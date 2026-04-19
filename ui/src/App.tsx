@@ -44,21 +44,22 @@ import {
 } from 'recharts';
 import {
   agents,
-  componentManifest,
-  executionUnits as executionUnitsFallback,
   feasibilityRows,
-  messagesByAgent,
   navItems,
-  paperCards,
   radarData,
   roleTabs,
   stats,
-  timeline,
   type AgentId,
   type ClaimType,
   type EvidenceLevel,
   type PageId,
 } from './data';
+import { BIOAGENT_PROFILES, componentManifest } from './agentProfiles';
+import {
+  executionUnits as executionUnitsFallback,
+  paperCards,
+  timeline,
+} from './demoData';
 import { sendAgentMessage } from './api/agentClient';
 import {
   makeId,
@@ -249,7 +250,7 @@ function toRecordList(value: unknown): Record<string, unknown>[] {
 
 function findArtifact(session: BioAgentSession, ref?: string): RuntimeArtifact | undefined {
   if (!ref) return undefined;
-  return session.artifacts.find((artifact) => artifact.id === ref || artifact.dataRef === ref);
+  return session.artifacts.find((artifact) => artifact.id === ref || artifact.dataRef === ref || artifact.type === ref);
 }
 
 function exportJsonFile(name: string, payload: unknown) {
@@ -782,29 +783,7 @@ type RegistryEntry = {
 };
 
 function defaultSlotsForAgent(agentId: AgentId): UIManifestSlot[] {
-  const fallback = {
-    literature: [
-      { componentId: 'paper-card-list', title: '文献卡片', priority: 1 },
-      { componentId: 'evidence-matrix', title: '证据矩阵', priority: 2 },
-      { componentId: 'network-graph', title: '证据网络', priority: 3 },
-    ],
-    structure: [
-      { componentId: 'molecule-viewer', title: '分子结构查看器', props: { pdbId: '7BZ5', ligand: '6SI', highlightResidues: ['Y96D'] }, priority: 1 },
-      { componentId: 'evidence-matrix', title: '结构证据', priority: 2 },
-      { componentId: 'execution-unit-table', title: '结构执行单元', priority: 3 },
-    ],
-    omics: [
-      { componentId: 'volcano-plot', title: '火山图', priority: 1 },
-      { componentId: 'heatmap-viewer', title: '热图', priority: 2 },
-      { componentId: 'umap-viewer', title: 'UMAP', priority: 3 },
-    ],
-    knowledge: [
-      { componentId: 'network-graph', title: '知识网络', priority: 1 },
-      { componentId: 'data-table', title: '知识卡片', priority: 2 },
-      { componentId: 'evidence-matrix', title: '证据矩阵', priority: 3 },
-    ],
-  } satisfies Record<AgentId, UIManifestSlot[]>;
-  return fallback[agentId];
+  return BIOAGENT_PROFILES[agentId].defaultSlots;
 }
 
 function PaperCardList({ slot, artifact }: RegistryRendererProps) {
@@ -982,30 +961,48 @@ function MetricGrid() {
 }
 
 function EvidenceMatrix({ claims }: { claims: EvidenceClaim[] }) {
+  const [expandedClaim, setExpandedClaim] = useState<string | null>(null);
   const rows = claims.length
-    ? claims.map((claim) => [
-      claim.text,
-      `${claim.supportingRefs.length} 条支持`,
-      `${claim.opposingRefs.length} 条反向`,
-      claim.evidenceLevel,
-      claim.type,
-    ])
+    ? claims.map((claim) => ({
+      id: claim.id,
+      claim: claim.text,
+      support: `${claim.supportingRefs.length} 条支持`,
+      oppose: `${claim.opposingRefs.length} 条反向`,
+      level: claim.evidenceLevel,
+      type: claim.type,
+      supportingRefs: claim.supportingRefs,
+      opposingRefs: claim.opposingRefs,
+    }))
     : [
-      ['EGFR/MET 旁路激活是主要耐药机制', '6 篇支持', '1 篇反向', 'cohort', 'inference'],
-      ['Y96D 改变结合口袋构象', '3 篇支持', '0 篇反向', 'case', 'hypothesis'],
-      ['Sotorasib 已形成临床验证可成药路径', '2 个上市药物', '0 篇反向', 'rct', 'fact'],
+      { id: 'demo-egfr-met', claim: 'EGFR/MET 旁路激活是主要耐药机制', support: '6 篇支持', oppose: '1 篇反向', level: 'cohort' as EvidenceLevel, type: 'inference' as ClaimType, supportingRefs: ['Cancer Discovery 2024', 'JCO 2023'], opposingRefs: ['case report subgroup'] },
+      { id: 'demo-y96d', claim: 'Y96D 改变结合口袋构象', support: '3 篇支持', oppose: '0 篇反向', level: 'case' as EvidenceLevel, type: 'hypothesis' as ClaimType, supportingRefs: ['PDB:7BZ5 structural note'], opposingRefs: [] },
+      { id: 'demo-sotorasib', claim: 'Sotorasib 已形成临床验证可成药路径', support: '2 个上市药物', oppose: '0 篇反向', level: 'rct' as EvidenceLevel, type: 'fact' as ClaimType, supportingRefs: ['FDA label', 'clinical trial record'], opposingRefs: [] },
     ];
   return (
     <div className="stack">
       <SectionHeader icon={Shield} title="EvidenceGraph" subtitle="Claim -> supporting / opposing evidence" />
-      {rows.map(([claim, support, oppose, level, type]) => (
-        <Card className="evidence-row" key={claim}>
-          <div>
-            <h3>{claim}</h3>
-            <p>{support} · {oppose}</p>
+      {rows.map((row) => (
+        <Card className="evidence-row" key={row.id}>
+          <div className="evidence-main">
+            <h3>{row.claim}</h3>
+            <p>{row.support} · {row.oppose}</p>
+            {row.supportingRefs.length || row.opposingRefs.length ? (
+              <>
+                <button className="expand-link source-toggle" onClick={() => setExpandedClaim(expandedClaim === row.id ? null : row.id)}>
+                  {expandedClaim === row.id ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  {expandedClaim === row.id ? '收起来源' : '查看来源'}
+                </button>
+                {expandedClaim === row.id ? (
+                  <div className="source-list">
+                    {row.supportingRefs.map((ref) => <code key={`support-${ref}`}>+ {ref}</code>)}
+                    {row.opposingRefs.map((ref) => <code key={`oppose-${ref}`}>- {ref}</code>)}
+                  </div>
+                ) : null}
+              </>
+            ) : null}
           </div>
-          <EvidenceTag level={level as EvidenceLevel} />
-          <ClaimTag type={type as ClaimType} />
+          <EvidenceTag level={row.level} />
+          <ClaimTag type={row.type} />
         </Card>
       ))}
     </div>
@@ -1093,6 +1090,41 @@ function NotebookTimeline({ agentId, notebook = [] }: { agentId: AgentId; notebo
   );
 }
 
+function AgentContractPanel({ agentId }: { agentId: AgentId }) {
+  const profile = BIOAGENT_PROFILES[agentId];
+  return (
+    <div className="contract-strip runtime-contract">
+      <div>
+        <span>Native tools</span>
+        <div className="tool-chips compact">
+          {profile.nativeTools.map((tool) => <code key={tool}>{tool}</code>)}
+        </div>
+      </div>
+      <div>
+        <span>Input contract</span>
+        <div className="field-chips">
+          {profile.inputContract.map((field) => (
+            <code key={field.key} title={field.label}>
+              {field.key}{'required' in field && field.required ? '*' : ''}:{field.type}
+            </code>
+          ))}
+        </div>
+      </div>
+      <div>
+        <span>Artifacts</span>
+        <div className="field-chips">
+          {profile.outputArtifacts.map((artifact) => (
+            <code key={artifact.type} title={artifact.description}>{artifact.type}</code>
+          ))}
+        </div>
+      </div>
+      <Badge variant={profile.mode === 'agent-server' ? 'success' : 'muted'}>
+        {profile.mode === 'agent-server' ? 'agent-server' : 'demo-ready'}
+      </Badge>
+    </div>
+  );
+}
+
 function Workbench({
   agentId,
   session,
@@ -1127,6 +1159,7 @@ function Workbench({
           <code key={component}>{component}</code>
         ))}
       </div>
+      <AgentContractPanel agentId={agentId} />
       <div className="workbench-grid">
         <ChatPanel agentId={agentId} role={role} session={session} onSessionChange={onSessionChange} />
         <ResultsRenderer agentId={agentId} session={session} />

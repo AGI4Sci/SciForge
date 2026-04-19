@@ -51,10 +51,15 @@ export interface RuntimeExecutionUnit {
   params: string;
   status: ExecutionUnitStatus;
   hash: string;
+  code?: string;
+  seed?: number;
   time?: string;
   environment?: string;
+  inputData?: string[];
   dataFingerprint?: string;
+  databaseVersions?: string[];
   artifacts?: string[];
+  outputArtifacts?: string[];
 }
 
 export interface NotebookRecord {
@@ -127,13 +132,6 @@ export interface AgentServerRunPayload {
   };
   metadata: Record<string, unknown>;
 }
-
-export const AGENT_SERVER_AGENT_IDS: Record<AgentId, string> = {
-  literature: 'bioagent-literature',
-  structure: 'bioagent-structure',
-  omics: 'bioagent-omics',
-  knowledge: 'bioagent-knowledge',
-};
 
 export function nowIso() {
   return new Date().toISOString();

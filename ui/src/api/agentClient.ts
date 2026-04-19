@@ -1,6 +1,5 @@
 import type { AgentId, ClaimType, EvidenceLevel } from '../data';
 import {
-  AGENT_SERVER_AGENT_IDS,
   makeId,
   nowIso,
   type AgentServerRunPayload,
@@ -9,6 +8,7 @@ import {
   type RuntimeExecutionUnit,
   type SendAgentMessageInput,
 } from '../domain';
+import { agentProtocolForPrompt, BIOAGENT_PROFILES } from '../agentProfiles';
 
 const DEFAULT_AGENT_SERVER_URL = 'http://127.0.0.1:18080';
 const REQUEST_TIMEOUT_MS = 120_000;
@@ -29,6 +29,12 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+function asStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const entries = value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
+  return entries.length ? entries : undefined;
+}
+
 function pickEvidence(value: unknown): EvidenceLevel {
   return evidenceLevels.includes(value as EvidenceLevel) ? value as EvidenceLevel : 'prediction';
 }
@@ -38,12 +44,17 @@ function pickClaimType(value: unknown): ClaimType {
 }
 
 function agentSystemPrompt(input: SendAgentMessageInput) {
+  const protocol = agentProtocolForPrompt(input.agentId);
   return [
     `你是 BioAgent 的${input.agentName}，领域是 ${input.agentDomain}。`,
     '请用中文回答生命科学研究问题。',
-    '优先输出可追溯证据、置信度、假设/事实区分，以及可复现 ExecutionUnit 草案。',
-    '如需要驱动前端 UI，可在回答末尾附加一个 JSON 对象，字段可包含 message、claims、uiManifest、executionUnits、artifacts。',
-    '不要生成 UI 代码，只返回结构化数据或自然语言。',
+    '优先使用当前 backend 的 native tools；只有 native tools 不可用时，才把 BioAgent/AgentServer tools 当兜底。',
+    '必须输出可追溯证据、置信度、事实/推断/假设区分，以及可复现 ExecutionUnit 草案。',
+    '不要生成 UI 代码；如需驱动前端 UI，请在回答末尾附加一个 JSON 对象。',
+    'JSON 字段可包含 message、confidence、claimType、evidenceLevel、reasoningTrace、claims、uiManifest、executionUnits、artifacts。',
+    'artifacts 必须优先使用下方协议中的 type/schema；uiManifest 只能引用已注册 componentId。',
+    '当前 Agent 协议:',
+    protocol,
   ].join('\n');
 }
 
@@ -66,7 +77,7 @@ function buildPrompt(input: SendAgentMessageInput) {
 function buildRunPayload(input: SendAgentMessageInput): AgentServerRunPayload {
   return {
     agent: {
-      id: AGENT_SERVER_AGENT_IDS[input.agentId],
+      id: BIOAGENT_PROFILES[input.agentId].agentServerId,
       name: input.agentName,
       backend: 'codex',
       workspace: WORKSPACE,
@@ -75,6 +86,8 @@ function buildRunPayload(input: SendAgentMessageInput): AgentServerRunPayload {
       metadata: {
         bioAgentProfile: input.agentId,
         domain: input.agentDomain,
+        nativeTools: BIOAGENT_PROFILES[input.agentId].nativeTools,
+        fallbackTools: BIOAGENT_PROFILES[input.agentId].fallbackTools,
       },
     },
     input: {
@@ -83,6 +96,8 @@ function buildRunPayload(input: SendAgentMessageInput): AgentServerRunPayload {
         rawUserPrompt: input.prompt,
         roleView: input.roleView,
         messageCount: input.messages.length,
+        inputContract: BIOAGENT_PROFILES[input.agentId].inputContract,
+        expectedArtifacts: BIOAGENT_PROFILES[input.agentId].outputArtifacts.map((artifact) => artifact.type),
       },
     },
     metadata: {
@@ -135,10 +150,15 @@ function normalizeExecutionUnits(value: unknown, fallback: RuntimeExecutionUnit)
         ? record.status
         : 'record-only',
       hash: asString(record.hash) || fallback.hash,
+      code: asString(record.code) || asString(record.command),
+      seed: asNumber(record.seed) ?? asNumber(record.randomSeed),
       time: asString(record.time),
       environment: asString(record.environment),
+      inputData: asStringArray(record.inputData) ?? asStringArray(record.inputs),
       dataFingerprint: asString(record.dataFingerprint),
-      artifacts: Array.isArray(record.artifacts) ? record.artifacts.filter((entry): entry is string => typeof entry === 'string') : undefined,
+      databaseVersions: asStringArray(record.databaseVersions),
+      artifacts: asStringArray(record.artifacts),
+      outputArtifacts: asStringArray(record.outputArtifacts),
     } satisfies RuntimeExecutionUnit;
   });
   return units.length ? units : [fallback];
@@ -228,7 +248,7 @@ export function normalizeAgentResponse(
     claims,
     executionUnits: normalizeExecutionUnits(structured.executionUnits, fallbackExecutionUnit),
     artifacts: Array.isArray(structured.artifacts) ? structured.artifacts.filter(isRecord).map((artifact) => ({
-      id: asString(artifact.id) || makeId('artifact'),
+      id: asString(artifact.id) || asString(artifact.type) || makeId('artifact'),
       type: asString(artifact.type) || 'agent-output',
       producerAgent: agentId,
       schemaVersion: asString(artifact.schemaVersion) || '1',

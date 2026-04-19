@@ -1,4 +1,5 @@
-import { messagesByAgent, type AgentId } from './data';
+import { type AgentId } from './data';
+import { messagesByAgent } from './demoData';
 import { makeId, nowIso, type BioAgentMessage, type BioAgentSession } from './domain';
 
 const STORAGE_KEY = 'bioagent.sessions.v1';

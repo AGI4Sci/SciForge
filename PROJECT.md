@@ -16,8 +16,9 @@
 - 已有 4 个 Agent profile mock：文献 Agent、结构 Agent、组学 Agent、知识库 Agent。
 - 单 Agent 工作台已有真实对话入口：`ChatPanel` 可调用 AgentServer `POST /api/agent-server/runs`，支持 loading、取消、错误提示和清空会话。
 - 对话、run、claim、UIManifest、ExecutionUnit、artifact、notebook 已建立前端运行时模型，并按 Agent 独立持久化到 `localStorage`。
+- Agent profile 契约已集中到 `ui/src/agentProfiles.ts`：AgentServer id、native tools、fallback tools、输入契约、artifact schema、默认 UIManifest slots 和 ExecutionUnit defaults 统一从这里生成。
 - 右侧结果区已接入 UIManifest component registry，可按 agent 返回的 slot 动态渲染 paper cards、结构查看器、组学图表、网络图、证据矩阵、ExecutionUnit 和 notebook timeline，并对 artifact 缺失 / 未注册组件提供 fallback 诊断。
-- ExecutionUnit 当前可从 agent 响应标准化生成 record-only/run 记录，支持当前会话 JSON bundle 导出；尚未对接后端真实工具执行状态和 pipeline 导出。
+- ExecutionUnit 当前可从 agent 响应标准化生成 record-only/run 记录，支持当前会话 JSON bundle 导出，并已预留 code、seed、inputData、databaseVersions、outputArtifacts 等可复现字段；尚未对接后端真实工具执行状态和 pipeline 导出。
 
 ---
 
@@ -125,12 +126,12 @@
 - 优先做成第一个可用单 Agent：支持生命科学文献问题、证据分级、矛盾证据并排展示。
 
 #### TODO
-- [ ] 明确文献检索输入：query、时间范围、物种、疾病/靶点、最大结果数。
+- [x] 明确文献检索输入：query、时间范围、物种、疾病/靶点、最大结果数。
 - [ ] 接入 AgentServer 文献工具或临时 search adapter。
-- [ ] 返回 paper cards：title、authors、journal、year、url、abstract、evidenceLevel。
-- [ ] 生成 claim-evidence matrix，区分 supporting / opposing evidence。
-- [ ] 每个事实性陈述尽量带 source refs。
-- [ ] 支持“展开推理链”和“查看来源”。
+- [x] 定义 paper-list artifact schema：title、authors、journal/source、year、url、abstract、evidenceLevel。
+- [x] 生成 claim-evidence matrix，区分 supporting / opposing evidence。
+- [x] 协议要求每个事实性陈述尽量带 source refs。
+- [x] 支持“展开推理链”和“查看来源”。
 
 ### T006 结构 Agent MVP
 
@@ -138,10 +139,10 @@
 - 支持 PDB / AlphaFold DB 查询、结构查看器参数更新、关键残基和口袋信息展示。
 
 #### TODO
-- [ ] 定义结构输入：PDB ID、UniProt ID、mutation、ligand、residue range。
+- [x] 定义结构输入：PDB ID、UniProt ID、mutation、ligand、residue range。
 - [ ] 将 MoleculeViewer 从纯示意升级为可接收结构参数。
-- [ ] 返回 pLDDT、resolution、pocket volume、mutation risk 等 metrics。
-- [ ] 生成结构分析 ExecutionUnit 草案。
+- [x] 定义 structure-summary artifact schema：pLDDT、resolution、pocket volume、mutation risk 等 metrics。
+- [x] 生成结构分析 ExecutionUnit 草案。
 - [ ] 对无结构、低置信度结构、无法加载结构提供 fallback。
 
 ### T007 组学 Agent MVP
@@ -150,11 +151,11 @@
 - 支持上传或引用示例表达矩阵，生成差异分析 ExecutionUnit 和可视化结果。
 
 #### TODO
-- [ ] 定义输入数据契约：表达矩阵、metadata、分组、design formula。
-- [ ] 先支持 demo dataset / record-only ExecutionUnit。
+- [x] 定义输入数据契约：表达矩阵、metadata、分组、design formula。
+- [x] 先支持 demo dataset / record-only ExecutionUnit。
 - [ ] 火山图、热图、UMAP 支持从 artifact 数据渲染。
 - [ ] 展示 p-value、FDR、log2FC、通路富集结果。
-- [ ] 区分真实计算结果和 mock / demo 数据。
+- [x] 区分真实计算结果和 mock / demo 数据。
 
 ### T008 知识库 Agent MVP
 
@@ -162,11 +163,11 @@
 - 支持靶点、疾病、药物的知识库查询，生成成药性和通路网络视图。
 
 #### TODO
-- [ ] 定义查询输入：gene / protein / disease / compound。
+- [x] 定义查询输入：gene / protein / disease / compound。
 - [ ] 接入 UniProt、PDB、ChEMBL、OpenTargets 等可用工具或 AgentServer proxy。
 - [ ] 返回知识卡片：功能、别名、疾病关联、药物、临床试验。
 - [ ] NetworkGraph 支持动态节点、边、证据来源和置信度。
-- [ ] 将知识库结果转换为可被其他 Agent 复用的标准 artifact。
+- [x] 将知识库结果转换为可被其他 Agent 复用的标准 artifact schema。
 
 ---
 
@@ -178,7 +179,7 @@
 - 把工具调用从聊天文本中抽离为确定性执行单元，为后续 Snakemake / Nextflow / Jupyter 导出打基础。
 
 #### TODO
-- [ ] 建立 ExecutionUnit schema：代码/工具、参数、环境、随机种子、输入数据指纹、数据库版本、输出 artifact。
+- [x] 建立 ExecutionUnit schema：代码/工具、参数、环境、随机种子、输入数据指纹、数据库版本、输出 artifact。
 - [x] 前端 ExecutionPanel 渲染真实 ExecutionUnit 列表。
 - [x] 支持导出当前会话 ExecutionUnit JSON bundle。
 - [x] 标记状态：planned、running、done、failed、record-only。
@@ -207,7 +208,7 @@
 - [x] 消息列表自动滚到底部。
 - [x] 用户手动上滚时不强制跳动。
 - [x] 长推理链可折叠。
-- [ ] 长来源列表可折叠。
+- [x] 长来源列表可折叠。
 - [ ] Agent 切换时保留各自滚动位置和输入草稿。
 - [ ] 顶部搜索框支持跳转到 gene / paper / ExecutionUnit 或先隐藏未实现能力。
 
@@ -226,10 +227,10 @@
 - 保留演示价值，但明确 mock 和真实运行的边界，避免误导。
 
 #### TODO
-- [ ] 将 demo seed 数据移动到 `ui/src/demoData.ts`。
+- [x] 将 demo seed 数据移动到 `ui/src/demoData.ts`。
 - [x] UI 明确标记 demo / agent artifact / record-only 状态。
 - [ ] AgentServer 连接成功后默认隐藏 demo seed，或作为“加载示例”入口。
-- [ ] README 补充 demo 模式和真实 agent 模式的启动方式。
+- [x] README 补充 demo 模式和真实 agent 模式的启动方式。
 
 ---
 
@@ -258,9 +259,9 @@
 ### T016 标准 Artifact 交换格式
 
 #### TODO
-- [ ] 定义 `Artifact`：id、type、producerAgent、schemaVersion、metadata、dataRef。
-- [ ] 文献 Agent 输出靶点列表可作为结构 Agent / 知识库 Agent 输入。
-- [ ] 组学 Agent 输出差异基因可作为文献 Agent / 知识库 Agent 输入。
+- [x] 定义 `Artifact`：id、type、producerAgent、schemaVersion、metadata、dataRef。
+- [x] 文献 Agent 输出靶点列表可作为结构 Agent / 知识库 Agent 输入的 schema consumers 已声明。
+- [x] 组学 Agent 输出差异基因可作为文献 Agent / 知识库 Agent 输入的 schema consumers 已声明。
 - [ ] UI 提供“发送到另一个 Agent”操作。
 
 ### T017 编排层预研
@@ -281,8 +282,8 @@
 5. T005：以文献 Agent 作为第一个完整单 Agent MVP。
 
 ## 最新验证记录
+- 2026-04-19：`npm run test` 通过。
 - 2026-04-19：`npm run typecheck` 通过。
 - 2026-04-19：`npm run build` 通过；Vite 提示主 chunk 超过 500 kB，暂不影响运行。
-- 2026-04-19：`npm run dev` 可访问 `http://localhost:5173/`。
-- 2026-04-19：AgentServer `GET http://127.0.0.1:18080/api/agent-server/agents` 连通，当前返回空 agent 列表。
-- 2026-04-19：AgentServer `POST /api/agent-server/runs` 可创建/调度 `bioagent-literature`，但当前 Codex backend 运行失败：上游 `http://localhost:8767/codex/v1/responses` 返回 502，需修复 AgentServer/Codex 模型服务配置后才能得到真实 agent 回复。
+- 2026-04-19：`npm run dev` 可访问 `http://127.0.0.1:5173/`。
+- 2026-04-19：AgentServer `GET http://127.0.0.1:18080/health` 连通。
