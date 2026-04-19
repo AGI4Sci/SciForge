@@ -64,7 +64,7 @@ export const agents: AgentViewConfig[] = [
     icon: Dna,
     color: '#4ECDC4',
     tools: ['DESeq2', 'Scanpy', 'clusterProfiler'],
-    status: 'ready',
+    status: 'active',
     defaultResult: 'volcano-plot',
   },
   {
@@ -75,7 +75,7 @@ export const agents: AgentViewConfig[] = [
     icon: Database,
     color: '#FFD54F',
     tools: ['UniProt', 'ChEMBL', 'OpenTargets'],
-    status: 'ready',
+    status: 'active',
     defaultResult: 'network-graph',
   },
 ];

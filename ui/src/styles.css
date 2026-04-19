@@ -583,6 +583,35 @@ button {
   font-size: 13px;
 }
 
+.settings-save-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  color: var(--bio-300);
+  border-top: 1px solid rgba(46, 61, 85, 0.62);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-save-state strong,
+.settings-save-state code,
+.settings-save-state em {
+  margin-left: 4px;
+  color: var(--bio-50);
+  font-style: normal;
+}
+
+.settings-save-state code {
+  display: inline-block;
+  max-width: min(360px, 60vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
 .page,
 .dashboard,
 .workbench {

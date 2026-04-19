@@ -36,15 +36,21 @@ The workspace path is edited from the left Resource Explorer panel or the Settin
 <workspace>/.bioagent/
 ```
 
-## AgentServer Mode
+## Runtime Mode
 
-The workbench chat panel calls AgentServer directly:
+The workbench first calls the BioAgent project workspace service for profile-specific tools:
+
+```text
+POST http://127.0.0.1:5174/api/bioagent/tools/run
+```
+
+If the project tool is unavailable or cannot satisfy the request, the chat panel falls back to AgentServer:
 
 ```text
 POST http://127.0.0.1:18080/api/agent-server/runs
 ```
 
-Start AgentServer first if you want real agent replies. If it is unavailable, BioAgent keeps the user message locally and shows a clear connection error instead of silently falling back to mock output.
+Start the workspace service for real BioAgent profile tools. Start AgentServer when you want the generic agent backend fallback. If both are unavailable, BioAgent keeps the user message locally and shows a clear connection error instead of silently falling back to mock output.
 
 BioAgent keeps the frontend protocol in `ui/src/agentProfiles.ts`:
 
@@ -57,7 +63,7 @@ BioAgent keeps the frontend protocol in `ui/src/agentProfiles.ts`:
 
 Agent replies should return natural language plus optional structured JSON with `claims`, `uiManifest`, `executionUnits`, and `artifacts`. The UI never executes generated UI code; it renders only registered components.
 
-The chat panel prefers AgentServer streaming via:
+The AgentServer fallback prefers streaming via:
 
 ```text
 POST http://127.0.0.1:18080/api/agent-server/runs/stream
@@ -109,10 +115,12 @@ Demo seed data lives in `ui/src/demoData.ts` and is labeled in the UI as demo/fa
 
 Current real-mode boundary:
 
-- Literature and structure profiles are marked `agent-server`.
-- Omics and knowledge profiles are `demo-ready` until their real tools are connected.
-- AgentServer must be running at `http://127.0.0.1:18080` for real chat responses.
-- `ui/src/api/localAdapters.ts` provides explicit `record-only` adapters for all 4 agents. Demo-ready agents use them directly; agent-server agents expose them as a visible fallback when AgentServer fails.
+- Literature, structure, omics, and knowledge profiles are marked `agent-server`.
+- BioAgent project tools run from `npm run workspace:server`; AgentServer remains a generic fallback brain and is not customized for BioAgent profiles.
+- Literature uses PubMed E-utilities; structure uses RCSB core entry and AlphaFold DB prediction APIs; knowledge uses UniProt REST from the BioAgent workspace service.
+- Omics reads workspace CSV matrix/metadata fixtures and returns `omics-differential-expression` artifacts. The bounded CSV runner writes audited output/log files under `<workspace>/.bioagent/omics/`.
+- AgentServer can be running at `http://127.0.0.1:18080` for generic fallback responses.
+- `ui/src/api/localAdapters.ts` provides explicit `record-only` adapters for all 4 agents as visible fallback drafts when AgentServer fails.
 
 ## Build
 

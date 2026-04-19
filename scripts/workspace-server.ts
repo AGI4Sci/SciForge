@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
+import { runBioAgentTool } from './bioagent-tools.js';
 
 const PORT = Number(process.env.BIOAGENT_WORKSPACE_PORT || 5174);
 
@@ -98,6 +99,16 @@ createServer(async (req, res) => {
         }
       }
       writeJson(res, 200, { ok: true, workspacePath: root });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  if (url.pathname === '/api/bioagent/tools/run' && req.method === 'POST') {
+    try {
+      const body = await readJson(req);
+      const result = await runBioAgentTool(body);
+      writeJson(res, 200, { ok: true, result });
     } catch (err) {
       writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
     }

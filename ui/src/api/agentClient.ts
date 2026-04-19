@@ -6,6 +6,7 @@ import {
   type AgentStreamEvent,
   type BioAgentMessage,
   type NormalizedAgentResponse,
+  type RuntimeArtifact,
   type RuntimeExecutionUnit,
   type SendAgentMessageInput,
 } from '../domain';
@@ -63,15 +64,18 @@ function buildPrompt(input: SendAgentMessageInput) {
     role: message.role,
     content: message.content,
   }));
+  const artifactContext = summarizeArtifacts(input.artifacts ?? []);
   return [
     `当前 BioAgent profile: ${input.agentId}`,
     `当前角色视图: ${input.roleView}`,
     '近期对话:',
     JSON.stringify(recentHistory, null, 2),
+    artifactContext.length ? '当前可用 artifacts:' : '',
+    artifactContext.length ? JSON.stringify(artifactContext, null, 2) : '',
     '',
     '用户问题:',
     input.prompt,
-  ].join('\n');
+  ].filter((line) => line !== '').join('\n');
 }
 
 function buildRunPayload(input: SendAgentMessageInput): AgentServerRunPayload {
@@ -100,6 +104,7 @@ function buildRunPayload(input: SendAgentMessageInput): AgentServerRunPayload {
         messageCount: input.messages.length,
         inputContract: BIOAGENT_PROFILES[input.agentId].inputContract,
         expectedArtifacts: BIOAGENT_PROFILES[input.agentId].outputArtifacts.map((artifact) => artifact.type),
+        artifacts: summarizeArtifacts(input.artifacts ?? []),
       },
     },
     runtime,
@@ -116,6 +121,31 @@ function buildRunPayload(input: SendAgentMessageInput): AgentServerRunPayload {
       },
     },
   };
+}
+
+function summarizeArtifacts(artifacts: RuntimeArtifact[]) {
+  return artifacts.slice(0, 8).map((artifact) => ({
+    id: artifact.id,
+    type: artifact.type,
+    producerAgent: artifact.producerAgent,
+    schemaVersion: artifact.schemaVersion,
+    metadata: artifact.metadata,
+    dataRef: artifact.dataRef,
+    dataPreview: previewArtifactData(artifact.data),
+  }));
+}
+
+function previewArtifactData(data: unknown): unknown {
+  if (!isRecord(data)) return data;
+  const preview: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data).slice(0, 8)) {
+    if (Array.isArray(value)) {
+      preview[key] = value.slice(0, 5);
+    } else {
+      preview[key] = value;
+    }
+  }
+  return preview;
 }
 
 function buildRuntimeConfig(input: SendAgentMessageInput): AgentServerRunPayload['runtime'] {

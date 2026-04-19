@@ -1,12 +1,17 @@
 # BioAgent - PROJECT.md
 
-最后更新：2026-04-19
+最后更新：2026-04-20
 
 ## 使用约定
 - 本文档作为 BioAgent 工程任务板使用，只保留正在推进或待推进的任务。
 - 产品与架构基准见 `docs/BioAgent_Project_Document.md`。
 - 当前 Web UI 位于 `ui/`，本项目服务运行在 `http://localhost:5173/`；本地 workspace writer 运行在 `http://127.0.0.1:5174/`。
 - 优先复用 `/Applications/workspace/ailab/research/app/AgentServer` 快速开发 agent；当前 AgentServer 运行在 `http://127.0.0.1:18080`。
+- 通过 Computer Use 做端到端探索时，优先验证用户能否在浏览器里完成真实研究动作，而不是只验证接口能返回；每个任务都需要留下可复现 prompt、点击路径、期望 artifact 和失败现象。
+- AgentServer 是项目无关的通用“大脑”和 fallback backend；BioAgent profile 专属检索、结构查询、组学 CSV runner、运行时环境安装和工具执行默认放在 BioAgent 项目路径与 workspace service 中。
+- 如果确实定位到 AgentServer 通用能力缺口，可以修改 `/Applications/workspace/ailab/research/app/AgentServer`；修改必须泛化到协议、配置、通用工具连接、网络环境或 backend 能力层，并在对应 TODO 标明影响的 API / backend / tool 约定。
+- BioAgent 当前优先调用本项目 `npm run workspace:server` 提供的 `POST /api/bioagent/tools/run`：文献 Agent 使用 PubMed E-utilities，结构 Agent 使用 RCSB core entry API 和 AlphaFold DB prediction API，组学 Agent 读取 workspace CSV fixture 执行本地差异表达，知识库 Agent 使用 UniProt REST 查询 reviewed human gene entry；失败时才回退到 AgentServer 通用 autonomous run 路径。
+- 外部数据库或模型下载失败时，优先排查本机网络、代理、DNS、证书和服务端工具配置；例如 PDB/CDN 访问问题应先确认 Clash/系统代理，而不是把特定下载源硬编码进 UI。
 - Phase 1 优先目标：先做好单 Agent 独立运行，再做 Agent 间数据打通，最后再做多 Agent 编排。
 - 代码路径必须尽量保持唯一真相源：引入新链路或发现冗余时必须删除、合并或明确降级旧链路，避免两个并行逻辑长期共存。
 - 开发过程中发现新的 TODO，优先追加到本文档。
@@ -14,18 +19,7 @@
 ## 当前状态
 - 已有 React + Vite Web UI，包含研究概览、单 Agent 工作台、对齐工作台、研究时间线。
 - 已有 4 个 Agent profile mock：文献 Agent、结构 Agent、组学 Agent、知识库 Agent。
-- 单 Agent 工作台已有真实对话入口：`ChatPanel` 可调用 AgentServer `POST /api/agent-server/runs`，支持 loading、取消、错误提示、新建聊天、删除聊天、编辑消息和删除消息。
-- AgentServer 对话入口已优先使用 `POST /api/agent-server/runs/stream`，ChatPanel 会展示 NDJSON 流式事件；运行中输入不会被锁死，用户引导会进入可见队列并在当前 run 完成后自动继续发送。
-- 对话、run、claim、UIManifest、ExecutionUnit、artifact、notebook 已建立前端运行时模型，并按 Agent 独立持久化到 `localStorage`。
-- 会话管理已升级为 workspace state v2：支持新建聊天、删除当前聊天、编辑/删除历史消息、按操作生成版本快照；用户设置 workspace 目录后会同步写入 `<workspace>/.bioagent/`。
-- 本地 workspace writer 会把结构化状态拆分为 `workspace-state.json`、`sessions/*.json`、`artifacts/*.json`、`versions/*.json`，对齐 AgentServer 的 session / artifact / run audit 思路，同时不要求现在配置 MCP/skills 资源。
-- 顶部设置入口已支持集中配置 AgentServer URL、workspace writer URL、workspace path、model provider/base URL/name/API key/timeout；配置会本地持久化并镜像到 `<workspace>/.bioagent/config.json`。
-- 左侧资源管理器已承担 workspace 管理：路径可编辑，支持列目录、刷新、新建文件/文件夹、重命名、删除、复制路径和双击进入文件夹。
-- Agent profile 契约已集中到 `ui/src/agentProfiles.ts`：AgentServer id、native tools、fallback tools、输入契约、artifact schema、默认 UIManifest slots 和 ExecutionUnit defaults 统一从这里生成。
-- 右侧结果区已接入 UIManifest component registry，可按 agent 返回的 slot 动态渲染 paper cards、结构查看器、组学图表、网络图、证据矩阵、ExecutionUnit 和 notebook timeline；结构/组学/网络组件已能消费 artifact payload，并对 artifact 缺失 / 未注册组件提供 fallback 诊断。
-- ExecutionUnit 当前可从 agent 响应标准化生成 record-only/run 记录，支持当前会话 JSON bundle 导出，并已预留 code、seed、inputData、databaseVersions、outputArtifacts 等可复现字段；尚未对接后端真实工具执行状态和 pipeline 导出。
-- 已新增 `npm run smoke:fixtures`，用 4 个 Agent 的标准 artifact fixture 回归验证 profile -> adapter -> UIManifest/ExecutionUnit 协议链路。
-- 已新增显式 `record-only` local adapters：demo-ready Agent 可直接生成标准 artifact；agent-server Agent 在 AgentServer 失败时可手动生成本地草案，不伪装成真实工具结果。
+
 
 ---
 
@@ -57,262 +51,194 @@
 - [x] 为请求失败、超时、服务未启动分别展示明确错误。
 - [x] 本地验证：`npm run typecheck`、`npm run build`。
 - [x] 直接调用 `/api/agent-server/runs` 完成一次文献 Agent smoke，并记录 AgentServer backend 实际响应质量。
-- [ ] 浏览器手动发送至少 2 个 Agent 的问题。
+- [x] 使用 Computer Use 在浏览器手动发送至少 2 个 Agent 的问题，并记录点击路径、prompt、响应质量和失败截图/现象。记录见 `docs/ComputerUseSmoke.md`。
 
-### T002 标准化 Agent 响应协议
+---
+
+## P0 - Computer Use 真实可用性探索
+
+### T002 建立浏览器端到端验收脚本
 
 #### 目标说明
-- 对齐设计文档中的“固定组件层 + 动态编排层”：agent 不生成 UI 代码，只返回结构化 JSON 指令驱动已有组件。
-- 建立前后端共享的最小响应协议，让 agent 回复能被 ChatPanel、ResultsRenderer、EvidenceMatrix、ExecutionPanel、NotebookTimeline 同时消费。
+- 用 Computer Use 以真实用户方式探索 BioAgent：打开 UI、配置 AgentServer / workspace、切换 Agent、发送 prompt、检查结果区、导出 ExecutionUnit、查看 Resource Explorer。
+- 形成可重复的 smoke 路线，后续每次修改都能快速判断「功能是否真的可用」。
 
 #### 成功标准
-- 单次 agent 响应可以包含：
-  - `message`：面向用户的自然语言回答。
-  - `claims`：事实 / 推断 / 假设，带 confidence 和 evidence level。
-  - `reasoningTrace`：可展开的推理链摘要。
-  - `uiManifest`：结果区应显示的组件、排序、输入参数。
-  - `executionUnits`：工具、参数、环境、数据指纹、状态。
-  - `artifacts`：文献、结构、组学图表、知识网络等结果数据。
-- 前端对未知字段容错，对未知组件显示“未注册组件”占位，而不是崩溃。
-- 协议能覆盖当前 4 个 Agent 的 mock 场景。
+- `npm run dev`、`npm run workspace:server` 和 AgentServer 启动后，浏览器可访问 `http://localhost:5173/`。
+- 能通过 Settings 设置 AgentServer Base URL、workspace writer URL、workspace path、模型连接，并在刷新后保持。
+- Computer Use 能完成一次从「选择 Agent -> 发送问题 -> 查看 streaming 事件 -> 查看 artifact -> 查看 ExecutionUnit -> 导出 bundle」的完整路径。
+- 失败时能区分前端交互问题、workspace writer 问题、AgentServer 运行问题和模型配置问题。
 
 #### TODO
-- [x] 在 `ui/src/types.ts` 或 `ui/src/domain.ts` 建立 BioAgent 运行时类型。
-- [x] 明确 `AgentId` 与 AgentServer agent 名称之间的映射表。
-- [x] 定义 `UIManifestSlot`：`componentId`、`title`、`props`、`artifactRef`、`priority`。
-- [x] 定义 `EvidenceClaim`：`text`、`type`、`confidence`、`evidenceLevel`、`supportingRefs`、`opposingRefs`。
-- [x] 定义 `ExecutionUnit`：`id`、`tool`、`params`、`status`、`environment`、`dataFingerprint`、`artifacts`。
-- [x] 写一个 `normalizeAgentResponse` adapter，兼容 AgentServer 当前响应和未来标准协议。
-- [x] 给 adapter 补充基础单测或最小 fixture 验证。
+- [x] 记录本地启动顺序：AgentServer、BioAgent dev server、workspace writer。记录见 `docs/ComputerUseSmoke.md`。
+- [x] 用 Computer Use 打开首页，验证首屏、导航、Settings、Agent Profiles、Workbench、Alignment、Timeline 均可进入。
+- [x] 用 Settings 配置 workspace path 为一个临时研究目录，并验证状态栏显示同步到 `.bioagent`。
+- [x] 发送一个文献 Agent prompt，验证 loading、streaming event、取消请求、失败消息和证据矩阵 fallback。
+- [x] BioAgent project tool 与浏览器复验均已验证结构 Agent 能返回 RCSB `structure-summary` artifact / ExecutionUnit，并驱动 molecule-viewer。
+- [x] 测试停止生成；运行中 guidance 输入框可见，队列 follow-up 尚待完整成功 run 验证。
+- [x] 导出当前 Agent 会话 JSON，检查 messages、claims、artifacts、executionUnits、notebook 是否齐全。
+- [x] 输出一份 `docs/` 下的 Computer Use smoke 记录模板或把固定步骤沉淀回本文档。
 
-### T003 对话驱动结果区动态更新
+### T003 文献 Agent 真实检索闭环
 
 #### 目标说明
-- 让 agent 回复不只停留在聊天气泡中，还能更新右侧结果区：文献卡片、分子查看器、火山图、网络图、证据矩阵、ExecutionUnit、研究记录。
-- 保持设计文档原则：固定组件复用，动态 JSON 编排。
+- 让文献 Agent 不只是通用聊天，而是能围绕生命科学问题返回可追溯论文、证据等级、claim type、结构化 `paper-list` artifact 和可复现检索 ExecutionUnit。
 
 #### 成功标准
-- 文献 Agent 回复可更新 PaperCardList / EvidenceMatrix。
-- 结构 Agent 回复可更新 MoleculeViewer 参数，例如 PDB ID、ligand、highlight residues。
-- 组学 Agent 回复可更新 volcano / heatmap / UMAP 的 artifact 数据或占位状态。
-- 知识库 Agent 回复可更新 NetworkGraph 节点和边。
-- 每次 agent 回复自动追加一条 NotebookTimeline 记录。
+- 在浏览器输入如「KRAS G12D 胰腺癌靶向治疗近三年证据」后，能得到真实论文引用、URL/DOI/PubMed 标识、证据等级和矛盾证据提示。
+- 结果区展示 `paper-card-list` 和 `evidence-matrix`，artifact 标记为 agent/runtime 数据而非 demo。
+- ExecutionUnit 记录检索 query、数据库、时间范围、maxResults、数据库版本或访问日期。
+- PubMed / Semantic Scholar / Crossref 等 BioAgent 专属工具默认接在 BioAgent workspace service；AgentServer 只做通用 agent fallback。
 
 #### TODO
-- [x] 将 `ResultsRenderer` 输入从 `agentId` 扩展为 `agentId + currentRunState`。
-- [x] 将 `paperCards`、`executionUnits`、`timeline` 从纯 mock 数据迁移为可被运行时覆盖的数据源。
-- [x] 建立 component registry：`paper-card-list`、`molecule-viewer`、`volcano-plot`、`heatmap-viewer`、`umap-viewer`、`network-graph`、`evidence-matrix`、`execution-unit-table`、`notebook-timeline`。
-- [x] 对每个组件定义最小 props schema 和 fallback empty state。
-- [x] 当 agent 返回多个 manifest slot 时，按 priority 和当前 tab 渲染。
-- [x] 对 artifactRef 找不到、组件未注册、数据格式错误提供诊断 UI。
+- [x] 用 Computer Use 跑一次文献 Agent 真实 prompt，并记录返回是否包含真实可点击来源。结果：AgentServer streaming 持续 usage-update，取消前未返回稳定 `paper-list`。
+- [x] 检查 `paper-list` artifact 是否符合 `ui/src/agentProfiles.ts` schema。BioAgent project tool 返回 `id=paper-list`、`type=paper-list`、`schemaVersion=1`、`data.query`、`data.papers[]`。
+- [x] 检查每条 claim 是否有 evidenceLevel、claimType、confidence 和 supportingRefs。direct smoke 返回 PMID supportingRefs。
+- [x] 检查 AgentServer 返回的 JSON 是否稳定可被 `normalizeAgentResponse` 解析。返回体为 `run.output.result` 内单一 JSON object，保留 `message/claims/uiManifest/executionUnits/artifacts`。
+- [x] BioAgent 侧：文献 Agent 结构化长 prompt 不能依赖通用 AgentServer 自由生成；已通过 `POST /api/bioagent/tools/run` 在项目服务内提供有边界结构化协议。
+- [x] BioAgent 侧：若通用 AgentServer 只返回自然语言，前端仍优先消费项目工具返回的标准 JSON；AgentServer 保留为 fallback。
+- [x] BioAgent 侧：已接入 PubMed E-utilities；Semantic Scholar / Crossref 可作为后续增强。
+- [x] 用 Computer Use 重新跑文献 Agent 浏览器路径，确认 PubMed `paper-list` 在 UI 的 paper cards、evidence matrix 和 JSON export 中完整展示。Prompt: `KRAS G12D 胰腺癌靶向治疗近三年证据，请返回 paper-list JSON artifact、claims、ExecutionUnit。`；结果：PubMed 返回 5 条记录，paper cards 展示 PMID 链接，evidence matrix 显示 5 条支持，ExecutionUnit 为 `PubMed.eutils.esearch+esummary` / `done`，已下载 `execution-units-literature-*.json`。
+- [x] BioAgent 侧：修复 Web UI 包装 prompt 会污染 PubMed query 的问题。项目工具现在直接接收原始 `prompt` 和 artifact 摘要，不再把整段 AgentServer 包装 prompt 当检索词。
 
-### T004 会话与研究记录持久化
+### T004 结构 Agent 真实结构分析闭环
 
 #### 目标说明
-- 将对话、agent 回复、证据、ExecutionUnit 和 UIManifest 沉淀为本地可恢复研究记录，符合“从聊天记录到可执行 Pipeline”的方向。
+- 让结构 Agent 能从 PDB ID / UniProt ID / mutation / ligand 输入生成结构摘要、坐标来源、残基高亮、质量指标和结构 ExecutionUnit。
 
 #### 成功标准
-- 刷新页面后可以恢复最近的会话。
-- 每个 Agent 的会话、结果和 timeline 独立保存。
-- 用户可以新建 / 删除当前 Agent 聊天，不影响其他 Agent。
-- 历史消息可编辑和删除，每次结构化变更生成版本记录。
-- 用户设置 workspace 目录后，结构化状态落在 workspace 内的 `.bioagent/` 目录，后续可平滑替换为后端项目存储。
+- 在浏览器输入如「分析 PDB 7BZ5，关注 ligand pocket 和 142-158 残基」后，能得到真实 PDB/RCSB 来源、结构元数据、可视化 artifact 和分析说明。
+- `molecule-viewer` 使用 runtime artifact 渲染，不仅显示 fallback 占位。
+- 结构 Agent 失败时，前端展示 AgentServer / 网络 / 工具错误，不用 case-specific UI fallback 伪装成功。
+- ExecutionUnit 记录 PDB ID、下载 URL、解析步骤、参数、数据指纹和输出 artifact。
 
 #### TODO
-- [x] 先用 localStorage 实现 `bioagent.sessions.v1`。
-- [x] 定义 session schema：`sessionId`、`agentId`、`messages`、`runs`、`artifacts`、`updatedAt`。
-- [x] 增加 schema version，未来迁移时不破坏旧数据。
-- [x] 在 UI 增加清空会话、导出 JSON 的入口。
-- [x] 避免保存超大 artifact；大对象只保存 metadata 或 artifactRef。
-- [x] 迁移到 `bioagent.workspace.v2`，集中管理 active sessions、archived sessions、workspacePath 和版本记录。
-- [x] 参考 AgentServer session / artifact 管理规则，为每个会话维护 version snapshot、checksum、reason 和时间戳。
-- [x] 增加“开启新聊天”和“删除当前聊天”入口；删除不会直接丢弃结构化信息，而是归档到 workspace state。
-- [x] 支持编辑/删除历史消息，并将操作记录为新版本。
-- [x] 新增 `npm run workspace:server`，把 workspace state、session、artifact、version 写入用户设置的 workspace 目录。
-- [x] 新增 `<workspace>/.bioagent/config.json`，集中保存 AgentServer/model/workspace 常见配置。
-- [x] 左侧资源管理器支持基础文件/文件夹操作；顶部重复 workspace 输入已移除。
-- [ ] 增加可视化版本浏览 / 恢复入口。
-- [ ] 将 workspace writer 替换或升级为 AgentServer 原生项目存储 API。
+- [x] BioAgent project tool 跑一次指定 PDB ID 的结构 Agent prompt：`7BZ5` 返回 RCSB metadata、`dataRef=https://files.rcsb.org/download/7BZ5.cif`、ExecutionUnit `RCSB.core.entry`。
+- [x] 验证 `structure-summary` artifact 包含 pdbId、highlightResidues、metrics、dataRef。已补齐 `142-158` 这类残基范围解析。
+- [x] 验证结构下载失败时错误信息能指向网络/代理/项目工具配置，而不是静默回退到 demo。
+- [x] 测试一个 UniProt ID prompt，确认能力由 BioAgent project tool 承载。`UniProt P04637` 返回 AlphaFold DB dataRef 与 `AlphaFoldDB.prediction` / `done` ExecutionUnit。
+- [x] BioAgent 侧：已接入 RCSB core entry API 与 AlphaFold DB prediction API；AlphaFold API 请求使用显式 `User-Agent`。
+- [x] BioAgent 侧：当前 PDB 返回 RCSB `.cif` dataRef；UniProt accession 返回 AlphaFold `.cif` dataRef。
+- [x] 用 Computer Use 重新跑结构 Agent 浏览器路径，确认 molecule-viewer / structure-summary / ExecutionUnit 在 UI 中完整展示。Prompt: `分析 PDB 7BZ5，关注 ligand pocket 和 142-158 残基，返回 structure-summary artifact 和 ExecutionUnit。`；结果：流式事件包含 `RCSB.core.entry`，结果区展示 `PDB=7BZ5`、`residues=142-158`、resolution `1.84 A`，ExecutionUnit 为 `EU-structure-*` / `RCSB.core.entry` / `done`。
+
+### T005 Artifact 跨 Agent 手动流转
+
+#### 目标说明
+- Phase 2 之前先做好手动串联：用户能把一个 Agent 的 artifact 发送给另一个 Agent，后者基于该 artifact 继续分析，而不是重新从空上下文开始。
+
+#### 成功标准
+- 文献 Agent 产生 `paper-list` 后，结果区出现「发送 artifact 到结构 Agent / 知识库 Agent」操作。
+- 目标 Agent 会话收到 handoff 消息，包含 artifact id、type、producerAgent 和下一步目标。
+- 目标 Agent 后续请求携带该 artifact 上下文，并产出符合自身 schema 的 claims、ExecutionUnit 和 UIManifest。
+- 原 Agent 与目标 Agent 的历史、artifact 列表、notebook 记录互不污染。
+
+#### TODO
+- [x] 用 Computer Use 从文献 Agent 发送 `paper-list` 到知识库 Agent，并确认目标会话出现 `接收 paper-list` handoff 消息。
+- [x] 用 Computer Use 从结构 Agent 发送 `structure-summary` 到知识库 Agent，并确认目标会话出现 `接收 structure-summary` handoff 消息。
+- [x] 用 Computer Use 从组学 Agent 发送 `omics-differential-expression` 到知识库 Agent，并验证目标 Agent 消息流、artifact 列表、notebook 和 workspace session 文件同步。
+- [x] 验证目标 Agent 的输入框、消息流、notebook timeline 和 artifact 列表同步更新。本次从知识库 Agent 发送 `knowledge-graph` 到文献 Agent。
+- [x] 验证 handoff 状态写入 workspace `.bioagent` session 文件；刷新恢复仍待浏览器手动确认。
+- [x] BioAgent 侧：定义 handoff 后请求携带 artifact 摘要和 dataPreview，目标 Agent 可从 prompt 与项目工具 request 两处读取。
+- [x] 后续增强：handoff 后自动触发目标 Agent run，而不只是把 artifact 上下文放入目标 Agent 会话。已实现 `handoffAutoRun`：目标 Agent 收到 handoff message 后自动生成面向目标 profile 的 prompt；Computer Use 复验知识库 `knowledge-graph` -> 文献 Agent 自动运行 `TP53 clinical trials`，PubMed 返回 5 条记录，ExecutionUnit `PubMed.eutils.esearch+esummary` / `done`。
+
+### T006 Workspace 与 Resource Explorer 真实文件闭环
+
+#### 目标说明
+- 让 BioAgent 选定 workspace 后，聊天记录、artifact、版本快照和用户文件操作都能真实落盘，并能被 Resource Explorer 探索。
+
+#### 成功标准
+- 选择 workspace path 后，`.bioagent/workspace-state.json`、`sessions/`、`artifacts/`、`versions/`、`config.json` 被创建或更新。
+- Resource Explorer 能列目录、双击进入文件夹、创建文件/文件夹、重命名、删除、刷新、复制路径。
+- 浏览器刷新或重启 dev server 后，会话和配置可以恢复。
+- workspace writer 未启动时，UI 给出明确错误，不影响本地浏览器状态。
+
+#### TODO
+- [x] 用 Computer Use 设置一个干净 workspace path。
+- [x] 发送一次 Agent 消息后检查 `.bioagent` 文件是否更新。
+- [x] 在 Resource Explorer 创建并重命名一个测试文件夹。Computer Use: 新建 `cu-smoke-folder`，右键菜单重命名为 `cu-smoke-renamed`，shell 确认 `/tmp/bioagent-computer-use-smoke/cu-smoke-renamed` 已落盘。
+- [x] 删除 Resource Explorer 测试文件夹。已在用户确认后删除 `/tmp/bioagent-computer-use-smoke/cu-smoke-renamed`，并确认路径不存在。
+- [x] 打开 Resource Explorer 并验证 workspace path、`.bioagent` 列表和刷新入口可见。
+- [x] 双击进入子目录后刷新列表，验证路径与面包屑/输入框行为。Computer Use: 双击 `cu-smoke-renamed` 后工作目录输入框更新为 `/tmp/bioagent-computer-use-smoke/cu-smoke-renamed`，同步提示指向该目录下 `.bioagent`。
+- [x] 关闭 workspace writer 后重复一次操作，验证错误提示可读。已在 `workspaceClient` 包装 fetch 错误；Computer Use 复验停掉 writer 后刷新显示：`Workspace writer unavailable at http://127.0.0.1:5174 while trying to list workspace ... Start npm run workspace:server and retry.`
+- [x] 检查版本快照是否记录 new-chat、delete-chat、message edit/delete 等原因。workspace 中已观察到 `new chat archived previous session`、`handoff artifact ...`、`session update` 版本文件与 checksum；代码路径中 delete chat 使用 `deleted current chat`，message edit/delete 使用 `edit message ...` / `delete message ...`。
 
 ---
 
-## P1 - Phase 1 单 Agent 能力补齐
+## P1 - 单 Agent 能力补齐
 
-### T005 文献 Agent MVP
-
-#### 目标说明
-- 优先做成第一个可用单 Agent：支持生命科学文献问题、证据分级、矛盾证据并排展示。
-
-#### TODO
-- [x] 明确文献检索输入：query、时间范围、物种、疾病/靶点、最大结果数。
-- [x] 接入临时 record-only search adapter；真实 PubMed/Semantic Scholar AgentServer 工具仍待接入。
-- [x] 定义 paper-list artifact schema：title、authors、journal/source、year、url、abstract、evidenceLevel。
-- [x] 生成 claim-evidence matrix，区分 supporting / opposing evidence。
-- [x] 协议要求每个事实性陈述尽量带 source refs。
-- [x] 支持“展开推理链”和“查看来源”。
-
-### T006 结构 Agent MVP
+### T007 组学 Agent 从 demo-ready 升级为真实分析
 
 #### 目标说明
-- 支持 PDB / AlphaFold DB 查询、结构查看器参数更新、关键残基和口袋信息展示。
+- 将组学 Agent 从 record-only/demo 数据推进到能读取用户 workspace 中表达矩阵和 metadata，并通过 BioAgent project tool 执行差异表达或单细胞基础分析。
+
+#### 成功标准
+- 用户能在 prompt 中指定 matrixRef、metadataRef、groupColumn、designFormula、alpha。
+- BioAgent project tool 运行 DESeq2 / edgeR / Scanpy 或等价工具，返回 `omics-differential-expression` artifact。
+- 结果区的 volcano、heatmap、UMAP 由真实 artifact 驱动。
+- ExecutionUnit 记录输入文件、数据指纹、参数、软件版本和输出文件。
 
 #### TODO
-- [x] 定义结构输入：PDB ID、UniProt ID、mutation、ligand、residue range。
-- [x] 将 MoleculeViewer 从纯示意升级为可接收结构参数。
-- [x] 定义 structure-summary artifact schema：pLDDT、resolution、pocket volume、mutation risk 等 metrics。
-- [x] 生成结构分析 ExecutionUnit 草案。
-- [x] 对无结构、低置信度结构、无法加载结构提供 record-only fallback。
-- [x] 对“最新 PDB 蛋白结构”类任务增加 RCSB PDB native fallback：AgentServer 失败/超时后可检索最新 protein entry、生成 CIF dataRef 和 structure-summary artifact。
+- [x] 准备一个最小 RNA-seq fixture 放入 workspace：`/tmp/bioagent-computer-use-smoke/fixtures/omics/matrix.csv` 与 `metadata.csv`。
+- [x] 用组学 Agent prompt 指定 fixture 路径并验证返回 artifact。Computer Use prompt: `matrixRef=fixtures/omics/matrix.csv metadataRef=fixtures/omics/metadata.csv groupColumn=condition caseGroup=treated controlGroup=control alpha=0.2`。
+- [x] 验证 points、heatmap、umap payload 能分别驱动当前注册组件。浏览器结果区显示 5 volcano points、4 UMAP points、5x4 heatmap。
+- [x] 将 `BIOAGENT_PROFILES.omics.mode` 从 demo 升级的前置条件列清楚。已切换为 `agent-server`，UI 状态改为 active。
+- [x] BioAgent 侧：接入可替代的 bounded local CSV differential runner：读 matrix/metadata、计算 group mean、logFC、pValue、BH FDR。
+- [x] BioAgent 侧：定义大文件输入、输出 artifact 文件路径和错误日志返回约定。当前约定为 workspace 内相对路径 `matrixRef/metadataRef`，禁止逃逸 workspace。
+- [x] 后续增强：将统计模型版本、设计矩阵、标准化方法和日志文件写入 artifact metadata。BioAgent local CSV runner 现在写入 `designMatrix`、`normalizationMethod`、`statisticalModel`、`outputRef` 和 `logRef`；同时在 workspace `.bioagent/omics/` 写入可审计输出 JSON 与日志 JSON。
+- [ ] 可选运行时增强：在 BioAgent 项目路径内安装并接入 DESeq2 / edgeR / Scanpy 真实 runner；不要安装到 AgentServer。
 
-### T007 组学 Agent MVP
+### T008 知识库 Agent 从 demo-ready 升级为真实知识查询
 
 #### 目标说明
-- 支持上传或引用示例表达矩阵，生成差异分析 ExecutionUnit 和可视化结果。
+- 让知识库 Agent 能围绕 gene/protein/disease/compound 查询 UniProt、PDB、ChEMBL、OpenTargets、ClinicalTrials 等来源，并返回可视化知识图谱。
+
+#### 成功标准
+- 输入如「TP53 gene include clinical trials」后，返回真实节点、边、来源、置信度和知识卡片。
+- `network-graph` 和 `data-table` 使用 `knowledge-graph` artifact 渲染。
+- 每条边具备 relation、evidenceLevel、supportingRefs。
+- 能消费文献或结构 Agent handoff 过来的 artifact。
 
 #### TODO
-- [x] 定义输入数据契约：表达矩阵、metadata、分组、design formula。
-- [x] 先支持 demo dataset / record-only ExecutionUnit。
-- [x] 火山图、热图、UMAP 支持从 artifact 数据渲染。
-- [x] 展示 p-value/log2FC 派生图形；FDR 和通路富集结果等待真实 omics backend artifact。
-- [x] 区分真实计算结果和 mock / demo 数据。
+- [x] 用 Computer Use 跑一个 gene 查询。compound 查询待真实 AgentServer tool 接入后再跑。
+- [x] 验证 `knowledge-graph` artifact 的 nodes、edges、rows 完整性。
+- [x] 验证来源链接、数据库版本或访问日期显示在 claim / ExecutionUnit 中。Computer Use prompt: `TP53 gene include clinical trials，返回 knowledge-graph、来源链接、数据库访问日期和 ExecutionUnit。`；结果：UI 显示 UniProt URL、`accessed_at`、claim supportingRefs、ExecutionUnit `UniProt.uniprotkb.search` / `done`。
+- [x] BioAgent 侧：接入 UniProt REST `uniprotkb/search`，返回 accession、protein name、function、source URL 和访问日期；ChEMBL / OpenTargets 仍属后续增强。
+- [x] BioAgent 侧：定义跨数据库实体消歧策略，如 gene symbol、UniProt accession、ChEMBL id。当前策略：`(gene_exact:<symbol>) AND (organism_id:9606) AND (reviewed:true)`，优先 reviewed human exact gene symbol。
 
-### T008 知识库 Agent MVP
+### T009 对齐工作台从静态展示升级为可保存协商流程
 
 #### 目标说明
-- 支持靶点、疾病、药物的知识库查询，生成成药性和通路网络视图。
+- 让 Alignment Workspace 支持真实项目对齐：填写数据资产、目标、AI 指标、生物验证标准、风险和再校准记录，并保存为 workspace artifact。
+
+#### 成功标准
+- Computer Use 能完成四步：数据现实摸底、可行性矩阵、项目契约、再校准。
+- 每一步的输入可编辑、可保存、可回看。
+- 输出项目契约包含双方目标定义、数据要求、成功标准、风险和下一步行动。
+- 相关记录进入研究时间线或 `.bioagent` workspace 状态。
 
 #### TODO
-- [x] 定义查询输入：gene / protein / disease / compound。
-- [ ] 接入 UniProt、PDB、ChEMBL、OpenTargets 等真实工具或 AgentServer proxy。
-- [x] 返回 record-only 知识卡片：功能、别名、疾病关联、药物、临床试验字段入口。
-- [x] NetworkGraph 支持动态节点、边；证据来源和置信度等待真实 knowledge backend artifact。
-- [x] 将知识库结果转换为可被其他 Agent 复用的标准 artifact schema。
+- [x] 用 Computer Use 走完当前 Alignment 页面入口，确认当前四步为静态展示，缺少可编辑/保存流程。
+- [x] 定义 alignment artifact schema：`alignment-contract` / schemaVersion `1`，顶层包含 `dataReality`、`feasibilityMatrix`、`projectContract`、`recalibrationEvents`。
+  - `dataReality`: `{ datasets: [{ id, name, modality, size, owner, location, accessStatus, qualityRisks }], constraints: string[], missingInfo: string[] }`
+  - `feasibilityMatrix`: `{ rows: [{ objective, aiMetric, bioValidation, requiredData, feasibility: "ready"|"needs-data"|"blocked", risks, nextAction }] }`
+  - `projectContract`: `{ question, scope, successCriteria, dataRequirements, modelAssumptions, wetLabValidation, decisionLog, owners, dueDate }`
+  - `recalibrationEvents`: `[{ at, trigger, observation, contractChange, owner, status }]`
+- [x] 增加保存到 workspace 的 TODO，并决定是否由 AgentServer 生成初稿。Phase 1 实现 TODO：Alignment Workspace 表单保存为 `.bioagent/artifacts/alignment-contract-<session>.json`，同步写入 session notebook/timeline；AgentServer 可选生成初稿，但人工编辑后的 artifact 以 workspace 版本为准。
+- [x] AgentServer 侧：若需要 AI 生成可行性矩阵，定义 alignment agent id 和输出 JSON 约定。约定 agent id 为 `bioagent-alignment`，`metadata.project=BioAgent` 且 `agent.metadata.bioAgentProfile=alignment`；输出必须为 `{ message, claims, uiManifest, executionUnits, artifacts: [alignment-contract] }`，ExecutionUnit tool 建议 `alignment.contract.draft`，status 可为 `done|record-only`。
 
----
-
-## P1 - 可复现与证据基础设施
-
-### T009 ExecutionUnit 数据模型与导出
+### T010 ExecutionUnit 导出与可复现性检查
 
 #### 目标说明
-- 把工具调用从聊天文本中抽离为确定性执行单元，为后续 Snakemake / Nextflow / Jupyter 导出打基础。
+- 确保每次 Agent 回复都能沉淀为可审计、可导出的 ExecutionUnit，而不只是 UI 上的一行记录。
+
+#### 成功标准
+- 导出的 JSON Bundle 包含 session、messages、claims、artifacts、executionUnits、notebook 和版本信息。
+- 每个 ExecutionUnit 至少包含 tool、params、status、hash；真实计算任务还需包含 environment、inputData、dataFingerprint、databaseVersions、outputArtifacts。
+- 用户能从导出内容判断如何重放或审计该步骤。
 
 #### TODO
-- [x] 建立 ExecutionUnit schema：代码/工具、参数、环境、随机种子、输入数据指纹、数据库版本、输出 artifact。
-- [x] 前端 ExecutionPanel 渲染真实 ExecutionUnit 列表。
-- [x] 支持导出当前会话 ExecutionUnit JSON bundle。
-- [x] 标记状态：planned、running、done、failed、record-only。
-- [ ] 后续对接 AgentServer 实际执行状态。
-
-### T010 Evidence / Claim 统一模型
-
-#### 目标说明
-- 将设计文档中的“文献证据分级、统计置信度、假设 vs 事实区分”落成统一数据结构和 UI。
-
-#### TODO
-- [x] 统一 `EvidenceLevel`，补充 experimental、review、database、preprint 等生命科学常见来源类型。
-- [x] 统一 `ClaimType`：fact、inference、hypothesis。
-- [x] 给每个 claim 支持 `confidence`、`supportingRefs`、`opposingRefs`、`updatedAt`。
-- [x] EvidenceMatrix 支持从 agent 响应渲染，不再写死 KRAS 示例。
-- [x] 在消息气泡、结果区、时间线保持同一套标签语义。
-
----
-
-## P2 - Web UI 体验完善
-
-### T011 工作台交互打磨
-
-#### TODO
-- [x] 发送按钮绑定 click 和 Enter，Shift+Enter 换行或改为 textarea。
-- [x] 消息列表自动滚到底部。
-- [x] 用户手动上滚时不强制跳动。
-- [x] 长推理链可折叠。
-- [x] 长来源列表可折叠。
-- [x] Agent 切换时保留各自滚动位置和输入草稿。
-- [x] 顶部搜索框支持跳转到 Agent / timeline / alignment / workbench。
-- [x] 推理过程中允许继续输入引导，并显示 queued guidance 状态。
-- [x] 支持开启新聊天、删除当前聊天、编辑消息、删除消息。
-- [x] 聊天面板展示当前会话版本数和归档数量，降低版本化管理的不可见感。
-- [x] 新建/删除聊天现在进入真正空聊天，不再重新注入 seed 示例消息。
-- [x] 设置按钮可打开 runtime config 面板并通过 AgentServer request runtime 切换模型连接。
-
-### T012 响应式与可访问性
-
-#### TODO
-- [ ] 检查 1440px、1024px、768px、390px 视口下工作台布局。
-- [ ] 小屏下 ChatPanel 和 ResultsRenderer 改为 tabs 或上下布局。
-- [x] 图表容器保持稳定尺寸，避免动态内容导致布局跳动。
-- [x] 所有 icon button 补齐 tooltip / aria-label。
-- [ ] 确保按钮文字、badge、tab 在中文长文本下不溢出。
-
-### T013 Mock 数据降级策略
-
-#### 目标说明
-- 保留演示价值，但明确 mock 和真实运行的边界，避免误导。
-
-#### TODO
-- [x] 将 demo seed 数据移动到 `ui/src/demoData.ts`。
-- [x] UI 明确标记 demo / agent artifact / record-only 状态。
-- [x] Demo-ready Agent 默认使用显式 record-only adapter；AgentServer profile 失败时通过按钮触发本地草案，不静默混入 mock。
-- [x] README 补充 demo 模式和真实 agent 模式的启动方式。
-
----
-
-## P2 - 对齐工作台与多角色视图
-
-### T014 对齐工作台从静态流程升级为可编辑流程
-
-#### TODO
-- [ ] 数据摸底表单支持输入样本量、模态、标签、批次、验证资源。
-- [ ] 可行性矩阵支持 agent 生成建议后人工编辑。
-- [ ] 项目契约支持导出 JSON / Markdown。
-- [ ] 持续校准支持从新的模型结果或实验结果触发。
-
-### T015 多角色视图真正影响输出
-
-#### TODO
-- [ ] role tabs 传入 AgentRequest。
-- [ ] 同一 agent 响应按角色生成不同摘要：实验生物学家、生信分析师、PI、临床医生。
-- [ ] 结果区根据角色调整默认 tab 和组件优先级。
-- [ ] 时间线记录当前角色视图。
-
----
-
-## P3 - Agent 间数据打通与编排预备
-
-### T016 标准 Artifact 交换格式
-
-#### TODO
-- [x] 定义 `Artifact`：id、type、producerAgent、schemaVersion、metadata、dataRef。
-- [x] 文献 Agent 输出靶点列表可作为结构 Agent / 知识库 Agent 输入的 schema consumers 已声明。
-- [x] 组学 Agent 输出差异基因可作为文献 Agent / 知识库 Agent 输入的 schema consumers 已声明。
-- [x] UI 提供“发送到另一个 Agent”操作。
-
-### T017 编排层预研
-
-#### TODO
-- [ ] 只做协议预留，不急于实现多 Agent 自动编排。
-- [ ] 定义跨 Agent run graph 的最小节点/边模型。
-- [ ] 时间线能表达一个问题拆成多个 Agent run。
-- [ ] 等 T001-T010 稳定后再进入 Phase 3。
-
----
-
-## 近期推荐开发顺序
-1. T004：补版本浏览 / 恢复入口，把当前只落盘的版本记录变成可操作历史。
-2. T012：补桌面 / 平板 / 手机视口回归，确保聊天面板、结果区和 workspace 输入不挤压。
-3. T008：接入真实知识库工具或 AgentServer proxy，减少 record-only 覆盖面。
-4. T009：对接 AgentServer 实际执行状态，让 ExecutionUnit 从 record-only 进入真实 run 状态。
-5. T014：把对齐工作台从静态说明推进到可编辑项目契约。
-
-## 最新验证记录
-- 2026-04-19：`npm run test` 通过。
-- 2026-04-19：`npm run smoke:fixtures` 通过，覆盖 literature、structure、omics、knowledge 的标准 artifact fixture。
-- 2026-04-19：`npm run typecheck` 通过。
-- 2026-04-19：`npm run build` 通过；Vite 提示主 chunk 超过 500 kB，暂不影响运行。
-- 2026-04-19：`npm run dev` 可访问 `http://127.0.0.1:5173/`。
-- 2026-04-19：AgentServer `GET http://127.0.0.1:18080/health` 连通。
-- 2026-04-19：前端已接入 AgentServer `/api/agent-server/runs/stream` NDJSON 流式事件；mid-run 用户输入当前为 queued follow-up，不伪装成真正 backend mid-run injection。
-- 2026-04-19：`npm run workspace:server` 已启动 `http://127.0.0.1:5174/`，workspace 写入 smoke 通过，验证生成 `.bioagent/workspace-state.json`、`sessions/session-smoke.json`、`artifacts/session-smoke-artifact-smoke.json`、`versions/session-smoke-version-smoke.json`。
-- 2026-04-19：workspace writer list/create-file/create-folder/rename/delete smoke 通过；snapshot smoke 验证生成 `.bioagent/config.json`。
-- 2026-04-19：RCSB PDB latest protein fallback smoke 通过，示例返回 `10NU` 并生成 `structure-summary-10NU` artifact。
+- [x] 用 Computer Use 在知识库 Agent 导出一次 JSON Bundle；文献/结构真实导出待 AgentServer 成功产出 ExecutionUnit。
+- [x] 检查 record-only 和 failed 两类运行结果；done/fallback 待真实工具 run 验证。
+- [x] 验证导出文件名、内容和当前 Agent 会话一致。
+- [x] BioAgent 侧：要求真实工具调用返回 tool name、params、environment、input/output artifact id。项目工具已为 PubMed/RCSB/AlphaFold/UniProt/omics CSV run 返回这些字段。
+- [x] 后续评估 Snakemake / Nextflow / Notebook 导出格式，但 Phase 1 先保证 JSON Bundle 稳定。结论：Phase 1 保持 JSON Bundle 为唯一规范审计产物；Snakemake / Nextflow 只适合后续多步骤文件型 pipeline DAG，Notebook 导出可作为 JSON Bundle 的只读渲染层，不能替代 `executionUnits`、artifact id、hash 和 metadata。

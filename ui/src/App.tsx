@@ -66,6 +66,7 @@ import {
   timeline,
 } from './demoData';
 import { sendAgentMessageStream } from './api/agentClient';
+import { sendBioAgentToolMessage } from './api/bioagentToolsClient';
 import { runLocalBioAgentAdapter } from './api/localAdapters';
 import {
   makeId,
@@ -77,6 +78,7 @@ import {
   type AgentStreamEvent,
   type EvidenceClaim,
   type NotebookRecord,
+  type NormalizedAgentResponse,
   type RuntimeArtifact,
   type RuntimeExecutionUnit,
   type UIManifestSlot,
@@ -84,7 +86,6 @@ import {
 import { createSession, loadWorkspaceState, resetSession, saveWorkspaceState, versionSession } from './sessionStore';
 import { loadBioAgentConfig, saveBioAgentConfig, updateConfig } from './config';
 import { listWorkspace, mutateWorkspaceFile, persistWorkspaceState, type WorkspaceEntry } from './api/workspaceClient';
-import { runLatestPdbStructureRescue } from './api/pdbClient';
 import { HeatmapViewer, MoleculeViewer, NetworkGraph, UmapViewer } from './visualizations';
 
 const chartTheme = {
@@ -674,6 +675,8 @@ function SettingsDialog({
             <select value={config.modelProvider} onChange={(event) => onChange({ modelProvider: event.target.value })}>
               <option value="native">native backend default</option>
               <option value="openai-compatible">openai-compatible</option>
+              <option value="openrouter">openrouter</option>
+              <option value="qwen">qwen</option>
               <option value="codex-chatgpt">codex-chatgpt</option>
               <option value="gemini">gemini</option>
             </select>
@@ -700,6 +703,15 @@ function SettingsDialog({
               onChange={(event) => onChange({ requestTimeoutMs: Number(event.target.value) })}
             />
           </label>
+        </div>
+        <div className="settings-save-state" role="status">
+          <span className="status-dot online" />
+          <span>
+            已自动保存到本机浏览器。下一次 AgentServer 请求会使用当前模型：
+            {' '}
+            <strong>{config.modelProvider || 'native'}</strong>
+            {config.modelName.trim() ? <code>{config.modelName.trim()}</code> : <em>backend default</em>}
+          </span>
         </div>
       </section>
     </div>
@@ -834,6 +846,8 @@ function ChatPanel({
   onEditMessage,
   onDeleteMessage,
   archivedCount,
+  autoRunRequest,
+  onAutoRunConsumed,
 }: {
   agentId: AgentId;
   role: string;
@@ -849,6 +863,8 @@ function ChatPanel({
   onEditMessage: (messageId: string, content: string) => void;
   onDeleteMessage: (messageId: string) => void;
   archivedCount: number;
+  autoRunRequest?: HandoffAutoRunRequest;
+  onAutoRunConsumed: (requestId: string) => void;
 }) {
   const [expanded, setExpanded] = useState<number | null>(0);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -875,10 +891,25 @@ function ChatPanel({
   }, [guidanceQueue]);
 
   useEffect(() => {
+    setStreamEvents([]);
+    setGuidanceQueue([]);
+    setErrorText('');
+    setFallbackPrompt('');
+  }, [agentId, session.sessionId]);
+
+  useEffect(() => {
     if (autoScrollRef.current) {
       messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: 'smooth' });
     }
   }, [messages.length, isSending]);
+
+  useEffect(() => {
+    if (!autoRunRequest || autoRunRequest.targetAgent !== agentId || isSending) return;
+    onAutoRunConsumed(autoRunRequest.id);
+    window.setTimeout(() => {
+      void runPrompt(autoRunRequest.prompt, activeSessionRef.current);
+    }, 120);
+  }, [agentId, autoRunRequest, isSending, onAutoRunConsumed]);
 
   useEffect(() => {
     setErrorText('');
@@ -930,50 +961,46 @@ function ChatPanel({
     setIsSending(true);
     const controller = new AbortController();
     abortRef.current = controller;
-	    try {
-	      const response = BIOAGENT_PROFILES[agentId].mode === 'demo'
-	        ? runLocalBioAgentAdapter(agentId, prompt)
-	        : await sendAgentMessageStream({
-	          agentId,
-	          agentName: agent.name,
-	          agentDomain: agent.domain,
-	          prompt,
-	          roleView: role,
-	          messages: optimisticSession.messages,
-	          config,
-	        }, {
-	          onEvent(event) {
-	            setStreamEvents((current) => [...current.slice(-32), event]);
-	          },
-	        }, controller.signal);
-	      const mergedSession = mergeAgentResponse(activeSessionRef.current, response);
-	      onSessionChange(mergedSession);
-	      activeSessionRef.current = mergedSession;
-	    } catch (err) {
-	      const message = err instanceof Error ? err.message : String(err);
-	      const rescue = agentId === 'structure' ? await runLatestPdbStructureRescue(prompt).catch(() => null) : null;
-	      if (rescue) {
-	        const rescuedSession = mergeAgentResponse(activeSessionRef.current, rescue);
-	        const rescuedWithNotice: BioAgentSession = {
-	          ...rescuedSession,
-	          messages: [
-	            ...rescuedSession.messages,
-	            {
-	              id: makeId('msg'),
-	              role: 'system',
-	              content: `AgentServer 未完成该 PDB 任务，已启用 RCSB PDB native fallback。原始错误：${message}`,
-	              createdAt: nowIso(),
-	              status: 'completed',
-	            },
-	          ],
-	        };
-	        onSessionChange(rescuedWithNotice);
-	        activeSessionRef.current = rescuedWithNotice;
-	        setErrorText('');
-	        setFallbackPrompt('');
-	        return;
-	      }
-	      setErrorText(message);
+    try {
+      const request = {
+        agentId,
+        agentName: agent.name,
+        agentDomain: agent.domain,
+        prompt,
+        roleView: role,
+        messages: optimisticSession.messages,
+        artifacts: optimisticSession.artifacts,
+        config,
+      };
+      let response: NormalizedAgentResponse;
+      try {
+        response = await sendBioAgentToolMessage(request, {
+          onEvent(event) {
+            setStreamEvents((current) => [...current.slice(-32), event]);
+          },
+        }, controller.signal);
+      } catch (projectToolError) {
+        const detail = projectToolError instanceof Error ? projectToolError.message : String(projectToolError);
+        setStreamEvents((current) => [...current.slice(-32), {
+          id: makeId('evt'),
+          type: 'project-tool-fallback',
+          label: '项目工具',
+          detail: `BioAgent project tool unavailable, falling back to AgentServer: ${detail}`,
+          createdAt: nowIso(),
+          raw: { error: detail },
+        }]);
+        response = await sendAgentMessageStream(request, {
+          onEvent(event) {
+            setStreamEvents((current) => [...current.slice(-32), event]);
+          },
+        }, controller.signal);
+      }
+      const mergedSession = mergeAgentResponse(activeSessionRef.current, response);
+      onSessionChange(mergedSession);
+      activeSessionRef.current = mergedSession;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setErrorText(message);
       setFallbackPrompt(prompt);
       onSessionChange({
         ...optimisticSession,
@@ -1045,7 +1072,7 @@ function ChatPanel({
     abortRef.current?.abort();
   }
 
-  function mergeAgentResponse(baseSession: BioAgentSession, response: ReturnType<typeof runLocalBioAgentAdapter>): BioAgentSession {
+  function mergeAgentResponse(baseSession: BioAgentSession, response: NormalizedAgentResponse): BioAgentSession {
     return {
       ...baseSession,
       messages: [...baseSession.messages, response.message],
@@ -1321,6 +1348,12 @@ type RegistryEntry = {
   render: (props: RegistryRendererProps) => ReactNode;
 };
 
+interface HandoffAutoRunRequest {
+  id: string;
+  targetAgent: AgentId;
+  prompt: string;
+}
+
 function defaultSlotsForAgent(agentId: AgentId): UIManifestSlot[] {
   return BIOAGENT_PROFILES[agentId].defaultSlots;
 }
@@ -1355,6 +1388,7 @@ function PaperCardList({ slot, artifact }: RegistryRendererProps) {
 function MoleculeSlot({ slot, artifact }: RegistryRendererProps) {
   const payload = slotPayload(slot, artifact);
   const pdbId = asString(payload.pdbId) || asString(payload.pdb) || '7BZ5';
+  const uniprotId = asString(payload.uniprotId);
   const ligand = asString(payload.ligand) || '6SI';
   const residues = asStringList(payload.highlightResidues ?? payload.residues);
   const metrics = isRecord(payload.metrics) ? payload.metrics : payload;
@@ -1362,7 +1396,7 @@ function MoleculeSlot({ slot, artifact }: RegistryRendererProps) {
     <div className="stack">
       <div className="slot-meta">
         <Badge variant={artifact ? 'success' : 'muted'}>{artifactMeta(artifact)}</Badge>
-        <code>PDB={pdbId}</code>
+        <code>{uniprotId ? `UniProt=${uniprotId}` : `PDB=${pdbId}`}</code>
         <code>ligand={ligand}</code>
         {residues.length ? <code>residues={residues.join(',')}</code> : null}
       </div>
@@ -1749,6 +1783,8 @@ function Workbench({
   onDeleteMessage,
   archivedCount,
   onArtifactHandoff,
+  autoRunRequest,
+  onAutoRunConsumed,
 }: {
   agentId: AgentId;
   config: BioAgentConfig;
@@ -1764,6 +1800,8 @@ function Workbench({
   onDeleteMessage: (agentId: AgentId, messageId: string) => void;
   archivedCount: number;
   onArtifactHandoff: (targetAgent: AgentId, artifact: RuntimeArtifact) => void;
+  autoRunRequest?: HandoffAutoRunRequest;
+  onAutoRunConsumed: (requestId: string) => void;
 }) {
   const agent = agents.find((item) => item.id === agentId) ?? agents[0];
   const [role, setRole] = useState('biologist');
@@ -1807,6 +1845,8 @@ function Workbench({
           onEditMessage={(messageId, content) => onEditMessage(agentId, messageId, content)}
           onDeleteMessage={(messageId) => onDeleteMessage(agentId, messageId)}
           archivedCount={archivedCount}
+          autoRunRequest={autoRunRequest}
+          onAutoRunConsumed={onAutoRunConsumed}
         />
         <ResultsRenderer agentId={agentId} session={session} onArtifactHandoff={onArtifactHandoff} />
       </div>
@@ -1975,6 +2015,52 @@ function TimelinePage() {
   );
 }
 
+function handoffAutoRunPrompt(targetAgent: AgentId, artifact: RuntimeArtifact, sourceAgentName: string, targetAgentName: string): string {
+  const focus = artifactFocusTerm(artifact);
+  if (targetAgent === 'literature' && focus) {
+    return `${focus} clinical trials，返回 paper-list JSON artifact、claims、ExecutionUnit。`;
+  }
+  if (targetAgent === 'structure' && focus) {
+    return `分析 ${focus} 的结构，返回 structure-summary artifact、dataRef、质量指标和 ExecutionUnit。`;
+  }
+  if (targetAgent === 'knowledge' && focus) {
+    return `${focus} gene/protein knowledge graph，返回 knowledge-graph、来源链接、数据库访问日期和 ExecutionUnit。`;
+  }
+  return [
+    `消费 handoff artifact ${artifact.id} (${artifact.type})。`,
+    `来源 Agent: ${sourceAgentName}。`,
+    `请按${targetAgentName}的 input contract 生成下一步 claims、ExecutionUnit、UIManifest 和 runtime artifact。`,
+  ].join('\n');
+}
+
+function artifactFocusTerm(artifact: RuntimeArtifact): string | undefined {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  const data = isRecord(artifact.data) ? artifact.data : {};
+  return asString(metadata.entity)
+    || asString(metadata.accession)
+    || asString(metadata.uniprotAccession)
+    || asString(data.uniprotId)
+    || asString(data.pdbId)
+    || rowValue(data.rows, 'entity')
+    || rowValue(data.rows, 'uniprot_accession')
+    || nodeId(data.nodes, ['gene', 'protein']);
+}
+
+function rowValue(value: unknown, key: string): string | undefined {
+  const rows = Array.isArray(value) ? value.filter(isRecord) : [];
+  const found = rows.find((row) => asString(row.key)?.toLowerCase() === key.toLowerCase());
+  return asString(found?.value);
+}
+
+function nodeId(value: unknown, preferredTypes: string[]): string | undefined {
+  const nodes = Array.isArray(value) ? value.filter(isRecord) : [];
+  const found = nodes.find((node) => {
+    const type = asString(node.type)?.toLowerCase();
+    return type ? preferredTypes.includes(type) : false;
+  }) ?? nodes[0];
+  return asString(found?.id) || asString(found?.label);
+}
+
 export function BioAgentApp() {
   const [page, setPage] = useState<PageId>('dashboard');
   const [agentId, setAgentId] = useState<AgentId>('literature');
@@ -1986,6 +2072,7 @@ export function BioAgentApp() {
     return { ...state, workspacePath: loadedConfig.workspacePath || state.workspacePath };
   });
   const [workspaceStatus, setWorkspaceStatus] = useState('');
+  const [handoffAutoRun, setHandoffAutoRun] = useState<HandoffAutoRunRequest | undefined>();
   const [drafts, setDrafts] = useState<Record<AgentId, string>>({
     literature: '',
     structure: '',
@@ -2036,13 +2123,18 @@ export function BioAgentApp() {
   }
 
   function setWorkspacePath(value: string) {
-    setConfig((current) => updateConfig(current, { workspacePath: value }));
+    setConfig((current) => {
+      const next = updateConfig(current, { workspacePath: value });
+      saveBioAgentConfig(next);
+      return next;
+    });
     updateWorkspace((current) => ({ ...current, workspacePath: value }));
   }
 
   function updateRuntimeConfig(patch: Partial<BioAgentConfig>) {
     setConfig((current) => {
       const next = updateConfig(current, patch);
+      saveBioAgentConfig(next);
       if ('workspacePath' in patch) {
         updateWorkspace((state) => ({ ...state, workspacePath: next.workspacePath }));
       }
@@ -2135,6 +2227,7 @@ export function BioAgentApp() {
     const sourceAgent = agents.find((item) => item.id === artifact.producerAgent);
     const target = agents.find((item) => item.id === targetAgent);
     const now = nowIso();
+    const autoRunPrompt = handoffAutoRunPrompt(targetAgent, artifact, sourceAgent?.name ?? artifact.producerAgent, target?.name ?? targetAgent);
     const handoffMessage: BioAgentMessage = {
       id: makeId('handoff'),
       role: 'user',
@@ -2178,6 +2271,15 @@ export function BioAgentApp() {
     });
     setAgentId(targetAgent);
     setPage('workbench');
+    setHandoffAutoRun({
+      id: makeId('handoff-run'),
+      targetAgent,
+      prompt: autoRunPrompt,
+    });
+  }
+
+  function consumeHandoffAutoRun(requestId: string) {
+    setHandoffAutoRun((current) => current?.id === requestId ? undefined : current);
   }
 
   return (
@@ -2214,6 +2316,8 @@ export function BioAgentApp() {
               onDeleteMessage={deleteMessage}
               archivedCount={archivedCountByAgent[agentId]}
               onArtifactHandoff={handleArtifactHandoff}
+              autoRunRequest={handoffAutoRun}
+              onAutoRunConsumed={consumeHandoffAutoRun}
             />
           ) : page === 'alignment' ? (
             <AlignmentPage />

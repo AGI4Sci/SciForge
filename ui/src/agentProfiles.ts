@@ -115,7 +115,7 @@ export const BIOAGENT_PROFILES = {
   omics: {
     id: 'omics',
     agentServerId: 'bioagent-omics',
-    mode: 'demo',
+    mode: 'agent-server',
     nativeTools: ['DESeq2', 'Scanpy', 'clusterProfiler'],
     fallbackTools: ['demo-expression-matrix'],
     inputContract: [
@@ -149,7 +149,7 @@ export const BIOAGENT_PROFILES = {
   knowledge: {
     id: 'knowledge',
     agentServerId: 'bioagent-knowledge',
-    mode: 'demo',
+    mode: 'agent-server',
     nativeTools: ['UniProt', 'ChEMBL', 'OpenTargets', 'ClinicalTrials'],
     fallbackTools: ['manual-knowledge-card'],
     inputContract: [

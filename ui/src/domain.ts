@@ -140,6 +140,7 @@ export interface SendAgentMessageInput {
   prompt: string;
   roleView: string;
   messages: BioAgentMessage[];
+  artifacts?: RuntimeArtifact[];
   config: BioAgentConfig;
 }
 
