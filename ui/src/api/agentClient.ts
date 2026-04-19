@@ -12,8 +12,7 @@ import {
 import { agentProtocolForPrompt, BIOAGENT_PROFILES } from '../agentProfiles';
 
 const DEFAULT_AGENT_SERVER_URL = 'http://127.0.0.1:18080';
-const REQUEST_TIMEOUT_MS = 120_000;
-const WORKSPACE = '/Applications/workspace/ailab/research/app/BioAgent';
+const DEFAULT_REQUEST_TIMEOUT_MS = 300_000;
 
 const evidenceLevels: EvidenceLevel[] = ['meta', 'rct', 'cohort', 'case', 'experimental', 'review', 'database', 'preprint', 'prediction'];
 const claimTypes: ClaimType[] = ['fact', 'inference', 'hypothesis'];
@@ -76,12 +75,14 @@ function buildPrompt(input: SendAgentMessageInput) {
 }
 
 function buildRunPayload(input: SendAgentMessageInput): AgentServerRunPayload {
+  const runtime = buildRuntimeConfig(input);
   return {
     agent: {
       id: BIOAGENT_PROFILES[input.agentId].agentServerId,
       name: input.agentName,
       backend: 'codex',
-      workspace: WORKSPACE,
+      workspace: input.config.workspacePath,
+      workingDirectory: input.config.workspacePath,
       systemPrompt: agentSystemPrompt(input),
       reconcileExisting: true,
       metadata: {
@@ -101,12 +102,48 @@ function buildRunPayload(input: SendAgentMessageInput): AgentServerRunPayload {
         expectedArtifacts: BIOAGENT_PROFILES[input.agentId].outputArtifacts.map((artifact) => artifact.type),
       },
     },
+    runtime,
     metadata: {
       project: 'BioAgent',
       source: 'bioagent-web-ui',
       agentId: input.agentId,
+      runtimeConfig: {
+        modelProvider: input.config.modelProvider,
+        modelBaseUrl: input.config.modelBaseUrl,
+        modelName: input.config.modelName,
+        agentServerBaseUrl: input.config.agentServerBaseUrl,
+        workspacePath: input.config.workspacePath,
+      },
     },
   };
+}
+
+function buildRuntimeConfig(input: SendAgentMessageInput): AgentServerRunPayload['runtime'] {
+  const provider = input.config.modelProvider.trim();
+  const modelName = input.config.modelName.trim();
+  const modelBaseUrl = input.config.modelBaseUrl.trim().replace(/\/+$/, '');
+  const useNative = !provider || provider === 'native';
+  const runtime: AgentServerRunPayload['runtime'] = {
+    backend: 'codex',
+    cwd: input.config.workspacePath,
+    metadata: {
+      bioAgentProfile: input.agentId,
+      nativeToolFirst: true,
+      autoApprove: true,
+      sandbox: 'danger-full-access',
+    },
+  };
+  if (!useNative) runtime.modelProvider = provider;
+  if (modelName) runtime.modelName = modelName;
+  if (!useNative || modelName || input.config.apiKey.trim()) {
+    runtime.llmEndpoint = {
+      provider: useNative ? 'native' : provider,
+      baseUrl: useNative ? undefined : modelBaseUrl || undefined,
+      apiKey: input.config.apiKey.trim() || undefined,
+      modelName: modelName || undefined,
+    };
+  }
+  return runtime;
 }
 
 function normalizeStreamEvent(raw: unknown): AgentStreamEvent {
@@ -298,11 +335,12 @@ export function normalizeAgentResponse(
 
 export async function sendAgentMessage(input: SendAgentMessageInput, signal?: AbortSignal): Promise<NormalizedAgentResponse> {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = window.setTimeout(() => controller.abort(), input.config.requestTimeoutMs || DEFAULT_REQUEST_TIMEOUT_MS);
   const linkedAbort = () => controller.abort();
   signal?.addEventListener('abort', linkedAbort, { once: true });
   try {
-    const response = await fetch(`${DEFAULT_AGENT_SERVER_URL}/api/agent-server/runs`, {
+    const baseUrl = input.config.agentServerBaseUrl || DEFAULT_AGENT_SERVER_URL;
+    const response = await fetch(`${baseUrl}/api/agent-server/runs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(buildRunPayload(input)),
@@ -325,7 +363,7 @@ export async function sendAgentMessage(input: SendAgentMessageInput, signal?: Ab
       throw new Error('AgentServer 请求已取消或超时。');
     }
     if (err instanceof TypeError) {
-      throw new Error('无法连接 AgentServer，请确认 http://127.0.0.1:18080 正在运行。');
+      throw new Error(`无法连接 AgentServer，请确认 ${input.config.agentServerBaseUrl || DEFAULT_AGENT_SERVER_URL} 正在运行。`);
     }
     throw err;
   } finally {
@@ -342,11 +380,12 @@ export async function sendAgentMessageStream(
   signal?: AbortSignal,
 ): Promise<NormalizedAgentResponse> {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = window.setTimeout(() => controller.abort(), input.config.requestTimeoutMs || DEFAULT_REQUEST_TIMEOUT_MS);
   const linkedAbort = () => controller.abort();
   signal?.addEventListener('abort', linkedAbort, { once: true });
   try {
-    const response = await fetch(`${DEFAULT_AGENT_SERVER_URL}/api/agent-server/runs/stream`, {
+    const baseUrl = input.config.agentServerBaseUrl || DEFAULT_AGENT_SERVER_URL;
+    const response = await fetch(`${baseUrl}/api/agent-server/runs/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(buildRunPayload(input)),
@@ -406,7 +445,7 @@ export async function sendAgentMessageStream(
       throw new Error('AgentServer 流式请求已取消或超时。');
     }
     if (err instanceof TypeError) {
-      throw new Error('无法连接 AgentServer stream，请确认 http://127.0.0.1:18080 正在运行。');
+      throw new Error(`无法连接 AgentServer stream，请确认 ${input.config.agentServerBaseUrl || DEFAULT_AGENT_SERVER_URL} 正在运行。`);
     }
     throw err;
   } finally {

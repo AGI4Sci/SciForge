@@ -19,6 +19,8 @@
 - 对话、run、claim、UIManifest、ExecutionUnit、artifact、notebook 已建立前端运行时模型，并按 Agent 独立持久化到 `localStorage`。
 - 会话管理已升级为 workspace state v2：支持新建聊天、删除当前聊天、编辑/删除历史消息、按操作生成版本快照；用户设置 workspace 目录后会同步写入 `<workspace>/.bioagent/`。
 - 本地 workspace writer 会把结构化状态拆分为 `workspace-state.json`、`sessions/*.json`、`artifacts/*.json`、`versions/*.json`，对齐 AgentServer 的 session / artifact / run audit 思路，同时不要求现在配置 MCP/skills 资源。
+- 顶部设置入口已支持集中配置 AgentServer URL、workspace writer URL、workspace path、model provider/base URL/name/API key/timeout；配置会本地持久化并镜像到 `<workspace>/.bioagent/config.json`。
+- 左侧资源管理器已承担 workspace 管理：路径可编辑，支持列目录、刷新、新建文件/文件夹、重命名、删除、复制路径和双击进入文件夹。
 - Agent profile 契约已集中到 `ui/src/agentProfiles.ts`：AgentServer id、native tools、fallback tools、输入契约、artifact schema、默认 UIManifest slots 和 ExecutionUnit defaults 统一从这里生成。
 - 右侧结果区已接入 UIManifest component registry，可按 agent 返回的 slot 动态渲染 paper cards、结构查看器、组学图表、网络图、证据矩阵、ExecutionUnit 和 notebook timeline；结构/组学/网络组件已能消费 artifact payload，并对 artifact 缺失 / 未注册组件提供 fallback 诊断。
 - ExecutionUnit 当前可从 agent 响应标准化生成 record-only/run 记录，支持当前会话 JSON bundle 导出，并已预留 code、seed、inputData、databaseVersions、outputArtifacts 等可复现字段；尚未对接后端真实工具执行状态和 pipeline 导出。
@@ -127,6 +129,8 @@
 - [x] 增加“开启新聊天”和“删除当前聊天”入口；删除不会直接丢弃结构化信息，而是归档到 workspace state。
 - [x] 支持编辑/删除历史消息，并将操作记录为新版本。
 - [x] 新增 `npm run workspace:server`，把 workspace state、session、artifact、version 写入用户设置的 workspace 目录。
+- [x] 新增 `<workspace>/.bioagent/config.json`，集中保存 AgentServer/model/workspace 常见配置。
+- [x] 左侧资源管理器支持基础文件/文件夹操作；顶部重复 workspace 输入已移除。
 - [ ] 增加可视化版本浏览 / 恢复入口。
 - [ ] 将 workspace writer 替换或升级为 AgentServer 原生项目存储 API。
 
@@ -158,6 +162,7 @@
 - [x] 定义 structure-summary artifact schema：pLDDT、resolution、pocket volume、mutation risk 等 metrics。
 - [x] 生成结构分析 ExecutionUnit 草案。
 - [x] 对无结构、低置信度结构、无法加载结构提供 record-only fallback。
+- [x] 对“最新 PDB 蛋白结构”类任务增加 RCSB PDB native fallback：AgentServer 失败/超时后可检索最新 protein entry、生成 CIF dataRef 和 structure-summary artifact。
 
 ### T007 组学 Agent MVP
 
@@ -228,6 +233,8 @@
 - [x] 推理过程中允许继续输入引导，并显示 queued guidance 状态。
 - [x] 支持开启新聊天、删除当前聊天、编辑消息、删除消息。
 - [x] 聊天面板展示当前会话版本数和归档数量，降低版本化管理的不可见感。
+- [x] 新建/删除聊天现在进入真正空聊天，不再重新注入 seed 示例消息。
+- [x] 设置按钮可打开 runtime config 面板并通过 AgentServer request runtime 切换模型连接。
 
 ### T012 响应式与可访问性
 
@@ -307,3 +314,5 @@
 - 2026-04-19：AgentServer `GET http://127.0.0.1:18080/health` 连通。
 - 2026-04-19：前端已接入 AgentServer `/api/agent-server/runs/stream` NDJSON 流式事件；mid-run 用户输入当前为 queued follow-up，不伪装成真正 backend mid-run injection。
 - 2026-04-19：`npm run workspace:server` 已启动 `http://127.0.0.1:5174/`，workspace 写入 smoke 通过，验证生成 `.bioagent/workspace-state.json`、`sessions/session-smoke.json`、`artifacts/session-smoke-artifact-smoke.json`、`versions/session-smoke-version-smoke.json`。
+- 2026-04-19：workspace writer list/create-file/create-folder/rename/delete smoke 通过；snapshot smoke 验证生成 `.bioagent/config.json`。
+- 2026-04-19：RCSB PDB latest protein fallback smoke 通过，示例返回 `10NU` 并生成 `structure-summary-10NU` artifact。

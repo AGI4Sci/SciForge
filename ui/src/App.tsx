@@ -9,8 +9,12 @@ import {
   ChevronUp,
   Clock,
   Download,
+  File,
   FileCode,
+  FilePlus,
   FileText,
+  Folder,
+  FolderPlus,
   Lock,
   MessageSquare,
   Plus,
@@ -69,6 +73,7 @@ import {
   type BioAgentMessage,
   type BioAgentSession,
   type BioAgentWorkspaceState,
+  type BioAgentConfig,
   type AgentStreamEvent,
   type EvidenceClaim,
   type NotebookRecord,
@@ -77,7 +82,9 @@ import {
   type UIManifestSlot,
 } from './domain';
 import { createSession, loadWorkspaceState, resetSession, saveWorkspaceState, versionSession } from './sessionStore';
-import { persistWorkspaceState } from './api/workspaceClient';
+import { loadBioAgentConfig, saveBioAgentConfig, updateConfig } from './config';
+import { listWorkspace, mutateWorkspaceFile, persistWorkspaceState, type WorkspaceEntry } from './api/workspaceClient';
+import { runLatestPdbStructureRescue } from './api/pdbClient';
 import { HeatmapViewer, MoleculeViewer, NetworkGraph, UmapViewer } from './visualizations';
 
 const chartTheme = {
@@ -352,15 +359,25 @@ function Sidebar({
   setPage,
   agentId,
   setAgentId,
+  config,
+  workspaceStatus,
+  onWorkspacePathChange,
 }: {
   page: PageId;
   setPage: (page: PageId) => void;
   agentId: AgentId;
   setAgentId: (id: AgentId) => void;
+  config: BioAgentConfig;
+  workspaceStatus: string;
+  onWorkspacePathChange: (value: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [activePanel, setActivePanel] = useState<'navigation' | 'workspace' | 'extensions'>('navigation');
   const [sidebarWidth, setSidebarWidth] = useState(284);
+  const [workspaceEntries, setWorkspaceEntries] = useState<WorkspaceEntry[]>([]);
+  const [workspaceError, setWorkspaceError] = useState('');
+  const [selectedEntryPath, setSelectedEntryPath] = useState('');
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry?: WorkspaceEntry } | null>(null);
   const resizingRef = useRef(false);
 
   useEffect(() => {
@@ -386,8 +403,61 @@ function Sidebar({
     setCollapsed(false);
   }
 
-  const workspaceFolders = ['projects', 'proj-1', 'proj-e2e-artifacts', 'proj-e2e-dag', 'proj-bioagent'];
   const extensions = ['Python', 'Jupyter', 'Docker', 'GitLens', 'Error Lens'];
+
+  useEffect(() => {
+    if (activePanel !== 'workspace' || collapsed) return;
+    void refreshWorkspace();
+  }, [activePanel, collapsed, config.workspacePath, config.workspaceWriterBaseUrl]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    function closeMenu() {
+      setContextMenu(null);
+    }
+    window.addEventListener('click', closeMenu);
+    return () => window.removeEventListener('click', closeMenu);
+  }, [contextMenu]);
+
+  async function refreshWorkspace() {
+    try {
+      setWorkspaceError('');
+      setWorkspaceEntries(await listWorkspace(config.workspacePath, config));
+    } catch (err) {
+      setWorkspaceEntries([]);
+      setWorkspaceError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function runWorkspaceAction(action: 'create-file' | 'create-folder' | 'rename' | 'delete', entry?: WorkspaceEntry) {
+    const basePath = entry?.kind === 'folder' ? entry.path : config.workspacePath;
+    const selectedPath = entry?.path || config.workspacePath;
+    let targetPath = selectedPath;
+    let renameTarget: string | undefined;
+    if (action === 'create-file') {
+      const name = window.prompt('新文件名', 'notes.md');
+      if (!name) return;
+      targetPath = `${basePath.replace(/\/+$/, '')}/${name}`;
+    } else if (action === 'create-folder') {
+      const name = window.prompt('新文件夹名', 'new-folder');
+      if (!name) return;
+      targetPath = `${basePath.replace(/\/+$/, '')}/${name}`;
+    } else if (action === 'rename') {
+      if (!entry) return;
+      const name = window.prompt('重命名为', entry.name);
+      if (!name || name === entry.name) return;
+      renameTarget = `${entry.path.slice(0, -entry.name.length)}${name}`;
+    } else if (action === 'delete') {
+      if (!entry || !window.confirm(`删除 ${entry.name}？`)) return;
+    }
+    try {
+      setWorkspaceError('');
+      await mutateWorkspaceFile(config, action, { path: targetPath, targetPath: renameTarget });
+      await refreshWorkspace();
+    } catch (err) {
+      setWorkspaceError(err instanceof Error ? err.message : String(err));
+    }
+  }
 
   return (
     <aside className={cx('sidebar', collapsed && 'collapsed')} style={{ width: collapsed ? 46 : sidebarWidth }}>
@@ -469,10 +539,48 @@ function Sidebar({
             {activePanel === 'workspace' ? (
               <div className="sidebar-tree">
                 <div className="sidebar-label">当前工作目录</div>
-                <code>/Applications/workspace/ailab/research/app/BioAgent</code>
-                {workspaceFolders.map((folder) => (
-                  <div key={folder} className="tree-item">📁 {folder}</div>
+                <input
+                  className="workspace-path-editor"
+                  value={config.workspacePath}
+                  onChange={(event) => onWorkspacePathChange(event.target.value)}
+                  onBlur={() => void refreshWorkspace()}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') void refreshWorkspace();
+                  }}
+                  title={workspaceStatus || 'BioAgent workspace path'}
+                />
+                <div className="workspace-toolbar">
+                  <button onClick={() => void runWorkspaceAction('create-file')} title="新建文件" aria-label="新建文件"><FilePlus size={14} /></button>
+                  <button onClick={() => void runWorkspaceAction('create-folder')} title="新建文件夹" aria-label="新建文件夹"><FolderPlus size={14} /></button>
+                  <button onClick={() => void refreshWorkspace()} title="刷新" aria-label="刷新"><RefreshCw size={14} /></button>
+                </div>
+                {workspaceError ? <p className="workspace-error">{workspaceError}</p> : null}
+                {workspaceEntries.map((entry) => (
+                  <button
+                    key={entry.path}
+                    className={cx('tree-item', selectedEntryPath === entry.path && 'active')}
+                    onClick={() => setSelectedEntryPath(entry.path)}
+                    onDoubleClick={() => entry.kind === 'folder' && onWorkspacePathChange(entry.path)}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      setSelectedEntryPath(entry.path);
+                      setContextMenu({ x: event.clientX, y: event.clientY, entry });
+                    }}
+                    title={entry.path}
+                  >
+                    {entry.kind === 'folder' ? <Folder size={14} /> : <File size={14} />}
+                    <span>{entry.name}</span>
+                  </button>
                 ))}
+                {contextMenu ? (
+                  <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
+                    <button onClick={() => void runWorkspaceAction('create-file', contextMenu.entry)}>新建文件</button>
+                    <button onClick={() => void runWorkspaceAction('create-folder', contextMenu.entry)}>新建文件夹</button>
+                    {contextMenu.entry ? <button onClick={() => void runWorkspaceAction('rename', contextMenu.entry)}>重命名</button> : null}
+                    {contextMenu.entry ? <button onClick={() => void navigator.clipboard?.writeText(contextMenu.entry?.path || '')}>复制路径</button> : null}
+                    {contextMenu.entry ? <button className="danger" onClick={() => void runWorkspaceAction('delete', contextMenu.entry)}>删除</button> : null}
+                  </div>
+                ) : null}
               </div>
             ) : null}
             {activePanel === 'extensions' ? (
@@ -503,14 +611,10 @@ function Sidebar({
 
 function TopBar({
   onSearch,
-  workspacePath,
-  onWorkspacePathChange,
-  workspaceStatus,
+  onSettingsOpen,
 }: {
   onSearch: (query: string) => void;
-  workspacePath: string;
-  onWorkspacePathChange: (value: string) => void;
-  workspaceStatus: string;
+  onSettingsOpen: () => void;
 }) {
   const [query, setQuery] = useState('');
   function handleSubmit(event: FormEvent) {
@@ -524,20 +628,81 @@ function TopBar({
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索基因、通路、文献、Execution Unit..." />
       </form>
       <div className="topbar-actions">
-        <div className="workspace-input" title={workspaceStatus || '设置 BioAgent workspace 目录'}>
-          <span>Workspace</span>
-          <input
-            value={workspacePath}
-            onChange={(event) => onWorkspacePathChange(event.target.value)}
-            placeholder="/path/to/workspace"
-          />
-        </div>
         <Badge variant="info" glow>
           Phase 1 - 单 Agent 独立运行
         </Badge>
-        <IconButton icon={Settings} label="设置" />
+        <IconButton icon={Settings} label="设置" onClick={onSettingsOpen} />
       </div>
     </header>
+  );
+}
+
+function SettingsDialog({
+  config,
+  onChange,
+  onClose,
+}: {
+  config: BioAgentConfig;
+  onChange: (patch: Partial<BioAgentConfig>) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="settings-dialog" role="dialog" aria-modal="true" aria-label="BioAgent 设置" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="settings-head">
+          <div>
+            <h2>设置</h2>
+            <p>统一配置 AgentServer、模型连接和本地 workspace。</p>
+          </div>
+          <IconButton icon={ChevronDown} label="关闭设置" onClick={onClose} />
+        </div>
+        <div className="settings-grid">
+          <label>
+            <span>AgentServer Base URL</span>
+            <input value={config.agentServerBaseUrl} onChange={(event) => onChange({ agentServerBaseUrl: event.target.value })} />
+          </label>
+          <label>
+            <span>Workspace Writer URL</span>
+            <input value={config.workspaceWriterBaseUrl} onChange={(event) => onChange({ workspaceWriterBaseUrl: event.target.value })} />
+          </label>
+          <label className="wide">
+            <span>Workspace Path</span>
+            <input value={config.workspacePath} onChange={(event) => onChange({ workspacePath: event.target.value })} />
+          </label>
+          <label>
+            <span>Model Provider</span>
+            <select value={config.modelProvider} onChange={(event) => onChange({ modelProvider: event.target.value })}>
+              <option value="native">native backend default</option>
+              <option value="openai-compatible">openai-compatible</option>
+              <option value="codex-chatgpt">codex-chatgpt</option>
+              <option value="gemini">gemini</option>
+            </select>
+          </label>
+          <label>
+            <span>Model Name</span>
+            <input value={config.modelName} onChange={(event) => onChange({ modelName: event.target.value })} placeholder="gpt-5.4 / local-model / ..." />
+          </label>
+          <label>
+            <span>Model Base URL</span>
+            <input value={config.modelBaseUrl} onChange={(event) => onChange({ modelBaseUrl: event.target.value })} placeholder="https://.../v1" />
+          </label>
+          <label>
+            <span>API Key</span>
+            <input type="password" value={config.apiKey} onChange={(event) => onChange({ apiKey: event.target.value })} placeholder="stored in local config.json" />
+          </label>
+          <label>
+            <span>Timeout ms</span>
+            <input
+              type="number"
+              min={30000}
+              step={10000}
+              value={config.requestTimeoutMs}
+              onChange={(event) => onChange({ requestTimeoutMs: Number(event.target.value) })}
+            />
+          </label>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -657,6 +822,7 @@ function Dashboard({ setPage, setAgentId }: { setPage: (page: PageId) => void; s
 function ChatPanel({
   agentId,
   role,
+  config,
   session,
   input,
   savedScrollTop,
@@ -671,6 +837,7 @@ function ChatPanel({
 }: {
   agentId: AgentId;
   role: string;
+  config: BioAgentConfig;
   session: BioAgentSession;
   input: string;
   savedScrollTop: number;
@@ -763,27 +930,50 @@ function ChatPanel({
     setIsSending(true);
     const controller = new AbortController();
     abortRef.current = controller;
-    try {
-      const response = BIOAGENT_PROFILES[agentId].mode === 'demo'
-        ? runLocalBioAgentAdapter(agentId, prompt)
-        : await sendAgentMessageStream({
-          agentId,
-          agentName: agent.name,
-          agentDomain: agent.domain,
-          prompt,
-          roleView: role,
-          messages: optimisticSession.messages,
-        }, {
-          onEvent(event) {
-            setStreamEvents((current) => [...current.slice(-32), event]);
-          },
-        }, controller.signal);
-      const mergedSession = mergeAgentResponse(activeSessionRef.current, response);
-      onSessionChange(mergedSession);
-      activeSessionRef.current = mergedSession;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setErrorText(message);
+	    try {
+	      const response = BIOAGENT_PROFILES[agentId].mode === 'demo'
+	        ? runLocalBioAgentAdapter(agentId, prompt)
+	        : await sendAgentMessageStream({
+	          agentId,
+	          agentName: agent.name,
+	          agentDomain: agent.domain,
+	          prompt,
+	          roleView: role,
+	          messages: optimisticSession.messages,
+	          config,
+	        }, {
+	          onEvent(event) {
+	            setStreamEvents((current) => [...current.slice(-32), event]);
+	          },
+	        }, controller.signal);
+	      const mergedSession = mergeAgentResponse(activeSessionRef.current, response);
+	      onSessionChange(mergedSession);
+	      activeSessionRef.current = mergedSession;
+	    } catch (err) {
+	      const message = err instanceof Error ? err.message : String(err);
+	      const rescue = agentId === 'structure' ? await runLatestPdbStructureRescue(prompt).catch(() => null) : null;
+	      if (rescue) {
+	        const rescuedSession = mergeAgentResponse(activeSessionRef.current, rescue);
+	        const rescuedWithNotice: BioAgentSession = {
+	          ...rescuedSession,
+	          messages: [
+	            ...rescuedSession.messages,
+	            {
+	              id: makeId('msg'),
+	              role: 'system',
+	              content: `AgentServer 未完成该 PDB 任务，已启用 RCSB PDB native fallback。原始错误：${message}`,
+	              createdAt: nowIso(),
+	              status: 'completed',
+	            },
+	          ],
+	        };
+	        onSessionChange(rescuedWithNotice);
+	        activeSessionRef.current = rescuedWithNotice;
+	        setErrorText('');
+	        setFallbackPrompt('');
+	        return;
+	      }
+	      setErrorText(message);
       setFallbackPrompt(prompt);
       onSessionChange({
         ...optimisticSession,
@@ -928,6 +1118,13 @@ function ChatPanel({
       </div>
 
       <div className="messages" ref={messagesRef} onScroll={handleMessagesScroll}>
+        {!messages.length ? (
+          <div className="chat-empty">
+            <MessageSquare size={18} />
+            <strong>新聊天已就绪</strong>
+            <span>输入研究问题后，当前 Agent 会从一个干净上下文开始工作。</span>
+          </div>
+        ) : null}
         {messages.map((message, index) => (
           <div key={message.id} className={cx('message', message.role)}>
             <div className="message-body">
@@ -1539,6 +1736,7 @@ function AgentContractPanel({ agentId }: { agentId: AgentId }) {
 
 function Workbench({
   agentId,
+  config,
   session,
   draft,
   savedScrollTop,
@@ -1553,6 +1751,7 @@ function Workbench({
   onArtifactHandoff,
 }: {
   agentId: AgentId;
+  config: BioAgentConfig;
   session: BioAgentSession;
   draft: string;
   savedScrollTop: number;
@@ -1593,10 +1792,11 @@ function Workbench({
       </div>
       <AgentContractPanel agentId={agentId} />
       <div className="workbench-grid">
-        <ChatPanel
-          agentId={agentId}
-          role={role}
-          session={session}
+	        <ChatPanel
+	          agentId={agentId}
+	          role={role}
+	          config={config}
+	          session={session}
           input={draft}
           savedScrollTop={savedScrollTop}
           onInputChange={(value) => onDraftChange(agentId, value)}
@@ -1778,7 +1978,13 @@ function TimelinePage() {
 export function BioAgentApp() {
   const [page, setPage] = useState<PageId>('dashboard');
   const [agentId, setAgentId] = useState<AgentId>('literature');
-  const [workspaceState, setWorkspaceState] = useState<BioAgentWorkspaceState>(() => loadWorkspaceState());
+  const [config, setConfig] = useState<BioAgentConfig>(() => loadBioAgentConfig());
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [workspaceState, setWorkspaceState] = useState<BioAgentWorkspaceState>(() => {
+    const state = loadWorkspaceState();
+    const loadedConfig = loadBioAgentConfig();
+    return { ...state, workspacePath: loadedConfig.workspacePath || state.workspacePath };
+  });
   const [workspaceStatus, setWorkspaceStatus] = useState('');
   const [drafts, setDrafts] = useState<Record<AgentId, string>>({
     literature: '',
@@ -1802,11 +2008,15 @@ export function BioAgentApp() {
   useEffect(() => {
     saveWorkspaceState(workspaceState);
     if (workspaceState.workspacePath.trim()) {
-      persistWorkspaceState(workspaceState)
+      persistWorkspaceState(workspaceState, config)
         .then(() => setWorkspaceStatus(`已同步到 ${workspaceState.workspacePath}/.bioagent`))
         .catch((err) => setWorkspaceStatus(`Workspace writer 未连接：${err instanceof Error ? err.message : String(err)}`));
     }
-  }, [workspaceState]);
+  }, [workspaceState, config]);
+
+  useEffect(() => {
+    saveBioAgentConfig(config);
+  }, [config]);
 
   function updateWorkspace(mutator: (state: BioAgentWorkspaceState) => BioAgentWorkspaceState) {
     setWorkspaceState((current) => ({
@@ -1826,7 +2036,18 @@ export function BioAgentApp() {
   }
 
   function setWorkspacePath(value: string) {
+    setConfig((current) => updateConfig(current, { workspacePath: value }));
     updateWorkspace((current) => ({ ...current, workspacePath: value }));
+  }
+
+  function updateRuntimeConfig(patch: Partial<BioAgentConfig>) {
+    setConfig((current) => {
+      const next = updateConfig(current, patch);
+      if ('workspacePath' in patch) {
+        updateWorkspace((state) => ({ ...state, workspacePath: next.workspacePath }));
+      }
+      return next;
+    });
   }
 
   function updateDraft(nextAgentId: AgentId, value: string) {
@@ -1963,15 +2184,24 @@ export function BioAgentApp() {
     <div className="app-shell">
       <div className="ambient ambient-a" />
       <div className="ambient ambient-b" />
-      <Sidebar page={page} setPage={setPage} agentId={agentId} setAgentId={setAgentId} />
+      <Sidebar
+        page={page}
+        setPage={setPage}
+        agentId={agentId}
+        setAgentId={setAgentId}
+        config={config}
+        workspaceStatus={workspaceStatus}
+        onWorkspacePathChange={setWorkspacePath}
+      />
       <div className="main-shell">
-        <TopBar onSearch={handleSearch} workspacePath={workspaceState.workspacePath} onWorkspacePathChange={setWorkspacePath} workspaceStatus={workspaceStatus} />
+        <TopBar onSearch={handleSearch} onSettingsOpen={() => setSettingsOpen(true)} />
         <div className="content-shell">
           {page === 'dashboard' ? (
             <Dashboard setPage={setPage} setAgentId={setAgentId} />
           ) : page === 'workbench' ? (
             <Workbench
               agentId={agentId}
+              config={config}
               session={sessions[agentId]}
               draft={drafts[agentId]}
               savedScrollTop={messageScrollTops[agentId]}
@@ -1992,6 +2222,13 @@ export function BioAgentApp() {
           )}
         </div>
       </div>
+      {settingsOpen ? (
+        <SettingsDialog
+          config={config}
+          onChange={updateRuntimeConfig}
+          onClose={() => setSettingsOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

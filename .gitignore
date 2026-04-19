@@ -3,3 +3,4 @@ dist/
 dist-ui/
 .DS_Store
 *.log
+.bioagent/

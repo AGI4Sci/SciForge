@@ -31,7 +31,7 @@ function seedMessages(agentId: AgentId): BioAgentMessage[] {
   }));
 }
 
-export function createSession(agentId: AgentId, title = '新聊天'): BioAgentSession {
+export function createSession(agentId: AgentId, title = '新聊天', options: { seed?: boolean } = {}): BioAgentSession {
   const now = nowIso();
   return {
     schemaVersion: 2,
@@ -39,7 +39,7 @@ export function createSession(agentId: AgentId, title = '新聊天'): BioAgentSe
     agentId,
     title,
     createdAt: now,
-    messages: seedMessages(agentId),
+    messages: options.seed ? seedMessages(agentId) : [],
     runs: [],
     uiManifest: [],
     claims: [],
@@ -91,7 +91,7 @@ export function createInitialWorkspaceState(): BioAgentWorkspaceState {
     schemaVersion: 2,
     workspacePath: '',
     sessionsByAgent: agentIds.reduce((acc, agentId) => {
-      acc[agentId] = createSession(agentId, `${agentLabel(agentId)} 默认聊天`);
+      acc[agentId] = createSession(agentId, `${agentLabel(agentId)} 默认聊天`, { seed: true });
       return acc;
     }, {} as Record<AgentId, BioAgentSession>),
     archivedSessions: [],

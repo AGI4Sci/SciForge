@@ -209,28 +209,108 @@ button {
   padding: 12px 10px;
 }
 
-.sidebar-tree code {
-  display: block;
-  margin: 0 12px 8px;
+.workspace-path-editor {
+  width: calc(100% - 20px);
+  min-height: 32px;
+  margin: 0 10px 8px;
+  padding: 0 9px;
   color: var(--teal);
+  background: rgba(5, 8, 16, 0.62);
+  border: 1px solid rgba(46, 61, 85, 0.72);
+  border-radius: 7px;
   font-size: 10px;
+  outline: 0;
+}
+
+.workspace-toolbar {
+  display: flex;
+  gap: 6px;
+  margin: 0 10px 8px;
+}
+
+.workspace-toolbar button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  color: var(--bio-300);
+  background: rgba(5, 8, 16, 0.48);
+  border: 1px solid rgba(46, 61, 85, 0.62);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.workspace-toolbar button:hover {
+  color: var(--accent);
+  border-color: rgba(0, 229, 160, 0.34);
+}
+
+.workspace-error {
+  margin: 0 10px 8px;
+  color: var(--coral);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.tree-item {
+  min-height: 30px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border-radius: 8px;
+  color: var(--bio-100);
+  background: transparent;
+  border: 0;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tree-item span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.tree-item {
-  min-height: 30px;
-  display: flex;
-  align-items: center;
-  padding: 0 12px;
+.tree-item:hover,
+.tree-item.active {
+  background: rgba(26, 35, 50, 0.82);
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 40;
+  width: 160px;
+  padding: 5px;
+  background: rgba(10, 15, 26, 0.98);
+  border: 1px solid rgba(46, 61, 85, 0.9);
   border-radius: 8px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38);
+}
+
+.context-menu button {
+  width: 100%;
+  min-height: 28px;
+  padding: 0 9px;
   color: var(--bio-100);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
   font-size: 12px;
 }
 
-.tree-item:hover {
-  background: rgba(26, 35, 50, 0.82);
+.context-menu button:hover {
+  background: rgba(26, 35, 50, 0.95);
+  color: var(--accent);
+}
+
+.context-menu button.danger:hover {
+  color: var(--coral);
 }
 
 .resize-handle {
@@ -420,41 +500,87 @@ button {
   gap: 10px;
 }
 
-.workspace-input {
-  width: min(360px, 30vw);
-  min-height: 38px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px;
-  color: var(--bio-300);
-  background: rgba(5, 8, 16, 0.42);
-  border: 1px solid rgba(46, 61, 85, 0.66);
-  border-radius: var(--radius);
-}
-
-.workspace-input span {
-  color: var(--accent);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-}
-
-.workspace-input input {
-  flex: 1;
-  min-width: 0;
-  color: var(--bio-50);
-  background: transparent;
-  border: 0;
-  outline: 0;
-  font-size: 12px;
-}
-
 .content-shell {
   flex: 1;
   min-height: 0;
   overflow: auto;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(5, 8, 16, 0.68);
+  backdrop-filter: blur(12px);
+}
+
+.settings-dialog {
+  width: min(720px, 100%);
+  max-height: min(760px, 92vh);
+  overflow: auto;
+  padding: 18px;
+  background: rgba(15, 22, 35, 0.98);
+  border: 1px solid rgba(46, 61, 85, 0.86);
+  border-radius: var(--radius);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.48);
+}
+
+.settings-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.settings-head h2 {
+  margin: 0 0 4px;
+  color: var(--bio-50);
+  font-size: 20px;
+}
+
+.settings-head p {
+  margin: 0;
+  color: var(--bio-300);
+  font-size: 12px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-grid label {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-grid label.wide {
+  grid-column: 1 / -1;
+}
+
+.settings-grid span {
+  color: var(--bio-300);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+
+.settings-grid input,
+.settings-grid select {
+  min-height: 38px;
+  width: 100%;
+  color: var(--bio-50);
+  background: rgba(5, 8, 16, 0.62);
+  border: 1px solid rgba(46, 61, 85, 0.76);
+  border-radius: var(--radius);
+  outline: 0;
+  padding: 0 10px;
+  font-size: 13px;
 }
 
 .page,
@@ -1016,6 +1142,30 @@ code,
 
 .messages {
   padding: 12px 16px;
+}
+
+.chat-empty {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  color: var(--bio-300);
+  border: 1px dashed rgba(46, 61, 85, 0.72);
+  border-radius: var(--radius);
+  background: rgba(5, 8, 16, 0.24);
+  text-align: center;
+}
+
+.chat-empty strong {
+  color: var(--bio-50);
+  font-size: 14px;
+}
+
+.chat-empty span {
+  max-width: 320px;
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .message {

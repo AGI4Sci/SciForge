@@ -120,6 +120,19 @@ export interface BioAgentWorkspaceState {
   updatedAt: string;
 }
 
+export interface BioAgentConfig {
+  schemaVersion: 1;
+  agentServerBaseUrl: string;
+  workspaceWriterBaseUrl: string;
+  workspacePath: string;
+  modelProvider: string;
+  modelBaseUrl: string;
+  modelName: string;
+  apiKey: string;
+  requestTimeoutMs: number;
+  updatedAt: string;
+}
+
 export interface SendAgentMessageInput {
   agentId: AgentId;
   agentName: string;
@@ -127,6 +140,7 @@ export interface SendAgentMessageInput {
   prompt: string;
   roleView: string;
   messages: BioAgentMessage[];
+  config: BioAgentConfig;
 }
 
 export interface NormalizedAgentResponse {
@@ -154,6 +168,7 @@ export interface AgentServerRunPayload {
     name: string;
     backend: 'codex';
     workspace: string;
+    workingDirectory?: string;
     systemPrompt: string;
     reconcileExisting: boolean;
     metadata: Record<string, unknown>;
@@ -161,6 +176,19 @@ export interface AgentServerRunPayload {
   input: {
     text: string;
     metadata: Record<string, unknown>;
+  };
+  runtime?: {
+    backend?: 'codex';
+    cwd?: string;
+    modelProvider?: string;
+    modelName?: string;
+    llmEndpoint?: {
+      provider: string;
+      baseUrl?: string;
+      apiKey?: string;
+      modelName?: string;
+    };
+    metadata?: Record<string, unknown>;
   };
   metadata: Record<string, unknown>;
 }

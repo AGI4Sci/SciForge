@@ -30,7 +30,7 @@ For workspace-backed chat records, also start the local writer:
 npm run workspace:server
 ```
 
-Then set a workspace path in the top bar. BioAgent writes structured state under:
+The workspace path is edited from the left Resource Explorer panel or the Settings dialog. BioAgent writes structured state under:
 
 ```text
 <workspace>/.bioagent/
@@ -81,9 +81,27 @@ The workspace writer splits those records into:
 .bioagent/sessions/*.json
 .bioagent/artifacts/*.json
 .bioagent/versions/*.json
+.bioagent/config.json
 ```
 
 This keeps BioAgent aligned with AgentServer-style session and artifact bookkeeping while MCP and skills resources remain user-configured later.
+
+The left Resource Explorer can list the selected workspace and supports file/folder creation, rename, delete, refresh, copy path, and double-click folder navigation through the local workspace writer.
+
+## Runtime Settings
+
+Use the top-right Settings button to configure:
+
+- AgentServer base URL
+- workspace writer URL
+- workspace path
+- model provider
+- model base URL
+- model name
+- API key
+- request timeout
+
+Those values are kept in localStorage and mirrored to `<workspace>/.bioagent/config.json`. BioAgent passes model provider/name/base URL/API key to AgentServer per request through `runtime`, so AgentServer can switch model connection without hard-coded frontend constants.
 
 ## Demo vs Real Mode
 
