@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   AlertTriangle,
   ArrowRight,
@@ -14,11 +14,13 @@ import {
   Lock,
   MessageSquare,
   Play,
+  RefreshCw,
   Search,
   Settings,
   Shield,
   Sparkles,
   Target,
+  Trash2,
   type LucideIcon,
 } from 'lucide-react';
 import {
@@ -43,7 +45,7 @@ import {
 import {
   agents,
   componentManifest,
-  executionUnits,
+  executionUnits as executionUnitsFallback,
   feasibilityRows,
   messagesByAgent,
   navItems,
@@ -57,6 +59,17 @@ import {
   type EvidenceLevel,
   type PageId,
 } from './data';
+import { sendAgentMessage } from './api/agentClient';
+import {
+  makeId,
+  nowIso,
+  type BioAgentMessage,
+  type BioAgentSession,
+  type EvidenceClaim,
+  type NotebookRecord,
+  type RuntimeExecutionUnit,
+} from './domain';
+import { loadSessions, resetSession, saveSessions } from './sessionStore';
 import { HeatmapViewer, MoleculeViewer, NetworkGraph, UmapViewer } from './visualizations';
 
 const chartTheme = {
@@ -109,14 +122,16 @@ function ActionButton({
   children,
   variant = 'primary',
   onClick,
+  disabled = false,
 }: {
   icon?: LucideIcon;
   children: ReactNode;
   variant?: 'primary' | 'secondary' | 'ghost' | 'coral';
   onClick?: () => void;
+  disabled?: boolean;
 }) {
   return (
-    <button className={cx('action-button', `action-${variant}`)} onClick={onClick}>
+    <button className={cx('action-button', `action-${variant}`)} onClick={onClick} disabled={disabled}>
       {Icon ? <Icon size={16} /> : null}
       {children}
     </button>
@@ -404,11 +419,131 @@ function Dashboard({ setPage, setAgentId }: { setPage: (page: PageId) => void; s
   );
 }
 
-function ChatPanel({ agentId }: { agentId: AgentId }) {
+function ChatPanel({
+  agentId,
+  role,
+  session,
+  onSessionChange,
+}: {
+  agentId: AgentId;
+  role: string;
+  session: BioAgentSession;
+  onSessionChange: (session: BioAgentSession) => void;
+}) {
   const [input, setInput] = useState('');
   const [expanded, setExpanded] = useState<number | null>(0);
-  const messages = messagesByAgent[agentId];
+  const [errorText, setErrorText] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const messages = session.messages;
   const agent = agents.find((item) => item.id === agentId) ?? agents[0];
+
+  useEffect(() => {
+    messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: 'smooth' });
+  }, [messages.length, isSending]);
+
+  useEffect(() => {
+    setInput('');
+    setErrorText('');
+    setExpanded(0);
+  }, [agentId]);
+
+  async function handleSend() {
+    const prompt = input.trim();
+    if (!prompt || isSending) return;
+    const userMessage: BioAgentMessage = {
+      id: makeId('msg'),
+      role: 'user',
+      content: prompt,
+      createdAt: nowIso(),
+      status: 'completed',
+    };
+    const optimisticSession: BioAgentSession = {
+      ...session,
+      messages: [...session.messages, userMessage],
+      updatedAt: nowIso(),
+    };
+    onSessionChange(optimisticSession);
+    setInput('');
+    setErrorText('');
+    setIsSending(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const response = await sendAgentMessage({
+        agentId,
+        agentName: agent.name,
+        agentDomain: agent.domain,
+        prompt,
+        roleView: role,
+        messages: optimisticSession.messages,
+      }, controller.signal);
+      onSessionChange({
+        ...optimisticSession,
+        messages: [...optimisticSession.messages, response.message],
+        runs: [...optimisticSession.runs, response.run],
+        uiManifest: response.uiManifest.length ? response.uiManifest : optimisticSession.uiManifest,
+        claims: [...response.claims, ...optimisticSession.claims].slice(0, 24),
+        executionUnits: [...response.executionUnits, ...optimisticSession.executionUnits].slice(0, 24),
+        artifacts: [...response.artifacts, ...optimisticSession.artifacts].slice(0, 24),
+        notebook: [...response.notebook, ...optimisticSession.notebook].slice(0, 24),
+        updatedAt: nowIso(),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setErrorText(message);
+      onSessionChange({
+        ...optimisticSession,
+        messages: [
+          ...optimisticSession.messages,
+          {
+            id: makeId('msg'),
+            role: 'system',
+            content: message,
+            createdAt: nowIso(),
+            status: 'failed',
+          },
+        ],
+        runs: [
+          ...optimisticSession.runs,
+          {
+            id: makeId('run'),
+            agentId,
+            status: 'failed',
+            prompt,
+            response: message,
+            createdAt: nowIso(),
+            completedAt: nowIso(),
+          },
+        ],
+        updatedAt: nowIso(),
+      });
+    } finally {
+      setIsSending(false);
+      abortRef.current = null;
+    }
+  }
+
+  function handleAbort() {
+    abortRef.current?.abort();
+  }
+
+  function handleClear() {
+    if (isSending) abortRef.current?.abort();
+    onSessionChange(resetSession(agentId));
+  }
+
+  function handleExport() {
+    const blob = new Blob([JSON.stringify(session, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${agentId}-${session.sessionId}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="chat-panel">
       <div className="panel-title compact">
@@ -420,17 +555,23 @@ function ChatPanel({ agentId }: { agentId: AgentId }) {
           <span>{agent.tools.join(' / ')}</span>
         </div>
         <Badge variant="success" glow>在线</Badge>
+        <div className="panel-actions">
+          {isSending ? <IconButton icon={RefreshCw} label="取消请求" onClick={handleAbort} /> : null}
+          <IconButton icon={Download} label="导出当前 Agent 会话" onClick={handleExport} />
+          <IconButton icon={Trash2} label="清空当前 Agent 会话" onClick={handleClear} />
+        </div>
       </div>
 
-      <div className="messages">
+      <div className="messages" ref={messagesRef}>
         {messages.map((message, index) => (
           <div key={`${message.role}-${index}`} className={cx('message', message.role)}>
             <div className="message-body">
               <div className="message-meta">
-                <strong>{message.role === 'user' ? '你' : agent.name}</strong>
+                <strong>{message.role === 'user' ? '你' : message.role === 'system' ? '系统' : agent.name}</strong>
                 {message.confidence ? <ConfidenceBar value={message.confidence} /> : null}
                 {message.evidence ? <EvidenceTag level={message.evidence} /> : null}
                 {message.claimType ? <ClaimTag type={message.claimType} /> : null}
+                {message.status === 'failed' ? <Badge variant="danger">failed</Badge> : null}
               </div>
               <p>{message.content}</p>
               {message.expandable ? (
@@ -445,11 +586,33 @@ function ChatPanel({ agentId }: { agentId: AgentId }) {
             </div>
           </div>
         ))}
+        {isSending ? (
+          <div className="message agent">
+            <div className="message-body">
+              <div className="message-meta">
+                <strong>{agent.name}</strong>
+                <Badge variant="info">running</Badge>
+              </div>
+              <p>正在调用 AgentServer...</p>
+            </div>
+          </div>
+        ) : null}
       </div>
 
+      {errorText ? <div className="composer-error">{errorText}</div> : null}
       <div className="composer">
-        <input value={input} onChange={(event) => setInput(event.target.value)} placeholder="输入研究问题..." />
-        <ActionButton icon={Sparkles}>发送</ActionButton>
+        <input
+          value={input}
+          onChange={(event) => setInput(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') handleSend();
+          }}
+          placeholder="输入研究问题..."
+          disabled={isSending}
+        />
+        <ActionButton icon={Sparkles} onClick={handleSend} disabled={!input.trim() || isSending}>
+          {isSending ? '发送中' : '发送'}
+        </ActionButton>
       </div>
     </div>
   );
@@ -488,7 +651,7 @@ function VolcanoChart() {
   );
 }
 
-function ResultsRenderer({ agentId }: { agentId: AgentId }) {
+function ResultsRenderer({ agentId, session }: { agentId: AgentId; session: BioAgentSession }) {
   const [resultTab, setResultTab] = useState('primary');
   const agent = agents.find((item) => item.id === agentId) ?? agents[0];
   const tabs = [
@@ -505,24 +668,29 @@ function ResultsRenderer({ agentId }: { agentId: AgentId }) {
       </div>
       <div className="result-content">
         {resultTab === 'primary' ? (
-          <PrimaryResult agentId={agentId} />
+          <PrimaryResult agentId={agentId} session={session} />
         ) : resultTab === 'evidence' ? (
-          <EvidenceMatrix />
+          <EvidenceMatrix claims={session.claims} />
         ) : resultTab === 'execution' ? (
-          <ExecutionPanel />
+          <ExecutionPanel executionUnits={session.executionUnits} />
         ) : (
-          <NotebookTimeline agentId={agent.id} />
+          <NotebookTimeline agentId={agent.id} notebook={session.notebook} />
         )}
       </div>
     </div>
   );
 }
 
-function PrimaryResult({ agentId }: { agentId: AgentId }) {
+function PrimaryResult({ agentId, session }: { agentId: AgentId; session: BioAgentSession }) {
+  const latestManifest = session.uiManifest
+    .slice()
+    .sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99))
+    .slice(0, 4);
   if (agentId === 'structure') {
     return (
       <div className="stack">
         <SectionHeader icon={Shield} title="分子结构查看器" subtitle="PDB:7BZ5 · Switch-II pocket highlighted" action={<ActionButton icon={Play}>模拟旋转</ActionButton>} />
+        {latestManifest.length ? <ManifestDiagnostics slots={latestManifest} /> : null}
         <Card className="viz-card">
           <MoleculeViewer />
         </Card>
@@ -534,6 +702,7 @@ function PrimaryResult({ agentId }: { agentId: AgentId }) {
     return (
       <div className="stack">
         <SectionHeader icon={Target} title="组学差异分析" subtitle="Volcano / Heatmap / UMAP 组件均来自 registry" />
+        {latestManifest.length ? <ManifestDiagnostics slots={latestManifest} /> : null}
         <div className="split-grid">
           <Card className="viz-card">
             <VolcanoChart />
@@ -549,6 +718,7 @@ function PrimaryResult({ agentId }: { agentId: AgentId }) {
     return (
       <div className="stack">
         <SectionHeader icon={Target} title="靶点关联网络" subtitle="KRAS druggability knowledge graph" />
+        {latestManifest.length ? <ManifestDiagnostics slots={latestManifest} /> : null}
         <Card className="viz-card">
           <NetworkGraph />
         </Card>
@@ -558,6 +728,7 @@ function PrimaryResult({ agentId }: { agentId: AgentId }) {
   return (
     <div className="stack">
       <SectionHeader icon={FileText} title="文献卡片" subtitle="证据等级和 claim type 直接进入 UI" />
+      {latestManifest.length ? <ManifestDiagnostics slots={latestManifest} /> : null}
       <div className="paper-list">
         {paperCards.map((paper) => (
           <Card key={paper.title} className="paper-card">
@@ -572,6 +743,18 @@ function PrimaryResult({ agentId }: { agentId: AgentId }) {
       <Card className="viz-card">
         <NetworkGraph />
       </Card>
+    </div>
+  );
+}
+
+function ManifestDiagnostics({ slots }: { slots: Array<{ componentId: string; title?: string; artifactRef?: string }> }) {
+  return (
+    <div className="manifest-diagnostics">
+      {slots.map((slot) => (
+        <code key={`${slot.componentId}-${slot.artifactRef ?? slot.title ?? ''}`}>
+          {slot.componentId}{slot.artifactRef ? ` -> ${slot.artifactRef}` : ''}
+        </code>
+      ))}
     </div>
   );
 }
@@ -594,15 +777,24 @@ function MetricGrid() {
   );
 }
 
-function EvidenceMatrix() {
+function EvidenceMatrix({ claims }: { claims: EvidenceClaim[] }) {
+  const rows = claims.length
+    ? claims.map((claim) => [
+      claim.text,
+      `${claim.supportingRefs.length} 条支持`,
+      `${claim.opposingRefs.length} 条反向`,
+      claim.evidenceLevel,
+      claim.type,
+    ])
+    : [
+      ['EGFR/MET 旁路激活是主要耐药机制', '6 篇支持', '1 篇反向', 'cohort', 'inference'],
+      ['Y96D 改变结合口袋构象', '3 篇支持', '0 篇反向', 'case', 'hypothesis'],
+      ['Sotorasib 已形成临床验证可成药路径', '2 个上市药物', '0 篇反向', 'rct', 'fact'],
+    ];
   return (
     <div className="stack">
       <SectionHeader icon={Shield} title="EvidenceGraph" subtitle="Claim -> supporting / opposing evidence" />
-      {[
-        ['EGFR/MET 旁路激活是主要耐药机制', '6 篇支持', '1 篇反向', 'cohort', 'inference'],
-        ['Y96D 改变结合口袋构象', '3 篇支持', '0 篇反向', 'case', 'hypothesis'],
-        ['Sotorasib 已形成临床验证可成药路径', '2 个上市药物', '0 篇反向', 'rct', 'fact'],
-      ].map(([claim, support, oppose, level, type]) => (
+      {rows.map(([claim, support, oppose, level, type]) => (
         <Card className="evidence-row" key={claim}>
           <div>
             <h3>{claim}</h3>
@@ -616,7 +808,8 @@ function EvidenceMatrix() {
   );
 }
 
-function ExecutionPanel() {
+function ExecutionPanel({ executionUnits }: { executionUnits: RuntimeExecutionUnit[] }) {
+  const rows = executionUnits.length ? executionUnits : executionUnitsFallback;
   return (
     <div className="stack">
       <SectionHeader icon={Lock} title="可复现执行单元" subtitle="代码 + 参数 + 环境 + 数据指纹" action={<ActionButton icon={Download} variant="secondary">导出 JSON Bundle</ActionButton>} />
@@ -628,7 +821,7 @@ function ExecutionPanel() {
           <span>Status</span>
           <span>Hash</span>
         </div>
-        {executionUnits.map((unit) => (
+        {rows.map((unit) => (
           <div className="eu-row" key={unit.id}>
             <code>{unit.id}</code>
             <span>{unit.tool}</span>
@@ -655,8 +848,8 @@ database_versions:
   );
 }
 
-function NotebookTimeline({ agentId }: { agentId: AgentId }) {
-  const filtered = timeline.filter((item) => item.agent === agentId || agentId === 'literature');
+function NotebookTimeline({ agentId, notebook = [] }: { agentId: AgentId; notebook?: NotebookRecord[] }) {
+  const filtered = notebook.length ? notebook : timeline.filter((item) => item.agent === agentId || agentId === 'literature');
   return (
     <div className="stack">
       <SectionHeader icon={Clock} title="研究记录" subtitle="从对话到可审计 notebook timeline" />
@@ -683,7 +876,15 @@ function NotebookTimeline({ agentId }: { agentId: AgentId }) {
   );
 }
 
-function Workbench({ agentId }: { agentId: AgentId }) {
+function Workbench({
+  agentId,
+  session,
+  onSessionChange,
+}: {
+  agentId: AgentId;
+  session: BioAgentSession;
+  onSessionChange: (session: BioAgentSession) => void;
+}) {
   const agent = agents.find((item) => item.id === agentId) ?? agents[0];
   const [role, setRole] = useState('biologist');
   return (
@@ -710,8 +911,8 @@ function Workbench({ agentId }: { agentId: AgentId }) {
         ))}
       </div>
       <div className="workbench-grid">
-        <ChatPanel agentId={agentId} />
-        <ResultsRenderer agentId={agentId} />
+        <ChatPanel agentId={agentId} role={role} session={session} onSessionChange={onSessionChange} />
+        <ResultsRenderer agentId={agentId} session={session} />
       </div>
     </main>
   );
@@ -881,6 +1082,19 @@ function TimelinePage() {
 export function BioAgentApp() {
   const [page, setPage] = useState<PageId>('dashboard');
   const [agentId, setAgentId] = useState<AgentId>('literature');
+  const [sessions, setSessions] = useState<Record<AgentId, BioAgentSession>>(() => loadSessions());
+
+  useEffect(() => {
+    saveSessions(sessions);
+  }, [sessions]);
+
+  function updateSession(nextSession: BioAgentSession) {
+    setSessions((current) => ({
+      ...current,
+      [nextSession.agentId]: nextSession,
+    }));
+  }
+
   return (
     <div className="app-shell">
       <div className="ambient ambient-a" />
@@ -892,7 +1106,7 @@ export function BioAgentApp() {
           {page === 'dashboard' ? (
             <Dashboard setPage={setPage} setAgentId={setAgentId} />
           ) : page === 'workbench' ? (
-            <Workbench agentId={agentId} />
+            <Workbench agentId={agentId} session={sessions[agentId]} onSessionChange={updateSession} />
           ) : page === 'alignment' ? (
             <AlignmentPage />
           ) : (

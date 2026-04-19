@@ -24,6 +24,16 @@ Open:
 http://localhost:5173/
 ```
 
+## AgentServer Mode
+
+The workbench chat panel calls AgentServer directly:
+
+```text
+POST http://127.0.0.1:18080/api/agent-server/runs
+```
+
+Start AgentServer first if you want real agent replies. If it is unavailable, BioAgent keeps the user message locally and shows a clear connection error instead of silently falling back to mock output.
+
 ## Build
 
 ```bash

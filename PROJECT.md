@@ -14,10 +14,10 @@
 ## 当前状态
 - 已有 React + Vite Web UI，包含研究概览、单 Agent 工作台、对齐工作台、研究时间线。
 - 已有 4 个 Agent profile mock：文献 Agent、结构 Agent、组学 Agent、知识库 Agent。
-- 单 Agent 工作台已有静态对话面板、结果视图、证据矩阵、ExecutionUnit、研究记录。
-- 对话区当前只展示 `messagesByAgent` mock 数据，输入框和发送按钮尚未接入真实 agent。
-- UIManifest 当前是静态 `componentManifest`，尚未由 agent 响应动态驱动。
-- ExecutionUnit 当前是展示层 mock，尚未生成、持久化或与 AgentServer 工具调用绑定。
+- 单 Agent 工作台已有真实对话入口：`ChatPanel` 可调用 AgentServer `POST /api/agent-server/runs`，支持 loading、取消、错误提示和清空会话。
+- 对话、run、claim、UIManifest、ExecutionUnit、artifact、notebook 已建立前端运行时模型，并按 Agent 独立持久化到 `localStorage`。
+- 右侧结果区已开始读取运行时 claim、ExecutionUnit、notebook 和 UIManifest 诊断；具体科学组件的数据级动态渲染仍待补齐。
+- ExecutionUnit 当前可从 agent 响应标准化生成 record-only/run 记录，尚未对接后端真实工具执行状态和 pipeline 导出。
 
 ---
 
@@ -38,15 +38,16 @@
 - 没有 AgentServer 或请求失败时，UI 保留清晰 fallback，不把 mock 当成真实结果。
 
 #### TODO
-- [ ] 调研 AgentServer 当前 API 路径、请求体、响应体和流式能力。
-- [ ] 新增 `ui/src/api/agentClient.ts`，封装 base URL、超时、错误解析、AbortController。
-- [ ] 定义 `AgentMessage`、`AgentRequest`、`AgentResponse`、`AgentRunState` 类型，避免继续把 mock 数据当运行时状态。
-- [ ] 将 `messagesByAgent` 改为初始示例数据或 demo seed，真实会话状态放到 `ChatPanel` / 上层 store。
-- [ ] 发送请求时携带 `agentId`、用户输入、历史消息、当前 role view、当前结果 tab 和必要 project context。
-- [ ] 支持 non-streaming 版本先跑通；如 AgentServer 支持 SSE / chunk，再追加流式渲染。
-- [ ] 增加 loading、disabled、retry、abort 和空输入校验。
-- [ ] 为请求失败、超时、服务未启动分别展示明确错误。
-- [ ] 本地验证：`npm run typecheck`、`npm run build`、浏览器手动发送至少 2 个 Agent 的问题。
+- [x] 调研 AgentServer 当前 API 路径、请求体、响应体和流式能力。
+- [x] 新增 `ui/src/api/agentClient.ts`，封装 base URL、超时、错误解析、AbortController。
+- [x] 定义 `AgentMessage`、`AgentRequest`、`AgentResponse`、`AgentRunState` 类型，避免继续把 mock 数据当运行时状态。
+- [x] 将 `messagesByAgent` 改为初始示例数据或 demo seed，真实会话状态放到 `ChatPanel` / 上层 store。
+- [x] 发送请求时携带 `agentId`、用户输入、历史消息、当前 role view、当前结果 tab 和必要 project context。
+- [x] 支持 non-streaming 版本先跑通；如 AgentServer 支持 SSE / chunk，再追加流式渲染。
+- [x] 增加 loading、disabled、retry、abort 和空输入校验。
+- [x] 为请求失败、超时、服务未启动分别展示明确错误。
+- [x] 本地验证：`npm run typecheck`、`npm run build`。
+- [ ] 浏览器手动发送至少 2 个 Agent 的问题，并记录 AgentServer backend 实际响应质量。
 
 ### T002 标准化 Agent 响应协议
 
@@ -66,12 +67,12 @@
 - 协议能覆盖当前 4 个 Agent 的 mock 场景。
 
 #### TODO
-- [ ] 在 `ui/src/types.ts` 或 `ui/src/domain.ts` 建立 BioAgent 运行时类型。
-- [ ] 明确 `AgentId` 与 AgentServer agent 名称之间的映射表。
-- [ ] 定义 `UIManifestSlot`：`componentId`、`title`、`props`、`artifactRef`、`priority`。
-- [ ] 定义 `EvidenceClaim`：`text`、`type`、`confidence`、`evidenceLevel`、`supportingRefs`、`opposingRefs`。
-- [ ] 定义 `ExecutionUnit`：`id`、`tool`、`params`、`status`、`environment`、`dataFingerprint`、`artifacts`。
-- [ ] 写一个 `normalizeAgentResponse` adapter，兼容 AgentServer 当前响应和未来标准协议。
+- [x] 在 `ui/src/types.ts` 或 `ui/src/domain.ts` 建立 BioAgent 运行时类型。
+- [x] 明确 `AgentId` 与 AgentServer agent 名称之间的映射表。
+- [x] 定义 `UIManifestSlot`：`componentId`、`title`、`props`、`artifactRef`、`priority`。
+- [x] 定义 `EvidenceClaim`：`text`、`type`、`confidence`、`evidenceLevel`、`supportingRefs`、`opposingRefs`。
+- [x] 定义 `ExecutionUnit`：`id`、`tool`、`params`、`status`、`environment`、`dataFingerprint`、`artifacts`。
+- [x] 写一个 `normalizeAgentResponse` adapter，兼容 AgentServer 当前响应和未来标准协议。
 - [ ] 给 adapter 补充基础单测或最小 fixture 验证。
 
 ### T003 对话驱动结果区动态更新
@@ -88,12 +89,12 @@
 - 每次 agent 回复自动追加一条 NotebookTimeline 记录。
 
 #### TODO
-- [ ] 将 `ResultsRenderer` 输入从 `agentId` 扩展为 `agentId + currentRunState`。
+- [x] 将 `ResultsRenderer` 输入从 `agentId` 扩展为 `agentId + currentRunState`。
 - [ ] 将 `paperCards`、`executionUnits`、`timeline` 从纯 mock 数据迁移为可被运行时覆盖的数据源。
 - [ ] 建立 component registry：`paper-card-list`、`molecule-viewer`、`volcano-plot`、`heatmap-viewer`、`umap-viewer`、`network-graph`、`evidence-matrix`、`execution-unit-table`、`notebook-timeline`。
 - [ ] 对每个组件定义最小 props schema 和 fallback empty state。
-- [ ] 当 agent 返回多个 manifest slot 时，按 priority 和当前 tab 渲染。
-- [ ] 对 artifactRef 找不到、组件未注册、数据格式错误提供诊断 UI。
+- [x] 当 agent 返回多个 manifest slot 时，按 priority 和当前 tab 渲染。
+- [x] 对 artifactRef 找不到、组件未注册、数据格式错误提供诊断 UI。
 
 ### T004 会话与研究记录持久化
 
@@ -107,11 +108,11 @@
 - 后续可平滑替换为后端项目存储。
 
 #### TODO
-- [ ] 先用 localStorage 实现 `bioagent.sessions.v1`。
-- [ ] 定义 session schema：`sessionId`、`agentId`、`messages`、`runs`、`artifacts`、`updatedAt`。
-- [ ] 增加 schema version，未来迁移时不破坏旧数据。
-- [ ] 在 UI 增加清空会话、导出 JSON 的入口。
-- [ ] 避免保存超大 artifact；大对象只保存 metadata 或 artifactRef。
+- [x] 先用 localStorage 实现 `bioagent.sessions.v1`。
+- [x] 定义 session schema：`sessionId`、`agentId`、`messages`、`runs`、`artifacts`、`updatedAt`。
+- [x] 增加 schema version，未来迁移时不破坏旧数据。
+- [x] 在 UI 增加清空会话、导出 JSON 的入口。
+- [x] 避免保存超大 artifact；大对象只保存 metadata 或 artifactRef。
 
 ---
 
@@ -177,7 +178,7 @@
 
 #### TODO
 - [ ] 建立 ExecutionUnit schema：代码/工具、参数、环境、随机种子、输入数据指纹、数据库版本、输出 artifact。
-- [ ] 前端 ExecutionPanel 渲染真实 ExecutionUnit 列表。
+- [x] 前端 ExecutionPanel 渲染真实 ExecutionUnit 列表。
 - [ ] 支持导出当前会话 ExecutionUnit JSON bundle。
 - [ ] 标记状态：planned、running、done、failed、record-only。
 - [ ] 后续对接 AgentServer 实际执行状态。
@@ -189,10 +190,10 @@
 
 #### TODO
 - [ ] 统一 `EvidenceLevel`，补充 experimental、review、database 等生命科学常见来源类型。
-- [ ] 统一 `ClaimType`：fact、inference、hypothesis。
-- [ ] 给每个 claim 支持 `confidence`、`supportingRefs`、`opposingRefs`、`updatedAt`。
-- [ ] EvidenceMatrix 支持从 agent 响应渲染，不再写死 KRAS 示例。
-- [ ] 在消息气泡、结果区、时间线保持同一套标签语义。
+- [x] 统一 `ClaimType`：fact、inference、hypothesis。
+- [x] 给每个 claim 支持 `confidence`、`supportingRefs`、`opposingRefs`、`updatedAt`。
+- [x] EvidenceMatrix 支持从 agent 响应渲染，不再写死 KRAS 示例。
+- [x] 在消息气泡、结果区、时间线保持同一套标签语义。
 
 ---
 
@@ -201,8 +202,9 @@
 ### T011 工作台交互打磨
 
 #### TODO
-- [ ] 发送按钮绑定 click 和 Enter，Shift+Enter 换行或改为 textarea。
-- [ ] 消息列表自动滚到底部，用户手动上滚时不强制跳动。
+- [x] 发送按钮绑定 click 和 Enter，Shift+Enter 换行或改为 textarea。
+- [x] 消息列表自动滚到底部。
+- [ ] 用户手动上滚时不强制跳动。
 - [ ] 长推理链和长来源列表可折叠。
 - [ ] Agent 切换时保留各自滚动位置和输入草稿。
 - [ ] 顶部搜索框支持跳转到 gene / paper / ExecutionUnit 或先隐藏未实现能力。
@@ -275,3 +277,9 @@
 3. T003：让对话驱动右侧结果区，形成 BioAgent 区别于普通聊天的核心体验。
 4. T004：持久化会话和研究记录，防止刷新丢失上下文。
 5. T005：以文献 Agent 作为第一个完整单 Agent MVP。
+
+## 最新验证记录
+- 2026-04-19：`npm run typecheck` 通过。
+- 2026-04-19：`npm run build` 通过；Vite 提示主 chunk 超过 500 kB，暂不影响运行。
+- 2026-04-19：`npm run dev` 可访问 `http://localhost:5173/`。
+- 2026-04-19：AgentServer `GET http://127.0.0.1:18080/api/agent-server/agents` 连通，当前返回空 agent 列表。
