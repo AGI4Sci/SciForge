@@ -116,6 +116,7 @@ function extractOutputText(data: unknown): string {
     asString(output?.result) ||
     asString(output?.text) ||
     asString(output?.message) ||
+    asString(output?.error) ||
     asString(data.message) ||
     asString(data.result) ||
     'AgentServer 已返回结果，但响应中没有可展示文本。'
@@ -155,7 +156,11 @@ export function normalizeAgentResponse(
   const structured = extractJsonObject(outputText) ?? {};
   const now = nowIso();
   const runId = asString(runRecord.id) || makeId('run');
-  const messageText = asString(structured.message) || outputText.replace(/```(?:json)?[\s\S]*?```/gi, '').trim() || outputText;
+  const runStatus = runRecord.status === 'failed' ? 'failed' : 'completed';
+  const cleanOutputText = outputText.replace(/```(?:json)?[\s\S]*?```/gi, '').trim() || outputText;
+  const messageText = runStatus === 'failed'
+    ? `AgentServer 后端运行失败：${cleanOutputText}`
+    : asString(structured.message) || cleanOutputText;
   const confidence = asNumber(structured.confidence) ?? 0.78;
   const claimType = pickClaimType(structured.claimType);
   const evidence = pickEvidence(structured.evidenceLevel ?? structured.evidence);
@@ -163,7 +168,7 @@ export function normalizeAgentResponse(
     id: `EU-${runId.slice(-6)}`,
     tool: `${agentId}.agent-server-run`,
     params: `prompt=${prompt.slice(0, 80)}`,
-    status: runRecord.status === 'completed' ? 'done' : 'record-only',
+    status: runStatus === 'completed' ? 'done' : 'failed',
     hash: runId.slice(0, 10),
     time: asString(runRecord.completedAt) ? 'archived' : undefined,
   };
@@ -201,12 +206,12 @@ export function normalizeAgentResponse(
       claimType,
       expandable: asString(structured.reasoningTrace) || asString(structured.reasoning) || `AgentServer run: ${runId}\nStatus: ${asString(runRecord.status) || 'completed'}`,
       createdAt: now,
-      status: 'completed',
+      status: runStatus,
     },
     run: {
       id: runId,
       agentId,
-      status: runRecord.status === 'failed' ? 'failed' : 'completed',
+      status: runStatus,
       prompt,
       response: messageText,
       createdAt: asString(runRecord.createdAt) || now,

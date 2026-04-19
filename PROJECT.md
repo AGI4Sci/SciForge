@@ -47,7 +47,8 @@
 - [x] 增加 loading、disabled、retry、abort 和空输入校验。
 - [x] 为请求失败、超时、服务未启动分别展示明确错误。
 - [x] 本地验证：`npm run typecheck`、`npm run build`。
-- [ ] 浏览器手动发送至少 2 个 Agent 的问题，并记录 AgentServer backend 实际响应质量。
+- [x] 直接调用 `/api/agent-server/runs` 完成一次文献 Agent smoke，并记录 AgentServer backend 实际响应质量。
+- [ ] 浏览器手动发送至少 2 个 Agent 的问题。
 
 ### T002 标准化 Agent 响应协议
 
@@ -283,3 +284,4 @@
 - 2026-04-19：`npm run build` 通过；Vite 提示主 chunk 超过 500 kB，暂不影响运行。
 - 2026-04-19：`npm run dev` 可访问 `http://localhost:5173/`。
 - 2026-04-19：AgentServer `GET http://127.0.0.1:18080/api/agent-server/agents` 连通，当前返回空 agent 列表。
+- 2026-04-19：AgentServer `POST /api/agent-server/runs` 可创建/调度 `bioagent-literature`，但当前 Codex backend 运行失败：上游 `http://localhost:8767/codex/v1/responses` 返回 502，需修复 AgentServer/Codex 模型服务配置后才能得到真实 agent 回复。
