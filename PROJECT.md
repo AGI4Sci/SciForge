@@ -19,6 +19,7 @@
 - Agent profile 契约已集中到 `ui/src/agentProfiles.ts`：AgentServer id、native tools、fallback tools、输入契约、artifact schema、默认 UIManifest slots 和 ExecutionUnit defaults 统一从这里生成。
 - 右侧结果区已接入 UIManifest component registry，可按 agent 返回的 slot 动态渲染 paper cards、结构查看器、组学图表、网络图、证据矩阵、ExecutionUnit 和 notebook timeline；结构/组学/网络组件已能消费 artifact payload，并对 artifact 缺失 / 未注册组件提供 fallback 诊断。
 - ExecutionUnit 当前可从 agent 响应标准化生成 record-only/run 记录，支持当前会话 JSON bundle 导出，并已预留 code、seed、inputData、databaseVersions、outputArtifacts 等可复现字段；尚未对接后端真实工具执行状态和 pipeline 导出。
+- 已新增 `npm run smoke:fixtures`，用 4 个 Agent 的标准 artifact fixture 回归验证 profile -> adapter -> UIManifest/ExecutionUnit 协议链路。
 
 ---
 
@@ -191,7 +192,7 @@
 - 将设计文档中的“文献证据分级、统计置信度、假设 vs 事实区分”落成统一数据结构和 UI。
 
 #### TODO
-- [ ] 统一 `EvidenceLevel`，补充 experimental、review、database 等生命科学常见来源类型。
+- [x] 统一 `EvidenceLevel`，补充 experimental、review、database、preprint 等生命科学常见来源类型。
 - [x] 统一 `ClaimType`：fact、inference、hypothesis。
 - [x] 给每个 claim 支持 `confidence`、`supportingRefs`、`opposingRefs`、`updatedAt`。
 - [x] EvidenceMatrix 支持从 agent 响应渲染，不再写死 KRAS 示例。
@@ -209,8 +210,8 @@
 - [x] 用户手动上滚时不强制跳动。
 - [x] 长推理链可折叠。
 - [x] 长来源列表可折叠。
-- [ ] Agent 切换时保留各自滚动位置和输入草稿。
-- [ ] 顶部搜索框支持跳转到 gene / paper / ExecutionUnit 或先隐藏未实现能力。
+- [x] Agent 切换时保留各自滚动位置和输入草稿。
+- [x] 顶部搜索框支持跳转到 Agent / timeline / alignment / workbench。
 
 ### T012 响应式与可访问性
 
@@ -218,7 +219,7 @@
 - [ ] 检查 1440px、1024px、768px、390px 视口下工作台布局。
 - [ ] 小屏下 ChatPanel 和 ResultsRenderer 改为 tabs 或上下布局。
 - [x] 图表容器保持稳定尺寸，避免动态内容导致布局跳动。
-- [ ] 所有 icon button 补齐 tooltip / aria-label。
+- [x] 所有 icon button 补齐 tooltip / aria-label。
 - [ ] 确保按钮文字、badge、tab 在中文长文本下不溢出。
 
 ### T013 Mock 数据降级策略
@@ -283,6 +284,7 @@
 
 ## 最新验证记录
 - 2026-04-19：`npm run test` 通过。
+- 2026-04-19：`npm run smoke:fixtures` 通过，覆盖 literature、structure、omics、knowledge 的标准 artifact fixture。
 - 2026-04-19：`npm run typecheck` 通过。
 - 2026-04-19：`npm run build` 通过；Vite 提示主 chunk 超过 500 kB，暂不影响运行。
 - 2026-04-19：`npm run dev` 可访问 `http://127.0.0.1:5173/`。

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import {
   AlertTriangle,
   ArrowRight,
@@ -197,6 +197,10 @@ function EvidenceTag({ level }: { level: EvidenceLevel }) {
     rct: 'RCT/临床',
     cohort: '队列研究',
     case: '案例报告',
+    experimental: '实验验证',
+    review: '综述',
+    database: '数据库',
+    preprint: '预印本',
     prediction: '计算预测',
   };
   const variant: Record<EvidenceLevel, 'success' | 'info' | 'warning' | 'coral' | 'muted'> = {
@@ -204,6 +208,10 @@ function EvidenceTag({ level }: { level: EvidenceLevel }) {
     rct: 'info',
     cohort: 'warning',
     case: 'coral',
+    experimental: 'success',
+    review: 'info',
+    database: 'muted',
+    preprint: 'warning',
     prediction: 'muted',
   };
   return <Badge variant={variant[level]}>{labels[level]}</Badge>;
@@ -292,6 +300,11 @@ function asNumberMatrix(value: unknown): number[][] | undefined {
   if (!Array.isArray(value)) return undefined;
   const matrix = value.map(asNumberList).filter((row) => row.length > 0);
   return matrix.length ? matrix : undefined;
+}
+
+function pickEvidenceLevel(value: unknown): EvidenceLevel {
+  const levels: EvidenceLevel[] = ['meta', 'rct', 'cohort', 'case', 'experimental', 'review', 'database', 'preprint', 'prediction'];
+  return levels.includes(value as EvidenceLevel) ? value as EvidenceLevel : 'prediction';
 }
 
 function compactParams(params: string) {
@@ -384,13 +397,18 @@ function Sidebar({
   );
 }
 
-function TopBar() {
+function TopBar({ onSearch }: { onSearch: (query: string) => void }) {
+  const [query, setQuery] = useState('');
+  function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    onSearch(query);
+  }
   return (
     <header className="topbar">
-      <div className="searchbox">
+      <form className="searchbox" onSubmit={handleSubmit}>
         <Search size={15} />
-        <input placeholder="搜索基因、通路、文献、Execution Unit..." />
-      </div>
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索基因、通路、文献、Execution Unit..." />
+      </form>
       <div className="topbar-actions">
         <Badge variant="info" glow>
           Phase 1 - 单 Agent 独立运行
@@ -518,14 +536,21 @@ function ChatPanel({
   agentId,
   role,
   session,
+  input,
+  savedScrollTop,
+  onInputChange,
+  onScrollTopChange,
   onSessionChange,
 }: {
   agentId: AgentId;
   role: string;
   session: BioAgentSession;
+  input: string;
+  savedScrollTop: number;
+  onInputChange: (value: string) => void;
+  onScrollTopChange: (value: number) => void;
   onSessionChange: (session: BioAgentSession) => void;
 }) {
-  const [input, setInput] = useState('');
   const [expanded, setExpanded] = useState<number | null>(0);
   const [errorText, setErrorText] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -542,11 +567,14 @@ function ChatPanel({
   }, [messages.length, isSending]);
 
   useEffect(() => {
-    setInput('');
     setErrorText('');
     setExpanded(0);
-    autoScrollRef.current = true;
-  }, [agentId]);
+    const element = messagesRef.current;
+    if (element) {
+      element.scrollTo({ top: savedScrollTop, behavior: 'auto' });
+      autoScrollRef.current = savedScrollTop <= 0;
+    }
+  }, [agentId, savedScrollTop]);
 
   async function handleSend() {
     const prompt = input.trim();
@@ -564,7 +592,7 @@ function ChatPanel({
       updatedAt: nowIso(),
     };
     onSessionChange(optimisticSession);
-    setInput('');
+    onInputChange('');
     setErrorText('');
     setIsSending(true);
     const controller = new AbortController();
@@ -641,6 +669,7 @@ function ChatPanel({
     const element = messagesRef.current;
     if (!element) return;
     autoScrollRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+    onScrollTopChange(element.scrollTop);
   }
 
   return (
@@ -702,7 +731,7 @@ function ChatPanel({
       <div className="composer">
         <input
           value={input}
-          onChange={(event) => setInput(event.target.value)}
+          onChange={(event) => onInputChange(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter') handleSend();
           }}
@@ -835,7 +864,7 @@ function PaperCardList({ slot, artifact }: RegistryRendererProps) {
       source: asString(record.source) || asString(record.journal) || asString(record.venue) || 'agent artifact',
       year: asString(record.year) || String(asNumber(record.year) ?? 'unknown'),
       url: asString(record.url),
-      level: (['meta', 'rct', 'cohort', 'case', 'prediction'].includes(record.evidenceLevel as EvidenceLevel) ? record.evidenceLevel : 'prediction') as EvidenceLevel,
+      level: pickEvidenceLevel(record.evidenceLevel),
     }))
     : paperCards.map((paper) => ({ ...paper, url: undefined }));
   return (
@@ -1239,11 +1268,19 @@ function AgentContractPanel({ agentId }: { agentId: AgentId }) {
 function Workbench({
   agentId,
   session,
+  draft,
+  savedScrollTop,
+  onDraftChange,
+  onScrollTopChange,
   onSessionChange,
   onArtifactHandoff,
 }: {
   agentId: AgentId;
   session: BioAgentSession;
+  draft: string;
+  savedScrollTop: number;
+  onDraftChange: (agentId: AgentId, value: string) => void;
+  onScrollTopChange: (agentId: AgentId, value: number) => void;
   onSessionChange: (session: BioAgentSession) => void;
   onArtifactHandoff: (targetAgent: AgentId, artifact: RuntimeArtifact) => void;
 }) {
@@ -1274,7 +1311,16 @@ function Workbench({
       </div>
       <AgentContractPanel agentId={agentId} />
       <div className="workbench-grid">
-        <ChatPanel agentId={agentId} role={role} session={session} onSessionChange={onSessionChange} />
+        <ChatPanel
+          agentId={agentId}
+          role={role}
+          session={session}
+          input={draft}
+          savedScrollTop={savedScrollTop}
+          onInputChange={(value) => onDraftChange(agentId, value)}
+          onScrollTopChange={(value) => onScrollTopChange(agentId, value)}
+          onSessionChange={onSessionChange}
+        />
         <ResultsRenderer agentId={agentId} session={session} onArtifactHandoff={onArtifactHandoff} />
       </div>
     </main>
@@ -1446,6 +1492,18 @@ export function BioAgentApp() {
   const [page, setPage] = useState<PageId>('dashboard');
   const [agentId, setAgentId] = useState<AgentId>('literature');
   const [sessions, setSessions] = useState<Record<AgentId, BioAgentSession>>(() => loadSessions());
+  const [drafts, setDrafts] = useState<Record<AgentId, string>>({
+    literature: '',
+    structure: '',
+    omics: '',
+    knowledge: '',
+  });
+  const [messageScrollTops, setMessageScrollTops] = useState<Record<AgentId, number>>({
+    literature: 0,
+    structure: 0,
+    omics: 0,
+    knowledge: 0,
+  });
 
   useEffect(() => {
     saveSessions(sessions);
@@ -1456,6 +1514,39 @@ export function BioAgentApp() {
       ...current,
       [nextSession.agentId]: nextSession,
     }));
+  }
+
+  function updateDraft(nextAgentId: AgentId, value: string) {
+    setDrafts((current) => ({ ...current, [nextAgentId]: value }));
+  }
+
+  function updateMessageScrollTop(nextAgentId: AgentId, value: number) {
+    setMessageScrollTops((current) => ({ ...current, [nextAgentId]: value }));
+  }
+
+  function handleSearch(query: string) {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return;
+    const matchedAgent = agents.find((agent) =>
+      normalized.includes(agent.id)
+      || normalized.includes(agent.name.toLowerCase())
+      || normalized.includes(agent.domain.toLowerCase())
+      || agent.tools.some((tool) => normalized.includes(tool.toLowerCase())),
+    );
+    if (matchedAgent) {
+      setAgentId(matchedAgent.id);
+      setPage('workbench');
+      return;
+    }
+    if (normalized.includes('timeline') || normalized.includes('时间线') || normalized.includes('notebook')) {
+      setPage('timeline');
+      return;
+    }
+    if (normalized.includes('align') || normalized.includes('对齐')) {
+      setPage('alignment');
+      return;
+    }
+    setPage('workbench');
   }
 
   function handleArtifactHandoff(targetAgent: AgentId, artifact: RuntimeArtifact) {
@@ -1508,12 +1599,21 @@ export function BioAgentApp() {
       <div className="ambient ambient-b" />
       <Sidebar page={page} setPage={setPage} agentId={agentId} setAgentId={setAgentId} />
       <div className="main-shell">
-        <TopBar />
+        <TopBar onSearch={handleSearch} />
         <div className="content-shell">
           {page === 'dashboard' ? (
             <Dashboard setPage={setPage} setAgentId={setAgentId} />
           ) : page === 'workbench' ? (
-            <Workbench agentId={agentId} session={sessions[agentId]} onSessionChange={updateSession} onArtifactHandoff={handleArtifactHandoff} />
+            <Workbench
+              agentId={agentId}
+              session={sessions[agentId]}
+              draft={drafts[agentId]}
+              savedScrollTop={messageScrollTops[agentId]}
+              onDraftChange={updateDraft}
+              onScrollTopChange={updateMessageScrollTop}
+              onSessionChange={updateSession}
+              onArtifactHandoff={handleArtifactHandoff}
+            />
           ) : page === 'alignment' ? (
             <AlignmentPage />
           ) : (

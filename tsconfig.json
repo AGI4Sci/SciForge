@@ -18,6 +18,7 @@
   },
   "include": [
     "vite.config.ts",
+    "scripts/**/*.ts",
     "ui/src/**/*.ts",
     "ui/src/**/*.tsx"
   ],

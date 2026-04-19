@@ -14,7 +14,7 @@ const DEFAULT_AGENT_SERVER_URL = 'http://127.0.0.1:18080';
 const REQUEST_TIMEOUT_MS = 120_000;
 const WORKSPACE = '/Applications/workspace/ailab/research/app/BioAgent';
 
-const evidenceLevels: EvidenceLevel[] = ['meta', 'rct', 'cohort', 'case', 'prediction'];
+const evidenceLevels: EvidenceLevel[] = ['meta', 'rct', 'cohort', 'case', 'experimental', 'review', 'database', 'preprint', 'prediction'];
 const claimTypes: ClaimType[] = ['fact', 'inference', 'hypothesis'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {

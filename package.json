@@ -8,6 +8,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
     "test": "node --import tsx --test \"ui/src/**/*.test.ts\"",
+    "smoke:fixtures": "tsx scripts/smoke-bioagent-fixtures.ts",
     "preview": "vite preview --host 0.0.0.0",
     "typecheck": "tsc --noEmit"
   },

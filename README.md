@@ -59,6 +59,7 @@ Current real-mode boundary:
 
 ```bash
 npm run test
+npm run smoke:fixtures
 npm run typecheck
 npm run build
 ```

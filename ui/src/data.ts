@@ -19,7 +19,7 @@ import {
 export type AgentId = 'literature' | 'structure' | 'omics' | 'knowledge';
 export type PageId = 'dashboard' | 'workbench' | 'alignment' | 'timeline';
 export type ClaimType = 'fact' | 'inference' | 'hypothesis';
-export type EvidenceLevel = 'meta' | 'rct' | 'cohort' | 'case' | 'prediction';
+export type EvidenceLevel = 'meta' | 'rct' | 'cohort' | 'case' | 'experimental' | 'review' | 'database' | 'preprint' | 'prediction';
 
 export interface AgentViewConfig {
   id: AgentId;
