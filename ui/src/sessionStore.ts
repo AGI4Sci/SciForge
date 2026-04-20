@@ -1,6 +1,7 @@
 import { type AgentId } from './data';
 import { messagesByAgent } from './demoData';
 import {
+  type AlignmentContractRecord,
   makeId,
   nowIso,
   type BioAgentMessage,
@@ -95,6 +96,7 @@ export function createInitialWorkspaceState(): BioAgentWorkspaceState {
       return acc;
     }, {} as Record<AgentId, BioAgentSession>),
     archivedSessions: [],
+    alignmentContracts: [],
     updatedAt: now,
   };
 }
@@ -120,7 +122,7 @@ export function loadWorkspaceState(): BioAgentWorkspaceState {
   return createInitialWorkspaceState();
 }
 
-function parseWorkspaceState(value: unknown): BioAgentWorkspaceState {
+export function parseWorkspaceState(value: unknown): BioAgentWorkspaceState {
   const now = nowIso();
   if (typeof value !== 'object' || value === null) return createInitialWorkspaceState();
   const raw = value as Partial<BioAgentWorkspaceState>;
@@ -137,8 +139,23 @@ function parseWorkspaceState(value: unknown): BioAgentWorkspaceState {
         return isAgentId(agentId) ? [migrateSession(session, agentId)] : [];
       })
       : [],
+    alignmentContracts: Array.isArray(raw.alignmentContracts)
+      ? raw.alignmentContracts.filter(isAlignmentContract)
+      : [],
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : now,
   };
+}
+
+function isAlignmentContract(value: unknown): value is AlignmentContractRecord {
+  return typeof value === 'object'
+    && value !== null
+    && (value as AlignmentContractRecord).type === 'alignment-contract'
+    && (value as AlignmentContractRecord).schemaVersion === '1'
+    && typeof (value as AlignmentContractRecord).id === 'string'
+    && typeof (value as AlignmentContractRecord).title === 'string'
+    && typeof (value as AlignmentContractRecord).checksum === 'string'
+    && typeof (value as AlignmentContractRecord).data === 'object'
+    && (value as AlignmentContractRecord).data !== null;
 }
 
 export function saveWorkspaceState(state: BioAgentWorkspaceState) {

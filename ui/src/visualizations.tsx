@@ -23,6 +23,17 @@ export interface MoleculeViewerProps {
   ligand?: string;
   pocketLabel?: string;
   highlightResidues?: string[];
+  atoms?: Array<{
+    atomName?: string;
+    residueName?: string;
+    chain?: string;
+    residueNumber?: string;
+    element?: string;
+    x: number;
+    y: number;
+    z: number;
+    hetatm?: boolean;
+  }>;
 }
 
 export interface HeatmapViewerProps {
@@ -52,10 +63,11 @@ function fitCanvas(canvas: HTMLCanvasElement) {
 }
 
 export function MoleculeViewer({
-  pdbId = '7BZ5',
-  ligand = '6SI',
-  pocketLabel = 'Switch-II pocket',
+  pdbId = 'runtime-structure',
+  ligand = 'none',
+  pocketLabel = 'Runtime structure',
   highlightResidues = [],
+  atoms: runtimeAtoms = [],
 }: MoleculeViewerProps) {
   const ref = useRef<HTMLCanvasElement>(null);
 
@@ -64,14 +76,25 @@ export function MoleculeViewer({
     if (!canvas) return undefined;
     let frame = 0;
     let raf = 0;
-    const atoms = Array.from({ length: 48 }, (_, i) => {
-      const t = (i / 48) * Math.PI * 6;
+    const sourceAtoms = runtimeAtoms.filter((atom) => [atom.x, atom.y, atom.z].every(Number.isFinite));
+    if (!sourceAtoms.length) return undefined;
+    const centroid = sourceAtoms.reduce((sum, atom) => ({
+      x: sum.x + atom.x,
+      y: sum.y + atom.y,
+      z: sum.z + atom.z,
+    }), { x: 0, y: 0, z: 0 });
+    centroid.x /= sourceAtoms.length;
+    centroid.y /= sourceAtoms.length;
+    centroid.z /= sourceAtoms.length;
+    const maxRadius = Math.max(1, ...sourceAtoms.map((atom) => Math.hypot(atom.x - centroid.x, atom.y - centroid.y, atom.z - centroid.z)));
+    const atoms = sourceAtoms.map((atom) => {
+      const element = (atom.element || '').toUpperCase();
       return {
-        x: Math.cos(t) * (76 + Math.sin(i * 0.3) * 28),
-        y: Math.sin(t) * 48 + Math.cos(i * 0.7) * 12,
-        z: Math.sin(i * 0.4) * 48,
-        r: i % 5 === 0 ? 7 : i % 3 === 0 ? 6 : 4.8,
-        color: i % 5 === 0 ? '#FF7043' : i % 3 === 0 ? '#4ECDC4' : '#00E5A0',
+        x: ((atom.x - centroid.x) / maxRadius) * 120,
+        y: ((atom.y - centroid.y) / maxRadius) * 120,
+        z: ((atom.z - centroid.z) / maxRadius) * 120,
+        r: atom.hetatm ? 6.5 : atom.atomName === 'CA' || atom.atomName === 'P' ? 4.8 : 3.6,
+        color: atom.hetatm ? '#FF7043' : element === 'O' ? '#4ECDC4' : element === 'N' ? '#7B93B0' : element === 'S' ? '#FFD54F' : '#00E5A0',
       };
     });
 
@@ -123,16 +146,9 @@ export function MoleculeViewer({
         ctx.fill();
       });
 
-      ctx.fillStyle = 'rgba(0,229,160,0.08)';
-      ctx.strokeStyle = 'rgba(0,229,160,0.55)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.ellipse(width / 2 + 58, height / 2 + 12, 66, 34, -0.4, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
       ctx.fillStyle = '#00E5A0';
       ctx.font = '12px JetBrains Mono, monospace';
-      ctx.fillText(pocketLabel, width / 2 + 22, height / 2 + 62);
+      ctx.fillText(`${pocketLabel} (${sourceAtoms.length} parsed atoms)`, 22, height - 24);
       ctx.fillStyle = '#B0C4D8';
       ctx.fillText(`PDB:${pdbId} ligand:${ligand}`, 22, 24);
       if (highlightResidues.length) {
@@ -143,7 +159,7 @@ export function MoleculeViewer({
     };
     draw();
     return () => cancelAnimationFrame(raf);
-  }, [highlightResidues, ligand, pdbId, pocketLabel]);
+  }, [highlightResidues, ligand, pdbId, pocketLabel, runtimeAtoms]);
 
   return <canvas ref={ref} className="viz-canvas" aria-label="Molecule viewer" />;
 }
@@ -159,13 +175,19 @@ export function HeatmapViewer({ matrix, label = 'Top variable genes x samples' }
     const { ctx, width, height } = fit;
     ctx.fillStyle = '#0A0F1A';
     ctx.fillRect(0, 0, width, height);
-    const rows = matrix?.length || 22;
-    const cols = matrix?.[0]?.length || 18;
+    if (!matrix?.length || !matrix[0]?.length) {
+      ctx.fillStyle = '#B0C4D8';
+      ctx.font = '12px JetBrains Mono, monospace';
+      ctx.fillText('No runtime heatmap matrix', 34, 34);
+      return;
+    }
+    const rows = matrix.length;
+    const cols = matrix[0].length;
     const margin = 34;
     const cell = Math.min((width - margin * 2) / cols, (height - margin * 2) / rows);
     for (let r = 0; r < rows; r += 1) {
       for (let c = 0; c < cols; c += 1) {
-        const v = matrix?.[r]?.[c] ?? Math.sin(r * 0.75) + Math.cos(c * 0.6) + Math.sin((r + c) * 0.18);
+        const v = matrix[r]?.[c] ?? 0;
         const color = v > 0 ? `rgba(255,112,67,${Math.min(0.95, 0.25 + v * 0.28)})` : `rgba(78,205,196,${Math.min(0.95, 0.25 - v * 0.28)})`;
         ctx.fillStyle = color;
         ctx.fillRect(margin + c * cell, margin + r * cell, cell - 2, cell - 2);
@@ -193,7 +215,7 @@ export function NetworkGraph({ nodes: inputNodes, edges: inputEdges }: NetworkGr
         label: node.label || node.id || `Node ${index + 1}`,
         type: node.type,
       }))
-      : ['KRAS', 'EGFR', 'MET', 'MAPK1', 'PIK3CA', 'SOS1', 'RAF1', 'ERK'].map((label) => ({ id: label, label }));
+      : [];
     const indexById = new Map(nodes.map((node, index) => [node.id, index]));
     const edges = inputEdges?.length
       ? inputEdges.flatMap((edge) => {
@@ -201,7 +223,7 @@ export function NetworkGraph({ nodes: inputNodes, edges: inputEdges }: NetworkGr
         const target = edge.target ? indexById.get(edge.target) : undefined;
         return source === undefined || target === undefined ? [] : [[source, target] as [number, number]];
       })
-      : [[0, 1], [0, 2], [0, 5], [0, 6], [6, 7], [1, 4], [2, 4], [5, 6]] as [number, number][];
+      : [];
     const draw = () => {
       const fit = fitCanvas(canvas);
       if (!fit) return;
@@ -209,6 +231,13 @@ export function NetworkGraph({ nodes: inputNodes, edges: inputEdges }: NetworkGr
       tick += 0.01;
       ctx.fillStyle = '#0A0F1A';
       ctx.fillRect(0, 0, width, height);
+      if (!nodes.length) {
+        ctx.fillStyle = '#B0C4D8';
+        ctx.font = '12px JetBrains Mono, monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText('No runtime graph nodes', 24, 24);
+        return;
+      }
       const positions = nodes.map((_, i) => {
         const angle = (i / nodes.length) * Math.PI * 2 + tick;
         const radius = i === 0 ? 0 : Math.min(width, height) * 0.28 + Math.sin(tick * 2 + i) * 10;
@@ -282,29 +311,10 @@ export function UmapViewer({ points }: UmapViewerProps) {
       ctx.fillText(`UMAP ${points.length} samples`, 24, 24);
       return;
     }
-    const clusters = [
-      { x: 0.3, y: 0.35, color: '#00E5A0' },
-      { x: 0.65, y: 0.42, color: '#FF7043' },
-      { x: 0.52, y: 0.68, color: '#4ECDC4' },
-      { x: 0.78, y: 0.72, color: '#FFD54F' },
-    ];
-    clusters.forEach((cluster, clusterIndex) => {
-      for (let i = 0; i < 74; i += 1) {
-        const angle = (i * 2.399) % (Math.PI * 2);
-        const radius = Math.sqrt(i / 74) * 60;
-        const x = width * cluster.x + Math.cos(angle) * radius * (0.8 + clusterIndex * 0.1);
-        const y = height * cluster.y + Math.sin(angle) * radius * 0.65;
-        ctx.fillStyle = cluster.color;
-        ctx.globalAlpha = 0.62;
-        ctx.beginPath();
-        ctx.arc(x, y, 3.2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    });
     ctx.globalAlpha = 1;
     ctx.fillStyle = '#B0C4D8';
     ctx.font = '12px JetBrains Mono, monospace';
-    ctx.fillText('UMAP clusters', 24, 24);
+    ctx.fillText('No runtime UMAP points', 24, 24);
   }, [points]);
 
   return <canvas ref={ref} className="viz-canvas" aria-label="UMAP" />;

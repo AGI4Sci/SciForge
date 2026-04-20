@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { runBioAgentTool } from './bioagent-tools.js';
 
@@ -37,6 +37,19 @@ createServer(async (req, res) => {
       });
     } catch (err) {
       writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  if (url.pathname === '/api/bioagent/workspace/snapshot' && req.method === 'GET') {
+    try {
+      const requestedPath = url.searchParams.get('path')?.trim() || '';
+      const root = requestedPath ? resolve(requestedPath) : await readLastWorkspacePath();
+      const state = JSON.parse(await readFile(join(root, '.bioagent', 'workspace-state.json'), 'utf8'));
+      writeJson(res, 200, { ok: true, workspacePath: root, state });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const status = message.includes('ENOENT') ? 404 : 400;
+      writeJson(res, status, { ok: false, error: message });
     }
     return;
   }
@@ -80,6 +93,7 @@ createServer(async (req, res) => {
       await mkdir(join(bioagentDir, 'versions'), { recursive: true });
       await writeFile(join(bioagentDir, 'workspace-state.json'), JSON.stringify(state, null, 2));
       await writeFile(join(bioagentDir, 'config.json'), JSON.stringify(redactConfigForFile(config), null, 2));
+      await rememberWorkspace(root, state);
 
       const sessions = isRecord(state.sessionsByAgent)
         ? Object.values(state.sessionsByAgent)
@@ -97,6 +111,19 @@ createServer(async (req, res) => {
           const versionId = safeName(String(version.id || 'version'));
           await writeFile(join(bioagentDir, 'versions', `${sessionId}-${versionId}.json`), JSON.stringify(version, null, 2));
         }
+      }
+      const alignmentContracts = Array.isArray(state.alignmentContracts) ? state.alignmentContracts : [];
+      for (const contract of alignmentContracts as Array<Record<string, unknown>>) {
+        const contractId = safeName(String(contract.id || 'alignment-contract'));
+        await writeFile(join(bioagentDir, 'artifacts', `${contractId}.json`), JSON.stringify(contract, null, 2));
+        await writeFile(join(bioagentDir, 'versions', `${contractId}.json`), JSON.stringify({
+          id: contractId,
+          type: 'alignment-contract-version',
+          createdAt: contract.updatedAt,
+          reason: contract.reason,
+          checksum: contract.checksum,
+          artifactId: contract.id,
+        }, null, 2));
       }
       writeJson(res, 200, { ok: true, workspacePath: root });
     } catch (err) {
@@ -133,6 +160,100 @@ function writeJson(res: ServerResponse, status: number, body: unknown) {
 
 function safeName(value: string) {
   return basename(value.replace(/[^a-zA-Z0-9._-]+/g, '_')).slice(0, 120);
+}
+
+async function readLastWorkspacePath() {
+  const best = await readBestRememberedWorkspace();
+  if (best) return best;
+  const marker = JSON.parse(await readFile(lastWorkspaceFile(), 'utf8'));
+  if (!isRecord(marker) || typeof marker.workspacePath !== 'string' || !marker.workspacePath.trim()) {
+    throw new Error('last workspace marker is invalid');
+  }
+  return resolve(marker.workspacePath);
+}
+
+async function rememberWorkspace(workspacePath: string, state: Record<string, unknown>) {
+  const appBioagentDir = join(process.cwd(), '.bioagent');
+  await mkdir(appBioagentDir, { recursive: true });
+  const score = workspaceActivityScore(state);
+  const updatedAt = new Date().toISOString();
+  const history = await readWorkspaceHistory();
+  const nextHistory: Array<{ workspacePath: string; score: number; updatedAt: string }> = [
+    { workspacePath, score, updatedAt },
+    ...history.filter((item) => item.workspacePath !== workspacePath),
+  ]
+    .sort((left, right) => right.score - left.score || right.updatedAt.localeCompare(left.updatedAt))
+    .slice(0, 20);
+  const best = nextHistory[0];
+  await writeFile(workspaceHistoryFile(), JSON.stringify({ workspaces: nextHistory }, null, 2));
+  await writeFile(lastWorkspaceFile(), JSON.stringify({
+    workspacePath: best.workspacePath,
+    score: best.score,
+    updatedAt: best.updatedAt,
+  }, null, 2));
+}
+
+async function readBestRememberedWorkspace() {
+  const history = await readWorkspaceHistory();
+  return history[0]?.workspacePath ? resolve(history[0].workspacePath) : undefined;
+}
+
+async function readWorkspaceHistory(): Promise<Array<{ workspacePath: string; score: number; updatedAt: string }>> {
+  const records: Array<{ workspacePath: string; score: number; updatedAt: string }> = [];
+  try {
+    const parsed = JSON.parse(await readFile(workspaceHistoryFile(), 'utf8'));
+    if (isRecord(parsed) && Array.isArray(parsed.workspaces)) {
+      for (const item of parsed.workspaces) {
+        if (isRecord(item) && typeof item.workspacePath === 'string' && item.workspacePath.trim()) {
+          records.push({
+            workspacePath: resolve(item.workspacePath),
+            score: typeof item.score === 'number' ? item.score : 0,
+            updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : '',
+          });
+        }
+      }
+    }
+  } catch {
+    // No history file yet; fall back to the legacy single marker below.
+  }
+  try {
+    const marker = JSON.parse(await readFile(lastWorkspaceFile(), 'utf8'));
+    if (isRecord(marker) && typeof marker.workspacePath === 'string' && marker.workspacePath.trim()) {
+      records.push({
+        workspacePath: resolve(marker.workspacePath),
+        score: typeof marker.score === 'number' ? marker.score : 0,
+        updatedAt: typeof marker.updatedAt === 'string' ? marker.updatedAt : '',
+      });
+    }
+  } catch {
+    // No legacy marker.
+  }
+  return records
+    .filter((item, index, all) => all.findIndex((candidate) => candidate.workspacePath === item.workspacePath) === index)
+    .sort((left, right) => right.score - left.score || right.updatedAt.localeCompare(left.updatedAt));
+}
+
+function workspaceActivityScore(state: Record<string, unknown>): number {
+  const sessions = isRecord(state.sessionsByAgent) ? Object.values(state.sessionsByAgent) : [];
+  const archived = Array.isArray(state.archivedSessions) ? state.archivedSessions.length : 0;
+  const contracts = Array.isArray(state.alignmentContracts) ? state.alignmentContracts.length : 0;
+  return sessions.reduce<number>((total, session) => {
+    if (!isRecord(session)) return total;
+    const messages = Array.isArray(session.messages) ? session.messages : [];
+    const realMessages = messages.filter((message) => !isRecord(message) || !String(message.id || '').startsWith('seed')).length;
+    const artifacts = Array.isArray(session.artifacts) ? session.artifacts.length : 0;
+    const units = Array.isArray(session.executionUnits) ? session.executionUnits.length : 0;
+    const notebook = Array.isArray(session.notebook) ? session.notebook.length : 0;
+    return total + realMessages + artifacts + units + notebook;
+  }, archived + contracts);
+}
+
+function lastWorkspaceFile() {
+  return join(process.cwd(), '.bioagent', 'last-workspace.json');
+}
+
+function workspaceHistoryFile() {
+  return join(process.cwd(), '.bioagent', 'workspace-history.json');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

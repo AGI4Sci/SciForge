@@ -148,7 +148,7 @@ function literaturePayload(prompt: string): LocalAdapterPayload {
 }
 
 function structurePayload(prompt: string): LocalAdapterPayload {
-  const pdbId = extractToken(prompt, /\b[0-9][A-Za-z0-9]{3}\b/) ?? '7BZ5';
+  const pdbId = extractToken(prompt, /\b[0-9][A-Za-z0-9]{3}\b/);
   const artifact: RuntimeArtifact = {
     id: 'structure-summary',
     type: 'structure-summary',
@@ -156,28 +156,34 @@ function structurePayload(prompt: string): LocalAdapterPayload {
     schemaVersion: '1',
     metadata: { mode: 'record-only', source: 'local-adapter' },
     data: {
-      pdbId,
+      pdbId: pdbId ?? '',
       ligand: prompt.toUpperCase().includes('6SI') ? '6SI' : 'unknown',
       highlightResidues: prompt.match(/[A-Z][0-9]{2,4}[A-Z]/g) ?? ['Y96D'],
       pocketLabel: 'Candidate binding pocket',
       metrics: {
         pLDDT: 88.5,
-        resolution: pdbId === '7BZ5' ? 1.79 : undefined,
+        resolution: undefined,
         pocketVolume: 628,
         mutationRisk: prompt.match(/[A-Z][0-9]{2,4}[A-Z]/g)?.[0] ?? 'review-needed',
       },
     },
   };
   return {
-    message: `已生成 ${pdbId} 的结构 record-only 草案，可驱动分子查看器和结构 ExecutionUnit。真实 PDB/AlphaFold 拉取仍待 backend 接入。`,
-    confidence: 0.76,
+    message: pdbId
+      ? `已生成 ${pdbId} 的结构 record-only 草案；真实坐标需要 BioAgent project tool 或 AgentServer backend 完成。`
+      : '没有明确 PDB ID，local adapter 不会替换为默认 7BZ5；请连接 BioAgent project tool 进行 RCSB 搜索，或返回无法完成的原因。',
+    confidence: pdbId ? 0.56 : 0.35,
     evidenceLevel: 'database',
     claimType: 'inference',
-    reasoningTrace: `Local adapter extracted PDB=${pdbId}; no remote structure fetch was performed.`,
+    reasoningTrace: pdbId
+      ? `Local adapter extracted PDB=${pdbId}; no remote structure fetch was performed.`
+      : 'Local adapter found no PDB ID and intentionally avoided default/demo substitution.',
     claims: [{
-      text: `${pdbId} 已形成结构分析草案，关键残基和口袋指标需要真实结构工具确认。`,
+      text: pdbId
+        ? `${pdbId} 已形成结构分析草案，关键残基和口袋指标需要真实结构工具确认。`
+        : 'Local adapter did not select a structure because the prompt lacks an explicit PDB ID and no remote search was available.',
       type: 'inference',
-      confidence: 0.76,
+      confidence: pdbId ? 0.56 : 0.35,
       evidenceLevel: 'database',
       supportingRefs: ['structure-summary:record-only'],
       opposingRefs: [],

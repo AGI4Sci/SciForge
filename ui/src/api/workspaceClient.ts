@@ -1,4 +1,5 @@
 import type { BioAgentConfig, BioAgentWorkspaceState } from '../domain';
+import { parseWorkspaceState } from '../sessionStore';
 
 export interface WorkspaceEntry {
   name: string;
@@ -22,6 +23,39 @@ export async function persistWorkspaceState(state: BioAgentWorkspaceState, confi
     const text = await response.text();
     throw new Error(text || `Workspace writer failed: HTTP ${response.status}`);
   }
+}
+
+export async function loadPersistedWorkspaceState(path: string, config: BioAgentConfig): Promise<BioAgentWorkspaceState | undefined> {
+  const configured = path.trim() ? await fetchPersistedWorkspaceState(path, config) : undefined;
+  const recent = await fetchPersistedWorkspaceState('', config);
+  if (!configured) return recent;
+  if (!recent) return configured;
+  return workspaceActivityScore(recent) > workspaceActivityScore(configured) ? recent : configured;
+}
+
+async function fetchPersistedWorkspaceState(path: string, config: BioAgentConfig): Promise<BioAgentWorkspaceState | undefined> {
+  const url = new URL(`${config.workspaceWriterBaseUrl}/api/bioagent/workspace/snapshot`);
+  if (path.trim()) url.searchParams.set('path', path);
+  const label = path.trim() || 'last workspace';
+  const response = await fetchWorkspace(config, `load workspace snapshot ${label}`, url);
+  if (response.status === 404) return undefined;
+  if (!response.ok) throw new Error(await response.text() || `Load snapshot failed: HTTP ${response.status}`);
+  const json = await response.json() as { workspacePath?: unknown; state?: unknown };
+  if (!json.state) return undefined;
+  const state = parseWorkspaceState(json.state);
+  return typeof json.workspacePath === 'string' ? { ...state, workspacePath: json.workspacePath } : state;
+}
+
+function workspaceActivityScore(state: BioAgentWorkspaceState) {
+  return Object.values(state.sessionsByAgent).reduce((total, session) => {
+    const userMessages = session.messages.filter((message) => !message.id.startsWith('seed')).length;
+    return total
+      + userMessages
+      + session.runs.length
+      + session.artifacts.length
+      + session.executionUnits.length
+      + session.notebook.length;
+  }, state.archivedSessions.length + (state.alignmentContracts?.length ?? 0));
 }
 
 export async function listWorkspace(path: string, config: BioAgentConfig): Promise<WorkspaceEntry[]> {

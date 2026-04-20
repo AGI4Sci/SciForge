@@ -122,7 +122,58 @@ Phase 3：编排层自动化
 
 研究者可以一键将整个研究过程导出为可执行的 Snakemake / Nextflow pipeline 或 Jupyter notebook，附带完整的环境定义，供同行审稿或合作者验证。
 
-### 2.5 湿实验闭环（Lab-in-the-Loop）
+### 2.5 Python-first 科学任务运行时与自愈边界
+
+BioAgent 的实现语言边界必须服务于科学可复现性，而不是被 Web 技术栈牵着走。**TypeScript 是产品壳和协议层，不是默认的科学任务语言。** 生命科学任务代码应尽量生成在 workspace 内，并以研究者和 AI scientist 更容易理解、修改、复现的形式存在。
+
+明确分层如下：
+
+| 层级 | 首选语言/形态 | 职责边界 |
+|------|--------------|---------|
+| Web UI / 动态结果区 | TypeScript / React | 组件 registry、UIManifest 渲染、交互、状态展示 |
+| Workspace writer / 协议壳 | TypeScript | 文件 I/O、session/artifact snapshot、task runner 调度、AgentServer bridge |
+| 科学任务代码 | Python 优先 | 数据下载、解析、统计分析、结构/组学/知识库任务、artifact JSON 写出 |
+| 生态或高性能任务 | R / C/C++ / Rust / Julia / Shell / WASM 等 | 当科学生态或性能确实需要时使用，并在 ExecutionUnit 中记录选择理由 |
+| 通用智能与自愈 | AgentServer | 生成任务代码、读取失败日志、修改代码、重跑、在无法完成时解释原因 |
+
+这意味着：结构 Agent 不应该把“查最新 PDB、下载 mmCIF、解析原子坐标”长期写死在 TypeScript 分支里；组学 Agent 不应该把 Scanpy/DESeq2/edgeR 的完整分析流程长期藏在 workspace server 源码里。正确形态是：
+
+```
+用户问题
+  → BioAgent 选择 Agent profile 与 artifact schema
+  → AgentServer / task generator 在 workspace 写入任务代码
+  → workspace runner 执行任务代码
+  → 任务代码写出 artifact、日志、ExecutionUnit
+  → UI 根据 artifact 渲染专业组件
+  → 若失败，AgentServer 读取代码+日志+反馈并修改任务代码重跑
+```
+
+任务代码必须成为研究产物的一部分，例如：
+
+```
+.bioagent/tasks/structure_latest_pdb.py
+.bioagent/tasks/omics_differential_scanpy.py
+.bioagent/artifacts/structure-summary.json
+.bioagent/logs/structure_latest_pdb.stderr.log
+.bioagent/runs/run-*.json
+```
+
+每个 Execution Unit 至少记录：
+
+- `language`：Python / R / Rust / Shell 等
+- `codeRef`：workspace 内任务代码路径
+- `entrypoint`：可执行入口
+- `environmentRef`：conda/venv/container/系统依赖定义
+- `inputs` 与 `outputs`：输入文件、数据库 URL、输出 artifact 路径
+- `stdoutRef` / `stderrRef`：完整执行日志
+- `attempt` / `parentAttempt`：自愈重试关系
+- `selfHealReason`：为什么修改代码或重跑
+
+**失败语义必须诚实。** 如果数据库不可访问、依赖缺失、任务代码报错、artifact schema 不满足 UI 需要，BioAgent 必须展示 failed/empty state 和明确原因，而不是用 demo、默认 PDB、默认基因集、record-only 草案冒充成功。record-only 只允许作为明确标注的草稿或离线占位，不能驱动“已完成”的科学结论。
+
+**允许非 Python，但必须有理由。** 例如 DESeq2/edgeR 使用 R 是因为生态原生；结构解析中的高性能几何计算可以使用 C++/Rust；大规模矩阵或 GPU 任务可以使用专门二进制、CUDA 或 WASM。选择这些语言时，任务代码仍必须在 workspace 中有清晰入口，ExecutionUnit 必须说明语言选择、环境与复现方式。
+
+### 2.6 湿实验闭环（Lab-in-the-Loop）
 
 生命科学的独特之处在于：计算分析最终必须回到实验室验证。BioAgent 原生支持"干-湿"循环：
 
@@ -132,7 +183,7 @@ Phase 3：编排层自动化
 
 **迭代记录**：每一轮"假设→实验→结果→修正"都被完整记录在研究时间线中，形成一个可回溯的科学发现过程。
 
-### 2.6 跨领域价值对齐（Cross-Domain Alignment）
+### 2.7 跨领域价值对齐（Cross-Domain Alignment）
 
 这是 BioAgent 最具差异化的功能模块，直面生命科学研究中一个被长期忽视的核心痛点：**AI 专家与生物专家之间的系统性沟通失败。**
 
@@ -177,7 +228,7 @@ BioAgent 提供一个专门的**对齐工作台（Alignment Workspace）**，让
 
 BioAgent 的对齐工作台用**数据驱动的结构化协商**取代**自由形式的会议讨论**，用 AI 作为双方之间的实时翻译官和现实检验者，确保每个关键决策点上两个领域的专家对"我们在做什么、能做到什么、如何判断成功"有一致的理解。
 
-### 2.7 多角色视图
+### 2.8 多角色视图
 
 在对齐达成之后，研究过程中的每一份分析结果仍然需要面向不同角色以不同方式呈现。BioAgent 为同一份结果提供多角色视图：
 

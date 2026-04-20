@@ -117,7 +117,30 @@ export interface BioAgentWorkspaceState {
   workspacePath: string;
   sessionsByAgent: Record<AgentId, BioAgentSession>;
   archivedSessions: BioAgentSession[];
+  alignmentContracts: AlignmentContractRecord[];
   updatedAt: string;
+}
+
+export interface AlignmentContractRecord {
+  id: string;
+  type: 'alignment-contract';
+  schemaVersion: '1';
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  reason: string;
+  checksum: string;
+  data: {
+    dataReality: string;
+    aiAssessment: string;
+    bioReality: string;
+    feasibilityMatrix: string;
+    researchGoal: string;
+    technicalRoute: string;
+    successCriteria: string;
+    knownRisks: string;
+    recalibrationRecord: string;
+  };
 }
 
 export interface BioAgentConfig {

@@ -60,17 +60,14 @@ import {
   type PageId,
 } from './data';
 import { BIOAGENT_PROFILES, componentManifest } from './agentProfiles';
-import {
-  executionUnits as executionUnitsFallback,
-  paperCards,
-  timeline,
-} from './demoData';
+import { timeline } from './demoData';
 import { sendAgentMessageStream } from './api/agentClient';
 import { sendBioAgentToolMessage } from './api/bioagentToolsClient';
 import { runLocalBioAgentAdapter } from './api/localAdapters';
 import {
   makeId,
   nowIso,
+  type AlignmentContractRecord,
   type BioAgentMessage,
   type BioAgentSession,
   type BioAgentWorkspaceState,
@@ -85,7 +82,7 @@ import {
 } from './domain';
 import { createSession, loadWorkspaceState, resetSession, saveWorkspaceState, versionSession } from './sessionStore';
 import { loadBioAgentConfig, saveBioAgentConfig, updateConfig } from './config';
-import { listWorkspace, mutateWorkspaceFile, persistWorkspaceState, type WorkspaceEntry } from './api/workspaceClient';
+import { listWorkspace, loadPersistedWorkspaceState, mutateWorkspaceFile, persistWorkspaceState, type WorkspaceEntry } from './api/workspaceClient';
 import { HeatmapViewer, MoleculeViewer, NetworkGraph, UmapViewer } from './visualizations';
 
 const chartTheme = {
@@ -103,6 +100,14 @@ const chartTheme = {
 
 function cx(...values: Array<string | false | undefined>) {
   return values.filter(Boolean).join(' ');
+}
+
+function checksumText(text: string) {
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
 }
 
 function Card({ children, className = '', onClick }: { children: ReactNode; className?: string; onClick?: () => void }) {
@@ -290,8 +295,31 @@ function exportJsonFile(name: string, payload: unknown) {
 }
 
 function artifactMeta(artifact?: RuntimeArtifact) {
-  if (!artifact) return 'demo fallback';
+  if (!artifact) return 'empty';
   return `${artifact.type} · ${artifact.schemaVersion}`;
+}
+
+function artifactSource(artifact?: RuntimeArtifact): 'project-tool' | 'record-only' | 'empty' {
+  if (!artifact) return 'empty';
+  const mode = asString(artifact.metadata?.mode);
+  const runner = asString(artifact.metadata?.runner);
+  if (mode?.includes('record')) return 'record-only';
+  if (runner?.includes('local-csv') || artifact.dataRef?.includes('.bioagent/omics/')) return 'project-tool';
+  return 'project-tool';
+}
+
+function sourceVariant(source: ReturnType<typeof artifactSource>): 'success' | 'muted' | 'warning' {
+  if (source === 'project-tool') return 'success';
+  if (source === 'record-only') return 'warning';
+  return 'muted';
+}
+
+function executionUnitForArtifact(session: BioAgentSession, artifact?: RuntimeArtifact): RuntimeExecutionUnit | undefined {
+  if (!artifact) return undefined;
+  return session.executionUnits.find((unit) => {
+    const refs = [...(unit.artifacts ?? []), ...(unit.outputArtifacts ?? [])];
+    return refs.includes(artifact.id) || refs.includes(artifact.type) || (artifact.dataRef ? refs.includes(artifact.dataRef) : false);
+  });
 }
 
 function slotPayload(slot: UIManifestSlot, artifact?: RuntimeArtifact): Record<string, unknown> {
@@ -1266,19 +1294,8 @@ function volcanoPointsFromPayload(payload: Record<string, unknown>): VolcanoPoin
 }
 
 function VolcanoChart({ points }: { points?: VolcanoPoint[] }) {
-  const data = useMemo(
-    () =>
-      points?.length ? points : Array.from({ length: 160 }, (_, i) => {
-        const logFC = Math.sin(i * 1.73) * 3.8 + Math.cos(i * 0.29);
-        const negLogP = Math.abs(Math.cos(i * 0.41) * 9 + Math.sin(i * 0.13) * 4);
-        return { gene: `Gene${i}`, logFC, negLogP, sig: Math.abs(logFC) > 1.4 && negLogP > 3 };
-      }).concat([
-        { gene: 'BRCA1', logFC: -2.14, negLogP: 11.4, sig: true },
-        { gene: 'MYC', logFC: 3.2, negLogP: 7.9, sig: true },
-        { gene: 'TP53', logFC: -1.82, negLogP: 5.3, sig: true },
-      ]),
-    [points],
-  );
+  const data = useMemo(() => points ?? [], [points]);
+  if (!data.length) return <EmptyArtifactState title="没有 volcano points" detail="火山图需要 artifact.data.points，不会绘制 demo 基因点。" />;
   return (
     <div className="chart-300">
         <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
@@ -1358,57 +1375,98 @@ function defaultSlotsForAgent(agentId: AgentId): UIManifestSlot[] {
   return BIOAGENT_PROFILES[agentId].defaultSlots;
 }
 
-function PaperCardList({ slot, artifact }: RegistryRendererProps) {
+function PaperCardList({ slot, artifact, session }: RegistryRendererProps) {
   const records = arrayPayload(slot, 'papers', artifact);
-  const papers = records.length
-    ? records.map((record, index) => ({
-      title: asString(record.title) || asString(record.name) || `Agent paper ${index + 1}`,
-      source: asString(record.source) || asString(record.journal) || asString(record.venue) || 'agent artifact',
-      year: asString(record.year) || String(asNumber(record.year) ?? 'unknown'),
-      url: asString(record.url),
-      level: pickEvidenceLevel(record.evidenceLevel),
-    }))
-    : paperCards.map((paper) => ({ ...paper, url: undefined }));
+  const papers = records.map((record, index) => ({
+    title: asString(record.title) || asString(record.name) || `Paper ${index + 1}`,
+    source: asString(record.source) || asString(record.journal) || asString(record.venue) || 'unknown source',
+    year: asString(record.year) || String(asNumber(record.year) ?? 'unknown'),
+    url: asString(record.url),
+    level: pickEvidenceLevel(record.evidenceLevel),
+  }));
+  if (!artifact || !papers.length) {
+    return <EmptyArtifactState title="等待真实 paper-list" detail="文献结果区只展示当前会话的 PubMed / 文献工具 artifact，不再回退到 demo paper cards。" />;
+  }
   return (
-    <div className="paper-list">
-      {papers.map((paper) => (
-        <Card key={`${paper.title}-${paper.source}`} className="paper-card">
-          <div>
-            <h3>{paper.url ? <a href={paper.url} target="_blank" rel="noreferrer">{paper.title}</a> : paper.title}</h3>
-            <p>{paper.source} · {paper.year}</p>
-          </div>
-          <EvidenceTag level={paper.level} />
-          <Badge variant={artifact ? 'success' : 'muted'}>{artifact ? 'agent' : 'demo'}</Badge>
-        </Card>
-      ))}
+    <div className="stack">
+      <ArtifactSourceBar artifact={artifact} session={session} />
+      <div className="paper-list">
+        {papers.map((paper) => (
+          <Card key={`${paper.title}-${paper.source}`} className="paper-card">
+            <div>
+              <h3>{paper.url ? <a href={paper.url} target="_blank" rel="noreferrer">{paper.title}</a> : paper.title}</h3>
+              <p>{paper.source} · {paper.year}</p>
+            </div>
+            <EvidenceTag level={paper.level} />
+            <Badge variant="success">runtime</Badge>
+          </Card>
+        ))}
+      </div>
     </div>
   );
 }
 
-function MoleculeSlot({ slot, artifact }: RegistryRendererProps) {
+function MoleculeSlot({ slot, artifact, session }: RegistryRendererProps) {
   const payload = slotPayload(slot, artifact);
-  const pdbId = asString(payload.pdbId) || asString(payload.pdb) || '7BZ5';
+  const pdbId = asString(payload.pdbId) || asString(payload.pdb);
   const uniprotId = asString(payload.uniprotId);
-  const ligand = asString(payload.ligand) || '6SI';
+  const ligand = asString(payload.ligand) || 'none';
   const residues = asStringList(payload.highlightResidues ?? payload.residues);
   const metrics = isRecord(payload.metrics) ? payload.metrics : payload;
+  const dataRef = asString(artifact?.dataRef) || asString(payload.dataRef);
+  const atoms = toRecordList(payload.atomCoordinates).flatMap((atom) => {
+    const x = asNumber(atom.x);
+    const y = asNumber(atom.y);
+    const z = asNumber(atom.z);
+    if (x === undefined || y === undefined || z === undefined) return [];
+    return [{
+      atomName: asString(atom.atomName),
+      residueName: asString(atom.residueName),
+      chain: asString(atom.chain),
+      residueNumber: asString(atom.residueNumber),
+      element: asString(atom.element),
+      x,
+      y,
+      z,
+      hetatm: atom.hetatm === true,
+    }];
+  });
+  if (!artifact || (!pdbId && !uniprotId)) {
+    return <EmptyArtifactState title="等待真实 structure-summary" detail="结构结果区需要 RCSB 或 AlphaFold DB artifact；没有 dataRef 时不会加载默认 7BZ5 结构。" />;
+  }
   return (
     <div className="stack">
+      <ArtifactSourceBar artifact={artifact} session={session} />
       <div className="slot-meta">
-        <Badge variant={artifact ? 'success' : 'muted'}>{artifactMeta(artifact)}</Badge>
+        <Badge variant="success">{artifactMeta(artifact)}</Badge>
         <code>{uniprotId ? `UniProt=${uniprotId}` : `PDB=${pdbId}`}</code>
         <code>ligand={ligand}</code>
+        {dataRef ? <code title={dataRef}>dataRef={compactParams(dataRef)}</code> : <code>record-only structure</code>}
         {residues.length ? <code>residues={residues.join(',')}</code> : null}
       </div>
-      <Card className="viz-card">
-        <MoleculeViewer pdbId={pdbId} ligand={ligand} highlightResidues={residues} pocketLabel={asString(payload.pocketLabel) || asString(payload.pocket) || 'Switch-II pocket'} />
-      </Card>
+      {dataRef ? (
+        <Card className="viz-card">
+          {atoms.length ? (
+            <MoleculeViewer
+              pdbId={pdbId || uniprotId}
+              ligand={ligand}
+              highlightResidues={residues}
+              pocketLabel={asString(payload.pocketLabel) || asString(payload.pocket) || 'Structure view'}
+              atoms={atoms}
+            />
+          ) : (
+            <EmptyArtifactState title="缺少可渲染原子坐标" detail="structure-summary 有 dataRef，但 artifact.data.atomCoordinates 为空；不会绘制示意结构。" />
+          )}
+        </Card>
+      ) : (
+        <EmptyArtifactState title="缺少结构坐标 dataRef" detail="已保留结构摘要，但没有可加载坐标文件；请检查 project tool 输出。" />
+      )}
       <MetricGrid metrics={metrics} />
     </div>
   );
 }
 
-function CanvasSlot({ slot, artifact, kind }: RegistryRendererProps & { kind: 'volcano' | 'heatmap' | 'umap' | 'network' }) {
+function CanvasSlot({ slot, artifact, session, kind }: RegistryRendererProps & { kind: 'volcano' | 'heatmap' | 'umap' | 'network' }) {
   const payload = slotPayload(slot, artifact);
   const networkNodes = toRecordList(payload.nodes).map((node) => ({
     id: asString(node.id),
@@ -1428,10 +1486,24 @@ function CanvasSlot({ slot, artifact, kind }: RegistryRendererProps & { kind: 'v
     const y = asNumber(point.y) ?? asNumber(point.umap2);
     return x === undefined || y === undefined ? [] : [{ x, y, cluster: asString(point.cluster) || asString(point.group), label: asString(point.label) }];
   });
+  if (!artifact) {
+    return <EmptyArtifactState title="等待真实 runtime artifact" detail={`${kind} 组件不再使用 demo seed；请先运行对应 Agent 生成 artifact。`} />;
+  }
+  const hasData = kind === 'volcano'
+    ? Boolean(volcanoPoints?.length)
+    : kind === 'heatmap'
+      ? Boolean(heatmap)
+      : kind === 'umap'
+        ? Boolean(umapPoints.length)
+        : Boolean(networkNodes.length);
+  if (!hasData) {
+    return <EmptyArtifactState title="artifact 缺少可视化数据" detail={`当前 ${artifact.type} 没有 ${kind} 所需字段；UI 已停止回退到 demo 图。`} />;
+  }
   return (
     <div className="stack">
+      <ArtifactSourceBar artifact={artifact} session={session} />
       <div className="slot-meta">
-        <Badge variant={artifact ? 'success' : 'muted'}>{artifactMeta(artifact)}</Badge>
+        <Badge variant="success">{artifactMeta(artifact)}</Badge>
         {networkNodes.length ? <code>{networkNodes.length} nodes</code> : null}
         {networkEdges.length ? <code>{networkEdges.length} edges</code> : null}
         {volcanoPoints?.length ? <code>{volcanoPoints.length} volcano points</code> : null}
@@ -1453,26 +1525,59 @@ function CanvasSlot({ slot, artifact, kind }: RegistryRendererProps & { kind: 'v
   );
 }
 
-function DataTableSlot({ slot, artifact }: RegistryRendererProps) {
+function DataTableSlot({ slot, artifact, session }: RegistryRendererProps) {
   const records = arrayPayload(slot, 'rows', artifact);
-  const rows = records.length
-    ? records
-    : [
-      { key: 'target', value: 'KRAS', source: 'UniProt / ChEMBL' },
-      { key: 'approved_drugs', value: 'sotorasib, adagrasib', source: 'agent fallback' },
-      { key: 'clinical_status', value: 'approved + active trials', source: 'OpenTargets' },
-    ];
+  const rows = records;
+  if (!artifact || !rows.length) {
+    return <EmptyArtifactState title="等待真实 knowledge rows" detail="知识表格只展示 knowledge-graph artifact 中的 rows，不再填充 demo 药物或通路。" />;
+  }
   const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 5);
   return (
-    <div className="artifact-table">
-      <div className="artifact-table-head" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(120px, 1fr))` }}>
-        {columns.map((column) => <span key={column}>{column}</span>)}
-      </div>
-      {rows.map((row, index) => (
-        <div className="artifact-table-row" key={index} style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(120px, 1fr))` }}>
-          {columns.map((column) => <span key={column}>{String(row[column] ?? '-')}</span>)}
+    <div className="stack">
+      <ArtifactSourceBar artifact={artifact} session={session} />
+      <div className="artifact-table">
+        <div className="artifact-table-head" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(120px, 1fr))` }}>
+          {columns.map((column) => <span key={column}>{column}</span>)}
         </div>
-      ))}
+        {rows.map((row, index) => (
+          <div className="artifact-table-row" key={index} style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(120px, 1fr))` }}>
+            {columns.map((column) => <span key={column}>{String(row[column] ?? '-')}</span>)}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EmptyArtifactState({ title, detail }: { title: string; detail: string }) {
+  return (
+    <div className="empty-runtime-state">
+      <Badge variant="muted">empty</Badge>
+      <strong>{title}</strong>
+      <p>{detail}</p>
+    </div>
+  );
+}
+
+function ArtifactSourceBar({ artifact, session }: { artifact?: RuntimeArtifact; session?: BioAgentSession }) {
+  const source = artifactSource(artifact);
+  const unit = session ? executionUnitForArtifact(session, artifact) : undefined;
+  if (!artifact) {
+    return (
+      <div className="artifact-source-bar">
+        <Badge variant="muted">empty</Badge>
+        <code>no runtime artifact</code>
+      </div>
+    );
+  }
+  return (
+    <div className="artifact-source-bar">
+      <Badge variant={sourceVariant(source)}>{source}</Badge>
+      <code>{artifact.id}</code>
+      <code>{artifact.type}</code>
+      <code>schema={artifact.schemaVersion}</code>
+      {artifact.dataRef ? <code title={artifact.dataRef}>dataRef={compactParams(artifact.dataRef)}</code> : null}
+      {unit ? <code title={unit.params}>tool={unit.tool} · {unit.status}</code> : <code>audit warning: no ExecutionUnit</code>}
     </div>
   );
 }
@@ -1553,7 +1658,7 @@ function RegistrySlot({
   return (
     <Card className="registry-slot">
       <SectionHeader icon={Target} title={slot.title ?? entry.label} subtitle={`${slot.componentId}${slot.artifactRef ? ` -> ${slot.artifactRef}` : ''}`} />
-      {slot.artifactRef && !artifact ? <p className="empty-state">artifactRef 未找到，已使用组件 fallback。</p> : null}
+      {slot.artifactRef && !artifact ? <p className="empty-state">artifactRef 未找到，组件保持 empty state，不使用 demo 数据。</p> : null}
       {entry.render({ agentId, session, slot, artifact })}
       {artifact && handoffTargets.length ? (
         <div className="handoff-actions">
@@ -1586,11 +1691,15 @@ function ManifestDiagnostics({ slots }: { slots: Array<{ componentId: string; ti
 
 function MetricGrid({ metrics = {} }: { metrics?: Record<string, unknown> }) {
   const rows = [
-    ['Pocket volume', asString(metrics.pocketVolume) || (asNumber(metrics.pocketVolume) ? `${asNumber(metrics.pocketVolume)} A3` : '628 A3'), '#00E5A0'],
-    ['pLDDT mean', asString(metrics.pLDDT) || asString(metrics.plddt) || String(asNumber(metrics.pLDDT) ?? asNumber(metrics.plddt) ?? '94.2'), '#4ECDC4'],
-    ['Resolution', asString(metrics.resolution) || (asNumber(metrics.resolution) ? `${asNumber(metrics.resolution)} A` : '1.79 A'), '#FFD54F'],
-    ['Mutation risk', asString(metrics.mutationRisk) || 'Y96D', '#FF7043'],
-  ];
+    ['Pocket volume', asString(metrics.pocketVolume) || (asNumber(metrics.pocketVolume) ? `${asNumber(metrics.pocketVolume)} A3` : undefined), '#00E5A0'],
+    ['pLDDT mean', asString(metrics.pLDDT) || asString(metrics.plddt) || (asNumber(metrics.pLDDT) ?? asNumber(metrics.plddt))?.toString(), '#4ECDC4'],
+    ['Resolution', asString(metrics.resolution) || (asNumber(metrics.resolution) ? `${asNumber(metrics.resolution)} A` : undefined), '#FFD54F'],
+    ['Mutation risk', asString(metrics.mutationRisk), '#FF7043'],
+    ['Method', asString(metrics.method), '#B0C4D8'],
+  ].filter((row): row is [string, string, string] => typeof row[1] === 'string' && row[1].trim().length > 0);
+  if (!rows.length) {
+    return <EmptyArtifactState title="没有结构指标" detail="structure-summary 未提供 metrics；UI 不再填充默认分辨率或 pLDDT。" />;
+  }
   return (
     <div className="metric-grid">
       {rows.map(([label, value, color]) => (
@@ -1605,25 +1714,20 @@ function MetricGrid({ metrics = {} }: { metrics?: Record<string, unknown> }) {
 
 function EvidenceMatrix({ claims }: { claims: EvidenceClaim[] }) {
   const [expandedClaim, setExpandedClaim] = useState<string | null>(null);
-  const rows = claims.length
-    ? claims.map((claim) => ({
-      id: claim.id,
-      claim: claim.text,
-      support: `${claim.supportingRefs.length} 条支持`,
-      oppose: `${claim.opposingRefs.length} 条反向`,
-      level: claim.evidenceLevel,
-      type: claim.type,
-      supportingRefs: claim.supportingRefs,
-      opposingRefs: claim.opposingRefs,
-    }))
-    : [
-      { id: 'demo-egfr-met', claim: 'EGFR/MET 旁路激活是主要耐药机制', support: '6 篇支持', oppose: '1 篇反向', level: 'cohort' as EvidenceLevel, type: 'inference' as ClaimType, supportingRefs: ['Cancer Discovery 2024', 'JCO 2023'], opposingRefs: ['case report subgroup'] },
-      { id: 'demo-y96d', claim: 'Y96D 改变结合口袋构象', support: '3 篇支持', oppose: '0 篇反向', level: 'case' as EvidenceLevel, type: 'hypothesis' as ClaimType, supportingRefs: ['PDB:7BZ5 structural note'], opposingRefs: [] },
-      { id: 'demo-sotorasib', claim: 'Sotorasib 已形成临床验证可成药路径', support: '2 个上市药物', oppose: '0 篇反向', level: 'rct' as EvidenceLevel, type: 'fact' as ClaimType, supportingRefs: ['FDA label', 'clinical trial record'], opposingRefs: [] },
-    ];
+  const rows = claims.map((claim) => ({
+    id: claim.id,
+    claim: claim.text,
+    support: `${claim.supportingRefs.length} 条支持`,
+    oppose: `${claim.opposingRefs.length} 条反向`,
+    level: claim.evidenceLevel,
+    type: claim.type,
+    supportingRefs: claim.supportingRefs,
+    opposingRefs: claim.opposingRefs,
+  }));
   return (
     <div className="stack">
       <SectionHeader icon={Shield} title="EvidenceGraph" subtitle="Claim -> supporting / opposing evidence" />
+      {!rows.length ? <EmptyArtifactState title="等待真实 claims" detail="证据矩阵只展示当前 run 的 claims，不再回退到 KRAS demo claims。" /> : null}
       {rows.map((row) => (
         <Card className="evidence-row" key={row.id}>
           <div className="evidence-main">
@@ -1661,7 +1765,7 @@ function ExecutionPanel({
   executionUnits: RuntimeExecutionUnit[];
   embedded?: boolean;
 }) {
-  const rows = executionUnits.length ? executionUnits : executionUnitsFallback;
+  const rows = executionUnits;
   return (
     <div className="stack">
       <SectionHeader
@@ -1670,24 +1774,26 @@ function ExecutionPanel({
         subtitle={embedded ? '当前组件来自 UIManifest registry' : '代码 + 参数 + 环境 + 数据指纹'}
         action={<ActionButton icon={Download} variant="secondary" onClick={() => exportExecutionBundle(session)}>导出 JSON Bundle</ActionButton>}
       />
-      <div className="eu-table">
-        <div className="eu-head">
-          <span>EU ID</span>
-          <span>Tool</span>
-          <span>Params</span>
-          <span>Status</span>
-          <span>Hash</span>
-        </div>
-        {rows.map((unit) => (
-          <div className="eu-row" key={unit.id}>
-            <code>{unit.id}</code>
-            <span>{unit.tool}</span>
-            <code title={unit.params}>{compactParams(unit.params)}</code>
-            <Badge variant={unit.status === 'done' ? 'success' : unit.status === 'planned' || unit.status === 'record-only' ? 'muted' : unit.status === 'failed' ? 'danger' : 'warning'}>{unit.status}</Badge>
-            <code>{unit.hash}</code>
+      {rows.length ? (
+        <div className="eu-table">
+          <div className="eu-head">
+            <span>EU ID</span>
+            <span>Tool</span>
+            <span>Params</span>
+            <span>Status</span>
+            <span>Hash</span>
           </div>
-        ))}
-      </div>
+          {rows.map((unit) => (
+            <div className="eu-row" key={unit.id}>
+              <code>{unit.id}</code>
+              <span>{unit.tool}</span>
+              <code title={unit.params}>{compactParams(unit.params)}</code>
+              <Badge variant={unit.status === 'done' ? 'success' : unit.status === 'planned' || unit.status === 'record-only' ? 'muted' : unit.status === 'failed' ? 'danger' : 'warning'}>{unit.status}</Badge>
+              <code>{unit.hash}</code>
+            </div>
+          ))}
+        </div>
+      ) : <EmptyArtifactState title="等待真实 ExecutionUnit" detail="执行面板只展示当前会话的 runtime executionUnits，不再填充 demo 执行记录。" />}
       <Card className="code-card">
         <SectionHeader icon={FileCode} title="环境定义" />
         <pre>{`name: bioagent-phase1
@@ -1706,10 +1812,11 @@ database_versions:
 }
 
 function NotebookTimeline({ agentId, notebook = [] }: { agentId: AgentId; notebook?: NotebookRecord[] }) {
-  const filtered = notebook.length ? notebook : timeline.filter((item) => item.agent === agentId || agentId === 'literature');
+  const filtered = notebook;
   return (
     <div className="stack">
       <SectionHeader icon={Clock} title="研究记录" subtitle="从对话到可审计 notebook timeline" />
+      {!filtered.length ? <EmptyArtifactState title="等待真实 notebook 记录" detail="Notebook 只展示当前会话运行产生的记录；全局 demo timeline 仅保留在研究时间线页面。" /> : null}
       <div className="timeline-list">
         {filtered.map((item) => {
           const agent = agents.find((entry) => entry.id === item.agent) ?? agents[0];
@@ -1854,14 +1961,56 @@ function Workbench({
   );
 }
 
-function AlignmentPage() {
+type AlignmentContractData = AlignmentContractRecord['data'];
+
+const defaultAlignmentContract: AlignmentContractData = {
+  dataReality: '内部药敏样本约 200 例，包含 GDSC/CCLE 对齐后的表达矩阵、药物响应标签和基础质控记录。',
+  aiAssessment: '特征维度显著高于样本量，主模型需要正则化、先验通路约束和外部数据预训练。',
+  bioReality: '窄谱靶向药低响应率是生物学现实，需要按机制拆分模型，不能简单合并为一个泛化分类器。',
+  feasibilityMatrix: feasibilityRows.map((row) => `${row.dim}: AI=${row.ai}; Bio=${row.bio}; Action=${row.action}`).join('\n'),
+  researchGoal: '聚焦 12 种药物的敏感性预测，排除 3 种极低响应率窄谱靶向药。',
+  technicalRoute: 'GDSC/CCLE 预训练 + 内部数据微调，按机制拆分模型。',
+  successCriteria: 'AUROC > 0.80，假阳性率 < 20%，至少 3 个命中完成实验验证。',
+  knownRisks: '批次效应、药物机制差异和验证成本可能影响项目节奏。',
+  recalibrationRecord: '模型在 2 种 HDAC 抑制剂上 AUROC 仅 0.58；共识为拆分模型并补充组蛋白修饰数据。',
+};
+
+function AlignmentPage({
+  contracts,
+  onSaveContract,
+}: {
+  contracts: AlignmentContractRecord[];
+  onSaveContract: (data: AlignmentContractData, reason: string) => void;
+}) {
   const [step, setStep] = useState(0);
+  const latest = contracts[0];
+  const [draft, setDraft] = useState<AlignmentContractData>(() => latest?.data ?? defaultAlignmentContract);
+  const [reason, setReason] = useState('alignment contract saved from workspace');
   const steps = ['数据摸底', '可行性评估', '方案共识', '持续校准'];
+  useEffect(() => {
+    setDraft(latest?.data ?? defaultAlignmentContract);
+  }, [latest?.id]);
+  function updateField(field: keyof AlignmentContractData, value: string) {
+    setDraft((current) => ({ ...current, [field]: value }));
+  }
+  function saveDraft(nextReason = reason) {
+    onSaveContract(draft, nextReason.trim() || 'alignment contract saved from workspace');
+  }
+  function restore(contract: AlignmentContractRecord) {
+    setDraft(contract.data);
+    onSaveContract(contract.data, `restore alignment contract ${contract.id}`);
+  }
   return (
     <main className="page">
       <div className="page-heading">
         <h1>跨领域对齐工作台</h1>
         <p>把 AI 专家的可行性判断和生物专家的实验现实放到同一个结构化工作台里。</p>
+      </div>
+      <div className="artifact-source-bar alignment-status">
+        <Badge variant={latest ? 'success' : 'muted'}>{latest ? 'alignment-contract' : 'draft-only'}</Badge>
+        {latest ? <code>{latest.id}</code> : <code>not saved</code>}
+        {latest ? <code>checksum={latest.checksum}</code> : null}
+        {latest ? <code>versions={contracts.length}</code> : null}
       </div>
       <div className="stepper">
         {steps.map((name, index) => (
@@ -1871,12 +2020,26 @@ function AlignmentPage() {
           </button>
         ))}
       </div>
-      {step === 0 ? <AlignmentSurvey /> : step === 1 ? <Feasibility /> : step === 2 ? <ProjectContract /> : <Recalibration />}
+      {step === 0 ? (
+        <AlignmentSurvey draft={draft} onChange={updateField} />
+      ) : step === 1 ? (
+        <Feasibility draft={draft} onChange={updateField} />
+      ) : step === 2 ? (
+        <ProjectContract draft={draft} onChange={updateField} reason={reason} onReasonChange={setReason} onSave={() => saveDraft()} />
+      ) : (
+        <Recalibration draft={draft} onChange={updateField} contracts={contracts} onRestore={restore} onSave={() => saveDraft('alignment recalibration saved')} />
+      )}
     </main>
   );
 }
 
-function AlignmentSurvey() {
+function AlignmentSurvey({
+  draft,
+  onChange,
+}: {
+  draft: AlignmentContractData;
+  onChange: (field: keyof AlignmentContractData, value: string) => void;
+}) {
   return (
     <div className="alignment-grid">
       <Card>
@@ -1884,14 +2047,15 @@ function AlignmentSurvey() {
         <Progress label="样本量" value={20} color="#FFD54F" detail="200 / 1000 ideal" />
         <Progress label="特征维度" value={100} color="#00E5A0" detail="20K genes" />
         <Progress label="标签平衡度" value={35} color="#FF7043" detail="3 drugs < 5%" />
-        <p className="callout warning">特征维度远超样本量，建议降维、正则化或迁移学习。</p>
+        <EditableBlock label="AI assessment" value={draft.aiAssessment} onChange={(value) => onChange('aiAssessment', value)} />
       </Card>
       <Card>
         <SectionHeader icon={Target} title="生物视角" subtitle="数据来源与实验现实" />
         <Progress label="药物覆盖" value={100} color="#00E5A0" detail="15 / 15" />
         <Progress label="组学模态" value={60} color="#FFD54F" detail="3 / 5" />
         <Progress label="批次一致性" value={60} color="#FFD54F" detail="GDSC vs CCLE" />
-        <p className="callout success">窄谱靶向药低响应率是生物学现实，不应简单视为标签缺陷。</p>
+        <EditableBlock label="Data reality" value={draft.dataReality} onChange={(value) => onChange('dataReality', value)} />
+        <EditableBlock label="Bio reality" value={draft.bioReality} onChange={(value) => onChange('bioReality', value)} />
       </Card>
     </div>
   );
@@ -1911,7 +2075,13 @@ function Progress({ label, value, color, detail }: { label: string; value: numbe
   );
 }
 
-function Feasibility() {
+function Feasibility({
+  draft,
+  onChange,
+}: {
+  draft: AlignmentContractData;
+  onChange: (field: keyof AlignmentContractData, value: string) => void;
+}) {
   return (
     <div className="alignment-grid">
       <Card>
@@ -1931,6 +2101,7 @@ function Feasibility() {
             </div>
           ))}
         </div>
+        <EditableBlock label="Editable feasibility matrix" value={draft.feasibilityMatrix} onChange={(value) => onChange('feasibilityMatrix', value)} rows={8} />
       </Card>
       <Card>
         <SectionHeader title="双视角能力雷达" subtitle="AI vs Bio assessment" />
@@ -1951,40 +2122,111 @@ function Feasibility() {
   );
 }
 
-function ProjectContract() {
+function ProjectContract({
+  draft,
+  onChange,
+  reason,
+  onReasonChange,
+  onSave,
+}: {
+  draft: AlignmentContractData;
+  onChange: (field: keyof AlignmentContractData, value: string) => void;
+  reason: string;
+  onReasonChange: (value: string) => void;
+  onSave: () => void;
+}) {
+  const fields: Array<[keyof AlignmentContractData, string]> = [
+    ['researchGoal', '研究目标'],
+    ['technicalRoute', '技术路线'],
+    ['successCriteria', '成功标准'],
+    ['knownRisks', '已知风险'],
+  ];
   return (
     <Card>
-      <SectionHeader icon={FileText} title="项目契约草案" action={<ActionButton icon={Download} variant="secondary">导出 PDF</ActionButton>} />
+      <SectionHeader icon={FileText} title="项目契约草案" action={<ActionButton icon={FilePlus} variant="secondary" onClick={onSave}>保存契约</ActionButton>} />
       <div className="contract-grid">
-        {[
-          ['研究目标', '聚焦 12 种药物的敏感性预测，排除 3 种极低响应率窄谱靶向药。'],
-          ['技术路线', 'GDSC/CCLE 预训练 + 内部数据微调，按机制拆分模型。'],
-          ['成功标准', 'AUROC > 0.80，假阳性率 < 20%，至少 3 个命中完成实验验证。'],
-          ['已知风险', '批次效应、药物机制差异和验证成本可能影响项目节奏。'],
-        ].map(([title, text]) => (
-          <div className="contract-item" key={title}>
-            <strong>{title}</strong>
-            <p>{text}</p>
-          </div>
+        {fields.map(([field, label]) => (
+          <EditableBlock key={field} label={label} value={draft[field]} onChange={(value) => onChange(field, value)} rows={4} />
         ))}
       </div>
-    </Card>
-  );
-}
-
-function Recalibration() {
-  return (
-    <Card>
-      <SectionHeader icon={AlertTriangle} title="持续校准记录" subtitle="早期发现认知漂移和模型偏差" />
-      <div className="callout warning">
-        <strong>自动触发：模型在 2 种 HDAC 抑制剂上 AUROC 仅 0.58</strong>
-        <p>AI 诊断：特征空间与激酶抑制剂不同。生物解读：表观遗传调控机制需要独立建模。共识：拆分模型并补充组蛋白修饰数据。</p>
+      <div className="alignment-save-row">
+        <label>
+          <span>Version reason</span>
+          <input value={reason} onChange={(event) => onReasonChange(event.target.value)} />
+        </label>
+        <ActionButton icon={FilePlus} onClick={onSave}>保存 alignment-contract</ActionButton>
       </div>
     </Card>
   );
 }
 
-function TimelinePage() {
+function Recalibration({
+  draft,
+  onChange,
+  contracts,
+  onRestore,
+  onSave,
+}: {
+  draft: AlignmentContractData;
+  onChange: (field: keyof AlignmentContractData, value: string) => void;
+  contracts: AlignmentContractRecord[];
+  onRestore: (contract: AlignmentContractRecord) => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="alignment-grid">
+      <Card>
+        <SectionHeader icon={AlertTriangle} title="持续校准记录" subtitle="早期发现认知漂移和模型偏差" action={<ActionButton icon={FilePlus} variant="secondary" onClick={onSave}>保存校准</ActionButton>} />
+        <EditableBlock label="Recalibration record" value={draft.recalibrationRecord} onChange={(value) => onChange('recalibrationRecord', value)} rows={8} />
+      </Card>
+      <Card>
+        <SectionHeader icon={Clock} title="版本快照" subtitle="保存、查看和恢复 alignment-contract" />
+        <div className="alignment-version-list">
+          {contracts.length ? contracts.map((contract) => (
+            <div className="alignment-version-row" key={contract.id}>
+              <div>
+                <strong>{contract.title}</strong>
+                <p>{new Date(contract.updatedAt).toLocaleString('zh-CN', { hour12: false })} · {contract.reason}</p>
+                <code>{contract.checksum}</code>
+              </div>
+              <ActionButton variant="ghost" onClick={() => onRestore(contract)}>恢复</ActionButton>
+            </div>
+          )) : <EmptyArtifactState title="等待保存契约" detail="保存后会生成 alignment-contract artifact，并同步到 workspace .bioagent/artifacts。" />}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function EditableBlock({
+  label,
+  value,
+  onChange,
+  rows = 5,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  rows?: number;
+}) {
+  return (
+    <label className="editable-block">
+      <span>{label}</span>
+      <textarea value={value} rows={rows} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function TimelinePage({ alignmentContracts = [] }: { alignmentContracts?: AlignmentContractRecord[] }) {
+  const alignmentItems = alignmentContracts.map((contract) => ({
+    time: new Date(contract.updatedAt).toLocaleString('zh-CN', { hour12: false }),
+    agent: 'knowledge' as AgentId,
+    title: contract.title,
+    desc: `alignment-contract ${contract.id} · ${contract.reason} · checksum ${contract.checksum}`,
+    claimType: 'fact' as ClaimType,
+    confidence: 1,
+  }));
+  const items = [...alignmentItems, ...timeline];
   return (
     <main className="page">
       <div className="page-heading">
@@ -1992,10 +2234,10 @@ function TimelinePage() {
         <p>聊天、工具、证据和执行单元最终都沉淀为可审计的研究记录。</p>
       </div>
       <div className="timeline-list">
-        {timeline.map((item) => {
+        {items.map((item) => {
           const agent = agents.find((entry) => entry.id === item.agent) ?? agents[0];
           return (
-            <Card className="timeline-card" key={item.title}>
+            <Card className="timeline-card" key={`${item.time}-${item.title}`}>
               <div className="timeline-dot" style={{ background: agent.color }} />
               <div>
                 <div className="timeline-meta">
@@ -2061,6 +2303,30 @@ function nodeId(value: unknown, preferredTypes: string[]): string | undefined {
   return asString(found?.id) || asString(found?.label);
 }
 
+function shouldUsePersistedWorkspaceState(current: BioAgentWorkspaceState, persisted: BioAgentWorkspaceState) {
+  const currentActivity = workspaceActivityScore(current);
+  const persistedActivity = workspaceActivityScore(persisted);
+  if (persistedActivity === 0) return false;
+  if (currentActivity === 0) return true;
+  if (persistedActivity > currentActivity) return true;
+  if (persistedActivity < currentActivity) return false;
+  const currentTime = Date.parse(current.updatedAt || '');
+  const persistedTime = Date.parse(persisted.updatedAt || '');
+  return Number.isFinite(persistedTime) && (!Number.isFinite(currentTime) || persistedTime >= currentTime);
+}
+
+function workspaceActivityScore(state: BioAgentWorkspaceState) {
+  return Object.values(state.sessionsByAgent).reduce((total, session) => {
+    const userMessages = session.messages.filter((message) => !message.id.startsWith('seed')).length;
+    return total
+      + userMessages
+      + session.runs.length
+      + session.artifacts.length
+      + session.executionUnits.length
+      + session.notebook.length;
+  }, state.archivedSessions.length + (state.alignmentContracts?.length ?? 0));
+}
+
 export function BioAgentApp() {
   const [page, setPage] = useState<PageId>('dashboard');
   const [agentId, setAgentId] = useState<AgentId>('literature');
@@ -2072,6 +2338,7 @@ export function BioAgentApp() {
     return { ...state, workspacePath: loadedConfig.workspacePath || state.workspacePath };
   });
   const [workspaceStatus, setWorkspaceStatus] = useState('');
+  const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
   const [handoffAutoRun, setHandoffAutoRun] = useState<HandoffAutoRunRequest | undefined>();
   const [drafts, setDrafts] = useState<Record<AgentId, string>>({
     literature: '',
@@ -2093,13 +2360,54 @@ export function BioAgentApp() {
   }, {} as Record<AgentId, number>), [workspaceState.archivedSessions]);
 
   useEffect(() => {
+    let cancelled = false;
+    const workspacePath = config.workspacePath.trim();
+    if (!workspacePath) {
+      setWorkspaceHydrated(true);
+      return () => {
+        cancelled = true;
+      };
+    }
+    loadPersistedWorkspaceState(workspacePath, config)
+      .then((persisted) => {
+        if (cancelled) return;
+        if (persisted) {
+          const restoredPath = persisted.workspacePath || workspacePath;
+          setWorkspaceState((current) => {
+            const incoming = { ...persisted, workspacePath: restoredPath };
+            return shouldUsePersistedWorkspaceState(current, incoming) ? incoming : current;
+          });
+          setConfig((current) => {
+            if (current.workspacePath === restoredPath) return current;
+            const next = updateConfig(current, { workspacePath: restoredPath });
+            saveBioAgentConfig(next);
+            return next;
+          });
+          setWorkspaceStatus(`已从 ${restoredPath}/.bioagent 恢复工作区`);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setWorkspaceStatus(`Workspace snapshot 未加载：${err instanceof Error ? err.message : String(err)}`);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setWorkspaceHydrated(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!workspaceHydrated) return;
     saveWorkspaceState(workspaceState);
     if (workspaceState.workspacePath.trim()) {
       persistWorkspaceState(workspaceState, config)
         .then(() => setWorkspaceStatus(`已同步到 ${workspaceState.workspacePath}/.bioagent`))
         .catch((err) => setWorkspaceStatus(`Workspace writer 未连接：${err instanceof Error ? err.message : String(err)}`));
     }
-  }, [workspaceState, config]);
+  }, [workspaceState, config, workspaceHydrated]);
 
   useEffect(() => {
     saveBioAgentConfig(config);
@@ -2282,6 +2590,26 @@ export function BioAgentApp() {
     setHandoffAutoRun((current) => current?.id === requestId ? undefined : current);
   }
 
+  function saveAlignmentContract(data: AlignmentContractData, reason: string) {
+    const now = nowIso();
+    const checksum = checksumText(JSON.stringify(data));
+    const contract: AlignmentContractRecord = {
+      id: makeId('alignment-contract'),
+      type: 'alignment-contract',
+      schemaVersion: '1',
+      title: `Alignment contract ${new Date(now).toLocaleString('zh-CN', { hour12: false })}`,
+      createdAt: now,
+      updatedAt: now,
+      reason,
+      checksum,
+      data,
+    };
+    updateWorkspace((current) => ({
+      ...current,
+      alignmentContracts: [contract, ...(current.alignmentContracts ?? [])].slice(0, 40),
+    }));
+  }
+
   return (
     <div className="app-shell">
       <div className="ambient ambient-a" />
@@ -2320,9 +2648,9 @@ export function BioAgentApp() {
               onAutoRunConsumed={consumeHandoffAutoRun}
             />
           ) : page === 'alignment' ? (
-            <AlignmentPage />
+            <AlignmentPage contracts={workspaceState.alignmentContracts ?? []} onSaveContract={saveAlignmentContract} />
           ) : (
-            <TimelinePage />
+            <TimelinePage alignmentContracts={workspaceState.alignmentContracts ?? []} />
           )}
         </div>
       </div>
