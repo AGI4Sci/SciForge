@@ -1506,6 +1506,9 @@ code,
 .viz-card {
   min-height: 320px;
   padding: 10px;
+  border: 1px solid rgba(46, 61, 85, 0.72);
+  border-radius: var(--radius);
+  background: rgba(5, 8, 16, 0.34);
 }
 
 .viz-canvas {
@@ -1515,6 +1518,99 @@ code,
   min-height: 300px;
   border-radius: var(--radius);
   background: var(--bio-850);
+}
+
+.molecule-viewer-shell {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(340px, 1fr) auto;
+  gap: 8px;
+  min-height: 420px;
+}
+
+.molecule-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.molecule-segmented {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(46, 61, 85, 0.82);
+  border-radius: 7px;
+  background: rgba(10, 15, 26, 0.72);
+}
+
+.molecule-mode-button,
+.icon-button {
+  min-height: 30px;
+  border: 0;
+  color: var(--bio-300);
+  background: transparent;
+  cursor: pointer;
+  transition: 0.18s ease;
+}
+
+.molecule-mode-button {
+  padding: 0 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.molecule-mode-button:hover,
+.molecule-mode-button.active,
+.icon-button:hover {
+  color: var(--accent);
+  background: rgba(0, 229, 160, 0.1);
+}
+
+.icon-button {
+  width: 30px;
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  border: 1px solid rgba(46, 61, 85, 0.82);
+  border-radius: 7px;
+  background: rgba(10, 15, 26, 0.72);
+}
+
+.molecule-canvas {
+  position: relative;
+  min-height: 340px;
+  overflow: hidden;
+  border: 1px solid rgba(46, 61, 85, 0.62);
+  border-radius: var(--radius);
+  background: #0a0f1a;
+}
+
+.molecule-canvas canvas {
+  display: block;
+  outline: 0;
+}
+
+.molecule-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 0;
+}
+
+.molecule-status code {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--bio-100);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: rgba(123, 147, 176, 0.09);
 }
 
 .split-grid,

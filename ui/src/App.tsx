@@ -1462,19 +1462,16 @@ function MoleculeSlot({ slot, artifact, session }: RegistryRendererProps) {
         {slot.encoding?.highlightSelection ? <code>highlightSelection={Array.isArray(slot.encoding.highlightSelection) ? slot.encoding.highlightSelection.join(',') : slot.encoding.highlightSelection}</code> : null}
       </div>
       {dataRef ? (
-        <Card className="viz-card">
-          {atoms.length ? (
-            <MoleculeViewer
-              pdbId={pdbId || uniprotId}
-              ligand={ligand}
-              highlightResidues={residues}
-              pocketLabel={asString(payload.pocketLabel) || asString(payload.pocket) || 'Structure view'}
-              atoms={atoms}
-            />
-          ) : (
-            <EmptyArtifactState title="缺少可渲染原子坐标" detail="structure-summary 有 dataRef，但 artifact.data.atomCoordinates 为空；不会绘制示意结构。" />
-          )}
-        </Card>
+        <div className="viz-card">
+          <MoleculeViewer
+            pdbId={pdbId || uniprotId}
+            ligand={ligand}
+            structureUrl={dataRef}
+            highlightResidues={residues}
+            pocketLabel={asString(payload.pocketLabel) || asString(payload.pocket) || 'Structure view'}
+            atoms={atoms}
+          />
+        </div>
       ) : (
         <EmptyArtifactState title="缺少结构坐标 dataRef" detail="已保留结构摘要，但没有可加载坐标文件；请检查 project tool 输出。" />
       )}
