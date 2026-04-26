@@ -144,4 +144,15 @@ describe('scenario compiler package model', () => {
     assert.ok(recommendation.selectedComponentIds.includes('report-viewer'));
     assert.equal(result.validationReport.ok, true);
   });
+
+  it('does not infer paper-list just because a structure scenario asks for evidence matrix', () => {
+    const description = '全新场景：根据 PDB 1A3N 获取蛋白结构，展示分子结构查看器、链/残基摘要、证据矩阵和可复现 ExecutionUnit。';
+    const recommendation = recommendScenarioElements(description);
+
+    assert.ok(recommendation.selectedArtifactTypes.includes('structure-summary'));
+    assert.ok(recommendation.selectedComponentIds.includes('molecule-viewer'));
+    assert.ok(recommendation.selectedComponentIds.includes('evidence-matrix'));
+    assert.equal(recommendation.selectedArtifactTypes.includes('paper-list'), false);
+    assert.equal(recommendation.selectedComponentIds.includes('paper-card-list'), false);
+  });
 });

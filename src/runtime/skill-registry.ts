@@ -10,6 +10,7 @@ export async function loadSkillRegistry(request: Pick<GatewayRequest, 'workspace
   const roots = [
     { root: SEED_SKILLS_ROOT, kind: 'seed' as const },
     { root: join(workspace, '.bioagent', 'skills'), kind: 'workspace' as const },
+    { root: join(workspace, '.bioagent', 'evolved-skills'), kind: 'workspace' as const },
     { root: resolve(process.cwd(), 'skills', 'installed'), kind: 'installed' as const },
   ];
   const skills: SkillAvailability[] = [];

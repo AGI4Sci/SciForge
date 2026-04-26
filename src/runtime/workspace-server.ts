@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promise
 import { basename, dirname, join, resolve } from 'node:path';
 import { runBioAgentTool } from './bioagent-tools.js';
 import { readRecentTaskAttempts, readTaskAttempts } from './task-attempt-history.js';
+import { acceptSkillPromotionProposal, listSkillPromotionProposals } from './skill-promotion.js';
 
 const PORT = Number(process.env.BIOAGENT_WORKSPACE_PORT || 5174);
 
@@ -20,6 +21,25 @@ createServer(async (req, res) => {
     return;
   }
   const url = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
+  if (url.pathname === '/api/bioagent/config' && req.method === 'GET') {
+    try {
+      writeJson(res, 200, { ok: true, config: await readLocalBioAgentConfig() });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  if (url.pathname === '/api/bioagent/config' && req.method === 'POST') {
+    try {
+      const body = await readJson(req);
+      const config = isRecord(body.config) ? body.config : {};
+      await writeLocalBioAgentConfig(config);
+      writeJson(res, 200, { ok: true, config: await readLocalBioAgentConfig() });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
   if (url.pathname === '/api/bioagent/workspace/list' && req.method === 'GET') {
     try {
       const root = resolve(url.searchParams.get('path') || process.cwd());
@@ -223,6 +243,42 @@ createServer(async (req, res) => {
         workspacePath: root,
         id,
         attempts: await readTaskAttempts(root, id),
+      });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  if (url.pathname === '/api/bioagent/skill-proposals/list' && req.method === 'GET') {
+    try {
+      const root = scenarioWorkspaceRoot(url);
+      writeJson(res, 200, {
+        ok: true,
+        workspacePath: root,
+        proposals: await listSkillPromotionProposals(root),
+        isolation: {
+          proposals: '.bioagent/skill-proposals',
+          acceptedEvolvedSkills: '.bioagent/evolved-skills',
+          stableSkillRoots: ['skills/seed', 'skills/installed', '.bioagent/skills'],
+        },
+      });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  if (url.pathname === '/api/bioagent/skill-proposals/accept' && req.method === 'POST') {
+    try {
+      const body = await readJson(req);
+      const root = scenarioWorkspaceRootFromBody(body);
+      const id = typeof body.id === 'string' ? body.id.trim() : '';
+      if (!id) throw new Error('id is required');
+      const manifest = await acceptSkillPromotionProposal(root, id);
+      writeJson(res, 200, {
+        ok: true,
+        workspacePath: root,
+        manifest,
+        installedRoot: '.bioagent/evolved-skills',
       });
     } catch (err) {
       writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -588,4 +644,61 @@ function redactConfigForFile(config: Record<string, unknown>) {
     ...config,
     apiKey: typeof config.apiKey === 'string' ? config.apiKey : '',
   };
+}
+
+async function readLocalBioAgentConfig() {
+  const parsed = await readConfigLocalJson();
+  const llm = isRecord(parsed.llm) ? parsed.llm : {};
+  const bioagent = isRecord(parsed.bioagent) ? parsed.bioagent : {};
+  return {
+    schemaVersion: 1,
+    agentServerBaseUrl: typeof bioagent.agentServerBaseUrl === 'string' ? bioagent.agentServerBaseUrl : 'http://127.0.0.1:18080',
+    workspaceWriterBaseUrl: typeof bioagent.workspaceWriterBaseUrl === 'string' ? bioagent.workspaceWriterBaseUrl : `http://127.0.0.1:${PORT}`,
+    workspacePath: typeof bioagent.workspacePath === 'string' ? bioagent.workspacePath : join(process.cwd(), 'workspace'),
+    modelProvider: typeof llm.provider === 'string' ? llm.provider : 'native',
+    modelBaseUrl: typeof llm.baseUrl === 'string' ? llm.baseUrl.replace(/\/+$/, '') : '',
+    modelName: typeof llm.model === 'string' ? llm.model : typeof llm.modelName === 'string' ? llm.modelName : '',
+    apiKey: typeof llm.apiKey === 'string' ? llm.apiKey : '',
+    requestTimeoutMs: typeof bioagent.requestTimeoutMs === 'number' ? bioagent.requestTimeoutMs : 300000,
+    updatedAt: typeof bioagent.updatedAt === 'string' ? bioagent.updatedAt : new Date().toISOString(),
+    source: 'config.local.json',
+  };
+}
+
+async function writeLocalBioAgentConfig(config: Record<string, unknown>) {
+  const parsed = await readConfigLocalJson();
+  const llm = isRecord(parsed.llm) ? parsed.llm : {};
+  const bioagent = isRecord(parsed.bioagent) ? parsed.bioagent : {};
+  const next = {
+    ...parsed,
+    llm: {
+      ...llm,
+      provider: typeof config.modelProvider === 'string' ? config.modelProvider : llm.provider,
+      baseUrl: typeof config.modelBaseUrl === 'string' ? config.modelBaseUrl.replace(/\/+$/, '') : llm.baseUrl,
+      apiKey: typeof config.apiKey === 'string' ? config.apiKey : llm.apiKey,
+      model: typeof config.modelName === 'string' ? config.modelName : llm.model,
+    },
+    bioagent: {
+      ...bioagent,
+      agentServerBaseUrl: typeof config.agentServerBaseUrl === 'string' ? config.agentServerBaseUrl : bioagent.agentServerBaseUrl,
+      workspaceWriterBaseUrl: typeof config.workspaceWriterBaseUrl === 'string' ? config.workspaceWriterBaseUrl : bioagent.workspaceWriterBaseUrl,
+      workspacePath: typeof config.workspacePath === 'string' ? config.workspacePath : bioagent.workspacePath,
+      requestTimeoutMs: typeof config.requestTimeoutMs === 'number' ? config.requestTimeoutMs : bioagent.requestTimeoutMs,
+      updatedAt: new Date().toISOString(),
+    },
+  };
+  await writeFile(configLocalPath(), JSON.stringify(next, null, 2));
+}
+
+async function readConfigLocalJson(): Promise<Record<string, unknown>> {
+  try {
+    const parsed = JSON.parse(await readFile(configLocalPath(), 'utf8'));
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function configLocalPath() {
+  return join(process.cwd(), 'config.local.json');
 }

@@ -209,9 +209,16 @@ export function recommendScenarioElements(
 
 function enrichRecommendedComponents(componentIds: string[], artifactTypes: string[], complexOpenEnded: boolean) {
   const primaryComponents = componentIds.filter((componentId) => componentId !== 'unknown-artifact-inspector');
+  const wantsEvidence = artifactTypes.some((artifactType) => [
+    'paper-list',
+    'structure-summary',
+    'knowledge-graph',
+    'omics-differential-expression',
+    'sequence-alignment',
+  ].includes(artifactType));
   return unique([
     ...primaryComponents,
-    ...(artifactTypes.includes('paper-list') ? ['evidence-matrix'] : []),
+    ...(wantsEvidence ? ['evidence-matrix'] : []),
     ...(complexOpenEnded ? ['execution-unit-table', 'notebook-timeline'] : []),
     'unknown-artifact-inspector',
   ]);
@@ -464,7 +471,8 @@ function inferDomainFromText(text: string): SkillDomain {
 function inferTargetArtifactTypes(text: string, domain: SkillDomain) {
   const artifacts = new Set<string>();
   if (/report|summary|summari[sz]e|review|markdown|pdf|download|read|阅读|总结|报告|综述|下载/.test(text)) artifacts.add('research-report');
-  if (/paper|literature|pubmed|arxiv|semantic scholar|crossref|文献|论文|文章|证据/.test(text)) artifacts.add('paper-list');
+  if (/paper|literature|pubmed|arxiv|semantic scholar|crossref|文献|论文|文章/.test(text)
+    || (domain === 'literature' && /evidence|证据/.test(text))) artifacts.add('paper-list');
   if (/structure|pdb|alphafold|molecule|protein|ligand|residue|结构|蛋白|配体|残基/.test(text)) artifacts.add('structure-summary');
   if (/rna|scrna|omics|matrix|deseq|scanpy|umap|expression|表达|差异|组学|单细胞/.test(text)) artifacts.add('omics-differential-expression');
   if (/chembl|uniprot|opentargets|drug|compound|disease|pathway|knowledge graph|network|知识图谱|疾病|化合物|药物|靶点|网络/.test(text)) artifacts.add('knowledge-graph');

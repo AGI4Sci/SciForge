@@ -10,6 +10,7 @@
 - 如果确实定位到 AgentServer 通用能力缺口，可以修改 `/Applications/workspace/ailab/research/app/AgentServer`；修改必须泛化到协议、配置、通用工具连接、网络环境或 backend 能力层，并在对应 TODO 标明影响的 API / backend / tool 约定。
 - Self-evolving skills 是 BioAgent 的核心原则：Agent 在完成用户工作时发现现有 skill 不满足需求，应优先在当前工作目录生成或修复 workspace-local skill/task，并把 Python/R/notebook/CLI 代码视为 skill 的执行组件；稳定成功后再通过验证、反思和用户确认沉淀到用户 skill 库或 seed skill 候选，而不是由开发者手工把一次任务缺口写死进项目代码。
 - 自愈必须发生在 Agent 运行闭环内：当 artifact contract、外部 API、执行日志或用户目标暴露能力缺口时，Agent 应读取失败原因、生成/修改任务代码、重跑并记录 ExecutionUnit、attempt history 和 promotion candidate。开发者介入只能补通用协议、权限、安全边界、runner 能力和 promotion 机制；不应代替 Agent 为具体场景补专用分支。
+- 错误必须作为下一轮自愈上下文保留下来：不得吞掉错误、不得用 demo/空结果伪装成功；runtime 必须把失败原因、日志/代码引用、缺失输入、可恢复动作和 next step 写入 `repair-needed` / `failed-with-reason` ExecutionUnit、attempt history 和可见 UI。
 - 语言边界必须显式：TypeScript 主要用于 Web UI、workspace writer、artifact/session 协议、组件 registry 和轻量编排壳；科学任务执行代码优先生成到 workspace 内的 Python 脚本 / notebook / package 中，并作为 artifact 的一部分沉淀。只有在性能、生态或既有科学工具要求时，才使用 R、C/C++、Rust、Julia、Shell、WASM 或其它语言；选择非 Python 语言必须在 ExecutionUnit 中记录原因、环境和可复现入口。
 - BioAgent 不应把具体科学任务长期写死在 TypeScript backend 分支里。workspace runtime 只能作为通用能力原语和任务引导器；真实任务应尽量表现为 workspace-local code artifact，例如 `.bioagent/tasks/*.py`、`.bioagent/tasks/*.ipynb`、`.bioagent/tasks/*.R`，并输出标准 artifact JSON、日志和 ExecutionUnit。
 - 研究时间线是一等公民：它是研究记忆、分支探索历史、belief dependency graph 的时间投影，也是未来研究编排层的状态基底。
@@ -47,188 +48,70 @@
 - [x] 将 workspace runtime 请求切换为 `scenarioId` + `skillDomain`。
 - [x] 更新 README、PROJECT 和设计文档。
 
-### T034 Computer Use 深度 UX 审计与回归基线
+
+### T044 Self-evolving Skill Loop 与 Agent 自愈闭环
 
 #### 目标说明
-- 把“用起来顺不顺”变成可重复验证的工程资产，而不是一次性主观观察。
-- 使用 in-app browser、Computer Use、Playwright smoke 和截图回归覆盖真实用户路径。
+- 把“Agent 发现能力缺口 -> 生成/修复 workspace task -> 产出 artifact -> 形成 skill proposal -> 用户确认后进入隔离 skill 库 -> 后续运行可复用”做成产品级闭环。
+- 自进化 skill 必须与 seed/preinstalled/stable workspace skills 隔离，避免一次运行生成的代码污染原本稳定能力。
 
 #### 成功标准
-- 有一份 `docs/UXAudit.md`，记录 Dashboard、Package Catalog、Scenario Library、Workbench、Builder、Settings、Workspace、Timeline 的真实使用路径、截图、断点和优先级。
-- smoke 覆盖首访、导入官方 package、导入本地 package、编译发布自定义 package、进入工作台、运行任务、失败恢复、导出 bundle、移动端宽度。
-- 每条关键路径都有明确断言：页面是否跳转、主按钮是否可理解、错误是否可操作、空状态是否有下一步。
-- Computer Use 审计记录真实浏览器多标签、缩放、侧栏宽度、焦点和可见区域问题。
+- AgentServer-generated task 或 self-healed task 成功后，自动写入 `.bioagent/skill-proposals/<proposal-id>/proposal.json`，包含 task code ref、input/output/log refs、artifact schema、validation smoke、review checklist 和 promotion history。
+- 用户确认前 proposal 不会进入可执行 skill registry；确认后安装到 `.bioagent/evolved-skills/<skill-id>/`，不写入 `skills/seed`、`skills/installed` 或稳定 `.bioagent/skills`。
+- Skill Registry 显式读取四类来源：seed、stable workspace、evolved workspace、installed；路由时仍以 seed/stable 为优先，evolved skill 必须保留来源、review 状态和 validation smoke。
+- 自愈失败、schema 不匹配、外部 API 限流、缺依赖等情况写入 attempt history；成功 self-healed run 生成 promotion candidate，但 review checklist 默认不通过安全项。
+- 实际案例 smoke 覆盖：mock AgentServer 生成 workspace Python task，运行成功后产生 proposal；调用 accept API 后 evolved skill 被安装到隔离目录并被 registry 发现。
 
 #### TODO
-- [x] 新增 `docs/UXAudit.md`，把本轮发现的体验问题结构化为 journey map。
-- [x] 扩展 `tests/smoke/smoke-browser-workflows.ts`，覆盖 Settings、Workspace 侧栏、Timeline 和失败恢复。
-- [x] 增加截图回归：desktop、mobile、窄侧栏、结果面板折叠、Builder 展开/收起状态。
-- [x] 增加 UX 断言 helper：禁止裸 JSON 错误、禁止无说明 disabled 主按钮、禁止关键 CTA 不可见。
-- [x] 给每次 smoke 输出用户路径摘要，而不只是技术 selector 结果。
+- [x] 定义 self-evolving skill 隔离路径：proposal 在 `.bioagent/skill-proposals`，用户确认后的 evolved skill 在 `.bioagent/evolved-skills`。
+- [x] 新增 runtime promotion helper：从成功 AgentServer-generated / self-healed task 生成 `SkillPromotionProposal`。
+- [x] 新增 workspace writer API：列出 proposal、确认安装 proposal，并返回隔离路径说明。
+- [x] 扩展 Skill Registry：读取 `.bioagent/evolved-skills`，但不与 seed/preinstalled 物理混放。
+- [x] 增加实际案例 smoke：生成任务 -> proposal -> accept -> registry discover evolved skill。
+- [ ] Workbench UI 增加 “Skill proposal” 卡片：显示来源、代码、日志、review checklist、accept/reject 操作。
+- [ ] 增加安全 gate：确认安装前检测硬编码绝对路径、凭证样式、私人文件引用、不可复现网络依赖。
+- [ ] 增加反思队列：多次成功运行后自动提升 proposal 置信度，失败或 self-heal 过多则降级为 repair notes。
 
-### T035 首次使用与服务健康检查
+### T045 Multi-turn General Agent Work Loop
 
 #### 目标说明
-- 用户第一次打开网页时，不应该先理解 AgentServer、workspace writer、package、skillDomain 等内部概念。
-- 系统要主动检测运行环境，并给出可执行的下一步。
+- Workbench 中的聊天必须像通用 coding/research agent 一样理解多轮目标并完成工作，而不是把最后一句话路由到一个窄 seed skill 后就结束。
+- 当用户目标包含“阅读、总结、系统性报告、继续处理这些结果、写代码/生成 task、修复失败”等通用工作信号时，BioAgent 必须把完整上下文交给 AgentServer / workspace task generation；seed skill 只能作为可复现原语或被 AgentServer 生成的 task 调用。
 
 #### 成功标准
-- 顶部 `Scenario Runtime` 状态升级为 health center，显示 UI、workspace writer、AgentServer、model backend、workspace path、package library 的状态。
-- Dashboard 首屏给出“开始路径”：导入官方 package、导入本地 package、描述需求编译新场景、打开最近 workspace scenario。
-- 服务不可用时展示修复建议，例如启动 `npm run workspace:server`、检查 `http://127.0.0.1:18080`、切换到 workspace seed skill。
-- 所有网络/API 错误都被转换成用户可读提示，不出现 `{"ok":false,"error":"not found"}` 这类裸响应。
+- Runtime prompt 包含 Scenario 目标、最近多轮对话、已有 artifacts 概览和当前请求。
+- `research-report` / `report-viewer` / 多轮续写类任务会强制走 AgentServer generation 或明确返回 repair-needed，不能静默降级为 “web_search returned N records”。
+- AgentServer generation 收到 expected artifacts 与 UI contract，并生成协调 task 输出 report、paper-list、ExecutionUnit 等完整 ToolPayload。
+- AgentServer 作为长期服务依赖随本地 dev runtime 一起启动并对齐端口，避免前端显示 ready 但通用 agent backend 实际不可用。
+- AgentServer backend 不能在 BioAgent runtime 中写死；通过 `BIOAGENT_AGENTSERVER_BACKEND` 选择 Codex / Claude Code / OpenTeam 等后端，并把 backend 鉴权、模型、网络失败呈现为可恢复诊断。
+- AgentServer 必须复用用户在 BioAgent 端配置的 LLM endpoint：Workbench 设置、workspace `.bioagent/config.json` 和项目根 `config.local.json` 的 provider / base URL / model / API key 都应随 run 传入 AgentServer，避免 AgentServer 使用过期或不同的本地模型配置。
+- 本地 dev 启动 AgentServer 时，也必须把 BioAgent `config.local.json` 注入 `AGENT_SERVER_MODEL_*` / `AGENT_SERVER_ADAPTER_LLM_*` 环境变量，作为 backend fallback resolver 的统一配置来源。
+- 前端 `native` 或不完整的模型设置不能覆盖 AgentServer fallback；只有包含明确 base URL 或 modelName 的 endpoint 才作为用户端 LLM 配置传递。
+- 在本地 desktop/dev runtime 中，项目根 `config.local.json` 是 AgentServer LLM 的最高优先级来源；浏览器 localStorage 中的陈旧设置不能覆盖它。
+- 浏览器设置与 AgentServer/runtime 必须共享同一个真相源：`config.local.json`。前端启动时从 Workspace Writer 读取该 JSON，设置保存时写回该 JSON；localStorage 只能作为临时兜底缓存，不能成为第二份长期配置。
+- 所有可恢复错误都必须留给下一轮纠错：Workbench 展示 concise failure，ExecutionUnit metadata 保存 failureReason / recoverActions / nextStep，AgentServer prompt 读取 priorAttempts，下一轮可以基于这些证据继续修复。
+- smoke 覆盖：arXiv 最新论文 + 阅读总结报告的多轮请求，以及 literature / structure / omics / knowledge 多场景复杂任务，即使 seed skill 可用，也必须路由到 AgentServer generation。
+- 如果 AgentServer 返回的是自然语言工作结果而非 `taskFiles + entrypoint`，runtime 必须把结果桥接成可见 artifact / ExecutionUnit，并保留缺失 artifact 的 repair-needed 占位，不能把协议差异暴露成用户任务失败。
+- 如果 AgentServer 把 `taskFiles + entrypoint` 包在 markdown fenced JSON 或 stage finalText 中返回，runtime 仍必须解析、写入并执行生成任务，而不是把生成代码当作普通报告文本。
+- AgentServer generation parser 必须兼容合理的 shape 变体，例如 `entrypoint` 既可能是 `{ language, path }`，也可能是字符串路径。
+- 如果 AgentServer 已经在 workspace 写入 task，只在 `taskFiles` 中返回路径引用，BioAgent 必须读取并归档现有文件后执行，不能把路径数组当普通文本结果。
 
 #### TODO
-- [x] 实现 `RuntimeHealthPanel`，聚合 workspace writer、AgentServer、model provider、package library 状态。
-- [x] Dashboard 增加 `Get Started` 操作区，按用户目标推荐下一步。
-- [x] `workspaceClient` 与 `agentClient` 统一错误模型：`title`、`reason`、`recoverActions`、`diagnosticRef`。
-- [x] 发送按钮禁用时显示原因：空输入、runtime 不可用、缺少必填输入、场景未发布等。
-- [x] 增加 health smoke：关闭 AgentServer / workspace writer 时 UI 给出正确恢复动作。
+- [x] 前端 project-tool 请求传递多轮对话、场景契约和已有 artifact 摘要。
+- [x] 对报告/阅读/系统性总结等 open-ended work 设置 `forceAgentServerGeneration`，避免 seed skill 抢路由。
+- [x] Runtime gateway 尊重 `forceAgentServerGeneration`，并在 AgentServer 不可用时返回可恢复失败而非半成品成功。
+- [x] 增加实际案例 smoke：multi-turn arXiv report work routes to AgentServer generation。
+- [x] 本地 `npm run dev` 默认启动 AgentServer 并统一使用 `BIOAGENT_AGENT_SERVER_PORT || 18080`。
+- [x] Runtime gateway 支持 `BIOAGENT_AGENTSERVER_BACKEND`，不再把通用 agent generation 固定到单一 backend。
+- [x] Runtime gateway 向 AgentServer 转发用户端 LLM endpoint，并在未显式传参时回退读取 workspace config / `config.local.json`。
+- [x] `tools/dev.ts` 启动 AgentServer 时注入 BioAgent 本地 LLM 配置，避免 AgentServer backend fallback 继续使用旧 token。
+- [x] 增加 backend failure smoke：AgentServer 401 / token / backend error 不再误报为 `taskFiles` 协议错误。
+- [x] 增加 LLM endpoint smoke：确认 provider / base URL / model / API key 随 AgentServer run payload 传递。
+- [x] 增加 fenced generation smoke：确认 AgentServer 返回 markdown fenced JSON 时，BioAgent 会执行生成 task。
+- [x] 增加跨场景 smoke matrix：literature / structure / omics / knowledge 多轮复杂请求都走通用 AgentServer 工作流。
+- [x] 增加 AgentServer direct text / ToolPayload bridge：真实 backend 不按 task generation shape 返回时仍保留工作产物。
+- [ ] Workbench UI 将 “正在做什么 / 当前计划 / 正在写 task / 正在运行 / 正在修复” 作为更清晰的 agent progress 展示。
 
-### T036 Scenario Builder 渐进式体验
-
-#### 目标说明
-- Builder 当前功能强但信息密度过高，用户会直接看到大段 JSON 和大量组件按钮。
-- 需要把它改成“描述需求 -> 推荐组合 -> 精修元素 -> 编译质量检查 -> 发布/运行”的渐进式工作流。
-
-#### 成功标准
-- Builder 默认展示自然语言需求、推荐结果、关键组件和质量摘要；JSON contract 默认折叠到高级视图。
-- 每个 skill/tool/UI component 都有短说明、输入输出、为什么被推荐、风险或依赖。
-- 自动推荐和手动选择可以互相切换，且用户能看到变更 diff。
-- 发布前质量门用普通语言解释 blocking/warning/note，而不是只显示计数。
-
-#### TODO
-- [x] 将 Builder 拆成 Stepper：需求描述、推荐元素、编辑契约、质量检查、发布运行。
-- [x] 给 element chips 增加详情 popover：用途、producer/consumer、fallback、依赖 profile。
-- [x] JSON preview 默认折叠，仅在 `scenario/skill/ui/validation` 高级 tabs 中展开。
-- [x] 增加“为什么推荐这些组件”的解释区，并记录到 package metadata。
-- [x] 发布成功后提供两个明确动作：`进入工作台`、`导出 package`。
-
-### T037 Package Catalog / Library 的完整产品体验
-
-#### 目标说明
-- package 应像真实可安装资产：可导入、打开、导出、复制、升级、冲突处理、归档和恢复。
-
-#### 成功标准
-- 官方 package 主按钮遵循用户意图：未导入时 `导入并打开`，已导入时 `打开`。
-- 本地 package 导入支持 id 冲突处理：覆盖、另存为新 id、取消，并展示版本 diff。
-- Scenario Library 支持搜索、过滤、排序、最近打开、来源标签和版本历史。
-- 导出 package 前可预览包含内容：scenario、skillPlan、uiPlan、tests、qualityReport、version history。
-
-#### TODO
-- [x] 增加 package import conflict dialog：覆盖 / 重命名 / 取消。
-- [x] Library 增加搜索与过滤：source、status、skillDomain、最近打开、质量状态。
-- [x] 每个 package card 增加版本历史、quality badge、last run、失败次数。
-- [x] 导出前显示 package manifest preview，并标记是否包含敏感 workspace refs。
-- [x] 增加 package restore flow：archived package 可恢复到 Library。
-
-### T038 Workbench 聊天与运行体验
-
-#### 目标说明
-- Workbench 是主工作区，必须让用户清楚知道“我现在在什么场景、用哪个 package 版本、下一步能做什么、失败怎么恢复”。
-
-#### 成功标准
-- 输入区有明确状态：可发送、缺输入、runtime 不可用、正在运行、可重试。
-- AgentServer 不可用时，系统优先尝试稳定 seed/workspace skill；若仍失败，展示恢复动作，而不是只显示系统失败气泡。
-- 每次 run 的 route decision、selectedSkill、runtimeProfile、fallbackReason 以用户可读形式展示。
-- 历史消息、运行记录和 artifacts 可以按 run 聚合查看，避免聊天流和结果区割裂。
-
-#### TODO
-- [x] 输入区增加 `Run readiness` 小条：必填输入、runtime、package version、selected skill。
-- [x] 失败消息卡片化，包含 `原因`、`自动尝试过什么`、`下一步动作`、`查看日志`。
-- [x] 增加 retry / repair 按钮：重试当前 skill、改用 seed skill、打开设置、导出诊断包。
-- [x] 聊天消息与右侧结果按 run id 互相高亮。
-- [x] 历史会话列表展示 package/version 和最近运行状态。
-
-### T039 结果区、Artifact 与 Handoff 体验
-
-#### 目标说明
-- 结果区目前能渲染组件，但空状态、handoff、artifact lineage 和多组件布局还不够像专业研究工具。
-
-#### 成功标准
-- 每个空状态都说明缺什么 artifact、哪个 skill 会产生它、如何运行或导入数据。
-- Artifact 卡片显示来源、schema、producer skill、package version、可复现文件和可发送目标。
-- Handoff 不只是按钮跳转，还要生成目标场景的输入草案，并保留来源引用。
-- 结果区支持 focus mode、split view、collapse 和移动端单列切换。
-
-#### TODO
-- [x] 为每个 registry component 定义 `emptyState` 和 `recoverActions`。
-- [x] 增加 Artifact Inspector 抽屉：schema、preview、lineage、files、handoff targets。
-- [x] Handoff flow 增加确认预览：目标 package、传递字段、会创建的新 run。
-- [x] 结果区增加 focus mode，允许只看图、只看证据、只看执行单元。
-- [x] 移动端把聊天、Builder、结果区改成 tabs，而不是挤在同一滚动面。
-
-### T040 Settings 与 Workspace 资源管理器体验
-
-#### 目标说明
-- 设置与工作目录是用户排障和复现的基础，必须可靠、可理解、不会误操作。
-
-#### 成功标准
-- 设置入口稳定打开，包含连接测试、模型配置、AgentServer、workspace writer、API key 保存状态和安全说明。
-- Workspace 侧栏能解释当前路径、`.bioagent` 结构、最近 artifacts、logs、tasks，并支持安全打开/复制路径。
-- 新建、重命名、删除等文件操作有明确确认和错误反馈；删除仍必须二次确认。
-
-#### TODO
-- [x] 修复/验证 Settings modal 打开路径，增加 smoke 覆盖。
-- [x] 设置页增加 `Test connection`：AgentServer stream、workspace writer、model backend。
-- [x] 修复 workspace snapshot 恢复策略：显式 workspace path 不再被“最近工作区”覆盖。
-- [x] Workspace tree 增加 `.bioagent` 专用分组：tasks、logs、task-results、scenarios、exports。
-- [x] 文件操作统一 toast/status，不让错误只出现在 sidebar title。
-- [x] 增加 workspace path onboarding：不存在时可创建，权限不足时给出原因。
-
-### T041 Research Timeline 与研究记忆
-
-#### 目标说明
-- 时间线应成为研究记忆和分支探索入口，而不是静态展示页。
-
-#### 成功标准
-- 每次 package import/publish、run、artifact 生成、handoff、失败恢复都写入 timeline event。
-- Timeline 支持按 scenario/package/run/artifact 过滤，并能回到对应工作台状态。
-- 用户可以把一次成功 run 标记为 reusable task / skill candidate / view preset candidate。
-- 导出研究 bundle 时包含 timeline、package refs、artifacts、executionUnits 和复现说明。
-
-#### TODO
-- [x] 定义 timeline event schema，覆盖 package、run、artifact、handoff、failure、export。
-- [x] Workbench run 完成后自动追加 timeline event。
-- [x] Timeline UI 增加过滤、搜索、回放到场景、导出当前分支。
-- [x] 增加 reusable candidate 标记入口，并进入 Scenario Library / Element Registry 候选区。
-- [x] 增加 timeline smoke：运行任务后能在时间线找到对应事件并跳回。
-
-### T042 可访问性、性能与视觉打磨
-
-#### 目标说明
-- 让 BioAgent 在桌面、窄屏、缩放、多标签真实使用下都稳定、清晰、不卡顿。
-
-#### 成功标准
-- 所有 icon button 有 tooltip/aria label；键盘可完成导入、打开、发布、发送、切换结果 tab。
-- 图表和 heavy viewer 不再产生 Recharts width 警告或首屏布局跳动。
-- Builder/Workbench/Library 在 390px、768px、1440px 下无文本溢出和关键 CTA 遮挡。
-- 主 chunk 和重型 visualization chunk 保持在预算内，3Dmol eval 风险有明确隔离策略。
-
-#### TODO
-- [x] 增加 keyboard navigation smoke：Tab 顺序、Enter/Space 激活、Esc 关闭 modal。
-- [x] 修复 Recharts width(-1) warning，确保 chart container 有稳定尺寸。
-- [x] 增加 tooltip 系统，覆盖 icon-only 和专业术语按钮。
-- [x] 移动端重排 Builder/Workbench/Results，避免信息过载。
-- [x] 继续追踪 bundle budget 和 `3dmol` 替代/隔离路线。
-
-### T043 端到端可靠运行与发布门禁
-
-#### 目标说明
-- 用户体验最终依赖运行时稳定：场景发布、任务执行、失败恢复、导出复现必须形成闭环。
-
-#### 成功标准
-- `npm run verify` 覆盖 unit、typecheck、build budget、browser smoke、workspace API smoke 和关键 runtime smoke。
-- 每个官方 package 都有最小 dry-run/smoke case，并在 Package Catalog 显示质量状态。
-- 发布 package 前执行 quality gate；失败时用户知道缺哪些 inputs / skills / components / runtime profiles。
-- 导出 bundle 能在新 workspace 中重新导入并打开，不依赖旧 localStorage。
-
-#### TODO
-- [x] 收敛 `npm run verify`，区分 fast verify 和 full browser/runtime verify。
-- [x] 为四个官方 packages 增加独立 package-level smoke fixture。
-- [x] 增加导出 bundle -> 新 workspace 导入 -> 打开运行的回归测试。
-- [x] Quality gate 纳入真实 runtime health 和 package version diff。
-- [x] CI/本地报告输出 `docs/test-artifacts/index.html`，集中查看截图和日志。
 
 
 

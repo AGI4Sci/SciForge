@@ -42,6 +42,25 @@ export interface WorkspaceTaskAttemptRecord {
   createdAt: string;
 }
 
+export async function loadFileBackedBioAgentConfig(config: BioAgentConfig): Promise<BioAgentConfig | undefined> {
+  const response = await fetchWorkspace(config, 'load config.local.json', `${config.workspaceWriterBaseUrl}/api/bioagent/config`);
+  if (response.status === 404) return undefined;
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Load config failed: HTTP ${response.status}`));
+  const json = await response.json() as { config?: unknown };
+  return isBioAgentConfig(json.config) ? json.config : undefined;
+}
+
+export async function saveFileBackedBioAgentConfig(config: BioAgentConfig): Promise<BioAgentConfig | undefined> {
+  const response = await fetchWorkspace(config, 'save config.local.json', `${config.workspaceWriterBaseUrl}/api/bioagent/config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ config }),
+  });
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Save config failed: HTTP ${response.status}`));
+  const json = await response.json() as { config?: unknown };
+  return isBioAgentConfig(json.config) ? json.config : undefined;
+}
+
 export async function persistWorkspaceState(state: BioAgentWorkspaceState, config: BioAgentConfig): Promise<void> {
   if (!state.workspacePath.trim()) return;
   const operation = `snapshot workspace ${state.workspacePath}`;
@@ -57,6 +76,21 @@ export async function persistWorkspaceState(state: BioAgentWorkspaceState, confi
   if (!response.ok) {
     throw new Error(await workspaceResponseError(response, `Workspace writer failed: HTTP ${response.status}`));
   }
+}
+
+function isBioAgentConfig(value: unknown): value is BioAgentConfig {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return record.schemaVersion === 1
+    && typeof record.agentServerBaseUrl === 'string'
+    && typeof record.workspaceWriterBaseUrl === 'string'
+    && typeof record.workspacePath === 'string'
+    && typeof record.modelProvider === 'string'
+    && typeof record.modelBaseUrl === 'string'
+    && typeof record.modelName === 'string'
+    && typeof record.apiKey === 'string'
+    && typeof record.requestTimeoutMs === 'number'
+    && typeof record.updatedAt === 'string';
 }
 
 export async function loadPersistedWorkspaceState(path: string, config: BioAgentConfig): Promise<BioAgentWorkspaceState | undefined> {

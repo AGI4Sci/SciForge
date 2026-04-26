@@ -2,15 +2,18 @@ import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { agentServerGenerationSkill, loadSkillRegistry, matchSkill } from './skill-registry.js';
 import { appendTaskAttempt, readRecentTaskAttempts, readTaskAttempts } from './task-attempt-history.js';
-import type { AgentServerGenerationResponse, BioAgentSkillDomain, GatewayRequest, SkillAvailability, ToolPayload, WorkspaceTaskRunResult } from './runtime-types.js';
+import type { AgentServerGenerationResponse, BioAgentSkillDomain, GatewayRequest, LlmEndpointConfig, SkillAvailability, ToolPayload, WorkspaceTaskRunResult } from './runtime-types.js';
 import { fileExists, runWorkspaceTask, sha1 } from './workspace-task-runner.js';
+import { maybeWriteSkillPromotionProposal } from './skill-promotion.js';
 
 const SKILL_DOMAIN_SET = new Set<BioAgentSkillDomain>(['literature', 'structure', 'omics', 'knowledge']);
 
 export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>): Promise<ToolPayload> {
   const request = normalizeGatewayRequest(body);
   const skills = await loadSkillRegistry(request);
-  const skill = matchSkill(request, skills) ?? agentServerGenerationSkill(request.skillDomain);
+  const skill = shouldForceAgentServerGeneration(request)
+    ? agentServerGenerationSkill(request.skillDomain)
+    : matchSkill(request, skills) ?? agentServerGenerationSkill(request.skillDomain);
   if (skill.manifest.entrypoint.type === 'agentserver-generation') {
     return await runAgentServerGeneratedTask(request, skill, skills) ?? repairNeededPayload(request, skill, 'AgentServer task generation did not produce a runnable task.');
   }
@@ -68,6 +71,29 @@ async function runAgentServerGeneratedTask(
     if (options.allowFallbackOnGenerationFailure) return undefined;
     return repairNeededPayload(request, skill, generation.error);
   }
+  if ('directPayload' in generation) {
+    const normalized = validateAndNormalizePayload(generation.directPayload, request, skill, {
+      taskRel: 'agentserver://direct-payload',
+      outputRel: `agentserver://${generation.runId || 'unknown'}/output`,
+      stdoutRel: `agentserver://${generation.runId || 'unknown'}/stdout`,
+      stderrRel: `agentserver://${generation.runId || 'unknown'}/stderr`,
+      runtimeFingerprint: { runtime: 'AgentServer direct ToolPayload', runId: generation.runId },
+    });
+    return {
+      ...normalized,
+      reasoningTrace: [
+        normalized.reasoningTrace,
+        `AgentServer generation run: ${generation.runId || 'unknown'}`,
+        'AgentServer returned a BioAgent ToolPayload directly; no workspace task archive was required.',
+      ].filter(Boolean).join('\n'),
+      executionUnits: normalized.executionUnits.map((unit) => isRecord(unit) ? {
+        ...unit,
+        ...attemptPlanRefs(request, skill),
+        agentServerGenerated: true,
+        agentServerRunId: generation.runId,
+      } : unit),
+    };
+  }
 
   const taskId = `generated-${request.skillDomain}-${sha1(`${request.prompt}:${Date.now()}`).slice(0, 12)}`;
   const generatedPathMap = new Map<string, string>();
@@ -75,7 +101,8 @@ async function runAgentServerGeneratedTask(
     const rel = generatedTaskArchiveRel(taskId, file.path);
     generatedPathMap.set(safeWorkspaceRel(file.path), rel);
     await mkdir(dirname(join(workspace, rel)), { recursive: true });
-    await writeFile(join(workspace, rel), file.content);
+    const content = file.content || await readGeneratedTaskFileIfPresent(workspace, file.path);
+    await writeFile(join(workspace, rel), content);
   }
   const entrypointOriginalRel = safeWorkspaceRel(generation.response.entrypoint.path);
   const taskRel = generatedPathMap.get(entrypointOriginalRel) ?? generatedTaskArchiveRel(taskId, generation.response.entrypoint.path);
@@ -175,12 +202,26 @@ async function runAgentServerGeneratedTask(
     }
     const supplement = await trySupplementMissingArtifacts(request, skill, skills, normalized);
     if (supplement) return supplement;
+    const proposal = await maybeWriteSkillPromotionProposal({
+      workspacePath: workspace,
+      request,
+      skill,
+      taskId,
+      taskRel,
+      inputRef: `.bioagent/task-inputs/${taskId}.json`,
+      outputRef: outputRel,
+      stdoutRef: stdoutRel,
+      stderrRef: stderrRel,
+      payload: normalized,
+      patchSummary: generation.response.patchSummary,
+    });
     return {
       ...normalized,
       reasoningTrace: [
         normalized.reasoningTrace,
         `AgentServer generation run: ${generation.runId || 'unknown'}`,
         `Generation summary: ${generation.response.patchSummary || 'task generated'}`,
+        proposal ? `Skill promotion proposal: .bioagent/skill-proposals/${proposal.id}` : '',
       ].filter(Boolean).join('\n'),
       executionUnits: normalized.executionUnits.map((unit) => isRecord(unit) ? {
         ...unit,
@@ -223,6 +264,14 @@ async function runAgentServerGeneratedTask(
   }
 }
 
+async function readGeneratedTaskFileIfPresent(workspace: string, path: string) {
+  try {
+    return await readFile(join(workspace, safeWorkspaceRel(path)), 'utf8');
+  } catch {
+    return '';
+  }
+}
+
 function normalizeGatewayRequest(body: Record<string, unknown>): GatewayRequest {
   const skillDomain = String(body.skillDomain || '') as BioAgentSkillDomain;
   if (!SKILL_DOMAIN_SET.has(skillDomain)) throw new Error(`Unsupported BioAgent skill domain: ${String(body.skillDomain || '')}`);
@@ -231,6 +280,9 @@ function normalizeGatewayRequest(body: Record<string, unknown>): GatewayRequest 
     prompt: String(body.prompt || ''),
     workspacePath: typeof body.workspacePath === 'string' ? body.workspacePath : undefined,
     agentServerBaseUrl: typeof body.agentServerBaseUrl === 'string' ? cleanUrl(body.agentServerBaseUrl) : undefined,
+    modelProvider: typeof body.modelProvider === 'string' ? body.modelProvider : undefined,
+    modelName: typeof body.modelName === 'string' ? body.modelName : undefined,
+    llmEndpoint: normalizeLlmEndpoint(body.llmEndpoint),
     scenarioPackageRef: normalizeScenarioPackageRef(body.scenarioPackageRef),
     skillPlanRef: typeof body.skillPlanRef === 'string' ? body.skillPlanRef : undefined,
     uiPlanRef: typeof body.uiPlanRef === 'string' ? body.uiPlanRef : undefined,
@@ -250,6 +302,22 @@ function normalizeScenarioPackageRef(value: unknown): GatewayRequest['scenarioPa
   return id && version && source ? { id, version, source } : undefined;
 }
 
+function normalizeLlmEndpoint(value: unknown): LlmEndpointConfig | undefined {
+  if (!isRecord(value)) return undefined;
+  const provider = typeof value.provider === 'string' ? value.provider.trim() : '';
+  const baseUrl = typeof value.baseUrl === 'string' ? cleanUrl(value.baseUrl) : '';
+  const apiKey = typeof value.apiKey === 'string' ? value.apiKey.trim() : '';
+  const modelName = typeof value.modelName === 'string' ? value.modelName.trim() : '';
+  if (provider === 'native' && !baseUrl && !modelName) return undefined;
+  if (!baseUrl && !modelName) return undefined;
+  return {
+    provider: provider || undefined,
+    baseUrl: baseUrl || undefined,
+    apiKey: apiKey || undefined,
+    modelName: modelName || undefined,
+  };
+}
+
 function attemptPlanRefs(request: GatewayRequest, skill?: SkillAvailability, fallbackReason?: string) {
   return {
     scenarioPackageRef: request.scenarioPackageRef,
@@ -266,7 +334,7 @@ function attemptPlanRefs(request: GatewayRequest, skill?: SkillAvailability, fal
 }
 
 function runtimeProfileIdForRequest(request: GatewayRequest, skill?: SkillAvailability) {
-  if (skill?.manifest.entrypoint.type === 'agentserver-generation') return 'agentserver-codex';
+  if (skill?.manifest.entrypoint.type === 'agentserver-generation') return `agentserver-${agentServerBackend()}`;
   if (skill && isLiveScpSkill(skill.id)) return 'scp-hub';
   if (skill?.manifest.entrypoint.type === 'workspace-task') return 'workspace-python';
   return request.scenarioPackageRef?.source === 'built-in' ? 'seed-skill' : undefined;
@@ -279,6 +347,14 @@ function selectedRuntimeForSkill(skill?: SkillAvailability) {
   if (skill.manifest.entrypoint.type === 'workspace-task') return 'workspace-python';
   if (isLiveScpSkill(skill.id)) return 'scp-live-adapter';
   return skill.manifest.entrypoint.type;
+}
+
+function agentServerBackend() {
+  const requested = process.env.BIOAGENT_AGENTSERVER_BACKEND?.trim();
+  if (requested && ['openteam_agent', 'claude-code', 'codex', 'hermes-agent', 'openclaw'].includes(requested)) {
+    return requested;
+  }
+  return 'codex';
 }
 
 async function runPythonWorkspaceSkill(request: GatewayRequest, skill: SkillAvailability, taskPrefix: string): Promise<ToolPayload> {
@@ -658,6 +734,19 @@ function shouldAttemptFreshTaskGeneration(request: GatewayRequest, skill: SkillA
   return true;
 }
 
+function shouldForceAgentServerGeneration(request: GatewayRequest) {
+  if (request.uiState?.forceAgentServerGeneration === true) return true;
+  const expectedArtifacts = expectedArtifactTypesForRequest(request);
+  const selectedComponents = selectedComponentIdsForRequest(request);
+  const prompt = request.prompt.toLowerCase();
+  const wantsReport = expectedArtifacts.includes('research-report')
+    || selectedComponents.includes('report-viewer')
+    || /report|summary|summari[sz]e|systematic|read|reading|review|报告|总结|系统性|阅读|综述/.test(prompt);
+  const wantsFreshExternalResearch = /\barxiv\b|\blatest\b|\btoday\b|\bweb\b|\bbrowser\b|最新|今天|今日|网页|浏览器/.test(prompt);
+  const hasPriorContext = request.artifacts.length > 0 || toStringList(request.uiState?.recentConversation).length > 1;
+  return wantsReport && (wantsFreshExternalResearch || hasPriorContext);
+}
+
 function payloadRequestsAgentServerGeneration(payload: ToolPayload) {
   if (payload.executionUnits.some((unit) => isRecord(unit) && unit.status === 'repair-needed')) return true;
   return payload.artifacts.some((artifact) => {
@@ -802,6 +891,20 @@ async function tryAgentServerRepairAndRerun(params: {
       createdAt: new Date().toISOString(),
     });
     if (errors.length) return undefined;
+    const proposal = await maybeWriteSkillPromotionProposal({
+      workspacePath: workspace,
+      request: params.request,
+      skill: params.skill,
+      taskId: params.taskId,
+      taskRel: params.run.spec.taskRel,
+      inputRef: `.bioagent/task-inputs/${params.taskId}-attempt-2.json`,
+      outputRef: outputRel,
+      stdoutRef: stdoutRel,
+      stderrRef: stderrRel,
+      payload: normalized,
+      selfHealed: true,
+      patchSummary: diffSummary,
+    });
     return {
       ...normalized,
       reasoningTrace: [
@@ -809,6 +912,7 @@ async function tryAgentServerRepairAndRerun(params: {
         `AgentServer repair run: ${repair.runId || 'unknown'}`,
         `Self-heal reason: ${params.failureReason}`,
         `Diff ref: ${diffRel}`,
+        proposal ? `Skill promotion proposal: .bioagent/skill-proposals/${proposal.id}` : '',
       ].filter(Boolean).join('\n'),
       executionUnits: normalized.executionUnits.map((unit) => isRecord(unit) ? {
         ...unit,
@@ -858,10 +962,12 @@ async function requestAgentServerGeneration(params: {
   skill: SkillAvailability;
   skills: SkillAvailability[];
   workspace: string;
-}): Promise<{ ok: true; runId?: string; response: AgentServerGenerationResponse } | { ok: false; error: string }> {
+}): Promise<{ ok: true; runId?: string; response: AgentServerGenerationResponse } | { ok: true; runId?: string; directPayload: ToolPayload } | { ok: false; error: string }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Number(process.env.BIOAGENT_AGENTSERVER_GENERATION_TIMEOUT_MS || 300000));
   try {
+    const backend = agentServerBackend();
+    const { llmEndpointSource, ...llmRuntime } = await agentServerLlmRuntime(params.request, params.workspace);
     const generationRequest = {
       prompt: params.request.prompt,
       skillDomain: params.request.skillDomain,
@@ -891,7 +997,7 @@ async function requestAgentServerGeneration(params: {
         agent: {
           id: `bioagent-${params.request.skillDomain}-task-generation`,
           name: `BioAgent ${params.request.skillDomain} Task Generation`,
-          backend: 'codex',
+          backend,
           workspace: params.workspace,
           workingDirectory: params.workspace,
           reconcileExisting: true,
@@ -911,12 +1017,14 @@ async function requestAgentServerGeneration(params: {
           },
         },
         runtime: {
-          backend: 'codex',
+          backend,
           cwd: params.workspace,
+          ...llmRuntime,
           metadata: {
             autoApprove: true,
             sandbox: 'danger-full-access',
             source: 'bioagent-workspace-runtime-gateway',
+            llmEndpointSource: llmRuntime.llmEndpoint ? llmEndpointSource : undefined,
           },
         },
         metadata: {
@@ -939,8 +1047,38 @@ async function requestAgentServerGeneration(params: {
     }
     const data = isRecord(json) && isRecord(json.data) ? json.data : isRecord(json) ? json : {};
     const run = isRecord(data.run) ? data.run : {};
+    const runFailure = agentServerRunFailure(run);
+    if (runFailure) {
+      return { ok: false, error: runFailure };
+    }
     const parsed = parseGenerationResponse(run.output);
-    if (!parsed) return { ok: false, error: 'AgentServer generation response did not include taskFiles and entrypoint.' };
+    if (!parsed) {
+      const directPayload = parseToolPayloadResponse(run);
+      if (directPayload) {
+        return {
+          ok: true,
+          runId: typeof run.id === 'string' ? run.id : undefined,
+          directPayload,
+        };
+      }
+      const directText = extractAgentServerOutputText(run);
+      if (directText && !looksLikeAgentServerFailure(directText)) {
+        const parsedTextGeneration = parseGenerationResponse(extractJson(directText));
+        if (parsedTextGeneration) {
+          return {
+            ok: true,
+            runId: typeof run.id === 'string' ? run.id : undefined,
+            response: parsedTextGeneration,
+          };
+        }
+        return {
+          ok: true,
+          runId: typeof run.id === 'string' ? run.id : undefined,
+          directPayload: toolPayloadFromPlainAgentOutput(directText, params.request),
+        };
+      }
+      return { ok: false, error: 'AgentServer generation response did not include taskFiles and entrypoint or a BioAgent ToolPayload.' };
+    }
     return {
       ok: true,
       runId: typeof run.id === 'string' ? run.id : undefined,
@@ -965,6 +1103,8 @@ async function requestAgentServerRepair(params: {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Number(process.env.BIOAGENT_AGENTSERVER_REPAIR_TIMEOUT_MS || 300000));
   try {
+    const backend = agentServerBackend();
+    const { llmEndpointSource, ...llmRuntime } = await agentServerLlmRuntime(params.request, params.run.workspace);
     const response = await fetch(`${params.baseUrl}/api/agent-server/runs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -973,7 +1113,7 @@ async function requestAgentServerRepair(params: {
         agent: {
           id: `bioagent-${params.request.skillDomain}-runtime-repair`,
           name: `BioAgent ${params.request.skillDomain} Runtime Repair`,
-          backend: 'codex',
+          backend,
           workspace: params.run.workspace,
           workingDirectory: params.run.workspace,
           reconcileExisting: true,
@@ -999,12 +1139,14 @@ async function requestAgentServerRepair(params: {
           },
         },
         runtime: {
-          backend: 'codex',
+          backend,
           cwd: params.run.workspace,
+          ...llmRuntime,
           metadata: {
             autoApprove: true,
             sandbox: 'danger-full-access',
             source: 'bioagent-workspace-runtime-gateway',
+            llmEndpointSource: llmRuntime.llmEndpoint ? llmEndpointSource : undefined,
           },
         },
         metadata: {
@@ -1028,6 +1170,10 @@ async function requestAgentServerRepair(params: {
     }
     const data = isRecord(json) && isRecord(json.data) ? json.data : isRecord(json) ? json : {};
     const run = isRecord(data.run) ? data.run : {};
+    const runFailure = agentServerRunFailure(run);
+    if (runFailure) {
+      return { ok: false, error: runFailure };
+    }
     const output = isRecord(run.output) ? run.output : {};
     const stageResults = Array.isArray(run.stages)
       ? run.stages.map((stage) => isRecord(stage) && isRecord(stage.result) ? stage.result : undefined).filter(Boolean)
@@ -1058,6 +1204,59 @@ async function readConfiguredAgentServerBaseUrl(workspace: string) {
     // No persisted UI config is available for this workspace yet.
   }
   return undefined;
+}
+
+async function agentServerLlmRuntime(request: GatewayRequest, workspace: string): Promise<{
+  modelProvider?: string;
+  modelName?: string;
+  llmEndpoint?: LlmEndpointConfig;
+  llmEndpointSource?: string;
+}> {
+  const fromLocal = await readConfiguredLlmEndpoint(join(process.cwd(), 'config.local.json'), 'config.local.json');
+  if (fromLocal) return fromLocal;
+  const fromRequest = normalizeLlmEndpoint(request.llmEndpoint);
+  if (fromRequest) {
+    return {
+      modelProvider: request.modelProvider?.trim() || fromRequest.provider,
+      modelName: request.modelName?.trim() || fromRequest.modelName,
+      llmEndpoint: fromRequest,
+      llmEndpointSource: 'request',
+    };
+  }
+  const fromWorkspace = await readConfiguredLlmEndpoint(join(workspace, '.bioagent', 'config.json'), 'workspace-config');
+  if (fromWorkspace) return fromWorkspace;
+  return {};
+}
+
+async function readConfiguredLlmEndpoint(path: string, source: string): Promise<{
+  modelProvider?: string;
+  modelName?: string;
+  llmEndpoint?: LlmEndpointConfig;
+  llmEndpointSource?: string;
+} | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(path, 'utf8'));
+    if (!isRecord(parsed)) return undefined;
+    const llm = isRecord(parsed.llm) ? parsed.llm : parsed;
+    const provider = typeof llm.provider === 'string' ? llm.provider.trim() : '';
+    const baseUrl = typeof llm.baseUrl === 'string' ? cleanUrl(llm.baseUrl) : '';
+    const apiKey = typeof llm.apiKey === 'string' ? llm.apiKey.trim() : '';
+    const modelName = typeof llm.modelName === 'string'
+      ? llm.modelName.trim()
+      : typeof llm.model === 'string'
+        ? llm.model.trim()
+        : '';
+    const endpoint = normalizeLlmEndpoint({ provider, baseUrl, apiKey, modelName });
+    if (!endpoint) return undefined;
+    return {
+      modelProvider: provider || endpoint.provider,
+      modelName: modelName || endpoint.modelName,
+      llmEndpoint: endpoint,
+      llmEndpointSource: source,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function buildAgentServerRepairPrompt(params: {
@@ -1187,8 +1386,12 @@ function parseGenerationResponse(value: unknown): AgentServerGenerationResponse 
   for (const candidate of candidates) {
     const parsed = typeof candidate === 'string' ? extractJson(candidate) : candidate;
     if (!isRecord(parsed)) continue;
-    const taskFiles = Array.isArray(parsed.taskFiles) ? parsed.taskFiles.filter(isRecord) : [];
-    const entrypoint = isRecord(parsed.entrypoint) ? parsed.entrypoint : {};
+    const taskFiles = Array.isArray(parsed.taskFiles)
+      ? parsed.taskFiles
+        .map((file) => typeof file === 'string' ? { path: file, content: '', language: 'python' } : file)
+        .filter(isRecord)
+      : [];
+    const entrypoint = normalizeGenerationEntrypoint(parsed.entrypoint);
     if (!taskFiles.length || typeof entrypoint.path !== 'string') continue;
     return {
       taskFiles: taskFiles.map((file) => ({
@@ -1209,6 +1412,167 @@ function parseGenerationResponse(value: unknown): AgentServerGenerationResponse 
     };
   }
   return undefined;
+}
+
+function normalizeGenerationEntrypoint(value: unknown) {
+  if (typeof value === 'string' && value.trim()) {
+    return { language: 'python', path: value.trim() };
+  }
+  return isRecord(value) ? value : {};
+}
+
+function parseToolPayloadResponse(run: Record<string, unknown>): ToolPayload | undefined {
+  const output = isRecord(run.output) ? run.output : {};
+  const stages = Array.isArray(run.stages) ? run.stages.filter(isRecord) : [];
+  const candidates: unknown[] = [
+    output,
+    output.result,
+    output.text,
+    ...stages.flatMap((stage) => {
+      const result = isRecord(stage.result) ? stage.result : {};
+      return [
+        result.finalText,
+        result.handoffSummary,
+        result.output,
+      ];
+    }),
+  ];
+  for (const candidate of candidates) {
+    const parsed = typeof candidate === 'string' ? extractJson(candidate) : candidate;
+    if (isToolPayload(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function agentServerRunFailure(run: Record<string, unknown>) {
+  const status = typeof run.status === 'string' ? run.status : '';
+  const output = isRecord(run.output) ? run.output : {};
+  const success = typeof output.success === 'boolean' ? output.success : undefined;
+  if (status !== 'failed' && success !== false) return undefined;
+  const detail = extractAgentServerFailureDetail(run);
+  return `AgentServer backend failed: ${detail || 'run failed without a usable generation result.'}`;
+}
+
+function extractAgentServerFailureDetail(run: Record<string, unknown>) {
+  const output = isRecord(run.output) ? run.output : {};
+  const stages = Array.isArray(run.stages) ? run.stages.filter(isRecord) : [];
+  const candidates = [
+    output.error,
+    output.result,
+    output.text,
+    ...stages.flatMap((stage) => {
+      const result = isRecord(stage.result) ? stage.result : {};
+      return [result.error, result.finalText, result.outputSummary];
+    }),
+  ];
+  for (const candidate of candidates) {
+    const text = typeof candidate === 'string' ? candidate.trim() : '';
+    if (!text) continue;
+    const parsedMessage = parseJsonErrorMessage(text);
+    return sanitizeAgentServerError(parsedMessage || text);
+  }
+  return undefined;
+}
+
+function parseJsonErrorMessage(text: string) {
+  try {
+    const parsed = JSON.parse(text);
+    if (isRecord(parsed.error) && typeof parsed.error.message === 'string') {
+      return parsed.error.message;
+    }
+    if (typeof parsed.message === 'string') return parsed.message;
+  } catch {
+    // Not JSON; keep the raw text for sanitization.
+  }
+  return undefined;
+}
+
+function sanitizeAgentServerError(text: string) {
+  const firstLine = text.split('\n').map((line) => line.trim()).find(Boolean) || text;
+  return firstLine
+    .replace(/request id:\s*[^),\s]+/gi, 'request id: redacted')
+    .replace(/url:\s*\S+/gi, 'url: redacted')
+    .replace(/https?:\/\/[^\s|,)]+/gi, 'redacted-url')
+    .slice(0, 320);
+}
+
+function isToolPayload(value: unknown): value is ToolPayload {
+  if (!isRecord(value)) return false;
+  return typeof value.message === 'string'
+    && Array.isArray(value.claims)
+    && Array.isArray(value.uiManifest)
+    && Array.isArray(value.executionUnits)
+    && Array.isArray(value.artifacts);
+}
+
+function extractAgentServerOutputText(run: Record<string, unknown>) {
+  const output = isRecord(run.output) ? run.output : {};
+  const stages = Array.isArray(run.stages) ? run.stages.filter(isRecord) : [];
+  const candidates = [
+    output.result,
+    output.text,
+    output.error,
+    ...stages.flatMap((stage) => {
+      const result = isRecord(stage.result) ? stage.result : {};
+      return [result.finalText, result.handoffSummary, result.outputSummary];
+    }),
+  ];
+  return candidates
+    .map((candidate) => typeof candidate === 'string' ? candidate.trim() : '')
+    .find((candidate) => candidate.length > 40);
+}
+
+function looksLikeAgentServerFailure(text: string) {
+  return /failed|error|exception|timeout|cannot|unable|无法|失败|错误|超时/i.test(text)
+    && !/report|summary|artifact|报告|总结|结论|文献/i.test(text);
+}
+
+function toolPayloadFromPlainAgentOutput(text: string, request: GatewayRequest): ToolPayload {
+  const expected = expectedArtifactTypesForRequest(request);
+  const artifacts: Array<Record<string, unknown>> = [];
+  if (expected.includes('research-report') || /report|summary|报告|总结/.test(request.prompt.toLowerCase())) {
+    artifacts.push({
+      id: 'research-report',
+      type: 'research-report',
+      producerScenario: request.skillDomain,
+      schemaVersion: '1',
+      metadata: {
+        source: 'agentserver-direct-text',
+        note: 'AgentServer returned a natural-language answer instead of taskFiles; BioAgent preserved it as a report artifact.',
+      },
+      data: {
+        markdown: text,
+        sections: [{ title: 'AgentServer Report', content: text }],
+      },
+    });
+  }
+  const reportRef = artifacts.some((artifact) => artifact.type === 'research-report') ? 'research-report' : `${request.skillDomain}-runtime-result`;
+  return {
+    message: text,
+    confidence: 0.72,
+    claimType: 'evidence-summary',
+    evidenceLevel: 'agentserver-direct',
+    reasoningTrace: 'AgentServer returned plain text; BioAgent converted it into a ToolPayload so the work remains visible and auditable.',
+    claims: [{
+      text: text.split('\n').map((line) => line.trim()).find(Boolean)?.slice(0, 240) || 'AgentServer completed the request.',
+      type: 'inference',
+      confidence: 0.72,
+      evidenceLevel: 'agentserver-direct',
+      supportingRefs: [],
+      opposingRefs: [],
+    }],
+    uiManifest: [
+      { componentId: artifacts.length ? 'report-viewer' : 'execution-unit-table', artifactRef: reportRef, priority: 1 },
+      { componentId: 'execution-unit-table', artifactRef: `${request.skillDomain}-runtime-result`, priority: 2 },
+    ],
+    executionUnits: [{
+      id: `agentserver-direct-${sha1(text).slice(0, 8)}`,
+      status: 'done',
+      tool: 'agentserver.direct-text',
+      params: JSON.stringify({ expectedArtifactTypes: expected, prompt: request.prompt.slice(0, 200) }),
+    }],
+    artifacts,
+  };
 }
 
 function extractJson(text: string): unknown {

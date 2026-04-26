@@ -15,6 +15,9 @@ export interface GatewayRequest {
   prompt: string;
   workspacePath?: string;
   agentServerBaseUrl?: string;
+  modelProvider?: string;
+  modelName?: string;
+  llmEndpoint?: LlmEndpointConfig;
   scenarioPackageRef?: ScenarioPackageRef;
   skillPlanRef?: string;
   uiPlanRef?: string;
@@ -23,6 +26,13 @@ export interface GatewayRequest {
   availableSkills?: string[];
   expectedArtifactTypes?: string[];
   selectedComponentIds?: string[];
+}
+
+export interface LlmEndpointConfig {
+  provider?: string;
+  baseUrl?: string;
+  apiKey?: string;
+  modelName?: string;
 }
 
 export interface ScenarioPackageRef {

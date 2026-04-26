@@ -1465,6 +1465,17 @@ button {
   gap: 16px;
 }
 
+.scenario-library-scroll {
+  max-height: min(760px, calc(100vh - 330px));
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-color: rgba(0, 229, 160, 0.42) rgba(15, 22, 35, 0.42);
+}
+
+.scenario-library-grid {
+  padding-bottom: 4px;
+}
+
 .library-controls {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) repeat(4, minmax(118px, auto));
@@ -1503,6 +1514,10 @@ button {
   overflow: hidden;
 }
 
+.scenario-library-card {
+  min-height: 234px;
+}
+
 .scenario-card-top {
   display: flex;
   align-items: center;
@@ -1523,6 +1538,20 @@ button {
   height: 48px;
 }
 
+.scenario-card-icon.compact {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+}
+
+.library-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  margin-right: auto;
+}
+
 .scenario-card h3 {
   margin: 0 0 8px;
   font-size: 17px;
@@ -1534,6 +1563,11 @@ button {
   color: var(--bio-300);
   font-size: 12px;
   line-height: 1.55;
+  display: -webkit-box;
+  min-height: 56px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .principles {
@@ -1657,6 +1691,23 @@ button {
   align-items: center;
   margin: 8px 0 10px;
   color: var(--bio-400);
+  font-size: 11px;
+}
+
+.scenario-config-panel {
+  display: grid;
+  gap: 10px;
+  margin: 4px 0 12px;
+  padding: 10px;
+  border: 1px solid rgba(46, 61, 85, 0.72);
+  border-radius: 8px;
+  background: rgba(5, 8, 16, 0.36);
+}
+
+.scenario-config-panel strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--bio-100);
   font-size: 11px;
 }
 

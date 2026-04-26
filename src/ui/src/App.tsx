@@ -81,7 +81,7 @@ import {
 import type { VolcanoPoint } from './charts';
 import { createSession, loadWorkspaceState, resetSession, saveWorkspaceState, sessionActivityScore, shouldUsePersistedWorkspaceState, versionSession } from './sessionStore';
 import { loadBioAgentConfig, saveBioAgentConfig, updateConfig } from './config';
-import { archiveWorkspaceScenario, listWorkspace, loadPersistedWorkspaceState, loadScenarioLibrary, loadWorkspaceScenario, mutateWorkspaceFile, persistWorkspaceState, publishWorkspaceScenario, restoreWorkspaceScenario, saveWorkspaceScenario, type WorkspaceEntry } from './api/workspaceClient';
+import { archiveWorkspaceScenario, listWorkspace, loadFileBackedBioAgentConfig, loadPersistedWorkspaceState, loadScenarioLibrary, loadWorkspaceScenario, mutateWorkspaceFile, persistWorkspaceState, publishWorkspaceScenario, restoreWorkspaceScenario, saveFileBackedBioAgentConfig, saveWorkspaceScenario, type WorkspaceEntry } from './api/workspaceClient';
 import { HeatmapViewer, MoleculeViewer, NetworkGraph, UmapViewer } from './visualizations';
 
 const chartTheme = {
@@ -486,8 +486,8 @@ function renameScenarioPackageForImport(pkg: ScenarioPackage, nextId: string): S
   };
 }
 
-function filterScenarioLibraryItems(
-  items: ScenarioLibraryItem[],
+function filterScenarioLibraryItems<T extends ScenarioLibraryItem>(
+  items: T[],
   options: { query: string; status: string; source: string; domain: string; sort: string },
 ) {
   const query = options.query.trim().toLowerCase();
@@ -505,6 +505,49 @@ function filterScenarioLibraryItems(
       if (options.sort === 'status') return `${left.status}-${left.title}`.localeCompare(`${right.status}-${right.title}`);
       return Date.parse(right.versions[0]?.createdAt ?? '') - Date.parse(left.versions[0]?.createdAt ?? '');
     });
+}
+
+type DashboardLibraryItem = ScenarioLibraryItem & {
+  builtInScenarioId?: ScenarioId;
+  icon?: LucideIcon;
+  color?: string;
+  imported?: boolean;
+  package?: ScenarioPackage;
+};
+
+function scenarioPackageToLibraryDisplayItem(
+  pkg: ScenarioPackage,
+  options: {
+    source?: ScenarioLibraryItem['source'];
+    builtInScenarioId?: ScenarioId;
+    icon?: LucideIcon;
+    color?: string;
+    imported?: boolean;
+    package?: ScenarioPackage;
+  } = {},
+): DashboardLibraryItem {
+  return {
+    id: pkg.id,
+    title: pkg.scenario.title,
+    description: pkg.scenario.description,
+    version: pkg.version,
+    status: pkg.status,
+    skillDomain: pkg.scenario.skillDomain,
+    source: options.source ?? (pkg.status === 'archived' ? 'archived' : pkg.scenario.source === 'built-in' ? 'built-in' : 'workspace'),
+    packageRef: {
+      id: pkg.id,
+      version: pkg.version,
+      source: pkg.scenario.source === 'built-in' ? 'built-in' : 'workspace',
+    },
+    validationReport: pkg.validationReport,
+    qualityReport: pkg.qualityReport,
+    versions: pkg.versions,
+    builtInScenarioId: options.builtInScenarioId,
+    icon: options.icon,
+    color: options.color,
+    imported: options.imported,
+    package: options.package,
+  };
 }
 
 function exportTextFile(name: string, content: string, contentType = 'text/plain') {
@@ -855,8 +898,8 @@ function Sidebar({
                     </span>
                   </button>
                   <div className="sidebar-package-note">
-                    <strong>官方 packages 默认不导入</strong>
-                    <span>在研究概览的 Package Catalog 中按需导入、导出，然后从 Scenario Library 打开。</span>
+                    <strong>统一 Scenario Library</strong>
+                    <span>官方模板、workspace package 和新编译场景都在研究概览中按需打开、导入或编辑配置。</span>
                   </div>
                 </div>
               </>
@@ -1155,7 +1198,7 @@ function SettingsDialog({
         <div className="settings-save-state" role="status">
           <span className="status-dot online" />
           <span>
-            已自动保存到本机浏览器。下一次 AgentServer 请求会使用当前模型：
+            已自动保存到 config.local.json。下一次 AgentServer 请求会使用当前模型：
             {' '}
             <strong>{config.modelProvider || 'native'}</strong>
             {config.modelName.trim() ? <code>{config.modelName.trim()}</code> : <em>backend default</em>}
@@ -1295,8 +1338,6 @@ function Dashboard({
   workspaceState,
   onApplyScenarioDraft,
   onWorkbenchPrompt,
-  onHideOfficialPackage,
-  onRestoreOfficialPackages,
 }: {
   setPage: (page: PageId) => void;
   setScenarioId: (id: ScenarioInstanceId) => void;
@@ -1304,8 +1345,6 @@ function Dashboard({
   workspaceState: BioAgentWorkspaceState;
   onApplyScenarioDraft: (scenarioId: ScenarioInstanceId, draft: ScenarioRuntimeOverride) => void;
   onWorkbenchPrompt: (scenarioId: ScenarioInstanceId, prompt: string) => void;
-  onHideOfficialPackage: (id: string) => void;
-  onRestoreOfficialPackages: () => void;
 }) {
   const [scenarioPrompt, setScenarioPrompt] = useState('我想比较KRAS G12D突变相关文献证据，并在需要时联动蛋白结构和知识图谱。');
   const [scenarioDraft, setScenarioDraft] = useState<ScenarioBuilderDraft>(() => compileScenarioDraft('我想比较KRAS G12D突变相关文献证据，并在需要时联动蛋白结构和知识图谱。'));
@@ -1319,22 +1358,38 @@ function Dashboard({
   const [libraryDomainFilter, setLibraryDomainFilter] = useState('all');
   const [librarySort, setLibrarySort] = useState('recent');
   const [exportPreviewPackage, setExportPreviewPackage] = useState<ScenarioPackage | undefined>();
+  const [expandedLibraryItemId, setExpandedLibraryItemId] = useState<string | undefined>();
+  const [libraryDetailPackages, setLibraryDetailPackages] = useState<Record<string, ScenarioPackage>>({});
   const packageImportInputRef = useRef<HTMLInputElement>(null);
   const importedPackageIds = useMemo(() => new Set(libraryItems.map((item) => item.id)), [libraryItems]);
-  const filteredLibraryItems = useMemo(() => filterScenarioLibraryItems(libraryItems, {
+  const officialLibraryItems = useMemo<DashboardLibraryItem[]>(() => officialScenarioPackages.map(({ scenario, package: pkg }) => scenarioPackageToLibraryDisplayItem(pkg, {
+    source: 'built-in',
+    builtInScenarioId: scenario.id,
+    icon: scenario.icon,
+    color: scenario.color,
+    imported: importedPackageIds.has(pkg.id),
+    package: pkg,
+  })), [importedPackageIds]);
+  const workspaceLibraryItems = useMemo<DashboardLibraryItem[]>(() => libraryItems.map((item) => ({
+    ...item,
+    imported: true,
+  })), [libraryItems]);
+  const combinedLibraryItems = useMemo<DashboardLibraryItem[]>(() => {
+    const workspaceIds = new Set(workspaceLibraryItems.map((item) => item.id));
+    return [
+      ...workspaceLibraryItems,
+      ...officialLibraryItems.filter((item) => !workspaceIds.has(item.id)),
+    ];
+  }, [officialLibraryItems, workspaceLibraryItems]);
+  const filteredCombinedLibraryItems = useMemo(() => filterScenarioLibraryItems(combinedLibraryItems, {
     query: libraryQuery,
     status: libraryStatusFilter,
     source: librarySourceFilter,
     domain: libraryDomainFilter,
     sort: librarySort,
-  }), [libraryItems, libraryQuery, libraryStatusFilter, librarySourceFilter, libraryDomainFilter, librarySort]);
+  }), [combinedLibraryItems, libraryQuery, libraryStatusFilter, librarySourceFilter, libraryDomainFilter, librarySort]);
   const healthItems = useRuntimeHealth(config, libraryItems.length);
   const packageRunStatsById = useMemo(() => buildPackageRunStats(workspaceState), [workspaceState]);
-  const hiddenOfficialPackageIds = workspaceState.hiddenOfficialPackageIds ?? [];
-  const visibleOfficialScenarioPackages = useMemo(() => {
-    const hidden = new Set(hiddenOfficialPackageIds);
-    return officialScenarioPackages.filter(({ package: pkg }) => !hidden.has(pkg.id));
-  }, [hiddenOfficialPackageIds]);
   useEffect(() => {
     let cancelled = false;
     if (!config.workspacePath.trim()) {
@@ -1466,6 +1521,55 @@ function Dashboard({
     const pkg = buildBuiltInScenarioPackage(id);
     setExportPreviewPackage(pkg);
   }
+
+  async function openLibraryItem(item: DashboardLibraryItem) {
+    if (item.source === 'built-in' && item.builtInScenarioId && !importedPackageIds.has(item.id)) {
+      await importOfficialPackage(item.builtInScenarioId);
+      return;
+    }
+    await openWorkspaceScenario(item.id);
+  }
+
+  function exportLibraryItem(item: DashboardLibraryItem) {
+    if (item.source === 'built-in' && item.builtInScenarioId && !importedPackageIds.has(item.id)) {
+      exportOfficialPackage(item.builtInScenarioId);
+      return;
+    }
+    void exportWorkspacePackage(item.id);
+  }
+
+  async function toggleLibraryDetails(item: DashboardLibraryItem) {
+    if (expandedLibraryItemId === item.id) {
+      setExpandedLibraryItemId(undefined);
+      return;
+    }
+    setExpandedLibraryItemId(item.id);
+    if (item.package || libraryDetailPackages[item.id] || (item.source === 'built-in' && !importedPackageIds.has(item.id))) return;
+    try {
+      const pkg = await loadWorkspaceScenario(config, item.id);
+      if (pkg) {
+        setLibraryDetailPackages((current) => ({ ...current, [item.id]: pkg }));
+      }
+    } catch (error) {
+      setLibraryStatus(error instanceof Error ? `读取配置失败：${error.message}` : `读取配置失败：${String(error)}`);
+    }
+  }
+
+  async function saveCompiledDraftAndOpen() {
+    try {
+      const instanceId = scenarioInstanceIdForDraft(scenarioDraft);
+      const pkg = compileScenarioPackageForDraft(instanceId, scenarioDraft);
+      await saveWorkspaceScenario(config, pkg);
+      await refreshScenarioLibrary();
+      onApplyScenarioDraft(instanceId, scenarioPackageToOverride(pkg));
+      onWorkbenchPrompt(instanceId, scenarioPrompt.trim() || scenarioDraft.description);
+      setScenarioId(instanceId);
+      setLibraryStatus(`已保存新场景 ${pkg.scenario.title} 到 Scenario Library。`);
+      setPage('workbench');
+    } catch (error) {
+      setLibraryStatus(error instanceof Error ? `保存编译场景失败：${error.message}` : `保存编译场景失败：${String(error)}`);
+    }
+  }
   const activityData = [
     { day: 'Mon', papers: 28, eus: 4 },
     { day: 'Tue', papers: 36, eus: 7 },
@@ -1540,13 +1644,7 @@ function Dashboard({
             <ActionButton
               icon={Play}
               variant="secondary"
-              onClick={() => {
-                const instanceId = scenarioInstanceIdForDraft(scenarioDraft);
-                onApplyScenarioDraft(instanceId, compiledScenarioOverrideForDraft(instanceId, scenarioDraft));
-                onWorkbenchPrompt(instanceId, scenarioPrompt.trim() || scenarioDraft.description);
-                setScenarioId(instanceId);
-                setPage('workbench');
-              }}
+              onClick={() => void saveCompiledDraftAndOpen()}
             >
               进入可运行工作台
             </ActionButton>
@@ -1604,73 +1702,8 @@ function Dashboard({
 
       <section>
         <SectionHeader
-          title="Official Package Catalog"
-          subtitle="官方预编译 packages 默认不进入 workspace；可隐藏不常用模板，隐藏不会删除模板或 workspace package"
-          action={hiddenOfficialPackageIds.length ? (
-            <ActionButton icon={RefreshCw} variant="secondary" onClick={onRestoreOfficialPackages}>恢复隐藏</ActionButton>
-          ) : undefined}
-        />
-        <div className="scenario-grid">
-          {visibleOfficialScenarioPackages.map(({ scenario, package: pkg }) => (
-            <Card
-              key={pkg.id}
-              className="scenario-card"
-            >
-              <div className="scenario-card-top">
-                <div className="scenario-card-icon" style={{ color: scenario.color, background: `${scenario.color}18` }}>
-                  <scenario.icon size={23} />
-                </div>
-                <Badge variant={importedPackageIds.has(pkg.id) ? 'success' : 'muted'}>{importedPackageIds.has(pkg.id) ? 'imported' : 'not imported'}</Badge>
-              </div>
-              <h3 style={{ color: scenario.color }}>{pkg.scenario.title}</h3>
-              <p>{pkg.scenario.description}</p>
-              <div className="tool-chips">
-                {pkg.scenario.selectedSkillIds.slice(0, 3).map((skillId) => (
-                  <span key={skillId}>{skillId}</span>
-                ))}
-              </div>
-              <div className="scenario-note">
-                <code>{pkg.id}@{pkg.version}</code>
-                <span>{pkg.uiPlan.slots.length} UI slots</span>
-              </div>
-              <PackageOperationalMeta
-                versionCount={pkg.versions.length || 1}
-                versions={pkg.versions}
-                qualityOk={pkg.qualityReport?.ok ?? pkg.validationReport?.ok ?? true}
-                qualityIssueCount={pkg.qualityReport?.items.length ?? pkg.validationReport?.issues.length ?? 0}
-                runStats={packageRunStatsById[pkg.id]}
-              />
-              <div className="manifest-strip">
-                {pkg.uiPlan.compiledFrom.componentIds.map((component) => (
-                  <i key={component} title={component} />
-                ))}
-              </div>
-              <div className="scenario-builder-actions">
-                <ActionButton
-                  icon={importedPackageIds.has(pkg.id) ? Play : FilePlus}
-                  onClick={() => void (importedPackageIds.has(pkg.id) ? openWorkspaceScenario(pkg.id) : importOfficialPackage(scenario.id))}
-                >
-                  {importedPackageIds.has(pkg.id) ? '打开' : '导入并打开'}
-                </ActionButton>
-                <ActionButton icon={Download} variant="secondary" onClick={() => exportOfficialPackage(scenario.id)}>导出</ActionButton>
-                <ActionButton icon={Eye} variant="ghost" onClick={() => onHideOfficialPackage(pkg.id)}>隐藏</ActionButton>
-              </div>
-            </Card>
-          ))}
-        </div>
-        {!visibleOfficialScenarioPackages.length ? (
-          <div className="empty-runtime-state compact">
-            <strong>官方模板已全部隐藏</strong>
-            <span>模板没有被删除，可以随时恢复显示。</span>
-            <ActionButton icon={RefreshCw} variant="secondary" onClick={onRestoreOfficialPackages}>恢复全部官方模板</ActionButton>
-          </div>
-        ) : null}
-      </section>
-
-      <section>
-        <SectionHeader
           title="Scenario Library"
-          subtitle="workspace 中已导入、保存、发布或归档的可复用场景"
+          subtitle="所有官方模板、workspace package 和新编译场景统一在这里按需打开、导入或编辑配置"
           action={(
             <div className="scenario-builder-actions">
               <input
@@ -1719,40 +1752,76 @@ function Dashboard({
             <option value="status">质量状态</option>
           </select>
         </div>
-        <div className="scenario-grid">
-          {filteredLibraryItems.slice(0, 12).map((item) => (
-            <Card key={`${item.id}-${item.version}`} className="scenario-card">
-              <div className="scenario-card-top">
-                <Badge variant={item.status === 'published' ? 'success' : item.status === 'archived' ? 'muted' : 'warning'}>{item.status}</Badge>
-                <code>{item.version}</code>
-              </div>
-              <h3>{item.title || item.id}</h3>
-              <p>{item.description || item.id}</p>
-              <div className="scenario-note">
-                <code>{item.id}</code>
-                <span>{item.source ?? 'workspace'} · {item.skillDomain}</span>
-              </div>
-              <PackageOperationalMeta
-                versionCount={item.versions.length || 1}
-                versions={item.versions}
-                qualityOk={item.qualityReport?.ok ?? item.validationReport?.ok ?? true}
-                qualityIssueCount={item.qualityReport?.items.length ?? item.validationReport?.issues.length ?? 0}
-                runStats={packageRunStatsById[item.id]}
-              />
-              <div className="scenario-builder-actions">
-                {item.status === 'archived' ? (
-                  <ActionButton icon={RefreshCw} onClick={() => void restoreWorkspaceScenarioFromLibrary(item.id)}>恢复</ActionButton>
-                ) : (
-                  <ActionButton icon={Play} onClick={() => void openWorkspaceScenario(item.id)}>打开</ActionButton>
-                )}
-                <ActionButton icon={FilePlus} variant="secondary" onClick={() => void copyWorkspaceScenario(item.id)}>复制</ActionButton>
-                <ActionButton icon={Download} variant="secondary" onClick={() => void exportWorkspacePackage(item.id)}>导出</ActionButton>
-                {item.status !== 'archived' ? <ActionButton icon={Trash2} variant="ghost" onClick={() => void archiveWorkspaceScenarioFromLibrary(item.id)}>归档</ActionButton> : null}
-              </div>
-            </Card>
-          ))}
+        <div className="scenario-library-scroll">
+          <div className="scenario-grid scenario-library-grid">
+            {filteredCombinedLibraryItems.map((item) => {
+              const DetailIcon = item.icon;
+              const detailPackage = item.package ?? libraryDetailPackages[item.id];
+              const isBuiltInAvailable = item.source === 'built-in' && item.builtInScenarioId && !importedPackageIds.has(item.id);
+              const isExpanded = expandedLibraryItemId === item.id;
+              return (
+                <Card key={`${item.id}-${item.version}-${item.source}`} className="scenario-card scenario-library-card">
+                  <div className="scenario-card-top">
+                    {DetailIcon ? (
+                      <div className="scenario-card-icon compact" style={{ color: item.color, background: item.color ? `${item.color}18` : undefined }}>
+                        <DetailIcon size={18} />
+                      </div>
+                    ) : null}
+                    <div className="library-card-badges">
+                      <Badge variant={item.status === 'published' ? 'success' : item.status === 'archived' ? 'muted' : 'warning'}>{item.status}</Badge>
+                      <Badge variant={item.imported ? 'success' : 'muted'}>{item.imported ? 'workspace' : 'built-in'}</Badge>
+                    </div>
+                    <code>{item.version}</code>
+                  </div>
+                  <h3 style={item.color ? { color: item.color } : undefined}>{item.title || item.id}</h3>
+                  <p>{item.description || item.id}</p>
+                  <div className="scenario-note">
+                    <code>{item.id}</code>
+                    <span>{item.source ?? 'workspace'} · {item.skillDomain}</span>
+                  </div>
+                  <PackageOperationalMeta
+                    versionCount={item.versions.length || 1}
+                    versions={item.versions}
+                    qualityOk={item.qualityReport?.ok ?? item.validationReport?.ok ?? true}
+                    qualityIssueCount={item.qualityReport?.items.length ?? item.validationReport?.issues.length ?? 0}
+                    runStats={packageRunStatsById[item.id]}
+                  />
+                  {isExpanded ? (
+                    <div className="scenario-config-panel">
+                      <div>
+                        <strong>Skills</strong>
+                        <div className="tool-chips compact">
+                          {(detailPackage?.scenario.selectedSkillIds ?? ['打开后加载配置']).slice(0, 8).map((skillId) => <code key={skillId}>{skillId}</code>)}
+                        </div>
+                      </div>
+                      <div>
+                        <strong>UI Components</strong>
+                        <div className="tool-chips compact">
+                          {(detailPackage?.scenario.selectedComponentIds ?? ['打开后加载配置']).slice(0, 8).map((componentId) => <code key={componentId}>{componentId}</code>)}
+                        </div>
+                      </div>
+                      <ActionButton icon={Settings} variant="secondary" onClick={() => void openLibraryItem(item)}>打开编辑配置</ActionButton>
+                    </div>
+                  ) : null}
+                  <div className="scenario-builder-actions">
+                    {item.status === 'archived' && !isBuiltInAvailable ? (
+                      <ActionButton icon={RefreshCw} onClick={() => void restoreWorkspaceScenarioFromLibrary(item.id)}>恢复</ActionButton>
+                    ) : (
+                      <ActionButton icon={isBuiltInAvailable ? FilePlus : Play} onClick={() => void openLibraryItem(item)}>
+                        {isBuiltInAvailable ? '导入并打开' : '打开'}
+                      </ActionButton>
+                    )}
+                    <ActionButton icon={Settings} variant="secondary" onClick={() => void toggleLibraryDetails(item)}>{isExpanded ? '收起配置' : '配置'}</ActionButton>
+                    {item.imported ? <ActionButton icon={FilePlus} variant="secondary" onClick={() => void copyWorkspaceScenario(item.id)}>复制</ActionButton> : null}
+                    <ActionButton icon={Download} variant="secondary" onClick={() => exportLibraryItem(item)}>导出</ActionButton>
+                    {item.imported && item.status !== 'archived' ? <ActionButton icon={Trash2} variant="ghost" onClick={() => void archiveWorkspaceScenarioFromLibrary(item.id)}>归档</ActionButton> : null}
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
         </div>
-        {!filteredLibraryItems.length ? <p className="empty-state">没有匹配的 package。可以清空搜索、切换过滤条件，或导入新的 package JSON。</p> : null}
+        {!filteredCombinedLibraryItems.length ? <p className="empty-state">没有匹配的 package。可以清空搜索、切换过滤条件，或导入新的 package JSON。</p> : null}
         {workspaceState.reusableTaskCandidates?.length ? (
           <div className="candidate-panel" aria-label="Reusable candidate 候选区">
             <SectionHeader title="Reusable Task Candidates" subtitle="从 Workbench 标记出来、可进入 Element Registry 的 skill/task 候选" />
@@ -2632,7 +2701,7 @@ function scenarioInstanceIdForDraft(draft: ScenarioBuilderDraft): ScenarioInstan
   return `workspace-${draft.baseScenarioId}-${safeInstanceId(draft.title || draft.description)}-${Date.now().toString(36)}`;
 }
 
-function compiledScenarioOverrideForDraft(instanceId: ScenarioInstanceId, draft: ScenarioBuilderDraft): ScenarioRuntimeOverride {
+function compileScenarioPackageForDraft(instanceId: ScenarioInstanceId, draft: ScenarioBuilderDraft): ScenarioPackage {
   const recommendation = recommendScenarioElements(draft.description || draft.scenarioMarkdown);
   const selectedSkillIds = draft.recommendedSkillIds?.length ? draft.recommendedSkillIds : recommendation.selectedSkillIds;
   const selectedArtifactTypes = draft.recommendedArtifactTypes?.length ? draft.recommendedArtifactTypes : recommendation.selectedArtifactTypes;
@@ -2650,16 +2719,7 @@ function compiledScenarioOverrideForDraft(instanceId: ScenarioInstanceId, draft:
     selectedFailurePolicyIds: recommendation.selectedFailurePolicyIds,
     fallbackComponentId: draft.fallbackComponent,
   });
-  return {
-    ...draft,
-    scenarioPackageRef: {
-      id: result.package.id,
-      version: result.package.version,
-      source: 'generated',
-    },
-    skillPlanRef: result.skillPlan.id,
-    uiPlanRef: result.uiPlan.id,
-  };
+  return result.package;
 }
 
 function safeInstanceId(value: string) {
@@ -4771,6 +4831,7 @@ export function BioAgentApp() {
   const [page, setPage] = useState<PageId>('dashboard');
   const [scenarioId, setScenarioId] = useState<ScenarioInstanceId>('literature-evidence-review');
   const [config, setConfig] = useState<BioAgentConfig>(() => loadBioAgentConfig());
+  const [configFileHydrated, setConfigFileHydrated] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [workspaceState, setWorkspaceState] = useState<BioAgentWorkspaceState>(() => {
     const state = loadWorkspaceState();
@@ -4813,6 +4874,29 @@ export function BioAgentApp() {
   const archivedCountByAgent = useMemo(() => Object.fromEntries(
     Object.entries(archivedSessionsByAgent).map(([key, value]) => [key, value.length]),
   ) as Record<ScenarioInstanceId, number>, [archivedSessionsByAgent]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadFileBackedBioAgentConfig(config)
+      .then((fileConfig) => {
+        if (cancelled) return;
+        if (fileConfig) {
+          setConfig(fileConfig);
+          saveBioAgentConfig(fileConfig);
+          setWorkspaceState((current) => ({ ...current, workspacePath: fileConfig.workspacePath || current.workspacePath }));
+          setWorkspaceStatus('已从 config.local.json 加载统一配置');
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setWorkspaceStatus(`config.local.json 未加载：${err instanceof Error ? err.message : String(err)}`);
+      })
+      .finally(() => {
+        if (!cancelled) setConfigFileHydrated(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function hydrateWorkspaceSnapshot(path: string, runtimeConfig: BioAgentConfig, mode: 'prefer-newer' | 'force' = 'prefer-newer') {
     const requestedPath = path.trim();
@@ -4891,8 +4975,12 @@ export function BioAgentApp() {
   }, [workspaceState, config, workspaceHydrated]);
 
   useEffect(() => {
+    if (!configFileHydrated) return;
     saveBioAgentConfig(config);
-  }, [config]);
+    saveFileBackedBioAgentConfig(config)
+      .then(() => setWorkspaceStatus('已保存到 config.local.json'))
+      .catch((err) => setWorkspaceStatus(`config.local.json 未保存：${err instanceof Error ? err.message : String(err)}`));
+  }, [config, configFileHydrated]);
 
   function updateWorkspace(mutator: (state: BioAgentWorkspaceState) => BioAgentWorkspaceState) {
     setWorkspaceState((current) => ({
@@ -5064,20 +5152,6 @@ export function BioAgentApp() {
     });
   }
 
-  function hideOfficialPackage(packageId: string) {
-    updateWorkspace((current) => ({
-      ...current,
-      hiddenOfficialPackageIds: Array.from(new Set([...(current.hiddenOfficialPackageIds ?? []), packageId])),
-    }));
-  }
-
-  function restoreOfficialPackages() {
-    updateWorkspace((current) => ({
-      ...current,
-      hiddenOfficialPackageIds: [],
-    }));
-  }
-
   function handleSearch(query: string) {
     const normalized = query.trim().toLowerCase();
     if (!normalized) return;
@@ -5234,8 +5308,6 @@ export function BioAgentApp() {
               workspaceState={workspaceState}
               onApplyScenarioDraft={applyScenarioOverride}
               onWorkbenchPrompt={updateDraft}
-              onHideOfficialPackage={hideOfficialPackage}
-              onRestoreOfficialPackages={restoreOfficialPackages}
             />
           ) : page === 'workbench' ? (
             <Workbench

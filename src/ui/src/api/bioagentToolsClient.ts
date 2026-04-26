@@ -20,7 +20,23 @@ export async function sendBioAgentToolMessage(
   signal?: AbortSignal,
 ): Promise<NormalizedAgentResponse> {
   const builtInScenarioId = builtInScenarioIdForInput(input);
-  const compileHints = input.scenarioOverride ? recommendScenarioElements(input.scenarioOverride.description || input.scenarioOverride.scenarioMarkdown || input.prompt) : undefined;
+  const recentConversation = input.messages.slice(-8).map((message) => `${message.role}: ${message.content}`);
+  const artifactSummary = summarizeArtifacts(input);
+  const runtimePrompt = buildRuntimePrompt(input, recentConversation, artifactSummary);
+  const compileText = [
+    input.scenarioOverride?.title,
+    input.scenarioOverride?.description,
+    input.scenarioOverride?.scenarioMarkdown,
+    recentConversation.join('\n'),
+    input.prompt,
+  ].filter(Boolean).join('\n');
+  const compileHints = recommendScenarioElements(compileText || input.prompt);
+  const expectedArtifactTypes = compileHints.selectedArtifactTypes;
+  const selectedComponentIds = input.scenarioOverride?.defaultComponents?.length ? input.scenarioOverride.defaultComponents : compileHints.selectedComponentIds;
+  const forceAgentServerGeneration = shouldForceGeneralAgentWork(input, expectedArtifactTypes, selectedComponentIds, recentConversation, artifactSummary);
+  const availableSkills = forceAgentServerGeneration
+    ? [`agentserver.generate.${input.scenarioOverride?.skillDomain ?? SCENARIO_SPECS[builtInScenarioId].skillDomain}`]
+    : compileHints.selectedSkillIds;
   callbacks.onEvent?.(toolEvent('project-tool-start', `BioAgent ${input.scenarioId} project tool started`));
   const response = await fetch(`${input.config.workspaceWriterBaseUrl}/api/bioagent/tools/run`, {
     method: 'POST',
@@ -31,23 +47,29 @@ export async function sendBioAgentToolMessage(
       skillPlanRef: input.skillPlanRef,
       uiPlanRef: input.uiPlanRef,
       skillDomain: input.scenarioOverride?.skillDomain ?? SCENARIO_SPECS[builtInScenarioId].skillDomain,
-      prompt: input.prompt,
+      prompt: runtimePrompt,
       workspacePath: input.config.workspacePath,
       agentServerBaseUrl: input.config.agentServerBaseUrl,
+      modelProvider: input.config.modelProvider,
+      modelName: input.config.modelName,
+      llmEndpoint: buildToolLlmEndpoint(input),
       roleView: input.roleView,
-      artifacts: summarizeArtifacts(input),
-      availableSkills: compileHints?.selectedSkillIds,
-      expectedArtifactTypes: compileHints?.selectedArtifactTypes,
-      selectedComponentIds: input.scenarioOverride?.defaultComponents ?? compileHints?.selectedComponentIds,
+      artifacts: artifactSummary,
+      availableSkills,
+      expectedArtifactTypes,
+      selectedComponentIds,
       uiState: {
         scopeCheck: scopeCheck(builtInScenarioId, input.prompt),
         scenarioOverride: input.scenarioOverride,
         scenarioPackageRef: input.scenarioPackageRef,
         skillPlanRef: input.skillPlanRef,
         uiPlanRef: input.uiPlanRef,
-        expectedArtifactTypes: compileHints?.selectedArtifactTypes,
-        selectedComponentIds: input.scenarioOverride?.defaultComponents ?? compileHints?.selectedComponentIds,
+        currentPrompt: input.prompt,
+        recentConversation,
+        expectedArtifactTypes,
+        selectedComponentIds,
         freshTaskGeneration: true,
+        forceAgentServerGeneration,
       },
     }),
     signal,
@@ -103,6 +125,69 @@ function summarizeArtifacts(input: SendAgentMessageInput) {
     dataRef: artifact.dataRef,
     data: artifact.data,
   }));
+}
+
+function buildToolLlmEndpoint(input: SendAgentMessageInput) {
+  const provider = input.config.modelProvider.trim();
+  const modelName = input.config.modelName.trim();
+  const baseUrl = input.config.modelBaseUrl.trim().replace(/\/+$/, '');
+  const apiKey = input.config.apiKey.trim();
+  const useNative = !provider || provider === 'native';
+  if (useNative) return undefined;
+  if (!baseUrl && !modelName) return undefined;
+  return {
+    provider,
+    baseUrl: baseUrl || undefined,
+    apiKey: apiKey || undefined,
+    modelName: modelName || undefined,
+  };
+}
+
+function buildRuntimePrompt(
+  input: SendAgentMessageInput,
+  recentConversation: string[],
+  artifactSummary: ReturnType<typeof summarizeArtifacts>,
+) {
+  const scenario = input.scenarioOverride;
+  return [
+    'BioAgent should complete the user task end-to-end like a general coding/research agent, not only run a narrow seed search.',
+    scenario ? `Scenario title: ${scenario.title}` : '',
+    scenario ? `Scenario goal: ${scenario.description}` : '',
+    scenario ? `Scenario markdown:\n${scenario.scenarioMarkdown}` : '',
+    recentConversation.length ? 'Recent multi-turn conversation:' : '',
+    recentConversation.join('\n'),
+    artifactSummary.length ? 'Existing artifacts from previous turns:' : '',
+    artifactSummary.length ? JSON.stringify(artifactSummary, null, 2) : '',
+    'Current user request:',
+    input.prompt,
+    '',
+    'Work requirements:',
+    '- Infer the full user intent across turns.',
+    '- If the user asks to read, summarize, compare, or write a report, produce a research-report artifact, not just search metadata.',
+    '- Reuse previous paper-list/artifacts when useful; fetch or compute additional data only when needed.',
+    '- Emit BioAgent ToolPayload JSON with message, claims, artifacts, executionUnits, uiManifest, and reasoningTrace.',
+  ].filter(Boolean).join('\n');
+}
+
+function shouldForceGeneralAgentWork(
+  input: SendAgentMessageInput,
+  expectedArtifactTypes: string[],
+  selectedComponentIds: string[],
+  recentConversation: string[],
+  artifactSummary: ReturnType<typeof summarizeArtifacts>,
+) {
+  const text = [
+    input.scenarioOverride?.description,
+    input.scenarioOverride?.scenarioMarkdown,
+    recentConversation.join('\n'),
+    input.prompt,
+  ].filter(Boolean).join('\n').toLowerCase();
+  const wantsReport = expectedArtifactTypes.includes('research-report')
+    || selectedComponentIds.includes('report-viewer')
+    || /report|summary|summari[sz]e|systematic|read|reading|review|报告|总结|系统性|阅读|综述/.test(text);
+  const wantsFreshExternalResearch = /\barxiv\b|\blatest\b|\btoday\b|\bweb\b|\bbrowser\b|最新|今天|今日|网页|浏览器/.test(text);
+  const multiTurnContinuation = artifactSummary.length > 0 && /继续|这些|上述|它们|阅读|总结|报告|不只是|not only|not just|write|draft/.test(text);
+  return wantsReport && (wantsFreshExternalResearch || multiTurnContinuation);
 }
 
 function toolEvent(type: string, detail: string): AgentStreamEvent {
