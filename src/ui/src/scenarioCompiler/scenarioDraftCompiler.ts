@@ -1,7 +1,7 @@
 import type { ScenarioId } from '../data';
 import type { ScenarioRuntimeOverride } from '../domain';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
-import { recommendScenarioElements } from './scenarioElementCompiler';
+import { inferDomainFromText, recommendScenarioElements } from './scenarioElementCompiler';
 
 export type ScenarioBuilderDraft = ScenarioRuntimeOverride & {
   baseScenarioId: ScenarioId;
@@ -23,15 +23,7 @@ export const scenarioIdBySkillDomain: Record<ScenarioRuntimeOverride['skillDomai
 export function compileScenarioDraft(description: string): ScenarioBuilderDraft {
   const text = description.trim();
   const normalized = text.toLowerCase();
-  const skillDomain: ScenarioRuntimeOverride['skillDomain'] = /chembl|opentargets|drug|compound|disease|pathway|target priorit|target network|knowledge graph|知识图谱|疾病|化合物|药物|靶点|优先级/.test(normalized)
-    ? 'knowledge'
-    : /rna|scrna|omics|matrix|deseq|scanpy|umap|表达|差异|组学|单细胞/.test(normalized)
-      ? 'omics'
-      : /pdb|protein structure|structure|alphafold|ligand|residue|pocket|蛋白结构|结构|口袋|配体|残基/.test(normalized)
-        ? 'structure'
-        : /pubmed|paper|literature|review|evidence|文献|论文|综述|证据/.test(normalized)
-          ? 'literature'
-          : 'literature';
+  const skillDomain = inferDomainFromText(normalized);
   const baseScenarioId = scenarioIdBySkillDomain[skillDomain];
   const base = SCENARIO_SPECS[baseScenarioId];
   const titleSeed = text.replace(/[。.!?？\n].*$/s, '').trim().slice(0, 24);

@@ -31,7 +31,12 @@ export async function readTaskAttempts(workspacePath: string, id: string): Promi
   return readAttempts(join(workspace, '.bioagent', 'task-attempts', `${safeName(id)}.json`));
 }
 
-export async function readRecentTaskAttempts(workspacePath: string, skillDomain?: string, limit = 8): Promise<TaskAttemptRecord[]> {
+export async function readRecentTaskAttempts(
+  workspacePath: string,
+  skillDomain?: string,
+  limit = 8,
+  scope: { scenarioPackageId?: string; skillPlanRef?: string; prompt?: string } = {},
+): Promise<TaskAttemptRecord[]> {
   const workspace = resolve(workspacePath || process.cwd());
   const dir = join(workspace, '.bioagent', 'task-attempts');
   if (!await fileExists(dir)) return [];
@@ -47,8 +52,46 @@ export async function readRecentTaskAttempts(workspacePath: string, skillDomain?
   return groups
     .flat()
     .filter((attempt) => !skillDomain || attempt.skillDomain === skillDomain)
+    .filter((attempt) => matchesAttemptScope(attempt, scope))
     .sort((left, right) => Date.parse(right.createdAt || '') - Date.parse(left.createdAt || ''))
     .slice(0, limit);
+}
+
+function matchesAttemptScope(
+  attempt: TaskAttemptRecord,
+  scope: { scenarioPackageId?: string; skillPlanRef?: string; prompt?: string },
+) {
+  const scenarioPackageId = scope.scenarioPackageId?.trim();
+  if (scenarioPackageId) {
+    return attempt.scenarioPackageRef?.id === scenarioPackageId;
+  }
+  const skillPlanRef = scope.skillPlanRef?.trim();
+  if (skillPlanRef && attempt.skillPlanRef && attempt.skillPlanRef !== skillPlanRef) {
+    return false;
+  }
+  const prompt = scope.prompt?.trim();
+  if (!prompt) return true;
+  return promptSimilarity(prompt, attempt.prompt) >= 0.22;
+}
+
+function promptSimilarity(left: string, right: string) {
+  const leftTokens = promptTokens(left);
+  const rightTokens = promptTokens(right);
+  if (!leftTokens.size || !rightTokens.size) return 0;
+  let overlap = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) overlap += 1;
+  }
+  return overlap / Math.min(leftTokens.size, rightTokens.size);
+}
+
+function promptTokens(value: string) {
+  return new Set(value
+    .toLowerCase()
+    .replace(/[^\p{Letter}\p{Number}]+/gu, ' ')
+    .split(/\s+/)
+    .filter((token) => token.length >= 3)
+    .slice(0, 80));
 }
 
 async function readAttempts(path: string): Promise<TaskAttemptRecord[]> {

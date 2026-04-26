@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { maybeWriteSkillPromotionProposal } from '../../src/runtime/skill-promotion.js';
+import type { GatewayRequest, SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types.js';
 import { buildBuiltInScenarioPackage } from '../../src/ui/src/scenarioCompiler/scenarioPackage';
 import { buildScenarioQualityReport } from '../../src/ui/src/scenarioCompiler/scenarioQualityGate';
 
@@ -118,9 +120,118 @@ try {
   list = await response.json() as { scenarios: Array<{ id: string; status: string }> };
   assert.equal(list.scenarios[0].status, 'draft');
 
-  console.log('[ok] workspace scenario package APIs save, list, get, publish, archive, and restore');
+  await writeProposal(workspace, 'scvelo-velocity-report', 'scvelo velocity report api reject smoke');
+  await writeProposal(workspace, 'single-cell-label-transfer-qc', 'single-cell label-transfer qc report api archive smoke');
+
+  response = await fetch(`${baseUrl}/api/bioagent/skill-proposals/list?workspacePath=${encodeURIComponent(workspace)}`);
+  await assertOk(response);
+  let proposalList = await response.json() as { proposals: Array<{ id: string; status: string }> };
+  assert.equal(proposalList.proposals.length, 2);
+
+  response = await fetch(`${baseUrl}/api/bioagent/skill-proposals/reject`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspacePath: workspace, id: 'scvelo-velocity-report', reason: 'not reusable enough' }),
+  });
+  await assertOk(response);
+  let proposalResult = await response.json() as { proposal: { status: string; statusReason?: string } };
+  assert.equal(proposalResult.proposal.status, 'rejected');
+  assert.equal(proposalResult.proposal.statusReason, 'not reusable enough');
+
+  response = await fetch(`${baseUrl}/api/bioagent/skill-proposals/accept`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspacePath: workspace, id: 'scvelo-velocity-report' }),
+  });
+  assert.equal(response.status, 400);
+
+  response = await fetch(`${baseUrl}/api/bioagent/skill-proposals/archive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspacePath: workspace, id: 'single-cell-label-transfer-qc', reason: 'reviewed later' }),
+  });
+  await assertOk(response);
+  proposalResult = await response.json() as { proposal: { status: string; statusReason?: string } };
+  assert.equal(proposalResult.proposal.status, 'archived');
+  assert.equal(proposalResult.proposal.statusReason, 'reviewed later');
+
+  response = await fetch(`${baseUrl}/api/bioagent/skill-proposals/list?workspacePath=${encodeURIComponent(workspace)}`);
+  await assertOk(response);
+  proposalList = await response.json() as { proposals: Array<{ id: string; status: string }> };
+  assert.ok(proposalList.proposals.some((proposal) => proposal.id === 'scvelo-velocity-report' && proposal.status === 'rejected'));
+  assert.ok(proposalList.proposals.some((proposal) => proposal.id === 'single-cell-label-transfer-qc' && proposal.status === 'archived'));
+
+  console.log('[ok] workspace scenario and skill proposal APIs save, list, publish, archive, restore, reject, and archive proposals');
 } finally {
   child.kill('SIGTERM');
+}
+
+async function writeProposal(workspacePath: string, id: string, prompt: string) {
+  const taskRel = `.bioagent/tasks/${id}/task.py`;
+  await mkdir(join(workspacePath, '.bioagent', 'tasks', id), { recursive: true });
+  await writeFile(join(workspacePath, taskRel), [
+    'import json',
+    'import sys',
+    'with open(sys.argv[2], "w", encoding="utf-8") as handle:',
+    '    json.dump({"message": "ok", "claims": [], "uiManifest": [], "executionUnits": [], "artifacts": [{"id": "artifact.api", "type": "runtime-artifact"}]}, handle)',
+    '',
+  ].join('\n'), 'utf8');
+  const proposal = await maybeWriteSkillPromotionProposal({
+    workspacePath,
+    request: omicsRequest(prompt, workspacePath),
+    skill: generatedOmicsSkill(),
+    taskId: `task-${id}`,
+    taskRel,
+    payload: successfulPayload(id),
+  });
+  assert.equal(proposal?.id, id);
+}
+
+function generatedOmicsSkill(): SkillAvailability {
+  return {
+    id: 'agentserver.generate.omics',
+    kind: 'installed',
+    available: true,
+    reason: 'workspace server smoke',
+    checkedAt: new Date().toISOString(),
+    manifestPath: 'agentserver://generation',
+    manifest: {
+      id: 'agentserver.generate.omics',
+      kind: 'installed',
+      description: 'Generic AgentServer task generation fallback.',
+      skillDomains: ['omics'],
+      inputContract: { prompt: 'string' },
+      outputArtifactSchema: { type: 'runtime-artifact' },
+      entrypoint: { type: 'agentserver-generation' },
+      environment: { runtime: 'AgentServer' },
+      validationSmoke: { mode: 'delegated' },
+      examplePrompts: [],
+      promotionHistory: [],
+    },
+  };
+}
+
+function omicsRequest(prompt: string, workspacePath: string): GatewayRequest {
+  return {
+    skillDomain: 'omics',
+    prompt,
+    workspacePath,
+    artifacts: [],
+  };
+}
+
+function successfulPayload(id: string): ToolPayload {
+  return {
+    message: `${id} completed.`,
+    confidence: 0.9,
+    claimType: 'analysis-report',
+    evidenceLevel: 'smoke',
+    reasoningTrace: 'workspace server proposal API smoke',
+    claims: [],
+    uiManifest: [],
+    executionUnits: [{ id: `unit.${id}`, status: 'done' }],
+    artifacts: [{ id: `artifact.${id}`, type: 'runtime-artifact' }],
+  };
 }
 
 async function waitForHealth(portNumber: number) {

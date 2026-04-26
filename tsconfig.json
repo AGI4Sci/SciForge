@@ -20,6 +20,7 @@
     "vite.config.ts",
     "src/runtime/**/*.ts",
     "tools/**/*.ts",
+    "tests/deep/**/*.ts",
     "tests/smoke/**/*.ts",
     "src/ui/src/**/*.ts",
     "src/ui/src/**/*.tsx"

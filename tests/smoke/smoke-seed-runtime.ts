@@ -28,6 +28,8 @@ const cases: Array<{
   prompt: string;
   artifactType: string;
   skillId: string;
+  availableSkills?: string[];
+  uiState?: Record<string, unknown>;
   allowedStatuses?: string[];
 }> = [
   {
@@ -41,6 +43,18 @@ const cases: Array<{
     prompt: 'PDB 7BZ5 residues 142-158',
     artifactType: 'structure-summary',
     skillId: 'structure.rcsb_latest_or_entry',
+  },
+  {
+    skillDomain: 'structure',
+    prompt: '请使用已注册本地 workspace skill structure.rcsb_latest_or_entry；不要生成新代码，不要调用 AgentServer。对 PDB 6LUD 运行真实 RCSB metadata/coordinate retrieval。',
+    artifactType: 'structure-summary',
+    skillId: 'structure.rcsb_latest_or_entry',
+    availableSkills: ['structure.rcsb_latest_or_entry'],
+    uiState: {
+      freshTaskGeneration: true,
+      forceAgentServerGeneration: false,
+      scenarioPackageRef: { id: 'workspace-structure-exploration-t055-smoke', version: '1.0.0', source: 'workspace' },
+    },
   },
   {
     skillDomain: 'knowledge',
@@ -73,6 +87,8 @@ async function runSeedCase(item: {
   prompt: string;
   artifactType: string;
   skillId: string;
+  availableSkills?: string[];
+  uiState?: Record<string, unknown>;
 }) {
   let last: ToolPayload | undefined;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -81,6 +97,8 @@ async function runSeedCase(item: {
       prompt: item.prompt,
       workspacePath: workspace,
       artifacts: [],
+      availableSkills: item.availableSkills,
+      uiState: item.uiState,
     });
     if (last.artifacts[0]?.type === item.artifactType && last.executionUnits[0]?.status === 'done') return last;
     if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));

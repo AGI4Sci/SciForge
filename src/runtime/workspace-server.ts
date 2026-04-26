@@ -3,7 +3,7 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promise
 import { basename, dirname, join, resolve } from 'node:path';
 import { runBioAgentTool } from './bioagent-tools.js';
 import { readRecentTaskAttempts, readTaskAttempts } from './task-attempt-history.js';
-import { acceptSkillPromotionProposal, listSkillPromotionProposals } from './skill-promotion.js';
+import { acceptSkillPromotionProposal, archiveSkillPromotionProposal, listSkillPromotionProposals, rejectSkillPromotionProposal, runAcceptedSkillValidationSmoke } from './skill-promotion.js';
 
 const PORT = Number(process.env.BIOAGENT_WORKSPACE_PORT || 5174);
 
@@ -285,6 +285,57 @@ createServer(async (req, res) => {
     }
     return;
   }
+  if (url.pathname === '/api/bioagent/skill-proposals/validate' && req.method === 'POST') {
+    try {
+      const body = await readJson(req);
+      const root = scenarioWorkspaceRootFromBody(body);
+      const skillId = typeof body.skillId === 'string' ? body.skillId.trim() : '';
+      if (!skillId) throw new Error('skillId is required');
+      const validation = await runAcceptedSkillValidationSmoke(root, skillId);
+      writeJson(res, validation.passed ? 200 : 400, {
+        ok: validation.passed,
+        workspacePath: root,
+        validation,
+      });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  if (url.pathname === '/api/bioagent/skill-proposals/reject' && req.method === 'POST') {
+    try {
+      const body = await readJson(req);
+      const root = scenarioWorkspaceRootFromBody(body);
+      const id = typeof body.id === 'string' ? body.id.trim() : '';
+      const reason = typeof body.reason === 'string' ? body.reason : undefined;
+      if (!id) throw new Error('id is required');
+      writeJson(res, 200, {
+        ok: true,
+        workspacePath: root,
+        proposal: await rejectSkillPromotionProposal(root, id, reason),
+      });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  if (url.pathname === '/api/bioagent/skill-proposals/archive' && req.method === 'POST') {
+    try {
+      const body = await readJson(req);
+      const root = scenarioWorkspaceRootFromBody(body);
+      const id = typeof body.id === 'string' ? body.id.trim() : '';
+      const reason = typeof body.reason === 'string' ? body.reason : undefined;
+      if (!id) throw new Error('id is required');
+      writeJson(res, 200, {
+        ok: true,
+        workspacePath: root,
+        proposal: await archiveSkillPromotionProposal(root, id, reason),
+      });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
   if (url.pathname === '/api/bioagent/workspace/snapshot' && req.method === 'POST') {
     try {
       const body = await readJson(req);
@@ -292,7 +343,7 @@ createServer(async (req, res) => {
       if (!workspacePath) throw new Error('workspacePath is required');
       const state = isRecord(body.state) ? body.state : {};
       const config = isRecord(body.config) ? body.config : {};
-      const root = resolve(workspacePath);
+      const root = normalizeWorkspaceRootPath(resolve(workspacePath));
       const bioagentDir = join(root, '.bioagent');
       await mkdir(join(bioagentDir, 'sessions'), { recursive: true });
       await mkdir(join(bioagentDir, 'artifacts'), { recursive: true });
@@ -548,10 +599,11 @@ async function readLastWorkspacePath() {
   if (!isRecord(marker) || typeof marker.workspacePath !== 'string' || !marker.workspacePath.trim()) {
     throw new Error('last workspace marker is invalid');
   }
-  return resolve(marker.workspacePath);
+  return normalizeWorkspaceRootPath(resolve(marker.workspacePath));
 }
 
 async function rememberWorkspace(workspacePath: string, state: Record<string, unknown>) {
+  workspacePath = normalizeWorkspaceRootPath(workspacePath);
   const appBioagentDir = join(process.cwd(), '.bioagent');
   await mkdir(appBioagentDir, { recursive: true });
   const score = workspaceActivityScore(state);
@@ -574,7 +626,7 @@ async function rememberWorkspace(workspacePath: string, state: Record<string, un
 
 async function readBestRememberedWorkspace() {
   const history = await readWorkspaceHistory();
-  return history[0]?.workspacePath ? resolve(history[0].workspacePath) : undefined;
+  return history[0]?.workspacePath ? normalizeWorkspaceRootPath(resolve(history[0].workspacePath)) : undefined;
 }
 
 async function readWorkspaceHistory(): Promise<Array<{ workspacePath: string; score: number; updatedAt: string }>> {
@@ -585,7 +637,7 @@ async function readWorkspaceHistory(): Promise<Array<{ workspacePath: string; sc
       for (const item of parsed.workspaces) {
         if (isRecord(item) && typeof item.workspacePath === 'string' && item.workspacePath.trim()) {
           records.push({
-            workspacePath: resolve(item.workspacePath),
+            workspacePath: normalizeWorkspaceRootPath(resolve(item.workspacePath)),
             score: typeof item.score === 'number' ? item.score : 0,
             updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : '',
           });
@@ -599,7 +651,7 @@ async function readWorkspaceHistory(): Promise<Array<{ workspacePath: string; sc
     const marker = JSON.parse(await readFile(lastWorkspaceFile(), 'utf8'));
     if (isRecord(marker) && typeof marker.workspacePath === 'string' && marker.workspacePath.trim()) {
       records.push({
-        workspacePath: resolve(marker.workspacePath),
+        workspacePath: normalizeWorkspaceRootPath(resolve(marker.workspacePath)),
         score: typeof marker.score === 'number' ? marker.score : 0,
         updatedAt: typeof marker.updatedAt === 'string' ? marker.updatedAt : '',
       });
@@ -654,12 +706,12 @@ async function readLocalBioAgentConfig() {
     schemaVersion: 1,
     agentServerBaseUrl: typeof bioagent.agentServerBaseUrl === 'string' ? bioagent.agentServerBaseUrl : 'http://127.0.0.1:18080',
     workspaceWriterBaseUrl: typeof bioagent.workspaceWriterBaseUrl === 'string' ? bioagent.workspaceWriterBaseUrl : `http://127.0.0.1:${PORT}`,
-    workspacePath: typeof bioagent.workspacePath === 'string' ? bioagent.workspacePath : join(process.cwd(), 'workspace'),
+    workspacePath: normalizeWorkspaceRootPath(typeof bioagent.workspacePath === 'string' ? bioagent.workspacePath : join(process.cwd(), 'workspace')),
     modelProvider: typeof llm.provider === 'string' ? llm.provider : 'native',
     modelBaseUrl: typeof llm.baseUrl === 'string' ? llm.baseUrl.replace(/\/+$/, '') : '',
     modelName: typeof llm.model === 'string' ? llm.model : typeof llm.modelName === 'string' ? llm.modelName : '',
     apiKey: typeof llm.apiKey === 'string' ? llm.apiKey : '',
-    requestTimeoutMs: typeof bioagent.requestTimeoutMs === 'number' ? bioagent.requestTimeoutMs : 300000,
+    requestTimeoutMs: typeof bioagent.requestTimeoutMs === 'number' ? bioagent.requestTimeoutMs : 900000,
     updatedAt: typeof bioagent.updatedAt === 'string' ? bioagent.updatedAt : new Date().toISOString(),
     source: 'config.local.json',
   };
@@ -674,20 +726,28 @@ async function writeLocalBioAgentConfig(config: Record<string, unknown>) {
     llm: {
       ...llm,
       provider: typeof config.modelProvider === 'string' ? config.modelProvider : llm.provider,
-      baseUrl: typeof config.modelBaseUrl === 'string' ? config.modelBaseUrl.replace(/\/+$/, '') : llm.baseUrl,
-      apiKey: typeof config.apiKey === 'string' ? config.apiKey : llm.apiKey,
-      model: typeof config.modelName === 'string' ? config.modelName : llm.model,
+      baseUrl: preserveConfiguredSecretString(config.modelBaseUrl, llm.baseUrl).replace(/\/+$/, ''),
+      apiKey: preserveConfiguredSecretString(config.apiKey, llm.apiKey),
+      model: preserveConfiguredSecretString(config.modelName, llm.model),
     },
     bioagent: {
       ...bioagent,
       agentServerBaseUrl: typeof config.agentServerBaseUrl === 'string' ? config.agentServerBaseUrl : bioagent.agentServerBaseUrl,
       workspaceWriterBaseUrl: typeof config.workspaceWriterBaseUrl === 'string' ? config.workspaceWriterBaseUrl : bioagent.workspaceWriterBaseUrl,
-      workspacePath: typeof config.workspacePath === 'string' ? config.workspacePath : bioagent.workspacePath,
+      workspacePath: normalizeWorkspaceRootPath(typeof config.workspacePath === 'string' ? config.workspacePath : typeof bioagent.workspacePath === 'string' ? bioagent.workspacePath : ''),
       requestTimeoutMs: typeof config.requestTimeoutMs === 'number' ? config.requestTimeoutMs : bioagent.requestTimeoutMs,
       updatedAt: new Date().toISOString(),
     },
   };
   await writeFile(configLocalPath(), JSON.stringify(next, null, 2));
+}
+
+function preserveConfiguredSecretString(nextValue: unknown, currentValue: unknown) {
+  const current = typeof currentValue === 'string' ? currentValue : '';
+  if (typeof nextValue !== 'string') return current;
+  const next = nextValue.trim();
+  if (!next && current.trim()) return current;
+  return nextValue;
 }
 
 async function readConfigLocalJson(): Promise<Record<string, unknown>> {
@@ -701,4 +761,14 @@ async function readConfigLocalJson(): Promise<Record<string, unknown>> {
 
 function configLocalPath() {
   return join(process.cwd(), 'config.local.json');
+}
+
+function normalizeWorkspaceRootPath(value: string) {
+  const trimmed = value.trim().replace(/\/+$/, '');
+  if (!trimmed) return '';
+  const marker = '/.bioagent/';
+  const nestedIndex = trimmed.indexOf(marker);
+  if (nestedIndex >= 0) return trimmed.slice(0, nestedIndex);
+  if (trimmed.endsWith('/.bioagent')) return trimmed.slice(0, -'/.bioagent'.length);
+  return trimmed;
 }

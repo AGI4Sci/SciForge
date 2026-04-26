@@ -1,7 +1,10 @@
 import { copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { GatewayRequest, SkillAvailability, SkillManifest, SkillPromotionProposal, ToolPayload } from './runtime-types.js';
-import { fileExists, sha1 } from './workspace-task-runner.js';
+import { loadSkillRegistry } from './skill-registry.js';
+import { fileExists, runWorkspaceTask, sha1 } from './workspace-task-runner.js';
+
+type PromotionSafetyGate = NonNullable<SkillPromotionProposal['securityGate']>;
 
 export async function maybeWriteSkillPromotionProposal(params: {
   workspacePath: string;
@@ -21,7 +24,8 @@ export async function maybeWriteSkillPromotionProposal(params: {
   const workspace = resolve(params.workspacePath || process.cwd());
   const sourceTask = join(workspace, params.taskRel);
   if (!await fileExists(sourceTask)) return undefined;
-  const proposal = buildSkillPromotionProposal({ ...params, workspacePath: workspace });
+  const sourceTaskText = await readFile(sourceTask, 'utf8');
+  const proposal = buildSkillPromotionProposal({ ...params, workspacePath: workspace, sourceTaskText });
   const proposalDir = join(workspace, '.bioagent', 'skill-proposals', safeName(proposal.id));
   await mkdir(proposalDir, { recursive: true });
   await writeFile(join(proposalDir, 'proposal.json'), JSON.stringify(proposal, null, 2));
@@ -51,11 +55,18 @@ export async function acceptSkillPromotionProposal(workspacePath: string, propos
   const proposalPath = join(workspace, '.bioagent', 'skill-proposals', safeName(proposalId), 'proposal.json');
   const parsed = JSON.parse(await readFile(proposalPath, 'utf8'));
   if (!isSkillPromotionProposal(parsed)) throw new Error(`Invalid skill promotion proposal: ${proposalId}`);
+  if (parsed.status === 'rejected' || parsed.status === 'archived') {
+    throw new Error(`Skill promotion proposal is ${parsed.status}: ${proposalId}`);
+  }
   const manifest = parsed.proposedManifest;
-  const skillDir = join(workspace, '.bioagent', 'evolved-skills', safeName(manifest.id));
-  await mkdir(skillDir, { recursive: true });
   const sourceTask = join(workspace, parsed.source.taskCodeRef);
   if (!await fileExists(sourceTask)) throw new Error(`Promotion source task is missing: ${parsed.source.taskCodeRef}`);
+  const securityGate: PromotionSafetyGate = evaluatePromotionSafetyGate(await readFile(sourceTask, 'utf8'));
+  if (!securityGate.passed) {
+    throw new Error(`Skill promotion safety gate failed: ${securityGate.findings.join('; ')}`);
+  }
+  const skillDir = join(workspace, '.bioagent', 'evolved-skills', safeName(manifest.id));
+  await mkdir(skillDir, { recursive: true });
   const taskName = taskFileNameForManifest(manifest);
   await copyFile(sourceTask, join(skillDir, taskName));
   const installedManifest: SkillManifest = {
@@ -91,7 +102,88 @@ export async function acceptSkillPromotionProposal(workspacePath: string, propos
   return installedManifest;
 }
 
+export async function rejectSkillPromotionProposal(workspacePath: string, proposalId: string, reason?: string): Promise<SkillPromotionProposal> {
+  return updateSkillPromotionProposalStatus(workspacePath, proposalId, 'rejected', reason);
+}
+
+export async function archiveSkillPromotionProposal(workspacePath: string, proposalId: string, reason?: string): Promise<SkillPromotionProposal> {
+  return updateSkillPromotionProposalStatus(workspacePath, proposalId, 'archived', reason);
+}
+
+async function updateSkillPromotionProposalStatus(
+  workspacePath: string,
+  proposalId: string,
+  status: Extract<SkillPromotionProposal['status'], 'rejected' | 'archived'>,
+  reason?: string,
+): Promise<SkillPromotionProposal> {
+  const workspace = resolve(workspacePath || process.cwd());
+  const proposalPath = join(workspace, '.bioagent', 'skill-proposals', safeName(proposalId), 'proposal.json');
+  const parsed = JSON.parse(await readFile(proposalPath, 'utf8'));
+  if (!isSkillPromotionProposal(parsed)) throw new Error(`Invalid skill promotion proposal: ${proposalId}`);
+  if (parsed.status === 'accepted') throw new Error(`Accepted skill promotion proposal cannot be ${status}: ${proposalId}`);
+  const next: SkillPromotionProposal = {
+    ...parsed,
+    status,
+    statusUpdatedAt: new Date().toISOString(),
+    statusReason: reason?.trim() || undefined,
+  };
+  await writeFile(proposalPath, JSON.stringify(next, null, 2));
+  return next;
+}
+
+export async function runAcceptedSkillValidationSmoke(workspacePath: string, skillId: string) {
+  const workspace = resolve(workspacePath || process.cwd());
+  const registry = await loadSkillRegistry({ workspacePath: workspace });
+  const skill = registry.find((item) => item.id === skillId && item.available && item.manifestPath.includes(`${join('.bioagent', 'evolved-skills')}`));
+  if (!skill) throw new Error(`Accepted evolved skill is not discoverable in registry: ${skillId}`);
+  if (skill.manifest.entrypoint.type !== 'workspace-task' || !skill.manifest.entrypoint.path) {
+    throw new Error(`Accepted evolved skill is not a workspace task: ${skillId}`);
+  }
+  const entrypointPath = resolve(dirname(skill.manifestPath), skill.manifest.entrypoint.path);
+  const expectedArtifactTypes = Array.isArray(skill.manifest.validationSmoke.expectedArtifactTypes)
+    ? skill.manifest.validationSmoke.expectedArtifactTypes.map(String)
+    : [];
+  const runId = `validation-${safeName(skill.id)}-${sha1(`${skill.id}:${Date.now()}`).slice(0, 8)}`;
+  const run = await runWorkspaceTask(workspace, {
+    id: runId,
+    language: languageForManifest(skill.manifest),
+    entrypoint: basename(entrypointPath),
+    codeTemplatePath: entrypointPath,
+    input: {
+      prompt: String(skill.manifest.validationSmoke.prompt || skill.manifest.examplePrompts[0] || ''),
+      validationSmoke: true,
+      skillId,
+    },
+    outputRel: `.bioagent/validation/${safeName(skill.id)}/output.json`,
+    stdoutRel: `.bioagent/validation/${safeName(skill.id)}/stdout.txt`,
+    stderrRel: `.bioagent/validation/${safeName(skill.id)}/stderr.txt`,
+    taskRel: `.bioagent/validation/${safeName(skill.id)}/${basename(entrypointPath)}`,
+    timeoutMs: 120000,
+  });
+  const payload: unknown = JSON.parse(await readFile(join(workspace, run.outputRef), 'utf8'));
+  const schemaErrors = payloadSchemaErrors(payload);
+  const artifacts = isRecord(payload) && Array.isArray(payload.artifacts) ? payload.artifacts : [];
+  const artifactTypes = artifacts
+    .map((artifact: unknown) => isRecord(artifact) ? String(artifact.type || '') : '')
+    .filter(Boolean);
+  const missingArtifactTypes = expectedArtifactTypes.filter((type) => !artifactTypes.includes(type));
+  const passed = run.exitCode === 0 && !schemaErrors.length && !missingArtifactTypes.length;
+  return {
+    passed,
+    skillId,
+    exitCode: run.exitCode,
+    outputRef: run.outputRef,
+    stdoutRef: run.stdoutRef,
+    stderrRef: run.stderrRef,
+    schemaErrors,
+    expectedArtifactTypes,
+    artifactTypes,
+    missingArtifactTypes,
+  };
+}
+
 function shouldProposeSkill(skill: SkillAvailability, taskRel: string, selfHealed?: boolean) {
+  if (skill.kind === 'workspace' && skill.manifestPath.includes(`${join('.bioagent', 'evolved-skills')}`)) return false;
   if (selfHealed) return true;
   if (skill.manifest.entrypoint.type === 'agentserver-generation') return true;
   if (skill.id.startsWith('agentserver.generate.')) return true;
@@ -111,10 +203,17 @@ function buildSkillPromotionProposal(params: {
   payload: ToolPayload;
   selfHealed?: boolean;
   patchSummary?: string;
+  sourceTaskText: string;
 }): SkillPromotionProposal {
   const artifactTypes = uniqueStrings(params.payload.artifacts.map((artifact) => String(artifact.type || artifact.id || '')).filter(Boolean));
-  const skillId = `workspace.${params.request.skillDomain}.${slugForPrompt(params.request.prompt)}.${sha1(`${params.taskRel}:${artifactTypes.join(',')}`).slice(0, 8)}`;
-  const proposalId = `proposal.${skillId}.${sha1(`${params.taskId}:${params.outputRef || ''}`).slice(0, 10)}`;
+  const stableProposalSlug = complexSingleCellProposalSlug(params.request.prompt);
+  const skillId = stableProposalSlug
+    ? `workspace.${params.request.skillDomain}.${stableProposalSlug}`
+    : `workspace.${params.request.skillDomain}.${slugForPrompt(params.request.prompt)}.${sha1(`${params.taskRel}:${artifactTypes.join(',')}`).slice(0, 8)}`;
+  const proposalId = stableProposalSlug
+    ? stableProposalSlug
+    : `proposal.${skillId}.${sha1(`${params.taskId}:${params.outputRef || ''}`).slice(0, 10)}`;
+  const securityGate: PromotionSafetyGate = evaluatePromotionSafetyGate(params.sourceTaskText);
   const manifest: SkillManifest = {
     id: skillId,
     kind: 'workspace',
@@ -139,6 +238,10 @@ function buildSkillPromotionProposal(params: {
       mode: 'workspace-task',
       prompt: params.request.prompt,
       expectedArtifactTypes: artifactTypes,
+      sourceInputRef: params.inputRef,
+      sourceOutputRef: params.outputRef,
+      sourceStdoutRef: params.stdoutRef,
+      sourceStderrRef: params.stderrRef,
     },
     examplePrompts: [params.request.prompt],
     promotionHistory: [{
@@ -183,9 +286,18 @@ function buildSkillPromotionProposal(params: {
       smokePrompts: [params.request.prompt],
       expectedArtifactTypes: artifactTypes,
       requiredEnvironment: manifest.environment,
+      rerunAfterAccept: {
+        mode: 'registry-discovered-workspace-task',
+        expectedStatus: 'done',
+      },
     },
+    securityGate,
     reviewChecklist: {
-      noHardCodedUserData: false,
+      noHardCodedUserData: securityGate.passed,
+      noHardCodedAbsolutePaths: securityGate.checks.noHardCodedAbsolutePaths,
+      noCredentialLikeText: securityGate.checks.noCredentialLikeText,
+      noPrivateFileReferences: securityGate.checks.noPrivateFileReferences,
+      reproducibleDependencies: securityGate.checks.reproducibleDependencies,
       reproducibleEntrypoint: true,
       artifactSchemaValidated: true,
       failureModeIsExplicit: params.payload.executionUnits.every((unit) => !isRecord(unit) || unit.status === 'done' || unit.status === 'self-healed'),
@@ -207,10 +319,74 @@ function proposalReadme(proposal: SkillPromotionProposal) {
     proposal.source.stderrRef ? `- stderr: ${proposal.source.stderrRef}` : '',
     '',
     '## Required Review',
-    '- Check generated code for hard-coded user data, credentials, absolute paths, and hidden network assumptions.',
+    '- Check generated code for hard-coded user data, credentials, absolute paths, private file references, and hidden network assumptions.',
     '- Run the validation smoke prompt before accepting.',
     '- Accepting the proposal installs it into `.bioagent/evolved-skills/` for future registry matching without modifying seed or preinstalled skills.',
+    proposal.securityGate?.passed ? '- Safety gate: passed.' : `- Safety gate: failed (${proposal.securityGate?.findings.join('; ') || 'unknown'}).`,
   ].filter(Boolean).join('\n');
+}
+
+function evaluatePromotionSafetyGate(sourceTaskText: string): PromotionSafetyGate {
+  const findings: string[] = [];
+  if (hardCodedAbsolutePathPattern().test(sourceTaskText)) {
+    findings.push('hard-coded absolute path detected');
+  }
+  if (credentialLikePattern().test(sourceTaskText)) {
+    findings.push('credential-like text detected');
+  }
+  if (privateFileReferencePattern().test(sourceTaskText)) {
+    findings.push('private file reference detected');
+  }
+  if (unreproducibleDependencyPattern().test(sourceTaskText)) {
+    findings.push('unreproducible dependency detected');
+  }
+  const checks = {
+    noHardCodedAbsolutePaths: !findings.includes('hard-coded absolute path detected'),
+    noCredentialLikeText: !findings.includes('credential-like text detected'),
+    noPrivateFileReferences: !findings.includes('private file reference detected'),
+    reproducibleDependencies: !findings.includes('unreproducible dependency detected'),
+  };
+  return {
+    passed: Object.values(checks).every(Boolean),
+    checks,
+    findings,
+  };
+}
+
+function hardCodedAbsolutePathPattern() {
+  return /(?:["'`])(?:\/(?:Users|home|Applications|Volumes|private|tmp)\/[^"'`\s]+|[A-Za-z]:\\[^"'`\s]+)(?:["'`])/;
+}
+
+function credentialLikePattern() {
+  return /\b(?:api[_-]?key|secret(?:_key)?|access[_-]?token|auth[_-]?token|password|passwd|bearer)\b\s*[:=]\s*["'`][^"'`\s]{8,}["'`]|-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----/i;
+}
+
+function privateFileReferencePattern() {
+  return /(?:\.env\b|id_rsa\b|id_ed25519\b|\.ssh\/|\.aws\/credentials|\.kube\/config|\/Users\/[^"'`\s]+\/(?:Desktop|Documents|Downloads)\/)/i;
+}
+
+function unreproducibleDependencyPattern() {
+  return /\b(?:pip|uv)\s+install\s+(?:git\+|https?:\/\/|--editable|-e\s+)|\b(?:curl|wget)\s+https?:\/\/\S+\s*(?:\||>|&&)/i;
+}
+
+function payloadSchemaErrors(payload: unknown) {
+  if (!isRecord(payload)) return ['payload is not an object'];
+  const errors: string[] = [];
+  for (const key of ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts']) {
+    if (!(key in payload)) errors.push(`missing ${key}`);
+  }
+  if (!Array.isArray(payload.claims)) errors.push('claims must be an array');
+  if (!Array.isArray(payload.uiManifest)) errors.push('uiManifest must be an array');
+  if (!Array.isArray(payload.executionUnits)) errors.push('executionUnits must be an array');
+  if (!Array.isArray(payload.artifacts)) errors.push('artifacts must be an array');
+  return errors;
+}
+
+function languageForManifest(manifest: SkillManifest) {
+  const language = String(manifest.environment.language || manifest.entrypoint.command || 'python').toLowerCase();
+  if (language.includes('r')) return 'r' as const;
+  if (language.includes('shell') || language.includes('sh')) return 'shell' as const;
+  return 'python' as const;
 }
 
 function taskFileNameForManifest(manifest: SkillManifest) {
@@ -225,6 +401,20 @@ function slugForPrompt(prompt: string) {
     .replace(/^-+|-+$/g, '')
     .slice(0, 32);
   return ascii || 'generated-task';
+}
+
+function complexSingleCellProposalSlug(prompt: string) {
+  const text = prompt.toLowerCase();
+  if (/\bscanpy\b/.test(text) && /\batlas\b/.test(text) && /\bqc\b/.test(text) && /\bcluster/.test(text)) {
+    return 'scanpy-atlas-qc-cluster-report';
+  }
+  if (/\bscvelo\b/.test(text) && /\bvelocity\b/.test(text)) {
+    return 'scvelo-velocity-report';
+  }
+  if (/\blabel[- ]?transfer\b/.test(text) && /\b(single[- ]?cell|cell)\b/.test(text) && /\bqc\b/.test(text)) {
+    return 'single-cell-label-transfer-qc';
+  }
+  return undefined;
 }
 
 function safeName(value: string) {

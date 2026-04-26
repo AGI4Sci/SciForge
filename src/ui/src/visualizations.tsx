@@ -11,6 +11,10 @@ export interface NetworkNodeInput {
 export interface NetworkEdgeInput {
   source?: string;
   target?: string;
+  relation?: string;
+  evidenceLevel?: string;
+  confidence?: number;
+  sourceDb?: string;
 }
 
 export interface UmapPointInput {
@@ -545,7 +549,14 @@ export function NetworkGraph({ nodes: inputNodes, edges: inputEdges }: NetworkGr
       ? inputEdges.flatMap((edge) => {
         const source = edge.source ? indexById.get(edge.source) : undefined;
         const target = edge.target ? indexById.get(edge.target) : undefined;
-        return source === undefined || target === undefined ? [] : [[source, target] as [number, number]];
+        return source === undefined || target === undefined ? [] : [{
+          source,
+          target,
+          relation: edge.relation || '',
+          evidenceLevel: edge.evidenceLevel || '',
+          confidence: typeof edge.confidence === 'number' ? edge.confidence : undefined,
+          sourceDb: edge.sourceDb || '',
+        }];
       })
       : [];
     const draw = () => {
@@ -570,13 +581,26 @@ export function NetworkGraph({ nodes: inputNodes, edges: inputEdges }: NetworkGr
           y: height / 2 + Math.sin(angle) * radius * 0.8,
         };
       });
-      ctx.strokeStyle = 'rgba(90,112,145,0.5)';
-      edges.forEach(([a, b]) => {
+      edges.forEach((edge) => {
+        const isConflict = /conflict/i.test(edge.relation);
+        const confidence = edge.confidence ?? 0.7;
+        ctx.strokeStyle = isConflict ? 'rgba(244,63,94,0.88)' : confidence < 0.65 ? 'rgba(255,213,79,0.72)' : 'rgba(90,112,145,0.58)';
+        ctx.lineWidth = isConflict ? 2.8 : Math.max(1.1, confidence * 2.2);
+        ctx.setLineDash(isConflict ? [7, 5] : []);
         ctx.beginPath();
-        ctx.moveTo(positions[a].x, positions[a].y);
-        ctx.lineTo(positions[b].x, positions[b].y);
+        ctx.moveTo(positions[edge.source].x, positions[edge.source].y);
+        ctx.lineTo(positions[edge.target].x, positions[edge.target].y);
         ctx.stroke();
       });
+      ctx.setLineDash([]);
+      ctx.lineWidth = 1;
+      const conflictCount = edges.filter((edge) => /conflict/i.test(edge.relation)).length;
+      if (edges.length) {
+        ctx.fillStyle = '#B0C4D8';
+        ctx.font = '12px JetBrains Mono, monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(`${edges.length} edges · ${conflictCount} conflicts · provenance shown in evidence matrix`, 18, 22);
+      }
       positions.forEach((pos, i) => {
         const color = i === 0 ? '#00E5A0' : nodes[i].type === 'drug' || i < 3 ? '#FF7043' : '#4ECDC4';
         ctx.fillStyle = `${color}33`;

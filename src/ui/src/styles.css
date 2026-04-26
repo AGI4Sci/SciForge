@@ -3120,6 +3120,22 @@ code,
   background: var(--bio-850);
 }
 
+.svg-artifact-frame {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-height: 300px;
+  overflow: auto;
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.svg-artifact-frame img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
 .molecule-viewer-shell {
   position: relative;
   display: grid;

@@ -65,6 +65,7 @@ export interface WorkspaceTaskSpec {
   stderrRel: string;
   taskRel?: string;
   timeoutMs?: number;
+  inputArgMode?: 'json-file' | 'empty-data-path';
 }
 
 export interface WorkspaceTaskRunResult {
@@ -112,8 +113,10 @@ export interface SkillAvailability {
 
 export interface SkillPromotionProposal {
   id: string;
-  status: 'draft' | 'needs-user-confirmation' | 'accepted' | 'rejected';
+  status: 'draft' | 'needs-user-confirmation' | 'accepted' | 'rejected' | 'archived';
   createdAt: string;
+  statusUpdatedAt?: string;
+  statusReason?: string;
   source: {
     workspacePath: string;
     taskCodeRef: string;
@@ -129,9 +132,27 @@ export interface SkillPromotionProposal {
     smokePrompts: string[];
     expectedArtifactTypes: string[];
     requiredEnvironment: Record<string, unknown>;
+    rerunAfterAccept?: {
+      mode: 'registry-discovered-workspace-task';
+      expectedStatus: 'done';
+    };
+  };
+  securityGate?: {
+    passed: boolean;
+    checks: {
+      noHardCodedAbsolutePaths: boolean;
+      noCredentialLikeText: boolean;
+      noPrivateFileReferences: boolean;
+      reproducibleDependencies: boolean;
+    };
+    findings: string[];
   };
   reviewChecklist: {
     noHardCodedUserData: boolean;
+    noHardCodedAbsolutePaths?: boolean;
+    noCredentialLikeText?: boolean;
+    noPrivateFileReferences?: boolean;
+    reproducibleDependencies?: boolean;
     reproducibleEntrypoint: boolean;
     artifactSchemaValidated: boolean;
     failureModeIsExplicit: boolean;
@@ -151,6 +172,8 @@ export interface AgentServerGenerationRequest {
   artifactSchema: Record<string, unknown>;
   uiManifestContract: Record<string, unknown>;
   uiStateSummary?: Record<string, unknown>;
+  artifacts?: Array<Record<string, unknown>>;
+  recentExecutionRefs?: Array<Record<string, unknown>>;
   priorAttempts: TaskAttemptRecord[];
 }
 

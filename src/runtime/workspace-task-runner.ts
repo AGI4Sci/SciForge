@@ -39,7 +39,8 @@ export async function runWorkspaceTask(workspacePath: string, spec: WorkspaceTas
   }, null, 2));
 
   const command = await commandFor(workspace, spec.language, spec.entrypoint);
-  const args = argsFor(spec.language, taskPath, inputPath, outputPath, spec.entrypoint);
+  const taskInputArg = spec.inputArgMode === 'empty-data-path' ? '' : inputPath;
+  const args = argsFor(spec.language, taskPath, taskInputArg, outputPath, spec.entrypoint);
   const runtimeFingerprint = await fingerprint(command, spec.language);
   try {
     const result = await execFileAsync(command, args, {
@@ -103,15 +104,43 @@ async function commandFor(workspace: string, language: WorkspaceTaskSpec['langua
       join(workspace, '.venv-bioagent', 'bin', 'python'),
       join(workspace, '.venv-bioagent-omics', 'bin', 'python'),
       join(workspace, '.venv', 'bin', 'python'),
+      'python3',
     ];
+    const available: string[] = [];
     for (const candidate of candidates) {
-      if (await fileExists(candidate)) return candidate;
+      if (await commandExists(candidate)) available.push(candidate);
     }
-    return 'python3';
+    for (const candidate of available) {
+      if (await pythonSupportsModernAnnotations(candidate)) return candidate;
+    }
+    return available[0] ?? 'python3';
   }
   if (language === 'r') return 'Rscript';
   if (language === 'shell') return 'sh';
   return entrypoint;
+}
+
+async function commandExists(command: string) {
+  if (command.includes('/')) return fileExists(command);
+  try {
+    await execFileAsync(command, ['--version'], { timeout: 5000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function pythonSupportsModernAnnotations(command: string) {
+  try {
+    const { stdout, stderr } = await execFileAsync(command, ['--version'], { timeout: 5000 });
+    const version = `${stdout || stderr}`.match(/Python\s+(\d+)\.(\d+)/);
+    if (!version) return false;
+    const major = Number(version[1]);
+    const minor = Number(version[2]);
+    return major > 3 || (major === 3 && minor >= 10);
+  } catch {
+    return false;
+  }
 }
 
 function argsFor(language: WorkspaceTaskSpec['language'], taskPath: string, inputPath: string, outputPath: string, entrypoint: string) {
@@ -144,4 +173,3 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
-

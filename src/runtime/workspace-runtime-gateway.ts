@@ -39,6 +39,9 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>):
   if (skill.id === 'omics.differential_expression') {
     return runPythonWorkspaceSkill(request, skill, 'omics');
   }
+  if (skill.manifest.entrypoint.type === 'workspace-task') {
+    return runPythonWorkspaceSkill(request, skill, 'workspace');
+  }
   if (isLiveScpSkill(skill.id)) {
     return runLiveScpSkill(request, skill);
   }
@@ -60,6 +63,18 @@ async function runAgentServerGeneratedTask(
     if (options.allowFallbackOnGenerationFailure) return undefined;
     return repairNeededPayload(request, skill, 'No validated local skill matched this request and no AgentServer base URL is configured.');
   }
+  const generationStartedAtMs = Date.now();
+  if (referencedWorkspaceTaskRel(request.prompt)) {
+    const referencedTaskRun = await tryRunReferencedWorkspaceTaskAfterGenerationFailure({
+      request,
+      skill,
+      skills,
+      workspace,
+      failureReason: 'Prompt explicitly referenced an existing BioAgent-generated workspace task; gateway executed that task directly instead of waiting for a new AgentServer generation.',
+      generationStartedAtMs,
+    });
+    if (referencedTaskRun) return referencedTaskRun;
+  }
   const generation = await requestAgentServerGeneration({
     baseUrl,
     request,
@@ -68,11 +83,32 @@ async function runAgentServerGeneratedTask(
     workspace,
   });
   if (!generation.ok) {
+    const referencedTaskRun = await tryRunReferencedWorkspaceTaskAfterGenerationFailure({
+      request,
+      skill,
+      skills,
+      workspace,
+      failureReason: generation.error,
+      generationStartedAtMs,
+    });
+    if (referencedTaskRun) return referencedTaskRun;
     if (options.allowFallbackOnGenerationFailure) return undefined;
+    const failedRequestId = `agentserver-generation-${request.skillDomain}-${sha1(`${request.prompt}:${generation.error}`).slice(0, 12)}`;
+    await appendTaskAttempt(workspace, {
+      id: failedRequestId,
+      prompt: request.prompt,
+      skillDomain: request.skillDomain,
+      ...attemptPlanRefs(request, skill, generation.error),
+      skillId: skill.id,
+      attempt: 1,
+      status: 'repair-needed',
+      failureReason: generation.error,
+      createdAt: new Date().toISOString(),
+    });
     return repairNeededPayload(request, skill, generation.error);
   }
   if ('directPayload' in generation) {
-    const normalized = validateAndNormalizePayload(generation.directPayload, request, skill, {
+    const normalized = await validateAndNormalizePayload(generation.directPayload, request, skill, {
       taskRel: 'agentserver://direct-payload',
       outputRel: `agentserver://${generation.runId || 'unknown'}/output`,
       stdoutRel: `agentserver://${generation.runId || 'unknown'}/stdout`,
@@ -97,12 +133,23 @@ async function runAgentServerGeneratedTask(
 
   const taskId = `generated-${request.skillDomain}-${sha1(`${request.prompt}:${Date.now()}`).slice(0, 12)}`;
   const generatedPathMap = new Map<string, string>();
-  for (const file of generation.response.taskFiles) {
-    const rel = generatedTaskArchiveRel(taskId, file.path);
-    generatedPathMap.set(safeWorkspaceRel(file.path), rel);
-    await mkdir(dirname(join(workspace, rel)), { recursive: true });
-    const content = file.content || await readGeneratedTaskFileIfPresent(workspace, file.path);
-    await writeFile(join(workspace, rel), content);
+  try {
+    for (const file of generation.response.taskFiles) {
+      const rel = generatedTaskArchiveRel(taskId, file.path);
+      generatedPathMap.set(safeWorkspaceRel(file.path), rel);
+      await mkdir(dirname(join(workspace, rel)), { recursive: true });
+      const content = file.content || await readGeneratedTaskFileIfPresent(workspace, file.path);
+      if (content === undefined) {
+        return repairNeededPayload(
+          request,
+          skill,
+          `AgentServer returned taskFiles path-only reference but BioAgent could not read workspace file: ${safeWorkspaceRel(file.path)}`,
+        );
+      }
+      await writeFile(join(workspace, rel), content);
+    }
+  } catch (error) {
+    return repairNeededPayload(request, skill, `AgentServer generated task files could not be archived: ${sanitizeAgentServerError(errorMessage(error))}`);
   }
   const entrypointOriginalRel = safeWorkspaceRel(generation.response.entrypoint.path);
   const taskRel = generatedPathMap.get(entrypointOriginalRel) ?? generatedTaskArchiveRel(taskId, generation.response.entrypoint.path);
@@ -119,6 +166,14 @@ async function runAgentServerGeneratedTask(
       attempt: 1,
       skillId: skill.id,
       agentServerGenerated: true,
+      artifacts: request.artifacts,
+      uiStateSummary: request.uiState,
+      recentExecutionRefs: toRecordList(request.uiState?.recentExecutionRefs),
+      priorAttempts: summarizeTaskAttemptsForAgentServer(await readRecentTaskAttempts(workspace, request.skillDomain, 8, {
+        scenarioPackageId: request.scenarioPackageRef?.id,
+        skillPlanRef: request.skillPlanRef,
+        prompt: request.prompt,
+      })),
       expectedArtifacts: expectedArtifactTypesForRequest(request).length
         ? expectedArtifactTypesForRequest(request)
         : generation.response.expectedArtifacts,
@@ -164,7 +219,7 @@ async function runAgentServerGeneratedTask(
   try {
     const payload = JSON.parse(await readFile(join(workspace, outputRel), 'utf8')) as ToolPayload;
     const errors = schemaErrors(payload);
-    const normalized = validateAndNormalizePayload(payload, request, skill, {
+    const normalized = await validateAndNormalizePayload(payload, request, skill, {
       taskRel,
       outputRel,
       stdoutRel,
@@ -264,11 +319,201 @@ async function runAgentServerGeneratedTask(
   }
 }
 
+async function tryRunReferencedWorkspaceTaskAfterGenerationFailure(params: {
+  request: GatewayRequest;
+  skill: SkillAvailability;
+  skills: SkillAvailability[];
+  workspace: string;
+  failureReason: string;
+  generationStartedAtMs?: number;
+}): Promise<ToolPayload | undefined> {
+  const taskRel = referencedWorkspaceTaskRel(params.request.prompt)
+    ?? await newestGeneratedWorkspaceTaskRel(params.workspace, params.generationStartedAtMs);
+  if (!taskRel) return undefined;
+  if (!await fileExists(join(params.workspace, taskRel))) return undefined;
+
+  const taskId = `referenced-${params.request.skillDomain}-${sha1(`${taskRel}:${params.request.prompt}`).slice(0, 12)}`;
+  const outputRel = `.bioagent/task-results/${taskId}.json`;
+  const stdoutRel = `.bioagent/logs/${taskId}.stdout.log`;
+  const stderrRel = `.bioagent/logs/${taskId}.stderr.log`;
+  const language = languageForTaskRel(taskRel);
+  const run = await runWorkspaceTask(params.workspace, {
+    id: taskId,
+    language,
+    entrypoint: 'main',
+    taskRel,
+    timeoutMs: 300000,
+    inputArgMode: 'empty-data-path',
+    input: {
+      prompt: params.request.prompt,
+      attempt: 1,
+      skillId: params.skill.id,
+      recoveredFromGenerationFailure: true,
+      generationFailureReason: params.failureReason,
+      artifacts: params.request.artifacts,
+      uiStateSummary: params.request.uiState,
+      recentExecutionRefs: toRecordList(params.request.uiState?.recentExecutionRefs),
+      priorAttempts: await readRecentTaskAttempts(params.workspace, params.request.skillDomain, 8, {
+        scenarioPackageId: params.request.scenarioPackageRef?.id,
+        skillPlanRef: params.request.skillPlanRef,
+        prompt: params.request.prompt,
+      }),
+      expectedArtifacts: expectedArtifactTypesForRequest(params.request),
+      selectedComponentIds: selectedComponentIdsForRequest(params.request),
+    },
+    outputRel,
+    stdoutRel,
+    stderrRel,
+  });
+
+  if (run.exitCode !== 0 && !await fileExists(join(params.workspace, outputRel))) {
+    const failureReason = run.stderr || `Referenced workspace task failed after AgentServer generation failure: ${params.failureReason}`;
+    await appendTaskAttempt(params.workspace, {
+      id: taskId,
+      prompt: params.request.prompt,
+      skillDomain: params.request.skillDomain,
+      ...attemptPlanRefs(params.request, params.skill, params.failureReason),
+      skillId: params.skill.id,
+      attempt: 1,
+      status: 'failed-with-reason',
+      codeRef: taskRel,
+      inputRef: `.bioagent/task-inputs/${taskId}.json`,
+      outputRef: outputRel,
+      stdoutRef: stdoutRel,
+      stderrRef: stderrRel,
+      exitCode: run.exitCode,
+      failureReason,
+      createdAt: new Date().toISOString(),
+    });
+    return failedTaskPayload(params.request, params.skill, run, failureReason);
+  }
+
+  try {
+    const payload = JSON.parse(await readFile(join(params.workspace, outputRel), 'utf8')) as ToolPayload;
+    const errors = schemaErrors(payload);
+    const normalized = await validateAndNormalizePayload(payload, params.request, params.skill, {
+      taskRel,
+      outputRel,
+      stdoutRel,
+      stderrRel,
+      runtimeFingerprint: run.runtimeFingerprint,
+    });
+    await appendTaskAttempt(params.workspace, {
+      id: taskId,
+      prompt: params.request.prompt,
+      skillDomain: params.request.skillDomain,
+      ...attemptPlanRefs(params.request, params.skill, params.failureReason),
+      skillId: params.skill.id,
+      attempt: 1,
+      status: errors.length ? 'repair-needed' : 'done',
+      codeRef: taskRel,
+      inputRef: `.bioagent/task-inputs/${taskId}.json`,
+      outputRef: outputRel,
+      stdoutRef: stdoutRel,
+      stderrRef: stderrRel,
+      exitCode: run.exitCode,
+      schemaErrors: errors,
+      failureReason: errors.length ? `Referenced workspace task output failed schema validation: ${errors.join('; ')}` : undefined,
+      createdAt: new Date().toISOString(),
+    });
+    if (errors.length) {
+      const repaired = await tryAgentServerRepairAndRerun({
+        request: params.request,
+        skill: params.skill,
+        taskId,
+        taskPrefix: 'referenced',
+        run,
+        schemaErrors: errors,
+        failureReason: `Referenced workspace task output failed schema validation: ${errors.join('; ')}`,
+      });
+      if (repaired) return repaired;
+      return normalized;
+    }
+    const supplement = await trySupplementMissingArtifacts(params.request, params.skill, params.skills, normalized);
+    if (supplement) return supplement;
+    return {
+      ...normalized,
+      reasoningTrace: [
+        normalized.reasoningTrace,
+        `Recovered by running referenced workspace task after AgentServer generation failure: ${params.failureReason}`,
+      ].filter(Boolean).join('\n'),
+      executionUnits: normalized.executionUnits.map((unit) => isRecord(unit) ? {
+        ...unit,
+        ...attemptPlanRefs(params.request, params.skill, params.failureReason),
+        recoveredFromGenerationFailure: true,
+        generationFailureReason: params.failureReason,
+      } : unit),
+    };
+  } catch (error) {
+    const failureReason = `Referenced workspace task output could not be parsed after AgentServer generation failure: ${errorMessage(error)}`;
+    await appendTaskAttempt(params.workspace, {
+      id: taskId,
+      prompt: params.request.prompt,
+      skillDomain: params.request.skillDomain,
+      ...attemptPlanRefs(params.request, params.skill, params.failureReason),
+      skillId: params.skill.id,
+      attempt: 1,
+      status: 'repair-needed',
+      codeRef: taskRel,
+      inputRef: `.bioagent/task-inputs/${taskId}.json`,
+      outputRef: outputRel,
+      stdoutRef: stdoutRel,
+      stderrRef: stderrRel,
+      exitCode: run.exitCode,
+      failureReason,
+      createdAt: new Date().toISOString(),
+    });
+    const repaired = await tryAgentServerRepairAndRerun({
+      request: params.request,
+      skill: params.skill,
+      taskId,
+      taskPrefix: 'referenced',
+      run,
+      schemaErrors: ['output could not be parsed'],
+      failureReason,
+    });
+    if (repaired) return repaired;
+    return failedTaskPayload(params.request, params.skill, run, failureReason);
+  }
+}
+
+async function newestGeneratedWorkspaceTaskRel(workspace: string, generatedAfterMs?: number) {
+  const rootRel = '.bioagent/tasks';
+  const root = join(workspace, rootRel);
+  if (!await fileExists(root)) return undefined;
+  const minMtimeMs = generatedAfterMs ? generatedAfterMs - 5_000 : Date.now() - 30 * 60_000;
+  let newest: { rel: string; mtimeMs: number } | undefined;
+
+  async function visit(dirAbs: string, dirRel: string) {
+    let entries;
+    try {
+      entries = await readdir(dirAbs, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const childAbs = join(dirAbs, entry.name);
+      const childRel = `${dirRel}/${entry.name}`;
+      if (entry.isDirectory()) {
+        await visit(childAbs, childRel);
+        continue;
+      }
+      if (!entry.isFile() || !/\.(?:py|R|r|sh)$/.test(entry.name)) continue;
+      const info = await stat(childAbs);
+      if (info.mtimeMs < minMtimeMs) continue;
+      if (!newest || info.mtimeMs > newest.mtimeMs) newest = { rel: childRel, mtimeMs: info.mtimeMs };
+    }
+  }
+
+  await visit(root, rootRel);
+  return newest?.rel;
+}
+
 async function readGeneratedTaskFileIfPresent(workspace: string, path: string) {
   try {
     return await readFile(join(workspace, safeWorkspaceRel(path)), 'utf8');
   } catch {
-    return '';
+    return undefined;
   }
 }
 
@@ -308,8 +553,7 @@ function normalizeLlmEndpoint(value: unknown): LlmEndpointConfig | undefined {
   const baseUrl = typeof value.baseUrl === 'string' ? cleanUrl(value.baseUrl) : '';
   const apiKey = typeof value.apiKey === 'string' ? value.apiKey.trim() : '';
   const modelName = typeof value.modelName === 'string' ? value.modelName.trim() : '';
-  if (provider === 'native' && !baseUrl && !modelName) return undefined;
-  if (!baseUrl && !modelName) return undefined;
+  if (!baseUrl && !apiKey && !modelName) return undefined;
   return {
     provider: provider || undefined,
     baseUrl: baseUrl || undefined,
@@ -334,7 +578,7 @@ function attemptPlanRefs(request: GatewayRequest, skill?: SkillAvailability, fal
 }
 
 function runtimeProfileIdForRequest(request: GatewayRequest, skill?: SkillAvailability) {
-  if (skill?.manifest.entrypoint.type === 'agentserver-generation') return `agentserver-${agentServerBackend()}`;
+  if (skill?.manifest.entrypoint.type === 'agentserver-generation') return `agentserver-${agentServerBackend(request, request.llmEndpoint)}`;
   if (skill && isLiveScpSkill(skill.id)) return 'scp-hub';
   if (skill?.manifest.entrypoint.type === 'workspace-task') return 'workspace-python';
   return request.scenarioPackageRef?.source === 'built-in' ? 'seed-skill' : undefined;
@@ -349,11 +593,13 @@ function selectedRuntimeForSkill(skill?: SkillAvailability) {
   return skill.manifest.entrypoint.type;
 }
 
-function agentServerBackend() {
+function agentServerBackend(request?: GatewayRequest, llmEndpoint?: LlmEndpointConfig) {
   const requested = process.env.BIOAGENT_AGENTSERVER_BACKEND?.trim();
   if (requested && ['openteam_agent', 'claude-code', 'codex', 'hermes-agent', 'openclaw'].includes(requested)) {
     return requested;
   }
+  const endpoint = llmEndpoint ?? request?.llmEndpoint;
+  if (endpoint?.baseUrl?.trim()) return 'openteam_agent';
   return 'codex';
 }
 
@@ -423,7 +669,7 @@ async function runPythonWorkspaceSkill(request: GatewayRequest, skill: SkillAvai
   try {
     const payload = JSON.parse(await readFile(join(workspace, outputRel), 'utf8')) as ToolPayload;
     const errors = schemaErrors(payload);
-    const normalized = validateAndNormalizePayload(payload, request, skill, {
+    const normalized = await validateAndNormalizePayload(payload, request, skill, {
       taskRel,
       outputRel,
       stdoutRel,
@@ -561,7 +807,7 @@ async function runLiveScpSkill(request: GatewayRequest, skill: SkillAvailability
   }
   try {
     const payload = JSON.parse(await readFile(join(workspace, outputRel), 'utf8')) as ToolPayload;
-    const normalized = validateAndNormalizePayload(payload, request, skill, {
+    const normalized = await validateAndNormalizePayload(payload, request, skill, {
       taskRel,
       outputRel,
       stdoutRel,
@@ -569,7 +815,8 @@ async function runLiveScpSkill(request: GatewayRequest, skill: SkillAvailability
       runtimeFingerprint: run.runtimeFingerprint,
     });
     const errors = schemaErrors(payload);
-    const unitStatus = String(normalized.executionUnits[0]?.status || '');
+    const firstUnit = normalized.executionUnits[0] as Record<string, unknown> | undefined;
+    const unitStatus = String(firstUnit && typeof firstUnit === 'object' ? firstUnit.status || '' : '');
     const requiresGeneration = payloadRequestsAgentServerGeneration(normalized);
     await appendTaskAttempt(workspace, {
       id: taskId,
@@ -736,6 +983,7 @@ function shouldAttemptFreshTaskGeneration(request: GatewayRequest, skill: SkillA
 
 function shouldForceAgentServerGeneration(request: GatewayRequest) {
   if (request.uiState?.forceAgentServerGeneration === true) return true;
+  if (request.uiState?.forceAgentServerGeneration === false) return false;
   const expectedArtifacts = expectedArtifactTypesForRequest(request);
   const selectedComponents = selectedComponentIdsForRequest(request);
   const prompt = request.prompt.toLowerCase();
@@ -744,7 +992,14 @@ function shouldForceAgentServerGeneration(request: GatewayRequest) {
     || /report|summary|summari[sz]e|systematic|read|reading|review|报告|总结|系统性|阅读|综述/.test(prompt);
   const wantsFreshExternalResearch = /\barxiv\b|\blatest\b|\btoday\b|\bweb\b|\bbrowser\b|最新|今天|今日|网页|浏览器/.test(prompt);
   const hasPriorContext = request.artifacts.length > 0 || toStringList(request.uiState?.recentConversation).length > 1;
-  return wantsReport && (wantsFreshExternalResearch || hasPriorContext);
+  return (wantsReport && (wantsFreshExternalResearch || hasPriorContext))
+    || isComplexCellReproductionTask(prompt);
+}
+
+function isComplexCellReproductionTask(text: string) {
+  const cellSignals = /single[-\s]?cell|scrna|scatac|cite[-\s]?seq|perturb[-\s]?seq|velocity|scvelo|seurat|scanpy|harmony|scvi|totalvi|wnn|glue|milo|scenic|cellchat|spatial transcriptomics|multi[-\s]?organ|multi[-\s]?omics|多器官|单细胞|细胞图谱|跨数据集|标签迁移|整合|速度|扰动|空间转录组|多组学|轨迹|通讯|调控网络|克隆型|类器官/.test(text);
+  const workSignals = /reproduce|replicate|benchmark|workflow|pipeline|atlas|integration|label transfer|mapping|reference mapping|batch mixing|qc|cluster|marker|annotation|latent time|driver genes|velocity stream|spliced|unspliced|embedding|modality|niche|复现|重现|基准|流程|图谱|整合|映射|质控|聚类|标记基因|注释|比较|分析|模型比较|复现重点|联合建模|空间邻域/.test(text);
+  return cellSignals && workSignals;
 }
 
 function payloadRequestsAgentServerGeneration(payload: ToolPayload) {
@@ -801,7 +1056,7 @@ async function tryAgentServerRepairAndRerun(params: {
       selfHealReason: params.failureReason,
       patchSummary: repair.error,
       diffRef: diffRel,
-      status: 'failed',
+      status: 'failed-with-reason',
       codeRef: params.run.spec.taskRel,
       inputRef: params.run.spec.id ? `.bioagent/task-inputs/${params.run.spec.id}.json` : undefined,
       outputRef: params.run.outputRef,
@@ -828,6 +1083,10 @@ async function tryAgentServerRepairAndRerun(params: {
       skillId: params.skill.id,
       selfHealReason: params.failureReason,
       agentServerRunId: repair.runId,
+      artifacts: params.request.artifacts,
+      uiStateSummary: params.request.uiState,
+      recentExecutionRefs: toRecordList(params.request.uiState?.recentExecutionRefs),
+      priorAttempts,
     },
     outputRel,
     stdoutRel,
@@ -846,7 +1105,7 @@ async function tryAgentServerRepairAndRerun(params: {
       selfHealReason: params.failureReason,
       patchSummary: diffSummary,
       diffRef: diffRel,
-      status: 'failed',
+      status: 'failed-with-reason',
       codeRef: params.run.spec.taskRel,
       inputRef: `.bioagent/task-inputs/${params.taskId}-attempt-2.json`,
       outputRef: outputRel,
@@ -862,7 +1121,7 @@ async function tryAgentServerRepairAndRerun(params: {
   try {
     const payload = JSON.parse(await readFile(join(workspace, outputRel), 'utf8')) as ToolPayload;
     const errors = schemaErrors(payload);
-    const normalized = validateAndNormalizePayload(payload, params.request, params.skill, {
+    const normalized = await validateAndNormalizePayload(payload, params.request, params.skill, {
       taskRel: params.run.spec.taskRel,
       outputRel,
       stdoutRel,
@@ -942,7 +1201,7 @@ async function tryAgentServerRepairAndRerun(params: {
       selfHealReason: params.failureReason,
       patchSummary: diffSummary,
       diffRef: diffRel,
-      status: 'failed',
+      status: 'failed-with-reason',
       codeRef: params.run.spec.taskRel,
       inputRef: `.bioagent/task-inputs/${params.taskId}-attempt-2.json`,
       outputRef: outputRel,
@@ -964,75 +1223,83 @@ async function requestAgentServerGeneration(params: {
   workspace: string;
 }): Promise<{ ok: true; runId?: string; response: AgentServerGenerationResponse } | { ok: true; runId?: string; directPayload: ToolPayload } | { ok: false; error: string }> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Number(process.env.BIOAGENT_AGENTSERVER_GENERATION_TIMEOUT_MS || 300000));
+  const timeoutMs = Number(process.env.BIOAGENT_AGENTSERVER_GENERATION_TIMEOUT_MS || 900000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let runPayload: unknown;
   try {
-    const backend = agentServerBackend();
     const { llmEndpointSource, ...llmRuntime } = await agentServerLlmRuntime(params.request, params.workspace);
+    const backend = agentServerBackend(params.request, llmRuntime.llmEndpoint);
+    if (!llmRuntime.llmEndpoint && requiresUserLlmEndpoint(params.baseUrl)) {
+      return { ok: false, error: missingUserLlmEndpointMessage() };
+    }
     const generationRequest = {
       prompt: params.request.prompt,
       skillDomain: params.request.skillDomain,
       workspaceTreeSummary: await workspaceTreeSummary(params.workspace),
-      availableSkills: params.skills.map((skill) => ({
-        id: skill.id,
-        kind: skill.kind,
-        available: skill.available,
-        reason: skill.reason,
-        description: skill.manifest.description,
-        entrypointType: skill.manifest.entrypoint.type,
-        manifestPath: skill.manifestPath,
-        scopeDeclaration: skill.manifest.scopeDeclaration,
-      })),
+      availableSkills: summarizeSkillsForAgentServer(params.skills, params.skill, params.request.skillDomain),
       artifactSchema: expectedArtifactSchema(params.request),
       uiManifestContract: { expectedKeys: ['componentId', 'artifactRef', 'encoding', 'layout', 'compare'] },
       uiStateSummary: params.request.uiState,
+      artifacts: params.request.artifacts,
+      recentExecutionRefs: toRecordList(params.request.uiState?.recentExecutionRefs),
       expectedArtifactTypes: expectedArtifactTypesForRequest(params.request),
       selectedComponentIds: params.request.selectedComponentIds ?? toStringList(params.request.uiState?.selectedComponentIds),
-      priorAttempts: await readRecentTaskAttempts(params.workspace, params.request.skillDomain),
+      priorAttempts: summarizeTaskAttemptsForAgentServer(await readRecentTaskAttempts(params.workspace, params.request.skillDomain, 8, {
+        scenarioPackageId: params.request.scenarioPackageRef?.id,
+        skillPlanRef: params.request.skillPlanRef,
+        prompt: params.request.prompt,
+      })),
+    };
+    runPayload = {
+      agent: {
+        id: `bioagent-${params.request.skillDomain}-task-generation`,
+        name: `BioAgent ${params.request.skillDomain} Task Generation`,
+        backend,
+        workspace: params.workspace,
+        workingDirectory: params.workspace,
+        reconcileExisting: true,
+        systemPrompt: [
+          'You generate BioAgent workspace-local task code.',
+          'Write task files that accept inputPath and outputPath argv values and write a BioAgent ToolPayload JSON object.',
+          'Do not create demo/default success artifacts; if the real task cannot be generated, explain the missing condition.',
+        ].join(' '),
+      },
+      input: {
+        text: buildAgentServerGenerationPrompt(generationRequest),
+        metadata: {
+          project: 'BioAgent',
+          purpose: 'workspace-task-generation',
+          skillDomain: params.request.skillDomain,
+          skillId: params.skill.id,
+          expectedArtifactTypes: generationRequest.expectedArtifactTypes,
+          selectedComponentIds: generationRequest.selectedComponentIds,
+          priorAttemptCount: generationRequest.priorAttempts.length,
+        },
+      },
+      runtime: {
+        backend,
+        cwd: params.workspace,
+        ...llmRuntime,
+        metadata: {
+          autoApprove: true,
+          sandbox: 'danger-full-access',
+          source: 'bioagent-workspace-runtime-gateway',
+          llmEndpointSource: llmRuntime.llmEndpoint ? llmEndpointSource : undefined,
+        },
+      },
+      metadata: {
+        project: 'BioAgent',
+        source: 'workspace-runtime-gateway',
+        task: 'generation',
+        workspace: params.workspace,
+        workingDirectory: params.workspace,
+      },
     };
     const response = await fetch(`${params.baseUrl}/api/agent-server/runs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: controller.signal,
-      body: JSON.stringify({
-        agent: {
-          id: `bioagent-${params.request.skillDomain}-task-generation`,
-          name: `BioAgent ${params.request.skillDomain} Task Generation`,
-          backend,
-          workspace: params.workspace,
-          workingDirectory: params.workspace,
-          reconcileExisting: true,
-          systemPrompt: [
-            'You generate BioAgent workspace-local task code.',
-            'Write task files that accept inputPath and outputPath argv values and write a BioAgent ToolPayload JSON object.',
-            'Do not create demo/default success artifacts; if the real task cannot be generated, explain the missing condition.',
-          ].join(' '),
-        },
-        input: {
-          text: buildAgentServerGenerationPrompt(generationRequest),
-          metadata: {
-            project: 'BioAgent',
-            purpose: 'workspace-task-generation',
-            skillDomain: params.request.skillDomain,
-            skillId: params.skill.id,
-          },
-        },
-        runtime: {
-          backend,
-          cwd: params.workspace,
-          ...llmRuntime,
-          metadata: {
-            autoApprove: true,
-            sandbox: 'danger-full-access',
-            source: 'bioagent-workspace-runtime-gateway',
-            llmEndpointSource: llmRuntime.llmEndpoint ? llmEndpointSource : undefined,
-          },
-        },
-        metadata: {
-          project: 'BioAgent',
-          source: 'workspace-runtime-gateway',
-          task: 'generation',
-        },
-      }),
+      body: JSON.stringify(runPayload),
     });
     const text = await response.text();
     let json: unknown = text;
@@ -1041,9 +1308,10 @@ async function requestAgentServerGeneration(params: {
     } catch {
       // Keep raw text in the failure message below.
     }
+    await writeAgentServerDebugArtifact(params.workspace, 'generation', runPayload, response.status, json);
     if (!response.ok) {
       const detail = isRecord(json) ? String(json.error || json.message || '') : '';
-      return { ok: false, error: detail || `AgentServer generation HTTP ${response.status}: ${String(text).slice(0, 500)}` };
+      return { ok: false, error: sanitizeAgentServerError(detail || `AgentServer generation HTTP ${response.status}: ${String(text).slice(0, 500)}`) };
     }
     const data = isRecord(json) && isRecord(json.data) ? json.data : isRecord(json) ? json : {};
     const run = isRecord(data.run) ? data.run : {};
@@ -1062,7 +1330,10 @@ async function requestAgentServerGeneration(params: {
         };
       }
       const directText = extractAgentServerOutputText(run);
-      if (directText && !looksLikeAgentServerFailure(directText)) {
+      if (directText && looksLikeAgentServerFailure(directText)) {
+        return { ok: false, error: `AgentServer backend failed: ${sanitizeAgentServerError(directText)}` };
+      }
+      if (directText) {
         const parsedTextGeneration = parseGenerationResponse(extractJson(directText));
         if (parsedTextGeneration) {
           return {
@@ -1085,7 +1356,8 @@ async function requestAgentServerGeneration(params: {
       response: parsed,
     };
   } catch (error) {
-    return { ok: false, error: `AgentServer generation request failed: ${errorMessage(error)}` };
+    await writeAgentServerDebugArtifact(params.workspace, 'generation', runPayload, 0, { error: errorMessage(error) });
+    return { ok: false, error: agentServerRequestFailureMessage('generation', error, timeoutMs) };
   } finally {
     clearTimeout(timeout);
   }
@@ -1101,61 +1373,69 @@ async function requestAgentServerRepair(params: {
   priorAttempts: unknown[];
 }): Promise<{ ok: true; runId?: string; diffSummary?: string } | { ok: false; error: string }> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), Number(process.env.BIOAGENT_AGENTSERVER_REPAIR_TIMEOUT_MS || 300000));
+  const timeoutMs = Number(process.env.BIOAGENT_AGENTSERVER_REPAIR_TIMEOUT_MS || 900000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let runPayload: unknown;
   try {
-    const backend = agentServerBackend();
     const { llmEndpointSource, ...llmRuntime } = await agentServerLlmRuntime(params.request, params.run.workspace);
+    const backend = agentServerBackend(params.request, llmRuntime.llmEndpoint);
+    if (!llmRuntime.llmEndpoint && requiresUserLlmEndpoint(params.baseUrl)) {
+      return { ok: false, error: missingUserLlmEndpointMessage() };
+    }
+    runPayload = {
+      agent: {
+        id: `bioagent-${params.request.skillDomain}-runtime-repair`,
+        name: `BioAgent ${params.request.skillDomain} Runtime Repair`,
+        backend,
+        workspace: params.run.workspace,
+        workingDirectory: params.run.workspace,
+        reconcileExisting: true,
+        systemPrompt: [
+          'You repair BioAgent workspace-local task code.',
+          'Edit the referenced task file or adjacent helper files in the workspace, then stop.',
+          'Preserve the task contract: task receives inputPath and outputPath argv values and writes a BioAgent ToolPayload JSON object.',
+          'Do not create demo/default success artifacts; if the real task cannot be repaired, explain the missing condition.',
+        ].join(' '),
+      },
+      input: {
+        text: buildAgentServerRepairPrompt(params),
+        metadata: {
+          project: 'BioAgent',
+          purpose: 'workspace-task-repair',
+          skillDomain: params.request.skillDomain,
+          skillId: params.skill.id,
+          codeRef: params.run.spec.taskRel,
+          stdoutRef: params.run.stdoutRef,
+          stderrRef: params.run.stderrRef,
+          outputRef: params.run.outputRef,
+          schemaErrors: params.schemaErrors,
+        },
+      },
+      runtime: {
+        backend,
+        cwd: params.run.workspace,
+        ...llmRuntime,
+        metadata: {
+          autoApprove: true,
+          sandbox: 'danger-full-access',
+          source: 'bioagent-workspace-runtime-gateway',
+          llmEndpointSource: llmRuntime.llmEndpoint ? llmEndpointSource : undefined,
+        },
+      },
+      metadata: {
+        project: 'BioAgent',
+        source: 'workspace-runtime-gateway',
+        taskId: params.run.spec.id,
+        repairOf: params.run.spec.taskRel,
+        workspace: params.run.workspace,
+        workingDirectory: params.run.workspace,
+      },
+    };
     const response = await fetch(`${params.baseUrl}/api/agent-server/runs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: controller.signal,
-      body: JSON.stringify({
-        agent: {
-          id: `bioagent-${params.request.skillDomain}-runtime-repair`,
-          name: `BioAgent ${params.request.skillDomain} Runtime Repair`,
-          backend,
-          workspace: params.run.workspace,
-          workingDirectory: params.run.workspace,
-          reconcileExisting: true,
-          systemPrompt: [
-            'You repair BioAgent workspace-local task code.',
-            'Edit the referenced task file or adjacent helper files in the workspace, then stop.',
-            'Preserve the task contract: task receives inputPath and outputPath argv values and writes a BioAgent ToolPayload JSON object.',
-            'Do not create demo/default success artifacts; if the real task cannot be repaired, explain the missing condition.',
-          ].join(' '),
-        },
-        input: {
-          text: buildAgentServerRepairPrompt(params),
-          metadata: {
-            project: 'BioAgent',
-            purpose: 'workspace-task-repair',
-            skillDomain: params.request.skillDomain,
-            skillId: params.skill.id,
-            codeRef: params.run.spec.taskRel,
-            stdoutRef: params.run.stdoutRef,
-            stderrRef: params.run.stderrRef,
-            outputRef: params.run.outputRef,
-            schemaErrors: params.schemaErrors,
-          },
-        },
-        runtime: {
-          backend,
-          cwd: params.run.workspace,
-          ...llmRuntime,
-          metadata: {
-            autoApprove: true,
-            sandbox: 'danger-full-access',
-            source: 'bioagent-workspace-runtime-gateway',
-            llmEndpointSource: llmRuntime.llmEndpoint ? llmEndpointSource : undefined,
-          },
-        },
-        metadata: {
-          project: 'BioAgent',
-          source: 'workspace-runtime-gateway',
-          taskId: params.run.spec.id,
-          repairOf: params.run.spec.taskRel,
-        },
-      }),
+      body: JSON.stringify(runPayload),
     });
     const text = await response.text();
     let json: unknown = text;
@@ -1164,9 +1444,10 @@ async function requestAgentServerRepair(params: {
     } catch {
       // Keep raw text in the failure message below.
     }
+    await writeAgentServerDebugArtifact(params.run.workspace, 'repair', runPayload, response.status, json);
     if (!response.ok) {
       const detail = isRecord(json) ? String(json.error || json.message || '') : '';
-      return { ok: false, error: detail || `AgentServer repair HTTP ${response.status}: ${String(text).slice(0, 500)}` };
+      return { ok: false, error: sanitizeAgentServerError(detail || `AgentServer repair HTTP ${response.status}: ${String(text).slice(0, 500)}`) };
     }
     const data = isRecord(json) && isRecord(json.data) ? json.data : isRecord(json) ? json : {};
     const run = isRecord(data.run) ? data.run : {};
@@ -1188,7 +1469,8 @@ async function requestAgentServerRepair(params: {
       diffSummary,
     };
   } catch (error) {
-    return { ok: false, error: `AgentServer repair request failed: ${errorMessage(error)}` };
+    await writeAgentServerDebugArtifact(params.run.workspace, 'repair', runPayload, 0, { error: errorMessage(error) });
+    return { ok: false, error: agentServerRequestFailureMessage('repair', error, timeoutMs) };
   } finally {
     clearTimeout(timeout);
   }
@@ -1206,14 +1488,53 @@ async function readConfiguredAgentServerBaseUrl(workspace: string) {
   return undefined;
 }
 
+async function writeAgentServerDebugArtifact(
+  workspace: string,
+  task: 'generation' | 'repair',
+  requestPayload: unknown,
+  responseStatus: number,
+  responseBody: unknown,
+) {
+  try {
+    const id = `${new Date().toISOString().replace(/[:.]/g, '-')}-${task}-${sha1(JSON.stringify(requestPayload)).slice(0, 8)}`;
+    const rel = join('.bioagent', 'debug', 'agentserver', `${id}.json`);
+    await mkdir(dirname(join(workspace, rel)), { recursive: true });
+    await writeFile(join(workspace, rel), JSON.stringify({
+      createdAt: new Date().toISOString(),
+      kind: 'agentserver-run-debug',
+      task,
+      responseStatus,
+      request: redactSecrets(requestPayload),
+      response: redactSecrets(responseBody),
+    }, null, 2));
+  } catch {
+    // Debug artifacts are diagnostic-only; never fail the user task because the trace cannot be written.
+  }
+}
+
+function redactSecrets(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactSecrets);
+  if (!isRecord(value)) {
+    if (typeof value === 'string') return redactSecretText(value);
+    return value;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (/api[-_]?key|token|authorization|secret|password|credential/i.test(key)) {
+      out[key] = entry ? '[redacted]' : entry;
+      continue;
+    }
+    out[key] = redactSecrets(entry);
+  }
+  return out;
+}
+
 async function agentServerLlmRuntime(request: GatewayRequest, workspace: string): Promise<{
   modelProvider?: string;
   modelName?: string;
   llmEndpoint?: LlmEndpointConfig;
   llmEndpointSource?: string;
 }> {
-  const fromLocal = await readConfiguredLlmEndpoint(join(process.cwd(), 'config.local.json'), 'config.local.json');
-  if (fromLocal) return fromLocal;
   const fromRequest = normalizeLlmEndpoint(request.llmEndpoint);
   if (fromRequest) {
     return {
@@ -1223,9 +1544,42 @@ async function agentServerLlmRuntime(request: GatewayRequest, workspace: string)
       llmEndpointSource: 'request',
     };
   }
+  if (hasExplicitRequestLlmConfig(request)) {
+    return {
+      modelProvider: request.modelProvider?.trim(),
+      modelName: request.modelName?.trim(),
+      llmEndpointSource: 'request-empty',
+    };
+  }
+  const fromLocal = await readConfiguredLlmEndpoint(join(process.cwd(), 'config.local.json'), 'config.local.json');
+  if (fromLocal) return fromLocal;
   const fromWorkspace = await readConfiguredLlmEndpoint(join(workspace, '.bioagent', 'config.json'), 'workspace-config');
   if (fromWorkspace) return fromWorkspace;
   return {};
+}
+
+function hasExplicitRequestLlmConfig(request: GatewayRequest) {
+  return typeof request.modelProvider === 'string'
+    || typeof request.modelName === 'string'
+    || request.llmEndpoint !== undefined;
+}
+
+function requiresUserLlmEndpoint(agentServerBaseUrl: string) {
+  if (process.env.BIOAGENT_ALLOW_AGENTSERVER_DEFAULT_LLM === '1') return false;
+  try {
+    const url = new URL(agentServerBaseUrl);
+    return ['127.0.0.1', 'localhost', '::1'].includes(url.hostname) && url.port === '18080';
+  } catch {
+    return false;
+  }
+}
+
+function missingUserLlmEndpointMessage() {
+  return [
+    'User-side model configuration is required before using the default local AgentServer.',
+    'Set Model Provider, Model Base URL, Model Name, and API Key in BioAgent settings so the request-selected llmEndpoint is forwarded.',
+    'BioAgent will not fall back to AgentServer openteam.json defaults for this path.',
+  ].join(' ');
 }
 
 async function readConfiguredLlmEndpoint(path: string, source: string): Promise<{
@@ -1269,6 +1623,8 @@ function buildAgentServerRepairPrompt(params: {
 }) {
   return [
     'Repair this BioAgent workspace task and leave the workspace ready for BioAgent to rerun it.',
+    'Read the priorAttempts plus codeRef/stdoutRef/stderrRef/outputRef before changing behavior. Preserve failureReason in the next ToolPayload if the blocker remains.',
+    'Do not fabricate success or replace the user goal with an unrelated demo task.',
     '',
     JSON.stringify({
       prompt: params.request.prompt,
@@ -1284,6 +1640,7 @@ function buildAgentServerRepairPrompt(params: {
       failureReason: params.failureReason,
       uiStateSummary: params.request.uiState,
       artifacts: params.request.artifacts,
+      recentExecutionRefs: toRecordList(params.request.uiState?.recentExecutionRefs),
       priorAttempts: params.priorAttempts,
       expectedPayloadKeys: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'uiManifest', 'executionUnits', 'artifacts'],
     }, null, 2),
@@ -1309,6 +1666,8 @@ function buildAgentServerGenerationPrompt(request: {
   artifactSchema: Record<string, unknown>;
   uiManifestContract: Record<string, unknown>;
   uiStateSummary?: Record<string, unknown>;
+  artifacts?: Array<Record<string, unknown>>;
+  recentExecutionRefs?: Array<Record<string, unknown>>;
   expectedArtifactTypes?: string[];
   selectedComponentIds?: string[];
   priorAttempts: unknown[];
@@ -1321,16 +1680,103 @@ function buildAgentServerGenerationPrompt(request: {
     'Prefer installed or workspace tools when they genuinely fit, but write adapter code as needed so the run is reproducible from inputPath and outputPath.',
     'If expectedArtifactTypes contains multiple artifacts, generate a coordinated Python task or small Python module set that emits every requested artifact type. A partial seed skill result is not enough unless the missing artifact has a clear failed-with-reason ExecutionUnit.',
     'Use the selectedComponentIds/UI contract to preserve promised UI slots; do not drop report, table, graph, structure, omics, or execution outputs just because one local skill only produces a subset.',
+    'For continuation requests, continue the scenario goal using recentConversation, artifacts, recentExecutionRefs, and priorAttempts. Do not restart an unrelated analysis.',
+    'For repair requests, inspect the failureReason plus stdoutRef/stderrRef/outputRef/codeRef and report whether logs are readable before editing or rerunning.',
     'If a required input, remote file, credential, or executable is missing, write a valid ToolPayload with executionUnits.status="failed-with-reason" and a precise failureReason instead of fabricating outputs.',
     '',
-    JSON.stringify({
+    JSON.stringify(clipForAgentServerJson({
       ...request,
       taskContract: {
         argv: ['inputPath', 'outputPath'],
         outputPayloadKeys: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'uiManifest', 'executionUnits', 'artifacts'],
       },
-    }, null, 2),
+    }), null, 2),
   ].join('\n');
+}
+
+function summarizeSkillsForAgentServer(
+  skills: SkillAvailability[],
+  selectedSkill: SkillAvailability,
+  skillDomain: BioAgentSkillDomain,
+) {
+  const selectedId = selectedSkill.id;
+  const domainToken = `.${skillDomain}`;
+  const selected = skills.filter((skill) => skill.id === selectedId);
+  const sameDomain = skills
+    .filter((skill) => skill.id !== selectedId)
+    .filter((skill) => skill.id.includes(domainToken) || skill.id.endsWith(`.${skillDomain}`))
+    .slice(0, 8);
+  const localAvailable = skills
+    .filter((skill) => skill.id !== selectedId && !sameDomain.includes(skill))
+    .filter((skill) => skill.available)
+    .slice(0, 8);
+  return [...selected, ...sameDomain, ...localAvailable].map((skill) => ({
+    id: skill.id,
+    kind: skill.kind,
+    available: skill.available,
+    reason: clipForAgentServerPrompt(skill.reason, 240) ?? '',
+    description: clipForAgentServerPrompt(skill.manifest.description, 480),
+    entrypointType: skill.manifest.entrypoint.type,
+    manifestPath: skill.manifestPath,
+  }));
+}
+
+function summarizeTaskAttemptsForAgentServer(attempts: unknown[]) {
+  return attempts
+    .filter(isRecord)
+    .slice(0, 4)
+    .map((attempt) => ({
+      id: typeof attempt.id === 'string' ? attempt.id : undefined,
+      attempt: typeof attempt.attempt === 'number' ? attempt.attempt : undefined,
+      status: typeof attempt.status === 'string' ? attempt.status : undefined,
+      skillDomain: typeof attempt.skillDomain === 'string' ? attempt.skillDomain : undefined,
+      skillId: typeof attempt.skillId === 'string' ? attempt.skillId : undefined,
+      codeRef: typeof attempt.codeRef === 'string' ? attempt.codeRef : undefined,
+      inputRef: typeof attempt.inputRef === 'string' ? attempt.inputRef : undefined,
+      outputRef: typeof attempt.outputRef === 'string' ? attempt.outputRef : undefined,
+      stdoutRef: typeof attempt.stdoutRef === 'string' ? attempt.stdoutRef : undefined,
+      stderrRef: typeof attempt.stderrRef === 'string' ? attempt.stderrRef : undefined,
+      failureReason: clipForAgentServerPrompt(attempt.failureReason, 800),
+      schemaErrors: Array.isArray(attempt.schemaErrors)
+        ? attempt.schemaErrors.map((entry) => clipForAgentServerPrompt(entry, 240)).filter(Boolean).slice(0, 8)
+        : undefined,
+      patchSummary: clipForAgentServerPrompt(attempt.patchSummary, 800),
+      diffRef: typeof attempt.diffRef === 'string' ? attempt.diffRef : undefined,
+      scenarioPackageRef: isRecord(attempt.scenarioPackageRef) ? attempt.scenarioPackageRef : undefined,
+      skillPlanRef: typeof attempt.skillPlanRef === 'string' ? attempt.skillPlanRef : undefined,
+      uiPlanRef: typeof attempt.uiPlanRef === 'string' ? attempt.uiPlanRef : undefined,
+      createdAt: typeof attempt.createdAt === 'string' ? attempt.createdAt : undefined,
+    }));
+}
+
+function clipForAgentServerPrompt(value: unknown, maxLength: number) {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
+}
+
+function clipForAgentServerJson(value: unknown, depth = 0): unknown {
+  if (typeof value === 'string') {
+    const normalized = value.replace(/\s+/g, ' ').trim();
+    return normalized.length > 2400 ? `${normalized.slice(0, 2400)}... [truncated ${normalized.length - 2400} chars]` : normalized;
+  }
+  if (typeof value !== 'object' || value === null) return value;
+  if (depth >= 5) return '[truncated-depth]';
+  if (Array.isArray(value)) {
+    const limit = depth <= 1 ? 24 : 12;
+    const clipped = value.slice(0, limit).map((entry) => clipForAgentServerJson(entry, depth + 1));
+    if (value.length > limit) clipped.push(`[truncated ${value.length - limit} entries]`);
+    return clipped;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (/api[-_]?key|token|authorization|secret|password|credential/i.test(key)) {
+      out[key] = entry ? '[redacted]' : entry;
+      continue;
+    }
+    out[key] = clipForAgentServerJson(entry, depth + 1);
+  }
+  return out;
 }
 
 async function workspaceTreeSummary(workspace: string) {
@@ -1414,11 +1860,46 @@ function parseGenerationResponse(value: unknown): AgentServerGenerationResponse 
   return undefined;
 }
 
-function normalizeGenerationEntrypoint(value: unknown) {
+type NormalizedGenerationEntrypoint = {
+  language?: WorkspaceTaskRunResult['spec']['language'] | string;
+  path?: string;
+  command?: string;
+  args?: unknown[];
+};
+
+function normalizeGenerationEntrypoint(value: unknown): NormalizedGenerationEntrypoint {
   if (typeof value === 'string' && value.trim()) {
-    return { language: 'python', path: value.trim() };
+    return {
+      language: inferLanguageFromEntrypoint(value),
+      path: extractEntrypointPath(value) ?? value.trim(),
+    };
   }
-  return isRecord(value) ? value : {};
+  if (isRecord(value)) {
+    const path = typeof value.path === 'string' ? extractEntrypointPath(value.path) ?? value.path : undefined;
+    const command = typeof value.command === 'string' ? value.command : undefined;
+    return {
+      path: path ?? extractEntrypointPath(command),
+      command,
+      args: Array.isArray(value.args) ? value.args : undefined,
+      language: typeof value.language === 'string' ? value.language : inferLanguageFromEntrypoint(path ?? command),
+    };
+  }
+  return {};
+}
+
+function extractEntrypointPath(value: unknown) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) return undefined;
+  const token = text.match(/(?:^|\s)(\.?\/?\.bioagent\/tasks\/[^\s"'<>]+\.(?:py|R|r|sh))(?:\s|$)/)?.[1]
+    ?? text.match(/(?:^|\s)([^\s"'<>]+\.(?:py|R|r|sh))(?:\s|$)/)?.[1];
+  return token ? token.replace(/^\.\//, '') : undefined;
+}
+
+function inferLanguageFromEntrypoint(value: unknown): WorkspaceTaskRunResult['spec']['language'] {
+  const text = typeof value === 'string' ? value : '';
+  if (/\.r(?:\s|$)/i.test(text) || /\bRscript\b/.test(text)) return 'r';
+  if (/\.sh(?:\s|$)/i.test(text) || /\b(?:bash|sh)\b/.test(text)) return 'shell';
+  return 'python';
 }
 
 function parseToolPayloadResponse(run: Record<string, unknown>): ToolPayload | undefined {
@@ -1489,11 +1970,29 @@ function parseJsonErrorMessage(text: string) {
 
 function sanitizeAgentServerError(text: string) {
   const firstLine = text.split('\n').map((line) => line.trim()).find(Boolean) || text;
-  return firstLine
+  return redactSecretText(firstLine
     .replace(/request id:\s*[^),\s]+/gi, 'request id: redacted')
     .replace(/url:\s*\S+/gi, 'url: redacted')
-    .replace(/https?:\/\/[^\s|,)]+/gi, 'redacted-url')
+    .replace(/https?:\/\/[^\s|,)]+/gi, 'redacted-url'))
     .slice(0, 320);
+}
+
+function agentServerRequestFailureMessage(operation: 'generation' | 'repair', error: unknown, timeoutMs: number) {
+  const message = errorMessage(error);
+  if (isAbortError(error) || /abort|cancel|timeout/i.test(message)) {
+    return `AgentServer ${operation} request timed out or was cancelled after ${timeoutMs}ms. Retry can resume with this repair-needed attempt in priorAttempts.`;
+  }
+  return `AgentServer ${operation} request failed: ${sanitizeAgentServerError(message)}`;
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+function redactSecretText(text: string) {
+  return text
+    .replace(/(api[-_]?key|token|authorization|secret|password|credential)(["'\s]*[:=]\s*["']?)([^"',\s)]+)/gi, '$1$2[redacted]')
+    .replace(/\b(sk|pk|ak)-[A-Za-z0-9_-]{12,}\b/g, '$1-[redacted]');
 }
 
 function isToolPayload(value: unknown): value is ToolPayload {
@@ -1600,6 +2099,19 @@ function safeWorkspaceRel(path: string) {
   return normalized;
 }
 
+function referencedWorkspaceTaskRel(text: string) {
+  const match = text.match(/(?:^|[`"'\s(])((?:\.?\/)?\.bioagent\/tasks\/[A-Za-z0-9._/-]+\.(?:py|R|r|sh))(?:[`"'\s),]|$)/);
+  if (!match) return undefined;
+  const rel = safeWorkspaceRel(match[1].replace(/^\.\//, ''));
+  return rel.startsWith('.bioagent/tasks/') ? rel : undefined;
+}
+
+function languageForTaskRel(taskRel: string): 'python' | 'r' | 'shell' {
+  if (/\.r$/i.test(taskRel)) return 'r';
+  if (/\.sh$/i.test(taskRel)) return 'shell';
+  return 'python';
+}
+
 function generatedTaskArchiveRel(taskId: string, path: string) {
   const rel = safeWorkspaceRel(path);
   const archivePrefix = '.bioagent/tasks/';
@@ -1611,12 +2123,12 @@ function generatedTaskArchiveRel(taskId: string, path: string) {
   return `${archivePrefix}${taskId}/${archived}`;
 }
 
-function validateAndNormalizePayload(
+async function validateAndNormalizePayload(
   payload: ToolPayload,
   request: GatewayRequest,
   skill: SkillAvailability,
   refs: { taskRel: string; outputRel: string; stdoutRel: string; stderrRel: string; runtimeFingerprint: Record<string, unknown> },
-): ToolPayload {
+) {
   const errors = schemaErrors(payload);
   if (errors.length) {
     return repairNeededPayload(request, skill, `Task output failed schema validation: ${errors.join('; ')}`, refs);
@@ -1648,13 +2160,13 @@ function validateAndNormalizePayload(
       ...attemptPlanRefs(request, skill),
       ...unit,
     } : unit),
-    artifacts: normalizedArtifactsWithPlaceholders(Array.isArray(payload.artifacts) ? payload.artifacts : [], request),
+    artifacts: await normalizedArtifactsWithPlaceholders(Array.isArray(payload.artifacts) ? payload.artifacts : [], request, resolve(request.workspacePath || process.cwd())),
     logs: [{ kind: 'stdout', ref: refs.stdoutRel }, { kind: 'stderr', ref: refs.stderrRel }],
   };
 }
 
-function normalizedArtifactsWithPlaceholders(artifacts: Array<Record<string, unknown>>, request: GatewayRequest) {
-  const out = [...artifacts];
+async function normalizedArtifactsWithPlaceholders(artifacts: Array<Record<string, unknown>>, request: GatewayRequest, workspace: string) {
+  const out = await Promise.all(artifacts.map((artifact) => enrichArtifactDataFromFileRefs(artifact, workspace)));
   const present = new Set(out.map((artifact) => String(artifact.type || artifact.id || '')).filter(Boolean));
   for (const artifactType of expectedArtifactTypesForRequest(request)) {
     if (present.has(artifactType)) continue;
@@ -1679,11 +2191,179 @@ function normalizedArtifactsWithPlaceholders(artifacts: Array<Record<string, unk
   return out;
 }
 
+async function enrichArtifactDataFromFileRefs(artifact: Record<string, unknown>, workspace: string) {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  const currentData = isRecord(artifact.data) ? artifact.data : {};
+  const type = String(artifact.type || artifact.id || '');
+  const data: Record<string, unknown> = { ...currentData };
+
+  if (type === 'omics-differential-expression') {
+    const markerRows = await readCsvRef(metadata.markerRef, workspace);
+    const qcRows = await readCsvRef(metadata.qcRef, workspace);
+    const compositionRows = await readCsvRef(metadata.compositionRef, workspace);
+    const volcanoRows = await readCsvRef(metadata.volcanoRef, workspace);
+    const umapSvgText = await readTextRef(metadata.umapSvgRef, workspace);
+    const heatmapSvgText = await readTextRef(metadata.heatmapSvgRef, workspace);
+    if (markerRows.length) data.markers = markerRows;
+    if (qcRows.length) data.qc = qcRows;
+    if (compositionRows.length) data.composition = compositionRows;
+    if (volcanoRows.length) {
+      data.volcano = volcanoRows;
+      data.points = volcanoRows.map((row, index) => {
+        const negLogP = numberFrom(row.negLogP ?? row.neg_log10_pval ?? row.neg_log10_p ?? row.pValue ?? row.pval_adj);
+        return {
+          gene: String(row.gene || row.label || `Gene${index + 1}`),
+          logFC: numberFrom(row.logFC ?? row.log2FC ?? row.logfoldchange) ?? 0,
+          negLogP,
+          significant: Boolean((negLogP ?? 0) >= 1.3),
+          cluster: String(row.cluster || row.cell_type || ''),
+        };
+      });
+    }
+    if (umapSvgText) data.umapSvgText = umapSvgText;
+    if (heatmapSvgText) data.heatmapSvgText = heatmapSvgText;
+  }
+
+  if (type === 'research-report') {
+    const markdown = await readTextRef(metadata.reportRef, workspace);
+    const realDataPlanText = await readTextRef(metadata.realDataPlanRef, workspace);
+    if (markdown) {
+      data.markdown = markdown;
+      if (!Array.isArray(data.sections)) {
+        data.sections = markdownSections(markdown);
+      }
+    }
+    if (realDataPlanText) {
+      try {
+        data.realDataPlan = JSON.parse(realDataPlanText);
+      } catch {
+        data.realDataPlan = realDataPlanText;
+      }
+    }
+  }
+
+  return Object.keys(data).length ? { ...artifact, data } : artifact;
+}
+
+async function readTextRef(value: unknown, workspace: string) {
+  const path = safeWorkspaceFilePath(value, workspace);
+  if (!path) return undefined;
+  try {
+    return await readFile(path, 'utf8');
+  } catch {
+    const scanpyFallback = scanpyFigureFallbackPath(path, workspace);
+    if (!scanpyFallback) return undefined;
+    try {
+      return await readFile(scanpyFallback, 'utf8');
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+async function readCsvRef(value: unknown, workspace: string) {
+  const text = await readTextRef(value, workspace);
+  return text ? parseCsvRows(text) : [];
+}
+
+function safeWorkspaceFilePath(value: unknown, workspace: string) {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  const candidate = value.trim();
+  const workspaceRoot = resolve(workspace);
+  const absolute = candidate.startsWith('/') ? resolve(candidate) : resolve(workspaceRoot, candidate);
+  return absolute.startsWith(`${workspaceRoot}/`) || absolute === workspaceRoot ? absolute : undefined;
+}
+
+function scanpyFigureFallbackPath(path: string, workspace: string) {
+  if (!path.replaceAll('\\', '/').includes('/.bioagent/task-results/figures/')) return undefined;
+  const basename = path.split('/').pop();
+  if (!basename) return undefined;
+  const normalizedName = basename.replace(/^rank_genes_groups_/, '');
+  const candidate = resolve(workspace, 'figures', normalizedName);
+  return candidate.startsWith(`${resolve(workspace)}/`) ? candidate : undefined;
+}
+
+function parseCsvRows(text: string) {
+  const rows = parseCsv(text).filter((row) => row.some((cell) => cell.trim().length));
+  const header = rows[0]?.map((cell) => cell.trim()) ?? [];
+  if (!header.length) return [];
+  return rows.slice(1).map((row) => Object.fromEntries(header.map((key, index) => [key, coerceCsvValue(row[index] ?? '')])));
+}
+
+function parseCsv(text: string) {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (char === '"' && quoted && next === '"') {
+      cell += '"';
+      index += 1;
+      continue;
+    }
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (char === ',' && !quoted) {
+      row.push(cell);
+      cell = '';
+      continue;
+    }
+    if ((char === '\n' || char === '\r') && !quoted) {
+      if (char === '\r' && next === '\n') index += 1;
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = '';
+      continue;
+    }
+    cell += char;
+  }
+  row.push(cell);
+  rows.push(row);
+  return rows;
+}
+
+function coerceCsvValue(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const numeric = Number(trimmed);
+  return Number.isFinite(numeric) ? numeric : trimmed;
+}
+
+function numberFrom(value: unknown) {
+  const numeric = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function markdownSections(markdown: string) {
+  const sections: Array<{ title: string; content: string }> = [];
+  let current: { title: string; content: string } | undefined;
+  for (const line of markdown.split('\n')) {
+    const heading = line.match(/^##\s+(.+)$/);
+    if (heading) {
+      if (current) sections.push({ ...current, content: current.content.trim() });
+      current = { title: heading[1].trim(), content: '' };
+      continue;
+    }
+    if (current) current.content += `${line}\n`;
+  }
+  if (current) sections.push({ ...current, content: current.content.trim() });
+  return sections;
+}
+
 function expectedArtifactTypesForRequest(request: GatewayRequest) {
-  return uniqueStrings([
+  const inferred = uniqueStrings([
     ...(request.expectedArtifactTypes ?? []),
     ...toStringList(request.uiState?.expectedArtifactTypes),
   ]);
+  if (request.skillDomain === 'knowledge') {
+    return inferred.filter((type) => type === 'knowledge-graph' || type === 'research-report' || type === 'sequence-alignment');
+  }
+  return inferred;
 }
 
 function selectedComponentIdsForRequest(request: Pick<GatewayRequest, 'selectedComponentIds' | 'uiState'>) {
@@ -1749,7 +2429,7 @@ export function composeRuntimeUiManifest(
     ...(overrideComponents.length || selectedComponents.length || promptComponents.length ? [] : incomingComponents),
     ...(overrideComponents.length || selectedComponents.length || promptComponents.length || incomingComponents.length ? [] : DOMAIN_DEFAULT_COMPONENTS[request.skillDomain] ?? []),
     ...(componentNegated(request.prompt, 'execution-unit-table') ? [] : ['execution-unit-table']),
-  ]).slice(0, 6);
+  ]).slice(0, 8);
   const sourceByComponent = new Map(incoming.map((slot) => [String(slot.componentId || ''), slot]));
   return componentIds.map((componentId, index) => {
     const base = sourceByComponent.get(componentId) ?? {};
@@ -1871,6 +2551,10 @@ function toStringList(value: unknown) {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : [];
 }
 
+function toRecordList(value: unknown) {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
 function repairNeededPayload(
   request: GatewayRequest,
   skill: SkillAvailability,
@@ -1929,6 +2613,7 @@ function repairNeededPayload(
 function requiredInputsForRepair(request: GatewayRequest, reason: string) {
   const inputs = ['workspacePath', 'prompt', 'skillDomain'];
   if (/agentserver|base url/i.test(reason)) inputs.push('agentServerBaseUrl');
+  if (/User-side model configuration|llmEndpoint|Model Provider|Model Base URL|Model Name/i.test(reason)) inputs.push('modelProvider', 'modelBaseUrl', 'modelName', 'apiKey');
   if (/credential|token|api key/i.test(reason)) inputs.push('credentials');
   if (/file|path|input/i.test(reason)) inputs.push('input artifacts or workspace files');
   if (request.scenarioPackageRef) inputs.push(`scenarioPackage:${request.scenarioPackageRef.id}@${request.scenarioPackageRef.version}`);
@@ -1936,6 +2621,13 @@ function requiredInputsForRepair(request: GatewayRequest, reason: string) {
 }
 
 function recoverActionsForRepair(reason: string) {
+  if (/User-side model configuration|llmEndpoint|openteam\.json defaults/i.test(reason)) {
+    return [
+      'Open BioAgent settings and fill Model Provider, Model Base URL, Model Name, and API Key.',
+      'Save config.local.json, then retry the same prompt so BioAgent forwards the request-selected llmEndpoint.',
+      'Do not rely on AgentServer openteam.json defaults for generated workspace tasks.',
+    ];
+  }
   if (/AgentServer|base URL|fetch|ECONNREFUSED/i.test(reason)) {
     return [
       'Start or configure AgentServer, then retry the same prompt.',
@@ -1955,6 +2647,7 @@ function recoverActionsForRepair(reason: string) {
 }
 
 function nextStepForRepair(reason: string) {
+  if (/User-side model configuration|llmEndpoint|openteam\.json defaults/i.test(reason)) return 'Configure the user-side model endpoint in BioAgent settings, then retry the same prompt.';
   if (/AgentServer|base URL|fetch|ECONNREFUSED/i.test(reason)) return 'Start AgentServer or choose a local skill/runtime, then retry.';
   if (/schema|payload|parsed|validation/i.test(reason)) return 'Repair the task output contract and rerun validation.';
   return 'Review diagnostics, provide missing inputs, and rerun.';

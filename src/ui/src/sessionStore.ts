@@ -12,6 +12,7 @@ import {
   type SessionVersionRecord,
 } from './domain';
 import { isTimelineEventRecord } from './timelineSchema';
+import { normalizeWorkspaceRootPath } from './config';
 
 const STORAGE_KEY = 'bioagent.workspace.v2';
 const scenarioIds: ScenarioId[] = scenarios.map((scenario) => scenario.id);
@@ -120,7 +121,7 @@ export function parseWorkspaceState(value: unknown): BioAgentWorkspaceState {
   const raw = value as Partial<BioAgentWorkspaceState>;
   return {
     schemaVersion: 2,
-    workspacePath: typeof raw.workspacePath === 'string' ? raw.workspacePath : '',
+    workspacePath: typeof raw.workspacePath === 'string' ? normalizeWorkspaceRootPath(raw.workspacePath) : '',
     sessionsByScenario: preserveWorkspaceSessions(raw.sessionsByScenario, scenarioIds.reduce((acc, scenarioId) => {
       acc[scenarioId] = migrateSession(raw.sessionsByScenario?.[scenarioId], scenarioId);
       return acc;
@@ -173,7 +174,83 @@ function isAlignmentContract(value: unknown): value is AlignmentContractRecord {
 
 export function saveWorkspaceState(state: BioAgentWorkspaceState) {
   if (typeof window === 'undefined') return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    return;
+  } catch {
+    // Very long repair-loop sessions can fail either at stringify time or at localStorage write time.
+    // Compact and retry so persistence never unmounts the workbench.
+  }
+  const compact = compactWorkspaceStateForStorage(state);
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(compact));
+  } catch {
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(compactWorkspaceStateForStorage(compact, 'minimal')));
+    } catch {
+      // Persistence must not take down the workbench. The workspace writer remains the durable audit path.
+    }
+  }
+}
+
+export function compactWorkspaceStateForStorage(
+  state: BioAgentWorkspaceState,
+  mode: 'normal' | 'minimal' = 'normal',
+): BioAgentWorkspaceState {
+  const limits = mode === 'minimal'
+    ? { messages: 4, runs: 3, records: 3, versions: 1, archived: 2, timeline: 10, reusable: 5 }
+    : { messages: 16, runs: 8, records: 8, versions: 3, archived: 6, timeline: 40, reusable: 20 };
+  return {
+    ...state,
+    sessionsByScenario: Object.fromEntries(Object.entries(state.sessionsByScenario).map(([id, session]) => [
+      id,
+      compactSessionForStorage(session, limits),
+    ])) as Record<ScenarioInstanceId, BioAgentSession>,
+    archivedSessions: (state.archivedSessions ?? []).slice(0, limits.archived).map((session) => compactSessionForStorage(session, limits)),
+    timelineEvents: state.timelineEvents?.slice(0, limits.timeline),
+    reusableTaskCandidates: state.reusableTaskCandidates?.slice(0, limits.reusable),
+  };
+}
+
+function compactSessionForStorage(
+  session: BioAgentSession,
+  limits: { messages: number; runs: number; records: number; versions: number },
+): BioAgentSession {
+  return {
+    ...session,
+    messages: session.messages.slice(-limits.messages).map((message) => ({
+      ...message,
+      content: message.content.length > 2400 ? `${message.content.slice(0, 2400)}...` : message.content,
+    })),
+    runs: session.runs.slice(-limits.runs).map((run) => ({
+      ...run,
+      prompt: run.prompt.length > 1200 ? `${run.prompt.slice(0, 1200)}...` : run.prompt,
+      response: run.response.length > 2400 ? `${run.response.slice(0, 2400)}...` : run.response,
+      raw: compactArtifactData(run.raw),
+    })),
+    uiManifest: session.uiManifest.slice(0, limits.records),
+    claims: session.claims.slice(0, limits.records),
+    executionUnits: session.executionUnits.slice(0, limits.records),
+    artifacts: session.artifacts.slice(0, limits.records).map((artifact) => ({
+      ...artifact,
+      data: compactArtifactData(artifact.data),
+    })),
+    notebook: session.notebook.slice(0, limits.records),
+    versions: session.versions.slice(0, limits.versions),
+  };
+}
+
+function compactArtifactData(data: unknown) {
+  if (typeof data === 'string') return data.length > 4000 ? `${data.slice(0, 4000)}...` : data;
+  if (Array.isArray(data)) return data.slice(0, 20);
+  if (typeof data !== 'object' || data === null) return data;
+  const compact: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data).slice(0, 24)) {
+    if (typeof value === 'string') compact[key] = value.length > 4000 ? `${value.slice(0, 4000)}...` : value;
+    else if (Array.isArray(value)) compact[key] = value.slice(0, 20);
+    else compact[key] = value;
+  }
+  return compact;
 }
 
 export function shouldUsePersistedWorkspaceState(

@@ -4,7 +4,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { appendTaskAttempt } from '../../src/runtime/task-attempt-history';
+import { appendTaskAttempt, readRecentTaskAttempts } from '../../src/runtime/task-attempt-history';
 import type { TaskAttemptRecord } from '../../src/runtime/runtime-types';
 
 const workspace = await mkdtemp(join(tmpdir(), 'bioagent-task-attempts-'));
@@ -43,6 +43,24 @@ try {
     createdAt: '2026-04-25T00:00:01.000Z',
   };
   await appendTaskAttempt(workspace, record);
+  await appendTaskAttempt(workspace, {
+    ...record,
+    id: 'run-literature-other-package',
+    prompt: 'unrelated old literature task',
+    scenarioPackageRef: { id: 'other-literature-package', version: '1.0.0', source: 'workspace' },
+    createdAt: '2026-04-25T00:00:02.000Z',
+  });
+  const scopedAttempts = await readRecentTaskAttempts(workspace, 'literature', 8, {
+    scenarioPackageId: 'literature-evidence-review',
+    prompt: 'CRISPR base editing review continuation',
+  });
+  assert.equal(scopedAttempts.length, 1);
+  assert.equal(scopedAttempts[0].id, 'run-literature-1');
+  const newPackageAttempts = await readRecentTaskAttempts(workspace, 'literature', 8, {
+    scenarioPackageId: 'new-literature-package',
+    prompt: 'CRISPR base editing review continuation',
+  });
+  assert.equal(newPackageAttempts.length, 0);
   await waitForHealth(port);
   const baseUrl = `http://127.0.0.1:${port}`;
 

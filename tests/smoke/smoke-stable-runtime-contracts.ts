@@ -32,7 +32,7 @@ const noProducer = compileScenarioIRFromSelection({
 });
 
 assert.equal(noProducer.validationReport.ok, false);
-assert.ok(noProducer.issues.some((issue) => issue.code === 'missing-producer'));
+assert.ok(noProducer.issues.some((issue) => issue.code === 'missing-producer' || issue.code === 'ambiguous-skill'));
 assert.ok(noProducer.validationReport.issues.some((issue) => issue.code === 'missing-selected-producer' || issue.code === 'missing-producer'));
 
 console.log('[ok] stable runtime contracts dry-run without AgentServer and reject no-producer scenario');

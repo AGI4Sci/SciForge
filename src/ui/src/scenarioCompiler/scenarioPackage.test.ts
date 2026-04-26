@@ -145,6 +145,35 @@ describe('scenario compiler package model', () => {
     assert.equal(result.validationReport.ok, true);
   });
 
+  it('classifies complex single-cell label transfer as generated omics work', () => {
+    const description = '创建跨数据集整合和 label transfer 场景，支持 Seurat anchors、batch mixing、reference mapping';
+    const draft = compileScenarioDraft(description);
+    const recommendation = recommendScenarioElements(description);
+
+    assert.equal(draft.skillDomain, 'omics');
+    assert.equal(draft.baseScenarioId, 'omics-differential-exploration');
+    assert.deepEqual(recommendation.selectedSkillIds, ['agentserver.generate.omics']);
+    assert.ok(recommendation.selectedArtifactTypes.includes('omics-differential-expression'));
+    assert.ok(recommendation.selectedArtifactTypes.includes('research-report'));
+    assert.ok(recommendation.selectedComponentIds.includes('report-viewer'));
+    assert.ok(recommendation.selectedComponentIds.includes('execution-unit-table'));
+  });
+
+  it('classifies knowledge graph requests with evidence matrix as generated knowledge work', () => {
+    const description = '构建 KRAS G12D、SHP2、EGFR、MEK、ERK、adagrasib、sotorasib 的知识图谱，要求实体归一化、关系抽取、证据引用、冲突关系、网络可视化、evidence matrix 和可复现报告。';
+    const draft = compileScenarioDraft(description);
+    const recommendation = recommendScenarioElements(description);
+
+    assert.equal(draft.skillDomain, 'knowledge');
+    assert.equal(draft.baseScenarioId, 'biomedical-knowledge-graph');
+    assert.deepEqual(recommendation.selectedSkillIds, ['agentserver.generate.knowledge']);
+    assert.ok(recommendation.selectedArtifactTypes.includes('knowledge-graph'));
+    assert.ok(recommendation.selectedArtifactTypes.includes('research-report'));
+    assert.equal(recommendation.selectedArtifactTypes.includes('omics-differential-expression'), false);
+    assert.ok(recommendation.selectedComponentIds.includes('network-graph'));
+    assert.ok(recommendation.selectedComponentIds.includes('evidence-matrix'));
+  });
+
   it('does not infer paper-list just because a structure scenario asks for evidence matrix', () => {
     const description = '全新场景：根据 PDB 1A3N 获取蛋白结构，展示分子结构查看器、链/残基摘要、证据矩阵和可复现 ExecutionUnit。';
     const recommendation = recommendScenarioElements(description);

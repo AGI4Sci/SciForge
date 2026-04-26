@@ -2,6 +2,7 @@ import type { BioAgentConfig, BioAgentWorkspaceState, RuntimeExecutionUnit } fro
 import type { ScenarioLibraryState } from '../scenarioCompiler/scenarioLibrary';
 import type { ScenarioPackage } from '../scenarioCompiler/scenarioPackage';
 import { parseWorkspaceState } from '../sessionStore';
+import { normalizeWorkspaceRootPath } from '../config';
 import { BioAgentClientError, reasonFromResponseText, recoverActionsForService } from './clientError';
 
 export interface WorkspaceEntry {
@@ -42,6 +43,55 @@ export interface WorkspaceTaskAttemptRecord {
   createdAt: string;
 }
 
+export interface SkillPromotionProposalRecord {
+  id: string;
+  status: 'draft' | 'needs-user-confirmation' | 'accepted' | 'rejected' | 'archived';
+  createdAt: string;
+  statusUpdatedAt?: string;
+  statusReason?: string;
+  source: {
+    workspacePath: string;
+    taskCodeRef: string;
+    inputRef?: string;
+    outputRef?: string;
+    stdoutRef?: string;
+    stderrRef?: string;
+    successfulExecutionUnitRefs: string[];
+  };
+  proposedManifest: {
+    id: string;
+    description: string;
+    skillDomains: string[];
+    validationSmoke?: Record<string, unknown>;
+    promotionHistory?: Array<Record<string, unknown>>;
+  };
+  validationPlan: {
+    smokePrompts: string[];
+    expectedArtifactTypes: string[];
+    requiredEnvironment: Record<string, unknown>;
+    rerunAfterAccept?: Record<string, unknown>;
+  };
+  securityGate?: {
+    passed: boolean;
+    checks: Record<string, boolean>;
+    findings: string[];
+  };
+  reviewChecklist: Record<string, boolean>;
+}
+
+export interface SkillPromotionValidationResult {
+  passed: boolean;
+  skillId: string;
+  exitCode: number;
+  outputRef: string;
+  stdoutRef: string;
+  stderrRef: string;
+  schemaErrors: string[];
+  expectedArtifactTypes: string[];
+  artifactTypes: string[];
+  missingArtifactTypes: string[];
+}
+
 export async function loadFileBackedBioAgentConfig(config: BioAgentConfig): Promise<BioAgentConfig | undefined> {
   const response = await fetchWorkspace(config, 'load config.local.json', `${config.workspaceWriterBaseUrl}/api/bioagent/config`);
   if (response.status === 404) return undefined;
@@ -62,15 +112,17 @@ export async function saveFileBackedBioAgentConfig(config: BioAgentConfig): Prom
 }
 
 export async function persistWorkspaceState(state: BioAgentWorkspaceState, config: BioAgentConfig): Promise<void> {
-  if (!state.workspacePath.trim()) return;
-  const operation = `snapshot workspace ${state.workspacePath}`;
+  const workspacePath = normalizeWorkspaceRootPath(state.workspacePath);
+  if (!workspacePath) return;
+  const normalizedState = { ...state, workspacePath };
+  const operation = `snapshot workspace ${workspacePath}`;
   const response = await fetchWorkspace(config, operation, `${config.workspaceWriterBaseUrl}/api/bioagent/workspace/snapshot`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      workspacePath: state.workspacePath,
-      state,
-      config,
+      workspacePath,
+      state: normalizedState,
+      config: { ...config, workspacePath: normalizeWorkspaceRootPath(config.workspacePath) },
     }),
   });
   if (!response.ok) {
@@ -108,7 +160,9 @@ async function fetchPersistedWorkspaceState(path: string, config: BioAgentConfig
   const json = await response.json() as { workspacePath?: unknown; state?: unknown };
   if (!json.state) return undefined;
   const state = parseWorkspaceState(json.state);
-  return typeof json.workspacePath === 'string' ? { ...state, workspacePath: json.workspacePath } : state;
+  return typeof json.workspacePath === 'string'
+    ? { ...state, workspacePath: normalizeWorkspaceRootPath(json.workspacePath) }
+    : state;
 }
 
 export async function listWorkspace(path: string, config: BioAgentConfig): Promise<WorkspaceEntry[]> {
@@ -213,6 +267,53 @@ export async function loadWorkspaceTaskAttempts(
   if (!response.ok) throw new Error(await workspaceResponseError(response, `Load task attempts failed: HTTP ${response.status}`));
   const json = await response.json() as { attempts?: WorkspaceTaskAttemptRecord[] };
   return Array.isArray(json.attempts) ? json.attempts : [];
+}
+
+export async function listSkillPromotionProposals(
+  config: BioAgentConfig,
+  workspacePath = config.workspacePath,
+): Promise<SkillPromotionProposalRecord[]> {
+  if (!workspacePath.trim()) return [];
+  const url = new URL(`${config.workspaceWriterBaseUrl}/api/bioagent/skill-proposals/list`);
+  url.searchParams.set('workspacePath', workspacePath);
+  const response = await fetchWorkspace(config, `list skill proposals ${workspacePath}`, url);
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `List skill proposals failed: HTTP ${response.status}`));
+  const json = await response.json() as { proposals?: SkillPromotionProposalRecord[] };
+  return Array.isArray(json.proposals) ? json.proposals : [];
+}
+
+export async function acceptSkillPromotionProposal(config: BioAgentConfig, id: string, workspacePath = config.workspacePath): Promise<SkillPromotionProposalRecord['proposedManifest']> {
+  const json = await mutateSkillPromotionProposal(config, 'accept', { workspacePath, id }) as { manifest?: SkillPromotionProposalRecord['proposedManifest'] };
+  if (!json.manifest) throw new Error(`Accept skill proposal ${id} returned no manifest.`);
+  return json.manifest;
+}
+
+export async function rejectSkillPromotionProposal(config: BioAgentConfig, id: string, reason?: string, workspacePath = config.workspacePath): Promise<SkillPromotionProposalRecord> {
+  const json = await mutateSkillPromotionProposal(config, 'reject', { workspacePath, id, reason }) as { proposal?: SkillPromotionProposalRecord };
+  if (!json.proposal) throw new Error(`Reject skill proposal ${id} returned no proposal.`);
+  return json.proposal;
+}
+
+export async function archiveSkillPromotionProposal(config: BioAgentConfig, id: string, reason?: string, workspacePath = config.workspacePath): Promise<SkillPromotionProposalRecord> {
+  const json = await mutateSkillPromotionProposal(config, 'archive', { workspacePath, id, reason }) as { proposal?: SkillPromotionProposalRecord };
+  if (!json.proposal) throw new Error(`Archive skill proposal ${id} returned no proposal.`);
+  return json.proposal;
+}
+
+export async function validateAcceptedSkillPromotionProposal(config: BioAgentConfig, skillId: string, workspacePath = config.workspacePath): Promise<SkillPromotionValidationResult> {
+  const json = await mutateSkillPromotionProposal(config, 'validate', { workspacePath, skillId }) as { validation?: SkillPromotionValidationResult };
+  if (!json.validation) throw new Error(`Validate evolved skill ${skillId} returned no validation result.`);
+  return json.validation;
+}
+
+async function mutateSkillPromotionProposal(config: BioAgentConfig, action: 'accept' | 'reject' | 'archive' | 'validate', body: Record<string, unknown>) {
+  const response = await fetchWorkspace(config, `${action} skill proposal`, `${config.workspaceWriterBaseUrl}/api/bioagent/skill-proposals/${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `${action} skill proposal failed: HTTP ${response.status}`));
+  return response.json();
 }
 
 async function writeWorkspaceScenario(config: BioAgentConfig, action: 'save' | 'publish' | 'archive' | 'restore', body: Record<string, unknown>) {

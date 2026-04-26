@@ -57,6 +57,7 @@ import { timeline } from './demoData';
 import { sendAgentMessageStream } from './api/agentClient';
 import { sendBioAgentToolMessage } from './api/bioagentToolsClient';
 import { buildExecutionBundle, evaluateExecutionBundleExport } from './exportPolicy';
+import { modelHealth, type RuntimeHealthItem, type RuntimeHealthStatus } from './runtimeHealth';
 import {
   makeId,
   nowIso,
@@ -80,8 +81,29 @@ import {
 } from './domain';
 import type { VolcanoPoint } from './charts';
 import { createSession, loadWorkspaceState, resetSession, saveWorkspaceState, sessionActivityScore, shouldUsePersistedWorkspaceState, versionSession } from './sessionStore';
-import { loadBioAgentConfig, saveBioAgentConfig, updateConfig } from './config';
-import { archiveWorkspaceScenario, listWorkspace, loadFileBackedBioAgentConfig, loadPersistedWorkspaceState, loadScenarioLibrary, loadWorkspaceScenario, mutateWorkspaceFile, persistWorkspaceState, publishWorkspaceScenario, restoreWorkspaceScenario, saveFileBackedBioAgentConfig, saveWorkspaceScenario, type WorkspaceEntry } from './api/workspaceClient';
+import { loadBioAgentConfig, normalizeWorkspaceRootPath, saveBioAgentConfig, updateConfig } from './config';
+import {
+  acceptSkillPromotionProposal,
+  archiveSkillPromotionProposal,
+  archiveWorkspaceScenario,
+  listSkillPromotionProposals,
+  listWorkspace,
+  loadFileBackedBioAgentConfig,
+  loadPersistedWorkspaceState,
+  loadScenarioLibrary,
+  loadWorkspaceScenario,
+  mutateWorkspaceFile,
+  persistWorkspaceState,
+  publishWorkspaceScenario,
+  rejectSkillPromotionProposal,
+  restoreWorkspaceScenario,
+  saveFileBackedBioAgentConfig,
+  saveWorkspaceScenario,
+  validateAcceptedSkillPromotionProposal,
+  type SkillPromotionProposalRecord,
+  type SkillPromotionValidationResult,
+  type WorkspaceEntry,
+} from './api/workspaceClient';
 import { HeatmapViewer, MoleculeViewer, NetworkGraph, UmapViewer } from './visualizations';
 
 const chartTheme = {
@@ -123,11 +145,12 @@ function isBuiltInScenarioId(value: string): value is ScenarioId {
 }
 
 function builtInScenarioIdForInstance(scenarioId: ScenarioInstanceId, scenarioOverride?: ScenarioRuntimeOverride): ScenarioId {
-  if (typeof scenarioId === 'string' && isBuiltInScenarioId(scenarioId)) return scenarioId;
   const skillDomain = scenarioOverride?.skillDomain;
   if (skillDomain === 'structure') return 'structure-exploration';
   if (skillDomain === 'omics') return 'omics-differential-exploration';
   if (skillDomain === 'knowledge') return 'biomedical-knowledge-graph';
+  if (skillDomain === 'literature') return 'literature-evidence-review';
+  if (typeof scenarioId === 'string' && isBuiltInScenarioId(scenarioId)) return scenarioId;
   return 'literature-evidence-review';
 }
 
@@ -194,16 +217,6 @@ function ChartLoadingFallback({ label }: { label: string }) {
   );
 }
 
-type RuntimeHealthStatus = 'checking' | 'online' | 'offline' | 'optional' | 'not-configured';
-
-interface RuntimeHealthItem {
-  id: 'ui' | 'workspace' | 'agentserver' | 'model' | 'library';
-  label: string;
-  status: RuntimeHealthStatus;
-  detail: string;
-  recoverAction?: string;
-}
-
 function useRuntimeHealth(config: BioAgentConfig, libraryCount?: number) {
   const [items, setItems] = useState<RuntimeHealthItem[]>(() => buildInitialHealth(config, libraryCount));
 
@@ -237,9 +250,25 @@ function useRuntimeHealth(config: BioAgentConfig, libraryCount?: number) {
     return () => {
       cancelled = true;
     };
-  }, [config.agentServerBaseUrl, config.workspaceWriterBaseUrl, config.modelProvider, config.modelName, config.apiKey, libraryCount]);
+  }, [
+    config.agentServerBaseUrl,
+    config.workspaceWriterBaseUrl,
+    config.modelProvider,
+    config.modelBaseUrl,
+    config.modelName,
+    config.apiKey,
+    libraryCount,
+  ]);
 
   return items;
+}
+
+function hasUsableModelConfig(config: BioAgentConfig) {
+  const provider = config.modelProvider.trim() || 'native';
+  if (provider === 'native') {
+    return Boolean(config.modelName.trim() || config.modelBaseUrl.trim() || config.apiKey.trim());
+  }
+  return Boolean(config.modelBaseUrl.trim() && config.apiKey.trim());
 }
 
 function buildInitialHealth(config: BioAgentConfig, libraryCount?: number): RuntimeHealthItem[] {
@@ -255,18 +284,6 @@ function buildInitialHealth(config: BioAgentConfig, libraryCount?: number): Runt
       detail: libraryCount && libraryCount > 0 ? `${libraryCount} packages in workspace` : '可先导入官方 package 或编译新场景',
     },
   ];
-}
-
-function modelHealth(config: BioAgentConfig): RuntimeHealthItem {
-  const provider = config.modelProvider.trim() || 'native';
-  if (provider === 'native') return { id: 'model', label: 'Model Backend', status: 'online', detail: 'native backend default' };
-  if (!config.modelBaseUrl.trim()) {
-    return { id: 'model', label: 'Model Backend', status: 'not-configured', detail: provider, recoverAction: '填写 Model Base URL 或切回 native' };
-  }
-  if (!config.apiKey.trim()) {
-    return { id: 'model', label: 'Model Backend', status: 'not-configured', detail: provider, recoverAction: '填写 API Key 或使用 native backend' };
-  }
-  return { id: 'model', label: 'Model Backend', status: 'online', detail: `${provider}${config.modelName.trim() ? ` · ${config.modelName.trim()}` : ''}` };
 }
 
 async function probeUrl(url: string) {
@@ -440,7 +457,10 @@ function toRecordList(value: unknown): Record<string, unknown>[] {
 
 function findArtifact(session: BioAgentSession, ref?: string): RuntimeArtifact | undefined {
   if (!ref) return undefined;
-  return session.artifacts.find((artifact) => artifact.id === ref || artifact.dataRef === ref || artifact.type === ref);
+  return session.artifacts.find((artifact) => artifact.id === ref
+    || artifact.dataRef === ref
+    || artifact.type === ref
+    || Object.values(artifact.metadata ?? {}).some((value) => value === ref));
 }
 
 function exportJsonFile(name: string, payload: unknown) {
@@ -587,7 +607,12 @@ function executionUnitForArtifact(session: BioAgentSession, artifact?: RuntimeAr
   if (!artifact) return undefined;
   return session.executionUnits.find((unit) => {
     const refs = [...(unit.artifacts ?? []), ...(unit.outputArtifacts ?? [])];
-    return refs.includes(artifact.id) || refs.includes(artifact.type) || (artifact.dataRef ? refs.includes(artifact.dataRef) : false);
+    const metadataRefs = Object.values(artifact.metadata ?? {}).filter((value): value is string => typeof value === 'string');
+    const outputRef = asString(unit.outputRef);
+    return refs.includes(artifact.id)
+      || refs.includes(artifact.type)
+      || (artifact.dataRef ? refs.includes(artifact.dataRef) : false)
+      || Boolean(outputRef && metadataRefs.some((ref) => ref === outputRef || ref.startsWith(`${outputRef.replace(/\/+$/, '')}/`)));
   });
 }
 
@@ -646,6 +671,19 @@ function arrayPayload(slot: UIManifestSlot, key: string, artifact?: RuntimeArtif
 
 function asStringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : [];
+}
+
+function edgeSourcesLabel(value: unknown): string | undefined {
+  const sources = asStringList(value);
+  if (sources.length) return sources.join(', ');
+  const recordSources = toRecordList(value)
+    .map((source) => asString(source.id) || asString(source.name) || asString(source.type))
+    .filter(Boolean);
+  if (recordSources.length) return recordSources.slice(0, 3).join(', ');
+  if (isRecord(value)) {
+    return [value.database, value.source, value.id].map(asString).filter(Boolean).join(', ') || undefined;
+  }
+  return asString(value);
 }
 
 function asNumberList(value: unknown): number[] {
@@ -1164,7 +1202,7 @@ function SettingsDialog({
           <label>
             <span>Model Provider</span>
             <select value={config.modelProvider} onChange={(event) => onChange({ modelProvider: event.target.value })}>
-              <option value="native">native backend default</option>
+              <option value="native">native user endpoint</option>
               <option value="openai-compatible">openai-compatible</option>
               <option value="openrouter">openrouter</option>
               <option value="qwen">qwen</option>
@@ -1201,7 +1239,7 @@ function SettingsDialog({
             已自动保存到 config.local.json。下一次 AgentServer 请求会使用当前模型：
             {' '}
             <strong>{config.modelProvider || 'native'}</strong>
-            {config.modelName.trim() ? <code>{config.modelName.trim()}</code> : <em>backend default</em>}
+            {config.modelName.trim() ? <code>{config.modelName.trim()}</code> : <em>user model not set</em>}
           </span>
           <ActionButton icon={RefreshCw} variant="secondary" onClick={() => window.location.reload()}>重新检测连接</ActionButton>
         </div>
@@ -1360,6 +1398,9 @@ function Dashboard({
   const [exportPreviewPackage, setExportPreviewPackage] = useState<ScenarioPackage | undefined>();
   const [expandedLibraryItemId, setExpandedLibraryItemId] = useState<string | undefined>();
   const [libraryDetailPackages, setLibraryDetailPackages] = useState<Record<string, ScenarioPackage>>({});
+  const [skillProposals, setSkillProposals] = useState<SkillPromotionProposalRecord[]>([]);
+  const [skillProposalStatus, setSkillProposalStatus] = useState('');
+  const [skillProposalValidations, setSkillProposalValidations] = useState<Record<string, SkillPromotionValidationResult>>({});
   const packageImportInputRef = useRef<HTMLInputElement>(null);
   const importedPackageIds = useMemo(() => new Set(libraryItems.map((item) => item.id)), [libraryItems]);
   const officialLibraryItems = useMemo<DashboardLibraryItem[]>(() => officialScenarioPackages.map(({ scenario, package: pkg }) => scenarioPackageToLibraryDisplayItem(pkg, {
@@ -1400,6 +1441,10 @@ function Dashboard({
       .catch((error) => {
         if (!cancelled) setLibraryStatus(error instanceof Error ? error.message : String(error));
       });
+    refreshSkillProposals()
+      .catch((error) => {
+        if (!cancelled) setSkillProposalStatus(error instanceof Error ? error.message : String(error));
+      });
     return () => {
       cancelled = true;
     };
@@ -1408,6 +1453,37 @@ function Dashboard({
   async function refreshScenarioLibrary() {
     const library = await loadScenarioLibrary(config);
     setLibraryItems(library?.items ?? []);
+  }
+
+  async function refreshSkillProposals() {
+    setSkillProposals(await listSkillPromotionProposals(config));
+  }
+
+  async function acceptSkillProposalFromDashboard(id: string, skillId: string) {
+    const manifest = await acceptSkillPromotionProposal(config, id);
+    setSkillProposalStatus(`已接受 ${id}，安装到 .bioagent/evolved-skills/${manifest.id}。`);
+    await refreshSkillProposals();
+    const validation = await validateAcceptedSkillPromotionProposal(config, manifest.id || skillId);
+    setSkillProposalValidations((current) => ({ ...current, [manifest.id || skillId]: validation }));
+    setSkillProposalStatus(validation.passed ? `已接受并通过 validation smoke：${manifest.id || skillId}` : `已接受，但 validation smoke 未通过：${manifest.id || skillId}`);
+  }
+
+  async function validateSkillProposalFromDashboard(skillId: string) {
+    const validation = await validateAcceptedSkillPromotionProposal(config, skillId);
+    setSkillProposalValidations((current) => ({ ...current, [skillId]: validation }));
+    setSkillProposalStatus(validation.passed ? `Validation smoke 通过：${skillId}` : `Validation smoke 未通过：${skillId}`);
+  }
+
+  async function rejectSkillProposalFromDashboard(id: string) {
+    await rejectSkillPromotionProposal(config, id, 'Rejected from BioAgent dashboard review.');
+    await refreshSkillProposals();
+    setSkillProposalStatus(`已拒绝 ${id}，不会进入 evolved skills。`);
+  }
+
+  async function archiveSkillProposalFromDashboard(id: string) {
+    await archiveSkillPromotionProposal(config, id, 'Archived from BioAgent dashboard review.');
+    await refreshSkillProposals();
+    setSkillProposalStatus(`已归档 ${id}。`);
   }
 
   function openScenarioPackage(pkg: ScenarioPackage) {
@@ -1822,6 +1898,16 @@ function Dashboard({
           </div>
         </div>
         {!filteredCombinedLibraryItems.length ? <p className="empty-state">没有匹配的 package。可以清空搜索、切换过滤条件，或导入新的 package JSON。</p> : null}
+        <SkillProposalPanel
+          proposals={skillProposals}
+          status={skillProposalStatus}
+          validations={skillProposalValidations}
+          onRefresh={() => void refreshSkillProposals().catch((error) => setSkillProposalStatus(error instanceof Error ? error.message : String(error)))}
+          onAccept={(proposal) => void acceptSkillProposalFromDashboard(proposal.id, proposal.proposedManifest.id).catch((error) => setSkillProposalStatus(error instanceof Error ? error.message : String(error)))}
+          onValidate={(proposal) => void validateSkillProposalFromDashboard(proposal.proposedManifest.id).catch((error) => setSkillProposalStatus(error instanceof Error ? error.message : String(error)))}
+          onReject={(proposal) => void rejectSkillProposalFromDashboard(proposal.id).catch((error) => setSkillProposalStatus(error instanceof Error ? error.message : String(error)))}
+          onArchive={(proposal) => void archiveSkillProposalFromDashboard(proposal.id).catch((error) => setSkillProposalStatus(error instanceof Error ? error.message : String(error)))}
+        />
         {workspaceState.reusableTaskCandidates?.length ? (
           <div className="candidate-panel" aria-label="Reusable candidate 候选区">
             <SectionHeader title="Reusable Task Candidates" subtitle="从 Workbench 标记出来、可进入 Element Registry 的 skill/task 候选" />
@@ -1842,6 +1928,76 @@ function Dashboard({
       </section>
     </main>
   );
+}
+
+function SkillProposalPanel({
+  proposals,
+  status,
+  validations,
+  onRefresh,
+  onAccept,
+  onValidate,
+  onReject,
+  onArchive,
+}: {
+  proposals: SkillPromotionProposalRecord[];
+  status: string;
+  validations: Record<string, SkillPromotionValidationResult>;
+  onRefresh: () => void;
+  onAccept: (proposal: SkillPromotionProposalRecord) => void;
+  onValidate: (proposal: SkillPromotionProposalRecord) => void;
+  onReject: (proposal: SkillPromotionProposalRecord) => void;
+  onArchive: (proposal: SkillPromotionProposalRecord) => void;
+}) {
+  const visible = proposals.filter((proposal) => proposal.status !== 'archived').slice(0, 8);
+  if (!visible.length && !status) return null;
+  return (
+    <div className="candidate-panel" aria-label="Skill promotion proposals">
+      <SectionHeader title="Skill Proposals" subtitle=".bioagent/skill-proposals → .bioagent/evolved-skills" action={<ActionButton icon={RefreshCw} variant="secondary" onClick={onRefresh}>刷新</ActionButton>} />
+      {status ? <p className="scenario-note">{status}</p> : null}
+      <div className="candidate-list">
+        {visible.map((proposal) => {
+          const validation = validations[proposal.proposedManifest.id];
+          const acceptDisabled = proposal.status === 'accepted' || proposal.status === 'rejected' || proposal.securityGate?.passed === false;
+          return (
+            <div className="candidate-row skill-proposal-row" key={proposal.id}>
+              <Badge variant={proposalStatusBadge(proposal)}>{proposal.status}</Badge>
+              <span>
+                <strong>{proposal.id}</strong>
+                <small>{proposal.proposedManifest.id}</small>
+              </span>
+              <div className="skill-proposal-meta">
+                <code>{proposal.source.taskCodeRef}</code>
+                <small>
+                  input {proposal.source.inputRef ?? 'none'} · output {proposal.source.outputRef ?? 'none'} · logs {[proposal.source.stdoutRef, proposal.source.stderrRef].filter(Boolean).join(', ') || 'none'}
+                </small>
+                <div className="tool-chips compact">
+                  {(proposal.validationPlan.expectedArtifactTypes ?? []).slice(0, 4).map((type) => <code key={type}>{type}</code>)}
+                  <Badge variant={proposal.securityGate?.passed === false ? 'danger' : 'success'}>{proposal.securityGate?.passed === false ? 'gate fail' : 'gate pass'}</Badge>
+                  {validation ? <Badge variant={validation.passed ? 'success' : 'danger'}>{validation.passed ? 'smoke pass' : 'smoke fail'}</Badge> : null}
+                </div>
+                {proposal.securityGate?.findings.length ? <small>{proposal.securityGate.findings.join('; ')}</small> : null}
+              </div>
+              <div className="scenario-builder-actions compact-actions">
+                <IconButton icon={Check} label="Accept proposal" onClick={acceptDisabled ? undefined : () => onAccept(proposal)} />
+                <IconButton icon={RefreshCw} label="Run validation smoke" onClick={proposal.status === 'accepted' ? () => onValidate(proposal) : undefined} />
+                <IconButton icon={AlertTriangle} label="Reject proposal" onClick={proposal.status === 'accepted' ? undefined : () => onReject(proposal)} />
+                <IconButton icon={Trash2} label="Archive proposal" onClick={() => onArchive(proposal)} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function proposalStatusBadge(proposal: SkillPromotionProposalRecord): 'info' | 'success' | 'warning' | 'danger' | 'muted' {
+  if (proposal.status === 'accepted') return 'success';
+  if (proposal.status === 'rejected') return 'danger';
+  if (proposal.status === 'archived') return 'muted';
+  if (proposal.securityGate?.passed === false) return 'danger';
+  return 'warning';
 }
 
 type PackageRunStats = {
@@ -1971,6 +2127,8 @@ function ChatPanel({
   const skillPlanRef = scenarioOverride?.skillPlanRef ?? `skill-plan.${baseScenarioId}.default`;
   const uiPlanRef = scenarioOverride?.uiPlanRef ?? `ui-plan.${baseScenarioId}.default`;
   const activeRun = activeRunId ? session.runs.find((run) => run.id === activeRunId) : undefined;
+  const visibleMessageStart = Math.max(0, messages.length - 24);
+  const visibleMessages = messages.slice(visibleMessageStart);
 
   useEffect(() => {
     activeSessionRef.current = session;
@@ -2058,6 +2216,8 @@ function ChatPanel({
         roleView: role,
         messages: optimisticSession.messages,
         artifacts: optimisticSession.artifacts,
+        executionUnits: optimisticSession.executionUnits,
+        runs: optimisticSession.runs,
         config,
         scenarioOverride,
         scenarioPackageRef,
@@ -2288,7 +2448,15 @@ function ChatPanel({
             <span>输入研究问题后，当前 Scenario 会从一个干净上下文开始工作。</span>
           </div>
         ) : null}
-        {messages.map((message, index) => {
+        {visibleMessageStart > 0 ? (
+          <div className="chat-empty compact-history-note">
+            <MessageSquare size={18} />
+            <strong>已折叠较早对话</strong>
+            <span>当前工作台仅渲染最近 {visibleMessages.length} 条消息，完整审计保留在 runs、ExecutionUnit 和 workspace artifacts 中。</span>
+          </div>
+        ) : null}
+        {visibleMessages.map((message, visibleIndex) => {
+          const index = visibleMessageStart + visibleIndex;
           const messageRunId = runIdForMessage(message, index, messages, session.runs);
           return (
           <div
@@ -3182,8 +3350,32 @@ function ScenarioBuilderPanel({
                 value={scenario.skillDomain}
                 onChange={(event) => {
                   const skillDomain = event.target.value as ScenarioRuntimeOverride['skillDomain'];
-                  patch({ skillDomain });
-                  patchSelection({ skillDomain });
+                  const base = SCENARIO_SPECS[scenarioIdBySkillDomain[skillDomain]];
+                  const domainSkillIds = elementRegistry.skills
+                    .filter((skill) => skill.skillDomains.includes(skillDomain))
+                    .map((skill) => skill.id);
+                  const generatedSkillId = `agentserver.generate.${skillDomain}`;
+                  const nextSelectedSkillIds = domainSkillIds.includes(generatedSkillId)
+                    ? [generatedSkillId]
+                    : domainSkillIds.slice(0, 1);
+                  const nextDefaultComponents = base.componentPolicy.defaultComponents;
+                  patch({
+                    skillDomain,
+                    defaultComponents: nextDefaultComponents,
+                    allowedComponents: base.componentPolicy.allowedComponents,
+                    fallbackComponent: base.componentPolicy.fallbackComponent,
+                    scenarioPackageRef: undefined,
+                    skillPlanRef: undefined,
+                    uiPlanRef: undefined,
+                  });
+                  patchSelection({
+                    skillDomain,
+                    selectedSkillIds: nextSelectedSkillIds,
+                    selectedToolIds: elementRegistry.tools.filter((tool) => tool.skillDomains.includes(skillDomain)).slice(0, 5).map((tool) => tool.id),
+                    selectedArtifactTypes: base.outputArtifacts.map((artifact) => artifact.type),
+                    selectedComponentIds: nextDefaultComponents,
+                    fallbackComponentId: base.componentPolicy.fallbackComponent,
+                  });
                 }}
               >
                 <option value="literature">literature</option>
@@ -3570,7 +3762,8 @@ function CanvasSlot({ slot, artifact, session, kind }: RegistryRendererProps & {
   const payload = slotPayload(slot, artifact);
   const colorField = slot.encoding?.colorBy;
   const splitField = slot.encoding?.splitBy || slot.encoding?.facetBy;
-  const networkNodes = toRecordList(payload.nodes).map((node) => ({
+  const graphNodeRecords = toRecordList(payload.nodes).length ? toRecordList(payload.nodes) : toRecordList(payload.entities);
+  const networkNodes = graphNodeRecords.map((node) => ({
     id: asString(node.id),
     label: asString(node.label) || asString(node.name),
     type: colorField ? asString(node[colorField]) || asString(node.type) : asString(node.type),
@@ -3578,11 +3771,20 @@ function CanvasSlot({ slot, artifact, session, kind }: RegistryRendererProps & {
   const networkEdges = toRecordList(payload.edges).map((edge) => ({
     source: asString(edge.source) || asString(edge.from),
     target: asString(edge.target) || asString(edge.to),
+    relation: asString(edge.relation),
+    evidenceLevel: asString(edge.evidenceLevel) || asString(edge.evidence_level),
+    confidence: asNumber(edge.confidence),
+    sourceDb: asString(edge.sourceDb) || asString(edge.source_db) || edgeSourcesLabel(edge.sources),
   }));
   const volcanoPoints = volcanoPointsFromPayload(payload, colorField);
   const heatmap = isRecord(payload.heatmap)
     ? asNumberMatrix(payload.heatmap.matrix ?? payload.heatmap.values)
     : asNumberMatrix(payload.matrix ?? payload.values);
+  const svgText = kind === 'heatmap'
+    ? asString(payload.heatmapSvgText) || asString(payload.svgText)
+    : kind === 'umap'
+      ? asString(payload.umapSvgText) || asString(payload.svgText)
+      : undefined;
   const umapPoints = toRecordList(payload.umap ?? payload.points).flatMap((point) => {
     const x = asNumber(point.x) ?? asNumber(point.umap1);
     const y = asNumber(point.y) ?? asNumber(point.umap2);
@@ -3594,14 +3796,14 @@ function CanvasSlot({ slot, artifact, session, kind }: RegistryRendererProps & {
     }];
   });
   if (!artifact) {
-    return <ComponentEmptyState componentId={canvasComponentId(kind)} artifactType="omics-differential-expression" detail={`${kind} 组件不再使用 demo seed；请先运行当前 Scenario 生成 artifact。`} />;
+    return <ComponentEmptyState componentId={canvasComponentId(kind)} artifactType={canvasArtifactType(kind)} detail={`${kind} 组件不再使用 demo seed；请先运行当前 Scenario 生成 artifact。`} />;
   }
   const hasData = kind === 'volcano'
     ? Boolean(volcanoPoints?.length)
     : kind === 'heatmap'
-      ? Boolean(heatmap)
+      ? Boolean(heatmap || svgText)
       : kind === 'umap'
-        ? Boolean(umapPoints.length)
+        ? Boolean(umapPoints.length || svgText)
         : Boolean(networkNodes.length);
   if (!hasData) {
     return <ComponentEmptyState componentId={canvasComponentId(kind)} artifactType={artifact.type} title="artifact 缺少可视化数据" detail={`当前 ${artifact.type} 没有 ${kind} 所需字段；UI 已停止回退到 demo 图。`} />;
@@ -3626,6 +3828,8 @@ function CanvasSlot({ slot, artifact, session, kind }: RegistryRendererProps & {
               <VolcanoChart points={volcanoPoints} />
             </Suspense>
           </div>
+        ) : svgText ? (
+          <SvgArtifactImage svgText={svgText} label={kind === 'heatmap' ? 'Heatmap SVG artifact' : 'UMAP SVG artifact'} />
         ) : kind === 'heatmap' ? (
           <HeatmapViewer matrix={heatmap} label={[asString(payload.label) || asString(isRecord(payload.heatmap) ? payload.heatmap.label : undefined), splitField ? `splitBy=${splitField}` : undefined].filter(Boolean).join(' · ') || undefined} />
         ) : kind === 'umap' ? (
@@ -3634,6 +3838,15 @@ function CanvasSlot({ slot, artifact, session, kind }: RegistryRendererProps & {
           <NetworkGraph nodes={networkNodes.length ? networkNodes : undefined} edges={networkEdges.length ? networkEdges : undefined} />
         )}
       </Card>
+    </div>
+  );
+}
+
+function SvgArtifactImage({ svgText, label }: { svgText: string; label: string }) {
+  const source = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgText)}`;
+  return (
+    <div className="svg-artifact-frame">
+      <img src={source} alt={label} />
     </div>
   );
 }
@@ -3832,6 +4045,10 @@ function canvasComponentId(kind: 'volcano' | 'heatmap' | 'umap' | 'network') {
   return 'network-graph';
 }
 
+function canvasArtifactType(kind: 'volcano' | 'heatmap' | 'umap' | 'network') {
+  return kind === 'network' ? 'knowledge-graph' : 'omics-differential-expression';
+}
+
 function recoverActionLabel(action: string) {
   const labels: Record<string, string> = {
     'run-current-scenario': '运行当前场景',
@@ -3914,11 +4131,12 @@ function PrimaryResult({
   onInspectArtifact: (artifact: RuntimeArtifact) => void;
 }) {
   const runtimeSlots = session.runs.length && session.uiManifest.length ? session.uiManifest : [];
+  const slotLimit = focusMode === 'visual' || focusMode === 'all' ? 8 : 4;
   const slots = (runtimeSlots.length ? runtimeSlots : defaultSlots?.length ? defaultSlots : defaultSlotsForAgent(scenarioId))
     .slice()
     .sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99))
-    .slice(0, 4)
-    .filter((slot) => slotMatchesFocusMode(slot, focusMode));
+    .filter((slot) => slotMatchesFocusMode(slot, focusMode))
+    .slice(0, slotLimit);
   return (
     <div className="stack">
       <SectionHeader icon={FileText} title="动态结果区" subtitle="UIManifest -> component registry -> artifact/runtime data" />
@@ -4836,7 +5054,7 @@ export function BioAgentApp() {
   const [workspaceState, setWorkspaceState] = useState<BioAgentWorkspaceState>(() => {
     const state = loadWorkspaceState();
     const loadedConfig = loadBioAgentConfig();
-    return { ...state, workspacePath: loadedConfig.workspacePath || state.workspacePath };
+    return { ...state, workspacePath: normalizeWorkspaceRootPath(loadedConfig.workspacePath || state.workspacePath) };
   });
   const [workspaceStatus, setWorkspaceStatus] = useState('');
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
@@ -4881,9 +5099,24 @@ export function BioAgentApp() {
       .then((fileConfig) => {
         if (cancelled) return;
         if (fileConfig) {
-          setConfig(fileConfig);
-          saveBioAgentConfig(fileConfig);
-          setWorkspaceState((current) => ({ ...current, workspacePath: fileConfig.workspacePath || current.workspacePath }));
+          setConfig((current) => {
+            const currentHasModel = hasUsableModelConfig(current);
+            const fileHasModel = hasUsableModelConfig(fileConfig);
+            const next = currentHasModel && !fileHasModel
+              ? updateConfig(fileConfig, {
+                modelProvider: current.modelProvider,
+                modelBaseUrl: current.modelBaseUrl,
+                modelName: current.modelName,
+                apiKey: current.apiKey,
+              })
+              : fileConfig;
+            saveBioAgentConfig(next);
+            return next;
+          });
+          setWorkspaceState((current) => ({
+            ...current,
+            workspacePath: normalizeWorkspaceRootPath(fileConfig.workspacePath || current.workspacePath),
+          }));
           setWorkspaceStatus('已从 config.local.json 加载统一配置');
         }
       })
@@ -4899,12 +5132,12 @@ export function BioAgentApp() {
   }, []);
 
   async function hydrateWorkspaceSnapshot(path: string, runtimeConfig: BioAgentConfig, mode: 'prefer-newer' | 'force' = 'prefer-newer') {
-    const requestedPath = path.trim();
+    const requestedPath = normalizeWorkspaceRootPath(path);
     setWorkspaceHydrated(false);
     try {
       const persisted = await loadPersistedWorkspaceState(requestedPath, runtimeConfig);
       if (persisted) {
-        const restoredPath = persisted.workspacePath || requestedPath;
+        const restoredPath = normalizeWorkspaceRootPath(persisted.workspacePath || requestedPath);
         setWorkspaceState((current) => {
           const incoming = { ...persisted, workspacePath: restoredPath };
           return mode === 'force' || shouldUsePersistedWorkspaceState(current, incoming) ? incoming : current;
@@ -4930,13 +5163,16 @@ export function BioAgentApp() {
 
   useEffect(() => {
     let cancelled = false;
-    const workspacePath = config.workspacePath.trim();
+    const workspacePath = normalizeWorkspaceRootPath(config.workspacePath);
+    const loadStartedAt = Date.now();
 	    loadPersistedWorkspaceState(workspacePath, config)
 	      .then((persisted) => {
 	        if (cancelled) return;
 	        if (persisted) {
-	          const restoredPath = persisted.workspacePath || workspacePath;
+	          const restoredPath = normalizeWorkspaceRootPath(persisted.workspacePath || workspacePath);
 	          setWorkspaceState((current) => {
+	            const currentUpdatedAt = Date.parse(current.updatedAt || '');
+	            if (Number.isFinite(currentUpdatedAt) && currentUpdatedAt > loadStartedAt) return current;
 	            const incoming = { ...persisted, workspacePath: restoredPath };
 	            return shouldUsePersistedWorkspaceState(current, incoming, { explicitWorkspacePath: Boolean(workspacePath) }) ? incoming : current;
 	          });
@@ -5008,11 +5244,12 @@ export function BioAgentApp() {
   }
 
   function setWorkspacePath(value: string) {
-    const nextConfig = updateConfig(config, { workspacePath: value });
+    const workspacePath = normalizeWorkspaceRootPath(value);
+    const nextConfig = updateConfig(config, { workspacePath });
     setConfig(nextConfig);
     saveBioAgentConfig(nextConfig);
-    updateWorkspace((current) => ({ ...current, workspacePath: value }));
-    void hydrateWorkspaceSnapshot(value, nextConfig, 'force');
+    updateWorkspace((current) => ({ ...current, workspacePath }));
+    void hydrateWorkspaceSnapshot(workspacePath, nextConfig, 'force');
   }
 
   function updateRuntimeConfig(patch: Partial<BioAgentConfig>) {

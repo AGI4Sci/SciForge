@@ -11,7 +11,7 @@ export const defaultBioAgentConfig: BioAgentConfig = {
   modelBaseUrl: '',
   modelName: '',
   apiKey: '',
-  requestTimeoutMs: 300_000,
+  requestTimeoutMs: 900_000,
   updatedAt: new Date().toISOString(),
 };
 
@@ -38,7 +38,7 @@ export function normalizeConfig(value: unknown): BioAgentConfig {
     schemaVersion: 1,
     agentServerBaseUrl: cleanUrl(raw.agentServerBaseUrl) || defaultBioAgentConfig.agentServerBaseUrl,
     workspaceWriterBaseUrl: cleanUrl(raw.workspaceWriterBaseUrl) || defaultBioAgentConfig.workspaceWriterBaseUrl,
-    workspacePath: typeof raw.workspacePath === 'string' ? raw.workspacePath : defaultBioAgentConfig.workspacePath,
+    workspacePath: normalizeWorkspaceRootPath(typeof raw.workspacePath === 'string' ? raw.workspacePath : defaultBioAgentConfig.workspacePath),
     modelProvider: typeof raw.modelProvider === 'string' ? raw.modelProvider : defaultBioAgentConfig.modelProvider,
     modelBaseUrl: cleanUrl(raw.modelBaseUrl) || '',
     modelName: typeof raw.modelName === 'string' ? raw.modelName : '',
@@ -60,4 +60,14 @@ export function updateConfig(config: BioAgentConfig, patch: Partial<BioAgentConf
 
 function cleanUrl(value: unknown) {
   return typeof value === 'string' ? value.trim().replace(/\/+$/, '') : '';
+}
+
+export function normalizeWorkspaceRootPath(value: string) {
+  const trimmed = value.trim().replace(/\/+$/, '');
+  if (!trimmed) return '';
+  const marker = '/.bioagent/';
+  const nestedIndex = trimmed.indexOf(marker);
+  if (nestedIndex >= 0) return trimmed.slice(0, nestedIndex);
+  if (trimmed.endsWith('/.bioagent')) return trimmed.slice(0, -'/.bioagent'.length);
+  return trimmed;
 }

@@ -16,18 +16,34 @@ const result = await runWorkspaceRuntimeGateway({
   uiPlanRef: 'ui-plan/custom-literature-workflow@0.1.0',
 });
 
-assert.equal(result.artifacts.length, 0);
-assert.equal(result.executionUnits.length, 1);
+assertRepairNeededAgentServer(result, 'custom-literature-workflow');
 
-const unit = result.executionUnits[0] as Record<string, unknown>;
-assert.equal(unit.status, 'repair-needed');
-assert.match(String(unit.failureReason || result.message), /AgentServer|base URL/i);
-assert.equal((unit.scenarioPackageRef as Record<string, unknown> | undefined)?.id, 'custom-literature-workflow');
-assert.equal(unit.skillPlanRef, 'skill-plan/custom-literature-workflow@0.1.0');
-assert.equal(unit.uiPlanRef, 'ui-plan/custom-literature-workflow@0.1.0');
-assert.equal((unit.routeDecision as Record<string, unknown> | undefined)?.selectedRuntime, 'agentserver-generation');
-assert.ok((unit.requiredInputs as string[] | undefined)?.includes('agentServerBaseUrl'));
-assert.ok((unit.recoverActions as string[] | undefined)?.some((action) => /Start or configure AgentServer/.test(action)));
-assert.match(String(unit.nextStep), /Start AgentServer|local skill/);
+const cellResult = await runWorkspaceRuntimeGateway({
+  skillDomain: 'omics',
+  prompt: '创建 scRNA atlas 复现场景，完成 QC、整合、聚类、marker gene、细胞类型注释和跨组织组成比较',
+  workspacePath: workspace,
+  availableSkills: ['omics.differential_expression'],
+  expectedArtifactTypes: ['omics-differential-expression', 'research-report'],
+  selectedComponentIds: ['umap-viewer', 'report-viewer', 'execution-unit-table', 'notebook-timeline'],
+  scenarioPackageRef: { id: 'complex-cell-atlas', version: '0.1.0', source: 'workspace' },
+  skillPlanRef: 'skill-plan/complex-cell-atlas@0.1.0',
+  uiPlanRef: 'ui-plan/complex-cell-atlas@0.1.0',
+});
+
+assertRepairNeededAgentServer(cellResult, 'complex-cell-atlas');
 
 console.log('[ok] AgentServer unavailable diagnostics include route, package refs, required inputs, and recovery actions');
+
+function assertRepairNeededAgentServer(result: Awaited<ReturnType<typeof runWorkspaceRuntimeGateway>>, scenarioId: string) {
+  assert.equal(result.artifacts.length, 0);
+  assert.equal(result.executionUnits.length, 1);
+
+  const unit = result.executionUnits[0] as Record<string, unknown>;
+  assert.equal(unit.status, 'repair-needed');
+  assert.match(String(unit.failureReason || result.message), /AgentServer|base URL/i);
+  assert.equal((unit.scenarioPackageRef as Record<string, unknown> | undefined)?.id, scenarioId);
+  assert.equal((unit.routeDecision as Record<string, unknown> | undefined)?.selectedRuntime, 'agentserver-generation');
+  assert.ok((unit.requiredInputs as string[] | undefined)?.includes('agentServerBaseUrl'));
+  assert.ok((unit.recoverActions as string[] | undefined)?.some((action) => /Start or configure AgentServer/.test(action)));
+  assert.match(String(unit.nextStep), /Start AgentServer|local skill/);
+}

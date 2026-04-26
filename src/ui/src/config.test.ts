@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 
-import { defaultBioAgentConfig, loadBioAgentConfig, saveBioAgentConfig, updateConfig } from './config';
+import { defaultBioAgentConfig, loadBioAgentConfig, normalizeWorkspaceRootPath, saveBioAgentConfig, updateConfig } from './config';
 
 class MemoryStorage {
   private values = new Map<string, string>();
@@ -48,5 +48,13 @@ describe('BioAgent config persistence', () => {
     assert.equal(loaded.modelBaseUrl, 'https://openrouter.ai/api/v1');
     assert.equal(loaded.modelName, 'qwen/qwen3.6-plus:free');
     assert.equal(loaded.apiKey, 'test-key');
+  });
+
+  it('normalizes accidental .bioagent internal paths back to the workspace root', () => {
+    const root = '/Applications/workspace/ailab/research/app/BioAgent/workspace';
+
+    assert.equal(normalizeWorkspaceRootPath(`${root}/.bioagent/tasks/.bioagent/logs`), root);
+    assert.equal(normalizeWorkspaceRootPath(`${root}/.bioagent`), root);
+    assert.equal(updateConfig(defaultBioAgentConfig, { workspacePath: `${root}/.bioagent/tasks/run-1` }).workspacePath, root);
   });
 });

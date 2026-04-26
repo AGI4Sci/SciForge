@@ -173,11 +173,12 @@ export function recommendScenarioElements(
     .map((item) => item.skill)
     .slice(0, 4);
   const generatedSkill = registry.skills.find((skill) => skill.id === `agentserver.generate.${inferredDomain}`);
-  const selectedSkills = unique([
-    ...(complexOpenEnded && generatedSkill ? [generatedSkill] : []),
-    ...matchedSkills,
-    ...(!matchedSkills.length && generatedSkill ? [generatedSkill] : []),
-  ]).slice(0, 5);
+  const selectedSkills = complexOpenEnded && generatedSkill
+    ? [generatedSkill]
+    : unique([
+      ...matchedSkills,
+      ...(!matchedSkills.length && generatedSkill ? [generatedSkill] : []),
+    ]).slice(0, 5);
   const selectedArtifactTypes = unique(targetArtifactTypes.length
     ? targetArtifactTypes
     : selectedSkills.flatMap((skill) => skill.outputArtifactTypes).filter((artifactType) => artifactType !== 'runtime-artifact'));
@@ -461,10 +462,10 @@ function inferSkillDomain(skills: SkillElement[]): SkillDomain {
   return Array.from(counts.entries()).sort((left, right) => right[1] - left[1])[0]?.[0] ?? 'literature';
 }
 
-function inferDomainFromText(text: string): SkillDomain {
-  if (/rna|scrna|omics|matrix|deseq|scanpy|umap|表达|差异|组学|单细胞/.test(text)) return 'omics';
+export function inferDomainFromText(text: string): SkillDomain {
+  if (/chembl|opentargets|drug|compound|disease|pathway|target|knowledge graph|knowledge[-\s]?graph|知识图谱|疾病|化合物|药物|靶点/.test(text)) return 'knowledge';
+  if (/rna|scrna|single[-\s]?cell|scatac|cite[-\s]?seq|perturb[-\s]?seq|velocity|scvelo|tabula sapiens|seurat|scanpy|harmony|scvi|totalvi|spatial transcriptomics|spatial|omics|matrix|deseq|umap|atlas|integration|label transfer|batch mixing|reference mapping|表达|差异|组学|单细胞|细胞图谱|跨数据集|标签迁移|整合|空间转录组/.test(text)) return 'omics';
   if (/pdb|protein structure|structure|alphafold|ligand|residue|pocket|蛋白结构|结构|口袋|配体|残基/.test(text)) return 'structure';
-  if (/chembl|opentargets|drug|compound|disease|pathway|target|knowledge graph|知识图谱|疾病|化合物|药物|靶点/.test(text)) return 'knowledge';
   return 'literature';
 }
 
@@ -474,9 +475,13 @@ function inferTargetArtifactTypes(text: string, domain: SkillDomain) {
   if (/paper|literature|pubmed|arxiv|semantic scholar|crossref|文献|论文|文章/.test(text)
     || (domain === 'literature' && /evidence|证据/.test(text))) artifacts.add('paper-list');
   if (/structure|pdb|alphafold|molecule|protein|ligand|residue|结构|蛋白|配体|残基/.test(text)) artifacts.add('structure-summary');
-  if (/rna|scrna|omics|matrix|deseq|scanpy|umap|expression|表达|差异|组学|单细胞/.test(text)) artifacts.add('omics-differential-expression');
+  if (domain === 'omics' && /rna|scrna|omics|matrix|deseq|scanpy|umap|expression|表达|差异|组学|单细胞/.test(text)) artifacts.add('omics-differential-expression');
   if (/chembl|uniprot|opentargets|drug|compound|disease|pathway|knowledge graph|network|知识图谱|疾病|化合物|药物|靶点|网络/.test(text)) artifacts.add('knowledge-graph');
   if (/blast|alignment|sequence|序列|比对|同源/.test(text)) artifacts.add('sequence-alignment');
+  if (isComplexCellReproductionTask(text)) {
+    artifacts.add('omics-differential-expression');
+    artifacts.add('research-report');
+  }
   if (!artifacts.size) {
     const base = baseSpecForDomain(domain);
     base.outputArtifacts.forEach((artifact) => artifacts.add(artifact.type));
@@ -485,7 +490,8 @@ function inferTargetArtifactTypes(text: string, domain: SkillDomain) {
 }
 
 function requiresGeneratedCapability(text: string) {
-  return /scenario|workflow|pipeline|package|compile|generate|build|agent|download|read|report|summary|summari[sz]e|systematic|latest|today|arxiv|browser|google|web|场景|流程|编译|生成|下载|阅读|报告|总结|系统性|最新|今天|浏览器|搜索/.test(text);
+  return /scenario|workflow|pipeline|package|compile|generate|build|agent|download|read|report|summary|summari[sz]e|systematic|latest|today|arxiv|browser|google|web|场景|流程|编译|生成|下载|阅读|报告|总结|系统性|最新|今天|浏览器|搜索/.test(text)
+    || isComplexCellReproductionTask(text);
 }
 
 function scoreSkillForDescription(skill: SkillElement, text: string, targetArtifactTypes: string[]) {
@@ -501,6 +507,12 @@ function scoreSkillForDescription(skill: SkillElement, text: string, targetArtif
   if (skill.id === 'literature.pubmed_search' && /\bpubmed\b|医学文献|生物医学/.test(text)) score += 12;
   if (skill.entrypointType === 'markdown-skill') score -= 2;
   return score;
+}
+
+function isComplexCellReproductionTask(text: string) {
+  const cellSignals = /single[-\s]?cell|scrna|scatac|cite[-\s]?seq|perturb[-\s]?seq|velocity|scvelo|seurat|scanpy|harmony|scvi|totalvi|wnn|glue|milo|scenic|cellchat|spatial transcriptomics|multi[-\s]?organ|multi[-\s]?omics|多器官|单细胞|细胞图谱|跨数据集|标签迁移|整合|速度|扰动|空间转录组|多组学|轨迹|通讯|调控网络|克隆型|类器官/.test(text);
+  const workSignals = /reproduce|replicate|benchmark|workflow|pipeline|atlas|integration|label transfer|mapping|reference mapping|batch mixing|qc|cluster|marker|annotation|latent time|driver genes|velocity stream|spliced|unspliced|embedding|modality|niche|复现|重现|基准|流程|图谱|整合|映射|质控|聚类|标记基因|注释|比较|分析|模型比较|复现重点|联合建模|空间邻域/.test(text);
+  return cellSignals && workSignals;
 }
 
 function baseSpecForDomain(skillDomain: SkillDomain) {

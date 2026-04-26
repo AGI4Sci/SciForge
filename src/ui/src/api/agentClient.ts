@@ -16,7 +16,7 @@ import { BioAgentClientError, reasonFromResponseText, recoverActionsForService }
 import { promptWithScopeCheck, scopeCheck } from './scopeCheck';
 
 const DEFAULT_AGENT_SERVER_URL = 'http://127.0.0.1:18080';
-const DEFAULT_REQUEST_TIMEOUT_MS = 300_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 900_000;
 
 const evidenceLevels: EvidenceLevel[] = ['meta', 'rct', 'cohort', 'case', 'experimental', 'review', 'database', 'preprint', 'prediction'];
 const claimTypes: ClaimType[] = ['fact', 'inference', 'hypothesis'];
@@ -195,10 +195,10 @@ function buildRuntimeConfig(input: SendAgentMessageInput): AgentServerRunPayload
   };
   if (!useNative) runtime.modelProvider = provider;
   if (modelName) runtime.modelName = modelName;
-  if (!useNative || modelName || input.config.apiKey.trim()) {
+  if (!useNative || modelBaseUrl || modelName || input.config.apiKey.trim()) {
     runtime.llmEndpoint = {
       provider: useNative ? 'native' : provider,
-      baseUrl: useNative ? undefined : modelBaseUrl || undefined,
+      baseUrl: modelBaseUrl || undefined,
       apiKey: input.config.apiKey.trim() || undefined,
       modelName: modelName || undefined,
     };

@@ -383,6 +383,8 @@ export interface SendAgentMessageInput {
   roleView: string;
   messages: BioAgentMessage[];
   artifacts?: RuntimeArtifact[];
+  executionUnits?: RuntimeExecutionUnit[];
+  runs?: BioAgentRun[];
   config: BioAgentConfig;
   scenarioOverride?: ScenarioRuntimeOverride;
   scenarioPackageRef?: ScenarioPackageRef;
