@@ -83,15 +83,17 @@ async function runAgentServerGeneratedTask(
     workspace,
   });
   if (!generation.ok) {
-    const referencedTaskRun = await tryRunReferencedWorkspaceTaskAfterGenerationFailure({
-      request,
-      skill,
-      skills,
-      workspace,
-      failureReason: generation.error,
-      generationStartedAtMs,
-    });
-    if (referencedTaskRun) return referencedTaskRun;
+    if (!isBlockingAgentServerConfigurationFailure(generation.error)) {
+      const referencedTaskRun = await tryRunReferencedWorkspaceTaskAfterGenerationFailure({
+        request,
+        skill,
+        skills,
+        workspace,
+        failureReason: generation.error,
+        generationStartedAtMs,
+      });
+      if (referencedTaskRun) return referencedTaskRun;
+    }
     if (options.allowFallbackOnGenerationFailure) return undefined;
     const failedRequestId = `agentserver-generation-${request.skillDomain}-${sha1(`${request.prompt}:${generation.error}`).slice(0, 12)}`;
     await appendTaskAttempt(workspace, {
@@ -317,6 +319,10 @@ async function runAgentServerGeneratedTask(
     if (repaired) return repaired;
     return failedTaskPayload(request, skill, run, failureReason);
   }
+}
+
+function isBlockingAgentServerConfigurationFailure(reason: string) {
+  return /User-side model configuration|llmEndpoint|openteam\.json defaults|Model Provider|Model Base URL|Model Name/i.test(reason);
 }
 
 async function tryRunReferencedWorkspaceTaskAfterGenerationFailure(params: {

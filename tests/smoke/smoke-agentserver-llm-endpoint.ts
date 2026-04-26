@@ -9,6 +9,7 @@ import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-
 const workspace = await mkdtemp(join(tmpdir(), 'bioagent-agentserver-llm-endpoint-'));
 const configLocalPath = 'config.local.json';
 const originalConfigLocal = await readFile(configLocalPath, 'utf8').catch(() => '');
+const originalAllowAgentServerDefaultLlm = process.env.BIOAGENT_ALLOW_AGENTSERVER_DEFAULT_LLM;
 const localConfig = {
   llm: {
     provider: 'openai-compatible',
@@ -56,6 +57,7 @@ assert.ok(address && typeof address === 'object');
 const baseUrl = `http://127.0.0.1:${address.port}`;
 
 try {
+  process.env.BIOAGENT_ALLOW_AGENTSERVER_DEFAULT_LLM = '0';
   await writeFile(configLocalPath, JSON.stringify(localConfig, null, 2));
   const nativeOnlyResult = await runWorkspaceRuntimeGateway({
     skillDomain: 'literature',
@@ -157,6 +159,11 @@ try {
   assert.equal(requestBody, undefined);
   console.log('[ok] BioAgent forwards request-selected LLM endpoint to AgentServer runs before local/server defaults');
 } finally {
+  if (originalAllowAgentServerDefaultLlm === undefined) {
+    delete process.env.BIOAGENT_ALLOW_AGENTSERVER_DEFAULT_LLM;
+  } else {
+    process.env.BIOAGENT_ALLOW_AGENTSERVER_DEFAULT_LLM = originalAllowAgentServerDefaultLlm;
+  }
   if (originalConfigLocal) await writeFile(configLocalPath, originalConfigLocal);
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }

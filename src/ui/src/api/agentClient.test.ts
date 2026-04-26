@@ -88,6 +88,63 @@ describe('normalizeAgentResponse', () => {
     assert.equal(response.uiManifest.length, 0);
   });
 
+  it('surfaces research-report artifacts as readable markdown instead of raw JSON', () => {
+    const response = normalizeAgentResponse('literature-evidence-review', '总结 arXiv AI Agent 论文', {
+      ok: true,
+      data: {
+        run: {
+          id: 'run-report-json-1',
+          status: 'completed',
+          output: {
+            result: [
+              '```json',
+              JSON.stringify({
+                message: JSON.stringify({
+                  artifactType: 'research-report',
+                  encoding: 'markdown',
+                  data: {
+                    title: 'AI Agent Literature Review',
+                    sections: [
+                      { title: 'Executive Summary', content: 'Recent AI Agent papers emphasize tool use and evaluation.' },
+                      { title: 'Key Findings', content: '- Tool orchestration is central.\n- Benchmarks remain fragmented.' },
+                    ],
+                  },
+                }),
+                confidence: 0.86,
+                claimType: 'analysis',
+                evidenceLevel: 'preprint',
+                artifacts: [{
+                  id: 'research-report',
+                  type: 'research-report',
+                  schemaVersion: '1',
+                  data: {
+                    content: JSON.stringify({
+                      data: {
+                        sections: [
+                          { title: 'Executive Summary', content: 'Recent AI Agent papers emphasize tool use and evaluation.' },
+                          { title: 'Key Findings', content: '- Tool orchestration is central.\n- Benchmarks remain fragmented.' },
+                        ],
+                      },
+                    }),
+                  },
+                }],
+                uiManifest: [{ componentId: 'report-viewer', artifactRef: 'research-report' }],
+                executionUnits: [],
+              }),
+              '```',
+            ].join('\n'),
+          },
+        },
+      },
+    });
+
+    assert.match(response.message.content, /## Executive Summary/);
+    assert.match(response.message.content, /Recent AI Agent papers emphasize tool use/);
+    assert.doesNotMatch(response.message.content, /^\s*\{/);
+    assert.equal(response.uiManifest[0].componentId, 'report-viewer');
+    assert.equal(response.artifacts[0].type, 'research-report');
+  });
+
   it('preserves every skillDomain default artifact contract through normalization', () => {
     (Object.keys(SCENARIO_SPECS) as ScenarioId[]).forEach((scenarioId) => {
       const skillDomain = SCENARIO_SPECS[scenarioId];
