@@ -2,6 +2,7 @@ import type { BioAgentConfig, BioAgentWorkspaceState, RuntimeExecutionUnit } fro
 import type { ScenarioLibraryState } from '../scenarioCompiler/scenarioLibrary';
 import type { ScenarioPackage } from '../scenarioCompiler/scenarioPackage';
 import { parseWorkspaceState } from '../sessionStore';
+import { BioAgentClientError, reasonFromResponseText, recoverActionsForService } from './clientError';
 
 export interface WorkspaceEntry {
   name: string;
@@ -59,11 +60,8 @@ export async function persistWorkspaceState(state: BioAgentWorkspaceState, confi
 }
 
 export async function loadPersistedWorkspaceState(path: string, config: BioAgentConfig): Promise<BioAgentWorkspaceState | undefined> {
-  const configured = path.trim() ? await fetchPersistedWorkspaceState(path, config) : undefined;
-  const recent = await fetchPersistedWorkspaceState('', config);
-  if (!configured) return recent;
-  if (!recent) return configured;
-  return workspaceActivityScore(recent) > workspaceActivityScore(configured) ? recent : configured;
+  if (path.trim()) return fetchPersistedWorkspaceState(path, config);
+  return fetchPersistedWorkspaceState('', config);
 }
 
 async function fetchPersistedWorkspaceState(path: string, config: BioAgentConfig): Promise<BioAgentWorkspaceState | undefined> {
@@ -77,18 +75,6 @@ async function fetchPersistedWorkspaceState(path: string, config: BioAgentConfig
   if (!json.state) return undefined;
   const state = parseWorkspaceState(json.state);
   return typeof json.workspacePath === 'string' ? { ...state, workspacePath: json.workspacePath } : state;
-}
-
-function workspaceActivityScore(state: BioAgentWorkspaceState) {
-  return Object.values(state.sessionsByScenario).reduce((total, session) => {
-    const userMessages = session.messages.filter((message) => !message.id.startsWith('seed')).length;
-    return total
-      + userMessages
-      + session.runs.length
-      + session.artifacts.length
-      + session.executionUnits.length
-      + session.notebook.length;
-  }, state.archivedSessions.length + (state.alignmentContracts?.length ?? 0));
 }
 
 export async function listWorkspace(path: string, config: BioAgentConfig): Promise<WorkspaceEntry[]> {
@@ -159,6 +145,10 @@ export async function archiveWorkspaceScenario(config: BioAgentConfig, id: strin
   await writeWorkspaceScenario(config, 'archive', { workspacePath, id });
 }
 
+export async function restoreWorkspaceScenario(config: BioAgentConfig, id: string, status: 'draft' | 'validated' | 'published' = 'draft', workspacePath = config.workspacePath): Promise<void> {
+  await writeWorkspaceScenario(config, 'restore', { workspacePath, id, status });
+}
+
 export async function listWorkspaceTaskAttempts(
   config: BioAgentConfig,
   options: { workspacePath?: string; skillDomain?: string; scenarioPackageId?: string; limit?: number } = {},
@@ -191,7 +181,7 @@ export async function loadWorkspaceTaskAttempts(
   return Array.isArray(json.attempts) ? json.attempts : [];
 }
 
-async function writeWorkspaceScenario(config: BioAgentConfig, action: 'save' | 'publish' | 'archive', body: Record<string, unknown>) {
+async function writeWorkspaceScenario(config: BioAgentConfig, action: 'save' | 'publish' | 'archive' | 'restore', body: Record<string, unknown>) {
   const response = await fetchWorkspace(config, `${action} scenario`, `${config.workspaceWriterBaseUrl}/api/bioagent/scenarios/${action}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -202,21 +192,12 @@ async function writeWorkspaceScenario(config: BioAgentConfig, action: 'save' | '
 
 async function workspaceResponseError(response: Response, fallback: string) {
   const text = await response.text();
-  if (!text.trim()) return fallback;
-  try {
-    const json = JSON.parse(text) as unknown;
-    if (isRecord(json) && typeof json.error === 'string' && json.error.trim()) {
-      return json.error === 'not found' ? fallback : json.error;
-    }
-    if (isRecord(json) && typeof json.message === 'string' && json.message.trim()) return json.message;
-  } catch {
-    // Keep the server text when it is already human-readable.
-  }
-  return text;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
+  return new BioAgentClientError({
+    title: 'Workspace Writer 请求失败',
+    reason: reasonFromResponseText(text, fallback),
+    recoverActions: recoverActionsForService('workspace'),
+    diagnosticRef: `workspace-http-${response.status}`,
+  }).message;
 }
 
 async function fetchWorkspace(
@@ -229,6 +210,12 @@ async function fetchWorkspace(
     return await fetch(input, init);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`Workspace writer unavailable at ${config.workspaceWriterBaseUrl} while trying to ${operation}. Start npm run workspace:server and retry. ${detail}`);
+    throw new BioAgentClientError({
+      title: 'Workspace Writer 未连接',
+      reason: `${config.workspaceWriterBaseUrl} 无法访问，操作：${operation}。${detail}`,
+      recoverActions: recoverActionsForService('workspace'),
+      diagnosticRef: 'workspace-connection',
+      cause: error,
+    });
   }
 }

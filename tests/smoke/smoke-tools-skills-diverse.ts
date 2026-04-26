@@ -38,6 +38,12 @@ const routeCases: Array<{ name: string; skillDomain: BioAgentSkillDomain; prompt
     expectedSkill: 'literature.pubmed_search',
   },
   {
+    name: 'literature explicit Google/web search',
+    skillDomain: 'literature',
+    prompt: '通过google搜索一下今天arxiv上AI+生命科学的文章',
+    expectedSkill: 'literature.web_search',
+  },
+  {
     name: 'structure RCSB seed',
     skillDomain: 'structure',
     prompt: 'Fetch PDB 1A3N and show chain/residue metadata in molecule viewer',
@@ -77,7 +83,7 @@ const routeCases: Array<{ name: string; skillDomain: BioAgentSkillDomain; prompt
     name: 'SCP markdown docking/structure',
     skillDomain: 'structure',
     prompt: 'Run molecular docking for aspirin against a target structure and report binding site interactions',
-    expectedSkill: 'scp.molecular-docking',
+    expectedSkill: 'scp.drug-screening-docking',
   },
   {
     name: 'SCP markdown biomedical search',

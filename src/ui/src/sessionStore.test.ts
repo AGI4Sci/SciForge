@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { parseWorkspaceState } from './sessionStore';
+import { parseWorkspaceState, shouldUsePersistedWorkspaceState } from './sessionStore';
 
 test('parseWorkspaceState preserves built-in and workspace scenario sessions', () => {
   const state = parseWorkspaceState({
@@ -84,3 +84,64 @@ test('parseWorkspaceState preserves built-in and workspace scenario sessions', (
   assert.equal(state.sessionsByScenario['workspace-literature-review-alt'].messages[0]?.content, 'alt hello');
   assert.equal(state.archivedSessions[0]?.scenarioId, 'workspace-literature-review');
 });
+
+test('explicit workspace path treats workspace snapshot as canonical across browsers', () => {
+  const localBrowserState = parseWorkspaceState({
+    schemaVersion: 2,
+    workspacePath: '/Applications/workspace/ailab/research/app/BioAgent/workspace',
+    sessionsByScenario: {
+      'literature-evidence-review': sessionFixture('local-browser', ['local-only', 'local-extra']),
+    },
+    archivedSessions: [],
+    updatedAt: '2026-04-25T02:00:00.000Z',
+  });
+  const sharedWorkspaceState = parseWorkspaceState({
+    schemaVersion: 2,
+    workspacePath: '/Applications/workspace/ailab/research/app/BioAgent/workspace',
+    sessionsByScenario: {
+      'literature-evidence-review': sessionFixture('shared-workspace', ['shared-history']),
+    },
+    archivedSessions: [],
+    updatedAt: '2026-04-25T01:00:00.000Z',
+  });
+
+  assert.equal(shouldUsePersistedWorkspaceState(localBrowserState, sharedWorkspaceState), false);
+  assert.equal(shouldUsePersistedWorkspaceState(localBrowserState, sharedWorkspaceState, { explicitWorkspacePath: true }), true);
+});
+
+test('parseWorkspaceState preserves hidden official package preferences', () => {
+  const state = parseWorkspaceState({
+    schemaVersion: 2,
+    workspacePath: '/tmp/bioagent-workspace',
+    sessionsByScenario: {},
+    archivedSessions: [],
+    hiddenOfficialPackageIds: ['structure-exploration', 'structure-exploration', 42],
+    updatedAt: '2026-04-25T00:00:00.000Z',
+  });
+
+  assert.deepEqual(state.hiddenOfficialPackageIds, ['structure-exploration']);
+});
+
+function sessionFixture(sessionId: string, messages: string[]) {
+  return {
+    schemaVersion: 2,
+    sessionId,
+    scenarioId: 'literature-evidence-review',
+    title: sessionId,
+    createdAt: '2026-04-25T00:00:00.000Z',
+    messages: messages.map((content, index) => ({
+      id: `msg-${sessionId}-${index}`,
+      role: 'user',
+      content,
+      createdAt: '2026-04-25T00:00:00.000Z',
+    })),
+    runs: [],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [],
+    notebook: [],
+    versions: [],
+    updatedAt: '2026-04-25T00:00:00.000Z',
+  };
+}

@@ -12,6 +12,7 @@ import {
   type SendAgentMessageInput,
 } from '../domain';
 import { agentProtocolForPrompt, SCENARIO_SPECS } from '../scenarioSpecs';
+import { BioAgentClientError, reasonFromResponseText, recoverActionsForService } from './clientError';
 import { promptWithScopeCheck, scopeCheck } from './scopeCheck';
 
 const DEFAULT_AGENT_SERVER_URL = 'http://127.0.0.1:18080';
@@ -565,16 +566,32 @@ export async function sendAgentMessage(input: SendAgentMessageInput, signal?: Ab
       // Keep the raw text for diagnostics.
     }
     if (!response.ok) {
-      const detail = isRecord(json) ? asString(json.error) || asString(json.message) : undefined;
-      throw new Error(detail || `AgentServer 请求失败：HTTP ${response.status}`);
+      throw new BioAgentClientError({
+        title: 'AgentServer 请求失败',
+        reason: reasonFromResponseText(text, `HTTP ${response.status}`),
+        recoverActions: recoverActionsForService('agentserver'),
+        diagnosticRef: `agentserver-http-${response.status}`,
+      });
     }
     return normalizeAgentResponse(input.scenarioId, input.prompt, json);
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new Error('AgentServer 请求已取消或超时。');
+      throw new BioAgentClientError({
+        title: 'AgentServer 请求超时',
+        reason: '请求已取消或超过配置的 timeout。',
+        recoverActions: ['检查模型后端是否响应', '调大 Timeout ms', '重试当前请求'],
+        diagnosticRef: 'agentserver-timeout',
+        cause: err,
+      });
     }
     if (err instanceof TypeError) {
-      throw new Error(`无法连接 AgentServer，请确认 ${input.config.agentServerBaseUrl || DEFAULT_AGENT_SERVER_URL} 正在运行。`);
+      throw new BioAgentClientError({
+        title: '无法连接 AgentServer',
+        reason: `${input.config.agentServerBaseUrl || DEFAULT_AGENT_SERVER_URL} 未响应。`,
+        recoverActions: recoverActionsForService('agentserver'),
+        diagnosticRef: 'agentserver-connection',
+        cause: err,
+      });
     }
     throw err;
   } finally {
@@ -604,17 +621,20 @@ export async function sendAgentMessageStream(
     });
     if (!response.ok) {
       const text = await response.text();
-      let json: unknown = text;
-      try {
-        json = JSON.parse(text);
-      } catch {
-        // Keep raw text.
-      }
-      const detail = isRecord(json) ? asString(json.error) || asString(json.message) : undefined;
-      throw new Error(detail || `AgentServer 流式请求失败：HTTP ${response.status}`);
+      throw new BioAgentClientError({
+        title: 'AgentServer 流式请求失败',
+        reason: reasonFromResponseText(text, `HTTP ${response.status}`),
+        recoverActions: recoverActionsForService('agentserver'),
+        diagnosticRef: `agentserver-stream-http-${response.status}`,
+      });
     }
     if (!response.body) {
-      throw new Error('AgentServer 未返回可读取的流式响应。');
+      throw new BioAgentClientError({
+        title: 'AgentServer 流式响应不可读',
+        reason: '服务返回了成功状态，但没有可读取的响应体。',
+        recoverActions: recoverActionsForService('agentserver'),
+        diagnosticRef: 'agentserver-stream-body',
+      });
     }
 
     const reader = response.body.getReader();
@@ -648,15 +668,32 @@ export async function sendAgentMessageStream(
       }
     }
     if (!finalResult) {
-      throw new Error('AgentServer 流式响应结束，但没有返回最终 run result。');
+      throw new BioAgentClientError({
+        title: 'AgentServer 流式响应不完整',
+        reason: '流结束时没有最终 run result。',
+        recoverActions: ['查看 AgentServer 日志', '重试当前请求', '改用 seed skill 或 workspace runtime'],
+        diagnosticRef: 'agentserver-stream-missing-result',
+      });
     }
     return normalizeAgentResponse(input.scenarioId, input.prompt, { ok: true, data: finalResult });
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new Error('AgentServer 流式请求已取消或超时。');
+      throw new BioAgentClientError({
+        title: 'AgentServer 流式请求超时',
+        reason: '请求已取消或超过配置的 timeout。',
+        recoverActions: ['检查模型后端是否响应', '调大 Timeout ms', '重试当前请求'],
+        diagnosticRef: 'agentserver-stream-timeout',
+        cause: err,
+      });
     }
     if (err instanceof TypeError) {
-      throw new Error(`无法连接 AgentServer stream，请确认 ${input.config.agentServerBaseUrl || DEFAULT_AGENT_SERVER_URL} 正在运行。`);
+      throw new BioAgentClientError({
+        title: '无法连接 AgentServer stream',
+        reason: `${input.config.agentServerBaseUrl || DEFAULT_AGENT_SERVER_URL} 未响应。`,
+        recoverActions: recoverActionsForService('agentserver'),
+        diagnosticRef: 'agentserver-stream-connection',
+        cause: err,
+      });
     }
     throw err;
   } finally {

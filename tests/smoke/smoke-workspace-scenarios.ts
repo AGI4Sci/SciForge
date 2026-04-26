@@ -106,7 +106,19 @@ try {
   list = await response.json() as { scenarios: Array<{ id: string; status: string }> };
   assert.equal(list.scenarios[0].status, 'archived');
 
-  console.log('[ok] workspace scenario package APIs save, list, get, publish, and archive');
+  response = await fetch(`${baseUrl}/api/bioagent/scenarios/restore`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspacePath: workspace, id: pkg.id, status: 'draft' }),
+  });
+  await assertOk(response);
+
+  response = await fetch(`${baseUrl}/api/bioagent/scenarios/list?workspacePath=${encodeURIComponent(workspace)}`);
+  await assertOk(response);
+  list = await response.json() as { scenarios: Array<{ id: string; status: string }> };
+  assert.equal(list.scenarios[0].status, 'draft');
+
+  console.log('[ok] workspace scenario package APIs save, list, get, publish, archive, and restore');
 } finally {
   child.kill('SIGTERM');
 }

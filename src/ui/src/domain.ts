@@ -306,10 +306,25 @@ export interface BioAgentWorkspaceState {
   alignmentContracts: AlignmentContractRecord[];
   beliefGraphs?: BeliefDependencyGraph[];
   timelineEvents?: TimelineEventRecord[];
+  reusableTaskCandidates?: ReusableTaskCandidateRecord[];
+  hiddenOfficialPackageIds?: string[];
   branches?: ResearchBranchRecord[];
   researcherDecisions?: ResearcherDecisionRecord[];
   collaborationPolicy?: CollaborationPolicy;
   updatedAt: string;
+}
+
+export interface ReusableTaskCandidateRecord {
+  id: string;
+  runId: string;
+  scenarioId: ScenarioInstanceId;
+  scenarioPackageRef?: ScenarioPackageRef;
+  skillPlanRef?: string;
+  uiPlanRef?: string;
+  prompt: string;
+  status: RunStatus;
+  promotionState: 'candidate' | 'promoted' | 'rejected';
+  createdAt: string;
 }
 
 export interface AlignmentContractRecord {

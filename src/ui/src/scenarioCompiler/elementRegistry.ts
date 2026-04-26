@@ -1,6 +1,7 @@
 import inspectorSkill from '../../../../skills/seed/inspector.generic_file_table_log/skill.json';
 import knowledgeSkill from '../../../../skills/seed/knowledge.uniprot_chembl_lookup/skill.json';
 import literatureSkill from '../../../../skills/seed/literature.pubmed_search/skill.json';
+import literatureWebSearchSkill from '../../../../skills/seed/literature.web_search/skill.json';
 import omicsSkill from '../../../../skills/seed/omics.differential_expression/skill.json';
 import blastpSkill from '../../../../skills/seed/sequence.ncbi_blastp_search/skill.json';
 import structureSkill from '../../../../skills/seed/structure.rcsb_latest_or_entry/skill.json';
@@ -26,6 +27,7 @@ const seedSkillManifests = [
   inspectorSkill,
   knowledgeSkill,
   literatureSkill,
+  literatureWebSearchSkill,
   omicsSkill,
   blastpSkill,
   structureSkill,
@@ -34,6 +36,7 @@ const seedSkillManifests = [
 export function buildElementRegistry(): ElementRegistry {
   const skills = [
     ...seedSkillManifests.map(seedSkillToElement),
+    ...buildGeneratedCapabilitySkills(),
     ...scpMarkdownSkills.map(scpSkillToElement),
   ];
   const artifacts = buildArtifactElements(skills);
@@ -46,6 +49,39 @@ export function buildElementRegistry(): ElementRegistry {
     rolePolicies: buildRolePolicies(),
     failurePolicies: buildFailurePolicies(),
   };
+}
+
+function buildGeneratedCapabilitySkills(): SkillElement[] {
+  return (['literature', 'structure', 'omics', 'knowledge'] as SkillDomain[]).map((domain) => {
+    const scenarioId = scenarioIdForDomain(domain);
+    const baseArtifacts = SCENARIO_SPECS[scenarioId].outputArtifacts.map((artifact) => artifact.type);
+    return {
+      id: `agentserver.generate.${domain}`,
+      kind: 'skill',
+      version: '1.0.0',
+      label: `Agent backend ${domain} generator`,
+      description: `Use the configured AgentServer/native backend to synthesize a task plan, tool calls, artifacts, and report outputs for open-ended ${domain} scenarios.`,
+      source: 'generated',
+      skillDomains: [domain],
+      inputContract: {
+        prompt: 'Natural-language scenario or task request compiled into a stable package contract.',
+      },
+      outputArtifactTypes: unique([...baseArtifacts, 'research-report', 'runtime-artifact']),
+      entrypointType: 'agentserver-generation',
+      requiredCapabilities: [
+        { capability: 'agentserver-generation', level: 'self-healing' },
+        { capability: 'code-generation', level: 'self-healing' },
+        { capability: 'artifact-emission', level: 'schema-checked' },
+      ],
+      failureModes: ['backend-unavailable', 'schema-mismatch', 'runtime-error'],
+      examplePrompts: [
+        'Generate a reusable research scenario from this description',
+        '搜索、下载、阅读并总结最新论文为报告',
+        'Build a stable workspace package for this analysis workflow',
+      ],
+      tags: ['agent-backend', 'native-tools', 'generated-capability', domain],
+    };
+  });
 }
 
 export const elementRegistry = buildElementRegistry();
@@ -72,6 +108,12 @@ export function validateElementRegistry(registry: ElementRegistry = elementRegis
   const skillIds = new Set(registry.skills.map((item) => item.id));
 
   for (const component of registry.components) {
+    if (!component.emptyState.title.trim() || !component.emptyState.detail.trim()) {
+      issues.push({ severity: 'error', code: 'missing-component-empty-state', message: `${component.componentId} must define emptyState title/detail`, elementId: component.id });
+    }
+    if (!component.recoverActions.length) {
+      issues.push({ severity: 'error', code: 'missing-component-recover-actions', message: `${component.componentId} must define at least one recover action`, elementId: component.id });
+    }
     if (component.fallback && !componentIds.has(component.fallback)) {
       issues.push({ severity: 'error', code: 'missing-component-fallback', message: `${component.componentId} fallback is missing: ${component.fallback}`, elementId: component.id });
     }
@@ -130,7 +172,14 @@ function buildArtifactElements(skills: SkillElement[]): ArtifactSchemaElement[] 
 
   for (const skill of skills) {
     for (const artifactType of skill.outputArtifactTypes) {
-      if (byType.has(artifactType)) continue;
+      const existing = byType.get(artifactType);
+      if (existing) {
+        if (!existing.producerSkillIds.includes(skill.id)) existing.producerSkillIds.push(skill.id);
+        for (const domain of skill.skillDomains) {
+          if (!existing.tags?.includes(domain)) existing.tags = [...existing.tags ?? [], domain];
+        }
+        continue;
+      }
       const consumerComponentIds = uiComponentElements
         .filter((component) => component.acceptsArtifactTypes.includes(artifactType) || component.acceptsArtifactTypes.includes('*'))
         .map((component) => component.componentId);
@@ -373,4 +422,15 @@ function toolTypeForName(name: string): ToolElement['toolType'] {
 
 function safeElementId(value: string) {
   return value.trim().toLowerCase().replace(/[^a-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '') || 'unnamed';
+}
+
+function scenarioIdForDomain(domain: SkillDomain): ScenarioId {
+  if (domain === 'structure') return 'structure-exploration';
+  if (domain === 'omics') return 'omics-differential-exploration';
+  if (domain === 'knowledge') return 'biomedical-knowledge-graph';
+  return 'literature-evidence-review';
+}
+
+function unique<T>(values: T[]) {
+  return Array.from(new Set(values));
 }

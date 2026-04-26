@@ -9,6 +9,7 @@ const workspace = await mkdtemp(join(tmpdir(), 'bioagent-knowledge-unsupported-'
 const result = await runWorkspaceRuntimeGateway({
   skillDomain: 'knowledge',
   prompt: 'melanoma disease OpenTargets connector status',
+  availableSkills: ['knowledge.uniprot_chembl_lookup'],
   workspacePath: workspace,
 });
 

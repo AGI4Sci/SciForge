@@ -8,7 +8,9 @@ import {
   ChevronRight,
   ChevronUp,
   Clock,
+  Database,
   Download,
+  Eye,
   File,
   FileCode,
   FilePlus,
@@ -43,11 +45,12 @@ import {
 } from './data';
 import { SCENARIO_SPECS, SCENARIO_PRESETS, componentManifest } from './scenarioSpecs';
 import { compileScenarioDraft, scenarioIdBySkillDomain, type ScenarioBuilderDraft } from './scenarioCompiler/scenarioDraftCompiler';
-import { compileScenarioIRFromSelection, type ScenarioElementSelection } from './scenarioCompiler/scenarioElementCompiler';
+import { compileScenarioIRFromSelection, recommendScenarioElements, type ScenarioElementSelection } from './scenarioCompiler/scenarioElementCompiler';
 import { elementRegistry } from './scenarioCompiler/elementRegistry';
 import { runScenarioRuntimeSmoke } from './scenarioCompiler/runtimeSmoke';
 import { buildScenarioQualityReport } from './scenarioCompiler/scenarioQualityGate';
 import { buildBuiltInScenarioPackage, builtInScenarioPackageRef, type ScenarioPackage } from './scenarioCompiler/scenarioPackage';
+import type { ScenarioLibraryItem } from './scenarioCompiler/scenarioLibrary';
 import { compileSlotsForScenario } from './scenarioCompiler/uiPlanCompiler';
 import { scpMarkdownSkills } from './scpSkillCatalog';
 import { timeline } from './demoData';
@@ -59,6 +62,7 @@ import {
   nowIso,
   type AlignmentContractRecord,
   type BioAgentMessage,
+  type BioAgentRun,
   type BioAgentSession,
   type BioAgentWorkspaceState,
   type BioAgentConfig,
@@ -70,12 +74,14 @@ import {
   type RuntimeExecutionUnit,
   type ScenarioInstanceId,
   type ScenarioRuntimeOverride,
+  type TimelineEventRecord,
   type UIManifestSlot,
+  type ReusableTaskCandidateRecord,
 } from './domain';
 import type { VolcanoPoint } from './charts';
-import { createSession, loadWorkspaceState, resetSession, saveWorkspaceState, versionSession } from './sessionStore';
+import { createSession, loadWorkspaceState, resetSession, saveWorkspaceState, sessionActivityScore, shouldUsePersistedWorkspaceState, versionSession } from './sessionStore';
 import { loadBioAgentConfig, saveBioAgentConfig, updateConfig } from './config';
-import { archiveWorkspaceScenario, listWorkspace, loadPersistedWorkspaceState, loadScenarioLibrary, loadWorkspaceScenario, mutateWorkspaceFile, persistWorkspaceState, publishWorkspaceScenario, saveWorkspaceScenario, type WorkspaceEntry } from './api/workspaceClient';
+import { archiveWorkspaceScenario, listWorkspace, loadPersistedWorkspaceState, loadScenarioLibrary, loadWorkspaceScenario, mutateWorkspaceFile, persistWorkspaceState, publishWorkspaceScenario, restoreWorkspaceScenario, saveWorkspaceScenario, type WorkspaceEntry } from './api/workspaceClient';
 import { HeatmapViewer, MoleculeViewer, NetworkGraph, UmapViewer } from './visualizations';
 
 const chartTheme = {
@@ -147,7 +153,7 @@ function Badge({
 
 function IconButton({ icon: Icon, label, onClick }: { icon: LucideIcon; label: string; onClick?: () => void }) {
   return (
-    <button className="icon-button" onClick={onClick} title={label} aria-label={label}>
+    <button className="icon-button" onClick={onClick} title={label} aria-label={label} data-tooltip={label}>
       <Icon size={17} />
     </button>
   );
@@ -184,6 +190,135 @@ function ChartLoadingFallback({ label }: { label: string }) {
     <div className="empty-runtime-state compact chart-loading-state">
       <Badge variant="muted">loading</Badge>
       <strong>{label}</strong>
+    </div>
+  );
+}
+
+type RuntimeHealthStatus = 'checking' | 'online' | 'offline' | 'optional' | 'not-configured';
+
+interface RuntimeHealthItem {
+  id: 'ui' | 'workspace' | 'agentserver' | 'model' | 'library';
+  label: string;
+  status: RuntimeHealthStatus;
+  detail: string;
+  recoverAction?: string;
+}
+
+function useRuntimeHealth(config: BioAgentConfig, libraryCount?: number) {
+  const [items, setItems] = useState<RuntimeHealthItem[]>(() => buildInitialHealth(config, libraryCount));
+
+  useEffect(() => {
+    let cancelled = false;
+    setItems(buildInitialHealth(config, libraryCount));
+    async function check() {
+      const [workspaceOnline, agentOnline] = await Promise.all([
+        probeUrl(`${config.workspaceWriterBaseUrl.replace(/\/+$/, '')}/health`),
+        probeUrl(`${config.agentServerBaseUrl.replace(/\/+$/, '')}/health`),
+      ]);
+      if (cancelled) return;
+      setItems([
+        { id: 'ui', label: 'Web UI', status: 'online', detail: '当前页面已加载' },
+        workspaceOnline
+          ? { id: 'workspace', label: 'Workspace Writer', status: 'online', detail: config.workspaceWriterBaseUrl }
+          : { id: 'workspace', label: 'Workspace Writer', status: 'offline', detail: config.workspaceWriterBaseUrl, recoverAction: '启动 npm run workspace:server 后刷新' },
+        agentOnline
+          ? { id: 'agentserver', label: 'AgentServer', status: 'online', detail: config.agentServerBaseUrl }
+          : { id: 'agentserver', label: 'AgentServer', status: 'optional', detail: config.agentServerBaseUrl, recoverAction: '需要通用生成/修复时启动 AgentServer；seed skill 可离线运行' },
+        modelHealth(config),
+        {
+          id: 'library',
+          label: 'Scenario Library',
+          status: libraryCount && libraryCount > 0 ? 'online' : 'optional',
+          detail: libraryCount && libraryCount > 0 ? `${libraryCount} packages in workspace` : '可先导入官方 package 或编译新场景',
+        },
+      ]);
+    }
+    void check();
+    return () => {
+      cancelled = true;
+    };
+  }, [config.agentServerBaseUrl, config.workspaceWriterBaseUrl, config.modelProvider, config.modelName, config.apiKey, libraryCount]);
+
+  return items;
+}
+
+function buildInitialHealth(config: BioAgentConfig, libraryCount?: number): RuntimeHealthItem[] {
+  return [
+    { id: 'ui', label: 'Web UI', status: 'online', detail: '当前页面已加载' },
+    { id: 'workspace', label: 'Workspace Writer', status: 'checking', detail: config.workspaceWriterBaseUrl },
+    { id: 'agentserver', label: 'AgentServer', status: 'checking', detail: config.agentServerBaseUrl },
+    modelHealth(config),
+    {
+      id: 'library',
+      label: 'Scenario Library',
+      status: libraryCount && libraryCount > 0 ? 'online' : 'optional',
+      detail: libraryCount && libraryCount > 0 ? `${libraryCount} packages in workspace` : '可先导入官方 package 或编译新场景',
+    },
+  ];
+}
+
+function modelHealth(config: BioAgentConfig): RuntimeHealthItem {
+  const provider = config.modelProvider.trim() || 'native';
+  if (provider === 'native') return { id: 'model', label: 'Model Backend', status: 'online', detail: 'native backend default' };
+  if (!config.modelBaseUrl.trim()) {
+    return { id: 'model', label: 'Model Backend', status: 'not-configured', detail: provider, recoverAction: '填写 Model Base URL 或切回 native' };
+  }
+  if (!config.apiKey.trim()) {
+    return { id: 'model', label: 'Model Backend', status: 'not-configured', detail: provider, recoverAction: '填写 API Key 或使用 native backend' };
+  }
+  return { id: 'model', label: 'Model Backend', status: 'online', detail: `${provider}${config.modelName.trim() ? ` · ${config.modelName.trim()}` : ''}` };
+}
+
+async function probeUrl(url: string) {
+  if (!url || !/^https?:\/\//.test(url)) return false;
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 1600);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+function healthBadgeVariant(status: RuntimeHealthStatus): 'success' | 'info' | 'warning' | 'danger' | 'muted' {
+  if (status === 'online') return 'success';
+  if (status === 'checking') return 'info';
+  if (status === 'optional') return 'warning';
+  if (status === 'not-configured') return 'warning';
+  return 'danger';
+}
+
+function healthLabel(status: RuntimeHealthStatus) {
+  if (status === 'online') return 'online';
+  if (status === 'checking') return 'checking';
+  if (status === 'optional') return 'optional';
+  if (status === 'not-configured') return 'setup';
+  return 'offline';
+}
+
+function RuntimeHealthPanel({ items, compact = false }: { items: RuntimeHealthItem[]; compact?: boolean }) {
+  const blocking = items.filter((item) => item.status === 'offline' || item.status === 'not-configured');
+  return (
+    <div className={cx('runtime-health-panel', compact && 'compact')}>
+      <div className="runtime-health-head">
+        <strong>Runtime Health</strong>
+        <Badge variant={blocking.length ? 'warning' : 'success'}>{blocking.length ? `${blocking.length} actions` : 'ready'}</Badge>
+      </div>
+      <div className="runtime-health-grid">
+        {items.map((item) => (
+          <div className="runtime-health-item" key={item.id}>
+            <Badge variant={healthBadgeVariant(item.status)}>{healthLabel(item.status)}</Badge>
+            <div>
+              <strong>{item.label}</strong>
+              <span>{item.detail}</span>
+              {item.recoverAction ? <em>{item.recoverAction}</em> : null}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -229,7 +364,7 @@ function TabBar<T extends string>({
   return (
     <div className="tabbar">
       {tabs.map((tab) => (
-        <button key={tab.id} className={cx('tab', active === tab.id && 'active')} onClick={() => onChange(tab.id)}>
+        <button key={tab.id} className={cx('tab', active === tab.id && 'active')} onClick={() => onChange(tab.id)} title={tab.label} data-tooltip={tab.label}>
           {tab.icon ? <tab.icon size={14} /> : null}
           <span>{tab.label}</span>
         </button>
@@ -328,6 +463,48 @@ function parseScenarioPackageJson(value: unknown): ScenarioPackage {
   if (!Array.isArray(value.tests)) throw new Error('Package tests 必须是数组。');
   if (!Array.isArray(value.versions)) throw new Error('Package versions 必须是数组。');
   return value as unknown as ScenarioPackage;
+}
+
+function renameScenarioPackageForImport(pkg: ScenarioPackage, nextId: string): ScenarioPackage {
+  return {
+    ...pkg,
+    id: nextId,
+    status: pkg.status === 'archived' ? 'draft' : pkg.status,
+    scenario: {
+      ...pkg.scenario,
+      id: nextId,
+      title: pkg.scenario.title.endsWith(' copy') ? pkg.scenario.title : `${pkg.scenario.title} copy`,
+      source: 'workspace',
+    },
+    versions: [{
+      version: pkg.version,
+      status: 'draft',
+      createdAt: nowIso(),
+      summary: `Imported as ${nextId} to avoid package id conflict.`,
+      scenarioHash: `import-${nextId}`,
+    }, ...pkg.versions],
+  };
+}
+
+function filterScenarioLibraryItems(
+  items: ScenarioLibraryItem[],
+  options: { query: string; status: string; source: string; domain: string; sort: string },
+) {
+  const query = options.query.trim().toLowerCase();
+  return [...items]
+    .filter((item) => {
+      if (options.status !== 'all' && item.status !== options.status) return false;
+      if (options.source !== 'all' && item.source !== options.source) return false;
+      if (options.domain !== 'all' && item.skillDomain !== options.domain) return false;
+      if (!query) return true;
+      return [item.id, item.title, item.description, item.version, item.status, item.source, item.skillDomain]
+        .some((value) => value.toLowerCase().includes(query));
+    })
+    .sort((left, right) => {
+      if (options.sort === 'title') return left.title.localeCompare(right.title);
+      if (options.sort === 'status') return `${left.status}-${left.title}`.localeCompare(`${right.status}-${right.title}`);
+      return Date.parse(right.versions[0]?.createdAt ?? '') - Date.parse(left.versions[0]?.createdAt ?? '');
+    });
 }
 
 function exportTextFile(name: string, content: string, contentType = 'text/plain') {
@@ -498,6 +675,7 @@ function Sidebar({
   const [sidebarWidth, setSidebarWidth] = useState(284);
   const [workspaceEntries, setWorkspaceEntries] = useState<WorkspaceEntry[]>([]);
   const [workspaceError, setWorkspaceError] = useState('');
+  const [workspaceNotice, setWorkspaceNotice] = useState('');
   const [selectedEntryPath, setSelectedEntryPath] = useState('');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry?: WorkspaceEntry } | null>(null);
   const resizingRef = useRef(false);
@@ -542,10 +720,13 @@ function Sidebar({
   async function refreshWorkspace() {
     try {
       setWorkspaceError('');
-      setWorkspaceEntries(await listWorkspace(config.workspacePath, config));
+      const entries = await listWorkspace(config.workspacePath, config);
+      setWorkspaceEntries(entries);
+      setWorkspaceNotice(entries.length ? `已加载 ${entries.length} 个资源` : '当前目录为空；可新建文件夹或打开 .bioagent 分组。');
     } catch (err) {
       setWorkspaceEntries([]);
       setWorkspaceError(err instanceof Error ? err.message : String(err));
+      setWorkspaceNotice('');
     }
   }
 
@@ -574,8 +755,32 @@ function Sidebar({
       setWorkspaceError('');
       await mutateWorkspaceFile(config, action, { path: targetPath, targetPath: renameTarget });
       await refreshWorkspace();
+      setWorkspaceNotice(workspaceActionSuccessMessage(action));
     } catch (err) {
       setWorkspaceError(err instanceof Error ? err.message : String(err));
+      setWorkspaceNotice('');
+    }
+  }
+
+  async function initializeWorkspacePath() {
+    const root = config.workspacePath.trim();
+    if (!root) {
+      setWorkspaceError('请先填写 workspace path。');
+      return;
+    }
+    try {
+      setWorkspaceError('');
+      setWorkspaceNotice('正在创建 BioAgent workspace...');
+      await mutateWorkspaceFile(config, 'create-folder', { path: root });
+      await mutateWorkspaceFile(config, 'create-folder', { path: `${root.replace(/\/+$/, '')}/.bioagent` });
+      for (const resource of ['tasks', 'logs', 'task-results', 'scenarios', 'exports', 'artifacts', 'sessions', 'versions']) {
+        await mutateWorkspaceFile(config, 'create-folder', { path: `${root.replace(/\/+$/, '')}/.bioagent/${resource}` });
+      }
+      await refreshWorkspace();
+      setWorkspaceNotice('BioAgent workspace 已创建；可以导入 package 或运行场景。');
+    } catch (err) {
+      setWorkspaceError(workspaceOnboardingError(err));
+      setWorkspaceNotice('');
     }
   }
 
@@ -674,7 +879,34 @@ function Sidebar({
                   <button onClick={() => void runWorkspaceAction('create-folder')} title="新建文件夹" aria-label="新建文件夹"><FolderPlus size={14} /></button>
                   <button onClick={() => void refreshWorkspace()} title="刷新" aria-label="刷新"><RefreshCw size={14} /></button>
                 </div>
+                {workspaceNeedsOnboarding(config.workspacePath, workspaceError, workspaceStatus) ? (
+                  <div className="workspace-onboarding">
+                    <strong>{config.workspacePath.trim() ? '初始化 BioAgent workspace' : '设置 workspace path'}</strong>
+                    <p>{workspaceOnboardingReason(config.workspacePath, workspaceError, workspaceStatus)}</p>
+                    <button type="button" onClick={() => void initializeWorkspacePath()}>
+                      创建 .bioagent 工作区
+                    </button>
+                  </div>
+                ) : null}
+                {workspaceNotice ? <p className="workspace-status" role="status">{workspaceNotice}</p> : null}
                 {workspaceError ? <p className="workspace-error">{workspaceError}</p> : null}
+                <div className="workspace-bioagent-group" aria-label=".bioagent 专用分组">
+                  <div className="workspace-group-head">
+                    <Database size={14} />
+                    <span>.bioagent resources</span>
+                  </div>
+                  {bioagentWorkspaceResources(config.workspacePath).map((resource) => (
+                    <button
+                      key={resource.key}
+                      className="workspace-resource-chip"
+                      onClick={() => onWorkspacePathChange(resource.path)}
+                      title={resource.path}
+                    >
+                      <Folder size={13} />
+                      <span>{resource.label}</span>
+                    </button>
+                  ))}
+                </div>
                 {workspaceEntries.map((entry) => (
                   <button
                     key={entry.path}
@@ -770,14 +1002,61 @@ function Sidebar({
   );
 }
 
+function workspaceActionSuccessMessage(action: 'create-file' | 'create-folder' | 'rename' | 'delete') {
+  if (action === 'create-file') return '文件已创建。';
+  if (action === 'create-folder') return '文件夹已创建。';
+  if (action === 'rename') return '资源已重命名。';
+  return '资源已删除。';
+}
+
+function workspaceNeedsOnboarding(path: string, workspaceError: string, workspaceStatus: string) {
+  if (!path.trim()) return true;
+  const combined = `${workspaceError} ${workspaceStatus}`;
+  return /ENOENT|no such file|not found|未找到|不存在/i.test(combined);
+}
+
+function workspaceOnboardingReason(path: string, workspaceError: string, workspaceStatus: string) {
+  if (!path.trim()) return '当前还没有 workspace path；填写一个本机目录后可以创建 .bioagent 资源结构。';
+  const combined = `${workspaceError} ${workspaceStatus}`;
+  if (/EACCES|EPERM|permission|权限/i.test(combined)) {
+    return '当前路径权限不足；请选择可写目录，或修复目录权限后再创建。';
+  }
+  if (/Workspace Writer 未连接|Failed to fetch|无法访问|connection/i.test(combined)) {
+    return 'Workspace Writer 当前不可用；请启动 npm run workspace:server 后再创建。';
+  }
+  return `未找到 ${path}/.bioagent/workspace-state.json；可以创建标准 .bioagent 目录结构作为新工作区。`;
+}
+
+function workspaceOnboardingError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/EACCES|EPERM|permission/i.test(message)) return `创建失败：权限不足。${message}`;
+  if (/Workspace Writer 未连接|Failed to fetch|fetch/i.test(message)) return `创建失败：Workspace Writer 未连接。${message}`;
+  return `创建失败：${message}`;
+}
+
+function bioagentWorkspaceResources(workspacePath: string) {
+  const root = `${workspacePath.replace(/\/+$/, '')}/.bioagent`;
+  return [
+    { key: 'tasks', label: 'tasks', path: `${root}/tasks` },
+    { key: 'logs', label: 'logs', path: `${root}/logs` },
+    { key: 'task-results', label: 'task-results', path: `${root}/task-results` },
+    { key: 'scenarios', label: 'scenarios', path: `${root}/scenarios` },
+    { key: 'exports', label: 'exports', path: `${root}/exports` },
+    { key: 'artifacts', label: 'artifacts', path: `${root}/artifacts` },
+  ];
+}
+
 function TopBar({
   onSearch,
   onSettingsOpen,
+  healthItems,
 }: {
   onSearch: (query: string) => void;
   onSettingsOpen: () => void;
+  healthItems: RuntimeHealthItem[];
 }) {
   const [query, setQuery] = useState('');
+  const healthProblems = healthItems.filter((item) => item.status === 'offline' || item.status === 'not-configured').length;
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     onSearch(query);
@@ -789,8 +1068,8 @@ function TopBar({
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索基因、通路、文献、Execution Unit..." />
       </form>
       <div className="topbar-actions">
-        <Badge variant="info" glow>
-          Scenario Runtime
+        <Badge variant={healthProblems ? 'warning' : 'success'} glow>
+          Scenario Runtime · {healthProblems ? `${healthProblems} actions` : 'ready'}
         </Badge>
         <IconButton icon={Settings} label="设置" onClick={onSettingsOpen} />
       </div>
@@ -807,6 +1086,14 @@ function SettingsDialog({
   onChange: (patch: Partial<BioAgentConfig>) => void;
   onClose: () => void;
 }) {
+  const healthItems = useRuntimeHealth(config);
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') onClose();
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section className="settings-dialog" role="dialog" aria-modal="true" aria-label="BioAgent 设置" onMouseDown={(event) => event.stopPropagation()}>
@@ -817,6 +1104,7 @@ function SettingsDialog({
           </div>
           <IconButton icon={ChevronDown} label="关闭设置" onClick={onClose} />
         </div>
+        <RuntimeHealthPanel items={healthItems} />
         <div className="settings-grid">
           <label>
             <span>AgentServer Base URL</span>
@@ -872,29 +1160,181 @@ function SettingsDialog({
             <strong>{config.modelProvider || 'native'}</strong>
             {config.modelName.trim() ? <code>{config.modelName.trim()}</code> : <em>backend default</em>}
           </span>
+          <ActionButton icon={RefreshCw} variant="secondary" onClick={() => window.location.reload()}>重新检测连接</ActionButton>
         </div>
       </section>
     </div>
   );
 }
 
+function PackageExportPreviewDialog({
+  pkg,
+  workspacePath,
+  onClose,
+  onConfirm,
+}: {
+  pkg: ScenarioPackage;
+  workspacePath: string;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const preview = packageManifestPreview(pkg, workspacePath);
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') onClose();
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="settings-dialog package-export-dialog" role="dialog" aria-modal="true" aria-label="Package export preview" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="settings-head">
+          <div>
+            <h2>导出 package manifest preview</h2>
+            <p>{pkg.id}@{pkg.version} · {pkg.status}</p>
+          </div>
+          <IconButton icon={ChevronDown} label="关闭导出预览" onClick={onClose} />
+        </div>
+        <div className="package-export-summary">
+          <Badge variant={preview.hasSensitiveRefs ? 'warning' : 'success'}>
+            {preview.hasSensitiveRefs ? 'contains workspace refs' : 'portable manifest'}
+          </Badge>
+          <span>{preview.slotCount} UI slots</span>
+          <span>{preview.skillCount} skills</span>
+          <span>{preview.testCount} tests</span>
+          <span>{preview.versionCount} versions</span>
+        </div>
+        <div className="handoff-field-grid">
+          <span><em>scenario</em><code>{pkg.scenario.title}</code></span>
+          <span><em>domain</em><code>{pkg.scenario.skillDomain}</code></span>
+          <span><em>quality</em><code>{preview.qualityLabel}</code></span>
+          <span><em>export file</em><code>{pkg.id}-{pkg.version}.scenario-package.json</code></span>
+        </div>
+        {preview.sensitiveRefs.length ? (
+          <div className="export-warning">
+            <strong>可能包含本机 workspace 引用</strong>
+            <p>导出前确认这些路径是否可以分享；需要公开分发时建议替换为相对路径、dataRef 或受控 artifact refs。</p>
+            <div className="inspector-ref-list">
+              {preview.sensitiveRefs.slice(0, 5).map((ref) => <code key={ref}>{ref}</code>)}
+            </div>
+          </div>
+        ) : null}
+        <pre className="inspector-json">{JSON.stringify(preview.manifest, null, 2)}</pre>
+        <div className="scenario-builder-actions">
+          <ActionButton icon={ChevronLeft} variant="secondary" onClick={onClose}>取消</ActionButton>
+          <ActionButton icon={Download} onClick={onConfirm}>确认导出</ActionButton>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function packageManifestPreview(pkg: ScenarioPackage, workspacePath: string) {
+  const json = JSON.stringify(pkg, null, 2);
+  const sensitiveRefs = extractSensitiveWorkspaceRefs(json, workspacePath);
+  const qualityOk = pkg.qualityReport?.ok ?? pkg.validationReport?.ok ?? true;
+  return {
+    hasSensitiveRefs: sensitiveRefs.length > 0,
+    sensitiveRefs,
+    slotCount: pkg.uiPlan.slots.length,
+    skillCount: pkg.skillPlan.skillIRs.length,
+    testCount: pkg.tests.length,
+    versionCount: pkg.versions.length || 1,
+    qualityLabel: qualityOk ? 'quality pass' : 'quality warnings',
+    manifest: {
+      schemaVersion: pkg.schemaVersion,
+      id: pkg.id,
+      version: pkg.version,
+      status: pkg.status,
+      scenario: {
+        id: pkg.scenario.id,
+        title: pkg.scenario.title,
+        skillDomain: pkg.scenario.skillDomain,
+        source: pkg.scenario.source,
+      },
+      skillPlan: {
+        id: pkg.skillPlan.id,
+        skills: pkg.skillPlan.skillIRs.map((skill) => skill.skillId),
+      },
+      uiPlan: {
+        id: pkg.uiPlan.id,
+        components: pkg.uiPlan.compiledFrom.componentIds,
+        artifacts: pkg.uiPlan.compiledFrom.artifactTypes,
+      },
+      tests: pkg.tests.map((test) => ({ id: test.id, expectedArtifactTypes: test.expectedArtifactTypes })),
+      quality: {
+        ok: qualityOk,
+        issues: pkg.qualityReport?.items.length ?? pkg.validationReport?.issues.length ?? 0,
+      },
+      versions: pkg.versions.map((version) => ({
+        version: version.version,
+        status: version.status,
+        createdAt: version.createdAt,
+        summary: version.summary,
+      })),
+    },
+  };
+}
+
+function extractSensitiveWorkspaceRefs(json: string, workspacePath: string) {
+  const refs = new Set<string>();
+  const normalizedWorkspace = workspacePath.trim();
+  if (normalizedWorkspace && json.includes(normalizedWorkspace)) refs.add(normalizedWorkspace);
+  const pathPattern = /(?:\/Users\/|\/Applications\/workspace\/|[A-Za-z]:\\)[^"',\s)]+/g;
+  for (const match of json.matchAll(pathPattern)) {
+    refs.add(match[0]);
+  }
+  return Array.from(refs).slice(0, 12);
+}
+
 function Dashboard({
   setPage,
   setScenarioId,
   config,
+  workspaceState,
   onApplyScenarioDraft,
+  onWorkbenchPrompt,
+  onHideOfficialPackage,
+  onRestoreOfficialPackages,
 }: {
   setPage: (page: PageId) => void;
   setScenarioId: (id: ScenarioInstanceId) => void;
   config: BioAgentConfig;
+  workspaceState: BioAgentWorkspaceState;
   onApplyScenarioDraft: (scenarioId: ScenarioInstanceId, draft: ScenarioRuntimeOverride) => void;
+  onWorkbenchPrompt: (scenarioId: ScenarioInstanceId, prompt: string) => void;
+  onHideOfficialPackage: (id: string) => void;
+  onRestoreOfficialPackages: () => void;
 }) {
   const [scenarioPrompt, setScenarioPrompt] = useState('我想比较KRAS G12D突变相关文献证据，并在需要时联动蛋白结构和知识图谱。');
   const [scenarioDraft, setScenarioDraft] = useState<ScenarioBuilderDraft>(() => compileScenarioDraft('我想比较KRAS G12D突变相关文献证据，并在需要时联动蛋白结构和知识图谱。'));
-  const [libraryItems, setLibraryItems] = useState<Array<{ id: string; title: string; description: string; version: string; status: string; source?: string }>>([]);
+  const draftArtifactTypes = scenarioDraft.recommendedArtifactTypes ?? [];
+  const draftSkillIds = scenarioDraft.recommendedSkillIds ?? [];
+  const [libraryItems, setLibraryItems] = useState<ScenarioLibraryItem[]>([]);
   const [libraryStatus, setLibraryStatus] = useState('');
+  const [libraryQuery, setLibraryQuery] = useState('');
+  const [libraryStatusFilter, setLibraryStatusFilter] = useState('all');
+  const [librarySourceFilter, setLibrarySourceFilter] = useState('all');
+  const [libraryDomainFilter, setLibraryDomainFilter] = useState('all');
+  const [librarySort, setLibrarySort] = useState('recent');
+  const [exportPreviewPackage, setExportPreviewPackage] = useState<ScenarioPackage | undefined>();
   const packageImportInputRef = useRef<HTMLInputElement>(null);
   const importedPackageIds = useMemo(() => new Set(libraryItems.map((item) => item.id)), [libraryItems]);
+  const filteredLibraryItems = useMemo(() => filterScenarioLibraryItems(libraryItems, {
+    query: libraryQuery,
+    status: libraryStatusFilter,
+    source: librarySourceFilter,
+    domain: libraryDomainFilter,
+    sort: librarySort,
+  }), [libraryItems, libraryQuery, libraryStatusFilter, librarySourceFilter, libraryDomainFilter, librarySort]);
+  const healthItems = useRuntimeHealth(config, libraryItems.length);
+  const packageRunStatsById = useMemo(() => buildPackageRunStats(workspaceState), [workspaceState]);
+  const hiddenOfficialPackageIds = workspaceState.hiddenOfficialPackageIds ?? [];
+  const visibleOfficialScenarioPackages = useMemo(() => {
+    const hidden = new Set(hiddenOfficialPackageIds);
+    return officialScenarioPackages.filter(({ package: pkg }) => !hidden.has(pkg.id));
+  }, [hiddenOfficialPackageIds]);
   useEffect(() => {
     let cancelled = false;
     if (!config.workspacePath.trim()) {
@@ -959,6 +1399,12 @@ function Dashboard({
     setLibraryStatus('已归档。');
   }
 
+  async function restoreWorkspaceScenarioFromLibrary(id: string) {
+    await restoreWorkspaceScenario(config, id, 'draft');
+    await refreshScenarioLibrary();
+    setLibraryStatus(`已恢复 ${id} 到 Library draft，可重新打开或发布。`);
+  }
+
   async function importScenarioPackageFile(event: FormEvent<HTMLInputElement>) {
     const input = event.currentTarget;
     const file = input.files?.[0];
@@ -966,7 +1412,18 @@ function Dashboard({
     if (!file) return;
     try {
       const json = JSON.parse(await file.text()) as unknown;
-      const pkg = parseScenarioPackageJson(json);
+      let pkg = parseScenarioPackageJson(json);
+      if (importedPackageIds.has(pkg.id)) {
+        const overwrite = window.confirm(`Scenario Library 已存在 ${pkg.id}。选择“确定”覆盖，选择“取消”则另存为新 id。`);
+        if (!overwrite) {
+          const nextId = window.prompt('另存为 package id', `${pkg.id}-import-${Date.now().toString(36)}`);
+          if (!nextId?.trim()) {
+            setLibraryStatus('已取消导入。');
+            return;
+          }
+          pkg = renameScenarioPackageForImport(pkg, nextId.trim());
+        }
+      }
       await saveWorkspaceScenario(config, pkg);
       await refreshScenarioLibrary();
       setLibraryStatus(`已导入 package ${pkg.scenario.title} (${pkg.id}@${pkg.version})，正在打开工作台。`);
@@ -982,8 +1439,7 @@ function Dashboard({
       setLibraryStatus(`导出失败：找不到 package ${id}。`);
       return;
     }
-    exportJsonFile(`${pkg.id}-${pkg.version}.scenario-package.json`, pkg);
-    setLibraryStatus(`已导出 ${pkg.scenario.title || pkg.id} package JSON。`);
+    setExportPreviewPackage(pkg);
   }
 
   async function importOfficialPackage(id: ScenarioId) {
@@ -1008,8 +1464,7 @@ function Dashboard({
 
   function exportOfficialPackage(id: ScenarioId) {
     const pkg = buildBuiltInScenarioPackage(id);
-    exportJsonFile(`${pkg.id}-${pkg.version}.scenario-package.json`, pkg);
-    setLibraryStatus(`已导出 ${pkg.scenario.title} package JSON。`);
+    setExportPreviewPackage(pkg);
   }
   const activityData = [
     { day: 'Mon', papers: 28, eus: 4 },
@@ -1025,6 +1480,32 @@ function Dashboard({
         <h1>研究概览</h1>
         <p>场景 markdown 编译为 ScenarioSpec，LLM 只生成结构化 artifact 和 UIManifest，组件库负责专业展示。</p>
       </div>
+
+      <section className="get-started-panel">
+        <div>
+          <Badge variant="success">Get Started</Badge>
+          <h2>从一个稳定研究服务开始</h2>
+          <p>导入官方 package、导入本地 package，或描述需求编译新场景。导入后会直接进入对应工作台。</p>
+        </div>
+        <div className="get-started-actions">
+          <ActionButton icon={FilePlus} onClick={() => void importOfficialPackage('literature-evidence-review')}>导入文献场景</ActionButton>
+          <ActionButton icon={FileUp} variant="secondary" onClick={() => packageImportInputRef.current?.click()}>导入 package JSON</ActionButton>
+          <ActionButton icon={Sparkles} variant="secondary" onClick={() => setScenarioDraft(compileScenarioDraft(scenarioPrompt))}>编译新场景</ActionButton>
+        </div>
+        <RuntimeHealthPanel items={healthItems} compact />
+      </section>
+      {exportPreviewPackage ? (
+        <PackageExportPreviewDialog
+          pkg={exportPreviewPackage}
+          workspacePath={config.workspacePath}
+          onClose={() => setExportPreviewPackage(undefined)}
+          onConfirm={() => {
+            exportJsonFile(`${exportPreviewPackage.id}-${exportPreviewPackage.version}.scenario-package.json`, exportPreviewPackage);
+            setLibraryStatus(`已导出 ${exportPreviewPackage.scenario.title || exportPreviewPackage.id} package JSON。`);
+            setExportPreviewPackage(undefined);
+          }}
+        />
+      ) : null}
 
       <div className="stats-grid">
         {stats.map((stat) => (
@@ -1060,12 +1541,14 @@ function Dashboard({
               icon={Play}
               variant="secondary"
               onClick={() => {
-                onApplyScenarioDraft(scenarioDraft.baseScenarioId, scenarioDraft);
-                setScenarioId(scenarioDraft.baseScenarioId);
+                const instanceId = scenarioInstanceIdForDraft(scenarioDraft);
+                onApplyScenarioDraft(instanceId, compiledScenarioOverrideForDraft(instanceId, scenarioDraft));
+                onWorkbenchPrompt(instanceId, scenarioPrompt.trim() || scenarioDraft.description);
+                setScenarioId(instanceId);
                 setPage('workbench');
               }}
             >
-              进入场景工作台
+              进入可运行工作台
             </ActionButton>
           </div>
         </div>
@@ -1077,6 +1560,12 @@ function Dashboard({
           </div>
           <div className="component-pills">
             {scenarioDraft.defaultComponents.map((component) => <code key={component}>{component}</code>)}
+          </div>
+          <div className="component-pills">
+            {draftArtifactTypes.map((artifactType) => <code key={artifactType}>{artifactType}</code>)}
+          </div>
+          <div className="component-pills">
+            {draftSkillIds.slice(0, 4).map((skillId) => <code key={skillId}>{skillId}</code>)}
           </div>
           <pre>{scenarioDraft.scenarioMarkdown}</pre>
         </div>
@@ -1114,9 +1603,15 @@ function Dashboard({
       </div>
 
       <section>
-        <SectionHeader title="Official Package Catalog" subtitle="官方预编译 packages 默认不进入 workspace；按需导入后才会成为可运行场景" />
+        <SectionHeader
+          title="Official Package Catalog"
+          subtitle="官方预编译 packages 默认不进入 workspace；可隐藏不常用模板，隐藏不会删除模板或 workspace package"
+          action={hiddenOfficialPackageIds.length ? (
+            <ActionButton icon={RefreshCw} variant="secondary" onClick={onRestoreOfficialPackages}>恢复隐藏</ActionButton>
+          ) : undefined}
+        />
         <div className="scenario-grid">
-          {officialScenarioPackages.map(({ scenario, package: pkg }) => (
+          {visibleOfficialScenarioPackages.map(({ scenario, package: pkg }) => (
             <Card
               key={pkg.id}
               className="scenario-card"
@@ -1138,6 +1633,13 @@ function Dashboard({
                 <code>{pkg.id}@{pkg.version}</code>
                 <span>{pkg.uiPlan.slots.length} UI slots</span>
               </div>
+              <PackageOperationalMeta
+                versionCount={pkg.versions.length || 1}
+                versions={pkg.versions}
+                qualityOk={pkg.qualityReport?.ok ?? pkg.validationReport?.ok ?? true}
+                qualityIssueCount={pkg.qualityReport?.items.length ?? pkg.validationReport?.issues.length ?? 0}
+                runStats={packageRunStatsById[pkg.id]}
+              />
               <div className="manifest-strip">
                 {pkg.uiPlan.compiledFrom.componentIds.map((component) => (
                   <i key={component} title={component} />
@@ -1151,10 +1653,18 @@ function Dashboard({
                   {importedPackageIds.has(pkg.id) ? '打开' : '导入并打开'}
                 </ActionButton>
                 <ActionButton icon={Download} variant="secondary" onClick={() => exportOfficialPackage(scenario.id)}>导出</ActionButton>
+                <ActionButton icon={Eye} variant="ghost" onClick={() => onHideOfficialPackage(pkg.id)}>隐藏</ActionButton>
               </div>
             </Card>
           ))}
         </div>
+        {!visibleOfficialScenarioPackages.length ? (
+          <div className="empty-runtime-state compact">
+            <strong>官方模板已全部隐藏</strong>
+            <span>模板没有被删除，可以随时恢复显示。</span>
+            <ActionButton icon={RefreshCw} variant="secondary" onClick={onRestoreOfficialPackages}>恢复全部官方模板</ActionButton>
+          </div>
+        ) : null}
       </section>
 
       <section>
@@ -1176,8 +1686,41 @@ function Dashboard({
           )}
         />
         {libraryStatus ? <p className="empty-state">{libraryStatus}</p> : null}
+        <div className="library-controls">
+          <input
+            value={libraryQuery}
+            onChange={(event) => setLibraryQuery(event.target.value)}
+            placeholder="搜索 package、描述、版本..."
+            aria-label="搜索 Scenario Library"
+          />
+          <select value={libraryStatusFilter} onChange={(event) => setLibraryStatusFilter(event.target.value)} aria-label="按状态过滤">
+            <option value="all">全部状态</option>
+            <option value="published">published</option>
+            <option value="draft">draft</option>
+            <option value="validated">validated</option>
+            <option value="archived">archived</option>
+          </select>
+          <select value={librarySourceFilter} onChange={(event) => setLibrarySourceFilter(event.target.value)} aria-label="按来源过滤">
+            <option value="all">全部来源</option>
+            <option value="built-in">built-in</option>
+            <option value="workspace">workspace</option>
+            <option value="archived">archived</option>
+          </select>
+          <select value={libraryDomainFilter} onChange={(event) => setLibraryDomainFilter(event.target.value)} aria-label="按 skill domain 过滤">
+            <option value="all">全部 domain</option>
+            <option value="literature">literature</option>
+            <option value="structure">structure</option>
+            <option value="omics">omics</option>
+            <option value="knowledge">knowledge</option>
+          </select>
+          <select value={librarySort} onChange={(event) => setLibrarySort(event.target.value)} aria-label="排序 Scenario Library">
+            <option value="recent">最近版本</option>
+            <option value="title">名称</option>
+            <option value="status">质量状态</option>
+          </select>
+        </div>
         <div className="scenario-grid">
-          {libraryItems.slice(0, 8).map((item) => (
+          {filteredLibraryItems.slice(0, 12).map((item) => (
             <Card key={`${item.id}-${item.version}`} className="scenario-card">
               <div className="scenario-card-top">
                 <Badge variant={item.status === 'published' ? 'success' : item.status === 'archived' ? 'muted' : 'warning'}>{item.status}</Badge>
@@ -1187,19 +1730,104 @@ function Dashboard({
               <p>{item.description || item.id}</p>
               <div className="scenario-note">
                 <code>{item.id}</code>
-                <span>{item.source ?? 'workspace'}</span>
+                <span>{item.source ?? 'workspace'} · {item.skillDomain}</span>
               </div>
+              <PackageOperationalMeta
+                versionCount={item.versions.length || 1}
+                versions={item.versions}
+                qualityOk={item.qualityReport?.ok ?? item.validationReport?.ok ?? true}
+                qualityIssueCount={item.qualityReport?.items.length ?? item.validationReport?.issues.length ?? 0}
+                runStats={packageRunStatsById[item.id]}
+              />
               <div className="scenario-builder-actions">
-                <ActionButton icon={Play} onClick={() => void openWorkspaceScenario(item.id)}>打开</ActionButton>
+                {item.status === 'archived' ? (
+                  <ActionButton icon={RefreshCw} onClick={() => void restoreWorkspaceScenarioFromLibrary(item.id)}>恢复</ActionButton>
+                ) : (
+                  <ActionButton icon={Play} onClick={() => void openWorkspaceScenario(item.id)}>打开</ActionButton>
+                )}
                 <ActionButton icon={FilePlus} variant="secondary" onClick={() => void copyWorkspaceScenario(item.id)}>复制</ActionButton>
                 <ActionButton icon={Download} variant="secondary" onClick={() => void exportWorkspacePackage(item.id)}>导出</ActionButton>
-                <ActionButton icon={Trash2} variant="ghost" onClick={() => void archiveWorkspaceScenarioFromLibrary(item.id)}>归档</ActionButton>
+                {item.status !== 'archived' ? <ActionButton icon={Trash2} variant="ghost" onClick={() => void archiveWorkspaceScenarioFromLibrary(item.id)}>归档</ActionButton> : null}
               </div>
             </Card>
           ))}
         </div>
+        {!filteredLibraryItems.length ? <p className="empty-state">没有匹配的 package。可以清空搜索、切换过滤条件，或导入新的 package JSON。</p> : null}
+        {workspaceState.reusableTaskCandidates?.length ? (
+          <div className="candidate-panel" aria-label="Reusable candidate 候选区">
+            <SectionHeader title="Reusable Task Candidates" subtitle="从 Workbench 标记出来、可进入 Element Registry 的 skill/task 候选" />
+            <div className="candidate-list">
+              {workspaceState.reusableTaskCandidates.slice(0, 6).map((candidate) => (
+                <div className="candidate-row" key={candidate.id}>
+                  <Badge variant={candidate.status === 'completed' ? 'success' : 'warning'}>{candidate.promotionState}</Badge>
+                  <span>
+                    <strong>{candidate.scenarioPackageRef?.id ?? candidate.scenarioId}</strong>
+                    <small>{candidate.skillPlanRef ?? 'skill-plan unknown'} · run {candidate.runId.replace(/^run-/, '').slice(0, 8)}</small>
+                  </span>
+                  <code>{candidate.prompt.slice(0, 72)}</code>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </section>
     </main>
+  );
+}
+
+type PackageRunStats = {
+  lastRun?: BioAgentRun;
+  totalRuns: number;
+  failedRuns: number;
+};
+
+function buildPackageRunStats(workspaceState: BioAgentWorkspaceState): Record<string, PackageRunStats> {
+  const stats: Record<string, PackageRunStats> = {};
+  const sessions = [
+    ...Object.values(workspaceState.sessionsByScenario),
+    ...workspaceState.archivedSessions,
+  ];
+  for (const run of sessions.flatMap((session) => session.runs)) {
+    const packageId = run.scenarioPackageRef?.id;
+    if (!packageId) continue;
+    const current = stats[packageId] ?? { totalRuns: 0, failedRuns: 0 };
+    const currentLast = current.lastRun ? Date.parse(current.lastRun.completedAt ?? current.lastRun.createdAt) : -1;
+    const runTime = Date.parse(run.completedAt ?? run.createdAt);
+    stats[packageId] = {
+      lastRun: runTime >= currentLast ? run : current.lastRun,
+      totalRuns: current.totalRuns + 1,
+      failedRuns: current.failedRuns + (run.status === 'failed' ? 1 : 0),
+    };
+  }
+  return stats;
+}
+
+function PackageOperationalMeta({
+  versionCount,
+  versions = [],
+  qualityOk,
+  qualityIssueCount,
+  runStats,
+}: {
+  versionCount: number;
+  versions?: ScenarioPackage['versions'];
+  qualityOk: boolean;
+  qualityIssueCount: number;
+  runStats?: PackageRunStats;
+}) {
+  const latestVersion = versions[0];
+  const lastRunLabel = runStats?.lastRun
+    ? `${runStats.lastRun.status} · ${new Date(runStats.lastRun.completedAt ?? runStats.lastRun.createdAt).toLocaleDateString('zh-CN')}`
+    : 'no runs yet';
+  return (
+    <div className="library-card-meta">
+      <Badge variant={qualityOk ? 'success' : 'warning'}>{qualityOk ? 'quality pass' : 'quality warnings'}</Badge>
+      <span>{qualityIssueCount} issues</span>
+      <span>{versionCount} versions</span>
+      <span>last run {lastRunLabel}</span>
+      <span>{runStats?.failedRuns ?? 0} failed / {runStats?.totalRuns ?? 0} runs</span>
+      {latestVersion ? <code title={latestVersion.summary}>latest {latestVersion.version} · {latestVersion.status}</code> : null}
+    </div>
   );
 }
 
@@ -1223,6 +1851,10 @@ function ChatPanel({
   autoRunRequest,
   onAutoRunConsumed,
   scenarioOverride,
+  onTimelineEvent,
+  activeRunId,
+  onActiveRunChange,
+  onMarkReusableRun,
 }: {
   scenarioId: ScenarioInstanceId;
   role: string;
@@ -1243,6 +1875,10 @@ function ChatPanel({
   autoRunRequest?: HandoffAutoRunRequest;
   onAutoRunConsumed: (requestId: string) => void;
   scenarioOverride?: ScenarioRuntimeOverride;
+  onTimelineEvent: (event: TimelineEventRecord) => void;
+  activeRunId?: string;
+  onActiveRunChange: (runId: string | undefined) => void;
+  onMarkReusableRun: (runId: string) => void;
 }) {
   const [expanded, setExpanded] = useState<number | null>(0);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -1265,6 +1901,7 @@ function ChatPanel({
   const scenarioPackageRef = scenarioOverride?.scenarioPackageRef ?? builtInScenarioPackageRef(baseScenarioId);
   const skillPlanRef = scenarioOverride?.skillPlanRef ?? `skill-plan.${baseScenarioId}.default`;
   const uiPlanRef = scenarioOverride?.uiPlanRef ?? `ui-plan.${baseScenarioId}.default`;
+  const activeRun = activeRunId ? session.runs.find((run) => run.id === activeRunId) : undefined;
 
   useEffect(() => {
     activeSessionRef.current = session;
@@ -1384,9 +2021,24 @@ function ChatPanel({
       const mergedSession = mergeAgentResponse(activeSessionRef.current, response);
       onSessionChange(mergedSession);
       activeSessionRef.current = mergedSession;
+      onActiveRunChange(response.run.id);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setErrorText(message);
+      const failedRunId = makeId('run');
+      const failedAt = nowIso();
+      const failedRun = {
+        id: failedRunId,
+        scenarioId,
+        scenarioPackageRef,
+        skillPlanRef,
+        uiPlanRef,
+        status: 'failed' as const,
+        prompt,
+        response: message,
+        createdAt: failedAt,
+        completedAt: failedAt,
+      };
       onSessionChange({
         ...optimisticSession,
         messages: [
@@ -1401,21 +2053,11 @@ function ChatPanel({
         ],
         runs: [
           ...optimisticSession.runs,
-          {
-            id: makeId('run'),
-            scenarioId,
-            scenarioPackageRef,
-            skillPlanRef,
-            uiPlanRef,
-            status: 'failed',
-            prompt,
-            response: message,
-            createdAt: nowIso(),
-            completedAt: nowIso(),
-          },
+          failedRun,
         ],
         updatedAt: nowIso(),
       });
+      onActiveRunChange(failedRunId);
     } finally {
       setIsSending(false);
       abortRef.current = null;
@@ -1508,6 +2150,15 @@ function ChatPanel({
     exportJsonFile(`${scenarioId}-${session.sessionId}.json`, session);
   }
 
+  const readiness = runReadiness({
+    input,
+    isSending,
+    config,
+    scenarioPackageRef,
+    skillPlanRef,
+    uiPlanRef,
+  });
+
   function beginEditMessage(message: BioAgentMessage) {
     setEditingMessageId(message.id);
     setEditingContent(message.content);
@@ -1560,7 +2211,6 @@ function ChatPanel({
           }}
         />
       ) : null}
-
       <div className="messages" ref={messagesRef} onScroll={handleMessagesScroll}>
         {!messages.length ? (
           <div className="chat-empty">
@@ -1569,11 +2219,22 @@ function ChatPanel({
             <span>输入研究问题后，当前 Scenario 会从一个干净上下文开始工作。</span>
           </div>
         ) : null}
-        {messages.map((message, index) => (
-          <div key={message.id} className={cx('message', message.role)}>
+        {messages.map((message, index) => {
+          const messageRunId = runIdForMessage(message, index, messages, session.runs);
+          return (
+          <div
+            key={message.id}
+            className={cx('message', message.role, activeRunId && messageRunId === activeRunId && 'active-run')}
+            data-run-id={messageRunId}
+          >
             <div className="message-body">
               <div className="message-meta">
                 <strong>{message.role === 'user' ? '你' : message.role === 'system' ? '系统' : scenario.name}</strong>
+                {messageRunId ? (
+                  <button type="button" className="message-run-link" onClick={() => onActiveRunChange(messageRunId)}>
+                    run {messageRunId.replace(/^run-/, '').slice(0, 8)}
+                  </button>
+                ) : null}
                 {message.confidence ? <ConfidenceBar value={message.confidence} /> : null}
                 {message.evidence ? <EvidenceTag level={message.evidence} /> : null}
                 {message.claimType ? <ClaimTag type={message.claimType} /> : null}
@@ -1590,6 +2251,22 @@ function ChatPanel({
               ) : (
                 <p>{message.content}</p>
               )}
+              {message.status === 'failed' ? (
+                <FailureRecoveryCard
+                  message={message.content}
+                  onOpenSettings={() => setErrorText('请打开右上角设置，检查 AgentServer / Workspace Writer / Model Backend 连接。')}
+                  onRetry={() => {
+                    const lastPrompt = [...messages].reverse().find((item) => item.role === 'user')?.content;
+                    if (lastPrompt) void runPrompt(lastPrompt, activeSessionRef.current);
+                  }}
+                  onUseSeedSkill={() => setErrorText(`当前可先使用 seed skill / workspace runtime：${skillPlanRef}。如果任务需要通用生成，再启动 AgentServer。`)}
+                  onExportDiagnostics={() => exportJsonFile(`${scenarioId}-${session.sessionId}-diagnostics.json`, buildSessionDiagnostics(session, message.content, {
+                    scenarioPackageRef,
+                    skillPlanRef,
+                    uiPlanRef,
+                  }))}
+                />
+              ) : null}
               <div className="message-actions">
                 <button onClick={() => beginEditMessage(message)}>编辑</button>
                 <button onClick={() => onDeleteMessage(message.id)}>删除</button>
@@ -1605,7 +2282,8 @@ function ChatPanel({
               ) : null}
             </div>
           </div>
-        ))}
+          );
+        })}
         {isSending ? (
           <div className="message scenario">
             <div className="message-body">
@@ -1618,6 +2296,29 @@ function ChatPanel({
           </div>
         ) : null}
       </div>
+
+      {session.runs.length ? (
+        <div className="run-link-strip" aria-label="运行记录">
+          <span>Runs</span>
+          {session.runs.slice(-6).map((run) => (
+            <button
+              key={run.id}
+              type="button"
+              className={cx(activeRunId === run.id && 'active')}
+              onClick={() => onActiveRunChange(activeRunId === run.id ? undefined : run.id)}
+              data-run-id={run.id}
+            >
+              {run.id.replace(/^run-/, '').slice(0, 8)}
+              <em>{run.status}</em>
+            </button>
+          ))}
+          {activeRun ? (
+            <button type="button" className="candidate-action" onClick={() => onMarkReusableRun(activeRun.id)}>
+              标记 reusable
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {isSending || streamEvents.length ? (
         <div className="stream-events">
@@ -1639,8 +2340,14 @@ function ChatPanel({
       {errorText ? (
         <div className="composer-error">
           <span>{errorText}</span>
+          <small>可检查 Runtime Health、启动缺失服务，或改用当前场景的 seed skill 重试。</small>
         </div>
       ) : null}
+      <div className="run-readiness">
+        <Badge variant={readiness.ok ? 'success' : readiness.severity}>{readiness.ok ? 'ready' : 'action'}</Badge>
+        <span>{readiness.message}</span>
+        <code>{scenarioPackageRef.id}@{scenarioPackageRef.version}</code>
+      </div>
       <div className="composer">
         <div className="composer-resize-handle" onMouseDown={beginComposerResize} title="拖拽调整输入框高度" />
         <textarea
@@ -1655,12 +2362,198 @@ function ChatPanel({
           rows={1}
           style={{ height: `${composerHeight}px` }}
         />
-        <ActionButton icon={Sparkles} onClick={handleSend} disabled={!input.trim()}>
+        <ActionButton icon={Sparkles} onClick={handleSend} disabled={!input.trim()} >
           {isSending ? '引导' : '发送'}
         </ActionButton>
       </div>
     </div>
   );
+}
+
+function runReadiness({
+  input,
+  isSending,
+  config,
+  scenarioPackageRef,
+  skillPlanRef,
+  uiPlanRef,
+}: {
+  input: string;
+  isSending: boolean;
+  config: BioAgentConfig;
+  scenarioPackageRef: RuntimeExecutionUnit['scenarioPackageRef'];
+  skillPlanRef: string;
+  uiPlanRef: string;
+}) {
+  if (!input.trim() && !isSending) {
+    return {
+      ok: false,
+      severity: 'muted' as const,
+      message: '输入研究问题后即可运行；Shift+Enter 换行，Enter 发送。',
+    };
+  }
+  if (isSending) {
+    return {
+      ok: true,
+      severity: 'info' as const,
+      message: '当前 run 正在执行；继续输入会排队为下一条引导。',
+    };
+  }
+  if (!config.workspacePath.trim()) {
+    return {
+      ok: false,
+      severity: 'warning' as const,
+      message: '缺少 workspace path，请先在设置中选择工作目录。',
+    };
+  }
+  return {
+    ok: true,
+    severity: 'success' as const,
+    message: `将使用 ${scenarioPackageRef?.id ?? 'built-in'} · ${skillPlanRef} · ${uiPlanRef} 运行。`,
+  };
+}
+
+function runIdForMessage(
+  message: BioAgentMessage,
+  index: number,
+  messages: BioAgentMessage[],
+  runs: BioAgentRun[],
+) {
+  if (!runs.length || message.id.startsWith('seed')) return undefined;
+  if (message.role === 'user') {
+    const normalizedContent = normalizeRunPrompt(message.content);
+    return [...runs].reverse().find((run) => normalizeRunPrompt(run.prompt) === normalizedContent)?.id;
+  }
+  const responseIndex = messages
+    .slice(0, index + 1)
+    .filter((item) => !item.id.startsWith('seed') && item.role !== 'user')
+    .length - 1;
+  return runs[responseIndex]?.id;
+}
+
+function normalizeRunPrompt(value: string) {
+  return value.replace(/^运行中引导：/, '').trim();
+}
+
+function FailureRecoveryCard({
+  message,
+  onRetry,
+  onOpenSettings,
+  onUseSeedSkill,
+  onExportDiagnostics,
+}: {
+  message: string;
+  onRetry: () => void;
+  onOpenSettings: () => void;
+  onUseSeedSkill: () => void;
+  onExportDiagnostics: () => void;
+}) {
+  const actions = recoveryActionsForMessage(message);
+  return (
+    <div className="failure-recovery-card">
+      <strong>可以这样恢复</strong>
+      <div>
+        {actions.map((action) => <span key={action}>{action}</span>)}
+      </div>
+      <div className="scenario-builder-actions">
+        <button onClick={onRetry}>重试上一条请求</button>
+        <button onClick={onUseSeedSkill}>改用 seed skill</button>
+        <button onClick={onOpenSettings}>检查设置</button>
+        <button onClick={onExportDiagnostics}>导出诊断包</button>
+      </div>
+    </div>
+  );
+}
+
+function buildSessionDiagnostics(
+  session: BioAgentSession,
+  message: string,
+  refs: {
+    scenarioPackageRef?: RuntimeExecutionUnit['scenarioPackageRef'];
+    skillPlanRef: string;
+    uiPlanRef: string;
+  },
+) {
+  return {
+    schemaVersion: '1',
+    generatedAt: nowIso(),
+    reason: message,
+    scenarioId: session.scenarioId,
+    sessionId: session.sessionId,
+    packageRef: refs.scenarioPackageRef,
+    skillPlanRef: refs.skillPlanRef,
+    uiPlanRef: refs.uiPlanRef,
+    recentMessages: session.messages.slice(-8),
+    recentRuns: session.runs.slice(-8),
+    executionUnits: session.executionUnits.slice(0, 12),
+    artifacts: session.artifacts.slice(0, 12).map((artifact) => ({
+      id: artifact.id,
+      type: artifact.type,
+      schemaVersion: artifact.schemaVersion,
+      dataRef: artifact.dataRef,
+      metadata: artifact.metadata,
+    })),
+  };
+}
+
+function mergeRunTimelineEvents(events: TimelineEventRecord[], previousSession: BioAgentSession | undefined, nextSession: BioAgentSession) {
+  const previousRunIds = new Set(previousSession?.runs.map((run) => run.id) ?? []);
+  const existingEventIds = new Set(events.map((event) => event.id));
+  const newEvents = nextSession.runs
+    .filter((run) => !previousRunIds.has(run.id))
+    .map((run) => timelineEventFromStoredRun(nextSession, run))
+    .filter((event) => !existingEventIds.has(event.id));
+  return [...newEvents, ...events].slice(0, 200);
+}
+
+function timelineEventFromStoredRun(session: BioAgentSession, run: BioAgentSession['runs'][number]): TimelineEventRecord {
+  const runArtifactRefs = session.artifacts
+    .filter((artifact) => artifact.producerScenario === session.scenarioId)
+    .slice(0, 8)
+    .map((artifact) => artifact.id);
+  const runUnitRefs = [
+    ...session.executionUnits.slice(0, 8).map((unit) => unit.id),
+    run.skillPlanRef,
+    run.uiPlanRef,
+    run.scenarioPackageRef ? `${run.scenarioPackageRef.id}@${run.scenarioPackageRef.version}` : undefined,
+  ].filter((value): value is string => Boolean(value));
+  const promptSummary = run.prompt ? ` · ${run.prompt.slice(0, 100)}` : '';
+  const failureSummary = run.status === 'failed' && run.response ? ` · ${run.response.slice(0, 120)}` : '';
+  return {
+    id: `timeline-${run.id}`,
+    actor: 'BioAgent Runtime',
+    action: `run.${run.status}`,
+    subject: `${session.scenarioId}:${run.id}${promptSummary}${failureSummary}`,
+    artifactRefs: runArtifactRefs,
+    executionUnitRefs: Array.from(new Set(runUnitRefs)),
+    beliefRefs: session.claims.slice(0, 8).map((claim) => claim.id),
+    branchId: session.scenarioId,
+    visibility: 'project-record',
+    decisionStatus: 'not-a-decision',
+    createdAt: run.completedAt ?? run.createdAt ?? nowIso(),
+  };
+}
+
+function recoveryActionsForMessage(message: string) {
+  if (/AgentServer|18080|stream|fetch/i.test(message)) {
+    return [
+      '启动或修复 AgentServer 后重试。',
+      '如果当前任务已有 seed skill，BioAgent 会优先走 workspace runtime。',
+      '仍失败时导出诊断包，保留 package/version 和 execution logs。',
+    ];
+  }
+  if (/workspace|writer|5174|scenarios|save/i.test(message)) {
+    return [
+      '启动 workspace writer 或检查 Workspace Writer URL。',
+      '确认 workspace path 可写。',
+      '刷新 Scenario Library 后重试。',
+    ];
+  }
+  return [
+    '查看 Runtime Health 判断是连接、输入还是 contract 问题。',
+    '检查当前 package 的 validation / quality gate。',
+    '保留失败 run，作为 repair 或 reusable task 候选。',
+  ];
 }
 
 function SessionHistoryPanel({
@@ -1695,6 +2588,10 @@ function SessionHistoryPanel({
               <div className="session-history-copy">
                 <strong>{item.title}</strong>
                 <span>{formatSessionTime(item.updatedAt || item.createdAt)} · {sessionHistoryStats(item)}</span>
+                <div className="session-history-meta">
+                  {sessionHistoryPackageLabel(item) ? <code>{sessionHistoryPackageLabel(item)}</code> : null}
+                  {sessionHistoryLastRunLabel(item) ? <Badge variant={sessionHistoryLastRunVariant(item)}>{sessionHistoryLastRunLabel(item)}</Badge> : <Badge variant="muted">no runs</Badge>}
+                </div>
               </div>
               <ActionButton icon={Clock} variant="secondary" onClick={() => onRestore(item.sessionId)}>恢复</ActionButton>
             </div>
@@ -1708,6 +2605,65 @@ function SessionHistoryPanel({
 function sessionHistoryStats(session: BioAgentSession) {
   const userMessages = session.messages.filter((message) => !message.id.startsWith('seed')).length;
   return `${userMessages} messages · ${session.artifacts.length} artifacts · ${session.executionUnits.length} units`;
+}
+
+function sessionHistoryPackageLabel(session: BioAgentSession) {
+  const lastRun = session.runs.at(-1);
+  const ref = lastRun?.scenarioPackageRef;
+  if (!ref) return undefined;
+  return `${ref.id}@${ref.version}`;
+}
+
+function sessionHistoryLastRunLabel(session: BioAgentSession) {
+  const lastRun = session.runs.at(-1);
+  if (!lastRun) return undefined;
+  return `last run ${lastRun.status}`;
+}
+
+function sessionHistoryLastRunVariant(session: BioAgentSession): 'info' | 'success' | 'warning' | 'danger' | 'muted' {
+  const status = session.runs.at(-1)?.status;
+  if (status === 'completed') return 'success';
+  if (status === 'failed') return 'danger';
+  if (status === 'idle') return 'muted';
+  return 'info';
+}
+
+function scenarioInstanceIdForDraft(draft: ScenarioBuilderDraft): ScenarioInstanceId {
+  return `workspace-${draft.baseScenarioId}-${safeInstanceId(draft.title || draft.description)}-${Date.now().toString(36)}`;
+}
+
+function compiledScenarioOverrideForDraft(instanceId: ScenarioInstanceId, draft: ScenarioBuilderDraft): ScenarioRuntimeOverride {
+  const recommendation = recommendScenarioElements(draft.description || draft.scenarioMarkdown);
+  const selectedSkillIds = draft.recommendedSkillIds?.length ? draft.recommendedSkillIds : recommendation.selectedSkillIds;
+  const selectedArtifactTypes = draft.recommendedArtifactTypes?.length ? draft.recommendedArtifactTypes : recommendation.selectedArtifactTypes;
+  const selectedComponentIds = draft.recommendedComponentIds?.length ? draft.recommendedComponentIds : draft.defaultComponents.length ? draft.defaultComponents : recommendation.selectedComponentIds;
+  const result = compileScenarioIRFromSelection({
+    id: String(instanceId),
+    title: draft.title,
+    description: draft.description,
+    skillDomain: draft.skillDomain,
+    scenarioMarkdown: draft.scenarioMarkdown,
+    selectedSkillIds,
+    selectedToolIds: recommendation.selectedToolIds,
+    selectedArtifactTypes,
+    selectedComponentIds,
+    selectedFailurePolicyIds: recommendation.selectedFailurePolicyIds,
+    fallbackComponentId: draft.fallbackComponent,
+  });
+  return {
+    ...draft,
+    scenarioPackageRef: {
+      id: result.package.id,
+      version: result.package.version,
+      source: 'generated',
+    },
+    skillPlanRef: result.skillPlan.id,
+    uiPlanRef: result.uiPlan.id,
+  };
+}
+
+function safeInstanceId(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5_.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || Date.now().toString(36);
 }
 
 function formatSessionTime(value: string) {
@@ -1736,23 +2692,38 @@ function volcanoPointsFromPayload(payload: Record<string, unknown>, colorField?:
 function ResultsRenderer({
   scenarioId,
   session,
+  defaultSlots,
   onArtifactHandoff,
   collapsed,
   onToggleCollapse,
+  activeRunId,
+  onActiveRunChange,
 }: {
   scenarioId: ScenarioId;
   session: BioAgentSession;
+  defaultSlots: UIManifestSlot[];
   onArtifactHandoff: (targetScenario: ScenarioId, artifact: RuntimeArtifact) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  activeRunId?: string;
+  onActiveRunChange: (runId: string | undefined) => void;
 }) {
   const [resultTab, setResultTab] = useState('primary');
+  const [focusMode, setFocusMode] = useState<ResultFocusMode>('all');
+  const [inspectedArtifact, setInspectedArtifact] = useState<RuntimeArtifact | undefined>();
   const scenario = scenarios.find((item) => item.id === scenarioId) ?? scenarios[0];
+  const activeRun = activeRunId ? session.runs.find((run) => run.id === activeRunId) : undefined;
   const tabs = [
     { id: 'primary', label: '结果视图' },
     { id: 'evidence', label: '证据矩阵' },
     { id: 'execution', label: 'ExecutionUnit' },
     { id: 'notebook', label: '研究记录' },
+  ];
+  const focusModes: Array<{ id: ResultFocusMode; label: string }> = [
+    { id: 'all', label: '全部' },
+    { id: 'visual', label: '只看图' },
+    { id: 'evidence', label: '只看证据' },
+    { id: 'execution', label: '只看执行单元' },
   ];
 
   return (
@@ -1769,10 +2740,43 @@ function ResultsRenderer({
         <>
           <div className="result-tabs">
             <TabBar tabs={tabs} active={resultTab} onChange={setResultTab} />
+            <div className="result-focus-mode" aria-label="结果区 focus mode">
+              {focusModes.map((mode) => (
+                <button
+                  key={mode.id}
+                  className={cx(focusMode === mode.id && 'active')}
+                  type="button"
+                  onClick={() => {
+                    setFocusMode(mode.id);
+                    if (mode.id === 'evidence') setResultTab('evidence');
+                    if (mode.id === 'execution') setResultTab('execution');
+                    if (mode.id === 'visual') setResultTab('primary');
+                  }}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="result-content">
+            {activeRun ? (
+              <div className="active-run-banner">
+                <div>
+                  <strong>当前聚焦 run</strong>
+                  <span>{activeRun.id} · {activeRun.status} · {activeRun.scenarioPackageRef ? `${activeRun.scenarioPackageRef.id}@${activeRun.scenarioPackageRef.version}` : scenarioId}</span>
+                </div>
+                <button type="button" onClick={() => onActiveRunChange(undefined)}>取消高亮</button>
+              </div>
+            ) : null}
             {resultTab === 'primary' ? (
-              <PrimaryResult scenarioId={scenarioId} session={session} onArtifactHandoff={onArtifactHandoff} />
+              <PrimaryResult
+                scenarioId={scenarioId}
+                session={session}
+                defaultSlots={defaultSlots}
+                focusMode={focusMode}
+                onArtifactHandoff={onArtifactHandoff}
+                onInspectArtifact={setInspectedArtifact}
+              />
             ) : resultTab === 'evidence' ? (
               <EvidenceMatrix claims={session.claims} />
             ) : resultTab === 'execution' ? (
@@ -1781,6 +2785,15 @@ function ResultsRenderer({
               <NotebookTimeline scenarioId={scenario.id} notebook={session.notebook} />
             )}
           </div>
+          {inspectedArtifact ? (
+            <ArtifactInspectorDrawer
+              scenarioId={scenarioId}
+              session={session}
+              artifact={inspectedArtifact}
+              onClose={() => setInspectedArtifact(undefined)}
+              onArtifactHandoff={onArtifactHandoff}
+            />
+          ) : null}
         </>
       ) : (
         <div className="results-collapsed-hint">结果</div>
@@ -1810,6 +2823,8 @@ function Workbench({
   onAutoRunConsumed,
   scenarioOverride,
   onScenarioOverrideChange,
+  onTimelineEvent,
+  onMarkReusableRun,
 }: {
   scenarioId: ScenarioInstanceId;
   config: BioAgentConfig;
@@ -1831,6 +2846,8 @@ function Workbench({
   onAutoRunConsumed: (requestId: string) => void;
   scenarioOverride?: ScenarioRuntimeOverride;
   onScenarioOverrideChange: (scenarioId: ScenarioInstanceId, override: ScenarioRuntimeOverride) => void;
+  onTimelineEvent: (event: TimelineEventRecord) => void;
+  onMarkReusableRun: (scenarioId: ScenarioInstanceId, runId: string) => void;
 }) {
   const baseScenarioId = builtInScenarioIdForInstance(scenarioId, scenarioOverride);
   const scenarioView = scenarios.find((item) => item.id === baseScenarioId) ?? scenarios[0];
@@ -1846,7 +2863,18 @@ function Workbench({
   };
   const [role, setRole] = useState('biologist');
   const [resultsCollapsed, setResultsCollapsed] = useState(false);
-  const [settingsExpanded, setSettingsExpanded] = useState(true);
+  const [settingsExpanded, setSettingsExpanded] = useState(false);
+  const [mobilePane, setMobilePane] = useState<'builder' | 'chat' | 'results'>('chat');
+  const [activeRunId, setActiveRunId] = useState<string | undefined>();
+  const defaultResultSlots = useMemo(
+    () => compileScenarioIRFromSelection(defaultElementSelectionForScenario(baseScenarioId, runtimeScenario)).uiPlan.slots,
+    [baseScenarioId, runtimeScenario],
+  );
+  useEffect(() => {
+    if (activeRunId && !session.runs.some((run) => run.id === activeRunId)) {
+      setActiveRunId(undefined);
+    }
+  }, [activeRunId, session.runs]);
   return (
     <main className="workbench">
       <div className="workbench-header">
@@ -1864,14 +2892,27 @@ function Workbench({
           <TabBar tabs={roleTabs} active={role} onChange={setRole} />
         </div>
       </div>
-      <ScenarioBuilderPanel
-        scenarioId={baseScenarioId}
-        scenario={runtimeScenario}
-        config={config}
-        expanded={settingsExpanded}
-        onToggle={() => setSettingsExpanded((value) => !value)}
-        onChange={(override) => onScenarioOverrideChange(scenarioId, override)}
-      />
+      <div className="mobile-workbench-tabs" aria-label="移动端工作区视图">
+        {[
+          ['builder', 'Builder'],
+          ['chat', 'Chat'],
+          ['results', 'Results'],
+        ].map(([id, label]) => (
+          <button key={id} type="button" className={cx(mobilePane === id && 'active')} onClick={() => setMobilePane(id as typeof mobilePane)}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className={cx('mobile-pane', mobilePane !== 'builder' && 'mobile-hidden')}>
+        <ScenarioBuilderPanel
+          scenarioId={baseScenarioId}
+          scenario={runtimeScenario}
+          config={config}
+          expanded={settingsExpanded}
+          onToggle={() => setSettingsExpanded((value) => !value)}
+          onChange={(override) => onScenarioOverrideChange(scenarioId, override)}
+        />
+      </div>
       <div className="manifest-banner">
         <span>UIManifest</span>
         {runtimeScenario.defaultComponents.map((component) => (
@@ -1880,34 +2921,45 @@ function Workbench({
         <code>fallback={runtimeScenario.fallbackComponent}</code>
       </div>
       <div className={cx('workbench-grid', resultsCollapsed && 'results-collapsed')}>
-        <ChatPanel
-          scenarioId={scenarioId}
-          role={role}
-          config={config}
-          session={session}
-          input={draft}
-          savedScrollTop={savedScrollTop}
-          onInputChange={(value) => onDraftChange(scenarioId, value)}
-          onScrollTopChange={(value) => onScrollTopChange(scenarioId, value)}
-          onSessionChange={onSessionChange}
-          onNewChat={() => onNewChat(scenarioId)}
-          onDeleteChat={() => onDeleteChat(scenarioId)}
-          archivedSessions={archivedSessions}
-          onRestoreArchivedSession={(sessionId) => onRestoreArchivedSession(scenarioId, sessionId)}
-          onEditMessage={(messageId, content) => onEditMessage(scenarioId, messageId, content)}
-          onDeleteMessage={(messageId) => onDeleteMessage(scenarioId, messageId)}
-          archivedCount={archivedCount}
-          autoRunRequest={autoRunRequest}
-          onAutoRunConsumed={onAutoRunConsumed}
-          scenarioOverride={scenarioOverride}
-        />
-        <ResultsRenderer
-          scenarioId={baseScenarioId}
-          session={session}
-          onArtifactHandoff={onArtifactHandoff}
-          collapsed={resultsCollapsed}
-          onToggleCollapse={() => setResultsCollapsed((value) => !value)}
-        />
+        <div className={cx('mobile-pane', mobilePane !== 'chat' && 'mobile-hidden')}>
+          <ChatPanel
+            scenarioId={scenarioId}
+            role={role}
+            config={config}
+            session={session}
+            input={draft}
+            savedScrollTop={savedScrollTop}
+            onInputChange={(value) => onDraftChange(scenarioId, value)}
+            onScrollTopChange={(value) => onScrollTopChange(scenarioId, value)}
+            onSessionChange={onSessionChange}
+            onNewChat={() => onNewChat(scenarioId)}
+            onDeleteChat={() => onDeleteChat(scenarioId)}
+            archivedSessions={archivedSessions}
+            onRestoreArchivedSession={(sessionId) => onRestoreArchivedSession(scenarioId, sessionId)}
+            onEditMessage={(messageId, content) => onEditMessage(scenarioId, messageId, content)}
+            onDeleteMessage={(messageId) => onDeleteMessage(scenarioId, messageId)}
+            archivedCount={archivedCount}
+            autoRunRequest={autoRunRequest}
+            onAutoRunConsumed={onAutoRunConsumed}
+            scenarioOverride={scenarioOverride}
+            onTimelineEvent={onTimelineEvent}
+            activeRunId={activeRunId}
+            onActiveRunChange={setActiveRunId}
+            onMarkReusableRun={(runId) => onMarkReusableRun(scenarioId, runId)}
+          />
+        </div>
+        <div className={cx('mobile-pane', mobilePane !== 'results' && 'mobile-hidden')}>
+          <ResultsRenderer
+            scenarioId={baseScenarioId}
+            session={session}
+            defaultSlots={defaultResultSlots}
+            onArtifactHandoff={onArtifactHandoff}
+            collapsed={resultsCollapsed}
+            onToggleCollapse={() => setResultsCollapsed((value) => !value)}
+            activeRunId={activeRunId}
+            onActiveRunChange={setActiveRunId}
+          />
+        </div>
       </div>
     </main>
   );
@@ -1931,17 +2983,21 @@ function ScenarioBuilderPanel({
   const builtin = SCENARIO_SPECS[scenarioId];
   const initialSelection = useMemo(() => defaultElementSelectionForScenario(scenarioId, scenario), [scenarioId]);
   const [selection, setSelection] = useState<ScenarioElementSelection>(initialSelection);
+  const [builderStep, setBuilderStep] = useState<'describe' | 'elements' | 'contract' | 'quality' | 'publish'>('describe');
   const [previewTab, setPreviewTab] = useState<'scenario' | 'skill' | 'ui' | 'validation'>('scenario');
+  const [advancedPreviewOpen, setAdvancedPreviewOpen] = useState(false);
   const [publishStatus, setPublishStatus] = useState('');
   useEffect(() => {
     setSelection(initialSelection);
   }, [initialSelection]);
   const componentOptions = Array.from(new Set([...builtin.componentPolicy.allowedComponents, ...scenario.allowedComponents]));
   const compileResult = useMemo(() => compileScenarioIRFromSelection(selection), [selection]);
+  const runtimeHealth = useRuntimeHealth(config);
   const qualityReport = useMemo(() => buildScenarioQualityReport({
     package: compileResult.package,
     validationReport: compileResult.validationReport,
-  }), [compileResult]);
+    runtimeHealth,
+  }), [compileResult, runtimeHealth]);
   const qualityCounts = useMemo(() => ({
     blocking: qualityReport.items.filter((item) => item.severity === 'blocking').length,
     warning: qualityReport.items.filter((item) => item.severity === 'warning').length,
@@ -1954,6 +3010,7 @@ function ScenarioBuilderPanel({
     || selection.selectedArtifactTypes.includes(artifact.artifactType)
   ));
   const toolOptions = elementRegistry.tools.filter((tool) => tool.skillDomains.includes(selection.skillDomain ?? scenario.skillDomain));
+  const recommendationReasons = builderRecommendationReasons(selection, scenario, compileResult.uiPlan.slots.length, compileResult.skillPlan.skillIRs.length);
   function patch(patchValue: Partial<ScenarioRuntimeOverride>) {
     onChange({ ...scenario, ...patchValue });
   }
@@ -1981,10 +3038,23 @@ function ScenarioBuilderPanel({
         package: compileResult.package,
         validationReport: smoke.validationReport,
         runtimeSmoke: smoke,
+        runtimeHealth,
       });
       const pkg = {
         ...compileResult.package,
         status,
+        metadata: {
+          ...(compileResult.package as ScenarioPackage & { metadata?: Record<string, unknown> }).metadata,
+          recommendationReasons,
+          compiledFrom: {
+            builderStep,
+            skillDomain: selection.skillDomain ?? scenario.skillDomain,
+            selectedSkillIds: selection.selectedSkillIds,
+            selectedToolIds: selection.selectedToolIds,
+            selectedComponentIds: selection.selectedComponentIds,
+            selectedArtifactTypes: selection.selectedArtifactTypes,
+          },
+        },
         validationReport: smoke.validationReport,
         qualityReport: quality,
       };
@@ -2021,106 +3091,163 @@ function ScenarioBuilderPanel({
       </button>
       {expanded ? (
         <div className="scenario-settings-body">
-          <label>
-            <span>场景名称</span>
-            <input
-              value={scenario.title}
-              onChange={(event) => {
-                patch({ title: event.target.value });
-                patchSelection({ title: event.target.value });
-              }}
-            />
-          </label>
-          <label>
-            <span>Skill domain</span>
-            <select
-              value={scenario.skillDomain}
-              onChange={(event) => {
-                const skillDomain = event.target.value as ScenarioRuntimeOverride['skillDomain'];
-                patch({ skillDomain });
-                patchSelection({ skillDomain });
-              }}
-            >
-              <option value="literature">literature</option>
-              <option value="structure">structure</option>
-              <option value="omics">omics</option>
-              <option value="knowledge">knowledge</option>
-            </select>
-          </label>
-          <label className="wide">
-            <span>场景描述</span>
-            <input
-              value={scenario.description}
-              onChange={(event) => {
-                patch({ description: event.target.value });
-                patchSelection({ description: event.target.value });
-              }}
-            />
-          </label>
-          <label className="wide">
-            <span>Scenario markdown</span>
-            <textarea
-              value={scenario.scenarioMarkdown}
-              onChange={(event) => {
-                patch({ scenarioMarkdown: event.target.value });
-                patchSelection({ scenarioMarkdown: event.target.value });
-              }}
-            />
-          </label>
-          <div className="component-selector">
-            <span>默认组件集合</span>
-            <div>
-              {componentOptions.map((component) => (
-                <button
-                  key={component}
-                  className={cx(scenario.defaultComponents.includes(component) && 'active')}
-                  onClick={() => toggleComponent(component)}
-                >
-                  {component}
-                </button>
-              ))}
-            </div>
+          <div className="builder-stepper" aria-label="Scenario Builder steps">
+            {[
+              ['describe', '需求描述'],
+              ['elements', '推荐元素'],
+              ['contract', '编辑契约'],
+              ['quality', '质量检查'],
+              ['publish', '发布运行'],
+            ].map(([id, label], index) => (
+              <button key={id} className={cx(builderStep === id && 'active')} onClick={() => setBuilderStep(id as typeof builderStep)}>
+                <span>{index + 1}</span>
+                {label}
+              </button>
+            ))}
           </div>
-          <ElementSelector
-            title="Skills"
-            options={skillOptions.map((skill) => ({ id: skill.id, label: skill.label }))}
-            selected={selection.selectedSkillIds}
-            onToggle={(id) => toggleSelectionList('selectedSkillIds', id)}
-          />
-          <ElementSelector
-            title="Tools"
-            options={toolOptions.map((tool) => ({ id: tool.id, label: tool.label }))}
-            selected={selection.selectedToolIds ?? []}
-            onToggle={(id) => toggleSelectionList('selectedToolIds', id)}
-          />
-          <ElementSelector
-            title="Artifacts"
-            options={artifactOptions.map((artifact) => ({ id: artifact.artifactType, label: artifact.label }))}
-            selected={selection.selectedArtifactTypes}
-            onToggle={(id) => toggleSelectionList('selectedArtifactTypes', id)}
-          />
-          <ElementSelector
-            title="Failure policies"
-            options={elementRegistry.failurePolicies.map((policy) => ({ id: policy.id, label: policy.label }))}
-            selected={selection.selectedFailurePolicyIds ?? []}
-            onToggle={(id) => toggleSelectionList('selectedFailurePolicyIds', id)}
-          />
-          <div className="scenario-preview-panel">
-            <div className="scenario-preview-tabs">
-              {(['scenario', 'skill', 'ui', 'validation'] as const).map((tab) => (
-                <button key={tab} className={cx(previewTab === tab && 'active')} onClick={() => setPreviewTab(tab)}>{tab}</button>
-              ))}
-            </div>
-            <pre className="inspector-json">{JSON.stringify(previewJson, null, 2)}</pre>
+          <div className={cx('builder-step-panel', builderStep !== 'describe' && 'muted')}>
+            <label>
+              <span>场景名称</span>
+              <input
+                value={scenario.title}
+                onChange={(event) => {
+                  patch({ title: event.target.value });
+                  patchSelection({ title: event.target.value });
+                }}
+              />
+            </label>
+            <label>
+              <span>Skill domain</span>
+              <select
+                value={scenario.skillDomain}
+                onChange={(event) => {
+                  const skillDomain = event.target.value as ScenarioRuntimeOverride['skillDomain'];
+                  patch({ skillDomain });
+                  patchSelection({ skillDomain });
+                }}
+              >
+                <option value="literature">literature</option>
+                <option value="structure">structure</option>
+                <option value="omics">omics</option>
+                <option value="knowledge">knowledge</option>
+              </select>
+            </label>
+            <label className="wide">
+              <span>场景描述</span>
+              <input
+                value={scenario.description}
+                onChange={(event) => {
+                  patch({ description: event.target.value });
+                  patchSelection({ description: event.target.value });
+                }}
+              />
+            </label>
           </div>
-          <div className="manifest-diagnostics">
+          <div className={cx('builder-step-panel', builderStep !== 'elements' && 'muted')}>
+            <div className="component-selector">
+              <span>默认组件集合</span>
+              <div>
+                {componentOptions.map((component) => (
+                  <button
+                    key={component}
+                    className={cx(scenario.defaultComponents.includes(component) && 'active')}
+                    onClick={() => toggleComponent(component)}
+                  >
+                    {component}
+                    <ElementPopover {...componentElementPopover(component)} />
+                  </button>
+                ))}
+              </div>
+            </div>
+            <ElementSelector
+              title="Skills"
+              options={skillOptions.map((skill) => ({
+                id: skill.id,
+                label: skill.label,
+                detail: skill.description,
+                meta: `produces ${skill.outputArtifactTypes.join(', ') || 'runtime artifacts'} · ${skill.requiredCapabilities.map((item) => `${item.capability}:${item.level}`).join(', ') || 'no extra capability profile'}`,
+              }))}
+              selected={selection.selectedSkillIds}
+              onToggle={(id) => toggleSelectionList('selectedSkillIds', id)}
+            />
+            <ElementSelector
+              title="Tools"
+              options={toolOptions.map((tool) => ({
+                id: tool.id,
+                label: tool.label,
+                detail: tool.description,
+                meta: `${tool.toolType} · produces ${(tool.producesArtifactTypes ?? []).join(', ') || 'supporting runtime data'}`,
+              }))}
+              selected={selection.selectedToolIds ?? []}
+              onToggle={(id) => toggleSelectionList('selectedToolIds', id)}
+            />
+            <ElementSelector
+              title="Artifacts"
+              options={artifactOptions.map((artifact) => ({
+                id: artifact.artifactType,
+                label: artifact.label,
+                detail: artifact.description,
+                meta: `producer ${artifact.producerSkillIds.join(', ') || 'none'} · consumer ${artifact.consumerComponentIds.join(', ') || 'none'} · handoff ${artifact.handoffTargets.join(', ') || 'none'}`,
+              }))}
+              selected={selection.selectedArtifactTypes}
+              onToggle={(id) => toggleSelectionList('selectedArtifactTypes', id)}
+            />
+            <ElementSelector
+              title="Failure policies"
+              options={elementRegistry.failurePolicies.map((policy) => ({
+                id: policy.id,
+                label: policy.label,
+                detail: policy.description,
+                meta: `fallback ${policy.fallbackComponentId} · ${policy.recoverActions.join(', ')}`,
+              }))}
+              selected={selection.selectedFailurePolicyIds ?? []}
+              onToggle={(id) => toggleSelectionList('selectedFailurePolicyIds', id)}
+            />
+          </div>
+          <div className={cx('builder-step-panel', builderStep !== 'contract' && 'muted')}>
+            <label className="wide">
+              <span>Scenario markdown</span>
+              <textarea
+                value={scenario.scenarioMarkdown}
+                onChange={(event) => {
+                  patch({ scenarioMarkdown: event.target.value });
+                  patchSelection({ scenarioMarkdown: event.target.value });
+                }}
+              />
+            </label>
+          </div>
+          <div className="builder-recommendation-summary">
+            <strong>推荐组合</strong>
+            <span>基于 skill domain={selection.skillDomain ?? scenario.skillDomain}，当前会生成 {compileResult.uiPlan.slots.length} 个 UI slot、{compileResult.skillPlan.skillIRs.length} 个 skill step。</span>
+            <span>发布前会检查 producer/consumer、fallback、runtime profile 和 package quality gate。</span>
+            <ul>
+              {recommendationReasons.map((reason) => <li key={reason}>{reason}</li>)}
+            </ul>
+          </div>
+          <div className={cx('scenario-preview-panel', builderStep !== 'contract' && 'muted')}>
+            <button className="advanced-preview-toggle" onClick={() => setAdvancedPreviewOpen((value) => !value)}>
+              {advancedPreviewOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              {advancedPreviewOpen ? '收起高级 JSON contract' : '展开高级 JSON contract'}
+            </button>
+            {advancedPreviewOpen ? (
+              <>
+                <div className="scenario-preview-tabs">
+                  {(['scenario', 'skill', 'ui', 'validation'] as const).map((tab) => (
+                    <button key={tab} className={cx(previewTab === tab && 'active')} onClick={() => setPreviewTab(tab)}>{tab}</button>
+                  ))}
+                </div>
+                <pre className="inspector-json">{JSON.stringify(previewJson, null, 2)}</pre>
+              </>
+            ) : null}
+          </div>
+          <div className={cx('manifest-diagnostics', builderStep !== 'quality' && 'muted')}>
             <strong>Quality gate</strong>
             <span><Badge variant={qualityCounts.blocking ? 'danger' : 'success'}>{qualityCounts.blocking} blocking</Badge></span>
             <span><Badge variant={qualityCounts.warning ? 'warning' : 'muted'}>{qualityCounts.warning} warning</Badge></span>
             <span><Badge variant="info">{qualityCounts.note} note</Badge></span>
             <code>{qualityReport.items.slice(0, 3).map((item) => `${item.severity}:${item.code}`).join(' · ') || 'ready'}</code>
           </div>
-          <div className="scenario-publish-row">
+          <div className={cx('scenario-publish-row', builderStep !== 'publish' && 'muted')}>
             <div>
               <Badge variant={compileResult.validationReport.ok ? 'success' : 'warning'}>
                 {compileResult.validationReport.ok ? 'validation ok' : `${compileResult.validationReport.issues.length} issues`}
@@ -2130,6 +3257,7 @@ function ScenarioBuilderPanel({
             <div>
               <ActionButton icon={FilePlus} variant="secondary" onClick={() => void saveCompiled('draft')}>保存 draft</ActionButton>
               <ActionButton icon={Play} disabled={!compileResult.validationReport.ok} onClick={() => void saveCompiled('published')}>发布</ActionButton>
+              {publishStatus.includes('已发布') ? <ActionButton icon={Download} variant="secondary" onClick={() => exportJsonFile(`${compileResult.package.id}-${compileResult.package.version}.scenario-package.json`, compileResult.package)}>导出 package</ActionButton> : null}
             </div>
           </div>
         </div>
@@ -2140,25 +3268,35 @@ function ScenarioBuilderPanel({
 
 function defaultElementSelectionForScenario(scenarioId: ScenarioId, scenario: ScenarioRuntimeOverride): ScenarioElementSelection {
   const spec = SCENARIO_SPECS[scenarioId];
-  const artifactTypes = spec.outputArtifacts.map((artifact) => artifact.type);
-  const selectedSkillIds = elementRegistry.skills
-    .filter((skill) => skill.skillDomains.includes(scenario.skillDomain) && skill.outputArtifactTypes.some((artifactType) => artifactTypes.includes(artifactType)))
-    .slice(0, 3)
-    .map((skill) => skill.id);
-  const selectedToolIds = elementRegistry.tools
-    .filter((tool) => tool.skillDomains.includes(scenario.skillDomain))
-    .slice(0, 5)
-    .map((tool) => tool.id);
+  const compiledHints = scenario as ScenarioRuntimeOverride & Partial<Pick<ScenarioBuilderDraft, 'recommendedSkillIds' | 'recommendedArtifactTypes' | 'recommendedComponentIds'>>;
+  const recommendation = recommendScenarioElements([
+    scenario.title,
+    scenario.description,
+  ].join('\n'));
   return {
     id: `${scenarioId}-workspace-draft`,
     title: scenario.title,
     description: scenario.description,
     skillDomain: scenario.skillDomain,
     scenarioMarkdown: scenario.scenarioMarkdown,
-    selectedSkillIds,
-    selectedToolIds,
-    selectedArtifactTypes: artifactTypes,
-    selectedComponentIds: scenario.defaultComponents,
+    selectedSkillIds: compiledHints.recommendedSkillIds?.length
+      ? compiledHints.recommendedSkillIds
+      : recommendation.selectedSkillIds.length
+      ? recommendation.selectedSkillIds
+      : [`agentserver.generate.${scenario.skillDomain}`],
+    selectedToolIds: recommendation.selectedToolIds.length
+      ? recommendation.selectedToolIds
+      : elementRegistry.tools.filter((tool) => tool.skillDomains.includes(scenario.skillDomain)).slice(0, 5).map((tool) => tool.id),
+    selectedArtifactTypes: compiledHints.recommendedArtifactTypes?.length
+      ? compiledHints.recommendedArtifactTypes
+      : recommendation.selectedArtifactTypes.length
+      ? recommendation.selectedArtifactTypes
+      : spec.outputArtifacts.map((artifact) => artifact.type),
+    selectedComponentIds: compiledHints.recommendedComponentIds?.length
+      ? compiledHints.recommendedComponentIds
+      : recommendation.selectedComponentIds.length
+      ? recommendation.selectedComponentIds
+      : scenario.defaultComponents,
     selectedFailurePolicyIds: ['failure.missing-input', 'failure.schema-mismatch', 'failure.backend-unavailable'],
     fallbackComponentId: scenario.fallbackComponent,
     status: 'draft',
@@ -2187,6 +3325,47 @@ function toggleList(values: string[], value: string) {
   return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
 }
 
+function builderRecommendationReasons(
+  selection: ScenarioElementSelection,
+  scenario: ScenarioRuntimeOverride,
+  uiSlotCount: number,
+  skillStepCount: number,
+) {
+  const domain = selection.skillDomain ?? scenario.skillDomain;
+  return [
+    `skill domain ${domain} 决定默认 skill/tool/profile 搜索空间。`,
+    `${selection.selectedSkillIds.length} 个 skill 覆盖 ${selection.selectedArtifactTypes.length} 个 artifact contract。`,
+    `${uiSlotCount} 个 UI slot 由已选 artifact consumer 自动编译，fallback=${scenario.fallbackComponent}。`,
+    `${skillStepCount} 个 skill step 会进入 package metadata，便于后续 diff 和复现。`,
+  ];
+}
+
+function componentElementPopover(componentId: string) {
+  const component = elementRegistry.components.find((item) => item.componentId === componentId);
+  if (!component) {
+    return {
+      label: componentId,
+      detail: '未注册组件会使用 unknown-artifact-inspector fallback。',
+      meta: 'producer/consumer unknown · fallback unknown-artifact-inspector',
+    };
+  }
+  return {
+    label: component.label,
+    detail: component.description,
+    meta: `accepts ${component.acceptsArtifactTypes.join(', ') || '*'} · fields ${component.requiredFields.join(', ') || 'none'} · fallback ${component.fallback}`,
+  };
+}
+
+function ElementPopover({ label, detail, meta }: { label: string; detail: string; meta: string }) {
+  return (
+    <span className="element-popover" role="tooltip">
+      <strong>{label}</strong>
+      <small>{detail}</small>
+      <em>{meta}</em>
+    </span>
+  );
+}
+
 function ElementSelector({
   title,
   options,
@@ -2194,7 +3373,7 @@ function ElementSelector({
   onToggle,
 }: {
   title: string;
-  options: Array<{ id: string; label: string }>;
+  options: Array<{ id: string; label: string; detail?: string; meta?: string }>;
   selected: string[];
   onToggle: (id: string) => void;
 }) {
@@ -2205,6 +3384,7 @@ function ElementSelector({
         {options.slice(0, 24).map((option) => (
           <button key={option.id} className={cx(selected.includes(option.id) && 'active')} onClick={() => onToggle(option.id)} title={option.label}>
             {option.id}
+            <ElementPopover label={option.label} detail={option.detail ?? option.id} meta={option.meta ?? 'no additional profile'} />
           </button>
         ))}
       </div>
@@ -2223,6 +3403,8 @@ type RegistryEntry = {
   label: string;
   render: (props: RegistryRendererProps) => ReactNode;
 };
+
+type ResultFocusMode = 'all' | 'visual' | 'evidence' | 'execution';
 
 interface HandoffAutoRunRequest {
   id: string;
@@ -2244,7 +3426,7 @@ function PaperCardList({ slot, artifact, session }: RegistryRendererProps) {
     level: pickEvidenceLevel(record.evidenceLevel),
   }));
   if (!artifact || !papers.length) {
-    return <EmptyArtifactState title="等待真实 paper-list" detail="文献结果区只展示当前会话的 PubMed / 文献工具 artifact，不再回退到 demo paper cards。" />;
+    return <ComponentEmptyState componentId="paper-card-list" artifactType="paper-list" detail={!artifact ? undefined : '当前 paper-list artifact 缺少 papers 数组；请检查字段映射或修复 skill 输出。'} />;
   }
   return (
     <div className="stack">
@@ -2292,7 +3474,7 @@ function MoleculeSlot({ slot, artifact, session }: RegistryRendererProps) {
     }];
   });
   if (!artifact || (!pdbId && !uniprotId)) {
-    return <EmptyArtifactState title="等待真实 structure-summary" detail="结构结果区需要 RCSB 或 AlphaFold DB artifact；没有 dataRef 时不会加载默认 7BZ5 结构。" />;
+    return <ComponentEmptyState componentId="molecule-viewer" artifactType="structure-summary" detail={!artifact ? undefined : '当前 structure-summary 缺少 pdbId 或 uniprotId；请补齐 accession 字段。'} />;
   }
   return (
     <div className="stack">
@@ -2317,7 +3499,7 @@ function MoleculeSlot({ slot, artifact, session }: RegistryRendererProps) {
           />
         </div>
       ) : (
-        <EmptyArtifactState title="缺少结构坐标 dataRef" detail="已保留结构摘要，但没有可加载坐标文件；请检查 project tool 输出。" />
+        <ComponentEmptyState componentId="molecule-viewer" artifactType="structure-summary" title="缺少结构坐标 dataRef" detail="已保留结构摘要，但没有可加载坐标文件；请检查 project tool 输出。" />
       )}
       <MetricGrid metrics={metrics} />
     </div>
@@ -2352,7 +3534,7 @@ function CanvasSlot({ slot, artifact, session, kind }: RegistryRendererProps & {
     }];
   });
   if (!artifact) {
-    return <EmptyArtifactState title="等待真实 runtime artifact" detail={`${kind} 组件不再使用 demo seed；请先运行当前 Scenario 生成 artifact。`} />;
+    return <ComponentEmptyState componentId={canvasComponentId(kind)} artifactType="omics-differential-expression" detail={`${kind} 组件不再使用 demo seed；请先运行当前 Scenario 生成 artifact。`} />;
   }
   const hasData = kind === 'volcano'
     ? Boolean(volcanoPoints?.length)
@@ -2362,7 +3544,7 @@ function CanvasSlot({ slot, artifact, session, kind }: RegistryRendererProps & {
         ? Boolean(umapPoints.length)
         : Boolean(networkNodes.length);
   if (!hasData) {
-    return <EmptyArtifactState title="artifact 缺少可视化数据" detail={`当前 ${artifact.type} 没有 ${kind} 所需字段；UI 已停止回退到 demo 图。`} />;
+    return <ComponentEmptyState componentId={canvasComponentId(kind)} artifactType={artifact.type} title="artifact 缺少可视化数据" detail={`当前 ${artifact.type} 没有 ${kind} 所需字段；UI 已停止回退到 demo 图。`} />;
   }
   return (
     <div className="stack">
@@ -2403,7 +3585,7 @@ function DataTableSlot({ slot, artifact, session }: RegistryRendererProps) {
     return (
       <div className="stack">
         <ArtifactDownloads artifact={artifact} />
-        <EmptyArtifactState title="等待真实 knowledge rows" detail="知识表格只展示 knowledge-graph artifact 中的 rows，不再填充 demo 药物或通路。" />
+        <ComponentEmptyState componentId="data-table" artifactType={artifact?.type ?? 'knowledge-graph'} detail={!artifact ? undefined : `当前 ${artifact.type} 没有可表格化 rows；请打开 Artifact Inspector 检查 payload。`} />
       </div>
     );
   }
@@ -2477,6 +3659,34 @@ function UnknownArtifactInspector({ slot, artifact, session }: RegistryRendererP
   );
 }
 
+function ReportViewerSlot({ slot, artifact, session }: RegistryRendererProps) {
+  const payload = slotPayload(slot, artifact);
+  const markdown = asString(payload.markdown) || asString(payload.report) || asString(payload.summary);
+  const sections = toRecordList(payload.sections);
+  if (!artifact || (!markdown && !sections.length)) {
+    return <ComponentEmptyState componentId="report-viewer" artifactType="research-report" detail={!artifact ? undefined : '当前 research-report 缺少 markdown/report/sections 字段；请检查 AgentServer 生成的 artifact contract。'} />;
+  }
+  return (
+    <div className="stack">
+      <ArtifactSourceBar artifact={artifact} session={session} />
+      <ArtifactDownloads artifact={artifact} />
+      <div className="slot-meta">
+        <Badge variant="success">report</Badge>
+        {sections.length ? <code>{sections.length} sections</code> : null}
+        {viewCompositionSummary(slot) ? <code>{viewCompositionSummary(slot)}</code> : null}
+      </div>
+      <div className="report-viewer">
+        {sections.length ? sections.map((section, index) => (
+          <section key={`${asString(section.title) ?? 'section'}-${index}`}>
+            <h3>{asString(section.title) || `Section ${index + 1}`}</h3>
+            <p>{asString(section.content) || asString(section.markdown) || JSON.stringify(section)}</p>
+          </section>
+        )) : <pre>{markdown}</pre>}
+      </div>
+    </div>
+  );
+}
+
 function ArtifactDownloads({ artifact }: { artifact?: RuntimeArtifact }) {
   const downloads = artifactDownloadItems(artifact);
   if (!downloads.length) return null;
@@ -2512,14 +3722,82 @@ function artifactDownloadItems(artifact?: RuntimeArtifact) {
     .filter((item) => item.content.length > 0);
 }
 
-function EmptyArtifactState({ title, detail }: { title: string; detail: string }) {
+function EmptyArtifactState({ title, detail, recoverActions }: { title: string; detail: string; recoverActions?: string[] }) {
   return (
     <div className="empty-runtime-state">
       <Badge variant="muted">empty</Badge>
       <strong>{title}</strong>
       <p>{detail}</p>
+      <div className="empty-recover-actions" aria-label="恢复动作">
+        {(recoverActions?.length ? recoverActions : ['run-current-scenario', 'import-matching-package', 'inspect-artifact-schema']).map((action) => (
+          <span key={action}>{recoverActionLabel(action)}</span>
+        ))}
+      </div>
     </div>
   );
+}
+
+function ComponentEmptyState({
+  componentId,
+  artifactType,
+  title,
+  detail,
+}: {
+  componentId: string;
+  artifactType?: string;
+  title?: string;
+  detail?: string;
+}) {
+  const component = elementRegistry.components.find((item) => item.componentId === componentId);
+  const producerSkillIds = artifactType
+    ? elementRegistry.artifacts.find((item) => item.artifactType === artifactType)?.producerSkillIds ?? []
+    : [];
+  const recoverActions = [
+    ...(component?.recoverActions ?? []),
+    ...producerSkillIds.slice(0, 2).map((skillId) => `run-skill:${skillId}`),
+  ];
+  return (
+    <EmptyArtifactState
+      title={title ?? component?.emptyState.title ?? '等待 runtime artifact'}
+      detail={detail ?? component?.emptyState.detail ?? '当前组件没有可展示 artifact；请运行场景或导入匹配数据。'}
+      recoverActions={Array.from(new Set(recoverActions))}
+    />
+  );
+}
+
+function canvasComponentId(kind: 'volcano' | 'heatmap' | 'umap' | 'network') {
+  if (kind === 'volcano') return 'volcano-plot';
+  if (kind === 'heatmap') return 'heatmap-viewer';
+  if (kind === 'umap') return 'umap-viewer';
+  return 'network-graph';
+}
+
+function recoverActionLabel(action: string) {
+  const labels: Record<string, string> = {
+    'run-current-scenario': '运行当前场景',
+    'rerun-current-scenario': '重试当前运行',
+    'import-matching-package': '导入匹配 package',
+    'inspect-artifact-schema': '检查 artifact schema',
+    'inspect-artifact': '打开 Artifact Inspector',
+    'inspect-ui-manifest': '检查 UIManifest',
+    'inspect-claims': '检查 claims',
+    'inspect-runtime-route': '查看 runtime route',
+    'export-diagnostics': '导出诊断包',
+    'repair-ui-plan': '修复 UIPlan',
+    'create-timeline-event': '创建 timeline event',
+    'import-research-bundle': '导入研究 bundle',
+  };
+  if (labels[action]) return labels[action];
+  if (action.startsWith('run-skill:')) return `运行 skill ${action.slice('run-skill:'.length)}`;
+  if (action.startsWith('inspect-artifact-schema:')) return `检查 ${action.slice('inspect-artifact-schema:'.length)} schema`;
+  if (action.startsWith('import-package:')) return `导入 ${action.slice('import-package:'.length)} package`;
+  if (action.startsWith('fallback-component:')) return `改用 ${action.slice('fallback-component:'.length)} 组件`;
+  if (action.startsWith('add-field:')) return `补齐字段 ${action.slice('add-field:'.length)}`;
+  if (action.startsWith('add-fields:')) return `补齐字段 ${action.slice('add-fields:'.length)}`;
+  if (action.startsWith('map-fields:')) return `映射字段 ${action.slice('map-fields:'.length)}`;
+  if (action.startsWith('map-array-field:')) return `映射数组字段 ${action.slice('map-array-field:'.length)}`;
+  if (action.startsWith('repair-task:')) return `修复任务 ${action.slice('repair-task:'.length)}`;
+  return action;
 }
 
 function ArtifactSourceBar({ artifact, session }: { artifact?: RuntimeArtifact; session?: BioAgentSession }) {
@@ -2546,6 +3824,7 @@ function ArtifactSourceBar({ artifact, session }: { artifact?: RuntimeArtifact; 
 }
 
 const componentRegistry: Record<string, RegistryEntry> = {
+  'report-viewer': { label: 'ReportViewer', render: (props) => <ReportViewerSlot {...props} /> },
   'paper-card-list': { label: 'PaperCardList', render: (props) => <PaperCardList {...props} /> },
   'molecule-viewer': { label: 'MoleculeViewer', render: (props) => <MoleculeSlot {...props} /> },
   'volcano-plot': { label: 'VolcanoPlot', render: (props) => <CanvasSlot {...props} kind="volcano" /> },
@@ -2562,20 +3841,34 @@ const componentRegistry: Record<string, RegistryEntry> = {
 function PrimaryResult({
   scenarioId,
   session,
+  defaultSlots,
+  focusMode,
   onArtifactHandoff,
+  onInspectArtifact,
 }: {
   scenarioId: ScenarioId;
   session: BioAgentSession;
+  defaultSlots?: UIManifestSlot[];
+  focusMode: ResultFocusMode;
   onArtifactHandoff: (targetScenario: ScenarioId, artifact: RuntimeArtifact) => void;
+  onInspectArtifact: (artifact: RuntimeArtifact) => void;
 }) {
-  const slots = (session.uiManifest.length ? session.uiManifest : defaultSlotsForAgent(scenarioId))
+  const runtimeSlots = session.runs.length && session.uiManifest.length ? session.uiManifest : [];
+  const slots = (runtimeSlots.length ? runtimeSlots : defaultSlots?.length ? defaultSlots : defaultSlotsForAgent(scenarioId))
     .slice()
     .sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99))
-    .slice(0, 4);
+    .slice(0, 4)
+    .filter((slot) => slotMatchesFocusMode(slot, focusMode));
   return (
     <div className="stack">
       <SectionHeader icon={FileText} title="动态结果区" subtitle="UIManifest -> component registry -> artifact/runtime data" />
       <ManifestDiagnostics slots={slots} />
+      {!slots.length ? (
+        <EmptyArtifactState
+          title="当前 focus mode 没有匹配组件"
+          detail="切回“全部”，或运行一个会生成对应 artifact 的 skill；结果区不会用 demo 数据补位。"
+        />
+      ) : null}
       <div className="registry-grid">
         {slots.map((slot) => (
           <RegistrySlot
@@ -2584,6 +3877,7 @@ function PrimaryResult({
             session={session}
             slot={slot}
             onArtifactHandoff={onArtifactHandoff}
+            onInspectArtifact={onInspectArtifact}
           />
         ))}
       </div>
@@ -2596,12 +3890,15 @@ function RegistrySlot({
   session,
   slot,
   onArtifactHandoff,
+  onInspectArtifact,
 }: {
   scenarioId: ScenarioId;
   session: BioAgentSession;
   slot: UIManifestSlot;
   onArtifactHandoff: (targetScenario: ScenarioId, artifact: RuntimeArtifact) => void;
+  onInspectArtifact: (artifact: RuntimeArtifact) => void;
 }) {
+  const [handoffPreviewTarget, setHandoffPreviewTarget] = useState<ScenarioId | undefined>();
   const artifact = findArtifact(session, slot.artifactRef);
   const entry = componentRegistry[slot.componentId];
   const handoffTargets = artifact ? handoffTargetsForArtifact(artifact, scenarioId) : [];
@@ -2620,21 +3917,182 @@ function RegistrySlot({
       <SectionHeader icon={Target} title={slot.title ?? entry.label} subtitle={`${slot.componentId}${slot.artifactRef ? ` -> ${slot.artifactRef}` : ''}`} />
       {viewCompositionSummary(slot) ? <div className="composition-strip"><code>{viewCompositionSummary(slot)}</code></div> : null}
       {slot.artifactRef && !artifact ? <p className="empty-state">artifactRef 未找到，组件保持 empty state，不使用 demo 数据。</p> : null}
-      {entry.render({ scenarioId, session, slot, artifact })}
+      {artifact ? (
+        <div className="artifact-card-actions">
+          <button type="button" onClick={() => onInspectArtifact(artifact)}>
+            <Eye size={13} />
+            检查 artifact
+          </button>
+        </div>
+      ) : null}
       {artifact && handoffTargets.length ? (
         <div className="handoff-actions">
           <span>发送 artifact 到</span>
           {handoffTargets.map((target) => {
             const targetScenario = scenarios.find((item) => item.id === target);
             return (
-              <button key={target} onClick={() => onArtifactHandoff(target, artifact)}>
+              <button key={target} onClick={() => setHandoffPreviewTarget(target)}>
                 {targetScenario?.name ?? target}
               </button>
             );
           })}
         </div>
       ) : null}
+      {artifact && handoffPreviewTarget ? (
+        <HandoffPreview
+          sourceScenarioId={scenarioId}
+          targetScenarioId={handoffPreviewTarget}
+          artifact={artifact}
+          onCancel={() => setHandoffPreviewTarget(undefined)}
+          onConfirm={() => onArtifactHandoff(handoffPreviewTarget, artifact)}
+        />
+      ) : null}
+      {entry.render({ scenarioId, session, slot, artifact })}
     </Card>
+  );
+}
+
+function slotMatchesFocusMode(slot: UIManifestSlot, focusMode: ResultFocusMode) {
+  if (focusMode === 'all') return true;
+  if (focusMode === 'evidence') return slot.componentId === 'evidence-matrix' || slot.artifactRef === 'evidence-matrix';
+  if (focusMode === 'execution') return slot.componentId === 'execution-unit-table' || slot.artifactRef === 'execution-unit';
+  return ['molecule-viewer', 'volcano-plot', 'heatmap-viewer', 'umap-viewer', 'network-graph'].includes(slot.componentId);
+}
+
+function HandoffPreview({
+  sourceScenarioId,
+  targetScenarioId,
+  artifact,
+  onCancel,
+  onConfirm,
+}: {
+  sourceScenarioId: ScenarioId;
+  targetScenarioId: ScenarioId;
+  artifact: RuntimeArtifact;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const source = scenarios.find((item) => item.id === sourceScenarioId);
+  const target = scenarios.find((item) => item.id === targetScenarioId);
+  const autoRunPrompt = handoffAutoRunPrompt(targetScenarioId, artifact, source?.name ?? sourceScenarioId, target?.name ?? targetScenarioId);
+  const fields = [
+    ['artifact id', artifact.id],
+    ['artifact type', artifact.type],
+    ['schema', artifact.schemaVersion],
+    ['source', artifact.producerScenario],
+    ['new run', `${target?.name ?? targetScenarioId} auto-run draft`],
+  ];
+  return (
+    <div className="handoff-preview" role="group" aria-label="Handoff 确认预览">
+      <div>
+        <strong>确认 handoff</strong>
+        <p>会把 artifact 放入目标场景上下文，并创建一条可自动运行的用户输入草案。</p>
+      </div>
+      <div className="handoff-field-grid">
+        {fields.map(([label, value]) => (
+          <span key={label}>
+            <em>{label}</em>
+            <code>{value}</code>
+          </span>
+        ))}
+      </div>
+      <pre className="handoff-prompt-preview">{autoRunPrompt}</pre>
+      <div className="handoff-preview-actions">
+        <button type="button" onClick={onCancel}>取消</button>
+        <button type="button" onClick={onConfirm}>确认 handoff</button>
+      </div>
+    </div>
+  );
+}
+
+function ArtifactInspectorDrawer({
+  scenarioId,
+  session,
+  artifact,
+  onClose,
+  onArtifactHandoff,
+}: {
+  scenarioId: ScenarioId;
+  session: BioAgentSession;
+  artifact: RuntimeArtifact;
+  onClose: () => void;
+  onArtifactHandoff: (targetScenario: ScenarioId, artifact: RuntimeArtifact) => void;
+}) {
+  const unit = executionUnitForArtifact(session, artifact);
+  const handoffTargets = handoffTargetsForArtifact(artifact, scenarioId);
+  const files = [
+    artifact.dataRef ? ['dataRef', artifact.dataRef] : undefined,
+    unit?.codeRef ? ['codeRef', unit.codeRef] : undefined,
+    unit?.stdoutRef ? ['stdoutRef', unit.stdoutRef] : undefined,
+    unit?.stderrRef ? ['stderrRef', unit.stderrRef] : undefined,
+    unit?.outputRef ? ['outputRef', unit.outputRef] : undefined,
+    ...artifactDownloadItems(artifact).map((item) => [item.name, item.path || item.key || 'download payload'] as [string, string]),
+  ].filter((item): item is [string, string] => Boolean(item));
+  const lineage = [
+    ['producer scenario', artifact.producerScenario],
+    ['producer skill', asStringList(artifact.metadata?.producerSkillIds).join(', ') || asString(artifact.metadata?.producerSkillId) || 'unknown'],
+    ['execution unit', unit ? `${unit.id} · ${unit.tool} · ${unit.status}` : 'missing'],
+    ['created', asString(artifact.metadata?.createdAt) ?? 'unknown'],
+  ];
+  return (
+    <div className="artifact-inspector-layer">
+      <button className="artifact-inspector-backdrop" type="button" aria-label="关闭 Artifact Inspector" onClick={onClose} />
+      <aside className="artifact-inspector-drawer" role="dialog" aria-modal="false" aria-label="Artifact Inspector">
+        <div className="artifact-inspector-head">
+          <div>
+            <Badge variant="info">Artifact Inspector</Badge>
+            <h2>{artifact.id}</h2>
+            <p>{artifact.type} · schema {artifact.schemaVersion}</p>
+          </div>
+          <button type="button" onClick={onClose} aria-label="关闭 Artifact Inspector">关闭</button>
+        </div>
+        <section>
+          <h3>Schema</h3>
+          <div className="handoff-field-grid">
+            <span><em>type</em><code>{artifact.type}</code></span>
+            <span><em>schemaVersion</em><code>{artifact.schemaVersion}</code></span>
+            <span><em>source</em><code>{artifactSource(artifact)}</code></span>
+          </div>
+        </section>
+        <section>
+          <h3>Lineage</h3>
+          <div className="inspector-ref-list">
+            {lineage.map(([label, value]) => <code key={label}>{label}: {value}</code>)}
+          </div>
+        </section>
+        <section>
+          <h3>Files</h3>
+          {files.length ? (
+            <div className="inspector-ref-list">
+              {files.map(([label, value]) => <code key={`${label}-${value}`}>{label}: {value}</code>)}
+            </div>
+          ) : (
+            <p className="empty-state">没有可复现文件引用；请检查 ExecutionUnit 是否写入 code/stdout/stderr/output refs。</p>
+          )}
+        </section>
+        <section>
+          <h3>Preview</h3>
+          <pre className="inspector-json">{JSON.stringify(artifact.data ?? artifact, null, 2)}</pre>
+        </section>
+        <section>
+          <h3>Handoff targets</h3>
+          {handoffTargets.length ? (
+            <div className="handoff-actions compact">
+              {handoffTargets.map((target) => {
+                const targetScenario = scenarios.find((item) => item.id === target);
+                return (
+                  <button key={target} type="button" onClick={() => onArtifactHandoff(target, artifact)}>
+                    {targetScenario?.name ?? target}
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="empty-state">当前 artifact schema 没有声明可 handoff 的目标场景。</p>
+          )}
+        </section>
+      </aside>
+    </div>
   );
 }
 
@@ -3168,7 +4626,17 @@ function EditableBlock({
   );
 }
 
-function TimelinePage({ alignmentContracts = [] }: { alignmentContracts?: AlignmentContractRecord[] }) {
+function TimelinePage({
+  alignmentContracts = [],
+  events = [],
+  onOpenScenario,
+}: {
+  alignmentContracts?: AlignmentContractRecord[];
+  events?: TimelineEventRecord[];
+  onOpenScenario: (id: ScenarioInstanceId) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [actionFilter, setActionFilter] = useState('all');
   const alignmentItems = alignmentContracts.map((contract) => ({
     time: new Date(contract.updatedAt).toLocaleString('zh-CN', { hour12: false }),
     scenario: 'knowledge' as ScenarioId,
@@ -3176,16 +4644,52 @@ function TimelinePage({ alignmentContracts = [] }: { alignmentContracts?: Alignm
     desc: `alignment-contract ${contract.id} · ${contract.reason} · checksum ${contract.checksum}`,
     claimType: 'fact' as ClaimType,
     confidence: 1,
+    action: 'alignment.contract',
+    refs: contract.sourceRefs,
   }));
-  const items = [...alignmentItems, ...timeline];
+  const runtimeItems = events.map((event) => ({
+    time: new Date(event.createdAt).toLocaleString('zh-CN', { hour12: false }),
+    scenario: event.branchId ?? 'literature-evidence-review',
+    title: event.action,
+    desc: `${event.subject} · artifacts=${event.artifactRefs.length} · units=${event.executionUnitRefs.length}`,
+    claimType: 'fact' as ClaimType,
+    confidence: event.action.includes('failed') ? 0.35 : 0.9,
+    action: event.action,
+    refs: [...event.artifactRefs, ...event.executionUnitRefs],
+  }));
+  const items = [...runtimeItems, ...alignmentItems, ...timeline.map((item) => ({ ...item, action: 'demo.timeline', refs: [] }))];
+  const filtered = items.filter((item) => {
+    if (actionFilter !== 'all' && item.action !== actionFilter) return false;
+    if (!query.trim()) return true;
+    const normalized = query.trim().toLowerCase();
+    return [item.title, item.desc, item.scenario, item.action, ...(item.refs ?? [])].some((value) => String(value).toLowerCase().includes(normalized));
+  });
+  const actions = ['all', ...Array.from(new Set(items.map((item) => item.action)))];
+  function exportFilteredBranch() {
+    exportJsonFile(`bioagent-timeline-${actionFilter}-${new Date().toISOString().slice(0, 10)}.json`, {
+      schemaVersion: '1',
+      exportedAt: nowIso(),
+      query,
+      actionFilter,
+      eventCount: filtered.length,
+      events: filtered,
+    });
+  }
   return (
     <main className="page">
       <div className="page-heading">
         <h1>研究时间线</h1>
         <p>聊天、工具、证据和执行单元最终都沉淀为可审计的研究记录。</p>
       </div>
+      <div className="library-controls">
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 run、artifact、package、scenario..." aria-label="搜索 Timeline" />
+        <select value={actionFilter} onChange={(event) => setActionFilter(event.target.value)} aria-label="按事件类型过滤">
+          {actions.map((action) => <option key={action} value={action}>{action === 'all' ? '全部事件' : action}</option>)}
+        </select>
+        <button type="button" onClick={exportFilteredBranch}>导出当前分支</button>
+      </div>
       <div className="timeline-list">
-        {items.map((item) => {
+        {filtered.map((item) => {
           const scenario = scenarios.find((entry) => entry.id === item.scenario) ?? scenarios[0];
           return (
             <Card className="timeline-card" key={`${item.time}-${item.title}`}>
@@ -3199,11 +4703,16 @@ function TimelinePage({ alignmentContracts = [] }: { alignmentContracts?: Alignm
                 </div>
                 <h3>{item.title}</h3>
                 <p>{item.desc}</p>
+                <div className="scenario-builder-actions">
+                  <button onClick={() => onOpenScenario(item.scenario)}>回到场景</button>
+                  {item.refs?.slice(0, 3).map((ref) => <code key={ref}>{ref}</code>)}
+                </div>
               </div>
             </Card>
           );
         })}
       </div>
+      {!filtered.length ? <EmptyArtifactState title="没有匹配的时间线事件" detail="运行任务、发布 package、handoff artifact 或保存契约后，会在这里形成可过滤记录。" /> : null}
     </main>
   );
 }
@@ -3252,33 +4761,6 @@ function nodeId(value: unknown, preferredTypes: string[]): string | undefined {
     return type ? preferredTypes.includes(type) : false;
   }) ?? nodes[0];
   return asString(found?.id) || asString(found?.label);
-}
-
-function shouldUsePersistedWorkspaceState(current: BioAgentWorkspaceState, persisted: BioAgentWorkspaceState) {
-  const currentActivity = workspaceActivityScore(current);
-  const persistedActivity = workspaceActivityScore(persisted);
-  if (persistedActivity === 0) return false;
-  if (currentActivity === 0) return true;
-  if (persistedActivity > currentActivity) return true;
-  if (persistedActivity < currentActivity) return false;
-  const currentTime = Date.parse(current.updatedAt || '');
-  const persistedTime = Date.parse(persisted.updatedAt || '');
-  return Number.isFinite(persistedTime) && (!Number.isFinite(currentTime) || persistedTime >= currentTime);
-}
-
-function workspaceActivityScore(state: BioAgentWorkspaceState) {
-  return Object.values(state.sessionsByScenario).reduce((total, session) => {
-    return total + sessionActivityScore(session);
-  }, state.archivedSessions.length + (state.alignmentContracts?.length ?? 0));
-}
-
-function sessionActivityScore(session: BioAgentSession) {
-  const userMessages = session.messages.filter((message) => !message.id.startsWith('seed')).length;
-  return userMessages
-    + session.runs.length
-    + session.artifacts.length
-    + session.executionUnits.length
-    + session.notebook.length;
 }
 
 function scenarioLabelForInstance(scenarioId: ScenarioInstanceId) {
@@ -3365,15 +4847,15 @@ export function BioAgentApp() {
   useEffect(() => {
     let cancelled = false;
     const workspacePath = config.workspacePath.trim();
-    loadPersistedWorkspaceState(workspacePath, config)
-      .then((persisted) => {
-        if (cancelled) return;
-        if (persisted) {
-          const restoredPath = persisted.workspacePath || workspacePath;
-          setWorkspaceState((current) => {
-            const incoming = { ...persisted, workspacePath: restoredPath };
-            return shouldUsePersistedWorkspaceState(current, incoming) ? incoming : current;
-          });
+	    loadPersistedWorkspaceState(workspacePath, config)
+	      .then((persisted) => {
+	        if (cancelled) return;
+	        if (persisted) {
+	          const restoredPath = persisted.workspacePath || workspacePath;
+	          setWorkspaceState((current) => {
+	            const incoming = { ...persisted, workspacePath: restoredPath };
+	            return shouldUsePersistedWorkspaceState(current, incoming, { explicitWorkspacePath: Boolean(workspacePath) }) ? incoming : current;
+	          });
           setConfig((current) => {
             if (current.workspacePath === restoredPath) return current;
             const next = updateConfig(current, { workspacePath: restoredPath });
@@ -3426,6 +4908,14 @@ export function BioAgentApp() {
         ...current.sessionsByScenario,
         [nextSession.scenarioId]: versionSession(nextSession, reason),
       },
+      timelineEvents: mergeRunTimelineEvents(current.timelineEvents ?? [], current.sessionsByScenario[nextSession.scenarioId], nextSession),
+    }));
+  }
+
+  function appendTimelineEvent(event: TimelineEventRecord) {
+    updateWorkspace((current) => ({
+      ...current,
+      timelineEvents: [event, ...(current.timelineEvents ?? [])].slice(0, 200),
     }));
   }
 
@@ -3536,6 +5026,58 @@ export function BioAgentApp() {
     updateSession(nextSession, `delete message ${messageId}`);
   }
 
+  function markReusableRun(nextScenarioId: ScenarioInstanceId, runId: string) {
+    updateWorkspace((current) => {
+      const session = current.sessionsByScenario[nextScenarioId];
+      const run = session?.runs.find((item) => item.id === runId);
+      if (!run) return current;
+      const candidate: ReusableTaskCandidateRecord = {
+        id: `reusable.${run.scenarioPackageRef?.id ?? nextScenarioId}.${run.id}`,
+        runId: run.id,
+        scenarioId: nextScenarioId,
+        scenarioPackageRef: run.scenarioPackageRef,
+        skillPlanRef: run.skillPlanRef,
+        uiPlanRef: run.uiPlanRef,
+        prompt: run.prompt,
+        status: run.status,
+        promotionState: 'candidate',
+        createdAt: nowIso(),
+      };
+      const existing = current.reusableTaskCandidates ?? [];
+      return {
+        ...current,
+        reusableTaskCandidates: [candidate, ...existing.filter((item) => item.id !== candidate.id)].slice(0, 80),
+        timelineEvents: [({
+          id: makeId('timeline'),
+          actor: 'BioAgent Library',
+          action: 'package.reusable-candidate',
+          subject: `${candidate.scenarioPackageRef?.id ?? nextScenarioId}:${run.id}`,
+          artifactRefs: [],
+          executionUnitRefs: [run.id, run.skillPlanRef, run.uiPlanRef].filter((value): value is string => Boolean(value)),
+          beliefRefs: [],
+          branchId: nextScenarioId,
+          visibility: 'project-record',
+          decisionStatus: 'not-a-decision',
+          createdAt: candidate.createdAt,
+        } satisfies TimelineEventRecord), ...(current.timelineEvents ?? [])].slice(0, 200),
+      };
+    });
+  }
+
+  function hideOfficialPackage(packageId: string) {
+    updateWorkspace((current) => ({
+      ...current,
+      hiddenOfficialPackageIds: Array.from(new Set([...(current.hiddenOfficialPackageIds ?? []), packageId])),
+    }));
+  }
+
+  function restoreOfficialPackages() {
+    updateWorkspace((current) => ({
+      ...current,
+      hiddenOfficialPackageIds: [],
+    }));
+  }
+
   function handleSearch(query: string) {
     const normalized = query.trim().toLowerCase();
     if (!normalized) return;
@@ -3602,6 +5144,19 @@ export function BioAgentApp() {
       }, `handoff artifact ${artifact.id}`);
       return {
         ...current,
+        timelineEvents: [({
+          id: makeId('timeline'),
+          actor: 'BioAgent Handoff',
+          action: 'artifact.handoff',
+          subject: `${artifact.producerScenario}:${artifact.id} -> ${targetScenario}`,
+          artifactRefs: [artifact.id],
+          executionUnitRefs: [],
+          beliefRefs: [],
+          branchId: targetScenario,
+          visibility: 'project-record',
+          decisionStatus: 'not-a-decision',
+          createdAt: now,
+        } satisfies TimelineEventRecord), ...(current.timelineEvents ?? [])].slice(0, 200),
         sessionsByScenario: {
           ...current.sessionsByScenario,
           [targetScenario]: nextTargetSession,
@@ -3653,6 +5208,7 @@ export function BioAgentApp() {
   const activeScenarioOverride = scenarioOverrides[scenarioId];
   const activeBuiltInScenarioId = builtInScenarioIdForInstance(scenarioId, activeScenarioOverride);
   const activeSession = sessions[scenarioId] ?? createSession(scenarioId, `${scenarioLabelForInstance(scenarioId)} 新聊天`);
+  const appHealthItems = useRuntimeHealth(config, Object.keys(sessions).length);
 
   return (
     <div className="app-shell">
@@ -3668,10 +5224,19 @@ export function BioAgentApp() {
         onWorkspacePathChange={setWorkspacePath}
       />
       <div className="main-shell">
-        <TopBar onSearch={handleSearch} onSettingsOpen={() => setSettingsOpen(true)} />
+        <TopBar onSearch={handleSearch} onSettingsOpen={() => setSettingsOpen(true)} healthItems={appHealthItems} />
         <div className="content-shell">
           {page === 'dashboard' ? (
-            <Dashboard setPage={setPage} setScenarioId={setScenarioId} config={config} onApplyScenarioDraft={applyScenarioOverride} />
+            <Dashboard
+              setPage={setPage}
+              setScenarioId={setScenarioId}
+              config={config}
+              workspaceState={workspaceState}
+              onApplyScenarioDraft={applyScenarioOverride}
+              onWorkbenchPrompt={updateDraft}
+              onHideOfficialPackage={hideOfficialPackage}
+              onRestoreOfficialPackages={restoreOfficialPackages}
+            />
           ) : page === 'workbench' ? (
             <Workbench
               scenarioId={scenarioId}
@@ -3694,11 +5259,16 @@ export function BioAgentApp() {
               onAutoRunConsumed={consumeHandoffAutoRun}
               scenarioOverride={activeScenarioOverride}
               onScenarioOverrideChange={applyScenarioOverride}
+              onTimelineEvent={appendTimelineEvent}
+              onMarkReusableRun={markReusableRun}
             />
           ) : page === 'alignment' ? (
             <AlignmentPage contracts={workspaceState.alignmentContracts ?? []} onSaveContract={saveAlignmentContract} />
           ) : (
-            <TimelinePage alignmentContracts={workspaceState.alignmentContracts ?? []} />
+            <TimelinePage alignmentContracts={workspaceState.alignmentContracts ?? []} events={workspaceState.timelineEvents ?? []} onOpenScenario={(id) => {
+              setScenarioId(id);
+              setPage('workbench');
+            }} />
           )}
         </div>
       </div>

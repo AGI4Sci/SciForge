@@ -60,6 +60,11 @@ export interface UIComponentElement extends ElementManifestBase {
   componentId: string;
   acceptsArtifactTypes: string[];
   requiredFields: string[];
+  emptyState: {
+    title: string;
+    detail: string;
+  };
+  recoverActions: string[];
   viewParams: string[];
   interactionEvents: string[];
   roleDefaults: string[];

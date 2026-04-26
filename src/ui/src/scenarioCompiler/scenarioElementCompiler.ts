@@ -158,34 +158,63 @@ export function recommendScenarioElements(
   options: ScenarioRecommendationOptions = {},
 ): ScenarioElementRecommendation {
   const text = description.toLowerCase();
+  const inferredDomain = inferDomainFromText(text);
+  const targetArtifactTypes = inferTargetArtifactTypes(text, inferredDomain);
+  const complexOpenEnded = requiresGeneratedCapability(text);
   const matchedSkills = registry.skills
-    .filter((skill) => [skill.label, skill.description, ...skill.tags ?? [], ...skill.examplePrompts].join(' ').toLowerCase().split(/\s+/)
-      .some((token) => token.length > 3 && text.includes(token)))
+    .filter((skill) => skill.skillDomains.includes(inferredDomain))
+    .filter((skill) => skill.source !== 'generated')
+    .map((skill) => ({
+      skill,
+      score: scoreSkillForDescription(skill, text, targetArtifactTypes),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.skill.id.localeCompare(right.skill.id))
+    .map((item) => item.skill)
     .slice(0, 4);
-  const fallbackSkills = matchedSkills.length ? matchedSkills : registry.skills
-    .filter((skill) => skill.skillDomains.includes(inferDomainFromText(text)))
-    .slice(0, 2);
-  const selectedArtifactTypes = unique(fallbackSkills.flatMap((skill) => skill.outputArtifactTypes));
-  const selectedComponentIds = defaultComponentIdsForArtifacts(
+  const generatedSkill = registry.skills.find((skill) => skill.id === `agentserver.generate.${inferredDomain}`);
+  const selectedSkills = unique([
+    ...(complexOpenEnded && generatedSkill ? [generatedSkill] : []),
+    ...matchedSkills,
+    ...(!matchedSkills.length && generatedSkill ? [generatedSkill] : []),
+  ]).slice(0, 5);
+  const selectedArtifactTypes = unique(targetArtifactTypes.length
+    ? targetArtifactTypes
+    : selectedSkills.flatMap((skill) => skill.outputArtifactTypes).filter((artifactType) => artifactType !== 'runtime-artifact'));
+  const selectedComponentIds = enrichRecommendedComponents(defaultComponentIdsForArtifacts(
     registry.artifacts.filter((artifact) => selectedArtifactTypes.includes(artifact.artifactType)),
     registry,
-  );
+  ), selectedArtifactTypes, complexOpenEnded);
   return {
     source: options.allowAgentServer && options.agentServerBaseUrl ? 'agentserver-placeholder' : 'heuristic',
-    selectedSkillIds: fallbackSkills.map((skill) => skill.id),
+    selectedSkillIds: selectedSkills.map((skill) => skill.id),
     selectedToolIds: registry.tools
-      .filter((tool) => tool.skillDomains.includes(inferDomainFromText(text)))
+      .filter((tool) => tool.skillDomains.includes(inferredDomain))
       .slice(0, 4)
       .map((tool) => tool.id),
     selectedArtifactTypes,
     selectedComponentIds,
     selectedFailurePolicyIds: ['failure.missing-input', 'failure.schema-mismatch', 'failure.backend-unavailable'],
     reasons: [
+      `Inferred domain=${inferredDomain}; target artifacts=${selectedArtifactTypes.join(', ') || 'runtime-artifact'}.`,
+      complexOpenEnded
+        ? 'Open-ended or multi-step request: compiled with AgentServer/native backend generated capability as the stable runtime producer.'
+        : 'Request matches registered deterministic capabilities; backend generation remains available if no local route can satisfy runtime execution.',
       options.allowAgentServer && options.agentServerBaseUrl
         ? 'AgentServer recommendation API is reserved; deterministic heuristic recommendations remain available offline.'
         : 'Matched local element manifests by description, tags, examples, and skill domain.',
     ],
   };
+}
+
+function enrichRecommendedComponents(componentIds: string[], artifactTypes: string[], complexOpenEnded: boolean) {
+  const primaryComponents = componentIds.filter((componentId) => componentId !== 'unknown-artifact-inspector');
+  return unique([
+    ...primaryComponents,
+    ...(artifactTypes.includes('paper-list') ? ['evidence-matrix'] : []),
+    ...(complexOpenEnded ? ['execution-unit-table', 'notebook-timeline'] : []),
+    'unknown-artifact-inspector',
+  ]);
 }
 
 function resolveSkills(skillIds: string[], registry: ElementRegistry, issues: ScenarioCompileIssue[]) {
@@ -324,7 +353,7 @@ function compileSlotsFromSelection(
   components: UIComponentElement[],
   fallbackComponentId: string,
 ): UIManifestSlot[] {
-  return artifacts.map((artifact, index) => {
+  const artifactSlots = artifacts.map((artifact, index) => {
     const component = components.find((item) => item.acceptsArtifactTypes.includes(artifact.artifactType))
       ?? components.find((item) => item.acceptsArtifactTypes.includes('*'))
       ?? components.find((item) => item.componentId === fallbackComponentId);
@@ -335,6 +364,16 @@ function compileSlotsFromSelection(
       priority: index + 1,
     };
   });
+  const usedComponentIds = new Set(artifactSlots.map((slot) => slot.componentId));
+  const supportSlots = components
+    .filter((component) => !usedComponentIds.has(component.componentId))
+    .filter((component) => component.requiredFields.length === 0 || component.acceptsArtifactTypes.includes('*'))
+    .map((component, index) => ({
+      componentId: component.componentId,
+      title: component.label,
+      priority: artifactSlots.length + index + 1,
+    }));
+  return [...artifactSlots, ...supportSlots];
 }
 
 function defaultComponentIdsForArtifacts(artifacts: ArtifactSchemaElement[], registry: ElementRegistry) {
@@ -420,6 +459,40 @@ function inferDomainFromText(text: string): SkillDomain {
   if (/pdb|protein structure|structure|alphafold|ligand|residue|pocket|蛋白结构|结构|口袋|配体|残基/.test(text)) return 'structure';
   if (/chembl|opentargets|drug|compound|disease|pathway|target|knowledge graph|知识图谱|疾病|化合物|药物|靶点/.test(text)) return 'knowledge';
   return 'literature';
+}
+
+function inferTargetArtifactTypes(text: string, domain: SkillDomain) {
+  const artifacts = new Set<string>();
+  if (/report|summary|summari[sz]e|review|markdown|pdf|download|read|阅读|总结|报告|综述|下载/.test(text)) artifacts.add('research-report');
+  if (/paper|literature|pubmed|arxiv|semantic scholar|crossref|文献|论文|文章|证据/.test(text)) artifacts.add('paper-list');
+  if (/structure|pdb|alphafold|molecule|protein|ligand|residue|结构|蛋白|配体|残基/.test(text)) artifacts.add('structure-summary');
+  if (/rna|scrna|omics|matrix|deseq|scanpy|umap|expression|表达|差异|组学|单细胞/.test(text)) artifacts.add('omics-differential-expression');
+  if (/chembl|uniprot|opentargets|drug|compound|disease|pathway|knowledge graph|network|知识图谱|疾病|化合物|药物|靶点|网络/.test(text)) artifacts.add('knowledge-graph');
+  if (/blast|alignment|sequence|序列|比对|同源/.test(text)) artifacts.add('sequence-alignment');
+  if (!artifacts.size) {
+    const base = baseSpecForDomain(domain);
+    base.outputArtifacts.forEach((artifact) => artifacts.add(artifact.type));
+  }
+  return Array.from(artifacts);
+}
+
+function requiresGeneratedCapability(text: string) {
+  return /scenario|workflow|pipeline|package|compile|generate|build|agent|download|read|report|summary|summari[sz]e|systematic|latest|today|arxiv|browser|google|web|场景|流程|编译|生成|下载|阅读|报告|总结|系统性|最新|今天|浏览器|搜索/.test(text);
+}
+
+function scoreSkillForDescription(skill: SkillElement, text: string, targetArtifactTypes: string[]) {
+  let score = 0;
+  for (const artifactType of skill.outputArtifactTypes) {
+    if (targetArtifactTypes.includes(artifactType)) score += 8;
+  }
+  const haystack = [skill.id, skill.label, skill.description, ...skill.tags ?? [], ...skill.examplePrompts].join(' ').toLowerCase();
+  for (const token of text.split(/[\s,，。.!?？;；:：/]+/)) {
+    if (token.length > 2 && haystack.includes(token)) score += 2;
+  }
+  if (skill.id === 'literature.web_search' && /\b(arxiv|google|web|browser|latest|today)\b|谷歌|浏览器|网页|最新|今天/.test(text)) score += 20;
+  if (skill.id === 'literature.pubmed_search' && /\bpubmed\b|医学文献|生物医学/.test(text)) score += 12;
+  if (skill.entrypointType === 'markdown-skill') score -= 2;
+  return score;
 }
 
 function baseSpecForDomain(skillDomain: SkillDomain) {

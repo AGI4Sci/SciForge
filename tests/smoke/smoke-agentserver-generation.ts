@@ -167,7 +167,7 @@ try {
   const attemptHistory = JSON.parse(await readFile(join(workspace, '.bioagent', 'task-attempts', generatedAttemptFile), 'utf8'));
   assert.equal(attemptHistory.attempts.length, 1);
   assert.equal(attemptHistory.attempts[0].status, 'done');
-  assert.equal(attemptHistory.attempts[0].codeRef, '.bioagent/tasks/generated-literature.py');
+  assert.match(attemptHistory.attempts[0].codeRef, /^\.bioagent\/tasks\/generated-literature-[a-f0-9]+\/generated-literature\.py$/);
 
   console.log('[ok] agentserver generation smoke writes generated task code and runs it through gateway');
 } finally {

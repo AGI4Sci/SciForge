@@ -91,8 +91,8 @@ describe('scenario compiler package model', () => {
     });
 
     assert.equal(result.validationReport.ok, false);
-    assert.ok(result.issues.some((issue) => issue.code === 'missing-producer'));
-    assert.ok(result.validationReport.issues.some((issue) => issue.code === 'missing-producer'));
+    assert.ok(result.issues.some((issue) => issue.code === 'missing-producer' || issue.code === 'ambiguous-skill'));
+    assert.ok(result.validationReport.issues.some((issue) => issue.code === 'missing-selected-producer' || issue.code === 'missing-producer' || issue.code === 'ambiguous-skill'));
   });
 
   it('keeps AgentServer recommendation as an optional placeholder with offline heuristic fallback', () => {
@@ -105,5 +105,43 @@ describe('scenario compiler package model', () => {
     assert.ok(recommendation.selectedSkillIds.some((skillId) => skillId.includes('omics')));
     assert.ok(recommendation.selectedArtifactTypes.includes('omics-differential-expression'));
     assert.ok(recommendation.selectedComponentIds.includes('volcano-plot'));
+  });
+
+  it('compiles open-ended arXiv report scenarios through generated backend capability and report UI', () => {
+    const description = '帮我生成一个场景，可以按照要求搜索arxiv上最新的文章，并且下载、阅读、系统性总结成报告';
+    const recommendation = recommendScenarioElements(description);
+    const result = compileScenarioIRFromSelection({
+      id: 'arxiv-report-review',
+      title: 'arXiv latest paper report',
+      description,
+      skillDomain: 'literature',
+      scenarioMarkdown: description,
+      ...recommendation,
+    });
+
+    assert.ok(recommendation.selectedSkillIds.includes('agentserver.generate.literature'));
+    assert.ok(recommendation.selectedArtifactTypes.includes('paper-list'));
+    assert.ok(recommendation.selectedArtifactTypes.includes('research-report'));
+    assert.ok(recommendation.selectedComponentIds.includes('report-viewer'));
+    assert.equal(result.validationReport.ok, true);
+  });
+
+  it('uses the same generated capability path for complex non-literature scenario compilation', () => {
+    const description = '生成一个蛋白结构场景，下载AlphaFold结构，分析结合口袋，并输出系统性报告';
+    const recommendation = recommendScenarioElements(description);
+    const result = compileScenarioIRFromSelection({
+      id: 'structure-pocket-report',
+      title: 'Structure pocket report',
+      description,
+      skillDomain: 'structure',
+      scenarioMarkdown: description,
+      ...recommendation,
+    });
+
+    assert.ok(recommendation.selectedSkillIds.includes('agentserver.generate.structure'));
+    assert.ok(recommendation.selectedArtifactTypes.includes('structure-summary'));
+    assert.ok(recommendation.selectedArtifactTypes.includes('research-report'));
+    assert.ok(recommendation.selectedComponentIds.includes('report-viewer'));
+    assert.equal(result.validationReport.ok, true);
   });
 });

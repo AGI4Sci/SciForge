@@ -13,8 +13,12 @@ describe('element registry', () => {
 
     assert.equal(report.ok, true, JSON.stringify(report.issues, null, 2));
     assert.ok(registry.skills.some((skill) => skill.id === 'literature.pubmed_search'));
+    assert.ok(registry.skills.some((skill) => skill.id === 'literature.web_search'));
+    assert.ok(registry.skills.some((skill) => skill.id === 'agentserver.generate.literature'));
     assert.ok(registry.skills.some((skill) => skill.id.startsWith('scp.')));
     assert.ok(registry.artifacts.some((artifact) => artifact.artifactType === 'paper-list'));
+    assert.ok(registry.artifacts.some((artifact) => artifact.artifactType === 'research-report'));
+    assert.ok(registry.components.some((component) => component.componentId === 'report-viewer'));
     assert.ok(registry.components.some((component) => component.componentId === 'unknown-artifact-inspector'));
     assert.ok(registry.failurePolicies.some((policy) => policy.failureMode === 'schema-mismatch'));
   });
@@ -28,6 +32,15 @@ describe('element registry', () => {
         assert.ok(artifact.producerSkillIds.length, `missing producer for ${artifactSchema.type}`);
         assert.ok(artifact.consumerComponentIds.includes('unknown-artifact-inspector'), `missing inspector fallback for ${artifactSchema.type}`);
       }
+    }
+  });
+
+  it('requires every UI component to define empty state copy and recovery actions', () => {
+    const registry = buildElementRegistry();
+    for (const component of registry.components) {
+      assert.ok(component.emptyState.title.trim(), `missing emptyState.title for ${component.componentId}`);
+      assert.ok(component.emptyState.detail.trim(), `missing emptyState.detail for ${component.componentId}`);
+      assert.ok(component.recoverActions.length, `missing recoverActions for ${component.componentId}`);
     }
   });
 

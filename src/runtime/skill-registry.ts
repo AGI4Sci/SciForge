@@ -58,6 +58,12 @@ export function matchSkill(request: GatewayRequest, skills: SkillAvailability[])
 }
 
 function skillAllowedByPrompt(skill: SkillAvailability, prompt: string) {
+  if (skill.id === 'literature.pubmed_search') {
+    return !explicitWebSearchRequested(prompt);
+  }
+  if (skill.id === 'literature.web_search') {
+    return explicitWebSearchRequested(prompt) && !specializedBiomedicalSearchRequested(prompt);
+  }
   if (skill.id === 'inspector.generic_file_table_log') {
     return /\b(inspect|preview|open|show|view|log|artifact|file|table|json)\b|查看|检查|预览|打开|日志|文件|表格|产物/i.test(prompt)
       && !/\b(smiles|admet|lipinski|docking|dock|screening|pocket|pdb|scp|virtual screening)\b|虚拟筛选|对接|类药性|口袋|蛋白/i.test(prompt);
@@ -224,6 +230,9 @@ async function persistWorkspaceSkillStatus(workspace: string, skills: SkillAvail
 
 function scoreSkill(manifest: SkillManifest, skillDomain: BioAgentSkillDomain, prompt: string) {
   let score = manifest.skillDomains.includes(skillDomain) ? 10 : 0;
+  if (manifest.id === 'literature.web_search' && directWebProviderRequested(prompt)) {
+    score += 100;
+  }
   if (
     manifest.id === 'scp.drug-screening-docking'
     && /\b(virtual screening|drug screening|docking|admet|lipinski|smiles|pocket)\b|虚拟筛选|高通量|对接|类药性|口袋/i.test(prompt)
@@ -245,6 +254,19 @@ function scoreSkill(manifest: SkillManifest, skillDomain: BioAgentSkillDomain, p
     if (text.includes(token)) score += manifest.entrypoint.type === 'markdown-skill' ? 0.2 : 0.5;
   }
   return score;
+}
+
+function explicitWebSearchRequested(prompt: string) {
+  return /\b(?:google|web|browser|internet|arxiv|news|网页|互联网|浏览器|谷歌)\b|(?:google|web|browser|网页|互联网|浏览器|谷歌)\s*(?:search|检索|搜索|查找)|(?:通过|用|使用)\s*(?:google|谷歌|web|网页|互联网|浏览器|本地浏览器)\s*(?:search|检索|搜索|查找)?/i.test(prompt);
+}
+
+function directWebProviderRequested(prompt: string) {
+  return /\b(?:google|browser|internet|arxiv|news)\b|(?:网页|互联网|浏览器|谷歌)|(?:通过|用|使用)\s*(?:google|谷歌|web|网页|互联网|浏览器|本地浏览器)\s*(?:search|检索|搜索|查找)?/i.test(prompt);
+}
+
+function specializedBiomedicalSearchRequested(prompt: string) {
+  return /\bbiomedical\s+web\s+search\b|\b(?:uniprot|drugbank|chembl|opentargets)\b.*\b(?:pubmed|drugbank|uniprot|chembl|opentargets)\b/i.test(prompt)
+    && !directWebProviderRequested(prompt);
 }
 
 function priority(kind: SkillManifest['kind']) {

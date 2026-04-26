@@ -33,8 +33,16 @@ export interface ScenarioQualityReport {
   items: ScenarioQualityItem[];
   validationReport: ValidationReport;
   runtimeSmoke?: ScenarioRuntimeSmokeResult;
+  runtimeHealth?: ScenarioRuntimeHealthItem[];
   exportPolicy?: ExportPolicyDecision;
   versionDiff?: ScenarioPackageDiff;
+}
+
+export interface ScenarioRuntimeHealthItem {
+  id: string;
+  label: string;
+  status: 'online' | 'offline' | 'checking' | 'not-configured' | 'optional';
+  detail?: string;
 }
 
 export function buildScenarioQualityReport(params: {
@@ -42,6 +50,7 @@ export function buildScenarioQualityReport(params: {
   previousPackage?: ScenarioPackage;
   validationReport?: ValidationReport;
   runtimeSmoke?: ScenarioRuntimeSmokeResult;
+  runtimeHealth?: ScenarioRuntimeHealthItem[];
   exportPolicy?: ExportPolicyDecision;
   checkedAt?: string;
 }): ScenarioQualityReport {
@@ -65,6 +74,24 @@ export function buildScenarioQualityReport(params: {
       message: params.runtimeSmoke.execution?.reason || 'Runtime smoke failed.',
       recoverActions: params.runtimeSmoke.execution?.recoverActions ?? ['inspect-runtime-smoke', 'save-as-draft'],
     });
+  }
+
+  for (const health of params.runtimeHealth ?? []) {
+    if (health.status === 'offline') {
+      items.push({
+        severity: health.id === 'workspace' ? 'blocking' : 'warning',
+        code: `runtime-health-${health.id}-offline`,
+        message: `${health.label} is offline: ${health.detail ?? 'no detail'}`,
+        recoverActions: health.id === 'workspace' ? ['start-workspace-writer', 'save-as-draft'] : ['start-runtime-service', 'use-seed-skill-fallback'],
+      });
+    } else if (health.status === 'not-configured') {
+      items.push({
+        severity: 'warning',
+        code: `runtime-health-${health.id}-not-configured`,
+        message: `${health.label} is not configured.`,
+        recoverActions: ['open-settings', 'save-as-draft'],
+      });
+    }
   }
 
   if (params.exportPolicy && !params.exportPolicy.allowed) {
@@ -105,6 +132,7 @@ export function buildScenarioQualityReport(params: {
     items,
     validationReport,
     runtimeSmoke: params.runtimeSmoke,
+    runtimeHealth: params.runtimeHealth,
     exportPolicy: params.exportPolicy,
     versionDiff,
   };

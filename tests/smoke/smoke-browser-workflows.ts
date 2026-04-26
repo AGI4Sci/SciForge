@@ -17,7 +17,9 @@ const children: ChildProcess[] = [];
 
 try {
   await mkdir(artifactsDir, { recursive: true });
+  await mkdir(join(workspace, '.bioagent'), { recursive: true });
   await writeFile(importPackagePath, JSON.stringify(browserSmokeScenarioPackage(), null, 2));
+  await writeFile(join(workspace, '.bioagent', 'workspace-state.json'), JSON.stringify(browserSmokeWorkspaceState(workspace), null, 2));
   children.push(start('workspace', ['npm', 'run', 'workspace:server'], { BIOAGENT_WORKSPACE_PORT: String(workspacePort) }));
   children.push(start('ui', ['npm', 'run', 'dev:ui', '--', '--host', '127.0.0.1', '--port', String(uiPort), '--strictPort'], { BIOAGENT_UI_PORT: String(uiPort) }));
   await waitForHttp(`http://127.0.0.1:${workspacePort}/health`);
@@ -32,47 +34,184 @@ try {
   try {
     const page = await newConfiguredPage(browser, { width: 1440, height: 1050 });
     await page.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: 'networkidle' });
+    logStep('first visit shows Scenario Builder, Runtime Health, and import CTAs');
     await page.getByText('AI Scenario Builder').waitFor({ timeout: 15_000 });
+    await page.getByText('Runtime Health').first().waitFor({ timeout: 15_000 });
+    await page.getByRole('button', { name: '导入文献场景', exact: true }).waitFor();
+    await assertNoRawJsonErrors(page, 'first-visit');
+    await assertNoUnexplainedDisabledPrimaryButtons(page, 'first-visit');
+    await assertTooltipCoverage(page, 'first-visit');
+    logStep('keyboard navigation reaches controls and Esc closes Settings');
+    await page.keyboard.press('Tab');
+    await assertActiveElementInteractive(page, 'first tab stop');
+    await page.getByLabel('设置').focus();
+    await page.keyboard.press('Enter');
+    await page.getByRole('dialog', { name: 'BioAgent 设置' }).waitFor({ timeout: 15_000 });
+    await page.keyboard.press('Escape');
+    await page.getByRole('dialog', { name: 'BioAgent 设置' }).waitFor({ state: 'hidden', timeout: 15_000 });
+    await assertNoRechartsSizeWarnings(page, 'first-visit');
+    logStep('settings modal opens and exposes connection diagnostics');
+    await page.getByLabel('设置').click();
+    await page.getByRole('dialog', { name: 'BioAgent 设置' }).waitFor({ timeout: 15_000 });
+    await page.getByText('Workspace Writer').first().waitFor();
+    await page.getByText('AgentServer').first().waitFor();
+    await page.getByLabel('关闭设置').click();
+    logStep('workspace sidebar opens, explains current path, and lists .bioagent resources');
+    await page.getByLabel('工作目录').click();
+    await page.locator('.workspace-path-editor').waitFor({ timeout: 15_000 });
+    await page.getByLabel('刷新').click();
+    await page.getByText(/workspace-state\.json|scenarios|\.bioagent|未找到|Workspace Writer/).first().waitFor({ timeout: 15_000 });
+    await page.getByLabel('.bioagent 专用分组').getByText('task-results').waitFor({ timeout: 15_000 });
+    await page.getByRole('status').filter({ hasText: /已加载|当前目录为空/ }).first().waitFor({ timeout: 15_000 });
+    logStep('workbench run records a searchable timeline event');
+    await page.getByLabel('导航').click();
+    await page.getByText('场景工作台').first().click();
+    await page.getByPlaceholder('输入研究问题...').fill('browser-smoke-run AgentServer offline recovery card');
+    await page.getByPlaceholder('输入研究问题...').press('Enter');
+    await page.waitForFunction(() => {
+      const raw = window.localStorage.getItem('bioagent.workspace.v2');
+      if (!raw) return false;
+      const parsed = JSON.parse(raw) as { timelineEvents?: Array<{ action?: string; subject?: string }> };
+      return parsed.timelineEvents?.some((event) => event.subject?.includes('browser-smoke-run'));
+    }, null, { timeout: 15_000 });
+    await page.getByLabel('运行记录').getByRole('button').first().waitFor({ timeout: 15_000 });
+    await page.locator('.message.active-run').first().waitFor({ timeout: 15_000 });
+    await page.getByText('当前聚焦 run').waitFor({ timeout: 15_000 });
+    const reusableButton = page.getByRole('button', { name: '标记 reusable' });
+    await reusableButton.scrollIntoViewIfNeeded();
+    await reusableButton.click();
+    await page.waitForFunction(() => {
+      const raw = window.localStorage.getItem('bioagent.workspace.v2');
+      if (!raw) return false;
+      const parsed = JSON.parse(raw) as { reusableTaskCandidates?: unknown[] };
+      return Boolean(parsed.reusableTaskCandidates?.length);
+    }, null, { timeout: 15_000 });
+    const smokeRunAction = await page.evaluate(() => {
+      const raw = window.localStorage.getItem('bioagent.workspace.v2');
+      if (!raw) return '';
+      const parsed = JSON.parse(raw) as { timelineEvents?: Array<{ action?: string; subject?: string }> };
+      return parsed.timelineEvents?.find((event) => event.subject?.includes('browser-smoke-run'))?.action ?? '';
+    });
+    logStep('timeline is reachable from navigation');
+    await page.getByLabel('导航').click();
+    await page.getByRole('button', { name: '研究时间线' }).click();
+    await page.getByRole('heading', { name: '研究时间线' }).waitFor({ timeout: 15_000 });
+    await page.getByLabel('搜索 Timeline').fill('browser-smoke-run');
+    await page.getByRole('heading', { name: smokeRunAction }).waitFor({ timeout: 15_000 });
+    await page.getByLabel('按事件类型过滤').selectOption(smokeRunAction);
+    await page.getByText('browser-smoke-run').waitFor({ timeout: 15_000 });
+    await page.getByRole('button', { name: '导出当前分支' }).waitFor({ timeout: 15_000 });
+    await page.getByRole('button', { name: '回到场景' }).first().click();
+    await page.getByText('Scenario Builder').waitFor({ timeout: 15_000 });
+    await page.getByLabel('导航').click();
+    await page.getByText('研究概览').first().click();
+    await page.getByRole('heading', { name: 'Official Package Catalog' }).waitFor({ timeout: 15_000 });
+    await page.getByText('last run no runs yet').first().waitFor({ timeout: 15_000 });
+    const catalogSection = page.locator('section', { has: page.getByRole('heading', { name: 'Official Package Catalog' }) });
+    await catalogSection.locator('.scenario-card', { hasText: 'biomedical-knowledge-graph' }).getByRole('button', { name: '隐藏' }).click();
+    await catalogSection.locator('.scenario-card', { hasText: 'biomedical-knowledge-graph' }).waitFor({ state: 'hidden', timeout: 15_000 });
+    await catalogSection.getByRole('button', { name: '恢复隐藏' }).click();
+    await catalogSection.locator('.scenario-card', { hasText: 'biomedical-knowledge-graph' }).waitFor({ timeout: 15_000 });
     const importChooser = page.waitForEvent('filechooser');
-    await page.getByRole('button', { name: '导入 package' }).click();
+    logStep('local package import jumps directly into its workbench');
+    await page.getByRole('button', { name: '导入 package', exact: true }).click();
     await (await importChooser).setFiles(importPackagePath);
     await page.getByText('Scenario Builder').waitFor({ timeout: 15_000 });
-    await page.getByText('browser-smoke-imported-package').waitFor({ timeout: 15_000 });
+    await page.getByText(/browser-smoke-imported-package 新聊天/).waitFor({ timeout: 15_000 });
     await page.getByText('研究概览').first().click();
     await page.getByRole('heading', { name: 'Scenario Library' }).waitFor();
+    await page.getByText(/versions/).first().waitFor({ timeout: 15_000 });
     const importedCard = page.locator('.scenario-card', { hasText: 'browser-smoke-imported-package' }).first();
-    await importedCard.getByRole('button', { name: '导出', exact: true }).click();
+    await importedCard.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(500);
+    await importedCard.getByRole('button', { name: '导出', exact: true }).click({ force: true });
+    await page.getByRole('dialog', { name: 'Package export preview' }).waitFor({ timeout: 15_000 });
+    await page.getByText(/portable manifest|contains workspace refs/).waitFor({ timeout: 15_000 });
+    await page.getByRole('button', { name: '确认导出' }).click();
     await page.getByText(/已导出 Browser Smoke Imported Package package JSON/).waitFor({ timeout: 15_000 });
     await page.locator('.scenario-builder textarea').fill('构建一个单细胞差异表达场景，输入表达矩阵和metadata，输出火山图、热图、UMAP和execution diagnostics。');
     await page.getByRole('button', { name: '生成场景设置' }).click();
     await page.locator('code', { hasText: 'volcano-plot' }).first().waitFor();
-    await page.getByRole('button', { name: '进入场景工作台' }).click();
+    await page.getByRole('button', { name: /进入.*工作台/ }).click();
     await page.getByText('Scenario Builder').waitFor();
+    await page.locator('.scenario-settings-summary').click();
+    await page.getByLabel('Scenario Builder steps').getByRole('button', { name: /需求描述/ }).waitFor();
+    await page.getByRole('button', { name: /推荐元素/ }).click();
+    await page.locator('.component-selector button').first().hover();
+    await page.locator('.element-popover').first().waitFor({ state: 'visible', timeout: 15_000 });
+    await page.getByText(/producer|accepts|fallback|skill domain/).first().waitFor({ timeout: 15_000 });
+    await page.getByRole('button', { name: /编辑契约/ }).click();
+    await page.screenshot({ path: join(artifactsDir, 'browser-smoke-builder-collapsed.png'), fullPage: true });
+    await page.getByRole('button', { name: 'ExecutionUnit' }).focus();
+    await page.keyboard.press('Space');
+    await page.getByRole('heading', { name: '可复现执行单元' }).waitFor({ timeout: 15_000 });
+    await page.getByRole('button', { name: '结果视图' }).focus();
+    await page.keyboard.press('Enter');
+    await page.getByText('展开高级 JSON contract').click();
     await page.getByRole('button', { name: 'skill', exact: true }).click();
-    await page.getByText('skillPlan').waitFor();
+    await page.getByText('skillIRs').waitFor();
     await page.getByRole('button', { name: 'validation', exact: true }).click();
-    await page.getByText('issues').waitFor();
+    await page.locator('pre.inspector-json', { hasText: 'issues' }).waitFor();
     await page.getByRole('button', { name: '保存 draft' }).click();
     await page.getByText('已保存 draft 到 workspace。').waitFor({ timeout: 15_000 });
     await page.getByRole('button', { name: '发布', exact: true }).click();
     await page.getByText(/已发布到 workspace scenario library|quality gate/).waitFor({ timeout: 15_000 });
+    await page.locator('.results-collapse-button').evaluate((element) => {
+      if (element instanceof HTMLElement) element.click();
+    });
+    await page.waitForFunction(() => Boolean(document.querySelector('.workbench-grid.results-collapsed')), null, { timeout: 15_000 });
+    await page.screenshot({ path: join(artifactsDir, 'browser-smoke-results-collapsed.png'), fullPage: true });
+    await page.locator('.results-collapse-button').evaluate((element) => {
+      if (element instanceof HTMLElement) element.click();
+    });
     await assertNoCriticalOverflow(page, 'desktop-builder');
+    await assertNoRawJsonErrors(page, 'desktop-builder');
+    await assertNoUnexplainedDisabledPrimaryButtons(page, 'desktop-builder');
+    await assertTooltipCoverage(page, 'desktop-builder');
+    await assertNoRechartsSizeWarnings(page, 'desktop-builder');
     await page.screenshot({ path: join(artifactsDir, 'browser-smoke-desktop.png'), fullPage: true });
 
     await page.getByText('研究概览').first().click();
     await page.reload({ waitUntil: 'networkidle' });
     await page.getByRole('heading', { name: 'Scenario Library' }).waitFor();
+    await page.getByLabel('搜索 Scenario Library').fill('omics');
+    await page.getByLabel('按 skill domain 过滤').selectOption('omics');
+    await page.getByText('omics-differential-exploration-workspace-draft').waitFor({ timeout: 15_000 });
+    await page.getByLabel('排序 Scenario Library').selectOption('title');
     await page.getByText('omics-differential-exploration-workspace-draft').waitFor({ timeout: 15_000 });
     await page.locator('.scenario-card', { hasText: 'omics-differential-exploration-workspace-draft' }).getByRole('button', { name: '打开' }).click();
     await page.getByText('Scenario Builder').waitFor();
     await page.getByText('omics-differential-exploration-workspace-draft').waitFor();
+    await page.getByText(/将使用|输入研究问题后即可运行/).waitFor({ timeout: 15_000 });
 
     await page.setViewportSize({ width: 390, height: 900 });
-    await page.getByText('Scenario Builder').waitFor();
+    await page.getByLabel('移动端工作区视图').waitFor({ timeout: 15_000 });
+    await page.getByLabel('移动端工作区视图').getByRole('button', { name: 'Builder' }).click();
+    await page.getByText('Scenario Builder').waitFor({ timeout: 15_000 });
+    await page.getByLabel('移动端工作区视图').getByRole('button', { name: 'Results' }).click();
+    await page.getByText('动态结果区').waitFor({ timeout: 15_000 });
+    await page.getByLabel('移动端工作区视图').getByRole('button', { name: 'Chat' }).click();
+    await page.getByPlaceholder('输入研究问题...').waitFor({ timeout: 15_000 });
     await assertNoCriticalOverflow(page, 'mobile-workbench');
+    await assertNoRawJsonErrors(page, 'mobile-workbench');
+    await assertNoUnexplainedDisabledPrimaryButtons(page, 'mobile-workbench');
+    await assertNoRechartsSizeWarnings(page, 'mobile-workbench');
     await page.screenshot({ path: join(artifactsDir, 'browser-smoke-mobile.png'), fullPage: true });
     assert.deepEqual((page as Page & { __bioagentPageErrors?: string[] }).__bioagentPageErrors ?? [], [], 'builder workflow should not emit page errors');
     await page.close();
+
+    const offlineHealthPage = await newConfiguredPage(browser, { width: 1280, height: 900 }, false, {
+      workspaceWriterBaseUrl: 'http://127.0.0.1:9',
+      agentServerBaseUrl: 'http://127.0.0.1:9',
+    });
+    await offlineHealthPage.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: 'networkidle' });
+    logStep('offline runtime health shows concrete recovery actions');
+    await offlineHealthPage.getByText('Runtime Health').first().waitFor({ timeout: 15_000 });
+    await offlineHealthPage.getByText('启动 npm run workspace:server 后刷新').waitFor({ timeout: 15_000 });
+    await offlineHealthPage.getByText('需要通用生成/修复时启动 AgentServer；seed skill 可离线运行').waitFor({ timeout: 15_000 });
+    await assertNoRawJsonErrors(offlineHealthPage, 'offline-health');
+    await assertNoUnexplainedDisabledPrimaryButtons(offlineHealthPage, 'offline-health');
+    await offlineHealthPage.close();
 
     const structurePage = await newConfiguredPage(browser, { width: 1280, height: 900 }, true);
     await structurePage.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: 'networkidle' });
@@ -88,46 +227,64 @@ try {
     }
     await structurePage.locator('.manifest-diagnostics code', { hasText: 'molecule-viewer' }).waitFor({ timeout: 15_000 });
     await structurePage.locator('.molecule-viewer-shell').waitFor({ timeout: 15_000 });
+    await structurePage.getByRole('button', { name: '只看图' }).click({ force: true });
+    await structurePage.locator('.molecule-viewer-shell').waitFor({ timeout: 15_000 });
+    await structurePage.getByRole('button', { name: '检查 artifact' }).first().evaluate((button) => {
+      if (button instanceof HTMLElement) button.click();
+    });
+    await structurePage.getByRole('dialog', { name: 'Artifact Inspector' }).waitFor({ timeout: 15_000 });
+    await structurePage.getByText('Lineage').waitFor({ timeout: 15_000 });
+    await structurePage.getByRole('button', { name: '关闭 Artifact Inspector' }).last().click({ force: true });
+    await structurePage.locator('.registry-slot .handoff-actions button').first().evaluate((button) => {
+      if (button instanceof HTMLElement) button.click();
+    });
+    await structurePage.getByLabel('Handoff 确认预览').waitFor({ timeout: 15_000 });
+    await structurePage.getByText('new run').waitFor({ timeout: 15_000 });
+    await structurePage.getByRole('button', { name: '取消' }).click({ force: true });
     await structurePage.screenshot({ path: join(artifactsDir, 'browser-smoke-structure.png'), fullPage: true });
     const viewerBox = await structurePage.locator('.molecule-viewer-shell').boundingBox();
     assert.ok(viewerBox && viewerBox.width > 260 && viewerBox.height > 220, 'structure viewer should be visible and stable');
+    await assertNoRawJsonErrors(structurePage, 'structure-workflow');
+    await assertNoUnexplainedDisabledPrimaryButtons(structurePage, 'structure-workflow');
+    await assertNoRechartsSizeWarnings(structurePage, 'structure-workflow');
     assert.deepEqual((structurePage as Page & { __bioagentPageErrors?: string[] }).__bioagentPageErrors ?? [], [], 'structure workflow should not emit page errors');
     await structurePage.close();
   } finally {
     await browser.close();
   }
 
-  console.log(`[ok] browser smoke covered Builder publish/open flow, mobile layout, and structure viewer screenshots in ${artifactsDir}`);
+  console.log(`[ok] browser smoke covered onboarding, Settings, Workspace, Timeline, Builder publish/open flow, collapsed results, mobile layout, and structure viewer screenshots in ${artifactsDir}`);
 } finally {
   for (const child of children.reverse()) child.kill('SIGTERM');
   await rm(workspace, { recursive: true, force: true });
 }
 
-async function newConfiguredPage(browser: Browser, viewport: { width: number; height: number }, withStructureState = false) {
+async function newConfiguredPage(
+  browser: Browser,
+  viewport: { width: number; height: number },
+  withStructureState = false,
+  configPatch: Partial<{ workspaceWriterBaseUrl: string; agentServerBaseUrl: string }> = {},
+) {
   const page = await browser.newPage({ viewport });
+  const configuredWorkspacePath = withStructureState ? join(workspace, 'structure-smoke') : workspace;
+  const consoleWarnings: string[] = [];
   page.on('console', (message) => {
     if (message.type() === 'error') console.error(`[browser:${message.type()}] ${message.text()}`);
+    if (message.type() === 'warning') consoleWarnings.push(message.text());
   });
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => {
     pageErrors.push(error.message);
   });
-  await page.addInitScript(({ config, structureState }) => {
+  await page.addInitScript(({ config, structureState, defaultWorkspaceState }) => {
     window.localStorage.setItem('bioagent.config.v1', JSON.stringify(config));
-    window.localStorage.setItem('bioagent.workspace.v2', JSON.stringify(structureState ?? {
-      schemaVersion: 2,
-      workspacePath: config.workspacePath,
-      sessionsByScenario: {},
-      archivedSessions: [],
-      alignmentContracts: [],
-      updatedAt: new Date().toISOString(),
-    }));
+    window.localStorage.setItem('bioagent.workspace.v2', JSON.stringify(structureState ?? defaultWorkspaceState));
   }, {
     config: {
       schemaVersion: 1,
-      agentServerBaseUrl: 'http://127.0.0.1:18080',
-      workspaceWriterBaseUrl: `http://127.0.0.1:${workspacePort}`,
-      workspacePath: workspace,
+      agentServerBaseUrl: configPatch.agentServerBaseUrl ?? 'http://127.0.0.1:18080',
+      workspaceWriterBaseUrl: configPatch.workspaceWriterBaseUrl ?? `http://127.0.0.1:${workspacePort}`,
+      workspacePath: configuredWorkspacePath,
       modelProvider: 'native',
       modelBaseUrl: '',
       modelName: '',
@@ -135,10 +292,29 @@ async function newConfiguredPage(browser: Browser, viewport: { width: number; he
       requestTimeoutMs: 300_000,
       updatedAt: new Date().toISOString(),
     },
-    structureState: withStructureState ? structureWorkspaceState(workspace) : undefined,
+    structureState: withStructureState ? structureWorkspaceState(configuredWorkspacePath) : undefined,
+    defaultWorkspaceState: browserSmokeWorkspaceState(configuredWorkspacePath),
   });
-  (page as Page & { __bioagentPageErrors?: string[] }).__bioagentPageErrors = pageErrors;
+  (page as Page & { __bioagentPageErrors?: string[]; __bioagentConsoleWarnings?: string[] }).__bioagentPageErrors = pageErrors;
+  (page as Page & { __bioagentPageErrors?: string[]; __bioagentConsoleWarnings?: string[] }).__bioagentConsoleWarnings = consoleWarnings;
   return page;
+}
+
+function browserSmokeTimelineEvent() {
+  const now = new Date().toISOString();
+  return {
+    id: 'timeline-browser-smoke-run',
+    actor: 'Browser Smoke',
+    action: 'run.failed',
+    subject: 'browser-smoke-run · AgentServer offline recovery card',
+    artifactRefs: [],
+    executionUnitRefs: ['skill-plan.browser-smoke'],
+    beliefRefs: [],
+    branchId: 'literature-evidence-review',
+    visibility: 'project-record',
+    decisionStatus: 'not-a-decision',
+    createdAt: now,
+  };
 }
 
 function structureWorkspaceState(workspacePath: string) {
@@ -191,6 +367,18 @@ function structureWorkspaceState(workspacePath: string) {
   };
 }
 
+function browserSmokeWorkspaceState(workspacePath: string) {
+  return {
+    schemaVersion: 2,
+    workspacePath,
+    sessionsByScenario: {},
+    archivedSessions: [],
+    alignmentContracts: [],
+    timelineEvents: [browserSmokeTimelineEvent()],
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 function browserSmokePdb() {
   return [
     'ATOM      1 N    GLY A   1      -1.200   0.100   0.200  1.00 20.00           N',
@@ -236,10 +424,78 @@ async function assertNoCriticalOverflow(page: Page, label: string) {
         height: box.height,
         scrollWidth: element.scrollWidth,
         scrollHeight: element.scrollHeight,
+        hasTooltip: element.hasAttribute('data-tooltip'),
       };
     })
+    .filter((item) => !(item.hasTooltip && !item.html))
     .filter((item) => item.width > 0 && item.height > 0 && (item.scrollWidth > item.width + 8 || item.scrollHeight > item.height + 12)));
   assert.deepEqual(offenders, [], `${label} should not have critical text overflow`);
+}
+
+async function assertNoRawJsonErrors(page: Page, label: string) {
+  const offenders = await page.evaluate(() => Array.from(document.querySelectorAll('body *'))
+    .map((element) => element instanceof HTMLElement ? element.innerText.trim() : '')
+    .filter(Boolean)
+    .filter((text) => /\{"ok":false|"error":"not found"|^\s*\{[\s\S]{0,240}"error"/.test(text))
+    .slice(0, 8));
+  assert.deepEqual(offenders, [], `${label} should not expose raw JSON errors`);
+}
+
+async function assertNoUnexplainedDisabledPrimaryButtons(page: Page, label: string) {
+  const offenders = await page.evaluate(() => Array.from(document.querySelectorAll('button.action-primary:disabled, button.action-button:disabled'))
+    .map((element) => {
+      const button = element as HTMLButtonElement;
+      const text = button.innerText.trim();
+      const aria = button.getAttribute('aria-label')?.trim() ?? '';
+      const title = button.getAttribute('title')?.trim() ?? '';
+      const nearbyReadiness = button.closest('.chat-panel')?.querySelector('.run-readiness')?.textContent?.trim() ?? '';
+      return { text, aria, title, nearbyReadiness };
+    })
+    .filter((item) => !item.text && !item.aria && !item.title && !item.nearbyReadiness)
+    .slice(0, 8));
+  assert.deepEqual(offenders, [], `${label} should not have unexplained disabled primary buttons`);
+}
+
+async function assertTooltipCoverage(page: Page, label: string) {
+  const offenders = await page.evaluate(() => Array.from(document.querySelectorAll('.icon-button, .tab'))
+    .map((element) => {
+      const html = element instanceof HTMLElement ? element.innerText.trim().replace(/\s+/g, ' ') : element.tagName;
+      const aria = element.getAttribute('aria-label')?.trim() ?? '';
+      const title = element.getAttribute('title')?.trim() ?? '';
+      const tooltip = element.getAttribute('data-tooltip')?.trim() ?? '';
+      return { html, aria, title, tooltip };
+    })
+    .filter((item) => !item.aria && !item.title && !item.tooltip)
+    .slice(0, 8));
+  assert.deepEqual(offenders, [], `${label} should provide tooltip/aria text for icon and tab buttons`);
+}
+
+async function assertActiveElementInteractive(page: Page, label: string) {
+  const active = await page.evaluate(() => {
+    const element = document.activeElement;
+    if (!element) return { tag: '', role: '', aria: '', text: '' };
+    return {
+      tag: element.tagName,
+      role: element.getAttribute('role') ?? '',
+      aria: element.getAttribute('aria-label') ?? '',
+      text: element instanceof HTMLElement ? element.innerText.trim().slice(0, 80) : '',
+    };
+  });
+  assert.ok(
+    ['INPUT', 'BUTTON', 'TEXTAREA', 'SELECT', 'A'].includes(active.tag) || active.role === 'button',
+    `${label} should land on an interactive element, got ${JSON.stringify(active)}`,
+  );
+}
+
+async function assertNoRechartsSizeWarnings(page: Page, label: string) {
+  await page.waitForTimeout(150);
+  const warnings = (page as Page & { __bioagentConsoleWarnings?: string[] }).__bioagentConsoleWarnings ?? [];
+  const offenders = warnings.filter((warning) => /width\(-1\)|height\(-1\)|width.*height.*greater than 0/i.test(warning));
+  assert.deepEqual(offenders, [], `${label} should not emit Recharts negative-size warnings`);
+}
+
+function logStep(message: string) {
+  console.log(`[ux] ${message}`);
 }
 
 function start(label: string, command: string[], extraEnv: Record<string, string>) {

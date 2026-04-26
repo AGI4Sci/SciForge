@@ -45,4 +45,21 @@ describe('scenario quality gate', () => {
     assert.equal(diff.outputArtifactsChanged, true);
     assert.ok(report.items.some((item) => item.code === 'contract-diff'));
   });
+
+  it('includes runtime health in publish quality decisions', () => {
+    const pkg = buildBuiltInScenarioPackage('literature-evidence-review', '2026-04-25T00:00:00.000Z');
+    const report = buildScenarioQualityReport({
+      package: pkg,
+      checkedAt: '2026-04-25T00:00:00.000Z',
+      runtimeHealth: [
+        { id: 'workspace', label: 'Workspace Writer', status: 'offline', detail: 'connection refused' },
+        { id: 'agentserver', label: 'AgentServer', status: 'offline', detail: 'optional fallback unavailable' },
+      ],
+    });
+
+    assert.equal(report.ok, false);
+    assert.ok(report.items.some((item) => item.code === 'runtime-health-workspace-offline' && item.severity === 'blocking'));
+    assert.ok(report.items.some((item) => item.code === 'runtime-health-agentserver-offline' && item.severity === 'warning'));
+    assert.equal(report.runtimeHealth?.length, 2);
+  });
 });

@@ -1,6 +1,7 @@
 import type { ScenarioPackageRef } from '../domain';
 import type { ScenarioPackage } from './scenarioPackage';
 import type { ValidationReport } from './validationGate';
+import type { ScenarioQualityReport } from './scenarioQualityGate';
 
 export type ScenarioLibrarySource = 'built-in' | 'workspace' | 'team' | 'marketplace' | 'archived';
 
@@ -10,9 +11,11 @@ export interface ScenarioLibraryItem {
   description: string;
   version: string;
   status: ScenarioPackage['status'];
+  skillDomain: ScenarioPackage['scenario']['skillDomain'];
   source: ScenarioLibrarySource;
   packageRef: ScenarioPackageRef;
   validationReport?: ValidationReport;
+  qualityReport?: ScenarioQualityReport;
   versions: ScenarioPackage['versions'];
 }
 
@@ -94,6 +97,7 @@ function packageToLibraryItem(pkg: ScenarioPackage): ScenarioLibraryItem {
     description: pkg.scenario.description,
     version: pkg.version,
     status: pkg.status,
+    skillDomain: pkg.scenario.skillDomain,
     source: pkg.status === 'archived' ? 'archived' : pkg.scenario.source === 'built-in' ? 'built-in' : 'workspace',
     packageRef: {
       id: pkg.id,
@@ -101,6 +105,7 @@ function packageToLibraryItem(pkg: ScenarioPackage): ScenarioLibraryItem {
       source: pkg.scenario.source === 'built-in' ? 'built-in' : 'workspace',
     },
     validationReport: pkg.validationReport,
+    qualityReport: pkg.qualityReport,
     versions: pkg.versions,
   };
 }

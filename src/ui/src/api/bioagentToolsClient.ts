@@ -4,6 +4,7 @@ import { makeId, nowIso } from '../domain';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
 import { normalizeAgentResponse } from './agentClient';
 import { scopeCheck } from './scopeCheck';
+import { recommendScenarioElements } from '../scenarioCompiler/scenarioElementCompiler';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -19,6 +20,7 @@ export async function sendBioAgentToolMessage(
   signal?: AbortSignal,
 ): Promise<NormalizedAgentResponse> {
   const builtInScenarioId = builtInScenarioIdForInput(input);
+  const compileHints = input.scenarioOverride ? recommendScenarioElements(input.scenarioOverride.description || input.scenarioOverride.scenarioMarkdown || input.prompt) : undefined;
   callbacks.onEvent?.(toolEvent('project-tool-start', `BioAgent ${input.scenarioId} project tool started`));
   const response = await fetch(`${input.config.workspaceWriterBaseUrl}/api/bioagent/tools/run`, {
     method: 'POST',
@@ -34,12 +36,17 @@ export async function sendBioAgentToolMessage(
       agentServerBaseUrl: input.config.agentServerBaseUrl,
       roleView: input.roleView,
       artifacts: summarizeArtifacts(input),
+      availableSkills: compileHints?.selectedSkillIds,
+      expectedArtifactTypes: compileHints?.selectedArtifactTypes,
+      selectedComponentIds: input.scenarioOverride?.defaultComponents ?? compileHints?.selectedComponentIds,
       uiState: {
         scopeCheck: scopeCheck(builtInScenarioId, input.prompt),
         scenarioOverride: input.scenarioOverride,
         scenarioPackageRef: input.scenarioPackageRef,
         skillPlanRef: input.skillPlanRef,
         uiPlanRef: input.uiPlanRef,
+        expectedArtifactTypes: compileHints?.selectedArtifactTypes,
+        selectedComponentIds: input.scenarioOverride?.defaultComponents ?? compileHints?.selectedComponentIds,
         freshTaskGeneration: true,
       },
     }),

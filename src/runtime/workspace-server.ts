@@ -179,6 +179,21 @@ createServer(async (req, res) => {
     }
     return;
   }
+  if (url.pathname === '/api/bioagent/scenarios/restore' && req.method === 'POST') {
+    try {
+      const body = await readJson(req);
+      const root = scenarioWorkspaceRootFromBody(body);
+      const id = typeof body.id === 'string' ? body.id.trim() : '';
+      const status = typeof body.status === 'string' && ['draft', 'validated', 'published'].includes(body.status) ? body.status : 'draft';
+      if (!id) throw new Error('id is required');
+      const pkg = await readScenarioPackageFromDir(join(root, '.bioagent', 'scenarios', safeName(id)));
+      await writeScenarioPackage(root, pkg, status);
+      writeJson(res, 200, { ok: true, workspacePath: root, scenario: scenarioListItem({ ...pkg, status }) });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
   if (url.pathname === '/api/bioagent/task-attempts/list' && req.method === 'GET') {
     try {
       const root = scenarioWorkspaceRoot(url);
@@ -418,6 +433,7 @@ function buildWorkspaceScenarioLibrary(packages: Array<Record<string, unknown>>)
         source: source === 'built-in' ? 'built-in' : 'workspace',
       },
       validationReport: isRecord(pkg.validationReport) ? pkg.validationReport : undefined,
+      qualityReport: isRecord(pkg.qualityReport) ? pkg.qualityReport : undefined,
       versions: Array.isArray(pkg.versions) ? pkg.versions : [],
     };
   });

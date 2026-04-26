@@ -24,6 +24,9 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>):
   if (skill.id === 'literature.pubmed_search') {
     return runPythonWorkspaceSkill(request, skill, 'literature');
   }
+  if (skill.id === 'literature.web_search') {
+    return runPythonWorkspaceSkill(request, skill, 'literature-web');
+  }
   if (skill.id === 'knowledge.uniprot_chembl_lookup') {
     return runPythonWorkspaceSkill(request, skill, 'knowledge');
   }
@@ -89,7 +92,10 @@ async function runAgentServerGeneratedTask(
       attempt: 1,
       skillId: skill.id,
       agentServerGenerated: true,
-      expectedArtifacts: generation.response.expectedArtifacts,
+      expectedArtifacts: expectedArtifactTypesForRequest(request).length
+        ? expectedArtifactTypesForRequest(request)
+        : generation.response.expectedArtifacts,
+      selectedComponentIds: selectedComponentIdsForRequest(request),
     },
     outputRel,
     stdoutRel,
@@ -167,6 +173,8 @@ async function runAgentServerGeneratedTask(
       });
       if (repaired) return repaired;
     }
+    const supplement = await trySupplementMissingArtifacts(request, skill, skills, normalized);
+    if (supplement) return supplement;
     return {
       ...normalized,
       reasoningTrace: [
@@ -229,6 +237,8 @@ function normalizeGatewayRequest(body: Record<string, unknown>): GatewayRequest 
     artifacts: Array.isArray(body.artifacts) ? body.artifacts.filter(isRecord) : [],
     uiState: isRecord(body.uiState) ? body.uiState : undefined,
     availableSkills: Array.isArray(body.availableSkills) ? body.availableSkills.map(String) : undefined,
+    expectedArtifactTypes: Array.isArray(body.expectedArtifactTypes) ? uniqueStrings(body.expectedArtifactTypes.map(String)) : undefined,
+    selectedComponentIds: Array.isArray(body.selectedComponentIds) ? uniqueStrings(body.selectedComponentIds.map(String)) : undefined,
   };
 }
 
@@ -294,6 +304,8 @@ async function runPythonWorkspaceSkill(request: GatewayRequest, skill: SkillAvai
       skillId: skill.id,
       skillMarkdownRef: skill.manifest.entrypoint.path,
       skillDescription: skill.manifest.description,
+      expectedArtifacts: expectedArtifactTypesForRequest(request),
+      selectedComponentIds: selectedComponentIdsForRequest(request),
     },
     taskRel,
     outputRel,
@@ -371,6 +383,8 @@ async function runPythonWorkspaceSkill(request: GatewayRequest, skill: SkillAvai
       });
       if (repaired) return repaired;
     }
+    const supplement = await trySupplementMissingArtifacts(request, skill, [skill], normalized);
+    if (supplement) return supplement;
     return normalized;
   } catch (error) {
     const failureReason = errorMessage(error);
@@ -429,6 +443,8 @@ async function runLiveScpSkill(request: GatewayRequest, skill: SkillAvailability
       skillId: skill.id,
       skillMarkdownRef: skill.manifest.entrypoint.path,
       skillDescription: skill.manifest.description,
+      expectedArtifacts: expectedArtifactTypesForRequest(request),
+      selectedComponentIds: selectedComponentIdsForRequest(request),
     },
     taskRel,
     outputRel,
@@ -543,6 +559,90 @@ async function runLiveScpSkill(request: GatewayRequest, skill: SkillAvailability
     if (repaired) return repaired;
     return failedTaskPayload(request, skill, run, failureReason);
   }
+}
+
+async function trySupplementMissingArtifacts(
+  request: GatewayRequest,
+  skill: SkillAvailability,
+  skills: SkillAvailability[],
+  payload: ToolPayload,
+): Promise<ToolPayload | undefined> {
+  const missing = missingExpectedArtifactTypes(request, payload);
+  if (!missing.length) return undefined;
+  const supplementalSkill = agentServerGenerationSkill(request.skillDomain);
+  const supplemental = await runAgentServerGeneratedTask({
+    ...request,
+    prompt: [
+      request.prompt,
+      '',
+      `Supplement the previous local skill result. Missing expected artifact types: ${missing.join(', ')}.`,
+      'Write reproducible workspace Python code that emits all missing artifacts and preserves existing artifacts if useful.',
+      `Existing artifact types: ${payload.artifacts.map((artifact) => String(artifact.type || artifact.id || '')).filter(Boolean).join(', ') || 'none'}.`,
+    ].join('\n'),
+    artifacts: [...request.artifacts, ...payload.artifacts],
+    availableSkills: undefined,
+    expectedArtifactTypes: missing,
+    uiState: {
+      ...request.uiState,
+      expectedArtifactTypes: missing,
+    },
+  }, supplementalSkill, [...skills, supplementalSkill], { allowFallbackOnGenerationFailure: true });
+  if (!supplemental) return undefined;
+  return mergeSupplementalPayload(payload, supplemental);
+}
+
+function missingExpectedArtifactTypes(request: GatewayRequest, payload: ToolPayload) {
+  const present = new Set(payload.artifacts
+    .filter((artifact) => !artifactNeedsRepair(artifact))
+    .map((artifact) => String(artifact.type || artifact.id || ''))
+    .filter(Boolean));
+  return expectedArtifactTypesForRequest(request).filter((artifactType) => !present.has(artifactType));
+}
+
+function artifactNeedsRepair(artifact: Record<string, unknown>) {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  const data = isRecord(artifact.data) ? artifact.data : {};
+  return metadata.status === 'repair-needed'
+    || metadata.requiresAgentServerGeneration === true
+    || data.requiresAgentServerGeneration === true;
+}
+
+function mergeSupplementalPayload(base: ToolPayload, supplement: ToolPayload): ToolPayload {
+  return {
+    ...base,
+    message: [base.message, supplement.message].filter(Boolean).join('\n'),
+    confidence: Math.max(base.confidence ?? 0, supplement.confidence ?? 0),
+    reasoningTrace: [base.reasoningTrace, 'Supplemental AgentServer/backend generation:', supplement.reasoningTrace].filter(Boolean).join('\n'),
+    claims: [...base.claims, ...supplement.claims],
+    uiManifest: mergeUiManifest(base.uiManifest, supplement.uiManifest),
+    executionUnits: [...base.executionUnits, ...supplement.executionUnits],
+    artifacts: mergeArtifacts(base.artifacts, supplement.artifacts),
+    logs: [...base.logs ?? [], ...supplement.logs ?? []],
+  };
+}
+
+function mergeArtifacts(left: Array<Record<string, unknown>>, right: Array<Record<string, unknown>>) {
+  const byType = new Map<string, Record<string, unknown>>();
+  for (const artifact of [...left, ...right]) {
+    const key = String(artifact.type || artifact.id || byType.size);
+    const existing = byType.get(key);
+    const existingNeedsRepair = isRecord(existing?.metadata) && existing.metadata.status === 'repair-needed';
+    if (!existing || existingNeedsRepair) byType.set(key, artifact);
+  }
+  return Array.from(byType.values());
+}
+
+function mergeUiManifest(left: Array<Record<string, unknown>>, right: Array<Record<string, unknown>>) {
+  const keyFor = (slot: Record<string, unknown>) => `${String(slot.componentId || '')}:${String(slot.artifactRef || '')}`;
+  const out = [...left];
+  const seen = new Set(out.map(keyFor));
+  for (const slot of right) {
+    const key = keyFor(slot);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(slot);
+  }
+  return out.map((slot, index) => ({ ...slot, priority: typeof slot.priority === 'number' ? slot.priority : index + 1 }));
 }
 
 function isLiveScpSkill(skillId: string) {
@@ -776,9 +876,11 @@ async function requestAgentServerGeneration(params: {
         manifestPath: skill.manifestPath,
         scopeDeclaration: skill.manifest.scopeDeclaration,
       })),
-      artifactSchema: expectedArtifactSchema(params.request.skillDomain),
+      artifactSchema: expectedArtifactSchema(params.request),
       uiManifestContract: { expectedKeys: ['componentId', 'artifactRef', 'encoding', 'layout', 'compare'] },
       uiStateSummary: params.request.uiState,
+      expectedArtifactTypes: expectedArtifactTypesForRequest(params.request),
+      selectedComponentIds: params.request.selectedComponentIds ?? toStringList(params.request.uiState?.selectedComponentIds),
       priorAttempts: await readRecentTaskAttempts(params.workspace, params.request.skillDomain),
     };
     const response = await fetch(`${params.baseUrl}/api/agent-server/runs`, {
@@ -1008,6 +1110,8 @@ function buildAgentServerGenerationPrompt(request: {
   artifactSchema: Record<string, unknown>;
   uiManifestContract: Record<string, unknown>;
   uiStateSummary?: Record<string, unknown>;
+  expectedArtifactTypes?: string[];
+  selectedComponentIds?: string[];
   priorAttempts: unknown[];
 }) {
   return [
@@ -1016,6 +1120,8 @@ function buildAgentServerGenerationPrompt(request: {
     'Generate fresh task code for this specific user request; do not reuse a prior run as the implementation source.',
     'Put generated task paths under .bioagent/tasks when possible. BioAgent will archive any returned taskFiles under .bioagent/tasks/<run-id>/ before execution.',
     'Prefer installed or workspace tools when they genuinely fit, but write adapter code as needed so the run is reproducible from inputPath and outputPath.',
+    'If expectedArtifactTypes contains multiple artifacts, generate a coordinated Python task or small Python module set that emits every requested artifact type. A partial seed skill result is not enough unless the missing artifact has a clear failed-with-reason ExecutionUnit.',
+    'Use the selectedComponentIds/UI contract to preserve promised UI slots; do not drop report, table, graph, structure, omics, or execution outputs just because one local skill only produces a subset.',
     'If a required input, remote file, credential, or executable is missing, write a valid ToolPayload with executionUnits.status="failed-with-reason" and a precise failureReason instead of fabricating outputs.',
     '',
     JSON.stringify({
@@ -1062,7 +1168,10 @@ async function workspaceTreeSummary(workspace: string) {
   return out;
 }
 
-function expectedArtifactSchema(skillDomain: BioAgentSkillDomain): Record<string, unknown> {
+function expectedArtifactSchema(request: GatewayRequest | BioAgentSkillDomain): Record<string, unknown> {
+  const skillDomain = typeof request === 'string' ? request : request.skillDomain;
+  const types = typeof request === 'string' ? [] : expectedArtifactTypesForRequest(request);
+  if (types.length) return { types };
   if (skillDomain === 'literature') return { type: 'paper-list' };
   if (skillDomain === 'structure') return { type: 'structure-summary' };
   if (skillDomain === 'omics') return { type: 'omics-differential-expression' };
@@ -1175,12 +1284,53 @@ function validateAndNormalizePayload(
       ...attemptPlanRefs(request, skill),
       ...unit,
     } : unit),
-    artifacts: Array.isArray(payload.artifacts) ? payload.artifacts : [],
+    artifacts: normalizedArtifactsWithPlaceholders(Array.isArray(payload.artifacts) ? payload.artifacts : [], request),
     logs: [{ kind: 'stdout', ref: refs.stdoutRel }, { kind: 'stderr', ref: refs.stderrRel }],
   };
 }
 
+function normalizedArtifactsWithPlaceholders(artifacts: Array<Record<string, unknown>>, request: GatewayRequest) {
+  const out = [...artifacts];
+  const present = new Set(out.map((artifact) => String(artifact.type || artifact.id || '')).filter(Boolean));
+  for (const artifactType of expectedArtifactTypesForRequest(request)) {
+    if (present.has(artifactType)) continue;
+    out.push({
+      id: artifactType,
+      type: artifactType,
+      producerScenario: request.skillDomain,
+      schemaVersion: '1',
+      metadata: {
+        status: 'repair-needed',
+        reason: 'Compiled scenario expected this artifact but the selected local skill did not emit it.',
+        recoverActions: ['agentserver-generate-python-task', 'repair-current-task', 'select-capable-skill'],
+      },
+      data: {
+        rows: [],
+        markdown: '',
+        missingArtifactType: artifactType,
+        requiresAgentServerGeneration: true,
+      },
+    });
+  }
+  return out;
+}
+
+function expectedArtifactTypesForRequest(request: GatewayRequest) {
+  return uniqueStrings([
+    ...(request.expectedArtifactTypes ?? []),
+    ...toStringList(request.uiState?.expectedArtifactTypes),
+  ]);
+}
+
+function selectedComponentIdsForRequest(request: Pick<GatewayRequest, 'selectedComponentIds' | 'uiState'>) {
+  return uniqueStrings([
+    ...(request.selectedComponentIds ?? []),
+    ...toStringList(request.uiState?.selectedComponentIds),
+  ]);
+}
+
 const REGISTERED_COMPONENTS = new Set([
+  'report-viewer',
   'paper-card-list',
   'molecule-viewer',
   'volcano-plot',
@@ -1195,6 +1345,7 @@ const REGISTERED_COMPONENTS = new Set([
 ]);
 
 const COMPONENT_ALIASES: Array<{ id: string; patterns: RegExp[] }> = [
+  { id: 'report-viewer', patterns: [/report[-\s]?viewer/i, /research[-\s]?report/i, /报告|总结|系统性整理/i] },
   { id: 'paper-card-list', patterns: [/paper[-\s]?card/i, /paper[-\s]?list/i, /文献卡片|文献列表|论文列表/i] },
   { id: 'molecule-viewer', patterns: [/molecule[-\s]?viewer/i, /structure viewer/i, /mol\*/i, /分子|结构查看|蛋白结构/i] },
   { id: 'volcano-plot', patterns: [/volcano/i, /火山图/i] },
@@ -1218,19 +1369,21 @@ const DOMAIN_DEFAULT_COMPONENTS: Record<string, string[]> = {
 export function composeRuntimeUiManifest(
   incoming: Array<Record<string, unknown>>,
   artifacts: Array<Record<string, unknown>>,
-  request: Pick<GatewayRequest, 'prompt' | 'skillDomain' | 'uiState'>,
+  request: Pick<GatewayRequest, 'prompt' | 'skillDomain' | 'uiState' | 'selectedComponentIds'>,
 ): Array<Record<string, unknown>> {
   const override = isRecord(request.uiState?.scenarioOverride) ? request.uiState.scenarioOverride : undefined;
   const overrideComponents = toStringList(override?.defaultComponents).filter((id) => REGISTERED_COMPONENTS.has(id));
+  const selectedComponents = selectedComponentIdsForRequest(request).filter((id) => REGISTERED_COMPONENTS.has(id));
   const promptComponents = componentsRequestedByPrompt(request.prompt);
   const incomingComponents = incoming
     .map((slot) => typeof slot.componentId === 'string' ? slot.componentId : undefined)
     .filter((id): id is string => typeof id === 'string' && REGISTERED_COMPONENTS.has(id));
   const componentIds = uniqueStrings([
     ...overrideComponents,
+    ...selectedComponents,
     ...promptComponents,
-    ...(overrideComponents.length || promptComponents.length ? [] : incomingComponents),
-    ...(overrideComponents.length || promptComponents.length || incomingComponents.length ? [] : DOMAIN_DEFAULT_COMPONENTS[request.skillDomain] ?? []),
+    ...(overrideComponents.length || selectedComponents.length || promptComponents.length ? [] : incomingComponents),
+    ...(overrideComponents.length || selectedComponents.length || promptComponents.length || incomingComponents.length ? [] : DOMAIN_DEFAULT_COMPONENTS[request.skillDomain] ?? []),
     ...(componentNegated(request.prompt, 'execution-unit-table') ? [] : ['execution-unit-table']),
   ]).slice(0, 6);
   const sourceByComponent = new Map(incoming.map((slot) => [String(slot.componentId || ''), slot]));
@@ -1282,12 +1435,14 @@ function inferArtifactRef(componentId: string, artifacts: Array<Record<string, u
     return firstArtifactRef(artifacts);
   }
   const targetType = componentTargetType(componentId, artifacts);
+  if (targetType === 'research-report') return 'research-report';
   const direct = artifacts.find((artifact) => artifact.type === targetType || artifact.id === targetType);
   return refForArtifact(direct) ?? firstArtifactRef(artifacts);
 }
 
 function componentTargetType(componentId: string, artifacts: Array<Record<string, unknown>>) {
   if (componentId === 'paper-card-list') return 'paper-list';
+  if (componentId === 'report-viewer') return 'research-report';
   if (componentId === 'molecule-viewer') return 'structure-summary';
   if (componentId === 'volcano-plot' || componentId === 'heatmap-viewer' || componentId === 'umap-viewer') return 'omics-differential-expression';
   if (componentId === 'network-graph') return 'knowledge-graph';

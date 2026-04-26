@@ -11,6 +11,7 @@ import {
   type ScenarioInstanceId,
   type SessionVersionRecord,
 } from './domain';
+import { isTimelineEventRecord } from './timelineSchema';
 
 const STORAGE_KEY = 'bioagent.workspace.v2';
 const scenarioIds: ScenarioId[] = scenarios.map((scenario) => scenario.id);
@@ -133,8 +134,29 @@ export function parseWorkspaceState(value: unknown): BioAgentWorkspaceState {
     alignmentContracts: Array.isArray(raw.alignmentContracts)
       ? raw.alignmentContracts.filter(isAlignmentContract)
       : [],
+    timelineEvents: Array.isArray(raw.timelineEvents)
+      ? raw.timelineEvents.filter(isTimelineEventRecord)
+      : [],
+    reusableTaskCandidates: Array.isArray(raw.reusableTaskCandidates)
+      ? raw.reusableTaskCandidates.filter(isReusableTaskCandidate)
+      : [],
+    hiddenOfficialPackageIds: Array.isArray(raw.hiddenOfficialPackageIds)
+      ? Array.from(new Set(raw.hiddenOfficialPackageIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)))
+      : [],
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : now,
   };
+}
+
+function isReusableTaskCandidate(value: unknown) {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as { id?: unknown; runId?: unknown; scenarioId?: unknown; prompt?: unknown; status?: unknown; promotionState?: unknown; createdAt?: unknown };
+  return typeof record.id === 'string'
+    && typeof record.runId === 'string'
+    && typeof record.scenarioId === 'string'
+    && typeof record.prompt === 'string'
+    && typeof record.status === 'string'
+    && ['candidate', 'promoted', 'rejected'].includes(String(record.promotionState))
+    && typeof record.createdAt === 'string';
 }
 
 function isAlignmentContract(value: unknown): value is AlignmentContractRecord {
@@ -152,6 +174,23 @@ function isAlignmentContract(value: unknown): value is AlignmentContractRecord {
 export function saveWorkspaceState(state: BioAgentWorkspaceState) {
   if (typeof window === 'undefined') return;
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+export function shouldUsePersistedWorkspaceState(
+  current: BioAgentWorkspaceState,
+  persisted: BioAgentWorkspaceState,
+  options: { explicitWorkspacePath?: boolean } = {},
+) {
+  if (options.explicitWorkspacePath && persisted.workspacePath.trim()) return true;
+  const currentActivity = workspaceActivityScore(current);
+  const persistedActivity = workspaceActivityScore(persisted);
+  if (persistedActivity === 0) return false;
+  if (currentActivity === 0) return true;
+  if (persistedActivity > currentActivity) return true;
+  if (persistedActivity < currentActivity) return false;
+  const currentTime = Date.parse(current.updatedAt || '');
+  const persistedTime = Date.parse(persisted.updatedAt || '');
+  return Number.isFinite(persistedTime) && (!Number.isFinite(currentTime) || persistedTime >= currentTime);
 }
 
 export function resetSession(scenarioId: ScenarioInstanceId): BioAgentSession {
@@ -204,4 +243,19 @@ function preserveWorkspaceSessions(
 
 function scenarioLabel(scenarioId: ScenarioInstanceId) {
   return scenarios.find((scenario) => scenario.id === scenarioId)?.name ?? scenarioId;
+}
+
+function workspaceActivityScore(state: BioAgentWorkspaceState) {
+  return Object.values(state.sessionsByScenario).reduce((total, session) => {
+    return total + sessionActivityScore(session);
+  }, state.archivedSessions.length + (state.alignmentContracts?.length ?? 0) + (state.timelineEvents?.length ?? 0));
+}
+
+export function sessionActivityScore(session: BioAgentSession) {
+  const userMessages = session.messages.filter((message) => !message.id.startsWith('seed')).length;
+  return userMessages
+    + session.runs.length
+    + session.artifacts.length
+    + session.executionUnits.length
+    + session.notebook.length;
 }

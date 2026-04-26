@@ -108,7 +108,7 @@ export function builtInScenarioPackageRef(scenarioId: ScenarioId): ScenarioPacka
 }
 
 function skillIdsForDomain(skillDomain: SkillDomain) {
-  if (skillDomain === 'literature') return ['literature.pubmed_search'];
+  if (skillDomain === 'literature') return ['literature.pubmed_search', 'literature.web_search'];
   if (skillDomain === 'structure') return ['structure.rcsb_latest_or_entry'];
   if (skillDomain === 'omics') return ['omics.differential_expression'];
   if (skillDomain === 'knowledge') return ['knowledge.uniprot_chembl_lookup', 'sequence.ncbi_blastp_search'];
