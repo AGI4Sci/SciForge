@@ -2,12 +2,14 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent, t
 import {
   AlertTriangle,
   ArrowRight,
+  ArrowUp,
   Check,
   ChevronLeft,
   ChevronDown,
   ChevronRight,
   ChevronUp,
   Clock,
+  Copy,
   Database,
   Download,
   Eye,
@@ -18,11 +20,13 @@ import {
   FileUp,
   Folder,
   FolderPlus,
+  Home,
   Lock,
   MessageSquare,
   Plus,
   Play,
   RefreshCw,
+  Save,
   Search,
   Settings,
   Shield,
@@ -100,9 +104,12 @@ import {
   saveFileBackedBioAgentConfig,
   saveWorkspaceScenario,
   validateAcceptedSkillPromotionProposal,
+  readWorkspaceFile,
+  writeWorkspaceFile,
   type SkillPromotionProposalRecord,
   type SkillPromotionValidationResult,
   type WorkspaceEntry,
+  type WorkspaceFileContent,
 } from './api/workspaceClient';
 import { HeatmapViewer, MoleculeViewer, NetworkGraph, UmapViewer } from './visualizations';
 
@@ -758,6 +765,10 @@ function Sidebar({
   const [workspaceError, setWorkspaceError] = useState('');
   const [workspaceNotice, setWorkspaceNotice] = useState('');
   const [selectedEntryPath, setSelectedEntryPath] = useState('');
+  const [currentWorkspacePath, setCurrentWorkspacePath] = useState(config.workspacePath);
+  const [previewFile, setPreviewFile] = useState<WorkspaceFileContent | null>(null);
+  const [previewDraft, setPreviewDraft] = useState('');
+  const [previewDirty, setPreviewDirty] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry?: WorkspaceEntry } | null>(null);
   const resizingRef = useRef(false);
 
@@ -787,7 +798,14 @@ function Sidebar({
   useEffect(() => {
     if (activePanel !== 'workspace' || collapsed) return;
     void refreshWorkspace();
-  }, [activePanel, collapsed, config.workspacePath, config.workspaceWriterBaseUrl]);
+  }, [activePanel, collapsed, currentWorkspacePath, config.workspaceWriterBaseUrl]);
+
+  useEffect(() => {
+    setCurrentWorkspacePath(config.workspacePath);
+    setPreviewFile(null);
+    setPreviewDraft('');
+    setPreviewDirty(false);
+  }, [config.workspacePath]);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -801,7 +819,7 @@ function Sidebar({
   async function refreshWorkspace() {
     try {
       setWorkspaceError('');
-      const entries = await listWorkspace(config.workspacePath, config);
+      const entries = await listWorkspace(currentWorkspacePath || config.workspacePath, config);
       setWorkspaceEntries(entries);
       setWorkspaceNotice(entries.length ? `已加载 ${entries.length} 个资源` : '当前目录为空；可新建文件夹或打开 .bioagent 分组。');
     } catch (err) {
@@ -811,9 +829,61 @@ function Sidebar({
     }
   }
 
+  function openWorkspaceFolder(path: string) {
+    setCurrentWorkspacePath(path);
+    setSelectedEntryPath(path);
+    setPreviewFile(null);
+    setPreviewDraft('');
+    setPreviewDirty(false);
+  }
+
+  async function openWorkspaceEntry(entry: WorkspaceEntry) {
+    setSelectedEntryPath(entry.path);
+    if (entry.kind === 'folder') {
+      openWorkspaceFolder(entry.path);
+      return;
+    }
+    try {
+      setWorkspaceError('');
+      const file = await readWorkspaceFile(entry.path, config);
+      setPreviewFile(file);
+      setPreviewDraft(file.content);
+      setPreviewDirty(false);
+      setWorkspaceNotice(`已打开 ${file.name}`);
+    } catch (err) {
+      setWorkspaceError(err instanceof Error ? err.message : String(err));
+      setWorkspaceNotice('');
+    }
+  }
+
+  async function savePreviewFile() {
+    if (!previewFile) return;
+    try {
+      setWorkspaceError('');
+      const file = await writeWorkspaceFile(previewFile.path, previewDraft, config);
+      setPreviewFile(file);
+      setPreviewDraft(file.content);
+      setPreviewDirty(false);
+      setWorkspaceNotice(`已保存 ${file.name}`);
+      await refreshWorkspace();
+    } catch (err) {
+      setWorkspaceError(err instanceof Error ? err.message : String(err));
+      setWorkspaceNotice('');
+    }
+  }
+
+  function goWorkspaceParent() {
+    const parent = parentPath(currentWorkspacePath);
+    if (parent && parent !== currentWorkspacePath) openWorkspaceFolder(parent);
+  }
+
+  function goWorkspaceRoot() {
+    openWorkspaceFolder(config.workspacePath);
+  }
+
   async function runWorkspaceAction(action: 'create-file' | 'create-folder' | 'rename' | 'delete', entry?: WorkspaceEntry) {
-    const basePath = entry?.kind === 'folder' ? entry.path : config.workspacePath;
-    const selectedPath = entry?.path || config.workspacePath;
+    const basePath = entry?.kind === 'folder' ? entry.path : currentWorkspacePath || config.workspacePath;
+    const selectedPath = entry?.path || currentWorkspacePath || config.workspacePath;
     let targetPath = selectedPath;
     let renameTarget: string | undefined;
     if (action === 'create-file') {
@@ -835,6 +905,11 @@ function Sidebar({
     try {
       setWorkspaceError('');
       await mutateWorkspaceFile(config, action, { path: targetPath, targetPath: renameTarget });
+      if (previewFile && (previewFile.path === targetPath || previewFile.path === selectedPath)) {
+        setPreviewFile(null);
+        setPreviewDraft('');
+        setPreviewDirty(false);
+      }
       await refreshWorkspace();
       setWorkspaceNotice(workspaceActionSuccessMessage(action));
     } catch (err) {
@@ -947,8 +1022,8 @@ function Sidebar({
                 <div className="sidebar-label">当前工作目录</div>
                 <input
                   className="workspace-path-editor"
-                  value={config.workspacePath}
-                  onChange={(event) => onWorkspacePathChange(event.target.value)}
+                  value={currentWorkspacePath}
+                  onChange={(event) => setCurrentWorkspacePath(event.target.value)}
                   onBlur={() => void refreshWorkspace()}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') void refreshWorkspace();
@@ -956,9 +1031,19 @@ function Sidebar({
                   title={workspaceStatus || 'BioAgent workspace path'}
                 />
                 <div className="workspace-toolbar">
+                  <button onClick={() => onWorkspacePathChange(currentWorkspacePath)} title="将当前路径设为工作区根目录" aria-label="将当前路径设为工作区根目录"><Check size={14} /></button>
+                  <button onClick={goWorkspaceRoot} title="回到工作区根目录" aria-label="回到工作区根目录"><Home size={14} /></button>
+                  <button onClick={goWorkspaceParent} title="返回上一级目录" aria-label="返回上一级目录"><ArrowUp size={14} /></button>
                   <button onClick={() => void runWorkspaceAction('create-file')} title="新建文件" aria-label="新建文件"><FilePlus size={14} /></button>
                   <button onClick={() => void runWorkspaceAction('create-folder')} title="新建文件夹" aria-label="新建文件夹"><FolderPlus size={14} /></button>
                   <button onClick={() => void refreshWorkspace()} title="刷新" aria-label="刷新"><RefreshCw size={14} /></button>
+                </div>
+                <div className="workspace-breadcrumbs" aria-label="当前目录层级">
+                  {workspaceBreadcrumbs(currentWorkspacePath, config.workspacePath).map((crumb) => (
+                    <button key={crumb.path} type="button" onClick={() => openWorkspaceFolder(crumb.path)} title={crumb.path}>
+                      {crumb.label}
+                    </button>
+                  ))}
                 </div>
                 {workspaceNeedsOnboarding(config.workspacePath, workspaceError, workspaceStatus) ? (
                   <div className="workspace-onboarding">
@@ -980,7 +1065,7 @@ function Sidebar({
                     <button
                       key={resource.key}
                       className="workspace-resource-chip"
-                      onClick={() => onWorkspacePathChange(resource.path)}
+                      onClick={() => openWorkspaceFolder(resource.path)}
                       title={resource.path}
                     >
                       <Folder size={13} />
@@ -992,8 +1077,8 @@ function Sidebar({
                   <button
                     key={entry.path}
                     className={cx('tree-item', selectedEntryPath === entry.path && 'active')}
-                    onClick={() => setSelectedEntryPath(entry.path)}
-                    onDoubleClick={() => entry.kind === 'folder' && onWorkspacePathChange(entry.path)}
+                    onClick={() => void openWorkspaceEntry(entry)}
+                    onDoubleClick={() => entry.kind === 'folder' && openWorkspaceFolder(entry.path)}
                     onContextMenu={(event) => {
                       event.preventDefault();
                       setSelectedEntryPath(entry.path);
@@ -1003,10 +1088,49 @@ function Sidebar({
                   >
                     {entry.kind === 'folder' ? <Folder size={14} /> : <File size={14} />}
                     <span>{entry.name}</span>
+                    {entry.kind === 'file' && typeof entry.size === 'number' ? <small>{formatBytes(entry.size)}</small> : null}
                   </button>
                 ))}
+                {previewFile ? (
+                  <div className="workspace-preview" aria-label="文件预览">
+                    <div className="workspace-preview-head">
+                      <span>
+                        <FileText size={13} />
+                        <strong>{previewFile.name}</strong>
+                        {previewDirty ? <Badge variant="warning">未保存</Badge> : <Badge variant="success">已保存</Badge>}
+                      </span>
+                      <div>
+                        <button type="button" onClick={() => void navigator.clipboard?.writeText(previewFile.path)} title="复制路径" aria-label="复制路径"><Copy size={13} /></button>
+                        <button type="button" onClick={() => void navigator.clipboard?.writeText(previewDraft)} title="复制内容" aria-label="复制内容"><Copy size={13} /></button>
+                        <button type="button" onClick={() => void savePreviewFile()} disabled={!previewDirty} title="保存文件" aria-label="保存文件"><Save size={13} /></button>
+                      </div>
+                    </div>
+                    <textarea
+                      value={previewDraft}
+                      spellCheck={false}
+                      onChange={(event) => {
+                        setPreviewDraft(event.target.value);
+                        setPreviewDirty(event.target.value !== previewFile.content);
+                      }}
+                      onKeyDown={(event) => {
+                        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+                          event.preventDefault();
+                          void savePreviewFile();
+                        }
+                      }}
+                      aria-label={`${previewFile.name} 文件内容`}
+                    />
+                    <div className="workspace-preview-meta">
+                      <code>{previewFile.language}</code>
+                      <span>{formatBytes(previewFile.size)}</span>
+                      {previewFile.modifiedAt ? <span>{new Date(previewFile.modifiedAt).toLocaleString('zh-CN', { hour12: false })}</span> : null}
+                    </div>
+                  </div>
+                ) : null}
                 {contextMenu ? (
                   <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={(event) => event.stopPropagation()}>
+                    {contextMenu.entry?.kind === 'folder' ? <button onClick={() => openWorkspaceFolder(contextMenu.entry?.path || currentWorkspacePath)}>打开文件夹</button> : null}
+                    {contextMenu.entry?.kind === 'file' ? <button onClick={() => contextMenu.entry && void openWorkspaceEntry(contextMenu.entry)}>打开/预览</button> : null}
                     <button onClick={() => void runWorkspaceAction('create-file', contextMenu.entry)}>新建文件</button>
                     <button onClick={() => void runWorkspaceAction('create-folder', contextMenu.entry)}>新建文件夹</button>
                     {contextMenu.entry ? <button onClick={() => void runWorkspaceAction('rename', contextMenu.entry)}>重命名</button> : null}
@@ -1125,6 +1249,41 @@ function bioagentWorkspaceResources(workspacePath: string) {
     { key: 'exports', label: 'exports', path: `${root}/exports` },
     { key: 'artifacts', label: 'artifacts', path: `${root}/artifacts` },
   ];
+}
+
+function parentPath(path: string) {
+  const clean = path.replace(/\/+$/, '');
+  if (!clean || clean === '/') return clean || '/';
+  const index = clean.lastIndexOf('/');
+  return index <= 0 ? '/' : clean.slice(0, index);
+}
+
+function workspaceBreadcrumbs(path: string, workspaceRoot: string) {
+  const cleanPath = path.replace(/\/+$/, '') || workspaceRoot.replace(/\/+$/, '');
+  const cleanRoot = workspaceRoot.replace(/\/+$/, '');
+  const crumbs: Array<{ label: string; path: string }> = [];
+  if (cleanRoot && cleanPath.startsWith(cleanRoot)) {
+    crumbs.push({ label: 'workspace', path: cleanRoot });
+    const rest = cleanPath.slice(cleanRoot.length).replace(/^\/+/, '');
+    let cursor = cleanRoot;
+    for (const part of rest.split('/').filter(Boolean)) {
+      cursor = `${cursor}/${part}`;
+      crumbs.push({ label: part, path: cursor });
+    }
+    return crumbs;
+  }
+  let cursor = '';
+  for (const part of cleanPath.split('/').filter(Boolean).slice(-4)) {
+    cursor = cursor ? `${cursor}/${part}` : cleanPath.startsWith('/') ? `/${part}` : part;
+    crumbs.push({ label: part, path: cursor });
+  }
+  return crumbs.length ? crumbs : [{ label: cleanPath || '/', path: cleanPath || '/' }];
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function TopBar({
@@ -2505,6 +2664,7 @@ function ChatPanel({
                 />
               ) : null}
               <div className="message-actions">
+                <button onClick={() => void navigator.clipboard?.writeText(message.content)}>复制</button>
                 <button onClick={() => beginEditMessage(message)}>编辑</button>
                 <button onClick={() => onDeleteMessage(message.id)}>删除</button>
               </div>
@@ -2514,7 +2674,12 @@ function ChatPanel({
                     {expanded === index ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                     {expanded === index ? '收起推理链' : '展开推理链'}
                   </button>
-                  {expanded === index ? <pre className="reasoning">{message.expandable}</pre> : null}
+                  {expanded === index ? (
+                    <div className="reasoning-block">
+                      <button type="button" onClick={() => void navigator.clipboard?.writeText(message.expandable || '')}>复制推理链</button>
+                      <pre className="reasoning">{message.expandable}</pre>
+                    </div>
+                  ) : null}
                 </>
               ) : null}
             </div>
@@ -2528,7 +2693,7 @@ function ChatPanel({
                 <strong>{scenario.name}</strong>
                 <Badge variant="info">running</Badge>
               </div>
-              <p>正在调用 AgentServer...</p>
+              <p>{latestRunningEvent(streamEvents) || '正在规划、生成或执行 workspace task...'}</p>
             </div>
           </div>
         ) : null}
@@ -2567,7 +2732,8 @@ function ChatPanel({
             {streamEvents.slice(-8).map((event) => (
               <div className="stream-event" key={event.id}>
                 <Badge variant={event.type.includes('error') ? 'danger' : event.type.includes('guidance') ? 'warning' : 'info'}>{event.label}</Badge>
-                {event.detail ? <span>{event.detail}</span> : null}
+                {event.detail ? <span className="stream-event-detail">{event.detail}</span> : null}
+                <button type="button" onClick={() => void navigator.clipboard?.writeText([event.label, event.detail].filter(Boolean).join(' '))}>复制</button>
               </div>
             ))}
           </div>
@@ -2670,6 +2836,10 @@ function runIdForMessage(
 
 function normalizeRunPrompt(value: string) {
   return value.replace(/^运行中引导：/, '').trim();
+}
+
+function latestRunningEvent(events: AgentStreamEvent[]) {
+  return [...events].reverse().find((event) => event.detail)?.detail;
 }
 
 function FailureRecoveryCard({
@@ -3934,8 +4104,9 @@ function UnknownArtifactInspector({ slot, artifact, session }: RegistryRendererP
 
 function ReportViewerSlot({ slot, artifact, session }: RegistryRendererProps) {
   const payload = slotPayload(slot, artifact);
-  const markdown = asString(payload.markdown) || asString(payload.report) || asString(payload.summary);
-  const sections = toRecordList(payload.sections);
+  const report = coerceReportPayload(payload);
+  const markdown = report.markdown;
+  const sections = report.sections;
   if (!artifact || (!markdown && !sections.length)) {
     return <ComponentEmptyState componentId="report-viewer" artifactType="research-report" detail={!artifact ? undefined : '当前 research-report 缺少 markdown/report/sections 字段；请检查 AgentServer 生成的 artifact contract。'} />;
   }
@@ -3949,15 +4120,134 @@ function ReportViewerSlot({ slot, artifact, session }: RegistryRendererProps) {
         {viewCompositionSummary(slot) ? <code>{viewCompositionSummary(slot)}</code> : null}
       </div>
       <div className="report-viewer">
+        <div className="report-actions">
+          <button type="button" onClick={() => void navigator.clipboard?.writeText(markdown || sectionsToMarkdown(sections))}>
+            复制 Markdown
+          </button>
+        </div>
         {sections.length ? sections.map((section, index) => (
           <section key={`${asString(section.title) ?? 'section'}-${index}`}>
             <h3>{asString(section.title) || `Section ${index + 1}`}</h3>
-            <p>{asString(section.content) || asString(section.markdown) || JSON.stringify(section)}</p>
+            <MarkdownBlock markdown={asString(section.content) || asString(section.markdown) || recordToReadableText(section)} />
           </section>
-        )) : <pre>{markdown}</pre>}
+        )) : <MarkdownBlock markdown={markdown} />}
       </div>
     </div>
   );
+}
+
+function coerceReportPayload(payload: Record<string, unknown>) {
+  const nested = parseNestedReport(payload);
+  const source = nested ?? payload;
+  const sections = toRecordList(source.sections);
+  const markdown = asString(source.markdown)
+    || asString(source.report)
+    || asString(source.summary)
+    || asString(source.content)
+    || (sections.length ? sectionsToMarkdown(sections) : undefined)
+    || reportFromKnownFields(source);
+  return { markdown, sections };
+}
+
+function parseNestedReport(payload: Record<string, unknown>): Record<string, unknown> | undefined {
+  for (const key of ['data', 'content', 'report', 'markdown', 'result']) {
+    const value = payload[key];
+    if (isRecord(value)) return value;
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (!trimmed.startsWith('{')) continue;
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (isRecord(parsed)) {
+        if (isRecord(parsed.data)) return parsed.data;
+        return parsed;
+      }
+    } catch {
+      // The string may already be normal Markdown.
+    }
+  }
+  return undefined;
+}
+
+function sectionsToMarkdown(sections: Record<string, unknown>[]) {
+  return sections.map((section, index) => {
+    const title = asString(section.title) || `Section ${index + 1}`;
+    const content = asString(section.content) || asString(section.markdown) || recordToReadableText(section);
+    return `## ${title}\n\n${content}`;
+  }).join('\n\n');
+}
+
+function reportFromKnownFields(record: Record<string, unknown>) {
+  const parts: string[] = [];
+  const title = asString(record.title) || asString(record.name);
+  if (title) parts.push(`# ${title}`);
+  for (const key of ['executiveSummary', 'keyFindings', 'methods', 'limitations', 'conclusions']) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) parts.push(`## ${humanizeKey(key)}\n\n${value.trim()}`);
+    if (Array.isArray(value) && value.length) {
+      parts.push(`## ${humanizeKey(key)}\n\n${value.map((item) => `- ${typeof item === 'string' ? item : recordToReadableText(isRecord(item) ? item : { value: item })}`).join('\n')}`);
+    }
+  }
+  return parts.length ? parts.join('\n\n') : undefined;
+}
+
+function recordToReadableText(record: Record<string, unknown>) {
+  return Object.entries(record)
+    .filter(([key]) => key !== 'title')
+    .map(([key, value]) => {
+      if (typeof value === 'string') return `**${humanizeKey(key)}:** ${value}`;
+      if (typeof value === 'number' || typeof value === 'boolean') return `**${humanizeKey(key)}:** ${String(value)}`;
+      if (Array.isArray(value)) return `**${humanizeKey(key)}:**\n${value.map((item) => `- ${typeof item === 'string' ? item : JSON.stringify(item)}`).join('\n')}`;
+      return '';
+    })
+    .filter(Boolean)
+    .join('\n\n') || JSON.stringify(record, null, 2);
+}
+
+function humanizeKey(key: string) {
+  return key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function MarkdownBlock({ markdown }: { markdown?: string }) {
+  const lines = (markdown || '').split('\n');
+  const nodes: ReactNode[] = [];
+  let list: string[] = [];
+  function flushList() {
+    if (!list.length) return;
+    nodes.push(<ul key={`list-${nodes.length}`}>{list.map((item, index) => <li key={index}>{inlineMarkdown(item)}</li>)}</ul>);
+    list = [];
+  }
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushList();
+      return;
+    }
+    if (/^#{1,4}\s+/.test(trimmed)) {
+      flushList();
+      const level = trimmed.match(/^#+/)?.[0].length ?? 2;
+      const text = trimmed.replace(/^#{1,4}\s+/, '');
+      nodes.push(level <= 2 ? <h3 key={index}>{inlineMarkdown(text)}</h3> : <h4 key={index}>{inlineMarkdown(text)}</h4>);
+      return;
+    }
+    if (/^[-*]\s+/.test(trimmed)) {
+      list.push(trimmed.replace(/^[-*]\s+/, ''));
+      return;
+    }
+    flushList();
+    nodes.push(<p key={index}>{inlineMarkdown(trimmed)}</p>);
+  });
+  flushList();
+  return <div className="markdown-block">{nodes}</div>;
+}
+
+function inlineMarkdown(text: string): ReactNode {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean);
+  return parts.map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) return <strong key={index}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith('`') && part.endsWith('`')) return <code key={index}>{part.slice(1, -1)}</code>;
+    return <span key={index}>{part}</span>;
+  });
 }
 
 function ArtifactDownloads({ artifact }: { artifact?: RuntimeArtifact }) {

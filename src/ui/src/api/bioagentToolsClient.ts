@@ -56,44 +56,59 @@ export async function sendBioAgentToolMessage(
     callbacks.onEvent?.(toolEvent('repair-start', `正在修复：已发现上一轮 failureReason=${priorFailure}`));
   }
   callbacks.onEvent?.(toolEvent('project-tool-start', `BioAgent ${builtInScenarioId} project tool started`));
+  callbacks.onEvent?.(toolEvent('agentserver-dispatch', forceAgentServerGeneration
+    ? `正在交给 AgentServer 通用后端处理：${input.config.agentServerBaseUrl}`
+    : '正在尝试 workspace skill；如不能产出完整 artifacts 会自动补交给 AgentServer。'));
+  let heartbeatCount = 0;
+  const heartbeat = globalThis.setInterval(() => {
+    heartbeatCount += 1;
+    const phase = heartbeatCount % 4 === 1
+      ? '等待 Workspace Writer / AgentServer 返回运行状态'
+      : heartbeatCount % 4 === 2
+      ? '后端可能正在生成 task、读取上下文或执行代码'
+      : heartbeatCount % 4 === 3
+      ? '如果任务需要联网/LLM，当前请求会继续保持连接'
+      : 'BioAgent 仍在等待完整 ToolPayload，不会把半成品当成功';
+    callbacks.onEvent?.(toolEvent('backend-heartbeat', `${phase} · ${heartbeatCount * 3}s`));
+  }, 3000);
   const response = await fetch(`${input.config.workspaceWriterBaseUrl}/api/bioagent/tools/run`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      scenarioId: builtInScenarioId,
-      scenarioPackageRef: input.scenarioPackageRef,
-      skillPlanRef: input.skillPlanRef,
-      uiPlanRef: input.uiPlanRef,
-      skillDomain,
-      prompt: runtimePrompt,
-      workspacePath: input.config.workspacePath,
-      agentServerBaseUrl: input.config.agentServerBaseUrl,
-      modelProvider: input.config.modelProvider,
-      modelName: input.config.modelName,
-      llmEndpoint: buildToolLlmEndpoint(input),
-      roleView: input.roleView,
-      artifacts: artifactSummary,
-      availableSkills,
-      expectedArtifactTypes,
-      selectedComponentIds,
-      uiState: {
-        scopeCheck: scopeCheck(builtInScenarioId, input.prompt),
-        scenarioOverride: input.scenarioOverride,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scenarioId: builtInScenarioId,
         scenarioPackageRef: input.scenarioPackageRef,
         skillPlanRef: input.skillPlanRef,
         uiPlanRef: input.uiPlanRef,
-        currentPrompt: input.prompt,
-        recentConversation,
-        recentExecutionRefs,
-        recentRuns: summarizeRuns(input),
+        skillDomain,
+        prompt: runtimePrompt,
+        workspacePath: input.config.workspacePath,
+        agentServerBaseUrl: input.config.agentServerBaseUrl,
+        modelProvider: input.config.modelProvider,
+        modelName: input.config.modelName,
+        llmEndpoint: buildToolLlmEndpoint(input),
+        roleView: input.roleView,
+        artifacts: artifactSummary,
+        availableSkills,
         expectedArtifactTypes,
         selectedComponentIds,
-        freshTaskGeneration: true,
-        forceAgentServerGeneration,
-      },
-    }),
-    signal,
-  });
+        uiState: {
+          scopeCheck: scopeCheck(builtInScenarioId, input.prompt),
+          scenarioOverride: input.scenarioOverride,
+          scenarioPackageRef: input.scenarioPackageRef,
+          skillPlanRef: input.skillPlanRef,
+          uiPlanRef: input.uiPlanRef,
+          currentPrompt: input.prompt,
+          recentConversation,
+          recentExecutionRefs,
+          recentRuns: summarizeRuns(input),
+          expectedArtifactTypes,
+          selectedComponentIds,
+          freshTaskGeneration: true,
+          forceAgentServerGeneration,
+        },
+      }),
+      signal,
+    }).finally(() => globalThis.clearInterval(heartbeat));
   const text = await response.text();
   let json: unknown = text;
   try {

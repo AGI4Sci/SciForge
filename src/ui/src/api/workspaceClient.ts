@@ -9,6 +9,17 @@ export interface WorkspaceEntry {
   name: string;
   path: string;
   kind: 'file' | 'folder';
+  size?: number;
+  modifiedAt?: string;
+}
+
+export interface WorkspaceFileContent {
+  path: string;
+  name: string;
+  content: string;
+  size: number;
+  modifiedAt?: string;
+  language: string;
 }
 
 export interface WorkspaceScenarioListItem {
@@ -173,6 +184,30 @@ export async function listWorkspace(path: string, config: BioAgentConfig): Promi
   if (!response.ok) throw new Error(await workspaceResponseError(response, `List failed: HTTP ${response.status}`));
   const json = await response.json() as { entries?: WorkspaceEntry[] };
   return Array.isArray(json.entries) ? json.entries : [];
+}
+
+export async function readWorkspaceFile(path: string, config: BioAgentConfig): Promise<WorkspaceFileContent> {
+  if (!path.trim()) throw new Error('path is required');
+  const url = new URL(`${config.workspaceWriterBaseUrl}/api/bioagent/workspace/file`);
+  url.searchParams.set('path', path);
+  const response = await fetchWorkspace(config, `read workspace file ${path}`, url);
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Read file failed: HTTP ${response.status}`));
+  const json = await response.json() as { file?: WorkspaceFileContent };
+  if (!json.file) throw new Error(`Read file ${path} returned no file payload.`);
+  return json.file;
+}
+
+export async function writeWorkspaceFile(path: string, content: string, config: BioAgentConfig): Promise<WorkspaceFileContent> {
+  if (!path.trim()) throw new Error('path is required');
+  const response = await fetchWorkspace(config, `write workspace file ${path}`, `${config.workspaceWriterBaseUrl}/api/bioagent/workspace/file`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, content }),
+  });
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Write file failed: HTTP ${response.status}`));
+  const json = await response.json() as { file?: WorkspaceFileContent };
+  if (!json.file) throw new Error(`Write file ${path} returned no file payload.`);
+  return json.file;
 }
 
 export async function mutateWorkspaceFile(

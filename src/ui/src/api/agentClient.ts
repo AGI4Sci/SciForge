@@ -248,6 +248,74 @@ function extractJsonObject(text: string): Record<string, unknown> | undefined {
   return undefined;
 }
 
+function readableMessageFromStructured(structured: Record<string, unknown>, fallback: string) {
+  const direct = asString(structured.message);
+  if (direct && !looksLikeRawJson(direct)) return direct;
+  const report = reportMarkdownFromArtifacts(structured.artifacts);
+  if (report) return report;
+  const markdown = reportMarkdownFromPayload(structured);
+  if (markdown) return markdown;
+  return direct || fallback;
+}
+
+function reportMarkdownFromArtifacts(value: unknown) {
+  if (!Array.isArray(value)) return undefined;
+  for (const item of value) {
+    if (!isRecord(item) || item.type !== 'research-report') continue;
+    const markdown = reportMarkdownFromPayload(isRecord(item.data) ? item.data : item);
+    if (markdown) return markdown;
+  }
+  return undefined;
+}
+
+function reportMarkdownFromPayload(payload: Record<string, unknown>): string | undefined {
+  const nested = parseReportPayload(payload) ?? payload;
+  const direct = asString(nested.markdown) || asString(nested.report) || asString(nested.summary) || asString(nested.content);
+  if (direct && !looksLikeRawJson(direct)) return direct;
+  const sections = Array.isArray(nested.sections) ? nested.sections.filter(isRecord) : [];
+  if (sections.length) {
+    return sections.map((section, index) => {
+      const title = asString(section.title) || `Section ${index + 1}`;
+      const content = asString(section.content) || asString(section.markdown) || readableRecord(section);
+      return `## ${title}\n\n${content}`;
+    }).join('\n\n');
+  }
+  return undefined;
+}
+
+function parseReportPayload(payload: Record<string, unknown>) {
+  for (const key of ['data', 'content', 'report', 'result']) {
+    const value = payload[key];
+    if (isRecord(value)) return value;
+    if (typeof value !== 'string' || !value.trim().startsWith('{')) continue;
+    try {
+      const parsed = JSON.parse(value);
+      if (isRecord(parsed)) return isRecord(parsed.data) ? parsed.data : parsed;
+    } catch {
+      // Keep natural-language report strings unchanged.
+    }
+  }
+  return undefined;
+}
+
+function readableRecord(record: Record<string, unknown>) {
+  return Object.entries(record)
+    .filter(([key]) => key !== 'title')
+    .map(([key, value]) => {
+      if (typeof value === 'string') return `**${key}:** ${value}`;
+      if (Array.isArray(value)) return `**${key}:**\n${value.map((item) => `- ${typeof item === 'string' ? item : JSON.stringify(item)}`).join('\n')}`;
+      if (typeof value === 'number' || typeof value === 'boolean') return `**${key}:** ${String(value)}`;
+      return '';
+    })
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function looksLikeRawJson(value: string) {
+  const trimmed = value.trim();
+  return trimmed.startsWith('{') && trimmed.endsWith('}');
+}
+
 function extractOutputText(data: unknown): string {
   if (!isRecord(data)) return String(data ?? '');
   const run = isRecord(data.run) ? data.run : undefined;
@@ -353,7 +421,7 @@ export function normalizeAgentResponse(
   const cleanOutputText = outputText.replace(/```(?:json)?[\s\S]*?```/gi, '').trim() || outputText;
   const messageText = runStatus === 'failed'
     ? `AgentServer 后端运行失败：${cleanOutputText}`
-    : asString(structured.message) || cleanOutputText;
+    : readableMessageFromStructured(structured, cleanOutputText);
   const confidence = asNumber(structured.confidence) ?? 0.78;
   const claimType = pickClaimType(structured.claimType);
   const evidence = pickEvidence(structured.evidenceLevel ?? structured.evidence);

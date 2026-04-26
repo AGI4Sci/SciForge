@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import { runBioAgentTool } from './bioagent-tools.js';
 import { readRecentTaskAttempts, readTaskAttempts } from './task-attempt-history.js';
 import { acceptSkillPromotionProposal, archiveSkillPromotionProposal, listSkillPromotionProposals, rejectSkillPromotionProposal, runAcceptedSkillValidationSmoke } from './skill-promotion.js';
@@ -44,17 +44,73 @@ createServer(async (req, res) => {
     try {
       const root = resolve(url.searchParams.get('path') || process.cwd());
       const entries = await readdir(root, { withFileTypes: true });
+      const mapped = await Promise.all(entries
+        .filter((entry) => !entry.name.startsWith('.DS_Store'))
+        .map(async (entry) => {
+          const path = join(root, entry.name);
+          const info = await stat(path).catch(() => undefined);
+          return {
+            name: entry.name,
+            path,
+            kind: entry.isDirectory() ? 'folder' : 'file',
+            size: info?.size,
+            modifiedAt: info?.mtime?.toISOString(),
+          };
+        }));
       writeJson(res, 200, {
         ok: true,
         path: root,
-        entries: entries
-          .filter((entry) => !entry.name.startsWith('.DS_Store'))
-          .sort((left, right) => Number(right.isDirectory()) - Number(left.isDirectory()) || left.name.localeCompare(right.name))
-          .map((entry) => ({
-            name: entry.name,
-            path: join(root, entry.name),
-            kind: entry.isDirectory() ? 'folder' : 'file',
-          })),
+        entries: mapped
+          .sort((left, right) => Number(right.kind === 'folder') - Number(left.kind === 'folder') || left.name.localeCompare(right.name))
+      });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  if (url.pathname === '/api/bioagent/workspace/file' && req.method === 'GET') {
+    try {
+      const filePath = resolve(url.searchParams.get('path') || '');
+      if (!filePath) throw new Error('path is required');
+      const info = await stat(filePath);
+      if (!info.isFile()) throw new Error(`${filePath} is not a file`);
+      if (info.size > 1024 * 1024) throw new Error('File is larger than the 1MB preview/edit limit.');
+      const content = await readFile(filePath, 'utf8');
+      writeJson(res, 200, {
+        ok: true,
+        file: {
+          path: filePath,
+          name: basename(filePath),
+          content,
+          size: info.size,
+          modifiedAt: info.mtime.toISOString(),
+          language: languageForPath(filePath),
+        },
+      });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  if (url.pathname === '/api/bioagent/workspace/file' && req.method === 'POST') {
+    try {
+      const body = await readJson(req);
+      const filePath = typeof body.path === 'string' ? resolve(body.path) : '';
+      const content = typeof body.content === 'string' ? body.content : '';
+      if (!filePath) throw new Error('path is required');
+      await mkdir(dirname(filePath), { recursive: true });
+      await writeFile(filePath, content, 'utf8');
+      const info = await stat(filePath);
+      writeJson(res, 200, {
+        ok: true,
+        file: {
+          path: filePath,
+          name: basename(filePath),
+          content,
+          size: info.size,
+          modifiedAt: info.mtime.toISOString(),
+          language: languageForPath(filePath),
+        },
       });
     } catch (err) {
       writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -417,6 +473,21 @@ function writeJson(res: ServerResponse, status: number, body: unknown) {
 
 function safeName(value: string) {
   return basename(value.replace(/[^a-zA-Z0-9._-]+/g, '_')).slice(0, 120);
+}
+
+function languageForPath(path: string) {
+  const ext = extname(path).toLowerCase();
+  if (ext === '.md' || ext === '.markdown') return 'markdown';
+  if (ext === '.json') return 'json';
+  if (ext === '.ts' || ext === '.tsx') return 'typescript';
+  if (ext === '.js' || ext === '.jsx') return 'javascript';
+  if (ext === '.py') return 'python';
+  if (ext === '.r') return 'r';
+  if (ext === '.csv' || ext === '.tsv') return 'table';
+  if (ext === '.html') return 'html';
+  if (ext === '.css') return 'css';
+  if (ext === '.sh') return 'shell';
+  return 'text';
 }
 
 function scenarioWorkspaceRoot(url: URL) {
