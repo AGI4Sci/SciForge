@@ -93,9 +93,12 @@ def web_query(prompt):
     text = re.sub(r"(?:google|谷歌|browser|web|网页|互联网)\s*(?:search|检索|搜索|查找)", " ", text, flags=re.I)
     text = re.sub(r"返回.*$", "", text)
     text = re.sub(r"^\s*场景\s*[:：]\s*", " ", text)
-    text = re.sub(r"按照要求|系统性(?:整理|总结)?|写成报告|生成报告|总结一下|总结|报告", " ", text)
+    text = re.sub(r"帮我|请|阅读并?|读完|写一份|撰写|调研|相关|按照要求|系统性(?:整理|总结)?|写成报告|生成报告|总结一下|总结|报告", " ", text)
     text = re.sub(r"在?\s*arxiv\s*上?|今天|今日|最新(?:的)?|论文|papers?", " ", text, flags=re.I)
-    return clean_query_text(text)
+    query = clean_query_text(text)
+    if re.fullmatch(r"agent|agents", query, flags=re.I):
+        return "AI agent"
+    return query
 
 
 def report_requested(prompt):

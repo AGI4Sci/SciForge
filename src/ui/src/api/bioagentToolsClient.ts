@@ -45,7 +45,23 @@ export async function sendBioAgentToolMessage(
     ? [`agentserver.generate.${skillDomain}`]
     : compileHints.selectedSkillIds;
   const priorFailure = hasPriorFailure(artifactSummary, recentExecutionRefs);
-  callbacks.onEvent?.(toolEvent('current-plan', `当前计划：${forceAgentServerGeneration ? '交给 AgentServer 生成/延续 workspace task' : '使用匹配的 workspace skill'}，目标 artifacts=${expectedArtifactTypes.join(', ') || 'default'}`));
+  const requestController = new AbortController();
+  let timedOut = false;
+  const timeout = globalThis.setTimeout(() => {
+    timedOut = true;
+    requestController.abort();
+  }, input.config.requestTimeoutMs || 900_000);
+  const linkedAbort = () => requestController.abort();
+  signal?.addEventListener('abort', linkedAbort, { once: true });
+  let lastRealEventAt = Date.now();
+  const silenceWatchdog = globalThis.setInterval(() => {
+    const seconds = Math.round((Date.now() - lastRealEventAt) / 1000);
+    if (seconds < 20) return;
+    callbacks.onEvent?.(toolEvent('backend-silent', `后端 ${seconds}s 没有输出新事件；HTTP stream 仍在等待 ${input.config.agentBackend || 'codex'} 返回。`));
+    lastRealEventAt = Date.now();
+  }, 10_000);
+  try {
+    callbacks.onEvent?.(toolEvent('current-plan', `当前计划：${forceAgentServerGeneration ? '交给 AgentServer 生成/延续 workspace task' : '使用匹配的 workspace skill'}，目标 artifacts=${expectedArtifactTypes.join(', ') || 'default'}`));
   callbacks.onEvent?.(toolEvent(
     'context-loaded',
     artifactSummary.length || recentExecutionRefs.length
@@ -56,22 +72,7 @@ export async function sendBioAgentToolMessage(
     callbacks.onEvent?.(toolEvent('repair-start', `正在修复：已发现上一轮 failureReason=${priorFailure}`));
   }
   callbacks.onEvent?.(toolEvent('project-tool-start', `BioAgent ${builtInScenarioId} project tool started`));
-  callbacks.onEvent?.(toolEvent('agentserver-dispatch', forceAgentServerGeneration
-    ? `正在交给 AgentServer 通用后端处理：${input.config.agentServerBaseUrl}`
-    : '正在尝试 workspace skill；如不能产出完整 artifacts 会自动补交给 AgentServer。'));
-  let heartbeatCount = 0;
-  const heartbeat = globalThis.setInterval(() => {
-    heartbeatCount += 1;
-    const phase = heartbeatCount % 4 === 1
-      ? '等待 Workspace Writer / AgentServer 返回运行状态'
-      : heartbeatCount % 4 === 2
-      ? '后端可能正在生成 task、读取上下文或执行代码'
-      : heartbeatCount % 4 === 3
-      ? '如果任务需要联网/LLM，当前请求会继续保持连接'
-      : 'BioAgent 仍在等待完整 ToolPayload，不会把半成品当成功';
-    callbacks.onEvent?.(toolEvent('backend-heartbeat', `${phase} · ${heartbeatCount * 3}s`));
-  }, 3000);
-  const response = await fetch(`${input.config.workspaceWriterBaseUrl}/api/bioagent/tools/run`, {
+  const response = await fetch(`${input.config.workspaceWriterBaseUrl}/api/bioagent/tools/run/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -80,6 +81,7 @@ export async function sendBioAgentToolMessage(
         skillPlanRef: input.skillPlanRef,
         uiPlanRef: input.uiPlanRef,
         skillDomain,
+        agentBackend: input.config.agentBackend,
         prompt: runtimePrompt,
         workspacePath: input.config.workspacePath,
         agentServerBaseUrl: input.config.agentServerBaseUrl,
@@ -92,6 +94,7 @@ export async function sendBioAgentToolMessage(
         expectedArtifactTypes,
         selectedComponentIds,
         uiState: {
+          sessionId: input.sessionId,
           scopeCheck: scopeCheck(builtInScenarioId, input.prompt),
           scenarioOverride: input.scenarioOverride,
           scenarioPackageRef: input.scenarioPackageRef,
@@ -101,29 +104,25 @@ export async function sendBioAgentToolMessage(
           recentConversation,
           recentExecutionRefs,
           recentRuns: summarizeRuns(input),
+          workspacePersistence: workspacePersistenceSummary(input),
           expectedArtifactTypes,
           selectedComponentIds,
           freshTaskGeneration: true,
           forceAgentServerGeneration,
         },
       }),
-      signal,
-    }).finally(() => globalThis.clearInterval(heartbeat));
-  const text = await response.text();
-  let json: unknown = text;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    // Keep raw text for the error below.
-  }
-  if (!response.ok || !isRecord(json) || json.ok !== true) {
-    const detail = isRecord(json) ? asString(json.error) || asString(json.message) : undefined;
-    throw new Error(detail || `BioAgent project tool failed: HTTP ${response.status}`);
+      signal: requestController.signal,
+    });
+  const { result, error } = await readWorkspaceToolStream(response, (event) => {
+    lastRealEventAt = Date.now();
+    callbacks.onEvent?.(normalizeWorkspaceRuntimeEvent(event));
+  });
+  if (!response.ok || error || !isRecord(result)) {
+    throw new Error(error || `BioAgent project tool failed: HTTP ${response.status}`);
   }
   callbacks.onEvent?.(toolEvent('project-tool-done', priorFailure
     ? `重跑完成：BioAgent ${builtInScenarioId} 已保留修复结果或 repair-needed 诊断`
     : `重跑完成：BioAgent ${builtInScenarioId} project tool completed`));
-  const result = isRecord(json.result) ? json.result : {};
   return normalizeAgentResponse(builtInScenarioId, input.prompt, {
     ok: true,
     data: {
@@ -138,6 +137,95 @@ export async function sendBioAgentToolMessage(
       },
     },
   });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(timedOut
+        ? `BioAgent project tool 超时：${input.config.requestTimeoutMs || 900_000}ms 内没有完成。流式面板已显示最后一个真实事件。`
+        : 'BioAgent project tool 已取消。');
+    }
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeout);
+    globalThis.clearInterval(silenceWatchdog);
+    signal?.removeEventListener('abort', linkedAbort);
+  }
+}
+
+async function readWorkspaceToolStream(
+  response: Response,
+  onEvent: (event: unknown) => void,
+): Promise<{ result?: unknown; error?: string }> {
+  if (!response.body) {
+    const text = await response.text();
+    let json: unknown = text;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      // Keep raw text for diagnostics.
+    }
+    if (isRecord(json) && json.ok === true) return { result: json.result };
+    return { error: isRecord(json) ? asString(json.error) || asString(json.message) : text || `HTTP ${response.status}` };
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result: unknown;
+  let error: string | undefined;
+  function consumeLine(rawLine: string) {
+    const line = rawLine.trim();
+    if (!line) return;
+    const envelope = JSON.parse(line) as unknown;
+    if (!isRecord(envelope)) return;
+    if ('event' in envelope) onEvent(envelope.event);
+    if ('result' in envelope) result = envelope.result;
+    if ('error' in envelope) error = asString(envelope.error) || JSON.stringify(envelope.error);
+  }
+  for (;;) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+    while (buffer.includes('\n')) {
+      const index = buffer.indexOf('\n');
+      consumeLine(buffer.slice(0, index));
+      buffer = buffer.slice(index + 1);
+    }
+    if (done) break;
+  }
+  if (buffer.trim()) consumeLine(buffer);
+  return { result, error };
+}
+
+function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
+  const record = isRecord(raw) ? raw : {};
+  const type = asString(record.type) || asString(record.kind) || 'workspace-runtime-event';
+  const source = asString(record.source);
+  const toolName = asString(record.toolName);
+  const detail = asString(record.detail)
+    || asString(record.message)
+    || asString(record.text)
+    || asString(record.output)
+    || asString(record.status)
+    || asString(record.error)
+    || (Object.keys(record).length ? JSON.stringify(record) : undefined);
+  return {
+    id: makeId('evt'),
+    type,
+    label: streamEventLabel(type, source, toolName),
+    detail,
+    createdAt: nowIso(),
+    raw,
+  };
+}
+
+function streamEventLabel(type: string, source?: string, toolName?: string) {
+  if (type === 'run-plan') return '计划';
+  if (type === 'stage-start') return '阶段';
+  if (type === 'text-delta') return '思考';
+  if (type === 'tool-call') return toolName ? `调用 ${toolName}` : '工具调用';
+  if (type === 'tool-result') return toolName ? `结果 ${toolName}` : '工具结果';
+  if (type === 'status') return source === 'agentserver' ? 'AgentServer 状态' : '运行状态';
+  if (type.includes('error')) return '错误';
+  if (type.includes('silent')) return '等待';
+  return source === 'agentserver' ? 'AgentServer' : 'Workspace Runtime';
 }
 
 function builtInScenarioIdForInput(input: SendAgentMessageInput): ScenarioId {
@@ -162,7 +250,16 @@ function currentTurnConversation(
     || artifactSummary.length > 0
     || recentExecutionRefs.length > 0;
   if (!hasCurrentSessionWork) return [`user: ${input.prompt}`];
-  return input.messages.slice(-8).map((message) => `${message.role}: ${message.content}`);
+  const conversation = input.messages.slice(-12).map((message) => `${message.role}: ${message.content}`);
+  const lastUser = [...input.messages].reverse().find((message) => message.role === 'user');
+  if (!lastUser || normalizePromptText(lastUser.content) !== normalizePromptText(input.prompt)) {
+    conversation.push(`user: ${input.prompt}`);
+  }
+  return conversation;
+}
+
+function normalizePromptText(value: string) {
+  return value.replace(/^运行中引导：/, '').trim();
 }
 
 function summarizeArtifacts(input: SendAgentMessageInput) {
@@ -173,9 +270,11 @@ function summarizeArtifacts(input: SendAgentMessageInput) {
     producer: artifact.producerScenario,
     schemaVersion: artifact.schemaVersion,
     dataRef: artifact.dataRef,
+    workspaceArtifactRef: input.sessionId ? `.bioagent/artifacts/${safeWorkspaceName(input.sessionId)}-${safeWorkspaceName(artifact.id || artifact.type || 'artifact')}.json` : undefined,
     runId: artifactRunId(artifact),
     status: artifactStatus(artifact),
     failureReason: artifactFailureReason(artifact),
+    fileRefs: collectArtifactFileRefs(artifact),
     metadata: compactRecord(artifact.metadata),
     dataSummary: summarizeArtifactData(artifact.data),
   }));
@@ -237,9 +336,11 @@ function summarizeArtifactData(data: unknown) {
   const keys = Object.keys(data).slice(0, 20);
   const rows = Array.isArray(data.rows) ? data.rows : Array.isArray(data.records) ? data.records : undefined;
   const sections = Array.isArray(data.sections) ? data.sections : undefined;
+  const collections = summarizeArtifactCollections(data);
   return {
     keys,
     rowCount: rows?.length,
+    collections,
     sectionTitles: sections?.slice(0, 8).map((section) => isRecord(section) ? asString(section.title) : undefined).filter(Boolean),
     markdownPreview: typeof data.markdown === 'string' ? data.markdown.slice(0, 500) : undefined,
     refs: compactRecord({
@@ -249,8 +350,68 @@ function summarizeArtifactData(data: unknown) {
       stdoutRef: data.stdoutRef,
       stderrRef: data.stderrRef,
       logRef: data.logRef,
+      reportRef: data.reportRef,
+      paperListRef: data.paperListRef,
+      pdfDir: data.pdfDir,
+      downloadDir: data.downloadDir,
     }),
   };
+}
+
+function summarizeArtifactCollections(data: Record<string, unknown>) {
+  const collections: Record<string, unknown> = {};
+  for (const key of ['papers', 'items', 'records', 'rows', 'nodes', 'edges', 'files', 'results']) {
+    const value = data[key];
+    if (!Array.isArray(value)) continue;
+    collections[key] = {
+      count: value.length,
+      refs: summarizeCollectionRefs(value),
+    };
+  }
+  return Object.keys(collections).length ? collections : undefined;
+}
+
+function summarizeCollectionRefs(items: unknown[]) {
+  return items.slice(0, 8).map((item) => {
+    const record = isRecord(item) ? item : {};
+    return compactRecord({
+      title: record.title,
+      name: record.name,
+      id: record.id,
+      accession: record.accession,
+      doi: record.doi,
+      url: record.url,
+      remoteUrl: record.remoteUrl,
+      downloadUrl: record.downloadUrl,
+      localPath: record.localPath,
+      path: record.path,
+      filePath: record.filePath,
+      downloadedPath: record.downloadedPath,
+      sourcePath: record.sourcePath,
+      dataRef: record.dataRef,
+    });
+  }).filter(Boolean);
+}
+
+function collectArtifactFileRefs(value: unknown) {
+  const refs = new Set<string>();
+  const visit = (entry: unknown, key = '') => {
+    if (refs.size >= 24) return;
+    if (typeof entry === 'string') {
+      if (looksLikeRef(entry) || /path|ref|file|dir|pdf|download|log|stdout|stderr|output|code/i.test(key)) refs.add(entry);
+      return;
+    }
+    if (Array.isArray(entry)) {
+      for (const item of entry.slice(0, 24)) visit(item, key);
+      return;
+    }
+    if (!isRecord(entry)) return;
+    for (const [childKey, childValue] of Object.entries(entry).slice(0, 48)) {
+      visit(childValue, childKey);
+    }
+  };
+  visit(value);
+  return refs.size ? Array.from(refs) : undefined;
 }
 
 function compactRecord(value: unknown) {
@@ -267,6 +428,26 @@ function compactRecord(value: unknown) {
 
 function looksLikeRef(value: string) {
   return /\.bioagent\/|stdout|stderr|output|input|\.json|\.log|\.py|\.ipynb|\.r$/i.test(value);
+}
+
+function safeWorkspaceName(value: string) {
+  return value.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120);
+}
+
+function workspacePersistenceSummary(input: SendAgentMessageInput) {
+  const workspacePath = input.config.workspacePath.trim();
+  const sessionId = input.sessionId;
+  return {
+    workspacePath,
+    bioagentDir: workspacePath ? `${workspacePath}/.bioagent` : '.bioagent',
+    workspaceStateRef: '.bioagent/workspace-state.json',
+    sessionRef: sessionId ? `.bioagent/sessions/${safeWorkspaceName(sessionId)}.json` : undefined,
+    artifactDir: '.bioagent/artifacts/',
+    taskDir: '.bioagent/tasks/',
+    taskResultDir: '.bioagent/task-results/',
+    logDir: '.bioagent/logs/',
+    note: 'Generated task code, task inputs/results/logs, and UI artifacts are persisted under the workspace .bioagent directory when Workspace Writer is online.',
+  };
 }
 
 function hasPriorFailure(
@@ -316,6 +497,8 @@ function buildRuntimePrompt(
     artifactSummary.length ? JSON.stringify(artifactSummary, null, 2) : '',
     recentExecutionRefs.length ? 'Code/log/output refs from previous turns:' : '',
     recentExecutionRefs.length ? JSON.stringify(recentExecutionRefs, null, 2) : '',
+    'Local workspace persistence:',
+    JSON.stringify(workspacePersistenceSummary(input), null, 2),
     'Current user request:',
     input.prompt,
     '',
@@ -326,6 +509,7 @@ function buildRuntimePrompt(
     '- If previous runs failed, preserve failureReason and return repair-needed or failed-with-reason unless the rerun truly succeeds.',
     '- If the user asks to read, summarize, compare, or write a report, produce a research-report artifact, not just search metadata.',
     '- Reuse previous artifacts when useful; fetch or compute additional data only when needed.',
+    '- If the user asks where downloaded/source files, generated code, reports, logs, or artifacts are stored, answer directly with exact workspace refs from artifacts, executionUnits, and Local workspace persistence. If no local file ref exists for the requested item, say that explicitly and point to the task output/artifact JSON that is actually present.',
     '- Emit BioAgent ToolPayload JSON with message, claims, artifacts, executionUnits, uiManifest, and reasoningTrace.',
   ].filter(Boolean).join('\n');
 }

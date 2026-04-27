@@ -70,7 +70,7 @@ with open(output_path, "w", encoding="utf-8") as handle:
 `;
 
 const server = createServer(async (req, res) => {
-  if (req.url !== '/api/agent-server/runs' || req.method !== 'POST') {
+  if (!['/api/agent-server/runs', '/api/agent-server/runs/stream'].includes(String(req.url)) || req.method !== 'POST') {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: false, error: 'not found' }));
     return;
@@ -85,8 +85,7 @@ const server = createServer(async (req, res) => {
   sawScopeSummary = promptText.includes('scopeCheck') && promptText.includes('handoffTargets');
   sawGenerationRequest = true;
 
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({
+  const result = {
     ok: true,
     data: {
       run: {
@@ -115,7 +114,14 @@ const server = createServer(async (req, res) => {
         },
       },
     },
-  }));
+  };
+  if (req.url === '/api/agent-server/runs/stream') {
+    res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+    res.end(JSON.stringify({ result }) + '\n');
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(result));
 });
 
 await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -141,6 +147,7 @@ try {
     agentServerBaseUrl: baseUrl,
     availableSkills: ['missing.skill'],
     uiState: {
+      forceAgentServerGeneration: true,
       scopeCheck: {
         inScope: false,
         handoffTargets: ['knowledge'],
@@ -168,6 +175,8 @@ try {
   assert.equal(attemptHistory.attempts.length, 1);
   assert.equal(attemptHistory.attempts[0].status, 'done');
   assert.match(attemptHistory.attempts[0].codeRef, /^\.bioagent\/tasks\/generated-literature-[a-f0-9]+\/generated-literature\.py$/);
+  assert.equal(await readFile(join(workspace, '.bioagent', 'tasks', 'generated-literature.py'), 'utf8'), generatedTask);
+  assert.equal(await readFile(join(workspace, attemptHistory.attempts[0].codeRef), 'utf8'), generatedTask);
 
   console.log('[ok] agentserver generation smoke writes generated task code and runs it through gateway');
 } finally {

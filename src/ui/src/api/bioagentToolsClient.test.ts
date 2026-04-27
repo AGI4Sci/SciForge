@@ -90,6 +90,51 @@ describe('sendBioAgentToolMessage routing', () => {
     assert.equal(uiState.forceAgentServerGeneration, true);
   });
 
+  it('routes fresh arxiv literature report requests to Codex-backed AgentServer generation', async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    globalThis.fetch = (async (_url, init) => {
+      requestBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        ok: true,
+        result: {
+          message: 'agentserver generation requested',
+          confidence: 0.5,
+          claimType: 'fact',
+          evidenceLevel: 'runtime',
+          uiManifest: [],
+          executionUnits: [{ id: 'EU-agentserver-literature', tool: 'bioagent.workspace-runtime-gateway', status: 'repair-needed' }],
+          artifacts: [],
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    await sendBioAgentToolMessage({
+      ...baseInput(),
+      scenarioId: 'literature-evidence-review',
+      agentName: 'Literature',
+      agentDomain: 'literature',
+      scenarioOverride: {
+        title: '文献证据评估',
+        description: '帮我检索arxiv上最新的agent相关论文，阅读并写一份调研报告',
+        skillDomain: 'literature',
+        scenarioMarkdown: '需要 paper-list、research-report、knowledge-graph。',
+        defaultComponents: ['paper-card-list', 'report-viewer', 'evidence-matrix', 'execution-unit-table'],
+        allowedComponents: ['paper-card-list', 'report-viewer', 'evidence-matrix', 'execution-unit-table'],
+        fallbackComponent: 'unknown-artifact-inspector',
+      },
+      prompt: '帮我检索arxiv上最新的agent相关论文，阅读并写一份调研报告',
+      scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'built-in' },
+    });
+
+    assert.deepEqual(requestBody?.availableSkills, ['agentserver.generate.literature']);
+    assert.equal(requestBody?.agentBackend, 'codex');
+    const uiState = requestBody?.uiState as Record<string, unknown>;
+    assert.equal(uiState.forceAgentServerGeneration, true);
+  });
+
   it('does not treat "do not use seed skill" repair prompts as local skill requests', async () => {
     let requestBody: Record<string, unknown> | undefined;
     globalThis.fetch = (async (_url, init) => {
@@ -227,6 +272,81 @@ describe('sendBioAgentToolMessage routing', () => {
     const uiState = requestBody?.uiState as Record<string, unknown>;
     assert.deepEqual(uiState.recentConversation, ['user: Round 1：制定结构选择策略，检索 PDB/AlphaFold/UniProt refs。']);
   });
+
+  it('passes generic workspace refs and full recent context for continuation questions', async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    globalThis.fetch = (async (_url, init) => {
+      requestBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        ok: true,
+        result: {
+          message: 'storage refs answered',
+          confidence: 0.8,
+          claimType: 'fact',
+          evidenceLevel: 'runtime',
+          uiManifest: [],
+          executionUnits: [{ id: 'EU-storage', tool: 'bioagent.workspace-runtime-gateway', status: 'done' }],
+          artifacts: [],
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    await sendBioAgentToolMessage({
+      ...baseInput(),
+      sessionId: 'session-alpha',
+      messages: [
+        { id: 'u1', role: 'user', content: '生成一个结果文件并写报告', createdAt: '2026-04-26T00:00:00.000Z', status: 'completed' },
+        { id: 'a1', role: 'scenario', content: '已生成报告和数据表。', createdAt: '2026-04-26T00:00:10.000Z', status: 'completed' },
+      ],
+      runs: [{
+        id: 'run-alpha',
+        scenarioId: 'workspace-structure-exploration-t055-test',
+        status: 'completed',
+        prompt: '生成一个结果文件并写报告',
+        response: '已生成报告和数据表。',
+        createdAt: '2026-04-26T00:00:00.000Z',
+        completedAt: '2026-04-26T00:00:10.000Z',
+      }],
+      artifacts: [{
+        id: 'generic-result',
+        type: 'runtime-artifact',
+        producerScenario: 'workspace-structure-exploration-t055-test',
+        schemaVersion: '1',
+        dataRef: '.bioagent/task-results/run-alpha.json',
+        metadata: { outputRef: '.bioagent/task-results/run-alpha.json' },
+        data: {
+          files: [{ name: 'result.csv', localPath: '.bioagent/outputs/result.csv' }],
+          markdown: 'Report text',
+        },
+      }],
+      executionUnits: [{
+        id: 'EU-alpha',
+        tool: 'generated.workspace-task',
+        params: 'n/a',
+        status: 'done',
+        hash: 'hash',
+        codeRef: '.bioagent/tasks/generated-alpha/main.py',
+        outputRef: '.bioagent/task-results/run-alpha.json',
+        stdoutRef: '.bioagent/logs/run-alpha.stdout.log',
+        stderrRef: '.bioagent/logs/run-alpha.stderr.log',
+      }],
+      prompt: '这些产物存在哪里？',
+    });
+
+    const uiState = requestBody?.uiState as Record<string, unknown>;
+    assert.deepEqual(uiState.recentConversation, [
+      'user: 生成一个结果文件并写报告',
+      'scenario: 已生成报告和数据表。',
+      'user: 这些产物存在哪里？',
+    ]);
+    assert.deepEqual((uiState.workspacePersistence as Record<string, unknown>).sessionRef, '.bioagent/sessions/session-alpha.json');
+    const artifacts = requestBody?.artifacts as Array<Record<string, unknown>>;
+    assert.equal(artifacts[0].workspaceArtifactRef, '.bioagent/artifacts/session-alpha-generic-result.json');
+    assert.deepEqual(artifacts[0].fileRefs, ['.bioagent/task-results/run-alpha.json', '.bioagent/outputs/result.csv']);
+  });
 });
 
 function baseInput(): SendAgentMessageInput {
@@ -245,6 +365,7 @@ function baseInput(): SendAgentMessageInput {
       agentServerBaseUrl: 'http://127.0.0.1:18080',
       workspaceWriterBaseUrl: 'http://127.0.0.1:5174',
       workspacePath: '/tmp/bioagent-test-workspace',
+      agentBackend: 'codex',
       modelProvider: 'native',
       modelBaseUrl: '',
       modelName: '',

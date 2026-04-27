@@ -367,6 +367,7 @@ export interface BioAgentConfig {
   agentServerBaseUrl: string;
   workspaceWriterBaseUrl: string;
   workspacePath: string;
+  agentBackend: string;
   modelProvider: string;
   modelBaseUrl: string;
   modelName: string;
@@ -376,6 +377,7 @@ export interface BioAgentConfig {
 }
 
 export interface SendAgentMessageInput {
+  sessionId?: string;
   scenarioId: ScenarioInstanceId;
   agentName: string;
   agentDomain: string;
@@ -430,11 +432,13 @@ export interface AgentStreamEvent {
   raw?: unknown;
 }
 
+export type AgentBackendId = 'codex' | 'openteam_agent' | 'claude-code' | 'hermes-agent' | 'openclaw';
+
 export interface AgentServerRunPayload {
   agent: {
     id: string;
     name: string;
-    backend: 'codex';
+    backend: AgentBackendId;
     workspace: string;
     workingDirectory?: string;
     systemPrompt: string;
@@ -446,7 +450,7 @@ export interface AgentServerRunPayload {
     metadata: Record<string, unknown>;
   };
   runtime?: {
-    backend?: 'codex';
+    backend?: AgentBackendId;
     cwd?: string;
     modelProvider?: string;
     modelName?: string;

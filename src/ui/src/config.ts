@@ -7,6 +7,7 @@ export const defaultBioAgentConfig: BioAgentConfig = {
   agentServerBaseUrl: 'http://127.0.0.1:18080',
   workspaceWriterBaseUrl: 'http://127.0.0.1:5174',
   workspacePath: '/Applications/workspace/ailab/research/app/BioAgent/workspace',
+  agentBackend: 'codex',
   modelProvider: 'native',
   modelBaseUrl: '',
   modelName: '',
@@ -39,6 +40,7 @@ export function normalizeConfig(value: unknown): BioAgentConfig {
     agentServerBaseUrl: cleanUrl(raw.agentServerBaseUrl) || defaultBioAgentConfig.agentServerBaseUrl,
     workspaceWriterBaseUrl: cleanUrl(raw.workspaceWriterBaseUrl) || defaultBioAgentConfig.workspaceWriterBaseUrl,
     workspacePath: normalizeWorkspaceRootPath(typeof raw.workspacePath === 'string' ? raw.workspacePath : defaultBioAgentConfig.workspacePath),
+    agentBackend: normalizeAgentBackend(raw.agentBackend),
     modelProvider: typeof raw.modelProvider === 'string' ? raw.modelProvider : defaultBioAgentConfig.modelProvider,
     modelBaseUrl: cleanUrl(raw.modelBaseUrl) || '',
     modelName: typeof raw.modelName === 'string' ? raw.modelName : '',
@@ -60,6 +62,13 @@ export function updateConfig(config: BioAgentConfig, patch: Partial<BioAgentConf
 
 function cleanUrl(value: unknown) {
   return typeof value === 'string' ? value.trim().replace(/\/+$/, '') : '';
+}
+
+function normalizeAgentBackend(value: unknown) {
+  const backend = typeof value === 'string' ? value.trim() : '';
+  return ['codex', 'openteam_agent', 'claude-code', 'hermes-agent', 'openclaw'].includes(backend)
+    ? backend
+    : defaultBioAgentConfig.agentBackend;
 }
 
 export function normalizeWorkspaceRootPath(value: string) {

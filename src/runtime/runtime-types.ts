@@ -15,6 +15,7 @@ export interface GatewayRequest {
   prompt: string;
   workspacePath?: string;
   agentServerBaseUrl?: string;
+  agentBackend?: string;
   modelProvider?: string;
   modelName?: string;
   llmEndpoint?: LlmEndpointConfig;
@@ -26,6 +27,22 @@ export interface GatewayRequest {
   availableSkills?: string[];
   expectedArtifactTypes?: string[];
   selectedComponentIds?: string[];
+}
+
+export interface WorkspaceRuntimeEvent {
+  type: string;
+  message?: string;
+  detail?: string;
+  status?: string;
+  source?: string;
+  toolName?: string;
+  text?: string;
+  output?: string;
+  raw?: unknown;
+}
+
+export interface WorkspaceRuntimeCallbacks {
+  onEvent?: (event: WorkspaceRuntimeEvent) => void;
 }
 
 export interface LlmEndpointConfig {

@@ -2,7 +2,7 @@ import type { BioAgentConfig, BioAgentWorkspaceState, RuntimeExecutionUnit } fro
 import type { ScenarioLibraryState } from '../scenarioCompiler/scenarioLibrary';
 import type { ScenarioPackage } from '../scenarioCompiler/scenarioPackage';
 import { parseWorkspaceState } from '../sessionStore';
-import { normalizeWorkspaceRootPath } from '../config';
+import { normalizeConfig, normalizeWorkspaceRootPath } from '../config';
 import { BioAgentClientError, reasonFromResponseText, recoverActionsForService } from './clientError';
 
 export interface WorkspaceEntry {
@@ -108,7 +108,7 @@ export async function loadFileBackedBioAgentConfig(config: BioAgentConfig): Prom
   if (response.status === 404) return undefined;
   if (!response.ok) throw new Error(await workspaceResponseError(response, `Load config failed: HTTP ${response.status}`));
   const json = await response.json() as { config?: unknown };
-  return isBioAgentConfig(json.config) ? json.config : undefined;
+  return isBioAgentConfig(json.config) ? normalizeConfig(json.config) : undefined;
 }
 
 export async function saveFileBackedBioAgentConfig(config: BioAgentConfig): Promise<BioAgentConfig | undefined> {
@@ -119,7 +119,7 @@ export async function saveFileBackedBioAgentConfig(config: BioAgentConfig): Prom
   });
   if (!response.ok) throw new Error(await workspaceResponseError(response, `Save config failed: HTTP ${response.status}`));
   const json = await response.json() as { config?: unknown };
-  return isBioAgentConfig(json.config) ? json.config : undefined;
+  return isBioAgentConfig(json.config) ? normalizeConfig(json.config) : undefined;
 }
 
 export async function persistWorkspaceState(state: BioAgentWorkspaceState, config: BioAgentConfig): Promise<void> {
@@ -268,6 +268,10 @@ export async function archiveWorkspaceScenario(config: BioAgentConfig, id: strin
   await writeWorkspaceScenario(config, 'archive', { workspacePath, id });
 }
 
+export async function deleteWorkspaceScenario(config: BioAgentConfig, id: string, workspacePath = config.workspacePath): Promise<void> {
+  await writeWorkspaceScenario(config, 'delete', { workspacePath, id });
+}
+
 export async function restoreWorkspaceScenario(config: BioAgentConfig, id: string, status: 'draft' | 'validated' | 'published' = 'draft', workspacePath = config.workspacePath): Promise<void> {
   await writeWorkspaceScenario(config, 'restore', { workspacePath, id, status });
 }
@@ -351,7 +355,7 @@ async function mutateSkillPromotionProposal(config: BioAgentConfig, action: 'acc
   return response.json();
 }
 
-async function writeWorkspaceScenario(config: BioAgentConfig, action: 'save' | 'publish' | 'archive' | 'restore', body: Record<string, unknown>) {
+async function writeWorkspaceScenario(config: BioAgentConfig, action: 'save' | 'publish' | 'archive' | 'restore' | 'delete', body: Record<string, unknown>) {
   const response = await fetchWorkspace(config, `${action} scenario`, `${config.workspaceWriterBaseUrl}/api/bioagent/scenarios/${action}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

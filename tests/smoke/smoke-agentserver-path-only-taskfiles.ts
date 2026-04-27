@@ -42,14 +42,13 @@ await appendTaskAttempt(workspace, {
 let capturedBody: Record<string, unknown> | undefined;
 
 const server = createServer(async (req, res) => {
-  if (req.url !== '/api/agent-server/runs' || req.method !== 'POST') {
+  if (!['/api/agent-server/runs', '/api/agent-server/runs/stream'].includes(String(req.url)) || req.method !== 'POST') {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: false, error: 'not found' }));
     return;
   }
   capturedBody = JSON.parse(await readBody(req));
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({
+  const result = {
     ok: true,
     data: {
       run: {
@@ -63,7 +62,14 @@ const server = createServer(async (req, res) => {
         },
       },
     },
-  }));
+  };
+  if (req.url === '/api/agent-server/runs/stream') {
+    res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+    res.end(JSON.stringify({ result }) + '\n');
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(result));
 });
 
 await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));

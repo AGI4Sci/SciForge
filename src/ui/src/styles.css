@@ -3111,7 +3111,7 @@ code,
 .stream-events-list {
   display: grid;
   gap: 6px;
-  max-height: 112px;
+  max-height: 220px;
   overflow: auto;
 }
 
@@ -3123,6 +3123,29 @@ code,
   color: var(--bio-100);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.stream-event.plan {
+  color: var(--bio-50);
+}
+
+.stream-event.tool {
+  color: var(--teal);
+}
+
+.stream-event.thinking {
+  color: var(--bio-300);
+}
+
+.stream-event.error {
+  color: var(--coral);
+}
+
+.stream-event-type {
+  flex-shrink: 0;
+  color: var(--bio-500);
+  font-family: var(--mono);
+  font-size: 10px;
 }
 
 .stream-event button {
@@ -3147,6 +3170,33 @@ code,
   flex: 1;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+.backend-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 6px;
+  background: rgba(5, 8, 16, 0.28);
+  border: 1px solid rgba(46, 61, 85, 0.58);
+  border-radius: 6px;
+}
+
+.backend-picker span {
+  color: var(--bio-400);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.backend-picker select {
+  width: 116px;
+  color: var(--bio-100);
+  background: rgba(5, 8, 16, 0.7);
+  border: 1px solid rgba(46, 61, 85, 0.7);
+  border-radius: 5px;
+  font-size: 11px;
 }
 
 .composer textarea {

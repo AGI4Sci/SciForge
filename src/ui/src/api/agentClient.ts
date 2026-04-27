@@ -3,6 +3,7 @@ import {
   makeId,
   nowIso,
   type AgentServerRunPayload,
+  type AgentBackendId,
   type AgentStreamEvent,
   type BioAgentMessage,
   type NormalizedAgentResponse,
@@ -100,7 +101,7 @@ function buildRunPayload(input: SendAgentMessageInput): AgentServerRunPayload {
     agent: {
       id: scenario.runtimeId,
       name: input.scenarioOverride?.title ?? scenario.title,
-      backend: 'codex',
+      backend: normalizeAgentBackend(input.config.agentBackend),
       workspace: input.config.workspacePath,
       workingDirectory: input.config.workspacePath,
       systemPrompt: agentSystemPrompt(input),
@@ -138,6 +139,7 @@ function buildRunPayload(input: SendAgentMessageInput): AgentServerRunPayload {
       source: 'bioagent-web-ui',
       scenarioId: input.scenarioId,
       runtimeConfig: {
+        agentBackend: input.config.agentBackend,
         modelProvider: input.config.modelProvider,
         modelBaseUrl: input.config.modelBaseUrl,
         modelName: input.config.modelName,
@@ -173,14 +175,14 @@ function previewArtifactData(data: unknown): unknown {
   return preview;
 }
 
-function buildRuntimeConfig(input: SendAgentMessageInput): AgentServerRunPayload['runtime'] {
+function buildRuntimeConfig(input: SendAgentMessageInput): NonNullable<AgentServerRunPayload['runtime']> {
   const builtInScenarioId = builtInScenarioIdForInput(input);
   const provider = input.config.modelProvider.trim();
   const modelName = input.config.modelName.trim();
   const modelBaseUrl = input.config.modelBaseUrl.trim().replace(/\/+$/, '');
   const useNative = !provider || provider === 'native';
-  const runtime: AgentServerRunPayload['runtime'] = {
-    backend: 'codex',
+  const runtime: NonNullable<AgentServerRunPayload['runtime']> = {
+    backend: normalizeAgentBackend(input.config.agentBackend),
     cwd: input.config.workspacePath,
     metadata: {
       bioAgentScenario: input.scenarioId,
@@ -204,6 +206,12 @@ function buildRuntimeConfig(input: SendAgentMessageInput): AgentServerRunPayload
     };
   }
   return runtime;
+}
+
+function normalizeAgentBackend(value: string): AgentBackendId {
+  return ['codex', 'openteam_agent', 'claude-code', 'hermes-agent', 'openclaw'].includes(value)
+    ? value as AgentBackendId
+    : 'codex';
 }
 
 function normalizeStreamEvent(raw: unknown): AgentStreamEvent {

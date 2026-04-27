@@ -1,21 +1,25 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
 
 const workspace = await mkdtemp(join(tmpdir(), 'bioagent-agentserver-backend-failure-'));
+await mkdir(join(workspace, '.bioagent', 'tasks'), { recursive: true });
+await writeFile(join(workspace, '.bioagent', 'tasks', 'stale.py'), [
+  'import json, sys',
+  'json.dump({"message":"stale task should not run","confidence":0.1,"claimType":"debug","evidenceLevel":"stale","reasoningTrace":"stale","claims":[],"uiManifest":[],"executionUnits":[],"artifacts":[]}, open(sys.argv[2], "w"))',
+].join('\n'));
 
 const server = createServer(async (req, res) => {
-  if (req.url !== '/api/agent-server/runs' || req.method !== 'POST') {
+  if (!['/api/agent-server/runs', '/api/agent-server/runs/stream'].includes(String(req.url)) || req.method !== 'POST') {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: false, error: 'not found' }));
     return;
   }
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({
+  const result = {
     ok: true,
     data: {
       run: {
@@ -31,7 +35,14 @@ const server = createServer(async (req, res) => {
         },
       },
     },
-  }));
+  };
+  if (req.url === '/api/agent-server/runs/stream') {
+    res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+    res.end(JSON.stringify({ result }) + '\n');
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(result));
 });
 
 await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -58,6 +69,7 @@ try {
 
   assert.match(result.message, /AgentServer backend failed/i);
   assert.match(result.message, /401 Unauthorized|Invalid token/i);
+  assert.doesNotMatch(result.message, /stale task should not run/i);
   assert.doesNotMatch(result.message, /taskFiles and entrypoint/i);
   assert.doesNotMatch(result.message, /secret-123|localhost:8767/i);
   assert.ok(result.executionUnits.some((unit) => isRecord(unit) && unit.status === 'repair-needed'));

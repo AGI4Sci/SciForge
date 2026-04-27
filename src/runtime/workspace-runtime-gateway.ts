@@ -2,51 +2,57 @@ import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { agentServerGenerationSkill, loadSkillRegistry, matchSkill } from './skill-registry.js';
 import { appendTaskAttempt, readRecentTaskAttempts, readTaskAttempts } from './task-attempt-history.js';
-import type { AgentServerGenerationResponse, BioAgentSkillDomain, GatewayRequest, LlmEndpointConfig, SkillAvailability, ToolPayload, WorkspaceTaskRunResult } from './runtime-types.js';
+import type { AgentServerGenerationResponse, BioAgentSkillDomain, GatewayRequest, LlmEndpointConfig, SkillAvailability, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceRuntimeEvent, WorkspaceTaskRunResult } from './runtime-types.js';
 import { fileExists, runWorkspaceTask, sha1 } from './workspace-task-runner.js';
 import { maybeWriteSkillPromotionProposal } from './skill-promotion.js';
 
 const SKILL_DOMAIN_SET = new Set<BioAgentSkillDomain>(['literature', 'structure', 'omics', 'knowledge']);
 
-export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>): Promise<ToolPayload> {
+export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, callbacks: WorkspaceRuntimeCallbacks = {}): Promise<ToolPayload> {
   const request = normalizeGatewayRequest(body);
   const skills = await loadSkillRegistry(request);
   const skill = shouldForceAgentServerGeneration(request)
     ? agentServerGenerationSkill(request.skillDomain)
     : matchSkill(request, skills) ?? agentServerGenerationSkill(request.skillDomain);
+  emitWorkspaceRuntimeEvent(callbacks, {
+    type: 'workspace-skill-selected',
+    source: 'workspace-runtime',
+    message: `Selected skill ${skill.id} for ${request.skillDomain}`,
+    detail: skill.manifest.entrypoint.type,
+  });
   if (skill.manifest.entrypoint.type === 'agentserver-generation') {
-    return await runAgentServerGeneratedTask(request, skill, skills) ?? repairNeededPayload(request, skill, 'AgentServer task generation did not produce a runnable task.');
+    return await runAgentServerGeneratedTask(request, skill, skills, {}, callbacks) ?? repairNeededPayload(request, skill, 'AgentServer task generation did not produce a runnable task.');
   }
   if (shouldAttemptFreshTaskGeneration(request, skill)) {
-    const generated = await runAgentServerGeneratedTask(request, skill, skills, { allowFallbackOnGenerationFailure: true });
+    const generated = await runAgentServerGeneratedTask(request, skill, skills, { allowFallbackOnGenerationFailure: true }, callbacks);
     if (generated) return generated;
   }
   if (skill.id === 'structure.rcsb_latest_or_entry') {
-    return runPythonWorkspaceSkill(request, skill, 'structure');
+    return runPythonWorkspaceSkill(request, skill, 'structure', callbacks);
   }
   if (skill.id === 'literature.pubmed_search') {
-    return runPythonWorkspaceSkill(request, skill, 'literature');
+    return runPythonWorkspaceSkill(request, skill, 'literature', callbacks);
   }
   if (skill.id === 'literature.web_search') {
-    return runPythonWorkspaceSkill(request, skill, 'literature-web');
+    return runPythonWorkspaceSkill(request, skill, 'literature-web', callbacks);
   }
   if (skill.id === 'knowledge.uniprot_chembl_lookup') {
-    return runPythonWorkspaceSkill(request, skill, 'knowledge');
+    return runPythonWorkspaceSkill(request, skill, 'knowledge', callbacks);
   }
   if (skill.id === 'sequence.ncbi_blastp_search') {
-    return runPythonWorkspaceSkill(request, skill, 'blastp');
+    return runPythonWorkspaceSkill(request, skill, 'blastp', callbacks);
   }
   if (skill.id === 'omics.differential_expression') {
-    return runPythonWorkspaceSkill(request, skill, 'omics');
+    return runPythonWorkspaceSkill(request, skill, 'omics', callbacks);
   }
   if (skill.manifest.entrypoint.type === 'workspace-task') {
-    return runPythonWorkspaceSkill(request, skill, 'workspace');
+    return runPythonWorkspaceSkill(request, skill, 'workspace', callbacks);
   }
   if (isLiveScpSkill(skill.id)) {
     return runLiveScpSkill(request, skill);
   }
   if (skill.manifest.entrypoint.type === 'markdown-skill') {
-    return await runAgentServerGeneratedTask(request, skill, skills) ?? repairNeededPayload(request, skill, 'AgentServer markdown-skill task generation did not produce a runnable task.');
+    return await runAgentServerGeneratedTask(request, skill, skills, {}, callbacks) ?? repairNeededPayload(request, skill, 'AgentServer markdown-skill task generation did not produce a runnable task.');
   }
   return repairNeededPayload(request, skill, `Skill ${skill.id} is installed but has no gateway adapter yet.`);
 }
@@ -56,6 +62,7 @@ async function runAgentServerGeneratedTask(
   skill: SkillAvailability,
   skills: SkillAvailability[],
   options: { allowFallbackOnGenerationFailure?: boolean } = {},
+  callbacks: WorkspaceRuntimeCallbacks = {},
 ): Promise<ToolPayload | undefined> {
   const workspace = resolve(request.workspacePath || process.cwd());
   const baseUrl = request.agentServerBaseUrl || await readConfiguredAgentServerBaseUrl(workspace);
@@ -63,7 +70,6 @@ async function runAgentServerGeneratedTask(
     if (options.allowFallbackOnGenerationFailure) return undefined;
     return repairNeededPayload(request, skill, 'No validated local skill matched this request and no AgentServer base URL is configured.');
   }
-  const generationStartedAtMs = Date.now();
   if (referencedWorkspaceTaskRel(request.prompt)) {
     const referencedTaskRun = await tryRunReferencedWorkspaceTaskAfterGenerationFailure({
       request,
@@ -71,7 +77,6 @@ async function runAgentServerGeneratedTask(
       skills,
       workspace,
       failureReason: 'Prompt explicitly referenced an existing BioAgent-generated workspace task; gateway executed that task directly instead of waiting for a new AgentServer generation.',
-      generationStartedAtMs,
     });
     if (referencedTaskRun) return referencedTaskRun;
   }
@@ -81,6 +86,7 @@ async function runAgentServerGeneratedTask(
     skill,
     skills,
     workspace,
+    callbacks,
   });
   if (!generation.ok) {
     if (!isBlockingAgentServerConfigurationFailure(generation.error)) {
@@ -90,7 +96,6 @@ async function runAgentServerGeneratedTask(
         skills,
         workspace,
         failureReason: generation.error,
-        generationStartedAtMs,
       });
       if (referencedTaskRun) return referencedTaskRun;
     }
@@ -137,18 +142,27 @@ async function runAgentServerGeneratedTask(
   const generatedPathMap = new Map<string, string>();
   try {
     for (const file of generation.response.taskFiles) {
-      const rel = generatedTaskArchiveRel(taskId, file.path);
-      generatedPathMap.set(safeWorkspaceRel(file.path), rel);
-      await mkdir(dirname(join(workspace, rel)), { recursive: true });
+      const declaredRel = safeWorkspaceRel(file.path);
+      const rel = generatedTaskArchiveRel(taskId, declaredRel);
+      generatedPathMap.set(declaredRel, rel);
       const content = file.content || await readGeneratedTaskFileIfPresent(workspace, file.path);
       if (content === undefined) {
         return repairNeededPayload(
           request,
           skill,
-          `AgentServer returned taskFiles path-only reference but BioAgent could not read workspace file: ${safeWorkspaceRel(file.path)}`,
+          `AgentServer returned taskFiles path-only reference but BioAgent could not read workspace file: ${declaredRel}`,
         );
       }
+      await mkdir(dirname(join(workspace, declaredRel)), { recursive: true });
+      await writeFile(join(workspace, declaredRel), content);
+      await mkdir(dirname(join(workspace, rel)), { recursive: true });
       await writeFile(join(workspace, rel), content);
+      emitWorkspaceRuntimeEvent(callbacks, {
+        type: 'workspace-task-materialized',
+        source: 'workspace-runtime',
+        message: `Materialized AgentServer task file ${declaredRel}`,
+        detail: rel === declaredRel ? declaredRel : `${declaredRel} -> ${rel}`,
+      });
     }
   } catch (error) {
     return repairNeededPayload(request, skill, `AgentServer generated task files could not be archived: ${sanitizeAgentServerError(errorMessage(error))}`);
@@ -331,10 +345,8 @@ async function tryRunReferencedWorkspaceTaskAfterGenerationFailure(params: {
   skills: SkillAvailability[];
   workspace: string;
   failureReason: string;
-  generationStartedAtMs?: number;
 }): Promise<ToolPayload | undefined> {
-  const taskRel = referencedWorkspaceTaskRel(params.request.prompt)
-    ?? await newestGeneratedWorkspaceTaskRel(params.workspace, params.generationStartedAtMs);
+  const taskRel = referencedWorkspaceTaskRel(params.request.prompt);
   if (!taskRel) return undefined;
   if (!await fileExists(join(params.workspace, taskRel))) return undefined;
 
@@ -483,38 +495,6 @@ async function tryRunReferencedWorkspaceTaskAfterGenerationFailure(params: {
   }
 }
 
-async function newestGeneratedWorkspaceTaskRel(workspace: string, generatedAfterMs?: number) {
-  const rootRel = '.bioagent/tasks';
-  const root = join(workspace, rootRel);
-  if (!await fileExists(root)) return undefined;
-  const minMtimeMs = generatedAfterMs ? generatedAfterMs - 5_000 : Date.now() - 30 * 60_000;
-  let newest: { rel: string; mtimeMs: number } | undefined;
-
-  async function visit(dirAbs: string, dirRel: string) {
-    let entries;
-    try {
-      entries = await readdir(dirAbs, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const childAbs = join(dirAbs, entry.name);
-      const childRel = `${dirRel}/${entry.name}`;
-      if (entry.isDirectory()) {
-        await visit(childAbs, childRel);
-        continue;
-      }
-      if (!entry.isFile() || !/\.(?:py|R|r|sh)$/.test(entry.name)) continue;
-      const info = await stat(childAbs);
-      if (info.mtimeMs < minMtimeMs) continue;
-      if (!newest || info.mtimeMs > newest.mtimeMs) newest = { rel: childRel, mtimeMs: info.mtimeMs };
-    }
-  }
-
-  await visit(root, rootRel);
-  return newest?.rel;
-}
-
 async function readGeneratedTaskFileIfPresent(workspace: string, path: string) {
   try {
     return await readFile(join(workspace, safeWorkspaceRel(path)), 'utf8');
@@ -531,6 +511,7 @@ function normalizeGatewayRequest(body: Record<string, unknown>): GatewayRequest 
     prompt: String(body.prompt || ''),
     workspacePath: typeof body.workspacePath === 'string' ? body.workspacePath : undefined,
     agentServerBaseUrl: typeof body.agentServerBaseUrl === 'string' ? cleanUrl(body.agentServerBaseUrl) : undefined,
+    agentBackend: typeof body.agentBackend === 'string' ? body.agentBackend : undefined,
     modelProvider: typeof body.modelProvider === 'string' ? body.modelProvider : undefined,
     modelName: typeof body.modelName === 'string' ? body.modelName : undefined,
     llmEndpoint: normalizeLlmEndpoint(body.llmEndpoint),
@@ -599,7 +580,18 @@ function selectedRuntimeForSkill(skill?: SkillAvailability) {
   return skill.manifest.entrypoint.type;
 }
 
+function executionPromptForWorkspaceSkill(request: GatewayRequest) {
+  const currentPrompt = request.uiState && typeof request.uiState.currentPrompt === 'string'
+    ? request.uiState.currentPrompt.trim()
+    : '';
+  return currentPrompt || request.prompt;
+}
+
 function agentServerBackend(request?: GatewayRequest, llmEndpoint?: LlmEndpointConfig) {
+  const requestBackend = request?.agentBackend?.trim();
+  if (requestBackend && ['openteam_agent', 'claude-code', 'codex', 'hermes-agent', 'openclaw'].includes(requestBackend)) {
+    return requestBackend;
+  }
   const requested = process.env.BIOAGENT_AGENTSERVER_BACKEND?.trim();
   if (requested && ['openteam_agent', 'claude-code', 'codex', 'hermes-agent', 'openclaw'].includes(requested)) {
     return requested;
@@ -609,15 +601,22 @@ function agentServerBackend(request?: GatewayRequest, llmEndpoint?: LlmEndpointC
   return 'codex';
 }
 
-async function runPythonWorkspaceSkill(request: GatewayRequest, skill: SkillAvailability, taskPrefix: string): Promise<ToolPayload> {
+async function runPythonWorkspaceSkill(request: GatewayRequest, skill: SkillAvailability, taskPrefix: string, callbacks: WorkspaceRuntimeCallbacks = {}): Promise<ToolPayload> {
   const workspace = resolve(request.workspacePath || process.cwd());
-  const runId = sha1(`${taskPrefix}:${request.prompt}:${Date.now()}`).slice(0, 12);
+  const executionPrompt = executionPromptForWorkspaceSkill(request);
+  const runId = sha1(`${taskPrefix}:${executionPrompt}:${Date.now()}`).slice(0, 12);
   const outputRel = `.bioagent/task-results/${taskPrefix}-${runId}.json`;
   const inputRel = `.bioagent/task-inputs/${taskPrefix}-${runId}.json`;
   const stdoutRel = `.bioagent/logs/${taskPrefix}-${runId}.stdout.log`;
   const stderrRel = `.bioagent/logs/${taskPrefix}-${runId}.stderr.log`;
   const taskRel = `.bioagent/tasks/${taskPrefix}-${runId}.py`;
   const taskId = `${taskPrefix}-${runId}`;
+  emitWorkspaceRuntimeEvent(callbacks, {
+    type: 'workspace-task-start',
+    source: 'workspace-runtime',
+    message: `Running ${skill.id}`,
+    detail: `${taskPrefix} task ${taskId}`,
+  });
   if (taskPrefix === 'structure') await mkdir(join(workspace, '.bioagent', 'structures'), { recursive: true });
   const entrypointPath = resolve(dirname(skill.manifestPath), String(skill.manifest.entrypoint.path || ''));
   const run = await runWorkspaceTask(workspace, {
@@ -626,7 +625,8 @@ async function runPythonWorkspaceSkill(request: GatewayRequest, skill: SkillAvai
     entrypoint: 'main',
     codeTemplatePath: entrypointPath,
     input: {
-      prompt: request.prompt,
+      prompt: executionPrompt,
+      runtimePrompt: request.prompt,
       runId,
       attempt: 1,
       skillId: skill.id,
@@ -640,11 +640,18 @@ async function runPythonWorkspaceSkill(request: GatewayRequest, skill: SkillAvai
     stdoutRel,
     stderrRel,
   });
+  emitWorkspaceRuntimeEvent(callbacks, {
+    type: 'workspace-task-result',
+    source: 'workspace-runtime',
+    status: run.exitCode === 0 ? 'completed' : 'failed',
+    message: `${skill.id} exited with ${run.exitCode}`,
+    detail: [run.stdout?.slice(0, 800), run.stderr?.slice(0, 800)].filter(Boolean).join('\n'),
+  });
   if (run.exitCode !== 0 && !await fileExists(join(workspace, outputRel))) {
     const failureReason = run.stderr || 'Task failed before writing output.';
     await appendTaskAttempt(workspace, {
       id: taskId,
-      prompt: request.prompt,
+      prompt: executionPrompt,
       skillDomain: request.skillDomain,
       ...attemptPlanRefs(request, skill),
       skillId: skill.id,
@@ -684,7 +691,7 @@ async function runPythonWorkspaceSkill(request: GatewayRequest, skill: SkillAvai
     });
     await appendTaskAttempt(workspace, {
       id: taskId,
-      prompt: request.prompt,
+      prompt: executionPrompt,
       skillDomain: request.skillDomain,
       ...attemptPlanRefs(request, skill),
       skillId: skill.id,
@@ -718,7 +725,7 @@ async function runPythonWorkspaceSkill(request: GatewayRequest, skill: SkillAvai
     const failureReason = errorMessage(error);
     await appendTaskAttempt(workspace, {
       id: taskId,
-      prompt: request.prompt,
+      prompt: executionPrompt,
       skillDomain: request.skillDomain,
       ...attemptPlanRefs(request, skill),
       skillId: skill.id,
@@ -1227,6 +1234,7 @@ async function requestAgentServerGeneration(params: {
   skill: SkillAvailability;
   skills: SkillAvailability[];
   workspace: string;
+  callbacks?: WorkspaceRuntimeCallbacks;
 }): Promise<{ ok: true; runId?: string; response: AgentServerGenerationResponse } | { ok: true; runId?: string; directPayload: ToolPayload } | { ok: false; error: string }> {
   const controller = new AbortController();
   const timeoutMs = Number(process.env.BIOAGENT_AGENTSERVER_GENERATION_TIMEOUT_MS || 900000);
@@ -1301,26 +1309,29 @@ async function requestAgentServerGeneration(params: {
         workingDirectory: params.workspace,
       },
     };
-    const response = await fetch(`${params.baseUrl}/api/agent-server/runs`, {
+    emitWorkspaceRuntimeEvent(params.callbacks, {
+      type: 'agentserver-dispatch',
+      source: 'workspace-runtime',
+      message: `Dispatching to AgentServer ${backend}`,
+      detail: params.baseUrl,
+    });
+    const response = await fetch(`${params.baseUrl}/api/agent-server/runs/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: controller.signal,
       body: JSON.stringify(runPayload),
     });
-    const text = await response.text();
-    let json: unknown = text;
-    try {
-      json = JSON.parse(text);
-    } catch {
-      // Keep raw text in the failure message below.
-    }
+    const { json, run, error } = await readAgentServerRunStream(response, (event) => {
+      emitWorkspaceRuntimeEvent(params.callbacks, normalizeAgentServerWorkspaceEvent(event));
+    });
     await writeAgentServerDebugArtifact(params.workspace, 'generation', runPayload, response.status, json);
     if (!response.ok) {
       const detail = isRecord(json) ? String(json.error || json.message || '') : '';
-      return { ok: false, error: sanitizeAgentServerError(detail || `AgentServer generation HTTP ${response.status}: ${String(text).slice(0, 500)}`) };
+      return { ok: false, error: sanitizeAgentServerError(detail || error || `AgentServer generation HTTP ${response.status}`) };
     }
-    const data = isRecord(json) && isRecord(json.data) ? json.data : isRecord(json) ? json : {};
-    const run = isRecord(data.run) ? data.run : {};
+    if (error) {
+      return { ok: false, error: sanitizeAgentServerError(error) };
+    }
     const runFailure = agentServerRunFailure(run);
     if (runFailure) {
       return { ok: false, error: runFailure };
@@ -1366,6 +1377,108 @@ async function requestAgentServerGeneration(params: {
     return { ok: false, error: agentServerRequestFailureMessage('generation', error, timeoutMs) };
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+async function readAgentServerRunStream(
+  response: Response,
+  onEvent: (event: unknown) => void,
+): Promise<{ json: unknown; run: Record<string, unknown>; error?: string }> {
+  if (!response.body) {
+    const text = await response.text();
+    let json: unknown = text;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      // Keep raw text for diagnostics.
+    }
+    const data = isRecord(json) && isRecord(json.data) ? json.data : isRecord(json) ? json : {};
+    return {
+      json,
+      run: isRecord(data.run) ? data.run : {},
+      error: isRecord(json) ? String(json.error || '') : String(text).slice(0, 500),
+    };
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const envelopes: unknown[] = [];
+  let buffer = '';
+  let finalResult: unknown;
+  let streamError = '';
+  function consumeLine(rawLine: string) {
+    const line = rawLine.trim();
+    if (!line) return;
+    const envelope = JSON.parse(line) as unknown;
+    envelopes.push(envelope);
+    if (!isRecord(envelope)) return;
+    if ('event' in envelope) onEvent(envelope.event);
+    if ('result' in envelope) finalResult = envelope.result;
+    if ('error' in envelope) streamError = String(envelope.error || '');
+  }
+  for (;;) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+    while (buffer.includes('\n')) {
+      const index = buffer.indexOf('\n');
+      consumeLine(buffer.slice(0, index));
+      buffer = buffer.slice(index + 1);
+    }
+    if (done) break;
+  }
+  if (buffer.trim()) consumeLine(buffer);
+  const data = isRecord(finalResult) && isRecord(finalResult.data) ? finalResult.data : isRecord(finalResult) ? finalResult : {};
+  return {
+    json: finalResult ?? { envelopes, error: streamError },
+    run: isRecord(data.run) ? data.run : {},
+    error: streamError || undefined,
+  };
+}
+
+function normalizeAgentServerWorkspaceEvent(raw: unknown): WorkspaceRuntimeEvent {
+  const record = isRecord(raw) ? raw : {};
+  const type = typeof record.type === 'string' ? record.type : typeof record.kind === 'string' ? record.kind : 'agentserver-event';
+  const toolName = typeof record.toolName === 'string' ? record.toolName : undefined;
+  const detail = typeof record.detail === 'string'
+    ? record.detail
+    : typeof record.message === 'string'
+      ? record.message
+      : typeof record.text === 'string'
+        ? record.text
+        : typeof record.output === 'string'
+        ? record.output.slice(0, 600)
+        : Array.isArray(record.plan)
+          ? record.plan.join(' -> ')
+        : record.error !== undefined
+          ? summarizeEventValue(record.error)
+        : record.result !== undefined
+          ? summarizeEventValue(record.result)
+        : undefined;
+  return {
+    type,
+    source: 'agentserver',
+    toolName,
+    message: toolName ? `${type}: ${toolName}` : type,
+    detail,
+    text: typeof record.text === 'string' ? record.text : undefined,
+    output: typeof record.output === 'string' ? record.output.slice(0, 2000) : undefined,
+    raw,
+  };
+}
+
+function summarizeEventValue(value: unknown) {
+  if (typeof value === 'string') return value.slice(0, 1200);
+  try {
+    return JSON.stringify(redactSecrets(value)).slice(0, 1200);
+  } catch {
+    return String(value).slice(0, 1200);
+  }
+}
+
+function emitWorkspaceRuntimeEvent(callbacks: WorkspaceRuntimeCallbacks | undefined, event: WorkspaceRuntimeEvent) {
+  try {
+    callbacks?.onEvent?.(event);
+  } catch {
+    // Runtime execution should not fail because a stream consumer disconnected.
   }
 }
 
@@ -2166,13 +2279,32 @@ async function validateAndNormalizePayload(
       ...attemptPlanRefs(request, skill),
       ...unit,
     } : unit),
-    artifacts: await normalizedArtifactsWithPlaceholders(Array.isArray(payload.artifacts) ? payload.artifacts : [], request, resolve(request.workspacePath || process.cwd())),
+    artifacts: await normalizedArtifactsWithPlaceholders(Array.isArray(payload.artifacts) ? payload.artifacts : [], request, resolve(request.workspacePath || process.cwd()), refs),
     logs: [{ kind: 'stdout', ref: refs.stdoutRel }, { kind: 'stderr', ref: refs.stderrRel }],
   };
 }
 
-async function normalizedArtifactsWithPlaceholders(artifacts: Array<Record<string, unknown>>, request: GatewayRequest, workspace: string) {
-  const out = await Promise.all(artifacts.map((artifact) => enrichArtifactDataFromFileRefs(artifact, workspace)));
+async function normalizedArtifactsWithPlaceholders(
+  artifacts: Array<Record<string, unknown>>,
+  request: GatewayRequest,
+  workspace: string,
+  refs?: { taskRel: string; outputRel: string; stdoutRel: string; stderrRel: string },
+) {
+  const out: Array<Record<string, unknown>> = await Promise.all(artifacts.map(async (artifact): Promise<Record<string, unknown>> => {
+    const enriched = await enrichArtifactDataFromFileRefs(artifact, workspace);
+    const metadata = isRecord(enriched.metadata) ? enriched.metadata : {};
+    return {
+      ...enriched,
+      dataRef: typeof enriched.dataRef === 'string' ? enriched.dataRef : refs?.outputRel,
+      metadata: refs ? {
+        ...metadata,
+        taskCodeRef: metadata.taskCodeRef ?? refs.taskRel,
+        outputRef: metadata.outputRef ?? refs.outputRel,
+        stdoutRef: metadata.stdoutRef ?? refs.stdoutRel,
+        stderrRef: metadata.stderrRef ?? refs.stderrRel,
+      } : metadata,
+    };
+  }));
   const present = new Set(out.map((artifact) => String(artifact.type || artifact.id || '')).filter(Boolean));
   for (const artifactType of expectedArtifactTypesForRequest(request)) {
     if (present.has(artifactType)) continue;

@@ -270,6 +270,19 @@ createServer(async (req, res) => {
     }
     return;
   }
+  if (url.pathname === '/api/bioagent/scenarios/delete' && req.method === 'POST') {
+    try {
+      const body = await readJson(req);
+      const root = scenarioWorkspaceRootFromBody(body);
+      const id = typeof body.id === 'string' ? body.id.trim() : '';
+      if (!id) throw new Error('id is required');
+      await rm(join(root, '.bioagent', 'scenarios', safeName(id)), { recursive: true, force: true });
+      writeJson(res, 200, { ok: true, workspacePath: root, id });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
   if (url.pathname === '/api/bioagent/task-attempts/list' && req.method === 'GET') {
     try {
       const root = scenarioWorkspaceRoot(url);
@@ -454,6 +467,27 @@ createServer(async (req, res) => {
     }
     return;
   }
+  if (url.pathname === '/api/bioagent/tools/run/stream' && req.method === 'POST') {
+    res.writeHead(200, {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+    });
+    try {
+      const body = await readJson(req);
+      const result = await runBioAgentTool(body, {
+        onEvent(event) {
+          writeStreamEnvelope(res, { event });
+        },
+      });
+      writeStreamEnvelope(res, { result });
+    } catch (err) {
+      writeStreamEnvelope(res, { error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      res.end();
+    }
+    return;
+  }
   writeJson(res, 404, { ok: false, error: 'not found' });
 }).listen(PORT, '127.0.0.1', () => {
   console.log(`BioAgent workspace writer: http://127.0.0.1:${PORT}`);
@@ -469,6 +503,10 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 function writeJson(res: ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(body));
+}
+
+function writeStreamEnvelope(res: ServerResponse, body: unknown) {
+  res.write(`${JSON.stringify(body)}\n`);
 }
 
 function safeName(value: string) {

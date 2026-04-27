@@ -90,6 +90,7 @@ import {
   acceptSkillPromotionProposal,
   archiveSkillPromotionProposal,
   archiveWorkspaceScenario,
+  deleteWorkspaceScenario,
   listSkillPromotionProposals,
   listWorkspace,
   loadFileBackedBioAgentConfig,
@@ -515,7 +516,7 @@ function renameScenarioPackageForImport(pkg: ScenarioPackage, nextId: string): S
 
 function filterScenarioLibraryItems<T extends ScenarioLibraryItem>(
   items: T[],
-  options: { query: string; status: string; source: string; domain: string; sort: string },
+  options: { query: string; status: string; source: string; domain: string; sort: string; runStatsById?: Record<string, PackageRunStats> },
 ) {
   const query = options.query.trim().toLowerCase();
   return [...items]
@@ -530,8 +531,18 @@ function filterScenarioLibraryItems<T extends ScenarioLibraryItem>(
     .sort((left, right) => {
       if (options.sort === 'title') return left.title.localeCompare(right.title);
       if (options.sort === 'status') return `${left.status}-${left.title}`.localeCompare(`${right.status}-${right.title}`);
+      if (options.sort === 'usage') return scenarioRankScore(right, options.runStatsById?.[right.id]) - scenarioRankScore(left, options.runStatsById?.[left.id]);
       return Date.parse(right.versions[0]?.createdAt ?? '') - Date.parse(left.versions[0]?.createdAt ?? '');
     });
+}
+
+function scenarioRankScore(item: ScenarioLibraryItem, runStats?: PackageRunStats) {
+  const qualityOk = item.qualityReport?.ok ?? item.validationReport?.ok ?? true;
+  const latestRunAt = runStats?.lastRun ? Date.parse(runStats.lastRun.completedAt ?? runStats.lastRun.createdAt) : 0;
+  const recencyDays = latestRunAt ? Math.max(0, 30 - ((Date.now() - latestRunAt) / 86_400_000)) : 0;
+  const successRuns = (runStats?.totalRuns ?? 0) - (runStats?.failedRuns ?? 0);
+  const statusScore = item.status === 'published' ? 30 : item.status === 'validated' ? 20 : item.status === 'draft' ? 8 : -40;
+  return statusScore + (qualityOk ? 20 : -10) + Math.min(40, successRuns * 8) + recencyDays;
 }
 
 type DashboardLibraryItem = ScenarioLibraryItem & {
@@ -1359,6 +1370,16 @@ function SettingsDialog({
             <input value={config.workspacePath} onChange={(event) => onChange({ workspacePath: event.target.value })} />
           </label>
           <label>
+            <span>Agent Backend</span>
+            <select value={config.agentBackend} onChange={(event) => onChange({ agentBackend: event.target.value })}>
+              <option value="codex">Codex</option>
+              <option value="openteam_agent">OpenTeam Agent</option>
+              <option value="claude-code">Claude Code</option>
+              <option value="hermes-agent">Hermes Agent</option>
+              <option value="openclaw">OpenClaw</option>
+            </select>
+          </label>
+          <label>
             <span>Model Provider</span>
             <select value={config.modelProvider} onChange={(event) => onChange({ modelProvider: event.target.value })}>
               <option value="native">native user endpoint</option>
@@ -1397,6 +1418,7 @@ function SettingsDialog({
           <span>
             已自动保存到 config.local.json。下一次 AgentServer 请求会使用当前模型：
             {' '}
+            <code>{config.agentBackend}</code>
             <strong>{config.modelProvider || 'native'}</strong>
             {config.modelName.trim() ? <code>{config.modelName.trim()}</code> : <em>user model not set</em>}
           </span>
@@ -1553,7 +1575,7 @@ function Dashboard({
   const [libraryStatusFilter, setLibraryStatusFilter] = useState('all');
   const [librarySourceFilter, setLibrarySourceFilter] = useState('all');
   const [libraryDomainFilter, setLibraryDomainFilter] = useState('all');
-  const [librarySort, setLibrarySort] = useState('recent');
+  const [librarySort, setLibrarySort] = useState('usage');
   const [exportPreviewPackage, setExportPreviewPackage] = useState<ScenarioPackage | undefined>();
   const [expandedLibraryItemId, setExpandedLibraryItemId] = useState<string | undefined>();
   const [libraryDetailPackages, setLibraryDetailPackages] = useState<Record<string, ScenarioPackage>>({});
@@ -1581,15 +1603,16 @@ function Dashboard({
       ...officialLibraryItems.filter((item) => !workspaceIds.has(item.id)),
     ];
   }, [officialLibraryItems, workspaceLibraryItems]);
+  const packageRunStatsById = useMemo(() => buildPackageRunStats(workspaceState), [workspaceState]);
   const filteredCombinedLibraryItems = useMemo(() => filterScenarioLibraryItems(combinedLibraryItems, {
     query: libraryQuery,
     status: libraryStatusFilter,
     source: librarySourceFilter,
     domain: libraryDomainFilter,
     sort: librarySort,
-  }), [combinedLibraryItems, libraryQuery, libraryStatusFilter, librarySourceFilter, libraryDomainFilter, librarySort]);
+    runStatsById: packageRunStatsById,
+  }), [combinedLibraryItems, libraryQuery, libraryStatusFilter, librarySourceFilter, libraryDomainFilter, librarySort, packageRunStatsById]);
   const healthItems = useRuntimeHealth(config, libraryItems.length);
-  const packageRunStatsById = useMemo(() => buildPackageRunStats(workspaceState), [workspaceState]);
   useEffect(() => {
     let cancelled = false;
     if (!config.workspacePath.trim()) {
@@ -1686,7 +1709,15 @@ function Dashboard({
   async function archiveWorkspaceScenarioFromLibrary(id: string) {
     await archiveWorkspaceScenario(config, id);
     await refreshScenarioLibrary();
-    setLibraryStatus('已归档。');
+    setLibraryStatus('已归档：该 package 会从默认排序中降级并保留恢复入口；如确认不再需要，可使用删除永久移除。');
+  }
+
+  async function deleteWorkspaceScenarioFromLibrary(id: string) {
+    const confirmed = window.confirm(`永久删除 Scenario package ${id}？删除后无法从 Scenario Library 恢复。`);
+    if (!confirmed) return;
+    await deleteWorkspaceScenario(config, id);
+    await refreshScenarioLibrary();
+    setLibraryStatus(`已删除 ${id}。`);
   }
 
   async function restoreWorkspaceScenarioFromLibrary(id: string) {
@@ -1938,7 +1969,7 @@ function Dashboard({
       <section>
         <SectionHeader
           title="Scenario Library"
-          subtitle="所有官方模板、workspace package 和新编译场景统一在这里按需打开、导入或编辑配置"
+          subtitle="按综合等级优先展示常用、高质量、最近成功的场景；归档保留可恢复记录，删除会永久移除 workspace package"
           action={(
             <div className="scenario-builder-actions">
               <input
@@ -1982,6 +2013,7 @@ function Dashboard({
             <option value="knowledge">knowledge</option>
           </select>
           <select value={librarySort} onChange={(event) => setLibrarySort(event.target.value)} aria-label="排序 Scenario Library">
+            <option value="usage">综合等级</option>
             <option value="recent">最近版本</option>
             <option value="title">名称</option>
             <option value="status">质量状态</option>
@@ -2050,6 +2082,7 @@ function Dashboard({
                     {item.imported ? <ActionButton icon={FilePlus} variant="secondary" onClick={() => void copyWorkspaceScenario(item.id)}>复制</ActionButton> : null}
                     <ActionButton icon={Download} variant="secondary" onClick={() => exportLibraryItem(item)}>导出</ActionButton>
                     {item.imported && item.status !== 'archived' ? <ActionButton icon={Trash2} variant="ghost" onClick={() => void archiveWorkspaceScenarioFromLibrary(item.id)}>归档</ActionButton> : null}
+                    {item.imported ? <ActionButton icon={Trash2} variant="ghost" onClick={() => void deleteWorkspaceScenarioFromLibrary(item.id)}>删除</ActionButton> : null}
                   </div>
                 </Card>
               );
@@ -2235,6 +2268,7 @@ function ChatPanel({
   autoRunRequest,
   onAutoRunConsumed,
   scenarioOverride,
+  onConfigChange,
   onTimelineEvent,
   activeRunId,
   onActiveRunChange,
@@ -2259,6 +2293,7 @@ function ChatPanel({
   autoRunRequest?: HandoffAutoRunRequest;
   onAutoRunConsumed: (requestId: string) => void;
   scenarioOverride?: ScenarioRuntimeOverride;
+  onConfigChange: (patch: Partial<BioAgentConfig>) => void;
   onTimelineEvent: (event: TimelineEventRecord) => void;
   activeRunId?: string;
   onActiveRunChange: (runId: string | undefined) => void;
@@ -2368,6 +2403,7 @@ function ChatPanel({
     abortRef.current = controller;
     try {
       const request = {
+        sessionId: optimisticSession.sessionId,
         scenarioId,
         agentName: scenario.name,
         agentDomain: scenario.domain,
@@ -2387,7 +2423,7 @@ function ChatPanel({
       try {
         response = await sendBioAgentToolMessage(request, {
           onEvent(event) {
-            setStreamEvents((current) => [...current.slice(-32), event]);
+            setStreamEvents((current) => coalesceStreamEvents(current, event).slice(-32));
           },
         }, controller.signal);
       } catch (projectToolError) {
@@ -2402,7 +2438,7 @@ function ChatPanel({
         }]);
         response = await sendAgentMessageStream(request, {
           onEvent(event) {
-            setStreamEvents((current) => [...current.slice(-32), event]);
+            setStreamEvents((current) => coalesceStreamEvents(current, event).slice(-32));
           },
         }, controller.signal);
       }
@@ -2580,6 +2616,16 @@ function ChatPanel({
         <Badge variant="success" glow>在线</Badge>
         <Badge variant="muted">{session.versions.length} versions</Badge>
         {archivedCount ? <Badge variant="muted">{archivedCount} archived</Badge> : null}
+        <label className="backend-picker" title="选择本场景下一次 AgentServer 运行使用的 agent backend">
+          <span>backend</span>
+          <select value={config.agentBackend} onChange={(event) => onConfigChange({ agentBackend: event.target.value })}>
+            <option value="codex">Codex</option>
+            <option value="openteam_agent">OpenTeam</option>
+            <option value="claude-code">Claude Code</option>
+            <option value="hermes-agent">Hermes</option>
+            <option value="openclaw">OpenClaw</option>
+          </select>
+        </label>
         <div className="panel-actions">
           <IconButton icon={Plus} label="开启新聊天" onClick={onNewChat} />
           <IconButton icon={Clock} label="历史会话" onClick={() => setHistoryOpen((value) => !value)} />
@@ -2725,15 +2771,17 @@ function ChatPanel({
       {isSending || streamEvents.length ? (
         <div className="stream-events">
           <div className="stream-events-head">
-            <span>流式事件</span>
+            <span>Agent Backend 运行观察</span>
             {guidanceQueue.length ? <Badge variant="warning">{guidanceQueue.length} 条引导排队</Badge> : null}
+            <Badge variant="muted">{config.agentBackend}</Badge>
           </div>
           <div className="stream-events-list">
-            {streamEvents.slice(-8).map((event) => (
-              <div className="stream-event" key={event.id}>
-                <Badge variant={event.type.includes('error') ? 'danger' : event.type.includes('guidance') ? 'warning' : 'info'}>{event.label}</Badge>
+            {streamEvents.slice(-24).map((event) => (
+              <div className={cx('stream-event', streamEventUiClass(event.type))} key={event.id}>
+                <Badge variant={streamEventBadge(event.type)}>{event.label}</Badge>
+                <span className="stream-event-type">{event.type}</span>
                 {event.detail ? <span className="stream-event-detail">{event.detail}</span> : null}
-                <button type="button" onClick={() => void navigator.clipboard?.writeText([event.label, event.detail].filter(Boolean).join(' '))}>复制</button>
+                <button type="button" onClick={() => void navigator.clipboard?.writeText(JSON.stringify(event.raw ?? { type: event.type, label: event.label, detail: event.detail }, null, 2))}>复制 raw</button>
               </div>
             ))}
           </div>
@@ -2840,6 +2888,53 @@ function normalizeRunPrompt(value: string) {
 
 function latestRunningEvent(events: AgentStreamEvent[]) {
   return [...events].reverse().find((event) => event.detail)?.detail;
+}
+
+function coalesceStreamEvents(events: AgentStreamEvent[], next: AgentStreamEvent) {
+  if (next.type !== 'text-delta') return [...events, next];
+  const detail = next.detail?.trim();
+  if (!detail) return events;
+  const last = events.at(-1);
+  if (!last || last.type !== 'text-delta') return [...events, { ...next, detail }];
+  const mergedDetail = mergeTextDeltaDetail(last.detail || '', detail);
+  return [
+    ...events.slice(0, -1),
+    {
+      ...next,
+      id: last.id,
+      label: last.label || next.label,
+      detail: mergedDetail.length > 1200 ? `${mergedDetail.slice(-1200).replace(/^\S+\s+/, '')}` : mergedDetail,
+      raw: {
+        type: 'text-delta',
+        coalesced: true,
+        latest: next.raw ?? { detail },
+      },
+    },
+  ];
+}
+
+function mergeTextDeltaDetail(previous: string, next: string) {
+  if (!previous.trim()) return next;
+  if (!next.trim()) return previous;
+  if (/^[,.;:!?，。；：！？)\]}]/.test(next)) return `${previous}${next}`;
+  if (/[(\[{]$/.test(previous)) return `${previous}${next}`;
+  return `${previous} ${next}`.replace(/\s+/g, ' ').trim();
+}
+
+function streamEventBadge(type: string): 'info' | 'warning' | 'danger' | 'success' | 'muted' {
+  if (type.includes('error') || type.includes('failed')) return 'danger';
+  if (type.includes('silent') || type.includes('guidance') || type.includes('permission')) return 'warning';
+  if (type.includes('result') || type.includes('completed') || type.includes('done')) return 'success';
+  if (type.includes('text-delta')) return 'muted';
+  return 'info';
+}
+
+function streamEventUiClass(type: string) {
+  if (type === 'tool-call' || type === 'tool-result') return 'tool';
+  if (type === 'text-delta') return 'thinking';
+  if (type === 'run-plan' || type === 'stage-start') return 'plan';
+  if (type.includes('error') || type.includes('failed')) return 'error';
+  return '';
 }
 
 function FailureRecoveryCard({
@@ -3221,6 +3316,7 @@ function Workbench({
   onAutoRunConsumed,
   scenarioOverride,
   onScenarioOverrideChange,
+  onConfigChange,
   onTimelineEvent,
   onMarkReusableRun,
 }: {
@@ -3244,6 +3340,7 @@ function Workbench({
   onAutoRunConsumed: (requestId: string) => void;
   scenarioOverride?: ScenarioRuntimeOverride;
   onScenarioOverrideChange: (scenarioId: ScenarioInstanceId, override: ScenarioRuntimeOverride) => void;
+  onConfigChange: (patch: Partial<BioAgentConfig>) => void;
   onTimelineEvent: (event: TimelineEventRecord) => void;
   onMarkReusableRun: (scenarioId: ScenarioInstanceId, runId: string) => void;
 }) {
@@ -3340,6 +3437,7 @@ function Workbench({
             autoRunRequest={autoRunRequest}
             onAutoRunConsumed={onAutoRunConsumed}
             scenarioOverride={scenarioOverride}
+            onConfigChange={onConfigChange}
             onTimelineEvent={onTimelineEvent}
             activeRunId={activeRunId}
             onActiveRunChange={setActiveRunId}
@@ -5858,6 +5956,7 @@ export function BioAgentApp() {
               onAutoRunConsumed={consumeHandoffAutoRun}
               scenarioOverride={activeScenarioOverride}
               onScenarioOverrideChange={applyScenarioOverride}
+              onConfigChange={updateRuntimeConfig}
               onTimelineEvent={appendTimelineEvent}
               onMarkReusableRun={markReusableRun}
             />
