@@ -1,6 +1,6 @@
 # BioAgent - PROJECT.md
 
-最后更新：2026-04-29
+最后更新：2026-04-30
 
 ## 关键原则
 
@@ -64,100 +64,79 @@
 - 修复跨场景 artifact 串扰：同一 workspace 内不同 domain 不会误用 unrelated artifact refs。
 - 验证：BioAgent `npm run verify:fast`；AgentServer `npm test`、`npm run build`、`npm run smoke:agent-server`；两边 `git diff --check`。
 
-### T049 通用多轮复杂任务闭环修复
+### T049 UI Capability Registry、UI Design Studio 与 Runtime View Planner
 
-状态：进行中。
+状态：首版已实现（运行期 view-plan-first、模块匹配诊断和 UI Design Studio MVP 已落地；完整可视化 authoring/publish 流程继续作为后续增量）。
+
+#### 背景
+- 当前结果视图仍偏向 `Scenario defaultSlots` / `UIManifest slots` 的堆叠展示，用户本轮真正想看的结果不够突出。
+- 当用户提出跨场景或此前没见过的展示需求时，例如“展示 PDB 蛋白质结构”“给我易读 Markdown 报告”“把证据和结构联动起来”，结果区可能把 artifact 塞进不匹配的 slot，出现 empty paper-list、原始 JSON、低优先级关键信息淹没等问题。
+- 设计文档要求“UI 跟 artifact 和 UIManifest 走，LLM 只生成结构化调用，不生成页面”。因此解决方向不是为每个需求写死页面，而是把用户展示意图编译成可校验、可降级、可复现的 UI module / view plan。
+- 核心原则：动态发生在 UI 设计期，真正多轮科研运行期只做已发布 UI 模块的选择、组合和 artifact binding。
+
+#### 目标
+- 结果区优先呈现用户本轮明确要求的核心结果，而不是机械展示所有 slot。
+- 用户可以先和 agent 设计自己需要的 UI；设计确认后发布成版本化 UI module package，后续多轮任务只复用这些模块。
+- 运行期 AgentServer 只做三件事：判断当前目标需要什么展示能力；从已发布 UI 模块库中选择、组合、绑定 artifact；模块不足时触发可恢复的 `blocked-awaiting-ui-design`。
+- 对 PDB/AlphaFold/结构坐标、Markdown 报告、证据矩阵、ExecutionUnit、日志和未知 artifact 都有稳定展示路径。
+- 任何缺失字段、组件不支持或 artifact 不存在，都要显示明确原因和可恢复动作，不使用 demo 数据或空结果伪装成功。
+
+#### 三层架构
+- `UI Capability Registry`：保存已发布的 UI module package、view preset、artifact schema、view schema、交互能力、版本和迁移记录。模块必须 artifact-first，不按 prompt 关键词声明能力。
+- `UI Design Studio`：用户和 agent 先对话设计展示页面，选择输入 artifact schema、组合组件、配置字段映射和交互，用 fixture 预览并通过 smoke 后发布模块。
+- `Runtime View Planner`：运行期只执行 `DisplayIntent -> UI module matching -> artifact binding -> ResolvedViewPlan`，不临场发明 UI，也不生成未验证 React 代码。
+
+#### UI Module Package Contract
+```text
+ui-module/
+  module.json          # 模块 manifest、能力、版本、角色、fallback、安全边界
+  artifact.schema.json # 接受什么 artifact type、必需字段、字段映射
+  view.schema.json     # 支持什么展示参数，如 colorBy/highlightResidues/layoutMode
+  interactions.json    # 能发出/接收什么交互事件
+  renderer             # 受控渲染实现，优先内置组件/低代码 DSL
+  fixtures/            # 示例数据，用于预览和 smoke
+  tests.json           # contract/smoke 测试
+  preview.md           # 给用户看的说明
+```
+
+#### 运行期规则
+- `UI Module = 展示能力`，`View Preset = 模块的一种轻量配置`；常见布局优先沉淀为 preset，避免模块库膨胀。
+- 模块声明消费 artifact type 和必需字段，例如 `structure-summary` 需要 `pdbId` 或 `dataRef`；用户怎么说由 AgentServer 理解，UI 怎么渲染由 artifact contract 决定。
+- 运行期 `DisplayIntent` 必须引用 required artifact types、preferred modules、fallback acceptable modules、layout preference 和 acceptance criteria。
+- 若无法匹配已发布模块，当前 run 写 checkpoint 并进入 `blocked-awaiting-ui-design`，打开 UI Design Studio；用户发布模块后按 `resumeRunId` 恢复原任务。
+- 老 run 必须固定使用当时的 `moduleId@version`；模块 schema 变化需要 migration，不能破坏历史结果复现。
+- 模块生命周期：`draft -> validated -> published -> deprecated`；团队高频展示需求从临时设计沉淀为标准模块或 view preset。
+- 动态 UI 代码是最后路径：已有 UI module -> 新 View Preset -> 低代码/声明式 UI module -> sandboxed dynamic plugin。plugin 必须有 sandbox、权限、测试和回滚。
+- 结果区从“slot-first 渲染”改成“view-plan-first 渲染”：首屏展示 primary result，其后是 supporting evidence、execution/provenance、raw inspector。
+- fallback ladder：specialized scientific component -> generic visualization -> data-table/markdown-viewer -> file/log/JSON inspector -> empty state with explicit reason。
+
+#### 完成记录
+- 已在 UI domain 中加入 `UIModuleManifest`、`ViewPreset`、`DisplayIntent`、`ResolvedViewPlan`、module lifecycle 和 view section 类型，先建立 TypeScript contract。
+- 已实现运行期 `UI Capability Registry` 首版，内置 report、protein structure、paper cards、evidence matrix、execution provenance、timeline、data table 和 generic inspector 模块。
+- 已实现 `resolveViewPlan()`：按 active run artifacts / DisplayIntent / scenario default slots 生成 primary、supporting、provenance、raw 分区，并记录 module binding、missing fields、fallback reason 和 recoverActions。
+- 结果区已改为 view-plan-first：首屏显示 Runtime View Planner 摘要、primary result、supporting evidence、provenance/raw；错配时自动选择更合适模块，不再让结构 artifact 作为 paper-list 主结果。
+- 已加入 `UI设计` tab 和 UI Design Studio MVP：展示 module package contract、DisplayIntent、当前匹配状态和已发布模块表；模块不足时显示 `blocked-awaiting-ui-design` 风格的可恢复 blocker。
+- 已增强 `molecule-viewer`，支持 `structure-summary`、`structure-3d-html`、`pdb-structure`、`protein-structure`、PDB/UniProt/dataRef/htmlRef 等结构输入，并对 HTML 结构视图使用 sandboxed iframe。
+- 已增强 report/Markdown 路径，对 `research-report`、`markdown-report` 和 `.md` dataRef 优先展示可读文档壳，不把 AgentServer payload 直接暴露成主结果 JSON。
+- 已保留 T050 删除状态；本轮没有引入长期 coding/guardian agent 复杂度。
 
 #### TODO
-- [x] 修复多轮意图路由：`文件在哪里/上一轮产物是什么` 这类引用型追问走 AgentServer context-answer；`继续补充/完善/更新/生成/执行/修复` 这类工作型请求必须进入通用 generation/continuation/repair 流程，不能因为提到 artifact/ref/report/上一轮而误判为纯问答。
-- [x] 修复 AgentServer 结构化输出规范化：当 backend 返回 fenced JSON、ToolPayload-like JSON 或带 `artifacts` 的直接回答时，BioAgent 要解析出 `message`、`artifacts`、`uiManifest`、`executionUnits`，不得把整段 JSON 当作 markdown 报告展示。
-- [x] 删除正常回答路径中的本地模板：所有用户请求必须先经过 AgentServer context-answer 或 generation/continuation 判断；BioAgent 本地只保留失败诊断、协议校验、执行恢复和 artifact 展示。
-- [x] 建立“任务代码生成不是终点”的通用验收：如果 AgentServer 返回 `taskFiles` 或 workspace task ref，BioAgent 必须物化、执行、校验 expected artifacts，并在缺失时进入 repair/continuation，而不是只展示生成的代码。
-- [x] 强化 artifact 写回：多轮继续生成的新报告、表格、结构化数据要落到 workspace `.bioagent/artifacts` 或 `.bioagent/task-results` 的稳定 ref；`agentserver://...` 临时 ref 只能作为诊断引用，不能替代本地可追踪产物。
-- [x] 增加 smoke 覆盖：一轮生成并执行任务、二轮只问路径不重跑、三轮要求补充/更新 artifact 必须产生新的可追踪 artifact，且至少覆盖一个非文献任务，证明修复不是场景补丁。
-- [ ] 用真实 Web E2E 复测：在浏览器工作台完成复杂三轮任务，确认 AgentServer 不断连、回复不是预设模板、最终 artifact 内容满足用户目标。
-
-### T050 多轮对话 failed 根因调查与稳定运行方案
-
-状态：核心修复已实现并完成针对性验证。
-
-#### 实施记录
-- BioAgent 已加入结构化 `BioAgentRunIntent`，将 existing-only follow-up、artifact continuation、repair、fresh retrieval 和 new task generation 分开路由。
-- “不要生成新脚本 / 不要检索 / 只读取已有 / 基于上一轮” 且已有 refs/artifacts 的请求会强制走 AgentServer context-answer，不再进入 workspace-task-generation。
-- `AgentServerGenerationResponse.taskFiles` 不再宽松接受纯 string path；path-only task file 必须已经存在于 workspace，否则触发 strict retry；strict retry 仍缺内容时返回 generation contract violation 或按 intent 转 context-answer。
-- AgentServer workspace-task-generation/runtime-repair 请求会强制使用 native workspace-capable adapter 路径；配置了 OpenAI-compatible model endpoint 也不会自动降级到 `legacy_supervisor`。
-- AgentServer stage finalizer 已增加 contract gate：`taskFiles` path-only、`filesChanged=[]`、`toolCallCount=0`、无 inline content 的 stage 会被标记为 failed，不再伪装 completed。
-- 同一 BioAgent session 的 AgentServer agent id 不再按 purpose 拆分；generation/context-answer/repair 共用稳定 session key，并且 delta context 也包含 recent turns。
-- `status=done` 的 task attempt 会清除 `failureReason`，避免成功记录污染后续多轮上下文。
-- 验证：BioAgent `npm run typecheck`、`smoke:agentserver-artifact-followup`、`smoke:agentserver-generation`、`smoke:agentserver-path-only`、`smoke:agentserver-fenced-generation`、`smoke:agentserver-llm-endpoint`、`smoke-agentserver-path-only-taskfiles-retry.ts`、`smoke-agentserver-text-generation-fallback.ts`、UI routing tests；AgentServer `npm run build`、`agent-server-run-facade.test.ts`。
-
-#### 真实复现结论
-- 环境：浏览器工作台 `http://127.0.0.1:5173/`，真实 AgentServer 调用，非 mock。
-- 第 1 轮：要求围绕 KRAS G12D / lung adenocarcinoma 检索并整理证据，返回成功，生成 paper-list、claims、结构证据缺口等结果。
-- 第 2 轮：用户要求“基于上一轮结果重新分组 claims、重点说明证据强度和后续实验”，AgentServer 返回 `taskFiles` 路径 `.bioagent/tasks/kras-g12d-claim-reorganizer/reorganize_claims.py`，但没有 inline `content`，workspace 中也没有这个文件，BioAgent 物化失败，整轮变成 failed。
-- 第 3 轮：用户明确要求“不要生成新脚本，也不要检索新论文，只读取当前会话已有 paper-list 和 claims”，仍然进入 `workspace-task-generation`，再次返回 path-only task file `.bioagent/tasks/kras-g12d-recovery-summary/recovery_summary_task.py`，仍然 failed。
-- Debug 记录显示这些失败请求的 `purpose` 是 `workspace-task-generation`，`toolCallCount=0`，`filesChanged=[]`，输出只是 fenced JSON 文本。实际执行路径是 AgentServer `legacy_supervisor`，不是 Codex/agent backend adapter 的原生可写 workspace session。
-
-#### 为什么现在不像 Codex 那样稳定长时间运行
-- 当前多轮请求被拆成 BioAgent 的 generation、context-answer、runtime-repair 等不同 purpose；这些 purpose 会生成不同 AgentServer agent id/native session key，后端没有形成一个持续的“同一任务线程”。
-- 当配置了 OpenAI-compatible model endpoint 时，AgentServer 会走 `legacy_supervisor` 路径。这个路径可以产出文本，但不能像 Codex native backend 一样稳定地编辑文件、运行命令、观察失败、继续修复。
-- BioAgent 的 context policy 在有 artifact refs 的 delta 场景下会减少 recent turns；下一轮看到的是压缩过的 artifact/ref 摘要和前一轮 generated prompt，而不是一个连续的 agent 工作现场。
-- HTTP stream 和 UI `runPrompt` 仍然以单次请求为生命周期；断流、超时、path-only generation 或一次 repair 边界失败，都会直接暴露成用户可见 failed，而不是 server-side run 继续执行、checkpoint、resume。
-- UI completion 逻辑把任何 blocking `ExecutionUnit` / `repair-needed` / `failed-with-reason` 都提升成整轮 failed；这对真实 blocker 是对的，但缺少 `blocked-awaiting-user`、`repairing`、`completed-with-warnings`、`resumable` 等状态。
-
-#### 根因拆解
-- 多轮意图路由过于依赖正则：`不要重新/基于上一轮/读取已有结果/给我摘要` 这类 existing-only 请求仍可能因为提到报告、summary、执行、生成等词进入 task generation。
-- `AgentServerGenerationResponse` 的 TypeScript 类型要求 `taskFiles[].content`，但 runtime parser 仍接受 `taskFiles: ["path.py"]`，导致 path-only JSON 被当成有效 generation 结果继续流入物化阶段。
-- BioAgent 对 path-only task file 只有一次 strict retry；如果 retry 仍返回 path-only，就形成 terminal failed，没有自动切换到 native workspace-capable backend 或 existing-context answer。
-- AgentServer stage boundary 没有把“声称生成 task file，但 `filesChanged=[]` 且无 inline content”判为 contract violation；legacy supervisor 可以用一段 JSON 文本完成 stage。
-- AgentServer capability 没有显式参与路由：workspace-task-generation / repair 需要 `canEditWorkspace`、`canRunShell`、`canPersistNativeSession`，但当前 backend fallback 仍允许 model-provider-only 路径承担这些任务。
-- running guidance 在 UI 中只是排队成下一次 `runPrompt`，不是注入当前 AgentServer run；用户以为是在指导正在运行的 agent，系统实际又开了一轮新 generation。
-- task attempt 里存在成功 run 也写入 `failureReason` 的污染：`status=done` 但 `failureReason` 可能保存成功 message，后续上下文容易把历史成功误读成失败信号。
-
-#### 总体改造目标
-- 把 BioAgent 多轮对话从“每轮发起一次生成任务”改成“一个可恢复的 workspace run”：同一用户目标拥有稳定 runId/sessionId/nativeSessionRef，直到满足验收条件、用户暂停或遇到明确 terminal blocker。
-- 把 AgentServer 从“能返回文本 JSON 就算完成 stage”改成“按 task contract 验收”：需要文件就必须有 inline content 或真实 filesChanged，需要执行就必须有 command/log/artifact evidence，需要修复就必须带 failure context 和 rerun evidence。
-- 把 existing-only follow-up、continuation、repair、fresh retrieval 分开路由：不该生成脚本的请求绝不进入 task generation；该继续工作的请求必须接上已有 artifact/task refs，而不是从头探索。
-
-#### BioAgent 侧修改方案
-- 在 `src/runtime/workspace-runtime-gateway.ts` 增加结构化 `BioAgentRunIntent`：`answer_existing_context`、`continue_existing_artifact`、`repair_existing_task`、`generate_new_task`、`fresh_retrieval`、`rerun_current_task`。每次请求先产出 intent、confidence、freshWorkAllowed、workspaceWriteRequired、reason。
-- 强化 existing-only 硬规则：只要用户明确说“不要重新/不要检索/不要生成新脚本/只读取已有/基于上一轮结果”，并且 session 有可用 artifact refs，就强制走 context-answer 或 artifact reader，禁止 workspace-task-generation。
-- 将 artifact reader 前置为确定性能力：对已有 paper-list、claims、report、task result，先读取本地 `.bioagent/artifacts` / `.bioagent/task-results` 的结构化内容和必要 excerpt，再交给 AgentServer context-answer 组织回答。
-- 修改 `parseGenerationResponse` 和 task materialization 前置校验：`taskFiles` 只接受对象；每个 task file 必须有非空 `content`，或者 AgentServer audit 必须证明该 path 已经在 workspace 写入。path-only string 在 BioAgent 边界直接判为 `contract_violation:path_only_taskfiles`。
-- 对 strict retry 增加升级策略：如果一次 retry 后仍 path-only，按 intent 分流。existing-only 转 context-answer；workspaceWriteRequired 转 native workspace-capable backend；backend 无能力则返回清晰 blocker，不再让 UI 展示“找不到脚本”的低层错误。
-- 合并 AgentServer agent/session identity：`agentServerAgentId()` 不再把 purpose 拼进身份主键；同一 BioAgent session/scenario 使用稳定 native session，generation/context-answer/repair 作为同一 session 的 turn metadata。
-- 调整 `agentServerContextPolicy()`：delta 模式也要携带最近用户意图摘要、上一轮 assistant outcome、active task refs、失败 attempt refs；不要把大段 generation prompt 当成多轮语义上下文。
-- 在 `src/ui/src/App.tsx` 将 running guidance 改成 active run guidance：有运行中的 AgentServer runId 时调用 guidance/interrupt endpoint；没有 active run 时才排队为下一轮 continuation。
-- 在 `src/ui/src/api/bioagentToolsClient.ts` 调整 completion taxonomy：区分 `completed`、`completed-with-warnings`、`repairing`、`blocked-awaiting-user`、`resumable-failed`、`failed-terminal`。只有 terminal blocker 才标红 failed。
-- 修复 attempt 记录：`status=done` 的 attempt 不允许写入 `failureReason`；成功摘要进入 `summary/message`，失败原因只在 failed/repair-needed 状态写入。
-
-#### AgentServer 侧修改方案
-- 在 `/Applications/workspace/ailab/research/app/AgentServer/server/agent_server/types.ts` 增加 backend capability contract：`canEditWorkspace`、`canRunShell`、`canPersistNativeSession`、`canResumeRun`、`canStreamToolEvents`、`supportsInlineTaskFiles`。
-- 在 `/Applications/workspace/ailab/research/app/AgentServer/server/agent_server/service.ts` 的 backend selection 中加入 capability gate：`workspace-task-generation`、`runtime-repair`、`artifact-continuation` 必须使用具备 workspace edit/tool 能力的 native adapter；`legacy_supervisor` 只能承担 pure text/context-answer 或返回 inline content 的轻量生成。
-- 修改 `shouldRouteModelEndpointThroughSupervisor` 的使用边界：配置了 model endpoint 不应自动把 workspace-write 任务降级到 legacy supervisor。若 native adapter 支持 model override，则仍走 native adapter；不支持时返回 capability blocker。
-- 在 `buildStageRecordFromExecution()` 或 stage finalizer 中增加 contract verification：若输出包含 `taskFiles`/entrypoint 但 `filesChanged=[]`、`toolCallCount=0`、无 inline `content`，stage 必须失败为 `contract_violation:path_only_taskfiles`，不能标记 completed。
-- AgentServer 对 BioAgent generation prompt 使用 JSON Schema/structured output gate：`taskFiles[].content` 非空、entrypoint 引用的文件必须存在于 inline content 或 workspace write evidence；不符合 schema 时自动在同一 native session 内修复一次。
-- 将 native session scope 从 stage 优先改为 session/run 优先：同一 BioAgent session 的 generation、repair、context answer 共享 `nativeSessionRef`；只有显式隔离、安全审查或跨 backend handoff 才使用 stage scope。
-- 增加 server-side run lifecycle：`POST /runs` 创建持久 run，`GET /runs/:id/events` 断线续流，`POST /runs/:id/guidance` 注入用户运行中指导，`POST /runs/:id/cancel` 取消。BioAgent UI 不再把一次 HTTP stream 当成任务生命。
-- 在 AgentServer Core context store 中保存 compacted working memory：用户目标、当前计划、已完成 artifact refs、失败原因、下一步、acceptance checklist。恢复时优先加载 working memory，而不是原始 turns 全量拼接。
-
-#### 执行闭环设计
-- 标准状态机：`classify_intent -> load_context_refs -> choose_backend_by_capability -> generate_or_answer -> materialize -> execute -> validate_artifacts -> repair_or_continue -> final_answer`。
-- 验收标准由 expected artifacts、用户目标和 task contract 共同决定：仅生成代码不是完成；必须有可读 artifact、stdout/stderr/log refs、UI manifest 或明确说明无法继续的 blocker。
-- Repair loop 必须带上失败文件路径、stderr/stdout、缺失 artifact、上一次代码摘要和 contract violation 类型；每次修复后重新执行并验证，而不是只返回修复建议。
-- 长任务每个安全点写 checkpoint：current plan、completed steps、pending steps、artifact refs、nativeSessionRef、backend capability、last event cursor。浏览器刷新或 stream 断开后可以继续看同一个 run。
-
-#### 测试与验收
-- BioAgent smoke：第 1 轮生成并执行复杂任务；第 2 轮“只基于上一轮结果总结/分组，不要重新检索/不要生成脚本”必须走 context-answer，不能出现 workspace-task-generation。
-- BioAgent smoke：AgentServer 返回 path-only `taskFiles` 时，BioAgent 必须识别 contract violation，并按 intent 转 context-answer、切 native backend 或给 capability blocker；不得再报“workspace file missing”作为最终用户错误。
-- AgentServer unit/smoke：legacy supervisor 返回 `taskFiles: ["foo.py"]` 且 `filesChanged=[]` 时 stage 必须失败为 contract violation；native adapter 真实写入文件或返回 inline content 时才能通过。
-- UI E2E：四轮浏览器流程必须通过：复杂任务生成 artifact -> existing-only 追问 -> 基于 artifact 继续更新 -> 人为制造失败后 repair/rerun；全程 runId 可见、可恢复、没有误报 terminal failed。
-- Resume E2E：中途断开 stream 或刷新页面后，UI 通过 runId/event cursor 恢复事件和最终 artifact，不能丢上下文或重新从头跑。
-- Attempt context 测试：`status=done` 的 attempt 不允许有 `failureReason`；failed/repair-needed attempt 必须携带 failureReason、recoverActions、refs 和 nextStep。
-
-#### 分阶段落地顺序
-- Phase 1：先修硬失败边界。完成 BioAgent path-only schema 校验、existing-only intent 硬规则、AgentServer contract violation gate、attempt failureReason 污染修复。
-- Phase 2：接入 capability routing。AgentServer 暴露 backend capabilities，BioAgent 对 workspace-write 任务强制选择 native workspace-capable backend，model-provider-only 路径只做 context-answer/direct payload。
-- Phase 3：打通持久 run lifecycle。新增 runId/event cursor/guidance/resume/cancel，UI running guidance 注入 active run，HTTP 断线不等于任务失败。
-- Phase 4：统一长期 session。移除 purpose-based native session 分裂，改为同一 BioAgent session 的稳定 nativeSessionRef，加 compacted working memory 和 acceptance checklist。
-- Phase 5：真实 Web E2E 回归。用 KRAS G12D 三轮任务和一个非文献任务复测，确认多轮可以像 Codex 一样持续执行、修复和交付，而不是在中间协议错误处 failed。
+- [x] 定义 `UIModuleManifest` / `ViewPreset` / `UIModuleLifecycle` / `DisplayIntent` / `ResolvedViewPlan` TypeScript 类型。
+- [x] 建立 `UI Capability Registry` 首版：索引 module capabilities、artifact schema、view params、role defaults、fallback、安全边界和版本信息。
+- [x] 建立 `UI Design Studio` MVP 页面：展示 module package contract、DisplayIntent、模块匹配状态和已发布模块表。
+- [ ] 补齐 `UIModulePackage` / `DisplayIntent` / `ResolvedViewPlan` JSON Schema，并把 schema 校验纳入 smoke。
+- [ ] 将 UI Design Studio 从 MVP 扩展为完整 authoring：支持和 agent 对话生成 UI module 草案、选择 artifact schema、拖拽/组合组件、字段映射、交互配置、fixture 预览和发布。
+- [ ] 将 AgentServer 输出 contract 扩展为可选 `displayIntent`，要求它引用 artifact refs、artifact types 和 module capabilities，而不是凭关键词路由或临场生成 UI。
+- [x] 实现 `resolveViewPlan()`：从 `DisplayIntent` / active run artifacts / scenario defaults 匹配已发布 UI module，绑定 artifacts，并输出 primary/supporting/provenance/raw 分区。
+- [x] 实现 artifact/component/module 匹配校验首版：模块只能消费 manifest 声明支持的 artifact type；错配时降级到合适 fallback，并给出原因和 recoverActions。
+- [x] 增强 `molecule-viewer`：支持 `structure-summary`、PDB ID、mmCIF/PDB `dataRef`、HTML 结构视图 ref；首屏优先展示结构而不是 paper empty state。
+- [x] 增强 `report-viewer` / Markdown 路径：把 research-report、Markdown file ref、sections、agentserver report payload 渲染成易读文档壳，避免原始 JSON 成为主视图。
+- [x] 增加 active run 结果区摘要：首屏显示 Runtime View Planner、核心 artifact 状态、主要查看组件和缺失项。
+- [x] 增加结果区诊断面板：展示每个 slot 为什么被选中、绑定了哪个 artifact、字段是否满足、fallback 原因和 recoverActions。
+- [ ] 实现完整 `blocked-awaiting-ui-design` run lifecycle：当没有模块满足展示需求时 checkpoint 当前 run，打开 UI Design Studio，发布模块后按 `resumeRunId` 恢复。
+- [ ] 实现 UI module 版本锁定与 migration 记录：历史 run 继续使用原 module version，schema 变化必须可迁移或保留旧渲染路径。
+- [ ] 增加用户可调 UI：组件显隐、排序、聚焦、布局密度、保存/恢复 view preset；用户调整只影响 view state，不修改 artifact 原始数据。
+- [ ] 增加 UI module lifecycle 测试：`draft -> validated -> published -> deprecated`，并验证团队共享模块不会破坏已有 run。
+- [ ] 增加 browser E2E：用户在文献场景中要求“查 PDB 并在右侧可视化 3D 结构”，结果区必须优先展示结构查看器或清晰 fallback，不得出现 paper-list empty 作为主结果。
+- [ ] 增加 browser E2E：用户要求“生成易读 Markdown 报告”，结果区必须展示 Markdown 文档视图，而不是原始 JSON 或低可读 payload。
+- [ ] 增加 unknown-demand smoke：用户提出未注册展示需求时，系统必须走 `DisplayIntent -> module match -> blocked-awaiting-ui-design 或 fallback ladder`，稳定显示可解释状态和下一步建议。

@@ -86,6 +86,15 @@ function inferStructureFormat(url: string, fallback: 'pdb' | 'cif' = 'pdb') {
   return fallback;
 }
 
+function rcsbStructureUrls(pdbId: string) {
+  const cleanId = pdbId.trim().toUpperCase();
+  if (!/^[0-9][A-Z0-9]{3}$/.test(cleanId)) return [];
+  return [
+    `https://files.rcsb.org/download/${cleanId}.pdb`,
+    `https://files.rcsb.org/download/${cleanId}.cif`,
+  ];
+}
+
 function residueSelection(residues: string[]) {
   const ranges = residues
     .map((residue) => residue.trim())
@@ -347,7 +356,19 @@ export function MoleculeViewer({
   const [error, setError] = useState('');
   const [webglUnavailable, setWebglUnavailable] = useState(false);
   const [resetSignal, setResetSignal] = useState(0);
-  const localPdb = useMemo(() => pdbFromAtoms(runtimeAtoms), [runtimeAtoms]);
+  const runtimeAtomsKey = runtimeAtoms.map((atom) => [
+    atom.atomName,
+    atom.residueName,
+    atom.chain,
+    atom.residueNumber,
+    atom.element,
+    atom.x,
+    atom.y,
+    atom.z,
+    atom.hetatm ? 1 : 0,
+  ].join(':')).join('|');
+  const localPdb = useMemo(() => pdbFromAtoms(runtimeAtoms), [runtimeAtomsKey]);
+  const highlightResiduesKey = highlightResidues.join('|');
 
   useEffect(() => {
     const container = ref.current;
@@ -383,14 +404,23 @@ export function MoleculeViewer({
         resizeObserver.observe(containerEl);
         let structureText = '';
         let format = 'pdb';
-        if (structureUrl) {
-          const response = await fetch(structureUrl, { mode: 'cors' });
-          if (!response.ok) throw new Error(`coordinates fetch failed: ${response.status}`);
-          structureText = await response.text();
-          format = inferStructureFormat(structureUrl, structureText.startsWith('data_') ? 'cif' : 'pdb');
-        } else {
+        const candidateUrls = structureUrl ? [structureUrl] : rcsbStructureUrls(pdbId);
+        let lastFetchError: unknown;
+        for (const candidateUrl of candidateUrls) {
+          try {
+            const response = await fetch(candidateUrl, /^https?:\/\//i.test(candidateUrl) ? { mode: 'cors' } : undefined);
+            if (!response.ok) throw new Error(`coordinates fetch failed: ${response.status}`);
+            structureText = await response.text();
+            format = inferStructureFormat(candidateUrl, structureText.startsWith('data_') ? 'cif' : 'pdb');
+            if (structureText.trim()) break;
+          } catch (candidateError) {
+            lastFetchError = candidateError;
+          }
+        }
+        if (!structureText.trim()) {
           structureText = localPdb;
         }
+        if (!structureText.trim() && lastFetchError) throw lastFetchError;
         if (!structureText.trim()) throw new Error('no coordinate text available');
         if (cancelled) return;
         viewer.clear();
@@ -425,7 +455,7 @@ export function MoleculeViewer({
       viewer?.clear();
       viewerRef.current = null;
     };
-  }, [highlightResidues, localPdb, structureUrl]);
+  }, [highlightResiduesKey, localPdb, pdbId, structureUrl]);
 
   useEffect(() => {
     const viewer = viewerRef.current;
@@ -434,7 +464,7 @@ export function MoleculeViewer({
     if (!moleculeRuntime) return;
     applyMoleculeStyle(viewer, moleculeRuntime.SurfaceType, style, highlightResidues);
     viewer.spin(spinning ? 'y' : false, 0.7);
-  }, [highlightResidues, spinning, status, style, webglUnavailable]);
+  }, [highlightResiduesKey, spinning, status, style, webglUnavailable]);
 
   const resetView = () => {
     const viewer = viewerRef.current;

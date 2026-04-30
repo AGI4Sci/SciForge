@@ -167,6 +167,7 @@ describe('normalizeAgentResponse', () => {
                 id: 'paper-list',
                 type: 'paper-list',
                 schemaVersion: '1',
+                path: '.bioagent/task-results/papers.json',
                 data: [{ title: 'Paper A' }, { title: 'Paper B' }],
               }],
             }),
@@ -182,6 +183,7 @@ describe('normalizeAgentResponse', () => {
     });
     assert.ok(Array.isArray(response.artifacts[1].data));
     assert.equal((response.artifacts[1].data as unknown[]).length, 2);
+    assert.equal(response.artifacts[1].path, '.bioagent/task-results/papers.json');
   });
 
   it('preserves every skillDomain default artifact contract through normalization', () => {

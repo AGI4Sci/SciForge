@@ -196,6 +196,61 @@ export interface ViewCompare {
   mode?: 'overlay' | 'side-by-side' | 'diff';
 }
 
+export type UIModuleLifecycle = 'draft' | 'validated' | 'published' | 'deprecated';
+export type ViewPlanSection = 'primary' | 'supporting' | 'provenance' | 'raw';
+
+export interface UIModuleManifest {
+  moduleId: string;
+  version: string;
+  title: string;
+  componentId: string;
+  lifecycle: UIModuleLifecycle;
+  acceptsArtifactTypes: string[];
+  requiredFields?: string[];
+  requiredAnyFields?: string[][];
+  viewParams?: string[];
+  interactionEvents?: string[];
+  roleDefaults?: string[];
+  fallbackModuleIds?: string[];
+  defaultSection?: ViewPlanSection;
+  priority?: number;
+  safety?: {
+    sandbox?: boolean;
+    externalResources?: 'none' | 'declared-only' | 'allowed';
+    executesCode?: boolean;
+  };
+}
+
+export interface ViewPreset {
+  presetId: string;
+  moduleId: string;
+  version: string;
+  title: string;
+  slot: UIManifestSlot;
+  lifecycle: UIModuleLifecycle;
+}
+
+export interface DisplayIntent {
+  primaryGoal: string;
+  requiredArtifactTypes?: string[];
+  preferredModules?: string[];
+  fallbackAcceptable?: string[];
+  layoutPreference?: ViewLayout;
+  acceptanceCriteria?: string[];
+  source?: 'agentserver' | 'runtime-artifact' | 'ui-design-studio' | 'fallback-inference';
+}
+
+export interface ResolvedViewPlan {
+  displayIntent: DisplayIntent;
+  sections: Record<ViewPlanSection, UIManifestSlot[]>;
+  diagnostics: string[];
+  blockedDesign?: {
+    reason: string;
+    requiredModuleCapability: string;
+    resumeRunId?: string;
+  };
+}
+
 export interface RuntimeArtifact {
   id: string;
   type: string;
@@ -205,6 +260,7 @@ export interface RuntimeArtifact {
   metadata?: Record<string, unknown>;
   data?: unknown;
   dataRef?: string;
+  path?: string;
   visibility?: TimelineVisibility;
   audience?: string[];
   sensitiveDataFlags?: string[];

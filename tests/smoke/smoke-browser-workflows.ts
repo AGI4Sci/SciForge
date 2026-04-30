@@ -166,7 +166,7 @@ try {
     await page.getByLabel('移动端工作区视图').getByRole('button', { name: 'Builder' }).click();
     await page.getByText('Scenario Builder').waitFor({ timeout: 15_000 });
     await page.getByLabel('移动端工作区视图').getByRole('button', { name: 'Results' }).click();
-    await page.getByText('动态结果区').waitFor({ timeout: 15_000 });
+    await page.getByRole('heading', { name: '结果视图' }).waitFor({ timeout: 15_000 });
     await page.getByLabel('移动端工作区视图').getByRole('button', { name: 'Chat' }).click();
     await page.getByPlaceholder('输入研究问题...').waitFor({ timeout: 15_000 });
     await assertNoCriticalOverflow(page, 'mobile-workbench');
@@ -185,7 +185,7 @@ try {
     logStep('offline runtime health shows concrete recovery actions');
     await offlineHealthPage.getByText('Runtime Health').first().waitFor({ timeout: 15_000 });
     await offlineHealthPage.getByText('启动 npm run workspace:server 后刷新').waitFor({ timeout: 15_000 });
-    await offlineHealthPage.getByText('需要通用生成/修复时启动 AgentServer；workspace/evolved skill 可复用已批准任务').waitFor({ timeout: 15_000 });
+    await offlineHealthPage.getByText(/启动或修复 AgentServer|AgentServer\/agent backend/).waitFor({ timeout: 15_000 });
     await assertNoRawJsonErrors(offlineHealthPage, 'offline-health');
     await assertNoUnexplainedDisabledPrimaryButtons(offlineHealthPage, 'offline-health');
     await offlineHealthPage.close();
@@ -202,11 +202,11 @@ try {
     } else {
       await structurePackageCard.getByRole('button', { name: '打开', exact: true }).click();
     }
-    await structurePage.locator('.manifest-diagnostics code', { hasText: 'molecule-viewer' }).waitFor({ timeout: 15_000 });
+    await structurePage.getByRole('heading', { name: '结果视图' }).waitFor({ timeout: 15_000 });
     await structurePage.locator('.molecule-viewer-shell').waitFor({ timeout: 15_000 });
     await structurePage.getByRole('button', { name: '只看图' }).click({ force: true });
     await structurePage.locator('.molecule-viewer-shell').waitFor({ timeout: 15_000 });
-    await structurePage.getByRole('button', { name: '检查 artifact' }).first().evaluate((button) => {
+    await structurePage.getByRole('button', { name: '查看数据' }).first().evaluate((button) => {
       if (button instanceof HTMLElement) button.click();
     });
     await structurePage.getByRole('dialog', { name: 'Artifact Inspector' }).waitFor({ timeout: 15_000 });

@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  CircleStop,
   Clock,
   Copy,
   Database,
@@ -72,15 +73,19 @@ import {
   type BioAgentWorkspaceState,
   type BioAgentConfig,
   type AgentStreamEvent,
+  type DisplayIntent,
   type EvidenceClaim,
   type NotebookRecord,
   type NormalizedAgentResponse,
+  type ResolvedViewPlan,
   type RuntimeArtifact,
   type RuntimeExecutionUnit,
   type ScenarioInstanceId,
   type ScenarioRuntimeOverride,
   type TimelineEventRecord,
+  type UIModuleManifest,
   type UIManifestSlot,
+  type ViewPlanSection,
   type ReusableTaskCandidateRecord,
 } from './domain';
 import type { VolcanoPoint } from './charts';
@@ -465,9 +470,13 @@ function toRecordList(value: unknown): Record<string, unknown>[] {
 
 function findArtifact(session: BioAgentSession, ref?: string): RuntimeArtifact | undefined {
   if (!ref) return undefined;
+  const normalizedRef = ref.replace(/^artifact:\/\//, '').replace(/^artifact:/, '');
   return session.artifacts.find((artifact) => artifact.id === ref
+    || artifact.id === normalizedRef
     || artifact.dataRef === ref
+    || artifact.dataRef === normalizedRef
     || artifact.type === ref
+    || artifact.type === normalizedRef
     || Object.values(artifact.metadata ?? {}).some((value) => value === ref));
 }
 
@@ -2458,7 +2467,9 @@ function ChatPanel({
       activeSessionRef.current = mergedSession;
       onActiveRunChange(responseWithUsage.run.id);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const rawMessage = err instanceof Error ? err.message : String(err);
+      const wasInterrupted = controller.signal.aborted || /cancel|abort|已取消|cancelled|canceled/i.test(rawMessage);
+      const message = wasInterrupted ? '用户已中断当前 backend 运行。' : rawMessage;
       setErrorText(message);
       const failedRunId = makeId('run');
       const failedAt = nowIso();
@@ -2534,7 +2545,18 @@ function ChatPanel({
   }
 
   function handleAbort() {
-    abortRef.current?.abort();
+    if (!abortRef.current) return;
+    const interruptedAt = nowIso();
+    guidanceQueueRef.current = [];
+    setGuidanceQueue([]);
+    setStreamEvents((current) => [...current.slice(-31), {
+      id: makeId('evt'),
+      type: 'user-interrupt',
+      label: '中断请求',
+      detail: '用户请求中断当前 backend 运行；已关闭当前 HTTP stream，并清空排队引导。',
+      createdAt: interruptedAt,
+    }]);
+    abortRef.current.abort();
   }
 
   function beginComposerResize(event: React.MouseEvent<HTMLDivElement>) {
@@ -2660,7 +2682,7 @@ function ChatPanel({
         <div className="panel-actions">
           <IconButton icon={Plus} label="开启新聊天" onClick={onNewChat} />
           <IconButton icon={Clock} label="历史会话" onClick={() => setHistoryOpen((value) => !value)} />
-          {isSending ? <IconButton icon={RefreshCw} label="取消请求" onClick={handleAbort} /> : null}
+          {isSending ? <IconButton icon={CircleStop} label="中断请求" onClick={handleAbort} /> : null}
           <IconButton icon={Download} label="导出当前 Scenario 会话" onClick={handleExport} />
           <IconButton icon={Trash2} label="删除当前聊天" onClick={onDeleteChat} />
         </div>
@@ -2874,10 +2896,15 @@ function ChatPanel({
             event.preventDefault();
             void handleSend();
           }}
-          placeholder={isSending ? '继续输入引导，Enter 后排队到当前推理之后...' : '输入研究问题...'}
+          placeholder={isSending ? '继续输入引导会排队；也可以中断当前运行...' : '输入研究问题...'}
           rows={1}
           style={{ height: `${composerHeight}px` }}
         />
+        {isSending ? (
+          <ActionButton icon={CircleStop} variant="coral" onClick={handleAbort}>
+            中断
+          </ActionButton>
+        ) : null}
         <ActionButton icon={Sparkles} onClick={handleSend} disabled={!input.trim()} >
           {isSending ? '引导' : '发送'}
         </ActionButton>
@@ -3343,10 +3370,17 @@ function ResultsRenderer({
   const [inspectedArtifact, setInspectedArtifact] = useState<RuntimeArtifact | undefined>();
   const scenario = scenarios.find((item) => item.id === scenarioId) ?? scenarios[0];
   const activeRun = activeRunId ? session.runs.find((run) => run.id === activeRunId) : undefined;
+  const viewPlan = useMemo(() => resolveViewPlan({
+    scenarioId,
+    session,
+    defaultSlots,
+    activeRun,
+  }), [scenarioId, session, defaultSlots, activeRun]);
   const tabs = [
     { id: 'primary', label: '结果视图' },
     { id: 'evidence', label: '证据矩阵' },
     { id: 'execution', label: 'ExecutionUnit' },
+    { id: 'ui-design', label: 'UI设计' },
     { id: 'notebook', label: '研究记录' },
   ];
   const focusModes: Array<{ id: ResultFocusMode; label: string }> = [
@@ -3402,7 +3436,7 @@ function ResultsRenderer({
               <PrimaryResult
                 scenarioId={scenarioId}
                 session={session}
-                defaultSlots={defaultSlots}
+                viewPlan={viewPlan}
                 focusMode={focusMode}
                 onArtifactHandoff={onArtifactHandoff}
                 onInspectArtifact={setInspectedArtifact}
@@ -3411,6 +3445,8 @@ function ResultsRenderer({
               <EvidenceMatrix claims={session.claims} />
             ) : resultTab === 'execution' ? (
               <ExecutionPanel session={session} executionUnits={session.executionUnits} />
+            ) : resultTab === 'ui-design' ? (
+              <UIDesignStudioPanel viewPlan={viewPlan} />
             ) : (
               <NotebookTimeline scenarioId={scenario.id} notebook={session.notebook} />
             )}
@@ -4103,6 +4139,191 @@ type RegistryEntry = {
 
 type ResultFocusMode = 'all' | 'visual' | 'evidence' | 'execution';
 
+type ViewPlanSource = 'display-intent' | 'runtime-manifest' | 'artifact-inferred' | 'default-plan' | 'fallback';
+type ViewPlanBindingStatus = 'bound' | 'missing-artifact' | 'missing-fields' | 'fallback';
+
+type PresentationDedupeScope = 'entity' | 'document' | 'collection' | 'none';
+
+type RuntimeUIModule = UIModuleManifest & {
+  description: string;
+  presentation?: {
+    dedupeScope?: PresentationDedupeScope;
+    identityFields?: string[];
+  };
+};
+
+type ResolvedViewPlanItem = {
+  id: string;
+  slot: UIManifestSlot;
+  module: RuntimeUIModule;
+  artifact?: RuntimeArtifact;
+  section: ViewPlanSection;
+  source: ViewPlanSource;
+  status: ViewPlanBindingStatus;
+  reason?: string;
+  missingFields?: string[];
+};
+
+type RuntimeResolvedViewPlan = Omit<ResolvedViewPlan, 'sections'> & {
+  sections: Record<ViewPlanSection, ResolvedViewPlanItem[]>;
+  allItems: ResolvedViewPlanItem[];
+};
+
+const uiModuleRegistry: RuntimeUIModule[] = [
+  {
+    moduleId: 'research-report-document',
+    version: '1.0.0',
+    title: 'Markdown report document',
+    description: 'Readable Markdown/sectioned report renderer for research-report artifacts.',
+    componentId: 'report-viewer',
+    lifecycle: 'published',
+    acceptsArtifactTypes: ['research-report', 'markdown-report'],
+    requiredAnyFields: [['markdown', 'sections', 'report', 'summary', 'content', 'dataRef']],
+    viewParams: ['layoutMode', 'sectionFilter'],
+    interactionEvents: ['select-section', 'open-ref'],
+    roleDefaults: ['experimental-biologist', 'pi', 'bioinformatician'],
+    fallbackModuleIds: ['generic-artifact-inspector'],
+    defaultSection: 'primary',
+    priority: 10,
+    safety: { sandbox: false, externalResources: 'none', executesCode: false },
+    presentation: {
+      dedupeScope: 'document',
+      identityFields: ['reportId', 'report_id', 'documentId', 'document_id', 'title', 'dataRef', 'path', 'outputRef', 'resultRef'],
+    },
+  },
+  {
+    moduleId: 'protein-structure-viewer',
+    version: '1.0.0',
+    title: 'Protein structure viewer',
+    description: 'PDB/mmCIF/dataRef/HTML structure visualization bound to structure artifacts.',
+    componentId: 'molecule-viewer',
+    lifecycle: 'published',
+    acceptsArtifactTypes: ['structure-summary', 'structure-3d-html', 'pdb-file', 'structure-list', 'pdb-structure', 'protein-structure', 'mmcif-file', 'cif-file'],
+    requiredAnyFields: [['pdbId', 'pdb_id', 'pdb', 'uniprotId', 'dataRef', 'structureUrl', 'html', 'htmlRef', 'structureHtml', 'path', 'filePath']],
+    viewParams: ['colorBy', 'highlightSelection', 'highlightResidues', 'syncViewport'],
+    interactionEvents: ['highlight-residue', 'select-chain'],
+    roleDefaults: ['experimental-biologist', 'bioinformatician', 'pi'],
+    fallbackModuleIds: ['generic-artifact-inspector'],
+    defaultSection: 'primary',
+    priority: 8,
+    safety: { sandbox: true, externalResources: 'declared-only', executesCode: false },
+    presentation: {
+      dedupeScope: 'entity',
+      identityFields: ['pdbId', 'pdb_id', 'pdb', 'uniprotId', 'uniprot_id', 'accession', 'entityId', 'entity_id', 'targetId', 'target_id'],
+    },
+  },
+  {
+    moduleId: 'literature-paper-cards',
+    version: '1.0.0',
+    title: 'Evidence paper cards',
+    description: 'Paper list renderer for literature evidence artifacts.',
+    componentId: 'paper-card-list',
+    lifecycle: 'published',
+    acceptsArtifactTypes: ['paper-list'],
+    requiredAnyFields: [['papers', 'rows']],
+    viewParams: ['filter', 'sort', 'limit', 'colorBy'],
+    interactionEvents: ['select-paper', 'select-target'],
+    roleDefaults: ['experimental-biologist', 'pi'],
+    fallbackModuleIds: ['generic-data-table', 'generic-artifact-inspector'],
+    defaultSection: 'supporting',
+    priority: 20,
+    safety: { sandbox: false, externalResources: 'declared-only', executesCode: false },
+    presentation: {
+      dedupeScope: 'collection',
+      identityFields: ['paperListId', 'paper_list_id', 'queryId', 'query_id', 'searchQuery', 'query', 'dataRef', 'outputRef', 'resultRef'],
+    },
+  },
+  {
+    moduleId: 'evidence-matrix-panel',
+    version: '1.0.0',
+    title: 'Evidence matrix panel',
+    description: 'Claim/evidence matrix bound to session claims and supporting artifacts.',
+    componentId: 'evidence-matrix',
+    lifecycle: 'published',
+    acceptsArtifactTypes: ['evidence-matrix', 'paper-list', 'structure-summary', 'knowledge-graph', 'omics-differential-expression', 'research-report'],
+    viewParams: ['filter', 'sort', 'limit'],
+    interactionEvents: ['select-claim'],
+    roleDefaults: ['experimental-biologist', 'pi', 'clinical'],
+    fallbackModuleIds: ['generic-artifact-inspector'],
+    defaultSection: 'supporting',
+    priority: 30,
+    safety: { sandbox: false, externalResources: 'none', executesCode: false },
+    presentation: {
+      dedupeScope: 'collection',
+      identityFields: ['matrixId', 'matrix_id', 'evidenceSetId', 'evidence_set_id', 'claimSetId', 'claim_set_id', 'dataRef', 'outputRef', 'resultRef'],
+    },
+  },
+  {
+    moduleId: 'execution-provenance-table',
+    version: '1.0.0',
+    title: 'Execution provenance',
+    description: 'Reproducible execution refs, code/log/output refs, and statuses.',
+    componentId: 'execution-unit-table',
+    lifecycle: 'published',
+    acceptsArtifactTypes: ['*'],
+    viewParams: ['filter', 'sort', 'limit'],
+    interactionEvents: ['open-code-ref', 'open-log-ref'],
+    roleDefaults: ['bioinformatician', 'pi'],
+    fallbackModuleIds: ['generic-artifact-inspector'],
+    defaultSection: 'provenance',
+    priority: 80,
+    safety: { sandbox: false, externalResources: 'none', executesCode: false },
+  },
+  {
+    moduleId: 'notebook-research-timeline',
+    version: '1.0.0',
+    title: 'Research notebook timeline',
+    description: 'Structured research notebook and decision timeline.',
+    componentId: 'notebook-timeline',
+    lifecycle: 'published',
+    acceptsArtifactTypes: ['*'],
+    viewParams: ['filter', 'sort', 'limit'],
+    interactionEvents: ['select-timeline-event'],
+    roleDefaults: ['experimental-biologist', 'pi'],
+    fallbackModuleIds: ['generic-artifact-inspector'],
+    defaultSection: 'provenance',
+    priority: 85,
+    safety: { sandbox: false, externalResources: 'none', executesCode: false },
+  },
+  {
+    moduleId: 'generic-data-table',
+    version: '1.0.0',
+    title: 'Generic artifact table',
+    description: 'Safe table renderer for array-like artifact payloads.',
+    componentId: 'data-table',
+    lifecycle: 'published',
+    acceptsArtifactTypes: ['paper-list', 'structure-summary', 'knowledge-graph', 'omics-differential-expression', 'sequence-alignment', 'inspection-summary', 'research-report', 'runtime-artifact'],
+    viewParams: ['filter', 'sort', 'limit', 'group'],
+    interactionEvents: ['select-row'],
+    roleDefaults: ['bioinformatician', 'pi'],
+    fallbackModuleIds: ['generic-artifact-inspector'],
+    defaultSection: 'raw',
+    priority: 90,
+    safety: { sandbox: false, externalResources: 'none', executesCode: false },
+    presentation: {
+      dedupeScope: 'collection',
+      identityFields: ['datasetId', 'dataset_id', 'tableId', 'table_id', 'dataRef', 'outputRef', 'resultRef'],
+    },
+  },
+  {
+    moduleId: 'generic-artifact-inspector',
+    version: '1.0.0',
+    title: 'Artifact inspector',
+    description: 'Safe fallback for any artifact, ref, file, log, or JSON payload.',
+    componentId: 'unknown-artifact-inspector',
+    lifecycle: 'published',
+    acceptsArtifactTypes: ['*'],
+    viewParams: ['filter', 'sort', 'limit'],
+    interactionEvents: ['open-ref'],
+    roleDefaults: ['bioinformatician', 'pi'],
+    fallbackModuleIds: [],
+    defaultSection: 'raw',
+    priority: 100,
+    safety: { sandbox: false, externalResources: 'none', executesCode: false },
+    presentation: { dedupeScope: 'none' },
+  },
+];
+
 interface HandoffAutoRunRequest {
   id: string;
   targetScenario: ScenarioId;
@@ -4111,6 +4332,549 @@ interface HandoffAutoRunRequest {
 
 function defaultSlotsForAgent(scenarioId: ScenarioId): UIManifestSlot[] {
   return compileSlotsForScenario(scenarioId);
+}
+
+function resolveViewPlan({
+  scenarioId,
+  session,
+  defaultSlots,
+  activeRun,
+}: {
+  scenarioId: ScenarioId;
+  session: BioAgentSession;
+  defaultSlots?: UIManifestSlot[];
+  activeRun?: BioAgentRun;
+}): RuntimeResolvedViewPlan {
+  const displayIntent = extractDisplayIntent(activeRun) ?? inferDisplayIntentFromArtifacts(session, activeRun);
+  const runtimeSlots = session.runs.length && session.uiManifest.length ? session.uiManifest : [];
+  const seedSlots = (runtimeSlots.length ? runtimeSlots : defaultSlots?.length ? defaultSlots : defaultSlotsForAgent(scenarioId))
+    .slice()
+    .sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99));
+  const diagnostics: string[] = [];
+  const items: ResolvedViewPlanItem[] = [];
+  const seen = new Set<string>();
+
+  const addItem = (
+    module: RuntimeUIModule,
+    artifact: RuntimeArtifact | undefined,
+    source: ViewPlanSource,
+    overrides: Partial<UIManifestSlot> = {},
+    reason?: string,
+  ) => {
+    const slot: UIManifestSlot = {
+      componentId: overrides.componentId ?? module.componentId,
+      title: overrides.title ?? module.title,
+      artifactRef: overrides.artifactRef ?? artifact?.id,
+      priority: overrides.priority ?? module.priority,
+      props: overrides.props,
+      encoding: overrides.encoding,
+      layout: overrides.layout,
+      selection: overrides.selection,
+      sync: overrides.sync,
+      transform: overrides.transform,
+      compare: overrides.compare,
+    };
+    const validation = validateModuleBinding(module, artifact);
+    const section = sectionForModule(module, displayIntent, artifact);
+    const id = `${section}-${module.moduleId}-${artifact?.id ?? slot.artifactRef ?? slot.componentId}`;
+    if (seen.has(id)) return;
+    seen.add(id);
+    items.push({
+      id,
+      slot,
+      module,
+      artifact,
+      section,
+      source,
+      status: validation.status,
+      reason: reason ?? validation.reason,
+      missingFields: validation.missingFields,
+    });
+  };
+
+  for (const moduleId of displayIntent.preferredModules ?? []) {
+    const module = moduleById(moduleId);
+    if (!module) {
+      diagnostics.push(`UI module 未发布：${moduleId}`);
+      continue;
+    }
+    addItem(module, findBestArtifactForModule(session.artifacts, module), 'display-intent');
+  }
+
+  for (const artifactType of displayIntent.requiredArtifactTypes ?? []) {
+    const artifact = findBestArtifactForType(session.artifacts, artifactType);
+    const module = findBestModuleForArtifactType(artifact?.type ?? artifactType, displayIntent.preferredModules);
+    if (module) {
+      addItem(module, artifact, 'display-intent', {}, artifact ? undefined : `等待 artifact type=${artifactType}`);
+    } else {
+      diagnostics.push(`没有已发布 UI module 可消费 artifact type=${artifactType}`);
+    }
+  }
+
+  for (const artifact of session.artifacts.slice(0, 12)) {
+    const module = findBestModuleForArtifact(artifact);
+    if (module) addItem(module, artifact, 'artifact-inferred');
+  }
+
+  for (const slot of seedSlots) {
+    const artifact = findArtifact(session, slot.artifactRef);
+    const currentModule = uiModuleRegistry.find((module) => module.componentId === slot.componentId && moduleAcceptsArtifact(module, artifact?.type ?? slot.artifactRef));
+    const replacementModule = artifact ? findBestModuleForArtifact(artifact) : uiModuleRegistry.find((module) => module.componentId === slot.componentId);
+    const module = currentModule ?? replacementModule ?? moduleById('generic-artifact-inspector');
+    if (!module) continue;
+    if (artifact && slot.componentId !== module.componentId) {
+      diagnostics.push(`${slot.componentId} -> ${artifact.type} 已改由 ${module.componentId} 渲染，避免组件/artifact 错配。`);
+    }
+    addItem(module, artifact, runtimeSlots.includes(slot) ? 'runtime-manifest' : 'default-plan', {
+      ...slot,
+      componentId: module.componentId,
+      title: slot.title ?? module.title,
+      artifactRef: artifact?.id ?? slot.artifactRef,
+      priority: slot.priority ?? module.priority,
+    });
+  }
+
+  if (session.claims.length || session.artifacts.some((artifact) => artifact.type === 'evidence-matrix')) {
+    addItem(moduleById('evidence-matrix-panel') ?? uiModuleRegistry[3], undefined, 'fallback');
+  }
+  if (session.executionUnits.length) {
+    addItem(moduleById('execution-provenance-table') ?? uiModuleRegistry[4], undefined, 'fallback');
+  }
+
+  const ordered = compactViewPlanItems(items, session).sort((left, right) => {
+    const sectionDelta = sectionRank(left.section) - sectionRank(right.section);
+    if (sectionDelta) return sectionDelta;
+    return (left.slot.priority ?? left.module.priority ?? 99) - (right.slot.priority ?? right.module.priority ?? 99);
+  });
+  const sections: RuntimeResolvedViewPlan['sections'] = {
+    primary: [],
+    supporting: [],
+    provenance: [],
+    raw: [],
+  };
+  ordered.forEach((item) => sections[item.section].push(item));
+
+  const blockedDesign = blockedDesignForIntent(displayIntent, session, ordered, activeRun);
+  return {
+    displayIntent,
+    diagnostics,
+    sections,
+    allItems: ordered,
+    blockedDesign,
+  };
+}
+
+function extractDisplayIntent(activeRun?: BioAgentRun): DisplayIntent | undefined {
+  const candidates = [
+    activeRun?.raw,
+    isRecord(activeRun?.raw) ? activeRun?.raw.displayIntent : undefined,
+    parseMaybeJsonObject(activeRun?.response)?.displayIntent,
+  ];
+  for (const candidate of candidates) {
+    if (!isRecord(candidate)) continue;
+    const primaryGoal = asString(candidate.primaryGoal) || asString(candidate.goal) || asString(candidate.title);
+    if (!primaryGoal) continue;
+    return {
+      primaryGoal,
+      requiredArtifactTypes: asStringList(candidate.requiredArtifactTypes),
+      preferredModules: asStringList(candidate.preferredModules),
+      fallbackAcceptable: asStringList(candidate.fallbackAcceptable),
+      acceptanceCriteria: asStringList(candidate.acceptanceCriteria),
+      source: 'agentserver',
+    };
+  }
+  return undefined;
+}
+
+function inferDisplayIntentFromArtifacts(session: BioAgentSession, activeRun?: BioAgentRun): DisplayIntent {
+  const artifactTypes = Array.from(new Set(session.artifacts.map((artifact) => artifact.type)));
+  const text = `${activeRun?.prompt ?? ''}\n${activeRun?.response ?? ''}`.toLowerCase();
+  const requiredArtifactTypes = prioritizeArtifactTypes(artifactTypes, text);
+  const preferredModules = requiredArtifactTypes
+    .map((artifactType) => findBestModuleForArtifactType(artifactType)?.moduleId)
+    .filter((moduleId): moduleId is string => Boolean(moduleId));
+  return {
+    primaryGoal: activeRun?.prompt
+      ? `展示当前 run 的核心结果：${activeRun.prompt.slice(0, 80)}`
+      : '展示当前 session 的最新 runtime artifacts',
+    requiredArtifactTypes,
+    preferredModules: Array.from(new Set(preferredModules)),
+    fallbackAcceptable: ['generic-data-table', 'generic-artifact-inspector'],
+    acceptanceCriteria: ['primary result visible', 'artifact binding validated', 'fallback explains missing fields'],
+    source: 'fallback-inference',
+  };
+}
+
+function prioritizeArtifactTypes(artifactTypes: string[], text: string) {
+  const ranked = [...artifactTypes].sort((left, right) => artifactTypePriority(right, text) - artifactTypePriority(left, text));
+  return ranked.slice(0, 4);
+}
+
+function artifactTypePriority(type: string, text: string) {
+  let score = 0;
+  if (/structure|pdb|protein|molecule|蛋白|结构|3d/.test(type)) score += 60;
+  if (/report|markdown|summary|报告|文档/.test(type)) score += 50;
+  if (/evidence|claim|证据/.test(type)) score += 40;
+  if (/paper|literature|文献/.test(type)) score += 30;
+  if (/omics|expression|matrix|umap|heatmap|volcano|组学/.test(type)) score += 30;
+  if (text.includes('pdb') || text.includes('结构') || text.includes('3d')) score += /structure|pdb|protein|3d/.test(type) ? 30 : 0;
+  if (text.includes('markdown') || text.includes('报告')) score += /report|markdown/.test(type) ? 30 : 0;
+  return score;
+}
+
+function parseMaybeJsonObject(value: unknown): Record<string, unknown> | undefined {
+  if (isRecord(value)) return value;
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{')) return undefined;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function moduleById(moduleId: string) {
+  return uiModuleRegistry.find((module) => module.moduleId === moduleId);
+}
+
+function moduleAcceptsArtifact(module: RuntimeUIModule, artifactType?: string) {
+  if (!artifactType) return module.acceptsArtifactTypes.includes('*');
+  return module.acceptsArtifactTypes.includes('*') || module.acceptsArtifactTypes.includes(artifactType);
+}
+
+function findBestModuleForArtifact(artifact: RuntimeArtifact) {
+  return findBestModuleForArtifactType(artifact.type);
+}
+
+function findBestModuleForArtifactType(artifactType: string, preferredModules: string[] = []) {
+  const preferred = preferredModules
+    .map(moduleById)
+    .find((module): module is RuntimeUIModule => Boolean(module && moduleAcceptsArtifact(module, artifactType)));
+  if (preferred) return preferred;
+  return uiModuleRegistry
+    .filter((module) => module.componentId !== 'unknown-artifact-inspector' && moduleAcceptsArtifact(module, artifactType))
+    .sort((left, right) => (left.priority ?? 99) - (right.priority ?? 99))[0]
+    ?? moduleById('generic-artifact-inspector');
+}
+
+function findBestArtifactForModule(artifacts: RuntimeArtifact[], module: RuntimeUIModule) {
+  return artifacts.find((artifact) => moduleAcceptsArtifact(module, artifact.type));
+}
+
+function findBestArtifactForType(artifacts: RuntimeArtifact[], artifactType: string) {
+  return artifacts.find((artifact) => artifact.type === artifactType || artifact.id === artifactType)
+    ?? artifacts.find((artifact) => artifactTypeMatches(artifact.type, artifactType));
+}
+
+function artifactTypeMatches(actualType: string, requestedType: string) {
+  if (actualType === requestedType) return true;
+  if (isStructureArtifactType(actualType) && isStructureArtifactType(requestedType)) return true;
+  return false;
+}
+
+function isStructureArtifactType(type: string) {
+  return /structure|pdb|protein|molecule|mmcif|cif|3d/i.test(type);
+}
+
+function validateModuleBinding(module: RuntimeUIModule, artifact?: RuntimeArtifact): { status: ViewPlanBindingStatus; reason?: string; missingFields?: string[] } {
+  if (!artifact && ['evidence-matrix', 'execution-unit-table', 'notebook-timeline'].includes(module.componentId)) {
+    return { status: 'bound' };
+  }
+  if (!artifact && !module.acceptsArtifactTypes.includes('*')) {
+    return { status: 'missing-artifact', reason: `等待 ${module.acceptsArtifactTypes.join('/')} artifact` };
+  }
+  if (artifact && !moduleAcceptsArtifact(module, artifact.type)) {
+    return { status: 'fallback', reason: `${module.moduleId} 不声明消费 ${artifact.type}` };
+  }
+  const missingFields = (module.requiredFields ?? []).filter((field) => !artifactHasField(artifact, field));
+  const missingAny = (module.requiredAnyFields ?? []).filter((group) => !group.some((field) => artifactHasField(artifact, field)));
+  if (missingFields.length || missingAny.length) {
+    return {
+      status: 'missing-fields',
+      reason: 'artifact 缺少模块必需字段',
+      missingFields: [...missingFields, ...missingAny.map((group) => group.join('|'))],
+    };
+  }
+  return { status: 'bound' };
+}
+
+function artifactHasField(artifact: RuntimeArtifact | undefined, field: string) {
+  if (!artifact) return false;
+  if (field === 'dataRef' && artifact.dataRef) return true;
+  if (field in artifact) return true;
+  if (isRecord(artifact.metadata) && field in artifact.metadata) return true;
+  const data = artifact.data;
+  if (isRecord(data) && field in data) return true;
+  if (field === 'rows' && Array.isArray(data)) return true;
+  return false;
+}
+
+function sectionForModule(module: RuntimeUIModule, displayIntent: DisplayIntent, artifact?: RuntimeArtifact): ViewPlanSection {
+  if (isPrimaryResultModule(module)) {
+    if (artifact && displayIntent.requiredArtifactTypes?.includes(artifact.type)) return 'primary';
+    if (displayIntent.preferredModules?.includes(module.moduleId)) return 'primary';
+  }
+  return module.defaultSection ?? 'supporting';
+}
+
+function isPrimaryResultModule(module: RuntimeUIModule) {
+  return ['report-viewer', 'molecule-viewer', 'volcano-plot', 'heatmap-viewer', 'umap-viewer', 'network-graph'].includes(module.componentId);
+}
+
+function compactViewPlanItems(items: ResolvedViewPlanItem[], session: BioAgentSession) {
+  const strongestByArtifact = new Map<string, ResolvedViewPlanItem>();
+  const strongestByPresentationIdentity = new Map<string, ResolvedViewPlanItem>();
+  for (const item of items) {
+    const artifactKey = item.artifact?.id ?? item.slot.artifactRef;
+    if (artifactKey) {
+      const previous = strongestByArtifact.get(artifactKey);
+      if (!previous || resultPresentationRank(item, previous) < 0) strongestByArtifact.set(artifactKey, item);
+    }
+    const presentationKey = presentationIdentityKey(item);
+    if (presentationKey) {
+      const previous = strongestByPresentationIdentity.get(presentationKey);
+      if (!previous || presentationIdentityRank(item, previous) < 0) strongestByPresentationIdentity.set(presentationKey, item);
+    }
+  }
+  return items.filter((item) => {
+    if (item.status === 'missing-artifact' && item.section !== 'primary' && item.source !== 'display-intent') return false;
+    if (item.module.componentId === 'execution-unit-table' && !session.executionUnits.length) return false;
+    if (item.module.componentId === 'evidence-matrix' && !session.claims.length && item.status === 'missing-artifact') return false;
+    if (item.module.componentId === 'unknown-artifact-inspector' && !item.artifact) return false;
+    const artifactKey = item.artifact?.id ?? item.slot.artifactRef;
+    const strongest = artifactKey ? strongestByArtifact.get(artifactKey) : undefined;
+    if (strongest && strongest.id !== item.id && item.module.componentId === 'unknown-artifact-inspector') return false;
+    if (strongest && strongest.id !== item.id && item.module.componentId === 'data-table' && strongest.status === 'bound') return false;
+    const presentationKey = presentationIdentityKey(item);
+    const strongestPresentation = presentationKey ? strongestByPresentationIdentity.get(presentationKey) : undefined;
+    if (strongestPresentation && strongestPresentation.id !== item.id && isPresentationDedupeEnabled(item.module)) return false;
+    return true;
+  });
+}
+
+function isPresentationDedupeEnabled(module: RuntimeUIModule) {
+  return (module.presentation?.dedupeScope ?? 'entity') !== 'none';
+}
+
+function presentationIdentityKey(item: ResolvedViewPlanItem) {
+  if (!item.artifact || item.status === 'missing-artifact' || !isPresentationDedupeEnabled(item.module)) return undefined;
+  const scope = item.module.presentation?.dedupeScope ?? 'entity';
+  const identity = artifactPresentationIdentity(item.artifact, item.module, scope);
+  return identity ? `${item.module.componentId}:${scope}:${identity}` : undefined;
+}
+
+function artifactPresentationIdentity(
+  artifact: RuntimeArtifact,
+  module: RuntimeUIModule,
+  scope: PresentationDedupeScope,
+) {
+  const fields = module.presentation?.identityFields?.length
+    ? module.presentation.identityFields
+    : defaultPresentationIdentityFields;
+  const semanticIdentity = artifactSemanticIdentity(artifact, fields, scope);
+  if (semanticIdentity) return `semantic:${semanticIdentity}`;
+  const provenanceIdentity = artifactProvenanceIdentity(artifact);
+  if (provenanceIdentity) return `provenance:${provenanceIdentity}`;
+  return undefined;
+}
+
+const defaultPresentationIdentityFields = [
+  'presentationKey',
+  'resultKey',
+  'displayKey',
+  'semanticKey',
+  'entityKey',
+  'entityId',
+  'entity_id',
+  'targetId',
+  'target_id',
+  'subjectId',
+  'subject_id',
+  'accession',
+  'accessionId',
+  'accession_id',
+  'gene',
+  'symbol',
+  'compoundId',
+  'compound_id',
+  'datasetId',
+  'dataset_id',
+  'reportId',
+  'report_id',
+  'documentId',
+  'document_id',
+  'paperId',
+  'paper_id',
+  'doi',
+  'url',
+  'dataRef',
+  'outputRef',
+  'resultRef',
+];
+
+function artifactSemanticIdentity(
+  artifact: RuntimeArtifact,
+  fields: string[],
+  scope: PresentationDedupeScope,
+) {
+  const data = artifact.data;
+  const records = [
+    artifact.metadata,
+    artifactRecordForIdentity(artifact),
+    isRecord(data) ? data : undefined,
+    scope === 'entity' ? firstPayloadRecordForIdentity(data) : undefined,
+  ];
+  for (const record of records) {
+    const identity = identityFromRecord(record, fields);
+    if (identity) return identity;
+  }
+  return undefined;
+}
+
+function artifactRecordForIdentity(artifact: RuntimeArtifact): Record<string, unknown> {
+  return {
+    id: artifact.id,
+    type: artifact.type,
+    dataRef: artifact.dataRef,
+    path: artifact.path,
+  };
+}
+
+function firstPayloadRecordForIdentity(data: unknown): Record<string, unknown> | undefined {
+  if (Array.isArray(data)) return toRecordList(data)[0];
+  if (!isRecord(data)) return undefined;
+  for (const key of ['selected', 'primary', 'item', 'record', 'data', 'structures', 'rows', 'items', 'results', 'records']) {
+    const value = data[key];
+    if (isRecord(value)) return value;
+    const first = toRecordList(value)[0];
+    if (first) return first;
+  }
+  return undefined;
+}
+
+function identityFromRecord(record: Record<string, unknown> | undefined, fields: string[]) {
+  if (!record) return undefined;
+  const canonicalFields = new Set(fields.map(canonicalPresentationIdentityField));
+  for (const field of fields) {
+    const value = asString(record[field]);
+    const normalized = normalizePresentationIdentity(value);
+    if (normalized) return `${canonicalPresentationIdentityField(field)}:${normalized}`;
+  }
+  for (const [field, rawValue] of Object.entries(record)) {
+    const canonicalField = canonicalPresentationIdentityField(field);
+    if (!canonicalFields.has(canonicalField)) continue;
+    const normalized = normalizePresentationIdentity(asString(rawValue));
+    if (normalized) return `${canonicalField}:${normalized}`;
+  }
+  return undefined;
+}
+
+function canonicalPresentationIdentityField(field: string) {
+  return field.trim().toLowerCase().replace(/[_\-\s]+/g, '');
+}
+
+function artifactProvenanceIdentity(artifact: RuntimeArtifact) {
+  const metadata = artifact.metadata ?? {};
+  const values = [
+    artifact.dataRef,
+    artifact.path,
+    asString(metadata.outputRef),
+    asString(metadata.resultRef),
+    asString(metadata.dataRef),
+    asString(metadata.path),
+    asString(metadata.runId),
+    asString(metadata.agentServerRunId),
+    asString(metadata.provenanceRef),
+  ];
+  return values.map(normalizePresentationIdentity).find(Boolean);
+}
+
+function normalizePresentationIdentity(value?: string) {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized || normalized === 'unknown' || normalized === 'none' || normalized === 'null' || normalized === 'undefined') return undefined;
+  return normalized.replace(/\s+/g, ' ');
+}
+
+function presentationIdentityRank(left: ResolvedViewPlanItem, right: ResolvedViewPlanItem) {
+  const statusDelta = resultStatusRank(left.status) - resultStatusRank(right.status);
+  if (statusDelta) return statusDelta;
+  const payloadDelta = artifactPresentationPayloadRank(left.artifact) - artifactPresentationPayloadRank(right.artifact);
+  if (payloadDelta) return payloadDelta;
+  const sourceDelta = viewPlanSourceRank(left.source) - viewPlanSourceRank(right.source);
+  if (sourceDelta) return sourceDelta;
+  const sectionDelta = sectionRank(left.section) - sectionRank(right.section);
+  if (sectionDelta) return sectionDelta;
+  return (left.slot.priority ?? left.module.priority ?? 99) - (right.slot.priority ?? right.module.priority ?? 99);
+}
+
+function artifactPresentationPayloadRank(artifact?: RuntimeArtifact) {
+  if (!artifact) return 50;
+  const type = artifact.type.toLowerCase();
+  if (/(interactive|viewer|html|3d|image|figure|plot|chart|report|document|markdown)/i.test(type)) return 0;
+  if (/(file|coordinate|matrix|graph|network|table|dataset|dataframe|csv|tsv|json)/i.test(type)) return 1;
+  if (/(summary|profile|annotation|metadata)/i.test(type)) return 2;
+  if (/(list|collection|index|search-result)/i.test(type)) return 6;
+  if (artifact.dataRef || artifact.path) return 3;
+  return 8;
+}
+
+function viewPlanSourceRank(source: ViewPlanSource) {
+  if (source === 'display-intent') return 0;
+  if (source === 'runtime-manifest') return 1;
+  if (source === 'artifact-inferred') return 2;
+  if (source === 'default-plan') return 3;
+  return 4;
+}
+
+function sectionRank(section: ViewPlanSection) {
+  if (section === 'primary') return 0;
+  if (section === 'supporting') return 1;
+  if (section === 'provenance') return 2;
+  return 3;
+}
+
+function blockedDesignForIntent(
+  displayIntent: DisplayIntent,
+  session: BioAgentSession,
+  items: ResolvedViewPlanItem[],
+  activeRun?: BioAgentRun,
+) {
+  const requiredTypes = displayIntent.requiredArtifactTypes ?? [];
+  const unsupportedType = requiredTypes.find((artifactType) => {
+    const artifact = findBestArtifactForType(session.artifacts, artifactType);
+    if (!artifact) return false;
+    const specialized = uiModuleRegistry.find((module) => module.componentId !== 'unknown-artifact-inspector' && moduleAcceptsArtifact(module, artifact.type));
+    return !specialized;
+  });
+  const primaryBound = items.some((item) => item.section === 'primary' && item.status === 'bound');
+  if (!unsupportedType && (primaryBound || !requiredTypes.length)) return undefined;
+  if (unsupportedType) {
+    return {
+      reason: `没有已发布 UI module 可作为主视图渲染 artifact type=${unsupportedType}`,
+      requiredModuleCapability: `render ${unsupportedType} as primary result`,
+      resumeRunId: activeRun?.id,
+    };
+  }
+  return undefined;
+}
+
+function itemsForFocusMode(plan: RuntimeResolvedViewPlan, focusMode: ResultFocusMode) {
+  const sections = focusMode === 'evidence'
+    ? ['supporting'] as ViewPlanSection[]
+    : focusMode === 'execution'
+      ? ['provenance'] as ViewPlanSection[]
+      : ['primary', 'supporting', 'provenance', 'raw'] as ViewPlanSection[];
+  return sections.flatMap((section) => plan.sections[section])
+    .filter((item) => itemMatchesFocusMode(item, focusMode));
+}
+
+function itemMatchesFocusMode(item: ResolvedViewPlanItem, focusMode: ResultFocusMode) {
+  if (focusMode === 'all') return true;
+  if (focusMode === 'evidence') return item.module.componentId === 'evidence-matrix' || item.artifact?.type === 'evidence-matrix';
+  if (focusMode === 'execution') return item.module.componentId === 'execution-unit-table' || item.section === 'provenance';
+  return ['molecule-viewer', 'volcano-plot', 'heatmap-viewer', 'umap-viewer', 'network-graph', 'report-viewer'].includes(item.module.componentId);
 }
 
 function PaperCardList({ slot, artifact, session }: RegistryRendererProps) {
@@ -4147,12 +4911,31 @@ function PaperCardList({ slot, artifact, session }: RegistryRendererProps) {
 
 function MoleculeSlot({ slot, artifact, session }: RegistryRendererProps) {
   const payload = slotPayload(slot, artifact);
-  const pdbId = asString(payload.pdbId) || asString(payload.pdb);
+  const structureRows = Array.isArray(artifact?.data)
+    ? toRecordList(artifact?.data)
+    : toRecordList(payload.structures ?? payload.data ?? payload.rows ?? payload.items);
+  const primaryStructure = structureRows[0] ?? {};
+  const artifactPath = artifactFilePath(artifact, payload);
+  const pdbId = asString(payload.pdbId)
+    || asString(payload.pdb_id)
+    || asString(payload.pdb)
+    || asString(artifact?.metadata?.pdbId)
+    || asString(artifact?.metadata?.pdb_id)
+    || asString(primaryStructure.pdbId)
+    || asString(primaryStructure.pdb_id)
+    || asString(primaryStructure.pdb);
   const uniprotId = asString(payload.uniprotId);
   const ligand = asString(payload.ligand) || 'none';
   const residues = asStringList(payload.highlightResidues ?? payload.residues);
   const metrics = isRecord(payload.metrics) ? payload.metrics : payload;
-  const dataRef = asString(artifact?.dataRef) || asString(payload.dataRef);
+  const dataRef = asString(payload.structureUrl) || asString(artifact?.dataRef) || asString(payload.dataRef) || artifactPath;
+  const coordinateRef = isFetchableStructureRef(dataRef) ? dataRef : undefined;
+  const html = asString(payload.html) || asString(payload.structureHtml) || asString(payload.iframeHtml);
+  const htmlRef = asString(payload.htmlRef) || asString(payload.structureHtmlRef)
+    || (artifactPath && /\.html?($|[?#])/i.test(artifactPath) ? artifactPath : undefined)
+    || (dataRef && (/\.html?($|[?#])/i.test(dataRef) || dataRef.startsWith('data:text/html')) ? dataRef : undefined);
+  const canPreviewHtml = Boolean(html || htmlRef?.startsWith('data:text/html') || /^https?:\/\//i.test(htmlRef ?? ''));
+  const isHtmlStructure = Boolean(canPreviewHtml || /html/i.test(artifact?.type ?? ''));
   const atoms = toRecordList(payload.atomCoordinates).flatMap((atom) => {
     const x = asNumber(atom.x);
     const y = asNumber(atom.y);
@@ -4170,28 +4953,32 @@ function MoleculeSlot({ slot, artifact, session }: RegistryRendererProps) {
       hetatm: atom.hetatm === true,
     }];
   });
-  if (!artifact || (!pdbId && !uniprotId)) {
-    return <ComponentEmptyState componentId="molecule-viewer" artifactType="structure-summary" detail={!artifact ? undefined : '当前 structure-summary 缺少 pdbId 或 uniprotId；请补齐 accession 字段。'} />;
+  if (!artifact || (!pdbId && !uniprotId && !coordinateRef && !html && !htmlRef && !atoms.length && !structureRows.length)) {
+    return <ComponentEmptyState componentId="molecule-viewer" artifactType="structure-summary" detail={!artifact ? undefined : '当前 structure artifact 缺少 pdbId、uniprotId、dataRef 或 HTML 结构视图；请补齐 accession/坐标/HTML ref。'} />;
   }
   return (
     <div className="stack">
       <ArtifactSourceBar artifact={artifact} session={session} />
       <div className="slot-meta">
         <Badge variant="success">{artifactMeta(artifact)}</Badge>
-        <code>{uniprotId ? `UniProt=${uniprotId}` : `PDB=${pdbId}`}</code>
+        <code>{uniprotId ? `UniProt=${uniprotId}` : `PDB=${pdbId || 'unknown'}`}</code>
         <code>ligand={ligand}</code>
         {dataRef ? <code title={dataRef}>dataRef={compactParams(dataRef)}</code> : <code>record-only structure</code>}
+        {!coordinateRef && pdbId ? <code>coordinates=RCSB</code> : null}
+        {structureRows.length ? <code>{structureRows.length} structures</code> : null}
         {residues.length ? <code>residues={residues.join(',')}</code> : null}
         {slot.encoding?.highlightSelection ? <code>highlightSelection={Array.isArray(slot.encoding.highlightSelection) ? slot.encoding.highlightSelection.join(',') : slot.encoding.highlightSelection}</code> : null}
       </div>
-      {dataRef ? (
+      {isHtmlStructure && canPreviewHtml ? (
+        <StructureHtmlPreview html={html} htmlRef={htmlRef} />
+      ) : coordinateRef || pdbId || atoms.length ? (
         <div className="viz-card">
           <MoleculeViewer
             pdbId={pdbId || uniprotId}
             ligand={ligand}
-            structureUrl={dataRef}
+            structureUrl={coordinateRef}
             highlightResidues={residues}
-            pocketLabel={asString(payload.pocketLabel) || asString(payload.pocket) || 'Structure view'}
+            pocketLabel={asString(payload.pocketLabel) || asString(payload.pocket) || asString(primaryStructure.title) || 'Structure view'}
             atoms={atoms}
           />
         </div>
@@ -4199,6 +4986,53 @@ function MoleculeSlot({ slot, artifact, session }: RegistryRendererProps) {
         <ComponentEmptyState componentId="molecule-viewer" artifactType="structure-summary" title="缺少结构坐标 dataRef" detail="已保留结构摘要，但没有可加载坐标文件；请检查 project tool 输出。" />
       )}
       <MetricGrid metrics={metrics} />
+    </div>
+  );
+}
+
+function artifactFilePath(artifact: RuntimeArtifact | undefined, payload: Record<string, unknown>) {
+  const artifactRecord = artifact as (RuntimeArtifact & Record<string, unknown>) | undefined;
+  const metadata = artifact?.metadata ?? {};
+  return asString(artifactRecord?.path)
+    || asString(payload.path)
+    || asString(payload.filePath)
+    || asString(payload.localPath)
+    || asString(payload.downloadedPath)
+    || asString(metadata.path)
+    || asString(metadata.filePath)
+    || asString(metadata.localPath)
+    || asString(metadata.downloadedPath);
+}
+
+function isFetchableStructureRef(ref?: string) {
+  if (!ref) return false;
+  if (/^agentserver:\/\//i.test(ref)) return false;
+  if (/\.html?($|[?#])/i.test(ref)) return false;
+  return /^https?:\/\//i.test(ref) || /^data:/i.test(ref);
+}
+
+function StructureHtmlPreview({ html, htmlRef }: { html?: string; htmlRef?: string }) {
+  const canEmbedRef = htmlRef?.startsWith('data:text/html') || /^https?:\/\//i.test(htmlRef ?? '');
+  return (
+    <div className="structure-html-preview">
+      <div className="slot-meta">
+        <Badge variant="info">sandboxed html structure</Badge>
+        {htmlRef ? <code title={htmlRef}>htmlRef={compactParams(htmlRef)}</code> : null}
+      </div>
+      {html || canEmbedRef ? (
+        <iframe
+          title="Sandboxed structure HTML preview"
+          sandbox="allow-scripts"
+          src={canEmbedRef ? htmlRef : undefined}
+          srcDoc={html}
+        />
+      ) : (
+        <EmptyArtifactState
+          title="结构 HTML 已生成但不能直接嵌入"
+          detail="当前 dataRef 指向 workspace 文件；请通过 Artifact Inspector 查看路径，或让任务输出 data:text/html / structure-summary 坐标 artifact。"
+          recoverActions={['inspect-artifact', 'repair-ui-plan', 'fallback-component:unknown-artifact-inspector']}
+        />
+      )}
     </div>
   );
 }
@@ -4379,7 +5213,7 @@ function UnknownArtifactInspector({ slot, artifact, session }: RegistryRendererP
 
 function ReportViewerSlot({ slot, artifact, session }: RegistryRendererProps) {
   const payload = slotPayload(slot, artifact);
-  const report = coerceReportPayload(payload);
+  const report = coerceReportPayload(payload, artifact);
   const markdown = report.markdown;
   const sections = report.sections;
   if (!artifact || (!markdown && !sections.length)) {
@@ -4387,13 +5221,6 @@ function ReportViewerSlot({ slot, artifact, session }: RegistryRendererProps) {
   }
   return (
     <div className="stack">
-      <ArtifactSourceBar artifact={artifact} session={session} />
-      <ArtifactDownloads artifact={artifact} />
-      <div className="slot-meta">
-        <Badge variant="success">report</Badge>
-        {sections.length ? <code>{sections.length} sections</code> : null}
-        {viewCompositionSummary(slot) ? <code>{viewCompositionSummary(slot)}</code> : null}
-      </div>
       <div className="report-viewer">
         <div className="report-actions">
           <button type="button" onClick={() => void navigator.clipboard?.writeText(markdown || sectionsToMarkdown(sections))}>
@@ -4411,7 +5238,7 @@ function ReportViewerSlot({ slot, artifact, session }: RegistryRendererProps) {
   );
 }
 
-function coerceReportPayload(payload: Record<string, unknown>) {
+function coerceReportPayload(payload: Record<string, unknown>, artifact?: RuntimeArtifact) {
   const nested = parseNestedReport(payload);
   const source = nested ?? payload;
   const sections = toRecordList(source.sections);
@@ -4420,8 +5247,21 @@ function coerceReportPayload(payload: Record<string, unknown>) {
     || asString(source.summary)
     || asString(source.content)
     || (sections.length ? sectionsToMarkdown(sections) : undefined)
-    || reportFromKnownFields(source);
+    || reportFromKnownFields(source)
+    || markdownFromReportRef(artifact);
   return { markdown, sections };
+}
+
+function markdownFromReportRef(artifact?: RuntimeArtifact) {
+  const ref = artifact?.dataRef || asString(artifact?.metadata?.dataRef) || asString(artifact?.metadata?.outputRef);
+  if (!ref || !/\.md($|[?#])|markdown/i.test(ref)) return undefined;
+  return [
+    '# Markdown report',
+    '',
+    `报告内容已作为 workspace ref 生成：\`${ref}\`。`,
+    '',
+    '当前 artifact 没有内联 markdown 内容，因此结果区保留可读文档壳和可复现引用；如需全文预览，请让任务把 markdown 正文写入 `research-report.markdown` 或 `sections` 字段。',
+  ].join('\n');
 }
 
 function parseNestedReport(payload: Record<string, unknown>): Record<string, unknown> | undefined {
@@ -4561,16 +5401,20 @@ function artifactDownloadItems(artifact?: RuntimeArtifact) {
 }
 
 function EmptyArtifactState({ title, detail, recoverActions }: { title: string; detail: string; recoverActions?: string[] }) {
+  const actions = recoverActions?.length ? recoverActions : ['run-current-scenario', 'import-matching-package', 'inspect-artifact-schema'];
   return (
     <div className="empty-runtime-state">
       <Badge variant="muted">empty</Badge>
       <strong>{title}</strong>
       <p>{detail}</p>
-      <div className="empty-recover-actions" aria-label="恢复动作">
-        {(recoverActions?.length ? recoverActions : ['run-current-scenario', 'import-matching-package', 'inspect-artifact-schema']).map((action) => (
-          <span key={action}>{recoverActionLabel(action)}</span>
-        ))}
-      </div>
+      <details className="empty-recover-details">
+        <summary>可尝试的恢复动作</summary>
+        <div className="empty-recover-actions" aria-label="恢复动作">
+          {actions.map((action) => (
+            <span key={action}>{recoverActionLabel(action)}</span>
+          ))}
+        </div>
+      </details>
     </div>
   );
 }
@@ -4659,6 +5503,7 @@ function ArtifactSourceBar({ artifact, session }: { artifact?: RuntimeArtifact; 
       <code>{artifact.id}</code>
       <code>{artifact.type}</code>
       <code>schema={artifact.schemaVersion}</code>
+      {artifact.path ? <code title={artifact.path}>path={compactParams(artifact.path)}</code> : null}
       {artifact.dataRef ? <code title={artifact.dataRef}>dataRef={compactParams(artifact.dataRef)}</code> : null}
       {unit ? <code title={unit.params}>tool={unit.tool} · {unit.status}</code> : <code>audit warning: no ExecutionUnit</code>}
     </div>
@@ -4683,66 +5528,297 @@ const componentRegistry: Record<string, RegistryEntry> = {
 function PrimaryResult({
   scenarioId,
   session,
-  defaultSlots,
+  viewPlan,
   focusMode,
   onArtifactHandoff,
   onInspectArtifact,
 }: {
   scenarioId: ScenarioId;
   session: BioAgentSession;
-  defaultSlots?: UIManifestSlot[];
+  viewPlan: RuntimeResolvedViewPlan;
   focusMode: ResultFocusMode;
   onArtifactHandoff: (targetScenario: ScenarioId, artifact: RuntimeArtifact) => void;
   onInspectArtifact: (artifact: RuntimeArtifact) => void;
 }) {
-  const runtimeSlots = session.runs.length && session.uiManifest.length ? session.uiManifest : [];
   const slotLimit = focusMode === 'visual' || focusMode === 'all' ? 8 : 4;
-  const slots = (runtimeSlots.length ? runtimeSlots : defaultSlots?.length ? defaultSlots : defaultSlotsForAgent(scenarioId))
-    .slice()
-    .sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99))
-    .filter((slot) => slotMatchesFocusMode(slot, focusMode))
-    .slice(0, slotLimit);
+  const planItems = itemsForFocusMode(viewPlan, focusMode).slice(0, slotLimit);
+  const { visibleItems, deferredItems } = selectDefaultResultItems(planItems, focusMode);
   return (
     <div className="stack">
-      <SectionHeader icon={FileText} title="动态结果区" subtitle="UIManifest -> component registry -> artifact/runtime data" />
-      <ManifestDiagnostics slots={slots} />
-      {!slots.length ? (
+      <SectionHeader icon={FileText} title="结果视图" subtitle="优先展示用户本轮要看的结果；更多内容默认收起" />
+      <ViewPlanSummary viewPlan={viewPlan} />
+      {viewPlan.blockedDesign ? <UIDesignBlockerCard blocker={viewPlan.blockedDesign} /> : null}
+      {!planItems.length ? (
         <EmptyArtifactState
           title="当前 focus mode 没有匹配组件"
           detail="切回“全部”，或运行一个会生成对应 artifact 的 skill；结果区不会用 demo 数据补位。"
         />
       ) : null}
-      <div className="registry-grid">
-        {slots.map((slot) => (
-          <RegistrySlot
-            key={`${slot.componentId}-${slot.artifactRef ?? slot.title ?? slot.priority ?? ''}`}
-            scenarioId={scenarioId}
-            session={session}
-            slot={slot}
-            onArtifactHandoff={onArtifactHandoff}
-            onInspectArtifact={onInspectArtifact}
-          />
-        ))}
+      <ResultItemsSection
+        title={focusMode === 'execution' ? '执行记录' : focusMode === 'evidence' ? '证据重点' : '核心结果'}
+        items={visibleItems}
+        scenarioId={scenarioId}
+        session={session}
+        onArtifactHandoff={onArtifactHandoff}
+        onInspectArtifact={onInspectArtifact}
+      />
+      {deferredItems.length ? (
+        <details className="result-details-panel">
+          <summary>
+            <span>更多结果</span>
+            <Badge variant="muted">{deferredItems.length} hidden</Badge>
+          </summary>
+          {(['supporting', 'provenance', 'raw', 'primary'] as ViewPlanSection[]).map((section) => {
+            const sectionItems = deferredItems.filter((item) => item.section === section);
+            if (!sectionItems.length) return null;
+            return (
+              <ResultItemsSection
+                key={section}
+                title={viewPlanSectionLabel(section)}
+                items={sectionItems}
+                scenarioId={scenarioId}
+                session={session}
+                onArtifactHandoff={onArtifactHandoff}
+                onInspectArtifact={onInspectArtifact}
+              />
+            );
+          })}
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+function ViewPlanSummary({ viewPlan }: { viewPlan: RuntimeResolvedViewPlan }) {
+  const boundCount = viewPlan.allItems.filter((item) => item.status === 'bound').length;
+  const waitingCount = viewPlan.allItems.filter((item) => item.status === 'missing-artifact' || item.status === 'missing-fields').length;
+  return (
+    <div className="view-plan-summary">
+      <div>
+        <Badge variant={waitingCount ? 'warning' : 'success'}>{waitingCount ? 'partial result' : 'ready result'}</Badge>
+        <strong>{viewPlan.displayIntent.primaryGoal}</strong>
+        <span>{boundCount} 个结果可用{waitingCount ? `，${waitingCount} 个结果等待 artifact 或字段` : ''}</span>
       </div>
     </div>
   );
 }
 
+function UIDesignBlockerCard({ blocker }: { blocker: NonNullable<RuntimeResolvedViewPlan['blockedDesign']> }) {
+  return (
+    <div className="ui-design-blocker">
+      <Badge variant="warning">blocked-awaiting-ui-design</Badge>
+      <strong>需要先设计并发布一个 UI 模块</strong>
+      <p>{blocker.reason}</p>
+      <div className="slot-meta">
+        <code>{blocker.requiredModuleCapability}</code>
+        {blocker.resumeRunId ? <code>resumeRunId={blocker.resumeRunId}</code> : null}
+      </div>
+    </div>
+  );
+}
+
+function UIDesignStudioPanel({ viewPlan }: { viewPlan: RuntimeResolvedViewPlan }) {
+  const moduleRows = uiModuleRegistry.map((module) => ({
+    moduleId: `${module.moduleId}@${module.version}`,
+    component: module.componentId,
+    accepts: module.acceptsArtifactTypes.join(', '),
+    lifecycle: module.lifecycle,
+    section: module.defaultSection ?? 'supporting',
+  }));
+  return (
+    <div className="stack">
+      <SectionHeader icon={Sparkles} title="UI Design Studio" subtitle="先设计模块，运行期只组合和绑定已发布能力" />
+      {viewPlan.blockedDesign ? <UIDesignBlockerCard blocker={viewPlan.blockedDesign} /> : (
+        <div className="ui-design-blocker ready">
+          <Badge variant="success">module match ready</Badge>
+          <strong>当前展示需求可由已发布 UI modules 满足</strong>
+          <p>Runtime View Planner 已完成模块匹配；如果用户提出新展示方式，可在这里沉淀为 View Preset 或新 UI Module。</p>
+        </div>
+      )}
+      <div className="ui-module-package-preview">
+        <div>
+          <Badge variant="muted">UI Module Package Contract</Badge>
+          <pre>{[
+            'ui-module/',
+            '  module.json',
+            '  artifact.schema.json',
+            '  view.schema.json',
+            '  interactions.json',
+            '  renderer',
+            '  fixtures/',
+            '  tests.json',
+            '  preview.md',
+          ].join('\n')}</pre>
+        </div>
+        <div>
+          <Badge variant="info">DisplayIntent</Badge>
+          <pre>{JSON.stringify(viewPlan.displayIntent, null, 2)}</pre>
+        </div>
+      </div>
+      <DataPreviewTable rows={moduleRows} />
+    </div>
+  );
+}
+
+function viewPlanSectionLabel(section: ViewPlanSection) {
+  if (section === 'primary') return '核心结果';
+  if (section === 'supporting') return '支撑证据';
+  if (section === 'provenance') return '执行记录';
+  return '原始数据 / fallback';
+}
+
+function selectDefaultResultItems(items: ResolvedViewPlanItem[], focusMode: ResultFocusMode) {
+  const sorted = [...items].sort(resultPresentationRank);
+  if (focusMode === 'evidence' || focusMode === 'execution') {
+    const visibleItems: ResolvedViewPlanItem[] = [];
+    pushUniqueVisibleItems(visibleItems, sorted, 4);
+    const visibleIds = new Set(visibleItems.map((item) => item.id));
+    return {
+      visibleItems,
+      deferredItems: sorted.filter((item) => !visibleIds.has(item.id)),
+    };
+  }
+  const primary = sorted.filter((item) => item.section === 'primary');
+  const usefulPrimary = primary.filter((item) => item.status === 'bound' || item.status === 'missing-fields');
+  const visibleItems: ResolvedViewPlanItem[] = [];
+  pushUniqueVisibleItems(visibleItems, usefulPrimary.length ? usefulPrimary : primary, 2);
+  if (visibleItems.length < 2) {
+    const visibleIds = new Set(visibleItems.map((item) => item.id));
+    pushUniqueVisibleItems(
+      visibleItems,
+      sorted.filter((item) => !visibleIds.has(item.id) && item.section === 'supporting' && item.status === 'bound'),
+      2,
+    );
+  }
+  if (!visibleItems.length) visibleItems.push(...sorted.slice(0, 1));
+  const visibleIds = new Set(visibleItems.map((item) => item.id));
+  return {
+    visibleItems,
+    deferredItems: items.filter((item) => !visibleIds.has(item.id)),
+  };
+}
+
+function pushUniqueVisibleItems(target: ResolvedViewPlanItem[], candidates: ResolvedViewPlanItem[], limit: number) {
+  const visibleKeys = new Set(target.map(visiblePresentationGroupKey));
+  for (const item of candidates) {
+    if (target.length >= limit) break;
+    const key = visiblePresentationGroupKey(item);
+    if (visibleKeys.has(key)) continue;
+    visibleKeys.add(key);
+    target.push(item);
+  }
+}
+
+function visiblePresentationGroupKey(item: ResolvedViewPlanItem) {
+  return `${item.section}:${item.module.componentId}`;
+}
+
+function resultPresentationRank(left: ResolvedViewPlanItem, right: ResolvedViewPlanItem) {
+  const sectionDelta = sectionRank(left.section) - sectionRank(right.section);
+  if (sectionDelta) return sectionDelta;
+  const statusDelta = resultStatusRank(left.status) - resultStatusRank(right.status);
+  if (statusDelta) return statusDelta;
+  const componentDelta = resultComponentRank(left.module.componentId) - resultComponentRank(right.module.componentId);
+  if (componentDelta) return componentDelta;
+  return (left.slot.priority ?? left.module.priority ?? 99) - (right.slot.priority ?? right.module.priority ?? 99);
+}
+
+function resultStatusRank(status: ResolvedViewPlanItem['status']) {
+  if (status === 'bound') return 0;
+  if (status === 'missing-fields') return 1;
+  if (status === 'fallback') return 2;
+  return 3;
+}
+
+function resultComponentRank(componentId: string) {
+  const order = ['report-viewer', 'molecule-viewer', 'evidence-matrix', 'paper-card-list', 'network-graph', 'data-table', 'execution-unit-table', 'notebook-timeline', 'unknown-artifact-inspector'];
+  const index = order.indexOf(componentId);
+  return index === -1 ? 99 : index;
+}
+
+function ResultItemsSection({
+  title,
+  items,
+  scenarioId,
+  session,
+  onArtifactHandoff,
+  onInspectArtifact,
+}: {
+  title: string;
+  items: ResolvedViewPlanItem[];
+  scenarioId: ScenarioId;
+  session: BioAgentSession;
+  onArtifactHandoff: (targetScenario: ScenarioId, artifact: RuntimeArtifact) => void;
+  onInspectArtifact: (artifact: RuntimeArtifact) => void;
+}) {
+  if (!items.length) return null;
+  return (
+    <section className="view-plan-section">
+      <div className="view-plan-section-head">
+        <span>{title}</span>
+        <Badge variant="muted">{items.length}</Badge>
+      </div>
+      <div className="registry-grid">
+        {items.map((item) => (
+          <RegistrySlot
+            key={item.id}
+            scenarioId={scenarioId}
+            session={session}
+            item={item}
+            onArtifactHandoff={onArtifactHandoff}
+            onInspectArtifact={onInspectArtifact}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DataPreviewTable({ rows }: { rows: Record<string, unknown>[] }) {
+  const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 8);
+  if (!rows.length || !columns.length) return <p className="empty-state">没有可展示 rows。</p>;
+  return (
+    <div className="data-preview-table">
+      <table>
+        <thead>
+          <tr>{columns.map((column) => <th key={column}>{humanizeKey(column)}</th>)}</tr>
+        </thead>
+        <tbody>
+          {rows.slice(0, 12).map((row, index) => (
+            <tr key={index}>
+              {columns.map((column) => <td key={column}>{compactParams(formatCellValue(row[column]))}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function formatCellValue(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.map(formatCellValue).join(', ');
+  if (isRecord(value)) return JSON.stringify(value);
+  return '';
+}
+
 function RegistrySlot({
   scenarioId,
   session,
-  slot,
+  item,
   onArtifactHandoff,
   onInspectArtifact,
 }: {
   scenarioId: ScenarioId;
   session: BioAgentSession;
-  slot: UIManifestSlot;
+  item: ResolvedViewPlanItem;
   onArtifactHandoff: (targetScenario: ScenarioId, artifact: RuntimeArtifact) => void;
   onInspectArtifact: (artifact: RuntimeArtifact) => void;
 }) {
   const [handoffPreviewTarget, setHandoffPreviewTarget] = useState<ScenarioId | undefined>();
-  const artifact = findArtifact(session, slot.artifactRef);
+  const { slot, module } = item;
+  const artifact = item.artifact ?? findArtifact(session, slot.artifactRef);
   const entry = componentRegistry[slot.componentId];
   const handoffTargets = artifact ? handoffTargetsForArtifact(artifact, scenarioId) : [];
   if (!entry) {
@@ -4756,15 +5832,13 @@ function RegistrySlot({
     );
   }
   return (
-    <Card className="registry-slot">
-      <SectionHeader icon={Target} title={slot.title ?? entry.label} subtitle={`${slot.componentId}${slot.artifactRef ? ` -> ${slot.artifactRef}` : ''}`} />
-      {viewCompositionSummary(slot) ? <div className="composition-strip"><code>{viewCompositionSummary(slot)}</code></div> : null}
-      {slot.artifactRef && !artifact ? <p className="empty-state">artifactRef 未找到，组件保持 empty state，不使用 demo 数据。</p> : null}
+    <Card className={cx('registry-slot', item.section === 'primary' && 'primary-slot')}>
+      <SectionHeader icon={Target} title={slot.title ?? entry.label} subtitle={resultSlotSubtitle(item, artifact)} />
       {artifact ? (
         <div className="artifact-card-actions">
           <button type="button" onClick={() => onInspectArtifact(artifact)}>
             <Eye size={13} />
-            检查 artifact
+            查看数据
           </button>
         </div>
       ) : null}
@@ -4795,11 +5869,11 @@ function RegistrySlot({
   );
 }
 
-function slotMatchesFocusMode(slot: UIManifestSlot, focusMode: ResultFocusMode) {
-  if (focusMode === 'all') return true;
-  if (focusMode === 'evidence') return slot.componentId === 'evidence-matrix' || slot.artifactRef === 'evidence-matrix';
-  if (focusMode === 'execution') return slot.componentId === 'execution-unit-table' || slot.artifactRef === 'execution-unit';
-  return ['molecule-viewer', 'volcano-plot', 'heatmap-viewer', 'umap-viewer', 'network-graph'].includes(slot.componentId);
+function resultSlotSubtitle(item: ResolvedViewPlanItem, artifact?: RuntimeArtifact) {
+  if (artifact) return `${artifact.type} · ${artifact.id}`;
+  if (item.status === 'missing-fields') return `数据字段不完整 · ${item.slot.artifactRef ?? item.module.componentId}`;
+  if (item.status === 'missing-artifact') return `等待 ${item.slot.artifactRef ?? item.module.acceptsArtifactTypes[0] ?? 'artifact'}`;
+  return item.module.title;
 }
 
 function HandoffPreview({
@@ -4953,12 +6027,12 @@ function handoffTargetsForArtifact(artifact: RuntimeArtifact, currentScenarioId:
     .filter((target) => target !== currentScenarioId);
 }
 
-function ManifestDiagnostics({ slots }: { slots: Array<{ componentId: string; title?: string; artifactRef?: string }> }) {
+function ManifestDiagnostics({ items }: { items: ResolvedViewPlanItem[] }) {
   return (
     <div className="manifest-diagnostics">
-      {slots.map((slot) => (
-        <code key={`${slot.componentId}-${slot.artifactRef ?? slot.title ?? ''}`}>
-          {slot.componentId}{slot.artifactRef ? ` -> ${slot.artifactRef}` : ''}
+      {items.map((item) => (
+        <code key={item.id} title={item.reason ?? item.module.description}>
+          {item.module.moduleId}{item.artifact ? ` -> ${item.artifact.type}` : ''}
         </code>
       ))}
     </div>

@@ -2388,6 +2388,155 @@ code,
   background: rgba(78, 205, 196, 0.09);
 }
 
+.view-plan-summary,
+.ui-design-blocker,
+.ui-module-package-preview {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(46, 61, 85, 0.7);
+  border-radius: 8px;
+  background: rgba(10, 15, 26, 0.55);
+}
+
+.view-plan-summary {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.view-plan-summary strong,
+.ui-design-blocker strong {
+  display: block;
+  margin-top: 6px;
+  color: var(--bio-50);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.view-plan-summary span,
+.ui-design-blocker p {
+  color: var(--bio-300);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.view-plan-pills,
+.ui-module-binding {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.view-plan-pills code,
+.ui-module-binding code {
+  color: var(--teal);
+  font-size: 10px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: rgba(78, 205, 196, 0.09);
+}
+
+.view-plan-debug,
+.slot-diagnostics,
+.empty-recover-details,
+.result-details-panel {
+  min-width: 0;
+}
+
+.view-plan-debug summary,
+.slot-diagnostics summary,
+.empty-recover-details summary,
+.result-details-panel > summary {
+  cursor: pointer;
+  color: var(--bio-300);
+  font-size: 11px;
+  font-weight: 800;
+  list-style-position: inside;
+}
+
+.view-plan-debug[open] summary,
+.slot-diagnostics[open] summary,
+.empty-recover-details[open] summary,
+.result-details-panel[open] > summary {
+  margin-bottom: 8px;
+  color: var(--bio-100);
+}
+
+.view-plan-debug .view-plan-pills,
+.slot-diagnostics .ui-module-binding {
+  margin-top: 8px;
+}
+
+.result-details-panel {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(46, 61, 85, 0.65);
+  border-radius: 8px;
+  background: rgba(7, 10, 18, 0.42);
+}
+
+.result-details-panel > summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.result-details-panel[open] {
+  background: rgba(10, 15, 26, 0.55);
+}
+
+.result-diagnostics-block {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(46, 61, 85, 0.55);
+}
+
+.ui-design-blocker {
+  border-color: rgba(255, 193, 7, 0.38);
+  background: rgba(255, 193, 7, 0.08);
+}
+
+.ui-design-blocker.ready {
+  border-color: rgba(0, 229, 160, 0.28);
+  background: rgba(0, 229, 160, 0.07);
+}
+
+.ui-module-package-preview {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.ui-module-package-preview pre {
+  max-height: 240px;
+  margin: 8px 0 0;
+  padding: 10px;
+  overflow: auto;
+  color: var(--bio-100);
+  background: rgba(5, 8, 16, 0.65);
+  border: 1px solid rgba(46, 61, 85, 0.55);
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.view-plan-section {
+  display: grid;
+  gap: 10px;
+}
+
+.view-plan-section-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  color: var(--bio-100);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
 .registry-grid {
   display: grid;
   gap: 14px;
@@ -2395,11 +2544,15 @@ code,
 
 .registry-slot {
   min-width: 0;
-  min-height: 180px;
+  min-height: 120px;
   max-width: 100%;
   overflow: auto;
   padding: 14px;
-  resize: both;
+}
+
+.registry-slot.primary-slot {
+  border-color: rgba(0, 229, 160, 0.35);
+  box-shadow: 0 0 0 1px rgba(0, 229, 160, 0.08);
 }
 
 .slot-meta {
@@ -2439,6 +2592,45 @@ code,
   border: 1px dashed rgba(123, 147, 176, 0.42);
   border-radius: 8px;
   background: rgba(5, 8, 16, 0.28);
+}
+
+.structure-html-preview {
+  display: grid;
+  gap: 10px;
+}
+
+.structure-html-preview iframe {
+  width: 100%;
+  min-height: 420px;
+  border: 1px solid rgba(46, 61, 85, 0.64);
+  border-radius: 8px;
+  background: #050810;
+}
+
+.data-preview-table {
+  overflow: auto;
+  border: 1px solid rgba(46, 61, 85, 0.58);
+  border-radius: 8px;
+}
+
+.data-preview-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.data-preview-table th,
+.data-preview-table td {
+  padding: 8px 9px;
+  border-bottom: 1px solid rgba(46, 61, 85, 0.36);
+  color: var(--bio-200);
+  text-align: left;
+  vertical-align: top;
+}
+
+.data-preview-table th {
+  color: var(--bio-50);
+  background: rgba(46, 61, 85, 0.22);
 }
 
 .empty-runtime-state strong {

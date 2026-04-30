@@ -158,6 +158,7 @@ function summarizeArtifacts(artifacts: RuntimeArtifact[]) {
     schemaVersion: artifact.schemaVersion,
     metadata: artifact.metadata,
     dataRef: artifact.dataRef,
+    path: artifact.path,
     dataPreview: previewArtifactData(artifact.data),
   }));
 }
@@ -560,6 +561,7 @@ export function normalizeAgentResponse(
         metadata: isRecord(artifact.metadata) ? artifact.metadata : undefined,
         data: normalizeArtifactData(artifactType, artifact),
         dataRef: asString(artifact.dataRef),
+        path: asString(artifact.path),
         visibility: asTimelineVisibility(artifact.visibility),
         audience: asStringArray(artifact.audience),
         sensitiveDataFlags: asStringArray(artifact.sensitiveDataFlags),
