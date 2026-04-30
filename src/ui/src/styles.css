@@ -2439,6 +2439,34 @@ code,
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
+.ui-design-contract-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 0.7fr);
+  gap: 12px;
+}
+
+.ui-design-lifecycle {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(46, 61, 85, 0.7);
+  border-radius: 8px;
+  background: rgba(10, 15, 26, 0.55);
+}
+
+.ui-design-lifecycle span {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.ui-design-lifecycle small {
+  color: var(--bio-300);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .ui-module-package-preview pre {
   max-height: 240px;
   margin: 8px 0 0;
@@ -3018,6 +3046,48 @@ code,
   margin-top: 8px;
 }
 
+.object-reference-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.object-reference-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  max-width: 260px;
+  padding: 0 8px;
+  color: var(--bio-200);
+  background: rgba(78, 205, 196, 0.08);
+  border: 1px solid rgba(78, 205, 196, 0.2);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.object-reference-chip.active {
+  color: var(--accent);
+  border-color: rgba(0, 229, 160, 0.45);
+  background: rgba(0, 229, 160, 0.1);
+}
+
+.object-reference-chip span {
+  color: var(--teal);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.object-reference-chip strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .message-actions button,
 .message-editor button {
   min-height: 24px;
@@ -3548,6 +3618,85 @@ code,
   margin-top: 3px;
   color: var(--bio-300);
   font-size: 11px;
+}
+
+.object-focus-banner {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid rgba(78, 205, 196, 0.3);
+  border-radius: var(--radius);
+  background: rgba(78, 205, 196, 0.07);
+}
+
+.object-focus-banner strong,
+.object-focus-banner > div:first-child > span:not(.badge) {
+  display: block;
+}
+
+.object-focus-banner strong {
+  margin-top: 6px;
+  color: var(--bio-50);
+  font-size: 14px;
+}
+
+.object-focus-banner > div:first-child > span:not(.badge) {
+  margin-top: 3px;
+  color: var(--bio-300);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.object-focus-actions,
+.pinned-object-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+}
+
+.object-focus-actions button {
+  min-height: 28px;
+  padding: 0 9px;
+  color: var(--bio-100);
+  background: rgba(5, 8, 16, 0.5);
+  border: 1px solid rgba(46, 61, 85, 0.68);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.object-focus-actions button:hover {
+  color: var(--accent);
+  border-color: rgba(0, 229, 160, 0.35);
+}
+
+.pinned-object-row span {
+  color: var(--bio-400);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.pinned-object-row code {
+  color: var(--teal);
+  font-size: 10px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: rgba(5, 8, 16, 0.45);
+}
+
+.object-action-error {
+  margin: 0;
+  padding: 9px 10px;
+  color: #ffd2c2;
+  background: rgba(255, 112, 67, 0.09);
+  border: 1px solid rgba(255, 112, 67, 0.28);
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .stack {

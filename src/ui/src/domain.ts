@@ -6,6 +6,40 @@ export type ScenarioInstanceId = ScenarioId | (string & {});
 export type MessageRole = 'user' | 'scenario' | 'system';
 export type RunStatus = 'idle' | 'running' | 'completed' | 'failed';
 export type ExecutionUnitStatus = 'planned' | 'running' | 'done' | 'failed' | 'record-only' | 'repair-needed' | 'self-healed' | 'failed-with-reason';
+export type ObjectReferenceKind = 'artifact' | 'file' | 'folder' | 'run' | 'execution-unit' | 'url' | 'scenario-package';
+export type ObjectReferenceStatus = 'available' | 'missing' | 'expired' | 'blocked' | 'external';
+export type ObjectAction = 'focus-right-pane' | 'inspect' | 'open-external' | 'reveal-in-folder' | 'copy-path' | 'pin' | 'compare';
+
+export interface ObjectReference {
+  id: string;
+  title: string;
+  kind: ObjectReferenceKind;
+  ref: string;
+  artifactType?: string;
+  runId?: string;
+  executionUnitId?: string;
+  preferredView?: string;
+  actions?: ObjectAction[];
+  status?: ObjectReferenceStatus;
+  summary?: string;
+  provenance?: {
+    dataRef?: string;
+    path?: string;
+    producer?: string;
+    version?: string;
+    hash?: string;
+    size?: number;
+  };
+}
+
+export interface ObjectResolution {
+  reference: ObjectReference;
+  status: 'resolved' | 'missing' | 'blocked';
+  artifact?: RuntimeArtifact;
+  path?: string;
+  reason?: string;
+  actions: ObjectAction[];
+}
 
 export interface BioAgentMessage {
   id: string;
@@ -19,6 +53,7 @@ export interface BioAgentMessage {
   updatedAt?: string;
   status?: RunStatus;
   tokenUsage?: AgentTokenUsage;
+  objectReferences?: ObjectReference[];
 }
 
 export interface SessionVersionRecord {
@@ -336,6 +371,7 @@ export interface BioAgentRun {
   createdAt: string;
   completedAt?: string;
   raw?: unknown;
+  objectReferences?: ObjectReference[];
 }
 
 export interface BioAgentSession {

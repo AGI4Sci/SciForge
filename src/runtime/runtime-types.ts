@@ -82,6 +82,8 @@ export interface ToolPayload {
   executionUnits: Array<Record<string, unknown>>;
   artifacts: Array<Record<string, unknown>>;
   logs?: Array<Record<string, unknown>>;
+  displayIntent?: Record<string, unknown>;
+  objectReferences?: Array<Record<string, unknown>>;
 }
 
 export interface WorkspaceTaskSpec {

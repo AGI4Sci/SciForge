@@ -22,6 +22,14 @@ export interface WorkspaceFileContent {
   language: string;
 }
 
+export interface WorkspaceOpenResult {
+  ok: boolean;
+  action: 'open-external' | 'reveal-in-folder' | 'copy-path';
+  path: string;
+  workspacePath: string;
+  dryRun?: boolean;
+}
+
 export interface WorkspaceScenarioListItem {
   id: string;
   version: string;
@@ -222,6 +230,25 @@ export async function mutateWorkspaceFile(
     body: JSON.stringify({ action, ...payload }),
   });
   if (!response.ok) throw new Error(await workspaceResponseError(response, `File action failed: HTTP ${response.status}`));
+}
+
+export async function openWorkspaceObject(
+  config: BioAgentConfig,
+  action: WorkspaceOpenResult['action'],
+  path: string,
+  workspacePath = config.workspacePath,
+): Promise<WorkspaceOpenResult> {
+  const response = await fetchWorkspace(config, `${action} workspace object`, `${config.workspaceWriterBaseUrl}/api/bioagent/workspace/open`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspacePath, action, path }),
+  });
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `${action} failed: HTTP ${response.status}`));
+  const json = await response.json() as Partial<WorkspaceOpenResult>;
+  if (!json.ok || typeof json.path !== 'string' || json.action !== action || typeof json.workspacePath !== 'string') {
+    throw new Error(`Workspace open returned invalid payload for ${path}.`);
+  }
+  return json as WorkspaceOpenResult;
 }
 
 export async function listWorkspaceScenarios(config: BioAgentConfig, workspacePath = config.workspacePath): Promise<WorkspaceScenarioListItem[]> {

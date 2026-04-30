@@ -1924,7 +1924,7 @@ async function buildCompactRepairContext(params: {
       runtimeRole: 'scenario-first AI4Science workspace runtime',
       taskCodePolicy: 'Generated tasks live in workspace .bioagent/tasks and must be runnable from inputPath/outputPath.',
       completionPolicy: 'The final user-visible result must come from executing the repaired task and writing a valid ToolPayload, not from code generation alone.',
-      toolPayloadContract: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'uiManifest', 'executionUnits', 'artifacts'],
+      toolPayloadContract: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'displayIntent', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'],
     },
     currentGoal: {
       currentUserRequest: clipForAgentServerPrompt(currentUserRequestText(params.request.prompt), 4000),
@@ -2056,7 +2056,7 @@ function buildAgentServerRepairPrompt(params: {
     '',
     JSON.stringify({
       repairContext: params.repairContext,
-      expectedPayloadKeys: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'uiManifest', 'executionUnits', 'artifacts'],
+      expectedPayloadKeys: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'displayIntent', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'],
     }, null, 2),
     '',
     'Return a concise summary of files changed, tests or commands run, and any remaining blocker.',
@@ -2099,6 +2099,8 @@ function buildAgentServerGenerationPrompt(request: {
     'Hard contract: entrypoint.path MUST reference one of the returned taskFiles or a file that was physically written in the workspace before returning.',
     'If you physically write task files into the workspace, prefer a compact path-only taskFiles object (path + language, content may be omitted/empty) and return JSON immediately. Do not cat/read full generated source back into the final response just to inline it.',
     'Final output must be only compact JSON: either AgentServerGenerationResponse or BioAgent ToolPayload.',
+    'When returning a BioAgent ToolPayload, use displayIntent to describe the user-visible view need, and objectReferences to cite key artifacts/files/runs that the user can click on demand.',
+    'objectReferences refs must use controlled prefixes: artifact:*, file:*, folder:*, run:*, execution-unit:*, scenario-package:*, or url:*.',
     request.strictTaskFilesReason
       ? `Strict retry reason: ${request.strictTaskFilesReason}`
       : '',
@@ -2116,7 +2118,7 @@ function buildAgentServerGenerationPrompt(request: {
       ...request,
       taskContract: {
         argv: ['inputPath', 'outputPath'],
-        outputPayloadKeys: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'uiManifest', 'executionUnits', 'artifacts'],
+        outputPayloadKeys: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'displayIntent', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'],
       },
     }), null, 2),
   ].join('\n');
@@ -2342,7 +2344,7 @@ function buildContextEnvelope(
       project: 'BioAgent',
       runtimeRole: 'scenario-first AI4Science workspace runtime',
       taskCodePolicy: 'Generate or repair task code in the active workspace; do not rely on fixed source-tree scientific task scripts.',
-      toolPayloadContract: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'uiManifest', 'executionUnits', 'artifacts'],
+      toolPayloadContract: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'displayIntent', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'],
     } : {
       project: 'BioAgent',
       taskCodePolicyRef: 'bioagent.generated-task.v1',
@@ -3024,6 +3026,8 @@ function normalizeToolPayloadShape(payload: ToolPayload): ToolPayload {
     ...payload,
     executionUnits: normalizeAgentServerExecutionUnits(payload.executionUnits),
     artifacts: normalizeAgentServerArtifacts(payload.artifacts, payload.message),
+    objectReferences: Array.isArray(payload.objectReferences) ? payload.objectReferences.filter(isRecord) : undefined,
+    displayIntent: isRecord(payload.displayIntent) ? payload.displayIntent : undefined,
   };
 }
 
@@ -3049,6 +3053,8 @@ function normalizeAgentServerToolPayloadCandidate(value: unknown, depth = 0): un
   const claims = normalizeAgentServerClaims(value.claims, message);
   const uiManifest = normalizeAgentServerUiManifest(value.uiManifest, artifacts);
   const executionUnits = normalizeAgentServerExecutionUnits(value.executionUnits);
+  const objectReferences = Array.isArray(value.objectReferences) ? value.objectReferences.filter(isRecord) : undefined;
+  const displayIntent = isRecord(value.displayIntent) ? value.displayIntent : undefined;
 
   if (!message || !claims.length || !uiManifest.length) return undefined;
   return {
@@ -3061,6 +3067,8 @@ function normalizeAgentServerToolPayloadCandidate(value: unknown, depth = 0): un
     uiManifest,
     executionUnits,
     artifacts,
+    displayIntent,
+    objectReferences,
   };
 }
 

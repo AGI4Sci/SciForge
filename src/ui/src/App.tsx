@@ -77,6 +77,8 @@ import {
   type EvidenceClaim,
   type NotebookRecord,
   type NormalizedAgentResponse,
+  type ObjectAction,
+  type ObjectReference,
   type ResolvedViewPlan,
   type RuntimeArtifact,
   type RuntimeExecutionUnit,
@@ -103,6 +105,7 @@ import {
   loadScenarioLibrary,
   loadWorkspaceScenario,
   mutateWorkspaceFile,
+  openWorkspaceObject,
   persistWorkspaceState,
   publishWorkspaceScenario,
   rejectSkillPromotionProposal,
@@ -117,6 +120,7 @@ import {
   type WorkspaceEntry,
   type WorkspaceFileContent,
 } from './api/workspaceClient';
+import { runtimeContractSchemas, schemaPreview, validateRuntimeContract } from './runtimeContracts';
 import { HeatmapViewer, MoleculeViewer, NetworkGraph, UmapViewer } from './visualizations';
 
 const chartTheme = {
@@ -478,6 +482,68 @@ function findArtifact(session: BioAgentSession, ref?: string): RuntimeArtifact |
     || artifact.type === ref
     || artifact.type === normalizedRef
     || Object.values(artifact.metadata ?? {}).some((value) => value === ref));
+}
+
+function artifactForObjectReference(reference: ObjectReference, session: BioAgentSession): RuntimeArtifact | undefined {
+  if (reference.kind !== 'artifact') return undefined;
+  return findArtifact(session, reference.ref)
+    ?? findArtifact(session, reference.artifactType)
+    ?? session.artifacts.find((artifact) => artifact.id === reference.id || artifact.type === reference.artifactType);
+}
+
+function pathForObjectReference(reference: ObjectReference, session: BioAgentSession): string | undefined {
+  const artifact = artifactForObjectReference(reference, session);
+  if (artifact) {
+    return artifact.path
+      || asString(artifact.metadata?.path)
+      || asString(artifact.metadata?.filePath)
+      || asString(artifact.metadata?.localPath)
+      || asString(artifact.dataRef)
+      || reference.provenance?.path
+      || reference.provenance?.dataRef;
+  }
+  if (reference.kind === 'file' || reference.kind === 'folder') return reference.ref.replace(/^(file|folder):/i, '');
+  return reference.provenance?.path || reference.provenance?.dataRef;
+}
+
+function syntheticArtifactForObjectReference(reference: ObjectReference, scenarioId: ScenarioInstanceId): RuntimeArtifact | undefined {
+  if (reference.kind !== 'file' && reference.kind !== 'folder' && reference.kind !== 'url') return undefined;
+  const path = reference.ref.replace(/^(file|folder|url):/i, '');
+  return {
+    id: reference.id,
+    type: reference.kind === 'url' ? 'external-url' : artifactTypeForPath(path, reference.kind),
+    producerScenario: scenarioId,
+    schemaVersion: '1',
+    metadata: {
+      title: reference.title,
+      objectReferenceId: reference.id,
+      path: reference.kind === 'url' ? undefined : path,
+      url: reference.kind === 'url' ? path : undefined,
+      synthetic: true,
+    },
+    path: reference.kind === 'url' ? undefined : path,
+    dataRef: reference.kind === 'url' || reference.kind === 'file' ? path : undefined,
+    data: {
+      title: reference.title,
+      ref: reference.ref,
+      summary: reference.summary,
+      path: reference.kind === 'url' ? undefined : path,
+      url: reference.kind === 'url' ? path : undefined,
+    },
+  };
+}
+
+function artifactTypeForPath(path: string, kind: ObjectReference['kind']) {
+  if (kind === 'folder') return 'workspace-folder';
+  if (/\.md$/i.test(path)) return 'research-report';
+  if (/\.pdf$/i.test(path)) return 'pdf-document';
+  if (/\.(docx?|rtf)$/i.test(path)) return 'word-document';
+  if (/\.(pptx?|key)$/i.test(path)) return 'slide-deck';
+  if (/\.(png|jpe?g|gif|webp|svg)$/i.test(path)) return 'image';
+  if (/\.(csv|tsv|xlsx?)$/i.test(path)) return 'data-table';
+  if (/\.(pdb|cif|mmcif)$/i.test(path)) return 'structure-summary';
+  if (/\.html?$/i.test(path)) return 'html-document';
+  return 'workspace-file';
 }
 
 function exportJsonFile(name: string, payload: unknown) {
@@ -2282,6 +2348,7 @@ function ChatPanel({
   activeRunId,
   onActiveRunChange,
   onMarkReusableRun,
+  onObjectFocus,
 }: {
   scenarioId: ScenarioInstanceId;
   role: string;
@@ -2307,6 +2374,7 @@ function ChatPanel({
   activeRunId?: string;
   onActiveRunChange: (runId: string | undefined) => void;
   onMarkReusableRun: (runId: string) => void;
+  onObjectFocus: (reference: ObjectReference) => void;
 }) {
   const [expanded, setExpanded] = useState<number | null>(0);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -2751,6 +2819,13 @@ function ChatPanel({
               ) : (
                 <p>{message.content}</p>
               )}
+              {message.objectReferences?.length ? (
+                <ObjectReferenceChips
+                  references={message.objectReferences}
+                  activeRunId={activeRunId}
+                  onFocus={onObjectFocus}
+                />
+              ) : null}
               {message.status === 'failed' ? (
                 <FailureRecoveryCard
                   message={message.content}
@@ -2976,6 +3051,58 @@ function runIdForMessage(
 
 function normalizeRunPrompt(value: string) {
   return value.replace(/^运行中引导：/, '').trim();
+}
+
+function ObjectReferenceChips({
+  references,
+  activeRunId,
+  onFocus,
+}: {
+  references: ObjectReference[];
+  activeRunId?: string;
+  onFocus: (reference: ObjectReference) => void;
+}) {
+  const visible = references.slice(0, 8);
+  const hidden = Math.max(0, references.length - visible.length);
+  return (
+    <div className="object-reference-strip" aria-label="回答中引用的对象">
+      {visible.map((reference) => (
+        <button
+          type="button"
+          key={reference.id}
+          className={cx('object-reference-chip', activeRunId && reference.runId === activeRunId && 'active')}
+          onClick={() => onFocus(reference)}
+          title={reference.summary || reference.ref}
+          data-tooltip={`${objectReferenceKindLabel(reference.kind)} · ${reference.ref}`}
+        >
+          <span>{objectReferenceIcon(reference.kind)}</span>
+          <strong>{reference.title}</strong>
+          {reference.status && reference.status !== 'available' ? <Badge variant={reference.status === 'blocked' ? 'danger' : 'warning'}>{reference.status}</Badge> : null}
+        </button>
+      ))}
+      {hidden ? <Badge variant="muted">+{hidden} objects</Badge> : null}
+    </div>
+  );
+}
+
+function objectReferenceKindLabel(kind: ObjectReference['kind']) {
+  if (kind === 'artifact') return 'artifact';
+  if (kind === 'file') return 'file';
+  if (kind === 'folder') return 'folder';
+  if (kind === 'run') return 'run';
+  if (kind === 'execution-unit') return 'execution unit';
+  if (kind === 'scenario-package') return 'scenario package';
+  return 'url';
+}
+
+function objectReferenceIcon(kind: ObjectReference['kind']) {
+  if (kind === 'folder') return 'folder';
+  if (kind === 'file') return 'file';
+  if (kind === 'run') return 'run';
+  if (kind === 'execution-unit') return 'EU';
+  if (kind === 'url') return 'link';
+  if (kind === 'scenario-package') return 'pkg';
+  return 'obj';
 }
 
 function latestRunningEvent(events: AgentStreamEvent[]) {
@@ -3348,6 +3475,7 @@ function volcanoPointsFromPayload(payload: Record<string, unknown>, colorField?:
 
 function ResultsRenderer({
   scenarioId,
+  config,
   session,
   defaultSlots,
   onArtifactHandoff,
@@ -3355,8 +3483,11 @@ function ResultsRenderer({
   onToggleCollapse,
   activeRunId,
   onActiveRunChange,
+  focusedObjectReference,
+  onFocusedObjectChange,
 }: {
   scenarioId: ScenarioId;
+  config: BioAgentConfig;
   session: BioAgentSession;
   defaultSlots: UIManifestSlot[];
   onArtifactHandoff: (targetScenario: ScenarioId, artifact: RuntimeArtifact) => void;
@@ -3364,10 +3495,14 @@ function ResultsRenderer({
   onToggleCollapse: () => void;
   activeRunId?: string;
   onActiveRunChange: (runId: string | undefined) => void;
+  focusedObjectReference?: ObjectReference;
+  onFocusedObjectChange: (reference: ObjectReference | undefined) => void;
 }) {
   const [resultTab, setResultTab] = useState('primary');
   const [focusMode, setFocusMode] = useState<ResultFocusMode>('all');
   const [inspectedArtifact, setInspectedArtifact] = useState<RuntimeArtifact | undefined>();
+  const [pinnedObjectReferences, setPinnedObjectReferences] = useState<ObjectReference[]>([]);
+  const [objectActionError, setObjectActionError] = useState('');
   const scenario = scenarios.find((item) => item.id === scenarioId) ?? scenarios[0];
   const activeRun = activeRunId ? session.runs.find((run) => run.id === activeRunId) : undefined;
   const viewPlan = useMemo(() => resolveViewPlan({
@@ -3375,7 +3510,9 @@ function ResultsRenderer({
     session,
     defaultSlots,
     activeRun,
-  }), [scenarioId, session, defaultSlots, activeRun]);
+    focusedObjectReference,
+    pinnedObjectReferences,
+  }), [scenarioId, session, defaultSlots, activeRun, focusedObjectReference, pinnedObjectReferences]);
   const tabs = [
     { id: 'primary', label: '结果视图' },
     { id: 'evidence', label: '证据矩阵' },
@@ -3389,6 +3526,53 @@ function ResultsRenderer({
     { id: 'evidence', label: '只看证据' },
     { id: 'execution', label: '只看执行单元' },
   ];
+  const handleObjectAction = async (reference: ObjectReference, action: ObjectAction) => {
+    setObjectActionError('');
+    if (action === 'focus-right-pane') {
+      onFocusedObjectChange(reference);
+      if (reference.runId) onActiveRunChange(reference.runId);
+      setResultTab('primary');
+      return;
+    }
+    if (action === 'inspect') {
+      const artifact = artifactForObjectReference(reference, session);
+      if (artifact) {
+        setInspectedArtifact(artifact);
+      } else {
+        setObjectActionError(`无法解析 artifact：${reference.ref}`);
+      }
+      return;
+    }
+    if (action === 'pin' || action === 'compare') {
+      setPinnedObjectReferences((current) => current.some((item) => item.id === reference.id)
+        ? current.filter((item) => item.id !== reference.id)
+        : [...current, reference].slice(-4));
+      onFocusedObjectChange(reference);
+      setResultTab('primary');
+      return;
+    }
+    if (action === 'copy-path') {
+      const path = pathForObjectReference(reference, session);
+      if (!path) {
+        setObjectActionError(`没有可复制路径：${reference.title}`);
+        return;
+      }
+      await navigator.clipboard?.writeText(path);
+      return;
+    }
+    if (action === 'open-external' || action === 'reveal-in-folder') {
+      const path = pathForObjectReference(reference, session);
+      if (!path) {
+        setObjectActionError(`没有可打开路径：${reference.title}`);
+        return;
+      }
+      try {
+        await openWorkspaceObject(config, action, path);
+      } catch (error) {
+        setObjectActionError(error instanceof Error ? error.message : String(error));
+      }
+    }
+  };
 
   return (
     <div className={cx('results-panel', collapsed && 'collapsed')}>
@@ -3431,6 +3615,18 @@ function ResultsRenderer({
                 </div>
                 <button type="button" onClick={() => onActiveRunChange(undefined)}>取消高亮</button>
               </div>
+            ) : null}
+            {focusedObjectReference ? (
+              <ObjectFocusBanner
+                reference={focusedObjectReference}
+                pinnedReferences={pinnedObjectReferences}
+                actions={availableObjectActions(focusedObjectReference, session)}
+                error={objectActionError}
+                onAction={handleObjectAction}
+                onClear={() => onFocusedObjectChange(undefined)}
+              />
+            ) : objectActionError ? (
+              <div className="object-action-error">{objectActionError}</div>
             ) : null}
             {resultTab === 'primary' ? (
               <PrimaryResult
@@ -3534,6 +3730,7 @@ function Workbench({
   const [settingsExpanded, setSettingsExpanded] = useState(false);
   const [mobilePane, setMobilePane] = useState<'builder' | 'chat' | 'results'>('chat');
   const [activeRunId, setActiveRunId] = useState<string | undefined>();
+  const [focusedObjectReference, setFocusedObjectReference] = useState<ObjectReference | undefined>();
   const [chatColumnWidth, setChatColumnWidth] = useState(42);
   const workbenchResizeRef = useRef<{ startX: number; startWidth: number; gridWidth: number } | null>(null);
   const defaultResultSlots = useMemo(
@@ -3545,6 +3742,13 @@ function Workbench({
       setActiveRunId(undefined);
     }
   }, [activeRunId, session.runs]);
+
+  function handleObjectFocus(reference: ObjectReference) {
+    setFocusedObjectReference(reference);
+    if (reference.runId) setActiveRunId(reference.runId);
+    setResultsCollapsed(false);
+    setMobilePane('results');
+  }
 
   function beginWorkbenchResize(event: React.MouseEvent<HTMLDivElement>) {
     const grid = event.currentTarget.parentElement;
@@ -3645,6 +3849,7 @@ function Workbench({
             activeRunId={activeRunId}
             onActiveRunChange={setActiveRunId}
             onMarkReusableRun={(runId) => onMarkReusableRun(scenarioId, runId)}
+            onObjectFocus={handleObjectFocus}
           />
         </div>
         {!resultsCollapsed ? (
@@ -3660,6 +3865,7 @@ function Workbench({
         <div className={cx('mobile-pane', mobilePane !== 'results' && 'mobile-hidden')}>
           <ResultsRenderer
             scenarioId={baseScenarioId}
+            config={config}
             session={session}
             defaultSlots={defaultResultSlots}
             onArtifactHandoff={onArtifactHandoff}
@@ -3667,6 +3873,8 @@ function Workbench({
             onToggleCollapse={() => setResultsCollapsed((value) => !value)}
             activeRunId={activeRunId}
             onActiveRunChange={setActiveRunId}
+            focusedObjectReference={focusedObjectReference}
+            onFocusedObjectChange={setFocusedObjectReference}
           />
         </div>
       </div>
@@ -4139,7 +4347,7 @@ type RegistryEntry = {
 
 type ResultFocusMode = 'all' | 'visual' | 'evidence' | 'execution';
 
-type ViewPlanSource = 'display-intent' | 'runtime-manifest' | 'artifact-inferred' | 'default-plan' | 'fallback';
+type ViewPlanSource = 'object-focus' | 'display-intent' | 'runtime-manifest' | 'artifact-inferred' | 'default-plan' | 'fallback';
 type ViewPlanBindingStatus = 'bound' | 'missing-artifact' | 'missing-fields' | 'fallback';
 
 type ResolvedViewPlanItem = {
@@ -4174,11 +4382,15 @@ function resolveViewPlan({
   session,
   defaultSlots,
   activeRun,
+  focusedObjectReference,
+  pinnedObjectReferences = [],
 }: {
   scenarioId: ScenarioId;
   session: BioAgentSession;
   defaultSlots?: UIManifestSlot[];
   activeRun?: BioAgentRun;
+  focusedObjectReference?: ObjectReference;
+  pinnedObjectReferences?: ObjectReference[];
 }): RuntimeResolvedViewPlan {
   const displayIntent = extractDisplayIntent(activeRun) ?? inferDisplayIntentFromArtifacts(session, activeRun);
   const runtimeSlots = session.runs.length && session.uiManifest.length ? session.uiManifest : [];
@@ -4210,7 +4422,7 @@ function resolveViewPlan({
       compare: overrides.compare,
     };
     const validation = validateModuleBinding(module, artifact);
-    const section = sectionForModule(module, displayIntent, artifact);
+    const section = source === 'object-focus' ? 'primary' : sectionForModule(module, displayIntent, artifact);
     const id = `${section}-${module.moduleId}-${artifact?.id ?? slot.artifactRef ?? slot.componentId}`;
     if (seen.has(id)) return;
     seen.add(id);
@@ -4226,6 +4438,18 @@ function resolveViewPlan({
       missingFields: validation.missingFields,
     });
   };
+
+  for (const reference of [focusedObjectReference, ...pinnedObjectReferences].filter((item): item is ObjectReference => Boolean(item))) {
+    const artifact = artifactForObjectReference(reference, session) ?? syntheticArtifactForObjectReference(reference, scenarioId);
+    const module = moduleForObjectReference(reference, artifact) ?? (artifact ? findBestModuleForArtifact(artifact) : moduleById('generic-artifact-inspector'));
+    if (module) {
+      addItem(module, artifact, 'object-focus', {
+        title: reference.title,
+        artifactRef: artifact?.id ?? reference.ref,
+        priority: -10,
+      }, reference.summary || `object reference ${reference.ref}`);
+    }
+  }
 
   for (const moduleId of displayIntent.preferredModules ?? []) {
     const module = moduleById(moduleId);
@@ -4372,6 +4596,15 @@ function parseMaybeJsonObject(value: unknown): Record<string, unknown> | undefin
 
 function moduleById(moduleId: string) {
   return uiModuleRegistry.find((module) => module.moduleId === moduleId);
+}
+
+function moduleForObjectReference(reference: ObjectReference, artifact?: RuntimeArtifact) {
+  if (reference.preferredView) {
+    const preferred = uiModuleRegistry.find((module) => module.moduleId === reference.preferredView || module.componentId === reference.preferredView);
+    if (preferred && (!artifact || moduleAcceptsArtifact(preferred, artifact.type))) return preferred;
+  }
+  if (artifact) return findBestModuleForArtifact(artifact);
+  return moduleById('generic-artifact-inspector');
 }
 
 function moduleAcceptsArtifact(module: RuntimeUIModule, artifactType?: string) {
@@ -4656,6 +4889,7 @@ function artifactPresentationPayloadRank(artifact?: RuntimeArtifact) {
 }
 
 function viewPlanSourceRank(source: ViewPlanSource) {
+  if (source === 'object-focus') return -1;
   if (source === 'display-intent') return 0;
   if (source === 'runtime-manifest') return 1;
   if (source === 'artifact-inferred') return 2;
@@ -5473,6 +5707,68 @@ function UIDesignBlockerCard({ blocker }: { blocker: NonNullable<RuntimeResolved
   );
 }
 
+function ObjectFocusBanner({
+  reference,
+  pinnedReferences,
+  actions,
+  error,
+  onAction,
+  onClear,
+}: {
+  reference: ObjectReference;
+  pinnedReferences: ObjectReference[];
+  actions: ObjectAction[];
+  error?: string;
+  onAction: (reference: ObjectReference, action: ObjectAction) => void | Promise<void>;
+  onClear: () => void;
+}) {
+  return (
+    <div className="object-focus-banner">
+      <div>
+        <Badge variant="info">{objectReferenceKindLabel(reference.kind)}</Badge>
+        <strong>{reference.title}</strong>
+        <span>{reference.summary || reference.ref}</span>
+      </div>
+      <div className="object-focus-actions">
+        {actions.slice(0, 6).map((action) => (
+          <button key={action} type="button" onClick={() => void onAction(reference, action)}>
+            {objectActionLabel(action)}
+          </button>
+        ))}
+        <button type="button" onClick={onClear}>清除</button>
+      </div>
+      {pinnedReferences.length ? (
+        <div className="pinned-object-row">
+          <span>pinned</span>
+          {pinnedReferences.map((item) => <code key={item.id}>{item.title}</code>)}
+        </div>
+      ) : null}
+      {error ? <p className="object-action-error">{error}</p> : null}
+    </div>
+  );
+}
+
+function objectActionLabel(action: ObjectAction) {
+  if (action === 'focus-right-pane') return '聚焦';
+  if (action === 'inspect') return '检查数据';
+  if (action === 'open-external') return '系统打开';
+  if (action === 'reveal-in-folder') return '打开文件夹';
+  if (action === 'copy-path') return '复制路径';
+  if (action === 'compare') return '对比';
+  return 'Pin';
+}
+
+function availableObjectActions(reference: ObjectReference, session: BioAgentSession): ObjectAction[] {
+  const declared: ObjectAction[] = reference.actions?.length ? reference.actions : ['focus-right-pane', 'pin'];
+  const path = pathForObjectReference(reference, session);
+  const hasWorkspacePath = Boolean(path && !/^https?:\/\//i.test(path) && !/^agentserver:\/\//i.test(path) && !/^data:/i.test(path));
+  return declared.filter((action) => {
+    if (action === 'open-external' || action === 'reveal-in-folder' || action === 'copy-path') return hasWorkspacePath;
+    if (action === 'inspect') return reference.kind === 'artifact';
+    return true;
+  });
+}
+
 function UIDesignStudioPanel({ viewPlan }: { viewPlan: RuntimeResolvedViewPlan }) {
   const moduleRows = uiModuleRegistry.map((module) => ({
     moduleId: `${module.moduleId}@${module.version}`,
@@ -5480,6 +5776,22 @@ function UIDesignStudioPanel({ viewPlan }: { viewPlan: RuntimeResolvedViewPlan }
     accepts: module.acceptsArtifactTypes.join(', '),
     lifecycle: module.lifecycle,
     section: module.defaultSection ?? 'supporting',
+  }));
+  const displayIntentErrors = validateRuntimeContract('displayIntent', viewPlan.displayIntent);
+  const viewPlanErrors = validateRuntimeContract('resolvedViewPlan', {
+    displayIntent: viewPlan.displayIntent,
+    sections: viewPlan.sections,
+    diagnostics: viewPlan.diagnostics,
+    blockedDesign: viewPlan.blockedDesign,
+  });
+  const contractRows = (Object.keys(runtimeContractSchemas) as Array<keyof typeof runtimeContractSchemas>).map((name) => ({
+    contract: name,
+    status: name === 'displayIntent'
+      ? displayIntentErrors.length ? 'invalid' : 'valid'
+      : name === 'resolvedViewPlan'
+        ? viewPlanErrors.length ? 'invalid' : 'valid'
+        : 'registered',
+    schema: runtimeContractSchemas[name].$id,
   }));
   return (
     <div className="stack">
@@ -5511,9 +5823,39 @@ function UIDesignStudioPanel({ viewPlan }: { viewPlan: RuntimeResolvedViewPlan }
           <pre>{JSON.stringify(viewPlan.displayIntent, null, 2)}</pre>
         </div>
       </div>
+      <div className="ui-design-contract-grid">
+        <div className="ui-design-blocker ready">
+          <Badge variant={displayIntentErrors.length || viewPlanErrors.length ? 'warning' : 'success'}>contract check</Badge>
+          <strong>{displayIntentErrors.length || viewPlanErrors.length ? '当前 view contract 需要修复' : '当前 view contract 可复现'}</strong>
+          <p>{[...displayIntentErrors, ...viewPlanErrors].join('; ') || 'DisplayIntent、ResolvedViewPlan 和 UI Module Package schema 已登记，运行期只做匹配、绑定和 blocker 恢复。'}</p>
+        </div>
+        <div className="ui-design-lifecycle">
+          {['draft', 'validated', 'published', 'deprecated'].map((step) => (
+            <span key={step}>
+              <Badge variant={step === 'published' ? 'success' : 'muted'}>{step}</Badge>
+              <small>{uiDesignLifecycleHint(step)}</small>
+            </span>
+          ))}
+        </div>
+      </div>
+      <details className="view-plan-debug">
+        <summary>查看 runtime contract schemas</summary>
+        <div className="ui-module-package-preview">
+          <pre>{schemaPreview('objectReference')}</pre>
+          <pre>{schemaPreview('resolvedViewPlan')}</pre>
+        </div>
+      </details>
+      <DataPreviewTable rows={contractRows} />
       <DataPreviewTable rows={moduleRows} />
     </div>
   );
+}
+
+function uiDesignLifecycleHint(step: string) {
+  if (step === 'draft') return '对话生成草案，使用 fixture 预览';
+  if (step === 'validated') return '通过 schema、smoke 和安全检查';
+  if (step === 'published') return '运行期可被 View Planner 选择';
+  return '历史可复现，新任务不再默认选择';
 }
 
 function viewPlanSectionLabel(section: ViewPlanSection) {

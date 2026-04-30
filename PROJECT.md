@@ -66,7 +66,7 @@
 
 ### T049 UI Capability Registry、UI Design Studio 与 Runtime View Planner
 
-状态：首版已实现（运行期 view-plan-first、模块匹配诊断和 UI Design Studio MVP 已落地；完整可视化 authoring/publish 流程继续作为后续增量）。
+状态：首版已实现（运行期 view-plan-first、模块匹配诊断、runtime contract schema、AgentServer `displayIntent` 契约和 UI Design Studio MVP 已落地；完整可视化 authoring/publish 流程继续作为后续增量）。
 
 #### 背景
 - 当前结果视图仍偏向 `Scenario defaultSlots` / `UIManifest slots` 的堆叠展示，用户本轮真正想看的结果不够突出。
@@ -118,15 +118,17 @@ ui-module/
 - 已加入 `UI设计` tab 和 UI Design Studio MVP：展示 module package contract、DisplayIntent、当前匹配状态和已发布模块表；模块不足时显示 `blocked-awaiting-ui-design` 风格的可恢复 blocker。
 - 已增强 `molecule-viewer`，支持 `structure-summary`、`structure-3d-html`、`pdb-structure`、`protein-structure`、PDB/UniProt/dataRef/htmlRef 等结构输入，并对 HTML 结构视图使用 sandboxed iframe。
 - 已增强 report/Markdown 路径，对 `research-report`、`markdown-report` 和 `.md` dataRef 优先展示可读文档壳，不把 AgentServer payload 直接暴露成主结果 JSON。
+- 已新增 `runtimeContracts.ts`，登记 `UIModulePackage`、`DisplayIntent`、`ResolvedViewPlan` 和 `ObjectReference` schema，并用 smoke 覆盖 contract 校验。
+- 已扩展 AgentServer/BioAgent ToolPayload：运行期可返回 `displayIntent`，BioAgent 将其持久化到 run raw 并由 Runtime View Planner 消费。
 - 已保留 T050 删除状态；本轮没有引入长期 coding/guardian agent 复杂度。
 
 #### TODO
 - [x] 定义 `UIModuleManifest` / `ViewPreset` / `UIModuleLifecycle` / `DisplayIntent` / `ResolvedViewPlan` TypeScript 类型。
 - [x] 建立 `UI Capability Registry` 首版：索引 module capabilities、artifact schema、view params、role defaults、fallback、安全边界和版本信息。
 - [x] 建立 `UI Design Studio` MVP 页面：展示 module package contract、DisplayIntent、模块匹配状态和已发布模块表。
-- [ ] 补齐 `UIModulePackage` / `DisplayIntent` / `ResolvedViewPlan` JSON Schema，并把 schema 校验纳入 smoke。
+- [x] 补齐 `UIModulePackage` / `DisplayIntent` / `ResolvedViewPlan` JSON Schema，并把 schema 校验纳入 smoke。
 - [ ] 将 UI Design Studio 从 MVP 扩展为完整 authoring：支持和 agent 对话生成 UI module 草案、选择 artifact schema、拖拽/组合组件、字段映射、交互配置、fixture 预览和发布。
-- [ ] 将 AgentServer 输出 contract 扩展为可选 `displayIntent`，要求它引用 artifact refs、artifact types 和 module capabilities，而不是凭关键词路由或临场生成 UI。
+- [x] 将 AgentServer 输出 contract 扩展为可选 `displayIntent`，要求它引用 artifact refs、artifact types 和 module capabilities，而不是凭关键词路由或临场生成 UI。
 - [x] 实现 `resolveViewPlan()`：从 `DisplayIntent` / active run artifacts / scenario defaults 匹配已发布 UI module，绑定 artifacts，并输出 primary/supporting/provenance/raw 分区。
 - [x] 实现 artifact/component/module 匹配校验首版：模块只能消费 manifest 声明支持的 artifact type；错配时降级到合适 fallback，并给出原因和 recoverActions。
 - [x] 增强 `molecule-viewer`：支持 `structure-summary`、PDB ID、mmCIF/PDB `dataRef`、HTML 结构视图 ref；首屏优先展示结构而不是 paper empty state。
@@ -170,3 +172,71 @@ ui-module/
 - 新增 `workspace:prune` / `tools/prune-workspace.ts`，支持 dry-run / `--apply`、`--targets`、`--keep-days`、`--max-bytes`、`--run`、`--session`。
 - 新增 `uiModuleRegistry.ts`，区分 `acceptsArtifactTypes`（UI 可消费）与 `outputArtifactTypes`（运行期 expected artifacts），避免 registry 抽取后把支撑输入误当作任务产出。
 - 新增 `smoke:workspace-retention`，覆盖 retention、input compaction、20-run bounded growth 和 prune command。
+
+### T052 Object Reference Interaction 与按需结果打开
+
+状态：首版已实现（object refs 可由 AgentServer 返回并自动索引 artifacts；chat chips、右侧按对象聚焦、pin/compare 首版、Workspace Open Gateway 和安全 smoke 已落地；历史 retention 恢复提示继续后续增强）。
+
+#### 背景
+- 当前结果区已从 slot-first 收敛到 view-plan-first，但仍主要由系统自动选择右侧主视图；复杂任务里用户未必想立即看所有 artifacts。
+- 更自然的交互方式是：Agent 在回答中引用关键对象，用户点击对象后再决定在右侧栏查看、用系统默认应用打开，或打开所在文件夹。
+- 这能让对话保持简洁，让右侧结果栏从“自动堆叠结果”变成“用户当前关注对象的工作面板”。
+- 该能力必须建立在稳定 object/ref contract 上，不能回到关键词路由，也不能让前端直接打开任意本地路径。
+
+#### 目标
+- Agent 回答可以包含可点击对象引用，例如 `PDB 7RPZ`、`research-report.md`、`evidence-matrix`、`task result folder`、`PPT draft`、`Word report`。
+- 点击对象时，BioAgent 根据对象类型、artifact contract、UI module capability 和安全策略选择动作：右侧聚焦、Artifact Inspector、系统默认打开、Reveal in Finder、pin/compare。
+- 右侧栏默认只显示当前选中的对象及其关联上下文；其它对象以 inline chips、引用列表或“更多对象”形式存在。
+- 对象引用必须跨多轮、跨刷新、跨历史 run 可复现：同一个对象绑定 `runId`、`artifactId`、`version`、`dataRef`、`hash/size` 和 provenance。
+- 外部打开必须经过受控 `Workspace Open Gateway`，只允许 workspace 内可信 artifact/ref；高风险文件类型需要阻止或确认。
+
+#### Object Reference Contract
+```json
+{
+  "id": "obj-7rpz",
+  "title": "PDB 7RPZ",
+  "kind": "artifact",
+  "artifactType": "structure-summary",
+  "ref": "artifact:structure-summary",
+  "runId": "project-...",
+  "preferredView": "molecule-viewer",
+  "actions": ["focus-right-pane", "inspect", "open-external", "reveal-in-folder"],
+  "provenance": {
+    "dataRef": "https://files.rcsb.org/download/7RPZ.pdb",
+    "producer": "execution-unit-id",
+    "version": "1"
+  }
+}
+```
+
+#### 运行期规则
+- AgentServer 可以在 ToolPayload / answer payload 中返回 `objectReferences`；BioAgent 校验 refs 后渲染为回答中的 object chips。
+- BioAgent 负责把 object ref 解析成 artifact、file、folder、execution unit、run、scenario package 或 external URL；无法解析时显示可恢复诊断，不伪造对象。
+- 点击 object chip 默认执行 `focus-right-pane`，由 Runtime View Planner 选择 UI module；右侧栏只展示该对象的 primary view、supporting context 和 actions。
+- `open-external` / `reveal-in-folder` 走 Workspace Open Gateway；禁止打开 workspace 外路径，禁止自动执行脚本或可执行文件。
+- PPT、Word、PDF、图片、CSV、HTML、文件夹等对象优先支持系统默认打开；同时保留右侧预览/Inspector fallback。
+- 用户可以 pin 多个对象到右侧用于 compare，例如结构 + evidence matrix + report；pin 是 view state，不修改 artifact 数据。
+- 对象引用需要进入 session history 和 artifact index，历史聊天中点击旧对象能恢复当时版本或提示已被 retention 清理。
+
+#### 完成记录
+- 已在 `domain.ts` 中定义 `ObjectReference` / `ObjectAction` / `ObjectResolution`，并在 `runtimeContracts.ts` 中补充 `ObjectReference` schema。
+- 已扩展 AgentServer/BioAgent ToolPayload contract，支持 `displayIntent` 与 `objectReferences`；BioAgent normalize 阶段会把显式 refs 与关键 artifacts 自动索引为 clickable objects。
+- 已在 chat message 中渲染 object chips，点击后右侧栏进入对象聚焦视图；object focus 通过 Runtime View Planner 选择已发布 UI module，而不是关键词路由。
+- 已实现 `artifact:*` / `file:*` / `folder:*` / `url:*` 的首版 resolver，支持 artifact inspector、复制路径、pin/compare 和 synthetic workspace file/folder artifact fallback。
+- 已新增 Workspace Open Gateway `/api/bioagent/workspace/open`，支持 `open-external`、`reveal-in-folder`、`copy-path`，校验路径必须位于 workspace 内并阻止脚本/可执行/宏文档等高风险文件。
+- 已新增 smoke：runtime contract schema、object reference normalization、workspace open gateway 安全边界。
+
+#### TODO
+- [x] 定义 `ObjectReference` / `ObjectAction` / `ObjectResolution` TypeScript 类型和 JSON Schema。
+- [x] 扩展 AgentServer/BioAgent ToolPayload contract，允许返回 `objectReferences`，并把关键 artifacts/files/runs 自动索引为对象。
+- [x] 在 chat message 中渲染 object chips：支持 hover 摘要、状态、来源 run、快捷动作和缺失/过期提示。
+- [x] 实现 object resolver：从 `artifact:*`、`file:*`、`folder:*`、`url:*` 解析到受控对象；`run:*`、`execution-unit:*`、`scenario-package:*` 先作为可聚焦对象保留，后续补完整详情面板。
+- [x] 将点击 object chip 接入 Runtime View Planner：右侧栏按对象聚焦展示，而不是按整个 run 自动堆叠。
+- [x] 增加 pin/compare 机制：用户可把多个对象固定到右侧；支持取消 pin，排序和持久化保存 view state 后续增强。
+- [x] 实现 Workspace Open Gateway：支持 `open-external`、`reveal-in-folder`、`copy-path`，并校验路径位于 workspace 内。
+- [x] 增加文件类型安全策略：脚本、可执行文件、宏文档、未知二进制默认不自动打开；敏感/外部路径必须提示或阻止。
+- [x] 为 Markdown、PDF、Word、PPT、CSV、图片、HTML、文件夹、PDB/mmCIF/dataRef 添加打开和预览 fallback 首版：优先右侧 module/inspector，workspace 文件可走系统打开。
+- [ ] 对历史 run 对象加入版本锁定和 retention 状态：对象被清理时显示恢复建议或可重新生成入口。
+- [ ] 增加 browser smoke：Agent 回答引用 `research-report.md`，点击后右侧显示 Markdown 文档，外部打开走受控 gateway。
+- [ ] 增加 browser smoke：Agent 回答引用 `PDB 7RPZ`，点击后右侧显示 molecule-viewer，且不自动展示无关 artifacts。
+- [x] 增加 smoke：Agent 回答引用一个 workspace 文件夹，点击 `reveal-in-folder` 时只打开允许路径，workspace 外路径被拒绝。

@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { spawn } from 'node:child_process';
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, extname, join, resolve } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { runBioAgentTool } from './bioagent-tools.js';
 import { readRecentTaskAttempts, readTaskAttempts } from './task-attempt-history.js';
 import { acceptSkillPromotionProposal, archiveSkillPromotionProposal, listSkillPromotionProposals, rejectSkillPromotionProposal, runAcceptedSkillValidationSmoke } from './skill-promotion.js';
@@ -151,6 +152,37 @@ createServer(async (req, res) => {
         throw new Error(`Unsupported file action: ${action}`);
       }
       writeJson(res, 200, { ok: true });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  if (url.pathname === '/api/bioagent/workspace/open' && req.method === 'POST') {
+    try {
+      const body = await readJson(req);
+      const workspacePath = normalizeWorkspaceRootPath(typeof body.workspacePath === 'string' ? resolve(body.workspacePath) : await readLastWorkspacePath());
+      const action = typeof body.action === 'string' ? body.action : '';
+      const targetPath = resolveWorkspaceOpenPath(workspacePath, typeof body.path === 'string' ? body.path : '');
+      const info = await stat(targetPath);
+      if (action !== 'open-external' && action !== 'reveal-in-folder' && action !== 'copy-path') {
+        throw new Error(`Unsupported workspace open action: ${action}`);
+      }
+      if (action === 'open-external') assertCanOpenExternal(targetPath, info.isDirectory());
+      const dryRun = process.env.BIOAGENT_WORKSPACE_OPEN_DRY_RUN === '1';
+      if (!dryRun && action !== 'copy-path') {
+        const args = action === 'reveal-in-folder'
+          ? info.isDirectory() ? [targetPath] : ['-R', targetPath]
+          : [targetPath];
+        const child = spawn('open', args, { detached: true, stdio: 'ignore' });
+        child.unref();
+      }
+      writeJson(res, 200, {
+        ok: true,
+        action,
+        path: targetPath,
+        workspacePath,
+        dryRun,
+      });
     } catch (err) {
       writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
     }
@@ -801,6 +833,49 @@ function lastWorkspaceFile() {
 
 function workspaceHistoryFile() {
   return join(process.cwd(), '.bioagent', 'workspace-history.json');
+}
+
+function resolveWorkspaceOpenPath(workspacePath: string, rawPath: string) {
+  const root = normalizeWorkspaceRootPath(resolve(workspacePath));
+  if (!root) throw new Error('workspacePath is required');
+  if (!rawPath.trim()) throw new Error('path is required');
+  const stripped = rawPath.trim().replace(/^(file|folder):/i, '');
+  const targetPath = isAbsolute(stripped) ? resolve(stripped) : resolve(root, stripped);
+  const rel = relative(root, targetPath);
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new Error('Workspace Open Gateway refused a path outside the active workspace.');
+  }
+  return targetPath;
+}
+
+function assertCanOpenExternal(targetPath: string, isDirectory: boolean) {
+  if (isDirectory) return;
+  const extension = extname(targetPath).toLowerCase();
+  const blocked = new Set([
+    '.app',
+    '.bat',
+    '.cmd',
+    '.com',
+    '.dmg',
+    '.exe',
+    '.pkg',
+    '.ps1',
+    '.scr',
+    '.sh',
+    '.bash',
+    '.zsh',
+    '.fish',
+    '.command',
+    '.scpt',
+    '.workflow',
+    '.docm',
+    '.xlsm',
+    '.pptm',
+    '.jar',
+  ]);
+  if (blocked.has(extension)) {
+    throw new Error(`Workspace Open Gateway blocked high-risk file type: ${extension}`);
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
