@@ -240,3 +240,81 @@ ui-module/
 - [ ] 增加 browser smoke：Agent 回答引用 `research-report.md`，点击后右侧显示 Markdown 文档，外部打开走受控 gateway。
 - [ ] 增加 browser smoke：Agent 回答引用 `PDB 7RPZ`，点击后右侧显示 molecule-viewer，且不自动展示无关 artifacts。
 - [x] 增加 smoke：Agent 回答引用一个 workspace 文件夹，点击 `reveal-in-folder` 时只打开允许路径，workspace 外路径被拒绝。
+
+### T053 Code Modularization Without Behavior Change
+
+状态：待开始。
+
+#### 背景
+- 当前最大文件已经影响维护效率：`src/ui/src/App.tsx` 约 7.4k 行，`src/ui/src/styles.css` 约 4.7k 行，`src/runtime/workspace-runtime-gateway.ts` 约 4.0k 行。
+- T049/T052 把 UI module、Runtime View Planner、Object Reference、Workspace Open Gateway 等关键能力稳定下来后，继续在超大文件中迭代会让定位、审查和回归测试成本快速上升。
+- 模块化拆解的目标不是重写架构，而是保持行为不变，把已经稳定的职责边界显式化，让后续功能开发、测试和 agent 协作更快。
+
+#### 为什么模块化会让开发更快
+- 更短的上下文窗口：开发某个功能时只需要读对应模块，而不是反复扫描整个 `App.tsx` / gateway，大幅减少理解成本。
+- 更低的回归风险：组件、view planner、object resolver、payload normalizer 各自有小边界，改动更容易被局部 smoke 覆盖。
+- 更快的代码审查：diff 能集中在单一职责文件里，review 时不用在几千行文件中来回定位。
+- 更适合 agent 工作流：可以把独立文件/目录作为明确 ownership，未来并行 worker 或人工协作不容易互相踩线。
+- 更容易抽测试：纯函数如 `resolveViewPlan()`、object resolver、payload normalizer 从 UI 文件里移出后，可以直接做 unit/smoke。
+- 更好的长期演进：UI Design Studio、Object Reference Interaction、Runtime Gateway 后续都会继续长大，模块边界现在定住，后面新增能力会更轻。
+
+#### 拆分原则
+- 不做一次性大迁移；每一批只移动一个稳定职责，保持行为不变。
+- 优先抽纯函数和低耦合 UI 子树，再抽高状态组件；状态所有权暂时保留在现有父组件里，避免大面积重连。
+- 每一步必须通过 `npm run typecheck`，涉及 UI/view planner 的步骤补跑对应 smoke。
+- import/export 保持窄接口，不制造新的全局 registry 或循环依赖。
+- CSS 拆分按功能域移动选择器，不改视觉 tokens、不重命名大量 class，避免视觉回归。
+- 任何模块化提交都应该是“move-only 或 move+thin wrapper”，业务行为改动另起任务。
+
+#### 目标目录形态
+```text
+src/ui/src/
+  components/
+    chat/
+      ChatPanel.tsx
+      ObjectReferenceChips.tsx
+    results/
+      ResultsRenderer.tsx
+      PrimaryResult.tsx
+      UIDesignStudioPanel.tsx
+      ArtifactInspectorDrawer.tsx
+    scenario/
+      ScenarioBuilderPanel.tsx
+  viewPlanner/
+    resolveViewPlan.ts
+    viewPlanTypes.ts
+    objectResolver.ts
+  api/
+    agentProtocol.ts
+    agentResponseNormalizer.ts
+    objectReferenceNormalizer.ts
+  styles/
+    base.css
+    chat.css
+    results.css
+    object-references.css
+    ui-design-studio.css
+    artifacts.css
+
+src/runtime/
+  agentserver-prompt.ts
+  tool-payload-normalizer.ts
+  artifact-persistence.ts
+  repair-planner.ts
+  generation-gateway.ts
+  workspace-open-gateway.ts
+```
+
+#### TODO
+- [ ] 建立模块化基线 smoke：记录当前 `App.tsx`、`styles.css`、`workspace-runtime-gateway.ts` 大小和关键 smoke 命令，作为拆分前后对照。
+- [ ] 从 `App.tsx` 抽出 Object Reference UI：`ObjectReferenceChips`、`ObjectFocusBanner`、object action labels 与基础 resolver helper。
+- [ ] 从 `App.tsx` 抽出 Runtime View Planner：`resolveViewPlan()`、`ResolvedViewPlanItem`、dedupe/rank/blocked-design helpers，并增加纯函数 smoke。
+- [ ] 从 `App.tsx` 抽出 ResultsRenderer 族组件：`ResultsRenderer`、`PrimaryResult`、`ResultItemsSection`、`RegistrySlot`、`UIDesignStudioPanel`。
+- [ ] 从 `App.tsx` 抽出 ChatPanel：保留现有 state contract，先只移动文件，不改发送/中断/stream 行为。
+- [ ] 从 `App.tsx` 抽出 ArtifactInspectorDrawer 与 handoff preview，减少结果区组件依赖。
+- [ ] 将 `agentClient.ts` 拆为 `agentProtocol.ts`、`agentResponseNormalizer.ts`、`objectReferenceNormalizer.ts`，并保持现有 public API `sendAgentMessageStream()` 不变。
+- [ ] 将 `workspace-runtime-gateway.ts` 继续拆为 prompt 构建、ToolPayload normalization、artifact persistence、repair planning、generation orchestration。
+- [ ] 将 `workspace-server.ts` 中 Workspace Open Gateway 移到独立模块，保留 HTTP route 只做 request/response glue。
+- [ ] 将 `styles.css` 按功能域拆分，并在入口保持稳定 import 顺序；每次拆分后用浏览器 spot check 结果区和聊天区。
+- [ ] 每批拆分后运行：`npm run typecheck`、相关 smoke、`npm run build`；最后补 `git diff --check`。
+- [ ] 完成后更新 `PROJECT.md` 记录最终文件大小，目标是 `App.tsx < 2500` 行、`styles.css < 1800` 行、`workspace-runtime-gateway.ts < 1800` 行。
