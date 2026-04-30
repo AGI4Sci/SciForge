@@ -83,11 +83,11 @@ import {
   type ScenarioInstanceId,
   type ScenarioRuntimeOverride,
   type TimelineEventRecord,
-  type UIModuleManifest,
   type UIManifestSlot,
   type ViewPlanSection,
   type ReusableTaskCandidateRecord,
 } from './domain';
+import { uiModuleRegistry, type PresentationDedupeScope, type RuntimeUIModule } from './uiModuleRegistry';
 import type { VolcanoPoint } from './charts';
 import { createSession, loadWorkspaceState, resetSession, saveWorkspaceState, sessionActivityScore, shouldUsePersistedWorkspaceState, versionSession } from './sessionStore';
 import { loadBioAgentConfig, normalizeWorkspaceRootPath, saveBioAgentConfig, updateConfig } from './config';
@@ -4142,16 +4142,6 @@ type ResultFocusMode = 'all' | 'visual' | 'evidence' | 'execution';
 type ViewPlanSource = 'display-intent' | 'runtime-manifest' | 'artifact-inferred' | 'default-plan' | 'fallback';
 type ViewPlanBindingStatus = 'bound' | 'missing-artifact' | 'missing-fields' | 'fallback';
 
-type PresentationDedupeScope = 'entity' | 'document' | 'collection' | 'none';
-
-type RuntimeUIModule = UIModuleManifest & {
-  description: string;
-  presentation?: {
-    dedupeScope?: PresentationDedupeScope;
-    identityFields?: string[];
-  };
-};
-
 type ResolvedViewPlanItem = {
   id: string;
   slot: UIManifestSlot;
@@ -4168,161 +4158,6 @@ type RuntimeResolvedViewPlan = Omit<ResolvedViewPlan, 'sections'> & {
   sections: Record<ViewPlanSection, ResolvedViewPlanItem[]>;
   allItems: ResolvedViewPlanItem[];
 };
-
-const uiModuleRegistry: RuntimeUIModule[] = [
-  {
-    moduleId: 'research-report-document',
-    version: '1.0.0',
-    title: 'Markdown report document',
-    description: 'Readable Markdown/sectioned report renderer for research-report artifacts.',
-    componentId: 'report-viewer',
-    lifecycle: 'published',
-    acceptsArtifactTypes: ['research-report', 'markdown-report'],
-    requiredAnyFields: [['markdown', 'sections', 'report', 'summary', 'content', 'dataRef']],
-    viewParams: ['layoutMode', 'sectionFilter'],
-    interactionEvents: ['select-section', 'open-ref'],
-    roleDefaults: ['experimental-biologist', 'pi', 'bioinformatician'],
-    fallbackModuleIds: ['generic-artifact-inspector'],
-    defaultSection: 'primary',
-    priority: 10,
-    safety: { sandbox: false, externalResources: 'none', executesCode: false },
-    presentation: {
-      dedupeScope: 'document',
-      identityFields: ['reportId', 'report_id', 'documentId', 'document_id', 'title', 'dataRef', 'path', 'outputRef', 'resultRef'],
-    },
-  },
-  {
-    moduleId: 'protein-structure-viewer',
-    version: '1.0.0',
-    title: 'Protein structure viewer',
-    description: 'PDB/mmCIF/dataRef/HTML structure visualization bound to structure artifacts.',
-    componentId: 'molecule-viewer',
-    lifecycle: 'published',
-    acceptsArtifactTypes: ['structure-summary', 'structure-3d-html', 'pdb-file', 'structure-list', 'pdb-structure', 'protein-structure', 'mmcif-file', 'cif-file'],
-    requiredAnyFields: [['pdbId', 'pdb_id', 'pdb', 'uniprotId', 'dataRef', 'structureUrl', 'html', 'htmlRef', 'structureHtml', 'path', 'filePath']],
-    viewParams: ['colorBy', 'highlightSelection', 'highlightResidues', 'syncViewport'],
-    interactionEvents: ['highlight-residue', 'select-chain'],
-    roleDefaults: ['experimental-biologist', 'bioinformatician', 'pi'],
-    fallbackModuleIds: ['generic-artifact-inspector'],
-    defaultSection: 'primary',
-    priority: 8,
-    safety: { sandbox: true, externalResources: 'declared-only', executesCode: false },
-    presentation: {
-      dedupeScope: 'entity',
-      identityFields: ['pdbId', 'pdb_id', 'pdb', 'uniprotId', 'uniprot_id', 'accession', 'entityId', 'entity_id', 'targetId', 'target_id'],
-    },
-  },
-  {
-    moduleId: 'literature-paper-cards',
-    version: '1.0.0',
-    title: 'Evidence paper cards',
-    description: 'Paper list renderer for literature evidence artifacts.',
-    componentId: 'paper-card-list',
-    lifecycle: 'published',
-    acceptsArtifactTypes: ['paper-list'],
-    requiredAnyFields: [['papers', 'rows']],
-    viewParams: ['filter', 'sort', 'limit', 'colorBy'],
-    interactionEvents: ['select-paper', 'select-target'],
-    roleDefaults: ['experimental-biologist', 'pi'],
-    fallbackModuleIds: ['generic-data-table', 'generic-artifact-inspector'],
-    defaultSection: 'supporting',
-    priority: 20,
-    safety: { sandbox: false, externalResources: 'declared-only', executesCode: false },
-    presentation: {
-      dedupeScope: 'collection',
-      identityFields: ['paperListId', 'paper_list_id', 'queryId', 'query_id', 'searchQuery', 'query', 'dataRef', 'outputRef', 'resultRef'],
-    },
-  },
-  {
-    moduleId: 'evidence-matrix-panel',
-    version: '1.0.0',
-    title: 'Evidence matrix panel',
-    description: 'Claim/evidence matrix bound to session claims and supporting artifacts.',
-    componentId: 'evidence-matrix',
-    lifecycle: 'published',
-    acceptsArtifactTypes: ['evidence-matrix', 'paper-list', 'structure-summary', 'knowledge-graph', 'omics-differential-expression', 'research-report'],
-    viewParams: ['filter', 'sort', 'limit'],
-    interactionEvents: ['select-claim'],
-    roleDefaults: ['experimental-biologist', 'pi', 'clinical'],
-    fallbackModuleIds: ['generic-artifact-inspector'],
-    defaultSection: 'supporting',
-    priority: 30,
-    safety: { sandbox: false, externalResources: 'none', executesCode: false },
-    presentation: {
-      dedupeScope: 'collection',
-      identityFields: ['matrixId', 'matrix_id', 'evidenceSetId', 'evidence_set_id', 'claimSetId', 'claim_set_id', 'dataRef', 'outputRef', 'resultRef'],
-    },
-  },
-  {
-    moduleId: 'execution-provenance-table',
-    version: '1.0.0',
-    title: 'Execution provenance',
-    description: 'Reproducible execution refs, code/log/output refs, and statuses.',
-    componentId: 'execution-unit-table',
-    lifecycle: 'published',
-    acceptsArtifactTypes: ['*'],
-    viewParams: ['filter', 'sort', 'limit'],
-    interactionEvents: ['open-code-ref', 'open-log-ref'],
-    roleDefaults: ['bioinformatician', 'pi'],
-    fallbackModuleIds: ['generic-artifact-inspector'],
-    defaultSection: 'provenance',
-    priority: 80,
-    safety: { sandbox: false, externalResources: 'none', executesCode: false },
-  },
-  {
-    moduleId: 'notebook-research-timeline',
-    version: '1.0.0',
-    title: 'Research notebook timeline',
-    description: 'Structured research notebook and decision timeline.',
-    componentId: 'notebook-timeline',
-    lifecycle: 'published',
-    acceptsArtifactTypes: ['*'],
-    viewParams: ['filter', 'sort', 'limit'],
-    interactionEvents: ['select-timeline-event'],
-    roleDefaults: ['experimental-biologist', 'pi'],
-    fallbackModuleIds: ['generic-artifact-inspector'],
-    defaultSection: 'provenance',
-    priority: 85,
-    safety: { sandbox: false, externalResources: 'none', executesCode: false },
-  },
-  {
-    moduleId: 'generic-data-table',
-    version: '1.0.0',
-    title: 'Generic artifact table',
-    description: 'Safe table renderer for array-like artifact payloads.',
-    componentId: 'data-table',
-    lifecycle: 'published',
-    acceptsArtifactTypes: ['paper-list', 'structure-summary', 'knowledge-graph', 'omics-differential-expression', 'sequence-alignment', 'inspection-summary', 'research-report', 'runtime-artifact'],
-    viewParams: ['filter', 'sort', 'limit', 'group'],
-    interactionEvents: ['select-row'],
-    roleDefaults: ['bioinformatician', 'pi'],
-    fallbackModuleIds: ['generic-artifact-inspector'],
-    defaultSection: 'raw',
-    priority: 90,
-    safety: { sandbox: false, externalResources: 'none', executesCode: false },
-    presentation: {
-      dedupeScope: 'collection',
-      identityFields: ['datasetId', 'dataset_id', 'tableId', 'table_id', 'dataRef', 'outputRef', 'resultRef'],
-    },
-  },
-  {
-    moduleId: 'generic-artifact-inspector',
-    version: '1.0.0',
-    title: 'Artifact inspector',
-    description: 'Safe fallback for any artifact, ref, file, log, or JSON payload.',
-    componentId: 'unknown-artifact-inspector',
-    lifecycle: 'published',
-    acceptsArtifactTypes: ['*'],
-    viewParams: ['filter', 'sort', 'limit'],
-    interactionEvents: ['open-ref'],
-    roleDefaults: ['bioinformatician', 'pi'],
-    fallbackModuleIds: [],
-    defaultSection: 'raw',
-    priority: 100,
-    safety: { sandbox: false, externalResources: 'none', executesCode: false },
-    presentation: { dedupeScope: 'none' },
-  },
-];
 
 interface HandoffAutoRunRequest {
   id: string;
@@ -4916,6 +4751,7 @@ function MoleculeSlot({ slot, artifact, session }: RegistryRendererProps) {
     : toRecordList(payload.structures ?? payload.data ?? payload.rows ?? payload.items);
   const primaryStructure = structureRows[0] ?? {};
   const artifactPath = artifactFilePath(artifact, payload);
+  const dataRef = asString(payload.structureUrl) || asString(artifact?.dataRef) || asString(payload.dataRef) || artifactPath;
   const pdbId = asString(payload.pdbId)
     || asString(payload.pdb_id)
     || asString(payload.pdb)
@@ -4923,12 +4759,12 @@ function MoleculeSlot({ slot, artifact, session }: RegistryRendererProps) {
     || asString(artifact?.metadata?.pdb_id)
     || asString(primaryStructure.pdbId)
     || asString(primaryStructure.pdb_id)
-    || asString(primaryStructure.pdb);
+    || asString(primaryStructure.pdb)
+    || inferPdbIdFromStructureRef(dataRef);
   const uniprotId = asString(payload.uniprotId);
   const ligand = asString(payload.ligand) || 'none';
   const residues = asStringList(payload.highlightResidues ?? payload.residues);
   const metrics = isRecord(payload.metrics) ? payload.metrics : payload;
-  const dataRef = asString(payload.structureUrl) || asString(artifact?.dataRef) || asString(payload.dataRef) || artifactPath;
   const coordinateRef = isFetchableStructureRef(dataRef) ? dataRef : undefined;
   const html = asString(payload.html) || asString(payload.structureHtml) || asString(payload.iframeHtml);
   const htmlRef = asString(payload.htmlRef) || asString(payload.structureHtmlRef)
@@ -5009,6 +4845,26 @@ function isFetchableStructureRef(ref?: string) {
   if (/^agentserver:\/\//i.test(ref)) return false;
   if (/\.html?($|[?#])/i.test(ref)) return false;
   return /^https?:\/\//i.test(ref) || /^data:/i.test(ref);
+}
+
+function inferPdbIdFromStructureRef(ref?: string) {
+  if (!ref) return undefined;
+  let decoded = ref.trim();
+  try {
+    decoded = decodeURIComponent(decoded);
+  } catch {
+    // Keep the original ref when it is not URI-encoded.
+  }
+  const patterns = [
+    /(?:^|[/_-])([0-9][A-Za-z0-9]{3})(?=\.(?:pdb|cif|mmcif)(?:$|[?#]))/i,
+    /rcsb\.org\/(?:download|structure|entry)\/([0-9][A-Za-z0-9]{3})(?:$|[/?#.]|%)/i,
+    /(?:pdb(?:id)?[=:_-])([0-9][A-Za-z0-9]{3})(?:$|[/?#._-])/i,
+  ];
+  for (const pattern of patterns) {
+    const match = decoded.match(pattern);
+    if (match?.[1]) return match[1].toUpperCase();
+  }
+  return undefined;
 }
 
 function StructureHtmlPreview({ html, htmlRef }: { html?: string; htmlRef?: string }) {

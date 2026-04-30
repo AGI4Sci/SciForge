@@ -133,6 +133,7 @@ ui-module/
 - [x] 增强 `report-viewer` / Markdown 路径：把 research-report、Markdown file ref、sections、agentserver report payload 渲染成易读文档壳，避免原始 JSON 成为主视图。
 - [x] 增加 active run 结果区摘要：首屏显示 Runtime View Planner、核心 artifact 状态、主要查看组件和缺失项。
 - [x] 增加结果区诊断面板：展示每个 slot 为什么被选中、绑定了哪个 artifact、字段是否满足、fallback 原因和 recoverActions。
+- [x] 收窄运行期 supplemental artifact 生成：follow-up 只补当前 AgentServer 任务声明的 `expectedArtifacts`，避免被场景默认全量目标拖偏。
 - [ ] 实现完整 `blocked-awaiting-ui-design` run lifecycle：当没有模块满足展示需求时 checkpoint 当前 run，打开 UI Design Studio，发布模块后按 `resumeRunId` 恢复。
 - [ ] 实现 UI module 版本锁定与 migration 记录：历史 run 继续使用原 module version，schema 变化必须可迁移或保留旧渲染路径。
 - [ ] 增加用户可调 UI：组件显隐、排序、聚焦、布局密度、保存/恢复 view preset；用户调整只影响 view state，不修改 artifact 原始数据。
@@ -140,3 +141,32 @@ ui-module/
 - [ ] 增加 browser E2E：用户在文献场景中要求“查 PDB 并在右侧可视化 3D 结构”，结果区必须优先展示结构查看器或清晰 fallback，不得出现 paper-list empty 作为主结果。
 - [ ] 增加 browser E2E：用户要求“生成易读 Markdown 报告”，结果区必须展示 Markdown 文档视图，而不是原始 JSON 或低可读 payload。
 - [ ] 增加 unknown-demand smoke：用户提出未注册展示需求时，系统必须走 `DisplayIntent -> module match -> blocked-awaiting-ui-design 或 fallback ladder`，稳定显示可解释状态和下一步建议。
+
+### T051 Codebase Slimming 与 Workspace Runtime Retention
+
+状态：已完成（workspace 产物已清理；task input compact/retention、workspace prune、UI registry 去重和首轮模块拆分已落地）。
+
+#### 背景
+- 本轮审查发现项目源码并不是主要体积来源；`workspace/.bioagent/task-inputs` 曾累计到约 50G，主要来自多轮复杂任务中大 JSON / referenced artifact input 反复落盘。
+- 代码层面存在若干长期维护风险：`App.tsx`、`styles.css`、`workspace-runtime-gateway.ts` 过大；UI component/artifact capability mapping 在 UI registry、scenario compiler、tool client 和 runtime gateway 中存在重复真相源。
+- 瘦身目标不是删除能力，而是减少重复路径、让运行期产物有保留策略，并把大内容改成 artifact/ref 化。
+
+#### TODO
+- [x] 清空 `workspace` 运行期产物，保留 `workspace/README.md` 与 `workspace/.gitkeep`。
+- [x] 为 `.bioagent/task-inputs` 增加通用 retention：默认最多保留 160 个输入文件或 1GiB，总是保护当前任务输入；长期配置写入 `config.local.json` 的 `bioagent.taskInputRetention`，临时覆盖支持 `BIOAGENT_TASK_INPUT_MAX_FILES` / `BIOAGENT_TASK_INPUT_MAX_BYTES`。
+- [x] 增加 task-input retention smoke，验证旧输入会被裁剪、当前/受保护输入不会被误删。
+- [x] 将大型 task input 进一步改为 compact manifest：只保存 prompt、artifact refs、字段摘要、hash/size 和恢复路径；不得把完整大 artifact 重复内联到每轮输入。
+- [x] 增加 `workspace:prune` 命令：可按目录、mtime、大小和 run/session 范围清理 `.bioagent/task-results`、`logs`、`debug`、`task-attempts`、`versions`。
+- [x] 抽出 UI capability registry 唯一真相源：`App.tsx`、`componentElements.ts`、`bioagentToolsClient.ts` 共享 `uiModuleRegistry.ts` 中的 module capability、accepted artifact types 和 output artifact types。
+- [x] 拆分 `src/ui/src/App.tsx` 首轮：抽出 runtime UI module registry；保留现有 `ChatPanel`、`ResultsRenderer`、`UIDesignStudioPanel`、`ArtifactInspectorDrawer` 等命名组件边界，避免本轮把 UI 行为重写成高风险大迁移。
+- [x] 拆分 `src/ui/src/styles.css` 首轮：抽出 `styles/base.css` 承载字体、tokens、global reset 和 keyframes；业务样式继续保留现有选择器，避免视觉回归。
+- [x] 拆分 `workspace-runtime-gateway.ts` 首轮：抽出 `workspace-runtime-events.ts`、`workspace-task-input.ts`、`workspace-retention.ts` 和 `tools/prune-workspace.ts`，让 gateway 不再持有事件发送、输入 compact、保留策略和清理命令。
+- [x] 增加体积/重复度守门：`smoke:workspace-retention` 覆盖 20 轮模拟任务，检查 `.bioagent/task-inputs` 不会随大 artifact 线性膨胀到超过阈值。
+- [x] 清理忽略目录中的大型测试产物：删除 `docs/test-artifacts/deep-scenarios` 与 T050 临时截图，只保留已跟踪的代表性 browser smoke artifacts。
+
+#### 完成记录
+- `workspace` 从约 51G 清到 4K；`docs/test-artifacts` 从约 73M 清到 824K。
+- 新增 `buildWorkspaceTaskInput()`：大型 artifact data、长字符串、长 priorAttempts 会被替换为 compact manifest、hash、size、preview 和 refs。
+- 新增 `workspace:prune` / `tools/prune-workspace.ts`，支持 dry-run / `--apply`、`--targets`、`--keep-days`、`--max-bytes`、`--run`、`--session`。
+- 新增 `uiModuleRegistry.ts`，区分 `acceptsArtifactTypes`（UI 可消费）与 `outputArtifactTypes`（运行期 expected artifacts），避免 registry 抽取后把支撑输入误当作任务产出。
+- 新增 `smoke:workspace-retention`，覆盖 retention、input compaction、20-run bounded growth 和 prune command。

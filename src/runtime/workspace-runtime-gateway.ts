@@ -5,6 +5,7 @@ import { appendTaskAttempt, readRecentTaskAttempts, readTaskAttempts } from './t
 import type { AgentServerGenerationResponse, BioAgentSkillDomain, GatewayRequest, LlmEndpointConfig, SkillAvailability, TaskAttemptRecord, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceRuntimeEvent, WorkspaceTaskRunResult } from './runtime-types.js';
 import { fileExists, runWorkspaceTask, sha1 } from './workspace-task-runner.js';
 import { maybeWriteSkillPromotionProposal } from './skill-promotion.js';
+import { emitWorkspaceRuntimeEvent, throwIfRuntimeAborted } from './workspace-runtime-events.js';
 
 const SKILL_DOMAIN_SET = new Set<BioAgentSkillDomain>(['literature', 'structure', 'omics', 'knowledge']);
 const AGENT_BACKEND_ANSWER_PRINCIPLE = [
@@ -32,6 +33,7 @@ async function runAgentServerGeneratedTask(
   skill: SkillAvailability,
   skills: SkillAvailability[],
   callbacks: WorkspaceRuntimeCallbacks = {},
+  options: { allowSupplement?: boolean } = {},
 ): Promise<ToolPayload | undefined> {
   const workspace = resolve(request.workspacePath || process.cwd());
   const baseUrl = request.agentServerBaseUrl || await readConfiguredAgentServerBaseUrl(workspace);
@@ -136,11 +138,13 @@ async function runAgentServerGeneratedTask(
 
   const taskId = `generated-${request.skillDomain}-${sha1(`${request.prompt}:${Date.now()}`).slice(0, 12)}`;
   const generatedPathMap = new Map<string, string>();
+  const generatedInputRels: string[] = [];
   try {
     for (const file of generation.response.taskFiles) {
       const declaredRel = safeWorkspaceRel(file.path);
       const rel = generatedTaskArchiveRel(taskId, declaredRel);
       generatedPathMap.set(declaredRel, rel);
+      if (isTaskInputRel(declaredRel)) generatedInputRels.push(declaredRel);
       const content = file.content || await readGeneratedTaskFileIfPresent(workspace, file.path);
       if (content === undefined) {
         return repairNeededPayload(
@@ -168,6 +172,7 @@ async function runAgentServerGeneratedTask(
   const outputRel = `.bioagent/task-results/${taskId}.json`;
   const stdoutRel = `.bioagent/logs/${taskId}.stdout.log`;
   const stderrRel = `.bioagent/logs/${taskId}.stderr.log`;
+  const generatedExpectedArtifacts = expectedArtifactTypesForGeneratedRun(request, generation.response.expectedArtifacts);
   const run = await runWorkspaceTask(workspace, {
     id: taskId,
     language: generation.response.entrypoint.language,
@@ -187,11 +192,10 @@ async function runAgentServerGeneratedTask(
         skillPlanRef: request.skillPlanRef,
         prompt: request.prompt,
       })),
-      expectedArtifacts: expectedArtifactTypesForRequest(request).length
-        ? expectedArtifactTypesForRequest(request)
-        : generation.response.expectedArtifacts,
+      expectedArtifacts: generatedExpectedArtifacts,
       selectedComponentIds: selectedComponentIdsForRequest(request),
     },
+    retentionProtectedInputRels: generatedInputRels,
     outputRel,
     stdoutRel,
     stderrRel,
@@ -278,6 +282,19 @@ async function runAgentServerGeneratedTask(
       if (repaired) return repaired;
       return repairNeededPayload(request, skill, repairFailureReason);
     }
+    if (options.allowSupplement !== false) {
+      const supplemented = await tryAgentServerSupplementMissingArtifacts({
+        request,
+        skill,
+        skills,
+        baseUrl,
+        workspace,
+        payload: normalized,
+        expectedArtifactTypes: generatedExpectedArtifacts,
+        callbacks,
+      });
+      if (supplemented) return supplemented;
+    }
     const proposal = await maybeWriteSkillPromotionProposal({
       workspacePath: workspace,
       request,
@@ -339,6 +356,102 @@ async function runAgentServerGeneratedTask(
     if (repaired) return repaired;
     return failedTaskPayload(request, skill, run, failureReason);
   }
+}
+
+async function tryAgentServerSupplementMissingArtifacts(params: {
+  request: GatewayRequest;
+  skill: SkillAvailability;
+  skills: SkillAvailability[];
+  baseUrl: string;
+  workspace: string;
+  payload: ToolPayload;
+  expectedArtifactTypes?: string[];
+  callbacks?: WorkspaceRuntimeCallbacks;
+}) {
+  const missingTypes = missingExpectedArtifactTypes(params.request, params.payload.artifacts, params.expectedArtifactTypes);
+  if (!missingTypes.length) return undefined;
+  emitWorkspaceRuntimeEvent(params.callbacks, {
+    type: 'workspace-task-start',
+    source: 'workspace-runtime',
+    status: 'running',
+    message: 'Requesting supplemental AgentServer/backend generation',
+    detail: `Missing expected artifact types: ${missingTypes.join(', ')}`,
+  });
+  const existingTypes = uniqueStrings(params.payload.artifacts.map((artifact) => String(artifact.type || artifact.id || '')).filter(Boolean));
+  const supplementRequest: GatewayRequest = {
+    ...params.request,
+    prompt: [
+      params.request.prompt,
+      '',
+      `Supplement the previous local skill result. Missing expected artifact types: ${missingTypes.join(', ')}.`,
+      'Write reproducible workspace code that emits all missing artifacts and preserves existing artifacts if useful.',
+      `Existing artifact types: ${existingTypes.join(', ') || 'none'}.`,
+    ].join('\n'),
+    artifacts: params.payload.artifacts,
+    expectedArtifactTypes: missingTypes,
+  };
+  const supplement = await runAgentServerGeneratedTask(
+    supplementRequest,
+    params.skill,
+    params.skills,
+    params.callbacks,
+    { allowSupplement: false },
+  );
+  if (!supplement) return undefined;
+  const supplementedTypes = new Set(supplement.artifacts
+    .filter((artifact) => !artifactNeedsRepair(artifact))
+    .map((artifact) => String(artifact.type || artifact.id || ''))
+    .filter(Boolean));
+  const filled = missingTypes.filter((type) => supplementedTypes.has(type));
+  if (!filled.length) return undefined;
+  return mergeSupplementalPayload(params.payload, supplement, filled);
+}
+
+function missingExpectedArtifactTypes(request: GatewayRequest, artifacts: Array<Record<string, unknown>>, expectedArtifactTypes?: string[]) {
+  const present = new Set(artifacts
+    .filter((artifact) => !artifactNeedsRepair(artifact))
+    .map((artifact) => String(artifact.type || artifact.id || ''))
+    .filter(Boolean));
+  const expected = expectedArtifactTypes?.length ? expectedArtifactTypes : expectedArtifactTypesForRequest(request);
+  return uniqueStrings(expected).filter((type) => !present.has(type));
+}
+
+function expectedArtifactTypesForGeneratedRun(request: GatewayRequest, generatedExpectedArtifacts?: string[]) {
+  const generated = uniqueStrings((generatedExpectedArtifacts ?? []).map((type) => type.trim()).filter(Boolean));
+  return generated.length ? generated : expectedArtifactTypesForRequest(request);
+}
+
+function mergeSupplementalPayload(base: ToolPayload, supplement: ToolPayload, filledTypes: string[]): ToolPayload {
+  const seenArtifacts = new Set<string>();
+  const artifacts = [...base.artifacts, ...supplement.artifacts].filter((artifact) => {
+    const key = [
+      String(artifact.type || artifact.id || ''),
+      String(artifact.id || ''),
+      String(artifact.dataRef || ''),
+      isRecord(artifact.metadata) ? String(artifact.metadata.artifactRef || artifact.metadata.outputRef || '') : '',
+    ].join('|');
+    if (seenArtifacts.has(key)) return false;
+    seenArtifacts.add(key);
+    return true;
+  });
+  const uiManifest = [...base.uiManifest, ...supplement.uiManifest].filter((slot, index, all) => {
+    const key = `${String(slot.componentId || '')}:${String(slot.artifactRef || '')}`;
+    return all.findIndex((candidate) => `${String(candidate.componentId || '')}:${String(candidate.artifactRef || '')}` === key) === index;
+  });
+  return {
+    ...base,
+    message: `${base.message}\n\nSupplemented missing artifacts: ${filledTypes.join(', ')}.`,
+    reasoningTrace: [
+      base.reasoningTrace,
+      `Supplemental AgentServer/backend generation filled: ${filledTypes.join(', ')}`,
+      supplement.reasoningTrace,
+    ].filter(Boolean).join('\n'),
+    claims: [...base.claims, ...supplement.claims],
+    uiManifest,
+    executionUnits: [...base.executionUnits, ...supplement.executionUnits],
+    artifacts,
+    logs: [...(base.logs ?? []), ...(supplement.logs ?? [])],
+  };
 }
 
 function isBlockingAgentServerConfigurationFailure(reason: string) {
@@ -1188,12 +1301,6 @@ function agentServerRepairMaxAttempts() {
   return Number.isFinite(value) ? Math.max(2, Math.min(50, Math.floor(value))) : 12;
 }
 
-function throwIfRuntimeAborted(callbacks?: WorkspaceRuntimeCallbacks) {
-  if (callbacks?.signal?.aborted) {
-    throw new Error('BioAgent run cancelled by user before the workspace task satisfied the request.');
-  }
-}
-
 async function requestAgentServerGeneration(params: {
   baseUrl: string;
   request: GatewayRequest;
@@ -1535,14 +1642,6 @@ function summarizeEventValue(value: unknown) {
     return JSON.stringify(redactSecrets(value)).slice(0, 1200);
   } catch {
     return String(value).slice(0, 1200);
-  }
-}
-
-function emitWorkspaceRuntimeEvent(callbacks: WorkspaceRuntimeCallbacks | undefined, event: WorkspaceRuntimeEvent) {
-  try {
-    callbacks?.onEvent?.(event);
-  } catch {
-    // Runtime execution should not fail because a stream consumer disconnected.
   }
 }
 
@@ -3129,6 +3228,10 @@ function generatedTaskArchiveRel(taskId: string, path: string) {
     : withoutArchivePrefix;
   const archived = withoutTaskPrefix || 'task.py';
   return `${archivePrefix}${taskId}/${archived}`;
+}
+
+function isTaskInputRel(path: string) {
+  return safeWorkspaceRel(path).startsWith('.bioagent/task-inputs/');
 }
 
 async function validateAndNormalizePayload(

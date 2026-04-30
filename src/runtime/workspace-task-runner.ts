@@ -4,6 +4,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dirname, join, resolve } from 'node:path';
 import type { WorkspaceTaskRunResult, WorkspaceTaskSpec } from './runtime-types.js';
+import { pruneTaskInputRetention } from './workspace-retention.js';
+import { buildWorkspaceTaskInput } from './workspace-task-input.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -28,15 +30,17 @@ export async function runWorkspaceTask(workspacePath: string, spec: WorkspaceTas
   if (spec.codeTemplatePath) {
     await copyFile(resolve(spec.codeTemplatePath), taskPath);
   }
-  await writeFile(inputPath, JSON.stringify({
-    ...spec.input,
+  await writeFile(inputPath, JSON.stringify(buildWorkspaceTaskInput(spec.input, {
     workspacePath: workspace,
     taskCodeRef: taskRel,
     inputRef: inputRel,
     outputRef: spec.outputRel,
     stdoutRef: spec.stdoutRel,
     stderrRef: spec.stderrRel,
-  }, null, 2));
+  }), null, 2));
+  await pruneTaskInputRetention(workspace, {
+    protectedRels: [inputRel, ...(spec.retentionProtectedInputRels ?? [])],
+  });
 
   const command = await commandFor(workspace, spec.language, spec.entrypoint);
   const taskInputArg = spec.inputArgMode === 'empty-data-path' ? '' : inputPath;

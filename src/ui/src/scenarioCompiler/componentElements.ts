@@ -1,4 +1,5 @@
 import type { UIComponentElement } from './elementTypes';
+import { acceptedArtifactTypesForComponent } from '../uiModuleRegistry';
 
 export const uiComponentElements: UIComponentElement[] = [
   {
@@ -9,7 +10,7 @@ export const uiComponentElements: UIComponentElement[] = [
     description: 'Render structured markdown or sectioned research-report artifacts.',
     source: 'built-in',
     componentId: 'report-viewer',
-    acceptsArtifactTypes: ['research-report', 'markdown-report'],
+    acceptsArtifactTypes: acceptedArtifactTypesForComponent('report-viewer'),
     requiredFields: ['markdown'],
     emptyState: {
       title: '等待 research-report',
@@ -29,7 +30,7 @@ export const uiComponentElements: UIComponentElement[] = [
     description: 'Render PubMed/Semantic Scholar style paper-list artifacts as evidence cards.',
     source: 'built-in',
     componentId: 'paper-card-list',
-    acceptsArtifactTypes: ['paper-list'],
+    acceptsArtifactTypes: acceptedArtifactTypesForComponent('paper-card-list'),
     requiredFields: ['papers'],
     emptyState: {
       title: '等待真实 paper-list',
@@ -49,7 +50,7 @@ export const uiComponentElements: UIComponentElement[] = [
     description: 'Render structure-summary artifacts with 3Dmol-based structure visualization.',
     source: 'built-in',
     componentId: 'molecule-viewer',
-    acceptsArtifactTypes: ['structure-summary', 'structure-3d-html', 'pdb-file', 'structure-list', 'pdb-structure', 'protein-structure', 'mmcif-file', 'cif-file'],
+    acceptsArtifactTypes: acceptedArtifactTypesForComponent('molecule-viewer'),
     requiredFields: [],
     emptyState: {
       title: '等待真实 structure-summary',
@@ -69,7 +70,7 @@ export const uiComponentElements: UIComponentElement[] = [
     description: 'Render differential-expression points as a volcano plot.',
     source: 'built-in',
     componentId: 'volcano-plot',
-    acceptsArtifactTypes: ['omics-differential-expression'],
+    acceptsArtifactTypes: acceptedArtifactTypesForComponent('volcano-plot'),
     requiredFields: ['points'],
     emptyState: {
       title: '等待真实 volcano points',
@@ -89,7 +90,7 @@ export const uiComponentElements: UIComponentElement[] = [
     description: 'Render matrix payloads from omics artifacts.',
     source: 'built-in',
     componentId: 'heatmap-viewer',
-    acceptsArtifactTypes: ['omics-differential-expression'],
+    acceptsArtifactTypes: acceptedArtifactTypesForComponent('heatmap-viewer'),
     requiredFields: ['heatmap'],
     emptyState: {
       title: '等待真实 heatmap matrix',
@@ -109,7 +110,7 @@ export const uiComponentElements: UIComponentElement[] = [
     description: 'Render embedding coordinates from omics artifacts.',
     source: 'built-in',
     componentId: 'umap-viewer',
-    acceptsArtifactTypes: ['omics-differential-expression'],
+    acceptsArtifactTypes: acceptedArtifactTypesForComponent('umap-viewer'),
     requiredFields: ['umap'],
     emptyState: {
       title: '等待真实 UMAP coordinates',
@@ -129,7 +130,7 @@ export const uiComponentElements: UIComponentElement[] = [
     description: 'Render knowledge graph nodes and edges.',
     source: 'built-in',
     componentId: 'network-graph',
-    acceptsArtifactTypes: ['knowledge-graph'],
+    acceptsArtifactTypes: acceptedArtifactTypesForComponent('network-graph'),
     requiredFields: ['nodes', 'edges'],
     emptyState: {
       title: '等待真实 knowledge graph',
@@ -149,7 +150,7 @@ export const uiComponentElements: UIComponentElement[] = [
     description: 'Render session claims and evidence levels.',
     source: 'built-in',
     componentId: 'evidence-matrix',
-    acceptsArtifactTypes: ['paper-list', 'structure-summary', 'knowledge-graph', 'omics-differential-expression'],
+    acceptsArtifactTypes: acceptedArtifactTypesForComponent('evidence-matrix'),
     requiredFields: [],
     emptyState: {
       title: '等待 claims / evidence',
@@ -169,7 +170,7 @@ export const uiComponentElements: UIComponentElement[] = [
     description: 'Render reproducible execution units, logs, code refs, and statuses.',
     source: 'built-in',
     componentId: 'execution-unit-table',
-    acceptsArtifactTypes: ['paper-list', 'structure-summary', 'knowledge-graph', 'omics-differential-expression', 'sequence-alignment', 'inspection-summary', 'research-report', 'runtime-artifact'],
+    acceptsArtifactTypes: acceptedArtifactTypesForComponent('execution-unit-table'),
     requiredFields: [],
     emptyState: {
       title: '等待 ExecutionUnit',
@@ -189,7 +190,7 @@ export const uiComponentElements: UIComponentElement[] = [
     description: 'Render the structured research notebook timeline.',
     source: 'built-in',
     componentId: 'notebook-timeline',
-    acceptsArtifactTypes: ['paper-list', 'structure-summary', 'knowledge-graph', 'omics-differential-expression', 'research-report', 'runtime-artifact'],
+    acceptsArtifactTypes: acceptedArtifactTypesForComponent('notebook-timeline'),
     requiredFields: [],
     emptyState: {
       title: '等待研究记录',
@@ -209,7 +210,7 @@ export const uiComponentElements: UIComponentElement[] = [
     description: 'Generic tabular artifact renderer.',
     source: 'built-in',
     componentId: 'data-table',
-    acceptsArtifactTypes: ['paper-list', 'structure-summary', 'knowledge-graph', 'omics-differential-expression', 'sequence-alignment', 'inspection-summary', 'research-report', 'runtime-artifact'],
+    acceptsArtifactTypes: acceptedArtifactTypesForComponent('data-table'),
     requiredFields: [],
     emptyState: {
       title: '等待可表格化 artifact rows',
@@ -229,7 +230,7 @@ export const uiComponentElements: UIComponentElement[] = [
     description: 'Safe fallback for JSON, table, file, and log previews.',
     source: 'built-in',
     componentId: 'unknown-artifact-inspector',
-    acceptsArtifactTypes: ['*'],
+    acceptsArtifactTypes: acceptedArtifactTypesForComponent('unknown-artifact-inspector'),
     requiredFields: [],
     emptyState: {
       title: '等待任意 runtime artifact',

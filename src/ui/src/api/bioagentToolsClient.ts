@@ -2,6 +2,7 @@ import type { AgentStreamEvent, NormalizedAgentResponse, SendAgentMessageInput }
 import type { ScenarioId } from '../data';
 import { makeId, nowIso } from '../domain';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
+import { artifactTypesForComponents } from '../uiModuleRegistry';
 import { normalizeAgentResponse } from './agentClient';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -149,24 +150,9 @@ function expectedArtifactsForScenario(scenarioId: ScenarioId, componentIds: stri
   const builtInTypes = SCENARIO_SPECS[scenarioId].outputArtifacts.map((artifact) => artifact.type);
   return uniqueStrings([
     ...builtInTypes,
-    ...componentIds.flatMap((componentId) => COMPONENT_ARTIFACT_TYPES[componentId] ?? []),
+    ...artifactTypesForComponents(componentIds),
   ]);
 }
-
-const COMPONENT_ARTIFACT_TYPES: Record<string, string[]> = {
-  'paper-card-list': ['paper-list'],
-  'evidence-matrix': ['evidence-matrix'],
-  'notebook-timeline': ['notebook-timeline'],
-  'report-viewer': ['research-report'],
-  'data-table': ['data-table'],
-  'network-graph': ['knowledge-graph'],
-  'molecule-viewer': ['structure-summary', 'structure-3d-html', 'pdb-file', 'structure-list'],
-  'molecule-viewer-3d': ['structure-summary', 'structure-3d-html', 'pdb-file', 'structure-list'],
-  'protein-sequence-viewer': ['sequence-alignment'],
-  'volcano-plot': ['omics-differential-expression'],
-  'heatmap-viewer': ['omics-differential-expression'],
-  'umap-viewer': ['omics-differential-expression'],
-};
 
 function uniqueStrings(values: string[]) {
   return Array.from(new Set(values.filter(Boolean)));

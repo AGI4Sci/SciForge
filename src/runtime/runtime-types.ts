@@ -97,6 +97,7 @@ export interface WorkspaceTaskSpec {
   taskRel?: string;
   timeoutMs?: number;
   inputArgMode?: 'json-file' | 'empty-data-path';
+  retentionProtectedInputRels?: string[];
 }
 
 export interface WorkspaceTaskRunResult {

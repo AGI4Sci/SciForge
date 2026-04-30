@@ -1,0 +1,69 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+
+:root {
+  color-scheme: dark;
+  --bio-950: #050810;
+  --bio-900: #070b14;
+  --bio-850: #0a0f1a;
+  --bio-800: #0f1623;
+  --bio-750: #141c2b;
+  --bio-700: #1a2332;
+  --bio-600: #243044;
+  --bio-500: #2e3d55;
+  --bio-400: #5a7091;
+  --bio-300: #7b93b0;
+  --bio-100: #b0c4d8;
+  --bio-50: #e8edf5;
+  --accent: #00e5a0;
+  --teal: #4ecdc4;
+  --coral: #ff7043;
+  --amber: #ffd54f;
+  --blue: #3d7aed;
+  --rose: #f43f5e;
+  --radius: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bio-900);
+  color: var(--bio-50);
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  overflow: hidden;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bio-500);
+  border-radius: 999px;
+}
+
+@keyframes float-a {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(26px, -18px, 0) scale(1.08); }
+}
+
+@keyframes float-b {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(-22px, 28px, 0) scale(1.04); }
+}
