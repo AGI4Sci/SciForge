@@ -1,4 +1,4 @@
-import type { ObjectAction, ObjectReferenceKind } from './domain';
+import type { ObjectAction, ObjectReferenceKind, TurnAcceptanceSeverity, UserGoalType } from './domain';
 
 export const objectReferenceKinds = [
   'artifact',
@@ -19,6 +19,24 @@ export const objectActions = [
   'pin',
   'compare',
 ] as const satisfies readonly ObjectAction[];
+
+export const userGoalTypes = [
+  'answer',
+  'report',
+  'analysis',
+  'visualization',
+  'file',
+  'repair',
+  'continuation',
+  'workflow',
+] as const satisfies readonly UserGoalType[];
+
+export const turnAcceptanceSeverities = [
+  'pass',
+  'warning',
+  'repairable',
+  'failed',
+] as const satisfies readonly TurnAcceptanceSeverity[];
 
 export const runtimeContractSchemas = {
   uiModulePackage: {
@@ -82,6 +100,36 @@ export const runtimeContractSchemas = {
       provenance: { type: 'object' },
     },
   },
+  userGoalSnapshot: {
+    $id: 'bioagent.user-goal-snapshot.schema.json',
+    type: 'object',
+    required: ['turnId', 'rawPrompt', 'goalType', 'requiredFormats', 'requiredArtifacts', 'requiredReferences', 'uiExpectations', 'acceptanceCriteria'],
+    properties: {
+      turnId: { type: 'string' },
+      rawPrompt: { type: 'string' },
+      goalType: { enum: userGoalTypes },
+      requiredFormats: { type: 'array', items: { type: 'string' } },
+      requiredArtifacts: { type: 'array', items: { type: 'string' } },
+      requiredReferences: { type: 'array', items: { type: 'string' } },
+      freshness: { type: 'object' },
+      uiExpectations: { type: 'array', items: { type: 'string' } },
+      acceptanceCriteria: { type: 'array', items: { type: 'string' } },
+    },
+  },
+  turnAcceptance: {
+    $id: 'bioagent.turn-acceptance.schema.json',
+    type: 'object',
+    required: ['pass', 'severity', 'checkedAt', 'failures', 'objectReferences'],
+    properties: {
+      pass: { type: 'boolean' },
+      severity: { enum: turnAcceptanceSeverities },
+      checkedAt: { type: 'string' },
+      failures: { type: 'array', items: { type: 'object' } },
+      objectReferences: { type: 'array', items: { $ref: 'bioagent.object-reference.schema.json' } },
+      repairPrompt: { type: 'string' },
+      repairAttempt: { type: 'number' },
+    },
+  },
 } as const;
 
 export type RuntimeContractName = keyof typeof runtimeContractSchemas;
@@ -90,6 +138,8 @@ export function validateRuntimeContract(name: RuntimeContractName, value: unknow
   if (name === 'displayIntent') return validateDisplayIntent(value);
   if (name === 'resolvedViewPlan') return validateResolvedViewPlan(value);
   if (name === 'objectReference') return validateObjectReference(value);
+  if (name === 'userGoalSnapshot') return validateUserGoalSnapshot(value);
+  if (name === 'turnAcceptance') return validateTurnAcceptance(value);
   return validateUIModulePackage(value);
 }
 
@@ -138,6 +188,39 @@ function validateObjectReference(value: unknown): string[] {
     for (const action of Array.isArray(record.actions) ? record.actions : []) {
       if (!objectActions.includes(action as ObjectAction)) errors.push(`objectReference.actions contains unsupported action: ${String(action)}`);
     }
+  }
+  return errors;
+}
+
+function validateUserGoalSnapshot(value: unknown): string[] {
+  const errors = requireRecord(value, 'userGoalSnapshot');
+  if (errors.length) return errors;
+  const record = value as Record<string, unknown>;
+  if (!nonEmptyString(record.turnId)) errors.push('userGoalSnapshot.turnId is required');
+  if (!nonEmptyString(record.rawPrompt)) errors.push('userGoalSnapshot.rawPrompt is required');
+  if (!userGoalTypes.includes(record.goalType as UserGoalType)) errors.push('userGoalSnapshot.goalType is unsupported');
+  validateOptionalStringArray(record.requiredFormats, 'userGoalSnapshot.requiredFormats', errors);
+  validateOptionalStringArray(record.requiredArtifacts, 'userGoalSnapshot.requiredArtifacts', errors);
+  validateOptionalStringArray(record.requiredReferences, 'userGoalSnapshot.requiredReferences', errors);
+  validateOptionalStringArray(record.uiExpectations, 'userGoalSnapshot.uiExpectations', errors);
+  validateOptionalStringArray(record.acceptanceCriteria, 'userGoalSnapshot.acceptanceCriteria', errors);
+  return errors;
+}
+
+function validateTurnAcceptance(value: unknown): string[] {
+  const errors = requireRecord(value, 'turnAcceptance');
+  if (errors.length) return errors;
+  const record = value as Record<string, unknown>;
+  if (typeof record.pass !== 'boolean') errors.push('turnAcceptance.pass must be a boolean');
+  if (!turnAcceptanceSeverities.includes(record.severity as TurnAcceptanceSeverity)) errors.push('turnAcceptance.severity is unsupported');
+  if (!nonEmptyString(record.checkedAt)) errors.push('turnAcceptance.checkedAt is required');
+  if (!Array.isArray(record.failures)) errors.push('turnAcceptance.failures must be an array');
+  if (!Array.isArray(record.objectReferences)) {
+    errors.push('turnAcceptance.objectReferences must be an array');
+  } else {
+    record.objectReferences.forEach((reference, index) => {
+      for (const error of validateObjectReference(reference)) errors.push(`turnAcceptance.objectReferences.${index}: ${error}`);
+    });
   }
   return errors;
 }

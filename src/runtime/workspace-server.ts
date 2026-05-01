@@ -46,7 +46,6 @@ createServer(async (req, res) => {
       const root = resolve(url.searchParams.get('path') || process.cwd());
       const entries = await readdir(root, { withFileTypes: true });
       const mapped = await Promise.all(entries
-        .filter((entry) => !entry.name.startsWith('.DS_Store'))
         .map(async (entry) => {
           const path = join(root, entry.name);
           const info = await stat(path).catch(() => undefined);

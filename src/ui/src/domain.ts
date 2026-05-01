@@ -61,6 +61,40 @@ export interface ObjectResolution {
   actions: ObjectAction[];
 }
 
+export type UserGoalType = 'answer' | 'report' | 'analysis' | 'visualization' | 'file' | 'repair' | 'continuation' | 'workflow';
+export type TurnAcceptanceSeverity = 'pass' | 'warning' | 'repairable' | 'failed';
+
+export interface UserGoalSnapshot {
+  turnId: string;
+  rawPrompt: string;
+  goalType: UserGoalType;
+  requiredFormats: string[];
+  requiredArtifacts: string[];
+  requiredReferences: string[];
+  freshness?: {
+    kind: 'today' | 'latest' | 'current-session' | 'prior-run';
+    date?: string;
+  };
+  uiExpectations: string[];
+  acceptanceCriteria: string[];
+}
+
+export interface TurnAcceptanceFailure {
+  code: string;
+  detail: string;
+  repairAction?: string;
+}
+
+export interface TurnAcceptance {
+  pass: boolean;
+  severity: TurnAcceptanceSeverity;
+  checkedAt: string;
+  failures: TurnAcceptanceFailure[];
+  objectReferences: ObjectReference[];
+  repairPrompt?: string;
+  repairAttempt?: number;
+}
+
 export interface BioAgentMessage {
   id: string;
   role: MessageRole;
@@ -75,6 +109,8 @@ export interface BioAgentMessage {
   tokenUsage?: AgentTokenUsage;
   references?: BioAgentReference[];
   objectReferences?: ObjectReference[];
+  goalSnapshot?: UserGoalSnapshot;
+  acceptance?: TurnAcceptance;
 }
 
 export interface SessionVersionRecord {
@@ -394,6 +430,8 @@ export interface BioAgentRun {
   raw?: unknown;
   references?: BioAgentReference[];
   objectReferences?: ObjectReference[];
+  goalSnapshot?: UserGoalSnapshot;
+  acceptance?: TurnAcceptance;
 }
 
 export interface BioAgentSession {

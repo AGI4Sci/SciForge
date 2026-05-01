@@ -6,6 +6,7 @@ import { sendAgentMessageStream } from '../api/agentClient';
 import { sendBioAgentToolMessage } from '../api/bioagentToolsClient';
 import { builtInScenarioPackageRef } from '../scenarioCompiler/scenarioPackage';
 import { resetSession } from '../sessionStore';
+import { acceptAndRepairAgentResponse, buildUserGoalSnapshot } from '../turnAcceptance';
 import { makeId, nowIso, type AgentStreamEvent, type BioAgentConfig, type BioAgentMessage, type BioAgentReference, type BioAgentRun, type BioAgentSession, type NormalizedAgentResponse, type ObjectReference, type RuntimeExecutionUnit, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
 import { exportJsonFile } from './exportUtils';
 import { ActionButton, Badge, ClaimTag, ConfidenceBar, EvidenceTag, IconButton, cx } from './uiPrimitives';
@@ -216,6 +217,16 @@ export function ChatPanel({
   }
 
   async function runPrompt(prompt: string, baseSession: BioAgentSession, references: BioAgentReference[] = []) {
+    const turnId = makeId('turn');
+    const goalSnapshot = buildUserGoalSnapshot({
+      turnId,
+      prompt,
+      references,
+      scenarioId,
+      scenarioOverride,
+      expectedArtifacts: SCENARIO_SPECS[baseScenarioId].outputArtifacts.map((artifact) => artifact.type),
+      recentMessages: baseSession.messages.slice(-8).map((message) => ({ role: message.role, content: message.content })),
+    });
     const userMessage: BioAgentMessage = {
       id: makeId('msg'),
       role: 'user',
@@ -223,6 +234,7 @@ export function ChatPanel({
       createdAt: nowIso(),
       status: 'completed',
       references,
+      goalSnapshot,
     };
     const optimisticSession: BioAgentSession = {
       ...baseSession,
@@ -301,12 +313,23 @@ export function ChatPanel({
         run: {
           ...responseWithUsage.run,
           references,
+          goalSnapshot,
+        },
+        message: {
+          ...responseWithUsage.message,
+          references: responseWithUsage.message.references,
+          goalSnapshot,
         },
       };
-      const mergedSession = mergeAgentResponse(activeSessionRef.current, responseWithReferences);
+      const acceptedResponse = acceptAndRepairAgentResponse({
+        snapshot: goalSnapshot,
+        response: responseWithReferences,
+        session: activeSessionRef.current,
+      });
+      const mergedSession = mergeAgentResponse(activeSessionRef.current, acceptedResponse);
       onSessionChange(mergedSession);
       activeSessionRef.current = mergedSession;
-      onActiveRunChange(responseWithReferences.run.id);
+      onActiveRunChange(acceptedResponse.run.id);
     } catch (err) {
       const rawMessage = err instanceof Error ? err.message : String(err);
       const wasInterrupted = controller.signal.aborted || /cancel|abort|已取消|cancelled|canceled/i.test(rawMessage);
@@ -326,6 +349,7 @@ export function ChatPanel({
         createdAt: failedAt,
         completedAt: failedAt,
         references,
+        goalSnapshot,
       };
       onSessionChange({
         ...optimisticSession,
@@ -337,6 +361,7 @@ export function ChatPanel({
             content: message,
             createdAt: nowIso(),
             status: 'failed',
+            goalSnapshot,
           },
         ],
         runs: [
@@ -583,6 +608,11 @@ export function ChatPanel({
                 {message.evidence ? <EvidenceTag level={message.evidence} /> : null}
                 {message.claimType ? <ClaimTag type={message.claimType} /> : null}
                 {message.status === 'failed' ? <Badge variant="danger">failed</Badge> : null}
+                {message.acceptance ? (
+                  <Badge variant={message.acceptance.pass ? 'success' : message.acceptance.severity === 'repairable' ? 'warning' : 'danger'}>
+                    gate {message.acceptance.severity}
+                  </Badge>
+                ) : null}
               </div>
               {editingMessageId === message.id ? (
                 <div className="message-editor">
@@ -604,6 +634,9 @@ export function ChatPanel({
                   activeRunId={activeRunId}
                   onFocus={onObjectFocus}
                 />
+              ) : null}
+              {message.acceptance && !message.acceptance.pass ? (
+                <TurnAcceptanceNotice acceptance={message.acceptance} />
               ) : null}
               {message.status === 'failed' ? (
                 <FailureRecoveryCard
@@ -887,6 +920,19 @@ function ObjectReferenceChips({
         </button>
       ))}
       {hidden ? <Badge variant="muted">+{hidden} objects</Badge> : null}
+    </div>
+  );
+}
+
+function TurnAcceptanceNotice({
+  acceptance,
+}: {
+  acceptance: NonNullable<BioAgentMessage['acceptance']>;
+}) {
+  return (
+    <div className="turn-acceptance-notice">
+      <Badge variant={acceptance.severity === 'repairable' ? 'warning' : 'danger'}>{acceptance.severity}</Badge>
+      <span>{acceptance.failures.map((failure) => failure.detail).join('；')}</span>
     </div>
   );
 }

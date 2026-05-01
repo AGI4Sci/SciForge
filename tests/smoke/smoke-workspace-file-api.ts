@@ -19,6 +19,7 @@ try {
   await mkdir(join(workspace, 'notes'), { recursive: true });
   const filePath = join(workspace, 'notes', 'report.md');
   await writeFile(filePath, '# Draft\n\nhello', 'utf8');
+  await writeFile(join(workspace, '.DS_Store'), 'ignored before', 'utf8');
   await waitForHealth(port);
   const baseUrl = `http://127.0.0.1:${port}`;
 
@@ -26,6 +27,7 @@ try {
   await assertOk(response);
   const listed = await response.json() as { entries: Array<{ name: string; kind: string; size?: number; modifiedAt?: string }> };
   assert.ok(listed.entries.some((entry) => entry.name === 'notes' && entry.kind === 'folder'));
+  assert.ok(listed.entries.some((entry) => entry.name === '.DS_Store' && entry.kind === 'file'));
 
   response = await fetch(`${baseUrl}/api/bioagent/workspace/file?path=${encodeURIComponent(filePath)}`);
   await assertOk(response);

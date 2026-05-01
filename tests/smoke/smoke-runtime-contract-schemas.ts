@@ -27,6 +27,35 @@ const objectReference = {
 assert.deepEqual(validateRuntimeContract('objectReference', objectReference), []);
 assert.ok(validateRuntimeContract('objectReference', { id: 'bad', title: 'bad', kind: 'script', ref: 'file:run.sh' }).some((error) => error.includes('kind')));
 
+const userGoalSnapshot = {
+  turnId: 'turn-1',
+  rawPrompt: '请生成 markdown 阅读报告',
+  goalType: 'report',
+  requiredFormats: ['markdown'],
+  requiredArtifacts: ['research-report'],
+  requiredReferences: [],
+  uiExpectations: ['report-viewer'],
+  acceptanceCriteria: ['final response is user-readable'],
+};
+
+assert.deepEqual(validateRuntimeContract('userGoalSnapshot', userGoalSnapshot), []);
+assert.ok(validateRuntimeContract('userGoalSnapshot', { ...userGoalSnapshot, goalType: 'unknown' }).some((error) => error.includes('goalType')));
+
+assert.deepEqual(validateRuntimeContract('turnAcceptance', {
+  pass: true,
+  severity: 'pass',
+  checkedAt: '2026-05-01T00:00:00.000Z',
+  failures: [],
+  objectReferences: [objectReference],
+}), []);
+assert.ok(validateRuntimeContract('turnAcceptance', {
+  pass: true,
+  severity: 'oops',
+  checkedAt: '2026-05-01T00:00:00.000Z',
+  failures: [],
+  objectReferences: [],
+}).some((error) => error.includes('severity')));
+
 assert.deepEqual(validateRuntimeContract('resolvedViewPlan', {
   displayIntent,
   sections: {
@@ -55,4 +84,4 @@ assert.deepEqual(validateRuntimeContract('uiModulePackage', {
   preview: 'Protein structure viewer',
 }), []);
 
-console.log('[ok] runtime UI contracts validate DisplayIntent, ResolvedViewPlan, UI module package, and ObjectReference');
+console.log('[ok] runtime UI contracts validate DisplayIntent, ResolvedViewPlan, UI module package, ObjectReference, UserGoalSnapshot, and TurnAcceptance');

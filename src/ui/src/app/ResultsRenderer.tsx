@@ -502,6 +502,13 @@ export function ResultsRenderer({
             ) : objectActionError ? (
               <div className="object-action-error">{objectActionError}</div>
             ) : null}
+            {focusedObjectReference ? (
+              <WorkspaceObjectPreview
+                reference={focusedObjectReference}
+                session={session}
+                config={config}
+              />
+            ) : null}
             {resultTab === 'primary' ? (
               <PrimaryResult
                 scenarioId={scenarioId}
@@ -916,7 +923,8 @@ function compactViewPlanItems(items: ResolvedViewPlanItem[], session: BioAgentSe
   return items.filter((item) => {
     if (item.status === 'missing-artifact' && item.section !== 'primary' && item.source !== 'display-intent') return false;
     if (item.module.componentId === 'execution-unit-table' && !session.executionUnits.length) return false;
-    if (item.module.componentId === 'evidence-matrix' && !session.claims.length && item.status === 'missing-artifact') return false;
+    if (item.module.componentId === 'evidence-matrix' && !session.claims.length && !item.artifact) return false;
+    if (item.module.componentId === 'notebook-timeline' && !session.notebook.length && !item.artifact) return false;
     if (item.module.componentId === 'unknown-artifact-inspector' && !item.artifact) return false;
     const artifactKey = item.artifact?.id ?? item.slot.artifactRef;
     const strongest = artifactKey ? strongestByArtifact.get(artifactKey) : undefined;
@@ -2012,12 +2020,13 @@ function PrimaryResult({
   return (
     <div className="stack">
       <SectionHeader icon={FileText} title="结果视图" subtitle="优先展示用户本轮要看的结果；更多内容默认收起" />
-      <ViewPlanSummary viewPlan={viewPlan} />
       {viewPlan.blockedDesign ? <UIDesignBlockerCard blocker={viewPlan.blockedDesign} /> : null}
       {!planItems.length ? (
         <EmptyArtifactState
-          title="当前 focus mode 没有匹配组件"
-          detail="切回“全部”，或运行一个会生成对应 artifact 的 skill；结果区不会用 demo 数据补位。"
+          title={focusMode === 'all' ? '还没有可展示的关键结果' : '当前筛选没有匹配内容'}
+          detail={focusMode === 'all'
+            ? '发送请求后，这里只展示真实产物、当前 run 结果和被点选/引用的对象；空的系统模块会默认隐藏。'
+            : '切回“全部”，或运行一个会生成对应 artifact 的任务。'}
         />
       ) : null}
       <ResultItemsSection
@@ -2051,6 +2060,15 @@ function PrimaryResult({
               />
             );
           })}
+        </details>
+      ) : null}
+      {viewPlan.allItems.length ? (
+        <details className="result-details-panel subtle">
+          <summary>
+            <span>视图状态</span>
+            <Badge variant="muted">{viewPlan.allItems.length} modules</Badge>
+          </summary>
+          <ViewPlanSummary viewPlan={viewPlan} />
         </details>
       ) : null}
     </div>
@@ -2124,6 +2142,168 @@ function ObjectFocusBanner({
       {error ? <p className="object-action-error">{error}</p> : null}
     </div>
   );
+}
+
+function WorkspaceObjectPreview({
+  reference,
+  session,
+  config,
+}: {
+  reference: ObjectReference;
+  session: BioAgentSession;
+  config: BioAgentConfig;
+}) {
+  const path = pathForObjectReference(reference, session);
+  const [file, setFile] = useState<WorkspaceFileContent | undefined>();
+  const [loadingPath, setLoadingPath] = useState('');
+  const [error, setError] = useState('');
+  useEffect(() => {
+    setFile(undefined);
+    setError('');
+    if (!path || (reference.kind !== 'file' && reference.kind !== 'artifact') || /^https?:\/\//i.test(path)) return undefined;
+    let cancelled = false;
+    setLoadingPath(path);
+    void readWorkspaceFile(path, config)
+      .then((nextFile) => {
+        if (!cancelled) setFile(nextFile);
+      })
+      .catch((nextError) => {
+        if (!cancelled) setError(nextError instanceof Error ? nextError.message : String(nextError));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingPath('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [config, path, reference.kind]);
+
+  if (reference.kind === 'url') {
+    const url = reference.ref.replace(/^url:/i, '');
+    return (
+      <div className="workspace-object-preview">
+        <div className="workspace-object-preview-head">
+          <Badge variant="info">url</Badge>
+          <strong>{reference.title}</strong>
+        </div>
+        <a href={url} target="_blank" rel="noreferrer">{url}</a>
+      </div>
+    );
+  }
+  if (reference.kind === 'folder') {
+    return (
+      <div className="workspace-object-preview">
+        <div className="workspace-object-preview-head">
+          <Badge variant="info">folder</Badge>
+          <strong>{path || reference.ref}</strong>
+        </div>
+        <p>这是一个 workspace 文件夹引用；可用“系统打开”或“打开文件夹”查看内容。</p>
+      </div>
+    );
+  }
+  if (reference.kind !== 'file' && reference.kind !== 'artifact') return null;
+  if (!path) return null;
+  if (loadingPath) {
+    return (
+      <div className="workspace-object-preview">
+        <div className="workspace-object-preview-head">
+          <Badge variant="muted">loading</Badge>
+          <strong>{loadingPath}</strong>
+        </div>
+        <p>正在读取 workspace 文件内容...</p>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="workspace-object-preview">
+        <div className="workspace-object-preview-head">
+          <Badge variant="warning">preview</Badge>
+          <strong>{path}</strong>
+        </div>
+        <p>无法内联预览：{error}</p>
+      </div>
+    );
+  }
+  if (!file) return null;
+  return (
+    <div className="workspace-object-preview">
+      <div className="workspace-object-preview-head">
+        <Badge variant="info">{file.language || fileKindForPath(file.path)}</Badge>
+        <strong>{file.path}</strong>
+        <span>{formatBytes(file.size)}</span>
+      </div>
+      <WorkspaceFileInlineViewer file={file} />
+    </div>
+  );
+}
+
+function WorkspaceFileInlineViewer({ file }: { file: WorkspaceFileContent }) {
+  const kind = fileKindForPath(file.path, file.language);
+  if (kind === 'markdown') return <MarkdownBlock markdown={file.content} />;
+  if (kind === 'json') return <pre className="workspace-object-code">{formatJsonLike(file.content)}</pre>;
+  if (kind === 'csv' || kind === 'tsv') return <DelimitedTextPreview content={file.content} delimiter={kind === 'tsv' ? '\t' : ','} />;
+  if (kind === 'image') {
+    return (
+      <div className="workspace-object-media-note">
+        图片文件已解析为 workspace 引用；若 workspace server 返回文本内容，则下方显示其元数据/编码预览。
+        <pre className="workspace-object-code">{file.content.slice(0, 4000)}</pre>
+      </div>
+    );
+  }
+  if (kind === 'pdf') {
+    return <p className="workspace-object-media-note">PDF 已作为可点击文件引用聚焦。可用“系统打开”查看完整 PDF，BioAgent 不会把二进制内容直接塞进聊天区。</p>;
+  }
+  if (kind === 'html') return <pre className="workspace-object-code">{file.content.slice(0, 12000)}</pre>;
+  return <pre className="workspace-object-code">{file.content.slice(0, 12000)}</pre>;
+}
+
+function DelimitedTextPreview({ content, delimiter }: { content: string; delimiter: ',' | '\t' }) {
+  const rows = content.split(/\r?\n/).filter(Boolean).slice(0, 12).map((line) => line.split(delimiter).slice(0, 8));
+  if (!rows.length) return <p className="empty-state">表格文件为空。</p>;
+  return (
+    <div className="data-table-wrap compact">
+      <table className="data-preview-table">
+        <tbody>
+          {rows.map((row, rowIndex) => (
+            <tr key={`${rowIndex}-${row.join('|')}`}>
+              {row.map((cell, cellIndex) => rowIndex === 0 ? (
+                <th key={`${cellIndex}-${cell}`}>{cell}</th>
+              ) : (
+                <td key={`${cellIndex}-${cell}`}>{cell}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function fileKindForPath(path: string, language = '') {
+  const value = `${path} ${language}`.toLowerCase();
+  if (/markdown|\.md\b|\.markdown\b/.test(value)) return 'markdown';
+  if (/json|\.json\b/.test(value)) return 'json';
+  if (/\.csv\b/.test(value)) return 'csv';
+  if (/\.tsv\b/.test(value)) return 'tsv';
+  if (/\.pdf\b/.test(value)) return 'pdf';
+  if (/\.(png|jpe?g|gif|webp|svg)\b/.test(value)) return 'image';
+  if (/html|\.html?\b/.test(value)) return 'html';
+  return language || 'text';
+}
+
+function formatJsonLike(content: string) {
+  try {
+    return JSON.stringify(JSON.parse(content), null, 2);
+  } catch {
+    return content.slice(0, 12000);
+  }
+}
+
+function formatBytes(value: number) {
+  if (!Number.isFinite(value) || value < 1024) return `${value || 0} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function objectActionLabel(action: ObjectAction) {
@@ -2266,7 +2446,6 @@ function selectDefaultResultItems(items: ResolvedViewPlanItem[], focusMode: Resu
       2,
     );
   }
-  if (!visibleItems.length) visibleItems.push(...sorted.slice(0, 1));
   const visibleIds = new Set(visibleItems.map((item) => item.id));
   return {
     visibleItems,
