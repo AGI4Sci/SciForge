@@ -98,6 +98,11 @@
   line-height: 1.5;
 }
 
+.settings-save-state > span:nth-of-type(2) {
+  flex: 1 1 360px;
+  min-width: min(360px, 100%);
+}
+
 .settings-save-state strong,
 .settings-save-state code,
 .settings-save-state em {

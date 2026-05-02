@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
-import { ChevronDown, ChevronUp, CircleStop, Clock, Copy, Download, MessageSquare, Plus, Quote, Sparkles, Trash2, X } from 'lucide-react';
+import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent } from 'react';
+import { ChevronDown, ChevronUp, CircleStop, Clock, Copy, Download, FileUp, MessageSquare, Plus, Quote, Sparkles, Trash2, X } from 'lucide-react';
 import { scenarios, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
 import { sendAgentMessageStream, validateSemanticTurnAcceptance } from '../api/agentClient';
@@ -7,8 +7,10 @@ import { sendBioAgentToolMessage } from '../api/bioagentToolsClient';
 import { buildContextWindowMeterModel, estimateContextWindowState, latestContextWindowState } from '../contextWindow';
 import { builtInScenarioPackageRef } from '../scenarioCompiler/scenarioPackage';
 import { resetSession } from '../sessionStore';
+import { coalesceStreamEvents, formatAgentTokenUsage, latestRunningEvent, presentStreamEvent, streamEventCounts } from '../streamEventPresentation';
 import { acceptAndRepairAgentResponse, buildBackendAcceptanceRepairPrompt, buildUserGoalSnapshot, shouldRunBackendAcceptanceRepair } from '../turnAcceptance';
-import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type BioAgentConfig, type BioAgentMessage, type BioAgentReference, type BioAgentRun, type BioAgentSession, type NormalizedAgentResponse, type ObjectReference, type RuntimeExecutionUnit, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
+import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type BioAgentConfig, type BioAgentMessage, type BioAgentReference, type BioAgentRun, type BioAgentSession, type NormalizedAgentResponse, type ObjectReference, type PreviewDescriptor, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
+import { writeWorkspaceFile } from '../api/workspaceClient';
 import { exportJsonFile } from './exportUtils';
 import { ActionButton, Badge, ClaimTag, ConfidenceBar, EvidenceTag, IconButton, cx } from './uiPrimitives';
 
@@ -57,6 +59,8 @@ export function ChatPanel({
   onDeleteChat,
   archivedSessions,
   onRestoreArchivedSession,
+  onDeleteArchivedSessions,
+  onClearArchivedSessions,
   onEditMessage,
   onDeleteMessage,
   archivedCount,
@@ -69,6 +73,8 @@ export function ChatPanel({
   onActiveRunChange,
   onMarkReusableRun,
   onObjectFocus,
+  externalReferenceRequest,
+  onExternalReferenceConsumed,
 }: {
   scenarioId: ScenarioInstanceId;
   role: string;
@@ -83,6 +89,8 @@ export function ChatPanel({
   onDeleteChat: () => void;
   archivedSessions: BioAgentSession[];
   onRestoreArchivedSession: (sessionId: string) => void;
+  onDeleteArchivedSessions: (sessionIds: string[]) => void;
+  onClearArchivedSessions: () => void;
   onEditMessage: (messageId: string, content: string) => void;
   onDeleteMessage: (messageId: string) => void;
   archivedCount: number;
@@ -95,6 +103,8 @@ export function ChatPanel({
   onActiveRunChange: (runId: string | undefined) => void;
   onMarkReusableRun: (runId: string) => void;
   onObjectFocus: (reference: ObjectReference) => void;
+  externalReferenceRequest?: { id: string; reference: BioAgentReference };
+  onExternalReferenceConsumed?: (requestId: string) => void;
 }) {
   const [expanded, setExpanded] = useState<number | null>(0);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -103,7 +113,7 @@ export function ChatPanel({
   const [errorText, setErrorText] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [composerHeight, setComposerHeight] = useState(88);
-  const [streamEventsExpanded, setStreamEventsExpanded] = useState(true);
+  const [streamEventsExpanded, setStreamEventsExpanded] = useState(false);
   const [streamEventsHeight, setStreamEventsHeight] = useState(260);
   const [streamEvents, setStreamEvents] = useState<AgentStreamEvent[]>([]);
   const [guidanceQueue, setGuidanceQueue] = useState<string[]>([]);
@@ -116,6 +126,7 @@ export function ChatPanel({
   const abortRef = useRef<AbortController | null>(null);
   const userAbortRequestedRef = useRef(false);
   const messagesRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const autoScrollRef = useRef(true);
   const resizeStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
   const streamResizeStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
@@ -129,6 +140,8 @@ export function ChatPanel({
   const visibleMessageStart = Math.max(0, messages.length - 24);
   const visibleMessages = messages.slice(visibleMessageStart);
   const liveTokenUsage = latestTokenUsage(streamEvents);
+  const worklogCounts = streamEventCounts(streamEvents);
+  const latestWorklogLine = latestRunningEvent(streamEvents);
   const contextWindowState = latestContextWindowState(streamEvents)
     ?? estimateContextWindowState(session, config, streamEvents);
 
@@ -241,6 +254,12 @@ export function ChatPanel({
   }, [scenarioId, autoRunRequest, isSending, onAutoRunConsumed]);
 
   useEffect(() => {
+    if (!externalReferenceRequest) return;
+    addPendingReferenceToComposer(externalReferenceRequest.reference);
+    onExternalReferenceConsumed?.(externalReferenceRequest.id);
+  }, [externalReferenceRequest?.id]);
+
+  useEffect(() => {
     setErrorText('');
     setExpanded(0);
     const element = messagesRef.current;
@@ -258,6 +277,39 @@ export function ChatPanel({
       return;
     }
     await runPrompt(prompt, activeSessionRef.current, pendingReferences);
+  }
+
+  async function handleFileUpload(files: FileList | null) {
+    const selectedFiles = Array.from(files ?? []);
+    if (!selectedFiles.length) return;
+    try {
+      const uploaded = await Promise.all(selectedFiles.map((file) => fileToUploadedArtifact(file, scenarioId, config, activeSessionRef.current.sessionId)));
+      const references = uploaded.map((artifact) => referenceForUploadedArtifact(artifact));
+      const now = nowIso();
+      const uploadMessage: BioAgentMessage = {
+        id: makeId('msg'),
+        role: 'system',
+        content: `已上传 ${uploaded.length} 个文件到证据矩阵：${uploaded.map((artifact) => artifact.metadata?.title ?? artifact.id).join('、')}`,
+        createdAt: now,
+        status: 'completed',
+        references,
+        objectReferences: uploaded.map((artifact) => objectReferenceForUploadedArtifact(artifact)),
+      };
+      const nextSession: BioAgentSession = {
+        ...activeSessionRef.current,
+        messages: [...activeSessionRef.current.messages, uploadMessage],
+        artifacts: mergeRuntimeArtifacts(uploaded, activeSessionRef.current.artifacts),
+        updatedAt: now,
+      };
+      activeSessionRef.current = nextSession;
+      onSessionChange(nextSession);
+      references.forEach(addPendingReference);
+      setErrorText('');
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   }
 
   function addPendingReference(reference: BioAgentReference) {
@@ -339,6 +391,7 @@ export function ChatPanel({
         if (event.usage) latestRoundTokenUsage = event.usage;
         setStreamEvents((current) => coalesceStreamEvents(current, event).slice(-32));
       };
+      const turnPayload = requestPayloadForTurn(optimisticSession, userMessage, references);
       const request = {
         sessionId: optimisticSession.sessionId,
         scenarioId,
@@ -347,10 +400,10 @@ export function ChatPanel({
         prompt,
         references,
         roleView: role,
-        messages: optimisticSession.messages,
-        artifacts: optimisticSession.artifacts,
-        executionUnits: optimisticSession.executionUnits,
-        runs: optimisticSession.runs,
+        messages: turnPayload.messages,
+        artifacts: turnPayload.artifacts,
+        executionUnits: turnPayload.executionUnits,
+        runs: turnPayload.runs,
         config,
         scenarioOverride,
         scenarioPackageRef,
@@ -400,11 +453,13 @@ export function ChatPanel({
         response: responseWithReferences,
         session: activeSessionRef.current,
       });
-      const semanticAcceptance = await validateSemanticTurnAcceptance(request, {
-        snapshot: goalSnapshot,
-        response: deterministicAcceptedResponse,
-        deterministicAcceptance: deterministicAcceptedResponse.message.acceptance!,
-      }, controller.signal);
+      const semanticAcceptance = shouldValidateSemanticAcceptance(deterministicAcceptedResponse)
+        ? await validateSemanticTurnAcceptance(request, {
+          snapshot: goalSnapshot,
+          response: deterministicAcceptedResponse,
+          deterministicAcceptance: deterministicAcceptedResponse.message.acceptance!,
+        }, controller.signal)
+        : undefined;
       const acceptedResponse = semanticAcceptance
         ? acceptAndRepairAgentResponse({
           snapshot: goalSnapshot,
@@ -513,6 +568,12 @@ export function ChatPanel({
       detail: prompt,
       createdAt: now,
     }]);
+  }
+
+  function shouldValidateSemanticAcceptance(response: NormalizedAgentResponse) {
+    const acceptance = response.message.acceptance;
+    if (!acceptance || acceptance.pass) return false;
+    return shouldRunBackendAcceptanceRepair(acceptance, 1);
   }
 
   function handleAbort() {
@@ -789,6 +850,8 @@ export function ChatPanel({
             onRestoreArchivedSession(sessionId);
             setHistoryOpen(false);
           }}
+          onDelete={onDeleteArchivedSessions}
+          onClear={onClearArchivedSessions}
         />
       ) : null}
       <div className="messages" ref={messagesRef} onScroll={handleMessagesScroll}>
@@ -823,11 +886,6 @@ export function ChatPanel({
                   <button type="button" className="message-run-link" onClick={() => onActiveRunChange(messageRunId)}>
                     run {messageRunId.replace(/^run-/, '').slice(0, 8)}
                   </button>
-                ) : null}
-                {message.tokenUsage ? (
-                  <span className="message-token-usage" title="本轮 AgentServer token usage">
-                    {formatAgentTokenUsage(message.tokenUsage)}
-                  </span>
                 ) : null}
                 {message.confidence ? <ConfidenceBar value={message.confidence} /> : null}
                 {message.evidence ? <EvidenceTag level={message.evidence} /> : null}
@@ -892,17 +950,28 @@ export function ChatPanel({
               <div className="message-meta">
                 <strong>{scenario.name}</strong>
                 <Badge variant="info">running</Badge>
-                {liveTokenUsage ? (
-                  <span className="message-token-usage" title="当前运行 token usage">
-                    {formatAgentTokenUsage(liveTokenUsage)}
-                  </span>
-                ) : null}
               </div>
-              <p>{latestRunningEvent(streamEvents) || '正在规划、生成或执行 workspace task...'}</p>
+              <p>{latestWorklogLine || '正在规划、生成或执行 workspace task，过程日志默认折叠。'}</p>
             </div>
           </div>
         ) : null}
       </div>
+
+      {streamEvents.length || isSending ? (
+        <div className="codex-work-status" aria-label="工作状态">
+          <button
+            type="button"
+            onClick={() => setStreamEventsExpanded((value) => !value)}
+            title={streamEventsExpanded ? '收起工作过程' : '展开工作过程'}
+          >
+            <span>{isSending ? '处理中' : '已处理'}</span>
+            <small>
+              {worklogCounts.total ? `${worklogCounts.total} 条工作记录` : latestWorklogLine || '等待工作过程'}
+            </small>
+            {streamEventsExpanded ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
+          </button>
+        </div>
+      ) : null}
 
       {session.runs.length ? (
         <div className="run-link-strip" aria-label="运行记录">
@@ -937,8 +1006,10 @@ export function ChatPanel({
             <div className="stream-events-resize-handle" onMouseDown={beginStreamEventsResize} title="拖拽调整运行观察高度" />
           ) : null}
           <div className="stream-events-head">
-            <span>Agent Backend 运行观察</span>
+            <span>工作过程</span>
             <div className="stream-events-actions">
+              {worklogCounts.key ? <Badge variant="info">{worklogCounts.key} 关键</Badge> : null}
+              {worklogCounts.background ? <Badge variant="muted">{worklogCounts.background} 过程</Badge> : null}
               {guidanceQueue.length ? <Badge variant="warning">{guidanceQueue.length} 条引导排队</Badge> : null}
               {liveTokenUsage ? <Badge variant="muted">{formatAgentTokenUsage(liveTokenUsage)}</Badge> : null}
               <Badge variant="muted">{config.agentBackend}</Badge>
@@ -952,23 +1023,37 @@ export function ChatPanel({
               </button>
             </div>
           </div>
-          {streamEventsExpanded ? (
+          {!streamEventsExpanded ? (
+            <button
+              type="button"
+              className="stream-events-preview"
+              onClick={() => setStreamEventsExpanded(true)}
+              title="展开查看后台探索、工具调用和 raw event"
+            >
+              <span>{latestWorklogLine || '后台过程将折叠在这里。'}</span>
+            </button>
+          ) : (
             <div className="stream-events-list">
               {streamEvents.slice(-24).map((event) => {
-                const readableDetail = readableStreamEventDetail(event);
-                const usageDetail = formatAgentTokenUsage(event.usage);
+                const presentation = presentStreamEvent(event);
+                const copyPayload = JSON.stringify(event.raw ?? { type: event.type, label: event.label, detail: event.detail }, null, 2);
                 return (
-                  <div className={cx('stream-event', streamEventUiClass(event.type))} key={event.id}>
-                    <Badge variant={streamEventBadge(event.type)}>{event.label}</Badge>
-                    <span className="stream-event-type">{streamEventTypeLabel(event.type)}</span>
-                    {usageDetail ? <span className="stream-event-usage">{usageDetail}</span> : null}
-                    {readableDetail ? <span className="stream-event-detail">{readableDetail}</span> : null}
-                    <button type="button" onClick={() => void navigator.clipboard?.writeText(JSON.stringify(event.raw ?? { type: event.type, label: event.label, detail: event.detail }, null, 2))}>复制 raw</button>
-                  </div>
+                  <details className={cx('stream-event', presentation.uiClass)} key={event.id} open={!presentation.initiallyCollapsed}>
+                    <summary>
+                      <Badge variant={presentation.tone}>{event.label}</Badge>
+                      <span className="stream-event-type">{presentation.typeLabel}</span>
+                      {presentation.usageDetail ? <span className="stream-event-usage">{presentation.usageDetail}</span> : null}
+                      <span className="stream-event-detail compact">{presentation.shortDetail || '无详细文本'}</span>
+                    </summary>
+                    <div className="stream-event-expanded">
+                      {presentation.detail ? <pre>{presentation.detail}</pre> : <span>无额外详情。</span>}
+                      <button type="button" onClick={() => void navigator.clipboard?.writeText(copyPayload)}>复制 raw</button>
+                    </div>
+                  </details>
                 );
               })}
             </div>
-          ) : null}
+          )}
         </div>
       ) : null}
 
@@ -995,6 +1080,22 @@ export function ChatPanel({
             <Quote size={14} />
             点选
           </button>
+          <button
+            type="button"
+            className="reference-trigger"
+            onClick={() => fileInputRef.current?.click()}
+            title="上传 PDF、图片、表格或任意文件到证据矩阵"
+          >
+            <FileUp size={14} />
+            上传
+          </button>
+          <input
+            ref={fileInputRef}
+            className="sr-only-file-input"
+            type="file"
+            multiple
+            onChange={(event) => void handleFileUpload(event.currentTarget.files)}
+          />
           {pendingReferences.length ? (
             <BioAgentReferenceChips
               references={pendingReferences}
@@ -1178,6 +1279,30 @@ function mergeObjectReferences(primary: ObjectReference[], secondary: ObjectRefe
   return Array.from(byRef.values()).slice(0, 24);
 }
 
+function requestPayloadForTurn(session: BioAgentSession, userMessage: BioAgentMessage, references: BioAgentReference[]) {
+  const hasExplicitReferences = references.length > 0;
+  const priorMessages = session.messages.filter((message) => message.id !== userMessage.id);
+  const hasRealPriorMessages = priorMessages.some((message) => !message.id.startsWith('seed'));
+  const hasPriorWork = hasRealPriorMessages
+    || session.runs.length > 0
+    || session.artifacts.length > 0
+    || session.executionUnits.length > 0;
+  if (hasPriorWork || hasExplicitReferences) {
+    return {
+      messages: session.messages.filter((message) => !message.id.startsWith('seed')),
+      artifacts: session.artifacts,
+      executionUnits: session.executionUnits,
+      runs: session.runs,
+    };
+  }
+  return {
+    messages: [userMessage],
+    artifacts: [],
+    executionUnits: [],
+    runs: [],
+  };
+}
+
 function mergeRuntimeArtifacts(primary: NormalizedAgentResponse['artifacts'], secondary: NormalizedAgentResponse['artifacts']) {
   const byKey = new Map<string, NormalizedAgentResponse['artifacts'][number]>();
   for (const artifact of [...primary, ...secondary]) {
@@ -1200,6 +1325,179 @@ function mergeRuns(primary: NormalizedAgentResponse['run'][], secondary: Normali
   return Array.from(byId.values()).slice(-12);
 }
 
+async function fileToUploadedArtifact(file: File, scenarioId: ScenarioInstanceId, config: BioAgentConfig, sessionId: string): Promise<RuntimeArtifact> {
+  const id = makeId('upload');
+  const safeSessionId = safeWorkspaceSegment(sessionId || 'sessionless');
+  const safeFileName = safeWorkspaceSegment(file.name) || `${id}.bin`;
+  const relativePath = `.bioagent/uploads/${safeSessionId}/${id}-${safeFileName}`;
+  const workspaceRoot = config.workspacePath.replace(/\/+$/, '');
+  if (!workspaceRoot) throw new Error('上传文件需要先配置 workspacePath。');
+  const absolutePath = `${workspaceRoot}/${relativePath}`;
+  const bytes = await file.arrayBuffer();
+  await writeWorkspaceFile(absolutePath, arrayBufferToBase64(bytes), config, {
+    encoding: 'base64',
+    mimeType: file.type || 'application/octet-stream',
+  });
+  return {
+    id,
+    type: artifactTypeForUploadedFile(file),
+    producerScenario: scenarioId,
+    schemaVersion: '1',
+    metadata: {
+      title: file.name,
+      fileName: file.name,
+      mimeType: file.type || 'application/octet-stream',
+      size: file.size,
+      uploadedAt: nowIso(),
+      source: 'user-upload',
+      storage: 'workspace-file',
+      workspacePath: relativePath,
+    },
+    dataRef: relativePath,
+    path: relativePath,
+    previewDescriptor: {
+      kind: previewKindForUploadedFile(file),
+      source: 'path',
+      ref: relativePath,
+      mimeType: file.type || 'application/octet-stream',
+      sizeBytes: file.size,
+      title: file.name,
+      inlinePolicy: uploadedInlinePolicy(file),
+      derivatives: uploadedDerivativeHints(file, relativePath),
+      actions: uploadedPreviewActions(file),
+      locatorHints: uploadedLocatorHints(file),
+    },
+    data: {
+      title: file.name,
+      fileName: file.name,
+      mimeType: file.type || 'application/octet-stream',
+      size: file.size,
+      path: relativePath,
+      previewKind: previewKindForUploadedFile(file),
+      storage: 'workspace-file',
+    },
+  };
+}
+
+function uploadedInlinePolicy(file: File): PreviewDescriptor['inlinePolicy'] {
+  const kind = previewKindForUploadedFile(file);
+  if (kind === 'pdf' || kind === 'image') return 'stream';
+  if (kind === 'markdown' || kind === 'text' || kind === 'json' || kind === 'table' || kind === 'html') return file.size <= 1024 * 1024 ? 'inline' : 'extract';
+  if (kind === 'office' || kind === 'structure') return 'external';
+  return kind === 'folder' ? 'extract' : 'unsupported';
+}
+
+function uploadedDerivativeHints(file: File, ref: string): PreviewDescriptor['derivatives'] {
+  const kind = previewKindForUploadedFile(file);
+  const lazy = (derivativeKind: NonNullable<PreviewDescriptor['derivatives']>[number]['kind'], mimeType: string) => ({
+    kind: derivativeKind,
+    ref: `${ref}#${derivativeKind}`,
+    mimeType,
+    status: 'lazy' as const,
+  });
+  if (kind === 'pdf') return [lazy('text', 'text/plain'), lazy('pages', 'application/json'), lazy('thumb', 'image/png')];
+  if (kind === 'image') return [lazy('thumb', file.type || 'image/*')];
+  if (kind === 'json' || kind === 'table') return [lazy('schema', 'application/json')];
+  if (kind === 'office' || kind === 'binary') return [lazy('metadata', 'application/json')];
+  return [];
+}
+
+function uploadedPreviewActions(file: File): PreviewDescriptor['actions'] {
+  const kind = previewKindForUploadedFile(file);
+  const common: PreviewDescriptor['actions'] = ['system-open', 'copy-ref', 'inspect-metadata'];
+  if (kind === 'pdf') return ['open-inline', 'extract-text', 'make-thumbnail', 'select-page', 'select-region', ...common];
+  if (kind === 'image') return ['open-inline', 'make-thumbnail', 'select-region', ...common];
+  if (kind === 'table') return ['open-inline', 'select-rows', ...common];
+  if (kind === 'markdown' || kind === 'text' || kind === 'json' || kind === 'html') return ['open-inline', 'extract-text', ...common];
+  return common;
+}
+
+function uploadedLocatorHints(file: File): PreviewDescriptor['locatorHints'] {
+  const kind = previewKindForUploadedFile(file);
+  if (kind === 'pdf') return ['page', 'region'];
+  if (kind === 'image') return ['region'];
+  if (kind === 'table') return ['row-range', 'column-range'];
+  if (kind === 'structure') return ['structure-selection'];
+  if (kind === 'markdown' || kind === 'text' || kind === 'json' || kind === 'html') return ['text-range'];
+  return [];
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function safeWorkspaceSegment(value: string) {
+  return value.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 120);
+}
+
+function artifactTypeForUploadedFile(file: File) {
+  const name = file.name.toLowerCase();
+  const type = file.type.toLowerCase();
+  if (type === 'application/pdf' || name.endsWith('.pdf')) return 'uploaded-pdf';
+  if (type.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/i.test(name)) return 'uploaded-image';
+  if (/\.(csv|tsv|xlsx?|json)$/i.test(name)) return 'uploaded-data-file';
+  if (/\.(txt|md|rtf|docx?)$/i.test(name)) return 'uploaded-document';
+  return 'uploaded-file';
+}
+
+function previewKindForUploadedFile(file: File): PreviewDescriptor['kind'] {
+  const name = file.name.toLowerCase();
+  const type = file.type.toLowerCase();
+  if (type === 'application/pdf' || name.endsWith('.pdf')) return 'pdf';
+  if (type.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/i.test(name)) return 'image';
+  if (/\.(md|markdown)$/i.test(name)) return 'markdown';
+  if (/\.(txt|log)$/i.test(name) || type.startsWith('text/')) return 'text';
+  if (/\.(json|jsonl)$/i.test(name) || type.includes('json')) return 'json';
+  if (/\.(csv|tsv|xlsx?)$/i.test(name)) return 'table';
+  if (/\.(html?|xhtml)$/i.test(name)) return 'html';
+  if (/\.(pdb|cif|mmcif)$/i.test(name)) return 'structure';
+  if (/\.(docx?|pptx?)$/i.test(name)) return 'office';
+  return 'binary';
+}
+
+function referenceForUploadedArtifact(artifact: RuntimeArtifact): BioAgentReference {
+  const title = String(artifact.metadata?.title ?? artifact.id);
+  return {
+    id: makeId('ref-upload'),
+    kind: 'file',
+    title,
+    ref: artifact.dataRef ?? artifact.id,
+    summary: `用户上传文件 · ${artifact.type}`,
+    sourceId: artifact.id,
+    payload: {
+      artifactId: artifact.id,
+      type: artifact.type,
+      metadata: artifact.metadata,
+    },
+  };
+}
+
+function objectReferenceForUploadedArtifact(artifact: RuntimeArtifact): ObjectReference {
+  const title = String(artifact.metadata?.title ?? artifact.id);
+  return {
+    id: makeId('obj-upload'),
+    kind: 'artifact',
+    title,
+    ref: artifact.id,
+    artifactType: artifact.type,
+    preferredView: artifact.type === 'uploaded-image' || artifact.type === 'uploaded-pdf' ? 'preview' : 'generic-artifact-inspector',
+    actions: ['focus-right-pane', 'inspect', 'pin'],
+    status: 'available',
+    summary: '用户上传到证据矩阵的文件',
+    provenance: {
+      dataRef: artifact.dataRef,
+      producer: 'user-upload',
+      size: typeof artifact.metadata?.size === 'number' ? artifact.metadata.size : undefined,
+    },
+  };
+}
+
 function enrichRepairRaw(raw: unknown, repairHistory: unknown, sourceRunId: string, failureReason?: string) {
   const repairMetadata = { acceptanceRepair: { sourceRunId, repairHistory, failureReason } };
   return raw && typeof raw === 'object' && !Array.isArray(raw)
@@ -1215,15 +1513,35 @@ function ContextWindowMeter({
   running: boolean;
 }) {
   const meter = buildContextWindowMeterModel(state, running);
+  const tooltipId = useId();
   return (
     <div
       role="status"
       aria-label={`上下文窗口 ${meter.ratioLabel}，${meter.statusLabel}`}
+      aria-describedby={tooltipId}
       className={cx('context-window-meter', meter.level, meter.isEstimated && 'estimated', meter.isUnknown && 'unknown')}
       title={meter.title}
+      tabIndex={0}
       style={{ '--context-window-ratio': meter.ratioStyle } as CSSProperties}
     >
-      <span className="context-window-ring" aria-hidden="true" />
+      <span className="context-window-ring" aria-hidden="true">
+        <span>{meter.ratioLabel === 'unknown' ? '?' : meter.ratioLabel}</span>
+      </span>
+      <div className="context-window-popover" id={tooltipId} role="tooltip">
+        <div className="context-window-popover-head">
+          <strong>Context window</strong>
+          <em>{meter.statusLabel}</em>
+        </div>
+        <dl>
+          {meter.detailRows.map((row) => (
+            <div key={row.label}>
+              <dt>{row.label}</dt>
+              <dd>{row.value}</dd>
+            </div>
+          ))}
+        </dl>
+        <small>只读状态 · 压缩由 backend 能力和阈值触发</small>
+      </div>
     </div>
   );
 }
@@ -1302,7 +1620,9 @@ function ObjectReferenceChips({
   activeRunId?: string;
   onFocus: (reference: ObjectReference) => void;
 }) {
-  const visible = references.slice(0, 8);
+  const trusted = references.filter(isTrustedObjectReference);
+  const pending = references.filter((reference) => !isTrustedObjectReference(reference));
+  const visible = [...trusted, ...pending].slice(0, 8);
   const hidden = Math.max(0, references.length - visible.length);
   return (
     <div className="object-reference-strip" aria-label="回答中引用的对象">
@@ -1318,12 +1638,21 @@ function ObjectReferenceChips({
         >
           <span>{objectReferenceIcon(reference.kind)}</span>
           <strong>{reference.title}</strong>
+          {!isTrustedObjectReference(reference) ? <Badge variant="warning">点击验证</Badge> : null}
           {reference.status && reference.status !== 'available' ? <Badge variant={reference.status === 'blocked' ? 'danger' : 'warning'}>{reference.status}</Badge> : null}
         </button>
       ))}
       {hidden ? <Badge variant="muted">+{hidden} objects</Badge> : null}
     </div>
   );
+}
+
+function isTrustedObjectReference(reference: ObjectReference) {
+  if (reference.status && reference.status !== 'available') return false;
+  if (reference.kind === 'artifact') return true;
+  if (reference.kind === 'url') return true;
+  if (/^agentserver:\/\//i.test(reference.ref)) return false;
+  return Boolean(reference.provenance?.hash || reference.provenance?.size || reference.provenance?.producer);
 }
 
 function TurnAcceptanceNotice({
@@ -1698,143 +2027,8 @@ function objectReferenceIcon(kind: ObjectReference['kind']) {
   return 'obj';
 }
 
-function latestRunningEvent(events: AgentStreamEvent[]) {
-  const latest = [...events].reverse().find((event) => readableStreamEventDetail(event));
-  return latest ? readableStreamEventDetail(latest) : undefined;
-}
-
 function latestTokenUsage(events: AgentStreamEvent[]) {
   return [...events].reverse().find((event) => event.usage)?.usage;
-}
-
-function formatAgentTokenUsage(usage: AgentStreamEvent['usage'] | undefined) {
-  if (!usage) return '';
-  const parts = [
-    usage.input !== undefined ? `in ${usage.input}` : '',
-    usage.output !== undefined ? `out ${usage.output}` : '',
-    usage.total !== undefined ? `total ${usage.total}` : '',
-    usage.cacheRead !== undefined ? `cache read ${usage.cacheRead}` : '',
-    usage.cacheWrite !== undefined ? `cache write ${usage.cacheWrite}` : '',
-  ].filter(Boolean);
-  const model = [usage.provider, usage.model].filter(Boolean).join('/');
-  const suffix = [model, usage.source].filter(Boolean).join(' ');
-  return `tokens ${parts.join(', ')}${suffix ? ` (${suffix})` : ''}`;
-}
-
-function coalesceStreamEvents(events: AgentStreamEvent[], next: AgentStreamEvent) {
-  if (next.type !== 'text-delta') return [...events, next];
-  const detail = normalizeStreamTextDelta(next.detail).trim();
-  if (!detail) return events;
-  const last = events.at(-1);
-  if (!last || last.type !== 'text-delta') return [...events, { ...next, detail }];
-  const mergedDetail = mergeTextDeltaDetail(last.detail || '', detail);
-  return [
-    ...events.slice(0, -1),
-    {
-      ...next,
-      id: last.id,
-      label: last.label || next.label,
-      detail: mergedDetail.length > 1200 ? `${mergedDetail.slice(-1200).replace(/^\S+\s+/, '')}` : mergedDetail,
-      raw: {
-        type: 'text-delta',
-        coalesced: true,
-        latest: next.raw ?? { detail },
-      },
-    },
-  ];
-}
-
-function mergeTextDeltaDetail(previous: string, next: string) {
-  if (!previous.trim()) return next;
-  if (!next.trim()) return previous;
-  if (/^[,.;:!?，。；：！？)\]}]/.test(next)) return tidyReadableText(`${previous}${next}`);
-  if (/[(\[{]$/.test(previous)) return `${previous}${next}`;
-  return tidyReadableText(`${previous} ${next}`);
-}
-
-function streamEventTypeLabel(type: string) {
-  if (type === 'contextWindowState') return '上下文窗口';
-  if (type === 'contextCompaction') return '上下文压缩';
-  if (type === 'text-delta') return '生成内容';
-  if (type === 'tool-call') return '工具调用';
-  if (type === 'tool-result') return '工具结果';
-  if (type === 'run-plan') return '执行计划';
-  if (type === 'stage-start') return '阶段开始';
-  return type;
-}
-
-function readableStreamEventDetail(event: AgentStreamEvent) {
-  if (event.contextWindowState) {
-    const state = event.contextWindowState;
-    const meter = buildContextWindowMeterModel(state, false);
-    return `used/window ${meter.used}/${meter.windowSize}, ratio ${meter.ratioLabel}, source ${meter.sourceLabel}, status ${meter.statusLabel}, backend ${state.backend || 'unknown'}, ${meter.compactLine}, last ${state.lastCompactedAt || 'never'}`;
-  }
-  if (event.contextCompaction) {
-    const compaction = event.contextCompaction;
-    return [compaction.status, compaction.message || compaction.reason, compaction.lastCompactedAt ? `last ${compaction.lastCompactedAt}` : '']
-      .filter(Boolean)
-      .join(' · ');
-  }
-  if (!event.detail) return '';
-  const detail = event.type === 'text-delta'
-    ? normalizeStreamTextDelta(event.detail)
-    : tidyReadableText(event.detail);
-  const usageDetail = formatAgentTokenUsage(event.usage);
-  return usageDetail ? detail.replace(` | ${usageDetail}`, '').replace(usageDetail, '').trim() : detail;
-}
-
-function normalizeStreamTextDelta(value?: string) {
-  if (!value) return '';
-  const extracted = extractProtocolText(value);
-  return tidyReadableText(extracted || value);
-}
-
-function extractProtocolText(value: string) {
-  const parts: string[] = [];
-  const textFieldPattern = /"text"\s*:\s*"((?:\\.|[^"\\])*)"/g;
-  for (const match of value.matchAll(textFieldPattern)) {
-    try {
-      parts.push(JSON.parse(`"${match[1]}"`) as string);
-    } catch {
-      parts.push(match[1].replace(/\\"/g, '"').replace(/\\n/g, '\n'));
-    }
-  }
-  if (!parts.length) return '';
-  const protocolFragments = value.match(/"protocolVersion"\s*:\s*"v\d+"/g)?.length ?? 0;
-  return protocolFragments || parts.length > 1 ? parts.join('') : '';
-}
-
-function tidyReadableText(value: string) {
-  return value
-    .replace(/\\n/g, '\n')
-    .replace(/\\t/g, ' ')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .split('\n')
-    .map((line) => line.replace(/[ \t]{2,}/g, ' ').trim())
-    .join('\n')
-    .replace(/([A-Za-z0-9\u4e00-\u9fff])\n(?=[A-Za-z0-9\u4e00-\u9fff])/g, '$1 ')
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim();
-}
-
-function streamEventBadge(type: string): 'info' | 'warning' | 'danger' | 'success' | 'muted' {
-  if (type.includes('error') || type.includes('failed')) return 'danger';
-  if (type === 'contextCompaction') return 'warning';
-  if (type.includes('silent') || type.includes('guidance') || type.includes('permission')) return 'warning';
-  if (type === 'contextWindowState') return 'info';
-  if (type.includes('result') || type.includes('completed') || type.includes('done')) return 'success';
-  if (type.includes('text-delta')) return 'muted';
-  return 'info';
-}
-
-function streamEventUiClass(type: string) {
-  if (type === 'contextWindowState' || type === 'contextCompaction') return 'context';
-  if (type === 'tool-call' || type === 'tool-result') return 'tool';
-  if (type === 'text-delta') return 'thinking';
-  if (type === 'run-plan' || type === 'stage-start') return 'plan';
-  if (type.includes('error') || type.includes('failed')) return 'error';
-  return '';
 }
 
 export function mergeRunTimelineEvents(events: TimelineEventRecord[], previousSession: BioAgentSession | undefined, nextSession: BioAgentSession) {
@@ -1879,12 +2073,33 @@ function SessionHistoryPanel({
   currentSession,
   archivedSessions,
   onRestore,
+  onDelete,
+  onClear,
 }: {
   currentSession: BioAgentSession;
   archivedSessions: BioAgentSession[];
   onRestore: (sessionId: string) => void;
+  onDelete: (sessionIds: string[]) => void;
+  onClear: () => void;
 }) {
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const currentStats = sessionHistoryStats(currentSession);
+  const allSelected = archivedSessions.length > 0 && selectedIds.length === archivedSessions.length;
+  function toggleSelected(sessionId: string) {
+    setSelectedIds((current) => current.includes(sessionId)
+      ? current.filter((id) => id !== sessionId)
+      : [...current, sessionId]);
+  }
+  function deleteSelected() {
+    if (!selectedIds.length) return;
+    onDelete(selectedIds);
+    setSelectedIds([]);
+  }
+  function clearAll() {
+    if (!archivedSessions.length) return;
+    onClear();
+    setSelectedIds([]);
+  }
   return (
     <div className="session-history-panel">
       <div className="session-history-head">
@@ -1894,6 +2109,21 @@ function SessionHistoryPanel({
         </div>
         <Badge variant="muted">{currentStats}</Badge>
       </div>
+      {archivedSessions.length ? (
+        <div className="session-history-bulkbar">
+          <label>
+            <input
+              type="checkbox"
+              checked={allSelected}
+              onChange={(event) => setSelectedIds(event.target.checked ? archivedSessions.map((item) => item.sessionId) : [])}
+            />
+            全选
+          </label>
+          <Badge variant={selectedIds.length ? 'info' : 'muted'}>{selectedIds.length} selected</Badge>
+          <button type="button" onClick={deleteSelected} disabled={!selectedIds.length}>删除选中</button>
+          <button type="button" onClick={clearAll}>清空历史</button>
+        </div>
+      ) : null}
       {!archivedSessions.length ? (
         <div className="empty-runtime-state compact">
           <Badge variant="muted">empty</Badge>
@@ -1904,6 +2134,12 @@ function SessionHistoryPanel({
         <div className="session-history-list">
           {archivedSessions.map((item) => (
             <div className="session-history-row" key={item.sessionId}>
+              <input
+                type="checkbox"
+                checked={selectedIds.includes(item.sessionId)}
+                onChange={() => toggleSelected(item.sessionId)}
+                aria-label={`选择历史会话 ${item.title}`}
+              />
               <div className="session-history-copy">
                 <strong>{item.title}</strong>
                 <span>{formatSessionTime(item.updatedAt || item.createdAt)} · {sessionHistoryStats(item)}</span>

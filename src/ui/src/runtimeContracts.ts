@@ -1,4 +1,4 @@
-import type { ObjectAction, ObjectReferenceKind, TurnAcceptanceSeverity, UserGoalType } from './domain';
+import type { ArtifactPreviewAction, ObjectAction, ObjectReferenceKind, PreviewDescriptorKind, PreviewDescriptorSource, PreviewDerivativeKind, PreviewInlinePolicy, TurnAcceptanceSeverity, UserGoalType } from './domain';
 
 export const objectReferenceKinds = [
   'artifact',
@@ -19,6 +19,58 @@ export const objectActions = [
   'pin',
   'compare',
 ] as const satisfies readonly ObjectAction[];
+
+export const previewDescriptorKinds = [
+  'pdf',
+  'image',
+  'markdown',
+  'text',
+  'json',
+  'table',
+  'html',
+  'structure',
+  'office',
+  'folder',
+  'binary',
+] as const satisfies readonly PreviewDescriptorKind[];
+
+export const previewDescriptorSources = [
+  'path',
+  'dataRef',
+  'artifact',
+  'url',
+] as const satisfies readonly PreviewDescriptorSource[];
+
+export const previewInlinePolicies = [
+  'inline',
+  'stream',
+  'thumbnail',
+  'extract',
+  'external',
+  'unsupported',
+] as const satisfies readonly PreviewInlinePolicy[];
+
+export const previewDerivativeKinds = [
+  'text',
+  'thumb',
+  'pages',
+  'schema',
+  'html',
+  'structure-bundle',
+  'metadata',
+] as const satisfies readonly PreviewDerivativeKind[];
+
+export const artifactPreviewActions = [
+  'open-inline',
+  'system-open',
+  'copy-ref',
+  'extract-text',
+  'make-thumbnail',
+  'select-region',
+  'select-page',
+  'select-rows',
+  'inspect-metadata',
+] as const satisfies readonly ArtifactPreviewAction[];
 
 export const userGoalTypes = [
   'answer',
@@ -100,6 +152,42 @@ export const runtimeContractSchemas = {
       provenance: { type: 'object' },
     },
   },
+  previewDescriptor: {
+    $id: 'bioagent.preview-descriptor.schema.json',
+    type: 'object',
+    required: ['kind', 'source', 'ref', 'inlinePolicy', 'actions'],
+    properties: {
+      kind: { enum: previewDescriptorKinds },
+      source: { enum: previewDescriptorSources },
+      ref: { type: 'string' },
+      mimeType: { type: 'string' },
+      sizeBytes: { type: 'number' },
+      hash: { type: 'string' },
+      title: { type: 'string' },
+      rawUrl: { type: 'string' },
+      inlinePolicy: { enum: previewInlinePolicies },
+      derivatives: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['kind', 'ref'],
+          properties: {
+            kind: { enum: previewDerivativeKinds },
+            ref: { type: 'string' },
+            mimeType: { type: 'string' },
+            sizeBytes: { type: 'number' },
+            hash: { type: 'string' },
+            generatedAt: { type: 'string' },
+            status: { enum: ['available', 'lazy', 'failed', 'unsupported'] },
+            diagnostics: { type: 'array', items: { type: 'string' } },
+          },
+        },
+      },
+      actions: { type: 'array', items: { enum: artifactPreviewActions } },
+      diagnostics: { type: 'array', items: { type: 'string' } },
+      locatorHints: { type: 'array', items: { enum: ['page', 'region', 'row-range', 'column-range', 'structure-selection', 'text-range'] } },
+    },
+  },
   userGoalSnapshot: {
     $id: 'bioagent.user-goal-snapshot.schema.json',
     type: 'object',
@@ -151,6 +239,7 @@ export function validateRuntimeContract(name: RuntimeContractName, value: unknow
   if (name === 'displayIntent') return validateDisplayIntent(value);
   if (name === 'resolvedViewPlan') return validateResolvedViewPlan(value);
   if (name === 'objectReference') return validateObjectReference(value);
+  if (name === 'previewDescriptor') return validatePreviewDescriptor(value);
   if (name === 'userGoalSnapshot') return validateUserGoalSnapshot(value);
   if (name === 'turnAcceptance') return validateTurnAcceptance(value);
   return validateUIModulePackage(value);
@@ -200,6 +289,38 @@ function validateObjectReference(value: unknown): string[] {
     if (!Array.isArray(record.actions)) errors.push('objectReference.actions must be an array');
     for (const action of Array.isArray(record.actions) ? record.actions : []) {
       if (!objectActions.includes(action as ObjectAction)) errors.push(`objectReference.actions contains unsupported action: ${String(action)}`);
+    }
+  }
+  return errors;
+}
+
+function validatePreviewDescriptor(value: unknown): string[] {
+  const errors = requireRecord(value, 'previewDescriptor');
+  if (errors.length) return errors;
+  const record = value as Record<string, unknown>;
+  if (!previewDescriptorKinds.includes(record.kind as PreviewDescriptorKind)) errors.push('previewDescriptor.kind is unsupported');
+  if (!previewDescriptorSources.includes(record.source as PreviewDescriptorSource)) errors.push('previewDescriptor.source is unsupported');
+  if (!nonEmptyString(record.ref)) errors.push('previewDescriptor.ref is required');
+  if (!previewInlinePolicies.includes(record.inlinePolicy as PreviewInlinePolicy)) errors.push('previewDescriptor.inlinePolicy is unsupported');
+  if (!Array.isArray(record.actions)) {
+    errors.push('previewDescriptor.actions must be an array');
+  } else {
+    for (const action of record.actions) {
+      if (!artifactPreviewActions.includes(action as ArtifactPreviewAction)) errors.push(`previewDescriptor.actions contains unsupported action: ${String(action)}`);
+    }
+  }
+  if (record.derivatives !== undefined) {
+    if (!Array.isArray(record.derivatives)) {
+      errors.push('previewDescriptor.derivatives must be an array');
+    } else {
+      for (const [index, derivative] of record.derivatives.entries()) {
+        if (!isRecord(derivative)) {
+          errors.push(`previewDescriptor.derivatives.${index} must be an object`);
+          continue;
+        }
+        if (!previewDerivativeKinds.includes(derivative.kind as PreviewDerivativeKind)) errors.push(`previewDescriptor.derivatives.${index}.kind is unsupported`);
+        if (!nonEmptyString(derivative.ref)) errors.push(`previewDescriptor.derivatives.${index}.ref is required`);
+      }
     }
   }
   return errors;

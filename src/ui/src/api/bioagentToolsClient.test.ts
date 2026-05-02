@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 
-import { sendBioAgentToolMessage } from './bioagentToolsClient';
+import { currentTurnContextPolicy, sendBioAgentToolMessage } from './bioagentToolsClient';
 import type { SendAgentMessageInput } from '../domain';
 
 const originalFetch = globalThis.fetch;
@@ -93,6 +93,55 @@ describe('sendBioAgentToolMessage routing', () => {
     assert.equal(uiState.agentDispatchPolicy, 'agentserver-decides');
   });
 
+  it('summarizes uploaded binary artifacts without forwarding data URLs to AgentServer', async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    globalThis.fetch = (async (_url, init) => {
+      requestBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        ok: true,
+        result: {
+          message: 'upload reference received',
+          confidence: 0.8,
+          claimType: 'fact',
+          evidenceLevel: 'runtime',
+          uiManifest: [],
+          executionUnits: [{ id: 'EU-upload-ref', tool: 'bioagent.workspace-runtime-gateway', status: 'done' }],
+          artifacts: [],
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    const pdfDataUrl = `data:application/pdf;base64,${Buffer.from('fake-pdf-binary'.repeat(80_000)).toString('base64')}`;
+    await sendBioAgentToolMessage({
+      ...baseInput(),
+      sessionId: 'session-upload',
+      scenarioId: 'literature-evidence-review',
+      agentDomain: 'literature',
+      artifacts: [{
+        id: 'upload-pdf',
+        type: 'uploaded-pdf',
+        producerScenario: 'literature-evidence-review',
+        schemaVersion: '1',
+        dataRef: '.bioagent/uploads/session-upload/upload-pdf.pdf',
+        path: '.bioagent/uploads/session-upload/upload-pdf.pdf',
+        metadata: { fileName: 'paper.pdf', mimeType: 'application/pdf', size: 1234, source: 'user-upload' },
+        data: { fileName: 'paper.pdf', mimeType: 'application/pdf', dataUrl: pdfDataUrl },
+      }],
+      prompt: '阅读上传 PDF 并总结。',
+    });
+
+    const serialized = JSON.stringify(requestBody);
+    assert.ok(!serialized.includes(pdfDataUrl.slice(0, 50_000)), 'uploaded PDF dataUrl leaked into AgentServer request');
+    const artifacts = requestBody?.artifacts as Array<Record<string, unknown>>;
+    assert.equal(artifacts[0].dataRef, '.bioagent/uploads/session-upload/upload-pdf.pdf');
+    assert.equal(artifacts[0].path, '.bioagent/uploads/session-upload/upload-pdf.pdf');
+    assert.equal('data' in artifacts[0], false);
+    assert.ok(artifacts[0].dataSummary);
+  });
+
   it('routes fresh arxiv literature report requests to Codex-backed AgentServer generation', async () => {
     let requestBody: Record<string, unknown> | undefined;
     globalThis.fetch = (async (_url, init) => {
@@ -137,6 +186,92 @@ describe('sendBioAgentToolMessage routing', () => {
     assert.equal(requestBody?.prompt, '帮我检索arxiv上最新的agent相关论文，阅读并写一份调研报告');
     const uiState = requestBody?.uiState as Record<string, unknown>;
     assert.equal(uiState.agentDispatchPolicy, 'agentserver-decides');
+  });
+
+  it('isolates stale session artifacts for fresh latest/arxiv retrieval requests', async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    globalThis.fetch = (async (_url, init) => {
+      requestBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        ok: true,
+        result: {
+          message: 'fresh arxiv search started',
+          confidence: 0.8,
+          claimType: 'fact',
+          evidenceLevel: 'runtime',
+          uiManifest: [],
+          executionUnits: [{ id: 'EU-fresh', tool: 'bioagent.workspace-runtime-gateway', status: 'done' }],
+          artifacts: [],
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    await sendBioAgentToolMessage({
+      ...baseInput(),
+      scenarioId: 'literature-evidence-review',
+      agentName: 'Literature',
+      agentDomain: 'literature',
+      prompt: '帮我检索今天arxiv上最新的agent相关论文，并提供一个简要的总结报告',
+      messages: [
+        { id: 'msg-old-user', role: 'user', content: '阅读这篇单细胞 PDF', createdAt: '2026-05-01T00:00:00.000Z', status: 'completed' },
+        { id: 'msg-old-system', role: 'scenario', content: '论文总结：mouse spermatogenesis', createdAt: '2026-05-01T00:01:00.000Z', status: 'completed' },
+      ],
+      artifacts: [{
+        id: 'paper-list-old',
+        type: 'paper-list',
+        producerScenario: 'literature-evidence-review',
+        schemaVersion: '1',
+        dataRef: '.bioagent/artifacts/old-paper-list.json',
+        data: { papers: [{ title: 'Single-cell RNA-seq uncovers dynamic processes in mouse spermatogenesis' }] },
+      }],
+      executionUnits: [{
+        id: 'EU-old',
+        tool: 'literature.old-pdf-reader',
+        params: 'old-pdf',
+        status: 'done',
+        hash: 'oldhash',
+        outputRef: '.bioagent/task-results/old/output.json',
+      }],
+      runs: [{
+        id: 'run-old',
+        scenarioId: 'literature-evidence-review',
+        status: 'completed',
+        prompt: '阅读上传的单细胞 PDF',
+        response: 'mouse spermatogenesis summary',
+        createdAt: '2026-05-01T00:00:00.000Z',
+        completedAt: '2026-05-01T00:01:00.000Z',
+      }],
+      scenarioOverride: {
+        title: '文献证据评估',
+        description: '检索最新文献',
+        skillDomain: 'literature',
+        scenarioMarkdown: '需要 paper-list、research-report。',
+        defaultComponents: ['paper-card-list', 'report-viewer', 'execution-unit-table'],
+        allowedComponents: ['paper-card-list', 'report-viewer', 'execution-unit-table'],
+        fallbackComponent: 'unknown-artifact-inspector',
+      },
+    });
+
+    assert.deepEqual(requestBody?.artifacts, []);
+    const uiState = requestBody?.uiState as Record<string, unknown>;
+    assert.deepEqual(uiState.recentExecutionRefs, []);
+    assert.deepEqual(uiState.recentRuns, []);
+    assert.deepEqual(uiState.recentConversation, ['user: 帮我检索今天arxiv上最新的agent相关论文，并提供一个简要的总结报告']);
+    assert.deepEqual(uiState.contextIsolation, { isolated: true, reason: 'fresh-retrieval-request' });
+  });
+
+  it('keeps explicit references even when the prompt looks like a fresh retrieval', () => {
+    const policy = currentTurnContextPolicy({
+      ...baseInput(),
+      prompt: '检索最新相关论文并对比这份 PDF',
+      references: [{ id: 'ref-pdf', kind: 'file', title: 'paper.pdf', ref: 'file:.bioagent/uploads/paper.pdf' }],
+      artifacts: [{ id: 'upload-pdf', type: 'uploaded-pdf', producerScenario: 'literature-evidence-review', schemaVersion: '1' }],
+    });
+
+    assert.deepEqual(policy, { isolated: false, reason: 'explicit-user-reference' });
   });
 
   it('passes scenario artifact hints into the AgentServer contract without prompt keyword routing', async () => {
@@ -299,6 +434,74 @@ describe('sendBioAgentToolMessage routing', () => {
     assert.equal(response.message.status, 'completed');
     assert.doesNotMatch(events.at(-1) || '', /未完成/);
     assert.match(response.message.content, /repair-needed/);
+  });
+
+  it('keeps provider usage separate from explicit context-window telemetry in streams', async () => {
+    const events: Array<Record<string, any>> = [];
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        [
+          {
+            event: {
+              type: 'usage-update',
+              usage: { input: 178_700, output: 2_318, total: 181_018, provider: 'codex' },
+            },
+          },
+          {
+            event: {
+              type: 'contextWindowState',
+              usage: { inputTokens: 178_700, outputTokens: 2_318, total: 181_018, provider: 'codex' },
+              source: 'model-provider',
+              message: 'provider usage only; not a backend context-window state',
+            },
+          },
+          {
+            event: {
+              type: 'contextWindowState',
+              contextWindowState: {
+                usedTokens: 20_000,
+                windowTokens: 200_000,
+                source: 'native',
+                backend: 'codex',
+              },
+            },
+          },
+          {
+            result: {
+              message: 'done',
+              confidence: 0.9,
+              claimType: 'fact',
+              evidenceLevel: 'runtime',
+              uiManifest: [],
+              executionUnits: [{ id: 'EU-stream', tool: 'bioagent.workspace-runtime-gateway', status: 'done' }],
+              artifacts: [],
+            },
+          },
+        ].forEach((line) => controller.enqueue(encoder.encode(`${JSON.stringify(line)}\n`)));
+        controller.close();
+      },
+    });
+    globalThis.fetch = (async () => new Response(stream, {
+      status: 200,
+      headers: { 'Content-Type': 'application/x-ndjson' },
+    })) as typeof fetch;
+
+    await sendBioAgentToolMessage(baseInput(), {
+      onEvent: (event) => {
+        events.push(event as Record<string, any>);
+      },
+    });
+
+    const usageEvent = events.find((event) => event.type === 'usage-update');
+    const usageOnlyContextEvent = events.find((event) => event.type === 'contextWindowState' && /provider usage only/.test(String(event.detail || '')));
+    const contextEvent = events.find((event) => event.type === 'contextWindowState' && event.contextWindowState);
+    assert.equal(usageEvent?.usage?.total, 181_018);
+    assert.equal(usageEvent?.contextWindowState, undefined);
+    assert.equal(usageOnlyContextEvent?.usage?.total, 181_018);
+    assert.equal(usageOnlyContextEvent?.contextWindowState, undefined);
+    assert.equal(contextEvent?.contextWindowState?.usedTokens, 20_000);
+    assert.equal(contextEvent?.contextWindowState?.windowTokens, 200_000);
   });
 
   it('does not treat "do not use seed skill" repair prompts as local skill requests', async () => {
@@ -512,6 +715,60 @@ describe('sendBioAgentToolMessage routing', () => {
     const artifacts = requestBody?.artifacts as Array<Record<string, unknown>>;
     assert.equal(artifacts[0].workspaceArtifactRef, '.bioagent/artifacts/session-alpha-generic-result.json');
     assert.deepEqual(artifacts[0].fileRefs, ['.bioagent/task-results/run-alpha.json', '.bioagent/outputs/result.csv']);
+  });
+
+  it('compacts long chat history before sending workspace runtime context', async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    globalThis.fetch = (async (_url, init) => {
+      requestBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        ok: true,
+        result: {
+          message: 'compact context answered',
+          confidence: 0.8,
+          claimType: 'fact',
+          evidenceLevel: 'runtime',
+          uiManifest: [],
+          executionUnits: [{ id: 'EU-compact-context', tool: 'bioagent.workspace-runtime-gateway', status: 'done' }],
+          artifacts: [],
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    const longAnswer = `开头 ${'token-heavy-content '.repeat(200)} 结尾`;
+    await sendBioAgentToolMessage({
+      ...baseInput(),
+      sessionId: 'session-compact-history',
+      messages: [
+        { id: 'u1', role: 'user', content: '读取上传的 PDF 并做摘要', createdAt: '2026-04-26T00:00:00.000Z', status: 'completed' },
+        { id: 'a1', role: 'scenario', content: longAnswer, createdAt: '2026-04-26T00:00:10.000Z', status: 'completed' },
+      ],
+      artifacts: [{
+        id: 'prior-report',
+        type: 'research-report',
+        producerScenario: 'workspace-structure-exploration-t055-test',
+        schemaVersion: '1',
+        dataRef: '.bioagent/artifacts/prior-report.json',
+        metadata: { outputRef: '.bioagent/task-results/prior.json' },
+        data: { markdown: longAnswer },
+      }],
+      prompt: '继续，只补充局限性。',
+    });
+
+    const uiState = requestBody?.uiState as Record<string, unknown>;
+    const recentConversation = uiState.recentConversation as string[];
+    assert.equal(recentConversation.length, 3);
+    assert.match(recentConversation[1], /\[.*chars omitted\]/);
+    assert.ok(recentConversation[1].length < 1300);
+    const agentContext = uiState.agentContext as Record<string, unknown>;
+    assert.deepEqual(agentContext.recentConversation, recentConversation);
+    const scenario = agentContext.scenario as Record<string, unknown>;
+    assert.equal(typeof scenario.markdownPreview, 'string');
+    assert.equal(typeof scenario.markdownChars, 'number');
+    assert.equal('markdown' in scenario, false);
   });
 
   it('passes explicit chat references to workspace runtime context', async () => {

@@ -33,10 +33,15 @@ export async function sendBioAgentToolMessage(
   signal?: AbortSignal,
 ): Promise<NormalizedAgentResponse> {
   const builtInScenarioId = builtInScenarioIdForInput(input);
-  const artifactSummary = summarizeArtifacts(input);
+  const rawArtifactSummary = summarizeArtifacts(input);
   const referenceSummary = summarizeBioAgentReferences(input);
-  const recentExecutionRefs = summarizeExecutionRefs(input);
-  const recentConversation = currentTurnConversation(input, artifactSummary, recentExecutionRefs);
+  const rawRecentExecutionRefs = summarizeExecutionRefs(input);
+  const contextPolicy = currentTurnContextPolicy(input, rawArtifactSummary, rawRecentExecutionRefs);
+  const artifactSummary = contextPolicy.isolated ? [] : rawArtifactSummary;
+  const recentExecutionRefs = contextPolicy.isolated ? [] : rawRecentExecutionRefs;
+  const recentConversation = contextPolicy.isolated
+    ? [`user: ${input.prompt}`]
+    : currentTurnConversation(input, artifactSummary, recentExecutionRefs);
   const skillDomain = input.scenarioOverride?.skillDomain ?? SCENARIO_SPECS[builtInScenarioId].skillDomain;
   const selectedComponentIds = input.scenarioOverride?.defaultComponents?.length
     ? input.scenarioOverride.defaultComponents
@@ -62,7 +67,9 @@ export async function sendBioAgentToolMessage(
     callbacks.onEvent?.(toolEvent('current-plan', `当前计划：发送用户原始请求到 AgentServer/workspace runtime，由后台判断回答、生成、修复或执行；UI 仅附带目标 artifacts=${expectedArtifactTypes.join(', ') || 'default'}`));
   callbacks.onEvent?.(toolEvent(
     'context-loaded',
-    artifactSummary.length || recentExecutionRefs.length
+    contextPolicy.isolated
+      ? `已隔离历史上下文：${contextPolicy.reason}。本轮只发送用户原始请求和显式引用。`
+      : artifactSummary.length || recentExecutionRefs.length
       ? `读取上一轮上下文：artifacts=${artifactSummary.length}, refs=${recentExecutionRefs.length}`
       : '当前轮没有可复用 artifact/ref，上下文从场景目标和对话开始。',
   ));
@@ -109,11 +116,12 @@ export async function sendBioAgentToolMessage(
           recentConversation,
           currentReferences: referenceSummary,
           recentExecutionRefs,
-          recentRuns: summarizeRuns(input),
+          recentRuns: contextPolicy.isolated ? [] : summarizeRuns(input),
           workspacePersistence: workspacePersistenceSummary(input),
           expectedArtifactTypes,
           selectedComponentIds,
           rawUserPrompt: input.prompt,
+          contextIsolation: contextPolicy,
           agentDispatchPolicy: 'agentserver-decides',
           agentContext: buildAgentContext(input, recentConversation, artifactSummary, recentExecutionRefs),
         },
@@ -122,7 +130,10 @@ export async function sendBioAgentToolMessage(
     });
   const { result, error } = await readWorkspaceToolStream(response, (event) => {
     lastRealEventAt = Date.now();
-    callbacks.onEvent?.(normalizeWorkspaceRuntimeEvent(event));
+    callbacks.onEvent?.(withConfiguredContextWindowLimit(
+      normalizeWorkspaceRuntimeEvent(event),
+      input.config.maxContextWindowTokens,
+    ));
   });
   if (!response.ok || error || !isRecord(result)) {
     throw new Error(error || `BioAgent project tool failed: HTTP ${response.status}`);
@@ -159,6 +170,22 @@ export async function sendBioAgentToolMessage(
     globalThis.clearInterval(silenceWatchdog);
     signal?.removeEventListener('abort', linkedAbort);
   }
+}
+
+function withConfiguredContextWindowLimit(event: AgentStreamEvent, maxContextWindowTokens: number): AgentStreamEvent {
+  const state = event.contextWindowState;
+  if (!state || state.windowTokens !== undefined || !maxContextWindowTokens) return event;
+  const ratio = state.usedTokens !== undefined ? state.usedTokens / maxContextWindowTokens : state.ratio;
+  return {
+    ...event,
+    contextWindowState: {
+      ...state,
+      window: maxContextWindowTokens,
+      windowTokens: maxContextWindowTokens,
+      ratio,
+      status: normalizeContextWindowStatus(state.status, ratio, state.autoCompactThreshold),
+    },
+  };
 }
 
 function expectedArtifactsForScenario(scenarioId: ScenarioId, componentIds: string[]) {
@@ -290,7 +317,7 @@ function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
     ?? normalizeTokenUsage(isRecord(record.output) ? record.output.usage : undefined)
     ?? normalizeTokenUsage(isRecord(record.result) ? record.result.usage : undefined)
     ?? normalizeTokenUsage(isRecord(record.result) && isRecord(record.result.output) ? record.result.output.usage : undefined);
-  const contextWindowState = normalizeContextWindowState(record.contextWindowState ?? record.contextWindow ?? record.context_window ?? record.usage, type, record);
+  const contextWindowState = normalizeContextWindowState(contextWindowCandidate(record), type, record);
   const contextCompaction = normalizeContextCompaction(record.contextCompaction ?? record.compaction ?? record.context_compaction, type, record);
   const baseDetail = asString(record.detail)
     || asString(record.message)
@@ -325,15 +352,26 @@ function normalizeContextWindowState(value: unknown, type: string, fallback: Rec
   const cache = asNumber(record.cache) ?? asNumber(record.cacheTokens) ?? asNumber(usage.cache) ?? (
     cacheRead !== undefined || cacheWrite !== undefined ? (cacheRead ?? 0) + (cacheWrite ?? 0) : undefined
   );
-  const usedTokens = asNumber(record.usedTokens) ?? asNumber(record.used) ?? asNumber(record.contextWindowTokens) ?? asNumber(record.tokens) ?? asNumber(record.inputTokens) ?? asNumber(record.total) ?? asNumber(usage.total) ?? (
-    input !== undefined || output !== undefined || cache !== undefined ? (input ?? 0) + (output ?? 0) + (cache ?? 0) : undefined
-  );
-  const windowTokens = asNumber(record.windowTokens) ?? asNumber(record.window) ?? asNumber(record.contextWindowLimit) ?? asNumber(record.limit) ?? asNumber(record.contextWindow);
+  const explicitUsedTokens = asNumber(record.usedTokens)
+    ?? asNumber(record.used_tokens)
+    ?? asNumber(record.used)
+    ?? asNumber(record.contextWindowTokens)
+    ?? asNumber(record.currentContextWindowTokens)
+    ?? asNumber(record.context_window_tokens)
+    ?? asNumber(record.current_context_window_tokens)
+    ?? asNumber(record.contextLength)
+    ?? asNumber(record.context_length)
+    ?? asNumber(record.currentContextLength)
+    ?? asNumber(record.current_context_length)
+    ?? asNumber(record.tokens);
+  const usedTokens = explicitUsedTokens;
+  const windowTokens = asNumber(record.windowTokens) ?? asNumber(record.window) ?? asNumber(record.contextWindowLimit) ?? asNumber(record.context_window_limit) ?? asNumber(record.limit) ?? asNumber(record.contextWindow);
   const ratio = clampRatio(asNumber(record.ratio) ?? asNumber(record.contextWindowRatio) ?? (
     usedTokens !== undefined && windowTokens ? usedTokens / windowTokens : undefined
   ));
   const hasUsage = input !== undefined || output !== undefined || cache !== undefined || asNumber(usage.total) !== undefined;
-  const explicitSource = asString(record.source) ?? asString(record.contextWindowSource);
+  const hasContextTelemetry = usedTokens !== undefined || windowTokens !== undefined || ratio !== undefined;
+  const explicitSource = asString(record.source) ?? asString(record.contextWindowSource) ?? asString(record.context_window_source);
   const source = explicitSource
     ? (normalizeContextWindowSource(explicitSource) === 'unknown' && hasUsage ? 'provider-usage' : normalizeContextWindowSource(explicitSource))
     : (hasUsage ? 'provider-usage' : 'unknown');
@@ -362,9 +400,42 @@ function normalizeContextWindowState(value: unknown, type: string, fallback: Rec
   if (state.compactCapability === 'unknown' && state.backend) {
     state.compactCapability = compactCapabilityForBackend(state.backend);
   }
-  return state.usedTokens !== undefined || state.windowTokens !== undefined || state.ratio !== undefined || state.source !== 'unknown'
+  return hasContextTelemetry
     ? state
     : undefined;
+}
+
+function contextWindowCandidate(record: Record<string, unknown>): unknown {
+  return record.contextWindowState
+    ?? record.contextWindow
+    ?? record.context_window
+    ?? (isExplicitContextWindowRecord(record.usage) ? record.usage : undefined);
+}
+
+function isExplicitContextWindowRecord(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
+  return [
+    'usedTokens',
+    'used_tokens',
+    'contextWindowTokens',
+    'context_window_tokens',
+    'currentContextWindowTokens',
+    'current_context_window_tokens',
+    'contextLength',
+    'context_length',
+    'currentContextLength',
+    'current_context_length',
+    'windowTokens',
+    'window_tokens',
+    'contextWindowLimit',
+    'context_window_limit',
+    'modelContextWindow',
+    'model_context_window',
+    'contextWindowRatio',
+    'context_window_ratio',
+    'contextWindowSource',
+    'context_window_source',
+  ].some((key) => key in value);
 }
 
 function normalizeContextCompaction(value: unknown, type: string, fallback: Record<string, unknown>): AgentStreamEvent['contextCompaction'] | undefined {
@@ -534,6 +605,72 @@ function builtInScenarioIdForInput(input: SendAgentMessageInput): ScenarioId {
   return 'literature-evidence-review';
 }
 
+export function currentTurnContextPolicy(
+  input: SendAgentMessageInput,
+  artifacts: ReturnType<typeof summarizeArtifacts> = summarizeArtifacts(input),
+  recentExecutionRefs: ReturnType<typeof summarizeExecutionRefs> = summarizeExecutionRefs(input),
+) {
+  const prompt = input.prompt.trim();
+  const hasExplicitReferences = (input.references?.length ?? 0) > 0;
+  if (hasExplicitReferences) return { isolated: false, reason: 'explicit-user-reference' };
+  if (!artifacts.length && !recentExecutionRefs.length && !(input.runs?.length ?? 0)) {
+    return { isolated: false, reason: 'no-prior-context' };
+  }
+  if (isContinuationLikePrompt(prompt)) return { isolated: false, reason: 'continuation-or-repair-request' };
+  if (isFreshRetrievalPrompt(prompt)) return { isolated: true, reason: 'fresh-retrieval-request' };
+  if (isPromptFarFromPriorContext(prompt, artifacts, input.runs ?? [])) return { isolated: true, reason: 'current-prompt-drifted-from-prior-context' };
+  return { isolated: false, reason: 'context-may-be-relevant' };
+}
+
+function isContinuationLikePrompt(prompt: string) {
+  return /继续|基于|根据|上面|上述|这个|这个文件|该文件|这些|前面|之前|上一轮|刚才|已有|已上传|上传|PDF|pdf|总结已有|解释上一轮|修复|重试|重新跑|rerun|repair|retry|continue|existing|previous|uploaded/i.test(prompt);
+}
+
+function isFreshRetrievalPrompt(prompt: string) {
+  return /今天|今日|最新|新近|刚发布|检索|搜索|查找|arxiv|bioRxiv|medRxiv|PubMed|Semantic Scholar|Google Scholar|latest|today|new|recent|search|retrieve/i.test(prompt);
+}
+
+function isPromptFarFromPriorContext(
+  prompt: string,
+  artifacts: ReturnType<typeof summarizeArtifacts>,
+  runs: NonNullable<SendAgentMessageInput['runs']>,
+) {
+  const promptTokens = keywordTokens(prompt);
+  if (!promptTokens.size) return false;
+  const priorText = [
+    ...artifacts.map((artifact) => JSON.stringify({
+      id: artifact.id,
+      type: artifact.type,
+      metadata: artifact.metadata,
+      dataSummary: artifact.dataSummary,
+    })),
+    ...runs.slice(-4).map((run) => `${run.prompt} ${run.response}`),
+  ].join('\n');
+  const priorTokens = keywordTokens(priorText);
+  if (!priorTokens.size) return false;
+  let overlap = 0;
+  for (const token of promptTokens) {
+    if (priorTokens.has(token)) overlap += 1;
+  }
+  return overlap / promptTokens.size < 0.18;
+}
+
+function keywordTokens(value: string) {
+  const normalized = value.toLowerCase();
+  const tokens = new Set<string>();
+  for (const match of normalized.matchAll(/[a-z][a-z0-9-]{2,}|[\u4e00-\u9fff]{2,}/g)) {
+    const token = match[0];
+    if (STOPWORDS.has(token)) continue;
+    tokens.add(token);
+  }
+  return tokens;
+}
+
+const STOPWORDS = new Set([
+  'the', 'and', 'for', 'with', 'from', 'that', 'this', 'are', 'was', 'were', 'have', 'has', 'had',
+  '请', '帮我', '提供', '一个', '一份', '简要', '总结', '报告', '相关', '论文', '阅读',
+]);
+
 function currentTurnConversation(
   input: SendAgentMessageInput,
   artifactSummary: ReturnType<typeof summarizeArtifacts>,
@@ -548,17 +685,23 @@ function currentTurnConversation(
     const references = message.references?.length
       ? `\n  references: ${JSON.stringify(message.references.map(compactBioAgentReference))}`
       : '';
-    return `${message.role}: ${message.content}${references}`;
+    return `${message.role}: ${compactConversationContent(message.content)}${references}`;
   });
   const lastUser = [...input.messages].reverse().find((message) => message.role === 'user');
   if (!lastUser || normalizePromptText(lastUser.content) !== normalizePromptText(input.prompt)) {
-    conversation.push(`user: ${input.prompt}`);
+    conversation.push(`user: ${compactConversationContent(input.prompt)}`);
   }
   return conversation;
 }
 
 function normalizePromptText(value: string) {
   return value.replace(/^运行中引导：/, '').trim();
+}
+
+function compactConversationContent(value: string) {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= 1200) return normalized;
+  return `${normalized.slice(0, 800)} ... [${normalized.length - 1200} chars omitted] ... ${normalized.slice(-400)}`;
 }
 
 function summarizeArtifacts(input: SendAgentMessageInput) {
@@ -834,7 +977,8 @@ function buildAgentContext(
     scenario: scenario ? {
       title: scenario.title,
       goal: scenario.description,
-      markdown: scenario.scenarioMarkdown,
+      markdownPreview: compactConversationContent(scenario.scenarioMarkdown),
+      markdownChars: scenario.scenarioMarkdown.length,
     } : undefined,
     recentConversation,
     currentReferences: summarizeBioAgentReferences(input),

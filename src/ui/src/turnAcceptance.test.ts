@@ -372,6 +372,34 @@ test('explicit references pass when selected evidence changes the answer', () =>
   assert.equal(accepted.message.acceptance?.pass, true);
 });
 
+test('generic UI element references are preserved without forcing selector text into the answer', () => {
+  const reference = {
+    id: 'ref-ui-explorer-node',
+    kind: 'ui' as const,
+    title: 'pdf-extract',
+    ref: 'ui:div.explorer-node:nth-of-type(2) > div.explorer-row > span.explorer-label',
+    summary: 'pdf-extract',
+    payload: {
+      tagName: 'span',
+      className: 'explorer-label',
+      textPreview: 'pdf-extract',
+    },
+  };
+  const snapshot = buildUserGoalSnapshot({
+    turnId: 'turn-generic-ui-reference',
+    prompt: '※1 帮我基于这个元素继续分析',
+    scenarioId: 'literature-evidence-review',
+    references: [reference],
+  });
+  const response = responseWithContent('我会把这个 UI 元素作为当前操作上下文，并继续分析相关结果。');
+  response.message.references = [reference];
+  response.run.references = [reference];
+
+  const accepted = acceptAndRepairAgentResponse({ snapshot, response, session: baseSession });
+
+  assert.equal(accepted.message.acceptance?.failures.some((failure) => failure.code === 'unused-explicit-references'), false);
+});
+
 function responseFixture({
   runId,
   content,

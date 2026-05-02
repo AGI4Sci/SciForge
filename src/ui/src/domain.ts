@@ -9,7 +9,39 @@ export type ExecutionUnitStatus = 'planned' | 'running' | 'done' | 'failed' | 'r
 export type ObjectReferenceKind = 'artifact' | 'file' | 'folder' | 'run' | 'execution-unit' | 'url' | 'scenario-package';
 export type ObjectReferenceStatus = 'available' | 'missing' | 'expired' | 'blocked' | 'external';
 export type ObjectAction = 'focus-right-pane' | 'inspect' | 'open-external' | 'reveal-in-folder' | 'copy-path' | 'pin' | 'compare';
-export type BioAgentReferenceKind = 'file' | 'file-region' | 'message' | 'task-result' | 'chart' | 'table' | 'ui';
+export type BioAgentReferenceKind = 'file' | 'file-region' | 'message' | 'task-result' | 'chart' | 'table' | 'table-range' | 'structure-selection' | 'ui';
+export type PreviewDescriptorKind = 'pdf' | 'image' | 'markdown' | 'text' | 'json' | 'table' | 'html' | 'structure' | 'office' | 'folder' | 'binary';
+export type PreviewDescriptorSource = 'path' | 'dataRef' | 'artifact' | 'url';
+export type PreviewInlinePolicy = 'inline' | 'stream' | 'thumbnail' | 'extract' | 'external' | 'unsupported';
+export type PreviewDerivativeKind = 'text' | 'thumb' | 'pages' | 'schema' | 'html' | 'structure-bundle' | 'metadata';
+export type ArtifactPreviewAction = 'open-inline' | 'system-open' | 'copy-ref' | 'extract-text' | 'make-thumbnail' | 'select-region' | 'select-page' | 'select-rows' | 'inspect-metadata';
+
+export interface PreviewDerivative {
+  kind: PreviewDerivativeKind;
+  ref: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  hash?: string;
+  generatedAt?: string;
+  status?: 'available' | 'lazy' | 'failed' | 'unsupported';
+  diagnostics?: string[];
+}
+
+export interface PreviewDescriptor {
+  kind: PreviewDescriptorKind;
+  source: PreviewDescriptorSource;
+  ref: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  hash?: string;
+  title?: string;
+  rawUrl?: string;
+  inlinePolicy: PreviewInlinePolicy;
+  derivatives?: PreviewDerivative[];
+  actions: ArtifactPreviewAction[];
+  diagnostics?: string[];
+  locatorHints?: Array<'page' | 'region' | 'row-range' | 'column-range' | 'structure-selection' | 'text-range'>;
+}
 
 export interface BioAgentReference {
   id: string;
@@ -375,6 +407,7 @@ export interface RuntimeArtifact {
   data?: unknown;
   dataRef?: string;
   path?: string;
+  previewDescriptor?: PreviewDescriptor;
   visibility?: TimelineVisibility;
   audience?: string[];
   sensitiveDataFlags?: string[];
@@ -479,6 +512,8 @@ export interface BioAgentWorkspaceState {
   sessionsByScenario: Record<ScenarioInstanceId, BioAgentSession>;
   archivedSessions: BioAgentSession[];
   alignmentContracts: AlignmentContractRecord[];
+  feedbackComments?: FeedbackCommentRecord[];
+  feedbackRequests?: FeedbackRequestRecord[];
   beliefGraphs?: BeliefDependencyGraph[];
   timelineEvents?: TimelineEventRecord[];
   reusableTaskCandidates?: ReusableTaskCandidateRecord[];
@@ -486,6 +521,64 @@ export interface BioAgentWorkspaceState {
   branches?: ResearchBranchRecord[];
   researcherDecisions?: ResearcherDecisionRecord[];
   collaborationPolicy?: CollaborationPolicy;
+  updatedAt: string;
+}
+
+export type FeedbackCommentStatus = 'open' | 'triaged' | 'planned' | 'fixed' | 'needs-discussion' | 'wont-fix';
+export type FeedbackPriority = 'low' | 'normal' | 'high' | 'urgent';
+
+export interface FeedbackTargetSnapshot {
+  selector: string;
+  path: string;
+  text: string;
+  tagName: string;
+  role?: string;
+  ariaLabel?: string;
+  rect: { x: number; y: number; width: number; height: number };
+}
+
+export interface FeedbackRuntimeSnapshot {
+  page: string;
+  url: string;
+  scenarioId: ScenarioInstanceId;
+  sessionId?: string;
+  activeRunId?: string;
+  sessionTitle?: string;
+  messageCount?: number;
+  artifactSummary?: Array<{ id: string; type: string; title?: string }>;
+  executionSummary?: Array<{ id: string; tool: string; status: ExecutionUnitStatus }>;
+  uiManifest?: string[];
+  appVersion?: string;
+}
+
+export interface FeedbackCommentRecord {
+  id: string;
+  schemaVersion: 1;
+  authorId: string;
+  authorName: string;
+  comment: string;
+  status: FeedbackCommentStatus;
+  priority: FeedbackPriority;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+  requestId?: string;
+  target: FeedbackTargetSnapshot;
+  viewport: { width: number; height: number; devicePixelRatio: number; scrollX: number; scrollY: number };
+  runtime: FeedbackRuntimeSnapshot;
+  screenshotRef?: string;
+}
+
+export interface FeedbackRequestRecord {
+  id: string;
+  schemaVersion: 1;
+  title: string;
+  status: 'draft' | 'ready' | 'in-progress' | 'fixed' | 'closed';
+  feedbackIds: string[];
+  summary: string;
+  acceptanceCriteria: string[];
+  githubIssueUrl?: string;
+  createdAt: string;
   updatedAt: string;
 }
 

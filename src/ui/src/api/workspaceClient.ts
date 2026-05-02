@@ -1,4 +1,4 @@
-import type { BioAgentConfig, BioAgentWorkspaceState, RuntimeExecutionUnit } from '../domain';
+import type { BioAgentConfig, BioAgentWorkspaceState, PreviewDescriptor, PreviewDerivative, RuntimeExecutionUnit } from '../domain';
 import type { ScenarioLibraryState } from '../scenarioCompiler/scenarioLibrary';
 import type { ScenarioPackage } from '../scenarioCompiler/scenarioPackage';
 import { parseWorkspaceState } from '../sessionStore';
@@ -216,6 +216,7 @@ export async function readWorkspaceFile(path: string, config: BioAgentConfig): P
   if (!path.trim()) throw new Error('path is required');
   const url = new URL(`${config.workspaceWriterBaseUrl}/api/bioagent/workspace/file`);
   url.searchParams.set('path', path);
+  if (config.workspacePath.trim()) url.searchParams.set('workspacePath', config.workspacePath.trim());
   const response = await fetchWorkspace(config, `read workspace file ${path}`, url);
   if (!response.ok) throw new Error(await workspaceResponseError(response, `Read file failed: HTTP ${response.status}`));
   const json = await response.json() as { file?: WorkspaceFileContent };
@@ -223,12 +224,42 @@ export async function readWorkspaceFile(path: string, config: BioAgentConfig): P
   return json.file;
 }
 
-export async function writeWorkspaceFile(path: string, content: string, config: BioAgentConfig): Promise<WorkspaceFileContent> {
+export async function readPreviewDescriptor(ref: string, config: BioAgentConfig): Promise<PreviewDescriptor> {
+  if (!ref.trim()) throw new Error('ref is required');
+  const url = new URL(`${config.workspaceWriterBaseUrl}/api/bioagent/preview/descriptor`);
+  url.searchParams.set('ref', ref);
+  if (config.workspacePath.trim()) url.searchParams.set('workspacePath', config.workspacePath.trim());
+  const response = await fetchWorkspace(config, `read preview descriptor ${ref}`, url);
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Read preview descriptor failed: HTTP ${response.status}`));
+  const json = await response.json() as { descriptor?: PreviewDescriptor };
+  if (!json.descriptor) throw new Error(`Preview descriptor ${ref} returned no descriptor payload.`);
+  return json.descriptor;
+}
+
+export async function readPreviewDerivative(ref: string, kind: PreviewDerivative['kind'], config: BioAgentConfig): Promise<PreviewDerivative> {
+  if (!ref.trim()) throw new Error('ref is required');
+  const url = new URL(`${config.workspaceWriterBaseUrl}/api/bioagent/preview/derivative`);
+  url.searchParams.set('ref', ref);
+  url.searchParams.set('kind', kind);
+  if (config.workspacePath.trim()) url.searchParams.set('workspacePath', config.workspacePath.trim());
+  const response = await fetchWorkspace(config, `read preview derivative ${kind} ${ref}`, url);
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Read preview derivative failed: HTTP ${response.status}`));
+  const json = await response.json() as { derivative?: PreviewDerivative };
+  if (!json.derivative) throw new Error(`Preview derivative ${ref} returned no derivative payload.`);
+  return json.derivative;
+}
+
+export async function writeWorkspaceFile(
+  path: string,
+  content: string,
+  config: BioAgentConfig,
+  options?: { encoding?: 'utf8' | 'base64'; mimeType?: string },
+): Promise<WorkspaceFileContent> {
   if (!path.trim()) throw new Error('path is required');
   const response = await fetchWorkspace(config, `write workspace file ${path}`, `${config.workspaceWriterBaseUrl}/api/bioagent/workspace/file`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path, content }),
+    body: JSON.stringify({ path, content, encoding: options?.encoding, mimeType: options?.mimeType }),
   });
   if (!response.ok) throw new Error(await workspaceResponseError(response, `Write file failed: HTTP ${response.status}`));
   const json = await response.json() as { file?: WorkspaceFileContent };

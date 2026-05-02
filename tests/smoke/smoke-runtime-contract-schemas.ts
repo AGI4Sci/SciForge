@@ -27,6 +27,26 @@ const objectReference = {
 assert.deepEqual(validateRuntimeContract('objectReference', objectReference), []);
 assert.ok(validateRuntimeContract('objectReference', { id: 'bad', title: 'bad', kind: 'script', ref: 'file:run.sh' }).some((error) => error.includes('kind')));
 
+const previewDescriptor = {
+  kind: 'pdf',
+  source: 'path',
+  ref: '.bioagent/uploads/paper.pdf',
+  mimeType: 'application/pdf',
+  sizeBytes: 31_000_000,
+  rawUrl: 'http://127.0.0.1:5174/api/bioagent/preview/raw?ref=paper.pdf',
+  inlinePolicy: 'stream',
+  derivatives: [
+    { kind: 'text', ref: '.bioagent/uploads/paper.pdf#text', status: 'lazy' },
+    { kind: 'pages', ref: '.bioagent/uploads/paper.pdf#pages', status: 'lazy' },
+  ],
+  actions: ['open-inline', 'extract-text', 'select-page', 'select-region', 'system-open', 'copy-ref'],
+  locatorHints: ['page', 'region'],
+};
+
+assert.deepEqual(validateRuntimeContract('previewDescriptor', previewDescriptor), []);
+assert.ok(validateRuntimeContract('previewDescriptor', { ...previewDescriptor, inlinePolicy: 'base64' }).some((error) => error.includes('inlinePolicy')));
+assert.ok(validateRuntimeContract('previewDescriptor', { ...previewDescriptor, derivatives: [{ kind: 'oops' }] }).some((error) => error.includes('derivatives.0.kind')));
+
 const userGoalSnapshot = {
   turnId: 'turn-1',
   rawPrompt: '请生成 markdown 阅读报告',
@@ -84,4 +104,4 @@ assert.deepEqual(validateRuntimeContract('uiModulePackage', {
   preview: 'Protein structure viewer',
 }), []);
 
-console.log('[ok] runtime UI contracts validate DisplayIntent, ResolvedViewPlan, UI module package, ObjectReference, UserGoalSnapshot, and TurnAcceptance');
+console.log('[ok] runtime UI contracts validate DisplayIntent, PreviewDescriptor, ResolvedViewPlan, UI module package, ObjectReference, UserGoalSnapshot, and TurnAcceptance');

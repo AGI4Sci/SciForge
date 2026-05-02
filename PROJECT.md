@@ -16,172 +16,194 @@
 
 ## 任务板
 
+### T065 通用 Artifact Preview Contract 与按需派生预览
 
-
-### T056 Turn Acceptance Gate、自动修复与最终回复对象引用
-
-状态：已完成首版（已接入通用 `UserGoalSnapshot`、确定性 `TurnAcceptanceGate`、可选 backend 语义验收、展示层自动修复、最终回复 objectReferences 抽取、右侧文件预览和 contract/test 覆盖；深度 backend rerun repair 作为后续增强）。
+状态：已完成。
 
 #### 背景
-- 当前多轮机制已经能携带 recent messages、artifacts、runs、ExecutionUnit、失败原因和用户点选 references，但“完成”更多依赖协议状态，而不是用户本轮真实目标是否被满足。
-- 用户要 Markdown 报告却看到 JSON、用户要继续上一轮却无意重跑、用户点选对象但回答未使用该引用，这些都属于“协议成功但用户目标失败”。
-- Agent 最终回复经常包含生成产物路径，例如 `.bioagent/tasks/.../report.md`、`.csv`、`.pdf`、文件夹或 task result JSON；这些路径应该自动变成可点击 object/reference chip，点击后在右侧结果视图打开具体内容，而不是只作为纯文本。
+- 批注指出大 PDF（例如 31MB）仍然无法稳定内联预览：当前链路依赖 Workspace Writer 将整个二进制文件读成 base64，超过预览上限后前端只能显示错误。
+- 用户指出 PDF artifact 不应一开始就携带全文、缩略图、页索引、图表区域等所有派生内容；这会增加 artifact 负担、污染上下文，也不利于任何场景泛化。
+- 更合理的通用模型是：初始 artifact 只保存原始文件和轻量 metadata；当用户打开预览、搜索、引用页码/区域、请求总结时，再通过统一 preview API 按需生成/缓存派生物。
+- 该任务必须覆盖所有 BioAgent 支持的预览类型，形成 backend 可稳定使用的 artifact/preview contract，而不是为当前 PDF、当前论文或当前文献场景打专门补丁。
 
-#### 目标
-- 每一轮对话都生成 `UserGoalSnapshot`：记录用户要的结果类型、格式、引用对象、时效要求、必须产出的 artifact/UI、可接受的 fallback 和明确的完成条件。
-- 每一轮 backend 返回后先经过 `TurnAcceptanceGate`：判断最终回复、artifacts、ExecutionUnit、object refs 和右侧 UI 是否满足 `UserGoalSnapshot`。
-- 若验收失败，系统自动生成 repair request，带上失败项、原始目标、当前 refs/logs/artifacts，并在预算内自动修复；修复失败时返回 `failed-with-reason`，不把半成品包装成成功。
-- 最终回复中的路径、artifact id、run id、execution unit id、URL 和 workspace refs 自动归一化为 `ObjectReference` / `BioAgentReference`，用户点击即可聚焦右侧结果、打开文件预览或进入 Artifact Inspector。
+#### 设计原则
+- Artifact 轻量化：原始 artifact 只包含 `id/type/path/dataRef/mimeType/size/hash/title` 等必要 metadata，不默认内联大文件、全文、base64 或完整 JSON。
+- 预览按需派生：全文提取、缩略图、分页索引、表格 schema、结构 viewer bundle 等都作为 lazy preview derivative，通过用户动作或 backend 明确请求生成。
+- 前后端契约稳定：backend 返回 `previewDescriptor`，前端根据 descriptor 选择预览器；Workspace Writer 负责 raw streaming、range、derivative cache 和安全路径解析。
+- 降级体验稳定：内联预览失败时不能把错误作为主结果；应展示可用替代视图（文本摘要、缩略图、metadata、系统打开、复制引用），详细错误折叠到 diagnostics。
+- 引用语义优先：用户引用的是文件、页码、区域、表格行列、分子残基、图像 ROI 等语义对象，而不是 base64 或脆弱 DOM/path 字符串。
+- Backend-neutral：Codex/OpenTeam/Hermes/Gemini 等 backend 都通过同一 contract 使用 preview，不依赖某个 agent 的特殊输出格式。
 
-#### 通用 Contract 草案
-```ts
-type UserGoalSnapshot = {
-  turnId: string;
-  rawPrompt: string;
-  goalType: 'answer' | 'report' | 'analysis' | 'visualization' | 'file' | 'repair' | 'continuation' | 'workflow';
-  requiredFormats: string[];
-  requiredArtifacts: string[];
-  requiredReferences: string[];
-  freshness?: { kind: 'today' | 'latest' | 'current-session' | 'prior-run'; date?: string };
-  uiExpectations: string[];
-  acceptanceCriteria: string[];
-};
-
-type TurnAcceptance = {
-  pass: boolean;
-  severity: 'pass' | 'warning' | 'repairable' | 'failed';
-  checkedAt: string;
-  failures: Array<{ code: string; detail: string; repairAction?: string }>;
-  objectReferences: ObjectReference[];
-  repairPrompt?: string;
-  semantic?: SemanticTurnAcceptance;
-};
-
-type SemanticTurnAcceptance = {
-  pass: boolean;
-  confidence: number;
-  unmetCriteria: string[];
-  missingArtifacts: string[];
-  referencedEvidence: string[];
-  repairPrompt?: string;
-  backendRunRef?: string;
-};
-```
-
-#### 验收规则
-- 报告类请求：必须有可读 `research-report` / Markdown 正文 / `.md` ref；默认报告视图不能展示 ToolPayload JSON、raw artifacts 或诊断过程。
-- 文件类请求：必须有可解析 workspace file/folder ref，文件存在且类型可预览或可安全打开。
-- 可视化类请求：必须有匹配 UI module 或明确 `blocked-awaiting-ui-design`，不能用空卡片伪装成功。
-- 继续/修复类请求：必须引用上一轮 run/artifact/execution refs，不能无依据开始无关新任务。
-- 点选引用请求：最终请求上下文、Agent 回复和结果对象必须保留被点选 references。
-- 路径引用：最终回复中的 `.bioagent/...`、workspace path、artifact id、run id、execution-unit id、URL 自动变成 object chips；点击默认右侧聚焦，文件内容优先用内置 viewer/inspector 展示。
-- 高风险或不可读对象：显示明确 blocker、原因和 recoverActions，不自动执行脚本或打开危险文件。
-
-#### 自动修复策略
-- `presentation-repair`：结果存在但展示错误，例如报告正文被 JSON 包住、UI module 绑定错、路径未引用化；优先前端/normalizer 修复。
-- `artifact-repair`：回答有结论但缺少要求格式或文件，例如没有 `.md`、表格、图；向 AgentServer 请求补 artifact。
-- `execution-repair`：任务本身未完成，例如下载失败、全文未读、代码报错；走已有 repair/rerun，并保留 failureReason、stdout/stderr、codeRef。
-- 每轮自动 repair 默认最多 1-2 次；超过预算后把验收失败项作为用户可见诊断和下一步建议。
+#### Preview Descriptor 草案
+- `kind`: `pdf | image | markdown | text | json | table | html | structure | office | folder | binary`
+- `source`: `path | dataRef | artifact | url`
+- `mimeType`, `sizeBytes`, `hash`, `title`
+- `rawUrl`: Workspace Writer 可流式读取的稳定 URL；大文件必须支持 `Range`。
+- `inlinePolicy`: `inline | stream | thumbnail | extract | external | unsupported`
+- `derivatives`: 可选派生物声明，例如 `textRef`、`thumbRef`、`pagesRef`、`schemaRef`、`previewHtmlRef`、`structureBundleRef`。
+- `actions`: `open-inline`、`system-open`、`copy-ref`、`extract-text`、`make-thumbnail`、`select-region`、`select-page`、`select-rows`、`inspect-metadata`。
+- `diagnostics`: 只放折叠诊断，不作为主视图内容。
 
 #### TODO
-- [x] 定义 `UserGoalSnapshot` / `TurnAcceptance` TypeScript 类型和 runtime schema，写入 run raw 与 session history。
-- [x] 在发送请求前从 prompt、点选 references、scenario/output contract、recent conversation 生成 `UserGoalSnapshot`。
-- [x] 实现确定性 `TurnAcceptanceGate`：检查 artifacts、files、Markdown、references 和 raw JSON/ToolPayload 泄漏。
-- [x] 接入最终回复路径抽取：把 `.bioagent/...`、workspace 文件、artifact/run/execution refs 和 URL 自动转为 `objectReferences`。
-- [x] 点击最终回复里的文件/path object chip 时，右侧结果视图读取并展示文件内容；Markdown/CSV/TSV/HTML/JSON 走内置 viewer，PDF/图片等走安全提示和系统打开 fallback。
-- [x] 若 acceptance 失败但可修复，自动执行 presentation repair，并在 `repairPrompt` 中记录 artifact/execution repair 所需失败项和期望产物。
-- [x] 为自动修复增加预算和防循环机制：记录 `repairAttempt`、failure codes 和 repair action，不在同一轮无限重试。
-- [x] 后续增强：接入语义验收，由 backend 判断最终回答是否满足用户目标，但 BioAgent 保留确定性 gate 的否决权。
-- [x] 后续增强：artifact/execution repair 可在用户允许或后台预算满足时自动触发第二次 AgentServer rerun，而不仅记录 `repairPrompt`。
-- [x] 增加单测：用户要求 Markdown 报告，backend 返回 JSON 包裹路径，系统自动生成可点击文件引用并避免 raw JSON 默认呈现。
-- [x] 增加单测：用户最终回复包含 `.csv` / `.md` 路径，路径自动变 chip，优先展示报告路径。
-- [x] 后续增强：补 browser E2E 覆盖点选历史消息/图表/表格/文件后追问、最终回复 object chip 右侧聚焦和真实 workspace Markdown 文件预览。
+- [x] 定义 `PreviewDescriptor` / `PreviewDerivative` / `ArtifactPreviewAction` domain types，并写入 artifact contract 文档。
+- [x] 统一 artifact normalization：从 `path/dataRef/objectReference/artifact.metadata` 生成 descriptor，不再让各组件各自猜字段。
+- [x] Workspace Writer 增加 raw file streaming API：支持 workspace-relative path、absolute path 安全校验、`Content-Type`、`Content-Length`、`ETag/hash`、`Range`。
+- [x] Workspace Writer 增加 preview descriptor API：`GET /api/bioagent/preview/descriptor?ref=...`，返回稳定 descriptor 和可用 action。
+- [x] Workspace Writer 增加 derivative cache API：按需生成并缓存 text/thumb/pages/schema/html/structure bundle，缓存 key 使用 path/hash/action/options。
+- [x] PDF：默认只保存原 PDF；预览走 raw streaming/PDF.js；按需生成 `textRef`、`pagesRef`、首页/指定页 thumbnail；支持页码和 normalized region 引用。
+- [x] Image/SVG：默认 raw streaming；按需生成 thumbnail；支持 normalized ROI 引用；大图不走 base64 JSON。
+- [x] Markdown/Text：小文件可直接读取；大文件分块读取、搜索和 excerpt；主视图显示标题、前若干段和目录。
+- [x] JSON：默认展示 schema/key summary；按需表格化 rows/items/records；大 JSON 支持路径选择和 excerpt，不默认全量渲染。
+- [x] CSV/TSV/XLSX：按需读取表头、行数、列类型和前 N 行；支持 row/column range 引用；大表格分页。
+- [x] HTML：优先 sandboxed preview；不安全或过大时展示截图/文本摘要/system-open；禁止任意脚本影响 BioAgent 页面。
+- [x] PDB/CIF/mmCIF：按需生成 3D viewer bundle 或轻量结构 metadata；支持 chain/residue/ligand selection 引用。
+- [x] Office/PPTX/DOCX：默认 metadata + system-open；按需转文本/缩略图（可选依赖），失败时展示明确能力缺口。
+- [x] Folder：展示目录摘要、文件类型统计和可筛选列表；支持文件选择引用，不递归读取大目录。
+- [x] Unknown/Binary：展示 metadata、hash、size、可打开/复制引用；不尝试内联。
+- [x] 前端 ResultsRenderer 改为 descriptor-driven preview registry：每个 kind 一个稳定组件和统一 fallback。
+- [x] 将当前 base64 PDF/image 内联链路降级为小文件兼容路径，大文件必须走 raw streaming。
+- [x] 预览失败 UI 改为“已切换到备用预览/可执行动作”，详细错误折叠到 diagnostics，避免主结果区反复出现 ENOENT/limit 文案。
+- [x] Backend 输出指南：要求 AgentServer/skill 只输出轻量 artifact + descriptor hints；派生内容由 preview API 按需生成。
+- [x] 引用协议扩展：支持 `file:...#page=...`、`file-region:...`、`table-range:...`、`structure-selection:...` 等稳定 locator。
+- [x] 增加单元测试：descriptor 归一化、路径安全、各类型 fallback、preview action 选择、错误折叠。
+- [x] 增加 smoke/browser 测试：大 PDF streaming、图片 ROI、CSV 分页、JSON schema、PDB viewer fallback、Office metadata fallback。
+- [x] 迁移旧 artifact：兼容现有 `path/dataRef/metadata`，逐步补 descriptor，不破坏历史 workspace。
 
+### T064 Workspace-relative Preview Path 与失败任务重试修复
 
-
-### T057 统一 Backend Context Window 契约、原生压缩与失败自治恢复
-
-状态：推进中（backend-neutral context/compact contract 已接入；BackendContextWindowState usage/context 归一化、Gemini SDK fallback、Hermes compat 映射与 429/retry-budget 受控恢复首版已完成）。
+状态：已完成。
 
 #### 背景
-- 失败解释类问题继续交给 agent backend 是正确方向：用户需要 backend 自主定位、修复和继续，而不是 BioAgent 在前端写死恢复话术。
-- 不同 backend 的 context 能力并不一致：Codex 已有 `thread/compact/start`、auto compact、token telemetry 和错误分类；Gemini adapter 有 long-context 与 usage stream，但未暴露统一 compact API；Claude Code 当前走 supervisor bridge，native state/compact 能力还没有进 contract；self-hosted/openteam 可把 AgentServer 自身 current-work/session compaction 作为白盒能力；Hermes backend 已有 context compressor/context length 检测，可后续接入；OpenClaw 目前按 compatibility backend 处理。
-- 上层不能让用户感受到 backend 差异：BioAgent 只展示统一的 context window 使用情况、统一的“正在压缩/已压缩/需要稍后重试”状态；具体是 native compact、AgentServer compact、handoff slimming 还是 session rotation，由 AgentServer 决策。
-- 最近失败更像 provider 429 / retry budget 问题，而不是单纯 context window exceeded；但超大累计 tokens 会放大 429 和重试消耗，因此需要同时控制上下文、工具输出和重试预算。
-- 修改 AgentServer 前必须先按 `/Applications/workspace/ailab/research/app/AgentServer/docs/architecture.md` 校准边界：AgentServer Core 负责统一上下文、run/stage、audit 和 orchestration；各 backend harness 保持自治。
-- 右侧结果中的 ExecutionUnit 和研究记录有长期价值，但默认露出过多会分散用户注意力；它们应从“主结果内容”降级为“可复现/审计/研究日志”详情。
-
-#### 统一 Contract 草案
-```ts
-type BackendContextWindowState = {
-  backend: string;
-  sessionRef: string;
-  provider?: string;
-  model?: string;
-  usedTokens?: number;
-  input?: number;
-  output?: number;
-  cache?: number;
-  window?: number;
-  ratio?: number;
-  source: 'native' | 'provider-usage' | 'agentserver-estimate' | 'unknown';
-  status: 'healthy' | 'watch' | 'near-limit' | 'exceeded' | 'compacting' | 'blocked' | 'unknown';
-  compactCapability: 'native' | 'agentserver' | 'handoff-only' | 'session-rotate' | 'none';
-  lastCompactedAt?: string;
-  lastCompactionReason?: string;
-};
-
-type BackendContextCompactionResult = {
-  status: 'compacted' | 'skipped' | 'failed' | 'unsupported';
-  backend: string;
-  capabilityUsed: BackendContextWindowState['compactCapability'];
-  before?: BackendContextWindowState;
-  after?: BackendContextWindowState;
-  reason: string;
-  userVisibleSummary: string;
-  auditRefs: string[];
-};
-```
-
-#### Backend 能力映射
-- `codex`：优先使用 Codex app-server 原生 `thread/compact/start`；监听 `contextCompaction` item、`turn/completed`、`thread/tokenUsage/updated` 和 error；为 custom provider 配置 `model_context_window`、`model_auto_compact_token_limit`、`compact_prompt`。
-- `gemini`：已确认当前 Gemini CLI SDK/API adapter 可读取 usage stream 和保留 native session/resume，但未暴露 context-window limit、native compact/clear/summarize 或 in-place session reset；标记为 `provider-usage` telemetry + `agentserver/session-rotate` fallback。若 SDK 后续暴露 native compact/clear/summarize API 再接入。
-- `claude-code`：已确认 vendored Claude Code 暴露原生 `/compact`、`compact_boundary`、`status=compacting` 与 usage 相关消息；通过 supervisor bridge 优先调用原生 `/compact`，并把 compact/usage 信号归一化。
-- `self-hosted-agent` / `openteam_agent`：作为白盒参考实现，直接实现统一 contract；AgentServer session-store/current-work compaction 即本 backend 的 native managed compaction。
-- `hermes-agent`：优先复用 Hermes context compressor、context length detection、rate-limit diagnostics；通过 supervisor compat adapter 将压缩事件、window ratio 和 retry-after 归一化成统一事件。
-- `openclaw`：若无可探测 native compact，就标记为 `handoff-only` / `session-rotate`，仍保持同样的 UI 和 preflight 策略。
+- 批注指出上传 PDF 仍然无法预览：结果区读取 `.bioagent/uploads/...` 时，Workspace Writer 把相对路径解析到了 BioAgent repo 根目录，而上传文件实际写在当前 `workspacePath/.bioagent/uploads/...`。
+- 当前任务失败信息显示 AgentServer backend stage failure / invalid tool call id，修复前端预览路径后，需要让用户能够点击已上传对象重新聚焦、预览和引用，再发起同一任务重试。
+- 实测重试时还暴露了两个环境/遥测问题：AgentServer 未在 `18080` 运行会导致 `fetch failed`；provider 累计 token usage 不能再被 UI 估算成 context window 占用。
 
 #### TODO
-- [x] 扩展 `AgentBackendCapabilities`：增加 `contextWindowTelemetry`、`nativeCompaction`、`compactionDuringTurn`、`rateLimitTelemetry`、`sessionRotationSafe` 等能力位。
-- [x] 扩展 `AgentBackendAdapter` contract：增加 `readContextWindowState(sessionRef)`、`compactContext(sessionRef, reason)` 可选方法；无原生能力的 backend 返回 fallback capability，而不是抛错。
-- [x] 将所有 backend 的 usage event 归一化为 `BackendContextWindowState`：BioAgent adapter/normalizer 统一输出 `backend/provider/model/usedTokens/input/output/cache/window/ratio/source/status/compactCapability`；Codex/Hermes 可用 native/context telemetry 时标记 `native`，Gemini/Claude/self-hosted/OpenClaw 等 stream usage 标记 `provider-usage`，无法读原生 window 时明确降级为 `agentserver-estimate` / `handoff-only` / `session-rotate`。
-- [x] 在 AgentServer run preflight 中统一判断 `watch` / `near-limit`：接近阈值时先调用 backend native compact；没有 native compact 时调用 AgentServer `/compact` 或 handoff slimming。
-- [x] Codex adapter：封装 `compactThread(threadId)`，调用 `thread/compact/start`，监听 `contextCompaction` item、`turn/completed` 和 error，并把压缩事件写入 run observation。
-- [x] Codex custom provider：配置 `model_context_window`、`model_auto_compact_token_limit` 和可选 `compact_prompt`，避免 unknown model fallback 让 auto compact 阈值失真。
-- [x] Gemini adapter：探测 SDK 是否提供 context window / session compaction / session reset API；当前仅有 usage stream、`session()`、`resumeSession()`、`sendStream()`，没有 native compact/reset/window limit，已明确标记为 AgentServer compact + `session-rotate` fallback，并补 BioAgent/AgentServer contract smoke。
-- [x] Claude Code bridge：检查 vendored Claude Code remote/session manager 能否提供 usage、limit、summary、compact 或 clear history；能用则接入，不能用则只暴露 fallback。
-- [x] OpenTeam/openteam_agent compact 专项：明确其作为 self-hosted/AgentServer managed backend 的策略。
-  - [x] `readContextWindowState` 使用 AgentServer `/agents/:id/context` 的 session/current-work 视图；即使只能估算，也标记 `compactCapability=agentserver`，不降级成 `handoff-only`。
-  - [x] `compactContext` 调用 AgentServer `/agents/:id/compact`，并显式声明 `compactionScope=session-current-work` / `strategy=agentserver-session-current-work`。
-  - [x] `/compact` 不可用时返回 `agentserver` compact failure refs，由上层 slim handoff 继续一次受控恢复，但不把 OpenTeam 伪装成 backend native compact。
-  - [x] smoke 覆盖 near-limit preflight compact、`contextWindowExceeded` 后 compact+retry 一次、失败时返回 refs/recoverActions。
-- [x] Hermes compat adapter：在 BioAgent adapter/normalizer 层映射 Hermes `context_compressor`、context length、compression threshold、rate-limit reset 信息到统一 `BackendContextWindowState` / `contextCompaction` / `rateLimit` 事件；不改 vendored Hermes。
-- [x] OpenClaw compact fallback 专项：无 native compact 时明确标记 `handoff-only` / `session-rotate`，不伪装 native compact 成功；compact API unsupported/404 返回 skipped/unsupported + audit refs；补 smoke 覆盖 preflight 不失败、handoff slimming 生效、最终诊断清楚。
-- [x] 对 `contextWindowExceeded` 做一次自动恢复：触发统一 compact，再重放同一轮用户请求一次；仍失败时返回 blocker 和 refs。
-- [x] 对 `responseTooManyFailedAttempts` / 429 做受控恢复：退避、减少传入上下文、必要时 compact 后重试一次；不做无限重试，并明确暴露 provider/rate-limit 诊断。
-- [x] 将 AgentServer 自身的 session compaction 从“run 后整理”为“run 前可预防”：在 includeCurrentWork、多轮失败修复、prior run 很大时先 preview/compact current work，再交给 backend；compact 结果写入 contextWindowState/contextCompaction、run metadata/context refs，失败时 slim handoff 继续并携带 recovery ref。
-- [x] 增加 smoke/contract 覆盖：每个 backend 至少覆盖 `readContextWindowState`、preflight compact fallback、context error compact+retry、429 不无限重试。（已补六 backend 矩阵：`codex`、`openteam_agent`、`claude-code`、`hermes-agent`、`openclaw`、`gemini`；覆盖 context source/fallback、preflight compact、contextWindowExceeded compact+retry once、429/retry-budget bounded retry、最终 refs/recoverActions。）
-- [ ] 若必须修改 Codex/Claude/Gemini/Hermes/OpenClaw 等官方或 vendored backend 源码，先证明无法通过 SDK/API/RPC/app-server、环境变量、配置、bridge 或 capability 降级解决；patch 必须小、集中、可重放，并记录到 `/Applications/workspace/ailab/research/app/AgentServer/docs/upstream-backend-overrides.md`。
-- [x] BioAgent UI：ExecutionUnit 保留为“可复现/运行审计”详情，不作为普通用户默认主 tab；失败、开发者模式、用户点击“查看运行细节”时展开。
-- [x] BioAgent UI：研究记录只保留 curated notebook 价值，包括里程碑、假设、关键证据、决策和 run refs；若只是复刻聊天内容，则默认隐藏或合并到运行详情。
-- [x] 结果视图降噪：默认只展示用户最关心的成果、状态和少量恢复建议；raw JSON、完整 ExecutionUnit、完整 timeline、stdout/stderr 统一放入可展开详情。
+- [x] Workspace Writer GET `/workspace/file` 支持 `workspacePath + relative path`，并拒绝越界路径。
+- [x] 前端 `readWorkspaceFile` 请求携带当前 `config.workspacePath`，确保 `.bioagent/uploads/...`、`.bioagent/artifacts/...` 等相对 ref 从工作区根解析。
+- [x] 保留 absolute path 兼容，避免破坏已有文件 API。
+- [x] 扩展可引用文件类型：PDF/图片/SVG 走内联预览，Office 文档/表格/演示文稿作为可引用对象安全展示。
+- [x] 修正 context window 估算：运行日志里的 provider usage 不再推高上下文窗口 meter。
+- [x] 启动 AgentServer `18080` 并重试用户任务，确认新 run 完成并产出 summary-report / evidence-matrix / paper-list / notebook-timeline。
+- [x] 增加 smoke 覆盖：通过 `workspacePath` 读取相对路径文件。
+- [x] 运行 typecheck、build 与 workspace-file smoke 验证。
 
-#### 验收标准
-- BioAgent 不需要知道具体 backend 的内部实现，也能显示一致的 context window 状态和压缩状态。
-- 长程/复杂任务遇到上下文压力时，AgentServer 优先调用 backend 原生 compact；无原生能力时自动降级到 AgentServer external context compaction / handoff slimming。
-- 失败解释类追问仍由 backend 处理，且携带必要 refs、日志摘要和当前目标；BioAgent 不把模板化恢复话术当成最终答案。
-- 429 / retry budget 问题不会造成无限重试或百万级 token 失控；用户能看到清楚的 provider/rate-limit 诊断。
-- 普通用户默认看到的是产物和结论；ExecutionUnit 与研究记录仍可用于复现和审计，但不会抢占主结果焦点。
+### T063 Object-focused Result Viewer、引用校验与 Context Budget 收敛
+
+状态：已完成。
+
+#### 背景
+- 批注指出结果区信息过载：当前聚焦 run、artifact、preview、核心结果、恢复建议和所有模块同时出现，用户无法按需查看对象。
+- 回答中的 object/file chips 里混入了未完成或不可读路径，例如 `summary-report.md`、`output` 等 ref，容易让用户误以为文件已经可用。
+- context window meter 显示很快到顶，其中一部分来自把 provider 累计 token usage 当作真实 context window 使用量，另一部分来自前端 handoff 仍携带过长历史、artifact preview 和 reference payload。
+
+#### UX/Runtime 原则
+- 用户点击对象才展示对象：右侧结果视图优先显示当前 focused object；清除后回到默认结果。
+- 默认结果只展示少量核心内容；更多结果、运行审计和 raw payload 默认折叠。
+- 文件预览按类型处理：Markdown/JSON/CSV/TSV/图片/PDF/HTML/文本走内联预览；大 PDF/图片允许 workspace writer 以 base64 返回预览，不把二进制塞进聊天文本。
+- 引用必须可解释：artifact refs 优先展示；file/path refs 默认标记为点击后验证，失败时在右侧给出明确原因。
+- context window 只在有明确 context telemetry 时显示窗口占用；provider usage 只作为运行指标，不再冒充真实上下文窗口。
+
+#### TODO
+- [x] 结果区支持 focused object 模式：点击 object chip 后右侧只优先展示该对象，提供清除展示按钮。
+- [x] 收敛默认结果区：object focus 存在时隐藏其它自动推断模块，更多内容折叠。
+- [x] Workspace Writer 放宽 PDF/图片二进制预览大小限制，支持上传 PDF/图片内联预览。
+- [x] 回答对象 chip 区分可用 artifact 与待验证 file/path，避免未完成文件默认显得已完成。
+- [x] context window normalizer 不再用 provider cumulative usage 推断真实 window ratio。
+- [x] 缩短前端 AgentServer prompt/metadata 中的历史、artifact data preview 和 reference payload。
+- [x] 运行 typecheck/build 验证。
+
+### T062 Codex-like Quiet Conversation Shell
+
+状态：已完成。
+
+#### 背景
+- 用户提供了桌面截图 `codex1.png` 和 `codex2.png`，希望 BioAgent 继续向 Codex 桌面端的用户体验靠拢。
+- 截图中的核心体验不是改颜色或增加装饰，而是让正文对话更安静：用户消息右置、Agent 回答直接阅读、工具/浏览器/Node/命令过程折叠成一行审计记录、底部输入区像独立 composer 托盘。
+- 该改动必须通用适配所有 workspace/scenario/backend，不为当前科研案例写死 UI 或逻辑。
+
+#### UX 对齐原则
+- 对话优先：主要回答和用户输入保持阅读区中心，减少运行日志、边框和深色卡片对注意力的争夺。
+- 工作过程可审计但默认收起：Runs、stream events、token/backend 指标以低对比行呈现，展开后仍保留 raw copy。
+- 输入区像 Codex composer：底部常驻、圆角托盘，保留点选引用、上传、context meter、中断和发送，同时沿用 BioAgent 原有配色。
+- 不改变全局配色：侧栏、topbar、背景和结果区保持原有视觉基调，只调整对话节奏与信息层级。
+- 结果区保持稳定：科研 artifact、PDF/图片预览、Evidence Matrix 和 ExecutionUnit 不因外观调整丢失可用性。
+
+#### TODO
+- [x] 阅读并记录 `codex1.png` / `codex2.png` 的 UX 特征，转成通用验收标准。
+- [x] 在 PROJECT.md 新增 Codex-like quiet conversation shell 任务和 TODO。
+- [x] 给 Workbench 增加 quiet shell 入口 class，便于后续持续迭代。
+- [x] 将聊天消息改成 Codex-like 节奏：用户输入右置，Agent/系统消息更像正文而不是厚重卡片。
+- [x] 将工作过程、run strip 和 stream events 降低为默认折叠的审计行。
+- [x] 将 composer 改为底部输入托盘，保留引用、上传、context window 和发送控制。
+- [x] 回退浅色 app shell/sidebar/topbar 覆盖，保持 BioAgent 原有暗色视觉基调。
+- [x] 运行 typecheck/build 验证。
+
+### T061 Codex-like Canvas Shell 与 Context Hover 细节
+
+状态：已完成。
+
+#### 背景
+- 用户希望 BioAgent 的聊天工作区更接近 Codex 桌面版的“画布”体验：内容流、运行过程和结果区在同一工作面上自然伸缩，而不是强烈的固定卡片拼接。
+- context window 进度条需要在鼠标悬浮或键盘聚焦时展示具体使用情况，不能只依赖浏览器原生 title。
+- 该改动必须通用适配所有 scenario/backend，不绑定当前 KRAS、论文或任何单一案例。
+
+#### TODO
+- [x] 给 Workbench 增加 canvas shell 语义 class，弱化固定卡片感，保留聊天/结果区的可伸缩与折叠能力。
+- [x] 将 context window meter 扩展为 hover/focus popover，展示 used/window/remaining、source/status、backend/model、阈值、压缩与 budget。
+- [x] 增加模型层单测，保证 hover 明细中的精确 token/window/remaining 信息可用。
+- [x] 用 in-app browser 截图验证 BioAgent 页面视觉效果；Codex 宿主窗口截图受平台安全限制，不绕过。
+
+### T060 Codex-style Agent 工作过程呈现
+
+状态：已完成。
+
+#### 背景
+- 用户希望 BioAgent 的多轮对话体验更接近 Codex 桌面版：关键状态、结果和失败原因直接可见，探索、工具调用、stdout/stderr、usage 等过程信息默认折叠为灰色工作日志，可按需展开。
+- 现状更像“运行日志面板”：后台事件、token usage、context window、tool delta 混在一个常开区域，容易抢走真正回答和关键状态的注意力。
+- 该改动必须 backend-neutral，不能为某个论文、某个场景或某个 agent backend 打补丁。
+
+#### UX 对齐原则
+- 关键内容显性：最终回答、失败原因、需要用户处理的 blocker、权限/中断/修复状态、重要 artifact/object refs 必须直接显示。
+- 过程内容折叠：探索、阶段切换、工具调用、token usage、健康 context window、text delta、raw event 默认进入灰色折叠工作日志。
+- 渐进展开：工作日志默认只显示一行当前状态和计数；展开后每条事件仍保留可折叠详情和 raw copy。
+- 语义分层：usage/cost 只显示为运行指标，不冒充 context window；context window 只有明确遥测时才进入 meter。
+- 多轮连续：运行中引导、修复、续问和历史 run 都沿用同一套展示规则，不能按当前案例特殊处理。
+
+#### TODO
+- [x] 抽象通用 stream event presentation：把事件分类为 key/background/debug，并生成可读摘要、badge、默认折叠状态。
+- [x] 改造 ChatPanel 运行中消息：只展示最新关键状态；后台探索和运行细节进入灰色折叠工作日志。
+- [x] 改造工作日志 UI：默认收起，展开后每条事件可单独展开，支持复制 raw，保留 token/context 指标但降低视觉权重。
+- [x] 增加单元测试：usage-update 不再显示成关键工作内容；context 警告/失败/修复事件保持可见；text delta 合并后进入后台过程。
+- [x] 用实际多轮对话案例验证：第一轮轻量任务、第二轮续问/引导，确认关键内容可见、过程日志折叠、展开后可审计。
+
+### T059 全局产品反馈与 Codex 修改闭环
+
+状态：进行中。
+
+#### 背景
+- 用户希望 BioAgent 像 Codex 桌面端一样，在任意页面位置留下评论、选择目标对象，并把评论、截图/定位和运行时上下文统一保存。
+- 多个用户后续会一起使用产品，反馈需要汇总成结构化 comment bundle，Codex 再按批量评论统一修改代码、发布稳定版本。
+- GitHub Issue 可作为团队协作出口，但不应成为原始反馈事实层；原始反馈必须保存在 workspace-local、机器可读的 bundle 中。
+
+#### UX 原则
+- 用户只管使用和评论：全局评论模式一键开启，点选任意 UI 元素后填写反馈。
+- 评论必须保存可复现上下文：URL、viewport、selector、文本片段、scenario/session/run、artifact/execution 摘要、app version/build id。
+- 多用户反馈要可归并：每条 comment 有 author、status、requestId、priority 和 tag；一组 comments 可导出为 Codex change request。
+- GitHub Issue 是可选同步出口：issue 只引用/摘要 feedback bundle，不替代原始 JSON。
+- 不阻塞正常科研流程：评论层是轻量浮层，退出后不影响当前页面交互。
+
+#### TODO
+- [x] 在 PROJECT.md 记录 feedback capture / request / GitHub issue 分层方案。
+- [x] 扩展 workspace state/domain：增加 `feedbackComments` 与 `feedbackRequests`，支持多用户 author、status、target、runtime context。
+- [x] 增加全局评论模式：任意页面点选元素，捕获 selector、文本、坐标、viewport 和当前运行时摘要。
+- [x] 增加反馈收件箱页面：查看、筛选、标记状态、复制/导出 selected feedback bundle。
+- [x] 反馈随 workspace snapshot/localStorage 持久化，后续多用户可通过同一 workspace writer 汇总。
+- [ ] 增加 GitHub Issue 同步出口：将 selected feedback request 格式化为 issue body，并关联 bundle id。
+- [ ] 增加真实截图能力：优先用浏览器/host 能力生成 marker screenshot；无权限时保留 DOM/viewport 定位作为 fallback。
+- [ ] 增加 Codex change request 生成器：自动把多条 comments 聚合成验收标准、影响范围和实现建议。
+- [ ] 增加 feedback 状态回写：修复 PR/commit/release 后把对应 comments 标记为 fixed 或 needs-discussion。
+
 
 
 
@@ -212,150 +234,3 @@ type BackendContextCompactionResult = {
 - [x] compact 失败时不要打断用户输入；显示可恢复状态，并让下一轮请求带上 compact failure ref 交给 backend 处理。
 - [x] 增加前端测试：不同 ratio/status/source 的显示、自动 compact 阈值、防重复触发、backend unsupported fallback。
 - [x] 增加 browser E2E：多轮对话让 usage 接近阈值，确认 meter 变色、preflight 自动 compact、用户侧体验一致。
-
-
-
-### T059 Handoff 预算、工具输出瘦身与二进制/Raw 数据隔离
-
-状态：已规划。
-
-#### 背景
-- 即使 backend 有 native compact，如果每轮 handoff 继续塞入完整 prior run、stdout/stderr、payload JSON、二进制预览或大 artifact，仍会快速撑爆 context，并放大 429/retry budget。
-- BioAgent 已有部分 workspace-task input compact 和 artifact/ref 机制，但需要统一成所有 backend 共享的 handoff budget。
-
-#### TODO
-- [x] 定义 `BackendHandoffBudget`：每层最大 tokens/bytes，包括 user goal、refs、recent messages、artifacts、stdout/stderr、ExecutionUnit、UI state、prior attempts。
-- [x] 所有 backend adapter 在渲染 handoff 前统一走 budget normalizer；超预算字段改为 refs + schema + head/tail + hash。
-- [x] 对二进制文件、图片、PDF、large JSON 只传 metadata/ref/preview，不把原始内容塞进 model context。
-- [x] stdout/stderr 默认只传错误摘要、最后 N 行、exit code、相关文件路径；完整日志进入 workspace ref。
-- [x] prior attempts 默认只保留最近失败原因、修复动作、artifact refs 和 code refs；旧 attempt 走 session compaction summary。
-- [x] 将 budget decisions 写入 run audit，便于解释“为什么 backend 没看到完整 raw 数据，但可通过 ref 找回”。
-- [x] 增加 contract test：大型 artifact、二进制图片、超长 stdout、多个 prior attempts 都不会让 handoff 超预算。
-- [x] 与 T058 联动：handoff slimming 后刷新 context meter，避免用户看到压缩完成但下一轮又瞬间爆表。
-
-
-
-### T060 长程多轮复杂任务评测集：引用操作、上下文保持与问题解决能力
-
-状态：已完成首版（已落地 `tests/longform/` 六个长程人工评测脚本、Codex/Computer Use 执行模板、longform 结构校验、pending manifest/checklist 生成器、weekly prepare、next-round runner helper、missing-evidence checklist、evidence command generator、operator runbook exporter、round observation recorder、top-level evidence recorder、finalization/scoring CLI、weekly plan selector、T060 evidence quality gate、longform status/weekly regression summary、右键选中文字引用浏览器 E2E、引用 payload contract、显式引用使用 acceptance 检查；真实 backend 每周回归按模板持续执行并沉淀 manifest）。
-
-#### 背景
-- BioAgent 需要用真实长程任务验证复杂科研问题解决能力，而不是只验证单轮协议、UI 展示或 mock smoke。
-- 新增的引用交互包括：选中文字右键引用、点选整块 UI 引用、引用 chip 点击回到并高亮来源、引用 marker 进入聊天框、最终回复 object references 聚焦右侧结果。
-- 长程任务必须覆盖多轮规划、检索、执行、失败修复、结果复用、上下文压缩、引用追问和最终报告交付。
-- 测试目标不是让 BioAgent 给出预设答案，而是验证 backend 是否能正确使用被引用内容、历史产物、失败日志和 workspace refs 继续推进复杂问题。
-
-#### 评测原则
-- 每个任务至少 6 轮，推荐 8-12 轮；中间必须包含 2 次以上引用操作。
-- 引用操作必须混合使用：右键引用具体文字、点选引用 UI 块、引用 run/result chip、引用右侧 artifact/file/object。
-- 每个任务都要产生可复现 artifact：Markdown 报告、CSV/TSV 表格、图表、notebook、代码或日志 refs。
-- 每个任务都要设计一次干扰或修复场景：信息不足、结果矛盾、执行失败、文件缺失、上下文过长或用户改变目标。
-- 验收时重点看“是否使用了引用”，而不是仅检查 references 数组是否存在：最终回答、artifact 和后续行动必须能体现被引用内容。
-
-#### Codex 执行要求
-- 这些长程任务必须由 Codex 真实操作 BioAgent 前端完成，不能只用单元测试、mock request 或直接调用 API 代替。
-- Codex 必须优先使用内置浏览器打开 `http://localhost:5173/`，完成真实页面交互：输入 prompt、等待 backend stream、切换结果 tab、点选 UI、右键引用文字、点击引用 chip、检查右侧 object references。
-- Codex 必须配合使用 Computer Use 做桌面级验证：确认浏览器窗口焦点、鼠标右键菜单、文本选区、拖拽/滚动、截图标记和高亮效果在真实 UI 中可见。
-- 每个长程任务至少保留 3 类证据：内置浏览器截图或 DOM 观察、Computer Use 截图/坐标操作记录、session/workspace artifact refs。
-- 测试记录必须写明使用的 backend/model、任务开始/结束时间、每轮 prompt、引用 marker（例如 `※1`）、引用来源、产物 refs、失败与修复动作。
-- 如果 backend 不可用、端口不可用或模型额度不足，Codex 仍需用内置浏览器和 Computer Use 完成前端引用交互冒烟，并在记录中明确 blocker、缺失能力和下一次可重跑步骤。
-
-#### 任务 1：文献证据评估到可复现报告
-- 目标：围绕一个生物医学 claim 生成文献证据矩阵、支持/反对证据、研究限制和可复现 Markdown 报告。
-- 多轮脚本：
-  - 第 1 轮：用户提出 claim，例如“评估 Playwright MCP 是否适合 BioAgent 浏览器自动化技能安装与安全验证”或一个真实 biomedical claim。
-  - 第 2 轮：要求生成 paper list、证据矩阵和初版结论。
-  - 第 3 轮：用户右键引用某条证据摘要中的一句关键限制，追问“这个限制会不会推翻结论？”
-  - 第 4 轮：用户点选整块 Evidence matrix UI，要求重排证据等级并标出低可信证据。
-  - 第 5 轮：用户引用一个失败/警告 ExecutionUnit，要求解释其对报告可信度的影响。
-  - 第 6 轮：用户要求输出最终 Markdown 报告、CSV 证据表和 object references。
-- 必查点：引用文字进入 backend context；点选矩阵后回答使用矩阵内容；最终报告包含引用来源、limitations、路径/object chips。
-
-#### 任务 2：单细胞分析方案设计、执行与修复
-- 目标：从用户给出的 scRNA-seq 分析目标出发，生成 QC、聚类、marker gene、差异表达和可视化方案，并在 workspace 中执行或生成可复现任务代码。
-- 多轮脚本：
-  - 第 1 轮：用户要求分析一个公开或 fixture 数据集，明确疾病/细胞类型问题。
-  - 第 2 轮：BioAgent 生成执行计划和输入需求；用户引用 UIManifest 中的数据表/输入 slot，要求只使用该 slot。
-  - 第 3 轮：执行失败或缺依赖时，用户引用失败日志文字，要求 backend 自主修复。
-  - 第 4 轮：用户点选 UMAP/结果图 UI，追问“这两个 cluster 是否应该合并？”
-  - 第 5 轮：用户右键引用 marker gene 表中的几行，要求解释细胞类型注释依据。
-  - 第 6 轮：用户改变目标，要求基于已产出的 refs 追加差异表达和富集分析，不重跑无关步骤。
-  - 第 7 轮：输出 notebook、figure refs、marker table 和结论报告。
-- 必查点：失败日志引用驱动修复；图表/表格引用影响后续分析；继续任务复用已有 artifacts 而不是从头开始。
-
-#### 任务 3：结构生物学突变影响分析
-- 目标：围绕一个蛋白突变，检索结构、定位残基、分析可能影响、生成结构视图和证据摘要。
-- 多轮脚本：
-  - 第 1 轮：用户给出蛋白 ID 和突变，例如 UniProt/PDB + residue change。
-  - 第 2 轮：BioAgent 检索结构、序列映射、功能区域和已知文献。
-  - 第 3 轮：用户点选结构 viewer 或结构摘要 UI，要求说明被点选区域附近的相互作用。
-  - 第 4 轮：用户右键引用一段“不确定映射/低分辨率/缺失 loop”提示，要求评估可信度。
-  - 第 5 轮：用户引用某个 artifact/file ref，要求生成 PyMOL/3Dmol 可复现脚本。
-  - 第 6 轮：要求最终输出结构图、方法说明、限制和可复现文件路径。
-- 必查点：结构 UI 引用可定位；不确定性文字引用进入最终 limitations；脚本和图像以 objectReferences 暴露。
-
-#### 任务 4：跨工具知识图谱与冲突证据消解
-- 目标：整合 PubMed、UniProt、ChEMBL、DrugBank 或内部 artifact，构建一个 gene-drug-disease 关系图，并处理矛盾证据。
-- 多轮脚本：
-  - 第 1 轮：用户指定 gene/drug/disease 三元组，要求构建证据图。
-  - 第 2 轮：BioAgent 输出关系图、证据列表和置信度。
-  - 第 3 轮：用户右键引用一条反对证据，要求重算结论。
-  - 第 4 轮：用户点选关系图中的某条边或边详情 UI，要求解释该边的证据来源。
-  - 第 5 轮：用户引用右侧 artifact inspector 中的 raw JSON/table，要求导出规范化 TSV。
-  - 第 6 轮：用户要求给出最终 decision memo：哪些关系可信、哪些需要实验验证。
-- 必查点：矛盾证据引用能改变置信度；图谱边引用能追溯证据；导出 TSV 文件可预览。
-
-#### 任务 5：长上下文压力下的报告迭代与压缩恢复
-- 目标：通过大量中间结果、日志和多次追问，把 context window 推近阈值，验证 compact/handoff slimming 后仍能继续使用引用。
-- 多轮脚本：
-  - 第 1-3 轮：连续要求生成多个候选分析、表格和中间报告。
-  - 第 4 轮：用户引用第一轮报告中的一个段落，要求和当前结论对比。
-  - 第 5 轮：用户引用最新运行日志中的失败原因，要求修复并继续。
-  - 第 6 轮：触发或模拟 context near-limit；确认 meter、compact event 和 audit refs 出现。
-  - 第 7 轮：compact 后用户再次点击旧引用 chip，要求继续围绕旧引用追问。
-  - 第 8 轮：输出压缩前后仍一致的最终结论和可复现 refs。
-- 必查点：compact 后引用仍可用；handoff 不携带大 raw，但 backend 能通过 refs 找回必要上下文；不出现无限重试。
-
-#### 任务 6：用户目标漂移与引用约束下的研究计划重构
-- 目标：测试用户多次改变目标时，BioAgent 是否能保留关键引用、舍弃过时假设、重构计划并给出可执行下一步。
-- 多轮脚本：
-  - 第 1 轮：用户提出宽泛研究目标。
-  - 第 2 轮：BioAgent 产出初始计划和假设列表。
-  - 第 3 轮：用户右键引用其中一个假设，要求“只保留这条主线”。
-  - 第 4 轮：用户点选一个无关结果 UI，要求解释为什么它不应进入主线。
-  - 第 5 轮：用户引入新约束，例如预算、时间、数据不可用或必须使用特定 skill。
-  - 第 6 轮：用户引用前一轮的约束文字，要求重写计划、里程碑和验收标准。
-  - 第 7 轮：输出最终 project plan、risk register 和 next actions。
-- 必查点：引用约束能覆盖旧目标；无关 UI 引用不会被过度使用；最终计划有明确完成标准。
-
-#### TODO
-- [x] 把上述 6 个任务整理成 `tests/longform/` 下的人工评测脚本，每个脚本包含 turn-by-turn prompt、必做引用操作、预期 artifact 和验收清单。
-- [x] 为每个 `tests/longform/` 脚本增加 Codex 执行规程：内置浏览器步骤、Computer Use 步骤、截图点位、引用操作点位、预期高亮对象和失败记录格式。
-- [x] 增加浏览器 E2E：选中文字右键引用到对话栏，确认输入框出现 `※n` marker、reference chip 出现、点击 chip 高亮原文。
-- [x] 增加浏览器 E2E：点选模式引用整块 UI，确认输入框出现 `※n` marker、chip 点击高亮整块 UI。
-- [x] 增加 Computer Use 冒烟：真实鼠标右键选中文字、点击“引用到对话栏”、点击 chip 回到来源并截图确认高亮。
-- [x] 增加 Codex 长程回归模板：要求每次真实测试都记录内置浏览器 URL、Computer Use 截图、操作时间线、backend stream 关键事件和 artifact refs。
-- [x] 增加长程回归准备器：从 `tests/longform/scenarios/*.json` 生成 pending `manifest.json`、`run-checklist.md` 和 evidence 目录，并纳入 `verify:deep`。
-- [x] 增加 round observation recorder：真实 UI 每轮跑完后用 CLI 写入 observedBehavior、status、artifact/execution/screenshot refs，并自动推断顶层 run status。
-- [x] 增加 top-level evidence recorder：用 CLI 追加或更新 artifacts、executionUnits、screenshots，减少人工编辑 manifest JSON 时漏证据。
-- [x] 增加 finalization/scoring CLI：真实 run 结束后用 CLI 写入顶层 status、coverageStage、completedAt、1-5 分评分、结案 notes 和 blocker/repair action。
-- [x] 增加 T060 evidence quality gate：`passed` manifest 必须包含 6+ passed rounds、2 类以上引用操作、browser/Computer Use/workspace 三类证据、produced artifacts 和引用影响说明。
-- [x] 增加 longform status/weekly regression summary：汇总 6 个脚本的 latest status、passed/pending 数量、quality issues 和本周真实 backend passed run 数；可用 `--enforce-weekly` 强制每周至少 2 个真实回归。
-- [x] 增加 weekly plan selector：按 missing、pending、repair-needed、failed 优先级选择本周还需要跑的真实 backend 场景，并生成 `longform:prepare` 命令。
-- [x] 增加 weekly prepare：根据 weekly plan 一键生成本周推荐场景的 pending manifest/checklist；默认跳过已有 pending manifest，避免覆盖半成品记录。
-- [x] 增加 next-round runner helper：从 pending manifest 输出下一轮 prompt、引用操作、预期 artifact、验收点和对应 `longform:record-round` 命令。
-- [x] 增加 missing-evidence checklist：从 manifest 输出离 `passed` 结案还缺的 rounds、round refs、browser/Computer Use/workspace 证据、produced artifact、reference impact 和 completedAt。
-- [x] 增加 evidence command generator：按当前 manifest 自动生成逐轮 `record-round`、顶层 `record-evidence` 和 `finalize` 命令骨架。
-- [x] 增加 operator runbook exporter：为 pending manifest 生成 `operator-runbook.md`，汇总目标、下一轮、缺口、逐轮记录命令、顶层证据命令和 finalize 命令。
-- [x] 增加多轮 contract test：发送请求时 `references` payload 保留 selectedText/sourceRef/composerMarker，prompt 中只含简短 marker，不含完整引用正文。
-- [x] 增加 acceptance 检查：当用户引用了对象，最终回答必须在 message/run/objectReferences 或 artifact 中体现引用使用；未使用时进入 repair。
-- [x] 增加长程测试记录模板：记录 backend、模型、轮数、context ratio、compact 事件、失败修复次数、最终 artifact refs 和人工评分。
-- [x] 为每个长程任务定义评分维度：目标保持、引用使用、推理连续性、执行能力、失败恢复、artifact 质量、可复现性、UI 可用性。
-- [x] 每周至少跑一次 2 个任务的真实 backend regression，保留 session export、workspace refs 和失败复盘。
-
-#### 验收标准
-- 至少 3 个长程任务能在真实 backend 上连续完成 6+ 轮，并产出可复现 artifact。
-- 每个完成任务至少使用 2 个不同类型引用，且最终回答能说明引用如何影响结论或下一步行动。
-- 引用 chip 点击可稳定高亮来源；引用 marker 简洁，不污染 prompt 阅读体验。
-- 每个真实长程任务都必须有内置浏览器执行证据和 Computer Use 视觉证据；缺任一类证据则只能算未完成评测。
-- 遇到失败、上下文压缩或用户目标变化时，BioAgent 能继续围绕已有 refs 推进，而不是丢失上下文或重新开始。

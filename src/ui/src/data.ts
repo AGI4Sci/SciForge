@@ -8,6 +8,7 @@ import {
   FileText,
   FlaskConical,
   GitBranch,
+  MessageSquare,
   Microscope,
   Network,
   Shield,
@@ -17,7 +18,7 @@ import {
 } from 'lucide-react';
 
 export type ScenarioId = 'literature-evidence-review' | 'structure-exploration' | 'omics-differential-exploration' | 'biomedical-knowledge-graph';
-export type PageId = 'dashboard' | 'workbench' | 'alignment' | 'timeline';
+export type PageId = 'dashboard' | 'workbench' | 'alignment' | 'timeline' | 'feedback';
 export type ClaimType = 'fact' | 'inference' | 'hypothesis';
 export type EvidenceLevel = 'meta' | 'rct' | 'cohort' | 'case' | 'experimental' | 'review' | 'database' | 'preprint' | 'prediction';
 
@@ -85,6 +86,7 @@ export const navItems = [
   { id: 'workbench' as const, label: '场景工作台', icon: Brain },
   { id: 'alignment' as const, label: '对齐工作台', icon: Users },
   { id: 'timeline' as const, label: '研究时间线', icon: GitBranch },
+  { id: 'feedback' as const, label: '反馈收件箱', icon: MessageSquare },
 ];
 
 export const stats = [

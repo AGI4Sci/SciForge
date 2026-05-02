@@ -1133,7 +1133,7 @@ function normalizeBackendContextWindowState(
   capabilities: AgentBackendCapabilities,
 ): BackendContextWindowState {
   const hermesCompat = backend === 'hermes-agent' ? hermesCompatContextRecord(data) : {};
-  const contextWindow = firstRecord(data.contextWindow, data.contextWindowState, data.tokenUsage, data.usage, hermesCompat);
+  const contextWindow = firstRecord(data.contextWindow, data.contextWindowState, hermesCompat);
   const usage = firstRecord(data.usage, data.tokenUsage, contextWindow.usage, hermesCompat);
   const workBudget = isRecord(data.workBudget) ? data.workBudget : {};
   const input = firstFiniteNumber(usage.input, usage.inputTokens, usage.promptTokens, usage.prompt_tokens, contextWindow.input, contextWindow.inputTokens, contextWindow.prompt_tokens);
@@ -1151,10 +1151,6 @@ function normalizeBackendContextWindowState(
     ?? finiteNumber(contextWindow.context_length)
     ?? finiteNumber(contextWindow.currentContextLength)
     ?? finiteNumber(contextWindow.current_context_length)
-    ?? finiteNumber(contextWindow.total)
-    ?? finiteNumber(usage.total)
-    ?? finiteNumber(usage.total_tokens)
-    ?? (input !== undefined || output !== undefined || cache !== undefined ? (input ?? 0) + (output ?? 0) + (cache ?? 0) : undefined)
     ?? finiteNumber(workBudget.approxCurrentWorkTokens);
   const limit = finiteNumber(contextWindow.limit)
     ?? finiteNumber(contextWindow.window)
@@ -1168,6 +1164,10 @@ function normalizeBackendContextWindowState(
     ?? finiteNumber(contextWindow.max_context_length)
     ?? finiteNumber(contextWindow.contextLimit)
     ?? finiteNumber(contextWindow.context_limit)
+    ?? finiteNumber(data.maxContextWindowTokens)
+    ?? finiteNumber(data.max_context_window_tokens)
+    ?? finiteNumber(snapshot?.maxContextWindowTokens)
+    ?? finiteNumber(snapshot?.max_context_window_tokens)
     ?? finiteNumber(workBudget.contextWindowLimit);
   const ratio = finiteNumber(contextWindow.ratio)
     ?? finiteNumber(contextWindow.contextWindowRatio)
@@ -1466,6 +1466,9 @@ function agentServerContextPolicy(request: GatewayRequest) {
     includeMemory: false,
     persistRunSummary: hasSession,
     persistExtractedConstraints: false,
+    maxContextWindowTokens: request.maxContextWindowTokens,
+    contextWindowLimit: request.maxContextWindowTokens,
+    modelContextWindow: request.maxContextWindowTokens,
   };
 }
 
@@ -2201,6 +2204,9 @@ async function requestAgentServerGeneration(params: {
           retryAudit: contextRecovery?.retryAudit,
           contextEnvelopeBytes,
           promptChars: generationPrompt.length,
+          maxContextWindowTokens: params.request.maxContextWindowTokens,
+          contextWindowLimit: params.request.maxContextWindowTokens,
+          modelContextWindow: params.request.maxContextWindowTokens,
           workspaceTreeEntryCount: workspaceTree.length,
           contextWindow: preflight.state ? contextWindowMetadata(preflight.state) : undefined,
           contextCompaction: preflight.compaction ? contextCompactionMetadata(preflight.compaction) : undefined,
@@ -2217,6 +2223,9 @@ async function requestAgentServerGeneration(params: {
           sandbox: 'danger-full-access',
           source: 'bioagent-workspace-runtime-gateway',
           purpose: 'workspace-task-generation',
+          maxContextWindowTokens: params.request.maxContextWindowTokens,
+          contextWindowLimit: params.request.maxContextWindowTokens,
+          modelContextWindow: params.request.maxContextWindowTokens,
           requiresNativeWorkspaceCapabilities: true,
           llmEndpointSource: llmRuntime.llmEndpoint ? llmEndpointSource : undefined,
           retryAudit: contextRecovery?.retryAudit,
@@ -2228,6 +2237,9 @@ async function requestAgentServerGeneration(params: {
         task: 'generation',
         workspace: params.workspace,
         workingDirectory: params.workspace,
+        maxContextWindowTokens: params.request.maxContextWindowTokens,
+        contextWindowLimit: params.request.maxContextWindowTokens,
+        modelContextWindow: params.request.maxContextWindowTokens,
         orchestrator: {
           mode: 'multi_stage',
           planKind: 'implement-only',
@@ -2295,7 +2307,10 @@ async function requestAgentServerGeneration(params: {
       body: JSON.stringify(runPayload),
     });
     const { json, run, error } = await readAgentServerRunStream(response, (event) => {
-      emitWorkspaceRuntimeEvent(params.callbacks, normalizeAgentServerWorkspaceEvent(event));
+      emitWorkspaceRuntimeEvent(params.callbacks, withRequestContextWindowLimit(
+        normalizeAgentServerWorkspaceEvent(event),
+        params.request,
+      ));
     });
     await writeAgentServerDebugArtifact(params.workspace, 'generation', runPayload, response.status, json);
     if (!response.ok) {
@@ -2928,7 +2943,7 @@ function normalizeAgentServerWorkspaceEvent(raw: unknown): WorkspaceRuntimeEvent
     record,
   );
   const contextWindowState = normalizeWorkspaceContextWindowState(
-    record.contextWindowState ?? record.contextWindow ?? record.context_window ?? record.context_compressor ?? record.contextCompressor ?? record.usage,
+    workspaceContextWindowCandidate(record),
     type,
     record,
   );
@@ -2965,6 +2980,23 @@ function normalizeAgentServerWorkspaceEvent(raw: unknown): WorkspaceRuntimeEvent
   };
 }
 
+function withRequestContextWindowLimit(event: WorkspaceRuntimeEvent, request: GatewayRequest): WorkspaceRuntimeEvent {
+  const state = event.contextWindowState;
+  const limit = request.maxContextWindowTokens;
+  if (!state || state.windowTokens !== undefined || limit === undefined) return event;
+  const ratio = state.usedTokens !== undefined ? state.usedTokens / limit : state.ratio;
+  return {
+    ...event,
+    contextWindowState: {
+      ...state,
+      window: limit,
+      windowTokens: limit,
+      ratio,
+      status: normalizeWorkspaceContextStatus(state.status, ratio, state.autoCompactThreshold),
+    },
+  };
+}
+
 function normalizeAgentServerWorkspaceEventType(type: string, record: Record<string, unknown>) {
   const lower = type.toLowerCase();
   if (lower === 'context_compressor' || lower === 'context-compressor') return 'contextCompaction';
@@ -2988,22 +3020,19 @@ function normalizeWorkspaceContextWindowState(
   const cacheWrite = firstFiniteNumber(record.cacheWrite, record.cache_write, record.cacheWriteTokens, usage.cacheWrite, usage.cache_write, usage.cacheWriteTokens);
   const cache = firstFiniteNumber(record.cache, record.cacheTokens, record.cache_tokens, usage.cache, usage.cacheTokens, usage.cache_tokens)
     ?? (cacheRead !== undefined || cacheWrite !== undefined ? (cacheRead ?? 0) + (cacheWrite ?? 0) : undefined);
-  const usedTokens = finiteNumber(record.usedTokens)
+  const explicitUsedTokens = finiteNumber(record.usedTokens)
     ?? finiteNumber(record.used_tokens)
     ?? finiteNumber(record.used)
     ?? finiteNumber(record.contextWindowTokens)
     ?? finiteNumber(record.context_window_tokens)
+    ?? finiteNumber(record.currentContextWindowTokens)
+    ?? finiteNumber(record.current_context_window_tokens)
     ?? finiteNumber(record.contextLength)
     ?? finiteNumber(record.context_length)
     ?? finiteNumber(record.currentContextLength)
     ?? finiteNumber(record.current_context_length)
-    ?? finiteNumber(record.tokens)
-    ?? finiteNumber(record.inputTokens)
-    ?? finiteNumber(record.total)
-    ?? finiteNumber(record.total_tokens)
-    ?? finiteNumber(usage.total)
-    ?? finiteNumber(usage.total_tokens)
-    ?? (input !== undefined || output !== undefined || cache !== undefined ? (input ?? 0) + (output ?? 0) + (cache ?? 0) : undefined);
+    ?? finiteNumber(record.tokens);
+  const usedTokens = explicitUsedTokens;
   const windowTokens = finiteNumber(record.windowTokens)
     ?? finiteNumber(record.window_tokens)
     ?? finiteNumber(record.window)
@@ -3029,7 +3058,8 @@ function normalizeWorkspaceContextWindowState(
     ? rawAutoCompactThreshold / windowTokens
     : rawAutoCompactThreshold;
   const hasUsage = input !== undefined || output !== undefined || cache !== undefined || finiteNumber(usage.total) !== undefined;
-  const explicitSource = stringField(record.source) ?? stringField(record.contextWindowSource);
+  const hasContextTelemetry = usedTokens !== undefined || windowTokens !== undefined || ratio !== undefined;
+  const explicitSource = stringField(record.source) ?? stringField(record.contextWindowSource) ?? stringField(record.context_window_source);
   const source = explicitSource
     ? (normalizeWorkspaceContextSource(explicitSource) === 'unknown' && hasUsage ? 'provider-usage' : normalizeWorkspaceContextSource(explicitSource))
     : (hasUsage ? 'provider-usage' : 'unknown');
@@ -3058,9 +3088,44 @@ function normalizeWorkspaceContextWindowState(
   if (state.compactCapability === 'unknown' && state.backend) {
     state.compactCapability = compactCapabilityForBackend(state.backend);
   }
-  return state.usedTokens !== undefined || state.windowTokens !== undefined || state.ratio !== undefined || state.source !== 'unknown'
+  return hasContextTelemetry
     ? state
     : undefined;
+}
+
+function workspaceContextWindowCandidate(record: Record<string, unknown>): unknown {
+  return record.contextWindowState
+    ?? record.contextWindow
+    ?? record.context_window
+    ?? record.context_compressor
+    ?? record.contextCompressor
+    ?? (isExplicitWorkspaceContextWindowRecord(record.usage) ? record.usage : undefined);
+}
+
+function isExplicitWorkspaceContextWindowRecord(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
+  return [
+    'usedTokens',
+    'used_tokens',
+    'contextWindowTokens',
+    'context_window_tokens',
+    'currentContextWindowTokens',
+    'current_context_window_tokens',
+    'contextLength',
+    'context_length',
+    'currentContextLength',
+    'current_context_length',
+    'windowTokens',
+    'window_tokens',
+    'contextWindowLimit',
+    'context_window_limit',
+    'modelContextWindow',
+    'model_context_window',
+    'contextWindowRatio',
+    'context_window_ratio',
+    'contextWindowSource',
+    'context_window_source',
+  ].some((key) => key in value);
 }
 
 function normalizeWorkspaceContextCompaction(
@@ -3317,6 +3382,9 @@ async function requestAgentServerRepair(params: {
           failureStrategy: 'retry_stage',
           maxRetries: 1,
         },
+        maxContextWindowTokens: params.request.maxContextWindowTokens,
+        contextWindowLimit: params.request.maxContextWindowTokens,
+        modelContextWindow: params.request.maxContextWindowTokens,
       },
     };
     const normalizedHandoff = await normalizeBackendHandoff(runPayload, {
@@ -3661,6 +3729,8 @@ function buildAgentServerGenerationPrompt(request: {
     'Generate fresh task code only when the current turn truly asks for new work or no prior executable artifact can satisfy the request.',
     'Put generated task paths under .bioagent/tasks when possible. BioAgent will archive any returned taskFiles under .bioagent/tasks/<run-id>/ before execution.',
     'Prefer installed or workspace tools when they genuinely fit, but write adapter code as needed so the run is reproducible from inputPath and outputPath.',
+    'Large-file contract: uploaded PDFs, images, spreadsheets, binary blobs, extracted full text, and large logs must stay as workspace refs. Do not inline base64, do not print full extracted text to stdout/stderr, and do not paste full document text into final JSON.',
+    'For uploaded PDFs or long documents, generated tasks should read the file by path/dataRef, write any full extraction to .bioagent/artifacts or .bioagent/task-results, and return only bounded excerpts, section summaries, page/figure locators, hashes, and clickable file/artifact refs.',
     'If expectedArtifactTypes contains multiple artifacts, generate a coordinated Python task or small Python module set that emits every requested artifact type. A partial seed skill result is not enough unless the missing artifact has a clear failed-with-reason ExecutionUnit.',
     'Use the selectedComponentIds/UI contract to preserve promised UI slots; do not drop report, table, graph, structure, omics, or execution outputs just because one local skill only produces a subset.',
     'For continuation requests, continue the scenario goal using recentConversation, artifacts, recentExecutionRefs, and priorAttempts. Do not restart an unrelated analysis.',
@@ -3752,9 +3822,9 @@ function buildAgentServerCompactContext(
       ? summarizeSkillsForAgentServer([params.selectedSkill], params.selectedSkill, request.skillDomain)
       : summarizeSkillsForAgentServer(params.skills, params.selectedSkill, request.skillDomain),
     uiStateSummary: summarizeUiStateForAgentServer(request.uiState, mode),
-    artifacts: mode === 'full' ? request.artifacts : summarizeArtifactRefs(request.artifacts),
+    artifacts: summarizeArtifactRefs(request.artifacts),
     recentExecutionRefs: summarizeExecutionRefs(toRecordList(request.uiState?.recentExecutionRefs)),
-    priorAttempts: mode === 'full' ? params.priorAttempts : params.priorAttempts.slice(0, 2),
+    priorAttempts: summarizeTaskAttemptsForAgentServer(params.priorAttempts).slice(0, mode === 'full' ? 4 : 2),
   };
 }
 
@@ -3767,30 +3837,37 @@ function contextEnvelopeMode(
   const hasPriorRefs = request.artifacts.length > 0
     || toRecordList(uiState.recentExecutionRefs).length > 0
     || toStringList(uiState.recentConversation).length > 1;
+  const backend = String(request.agentBackend || '').toLowerCase();
+  const codexNativeSession = backend === 'codex' && hasSession && hasPriorRefs;
   if (options.forceSlimHandoff && hasSession && hasPriorRefs) return 'delta';
+  if (codexNativeSession) return 'delta';
   return hasSession && hasPriorRefs && options.agentServerCoreAvailable === true ? 'delta' : 'full';
 }
 
 function summarizeUiStateForAgentServer(uiState: unknown, mode: AgentServerContextMode) {
   if (!isRecord(uiState)) return undefined;
-  if (mode === 'full') return uiState;
   return {
     sessionId: typeof uiState.sessionId === 'string' ? uiState.sessionId : undefined,
-    currentPrompt: clipForAgentServerPrompt(uiState.currentPrompt, 1200),
+    currentPrompt: clipForAgentServerPrompt(uiState.currentPrompt, mode === 'full' ? 1600 : 1200),
+    rawUserPrompt: clipForAgentServerPrompt(uiState.rawUserPrompt, mode === 'full' ? 1600 : 1200),
     recentConversation: toStringList(uiState.recentConversation)
-      .slice(-6)
-      .map((entry) => clipForAgentServerPrompt(entry, 1000))
+      .slice(mode === 'full' ? -6 : -4)
+      .map((entry) => clipForAgentServerPrompt(entry, mode === 'full' ? 900 : 700))
       .filter(Boolean),
+    currentReferences: Array.isArray(uiState.currentReferences)
+      ? uiState.currentReferences.slice(0, 8).map((entry) => clipForAgentServerJson(entry, 2))
+      : undefined,
+    scopeCheck: isRecord(uiState.scopeCheck) ? clipForAgentServerJson(uiState.scopeCheck, 3) : undefined,
     selectedComponentIds: toStringList(uiState.selectedComponentIds),
     recentRuns: Array.isArray(uiState.recentRuns)
       ? uiState.recentRuns.slice(-4).map((entry) => clipForAgentServerJson(entry, 2))
       : undefined,
-    contextMode: 'delta',
+    contextMode: mode,
   };
 }
 
 function summarizeArtifactRefs(artifacts: Array<Record<string, unknown>>) {
-  return artifacts.slice(-12).map((artifact) => {
+  return artifacts.slice(-8).map((artifact) => {
     const id = typeof artifact.id === 'string' ? artifact.id : undefined;
     const type = typeof artifact.type === 'string' ? artifact.type : undefined;
     const title = typeof artifact.title === 'string'
@@ -3805,7 +3882,7 @@ function summarizeArtifactRefs(artifacts: Array<Record<string, unknown>>) {
       ref: typeof artifact.ref === 'string' ? artifact.ref : undefined,
       path: typeof artifact.path === 'string' ? artifact.path : undefined,
       outputRef: typeof artifact.outputRef === 'string' ? artifact.outputRef : undefined,
-      keys: Object.keys(artifact).slice(0, 20),
+      keys: Object.keys(artifact).slice(0, 12),
       hash: hashJson(artifact),
     };
   });
@@ -3844,11 +3921,11 @@ function buildContextEnvelope(
   const recentConversation = toStringList(uiState.recentConversation);
   const mode = params.mode ?? contextEnvelopeMode(request);
   const workspaceTree = params.workspaceTreeSummary ?? [];
-  const artifactRefs = mode === 'full' ? request.artifacts : summarizeArtifactRefs(request.artifacts);
+  const artifactRefs = summarizeArtifactRefs(request.artifacts);
   const executionRefs = summarizeExecutionRefs(recentExecutionRefs);
   const visibleRecentConversation = recentConversation
-    .slice(mode === 'full' ? -12 : -6)
-    .map((entry) => clipForAgentServerPrompt(entry, mode === 'full' ? 1600 : 1000))
+    .slice(mode === 'full' ? -6 : -4)
+    .map((entry) => clipForAgentServerPrompt(entry, mode === 'full' ? 900 : 700))
     .filter(Boolean);
   return {
     version: 'bioagent.context-envelope.v1',
@@ -3877,7 +3954,7 @@ function buildContextEnvelope(
       agentId: params.agentId,
       agentServerCoreSnapshotAvailable: params.agentServerCoreSnapshotAvailable === true,
       contextModeReason: mode === 'delta'
-        ? 'AgentServer Core snapshot was available, so BioAgent sent compact delta refs plus hashes.'
+        ? 'BioAgent sent compact delta refs plus hashes for a multi-turn backend session.'
         : 'BioAgent sent a full handoff because AgentServer Core context was unavailable or the turn had no reusable session refs.',
     },
     workspaceFacts: mode === 'full' ? {
@@ -3927,7 +4004,7 @@ function buildContextEnvelope(
     longTermRefs: {
       artifacts: artifactRefs,
       recentExecutionRefs: executionRefs,
-      priorAttempts: mode === 'full' ? params.priorAttempts : (params.priorAttempts ?? []).slice(0, 2),
+      priorAttempts: summarizeTaskAttemptsForAgentServer(params.priorAttempts ?? []).slice(0, mode === 'full' ? 4 : 2),
       repairRefs: params.repairRefs,
     },
     continuityRules: mode === 'full' ? [

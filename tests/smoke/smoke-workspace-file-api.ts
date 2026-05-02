@@ -39,6 +39,38 @@ try {
   assert.equal(opened.file.language, 'markdown');
   assert.ok(opened.file.size > 0);
 
+  response = await fetch(`${baseUrl}/api/bioagent/workspace/file?path=${encodeURIComponent('notes/report.md')}&workspacePath=${encodeURIComponent(workspace)}`);
+  await assertOk(response);
+  const openedRelative = await response.json() as { file: { path: string; name: string; content: string } };
+  assert.equal(openedRelative.file.path, filePath);
+  assert.equal(openedRelative.file.name, 'report.md');
+  assert.equal(openedRelative.file.content, '# Draft\n\nhello');
+
+  response = await fetch(`${baseUrl}/api/bioagent/preview/descriptor?ref=${encodeURIComponent('notes/report.md')}&workspacePath=${encodeURIComponent(workspace)}`);
+  await assertOk(response);
+  const markdownDescriptor = await response.json() as { descriptor: { kind: string; inlinePolicy: string; rawUrl: string; actions: string[]; derivatives: Array<{ kind: string; status: string }> } };
+  assert.equal(markdownDescriptor.descriptor.kind, 'markdown');
+  assert.equal(markdownDescriptor.descriptor.inlinePolicy, 'inline');
+  assert.ok(markdownDescriptor.descriptor.rawUrl.includes('/api/bioagent/preview/raw'));
+  assert.ok(markdownDescriptor.descriptor.actions.includes('open-inline'));
+
+  response = await fetch(`${baseUrl}/api/bioagent/preview/raw?ref=${encodeURIComponent('notes/report.md')}&workspacePath=${encodeURIComponent(workspace)}`, {
+    headers: { Range: 'bytes=0-6' },
+  });
+  assert.equal(response.status, 206);
+  assert.equal(response.headers.get('accept-ranges'), 'bytes');
+  assert.equal(await response.text(), '# Draft');
+
+  response = await fetch(`${baseUrl}/api/bioagent/preview/derivative?ref=${encodeURIComponent('notes/report.md')}&workspacePath=${encodeURIComponent(workspace)}&kind=text`);
+  await assertOk(response);
+  const textDerivative = await response.json() as { derivative: { kind: string; status: string; ref: string; mimeType: string } };
+  assert.equal(textDerivative.derivative.kind, 'text');
+  assert.equal(textDerivative.derivative.status, 'available');
+  assert.equal(textDerivative.derivative.mimeType, 'text/plain');
+
+  response = await fetch(`${baseUrl}/api/bioagent/preview/descriptor?ref=${encodeURIComponent('../outside.md')}&workspacePath=${encodeURIComponent(workspace)}`);
+  assert.equal(response.status, 400);
+
   response = await fetch(`${baseUrl}/api/bioagent/workspace/file?path=${encodeURIComponent(imagePath)}`);
   await assertOk(response);
   const image = await response.json() as { file: { name: string; content: string; language: string; encoding?: string; mimeType?: string } };
@@ -47,6 +79,21 @@ try {
   assert.equal(image.file.encoding, 'base64');
   assert.equal(image.file.mimeType, 'image/png');
   assert.equal(image.file.content, 'iVBORw0KGgo=');
+
+  response = await fetch(`${baseUrl}/api/bioagent/preview/descriptor?ref=${encodeURIComponent(imagePath)}`);
+  await assertOk(response);
+  const imageDescriptor = await response.json() as { descriptor: { kind: string; inlinePolicy: string; derivatives: Array<{ kind: string; status: string }>; actions: string[] } };
+  assert.equal(imageDescriptor.descriptor.kind, 'image');
+  assert.equal(imageDescriptor.descriptor.inlinePolicy, 'stream');
+  assert.ok(imageDescriptor.descriptor.derivatives.some((item) => item.kind === 'thumb' && item.status === 'lazy'));
+  assert.ok(imageDescriptor.descriptor.actions.includes('select-region'));
+
+  response = await fetch(`${baseUrl}/api/bioagent/preview/derivative?ref=${encodeURIComponent(imagePath)}&kind=thumb`);
+  await assertOk(response);
+  const thumbDerivative = await response.json() as { derivative: { kind: string; status: string; mimeType: string } };
+  assert.equal(thumbDerivative.derivative.kind, 'thumb');
+  assert.equal(thumbDerivative.derivative.status, 'available');
+  assert.equal(thumbDerivative.derivative.mimeType, 'image/png');
 
   response = await fetch(`${baseUrl}/api/bioagent/workspace/file`, {
     method: 'POST',
@@ -74,7 +121,7 @@ try {
   response = await fetch(`${baseUrl}/api/bioagent/workspace/file?path=${encodeURIComponent(renamedPath)}`);
   assert.equal(response.status, 400);
 
-  console.log('[ok] workspace file APIs list, read, write, rename, and delete real files');
+  console.log('[ok] workspace file APIs and preview contract cover list/read/write/raw-range/descriptor/derivative/delete');
 } finally {
   child.kill('SIGTERM');
   await rm(workspace, { recursive: true, force: true });

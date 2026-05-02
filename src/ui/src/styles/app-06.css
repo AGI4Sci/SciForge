@@ -119,10 +119,19 @@
     min-height: auto;
   }
 
+  .workbench-canvas {
+    gap: 12px;
+  }
+
   .chat-panel,
   .results-panel {
     min-height: 520px;
     resize: vertical;
+  }
+
+  .workbench-canvas .chat-panel,
+  .workbench-canvas .results-panel {
+    border-radius: 10px;
   }
 
   .workbench-resize-handle {
@@ -206,6 +215,11 @@
     padding: 16px;
   }
 
+  .context-window-popover {
+    right: -8px;
+    width: min(310px, calc(100vw - 32px));
+  }
+
   .stats-grid,
   .agent-grid,
   .scenario-grid,
@@ -237,4 +251,172 @@
   .stepper {
     grid-template-columns: 1fr;
   }
+}
+
+/* T062: Codex-like conversation rhythm without changing the app palette. */
+
+.codex-quiet-shell .workbench-canvas {
+  gap: 10px;
+}
+
+.codex-quiet-shell .chat-panel,
+.codex-quiet-shell .results-panel {
+  border-radius: 12px;
+  resize: none;
+}
+
+.codex-quiet-shell .panel-title {
+  min-height: 56px;
+  padding: 12px 16px;
+}
+
+.codex-quiet-shell .messages {
+  padding: 18px 20px;
+}
+
+.codex-quiet-shell .message {
+  margin: 14px 0;
+}
+
+.codex-quiet-shell .message-body {
+  max-width: min(760px, 92%);
+  border-left-width: 0;
+  border-radius: 10px;
+}
+
+.codex-quiet-shell .message.user .message-body {
+  max-width: min(640px, 78%);
+  padding: 12px 15px;
+  border-radius: 18px;
+}
+
+.codex-quiet-shell .message.system .message-body {
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+
+.codex-quiet-shell .message-meta {
+  margin-bottom: 6px;
+}
+
+.codex-quiet-shell .message p {
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.codex-quiet-shell .message-actions {
+  opacity: 0;
+  transition: opacity 0.14s ease;
+}
+
+.codex-quiet-shell .message:hover .message-actions,
+.codex-quiet-shell .message:focus-within .message-actions {
+  opacity: 1;
+}
+
+.codex-work-status {
+  flex-shrink: 0;
+  padding: 6px 20px 2px;
+}
+
+.codex-work-status button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 0;
+  color: var(--bio-300);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.codex-work-status button:hover {
+  color: var(--bio-100);
+}
+
+.codex-work-status span {
+  color: var(--bio-100);
+  font-weight: 700;
+}
+
+.codex-work-status small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--bio-400);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-quiet-shell .run-link-strip {
+  padding: 7px 20px;
+  border-top-color: transparent;
+}
+
+.codex-quiet-shell .run-link-strip span {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.codex-quiet-shell .stream-events {
+  min-height: 42px;
+  padding: 8px 20px 10px;
+  border-top-color: transparent;
+}
+
+.codex-quiet-shell .stream-events-head > span {
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.codex-quiet-shell .stream-events-toggle {
+  border-radius: 8px;
+}
+
+.codex-quiet-shell .stream-events-preview {
+  min-height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+.codex-quiet-shell .stream-event {
+  border-radius: 8px;
+}
+
+.codex-quiet-shell .run-readiness {
+  padding: 6px 20px;
+  border-top-color: transparent;
+}
+
+.codex-quiet-shell .composer {
+  margin: 8px 18px 18px;
+  padding: 12px;
+  padding-top: 16px;
+  border-radius: 22px;
+  border: 1px solid rgba(46, 61, 85, 0.72);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.18);
+}
+
+.codex-quiet-shell .reference-trigger {
+  border-radius: 10px;
+}
+
+.codex-quiet-shell .reference-pick-banner {
+  border-radius: 10px;
+}
+
+.codex-quiet-shell .composer textarea {
+  background: transparent;
+  border-color: transparent;
+  border-radius: 14px;
+}
+
+.codex-quiet-shell .composer textarea:focus {
+  border-color: transparent;
+  box-shadow: none;
 }

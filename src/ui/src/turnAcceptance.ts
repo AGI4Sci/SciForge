@@ -347,7 +347,9 @@ function evaluateTurnAcceptance(
     if (missing.length) {
       failures.push({ code: 'missing-explicit-references', detail: `Explicit references were not preserved: ${missing.join(', ')}`, repairAction: 'presentation-repair' });
     }
-    const unused = explicitReferences.filter((reference) => snapshot.requiredReferences.includes(reference.ref) && !responseReflectsReferenceUse(reference, response, objectReferences));
+    const unused = explicitReferences.filter((reference) => snapshot.requiredReferences.includes(reference.ref)
+      && shouldRequireReferenceReflection(reference)
+      && !responseReflectsReferenceUse(reference, response, objectReferences));
     if (unused.length) {
       failures.push({
         code: 'unused-explicit-references',
@@ -467,6 +469,22 @@ function hasVisualization(response: NormalizedAgentResponse, objectReferences: O
   if (response.uiManifest.some((slot) => /plot|chart|visual|image|viewer|graph/i.test(slot.componentId) && slot.artifactRef)) return true;
   if (response.artifacts.some((artifact) => /visual|plot|chart|figure|image|png|svg|html/i.test(`${artifact.type} ${artifact.path ?? ''} ${artifact.dataRef ?? ''}`))) return true;
   return objectReferences.some((reference) => /\.(png|jpe?g|gif|webp|svg|html?)($|[?#])/i.test(reference.ref) || /visual|plot|chart|figure|image/i.test(reference.artifactType ?? ''));
+}
+
+function shouldRequireReferenceReflection(reference: BioAgentReference) {
+  if (reference.kind !== 'ui') return true;
+  const payload = isRecord(reference.payload) ? reference.payload : {};
+  const selectedText = typeof payload.selectedText === 'string' ? payload.selectedText.trim() : '';
+  const textRange = reference.locator?.textRange?.trim() ?? '';
+  const summary = reference.summary?.trim() ?? '';
+  if (selectedText.length >= 12 || textRange.length >= 12) return true;
+  if (/ui-text:/i.test(reference.ref)) return true;
+  if (/^ui:/i.test(reference.ref)) return false;
+  return summary.length >= 80 && !looksLikeDomSelector(summary);
+}
+
+function looksLikeDomSelector(value: string) {
+  return /[.#][a-z0-9_-]+|nth-of-type|>|data-|aria-|div|span|section|button/i.test(value);
 }
 
 function responseReflectsReferenceUse(reference: BioAgentReference, response: NormalizedAgentResponse, objectReferences: ObjectReference[]) {

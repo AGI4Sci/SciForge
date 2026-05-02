@@ -6,11 +6,35 @@ export function buildContextWindowMeterModel(state: AgentContextWindowState, run
   const sourceLabel = contextWindowSourceLabel(state.source);
   const used = state.usedTokens !== undefined ? formatCompactNumber(state.usedTokens) : 'unknown';
   const windowSize = state.windowTokens !== undefined ? formatCompactNumber(state.windowTokens) : 'unknown';
+  const remainingTokens = state.usedTokens !== undefined && state.windowTokens !== undefined
+    ? Math.max(0, state.windowTokens - state.usedTokens)
+    : undefined;
   const ratioLabel = state.ratio !== undefined ? `${Math.round(state.ratio * 100)}%` : 'unknown';
+  const ratioDetail = state.ratio !== undefined ? `${Math.round(state.ratio * 1000) / 10}%` : 'unknown';
   const statusLabel = contextWindowStatusLabel(state);
+  const thresholdDetail = [
+    state.watchThreshold !== undefined ? `watch ${formatPercent(state.watchThreshold)}` : undefined,
+    state.autoCompactThreshold !== undefined ? `auto ${formatPercent(state.autoCompactThreshold)}` : undefined,
+    state.nearLimitThreshold !== undefined ? `near ${formatPercent(state.nearLimitThreshold)}` : undefined,
+  ].filter(Boolean).join(' / ') || 'unknown';
+  const budgetRows = contextBudgetRows(state);
+  const detailRows = [
+    { label: 'used/window', value: `${formatExactNumber(state.usedTokens)} / ${formatExactNumber(state.windowTokens)} tokens` },
+    { label: 'remaining', value: remainingTokens !== undefined ? `${formatExactNumber(remainingTokens)} tokens` : 'unknown' },
+    { label: 'ratio', value: ratioDetail },
+    { label: 'status', value: statusLabel },
+    { label: 'source', value: sourceLabel },
+    { label: 'backend', value: state.backend || 'unknown' },
+    { label: 'model', value: state.model || state.provider || 'unknown' },
+    { label: 'compact', value: `${state.compactCapability || 'unknown'}${state.pendingCompact ? ' · pending' : ''}` },
+    { label: 'thresholds', value: thresholdDetail },
+    { label: 'last compacted', value: state.lastCompactedAt || 'never' },
+    ...budgetRows,
+  ];
   const title = [
-    `used/window: ${used}/${windowSize}`,
-    `ratio: ${ratioLabel}`,
+    `used/window: ${formatExactNumber(state.usedTokens)}/${formatExactNumber(state.windowTokens)} tokens`,
+    `remaining: ${remainingTokens !== undefined ? formatExactNumber(remainingTokens) : 'unknown'} tokens`,
+    `ratio: ${ratioDetail}`,
     `status: ${statusLabel}`,
     `source: ${sourceLabel}`,
     `backend: ${state.backend || 'unknown'}`,
@@ -32,6 +56,11 @@ export function buildContextWindowMeterModel(state: AgentContextWindowState, run
     isUnknown: state.source === 'unknown',
     compactLine: `compact ${state.compactCapability || 'unknown'}${state.pendingCompact ? ' · pending' : ''}`,
     lastLine: `last ${state.lastCompactedAt ? formatShortTime(state.lastCompactedAt) : 'never'}`,
+    remaining: remainingTokens !== undefined ? formatCompactNumber(remainingTokens) : 'unknown',
+    remainingExact: remainingTokens !== undefined ? formatExactNumber(remainingTokens) : 'unknown',
+    ratioDetail,
+    thresholdDetail,
+    detailRows,
     title: `${title}\n只读状态；压缩时机由 AgentServer 自动判断。`,
   };
 }
@@ -49,7 +78,6 @@ export function latestContextWindowState(events: AgentStreamEvent[]) {
 }
 
 export function estimateContextWindowState(session: BioAgentSession, config: BioAgentConfig, events: AgentStreamEvent[]): AgentContextWindowState {
-  const usage = latestTokenUsage(events);
   const modelWindow = config.maxContextWindowTokens || estimateModelContextWindow(config.modelName);
   const textChars = session.messages.slice(-24).reduce((sum, message) => sum + message.content.length + (message.expandable?.length ?? 0), 0);
   const artifactChars = session.artifacts.slice(-12).reduce((sum, artifact) => sum + JSON.stringify({
@@ -59,12 +87,12 @@ export function estimateContextWindowState(session: BioAgentSession, config: Bio
     dataRef: artifact.dataRef,
     path: artifact.path,
   }).length, 0);
-  const usedTokens = usage?.total ?? usage?.input ?? Math.ceil((textChars + artifactChars) / 4);
+  const usedTokens = Math.ceil((textChars + artifactChars) / 4);
   return {
-    usedTokens: usedTokens || undefined,
+    usedTokens: Number.isFinite(usedTokens) ? usedTokens : undefined,
     windowTokens: modelWindow,
-    ratio: modelWindow && usedTokens ? usedTokens / modelWindow : undefined,
-    source: modelWindow || usedTokens ? 'estimate' : 'unknown',
+    ratio: modelWindow && Number.isFinite(usedTokens) ? usedTokens / modelWindow : undefined,
+    source: modelWindow || Number.isFinite(usedTokens) ? 'estimate' : 'unknown',
     backend: config.agentBackend || 'unknown',
     compactCapability: compactCapabilityForBackend(config.agentBackend),
     autoCompactThreshold: 0.82,
@@ -116,10 +144,6 @@ export function contextWindowSourceLabel(source: AgentContextWindowState['source
   return 'AgentServer';
 }
 
-function latestTokenUsage(events: AgentStreamEvent[]) {
-  return [...events].reverse().find((event) => event.usage)?.usage;
-}
-
 function estimateModelContextWindow(modelName: string) {
   const model = modelName.toLowerCase();
   if (!model) return undefined;
@@ -157,8 +181,36 @@ function formatCompactNumber(value: number) {
   return String(value);
 }
 
+function formatExactNumber(value?: number) {
+  if (value === undefined || !Number.isFinite(value)) return 'unknown';
+  return Math.trunc(value).toLocaleString('en-US');
+}
+
+function formatPercent(value: number) {
+  return `${Math.round(value * 100)}%`;
+}
+
 function formatShortTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function contextBudgetRows(state: AgentContextWindowState) {
+  const budget = state.budget;
+  if (!budget) return [];
+  return [
+    budget.rawTokens !== undefined || budget.normalizedTokens !== undefined
+      ? { label: 'payload tokens', value: `${formatExactNumber(budget.normalizedTokens)} normalized / ${formatExactNumber(budget.rawTokens)} raw` }
+      : undefined,
+    budget.savedTokens !== undefined
+      ? { label: 'saved tokens', value: formatExactNumber(budget.savedTokens) }
+      : undefined,
+    budget.maxPayloadBytes !== undefined || budget.normalizedBytes !== undefined
+      ? { label: 'payload bytes', value: `${formatExactNumber(budget.normalizedBytes)} / ${formatExactNumber(budget.maxPayloadBytes)}` }
+      : undefined,
+    budget.normalizedBudgetRatio !== undefined
+      ? { label: 'payload budget', value: `${Math.round(budget.normalizedBudgetRatio * 1000) / 10}%` }
+      : undefined,
+  ].filter((row): row is { label: string; value: string } => Boolean(row));
 }

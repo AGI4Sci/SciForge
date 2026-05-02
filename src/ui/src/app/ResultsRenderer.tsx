@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { AlertTriangle, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Copy, Download, Eye, FileCode, FileText, Lock, Save, Shield, Sparkles, Target, Terminal, X } from 'lucide-react';
 import { scenarios, type EvidenceLevel, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
@@ -6,14 +6,14 @@ import { elementRegistry } from '../scenarioCompiler/elementRegistry';
 import { compileSlotsForScenario } from '../scenarioCompiler/uiPlanCompiler';
 import { buildExecutionBundle, evaluateExecutionBundleExport } from '../exportPolicy';
 import { runtimeContractSchemas, schemaPreview, validateRuntimeContract } from '../runtimeContracts';
-import { openWorkspaceObject, readWorkspaceFile, writeWorkspaceFile, type WorkspaceFileContent } from '../api/workspaceClient';
+import { openWorkspaceObject, readPreviewDescriptor, readWorkspaceFile, writeWorkspaceFile, type WorkspaceFileContent } from '../api/workspaceClient';
 import { uiModuleRegistry, type PresentationDedupeScope, type RuntimeUIModule } from '../uiModuleRegistry';
 import type { VolcanoPoint } from '../charts';
 import { HeatmapViewer, MoleculeViewer, NetworkGraph, UmapViewer } from '../visualizations';
 import { exportJsonFile, exportTextFile } from './exportUtils';
 import { objectReferenceKindLabel } from './ChatPanel';
 import { ActionButton, Badge, Card, ChartLoadingFallback, ClaimTag, ConfidenceBar, EmptyArtifactState, EvidenceTag, SectionHeader, TabBar, cx } from './uiPrimitives';
-import type { BioAgentConfig, BioAgentReference, BioAgentRun, BioAgentSession, DisplayIntent, EvidenceClaim, NotebookRecord, ObjectAction, ObjectReference, ResolvedViewPlan, RuntimeArtifact, RuntimeExecutionUnit, ScenarioInstanceId, UIManifestSlot, ViewPlanSection } from '../domain';
+import type { BioAgentConfig, BioAgentReference, BioAgentRun, BioAgentSession, DisplayIntent, EvidenceClaim, NotebookRecord, ObjectAction, ObjectReference, PreviewDescriptor, ResolvedViewPlan, RuntimeArtifact, RuntimeExecutionUnit, ScenarioInstanceId, UIManifestSlot, ViewPlanSection } from '../domain';
 
 const VolcanoChart = lazy(async () => ({ default: (await import('../charts')).VolcanoChart }));
 
@@ -58,12 +58,13 @@ function artifactForObjectReference(reference: ObjectReference, session: BioAgen
 
 function pathForObjectReference(reference: ObjectReference, session: BioAgentSession): string | undefined {
   const artifact = artifactForObjectReference(reference, session);
+  const artifactDataRef = asString(artifact?.dataRef);
   if (artifact) {
     return artifact.path
       || asString(artifact.metadata?.path)
       || asString(artifact.metadata?.filePath)
       || asString(artifact.metadata?.localPath)
-      || asString(artifact.dataRef)
+      || (artifactDataRef && !artifactDataRef.startsWith('upload:') ? artifactDataRef : undefined)
       || reference.provenance?.path
       || reference.provenance?.dataRef;
   }
@@ -481,7 +482,7 @@ export function ResultsRenderer({
             </div>
           </div>
           <div className="result-content">
-            {activeRun ? (
+            {activeRun && !focusedObjectReference ? (
               <div className="active-run-banner">
                 <div>
                   <strong>当前聚焦 run</strong>
@@ -530,7 +531,7 @@ export function ResultsRenderer({
                 onInspectArtifact={setInspectedArtifact}
               />
             ) : resultTab === 'evidence' ? (
-              <EvidenceMatrix claims={session.claims} />
+              <EvidenceMatrix claims={session.claims} artifacts={session.artifacts} />
             ) : resultTab === 'ui-design' ? (
               <UIDesignStudioPanel viewPlan={viewPlan} />
             ) : null}
@@ -929,7 +930,7 @@ function compactViewPlanItems(items: ResolvedViewPlanItem[], session: BioAgentSe
   return items.filter((item) => {
     if (item.status === 'missing-artifact' && item.section !== 'primary' && item.source !== 'display-intent') return false;
     if (item.module.componentId === 'execution-unit-table' && !session.executionUnits.length) return false;
-    if (item.module.componentId === 'evidence-matrix' && !session.claims.length && !item.artifact) return false;
+    if (item.module.componentId === 'evidence-matrix' && !session.claims.length && !uploadedEvidenceArtifacts(session.artifacts).length && !item.artifact) return false;
     if (item.module.componentId === 'notebook-timeline' && !session.notebook.length && !item.artifact) return false;
     if (item.module.componentId === 'unknown-artifact-inspector' && !item.artifact) return false;
     const artifactKey = item.artifact?.id ?? item.slot.artifactRef;
@@ -1522,9 +1523,9 @@ function UnknownArtifactInspector({ slot, artifact, session }: RegistryRendererP
   );
 }
 
-function ReportViewerSlot({ slot, artifact, config }: RegistryRendererProps) {
+function ReportViewerSlot({ slot, artifact, config, session }: RegistryRendererProps) {
   const payload = slotPayload(slot, artifact);
-  const report = coerceReportPayload(payload, artifact);
+  const report = coerceReportPayload(payload, artifact, relatedArtifactsForReport(session, artifact));
   const [loadedReport, setLoadedReport] = useState<{ ref: string; markdown: string } | undefined>();
   const [loadError, setLoadError] = useState('');
   useEffect(() => {
@@ -1560,7 +1561,10 @@ function ReportViewerSlot({ slot, artifact, config }: RegistryRendererProps) {
           <p className="empty-state">正在读取 Markdown 报告正文：{report.reportRef}</p>
         ) : null}
         {loadError ? (
-          <p className="empty-state">报告正文读取失败，已显示可用摘要：{loadError}</p>
+          <details className="report-read-warning">
+            <summary>外部报告正文暂不可读，已展示可用 artifacts 生成的摘要</summary>
+            <p>{loadError}</p>
+          </details>
         ) : null}
         {sections.length ? sections.map((section, index) => (
           <section key={`${asString(section.title) ?? 'section'}-${index}`}>
@@ -1573,20 +1577,24 @@ function ReportViewerSlot({ slot, artifact, config }: RegistryRendererProps) {
   );
 }
 
-export function coerceReportPayload(payload: Record<string, unknown>, artifact?: RuntimeArtifact) {
+export function coerceReportPayload(payload: Record<string, unknown>, artifact?: RuntimeArtifact, relatedArtifacts: RuntimeArtifact[] = []) {
   const nested = parseNestedReport(payload);
   const source = nested ?? payload;
   const sections = toRecordList(source.sections);
   const direct = firstString(source.markdown, source.report, source.summary, source.content);
   const extracted = extractUserFacingReport(direct);
+  const relatedMarkdown = reportFromRelatedArtifacts(relatedArtifacts, artifact);
+  const extractedMarkdown = extracted.markdown && !isGeneratedReportShell(extracted.markdown) ? extracted.markdown : undefined;
   const reportRef = extracted.reportRef
     || reportRefFromPayload(source)
     || reportRefFromText(direct)
     || reportRefFromArtifact(artifact);
-  const markdown = extracted.markdown
+  const markdown = extractedMarkdown
     || (!looksLikeBackendPayloadText(direct) ? direct : undefined)
     || (sections.length ? sectionsToMarkdown(sections) : undefined)
     || reportFromKnownFields(source)
+    || relatedMarkdown
+    || extracted.markdown
     || markdownShellForReportRef(reportRef);
   return { markdown, sections, reportRef };
 }
@@ -1599,6 +1607,108 @@ function markdownShellForReportRef(ref?: string) {
     `报告内容已作为 workspace ref 生成：\`${ref}\`。`,
     '',
     '当前 artifact 没有内联 markdown 内容，因此结果区保留可读文档壳和可复现引用；如需全文预览，请让任务把 markdown 正文写入 `research-report.markdown` 或 `sections` 字段。',
+  ].join('\n');
+}
+
+function isGeneratedReportShell(markdown: string) {
+  return /^# Markdown report\b/i.test(markdown) && /workspace ref|workspace 引用|artifact 没有内联 markdown/i.test(markdown);
+}
+
+function relatedArtifactsForReport(session: BioAgentSession, artifact?: RuntimeArtifact) {
+  const runId = asString(artifact?.metadata?.runId) || asString(artifact?.metadata?.agentServerRunId) || asString(artifact?.metadata?.producerRunId);
+  const candidates = session.artifacts.filter((item) => item.id !== artifact?.id);
+  const sameRun = runId
+    ? candidates.filter((item) => {
+      const metadata = item.metadata ?? {};
+      return asString(metadata.runId) === runId
+        || asString(metadata.agentServerRunId) === runId
+        || asString(metadata.producerRunId) === runId;
+    })
+    : [];
+  return (sameRun.length ? sameRun : candidates).filter((item) => isReportSupportingArtifact(item)).slice(0, 8);
+}
+
+function isReportSupportingArtifact(artifact: RuntimeArtifact) {
+  const haystack = `${artifact.id} ${artifact.type} ${artifact.path ?? ''} ${artifact.dataRef ?? ''}`;
+  return /paper|literature|evidence|matrix|table|csv|summary|result|graph|timeline|notebook/i.test(haystack);
+}
+
+function reportFromRelatedArtifacts(artifacts: RuntimeArtifact[], primary?: RuntimeArtifact) {
+  const sections: string[] = [];
+  const title = asString(primary?.metadata?.title) || asString(primary?.metadata?.name) || 'Research Report';
+  for (const artifact of artifacts) {
+    const section = reportSectionForArtifact(artifact);
+    if (section) sections.push(section);
+  }
+  if (!sections.length) return undefined;
+  return [
+    `# ${title}`,
+    '',
+    '以下内容由当前运行产生的结构化 artifacts 自动整理，便于直接阅读；原始 JSON 仍保留在对应 artifact 中。',
+    '',
+    ...sections,
+  ].join('\n');
+}
+
+function reportSectionForArtifact(artifact: RuntimeArtifact) {
+  const payload = isRecord(artifact.data) ? artifact.data : {};
+  const label = asString(artifact.metadata?.title) || asString(artifact.metadata?.name) || humanizeKey(artifact.type || artifact.id);
+  const papers = recordsFromArtifactPayload(payload, ['papers', 'items', 'records', 'rows']);
+  if (/paper|literature/i.test(`${artifact.type} ${artifact.id}`) && papers.length) {
+    return [
+      `## ${label}`,
+      '',
+      ...papers.slice(0, 12).map((paper, index) => readablePaperBullet(paper, index)),
+    ].join('\n');
+  }
+  const rows = recordsFromArtifactPayload(payload, ['rows', 'records', 'items', 'claims', 'entries']);
+  if (rows.length) {
+    return [
+      `## ${label}`,
+      '',
+      markdownTable(rows.slice(0, 10)),
+    ].join('\n');
+  }
+  const known = reportFromKnownFields(payload);
+  if (known) return `## ${label}\n\n${known.replace(/^# .+\n\n?/, '')}`;
+  const summary = firstString(payload.summary, payload.message, payload.description, artifact.dataRef, artifact.path);
+  if (summary) return `## ${label}\n\n${summary}`;
+  return undefined;
+}
+
+function recordsFromArtifactPayload(payload: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = payload[key];
+    if (Array.isArray(value)) return value.filter(isRecord);
+  }
+  return [];
+}
+
+function readablePaperBullet(paper: Record<string, unknown>, index: number) {
+  const title = firstString(paper.title, paper.name) || `Paper ${index + 1}`;
+  const authors = readableList(paper.authors);
+  const venue = firstString(paper.venue, paper.journal, paper.source, paper.publisher);
+  const year = firstString(paper.year, paper.published, paper.date, paper.publishedAt);
+  const url = firstString(paper.url, paper.doi, paper.arxivId, paper.id);
+  const summary = firstString(paper.summary, paper.abstract, paper.reason, paper.relevance, paper.finding);
+  const meta = [authors, venue, year, url].filter(Boolean).join(' · ');
+  return [`${index + 1}. **${title}**${meta ? ` (${meta})` : ''}`, summary ? `   - ${summary}` : ''].filter(Boolean).join('\n');
+}
+
+function readableList(value: unknown) {
+  if (Array.isArray(value)) return value.map((item) => typeof item === 'string' ? item : asString((item as Record<string, unknown>)?.name)).filter(Boolean).slice(0, 4).join(', ');
+  return asString(value);
+}
+
+function markdownTable(rows: Record<string, unknown>[]) {
+  if (!rows.length) return '';
+  const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 5);
+  if (!columns.length) return rows.map((row) => `- ${recordToReadableText(row).replace(/\n+/g, '; ')}`).join('\n');
+  const escapeCell = (value: unknown) => String(Array.isArray(value) ? value.join(', ') : isRecord(value) ? JSON.stringify(value) : value ?? '').replace(/\|/g, '\\|').slice(0, 220);
+  return [
+    `| ${columns.map(humanizeKey).join(' | ')} |`,
+    `| ${columns.map(() => '---').join(' | ')} |`,
+    ...rows.map((row) => `| ${columns.map((column) => escapeCell(row[column])).join(' | ')} |`),
   ].join('\n');
 }
 
@@ -1996,7 +2106,7 @@ const componentRegistry: Record<string, RegistryEntry> = {
   'heatmap-viewer': { label: 'HeatmapViewer', render: (props) => <CanvasSlot {...props} kind="heatmap" /> },
   'umap-viewer': { label: 'UmapViewer', render: (props) => <CanvasSlot {...props} kind="umap" /> },
   'network-graph': { label: 'NetworkGraph', render: (props) => <CanvasSlot {...props} kind="network" /> },
-  'evidence-matrix': { label: 'EvidenceMatrix', render: ({ session }) => <EvidenceMatrix claims={session.claims} /> },
+  'evidence-matrix': { label: 'EvidenceMatrix', render: ({ session }) => <EvidenceMatrix claims={session.claims} artifacts={session.artifacts} /> },
   'execution-unit-table': { label: 'ExecutionUnitTable', render: ({ session }) => <ExecutionPanel session={session} executionUnits={session.executionUnits} embedded /> },
   'notebook-timeline': { label: 'NotebookTimeline', render: ({ scenarioId, session }) => <NotebookTimeline scenarioId={scenarioId} notebook={session.notebook} /> },
   'data-table': { label: 'DataTable', render: (props) => <DataTableSlot {...props} /> },
@@ -2072,13 +2182,15 @@ function PrimaryResult({
           })}
         </details>
       ) : null}
-      <RunAuditDetails
-        scenarioId={scenarioId}
-        session={session}
-        activeRun={activeRun}
-        viewPlan={viewPlan}
-        defaultOpen={auditOpen || focusMode === 'execution'}
-      />
+      {auditOpen ? (
+        <RunAuditDetails
+          scenarioId={scenarioId}
+          session={session}
+          activeRun={activeRun}
+          viewPlan={viewPlan}
+          defaultOpen
+        />
+      ) : null}
       {viewPlan.allItems.length ? (
         <details className="result-details-panel subtle">
           <summary>
@@ -2335,22 +2447,44 @@ function WorkspaceObjectPreview({
   session: BioAgentSession;
   config: BioAgentConfig;
 }) {
+  const artifact = artifactForObjectReference(reference, session);
+  const inlinePreview = useMemo(() => uploadedArtifactPreview(artifact), [artifact]);
   const path = pathForObjectReference(reference, session);
+  const [descriptor, setDescriptor] = useState<PreviewDescriptor | undefined>();
   const [file, setFile] = useState<WorkspaceFileContent | undefined>();
   const [loadingPath, setLoadingPath] = useState('');
   const [error, setError] = useState('');
   useEffect(() => {
     setFile(undefined);
+    setDescriptor(undefined);
     setError('');
+    if (inlinePreview) return undefined;
     if (!path || (reference.kind !== 'file' && reference.kind !== 'artifact') || /^https?:\/\//i.test(path)) return undefined;
     let cancelled = false;
     setLoadingPath(path);
-    void readWorkspaceFile(path, config)
-      .then((nextFile) => {
-        if (!cancelled) setFile(nextFile);
+    const staticDescriptor = normalizeArtifactPreviewDescriptor(artifact, path);
+    if (staticDescriptor) {
+      setDescriptor(staticDescriptor);
+      setLoadingPath('');
+      return () => {
+        cancelled = true;
+      };
+    }
+    void readPreviewDescriptor(path, config)
+      .then((nextDescriptor) => {
+        if (!cancelled) setDescriptor(nextDescriptor);
       })
-      .catch((nextError) => {
-        if (!cancelled) setError(nextError instanceof Error ? nextError.message : String(nextError));
+      .catch(async (descriptorError) => {
+        try {
+          const nextFile = await readWorkspaceFile(path, config);
+          if (!cancelled) setFile(nextFile);
+        } catch (fileError) {
+          if (!cancelled) {
+            const descriptorMessage = descriptorError instanceof Error ? descriptorError.message : String(descriptorError);
+            const fileMessage = fileError instanceof Error ? fileError.message : String(fileError);
+            setError(`已切换到备用预览，但仍无法读取：${fileMessage}；descriptor diagnostic: ${descriptorMessage}`);
+          }
+        }
       })
       .finally(() => {
         if (!cancelled) setLoadingPath('');
@@ -2358,7 +2492,7 @@ function WorkspaceObjectPreview({
     return () => {
       cancelled = true;
     };
-  }, [config, path, reference.kind]);
+  }, [artifact, config, inlinePreview, path, reference.kind]);
 
   if (reference.kind === 'url') {
     const url = reference.ref.replace(/^url:/i, '');
@@ -2384,6 +2518,25 @@ function WorkspaceObjectPreview({
     );
   }
   if (reference.kind !== 'file' && reference.kind !== 'artifact') return null;
+  if (inlinePreview) {
+    const previewReference = referenceForObjectReference(reference, inlinePreview.kind === 'pdf' || inlinePreview.kind === 'image' ? 'file-region' : 'file');
+    return (
+      <div className="workspace-object-preview" data-bioagent-reference={bioAgentReferenceAttribute(previewReference)}>
+        <div className="workspace-object-preview-head">
+          <Badge variant="info">{inlinePreview.kind}</Badge>
+          <strong>{inlinePreview.title}</strong>
+          {inlinePreview.size ? <span>{formatBytes(inlinePreview.size)}</span> : null}
+        </div>
+        <UploadedDataUrlPreview
+          kind={inlinePreview.kind}
+          dataUrl={inlinePreview.dataUrl}
+          title={inlinePreview.title}
+          mimeType={inlinePreview.mimeType}
+          reference={previewReference}
+        />
+      </div>
+    );
+  }
   if (!path) return null;
   if (loadingPath) {
     return (
@@ -2407,9 +2560,21 @@ function WorkspaceObjectPreview({
       </div>
     );
   }
+  if (descriptor) {
+    return (
+      <div className="workspace-object-preview" data-bioagent-reference={bioAgentReferenceAttribute(referenceForObjectReference(reference, descriptor.kind === 'pdf' || descriptor.kind === 'image' ? 'file-region' : 'file'))}>
+        <div className="workspace-object-preview-head">
+          <Badge variant="info">{descriptor.kind}</Badge>
+          <strong>{descriptor.title || descriptor.ref}</strong>
+          {descriptor.sizeBytes !== undefined ? <span>{formatBytes(descriptor.sizeBytes)}</span> : null}
+        </div>
+        <DescriptorPreview descriptor={descriptor} reference={referenceForObjectReference(reference, descriptor.kind === 'pdf' || descriptor.kind === 'image' ? 'file-region' : 'file')} />
+      </div>
+    );
+  }
   if (!file) return null;
   return (
-    <div className="workspace-object-preview">
+    <div className="workspace-object-preview" data-bioagent-reference={bioAgentReferenceAttribute(referenceForObjectReference(reference, fileKindForPath(file.path, file.language) === 'pdf' ? 'file-region' : 'file'))}>
       <div className="workspace-object-preview-head">
         <Badge variant="info">{file.language || fileKindForPath(file.path)}</Badge>
         <strong>{file.path}</strong>
@@ -2417,6 +2582,62 @@ function WorkspaceObjectPreview({
       </div>
       <WorkspaceFileInlineViewer file={file} />
     </div>
+  );
+}
+
+function DescriptorPreview({ descriptor, reference }: { descriptor: PreviewDescriptor; reference: BioAgentReference }) {
+  if ((descriptor.kind === 'pdf' || descriptor.kind === 'image') && descriptor.rawUrl) {
+    return (
+      <UploadedDataUrlPreview
+        kind={descriptor.kind}
+        dataUrl={descriptor.rawUrl}
+        title={descriptor.title || descriptor.ref}
+        mimeType={descriptor.mimeType}
+        reference={reference}
+      />
+    );
+  }
+  if (descriptor.kind === 'markdown' || descriptor.kind === 'text' || descriptor.kind === 'json' || descriptor.kind === 'table' || descriptor.kind === 'html') {
+    return (
+      <div className="workspace-object-media-note">
+        <p>此 artifact 使用 descriptor-driven 预览。小文件可走兼容内联读取；大文件将按需生成 text/schema excerpt，不把全量内容塞进对话上下文。</p>
+        <PreviewDescriptorActions descriptor={descriptor} reference={reference} />
+      </div>
+    );
+  }
+  return (
+    <div className="workspace-object-media-note">
+      <p>{descriptor.title || descriptor.ref} 已作为轻量 artifact 聚焦。当前类型使用 metadata/system-open/copy-ref 作为稳定 fallback，派生内容按需生成。</p>
+      <PreviewDescriptorActions descriptor={descriptor} reference={reference} />
+    </div>
+  );
+}
+
+function PreviewDescriptorActions({ descriptor, reference }: { descriptor: PreviewDescriptor; reference: BioAgentReference }) {
+  return (
+    <>
+      <div className="source-list">
+        <code>{descriptor.ref}</code>
+        {descriptor.mimeType ? <code>{descriptor.mimeType}</code> : null}
+        <button type="button" onClick={() => void navigator.clipboard?.writeText(JSON.stringify(reference, null, 2))}>复制引用</button>
+      </div>
+      {descriptor.derivatives?.length ? (
+        <details className="report-read-warning">
+          <summary>按需派生物</summary>
+          <div className="source-list">
+            {descriptor.derivatives.map((derivative) => (
+              <code key={`${derivative.kind}-${derivative.ref}`}>{derivative.kind}: {derivative.status || 'lazy'}</code>
+            ))}
+          </div>
+        </details>
+      ) : null}
+      {descriptor.diagnostics?.length ? (
+        <details className="report-read-warning">
+          <summary>preview diagnostics</summary>
+          <pre className="workspace-object-code">{descriptor.diagnostics.join('\n')}</pre>
+        </details>
+      ) : null}
+    </>
   );
 }
 
@@ -2443,17 +2664,338 @@ function WorkspaceFileInlineViewer({ file }: { file: WorkspaceFileContent }) {
   if (kind === 'pdf') {
     if (file.encoding === 'base64') {
       return (
-        <iframe
-          className="workspace-object-pdf-frame"
+        <UploadedDataUrlPreview
+          kind="pdf"
+          dataUrl={`data:${file.mimeType || 'application/pdf'};base64,${file.content}`}
           title={file.name}
-          src={`data:${file.mimeType || 'application/pdf'};base64,${file.content}`}
+          mimeType={file.mimeType || 'application/pdf'}
+          reference={referenceForWorkspaceFile(file, 'file-region')}
         />
       );
     }
-    return <p className="workspace-object-media-note">PDF 已作为可点击文件引用聚焦。可用“系统打开”查看完整 PDF，BioAgent 不会把二进制内容直接塞进聊天区。</p>;
+    return (
+      <div className="workspace-object-media-note">
+        <p>PDF 已作为可点击文件引用聚焦。点击对话栏“点选”后选中这张卡片，即可把 PDF 文件作为上下文；如需页码、段落或图表区域，请在问题中补充页码/图号/坐标描述。</p>
+        <div className="source-list">
+          <code>{file.path}</code>
+          <button type="button" onClick={() => void navigator.clipboard?.writeText(JSON.stringify(referenceForWorkspaceFile(file, 'file-region'), null, 2))}>复制 PDF 引用</button>
+        </div>
+      </div>
+    );
+  }
+  if (kind === 'document' || kind === 'spreadsheet' || kind === 'presentation') {
+    return (
+      <div className="workspace-object-media-note">
+        <p>{officePreviewLabel(kind)} 已作为可点击文件引用聚焦。浏览器内联预览暂不展开此类二进制文件，可用“系统打开”查看完整内容，或继续把它作为上下文引用给 BioAgent。</p>
+        <div className="source-list">
+          <code>{file.path}</code>
+          <code>{file.mimeType || 'application/octet-stream'}</code>
+        </div>
+      </div>
+    );
   }
   if (kind === 'html') return <pre className="workspace-object-code">{file.content.slice(0, 12000)}</pre>;
   return <pre className="workspace-object-code">{file.content.slice(0, 12000)}</pre>;
+}
+
+function officePreviewLabel(kind: string) {
+  if (kind === 'spreadsheet') return '表格文件';
+  if (kind === 'presentation') return '演示文稿';
+  return '文档文件';
+}
+
+function uploadedArtifactPreview(artifact?: RuntimeArtifact) {
+  if (!artifact || !isRecord(artifact.data)) return undefined;
+  const dataUrl = asString(artifact.data.dataUrl);
+  const kind = asString(artifact.data.previewKind);
+  if (!dataUrl || (kind !== 'pdf' && kind !== 'image')) return undefined;
+  return {
+    kind: kind as 'pdf' | 'image',
+    dataUrl,
+    title: asString(artifact.metadata?.title) || asString(artifact.data.title) || artifact.id,
+    mimeType: asString(artifact.metadata?.mimeType) || asString(artifact.data.mimeType),
+    size: asNumber(artifact.metadata?.size) || asNumber(artifact.data.size),
+  };
+}
+
+function normalizeArtifactPreviewDescriptor(artifact: RuntimeArtifact | undefined, fallbackRef?: string): PreviewDescriptor | undefined {
+  if (!artifact) return undefined;
+  if (artifact.previewDescriptor) return artifact.previewDescriptor;
+  const metadata = artifact.metadata ?? {};
+  const nested = isRecord(metadata.previewDescriptor) ? metadata.previewDescriptor : undefined;
+  const rawKind = asString(nested?.kind) || asString(metadata.previewKind) || fileKindForPath(fallbackRef || artifact.path || artifact.dataRef || artifact.id, asString(metadata.language) || '');
+  const kind = previewKindFromArtifact(rawKind, artifact);
+  if (!kind) return undefined;
+  const rawUrl = asString(nested?.rawUrl) || asString(metadata.rawUrl);
+  return {
+    kind,
+    source: 'artifact',
+    ref: fallbackRef || artifact.path || artifact.dataRef || `artifact:${artifact.id}`,
+    mimeType: asString(nested?.mimeType) || asString(metadata.mimeType),
+    sizeBytes: asNumber(nested?.sizeBytes) || asNumber(metadata.size),
+    hash: asString(nested?.hash) || asString(metadata.hash),
+    title: asString(nested?.title) || asString(metadata.title) || artifact.id,
+    rawUrl,
+    inlinePolicy: rawUrl ? 'stream' : defaultInlinePolicyForKind(kind),
+    derivatives: Array.isArray(nested?.derivatives) ? nested.derivatives.map(normalizePreviewDerivative).filter((item): item is NonNullable<PreviewDescriptor['derivatives']>[number] => Boolean(item)) : undefined,
+    actions: previewActionsForDescriptorKind(kind),
+    diagnostics: asStringList(nested?.diagnostics),
+  };
+}
+
+function normalizePreviewDerivative(value: unknown): NonNullable<PreviewDescriptor['derivatives']>[number] | undefined {
+  if (!isRecord(value)) return undefined;
+  const kind = asString(value.kind);
+  const ref = asString(value.ref);
+  if (!kind || !ref) return undefined;
+  return {
+    kind: kind as NonNullable<PreviewDescriptor['derivatives']>[number]['kind'],
+    ref,
+    mimeType: asString(value.mimeType),
+    sizeBytes: asNumber(value.sizeBytes),
+    hash: asString(value.hash),
+    generatedAt: asString(value.generatedAt),
+    status: value.status === 'available' || value.status === 'lazy' || value.status === 'failed' || value.status === 'unsupported' ? value.status : undefined,
+    diagnostics: asStringList(value.diagnostics),
+  };
+}
+
+function previewKindFromArtifact(kind: string | undefined, artifact: RuntimeArtifact): PreviewDescriptor['kind'] | undefined {
+  const value = `${kind || ''} ${artifact.type} ${artifact.path || ''} ${artifact.dataRef || ''}`.toLowerCase();
+  if (/pdf/.test(value)) return 'pdf';
+  if (/image|png|jpe?g|gif|webp|svg/.test(value)) return 'image';
+  if (/markdown|\.md\b/.test(value)) return 'markdown';
+  if (/json/.test(value)) return 'json';
+  if (/csv|tsv|xlsx?|table|matrix/.test(value)) return 'table';
+  if (/html?/.test(value)) return 'html';
+  if (/pdb|cif|mmcif|structure|molecule/.test(value)) return 'structure';
+  if (/docx?|pptx?|office|presentation|document/.test(value)) return 'office';
+  if (/text|log|txt/.test(value)) return 'text';
+  if (artifact.path || artifact.dataRef) return 'binary';
+  return undefined;
+}
+
+function defaultInlinePolicyForKind(kind: PreviewDescriptor['kind']): PreviewDescriptor['inlinePolicy'] {
+  if (kind === 'pdf' || kind === 'image') return 'stream';
+  if (kind === 'markdown' || kind === 'text' || kind === 'json' || kind === 'table' || kind === 'html') return 'extract';
+  if (kind === 'office' || kind === 'structure') return 'external';
+  return kind === 'folder' ? 'extract' : 'unsupported';
+}
+
+function previewActionsForDescriptorKind(kind: PreviewDescriptor['kind']): PreviewDescriptor['actions'] {
+  const common: PreviewDescriptor['actions'] = ['system-open', 'copy-ref', 'inspect-metadata'];
+  if (kind === 'pdf') return ['open-inline', 'extract-text', 'make-thumbnail', 'select-page', 'select-region', ...common];
+  if (kind === 'image') return ['open-inline', 'make-thumbnail', 'select-region', ...common];
+  if (kind === 'table') return ['open-inline', 'select-rows', ...common];
+  if (kind === 'markdown' || kind === 'text' || kind === 'json' || kind === 'html') return ['open-inline', 'extract-text', ...common];
+  return common;
+}
+
+function UploadedDataUrlPreview({
+  kind,
+  dataUrl,
+  title,
+  mimeType,
+  reference,
+}: {
+  kind: 'image' | 'pdf';
+  dataUrl: string;
+  title: string;
+  mimeType?: string;
+  reference?: BioAgentReference;
+}) {
+  const [objectUrl, setObjectUrl] = useState('');
+  const [regionPick, setRegionPick] = useState<RegionPickState | null>(null);
+  const [pickedRegion, setPickedRegion] = useState<string>('');
+  const regionRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (kind !== 'pdf') return undefined;
+    let cancelled = false;
+    let nextUrl = '';
+    void fetch(dataUrl)
+      .then((response) => response.blob())
+      .then((blob) => {
+        if (cancelled) return;
+        nextUrl = URL.createObjectURL(blob.type ? blob : new Blob([blob], { type: mimeType || 'application/pdf' }));
+        setObjectUrl(nextUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setObjectUrl(dataUrl);
+      });
+    return () => {
+      cancelled = true;
+      if (nextUrl) URL.revokeObjectURL(nextUrl);
+    };
+  }, [dataUrl, kind, mimeType]);
+
+  const regionLayer = reference ? (
+    <div className={cx('workspace-object-region-layer', regionPick?.active ? 'active' : regionPick ? 'ready' : undefined)} ref={regionRef} onMouseDown={startRegionPick}>
+      {regionPick ? <span className="workspace-object-region-box" style={regionStyle(regionPick)} /> : null}
+      {pickedRegion ? <span className="workspace-object-region-label">{pickedRegion}</span> : null}
+    </div>
+  ) : null;
+
+  if (kind === 'image') {
+    return (
+      <div className="workspace-object-image-frame" data-bioagent-reference={bioAgentReferenceAttribute(reference)}>
+        <img src={dataUrl} alt={title} />
+        {regionLayer}
+        <PreviewReferenceHint reference={reference} label="点选图片或拖选区域作为图像上下文" onPickRegion={reference ? beginRegionPick : undefined} />
+      </div>
+    );
+  }
+  return (
+    <div className="workspace-object-pdf-shell" data-bioagent-reference={bioAgentReferenceAttribute(reference)}>
+      <object className="workspace-object-pdf-frame" data={objectUrl || dataUrl} type={mimeType || 'application/pdf'} aria-label={title}>
+        <iframe className="workspace-object-pdf-frame" title={title} src={objectUrl || dataUrl} />
+      </object>
+      {regionLayer}
+      <PreviewReferenceHint reference={reference} label="点选整份 PDF，或拖选页面区域作为上下文" onPickRegion={reference ? beginRegionPick : undefined} />
+    </div>
+  );
+
+  function beginRegionPick() {
+    setPickedRegion('');
+    setRegionPick({ active: false, x: 0, y: 0, width: 0, height: 0 });
+  }
+
+  function startRegionPick(event: ReactMouseEvent<HTMLDivElement>) {
+    if (!regionPick || !regionRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const bounds = regionRef.current.getBoundingClientRect();
+    const startX = clamp01((event.clientX - bounds.left) / bounds.width);
+    const startY = clamp01((event.clientY - bounds.top) / bounds.height);
+    setRegionPick({ active: true, x: startX, y: startY, width: 0, height: 0, originX: startX, originY: startY });
+    function move(pointerEvent: MouseEvent) {
+      const currentX = clamp01((pointerEvent.clientX - bounds.left) / bounds.width);
+      const currentY = clamp01((pointerEvent.clientY - bounds.top) / bounds.height);
+      const x = Math.min(startX, currentX);
+      const y = Math.min(startY, currentY);
+      setRegionPick({ active: true, x, y, width: Math.abs(currentX - startX), height: Math.abs(currentY - startY), originX: startX, originY: startY });
+    }
+    function up(pointerEvent: MouseEvent) {
+      move(pointerEvent);
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      const endX = clamp01((pointerEvent.clientX - bounds.left) / bounds.width);
+      const endY = clamp01((pointerEvent.clientY - bounds.top) / bounds.height);
+      const x = Math.min(startX, endX);
+      const y = Math.min(startY, endY);
+      const width = Math.abs(endX - startX);
+      const height = Math.abs(endY - startY);
+      if (width < 0.01 || height < 0.01) {
+        setRegionPick(null);
+        return;
+      }
+      const region = `${Math.round(x * 1000)},${Math.round(y * 1000)},${Math.round(width * 1000)},${Math.round(height * 1000)}`;
+      setPickedRegion(`region ${region}`);
+      setRegionPick({ active: false, x, y, width, height });
+      void navigator.clipboard?.writeText(JSON.stringify(withRegionLocator(reference, region), null, 2));
+    }
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  }
+}
+
+type RegionPickState = {
+  active: boolean;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  originX?: number;
+  originY?: number;
+};
+
+function PreviewReferenceHint({
+  reference,
+  label,
+  onPickRegion,
+}: {
+  reference?: BioAgentReference;
+  label: string;
+  onPickRegion?: () => void;
+}) {
+  return (
+    <div className="workspace-object-reference-hint">
+      <span>{label}</span>
+      <div>
+        {onPickRegion ? <button type="button" onClick={onPickRegion}>区域选择</button> : null}
+        {reference ? <button type="button" onClick={() => void navigator.clipboard?.writeText(JSON.stringify(reference, null, 2))}>复制引用</button> : null}
+      </div>
+    </div>
+  );
+}
+
+function regionStyle(region: RegionPickState) {
+  return {
+    left: `${region.x * 100}%`,
+    top: `${region.y * 100}%`,
+    width: `${region.width * 100}%`,
+    height: `${region.height * 100}%`,
+  };
+}
+
+function clamp01(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, value));
+}
+
+function withRegionLocator(reference: BioAgentReference | undefined, region: string): BioAgentReference | undefined {
+  if (!reference) return undefined;
+  return {
+    ...reference,
+    kind: 'file-region',
+    id: `${reference.id}-region-${region.replace(/,/g, '-')}`,
+    locator: {
+      ...reference.locator,
+      region,
+    },
+    payload: {
+      ...(isRecord(reference.payload) ? reference.payload : {}),
+      region,
+      regionUnit: 'normalized-1000',
+    },
+  };
+}
+
+function referenceForObjectReference(reference: ObjectReference, kind: BioAgentReference['kind'] = 'file'): BioAgentReference {
+  const title = reference.title || reference.ref;
+  return {
+    id: `ref-${kind}-${reference.id}`,
+    kind,
+    title,
+    ref: reference.ref,
+    sourceId: reference.id,
+    runId: reference.runId,
+    summary: reference.summary || reference.ref,
+    payload: {
+      objectReferenceId: reference.id,
+      objectKind: reference.kind,
+      artifactType: reference.artifactType,
+      path: reference.provenance?.path,
+      dataRef: reference.provenance?.dataRef,
+      preferredView: reference.preferredView,
+    },
+  };
+}
+
+function referenceForWorkspaceFile(file: WorkspaceFileContent, kind: BioAgentReference['kind'] = 'file'): BioAgentReference {
+  return {
+    id: `ref-${kind}-${file.path.replace(/[^a-z0-9]+/gi, '-').slice(0, 64)}`,
+    kind,
+    title: file.name || file.path,
+    ref: `file:${file.path}`,
+    summary: `${file.language || fileKindForPath(file.path)} · ${formatBytes(file.size)}`,
+    payload: {
+      path: file.path,
+      mimeType: file.mimeType,
+      language: file.language,
+      encoding: file.encoding,
+      size: file.size,
+    },
+  };
 }
 
 function DelimitedTextPreview({ content, delimiter }: { content: string; delimiter: ',' | '\t' }) {
@@ -2487,6 +3029,9 @@ function fileKindForPath(path: string, language = '') {
   if (/\.pdf\b/.test(value)) return 'pdf';
   if (/\.(png|jpe?g|gif|webp|svg)\b/.test(value)) return 'image';
   if (/html|\.html?\b/.test(value)) return 'html';
+  if (/document|\.(docx?|rtf)\b/.test(value)) return 'document';
+  if (/spreadsheet|\.(xlsx?|ods)\b/.test(value)) return 'spreadsheet';
+  if (/presentation|\.(pptx?|odp)\b/.test(value)) return 'presentation';
   return language || 'text';
 }
 
@@ -2641,6 +3186,16 @@ function viewPlanSectionLabel(section: ViewPlanSection) {
 
 export function selectDefaultResultItems(items: ResolvedViewPlanItem[], focusMode: ResultFocusMode) {
   const sorted = [...items].sort(resultPresentationRank);
+  const focused = sorted.filter((item) => item.source === 'object-focus');
+  if (focused.length && focusMode === 'all') {
+    const visibleItems: ResolvedViewPlanItem[] = [];
+    pushUniqueVisibleItems(visibleItems, focused, 2);
+    const visibleIds = new Set(visibleItems.map((item) => item.id));
+    return {
+      visibleItems,
+      deferredItems: sorted.filter((item) => !visibleIds.has(item.id) && !isAuditOnlyResultItem(item)),
+    };
+  }
   if (focusMode === 'evidence' || focusMode === 'execution') {
     const visibleItems: ResolvedViewPlanItem[] = [];
     pushUniqueVisibleItems(visibleItems, sorted, 4);
@@ -3053,8 +3608,14 @@ function MetricGrid({ metrics = {} }: { metrics?: Record<string, unknown> }) {
   );
 }
 
-function EvidenceMatrix({ claims }: { claims: EvidenceClaim[] }) {
+function uploadedEvidenceArtifacts(artifacts: RuntimeArtifact[]) {
+  return artifacts.filter((artifact) => artifact.metadata?.source === 'user-upload' || /^uploaded-/.test(artifact.type));
+}
+
+function EvidenceMatrix({ claims, artifacts = [] }: { claims: EvidenceClaim[]; artifacts?: RuntimeArtifact[] }) {
   const [expandedClaim, setExpandedClaim] = useState<string | null>(null);
+  const [expandedUpload, setExpandedUpload] = useState<string | null>(null);
+  const uploads = uploadedEvidenceArtifacts(artifacts);
   const rows = claims.map((claim, index) => ({
     id: `${claim.id || 'claim'}-${index}`,
     claim: claim.text,
@@ -3069,8 +3630,46 @@ function EvidenceMatrix({ claims }: { claims: EvidenceClaim[] }) {
   }));
   return (
     <div className="stack">
-      <SectionHeader icon={Shield} title="EvidenceGraph" subtitle="Claim -> supporting / opposing evidence" />
-      {!rows.length ? <EmptyArtifactState title="等待真实 claims" detail="证据矩阵只展示当前 run 的 claims，不再回退到 KRAS demo claims。" /> : null}
+      <SectionHeader icon={Shield} title="证据矩阵" subtitle="claims、上传文件和可交互引用" />
+      {!rows.length && !uploads.length ? <EmptyArtifactState title="等待证据" detail="上传论文 PDF、图片或运行任务后，证据矩阵会展示可预览、可引用的材料。" /> : null}
+      {uploads.map((artifact) => {
+        const title = asString(artifact.metadata?.title) || asString(artifact.metadata?.fileName) || artifact.id;
+        const mimeType = asString(artifact.metadata?.mimeType) || asString((artifact.data as Record<string, unknown> | undefined)?.mimeType) || 'application/octet-stream';
+        const size = typeof artifact.metadata?.size === 'number' ? artifact.metadata.size : undefined;
+        const data = isRecord(artifact.data) ? artifact.data : {};
+        const dataUrl = asString(data.dataUrl);
+        const previewKind = asString(data.previewKind);
+        return (
+          <Card className="evidence-row uploaded-evidence-row" key={artifact.id}>
+            <div className="evidence-main">
+              <h3>{title}</h3>
+              <p>{artifact.type} · {mimeType}{size ? ` · ${formatResultFileBytes(size)}` : ''}</p>
+              <button className="expand-link source-toggle" onClick={() => setExpandedUpload(expandedUpload === artifact.id ? null : artifact.id)}>
+                {expandedUpload === artifact.id ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                {expandedUpload === artifact.id ? '收起预览' : '预览/引用'}
+              </button>
+              {expandedUpload === artifact.id ? (
+                <div className="uploaded-evidence-preview">
+                  {previewKind === 'image' && dataUrl ? (
+                    <UploadedDataUrlPreview kind="image" dataUrl={dataUrl} title={title} mimeType={mimeType} />
+                  ) : null}
+                  {previewKind === 'pdf' && dataUrl ? (
+                    <UploadedDataUrlPreview kind="pdf" dataUrl={dataUrl} title={title} mimeType={mimeType} />
+                  ) : null}
+                  {previewKind !== 'image' && previewKind !== 'pdf' ? <p className="empty-state">此文件类型已加入证据矩阵，可在对话栏引用给 BioAgent 使用。</p> : null}
+                  <div className="source-list">
+                    <code>artifact:{artifact.id}</code>
+                    {artifact.dataRef ? <code>{artifact.dataRef}</code> : null}
+                    <button type="button" onClick={() => void navigator.clipboard?.writeText(`artifact:${artifact.id}`)}>复制引用</button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            <Badge variant="info">uploaded</Badge>
+            <Badge variant="muted">{previewKind || 'file'}</Badge>
+          </Card>
+        );
+      })}
       {rows.map((row) => (
         <Card className="evidence-row" key={row.id}>
           <div className="evidence-main">

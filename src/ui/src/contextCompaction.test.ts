@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildContextCompactionFailureResult, buildContextCompactionOutcome } from './contextCompaction';
-import { buildContextWindowMeterModel, contextWindowLevel, shouldAutoCompact, shouldStartContextCompaction } from './contextWindow';
+import { buildContextWindowMeterModel, contextWindowLevel, estimateContextWindowState, shouldAutoCompact, shouldStartContextCompaction } from './contextWindow';
 import type { AgentContextWindowState } from './domain';
 
 const beforeState: AgentContextWindowState = {
@@ -110,7 +110,17 @@ test('context meter display reflects ratio, status, and source trust level', () 
   assert.equal(nativeHealthy.statusLabel, 'healthy');
   assert.equal(nativeHealthy.ratioLabel, '42%');
   assert.equal(nativeHealthy.ratioStyle, '42%');
+  assert.equal(nativeHealthy.ratioDetail, '42%');
+  assert.equal(nativeHealthy.remainingExact, '58,000');
   assert.match(nativeHealthy.title, /auto threshold: 82%/);
+  assert.deepEqual(
+    nativeHealthy.detailRows.slice(0, 3),
+    [
+      { label: 'used/window', value: '42,000 / 100,000 tokens' },
+      { label: 'remaining', value: '58,000 tokens' },
+      { label: 'ratio', value: '42%' },
+    ],
+  );
 
   const providerWatch = buildContextWindowMeterModel({
     ...beforeState,
@@ -129,10 +139,20 @@ test('context meter display reflects ratio, status, and source trust level', () 
     ratio: 0.91,
     source: 'agentserver-estimate',
     status: 'near-limit',
+    budget: {
+      rawTokens: 160_000,
+      normalizedTokens: 38_000,
+      savedTokens: 122_000,
+      maxPayloadBytes: 900_000,
+      normalizedBytes: 120_000,
+      normalizedBudgetRatio: 0.133,
+    },
   }, false);
   assert.equal(estimatedNearLimit.level, 'near-limit');
   assert.equal(estimatedNearLimit.sourceLabel, '估算');
   assert.equal(estimatedNearLimit.isEstimated, true);
+  assert.ok(estimatedNearLimit.detailRows.some((row) => row.label === 'payload tokens' && row.value === '38,000 normalized / 160,000 raw'));
+  assert.ok(estimatedNearLimit.detailRows.some((row) => row.label === 'saved tokens' && row.value === '122,000'));
 
   const unknownBlocked = buildContextWindowMeterModel({
     source: 'unknown',
@@ -143,6 +163,48 @@ test('context meter display reflects ratio, status, and source trust level', () 
   assert.equal(unknownBlocked.isUnknown, true);
   assert.equal(unknownBlocked.ratioLabel, 'unknown');
   assert.match(unknownBlocked.title, /source: 未知/);
+});
+
+test('empty estimated context window reports zero usage when the model window is known', () => {
+  const state = estimateContextWindowState({
+    schemaVersion: 2,
+    sessionId: 'session-empty',
+    scenarioId: 'literature-evidence-review',
+    title: 'empty',
+    createdAt: '2026-05-02T00:00:00.000Z',
+    messages: [],
+    runs: [],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [],
+    notebook: [],
+    versions: [],
+    updatedAt: '2026-05-02T00:00:00.000Z',
+  }, {
+    schemaVersion: 1,
+    agentServerBaseUrl: 'http://localhost:18080',
+    workspaceWriterBaseUrl: 'http://localhost:5174',
+    workspacePath: '/tmp/bioagent',
+    agentBackend: 'codex',
+    modelProvider: 'native',
+    modelBaseUrl: '',
+    modelName: 'codex-test',
+    apiKey: '',
+    requestTimeoutMs: 900_000,
+    maxContextWindowTokens: 200_000,
+    updatedAt: '2026-05-02T00:00:00.000Z',
+  }, []);
+
+  assert.equal(state.usedTokens, 0);
+  assert.equal(state.windowTokens, 200_000);
+  assert.equal(state.ratio, 0);
+  const meter = buildContextWindowMeterModel(state, false);
+  assert.deepEqual(meter.detailRows.slice(0, 3), [
+    { label: 'used/window', value: '0 / 200,000 tokens' },
+    { label: 'remaining', value: '200,000 tokens' },
+    { label: 'ratio', value: '0%' },
+  ]);
 });
 
 test('auto compact threshold respects backend fallback and unsupported capability', () => {

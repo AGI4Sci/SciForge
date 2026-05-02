@@ -100,6 +100,8 @@ export function createInitialWorkspaceState(): BioAgentWorkspaceState {
     }, {} as Record<ScenarioInstanceId, BioAgentSession>),
     archivedSessions: [],
     alignmentContracts: [],
+    feedbackComments: [],
+    feedbackRequests: [],
     updatedAt: now,
   };
 }
@@ -134,6 +136,12 @@ export function parseWorkspaceState(value: unknown): BioAgentWorkspaceState {
       : [],
     alignmentContracts: Array.isArray(raw.alignmentContracts)
       ? raw.alignmentContracts.filter(isAlignmentContract)
+      : [],
+    feedbackComments: Array.isArray(raw.feedbackComments)
+      ? raw.feedbackComments.filter(isFeedbackComment)
+      : [],
+    feedbackRequests: Array.isArray(raw.feedbackRequests)
+      ? raw.feedbackRequests.filter(isFeedbackRequest)
       : [],
     timelineEvents: Array.isArray(raw.timelineEvents)
       ? raw.timelineEvents.filter(isTimelineEventRecord)
@@ -172,16 +180,51 @@ function isAlignmentContract(value: unknown): value is AlignmentContractRecord {
     && (value as AlignmentContractRecord).data !== null;
 }
 
+function isFeedbackComment(value: unknown) {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return record.schemaVersion === 1
+    && typeof record.id === 'string'
+    && typeof record.authorId === 'string'
+    && typeof record.authorName === 'string'
+    && typeof record.comment === 'string'
+    && typeof record.status === 'string'
+    && typeof record.priority === 'string'
+    && Array.isArray(record.tags)
+    && typeof record.createdAt === 'string'
+    && typeof record.updatedAt === 'string'
+    && typeof record.target === 'object'
+    && record.target !== null
+    && typeof record.viewport === 'object'
+    && record.viewport !== null
+    && typeof record.runtime === 'object'
+    && record.runtime !== null;
+}
+
+function isFeedbackRequest(value: unknown) {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return record.schemaVersion === 1
+    && typeof record.id === 'string'
+    && typeof record.title === 'string'
+    && typeof record.status === 'string'
+    && Array.isArray(record.feedbackIds)
+    && typeof record.summary === 'string'
+    && Array.isArray(record.acceptanceCriteria)
+    && typeof record.createdAt === 'string'
+    && typeof record.updatedAt === 'string';
+}
+
 export function saveWorkspaceState(state: BioAgentWorkspaceState) {
   if (typeof window === 'undefined') return;
+  const compact = compactWorkspaceStateForStorage(state);
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(compact));
     return;
   } catch {
     // Very long repair-loop sessions can fail either at stringify time or at localStorage write time.
     // Compact and retry so persistence never unmounts the workbench.
   }
-  const compact = compactWorkspaceStateForStorage(state);
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(compact));
   } catch {
@@ -207,6 +250,8 @@ export function compactWorkspaceStateForStorage(
       compactSessionForStorage(session, limits),
     ])) as Record<ScenarioInstanceId, BioAgentSession>,
     archivedSessions: (state.archivedSessions ?? []).slice(0, limits.archived).map((session) => compactSessionForStorage(session, limits)),
+    feedbackComments: state.feedbackComments?.slice(0, mode === 'minimal' ? 20 : 120),
+    feedbackRequests: state.feedbackRequests?.slice(0, mode === 'minimal' ? 8 : 40),
     timelineEvents: state.timelineEvents?.slice(0, limits.timeline),
     reusableTaskCandidates: state.reusableTaskCandidates?.slice(0, limits.reusable),
   };
@@ -236,21 +281,78 @@ function compactSessionForStorage(
       data: compactArtifactData(artifact.data),
     })),
     notebook: session.notebook.slice(0, limits.records),
-    versions: session.versions.slice(0, limits.versions),
+    versions: session.versions.slice(0, limits.versions).map((version) => ({
+      ...version,
+      snapshot: compactSessionSnapshotForStorage(version.snapshot, limits),
+    })),
   };
 }
 
 function compactArtifactData(data: unknown) {
-  if (typeof data === 'string') return data.length > 4000 ? `${data.slice(0, 4000)}...` : data;
+  if (typeof data === 'string') {
+    if (isLargeBinaryString(data)) return compactBinaryMarker(data);
+    return data.length > 4000 ? `${data.slice(0, 4000)}...` : data;
+  }
   if (Array.isArray(data)) return data.slice(0, 20);
   if (typeof data !== 'object' || data === null) return data;
   const compact: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data).slice(0, 24)) {
-    if (typeof value === 'string') compact[key] = value.length > 4000 ? `${value.slice(0, 4000)}...` : value;
+    if (typeof value === 'string') {
+      compact[key] = isLargeBinaryField(key, value)
+        ? compactBinaryMarker(value)
+        : value.length > 4000 ? `${value.slice(0, 4000)}...` : value;
+    }
     else if (Array.isArray(value)) compact[key] = value.slice(0, 20);
     else compact[key] = value;
   }
   return compact;
+}
+
+function compactSessionSnapshotForStorage(
+  session: Omit<BioAgentSession, 'versions'>,
+  limits: { messages: number; runs: number; records: number; versions: number },
+): Omit<BioAgentSession, 'versions'> {
+  return {
+    ...session,
+    messages: session.messages.slice(-limits.messages).map((message) => ({
+      ...message,
+      content: message.content.length > 2400 ? `${message.content.slice(0, 2400)}...` : message.content,
+    })),
+    runs: session.runs.slice(-limits.runs).map((run) => ({
+      ...run,
+      prompt: run.prompt.length > 1200 ? `${run.prompt.slice(0, 1200)}...` : run.prompt,
+      response: run.response.length > 2400 ? `${run.response.slice(0, 2400)}...` : run.response,
+      raw: compactArtifactData(run.raw),
+    })),
+    uiManifest: session.uiManifest.slice(0, limits.records),
+    claims: session.claims.slice(0, limits.records),
+    executionUnits: session.executionUnits.slice(0, limits.records),
+    artifacts: session.artifacts.slice(0, limits.records).map((artifact) => ({
+      ...artifact,
+      data: compactArtifactData(artifact.data),
+    })),
+    notebook: session.notebook.slice(0, limits.records),
+  };
+}
+
+function isLargeBinaryField(key: string, value: string) {
+  return isLargeBinaryString(value) || /^(?:dataUrl|base64|binary|blob|content)$/i.test(key) && value.length > 1024;
+}
+
+function isLargeBinaryString(value: string) {
+  if (/^data:(?:image|application\/pdf|application\/octet-stream)[^,]*;base64,/i.test(value)) return true;
+  if (value.length < 4096) return false;
+  const compact = value.replace(/\s+/g, '');
+  return compact.length % 4 === 0 && /^[A-Za-z0-9+/=]+$/.test(compact);
+}
+
+function compactBinaryMarker(value: string) {
+  return {
+    omitted: true,
+    reason: 'binary-or-data-url',
+    chars: value.length,
+    head: value.slice(0, 80),
+  };
 }
 
 export function shouldUsePersistedWorkspaceState(
@@ -275,7 +377,12 @@ export function resetSession(scenarioId: ScenarioInstanceId): BioAgentSession {
 }
 
 export function versionSession(session: BioAgentSession, reason: string): BioAgentSession {
-  const snapshot = stripVersions({ ...session, updatedAt: nowIso() });
+  const snapshot = compactSessionSnapshotForStorage(stripVersions({ ...session, updatedAt: nowIso() }), {
+    messages: 16,
+    runs: 8,
+    records: 8,
+    versions: 3,
+  });
   const version: SessionVersionRecord = {
     id: makeId('version'),
     reason,

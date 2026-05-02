@@ -193,6 +193,47 @@ test('compactWorkspaceStateForStorage keeps recent session records', () => {
   );
 });
 
+test('compactWorkspaceStateForStorage strips binary dataUrls from artifacts and versions', () => {
+  const dataUrl = `data:application/pdf;base64,${Buffer.from('pdf-binary'.repeat(80_000)).toString('base64')}`;
+  const session = {
+    ...sessionFixture('binary-session', ['uploaded pdf']),
+    artifacts: [{
+      id: 'upload-pdf',
+      type: 'uploaded-pdf',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      dataRef: '.bioagent/uploads/binary-session/upload.pdf',
+      data: { fileName: 'upload.pdf', dataUrl },
+    }],
+  };
+  const state = parseWorkspaceState({
+    schemaVersion: 2,
+    workspacePath: '/tmp/bioagent-workspace',
+    sessionsByScenario: {
+      'literature-evidence-review': {
+        ...session,
+        versions: [{
+          id: 'version-binary',
+          reason: 'upload',
+          createdAt: '2026-04-25T00:00:00.000Z',
+          messageCount: 1,
+          runCount: 0,
+          artifactCount: 1,
+          checksum: 'abc',
+          snapshot: session,
+        }],
+      },
+    },
+    archivedSessions: [session],
+    updatedAt: '2026-04-25T00:00:00.000Z',
+  });
+
+  const compact = compactWorkspaceStateForStorage(state);
+  const serialized = JSON.stringify(compact);
+  assert.ok(!serialized.includes(dataUrl.slice(0, 50_000)));
+  assert.ok(serialized.includes('binary-or-data-url'));
+});
+
 function sessionFixture(sessionId: string, messages: string[]) {
   return {
     schemaVersion: 2,

@@ -23,7 +23,6 @@ import {
   FolderOpen,
   FolderPlus,
   Lock,
-  MessageSquare,
   Plus,
   Play,
   RefreshCw,
@@ -67,6 +66,7 @@ import {
   nowIso,
   type AlignmentContractRecord,
   type BioAgentMessage,
+  type BioAgentReference,
   type BioAgentRun,
   type BioAgentSession,
   type BioAgentWorkspaceState,
@@ -74,6 +74,11 @@ import {
   type AgentStreamEvent,
   type DisplayIntent,
   type EvidenceClaim,
+  type FeedbackCommentRecord,
+  type FeedbackCommentStatus,
+  type FeedbackPriority,
+  type FeedbackRuntimeSnapshot,
+  type FeedbackTargetSnapshot,
   type NotebookRecord,
   type NormalizedAgentResponse,
   type ObjectAction,
@@ -90,7 +95,7 @@ import {
 } from '../domain';
 import { uiModuleRegistry, type PresentationDedupeScope, type RuntimeUIModule } from '../uiModuleRegistry';
 import type { VolcanoPoint } from '../charts';
-import { createSession, loadWorkspaceState, resetSession, saveWorkspaceState, sessionActivityScore, shouldUsePersistedWorkspaceState, versionSession } from '../sessionStore';
+import { compactWorkspaceStateForStorage, createSession, loadWorkspaceState, resetSession, saveWorkspaceState, sessionActivityScore, shouldUsePersistedWorkspaceState, versionSession } from '../sessionStore';
 import { loadBioAgentConfig, normalizeWorkspaceRootPath, saveBioAgentConfig, updateConfig } from '../config';
 import {
   acceptSkillPromotionProposal,
@@ -179,6 +184,36 @@ function builtInScenarioIdForInstance(scenarioId: ScenarioInstanceId, scenarioOv
 function titleFromPrompt(prompt: string) {
   const title = prompt.trim().replace(/\s+/g, ' ').slice(0, 36);
   return title || '新聊天';
+}
+
+const FEEDBACK_AUTHOR_KEY = 'bioagent.feedback.author.v1';
+const APP_BUILD_ID = (import.meta.env.VITE_APP_VERSION as string | undefined) ?? 'local-dev';
+
+function loadFeedbackAuthor() {
+  if (typeof window === 'undefined') return { authorId: 'local-user', authorName: 'Local User' };
+  try {
+    const raw = window.localStorage.getItem(FEEDBACK_AUTHOR_KEY);
+    if (raw) {
+      const value = JSON.parse(raw) as { authorId?: unknown; authorName?: unknown };
+      if (typeof value.authorId === 'string' && typeof value.authorName === 'string') {
+        return { authorId: value.authorId, authorName: value.authorName };
+      }
+    }
+  } catch {
+    // Fall through to a stable browser-local author.
+  }
+  const author = { authorId: makeId('feedback-user'), authorName: 'Local User' };
+  saveFeedbackAuthor(author);
+  return author;
+}
+
+function saveFeedbackAuthor(author: { authorId: string; authorName: string }) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(FEEDBACK_AUTHOR_KEY, JSON.stringify(author));
+  } catch {
+    // Feedback capture still works without local author persistence.
+  }
 }
 
 
@@ -1120,10 +1155,14 @@ function TopBar({
 function SettingsDialog({
   config,
   onChange,
+  saveState,
+  onSave,
   onClose,
 }: {
   config: BioAgentConfig;
   onChange: (patch: Partial<BioAgentConfig>) => void;
+  saveState: ConfigSaveState;
+  onSave: () => void;
   onClose: () => void;
 }) {
   const healthItems = useRuntimeHealth(config);
@@ -1203,30 +1242,51 @@ function SettingsDialog({
             />
           </label>
           <label>
-            <span>Max Context Window</span>
+            <span>Max Context Window (k tokens)</span>
             <input
               type="number"
-              min={1000}
-              step={1000}
-              value={config.maxContextWindowTokens}
-              onChange={(event) => onChange({ maxContextWindowTokens: Number(event.target.value) })}
+              min={1}
+              step={1}
+              value={Math.round(config.maxContextWindowTokens / 1000)}
+              onChange={(event) => onChange({ maxContextWindowTokens: Number(event.target.value) * 1000 })}
             />
           </label>
         </div>
         <div className="settings-save-state" role="status">
-          <span className="status-dot online" />
+          <span className={cx('status-dot', saveState.status === 'error' ? 'offline' : saveState.status === 'saving' ? 'optional' : 'online')} />
           <span>
-            已自动保存到 config.local.json。下一次 AgentServer 请求会使用当前模型：
+            {settingsSaveStateText(saveState)}
+            {' '}
+            下一次 AgentServer 请求会使用当前模型：
             {' '}
             <code>{config.agentBackend}</code>
             <strong>{config.modelProvider || 'native'}</strong>
             {config.modelName.trim() ? <code>{config.modelName.trim()}</code> : <em>user model not set</em>}
           </span>
+          <ActionButton icon={Save} variant="primary" onClick={onSave} disabled={saveState.status === 'saving'}>
+            {saveState.status === 'saving' ? '保存中' : '保存并生效'}
+          </ActionButton>
           <ActionButton icon={RefreshCw} variant="secondary" onClick={() => window.location.reload()}>重新检测连接</ActionButton>
         </div>
       </section>
     </div>
   );
+}
+
+type ConfigSaveState = {
+  status: 'idle' | 'saving' | 'saved' | 'error';
+  message?: string;
+  savedAt?: string;
+};
+
+function settingsSaveStateText(state: ConfigSaveState) {
+  if (state.status === 'saving') return '正在保存到 config.local.json...';
+  if (state.status === 'error') return state.message || 'config.local.json 保存失败，请检查 Workspace Writer。';
+  if (state.status === 'saved') {
+    const time = state.savedAt ? new Date(state.savedAt).toLocaleTimeString('zh-CN', { hour12: false }) : '';
+    return time ? `已保存到 config.local.json（${time}）` : '已保存到 config.local.json';
+  }
+  return '修改后点击“保存并生效”，BioAgent 会写入 config.local.json。';
 }
 
 function formatSessionTime(value: string) {
@@ -1248,6 +1308,8 @@ function Workbench({
   onDeleteChat,
   archivedSessions,
   onRestoreArchivedSession,
+  onDeleteArchivedSessions,
+  onClearArchivedSessions,
   onEditMessage,
   onDeleteMessage,
   archivedCount,
@@ -1261,6 +1323,8 @@ function Workbench({
   onMarkReusableRun,
   workspaceFileEditor,
   onWorkspaceFileEditorChange,
+  externalReferenceRequest,
+  onExternalReferenceConsumed,
 }: {
   scenarioId: ScenarioInstanceId;
   config: BioAgentConfig;
@@ -1274,6 +1338,8 @@ function Workbench({
   onDeleteChat: (scenarioId: ScenarioInstanceId) => void;
   archivedSessions: BioAgentSession[];
   onRestoreArchivedSession: (scenarioId: ScenarioInstanceId, sessionId: string) => void;
+  onDeleteArchivedSessions: (scenarioId: ScenarioInstanceId, sessionIds: string[]) => void;
+  onClearArchivedSessions: (scenarioId: ScenarioInstanceId) => void;
   onEditMessage: (scenarioId: ScenarioInstanceId, messageId: string, content: string) => void;
   onDeleteMessage: (scenarioId: ScenarioInstanceId, messageId: string) => void;
   archivedCount: number;
@@ -1287,6 +1353,8 @@ function Workbench({
   onMarkReusableRun: (scenarioId: ScenarioInstanceId, runId: string) => void;
   workspaceFileEditor: { file: WorkspaceFileContent; draft: string } | null;
   onWorkspaceFileEditorChange: (next: { file: WorkspaceFileContent; draft: string } | null) => void;
+  externalReferenceRequest?: { id: string; reference: BioAgentReference };
+  onExternalReferenceConsumed: (requestId: string) => void;
 }) {
   const baseScenarioId = builtInScenarioIdForInstance(scenarioId, scenarioOverride);
   const scenarioView = scenarios.find((item) => item.id === baseScenarioId) ?? scenarios[0];
@@ -1358,7 +1426,7 @@ function Workbench({
   }
 
   return (
-    <main className="workbench">
+    <main className="workbench workbench-canvas-shell codex-quiet-shell">
       <div className="workbench-header">
         <div className="scenario-title">
           <div className="scenario-large-icon" style={{ color: scenarioView.color, background: `${scenarioView.color}18` }}>
@@ -1404,7 +1472,7 @@ function Workbench({
         <code>fallback={runtimeScenario.fallbackComponent}</code>
       </div>
       <div
-        className={cx('workbench-grid', resultsCollapsed && 'results-collapsed')}
+        className={cx('workbench-grid', 'workbench-canvas', resultsCollapsed && 'results-collapsed')}
         style={!resultsCollapsed ? { gridTemplateColumns: `minmax(360px, ${chatColumnWidth}%) 10px minmax(360px, 1fr)` } : undefined}
       >
         <div className={cx('mobile-pane', mobilePane !== 'chat' && 'mobile-hidden')}>
@@ -1422,6 +1490,8 @@ function Workbench({
             onDeleteChat={() => onDeleteChat(scenarioId)}
             archivedSessions={archivedSessions}
             onRestoreArchivedSession={(sessionId) => onRestoreArchivedSession(scenarioId, sessionId)}
+            onDeleteArchivedSessions={(sessionIds) => onDeleteArchivedSessions(scenarioId, sessionIds)}
+            onClearArchivedSessions={() => onClearArchivedSessions(scenarioId)}
             onEditMessage={(messageId, content) => onEditMessage(scenarioId, messageId, content)}
             onDeleteMessage={(messageId) => onDeleteMessage(scenarioId, messageId)}
             archivedCount={archivedCount}
@@ -1434,6 +1504,8 @@ function Workbench({
             onActiveRunChange={setActiveRunId}
             onMarkReusableRun={(runId) => onMarkReusableRun(scenarioId, runId)}
             onObjectFocus={handleObjectFocus}
+            externalReferenceRequest={externalReferenceRequest}
+            onExternalReferenceConsumed={onExternalReferenceConsumed}
           />
         </div>
         {!resultsCollapsed ? (
@@ -1468,6 +1540,463 @@ function Workbench({
   );
 }
 
+function FeedbackCaptureLayer({
+  page,
+  scenarioId,
+  session,
+  author,
+  onAuthorChange,
+  onSubmit,
+  onReference,
+}: {
+  page: PageId;
+  scenarioId: ScenarioInstanceId;
+  session: BioAgentSession;
+  author: { authorId: string; authorName: string };
+  onAuthorChange: (author: { authorId: string; authorName: string }) => void;
+  onSubmit: (comment: FeedbackCommentRecord) => void;
+  onReference: (reference: BioAgentReference) => void;
+}) {
+  const [contextTarget, setContextTarget] = useState<{ x: number; y: number; target: FeedbackTargetSnapshot; selectedText: string; objectReference?: BioAgentReference; mode: 'menu' | 'comment' } | null>(null);
+  const [comment, setComment] = useState('');
+  const [priority, setPriority] = useState<FeedbackPriority>('normal');
+  const [tags, setTags] = useState('');
+
+  useEffect(() => {
+    function openMenu(event: MouseEvent) {
+      const element = event.target instanceof Element ? event.target : null;
+      if (!element || element.closest('[data-feedback-control="true"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setContextTarget({
+        x: Math.min(event.clientX, window.innerWidth - 230),
+        y: Math.min(event.clientY, window.innerHeight - 160),
+        target: feedbackTargetSnapshot(element),
+        selectedText: currentSelectedText(),
+        objectReference: bioAgentReferenceFromElement(element),
+        mode: 'menu',
+      });
+    }
+    function handleContextMenu(event: MouseEvent) {
+      openMenu(event);
+    }
+    function handleClick(event: MouseEvent) {
+      const element = event.target instanceof Element ? event.target : null;
+      if (element?.closest('[data-feedback-control="true"]')) return;
+      setContextTarget(null);
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') setContextTarget(null);
+    }
+    document.addEventListener('contextmenu', handleContextMenu, true);
+    document.addEventListener('click', handleClick, true);
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      document.removeEventListener('contextmenu', handleContextMenu, true);
+      document.removeEventListener('click', handleClick, true);
+      document.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, []);
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!contextTarget || !comment.trim()) return;
+    const now = nowIso();
+    onSubmit({
+      id: makeId('feedback'),
+      schemaVersion: 1,
+      authorId: author.authorId,
+      authorName: author.authorName.trim() || 'Anonymous',
+      comment: comment.trim(),
+      status: 'open',
+      priority,
+      tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean),
+      createdAt: now,
+      updatedAt: now,
+      target: contextTarget.target,
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        devicePixelRatio: window.devicePixelRatio || 1,
+        scrollX: window.scrollX,
+        scrollY: window.scrollY,
+      },
+      runtime: feedbackRuntimeSnapshot({ page, scenarioId, session }),
+    });
+    setContextTarget(null);
+    setComment('');
+    setTags('');
+    setPriority('normal');
+  }
+
+  function addReference(kind: 'object' | 'selection') {
+    if (!contextTarget) return;
+    const reference = kind === 'object' && contextTarget.objectReference
+      ? contextTarget.objectReference
+      : referenceForFeedbackTarget(contextTarget.target, contextTarget.selectedText, kind);
+    onReference(reference);
+    setContextTarget(null);
+    setComment('');
+    setTags('');
+    setPriority('normal');
+  }
+
+  function openComment() {
+    setContextTarget((current) => current
+      ? {
+        ...current,
+        x: Math.min(current.x, window.innerWidth - 380),
+        y: Math.min(current.y, window.innerHeight - 250),
+        mode: 'comment',
+      }
+      : current);
+  }
+
+  return (
+    <div className="feedback-layer" data-feedback-control="true" aria-live="polite">
+      {contextTarget?.mode === 'menu' ? (
+        <div
+          className="feedback-context-menu"
+          style={{ left: `${contextTarget.x}px`, top: `${contextTarget.y}px` }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button type="button" onClick={openComment}>添加评论</button>
+          <button type="button" onClick={() => addReference('object')}>引用对象到对话</button>
+          <button type="button" onClick={() => addReference('selection')} disabled={!contextTarget.selectedText}>引用选中内容</button>
+        </div>
+      ) : null}
+      {contextTarget?.mode === 'comment' ? (
+          <form
+            className="feedback-popover"
+            style={{ left: `${contextTarget.x}px`, top: `${contextTarget.y}px` }}
+            onSubmit={submit}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="feedback-popover-head">
+              <strong>添加评论</strong>
+              <button type="button" className="feedback-close" onClick={() => setContextTarget(null)}>关闭</button>
+            </div>
+            <div className="feedback-target-summary">
+              <span>selector</span>
+              <code>{contextTarget.target.selector}</code>
+              <span>position</span>
+              <code>{Math.round(contextTarget.target.rect.x)}, {Math.round(contextTarget.target.rect.y)} · {Math.round(contextTarget.target.rect.width)}x{Math.round(contextTarget.target.rect.height)}</code>
+            </div>
+            <label className="feedback-field wide">
+              <span>评论内容</span>
+              <textarea value={comment} onChange={(event) => setComment(event.target.value)} autoFocus placeholder="写下你希望这里如何改..." />
+            </label>
+            <div className="feedback-grid">
+              <label className="feedback-field">
+                <span>用户</span>
+                <input
+                  value={author.authorName}
+                  onChange={(event) => onAuthorChange({ ...author, authorName: event.target.value })}
+                />
+              </label>
+              <label className="feedback-field">
+                <span>优先级</span>
+                <select value={priority} onChange={(event) => setPriority(event.target.value as FeedbackPriority)}>
+                  <option value="normal">normal</option>
+                  <option value="high">high</option>
+                  <option value="urgent">urgent</option>
+                  <option value="low">low</option>
+                </select>
+              </label>
+              <label className="feedback-field wide">
+                <span>标签（逗号分隔）</span>
+                <input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="upload, history, ui" />
+              </label>
+            </div>
+            <div className="feedback-actions">
+              <ActionButton icon={Check} disabled={!comment.trim()}>保存反馈</ActionButton>
+            </div>
+          </form>
+      ) : null}
+    </div>
+  );
+}
+
+function FeedbackInboxPage({
+  comments,
+  requests,
+  onStatusChange,
+  onDelete,
+  onCreateRequest,
+}: {
+  comments: FeedbackCommentRecord[];
+  requests: NonNullable<BioAgentWorkspaceState['feedbackRequests']>;
+  onStatusChange: (ids: string[], status: FeedbackCommentStatus) => void;
+  onDelete: (ids: string[]) => void;
+  onCreateRequest: (ids: string[], title: string) => void;
+}) {
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [statusFilter, setStatusFilter] = useState<FeedbackCommentStatus | 'all'>('all');
+  const visibleComments = comments
+    .filter((comment) => statusFilter === 'all' || comment.status === statusFilter)
+    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
+  const selectedComments = comments.filter((comment) => selectedIds.includes(comment.id));
+  const bundle = feedbackBundle(selectedComments.length ? selectedComments : visibleComments, requests);
+  const visibleIds = visibleComments.map((item) => item.id);
+  const visibleSelectedCount = visibleIds.filter((id) => selectedIds.includes(id)).length;
+
+  function toggle(id: string) {
+    setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  }
+
+  function deleteSelected(ids: string[]) {
+    if (!ids.length) return;
+    const confirmed = window.confirm(`确认删除 ${ids.length} 条反馈？问题解决后删除不会影响已导出的 Bundle。`);
+    if (!confirmed) return;
+    onDelete(ids);
+    setSelectedIds((current) => current.filter((id) => !ids.includes(id)));
+  }
+
+  return (
+    <main className="feedback-page">
+      <section className="feedback-hero">
+        <div>
+          <Badge variant="info">Feedback Bundle</Badge>
+          <h1>反馈收件箱</h1>
+          <p>汇总多用户页面评论、元素定位和运行时上下文，供 Codex 批量修改代码并回写发布状态。</p>
+        </div>
+        <div className="feedback-stats">
+          <span><strong>{comments.length}</strong> comments</span>
+          <span><strong>{requests.length}</strong> requests</span>
+          <span><strong>{comments.filter((item) => item.status === 'open').length}</strong> open</span>
+        </div>
+      </section>
+      <section className="feedback-toolbar">
+        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as FeedbackCommentStatus | 'all')}>
+          <option value="all">全部状态</option>
+          <option value="open">open</option>
+          <option value="triaged">triaged</option>
+          <option value="planned">planned</option>
+          <option value="fixed">fixed</option>
+          <option value="needs-discussion">needs-discussion</option>
+          <option value="wont-fix">wont-fix</option>
+        </select>
+        <span className="feedback-selection-count">{selectedIds.length ? `已选择 ${selectedIds.length} 条` : `当前列表 ${visibleComments.length} 条`}</span>
+        <button type="button" onClick={() => setSelectedIds(visibleIds)} disabled={!visibleIds.length || visibleSelectedCount === visibleIds.length}>选择当前列表</button>
+        <button type="button" onClick={() => setSelectedIds([])}>清除选择</button>
+        <button type="button" onClick={() => onStatusChange(selectedIds, 'triaged')} disabled={!selectedIds.length}>标记 triaged</button>
+        <button type="button" onClick={() => onStatusChange(selectedIds, 'fixed')} disabled={!selectedIds.length}>标记 fixed</button>
+        <button type="button" className="danger" onClick={() => deleteSelected(selectedIds)} disabled={!selectedIds.length}>删除选中</button>
+        <button type="button" className="danger" onClick={() => deleteSelected(visibleIds)} disabled={!visibleIds.length}>删除当前列表</button>
+        <button type="button" onClick={() => onCreateRequest(selectedIds, requestTitleFromFeedback(selectedComments))} disabled={!selectedIds.length}>生成 Request</button>
+        <button type="button" onClick={() => exportJsonFile(`bioagent-feedback-${nowIso().slice(0, 10)}.json`, bundle)}>导出 Bundle</button>
+        <button type="button" onClick={() => void navigator.clipboard?.writeText(JSON.stringify(bundle, null, 2))}>复制 Bundle</button>
+      </section>
+      {!visibleComments.length ? (
+        <div className="empty-runtime-state">
+          <Badge variant="muted">empty</Badge>
+          <strong>还没有反馈</strong>
+          <p>点击右下角“评论”进入评论模式，然后点选任意页面元素保存反馈。</p>
+        </div>
+      ) : (
+        <section className="feedback-list">
+          {visibleComments.map((item) => (
+            <article className={cx('feedback-card', selectedIds.includes(item.id) && 'selected')} key={item.id}>
+              <input type="checkbox" checked={selectedIds.includes(item.id)} onChange={() => toggle(item.id)} aria-label={`选择反馈 ${item.id}`} />
+              <div className="feedback-card-main">
+                <div className="feedback-card-head">
+                  <strong>{item.comment}</strong>
+                  <Badge variant={feedbackStatusVariant(item.status)}>{item.status}</Badge>
+                  <Badge variant={item.priority === 'urgent' || item.priority === 'high' ? 'warning' : 'muted'}>{item.priority}</Badge>
+                </div>
+                <p>{item.authorName} · {formatSessionTime(item.createdAt)} · {item.runtime.page} · {item.runtime.scenarioId}</p>
+                <div className="feedback-target-summary compact">
+                  <span>target</span>
+                  <code>{item.target.selector}</code>
+                  <span>runtime</span>
+                  <code>{item.runtime.sessionId ?? 'no-session'} / {item.runtime.activeRunId ?? 'no-run'}</code>
+                </div>
+                {item.tags.length ? <div className="feedback-tags">{item.tags.map((tag) => <code key={tag}>{tag}</code>)}</div> : null}
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
+    </main>
+  );
+}
+
+function feedbackRuntimeSnapshot({
+  page,
+  scenarioId,
+  session,
+}: {
+  page: PageId;
+  scenarioId: ScenarioInstanceId;
+  session: BioAgentSession;
+}): FeedbackRuntimeSnapshot {
+  const activeRun = session.runs.at(-1);
+  return {
+    page,
+    url: window.location.href,
+    scenarioId,
+    sessionId: session.sessionId,
+    activeRunId: activeRun?.id,
+    sessionTitle: session.title,
+    messageCount: session.messages.length,
+    artifactSummary: session.artifacts.slice(0, 12).map((artifact) => ({
+      id: artifact.id,
+      type: artifact.type,
+      title: typeof artifact.metadata?.title === 'string' ? artifact.metadata.title : undefined,
+    })),
+    executionSummary: session.executionUnits.slice(0, 12).map((unit) => ({
+      id: unit.id,
+      tool: unit.tool,
+      status: unit.status,
+    })),
+    uiManifest: session.uiManifest.map((slot) => slot.componentId),
+    appVersion: APP_BUILD_ID,
+  };
+}
+
+function feedbackTargetSnapshot(element: Element): FeedbackTargetSnapshot {
+  const rect = element.getBoundingClientRect();
+  const htmlElement = element as HTMLElement;
+  return {
+    selector: cssSelectorForElement(element),
+    path: elementPath(element),
+    text: compactFeedbackText(htmlElement.innerText || element.textContent || ''),
+    tagName: element.tagName.toLowerCase(),
+    role: element.getAttribute('role') || undefined,
+    ariaLabel: element.getAttribute('aria-label') || htmlElement.title || undefined,
+    rect: {
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+    },
+  };
+}
+
+function currentSelectedText() {
+  const text = window.getSelection()?.toString().replace(/\s+/g, ' ').trim() ?? '';
+  return text.length > 2400 ? `${text.slice(0, 2400)}...` : text;
+}
+
+function bioAgentReferenceFromElement(element: Element): BioAgentReference | undefined {
+  const referenceElement = element.closest<HTMLElement>('[data-bioagent-reference]');
+  const raw = referenceElement?.dataset.bioagentReference;
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as Partial<BioAgentReference>;
+    if (!parsed.id || !parsed.kind || !parsed.title || !parsed.ref) return undefined;
+    return parsed as BioAgentReference;
+  } catch {
+    return undefined;
+  }
+}
+
+function referenceForFeedbackTarget(target: FeedbackTargetSnapshot, selectedText: string, mode: 'object' | 'selection'): BioAgentReference {
+  const sourceRef = `ui:${target.selector}`;
+  if (mode === 'selection' && selectedText) {
+    const textHash = feedbackHash(`${sourceRef}:${selectedText}`);
+    return {
+      id: `ref-context-text-${textHash}`,
+      kind: 'ui',
+      title: `选中内容 · ${selectedText.slice(0, 28)}`,
+      ref: `ui-text:${sourceRef}#${textHash}`,
+      summary: selectedText,
+      locator: {
+        textRange: selectedText.slice(0, 160),
+        region: sourceRef,
+      },
+      payload: {
+        selectedText,
+        sourceTitle: target.text || target.ariaLabel || target.tagName,
+        sourceRef,
+        sourceKind: 'ui',
+        composerMarkerHint: 'selection',
+      },
+    };
+  }
+  return {
+    id: `ref-context-ui-${feedbackHash(sourceRef)}`,
+    kind: 'ui',
+    title: target.text || target.ariaLabel || `${target.tagName} 对象`,
+    ref: sourceRef,
+    summary: target.text || target.ariaLabel || target.path,
+    payload: {
+      tagName: target.tagName,
+      ariaLabel: target.ariaLabel,
+      selector: target.selector,
+      path: target.path,
+      textPreview: target.text,
+      composerMarkerHint: 'object',
+    },
+  };
+}
+
+function feedbackHash(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = Math.imul(31, hash) + value.charCodeAt(index) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function cssSelectorForElement(element: Element) {
+  if (element.id) return `#${CSS.escape(element.id)}`;
+  const parts: string[] = [];
+  let current: Element | null = element;
+  while (current && current.nodeType === Node.ELEMENT_NODE && parts.length < 5) {
+    let part = current.tagName.toLowerCase();
+    const classNames = Array.from(current.classList).filter((name) => !/^active|selected|hover/.test(name)).slice(0, 2);
+    if (classNames.length) part += classNames.map((name) => `.${CSS.escape(name)}`).join('');
+    const parent: Element | null = current.parentElement;
+    if (parent) {
+      const siblings = Array.from(parent.children) as Element[];
+      const sameTagSiblings = siblings.filter((child) => child.tagName === current?.tagName);
+      if (sameTagSiblings.length > 1) part += `:nth-of-type(${sameTagSiblings.indexOf(current) + 1})`;
+    }
+    parts.unshift(part);
+    current = parent;
+  }
+  return parts.join(' > ');
+}
+
+function elementPath(element: Element) {
+  const parts: string[] = [];
+  let current: Element | null = element;
+  while (current && current.nodeType === Node.ELEMENT_NODE && parts.length < 8) {
+    parts.unshift(current.tagName.toLowerCase());
+    current = current.parentElement;
+  }
+  return parts.join(' > ');
+}
+
+function compactFeedbackText(text: string) {
+  return text.replace(/\s+/g, ' ').trim().slice(0, 240);
+}
+
+function feedbackBundle(comments: FeedbackCommentRecord[], requests: NonNullable<BioAgentWorkspaceState['feedbackRequests']>) {
+  return {
+    schemaVersion: 1,
+    exportedAt: nowIso(),
+    appVersion: APP_BUILD_ID,
+    comments,
+    requests: requests.filter((request) => request.feedbackIds.some((id) => comments.some((comment) => comment.id === id))),
+    githubIssueHint: 'Use comments as source-of-truth; GitHub Issue should summarize and link this bundle instead of replacing it.',
+  };
+}
+
+function requestTitleFromFeedback(comments: FeedbackCommentRecord[]) {
+  const first = comments[0]?.comment.trim();
+  return first ? first.slice(0, 48) : 'BioAgent feedback request';
+}
+
+function feedbackStatusVariant(status: FeedbackCommentStatus): 'info' | 'success' | 'warning' | 'danger' | 'muted' {
+  if (status === 'fixed') return 'success';
+  if (status === 'planned' || status === 'triaged') return 'info';
+  if (status === 'needs-discussion') return 'warning';
+  if (status === 'wont-fix') return 'danger';
+  return 'muted';
+}
+
 function scenarioLabelForInstance(scenarioId: ScenarioInstanceId) {
   return scenarios.find((item) => item.id === scenarioId)?.name ?? String(scenarioId);
 }
@@ -1487,6 +2016,9 @@ export function BioAgentApp() {
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
   const [handoffAutoRun, setHandoffAutoRun] = useState<HandoffAutoRunRequest | undefined>();
   const [workbenchWorkspaceFileEditor, setWorkbenchWorkspaceFileEditor] = useState<{ file: WorkspaceFileContent; draft: string } | null>(null);
+  const [feedbackAuthor, setFeedbackAuthor] = useState(() => loadFeedbackAuthor());
+  const [configSaveState, setConfigSaveState] = useState<ConfigSaveState>({ status: 'idle' });
+  const [externalReferenceRequest, setExternalReferenceRequest] = useState<{ id: string; scenarioId: ScenarioInstanceId; reference: BioAgentReference } | undefined>();
   const [scenarioOverrides, setScenarioOverrides] = useState<Partial<Record<ScenarioInstanceId, ScenarioRuntimeOverride>>>({});
   const [drafts, setDrafts] = useState<Record<ScenarioInstanceId, string>>({
     'literature-evidence-review': '',
@@ -1632,7 +2164,7 @@ export function BioAgentApp() {
     if (!workspaceHydrated) return;
     saveWorkspaceState(workspaceState);
     if (workspaceState.workspacePath.trim()) {
-      persistWorkspaceState(workspaceState, config)
+      persistWorkspaceState(compactWorkspaceStateForStorage(workspaceState), config)
         .then(() => setWorkspaceStatus(`已同步到 ${workspaceState.workspacePath}/.bioagent`))
         .catch((err) => setWorkspaceStatus(`Workspace writer 未连接：${err instanceof Error ? err.message : String(err)}`));
     }
@@ -1641,14 +2173,27 @@ export function BioAgentApp() {
   useEffect(() => {
     if (!configFileHydrated) return;
     saveBioAgentConfig(config);
+    setConfigSaveState({ status: 'saving' });
     saveFileBackedBioAgentConfig(config)
-      .then(() => setWorkspaceStatus('已保存到 config.local.json'))
-      .catch((err) => setWorkspaceStatus(`config.local.json 未保存：${err instanceof Error ? err.message : String(err)}`));
+      .then(() => {
+        const savedAt = nowIso();
+        setConfigSaveState({ status: 'saved', savedAt });
+        setWorkspaceStatus('已保存到 config.local.json');
+      })
+      .catch((err) => {
+        const message = `config.local.json 未保存：${err instanceof Error ? err.message : String(err)}`;
+        setConfigSaveState({ status: 'error', message });
+        setWorkspaceStatus(message);
+      });
   }, [config, configFileHydrated]);
 
   useEffect(() => {
     if (page !== 'workbench') setWorkbenchWorkspaceFileEditor(null);
   }, [page]);
+
+  useEffect(() => {
+    saveFeedbackAuthor(feedbackAuthor);
+  }, [feedbackAuthor]);
 
   function updateWorkspace(mutator: (state: BioAgentWorkspaceState) => BioAgentWorkspaceState) {
     setWorkspaceState((current) => ({
@@ -1675,6 +2220,72 @@ export function BioAgentApp() {
     }));
   }
 
+  function addFeedbackComment(comment: FeedbackCommentRecord) {
+    updateWorkspace((current) => ({
+      ...current,
+      feedbackComments: [comment, ...(current.feedbackComments ?? [])].slice(0, 500),
+    }));
+  }
+
+  function addContextReference(reference: BioAgentReference) {
+    const requestId = makeId('context-ref');
+    setExternalReferenceRequest({ id: requestId, scenarioId, reference });
+    setPage('workbench');
+  }
+
+  function updateFeedbackStatus(ids: string[], status: FeedbackCommentStatus) {
+    if (!ids.length) return;
+    const selected = new Set(ids);
+    updateWorkspace((current) => ({
+      ...current,
+      feedbackComments: (current.feedbackComments ?? []).map((comment) => selected.has(comment.id)
+        ? { ...comment, status, updatedAt: nowIso() }
+        : comment),
+    }));
+  }
+
+  function deleteFeedbackComments(ids: string[]) {
+    if (!ids.length) return;
+    const selected = new Set(ids);
+    updateWorkspace((current) => ({
+      ...current,
+      feedbackComments: (current.feedbackComments ?? []).filter((comment) => !selected.has(comment.id)),
+      feedbackRequests: (current.feedbackRequests ?? []).map((request) => ({
+        ...request,
+        feedbackIds: request.feedbackIds.filter((id) => !selected.has(id)),
+      })),
+    }));
+  }
+
+  function createFeedbackRequest(ids: string[], title: string) {
+    if (!ids.length) return;
+    const now = nowIso();
+    const requestId = makeId('request');
+    updateWorkspace((current) => {
+      const request: NonNullable<BioAgentWorkspaceState['feedbackRequests']>[number] = {
+        id: requestId,
+        schemaVersion: 1,
+        title,
+        status: 'draft',
+        feedbackIds: ids,
+        summary: `Codex change request from ${ids.length} feedback comments.`,
+        acceptanceCriteria: ids.map((id) => {
+          const comment = current.feedbackComments?.find((item) => item.id === id);
+          return comment ? comment.comment : id;
+        }).slice(0, 12),
+        createdAt: now,
+        updatedAt: now,
+      };
+      return {
+        ...current,
+        feedbackRequests: [request, ...(current.feedbackRequests ?? [])].slice(0, 80),
+        feedbackComments: (current.feedbackComments ?? []).map((comment) => ids.includes(comment.id)
+          ? { ...comment, status: comment.status === 'open' ? 'triaged' : comment.status, requestId, updatedAt: now }
+          : comment),
+      };
+    });
+  }
+
   function setWorkspacePath(value: string) {
     const workspacePath = normalizeWorkspaceRootPath(value);
     const nextConfig = updateConfig(config, { workspacePath });
@@ -1694,6 +2305,23 @@ export function BioAgentApp() {
       }
       return next;
     });
+  }
+
+  function saveRuntimeConfigNow() {
+    const next = updateConfig(config, {});
+    saveBioAgentConfig(next);
+    setConfigSaveState({ status: 'saving' });
+    saveFileBackedBioAgentConfig(next)
+      .then(() => {
+        const savedAt = nowIso();
+        setConfigSaveState({ status: 'saved', savedAt });
+        setWorkspaceStatus('设置已保存并对下一次 AgentServer 请求生效');
+      })
+      .catch((err) => {
+        const message = `设置未保存：${err instanceof Error ? err.message : String(err)}`;
+        setConfigSaveState({ status: 'error', message });
+        setWorkspaceStatus(message);
+      });
   }
 
   function updateDraft(nextScenarioId: ScenarioInstanceId, value: string) {
@@ -1761,6 +2389,22 @@ export function BioAgentApp() {
         },
       };
     });
+  }
+
+  function deleteArchivedSessions(nextScenarioId: ScenarioInstanceId, sessionIds: string[]) {
+    if (!sessionIds.length) return;
+    const selected = new Set(sessionIds);
+    updateWorkspace((current) => ({
+      ...current,
+      archivedSessions: current.archivedSessions.filter((session) => session.scenarioId !== nextScenarioId || !selected.has(session.sessionId)),
+    }));
+  }
+
+  function clearArchivedSessions(nextScenarioId: ScenarioInstanceId) {
+    updateWorkspace((current) => ({
+      ...current,
+      archivedSessions: current.archivedSessions.filter((session) => session.scenarioId !== nextScenarioId),
+    }));
   }
 
   function editMessage(nextScenarioId: ScenarioInstanceId, messageId: string, content: string) {
@@ -1996,6 +2640,8 @@ export function BioAgentApp() {
               onDeleteChat={deleteChat}
               archivedSessions={archivedSessionsByAgent[scenarioId] ?? []}
               onRestoreArchivedSession={restoreArchivedSession}
+              onDeleteArchivedSessions={deleteArchivedSessions}
+              onClearArchivedSessions={clearArchivedSessions}
               onEditMessage={editMessage}
               onDeleteMessage={deleteMessage}
               archivedCount={archivedCountByAgent[scenarioId] ?? 0}
@@ -2009,21 +2655,44 @@ export function BioAgentApp() {
               onMarkReusableRun={markReusableRun}
               workspaceFileEditor={workbenchWorkspaceFileEditor}
               onWorkspaceFileEditorChange={setWorkbenchWorkspaceFileEditor}
+              externalReferenceRequest={externalReferenceRequest?.scenarioId === scenarioId ? externalReferenceRequest : undefined}
+              onExternalReferenceConsumed={(requestId) => {
+                setExternalReferenceRequest((current) => current?.id === requestId ? undefined : current);
+              }}
             />
           ) : page === 'alignment' ? (
             <AlignmentPage contracts={workspaceState.alignmentContracts ?? []} onSaveContract={saveAlignmentContract} />
-          ) : (
+          ) : page === 'timeline' ? (
             <TimelinePage alignmentContracts={workspaceState.alignmentContracts ?? []} events={workspaceState.timelineEvents ?? []} onOpenScenario={(id) => {
               setScenarioId(id);
               setPage('workbench');
             }} />
+          ) : (
+            <FeedbackInboxPage
+              comments={workspaceState.feedbackComments ?? []}
+              requests={workspaceState.feedbackRequests ?? []}
+              onStatusChange={updateFeedbackStatus}
+              onDelete={deleteFeedbackComments}
+              onCreateRequest={createFeedbackRequest}
+            />
           )}
         </div>
       </div>
+      <FeedbackCaptureLayer
+        page={page}
+        scenarioId={scenarioId}
+        session={activeSession}
+        author={feedbackAuthor}
+        onAuthorChange={setFeedbackAuthor}
+        onSubmit={addFeedbackComment}
+        onReference={addContextReference}
+      />
       {settingsOpen ? (
         <SettingsDialog
           config={config}
           onChange={updateRuntimeConfig}
+          saveState={configSaveState}
+          onSave={saveRuntimeConfigNow}
           onClose={() => setSettingsOpen(false)}
         />
       ) : null}

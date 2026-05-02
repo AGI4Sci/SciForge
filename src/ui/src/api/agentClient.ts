@@ -81,9 +81,9 @@ function agentSystemPrompt(input: SendAgentMessageInput) {
 
 function buildPrompt(input: SendAgentMessageInput) {
   const builtInScenarioId = builtInScenarioIdForInput(input);
-  const recentHistory = input.messages.slice(-8).map((message) => ({
+  const recentHistory = input.messages.slice(-6).map((message) => ({
     role: message.role,
-    content: message.content,
+    content: clipPromptText(message.content, 900),
     references: message.references?.map(compactBioAgentReference),
   }));
   const artifactContext = summarizeArtifacts(input.artifacts ?? []);
@@ -180,19 +180,23 @@ function compactBioAgentReference(reference: NonNullable<SendAgentMessageInput['
     sourceId: reference.sourceId,
     runId: reference.runId,
     locator: reference.locator,
-    summary: reference.summary,
+    summary: clipPromptText(reference.summary, 320),
     payload: previewReferencePayload(reference.payload),
   };
 }
 
 function previewReferencePayload(payload: unknown): unknown {
+  if (typeof payload === 'string') return clipPromptText(payload, 360);
+  if (Array.isArray(payload)) return { valueType: 'array', count: payload.length, preview: payload.slice(0, 4).map((item) => previewReferencePayload(item)) };
   if (!isRecord(payload)) return payload;
   const preview: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(payload).slice(0, 10)) {
+  for (const [key, value] of Object.entries(payload).slice(0, 8)) {
     if (typeof value === 'string') {
-      preview[key] = value.slice(0, 1200);
+      preview[key] = clipPromptText(value, 360);
     } else if (Array.isArray(value)) {
-      preview[key] = value.slice(0, 8);
+      preview[key] = { count: value.length, preview: value.slice(0, 4).map((item) => previewReferencePayload(item)) };
+    } else if (isRecord(value)) {
+      preview[key] = previewReferencePayload(value);
     } else {
       preview[key] = value;
     }
@@ -201,12 +205,12 @@ function previewReferencePayload(payload: unknown): unknown {
 }
 
 function summarizeArtifacts(artifacts: RuntimeArtifact[]) {
-  return artifacts.slice(0, 8).map((artifact) => ({
+  return artifacts.slice(-8).map((artifact) => ({
     id: artifact.id,
     type: artifact.type,
     producerScenario: artifact.producerScenario,
     schemaVersion: artifact.schemaVersion,
-    metadata: artifact.metadata,
+    metadata: previewReferencePayload(artifact.metadata),
     dataRef: artifact.dataRef,
     path: artifact.path,
     dataPreview: previewArtifactData(artifact.data),
@@ -214,16 +218,28 @@ function summarizeArtifacts(artifacts: RuntimeArtifact[]) {
 }
 
 function previewArtifactData(data: unknown): unknown {
+  if (typeof data === 'string') return clipPromptText(data, 600);
+  if (Array.isArray(data)) return { valueType: 'array', count: data.length, preview: data.slice(0, 3).map((item) => previewArtifactData(item)) };
   if (!isRecord(data)) return data;
   const preview: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data).slice(0, 8)) {
     if (Array.isArray(value)) {
-      preview[key] = value.slice(0, 5);
+      preview[key] = { count: value.length, preview: value.slice(0, 3).map((item) => previewArtifactData(item)) };
+    } else if (typeof value === 'string') {
+      preview[key] = clipPromptText(value, 600);
+    } else if (isRecord(value)) {
+      preview[key] = previewArtifactData(value);
     } else {
       preview[key] = value;
     }
   }
   return preview;
+}
+
+function clipPromptText(value: unknown, limit: number) {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized.length > limit ? `${normalized.slice(0, limit)}...` : normalized;
 }
 
 function buildRuntimeConfig(input: SendAgentMessageInput): NonNullable<AgentServerRunPayload['runtime']> {
@@ -273,7 +289,7 @@ function normalizeStreamEvent(raw: unknown): AgentStreamEvent {
     ?? normalizeTokenUsage(isRecord(record.output) ? record.output.usage : undefined)
     ?? normalizeTokenUsage(isRecord(record.result) ? record.result.usage : undefined)
     ?? normalizeTokenUsage(isRecord(record.result) && isRecord(record.result.output) ? record.result.output.usage : undefined);
-  const contextWindowState = normalizeContextWindowState(record.contextWindowState ?? record.contextWindow ?? record.context_window ?? record.usage, type, record);
+  const contextWindowState = normalizeContextWindowState(contextWindowCandidate(record), type, record);
   const contextCompaction = normalizeContextCompaction(record.contextCompaction ?? record.compaction ?? record.context_compaction, type, record);
   const baseDetail = asString(record.message)
     || asString(record.detail)
@@ -295,6 +311,22 @@ function normalizeStreamEvent(raw: unknown): AgentStreamEvent {
   };
 }
 
+function withConfiguredContextWindowLimit(event: AgentStreamEvent, maxContextWindowTokens: number): AgentStreamEvent {
+  const state = event.contextWindowState;
+  if (!state || state.windowTokens !== undefined || !maxContextWindowTokens) return event;
+  const ratio = state.usedTokens !== undefined ? state.usedTokens / maxContextWindowTokens : state.ratio;
+  return {
+    ...event,
+    contextWindowState: {
+      ...state,
+      window: maxContextWindowTokens,
+      windowTokens: maxContextWindowTokens,
+      ratio,
+      status: normalizeContextWindowStatus(state.status, ratio, state.autoCompactThreshold),
+    },
+  };
+}
+
 function normalizeContextWindowState(value: unknown, type: string, fallback: Record<string, unknown>): AgentStreamEvent['contextWindowState'] | undefined {
   const record = isRecord(value) ? value : type === 'contextWindowState' && isRecord(fallback) ? fallback : undefined;
   if (!record) return undefined;
@@ -306,15 +338,15 @@ function normalizeContextWindowState(value: unknown, type: string, fallback: Rec
   const cache = asNumber(record.cache) ?? asNumber(record.cacheTokens) ?? asNumber(usage.cache) ?? (
     cacheRead !== undefined || cacheWrite !== undefined ? (cacheRead ?? 0) + (cacheWrite ?? 0) : undefined
   );
-  const usedTokens = asNumber(record.usedTokens) ?? asNumber(record.used) ?? asNumber(record.contextWindowTokens) ?? asNumber(record.tokens) ?? asNumber(record.inputTokens) ?? asNumber(record.total) ?? asNumber(usage.total) ?? (
-    input !== undefined || output !== undefined || cache !== undefined ? (input ?? 0) + (output ?? 0) + (cache ?? 0) : undefined
-  );
-  const windowTokens = asNumber(record.windowTokens) ?? asNumber(record.window) ?? asNumber(record.contextWindowLimit) ?? asNumber(record.limit) ?? asNumber(record.contextWindow);
+  const explicitUsedTokens = asNumber(record.usedTokens) ?? asNumber(record.used) ?? asNumber(record.contextWindowTokens) ?? asNumber(record.currentContextWindowTokens) ?? asNumber(record.context_window_tokens) ?? asNumber(record.current_context_window_tokens);
+  const usedTokens = explicitUsedTokens;
+  const windowTokens = asNumber(record.windowTokens) ?? asNumber(record.window) ?? asNumber(record.contextWindowLimit) ?? asNumber(record.context_window_limit) ?? asNumber(record.limit) ?? asNumber(record.contextWindow);
   const ratio = clampRatio(asNumber(record.ratio) ?? asNumber(record.contextWindowRatio) ?? (
     usedTokens !== undefined && windowTokens ? usedTokens / windowTokens : undefined
   ));
   const hasUsage = input !== undefined || output !== undefined || cache !== undefined || asNumber(usage.total) !== undefined;
-  const explicitSource = asString(record.source) ?? asString(record.contextWindowSource);
+  const hasContextTelemetry = explicitUsedTokens !== undefined || windowTokens !== undefined || ratio !== undefined;
+  const explicitSource = asString(record.source) ?? asString(record.contextWindowSource) ?? asString(record.context_window_source);
   const source = explicitSource
     ? (normalizeContextWindowSource(explicitSource) === 'unknown' && hasUsage ? 'provider-usage' : normalizeContextWindowSource(explicitSource))
     : (hasUsage ? 'provider-usage' : 'unknown');
@@ -343,9 +375,42 @@ function normalizeContextWindowState(value: unknown, type: string, fallback: Rec
   if (state.compactCapability === 'unknown' && state.backend) {
     state.compactCapability = compactCapabilityForBackend(state.backend);
   }
-  return state.usedTokens !== undefined || state.windowTokens !== undefined || state.ratio !== undefined || state.source !== 'unknown'
+  return hasContextTelemetry
     ? state
     : undefined;
+}
+
+function contextWindowCandidate(record: Record<string, unknown>): unknown {
+  return record.contextWindowState
+    ?? record.contextWindow
+    ?? record.context_window
+    ?? (isExplicitContextWindowRecord(record.usage) ? record.usage : undefined);
+}
+
+function isExplicitContextWindowRecord(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
+  return [
+    'usedTokens',
+    'used_tokens',
+    'contextWindowTokens',
+    'context_window_tokens',
+    'currentContextWindowTokens',
+    'current_context_window_tokens',
+    'contextLength',
+    'context_length',
+    'currentContextLength',
+    'current_context_length',
+    'windowTokens',
+    'window_tokens',
+    'contextWindowLimit',
+    'context_window_limit',
+    'modelContextWindow',
+    'model_context_window',
+    'contextWindowRatio',
+    'context_window_ratio',
+    'contextWindowSource',
+    'context_window_source',
+  ].some((key) => key in value);
 }
 
 function normalizeContextCompaction(value: unknown, type: string, fallback: Record<string, unknown>): AgentStreamEvent['contextCompaction'] | undefined {
@@ -1218,10 +1283,16 @@ export async function sendAgentMessageStream(
         if (!trimmed) continue;
         const envelope = JSON.parse(trimmed) as unknown;
         if (!isRecord(envelope)) continue;
-        if ('event' in envelope) callbacks.onEvent?.(normalizeStreamEvent(envelope.event));
+        if ('event' in envelope) callbacks.onEvent?.(withConfiguredContextWindowLimit(
+          normalizeStreamEvent(envelope.event),
+          input.config.maxContextWindowTokens,
+        ));
         if ('result' in envelope) finalResult = envelope.result;
         if ('error' in envelope) {
-          callbacks.onEvent?.(normalizeStreamEvent({ type: 'error', error: envelope.error }));
+          callbacks.onEvent?.(withConfiguredContextWindowLimit(
+            normalizeStreamEvent({ type: 'error', error: envelope.error }),
+            input.config.maxContextWindowTokens,
+          ));
         }
       }
       if (done) break;
@@ -1229,9 +1300,15 @@ export async function sendAgentMessageStream(
     if (buffer.trim()) {
       const envelope = JSON.parse(buffer.trim()) as unknown;
       if (isRecord(envelope)) {
-        if ('event' in envelope) callbacks.onEvent?.(normalizeStreamEvent(envelope.event));
+        if ('event' in envelope) callbacks.onEvent?.(withConfiguredContextWindowLimit(
+          normalizeStreamEvent(envelope.event),
+          input.config.maxContextWindowTokens,
+        ));
         if ('result' in envelope) finalResult = envelope.result;
-        if ('error' in envelope) callbacks.onEvent?.(normalizeStreamEvent({ type: 'error', error: envelope.error }));
+        if ('error' in envelope) callbacks.onEvent?.(withConfiguredContextWindowLimit(
+          normalizeStreamEvent({ type: 'error', error: envelope.error }),
+          input.config.maxContextWindowTokens,
+        ));
       }
     }
     if (!finalResult) {

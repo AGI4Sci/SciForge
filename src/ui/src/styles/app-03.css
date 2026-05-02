@@ -902,3 +902,39 @@ code,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.session-history-bulkbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.session-history-bulkbar label,
+.session-history-row > input {
+  color: var(--bio-300);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.session-history-bulkbar button {
+  min-height: 26px;
+  padding: 0 8px;
+  color: var(--bio-100);
+  background: rgba(5, 8, 16, 0.46);
+  border: 1px solid rgba(46, 61, 85, 0.72);
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.session-history-bulkbar button:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: rgba(0, 229, 160, 0.35);
+}
+
+.session-history-bulkbar button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
