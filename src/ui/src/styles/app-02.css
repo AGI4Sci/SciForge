@@ -147,6 +147,43 @@
   font-size: 13px;
 }
 
+.runtime-health-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.runtime-health-head-actions button {
+  min-height: 22px;
+  padding: 0 8px;
+  color: var(--accent);
+  background: var(--accent-muted);
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.runtime-health-head-actions button:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.runtime-start-status {
+  padding: 6px 8px;
+  color: var(--bio-200);
+  border: 1px solid var(--border-muted);
+  border-radius: 6px;
+  background: rgba(9, 18, 32, 0.36);
+  font-size: 11px;
+}
+
+.runtime-start-status.error {
+  color: var(--danger);
+  border-color: rgba(255, 112, 67, 0.45);
+}
+
 .runtime-health-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

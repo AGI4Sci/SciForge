@@ -546,11 +546,14 @@ describe('sendSciForgeToolMessage routing', () => {
 
     const usageEvent = events.find((event) => event.type === 'usage-update');
     const usageOnlyContextEvent = events.find((event) => event.type === 'contextWindowState' && /provider usage only/.test(String(event.detail || '')));
-    const contextEvent = events.find((event) => event.type === 'contextWindowState' && event.contextWindowState);
+    const preflightContextEvent = events.find((event) => event.type === 'contextWindowState' && event.contextWindowState?.source === 'agentserver-estimate');
+    const contextEvent = events.find((event) => event.type === 'contextWindowState' && event.contextWindowState?.source === 'native');
     assert.equal(usageEvent?.usage?.total, 181_018);
     assert.equal(usageEvent?.contextWindowState, undefined);
     assert.equal(usageOnlyContextEvent?.usage?.total, 181_018);
     assert.equal(usageOnlyContextEvent?.contextWindowState, undefined);
+    assert.equal(preflightContextEvent?.contextWindowState?.windowTokens, 200_000);
+    assert.equal(preflightContextEvent?.contextWindowState?.source, 'agentserver-estimate');
     assert.equal(contextEvent?.contextWindowState?.usedTokens, 20_000);
     assert.equal(contextEvent?.contextWindowState?.windowTokens, 200_000);
   });

@@ -16,6 +16,29 @@
 
 ## 任务板
 
+### T081 网页端真实多轮 Chat Agent 执行与预览验收
+
+状态：进行中。
+
+#### 背景
+- 2026-05-03 使用 Computer Use 在 Edge 网页端打开 `http://127.0.0.1:5173/`，进入由“我想比较 KRAS G12D 突变相关文献证据，并在需要时联动蛋白结构和知识图谱”生成的 workspace 场景，真实点击发送聊天任务。
+- Runtime Health 均在线，AgentServer 启动后真实执行 native/backend 工具；右侧结果区最初只显示等待 `structure-summary` 和 `knowledge-graph`。
+- 运行过程中 AgentServer 反复读取 workspace 下旧 `.bioagent/artifacts` 历史文件，例如旧 `evidence-matrix`、`paper-list`、`structure-3d`/graph 查询，provider usage 快速升至 60 万 token 级别，仍未产出当前 run 可预览 artifact；最终由用户侧中断，UI 显示 failed 和空预览。
+
+#### 已发现问题
+- workspace tree handoff 把 `.bioagent/artifacts` 旧历史目录暴露给 AgentServer；首次新场景没有 prior artifacts，但 backend 误把旧文件当可用上下文翻找，导致跑偏和 token 成本失控。
+- 当前轮 artifact intent 对“比较文献证据”识别不充分，没有稳定要求 `paper-list` + `evidence-matrix`；同时 selected component 的兼容类型会膨胀成 `structure-3d`、`graph`、`pdb-file` 等额外 required artifacts，使 agent 和结果区围绕低层别名空等。
+- 结果区预览未能从失败/中断 run 中恢复出任何当前 run artifact；后续需要在修复上下文后继续用网页端复测完整多轮成功路径。
+
+#### TODO
+- [x] 用 Computer Use 网页端发起真实 KRAS G12D 文献证据 + 结构 + 知识图谱任务，记录运行日志、结果预览和失败模式。
+- [x] 过滤 AgentServer context envelope / generation gateway 的 workspace tree，避免 `.bioagent` 历史运行目录进入新任务 handoff。
+- [x] 收紧 `.sciforge` workspace tree 展开策略：只暴露 immediate 目录/配置，不把旧 artifact、handoff、debug、log、session 文件列表当作新任务可用上下文；当前 artifact 仍通过显式 refs 传递。
+- [x] 修正 artifact intent：文献证据比较应要求 `paper-list`、`evidence-matrix`，组件兼容 alias 不应膨胀为当前轮 required artifacts。
+- [x] 增加 focused regression tests 覆盖 `.bioagent` 过滤和 KRAS 文献证据 artifact intent。
+- [ ] 用 Computer Use 网页端重新跑同一任务，确认 backend 不再翻 `.bioagent/artifacts`，能产生当前 run 的 `paper-list` / `evidence-matrix` / `structure-summary` / `knowledge-graph` 或明确 failed-with-reason。
+- [ ] 完成第二、第三轮真实续问：要求“只展示证据矩阵和知识图谱”、“基于上一轮列出最弱证据和下一步验证”，确认结果可正常预览且上下文复用不全量回放大 artifact。
+
 ### T080 科研 UI Components 原语化、独立发布与 Demo/README 契约
 
 状态：基础组件原语化迁移已完成。当前已有第一阶段落点：组件 manifest 已补充 agent-facing metadata、presentation dedupe、safety 和 workbench demo；Component Workbench 已优先用包内 basic/empty/selection fixtures 预览组件，并在缺少 fixtures 时回退到 manifest demo；scientific-plot-viewer 已新增 Plotly-first draft package、fixtures、README contract 和轻量 contract renderer；新增基础组件 skeleton `sequence-viewer`、`alignment-viewer`、`time-series-viewer`、`model-eval-viewer`、`schema-form-editor`、`comparison-viewer`、`genome-track-viewer`、`image-annotation-viewer`、`spatial-omics-viewer`、`plate-layout-viewer`、`prediction-reviewer`、`protocol-editor`、`publication-figure-builder`、`statistical-annotation-layer` 已建立可发布包边界、manifest、README 与 basic/empty/selection fixtures；旧组件删除前置迁移已完成：`record-table`、`graph-viewer`、`point-set-viewer`、`matrix-viewer`、`structure-viewer` 已接入真实 lightweight renderer、fixtures、README、manifest、Workbench demo 和 focused tests，scenario specs 已迁到新 id，runtime / Scenario Builder / UI module registry 保留旧 id alias fallback，旧组件目录和 ResultsRenderer 旧 renderer 分支已删除。

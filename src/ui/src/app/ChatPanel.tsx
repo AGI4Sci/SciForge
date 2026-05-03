@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { CircleStop, Clock, Copy, Download, FileUp, MessageSquare, Plus, Quote, Sparkles, Trash2, X } from 'lucide-react';
 import { scenarios, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
@@ -158,6 +158,8 @@ export function ChatPanel({
   const messagesRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const autoScrollRef = useRef(true);
+  const savedScrollTopRef = useRef(savedScrollTop);
+  const reportedScrollTopRef = useRef(savedScrollTop);
   const resizeStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
   const messagesResizeStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
   const messages = session.messages;
@@ -182,6 +184,10 @@ export function ChatPanel({
   useEffect(() => {
     inputRef.current = input;
   }, [input]);
+
+  useEffect(() => {
+    savedScrollTopRef.current = savedScrollTop;
+  }, [savedScrollTop]);
 
   useEffect(() => {
     guidanceQueueRef.current = guidanceQueue;
@@ -295,12 +301,16 @@ export function ChatPanel({
 
   useEffect(() => {
     setErrorText('');
-    const element = messagesRef.current;
-    if (element) {
-      element.scrollTo({ top: savedScrollTop, behavior: 'auto' });
-      autoScrollRef.current = savedScrollTop <= 0;
-    }
-  }, [scenarioId, savedScrollTop]);
+    const frame = window.requestAnimationFrame(() => {
+      const element = messagesRef.current;
+      if (!element) return;
+      const nextScrollTop = savedScrollTopRef.current;
+      element.scrollTo({ top: nextScrollTop, behavior: 'auto' });
+      reportedScrollTopRef.current = element.scrollTop;
+      autoScrollRef.current = nextScrollTop <= 0 || element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [scenarioId, session.sessionId]);
 
   async function handleSend() {
     const prompt = input.trim() || (pendingReferences.length ? '请基于已引用对象继续分析。' : '');
@@ -911,15 +921,23 @@ export function ChatPanel({
   function saveEditMessage() {
     const content = editingContent.trim();
     if (!editingMessageId || !content) return;
-    onEditMessage(editingMessageId, content);
+    const editedMessage = session.messages.find((message) => message.id === editingMessageId);
     setEditingMessageId(null);
     setEditingContent('');
+    if (editedMessage?.role === 'user') {
+      if (isSending) abortRef.current?.abort();
+      void runPrompt(content, rollbackSessionBeforeMessage(session, editingMessageId), editedMessage.references ?? []);
+      return;
+    }
+    onEditMessage(editingMessageId, content);
   }
 
   function handleMessagesScroll() {
     const element = messagesRef.current;
     if (!element) return;
     autoScrollRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
+    if (Math.abs(element.scrollTop - reportedScrollTopRef.current) < 1) return;
+    reportedScrollTopRef.current = element.scrollTop;
     onScrollTopChange(element.scrollTop);
   }
 
@@ -1016,6 +1034,15 @@ export function ChatPanel({
                     gate {message.acceptance.severity}
                   </Badge>
                 ) : null}
+                <div className="message-actions">
+                  <button
+                    onClick={() => void navigator.clipboard?.writeText(message.content)}
+                    title="复制原始 Markdown"
+                  >
+                    复制
+                  </button>
+                  <button onClick={() => beginEditMessage(message)}>编辑</button>
+                </div>
               </div>
               {editingMessageId === message.id ? (
                 <div className="message-editor">
@@ -1055,11 +1082,6 @@ export function ChatPanel({
               {message.acceptance && !message.acceptance.pass ? (
                 <TurnAcceptanceNotice acceptance={message.acceptance} />
               ) : null}
-              <div className="message-actions">
-                <button onClick={() => void navigator.clipboard?.writeText(message.content)}>复制</button>
-                <button onClick={() => beginEditMessage(message)}>编辑</button>
-                <button onClick={() => onDeleteMessage(message.id)}>删除</button>
-              </div>
             </div>
           </div>
           );
@@ -1352,6 +1374,28 @@ function requestPayloadForTurn(session: SciForgeSession, userMessage: SciForgeMe
   };
 }
 
+function rollbackSessionBeforeMessage(session: SciForgeSession, messageId: string): SciForgeSession {
+  const index = session.messages.findIndex((message) => message.id === messageId);
+  if (index < 0) return session;
+  const cutoff = session.messages[index]?.createdAt;
+  const runs = cutoff ? session.runs.filter((run) => run.createdAt < cutoff) : [];
+  const keptRunIds = new Set(runs.map((run) => run.id));
+  return {
+    ...session,
+    messages: session.messages.slice(0, index),
+    runs,
+    uiManifest: [],
+    claims: cutoff ? session.claims.filter((claim) => claim.updatedAt < cutoff) : [],
+    executionUnits: session.executionUnits.filter((unit) => {
+      const selectedAt = unit.routeDecision?.selectedAt;
+      return selectedAt ? selectedAt < cutoff : keptRunIds.size > 0;
+    }),
+    artifacts: keptRunIds.size ? session.artifacts : [],
+    notebook: cutoff ? session.notebook.filter((entry) => entry.time < cutoff) : [],
+    updatedAt: nowIso(),
+  };
+}
+
 function mergeRuntimeArtifacts(primary: NormalizedAgentResponse['artifacts'], secondary: NormalizedAgentResponse['artifacts']) {
   const byKey = new Map<string, NormalizedAgentResponse['artifacts'][number]>();
   for (const artifact of [...secondary, ...primary]) {
@@ -1566,12 +1610,193 @@ function MessageContent({
   references: ObjectReference[];
   onObjectFocus: (reference: ObjectReference) => void;
 }) {
-  const pieces = linkifyObjectReferences(content, references);
   return (
     <div className="message-content">
-      {pieces.map((piece, index) => piece.reference ? (
+      {renderMarkdownBlocks(content, references, onObjectFocus)}
+    </div>
+  );
+}
+
+type MarkdownBlock =
+  | { type: 'paragraph'; text: string }
+  | { type: 'heading'; depth: number; text: string }
+  | { type: 'blockquote'; text: string }
+  | { type: 'code'; language?: string; text: string }
+  | { type: 'list'; ordered: boolean; items: string[] }
+  | { type: 'table'; rows: string[][] }
+  | { type: 'rule' };
+
+function renderMarkdownBlocks(
+  markdown: string,
+  references: ObjectReference[],
+  onObjectFocus: (reference: ObjectReference) => void,
+): ReactNode[] {
+  const blocks = parseMarkdownBlocks(markdown);
+  return blocks.map((block, index) => {
+    const key = `md-${index}`;
+    if (block.type === 'heading') {
+      const children = renderInlineMarkdown(block.text, references, onObjectFocus, key);
+      if (block.depth === 1) return <h1 key={key}>{children}</h1>;
+      if (block.depth === 2) return <h2 key={key}>{children}</h2>;
+      if (block.depth === 3) return <h3 key={key}>{children}</h3>;
+      if (block.depth === 4) return <h4 key={key}>{children}</h4>;
+      if (block.depth === 5) return <h5 key={key}>{children}</h5>;
+      return <h6 key={key}>{children}</h6>;
+    }
+    if (block.type === 'blockquote') {
+      return <blockquote key={key}>{renderInlineMarkdown(block.text, references, onObjectFocus, key)}</blockquote>;
+    }
+    if (block.type === 'code') {
+      return (
+        <pre key={key} className="message-code-block">
+          {block.language ? <span className="message-code-lang">{block.language}</span> : null}
+          <code>{block.text}</code>
+        </pre>
+      );
+    }
+    if (block.type === 'list') {
+      const items = block.items.map((item, itemIndex) => (
+        <li key={`${key}-li-${itemIndex}`}>{renderInlineMarkdown(item, references, onObjectFocus, `${key}-${itemIndex}`)}</li>
+      ));
+      return block.ordered ? <ol key={key}>{items}</ol> : <ul key={key}>{items}</ul>;
+    }
+    if (block.type === 'table') {
+      const [head, ...body] = block.rows;
+      return (
+        <div key={key} className="message-table-scroll">
+          <table>
+            {head ? (
+              <thead>
+                <tr>{head.map((cell, cellIndex) => <th key={`${key}-th-${cellIndex}`}>{renderInlineMarkdown(cell, references, onObjectFocus, `${key}-h-${cellIndex}`)}</th>)}</tr>
+              </thead>
+            ) : null}
+            <tbody>
+              {body.map((row, rowIndex) => (
+                <tr key={`${key}-tr-${rowIndex}`}>
+                  {row.map((cell, cellIndex) => <td key={`${key}-td-${rowIndex}-${cellIndex}`}>{renderInlineMarkdown(cell, references, onObjectFocus, `${key}-c-${rowIndex}-${cellIndex}`)}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+    if (block.type === 'rule') return <hr key={key} />;
+    return <p key={key}>{renderInlineMarkdown(block.text, references, onObjectFocus, key)}</p>;
+  });
+}
+
+function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
+  const lines = markdown.replace(/\r\n?/g, '\n').split('\n');
+  const blocks: MarkdownBlock[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    if (!line.trim()) {
+      index += 1;
+      continue;
+    }
+    const fence = line.match(/^```([A-Za-z0-9_-]+)?\s*$/);
+    if (fence) {
+      const code: string[] = [];
+      index += 1;
+      while (index < lines.length && !/^```\s*$/.test(lines[index])) {
+        code.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      blocks.push({ type: 'code', language: fence[1], text: code.join('\n') });
+      continue;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      blocks.push({ type: 'heading', depth: heading[1].length, text: heading[2].trim() });
+      index += 1;
+      continue;
+    }
+    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      blocks.push({ type: 'rule' });
+      index += 1;
+      continue;
+    }
+    if (isMarkdownTableAt(lines, index)) {
+      const rows: string[][] = [];
+      rows.push(splitMarkdownTableRow(lines[index]));
+      index += 2;
+      while (index < lines.length && /^\s*\|.+\|\s*$/.test(lines[index])) {
+        rows.push(splitMarkdownTableRow(lines[index]));
+        index += 1;
+      }
+      blocks.push({ type: 'table', rows });
+      continue;
+    }
+    const unordered = line.match(/^\s*[-*+]\s+(.+)$/);
+    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (unordered || ordered) {
+      const items: string[] = [];
+      const orderedList = Boolean(ordered);
+      while (index < lines.length) {
+        const match = orderedList ? lines[index].match(/^\s*\d+[.)]\s+(.+)$/) : lines[index].match(/^\s*[-*+]\s+(.+)$/);
+        if (!match) break;
+        items.push(match[1].trim());
+        index += 1;
+      }
+      blocks.push({ type: 'list', ordered: orderedList, items });
+      continue;
+    }
+    if (/^\s*>\s?/.test(line)) {
+      const quote: string[] = [];
+      while (index < lines.length && /^\s*>\s?/.test(lines[index])) {
+        quote.push(lines[index].replace(/^\s*>\s?/, ''));
+        index += 1;
+      }
+      blocks.push({ type: 'blockquote', text: quote.join('\n') });
+      continue;
+    }
+    const paragraph: string[] = [];
+    while (index < lines.length && lines[index].trim() && !isMarkdownBlockStart(lines, index)) {
+      paragraph.push(lines[index]);
+      index += 1;
+    }
+    blocks.push({ type: 'paragraph', text: paragraph.join('\n') });
+  }
+  return blocks.length ? blocks : [{ type: 'paragraph', text: '' }];
+}
+
+function isMarkdownBlockStart(lines: string[], index: number) {
+  const line = lines[index];
+  return /^```/.test(line)
+    || /^(#{1,6})\s+/.test(line)
+    || /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)
+    || /^\s*[-*+]\s+/.test(line)
+    || /^\s*\d+[.)]\s+/.test(line)
+    || /^\s*>\s?/.test(line)
+    || isMarkdownTableAt(lines, index);
+}
+
+function isMarkdownTableAt(lines: string[], index: number) {
+  return index + 1 < lines.length
+    && /^\s*\|.+\|\s*$/.test(lines[index])
+    && /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[index + 1]);
+}
+
+function splitMarkdownTableRow(line: string) {
+  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
+}
+
+function renderInlineMarkdown(
+  text: string,
+  references: ObjectReference[],
+  onObjectFocus: (reference: ObjectReference) => void,
+  keyPrefix: string,
+): ReactNode[] {
+  const pieces = linkifyObjectReferences(text, references);
+  const nodes: ReactNode[] = [];
+  pieces.forEach((piece, index) => {
+    if (piece.reference) {
+      nodes.push(
         <button
-          key={`${piece.text}-${index}`}
+          key={`${keyPrefix}-ref-${index}`}
           type="button"
           className="message-object-link"
           onClick={() => onObjectFocus(piece.reference as ObjectReference)}
@@ -1579,12 +1804,54 @@ function MessageContent({
           data-sciforge-reference={sciForgeReferenceAttribute(referenceForObjectReference(piece.reference))}
         >
           {piece.text}
-        </button>
-      ) : (
-        <span key={`${piece.text}-${index}`}>{piece.text}</span>
-      ))}
-    </div>
-  );
+        </button>,
+      );
+    } else {
+      nodes.push(...renderInlineText(piece.text, `${keyPrefix}-txt-${index}`));
+    }
+  });
+  return nodes;
+}
+
+function renderInlineText(text: string, keyPrefix: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  const pattern = /(`[^`\n]+`|\*\*[^*\n]+(?:\*[^*\n]+)*\*\*|\[[^\]\n]+\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+)\)|\*[^*\n]+\*)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text))) {
+    appendPlainInlineText(nodes, text.slice(lastIndex, match.index), `${keyPrefix}-plain-${nodes.length}`);
+    const token = match[0];
+    if (token.startsWith('`')) {
+      nodes.push(<code key={`${keyPrefix}-code-${nodes.length}`}>{token.slice(1, -1)}</code>);
+    } else if (token.startsWith('**')) {
+      nodes.push(<strong key={`${keyPrefix}-strong-${nodes.length}`}>{renderInlineText(token.slice(2, -2), `${keyPrefix}-strong-${nodes.length}`)}</strong>);
+    } else if (token.startsWith('*')) {
+      nodes.push(<em key={`${keyPrefix}-em-${nodes.length}`}>{renderInlineText(token.slice(1, -1), `${keyPrefix}-em-${nodes.length}`)}</em>);
+    } else {
+      const link = token.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+)\)$/);
+      if (link) {
+        nodes.push(
+          <a key={`${keyPrefix}-link-${nodes.length}`} href={link[2]} target="_blank" rel="noreferrer">
+            {renderInlineText(link[1], `${keyPrefix}-link-${nodes.length}`)}
+          </a>,
+        );
+      } else {
+        appendPlainInlineText(nodes, token, `${keyPrefix}-fallback-${nodes.length}`);
+      }
+    }
+    lastIndex = match.index + token.length;
+  }
+  appendPlainInlineText(nodes, text.slice(lastIndex), `${keyPrefix}-tail-${nodes.length}`);
+  return nodes;
+}
+
+function appendPlainInlineText(nodes: ReactNode[], text: string, keyPrefix: string) {
+  if (!text) return;
+  const lines = text.split('\n');
+  lines.forEach((line, index) => {
+    if (line) nodes.push(<span key={`${keyPrefix}-${index}`}>{line}</span>);
+    if (index < lines.length - 1) nodes.push(<br key={`${keyPrefix}-br-${index}`} />);
+  });
 }
 
 function RunningWorkProcess({
@@ -2047,12 +2314,87 @@ function TurnAcceptanceNotice({
 }: {
   acceptance: NonNullable<SciForgeMessage['acceptance']>;
 }) {
+  const diagnostic = turnAcceptanceDiagnostic(acceptance);
   return (
     <div className="turn-acceptance-notice">
       <Badge variant={acceptance.severity === 'repairable' ? 'warning' : 'danger'}>{acceptance.severity}</Badge>
-      <span>{acceptance.failures.map((failure) => failure.detail).join('；')}</span>
+      <div className="turn-acceptance-copy">
+        <strong>{diagnostic.title}</strong>
+        <span>{diagnostic.summary}</span>
+        {diagnostic.recoverActions.length ? (
+          <ul>
+            {diagnostic.recoverActions.map((action) => <li key={action}>{action}</li>)}
+          </ul>
+        ) : null}
+        {diagnostic.secondary.length ? (
+          <div className="turn-acceptance-secondary">
+            {diagnostic.secondary.map((item) => <span key={item}>{item}</span>)}
+          </div>
+        ) : null}
+        <details className="turn-acceptance-raw">
+          <summary>查看原始诊断</summary>
+          <pre>{diagnostic.rawDetails}</pre>
+        </details>
+      </div>
     </div>
   );
+}
+
+function turnAcceptanceDiagnostic(acceptance: NonNullable<SciForgeMessage['acceptance']>) {
+  const rawDetails = acceptance.failures
+    .map((failure) => `${failure.code}: ${failure.detail}`)
+    .join('\n\n');
+  const haystack = rawDetails.toLowerCase();
+  const secondary = acceptance.failures
+    .filter((failure) => !/execution-failed|backend-repair-failed/i.test(failure.code))
+    .map((failure) => readableAcceptanceFailure(failure.code));
+  if (/http-429|429|rate-limit|too-many-failed-attempts|exceeded retry|retry-budget/.test(haystack)) {
+    return {
+      title: '后端模型限流，自动修复未完成',
+      summary: 'AgentServer 调用模型时触发 HTTP 429 / too-many-failed-attempts，SciForge 已做过一次 compact/slim retry；重试预算耗尽后停止，避免继续刷失败请求。',
+      recoverActions: [
+        '等待 provider 配额或 retry budget 恢复后重试同一问题。',
+        '切换到可用 quota 的 backend/model，再重试后续修复。',
+        '后续追问尽量引用已有 report/paper-list artifact，避免重新发送大段全文上下文。',
+      ],
+      secondary,
+      rawDetails,
+    };
+  }
+  if (/cancel|已取消|abort|timeout|超时/.test(haystack)) {
+    return {
+      title: '后端修复请求被中断',
+      summary: '本次 acceptance repair 没有完成，通常是用户中断、请求超时，或外层运行已经结束导致后台 stream 被取消。',
+      recoverActions: ['确认 Runtime Health 为 ready 后重新发送同一修复请求。'],
+      secondary,
+      rawDetails,
+    };
+  }
+  if (/missing-object-references|clickable object references|引用/.test(haystack)) {
+    return {
+      title: '结果缺少可点击引用',
+      summary: '回答里提到了路径或 artifact，但没有被规范化成 SciForge 可点击 object reference。',
+      recoverActions: ['要求后端基于已有 artifact 重新返回 objectReferences，不需要重新检索全文。'],
+      secondary,
+      rawDetails,
+    };
+  }
+  return {
+    title: '任务未通过验收',
+    summary: acceptance.failures.map((failure) => failure.detail).join('；'),
+    recoverActions: [],
+    secondary,
+    rawDetails,
+  };
+}
+
+function readableAcceptanceFailure(code: string) {
+  if (code === 'missing-object-references') return '缺少可点击对象引用';
+  if (code === 'missing-explicit-references') return '显式引用未保留';
+  if (code === 'unused-explicit-references') return '引用未体现在结果中';
+  if (code === 'empty-final-response') return '最终回答为空';
+  if (code === 'raw-payload-leak') return '暴露了原始 payload';
+  return code;
 }
 
 function SciForgeReferenceChips({

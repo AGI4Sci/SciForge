@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildContextEnvelope, expectedArtifactSchema, workspaceTreeSummary } from '../../src/runtime/gateway/context-envelope.js';
@@ -12,6 +12,12 @@ import type { SkillAvailability } from '../../src/runtime/runtime-types.js';
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-gateway-modules-'));
 try {
   await writeFile(join(workspace, 'report.md'), '## Summary\nGateway split smoke passed.\n', 'utf8');
+  await writeFile(join(workspace, '.bioagent-artifact-root-marker.txt'), 'not hidden by prefix alone\n', 'utf8');
+  await writeFile(join(workspace, '.gitkeep'), 'keep\n', 'utf8');
+  await mkdir(join(workspace, '.bioagent', 'artifacts'), { recursive: true });
+  await writeFile(join(workspace, '.bioagent', 'artifacts', 'stale-paper-list.json'), '{"stale":true}\n', 'utf8');
+  await mkdir(join(workspace, '.sciforge', 'artifacts'), { recursive: true });
+  await writeFile(join(workspace, '.sciforge', 'artifacts', 'old-large-report.txt'), 'old report\n', 'utf8');
   const request = normalizeGatewayRequest({
     skillDomain: 'literature',
     prompt: 'Summarize the uploaded report',
@@ -43,6 +49,10 @@ try {
 
   const tree = await workspaceTreeSummary(workspace);
   assert.ok(tree.some((entry) => entry.path === 'report.md'));
+  assert.ok(tree.some((entry) => entry.path === '.bioagent-artifact-root-marker.txt'));
+  assert.ok(!tree.some((entry) => entry.path === '.bioagent' || entry.path.startsWith('.bioagent/')));
+  assert.ok(tree.some((entry) => entry.path === '.sciforge/artifacts'));
+  assert.ok(!tree.some((entry) => entry.path.startsWith('.sciforge/artifacts/')));
 
   const envelope = buildContextEnvelope(request, { workspace, workspaceTreeSummary: tree });
   assert.equal(envelope.version, 'sciforge.context-envelope.v1');

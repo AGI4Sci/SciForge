@@ -68,7 +68,11 @@ export function buildContextWindowMeterModel(state: AgentContextWindowState, run
 export function latestContextWindowState(events: AgentStreamEvent[]) {
   const compaction = [...events].reverse().find((event) => event.contextCompaction?.lastCompactedAt)?.contextCompaction;
   const lastCompactedState = [...events].reverse().find((event) => event.contextWindowState?.lastCompactedAt)?.contextWindowState;
-  const state = [...events].reverse().find((event) => event.contextWindowState && event.contextWindowState.source !== 'provider-usage')?.contextWindowState;
+  const states = [...events]
+    .reverse()
+    .map((event) => event.contextWindowState)
+    .filter((state): state is AgentContextWindowState => state !== undefined && state.source !== 'provider-usage');
+  const state = states.find(isAuthoritativeContextWindowState) ?? states[0];
   if (!state && !compaction) return undefined;
   const compactionState = compaction?.after ?? compaction?.before;
   return {
@@ -77,6 +81,10 @@ export function latestContextWindowState(events: AgentStreamEvent[]) {
     compactCapability: state?.compactCapability ?? compaction?.compactCapability ?? compactionState?.compactCapability,
     backend: state?.backend ?? compaction?.backend ?? compactionState?.backend,
   };
+}
+
+function isAuthoritativeContextWindowState(state: AgentContextWindowState) {
+  return state.source === 'native' || state.source === 'agentserver';
 }
 
 export function estimateContextWindowState(session: SciForgeSession, config: SciForgeConfig, events: AgentStreamEvent[]): AgentContextWindowState {

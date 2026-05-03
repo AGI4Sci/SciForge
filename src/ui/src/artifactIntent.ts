@@ -41,10 +41,13 @@ export function expectedArtifactsForCurrentTurn({
   if (/\bpaper-list\b|文献列表|论文列表|paper list/i.test(text) || (
     /检索|搜索|查找|最新|今天|今日|arxiv|pubmed|semantic scholar|google scholar|bioRxiv|medRxiv|search|retrieve|latest|recent/i.test(text)
     && /论文|文献|paper|article|preprint/i.test(text)
+  ) || (
+    /比较|评估|梳理|review|compare|evaluate/i.test(text)
+    && /论文|文献|paper|article|preprint/i.test(text)
   )) {
     artifacts.add('paper-list');
   }
-  if (/\bevidence-matrix\b|证据矩阵|证据表|evidence table|claim matrix/i.test(text)) {
+  if (/\bevidence-matrix\b|证据矩阵|证据表|文献证据|证据|evidence table|claim matrix|evidence/i.test(text)) {
     artifacts.add('evidence-matrix');
   }
   if (/\bnotebook-timeline\b|研究记录|实验记录|时间线|timeline|notebook/i.test(text)) {
@@ -64,7 +67,7 @@ export function expectedArtifactsForCurrentTurn({
   }
 
   for (const componentId of selectedComponentsForCurrentTurn(prompt, selectedComponentIds)) {
-    for (const type of artifactTypesForComponents([componentId])) artifacts.add(type);
+    for (const type of primaryArtifactTypesForComponent(componentId)) artifacts.add(type);
   }
 
   return orderArtifactsByPrompt(Array.from(artifacts), text);
@@ -80,8 +83,8 @@ export function selectedComponentsForCurrentTurn(prompt: string, configuredCompo
 function expectedArtifactsForPromptOnly(text: string) {
   const out: string[] = [];
   if (/\b(research-report|summary-report|markdown-report)\b|阅读报告|调研报告|研究报告|报告|总结|摘要|markdown|\.md\b|report|summary/i.test(text)) out.push('research-report');
-  if (/\bpaper-list\b|文献列表|论文列表|paper list/i.test(text) || (/检索|搜索|查找|最新|今天|今日|arxiv|pubmed|semantic scholar|google scholar|bioRxiv|medRxiv|search|retrieve|latest|recent/i.test(text) && /论文|文献|paper|article|preprint/i.test(text))) out.push('paper-list');
-  if (/\bevidence-matrix\b|证据矩阵|证据表|evidence table|claim matrix/i.test(text)) out.push('evidence-matrix');
+  if (/\bpaper-list\b|文献列表|论文列表|paper list/i.test(text) || ((/检索|搜索|查找|最新|今天|今日|arxiv|pubmed|semantic scholar|google scholar|bioRxiv|medRxiv|search|retrieve|latest|recent/i.test(text) || /比较|评估|梳理|review|compare|evaluate/i.test(text)) && /论文|文献|paper|article|preprint/i.test(text))) out.push('paper-list');
+  if (/\bevidence-matrix\b|证据矩阵|证据表|文献证据|证据|evidence table|claim matrix|evidence/i.test(text)) out.push('evidence-matrix');
   if (/\bnotebook-timeline\b|研究记录|实验记录|时间线|timeline|notebook/i.test(text)) out.push('notebook-timeline');
   if (/structure-summary|PDB|AlphaFold|蛋白结构|分子结构|结构查看|molecule|protein structure/i.test(text)) out.push('structure-summary');
   if (/omics|差异表达|表达矩阵|DESeq|Scanpy|UMAP|火山图|heatmap|volcano/i.test(text)) out.push('omics-differential-expression');
@@ -107,6 +110,15 @@ function normalizeIntentText(value: string) {
 
 function uniqueStrings(values: string[]) {
   return Array.from(new Set(values.filter(Boolean)));
+}
+
+function primaryArtifactTypesForComponent(componentId: string) {
+  const direct = Object.entries(ARTIFACT_COMPONENTS)
+    .filter(([, component]) => component === componentId)
+    .map(([artifact]) => artifact);
+  if (direct.length) return direct;
+  const accepted = artifactTypesForComponents([componentId]);
+  return accepted.filter((type) => !['graph', 'structure-3d', 'pdb-file', 'mmcif-file'].includes(type));
 }
 
 function orderArtifactsByPrompt(types: string[], text: string) {

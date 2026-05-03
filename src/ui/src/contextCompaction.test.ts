@@ -267,6 +267,42 @@ test('latest context window meter ignores provider usage as current-window autho
   assert.equal(state?.status, 'healthy');
 });
 
+test('latest context window meter keeps AgentServer native telemetry above later estimates', () => {
+  const state = latestContextWindowState([
+    {
+      id: 'evt-native',
+      type: 'contextWindowState',
+      label: '上下文窗口',
+      createdAt: '2026-05-03T00:00:00.000Z',
+      contextWindowState: {
+        source: 'native',
+        backend: 'codex',
+        usedTokens: 6_690,
+        windowTokens: 200_000,
+        ratio: 0.03345,
+        status: 'healthy',
+      },
+    },
+    {
+      id: 'evt-estimate',
+      type: 'contextWindowState',
+      label: '上下文窗口',
+      createdAt: '2026-05-03T00:00:01.000Z',
+      contextWindowState: {
+        source: 'agentserver-estimate',
+        backend: 'codex',
+        usedTokens: 11_043,
+        windowTokens: 200_000,
+        ratio: 0.055215,
+        status: 'healthy',
+      },
+    },
+  ]);
+
+  assert.equal(state?.source, 'native');
+  assert.equal(state?.usedTokens, 6_690);
+});
+
 test('latest context window meter can use compaction after-state', () => {
   const state = latestContextWindowState([
     {

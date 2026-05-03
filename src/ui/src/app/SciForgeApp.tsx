@@ -2520,7 +2520,10 @@ export function SciForgeApp() {
   }
 
   function updateMessageScrollTop(nextScenarioId: ScenarioInstanceId, value: number) {
-    setMessageScrollTops((current) => ({ ...current, [nextScenarioId]: value }));
+    setMessageScrollTops((current) => {
+      if (Math.abs((current[nextScenarioId] ?? 0) - value) < 1) return current;
+      return { ...current, [nextScenarioId]: value };
+    });
   }
 
   function applyScenarioOverride(nextScenarioId: ScenarioInstanceId, override: ScenarioRuntimeOverride) {

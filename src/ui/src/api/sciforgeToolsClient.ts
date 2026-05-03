@@ -93,64 +93,71 @@ export async function sendSciForgeToolMessage(
       callbacks.onEvent?.(toolEvent('repair-start', `正在修复：已发现上一轮 failureReason=${priorFailure}`));
     }
     callbacks.onEvent?.(toolEvent('project-tool-start', `SciForge ${builtInScenarioId} project tool started`));
-    const response = await fetch(`${input.config.workspaceWriterBaseUrl}/api/sciforge/tools/run/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        scenarioId: builtInScenarioId,
+    const requestBody = {
+      scenarioId: builtInScenarioId,
+      scenarioPackageRef: input.scenarioPackageRef,
+      skillPlanRef: input.skillPlanRef,
+      uiPlanRef: input.uiPlanRef,
+      skillDomain,
+      agentBackend: input.config.agentBackend,
+      prompt: input.prompt,
+      workspacePath: input.config.workspacePath,
+      agentServerBaseUrl: input.config.agentServerBaseUrl,
+      modelProvider: input.config.modelProvider,
+      modelName: input.config.modelName,
+      maxContextWindowTokens: input.config.maxContextWindowTokens,
+      llmEndpoint: buildToolLlmEndpoint(input),
+      roleView: input.roleView,
+      artifacts: artifactSummary,
+      references: referenceSummary,
+      availableSkills: selectedSkillIds,
+      selectedToolIds,
+      expectedArtifactTypes,
+      selectedComponentIds,
+      availableComponentIds: configuredComponentIds,
+      uiState: {
+        sessionId: input.sessionId,
+        scopeCheck: {
+          source: 'structured-scenario-hint',
+          decisionOwner: 'AgentServer',
+          note: 'SciForge does not route or reject current-turn intent by keyword; AgentServer decides from rawUserPrompt and context.',
+        },
+        scenarioOverride: input.scenarioOverride,
         scenarioPackageRef: input.scenarioPackageRef,
         skillPlanRef: input.skillPlanRef,
         uiPlanRef: input.uiPlanRef,
-        skillDomain,
-        agentBackend: input.config.agentBackend,
-        prompt: input.prompt,
-        workspacePath: input.config.workspacePath,
-        agentServerBaseUrl: input.config.agentServerBaseUrl,
-        modelProvider: input.config.modelProvider,
-        modelName: input.config.modelName,
+        currentPrompt: input.prompt,
         maxContextWindowTokens: input.config.maxContextWindowTokens,
-        llmEndpoint: buildToolLlmEndpoint(input),
-        roleView: input.roleView,
-        artifacts: artifactSummary,
-        references: referenceSummary,
-        availableSkills: selectedSkillIds,
-        selectedToolIds,
+        recentConversation,
+        conversationLedger: buildConversationLedger(input),
+        contextReusePolicy: buildContextReusePolicy(input, recentConversation),
+        artifactAccessPolicy,
+        currentReferences: referenceSummary,
+        recentExecutionRefs,
+        recentRuns: contextPolicy.isolated ? [] : summarizeRuns(input),
+        workspacePersistence: workspacePersistenceSummary(input),
         expectedArtifactTypes,
         selectedComponentIds,
         availableComponentIds: configuredComponentIds,
-        uiState: {
-          sessionId: input.sessionId,
-          scopeCheck: {
-            source: 'structured-scenario-hint',
-            decisionOwner: 'AgentServer',
-            note: 'SciForge does not route or reject current-turn intent by keyword; AgentServer decides from rawUserPrompt and context.',
-          },
-          scenarioOverride: input.scenarioOverride,
-          scenarioPackageRef: input.scenarioPackageRef,
-          skillPlanRef: input.skillPlanRef,
-          uiPlanRef: input.uiPlanRef,
-          currentPrompt: input.prompt,
-          maxContextWindowTokens: input.config.maxContextWindowTokens,
-          recentConversation,
-          conversationLedger: buildConversationLedger(input),
-          contextReusePolicy: buildContextReusePolicy(input, recentConversation),
-          artifactAccessPolicy,
-          currentReferences: referenceSummary,
-          recentExecutionRefs,
-          recentRuns: contextPolicy.isolated ? [] : summarizeRuns(input),
-          workspacePersistence: workspacePersistenceSummary(input),
-          expectedArtifactTypes,
-          selectedComponentIds,
-          availableComponentIds: configuredComponentIds,
-          selectedSkillIds,
-          selectedToolIds,
-          artifactExpectationMode: expectedArtifactTypes.length ? 'explicit-current-turn' : 'backend-decides',
-          rawUserPrompt: input.prompt,
-          contextIsolation: contextPolicy,
-          agentDispatchPolicy: 'agentserver-decides',
-          agentContext: buildAgentContext(input, recentConversation, artifactSummary, recentExecutionRefs, configuredComponentIds, artifactAccessPolicy),
-        },
-      }),
+        selectedSkillIds,
+        selectedToolIds,
+        artifactExpectationMode: expectedArtifactTypes.length ? 'explicit-current-turn' : 'backend-decides',
+        rawUserPrompt: input.prompt,
+        contextIsolation: contextPolicy,
+        agentDispatchPolicy: 'agentserver-decides',
+        agentContext: buildAgentContext(input, recentConversation, artifactSummary, recentExecutionRefs, configuredComponentIds, artifactAccessPolicy),
+      },
+    };
+    const requestBodyText = JSON.stringify(requestBody);
+    callbacks.onEvent?.(contextWindowTelemetryEvent(
+      input,
+      requestBodyText,
+      'AgentServer handoff preflight estimate',
+    ));
+    const response = await fetch(`${input.config.workspaceWriterBaseUrl}/api/sciforge/tools/run/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: requestBodyText,
       signal: requestController.signal,
     });
   const { result, error } = await readWorkspaceToolStream(response, (event) => {
@@ -209,6 +216,41 @@ function withConfiguredContextWindowLimit(event: AgentStreamEvent, maxContextWin
       windowTokens: maxContextWindowTokens,
       ratio,
       status: normalizeContextWindowStatus(state.status, ratio, state.autoCompactThreshold),
+    },
+  };
+}
+
+function contextWindowTelemetryEvent(
+  input: SendAgentMessageInput,
+  requestBodyText: string,
+  detail: string,
+): AgentStreamEvent {
+  const rawBytes = new TextEncoder().encode(requestBodyText).length;
+  const rawTokens = Math.max(1, Math.ceil(requestBodyText.length / 4));
+  const windowTokens = input.config.maxContextWindowTokens || undefined;
+  const ratio = windowTokens ? rawTokens / windowTokens : undefined;
+  const autoCompactThreshold = 0.82;
+  return {
+    ...toolEvent('contextWindowState', detail),
+    label: '上下文窗口',
+    contextWindowState: {
+      backend: input.config.agentBackend,
+      provider: input.config.modelProvider,
+      model: input.config.modelName,
+      usedTokens: rawTokens,
+      window: windowTokens,
+      windowTokens,
+      ratio,
+      source: 'agentserver-estimate',
+      status: normalizeContextWindowStatus(undefined, ratio, autoCompactThreshold),
+      compactCapability: compactCapabilityForBackend(input.config.agentBackend),
+      autoCompactThreshold,
+      watchThreshold: 0.68,
+      nearLimitThreshold: 0.86,
+      budget: {
+        rawBytes,
+        rawTokens,
+      },
     },
   };
 }

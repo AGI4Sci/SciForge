@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { modelHealth, type RuntimeHealthItem, type RuntimeHealthStatus } from '../runtimeHealth';
 import type { SciForgeConfig } from '../domain';
+import { startRuntimeServices } from '../api/workspaceClient';
 import { Badge, cx } from './uiPrimitives';
 
 export type { RuntimeHealthItem };
@@ -98,12 +99,41 @@ function healthLabel(status: RuntimeHealthStatus) {
 
 export function RuntimeHealthPanel({ items, compact = false }: { items: RuntimeHealthItem[]; compact?: boolean }) {
   const blocking = items.filter((item) => item.status === 'offline' || item.status === 'not-configured');
+  const shouldShowStart = items.some((item) => item.id === 'workspace' || item.id === 'agentserver');
+  const [startState, setStartState] = useState<'idle' | 'starting' | 'done' | 'error'>('idle');
+  const [startDetail, setStartDetail] = useState('');
+
+  async function handleStartRuntime() {
+    setStartState('starting');
+    setStartDetail('正在启动 Workspace Writer 和 AgentServer...');
+    try {
+      const result = await startRuntimeServices();
+      const summary = result.services
+        .map((service) => `${String(service.label ?? service.id)}: ${String(service.status ?? 'unknown')}`)
+        .join('；');
+      setStartState(result.ok ? 'done' : 'error');
+      setStartDetail(summary || (result.ok ? '启动请求已发送。' : result.error || '部分服务未启动。'));
+      window.setTimeout(() => window.location.reload(), 1400);
+    } catch (error) {
+      setStartState('error');
+      setStartDetail(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   return (
     <div className={cx('runtime-health-panel', compact && 'compact')}>
       <div className="runtime-health-head">
         <strong>Runtime Health</strong>
-        <Badge variant={blocking.length ? 'warning' : 'success'}>{blocking.length ? `${blocking.length} actions` : 'ready'}</Badge>
+        <div className="runtime-health-head-actions">
+          <Badge variant={blocking.length ? 'warning' : 'success'}>{blocking.length ? `${blocking.length} actions` : 'ready'}</Badge>
+          {shouldShowStart ? (
+            <button type="button" onClick={() => void handleStartRuntime()} disabled={startState === 'starting'}>
+              {startState === 'starting' ? '启动中' : '启动服务'}
+            </button>
+          ) : null}
+        </div>
       </div>
+      {startDetail ? <div className={cx('runtime-start-status', startState === 'error' && 'error')}>{startDetail}</div> : null}
       <div className="runtime-health-grid">
         {items.map((item) => (
           <div className="runtime-health-item" key={item.id}>

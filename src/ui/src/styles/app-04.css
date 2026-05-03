@@ -420,9 +420,131 @@
   color: var(--bio-100);
   font-size: 12.5px;
   line-height: 1.52;
-  white-space: pre-line;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.message-content {
+  display: grid;
+  gap: 8px;
+}
+
+.message-content > :where(h1, h2, h3, h4, h5, h6, p, blockquote, ul, ol, pre, hr),
+.message-content .message-table-scroll {
+  margin: 0;
+}
+
+.message-content :where(h1, h2, h3, h4, h5, h6) {
+  color: var(--bio-50);
+  font-weight: 800;
+  line-height: 1.22;
+}
+
+.message-content h1 {
+  font-size: 18px;
+}
+
+.message-content h2 {
+  font-size: 16px;
+}
+
+.message-content h3 {
+  font-size: 14px;
+}
+
+.message-content :where(h4, h5, h6) {
+  font-size: 13px;
+}
+
+.message-content :where(ul, ol) {
+  display: grid;
+  gap: 4px;
+  padding-left: 20px;
+}
+
+.message-content blockquote {
+  padding: 7px 10px;
+  color: var(--bio-200);
+  background: rgba(148, 163, 184, 0.08);
+  border-left: 3px solid rgba(0, 229, 160, 0.42);
+  border-radius: 0 7px 7px 0;
+}
+
+.message-content code {
+  padding: 1px 4px;
+  color: var(--teal);
+  background: rgba(0, 229, 160, 0.1);
+  border: 1px solid rgba(0, 229, 160, 0.18);
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.92em;
+}
+
+.message-code-block {
+  position: relative;
+  overflow: auto;
+  padding: 12px;
+  color: var(--bio-100);
+  background: rgba(11, 18, 32, 0.68);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.message-code-block code {
+  display: block;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  white-space: pre;
+}
+
+.message-code-lang {
+  display: inline-flex;
+  margin-bottom: 8px;
+  color: var(--bio-300);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.message-content a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(0, 229, 160, 0.38);
+}
+
+.message-content a:hover {
+  color: var(--teal);
+}
+
+.message-content hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.message-table-scroll {
+  overflow-x: auto;
+}
+
+.message-content table {
+  width: max-content;
+  min-width: min(100%, 420px);
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.message-content :where(th, td) {
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.message-content th {
+  color: var(--bio-50);
+  background: rgba(148, 163, 184, 0.1);
+  font-weight: 800;
 }
 
 .message-object-link {
@@ -499,7 +621,7 @@
 .message-actions {
   display: flex;
   gap: 6px;
-  margin-top: 8px;
+  margin-left: auto;
 }
 
 .object-reference-strip {
@@ -670,6 +792,59 @@
   line-height: 1.45;
 }
 
+.turn-acceptance-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.turn-acceptance-copy strong {
+  color: var(--bio-50);
+}
+
+.turn-acceptance-copy ul {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.turn-acceptance-secondary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.turn-acceptance-secondary span {
+  padding: 2px 6px;
+  color: var(--gold);
+  background: rgba(255, 184, 77, 0.1);
+  border: 1px solid rgba(255, 184, 77, 0.22);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.turn-acceptance-raw summary {
+  width: fit-content;
+  color: var(--bio-300);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.turn-acceptance-raw pre {
+  max-height: 180px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px;
+  color: var(--bio-200);
+  background: rgba(11, 18, 32, 0.58);
+  border: 1px solid rgba(255, 184, 77, 0.18);
+  border-radius: 6px;
+  white-space: pre-wrap;
+}
+
 .sciforge-reference-strip {
   display: flex;
   flex: 1;
@@ -734,20 +909,21 @@
 
 .message-actions button,
 .message-editor button {
-  min-height: 24px;
-  padding: 0 8px;
+  min-height: 20px;
+  padding: 0 6px;
   color: var(--bio-300);
-  background: var(--surface-muted);
-  border: 1px solid var(--border);
-  border-radius: 5px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
 }
 
 .message-actions button:hover,
 .message-editor button:hover {
   color: var(--accent);
+  background: var(--surface-muted);
   border-color: var(--accent-border);
 }
 
