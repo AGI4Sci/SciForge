@@ -27,7 +27,7 @@ const noProducer = compileScenarioIRFromSelection({
   skillDomain: 'knowledge',
   selectedSkillIds: ['knowledge.uniprot_chembl_lookup'],
   selectedArtifactTypes: ['sequence-alignment'],
-  selectedComponentIds: ['data-table', 'unknown-artifact-inspector'],
+  selectedComponentIds: ['record-table', 'unknown-artifact-inspector'],
   selectedFailurePolicyIds: ['failure.missing-input', 'failure.schema-mismatch', 'failure.backend-unavailable'],
 });
 

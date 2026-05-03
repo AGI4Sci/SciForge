@@ -13,7 +13,7 @@ const artifacts = [{
 }];
 
 const explicitPromptManifest = composeRuntimeUiManifest(
-  [{ componentId: 'network-graph', artifactRef: 'knowledge-graph', priority: 1 }],
+  [{ componentId: 'graph-viewer', artifactRef: 'knowledge-graph', priority: 1 }],
   artifacts,
   {
     skillDomain: 'knowledge',
@@ -23,19 +23,19 @@ const explicitPromptManifest = composeRuntimeUiManifest(
 
 assert.deepEqual(
   explicitPromptManifest.map((slot) => slot.componentId),
-  ['data-table', 'evidence-matrix', 'execution-unit-table'],
+  ['record-table', 'evidence-matrix', 'execution-unit-table'],
 );
 assert.equal(explicitPromptManifest[0].artifactRef, 'knowledge-graph');
 
 const overrideManifest = composeRuntimeUiManifest(
-  [{ componentId: 'network-graph', artifactRef: 'knowledge-graph', priority: 1 }],
+  [{ componentId: 'graph-viewer', artifactRef: 'knowledge-graph', priority: 1 }],
   artifacts,
   {
     skillDomain: 'knowledge',
     prompt: '生成药物靶点优先级视图。',
     uiState: {
       scenarioOverride: {
-        defaultComponents: ['data-table', 'network-graph', 'execution-unit-table'],
+        defaultComponents: ['record-table', 'graph-viewer', 'execution-unit-table'],
       },
     },
   },
@@ -43,7 +43,7 @@ const overrideManifest = composeRuntimeUiManifest(
 
 assert.deepEqual(
   overrideManifest.map((slot) => slot.componentId),
-  ['data-table', 'network-graph', 'execution-unit-table'],
+  ['record-table', 'graph-viewer', 'execution-unit-table'],
 );
 
 const viewCompositionManifest = composeRuntimeUiManifest(
@@ -55,7 +55,7 @@ const viewCompositionManifest = composeRuntimeUiManifest(
   },
 );
 
-assert.equal(viewCompositionManifest[0].componentId, 'umap-viewer');
+assert.equal(viewCompositionManifest[0].componentId, 'point-set-viewer');
 assert.equal(viewCompositionManifest[0].artifactRef, 'omics-differential-expression');
 const encoding = viewCompositionManifest[0].encoding as Record<string, unknown>;
 const layout = viewCompositionManifest[0].layout as Record<string, unknown>;

@@ -1,0 +1,20 @@
+{
+  "name": "@sciforge-ui/runtime-contract",
+  "version": "1.0.0",
+  "type": "module",
+  "private": false,
+  "description": "Stable SciForge UI component runtime contracts for independently published component packages.",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "files": [
+    "README.md",
+    "index.ts",
+    "package.json"
+  ],
+  "exports": {
+    ".": "./index.ts"
+  },
+  "peerDependencies": {
+    "react": "^19.2.5"
+  }
+}

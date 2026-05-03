@@ -11,7 +11,7 @@ const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cell-benchmark-agent-lo
 const seenPrompts: Array<{ purpose: string; text: string }> = [];
 
 const expectedArtifacts = ['omics-differential-expression', 'research-report'];
-const selectedComponents = ['umap-viewer', 'data-table', 'report-viewer', 'execution-unit-table', 'notebook-timeline'];
+const selectedComponents = ['point-set-viewer', 'record-table', 'report-viewer', 'execution-unit-table', 'notebook-timeline'];
 
 const goodTask = String.raw`
 import json
@@ -85,7 +85,7 @@ def artifact_for(kind):
     }
 
 component_for = {
-    "omics-differential-expression": "umap-viewer",
+    "omics-differential-expression": "point-set-viewer",
     "research-report": "report-viewer",
     "runtime-artifact": "unknown-artifact-inspector",
 }
@@ -395,7 +395,7 @@ payload = {
   "reasoningTrace": "Round 1 created a continuation-ready plan and task refs.",
   "claims": [{"text": "Generated QC/integration/clustering/marker/cell-type/composition plan.", "confidence": 0.82, "evidenceLevel": "workspace-task"}],
   "uiManifest": [
-    {"componentId": "data-table", "artifactRef": "tabula-plan", "priority": 1},
+    {"componentId": "record-table", "artifactRef": "tabula-plan", "priority": 1},
     {"componentId": "report-viewer", "artifactRef": "research-report", "priority": 2},
     {"componentId": "execution-unit-table", "artifactRef": "tabula-plan", "priority": 3}
   ],

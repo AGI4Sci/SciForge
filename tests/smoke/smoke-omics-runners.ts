@@ -39,7 +39,7 @@ payload = {
     "evidenceLevel": "workspace-task",
     "reasoningTrace": "AgentServer generated a task that honored the requested omics runner parameters.",
     "claims": [],
-    "uiManifest": [{"componentId": "volcano-plot", "artifactRef": "omics-differential-expression", "priority": 1}],
+    "uiManifest": [{"componentId": "point-set-viewer", "artifactRef": "omics-differential-expression", "priority": 1}],
     "executionUnits": [{"id": "omics-runner-generated", "skillId": "agentserver.generate.omics", "tool": "agentserver.generated.python", "status": "done"}],
     "artifacts": [{
         "id": "omics-differential-expression",

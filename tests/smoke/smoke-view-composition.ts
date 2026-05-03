@@ -14,7 +14,7 @@ const response = normalizeAgentResponse('omics-differential-exploration', 'UMAP 
         JSON.stringify({
           message: 'View composition only; no new scientific task.',
           uiManifest: [{
-            componentId: 'umap-viewer',
+            componentId: 'point-set-viewer',
             artifactRef: 'omics-differential-expression',
             encoding: { colorBy: 'cellCycle', splitBy: 'batch', syncViewport: true },
             layout: { mode: 'side-by-side', columns: 2 },

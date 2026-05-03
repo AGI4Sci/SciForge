@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sciforge.local/schemas/ui-primitives/document.schema.json",
+  "title": "SciForge document primitive",
+  "type": "object",
+  "required": ["primitive", "title"],
+  "properties": {
+    "primitive": { "const": "document" },
+    "schemaVersion": { "type": "string", "default": "0.1.0" },
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "markdown": { "type": "string" },
+    "content": { "type": "string" },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "markdown": { "type": "string" },
+          "content": { "type": "string" },
+          "refs": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": true
+      }
+    },
+    "dataRef": { "type": "string" },
+    "metadata": { "type": "object", "additionalProperties": true }
+  },
+  "anyOf": [
+    { "required": ["markdown"] },
+    { "required": ["content"] },
+    { "required": ["sections"] },
+    { "required": ["dataRef"] }
+  ],
+  "additionalProperties": true,
+  "examples": [
+    {
+      "primitive": "document",
+      "schemaVersion": "0.1.0",
+      "id": "report-demo",
+      "title": "Differential expression summary",
+      "markdown": "# Summary\nTreatment increased pathway activity in cluster C2.",
+      "sections": [
+        { "id": "methods", "title": "Methods", "content": "Counts were normalized before testing." }
+      ]
+    }
+  ]
+}

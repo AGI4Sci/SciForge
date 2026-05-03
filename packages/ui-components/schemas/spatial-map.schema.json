@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sciforge.local/schemas/ui-primitives/spatial-map.schema.json",
+  "title": "SciForge spatial-map primitive",
+  "type": "object",
+  "required": ["primitive", "spots"],
+  "properties": {
+    "primitive": { "const": "spatial-map" },
+    "schemaVersion": { "type": "string", "default": "0.1.0" },
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "coordinateSystem": { "type": "string" },
+    "backgroundRef": { "type": "string" },
+    "spots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "x", "y"],
+        "properties": {
+          "id": { "type": "string" },
+          "x": { "type": "number" },
+          "y": { "type": "number" },
+          "z": { "type": "number" },
+          "label": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "regions": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+    "metadata": { "type": "object", "additionalProperties": true }
+  },
+  "additionalProperties": true,
+  "examples": [
+    {
+      "primitive": "spatial-map",
+      "schemaVersion": "0.1.0",
+      "id": "spatial-demo",
+      "title": "Spatial transcriptomics section",
+      "coordinateSystem": "pixel",
+      "backgroundRef": "workspace://images/tissue-section.png",
+      "spots": [
+        { "id": "spot-1", "x": 120.5, "y": 88.2, "cluster": "immune" },
+        { "id": "spot-2", "x": 180.0, "y": 130.7, "cluster": "stromal" }
+      ]
+    }
+  ]
+}

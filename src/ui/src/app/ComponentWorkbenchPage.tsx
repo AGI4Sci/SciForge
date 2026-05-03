@@ -1,10 +1,20 @@
 import { Check, Copy, Filter, Play, Search, ShieldCheck, SlidersHorizontal, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { buildWorkbenchDemoRenderProps, moduleHasWorkbenchDemo } from '../componentWorkbenchDemo';
+import {
+  availableWorkbenchDemoVariants,
+  buildWorkbenchArtifactShapeExample,
+  buildWorkbenchDemoRenderProps,
+  buildWorkbenchFigureQA,
+  buildWorkbenchInteractionEventLog,
+  moduleHasWorkbenchDemo,
+  recommendWorkbenchComponents,
+  type WorkbenchDemoVariant,
+} from '../componentWorkbenchDemo';
 import type { SciForgeConfig } from '../domain';
 import { acceptedArtifactTypesForComponent, artifactTypesForComponents, uiModuleRegistry, type RuntimeUIModule } from '../uiModuleRegistry';
 import { renderRegisteredWorkbenchSlot } from './ResultsRenderer';
 import { ActionButton, Badge, SectionHeader, cx } from './uiPrimitives';
+import { renderScientificPlotViewer } from '../../../../packages/ui-components/scientific-plot-viewer/render';
 
 type LifecycleFilter = 'all' | RuntimeUIModule['lifecycle'];
 
@@ -53,6 +63,59 @@ function formatList(values: string[] | undefined, fallback = 'none') {
   return values.map((value) => <code key={value}>{value}</code>);
 }
 
+function requiredContract(module: RuntimeUIModule) {
+  return module.requiredFields?.length ? module.requiredFields : module.requiredAnyFields?.map((fields) => fields.join(' | '));
+}
+
+function safetySummary(module: RuntimeUIModule) {
+  const safety = module.safety ?? {};
+  return [
+    safety.sandbox ? 'sandbox' : 'no-sandbox',
+    `external:${safety.externalResources ?? 'unspecified'}`,
+    safety.executesCode ? 'executes-code' : 'no-code-exec',
+  ];
+}
+
+function variantLabel(variant: WorkbenchDemoVariant) {
+  if (variant === 'basic') return 'basic';
+  if (variant === 'empty') return 'empty';
+  return 'selection';
+}
+
+function parseSchemaInput(input: string) {
+  const trimmed = input.trim();
+  if (!trimmed) return undefined;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return { properties: Object.fromEntries(trimmed.split(/[,\s]+/).filter(Boolean).map((field) => [field, {}])) };
+  }
+}
+
+function formatArtifactJson(value: unknown) {
+  return JSON.stringify(value ?? {}, null, 2);
+}
+
+function figureQaRows(qa: ReturnType<typeof buildWorkbenchFigureQA>) {
+  if (!qa) return [];
+  return [
+    ['size', qa.size],
+    ['DPI', qa.dpi],
+    ['font', qa.font],
+    ['palette', qa.palette],
+    ['colorblind safety', qa.colorblindSafety],
+    ['panel labels', qa.panelLabels],
+    ['vector/raster status', qa.vectorRasterStatus],
+    ['data source', qa.dataSource],
+    ['statistical method', qa.statisticalMethod],
+  ];
+}
+
+function renderWorkbenchPreview(module: RuntimeUIModule, props: ReturnType<typeof buildWorkbenchDemoRenderProps>) {
+  if (module.componentId === 'scientific-plot-viewer') return <>{renderScientificPlotViewer(props)}</>;
+  return renderRegisteredWorkbenchSlot(props);
+}
+
 export function ComponentWorkbenchPage({
   config,
   selectedComponentIds,
@@ -65,7 +128,11 @@ export function ComponentWorkbenchPage({
   const [query, setQuery] = useState('');
   const [lifecycle, setLifecycle] = useState<LifecycleFilter>('all');
   const [copied, setCopied] = useState(false);
+  const [copiedArtifactId, setCopiedArtifactId] = useState<string | null>(null);
   const [demoModuleKey, setDemoModuleKey] = useState<string | null>(null);
+  const [demoVariant, setDemoVariant] = useState<WorkbenchDemoVariant>('basic');
+  const [agentArtifactType, setAgentArtifactType] = useState('omics-differential-expression');
+  const [agentArtifactSchema, setAgentArtifactSchema] = useState('points logFC negLogP gene');
   const allComponentIds = useMemo(() => uniqueComponentIds(), []);
   const publishedComponentIds = useMemo(
     () => allComponentIds.filter((componentId) => modulesForComponent(componentId).some((module) => module.lifecycle === 'published')),
@@ -88,6 +155,11 @@ export function ComponentWorkbenchPage({
   }, [lifecycle, query]);
   const contract = useMemo(() => componentContract(selectedComponentIds), [selectedComponentIds]);
   const contractJson = useMemo(() => JSON.stringify(contract, null, 2), [contract]);
+  const recommendationInput = useMemo(() => parseSchemaInput(agentArtifactSchema), [agentArtifactSchema]);
+  const recommendations = useMemo(
+    () => recommendWorkbenchComponents(uiModuleRegistry, { artifactType: agentArtifactType, artifactSchema: recommendationInput }).slice(0, 6),
+    [agentArtifactType, recommendationInput],
+  );
 
   function toggleComponent(componentId: string) {
     onSelectedComponentIdsChange(
@@ -104,6 +176,16 @@ export function ComponentWorkbenchPage({
       window.setTimeout(() => setCopied(false), 1400);
     } catch {
       setCopied(false);
+    }
+  }
+
+  async function copyArtifactJson(artifactId: string, value: unknown) {
+    try {
+      await navigator.clipboard.writeText(formatArtifactJson(value));
+      setCopiedArtifactId(artifactId);
+      window.setTimeout(() => setCopiedArtifactId(null), 1400);
+    } catch {
+      setCopiedArtifactId(null);
     }
   }
 
@@ -157,8 +239,11 @@ export function ComponentWorkbenchPage({
         <div className="component-module-list" aria-label="UI module registry">
           {visibleModules.map((module) => {
             const selected = selectedComponentIds.includes(module.componentId);
+            const moduleKey = `${module.moduleId}@${module.version}`;
+            const demoVariants = availableWorkbenchDemoVariants(module);
+            const activeDemoVariant = demoVariants.includes(demoVariant) ? demoVariant : demoVariants[0] ?? 'basic';
             return (
-              <article key={`${module.moduleId}@${module.version}`} className={cx('component-module-row', selected && 'selected')}>
+              <article key={moduleKey} className={cx('component-module-row', selected && 'selected')}>
                 <div className="component-row-main">
                   <label className="component-select-toggle">
                     <input type="checkbox" checked={selected} onChange={() => toggleComponent(module.componentId)} />
@@ -182,33 +267,106 @@ export function ComponentWorkbenchPage({
                     type="button"
                     className="component-demo-trigger"
                     disabled={!moduleHasWorkbenchDemo(module)}
-                    onClick={() => setDemoModuleKey((current) => (current === `${module.moduleId}@${module.version}` ? null : `${module.moduleId}@${module.version}`))}
+                    onClick={() => {
+                      setDemoVariant(activeDemoVariant);
+                      setDemoModuleKey((current) => (current === moduleKey ? null : moduleKey));
+                    }}
                   >
                     <Play size={14} />
-                    {demoModuleKey === `${module.moduleId}@${module.version}` ? '收起 Demo' : '试用 Demo'}
+                    {demoModuleKey === moduleKey ? '收起 Demo' : '试用 Demo'}
                   </button>
                 </div>
-                {demoModuleKey === `${module.moduleId}@${module.version}` ? (
+                {demoModuleKey === moduleKey ? (
                   <div className="component-demo-preview">
-                    {renderRegisteredWorkbenchSlot(buildWorkbenchDemoRenderProps(module, config))}
+                    {(() => {
+                      const demoProps = buildWorkbenchDemoRenderProps(module, config, activeDemoVariant);
+                      const shape = buildWorkbenchArtifactShapeExample(module, activeDemoVariant);
+                      const eventLog = buildWorkbenchInteractionEventLog(module, activeDemoVariant);
+                      const qaRows = figureQaRows(buildWorkbenchFigureQA(module, activeDemoVariant, demoProps.artifact));
+                      const artifactJsonId = `${moduleKey}:${activeDemoVariant}`;
+                      return (
+                        <>
+                    <div className="component-row-actions" aria-label="Demo variants">
+                      {(['basic', 'empty', 'selection'] as WorkbenchDemoVariant[]).map((variant) => {
+                        const available = demoVariants.includes(variant);
+                        return (
+                          <button
+                            key={variant}
+                            type="button"
+                            className="component-demo-trigger"
+                            disabled={!available}
+                            aria-pressed={activeDemoVariant === variant}
+                            onClick={() => setDemoVariant(variant)}
+                          >
+                            {variantLabel(variant)}
+                          </button>
+                        );
+                      })}
+                      <button
+                        type="button"
+                        className="component-demo-trigger"
+                        onClick={() => copyArtifactJson(artifactJsonId, demoProps.artifact ?? shape)}
+                      >
+                        <Copy size={14} />
+                        {copiedArtifactId === artifactJsonId ? '已复制 artifact JSON' : '复制 artifact JSON'}
+                      </button>
+                    </div>
+                    {renderWorkbenchPreview(module, demoProps)}
+                    <div className="component-row-grid" aria-label="Agent artifact shape">
+                      <div>
+                        <span>artifact shape</span>
+                        <pre>{formatArtifactJson({
+                          type: shape.artifactType,
+                          schemaVersion: shape.schemaVersion,
+                          requiredFields: shape.requiredFields,
+                          requiredAnyFields: shape.requiredAnyFields,
+                          data: shape.exampleData,
+                        })}</pre>
+                      </div>
+                      <div>
+                        <span>interaction event log</span>
+                        <pre>{eventLog.length ? eventLog.join('\n') : 'no interaction events declared'}</pre>
+                      </div>
+                    </div>
+                    {qaRows.length ? (
+                      <div className="component-row-grid" aria-label="Figure QA">
+                        {qaRows.map(([label, value]) => (
+                          <div key={label}>
+                            <span>{label}</span>
+                            <div>{value}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                        </>
+                      );
+                    })()}
                   </div>
                 ) : null}
                 <div className="component-row-grid">
                   <div>
+                    <span>README summary</span>
+                    <div>{module.docs.agentSummary}</div>
+                  </div>
+                  <div>
                     <span>accepts</span>
                     <div>{formatList(module.acceptsArtifactTypes)}</div>
+                  </div>
+                  <div>
+                    <span>requires</span>
+                    <div>{formatList(requiredContract(module))}</div>
                   </div>
                   <div>
                     <span>outputs</span>
                     <div>{formatList(module.outputArtifactTypes, 'backend-decides')}</div>
                   </div>
                   <div>
-                    <span>required</span>
-                    <div>{formatList(module.requiredFields?.length ? module.requiredFields : module.requiredAnyFields?.map((fields) => fields.join(' | ')))}</div>
+                    <span>events</span>
+                    <div>{formatList(module.interactionEvents)}</div>
                   </div>
                   <div>
-                    <span>interactions</span>
-                    <div>{formatList(module.interactionEvents)}</div>
+                    <span>safety</span>
+                    <div>{formatList(safetySummary(module))}</div>
                   </div>
                   <div>
                     <span>fallback</span>
@@ -224,6 +382,42 @@ export function ComponentWorkbenchPage({
           })}
         </div>
         <aside className="component-contract-panel">
+          <div className="component-contract-header">
+            <div>
+              <strong>Agent 视角推荐</strong>
+              <span>输入 artifact type/schema，查看推荐组件和 fallback</span>
+            </div>
+          </div>
+          <label className="component-search">
+            <span>type</span>
+            <input value={agentArtifactType} onChange={(event) => setAgentArtifactType(event.target.value)} placeholder="artifact type" />
+          </label>
+          <label className="component-search">
+            <span>schema</span>
+            <textarea
+              value={agentArtifactSchema}
+              onChange={(event) => setAgentArtifactSchema(event.target.value)}
+              placeholder='JSON schema or fields, e.g. {"required":["points"]}'
+              rows={4}
+            />
+          </label>
+          <div className="component-row-grid">
+            {recommendations.length ? recommendations.map((item) => (
+              <div key={`${item.moduleId}:${item.componentId}`}>
+                <span>{item.componentId}</span>
+                <div>
+                  <strong>{item.title}</strong>
+                  <p>{item.reasons.join('; ')}</p>
+                  <small>fallback: {item.fallbackModuleIds.length ? item.fallbackModuleIds.join(', ') : 'none'}</small>
+                </div>
+              </div>
+            )) : (
+              <div>
+                <span>recommendation</span>
+                <div>No matching component; use backend-decides or generic inspector fallback.</div>
+              </div>
+            )}
+          </div>
           <div className="component-contract-header">
             <div>
               <strong>运行时组件 Contract</strong>

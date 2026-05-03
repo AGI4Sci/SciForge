@@ -1,4 +1,4 @@
-import type { UIComponentManifest } from '../types';
+import type { UIComponentManifest } from '@sciforge-ui/runtime-contract';
 
 export const manifest: UIComponentManifest = {
   packageName: '@sciforge-ui/execution-unit-table',

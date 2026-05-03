@@ -1,0 +1,2 @@
+import type { UIComponentRendererProps } from '@sciforge-ui/runtime-contract';
+export const selectionGraphViewerFixture: UIComponentRendererProps = { slot: { componentId: 'graph-viewer', props: { selectedNodeId: 'BRAF' } }, artifact: { id: 'graph-selection', type: 'graph', producerScenario: 'graph-preview', schemaVersion: '0.1.0', data: { nodes: [{ id: 'BRAF', label: 'BRAF', selected: true }, { id: 'MEK', label: 'MEK' }], edges: [{ source: 'BRAF', target: 'MEK', relation: 'activates' }] } } };

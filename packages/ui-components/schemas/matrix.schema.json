@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sciforge.local/schemas/ui-primitives/matrix.schema.json",
+  "title": "SciForge matrix primitive",
+  "type": "object",
+  "required": ["primitive", "matrix"],
+  "properties": {
+    "primitive": { "const": "matrix" },
+    "schemaVersion": { "type": "string", "default": "0.1.0" },
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "preset": { "type": "string", "examples": ["heatmap"] },
+    "matrix": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": { "type": ["number", "null"] }
+      }
+    },
+    "rowLabels": { "type": "array", "items": { "type": "string" } },
+    "columnLabels": { "type": "array", "items": { "type": "string" } },
+    "scale": { "type": "string" },
+    "metadata": { "type": "object", "additionalProperties": true }
+  },
+  "additionalProperties": true,
+  "examples": [
+    {
+      "primitive": "matrix",
+      "schemaVersion": "0.1.0",
+      "id": "expr-heatmap-demo",
+      "title": "Expression heatmap",
+      "preset": "heatmap",
+      "rowLabels": ["GENE1", "GENE2"],
+      "columnLabels": ["control", "treated"],
+      "matrix": [
+        [0.2, 0.9],
+        [0.7, 0.1]
+      ]
+    }
+  ]
+}

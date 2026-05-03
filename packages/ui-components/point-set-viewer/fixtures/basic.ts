@@ -1,0 +1,2 @@
+import type { UIComponentRendererProps } from '@sciforge-ui/runtime-contract';
+export const basicPointSetViewerFixture: UIComponentRendererProps = { slot: { componentId: 'point-set-viewer', props: { preset: 'volcano' } }, artifact: { id: 'point-set-basic', type: 'point-set', producerScenario: 'point-preview', schemaVersion: '0.1.0', data: { preset: 'volcano', points: [{ gene: 'IFIT1', logFC: 2.1, negLogP: 8.2 }, { gene: 'IL7R', logFC: -1.2, negLogP: 3.4 }] } } };

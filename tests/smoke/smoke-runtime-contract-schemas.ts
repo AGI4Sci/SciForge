@@ -20,7 +20,7 @@ const objectReference = {
   ref: 'artifact:structure-summary',
   artifactType: 'structure-summary',
   runId: 'run-1',
-  preferredView: 'molecule-viewer',
+  preferredView: 'structure-viewer',
   actions: ['focus-right-pane', 'inspect', 'pin'],
 };
 
@@ -91,7 +91,7 @@ assert.deepEqual(validateRuntimeContract('uiModulePackage', {
   module: {
     moduleId: 'protein-structure-viewer',
     version: '1.0.0',
-    componentId: 'molecule-viewer',
+    componentId: 'structure-viewer',
     lifecycle: 'published',
     acceptsArtifactTypes: ['structure-summary'],
   },

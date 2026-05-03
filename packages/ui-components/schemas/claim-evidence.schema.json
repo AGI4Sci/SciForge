@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sciforge.local/schemas/ui-primitives/claim-evidence.schema.json",
+  "title": "SciForge claim-evidence primitive",
+  "type": "object",
+  "required": ["primitive", "claims"],
+  "properties": {
+    "primitive": { "const": "claim-evidence" },
+    "schemaVersion": { "type": "string", "default": "0.1.0" },
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "preset": { "type": "string", "examples": ["claim-evidence-matrix", "literature-paper-list"] },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text"],
+        "properties": {
+          "id": { "type": "string" },
+          "text": { "type": "string" },
+          "status": { "type": "string" },
+          "confidence": { "type": "number" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "source": { "type": "string" },
+          "url": { "type": "string" },
+          "year": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "links": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["claimId", "evidenceId"],
+        "properties": {
+          "claimId": { "type": "string" },
+          "evidenceId": { "type": "string" },
+          "support": { "type": "string" },
+          "strength": { "type": "number" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "metadata": { "type": "object", "additionalProperties": true }
+  },
+  "additionalProperties": true,
+  "examples": [
+    {
+      "primitive": "claim-evidence",
+      "schemaVersion": "0.1.0",
+      "id": "evidence-demo",
+      "title": "Mechanism evidence",
+      "preset": "claim-evidence-matrix",
+      "claims": [
+        { "id": "c1", "text": "Treatment increases pathway activity.", "status": "supported", "confidence": 0.76 }
+      ],
+      "evidence": [
+        { "id": "p1", "title": "Demo paper", "source": "SciForge Journal", "year": "2026" }
+      ],
+      "links": [
+        { "claimId": "c1", "evidenceId": "p1", "support": "supports", "strength": 0.8 }
+      ]
+    }
+  ]
+}

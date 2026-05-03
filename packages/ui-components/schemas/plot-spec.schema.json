@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sciforge.local/schemas/ui-primitives/plot-spec.schema.json",
+  "title": "SciForge Plotly-compatible plot-spec primitive",
+  "type": "object",
+  "required": ["primitive", "plotly"],
+  "properties": {
+    "primitive": { "const": "plot-spec" },
+    "schemaVersion": { "type": "string", "default": "0.1.0" },
+    "id": { "type": "string" },
+    "plotId": { "type": "string" },
+    "title": { "type": "string" },
+    "preset": {
+      "type": "string",
+      "examples": ["scatter-line", "box-violin", "correlation-heatmap", "volcano", "ma-plot", "pca", "umap", "roc-pr-calibration"]
+    },
+    "plotly": {
+      "type": "object",
+      "required": ["data"],
+      "properties": {
+        "data": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "layout": { "type": "object", "additionalProperties": true },
+        "config": { "type": "object", "additionalProperties": true },
+        "frames": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "selection": { "$ref": "#/$defs/selection" },
+        "annotations": { "type": "array", "items": { "$ref": "#/$defs/annotation" } },
+        "exportProfile": { "$ref": "#/$defs/exportProfile" },
+        "fallbackRenderers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/fallbackRenderer" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "data": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+    "layout": { "type": "object", "additionalProperties": true },
+    "config": { "type": "object", "additionalProperties": true },
+    "frames": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+    "selection": { "$ref": "#/$defs/selection" },
+    "annotations": { "type": "array", "items": { "$ref": "#/$defs/annotation" } },
+    "exportProfile": { "$ref": "#/$defs/exportProfile" },
+    "fallbackRenderers": { "type": "array", "items": { "$ref": "#/$defs/fallbackRenderer" } },
+    "editPatch": {
+      "type": "object",
+      "description": "Patch that modifies the Plotly-compatible source spec; derived renderers must not become the edit source.",
+      "properties": {
+        "op": { "type": "string", "examples": ["add", "replace", "remove"] },
+        "path": { "type": "string" },
+        "value": {},
+        "sourceEvent": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "sourcePrimitive": { "type": "string" },
+    "metadata": { "type": "object", "additionalProperties": true }
+  },
+  "$defs": {
+    "selection": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "examples": ["point", "box", "lasso", "range", "legend"] },
+        "traceIndices": { "type": "array", "items": { "type": "number" } },
+        "pointIndices": { "type": "array", "items": { "type": "number" } },
+        "selectedIds": { "type": "array", "items": { "type": "string" } },
+        "anchorFields": { "type": "array", "items": { "type": "string" } },
+        "eventSource": { "type": "string", "examples": ["plotly_selected", "plotly_click", "plotly_relayout"] }
+      },
+      "additionalProperties": true
+    },
+    "annotation": {
+      "type": "object",
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "type": "string", "examples": ["label", "arrow", "bracket", "roi", "scale-bar", "threshold-line", "callout"] },
+        "label": { "type": "string" },
+        "coordinates": { "type": ["object", "array"], "additionalProperties": true },
+        "targetTrace": { "type": "string" },
+        "style": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": true
+    },
+    "exportProfile": {
+      "type": "object",
+      "properties": {
+        "renderer": { "const": "plotly" },
+        "format": { "type": "string", "examples": ["html", "svg", "pdf", "png", "tiff"] },
+        "width": { "type": "number" },
+        "height": { "type": "number" },
+        "units": { "type": "string", "examples": ["px", "mm", "in"] },
+        "scale": { "type": "number" },
+        "journalProfile": { "type": "string" },
+        "fontEmbedding": { "type": "string" },
+        "vectorRequired": { "type": "boolean" },
+        "colorProfile": { "type": "string" },
+        "qa": { "type": "object", "additionalProperties": true },
+        "derivedExports": { "type": "array", "items": { "$ref": "#/$defs/fallbackRenderer" } }
+      },
+      "additionalProperties": true
+    },
+    "fallbackRenderer": {
+      "type": "object",
+      "required": ["renderer", "purpose", "sourcePlotSpecId"],
+      "properties": {
+        "renderer": { "type": "string", "examples": ["matplotlib"] },
+        "purpose": { "type": "string", "examples": ["advanced-publication-export", "journal-fallback"] },
+        "derivedOnly": { "const": true },
+        "status": { "type": "string" },
+        "sourcePlotSpecId": { "type": "string" },
+        "scriptRef": { "type": "string" },
+        "outputRef": { "type": "string" },
+        "rendererVersions": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true,
+  "examples": [
+    {
+      "primitive": "plot-spec",
+      "schemaVersion": "0.1.0",
+      "id": "plotly-demo",
+      "plotId": "volcano-demo",
+      "title": "Volcano Plotly spec",
+      "sourcePrimitive": "point-set",
+      "preset": "volcano",
+      "plotly": {
+        "data": [
+          { "type": "scattergl", "mode": "markers", "x": [2.1, -1.8], "y": [8.2, 5.4], "text": ["GENE1", "GENE2"] }
+        ],
+        "layout": { "xaxis": { "title": "logFC" }, "yaxis": { "title": "-log10(p)" } },
+        "config": { "responsive": true, "displaylogo": false },
+        "selection": { "mode": "lasso", "pointIndices": [0], "eventSource": "plotly_selected" },
+        "annotations": [{ "id": "gene1-callout", "kind": "callout", "label": "GENE1", "coordinates": { "x": 2.1, "y": 8.2 } }],
+        "exportProfile": { "renderer": "plotly", "format": "svg", "width": 720, "height": 480, "scale": 2 },
+        "fallbackRenderers": [{ "renderer": "matplotlib", "purpose": "advanced-publication-export", "derivedOnly": true, "sourcePlotSpecId": "volcano-demo" }]
+      }
+    }
+  ]
+}

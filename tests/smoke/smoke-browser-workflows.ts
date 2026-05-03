@@ -122,7 +122,7 @@ try {
     await page.getByText(/已导出 Browser Smoke Imported Package package JSON/).waitFor({ timeout: 15_000 });
     await page.locator('.scenario-builder textarea').fill('构建一个单细胞差异表达场景，输入表达矩阵和metadata，输出火山图、热图、UMAP和execution diagnostics。');
     await page.getByRole('button', { name: '生成场景设置' }).click();
-    await page.locator('code', { hasText: 'volcano-plot' }).first().waitFor();
+    await page.locator('code', { hasText: 'point-set-viewer' }).first().waitFor();
     await page.getByRole('button', { name: /进入.*工作台/ }).click();
     await page.getByText('Scenario Builder').waitFor();
     await page.locator('.scenario-settings-summary').click();
@@ -221,9 +221,9 @@ try {
       await structurePackageCard.getByRole('button', { name: '打开', exact: true }).click();
     }
     await structurePage.getByRole('heading', { name: '结果视图' }).waitFor({ timeout: 15_000 });
-    await structurePage.locator('.molecule-viewer-shell').waitFor({ timeout: 15_000 });
+    await structurePage.locator('.structure-viewer-shell').waitFor({ timeout: 15_000 });
     await structurePage.getByRole('button', { name: '只看图' }).click({ force: true });
-    await structurePage.locator('.molecule-viewer-shell').waitFor({ timeout: 15_000 });
+    await structurePage.locator('.structure-viewer-shell').waitFor({ timeout: 15_000 });
     await structurePage.getByRole('button', { name: '查看数据' }).first().evaluate((button) => {
       if (button instanceof HTMLElement) button.click();
     });
@@ -237,7 +237,7 @@ try {
     await structurePage.getByText('new run').waitFor({ timeout: 15_000 });
     await structurePage.getByRole('button', { name: '取消' }).click({ force: true });
     await captureSmokeScreenshot(structurePage, join(artifactsDir, 'browser-smoke-structure.png'));
-    const viewerBox = await structurePage.locator('.molecule-viewer-shell').boundingBox();
+    const viewerBox = await structurePage.locator('.structure-viewer-shell').boundingBox();
     assert.ok(viewerBox && viewerBox.width > 260 && viewerBox.height > 220, 'structure viewer should be visible and stable');
     await assertNoRawJsonErrors(structurePage, 'structure-workflow');
     await assertNoUnexplainedDisabledPrimaryButtons(structurePage, 'structure-workflow');
@@ -562,7 +562,7 @@ function structureWorkspaceState(workspacePath: string) {
     createdAt: now,
     messages: [],
     runs: [],
-    uiManifest: [{ componentId: 'molecule-viewer', title: 'Structure viewer', artifactRef: 'artifact-structure-browser-smoke', priority: 1 }],
+    uiManifest: [{ componentId: 'structure-viewer', title: 'Structure viewer', artifactRef: 'artifact-structure-browser-smoke', priority: 1 }],
     claims: [],
     executionUnits: [],
     artifacts: [{
@@ -631,7 +631,7 @@ function referenceWorkspaceState(workspacePath: string) {
           ref: 'artifact:browser-smoke-umap',
           artifactType: 'umap-plot',
           runId: 'run-reference-seed',
-          preferredView: 'umap-viewer',
+          preferredView: 'point-set-viewer',
           actions: ['focus-right-pane', 'compare'],
           status: 'available',
           summary: 'Chart reference used by browser smoke follow-up.',
@@ -642,7 +642,7 @@ function referenceWorkspaceState(workspacePath: string) {
           ref: 'artifact:browser-smoke-table',
           artifactType: 'differential-expression-table',
           runId: 'run-reference-seed',
-          preferredView: 'data-table',
+          preferredView: 'record-table',
           actions: ['focus-right-pane', 'compare'],
           status: 'available',
           summary: 'Table reference used by browser smoke follow-up.',
@@ -684,8 +684,8 @@ function referenceWorkspaceState(workspacePath: string) {
       }],
     }],
     uiManifest: [
-      { componentId: 'umap-viewer', title: 'Browser smoke UMAP', artifactRef: 'browser-smoke-umap', priority: 1 },
-      { componentId: 'data-table', title: 'Browser smoke DE table', artifactRef: 'browser-smoke-table', priority: 2 },
+      { componentId: 'point-set-viewer', title: 'Browser smoke UMAP', artifactRef: 'browser-smoke-umap', priority: 1 },
+      { componentId: 'record-table', title: 'Browser smoke DE table', artifactRef: 'browser-smoke-table', priority: 2 },
     ],
     claims: [],
     executionUnits: [{

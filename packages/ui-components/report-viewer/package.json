@@ -5,8 +5,19 @@
   "main": "./manifest.ts",
   "files": [
     "README.md",
+    "fixtures",
     "manifest.json",
     "manifest.ts",
-    "package.json"
-  ]
+    "package.json",
+    "render.tsx"
+  ],
+  "exports": {
+    ".": "./manifest.ts",
+    "./manifest": "./manifest.ts",
+    "./README.md": "./README.md",
+    "./fixtures/basic": "./fixtures/basic.ts",
+    "./fixtures/empty": "./fixtures/empty.ts",
+    "./fixtures/selection": "./fixtures/selection.ts",
+    "./render": "./render.tsx"
+  }
 }

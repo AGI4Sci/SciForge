@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sciforge.local/schemas/ui-primitives/image-volume.schema.json",
+  "title": "SciForge image/volume primitive",
+  "type": "object",
+  "required": ["primitive"],
+  "properties": {
+    "primitive": { "const": "image-volume" },
+    "schemaVersion": { "type": "string", "default": "0.1.0" },
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "kind": { "type": "string", "examples": ["image", "volume", "mask", "stack"] },
+    "dataRef": { "type": "string" },
+    "uri": { "type": "string" },
+    "format": { "type": "string", "examples": ["png", "jpg", "tiff", "ome-tiff", "nifti"] },
+    "width": { "type": "number" },
+    "height": { "type": "number" },
+    "depth": { "type": "number" },
+    "channels": { "type": "array", "items": { "type": "string" } },
+    "metadata": { "type": "object", "additionalProperties": true }
+  },
+  "anyOf": [
+    { "required": ["dataRef"] },
+    { "required": ["uri"] }
+  ],
+  "additionalProperties": true,
+  "examples": [
+    {
+      "primitive": "image-volume",
+      "schemaVersion": "0.1.0",
+      "id": "microscopy-demo",
+      "title": "IF microscopy field",
+      "kind": "image",
+      "dataRef": "workspace://images/field-a.ome.tiff",
+      "format": "ome-tiff",
+      "width": 2048,
+      "height": 2048,
+      "channels": ["DAPI", "FITC"]
+    }
+  ]
+}

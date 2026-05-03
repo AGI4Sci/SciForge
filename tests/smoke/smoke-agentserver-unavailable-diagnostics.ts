@@ -24,7 +24,7 @@ const cellResult = await runWorkspaceRuntimeGateway({
   workspacePath: workspace,
   availableSkills: ['omics.differential_expression'],
   expectedArtifactTypes: ['omics-differential-expression', 'research-report'],
-  selectedComponentIds: ['umap-viewer', 'report-viewer', 'execution-unit-table', 'notebook-timeline'],
+  selectedComponentIds: ['point-set-viewer', 'report-viewer', 'execution-unit-table', 'notebook-timeline'],
   scenarioPackageRef: { id: 'complex-cell-atlas', version: '0.1.0', source: 'workspace' },
   skillPlanRef: 'skill-plan/complex-cell-atlas@0.1.0',
   uiPlanRef: 'ui-plan/complex-cell-atlas@0.1.0',

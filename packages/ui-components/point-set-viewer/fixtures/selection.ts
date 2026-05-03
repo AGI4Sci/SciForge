@@ -1,0 +1,2 @@
+import type { UIComponentRendererProps } from '@sciforge-ui/runtime-contract';
+export const selectionPointSetViewerFixture: UIComponentRendererProps = { slot: { componentId: 'point-set-viewer', props: { selectedPointId: 'IFIT1' } }, artifact: { id: 'point-set-selection', type: 'point-set', producerScenario: 'point-preview', schemaVersion: '0.1.0', data: { points: [{ gene: 'IFIT1', logFC: 2.1, negLogP: 8.2, selected: true }] } } };

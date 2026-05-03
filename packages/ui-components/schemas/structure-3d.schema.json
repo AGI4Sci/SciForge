@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sciforge.local/schemas/ui-primitives/structure-3d.schema.json",
+  "title": "SciForge structure-3d primitive",
+  "type": "object",
+  "required": ["primitive"],
+  "properties": {
+    "primitive": { "const": "structure-3d" },
+    "schemaVersion": { "type": "string", "default": "0.1.0" },
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "pdbId": { "type": "string" },
+    "uniprotId": { "type": "string" },
+    "format": { "type": "string", "examples": ["pdb", "mmcif", "cif", "html"] },
+    "dataRef": { "type": "string" },
+    "structureUrl": { "type": "string" },
+    "html": { "type": "string" },
+    "chains": { "type": "array", "items": { "type": "string" } },
+    "annotations": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+    "metadata": { "type": "object", "additionalProperties": true }
+  },
+  "anyOf": [
+    { "required": ["pdbId"] },
+    { "required": ["uniprotId"] },
+    { "required": ["dataRef"] },
+    { "required": ["structureUrl"] },
+    { "required": ["html"] }
+  ],
+  "additionalProperties": true,
+  "examples": [
+    {
+      "primitive": "structure-3d",
+      "schemaVersion": "0.1.0",
+      "id": "1crn-demo",
+      "title": "Crambin structure",
+      "pdbId": "1CRN",
+      "format": "mmcif",
+      "dataRef": "workspace://structures/1crn.cif",
+      "chains": ["A"]
+    }
+  ]
+}

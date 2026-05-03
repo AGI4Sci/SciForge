@@ -1,0 +1,2 @@
+import type { UIComponentRendererProps } from '@sciforge-ui/runtime-contract';
+export const basicMatrixViewerFixture: UIComponentRendererProps = { slot: { componentId: 'matrix-viewer' }, artifact: { id: 'matrix-basic', type: 'matrix', producerScenario: 'matrix-preview', schemaVersion: '0.1.0', data: { rows: ['IFIT1', 'ISG15'], columns: ['control', 'IFNB'], matrix: [[-0.8, 1.5], [-0.6, 1.2]] } } };

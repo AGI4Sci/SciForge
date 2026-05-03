@@ -5,6 +5,7 @@
   "private": true,
   "type": "module",
   "workspaces": [
+    "packages/runtime-contract",
     "packages/ui-components",
     "packages/ui-components/*",
     "packages/artifact-preview",
@@ -105,7 +106,8 @@
     "smoke:blastp-runtime": "tsx tests/smoke/smoke-blastp-runtime.ts",
     "smoke:omics-runners": "tsx tests/smoke/smoke-omics-runners.ts",
     "artifacts:index": "tsx tools/generate-test-artifacts-index.ts",
-    "packages:check": "npm run skills:generate && tsx tools/check-package-catalog.ts",
+    "ui-components:check": "npm --workspace @sciforge-ui/components run packages:check",
+    "packages:check": "npm run skills:generate && tsx tools/check-package-catalog.ts && npm run ui-components:check",
     "workspace:server": "tsx src/runtime/workspace-server.ts",
     "workspace:prune": "tsx tools/prune-workspace.ts",
     "bench:models": "tsx tools/benchmark-model-speed.ts",

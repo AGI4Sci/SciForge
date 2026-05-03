@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sciforge.local/schemas/ui-primitives/point-set.schema.json",
+  "title": "SciForge point-set primitive",
+  "type": "object",
+  "required": ["primitive", "points"],
+  "properties": {
+    "primitive": { "const": "point-set" },
+    "schemaVersion": { "type": "string", "default": "0.1.0" },
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "preset": { "type": "string", "examples": ["volcano", "umap", "pca", "tsne", "embedding-scatter"] },
+    "dimensions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 2
+    },
+    "points": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["x", "y"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "x": { "type": "number" },
+          "y": { "type": "number" },
+          "z": { "type": "number" },
+          "group": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "metadata": { "type": "object", "additionalProperties": true }
+  },
+  "additionalProperties": true,
+  "examples": [
+    {
+      "primitive": "point-set",
+      "schemaVersion": "0.1.0",
+      "id": "volcano-demo",
+      "title": "Volcano plot",
+      "preset": "volcano",
+      "dimensions": ["logFC", "negLogP"],
+      "points": [
+        { "id": "GENE1", "label": "GENE1", "x": 2.1, "y": 8.2, "significant": true },
+        { "id": "GENE2", "label": "GENE2", "x": -1.8, "y": 5.4, "significant": true }
+      ]
+    },
+    {
+      "primitive": "point-set",
+      "schemaVersion": "0.1.0",
+      "id": "umap-demo",
+      "title": "UMAP embedding",
+      "preset": "umap",
+      "dimensions": ["UMAP1", "UMAP2"],
+      "points": [
+        { "id": "cell-a", "label": "cell-a", "x": -2.1, "y": 0.4, "cluster": "C1" },
+        { "id": "cell-b", "label": "cell-b", "x": 1.8, "y": -0.6, "cluster": "C2" }
+      ]
+    }
+  ]
+}

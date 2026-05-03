@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { AlertTriangle, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Copy, Download, Eye, FileCode, FileText, Lock, Save, Shield, Sparkles, Target, Terminal, Trash2, X } from 'lucide-react';
 import { scenarios, type EvidenceLevel, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
@@ -8,17 +8,23 @@ import { buildExecutionBundle, evaluateExecutionBundleExport } from '../exportPo
 import { artifactPreviewActions, objectReferenceKinds, previewDescriptorKinds, runtimeContractSchemas, schemaPreview, validateRuntimeContract } from '../runtimeContracts';
 import { openWorkspaceObject, readPreviewDerivative, readPreviewDescriptor, readWorkspaceFile, writeWorkspaceFile, type WorkspaceFileContent } from '../api/workspaceClient';
 import { uiModuleRegistry, type PresentationDedupeScope, type RuntimeUIModule } from '../uiModuleRegistry';
-import { renderDataTable, renderReportViewer, type UIComponentRendererProps } from '../../../../packages/ui-components';
+import {
+  renderGraphViewer,
+  renderMatrixViewer,
+  renderPointSetViewer,
+  renderRecordTable,
+  renderReportViewer,
+  renderStructureViewer,
+  type UIComponentRendererProps,
+} from '../../../../packages/ui-components';
 import {
   descriptorWithDiagnostic as packageDescriptorWithDiagnostic,
   mergePreviewDescriptors as packageMergePreviewDescriptors,
   normalizeArtifactPreviewDescriptor as packageNormalizeArtifactPreviewDescriptor,
   shouldHydratePreviewDescriptor as packageShouldHydratePreviewDescriptor,
 } from '../../../../packages/artifact-preview';
-import type { VolcanoPoint } from '../charts';
-import { HeatmapViewer, MoleculeViewer, NetworkGraph, UmapViewer } from '../visualizations';
 import { exportJsonFile, exportTextFile } from './exportUtils';
-import { ActionButton, Badge, Card, ChartLoadingFallback, ClaimTag, ConfidenceBar, EmptyArtifactState, EvidenceTag, SectionHeader, TabBar, cx } from './uiPrimitives';
+import { ActionButton, Badge, Card, ClaimTag, ConfidenceBar, EmptyArtifactState, EvidenceTag, SectionHeader, TabBar, cx } from './uiPrimitives';
 import type { SciForgeConfig, SciForgeReference, SciForgeRun, SciForgeSession, DisplayIntent, EvidenceClaim, NotebookRecord, ObjectAction, ObjectReference, PreviewDerivative, PreviewDescriptor, ResolvedViewPlan, RuntimeArtifact, RuntimeExecutionUnit, ScenarioInstanceId, UIManifestSlot, ViewPlanSection } from '../domain';
 import {
   artifactForObjectReference,
@@ -35,8 +41,6 @@ import {
   syntheticArtifactForObjectReference,
   withRegionLocator,
 } from '../../../../packages/object-references';
-
-const VolcanoChart = lazy(async () => ({ default: (await import('../charts')).VolcanoChart }));
 
 function isBuiltInScenarioId(value: string): value is ScenarioId {
   return Object.prototype.hasOwnProperty.call(SCENARIO_SPECS, value);
@@ -161,29 +165,6 @@ function asStringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : [];
 }
 
-function edgeSourcesLabel(value: unknown): string | undefined {
-  const sources = asStringList(value);
-  if (sources.length) return sources.join(', ');
-  const recordSources = toRecordList(value)
-    .map((source) => asString(source.id) || asString(source.name) || asString(source.type))
-    .filter(Boolean);
-  if (recordSources.length) return recordSources.slice(0, 3).join(', ');
-  if (isRecord(value)) {
-    return [value.database, value.source, value.id].map(asString).filter(Boolean).join(', ') || undefined;
-  }
-  return asString(value);
-}
-
-function asNumberList(value: unknown): number[] {
-  return Array.isArray(value) ? value.filter((entry): entry is number => typeof entry === 'number' && Number.isFinite(entry)) : [];
-}
-
-function asNumberMatrix(value: unknown): number[][] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const matrix = value.map(asNumberList).filter((row) => row.length > 0);
-  return matrix.length ? matrix : undefined;
-}
-
 function pickEvidenceLevel(value: unknown): EvidenceLevel {
   const levels: EvidenceLevel[] = ['meta', 'rct', 'cohort', 'case', 'experimental', 'review', 'database', 'preprint', 'prediction'];
   return levels.includes(value as EvidenceLevel) ? value as EvidenceLevel : 'prediction';
@@ -276,23 +257,6 @@ function ResultPaneWorkspaceFileEditor({
       </div>
     </div>
   );
-}
-
-function volcanoPointsFromPayload(payload: Record<string, unknown>, colorField?: string): VolcanoPoint[] | undefined {
-  const records = toRecordList(payload.points);
-  const points = records.flatMap((record, index) => {
-    const logFC = asNumber(record.logFC) ?? asNumber(record.log2FC);
-    const negLogP = asNumber(record.negLogP) ?? (asNumber(record.pValue) ? -Math.log10(Math.max(1e-300, asNumber(record.pValue) ?? 1)) : undefined);
-    if (logFC === undefined || negLogP === undefined) return [];
-    return [{
-      gene: asString(record.gene) || asString(record.label) || `Gene${index + 1}`,
-      logFC,
-      negLogP,
-      sig: typeof record.significant === 'boolean' ? record.significant : Math.abs(logFC) > 1.4 && negLogP > 3,
-      category: colorField ? asString(record[colorField]) : undefined,
-    }];
-  });
-  return points.length ? points : undefined;
 }
 
 export function ResultsRenderer({
@@ -895,7 +859,18 @@ function sectionForModule(module: RuntimeUIModule, displayIntent: DisplayIntent,
 }
 
 function isPrimaryResultModule(module: RuntimeUIModule) {
-  return ['report-viewer', 'molecule-viewer', 'volcano-plot', 'heatmap-viewer', 'umap-viewer', 'network-graph'].includes(module.componentId);
+  return [
+    'report-viewer',
+    'structure-viewer',
+    'molecule-viewer',
+    'point-set-viewer',
+    'volcano-plot',
+    'umap-viewer',
+    'matrix-viewer',
+    'heatmap-viewer',
+    'graph-viewer',
+    'network-graph',
+  ].includes(module.componentId);
 }
 
 function compactViewPlanItems(items: ResolvedViewPlanItem[], session: SciForgeSession) {
@@ -922,7 +897,7 @@ function compactViewPlanItems(items: ResolvedViewPlanItem[], session: SciForgeSe
     const artifactKey = item.artifact?.id ?? item.slot.artifactRef;
     const strongest = artifactKey ? strongestByArtifact.get(artifactKey) : undefined;
     if (strongest && strongest.id !== item.id && item.module.componentId === 'unknown-artifact-inspector') return false;
-    if (strongest && strongest.id !== item.id && item.module.componentId === 'data-table' && strongest.status === 'bound') return false;
+    if (strongest && strongest.id !== item.id && (item.module.componentId === 'record-table' || item.module.componentId === 'data-table') && strongest.status === 'bound') return false;
     const presentationKey = presentationIdentityKey(item);
     const strongestPresentation = presentationKey ? strongestByPresentationIdentity.get(presentationKey) : undefined;
     if (strongestPresentation && strongestPresentation.id !== item.id && isPresentationDedupeEnabled(item.module)) return false;
@@ -1151,7 +1126,18 @@ function itemMatchesFocusMode(item: ResolvedViewPlanItem, focusMode: ResultFocus
   if (focusMode === 'all') return true;
   if (focusMode === 'evidence') return item.module.componentId === 'evidence-matrix' || item.artifact?.type === 'evidence-matrix';
   if (focusMode === 'execution') return item.module.componentId === 'execution-unit-table' || item.section === 'provenance';
-  return ['molecule-viewer', 'volcano-plot', 'heatmap-viewer', 'umap-viewer', 'network-graph', 'report-viewer'].includes(item.module.componentId);
+  return [
+    'structure-viewer',
+    'molecule-viewer',
+    'point-set-viewer',
+    'volcano-plot',
+    'umap-viewer',
+    'matrix-viewer',
+    'heatmap-viewer',
+    'graph-viewer',
+    'network-graph',
+    'report-viewer',
+  ].includes(item.module.componentId);
 }
 
 function PaperCardList({ slot, artifact, session }: RegistryRendererProps) {
@@ -1180,284 +1166,6 @@ function PaperCardList({ slot, artifact, session }: RegistryRendererProps) {
             <EvidenceTag level={paper.level} />
             <Badge variant="success">runtime</Badge>
           </Card>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function MoleculeSlot({ slot, artifact, session }: RegistryRendererProps) {
-  const payload = slotPayload(slot, artifact);
-  const structureRows = Array.isArray(artifact?.data)
-    ? toRecordList(artifact?.data)
-    : toRecordList(payload.structures ?? payload.data ?? payload.rows ?? payload.items);
-  const primaryStructure = structureRows[0] ?? {};
-  const artifactPath = artifactFilePath(artifact, payload);
-  const dataRef = asString(payload.structureUrl)
-    || asString(payload.mmcifUrl)
-    || asString(payload.cifUrl)
-    || asString(artifact?.dataRef)
-    || asString(payload.dataRef)
-    || artifactPath;
-  const pdbId = asString(payload.pdbId)
-    || asString(payload.pdb_id)
-    || asString(payload.pdb)
-    || asString(artifact?.metadata?.pdbId)
-    || asString(artifact?.metadata?.pdb_id)
-    || asString(primaryStructure.pdbId)
-    || asString(primaryStructure.pdb_id)
-    || asString(primaryStructure.pdb)
-    || inferPdbIdFromStructureRef(dataRef);
-  const uniprotId = asString(payload.uniprotId);
-  const ligand = asString(payload.ligand) || 'none';
-  const residues = asStringList(payload.highlightResidues ?? payload.residues);
-  const metrics = isRecord(payload.metrics) ? payload.metrics : payload;
-  const coordinateRef = isFetchableStructureRef(dataRef) ? dataRef : undefined;
-  const html = asString(payload.html) || asString(payload.structureHtml) || asString(payload.iframeHtml);
-  const htmlRef = asString(payload.htmlRef) || asString(payload.structureHtmlRef)
-    || (artifactPath && /\.html?($|[?#])/i.test(artifactPath) ? artifactPath : undefined)
-    || (dataRef && (/\.html?($|[?#])/i.test(dataRef) || dataRef.startsWith('data:text/html')) ? dataRef : undefined);
-  const canPreviewHtml = Boolean(html || htmlRef?.startsWith('data:text/html') || /^https?:\/\//i.test(htmlRef ?? ''));
-  const isHtmlStructure = Boolean(canPreviewHtml || /html/i.test(artifact?.type ?? ''));
-  const atoms = toRecordList(payload.atomCoordinates).flatMap((atom) => {
-    const x = asNumber(atom.x);
-    const y = asNumber(atom.y);
-    const z = asNumber(atom.z);
-    if (x === undefined || y === undefined || z === undefined) return [];
-    return [{
-      atomName: asString(atom.atomName),
-      residueName: asString(atom.residueName),
-      chain: asString(atom.chain),
-      residueNumber: asString(atom.residueNumber),
-      element: asString(atom.element),
-      x,
-      y,
-      z,
-      hetatm: atom.hetatm === true,
-    }];
-  });
-  if (!artifact || (!pdbId && !uniprotId && !coordinateRef && !html && !htmlRef && !atoms.length && !structureRows.length)) {
-    return <ComponentEmptyState componentId="molecule-viewer" artifactType="structure-summary" detail={!artifact ? undefined : '当前 structure artifact 缺少 pdbId、uniprotId、dataRef 或 HTML 结构视图；请补齐 accession/坐标/HTML ref。'} />;
-  }
-  return (
-    <div className="stack">
-      <ArtifactSourceBar artifact={artifact} session={session} />
-      <div className="slot-meta">
-        <Badge variant="success">{artifactMeta(artifact)}</Badge>
-        <code>{uniprotId ? `UniProt=${uniprotId}` : `PDB=${pdbId || 'unknown'}`}</code>
-        <code>ligand={ligand}</code>
-        {dataRef ? <code title={dataRef}>dataRef={compactParams(dataRef)}</code> : <code>record-only structure</code>}
-        {!coordinateRef && pdbId ? <code>coordinates=RCSB</code> : null}
-        {structureRows.length ? <code>{structureRows.length} structures</code> : null}
-        {residues.length ? <code>residues={residues.join(',')}</code> : null}
-        {slot.encoding?.highlightSelection ? <code>highlightSelection={Array.isArray(slot.encoding.highlightSelection) ? slot.encoding.highlightSelection.join(',') : slot.encoding.highlightSelection}</code> : null}
-      </div>
-      {isHtmlStructure && canPreviewHtml ? (
-        <StructureHtmlPreview html={html} htmlRef={htmlRef} />
-      ) : coordinateRef || pdbId || atoms.length ? (
-        <div className="viz-card">
-          <MoleculeViewer
-            pdbId={pdbId || uniprotId}
-            ligand={ligand}
-            structureUrl={coordinateRef}
-            highlightResidues={residues}
-            pocketLabel={asString(payload.pocketLabel) || asString(payload.pocket) || asString(primaryStructure.title) || 'Structure view'}
-            atoms={atoms}
-          />
-        </div>
-      ) : (
-        <ComponentEmptyState componentId="molecule-viewer" artifactType="structure-summary" title="缺少结构坐标 dataRef" detail="已保留结构摘要，但没有可加载坐标文件；请检查 project tool 输出。" />
-      )}
-      <MetricGrid metrics={metrics} />
-    </div>
-  );
-}
-
-function artifactFilePath(artifact: RuntimeArtifact | undefined, payload: Record<string, unknown>) {
-  const artifactRecord = artifact as (RuntimeArtifact & Record<string, unknown>) | undefined;
-  const metadata = artifact?.metadata ?? {};
-  return asString(artifactRecord?.path)
-    || asString(payload.path)
-    || asString(payload.filePath)
-    || asString(payload.localPath)
-    || asString(payload.downloadedPath)
-    || asString(metadata.path)
-    || asString(metadata.filePath)
-    || asString(metadata.localPath)
-    || asString(metadata.downloadedPath);
-}
-
-function isFetchableStructureRef(ref?: string) {
-  if (!ref) return false;
-  if (/^agentserver:\/\//i.test(ref)) return false;
-  if (/\.html?($|[?#])/i.test(ref)) return false;
-  return /^https?:\/\//i.test(ref) || /^data:/i.test(ref);
-}
-
-function inferPdbIdFromStructureRef(ref?: string) {
-  if (!ref) return undefined;
-  let decoded = ref.trim();
-  try {
-    decoded = decodeURIComponent(decoded);
-  } catch {
-    // Keep the original ref when it is not URI-encoded.
-  }
-  const patterns = [
-    /(?:^|[/_-])([0-9][A-Za-z0-9]{3})(?=\.(?:pdb|cif|mmcif)(?:$|[?#]))/i,
-    /rcsb\.org\/(?:download|structure|entry)\/([0-9][A-Za-z0-9]{3})(?:$|[/?#.]|%)/i,
-    /(?:pdb(?:id)?[=:_-])([0-9][A-Za-z0-9]{3})(?:$|[/?#._-])/i,
-  ];
-  for (const pattern of patterns) {
-    const match = decoded.match(pattern);
-    if (match?.[1]) return match[1].toUpperCase();
-  }
-  return undefined;
-}
-
-function StructureHtmlPreview({ html, htmlRef }: { html?: string; htmlRef?: string }) {
-  const canEmbedRef = htmlRef?.startsWith('data:text/html') || /^https?:\/\//i.test(htmlRef ?? '');
-  return (
-    <div className="structure-html-preview">
-      <div className="slot-meta">
-        <Badge variant="info">sandboxed html structure</Badge>
-        {htmlRef ? <code title={htmlRef}>htmlRef={compactParams(htmlRef)}</code> : null}
-      </div>
-      {html || canEmbedRef ? (
-        <iframe
-          title="Sandboxed structure HTML preview"
-          sandbox="allow-scripts"
-          src={canEmbedRef ? htmlRef : undefined}
-          srcDoc={html}
-        />
-      ) : (
-        <EmptyArtifactState
-          title="结构 HTML 已生成但不能直接嵌入"
-          detail="当前 dataRef 指向 workspace 文件；请通过 Artifact Inspector 查看路径，或让任务输出 data:text/html / structure-summary 坐标 artifact。"
-          recoverActions={['inspect-artifact', 'repair-ui-plan', 'fallback-component:unknown-artifact-inspector']}
-        />
-      )}
-    </div>
-  );
-}
-
-function CanvasSlot({ slot, artifact, session, kind }: RegistryRendererProps & { kind: 'volcano' | 'heatmap' | 'umap' | 'network' }) {
-  const payload = slotPayload(slot, artifact);
-  const colorField = slot.encoding?.colorBy;
-  const splitField = slot.encoding?.splitBy || slot.encoding?.facetBy;
-  const graphNodeRecords = toRecordList(payload.nodes).length ? toRecordList(payload.nodes) : toRecordList(payload.entities);
-  const networkNodes = graphNodeRecords.map((node) => ({
-    id: asString(node.id),
-    label: asString(node.label) || asString(node.name),
-    type: colorField ? asString(node[colorField]) || asString(node.type) : asString(node.type),
-  }));
-  const networkEdges = toRecordList(payload.edges).map((edge) => ({
-    source: asString(edge.source) || asString(edge.from),
-    target: asString(edge.target) || asString(edge.to),
-    relation: asString(edge.relation),
-    evidenceLevel: asString(edge.evidenceLevel) || asString(edge.evidence_level),
-    confidence: asNumber(edge.confidence),
-    sourceDb: asString(edge.sourceDb) || asString(edge.source_db) || edgeSourcesLabel(edge.sources),
-  }));
-  const volcanoPoints = volcanoPointsFromPayload(payload, colorField);
-  const heatmap = isRecord(payload.heatmap)
-    ? asNumberMatrix(payload.heatmap.matrix ?? payload.heatmap.values)
-    : asNumberMatrix(payload.matrix ?? payload.values);
-  const svgText = kind === 'heatmap'
-    ? asString(payload.heatmapSvgText) || asString(payload.svgText)
-    : kind === 'umap'
-      ? asString(payload.umapSvgText) || asString(payload.svgText)
-      : undefined;
-  const umapPoints = toRecordList(payload.umap ?? payload.points).flatMap((point) => {
-    const x = asNumber(point.x) ?? asNumber(point.umap1);
-    const y = asNumber(point.y) ?? asNumber(point.umap2);
-    return x === undefined || y === undefined ? [] : [{
-      x,
-      y,
-      cluster: colorField ? asString(point[colorField]) || asString(point.cluster) || asString(point.group) : asString(point.cluster) || asString(point.group),
-      label: asString(point.label),
-    }];
-  });
-  if (!artifact) {
-    return <ComponentEmptyState componentId={canvasComponentId(kind)} artifactType={canvasArtifactType(kind)} detail={`${kind} 组件不再使用 demo seed；请先运行当前 Scenario 生成 artifact。`} />;
-  }
-  const hasData = kind === 'volcano'
-    ? Boolean(volcanoPoints?.length)
-    : kind === 'heatmap'
-      ? Boolean(heatmap || svgText)
-      : kind === 'umap'
-        ? Boolean(umapPoints.length || svgText)
-        : Boolean(networkNodes.length);
-  if (!hasData) {
-    return <ComponentEmptyState componentId={canvasComponentId(kind)} artifactType={artifact.type} title="artifact 缺少可视化数据" detail={`当前 ${artifact.type} 没有 ${kind} 所需字段；UI 已停止回退到 demo 图。`} />;
-  }
-  return (
-    <div className="stack">
-      <ArtifactSourceBar artifact={artifact} session={session} />
-      <div className="slot-meta">
-        <Badge variant="success">{artifactMeta(artifact)}</Badge>
-        {networkNodes.length ? <code>{networkNodes.length} nodes</code> : null}
-        {networkEdges.length ? <code>{networkEdges.length} edges</code> : null}
-        {volcanoPoints?.length ? <code>{volcanoPoints.length} volcano points</code> : null}
-        {umapPoints.length ? <code>{umapPoints.length} UMAP points</code> : null}
-        {heatmap ? <code>{heatmap.length}x{heatmap[0]?.length ?? 0} heatmap</code> : null}
-        {colorField ? <code>colorBy={colorField}</code> : null}
-        {splitField ? <code>splitBy={splitField}</code> : null}
-      </div>
-      <Card className="viz-card">
-        {kind === 'volcano' ? (
-          <div className="chart-300">
-            <Suspense fallback={<ChartLoadingFallback label="加载火山图" />}>
-              <VolcanoChart points={volcanoPoints} />
-            </Suspense>
-          </div>
-        ) : svgText ? (
-          <SvgArtifactImage svgText={svgText} label={kind === 'heatmap' ? 'Heatmap SVG artifact' : 'UMAP SVG artifact'} />
-        ) : kind === 'heatmap' ? (
-          <HeatmapViewer matrix={heatmap} label={[asString(payload.label) || asString(isRecord(payload.heatmap) ? payload.heatmap.label : undefined), splitField ? `splitBy=${splitField}` : undefined].filter(Boolean).join(' · ') || undefined} />
-        ) : kind === 'umap' ? (
-          <UmapViewer points={umapPoints.length ? umapPoints : undefined} />
-        ) : (
-          <NetworkGraph nodes={networkNodes.length ? networkNodes : undefined} edges={networkEdges.length ? networkEdges : undefined} />
-        )}
-      </Card>
-    </div>
-  );
-}
-
-function SvgArtifactImage({ svgText, label }: { svgText: string; label: string }) {
-  const source = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgText)}`;
-  return (
-    <div className="svg-artifact-frame">
-      <img src={source} alt={label} />
-    </div>
-  );
-}
-
-function DataTableSlot({ slot, artifact, session }: RegistryRendererProps) {
-  const records = applyViewTransforms(arrayPayload(slot, 'rows', artifact), slot);
-  const rows = records;
-  if (!artifact || !rows.length) {
-    return (
-      <div className="stack">
-        <ArtifactDownloads artifact={artifact} />
-        <ComponentEmptyState componentId="data-table" artifactType={artifact?.type ?? 'knowledge-graph'} detail={!artifact ? undefined : `当前 ${artifact.type} 没有可表格化 rows；请打开 Artifact Inspector 检查 payload。`} />
-      </div>
-    );
-  }
-  const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 5);
-  return (
-    <div className="stack">
-      <ArtifactSourceBar artifact={artifact} session={session} />
-      <ArtifactDownloads artifact={artifact} />
-      {viewCompositionSummary(slot) ? <div className="composition-strip"><code>{viewCompositionSummary(slot)}</code></div> : null}
-      <div className="artifact-table">
-        <div className="artifact-table-head" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(120px, 1fr))` }}>
-          {columns.map((column) => <span key={column}>{column}</span>)}
-        </div>
-        {rows.map((row, index) => (
-          <div className="artifact-table-row" key={index} style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(120px, 1fr))` }}>
-            {columns.map((column) => <span key={column}>{String(row[column] ?? '-')}</span>)}
-          </div>
         ))}
       </div>
     </div>
@@ -2076,17 +1784,6 @@ function ComponentEmptyState({
   );
 }
 
-function canvasComponentId(kind: 'volcano' | 'heatmap' | 'umap' | 'network') {
-  if (kind === 'volcano') return 'volcano-plot';
-  if (kind === 'heatmap') return 'heatmap-viewer';
-  if (kind === 'umap') return 'umap-viewer';
-  return 'network-graph';
-}
-
-function canvasArtifactType(kind: 'volcano' | 'heatmap' | 'umap' | 'network') {
-  return kind === 'network' ? 'knowledge-graph' : 'omics-differential-expression';
-}
-
 function referenceForResultSlot(item: ResolvedViewPlanItem): SciForgeReference {
   return referenceForResultSlotLike(item);
 }
@@ -2146,22 +1843,44 @@ function PackageReportViewer(props: UIComponentRendererProps) {
   return <>{renderReportViewer(props)}</>;
 }
 
-function PackageDataTable(props: UIComponentRendererProps) {
-  return <>{renderDataTable(props)}</>;
+function PackageRecordTable(props: UIComponentRendererProps) {
+  return <>{renderRecordTable(props)}</>;
+}
+
+function PackageGraphViewer(props: UIComponentRendererProps) {
+  return <>{renderGraphViewer(props)}</>;
+}
+
+function PackagePointSetViewer(props: UIComponentRendererProps) {
+  return <>{renderPointSetViewer(props)}</>;
+}
+
+function PackageMatrixViewer(props: UIComponentRendererProps) {
+  return <>{renderMatrixViewer(props)}</>;
+}
+
+function PackageStructureViewer(props: UIComponentRendererProps) {
+  return <>{renderStructureViewer(props)}</>;
 }
 
 const componentRegistry: Record<string, RegistryEntry> = {
   'report-viewer': { label: 'ReportViewer', render: (props) => <PackageReportViewer {...packageRendererProps(props)} /> },
   'paper-card-list': { label: 'PaperCardList', render: (props) => <PaperCardList {...props} /> },
-  'molecule-viewer': { label: 'MoleculeViewer', render: (props) => <MoleculeSlot {...props} /> },
-  'volcano-plot': { label: 'VolcanoPlot', render: (props) => <CanvasSlot {...props} kind="volcano" /> },
-  'heatmap-viewer': { label: 'HeatmapViewer', render: (props) => <CanvasSlot {...props} kind="heatmap" /> },
-  'umap-viewer': { label: 'UmapViewer', render: (props) => <CanvasSlot {...props} kind="umap" /> },
-  'network-graph': { label: 'NetworkGraph', render: (props) => <CanvasSlot {...props} kind="network" /> },
+  'structure-viewer': { label: 'StructureViewer', render: (props) => <PackageStructureViewer {...packageRendererProps(props)} /> },
+  'molecule-viewer': { label: 'MoleculeViewer', render: (props) => <PackageStructureViewer {...packageRendererProps(props)} /> },
+  'molecule-viewer-3d': { label: 'MoleculeViewer3D', render: (props) => <PackageStructureViewer {...packageRendererProps(props)} /> },
+  'point-set-viewer': { label: 'PointSetViewer', render: (props) => <PackagePointSetViewer {...packageRendererProps(props)} /> },
+  'volcano-plot': { label: 'VolcanoPlot', render: (props) => <PackagePointSetViewer {...packageRendererProps(props)} /> },
+  'umap-viewer': { label: 'UmapViewer', render: (props) => <PackagePointSetViewer {...packageRendererProps(props)} /> },
+  'matrix-viewer': { label: 'MatrixViewer', render: (props) => <PackageMatrixViewer {...packageRendererProps(props)} /> },
+  'heatmap-viewer': { label: 'HeatmapViewer', render: (props) => <PackageMatrixViewer {...packageRendererProps(props)} /> },
+  'graph-viewer': { label: 'GraphViewer', render: (props) => <PackageGraphViewer {...packageRendererProps(props)} /> },
+  'network-graph': { label: 'NetworkGraph', render: (props) => <PackageGraphViewer {...packageRendererProps(props)} /> },
   'evidence-matrix': { label: 'EvidenceMatrix', render: ({ session }) => <EvidenceMatrix claims={session.claims} artifacts={session.artifacts} /> },
   'execution-unit-table': { label: 'ExecutionUnitTable', render: ({ session }) => <ExecutionPanel session={session} executionUnits={session.executionUnits} embedded /> },
   'notebook-timeline': { label: 'NotebookTimeline', render: ({ scenarioId, session }) => <NotebookTimeline scenarioId={scenarioId} notebook={session.notebook} /> },
-  'data-table': { label: 'DataTable', render: (props) => <PackageDataTable {...packageRendererProps(props)} /> },
+  'record-table': { label: 'RecordTable', render: (props) => <PackageRecordTable {...packageRendererProps(props)} /> },
+  'data-table': { label: 'DataTable', render: (props) => <PackageRecordTable {...packageRendererProps(props)} /> },
   'unknown-artifact-inspector': { label: 'UnknownArtifactInspector', render: (props) => <UnknownArtifactInspector {...props} /> },
 };
 
@@ -3477,7 +3196,22 @@ function resultStatusRank(status: ResolvedViewPlanItem['status']) {
 }
 
 function resultComponentRank(componentId: string) {
-  const order = ['report-viewer', 'molecule-viewer', 'evidence-matrix', 'paper-card-list', 'network-graph', 'data-table', 'execution-unit-table', 'notebook-timeline', 'unknown-artifact-inspector'];
+  const order = [
+    'report-viewer',
+    'structure-viewer',
+    'molecule-viewer',
+    'evidence-matrix',
+    'paper-card-list',
+    'graph-viewer',
+    'network-graph',
+    'point-set-viewer',
+    'matrix-viewer',
+    'record-table',
+    'data-table',
+    'execution-unit-table',
+    'notebook-timeline',
+    'unknown-artifact-inspector',
+  ];
   const index = order.indexOf(componentId);
   return index === -1 ? 99 : index;
 }

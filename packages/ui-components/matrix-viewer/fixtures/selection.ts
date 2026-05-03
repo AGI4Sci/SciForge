@@ -1,0 +1,2 @@
+import type { UIComponentRendererProps } from '@sciforge-ui/runtime-contract';
+export const selectionMatrixViewerFixture: UIComponentRendererProps = { slot: { componentId: 'matrix-viewer', props: { selectedCell: { row: 'IFIT1', column: 'IFNB' } } }, artifact: { id: 'matrix-selection', type: 'matrix', producerScenario: 'matrix-preview', schemaVersion: '0.1.0', data: { rows: ['IFIT1'], columns: ['IFNB'], matrix: [[1.5]], selectedCell: { row: 'IFIT1', column: 'IFNB' } } } };

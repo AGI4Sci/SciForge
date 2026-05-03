@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sciforge.local/schemas/ui-primitives/record-set.schema.json",
+  "title": "SciForge record-set primitive",
+  "type": "object",
+  "required": ["primitive", "rows"],
+  "properties": {
+    "primitive": { "const": "record-set" },
+    "schemaVersion": { "type": "string", "default": "0.1.0" },
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "columns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key"],
+        "properties": {
+          "key": { "type": "string" },
+          "label": { "type": "string" },
+          "type": { "type": "string" },
+          "unit": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "rows": {
+      "type": "array",
+      "items": { "type": "object", "additionalProperties": true }
+    },
+    "primaryKey": { "type": "string" },
+    "metadata": { "type": "object", "additionalProperties": true }
+  },
+  "additionalProperties": true,
+  "examples": [
+    {
+      "primitive": "record-set",
+      "schemaVersion": "0.1.0",
+      "id": "samples-demo",
+      "title": "Sample QC",
+      "columns": [
+        { "key": "sample", "label": "Sample" },
+        { "key": "group", "label": "Group" },
+        { "key": "score", "label": "QC score", "type": "number" }
+      ],
+      "primaryKey": "sample",
+      "rows": [
+        { "sample": "S001", "group": "control", "score": 0.42 },
+        { "sample": "S002", "group": "treated", "score": 0.91 }
+      ]
+    }
+  ]
+}

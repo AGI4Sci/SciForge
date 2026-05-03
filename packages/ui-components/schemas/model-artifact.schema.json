@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sciforge.local/schemas/ui-primitives/model-artifact.schema.json",
+  "title": "SciForge model-artifact primitive",
+  "type": "object",
+  "required": ["primitive", "model"],
+  "properties": {
+    "primitive": { "const": "model-artifact" },
+    "schemaVersion": { "type": "string", "default": "0.1.0" },
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "model": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "task": { "type": "string" },
+        "framework": { "type": "string" },
+        "checkpointRef": { "type": "string" },
+        "configRef": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "metrics": { "type": "object", "additionalProperties": { "type": ["number", "string", "boolean", "null"] } },
+    "inputs": { "type": "array", "items": { "type": "string" } },
+    "outputs": { "type": "array", "items": { "type": "string" } },
+    "metadata": { "type": "object", "additionalProperties": true }
+  },
+  "additionalProperties": true,
+  "examples": [
+    {
+      "primitive": "model-artifact",
+      "schemaVersion": "0.1.0",
+      "id": "classifier-demo",
+      "title": "Cell type classifier",
+      "model": {
+        "name": "celltype-xgb",
+        "version": "2026.05",
+        "task": "classification",
+        "framework": "xgboost",
+        "checkpointRef": "workspace://models/celltype-xgb.json"
+      },
+      "metrics": { "accuracy": 0.91, "macroF1": 0.88 }
+    }
+  ]
+}

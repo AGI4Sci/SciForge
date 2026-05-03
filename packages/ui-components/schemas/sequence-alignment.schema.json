@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sciforge.local/schemas/ui-primitives/sequence-alignment.schema.json",
+  "title": "SciForge sequence/alignment primitive",
+  "type": "object",
+  "required": ["primitive", "sequences"],
+  "properties": {
+    "primitive": { "const": "sequence-alignment" },
+    "schemaVersion": { "type": "string", "default": "0.1.0" },
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "alphabet": { "type": "string", "examples": ["dna", "rna", "protein"] },
+    "aligned": { "type": "boolean" },
+    "sequences": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "sequence"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "sequence": { "type": "string" },
+          "annotations": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+        },
+        "additionalProperties": true
+      }
+    },
+    "consensus": { "type": "string" },
+    "metadata": { "type": "object", "additionalProperties": true }
+  },
+  "additionalProperties": true,
+  "examples": [
+    {
+      "primitive": "sequence-alignment",
+      "schemaVersion": "0.1.0",
+      "id": "alignment-demo",
+      "title": "Protein alignment",
+      "alphabet": "protein",
+      "aligned": true,
+      "sequences": [
+        { "id": "ref", "label": "Reference", "sequence": "MKWVTF--ISLL" },
+        { "id": "variant", "label": "Variant", "sequence": "MKWVTFGGISLL" }
+      ],
+      "consensus": "MKWVTF--ISLL"
+    }
+  ]
+}

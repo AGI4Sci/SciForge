@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sciforge.local/schemas/ui-primitives/visual-annotation.schema.json",
+  "title": "SciForge visual-annotation primitive",
+  "type": "object",
+  "required": ["primitive", "annotations"],
+  "properties": {
+    "primitive": { "const": "visual-annotation" },
+    "schemaVersion": { "type": "string", "default": "0.1.0" },
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "targetPrimitive": { "type": "string" },
+    "targetId": { "type": "string" },
+    "targetPlotSpecId": { "type": "string" },
+    "annotations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind"],
+        "properties": {
+          "id": { "type": "string" },
+          "kind": {
+            "type": "string",
+            "examples": ["point", "box", "polygon", "range", "label", "arrow", "bracket", "roi", "scale-bar", "threshold-line", "callout"]
+          },
+          "label": { "type": "string" },
+          "coordinates": { "type": ["object", "array"], "additionalProperties": true },
+          "linkedDataTarget": { "type": "string" },
+          "statisticalResultRef": { "type": "string" },
+          "style": { "type": "object", "additionalProperties": true },
+          "plotlyLayoutPatch": {
+            "type": "object",
+            "description": "Patch targeting the canonical Plotly-compatible layout or annotation array.",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "editPatch": {
+      "type": "object",
+      "properties": {
+        "op": { "type": "string", "examples": ["add", "replace", "remove"] },
+        "path": { "type": "string" },
+        "value": {},
+        "sourceEvent": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "metadata": { "type": "object", "additionalProperties": true }
+  },
+  "additionalProperties": true,
+  "examples": [
+    {
+      "primitive": "visual-annotation",
+      "schemaVersion": "0.1.0",
+      "id": "annotation-demo",
+      "title": "Selected plot points",
+      "targetPrimitive": "plot-spec",
+      "targetPlotSpecId": "volcano-demo",
+      "annotations": [
+        {
+          "id": "gene1-callout",
+          "kind": "callout",
+          "label": "GENE1",
+          "coordinates": { "x": 2.1, "y": 8.2 },
+          "style": { "color": "#ef4444" },
+          "plotlyLayoutPatch": { "path": "/layout/annotations/-", "value": { "text": "GENE1", "x": 2.1, "y": 8.2, "showarrow": true } }
+        }
+      ]
+    }
+  ]
+}

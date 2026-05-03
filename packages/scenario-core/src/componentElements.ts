@@ -7,13 +7,19 @@ const componentArtifactTypes: Record<string, string[]> = uiComponentManifests.re
   return acc;
 }, {});
 
-componentArtifactTypes['molecule-viewer-3d'] = componentArtifactTypes['molecule-viewer'] ?? [];
+componentArtifactTypes['data-table'] = componentArtifactTypes['record-table'] ?? componentArtifactTypes['data-table'] ?? [];
+componentArtifactTypes['network-graph'] = componentArtifactTypes['graph-viewer'] ?? componentArtifactTypes['network-graph'] ?? [];
+componentArtifactTypes['volcano-plot'] = componentArtifactTypes['point-set-viewer'] ?? componentArtifactTypes['volcano-plot'] ?? [];
+componentArtifactTypes['umap-viewer'] = componentArtifactTypes['point-set-viewer'] ?? componentArtifactTypes['umap-viewer'] ?? [];
+componentArtifactTypes['heatmap-viewer'] = componentArtifactTypes['matrix-viewer'] ?? componentArtifactTypes['heatmap-viewer'] ?? [];
+componentArtifactTypes['molecule-viewer'] = componentArtifactTypes['structure-viewer'] ?? componentArtifactTypes['molecule-viewer'] ?? [];
+componentArtifactTypes['molecule-viewer-3d'] = componentArtifactTypes['structure-viewer'] ?? componentArtifactTypes['molecule-viewer'] ?? [];
 
 function acceptedArtifactTypesForComponent(componentId: string) {
   return componentArtifactTypes[componentId] ?? [];
 }
 
-export const uiComponentElements: UIComponentElement[] = [
+const builtInUIComponentElements: UIComponentElement[] = [
   {
     id: 'component.report-viewer',
     kind: 'ui-component',
@@ -52,17 +58,17 @@ export const uiComponentElements: UIComponentElement[] = [
     viewParams: ['filter', 'sort', 'limit', 'colorBy'],
     interactionEvents: ['select-paper', 'select-target'],
     roleDefaults: ['experimental-biologist', 'pi'],
-    fallback: 'data-table',
+    fallback: 'record-table',
   },
   {
-    id: 'component.molecule-viewer',
+    id: 'component.structure-viewer',
     kind: 'ui-component',
     version: '1.0.0',
-    label: 'Molecule viewer',
-    description: 'Render structure-summary artifacts with 3Dmol-based structure visualization.',
+    label: 'Structure viewer',
+    description: 'Render structure-summary and structure-3d artifacts with declared refs and metadata.',
     source: 'built-in',
-    componentId: 'molecule-viewer',
-    acceptsArtifactTypes: acceptedArtifactTypesForComponent('molecule-viewer'),
+    componentId: 'structure-viewer',
+    acceptsArtifactTypes: acceptedArtifactTypesForComponent('structure-viewer'),
     requiredFields: [],
     emptyState: {
       title: '等待真实 structure-summary',
@@ -75,84 +81,64 @@ export const uiComponentElements: UIComponentElement[] = [
     fallback: 'unknown-artifact-inspector',
   },
   {
-    id: 'component.volcano-plot',
+    id: 'component.point-set-viewer',
     kind: 'ui-component',
     version: '1.0.0',
-    label: 'Volcano plot',
-    description: 'Render differential-expression points as a volcano plot.',
+    label: 'Point set viewer',
+    description: 'Render differential-expression, UMAP, PCA, t-SNE, and embedding point sets.',
     source: 'built-in',
-    componentId: 'volcano-plot',
-    acceptsArtifactTypes: acceptedArtifactTypesForComponent('volcano-plot'),
+    componentId: 'point-set-viewer',
+    acceptsArtifactTypes: acceptedArtifactTypesForComponent('point-set-viewer'),
     requiredFields: ['points'],
     emptyState: {
-      title: '等待真实 volcano points',
-      detail: '火山图需要 omics-differential-expression artifact 的 points/logFC/pValue 数据；请先运行差异表达 skill。',
+      title: '等待真实 point-set',
+      detail: '点集视图需要 points、umap 或 Plotly scatter trace；请先运行差异表达或降维 skill。',
     },
-    recoverActions: ['run-skill:omics.differential_expression', 'map-fields:logFC,pValue', 'fallback-component:data-table'],
+    recoverActions: ['run-skill:omics.differential_expression', 'map-fields:logFC,pValue,x,y', 'fallback-component:record-table'],
     viewParams: ['colorBy', 'filter', 'x', 'y', 'label'],
     interactionEvents: ['select-gene'],
     roleDefaults: ['bioinformatician', 'pi'],
-    fallback: 'data-table',
+    fallback: 'record-table',
   },
   {
-    id: 'component.heatmap-viewer',
+    id: 'component.matrix-viewer',
     kind: 'ui-component',
     version: '1.0.0',
-    label: 'Heatmap viewer',
-    description: 'Render matrix payloads from omics artifacts.',
+    label: 'Matrix viewer',
+    description: 'Render numeric matrix, heatmap, similarity, attention, and confusion-matrix payloads.',
     source: 'built-in',
-    componentId: 'heatmap-viewer',
-    acceptsArtifactTypes: acceptedArtifactTypesForComponent('heatmap-viewer'),
+    componentId: 'matrix-viewer',
+    acceptsArtifactTypes: acceptedArtifactTypesForComponent('matrix-viewer'),
     requiredFields: ['heatmap'],
     emptyState: {
       title: '等待真实 heatmap matrix',
       detail: '热图需要 heatmap.matrix 或 matrix 字段；当前 artifact 不满足矩阵视图输入契约。',
     },
-    recoverActions: ['run-skill:omics.differential_expression', 'add-field:heatmap.matrix', 'fallback-component:data-table'],
+    recoverActions: ['run-skill:omics.differential_expression', 'add-field:heatmap.matrix', 'fallback-component:record-table'],
     viewParams: ['colorBy', 'splitBy', 'facetBy'],
     interactionEvents: ['select-gene-set'],
     roleDefaults: ['bioinformatician'],
-    fallback: 'data-table',
+    fallback: 'record-table',
   },
   {
-    id: 'component.umap-viewer',
+    id: 'component.graph-viewer',
     kind: 'ui-component',
     version: '1.0.0',
-    label: 'UMAP viewer',
-    description: 'Render embedding coordinates from omics artifacts.',
+    label: 'Graph viewer',
+    description: 'Render generic graph nodes and edges, including knowledge graphs and pathways.',
     source: 'built-in',
-    componentId: 'umap-viewer',
-    acceptsArtifactTypes: acceptedArtifactTypesForComponent('umap-viewer'),
-    requiredFields: ['umap'],
-    emptyState: {
-      title: '等待真实 UMAP coordinates',
-      detail: 'UMAP 视图需要 umap/points 中的 x/y 或 umap1/umap2 坐标；缺失时不会用 seed 图补位。',
-    },
-    recoverActions: ['run-skill:omics.differential_expression', 'add-field:umap', 'fallback-component:data-table'],
-    viewParams: ['colorBy', 'splitBy', 'highlightSelection'],
-    interactionEvents: ['select-cluster'],
-    roleDefaults: ['bioinformatician', 'experimental-biologist'],
-    fallback: 'data-table',
-  },
-  {
-    id: 'component.network-graph',
-    kind: 'ui-component',
-    version: '1.0.0',
-    label: 'Network graph',
-    description: 'Render knowledge graph nodes and edges.',
-    source: 'built-in',
-    componentId: 'network-graph',
-    acceptsArtifactTypes: acceptedArtifactTypesForComponent('network-graph'),
+    componentId: 'graph-viewer',
+    acceptsArtifactTypes: acceptedArtifactTypesForComponent('graph-viewer'),
     requiredFields: ['nodes', 'edges'],
     emptyState: {
       title: '等待真实 knowledge graph',
       detail: '网络图需要 knowledge-graph artifact 的 nodes/edges；请运行知识图谱 skill 或导入匹配 artifact。',
     },
-    recoverActions: ['run-skill:knowledge.uniprot_chembl_lookup', 'add-fields:nodes,edges', 'fallback-component:data-table'],
+    recoverActions: ['run-skill:knowledge.uniprot_chembl_lookup', 'add-fields:nodes,edges', 'fallback-component:record-table'],
     viewParams: ['colorBy', 'filter', 'highlightSelection'],
     interactionEvents: ['select-node', 'select-edge'],
     roleDefaults: ['experimental-biologist', 'pi'],
-    fallback: 'data-table',
+    fallback: 'record-table',
   },
   {
     id: 'component.evidence-matrix',
@@ -215,14 +201,14 @@ export const uiComponentElements: UIComponentElement[] = [
     fallback: 'unknown-artifact-inspector',
   },
   {
-    id: 'component.data-table',
+    id: 'component.record-table',
     kind: 'ui-component',
     version: '1.0.0',
-    label: 'Data table',
-    description: 'Generic tabular artifact renderer.',
+    label: 'Record table',
+    description: 'Generic row and record artifact renderer.',
     source: 'built-in',
-    componentId: 'data-table',
-    acceptsArtifactTypes: acceptedArtifactTypesForComponent('data-table'),
+    componentId: 'record-table',
+    acceptsArtifactTypes: acceptedArtifactTypesForComponent('record-table'),
     requiredFields: [],
     emptyState: {
       title: '等待可表格化 artifact rows',
@@ -255,3 +241,43 @@ export const uiComponentElements: UIComponentElement[] = [
     fallback: 'unknown-artifact-inspector',
   },
 ];
+
+const builtInComponentIds = new Set(builtInUIComponentElements.map((component) => component.componentId));
+const componentIdByModuleId = new Map(uiComponentManifests.map((manifest) => [manifest.moduleId, manifest.componentId]));
+
+const manifestBackedComponentElements: UIComponentElement[] = uiComponentManifests
+  .filter((manifest) => !builtInComponentIds.has(manifest.componentId))
+  .map((manifest) => ({
+    id: `component.${manifest.componentId}`,
+    kind: 'ui-component',
+    version: manifest.version,
+    label: manifest.title,
+    description: manifest.description,
+    source: 'package',
+    componentId: manifest.componentId,
+    acceptsArtifactTypes: acceptedArtifactTypesForComponent(manifest.componentId),
+    requiredFields: manifest.requiredFields ?? [],
+    emptyState: {
+      title: `等待 ${manifest.acceptsArtifactTypes[0] ?? 'runtime artifact'}`,
+      detail: `${manifest.title} 是 T080 manifest skeleton；需要匹配 ${manifest.acceptsArtifactTypes.join('/')} artifact，当前阶段不加载重型 renderer。`,
+    },
+    recoverActions: [
+      'run-current-scenario',
+      `inspect-artifact-schema:${manifest.acceptsArtifactTypes[0] ?? 'runtime-artifact'}`,
+      `fallback-component:${fallbackComponentIdForManifest(manifest.fallbackModuleIds?.[0])}`,
+    ],
+    viewParams: manifest.viewParams ?? [],
+    interactionEvents: manifest.interactionEvents ?? [],
+    roleDefaults: manifest.roleDefaults ?? [],
+    fallback: fallbackComponentIdForManifest(manifest.fallbackModuleIds?.[0]),
+  }));
+
+export const uiComponentElements: UIComponentElement[] = [
+  ...builtInUIComponentElements,
+  ...manifestBackedComponentElements,
+];
+
+function fallbackComponentIdForManifest(fallbackModuleId?: string) {
+  if (!fallbackModuleId) return 'unknown-artifact-inspector';
+  return componentIdByModuleId.get(fallbackModuleId) ?? fallbackModuleId;
+}

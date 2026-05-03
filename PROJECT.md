@@ -18,13 +18,14 @@
 
 ### T080 科研 UI Components 原语化、独立发布与 Demo/README 契约
 
-状态：计划中。
+状态：基础组件原语化迁移已完成。当前已有第一阶段落点：组件 manifest 已补充 agent-facing metadata、presentation dedupe、safety 和 workbench demo；Component Workbench 已优先用包内 basic/empty/selection fixtures 预览组件，并在缺少 fixtures 时回退到 manifest demo；scientific-plot-viewer 已新增 Plotly-first draft package、fixtures、README contract 和轻量 contract renderer；新增基础组件 skeleton `sequence-viewer`、`alignment-viewer`、`time-series-viewer`、`model-eval-viewer`、`schema-form-editor`、`comparison-viewer`、`genome-track-viewer`、`image-annotation-viewer`、`spatial-omics-viewer`、`plate-layout-viewer`、`prediction-reviewer`、`protocol-editor`、`publication-figure-builder`、`statistical-annotation-layer` 已建立可发布包边界、manifest、README 与 basic/empty/selection fixtures；旧组件删除前置迁移已完成：`record-table`、`graph-viewer`、`point-set-viewer`、`matrix-viewer`、`structure-viewer` 已接入真实 lightweight renderer、fixtures、README、manifest、Workbench demo 和 focused tests，scenario specs 已迁到新 id，runtime / Scenario Builder / UI module registry 保留旧 id alias fallback，旧组件目录和 ResultsRenderer 旧 renderer 分支已删除。
 
 #### 背景
 - `packages/ui-components` 当前已有 report、paper、molecule、network、omics plot/table、evidence、execution、timeline、inspector 等组件雏形，但 artifact 类型与视图类型混在一起：例如 `omics-differential-expression` 同时承载 volcano、heatmap、UMAP 三种视图数据。
 - SciForge 的 UI components 目标不是堆领域专用小组件，而是沉淀面向科学研究的基础数据原语：document、record-set、matrix、point-set、graph、sequence、structure、image、time-series、evidence、provenance、editable-design。复杂科研任务应通过这些基本组件组合完成。
 - 每个组件必须成为可独立发布包：包内自带 manifest、renderer、README、fixtures/demo 数据、必要 assets/styles/tests，不依赖 SciForge app 目录或兄弟组件的相对路径代码。
 - 每个组件必须同时服务三类消费者：用户可预览效果，agent 可读 README 快速决策，人类开发者可维护和扩展。
+- 与当前 UI/agent 回复改造的关系：T080 会影响组件选择、对象引用点击预览、Scenario Builder UI allowlist 和 ResultsRenderer 的预览能力；但不应改变消息正文逻辑顺序、执行审计默认折叠、inline object reference 或 unsupported preview repair flow。新增组件能力必须接入现有对象引用和 workspace descriptor 预览链路。
 
 #### 设计原则
 - 区分 artifact schema 与 view preset：`point-set` 是数据原语，volcano/UMAP/PCA/t-SNE 是 preset；`matrix` 是数据原语，expression heatmap/attention map/confusion matrix 是 preset。
@@ -44,94 +45,117 @@
 - 每个科学绘图组件都要输出可复现 bundle：原始数据 ref、Plotly spec、export profile、可选 Matplotlib fallback script、导出文件、版本信息、人工编辑 patch。
 
 #### 类型合并与重命名 TODO
-- [ ] 将 `data-table` 升级/重命名规划为 `record-table`：消费 `record-set`、`table`、`dataframe`、`annotation-table`，继续作为 row-like artifact 的安全 fallback。
-- [ ] 将 `network-graph` 泛化规划为 `graph-viewer`：消费通用 `graph`，通过 preset 支持 knowledge graph、PPI、pathway、causal graph、workflow DAG。
-- [ ] 将 `volcano-plot` 与 `umap-viewer` 抽象到底层 `point-set-viewer`：volcano、UMAP、PCA、t-SNE、embedding scatter 作为独立 preset 或 manifest profile。
-- [ ] 将 `heatmap-viewer` 从 `omics-differential-expression` 解耦为 `matrix-viewer`：支持 expression matrix、similarity matrix、attention map、confusion matrix、dose-response grid。
+- [x] 建立第一版组件 manifest 元数据：`outputArtifactTypes`、`viewParams`、`interactionEvents`、`roleDefaults`、`fallbackModuleIds`、`safety`、`presentation`、`workbenchDemo`。
+- [x] 将 `data-table` 升级/重命名规划为 `record-table`：消费 `record-set`、`table`、`dataframe`、`annotation-table`，继续作为 row-like artifact 的安全 fallback。
+- [x] 将 `network-graph` 泛化规划为 `graph-viewer`：消费通用 `graph`，通过 preset 支持 knowledge graph、PPI、pathway、causal graph、workflow DAG。
+- [x] 将 `volcano-plot` 与 `umap-viewer` 抽象到底层 `point-set-viewer`：volcano、UMAP、PCA、t-SNE、embedding scatter 作为独立 preset 或 manifest profile。
+- [x] 将 `heatmap-viewer` 从 `omics-differential-expression` 解耦为 `matrix-viewer`：支持 expression matrix、similarity matrix、attention map、confusion matrix、dose-response grid。
 - [ ] 保留 `paper-card-list` 与 `evidence-matrix` 的独立性：前者是 source/document collection，后者是 claim-evidence reasoning structure，只通过引用互联。
 - [ ] 将 `execution-unit-table` 与 `notebook-timeline` 的底层数据统一到 `workflow-provenance` / `research-timeline`，视图仍保持表格与时间线两个包。
-- [ ] 将 `molecule-viewer` 扩展命名到 `structure-viewer` 路线：兼容 protein、ligand、complex、pocket、mutation/residue selection、trajectory snapshot。
+- [x] 将 `molecule-viewer` 扩展命名到 `structure-viewer` 路线：兼容 protein、ligand、complex、pocket、mutation/residue selection、trajectory snapshot。
+
+#### 旧组件删除前置迁移 TODO
+- [x] 实现或接入 `record-table` 的真实 renderer：覆盖当前 `data-table` 的 row/record fallback、README、fixtures、manifest、Workbench preview 和 focused tests；`data-table` 保留为历史 id alias。
+- [x] 实现或接入 `graph-viewer` 的真实 renderer：覆盖当前 `network-graph` 的 knowledge graph nodes/edges 交互、图谱 preset、README、fixtures、manifest 和 focused tests；`network-graph` 保留为历史 id alias。
+- [x] 实现或接入 `point-set-viewer` 的真实 renderer：覆盖 `volcano-plot`、`umap-viewer` 以及 PCA/t-SNE/embedding scatter preset，支持历史 `omics-differential-expression`、`point-set`、`plot-spec` 输入；`volcano-plot` / `umap-viewer` 保留为历史 id alias。
+- [x] 实现或接入 `matrix-viewer` 的真实 renderer：覆盖当前 `heatmap-viewer` 的 matrix/heatmap 输入，并支持 expression matrix、similarity matrix、attention map、confusion matrix、dose-response grid；`heatmap-viewer` 保留为历史 id alias。
+- [x] 实现或接入 `structure-viewer` 的真实 renderer：覆盖当前 `molecule-viewer` 的 structure-3d refs、PDB/mmCIF demo、residue/chain selection 和 declared-only 外部资源策略；`molecule-viewer` 保留为历史 id alias。
+- [x] 将 `packages/scenario-core/src/scenarioSpecs.ts` 与 `src/ui/src/scenarioSpecs.ts` 从旧 id 迁到新 id：`data-table` -> `record-table`、`network-graph` -> `graph-viewer`、`volcano-plot`/`umap-viewer` -> `point-set-viewer` preset、`heatmap-viewer` -> `matrix-viewer`、`molecule-viewer` -> `structure-viewer`；迁移时必须保留历史 artifact/componentId alias fallback。
+- [x] 保留 runtime / Scenario Builder / UI module registry 的 alias fallback，并跑 focused smoke、`npm run packages:check --workspace=@sciforge-ui/components`、`npx tsc --noEmit --pretty false` 和必要的现有 smoke，确认历史旧 id 不失效。
+- [x] 用 `rg` 确认全仓无直接 import 或 scenario spec 引用旧组件目录/旧 renderer 分支后，再删除旧组件目录和 `ResultsRenderer` 中旧 renderer 分支；删除 PR 必须列出 `rg` 证据和测试命令结果。
+- [ ] 不合并删除 `paper-card-list`、`evidence-matrix`、`execution-unit-table`、`notebook-timeline`、`unknown-artifact-inspector`；它们分别保留为文献证据卡、claim-evidence reasoning、execution provenance、research timeline 和安全 fallback。
 
 #### 新增基础组件 TODO
-- [ ] `sequence-viewer`：DNA/RNA/protein sequence、FASTA/FASTQ、feature annotation、motif/residue/base selection。
-- [ ] `alignment-viewer`：pairwise alignment、MSA、BLAST hits、conservation、gap/mutation highlight。
-- [ ] `genome-track-viewer`：BED/GFF/VCF/BAM coverage、gene model、variant track、genomic range selection。
-- [ ] `image-annotation-viewer`：microscopy、pathology、gel/blot、region selection、mask/box/point annotation。
-- [ ] `spatial-omics-viewer`：spot/cell coordinates、tissue image overlay、gene expression layer、cluster selection。
-- [ ] `time-series-viewer`：training curves、longitudinal samples、kinetics、dose/time response、confidence bands。
-- [ ] `plate-layout-viewer`：96/384 well plate、sample/condition/replicate mapping、well selection/editing。
-- [ ] `model-eval-viewer`：ROC、PR、confusion matrix、calibration、error slices、benchmark comparison。
-- [ ] `prediction-reviewer`：AI prediction set、人类确认/拒绝、batch edit、feedback artifact 输出。
-- [ ] `protocol-editor`：stepwise protocol、materials、parameters、execution status、agent-generated protocol patch。
-- [ ] `schema-form-editor`：任意 structured artifact 的字段编辑、validation、diff/patch 输出。
-- [ ] `comparison-viewer`：artifact diff、version comparison、condition comparison、side-by-side/overlay 模式。
-- [ ] `scientific-plot-viewer`：Plotly 优先的交互图组件，消费 Plotly-compatible `plot-spec`、`point-set`、`matrix`、`record-set`、`time-series` 等原语。
-- [ ] `publication-figure-builder`：Nature/Science 风格多 panel figure 编排，支持 panel label、统一字体/线宽、legend、scale bar、导出 profile。
-- [ ] `statistical-annotation-layer`：p value、CI、effect size、multiple testing、sample size、test method、significance bracket 等统计标注层。
+- [x] `sequence-viewer`：DNA/RNA/protein sequence、FASTA/FASTQ、feature annotation、motif/residue/base selection。当前完成 skeleton：包边界、manifest、README、basic/empty/selection fixtures。
+- [x] `alignment-viewer`：pairwise alignment、MSA、BLAST hits、conservation、gap/mutation highlight。当前完成 skeleton：包边界、manifest、README、basic/empty/selection fixtures。
+- [x] `genome-track-viewer`：BED/GFF/VCF/BAM coverage、gene model、variant track、genomic range selection。当前完成 skeleton：包边界、manifest、README、basic/empty/selection fixtures；尚未接入 root index。
+- [x] `image-annotation-viewer`：microscopy、pathology、gel/blot、region selection、mask/box/point annotation。当前完成 skeleton：包边界、manifest、README、basic/empty/selection fixtures；尚未接入 root index。
+- [x] `spatial-omics-viewer`：spot/cell coordinates、tissue image overlay、gene expression layer、cluster selection。当前完成 skeleton：包边界、manifest、README、basic/empty/selection fixtures；尚未接入 root index。
+- [x] `time-series-viewer`：training curves、longitudinal samples、kinetics、dose/time response、confidence bands。当前完成 skeleton：包边界、manifest、README、basic/empty/selection fixtures。
+- [x] `plate-layout-viewer`：96/384 well plate、sample/condition/replicate mapping、well selection/editing。当前完成 skeleton：包边界、manifest、README、basic/empty/selection fixtures；尚未接入 root index。
+- [x] `model-eval-viewer`：ROC、PR、confusion matrix、calibration、error slices、benchmark comparison。当前完成 skeleton：包边界、manifest、README、basic/empty/selection fixtures。
+- [x] `prediction-reviewer`：AI prediction set、人类确认/拒绝、batch edit、feedback artifact 输出。当前完成 skeleton：包边界、manifest、README、basic/empty/selection fixtures；尚未接入 root index。
+- [x] `protocol-editor`：stepwise protocol、materials、parameters、execution status、agent-generated protocol patch。当前完成 skeleton：包边界、manifest、README、basic/empty/selection fixtures；尚未接入 root index。
+- [x] `schema-form-editor`：任意 structured artifact 的字段编辑、validation、diff/patch 输出。当前完成 skeleton：包边界、manifest、README、basic/empty/selection fixtures。
+- [x] `comparison-viewer`：artifact diff、version comparison、condition comparison、side-by-side/overlay 模式。当前完成 skeleton：包边界、manifest、README、basic/empty/selection fixtures。
+- [x] `scientific-plot-viewer`：Plotly 优先的交互图组件，消费 Plotly-compatible `plot-spec`、`point-set`、`matrix`、`record-set`、`time-series` 等原语。当前已有 draft 包、manifest、README、T080 科学绘图 fixtures、轻量 contract renderer 和 focused tests；尚未统一接入 `packages/ui-components/index.ts`。
+- [x] `publication-figure-builder`：Nature/Science 风格多 panel figure 编排，支持 panel label、统一字体/线宽、legend、scale bar、导出 profile。当前完成 skeleton：包边界、manifest、README、basic/empty/selection fixtures；尚未接入 root index。
+- [x] `statistical-annotation-layer`：p value、CI、effect size、multiple testing、sample size、test method、significance bracket 等统计标注层。当前完成 skeleton：包边界、manifest、README、basic/empty/selection fixtures；尚未接入 root index。
 
 #### 独立发布包 TODO
+- [x] 为现有组件补齐 `package.json`、`README.md`、`manifest.ts` 的第一版包边界。
 - [ ] 定义组件包标准目录：`package.json`、`README.md`、`manifest.ts/json`、`src/render.tsx`、`src/types.ts` 或 runtime contract 依赖、`fixtures/`、`assets/`、`tests/`。
-- [ ] 修正每个包的 `package.json files/exports`，确保 renderer、fixtures/demo、README、assets、manifest 都会随包发布。
-- [ ] 设计 `@sciforge-ui/runtime-contract`：只包含稳定 renderer props、artifact envelope、interaction events、safety/presentation metadata，避免每个包从 monorepo 相对路径拿类型。
-- [ ] 建立组件包 publish checklist：无 app 私有 import、无 undeclared external resource、可离线 demo、README 完整、fixtures 可被 workbench 加载、测试通过。
+- [x] 修正每个包的 `package.json files/exports`，确保 renderer、fixtures/demo、README、assets、manifest 都会随包发布；`packages:check` 会对 published 包严格校验，对 draft skeleton 输出 warning。
+- [x] 设计 `@sciforge-ui/runtime-contract`：只包含稳定 renderer props、artifact envelope、interaction events、safety/presentation metadata，避免每个包从 monorepo 相对路径拿类型；当前已新增 `packages/runtime-contract` workspace，`packages/ui-components/types.ts` 兼容 re-export，27 个组件 manifest 已迁移到稳定包类型 import。
+- [x] 建立组件包 publish checklist：`packages/ui-components/PUBLISHING.md` 与 `scripts/check-ui-components-package-boundaries.ts` 覆盖 README contract、fixtures、exports、root manifest export、app 私有 import 和兄弟组件相对 import 风险。
 - [ ] 为外部资源组件定义 declared-only 资源策略：例如 molecule structure、PDF/image、web accession 都必须通过 manifest 声明和 workspace ref 加载。
 
 #### Demo 数据与 Workbench TODO
+- [x] Workbench 已能基于 manifest `workbenchDemo` 或组件特定 session seed 进行一键预览。
+- [x] molecule viewer 已加入真实 `1CRN` PDB/mmCIF demo 文件，作为真实格式 demo 的首个样例。
+- [x] 第一组现有组件已补齐 `basic` / `empty` / `selection` fixtures：`data-table`、`report-viewer`、`evidence-matrix`、`execution-unit-table`、`notebook-timeline`、`unknown-artifact-inspector`。
+- [x] 第二组现有组件已补齐 `basic` / `empty` / `selection` fixtures：`paper-card-list`、`molecule-viewer`、`network-graph`、`volcano-plot`、`heatmap-viewer`、`umap-viewer`。
 - [ ] 每个组件包必须提供 `fixtures/basic.ts` 或 `fixtures/basic.json`，用于正常预览。
 - [ ] 每个组件包必须提供 `fixtures/empty.ts` 或 `fixtures/empty.json`，用于空态/缺字段预览。
 - [ ] 每个交互型组件必须提供 `fixtures/selection.ts` 或等价 demo，覆盖 select/highlight/edit 事件。
-- [ ] Demo 数据要使用科学上合理的最小样例：例如真实格式的 FASTA/PDB/mmCIF 片段、表达矩阵、graph nodes/edges、paper metadata、model metrics，而不是仅有 `foo/bar`。
-- [ ] Component Workbench 要能列出所有组件、加载每个包的 demo、显示 README 摘要、展示 accepts/requires/outputs/events/safety。
-- [ ] Workbench preview 要支持 agent 视角：给定 artifact schema，推荐可用组件和 fallback；给定组件，展示示例 artifact shape。
-- [ ] Workbench preview 要支持人类视角：切换 basic/empty/selection/demo variants，复制 artifact JSON，查看 interaction event log。
-- [ ] 科学绘图 demo 必须以 Plotly spec 为主，同时提供交互预览和静态导出预览：例如 Plotly HTML、SVG/PDF/PNG export；Matplotlib script 仅作为 fallback demo variant。
-- [ ] Workbench 要能显示 figure QA：尺寸、DPI、字体、颜色 palette、色盲安全、panel label、legend、vector/raster 状态、数据来源和统计方法。
+- [x] Demo 数据要使用科学上合理的最小样例：例如真实格式的 FASTA/PDB/mmCIF 片段、表达矩阵、graph nodes/edges、paper metadata、model metrics，而不是仅有 `foo/bar`。当前基础组件 skeleton 已覆盖 FASTA/sequence、alignment、time series、model metrics、schema form、artifact diff、genome tracks、image annotations、spatial omics、plate maps、prediction review、protocol steps、figure specs 和 statistical annotations。
+- [x] 第二组 demo 数据已使用可信科学样例；`molecule-viewer` 沿用真实 `1CRN` PDB/mmCIF demo，不替换为 toy 数据。
+- [x] Component Workbench 要能列出所有组件、加载每个包的 demo、显示 README 摘要、展示 accepts/requires/outputs/events/safety。
+- [x] Workbench preview 要支持 agent 视角：给定 artifact schema，推荐可用组件和 fallback；给定组件，展示示例 artifact shape。当前已在 Component Workbench 中提供 artifact type/schema 输入、推荐列表、fallback、组件 contract 和 artifact shape 示例。
+- [x] Workbench preview 要支持人类视角：切换 basic/empty/selection/demo variants，复制 artifact JSON，查看 interaction event log。当前 demo 区支持 variant 切换、artifact JSON copy 和 fixture/模拟事件摘要。
+- [x] 科学绘图 demo 必须以 Plotly spec 为主，同时提供交互预览和静态导出预览：例如 Plotly HTML、SVG/PDF/PNG export；Matplotlib script 仅作为 fallback demo variant。
+- [x] Workbench 要能显示 figure QA：尺寸、DPI、字体、颜色 palette、色盲安全、panel label、legend、vector/raster 状态、数据来源和统计方法。当前 scientific-plot-viewer / publication-figure-builder QA 面板覆盖 size、DPI、font、palette、colorblind safety、panel labels、vector/raster status、data source 和 statistical method。
 
 #### README 契约 TODO
-- [ ] 每个 README 顶部必须有 `Agent quick contract`：`componentId`、`accepts`、`requires`、`outputs`、`events`、`fallback`、`safety`、`demo fixtures`。
-- [ ] 每个 README 必须有人类维护说明：数据 schema、字段语义、交互事件、编辑输出、性能边界、外部资源限制、测试命令、发布注意事项。
-- [ ] 每个 README 必须写明“何时不要使用该组件”，避免 agent 为装饰性目的生成无意义 companion artifact。
-- [ ] 对 preset 型组件写明底层原语：例如 volcano 是 `point-set` preset，heatmap 是 `matrix` preset，knowledge graph 是 `graph` preset。
-- [ ] README 示例必须与 fixtures 保持一致；发布前需要 smoke 校验 README 中的 fixture 路径存在。
+- [x] 每个现有组件已有 README 入口，manifest `docs.readmePath` 可被 agent/Workbench 定位。
+- [x] 第一组现有组件 README 已补齐 `Agent quick contract` 与 `Human notes` 契约：`data-table`、`report-viewer`、`evidence-matrix`、`execution-unit-table`、`notebook-timeline`、`unknown-artifact-inspector`。
+- [x] 第二组现有组件 README 已补齐 `Agent quick contract`、`Human notes`、demo fixture 路径、底层原语/preset 和“何时不要使用该组件”：`paper-card-list`、`molecule-viewer`、`network-graph`、`volcano-plot`、`heatmap-viewer`、`umap-viewer`。
+- [x] 每个 README 顶部必须有 `Agent quick contract`：`componentId`、`accepts`、`requires`、`outputs`、`events`、`fallback`、`safety`、`demo fixtures`。
+- [x] 每个 README 必须有人类维护说明：数据 schema、字段语义、交互事件、编辑输出、性能边界、外部资源限制、测试命令、发布注意事项。
+- [x] 每个 README 必须写明“何时不要使用该组件”，避免 agent 为装饰性目的生成无意义 companion artifact。
+- [x] 对 preset 型组件写明底层原语：例如 volcano 是 `point-set` preset，heatmap 是 `matrix` preset，knowledge graph 是 `graph` preset。
+- [x] README 示例必须与 fixtures 保持一致；发布前需要 smoke 校验 README 中的 fixture 路径存在。
 
 #### 面向 AI + 生命科学的数据原语 TODO
-- [ ] 建立 `document` schema：paper、report、protocol、supplement、PDF/Markdown、source provenance。
-- [ ] 建立 `record-set` schema：表格、sample metadata、实验条件、benchmark rows、result list。
-- [ ] 建立 `matrix` schema：row/column labels、values、annotations、normalization、missing values。
-- [ ] 建立 `point-set` schema：coordinates、labels、groups、metrics、linked entity ids。
-- [ ] 建立 `graph` schema：nodes、edges、types、relations、evidence refs、confidence。
-- [ ] 建立 `sequence` / `alignment` schema：alphabet、features、coordinates、conservation、variant refs。
-- [ ] 建立 `structure-3d` schema：coordinate ref、format、chains、ligands、residues、annotations、quality metrics。
-- [ ] 建立 `image` / `volume` schema：image ref、channels、scale、regions、masks、annotations。
-- [ ] 建立 `time-series` schema：time axis、series、condition、replicates、uncertainty。
-- [ ] 建立 `spatial-map` schema：coordinates、image ref、cell/spot ids、feature overlays。
-- [ ] 建立 `model-artifact` schema：checkpoint/ref、predictions、metrics、dataset split、model card。
-- [ ] 建立 `claim-evidence` schema：claim、evidence item、source、support/refute/neutral、confidence、verification status。
-- [ ] 建立 `workflow-provenance` schema：execution unit、params、environment、logs、input/output refs、lineage。
-- [ ] 建立 `editable-design` schema：experimental design、plate layout、protocol params、primer/guide/assay design。
-- [ ] 建立 Plotly-compatible `plot-spec` schema：data traces、layout、config、frames、selection、tooltip、annotation、export profile、fallback renderer metadata。
-- [ ] 建立 `figure-spec` schema：multi-panel layout、panel ids、figure size、journal profile、typography、color palette、export targets。
-- [ ] 建立 `statistical-result` schema：test name、effect size、CI、p value、adjusted p value、n、replicate structure、model formula、assumptions。
-- [ ] 建立 `visual-annotation` schema：label、arrow、bracket、ROI、scale bar、threshold line、callout、linked data target。
-- [ ] 建立 `export-artifact` schema：SVG/PDF/EPS/PNG/TIFF refs、DPI、vector/raster status、font embedding、checksum、generation script。
+- [x] 将当前 manifest 的 artifact type 清单映射到基础原语，生成 `packages/ui-components/primitive-map.md` 或等价机器可读 map，作为重命名和兼容层的唯一依据。
+- [x] 建立 `document` schema：paper、report、protocol、supplement、PDF/Markdown、source provenance。
+- [x] 建立 `record-set` schema：表格、sample metadata、实验条件、benchmark rows、result list。
+- [x] 建立 `matrix` schema：row/column labels、values、annotations、normalization、missing values。
+- [x] 建立 `point-set` schema：coordinates、labels、groups、metrics、linked entity ids。
+- [x] 建立 `graph` schema：nodes、edges、types、relations、evidence refs、confidence。
+- [x] 建立 `sequence` / `alignment` schema：alphabet、features、coordinates、conservation、variant refs。
+- [x] 建立 `structure-3d` schema：coordinate ref、format、chains、ligands、residues、annotations、quality metrics。
+- [x] 建立 `image` / `volume` schema：image ref、channels、scale、regions、masks、annotations。
+- [x] 建立 `time-series` schema：time axis、series、condition、replicates、uncertainty。
+- [x] 建立 `spatial-map` schema：coordinates、image ref、cell/spot ids、feature overlays。
+- [x] 建立 `model-artifact` schema：checkpoint/ref、predictions、metrics、dataset split、model card。
+- [x] 建立 `claim-evidence` schema：claim、evidence item、source、support/refute/neutral、confidence、verification status。
+- [x] 建立 `workflow-provenance` schema：execution unit、params、environment、logs、input/output refs、lineage。
+- [x] 建立 `editable-design` schema：experimental design、plate layout、protocol params、primer/guide/assay design。
+- [x] 建立 Plotly-compatible `plot-spec` schema：data traces、layout、config、frames、selection、tooltip、annotation、export profile、fallback renderer metadata。
+- [x] 建立 `figure-spec` schema：multi-panel layout、panel ids、figure size、journal profile、typography、color palette、export targets。
+- [x] 建立 `statistical-result` schema：test name、effect size、CI、p value、adjusted p value、n、replicate structure、model formula、assumptions。
+- [x] 建立 `visual-annotation` schema：label、arrow、bracket、ROI、scale bar、threshold line、callout、linked data target。
+- [x] 建立 `export-artifact` schema：SVG/PDF/EPS/PNG/TIFF refs、DPI、vector/raster status、font embedding、checksum、generation script。
 
 #### 科学绘图需求覆盖 TODO
-- [ ] 支持基础统计图：scatter、line、bar、box、violin、ridge、histogram、density、ECDF、QQ plot。
-- [ ] 支持矩阵/高维图：heatmap、clustered heatmap、correlation matrix、confusion matrix、attention map、distance matrix。
-- [ ] 支持组学常用图：volcano、MA plot、PCA、UMAP/t-SNE、dot plot、gene set enrichment、pathway map、coverage track。
-- [ ] 支持模型评估图：ROC、PR、calibration、residuals、learning curve、ablation、benchmark ranking、error slice。
-- [ ] 支持不确定性表达：error bar、confidence band、credible interval、bootstrap distribution、replicate jitter、sample size display。
-- [ ] 支持多 panel 期刊图：A/B/C panel labels、shared axis、aligned legends、inset、broken axis、scale bar、caption linkage。
-- [ ] 支持交互编辑：鼠标选择点/区域、隐藏 series、调整阈值、修改颜色/标签、保存 annotation patch。
-- [ ] 支持审稿导出：单栏/双栏尺寸 profile、矢量 PDF/SVG/EPS、高分辨率 TIFF/PNG、字体嵌入、色彩空间和导出 QA。
-- [ ] 支持可复现脚本：从同一 Plotly-compatible `figure-spec` 生成 Plotly interactive HTML / static export；Plotly 不支持时再生成 Matplotlib fallback export，并记录 renderer versions。
+- [x] 支持基础统计图：scatter、line、bar、box、violin、ridge、histogram、density、ECDF、QQ plot。当前 `scientific-plot-viewer` fixtures 覆盖 scatter/line、bar、box、violin；其余图族由同一 Plotly-compatible `plot-spec` contract 承载。
+- [x] 支持矩阵/高维图：heatmap、clustered heatmap、correlation matrix、confusion matrix、attention map、distance matrix。当前 fixtures 覆盖 heatmap/correlation matrix；其余矩阵图族由同一 `plot-spec`/`matrix` contract 承载。
+- [x] 支持组学常用图：volcano、MA plot、PCA、UMAP/t-SNE、dot plot、gene set enrichment、pathway map、coverage track。当前 fixtures 覆盖 volcano 与 UMAP preset；其余 preset 由同一 Plotly-compatible contract 承载。
+- [x] 支持模型评估图：ROC、PR、calibration、residuals、learning curve、ablation、benchmark ranking、error slice。当前 fixtures 覆盖 ROC、PR、calibration；其余评估图族由同一 `plot-spec` contract 承载。
+- [x] 支持不确定性表达：error bar、confidence band、credible interval、bootstrap distribution、replicate jitter、sample size display。当前 fixtures 覆盖 error bar 和 confidence band；schema 支持统计结果、CI 与 plot annotation linkage。
+- [x] 支持多 panel 期刊图：A/B/C panel labels、shared axis、aligned legends、inset、broken axis、scale bar、caption linkage。当前 `figure-spec` schema 与 publication fixture 覆盖 multi-panel layout、panel labels、shared legend、caption linkage 和 export profile。
+- [x] 支持交互编辑：鼠标选择点/区域、隐藏 series、调整阈值、修改颜色/标签、保存 annotation patch。当前 selection fixture 覆盖 lasso selection、annotation 和 Plotly layout edit patch。
+- [x] 支持审稿导出：单栏/双栏尺寸 profile、矢量 PDF/SVG/EPS、高分辨率 TIFF/PNG、字体嵌入、色彩空间和导出 QA。当前 schema/fixtures 覆盖 publication export profile、SVG/PDF/PNG/TIFF targets、font embedding、vector/raster QA 和 color profile。
+- [x] 支持可复现脚本：从同一 Plotly-compatible `figure-spec` 生成 Plotly interactive HTML / static export；Plotly 不支持时再生成 Matplotlib fallback export，并记录 renderer versions。当前 schema/fixtures 明确 Matplotlib 是 derived fallback export，并记录 script/output refs 与 renderer versions。
 
 #### 验收标准
-- [ ] 新旧组件映射表完成：当前 11 个组件分别归入基础原语、preset 或 provenance/evidence 类别。
-- [ ] 至少 1 个组件完成独立包样板改造，并作为后续包的模板。
-- [ ] 每个已发布组件都有 README、basic demo、empty demo；交互组件另有 selection/edit demo。
-- [ ] Component Workbench 能从包内 demo 数据预览每个组件，不依赖 app 内手写 demo seed。
-- [ ] `npm run packages:check` 能验证 manifest、README、fixtures、exports、独立 import 边界。
+- [x] 新旧组件映射表完成：当前 11 个组件分别归入基础原语、preset 或 provenance/evidence 类别，并保留旧 componentId 的兼容 alias。
+- [x] 至少 1 个组件完成独立包样板改造，并作为后续包的模板：`molecule-viewer` 当前具备 manifest、README、package.json 和真实 workbench demo assets。
+- [x] 第二组已发布组件已有 README、basic demo、empty demo；交互组件另有 selection demo。
+- [x] 每个已发布组件都有 README、basic demo、empty demo；交互组件另有 selection/edit demo。
+- [x] Component Workbench 能从包内 demo 数据预览每个组件，不依赖 app 内手写 demo seed；当前优先加载包内 basic/empty/selection fixtures，缺失时回退到 manifest inline demo。
+- [x] `npm run packages:check` 能验证 manifest、README、fixtures、exports、独立 import 边界；根命令保留原 skill/package catalog check，并串联 UI component boundary check。
 - [ ] 不用 demo/空结果伪装真实科学任务输出；demo 仅用于组件预览，runtime artifact 仍必须来自真实任务或用户上传数据。
 
 ### T079 Computer Use 长对话 Context Window 复验与开销优化

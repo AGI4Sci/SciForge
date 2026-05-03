@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sciforge.local/schemas/ui-primitives/time-series.schema.json",
+  "title": "SciForge time-series primitive",
+  "type": "object",
+  "required": ["primitive", "series"],
+  "properties": {
+    "primitive": { "const": "time-series" },
+    "schemaVersion": { "type": "string", "default": "0.1.0" },
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "timeUnit": { "type": "string" },
+    "series": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "points"],
+        "properties": {
+          "name": { "type": "string" },
+          "unit": { "type": "string" },
+          "points": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["t", "value"],
+              "properties": {
+                "t": { "type": ["string", "number"] },
+                "value": { "type": ["number", "null"] }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "metadata": { "type": "object", "additionalProperties": true }
+  },
+  "additionalProperties": true,
+  "examples": [
+    {
+      "primitive": "time-series",
+      "schemaVersion": "0.1.0",
+      "id": "growth-demo",
+      "title": "Cell growth curve",
+      "timeUnit": "hour",
+      "series": [
+        {
+          "name": "treated",
+          "unit": "OD600",
+          "points": [
+            { "t": 0, "value": 0.08 },
+            { "t": 24, "value": 0.62 }
+          ]
+        }
+      ]
+    }
+  ]
+}

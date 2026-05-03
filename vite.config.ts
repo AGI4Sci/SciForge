@@ -1,18 +1,9 @@
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-
-const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   plugins: [react()],
   root: 'src/ui',
-  resolve: {
-    alias: {
-      '@molecule-workbench-demo': path.resolve(repoRoot, 'packages/ui-components/molecule-viewer/workbench-demo'),
-    },
-  },
   build: {
     outDir: '../../dist-ui',
     emptyOutDir: true,

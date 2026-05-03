@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sciforge.local/schemas/ui-primitives/workflow-provenance.schema.json",
+  "title": "SciForge workflow-provenance primitive",
+  "type": "object",
+  "required": ["primitive"],
+  "properties": {
+    "primitive": { "const": "workflow-provenance" },
+    "schemaVersion": { "type": "string", "default": "0.1.0" },
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "preset": { "type": "string", "examples": ["execution-unit-table", "research-notebook-timeline"] },
+    "executions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "status"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "status": { "type": "string" },
+          "startedAt": { "type": "string" },
+          "endedAt": { "type": "string" },
+          "codeRef": { "type": "string" },
+          "logRef": { "type": "string" },
+          "outputRefs": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": true
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "time", "text"],
+        "properties": {
+          "id": { "type": "string" },
+          "time": { "type": "string" },
+          "text": { "type": "string" },
+          "kind": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "metadata": { "type": "object", "additionalProperties": true }
+  },
+  "anyOf": [
+    { "required": ["executions"] },
+    { "required": ["events"] }
+  ],
+  "additionalProperties": true,
+  "examples": [
+    {
+      "primitive": "workflow-provenance",
+      "schemaVersion": "0.1.0",
+      "id": "workflow-demo",
+      "title": "RNA-seq execution provenance",
+      "preset": "execution-unit-table",
+      "executions": [
+        {
+          "id": "align-1",
+          "label": "Align reads",
+          "status": "succeeded",
+          "startedAt": "2026-05-03T09:00:00Z",
+          "endedAt": "2026-05-03T09:18:00Z",
+          "codeRef": "workspace://code/align.sh",
+          "logRef": "workspace://logs/align.log",
+          "outputRefs": ["workspace://outputs/aligned.bam"]
+        }
+      ]
+    }
+  ]
+}

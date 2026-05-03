@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sciforge.local/schemas/ui-primitives/export-artifact.schema.json",
+  "title": "SciForge export-artifact primitive",
+  "type": "object",
+  "required": ["primitive", "exports"],
+  "properties": {
+    "primitive": { "const": "export-artifact" },
+    "schemaVersion": { "type": "string", "default": "0.1.0" },
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "exports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "dataRef"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "dataRef": { "type": "string" },
+          "format": { "type": "string", "examples": ["html", "svg", "pdf", "eps", "png", "tiff", "csv"] },
+          "mimeType": { "type": "string" },
+          "sizeBytes": { "type": "number" },
+          "checksum": { "type": "string" },
+          "renderer": { "type": "string", "examples": ["plotly", "matplotlib"] },
+          "derivedFrom": { "type": "string" },
+          "derivedOnly": { "type": "boolean" },
+          "scriptRef": { "type": "string" },
+          "rendererVersions": { "type": "object", "additionalProperties": true },
+          "publicationProfile": {
+            "type": "object",
+            "properties": {
+              "width": { "type": "number" },
+              "height": { "type": "number" },
+              "units": { "type": "string" },
+              "dpi": { "type": "number" },
+              "fontEmbedding": { "type": "string" },
+              "colorProfile": { "type": "string" },
+              "vectorRasterStatus": { "type": "string" }
+            },
+            "additionalProperties": true
+          },
+          "qa": {
+            "type": "object",
+            "properties": {
+              "vector": { "type": "boolean" },
+              "rasterizedLayers": { "type": "array", "items": { "type": "string" } },
+              "minDpi": { "type": "number" },
+              "fontEmbedded": { "type": "boolean" },
+              "colorBlindSafe": { "type": "boolean" },
+              "journalReady": { "type": "boolean" }
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "sourceArtifactIds": { "type": "array", "items": { "type": "string" } },
+    "sourcePlotSpecRefs": { "type": "array", "items": { "type": "string" } },
+    "metadata": { "type": "object", "additionalProperties": true }
+  },
+  "additionalProperties": true,
+  "examples": [
+    {
+      "primitive": "export-artifact",
+      "schemaVersion": "0.1.0",
+      "id": "export-demo",
+      "title": "Plot export bundle",
+      "sourceArtifactIds": ["plot-volcano-demo"],
+      "sourcePlotSpecRefs": ["plot-volcano-demo"],
+      "exports": [
+        { "id": "plot-svg", "label": "Plotly SVG", "dataRef": "workspace://exports/plot.svg", "format": "svg", "mimeType": "image/svg+xml", "renderer": "plotly", "derivedFrom": "plot-volcano-demo", "qa": { "vector": true, "fontEmbedded": true, "journalReady": true } },
+        { "id": "plot-mpl-pdf", "label": "Matplotlib publication fallback", "dataRef": "workspace://exports/plot.pdf", "format": "pdf", "mimeType": "application/pdf", "renderer": "matplotlib", "derivedOnly": true, "derivedFrom": "plot-volcano-demo", "scriptRef": "workspace://exports/plot.matplotlib.py" }
+      ]
+    }
+  ]
+}

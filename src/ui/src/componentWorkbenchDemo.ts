@@ -1,34 +1,236 @@
 import type { ScenarioId } from './data';
 import {
-  nowIso,
-  type EvidenceClaim,
-  type NotebookRecord,
   type RuntimeArtifact,
-  type RuntimeExecutionUnit,
   type SciForgeConfig,
   type SciForgeSession,
   type UIManifestSlot,
 } from './domain';
-import { getMoleculeWorkbenchDemoArtifactData } from './moleculeWorkbenchDemoStructures';
 import { createSession } from './sessionStore';
 import type { RuntimeUIModule } from './uiModuleRegistry';
+import type { UIComponentRendererProps } from '../../../packages/ui-components/types';
+import { basicEvidenceMatrixFixture } from '../../../packages/ui-components/evidence-matrix/fixtures/basic';
+import { emptyEvidenceMatrixFixture } from '../../../packages/ui-components/evidence-matrix/fixtures/empty';
+import { selectionEvidenceMatrixFixture } from '../../../packages/ui-components/evidence-matrix/fixtures/selection';
+import { basicExecutionUnitTableFixture } from '../../../packages/ui-components/execution-unit-table/fixtures/basic';
+import { emptyExecutionUnitTableFixture } from '../../../packages/ui-components/execution-unit-table/fixtures/empty';
+import { selectionExecutionUnitTableFixture } from '../../../packages/ui-components/execution-unit-table/fixtures/selection';
+import { basicGraphViewerFixture } from '../../../packages/ui-components/graph-viewer/fixtures/basic';
+import { emptyGraphViewerFixture } from '../../../packages/ui-components/graph-viewer/fixtures/empty';
+import { selectionGraphViewerFixture } from '../../../packages/ui-components/graph-viewer/fixtures/selection';
+import { basicMatrixViewerFixture } from '../../../packages/ui-components/matrix-viewer/fixtures/basic';
+import { emptyMatrixViewerFixture } from '../../../packages/ui-components/matrix-viewer/fixtures/empty';
+import { selectionMatrixViewerFixture } from '../../../packages/ui-components/matrix-viewer/fixtures/selection';
+import { basicNotebookTimelineFixture } from '../../../packages/ui-components/notebook-timeline/fixtures/basic';
+import { emptyNotebookTimelineFixture } from '../../../packages/ui-components/notebook-timeline/fixtures/empty';
+import { selectionNotebookTimelineFixture } from '../../../packages/ui-components/notebook-timeline/fixtures/selection';
+import { basicPaperCardListFixture } from '../../../packages/ui-components/paper-card-list/fixtures/basic';
+import { emptyPaperCardListFixture } from '../../../packages/ui-components/paper-card-list/fixtures/empty';
+import { selectionPaperCardListFixture } from '../../../packages/ui-components/paper-card-list/fixtures/selection';
+import { basicPointSetViewerFixture } from '../../../packages/ui-components/point-set-viewer/fixtures/basic';
+import { emptyPointSetViewerFixture } from '../../../packages/ui-components/point-set-viewer/fixtures/empty';
+import { selectionPointSetViewerFixture } from '../../../packages/ui-components/point-set-viewer/fixtures/selection';
+import { basicRecordTableFixture } from '../../../packages/ui-components/record-table/fixtures/basic';
+import { emptyRecordTableFixture } from '../../../packages/ui-components/record-table/fixtures/empty';
+import { selectionRecordTableFixture } from '../../../packages/ui-components/record-table/fixtures/selection';
+import { basicReportViewerFixture } from '../../../packages/ui-components/report-viewer/fixtures/basic';
+import { emptyReportViewerFixture } from '../../../packages/ui-components/report-viewer/fixtures/empty';
+import { selectionReportViewerFixture } from '../../../packages/ui-components/report-viewer/fixtures/selection';
+import { basicPlotlyScatterLineFixture } from '../../../packages/ui-components/scientific-plot-viewer/fixtures/basic';
+import { basicStructureViewerFixture } from '../../../packages/ui-components/structure-viewer/fixtures/basic';
+import { emptyStructureViewerFixture } from '../../../packages/ui-components/structure-viewer/fixtures/empty';
+import { selectionStructureViewerFixture } from '../../../packages/ui-components/structure-viewer/fixtures/selection';
+import { basicUnknownArtifactInspectorFixture } from '../../../packages/ui-components/unknown-artifact-inspector/fixtures/basic';
+import { emptyUnknownArtifactInspectorFixture } from '../../../packages/ui-components/unknown-artifact-inspector/fixtures/empty';
+import { selectionUnknownArtifactInspectorFixture } from '../../../packages/ui-components/unknown-artifact-inspector/fixtures/selection';
 
 const DEMO_SCENARIO: ScenarioId = 'literature-evidence-review';
+export type WorkbenchDemoVariant = 'basic' | 'empty' | 'selection';
+
+const DEMO_VARIANTS: WorkbenchDemoVariant[] = ['basic', 'empty', 'selection'];
+
+const packageFixtures: Record<string, Partial<Record<WorkbenchDemoVariant, UIComponentRendererProps>>> = {
+  'data-table': {
+    basic: basicRecordTableFixture,
+    empty: emptyRecordTableFixture,
+    selection: selectionRecordTableFixture,
+  },
+  'record-table': {
+    basic: basicRecordTableFixture,
+    empty: emptyRecordTableFixture,
+    selection: selectionRecordTableFixture,
+  },
+  'evidence-matrix': {
+    basic: basicEvidenceMatrixFixture,
+    empty: emptyEvidenceMatrixFixture,
+    selection: selectionEvidenceMatrixFixture,
+  },
+  'execution-unit-table': {
+    basic: basicExecutionUnitTableFixture,
+    empty: emptyExecutionUnitTableFixture,
+    selection: selectionExecutionUnitTableFixture,
+  },
+  'heatmap-viewer': {
+    basic: basicMatrixViewerFixture,
+    empty: emptyMatrixViewerFixture,
+    selection: selectionMatrixViewerFixture,
+  },
+  'matrix-viewer': {
+    basic: basicMatrixViewerFixture,
+    empty: emptyMatrixViewerFixture,
+    selection: selectionMatrixViewerFixture,
+  },
+  'molecule-viewer': {
+    basic: basicStructureViewerFixture,
+    empty: emptyStructureViewerFixture,
+    selection: selectionStructureViewerFixture,
+  },
+  'structure-viewer': {
+    basic: basicStructureViewerFixture,
+    empty: emptyStructureViewerFixture,
+    selection: selectionStructureViewerFixture,
+  },
+  'network-graph': {
+    basic: basicGraphViewerFixture,
+    empty: emptyGraphViewerFixture,
+    selection: selectionGraphViewerFixture,
+  },
+  'graph-viewer': {
+    basic: basicGraphViewerFixture,
+    empty: emptyGraphViewerFixture,
+    selection: selectionGraphViewerFixture,
+  },
+  'notebook-timeline': {
+    basic: basicNotebookTimelineFixture,
+    empty: emptyNotebookTimelineFixture,
+    selection: selectionNotebookTimelineFixture,
+  },
+  'paper-card-list': {
+    basic: basicPaperCardListFixture,
+    empty: emptyPaperCardListFixture,
+    selection: selectionPaperCardListFixture,
+  },
+  'report-viewer': {
+    basic: basicReportViewerFixture,
+    empty: emptyReportViewerFixture,
+    selection: selectionReportViewerFixture,
+  },
+  'scientific-plot-viewer': {
+    basic: basicPlotlyScatterLineFixture,
+  },
+  'umap-viewer': {
+    basic: basicPointSetViewerFixture,
+    empty: emptyPointSetViewerFixture,
+    selection: selectionPointSetViewerFixture,
+  },
+  'point-set-viewer': {
+    basic: basicPointSetViewerFixture,
+    empty: emptyPointSetViewerFixture,
+    selection: selectionPointSetViewerFixture,
+  },
+  'unknown-artifact-inspector': {
+    basic: basicUnknownArtifactInspectorFixture,
+    empty: emptyUnknownArtifactInspectorFixture,
+    selection: selectionUnknownArtifactInspectorFixture,
+  },
+  'volcano-plot': {
+    basic: basicPointSetViewerFixture,
+    empty: emptyPointSetViewerFixture,
+    selection: selectionPointSetViewerFixture,
+  },
+};
+
+export interface WorkbenchComponentRecommendation {
+  componentId: string;
+  moduleId: string;
+  title: string;
+  score: number;
+  reasons: string[];
+  fallbackModuleIds: string[];
+}
+
+export interface WorkbenchArtifactShapeExample {
+  artifactType: string;
+  schemaVersion: string;
+  requiredFields: string[];
+  requiredAnyFields: string[][];
+  exampleData: unknown;
+}
+
+export interface WorkbenchFigureQA {
+  size: string;
+  dpi: string;
+  font: string;
+  palette: string;
+  colorblindSafety: string;
+  panelLabels: string;
+  vectorRasterStatus: string;
+  dataSource: string;
+  statisticalMethod: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function fieldsFromSchema(schema: unknown): string[] {
+  if (!isRecord(schema)) return [];
+  const directRequired = Array.isArray(schema.required) ? schema.required.filter((field): field is string => typeof field === 'string') : [];
+  const properties = isRecord(schema.properties) ? Object.keys(schema.properties) : [];
+  const data = isRecord(schema.data) ? fieldsFromSchema(schema.data) : [];
+  return Array.from(new Set([...directRequired, ...properties, ...data]));
+}
+
+function dataFieldsFromArtifactData(data: unknown): string[] {
+  return isRecord(data) ? Object.keys(data) : [];
+}
+
+function fieldMatches(required: string, fields: string[]) {
+  return fields.includes(required);
+}
+
+function requiredAnyMatches(requiredAny: string[][] | undefined, fields: string[]) {
+  if (!requiredAny?.length) return false;
+  return requiredAny.some((group) => group.some((field) => fieldMatches(field, fields)));
+}
+
+function requiredAllMatch(required: string[] | undefined, fields: string[]) {
+  if (!required?.length) return false;
+  return required.every((field) => fieldMatches(field, fields));
+}
+
+function cloneArtifact(artifact: RuntimeArtifact): RuntimeArtifact {
+  return {
+    ...artifact,
+    metadata: artifact.metadata ? { ...artifact.metadata } : undefined,
+    data: artifact.data,
+  };
+}
+
+function fixtureForVariant(module: RuntimeUIModule, variant: WorkbenchDemoVariant): UIComponentRendererProps | undefined {
+  return packageFixtures[module.componentId]?.[variant];
+}
+
+function fixtureArtifact(module: RuntimeUIModule, variant: WorkbenchDemoVariant): RuntimeArtifact | undefined {
+  const fixture = fixtureForVariant(module, variant);
+  const artifact = fixture?.artifact as RuntimeArtifact | undefined;
+  return artifact ? cloneArtifact(artifact) : undefined;
+}
+
+function fixtureSlot(module: RuntimeUIModule, variant: WorkbenchDemoVariant): UIManifestSlot | undefined {
+  const fixture = fixtureForVariant(module, variant);
+  if (!fixture?.slot) return undefined;
+  return {
+    ...(fixture.slot as UIManifestSlot),
+    title: module.title,
+    componentId: fixture.slot.componentId || module.componentId,
+  };
+}
 
 function demoArtifact(module: RuntimeUIModule): RuntimeArtifact | undefined {
-  if (module.componentId === 'molecule-viewer') {
-    return {
-      id: `workbench-demo-${module.moduleId}`,
-      type: module.workbenchDemo?.artifactType ?? 'structure-summary',
-      producerScenario: DEMO_SCENARIO,
-      schemaVersion: module.workbenchDemo?.schemaVersion ?? '1',
-      metadata: {
-        title: 'Crambin · PDB 1CRN',
-        pdbId: '1CRN',
-      },
-      data: getMoleculeWorkbenchDemoArtifactData(),
-    };
-  }
   const demo = module.workbenchDemo;
   if (!demo?.artifactData) return undefined;
   return {
@@ -40,113 +242,212 @@ function demoArtifact(module: RuntimeUIModule): RuntimeArtifact | undefined {
   };
 }
 
-function mergeSessionForComponent(module: RuntimeUIModule, base: SciForgeSession): SciForgeSession {
-  const cid = module.componentId;
-  const now = nowIso();
+function artifactForShape(module: RuntimeUIModule, variant: WorkbenchDemoVariant) {
+  return fixtureArtifact(module, variant) ?? fixtureArtifact(module, 'basic') ?? demoArtifact(module);
+}
 
-  if (cid === 'evidence-matrix') {
-    const claims: EvidenceClaim[] = [{
-      id: 'demo-claim-1',
-      text: '示例主张：处理后目标通路活性显著变化（工作台 Demo）。',
-      type: 'hypothesis',
-      confidence: 0.72,
-      evidenceLevel: 'experimental',
-      supportingRefs: ['artifact:demo-evidence'],
-      opposingRefs: ['run:demo-opposing'],
-      dependencyRefs: ['belief:demo-dep'],
-      updateReason: 'workbench demo',
-      updatedAt: now,
-    }, {
-      id: 'demo-claim-2',
-      text: '对照主张：批次效应需要额外校正（示例）。',
-      type: 'inference',
-      confidence: 0.55,
-      evidenceLevel: 'review',
-      supportingRefs: [],
-      opposingRefs: [],
-      updatedAt: now,
-    }];
-    const demoFigureUpload: RuntimeArtifact = {
-      id: 'workbench-demo-upload-fig',
-      type: 'uploaded-figure',
-      producerScenario: DEMO_SCENARIO,
-      schemaVersion: '1',
-      metadata: {
-        source: 'user-upload',
-        title: 'Demo 上传示意图',
-        mimeType: 'image/png',
-        size: 95,
-      },
-      data: {
-        previewKind: 'image',
-        dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mP8z/C/HcDFwMDAwMDEAABSOwXWZIq0pAAAAABJRU5ErkJggg==',
-      },
-    };
-    return { ...base, claims, artifacts: [demoFigureUpload] };
+function artifactDataForFigureQA(artifact?: RuntimeArtifact) {
+  const data = artifact?.data;
+  if (!isRecord(data)) return undefined;
+  const nested = data.plotSpec ?? data.figure ?? data.figureSpec;
+  return isRecord(nested) ? nested : data;
+}
+
+function tracePalette(spec: Record<string, unknown>) {
+  const traces = Array.isArray(spec.data) ? spec.data : [];
+  const colors = traces.flatMap((trace) => {
+    if (!isRecord(trace)) return [];
+    const markerColor = isRecord(trace.marker) ? trace.marker.color : undefined;
+    const lineColor = isRecord(trace.line) ? trace.line.color : undefined;
+    return [markerColor, lineColor].flatMap((value) => Array.isArray(value) ? value : [value]).filter((value): value is string => typeof value === 'string');
+  });
+  return Array.from(new Set(colors)).slice(0, 8);
+}
+
+function vectorRasterStatus(format: string | undefined) {
+  if (!format) return 'not declared';
+  const normalized = format.toLowerCase();
+  if (['svg', 'pdf', 'eps'].includes(normalized)) return `vector (${normalized})`;
+  if (['png', 'tif', 'tiff', 'jpg', 'jpeg'].includes(normalized)) return `raster (${normalized})`;
+  return format;
+}
+
+function figurePanelLabels(spec: Record<string, unknown>) {
+  const panels = Array.isArray(spec.panels) ? spec.panels : undefined;
+  if (panels) {
+    const labels = panels.flatMap((panel) => isRecord(panel) && typeof panel.label === 'string' ? [panel.label] : []);
+    if (labels.length) return labels.join(', ');
   }
+  const layout = isRecord(spec.layout) ? spec.layout : undefined;
+  const annotations = Array.isArray(layout?.annotations) ? layout.annotations : [];
+  const labels = annotations.flatMap((annotation) => {
+    if (!isRecord(annotation) || typeof annotation.text !== 'string') return [];
+    return /^[A-Z]$/.test(annotation.text.trim()) ? [annotation.text.trim()] : [];
+  });
+  return labels.length ? labels.join(', ') : 'not declared';
+}
 
-  if (cid === 'execution-unit-table') {
-    const executionUnits: RuntimeExecutionUnit[] = [{
-      id: 'demo-eu-1',
-      tool: 'demo-analysis',
-      params: '{"mode":"smoke","seed":42}',
-      status: 'done',
-      hash: 'demo-hash-0001',
-      language: 'python',
-      code: 'print("workbench demo execution unit")',
-      environment: 'local-demo',
-      stdoutRef: '.sciforge/logs/demo-eu-1.stdout.txt',
-    }, {
-      id: 'demo-eu-2',
-      tool: 'demo-qc',
-      params: '{"qc":"fast"}',
-      status: 'record-only',
-      hash: 'demo-hash-0002',
-      language: 'r',
-      codeRef: '.sciforge/code/qc.R',
-      stderrRef: '.sciforge/logs/demo-eu-2.stderr.txt',
-      environment: 'local-demo',
-    }];
-    return { ...base, executionUnits };
-  }
+function figureSize(spec: Record<string, unknown>, exportProfile?: Record<string, unknown>) {
+  const layout = isRecord(spec.layout) ? spec.layout : undefined;
+  const width = typeof exportProfile?.width === 'number' ? exportProfile.width : typeof layout?.width === 'number' ? layout.width : undefined;
+  const height = typeof exportProfile?.height === 'number' ? exportProfile.height : typeof layout?.height === 'number' ? layout.height : undefined;
+  return width && height ? `${width} x ${height}px` : 'not declared';
+}
 
-  if (cid === 'notebook-timeline') {
-    const notebook: NotebookRecord[] = [{
-      id: 'demo-note-1',
-      time: new Date().toLocaleString('zh-CN', { hour12: false }),
-      scenario: DEMO_SCENARIO,
-      title: '示例研究记录',
-      desc: '内置 notebook 条目，用于在工作台一键确认时间线组件可用。',
-      claimType: 'fact',
-      confidence: 0.88,
-      artifactRefs: ['workbench-demo-note-ref'],
-      updateReason: 'workbench demo',
-    }];
-    return { ...base, notebook };
-  }
+function figureFont(spec: Record<string, unknown>) {
+  const layout = isRecord(spec.layout) ? spec.layout : undefined;
+  const font = isRecord(layout?.font) ? layout.font : undefined;
+  const family = asString(font?.family);
+  const size = typeof font?.size === 'number' ? `${font.size}px` : undefined;
+  return [family, size].filter(Boolean).join(', ') || 'not declared';
+}
 
-  const artifact = demoArtifact(module);
-  if (!artifact) return base;
-  return { ...base, artifacts: [artifact] };
+function figureDpi(exportProfile?: Record<string, unknown>) {
+  if (typeof exportProfile?.dpi === 'number') return `${exportProfile.dpi} DPI`;
+  if (typeof exportProfile?.scale === 'number') return `${exportProfile.scale}x export scale`;
+  return 'not declared';
+}
+
+function figureDataSource(spec: Record<string, unknown>, artifact?: RuntimeArtifact) {
+  return asString(artifact?.metadata?.source)
+    ?? asString(spec.dataSource)
+    ?? asString(spec.sourceDataRef)
+    ?? asString(spec.dataRef)
+    ?? 'not declared';
+}
+
+function figureStatisticalMethod(spec: Record<string, unknown>) {
+  if (typeof spec.statisticalMethod === 'string') return spec.statisticalMethod;
+  const statistics = isRecord(spec.statistics) ? spec.statistics : undefined;
+  return asString(statistics?.method) ?? 'not declared';
+}
+
+function fixtureSession(module: RuntimeUIModule, variant: WorkbenchDemoVariant): Partial<SciForgeSession> | undefined {
+  const session = fixtureForVariant(module, variant)?.session;
+  return session && typeof session === 'object' ? session as Partial<SciForgeSession> : undefined;
+}
+
+function mergeSessionForComponent(base: SciForgeSession, module: RuntimeUIModule, variant: WorkbenchDemoVariant, artifact?: RuntimeArtifact): SciForgeSession {
+  const session = { ...base, ...fixtureSession(module, variant) };
+  if (!artifact) return session;
+  return { ...session, artifacts: [artifact] };
+}
+
+export function availableWorkbenchDemoVariants(module: RuntimeUIModule): WorkbenchDemoVariant[] {
+  const fixtureVariants = packageFixtures[module.componentId] ?? {};
+  const variants = DEMO_VARIANTS.filter((variant) => Boolean(fixtureVariants[variant]));
+  if (!variants.length && module.workbenchDemo?.artifactData) variants.push('basic');
+  return variants;
 }
 
 export function moduleHasWorkbenchDemo(module: RuntimeUIModule): boolean {
-  const cid = module.componentId;
-  if (cid === 'evidence-matrix' || cid === 'execution-unit-table' || cid === 'notebook-timeline') return true;
-  return Boolean(module.workbenchDemo?.artifactData);
+  return availableWorkbenchDemoVariants(module).length > 0;
 }
 
-export function buildWorkbenchDemoRenderProps(module: RuntimeUIModule, config: SciForgeConfig): {
+export function buildWorkbenchArtifactShapeExample(module: RuntimeUIModule, variant: WorkbenchDemoVariant = 'basic'): WorkbenchArtifactShapeExample {
+  const artifact = artifactForShape(module, variant);
+  return {
+    artifactType: artifact?.type ?? module.acceptsArtifactTypes[0] ?? 'runtime-artifact',
+    schemaVersion: artifact?.schemaVersion ?? module.workbenchDemo?.schemaVersion ?? '1',
+    requiredFields: module.requiredFields ?? [],
+    requiredAnyFields: module.requiredAnyFields ?? [],
+    exampleData: artifact?.data ?? module.workbenchDemo?.artifactData ?? {},
+  };
+}
+
+export function recommendWorkbenchComponents(
+  modules: RuntimeUIModule[],
+  input: { artifactType?: string; artifactSchema?: unknown; artifactData?: unknown },
+): WorkbenchComponentRecommendation[] {
+  const artifactType = input.artifactType?.trim();
+  const fields = Array.from(new Set([...fieldsFromSchema(input.artifactSchema), ...dataFieldsFromArtifactData(input.artifactData)]));
+  return modules
+    .map((module) => {
+      const reasons: string[] = [];
+      let score = 0;
+      if (artifactType && module.acceptsArtifactTypes.includes(artifactType)) {
+        score += 10;
+        reasons.push(`accepts ${artifactType}`);
+      }
+      if (artifactType && module.outputArtifactTypes?.includes(artifactType)) {
+        score += 2;
+        reasons.push(`outputs ${artifactType}`);
+      }
+      if (fields.length && requiredAllMatch(module.requiredFields, fields)) {
+        score += 5;
+        reasons.push(`required fields matched: ${module.requiredFields?.join(', ')}`);
+      }
+      if (fields.length && requiredAnyMatches(module.requiredAnyFields, fields)) {
+        score += 4;
+        reasons.push('required-any fields matched');
+      }
+      if (!artifactType && !fields.length && module.lifecycle === 'published') {
+        score += 1;
+        reasons.push('published component');
+      }
+      return {
+        componentId: module.componentId,
+        moduleId: module.moduleId,
+        title: module.title,
+        score,
+        reasons,
+        fallbackModuleIds: module.fallbackModuleIds ?? [],
+      };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || a.componentId.localeCompare(b.componentId));
+}
+
+export function buildWorkbenchInteractionEventLog(module: RuntimeUIModule, variant: WorkbenchDemoVariant = 'selection'): string[] {
+  const fixture = fixtureForVariant(module, variant) ?? fixtureForVariant(module, 'selection') ?? fixtureForVariant(module, 'basic');
+  const props = isRecord(fixture?.slot?.props) ? fixture.slot.props : {};
+  const expected = Array.isArray(props.expectedEvents) ? props.expectedEvents : [];
+  const eventLog = expected.map((event) => isRecord(event) ? JSON.stringify(event) : String(event));
+  if (eventLog.length) return eventLog;
+  const artifact = fixture?.artifact as RuntimeArtifact | undefined;
+  const spec = artifactDataForFigureQA(artifact);
+  const selection = isRecord(spec?.selection) ? spec.selection : undefined;
+  if (selection) {
+    const source = asString(selection.eventSource) ?? 'selection';
+    const points = Array.isArray(selection.pointIndices) ? `${selection.pointIndices.length} point(s)` : 'selected region';
+    return [`${source}: ${points}`];
+  }
+  return (module.interactionEvents ?? []).map((event) => `${event}: no fixture event payload declared`);
+}
+
+export function buildWorkbenchFigureQA(module: RuntimeUIModule, variant: WorkbenchDemoVariant = 'basic', artifactOverride?: RuntimeArtifact): WorkbenchFigureQA | undefined {
+  if (!['scientific-plot-viewer', 'publication-figure-builder'].includes(module.componentId)) return undefined;
+  const artifact = artifactOverride ?? artifactForShape(module, variant);
+  const spec = artifactDataForFigureQA(artifact);
+  if (!spec) return undefined;
+  const exportProfile = isRecord(spec.exportProfile) ? spec.exportProfile : undefined;
+  const palette = tracePalette(spec);
+  return {
+    size: figureSize(spec, exportProfile),
+    dpi: figureDpi(exportProfile),
+    font: figureFont(spec),
+    palette: palette.length ? palette.join(', ') : 'not declared',
+    colorblindSafety: typeof exportProfile?.colorblindSafe === 'boolean' ? (exportProfile.colorblindSafe ? 'declared safe' : 'declared unsafe') : asString(spec.colorblindSafety) ?? 'not declared',
+    panelLabels: figurePanelLabels(spec),
+    vectorRasterStatus: vectorRasterStatus(asString(exportProfile?.format)),
+    dataSource: figureDataSource(spec, artifact),
+    statisticalMethod: figureStatisticalMethod(spec),
+  };
+}
+
+export function buildWorkbenchDemoRenderProps(module: RuntimeUIModule, config: SciForgeConfig, variant: WorkbenchDemoVariant = 'basic'): {
   scenarioId: ScenarioId;
   config: SciForgeConfig;
   session: SciForgeSession;
   slot: UIManifestSlot;
   artifact?: RuntimeArtifact;
+  variant: WorkbenchDemoVariant;
 } {
   const baseSession = createSession(DEMO_SCENARIO, '组件工作台 Demo', {});
-  const session = mergeSessionForComponent(module, baseSession);
-  const artifact = demoArtifact(module);
-  const slot: UIManifestSlot = {
+  const fixtureVariant = fixtureForVariant(module, variant) ? variant : 'basic';
+  const artifact = fixtureArtifact(module, fixtureVariant) ?? demoArtifact(module);
+  const session = mergeSessionForComponent(baseSession, module, fixtureVariant, artifact);
+  const slot: UIManifestSlot = fixtureSlot(module, fixtureVariant) ?? {
     componentId: module.componentId,
     title: module.title,
     artifactRef: artifact?.id,
@@ -157,5 +458,6 @@ export function buildWorkbenchDemoRenderProps(module: RuntimeUIModule, config: S
     session,
     slot,
     artifact,
+    variant,
   };
 }

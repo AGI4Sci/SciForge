@@ -21,7 +21,7 @@ const response = normalizeAgentResponse('literature-evidence-review', 'show the 
     opposingRefs: [],
   }],
   uiManifest: [{
-    componentId: 'molecule-viewer',
+    componentId: 'structure-viewer',
     artifactRef: 'structure-summary',
     priority: 1,
   }],
@@ -52,14 +52,14 @@ const response = normalizeAgentResponse('literature-evidence-review', 'show the 
     kind: 'artifact',
     ref: 'artifact:structure-summary',
     artifactType: 'structure-summary',
-    preferredView: 'molecule-viewer',
+    preferredView: 'structure-viewer',
     actions: ['focus-right-pane', 'inspect'],
   }],
 });
 
 assert.equal(response.message.objectReferences?.length, 2);
 assert.equal(response.message.objectReferences?.[0].title, 'PDB 7RPZ');
-assert.equal(response.message.objectReferences?.[0].preferredView, 'molecule-viewer');
+assert.equal(response.message.objectReferences?.[0].preferredView, 'structure-viewer');
 assert.ok(response.message.objectReferences?.some((reference) => reference.ref === 'artifact:research-report'));
 assert.deepEqual((response.run.raw as { displayIntent?: unknown }).displayIntent, {
   primaryGoal: 'inspect protein structure',

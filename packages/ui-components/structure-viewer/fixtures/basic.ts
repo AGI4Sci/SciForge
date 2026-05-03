@@ -1,0 +1,2 @@
+import type { UIComponentRendererProps } from '@sciforge-ui/runtime-contract';
+export const basicStructureViewerFixture: UIComponentRendererProps = { slot: { componentId: 'structure-viewer' }, artifact: { id: 'structure-basic', type: 'structure-3d', producerScenario: 'structure-preview', schemaVersion: '0.1.0', dataRef: 'packages/ui-components/structure-viewer/workbench-demo/1crn.cif', data: { pdbId: '1CRN', ligand: 'none', highlightResidues: ['A:22'], metrics: { resolution: '1.5 A' } } } };

@@ -83,9 +83,9 @@ def artifact_for(kind):
 component_for = {
     "research-report": "report-viewer",
     "paper-list": "paper-card-list",
-    "structure-summary": "molecule-viewer",
-    "omics-differential-expression": "volcano-plot",
-    "knowledge-graph": "network-graph",
+    "structure-summary": "structure-viewer",
+    "omics-differential-expression": "point-set-viewer",
+    "knowledge-graph": "graph-viewer",
 }
 
 artifacts = [artifact_for(kind) for kind in expected]
@@ -188,19 +188,19 @@ const cases: Array<{
     domain: 'structure',
     prompt: '继续分析PDB 1A3N的结构和关键残基，生成结构总结和系统性报告',
     expected: ['structure-summary', 'research-report'],
-    components: ['molecule-viewer', 'report-viewer', 'execution-unit-table'],
+    components: ['structure-viewer', 'report-viewer', 'execution-unit-table'],
   },
   {
     domain: 'omics',
     prompt: '继续基于表达矩阵做差异分析，解释关键基因并写成报告',
     expected: ['omics-differential-expression', 'research-report'],
-    components: ['volcano-plot', 'heatmap-viewer', 'report-viewer'],
+    components: ['point-set-viewer', 'matrix-viewer', 'report-viewer'],
   },
   {
     domain: 'knowledge',
     prompt: '继续查询TP53和EGFR相关知识，生成知识图谱和证据报告',
     expected: ['knowledge-graph', 'research-report'],
-    components: ['network-graph', 'report-viewer', 'execution-unit-table'],
+    components: ['graph-viewer', 'report-viewer', 'execution-unit-table'],
   },
 ];
 

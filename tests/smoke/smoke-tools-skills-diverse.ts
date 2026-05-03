@@ -118,7 +118,7 @@ const runtimeCases: Array<{
     prompt: 'matrixRef=matrix.csv metadataRef=metadata.csv groupColumn=condition caseGroup=treated controlGroup=control runner=csv show volcano heatmap and UMAP',
     artifactType: 'omics-differential-expression',
     skillId: 'omics.differential_expression',
-    requiredComponents: ['volcano-plot', 'heatmap-viewer', 'umap-viewer', 'execution-unit-table'],
+    requiredComponents: ['point-set-viewer', 'matrix-viewer', 'point-set-viewer', 'execution-unit-table'],
   },
   {
     name: 'knowledge UniProt lookup',
@@ -126,15 +126,15 @@ const runtimeCases: Array<{
     prompt: 'TP53 gene knowledge graph with data table and evidence matrix',
     artifactType: 'knowledge-graph',
     skillId: 'knowledge.uniprot_chembl_lookup',
-    requiredComponents: ['network-graph', 'data-table', 'evidence-matrix', 'execution-unit-table'],
+    requiredComponents: ['graph-viewer', 'record-table', 'evidence-matrix', 'execution-unit-table'],
   },
   {
     name: 'structure coordinate fetch',
     skillDomain: 'structure',
-    prompt: 'PDB 7BZ5 residues 142-158 show molecule-viewer data-table and execution unit',
+    prompt: 'PDB 7BZ5 residues 142-158 show structure-viewer record-table and execution unit',
     artifactType: 'structure-summary',
     skillId: 'structure.rcsb_latest_or_entry',
-    requiredComponents: ['molecule-viewer', 'data-table', 'execution-unit-table'],
+    requiredComponents: ['structure-viewer', 'record-table', 'execution-unit-table'],
   },
 ];
 

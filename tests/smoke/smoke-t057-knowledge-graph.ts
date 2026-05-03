@@ -17,12 +17,12 @@ const result = await runWorkspaceRuntimeGateway({
   workspacePath: workspace,
   availableSkills: ['agentserver.generate.knowledge'],
   expectedArtifactTypes: ['research-report', 'omics-differential-expression', 'knowledge-graph'],
-  selectedComponentIds: ['report-viewer', 'network-graph', 'evidence-matrix', 'execution-unit-table'],
+  selectedComponentIds: ['report-viewer', 'graph-viewer', 'evidence-matrix', 'execution-unit-table'],
   uiState: {
     freshTaskGeneration: true,
     forceAgentServerGeneration: true,
     expectedArtifactTypes: ['research-report', 'omics-differential-expression', 'knowledge-graph'],
-    selectedComponentIds: ['report-viewer', 'network-graph', 'evidence-matrix', 'execution-unit-table'],
+    selectedComponentIds: ['report-viewer', 'graph-viewer', 'evidence-matrix', 'execution-unit-table'],
   },
 });
 

@@ -1,33 +1,110 @@
 import { manifest as reportViewer } from './report-viewer/manifest';
-import { manifest as moleculeViewer } from './molecule-viewer/manifest';
 import { manifest as paperCardList } from './paper-card-list/manifest';
-import { manifest as networkGraph } from './network-graph/manifest';
-import { manifest as volcanoPlot } from './volcano-plot/manifest';
-import { manifest as heatmapViewer } from './heatmap-viewer/manifest';
-import { manifest as umapViewer } from './umap-viewer/manifest';
 import { manifest as evidenceMatrix } from './evidence-matrix/manifest';
 import { manifest as executionUnitTable } from './execution-unit-table/manifest';
 import { manifest as notebookTimeline } from './notebook-timeline/manifest';
-import { manifest as dataTable } from './data-table/manifest';
+import { manifest as recordTable } from './record-table/manifest';
+import { manifest as graphViewer } from './graph-viewer/manifest';
+import { manifest as pointSetViewer } from './point-set-viewer/manifest';
+import { manifest as matrixViewer } from './matrix-viewer/manifest';
+import { manifest as structureViewer } from './structure-viewer/manifest';
 import { manifest as unknownArtifactInspector } from './unknown-artifact-inspector/manifest';
+import { manifest as scientificPlotViewer } from './scientific-plot-viewer/manifest';
+import { manifest as sequenceViewer } from './sequence-viewer/manifest';
+import { manifest as alignmentViewer } from './alignment-viewer/manifest';
+import { manifest as timeSeriesViewer } from './time-series-viewer/manifest';
+import { manifest as modelEvalViewer } from './model-eval-viewer/manifest';
+import { manifest as schemaFormEditor } from './schema-form-editor/manifest';
+import { manifest as comparisonViewer } from './comparison-viewer/manifest';
+import { manifest as genomeTrackViewer } from './genome-track-viewer/manifest';
+import { manifest as imageAnnotationViewer } from './image-annotation-viewer/manifest';
+import { manifest as spatialOmicsViewer } from './spatial-omics-viewer/manifest';
+import { manifest as plateLayoutViewer } from './plate-layout-viewer/manifest';
+import { manifest as predictionReviewer } from './prediction-reviewer/manifest';
+import { manifest as protocolEditor } from './protocol-editor/manifest';
+import { manifest as publicationFigureBuilder } from './publication-figure-builder/manifest';
+import { manifest as statisticalAnnotationLayer } from './statistical-annotation-layer/manifest';
 import type { UIComponentManifest } from './types';
 
 export type { PresentationDedupeScope, UIComponentManifest, UIComponentWorkbenchDemo } from './types';
 export type { UIComponentRenderer, UIComponentRendererProps } from './types';
-export { renderDataTable } from './data-table/render';
 export { renderReportViewer, coerceReportPayload as coerceReportViewerPayload } from './report-viewer/render';
+export { renderRecordTable } from './record-table/render';
+export { renderGraphViewer } from './graph-viewer/render';
+export { renderPointSetViewer } from './point-set-viewer/render';
+export { renderMatrixViewer } from './matrix-viewer/render';
+export { renderStructureViewer } from './structure-viewer/render';
 
 export const uiComponentManifests: UIComponentManifest[] = [
   reportViewer,
-  moleculeViewer,
   paperCardList,
-  networkGraph,
-  volcanoPlot,
-  heatmapViewer,
-  umapViewer,
   evidenceMatrix,
   executionUnitTable,
   notebookTimeline,
-  dataTable,
+  recordTable,
+  graphViewer,
+  pointSetViewer,
+  matrixViewer,
+  structureViewer,
+  scientificPlotViewer,
+  sequenceViewer,
+  alignmentViewer,
+  timeSeriesViewer,
+  modelEvalViewer,
+  schemaFormEditor,
+  comparisonViewer,
+  genomeTrackViewer,
+  imageAnnotationViewer,
+  spatialOmicsViewer,
+  plateLayoutViewer,
+  predictionReviewer,
+  protocolEditor,
+  publicationFigureBuilder,
+  statisticalAnnotationLayer,
   unknownArtifactInspector,
 ];
+
+export const uiComponentCompatibilityAliases = [
+  {
+    legacyComponentId: 'data-table',
+    routeComponentId: 'record-table',
+    activeComponentId: 'record-table',
+    status: 'deprecated-alias',
+    note: 'data-table is accepted only as a historical alias; new slots should use record-table.',
+  },
+  {
+    legacyComponentId: 'network-graph',
+    routeComponentId: 'graph-viewer',
+    activeComponentId: 'graph-viewer',
+    status: 'deprecated-alias',
+    note: 'network-graph is accepted only as a historical alias; new slots should use graph-viewer.',
+  },
+  {
+    legacyComponentId: 'volcano-plot',
+    routeComponentId: 'point-set-viewer',
+    activeComponentId: 'point-set-viewer',
+    status: 'deprecated-alias',
+    note: 'volcano-plot is accepted only as a historical point-set preset alias.',
+  },
+  {
+    legacyComponentId: 'umap-viewer',
+    routeComponentId: 'point-set-viewer',
+    activeComponentId: 'point-set-viewer',
+    status: 'deprecated-alias',
+    note: 'umap-viewer is accepted only as a historical point-set preset alias.',
+  },
+  {
+    legacyComponentId: 'heatmap-viewer',
+    routeComponentId: 'matrix-viewer',
+    activeComponentId: 'matrix-viewer',
+    status: 'deprecated-alias',
+    note: 'heatmap-viewer is accepted only as a historical alias; new slots should use matrix-viewer.',
+  },
+  {
+    legacyComponentId: 'molecule-viewer',
+    routeComponentId: 'structure-viewer',
+    activeComponentId: 'structure-viewer',
+    status: 'deprecated-alias',
+    note: 'molecule-viewer is accepted only as a historical alias; new slots should use structure-viewer.',
+  },
+] as const;

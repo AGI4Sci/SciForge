@@ -1,0 +1,18 @@
+{
+  "name": "@sciforge-ui/structure-viewer",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./manifest.ts",
+  "files": ["README.md", "fixtures", "manifest.ts", "package.json", "render.tsx", "workbench-demo"],
+  "exports": {
+    ".": "./manifest.ts",
+    "./manifest": "./manifest.ts",
+    "./README.md": "./README.md",
+    "./fixtures/basic": "./fixtures/basic.ts",
+    "./fixtures/empty": "./fixtures/empty.ts",
+    "./fixtures/selection": "./fixtures/selection.ts",
+    "./render": "./render.tsx",
+    "./workbench-demo/*": "./workbench-demo/*"
+  },
+  "peerDependencies": { "react": "^19.2.5" }
+}

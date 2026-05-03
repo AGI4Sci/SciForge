@@ -4170,8 +4170,9 @@ function parseGenerationResponse(value: unknown): AgentServerGenerationResponse 
       const taskFiles = Array.isArray(parsed.taskFiles)
         ? parsed.taskFiles
           .map((file) => {
-            if (!isRecord(file)) return undefined;
-            return file;
+            if (typeof file === 'string' && file.trim()) return { path: file.trim() };
+            if (isRecord(file)) return file;
+            return undefined;
           })
           .filter(isRecord)
         : [];

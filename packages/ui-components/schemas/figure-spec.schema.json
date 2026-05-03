@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sciforge.local/schemas/ui-primitives/figure-spec.schema.json",
+  "title": "SciForge figure-spec primitive",
+  "type": "object",
+  "required": ["primitive", "panels"],
+  "properties": {
+    "primitive": { "const": "figure-spec" },
+    "schemaVersion": { "type": "string", "default": "0.1.0" },
+    "id": { "type": "string" },
+    "figureId": { "type": "string" },
+    "title": { "type": "string" },
+    "caption": { "type": "string" },
+    "layout": {
+      "type": "object",
+      "properties": {
+        "rows": { "type": "number" },
+        "columns": { "type": "number" },
+        "panelLabels": { "type": "array", "items": { "type": "string" } },
+        "sharedAxes": { "type": "boolean" },
+        "sharedLegend": { "type": "boolean" },
+        "typography": { "type": "object", "additionalProperties": true },
+        "insets": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+      },
+      "additionalProperties": true
+    },
+    "panels": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "primitive"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "primitive": { "type": "string", "examples": ["plot-spec", "visual-annotation", "statistical-result"] },
+          "plotSpecRef": { "type": "string" },
+          "dataRef": { "type": "string" },
+          "title": { "type": "string" },
+          "spec": { "type": ["object", "array", "string"], "additionalProperties": true },
+          "annotations": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+        },
+        "additionalProperties": true
+      }
+    },
+    "exportProfile": {
+      "type": "object",
+      "properties": {
+        "renderer": { "const": "plotly" },
+        "format": { "type": "string", "examples": ["pdf", "svg", "png", "tiff"] },
+        "targets": { "type": "array", "items": { "type": "string" } },
+        "width": { "type": "number" },
+        "height": { "type": "number" },
+        "units": { "type": "string", "examples": ["mm", "in", "px"] },
+        "dpi": { "type": "number" },
+        "fontEmbedding": { "type": "string" },
+        "vectorRequired": { "type": "boolean" },
+        "fallbackRenderer": { "$ref": "#/$defs/fallbackRenderer" },
+        "qa": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": true
+    },
+    "metadata": { "type": "object", "additionalProperties": true }
+  },
+  "$defs": {
+    "fallbackRenderer": {
+      "type": "object",
+      "required": ["renderer", "purpose"],
+      "properties": {
+        "renderer": { "type": "string", "examples": ["matplotlib"] },
+        "purpose": { "type": "string", "examples": ["advanced-publication-export"] },
+        "derivedOnly": { "const": true },
+        "sourceFigureSpecId": { "type": "string" },
+        "scriptRef": { "type": "string" },
+        "outputRef": { "type": "string" },
+        "rendererVersions": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true,
+  "examples": [
+    {
+      "primitive": "figure-spec",
+      "schemaVersion": "0.1.0",
+      "id": "figure-demo",
+      "figureId": "figure-1",
+      "title": "Figure 1",
+      "caption": "Treatment effect summary.",
+      "layout": { "rows": 1, "columns": 2, "panelLabels": ["A", "B"], "sharedLegend": true },
+      "panels": [
+        { "id": "a", "label": "A", "primitive": "plot-spec", "plotSpecRef": "plot-volcano-demo" },
+        { "id": "b", "label": "B", "primitive": "plot-spec", "plotSpecRef": "plot-heatmap-demo" }
+      ],
+      "exportProfile": {
+        "renderer": "plotly",
+        "format": "pdf",
+        "targets": ["pdf", "svg", "png"],
+        "width": 174,
+        "height": 120,
+        "units": "mm",
+        "fallbackRenderer": { "renderer": "matplotlib", "purpose": "advanced-publication-export", "derivedOnly": true, "sourceFigureSpecId": "figure-1" }
+      }
+    }
+  ]
+}

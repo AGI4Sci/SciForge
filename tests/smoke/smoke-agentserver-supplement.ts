@@ -84,7 +84,7 @@ payload = {
     "reasoningTrace": "Initial generated task intentionally emitted only omics so supplement can fill report.",
     "claims": [],
     "uiManifest": [
-        {"componentId": "volcano-plot", "artifactRef": "omics-differential-expression", "priority": 1}
+        {"componentId": "point-set-viewer", "artifactRef": "omics-differential-expression", "priority": 1}
     ],
     "executionUnits": [
         {"id": "initial-omics-task", "status": "done", "tool": "agentserver.generated.python", "attempt": request.get("attempt", 1)}
@@ -171,7 +171,7 @@ try {
     workspacePath: workspace,
     agentServerBaseUrl: baseUrl,
     expectedArtifactTypes: ['omics-differential-expression', 'research-report'],
-    selectedComponentIds: ['report-viewer', 'volcano-plot', 'heatmap-viewer', 'execution-unit-table'],
+    selectedComponentIds: ['report-viewer', 'point-set-viewer', 'matrix-viewer', 'execution-unit-table'],
     artifacts: [],
   });
 
@@ -181,7 +181,7 @@ try {
   assert.ok(report);
   assert.notEqual(isRecord(report.metadata) ? report.metadata.status : undefined, 'repair-needed');
   assert.ok(result.uiManifest.some((slot) => slot.componentId === 'report-viewer' && slot.artifactRef === 'research-report'));
-  assert.ok(result.uiManifest.some((slot) => slot.componentId === 'volcano-plot'));
+  assert.ok(result.uiManifest.some((slot) => slot.componentId === 'point-set-viewer'));
   assert.match(String(result.reasoningTrace), /Supplemental AgentServer\/backend generation/);
   console.log('[ok] agentserver supplement fills missing expected artifacts after local skill output');
 } finally {
