@@ -417,7 +417,7 @@ createServer(async (req, res) => {
         isolation: {
           proposals: '.bioagent/skill-proposals',
           acceptedEvolvedSkills: '.bioagent/evolved-skills',
-          stableSkillRoots: ['skills/seed', 'skills/installed', '.bioagent/skills'],
+          stableSkillRoots: ['packages/skills', '.bioagent/evolved-skills'],
         },
       });
     } catch (err) {

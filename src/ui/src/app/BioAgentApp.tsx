@@ -23,6 +23,7 @@ import {
   FolderOpen,
   FolderPlus,
   Lock,
+  Moon,
   Plus,
   Play,
   RefreshCw,
@@ -31,6 +32,7 @@ import {
   Settings,
   Shield,
   Sparkles,
+  Sun,
   Target,
   Trash2,
   type LucideIcon,
@@ -40,7 +42,6 @@ import {
   feasibilityRows,
   navItems,
   radarData,
-  roleTabs,
   stats,
   type ScenarioId,
   type ClaimType,
@@ -56,7 +57,6 @@ import { buildScenarioQualityReport } from '../scenarioCompiler/scenarioQualityG
 import { buildBuiltInScenarioPackage, builtInScenarioPackageRef, type ScenarioPackage } from '../scenarioCompiler/scenarioPackage';
 import type { ScenarioLibraryItem } from '../scenarioCompiler/scenarioLibrary';
 import { compileSlotsForScenario } from '../scenarioCompiler/uiPlanCompiler';
-import { scpMarkdownSkills } from '../scpSkillCatalog';
 import { timeline } from '../demoData';
 import { sendAgentMessageStream } from '../api/agentClient';
 import { sendBioAgentToolMessage } from '../api/bioagentToolsClient';
@@ -126,13 +126,15 @@ import {
 } from '../api/workspaceClient';
 import { runtimeContractSchemas, schemaPreview, validateRuntimeContract } from '../runtimeContracts';
 import { AlignmentPage, TimelinePage, type AlignmentContractData } from './AlignmentPages';
+import { ComponentWorkbenchPage } from './ComponentWorkbenchPage';
 import { Dashboard } from './Dashboard';
 import { ResultsRenderer, handoffAutoRunPrompt, type HandoffAutoRunRequest } from './ResultsRenderer';
 import { ScenarioBuilderPanel, defaultElementSelectionForScenario, scenarioPackageToOverride } from './ScenarioBuilderPanel';
-import { ChatPanel, mergeRunTimelineEvents, objectReferenceKindLabel } from './ChatPanel';
+import { objectReferenceKindLabel } from '../../../../packages/object-references';
+import { ChatPanel, mergeRunTimelineEvents } from './ChatPanel';
 import { exportJsonFile, exportTextFile } from './exportUtils';
 import { RuntimeHealthPanel, useRuntimeHealth, type RuntimeHealthItem } from './runtimeHealthPanel';
-import { ActionButton, Badge, Card, ChartLoadingFallback, ClaimTag, ConfidenceBar, EmptyArtifactState, EvidenceTag, IconButton, SectionHeader, TabBar, cx } from './uiPrimitives';
+import { ActionButton, Badge, Card, ChartLoadingFallback, ClaimTag, ConfidenceBar, EmptyArtifactState, EvidenceTag, IconButton, SectionHeader, cx } from './uiPrimitives';
 import { HeatmapViewer, MoleculeViewer, NetworkGraph, UmapViewer } from '../visualizations';
 
 const chartTheme = {
@@ -225,26 +227,6 @@ function hasUsableModelConfig(config: BioAgentConfig) {
   return Boolean(config.modelBaseUrl.trim() && config.apiKey.trim());
 }
 
-const extensionTools = [
-  { name: 'Workspace Runtime Gateway', detail: 'deterministic task dispatch / artifact JSON / ExecutionUnit', kind: 'runtime' },
-  { name: 'MCP Tool Adapters', detail: 'fixed remote tool flows and connector contracts', kind: 'mcp' },
-  { name: 'PubMed E-utilities', detail: 'literature search and paper-list artifacts', kind: 'database' },
-  { name: 'RCSB / AlphaFold DB', detail: 'structure metadata, coordinate download and parsing', kind: 'database' },
-  { name: 'UniProt / ChEMBL', detail: 'protein, compound and mechanism lookups', kind: 'database' },
-  { name: 'NCBI BLAST URL API', detail: 'BLASTP sequence-alignment artifacts', kind: 'database' },
-  { name: 'Python / R / Shell / CLI Runner', detail: 'workspace-local reproducible task execution', kind: 'runner' },
-  { name: 'AgentServer Repair Bridge', detail: 'task generation and self-heal fallback', kind: 'fallback' },
-];
-
-const executableSeedSkills = [
-  'literature.pubmed_search',
-  'structure.rcsb_latest_or_entry',
-  'omics.differential_expression',
-  'knowledge.uniprot_chembl_lookup',
-  'sequence.ncbi_blastp_search',
-  'inspector.generic_file_table_log',
-];
-
 function explorerWorkspaceRoot(config: BioAgentConfig): string {
   return (config.workspacePath || '').replace(/\/+$/, '');
 }
@@ -310,7 +292,7 @@ function Sidebar({
 }) {
   const workspaceRoot = explorerWorkspaceRoot(config);
   const [collapsed, setCollapsed] = useState(false);
-  const [activePanel, setActivePanel] = useState<'navigation' | 'workspace' | 'extensions'>('navigation');
+  const [activePanel, setActivePanel] = useState<'navigation' | 'workspace'>('navigation');
   const prevPageRef = useRef<PageId | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(284);
   const [folderChildren, setFolderChildren] = useState<Record<string, WorkspaceEntry[]>>({});
@@ -343,7 +325,7 @@ function Sidebar({
     };
   }, [collapsed]);
 
-  function handlePanelSwitch(panel: 'navigation' | 'workspace' | 'extensions') {
+  function handlePanelSwitch(panel: 'navigation' | 'workspace') {
     setActivePanel(panel);
     setCollapsed(false);
   }
@@ -731,7 +713,7 @@ function Sidebar({
   }
 
   return (
-    <aside className={cx('sidebar', collapsed && 'collapsed', activePanel === 'workspace' && 'explorer-theme')} style={{ width: collapsed ? 46 : sidebarWidth }}>
+    <aside className={cx('sidebar', collapsed && 'collapsed')} style={{ width: collapsed ? 46 : sidebarWidth }}>
       <div className="sidebar-activitybar">
         <div className="brand">
           <div className="brand-mark">BA</div>
@@ -751,14 +733,6 @@ function Sidebar({
           aria-label="资源管理器"
         >
           <Files size={18} />
-        </button>
-        <button
-          className={cx('activity-item', activePanel === 'extensions' && !collapsed && 'active')}
-          onClick={() => handlePanelSwitch('extensions')}
-          title="拓展"
-          aria-label="拓展"
-        >
-          <Sparkles size={18} />
         </button>
         {collapsed ? (
           <button className="collapse-button top-toggle" onClick={() => setCollapsed(false)} title="展开侧栏" aria-label="展开侧栏">
@@ -806,7 +780,7 @@ function Sidebar({
             ) : (
               <>
                 <span>
-                  {activePanel === 'navigation' ? '导航' : '拓展'}
+                  导航
                 </span>
                 <button className="panel-collapse-button" onClick={() => setCollapsed(true)} title="收起侧栏" aria-label="收起侧栏">
                   <ChevronLeft size={16} />
@@ -1009,55 +983,6 @@ function Sidebar({
                 </details>
               </div>
             ) : null}
-            {activePanel === 'extensions' ? (
-              <div className="sidebar-tree">
-                <div className="extension-section">
-                  <div className="sidebar-label">Tools</div>
-                  <p className="extension-note">确定性的 MCP tool、数据库 connector、runtime runner 和修复流程。</p>
-                  {extensionTools.map((tool) => (
-                    <div key={tool.name} className="extension-row" title={`${tool.name}: ${tool.detail}`}>
-                      <span className="extension-icon"><Settings size={13} /></span>
-                      <span className="extension-copy">
-                        <strong>{tool.name}</strong>
-                        <small>{tool.kind} · {tool.detail}</small>
-                      </span>
-                    </div>
-                  ))}
-                </div>
-                <div className="extension-section">
-                  <div className="sidebar-label">Skills</div>
-                  <p className="extension-note">Markdown skill 是可读、可安装、可沉淀的任务知识；seed skill 描述能力和产物契约。</p>
-                  <div className="extension-subhead">
-                    <span>Seed capability contracts</span>
-                    <code>{executableSeedSkills.length}</code>
-                  </div>
-                  {executableSeedSkills.map((skill) => (
-                    <div key={skill} className="extension-row compact" title={`skills/seed/${skill}/skill.json`}>
-                      <span className="extension-icon"><FileCode size={13} /></span>
-                      <span className="extension-copy">
-                        <strong>{skill}</strong>
-                        <small>skills/seed capability manifest</small>
-                      </span>
-                    </div>
-                  ))}
-                  <div className="extension-subhead">
-                    <span>SCP markdown skills</span>
-                    <code>{scpMarkdownSkills.length}</code>
-                  </div>
-                  <div className="skill-catalog-list">
-                    {scpMarkdownSkills.map((skill) => (
-                      <div key={skill.id} className="extension-row compact" title={`${skill.description}\n${skill.path}`}>
-                        <span className="extension-icon"><FileText size={13} /></span>
-                        <span className="extension-copy">
-                          <strong>{skill.name}</strong>
-                          <small>{skill.description}</small>
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ) : null}
           </div>
         </div>
       ) : null}
@@ -1124,10 +1049,14 @@ function formatBytes(value: number) {
 function TopBar({
   onSearch,
   onSettingsOpen,
+  theme,
+  onThemeToggle,
   healthItems,
 }: {
   onSearch: (query: string) => void;
   onSettingsOpen: () => void;
+  theme: BioAgentConfig['theme'];
+  onThemeToggle: () => void;
   healthItems: RuntimeHealthItem[];
 }) {
   const [query, setQuery] = useState('');
@@ -1146,6 +1075,7 @@ function TopBar({
         <Badge variant={healthProblems ? 'warning' : 'success'} glow>
           Scenario Runtime · {healthProblems ? `${healthProblems} actions` : 'ready'}
         </Badge>
+        <IconButton icon={(theme ?? 'dark') === 'dark' ? Sun : Moon} label={(theme ?? 'dark') === 'dark' ? '切换白天模式' : '切换黑夜模式'} onClick={onThemeToggle} />
         <IconButton icon={Settings} label="设置" onClick={onSettingsOpen} />
       </div>
     </header>
@@ -1185,6 +1115,13 @@ function SettingsDialog({
         </div>
         <RuntimeHealthPanel items={healthItems} />
         <div className="settings-grid">
+          <label>
+            <span>界面主题</span>
+            <select value={config.theme} onChange={(event) => onChange({ theme: event.target.value === 'light' ? 'light' : 'dark' })}>
+              <option value="dark">黑夜</option>
+              <option value="light">白天</option>
+            </select>
+          </label>
           <label>
             <span>AgentServer Base URL</span>
             <input value={config.agentServerBaseUrl} onChange={(event) => onChange({ agentServerBaseUrl: event.target.value })} />
@@ -1325,6 +1262,7 @@ function Workbench({
   onWorkspaceFileEditorChange,
   externalReferenceRequest,
   onExternalReferenceConsumed,
+  availableComponentIds,
 }: {
   scenarioId: ScenarioInstanceId;
   config: BioAgentConfig;
@@ -1355,6 +1293,7 @@ function Workbench({
   onWorkspaceFileEditorChange: (next: { file: WorkspaceFileContent; draft: string } | null) => void;
   externalReferenceRequest?: { id: string; reference: BioAgentReference };
   onExternalReferenceConsumed: (requestId: string) => void;
+  availableComponentIds: string[];
 }) {
   const baseScenarioId = builtInScenarioIdForInstance(scenarioId, scenarioOverride);
   const scenarioView = scenarios.find((item) => item.id === baseScenarioId) ?? scenarios[0];
@@ -1368,7 +1307,6 @@ function Workbench({
     allowedComponents: scenarioSpec.componentPolicy.allowedComponents,
     fallbackComponent: scenarioSpec.componentPolicy.fallbackComponent,
   };
-  const [role, setRole] = useState('biologist');
   const [resultsCollapsed, setResultsCollapsed] = useState(false);
   const [settingsExpanded, setSettingsExpanded] = useState(false);
   const [mobilePane, setMobilePane] = useState<'builder' | 'chat' | 'results'>('chat');
@@ -1437,10 +1375,6 @@ function Workbench({
             <p>{runtimeScenario.description}</p>
           </div>
         </div>
-        <div className="role-tabs">
-          <span>角色视图</span>
-          <TabBar tabs={roleTabs} active={role} onChange={setRole} />
-        </div>
       </div>
       <div className="mobile-workbench-tabs" aria-label="移动端工作区视图">
         {[
@@ -1465,10 +1399,11 @@ function Workbench({
         />
       </div>
       <div className="manifest-banner">
-        <span>UIManifest</span>
-        {runtimeScenario.defaultComponents.map((component) => (
+        <span>UI allowlist</span>
+        {(availableComponentIds.length ? availableComponentIds : runtimeScenario.defaultComponents).map((component) => (
           <code key={component}>{component}</code>
         ))}
+        <code>source={availableComponentIds.length ? 'component-workbench' : 'scenario-default'}</code>
         <code>fallback={runtimeScenario.fallbackComponent}</code>
       </div>
       <div
@@ -1478,7 +1413,7 @@ function Workbench({
         <div className={cx('mobile-pane', mobilePane !== 'chat' && 'mobile-hidden')}>
           <ChatPanel
             scenarioId={scenarioId}
-            role={role}
+            role="biologist"
             config={config}
             session={session}
             input={draft}
@@ -1506,6 +1441,7 @@ function Workbench({
             onObjectFocus={handleObjectFocus}
             externalReferenceRequest={externalReferenceRequest}
             onExternalReferenceConsumed={onExternalReferenceConsumed}
+            availableComponentIds={availableComponentIds}
           />
         </div>
         {!resultsCollapsed ? (
@@ -2020,6 +1956,9 @@ export function BioAgentApp() {
   const [configSaveState, setConfigSaveState] = useState<ConfigSaveState>({ status: 'idle' });
   const [externalReferenceRequest, setExternalReferenceRequest] = useState<{ id: string; scenarioId: ScenarioInstanceId; reference: BioAgentReference } | undefined>();
   const [scenarioOverrides, setScenarioOverrides] = useState<Partial<Record<ScenarioInstanceId, ScenarioRuntimeOverride>>>({});
+  const [selectedRuntimeComponentIds, setSelectedRuntimeComponentIds] = useState<string[]>(() => (
+    Array.from(new Set(uiModuleRegistry.filter((module) => module.lifecycle === 'published').map((module) => module.componentId))).sort()
+  ));
   const [drafts, setDrafts] = useState<Record<ScenarioInstanceId, string>>({
     'literature-evidence-review': '',
     'structure-exploration': '',
@@ -2598,7 +2537,7 @@ export function BioAgentApp() {
   const appHealthItems = useRuntimeHealth(config, Object.keys(sessions).length);
 
   return (
-    <div className="app-shell">
+    <div className={cx('app-shell', `theme-${config.theme ?? 'dark'}`)}>
       <div className="ambient ambient-a" />
       <div className="ambient ambient-b" />
       <Sidebar
@@ -2615,7 +2554,13 @@ export function BioAgentApp() {
         onWorkbenchEditorPathInvalidated={() => setWorkbenchWorkspaceFileEditor(null)}
       />
       <div className="main-shell">
-        <TopBar onSearch={handleSearch} onSettingsOpen={() => setSettingsOpen(true)} healthItems={appHealthItems} />
+        <TopBar
+          onSearch={handleSearch}
+          onSettingsOpen={() => setSettingsOpen(true)}
+          theme={config.theme}
+          onThemeToggle={() => updateRuntimeConfig({ theme: (config.theme ?? 'dark') === 'dark' ? 'light' : 'dark' })}
+          healthItems={appHealthItems}
+        />
         <div className="content-shell">
           {page === 'dashboard' ? (
             <Dashboard
@@ -2659,6 +2604,12 @@ export function BioAgentApp() {
               onExternalReferenceConsumed={(requestId) => {
                 setExternalReferenceRequest((current) => current?.id === requestId ? undefined : current);
               }}
+              availableComponentIds={selectedRuntimeComponentIds}
+            />
+          ) : page === 'components' ? (
+            <ComponentWorkbenchPage
+              selectedComponentIds={selectedRuntimeComponentIds}
+              onSelectedComponentIdsChange={setSelectedRuntimeComponentIds}
             />
           ) : page === 'alignment' ? (
             <AlignmentPage contracts={workspaceState.alignmentContracts ?? []} onSaveContract={saveAlignmentContract} />

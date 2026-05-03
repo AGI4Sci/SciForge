@@ -37,12 +37,12 @@ describe('scenario compiler package model', () => {
     assert.match(draft.scenarioMarkdown, /输出 artifact/);
   });
 
-  it('compiles skill plans with route options for seed and generated skill paths', () => {
-    const plan = compileSkillPlan(['literature.pubmed_search', 'scp.biomarker_discovery']);
+  it('compiles skill plans with route options for SKILL.md and generated skill paths', () => {
+    const plan = compileSkillPlan(['agentserver.generate.literature', 'scp.biomarker_discovery']);
 
-    assert.ok(plan.skillIRs.some((skill) => skill.skillId === 'literature.pubmed_search'));
+    assert.ok(plan.skillIRs.some((skill) => skill.skillId === 'agentserver.generate.literature'));
     assert.ok(plan.skillIRs.some((skill) => skill.skillId === 'scp.biomarker_discovery'));
-    assert.ok(plan.routeOptions.some((route) => route.skillId === 'literature.pubmed_search' && route.runtimeProfileId === 'seed-skill'));
+    assert.ok(plan.routeOptions.some((route) => route.skillId === 'agentserver.generate.literature' && route.runtimeProfileId === 'agentserver-codex'));
     assert.ok(plan.routeOptions.some((route) => route.skillId === 'scp.biomarker_discovery' && route.runtimeProfileId === 'scp-hub'));
   });
 
@@ -66,7 +66,7 @@ describe('scenario compiler package model', () => {
       id: 'custom-literature-review',
       title: 'Custom literature review',
       description: 'Review PubMed evidence and show papers with evidence claims.',
-      selectedSkillIds: ['literature.pubmed_search'],
+      selectedSkillIds: ['scp.biomedical-web-search'],
       selectedArtifactTypes: ['paper-list'],
       selectedComponentIds: ['paper-card-list', 'evidence-matrix', 'unknown-artifact-inspector'],
       selectedToolIds: ['tool.pubmed'],
@@ -74,7 +74,7 @@ describe('scenario compiler package model', () => {
 
     assert.equal(result.scenario.id, 'custom-literature-review');
     assert.equal(result.scenario.skillDomain, 'literature');
-    assert.deepEqual(result.scenario.selectedSkillIds, ['literature.pubmed_search']);
+    assert.deepEqual(result.scenario.selectedSkillIds, ['scp.biomedical-web-search']);
     assert.equal(result.uiPlan.scenarioId, 'custom-literature-review');
     assert.equal(result.package.validationReport?.ok, true);
     assert.equal(result.validationReport.ok, true);
@@ -85,7 +85,7 @@ describe('scenario compiler package model', () => {
       id: 'broken-structure-review',
       title: 'Broken sequence review',
       description: 'Show a sequence alignment artifact without selecting a sequence-producing skill.',
-      selectedSkillIds: ['literature.pubmed_search'],
+      selectedSkillIds: ['pdf-extract'],
       selectedArtifactTypes: ['sequence-alignment'],
       selectedComponentIds: ['data-table', 'unknown-artifact-inspector'],
     });

@@ -6,9 +6,9 @@ import { runScenarioRuntimeSmoke } from '../../src/ui/src/scenarioCompiler/runti
 const stableSeed = compileScenarioIRFromSelection({
   id: 'stable-literature-offline',
   title: 'Stable literature offline',
-  description: 'Use the validated seed PubMed skill contract without requiring AgentServer.',
+  description: 'Use the validated packaged biomedical search skill contract without requiring AgentServer.',
   skillDomain: 'literature',
-  selectedSkillIds: ['literature.pubmed_search'],
+  selectedSkillIds: ['scp.biomedical-web-search'],
   selectedArtifactTypes: ['paper-list'],
   selectedComponentIds: ['paper-card-list', 'unknown-artifact-inspector'],
   selectedFailurePolicyIds: ['failure.missing-input', 'failure.schema-mismatch', 'failure.backend-unavailable'],
@@ -17,13 +17,13 @@ const stableSeed = compileScenarioIRFromSelection({
 const smoke = await runScenarioRuntimeSmoke({ package: stableSeed.package, mode: 'dry-run' });
 assert.equal(smoke.ok, true);
 assert.equal(smoke.packageRef.source, 'workspace');
-assert.ok(smoke.selectedSkillIds.includes('literature.pubmed_search'));
+assert.ok(smoke.selectedSkillIds.includes('scp.biomedical-web-search'));
 assert.ok(smoke.expectedArtifactTypes.includes('paper-list'));
 
 const noProducer = compileScenarioIRFromSelection({
   id: 'unsupported-sequence-no-producer',
   title: 'Unsupported sequence no producer',
-  description: 'Request sequence alignment without selecting the sequence-producing seed skill.',
+  description: 'Request sequence alignment without selecting the sequence-producing package skill.',
   skillDomain: 'knowledge',
   selectedSkillIds: ['knowledge.uniprot_chembl_lookup'],
   selectedArtifactTypes: ['sequence-alignment'],

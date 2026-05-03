@@ -12,10 +12,13 @@ describe('element registry', () => {
     const report = validateElementRegistry(registry);
 
     assert.equal(report.ok, true, JSON.stringify(report.issues, null, 2));
-    assert.ok(registry.skills.some((skill) => skill.id === 'literature.pubmed_search'));
-    assert.ok(registry.skills.some((skill) => skill.id === 'literature.web_search'));
+    assert.ok(registry.skills.some((skill) => skill.id === 'pdf-extract'));
+    assert.ok(registry.skills.some((skill) => skill.id === 'scp.biomedical-web-search'));
     assert.ok(registry.skills.some((skill) => skill.id === 'agentserver.generate.literature'));
     assert.ok(registry.skills.some((skill) => skill.id.startsWith('scp.')));
+    assert.ok(registry.skills.filter((skill) => skill.id.startsWith('scp.')).every((skill) => skill.source === 'package'));
+    assert.ok(registry.tools.some((tool) => tool.id === 'clawhub.playwright-mcp'));
+    assert.ok(registry.tools.every((tool) => tool.source === 'package'));
     assert.ok(registry.artifacts.some((artifact) => artifact.artifactType === 'paper-list'));
     assert.ok(registry.artifacts.some((artifact) => artifact.artifactType === 'research-report'));
     assert.ok(registry.components.some((component) => component.componentId === 'report-viewer'));

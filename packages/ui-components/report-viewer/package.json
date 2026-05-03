@@ -1,0 +1,12 @@
+{
+  "name": "@bioagent-ui/report-viewer",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./manifest.ts",
+  "files": [
+    "README.md",
+    "manifest.json",
+    "manifest.ts",
+    "package.json"
+  ]
+}

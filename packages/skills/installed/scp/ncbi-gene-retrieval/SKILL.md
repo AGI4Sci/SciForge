@@ -1,0 +1,75 @@
+---
+name: ncbi-gene-retrieval
+description: "Retrieve gene information from NCBI including sequences, aliases, summaries, and genomic location."
+metadata:
+  scpToolId: "122"
+  scpCategory: "life_science"
+  scpHubUrl: "https://scphub.intern-ai.org.cn/skill/122"
+  categoryLabel: "生命科学"
+  tags: ["生命科学"]
+---
+
+# NCBI Gene Retrieval
+
+## Usage
+
+```python
+import asyncio
+import json
+from mcp.client.streamable_http import streamablehttp_client
+from mcp import ClientSession
+
+class OrigeneClient:
+    def __init__(self, server_url: str, api_key: str):
+        self.server_url = server_url
+        self.api_key = api_key
+        self.session = None
+
+    async def connect(self):
+        try:
+            self.transport = streamablehttp_client(url=self.server_url, headers={"SCP-HUB-API-KEY": self.api_key})
+            self.read, self.write, self.get_session_id = await self.transport.__aenter__()
+            self.session_ctx = ClientSession(self.read, self.write)
+            self.session = await self.session_ctx.__aenter__()
+            await self.session.initialize()
+            return True
+        except Exception as e:
+            return False
+
+    async def disconnect(self):
+        if self.session:
+            await self.session_ctx.__aexit__(None, None, None)
+        if hasattr(self, 'transport'):
+            await self.transport.__aexit__(None, None, None)
+
+    def parse_result(self, result):
+        if isinstance(result, dict):
+            content_list = result.get("content") or []
+        else:
+            content_list = getattr(result, "content", []) or []
+        texts = []
+        for item in content_list:
+            if isinstance(item, dict):
+                if item.get("type") == "text":
+                    texts.append(item.get("text") or "")
+            else:
+                if getattr(item, "type", None) == "text":
+                    texts.append(getattr(item, "text", "") or "")
+        return "".join(texts)
+
+## Initialize and use
+client = OrigeneClient("https://scp.intern-ai.org.cn/api/v1/mcp/9/Origene-NCBI", "<your-api-key>")
+await client.connect()
+
+result = await client.session.call_tool("get_gene_by_ids", arguments={"gene_ids": [59067, 50615]})
+print(client.parse_result(result))
+
+await client.disconnect()
+```
+
+### Tool: `get_gene_by_ids`
+- Args: `gene_ids` (list) - NCBI gene IDs
+- Returns: Gene information including name, function, location, and expression
+
+### Use Cases
+- Gene annotation, functional genomics, disease gene research

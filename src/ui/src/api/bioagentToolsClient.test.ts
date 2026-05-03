@@ -140,6 +140,57 @@ describe('sendBioAgentToolMessage routing', () => {
     assert.equal(artifacts[0].path, '.bioagent/uploads/session-upload/upload-pdf.pdf');
     assert.equal('data' in artifacts[0], false);
     assert.ok(artifacts[0].dataSummary);
+    assert.deepEqual(requestBody?.expectedArtifactTypes, ['research-report']);
+    assert.deepEqual((requestBody?.uiState as Record<string, unknown>).expectedArtifactTypes, ['research-report']);
+    assert.deepEqual((requestBody?.uiState as Record<string, unknown>).selectedComponentIds, ['report-viewer']);
+  });
+
+  it('does not force scenario-default evidence objects for generic uploaded-file questions', async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    globalThis.fetch = (async (_url, init) => {
+      requestBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        ok: true,
+        result: {
+          message: 'backend decides',
+          confidence: 0.8,
+          claimType: 'fact',
+          evidenceLevel: 'runtime',
+          uiManifest: [],
+          executionUnits: [{ id: 'EU-generic-upload', tool: 'bioagent.workspace-runtime-gateway', status: 'done' }],
+          artifacts: [],
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    await sendBioAgentToolMessage({
+      ...baseInput(),
+      scenarioId: 'literature-evidence-review',
+      agentName: 'Literature',
+      agentDomain: 'literature',
+      prompt: '看一下这个 pdf-extract skill 能不能用，能用的话帮我处理上传的 PDF。',
+      availableComponentIds: ['report-viewer', 'unknown-artifact-inspector'],
+      artifacts: [{
+        id: 'upload-pdf',
+        type: 'uploaded-pdf',
+        producerScenario: 'literature-evidence-review',
+        schemaVersion: '1',
+        dataRef: '.bioagent/uploads/session-upload/paper.pdf',
+        path: '.bioagent/uploads/session-upload/paper.pdf',
+        metadata: { fileName: 'paper.pdf', mimeType: 'application/pdf', size: 1234, source: 'user-upload' },
+      }],
+    });
+
+    assert.deepEqual(requestBody?.expectedArtifactTypes, []);
+    assert.deepEqual(requestBody?.availableComponentIds, ['report-viewer', 'unknown-artifact-inspector']);
+    const uiState = requestBody?.uiState as Record<string, unknown>;
+    assert.deepEqual(uiState.expectedArtifactTypes, []);
+    assert.deepEqual(uiState.selectedComponentIds, []);
+    assert.deepEqual(uiState.availableComponentIds, ['report-viewer', 'unknown-artifact-inspector']);
+    assert.equal(uiState.artifactExpectationMode, 'backend-decides');
   });
 
   it('routes fresh arxiv literature report requests to Codex-backed AgentServer generation', async () => {
@@ -504,7 +555,7 @@ describe('sendBioAgentToolMessage routing', () => {
     assert.equal(contextEvent?.contextWindowState?.windowTokens, 200_000);
   });
 
-  it('does not treat "do not use seed skill" repair prompts as local skill requests', async () => {
+  it('does not treat "do not use package skill" repair prompts as local skill requests', async () => {
     let requestBody: Record<string, unknown> | undefined;
     globalThis.fetch = (async (_url, init) => {
       requestBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
@@ -539,7 +590,7 @@ describe('sendBioAgentToolMessage routing', () => {
         allowedComponents: ['paper-card-list', 'evidence-matrix', 'execution-unit-table'],
         fallbackComponent: 'unknown-artifact-inspector',
       },
-      prompt: 'T059 literature Round 1：不要使用 literature.pubmed_search seed skill；请由 BioAgent/AgentServer 自己生成 workspace-local task，故意制造 external API failure，失败时显示 failureReason、stdoutRef/stderrRef 和 ExecutionUnit。',
+      prompt: 'T059 literature Round 1：不要使用 literature.pubmed_search package skill；请由 BioAgent/AgentServer 自己生成 workspace-local task，故意制造 external API failure，失败时显示 failureReason、stdoutRef/stderrRef 和 ExecutionUnit。',
       scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'built-in' },
     });
 
@@ -715,6 +766,16 @@ describe('sendBioAgentToolMessage routing', () => {
     const artifacts = requestBody?.artifacts as Array<Record<string, unknown>>;
     assert.equal(artifacts[0].workspaceArtifactRef, '.bioagent/artifacts/session-alpha-generic-result.json');
     assert.deepEqual(artifacts[0].fileRefs, ['.bioagent/task-results/run-alpha.json', '.bioagent/outputs/result.csv']);
+    const accessPolicy = uiState.artifactAccessPolicy as Record<string, unknown>;
+    assert.equal(accessPolicy.mode, 'refs-first-bounded-read');
+    assert.match(String(accessPolicy.defaultAction), /metadata/);
+    assert.deepEqual(accessPolicy.reusableArtifactRefs, [
+      'artifact:generic-result',
+      'file:.bioagent/task-results/run-alpha.json',
+      'file:.bioagent/outputs/result.csv',
+    ]);
+    const agentContext = uiState.agentContext as Record<string, unknown>;
+    assert.deepEqual(agentContext.artifactAccessPolicy, accessPolicy);
   });
 
   it('compacts long chat history before sending workspace runtime context', async () => {
@@ -769,6 +830,91 @@ describe('sendBioAgentToolMessage routing', () => {
     assert.equal(typeof scenario.markdownPreview, 'string');
     assert.equal(typeof scenario.markdownChars, 'number');
     assert.equal('markdown' in scenario, false);
+  });
+
+  it('keeps a stable 12+ turn ledger and prefers latest artifacts for continuation context', async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    globalThis.fetch = (async (_url, init) => {
+      requestBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        ok: true,
+        result: {
+          message: 'multi-turn context answered',
+          confidence: 0.8,
+          claimType: 'fact',
+          evidenceLevel: 'runtime',
+          uiManifest: [],
+          executionUnits: [{ id: 'EU-multi-turn-context', tool: 'bioagent.workspace-runtime-gateway', status: 'done' }],
+          artifacts: [],
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    const messages = Array.from({ length: 22 }, (_, index) => ({
+      id: `msg-${index + 1}`,
+      role: index % 2 === 0 ? 'user' as const : 'scenario' as const,
+      content: `Round ${index + 1}: ${index % 2 === 0 ? '用户提出复杂约束' : '系统回答并生成 workspace refs'}，保持追加顺序。`,
+      createdAt: `2026-05-03T00:${String(index).padStart(2, '0')}:00.000Z`,
+      status: 'completed' as const,
+    }));
+    const artifacts = Array.from({ length: 10 }, (_, index) => ({
+      id: `artifact-${index + 1}`,
+      type: 'runtime-artifact',
+      producerScenario: 'generic-multi-turn-test',
+      schemaVersion: '1',
+      dataRef: `.bioagent/artifacts/artifact-${index + 1}.json`,
+      metadata: { runId: `run-${index + 1}` },
+      data: { markdown: `artifact ${index + 1}` },
+    }));
+    const executionUnits = Array.from({ length: 10 }, (_, index) => ({
+      id: `EU-${index + 1}`,
+      tool: 'generated.workspace-task',
+      params: '{}',
+      status: 'done' as const,
+      hash: `hash-${index + 1}`,
+      outputRef: `.bioagent/task-results/run-${index + 1}.json`,
+    }));
+
+    await sendBioAgentToolMessage({
+      ...baseInput(),
+      sessionId: 'session-multi-turn-ledger',
+      messages,
+      artifacts,
+      executionUnits,
+      prompt: '继续第 23 轮：只基于已有上下文和最新 workspace refs 继续分析，不要重新理解整个任务背景。',
+    });
+
+    const uiState = requestBody?.uiState as Record<string, unknown>;
+    const recentConversation = uiState.recentConversation as string[];
+    assert.equal(recentConversation.length, 17);
+    assert.match(recentConversation[0], /Round 7:/);
+    assert.match(recentConversation.at(-1) ?? '', /第 23 轮/);
+    const ledger = uiState.conversationLedger as Array<Record<string, unknown>>;
+    assert.equal(ledger.length, 22);
+    assert.equal(ledger[0].id, 'msg-1');
+    assert.equal(ledger.at(-1)?.id, 'msg-22');
+    assert.equal(typeof ledger[0].contentDigest, 'string');
+    const reusePolicy = uiState.contextReusePolicy as Record<string, unknown>;
+    assert.equal(reusePolicy.mode, 'stable-ledger-plus-recent-window');
+    const accessPolicy = uiState.artifactAccessPolicy as Record<string, unknown>;
+    assert.equal(accessPolicy.mode, 'refs-first-bounded-read');
+    assert.match(JSON.stringify(accessPolicy), /bounded reads/i);
+
+    const requestArtifacts = requestBody?.artifacts as Array<Record<string, unknown>>;
+    assert.deepEqual(requestArtifacts.map((artifact) => artifact.id), [
+      'artifact-3', 'artifact-4', 'artifact-5', 'artifact-6',
+      'artifact-7', 'artifact-8', 'artifact-9', 'artifact-10',
+    ]);
+    const recentExecutionRefs = uiState.recentExecutionRefs as Array<Record<string, unknown>>;
+    assert.deepEqual(recentExecutionRefs.map((unit) => unit.id), [
+      'EU-3', 'EU-4', 'EU-5', 'EU-6', 'EU-7', 'EU-8', 'EU-9', 'EU-10',
+    ]);
+    const agentContext = uiState.agentContext as Record<string, unknown>;
+    assert.deepEqual(agentContext.conversationLedger, ledger);
+    assert.deepEqual(agentContext.contextReusePolicy, reusePolicy);
   });
 
   it('passes explicit chat references to workspace runtime context', async () => {

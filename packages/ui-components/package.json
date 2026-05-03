@@ -1,0 +1,12 @@
+{
+  "name": "@bioagent-ui/components",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./index.ts",
+    "./types": "./types.ts",
+    "./data-table/render": "./data-table/render.tsx",
+    "./report-viewer/render": "./report-viewer/render.tsx"
+  }
+}

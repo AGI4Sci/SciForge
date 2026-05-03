@@ -1,120 +1,31 @@
-import type { HTMLAttributes, ReactNode } from 'react';
-import type { LucideIcon } from 'lucide-react';
 import type { ClaimType, EvidenceLevel } from '../data';
+import { Badge, EmptyState } from '../../../../packages/design-system/src';
 
-export function cx(...values: Array<string | false | undefined>) {
-  return values.filter(Boolean).join(' ');
-}
-
-export function Card({
-  children,
-  className = '',
-  onClick,
-  ...props
-}: HTMLAttributes<HTMLElement> & { children: ReactNode; className?: string; onClick?: () => void }) {
-  return (
-    <section {...props} className={cx('card', onClick && 'clickable', className)} onClick={onClick}>
-      {children}
-    </section>
-  );
-}
-
-export function Badge({
-  children,
-  variant = 'info',
-  glow = false,
-}: {
-  children: ReactNode;
-  variant?: 'info' | 'success' | 'warning' | 'danger' | 'muted' | 'coral';
-  glow?: boolean;
-}) {
-  return <span className={cx('badge', `badge-${variant}`, glow && 'badge-glow')}>{children}</span>;
-}
-
-export function IconButton({ icon: Icon, label, onClick }: { icon: LucideIcon; label: string; onClick?: () => void }) {
-  return (
-    <button className="icon-button" onClick={onClick} title={label} aria-label={label} data-tooltip={label}>
-      <Icon size={17} />
-    </button>
-  );
-}
-
-export function ActionButton({
-  icon: Icon,
-  children,
-  variant = 'primary',
-  onClick,
-  disabled = false,
-}: {
-  icon?: LucideIcon;
-  children: ReactNode;
-  variant?: 'primary' | 'secondary' | 'ghost' | 'coral';
-  onClick?: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button className={cx('action-button', `action-${variant}`)} onClick={onClick} disabled={disabled}>
-      {Icon ? <Icon size={16} /> : null}
-      {children}
-    </button>
-  );
-}
+export {
+  ActionButton,
+  Badge,
+  Button,
+  Card,
+  Details,
+  EmptyState,
+  IconButton,
+  Input,
+  Panel,
+  SectionHeader,
+  Select,
+  TabBar,
+  cssVar,
+  cx,
+  semanticTokens,
+  themeClassNames,
+} from '../../../../packages/design-system/src';
+export type { BadgeVariant, ButtonVariant, SemanticToken, ThemeName } from '../../../../packages/design-system/src';
 
 export function ChartLoadingFallback({ label }: { label: string }) {
   return (
     <div className="empty-runtime-state compact chart-loading-state">
       <Badge variant="muted">loading</Badge>
       <strong>{label}</strong>
-    </div>
-  );
-}
-
-export function SectionHeader({
-  icon: Icon,
-  title,
-  subtitle,
-  action,
-}: {
-  icon?: LucideIcon;
-  title: string;
-  subtitle?: string;
-  action?: ReactNode;
-}) {
-  return (
-    <div className="section-header">
-      <div className="section-title-wrap">
-        {Icon ? (
-          <div className="section-icon">
-            <Icon size={18} />
-          </div>
-        ) : null}
-        <div>
-          <h2>{title}</h2>
-          {subtitle ? <p>{subtitle}</p> : null}
-        </div>
-      </div>
-      {action}
-    </div>
-  );
-}
-
-export function TabBar<T extends string>({
-  tabs,
-  active,
-  onChange,
-}: {
-  tabs: Array<{ id: T; label: string; icon?: LucideIcon }>;
-  active: T;
-  onChange: (id: T) => void;
-}) {
-  return (
-    <div className="tabbar">
-      {tabs.map((tab) => (
-        <button key={tab.id} className={cx('tab', active === tab.id && 'active')} onClick={() => onChange(tab.id)} title={tab.label} data-tooltip={tab.label}>
-          {tab.icon ? <tab.icon size={14} /> : null}
-          <span>{tab.label}</span>
-        </button>
-      ))}
     </div>
   );
 }
@@ -171,10 +82,7 @@ export function ConfidenceBar({ value }: { value: number }) {
 export function EmptyArtifactState({ title, detail, recoverActions }: { title: string; detail: string; recoverActions?: string[] }) {
   const actions = recoverActions?.length ? recoverActions : ['run-current-scenario', 'import-matching-package', 'inspect-artifact-schema'];
   return (
-    <div className="empty-runtime-state">
-      <Badge variant="muted">empty</Badge>
-      <strong>{title}</strong>
-      <p>{detail}</p>
+    <EmptyState label="empty" title={title} detail={detail}>
       <details className="empty-recover-details">
         <summary>可尝试的恢复动作</summary>
         <div className="empty-recover-actions" aria-label="恢复动作">
@@ -183,7 +91,7 @@ export function EmptyArtifactState({ title, detail, recoverActions }: { title: s
           ))}
         </div>
       </details>
-    </div>
+    </EmptyState>
   );
 }
 

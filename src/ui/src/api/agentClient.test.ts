@@ -455,6 +455,36 @@ describe('normalizeAgentResponse', () => {
     assert.equal(result.lastCompactedAt, '2026-05-02T00:00:01.000Z');
     assert.equal(result.message, 'compact preflight completed');
   });
+
+  it('normalizes AgentServer compaction tags and no-op compact responses', async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify(calls === 1
+        ? {
+          ok: true,
+          data: {
+            kind: 'partial_compaction',
+            id: 'partial-test-1',
+            createdAt: '2026-05-02T00:01:00.000Z',
+          },
+        }
+        : { ok: true, data: null }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    const completed = await compactAgentContext(compactInput(), 'auto-threshold-before-send');
+    const skipped = await compactAgentContext(compactInput(), 'auto-threshold-before-send');
+
+    assert.equal(completed.status, 'completed');
+    assert.equal(completed.compactCapability, 'agentserver');
+    assert.equal(completed.lastCompactedAt, '2026-05-02T00:01:00.000Z');
+    assert.deepEqual(completed.auditRefs, ['agentserver-compaction:partial-test-1']);
+    assert.equal(skipped.status, 'skipped');
+    assert.match(skipped.message ?? '', /no compaction tag/i);
+  });
 });
 
 function compactInput(): SendAgentMessageInput {

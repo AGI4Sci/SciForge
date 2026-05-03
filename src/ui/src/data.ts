@@ -3,22 +3,20 @@ import {
   BarChart3,
   BookOpen,
   Brain,
+  Blocks,
   Database,
   Dna,
   FileText,
   FlaskConical,
   GitBranch,
   MessageSquare,
-  Microscope,
-  Network,
   Shield,
-  Target,
   Users,
   type LucideIcon,
 } from 'lucide-react';
 
 export type ScenarioId = 'literature-evidence-review' | 'structure-exploration' | 'omics-differential-exploration' | 'biomedical-knowledge-graph';
-export type PageId = 'dashboard' | 'workbench' | 'alignment' | 'timeline' | 'feedback';
+export type PageId = 'dashboard' | 'workbench' | 'components' | 'alignment' | 'timeline' | 'feedback';
 export type ClaimType = 'fact' | 'inference' | 'hypothesis';
 export type EvidenceLevel = 'meta' | 'rct' | 'cohort' | 'case' | 'experimental' | 'review' | 'database' | 'preprint' | 'prediction';
 
@@ -84,6 +82,7 @@ export const scenarios: ScenarioViewConfig[] = [
 export const navItems = [
   { id: 'dashboard' as const, label: '研究概览', icon: Activity },
   { id: 'workbench' as const, label: '场景工作台', icon: Brain },
+  { id: 'components' as const, label: '组件工作台', icon: Blocks },
   { id: 'alignment' as const, label: '对齐工作台', icon: Users },
   { id: 'timeline' as const, label: '研究时间线', icon: GitBranch },
   { id: 'feedback' as const, label: '反馈收件箱', icon: MessageSquare },
@@ -112,9 +111,3 @@ export const radarData = [
   { subject: '验证可行', ai: 70, bio: 75 },
 ];
 
-export const roleTabs = [
-  { id: 'biologist', label: '实验生物学家', icon: Microscope },
-  { id: 'bioinformatician', label: '生信分析师', icon: Dna },
-  { id: 'pi', label: 'PI', icon: Target },
-  { id: 'clinical', label: '临床医生', icon: Network },
-];

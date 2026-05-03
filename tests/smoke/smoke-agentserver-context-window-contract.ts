@@ -268,13 +268,13 @@ try {
     assert.equal(contextCompaction.ok, backend !== 'openclaw');
     assert.equal(contextCompaction.strategy, backend === 'openclaw' ? 'handoff-slimming' : capabilities.nativeCompaction ? 'native' : 'agentserver');
     if (backend === 'openclaw') {
-      assert.equal(contextCompaction.status, 'unsupported', 'OpenClaw compact endpoint 404 should be audited as unsupported');
+      assert.equal(contextCompaction.status, 'skipped', 'OpenClaw compact endpoint 404 should be surfaced as skipped for UI compaction state');
       assert.equal(capabilities.nativeCompaction, false, 'OpenClaw compatibility backend should not pretend native compact succeeded');
       assert.equal(contextWindow.compactCapability, 'handoff-only', 'OpenClaw without native compact should be handoff-only');
       assert.ok(Array.isArray(contextCompaction.auditRefs) && contextCompaction.auditRefs.length > 0, 'OpenClaw unsupported compact should carry audit refs');
       assert.match(String(contextCompaction.message || ''), /compact unavailable|no native compaction|handoff/i);
     } else {
-      assert.equal(contextCompaction.status, 'compacted');
+      assert.equal(contextCompaction.status, 'completed');
     }
     const contextEvents = contextEventsByBackend.get(backend) ?? [];
     const slimmedEvent = contextEvents.find((event) => isRecord(event.budget) && Array.isArray(event.auditRefs) && event.auditRefs.length > 0);

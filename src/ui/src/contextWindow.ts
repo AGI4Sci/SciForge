@@ -14,7 +14,7 @@ export function buildContextWindowMeterModel(state: AgentContextWindowState, run
   const statusLabel = contextWindowStatusLabel(state);
   const thresholdDetail = [
     state.watchThreshold !== undefined ? `watch ${formatPercent(state.watchThreshold)}` : undefined,
-    state.autoCompactThreshold !== undefined ? `auto ${formatPercent(state.autoCompactThreshold)}` : undefined,
+    state.autoCompactThreshold !== undefined ? `compact ${formatPercent(state.autoCompactThreshold)}` : undefined,
     state.nearLimitThreshold !== undefined ? `near ${formatPercent(state.nearLimitThreshold)}` : undefined,
   ].filter(Boolean).join(' / ') || 'unknown';
   const budgetRows = contextBudgetRows(state);
@@ -39,7 +39,7 @@ export function buildContextWindowMeterModel(state: AgentContextWindowState, run
     `source: ${sourceLabel}`,
     `backend: ${state.backend || 'unknown'}`,
     `compact: ${state.compactCapability || 'unknown'}`,
-    `auto threshold: ${state.autoCompactThreshold !== undefined ? `${Math.round(state.autoCompactThreshold * 100)}%` : 'unknown'}`,
+    `compact threshold: ${state.autoCompactThreshold !== undefined ? `${Math.round(state.autoCompactThreshold * 100)}%` : 'unknown'}`,
     `last compacted: ${state.lastCompactedAt || 'never'}`,
   ].join('\n');
 
@@ -61,33 +61,50 @@ export function buildContextWindowMeterModel(state: AgentContextWindowState, run
     ratioDetail,
     thresholdDetail,
     detailRows,
-    title: `${title}\n只读状态；压缩时机由 AgentServer 自动判断。`,
+    title: `${title}\n发送前达到阈值时会请求 AgentServer/backend 原生压缩；运行中事件只读展示。`,
   };
 }
 
 export function latestContextWindowState(events: AgentStreamEvent[]) {
   const compaction = [...events].reverse().find((event) => event.contextCompaction?.lastCompactedAt)?.contextCompaction;
-  const state = [...events].reverse().find((event) => event.contextWindowState)?.contextWindowState;
+  const lastCompactedState = [...events].reverse().find((event) => event.contextWindowState?.lastCompactedAt)?.contextWindowState;
+  const state = [...events].reverse().find((event) => event.contextWindowState && event.contextWindowState.source !== 'provider-usage')?.contextWindowState;
   if (!state && !compaction) return undefined;
+  const compactionState = compaction?.after ?? compaction?.before;
   return {
-    ...(state ?? { source: 'unknown' as const }),
-    lastCompactedAt: state?.lastCompactedAt ?? compaction?.lastCompactedAt,
-    compactCapability: state?.compactCapability ?? compaction?.compactCapability,
-    backend: state?.backend ?? compaction?.backend,
+    ...(state ?? compactionState ?? { source: 'unknown' as const }),
+    lastCompactedAt: state?.lastCompactedAt ?? lastCompactedState?.lastCompactedAt ?? compaction?.lastCompactedAt ?? compactionState?.lastCompactedAt,
+    compactCapability: state?.compactCapability ?? compaction?.compactCapability ?? compactionState?.compactCapability,
+    backend: state?.backend ?? compaction?.backend ?? compactionState?.backend,
   };
 }
 
 export function estimateContextWindowState(session: BioAgentSession, config: BioAgentConfig, events: AgentStreamEvent[]): AgentContextWindowState {
   const modelWindow = config.maxContextWindowTokens || estimateModelContextWindow(config.modelName);
-  const textChars = session.messages.slice(-24).reduce((sum, message) => sum + message.content.length + (message.expandable?.length ?? 0), 0);
-  const artifactChars = session.artifacts.slice(-12).reduce((sum, artifact) => sum + JSON.stringify({
+  const latestTelemetry = latestContextWindowState(events);
+  if (latestTelemetry && latestTelemetry.source !== 'provider-usage') {
+    return withFallbackContextWindow(latestTelemetry, modelWindow, config);
+  }
+  const textChars = session.messages.reduce((sum, message) => sum + message.content.length + (message.expandable?.length ?? 0), 0);
+  const artifactChars = session.artifacts.reduce((sum, artifact) => sum + JSON.stringify({
     id: artifact.id,
     type: artifact.type,
     metadata: artifact.metadata,
     dataRef: artifact.dataRef,
     path: artifact.path,
   }).length, 0);
-  const usedTokens = Math.ceil((textChars + artifactChars) / 4);
+  const runChars = session.runs.reduce((sum, run) => sum + run.prompt.length + run.response.length, 0);
+  const executionChars = session.executionUnits.reduce((sum, unit) => sum + JSON.stringify({
+    id: unit.id,
+    status: unit.status,
+    tool: unit.tool,
+    codeRef: unit.codeRef,
+    outputRef: unit.outputRef,
+    stdoutRef: unit.stdoutRef,
+    stderrRef: unit.stderrRef,
+    failureReason: unit.failureReason,
+  }).length, 0);
+  const usedTokens = Math.ceil((textChars + artifactChars + runChars + executionChars) / 4);
   return {
     usedTokens: Number.isFinite(usedTokens) ? usedTokens : undefined,
     windowTokens: modelWindow,
@@ -98,6 +115,27 @@ export function estimateContextWindowState(session: BioAgentSession, config: Bio
     autoCompactThreshold: 0.82,
     watchThreshold: 0.68,
     nearLimitThreshold: 0.86,
+  };
+}
+
+function withFallbackContextWindow(
+  state: AgentContextWindowState,
+  modelWindow: number | undefined,
+  config: BioAgentConfig,
+): AgentContextWindowState {
+  const windowTokens = state.windowTokens ?? state.window ?? modelWindow;
+  const ratio = state.ratio ?? (
+    state.usedTokens !== undefined && windowTokens ? state.usedTokens / windowTokens : undefined
+  );
+  return {
+    ...state,
+    windowTokens,
+    ratio,
+    backend: state.backend || config.agentBackend || 'unknown',
+    compactCapability: state.compactCapability ?? compactCapabilityForBackend(config.agentBackend),
+    autoCompactThreshold: state.autoCompactThreshold ?? 0.82,
+    watchThreshold: state.watchThreshold ?? 0.68,
+    nearLimitThreshold: state.nearLimitThreshold ?? 0.86,
   };
 }
 
@@ -128,11 +166,12 @@ export function shouldStartContextCompaction({
 }
 
 export function contextWindowLevel(state: AgentContextWindowState) {
+  const ratio = state.ratio;
+  if (ratio !== undefined && ratio >= (state.nearLimitThreshold ?? 0.86)) return 'near-limit';
   if (state.status === 'blocked' || state.status === 'exceeded' || state.status === 'near-limit') return 'near-limit';
+  if (ratio !== undefined && ratio >= (state.watchThreshold ?? 0.68)) return 'watch';
   if (state.status === 'watch' || state.status === 'compacting') return 'watch';
-  if (state.ratio === undefined) return 'unknown';
-  if (state.ratio >= (state.nearLimitThreshold ?? 0.86)) return 'near-limit';
-  if (state.ratio >= (state.watchThreshold ?? 0.68)) return 'watch';
+  if (ratio === undefined) return 'unknown';
   return 'ok';
 }
 
@@ -165,6 +204,9 @@ function compactCapabilityForBackend(backend: string): AgentContextWindowState['
 }
 
 function contextWindowStatusLabel(state: AgentContextWindowState) {
+  if (state.ratio !== undefined && state.ratio >= 1) return 'exceeded';
+  if (state.ratio !== undefined && state.ratio >= (state.nearLimitThreshold ?? 0.86)) return 'near-limit';
+  if (state.ratio !== undefined && state.ratio >= (state.watchThreshold ?? 0.68) && (state.status === 'healthy' || state.status === 'unknown' || !state.status)) return 'watch';
   if (state.status === 'healthy') return 'healthy';
   if (state.status === 'watch') return 'watch';
   if (state.status === 'near-limit') return 'near-limit';

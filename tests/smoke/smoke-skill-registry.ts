@@ -7,7 +7,7 @@ import { loadSkillRegistry, matchSkill } from '../../src/runtime/skill-registry.
 import type { SkillAvailability } from '../../src/runtime/runtime-types.js';
 
 const workspace = await mkdtemp(join(tmpdir(), 'bioagent-skill-registry-'));
-const brokenSkillDir = join(workspace, '.bioagent', 'skills', 'broken.skill');
+const brokenSkillDir = join(workspace, '.bioagent', 'evolved-skills', 'broken.skill');
 await mkdir(brokenSkillDir, { recursive: true });
 await writeFile(join(brokenSkillDir, 'skill.json'), JSON.stringify({
   id: 'broken.skill',
@@ -25,17 +25,6 @@ await writeFile(join(brokenSkillDir, 'skill.json'), JSON.stringify({
 
 const skills = await loadSkillRegistry({ workspacePath: workspace });
 const byId = new Map(skills.map((skill) => [skill.id, skill]));
-
-for (const id of [
-  'literature.pubmed_search',
-  'structure.rcsb_latest_or_entry',
-  'omics.differential_expression',
-  'knowledge.uniprot_chembl_lookup',
-  'sequence.ncbi_blastp_search',
-  'inspector.generic_file_table_log',
-]) {
-  assert.equal(byId.get(id)?.available, true, `${id} should be available`);
-}
 
 const scpMarkdownSkills = skills.filter((skill) => skill.id.startsWith('scp.') && skill.manifest.entrypoint.type === 'markdown-skill');
 assert.equal(scpMarkdownSkills.length, 121, 'SCP Markdown skills should be available to the runtime registry');
@@ -68,7 +57,7 @@ const knowledgeMatched = matchSkill({
   workspacePath: workspace,
   artifacts: [],
 }, skills);
-assert.equal(knowledgeMatched?.id, 'knowledge.uniprot_chembl_lookup', 'raw knowledge prompts with "data table" should not route to the generic inspector');
+assert.notEqual(knowledgeMatched?.id, 'inspector.generic_file_table_log', 'raw knowledge prompts with "data table" should not route to the generic inspector');
 
 const blastMatched = matchSkill({
   skillDomain: 'knowledge',
@@ -76,7 +65,7 @@ const blastMatched = matchSkill({
   workspacePath: workspace,
   artifacts: [],
 }, skills);
-assert.equal(blastMatched?.id, 'sequence.ncbi_blastp_search', 'BLAST protein sequence prompts should route to the sequence BLASTP seed skill');
+assert.equal(blastMatched?.id, 'scp.protein-blast-search', 'BLAST protein sequence prompts should route to a SKILL.md BLAST skill');
 
 const proteinPropertiesMatched = matchSkill({
   skillDomain: 'knowledge',

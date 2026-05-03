@@ -635,6 +635,7 @@ export interface BioAgentConfig {
   agentServerBaseUrl: string;
   workspaceWriterBaseUrl: string;
   workspacePath: string;
+  theme?: 'dark' | 'light';
   agentBackend: string;
   modelProvider: string;
   modelBaseUrl: string;
@@ -659,6 +660,7 @@ export interface SendAgentMessageInput {
   runs?: BioAgentRun[];
   config: BioAgentConfig;
   scenarioOverride?: ScenarioRuntimeOverride;
+  availableComponentIds?: string[];
   scenarioPackageRef?: ScenarioPackageRef;
   skillPlanRef?: string;
   uiPlanRef?: string;

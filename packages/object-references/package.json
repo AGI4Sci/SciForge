@@ -1,0 +1,9 @@
+{
+  "name": "@bioagent-ui/object-references",
+  "version": "1.0.0",
+  "type": "module",
+  "private": false,
+  "exports": {
+    ".": "./index.ts"
+  }
+}

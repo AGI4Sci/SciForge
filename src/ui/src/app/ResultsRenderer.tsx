@@ -5,15 +5,36 @@ import { SCENARIO_SPECS } from '../scenarioSpecs';
 import { elementRegistry } from '../scenarioCompiler/elementRegistry';
 import { compileSlotsForScenario } from '../scenarioCompiler/uiPlanCompiler';
 import { buildExecutionBundle, evaluateExecutionBundleExport } from '../exportPolicy';
-import { runtimeContractSchemas, schemaPreview, validateRuntimeContract } from '../runtimeContracts';
+import { artifactPreviewActions, objectReferenceKinds, previewDescriptorKinds, runtimeContractSchemas, schemaPreview, validateRuntimeContract } from '../runtimeContracts';
 import { openWorkspaceObject, readPreviewDescriptor, readWorkspaceFile, writeWorkspaceFile, type WorkspaceFileContent } from '../api/workspaceClient';
 import { uiModuleRegistry, type PresentationDedupeScope, type RuntimeUIModule } from '../uiModuleRegistry';
+import { renderDataTable, renderReportViewer, type UIComponentRendererProps } from '../../../../packages/ui-components';
+import {
+  descriptorWithDiagnostic as packageDescriptorWithDiagnostic,
+  mergePreviewDescriptors as packageMergePreviewDescriptors,
+  normalizeArtifactPreviewDescriptor as packageNormalizeArtifactPreviewDescriptor,
+  shouldHydratePreviewDescriptor as packageShouldHydratePreviewDescriptor,
+} from '../../../../packages/artifact-preview';
 import type { VolcanoPoint } from '../charts';
 import { HeatmapViewer, MoleculeViewer, NetworkGraph, UmapViewer } from '../visualizations';
 import { exportJsonFile, exportTextFile } from './exportUtils';
-import { objectReferenceKindLabel } from './ChatPanel';
 import { ActionButton, Badge, Card, ChartLoadingFallback, ClaimTag, ConfidenceBar, EmptyArtifactState, EvidenceTag, SectionHeader, TabBar, cx } from './uiPrimitives';
 import type { BioAgentConfig, BioAgentReference, BioAgentRun, BioAgentSession, DisplayIntent, EvidenceClaim, NotebookRecord, ObjectAction, ObjectReference, PreviewDescriptor, ResolvedViewPlan, RuntimeArtifact, RuntimeExecutionUnit, ScenarioInstanceId, UIManifestSlot, ViewPlanSection } from '../domain';
+import {
+  artifactForObjectReference,
+  artifactReferenceKind as packageArtifactReferenceKind,
+  availableObjectActions,
+  bioAgentReferenceAttribute,
+  findArtifact,
+  objectReferenceKindLabel,
+  pathForObjectReference,
+  referenceForArtifact,
+  referenceForObjectReference,
+  referenceForResultSlotLike,
+  referenceForWorkspaceFileLike,
+  syntheticArtifactForObjectReference,
+  withRegionLocator,
+} from '../../../../packages/object-references';
 
 const VolcanoChart = lazy(async () => ({ default: (await import('../charts')).VolcanoChart }));
 
@@ -35,81 +56,6 @@ function asNumber(value: unknown): number | undefined {
 
 function toRecordList(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
-}
-
-function findArtifact(session: BioAgentSession, ref?: string): RuntimeArtifact | undefined {
-  if (!ref) return undefined;
-  const normalizedRef = ref.replace(/^artifact:\/\//, '').replace(/^artifact:/, '');
-  return session.artifacts.find((artifact) => artifact.id === ref
-    || artifact.id === normalizedRef
-    || artifact.dataRef === ref
-    || artifact.dataRef === normalizedRef
-    || artifact.type === ref
-    || artifact.type === normalizedRef
-    || Object.values(artifact.metadata ?? {}).some((value) => value === ref));
-}
-
-function artifactForObjectReference(reference: ObjectReference, session: BioAgentSession): RuntimeArtifact | undefined {
-  if (reference.kind !== 'artifact') return undefined;
-  return findArtifact(session, reference.ref)
-    ?? findArtifact(session, reference.artifactType)
-    ?? session.artifacts.find((artifact) => artifact.id === reference.id || artifact.type === reference.artifactType);
-}
-
-function pathForObjectReference(reference: ObjectReference, session: BioAgentSession): string | undefined {
-  const artifact = artifactForObjectReference(reference, session);
-  const artifactDataRef = asString(artifact?.dataRef);
-  if (artifact) {
-    return artifact.path
-      || asString(artifact.metadata?.path)
-      || asString(artifact.metadata?.filePath)
-      || asString(artifact.metadata?.localPath)
-      || (artifactDataRef && !artifactDataRef.startsWith('upload:') ? artifactDataRef : undefined)
-      || reference.provenance?.path
-      || reference.provenance?.dataRef;
-  }
-  if (reference.kind === 'file' || reference.kind === 'folder') return reference.ref.replace(/^(file|folder):/i, '');
-  return reference.provenance?.path || reference.provenance?.dataRef;
-}
-
-function syntheticArtifactForObjectReference(reference: ObjectReference, scenarioId: ScenarioInstanceId): RuntimeArtifact | undefined {
-  if (reference.kind !== 'file' && reference.kind !== 'folder' && reference.kind !== 'url') return undefined;
-  const path = reference.ref.replace(/^(file|folder|url):/i, '');
-  return {
-    id: reference.id,
-    type: reference.kind === 'url' ? 'external-url' : artifactTypeForPath(path, reference.kind),
-    producerScenario: scenarioId,
-    schemaVersion: '1',
-    metadata: {
-      title: reference.title,
-      objectReferenceId: reference.id,
-      path: reference.kind === 'url' ? undefined : path,
-      url: reference.kind === 'url' ? path : undefined,
-      synthetic: true,
-    },
-    path: reference.kind === 'url' ? undefined : path,
-    dataRef: reference.kind === 'url' || reference.kind === 'file' ? path : undefined,
-    data: {
-      title: reference.title,
-      ref: reference.ref,
-      summary: reference.summary,
-      path: reference.kind === 'url' ? undefined : path,
-      url: reference.kind === 'url' ? path : undefined,
-    },
-  };
-}
-
-function artifactTypeForPath(path: string, kind: ObjectReference['kind']) {
-  if (kind === 'folder') return 'workspace-folder';
-  if (/\.md$/i.test(path)) return 'research-report';
-  if (/\.pdf$/i.test(path)) return 'pdf-document';
-  if (/\.(docx?|rtf)$/i.test(path)) return 'word-document';
-  if (/\.(pptx?|key)$/i.test(path)) return 'slide-deck';
-  if (/\.(png|jpe?g|gif|webp|svg)$/i.test(path)) return 'image';
-  if (/\.(csv|tsv|xlsx?)$/i.test(path)) return 'data-table';
-  if (/\.(pdb|cif|mmcif)$/i.test(path)) return 'structure-summary';
-  if (/\.html?$/i.test(path)) return 'html-document';
-  return 'workspace-file';
 }
 
 function artifactMeta(artifact?: RuntimeArtifact) {
@@ -146,8 +92,21 @@ function executionUnitForArtifact(session: BioAgentSession, artifact?: RuntimeAr
 }
 
 function slotPayload(slot: UIManifestSlot, artifact?: RuntimeArtifact): Record<string, unknown> {
-  if (isRecord(artifact?.data)) return artifact.data;
-  return slot.props ?? {};
+  const props = slot.props ?? {};
+  if (!artifact) return props;
+  const artifactRecord = artifact as RuntimeArtifact & Record<string, unknown>;
+  const artifactData = isRecord(artifact.data) ? artifact.data : {};
+  const nestedContent = isRecord(artifactRecord.content)
+    ? artifactRecord.content
+    : isRecord(artifactData.content)
+      ? artifactData.content
+      : {};
+  return {
+    ...props,
+    ...artifactRecord,
+    ...artifactData,
+    ...nestedContent,
+  };
 }
 
 function viewCompositionSummary(slot: UIManifestSlot) {
@@ -384,7 +343,6 @@ export function ResultsRenderer({
   const tabs = [
     { id: 'primary', label: '结果视图' },
     { id: 'evidence', label: '证据矩阵' },
-    { id: 'ui-design', label: 'UI设计' },
   ];
   const focusModes: Array<{ id: ResultFocusMode; label: string }> = [
     { id: 'all', label: '全部' },
@@ -532,8 +490,6 @@ export function ResultsRenderer({
               />
             ) : resultTab === 'evidence' ? (
               <EvidenceMatrix claims={session.claims} artifacts={session.artifacts} />
-            ) : resultTab === 'ui-design' ? (
-              <UIDesignStudioPanel viewPlan={viewPlan} />
             ) : null}
           </div>
           {inspectedArtifact ? (
@@ -1995,76 +1951,12 @@ function canvasArtifactType(kind: 'volcano' | 'heatmap' | 'umap' | 'network') {
   return kind === 'network' ? 'knowledge-graph' : 'omics-differential-expression';
 }
 
-function bioAgentReferenceAttribute(reference: BioAgentReference | undefined) {
-  return reference ? JSON.stringify(reference) : undefined;
-}
-
-function referenceForArtifact(
-  artifact: RuntimeArtifact,
-  kind: BioAgentReference['kind'] = 'file-region',
-): BioAgentReference {
-  const title = String(artifact.metadata?.title || artifact.metadata?.name || artifact.path || artifact.dataRef || artifact.id || artifact.type).slice(0, 52);
-  return {
-    id: `ref-${kind}-${artifact.id}`,
-    kind,
-    title,
-    ref: artifact.path && kind === 'file' ? `file:${artifact.path}` : `artifact:${artifact.id}`,
-    sourceId: artifact.id,
-    runId: asString(artifact.metadata?.runId) || asString(artifact.metadata?.agentServerRunId),
-    summary: `${artifact.type}${artifact.path ? ` · ${artifact.path}` : ''}${artifact.dataRef ? ` · ${artifact.dataRef}` : ''}`,
-    payload: {
-      id: artifact.id,
-      type: artifact.type,
-      schemaVersion: artifact.schemaVersion,
-      path: artifact.path,
-      dataRef: artifact.dataRef,
-      metadata: artifact.metadata,
-      dataSummary: summarizeReferencePayload(artifact.data),
-    },
-  };
-}
-
 function referenceForResultSlot(item: ResolvedViewPlanItem): BioAgentReference {
-  return {
-    id: `ref-ui-slot-${item.id.replace(/[^a-z0-9]+/gi, '-').slice(0, 52)}`,
-    kind: 'ui',
-    title: item.slot.title || item.module.title,
-    ref: `ui-module:${item.module.moduleId}`,
-    sourceId: item.id,
-    summary: `${item.section} · ${item.status}${item.reason ? ` · ${item.reason}` : ''}`,
-    payload: {
-      moduleId: item.module.moduleId,
-      componentId: item.module.componentId,
-      section: item.section,
-      status: item.status,
-      slot: item.slot,
-      missingFields: item.missingFields,
-    },
-  };
+  return referenceForResultSlotLike(item);
 }
 
 function artifactReferenceKind(artifact: RuntimeArtifact, componentId = ''): BioAgentReference['kind'] {
-  const haystack = `${artifact.type} ${artifact.id} ${componentId}`;
-  if (artifact.path || artifact.dataRef || artifact.metadata?.filePath || artifact.metadata?.path) {
-    if (/\.(pdf|docx?|pptx?|md|txt|png|jpe?g|csv|tsv|xlsx?|pdb|cif|html?)$/i.test(`${artifact.path ?? ''} ${artifact.dataRef ?? ''}`)) return 'file';
-  }
-  if (/chart|plot|graph|visual|pca|umap|volcano|heatmap|histogram|scatter|molecule|viewer/i.test(haystack)) return 'chart';
-  if (/table|matrix|csv|tsv|dataframe|spreadsheet|gene-list|evidence/i.test(haystack) || rowCountForReference(artifact.data)) return 'table';
-  return 'file-region';
-}
-
-function summarizeReferencePayload(data: unknown) {
-  if (typeof data === 'string') return { valueType: 'string', preview: data.slice(0, 1000) };
-  if (Array.isArray(data)) return { valueType: 'array', count: data.length, preview: data.slice(0, 5) };
-  if (!isRecord(data)) return data === undefined ? undefined : { valueType: typeof data };
-  const rows = Array.isArray(data.rows) ? data.rows : Array.isArray(data.records) ? data.records : undefined;
-  return {
-    valueType: 'object',
-    keys: Object.keys(data).slice(0, 16),
-    rowCount: rows?.length,
-    previewRows: rows?.slice(0, 5),
-    markdownPreview: typeof data.markdown === 'string' ? data.markdown.slice(0, 1000) : undefined,
-  };
+  return packageArtifactReferenceKind(artifact, componentId, rowCountForReference(artifact.data));
 }
 
 function rowCountForReference(data: unknown) {
@@ -2098,8 +1990,32 @@ function ArtifactSourceBar({ artifact, session }: { artifact?: RuntimeArtifact; 
   );
 }
 
+function packageRendererProps(props: RegistryRendererProps): UIComponentRendererProps {
+  return {
+    slot: props.slot,
+    artifact: props.artifact,
+    session: props.session,
+    config: props.config,
+    helpers: {
+      ArtifactSourceBar: ({ artifact, session }) => <ArtifactSourceBar artifact={artifact as RuntimeArtifact | undefined} session={session as BioAgentSession | undefined} />,
+      ArtifactDownloads: ({ artifact }) => <ArtifactDownloads artifact={artifact as RuntimeArtifact | undefined} />,
+      ComponentEmptyState,
+      MarkdownBlock,
+      readWorkspaceFile: (ref: string) => readWorkspaceFile(ref, props.config),
+    },
+  };
+}
+
+function PackageReportViewer(props: UIComponentRendererProps) {
+  return <>{renderReportViewer(props)}</>;
+}
+
+function PackageDataTable(props: UIComponentRendererProps) {
+  return <>{renderDataTable(props)}</>;
+}
+
 const componentRegistry: Record<string, RegistryEntry> = {
-  'report-viewer': { label: 'ReportViewer', render: (props) => <ReportViewerSlot {...props} /> },
+  'report-viewer': { label: 'ReportViewer', render: (props) => <PackageReportViewer {...packageRendererProps(props)} /> },
   'paper-card-list': { label: 'PaperCardList', render: (props) => <PaperCardList {...props} /> },
   'molecule-viewer': { label: 'MoleculeViewer', render: (props) => <MoleculeSlot {...props} /> },
   'volcano-plot': { label: 'VolcanoPlot', render: (props) => <CanvasSlot {...props} kind="volcano" /> },
@@ -2109,7 +2025,7 @@ const componentRegistry: Record<string, RegistryEntry> = {
   'evidence-matrix': { label: 'EvidenceMatrix', render: ({ session }) => <EvidenceMatrix claims={session.claims} artifacts={session.artifacts} /> },
   'execution-unit-table': { label: 'ExecutionUnitTable', render: ({ session }) => <ExecutionPanel session={session} executionUnits={session.executionUnits} embedded /> },
   'notebook-timeline': { label: 'NotebookTimeline', render: ({ scenarioId, session }) => <NotebookTimeline scenarioId={scenarioId} notebook={session.notebook} /> },
-  'data-table': { label: 'DataTable', render: (props) => <DataTableSlot {...props} /> },
+  'data-table': { label: 'DataTable', render: (props) => <PackageDataTable {...packageRendererProps(props)} /> },
   'unknown-artifact-inspector': { label: 'UnknownArtifactInspector', render: (props) => <UnknownArtifactInspector {...props} /> },
 };
 
@@ -2462,19 +2378,25 @@ function WorkspaceObjectPreview({
     if (!path || (reference.kind !== 'file' && reference.kind !== 'artifact') || /^https?:\/\//i.test(path)) return undefined;
     let cancelled = false;
     setLoadingPath(path);
-    const staticDescriptor = normalizeArtifactPreviewDescriptor(artifact, path);
+    const staticDescriptor = packageNormalizeArtifactPreviewDescriptor(artifact, path);
     if (staticDescriptor) {
       setDescriptor(staticDescriptor);
-      setLoadingPath('');
-      return () => {
-        cancelled = true;
-      };
+      if (!packageShouldHydratePreviewDescriptor(staticDescriptor, path)) {
+        setLoadingPath('');
+        return () => {
+          cancelled = true;
+        };
+      }
     }
     void readPreviewDescriptor(path, config)
       .then((nextDescriptor) => {
-        if (!cancelled) setDescriptor(nextDescriptor);
+        if (!cancelled) setDescriptor(staticDescriptor ? packageMergePreviewDescriptors(staticDescriptor, nextDescriptor) : nextDescriptor);
       })
       .catch(async (descriptorError) => {
+        if (staticDescriptor) {
+          if (!cancelled) setDescriptor(packageDescriptorWithDiagnostic(staticDescriptor, descriptorError));
+          return;
+        }
         try {
           const nextFile = await readWorkspaceFile(path, config);
           if (!cancelled) setFile(nextFile);
@@ -2583,6 +2505,45 @@ function WorkspaceObjectPreview({
       <WorkspaceFileInlineViewer file={file} />
     </div>
   );
+}
+
+function shouldHydratePreviewDescriptor(descriptor: PreviewDescriptor, path: string) {
+  if (!path || /^agentserver:\/\//i.test(path) || /^data:/i.test(path) || /^https?:\/\//i.test(path)) return false;
+  if (!descriptor.rawUrl && (descriptor.kind === 'pdf' || descriptor.kind === 'image' || descriptor.inlinePolicy === 'stream')) return true;
+  if (!descriptor.derivatives?.length && descriptor.actions.some((action) => action === 'extract-text' || action === 'make-thumbnail' || action === 'select-rows')) return true;
+  return false;
+}
+
+function mergePreviewDescriptors(local: PreviewDescriptor, hydrated: PreviewDescriptor): PreviewDescriptor {
+  return {
+    ...local,
+    ...hydrated,
+    title: local.title || hydrated.title,
+    diagnostics: uniqueStrings([...(local.diagnostics ?? []), ...(hydrated.diagnostics ?? [])]),
+    derivatives: mergePreviewDerivatives(local.derivatives, hydrated.derivatives),
+    actions: uniqueStrings([...(local.actions ?? []), ...(hydrated.actions ?? [])]) as PreviewDescriptor['actions'],
+    locatorHints: uniqueStrings([...(local.locatorHints ?? []), ...(hydrated.locatorHints ?? [])]) as PreviewDescriptor['locatorHints'],
+  };
+}
+
+function descriptorWithDiagnostic(descriptor: PreviewDescriptor, error: unknown): PreviewDescriptor {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    ...descriptor,
+    diagnostics: uniqueStrings([...(descriptor.diagnostics ?? []), `Workspace Writer descriptor hydration failed: ${message}`]),
+  };
+}
+
+function mergePreviewDerivatives(left: PreviewDescriptor['derivatives'], right: PreviewDescriptor['derivatives']) {
+  const byKey = new Map<string, NonNullable<PreviewDescriptor['derivatives']>[number]>();
+  for (const derivative of [...(left ?? []), ...(right ?? [])]) {
+    byKey.set(`${derivative.kind}:${derivative.ref}`, { ...byKey.get(`${derivative.kind}:${derivative.ref}`), ...derivative });
+  }
+  return byKey.size ? Array.from(byKey.values()) : undefined;
+}
+
+function uniqueStrings<T extends string>(values: T[]) {
+  return Array.from(new Set(values.filter(Boolean)));
 }
 
 function DescriptorPreview({ descriptor, reference }: { descriptor: PreviewDescriptor; reference: BioAgentReference }) {
@@ -2942,60 +2903,8 @@ function clamp01(value: number) {
   return Math.min(1, Math.max(0, value));
 }
 
-function withRegionLocator(reference: BioAgentReference | undefined, region: string): BioAgentReference | undefined {
-  if (!reference) return undefined;
-  return {
-    ...reference,
-    kind: 'file-region',
-    id: `${reference.id}-region-${region.replace(/,/g, '-')}`,
-    locator: {
-      ...reference.locator,
-      region,
-    },
-    payload: {
-      ...(isRecord(reference.payload) ? reference.payload : {}),
-      region,
-      regionUnit: 'normalized-1000',
-    },
-  };
-}
-
-function referenceForObjectReference(reference: ObjectReference, kind: BioAgentReference['kind'] = 'file'): BioAgentReference {
-  const title = reference.title || reference.ref;
-  return {
-    id: `ref-${kind}-${reference.id}`,
-    kind,
-    title,
-    ref: reference.ref,
-    sourceId: reference.id,
-    runId: reference.runId,
-    summary: reference.summary || reference.ref,
-    payload: {
-      objectReferenceId: reference.id,
-      objectKind: reference.kind,
-      artifactType: reference.artifactType,
-      path: reference.provenance?.path,
-      dataRef: reference.provenance?.dataRef,
-      preferredView: reference.preferredView,
-    },
-  };
-}
-
 function referenceForWorkspaceFile(file: WorkspaceFileContent, kind: BioAgentReference['kind'] = 'file'): BioAgentReference {
-  return {
-    id: `ref-${kind}-${file.path.replace(/[^a-z0-9]+/gi, '-').slice(0, 64)}`,
-    kind,
-    title: file.name || file.path,
-    ref: `file:${file.path}`,
-    summary: `${file.language || fileKindForPath(file.path)} · ${formatBytes(file.size)}`,
-    payload: {
-      path: file.path,
-      mimeType: file.mimeType,
-      language: file.language,
-      encoding: file.encoding,
-      size: file.size,
-    },
-  };
+  return referenceForWorkspaceFileLike(file, kind);
 }
 
 function DelimitedTextPreview({ content, delimiter }: { content: string; delimiter: ',' | '\t' }) {
@@ -3077,17 +2986,6 @@ async function writeClipboardText(text: string) {
   }
 }
 
-function availableObjectActions(reference: ObjectReference, session: BioAgentSession): ObjectAction[] {
-  const declared: ObjectAction[] = reference.actions?.length ? reference.actions : ['focus-right-pane', 'pin'];
-  const path = pathForObjectReference(reference, session);
-  const hasWorkspacePath = Boolean(path && !/^https?:\/\//i.test(path) && !/^agentserver:\/\//i.test(path) && !/^data:/i.test(path));
-  return declared.filter((action) => {
-    if (action === 'open-external' || action === 'reveal-in-folder' || action === 'copy-path') return hasWorkspacePath;
-    if (action === 'inspect') return reference.kind === 'artifact';
-    return true;
-  });
-}
-
 function UIDesignStudioPanel({ viewPlan }: { viewPlan: RuntimeResolvedViewPlan }) {
   const moduleRows = uiModuleRegistry.map((module) => ({
     moduleId: `${module.moduleId}@${module.version}`,
@@ -3112,6 +3010,23 @@ function UIDesignStudioPanel({ viewPlan }: { viewPlan: RuntimeResolvedViewPlan }
         : 'registered',
     schema: runtimeContractSchemas[name].$id,
   }));
+  const objectPreviewRows = [
+    ...objectReferenceKinds.map((kind) => ({
+      contract: 'objectReference.kind',
+      value: kind,
+      preview: kind === 'artifact' || kind === 'file' || kind === 'folder' || kind === 'url' ? 'focus/preview' : 'focus/audit',
+    })),
+    ...previewDescriptorKinds.map((kind) => ({
+      contract: 'previewDescriptor.kind',
+      value: kind,
+      preview: kind === 'office' || kind === 'binary' ? 'system-open fallback' : kind === 'folder' ? 'folder summary/system-open' : 'inline or lazy derivative',
+    })),
+    ...artifactPreviewActions.map((action) => ({
+      contract: 'preview action',
+      value: action,
+      preview: action === 'system-open' ? 'local default app' : 'workspace writer',
+    })),
+  ];
   return (
     <div className="stack">
       <SectionHeader icon={Sparkles} title="UI Design Studio" subtitle="先设计模块，运行期只组合和绑定已发布能力" />
@@ -3165,6 +3080,7 @@ function UIDesignStudioPanel({ viewPlan }: { viewPlan: RuntimeResolvedViewPlan }
         </div>
       </details>
       <DataPreviewTable rows={contractRows} />
+      <DataPreviewTable rows={objectPreviewRows} />
       <DataPreviewTable rows={moduleRows} />
     </div>
   );
@@ -3226,7 +3142,8 @@ export function selectDefaultResultItems(items: ResolvedViewPlanItem[], focusMod
 }
 
 function isAuditOnlyResultItem(item: ResolvedViewPlanItem) {
-  return item.module.componentId === 'execution-unit-table'
+  return item.module.componentId === 'evidence-matrix'
+    || item.module.componentId === 'execution-unit-table'
     || item.module.componentId === 'notebook-timeline'
     || item.module.componentId === 'unknown-artifact-inspector'
     || item.section === 'provenance'

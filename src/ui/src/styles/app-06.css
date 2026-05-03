@@ -23,8 +23,8 @@
   width: 100%;
   min-width: 0;
   color: var(--bio-100);
-  background: rgba(5, 8, 16, 0.58);
-  border: 1px solid rgba(46, 61, 85, 0.72);
+  background: var(--surface-input);
+  border: 1px solid var(--border-strong);
   border-radius: 8px;
   outline: none;
 }
@@ -67,9 +67,9 @@
   gap: 12px;
   align-items: center;
   padding: 12px;
-  border: 1px solid rgba(46, 61, 85, 0.58);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: rgba(5, 8, 16, 0.38);
+  background: var(--surface-muted);
 }
 
 .alignment-version-row strong {
@@ -106,8 +106,15 @@
   .scenario-contract,
   .scenario-settings-body,
   .library-controls,
-  .get-started-panel {
+  .get-started-panel,
+  .component-workbench-layout,
+  .component-row-main {
     grid-template-columns: 1fr;
+  }
+
+  .component-workbench-summary,
+  .component-row-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .alignment-save-row,
@@ -162,14 +169,14 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 6px;
     padding: 8px 0;
-    background: rgba(5, 8, 16, 0.92);
+    background: var(--surface-elevated);
   }
 
   .mobile-workbench-tabs button {
     min-height: 34px;
     color: var(--bio-300);
-    background: rgba(10, 15, 26, 0.72);
-    border: 1px solid rgba(46, 61, 85, 0.72);
+    background: var(--surface-elevated);
+    border: 1px solid var(--border-strong);
     border-radius: 7px;
     cursor: pointer;
     font-size: 12px;
@@ -177,7 +184,7 @@
   }
 
   .mobile-workbench-tabs button.active {
-    color: #001913;
+    color: var(--text-on-accent);
     background: var(--accent);
     border-color: rgba(0, 229, 160, 0.72);
   }
@@ -237,8 +244,7 @@
     grid-column: 1 / -1;
   }
 
-  .workbench-header,
-  .role-tabs {
+  .workbench-header {
     align-items: flex-start;
     flex-direction: column;
   }
@@ -246,6 +252,11 @@
   .manifest-banner,
   .contract-strip {
     overflow: auto;
+  }
+
+  .component-contract-panel {
+    position: static;
+    max-height: none;
   }
 
   .stepper {
@@ -398,7 +409,7 @@
   padding: 12px;
   padding-top: 16px;
   border-radius: 22px;
-  border: 1px solid rgba(46, 61, 85, 0.72);
+  border: 1px solid var(--border-strong);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.18);
 }
 

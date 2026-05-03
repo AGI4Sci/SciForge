@@ -1,0 +1,11 @@
+{
+  "name": "@bioagent/scenario-core",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./index.ts",
+    "./contracts": "./src/contracts.ts",
+    "./scenario-specs": "./src/scenarioSpecs.ts"
+  }
+}

@@ -1,35 +1,25 @@
 import assert from 'node:assert/strict';
-import { access, readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { access, readFile } from 'node:fs/promises';
 
-const sourceRoot = '/Applications/workspace/ailab/research/app/openteam-studio-run/agents/skills/scp';
-const installedRoot = join(process.cwd(), 'skills', 'installed', 'scp');
+import { skillPackageManifests } from '../../packages/skills';
 
-const sourceDirs = await skillDirs(sourceRoot);
-const installedDirs = await skillDirs(installedRoot);
+const scpSkills = skillPackageManifests.filter((skill) => skill.id.startsWith('scp.'));
 
-assert.equal(installedDirs.length, sourceDirs.length, 'installed SCP skill count must match source');
-assert.ok(installedDirs.length > 0, 'SCP skills should be installed');
+assert.equal(scpSkills.length, 121, 'SCP skill packages should be generated from the catalog');
+assert.ok(scpSkills.length > 0, 'SCP skill packages should be available');
 
-for (const id of sourceDirs) {
-  assert.ok(installedDirs.includes(id), `${id} should be installed`);
-  const skillPath = join(installedRoot, id, 'SKILL.md');
-  await access(skillPath);
-  const text = await readFile(skillPath, 'utf8');
-  assert.match(text, /^---\n[\s\S]*?\n---/, `${id} should preserve markdown frontmatter`);
+for (const skill of scpSkills) {
+  assert.equal(skill.source, 'package', `${skill.id} source should be package`);
+  await access(skill.docs.readmePath);
+  const text = await readFile(skill.docs.readmePath, 'utf8');
+  assert.ok(text.trim().length > 0, `${skill.id} SKILL.md should be readable`);
+  assert.equal(skill.docs.readmePath.endsWith('/SKILL.md'), true, `${skill.id} should use SKILL.md as source`);
 }
 
-for (const id of ['protein-properties-calculation', 'molecular-properties-calculation', 'sequence-alignment-pairwise']) {
-  const manifestPath = join(installedRoot, id, 'manifest.json');
-  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { id?: string; name?: string };
-  assert.ok(manifest.id || manifest.name, `${id} manifest should expose an id or name`);
+for (const id of ['scp.protein-properties-calculation', 'scp.molecular-properties-calculation', 'scp.sequence-alignment-pairwise']) {
+  const manifest = scpSkills.find((skill) => skill.id === id);
+  assert.ok(manifest, `${id} package manifest should exist`);
+  assert.ok(manifest.packageRoot, `${id} package manifest should expose packageRoot`);
 }
 
-console.log(`[ok] installed ${installedDirs.length} SCP markdown skills under skills/installed/scp`);
-
-async function skillDirs(root: string) {
-  return (await readdir(root, { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort();
-}
+console.log(`[ok] packaged ${scpSkills.length} SCP markdown skills under packages/skills`);

@@ -1,34 +1,21 @@
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { discoverMarkdownSkillPackages, markdownSkillPackageToRuntimeManifest } from './skill-markdown-catalog.js';
 import type { BioAgentSkillDomain, GatewayRequest, SkillAvailability, SkillManifest } from './runtime-types.js';
 import { fileExists } from './workspace-task-runner.js';
 
-const SEED_SKILLS_ROOT = resolve(process.cwd(), 'skills', 'seed');
-
 export async function loadSkillRegistry(request: Pick<GatewayRequest, 'workspacePath'>): Promise<SkillAvailability[]> {
   const workspace = resolve(request.workspacePath || process.cwd());
-  const roots = [
-    { root: SEED_SKILLS_ROOT, kind: 'seed' as const },
-    { root: join(workspace, '.bioagent', 'skills'), kind: 'workspace' as const },
-    { root: join(workspace, '.bioagent', 'evolved-skills'), kind: 'workspace' as const },
-    { root: resolve(process.cwd(), 'skills', 'installed'), kind: 'installed' as const },
-  ];
-  const skills: SkillAvailability[] = [];
-  for (const { root, kind } of roots) {
-    for (const manifestPath of await manifestFiles(root)) {
-      const manifest = await readManifest(manifestPath, kind);
-      const availability = await validateManifest(manifest, manifestPath);
-      skills.push(availability);
-    }
-    if (kind === 'installed') {
-      for (const skillPath of await markdownSkillFiles(root)) {
-        if (skills.some((skill) => dirname(skill.manifestPath) === dirname(skillPath))) continue;
-        const manifest = await readMarkdownSkillManifest(skillPath);
-        const availability = await validateManifest(manifest, skillPath);
-        skills.push(availability);
-      }
-    }
+  const packageSkills = await discoverMarkdownSkillPackages();
+  const skills: SkillAvailability[] = await Promise.all(
+    packageSkills.map((manifest) => validateManifest(markdownSkillPackageToRuntimeManifest(manifest), resolve(process.cwd(), manifest.docs.readmePath))),
+  );
+
+  for (const manifestPath of await manifestFiles(join(workspace, '.bioagent', 'evolved-skills'))) {
+    const manifest = await readManifest(manifestPath, 'workspace');
+    skills.push(await validateManifest(manifest, manifestPath));
   }
+
   await persistWorkspaceSkillStatus(workspace, skills);
   return skills;
 }
@@ -85,14 +72,14 @@ export function agentServerGenerationSkill(skillDomain: BioAgentSkillDomain): Sk
   const checkedAt = new Date().toISOString();
   return {
     id: `agentserver.generate.${skillDomain}`,
-    kind: 'installed',
+    kind: 'package',
     available: true,
     reason: 'No executable skill matched; caller should fall through to AgentServer task generation.',
     checkedAt,
     manifestPath: 'agentserver://generation',
     manifest: {
       id: `agentserver.generate.${skillDomain}`,
-      kind: 'installed',
+      kind: 'package',
       description: 'Generic AgentServer task generation fallback.',
       skillDomains: [skillDomain],
       inputContract: { prompt: 'string', workspacePath: 'string' },
@@ -118,18 +105,6 @@ async function manifestFiles(root: string): Promise<string[]> {
   return files;
 }
 
-async function markdownSkillFiles(root: string): Promise<string[]> {
-  if (!await fileExists(root)) return [];
-  const entries = await readdir(root, { withFileTypes: true });
-  const files: string[] = [];
-  for (const entry of entries) {
-    const path = join(root, entry.name);
-    if (entry.isDirectory()) files.push(...await markdownSkillFiles(path));
-    if (entry.isFile() && entry.name === 'SKILL.md') files.push(path);
-  }
-  return files;
-}
-
 async function readManifest(path: string, kind: SkillManifest['kind']): Promise<SkillManifest> {
   const parsed = JSON.parse(await readFile(path, 'utf8')) as Partial<SkillManifest>;
   return {
@@ -145,49 +120,6 @@ async function readManifest(path: string, kind: SkillManifest['kind']): Promise<
     examplePrompts: Array.isArray(parsed.examplePrompts) ? parsed.examplePrompts.map(String) : [],
     promotionHistory: Array.isArray(parsed.promotionHistory) ? parsed.promotionHistory.filter(isRecord) : [],
     scopeDeclaration: isRecord(parsed.scopeDeclaration) ? parsed.scopeDeclaration : undefined,
-  };
-}
-
-async function readMarkdownSkillManifest(path: string): Promise<SkillManifest> {
-  const text = await readFile(path, 'utf8');
-  const frontmatter = parseMarkdownFrontmatter(text);
-  const id = safeSkillId(String(frontmatter.name || basename(dirname(path))));
-  const description = String(frontmatter.description || firstMarkdownParagraph(text) || `Installed markdown skill ${id}.`);
-  return {
-    id: `scp.${id}`,
-    kind: 'installed',
-    description,
-    skillDomains: inferSkillDomains(`${id} ${description} ${text.slice(0, 4000)}`),
-    inputContract: {
-      prompt: 'Free-text user request matched against this Markdown skill.',
-      skillMarkdownRef: path,
-    },
-    outputArtifactSchema: {
-      type: 'agentserver-generated-runtime-artifact',
-      sourceSkill: id,
-    },
-    entrypoint: {
-      type: 'markdown-skill',
-      path,
-    },
-    environment: {
-      language: 'markdown',
-      execution: 'AgentServer or SCP Hub adapter required',
-      scpToolId: frontmatter.scpToolId,
-      scpHubUrl: frontmatter.scpHubUrl,
-    },
-    validationSmoke: {
-      mode: 'markdown-skill',
-      frontmatter: Boolean(Object.keys(frontmatter).length),
-    },
-    examplePrompts: examplePromptsForMarkdownSkill(id, description),
-    promotionHistory: [],
-    scopeDeclaration: {
-      source: 'skills/installed/scp',
-      markdownRef: path,
-      scpToolId: frontmatter.scpToolId,
-      scpHubUrl: frontmatter.scpHubUrl,
-    },
   };
 }
 
@@ -207,7 +139,7 @@ async function validateManifest(manifest: SkillManifest, manifestPath: string): 
       return { id: manifest.id, kind: manifest.kind, available: false, reason: `Entrypoint not found: ${path}`, checkedAt, manifestPath, manifest };
     }
   }
-  if (manifest.entrypoint.type === 'markdown-skill' && manifest.entrypoint.path && !await fileExists(manifest.entrypoint.path)) {
+  if (manifest.entrypoint.type === 'markdown-skill' && manifest.entrypoint.path && !await fileExists(resolve(process.cwd(), manifest.entrypoint.path))) {
     return { id: manifest.id, kind: manifest.kind, available: false, reason: `Markdown skill not found: ${manifest.entrypoint.path}`, checkedAt, manifestPath, manifest };
   }
   return { id: manifest.id, kind: manifest.kind, available: true, reason: 'Manifest validation passed', checkedAt, manifestPath, manifest };
@@ -240,7 +172,14 @@ function scoreSkill(manifest: SkillManifest, skillDomain: BioAgentSkillDomain, p
   ) {
     score += 80;
   }
-  if (manifest.kind === 'seed') score += 4;
+  if (
+    manifest.id === 'scp.protein-properties-calculation'
+    && /\bprotein\b.*\b(properties|physicochemical|isoelectric|instability|sequence)\b|\bsequence\b.*\bprotein\b/i.test(prompt)
+    && !/\bblastp?\b|\balignment\b|\bhomolog|similarity|比对|同源/i.test(prompt)
+  ) {
+    score += 60;
+  }
+  if (manifest.kind === 'package') score += 4;
   if (manifest.kind === 'workspace') score += 2;
   const markdownNameHit = manifest.entrypoint.type === 'markdown-skill' && promptIncludesSkillName(manifest.id, prompt);
   if (markdownNameHit) score += 4;
@@ -271,42 +210,7 @@ function specializedBiomedicalSearchRequested(prompt: string) {
 }
 
 function priority(kind: SkillManifest['kind']) {
-  return kind === 'seed' ? 0 : kind === 'workspace' ? 1 : kind === 'installed' ? 2 : 3;
-}
-
-function parseMarkdownFrontmatter(text: string): Record<string, unknown> {
-  const match = text.match(/^---\n([\s\S]*?)\n---/);
-  if (!match) return {};
-  const out: Record<string, unknown> = {};
-  const lines = match[1].split(/\r?\n/);
-  let inMetadata = false;
-  for (const line of lines) {
-    const top = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
-    const nested = line.match(/^\s+([A-Za-z0-9_-]+):\s*(.*)$/);
-    if (top) {
-      inMetadata = top[1] === 'metadata';
-      if (!inMetadata) out[top[1]] = cleanFrontmatterValue(top[2]);
-      continue;
-    }
-    if (inMetadata && nested) out[nested[1]] = cleanFrontmatterValue(nested[2]);
-  }
-  return out;
-}
-
-function cleanFrontmatterValue(value: string) {
-  return value.trim().replace(/^["']|["']$/g, '');
-}
-
-function firstMarkdownParagraph(text: string) {
-  return text
-    .replace(/^---\n[\s\S]*?\n---/, '')
-    .split(/\n{2,}/)
-    .map((part) => part.replace(/^#+\s*/, '').trim())
-    .find((part) => part && !part.startsWith('```'));
-}
-
-function safeSkillId(value: string) {
-  return value.trim().toLowerCase().replace(/[^a-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '') || 'markdown-skill';
+  return kind === 'package' ? 0 : kind === 'workspace' ? 1 : kind === 'installed' ? 2 : 3;
 }
 
 function promptIncludesSkillName(id: string, prompt: string) {
@@ -320,32 +224,6 @@ function promptIncludesSkillName(id: string, prompt: string) {
 
 function stemToken(token: string) {
   return token.replace(/(?:ation|tion|ing|ies|s)$/i, '');
-}
-
-function inferSkillDomains(text: string): BioAgentSkillDomain[] {
-  const lower = text.toLowerCase();
-  const domains = new Set<BioAgentSkillDomain>();
-  if (/\b(pubmed|literature|paper|web-search|mesh|clinical resource)\b/.test(lower)) domains.add('literature');
-  if (/\b(structure|pdb|alphafold|docking|binding site|pocket|esmfold|molecular visualization)\b/.test(lower)) domains.add('structure');
-  if (/\b(omics|rna|expression|tcga|biomarker|transcriptomic|metabolomics|epigenetic|gwas)\b/.test(lower)) domains.add('omics');
-  if (/\b(gene|protein|sequence|blast|uniprot|chembl|compound|drug|variant|disease|pathway|enzyme|smiles)\b/.test(lower)) domains.add('knowledge');
-  if (!domains.size) domains.add('knowledge');
-  return Array.from(domains);
-}
-
-function examplePromptsForMarkdownSkill(id: string, description: string) {
-  const title = id.replace(/[_.-]+/g, ' ');
-  const specificTerms = description
-    .toLowerCase()
-    .split(/[^a-z0-9_]+/)
-    .filter((token) => token.length > 5)
-    .slice(0, 5)
-    .join(' ');
-  return [
-    title,
-    specificTerms,
-    `Use ${title} and return structured BioAgent artifacts`,
-  ];
 }
 
 function recordOrEmpty(value: unknown): Record<string, unknown> {

@@ -1,0 +1,221 @@
+.theme-light .ambient {
+  display: none;
+}
+
+.theme-light .app-shell {
+  background:
+    linear-gradient(rgba(148, 163, 184, 0.1) 1px, transparent 1px) 0 0 / 42px 42px,
+    linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px) 0 0 / 42px 42px,
+    linear-gradient(135deg, #f7fafc 0%, #eef4f8 48%, #f8fbf7 100%);
+}
+
+.theme-light .sidebar,
+.theme-light .topbar,
+.theme-light .settings-dialog,
+.theme-light .chat-panel,
+.theme-light .results-panel,
+.theme-light .card,
+.theme-light .scenario-builder-box,
+.theme-light .scenario-draft-preview,
+.theme-light .scenario-settings,
+.theme-light .scenario-preview-panel,
+.theme-light .scenario-publish-row,
+.theme-light .component-contract-panel,
+.theme-light .feedback-popover {
+  background: var(--surface-panel);
+  border-color: var(--border);
+  box-shadow: var(--shadow-soft);
+}
+
+.theme-light .sidebar-activitybar,
+.theme-light .sidebar-panel-header,
+.theme-light .mobile-workbench-tabs,
+.theme-light .run-readiness,
+.theme-light .composer,
+.theme-light .reference-composer,
+.theme-light .runtime-health-panel,
+.theme-light .component-workbench-summary,
+.theme-light .component-workbench-toolbar,
+.theme-light .feedback-hero,
+.theme-light .feedback-target-summary,
+.theme-light .workspace-preview {
+  background: var(--surface-muted);
+  border-color: var(--border);
+}
+
+.theme-light .workbench-canvas-shell {
+  background:
+    linear-gradient(rgba(148, 163, 184, 0.14) 1px, transparent 1px) 0 0 / 44px 44px,
+    linear-gradient(90deg, rgba(148, 163, 184, 0.1) 1px, transparent 1px) 0 0 / 44px 44px,
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(239, 246, 244, 0.74));
+}
+
+.theme-light .workbench-canvas .chat-panel,
+.theme-light .workbench-canvas .results-panel {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: var(--border);
+  box-shadow: 0 16px 38px rgba(52, 65, 86, 0.12);
+}
+
+.theme-light .activity-item:hover,
+.theme-light .panel-collapse-button:hover,
+.theme-light .collapse-button:hover,
+.theme-light .workspace-toolbar button:hover,
+.theme-light .workspace-breadcrumbs button:hover,
+.theme-light .scenario-nav:hover,
+.theme-light .extension-row:hover,
+.theme-light .tab:hover,
+.theme-light .icon-button:hover,
+.theme-light .component-selector button:hover,
+.theme-light .feedback-context-menu button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.theme-light .activity-item.active,
+.theme-light .scenario-nav.active,
+.theme-light .tab.active,
+.theme-light .scenario-preview-tabs button.active,
+.theme-light .component-selector button.active,
+.theme-light .mobile-workbench-tabs button.active {
+  background: var(--surface-selected);
+  border-color: var(--accent-border);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-muted);
+}
+
+.theme-light .action-primary,
+.theme-light .workspace-onboarding button,
+.theme-light .explorer-cta-btn {
+  color: var(--text-on-accent);
+  background: linear-gradient(135deg, var(--accent), var(--teal));
+  border-color: var(--accent-border);
+}
+
+.theme-light .action-secondary,
+.theme-light .workspace-toolbar button,
+.theme-light .workspace-breadcrumbs button,
+.theme-light .feedback-toolbar button,
+.theme-light .feedback-toolbar select,
+.theme-light .feedback-close,
+.theme-light .component-contract-header button,
+.theme-light .object-focus-actions button,
+.theme-light .candidate-action,
+.theme-light .stream-events-toggle,
+.theme-light .reference-trigger {
+  background: var(--surface-raised);
+  border-color: var(--border);
+  color: var(--text-secondary);
+}
+
+.theme-light input,
+.theme-light select,
+.theme-light textarea,
+.theme-light .searchbox,
+.theme-light .workspace-path-editor,
+.theme-light .workspace-preview textarea,
+.theme-light .scenario-builder-box textarea,
+.theme-light .scenario-settings textarea,
+.theme-light .scenario-settings input,
+.theme-light .scenario-settings select,
+.theme-light .settings-grid input,
+.theme-light .settings-grid select,
+.theme-light .feedback-field input,
+.theme-light .feedback-field select,
+.theme-light .feedback-field textarea,
+.theme-light .component-search input,
+.theme-light .component-filter select,
+.theme-light .editable-block textarea,
+.theme-light .alignment-save-row input {
+  background: var(--surface-input);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.theme-light input::placeholder,
+.theme-light textarea::placeholder {
+  color: var(--text-faint);
+}
+
+.theme-light button:focus-visible,
+.theme-light input:focus-visible,
+.theme-light select:focus-visible,
+.theme-light textarea:focus-visible,
+.theme-light summary:focus-visible {
+  outline: 0;
+  box-shadow: var(--focus-ring);
+}
+
+.theme-light .message,
+.theme-light .message-editor,
+.theme-light .reasoning-block,
+.theme-light .stream-events-preview,
+.theme-light .stream-event,
+.theme-light .object-focus-banner,
+.theme-light .workspace-resource-chip,
+.theme-light .scenario-compile-card,
+.theme-light .scenario-config-panel,
+.theme-light .runtime-health-item,
+.theme-light .alignment-version-row,
+.theme-light .component-module-row,
+.theme-light .feedback-stats span {
+  background: var(--surface-muted);
+  border-color: var(--border);
+}
+
+.theme-light .message.user {
+  background: linear-gradient(135deg, rgba(0, 159, 114, 0.1), rgba(8, 127, 122, 0.08));
+  border-color: var(--accent-border);
+}
+
+.theme-light .modal-backdrop,
+.theme-light .feedback-layer {
+  background: var(--overlay);
+}
+
+.theme-light .context-menu-vscode,
+.theme-light .feedback-context-menu,
+.theme-light .element-popover,
+.theme-light .reference-context-menu {
+  background: var(--surface-elevated);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow);
+  color: var(--text-primary);
+}
+
+.theme-light .badge-muted {
+  background: rgba(95, 113, 137, 0.1);
+  border-color: rgba(95, 113, 137, 0.22);
+  color: var(--text-muted);
+}
+
+.theme-light .badge-info {
+  background: var(--teal-soft);
+}
+
+.theme-light .badge-danger,
+.theme-light .badge-coral,
+.theme-light .feedback-toolbar button.danger {
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+  color: var(--danger);
+}
+
+.theme-light code,
+.theme-light pre,
+.theme-light .reasoning,
+.theme-light .scenario-contract pre,
+.theme-light .scenario-draft-preview pre,
+.theme-light .component-contract-panel pre {
+  color: var(--text-secondary);
+}
+
+.theme-light .context-window-meter::before {
+  background:
+    radial-gradient(circle at center, var(--surface-elevated) 52%, transparent 53%),
+    conic-gradient(var(--context-window-color) var(--context-window-ratio), var(--border-muted) 0);
+}
+
+.theme-light .feedback-highlight-box {
+  box-shadow: 0 0 0 9999px rgba(27, 39, 58, 0.12);
+}

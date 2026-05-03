@@ -19,6 +19,7 @@ import {
   type UserGoalSnapshot,
 } from '../domain';
 import { agentProtocolForPrompt, SCENARIO_SPECS } from '../scenarioSpecs';
+import { expectedArtifactsForCurrentTurn } from '../artifactIntent';
 import { BioAgentClientError, reasonFromResponseText, recoverActionsForService } from './clientError';
 import { promptWithScopeCheck, scopeCheck } from './scopeCheck';
 
@@ -65,14 +66,16 @@ function agentSystemPrompt(input: SendAgentMessageInput) {
   const runtimeScenario = input.scenarioOverride;
   return [
     `你运行在 BioAgent 的场景工作台中，当前 Scenario 是「${runtimeScenario?.title ?? scenario.title}」，skill domain 是 ${runtimeScenario?.skillDomain ?? scenario.skillDomain}，领域是 ${input.agentDomain}。`,
+    '当前用户原始问题是最高优先级；ScenarioSpec、UI 默认组件和历史请求只能作为上下文提示，不能替用户添加没有要求的目标。',
     '请用中文回答生命科学研究问题。',
     '优先使用当前 backend 的 native tools；只有 native tools 不可用时，才把 BioAgent/AgentServer tools 当兜底。',
-    '必须输出可追溯证据、置信度、事实/推断/假设区分，以及可复现 ExecutionUnit 草案。',
+    '只在本轮用户明确需要时输出 artifact/uiManifest；不要因为场景默认值自动生成 paper-list、evidence-matrix、notebook-timeline。',
+    '需要执行或产物时，输出可追溯证据、置信度、事实/推断/假设区分，以及可复现 ExecutionUnit 草案。',
     '不要生成 UI 代码；如需驱动前端 UI，请在回答末尾附加一个 JSON 对象。',
     'JSON 字段可包含 message、confidence、claimType、evidenceLevel、reasoningTrace、claims、displayIntent、uiManifest、executionUnits、artifacts、objectReferences。',
     'artifacts 必须优先使用下方协议中的 type/schema；uiManifest 只能引用已注册 componentId 和声明式 View Composition。',
     'objectReferences 用于回答中引用关键对象；ref 必须是 artifact:*、file:*、folder:*、run:*、execution-unit:* 或 url:*，前端点击后再按需展示/打开。',
-    '当前 ScenarioSpec / skill domain 协议:',
+    '当前 ScenarioSpec / skill domain 协议是兼容提示，不是强制目标:',
     protocol,
     runtimeScenario ? '用户编辑后的 Scenario 设置:' : '',
     runtimeScenario ? JSON.stringify(runtimeScenario, null, 2) : '',
@@ -81,6 +84,10 @@ function agentSystemPrompt(input: SendAgentMessageInput) {
 
 function buildPrompt(input: SendAgentMessageInput) {
   const builtInScenarioId = builtInScenarioIdForInput(input);
+  const expectedArtifacts = expectedArtifactsForCurrentTurn({
+    scenarioId: builtInScenarioId,
+    prompt: input.prompt,
+  });
   const recentHistory = input.messages.slice(-6).map((message) => ({
     role: message.role,
     content: clipPromptText(message.content, 900),
@@ -88,23 +95,29 @@ function buildPrompt(input: SendAgentMessageInput) {
   }));
   const artifactContext = summarizeArtifacts(input.artifacts ?? []);
   const referenceContext = summarizeBioAgentReferences(input.references ?? []);
+  const artifactAccessPolicy = buildArtifactAccessPolicy(input, artifactContext);
   return [
+    '用户原始问题（权威）:',
+    input.prompt,
+    '',
     `当前 BioAgent scenario: ${input.scenarioId}`,
     `internal skill domain: ${input.scenarioOverride?.skillDomain ?? SCENARIO_SPECS[builtInScenarioId].skillDomain}`,
+    `本轮显式 expected artifacts: ${expectedArtifacts.join(', ') || 'backend-decides'}`,
+    `用户勾选的可用 UI 组件白名单: ${(input.availableComponentIds ?? []).join(', ') || 'none'}`,
     input.scenarioOverride ? `用户编辑 Scenario markdown:\n${input.scenarioOverride.scenarioMarkdown}` : '',
     `当前角色视图: ${input.roleView}`,
     '近期对话:',
     JSON.stringify(recentHistory, null, 2),
     artifactContext.length ? '当前可用 artifacts:' : '',
     artifactContext.length ? JSON.stringify(artifactContext, null, 2) : '',
+    artifactContext.length ? 'artifact 访问策略（通用成本约束）:' : '',
+    artifactContext.length ? JSON.stringify(artifactAccessPolicy, null, 2) : '',
     referenceContext.length ? '用户本轮显式引用对象:' : '',
     referenceContext.length ? JSON.stringify(referenceContext, null, 2) : '',
     '',
     'Scope check metadata:',
     JSON.stringify(scopeCheck(builtInScenarioId, input.prompt), null, 2),
     '',
-    '用户问题:',
-    input.prompt,
   ].filter((line) => line !== '').join('\n');
 }
 
@@ -112,6 +125,11 @@ function buildRunPayload(input: SendAgentMessageInput): AgentServerRunPayload {
   const runtime = buildRuntimeConfig(input);
   const builtInScenarioId = builtInScenarioIdForInput(input);
   const scenario = SCENARIO_SPECS[builtInScenarioId];
+  const expectedArtifacts = expectedArtifactsForCurrentTurn({
+    scenarioId: builtInScenarioId,
+    prompt: input.prompt,
+  });
+  const artifactSummary = summarizeArtifacts(input.artifacts ?? []);
   return {
     agent: {
       id: scenario.runtimeId,
@@ -139,12 +157,15 @@ function buildRunPayload(input: SendAgentMessageInput): AgentServerRunPayload {
         roleView: input.roleView,
         messageCount: input.messages.length,
         inputContract: scenario.inputContract,
-        expectedArtifacts: scenario.outputArtifacts.map((artifact) => artifact.type),
+        expectedArtifacts,
+        availableComponentIds: input.availableComponentIds ?? [],
+        scenarioArtifactHints: scenario.outputArtifacts.map((artifact) => artifact.type),
         scenarioPackageRef: input.scenarioPackageRef,
         skillPlanRef: input.skillPlanRef,
         uiPlanRef: input.uiPlanRef,
         scenarioOverride: input.scenarioOverride,
-        artifacts: summarizeArtifacts(input.artifacts ?? []),
+        artifacts: artifactSummary,
+        artifactAccessPolicy: buildArtifactAccessPolicy(input, artifactSummary),
         references: summarizeBioAgentReferences(input.references ?? []),
         scopeCheck: scopeCheck(builtInScenarioId, input.prompt),
       },
@@ -215,6 +236,30 @@ function summarizeArtifacts(artifacts: RuntimeArtifact[]) {
     path: artifact.path,
     dataPreview: previewArtifactData(artifact.data),
   }));
+}
+
+function buildArtifactAccessPolicy(input: SendAgentMessageInput, artifacts: ReturnType<typeof summarizeArtifacts>) {
+  const maxArtifactInlineChars = Math.max(800, Math.min(2400, Math.floor((input.config.maxContextWindowTokens || 200_000) * 0.012)));
+  const explicitRefs = uniqueStrings((input.references ?? []).map((reference) => reference.ref).filter(Boolean)).slice(0, 12);
+  const reusableArtifactRefs = uniqueStrings(artifacts.flatMap((artifact) => [
+    artifact.id ? `artifact:${artifact.id}` : undefined,
+    artifact.path ? `file:${artifact.path}` : undefined,
+    artifact.dataRef ? `file:${artifact.dataRef}` : undefined,
+  ]).filter((ref): ref is string => Boolean(ref))).slice(0, 32);
+  return {
+    mode: 'refs-first-bounded-read',
+    purpose: 'reuse prior work without replaying full artifact payloads into model context',
+    maxArtifactInlineChars,
+    defaultAction: 'Use artifact ids, paths, metadata, and dataPreview before opening files.',
+    readPolicy: [
+      'Do not cat or paste full JSON/markdown/log artifacts unless the current user explicitly asks for full content.',
+      'For verification, prefer bounded reads: file metadata, schema keys, counts, jq-selected fields, head/tail, or concise excerpts.',
+      'When comparing large artifacts, read only the fields needed for the current question and cite the artifact/ref path.',
+      'If the summary is enough, answer from refs and dataPreview without reopening the file.',
+    ],
+    explicitCurrentTurnRefs: explicitRefs,
+    reusableArtifactRefs,
+  };
 }
 
 function previewArtifactData(data: unknown): unknown {
@@ -416,11 +461,13 @@ function isExplicitContextWindowRecord(value: unknown): value is Record<string, 
 function normalizeContextCompaction(value: unknown, type: string, fallback: Record<string, unknown>): AgentStreamEvent['contextCompaction'] | undefined {
   const record = isRecord(value) ? value : type === 'contextCompaction' && isRecord(fallback) ? fallback : undefined;
   if (!record) return undefined;
-  const completedAt = asString(record.completedAt);
+  const isTag = record.kind === 'compaction' || record.kind === 'partial_compaction';
+  const completedAt = asString(record.completedAt) ?? (isTag ? asString(record.createdAt) : undefined);
   const lastCompactedAt = asString(record.lastCompactedAt) ?? completedAt;
-  const message = asString(record.message) ?? asString(record.userVisibleSummary) ?? asString(record.detail);
+  const message = asString(record.message) ?? asString(record.userVisibleSummary) ?? asString(record.detail)
+    ?? (isTag ? `${record.kind === 'partial_compaction' ? 'partial' : 'full'} compaction tag ${asString(record.id) ?? ''}`.trim() : undefined);
   const status = normalizeCompactionStatus(asString(record.status), {
-    ok: asBoolean(record.ok),
+    ok: asBoolean(record.ok) ?? (isTag ? true : undefined),
     completedAt,
     lastCompactedAt,
     message,
@@ -429,14 +476,14 @@ function normalizeContextCompaction(value: unknown, type: string, fallback: Reco
     status,
     source: normalizeContextWindowSource(asString(record.source)),
     backend: asString(record.backend),
-    compactCapability: normalizeCompactCapability(asString(record.compactCapability) ?? asString(record.compactionCapability)),
+    compactCapability: normalizeCompactCapability(asString(record.compactCapability) ?? asString(record.compactionCapability) ?? (isTag ? 'agentserver' : undefined)),
     before: normalizeContextWindowState(record.before, 'contextWindowState', {}),
     after: normalizeContextWindowState(record.after, 'contextWindowState', {}),
-    auditRefs: asStringArray(record.auditRefs),
+    auditRefs: asStringArray(record.auditRefs) ?? (isTag && asString(record.id) ? [`agentserver-compaction:${asString(record.id)}`] : undefined),
     startedAt: asString(record.startedAt),
     completedAt,
     lastCompactedAt,
-    reason: asString(record.reason),
+    reason: asString(record.reason) ?? (isTag ? 'agentserver-compact' : undefined),
     message,
   };
 }
@@ -467,6 +514,8 @@ function normalizeContextWindowStatus(
   ratio: number | undefined,
   autoCompactThreshold: number | undefined,
 ): NonNullable<AgentStreamEvent['contextWindowState']>['status'] {
+  if (ratio !== undefined && ratio >= 1) return 'exceeded';
+  if (ratio !== undefined && ratio >= (autoCompactThreshold ?? 0.82) && (!value || value === 'healthy' || value === 'ok' || value === 'normal')) return 'near-limit';
   if (value === 'healthy' || value === 'watch' || value === 'near-limit' || value === 'exceeded' || value === 'compacting' || value === 'blocked' || value === 'unknown') return value;
   if (value && /exceeded|overflow|max|full/i.test(value)) return 'exceeded';
   if (value && /compact/i.test(value)) return 'compacting';
@@ -474,7 +523,6 @@ function normalizeContextWindowStatus(
   if (value && /near|critical|warning/i.test(value)) return 'near-limit';
   if (value && /watch/i.test(value)) return 'watch';
   if (value && /healthy|ok|normal/i.test(value)) return 'healthy';
-  if (ratio !== undefined && ratio >= 1) return 'exceeded';
   if (ratio !== undefined && ratio >= (autoCompactThreshold ?? 0.82)) return 'near-limit';
   if (ratio !== undefined && ratio >= 0.68) return 'watch';
   return ratio === undefined ? 'unknown' : 'healthy';
@@ -1467,6 +1515,8 @@ export async function compactAgentContext(input: SendAgentMessageInput, reason: 
       includeRecentTurns: Boolean(input.sessionId),
       persistRunSummary: true,
     },
+    mode: 'auto',
+    decisionBy: 'agent',
     metadata: {
       sessionId: input.sessionId,
       scenarioId: input.scenarioId,
@@ -1501,6 +1551,18 @@ export async function compactAgentContext(input: SendAgentMessageInput, reason: 
         json = text ? JSON.parse(text) as unknown : {};
       } catch {
         json = { message: text };
+      }
+      if (isRecord(json) && 'data' in json && json.data === null) {
+        return {
+          status: 'skipped',
+          source: 'agentserver',
+          backend: input.config.agentBackend,
+          compactCapability: compactCapabilityForBackend(input.config.agentBackend),
+          completedAt: nowIso(),
+          reason,
+          message: 'AgentServer compact returned no compaction tag; current backend/session did not find compressible work.',
+          auditRefs: [`agentserver-compact:no-op:${input.sessionId ?? 'no-session'}:${reason}`],
+        };
       }
       const data = isRecord(json) && isRecord(json.data) ? json.data : json;
       const event = normalizeContextCompaction(isRecord(data) ? data.contextCompaction ?? data.compaction ?? data : data, 'contextCompaction', isRecord(data) ? data : {});

@@ -96,7 +96,7 @@ const baseUrl = `http://127.0.0.1:${address.port}`;
 try {
   const result = await runWorkspaceRuntimeGateway({
     skillDomain: 'literature',
-    prompt: 'custom self evolving literature workflow with no matching seed skill',
+    prompt: 'custom self evolving literature workflow with no matching package skill',
     workspacePath: workspace,
     agentServerBaseUrl: baseUrl,
     availableSkills: ['missing.skill'],
@@ -140,7 +140,7 @@ try {
   await writeFile(evolvedTaskPath, 'import sys\nraise RuntimeError("forced evolved skill failure")\n', 'utf8');
   const routedEvolvedRun = await runWorkspaceRuntimeGateway({
     skillDomain: 'literature',
-    prompt: 'custom self evolving literature workflow with no matching seed skill',
+    prompt: 'custom self evolving literature workflow with no matching package skill',
     workspacePath: workspace,
     availableSkills: [accepted.id],
     expectedArtifactTypes: ['paper-list'],
@@ -163,8 +163,7 @@ try {
 
 async function writeComplexSingleCellProposalsSmoke() {
   const complexWorkspace = await mkdtemp(join(tmpdir(), 'bioagent-complex-cell-proposals-'));
-  const stableSeedBefore = await stableSkillRootSnapshot('skills/seed');
-  const stableInstalledBefore = await stableSkillRootSnapshot('skills/installed');
+  const stablePackagesBefore = await stableSkillRootSnapshot('packages/skills');
   const generatedSkill = agentGeneratedOmicsSkill();
   const cases = [
     {
@@ -294,8 +293,7 @@ async function writeComplexSingleCellProposalsSmoke() {
   assert.equal(evolvedSkillDirs.length, 3);
   const stableWorkspaceSkills = await readdir(join(complexWorkspace, '.bioagent', 'skills')).catch(() => []);
   assert.equal(stableWorkspaceSkills.some((entry) => entry !== 'status.json'), false);
-  assert.deepEqual(await stableSkillRootSnapshot('skills/seed'), stableSeedBefore);
-  assert.deepEqual(await stableSkillRootSnapshot('skills/installed'), stableInstalledBefore);
+  assert.deepEqual(await stableSkillRootSnapshot('packages/skills'), stablePackagesBefore);
 }
 
 function agentGeneratedOmicsSkill(): SkillAvailability {

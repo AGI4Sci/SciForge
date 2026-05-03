@@ -1,0 +1,40 @@
+{
+  "id": "sequence-alignment-pairwise",
+  "name": "sequence-alignment-pairwise",
+  "description": "成对序列比对工具，支持 DNA/RNA/蛋白质序列的全局比对与相似性分析。",
+  "category": "life_science",
+  "type": "compute_tool",
+  "provider": "SCP Hub",
+  "url": "https://scphub.intern-ai.org.cn/skill/sequence-alignment-pairwise",
+  "tools": ["align"],
+  "invoke": {
+    "endpoint": "/api/mcp/v1/invoke",
+    "method": "POST",
+    "actions": {
+      "align": {
+        "description": "Pairwise sequence alignment for DNA, RNA, or protein sequences",
+        "parameters": {
+          "seq_a": {
+            "type": "string",
+            "required": true,
+            "description": "First sequence (DNA/RNA/protein)"
+          },
+          "seq_b": {
+            "type": "string",
+            "required": true,
+            "description": "Second sequence (DNA/RNA/protein)"
+          }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "action": "align",
+      "params": {
+        "seq_a": "ATGCGTCA",
+        "seq_b": "ATGGGTCA"
+      }
+    }
+  ]
+}

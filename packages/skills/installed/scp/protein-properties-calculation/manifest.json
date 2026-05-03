@@ -1,0 +1,34 @@
+{
+  "id": "protein-properties-calculation",
+  "name": "protein-properties-calculation",
+  "description": "蛋白质序列性质分析工具。接收氨基酸序列，返回分子量、等电点、不稳定指数等理化性质。",
+  "category": "life_science",
+  "type": "compute_tool",
+  "provider": "上海人工智能实验室",
+  "url": "https://scphub.intern-ai.org.cn/skill/protein-properties-calculation",
+  "tools": ["calculate"],
+  "invoke": {
+    "endpoint": "/api/mcp/v1/invoke",
+    "method": "POST",
+    "actions": {
+      "calculate": {
+        "description": "Calculate physicochemical properties from amino acid sequence",
+        "parameters": {
+          "sequence": {
+            "type": "string",
+            "required": true,
+            "description": "Amino acid sequence (single-letter codes)"
+          }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "action": "calculate",
+      "params": {
+        "sequence": "MKFLILLFNILCLFPVLAADNH"
+      }
+    }
+  ]
+}

@@ -2,13 +2,14 @@ import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { agentServerGenerationSkill, loadSkillRegistry } from './skill-registry.js';
 import { appendTaskAttempt, readRecentTaskAttempts, readTaskAttempts } from './task-attempt-history.js';
-import type { AgentBackendAdapter, AgentBackendCapabilities, AgentServerGenerationResponse, BackendContextCompactionResult, BackendContextWindowState, BioAgentSkillDomain, GatewayRequest, LlmEndpointConfig, SkillAvailability, TaskAttemptRecord, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceRuntimeContextBudget, WorkspaceRuntimeContextWindowSource, WorkspaceRuntimeEvent, WorkspaceTaskRunResult } from './runtime-types.js';
+import type { AgentBackendAdapter, AgentBackendCapabilities, AgentServerGenerationResponse, BackendContextCompactionResult, BackendContextWindowState, BioAgentSkillDomain, GatewayRequest, LlmEndpointConfig, SkillAvailability, TaskAttemptRecord, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceRuntimeContextBudget, WorkspaceRuntimeContextCompaction, WorkspaceRuntimeContextWindowSource, WorkspaceRuntimeEvent, WorkspaceTaskRunResult } from './runtime-types.js';
 import { fileExists, runWorkspaceTask, sha1 } from './workspace-task-runner.js';
 import { maybeWriteSkillPromotionProposal } from './skill-promotion.js';
 import { emitWorkspaceRuntimeEvent, throwIfRuntimeAborted } from './workspace-runtime-events.js';
 import { composeRuntimeUiManifest } from './runtime-ui-manifest.js';
 import { cleanUrl, clipForAgentServerJson, clipForAgentServerPrompt, errorMessage, excerptAroundFailureLine, extractLikelyErrorLine, generatedTaskArchiveRel, hashJson, headForAgentServer, isRecord, isTaskInputRel, readTextIfExists, safeWorkspaceRel, summarizeTextChange, tailForAgentServer, toRecordList, toStringList, uniqueStrings } from './gateway-utils.js';
 import { normalizeBackendHandoff } from './workspace-task-input.js';
+import { normalizeGatewayRequest as normalizeGatewayRequestFromModule } from './gateway/gateway-request.js';
 
 const SKILL_DOMAIN_SET = new Set<BioAgentSkillDomain>(['literature', 'structure', 'omics', 'knowledge']);
 const AGENT_BACKEND_ANSWER_PRINCIPLE = [
@@ -81,7 +82,7 @@ type AgentServerGenerationResult =
   | { ok: false; error: string; diagnostics?: AgentServerGenerationFailureDiagnostics };
 
 export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, callbacks: WorkspaceRuntimeCallbacks = {}): Promise<ToolPayload> {
-  const request = normalizeGatewayRequest(body);
+  const request = normalizeGatewayRequestFromModule(body);
   const skills = await loadSkillRegistry(request);
   const skill = agentServerGenerationSkill(request.skillDomain);
   emitWorkspaceRuntimeEvent(callbacks, {
@@ -817,7 +818,7 @@ function runtimeProfileIdForRequest(request: GatewayRequest, skill?: SkillAvaila
   if (skill?.manifest.entrypoint.type === 'agentserver-generation') return `agentserver-${agentServerBackend(request, request.llmEndpoint)}`;
   if (skill?.manifest.entrypoint.type === 'markdown-skill') return `agentserver-${agentServerBackend(request, request.llmEndpoint)}`;
   if (skill?.manifest.entrypoint.type === 'workspace-task') return 'workspace-python';
-  return request.scenarioPackageRef?.source === 'built-in' ? 'seed-skill' : undefined;
+  return request.scenarioPackageRef?.source === 'built-in' ? 'package-skill' : undefined;
 }
 
 function selectedRuntimeForSkill(skill?: SkillAvailability) {
@@ -948,11 +949,13 @@ async function preflightAgentServerContextWindow(params: {
       ? 'skipped'
       : compaction.ok ? 'completed' : 'failed';
     emitWorkspaceRuntimeEvent(params.callbacks, {
-      type: 'agentserver-context-compaction',
+      type: 'contextCompaction',
       source: 'workspace-runtime',
       status: compactionStatus,
       message: `AgentServer context compaction ${compaction.strategy}`,
       detail: compaction.message || compaction.reason,
+      contextCompaction: contextCompactionMetadata(compaction),
+      contextWindowState: compaction.after ? workspaceContextWindowStateFromBackend(compaction.after) : undefined,
       raw: compaction,
     });
   }
@@ -1434,17 +1437,24 @@ function workspaceContextWindowStateFromBackend(state: BackendContextWindowState
   };
 }
 
-function contextCompactionMetadata(compaction: BackendContextCompactionResult) {
+function contextCompactionMetadata(compaction: BackendContextCompactionResult): WorkspaceRuntimeContextCompaction & {
+  ok: boolean;
+  strategy?: BackendContextCompactionResult['strategy'];
+  runId?: string;
+} {
+  const status: WorkspaceRuntimeContextCompaction['status'] = compaction.status === 'unsupported' || compaction.status === 'skipped'
+    ? 'skipped'
+    : compaction.ok ? 'completed' : 'failed';
   return {
     ok: compaction.ok,
-    status: compaction.status,
+    status,
     strategy: compaction.strategy,
     reason: compaction.reason,
     message: compaction.message,
     runId: compaction.runId,
     auditRefs: compaction.auditRefs,
-    before: compaction.before ? contextWindowMetadata(compaction.before) : undefined,
-    after: compaction.after ? contextWindowMetadata(compaction.after) : undefined,
+    before: compaction.before ? workspaceContextWindowStateFromBackend(compaction.before) : undefined,
+    after: compaction.after ? workspaceContextWindowStateFromBackend(compaction.after) : undefined,
   };
 }
 
@@ -2634,7 +2644,7 @@ async function recoverOrReturnAgentServerGenerationFailure(params: {
       ? 'skipped'
       : compaction.ok ? 'completed' : 'failed';
     emitWorkspaceRuntimeEvent(params.callbacks, {
-      type: 'agentserver-context-window-recovery',
+      type: 'contextCompaction',
       source: 'workspace-runtime',
       status: compactionStatus,
       message: compaction.ok
@@ -2643,6 +2653,8 @@ async function recoverOrReturnAgentServerGenerationFailure(params: {
           ? 'Context compact API unsupported; retrying AgentServer generation once with slim handoff diagnostics.'
           : 'Context compaction failed; retrying AgentServer generation once with slim handoff diagnostics.',
       detail: compaction.message || compaction.reason,
+      contextCompaction: contextCompactionMetadata(compaction),
+      contextWindowState: compaction.after ? workspaceContextWindowStateFromBackend(compaction.after) : undefined,
       raw: compaction,
     });
     const diagnostics: AgentServerGenerationFailureDiagnostics = {
@@ -2732,11 +2744,13 @@ async function recoverOrReturnAgentServerGenerationFailure(params: {
   );
   if (compaction) {
     emitWorkspaceRuntimeEvent(params.callbacks, {
-      type: 'agentserver-context-compaction',
+      type: 'contextCompaction',
       source: 'workspace-runtime',
       status: compaction.ok ? 'completed' : 'failed',
       message: 'AgentServer compact before provider/rate-limit retry',
       detail: compaction.message || compaction.reason,
+      contextCompaction: contextCompactionMetadata(compaction),
+      contextWindowState: compaction.after ? workspaceContextWindowStateFromBackend(compaction.after) : undefined,
       raw: compaction,
     });
   }
@@ -3731,8 +3745,12 @@ function buildAgentServerGenerationPrompt(request: {
     'Prefer installed or workspace tools when they genuinely fit, but write adapter code as needed so the run is reproducible from inputPath and outputPath.',
     'Large-file contract: uploaded PDFs, images, spreadsheets, binary blobs, extracted full text, and large logs must stay as workspace refs. Do not inline base64, do not print full extracted text to stdout/stderr, and do not paste full document text into final JSON.',
     'For uploaded PDFs or long documents, generated tasks should read the file by path/dataRef, write any full extraction to .bioagent/artifacts or .bioagent/task-results, and return only bounded excerpts, section summaries, page/figure locators, hashes, and clickable file/artifact refs.',
-    'If expectedArtifactTypes contains multiple artifacts, generate a coordinated Python task or small Python module set that emits every requested artifact type. A partial seed skill result is not enough unless the missing artifact has a clear failed-with-reason ExecutionUnit.',
-    'Use the selectedComponentIds/UI contract to preserve promised UI slots; do not drop report, table, graph, structure, omics, or execution outputs just because one local skill only produces a subset.',
+    'Bibliographic verification contract: never mark a PMID, DOI, trial id, citation, or paper record as corrected/verified unless the returned title, year, journal, and identifier correspond to the same work as the source claim.',
+    'If an identifier lookup returns a title mismatch, topic mismatch, unrelated journal, or only a broad review when the source claim is a trial/cohort/paper, preserve the original claim and mark it needs-verification with the mismatch reason and search terms. Do not substitute the unrelated record as a correction.',
+    'For literature artifacts, keep original_title, verified_title, title_match, identifier_match, verification_status, and verification_notes fields when correcting references so BioAgent and users can audit the match.',
+    'Only treat expectedArtifactTypes as required when the list is non-empty. If it is empty, infer the minimal output from the raw user prompt and do not add scenario-default artifacts.',
+    'If expectedArtifactTypes contains multiple artifacts, generate a coordinated Python task or small Python module set that emits every requested artifact type. A partial package skill result is not enough unless the missing artifact has a clear failed-with-reason ExecutionUnit.',
+    'Use selectedComponentIds only when the current user turn explicitly requested those views; do not preserve default UI slots as output requirements.',
     'For continuation requests, continue the scenario goal using recentConversation, artifacts, recentExecutionRefs, and priorAttempts. Do not restart an unrelated analysis.',
     'For repair requests, inspect the failureReason plus stdoutRef/stderrRef/outputRef/codeRef and report whether logs are readable before editing or rerunning.',
     'If a required input, remote file, credential, or executable is missing, write a valid ToolPayload with executionUnits.status="failed-with-reason" and a precise failureReason instead of fabricating outputs.',
@@ -3846,6 +3864,8 @@ function contextEnvelopeMode(
 
 function summarizeUiStateForAgentServer(uiState: unknown, mode: AgentServerContextMode) {
   if (!isRecord(uiState)) return undefined;
+  const ledger = toRecordList(uiState.conversationLedger);
+  const contextReusePolicy = isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : undefined;
   return {
     sessionId: typeof uiState.sessionId === 'string' ? uiState.sessionId : undefined,
     currentPrompt: clipForAgentServerPrompt(uiState.currentPrompt, mode === 'full' ? 1600 : 1200),
@@ -3862,6 +3882,8 @@ function summarizeUiStateForAgentServer(uiState: unknown, mode: AgentServerConte
     recentRuns: Array.isArray(uiState.recentRuns)
       ? uiState.recentRuns.slice(-4).map((entry) => clipForAgentServerJson(entry, 2))
       : undefined,
+    conversationLedger: summarizeConversationLedger(ledger, mode),
+    contextReusePolicy: contextReusePolicy ? clipForAgentServerJson(contextReusePolicy, 3) : undefined,
     contextMode: mode,
   };
 }
@@ -3903,6 +3925,18 @@ function summarizeExecutionRefs(refs: Array<Record<string, unknown>>) {
   }));
 }
 
+function summarizeConversationLedger(ledger: Array<Record<string, unknown>>, mode: AgentServerContextMode) {
+  if (!ledger.length) return undefined;
+  const budget = mode === 'full' ? 24 : 18;
+  const tail = ledger.slice(-budget).map((entry) => clipForAgentServerJson(entry, 3));
+  return {
+    totalTurns: ledger.length,
+    omittedPrefixTurns: Math.max(0, ledger.length - tail.length),
+    ordering: 'append-only-session-order',
+    tail,
+  };
+}
+
 function buildContextEnvelope(
   request: GatewayRequest,
   params: {
@@ -3919,6 +3953,8 @@ function buildContextEnvelope(
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const recentExecutionRefs = toRecordList(uiState.recentExecutionRefs);
   const recentConversation = toStringList(uiState.recentConversation);
+  const conversationLedger = toRecordList(uiState.conversationLedger);
+  const contextReusePolicy = isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : undefined;
   const mode = params.mode ?? contextEnvelopeMode(request);
   const workspaceTree = params.workspaceTreeSummary ?? [];
   const artifactRefs = summarizeArtifactRefs(request.artifacts);
@@ -3997,6 +4033,8 @@ function buildContextEnvelope(
       currentPrompt: typeof uiState.currentPrompt === 'string' ? uiState.currentPrompt : request.prompt,
       currentUserRequest: currentUserRequestText(request.prompt),
       recentConversation: visibleRecentConversation,
+      conversationLedger: summarizeConversationLedger(conversationLedger, mode),
+      contextReusePolicy: contextReusePolicy ? clipForAgentServerJson(contextReusePolicy, 3) : undefined,
       recentRuns: Array.isArray(uiState.recentRuns)
         ? (mode === 'full' ? uiState.recentRuns : uiState.recentRuns.slice(-4).map((entry) => clipForAgentServerJson(entry, 2)))
         : undefined,
@@ -4009,12 +4047,12 @@ function buildContextEnvelope(
     },
     continuityRules: mode === 'full' ? [
       'Use workspace refs as the source of truth for files, logs, generated code, and artifacts.',
-      'Use recentConversation only to infer current intent.',
+      'Use conversationLedger to recover long-running session continuity; use recentConversation only to infer current intent.',
       'For continuation or repair requests, continue from priorAttempts/artifacts instead of restarting an unrelated task.',
       'If a requested local ref does not exist, say so explicitly and point to the nearest available output/log/artifact ref.',
     ] : [
       'Workspace refs are source of truth.',
-      'Continue from recentExecutionRefs/artifacts; answer missing refs honestly.',
+      'Continue from AgentServer session memory, conversationLedger, recentExecutionRefs, and artifacts; answer missing refs honestly.',
     ],
   };
 }
@@ -4057,6 +4095,13 @@ function expectedArtifactSchema(request: GatewayRequest | BioAgentSkillDomain): 
   const skillDomain = typeof request === 'string' ? request : request.skillDomain;
   const types = typeof request === 'string' ? [] : expectedArtifactTypesForRequest(request);
   if (types.length) return { types };
+  if (typeof request !== 'string') {
+    return {
+      types: [],
+      mode: 'backend-decides',
+      note: 'No current-turn artifact type was explicitly required; infer the minimal output from rawUserPrompt and explicit references.',
+    };
+  }
   if (skillDomain === 'literature') return { type: 'paper-list' };
   if (skillDomain === 'structure') return { type: 'structure-summary' };
   if (skillDomain === 'omics') return { type: 'omics-differential-expression' };
@@ -5352,7 +5397,7 @@ function recoverActionsForRepair(reason: string) {
   if (/AgentServer|base URL|fetch|ECONNREFUSED/i.test(reason)) {
     return [
       'Start or configure AgentServer, then retry the same prompt.',
-      'If a local seed skill should handle this task, verify the skill registry match before using AgentServer fallback.',
+      'If a local package skill package should handle this task, verify the skill registry match before using AgentServer fallback.',
     ];
   }
   if (/schema|payload|parsed|validation/i.test(reason)) {

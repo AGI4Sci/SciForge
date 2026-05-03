@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildContextCompactionFailureResult, buildContextCompactionOutcome } from './contextCompaction';
-import { buildContextWindowMeterModel, contextWindowLevel, estimateContextWindowState, shouldAutoCompact, shouldStartContextCompaction } from './contextWindow';
-import type { AgentContextWindowState } from './domain';
+import { buildContextWindowMeterModel, contextWindowLevel, estimateContextWindowState, latestContextWindowState, shouldAutoCompact, shouldStartContextCompaction } from './contextWindow';
+import type { AgentContextWindowState, BioAgentConfig, BioAgentSession } from './domain';
 
 const beforeState: AgentContextWindowState = {
   usedTokens: 86_000,
@@ -112,7 +112,7 @@ test('context meter display reflects ratio, status, and source trust level', () 
   assert.equal(nativeHealthy.ratioStyle, '42%');
   assert.equal(nativeHealthy.ratioDetail, '42%');
   assert.equal(nativeHealthy.remainingExact, '58,000');
-  assert.match(nativeHealthy.title, /auto threshold: 82%/);
+  assert.match(nativeHealthy.title, /compact threshold: 82%/);
   assert.deepEqual(
     nativeHealthy.detailRows.slice(0, 3),
     [
@@ -131,7 +131,7 @@ test('context meter display reflects ratio, status, and source trust level', () 
   }, true);
   assert.equal(providerWatch.level, 'watch');
   assert.equal(providerWatch.sourceLabel, 'provider');
-  assert.match(providerWatch.title, /压缩时机由 AgentServer 自动判断/);
+  assert.match(providerWatch.title, /发送前达到阈值时会请求 AgentServer/);
 
   const estimatedNearLimit = buildContextWindowMeterModel({
     ...beforeState,
@@ -149,6 +149,7 @@ test('context meter display reflects ratio, status, and source trust level', () 
     },
   }, false);
   assert.equal(estimatedNearLimit.level, 'near-limit');
+  assert.equal(estimatedNearLimit.statusLabel, 'near-limit');
   assert.equal(estimatedNearLimit.sourceLabel, '估算');
   assert.equal(estimatedNearLimit.isEstimated, true);
   assert.ok(estimatedNearLimit.detailRows.some((row) => row.label === 'payload tokens' && row.value === '38,000 normalized / 160,000 raw'));
@@ -165,10 +166,178 @@ test('context meter display reflects ratio, status, and source trust level', () 
   assert.match(unknownBlocked.title, /source: 未知/);
 });
 
+test('context meter uses ratio as the final authority when backend status is stale', () => {
+  const exceeded = buildContextWindowMeterModel({
+    ...beforeState,
+    usedTokens: 105_000,
+    windowTokens: 100_000,
+    ratio: 1.05,
+    source: 'agentserver',
+    status: 'healthy',
+  }, false);
+
+  assert.equal(exceeded.level, 'near-limit');
+  assert.equal(exceeded.statusLabel, 'exceeded');
+  assert.equal(exceeded.ratioLabel, '105%');
+});
+
 test('empty estimated context window reports zero usage when the model window is known', () => {
-  const state = estimateContextWindowState({
+  const state = estimateContextWindowState(emptySession('session-empty'), defaultConfig(), []);
+
+  assert.equal(state.usedTokens, 0);
+  assert.equal(state.windowTokens, 200_000);
+  assert.equal(state.ratio, 0);
+  const meter = buildContextWindowMeterModel(state, false);
+  assert.deepEqual(meter.detailRows.slice(0, 3), [
+    { label: 'used/window', value: '0 / 200,000 tokens' },
+    { label: 'remaining', value: '200,000 tokens' },
+    { label: 'ratio', value: '0%' },
+  ]);
+});
+
+test('estimated context window is monotonic across long multi-turn sessions', () => {
+  const base = emptySession('session-long-context');
+  const thirtyTurns: BioAgentSession = {
+    ...base,
+    messages: Array.from({ length: 30 }, (_, index) => ({
+      id: `msg-${index + 1}`,
+      role: index % 2 === 0 ? 'user' : 'scenario',
+      content: `Round ${index + 1}: retain this generic multi-turn context for later reuse.`,
+      createdAt: `2026-05-03T00:${String(index).padStart(2, '0')}:00.000Z`,
+      status: 'completed',
+    })),
+  };
+  const thirtyOneTurns: BioAgentSession = {
+    ...thirtyTurns,
+    messages: [
+      ...thirtyTurns.messages,
+      {
+        id: 'msg-31',
+        role: 'user',
+        content: 'Round 31: continue from all previous constraints and refs.',
+        createdAt: '2026-05-03T00:31:00.000Z',
+        status: 'completed',
+      },
+    ],
+  };
+
+  const first = estimateContextWindowState(thirtyTurns, defaultConfig(), []);
+  const next = estimateContextWindowState(thirtyOneTurns, defaultConfig(), []);
+  assert.ok((next.usedTokens ?? 0) > (first.usedTokens ?? 0));
+});
+
+test('latest context window meter ignores provider usage as current-window authority', () => {
+  const state = latestContextWindowState([
+    {
+      id: 'evt-native',
+      type: 'contextWindowState',
+      label: '上下文窗口',
+      createdAt: '2026-05-03T00:00:00.000Z',
+      contextWindowState: {
+        source: 'native',
+        backend: 'codex',
+        usedTokens: 42_000,
+        windowTokens: 100_000,
+        ratio: 0.42,
+        status: 'healthy',
+      },
+    },
+    {
+      id: 'evt-provider',
+      type: 'usage-update',
+      label: '用量',
+      createdAt: '2026-05-03T00:00:01.000Z',
+      usage: { input: 180_000, output: 200, total: 180_200, cacheRead: 160_000, source: 'provider' },
+      contextWindowState: {
+        source: 'provider-usage',
+        backend: 'codex',
+        input: 180_000,
+        output: 200,
+        cache: 160_000,
+        usedTokens: 180_200,
+        windowTokens: 100_000,
+        ratio: 1.802,
+        status: 'exceeded',
+      },
+    },
+  ]);
+
+  assert.equal(state?.source, 'native');
+  assert.equal(state?.usedTokens, 42_000);
+  assert.equal(state?.status, 'healthy');
+});
+
+test('latest context window meter can use compaction after-state', () => {
+  const state = latestContextWindowState([
+    {
+      id: 'evt-compact',
+      type: 'contextCompaction',
+      label: '上下文压缩',
+      createdAt: '2026-05-03T00:00:00.000Z',
+      contextCompaction: {
+        status: 'completed',
+        backend: 'codex',
+        compactCapability: 'native',
+        lastCompactedAt: '2026-05-03T00:00:00.000Z',
+        after: {
+          source: 'native',
+          backend: 'codex',
+          usedTokens: 18_000,
+          windowTokens: 100_000,
+          ratio: 0.18,
+          status: 'healthy',
+          compactCapability: 'native',
+        },
+      },
+    },
+  ]);
+
+  assert.equal(state?.source, 'native');
+  assert.equal(state?.usedTokens, 18_000);
+  assert.equal(state?.lastCompactedAt, '2026-05-03T00:00:00.000Z');
+});
+
+test('latest context window meter preserves previous compaction timestamp across running updates', () => {
+  const state = latestContextWindowState([
+    {
+      id: 'evt-compact-state',
+      type: 'contextWindowState',
+      label: '上下文窗口',
+      createdAt: '2026-05-03T00:00:00.000Z',
+      contextWindowState: {
+        source: 'agentserver-estimate',
+        backend: 'codex',
+        usedTokens: 5_297,
+        windowTokens: 4_000,
+        ratio: 1.324,
+        status: 'exceeded',
+        lastCompactedAt: '2026-05-02T22:07:13.067Z',
+      },
+    },
+    {
+      id: 'evt-running-state',
+      type: 'contextWindowState',
+      label: '上下文窗口',
+      createdAt: '2026-05-03T00:01:00.000Z',
+      contextWindowState: {
+        source: 'agentserver-estimate',
+        backend: 'codex',
+        usedTokens: 14_377,
+        windowTokens: 20_000,
+        ratio: 0.711,
+        status: 'watch',
+      },
+    },
+  ]);
+
+  assert.equal(state?.usedTokens, 14_377);
+  assert.equal(state?.lastCompactedAt, '2026-05-02T22:07:13.067Z');
+});
+
+function emptySession(sessionId: string): BioAgentSession {
+  return {
     schemaVersion: 2,
-    sessionId: 'session-empty',
+    sessionId,
     scenarioId: 'literature-evidence-review',
     title: 'empty',
     createdAt: '2026-05-02T00:00:00.000Z',
@@ -181,7 +350,11 @@ test('empty estimated context window reports zero usage when the model window is
     notebook: [],
     versions: [],
     updatedAt: '2026-05-02T00:00:00.000Z',
-  }, {
+  };
+}
+
+function defaultConfig(): BioAgentConfig {
+  return {
     schemaVersion: 1,
     agentServerBaseUrl: 'http://localhost:18080',
     workspaceWriterBaseUrl: 'http://localhost:5174',
@@ -194,18 +367,8 @@ test('empty estimated context window reports zero usage when the model window is
     requestTimeoutMs: 900_000,
     maxContextWindowTokens: 200_000,
     updatedAt: '2026-05-02T00:00:00.000Z',
-  }, []);
-
-  assert.equal(state.usedTokens, 0);
-  assert.equal(state.windowTokens, 200_000);
-  assert.equal(state.ratio, 0);
-  const meter = buildContextWindowMeterModel(state, false);
-  assert.deepEqual(meter.detailRows.slice(0, 3), [
-    { label: 'used/window', value: '0 / 200,000 tokens' },
-    { label: 'remaining', value: '200,000 tokens' },
-    { label: 'ratio', value: '0%' },
-  ]);
-});
+  };
+}
 
 test('auto compact threshold respects backend fallback and unsupported capability', () => {
   assert.equal(shouldAutoCompact({

@@ -31,7 +31,7 @@ try {
     routeDecision: {
       selectedSkill: 'literature.pubmed_search',
       selectedRuntime: 'workspace-python',
-      fallbackReason: 'seed skill matched',
+      fallbackReason: 'package skill matched',
       selectedAt: '2026-04-25T00:00:00.000Z',
     },
     attempt: 1,

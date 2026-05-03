@@ -2,17 +2,47 @@ import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent 
 import { ChevronDown, ChevronUp, CircleStop, Clock, Copy, Download, FileUp, MessageSquare, Plus, Quote, Sparkles, Trash2, X } from 'lucide-react';
 import { scenarios, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
-import { sendAgentMessageStream, validateSemanticTurnAcceptance } from '../api/agentClient';
+import { compactAgentContext, sendAgentMessageStream, validateSemanticTurnAcceptance } from '../api/agentClient';
 import { sendBioAgentToolMessage } from '../api/bioagentToolsClient';
-import { buildContextWindowMeterModel, estimateContextWindowState, latestContextWindowState } from '../contextWindow';
+import { buildContextWindowMeterModel, estimateContextWindowState, latestContextWindowState, shouldStartContextCompaction } from '../contextWindow';
+import { buildContextCompactionFailureResult, buildContextCompactionOutcome } from '../contextCompaction';
 import { builtInScenarioPackageRef } from '../scenarioCompiler/scenarioPackage';
 import { resetSession } from '../sessionStore';
 import { coalesceStreamEvents, formatAgentTokenUsage, latestRunningEvent, presentStreamEvent, streamEventCounts } from '../streamEventPresentation';
 import { acceptAndRepairAgentResponse, buildBackendAcceptanceRepairPrompt, buildUserGoalSnapshot, shouldRunBackendAcceptanceRepair } from '../turnAcceptance';
-import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type BioAgentConfig, type BioAgentMessage, type BioAgentReference, type BioAgentRun, type BioAgentSession, type NormalizedAgentResponse, type ObjectReference, type PreviewDescriptor, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
+import { expectedArtifactsForCurrentTurn, selectedComponentsForCurrentTurn } from '../artifactIntent';
+import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type BioAgentConfig, type BioAgentMessage, type BioAgentReference, type BioAgentRun, type BioAgentSession, type NormalizedAgentResponse, type ObjectReference, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
 import { writeWorkspaceFile } from '../api/workspaceClient';
 import { exportJsonFile } from './exportUtils';
 import { ActionButton, Badge, ClaimTag, ConfidenceBar, EvidenceTag, IconButton, cx } from './uiPrimitives';
+import {
+  appendReferenceMarkerToInput,
+  artifactTypeForUploadedFileLike as artifactTypeForUploadedFile,
+  bioAgentReferenceAttribute,
+  mergeObjectReferences,
+  objectReferenceChipModel,
+  objectReferenceForArtifactSummary,
+  objectReferenceForUploadedArtifact,
+  objectReferenceIcon,
+  objectReferenceKindLabel,
+  parseBioAgentReferenceAttribute,
+  previewKindForUploadedFileLike as previewKindForUploadedFile,
+  referenceComposerMarker,
+  referenceForMessage,
+  referenceForObjectReference,
+  referenceForRun,
+  referenceForTextSelection,
+  referenceForUiElement,
+  referenceForUploadedArtifact,
+  removeReferenceMarkerFromInput,
+  uploadedDerivativeHintsForFileLike as uploadedDerivativeHints,
+  uploadedInlinePolicyForFileLike as uploadedInlinePolicy,
+  uploadedLocatorHintsForFileLike as uploadedLocatorHints,
+  uploadedPreviewActionsForFileLike as uploadedPreviewActions,
+  withComposerMarker,
+} from '../../../../packages/object-references';
+
+export { objectReferenceKindLabel } from '../../../../packages/object-references';
 
 interface HandoffAutoRunRequest {
   id: string;
@@ -75,6 +105,7 @@ export function ChatPanel({
   onObjectFocus,
   externalReferenceRequest,
   onExternalReferenceConsumed,
+  availableComponentIds = [],
 }: {
   scenarioId: ScenarioInstanceId;
   role: string;
@@ -105,6 +136,7 @@ export function ChatPanel({
   onObjectFocus: (reference: ObjectReference) => void;
   externalReferenceRequest?: { id: string; reference: BioAgentReference };
   onExternalReferenceConsumed?: (requestId: string) => void;
+  availableComponentIds?: string[];
 }) {
   const [expanded, setExpanded] = useState<number | null>(0);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -342,13 +374,25 @@ export function ChatPanel({
 
   async function runPrompt(prompt: string, baseSession: BioAgentSession, references: BioAgentReference[] = []) {
     const turnId = makeId('turn');
+    const turnComponentHints = selectedComponentsForCurrentTurn(
+      prompt,
+      availableComponentIds.length
+        ? availableComponentIds
+        : (scenarioOverride?.defaultComponents?.length
+          ? scenarioOverride.defaultComponents
+          : SCENARIO_SPECS[baseScenarioId].componentPolicy.defaultComponents),
+    );
     const goalSnapshot = buildUserGoalSnapshot({
       turnId,
       prompt,
       references,
       scenarioId,
       scenarioOverride,
-      expectedArtifacts: SCENARIO_SPECS[baseScenarioId].outputArtifacts.map((artifact) => artifact.type),
+      expectedArtifacts: expectedArtifactsForCurrentTurn({
+        scenarioId: baseScenarioId,
+        prompt,
+        selectedComponentIds: turnComponentHints,
+      }),
       recentMessages: baseSession.messages.slice(-8).map((message) => ({ role: message.role, content: message.content })),
     });
     const userMessage: BioAgentMessage = {
@@ -406,10 +450,78 @@ export function ChatPanel({
         runs: turnPayload.runs,
         config,
         scenarioOverride,
+        availableComponentIds,
         scenarioPackageRef,
         skillPlanRef,
         uiPlanRef,
       };
+      const preflightState = latestContextWindowState(streamEvents)
+        ?? estimateContextWindowState(baseSession, config, streamEvents);
+      if (shouldStartContextCompaction({
+        state: preflightState,
+        running: false,
+        inFlight: false,
+        reason: 'auto-threshold-before-send',
+      })) {
+        const startedAt = nowIso();
+        setStreamEvents((current) => [...current.slice(-31), {
+          id: makeId('evt'),
+          type: 'contextCompaction',
+          label: '上下文压缩',
+          detail: '发送前达到阈值，正在请求 AgentServer/backend 原生压缩。',
+          contextWindowState: {
+            ...preflightState,
+            pendingCompact: true,
+            status: 'compacting',
+          },
+          contextCompaction: {
+            status: 'started',
+            source: 'agentserver',
+            backend: config.agentBackend,
+            compactCapability: preflightState.compactCapability,
+            before: preflightState,
+            startedAt,
+            reason: 'auto-threshold-before-send',
+            message: '发送前达到阈值，正在请求 AgentServer/backend 原生压缩。',
+          },
+          createdAt: startedAt,
+        }]);
+        try {
+          const compactResult = await compactAgentContext(request, 'auto-threshold-before-send', controller.signal);
+          const completedAt = nowIso();
+          const outcome = buildContextCompactionOutcome({
+            eventId: makeId('evt'),
+            messageId: makeId('msg'),
+            result: compactResult,
+            beforeState: preflightState,
+            reason: 'auto-threshold-before-send',
+            startedAt,
+            completedAt,
+            fallbackBackend: config.agentBackend,
+          });
+          setStreamEvents((current) => coalesceStreamEvents(current, outcome.event).slice(-32));
+        } catch (compactError) {
+          if (compactError instanceof DOMException && compactError.name === 'AbortError') throw compactError;
+          const completedAt = nowIso();
+          const outcome = buildContextCompactionOutcome({
+            eventId: makeId('evt'),
+            messageId: makeId('msg'),
+            result: buildContextCompactionFailureResult({
+              error: compactError,
+              reason: 'auto-threshold-before-send',
+              backend: config.agentBackend,
+              compactCapability: preflightState.compactCapability,
+              startedAt,
+            }),
+            beforeState: preflightState,
+            reason: 'auto-threshold-before-send',
+            startedAt,
+            completedAt,
+            fallbackBackend: config.agentBackend,
+          });
+          setStreamEvents((current) => coalesceStreamEvents(current, outcome.event).slice(-32));
+        }
+      }
       let response: NormalizedAgentResponse;
       try {
         response = await sendBioAgentToolMessage(request, {
@@ -764,8 +876,8 @@ export function ChatPanel({
       runs: [...baseSession.runs, versionedRun],
       uiManifest: response.uiManifest.length ? response.uiManifest : baseSession.uiManifest,
       claims: [...response.claims, ...baseSession.claims].slice(0, 24),
-      executionUnits: [...response.executionUnits, ...baseSession.executionUnits].slice(0, 24),
-      artifacts: [...response.artifacts, ...baseSession.artifacts].slice(0, 24),
+      executionUnits: mergeExecutionUnits(response.executionUnits, baseSession.executionUnits),
+      artifacts: mergeRuntimeArtifacts(response.artifacts, baseSession.artifacts),
       notebook: [...response.notebook, ...baseSession.notebook].slice(0, 24),
       updatedAt: nowIso(),
     };
@@ -916,6 +1028,13 @@ export function ChatPanel({
                   references={message.objectReferences}
                   activeRunId={activeRunId}
                   onFocus={onObjectFocus}
+                />
+              ) : null}
+              {messageRunId && message.role !== 'user' ? (
+                <RunKeyInfo
+                  runId={messageRunId}
+                  session={session}
+                  onObjectFocus={onObjectFocus}
                 />
               ) : null}
               {message.acceptance && !message.acceptance.pass ? (
@@ -1271,14 +1390,6 @@ function failedAcceptanceRepairResponse(
   };
 }
 
-function mergeObjectReferences(primary: ObjectReference[], secondary: ObjectReference[]) {
-  const byRef = new Map<string, ObjectReference>();
-  for (const reference of [...primary, ...secondary]) {
-    byRef.set(reference.ref || reference.id, { ...byRef.get(reference.ref || reference.id), ...reference });
-  }
-  return Array.from(byRef.values()).slice(0, 24);
-}
-
 function requestPayloadForTurn(session: BioAgentSession, userMessage: BioAgentMessage, references: BioAgentReference[]) {
   const hasExplicitReferences = references.length > 0;
   const priorMessages = session.messages.filter((message) => message.id !== userMessage.id);
@@ -1305,16 +1416,18 @@ function requestPayloadForTurn(session: BioAgentSession, userMessage: BioAgentMe
 
 function mergeRuntimeArtifacts(primary: NormalizedAgentResponse['artifacts'], secondary: NormalizedAgentResponse['artifacts']) {
   const byKey = new Map<string, NormalizedAgentResponse['artifacts'][number]>();
-  for (const artifact of [...primary, ...secondary]) {
-    byKey.set(artifact.id || artifact.path || artifact.dataRef || `${artifact.type}-${byKey.size}`, { ...byKey.get(artifact.id || artifact.path || artifact.dataRef || ''), ...artifact });
+  for (const artifact of [...secondary, ...primary]) {
+    const key = artifact.id || artifact.path || artifact.dataRef || `${artifact.type}-${byKey.size}`;
+    byKey.set(key, { ...byKey.get(key), ...artifact });
   }
   return Array.from(byKey.values()).slice(0, 32);
 }
 
 function mergeExecutionUnits(primary: NormalizedAgentResponse['executionUnits'], secondary: NormalizedAgentResponse['executionUnits']) {
   const byId = new Map<string, NormalizedAgentResponse['executionUnits'][number]>();
-  for (const unit of [...primary, ...secondary]) {
-    byId.set(unit.id || `${unit.tool}-${byId.size}`, { ...byId.get(unit.id || ''), ...unit });
+  for (const unit of [...secondary, ...primary]) {
+    const key = unit.id || `${unit.tool}-${byId.size}`;
+    byId.set(key, { ...byId.get(key), ...unit });
   }
   return Array.from(byId.values()).slice(0, 32);
 }
@@ -1379,49 +1492,6 @@ async function fileToUploadedArtifact(file: File, scenarioId: ScenarioInstanceId
   };
 }
 
-function uploadedInlinePolicy(file: File): PreviewDescriptor['inlinePolicy'] {
-  const kind = previewKindForUploadedFile(file);
-  if (kind === 'pdf' || kind === 'image') return 'stream';
-  if (kind === 'markdown' || kind === 'text' || kind === 'json' || kind === 'table' || kind === 'html') return file.size <= 1024 * 1024 ? 'inline' : 'extract';
-  if (kind === 'office' || kind === 'structure') return 'external';
-  return kind === 'folder' ? 'extract' : 'unsupported';
-}
-
-function uploadedDerivativeHints(file: File, ref: string): PreviewDescriptor['derivatives'] {
-  const kind = previewKindForUploadedFile(file);
-  const lazy = (derivativeKind: NonNullable<PreviewDescriptor['derivatives']>[number]['kind'], mimeType: string) => ({
-    kind: derivativeKind,
-    ref: `${ref}#${derivativeKind}`,
-    mimeType,
-    status: 'lazy' as const,
-  });
-  if (kind === 'pdf') return [lazy('text', 'text/plain'), lazy('pages', 'application/json'), lazy('thumb', 'image/png')];
-  if (kind === 'image') return [lazy('thumb', file.type || 'image/*')];
-  if (kind === 'json' || kind === 'table') return [lazy('schema', 'application/json')];
-  if (kind === 'office' || kind === 'binary') return [lazy('metadata', 'application/json')];
-  return [];
-}
-
-function uploadedPreviewActions(file: File): PreviewDescriptor['actions'] {
-  const kind = previewKindForUploadedFile(file);
-  const common: PreviewDescriptor['actions'] = ['system-open', 'copy-ref', 'inspect-metadata'];
-  if (kind === 'pdf') return ['open-inline', 'extract-text', 'make-thumbnail', 'select-page', 'select-region', ...common];
-  if (kind === 'image') return ['open-inline', 'make-thumbnail', 'select-region', ...common];
-  if (kind === 'table') return ['open-inline', 'select-rows', ...common];
-  if (kind === 'markdown' || kind === 'text' || kind === 'json' || kind === 'html') return ['open-inline', 'extract-text', ...common];
-  return common;
-}
-
-function uploadedLocatorHints(file: File): PreviewDescriptor['locatorHints'] {
-  const kind = previewKindForUploadedFile(file);
-  if (kind === 'pdf') return ['page', 'region'];
-  if (kind === 'image') return ['region'];
-  if (kind === 'table') return ['row-range', 'column-range'];
-  if (kind === 'structure') return ['structure-selection'];
-  if (kind === 'markdown' || kind === 'text' || kind === 'json' || kind === 'html') return ['text-range'];
-  return [];
-}
-
 function arrayBufferToBase64(buffer: ArrayBuffer) {
   const bytes = new Uint8Array(buffer);
   let binary = '';
@@ -1434,68 +1504,6 @@ function arrayBufferToBase64(buffer: ArrayBuffer) {
 
 function safeWorkspaceSegment(value: string) {
   return value.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 120);
-}
-
-function artifactTypeForUploadedFile(file: File) {
-  const name = file.name.toLowerCase();
-  const type = file.type.toLowerCase();
-  if (type === 'application/pdf' || name.endsWith('.pdf')) return 'uploaded-pdf';
-  if (type.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/i.test(name)) return 'uploaded-image';
-  if (/\.(csv|tsv|xlsx?|json)$/i.test(name)) return 'uploaded-data-file';
-  if (/\.(txt|md|rtf|docx?)$/i.test(name)) return 'uploaded-document';
-  return 'uploaded-file';
-}
-
-function previewKindForUploadedFile(file: File): PreviewDescriptor['kind'] {
-  const name = file.name.toLowerCase();
-  const type = file.type.toLowerCase();
-  if (type === 'application/pdf' || name.endsWith('.pdf')) return 'pdf';
-  if (type.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/i.test(name)) return 'image';
-  if (/\.(md|markdown)$/i.test(name)) return 'markdown';
-  if (/\.(txt|log)$/i.test(name) || type.startsWith('text/')) return 'text';
-  if (/\.(json|jsonl)$/i.test(name) || type.includes('json')) return 'json';
-  if (/\.(csv|tsv|xlsx?)$/i.test(name)) return 'table';
-  if (/\.(html?|xhtml)$/i.test(name)) return 'html';
-  if (/\.(pdb|cif|mmcif)$/i.test(name)) return 'structure';
-  if (/\.(docx?|pptx?)$/i.test(name)) return 'office';
-  return 'binary';
-}
-
-function referenceForUploadedArtifact(artifact: RuntimeArtifact): BioAgentReference {
-  const title = String(artifact.metadata?.title ?? artifact.id);
-  return {
-    id: makeId('ref-upload'),
-    kind: 'file',
-    title,
-    ref: artifact.dataRef ?? artifact.id,
-    summary: `用户上传文件 · ${artifact.type}`,
-    sourceId: artifact.id,
-    payload: {
-      artifactId: artifact.id,
-      type: artifact.type,
-      metadata: artifact.metadata,
-    },
-  };
-}
-
-function objectReferenceForUploadedArtifact(artifact: RuntimeArtifact): ObjectReference {
-  const title = String(artifact.metadata?.title ?? artifact.id);
-  return {
-    id: makeId('obj-upload'),
-    kind: 'artifact',
-    title,
-    ref: artifact.id,
-    artifactType: artifact.type,
-    preferredView: artifact.type === 'uploaded-image' || artifact.type === 'uploaded-pdf' ? 'preview' : 'generic-artifact-inspector',
-    actions: ['focus-right-pane', 'inspect', 'pin'],
-    status: 'available',
-    summary: '用户上传到证据矩阵的文件',
-    provenance: {
-      dataRef: artifact.dataRef,
-      producer: 'user-upload',
-      size: typeof artifact.metadata?.size === 'number' ? artifact.metadata.size : undefined,
-    },
-  };
 }
 
 function enrichRepairRaw(raw: unknown, repairHistory: unknown, sourceRunId: string, failureReason?: string) {
@@ -1620,13 +1628,11 @@ function ObjectReferenceChips({
   activeRunId?: string;
   onFocus: (reference: ObjectReference) => void;
 }) {
-  const trusted = references.filter(isTrustedObjectReference);
-  const pending = references.filter((reference) => !isTrustedObjectReference(reference));
-  const visible = [...trusted, ...pending].slice(0, 8);
-  const hidden = Math.max(0, references.length - visible.length);
+  const [expanded, setExpanded] = useState(false);
+  const chipModel = objectReferenceChipModel(references, expanded);
   return (
     <div className="object-reference-strip" aria-label="回答中引用的对象">
-      {visible.map((reference) => (
+      {chipModel.visible.map((reference) => (
         <button
           type="button"
           key={reference.id}
@@ -1638,21 +1644,88 @@ function ObjectReferenceChips({
         >
           <span>{objectReferenceIcon(reference.kind)}</span>
           <strong>{reference.title}</strong>
-          {!isTrustedObjectReference(reference) ? <Badge variant="warning">点击验证</Badge> : null}
+          {chipModel.pending.some((item) => item.id === reference.id) ? <Badge variant="warning">点击验证</Badge> : null}
           {reference.status && reference.status !== 'available' ? <Badge variant={reference.status === 'blocked' ? 'danger' : 'warning'}>{reference.status}</Badge> : null}
         </button>
       ))}
-      {hidden ? <Badge variant="muted">+{hidden} objects</Badge> : null}
+      {chipModel.hasOverflow ? (
+        <button
+          type="button"
+          className="object-reference-more"
+          onClick={() => setExpanded((value) => !value)}
+          aria-expanded={expanded}
+          title={expanded ? '收起对象列表' : `展开剩余 ${chipModel.hiddenCount} 个对象`}
+        >
+          {expanded ? '收起对象' : `+${chipModel.hiddenCount} objects`}
+        </button>
+      ) : null}
     </div>
   );
 }
 
-function isTrustedObjectReference(reference: ObjectReference) {
-  if (reference.status && reference.status !== 'available') return false;
-  if (reference.kind === 'artifact') return true;
-  if (reference.kind === 'url') return true;
-  if (/^agentserver:\/\//i.test(reference.ref)) return false;
-  return Boolean(reference.provenance?.hash || reference.provenance?.size || reference.provenance?.producer);
+function RunKeyInfo({
+  runId,
+  session,
+  onObjectFocus,
+}: {
+  runId: string;
+  session: BioAgentSession;
+  onObjectFocus?: (reference: ObjectReference) => void;
+}) {
+  const run = session.runs.find((item) => item.id === runId);
+  const objectRefs = run?.objectReferences ?? [];
+  const artifactRefIds = new Set(objectRefs.filter((ref) => ref.kind === 'artifact').map((ref) => ref.ref.replace(/^artifact:/, '')));
+  const artifacts = session.artifacts
+    .filter((artifact) => artifactRefIds.has(artifact.id) || artifact.metadata?.runId === runId)
+    .slice(0, 4);
+  const units = session.executionUnits
+    .filter((unit) => unit.status !== 'planned')
+    .slice(0, 3);
+  const claims = session.claims.slice(0, 3);
+  if (!artifacts.length && !claims.length && !units.length) return null;
+  return (
+    <div className="message-key-info" aria-label="本轮关键信息">
+      <div className="message-key-info-head">
+        <strong>关键信息</strong>
+        <span>{artifacts.length} artifacts · {claims.length} claims · {units.length} units</span>
+      </div>
+      {claims.length ? (
+        <div className="message-key-list">
+          {claims.map((claim) => (
+            <div key={claim.id} className="message-key-row">
+              <strong>{claim.text}</strong>
+              <span>{claim.evidenceLevel} · confidence {Math.round(claim.confidence * 100)}%</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {artifacts.length ? (
+        <div className="message-key-list">
+          {artifacts.map((artifact, index) => {
+            const ref = objectReferenceForArtifactSummary(artifact, runId);
+            return (
+              <button key={`${artifact.id || artifact.type}-${artifact.path || artifact.dataRef || index}`} type="button" className="message-key-row as-button" onClick={() => onObjectFocus?.(ref)}>
+                <strong>{artifactTitle(artifact)}</strong>
+                <span>{artifact.type} · {artifact.dataRef || artifact.path || artifact.id}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+      {units.length ? (
+        <details className="message-secondary-info">
+          <summary>展开次要执行信息</summary>
+          {units.map((unit) => (
+            <code key={unit.id}>{unit.status} · {unit.tool} · {unit.outputRef || unit.codeRef || unit.id}</code>
+          ))}
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+function artifactTitle(artifact: RuntimeArtifact) {
+  return String(artifact.metadata?.title || artifact.metadata?.name || artifact.id);
 }
 
 function TurnAcceptanceNotice({
@@ -1718,63 +1791,6 @@ function BioAgentReferenceChips({
       ))}
     </div>
   );
-}
-
-function bioAgentReferenceKindLabel(kind: BioAgentReference['kind']) {
-  if (kind === 'file') return 'file';
-  if (kind === 'file-region') return 'region';
-  if (kind === 'message') return 'msg';
-  if (kind === 'task-result') return 'run';
-  if (kind === 'chart') return 'chart';
-  if (kind === 'table') return 'table';
-  return 'ui';
-}
-
-function bioAgentReferenceAttribute(reference: BioAgentReference | undefined) {
-  return reference ? JSON.stringify(reference) : undefined;
-}
-
-function appendReferenceMarkerToInput(currentInput: string, reference: BioAgentReference) {
-  const marker = referenceComposerMarker(reference);
-  if (!marker || currentInput.includes(marker)) return currentInput;
-  return [currentInput.trimEnd(), marker].filter(Boolean).join(' ');
-}
-
-function removeReferenceMarkerFromInput(currentInput: string, reference: BioAgentReference) {
-  const marker = referenceComposerMarker(reference);
-  return currentInput
-    .replace(marker, '')
-    .replace(/[ \t]{2,}/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trimStart();
-}
-
-function referenceComposerMarker(reference: BioAgentReference) {
-  const payload = isRecord(reference.payload) ? reference.payload : undefined;
-  const marker = typeof payload?.composerMarker === 'string' ? payload.composerMarker : '';
-  return marker || '※?';
-}
-
-function withComposerMarker(reference: BioAgentReference, currentReferences: BioAgentReference[]) {
-  const existing = currentReferences.find((item) => item.id === reference.id);
-  if (existing) return existing;
-  const marker = nextComposerMarker(currentReferences);
-  return {
-    ...reference,
-    payload: {
-      ...(isRecord(reference.payload) ? reference.payload : {}),
-      composerMarker: marker,
-    },
-  };
-}
-
-function nextComposerMarker(currentReferences: BioAgentReference[]) {
-  const used = new Set(currentReferences.map(referenceComposerMarker));
-  for (let index = 1; index <= currentReferences.length + 1; index += 1) {
-    const marker = `※${index}`;
-    if (!used.has(marker)) return marker;
-  }
-  return `※${currentReferences.length + 1}`;
 }
 
 function highlightReferencedContent(reference: BioAgentReference) {
@@ -1847,30 +1863,11 @@ function textSelectionReferenceTarget(event?: MouseEvent): { element: HTMLElemen
   if (!element || element.closest('.composer, .reference-pick-banner, .settings-dialog')) return undefined;
   if (rawTarget && !element.contains(rawTarget) && !rawTarget.contains(element)) return undefined;
   const sourceReference = parseBioAgentReferenceAttribute(element.dataset.bioagentReference) ?? referenceForUiElement(element);
-  const textHash = stableHash(`${sourceReference.ref}:${selectedText}`);
-  const clippedText = selectedText.length > 2400 ? `${selectedText.slice(0, 2400)}...` : selectedText;
+  const reference = referenceForTextSelection({ sourceReference, selectedText });
+  if (!reference) return undefined;
   return {
     element,
-    reference: {
-      id: `ref-text-${textHash}`,
-      kind: 'ui',
-      title: `选中文本 · ${selectedText.replace(/\s+/g, ' ').slice(0, 28)}`,
-      ref: `ui-text:${sourceReference.ref}#${textHash}`,
-      sourceId: sourceReference.sourceId,
-      runId: sourceReference.runId,
-      summary: clippedText,
-      locator: {
-        textRange: selectedText.slice(0, 160),
-        region: sourceReference.ref,
-      },
-      payload: {
-        selectedText: clippedText,
-        sourceTitle: sourceReference.title,
-        sourceRef: sourceReference.ref,
-        sourceKind: sourceReference.kind,
-        sourceSummary: sourceReference.summary,
-      },
-    },
+    reference,
   };
 }
 
@@ -1887,144 +1884,8 @@ function referenceTargetFromEvent(event: MouseEvent): { element: HTMLElement; re
   return { element: implicit, reference: referenceForUiElement(implicit) };
 }
 
-function parseBioAgentReferenceAttribute(value: string | undefined): BioAgentReference | undefined {
-  if (!value) return undefined;
-  try {
-    const parsed = JSON.parse(value) as Partial<BioAgentReference>;
-    if (!parsed.id || !parsed.kind || !parsed.title || !parsed.ref) return undefined;
-    return parsed as BioAgentReference;
-  } catch {
-    return undefined;
-  }
-}
-
-function referenceForMessage(message: BioAgentMessage, runId?: string): BioAgentReference {
-  return {
-    id: `ref-message-${message.id}`,
-    kind: 'message',
-    title: `${message.role === 'user' ? '用户' : message.role === 'system' ? '系统' : 'Agent'} · ${message.content.trim().slice(0, 28) || message.id}`,
-    ref: `message:${message.id}`,
-    sourceId: message.id,
-    runId,
-    summary: message.content.slice(0, 500),
-    payload: {
-      role: message.role,
-      content: message.content,
-      createdAt: message.createdAt,
-      references: message.references,
-      objectReferences: message.objectReferences,
-    },
-  };
-}
-
-function referenceForRun(run: BioAgentRun): BioAgentReference {
-  return {
-    id: `ref-run-${run.id}`,
-    kind: 'task-result',
-    title: `run ${run.id.replace(/^run-/, '').slice(0, 8)} · ${run.status}`,
-    ref: `run:${run.id}`,
-    sourceId: run.id,
-    runId: run.id,
-    summary: `${run.prompt.slice(0, 240)}\n${run.response.slice(0, 240)}`,
-    payload: {
-      status: run.status,
-      prompt: run.prompt,
-      response: run.response,
-      references: run.references,
-      objectReferences: run.objectReferences,
-    },
-  };
-}
-
-function referenceForObjectReference(reference: ObjectReference): BioAgentReference {
-  const kind: BioAgentReference['kind'] = reference.kind === 'file' ? 'file'
-    : reference.kind === 'artifact' && /table|matrix|csv|dataframe/i.test(reference.artifactType ?? reference.title) ? 'table'
-      : reference.kind === 'artifact' && /chart|plot|graph|visual|umap|heatmap/i.test(reference.artifactType ?? reference.title) ? 'chart'
-        : 'task-result';
-  return {
-    id: `ref-object-${reference.id}`,
-    kind,
-    title: reference.title,
-    ref: reference.ref,
-    sourceId: reference.id,
-    runId: reference.runId,
-    summary: reference.summary,
-    payload: {
-      artifactType: reference.artifactType,
-      preferredView: reference.preferredView,
-      provenance: reference.provenance,
-      status: reference.status,
-    },
-  };
-}
-
-function referenceForUiElement(element: HTMLElement): BioAgentReference {
-  const title = readableElementTitle(element);
-  const selector = stableElementSelector(element);
-  return {
-    id: `ref-ui-${selector.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 48) || makeId('ui')}`,
-    kind: 'ui',
-    title,
-    ref: `ui:${selector}`,
-    summary: element.innerText?.trim().slice(0, 600) || element.getAttribute('aria-label') || element.className.toString(),
-    payload: {
-      tagName: element.tagName.toLowerCase(),
-      className: element.className.toString(),
-      ariaLabel: element.getAttribute('aria-label'),
-      textPreview: element.innerText?.trim().slice(0, 1000),
-    },
-  };
-}
-
-function readableElementTitle(element: HTMLElement) {
-  return (element.getAttribute('aria-label')
-    || element.getAttribute('title')
-    || element.querySelector('h1,h2,h3,strong')?.textContent
-    || element.innerText
-    || element.tagName)
-    .trim()
-    .replace(/\s+/g, ' ')
-    .slice(0, 52);
-}
-
-function stableElementSelector(element: HTMLElement) {
-  if (element.id) return `#${element.id}`;
-  const dataRunId = element.dataset.runId;
-  if (dataRunId) return `[data-run-id="${dataRunId}"]`;
-  const className = element.className.toString().split(/\s+/).filter(Boolean).slice(0, 3).join('.');
-  return `${element.tagName.toLowerCase()}${className ? `.${className}` : ''}`;
-}
-
-function stableHash(value: string) {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = Math.imul(31, hash) + value.charCodeAt(index) | 0;
-  }
-  return Math.abs(hash).toString(36);
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-export function objectReferenceKindLabel(kind: ObjectReference['kind']) {
-  if (kind === 'artifact') return 'artifact';
-  if (kind === 'file') return 'file';
-  if (kind === 'folder') return 'folder';
-  if (kind === 'run') return 'run';
-  if (kind === 'execution-unit') return 'execution unit';
-  if (kind === 'scenario-package') return 'scenario package';
-  return 'url';
-}
-
-function objectReferenceIcon(kind: ObjectReference['kind']) {
-  if (kind === 'folder') return 'folder';
-  if (kind === 'file') return 'file';
-  if (kind === 'run') return 'run';
-  if (kind === 'execution-unit') return 'EU';
-  if (kind === 'url') return 'link';
-  if (kind === 'scenario-package') return 'pkg';
-  return 'obj';
 }
 
 function latestTokenUsage(events: AgentStreamEvent[]) {

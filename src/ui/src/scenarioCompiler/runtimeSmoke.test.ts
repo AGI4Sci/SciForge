@@ -16,9 +16,9 @@ describe('scenario runtime smoke hook', () => {
     assert.ok(result.expectedArtifactTypes.includes('paper-list'));
   });
 
-  it('uses an optional executor for seed skill smoke execution', async () => {
+  it('uses an optional executor for package skill smoke execution', async () => {
     const pkg = buildBuiltInScenarioPackage('literature-evidence-review', '2026-04-25T00:00:00.000Z');
-    const result = await runScenarioRuntimeSmoke({ package: pkg, mode: 'execute-seed-skill' }, async () => ({
+    const result = await runScenarioRuntimeSmoke({ package: pkg, mode: 'execute-package-skill' }, async () => ({
       ok: true,
       execution: { status: 'done' },
     }));

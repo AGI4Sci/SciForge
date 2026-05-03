@@ -1,0 +1,19 @@
+{
+  "name": "@agi4sci/design-system",
+  "version": "0.1.0",
+  "description": "BioAgent design tokens and reusable UI primitives.",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.tsx",
+  "types": "./src/index.tsx",
+  "exports": {
+    ".": "./src/index.tsx",
+    "./tokens": "./src/tokens.ts",
+    "./theme.css": "./theme.css",
+    "./components.css": "./components.css"
+  },
+  "peerDependencies": {
+    "lucide-react": "^1.8.0",
+    "react": "^19.2.5"
+  }
+}

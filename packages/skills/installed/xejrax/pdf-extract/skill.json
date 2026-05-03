@@ -1,0 +1,28 @@
+{
+  "id": "xejrax.pdf-extract",
+  "name": "Pdf Extract",
+  "owner": "xejrax",
+  "slug": "pdf-extract",
+  "version": "1.0.0",
+  "description": "Extract text from PDF files for LLM processing",
+  "source": "clawhub",
+  "sourceUrl": "https://clawhub.ai/xejrax/pdf-extract",
+  "kind": "installed",
+  "entrypointType": "agentserver-generation",
+  "requiredBinaries": [
+    "pdftotext"
+  ],
+  "skillDomain": "literature",
+  "capabilities": [
+    "Extract text content from PDF files",
+    "Convert PDF pages to plain text for LLM processing",
+    "Support for pdftotext (poppler-utils) backend"
+  ],
+  "requirements": {
+    "binaries": [
+      "pdftotext"
+    ],
+    "packages": [],
+    "notes": "pdftotext is provided by poppler-utils on Linux/macOS"
+  }
+}

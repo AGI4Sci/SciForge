@@ -89,6 +89,9 @@ export interface WorkspaceRuntimeContextCompaction {
   source?: WorkspaceRuntimeContextWindowSource;
   backend?: string;
   compactCapability?: WorkspaceRuntimeContextWindowState['compactCapability'];
+  before?: WorkspaceRuntimeContextWindowState;
+  after?: WorkspaceRuntimeContextWindowState;
+  auditRefs?: string[];
   startedAt?: string;
   completedAt?: string;
   lastCompactedAt?: string;
@@ -182,7 +185,7 @@ export interface WorkspaceTaskRunResult {
 
 export interface SkillManifest {
   id: string;
-  kind: 'seed' | 'workspace' | 'installed';
+  kind: 'package' | 'workspace' | 'installed';
   description: string;
   skillDomains: BioAgentSkillDomain[];
   inputContract: Record<string, unknown>;

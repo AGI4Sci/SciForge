@@ -22,6 +22,7 @@
     "tools/**/*.ts",
     "tests/deep/**/*.ts",
     "tests/smoke/**/*.ts",
+    "packages/**/*.ts",
     "src/ui/src/**/*.ts",
     "src/ui/src/**/*.tsx"
   ],

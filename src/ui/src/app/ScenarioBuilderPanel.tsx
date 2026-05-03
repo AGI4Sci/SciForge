@@ -1,14 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { ChevronDown, ChevronUp, Download, FileCode, FilePlus, Play } from 'lucide-react';
 import { type ScenarioId } from '../data';
 import { SCENARIO_SPECS, componentManifest } from '../scenarioSpecs';
-import { scenarioIdBySkillDomain, type ScenarioBuilderDraft } from '../scenarioCompiler/scenarioDraftCompiler';
-import { compileScenarioIRFromSelection, recommendScenarioElements, type ScenarioElementSelection } from '../scenarioCompiler/scenarioElementCompiler';
-import { elementRegistry } from '../scenarioCompiler/elementRegistry';
-import { runScenarioRuntimeSmoke } from '../scenarioCompiler/runtimeSmoke';
-import { buildScenarioQualityReport } from '../scenarioCompiler/scenarioQualityGate';
+import {
+  buildScenarioQualityReport,
+  compileScenarioIRFromSelection,
+  elementRegistry,
+  recommendScenarioElements,
+  runScenarioRuntimeSmoke,
+  scenarioIdBySkillDomain,
+  type ScenarioBuilderDraft,
+  type ScenarioElementSelection,
+  type ScenarioPackage,
+} from '../../../../packages/scenario-core';
 import { saveWorkspaceScenario, publishWorkspaceScenario } from '../api/workspaceClient';
-import type { ScenarioPackage } from '../scenarioCompiler/scenarioPackage';
 import type { BioAgentConfig, ScenarioRuntimeOverride } from '../domain';
 import type { RuntimeHealthItem } from '../runtimeHealth';
 import { exportJsonFile } from './exportUtils';
@@ -31,7 +36,6 @@ export function ScenarioBuilderPanel({
   onToggle: () => void;
   onChange: (override: ScenarioRuntimeOverride) => void;
 }) {
-  const builtin = SCENARIO_SPECS[scenarioId];
   const initialSelection = useMemo(() => defaultElementSelectionForScenario(scenarioId, scenario), [scenarioId]);
   const [selection, setSelection] = useState<ScenarioElementSelection>(initialSelection);
   const [builderStep, setBuilderStep] = useState<'describe' | 'elements' | 'contract' | 'quality' | 'publish'>('describe');
@@ -41,7 +45,12 @@ export function ScenarioBuilderPanel({
   useEffect(() => {
     setSelection(initialSelection);
   }, [initialSelection]);
-  const componentOptions = Array.from(new Set([...builtin.componentPolicy.allowedComponents, ...scenario.allowedComponents]));
+  const componentOptions = prioritizeBySelectionAndDomain(
+    elementRegistry.components,
+    selection.selectedComponentIds ?? [],
+    selection.skillDomain ?? scenario.skillDomain,
+    (component) => component.componentId,
+  );
   const compileResult = useMemo(() => compileScenarioIRFromSelection(selection), [selection]);
   const qualityReport = useMemo(() => buildScenarioQualityReport({
     package: compileResult.package,
@@ -53,13 +62,24 @@ export function ScenarioBuilderPanel({
     warning: qualityReport.items.filter((item) => item.severity === 'warning').length,
     note: qualityReport.items.filter((item) => item.severity === 'note').length,
   }), [qualityReport]);
-  const skillOptions = elementRegistry.skills.filter((skill) => skill.skillDomains.includes(selection.skillDomain ?? scenario.skillDomain));
-  const artifactOptions = elementRegistry.artifacts.filter((artifact) => (
-    artifact.tags?.includes(selection.skillDomain ?? scenario.skillDomain)
-    || artifact.producerSkillIds.some((skillId) => selection.selectedSkillIds.includes(skillId))
-    || selection.selectedArtifactTypes.includes(artifact.artifactType)
-  ));
-  const toolOptions = elementRegistry.tools.filter((tool) => tool.skillDomains.includes(selection.skillDomain ?? scenario.skillDomain));
+  const skillOptions = prioritizeBySelectionAndDomain(
+    elementRegistry.skills,
+    selection.selectedSkillIds,
+    selection.skillDomain ?? scenario.skillDomain,
+    (skill) => skill.id,
+  );
+  const artifactOptions = prioritizeBySelectionAndDomain(
+    elementRegistry.artifacts,
+    selection.selectedArtifactTypes,
+    selection.skillDomain ?? scenario.skillDomain,
+    (artifact) => artifact.artifactType,
+  );
+  const toolOptions = prioritizeBySelectionAndDomain(
+    elementRegistry.tools,
+    selection.selectedToolIds ?? [],
+    selection.skillDomain ?? scenario.skillDomain,
+    (tool) => tool.id,
+  );
   const recommendationReasons = builderRecommendationReasons(selection, scenario, compileResult.uiPlan.slots.length, compileResult.skillPlan.skillIRs.length);
   function patch(patchValue: Partial<ScenarioRuntimeOverride>) {
     onChange({ ...scenario, ...patchValue });
@@ -72,13 +92,27 @@ export function ScenarioBuilderPanel({
       ? scenario.defaultComponents.filter((item) => item !== component)
       : [...scenario.defaultComponents, component];
     patchSelection({ selectedComponentIds: toggleList(selection.selectedComponentIds ?? [], component) });
-    patch({ defaultComponents: next.length ? next : [scenario.fallbackComponent] });
+    patch({
+      defaultComponents: next.length ? next : [scenario.fallbackComponent],
+      allowedComponents: Array.from(new Set([...scenario.allowedComponents, component])),
+    });
+  }
+  function setSelectedComponents(ids: string[]) {
+    const next = unique(ids.length ? ids : [scenario.fallbackComponent]);
+    patchSelection({ selectedComponentIds: next });
+    patch({
+      defaultComponents: next,
+      allowedComponents: Array.from(new Set([...scenario.allowedComponents, ...next])),
+    });
   }
   function toggleSelectionList(key: 'selectedSkillIds' | 'selectedToolIds' | 'selectedArtifactTypes' | 'selectedFailurePolicyIds', value: string) {
     setSelection((current) => ({
       ...current,
       [key]: toggleList((current[key] ?? []) as string[], value),
     }));
+  }
+  function setSelectionList(key: 'selectedSkillIds' | 'selectedToolIds' | 'selectedArtifactTypes' | 'selectedFailurePolicyIds', values: string[]) {
+    setSelection((current) => ({ ...current, [key]: unique(values) }));
   }
   async function saveCompiled(status: 'draft' | 'published') {
     try {
@@ -166,46 +200,6 @@ export function ScenarioBuilderPanel({
                 }}
               />
             </label>
-            <label>
-              <span>Skill domain</span>
-              <select
-                value={scenario.skillDomain}
-                onChange={(event) => {
-                  const skillDomain = event.target.value as ScenarioRuntimeOverride['skillDomain'];
-                  const base = SCENARIO_SPECS[scenarioIdBySkillDomain[skillDomain]];
-                  const domainSkillIds = elementRegistry.skills
-                    .filter((skill) => skill.skillDomains.includes(skillDomain))
-                    .map((skill) => skill.id);
-                  const generatedSkillId = `agentserver.generate.${skillDomain}`;
-                  const nextSelectedSkillIds = domainSkillIds.includes(generatedSkillId)
-                    ? [generatedSkillId]
-                    : domainSkillIds.slice(0, 1);
-                  const nextDefaultComponents = base.componentPolicy.defaultComponents;
-                  patch({
-                    skillDomain,
-                    defaultComponents: nextDefaultComponents,
-                    allowedComponents: base.componentPolicy.allowedComponents,
-                    fallbackComponent: base.componentPolicy.fallbackComponent,
-                    scenarioPackageRef: undefined,
-                    skillPlanRef: undefined,
-                    uiPlanRef: undefined,
-                  });
-                  patchSelection({
-                    skillDomain,
-                    selectedSkillIds: nextSelectedSkillIds,
-                    selectedToolIds: elementRegistry.tools.filter((tool) => tool.skillDomains.includes(skillDomain)).slice(0, 5).map((tool) => tool.id),
-                    selectedArtifactTypes: base.outputArtifacts.map((artifact) => artifact.type),
-                    selectedComponentIds: nextDefaultComponents,
-                    fallbackComponentId: base.componentPolicy.fallbackComponent,
-                  });
-                }}
-              >
-                <option value="literature">literature</option>
-                <option value="structure">structure</option>
-                <option value="omics">omics</option>
-                <option value="knowledge">knowledge</option>
-              </select>
-            </label>
             <label className="wide">
               <span>场景描述</span>
               <input
@@ -218,21 +212,22 @@ export function ScenarioBuilderPanel({
             </label>
           </div>
           <div className={cx('builder-step-panel', builderStep !== 'elements' && 'muted')}>
-            <div className="component-selector">
-              <span>默认组件集合</span>
-              <div>
-                {componentOptions.map((component) => (
-                  <button
-                    key={component}
-                    className={cx(scenario.defaultComponents.includes(component) && 'active')}
-                    onClick={() => toggleComponent(component)}
-                  >
-                    {component}
-                    <ElementPopover {...componentElementPopover(component)} />
-                  </button>
-                ))}
-              </div>
-            </div>
+            <ElementSelector
+              title="Components"
+              options={componentOptions.map((component) => {
+                const popover = componentElementPopover(component.componentId);
+                return {
+                  id: component.componentId,
+                  label: component.label,
+                  detail: component.description,
+                  meta: popover.meta,
+                };
+              })}
+              selected={scenario.defaultComponents}
+              onToggle={toggleComponent}
+              onSelectMany={(ids) => setSelectedComponents(unique([...scenario.defaultComponents, ...ids]))}
+              onClearMany={(ids) => setSelectedComponents(scenario.defaultComponents.filter((id) => !ids.includes(id)))}
+            />
             <ElementSelector
               title="Skills"
               options={skillOptions.map((skill) => ({
@@ -243,6 +238,8 @@ export function ScenarioBuilderPanel({
               }))}
               selected={selection.selectedSkillIds}
               onToggle={(id) => toggleSelectionList('selectedSkillIds', id)}
+              onSelectMany={(ids) => setSelectionList('selectedSkillIds', [...selection.selectedSkillIds, ...ids])}
+              onClearMany={(ids) => setSelectionList('selectedSkillIds', selection.selectedSkillIds.filter((id) => !ids.includes(id)))}
             />
             <ElementSelector
               title="Tools"
@@ -254,6 +251,8 @@ export function ScenarioBuilderPanel({
               }))}
               selected={selection.selectedToolIds ?? []}
               onToggle={(id) => toggleSelectionList('selectedToolIds', id)}
+              onSelectMany={(ids) => setSelectionList('selectedToolIds', [...(selection.selectedToolIds ?? []), ...ids])}
+              onClearMany={(ids) => setSelectionList('selectedToolIds', (selection.selectedToolIds ?? []).filter((id) => !ids.includes(id)))}
             />
             <ElementSelector
               title="Artifacts"
@@ -265,6 +264,8 @@ export function ScenarioBuilderPanel({
               }))}
               selected={selection.selectedArtifactTypes}
               onToggle={(id) => toggleSelectionList('selectedArtifactTypes', id)}
+              onSelectMany={(ids) => setSelectionList('selectedArtifactTypes', [...selection.selectedArtifactTypes, ...ids])}
+              onClearMany={(ids) => setSelectionList('selectedArtifactTypes', selection.selectedArtifactTypes.filter((id) => !ids.includes(id)))}
             />
             <ElementSelector
               title="Failure policies"
@@ -276,6 +277,8 @@ export function ScenarioBuilderPanel({
               }))}
               selected={selection.selectedFailurePolicyIds ?? []}
               onToggle={(id) => toggleSelectionList('selectedFailurePolicyIds', id)}
+              onSelectMany={(ids) => setSelectionList('selectedFailurePolicyIds', [...(selection.selectedFailurePolicyIds ?? []), ...ids])}
+              onClearMany={(ids) => setSelectionList('selectedFailurePolicyIds', (selection.selectedFailurePolicyIds ?? []).filter((id) => !ids.includes(id)))}
             />
           </div>
           <div className={cx('builder-step-panel', builderStep !== 'contract' && 'muted')}>
@@ -399,6 +402,27 @@ function toggleList(values: string[], value: string) {
   return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
 }
 
+function unique(values: string[]) {
+  return Array.from(new Set(values)).filter(Boolean);
+}
+
+function prioritizeBySelectionAndDomain<T extends { label?: string; id: string; tags?: string[]; skillDomains?: string[] }>(
+  values: T[],
+  selectedIds: string[],
+  domain: ScenarioRuntimeOverride['skillDomain'],
+  idForItem: (item: T) => string,
+) {
+  return [...values].sort((left, right) => {
+    const leftSelected = selectedIds.includes(idForItem(left)) ? 0 : 1;
+    const rightSelected = selectedIds.includes(idForItem(right)) ? 0 : 1;
+    if (leftSelected !== rightSelected) return leftSelected - rightSelected;
+    const leftDomain = left.skillDomains?.includes(domain) || left.tags?.includes(domain) ? 0 : 1;
+    const rightDomain = right.skillDomains?.includes(domain) || right.tags?.includes(domain) ? 0 : 1;
+    if (leftDomain !== rightDomain) return leftDomain - rightDomain;
+    return idForItem(left).localeCompare(idForItem(right));
+  });
+}
+
 function builderRecommendationReasons(
   selection: ScenarioElementSelection,
   scenario: ScenarioRuntimeOverride,
@@ -445,23 +469,125 @@ function ElementSelector({
   options,
   selected,
   onToggle,
+  onSelectMany,
+  onClearMany,
 }: {
   title: string;
   options: Array<{ id: string; label: string; detail?: string; meta?: string }>;
   selected: string[];
   onToggle: (id: string) => void;
+  onSelectMany?: (ids: string[]) => void;
+  onClearMany?: (ids: string[]) => void;
 }) {
+  const [query, setQuery] = useState('');
+  const [excluded, setExcluded] = useState<string[]>([]);
+  const [bodyOpen, setBodyOpen] = useState(true);
+  const bodyId = useId();
+  const visibleOptions = useMemo(() => {
+    const excludedSet = new Set(excluded);
+    return fuzzyFilterOptions(options, query)
+      .filter((option) => !excludedSet.has(option.id));
+  }, [excluded, options, query]);
+  const visibleIds = visibleOptions.map((option) => option.id);
+  const selectedCount = selected.length;
+  const excludedVisibleCount = excluded.length;
   return (
-    <div className="component-selector">
-      <span>{title}</span>
-      <div>
-        {options.slice(0, 24).map((option) => (
-          <button key={option.id} className={cx(selected.includes(option.id) && 'active')} onClick={() => onToggle(option.id)} title={option.label}>
-            {option.id}
-            <ElementPopover label={option.label} detail={option.detail ?? option.id} meta={option.meta ?? 'no additional profile'} />
-          </button>
-        ))}
+    <div className={cx('element-selector', !bodyOpen && 'collapsed')}>
+      <div className="element-selector-top">
+        <button
+          type="button"
+          className="element-selector-collapse"
+          aria-expanded={bodyOpen}
+          aria-controls={bodyId}
+          title={bodyOpen ? '收起列表' : '展开列表'}
+          onClick={() => setBodyOpen((value) => !value)}
+        >
+          {bodyOpen ? <ChevronUp size={16} aria-hidden /> : <ChevronDown size={16} aria-hidden />}
+        </button>
+        <div className="element-selector-title-block">
+          <span>{title}</span>
+          <small>{selectedCount} selected · {visibleOptions.length}/{options.length} shown{excludedVisibleCount ? ` · ${excludedVisibleCount} excluded` : ''}</small>
+        </div>
       </div>
+      {bodyOpen ? (
+        <>
+          <div className="element-selector-controls">
+            <label className="element-selector-search">
+              <span>搜索</span>
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="名称、说明、artifact、capability..."
+              />
+            </label>
+            <div className="element-selector-actions">
+              <button type="button" onClick={() => onSelectMany?.(visibleIds)} disabled={!visibleIds.length}>选中当前</button>
+              <button type="button" onClick={() => onClearMany?.(visibleIds)} disabled={!visibleIds.length}>取消当前</button>
+              <button type="button" onClick={() => setExcluded((current) => unique([...current, ...visibleIds]))} disabled={!visibleIds.length}>排除当前</button>
+              <button type="button" onClick={() => setExcluded([])} disabled={!excluded.length}>恢复排除</button>
+            </div>
+          </div>
+          <div id={bodyId} className="element-selector-table" role="list" aria-label={`${title} registry`}>
+        {visibleOptions.map((option) => {
+          const isSelected = selected.includes(option.id);
+          return (
+            <article key={option.id} className={cx('element-selector-row', isSelected && 'selected')} role="listitem">
+              <label>
+                <input type="checkbox" checked={isSelected} onChange={() => onToggle(option.id)} />
+                <span className="element-selector-name">
+                  <strong>{option.id}</strong>
+                  <small>{option.label}</small>
+                </span>
+              </label>
+              <p>{option.detail ?? option.id}</p>
+              <details>
+                <summary>详细</summary>
+                <em>{option.meta ?? 'no additional profile'}</em>
+              </details>
+              <button type="button" className="element-selector-exclude" onClick={() => setExcluded((current) => unique([...current, option.id]))}>
+                排除
+              </button>
+            </article>
+          );
+        })}
+            {!visibleOptions.length ? (
+              <div className="element-selector-empty">没有匹配项。可以清空搜索或恢复排除。</div>
+            ) : null}
+          </div>
+        </>
+      ) : null}
     </div>
   );
+}
+
+function fuzzyFilterOptions(options: Array<{ id: string; label: string; detail?: string; meta?: string }>, query: string) {
+  const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!tokens.length) return options;
+  return options
+    .map((option) => ({ option, score: fuzzyScore([option.id, option.label, option.detail, option.meta].filter(Boolean).join(' '), tokens) }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.option.id.localeCompare(right.option.id))
+    .map((item) => item.option);
+}
+
+function fuzzyScore(text: string, tokens: string[]) {
+  const lower = text.toLowerCase();
+  let score = 0;
+  for (const token of tokens) {
+    if (lower.includes(token)) {
+      score += token.length * 8;
+      continue;
+    }
+    let cursor = 0;
+    let matched = 0;
+    for (const char of token) {
+      const next = lower.indexOf(char, cursor);
+      if (next < 0) break;
+      matched += 1;
+      cursor = next + 1;
+    }
+    if (matched < Math.ceil(token.length * 0.7)) return 0;
+    score += matched;
+  }
+  return score;
 }

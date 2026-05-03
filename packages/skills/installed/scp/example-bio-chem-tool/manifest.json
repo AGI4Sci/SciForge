@@ -1,0 +1,41 @@
+{
+  "id": "example-bio-chem-tool",
+  "name": "Example Bio-Chem Tool",
+  "description": "示例生物化学工具占位模板，用于展示本地 SKILL.md 与 SCP toolId 的对齐方式。",
+  "category": "chemistry",
+  "type": "compute_tool",
+  "provider": "上海人工智能实验室",
+  "url": "https://scphub.intern-ai.org.cn/skill/example-bio-chem-tool",
+  "tools": ["calculate"],
+  "invoke": {
+    "endpoint": "/api/mcp/v1/invoke",
+    "method": "POST",
+    "actions": {
+      "calculate": {
+        "description": "Calculate molecular properties from SMILES input",
+        "parameters": {
+          "smiles": {
+            "type": "string",
+            "required": true,
+            "description": "SMILES molecular structure string"
+          },
+          "properties": {
+            "type": "array",
+            "required": false,
+            "description": "List of properties to calculate (mw, logp, tpsa)",
+            "default": ["mw", "logp", "tpsa"]
+          }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "action": "calculate",
+      "params": {
+        "smiles": "CCO",
+        "properties": ["mw", "logp"]
+      }
+    }
+  ]
+}
