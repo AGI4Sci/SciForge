@@ -97,7 +97,7 @@ export function pathForObjectReference(reference: ObjectReference, session: Pick
       || reference.provenance?.path
       || reference.provenance?.dataRef;
   }
-  if (reference.kind === 'file' || reference.kind === 'folder') return reference.ref.replace(/^(file|folder):/i, '');
+  if (reference.kind === 'file' || reference.kind === 'folder') return reference.ref.replace(/^(file|folder)::?/i, '');
   if (reference.kind === 'url') return reference.ref.replace(/^url:/i, '');
   return reference.provenance?.path || reference.provenance?.dataRef;
 }

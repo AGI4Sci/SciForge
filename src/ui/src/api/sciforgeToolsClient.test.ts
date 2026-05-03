@@ -648,6 +648,53 @@ describe('sendSciForgeToolMessage routing', () => {
     assert.equal(uiState.agentDispatchPolicy, 'agentserver-decides');
   });
 
+  it('forwards Scenario Builder selected skills and tools to the workspace runtime', async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    globalThis.fetch = (async (_url, init) => {
+      requestBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        ok: true,
+        result: {
+          message: 'ok',
+          confidence: 0.8,
+          claimType: 'fact',
+          evidenceLevel: 'runtime',
+          uiManifest: [],
+          executionUnits: [],
+          artifacts: [],
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    await sendSciForgeToolMessage({
+      ...baseInput(),
+      scenarioId: 'literature-evidence-review',
+      agentName: 'Literature',
+      agentDomain: 'literature',
+      scenarioOverride: {
+        title: 'Builder-selected tooling',
+        description: 'Use selected capabilities when they fit.',
+        skillDomain: 'literature',
+        scenarioMarkdown: 'Prefer selected tools over self-contained code when appropriate.',
+        defaultComponents: ['report-viewer', 'evidence-matrix'],
+        allowedComponents: ['report-viewer', 'evidence-matrix'],
+        fallbackComponent: 'unknown-artifact-inspector',
+        selectedSkillIds: ['scp.biomedical-web-search'],
+        selectedToolIds: ['clawhub.playwright-mcp'],
+      },
+      prompt: '检索并总结最新 agent 论文。',
+    });
+
+    assert.deepEqual(requestBody?.availableSkills, ['scp.biomedical-web-search', 'agentserver.generate.literature']);
+    assert.deepEqual(requestBody?.selectedToolIds, ['clawhub.playwright-mcp']);
+    const uiState = requestBody?.uiState as Record<string, unknown>;
+    assert.deepEqual(uiState.selectedSkillIds, ['scp.biomedical-web-search', 'agentserver.generate.literature']);
+    assert.deepEqual(uiState.selectedToolIds, ['clawhub.playwright-mcp']);
+  });
+
   it('does not leak stale local conversation into a clean package first run', async () => {
     let requestBody: Record<string, unknown> | undefined;
     globalThis.fetch = (async (_url, init) => {

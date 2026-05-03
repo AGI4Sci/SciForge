@@ -1,12 +1,12 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
-import { AlertTriangle, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Copy, Download, Eye, FileCode, FileText, Lock, Save, Shield, Sparkles, Target, Terminal, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Copy, Download, Eye, FileCode, FileText, Lock, Save, Shield, Sparkles, Target, Terminal, Trash2, X } from 'lucide-react';
 import { scenarios, type EvidenceLevel, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
 import { elementRegistry } from '../scenarioCompiler/elementRegistry';
 import { compileSlotsForScenario } from '../scenarioCompiler/uiPlanCompiler';
 import { buildExecutionBundle, evaluateExecutionBundleExport } from '../exportPolicy';
 import { artifactPreviewActions, objectReferenceKinds, previewDescriptorKinds, runtimeContractSchemas, schemaPreview, validateRuntimeContract } from '../runtimeContracts';
-import { openWorkspaceObject, readPreviewDescriptor, readWorkspaceFile, writeWorkspaceFile, type WorkspaceFileContent } from '../api/workspaceClient';
+import { openWorkspaceObject, readPreviewDerivative, readPreviewDescriptor, readWorkspaceFile, writeWorkspaceFile, type WorkspaceFileContent } from '../api/workspaceClient';
 import { uiModuleRegistry, type PresentationDedupeScope, type RuntimeUIModule } from '../uiModuleRegistry';
 import { renderDataTable, renderReportViewer, type UIComponentRendererProps } from '../../../../packages/ui-components';
 import {
@@ -19,7 +19,7 @@ import type { VolcanoPoint } from '../charts';
 import { HeatmapViewer, MoleculeViewer, NetworkGraph, UmapViewer } from '../visualizations';
 import { exportJsonFile, exportTextFile } from './exportUtils';
 import { ActionButton, Badge, Card, ChartLoadingFallback, ClaimTag, ConfidenceBar, EmptyArtifactState, EvidenceTag, SectionHeader, TabBar, cx } from './uiPrimitives';
-import type { SciForgeConfig, SciForgeReference, SciForgeRun, SciForgeSession, DisplayIntent, EvidenceClaim, NotebookRecord, ObjectAction, ObjectReference, PreviewDescriptor, ResolvedViewPlan, RuntimeArtifact, RuntimeExecutionUnit, ScenarioInstanceId, UIManifestSlot, ViewPlanSection } from '../domain';
+import type { SciForgeConfig, SciForgeReference, SciForgeRun, SciForgeSession, DisplayIntent, EvidenceClaim, NotebookRecord, ObjectAction, ObjectReference, PreviewDerivative, PreviewDescriptor, ResolvedViewPlan, RuntimeArtifact, RuntimeExecutionUnit, ScenarioInstanceId, UIManifestSlot, ViewPlanSection } from '../domain';
 import {
   artifactForObjectReference,
   artifactReferenceKind as packageArtifactReferenceKind,
@@ -307,8 +307,10 @@ export function ResultsRenderer({
   onActiveRunChange,
   focusedObjectReference,
   onFocusedObjectChange,
+  onPreviewPackageRequest,
   workspaceFileEditor,
   onWorkspaceFileEditorChange,
+  onDismissResultSlotPresentation,
 }: {
   scenarioId: ScenarioId;
   config: SciForgeConfig;
@@ -321,8 +323,11 @@ export function ResultsRenderer({
   onActiveRunChange: (runId: string | undefined) => void;
   focusedObjectReference?: ObjectReference;
   onFocusedObjectChange: (reference: ObjectReference | undefined) => void;
+  onPreviewPackageRequest?: (reference: ObjectReference, path?: string, descriptor?: PreviewDescriptor) => void;
   workspaceFileEditor: { file: WorkspaceFileContent; draft: string } | null;
   onWorkspaceFileEditorChange: (next: { file: WorkspaceFileContent; draft: string } | null) => void;
+  /** Hide a resolved results card from the UI only (artifacts and workspace files stay). */
+  onDismissResultSlotPresentation?: (resolvedSlotPresentationId: string) => void;
 }) {
   const [resultTab, setResultTab] = useState('primary');
   const [focusMode, setFocusMode] = useState<ResultFocusMode>('all');
@@ -332,6 +337,20 @@ export function ResultsRenderer({
   const [objectActionNotice, setObjectActionNotice] = useState('');
   const scenario = scenarios.find((item) => item.id === scenarioId) ?? scenarios[0];
   const activeRun = activeRunId ? session.runs.find((run) => run.id === activeRunId) : undefined;
+  useEffect(() => {
+    const handleInlineReferenceFocus = (event: Event) => {
+      const reference = (event as CustomEvent<ObjectReference>).detail;
+      if (!reference || typeof reference !== 'object') return;
+      onFocusedObjectChange(reference);
+      setResultTab('primary');
+    };
+    window.addEventListener('sciforge-focus-object-reference', handleInlineReferenceFocus);
+    return () => window.removeEventListener('sciforge-focus-object-reference', handleInlineReferenceFocus);
+  }, [onFocusedObjectChange]);
+  useEffect(() => {
+    const cleanup = hydrateInlineObjectReferenceButtons();
+    return cleanup;
+  }, [resultTab, session.artifacts, session.runs, focusedObjectReference]);
   const viewPlan = useMemo(() => resolveViewPlan({
     scenarioId,
     session,
@@ -475,6 +494,7 @@ export function ResultsRenderer({
                 reference={focusedObjectReference}
                 session={session}
                 config={config}
+                onPreviewPackageRequest={onPreviewPackageRequest}
               />
             ) : null}
             {resultTab === 'primary' ? (
@@ -487,6 +507,8 @@ export function ResultsRenderer({
                 focusMode={focusMode}
                 onArtifactHandoff={onArtifactHandoff}
                 onInspectArtifact={setInspectedArtifact}
+                onObjectReferenceFocus={onFocusedObjectChange}
+                onDismissResultSlotPresentation={onDismissResultSlotPresentation}
               />
             ) : resultTab === 'evidence' ? (
               <EvidenceMatrix claims={session.claims} artifacts={session.artifacts} />
@@ -515,6 +537,7 @@ type RegistryRendererProps = {
   session: SciForgeSession;
   slot: UIManifestSlot;
   artifact?: RuntimeArtifact;
+  onObjectReferenceFocus?: (reference: ObjectReference) => void;
 };
 
 type RegistryEntry = {
@@ -539,6 +562,13 @@ type ResolvedViewPlanItem = {
   missingFields?: string[];
 };
 
+function filterHiddenResultSlots(items: ResolvedViewPlanItem[], session: SciForgeSession): ResolvedViewPlanItem[] {
+  const hidden = session.hiddenResultSlotIds;
+  if (!hidden?.length) return items;
+  const drop = new Set(hidden);
+  return items.filter((item) => !drop.has(item.id));
+}
+
 type RuntimeResolvedViewPlan = Omit<ResolvedViewPlan, 'sections'> & {
   sections: Record<ViewPlanSection, ResolvedViewPlanItem[]>;
   allItems: ResolvedViewPlanItem[];
@@ -546,7 +576,7 @@ type RuntimeResolvedViewPlan = Omit<ResolvedViewPlan, 'sections'> & {
 
 export interface HandoffAutoRunRequest {
   id: string;
-  targetScenario: ScenarioId;
+  targetScenario: ScenarioInstanceId;
   prompt: string;
 }
 
@@ -1163,7 +1193,12 @@ function MoleculeSlot({ slot, artifact, session }: RegistryRendererProps) {
     : toRecordList(payload.structures ?? payload.data ?? payload.rows ?? payload.items);
   const primaryStructure = structureRows[0] ?? {};
   const artifactPath = artifactFilePath(artifact, payload);
-  const dataRef = asString(payload.structureUrl) || asString(artifact?.dataRef) || asString(payload.dataRef) || artifactPath;
+  const dataRef = asString(payload.structureUrl)
+    || asString(payload.mmcifUrl)
+    || asString(payload.cifUrl)
+    || asString(artifact?.dataRef)
+    || asString(payload.dataRef)
+    || artifactPath;
   const pdbId = asString(payload.pdbId)
     || asString(payload.pdb_id)
     || asString(payload.pdb)
@@ -1479,7 +1514,7 @@ function UnknownArtifactInspector({ slot, artifact, session }: RegistryRendererP
   );
 }
 
-function ReportViewerSlot({ slot, artifact, config, session }: RegistryRendererProps) {
+function ReportViewerSlot({ slot, artifact, config, session, onObjectReferenceFocus }: RegistryRendererProps) {
   const payload = slotPayload(slot, artifact);
   const report = coerceReportPayload(payload, artifact, relatedArtifactsForReport(session, artifact));
   const [loadedReport, setLoadedReport] = useState<{ ref: string; markdown: string } | undefined>();
@@ -1525,9 +1560,9 @@ function ReportViewerSlot({ slot, artifact, config, session }: RegistryRendererP
         {sections.length ? sections.map((section, index) => (
           <section key={`${asString(section.title) ?? 'section'}-${index}`}>
             <h3>{asString(section.title) || `Section ${index + 1}`}</h3>
-            <MarkdownBlock markdown={asString(section.content) || asString(section.markdown) || recordToReadableText(section)} />
+            <MarkdownBlock markdown={asString(section.content) || asString(section.markdown) || recordToReadableText(section)} onObjectReferenceFocus={onObjectReferenceFocus} />
           </section>
-        )) : <MarkdownBlock markdown={markdown} />}
+        )) : <MarkdownBlock markdown={markdown} onObjectReferenceFocus={onObjectReferenceFocus} />}
       </div>
     </div>
   );
@@ -1834,13 +1869,13 @@ function humanizeKey(key: string) {
   return key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function MarkdownBlock({ markdown }: { markdown?: string }) {
+function MarkdownBlock({ markdown, onObjectReferenceFocus }: { markdown?: string; onObjectReferenceFocus?: (reference: ObjectReference) => void }) {
   const lines = (markdown || '').split('\n');
   const nodes: ReactNode[] = [];
   let list: string[] = [];
   function flushList() {
     if (!list.length) return;
-    nodes.push(<ul key={`list-${nodes.length}`}>{list.map((item, index) => <li key={index}>{inlineMarkdown(item)}</li>)}</ul>);
+    nodes.push(<ul key={`list-${nodes.length}`}>{list.map((item, index) => <li key={index}>{inlineMarkdown(item, onObjectReferenceFocus)}</li>)}</ul>);
     list = [];
   }
   lines.forEach((line, index) => {
@@ -1853,7 +1888,7 @@ function MarkdownBlock({ markdown }: { markdown?: string }) {
       flushList();
       const level = trimmed.match(/^#+/)?.[0].length ?? 2;
       const text = trimmed.replace(/^#{1,4}\s+/, '');
-      nodes.push(level <= 2 ? <h3 key={index}>{inlineMarkdown(text)}</h3> : <h4 key={index}>{inlineMarkdown(text)}</h4>);
+      nodes.push(level <= 2 ? <h3 key={index}>{inlineMarkdown(text, onObjectReferenceFocus)}</h3> : <h4 key={index}>{inlineMarkdown(text, onObjectReferenceFocus)}</h4>);
       return;
     }
     if (/^[-*]\s+/.test(trimmed)) {
@@ -1861,19 +1896,120 @@ function MarkdownBlock({ markdown }: { markdown?: string }) {
       return;
     }
     flushList();
-    nodes.push(<p key={index}>{inlineMarkdown(trimmed)}</p>);
+    nodes.push(<p key={index}>{inlineMarkdown(trimmed, onObjectReferenceFocus)}</p>);
   });
   flushList();
   return <div className="markdown-block">{nodes}</div>;
 }
 
-function inlineMarkdown(text: string): ReactNode {
+function inlineMarkdown(text: string, onObjectReferenceFocus?: (reference: ObjectReference) => void): ReactNode {
   const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean);
   return parts.map((part, index) => {
-    if (part.startsWith('**') && part.endsWith('**')) return <strong key={index}>{part.slice(2, -2)}</strong>;
-    if (part.startsWith('`') && part.endsWith('`')) return <code key={index}>{part.slice(1, -1)}</code>;
-    return <span key={index}>{part}</span>;
+    if (part.startsWith('**') && part.endsWith('**')) return <strong key={index}>{inlinePlainText(part.slice(2, -2), onObjectReferenceFocus)}</strong>;
+    if (part.startsWith('`') && part.endsWith('`')) {
+      const codeText = part.slice(1, -1);
+      const reference = objectReferenceFromInlineRef(codeText);
+      return reference ? inlineObjectReferenceButton(reference, index, onObjectReferenceFocus) : <code key={index}>{codeText}</code>;
+    }
+    return <span key={index}>{inlinePlainText(part, onObjectReferenceFocus)}</span>;
   });
+}
+
+function inlinePlainText(text: string, onObjectReferenceFocus?: (reference: ObjectReference) => void): ReactNode {
+  const parts = text.split(/((?:file|folder|artifact):[^\s\])}>,，。；;、|]+)/gi).filter(Boolean);
+  return parts.map((part, index) => {
+    const reference = objectReferenceFromInlineRef(part);
+    if (!reference) return <span key={index}>{part}</span>;
+    return inlineObjectReferenceButton(reference, index, onObjectReferenceFocus);
+  });
+}
+
+function inlineObjectReferenceButton(reference: ObjectReference, key: string | number, onObjectReferenceFocus?: (reference: ObjectReference) => void): ReactNode {
+  return (
+    <button
+      key={key}
+      type="button"
+      className="markdown-object-ref"
+      title={reference.ref}
+      onClick={() => focusInlineObjectReference(reference, onObjectReferenceFocus)}
+    >
+      {reference.title}
+    </button>
+  );
+}
+
+function hydrateInlineObjectReferenceButtons(root: ParentNode = document): () => void {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const text = node.textContent || '';
+      if (!/(?:file|folder|artifact):/i.test(text)) return NodeFilter.FILTER_REJECT;
+      const parent = node.parentElement;
+      if (!parent || parent.closest('button,a,textarea,input,script,style')) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const nodes: Text[] = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode as Text);
+  for (const node of nodes) {
+    const text = node.textContent || '';
+    const parts = text.split(/((?:file|folder|artifact):[^\s\])}>,，。；;、|]+)/gi).filter(Boolean);
+    if (parts.length < 2) continue;
+    const fragment = document.createDocumentFragment();
+    let changed = false;
+    for (const part of parts) {
+      const reference = objectReferenceFromInlineRef(part);
+      if (!reference) {
+        fragment.append(document.createTextNode(part));
+        continue;
+      }
+      changed = true;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'markdown-object-ref';
+      button.title = reference.ref;
+      button.textContent = reference.title;
+      button.addEventListener('click', () => focusInlineObjectReference(reference));
+      fragment.append(button);
+    }
+    if (!changed || !node.parentNode) continue;
+    node.parentNode.replaceChild(fragment, node);
+  }
+  return () => undefined;
+}
+
+function focusInlineObjectReference(reference: ObjectReference, onObjectReferenceFocus?: (reference: ObjectReference) => void) {
+  if (onObjectReferenceFocus) {
+    onObjectReferenceFocus(reference);
+    return;
+  }
+  window.dispatchEvent(new CustomEvent('sciforge-focus-object-reference', { detail: reference }));
+}
+
+function objectReferenceFromInlineRef(rawRef: string): ObjectReference | undefined {
+  const match = rawRef.match(/^(file|folder|artifact):(.+)$/i);
+  if (!match) return undefined;
+  const kind = match[1].toLowerCase() as 'file' | 'folder' | 'artifact';
+  const value = match[2].trim();
+  if (!value) return undefined;
+  const title = inlineReferenceTitle(kind, value);
+  const pathLike = kind === 'file' || kind === 'folder';
+  return {
+    id: `inline-${kind}-${value.replace(/[^a-z0-9_.-]+/gi, '-').slice(0, 80)}`,
+    kind,
+    title,
+    ref: `${kind}:${value}`,
+    artifactType: kind === 'artifact' ? value : undefined,
+    preferredView: /\.pdf(?:$|[?#])/i.test(value) ? 'pdf' : undefined,
+    actions: pathLike ? ['focus-right-pane', 'open-external', 'reveal-in-folder', 'copy-path', 'pin'] : ['focus-right-pane', 'inspect', 'pin'],
+    summary: value,
+    provenance: pathLike ? { path: value } : undefined,
+  };
+}
+
+function inlineReferenceTitle(kind: 'file' | 'folder' | 'artifact', value: string) {
+  if (kind === 'artifact') return value.replace(/^artifact:/i, '');
+  const clean = value.replace(/[?#].*$/, '').replace(/\/+$/, '');
+  return clean.split('/').filter(Boolean).at(-1) || value;
 }
 
 function ArtifactDownloads({ artifact }: { artifact?: RuntimeArtifact }) {
@@ -2000,7 +2136,7 @@ function packageRendererProps(props: RegistryRendererProps): UIComponentRenderer
       ArtifactSourceBar: ({ artifact, session }) => <ArtifactSourceBar artifact={artifact as RuntimeArtifact | undefined} session={session as SciForgeSession | undefined} />,
       ArtifactDownloads: ({ artifact }) => <ArtifactDownloads artifact={artifact as RuntimeArtifact | undefined} />,
       ComponentEmptyState,
-      MarkdownBlock,
+      MarkdownBlock: (markdownProps) => <MarkdownBlock {...markdownProps} onObjectReferenceFocus={props.onObjectReferenceFocus} />,
       readWorkspaceFile: (ref: string) => readWorkspaceFile(ref, props.config),
     },
   };
@@ -2029,6 +2165,21 @@ const componentRegistry: Record<string, RegistryEntry> = {
   'unknown-artifact-inspector': { label: 'UnknownArtifactInspector', render: (props) => <UnknownArtifactInspector {...props} /> },
 };
 
+export type WorkbenchSlotRenderProps = RegistryRendererProps;
+
+export function renderRegisteredWorkbenchSlot(props: RegistryRendererProps): ReactNode {
+  const entry = componentRegistry[props.slot.componentId];
+  if (!entry) {
+    return (
+      <EmptyArtifactState
+        title="未注册组件"
+        detail={`componentId: ${props.slot.componentId}`}
+      />
+    );
+  }
+  return entry.render(props);
+}
+
 function PrimaryResult({
   scenarioId,
   config,
@@ -2038,6 +2189,8 @@ function PrimaryResult({
   focusMode,
   onArtifactHandoff,
   onInspectArtifact,
+  onObjectReferenceFocus,
+  onDismissResultSlotPresentation,
 }: {
   scenarioId: ScenarioId;
   config: SciForgeConfig;
@@ -2047,9 +2200,14 @@ function PrimaryResult({
   focusMode: ResultFocusMode;
   onArtifactHandoff: (targetScenario: ScenarioId, artifact: RuntimeArtifact) => void;
   onInspectArtifact: (artifact: RuntimeArtifact) => void;
+  onObjectReferenceFocus?: (reference: ObjectReference) => void;
+  onDismissResultSlotPresentation?: (resolvedSlotPresentationId: string) => void;
 }) {
   const slotLimit = focusMode === 'visual' || focusMode === 'all' ? 8 : 4;
-  const planItems = itemsForFocusMode(viewPlan, focusMode).slice(0, slotLimit);
+  const focusModeItems = itemsForFocusMode(viewPlan, focusMode);
+  const visibleAfterDismiss = filterHiddenResultSlots(focusModeItems, session);
+  const planItems = visibleAfterDismiss.slice(0, slotLimit);
+  const dismissedAllInFilter = focusModeItems.length > 0 && visibleAfterDismiss.length === 0;
   const { visibleItems, deferredItems } = selectDefaultResultItems(planItems, focusMode);
   const auditOpen = shouldOpenRunAuditDetails(session, activeRun);
   return (
@@ -2059,10 +2217,12 @@ function PrimaryResult({
       <RunStatusSummary session={session} activeRun={activeRun} />
       {!planItems.length ? (
         <EmptyArtifactState
-          title={focusMode === 'all' ? '还没有可展示的关键结果' : '当前筛选没有匹配内容'}
-          detail={focusMode === 'all'
-            ? '发送请求后，这里只展示真实产物、当前 run 结果和被点选/引用的对象；空的系统模块会默认隐藏。'
-            : '切回“全部”，或运行一个会生成对应 artifact 的任务。'}
+          title={dismissedAllInFilter ? '当前筛选下的视图已全部从界面移除' : focusMode === 'all' ? '还没有可展示的关键结果' : '当前筛选没有匹配内容'}
+          detail={dismissedAllInFilter
+            ? '这是仅影响呈现的隐藏列表，artifact 与工作区文件未被删除。新开聊天会清空该列表。'
+            : focusMode === 'all'
+              ? '发送请求后，这里只展示真实产物、当前 run 结果和被点选/引用的对象；空的系统模块会默认隐藏。'
+              : '切回“全部”，或运行一个会生成对应 artifact 的任务。'}
         />
       ) : null}
       <ResultItemsSection
@@ -2073,6 +2233,8 @@ function PrimaryResult({
         session={session}
         onArtifactHandoff={onArtifactHandoff}
         onInspectArtifact={onInspectArtifact}
+        onObjectReferenceFocus={onObjectReferenceFocus}
+        onDismissResultSlotPresentation={onDismissResultSlotPresentation}
       />
       {deferredItems.length ? (
         <details className="result-details-panel">
@@ -2093,6 +2255,8 @@ function PrimaryResult({
                 session={session}
                 onArtifactHandoff={onArtifactHandoff}
                 onInspectArtifact={onInspectArtifact}
+                onObjectReferenceFocus={onObjectReferenceFocus}
+                onDismissResultSlotPresentation={onDismissResultSlotPresentation}
               />
             );
           })}
@@ -2358,10 +2522,12 @@ function WorkspaceObjectPreview({
   reference,
   session,
   config,
+  onPreviewPackageRequest,
 }: {
   reference: ObjectReference;
   session: SciForgeSession;
   config: SciForgeConfig;
+  onPreviewPackageRequest?: (reference: ObjectReference, path?: string, descriptor?: PreviewDescriptor) => void;
 }) {
   const artifact = artifactForObjectReference(reference, session);
   const inlinePreview = useMemo(() => uploadedArtifactPreview(artifact), [artifact]);
@@ -2478,7 +2644,12 @@ function WorkspaceObjectPreview({
           <Badge variant="warning">preview</Badge>
           <strong>{path}</strong>
         </div>
-        <p>无法内联预览：{error}</p>
+        <UnsupportedPreviewPackageNotice
+          reference={reference}
+          path={path}
+          diagnostic={error}
+          onRequest={onPreviewPackageRequest}
+        />
       </div>
     );
   }
@@ -2490,7 +2661,16 @@ function WorkspaceObjectPreview({
           <strong>{descriptor.title || descriptor.ref}</strong>
           {descriptor.sizeBytes !== undefined ? <span>{formatBytes(descriptor.sizeBytes)}</span> : null}
         </div>
-        <DescriptorPreview descriptor={descriptor} reference={referenceForObjectReference(reference, descriptor.kind === 'pdf' || descriptor.kind === 'image' ? 'file-region' : 'file')} />
+        {previewNeedsPackage(descriptor) ? (
+          <UnsupportedPreviewPackageNotice
+            reference={reference}
+            path={path}
+            descriptor={descriptor}
+            onRequest={onPreviewPackageRequest}
+          />
+        ) : (
+          <DescriptorPreview descriptor={descriptor} config={config} reference={referenceForObjectReference(reference, descriptor.kind === 'pdf' || descriptor.kind === 'image' ? 'file-region' : 'file')} />
+        )}
       </div>
     );
   }
@@ -2546,7 +2726,40 @@ function uniqueStrings<T extends string>(values: T[]) {
   return Array.from(new Set(values.filter(Boolean)));
 }
 
-function DescriptorPreview({ descriptor, reference }: { descriptor: PreviewDescriptor; reference: SciForgeReference }) {
+function DescriptorPreview({ descriptor, config, reference }: { descriptor: PreviewDescriptor; config: SciForgeConfig; reference: SciForgeReference }) {
+  const [derivedFile, setDerivedFile] = useState<WorkspaceFileContent | undefined>();
+  const [derivedLabel, setDerivedLabel] = useState('');
+  const [derivedError, setDerivedError] = useState('');
+  const [derivedLoading, setDerivedLoading] = useState(false);
+  useEffect(() => {
+    if (!descriptorCanUseWorkspacePreview(descriptor)) {
+      setDerivedFile(undefined);
+      setDerivedLabel('');
+      setDerivedError('');
+      setDerivedLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setDerivedFile(undefined);
+    setDerivedError('');
+    setDerivedLoading(true);
+    void loadDescriptorPreviewFile(descriptor, config)
+      .then(({ file, label }) => {
+        if (cancelled) return;
+        setDerivedFile(file);
+        setDerivedLabel(label);
+      })
+      .catch((error) => {
+        if (!cancelled) setDerivedError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (!cancelled) setDerivedLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [config, descriptor]);
+
   if ((descriptor.kind === 'pdf' || descriptor.kind === 'image') && descriptor.rawUrl) {
     return (
       <UploadedDataUrlPreview
@@ -2561,7 +2774,15 @@ function DescriptorPreview({ descriptor, reference }: { descriptor: PreviewDescr
   if (descriptor.kind === 'markdown' || descriptor.kind === 'text' || descriptor.kind === 'json' || descriptor.kind === 'table' || descriptor.kind === 'html') {
     return (
       <div className="workspace-object-media-note">
-        <p>此 artifact 使用 descriptor-driven 预览。小文件可走兼容内联读取；大文件将按需生成 text/schema excerpt，不把全量内容塞进对话上下文。</p>
+        <p>此 artifact 使用 workspace descriptor 预览；小文件直接读取，大文件按需生成 text/schema 派生预览。这只调用本地 workspace 函数，不增加 LLM token 开销。</p>
+        {derivedLoading ? <p>正在生成或读取预览...</p> : null}
+        {derivedFile ? (
+          <div className="descriptor-derived-preview">
+            <Badge variant="info">{derivedLabel}</Badge>
+            <WorkspaceFileInlineViewer file={derivedFile} />
+          </div>
+        ) : null}
+        {derivedError ? <pre className="workspace-object-code">{derivedError}</pre> : null}
         <PreviewDescriptorActions descriptor={descriptor} reference={reference} />
       </div>
     );
@@ -2570,6 +2791,79 @@ function DescriptorPreview({ descriptor, reference }: { descriptor: PreviewDescr
     <div className="workspace-object-media-note">
       <p>{descriptor.title || descriptor.ref} 已作为轻量 artifact 聚焦。当前类型使用 metadata/system-open/copy-ref 作为稳定 fallback，派生内容按需生成。</p>
       <PreviewDescriptorActions descriptor={descriptor} reference={reference} />
+    </div>
+  );
+}
+
+function descriptorCanUseWorkspacePreview(descriptor: PreviewDescriptor) {
+  return descriptor.kind === 'markdown'
+    || descriptor.kind === 'text'
+    || descriptor.kind === 'json'
+    || descriptor.kind === 'table'
+    || descriptor.kind === 'html';
+}
+
+async function loadDescriptorPreviewFile(descriptor: PreviewDescriptor, config: SciForgeConfig) {
+  const shouldReadInline = descriptor.inlinePolicy === 'inline' && (descriptor.sizeBytes ?? 0) <= 1024 * 1024;
+  if (shouldReadInline) {
+    try {
+      return { file: await readWorkspaceFile(descriptor.ref, config), label: 'inline' };
+    } catch {
+      // Fall through to derived preview; the descriptor endpoint may point at a file outside the normal workspace route.
+    }
+  }
+  const derivativeKind = descriptorDerivativeKind(descriptor);
+  const derivative = await readPreviewDerivative(descriptor.ref, derivativeKind, config);
+  return { file: await readWorkspaceFile(derivative.ref, config), label: `${derivative.kind} derivative` };
+}
+
+function descriptorDerivativeKind(descriptor: PreviewDescriptor): PreviewDerivative['kind'] {
+  if (descriptor.kind === 'json' || descriptor.kind === 'table') return 'schema';
+  if (descriptor.kind === 'html') return 'html';
+  return 'text';
+}
+
+function previewNeedsPackage(descriptor: PreviewDescriptor) {
+  if (descriptor.inlinePolicy === 'unsupported') return true;
+  if (descriptor.kind === 'binary' || descriptor.kind === 'office') return true;
+  return false;
+}
+
+function UnsupportedPreviewPackageNotice({
+  reference,
+  path,
+  descriptor,
+  diagnostic,
+  onRequest,
+}: {
+  reference: ObjectReference;
+  path?: string;
+  descriptor?: PreviewDescriptor;
+  diagnostic?: string;
+  onRequest?: (reference: ObjectReference, path?: string, descriptor?: PreviewDescriptor) => void;
+}) {
+  const kind = descriptor?.kind || reference.artifactType || 'unknown';
+  return (
+    <div className="unsupported-preview-package">
+      <p>
+        这个文件仍然可以作为对象引用传给 Agent，但右侧暂不支持内联预览
+        {kind ? `（${kind}）` : ''}。需要设计一个匹配该文件类型的 preview package 插件后，才能在这里稳定渲染。
+      </p>
+      <div className="source-list">
+        <code>{path || descriptor?.ref || reference.ref}</code>
+        {descriptor?.mimeType ? <code>{descriptor.mimeType}</code> : null}
+        {descriptor?.inlinePolicy ? <code>inlinePolicy: {descriptor.inlinePolicy}</code> : null}
+      </div>
+      {diagnostic ? <pre className="workspace-object-code">{diagnostic}</pre> : null}
+      <button
+        type="button"
+        className="unsupported-preview-package-action"
+        onClick={() => onRequest?.(reference, path, descriptor)}
+        disabled={!onRequest}
+      >
+        <Sparkles size={14} />
+        让 Agent 设计 preview package 并重试
+      </button>
     </div>
   );
 }
@@ -3196,6 +3490,8 @@ function ResultItemsSection({
   session,
   onArtifactHandoff,
   onInspectArtifact,
+  onObjectReferenceFocus,
+  onDismissResultSlotPresentation,
 }: {
   title: string;
   items: ResolvedViewPlanItem[];
@@ -3204,6 +3500,8 @@ function ResultItemsSection({
   session: SciForgeSession;
   onArtifactHandoff: (targetScenario: ScenarioId, artifact: RuntimeArtifact) => void;
   onInspectArtifact: (artifact: RuntimeArtifact) => void;
+  onObjectReferenceFocus?: (reference: ObjectReference) => void;
+  onDismissResultSlotPresentation?: (resolvedSlotPresentationId: string) => void;
 }) {
   if (!items.length) return null;
   return (
@@ -3222,6 +3520,8 @@ function ResultItemsSection({
             item={item}
             onArtifactHandoff={onArtifactHandoff}
             onInspectArtifact={onInspectArtifact}
+            onObjectReferenceFocus={onObjectReferenceFocus}
+            onDismissResultSlotPresentation={onDismissResultSlotPresentation}
           />
         ))}
       </div>
@@ -3265,6 +3565,8 @@ function RegistrySlot({
   item,
   onArtifactHandoff,
   onInspectArtifact,
+  onObjectReferenceFocus,
+  onDismissResultSlotPresentation,
 }: {
   scenarioId: ScenarioId;
   config: SciForgeConfig;
@@ -3272,6 +3574,8 @@ function RegistrySlot({
   item: ResolvedViewPlanItem;
   onArtifactHandoff: (targetScenario: ScenarioId, artifact: RuntimeArtifact) => void;
   onInspectArtifact: (artifact: RuntimeArtifact) => void;
+  onObjectReferenceFocus?: (reference: ObjectReference) => void;
+  onDismissResultSlotPresentation?: (resolvedSlotPresentationId: string) => void;
 }) {
   const [handoffPreviewTarget, setHandoffPreviewTarget] = useState<ScenarioId | undefined>();
   const { slot, module } = item;
@@ -3287,6 +3591,19 @@ function RegistrySlot({
         <SectionHeader icon={AlertTriangle} title={slot.title ?? '未注册组件'} subtitle={slot.componentId} />
         <p className="empty-state">Scenario 返回了未知 componentId。当前使用通用 inspector 展示 artifact、manifest 和日志引用。</p>
         {slot.artifactRef && !artifact ? <p className="empty-state">artifactRef 未找到：{slot.artifactRef}</p> : null}
+        {onDismissResultSlotPresentation ? (
+          <div className="artifact-card-actions">
+            <button
+              type="button"
+              className="registry-slot-dismiss"
+              onClick={() => onDismissResultSlotPresentation(item.id)}
+              title="从结果区移除本卡片（不删除 workspace 中的 artifact 或文件）"
+            >
+              <Trash2 size={13} />
+              删除视图
+            </button>
+          </div>
+        ) : null}
         <UnknownArtifactInspector scenarioId={scenarioId} config={config} session={session} slot={slot} artifact={artifact} />
       </Card>
     );
@@ -3297,12 +3614,25 @@ function RegistrySlot({
       data-sciforge-reference={sciForgeReferenceAttribute(artifact ? referenceForArtifact(artifact, artifactReferenceKind(artifact, slot.componentId)) : referenceForResultSlot(item))}
     >
       <SectionHeader icon={Target} title={slot.title ?? entry.label} subtitle={resultSlotSubtitle(item, artifact)} />
-      {artifact ? (
+      {artifact || onDismissResultSlotPresentation ? (
         <div className="artifact-card-actions">
-          <button type="button" onClick={() => onInspectArtifact(artifact)}>
-            <Eye size={13} />
-            查看数据
-          </button>
+          {artifact ? (
+            <button type="button" onClick={() => onInspectArtifact(artifact)}>
+              <Eye size={13} />
+              查看数据
+            </button>
+          ) : null}
+          {onDismissResultSlotPresentation ? (
+            <button
+              type="button"
+              className="registry-slot-dismiss"
+              onClick={() => onDismissResultSlotPresentation(item.id)}
+              title="从结果区移除本卡片（不删除 workspace 中的 artifact 或文件）"
+            >
+              <Trash2 size={13} />
+              删除视图
+            </button>
+          ) : null}
         </div>
       ) : null}
       {artifact && handoffTargets.length ? (
@@ -3327,7 +3657,7 @@ function RegistrySlot({
           onConfirm={() => onArtifactHandoff(handoffPreviewTarget, artifact)}
         />
       ) : null}
-      {entry.render({ scenarioId, config, session, slot, artifact })}
+      {entry.render({ scenarioId, config, session, slot, artifact, onObjectReferenceFocus })}
     </Card>
   );
 }
@@ -3790,6 +4120,32 @@ export function handoffAutoRunPrompt(targetScenario: ScenarioId, artifact: Runti
     `消费 handoff artifact ${artifact.id} (${artifact.type})。`,
     `来源 Scenario: ${sourceScenarioName}。`,
     `请按${targetScenarioName}的 input contract 生成下一步 claims、ExecutionUnit、UIManifest 和 runtime artifact。`,
+  ].join('\n');
+}
+
+export function previewPackageAutoRunPrompt(reference: ObjectReference, path?: string, descriptor?: PreviewDescriptor): string {
+  const target = path || descriptor?.ref || reference.ref;
+  const ext = target.includes('.') ? target.split(/[?#]/)[0].split('.').pop() : undefined;
+  return [
+    `右侧预览点击了一个当前不支持内联 preview 的文件，但它仍然必须保持为可引用对象。`,
+    `请为这个文件类型设计并实现一个 SciForge preview package 插件，然后自动尝试再次 preview/review。`,
+    ``,
+    `目标文件引用：${reference.ref}`,
+    `目标文件路径：${target}`,
+    `文件扩展名：${ext || 'unknown'}`,
+    `当前 preview descriptor：${JSON.stringify({
+      kind: descriptor?.kind,
+      inlinePolicy: descriptor?.inlinePolicy,
+      mimeType: descriptor?.mimeType,
+      actions: descriptor?.actions,
+      diagnostics: descriptor?.diagnostics,
+    }, null, 2)}`,
+    ``,
+    `实施要求：`,
+    `1. 先检查 packages/ui-components 下已有组件和 manifest，优先复用现有 package；不够再新增专门的 preview package。`,
+    `2. 新 package 要包含 manifest、必要的 renderer/README/test，并接入 UI registry 或现有 preview 分发链路。`,
+    `3. 未能完整渲染时要给用户明确 unsupported 状态和 fallback 操作，不能让右侧面板空白或崩溃。`,
+    `4. 完成后运行相关测试/类型检查，并再次尝试聚焦 ${target}，报告 preview 是否已可用。`,
   ].join('\n');
 }
 

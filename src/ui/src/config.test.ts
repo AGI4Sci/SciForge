@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 
-import { defaultSciForgeConfig, loadSciForgeConfig, normalizeWorkspaceRootPath, saveSciForgeConfig, updateConfig } from './config';
+import { defaultSciForgeConfig, loadSciForgeConfig, normalizeFeedbackGithubRepo, normalizeFeedbackGithubToken, normalizeWorkspaceRootPath, saveSciForgeConfig, updateConfig } from './config';
 
 class MemoryStorage {
   private values = new Map<string, string>();
@@ -26,6 +26,10 @@ class MemoryStorage {
 describe('SciForge config persistence', () => {
   afterEach(() => {
     Reflect.deleteProperty(globalThis, 'window');
+  });
+
+  it('defaults feedback github repo to upstream SciForge', () => {
+    assert.equal(defaultSciForgeConfig.feedbackGithubRepo, 'AGI4Sci/SciForge');
   });
 
   it('round-trips qwen/openrouter style model settings through localStorage', () => {
@@ -69,5 +73,19 @@ describe('SciForge config persistence', () => {
   it('normalizes user context window limits', () => {
     assert.equal(updateConfig(defaultSciForgeConfig, { maxContextWindowTokens: 64000 }).maxContextWindowTokens, 64000);
     assert.equal(updateConfig(defaultSciForgeConfig, { maxContextWindowTokens: 12 }).maxContextWindowTokens, 1000);
+  });
+
+  it('normalizes feedback github repo to owner/repo', () => {
+    assert.equal(normalizeFeedbackGithubRepo('acme/SciForge'), 'acme/SciForge');
+    assert.equal(normalizeFeedbackGithubRepo('https://github.com/acme/SciForge.git'), 'acme/SciForge');
+    assert.equal(normalizeFeedbackGithubRepo(''), undefined);
+    assert.equal(normalizeFeedbackGithubRepo('not-a-repo'), undefined);
+    assert.equal(updateConfig(defaultSciForgeConfig, { feedbackGithubRepo: 'https://github.com/org/repo-name' }).feedbackGithubRepo, 'org/repo-name');
+  });
+
+  it('normalizes feedback github token', () => {
+    assert.equal(normalizeFeedbackGithubToken('  ghp_abcd  '), 'ghp_abcd');
+    assert.equal(normalizeFeedbackGithubToken(''), undefined);
+    assert.equal(updateConfig(defaultSciForgeConfig, { feedbackGithubToken: ' tok ' }).feedbackGithubToken, 'tok');
   });
 });

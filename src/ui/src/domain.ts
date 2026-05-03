@@ -503,7 +503,22 @@ export interface SciForgeSession {
   artifacts: RuntimeArtifact[];
   notebook: NotebookRecord[];
   versions: SessionVersionRecord[];
+  /** Resolved view-plan item ids hidden in the results pane only; artifacts/workspace files are untouched. */
+  hiddenResultSlotIds?: string[];
   updatedAt: string;
+}
+
+/** Snapshot of an Issue while it remains open on GitHub (REST `/issues`, excludes pull requests). */
+export interface GithubSyncedOpenIssueRecord {
+  schemaVersion: 1;
+  number: number;
+  title: string;
+  body: string;
+  htmlUrl: string;
+  updatedAt: string;
+  authorLogin?: string;
+  labels: string[];
+  syncedAt: string;
 }
 
 export interface SciForgeWorkspaceState {
@@ -514,6 +529,8 @@ export interface SciForgeWorkspaceState {
   alignmentContracts: AlignmentContractRecord[];
   feedbackComments?: FeedbackCommentRecord[];
   feedbackRequests?: FeedbackRequestRecord[];
+  /** Open GitHub Issues synced from the configured feedback repo (PRs excluded). Replaced on each sync. */
+  githubSyncedOpenIssues?: GithubSyncedOpenIssueRecord[];
   beliefGraphs?: BeliefDependencyGraph[];
   timelineEvents?: TimelineEventRecord[];
   reusableTaskCandidates?: ReusableTaskCandidateRecord[];
@@ -635,6 +652,10 @@ export interface SciForgeConfig {
   agentServerBaseUrl: string;
   workspaceWriterBaseUrl: string;
   workspacePath: string;
+  /** `owner/repo` or full `https://github.com/owner/repo` — feedback inbox creates/syncs issues against this repo. */
+  feedbackGithubRepo?: string;
+  /** GitHub PAT with Issues read (sync) + write (create). Stored like API keys (local config only). */
+  feedbackGithubToken?: string;
   theme?: 'dark' | 'light';
   agentBackend: string;
   modelProvider: string;
@@ -680,6 +701,8 @@ export interface ScenarioRuntimeOverride {
   defaultComponents: string[];
   allowedComponents: string[];
   fallbackComponent: string;
+  selectedSkillIds?: string[];
+  selectedToolIds?: string[];
   scenarioPackageRef?: ScenarioPackageRef;
   skillPlanRef?: string;
   uiPlanRef?: string;

@@ -21,4 +21,14 @@ export const manifest: UIComponentManifest = {
     readmePath: 'packages/ui-components/unknown-artifact-inspector/README.md',
     agentSummary: 'Use as the safe fallback for unsupported artifact, file, log, JSON, or ref objects. Does not execute code.',
   },
+  workbenchDemo: {
+    artifactType: 'runtime-artifact',
+    artifactData: {
+      note: 'Workbench demo payload',
+      rows: [
+        { key: 'alpha', value: 1 },
+        { key: 'beta', value: 2 },
+      ],
+    },
+  },
 };

@@ -285,6 +285,11 @@
   padding: 18px 20px;
 }
 
+.codex-quiet-shell .messages-stack {
+  flex: 1;
+  min-height: 0;
+}
+
 .codex-quiet-shell .message {
   margin: 14px 0;
 }

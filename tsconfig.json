@@ -1,5 +1,9 @@
 {
   "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@molecule-workbench-demo/*": ["packages/ui-components/molecule-viewer/workbench-demo/*"]
+    },
     "target": "ES2023",
     "module": "ESNext",
     "moduleResolution": "bundler",

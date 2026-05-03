@@ -25,4 +25,14 @@ export const manifest: UIComponentManifest = {
     readmePath: 'packages/ui-components/data-table/README.md',
     agentSummary: 'Use for safe tabular rendering of array-like payloads. Prefer as fallback for row/record datasets.',
   },
+  workbenchDemo: {
+    artifactType: 'inspection-summary',
+    artifactData: {
+      rows: [
+        { sample: 'S001', group: 'control', score: 0.42 },
+        { sample: 'S002', group: 'treated', score: 0.91 },
+        { sample: 'S003', group: 'treated', score: 0.73 },
+      ],
+    },
+  },
 };

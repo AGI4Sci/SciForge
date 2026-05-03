@@ -43,7 +43,7 @@ export function buildContextEnvelope(
     projectFacts: mode === 'full' ? {
       project: 'SciForge',
       runtimeRole: 'scenario-first AI4Science workspace runtime',
-      taskCodePolicy: 'Generate or repair task code in the active workspace; do not rely on fixed source-tree scientific task scripts.',
+      taskCodePolicy: 'Generate or repair task code in the active workspace, but compose installed/workspace tools when they are a better fit than hand-written code.',
       toolPayloadContract: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'displayIntent', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'],
     } : {
       project: 'SciForge',
@@ -88,6 +88,7 @@ export function buildContextEnvelope(
       uiPlanRef: request.uiPlanRef,
       expectedArtifactTypes: expectedArtifactTypesForRequest(request),
       selectedComponentIds: selectedComponentIdsForRequest(request),
+      selectedToolIds: request.selectedToolIds ?? toStringList(request.uiState?.selectedToolIds),
       selectedSkill: params.selectedSkill ? {
         id: params.selectedSkill.id,
         kind: params.selectedSkill.kind,

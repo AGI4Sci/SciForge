@@ -2,11 +2,11 @@
   display: none;
 }
 
-.theme-light .app-shell {
+/* Same element: class="app-shell theme-light" — must use compound selector, not .theme-light .app-shell */
+.app-shell.theme-light {
   background:
-    linear-gradient(rgba(148, 163, 184, 0.1) 1px, transparent 1px) 0 0 / 42px 42px,
-    linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px) 0 0 / 42px 42px,
-    linear-gradient(135deg, #f7fafc 0%, #eef4f8 48%, #f8fbf7 100%);
+    radial-gradient(ellipse 120% 55% at 50% -8%, rgba(255, 255, 255, 0.92), transparent 52%),
+    linear-gradient(145deg, #f5f9fc 0%, #eef3f8 42%, #f4faf7 100%);
 }
 
 .theme-light .sidebar,
@@ -35,6 +35,7 @@
 .theme-light .reference-composer,
 .theme-light .runtime-health-panel,
 .theme-light .component-workbench-summary,
+.theme-light .component-demo-preview,
 .theme-light .component-workbench-toolbar,
 .theme-light .feedback-hero,
 .theme-light .feedback-target-summary,
@@ -45,9 +46,8 @@
 
 .theme-light .workbench-canvas-shell {
   background:
-    linear-gradient(rgba(148, 163, 184, 0.14) 1px, transparent 1px) 0 0 / 44px 44px,
-    linear-gradient(90deg, rgba(148, 163, 184, 0.1) 1px, transparent 1px) 0 0 / 44px 44px,
-    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(239, 246, 244, 0.74));
+    radial-gradient(ellipse 90% 70% at 50% 0%, rgba(255, 255, 255, 0.55), transparent 58%),
+    linear-gradient(168deg, rgba(248, 251, 253, 0.97) 0%, rgba(237, 244, 248, 0.98) 55%, rgba(241, 247, 243, 0.96) 100%);
 }
 
 .theme-light .workbench-canvas .chat-panel,
@@ -153,7 +153,6 @@
 .theme-light .stream-event,
 .theme-light .object-focus-banner,
 .theme-light .workspace-resource-chip,
-.theme-light .scenario-compile-card,
 .theme-light .scenario-config-panel,
 .theme-light .runtime-health-item,
 .theme-light .alignment-version-row,

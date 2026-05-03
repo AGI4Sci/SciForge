@@ -22,4 +22,14 @@ export const manifest: UIComponentManifest = {
     readmePath: 'packages/ui-components/volcano-plot/README.md',
     agentSummary: 'Use for omics differential-expression artifacts with points. Emits select-gene.',
   },
+  workbenchDemo: {
+    artifactType: 'omics-differential-expression',
+    artifactData: {
+      points: [
+        { gene: 'GENE1', logFC: 2.1, negLogP: 8.2, significant: true },
+        { gene: 'GENE2', logFC: -1.8, negLogP: 5.4, significant: true },
+        { gene: 'GENE3', logFC: 0.2, negLogP: 0.8, significant: false },
+      ],
+    },
+  },
 };

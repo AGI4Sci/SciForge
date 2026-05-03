@@ -4,6 +4,13 @@ export type UIComponentLifecycle = 'draft' | 'validated' | 'published' | 'deprec
 export type UIComponentSection = 'primary' | 'supporting' | 'provenance' | 'raw';
 export type PresentationDedupeScope = 'entity' | 'document' | 'collection' | 'none';
 
+/** Inline payload for the UI component workbench “试用 Demo” preview (`artifact.data` shape). */
+export interface UIComponentWorkbenchDemo {
+  artifactData: Record<string, unknown>;
+  artifactType?: string;
+  schemaVersion?: string;
+}
+
 export interface UIComponentManifest {
   packageName: string;
   moduleId: string;
@@ -22,6 +29,8 @@ export interface UIComponentManifest {
   fallbackModuleIds?: string[];
   defaultSection?: UIComponentSection;
   priority?: number;
+  /** Built-in sample payload for the component workbench smoke preview. */
+  workbenchDemo?: UIComponentWorkbenchDemo;
   safety?: {
     sandbox?: boolean;
     externalResources?: 'none' | 'declared-only' | 'allowed';

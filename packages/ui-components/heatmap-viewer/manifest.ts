@@ -22,4 +22,17 @@ export const manifest: UIComponentManifest = {
     readmePath: 'packages/ui-components/heatmap-viewer/README.md',
     agentSummary: 'Use for omics differential-expression artifacts with heatmap matrix payloads.',
   },
+  workbenchDemo: {
+    artifactType: 'omics-differential-expression',
+    artifactData: {
+      heatmap: {
+        matrix: [
+          [0.2, 0.9, 0.4],
+          [0.7, 0.1, 0.85],
+          [0.35, 0.55, 0.2],
+        ],
+        label: 'Demo expression matrix',
+      },
+    },
+  },
 };

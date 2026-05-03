@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { AlertTriangle, Check, Clock, FilePlus, FileText, Sparkles, Target } from 'lucide-react';
+import { AlertTriangle, Check, Clock, CornerUpLeft, FilePlus, FileText, Sparkles, Target } from 'lucide-react';
 import { feasibilityRows, radarData, scenarios, type ClaimType, type ScenarioId } from '../data';
 import { timeline } from '../demoData';
 import { nowIso, type AlignmentContractRecord, type ScenarioInstanceId, type TimelineEventRecord } from '../domain';
@@ -360,8 +360,10 @@ export function TimelinePage({
                 </div>
                 <h3>{item.title}</h3>
                 <p>{item.desc}</p>
-                <div className="scenario-builder-actions">
-                  <button onClick={() => onOpenScenario(item.scenario)}>回到场景</button>
+                <div className="scenario-builder-actions timeline-card-actions">
+                  <ActionButton type="button" icon={CornerUpLeft} variant="secondary" onClick={() => onOpenScenario(item.scenario)}>
+                    回到场景
+                  </ActionButton>
                   {item.refs?.slice(0, 3).map((ref) => <code key={ref}>{ref}</code>)}
                 </div>
               </div>

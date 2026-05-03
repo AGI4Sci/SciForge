@@ -26,4 +26,13 @@ export const manifest: UIComponentManifest = {
     readmePath: 'packages/ui-components/paper-card-list/README.md',
     agentSummary: 'Use only when the current user asks for a paper-list or literature search/list. Requires papers or rows.',
   },
+  workbenchDemo: {
+    artifactType: 'paper-list',
+    artifactData: {
+      papers: [
+        { title: 'Demo paper: reproducible omics workflows', source: 'SciForge Journal', year: '2026', evidenceLevel: 'review', url: 'https://example.com/paper/demo' },
+        { title: 'Companion methods note', source: 'Methods Primer', year: '2025', evidenceLevel: 'experimental' },
+      ],
+    },
+  },
 };

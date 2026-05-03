@@ -12,9 +12,8 @@
 
 .app-shell.theme-light {
   background:
-    linear-gradient(rgba(148, 163, 184, 0.12) 1px, transparent 1px) 0 0 / 44px 44px,
-    linear-gradient(90deg, rgba(148, 163, 184, 0.1) 1px, transparent 1px) 0 0 / 44px 44px,
-    linear-gradient(135deg, #f8fafc, #eef4fb);
+    radial-gradient(ellipse 120% 55% at 50% -8%, rgba(255, 255, 255, 0.92), transparent 52%),
+    linear-gradient(145deg, #f5f9fc 0%, #eef3f8 42%, #f4faf7 100%);
 }
 
 .ambient {
@@ -94,8 +93,9 @@
 }
 
 .sidebar-panel {
-  width: calc(100% - 46px);
+  flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -139,7 +139,9 @@
 .sidebar-panel-body {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .sidebar-tree {
@@ -601,6 +603,10 @@
   padding: 12px 10px;
 }
 
+.sidebar-panel-body > .nav-section {
+  flex-shrink: 0;
+}
+
 .sidebar-label {
   margin: 8px 12px;
   color: var(--bio-400);
@@ -664,60 +670,42 @@
 }
 
 .scenario-list {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 6px;
   padding-top: 4px;
   border-top: 1px solid var(--border-muted);
 }
 
-.scenario-list .sidebar-label {
-  margin: 10px 2px 4px;
+.scenario-list-workspace {
+  flex: 1;
+  min-height: 0;
 }
 
-.scenario-list .sidebar-label.compact {
-  margin-top: 12px;
-}
-
-.scenario-compile-card {
-  width: 100%;
-  min-height: 74px;
-  display: grid;
-  grid-template-columns: 30px minmax(0, 1fr);
+.scenario-list-explorer-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
   align-items: center;
-  gap: 10px;
-  padding: 10px;
-  color: var(--bio-50);
-  background: var(--accent-soft);
-  border: 1px solid var(--accent-border);
-  border-radius: var(--radius);
-  cursor: pointer;
-  text-align: left;
+  padding: 2px 0 8px;
+  margin-top: 2px;
+  border-bottom: 1px solid var(--border-muted);
 }
 
-.scenario-compile-card svg {
-  color: var(--accent);
+.scenario-list-explorer-toolbar .explorer-view-toolbar {
+  width: 100%;
+  justify-content: flex-end;
 }
 
-.scenario-compile-card span {
-  min-width: 0;
-  display: grid;
-  gap: 4px;
+.scenario-list-explorer-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-top: 6px;
 }
 
-.scenario-compile-card strong {
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.scenario-compile-card small {
-  color: var(--bio-300);
-  font-size: 10px;
-  line-height: 1.45;
-}
-
-.scenario-compile-card:hover {
-  background: var(--surface-selected);
-  border-color: rgba(0, 229, 160, 0.42);
+.scenario-list-explorer-tree.explorer-surface {
+  min-height: 0;
 }
 
 .sidebar-package-note {

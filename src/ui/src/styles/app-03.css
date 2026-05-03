@@ -51,6 +51,13 @@
   gap: 13px;
 }
 
+.scenario-title {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  min-width: 0;
+}
+
 .agent-large-icon {
   width: 48px;
   height: 48px;
@@ -278,6 +285,13 @@
 .component-selector > small {
   color: var(--bio-300);
   font-size: 12px;
+}
+
+.element-selector-title-block p {
+  margin: 0;
+  color: var(--bio-300);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .element-selector-controls {
@@ -651,9 +665,86 @@
   white-space: pre-wrap;
 }
 
-.manifest-banner {
+.workbench-chrome {
+  margin-bottom: 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.workbench-chrome-toggle {
+  width: 100%;
   display: flex;
   align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 0;
+  background: var(--surface-subtle);
+  cursor: pointer;
+  text-align: left;
+  color: var(--bio-100);
+  font: inherit;
+}
+
+.workbench-chrome-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.workbench-chrome-icon.scenario-large-icon {
+  width: 40px;
+  height: 40px;
+}
+
+.workbench-chrome-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 800;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-chrome-meta {
+  max-width: min(380px, 46vw);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--bio-300);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-chrome-toggle svg {
+  flex-shrink: 0;
+  color: var(--bio-300);
+}
+
+.workbench-chrome-body {
+  padding: 0 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-top: 1px solid var(--border-muted);
+}
+
+.workbench-header.workbench-header-nested {
+  margin-bottom: 0;
+}
+
+.workbench-chrome-body .manifest-banner {
+  margin-bottom: 0;
+}
+
+.workbench-chrome-body .scenario-settings {
+  margin: 0;
+}
+
+.manifest-banner {
+  display: flex;
+  align-items: flex-start;
   gap: 7px;
   margin-bottom: 12px;
   padding: 8px 10px;
@@ -703,11 +794,15 @@ code,
 }
 
 .manifest-banner code {
+  flex: 1;
+  min-width: 0;
   color: var(--bio-100);
   font-size: 10px;
   padding: 2px 6px;
   border-radius: 5px;
   background: var(--surface-input);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .manifest-diagnostics {

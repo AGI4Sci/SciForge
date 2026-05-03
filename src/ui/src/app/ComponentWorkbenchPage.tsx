@@ -1,6 +1,9 @@
-import { Check, Copy, Filter, Search, ShieldCheck, SlidersHorizontal, X } from 'lucide-react';
+import { Check, Copy, Filter, Play, Search, ShieldCheck, SlidersHorizontal, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { buildWorkbenchDemoRenderProps, moduleHasWorkbenchDemo } from '../componentWorkbenchDemo';
+import type { SciForgeConfig } from '../domain';
 import { acceptedArtifactTypesForComponent, artifactTypesForComponents, uiModuleRegistry, type RuntimeUIModule } from '../uiModuleRegistry';
+import { renderRegisteredWorkbenchSlot } from './ResultsRenderer';
 import { ActionButton, Badge, SectionHeader, cx } from './uiPrimitives';
 
 type LifecycleFilter = 'all' | RuntimeUIModule['lifecycle'];
@@ -51,15 +54,18 @@ function formatList(values: string[] | undefined, fallback = 'none') {
 }
 
 export function ComponentWorkbenchPage({
+  config,
   selectedComponentIds,
   onSelectedComponentIdsChange,
 }: {
+  config: SciForgeConfig;
   selectedComponentIds: string[];
   onSelectedComponentIdsChange: (componentIds: string[]) => void;
 }) {
   const [query, setQuery] = useState('');
   const [lifecycle, setLifecycle] = useState<LifecycleFilter>('all');
   const [copied, setCopied] = useState(false);
+  const [demoModuleKey, setDemoModuleKey] = useState<string | null>(null);
   const allComponentIds = useMemo(() => uniqueComponentIds(), []);
   const publishedComponentIds = useMemo(
     () => allComponentIds.filter((componentId) => modulesForComponent(componentId).some((module) => module.lifecycle === 'published')),
@@ -171,6 +177,22 @@ export function ComponentWorkbenchPage({
                     </div>
                   </div>
                 </div>
+                <div className="component-row-actions">
+                  <button
+                    type="button"
+                    className="component-demo-trigger"
+                    disabled={!moduleHasWorkbenchDemo(module)}
+                    onClick={() => setDemoModuleKey((current) => (current === `${module.moduleId}@${module.version}` ? null : `${module.moduleId}@${module.version}`))}
+                  >
+                    <Play size={14} />
+                    {demoModuleKey === `${module.moduleId}@${module.version}` ? '收起 Demo' : '试用 Demo'}
+                  </button>
+                </div>
+                {demoModuleKey === `${module.moduleId}@${module.version}` ? (
+                  <div className="component-demo-preview">
+                    {renderRegisteredWorkbenchSlot(buildWorkbenchDemoRenderProps(module, config))}
+                  </div>
+                ) : null}
                 <div className="component-row-grid">
                   <div>
                     <span>accepts</span>

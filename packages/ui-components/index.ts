@@ -12,7 +12,7 @@ import { manifest as dataTable } from './data-table/manifest';
 import { manifest as unknownArtifactInspector } from './unknown-artifact-inspector/manifest';
 import type { UIComponentManifest } from './types';
 
-export type { PresentationDedupeScope, UIComponentManifest } from './types';
+export type { PresentationDedupeScope, UIComponentManifest, UIComponentWorkbenchDemo } from './types';
 export type { UIComponentRenderer, UIComponentRendererProps } from './types';
 export { renderDataTable } from './data-table/render';
 export { renderReportViewer, coerceReportPayload as coerceReportViewerPayload } from './report-viewer/render';

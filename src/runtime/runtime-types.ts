@@ -26,6 +26,7 @@ export interface GatewayRequest {
   artifacts: Array<Record<string, unknown>>;
   uiState?: Record<string, unknown>;
   availableSkills?: string[];
+  selectedToolIds?: string[];
   expectedArtifactTypes?: string[];
   selectedComponentIds?: string[];
 }

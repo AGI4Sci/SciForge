@@ -385,6 +385,30 @@
   gap: 8px;
 }
 
+.markdown-object-ref {
+  display: inline-flex;
+  align-items: center;
+  max-width: min(100%, 30rem);
+  margin: 0 0.12rem;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid rgba(45, 212, 191, 0.42);
+  border-radius: 4px;
+  background: rgba(20, 184, 166, 0.14);
+  color: #5eead4;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 0.92em;
+  line-height: 1.35;
+  vertical-align: baseline;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.markdown-object-ref:hover {
+  border-color: rgba(94, 234, 212, 0.72);
+  background: rgba(20, 184, 166, 0.22);
+}
+
 .markdown-block h3,
 .markdown-block h4 {
   margin: 6px 0 0;
@@ -826,6 +850,48 @@
   line-height: 1.5;
 }
 
+.component-row-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.component-demo-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 229, 160, 0.35);
+  background: rgba(0, 229, 160, 0.08);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.component-demo-trigger:hover:not(:disabled) {
+  border-color: rgba(0, 229, 160, 0.55);
+  background: rgba(0, 229, 160, 0.14);
+}
+
+.component-demo-trigger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.component-demo-preview {
+  margin: 0;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px dashed rgba(123, 147, 176, 0.35);
+  background: rgba(10, 15, 26, 0.35);
+  min-width: 0;
+  overflow: auto;
+}
+
+.component-demo-preview .registry-slot {
+  margin: 0;
+}
+
 .component-row-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -938,10 +1004,123 @@
   align-items: center;
 }
 
+.feedback-toolbar-token-note {
+  flex: 1 1 280px;
+  color: var(--bio-400);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
 .feedback-selection-count {
   color: var(--bio-300);
   font-size: 11px;
   font-weight: 900;
+}
+
+.feedback-github-hint {
+  flex: 1 1 220px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.feedback-github-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+@keyframes feedback-inline-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.feedback-inline-spin {
+  animation: feedback-inline-spin 0.85s linear infinite;
+}
+
+.feedback-github-panel {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 14px;
+}
+
+.feedback-github-panel-head h2 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--bio-50);
+}
+
+.feedback-github-panel-head p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--bio-400);
+  line-height: 1.45;
+}
+
+.feedback-github-issue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.feedback-github-issue-row {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.feedback-github-issue-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.feedback-github-issue-link:hover {
+  text-decoration: underline;
+}
+
+.feedback-github-issue-num {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.feedback-github-issue-ext {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.feedback-github-issue-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--bio-400);
+}
+
+.feedback-github-empty {
+  padding: 16px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--bio-400);
+  font-size: 12px;
+}
+
+.feedback-github-empty p {
+  margin: 8px 0 0;
 }
 
 .feedback-list {
@@ -1007,8 +1186,20 @@
 
 .artifact-card-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  gap: 8px;
   margin-top: 12px;
+}
+
+.artifact-card-actions button.registry-slot-dismiss {
+  color: var(--bio-300);
+  border-color: var(--border-muted);
+}
+
+.artifact-card-actions button.registry-slot-dismiss:hover {
+  color: var(--coral);
+  border-color: rgba(255, 112, 67, 0.42);
 }
 
 .artifact-card-actions button,
@@ -1342,6 +1533,16 @@
   margin-bottom: 7px;
   color: var(--bio-400);
   font-size: 11px;
+}
+
+.timeline-card-actions {
+  margin-top: 10px;
+  align-items: center;
+}
+
+.timeline-card-actions .action-button.action-secondary:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  color: var(--accent);
 }
 
 .stepper {

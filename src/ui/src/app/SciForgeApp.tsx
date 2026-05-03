@@ -11,11 +11,12 @@ import {
   CircleStop,
   Clock,
   Copy,
+  ExternalLink,
+  Loader2,
   Download,
   Eye,
   File,
   FileCode,
-  Files,
   FilePlus,
   FileText,
   FileUp,
@@ -31,7 +32,6 @@ import {
   Search,
   Settings,
   Shield,
-  Sparkles,
   Sun,
   Target,
   Trash2,
@@ -58,13 +58,13 @@ import { buildBuiltInScenarioPackage, builtInScenarioPackageRef, type ScenarioPa
 import type { ScenarioLibraryItem } from '../scenarioCompiler/scenarioLibrary';
 import { compileSlotsForScenario } from '../scenarioCompiler/uiPlanCompiler';
 import { timeline } from '../demoData';
+import { createGithubIssue, fetchOpenGithubIssues } from '../api/githubIssuesApi';
 import { sendAgentMessageStream } from '../api/agentClient';
 import { sendSciForgeToolMessage } from '../api/sciforgeToolsClient';
 import { buildExecutionBundle, evaluateExecutionBundleExport } from '../exportPolicy';
 import {
   makeId,
   nowIso,
-  type AlignmentContractRecord,
   type SciForgeMessage,
   type SciForgeReference,
   type SciForgeRun,
@@ -76,6 +76,7 @@ import {
   type EvidenceClaim,
   type FeedbackCommentRecord,
   type FeedbackCommentStatus,
+  type GithubSyncedOpenIssueRecord,
   type FeedbackPriority,
   type FeedbackRuntimeSnapshot,
   type FeedbackTargetSnapshot,
@@ -83,6 +84,7 @@ import {
   type NormalizedAgentResponse,
   type ObjectAction,
   type ObjectReference,
+  type PreviewDescriptor,
   type ResolvedViewPlan,
   type RuntimeArtifact,
   type RuntimeExecutionUnit,
@@ -96,7 +98,7 @@ import {
 import { uiModuleRegistry, type PresentationDedupeScope, type RuntimeUIModule } from '../uiModuleRegistry';
 import type { VolcanoPoint } from '../charts';
 import { compactWorkspaceStateForStorage, createSession, loadWorkspaceState, resetSession, saveWorkspaceState, sessionActivityScore, shouldUsePersistedWorkspaceState, versionSession } from '../sessionStore';
-import { loadSciForgeConfig, normalizeWorkspaceRootPath, saveSciForgeConfig, updateConfig } from '../config';
+import { defaultSciForgeConfig, loadSciForgeConfig, normalizeWorkspaceRootPath, saveSciForgeConfig, updateConfig } from '../config';
 import {
   acceptSkillPromotionProposal,
   archiveSkillPromotionProposal,
@@ -125,10 +127,10 @@ import {
   type WorkspaceFileContent,
 } from '../api/workspaceClient';
 import { runtimeContractSchemas, schemaPreview, validateRuntimeContract } from '../runtimeContracts';
-import { AlignmentPage, TimelinePage, type AlignmentContractData } from './AlignmentPages';
+import { TimelinePage } from './AlignmentPages';
 import { ComponentWorkbenchPage } from './ComponentWorkbenchPage';
 import { Dashboard } from './Dashboard';
-import { ResultsRenderer, handoffAutoRunPrompt, type HandoffAutoRunRequest } from './ResultsRenderer';
+import { ResultsRenderer, handoffAutoRunPrompt, previewPackageAutoRunPrompt, type HandoffAutoRunRequest } from './ResultsRenderer';
 import { ScenarioBuilderPanel, defaultElementSelectionForScenario, scenarioPackageToOverride } from './ScenarioBuilderPanel';
 import { objectReferenceKindLabel } from '../../../../packages/object-references';
 import { ChatPanel, mergeRunTimelineEvents } from './ChatPanel';
@@ -159,14 +161,6 @@ const officialScenarioPackages = scenarios.map((scenario) => ({
   package: buildBuiltInScenarioPackage(scenario.id, '2026-04-25T00:00:00.000Z'),
 }));
 
-
-function checksumText(text: string) {
-  let hash = 0;
-  for (let index = 0; index < text.length; index += 1) {
-    hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
-  }
-  return hash.toString(16).padStart(8, '0');
-}
 
 function isBuiltInScenarioId(value: string): value is ScenarioId {
   return Object.prototype.hasOwnProperty.call(SCENARIO_SPECS, value);
@@ -292,8 +286,6 @@ function Sidebar({
 }) {
   const workspaceRoot = explorerWorkspaceRoot(config);
   const [collapsed, setCollapsed] = useState(false);
-  const [activePanel, setActivePanel] = useState<'navigation' | 'workspace'>('navigation');
-  const prevPageRef = useRef<PageId | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(284);
   const [folderChildren, setFolderChildren] = useState<Record<string, WorkspaceEntry[]>>({});
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set(workspaceRoot ? [workspaceRoot] : []));
@@ -325,19 +317,6 @@ function Sidebar({
     };
   }, [collapsed]);
 
-  function handlePanelSwitch(panel: 'navigation' | 'workspace') {
-    setActivePanel(panel);
-    setCollapsed(false);
-  }
-
-  useEffect(() => {
-    if (page === 'workbench' && prevPageRef.current !== 'workbench') {
-      setActivePanel('workspace');
-      setCollapsed(false);
-    }
-    prevPageRef.current = page;
-  }, [page]);
-
   useEffect(() => {
     const root = explorerWorkspaceRoot(config);
     setPathEditDraft(config.workspacePath);
@@ -350,7 +329,7 @@ function Sidebar({
   }, [config.workspacePath]);
 
   useEffect(() => {
-    if (activePanel !== 'workspace' || collapsed || !workspaceRoot) return;
+    if (collapsed || !workspaceRoot) return;
     void (async () => {
       try {
         setWorkspaceError('');
@@ -363,7 +342,7 @@ function Sidebar({
         setWorkspaceNotice('');
       }
     })();
-  }, [activePanel, collapsed, workspaceRoot, config.workspaceWriterBaseUrl, config.workspacePath]);
+  }, [collapsed, workspaceRoot, config.workspaceWriterBaseUrl, config.workspacePath]);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -719,20 +698,12 @@ function Sidebar({
           <div className="brand-mark">BA</div>
         </div>
         <button
-          className={cx('activity-item', activePanel === 'navigation' && !collapsed && 'active')}
-          onClick={() => handlePanelSwitch('navigation')}
+          className={cx('activity-item', !collapsed && 'active')}
+          onClick={() => setCollapsed(false)}
           title="导航"
           aria-label="导航"
         >
           <Target size={18} />
-        </button>
-        <button
-          className={cx('activity-item', activePanel === 'workspace' && !collapsed && 'active')}
-          onClick={() => handlePanelSwitch('workspace')}
-          title="资源管理器"
-          aria-label="资源管理器"
-        >
-          <Files size={18} />
         </button>
         {collapsed ? (
           <button className="collapse-button top-toggle" onClick={() => setCollapsed(false)} title="展开侧栏" aria-label="展开侧栏">
@@ -743,10 +714,23 @@ function Sidebar({
 
       {!collapsed ? (
         <div className="sidebar-panel">
-          <div className={cx('sidebar-panel-header', activePanel === 'workspace' && 'explorer-panel-header')}>
-            {activePanel === 'workspace' ? (
-              <>
-                <span className="explorer-view-title">资源管理器</span>
+          <div className="sidebar-panel-header">
+            <span>导航</span>
+            <button className="panel-collapse-button" onClick={() => setCollapsed(true)} title="收起侧栏" aria-label="收起侧栏">
+              <ChevronLeft size={16} />
+            </button>
+          </div>
+          <div className="sidebar-panel-body">
+            <nav className="nav-section">
+              {navItems.map((item) => (
+                <button key={item.id} className={cx('nav-item', page === item.id && 'active')} onClick={() => setPage(item.id)}>
+                  <item.icon size={18} />
+                  <span>{item.label}</span>
+                </button>
+              ))}
+            </nav>
+            <div className="scenario-list scenario-list-workspace">
+              <div className="scenario-list-explorer-toolbar">
                 <div className="explorer-view-toolbar">
                   <button
                     type="button"
@@ -772,55 +756,10 @@ function Sidebar({
                   <button type="button" className="explorer-icon-btn" onClick={collapseExplorerFolders} title="全部折叠" aria-label="全部折叠">
                     <ChevronsUp size={16} />
                   </button>
-                  <button className="panel-collapse-button" onClick={() => setCollapsed(true)} title="收起侧栏" aria-label="收起侧栏">
-                    <ChevronLeft size={16} />
-                  </button>
                 </div>
-              </>
-            ) : (
-              <>
-                <span>
-                  导航
-                </span>
-                <button className="panel-collapse-button" onClick={() => setCollapsed(true)} title="收起侧栏" aria-label="收起侧栏">
-                  <ChevronLeft size={16} />
-                </button>
-              </>
-            )}
-          </div>
-          <div className="sidebar-panel-body">
-            {activePanel === 'navigation' ? (
-              <>
-                <nav className="nav-section">
-                  {navItems.map((item) => (
-                    <button key={item.id} className={cx('nav-item', page === item.id && 'active')} onClick={() => setPage(item.id)}>
-                      <item.icon size={18} />
-                      <span>{item.label}</span>
-                    </button>
-                  ))}
-                </nav>
-                <div className="scenario-list">
-                  <div className="sidebar-label">场景编译</div>
-                  <button
-                    className="scenario-compile-card"
-                    onClick={() => setPage('dashboard')}
-                  >
-                    <Sparkles size={15} />
-                    <span>
-                      <strong>描述需求并编译新场景</strong>
-                      <small>选择 skills / tools / UI 组件后发布稳定 workspace package</small>
-                    </span>
-                  </button>
-                  <div className="sidebar-package-note">
-                    <strong>统一 Scenario Library</strong>
-                    <span>官方模板、workspace package 和新编译场景都在研究概览中按需打开、导入或编辑配置。</span>
-                  </div>
-                </div>
-              </>
-            ) : null}
-            {activePanel === 'workspace' ? (
+              </div>
               <div
-                className="sidebar-tree explorer-surface"
+                className="sidebar-tree explorer-surface scenario-list-explorer-tree"
                 role="tree"
                 aria-label="工作区文件树"
                 onContextMenu={(event) => {
@@ -982,7 +921,7 @@ function Sidebar({
                   </div>
                 </details>
               </div>
-            ) : null}
+            </div>
           </div>
         </div>
       ) : null}
@@ -1188,6 +1127,24 @@ function SettingsDialog({
               onChange={(event) => onChange({ maxContextWindowTokens: Number(event.target.value) * 1000 })}
             />
           </label>
+          <label className="wide">
+            <span>反馈 GitHub 仓库</span>
+            <input
+              value={config.feedbackGithubRepo ?? ''}
+              onChange={(event) => onChange({ feedbackGithubRepo: event.target.value.trim() || undefined })}
+              placeholder="默认 AGI4Sci/SciForge；可改为 fork 或完整 https://github.com/… URL"
+            />
+          </label>
+          <label className="wide">
+            <span>反馈 GitHub Token（可选）</span>
+            <input
+              type="password"
+              autoComplete="off"
+              value={config.feedbackGithubToken ?? ''}
+              onChange={(event) => onChange({ feedbackGithubToken: event.target.value.trim() || undefined })}
+              placeholder="classic PAT 或 fine-grained PAT（需 Issues 读写；仅存本地）"
+            />
+          </label>
         </div>
         <div className="settings-save-state" role="status">
           <span className={cx('status-dot', saveState.status === 'error' ? 'offline' : saveState.status === 'saving' ? 'optional' : 'online')} />
@@ -1258,11 +1215,13 @@ function Workbench({
   onConfigChange,
   onTimelineEvent,
   onMarkReusableRun,
+  onPreviewPackageRequest,
   workspaceFileEditor,
   onWorkspaceFileEditorChange,
   externalReferenceRequest,
   onExternalReferenceConsumed,
   availableComponentIds,
+  onAvailableComponentIdsChange,
 }: {
   scenarioId: ScenarioInstanceId;
   config: SciForgeConfig;
@@ -1289,11 +1248,13 @@ function Workbench({
   onConfigChange: (patch: Partial<SciForgeConfig>) => void;
   onTimelineEvent: (event: TimelineEventRecord) => void;
   onMarkReusableRun: (scenarioId: ScenarioInstanceId, runId: string) => void;
+  onPreviewPackageRequest: (scenarioId: ScenarioInstanceId, reference: ObjectReference, path?: string, descriptor?: PreviewDescriptor) => void;
   workspaceFileEditor: { file: WorkspaceFileContent; draft: string } | null;
   onWorkspaceFileEditorChange: (next: { file: WorkspaceFileContent; draft: string } | null) => void;
   externalReferenceRequest?: { id: string; reference: SciForgeReference };
   onExternalReferenceConsumed: (requestId: string) => void;
   availableComponentIds: string[];
+  onAvailableComponentIdsChange: (ids: string[]) => void;
 }) {
   const baseScenarioId = builtInScenarioIdForInstance(scenarioId, scenarioOverride);
   const scenarioView = scenarios.find((item) => item.id === baseScenarioId) ?? scenarios[0];
@@ -1309,6 +1270,8 @@ function Workbench({
   };
   const [resultsCollapsed, setResultsCollapsed] = useState(false);
   const [settingsExpanded, setSettingsExpanded] = useState(false);
+  const [workbenchChromeExpanded, setWorkbenchChromeExpanded] = useState(false);
+  const [mobileWorkbenchLayout, setMobileWorkbenchLayout] = useState(false);
   const [mobilePane, setMobilePane] = useState<'builder' | 'chat' | 'results'>('chat');
   const [activeRunId, setActiveRunId] = useState<string | undefined>();
   const [focusedObjectReference, setFocusedObjectReference] = useState<ObjectReference | undefined>();
@@ -1319,6 +1282,29 @@ function Workbench({
     () => compileScenarioIRFromSelection(defaultElementSelectionForScenario(baseScenarioId, runtimeScenario)).uiPlan.slots,
     [baseScenarioId, runtimeScenario],
   );
+  const scenarioCompileSummary = useMemo(() => {
+    const compileResult = compileScenarioIRFromSelection(defaultElementSelectionForScenario(baseScenarioId, runtimeScenario));
+    return {
+      packageId: compileResult.package.id,
+      packageVersion: compileResult.package.version,
+      valid: compileResult.validationReport.ok,
+    };
+  }, [baseScenarioId, runtimeScenario]);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 760px)');
+    const sync = () => setMobileWorkbenchLayout(mq.matches);
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
+
+  useEffect(() => {
+    if (!mobileWorkbenchLayout || mobilePane !== 'builder') return;
+    setWorkbenchChromeExpanded(true);
+  }, [mobileWorkbenchLayout, mobilePane]);
+
+  const showWorkbenchChromeBody = workbenchChromeExpanded;
   useEffect(() => {
     if (activeRunId && !session.runs.some((run) => run.id === activeRunId)) {
       setActiveRunId(undefined);
@@ -1365,16 +1351,48 @@ function Workbench({
 
   return (
     <main className="workbench workbench-canvas-shell codex-quiet-shell">
-      <div className="workbench-header">
-        <div className="scenario-title">
-          <div className="scenario-large-icon" style={{ color: scenarioView.color, background: `${scenarioView.color}18` }}>
-            <scenarioView.icon size={24} />
+      <div className="workbench-chrome">
+        <button
+          type="button"
+          className="workbench-chrome-toggle"
+          onClick={() => setWorkbenchChromeExpanded((value) => !value)}
+          aria-expanded={showWorkbenchChromeBody}
+        >
+          <div className="scenario-large-icon workbench-chrome-icon" style={{ color: scenarioView.color, background: `${scenarioView.color}18` }}>
+            <scenarioView.icon size={22} />
           </div>
-          <div>
-            <h1 style={{ color: scenarioView.color }}>{runtimeScenario.title}</h1>
-            <p>{runtimeScenario.description}</p>
+          <span className="workbench-chrome-title">{runtimeScenario.title}</span>
+          <span className="workbench-chrome-meta">
+            {scenarioCompileSummary.packageId}@{scenarioCompileSummary.packageVersion}
+            {' · '}
+            {scenarioCompileSummary.valid ? 'valid' : 'needs fixes'}
+            {availableComponentIds.length ? ` · UI×${availableComponentIds.length}` : ''}
+          </span>
+          {workbenchChromeExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+        </button>
+        {showWorkbenchChromeBody ? (
+          <div className="workbench-chrome-body">
+            <div className="workbench-header workbench-header-nested">
+              <div className="scenario-title">
+                <div className="scenario-large-icon" style={{ color: scenarioView.color, background: `${scenarioView.color}18` }}>
+                  <scenarioView.icon size={24} />
+                </div>
+                <h1 style={{ color: scenarioView.color }}>{runtimeScenario.title}</h1>
+              </div>
+            </div>
+            <ScenarioBuilderPanel
+              scenarioId={baseScenarioId}
+              scenario={runtimeScenario}
+              config={config}
+              runtimeHealth={runtimeHealth}
+              expanded={settingsExpanded}
+              onToggle={() => setSettingsExpanded((value) => !value)}
+              onChange={(override) => onScenarioOverrideChange(scenarioId, override)}
+              agentRuntimeComponentIds={availableComponentIds}
+              onAgentRuntimeComponentIdsChange={onAvailableComponentIdsChange}
+            />
           </div>
-        </div>
+        ) : null}
       </div>
       <div className="mobile-workbench-tabs" aria-label="移动端工作区视图">
         {[
@@ -1386,25 +1404,6 @@ function Workbench({
             {label}
           </button>
         ))}
-      </div>
-      <div className={cx('mobile-pane', mobilePane !== 'builder' && 'mobile-hidden')}>
-        <ScenarioBuilderPanel
-          scenarioId={baseScenarioId}
-          scenario={runtimeScenario}
-          config={config}
-          runtimeHealth={runtimeHealth}
-          expanded={settingsExpanded}
-          onToggle={() => setSettingsExpanded((value) => !value)}
-          onChange={(override) => onScenarioOverrideChange(scenarioId, override)}
-        />
-      </div>
-      <div className="manifest-banner">
-        <span>UI allowlist</span>
-        {(availableComponentIds.length ? availableComponentIds : runtimeScenario.defaultComponents).map((component) => (
-          <code key={component}>{component}</code>
-        ))}
-        <code>source={availableComponentIds.length ? 'component-workbench' : 'scenario-default'}</code>
-        <code>fallback={runtimeScenario.fallbackComponent}</code>
       </div>
       <div
         className={cx('workbench-grid', 'workbench-canvas', resultsCollapsed && 'results-collapsed')}
@@ -1467,8 +1466,16 @@ function Workbench({
             onActiveRunChange={setActiveRunId}
             focusedObjectReference={focusedObjectReference}
             onFocusedObjectChange={setFocusedObjectReference}
+            onPreviewPackageRequest={(reference, path, descriptor) => onPreviewPackageRequest(scenarioId, reference, path, descriptor)}
             workspaceFileEditor={workspaceFileEditor}
             onWorkspaceFileEditorChange={onWorkspaceFileEditorChange}
+            onDismissResultSlotPresentation={(presentationId) => {
+              onSessionChange({
+                ...session,
+                hiddenResultSlotIds: [...new Set([...(session.hiddenResultSlotIds ?? []), presentationId])],
+                updatedAt: nowIso(),
+              });
+            }}
           />
         </div>
       </div>
@@ -1659,22 +1666,120 @@ function FeedbackInboxPage({
   onStatusChange,
   onDelete,
   onCreateRequest,
+  feedbackGithubRepo,
+  feedbackGithubToken,
+  githubSyncedOpenIssues,
+  onReplaceGithubSyncedOpenIssues,
+  onOpenGithubSettings,
 }: {
   comments: FeedbackCommentRecord[];
   requests: NonNullable<SciForgeWorkspaceState['feedbackRequests']>;
   onStatusChange: (ids: string[], status: FeedbackCommentStatus) => void;
   onDelete: (ids: string[]) => void;
   onCreateRequest: (ids: string[], title: string) => void;
+  feedbackGithubRepo?: string;
+  feedbackGithubToken?: string;
+  githubSyncedOpenIssues: GithubSyncedOpenIssueRecord[];
+  onReplaceGithubSyncedOpenIssues: (issues: GithubSyncedOpenIssueRecord[]) => void;
+  onOpenGithubSettings: () => void;
 }) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<FeedbackCommentStatus | 'all'>('all');
+  const [githubActionHint, setGithubActionHint] = useState('');
+  const [githubSubmitBusy, setGithubSubmitBusy] = useState(false);
+  const [githubSyncBusy, setGithubSyncBusy] = useState(false);
+  const effectiveGithubRepo = useMemo(
+    () => (feedbackGithubRepo?.trim() || defaultSciForgeConfig.feedbackGithubRepo || '').trim(),
+    [feedbackGithubRepo],
+  );
   const visibleComments = comments
     .filter((comment) => statusFilter === 'all' || comment.status === statusFilter)
     .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
   const selectedComments = comments.filter((comment) => selectedIds.includes(comment.id));
   const bundle = feedbackBundle(selectedComments.length ? selectedComments : visibleComments, requests);
+  const issueScopeComments = selectedComments.length ? selectedComments : visibleComments;
+  const issueTitle = feedbackGithubIssueTitle(issueScopeComments);
+  const issueBody = feedbackGithubIssueBody(issueScopeComments, requests);
   const visibleIds = visibleComments.map((item) => item.id);
   const visibleSelectedCount = visibleIds.filter((id) => selectedIds.includes(id)).length;
+
+  useEffect(() => {
+    if (!githubActionHint) return;
+    const timer = window.setTimeout(() => setGithubActionHint(''), 3800);
+    return () => window.clearTimeout(timer);
+  }, [githubActionHint]);
+
+  async function copyGithubIssueMarkdown() {
+    if (!issueScopeComments.length) return;
+    const doc = `# ${issueTitle}\n\n${issueBody}`;
+    try {
+      await navigator.clipboard.writeText(doc);
+      setGithubActionHint('已复制 GitHub Issue 标题与正文（Markdown）。');
+    } catch {
+      setGithubActionHint('复制失败：请检查浏览器剪贴板权限。');
+    }
+  }
+
+  function ensureGithubTokenOrOpenSettings(): boolean {
+    const token = feedbackGithubToken?.trim();
+    if (token) return true;
+    setGithubActionHint(`需要 GitHub Personal Access Token：已打开「设置」，请在「反馈 GitHub Token」填写（需 Issues 读写）。当前仓库 ${effectiveGithubRepo || '（未解析）'}。`);
+    onOpenGithubSettings();
+    return false;
+  }
+
+  async function submitGithubIssueApi() {
+    if (!issueScopeComments.length) return;
+    if (!ensureGithubTokenOrOpenSettings()) return;
+    const repo = effectiveGithubRepo;
+    const token = feedbackGithubToken!.trim();
+    if (!repo) {
+      setGithubActionHint('请在设置中填写有效的反馈 GitHub 仓库（owner/repo）。');
+      return;
+    }
+    setGithubSubmitBusy(true);
+    try {
+      const created = await createGithubIssue(repo, token, { title: issueTitle, body: issueBody });
+      setGithubActionHint(`已创建 Issue #${created.number}，正在打开页面…`);
+      window.open(created.htmlUrl, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      setGithubActionHint(error instanceof Error ? error.message : String(error));
+    } finally {
+      setGithubSubmitBusy(false);
+    }
+  }
+
+  async function syncGithubOpenIssues() {
+    if (!ensureGithubTokenOrOpenSettings()) return;
+    const repo = effectiveGithubRepo;
+    const token = feedbackGithubToken!.trim();
+    if (!repo) {
+      setGithubActionHint('请在设置中填写有效的反馈 GitHub 仓库（owner/repo）。');
+      return;
+    }
+    setGithubSyncBusy(true);
+    try {
+      const rows = await fetchOpenGithubIssues(repo, token);
+      const syncedAt = nowIso();
+      const mapped: GithubSyncedOpenIssueRecord[] = rows.map((row) => ({
+        schemaVersion: 1,
+        number: row.number,
+        title: row.title,
+        body: row.body ?? '',
+        htmlUrl: row.html_url,
+        updatedAt: row.updated_at,
+        authorLogin: row.user?.login,
+        labels: (row.labels ?? []).map((label) => label.name ?? '').filter(Boolean),
+        syncedAt,
+      }));
+      onReplaceGithubSyncedOpenIssues(mapped.slice(0, 500));
+      setGithubActionHint(`已同步 ${mapped.length} 条未关闭 Issue（不含 PR）。`);
+    } catch (error) {
+      setGithubActionHint(error instanceof Error ? error.message : String(error));
+    } finally {
+      setGithubSyncBusy(false);
+    }
+  }
 
   function toggle(id: string) {
     setSelectedIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
@@ -1700,6 +1805,7 @@ function FeedbackInboxPage({
           <span><strong>{comments.length}</strong> comments</span>
           <span><strong>{requests.length}</strong> requests</span>
           <span><strong>{comments.filter((item) => item.status === 'open').length}</strong> open</span>
+          <span><strong>{githubSyncedOpenIssues.length}</strong> GitHub open</span>
         </div>
       </section>
       <section className="feedback-toolbar">
@@ -1722,6 +1828,32 @@ function FeedbackInboxPage({
         <button type="button" onClick={() => onCreateRequest(selectedIds, requestTitleFromFeedback(selectedComments))} disabled={!selectedIds.length}>生成 Request</button>
         <button type="button" onClick={() => exportJsonFile(`sciforge-feedback-${nowIso().slice(0, 10)}.json`, bundle)}>导出 Bundle</button>
         <button type="button" onClick={() => void navigator.clipboard?.writeText(JSON.stringify(bundle, null, 2))}>复制 Bundle</button>
+        <button type="button" onClick={() => void copyGithubIssueMarkdown()} disabled={!issueScopeComments.length}>复制 GitHub Issue</button>
+        <button
+          type="button"
+          className="feedback-github-primary"
+          onClick={() => void submitGithubIssueApi()}
+          disabled={!issueScopeComments.length || githubSubmitBusy}
+          title={`向 ${effectiveGithubRepo || '…'} 创建 Issue（需先在设置填写 PAT）`}
+        >
+          {githubSubmitBusy ? <Loader2 size={15} className="feedback-inline-spin" aria-hidden /> : null}
+          提交到 GitHub
+        </button>
+        <button
+          type="button"
+          onClick={() => void syncGithubOpenIssues()}
+          disabled={githubSyncBusy}
+          title={`从 ${effectiveGithubRepo || '…'} 拉取未关闭 Issue（需 PAT；不含 PR）`}
+        >
+          {githubSyncBusy ? <Loader2 size={15} className="feedback-inline-spin" aria-hidden /> : null}
+          从 GitHub 同步
+        </button>
+        {!feedbackGithubToken?.trim() ? (
+          <span className="feedback-toolbar-token-note" title="GitHub API 匿名不可用">
+            未配置 Token：点「提交 / 同步」将打开设置并提示填写 PAT
+          </span>
+        ) : null}
+        {githubActionHint ? <span className="feedback-github-hint" role="status">{githubActionHint}</span> : null}
       </section>
       {!visibleComments.length ? (
         <div className="empty-runtime-state">
@@ -1753,6 +1885,40 @@ function FeedbackInboxPage({
           ))}
         </section>
       )}
+      <section className="feedback-github-panel" aria-label="GitHub 未关闭 Issue">
+        <div className="feedback-github-panel-head">
+          <h2>GitHub 未关闭 Issue</h2>
+          <p>与上方本地反馈评论独立；仅同步仍打开的 Issue，Pull Request 会自动排除。数据保存在本机 workspace。</p>
+        </div>
+        {githubSyncedOpenIssues.length ? (
+          <ul className="feedback-github-issue-list">
+            {githubSyncedOpenIssues.map((issue) => (
+              <li key={issue.number}>
+                <div className="feedback-github-issue-row">
+                  <a className="feedback-github-issue-link" href={issue.htmlUrl} target="_blank" rel="noopener noreferrer">
+                    <span className="feedback-github-issue-num">#{issue.number}</span>
+                    <strong>{issue.title}</strong>
+                    <ExternalLink size={14} aria-hidden className="feedback-github-issue-ext" />
+                  </a>
+                  <div className="feedback-github-issue-meta">
+                    {issue.authorLogin ? <span>@{issue.authorLogin}</span> : null}
+                    <span>更新 {formatSessionTime(issue.updatedAt)}</span>
+                    <span>同步 {formatSessionTime(issue.syncedAt)}</span>
+                  </div>
+                  {issue.labels.length ? (
+                    <div className="feedback-tags">{issue.labels.map((label) => <code key={label}>{label}</code>)}</div>
+                  ) : null}
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="feedback-github-empty">
+            <Badge variant="muted">empty</Badge>
+            <p>尚未同步。配置仓库与 Token 后点击「从 GitHub 同步」。</p>
+          </div>
+        )}
+      </section>
     </main>
   );
 }
@@ -1918,6 +2084,84 @@ function feedbackBundle(comments: FeedbackCommentRecord[], requests: NonNullable
     requests: requests.filter((request) => request.feedbackIds.some((id) => comments.some((comment) => comment.id === id))),
     githubIssueHint: 'Use comments as source-of-truth; GitHub Issue should summarize and link this bundle instead of replacing it.',
   };
+}
+
+function feedbackGithubIssueTitle(comments: FeedbackCommentRecord[]): string {
+  if (!comments.length) return '[SciForge] 反馈汇总';
+  if (comments.length === 1) {
+    const one = comments[0].comment.trim().slice(0, 88);
+    return `[SciForge] ${one || '反馈'}`;
+  }
+  const hint = requestTitleFromFeedback(comments).slice(0, 48);
+  return `[SciForge] 汇总 ×${comments.length} · ${hint}`;
+}
+
+function feedbackGithubIssueBody(
+  comments: FeedbackCommentRecord[],
+  requests: NonNullable<SciForgeWorkspaceState['feedbackRequests']>,
+): string {
+  const bundle = feedbackBundle(comments, requests);
+  const lines: string[] = [];
+  lines.push('## 概要');
+  lines.push('');
+  lines.push(`- **反馈条数**: ${comments.length}`);
+  lines.push(`- **导出时间**: ${bundle.exportedAt}`);
+  lines.push(`- **应用构建**: \`${bundle.appVersion}\``);
+  lines.push(`- **说明**: ${bundle.githubIssueHint}`);
+  lines.push('');
+  lines.push('---');
+  lines.push('');
+  comments.forEach((comment, index) => {
+    const heading = comment.comment.replace(/\s+/g, ' ').trim().slice(0, 120) || '(无摘要)';
+    lines.push(`### ${index + 1}. ${heading}`);
+    lines.push('');
+    lines.push('| 字段 | 值 |');
+    lines.push('| --- | --- |');
+    lines.push(`| 状态 | \`${comment.status}\` |`);
+    lines.push(`| 优先级 | \`${comment.priority}\` |`);
+    lines.push(`| 作者 | ${comment.authorName} |`);
+    lines.push(`| 创建时间 | ${comment.createdAt} |`);
+    lines.push(`| 页面 | \`${comment.runtime.page}\` |`);
+    lines.push(`| 场景 | \`${comment.runtime.scenarioId}\` |`);
+    lines.push(`| Session | ${comment.runtime.sessionId ?? '—'} |`);
+    lines.push(`| Active run | ${comment.runtime.activeRunId ?? '—'} |`);
+    lines.push(`| URL | ${comment.runtime.url} |`);
+    if (comment.tags.length) lines.push(`| 标签 | ${comment.tags.map((tag) => `\`${tag}\``).join(', ')} |`);
+    lines.push('');
+    lines.push('**评论原文**');
+    lines.push('');
+    lines.push('```');
+    lines.push(comment.comment);
+    lines.push('```');
+    lines.push('');
+    lines.push('**DOM selector**');
+    lines.push('');
+    lines.push('```css');
+    lines.push(comment.target.selector);
+    lines.push('```');
+    lines.push('');
+    lines.push('**元素**');
+    lines.push(`- tag: \`${comment.target.tagName}\`${comment.target.role ? ` · role: \`${comment.target.role}\`` : ''}`);
+    if (comment.target.ariaLabel) lines.push(`- aria-label: ${comment.target.ariaLabel}`);
+    lines.push(`- path: \`${comment.target.path}\``);
+    lines.push(`- rect: x=${Math.round(comment.target.rect.x)} y=${Math.round(comment.target.rect.y)} w=${Math.round(comment.target.rect.width)} h=${Math.round(comment.target.rect.height)}`);
+    if (comment.target.text.trim()) lines.push(`- text: ${compactFeedbackText(comment.target.text)}`);
+    lines.push('');
+    lines.push('**视口**');
+    lines.push(`- ${comment.viewport.width}×${comment.viewport.height} · dpr ${comment.viewport.devicePixelRatio} · scroll (${comment.viewport.scrollX}, ${comment.viewport.scrollY})`);
+    lines.push('');
+    lines.push('---');
+    lines.push('');
+  });
+  lines.push('<details>');
+  lines.push('<summary>反馈 Bundle JSON（机器可读）</summary>');
+  lines.push('');
+  lines.push('```json');
+  lines.push(JSON.stringify(bundle, null, 2));
+  lines.push('```');
+  lines.push('');
+  lines.push('</details>');
+  return lines.join('\n');
 }
 
 function requestTitleFromFeedback(comments: FeedbackCommentRecord[]) {
@@ -2225,6 +2469,14 @@ export function SciForgeApp() {
     });
   }
 
+  function replaceGithubSyncedOpenIssues(issues: GithubSyncedOpenIssueRecord[]) {
+    updateWorkspace((current) => ({
+      ...current,
+      githubSyncedOpenIssues: issues,
+      updatedAt: nowIso(),
+    }));
+  }
+
   function setWorkspacePath(value: string) {
     const workspacePath = normalizeWorkspaceRootPath(value);
     const nextConfig = updateConfig(config, { workspacePath });
@@ -2423,7 +2675,7 @@ export function SciForgeApp() {
       return;
     }
     if (normalized.includes('align') || normalized.includes('对齐')) {
-      setPage('alignment');
+      setPage('timeline');
       return;
     }
     setPage('workbench');
@@ -2503,32 +2755,19 @@ export function SciForgeApp() {
     setHandoffAutoRun((current) => current?.id === requestId ? undefined : current);
   }
 
-  function saveAlignmentContract(data: AlignmentContractData, reason: string, confirmationStatus: AlignmentContractRecord['confirmationStatus'] = 'needs-data') {
-    const now = nowIso();
-    const checksum = checksumText(JSON.stringify(data));
-    const id = makeId('alignment-contract');
-    const contract: AlignmentContractRecord = {
-      id,
-      type: 'alignment-contract',
-      schemaVersion: '1',
-      title: `Alignment contract ${new Date(now).toLocaleString('zh-CN', { hour12: false })}`,
-      createdAt: now,
-      updatedAt: now,
-      reason,
-      checksum,
-      sourceRefs: ['alignment-workspace:user-input', 'alignment-workspace:ai-draft'],
-      assumptionRefs: ['assumption:data-quality-review-required', 'assumption:researcher-final-authority'],
-      decisionAuthority: 'researcher',
-      confirmationStatus,
-      confirmedBy: confirmationStatus === 'user-confirmed' ? 'researcher' : undefined,
-      confirmedAt: confirmationStatus === 'user-confirmed' ? now : undefined,
-      sourceContractVersion: id,
-      data,
-    };
-    updateWorkspace((current) => ({
-      ...current,
-      alignmentContracts: [contract, ...(current.alignmentContracts ?? [])].slice(0, 40),
-    }));
+  function handlePreviewPackageRequest(
+    targetScenario: ScenarioInstanceId,
+    reference: ObjectReference,
+    path?: string,
+    descriptor?: PreviewDescriptor,
+  ) {
+    setScenarioId(targetScenario);
+    setPage('workbench');
+    setHandoffAutoRun({
+      id: makeId('preview-package-run'),
+      targetScenario,
+      prompt: previewPackageAutoRunPrompt(reference, path, descriptor),
+    });
   }
 
   const activeScenarioOverride = scenarioOverrides[scenarioId];
@@ -2598,6 +2837,7 @@ export function SciForgeApp() {
               onConfigChange={updateRuntimeConfig}
               onTimelineEvent={appendTimelineEvent}
               onMarkReusableRun={markReusableRun}
+              onPreviewPackageRequest={handlePreviewPackageRequest}
               workspaceFileEditor={workbenchWorkspaceFileEditor}
               onWorkspaceFileEditorChange={setWorkbenchWorkspaceFileEditor}
               externalReferenceRequest={externalReferenceRequest?.scenarioId === scenarioId ? externalReferenceRequest : undefined}
@@ -2605,14 +2845,14 @@ export function SciForgeApp() {
                 setExternalReferenceRequest((current) => current?.id === requestId ? undefined : current);
               }}
               availableComponentIds={selectedRuntimeComponentIds}
+              onAvailableComponentIdsChange={setSelectedRuntimeComponentIds}
             />
           ) : page === 'components' ? (
             <ComponentWorkbenchPage
+              config={config}
               selectedComponentIds={selectedRuntimeComponentIds}
               onSelectedComponentIdsChange={setSelectedRuntimeComponentIds}
             />
-          ) : page === 'alignment' ? (
-            <AlignmentPage contracts={workspaceState.alignmentContracts ?? []} onSaveContract={saveAlignmentContract} />
           ) : page === 'timeline' ? (
             <TimelinePage alignmentContracts={workspaceState.alignmentContracts ?? []} events={workspaceState.timelineEvents ?? []} onOpenScenario={(id) => {
               setScenarioId(id);
@@ -2625,6 +2865,11 @@ export function SciForgeApp() {
               onStatusChange={updateFeedbackStatus}
               onDelete={deleteFeedbackComments}
               onCreateRequest={createFeedbackRequest}
+              feedbackGithubRepo={config.feedbackGithubRepo}
+              feedbackGithubToken={config.feedbackGithubToken}
+              githubSyncedOpenIssues={workspaceState.githubSyncedOpenIssues ?? []}
+              onReplaceGithubSyncedOpenIssues={replaceGithubSyncedOpenIssues}
+              onOpenGithubSettings={() => setSettingsOpen(true)}
             />
           )}
         </div>

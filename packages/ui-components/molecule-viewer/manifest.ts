@@ -26,4 +26,11 @@ export const manifest: UIComponentManifest = {
     readmePath: 'packages/ui-components/molecule-viewer/README.md',
     agentSummary: 'Use for structure artifacts with PDB/mmCIF identifiers, dataRef, structureUrl, HTML refs, path, or filePath. Prefer for molecular inspection.',
   },
+  workbenchDemo: {
+    artifactType: 'structure-summary',
+    artifactData: {
+      pdbId: '1CRN',
+      note: 'Full PDB/mmCIF coordinates are injected by src/ui/src/moleculeWorkbenchDemoStructures.ts for offline Demo.',
+    },
+  },
 };

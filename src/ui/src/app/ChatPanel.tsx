@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent } from 'react';
-import { ChevronDown, ChevronUp, CircleStop, Clock, Copy, Download, FileUp, MessageSquare, Plus, Quote, Sparkles, Trash2, X } from 'lucide-react';
+import { CircleStop, Clock, Copy, Download, FileUp, MessageSquare, Plus, Quote, Sparkles, Trash2, X } from 'lucide-react';
 import { scenarios, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
 import { compactAgentContext, sendAgentMessageStream, validateSemanticTurnAcceptance } from '../api/agentClient';
@@ -11,7 +11,7 @@ import { resetSession } from '../sessionStore';
 import { coalesceStreamEvents, formatAgentTokenUsage, latestRunningEvent, presentStreamEvent, streamEventCounts } from '../streamEventPresentation';
 import { acceptAndRepairAgentResponse, buildBackendAcceptanceRepairPrompt, buildUserGoalSnapshot, shouldRunBackendAcceptanceRepair } from '../turnAcceptance';
 import { expectedArtifactsForCurrentTurn, selectedComponentsForCurrentTurn } from '../artifactIntent';
-import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeRun, type SciForgeSession, type NormalizedAgentResponse, type ObjectReference, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
+import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeRun, type SciForgeSession, type NormalizedAgentResponse, type ObjectAction, type ObjectReference, type ObjectReferenceKind, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
 import { writeWorkspaceFile } from '../api/workspaceClient';
 import { exportJsonFile } from './exportUtils';
 import { ActionButton, Badge, ClaimTag, ConfidenceBar, EvidenceTag, IconButton, cx } from './uiPrimitives';
@@ -46,7 +46,7 @@ export { objectReferenceKindLabel } from '../../../../packages/object-references
 
 interface HandoffAutoRunRequest {
   id: string;
-  targetScenario: ScenarioId;
+  targetScenario: ScenarioInstanceId;
   prompt: string;
 }
 
@@ -138,15 +138,13 @@ export function ChatPanel({
   onExternalReferenceConsumed?: (requestId: string) => void;
   availableComponentIds?: string[];
 }) {
-  const [expanded, setExpanded] = useState<number | null>(0);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [errorText, setErrorText] = useState('');
   const [isSending, setIsSending] = useState(false);
-  const [composerHeight, setComposerHeight] = useState(88);
-  const [streamEventsExpanded, setStreamEventsExpanded] = useState(false);
-  const [streamEventsHeight, setStreamEventsHeight] = useState(260);
+  const [composerHeight, setComposerHeight] = useState(58);
+  const [messagesPaneHeight, setMessagesPaneHeight] = useState<number | null>(null);
   const [streamEvents, setStreamEvents] = useState<AgentStreamEvent[]>([]);
   const [guidanceQueue, setGuidanceQueue] = useState<string[]>([]);
   const [referencePickMode, setReferencePickMode] = useState(false);
@@ -161,7 +159,7 @@ export function ChatPanel({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const autoScrollRef = useRef(true);
   const resizeStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
-  const streamResizeStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
+  const messagesResizeStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
   const messages = session.messages;
   const baseScenarioId = builtInScenarioIdForInstance(scenarioId, scenarioOverride);
   const scenario = scenarios.find((item) => item.id === baseScenarioId) ?? scenarios[0];
@@ -197,7 +195,11 @@ export function ChatPanel({
 
   useEffect(() => {
     if (autoScrollRef.current) {
-      messagesRef.current?.scrollTo({ top: messagesRef.current.scrollHeight, behavior: 'smooth' });
+      window.requestAnimationFrame(() => {
+        const element = messagesRef.current;
+        if (!element) return;
+        element.scrollTo({ top: element.scrollHeight, behavior: 'auto' });
+      });
     }
   }, [messages.length, isSending]);
 
@@ -293,7 +295,6 @@ export function ChatPanel({
 
   useEffect(() => {
     setErrorText('');
-    setExpanded(0);
     const element = messagesRef.current;
     if (element) {
       element.scrollTo({ top: savedScrollTop, behavior: 'auto' });
@@ -723,19 +724,20 @@ export function ChatPanel({
     window.addEventListener('mouseup', handleUp);
   }
 
-  function beginStreamEventsResize(event: React.MouseEvent<HTMLDivElement>) {
+  function beginMessagesResize(event: React.MouseEvent<HTMLDivElement>) {
     event.preventDefault();
-    streamResizeStateRef.current = { startY: event.clientY, startHeight: streamEventsHeight };
+    const el = messagesRef.current;
+    const startHeight = el?.getBoundingClientRect().height ?? 240;
+    messagesResizeStateRef.current = { startY: event.clientY, startHeight };
     const handleMove = (moveEvent: MouseEvent) => {
-      const state = streamResizeStateRef.current;
+      const state = messagesResizeStateRef.current;
       if (!state) return;
-      const delta = state.startY - moveEvent.clientY;
-      const nextHeight = Math.max(96, Math.min(Math.round(window.innerHeight * 0.62), state.startHeight + delta));
-      setStreamEventsHeight(nextHeight);
-      setStreamEventsExpanded(true);
+      const delta = moveEvent.clientY - state.startY;
+      const nextHeight = Math.max(140, Math.min(Math.round(window.innerHeight * 0.78), state.startHeight + delta));
+      setMessagesPaneHeight(nextHeight);
     };
     const handleUp = () => {
-      streamResizeStateRef.current = null;
+      messagesResizeStateRef.current = null;
       window.removeEventListener('mousemove', handleMove);
       window.removeEventListener('mouseup', handleUp);
     };
@@ -927,12 +929,8 @@ export function ChatPanel({
         <div className="scenario-mini" style={{ background: `${scenario.color}18`, color: scenario.color }}>
           <scenario.icon size={18} />
         </div>
-        <div>
-          <strong>{scenario.name}</strong>
-          <span>{session.title} · {scenario.tools.join(' / ')}</span>
-        </div>
+        <strong className="panel-scenario-name">{scenario.name}</strong>
         <Badge variant="success" glow>在线</Badge>
-        <Badge variant="muted">{session.versions.length} versions</Badge>
         {archivedCount ? <Badge variant="muted">{archivedCount} archived</Badge> : null}
         <label className="backend-picker" title="选择本场景下一次 AgentServer 运行使用的 agent backend">
           <span>backend</span>
@@ -966,7 +964,17 @@ export function ChatPanel({
           onClear={onClearArchivedSessions}
         />
       ) : null}
-      <div className="messages" ref={messagesRef} onScroll={handleMessagesScroll}>
+      <div className="messages-stack">
+        <div
+          className="messages"
+          ref={messagesRef}
+          onScroll={handleMessagesScroll}
+          style={
+            messagesPaneHeight != null
+              ? { flex: '0 0 auto', height: messagesPaneHeight, minHeight: 140 }
+              : undefined
+          }
+        >
         {!messages.length ? (
           <div className="chat-empty">
             <MessageSquare size={18} />
@@ -1018,24 +1026,31 @@ export function ChatPanel({
                   </div>
                 </div>
               ) : (
-                <p>{message.content}</p>
+                <>
+                  <MessageContent
+                    content={message.content}
+                    references={inlineObjectReferencesForMessage(message, session, messageRunId)}
+                    onObjectFocus={onObjectFocus}
+                  />
+                  {messageRunId && message.role !== 'user' ? (
+                    <RunKeyInfo
+                      runId={messageRunId}
+                      session={session}
+                      onObjectFocus={onObjectFocus}
+                    />
+                  ) : null}
+                  {messageRunId && message.role !== 'user' ? (
+                    <RunExecutionProcess
+                      runId={messageRunId}
+                      session={session}
+                      trace={message.expandable}
+                      onObjectFocus={onObjectFocus}
+                    />
+                  ) : null}
+                </>
               )}
               {message.references?.length ? (
                 <SciForgeReferenceChips references={message.references} />
-              ) : null}
-              {message.objectReferences?.length ? (
-                <ObjectReferenceChips
-                  references={message.objectReferences}
-                  activeRunId={activeRunId}
-                  onFocus={onObjectFocus}
-                />
-              ) : null}
-              {messageRunId && message.role !== 'user' ? (
-                <RunKeyInfo
-                  runId={messageRunId}
-                  session={session}
-                  onObjectFocus={onObjectFocus}
-                />
               ) : null}
               {message.acceptance && !message.acceptance.pass ? (
                 <TurnAcceptanceNotice acceptance={message.acceptance} />
@@ -1045,20 +1060,6 @@ export function ChatPanel({
                 <button onClick={() => beginEditMessage(message)}>编辑</button>
                 <button onClick={() => onDeleteMessage(message.id)}>删除</button>
               </div>
-              {message.expandable ? (
-                <>
-                  <button className="expand-link" onClick={() => setExpanded(expanded === index ? null : index)}>
-                    {expanded === index ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                    {expanded === index ? '收起推理链' : '展开推理链'}
-                  </button>
-                  {expanded === index ? (
-                    <div className="reasoning-block">
-                      <button type="button" onClick={() => void navigator.clipboard?.writeText(message.expandable || '')}>复制推理链</button>
-                      <pre className="reasoning">{message.expandable}</pre>
-                    </div>
-                  ) : null}
-                </>
-              ) : null}
             </div>
           </div>
           );
@@ -1070,27 +1071,24 @@ export function ChatPanel({
                 <strong>{scenario.name}</strong>
                 <Badge variant="info">running</Badge>
               </div>
-              <p>{latestWorklogLine || '正在规划、生成或执行 workspace task，过程日志默认折叠。'}</p>
+              <MessageContent content={latestWorklogLine || '正在规划、生成或执行 workspace task，过程日志默认折叠。'} references={[]} onObjectFocus={onObjectFocus} />
+              <RunningWorkProcess
+                events={streamEvents}
+                counts={worklogCounts}
+                tokenUsage={liveTokenUsage}
+                backend={config.agentBackend}
+                guidanceCount={guidanceQueue.length}
+              />
             </div>
           </div>
         ) : null}
-      </div>
-
-      {streamEvents.length || isSending ? (
-        <div className="codex-work-status" aria-label="工作状态">
-          <button
-            type="button"
-            onClick={() => setStreamEventsExpanded((value) => !value)}
-            title={streamEventsExpanded ? '收起工作过程' : '展开工作过程'}
-          >
-            <span>{isSending ? '处理中' : '已处理'}</span>
-            <small>
-              {worklogCounts.total ? `${worklogCounts.total} 条工作记录` : latestWorklogLine || '等待工作过程'}
-            </small>
-            {streamEventsExpanded ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
-          </button>
         </div>
-      ) : null}
+        <div
+          className="messages-resize-handle"
+          onMouseDown={beginMessagesResize}
+          title="拖拽调整对话区高度"
+        />
+      </div>
 
       {session.runs.length ? (
         <div className="run-link-strip" aria-label="运行记录">
@@ -1113,66 +1111,6 @@ export function ChatPanel({
               标记 reusable
             </button>
           ) : null}
-        </div>
-      ) : null}
-
-      {isSending || streamEvents.length ? (
-        <div
-          className={cx('stream-events', !streamEventsExpanded && 'collapsed')}
-          style={streamEventsExpanded ? { height: `${streamEventsHeight}px` } : undefined}
-        >
-          {streamEventsExpanded ? (
-            <div className="stream-events-resize-handle" onMouseDown={beginStreamEventsResize} title="拖拽调整运行观察高度" />
-          ) : null}
-          <div className="stream-events-head">
-            <span>工作过程</span>
-            <div className="stream-events-actions">
-              {worklogCounts.key ? <Badge variant="info">{worklogCounts.key} 关键</Badge> : null}
-              {worklogCounts.background ? <Badge variant="muted">{worklogCounts.background} 过程</Badge> : null}
-              {guidanceQueue.length ? <Badge variant="warning">{guidanceQueue.length} 条引导排队</Badge> : null}
-              {liveTokenUsage ? <Badge variant="muted">{formatAgentTokenUsage(liveTokenUsage)}</Badge> : null}
-              <Badge variant="muted">{config.agentBackend}</Badge>
-              <button
-                type="button"
-                className="stream-events-toggle"
-                onClick={() => setStreamEventsExpanded((value) => !value)}
-                title={streamEventsExpanded ? '收缩运行观察' : '展开运行观察'}
-              >
-                {streamEventsExpanded ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
-              </button>
-            </div>
-          </div>
-          {!streamEventsExpanded ? (
-            <button
-              type="button"
-              className="stream-events-preview"
-              onClick={() => setStreamEventsExpanded(true)}
-              title="展开查看后台探索、工具调用和 raw event"
-            >
-              <span>{latestWorklogLine || '后台过程将折叠在这里。'}</span>
-            </button>
-          ) : (
-            <div className="stream-events-list">
-              {streamEvents.slice(-24).map((event) => {
-                const presentation = presentStreamEvent(event);
-                const copyPayload = JSON.stringify(event.raw ?? { type: event.type, label: event.label, detail: event.detail }, null, 2);
-                return (
-                  <details className={cx('stream-event', presentation.uiClass)} key={event.id} open={!presentation.initiallyCollapsed}>
-                    <summary>
-                      <Badge variant={presentation.tone}>{event.label}</Badge>
-                      <span className="stream-event-type">{presentation.typeLabel}</span>
-                      {presentation.usageDetail ? <span className="stream-event-usage">{presentation.usageDetail}</span> : null}
-                      <span className="stream-event-detail compact">{presentation.shortDetail || '无详细文本'}</span>
-                    </summary>
-                    <div className="stream-event-expanded">
-                      {presentation.detail ? <pre>{presentation.detail}</pre> : <span>无额外详情。</span>}
-                      <button type="button" onClick={() => void navigator.clipboard?.writeText(copyPayload)}>复制 raw</button>
-                    </div>
-                  </details>
-                );
-              })}
-            </div>
-          )}
         </div>
       ) : null}
 
@@ -1619,6 +1557,239 @@ function normalizeRunPrompt(value: string) {
   return value.replace(/^运行中引导：/, '').trim();
 }
 
+function MessageContent({
+  content,
+  references,
+  onObjectFocus,
+}: {
+  content: string;
+  references: ObjectReference[];
+  onObjectFocus: (reference: ObjectReference) => void;
+}) {
+  const pieces = linkifyObjectReferences(content, references);
+  return (
+    <div className="message-content">
+      {pieces.map((piece, index) => piece.reference ? (
+        <button
+          key={`${piece.text}-${index}`}
+          type="button"
+          className="message-object-link"
+          onClick={() => onObjectFocus(piece.reference as ObjectReference)}
+          title={piece.reference.summary || piece.reference.ref}
+          data-sciforge-reference={sciForgeReferenceAttribute(referenceForObjectReference(piece.reference))}
+        >
+          {piece.text}
+        </button>
+      ) : (
+        <span key={`${piece.text}-${index}`}>{piece.text}</span>
+      ))}
+    </div>
+  );
+}
+
+function RunningWorkProcess({
+  events,
+  counts,
+  tokenUsage,
+  backend,
+  guidanceCount,
+}: {
+  events: AgentStreamEvent[];
+  counts: ReturnType<typeof streamEventCounts>;
+  tokenUsage?: AgentStreamEvent['usage'];
+  backend: string;
+  guidanceCount: number;
+}) {
+  const visibleEvents = events.slice(-24);
+  const usageLabel = formatAgentTokenUsage(tokenUsage);
+  if (!visibleEvents.length && !guidanceCount && !usageLabel) return null;
+  return (
+    <details className="message-fold depth-2 running-work-process">
+      <summary>
+        工作过程 · {counts.key} 关键 · {counts.background} 过程
+        {usageLabel ? ` · ${usageLabel}` : ''}
+      </summary>
+      <div className="running-work-process-body">
+        <div className="running-work-process-meta">
+          <Badge variant="muted">{backend}</Badge>
+          {guidanceCount ? <Badge variant="warning">{guidanceCount} 条引导排队</Badge> : null}
+          {counts.debug ? <Badge variant="muted">{counts.debug} debug</Badge> : null}
+        </div>
+        <div className="stream-events-list inline">
+          {visibleEvents.map((event) => {
+            const presentation = presentStreamEvent(event);
+            const copyPayload = JSON.stringify(event.raw ?? { type: event.type, label: event.label, detail: event.detail }, null, 2);
+            return (
+              <details className={cx('stream-event', presentation.uiClass)} key={event.id} open={!presentation.initiallyCollapsed}>
+                <summary>
+                  <Badge variant={presentation.tone}>{event.label}</Badge>
+                  <span className="stream-event-type">{presentation.typeLabel}</span>
+                  {presentation.usageDetail ? <span className="stream-event-usage">{presentation.usageDetail}</span> : null}
+                  <span className="stream-event-detail compact">{presentation.shortDetail || '无详细文本'}</span>
+                </summary>
+                <div className="stream-event-expanded">
+                  {presentation.detail ? <pre>{presentation.detail}</pre> : <span>无额外详情。</span>}
+                  <button type="button" onClick={() => void navigator.clipboard?.writeText(copyPayload)}>复制 raw</button>
+                </div>
+              </details>
+            );
+          })}
+        </div>
+      </div>
+    </details>
+  );
+}
+
+function inlineObjectReferencesForMessage(message: SciForgeMessage, session: SciForgeSession, runId?: string) {
+  const run = runId ? session.runs.find((item) => item.id === runId) : undefined;
+  const runArtifactRefs = new Set((run?.objectReferences ?? [])
+    .filter((reference) => reference.kind === 'artifact')
+    .map((reference) => reference.ref.replace(/^artifact:/, '')));
+  const runArtifacts = session.artifacts
+    .filter((artifact) => runArtifactRefs.has(artifact.id) || artifact.metadata?.runId === runId)
+    .map((artifact) => objectReferenceForArtifactSummary(artifact, runId));
+  const structuredReferences = mergeObjectReferences(message.objectReferences ?? [], mergeObjectReferences(run?.objectReferences ?? [], runArtifacts), 32);
+  return mergeObjectReferences(objectReferencesFromInlineTokens(message.content, runId), structuredReferences, 40);
+}
+
+function objectReferencesFromInlineTokens(content: string, runId?: string) {
+  const references: ObjectReference[] = [];
+  const seen = new Set<string>();
+  const tokenPattern = /\b(?:(?:artifact|file|folder|run|execution-unit|scenario-package)::?[^\s)\]）>，。；、,;]+|https?:\/\/[^\s)\]）>，。；、]+)[^\s)\]）>，。；、,;]*/gi;
+  for (const match of content.matchAll(tokenPattern)) {
+    const raw = match[0].replace(/[.,;，。；、]+$/, '');
+    const reference = objectReferenceFromInlineToken(raw, runId);
+    if (!reference || seen.has(reference.ref)) continue;
+    seen.add(reference.ref);
+    references.push(reference);
+  }
+  return references;
+}
+
+function objectReferenceFromInlineToken(raw: string, runId?: string): ObjectReference | undefined {
+  if (/^https?:\/\//i.test(raw)) {
+    return {
+      id: inlineObjectReferenceId('url', raw),
+      title: inlineReferenceTitle(raw),
+      kind: 'url',
+      ref: `url:${raw}`,
+      runId,
+      actions: ['focus-right-pane', 'open-external', 'copy-path'],
+      status: 'external',
+      summary: raw,
+      provenance: { dataRef: raw },
+    };
+  }
+  const tokenMatch = raw.match(/^([a-z-]+)::?(.+)$/i);
+  if (!tokenMatch) return undefined;
+  const prefix = tokenMatch[1].toLowerCase() as ObjectReferenceKind;
+  if (!['artifact', 'file', 'folder', 'run', 'execution-unit', 'scenario-package'].includes(prefix)) return undefined;
+  const target = tokenMatch[2];
+  return {
+    id: inlineObjectReferenceId(prefix, raw),
+    title: inlineReferenceTitle(target),
+    kind: prefix,
+    ref: raw,
+    runId,
+    actions: inlineObjectReferenceActions(prefix),
+    status: 'available',
+    summary: target,
+    provenance: prefix === 'file' || prefix === 'folder' ? { path: target } : { dataRef: target },
+  };
+}
+
+function inlineObjectReferenceActions(kind: ObjectReferenceKind): ObjectAction[] {
+  if (kind === 'file' || kind === 'folder') return ['focus-right-pane', 'reveal-in-folder', 'copy-path', 'pin'];
+  if (kind === 'url') return ['focus-right-pane', 'open-external', 'copy-path'];
+  return ['focus-right-pane', 'inspect', 'copy-path', 'pin'];
+}
+
+function inlineObjectReferenceId(kind: ObjectReferenceKind, ref: string) {
+  return `inline-${kind}-${ref.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80)}`;
+}
+
+function inlineReferenceTitle(ref: string) {
+  try {
+    const value = decodeURIComponent(ref.replace(/^url:/i, ''));
+    const trimmed = value.replace(/[?#].*$/, '').replace(/\/$/, '');
+    return trimmed.split('/').pop() || value;
+  } catch {
+    return ref;
+  }
+}
+
+function unmentionedObjectReferencesForMessage(message: SciForgeMessage, session: SciForgeSession, runId?: string) {
+  const mentioned = new Set(linkifyObjectReferences(message.content, inlineObjectReferencesForMessage(message, session, runId))
+    .flatMap((piece) => piece.reference ? [piece.reference.ref] : []));
+  return inlineObjectReferencesForMessage(message, session, runId).filter((reference) => !mentioned.has(reference.ref));
+}
+
+function linkifyObjectReferences(content: string, references: ObjectReference[]) {
+  if (!content || !references.length) return [{ text: content }];
+  const candidates = objectReferenceLinkCandidates(references);
+  if (!candidates.length) return [{ text: content }];
+  const pieces: Array<{ text: string; reference?: ObjectReference }> = [];
+  let cursor = 0;
+  while (cursor < content.length) {
+    const match = nextObjectReferenceMatch(content, cursor, candidates);
+    if (!match) {
+      pieces.push({ text: content.slice(cursor) });
+      break;
+    }
+    if (match.index > cursor) pieces.push({ text: content.slice(cursor, match.index) });
+    pieces.push({ text: content.slice(match.index, match.index + match.key.length), reference: match.reference });
+    cursor = match.index + match.key.length;
+  }
+  return pieces.filter((piece) => piece.text.length > 0);
+}
+
+function nextObjectReferenceMatch(
+  content: string,
+  cursor: number,
+  candidates: Array<{ key: string; reference: ObjectReference }>,
+) {
+  let best: { index: number; key: string; reference: ObjectReference } | undefined;
+  for (const candidate of candidates) {
+    const index = content.indexOf(candidate.key, cursor);
+    if (index < 0) continue;
+    if (!best || index < best.index || (index === best.index && candidate.key.length > best.key.length)) {
+      best = { index, key: candidate.key, reference: candidate.reference };
+    }
+  }
+  return best;
+}
+
+function objectReferenceLinkCandidates(references: ObjectReference[]) {
+  const candidates: Array<{ key: string; reference: ObjectReference }> = [];
+  const seen = new Set<string>();
+  for (const reference of references) {
+    for (const key of objectReferenceLinkKeys(reference)) {
+      const trimmed = key.trim();
+      if (trimmed.length < 4 || seen.has(trimmed)) continue;
+      seen.add(trimmed);
+      candidates.push({ key: trimmed, reference });
+    }
+  }
+  return candidates.sort((left, right) => right.key.length - left.key.length);
+}
+
+function objectReferenceLinkKeys(reference: ObjectReference) {
+  const keys = [
+    reference.ref,
+    reference.ref.replace(/^file:/i, 'file::'),
+    reference.ref.replace(/^folder:/i, 'folder::'),
+    reference.ref.replace(/^artifact:/i, ''),
+    reference.title,
+    reference.provenance?.path,
+    reference.provenance?.dataRef,
+    reference.provenance?.path ? `file:${reference.provenance.path}` : undefined,
+    reference.provenance?.path ? `file::${reference.provenance.path}` : undefined,
+    reference.provenance?.dataRef ? `file:${reference.provenance.dataRef}` : undefined,
+    reference.provenance?.dataRef ? `file::${reference.provenance.dataRef}` : undefined,
+  ];
+  return keys.filter((key): key is string => Boolean(key && key.trim()));
+}
+
 function ObjectReferenceChips({
   references,
   activeRunId,
@@ -1663,6 +1834,166 @@ function ObjectReferenceChips({
   );
 }
 
+function RunExecutionProcess({
+  runId,
+  session,
+  trace,
+  onObjectFocus,
+}: {
+  runId: string;
+  session: SciForgeSession;
+  trace?: string;
+  onObjectFocus: (reference: ObjectReference) => void;
+}) {
+  const run = session.runs.find((item) => item.id === runId);
+  const units = executionUnitsForRun(run, session).slice(-8);
+  if (!run && !units.length && !trace) return null;
+  const auditObjectReferences = objectReferencesForAudit(run, session, runId);
+  const lines = executionProcessLines(run, units, auditObjectReferences, trace);
+  if (!lines.length) return null;
+  const content = lines.join('\n');
+  const references = mergeObjectReferences(
+    objectReferencesFromInlineTokens(content, runId),
+    auditObjectReferences,
+    40,
+  );
+  const summary = executionProcessSummary(units);
+  return (
+    <details className="message-fold depth-2 execution-process-fold">
+      <summary>执行审计 · {summary}</summary>
+      <div className="execution-process-body">
+        <MessageContent
+          content={content}
+          references={references}
+          onObjectFocus={onObjectFocus}
+        />
+      </div>
+    </details>
+  );
+}
+
+function executionUnitsForRun(run: SciForgeRun | undefined, session: SciForgeSession) {
+  if (!run) return [];
+  const artifactRefs = new Set((run.objectReferences ?? [])
+    .filter((reference) => reference.kind === 'artifact')
+    .map((reference) => reference.ref.replace(/^artifact:/i, '')));
+  const packageKey = run.scenarioPackageRef ? `${run.scenarioPackageRef.id}@${run.scenarioPackageRef.version}` : '';
+  const matched = session.executionUnits.filter((unit) => {
+    const unitPackageKey = unit.scenarioPackageRef ? `${unit.scenarioPackageRef.id}@${unit.scenarioPackageRef.version}` : '';
+    if (packageKey && unitPackageKey === packageKey) return true;
+    if (unit.outputArtifacts?.some((artifactId) => artifactRefs.has(artifactId))) return true;
+    if (unit.artifacts?.some((artifactId) => artifactRefs.has(artifactId))) return true;
+    return false;
+  });
+  return matched.length ? matched : session.executionUnits.filter((unit) => unit.status !== 'planned').slice(-6);
+}
+
+function objectReferencesForAudit(run: SciForgeRun | undefined, session: SciForgeSession, runId: string) {
+  if (!run) return [];
+  const runArtifactRefs = new Set((run.objectReferences ?? [])
+    .filter((reference) => reference.kind === 'artifact')
+    .map((reference) => reference.ref.replace(/^artifact:/i, '')));
+  const runArtifacts = session.artifacts
+    .filter((artifact) => runArtifactRefs.has(artifact.id) || artifact.metadata?.runId === runId)
+    .map((artifact) => objectReferenceForArtifactSummary(artifact, runId));
+  return mergeObjectReferences(run.objectReferences ?? [], runArtifacts, 40);
+}
+
+function executionProcessLines(
+  run: SciForgeRun | undefined,
+  units: RuntimeExecutionUnit[],
+  objectReferences: ObjectReference[],
+  trace?: string,
+) {
+  const lines: string[] = [];
+  if (run?.prompt) lines.push(`1. 接收任务：${compactAuditText(run.prompt, 160)}`);
+  units.forEach((unit) => {
+    const step = lines.length + 1;
+    const verb = executionUnitVerb(unit);
+    const target = executionUnitTarget(unit);
+    lines.push(`${step}. ${verb}：${unit.tool}${target ? `，${target}` : ''}。状态：${unit.status}${unit.time ? `，时间：${unit.time}` : ''}。`);
+    for (const detail of executionUnitDetails(unit)) lines.push(`   - ${detail}`);
+  });
+  for (const line of producedObjectLines(objectReferences)) lines.push(`${lines.length + 1}. ${line}`);
+  if (trace) lines.push(`${lines.length + 1}. Agent 思考与完整 trace：${compactAuditText(trace, 900)}`);
+  if (run?.response) lines.push(`${lines.length + 1}. 形成最终总结：${compactAuditText(run.response, 220)}`);
+  return lines.slice(0, 36);
+}
+
+function producedObjectLines(references: ObjectReference[]) {
+  return references
+    .filter((reference) => reference.kind === 'artifact' || reference.kind === 'file' || reference.kind === 'folder')
+    .slice(0, 8)
+    .map((reference) => `产生/引用对象：${reference.title}（${reference.ref}）${reference.summary ? `，${compactAuditText(reference.summary, 120)}` : ''}`);
+}
+
+function executionProcessSummary(units: RuntimeExecutionUnit[]) {
+  const counts = units.reduce((memo, unit) => {
+    const verb = executionUnitVerb(unit);
+    if (verb === '运行程序') memo.program += 1;
+    else if (verb === '探索文件') memo.explore += 1;
+    else if (verb === '编辑文件') memo.edit += 1;
+    else memo.other += 1;
+    return memo;
+  }, { program: 0, explore: 0, edit: 0, other: 0 });
+  const parts = [
+    counts.program ? `运行 ${counts.program}` : '',
+    counts.explore ? `探索 ${counts.explore}` : '',
+    counts.edit ? `编辑 ${counts.edit}` : '',
+    counts.other ? `其他 ${counts.other}` : '',
+  ].filter(Boolean);
+  return parts.length ? parts.join(' · ') : '无执行单元';
+}
+
+function executionUnitVerb(unit: RuntimeExecutionUnit) {
+  const text = `${unit.tool} ${unit.entrypoint || ''} ${unit.params || ''} ${unit.codeRef || ''} ${unit.diffRef || ''}`.toLowerCase();
+  if (/edit|write|patch|apply|diff|save|mutate|create|生成|编辑|写入|修改/.test(text)) return '编辑文件';
+  if (/read|cat|sed|rg|grep|ls|find|open|inspect|explore|读取|检索|查看|探索/.test(text)) return '探索文件';
+  if (/python|node|npm|pnpm|yarn|tsx|pytest|vitest|test|build|run|exec|运行|执行/.test(text)) return '运行程序';
+  return '执行步骤';
+}
+
+function executionUnitTarget(unit: RuntimeExecutionUnit) {
+  const refs = [
+    formatExecutionRef(unit.entrypoint),
+    formatExecutionRef(unit.codeRef),
+    formatExecutionRef(unit.diffRef),
+    formatExecutionRef(unit.outputRef),
+    formatExecutionRef(unit.stdoutRef),
+    formatExecutionRef(unit.stderrRef),
+    ...(unit.inputData ?? []).map(formatExecutionRef),
+    ...(unit.outputArtifacts ?? []).map((artifactId) => `artifact:${artifactId}`),
+  ].filter(Boolean).slice(0, 4);
+  return refs.length ? `涉及 ${refs.join('、')}` : '';
+}
+
+function executionUnitDetails(unit: RuntimeExecutionUnit) {
+  const details = [
+    unit.params ? `参数：${compactAuditText(unit.params, 180)}` : '',
+    unit.codeRef ? `代码位置：${formatExecutionRef(unit.codeRef)}` : '',
+    unit.code ? `执行代码：${compactAuditText(unit.code, 220)}` : '',
+    unit.diffRef ? `编辑 diff：${formatExecutionRef(unit.diffRef)}` : '',
+    unit.stdoutRef ? `标准输出：${formatExecutionRef(unit.stdoutRef)}` : '',
+    unit.stderrRef ? `错误输出：${formatExecutionRef(unit.stderrRef)}` : '',
+    unit.outputRef ? `输出：${formatExecutionRef(unit.outputRef)}` : '',
+    unit.patchSummary ? `修改摘要：${unit.patchSummary}` : '',
+    unit.failureReason ? `失败原因：${unit.failureReason}` : '',
+  ];
+  return details.filter(Boolean).slice(0, 5);
+}
+
+function formatExecutionRef(value?: string) {
+  if (!value) return '';
+  if (/^(artifact|file|folder|run|execution-unit|scenario-package)::?/i.test(value) || /^https?:\/\//i.test(value)) return value;
+  if (/^\.?\/?[\w.-/]+(?:\.[a-z0-9]+)(?:[#?].*)?$/i.test(value)) return `file::${value.replace(/^\.\//, '')}`;
+  return value;
+}
+
+function compactAuditText(value: string, limit: number) {
+  const text = value.replace(/\s+/g, ' ').trim();
+  return text.length > limit ? `${text.slice(0, limit - 1)}...` : text;
+}
+
 function RunKeyInfo({
   runId,
   session,
@@ -1678,47 +2009,30 @@ function RunKeyInfo({
   const artifacts = session.artifacts
     .filter((artifact) => artifactRefIds.has(artifact.id) || artifact.metadata?.runId === runId)
     .slice(0, 4);
-  const units = session.executionUnits
-    .filter((unit) => unit.status !== 'planned')
-    .slice(0, 3);
+  const artifactReferences = artifacts.map((artifact) => objectReferenceForArtifactSummary(artifact, runId));
   const claims = session.claims.slice(0, 3);
-  if (!artifacts.length && !claims.length && !units.length) return null;
+  if (!artifacts.length && !claims.length) return null;
+  const objectNames = artifacts.map(artifactTitle).join('、') || '暂无新对象';
   return (
     <div className="message-key-info" aria-label="本轮关键信息">
       <div className="message-key-info-head">
         <strong>关键信息</strong>
-        <span>{artifacts.length} artifacts · {claims.length} claims · {units.length} units</span>
+        <span>{artifacts.length} objects · {claims.length} claims</span>
       </div>
+      <MessageContent
+        content={`本轮回答保留了 ${artifacts.length} 个关键对象和 ${claims.length} 条关键判断。关键对象包括 ${objectNames}；对象名可直接点击，在右侧预览。执行代码、程序、探索文件、编辑文件、trace 和输出对象统一收进下方“执行审计”。`}
+        references={artifactReferences}
+        onObjectFocus={onObjectFocus ?? (() => undefined)}
+      />
       {claims.length ? (
         <div className="message-key-list">
           {claims.map((claim) => (
-            <div key={claim.id} className="message-key-row">
-              <strong>{claim.text}</strong>
-              <span>{claim.evidenceLevel} · confidence {Math.round(claim.confidence * 100)}%</span>
-            </div>
+            <p key={claim.id} className="message-key-row">
+              <span>判断：{claim.text}</span>
+              <small>{claim.evidenceLevel} · confidence {Math.round(claim.confidence * 100)}%</small>
+            </p>
           ))}
         </div>
-      ) : null}
-      {artifacts.length ? (
-        <div className="message-key-list">
-          {artifacts.map((artifact, index) => {
-            const ref = objectReferenceForArtifactSummary(artifact, runId);
-            return (
-              <button key={`${artifact.id || artifact.type}-${artifact.path || artifact.dataRef || index}`} type="button" className="message-key-row as-button" onClick={() => onObjectFocus?.(ref)}>
-                <strong>{artifactTitle(artifact)}</strong>
-                <span>{artifact.type} · {artifact.dataRef || artifact.path || artifact.id}</span>
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-      {units.length ? (
-        <details className="message-secondary-info">
-          <summary>展开次要执行信息</summary>
-          {units.map((unit) => (
-            <code key={unit.id}>{unit.status} · {unit.tool} · {unit.outputRef || unit.codeRef || unit.id}</code>
-          ))}
-        </details>
       ) : null}
     </div>
   );

@@ -27,6 +27,8 @@ export function ScenarioBuilderPanel({
   expanded,
   onToggle,
   onChange,
+  agentRuntimeComponentIds,
+  onAgentRuntimeComponentIdsChange,
 }: {
   scenarioId: ScenarioId;
   scenario: ScenarioRuntimeOverride;
@@ -35,6 +37,9 @@ export function ScenarioBuilderPanel({
   expanded: boolean;
   onToggle: () => void;
   onChange: (override: ScenarioRuntimeOverride) => void;
+  /** When set (e.g. workbench), exposes AgentServer `availableComponentIds` as the same selectable component list as the scenario UI allowlist. */
+  agentRuntimeComponentIds?: string[];
+  onAgentRuntimeComponentIdsChange?: (ids: string[]) => void;
 }) {
   const initialSelection = useMemo(() => defaultElementSelectionForScenario(scenarioId, scenario), [scenarioId]);
   const [selection, setSelection] = useState<ScenarioElementSelection>(initialSelection);
@@ -105,14 +110,25 @@ export function ScenarioBuilderPanel({
       allowedComponents: Array.from(new Set([...scenario.allowedComponents, ...next])),
     });
   }
+  function patchRuntimeSelection(key: 'selectedSkillIds' | 'selectedToolIds', values: string[]) {
+    patch(key === 'selectedSkillIds'
+      ? { selectedSkillIds: unique(values) }
+      : { selectedToolIds: unique(values) });
+  }
   function toggleSelectionList(key: 'selectedSkillIds' | 'selectedToolIds' | 'selectedArtifactTypes' | 'selectedFailurePolicyIds', value: string) {
+    const next = toggleList((selection[key] ?? []) as string[], value);
     setSelection((current) => ({
       ...current,
-      [key]: toggleList((current[key] ?? []) as string[], value),
+      [key]: key === 'selectedSkillIds' || key === 'selectedToolIds'
+        ? next
+        : toggleList((current[key] ?? []) as string[], value),
     }));
+    if (key === 'selectedSkillIds' || key === 'selectedToolIds') patchRuntimeSelection(key, next);
   }
   function setSelectionList(key: 'selectedSkillIds' | 'selectedToolIds' | 'selectedArtifactTypes' | 'selectedFailurePolicyIds', values: string[]) {
-    setSelection((current) => ({ ...current, [key]: unique(values) }));
+    const next = unique(values);
+    setSelection((current) => ({ ...current, [key]: next }));
+    if (key === 'selectedSkillIds' || key === 'selectedToolIds') patchRuntimeSelection(key, next);
   }
   async function saveCompiled(status: 'draft' | 'published') {
     try {
@@ -212,8 +228,32 @@ export function ScenarioBuilderPanel({
             </label>
           </div>
           <div className={cx('builder-step-panel', builderStep !== 'elements' && 'muted')}>
+            {onAgentRuntimeComponentIdsChange ? (
+              <ElementSelector
+                title="Agent 运行时 UI 白名单"
+                description="发往 AgentServer 的 availableComponentIds；每行包含组件 ID、标题与说明。与左侧「组件工作台」勾选列表一致。"
+                options={componentOptions.map((component) => {
+                  const popover = componentElementPopover(component.componentId);
+                  return {
+                    id: component.componentId,
+                    label: component.label,
+                    detail: component.description,
+                    meta: popover.meta,
+                  };
+                })}
+                selected={agentRuntimeComponentIds ?? []}
+                onToggle={(id) => {
+                  const current = agentRuntimeComponentIds ?? [];
+                  const next = current.includes(id) ? current.filter((item) => item !== id) : [...current, id];
+                  onAgentRuntimeComponentIdsChange(unique(next));
+                }}
+                onSelectMany={(ids) => onAgentRuntimeComponentIdsChange(unique([...(agentRuntimeComponentIds ?? []), ...ids]))}
+                onClearMany={(ids) => onAgentRuntimeComponentIdsChange((agentRuntimeComponentIds ?? []).filter((item) => !ids.includes(item)))}
+              />
+            ) : null}
             <ElementSelector
-              title="Components"
+              title="场景 UI allowlist（Scenario package）"
+              description="每行一个可渲染 UI 组件；勾选项写入 Scenario 的 defaultComponents，用于编译 UI plan 与默认视图。"
               options={componentOptions.map((component) => {
                 const popover = componentElementPopover(component.componentId);
                 return {
@@ -356,12 +396,16 @@ export function defaultElementSelectionForScenario(scenarioId: ScenarioId, scena
     description: scenario.description,
     skillDomain: scenario.skillDomain,
     scenarioMarkdown: scenario.scenarioMarkdown,
-    selectedSkillIds: compiledHints.recommendedSkillIds?.length
+    selectedSkillIds: scenario.selectedSkillIds?.length
+      ? scenario.selectedSkillIds
+      : compiledHints.recommendedSkillIds?.length
       ? compiledHints.recommendedSkillIds
       : recommendation.selectedSkillIds.length
       ? recommendation.selectedSkillIds
       : [`agentserver.generate.${scenario.skillDomain}`],
-    selectedToolIds: recommendation.selectedToolIds.length
+    selectedToolIds: scenario.selectedToolIds?.length
+      ? scenario.selectedToolIds
+      : recommendation.selectedToolIds.length
       ? recommendation.selectedToolIds
       : elementRegistry.tools.filter((tool) => tool.skillDomains.includes(scenario.skillDomain)).slice(0, 5).map((tool) => tool.id),
     selectedArtifactTypes: compiledHints.recommendedArtifactTypes?.length
@@ -392,6 +436,8 @@ export function scenarioPackageToOverride(pkg: { scenario: { title: string; desc
     defaultComponents,
     allowedComponents: Array.from(new Set([...base.componentPolicy.allowedComponents, ...defaultComponents])),
     fallbackComponent: pkg.scenario.fallbackComponentId || base.componentPolicy.fallbackComponent,
+    selectedSkillIds: (pkg.scenario as typeof pkg.scenario & { selectedSkillIds?: string[] }).selectedSkillIds,
+    selectedToolIds: (pkg.scenario as typeof pkg.scenario & { selectedToolIds?: string[] }).selectedToolIds,
     scenarioPackageRef: packageLike.id && packageLike.version ? { id: packageLike.id, version: packageLike.version, source: 'workspace' } : undefined,
     skillPlanRef: packageLike.skillPlan?.id,
     uiPlanRef: packageLike.uiPlan?.id,
@@ -466,6 +512,7 @@ function ElementPopover({ label, detail, meta }: { label: string; detail: string
 
 function ElementSelector({
   title,
+  description,
   options,
   selected,
   onToggle,
@@ -473,6 +520,7 @@ function ElementSelector({
   onClearMany,
 }: {
   title: string;
+  description?: string;
   options: Array<{ id: string; label: string; detail?: string; meta?: string }>;
   selected: string[];
   onToggle: (id: string) => void;
@@ -506,6 +554,7 @@ function ElementSelector({
         </button>
         <div className="element-selector-title-block">
           <span>{title}</span>
+          {description ? <p>{description}</p> : null}
           <small>{selectedCount} selected · {visibleOptions.length}/{options.length} shown{excludedVisibleCount ? ` · ${excludedVisibleCount} excluded` : ''}</small>
         </div>
       </div>

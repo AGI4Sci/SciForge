@@ -10,6 +10,7 @@ import { composeRuntimeUiManifest } from './runtime-ui-manifest.js';
 import { cleanUrl, clipForAgentServerJson, clipForAgentServerPrompt, errorMessage, excerptAroundFailureLine, extractLikelyErrorLine, generatedTaskArchiveRel, hashJson, headForAgentServer, isRecord, isTaskInputRel, readTextIfExists, safeWorkspaceRel, summarizeTextChange, tailForAgentServer, toRecordList, toStringList, uniqueStrings } from './gateway-utils.js';
 import { normalizeBackendHandoff } from './workspace-task-input.js';
 import { normalizeGatewayRequest as normalizeGatewayRequestFromModule } from './gateway/gateway-request.js';
+import { toolPackageManifests } from '../../packages/tools';
 
 const SKILL_DOMAIN_SET = new Set<SciForgeSkillDomain>(['literature', 'structure', 'omics', 'knowledge']);
 const AGENT_BACKEND_ANSWER_PRINCIPLE = [
@@ -584,6 +585,7 @@ function normalizeGatewayRequest(body: Record<string, unknown>): GatewayRequest 
     availableSkills: Array.isArray(body.availableSkills) ? body.availableSkills.map(String) : undefined,
     expectedArtifactTypes: Array.isArray(body.expectedArtifactTypes) ? uniqueStrings(body.expectedArtifactTypes.map(String)) : undefined,
     selectedComponentIds: Array.isArray(body.selectedComponentIds) ? uniqueStrings(body.selectedComponentIds.map(String)) : undefined,
+    selectedToolIds: Array.isArray(body.selectedToolIds) ? uniqueStrings(body.selectedToolIds.map(String)) : undefined,
   };
 }
 
@@ -2159,6 +2161,7 @@ async function requestAgentServerGeneration(params: {
       contextEnvelope,
       workspaceTreeSummary: compactContext.workspaceTreeSummary,
       availableSkills: compactContext.availableSkills,
+      availableTools: summarizeToolsForAgentServer(params.request),
       artifactSchema: expectedArtifactSchema(params.request),
       uiManifestContract: { expectedKeys: ['componentId', 'artifactRef', 'encoding', 'layout', 'compare'] },
       uiStateSummary: compactContext.uiStateSummary,
@@ -3582,7 +3585,7 @@ async function buildCompactRepairContext(params: {
     projectFacts: {
       project: 'SciForge',
       runtimeRole: 'scenario-first AI4Science workspace runtime',
-      taskCodePolicy: 'Generated tasks live in workspace .sciforge/tasks and must be runnable from inputPath/outputPath.',
+      taskCodePolicy: 'Generated tasks live in workspace .sciforge/tasks and must be runnable from inputPath/outputPath. They may compose installed/workspace tools when those tools are more reliable than handwritten code.',
       completionPolicy: 'The final user-visible result must come from executing the repaired task and writing a valid ToolPayload, not from code generation alone.',
       toolPayloadContract: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'displayIntent', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'],
     },
@@ -3707,6 +3710,14 @@ function buildAgentServerGenerationPrompt(request: {
     manifestPath?: string;
     scopeDeclaration?: Record<string, unknown>;
   }>;
+  availableTools?: Array<{
+    id: string;
+    label: string;
+    toolType: string;
+    description: string;
+    producesArtifactTypes: string[];
+    selected: boolean;
+  }>;
   artifactSchema: Record<string, unknown>;
   uiManifestContract: Record<string, unknown>;
   uiStateSummary?: Record<string, unknown>;
@@ -3742,7 +3753,7 @@ function buildAgentServerGenerationPrompt(request: {
     'If a prior task already exists and the user asks to continue, repair, or rerun it, prefer returning taskFiles that reference that existing workspace task path or a minimal patched task instead of starting an unrelated fresh analysis.',
     'Generate fresh task code only when the current turn truly asks for new work or no prior executable artifact can satisfy the request.',
     'Put generated task paths under .sciforge/tasks when possible. SciForge will archive any returned taskFiles under .sciforge/tasks/<run-id>/ before execution.',
-    'Prefer installed or workspace tools when they genuinely fit, but write adapter code as needed so the run is reproducible from inputPath and outputPath.',
+    'Do not force self-contained task code when a better installed/workspace tool exists. Prefer the best available tool, record the tool id/version/command in ExecutionUnit, and write only the adapter/glue needed for reproducibility from inputPath and outputPath.',
     'Large-file contract: uploaded PDFs, images, spreadsheets, binary blobs, extracted full text, and large logs must stay as workspace refs. Do not inline base64, do not print full extracted text to stdout/stderr, and do not paste full document text into final JSON.',
     'For uploaded PDFs or long documents, generated tasks should read the file by path/dataRef, write any full extraction to .sciforge/artifacts or .sciforge/task-results, and return only bounded excerpts, section summaries, page/figure locators, hashes, and clickable file/artifact refs.',
     'Bibliographic verification contract: never mark a PMID, DOI, trial id, citation, or paper record as corrected/verified unless the returned title, year, journal, and identifier correspond to the same work as the source claim.',
@@ -3790,6 +3801,38 @@ function summarizeSkillsForAgentServer(
     entrypointType: skill.manifest.entrypoint.type,
     manifestPath: skill.manifestPath,
   }));
+}
+
+function summarizeToolsForAgentServer(request: GatewayRequest) {
+  const selectedIds = new Set(uniqueStrings([
+    ...(request.selectedToolIds ?? []),
+    ...toStringList(request.uiState?.selectedToolIds),
+  ]));
+  const selectedTools = toolPackageManifests.filter((tool) => selectedIds.has(tool.id));
+  const domainTools = toolPackageManifests
+    .filter((tool) => (tool.skillDomains as readonly string[]).includes(request.skillDomain))
+    .slice(0, 12);
+  return uniqueById([...selectedTools, ...domainTools])
+    .slice(0, 16)
+    .map((tool) => ({
+      id: tool.id,
+      label: tool.label,
+      toolType: tool.toolType,
+      description: clipForAgentServerPrompt(tool.description, 420) || '',
+      producesArtifactTypes: [...(tool.producesArtifactTypes ?? [])],
+      selected: selectedIds.has(tool.id),
+    }));
+}
+
+function uniqueById<T extends { id: string }>(values: readonly T[]) {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const value of values) {
+    if (seen.has(value.id)) continue;
+    seen.add(value.id);
+    out.push(value);
+  }
+  return out;
 }
 
 function summarizeTaskAttemptsForAgentServer(attempts: unknown[]) {
@@ -3879,6 +3922,8 @@ function summarizeUiStateForAgentServer(uiState: unknown, mode: AgentServerConte
       : undefined,
     scopeCheck: isRecord(uiState.scopeCheck) ? clipForAgentServerJson(uiState.scopeCheck, 3) : undefined,
     selectedComponentIds: toStringList(uiState.selectedComponentIds),
+    selectedSkillIds: toStringList(uiState.selectedSkillIds),
+    selectedToolIds: toStringList(uiState.selectedToolIds),
     recentRuns: Array.isArray(uiState.recentRuns)
       ? uiState.recentRuns.slice(-4).map((entry) => clipForAgentServerJson(entry, 2))
       : undefined,
@@ -3976,7 +4021,7 @@ function buildContextEnvelope(
     projectFacts: mode === 'full' ? {
       project: 'SciForge',
       runtimeRole: 'scenario-first AI4Science workspace runtime',
-      taskCodePolicy: 'Generate or repair task code in the active workspace; do not rely on fixed source-tree scientific task scripts.',
+      taskCodePolicy: 'Generate or repair task code in the active workspace, but compose installed/workspace tools when they are a better fit than hand-written code.',
       toolPayloadContract: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'displayIntent', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'],
     } : {
       project: 'SciForge',
@@ -4021,6 +4066,7 @@ function buildContextEnvelope(
       uiPlanRef: request.uiPlanRef,
       expectedArtifactTypes: expectedArtifactTypesForRequest(request),
       selectedComponentIds: selectedComponentIdsForRequest(request),
+      selectedToolIds: request.selectedToolIds ?? toStringList(request.uiState?.selectedToolIds),
       selectedSkill: params.selectedSkill ? {
         id: params.selectedSkill.id,
         kind: params.selectedSkill.kind,

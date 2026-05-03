@@ -5,6 +5,7 @@ import {
   type AlignmentContractRecord,
   makeId,
   nowIso,
+  type GithubSyncedOpenIssueRecord,
   type SciForgeMessage,
   type SciForgeSession,
   type SciForgeWorkspaceState,
@@ -51,6 +52,7 @@ export function createSession(scenarioId: ScenarioInstanceId, title = '新聊天
     artifacts: [],
     notebook: [],
     versions: [],
+    hiddenResultSlotIds: [],
     updatedAt: now,
   };
 }
@@ -74,6 +76,9 @@ function migrateSession(value: unknown, scenarioId: ScenarioInstanceId): SciForg
       artifacts: Array.isArray(raw.artifacts) ? raw.artifacts : [],
       notebook: Array.isArray(raw.notebook) ? raw.notebook : [],
       versions: Array.isArray(raw.versions) ? raw.versions : [],
+      hiddenResultSlotIds: Array.isArray(raw.hiddenResultSlotIds)
+        ? raw.hiddenResultSlotIds.filter((id): id is string => typeof id === 'string')
+        : [],
       updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : now,
     };
   }
@@ -102,6 +107,7 @@ export function createInitialWorkspaceState(): SciForgeWorkspaceState {
     alignmentContracts: [],
     feedbackComments: [],
     feedbackRequests: [],
+    githubSyncedOpenIssues: [],
     updatedAt: now,
   };
 }
@@ -142,6 +148,9 @@ export function parseWorkspaceState(value: unknown): SciForgeWorkspaceState {
       : [],
     feedbackRequests: Array.isArray(raw.feedbackRequests)
       ? raw.feedbackRequests.filter(isFeedbackRequest)
+      : [],
+    githubSyncedOpenIssues: Array.isArray(raw.githubSyncedOpenIssues)
+      ? raw.githubSyncedOpenIssues.filter(isGithubSyncedOpenIssue)
       : [],
     timelineEvents: Array.isArray(raw.timelineEvents)
       ? raw.timelineEvents.filter(isTimelineEventRecord)
@@ -201,6 +210,21 @@ function isFeedbackComment(value: unknown) {
     && record.runtime !== null;
 }
 
+function isGithubSyncedOpenIssue(value: unknown): value is GithubSyncedOpenIssueRecord {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return record.schemaVersion === 1
+    && typeof record.number === 'number'
+    && Number.isFinite(record.number)
+    && typeof record.title === 'string'
+    && typeof record.body === 'string'
+    && typeof record.htmlUrl === 'string'
+    && typeof record.updatedAt === 'string'
+    && typeof record.syncedAt === 'string'
+    && Array.isArray(record.labels)
+    && record.labels.every((label): label is string => typeof label === 'string');
+}
+
 function isFeedbackRequest(value: unknown) {
   if (typeof value !== 'object' || value === null) return false;
   const record = value as Record<string, unknown>;
@@ -252,6 +276,7 @@ export function compactWorkspaceStateForStorage(
     archivedSessions: (state.archivedSessions ?? []).slice(0, limits.archived).map((session) => compactSessionForStorage(session, limits)),
     feedbackComments: state.feedbackComments?.slice(0, mode === 'minimal' ? 20 : 120),
     feedbackRequests: state.feedbackRequests?.slice(0, mode === 'minimal' ? 8 : 40),
+    githubSyncedOpenIssues: state.githubSyncedOpenIssues?.slice(0, mode === 'minimal' ? 40 : 120),
     timelineEvents: state.timelineEvents?.slice(0, limits.timeline),
     reusableTaskCandidates: state.reusableTaskCandidates?.slice(0, limits.reusable),
   };

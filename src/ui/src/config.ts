@@ -7,6 +7,8 @@ export const defaultSciForgeConfig: SciForgeConfig = {
   agentServerBaseUrl: 'http://127.0.0.1:18080',
   workspaceWriterBaseUrl: 'http://127.0.0.1:5174',
   workspacePath: '/Applications/workspace/ailab/research/app/SciForge/workspace',
+  /** Default feedback inbox target; override in settings if you fork or use another repo. */
+  feedbackGithubRepo: 'AGI4Sci/SciForge',
   theme: 'dark',
   agentBackend: 'codex',
   modelProvider: 'native',
@@ -33,11 +35,30 @@ export function saveSciForgeConfig(config: SciForgeConfig) {
   window.localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(config));
 }
 
+export function normalizeFeedbackGithubRepo(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  let s = value.trim().replace(/\.git$/i, '');
+  if (!s) return undefined;
+  const fromUrl = /github\.com\/([^/]+)\/([^/?#]+)/i.exec(s);
+  if (fromUrl) return `${fromUrl[1]}/${fromUrl[2]}`;
+  const slash = /^([\w.-]+)\/([\w.-]+)$/.exec(s.replace(/^\/+/, ''));
+  return slash ? `${slash[1]}/${slash[2]}` : undefined;
+}
+
+export function normalizeFeedbackGithubToken(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const t = value.trim();
+  return t ? t : undefined;
+}
+
 export function normalizeConfig(value: unknown): SciForgeConfig {
   const raw = typeof value === 'object' && value !== null ? value as Partial<SciForgeConfig> : {};
+  const { feedbackGithubRepo: rawFeedbackRepo, feedbackGithubToken: rawFeedbackToken, ...rawRest } = raw;
+  const feedbackGithubRepo = normalizeFeedbackGithubRepo(rawFeedbackRepo);
+  const feedbackGithubToken = normalizeFeedbackGithubToken(rawFeedbackToken);
   return {
     ...defaultSciForgeConfig,
-    ...raw,
+    ...rawRest,
     schemaVersion: 1,
     agentServerBaseUrl: cleanUrl(raw.agentServerBaseUrl) || defaultSciForgeConfig.agentServerBaseUrl,
     workspaceWriterBaseUrl: cleanUrl(raw.workspaceWriterBaseUrl) || defaultSciForgeConfig.workspaceWriterBaseUrl,
@@ -55,6 +76,8 @@ export function normalizeConfig(value: unknown): SciForgeConfig {
       ? Math.max(1_000, Math.trunc(raw.maxContextWindowTokens))
       : defaultSciForgeConfig.maxContextWindowTokens,
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString(),
+    ...(feedbackGithubRepo ? { feedbackGithubRepo } : {}),
+    ...(feedbackGithubToken ? { feedbackGithubToken } : {}),
   };
 }
 

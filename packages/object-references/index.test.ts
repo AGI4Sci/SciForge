@@ -50,6 +50,7 @@ const fileRef: ObjectReference = {
   provenance: { producer: 'workspace-writer' },
 };
 assert.equal(pathForObjectReference(fileRef, session), 'reports/final.md');
+assert.equal(pathForObjectReference({ ...fileRef, ref: 'file::.sciforge/artifacts/pdfs/2604.28185v1.pdf' }, session), '.sciforge/artifacts/pdfs/2604.28185v1.pdf');
 assert.equal(syntheticArtifactForObjectReference(fileRef, 'literature-evidence-review')?.type, 'research-report');
 assert.equal(artifactTypeForPath('assets/model.pdb', 'file'), 'structure-summary');
 

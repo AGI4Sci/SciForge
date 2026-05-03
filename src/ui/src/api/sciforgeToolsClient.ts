@@ -49,6 +49,8 @@ export async function sendSciForgeToolMessage(
       ? input.scenarioOverride.defaultComponents
       : SCENARIO_SPECS[builtInScenarioId].componentPolicy.defaultComponents);
   const selectedComponentIds = selectedComponentsForCurrentTurn(input.prompt, configuredComponentIds);
+  const selectedSkillIds = selectedRuntimeSkillIds(input, skillDomain);
+  const selectedToolIds = selectedRuntimeToolIds(input);
   const expectedArtifactTypes = expectedArtifactsForCurrentTurn({
     scenarioId: builtInScenarioId,
     prompt: input.prompt,
@@ -111,7 +113,8 @@ export async function sendSciForgeToolMessage(
         roleView: input.roleView,
         artifacts: artifactSummary,
         references: referenceSummary,
-        availableSkills: [`agentserver.generate.${skillDomain}`],
+        availableSkills: selectedSkillIds,
+        selectedToolIds,
         expectedArtifactTypes,
         selectedComponentIds,
         availableComponentIds: configuredComponentIds,
@@ -139,6 +142,8 @@ export async function sendSciForgeToolMessage(
           expectedArtifactTypes,
           selectedComponentIds,
           availableComponentIds: configuredComponentIds,
+          selectedSkillIds,
+          selectedToolIds,
           artifactExpectationMode: expectedArtifactTypes.length ? 'explicit-current-turn' : 'backend-decides',
           rawUserPrompt: input.prompt,
           contextIsolation: contextPolicy,
@@ -786,6 +791,17 @@ function uniqueStrings(values: Array<string | undefined>) {
     out.push(value);
   }
   return out;
+}
+
+function selectedRuntimeSkillIds(input: SendAgentMessageInput, skillDomain: string) {
+  return uniqueStrings([
+    ...(input.scenarioOverride?.selectedSkillIds ?? []),
+    `agentserver.generate.${skillDomain}`,
+  ]);
+}
+
+function selectedRuntimeToolIds(input: SendAgentMessageInput) {
+  return uniqueStrings(input.scenarioOverride?.selectedToolIds ?? []);
 }
 
 function summarizeSciForgeReferences(input: SendAgentMessageInput) {

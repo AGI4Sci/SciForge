@@ -22,4 +22,18 @@ export const manifest: UIComponentManifest = {
     readmePath: 'packages/ui-components/network-graph/README.md',
     agentSummary: 'Use for knowledge-graph artifacts. Requires nodes and edges.',
   },
+  workbenchDemo: {
+    artifactType: 'knowledge-graph',
+    artifactData: {
+      nodes: [
+        { id: 'g1', label: 'Gene A', type: 'gene' },
+        { id: 'g2', label: 'Gene B', type: 'gene' },
+        { id: 'd1', label: 'Drug X', type: 'drug' },
+      ],
+      edges: [
+        { source: 'g1', target: 'g2', relation: 'ppi', evidenceLevel: 'database', confidence: 0.81 },
+        { source: 'd1', target: 'g1', relation: 'targets', evidenceLevel: 'review', confidence: 0.62 },
+      ],
+    },
+  },
 };
