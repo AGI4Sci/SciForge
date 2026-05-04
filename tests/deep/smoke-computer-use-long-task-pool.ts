@@ -232,16 +232,21 @@ try {
     operator: 'Codex smoke',
     dryRun: true,
     maxSteps: 1,
+    maxConcurrency: 2,
     actionsJson: smokeActionsJson,
     now: new Date('2026-05-04T13:00:00.000Z'),
   });
   assert.equal(matrixRun.status, 'passed');
+  assert.equal(matrixRun.executionPlan?.mode, 'parallel-analysis');
+  assert.equal(matrixRun.executionPlan?.maxConcurrency, 2);
+  assert.equal(matrixRun.executionPlan?.realGuiSerialized, true);
   assert.equal(matrixRun.preflight?.ok, true);
   assert.deepEqual(matrixRun.passedScenarioIds, ['CU-LONG-001', 'CU-LONG-006']);
   assert.deepEqual(matrixRun.repairNeededScenarioIds, []);
   assert.equal((await stat(matrixRun.summaryPath)).isFile(), true);
   const matrixSummary = await readFile(matrixRun.summaryPath, 'utf8');
   assert.match(matrixSummary, /sciforge\.computer-use-long\.matrix-summary\.v1/);
+  assert.match(matrixSummary, /parallel-analysis/);
   assert.match(matrixSummary, /CU-LONG-001/);
   assert.match(matrixSummary, /CU-LONG-006/);
   assert.doesNotMatch(matrixSummary, /data:image|;base64,/i);
@@ -270,6 +275,7 @@ try {
     now: new Date('2026-05-04T13:10:00.000Z'),
   });
   assert.equal(blockedMatrix.status, 'repair-needed');
+  assert.equal(blockedMatrix.executionPlan?.mode, 'parallel-analysis');
   assert.equal(blockedMatrix.preflight?.ok, false);
   assert.deepEqual(blockedMatrix.results, []);
   assert.deepEqual(blockedMatrix.repairNeededScenarioIds, ['CU-LONG-001']);
@@ -377,6 +383,14 @@ const trace = {
     actionSchema: ['click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait'],
     appSpecificShortcuts: [],
     inputChannel: 'generic-mouse-keyboard',
+    inputChannelContract: {
+      type: 'generic-mouse-keyboard',
+      pointerKeyboardOwnership: 'virtual-dry-run-channel',
+      pointerMode: 'virtual-no-user-pointer-movement',
+      keyboardMode: 'virtual-no-user-keyboard-events',
+      userDeviceImpact: 'none',
+      highRiskConfirmationRequired: true,
+    },
     coordinateContract: {
       planner: 'target descriptions only',
       grounderOutput: 'target-window screenshot coordinates',
@@ -472,6 +486,14 @@ const plannerOnlyTrace = {
     actionSchema: ['click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait'],
     appSpecificShortcuts: [],
     inputChannel: 'generic-mouse-keyboard',
+    inputChannelContract: {
+      type: 'generic-mouse-keyboard',
+      pointerKeyboardOwnership: 'virtual-dry-run-channel',
+      pointerMode: 'virtual-no-user-pointer-movement',
+      keyboardMode: 'virtual-no-user-keyboard-events',
+      userDeviceImpact: 'none',
+      highRiskConfirmationRequired: true,
+    },
     coordinateContract: {
       planner: 'target descriptions only',
       grounderOutput: 'target-window screenshot coordinates',

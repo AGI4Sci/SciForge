@@ -9,7 +9,7 @@ import { captureDisplays, pixelDiffForScreenshotSets, toTraceScreenshotRef, vali
 import { executeGenericDesktopAction, executorBoundary } from './computer-use/executor.js';
 import type { ComputerUseConfig as VisionSenseConfig, GenericVisionAction, GroundingResolution, LoopStep, PlannerContractIssue, ScreenshotRef, TraceWindowTarget, VisionPlannerConfig } from './computer-use/types.js';
 import { booleanConfig, detectCaptureDisplays, envOrValue, extractChatCompletionContent, extractJsonObject, isDarwinPlatform, numberConfig, parseDisplayList, parseJson, platformLabel, sanitizeId, sha256, stringConfig, supportsBuiltinDesktopBridge, workspaceRel } from './computer-use/utils.js';
-import { inputChannelDescription, isWindowLocalCoordinateSpace, parseWindowTarget, resolveWindowTarget, schedulerRunMetadata, schedulerStepMetadata, stepInputChannelMetadata, toTraceWindowTarget, windowTargetTraceConfig } from './computer-use/window-target.js';
+import { inputChannelContract, inputChannelDescription, isWindowLocalCoordinateSpace, parseWindowTarget, resolveWindowTarget, schedulerRunMetadata, schedulerStepMetadata, stepInputChannelMetadata, toTraceWindowTarget, windowTargetTraceConfig } from './computer-use/window-target.js';
 
 const VISION_TOOL_ID = 'local.vision-sense';
 
@@ -77,23 +77,23 @@ async function loadVisionSenseConfig(workspace: string, request: GatewayRequest)
   const windowTarget = parseWindowTarget(requestConfig, fileConfig);
   return {
     desktopBridgeEnabled: booleanConfig(
-      process.env.SCIFORGE_VISION_DESKTOP_BRIDGE,
       requestConfig.desktopBridgeEnabled,
+      process.env.SCIFORGE_VISION_DESKTOP_BRIDGE,
       fileConfig.desktopBridgeEnabled,
       supportsBuiltinDesktopBridge(desktopPlatform),
     ),
     dryRun: booleanConfig(
-      process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN,
       requestConfig.dryRun,
+      process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN,
       fileConfig.dryRun,
       false,
     ),
     captureDisplays: defaultCaptureDisplays,
     desktopPlatform,
     windowTarget,
-    runId: stringConfig(process.env.SCIFORGE_VISION_RUN_ID, requestConfig.runId, fileConfig.runId),
-    outputDir: stringConfig(process.env.SCIFORGE_VISION_OUTPUT_DIR, requestConfig.outputDir, fileConfig.outputDir),
-    maxSteps: numberConfig(process.env.SCIFORGE_VISION_MAX_STEPS, requestConfig.maxSteps, fileConfig.maxSteps) ?? 8,
+    runId: stringConfig(requestConfig.runId, process.env.SCIFORGE_VISION_RUN_ID, fileConfig.runId),
+    outputDir: stringConfig(requestConfig.outputDir, process.env.SCIFORGE_VISION_OUTPUT_DIR, fileConfig.outputDir),
+    maxSteps: numberConfig(requestConfig.maxSteps, process.env.SCIFORGE_VISION_MAX_STEPS, fileConfig.maxSteps) ?? 8,
     allowHighRiskActions: booleanConfig(
       process.env.SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS,
       requestConfig.allowHighRiskActions,
@@ -172,7 +172,7 @@ async function loadVisionSenseConfig(workspace: string, request: GatewayRequest)
       visionTimeoutMs: numberConfig(process.env.SCIFORGE_VISION_GROUNDER_LLM_TIMEOUT_MS, requestConfig.visualGrounderTimeoutMs, fileConfig.visualGrounderTimeoutMs) ?? 60000,
       visionMaxTokens: numberConfig(process.env.SCIFORGE_VISION_GROUNDER_LLM_MAX_TOKENS, requestConfig.visualGrounderMaxTokens, fileConfig.visualGrounderMaxTokens) ?? 384,
     },
-    plannedActions: parseGenericActions(envOrValue(process.env.SCIFORGE_VISION_ACTIONS_JSON, requestConfig.actions, fileConfig.actions)),
+    plannedActions: parseGenericActions(envOrValue(requestConfig.actions, process.env.SCIFORGE_VISION_ACTIONS_JSON, fileConfig.actions)),
   };
 }
 
@@ -505,6 +505,7 @@ async function runGenericVisionComputerUseLoop(
       actionSchema: ['open_app', 'click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait'],
       appSpecificShortcuts: [],
       inputChannel: inputChannelDescription(config, targetResolution),
+      inputChannelContract: inputChannelContract(config, targetResolution),
       coordinateContract: {
         planner: 'target descriptions only',
         grounderOutput: 'target-window screenshot coordinates',

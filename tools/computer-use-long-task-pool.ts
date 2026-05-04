@@ -157,6 +157,12 @@ export interface ComputerUseLongMatrixRunResult {
   scenarioIds: string[];
   passedScenarioIds: string[];
   repairNeededScenarioIds: string[];
+  executionPlan?: {
+    mode: 'parallel-analysis' | 'serialized-real-gui';
+    maxConcurrency: number;
+    realGuiSerialized: boolean;
+    reason: string;
+  };
   preflight?: ComputerUseLongPreflightResult;
   results: Array<{
     scenarioId: string;
@@ -418,6 +424,14 @@ export async function validateComputerUseLongTrace(options: {
   if (!traceInputChannel || !/generic|mouse|keyboard|desktop/i.test(traceInputChannel)) {
     issues.push('genericComputerUse.inputChannel must declare generic mouse/keyboard input');
   }
+  const inputChannelContract = isRecord(genericComputerUse.inputChannelContract) ? genericComputerUse.inputChannelContract : {};
+  const userDeviceImpact = firstString(inputChannelContract.userDeviceImpact, inputChannelContract.pointerMode, inputChannelContract.keyboardMode);
+  if (!userDeviceImpact || !/none|fail-closed|focused-target|frontmost|system|virtual/i.test(userDeviceImpact)) {
+    issues.push('genericComputerUse.inputChannelContract must declare user-device impact and isolation behavior');
+  }
+  if (inputChannelContract.highRiskConfirmationRequired !== true) {
+    issues.push('genericComputerUse.inputChannelContract.highRiskConfirmationRequired must be true');
+  }
   const actionSchema = new Set(Array.isArray(genericComputerUse.actionSchema) ? genericComputerUse.actionSchema.map(String) : []);
   for (const action of allowedActionTypes) {
     if (!actionSchema.has(action)) issues.push(`genericComputerUse.actionSchema missing ${action}`);
@@ -596,37 +610,32 @@ export async function runComputerUseLongRound(options: {
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
   const { runWorkspaceRuntimeGateway } = await import('../src/runtime/workspace-runtime-gateway.js');
-  const payload = await withScopedVisionRuntimeEnv({
-    SCIFORGE_VISION_DESKTOP_BRIDGE: '1',
-    SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN: (options.dryRun ?? false) ? '1' : '0',
-    SCIFORGE_VISION_RUN_ID: runId,
-    SCIFORGE_VISION_MAX_STEPS: String(options.maxSteps ?? 8),
-    SCIFORGE_VISION_ACTIONS_JSON: options.actionsJson,
-    SCIFORGE_VISION_WINDOW_TARGET_JSON: JSON.stringify(defaultWindowTargetForRound(manifest, options.round)),
-  }, () => runWorkspaceRuntimeGateway({
-      skillDomain: 'knowledge',
-      prompt,
-      workspacePath,
+  const windowTarget = defaultWindowTargetForRound(manifest, options.round);
+  const payload = await runWorkspaceRuntimeGateway({
+    skillDomain: 'knowledge',
+    prompt,
+    workspacePath,
+    selectedToolIds: ['local.vision-sense'],
+    uiState: {
       selectedToolIds: ['local.vision-sense'],
-      uiState: {
-        selectedToolIds: ['local.vision-sense'],
-        visionSenseConfig: {
-          desktopBridgeEnabled: true,
-          dryRun: options.dryRun ?? false,
-          maxSteps: options.maxSteps ?? 8,
-          runId,
-          windowTarget: defaultWindowTargetForRound(manifest, options.round),
-        },
-        computerUseLong: {
-          scenarioId: manifest.scenarioId,
-          runId: manifest.run.id,
-          round: options.round,
-          requiredPipeline: manifest.universalPipeline,
-          safetyBoundary: manifest.safetyBoundary,
-        },
+      visionSenseConfig: {
+        desktopBridgeEnabled: true,
+        dryRun: options.dryRun ?? false,
+        maxSteps: options.maxSteps ?? 8,
+        runId,
+        actions: options.actionsJson ? JSON.parse(options.actionsJson) : undefined,
+        windowTarget,
       },
-      artifacts: [],
-    }));
+      computerUseLong: {
+        scenarioId: manifest.scenarioId,
+        runId: manifest.run.id,
+        round: options.round,
+        requiredPipeline: manifest.universalPipeline,
+        safetyBoundary: manifest.safetyBoundary,
+      },
+    },
+    artifacts: [],
+  });
 
   const traceRef = findPayloadTraceRef(payload);
   const tracePath = traceRef ? resolveTraceArtifactPath(traceRef, workspacePath) : undefined;
@@ -920,6 +929,7 @@ export async function runComputerUseLongMatrix(options: {
   dryRun?: boolean;
   skipPreflight?: boolean;
   maxSteps?: number;
+  maxConcurrency?: number;
   actionsJson?: string;
   now?: Date;
 }): Promise<ComputerUseLongMatrixRunResult> {
@@ -934,6 +944,7 @@ export async function runComputerUseLongMatrix(options: {
   const matrixId = `matrix-${now.toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;
   const matrixDir = join(outRoot, matrixId);
   await mkdir(matrixDir, { recursive: true });
+  const executionPlan = matrixExecutionPlan(Boolean(options.dryRun), scenarioIds.length, options.maxConcurrency);
   const preflight = options.skipPreflight ? undefined : await preflightComputerUseLong({
     scenarioIds,
     workspacePath: options.workspacePath,
@@ -951,6 +962,7 @@ export async function runComputerUseLongMatrix(options: {
       scenarioIds,
       passedScenarioIds: [],
       repairNeededScenarioIds: scenarioIds,
+      executionPlan,
       preflight,
       results,
     };
@@ -958,7 +970,7 @@ export async function runComputerUseLongMatrix(options: {
     return summary;
   }
 
-  for (const scenarioId of scenarioIds) {
+  const runScenario = async (scenarioId: string) => {
     const prepared = await prepareComputerUseLongRun({
       scenarioId,
       outRoot: matrixDir,
@@ -981,15 +993,23 @@ export async function runComputerUseLongMatrix(options: {
       requirePassed: scenarioRun.status === 'passed',
     });
     const issues = await collectScenarioRunIssues(scenarioRun, validation);
-    results.push({
+    return {
       scenarioId,
       manifestPath: prepared.manifestPath,
       runStatus: scenarioRun.status,
       validationOk: validation.ok,
       summaryPath: scenarioRun.summaryPath,
       issues,
-    });
-    if (scenarioRun.status !== 'passed' || !validation.ok) break;
+    };
+  };
+  if (executionPlan.mode === 'parallel-analysis') {
+    results.push(...await mapWithConcurrency(scenarioIds, executionPlan.maxConcurrency, runScenario));
+  } else {
+    for (const scenarioId of scenarioIds) {
+      const result = await runScenario(scenarioId);
+      results.push(result);
+      if (result.runStatus !== 'passed' || !result.validationOk) break;
+    }
   }
 
   const passedScenarioIds = results
@@ -1006,6 +1026,7 @@ export async function runComputerUseLongMatrix(options: {
     scenarioIds,
     passedScenarioIds,
     repairNeededScenarioIds,
+    executionPlan,
     preflight,
     results,
   };
@@ -1064,6 +1085,15 @@ export async function validateComputerUseLongMatrix(options: {
   }
   if (summary.schemaVersion !== 'sciforge.computer-use-long.matrix-summary.v1') issues.push('matrix summary schemaVersion is invalid');
   if (summary.taskId !== 'T084') issues.push('matrix summary taskId must be T084');
+  const executionPlan = isRecord(summary.executionPlan) ? summary.executionPlan : undefined;
+  if (!executionPlan) {
+    issues.push('matrix summary missing executionPlan');
+  } else {
+    const mode = String(executionPlan.mode || '');
+    if (mode !== 'parallel-analysis' && mode !== 'serialized-real-gui') issues.push('matrix executionPlan.mode is invalid');
+    if (typeof executionPlan.maxConcurrency !== 'number' || executionPlan.maxConcurrency < 1) issues.push('matrix executionPlan.maxConcurrency must be positive');
+    if (mode === 'serialized-real-gui' && executionPlan.realGuiSerialized !== true) issues.push('real GUI matrix execution must be serialized');
+  }
   const scenarioIds = Array.isArray(summary.scenarioIds) ? summary.scenarioIds.map(String) : [];
   const passedScenarioIds = Array.isArray(summary.passedScenarioIds) ? summary.passedScenarioIds.map(String) : [];
   const repairNeededScenarioIds = Array.isArray(summary.repairNeededScenarioIds) ? summary.repairNeededScenarioIds.map(String) : [];
@@ -1530,6 +1560,7 @@ async function writeMatrixSummary(summaryPath: string, matrixId: string, summary
     scenarioIds: summary.scenarioIds,
     passedScenarioIds: summary.passedScenarioIds,
     repairNeededScenarioIds: summary.repairNeededScenarioIds,
+    executionPlan: summary.executionPlan,
     preflight: summary.preflight ? {
       ok: summary.preflight.ok,
       dryRun: summary.preflight.dryRun,
@@ -1539,6 +1570,38 @@ async function writeMatrixSummary(summaryPath: string, matrixId: string, summary
     } : undefined,
     results: summary.results,
   }, null, 2)}\n`);
+}
+
+function matrixExecutionPlan(dryRun: boolean, scenarioCount: number, requestedMaxConcurrency: number | undefined): NonNullable<ComputerUseLongMatrixRunResult['executionPlan']> {
+  if (!dryRun) {
+    return {
+      mode: 'serialized-real-gui',
+      maxConcurrency: 1,
+      realGuiSerialized: true,
+      reason: 'Real GUI execution may share displays and input devices, so scenarios run one at a time behind window locks.',
+    };
+  }
+  const maxConcurrency = Math.max(1, Math.min(scenarioCount || 1, requestedMaxConcurrency ?? Math.min(4, scenarioCount || 1)));
+  return {
+    mode: 'parallel-analysis',
+    maxConcurrency,
+    realGuiSerialized: true,
+    reason: 'Dry-run scenarios produce file-ref evidence without touching real GUI input, so planner/grounder/verifier analysis can run concurrently.',
+  };
+}
+
+async function mapWithConcurrency<T, R>(items: T[], maxConcurrency: number, run: (item: T, index: number) => Promise<R>) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(maxConcurrency, items.length || 1));
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await run(items[index], index);
+    }
+  }));
+  return results;
 }
 
 function renderMatrixReportMarkdown(
@@ -1940,29 +2003,6 @@ function defaultWindowTargetForRound(manifest: PreparedComputerUseLongRun, round
   };
 }
 
-async function withScopedVisionRuntimeEnv<T>(env: Record<string, string | undefined>, run: () => Promise<T>) {
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(env)) {
-    previous.set(key, process.env[key]);
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  try {
-    return await run();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
-}
-
 function emptyTraceValidation(scenarioId: string, tracePath: string, issues: string[]): ComputerUseLongTraceValidation {
   return {
     ok: false,
@@ -2300,6 +2340,9 @@ function parseRunMatrixArgs(args: string[]) {
     } else if (arg === '--max-steps') {
       options.maxSteps = Number(readArgValue(args, index, arg));
       index += 1;
+    } else if (arg === '--max-concurrency') {
+      options.maxConcurrency = Number(readArgValue(args, index, arg));
+      index += 1;
     } else if (arg === '--actions-json') {
       options.actionsJson = readArgValue(args, index, arg);
       index += 1;
@@ -2310,6 +2353,9 @@ function parseRunMatrixArgs(args: string[]) {
   if (options.scenarioIds && !options.scenarioIds.length) throw new Error('run-matrix --scenarios must include at least one scenario id');
   if (options.maxSteps !== undefined && (!Number.isInteger(options.maxSteps) || options.maxSteps < 1)) {
     throw new Error('run-matrix --max-steps must be a positive integer');
+  }
+  if (options.maxConcurrency !== undefined && (!Number.isInteger(options.maxConcurrency) || options.maxConcurrency < 1)) {
+    throw new Error('run-matrix --max-concurrency must be a positive integer');
   }
   return options;
 }

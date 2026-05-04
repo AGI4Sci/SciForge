@@ -19,7 +19,7 @@
 
 ### T084 Window-based Vision Computer Use 长测与优化
 
-状态：进行中。本任务承接批注要求：先不改代码，只把 CU-LONG-001 到 CU-LONG-010 迁入独立任务，并把后续测试/优化方向收束到通用窗口级算法。当前已补齐可校验的 WindowTarget / trace contract 和 CU-LONG dry-run 编排资产，并把 `vision-sense` 边界收紧为 `text + screenshot/image modalities -> text only`；Computer Use 规划/执行是独立的 modular consumer/provider，不属于 `vision-sense` package。本轮继续增强了 window-local Grounder 坐标契约、window lifecycle evidence、window-based verifier consistency metadata。目标是让 SciForge 使用 `vision-sense` 观察屏幕应用，再由独立 Computer Use consumer/provider 操纵窗口，同时拥有独立的“鼠标/键盘”执行通道，不影响用户真实鼠标键盘使用。
+状态：进行中。本任务承接批注要求：先不改代码，只把 CU-LONG-001 到 CU-LONG-010 迁入独立任务，并把后续测试/优化方向收束到通用窗口级算法。当前已补齐可校验的 WindowTarget / trace contract 和 CU-LONG dry-run 编排资产，并把 `vision-sense` 边界收紧为 `text + screenshot/image modalities -> text only`；Computer Use 规划/执行是独立的 modular consumer/provider，不属于 `vision-sense` package。本轮继续增强了 window-local Grounder 坐标契约、window lifecycle evidence、window-based verifier consistency metadata、输入通道隔离契约和 CU-LONG parallel-analysis matrix。目标是让 SciForge 使用 `vision-sense` 观察屏幕应用，再由独立 Computer Use consumer/provider 操纵窗口，同时拥有独立的“鼠标/键盘”执行通道；在真实独立适配器不可用时必须 fail closed 或显式声明可能影响用户输入。
 
 #### 背景
 - 当前通用 loop 已能产生截图、规划、grounding、动作执行、replan 和 trace，但仍有全屏 capture / 全局坐标 / 共享输入设备的风险；多任务并行长测时，不同任务共用屏幕会相互干扰。
@@ -30,13 +30,13 @@
 - [x] 设计 `WindowTarget` contract：记录 app/window 标识、title、process id、displayId、bounds、contentRect、DPR、focus/minimized/occluded 状态和 capture timestamp，作为每个 screenshot/action/trace step 的必填上下文。当前 CU-LONG manifest、runtime prompt、trace fixture 和 validator 已要求 window-local coordinate / window screenshot metadata / scheduler metadata；真实平台 provider 仍需继续补强。
 - [x] 将 screenshot provider 主路径切到 window capture：优先捕获目标窗口内容，必要时记录遮挡/最小化/不可捕获的结构化失败；全屏截图只作为诊断 fallback，不进入默认 planner 输入。当前 runtime 在 resolved window target 下生成 `captureScope=window` refs，记录 `captureProvider`、`captureTimestamp`、`captureDiagnostics`；provider 不可用时抛出结构化 `CaptureProviderError`。
 - [x] 将 Grounder 坐标系统改为窗口局部坐标：planner 只描述目标，grounder 在窗口截图内定位，executor 负责窗口局部坐标到系统坐标或独立输入通道坐标的映射。当前 runtime 明确输出 `localCoordinateFrame` / `mappedCoordinateFrame`，step grounding 同时保留 `localX/localY` 或 drag local endpoints、executor 坐标和 scale，CU-LONG validator 会检查 window-local 坐标契约。
-- [ ] 设计独立输入通道：评估 macOS CGEvent / accessibility-per-window / 虚拟 HID / 远程桌面隔离 / 浏览器或 app sandbox 等通用方案，要求默认不移动用户真实鼠标、不抢用户键盘焦点；不可隔离时必须 fail closed 或要求显式确认。
+- [x] 设计独立输入通道：评估 macOS CGEvent / accessibility-per-window / 虚拟 HID / 远程桌面隔离 / 浏览器或 app sandbox 等通用方案，要求默认不移动用户真实鼠标、不抢用户键盘焦点；不可隔离时必须 fail closed 或要求显式确认。当前 trace 已输出 `inputChannelContract`：dry-run 是 `virtual-no-user-pointer-movement` / `virtual-no-user-keyboard-events`，macOS CGEvent 明确标注 `shared-system-pointer-keyboard` 和 `may-use-system-input-after-focused-target-verification`，未接入虚拟 HID/远程隔离适配器时不会伪装为独立输入。
 - [x] 增加 Computer Use scheduler：每个子 agent / scenario 绑定独立 target window、run directory、trace ledger 和输入锁；同一物理显示器或同一窗口上的真实执行不得并行，dry-run / 纯分析可并行。当前 trace/run/step 记录 `schedulerLockId`、`lockScope`、`actionConcurrency`、`analysisConcurrency`、`focusPolicy` 和 `interferenceRisk`；真实隔离 executor 后续可复用同一契约。
 - [x] 增加 window lifecycle recovery：目标窗口被遮挡、最小化、移动、缩放、跨显示器迁移或标题变化时，系统用窗口元数据和截图证据恢复，不让 VLM 在全屏里猜。当前 trace 增加 `windowLifecycle`，汇总 observed identities/displayIds、recent lifecycle samples 和 re-resolve policy；step verifier 会记录 before/after identity、bounds/display/focus/minimized/occluded 证据。
 - [x] 增加 window-based verifier：每步 after screenshot 必须来自同一目标窗口或明确记录窗口迁移；pixel diff、crosshair 和完成判断均基于窗口内容区域。当前 verifier method 为 `window-pixel-diff`，并记录 `windowConsistency`；CU-LONG validator 要求 `genericComputerUse.verifierContract` 和 step-level window consistency metadata。
 - [x] 增加 trace schema 升级：每个 step 记录 `windowTarget`、`windowScreenshotRef`、`localCoordinate`、`mappedCoordinate`、`inputChannel`、`focusPolicy`、`interferenceRisk` 和 `schedulerLockId`。当前 CU-LONG trace validator 已覆盖 windowTarget、window screenshot refs、local/mapped coordinates、inputChannel、scheduler lock 和 file-ref-only image memory；后续真实执行需继续用同一 schema 落盘。
-- [ ] 将 CU-LONG matrix 支持子 agent 并行测序：Planner/Grounder/Verifier 分析任务可并行；真实 GUI 执行动作按窗口锁串行或隔离执行，避免互相抢屏幕。
-- [ ] 针对 CU-LONG-001 到 CU-LONG-010 逐个运行 preflight -> scenario -> validate-run -> matrix-report -> repair-plan，并把失败分类回写到通用算法 TODO，不写单场景补丁。
+- [x] 将 CU-LONG matrix 支持子 agent 并行测序：Planner/Grounder/Verifier 分析任务可并行；真实 GUI 执行动作按窗口锁串行或隔离执行，避免互相抢屏幕。当前 `run-matrix` 生成 `executionPlan`，dry-run 使用 bounded `parallel-analysis`，真实 GUI 强制 `serialized-real-gui`；每个 scenario 通过 per-request `visionSenseConfig` 注入 runId/actions/windowTarget，避免并发写全局 env 或互相踩 trace。
+- [x] 针对 CU-LONG-001 到 CU-LONG-010 逐个运行 preflight -> scenario -> validate-run -> matrix-report -> repair-plan，并把失败分类回写到通用算法 TODO，不写单场景补丁。已执行 full dry-run matrix：`/tmp/sciforge-t084-matrix/matrix-20260504092236/matrix-summary.json`，10/10 passed，`validate-matrix` passed，`matrix-report.md` 已生成，`repair-plan.md` actions=0；真实 GUI 全量矩阵仍需在独立输入适配器接入后按同一链路重跑。
 
 #### 长时复杂 Computer Use 测试任务池
 

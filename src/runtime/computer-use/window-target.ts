@@ -202,10 +202,11 @@ export function toTraceWindowTarget(targetResolution: ResolvedWindowTarget): Tra
 }
 
 export function inputChannelDescription(config: ComputerUseConfig, targetResolution: WindowTargetResolution) {
-  const executor = config.dryRun ? 'dry-run' : executorBoundary(config);
+  const contract = inputChannelContract(config, targetResolution);
+  const executor = contract.executorBoundary;
   if (!targetResolution.ok) return `generic-mouse-keyboard:${executor}:blocked-unresolved-window-target`;
   return [
-    'generic-mouse-keyboard',
+    contract.type,
     executor,
     targetResolution.captureKind === 'window' ? 'target-window' : 'display',
     isWindowLocalCoordinateSpace(targetResolution.coordinateSpace) ? 'window-relative-grounding' : 'screen-relative-grounding',
@@ -284,15 +285,43 @@ export function schedulerRunMetadata(targetResolution: WindowTargetResolution): 
 }
 
 export function stepInputChannelMetadata(config: ComputerUseConfig, targetResolution: WindowTargetResolution): Record<string, unknown> {
+  return inputChannelContract(config, targetResolution);
+}
+
+export function inputChannelContract(config: ComputerUseConfig, targetResolution: WindowTargetResolution): Record<string, unknown> {
+  const targetBound = targetResolution.ok && targetResolution.captureKind === 'window';
+  const isolation = targetResolution.ok ? targetResolution.inputIsolation : config.windowTarget.inputIsolation;
+  const darwin = isDarwinPlatform(config.desktopPlatform);
+  const dryRun = config.dryRun;
+  const executor = dryRun ? 'dry-run-generic-gui-executor' : executorBoundary(config);
+  const sharedSystemInput = !dryRun && darwin;
+  const strictTarget = targetBound && isolation === 'require-focused-target';
   return {
     type: 'generic-mouse-keyboard',
-    executor: config.dryRun ? 'dry-run-generic-gui-executor' : executorBoundary(config),
-    isolation: targetResolution.ok ? targetResolution.inputIsolation : config.windowTarget.inputIsolation,
-    targetBound: targetResolution.ok && targetResolution.captureKind === 'window',
-    pointerKeyboardOwnership: 'sciforge-computer-use-channel',
-    userDeviceImpact: targetResolution.ok && targetResolution.inputIsolation === 'require-focused-target'
-      ? 'fail-closed-if-target-focus-cannot-be-verified'
-      : 'best-effort-system-input-may-affect-frontmost-window',
+    executor,
+    executorBoundary: dryRun ? 'dry-run' : executorBoundary(config),
+    provider: dryRun ? 'dry-run-input-channel' : darwin ? 'macos-cgevent-system-events' : `${config.desktopPlatform}-input-provider-unavailable`,
+    isolation,
+    targetBound,
+    pointerKeyboardOwnership: dryRun ? 'virtual-dry-run-channel' : sharedSystemInput ? 'shared-system-pointer-keyboard' : 'unavailable',
+    pointerMode: dryRun ? 'virtual-no-user-pointer-movement' : sharedSystemInput ? 'system-cursor-events' : 'none',
+    keyboardMode: dryRun ? 'virtual-no-user-keyboard-events' : sharedSystemInput ? 'system-key-events' : 'none',
+    userDeviceImpact: dryRun
+      ? 'none'
+      : strictTarget
+        ? 'may-use-system-input-after-focused-target-verification'
+        : 'may-affect-frontmost-window',
+    independentAdapterRequiredForNoUserImpact: !dryRun,
+    availableIndependentAdapters: ['browser-sandbox-adapter', 'remote-desktop-session', 'virtual-hid-device', 'accessibility-per-window-adapter'],
+    currentIndependentAdapter: dryRun ? 'dry-run' : 'not-configured',
+    failClosed: !targetResolution.ok || (isolation === 'require-focused-target' && !targetBound),
+    highRiskConfirmationRequired: true,
+    policy: [
+      'Planner and Grounder may run in parallel from screenshots.',
+      'Real GUI input must acquire the scheduler lock first.',
+      'If an independent adapter is unavailable, strict target focus must be verified before shared system input.',
+      'High-risk send/delete/pay/authorize/publish/submit actions require upstream confirmation before executor.',
+    ],
   };
 }
 

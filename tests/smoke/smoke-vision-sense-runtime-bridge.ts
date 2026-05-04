@@ -728,6 +728,12 @@ try {
     assert.equal(((generic.coordinateContract as Record<string, unknown>)?.localCoordinateFrame), 'window screenshot pixels before executor mapping');
     assert.equal(((generic.verifierContract as Record<string, unknown>)?.beforeAfterWindowConsistency), 'required-or-structured-window-lifecycle-diagnostics');
     assert.equal(generic.inputIsolation, 'require-focused-target');
+    const inputContract = generic.inputChannelContract as Record<string, unknown>;
+    assert.equal(inputContract.pointerKeyboardOwnership, 'virtual-dry-run-channel');
+    assert.equal(inputContract.pointerMode, 'virtual-no-user-pointer-movement');
+    assert.equal(inputContract.keyboardMode, 'virtual-no-user-keyboard-events');
+    assert.equal(inputContract.userDeviceImpact, 'none');
+    assert.equal(inputContract.independentAdapterRequiredForNoUserImpact, false);
     const lifecycle = windowTrace.windowLifecycle as Record<string, unknown>;
     assert.equal(lifecycle.status, 'stable-or-single-window');
     assert.ok(Array.isArray(lifecycle.samples));
@@ -755,7 +761,8 @@ try {
     assert.equal(((windowStep.localCoordinate as Record<string, unknown>)?.localY), 40);
     assert.equal(((windowStep.mappedCoordinate as Record<string, unknown>)?.space), 'executor');
     assert.equal(((windowStep.inputChannel as Record<string, unknown>)?.type), 'generic-mouse-keyboard');
-    assert.equal(((windowStep.inputChannel as Record<string, unknown>)?.pointerKeyboardOwnership), 'sciforge-computer-use-channel');
+    assert.equal(((windowStep.inputChannel as Record<string, unknown>)?.pointerKeyboardOwnership), 'virtual-dry-run-channel');
+    assert.equal(((windowStep.inputChannel as Record<string, unknown>)?.userDeviceImpact), 'none');
     assert.equal(((windowStep.scheduler as Record<string, unknown>)?.mode), 'serialized-window-actions');
     assert.equal(((windowStep.scheduler as Record<string, unknown>)?.lockScope), 'target-window');
     assert.equal(((windowStep.scheduler as Record<string, unknown>)?.focusPolicy), 'require-focused-target-before-action');
