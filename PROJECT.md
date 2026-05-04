@@ -19,7 +19,7 @@
 
 ### T084 Window-based Vision Computer Use 长测与优化
 
-状态：进行中。本任务承接批注要求：先不改代码，只把 CU-LONG-001 到 CU-LONG-010 迁入独立任务，并把后续测试/优化方向收束到通用窗口级算法。当前已补齐可校验的 WindowTarget / trace contract 和 CU-LONG dry-run 编排资产，并把 `vision-sense` 边界收紧为 `text + screenshot/image modalities -> text only`；Computer Use 规划/执行是独立的 modular consumer/provider，不属于 `vision-sense` package。本轮继续增强了 window-local Grounder 坐标契约、window lifecycle evidence、window-based verifier consistency metadata、输入通道隔离契约、CU-LONG parallel-analysis matrix、真实 GUI executor lock、可审计 scheduler lock policy、真实矩阵 input-isolation preflight 和 runtime input adapter trace。目标是让 SciForge 使用 `vision-sense` 观察屏幕应用，再由独立 Computer Use consumer/provider 操纵窗口，同时拥有独立的“鼠标/键盘”执行通道；在真实独立适配器不可用时必须 fail closed 或显式声明可能影响用户输入。
+状态：进行中。本任务承接批注要求：先不改代码，只把 CU-LONG-001 到 CU-LONG-010 迁入独立任务，并把后续测试/优化方向收束到通用窗口级算法。当前已补齐可校验的 WindowTarget / trace contract 和 CU-LONG dry-run 编排资产，并把 `vision-sense` 边界收紧为 `text + screenshot/image modalities -> text only`；Computer Use 规划/执行是独立的 modular consumer/provider，不属于 `vision-sense` package。本轮继续增强了 window-local Grounder 坐标契约、window lifecycle evidence、window-based verifier consistency metadata、输入通道隔离契约、CU-LONG parallel-analysis matrix、真实 GUI executor lock、可审计 scheduler lock policy、真实矩阵 input-isolation preflight、runtime input adapter trace 和 10 场景动态视觉矩阵 smoke。目标是让 SciForge 使用 `vision-sense` 观察屏幕应用，再由独立 Computer Use consumer/provider 操纵窗口，同时拥有独立的“鼠标/键盘”执行通道；在真实独立适配器不可用时必须 fail closed 或显式声明可能影响用户输入。
 
 #### 背景
 - 当前通用 loop 已能产生截图、规划、grounding、动作执行、replan 和 trace，但仍有全屏 capture / 全局坐标 / 共享输入设备的风险；多任务并行长测时，不同任务共用屏幕会相互干扰。
@@ -37,6 +37,7 @@
 - [x] 增加 trace schema 升级：每个 step 记录 `windowTarget`、`windowScreenshotRef`、`localCoordinate`、`mappedCoordinate`、`inputChannel`、`focusPolicy`、`interferenceRisk` 和 `schedulerLockId`。当前 CU-LONG trace validator 已覆盖 windowTarget、window screenshot refs、local/mapped coordinates、inputChannel、scheduler lock 和 file-ref-only image memory；后续真实执行需继续用同一 schema 落盘。
 - [x] 将 CU-LONG matrix 支持子 agent 并行测序：Planner/Grounder/Verifier 分析任务可并行；真实 GUI 执行动作按窗口锁串行或隔离执行，避免互相抢屏幕。当前 `run-matrix` 生成 `executionPlan`，dry-run 使用 bounded `parallel-analysis`，真实 GUI 强制 `serialized-real-gui`；每个 scenario 通过 per-request `visionSenseConfig` 注入 runId/actions/windowTarget，避免并发写全局 env 或互相踩 trace。
 - [x] 针对 CU-LONG-001 到 CU-LONG-010 逐个运行 preflight -> scenario -> validate-run -> matrix-report -> repair-plan，并把失败分类回写到通用算法 TODO，不写单场景补丁。已执行 full dry-run matrix：`/tmp/sciforge-t084-matrix/matrix-20260504092236/matrix-summary.json`，10/10 passed，`validate-matrix` passed，`matrix-report.md` 已生成，`repair-plan.md` actions=0；真实 GUI 全量矩阵仍需在独立输入适配器接入后按同一链路重跑。
+- [x] 针对长时复杂任务池补充动态视觉矩阵 smoke：全 10 个 CU-LONG 场景在不传 `actionsJson` 的情况下运行，mock OpenAI-compatible VisionPlanner 必须接收截图并输出 `targetDescription`，mock KV-Ground 必须接收截图路径并返回窗口坐标；测试同时保留外部 `SCIFORGE_VISION_ACTIONS_JSON=wait`，确认 CU-LONG runner 不会被旧静态动作污染。
 
 #### 长时复杂 Computer Use 测试任务池
 
@@ -187,6 +188,7 @@
 - [x] 增加 CU-LONG scenario 编排器：`npm run computer-use-long:run-scenario -- --manifest <manifest.json>` 会按场景 `minRounds` 连续运行，逐轮复用 compact file refs，首个失败轮次停止并输出 `scenario-summary.json`。
 - [x] 增加 CU-LONG matrix 编排器：`npm run computer-use-long:run-matrix -- --scenarios CU-LONG-001,CU-LONG-006 ...` 可跨多个场景连续 prepare/run/validate 并输出 `matrix-summary.json`，避免只验证单一示例。
 - [x] 增加 CU-LONG matrix 缺口报告：`npm run computer-use-long:matrix-report -- --summary <matrix-summary.json>` 会按 Planner/Grounder/Executor/Verifier/Trace/Image-memory/安全边界/证据台账分类失败，并给出下一步通用修复方向。
+- [x] 增加 CU-LONG 动态视觉矩阵 smoke：`smoke:computer-use-long` 会启动本地 mock VisionPlanner 和 KV-Ground，对 CU-LONG-001 到 CU-LONG-010 全量 dry-run matrix 验证 `WindowTarget -> VisionPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace`，且不允许外部 `SCIFORGE_VISION_ACTIONS_JSON` 污染动态规划路径。
 - [x] 增加 CU-LONG 真实运行 preflight：`npm run computer-use-long:preflight -- --scenarios ... --real` 会提前检查任务池、场景选择、desktop bridge、截图能力、VisionPlanner、Grounder、静态动作绕过和高风险闸门，避免真实矩阵一开始就因环境缺口空转。
 - [x] 将 CU-LONG preflight 接入 matrix：`run-matrix` 默认先执行 preflight；失败时直接生成 repair-needed `matrix-summary.json` 和 preflight report，不执行任何 round，`--skip-preflight` 仅保留给诊断用途。
 - [x] 增加 CU-LONG matrix 复核质量门：`npm run computer-use-long:validate-matrix -- --summary <matrix-summary.json>` 会重读 matrix summary、preflight 结果和每个 scenario manifest；preflight-blocked 矩阵也必须自洽且不能包含已执行 results。

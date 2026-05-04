@@ -651,7 +651,7 @@ export async function runComputerUseLongRound(options: {
         dryRun: options.dryRun ?? false,
         maxSteps: options.maxSteps ?? 8,
         runId,
-        actions: options.actionsJson ? JSON.parse(options.actionsJson) : undefined,
+        actions: options.actionsJson ? JSON.parse(options.actionsJson) : [],
         windowTarget,
       },
       computerUseLong: {

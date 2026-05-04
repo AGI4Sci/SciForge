@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { copyFile, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { createServer, type IncomingMessage } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   loadComputerUseLongTaskPool,
   prepareComputerUseLongRun,
@@ -294,6 +295,82 @@ try {
   const passedRepairPlan = await renderComputerUseLongRepairPlan({ summaryPath: matrixRun.summaryPath });
   assert.equal(passedRepairPlan.ok, true);
   assert.equal(passedRepairPlan.actionCount, 0);
+
+  let dynamicPlannerCalls = 0;
+  let dynamicGrounderCalls = 0;
+  const dynamicPlannerServer = createServer(async (request, response) => {
+    const raw = await readRequestBody(request);
+    dynamicPlannerCalls += 1;
+    assert.match(raw, /image_url|data:image|target-window|Window target contract/i);
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            done: true,
+            reason: 'mock visual planner saw the screenshot and selected a generic visible target',
+            actions: [{ actionType: 'click', targetDescription: 'generic visible target from screenshot' }],
+          }),
+        },
+      }],
+    }));
+  });
+  const dynamicGrounderServer = createServer(async (request, response) => {
+    const raw = await readRequestBody(request);
+    dynamicGrounderCalls += 1;
+    assert.match(raw, /generic visible target from screenshot/);
+    assert.match(raw, /image|image_path/);
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ coordinates: [24, 24], confidence: 0.93, reason: 'mock visual target center' }));
+  });
+  await new Promise<void>((resolve) => dynamicPlannerServer.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => dynamicGrounderServer.listen(0, '127.0.0.1', resolve));
+  try {
+    const plannerAddress = dynamicPlannerServer.address();
+    const grounderAddress = dynamicGrounderServer.address();
+    assert.ok(plannerAddress && typeof plannerAddress === 'object');
+    assert.ok(grounderAddress && typeof grounderAddress === 'object');
+    process.env.SCIFORGE_VISION_PLANNER_BASE_URL = `http://127.0.0.1:${plannerAddress.port}/v1`;
+    process.env.SCIFORGE_VISION_PLANNER_API_KEY = 'dynamic-visual-planner-key';
+    process.env.SCIFORGE_VISION_PLANNER_MODEL = 'dynamic-visual-planner-model';
+    process.env.SCIFORGE_VISION_KV_GROUND_URL = `http://127.0.0.1:${grounderAddress.port}`;
+    process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS = '1';
+    process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([{ type: 'wait', ms: 1 }]);
+    const dynamicVisualMatrix = await runComputerUseLongMatrix({
+      outRoot: preparedRoot,
+      workspacePath: '/tmp/sciforge-cu-workspace',
+      dryRun: true,
+      maxSteps: 1,
+      maxConcurrency: 3,
+      now: new Date('2026-05-04T13:05:00.000Z'),
+    });
+    assert.equal(dynamicVisualMatrix.status, 'passed');
+    assert.equal(dynamicVisualMatrix.passedScenarioIds.length, 10);
+    assert.deepEqual(dynamicVisualMatrix.repairNeededScenarioIds, []);
+    assert.ok(dynamicPlannerCalls >= 10);
+    assert.ok(dynamicGrounderCalls >= 10);
+    const dynamicMatrixValidation = await validateComputerUseLongMatrix({ summaryPath: dynamicVisualMatrix.summaryPath });
+    assert.deepEqual(dynamicMatrixValidation.issues, []);
+    assert.equal(dynamicMatrixValidation.metrics.validatedRuns, 10);
+    const firstDynamicManifest = JSON.parse(await readFile(String(dynamicVisualMatrix.results[0]?.manifestPath), 'utf8')) as Record<string, unknown>;
+    const firstDynamicRound = (firstDynamicManifest.rounds as Array<Record<string, unknown>>)[0];
+    const firstDynamicTracePath = join(dirname(String(dynamicVisualMatrix.results[0]?.manifestPath)), String(firstDynamicRound.visionTraceRef));
+    const firstDynamicTrace = JSON.parse(await readFile(firstDynamicTracePath, 'utf8')) as Record<string, unknown>;
+    const firstDynamicSteps = firstDynamicTrace.steps as Array<Record<string, unknown>>;
+    assert.ok(firstDynamicSteps.some((step) => ((step.execution as Record<string, unknown>)?.planner) === 'openai-compatible-vision-planner'));
+    assert.ok(firstDynamicSteps.some((step) => ((step.grounding as Record<string, unknown>)?.provider) === 'kv-ground'));
+  } finally {
+    await new Promise<void>((resolve) => dynamicPlannerServer.close(() => resolve()));
+    await new Promise<void>((resolve) => dynamicGrounderServer.close(() => resolve()));
+    process.env.SCIFORGE_VISION_PLANNER_BASE_URL = 'http://127.0.0.1:9999/v1';
+    process.env.SCIFORGE_VISION_PLANNER_API_KEY = 'preflight-key';
+    process.env.SCIFORGE_VISION_PLANNER_MODEL = 'preflight-model';
+    delete process.env.SCIFORGE_VISION_KV_GROUND_URL;
+    process.env.SCIFORGE_VISION_GROUNDER_LLM_BASE_URL = 'http://127.0.0.1:9999/v1';
+    process.env.SCIFORGE_VISION_GROUNDER_LLM_API_KEY = 'preflight-key';
+    process.env.SCIFORGE_VISION_GROUNDER_LLM_MODEL = 'preflight-model';
+    process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([{ type: 'wait', ms: 1 }]);
+  }
 
   process.env.SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS = '1';
   const blockedMatrix = await runComputerUseLongMatrix({
@@ -658,6 +735,12 @@ assert.ok(missingWindowValidation.issues.some((issue) => /inputChannel|input-cha
 assert.ok(missingWindowValidation.issues.some((issue) => /window screenshot metadata/.test(issue)));
 
 console.log('[ok] T084 Computer Use long task pool smoke passed');
+
+async function readRequestBody(request: IncomingMessage) {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  return Buffer.concat(chunks).toString('utf8');
+}
 
 function restoreEnv(key: string, value: string | undefined) {
   if (value === undefined) {
