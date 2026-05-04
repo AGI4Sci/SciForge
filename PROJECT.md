@@ -19,7 +19,7 @@
 
 ### T084 Window-based Vision Computer Use 长测与优化
 
-状态：新建。本任务承接批注要求：先不改代码，只把 CU-LONG-001 到 CU-LONG-010 迁入独立任务，并把后续测试/优化方向收束到通用窗口级算法。目标是让 SciForge 使用 `vision-sense` 观察和操纵屏幕应用，实现 Computer Use，同时拥有独立的“鼠标/键盘”执行通道，不影响用户真实鼠标键盘使用。
+状态：进行中。本任务承接批注要求：先不改代码，只把 CU-LONG-001 到 CU-LONG-010 迁入独立任务，并把后续测试/优化方向收束到通用窗口级算法。当前已补齐可校验的 WindowTarget / trace contract 和 CU-LONG dry-run 编排资产，并把 `vision-sense` 边界收紧为 `text + screenshot/image modalities -> text only`；Computer Use 规划/执行是独立的 modular consumer/provider，不属于 `vision-sense` package。目标是让 SciForge 使用 `vision-sense` 观察屏幕应用，再由独立 Computer Use consumer/provider 操纵窗口，同时拥有独立的“鼠标/键盘”执行通道，不影响用户真实鼠标键盘使用。
 
 #### 背景
 - 当前通用 loop 已能产生截图、规划、grounding、动作执行、replan 和 trace，但仍有全屏 capture / 全局坐标 / 共享输入设备的风险；多任务并行长测时，不同任务共用屏幕会相互干扰。
@@ -27,14 +27,14 @@
 - CU-LONG-001 到 CU-LONG-010 是通用能力验收池，不是具体应用补丁池；失败时要回到 Planner / Grounder / Executor / Verifier / Trace / Scheduler 的通用算法修复。
 
 #### TODO
-- [ ] 设计 `WindowTarget` contract：记录 app/window 标识、title、process id、displayId、bounds、contentRect、DPR、focus/minimized/occluded 状态和 capture timestamp，作为每个 screenshot/action/trace step 的必填上下文。
+- [x] 设计 `WindowTarget` contract：记录 app/window 标识、title、process id、displayId、bounds、contentRect、DPR、focus/minimized/occluded 状态和 capture timestamp，作为每个 screenshot/action/trace step 的必填上下文。当前 CU-LONG manifest、runtime prompt、trace fixture 和 validator 已要求 window-local coordinate / window screenshot metadata / scheduler metadata；真实平台 provider 仍需继续补强。
 - [ ] 将 screenshot provider 主路径切到 window capture：优先捕获目标窗口内容，必要时记录遮挡/最小化/不可捕获的结构化失败；全屏截图只作为诊断 fallback，不进入默认 planner 输入。
 - [ ] 将 Grounder 坐标系统改为窗口局部坐标：planner 只描述目标，grounder 在窗口截图内定位，executor 负责窗口局部坐标到系统坐标或独立输入通道坐标的映射。
 - [ ] 设计独立输入通道：评估 macOS CGEvent / accessibility-per-window / 虚拟 HID / 远程桌面隔离 / 浏览器或 app sandbox 等通用方案，要求默认不移动用户真实鼠标、不抢用户键盘焦点；不可隔离时必须 fail closed 或要求显式确认。
 - [ ] 增加 Computer Use scheduler：每个子 agent / scenario 绑定独立 target window、run directory、trace ledger 和输入锁；同一物理显示器或同一窗口上的真实执行不得并行，dry-run / 纯分析可并行。
 - [ ] 增加 window lifecycle recovery：目标窗口被遮挡、最小化、移动、缩放、跨显示器迁移或标题变化时，系统用窗口元数据和截图证据恢复，不让 VLM 在全屏里猜。
 - [ ] 增加 window-based verifier：每步 after screenshot 必须来自同一目标窗口或明确记录窗口迁移；pixel diff、crosshair 和完成判断均基于窗口内容区域。
-- [ ] 增加 trace schema 升级：每个 step 记录 `windowTarget`、`windowScreenshotRef`、`localCoordinate`、`mappedCoordinate`、`inputChannel`、`focusPolicy`、`interferenceRisk` 和 `schedulerLockId`。
+- [x] 增加 trace schema 升级：每个 step 记录 `windowTarget`、`windowScreenshotRef`、`localCoordinate`、`mappedCoordinate`、`inputChannel`、`focusPolicy`、`interferenceRisk` 和 `schedulerLockId`。当前 CU-LONG trace validator 已覆盖 windowTarget、window screenshot refs、local/mapped coordinates、inputChannel、scheduler lock 和 file-ref-only image memory；后续真实执行需继续用同一 schema 落盘。
 - [ ] 将 CU-LONG matrix 支持子 agent 并行测序：Planner/Grounder/Verifier 分析任务可并行；真实 GUI 执行动作按窗口锁串行或隔离执行，避免互相抢屏幕。
 - [ ] 针对 CU-LONG-001 到 CU-LONG-010 逐个运行 preflight -> scenario -> validate-run -> matrix-report -> repair-plan，并把失败分类回写到通用算法 TODO，不写单场景补丁。
 

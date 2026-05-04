@@ -18,8 +18,21 @@ import {
   validateComputerUseLongTrace,
   validateComputerUseLongTaskPool,
 } from '../../tools/computer-use-long-task-pool';
+import { toolPackageManifests } from '../../packages/tools';
 
 const pool = await loadComputerUseLongTaskPool();
+const visionSenseTool = toolPackageManifests.find((tool) => tool.id === 'local.vision-sense');
+assert.ok(visionSenseTool);
+assert.equal(visionSenseTool.toolType, 'sense-plugin');
+const visionRequiredConfig = [...(visionSenseTool.requiredConfig ?? [])] as string[];
+const visionOutputFormats = [...(visionSenseTool.sensePlugin?.outputContract.formats ?? [])] as string[];
+const visionOutputContract = visionSenseTool.sensePlugin?.outputContract as Record<string, unknown> | undefined;
+assert.deepEqual(visionSenseTool.sensePlugin?.inputContract.acceptedModalities, ['screenshot', 'image']);
+assert.equal(visionSenseTool.sensePlugin?.outputContract.kind, 'text');
+assert.ok(visionOutputFormats.includes('text/plain'));
+assert.ok(!visionRequiredConfig.includes('gui-executor'));
+assert.ok(!visionOutputFormats.includes('text/x-computer-use-command'));
+assert.equal(visionOutputContract?.commandSchema, undefined);
 const issues = validateComputerUseLongTaskPool(pool);
 assert.deepEqual(issues, []);
 assert.equal(pool.scenarios.length, 10);

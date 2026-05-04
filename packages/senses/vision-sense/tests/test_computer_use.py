@@ -8,6 +8,7 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PACKAGE_ROOT))
 
 from sciforge_vision_sense import (
+    COMPUTER_USE_COMMAND_SCHEMA,
     ComputerUseTextCommand,
     RunnerGroundingResult,
     RunnerVisionAction,
@@ -17,7 +18,10 @@ from sciforge_vision_sense import (
     build_sense_plugin_request,
     command_to_text,
     computer_use_command_from_action,
+    computer_use_text_envelope,
+    envelope_to_text,
     sense_text_result_for_computer_use,
+    text_envelope_from_vision_step,
     text_signal_from_vision_step,
 )
 
@@ -52,6 +56,26 @@ class ComputerUseTextSignalTest(unittest.TestCase):
         self.assertEqual(parsed["target"]["y"], 1101)
         self.assertEqual(parsed["sourceModalityRefs"], ["artifact:screen-001.png"])
 
+    def test_computer_use_command_envelope_is_text_only(self):
+        command = ComputerUseTextCommand(
+            action="type_text",
+            text="hello",
+            sourceModalityRefs=["artifact:screen-001.png"],
+        )
+
+        envelope = computer_use_text_envelope(command)
+        text = envelope_to_text(envelope)
+        parsed = json.loads(text)
+        nested_command = json.loads(parsed["text"])
+
+        self.assertEqual(parsed["kind"], "command")
+        self.assertEqual(parsed["targetUse"], "computer-use")
+        self.assertEqual(parsed["format"], "application/json")
+        self.assertEqual(parsed["metadata"]["commandSchema"], COMPUTER_USE_COMMAND_SCHEMA)
+        self.assertFalse(parsed["metadata"]["executorRequired"])
+        self.assertEqual(nested_command["action"], "type_text")
+        self.assertEqual(nested_command["text"], "hello")
+
     def test_high_risk_text_command_is_rejected_by_default(self):
         request = build_sense_plugin_request(
             "Click send and publish the post",
@@ -63,7 +87,14 @@ class ComputerUseTextSignalTest(unittest.TestCase):
 
         self.assertEqual(result.status, "rejected")
         self.assertIn("high-risk", result.reason)
-        self.assertEqual(json.loads(result.text)["riskLevel"], "high")
+        self.assertEqual(result.format, "application/json")
+        self.assertEqual(result.artifacts, [])
+        envelope = json.loads(result.text)
+        rejected_command = json.loads(envelope["text"])
+        self.assertEqual(envelope["kind"], "command")
+        self.assertEqual(envelope["metadata"]["commandSchema"], COMPUTER_USE_COMMAND_SCHEMA)
+        self.assertFalse(envelope["metadata"]["executorRequired"])
+        self.assertEqual(rejected_command["riskLevel"], "high")
 
     def test_vision_step_can_emit_plain_text_command(self):
         step = RunnerVisionStepRecord(
@@ -80,6 +111,26 @@ class ComputerUseTextSignalTest(unittest.TestCase):
         self.assertIn("scroll", text)
         self.assertIn("direction=down", text)
         self.assertIn("riskLevel=low", text)
+
+    def test_vision_step_can_emit_text_only_command_envelope(self):
+        step = RunnerVisionStepRecord(
+            index=0,
+            before_screenshot_ref="artifact:before.png",
+            screen_summary="Composer is visible.",
+            visible_texts=[],
+            completion_check=RunnerCompletionCheck(done=False),
+            planned_action=RunnerVisionAction(kind="press_key", key="Enter"),
+        )
+
+        text = text_envelope_from_vision_step(step)
+        envelope = json.loads(text)
+        command = json.loads(envelope["text"])
+
+        self.assertEqual(envelope["schemaVersion"], "sciforge.sense-plugin.text.v1")
+        self.assertEqual(envelope["kind"], "command")
+        self.assertEqual(envelope["targetUse"], "computer-use")
+        self.assertEqual(command["action"], "press_key")
+        self.assertEqual(command["key"], "Enter")
 
 
 if __name__ == "__main__":

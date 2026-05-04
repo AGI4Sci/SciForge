@@ -44,7 +44,7 @@ export const toolPackageManifests = [
     "kind": "tool",
     "version": "1.0.0",
     "label": "vision-sense",
-    "description": "Vision Sense Plugin for turning text plus screenshot/image modalities into text-form Computer Use signals and auditable vision traces.",
+    "description": "Vision Sense Plugin for turning text plus screenshot/image modalities into text-only visual observations and auditable vision traces.",
     "source": "package",
     "toolType": "sense-plugin",
     "skillDomains": [
@@ -56,11 +56,11 @@ export const toolPackageManifests = [
     "requiredConfig": [
       "shared-llm-config",
       "kv-ground-base-url",
-      "gui-executor"
+      "trace-output-dir"
     ],
     "docs": {
       "readmePath": "packages/tools/local/vision-sense/SKILL.md",
-      "agentSummary": "Vision Sense Plugin for turning text plus screenshot/image modalities into text-form Computer Use signals and auditable vision traces."
+      "agentSummary": "Vision Sense Plugin for turning text plus screenshot/image modalities into text-only visual observations and auditable vision traces. Computer Use execution is owned by a separate modular consumer/provider."
     },
     "packageRoot": "packages/senses/vision-sense",
     "tags": [
@@ -69,9 +69,9 @@ export const toolPackageManifests = [
       "knowledge",
       "vision",
       "modality:vision",
-      "gui",
       "grounding",
-      "computer-use",
+      "text-output",
+      "computer-use-input",
       "kv-ground"
     ],
     "provider": "local",
@@ -91,60 +91,8 @@ export const toolPackageManifests = [
         "formats": [
           "application/json",
           "application/x-ndjson",
-          "text/x-computer-use-command"
-        ],
-        "commandSchema": {
-          "type": "object",
-          "required": [
-            "action"
-          ],
-          "properties": {
-            "action": {
-              "enum": [
-                "click",
-                "type_text",
-                "press_key",
-                "scroll",
-                "wait"
-              ]
-            },
-            "target": {
-              "type": "object",
-              "properties": {
-                "x": {
-                  "type": "number"
-                },
-                "y": {
-                  "type": "number"
-                },
-                "description": {
-                  "type": "string"
-                }
-              }
-            },
-            "text": {
-              "type": "string"
-            },
-            "key": {
-              "type": "string"
-            },
-            "direction": {
-              "enum": [
-                "up",
-                "down",
-                "left",
-                "right"
-              ]
-            },
-            "riskLevel": {
-              "enum": [
-                "low",
-                "medium",
-                "high"
-              ]
-            }
-          }
-        }
+          "text/plain"
+        ]
       },
       "executionBoundary": "text-signal-only",
       "safety": {

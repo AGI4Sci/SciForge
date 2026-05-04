@@ -12,11 +12,17 @@ import re
 from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any, Literal, Mapping
 
-from .types import ModalityInput, SensePluginRequest, SensePluginTextResult
+from .types import (
+    ModalityInput,
+    SensePluginRequest,
+    SensePluginTextEnvelope,
+    SensePluginTextResult,
+)
 
 
 ComputerUseAction = Literal["click", "type_text", "press_key", "scroll", "wait"]
 RiskLevel = Literal["low", "medium", "high"]
+COMPUTER_USE_COMMAND_SCHEMA = "sciforge.computer-use.command.v1"
 
 HIGH_RISK_PATTERN = re.compile(
     r"\b(send|submit|delete|remove|pay|purchase|buy|authorize|approve|publish|post|"
@@ -75,6 +81,35 @@ def command_to_text(
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
+def computer_use_text_envelope(
+    command: ComputerUseTextCommand | Mapping[str, Any],
+    *,
+    target_use: str | None = "computer-use",
+    output_format: str = "application/json",
+    metadata: Mapping[str, Any] | None = None,
+) -> SensePluginTextEnvelope:
+    """Wrap a Computer Use command in the generic text-only sense envelope."""
+
+    command_text = command_to_text(command, output_format=output_format)
+    return SensePluginTextEnvelope(
+        kind="command",
+        targetUse=target_use,
+        text=command_text,
+        format=output_format,
+        metadata={
+            "commandSchema": COMPUTER_USE_COMMAND_SCHEMA,
+            "executorRequired": False,
+            **dict(metadata or {}),
+        },
+    )
+
+
+def envelope_to_text(envelope: SensePluginTextEnvelope | Mapping[str, Any]) -> str:
+    """Serialize a text envelope; the sense-plugin wire output remains text."""
+
+    return json.dumps(_dataclass_or_mapping_to_dict(envelope), ensure_ascii=False, separators=(",", ":"))
+
+
 def computer_use_command_from_action(
     action: Any,
     *,
@@ -126,7 +161,7 @@ def sense_text_result_for_computer_use(
     command_map = _dataclass_or_mapping_to_dict(command)
     command_risk = _classify_risk(req.text, command_map)
     if command_risk == "high" and not bool(req.riskPolicy.get("allowHighRiskActions")):
-        return SensePluginTextResult(
+        envelope = SensePluginTextEnvelope(
             text=json.dumps(
                 {
                     "status": "rejected",
@@ -136,15 +171,33 @@ def sense_text_result_for_computer_use(
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
+            kind="command",
+            targetUse=req.targetUse,
             format=req.outputFormat,
+            metadata={
+                "commandSchema": COMPUTER_USE_COMMAND_SCHEMA,
+                "executorRequired": False,
+            },
+        )
+        return SensePluginTextResult(
+            text=envelope_to_text(envelope),
+            format="application/json",
             status="rejected",
             reason="high-risk Computer Use action requires upstream confirmation",
             modality="vision",
         )
     safe_command = {**command_map, "riskLevel": command_risk}
+    envelope = computer_use_text_envelope(
+        safe_command,
+        target_use=req.targetUse,
+        output_format=req.outputFormat,
+        metadata={
+            "inputModalities": [item.kind for item in req.modalities],
+        },
+    )
     return SensePluginTextResult(
-        text=command_to_text(safe_command, output_format=req.outputFormat),
-        format=req.outputFormat,
+        text=envelope_to_text(envelope),
+        format="application/json",
         status="ok",
         modality="vision",
         metadata={
@@ -161,6 +214,24 @@ def text_signal_from_vision_step(
 ) -> str:
     """Serialize a completed vision step as a Computer Use text signal."""
 
+    command = _command_from_vision_step(step)
+    return command_to_text(command, output_format=output_format)
+
+
+def text_envelope_from_vision_step(
+    step: Any,
+    *,
+    target_use: str | None = "computer-use",
+    output_format: str = "application/json",
+) -> str:
+    """Serialize a completed vision step as a text-only command envelope."""
+
+    command = _command_from_vision_step(step)
+    envelope = computer_use_text_envelope(command, target_use=target_use, output_format=output_format)
+    return envelope_to_text(envelope)
+
+
+def _command_from_vision_step(step: Any) -> ComputerUseTextCommand:
     step_map = _dataclass_or_mapping_to_dict(step)
     action = step_map.get("planned_action") or step_map.get("plannedAction")
     if not action:
@@ -180,7 +251,7 @@ def text_signal_from_vision_step(
         source_modality_refs=refs,
         reason=step_map.get("failure_reason") or step_map.get("failureReason"),
     )
-    return command_to_text(command, output_format=output_format)
+    return command
 
 
 def _coerce_modality(value: ModalityInput | Mapping[str, Any]) -> ModalityInput:

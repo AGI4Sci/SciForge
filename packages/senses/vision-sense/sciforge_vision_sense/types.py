@@ -58,6 +58,16 @@ class SensePluginTextResult:
 
 
 @dataclass(slots=True)
+class SensePluginTextEnvelope:
+    text: str
+    kind: Literal["text", "command", "code", "coordinates"] = "text"
+    schemaVersion: str = "sciforge.sense-plugin.text.v1"
+    targetUse: str | None = None
+    format: str = "text/plain"
+    metadata: JsonMap = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class ScreenshotRef:
     uri: str
     mimeType: str = "image/png"

@@ -19,6 +19,7 @@ from sciforge_vision_sense import (
     VisionStepRecord,
     VisionTaskRequest,
     VisionTaskResult,
+    SensePluginTextEnvelope,
 )
 
 
@@ -26,6 +27,7 @@ class VisionSenseContractTest(unittest.TestCase):
     def test_contract_types_are_dataclasses(self):
         for contract in (
             SenseManifest,
+            SensePluginTextEnvelope,
             VisionTaskRequest,
             VisionTaskResult,
             VisionStepRecord,
@@ -53,7 +55,28 @@ class VisionSenseContractTest(unittest.TestCase):
             KV_GROUND_REMOTE_PATH_PREFIXES_ENV,
         )
         self.assertFalse(manifest.runtimeRequirements["privateSciForgeImports"])
+        self.assertFalse(manifest.runtimeRequirements["desktopExecutorRequired"])
+        self.assertIn("sense_plugin_text_output_contract", manifest.capabilities)
+        self.assertIn("text_command_envelope_contract", manifest.capabilities)
+        self.assertIn("SensePluginTextResult", manifest.outputs["sensePluginResult"])
+        self.assertIn("SensePluginTextEnvelope", manifest.outputs["textEnvelope"])
         self.assertIn("click", manifest.safety["allowedActions"])
+
+    def test_text_envelope_contract_is_generic_text_output(self):
+        envelope = SensePluginTextEnvelope(
+            kind="code",
+            targetUse="analysis",
+            text="print('ok')",
+            format="text/x-python",
+        )
+
+        payload = asdict(envelope)
+
+        self.assertEqual(payload["schemaVersion"], "sciforge.sense-plugin.text.v1")
+        self.assertEqual(payload["kind"], "code")
+        self.assertEqual(payload["targetUse"], "analysis")
+        self.assertEqual(payload["text"], "print('ok')")
+        self.assertEqual(payload["format"], "text/x-python")
 
     def test_request_defaults_are_mvp_safe(self):
         request = VisionTaskRequest(task="Open a low-risk page")
