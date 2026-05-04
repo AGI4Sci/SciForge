@@ -342,6 +342,11 @@ const fixtureWindowTarget = {
 const fixtureScheduler = {
   mode: 'serialized-window-actions',
   lockId: 'window-42-lock',
+  lockScope: 'target-window',
+  actionConcurrency: 'one-real-gui-action-at-a-time-per-window',
+  analysisConcurrency: 'parallel-allowed',
+  focusPolicy: 'require-focused-target-before-action',
+  interferenceRisk: 'low-when-focused-target-verified',
   failClosedIsolation: true,
 };
 const beforeWindowRef = {

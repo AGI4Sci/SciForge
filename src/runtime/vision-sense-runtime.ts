@@ -9,7 +9,7 @@ import { captureDisplays, pixelDiffForScreenshotSets, toTraceScreenshotRef, vali
 import { executeGenericDesktopAction, executorBoundary } from './computer-use/executor.js';
 import type { ComputerUseConfig as VisionSenseConfig, GenericVisionAction, GroundingResolution, LoopStep, PlannerContractIssue, ScreenshotRef, TraceWindowTarget, VisionPlannerConfig } from './computer-use/types.js';
 import { booleanConfig, detectCaptureDisplays, envOrValue, extractChatCompletionContent, extractJsonObject, isDarwinPlatform, numberConfig, parseDisplayList, parseJson, platformLabel, sanitizeId, sha256, stringConfig, supportsBuiltinDesktopBridge, workspaceRel } from './computer-use/utils.js';
-import { inputChannelDescription, isWindowLocalCoordinateSpace, parseWindowTarget, resolveWindowTarget, schedulerStepMetadata, stepInputChannelMetadata, toTraceWindowTarget, windowTargetTraceConfig } from './computer-use/window-target.js';
+import { inputChannelDescription, isWindowLocalCoordinateSpace, parseWindowTarget, resolveWindowTarget, schedulerRunMetadata, schedulerStepMetadata, stepInputChannelMetadata, toTraceWindowTarget, windowTargetTraceConfig } from './computer-use/window-target.js';
 
 const VISION_TOOL_ID = 'local.vision-sense';
 
@@ -508,10 +508,7 @@ async function runGenericVisionComputerUseLoop(
       requires: ['WindowTargetProvider', 'VisionPlanner', 'Grounder', 'GuiExecutor', 'Verifier'],
     },
     scheduler: {
-      mode: 'serialized-window-actions',
-      lockId: targetResolution.ok ? targetResolution.schedulerLockId : 'unresolved-window-target',
-      policy: 'one real GUI action stream per target window; planner/grounder analysis may run in parallel, executor actions are serialized by window lock',
-      targetWindow: targetResolution.ok ? toTraceWindowTarget(targetResolution) : windowTargetTraceConfig(config.windowTarget),
+      ...schedulerRunMetadata(targetResolution),
     },
     validation: traceValidation,
     steps,

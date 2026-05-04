@@ -17,9 +17,14 @@ export function parseWindowTarget(requestConfig: Record<string, unknown>, fileCo
   );
   const targetConfig = isRecordLike(rawTarget) ? rawTarget : {};
   const windowId = numberConfig(process.env.SCIFORGE_VISION_WINDOW_ID, targetConfig.windowId, targetConfig.window_id);
+  const processId = numberConfig(process.env.SCIFORGE_VISION_WINDOW_PROCESS_ID, targetConfig.processId, targetConfig.process_id, targetConfig.pid);
+  const bundleId = stringConfig(process.env.SCIFORGE_VISION_WINDOW_BUNDLE_ID, targetConfig.bundleId, targetConfig.bundle_id);
   const appName = stringConfig(process.env.SCIFORGE_VISION_WINDOW_APP_NAME, targetConfig.appName, targetConfig.app_name, targetConfig.application);
   const title = stringConfig(process.env.SCIFORGE_VISION_WINDOW_TITLE, targetConfig.title, targetConfig.windowTitle, targetConfig.window_title);
+  const displayId = numberConfig(process.env.SCIFORGE_VISION_WINDOW_DISPLAY_ID, targetConfig.displayId, targetConfig.display_id);
   const bounds = parseWindowBounds(envOrValue(process.env.SCIFORGE_VISION_WINDOW_BOUNDS, targetConfig.bounds, targetConfig.windowBounds, targetConfig.window_bounds));
+  const contentRect = parseWindowBounds(envOrValue(process.env.SCIFORGE_VISION_WINDOW_CONTENT_RECT, targetConfig.contentRect, targetConfig.content_rect));
+  const devicePixelRatio = numberConfig(process.env.SCIFORGE_VISION_WINDOW_DPR, targetConfig.devicePixelRatio, targetConfig.dpr, targetConfig.scaleFactor);
   const explicitMode = stringConfig(process.env.SCIFORGE_VISION_WINDOW_TARGET_MODE, targetConfig.mode, targetConfig.kind);
   const mode = normalizeWindowTargetMode(explicitMode, { windowId, appName, title });
   const enabled = booleanConfig(
@@ -41,9 +46,14 @@ export function parseWindowTarget(requestConfig: Record<string, unknown>, fileCo
     required,
     mode: enabled ? mode : 'display',
     windowId,
+    processId,
+    bundleId,
     appName,
     title,
+    displayId,
     bounds,
+    contentRect,
+    devicePixelRatio,
     coordinateSpace,
     inputIsolation,
   };
@@ -60,6 +70,11 @@ export async function resolveWindowTarget(config: ComputerUseConfig): Promise<Wi
       inputIsolation: target.inputIsolation,
       schedulerLockId: schedulerLockIdForTarget(target, 'display'),
       source: 'display-fallback',
+      displayId: target.displayId,
+      bounds: target.bounds,
+      contentRect: target.contentRect,
+      devicePixelRatio: target.devicePixelRatio,
+      captureTimestamp: new Date().toISOString(),
       diagnostics: ['window targeting disabled; using configured display capture for compatibility'],
     };
   }
@@ -69,13 +84,22 @@ export async function resolveWindowTarget(config: ComputerUseConfig): Promise<Wi
       target,
       captureKind: 'window',
       windowId: target.windowId,
+      processId: target.processId,
+      bundleId: target.bundleId,
       appName: target.appName,
       title: target.title,
+      displayId: target.displayId,
       bounds: target.bounds,
+      contentRect: target.contentRect,
+      devicePixelRatio: target.devicePixelRatio,
+      focused: target.focused,
+      minimized: target.minimized,
+      occluded: target.occluded,
       coordinateSpace: target.coordinateSpace,
       inputIsolation: target.inputIsolation,
       schedulerLockId: schedulerLockIdForTarget(target, target.windowId ?? target.mode),
       source: 'dry-run',
+      captureTimestamp: new Date().toISOString(),
       diagnostics: ['dry-run window target accepted without probing the desktop'],
     };
   }
@@ -91,6 +115,11 @@ export async function resolveWindowTarget(config: ComputerUseConfig): Promise<Wi
           inputIsolation: 'best-effort',
           schedulerLockId: schedulerLockIdForTarget(target, 'display'),
           source: 'display-fallback',
+          displayId: target.displayId,
+          bounds: target.bounds,
+          contentRect: target.contentRect,
+          devicePixelRatio: target.devicePixelRatio,
+          captureTimestamp: new Date().toISOString(),
           diagnostics: [reason, 'falling back to display capture because windowTarget.required=false'],
         };
   }
@@ -105,6 +134,11 @@ export async function resolveWindowTarget(config: ComputerUseConfig): Promise<Wi
     inputIsolation: 'best-effort',
     schedulerLockId: schedulerLockIdForTarget(target, 'display'),
     source: 'display-fallback',
+    displayId: target.displayId,
+    bounds: target.bounds,
+    contentRect: target.contentRect,
+    devicePixelRatio: target.devicePixelRatio,
+    captureTimestamp: new Date().toISOString(),
     diagnostics: [...detected.diagnostics, 'falling back to display capture because windowTarget.required=false'],
   };
 }
@@ -128,9 +162,17 @@ export function windowTargetTraceConfig(target: WindowTarget) {
     coordinateSpace: target.coordinateSpace,
     inputIsolation: target.inputIsolation,
     windowId: target.windowId,
+    processId: target.processId,
+    bundleId: target.bundleId,
     appName: target.appName,
     title: target.title,
+    displayId: target.displayId,
     bounds: target.bounds,
+    contentRect: target.contentRect,
+    devicePixelRatio: target.devicePixelRatio,
+    focused: target.focused,
+    minimized: target.minimized,
+    occluded: target.occluded,
   };
 }
 
@@ -141,9 +183,18 @@ export function toTraceWindowTarget(targetResolution: ResolvedWindowTarget): Tra
     coordinateSpace: targetResolution.coordinateSpace,
     inputIsolation: targetResolution.inputIsolation,
     windowId: targetResolution.windowId,
+    processId: targetResolution.processId,
+    bundleId: targetResolution.bundleId,
     appName: targetResolution.appName,
     title: targetResolution.title,
+    displayId: targetResolution.displayId,
     bounds: targetResolution.bounds,
+    contentRect: targetResolution.contentRect,
+    devicePixelRatio: targetResolution.devicePixelRatio,
+    focused: targetResolution.focused,
+    minimized: targetResolution.minimized,
+    occluded: targetResolution.occluded,
+    captureTimestamp: targetResolution.captureTimestamp,
     schedulerLockId: targetResolution.schedulerLockId,
     source: targetResolution.source,
     diagnostics: targetResolution.diagnostics.length ? targetResolution.diagnostics : undefined,
@@ -168,17 +219,66 @@ export function schedulerStepMetadata(targetResolution: WindowTargetResolution, 
       mode: 'blocked',
       stepId,
       lockId: 'unresolved-window-target',
+      lockScope: 'none',
+      actionConcurrency: 'blocked-unresolved-window-target',
+      analysisConcurrency: 'parallel-allowed',
+      focusPolicy: 'fail-closed-before-action',
+      interferenceRisk: 'blocked',
       reason: targetResolution.reason,
       diagnostics: targetResolution.diagnostics,
     };
   }
+  const targetBound = targetResolution.captureKind === 'window';
+  const strictFocus = targetResolution.inputIsolation === 'require-focused-target';
   return {
     mode: 'serialized-window-actions',
     stepId,
     lockId: targetResolution.schedulerLockId,
+    lockScope: targetBound ? 'target-window' : 'display-fallback',
+    actionConcurrency: targetBound ? 'one-real-gui-action-at-a-time-per-window' : 'one-real-gui-action-at-a-time-per-display',
+    analysisConcurrency: 'planner-grounder-verifier-may-run-in-parallel-before-executor-lock',
     captureKind: targetResolution.captureKind,
     inputIsolation: targetResolution.inputIsolation,
-    failClosedIsolation: targetResolution.inputIsolation === 'require-focused-target',
+    focusPolicy: strictFocus ? 'require-focused-target-before-action' : 'best-effort-focus',
+    failClosedIsolation: strictFocus,
+    interferenceRisk: targetBound && strictFocus ? 'low-when-focused-target-verified' : 'elevated-display-or-best-effort-isolation',
+    windowLifecycle: {
+      focused: targetResolution.focused,
+      minimized: targetResolution.minimized,
+      occluded: targetResolution.occluded,
+      captureTimestamp: targetResolution.captureTimestamp,
+    },
+    targetWindow: toTraceWindowTarget(targetResolution),
+  };
+}
+
+export function schedulerRunMetadata(targetResolution: WindowTargetResolution): Record<string, unknown> {
+  if (!targetResolution.ok) {
+    return {
+      mode: 'blocked',
+      lockId: 'unresolved-window-target',
+      lockScope: 'none',
+      policy: 'do not execute real GUI actions until WindowTarget resolves to an isolated target or explicit display fallback',
+      actionConcurrency: 'blocked-unresolved-window-target',
+      analysisConcurrency: 'parallel-allowed',
+      focusPolicy: 'fail-closed-before-action',
+      interferenceRisk: 'blocked',
+      targetWindow: windowTargetTraceConfig(targetResolution.target),
+      diagnostics: targetResolution.diagnostics,
+    };
+  }
+  const targetBound = targetResolution.captureKind === 'window';
+  const strictFocus = targetResolution.inputIsolation === 'require-focused-target';
+  return {
+    mode: 'serialized-window-actions',
+    lockId: targetResolution.schedulerLockId,
+    lockScope: targetBound ? 'target-window' : 'display-fallback',
+    policy: 'one real GUI action stream per target window; planner/grounder/verifier analysis may run in parallel before the executor lock',
+    actionConcurrency: targetBound ? 'one-real-gui-action-at-a-time-per-window' : 'one-real-gui-action-at-a-time-per-display',
+    analysisConcurrency: 'parallel-allowed',
+    focusPolicy: strictFocus ? 'require-focused-target-before-action' : 'best-effort-focus',
+    failClosedIsolation: strictFocus,
+    interferenceRisk: targetBound && strictFocus ? 'low-when-focused-target-verified' : 'elevated-display-or-best-effort-isolation',
     targetWindow: toTraceWindowTarget(targetResolution),
   };
 }
@@ -189,6 +289,10 @@ export function stepInputChannelMetadata(config: ComputerUseConfig, targetResolu
     executor: config.dryRun ? 'dry-run-generic-gui-executor' : executorBoundary(config),
     isolation: targetResolution.ok ? targetResolution.inputIsolation : config.windowTarget.inputIsolation,
     targetBound: targetResolution.ok && targetResolution.captureKind === 'window',
+    pointerKeyboardOwnership: 'sciforge-computer-use-channel',
+    userDeviceImpact: targetResolution.ok && targetResolution.inputIsolation === 'require-focused-target'
+      ? 'fail-closed-if-target-focus-cannot-be-verified'
+      : 'best-effort-system-input-may-affect-frontmost-window',
   };
 }
 
@@ -229,12 +333,19 @@ async function detectMacWindowTarget(target: WindowTarget): Promise<WindowTarget
       target,
       captureKind: 'window',
       windowId: target.windowId,
+      processId: target.processId,
+      bundleId: target.bundleId,
       appName: target.appName,
       title: target.title,
+      displayId: target.displayId,
+      bounds: target.bounds,
+      contentRect: target.contentRect,
+      devicePixelRatio: target.devicePixelRatio,
       coordinateSpace: target.coordinateSpace,
       inputIsolation: target.inputIsolation,
       schedulerLockId: schedulerLockIdForTarget(target, target.windowId),
       source: 'config',
+      captureTimestamp: new Date().toISOString(),
       diagnostics: ['using configured macOS window id'],
     };
   }
@@ -253,6 +364,7 @@ async function detectMacWindowTarget(target: WindowTarget): Promise<WindowTarget
     }
     const windowId = numberConfig(parsed.windowId);
     const bounds = parseWindowBounds(parsed.bounds);
+    const contentRect = parseWindowBounds(parsed.contentRect);
     if (windowId === undefined) {
       const reason = String(parsed.reason || 'macOS target-window probe did not find a matching on-screen window.');
       return { ok: false, target, reason, diagnostics: [reason] };
@@ -262,13 +374,22 @@ async function detectMacWindowTarget(target: WindowTarget): Promise<WindowTarget
       target,
       captureKind: 'window',
       windowId,
+      processId: numberConfig(parsed.processId, target.processId),
+      bundleId: stringConfig(parsed.bundleId, target.bundleId),
       appName: stringConfig(parsed.appName, target.appName),
       title: stringConfig(parsed.title, target.title),
+      displayId: numberConfig(parsed.displayId, target.displayId),
       bounds,
+      contentRect: contentRect ?? bounds,
+      devicePixelRatio: numberConfig(parsed.devicePixelRatio, target.devicePixelRatio),
+      focused: typeof parsed.focused === 'boolean' ? parsed.focused : target.focused,
+      minimized: typeof parsed.minimized === 'boolean' ? parsed.minimized : target.minimized,
+      occluded: typeof parsed.occluded === 'boolean' ? parsed.occluded : target.occluded,
       coordinateSpace: target.coordinateSpace,
       inputIsolation: target.inputIsolation,
       schedulerLockId: schedulerLockIdForTarget(target, windowId),
       source: target.mode === 'active-window' ? 'active-window' : 'config',
+      captureTimestamp: new Date().toISOString(),
       diagnostics: ['resolved macOS target window through CGWindowList'],
     };
   } finally {
@@ -280,16 +401,27 @@ function macWindowTargetProbeScript(target: WindowTarget) {
   return `
 import CoreGraphics
 import Foundation
+import AppKit
 
 let targetMode = ${swiftString(target.mode)}
 let targetApp: String? = ${swiftOptionalString(target.appName)}
 let targetTitle: String? = ${swiftOptionalString(target.title)}
+let targetBundle: String? = ${swiftOptionalString(target.bundleId)}
 let options = CGWindowListOption(arrayLiteral: .optionOnScreenOnly, .excludeDesktopElements)
 let windows = (CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]) ?? []
+let frontmostPid = NSWorkspace.shared.frontmostApplication?.processIdentifier
 
 func emit(_ value: [String: Any]) {
   let data = try! JSONSerialization.data(withJSONObject: value, options: [])
   print(String(data: data, encoding: .utf8)!)
+}
+
+func displayIdFor(bounds: CGRect) -> UInt32? {
+  var count: UInt32 = 0
+  var displays = [CGDirectDisplayID](repeating: 0, count: 16)
+  let error = CGGetDisplaysWithRect(bounds, UInt32(displays.count), &displays, &count)
+  if error == .success && count > 0 { return displays[0] }
+  return nil
 }
 
 for window in windows {
@@ -297,17 +429,37 @@ for window in windows {
   if layer != 0 { continue }
   let appName = window[kCGWindowOwnerName as String] as? String ?? ""
   let title = window[kCGWindowName as String] as? String ?? ""
+  let processId = window[kCGWindowOwnerPID as String] as? Int32
+  let runningApp = processId.flatMap { NSRunningApplication(processIdentifier: $0) }
+  let bundleId = runningApp?.bundleIdentifier ?? ""
   if let targetApp, appName.range(of: targetApp, options: [.caseInsensitive]) == nil { continue }
+  if let targetBundle, bundleId.range(of: targetBundle, options: [.caseInsensitive]) == nil { continue }
   if let targetTitle, title.range(of: targetTitle, options: [.caseInsensitive]) == nil { continue }
   let windowId = window[kCGWindowNumber as String] as? UInt32 ?? 0
   let bounds = window[kCGWindowBounds as String] as? [String: Any] ?? [:]
+  let x = bounds["X"] as? CGFloat ?? bounds["x"] as? CGFloat ?? 0
+  let y = bounds["Y"] as? CGFloat ?? bounds["y"] as? CGFloat ?? 0
+  let width = bounds["Width"] as? CGFloat ?? bounds["width"] as? CGFloat ?? 0
+  let height = bounds["Height"] as? CGFloat ?? bounds["height"] as? CGFloat ?? 0
+  let rect = CGRect(x: x, y: y, width: width, height: height)
+  let displayId = displayIdFor(bounds: rect)
+  let alpha = window[kCGWindowAlpha as String] as? Double ?? 1
+  let isOnscreen = (window[kCGWindowIsOnscreen as String] as? Bool) ?? true
   if targetMode == "active-window" || targetMode == "app-window" {
-    emit([
+    var payload: [String: Any] = [
       "windowId": Int(windowId),
+      "processId": Int(processId ?? 0),
+      "bundleId": bundleId,
       "appName": appName,
       "title": title,
       "bounds": bounds,
-    ])
+      "contentRect": bounds,
+      "focused": processId != nil && frontmostPid == processId,
+      "minimized": !isOnscreen,
+      "occluded": alpha <= 0 || !isOnscreen,
+    ]
+    if let displayId { payload["displayId"] = Int(displayId) }
+    emit(payload)
     exit(0)
   }
 }

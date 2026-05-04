@@ -61,10 +61,17 @@ export interface WindowTarget {
   required: boolean;
   mode: 'display' | 'active-window' | 'window-id' | 'app-window';
   windowId?: number;
+  processId?: number;
+  bundleId?: string;
   appName?: string;
   title?: string;
   displayId?: number;
   bounds?: WindowBounds;
+  contentRect?: WindowBounds;
+  devicePixelRatio?: number;
+  focused?: boolean;
+  minimized?: boolean;
+  occluded?: boolean;
   coordinateSpace: 'screen' | 'window' | 'window-local';
   inputIsolation: 'best-effort' | 'require-focused-target';
 }
@@ -74,9 +81,18 @@ export interface ResolvedWindowTarget {
   target: WindowTarget;
   captureKind: 'display' | 'window';
   windowId?: number;
+  processId?: number;
+  bundleId?: string;
   appName?: string;
   title?: string;
+  displayId?: number;
   bounds?: WindowBounds;
+  contentRect?: WindowBounds;
+  devicePixelRatio?: number;
+  focused?: boolean;
+  minimized?: boolean;
+  occluded?: boolean;
+  captureTimestamp?: string;
   coordinateSpace: 'screen' | 'window' | 'window-local';
   inputIsolation: WindowTarget['inputIsolation'];
   schedulerLockId: string;
@@ -105,10 +121,39 @@ export interface ScreenshotRef {
   absPath: string;
   displayId: number;
   windowTarget?: TraceWindowTarget;
+  captureScope?: 'display' | 'window';
+  captureProvider?: string;
+  captureTimestamp?: string;
+  diagnostics?: string[];
+  captureDiagnostics?: CaptureDiagnostic[];
   width?: number;
   height?: number;
   sha256: string;
   bytes: number;
+}
+
+export interface CaptureDiagnostic {
+  level: 'info' | 'warning' | 'error';
+  code: string;
+  message: string;
+  provider?: string;
+  captureScope?: 'display' | 'window';
+  command?: string;
+  args?: string[];
+  exitCode?: number;
+  stdout?: string;
+  stderr?: string;
+  timestamp: string;
+}
+
+export interface CaptureProviderFailure {
+  ok: false;
+  provider: string;
+  captureScope: 'display' | 'window';
+  displayId: number;
+  path: string;
+  windowId?: number;
+  diagnostics: CaptureDiagnostic[];
 }
 
 export interface TraceWindowTarget {
@@ -119,9 +164,18 @@ export interface TraceWindowTarget {
   coordinateSpace: WindowTarget['coordinateSpace'];
   inputIsolation: WindowTarget['inputIsolation'];
   windowId?: number;
+  processId?: number;
+  bundleId?: string;
   appName?: string;
   title?: string;
+  displayId?: number;
   bounds?: WindowBounds;
+  contentRect?: WindowBounds;
+  devicePixelRatio?: number;
+  focused?: boolean;
+  minimized?: boolean;
+  occluded?: boolean;
+  captureTimestamp?: string;
   schedulerLockId?: string;
   source: ResolvedWindowTarget['source'];
   diagnostics?: string[];
@@ -154,6 +208,11 @@ export function toTraceScreenshotRef(ref: ScreenshotRef) {
     path: ref.path,
     displayId: ref.displayId,
     windowTarget: ref.windowTarget,
+    captureScope: ref.captureScope,
+    captureProvider: ref.captureProvider,
+    captureTimestamp: ref.captureTimestamp,
+    diagnostics: ref.diagnostics,
+    captureDiagnostics: ref.captureDiagnostics,
     width: ref.width,
     height: ref.height,
     sha256: ref.sha256,

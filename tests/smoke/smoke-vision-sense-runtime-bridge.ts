@@ -4,6 +4,8 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { CaptureProviderError, captureDisplays } from '../../src/runtime/computer-use/capture.js';
+import type { ComputerUseConfig, WindowTargetResolution } from '../../src/runtime/computer-use/types.js';
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
 
 const previousBridge = process.env.SCIFORGE_VISION_DESKTOP_BRIDGE;
@@ -714,11 +716,22 @@ try {
     const windowRefs = (windowTrace.imageMemory as Record<string, unknown>).refs as Array<Record<string, unknown>>;
     assert.ok(windowRefs.length >= 2);
     assert.ok(windowRefs.every((ref) => /-window-/.test(String(ref.path))));
+    assert.ok(windowRefs.every((ref) => ref.captureScope === 'window'));
+    assert.ok(windowRefs.every((ref) => ref.captureProvider === 'dry-run-window-png'));
+    assert.ok(windowRefs.every((ref) => typeof ref.captureTimestamp === 'string' && String(ref.captureTimestamp).length > 0));
+    assert.ok(windowRefs.every((ref) => Array.isArray(ref.captureDiagnostics) && (ref.captureDiagnostics as unknown[]).length >= 1));
+    assert.ok(windowRefs.every((ref) => (ref.captureDiagnostics as Array<Record<string, unknown>>).some((item) => item.code === 'capture.window.dry-run')));
     assert.ok(windowRefs.every((ref) => ((ref.windowTarget as Record<string, unknown>)?.captureKind) === 'window'));
     const generic = windowTrace.genericComputerUse as Record<string, unknown>;
     assert.equal(((generic.coordinateContract as Record<string, unknown>)?.grounderOutput), 'target-window screenshot coordinates');
     assert.equal(((generic.coordinateContract as Record<string, unknown>)?.executorInput), 'window-local');
     assert.equal(generic.inputIsolation, 'require-focused-target');
+    const scheduler = windowTrace.scheduler as Record<string, unknown>;
+    assert.equal(scheduler.lockScope, 'target-window');
+    assert.equal(scheduler.actionConcurrency, 'one-real-gui-action-at-a-time-per-window');
+    assert.equal(scheduler.analysisConcurrency, 'parallel-allowed');
+    assert.equal(scheduler.focusPolicy, 'require-focused-target-before-action');
+    assert.equal(scheduler.interferenceRisk, 'low-when-focused-target-verified');
     const windowStep = (windowTrace.steps as Array<Record<string, unknown>>).find((step) => step.id === 'step-001-execute-click');
     assert.ok(windowStep);
     assert.equal(((windowStep.plannedAction as Record<string, unknown>)?.x), 40);
@@ -732,11 +745,61 @@ try {
     assert.equal(((windowStep.localCoordinate as Record<string, unknown>)?.space), 'window');
     assert.equal(((windowStep.mappedCoordinate as Record<string, unknown>)?.space), 'executor');
     assert.equal(((windowStep.inputChannel as Record<string, unknown>)?.type), 'generic-mouse-keyboard');
+    assert.equal(((windowStep.inputChannel as Record<string, unknown>)?.pointerKeyboardOwnership), 'sciforge-computer-use-channel');
     assert.equal(((windowStep.scheduler as Record<string, unknown>)?.mode), 'serialized-window-actions');
+    assert.equal(((windowStep.scheduler as Record<string, unknown>)?.lockScope), 'target-window');
+    assert.equal(((windowStep.scheduler as Record<string, unknown>)?.focusPolicy), 'require-focused-target-before-action');
+    assert.equal(((windowStep.scheduler as Record<string, unknown>)?.interferenceRisk), 'low-when-focused-target-verified');
     assert.equal(((windowStep.scheduler as Record<string, unknown>)?.failClosedIsolation), true);
   } finally {
     await new Promise<void>((resolve) => windowGrounderServer.close(() => resolve()));
   }
+
+  const providerFailureWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-window-provider-failure-'));
+  const providerFailureTarget = {
+    enabled: true,
+    required: true,
+    mode: 'window-id',
+    windowId: 99_999,
+    coordinateSpace: 'window-local',
+    inputIsolation: 'require-focused-target',
+  } satisfies ComputerUseConfig['windowTarget'];
+  const providerFailureResolution: WindowTargetResolution = {
+    ok: true,
+    target: providerFailureTarget,
+    captureKind: 'window',
+    windowId: 99_999,
+    coordinateSpace: 'window-local',
+    inputIsolation: 'require-focused-target',
+    schedulerLockId: 'window:99999',
+    source: 'config',
+    diagnostics: ['unit-smoke resolved generic window target'],
+  };
+  const providerFailureConfig: ComputerUseConfig = {
+    desktopBridgeEnabled: true,
+    dryRun: false,
+    captureDisplays: [7],
+    desktopPlatform: 'linux',
+    windowTarget: providerFailureTarget,
+    maxSteps: 1,
+    allowHighRiskActions: false,
+    planner: { timeoutMs: 1, maxTokens: 1 },
+    grounder: { timeoutMs: 1, allowServiceLocalPaths: false, visionTimeoutMs: 1, visionMaxTokens: 1 },
+    plannedActions: [],
+  };
+  await assert.rejects(
+    () => captureDisplays(providerFailureWorkspace, providerFailureWorkspace, 'step-structured-failure', providerFailureConfig, providerFailureResolution),
+    (error) => {
+      assert.ok(error instanceof CaptureProviderError);
+      assert.equal(error.failure.ok, false);
+      assert.equal(error.failure.captureScope, 'window');
+      assert.equal(error.failure.provider, 'linux-window-provider-unavailable');
+      assert.equal(error.failure.displayId, 7);
+      assert.equal(error.failure.windowId, 99_999);
+      assert.ok(error.failure.diagnostics.some((item) => item.code === 'capture.window.unsupported-provider' && item.level === 'error'));
+      return true;
+    },
+  );
 
   const isolatedWindowWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-window-isolation-'));
   process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-window-isolation-smoke';

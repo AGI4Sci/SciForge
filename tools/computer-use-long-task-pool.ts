@@ -402,6 +402,14 @@ export async function validateComputerUseLongTrace(options: {
     if (!schedulerMode || !/serial|ordered|single|window/i.test(schedulerMode)) {
       issues.push('trace.scheduler must declare serialized/ordered window action scheduling');
     }
+    const lockId = firstString(traceScheduler.lockId, traceScheduler.schedulerLockId);
+    if (!lockId) issues.push('trace.scheduler missing scheduler lock id');
+    const lockScope = firstString(traceScheduler.lockScope, traceScheduler.scope);
+    if (!lockScope || !/window|display/i.test(lockScope)) issues.push('trace.scheduler.lockScope must bind actions to a target window or display fallback');
+    const focusPolicy = firstString(traceScheduler.focusPolicy, traceScheduler.focus);
+    if (!focusPolicy || !/focus|fail-closed|best-effort/i.test(focusPolicy)) issues.push('trace.scheduler.focusPolicy must describe focus/isolation behavior');
+    const interferenceRisk = firstString(traceScheduler.interferenceRisk, traceScheduler.risk);
+    if (!interferenceRisk) issues.push('trace.scheduler.interferenceRisk must record user/device interference risk');
   }
   const genericComputerUse = isRecord(trace.genericComputerUse) ? trace.genericComputerUse : {};
   const appSpecificShortcuts = Array.isArray(genericComputerUse.appSpecificShortcuts) ? genericComputerUse.appSpecificShortcuts : undefined;
@@ -2028,7 +2036,10 @@ function hasSchedulerMetadata(step: Record<string, unknown>, traceScheduler: Rec
   const scheduler = isRecord(step.scheduler) ? step.scheduler : traceScheduler;
   if (!scheduler) return false;
   const mode = firstString(scheduler.mode, scheduler.policy, scheduler.queue);
-  return Boolean(mode && /serial|ordered|single|window/i.test(mode));
+  const lockId = firstString(scheduler.lockId, scheduler.schedulerLockId);
+  const focusPolicy = firstString(scheduler.focusPolicy, scheduler.focus);
+  const interferenceRisk = firstString(scheduler.interferenceRisk, scheduler.risk);
+  return Boolean(mode && /serial|ordered|single|window/i.test(mode) && lockId && focusPolicy && interferenceRisk);
 }
 
 function hasForbiddenPrivateFields(value: unknown): boolean {
