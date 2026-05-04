@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, stat } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +11,16 @@ const previousDryRun = process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN;
 const previousRunId = process.env.SCIFORGE_VISION_RUN_ID;
 const previousDisplays = process.env.SCIFORGE_VISION_CAPTURE_DISPLAYS;
 const previousActions = process.env.SCIFORGE_VISION_ACTIONS_JSON;
+const previousGrounderUrl = process.env.SCIFORGE_VISION_KV_GROUND_URL;
+const previousGrounderAllowLocal = process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS;
+const previousPlannerBaseUrl = process.env.SCIFORGE_VISION_PLANNER_BASE_URL;
+const previousPlannerApiKey = process.env.SCIFORGE_VISION_PLANNER_API_KEY;
+const previousPlannerModel = process.env.SCIFORGE_VISION_PLANNER_MODEL;
+const previousVisualGrounderBaseUrl = process.env.SCIFORGE_VISION_GROUNDER_LLM_BASE_URL;
+const previousVisualGrounderApiKey = process.env.SCIFORGE_VISION_GROUNDER_LLM_API_KEY;
+const previousVisualGrounderModel = process.env.SCIFORGE_VISION_GROUNDER_LLM_MODEL;
+const previousMaxSteps = process.env.SCIFORGE_VISION_MAX_STEPS;
+const previousDesktopPlatform = process.env.SCIFORGE_VISION_DESKTOP_PLATFORM;
 
 try {
   const blockedWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-bridge-blocked-'));
@@ -52,15 +63,37 @@ try {
   assert.ok(missingTraceArtifact);
   assert.equal(missingTraceArtifact.path, '.sciforge/vision-runs/generic-cu-missing-planner-smoke/vision-trace.json');
   await stat(join(missingPlannerWorkspace, '.sciforge/vision-runs/generic-cu-missing-planner-smoke/step-000-before-display-1.png'));
-  await stat(join(missingPlannerWorkspace, '.sciforge/vision-runs/generic-cu-missing-planner-smoke/step-999-after-display-2.png'));
+  await stat(join(missingPlannerWorkspace, '.sciforge/vision-runs/generic-cu-missing-planner-smoke/step-000-after-display-2.png'));
+  delete process.env.SCIFORGE_VISION_CAPTURE_DISPLAYS;
+
+  const autoDisplaysWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-auto-displays-'));
+  process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-auto-displays-smoke';
+  process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN = '1';
+  process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([{ type: 'wait', ms: 1 }]);
+  const autoDisplays = await runWorkspaceRuntimeGateway({
+    skillDomain: 'literature',
+    prompt: 'Use generic computer use with automatically detected displays.',
+    workspacePath: autoDisplaysWorkspace,
+    selectedToolIds: ['local.vision-sense'],
+    uiState: { selectedToolIds: ['local.vision-sense'] },
+  });
+  const autoDisplaysTraceArtifact = autoDisplays.artifacts.find((artifact) => artifact.id === 'vision-sense-trace');
+  assert.ok(autoDisplaysTraceArtifact);
+  const autoDisplaysTrace = JSON.parse(await readFile(join(autoDisplaysWorkspace, String(autoDisplaysTraceArtifact.path)), 'utf8')) as Record<string, unknown>;
+  const autoCaptureDisplays = (autoDisplaysTrace.config as Record<string, unknown>).captureDisplays as unknown[];
+  assert.ok(Array.isArray(autoCaptureDisplays) && autoCaptureDisplays.length >= 1);
+  assert.ok(autoCaptureDisplays.every((displayId) => Number.isInteger(displayId) && Number(displayId) > 0));
 
   const dryRunWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-generic-dryrun-'));
-  process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-actions-smoke';
-  process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([
-    { type: 'wait', ms: 1 },
-    { type: 'hotkey', keys: ['command', 'n'] },
-    { type: 'type_text', text: 'GUI Agent generic action smoke' },
-  ]);
+    process.env.SCIFORGE_VISION_CAPTURE_DISPLAYS = '1,2';
+    process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-actions-smoke';
+    process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([
+      { type: 'wait', ms: 1 },
+      { type: 'hotkey', keys: ['command', 'n'] },
+      { actionType: 'hotkey', hotkey: 'alt+tab' },
+      { actionType: 'scroll', scrollAmount: 300 },
+      { type: 'type_text', text: 'GUI Agent generic action smoke' },
+    ]);
   const completed = await runWorkspaceRuntimeGateway({
     skillDomain: 'literature',
     prompt: 'Use generic computer use actions in whichever app is active; do not use app-specific shortcuts.',
@@ -84,13 +117,541 @@ try {
   assert.equal((trace.imageMemory as Record<string, unknown>).policy, 'file-ref-only');
   assert.deepEqual((trace.genericComputerUse as Record<string, unknown>).appSpecificShortcuts, []);
   const refs = (trace.imageMemory as Record<string, unknown>).refs as Array<Record<string, unknown>>;
-  assert.equal(refs.length, 4);
-  assert.deepEqual(refs.map((ref) => ref.displayId), [1, 2, 1, 2]);
+  assert.equal(refs.length, 20);
+  assert.deepEqual(refs.map((ref) => ref.displayId), [1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2]);
   assert.ok((trace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-001-execute-wait'));
   assert.ok((trace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-002-execute-hotkey'));
-  assert.ok((trace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-003-execute-type_text'));
-  await stat(join(dryRunWorkspace, '.sciforge/vision-runs/generic-cu-actions-smoke/step-000-before-display-1.png'));
-  await stat(join(dryRunWorkspace, '.sciforge/vision-runs/generic-cu-actions-smoke/step-999-after-display-2.png'));
+  assert.ok((trace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-003-execute-hotkey'));
+  assert.ok((trace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-004-execute-scroll'));
+  assert.ok((trace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-005-execute-type_text'));
+  await stat(join(dryRunWorkspace, '.sciforge/vision-runs/generic-cu-actions-smoke/step-001-before-display-1.png'));
+  await stat(join(dryRunWorkspace, '.sciforge/vision-runs/generic-cu-actions-smoke/step-005-after-display-2.png'));
+
+  const highRiskWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-high-risk-'));
+  process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-high-risk-smoke';
+  process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([
+    { type: 'click', x: 10, y: 10, targetDescription: 'final submit button', riskLevel: 'high', requiresConfirmation: true },
+  ]);
+  const blockedHighRisk = await runWorkspaceRuntimeGateway({
+    skillDomain: 'literature',
+    prompt: 'Use computer use to click a high-risk submit action without confirmation.',
+    workspacePath: highRiskWorkspace,
+    selectedToolIds: ['local.vision-sense'],
+    uiState: { selectedToolIds: ['local.vision-sense'] },
+  });
+  assert.equal(blockedHighRisk.executionUnits[0].status, 'failed-with-reason');
+  assert.match(String(blockedHighRisk.executionUnits[0].failureReason), /High-risk Computer Use action blocked/i);
+  const highRiskTraceArtifact = blockedHighRisk.artifacts.find((artifact) => artifact.id === 'vision-sense-trace');
+  assert.ok(highRiskTraceArtifact);
+  const highRiskTrace = JSON.parse(await readFile(join(highRiskWorkspace, String(highRiskTraceArtifact.path)), 'utf8')) as Record<string, unknown>;
+  assert.ok((highRiskTrace.steps as Array<Record<string, unknown>>).some((step) => step.status === 'blocked'));
+  assert.doesNotMatch(JSON.stringify(highRiskTrace), /base64|data:image/i);
+
+  const grounderServer = createServer((request, response) => {
+    if (request.method !== 'POST' || request.url !== '/predict/') {
+      response.statusCode = 404;
+      response.end('not found');
+      return;
+    }
+    let raw = '';
+    request.on('data', (chunk) => {
+      raw += String(chunk);
+    });
+    request.on('end', () => {
+      const body = JSON.parse(raw) as Record<string, unknown>;
+      assert.equal(body.text_prompt, 'the generic search box');
+      assert.match(String(body.image_path), /step-001-before-display-1\.png$/);
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ coordinates: [42, 24], image_size: { width: 100, height: 80 }, text: 'click' }));
+    });
+  });
+  await new Promise<void>((resolve) => grounderServer.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = grounderServer.address();
+    assert.ok(address && typeof address === 'object');
+    const groundedWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-grounder-'));
+    process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-grounder-smoke';
+    process.env.SCIFORGE_VISION_KV_GROUND_URL = `http://127.0.0.1:${address.port}`;
+    process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS = '1';
+    process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([
+      { type: 'click', targetDescription: 'the generic search box' },
+    ]);
+    const grounded = await runWorkspaceRuntimeGateway({
+      skillDomain: 'literature',
+      prompt: 'Use generic computer use to click a visually described target.',
+      workspacePath: groundedWorkspace,
+      selectedToolIds: ['local.vision-sense'],
+      uiState: { selectedToolIds: ['local.vision-sense'] },
+    });
+    assert.equal(grounded.executionUnits[0].status, 'done');
+    const groundedTraceArtifact = grounded.artifacts.find((artifact) => artifact.id === 'vision-sense-trace');
+    assert.ok(groundedTraceArtifact);
+    const groundedTrace = JSON.parse(await readFile(join(groundedWorkspace, String(groundedTraceArtifact.path)), 'utf8')) as Record<string, unknown>;
+    const groundedStep = (groundedTrace.steps as Array<Record<string, unknown>>).find((step) => step.id === 'step-001-execute-click');
+    assert.ok(groundedStep);
+    assert.equal(((groundedStep.plannedAction as Record<string, unknown>)?.x), 42);
+    assert.equal(((groundedStep.grounding as Record<string, unknown>)?.provider), 'kv-ground');
+  } finally {
+    await new Promise<void>((resolve) => grounderServer.close(() => resolve()));
+  }
+
+  const visualGrounderServer = createServer((request, response) => {
+    if (request.method !== 'POST' || request.url !== '/chat/completions') {
+      response.statusCode = 404;
+      response.end('not found');
+      return;
+    }
+    let raw = '';
+    request.on('data', (chunk) => {
+      raw += String(chunk);
+    });
+    request.on('end', () => {
+      const body = JSON.parse(raw) as Record<string, unknown>;
+      assert.equal(body.model, 'visual-grounder-smoke-model');
+      assert.match(raw, /visually described fallback target/);
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({ coordinates: [66, 77], confidence: 0.8, reason: 'target center' }),
+          },
+        }],
+      }));
+    });
+  });
+  await new Promise<void>((resolve) => visualGrounderServer.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = visualGrounderServer.address();
+    assert.ok(address && typeof address === 'object');
+    const visualGrounderWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-visual-grounder-'));
+    process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-visual-grounder-smoke';
+    delete process.env.SCIFORGE_VISION_KV_GROUND_URL;
+    process.env.SCIFORGE_VISION_GROUNDER_LLM_BASE_URL = `http://127.0.0.1:${address.port}`;
+    process.env.SCIFORGE_VISION_GROUNDER_LLM_API_KEY = 'visual-grounder-key';
+    process.env.SCIFORGE_VISION_GROUNDER_LLM_MODEL = 'visual-grounder-smoke-model';
+    process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([
+      { type: 'click', targetDescription: 'visually described fallback target' },
+    ]);
+    const visuallyGrounded = await runWorkspaceRuntimeGateway({
+      skillDomain: 'literature',
+      prompt: 'Use generic computer use to click a target through visual grounder fallback.',
+      workspacePath: visualGrounderWorkspace,
+      selectedToolIds: ['local.vision-sense'],
+      uiState: { selectedToolIds: ['local.vision-sense'] },
+    });
+    assert.equal(visuallyGrounded.executionUnits[0].status, 'done');
+    const visualTraceArtifact = visuallyGrounded.artifacts.find((artifact) => artifact.id === 'vision-sense-trace');
+    assert.ok(visualTraceArtifact);
+    const visualTrace = JSON.parse(await readFile(join(visualGrounderWorkspace, String(visualTraceArtifact.path)), 'utf8')) as Record<string, unknown>;
+    const visualStep = (visualTrace.steps as Array<Record<string, unknown>>).find((step) => step.id === 'step-001-execute-click');
+    assert.ok(visualStep);
+    assert.equal(((visualStep.plannedAction as Record<string, unknown>)?.x), 66);
+    assert.equal(((visualStep.grounding as Record<string, unknown>)?.provider), 'openai-compatible-vision-grounder');
+  } finally {
+    await new Promise<void>((resolve) => visualGrounderServer.close(() => resolve()));
+  }
+
+  let plannerCalls = 0;
+  const plannerServer = createServer((request, response) => {
+    if (request.method !== 'POST' || request.url !== '/chat/completions') {
+      response.statusCode = 404;
+      response.end('not found');
+      return;
+    }
+    let raw = '';
+    request.on('data', (chunk) => {
+      raw += String(chunk);
+    });
+    request.on('end', () => {
+      plannerCalls += 1;
+      const body = JSON.parse(raw) as Record<string, unknown>;
+      assert.equal(body.model, 'vision-planner-smoke-model');
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({
+        choices: [{
+          message: {
+            content: plannerCalls === 1
+              ? JSON.stringify({
+                  done: false,
+                  reason: 'click target first',
+                  actions: [
+                    { actionType: 'click', target_description: 'the generic planner target' },
+                  ],
+                })
+              : JSON.stringify({ done: true, reason: 'target clicked', actions: [] }),
+          },
+        }],
+      }));
+    });
+  });
+  const plannerGrounderServer = createServer((request, response) => {
+    if (request.method !== 'POST' || request.url !== '/predict/') {
+      response.statusCode = 404;
+      response.end('not found');
+      return;
+    }
+    let raw = '';
+    request.on('data', (chunk) => {
+      raw += String(chunk);
+    });
+    request.on('end', () => {
+      const body = JSON.parse(raw) as Record<string, unknown>;
+      assert.equal(body.text_prompt, 'the generic planner target');
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ coordinates: [12, 34], image_size: { width: 100, height: 80 } }));
+    });
+  });
+  await new Promise<void>((resolve) => plannerServer.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => plannerGrounderServer.listen(0, '127.0.0.1', resolve));
+  try {
+    const plannerAddress = plannerServer.address();
+    const plannerGrounderAddress = plannerGrounderServer.address();
+    assert.ok(plannerAddress && typeof plannerAddress === 'object');
+    assert.ok(plannerGrounderAddress && typeof plannerGrounderAddress === 'object');
+    const plannerWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-planner-'));
+    process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-planner-smoke';
+    delete process.env.SCIFORGE_VISION_ACTIONS_JSON;
+    process.env.SCIFORGE_VISION_PLANNER_BASE_URL = `http://127.0.0.1:${plannerAddress.port}`;
+    process.env.SCIFORGE_VISION_PLANNER_API_KEY = 'planner-test-key';
+    process.env.SCIFORGE_VISION_PLANNER_MODEL = 'vision-planner-smoke-model';
+    process.env.SCIFORGE_VISION_KV_GROUND_URL = `http://127.0.0.1:${plannerGrounderAddress.port}`;
+    process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS = '1';
+    const planned = await runWorkspaceRuntimeGateway({
+      skillDomain: 'literature',
+      prompt: 'Use generic computer use planner to click the visible target.',
+      workspacePath: plannerWorkspace,
+      selectedToolIds: ['local.vision-sense'],
+      uiState: { selectedToolIds: ['local.vision-sense'] },
+    });
+    assert.equal(planned.executionUnits[0].status, 'done');
+    const plannedTraceArtifact = planned.artifacts.find((artifact) => artifact.id === 'vision-sense-trace');
+    assert.ok(plannedTraceArtifact);
+    const plannedTrace = JSON.parse(await readFile(join(plannerWorkspace, String(plannedTraceArtifact.path)), 'utf8')) as Record<string, unknown>;
+    assert.ok((plannedTrace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-000-plan'));
+    assert.ok((plannedTrace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-001-replan'));
+    const executeStep = (plannedTrace.steps as Array<Record<string, unknown>>).find((step) => step.id === 'step-001-execute-click');
+    assert.ok(executeStep);
+    assert.equal(((executeStep.plannedAction as Record<string, unknown>)?.x), 12);
+    assert.deepEqual((plannedTrace.genericComputerUse as Record<string, unknown>).appSpecificShortcuts, []);
+  } finally {
+    await new Promise<void>((resolve) => plannerServer.close(() => resolve()));
+    await new Promise<void>((resolve) => plannerGrounderServer.close(() => resolve()));
+  }
+
+  let maxStepsPlannerCalls = 0;
+  const maxStepsPlannerServer = createServer((request, response) => {
+    if (request.method !== 'POST' || request.url !== '/chat/completions') {
+      response.statusCode = 404;
+      response.end('not found');
+      return;
+    }
+    let raw = '';
+    request.on('data', (chunk) => {
+      raw += String(chunk);
+    });
+    request.on('end', () => {
+      maxStepsPlannerCalls += 1;
+      assert.match(raw, /Execution environment:/);
+      assert.match(raw, /Set done=true only when the supplied screenshot shows/);
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              done: false,
+              reason: 'task still needs more GUI work',
+              actions: [{ actionType: 'press_key', key: 'Escape' }],
+            }),
+          },
+        }],
+      }));
+    });
+  });
+  await new Promise<void>((resolve) => maxStepsPlannerServer.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = maxStepsPlannerServer.address();
+    assert.ok(address && typeof address === 'object');
+    const maxStepsWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-maxsteps-'));
+    process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-maxsteps-smoke';
+    delete process.env.SCIFORGE_VISION_ACTIONS_JSON;
+    delete process.env.SCIFORGE_VISION_KV_GROUND_URL;
+    process.env.SCIFORGE_VISION_MAX_STEPS = '1';
+    process.env.SCIFORGE_VISION_PLANNER_BASE_URL = `http://127.0.0.1:${address.port}`;
+    process.env.SCIFORGE_VISION_PLANNER_API_KEY = 'planner-test-key';
+    process.env.SCIFORGE_VISION_PLANNER_MODEL = 'vision-planner-maxsteps-model';
+    const maxSteps = await runWorkspaceRuntimeGateway({
+      skillDomain: 'literature',
+      prompt: 'Use generic computer use planner and keep going until the visible task is complete.',
+      workspacePath: maxStepsWorkspace,
+      selectedToolIds: ['local.vision-sense'],
+      uiState: { selectedToolIds: ['local.vision-sense'] },
+    });
+    assert.equal(maxStepsPlannerCalls, 1);
+    assert.equal(maxSteps.executionUnits[0].status, 'failed-with-reason');
+    assert.match(String(maxSteps.executionUnits[0].failureReason), /maxSteps=1/i);
+    const maxStepsTraceArtifact = maxSteps.artifacts.find((artifact) => artifact.id === 'vision-sense-trace');
+    assert.ok(maxStepsTraceArtifact);
+    const maxStepsTrace = JSON.parse(await readFile(join(maxStepsWorkspace, String(maxStepsTraceArtifact.path)), 'utf8')) as Record<string, unknown>;
+    assert.ok((maxStepsTrace.steps as Array<Record<string, unknown>>).some((step) => /maxSteps exhausted/.test(String((step.verifier as Record<string, unknown>)?.reason))));
+  } finally {
+    await new Promise<void>((resolve) => maxStepsPlannerServer.close(() => resolve()));
+    delete process.env.SCIFORGE_VISION_MAX_STEPS;
+  }
+
+  let platformRetryPlannerCalls = 0;
+  const platformRetryPlannerServer = createServer((request, response) => {
+    if (request.method !== 'POST' || request.url !== '/chat/completions') {
+      response.statusCode = 404;
+      response.end('not found');
+      return;
+    }
+    let raw = '';
+    request.on('data', (chunk) => {
+      raw += String(chunk);
+    });
+    request.on('end', () => {
+      platformRetryPlannerCalls += 1;
+      if (platformRetryPlannerCalls === 1) assert.match(raw, /desktopPlatform=\\?"darwin\\?"/);
+      if (platformRetryPlannerCalls === 2) assert.match(raw, /cannot be executed in the current operating system/);
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({
+        choices: [{
+          message: {
+            content: platformRetryPlannerCalls === 1
+              ? JSON.stringify({
+                  done: false,
+                  reason: 'bad key plan for configured platform',
+                  actions: [{ actionType: 'press_key', key: 'Win' }],
+                })
+              : JSON.stringify({
+                  done: false,
+                  reason: 'rewrite with configured-platform key',
+                  actions: [{ actionType: 'press_key', key: 'Escape' }],
+                }),
+          },
+        }],
+      }));
+    });
+  });
+  await new Promise<void>((resolve) => platformRetryPlannerServer.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = platformRetryPlannerServer.address();
+    assert.ok(address && typeof address === 'object');
+    const platformRetryWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-platform-retry-'));
+    process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-platform-retry-smoke';
+    delete process.env.SCIFORGE_VISION_ACTIONS_JSON;
+    process.env.SCIFORGE_VISION_DESKTOP_PLATFORM = 'darwin';
+    process.env.SCIFORGE_VISION_MAX_STEPS = '1';
+    process.env.SCIFORGE_VISION_PLANNER_BASE_URL = `http://127.0.0.1:${address.port}`;
+    process.env.SCIFORGE_VISION_PLANNER_API_KEY = 'planner-test-key';
+    process.env.SCIFORGE_VISION_PLANNER_MODEL = 'vision-planner-platform-retry-model';
+    const platformRetry = await runWorkspaceRuntimeGateway({
+      skillDomain: 'literature',
+      prompt: 'Use generic computer use planner with platform-compatible keys.',
+      workspacePath: platformRetryWorkspace,
+      selectedToolIds: ['local.vision-sense'],
+      uiState: { selectedToolIds: ['local.vision-sense'] },
+    });
+    assert.equal(platformRetryPlannerCalls, 2);
+    const platformTraceArtifact = platformRetry.artifacts.find((artifact) => artifact.id === 'vision-sense-trace');
+    assert.ok(platformTraceArtifact);
+    const platformTrace = JSON.parse(await readFile(join(platformRetryWorkspace, String(platformTraceArtifact.path)), 'utf8')) as Record<string, unknown>;
+    assert.equal(((platformTrace.config as Record<string, unknown>)?.desktopPlatform), 'darwin');
+    assert.ok((platformTrace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-001-execute-press_key'));
+    assert.doesNotMatch(JSON.stringify(platformTrace), /"key": "Win"/);
+  } finally {
+    await new Promise<void>((resolve) => platformRetryPlannerServer.close(() => resolve()));
+    delete process.env.SCIFORGE_VISION_MAX_STEPS;
+    delete process.env.SCIFORGE_VISION_DESKTOP_PLATFORM;
+  }
+
+  let waitRetryPlannerCalls = 0;
+  const waitRetryPlannerServer = createServer((request, response) => {
+    if (request.method !== 'POST' || request.url !== '/chat/completions') {
+      response.statusCode = 404;
+      response.end('not found');
+      return;
+    }
+    let raw = '';
+    request.on('data', (chunk) => {
+      raw += String(chunk);
+    });
+    request.on('end', () => {
+      waitRetryPlannerCalls += 1;
+      const body = JSON.parse(raw) as Record<string, unknown>;
+      assert.equal(body.model, 'vision-planner-wait-retry-model');
+      if (waitRetryPlannerCalls === 2) assert.match(raw, /Do not return an empty action list or wait as the only action/);
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({
+        choices: [{
+          message: {
+            content: waitRetryPlannerCalls === 1
+              ? JSON.stringify({
+                  done: false,
+                  reason: 'need another observation before acting',
+                  actions: [{ actionType: 'wait', ms: 100 }],
+                })
+              : waitRetryPlannerCalls === 2
+                ? JSON.stringify({
+                    done: false,
+                    reason: 'act on the supplied screenshot',
+                    actions: [{ actionType: 'click', targetDescription: 'the retry target' }],
+                  })
+                : JSON.stringify({ done: true, reason: 'retry target clicked', actions: [] }),
+          },
+        }],
+      }));
+    });
+  });
+  const waitRetryGrounderServer = createServer((request, response) => {
+    if (request.method !== 'POST' || request.url !== '/predict/') {
+      response.statusCode = 404;
+      response.end('not found');
+      return;
+    }
+    let raw = '';
+    request.on('data', (chunk) => {
+      raw += String(chunk);
+    });
+    request.on('end', () => {
+      const body = JSON.parse(raw) as Record<string, unknown>;
+      assert.equal(body.text_prompt, 'the retry target');
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ coordinates: [22, 44], image_size: { width: 100, height: 80 } }));
+    });
+  });
+  await new Promise<void>((resolve) => waitRetryPlannerServer.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => waitRetryGrounderServer.listen(0, '127.0.0.1', resolve));
+  try {
+    const plannerAddress = waitRetryPlannerServer.address();
+    const grounderAddress = waitRetryGrounderServer.address();
+    assert.ok(plannerAddress && typeof plannerAddress === 'object');
+    assert.ok(grounderAddress && typeof grounderAddress === 'object');
+    const waitRetryWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-wait-retry-'));
+    process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-wait-retry-smoke';
+    delete process.env.SCIFORGE_VISION_ACTIONS_JSON;
+    process.env.SCIFORGE_VISION_PLANNER_BASE_URL = `http://127.0.0.1:${plannerAddress.port}`;
+    process.env.SCIFORGE_VISION_PLANNER_API_KEY = 'planner-test-key';
+    process.env.SCIFORGE_VISION_PLANNER_MODEL = 'vision-planner-wait-retry-model';
+    process.env.SCIFORGE_VISION_KV_GROUND_URL = `http://127.0.0.1:${grounderAddress.port}`;
+    process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS = '1';
+    const waitRetry = await runWorkspaceRuntimeGateway({
+      skillDomain: 'literature',
+      prompt: 'Use generic computer use planner to avoid wait-only planning.',
+      workspacePath: waitRetryWorkspace,
+      selectedToolIds: ['local.vision-sense'],
+      uiState: { selectedToolIds: ['local.vision-sense'] },
+    });
+    assert.equal(waitRetryPlannerCalls, 3);
+    assert.equal(waitRetry.executionUnits[0].status, 'done');
+    const waitRetryTraceArtifact = waitRetry.artifacts.find((artifact) => artifact.id === 'vision-sense-trace');
+    assert.ok(waitRetryTraceArtifact);
+    const waitRetryTrace = JSON.parse(await readFile(join(waitRetryWorkspace, String(waitRetryTraceArtifact.path)), 'utf8')) as Record<string, unknown>;
+    assert.ok((waitRetryTrace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-001-execute-click'));
+    assert.ok(!(waitRetryTrace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-001-execute-wait'));
+  } finally {
+    await new Promise<void>((resolve) => waitRetryPlannerServer.close(() => resolve()));
+    await new Promise<void>((resolve) => waitRetryGrounderServer.close(() => resolve()));
+  }
+
+  let coordinateRetryPlannerCalls = 0;
+  const coordinateRetryPlannerServer = createServer((request, response) => {
+    if (request.method !== 'POST' || request.url !== '/chat/completions') {
+      response.statusCode = 404;
+      response.end('not found');
+      return;
+    }
+    let raw = '';
+    request.on('data', (chunk) => {
+      raw += String(chunk);
+    });
+    request.on('end', () => {
+      coordinateRetryPlannerCalls += 1;
+      const body = JSON.parse(raw) as Record<string, unknown>;
+      assert.equal(body.model, 'vision-planner-coordinate-retry-model');
+      if (coordinateRetryPlannerCalls === 2) assert.match(raw, /violated the planner contract by including screen coordinates/);
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({
+        choices: [{
+          message: {
+            content: coordinateRetryPlannerCalls === 1
+              ? JSON.stringify({
+                  done: false,
+                  reason: 'bad coordinate plan',
+                  actions: [{ actionType: 'drag', fromX: 0, fromY: 0, toX: 10, toY: 10 }],
+                })
+              : coordinateRetryPlannerCalls === 2
+                ? JSON.stringify({
+                    done: false,
+                    reason: 'rewrite with visual descriptions',
+                    actions: [{
+                      actionType: 'drag',
+                      sourceDescription: 'the generic window title bar',
+                      destinationDescription: 'the visible destination area',
+                    }],
+                  })
+                : JSON.stringify({ done: true, reason: 'drag completed', actions: [] }),
+          },
+        }],
+      }));
+    });
+  });
+  const coordinateRetryGrounderServer = createServer((request, response) => {
+    if (request.method !== 'POST' || request.url !== '/predict/') {
+      response.statusCode = 404;
+      response.end('not found');
+      return;
+    }
+    let raw = '';
+    request.on('data', (chunk) => {
+      raw += String(chunk);
+    });
+    request.on('end', () => {
+      const body = JSON.parse(raw) as Record<string, unknown>;
+      const textPrompt = String(body.text_prompt);
+      assert.match(textPrompt, /generic window title bar|visible destination area/);
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({
+        coordinates: textPrompt.includes('title bar') ? [10, 20] : [80, 90],
+        image_size: { width: 100, height: 100 },
+      }));
+    });
+  });
+  await new Promise<void>((resolve) => coordinateRetryPlannerServer.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => coordinateRetryGrounderServer.listen(0, '127.0.0.1', resolve));
+  try {
+    const plannerAddress = coordinateRetryPlannerServer.address();
+    const grounderAddress = coordinateRetryGrounderServer.address();
+    assert.ok(plannerAddress && typeof plannerAddress === 'object');
+    assert.ok(grounderAddress && typeof grounderAddress === 'object');
+    const coordinateRetryWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-coordinate-retry-'));
+    process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-coordinate-retry-smoke';
+    delete process.env.SCIFORGE_VISION_ACTIONS_JSON;
+    process.env.SCIFORGE_VISION_PLANNER_BASE_URL = `http://127.0.0.1:${plannerAddress.port}`;
+    process.env.SCIFORGE_VISION_PLANNER_API_KEY = 'planner-test-key';
+    process.env.SCIFORGE_VISION_PLANNER_MODEL = 'vision-planner-coordinate-retry-model';
+    process.env.SCIFORGE_VISION_KV_GROUND_URL = `http://127.0.0.1:${grounderAddress.port}`;
+    process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS = '1';
+    const coordinateRetry = await runWorkspaceRuntimeGateway({
+      skillDomain: 'literature',
+      prompt: 'Use generic computer use planner to rewrite coordinate actions through the grounder.',
+      workspacePath: coordinateRetryWorkspace,
+      selectedToolIds: ['local.vision-sense'],
+      uiState: { selectedToolIds: ['local.vision-sense'] },
+    });
+    assert.equal(coordinateRetryPlannerCalls, 3);
+    assert.equal(coordinateRetry.executionUnits[0].status, 'done');
+    const coordinateRetryTraceArtifact = coordinateRetry.artifacts.find((artifact) => artifact.id === 'vision-sense-trace');
+    assert.ok(coordinateRetryTraceArtifact);
+    const coordinateRetryTrace = JSON.parse(await readFile(join(coordinateRetryWorkspace, String(coordinateRetryTraceArtifact.path)), 'utf8')) as Record<string, unknown>;
+    const dragStep = (coordinateRetryTrace.steps as Array<Record<string, unknown>>).find((step) => step.id === 'step-001-execute-drag');
+    assert.ok(dragStep);
+    assert.equal(((dragStep.plannedAction as Record<string, unknown>)?.fromX), 10);
+    assert.equal(((dragStep.plannedAction as Record<string, unknown>)?.toX), 80);
+  } finally {
+    await new Promise<void>((resolve) => coordinateRetryPlannerServer.close(() => resolve()));
+    await new Promise<void>((resolve) => coordinateRetryGrounderServer.close(() => resolve()));
+  }
 
   console.log('[ok] vision-sense runtime uses the generic Computer Use loop without app-specific shortcuts');
 } finally {
@@ -99,6 +660,16 @@ try {
   restoreEnv('SCIFORGE_VISION_RUN_ID', previousRunId);
   restoreEnv('SCIFORGE_VISION_CAPTURE_DISPLAYS', previousDisplays);
   restoreEnv('SCIFORGE_VISION_ACTIONS_JSON', previousActions);
+  restoreEnv('SCIFORGE_VISION_KV_GROUND_URL', previousGrounderUrl);
+  restoreEnv('SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS', previousGrounderAllowLocal);
+  restoreEnv('SCIFORGE_VISION_PLANNER_BASE_URL', previousPlannerBaseUrl);
+  restoreEnv('SCIFORGE_VISION_PLANNER_API_KEY', previousPlannerApiKey);
+  restoreEnv('SCIFORGE_VISION_PLANNER_MODEL', previousPlannerModel);
+  restoreEnv('SCIFORGE_VISION_GROUNDER_LLM_BASE_URL', previousVisualGrounderBaseUrl);
+  restoreEnv('SCIFORGE_VISION_GROUNDER_LLM_API_KEY', previousVisualGrounderApiKey);
+  restoreEnv('SCIFORGE_VISION_GROUNDER_LLM_MODEL', previousVisualGrounderModel);
+  restoreEnv('SCIFORGE_VISION_MAX_STEPS', previousMaxSteps);
+  restoreEnv('SCIFORGE_VISION_DESKTOP_PLATFORM', previousDesktopPlatform);
 }
 
 function restoreEnv(key: string, value: string | undefined) {
