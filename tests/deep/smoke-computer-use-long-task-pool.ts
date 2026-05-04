@@ -105,6 +105,8 @@ const previousGrounderBaseUrl = process.env.SCIFORGE_VISION_GROUNDER_LLM_BASE_UR
 const previousGrounderApiKey = process.env.SCIFORGE_VISION_GROUNDER_LLM_API_KEY;
 const previousGrounderModel = process.env.SCIFORGE_VISION_GROUNDER_LLM_MODEL;
 const previousHighRisk = process.env.SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS;
+const previousInputAdapter = process.env.SCIFORGE_VISION_INPUT_ADAPTER;
+const previousAllowSharedInput = process.env.SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT;
 try {
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE = '1';
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN = '1';
@@ -118,6 +120,8 @@ try {
   process.env.SCIFORGE_VISION_GROUNDER_LLM_API_KEY = 'preflight-key';
   process.env.SCIFORGE_VISION_GROUNDER_LLM_MODEL = 'preflight-model';
   delete process.env.SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS;
+  delete process.env.SCIFORGE_VISION_INPUT_ADAPTER;
+  delete process.env.SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT;
   const smokeActionsJson = JSON.stringify([{ type: 'type_text', text: 'T084 generic window CU round smoke' }]);
   const preflight = await preflightComputerUseLong({
     scenarioIds: ['CU-LONG-001', 'CU-LONG-006'],
@@ -128,6 +132,33 @@ try {
   assert.equal(preflight.ok, true);
   assert.equal((await stat(String(preflight.reportPath))).isFile(), true);
   assert.ok(preflight.checks.some((check) => check.id === 'vision-planner' && check.status === 'pass'));
+  assert.ok(preflight.checks.some((check) => check.id === 'input-isolation' && check.status === 'pass'));
+  const realInputBlockedPreflight = await preflightComputerUseLong({
+    scenarioIds: ['CU-LONG-001'],
+    workspacePath: '/tmp/sciforge-cu-workspace',
+    dryRun: false,
+    actionsJson: smokeActionsJson,
+  });
+  assert.equal(realInputBlockedPreflight.ok, false);
+  assert.ok(realInputBlockedPreflight.checks.some((check) => check.id === 'input-isolation' && check.status === 'fail'));
+  process.env.SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT = '1';
+  const realSharedInputPreflight = await preflightComputerUseLong({
+    scenarioIds: ['CU-LONG-001'],
+    workspacePath: '/tmp/sciforge-cu-workspace',
+    dryRun: false,
+    actionsJson: smokeActionsJson,
+  });
+  assert.equal(realSharedInputPreflight.checks.find((check) => check.id === 'input-isolation')?.status, 'warn');
+  process.env.SCIFORGE_VISION_INPUT_ADAPTER = 'remote-desktop';
+  delete process.env.SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT;
+  const realIndependentInputPreflight = await preflightComputerUseLong({
+    scenarioIds: ['CU-LONG-001'],
+    workspacePath: '/tmp/sciforge-cu-workspace',
+    dryRun: false,
+    actionsJson: smokeActionsJson,
+  });
+  assert.equal(realIndependentInputPreflight.checks.find((check) => check.id === 'input-isolation')?.status, 'pass');
+  delete process.env.SCIFORGE_VISION_INPUT_ADAPTER;
   const staticPreflight = await preflightComputerUseLong({
     scenarioIds: ['CU-LONG-001'],
     workspacePath: '/tmp/sciforge-cu-workspace',
@@ -326,6 +357,8 @@ try {
   restoreEnv('SCIFORGE_VISION_GROUNDER_LLM_API_KEY', previousGrounderApiKey);
   restoreEnv('SCIFORGE_VISION_GROUNDER_LLM_MODEL', previousGrounderModel);
   restoreEnv('SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS', previousHighRisk);
+  restoreEnv('SCIFORGE_VISION_INPUT_ADAPTER', previousInputAdapter);
+  restoreEnv('SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT', previousAllowSharedInput);
 }
 
 const traceWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-long-trace-'));

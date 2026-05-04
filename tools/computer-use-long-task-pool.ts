@@ -1277,6 +1277,46 @@ export async function preflightComputerUseLong(options: {
     repairAction: 'Run on macOS or add a generic screenshot provider before starting real CU-LONG runs.',
   });
 
+  const independentInputAdapter = firstString(
+    process.env.SCIFORGE_VISION_INPUT_ADAPTER,
+    ...configCandidates.flatMap((config) => [
+      getConfigString(config, ['visionSense', 'inputAdapter']),
+      getConfigString(config, ['visionSense', 'independentInputAdapter']),
+      getConfigString(config, ['computerUse', 'inputAdapter']),
+    ]),
+  );
+  const allowSharedSystemInput = /^1|true|yes$/i.test(firstString(
+    process.env.SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT,
+    ...configCandidates.flatMap((config) => [
+      getConfigString(config, ['visionSense', 'allowSharedSystemInput']),
+      getConfigString(config, ['computerUse', 'allowSharedSystemInput']),
+    ]),
+  ) || '');
+  const independentInputReady = Boolean(independentInputAdapter && /virtual-hid|remote-desktop|browser-sandbox|accessibility-per-window/i.test(independentInputAdapter));
+  checks.push(dryRun ? {
+    id: 'input-isolation',
+    status: 'pass',
+    category: 'scheduler',
+    message: 'Dry-run uses a virtual input channel and cannot move the user pointer or type on the user keyboard.',
+  } : independentInputReady ? {
+    id: 'input-isolation',
+    status: 'pass',
+    category: 'scheduler',
+    message: `Independent input adapter is configured: ${independentInputAdapter}.`,
+  } : allowSharedSystemInput ? {
+    id: 'input-isolation',
+    status: 'warn',
+    category: 'scheduler',
+    message: 'Real run will use shared system mouse/keyboard input with explicit override; window focus checks and executor locks remain required.',
+    repairAction: 'Prefer SCIFORGE_VISION_INPUT_ADAPTER=virtual-hid, remote-desktop, browser-sandbox, or accessibility-per-window before running full real CU-LONG matrices.',
+  } : {
+    id: 'input-isolation',
+    status: 'fail',
+    category: 'scheduler',
+    message: 'Real run has no independent input adapter and shared system input is not explicitly allowed.',
+    repairAction: 'Configure SCIFORGE_VISION_INPUT_ADAPTER=virtual-hid|remote-desktop|browser-sandbox|accessibility-per-window, or set SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT=1 for an explicitly acknowledged focused-window real smoke only.',
+  });
+
   const hasStaticActions = Boolean(options.actionsJson?.trim());
   if (hasStaticActions) {
     checks.push({
