@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { ComputerUseConfig, GenericSwiftGuiAction, GenericVisionAction, ResolvedWindowTarget, WindowTargetResolution } from './types.js';
+import { acquireComputerUseSchedulerLease, schedulerLeaseTrace } from './scheduler.js';
 import { appleScriptString, isDarwinPlatform, runCommand, sanitizeId, sleep } from './utils.js';
 
 export async function executeGenericDesktopAction(action: GenericVisionAction, config: ComputerUseConfig, targetResolution: WindowTargetResolution) {
@@ -14,15 +15,44 @@ export async function executeGenericDesktopAction(action: GenericVisionAction, c
       stderr: targetResolution.reason,
     };
   }
-  if (isDarwinPlatform(config.desktopPlatform)) return executeGenericMacAction(action, targetResolution);
-  return {
-    exitCode: 126,
-    stdout: '',
-    stderr: [
-      `No real generic GUI executor is configured for desktopPlatform="${config.desktopPlatform}".`,
-      'Set visionSense.desktopPlatform to a supported local executor platform, enable dryRun, or add an executor adapter for this platform.',
-    ].join(' '),
-  };
+  const lease = await acquireComputerUseSchedulerLease({
+    targetResolution,
+    runId: config.runId,
+    stepId: action.type,
+  });
+  if (!lease.ok) {
+    return {
+      exitCode: 125,
+      stdout: '',
+      stderr: lease.reason,
+      schedulerLease: {
+        mode: 'real-gui-executor-lock',
+        lockId: lease.lockId,
+        lockPath: lease.lockPath,
+        waitMs: lease.waitMs,
+        status: 'timeout',
+        reason: lease.reason,
+      },
+    };
+  }
+  let result: { exitCode: number; stdout: string; stderr: string };
+  try {
+    if (isDarwinPlatform(config.desktopPlatform)) {
+      result = await executeGenericMacAction(action, targetResolution);
+    } else {
+      result = {
+        exitCode: 126,
+        stdout: '',
+        stderr: [
+          `No real generic GUI executor is configured for desktopPlatform="${config.desktopPlatform}".`,
+          'Set visionSense.desktopPlatform to a supported local executor platform, enable dryRun, or add an executor adapter for this platform.',
+        ].join(' '),
+      };
+    }
+  } finally {
+    await lease.release();
+  }
+  return { ...result, schedulerLease: schedulerLeaseTrace(lease.lease) };
 }
 
 export function executorBoundary(config: ComputerUseConfig) {

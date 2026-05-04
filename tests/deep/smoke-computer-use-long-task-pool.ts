@@ -464,6 +464,43 @@ assert.deepEqual(traceValidation.issues, []);
 assert.equal(traceValidation.metrics.actionCount, 1);
 assert.equal(traceValidation.metrics.screenshotCount, 2);
 
+const realGuiTracePath = join(runDir, 'real-gui-vision-trace.json');
+await writeFile(realGuiTracePath, `${JSON.stringify({
+  ...trace,
+  config: { dryRun: false },
+  genericComputerUse: {
+    ...(trace.genericComputerUse as Record<string, unknown>),
+    inputChannelContract: {
+      type: 'generic-mouse-keyboard',
+      pointerKeyboardOwnership: 'shared-system-pointer-keyboard',
+      pointerMode: 'system-cursor-events',
+      keyboardMode: 'system-key-events',
+      userDeviceImpact: 'may-use-system-input-after-focused-target-verification',
+      highRiskConfirmationRequired: true,
+    },
+  },
+  steps: [{
+    ...(trace.steps[0] as Record<string, unknown>),
+    scheduler: {
+      ...fixtureScheduler,
+      executorLease: {
+        mode: 'real-gui-executor-lock',
+        lockId: 'window-42-lock',
+        lockPath: '/tmp/sciforge-computer-use-locks/window-42-lock.lock',
+        acquiredAt: '2026-05-04T12:00:00.000Z',
+        releasedAt: '2026-05-04T12:00:00.100Z',
+        waitMs: 0,
+      },
+    },
+  }],
+}, null, 2)}\n`);
+const realGuiValidation = await validateComputerUseLongTrace({
+  scenarioId: 'CU-LONG-001',
+  tracePath: realGuiTracePath,
+  workspacePath: traceWorkspace,
+});
+assert.deepEqual(realGuiValidation.issues, []);
+
 await writeFile(join(runDir, 'step-000-planner-window-42.png'), png);
 const plannerWindowRef = {
   path: '.sciforge/vision-runs/cu-long-fixture/step-000-planner-window-42.png',

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { CaptureProviderError, captureDisplays } from '../../src/runtime/computer-use/capture.js';
+import { executeGenericDesktopAction } from '../../src/runtime/computer-use/executor.js';
 import type { ComputerUseConfig, WindowTargetResolution } from '../../src/runtime/computer-use/types.js';
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
 
@@ -819,6 +820,21 @@ try {
       return true;
     },
   );
+  const realExecutorLockResult = await executeGenericDesktopAction({ type: 'wait', ms: 1 }, {
+    ...providerFailureConfig,
+    runId: 'scheduler-lock-smoke',
+    desktopPlatform: 'linux',
+  }, {
+    ...providerFailureResolution,
+    captureKind: 'display',
+    schedulerLockId: 'smoke-real-gui-lock-424242',
+  });
+  assert.equal(realExecutorLockResult.exitCode, 126);
+  assert.equal((realExecutorLockResult.schedulerLease as Record<string, unknown>)?.mode, 'real-gui-executor-lock');
+  assert.equal((realExecutorLockResult.schedulerLease as Record<string, unknown>)?.lockId, 'smoke-real-gui-lock-424242');
+  assert.equal(typeof (realExecutorLockResult.schedulerLease as Record<string, unknown>)?.acquiredAt, 'string');
+  assert.equal(typeof (realExecutorLockResult.schedulerLease as Record<string, unknown>)?.releasedAt, 'string');
+  assert.match(String((realExecutorLockResult.schedulerLease as Record<string, unknown>)?.lockPath), /sciforge-computer-use-locks/);
 
   const isolatedWindowWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-window-isolation-'));
   process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-window-isolation-smoke';

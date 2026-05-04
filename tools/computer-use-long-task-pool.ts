@@ -384,6 +384,7 @@ export async function validateComputerUseLongTrace(options: {
 
   if (trace.schemaVersion !== 'sciforge.vision-trace.v1') issues.push('trace.schemaVersion must be sciforge.vision-trace.v1');
   const traceConfig = isRecord(trace.config) ? trace.config : {};
+  const realGuiTrace = traceConfig.dryRun === false;
   const traceWindowTarget = isRecord(trace.windowTarget)
     ? trace.windowTarget
     : isRecord(trace.windowTargeting)
@@ -509,6 +510,21 @@ export async function validateComputerUseLongTrace(options: {
       }
       if (!hasStepWindowTarget(step, traceWindowTarget)) issues.push(`steps[${index}] missing windowTarget metadata`);
       if (!hasSchedulerMetadata(step, traceScheduler)) issues.push(`steps[${index}] missing scheduler metadata`);
+      if (realGuiTrace && (status === 'done' || status === 'failed')) {
+        const stepScheduler = isRecord(step.scheduler) ? step.scheduler : {};
+        const executorLease = isRecord(stepScheduler.executorLease) ? stepScheduler.executorLease : {};
+        if (executorLease.mode !== 'real-gui-executor-lock') {
+          issues.push(`steps[${index}] real GUI execution missing executor scheduler lease`);
+        }
+        if (!firstString(executorLease.lockId)) {
+          issues.push(`steps[${index}] real GUI executor lease missing lock id`);
+        }
+        if (executorLease.status === 'timeout') {
+          if (typeof executorLease.waitMs !== 'number') issues.push(`steps[${index}] real GUI executor lease timeout missing wait evidence`);
+        } else if (!firstString(executorLease.acquiredAt) || !firstString(executorLease.releasedAt)) {
+          issues.push(`steps[${index}] real GUI executor lease missing acquire/release evidence`);
+        }
+      }
     }
     if (step.kind === 'planning' && !isRecord(step.execution)) {
       issues.push(`steps[${index}] planning step missing planner execution record`);

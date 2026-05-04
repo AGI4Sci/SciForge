@@ -390,6 +390,7 @@ async function runGenericVisionComputerUseLoop(
       const result = config.dryRun
         ? { exitCode: 0, stdout: 'dry-run', stderr: '' }
         : await executeGenericDesktopAction(executableAction, config, targetResolution);
+      const schedulerLease = isRecord((result as { schedulerLease?: unknown }).schedulerLease) ? (result as { schedulerLease?: Record<string, unknown> }).schedulerLease : undefined;
       const afterRefs = await captureDisplays(workspace, runDir, `step-${stepNumber}-after`, config, targetResolution);
       screenshotLedger.push(...afterRefs);
       const ok = result.exitCode === 0;
@@ -418,7 +419,10 @@ async function runGenericVisionComputerUseLoop(
           stdout: result.stdout.trim() || undefined,
           stderr: result.stderr.trim() || undefined,
         },
-        scheduler: schedulerStepMetadata(targetResolution, `step-${stepNumber}`),
+        scheduler: {
+          ...schedulerStepMetadata(targetResolution, `step-${stepNumber}`),
+          executorLease: schedulerLease,
+        },
         verifier: {
           status: ok ? 'checked' : 'skipped-after-execution-failure',
           method: 'window-pixel-diff',
