@@ -27,16 +27,26 @@ assert.equal(pool.scenarios[0].id, 'CU-LONG-001');
 assert.equal(pool.scenarios.at(-1)?.id, 'CU-LONG-010');
 
 for (const scenario of pool.scenarios) {
+  const scenarioContract = [
+    scenario.goal,
+    ...scenario.acceptance,
+    ...scenario.requiredEvidence,
+    ...scenario.failureRecord,
+    ...scenario.rounds.flatMap((round) => [round.prompt, ...round.expectedTrace]),
+  ].join(' ');
   assert.ok(scenario.rounds.length >= 3, `${scenario.id} has 3+ rounds`);
   assert.ok(scenario.acceptance.some((item) => /base64|dataUrl|data:image/i.test(item)), `${scenario.id} checks base64/dataUrl`);
   assert.ok(scenario.acceptance.some((item) => /DOM|accessibility/i.test(item)), `${scenario.id} checks DOM/accessibility`);
+  assert.match(scenarioContract, /windowTarget|window target|window-local|window screenshot/i, `${scenario.id} checks window-target trace metadata`);
+  assert.match(scenarioContract, /input channel|mouse\/keyboard|generic mouse|keyboard/i, `${scenario.id} checks generic input channel`);
+  assert.match(scenarioContract, /scheduler|serialized|ordered/i, `${scenario.id} checks serialized scheduling`);
   assert.equal(scenario.safetyBoundary.appSpecificShortcutsAllowed, false, `${scenario.id} forbids app-specific shortcuts`);
 }
 
 const runbook = renderComputerUseLongRunbook(pool);
-assert.match(runbook, /T083 长时复杂 Computer Use 测试任务池/);
+assert.match(runbook, /T084/);
 assert.match(runbook, /CU-LONG-006 SciForge 自举测试/);
-assert.match(runbook, /VisionPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace/);
+assert.match(runbook, /WindowTarget -> VisionPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace/);
 
 const outDir = await mkdtemp(join(tmpdir(), 'sciforge-cu-long-'));
 const outPath = join(outDir, 'runbook.md');
@@ -61,9 +71,13 @@ const prepared = await prepareComputerUseLongRun({
 assert.equal((await stat(prepared.manifestPath)).isFile(), true);
 assert.equal((await stat(prepared.checklistPath)).isFile(), true);
 const manifest = JSON.parse(await readFile(prepared.manifestPath, 'utf8')) as Record<string, unknown>;
-assert.equal(manifest.taskId, 'T083');
+assert.equal(manifest.taskId, 'T084');
 assert.equal(manifest.scenarioId, 'CU-LONG-006');
 assert.equal((manifest.rounds as unknown[]).length, 5);
+assert.equal((((manifest.run as Record<string, unknown>).windowTarget as Record<string, unknown>).mode), 'required');
+assert.equal((((manifest.run as Record<string, unknown>).windowTarget as Record<string, unknown>).coordinateSpace), 'window-local');
+assert.equal((((manifest.run as Record<string, unknown>).inputChannel as Record<string, unknown>).mode), 'generic-mouse-keyboard');
+assert.equal((((manifest.run as Record<string, unknown>).scheduler as Record<string, unknown>).mode), 'serialized-window-actions');
 assert.match(await readFile(prepared.checklistPath, 'utf8'), /Non-Negotiable Genericity Rules/);
 
 const previousBridge = process.env.SCIFORGE_VISION_DESKTOP_BRIDGE;
@@ -91,7 +105,7 @@ try {
   process.env.SCIFORGE_VISION_GROUNDER_LLM_API_KEY = 'preflight-key';
   process.env.SCIFORGE_VISION_GROUNDER_LLM_MODEL = 'preflight-model';
   delete process.env.SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS;
-  const smokeActionsJson = JSON.stringify([{ type: 'type_text', text: 'T083 generic CU round smoke' }]);
+  const smokeActionsJson = JSON.stringify([{ type: 'type_text', text: 'T084 generic window CU round smoke' }]);
   const preflight = await preflightComputerUseLong({
     scenarioIds: ['CU-LONG-001', 'CU-LONG-006'],
     workspacePath: '/tmp/sciforge-cu-workspace',
@@ -224,7 +238,7 @@ try {
   const matrixReport = await renderComputerUseLongMatrixReport({ summaryPath: matrixRun.summaryPath });
   assert.equal(matrixReport.ok, true);
   assert.equal((await stat(matrixReport.reportPath)).isFile(), true);
-  assert.match(matrixReport.markdown, /T083 Computer Use Matrix Report/);
+  assert.match(matrixReport.markdown, /T084 Computer Use Matrix Report/);
   assert.match(matrixReport.markdown, /## Preflight/);
   assert.match(matrixReport.markdown, /Genericity Rules Rechecked/);
   assert.doesNotMatch(matrixReport.markdown, /data:image|;base64,/i);
@@ -302,31 +316,86 @@ const png = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADgwGOSyRGjgAAAABJRU5ErkJggg==',
   'base64',
 );
-await writeFile(join(runDir, 'step-001-before-display-1.png'), png);
-await writeFile(join(runDir, 'step-001-after-display-1.png'), png);
+await writeFile(join(runDir, 'step-001-before-window-42.png'), png);
+await writeFile(join(runDir, 'step-001-after-window-42.png'), png);
 const sha = createHash('sha256').update(png).digest('hex');
+const fixtureWindowTarget = {
+  windowId: 42,
+  title: 'Generic target window',
+  appName: 'Generic desktop app',
+  coordinateSpace: 'window-local',
+  bounds: { x: 100, y: 200, width: 800, height: 600 },
+};
+const fixtureScheduler = {
+  mode: 'serialized-window-actions',
+  lockId: 'window-42-lock',
+  failClosedIsolation: true,
+};
+const beforeWindowRef = {
+  path: '.sciforge/vision-runs/cu-long-fixture/step-001-before-window-42.png',
+  scope: 'window-screenshot',
+  windowId: 42,
+  windowTitle: 'Generic target window',
+  bounds: fixtureWindowTarget.bounds,
+  sha256: sha,
+  width: 1,
+  height: 1,
+};
+const afterWindowRef = {
+  path: '.sciforge/vision-runs/cu-long-fixture/step-001-after-window-42.png',
+  scope: 'window-screenshot',
+  windowId: 42,
+  windowTitle: 'Generic target window',
+  bounds: fixtureWindowTarget.bounds,
+  sha256: sha,
+  width: 1,
+  height: 1,
+};
 const trace = {
   schemaVersion: 'sciforge.vision-trace.v1',
+  windowTarget: fixtureWindowTarget,
+  scheduler: fixtureScheduler,
   genericComputerUse: {
     actionSchema: ['click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait'],
     appSpecificShortcuts: [],
+    inputChannel: 'generic-mouse-keyboard',
   },
   imageMemory: {
     policy: 'file-ref-only',
-    refs: [
-      { path: '.sciforge/vision-runs/cu-long-fixture/step-001-before-display-1.png', sha256: sha, width: 1, height: 1 },
-      { path: '.sciforge/vision-runs/cu-long-fixture/step-001-after-display-1.png', sha256: sha, width: 1, height: 1 },
-    ],
+    refs: [beforeWindowRef, afterWindowRef],
   },
   steps: [{
     id: 'step-001-execute-click',
     kind: 'gui-execution',
     status: 'done',
-    beforeScreenshotRefs: [{ path: '.sciforge/vision-runs/cu-long-fixture/step-001-before-display-1.png' }],
-    afterScreenshotRefs: [{ path: '.sciforge/vision-runs/cu-long-fixture/step-001-after-display-1.png' }],
-    plannedAction: { type: 'click', targetDescription: 'generic target', x: 1, y: 1 },
-    grounding: { status: 'ok', provider: 'kv-ground', targetDescription: 'generic target', x: 1, y: 1 },
-    execution: { status: 'done', executor: 'dry-run-generic-gui-executor' },
+    windowTarget: fixtureWindowTarget,
+    scheduler: fixtureScheduler,
+    beforeScreenshotRefs: [beforeWindowRef],
+    afterScreenshotRefs: [afterWindowRef],
+    plannedAction: {
+      type: 'click',
+      targetDescription: 'generic target',
+      coordinateSpace: 'window-local',
+      localX: 1,
+      localY: 1,
+      mappedX: 101,
+      mappedY: 201,
+    },
+    grounding: {
+      status: 'ok',
+      provider: 'kv-ground',
+      targetDescription: 'generic target',
+      coordinateSpace: 'window-local',
+      localX: 1,
+      localY: 1,
+      mappedX: 101,
+      mappedY: 201,
+    },
+    execution: {
+      status: 'done',
+      executor: 'dry-run-generic-gui-executor',
+      inputChannel: 'generic-mouse-keyboard',
+    },
     verifier: { status: 'checked', method: 'pixel-diff' },
   }],
 };
@@ -341,27 +410,40 @@ assert.deepEqual(traceValidation.issues, []);
 assert.equal(traceValidation.metrics.actionCount, 1);
 assert.equal(traceValidation.metrics.screenshotCount, 2);
 
-await writeFile(join(runDir, 'step-000-planner-display-1.png'), png);
+await writeFile(join(runDir, 'step-000-planner-window-42.png'), png);
+const plannerWindowRef = {
+  path: '.sciforge/vision-runs/cu-long-fixture/step-000-planner-window-42.png',
+  scope: 'window-screenshot',
+  windowId: 42,
+  windowTitle: 'Generic target window',
+  bounds: fixtureWindowTarget.bounds,
+  sha256: sha,
+  width: 1,
+  height: 1,
+};
 const plannerOnlyTrace = {
   schemaVersion: 'sciforge.vision-trace.v1',
+  windowTarget: fixtureWindowTarget,
+  scheduler: fixtureScheduler,
   request: {
-    text: '[T083 fixture] Summarize prior trace refs, image memory, displayId, sha256, dimensions, and action ledger only.',
+    text: '[T084 fixture] Summarize prior trace refs, image memory, windowTarget, sha256, dimensions, scheduler metadata, and action ledger only.',
   },
   genericComputerUse: {
     actionSchema: ['click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait'],
     appSpecificShortcuts: [],
+    inputChannel: 'generic-mouse-keyboard',
   },
   imageMemory: {
     policy: 'file-ref-only',
-    refs: [
-      { path: '.sciforge/vision-runs/cu-long-fixture/step-000-planner-display-1.png', sha256: sha, width: 1, height: 1 },
-    ],
+    refs: [plannerWindowRef],
   },
   steps: [{
     id: 'step-000-plan',
     kind: 'planning',
     status: 'done',
-    beforeScreenshotRefs: [{ path: '.sciforge/vision-runs/cu-long-fixture/step-000-planner-display-1.png' }],
+    windowTarget: fixtureWindowTarget,
+    scheduler: fixtureScheduler,
+    beforeScreenshotRefs: [plannerWindowRef],
     verifier: { status: 'checked', reason: 'planner-only evidence summary' },
     execution: {
       planner: 'openai-compatible-vision-planner',
@@ -391,7 +473,35 @@ assert.deepEqual(plannerOnlyValidation.issues, []);
 assert.equal(plannerOnlyValidation.metrics.actionCount, 0);
 assert.equal(plannerOnlyValidation.metrics.nonWaitActionCount, 0);
 
-console.log('[ok] T083 Computer Use long task pool smoke passed');
+const missingWindowTracePath = join(runDir, 'missing-window-vision-trace.json');
+await writeFile(missingWindowTracePath, `${JSON.stringify({
+  ...trace,
+  windowTarget: undefined,
+  scheduler: undefined,
+  imageMemory: {
+    policy: 'file-ref-only',
+    refs: [
+      { path: beforeWindowRef.path, sha256: sha, width: 1, height: 1 },
+      { path: afterWindowRef.path, sha256: sha, width: 1, height: 1 },
+    ],
+  },
+  genericComputerUse: {
+    actionSchema: ['click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait'],
+    appSpecificShortcuts: [],
+  },
+}, null, 2)}\n`);
+const missingWindowValidation = await validateComputerUseLongTrace({
+  scenarioId: 'CU-LONG-001',
+  tracePath: missingWindowTracePath,
+  workspacePath: traceWorkspace,
+});
+assert.equal(missingWindowValidation.ok, false);
+assert.ok(missingWindowValidation.issues.some((issue) => /windowTarget/.test(issue)));
+assert.ok(missingWindowValidation.issues.some((issue) => /scheduler/.test(issue)));
+assert.ok(missingWindowValidation.issues.some((issue) => /inputChannel|input-channel/.test(issue)));
+assert.ok(missingWindowValidation.issues.some((issue) => /window screenshot metadata/.test(issue)));
+
+console.log('[ok] T084 Computer Use long task pool smoke passed');
 
 function restoreEnv(key: string, value: string | undefined) {
   if (value === undefined) {

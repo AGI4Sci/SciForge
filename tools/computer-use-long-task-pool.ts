@@ -2,10 +2,18 @@ import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 const allowedActionTypes = new Set(['click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait']);
+const requiredPipeline = ['WindowTarget', 'VisionPlanner', 'Grounder', 'GuiExecutor', 'Verifier', 'vision-trace'];
+const requiredTraceMetadata = [
+  'windowTarget',
+  'window screenshot refs',
+  'window-local coordinates',
+  'input channel',
+  'scheduler metadata',
+];
 
 export interface ComputerUseLongTaskPool {
   schemaVersion: '1.0';
-  taskId: 'T083';
+  taskId: 'T084';
   title: string;
   commonPrinciples: string[];
   scenarios: ComputerUseLongScenario[];
@@ -53,7 +61,7 @@ export interface ComputerUseLongTraceValidation {
 
 export interface PreparedComputerUseLongRun {
   schemaVersion: '1.0';
-  taskId: 'T083';
+  taskId: 'T084';
   scenarioId: string;
   title: string;
   status: 'not-run' | 'running' | 'passed' | 'repair-needed' | 'failed';
@@ -64,8 +72,28 @@ export interface PreparedComputerUseLongRun {
     appUrl?: string;
     backend?: string;
     operator?: string;
+    windowTarget: {
+      mode: 'required';
+      expectedScope: 'active-window-or-selected-window';
+      coordinateSpace: 'window-local';
+    };
+    inputChannel: {
+      mode: 'generic-mouse-keyboard';
+      allowedActionTypes: string[];
+    };
+    scheduler: {
+      mode: 'serialized-window-actions';
+      requiresBeforeAfterScreenshots: true;
+    };
   };
   universalPipeline: string[];
+  validationContract: {
+    requiredTraceMetadata: string[];
+    screenshotScope: 'window';
+    coordinateSpace: 'window-local';
+    inputChannel: 'generic-mouse-keyboard';
+    scheduler: 'serialized-window-actions';
+  };
   safetyBoundary: ComputerUseLongScenario['safetyBoundary'];
   rounds: Array<{
     round: number;
@@ -187,9 +215,9 @@ export interface ComputerUseLongPreflightResult {
 export function validateComputerUseLongTaskPool(pool: ComputerUseLongTaskPool): string[] {
   const issues: string[] = [];
   if (pool.schemaVersion !== '1.0') issues.push('schemaVersion must be "1.0"');
-  if (pool.taskId !== 'T083') issues.push('taskId must be T083');
+  if (pool.taskId !== 'T084') issues.push('taskId must be T084');
   if (!Array.isArray(pool.scenarios) || pool.scenarios.length !== 10) {
-    issues.push('T083 Computer Use task pool must define exactly 10 CU-LONG scenarios');
+    issues.push('T084 Computer Use task pool must define exactly 10 CU-LONG scenarios');
   }
 
   const scenarioIds = new Set<string>();
@@ -199,11 +227,9 @@ export function validateComputerUseLongTaskPool(pool: ComputerUseLongTaskPool): 
     scenarioIds.add(scenario.id);
     if (scenario.minRounds < 3) issues.push(`${scenario.id} minRounds must be at least 3`);
     if (scenario.rounds.length < scenario.minRounds) issues.push(`${scenario.id} must define minRounds worth of rounds`);
-    if (!scenario.requiredPipeline.includes('VisionPlanner')) issues.push(`${scenario.id} missing VisionPlanner pipeline requirement`);
-    if (!scenario.requiredPipeline.includes('Grounder')) issues.push(`${scenario.id} missing Grounder pipeline requirement`);
-    if (!scenario.requiredPipeline.includes('GuiExecutor')) issues.push(`${scenario.id} missing GuiExecutor pipeline requirement`);
-    if (!scenario.requiredPipeline.includes('Verifier')) issues.push(`${scenario.id} missing Verifier pipeline requirement`);
-    if (!scenario.requiredPipeline.includes('vision-trace')) issues.push(`${scenario.id} missing vision-trace pipeline requirement`);
+    if (JSON.stringify(scenario.requiredPipeline) !== JSON.stringify(requiredPipeline)) {
+      issues.push(`${scenario.id} requiredPipeline must be ${requiredPipeline.join(' -> ')}`);
+    }
     if (!scenario.safetyBoundary.noDomAccessibility) issues.push(`${scenario.id} must forbid DOM/accessibility reads`);
     if (!scenario.safetyBoundary.fileRefOnlyImageMemory) issues.push(`${scenario.id} must require file-ref-only image memory`);
     if (!scenario.safetyBoundary.failClosedHighRiskActions) issues.push(`${scenario.id} must fail closed for high-risk actions`);
@@ -214,6 +240,18 @@ export function validateComputerUseLongTaskPool(pool: ComputerUseLongTaskPool): 
     if (!scenario.requiredEvidence.includes('before/after screenshots')) issues.push(`${scenario.id} must require before/after screenshots`);
     if (!scenario.requiredEvidence.includes('action ledger')) issues.push(`${scenario.id} must require action ledger evidence`);
     if (!scenario.requiredEvidence.includes('failure diagnostics')) issues.push(`${scenario.id} must require failure diagnostics`);
+    for (const required of requiredTraceMetadata) {
+      const haystack = [
+        scenario.goal,
+        ...scenario.acceptance,
+        ...scenario.requiredEvidence,
+        ...scenario.failureRecord,
+        ...scenario.rounds.flatMap((round) => [round.prompt, ...round.expectedTrace]),
+      ].join(' ');
+      if (!new RegExp(escapeRegExp(required), 'i').test(haystack)) {
+        issues.push(`${scenario.id} must require ${required} trace/run metadata`);
+      }
+    }
 
     const roundNumbers = scenario.rounds.map((round) => round.round);
     const expectedRoundNumbers = Array.from({ length: scenario.rounds.length }, (_, index) => index + 1);
@@ -250,7 +288,7 @@ export async function prepareComputerUseLongRun(options: {
 }) {
   const pool = await loadComputerUseLongTaskPool();
   const issues = validateComputerUseLongTaskPool(pool);
-  if (issues.length) throw new Error(`Invalid T083 Computer Use task pool:\n${issues.join('\n')}`);
+  if (issues.length) throw new Error(`Invalid T084 Computer Use task pool:\n${issues.join('\n')}`);
   const scenario = pool.scenarios.find((item) => item.id === options.scenarioId);
   if (!scenario) throw new Error(`Unknown CU-LONG scenario: ${options.scenarioId}`);
   const now = options.now ?? new Date();
@@ -262,7 +300,7 @@ export async function prepareComputerUseLongRun(options: {
   const evidenceDir = join(runDir, 'evidence');
   const manifest: PreparedComputerUseLongRun = {
     schemaVersion: '1.0',
-    taskId: 'T083',
+    taskId: 'T084',
     scenarioId: scenario.id,
     title: scenario.title,
     status: 'not-run',
@@ -273,8 +311,28 @@ export async function prepareComputerUseLongRun(options: {
       appUrl: options.appUrl,
       backend: options.backend,
       operator: options.operator || 'Codex',
+      windowTarget: {
+        mode: 'required',
+        expectedScope: 'active-window-or-selected-window',
+        coordinateSpace: 'window-local',
+      },
+      inputChannel: {
+        mode: 'generic-mouse-keyboard',
+        allowedActionTypes: Array.from(allowedActionTypes),
+      },
+      scheduler: {
+        mode: 'serialized-window-actions',
+        requiresBeforeAfterScreenshots: true,
+      },
     },
     universalPipeline: scenario.requiredPipeline,
+    validationContract: {
+      requiredTraceMetadata,
+      screenshotScope: 'window',
+      coordinateSpace: 'window-local',
+      inputChannel: 'generic-mouse-keyboard',
+      scheduler: 'serialized-window-actions',
+    },
     safetyBoundary: scenario.safetyBoundary,
     rounds: scenario.rounds.map((round) => ({
       round: round.round,
@@ -291,7 +349,7 @@ export async function prepareComputerUseLongRun(options: {
     notes: [
       'This run must validate generic Computer Use behavior only.',
       'Do not add app-specific patches, DOM reads, accessibility reads, repository scans, or synthetic success artifacts.',
-      'If any VisionPlanner, Grounder, GuiExecutor, or Verifier dependency is missing, record failed-with-reason with real screenshot refs.',
+      'If any WindowTarget, VisionPlanner, Grounder, GuiExecutor, or Verifier dependency is missing, record failed-with-reason with real window screenshot refs.',
     ].join(' '),
   };
   await mkdir(evidenceDir, { recursive: true });
@@ -319,9 +377,39 @@ export async function validateComputerUseLongTrace(options: {
   }
 
   if (trace.schemaVersion !== 'sciforge.vision-trace.v1') issues.push('trace.schemaVersion must be sciforge.vision-trace.v1');
+  const traceConfig = isRecord(trace.config) ? trace.config : {};
+  const traceWindowTarget = isRecord(trace.windowTarget)
+    ? trace.windowTarget
+    : isRecord(trace.windowTargeting)
+      ? trace.windowTargeting
+      : isRecord(traceConfig.windowTarget)
+        ? traceConfig.windowTarget
+        : undefined;
+  if (!traceWindowTarget) {
+    issues.push('trace.windowTarget must record selected target window metadata');
+  } else {
+    const targetId = firstString(traceWindowTarget.windowId, traceWindowTarget.id, traceWindowTarget.handle, traceWindowTarget.title, traceWindowTarget.appName, traceWindowTarget.bundleId);
+    if (!targetId) issues.push('trace.windowTarget missing stable window identity');
+    if (!hasWindowBounds(traceWindowTarget)) issues.push('trace.windowTarget missing window bounds');
+    const coordinateSpace = firstString(traceWindowTarget.coordinateSpace, traceWindowTarget.coordinates);
+    if (!coordinateSpace || !/window(?:-local)?/i.test(coordinateSpace)) issues.push('trace.windowTarget.coordinateSpace must be window-local');
+  }
+  const traceScheduler = isRecord(trace.scheduler) ? trace.scheduler : undefined;
+  if (!traceScheduler) {
+    issues.push('trace.scheduler must record serialized GUI action scheduling metadata');
+  } else {
+    const schedulerMode = firstString(traceScheduler.mode, traceScheduler.policy, traceScheduler.queue);
+    if (!schedulerMode || !/serial|ordered|single|window/i.test(schedulerMode)) {
+      issues.push('trace.scheduler must declare serialized/ordered window action scheduling');
+    }
+  }
   const genericComputerUse = isRecord(trace.genericComputerUse) ? trace.genericComputerUse : {};
   const appSpecificShortcuts = Array.isArray(genericComputerUse.appSpecificShortcuts) ? genericComputerUse.appSpecificShortcuts : undefined;
   if (!appSpecificShortcuts || appSpecificShortcuts.length !== 0) issues.push('genericComputerUse.appSpecificShortcuts must be []');
+  const traceInputChannel = firstString(genericComputerUse.inputChannel, genericComputerUse.inputChannelMode, trace.inputChannel);
+  if (!traceInputChannel || !/generic|mouse|keyboard|desktop/i.test(traceInputChannel)) {
+    issues.push('genericComputerUse.inputChannel must declare generic mouse/keyboard input');
+  }
   const actionSchema = new Set(Array.isArray(genericComputerUse.actionSchema) ? genericComputerUse.actionSchema.map(String) : []);
   for (const action of allowedActionTypes) {
     if (!actionSchema.has(action)) issues.push(`genericComputerUse.actionSchema missing ${action}`);
@@ -344,6 +432,7 @@ export async function validateComputerUseLongTrace(options: {
     issues.push(...fileIssues);
     if (typeof ref.sha256 !== 'string' || ref.sha256.length !== 64) issues.push(`screenshot ref ${refPath} missing sha256`);
     if (typeof ref.width !== 'number' || typeof ref.height !== 'number') issues.push(`screenshot ref ${refPath} missing width/height`);
+    if (!screenshotRefHasWindowMetadata(ref)) issues.push(`screenshot ref ${refPath} missing window screenshot metadata`);
   }
 
   const steps = Array.isArray(trace.steps) ? trace.steps.filter(isRecord) : [];
@@ -366,11 +455,21 @@ export async function validateComputerUseLongTrace(options: {
       if (hasForbiddenPrivateFields(action)) issues.push(`steps[${index}].plannedAction contains DOM/accessibility/private-app fields`);
       if (!Array.isArray(step.beforeScreenshotRefs) || !step.beforeScreenshotRefs.length) issues.push(`steps[${index}] missing beforeScreenshotRefs`);
       if (!Array.isArray(step.afterScreenshotRefs) || !step.afterScreenshotRefs.length) issues.push(`steps[${index}] missing afterScreenshotRefs`);
+      for (const ref of [...screenshotStepRefs(step.beforeScreenshotRefs), ...screenshotStepRefs(step.afterScreenshotRefs)]) {
+        if (!screenshotRefHasWindowMetadata(ref)) issues.push(`steps[${index}] screenshot ref missing window metadata`);
+      }
       if (!isRecord(step.execution)) issues.push(`steps[${index}] missing execution record`);
+      if (isRecord(step.execution) && !hasInputChannelMetadata(step.execution, action)) issues.push(`steps[${index}] execution missing input-channel metadata`);
       if (!isRecord(step.verifier)) issues.push(`steps[${index}] missing verifier record`);
       if ((type === 'click' || type === 'double_click' || type === 'drag') && status === 'done' && !isRecord(step.grounding)) {
         issues.push(`steps[${index}] ${type} action missing grounding record`);
       }
+      if ((type === 'click' || type === 'double_click' || type === 'drag') && status === 'done') {
+        if (!hasWindowLocalCoordinates(action) && !hasWindowLocalCoordinates(step.localCoordinate)) issues.push(`steps[${index}].plannedAction missing window-local coordinates`);
+        if (isRecord(step.grounding) && !hasWindowLocalCoordinates(step.grounding) && !hasWindowLocalCoordinates(step.localCoordinate)) issues.push(`steps[${index}].grounding missing window-local coordinates`);
+      }
+      if (!hasStepWindowTarget(step, traceWindowTarget)) issues.push(`steps[${index}] missing windowTarget metadata`);
+      if (!hasSchedulerMetadata(step, traceScheduler)) issues.push(`steps[${index}] missing scheduler metadata`);
     }
     if (step.kind === 'planning' && !isRecord(step.execution)) {
       issues.push(`steps[${index}] planning step missing planner execution record`);
@@ -452,8 +551,8 @@ export async function runComputerUseLongRound(options: {
 }): Promise<ComputerUseLongRoundRunResult> {
   const manifestPath = resolve(options.manifestPath);
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as PreparedComputerUseLongRun;
-  if (manifest.schemaVersion !== '1.0' || manifest.taskId !== 'T083') {
-    throw new Error('run-round requires a prepared T083 Computer Use manifest');
+  if (manifest.schemaVersion !== '1.0' || manifest.taskId !== 'T084') {
+    throw new Error('run-round requires a prepared T084 Computer Use manifest');
   }
   const round = manifest.rounds.find((item) => item.round === options.round);
   if (!round) throw new Error(`Round ${options.round} is not present in ${manifestPath}`);
@@ -478,6 +577,7 @@ export async function runComputerUseLongRound(options: {
     SCIFORGE_VISION_RUN_ID: runId,
     SCIFORGE_VISION_MAX_STEPS: String(options.maxSteps ?? 8),
     SCIFORGE_VISION_ACTIONS_JSON: options.actionsJson,
+    SCIFORGE_VISION_WINDOW_TARGET_JSON: JSON.stringify(defaultWindowTargetForRound(manifest, options.round)),
   }, () => runWorkspaceRuntimeGateway({
       skillDomain: 'knowledge',
       prompt,
@@ -490,6 +590,7 @@ export async function runComputerUseLongRound(options: {
           dryRun: options.dryRun ?? false,
           maxSteps: options.maxSteps ?? 8,
           runId,
+          windowTarget: defaultWindowTargetForRound(manifest, options.round),
         },
         computerUseLong: {
           scenarioId: manifest.scenarioId,
@@ -577,8 +678,8 @@ export async function runComputerUseLongScenario(options: {
 }): Promise<ComputerUseLongScenarioRunResult> {
   const manifestPath = resolve(options.manifestPath);
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as PreparedComputerUseLongRun;
-  if (manifest.schemaVersion !== '1.0' || manifest.taskId !== 'T083') {
-    throw new Error('run-scenario requires a prepared T083 Computer Use manifest');
+  if (manifest.schemaVersion !== '1.0' || manifest.taskId !== 'T084') {
+    throw new Error('run-scenario requires a prepared T084 Computer Use manifest');
   }
   const pool = await loadComputerUseLongTaskPool();
   const scenario = pool.scenarios.find((item) => item.id === manifest.scenarioId);
@@ -640,7 +741,7 @@ export async function validateComputerUseLongRun(options: {
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as PreparedComputerUseLongRun;
   const issues: string[] = [];
   if (manifest.schemaVersion !== '1.0') issues.push('manifest.schemaVersion must be 1.0');
-  if (manifest.taskId !== 'T083') issues.push('manifest.taskId must be T083');
+  if (manifest.taskId !== 'T084') issues.push('manifest.taskId must be T084');
   const pool = await loadComputerUseLongTaskPool();
   const scenario = pool.scenarios.find((item) => item.id === manifest.scenarioId);
   if (!scenario) {
@@ -655,6 +756,39 @@ export async function validateComputerUseLongRun(options: {
       issues.push('manifest safetyBoundary does not match scenario safetyBoundary');
     }
     if (options.requirePassed !== false && manifest.status !== 'passed') issues.push('manifest.status must be passed');
+  }
+  if (!isRecord(manifest.run.windowTarget)) {
+    issues.push('manifest.run.windowTarget must require window-targeted Computer Use');
+  } else {
+    if (manifest.run.windowTarget.mode !== 'required') issues.push('manifest.run.windowTarget.mode must be required');
+    if (manifest.run.windowTarget.coordinateSpace !== 'window-local') issues.push('manifest.run.windowTarget.coordinateSpace must be window-local');
+  }
+  if (!isRecord(manifest.run.inputChannel)) {
+    issues.push('manifest.run.inputChannel must describe generic mouse/keyboard input');
+  } else {
+    if (manifest.run.inputChannel.mode !== 'generic-mouse-keyboard') issues.push('manifest.run.inputChannel.mode must be generic-mouse-keyboard');
+    const manifestActions = new Set(Array.isArray(manifest.run.inputChannel.allowedActionTypes) ? manifest.run.inputChannel.allowedActionTypes.map(String) : []);
+    for (const action of allowedActionTypes) {
+      if (!manifestActions.has(action)) issues.push(`manifest.run.inputChannel.allowedActionTypes missing ${action}`);
+    }
+  }
+  if (!isRecord(manifest.run.scheduler)) {
+    issues.push('manifest.run.scheduler must describe serialized window action scheduling');
+  } else {
+    if (manifest.run.scheduler.mode !== 'serialized-window-actions') issues.push('manifest.run.scheduler.mode must be serialized-window-actions');
+    if (manifest.run.scheduler.requiresBeforeAfterScreenshots !== true) issues.push('manifest.run.scheduler.requiresBeforeAfterScreenshots must be true');
+  }
+  if (!isRecord(manifest.validationContract)) {
+    issues.push('manifest.validationContract is missing');
+  } else {
+    if (manifest.validationContract.screenshotScope !== 'window') issues.push('manifest.validationContract.screenshotScope must be window');
+    if (manifest.validationContract.coordinateSpace !== 'window-local') issues.push('manifest.validationContract.coordinateSpace must be window-local');
+    if (manifest.validationContract.inputChannel !== 'generic-mouse-keyboard') issues.push('manifest.validationContract.inputChannel must be generic-mouse-keyboard');
+    if (manifest.validationContract.scheduler !== 'serialized-window-actions') issues.push('manifest.validationContract.scheduler must be serialized-window-actions');
+    const required = Array.isArray(manifest.validationContract.requiredTraceMetadata) ? manifest.validationContract.requiredTraceMetadata.map(String) : [];
+    for (const item of requiredTraceMetadata) {
+      if (!required.includes(item)) issues.push(`manifest.validationContract.requiredTraceMetadata missing ${item}`);
+    }
   }
 
   const summaryPath = join(manifestDir, 'scenario-summary.json');
@@ -766,7 +900,7 @@ export async function runComputerUseLongMatrix(options: {
 }): Promise<ComputerUseLongMatrixRunResult> {
   const pool = await loadComputerUseLongTaskPool();
   const poolIssues = validateComputerUseLongTaskPool(pool);
-  if (poolIssues.length) throw new Error(`Invalid T083 Computer Use task pool:\n${poolIssues.join('\n')}`);
+  if (poolIssues.length) throw new Error(`Invalid T084 Computer Use task pool:\n${poolIssues.join('\n')}`);
   const scenarioIds = (options.scenarioIds?.length ? options.scenarioIds : pool.scenarios.map((item) => item.id));
   const unknown = scenarioIds.filter((id) => !pool.scenarios.some((scenario) => scenario.id === id));
   if (unknown.length) throw new Error(`Unknown CU-LONG scenarios: ${unknown.join(', ')}`);
@@ -904,7 +1038,7 @@ export async function validateComputerUseLongMatrix(options: {
     };
   }
   if (summary.schemaVersion !== 'sciforge.computer-use-long.matrix-summary.v1') issues.push('matrix summary schemaVersion is invalid');
-  if (summary.taskId !== 'T083') issues.push('matrix summary taskId must be T083');
+  if (summary.taskId !== 'T084') issues.push('matrix summary taskId must be T084');
   const scenarioIds = Array.isArray(summary.scenarioIds) ? summary.scenarioIds.map(String) : [];
   const passedScenarioIds = Array.isArray(summary.passedScenarioIds) ? summary.passedScenarioIds.map(String) : [];
   const repairNeededScenarioIds = Array.isArray(summary.repairNeededScenarioIds) ? summary.repairNeededScenarioIds.map(String) : [];
@@ -1148,7 +1282,7 @@ export async function preflightComputerUseLong(options: {
     status: 'fail',
     category: 'safety-boundary',
     message: 'High-risk actions are globally allowed, which violates CU-LONG fail-closed defaults.',
-    repairAction: 'Unset SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS for T083 runs unless an explicit confirmation test requires it.',
+    repairAction: 'Unset SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS for T084 runs unless an explicit confirmation test requires it.',
   } : {
     id: 'high-risk-boundary',
     status: 'pass',
@@ -1318,7 +1452,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const pool = await loadComputerUseLongTaskPool();
     const issues = validateComputerUseLongTaskPool(pool);
     if (issues.length) {
-      throw new Error(`Invalid T083 Computer Use task pool:\n${issues.join('\n')}`);
+      throw new Error(`Invalid T084 Computer Use task pool:\n${issues.join('\n')}`);
     }
     const outIndex = process.argv.indexOf('--out');
     if (outIndex >= 0) {
@@ -1344,6 +1478,7 @@ function renderScenarioSummary(
     status: manifest.status,
     minRounds: scenario.minRounds,
     requiredPipeline: manifest.universalPipeline,
+    validationContract: manifest.validationContract,
     safetyBoundary: manifest.safetyBoundary,
     acceptance: manifest.acceptance,
     attemptedRounds: roundResults.map((item) => item.round),
@@ -1364,7 +1499,7 @@ function renderScenarioSummary(
 async function writeMatrixSummary(summaryPath: string, matrixId: string, summary: ComputerUseLongMatrixRunResult) {
   await writeFile(summaryPath, `${JSON.stringify({
     schemaVersion: 'sciforge.computer-use-long.matrix-summary.v1',
-    taskId: 'T083',
+    taskId: 'T084',
     matrixId,
     status: summary.status,
     scenarioIds: summary.scenarioIds,
@@ -1393,7 +1528,7 @@ function renderMatrixReportMarkdown(
   const repairNeededScenarioIds = Array.isArray(summary.repairNeededScenarioIds) ? summary.repairNeededScenarioIds.map(String) : [];
   const preflight = isRecord(summary.preflight) ? summary.preflight : undefined;
   const lines = [
-    '# T083 Computer Use Matrix Report',
+    '# T084 Computer Use Matrix Report',
     '',
     `Summary: ${manifestRel(process.cwd(), summaryPath)}`,
     `Status: ${status}`,
@@ -1418,7 +1553,10 @@ function renderMatrixReportMarkdown(
   lines.push(
     '',
     '## Genericity Rules Rechecked',
-    '- All evidence must come from VisionPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace.',
+    '- All evidence must come from WindowTarget -> VisionPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace.',
+    '- WindowTarget must select a concrete target window before planning, and all coordinates must be window-local.',
+    '- Screenshot refs must be window screenshots with window identity, bounds, dimensions, and sha256 metadata.',
+    '- GUI execution must record the generic input channel and serialized scheduler metadata.',
     '- Screenshot memory must remain file-ref-only; no base64/dataUrl payloads.',
     '- DOM/accessibility/app-private shortcuts are invalid for this matrix.',
     '- High-risk actions must fail closed unless explicit upstream confirmation is recorded.',
@@ -1464,7 +1602,7 @@ function renderPreflightReport(params: {
   checks: ComputerUseLongPreflightResult['checks'];
 }) {
   const lines = [
-    '# T083 Computer Use Preflight',
+    '# T084 Computer Use Preflight',
     '',
     `Status: ${params.ok ? 'passed' : 'failed'}`,
     `Mode: ${params.dryRun ? 'dry-run' : 'real'}`,
@@ -1488,7 +1626,7 @@ function renderRepairPlanMarkdown(summaryPath: string, summary: Record<string, u
   const preflightChecks = preflight && Array.isArray(preflight.checks) ? preflight.checks.filter(isRecord) : [];
   const failedPreflight = preflightChecks.filter((check) => check.status === 'fail');
   const lines = [
-    '# T083 Computer Use Repair Plan',
+    '# T084 Computer Use Repair Plan',
     '',
     `Summary: ${manifestRel(process.cwd(), summaryPath)}`,
     `Status: ${status}`,
@@ -1536,8 +1674,10 @@ function renderRepairPlanMarkdown(summaryPath: string, summary: Record<string, u
 
 function categorizeComputerUseIssue(issue: string) {
   if (/planner|planning|VisionPlanner/i.test(issue)) return 'planner';
+  if (/windowTarget|window target|target window|window-local|window screenshot|displayId|window bounds/i.test(issue)) return 'window-target';
   if (/ground|coordinate|targetDescription|KV-Ground/i.test(issue)) return 'grounder';
   if (/executor|execution|mouse|keyboard|click|drag|scroll|type_text|System Events|CGEvent|osascript|Swift/i.test(issue)) return 'executor';
+  if (/input-channel|inputChannel|scheduler|serialized|ordered/i.test(issue)) return 'scheduler';
   if (/verifier|pixel|checked/i.test(issue)) return 'verifier';
   if (/trace|vision-trace|schemaVersion|action schema|plannedAction/i.test(issue)) return 'trace';
   if (/screenshot|png|image|base64|dataUrl|file-ref|image memory/i.test(issue)) return 'image-memory';
@@ -1599,9 +1739,11 @@ function firstExecutionFailure(diagnostics: Record<string, unknown>) {
 function repairActionsForIssues(issues: string[]) {
   const categories = new Set(issues.map(categorizeComputerUseIssue));
   const actions: string[] = [];
+  if (categories.has('window-target')) actions.push('Ensure WindowTarget selects the concrete app/window first, captures window screenshots, and maps every point in window-local coordinates.');
   if (categories.has('planner')) actions.push('Inspect planner prompt/output JSON and ensure it emits generic action schema without coordinates or app-private fields.');
   if (categories.has('grounder')) actions.push('Check KV-Ground or visual Grounder configuration and ensure screenshot paths are readable by the Grounder.');
   if (categories.has('executor')) actions.push('Verify the generic mouse/keyboard executor, coordinate scale, display selection, and dry-run/real-run mode.');
+  if (categories.has('scheduler')) actions.push('Record generic input-channel metadata and serialize window actions with before/after screenshot boundaries.');
   if (categories.has('verifier')) actions.push('Strengthen step verifier evidence so every GUI action has after-screenshot and pixel/state validation.');
   if (categories.has('trace')) actions.push('Fix vision-trace schema emission before updating manifests or summaries.');
   if (categories.has('image-memory')) actions.push('Repair screenshot file refs, PNG metadata, sha256, and remove any inline image payloads.');
@@ -1637,9 +1779,11 @@ function renderRoundRuntimePrompt(
 ) {
   const priorEvidence = renderPriorRoundEvidence(manifest, round.round);
   return [
-    `[T083 ${manifest.scenarioId} round ${round.round}] ${round.prompt}`,
+    `[T084 ${manifest.scenarioId} round ${round.round}] ${round.prompt}`,
     '',
-    'You must use the generic Computer Use pipeline only: VisionPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace.',
+    'You must use the generic Computer Use pipeline only: WindowTarget -> VisionPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace.',
+    'WindowTarget must select the target window first; every screenshot ref must be a window screenshot with window id/title, bounds, sha256, width, and height.',
+    'Grounding and executor coordinates must be window-local, and every GUI action must record the generic mouse/keyboard input channel plus serialized scheduler metadata.',
     'Do not inspect DOM, accessibility trees, application private APIs, files, source code, or app-specific shortcuts to complete the GUI task.',
     'Use screenshots as visual input, generic target descriptions for visual targets, and only generic mouse/keyboard actions.',
     'Store image memory as screenshot file refs only; never put base64/dataUrl screenshots into the trace or multi-turn memory.',
@@ -1757,6 +1901,20 @@ function manifestRel(root: string, path: string) {
   return relative(root, path).replace(/\\/g, '/');
 }
 
+function defaultWindowTargetForRound(manifest: PreparedComputerUseLongRun, round: number) {
+  return {
+    enabled: true,
+    required: true,
+    mode: 'window-id',
+    windowId: 84000 + round,
+    appName: 'SciForge T084 Harness',
+    title: `${manifest.scenarioId} ${manifest.run.id} round ${round}`,
+    bounds: { x: 0, y: 0, width: 1280, height: 800 },
+    coordinateSpace: 'window',
+    inputIsolation: 'require-focused-target',
+  };
+}
+
 async function withScopedVisionRuntimeEnv<T>(env: Record<string, string | undefined>, run: () => Promise<T>) {
   const previous = new Map<string, string | undefined>();
   for (const [key, value] of Object.entries(env)) {
@@ -1813,6 +1971,66 @@ function resolveTraceRefPath(refPath: string, workspacePath: string, traceDir: s
   return resolve(traceDir, refPath);
 }
 
+function hasWindowBounds(value: Record<string, unknown>) {
+  const bounds = isRecord(value.bounds) ? value.bounds : isRecord(value.windowBounds) ? value.windowBounds : value;
+  return ['x', 'y', 'width', 'height'].every((key) => typeof bounds[key] === 'number')
+    || ['left', 'top', 'right', 'bottom'].every((key) => typeof bounds[key] === 'number');
+}
+
+function screenshotRefHasWindowMetadata(value: unknown) {
+  if (!isRecord(value)) return false;
+  const nestedWindowTarget = isRecord(value.windowTarget) ? value.windowTarget : undefined;
+  if (nestedWindowTarget) {
+    return Boolean(firstString(nestedWindowTarget.windowId, nestedWindowTarget.windowTitle, nestedWindowTarget.title, nestedWindowTarget.appName, nestedWindowTarget.bundleId))
+      && hasWindowBounds(nestedWindowTarget);
+  }
+  const scope = firstString(value.scope, value.captureScope, value.screenshotScope, value.kind, value.type);
+  const hasWindowScope = Boolean(scope && /window/i.test(scope));
+  const hasWindowId = Boolean(firstString(value.windowId, value.windowTitle, value.appName, value.bundleId));
+  return hasWindowScope && hasWindowId && hasWindowBounds(value);
+}
+
+function screenshotStepRefs(value: unknown) {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function hasWindowLocalCoordinates(value: unknown) {
+  if (!isRecord(value)) return false;
+  const coordinateSpace = firstString(value.coordinateSpace, value.coordinates, value.frame);
+  const directPoint = (typeof value.localX === 'number' && typeof value.localY === 'number')
+    || (typeof value.windowX === 'number' && typeof value.windowY === 'number');
+  const point = isRecord(value.point) ? value.point : isRecord(value.start) ? value.start : undefined;
+  const nestedPoint = Boolean(point && (
+    (typeof point.localX === 'number' && typeof point.localY === 'number')
+    || (typeof point.x === 'number' && typeof point.y === 'number')
+  ));
+  const dragEnd = !isRecord(value.end) || (
+    typeof value.end.x === 'number'
+    || typeof value.end.localX === 'number'
+    || typeof value.end.windowX === 'number'
+  );
+  return Boolean(coordinateSpace && /window(?:-local)?/i.test(coordinateSpace)) && (directPoint || nestedPoint) && dragEnd;
+}
+
+function hasInputChannelMetadata(execution: Record<string, unknown>, action: Record<string, unknown> | undefined) {
+  const inputChannel = firstString(execution.inputChannel, execution.channel, action?.inputChannel, action?.channel);
+  return Boolean(inputChannel && /generic|mouse|keyboard|desktop/i.test(inputChannel));
+}
+
+function hasStepWindowTarget(step: Record<string, unknown>, traceWindowTarget: Record<string, unknown> | undefined) {
+  const windowTarget = isRecord(step.windowTarget) ? step.windowTarget : traceWindowTarget;
+  if (!windowTarget) return false;
+  return Boolean(firstString(windowTarget.windowId, windowTarget.id, windowTarget.handle, windowTarget.title, windowTarget.appName, windowTarget.bundleId))
+    && hasWindowBounds(windowTarget);
+}
+
+function hasSchedulerMetadata(step: Record<string, unknown>, traceScheduler: Record<string, unknown> | undefined) {
+  const scheduler = isRecord(step.scheduler) ? step.scheduler : traceScheduler;
+  if (!scheduler) return false;
+  const mode = firstString(scheduler.mode, scheduler.policy, scheduler.queue);
+  return Boolean(mode && /serial|ordered|single|window/i.test(mode));
+}
+
 function hasForbiddenPrivateFields(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return collectKeys(value).some((key) => /dom|selector|accessibility|aria|xpath|css|appApi|privateShortcut/i.test(key));
@@ -1828,6 +2046,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function renderPreparedRunChecklist(scenario: ComputerUseLongScenario, manifest: PreparedComputerUseLongRun) {
   const lines = [
     `# ${scenario.id} ${scenario.title}`,
@@ -1836,7 +2058,10 @@ function renderPreparedRunChecklist(scenario: ComputerUseLongScenario, manifest:
     `Workspace: ${manifest.run.workspacePath}`,
     '',
     '## Non-Negotiable Genericity Rules',
-    '- Use only the shared VisionPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace path.',
+    '- Use only the shared WindowTarget -> VisionPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace path.',
+    '- Select a concrete target window before planning; record window id/title, app identity, bounds, displayId, and window-local coordinate space.',
+    '- Store only window screenshot refs with path, sha256, width/height, window identity, displayId, and bounds.',
+    '- Record generic mouse/keyboard input-channel metadata and serialized scheduler metadata for every executed GUI action.',
     '- Do not read DOM/accessibility data, call app-private APIs, generate files directly for an app, or scan the repository to fake GUI success.',
     '- Missing dependencies must produce failed-with-reason plus real screenshot refs.',
     '- Multi-turn memory must be file refs and compact summaries only; never inline base64/dataUrl screenshots.',

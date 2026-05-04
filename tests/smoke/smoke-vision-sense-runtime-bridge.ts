@@ -653,7 +653,127 @@ try {
     await new Promise<void>((resolve) => coordinateRetryGrounderServer.close(() => resolve()));
   }
 
-  console.log('[ok] vision-sense runtime uses the generic Computer Use loop without app-specific shortcuts');
+  const windowTargetWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-window-target-'));
+  process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-window-target-smoke';
+  process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN = '1';
+  process.env.SCIFORGE_VISION_CAPTURE_DISPLAYS = '1,2';
+  process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([{ type: 'click', targetDescription: 'generic window-local target' }]);
+  process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS = '1';
+  const windowGrounderServer = createServer((request, response) => {
+    if (request.method !== 'POST' || request.url !== '/predict/') {
+      response.statusCode = 404;
+      response.end('not found');
+      return;
+    }
+    let raw = '';
+    request.on('data', (chunk) => {
+      raw += String(chunk);
+    });
+    request.on('end', () => {
+      const body = JSON.parse(raw) as Record<string, unknown>;
+      assert.equal(body.text_prompt, 'generic window-local target');
+      assert.match(String(body.image_path), /step-001-before-window-/);
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ coordinates: [80, 40], image_size: { width: 160, height: 80 } }));
+    });
+  });
+  await new Promise<void>((resolve) => windowGrounderServer.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = windowGrounderServer.address();
+    assert.ok(address && typeof address === 'object');
+    process.env.SCIFORGE_VISION_KV_GROUND_URL = `http://127.0.0.1:${address.port}`;
+    const windowTarget = await runWorkspaceRuntimeGateway({
+      skillDomain: 'literature',
+      prompt: 'Use generic computer use inside the target window only.',
+      workspacePath: windowTargetWorkspace,
+      selectedToolIds: ['local.vision-sense'],
+      uiState: {
+        selectedToolIds: ['local.vision-sense'],
+        visionSenseConfig: {
+          dryRun: true,
+          executorCoordinateScale: 2,
+          windowTarget: {
+            enabled: true,
+            required: true,
+            mode: 'active-window',
+            coordinateSpace: 'window-local',
+            inputIsolation: 'require-focused-target',
+          },
+        },
+      },
+    });
+    assert.equal(windowTarget.executionUnits[0].status, 'done');
+    const windowTraceArtifact = windowTarget.artifacts.find((artifact) => artifact.id === 'vision-sense-trace');
+    assert.ok(windowTraceArtifact);
+    const windowTrace = JSON.parse(await readFile(join(windowTargetWorkspace, String(windowTraceArtifact.path)), 'utf8')) as Record<string, unknown>;
+    const traceConfig = windowTrace.config as Record<string, unknown>;
+    assert.deepEqual((traceConfig.windowTarget as Record<string, unknown>)?.mode, 'active-window');
+    assert.deepEqual((traceConfig.windowTarget as Record<string, unknown>)?.captureKind, 'window');
+    assert.deepEqual((traceConfig.windowTarget as Record<string, unknown>)?.coordinateSpace, 'window-local');
+    assert.deepEqual((traceConfig.windowTarget as Record<string, unknown>)?.inputIsolation, 'require-focused-target');
+    const windowRefs = (windowTrace.imageMemory as Record<string, unknown>).refs as Array<Record<string, unknown>>;
+    assert.ok(windowRefs.length >= 2);
+    assert.ok(windowRefs.every((ref) => /-window-/.test(String(ref.path))));
+    assert.ok(windowRefs.every((ref) => ((ref.windowTarget as Record<string, unknown>)?.captureKind) === 'window'));
+    const generic = windowTrace.genericComputerUse as Record<string, unknown>;
+    assert.equal(((generic.coordinateContract as Record<string, unknown>)?.grounderOutput), 'target-window screenshot coordinates');
+    assert.equal(((generic.coordinateContract as Record<string, unknown>)?.executorInput), 'window-local');
+    assert.equal(generic.inputIsolation, 'require-focused-target');
+    const windowStep = (windowTrace.steps as Array<Record<string, unknown>>).find((step) => step.id === 'step-001-execute-click');
+    assert.ok(windowStep);
+    assert.equal(((windowStep.plannedAction as Record<string, unknown>)?.x), 40);
+    assert.equal(((windowStep.plannedAction as Record<string, unknown>)?.y), 20);
+    assert.equal(((windowStep.grounding as Record<string, unknown>)?.screenshotX), 80);
+    assert.equal(((windowStep.grounding as Record<string, unknown>)?.screenshotY), 40);
+    assert.equal(((windowStep.grounding as Record<string, unknown>)?.executorX), 40);
+    assert.equal(((windowStep.grounding as Record<string, unknown>)?.executorY), 20);
+    assert.equal(((windowStep.grounding as Record<string, unknown>)?.executorCoordinateScale), 2);
+    assert.equal(((windowStep.windowTarget as Record<string, unknown>)?.captureKind), 'window');
+    assert.equal(((windowStep.localCoordinate as Record<string, unknown>)?.space), 'window');
+    assert.equal(((windowStep.mappedCoordinate as Record<string, unknown>)?.space), 'executor');
+    assert.equal(((windowStep.inputChannel as Record<string, unknown>)?.type), 'generic-mouse-keyboard');
+    assert.equal(((windowStep.scheduler as Record<string, unknown>)?.mode), 'serialized-window-actions');
+    assert.equal(((windowStep.scheduler as Record<string, unknown>)?.failClosedIsolation), true);
+  } finally {
+    await new Promise<void>((resolve) => windowGrounderServer.close(() => resolve()));
+  }
+
+  const isolatedWindowWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-window-isolation-'));
+  process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-window-isolation-smoke';
+  process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN = '0';
+  process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([{ type: 'click', x: 5, y: 5 }]);
+  delete process.env.SCIFORGE_VISION_KV_GROUND_URL;
+  const isolatedWindow = await runWorkspaceRuntimeGateway({
+    skillDomain: 'literature',
+    prompt: 'Use generic computer use only if the requested target window can be isolated.',
+    workspacePath: isolatedWindowWorkspace,
+    selectedToolIds: ['local.vision-sense'],
+    uiState: {
+      selectedToolIds: ['local.vision-sense'],
+      visionSenseConfig: {
+        dryRun: false,
+        desktopPlatform: 'linux',
+        windowTarget: {
+          enabled: true,
+          required: true,
+          mode: 'window-id',
+          windowId: 424242,
+          coordinateSpace: 'window-local',
+          inputIsolation: 'require-focused-target',
+        },
+      },
+    },
+  });
+  assert.equal(isolatedWindow.executionUnits[0].status, 'failed-with-reason');
+  assert.match(String(isolatedWindow.executionUnits[0].failureReason), /window|target|isolation|focus|failed-with-reason/i);
+  const isolatedTraceArtifact = isolatedWindow.artifacts.find((artifact) => artifact.id === 'vision-sense-trace');
+  assert.ok(isolatedTraceArtifact);
+  const isolatedTrace = JSON.parse(await readFile(join(isolatedWindowWorkspace, String(isolatedTraceArtifact.path)), 'utf8')) as Record<string, unknown>;
+  assert.equal(((isolatedTrace.config as Record<string, unknown>).windowTarget as Record<string, unknown>)?.status, 'unresolved');
+  assert.ok((isolatedTrace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-000-blocked-window-target' && step.status === 'blocked'));
+  assert.doesNotMatch(JSON.stringify(isolatedTrace), /step-001-execute-click/);
+
+  console.log('[ok] vision-sense runtime uses the generic window-based Computer Use loop without app-specific shortcuts');
 } finally {
   restoreEnv('SCIFORGE_VISION_DESKTOP_BRIDGE', previousBridge);
   restoreEnv('SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN', previousDryRun);

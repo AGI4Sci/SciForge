@@ -41,6 +41,7 @@ interface VisionSenseConfig {
   dryRun: boolean;
   captureDisplays: number[];
   desktopPlatform: string;
+  windowTarget: WindowTarget;
   runId?: string;
   outputDir?: string;
   maxSteps: number;
@@ -72,6 +73,43 @@ interface VisionGrounderConfig {
   visionMaxTokens: number;
 }
 
+interface WindowTarget {
+  enabled: boolean;
+  required: boolean;
+  mode: 'display' | 'active-window' | 'window-id' | 'app-window';
+  windowId?: number;
+  appName?: string;
+  title?: string;
+  displayId?: number;
+  bounds?: WindowBounds;
+  coordinateSpace: 'screen' | 'window' | 'window-local';
+  inputIsolation: 'best-effort' | 'require-focused-target';
+}
+
+interface ResolvedWindowTarget {
+  ok: true;
+  target: WindowTarget;
+  captureKind: 'display' | 'window';
+  windowId?: number;
+  appName?: string;
+  title?: string;
+  bounds?: WindowBounds;
+  coordinateSpace: 'screen' | 'window' | 'window-local';
+  inputIsolation: WindowTarget['inputIsolation'];
+  schedulerLockId: string;
+  source: 'config' | 'active-window' | 'display-fallback' | 'dry-run';
+  diagnostics: string[];
+}
+
+interface WindowBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+type WindowTargetResolution = ResolvedWindowTarget | { ok: false; target: WindowTarget; reason: string; diagnostics: string[] };
+
 type GroundingResolution =
   | { ok: true; action: GenericVisionAction; grounding?: Record<string, unknown> }
   | { ok: false; action: GenericVisionAction; grounding?: Record<string, unknown>; reason: string };
@@ -83,10 +121,27 @@ interface ScreenshotRef {
   path: string;
   absPath: string;
   displayId: number;
+  windowTarget?: TraceWindowTarget;
   width?: number;
   height?: number;
   sha256: string;
   bytes: number;
+}
+
+interface TraceWindowTarget {
+  enabled: boolean;
+  required: boolean;
+  mode: WindowTarget['mode'];
+  captureKind: 'display' | 'window';
+  coordinateSpace: WindowTarget['coordinateSpace'];
+  inputIsolation: WindowTarget['inputIsolation'];
+  windowId?: number;
+  appName?: string;
+  title?: string;
+  bounds?: WindowBounds;
+  schedulerLockId?: string;
+  source: ResolvedWindowTarget['source'];
+  diagnostics?: string[];
 }
 
 interface LoopStep {
@@ -98,7 +153,12 @@ interface LoopStep {
   plannedAction?: GenericVisionAction;
   grounding?: Record<string, unknown>;
   execution?: Record<string, unknown>;
+  windowTarget?: TraceWindowTarget;
+  localCoordinate?: Record<string, unknown>;
+  mappedCoordinate?: Record<string, unknown>;
+  inputChannel?: Record<string, unknown>;
   verifier?: Record<string, unknown>;
+  scheduler?: Record<string, unknown>;
   failureReason?: string;
 }
 
@@ -122,6 +182,7 @@ export async function tryRunVisionSenseRuntime(
     detail: JSON.stringify({
       dryRun: config.dryRun,
       captureDisplays: config.captureDisplays,
+      windowTarget: windowTargetTraceConfig(config.windowTarget),
       plannedActions: config.plannedActions.length,
     }),
   });
@@ -164,6 +225,7 @@ async function loadVisionSenseConfig(workspace: string, request: GatewayRequest)
     fileConfig.executorPlatform,
     process.platform,
   ) as string;
+  const windowTarget = parseWindowTarget(requestConfig, fileConfig);
   return {
     desktopBridgeEnabled: booleanConfig(
       process.env.SCIFORGE_VISION_DESKTOP_BRIDGE,
@@ -179,6 +241,7 @@ async function loadVisionSenseConfig(workspace: string, request: GatewayRequest)
     ),
     captureDisplays: defaultCaptureDisplays,
     desktopPlatform,
+    windowTarget,
     runId: stringConfig(process.env.SCIFORGE_VISION_RUN_ID, requestConfig.runId, fileConfig.runId),
     outputDir: stringConfig(process.env.SCIFORGE_VISION_OUTPUT_DIR, requestConfig.outputDir, fileConfig.outputDir),
     maxSteps: numberConfig(process.env.SCIFORGE_VISION_MAX_STEPS, requestConfig.maxSteps, fileConfig.maxSteps) ?? 8,
@@ -277,6 +340,79 @@ async function readWorkspaceVisionConfig(workspace: string): Promise<Record<stri
   return {};
 }
 
+function parseWindowTarget(requestConfig: Record<string, unknown>, fileConfig: Record<string, unknown>): WindowTarget {
+  const rawTarget = envOrValue(
+    parseJsonEnv(process.env.SCIFORGE_VISION_WINDOW_TARGET_JSON),
+    requestConfig.windowTarget,
+    requestConfig.targetWindow,
+    fileConfig.windowTarget,
+    fileConfig.targetWindow,
+  );
+  const targetConfig = isRecord(rawTarget) ? rawTarget : {};
+  const windowId = numberConfig(process.env.SCIFORGE_VISION_WINDOW_ID, targetConfig.windowId, targetConfig.window_id);
+  const appName = stringConfig(process.env.SCIFORGE_VISION_WINDOW_APP_NAME, targetConfig.appName, targetConfig.app_name, targetConfig.application);
+  const title = stringConfig(process.env.SCIFORGE_VISION_WINDOW_TITLE, targetConfig.title, targetConfig.windowTitle, targetConfig.window_title);
+  const bounds = parseWindowBounds(envOrValue(process.env.SCIFORGE_VISION_WINDOW_BOUNDS, targetConfig.bounds, targetConfig.windowBounds, targetConfig.window_bounds));
+  const explicitMode = stringConfig(process.env.SCIFORGE_VISION_WINDOW_TARGET_MODE, targetConfig.mode, targetConfig.kind);
+  const mode = normalizeWindowTargetMode(explicitMode, { windowId, appName, title });
+  const enabled = booleanConfig(
+    process.env.SCIFORGE_VISION_WINDOW_TARGET_ENABLED,
+    targetConfig.enabled,
+    undefined,
+    mode !== 'display',
+  );
+  const required = booleanConfig(
+    process.env.SCIFORGE_VISION_REQUIRE_WINDOW_TARGET,
+    targetConfig.required,
+    targetConfig.requireWindowTarget,
+    enabled && mode !== 'display',
+  );
+  const coordinateSpace = normalizeCoordinateSpace(stringConfig(process.env.SCIFORGE_VISION_COORDINATE_SPACE, targetConfig.coordinateSpace, targetConfig.coordinate_space), mode);
+  const inputIsolation = normalizeInputIsolation(stringConfig(process.env.SCIFORGE_VISION_INPUT_ISOLATION, targetConfig.inputIsolation, targetConfig.input_isolation), required);
+  return {
+    enabled,
+    required,
+    mode: enabled ? mode : 'display',
+    windowId,
+    appName,
+    title,
+    bounds,
+    coordinateSpace,
+    inputIsolation,
+  };
+}
+
+function normalizeWindowTargetMode(value: string | undefined, target: { windowId?: number; appName?: string; title?: string }): WindowTarget['mode'] {
+  const normalized = value?.trim().toLowerCase().replace(/[-\s]+/g, '_');
+  if (normalized === 'display' || normalized === 'screen') return 'display';
+  if (normalized === 'active' || normalized === 'active_window' || normalized === 'frontmost') return 'active-window';
+  if (normalized === 'window' || normalized === 'window_id' || normalized === 'id') return 'window-id';
+  if (normalized === 'app' || normalized === 'app_window' || normalized === 'application') return 'app-window';
+  if (target.windowId !== undefined) return 'window-id';
+  if (target.appName || target.title) return 'app-window';
+  return 'display';
+}
+
+function normalizeCoordinateSpace(value: string | undefined, mode: WindowTarget['mode']): WindowTarget['coordinateSpace'] {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === 'screen' || normalized === 'global') return 'screen';
+  if (normalized === 'window-local' || normalized === 'window_local' || normalized === 'local') return 'window-local';
+  if (normalized === 'window' || normalized === 'target-window' || normalized === 'target') return 'window';
+  return mode === 'display' ? 'screen' : 'window';
+}
+
+function normalizeInputIsolation(value: string | undefined, required: boolean): WindowTarget['inputIsolation'] {
+  const normalized = value?.trim().toLowerCase().replace(/[-\s]+/g, '_');
+  if (normalized === 'require_focused_target' || normalized === 'strict' || normalized === 'required') return 'require-focused-target';
+  if (normalized === 'best_effort' || normalized === 'off' || normalized === 'none') return 'best-effort';
+  return required ? 'require-focused-target' : 'best-effort';
+}
+
+function parseJsonEnv(value: string | undefined) {
+  if (!value) return undefined;
+  return parseJson(value);
+}
+
 async function runGenericVisionComputerUseLoop(
   request: GatewayRequest,
   workspace: string,
@@ -289,6 +425,7 @@ async function runGenericVisionComputerUseLoop(
   const createdAt = new Date().toISOString();
   const steps: LoopStep[] = [];
   const screenshotLedger: ScreenshotRef[] = [];
+  const targetResolution = await resolveWindowTarget(config);
 
   let executionStatus: 'done' | 'failed-with-reason' = 'done';
   let failureReason = '';
@@ -297,9 +434,26 @@ async function runGenericVisionComputerUseLoop(
   let plannerReportedDone = false;
   let dynamicPlannerRan = false;
 
-  if (!actionQueue.length && dynamicPlannerEnabled) {
+  if (!targetResolution.ok) {
+    executionStatus = 'failed-with-reason';
+    failureReason = targetResolution.reason;
+    steps.push({
+      id: 'step-000-blocked-window-target',
+      kind: 'planning',
+      status: 'blocked',
+      verifier: {
+        status: 'blocked',
+        reason: 'target window contract could not be resolved',
+        diagnostics: targetResolution.diagnostics,
+        windowTarget: windowTargetTraceConfig(targetResolution.target),
+      },
+      failureReason,
+    });
+  }
+
+  if (!actionQueue.length && dynamicPlannerEnabled && executionStatus !== 'failed-with-reason') {
     dynamicPlannerRan = true;
-    const plannerRefs = await captureDisplays(workspace, runDir, 'step-000-planner', config);
+    const plannerRefs = await captureDisplays(workspace, runDir, 'step-000-planner', config, targetResolution);
     screenshotLedger.push(...plannerRefs);
     const planned = await appendPlannerStep({
       id: 'step-000-plan',
@@ -321,8 +475,8 @@ async function runGenericVisionComputerUseLoop(
   }
 
   if (!actionQueue.length && !plannerReportedDone && executionStatus !== 'failed-with-reason') {
-    const beforeRefs = await captureDisplays(workspace, runDir, 'step-000-before', config);
-    const afterRefs = await captureDisplays(workspace, runDir, 'step-000-after', config);
+    const beforeRefs = await captureDisplays(workspace, runDir, 'step-000-before', config, targetResolution);
+    const afterRefs = await captureDisplays(workspace, runDir, 'step-000-after', config, targetResolution);
     screenshotLedger.push(...beforeRefs, ...afterRefs);
     executionStatus = 'failed-with-reason';
     failureReason = [
@@ -349,11 +503,11 @@ async function runGenericVisionComputerUseLoop(
     for (let index = 0; index < config.maxSteps && actionQueue.length; index += 1) {
       const action = actionQueue.shift() as GenericVisionAction;
       const stepNumber = String(index + 1).padStart(3, '0');
-      const beforeRefs = await captureDisplays(workspace, runDir, `step-${stepNumber}-before`, config);
+      const beforeRefs = await captureDisplays(workspace, runDir, `step-${stepNumber}-before`, config, targetResolution);
       screenshotLedger.push(...beforeRefs);
       const platformBlockReason = platformActionIssue(action, config);
       if (platformBlockReason) {
-        const afterRefs = await captureDisplays(workspace, runDir, `step-${stepNumber}-after`, config);
+        const afterRefs = await captureDisplays(workspace, runDir, `step-${stepNumber}-after`, config, targetResolution);
         screenshotLedger.push(...afterRefs);
         executionStatus = 'failed-with-reason';
         failureReason = platformBlockReason;
@@ -367,9 +521,12 @@ async function runGenericVisionComputerUseLoop(
           grounding: groundingForAction(action),
           execution: {
             executor: config.dryRun ? 'dry-run-generic-gui-executor' : executorBoundary(config),
+            inputChannel: inputChannelDescription(config, targetResolution),
+            windowTarget: targetResolution.ok ? toTraceWindowTarget(targetResolution) : undefined,
             status: 'blocked',
             blockedReason: platformBlockReason,
           },
+          scheduler: schedulerStepMetadata(targetResolution, `step-${stepNumber}`),
           verifier: {
             status: 'blocked',
             reason: 'platform-incompatible Computer Use action',
@@ -381,7 +538,7 @@ async function runGenericVisionComputerUseLoop(
       }
       const riskBlockReason = highRiskBlockReason(action, config);
       if (riskBlockReason) {
-        const afterRefs = await captureDisplays(workspace, runDir, `step-${stepNumber}-after`, config);
+        const afterRefs = await captureDisplays(workspace, runDir, `step-${stepNumber}-after`, config, targetResolution);
         screenshotLedger.push(...afterRefs);
         executionStatus = 'failed-with-reason';
         failureReason = riskBlockReason;
@@ -395,9 +552,12 @@ async function runGenericVisionComputerUseLoop(
           grounding: groundingForAction(action),
           execution: {
             executor: config.dryRun ? 'dry-run-generic-gui-executor' : executorBoundary(config),
+            inputChannel: inputChannelDescription(config, targetResolution),
+            windowTarget: targetResolution.ok ? toTraceWindowTarget(targetResolution) : undefined,
             status: 'blocked',
             blockedReason: riskBlockReason,
           },
+          scheduler: schedulerStepMetadata(targetResolution, `step-${stepNumber}`),
           verifier: {
             status: 'blocked',
             reason: 'high-risk action requires upstream confirmation',
@@ -409,7 +569,7 @@ async function runGenericVisionComputerUseLoop(
       }
       const groundingResolution = await resolveActionGrounding(action, beforeRefs, config);
       if (!groundingResolution.ok) {
-        const afterRefs = await captureDisplays(workspace, runDir, `step-${stepNumber}-after`, config);
+        const afterRefs = await captureDisplays(workspace, runDir, `step-${stepNumber}-after`, config, targetResolution);
         screenshotLedger.push(...afterRefs);
         executionStatus = 'failed-with-reason';
         failureReason = groundingResolution.reason;
@@ -423,9 +583,12 @@ async function runGenericVisionComputerUseLoop(
           grounding: groundingResolution.grounding,
           execution: {
             executor: config.dryRun ? 'dry-run-generic-gui-executor' : executorBoundary(config),
+            inputChannel: inputChannelDescription(config, targetResolution),
+            windowTarget: targetResolution.ok ? toTraceWindowTarget(targetResolution) : undefined,
             status: 'blocked',
             blockedReason: groundingResolution.reason,
           },
+          scheduler: schedulerStepMetadata(targetResolution, `step-${stepNumber}`),
           verifier: {
             status: 'blocked',
             reason: 'grounding did not produce executable coordinates',
@@ -445,8 +608,8 @@ async function runGenericVisionComputerUseLoop(
       });
       const result = config.dryRun
         ? { exitCode: 0, stdout: 'dry-run', stderr: '' }
-        : await executeGenericDesktopAction(executableAction, config);
-      const afterRefs = await captureDisplays(workspace, runDir, `step-${stepNumber}-after`, config);
+        : await executeGenericDesktopAction(executableAction, config, targetResolution);
+      const afterRefs = await captureDisplays(workspace, runDir, `step-${stepNumber}-after`, config, targetResolution);
       screenshotLedger.push(...afterRefs);
       const ok = result.exitCode === 0;
       if (!ok) {
@@ -461,13 +624,20 @@ async function runGenericVisionComputerUseLoop(
         afterScreenshotRefs: afterRefs.map(toTraceScreenshotRef),
         plannedAction: executableAction,
         grounding: groundingResolution.grounding ?? groundingForAction(executableAction),
+        windowTarget: targetResolution.ok ? toTraceWindowTarget(targetResolution) : undefined,
+        localCoordinate: localCoordinateMetadata(groundingResolution.grounding, executableAction, beforeRefs[0]),
+        mappedCoordinate: mappedCoordinateMetadata(groundingResolution.grounding, executableAction),
+        inputChannel: stepInputChannelMetadata(config, targetResolution),
         execution: {
           executor: config.dryRun ? 'dry-run-generic-gui-executor' : executorBoundary(config),
+          inputChannel: inputChannelDescription(config, targetResolution),
+          windowTarget: targetResolution.ok ? toTraceWindowTarget(targetResolution) : undefined,
           status: ok ? 'done' : 'failed',
           exitCode: result.exitCode,
           stdout: result.stdout.trim() || undefined,
           stderr: result.stderr.trim() || undefined,
         },
+        scheduler: schedulerStepMetadata(targetResolution, `step-${stepNumber}`),
         verifier: {
           status: ok ? 'checked' : 'skipped-after-execution-failure',
           method: 'pixel-diff',
@@ -532,6 +702,13 @@ async function runGenericVisionComputerUseLoop(
     config: {
       captureDisplays: config.captureDisplays,
       desktopPlatform: config.desktopPlatform,
+      windowTarget: targetResolution.ok
+        ? toTraceWindowTarget(targetResolution)
+        : {
+            ...windowTargetTraceConfig(targetResolution.target),
+            status: 'unresolved',
+            diagnostics: targetResolution.diagnostics,
+          },
       outputDir: workspaceRel(workspace, runDir),
       maxSteps: config.maxSteps,
       dryRun: config.dryRun,
@@ -545,7 +722,20 @@ async function runGenericVisionComputerUseLoop(
     genericComputerUse: {
       actionSchema: ['open_app', 'click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait'],
       appSpecificShortcuts: [],
-      requires: ['VisionPlanner', 'Grounder', 'GuiExecutor', 'Verifier'],
+      inputChannel: inputChannelDescription(config, targetResolution),
+      coordinateContract: {
+        planner: 'target descriptions only',
+        grounderOutput: 'target-window screenshot coordinates',
+        executorInput: targetResolution.ok ? targetResolution.coordinateSpace : config.windowTarget.coordinateSpace,
+      },
+      inputIsolation: targetResolution.ok ? targetResolution.inputIsolation : config.windowTarget.inputIsolation,
+      requires: ['WindowTargetProvider', 'VisionPlanner', 'Grounder', 'GuiExecutor', 'Verifier'],
+    },
+    scheduler: {
+      mode: 'serialized-window-actions',
+      lockId: targetResolution.ok ? targetResolution.schedulerLockId : 'unresolved-window-target',
+      policy: 'one real GUI action stream per target window; planner/grounder analysis may run in parallel, executor actions are serialized by window lock',
+      targetWindow: targetResolution.ok ? toTraceWindowTarget(targetResolution) : windowTargetTraceConfig(config.windowTarget),
     },
     validation: traceValidation,
     steps,
@@ -564,11 +754,46 @@ async function runGenericVisionComputerUseLoop(
     actionCount: steps.filter((step) => step.kind === 'gui-execution').length,
     dryRun: config.dryRun,
     desktopPlatform: config.desktopPlatform,
+    windowTarget: targetResolution.ok ? toTraceWindowTarget(targetResolution) : undefined,
   });
 }
 
-async function captureDisplays(workspace: string, runDir: string, prefix: string, config: VisionSenseConfig) {
+async function captureDisplays(
+  workspace: string,
+  runDir: string,
+  prefix: string,
+  config: VisionSenseConfig,
+  targetResolution: WindowTargetResolution,
+) {
   const refs: ScreenshotRef[] = [];
+  if (targetResolution.ok && targetResolution.captureKind === 'window') {
+    const displayId = config.captureDisplays[0] ?? 1;
+    const absPath = join(runDir, `${prefix}-window-${targetResolution.windowId ?? 'active'}.png`);
+    if (config.dryRun) {
+      await writeFile(absPath, ONE_BY_ONE_PNG);
+    } else {
+      const result = await captureWindowScreenshot(absPath, targetResolution, config);
+      if (result.exitCode !== 0) {
+        throw new Error(`target window capture failed: ${result.stderr || result.stdout || `exit ${result.exitCode}`}`);
+      }
+    }
+    const stats = await stat(absPath);
+    const bytes = await readFile(absPath);
+    const dimensions = pngDimensions(bytes);
+    refs.push({
+      id: basename(absPath, '.png'),
+      path: workspaceRel(workspace, absPath),
+      absPath,
+      displayId,
+      windowTarget: toTraceWindowTarget(targetResolution),
+      width: dimensions?.width,
+      height: dimensions?.height,
+      sha256: sha256(bytes),
+      bytes: stats.size,
+    });
+    return refs;
+  }
+
   for (const displayId of config.captureDisplays) {
     const absPath = join(runDir, `${prefix}-display-${displayId}.png`);
     if (config.dryRun) {
@@ -587,6 +812,7 @@ async function captureDisplays(workspace: string, runDir: string, prefix: string
       path: workspaceRel(workspace, absPath),
       absPath,
       displayId,
+      windowTarget: targetResolution.ok ? toTraceWindowTarget(targetResolution) : undefined,
       width: dimensions?.width,
       height: dimensions?.height,
       sha256: sha256(bytes),
@@ -594,6 +820,193 @@ async function captureDisplays(workspace: string, runDir: string, prefix: string
     });
   }
   return refs;
+}
+
+async function resolveWindowTarget(config: VisionSenseConfig): Promise<WindowTargetResolution> {
+  const target = config.windowTarget;
+  if (!target.enabled || target.mode === 'display') {
+    return {
+      ok: true,
+      target,
+      captureKind: 'display',
+      coordinateSpace: 'screen',
+      inputIsolation: target.inputIsolation,
+      schedulerLockId: schedulerLockIdForTarget(target, 'display'),
+      source: 'display-fallback',
+      diagnostics: ['window targeting disabled; using configured display capture for compatibility'],
+    };
+  }
+  if (config.dryRun) {
+    return {
+      ok: true,
+      target,
+      captureKind: 'window',
+      windowId: target.windowId,
+      appName: target.appName,
+      title: target.title,
+      bounds: target.bounds,
+      coordinateSpace: target.coordinateSpace,
+      inputIsolation: target.inputIsolation,
+      schedulerLockId: schedulerLockIdForTarget(target, target.windowId ?? target.mode),
+      source: 'dry-run',
+      diagnostics: ['dry-run window target accepted without probing the desktop'],
+    };
+  }
+  if (!isDarwinPlatform(config.desktopPlatform)) {
+    const reason = `WindowTarget mode="${target.mode}" is configured, but no target-window provider is available for desktopPlatform="${config.desktopPlatform}".`;
+    return target.required
+      ? { ok: false, target, reason, diagnostics: [reason] }
+      : {
+          ok: true,
+          target,
+          captureKind: 'display',
+          coordinateSpace: 'screen',
+          inputIsolation: 'best-effort',
+          schedulerLockId: schedulerLockIdForTarget(target, 'display'),
+          source: 'display-fallback',
+          diagnostics: [reason, 'falling back to display capture because windowTarget.required=false'],
+        };
+  }
+  const detected = await detectMacWindowTarget(target);
+  if (detected.ok) return detected;
+  if (target.required) return detected;
+  return {
+    ok: true,
+    target,
+    captureKind: 'display',
+    coordinateSpace: 'screen',
+    inputIsolation: 'best-effort',
+    schedulerLockId: schedulerLockIdForTarget(target, 'display'),
+    source: 'display-fallback',
+    diagnostics: [...detected.diagnostics, 'falling back to display capture because windowTarget.required=false'],
+  };
+}
+
+async function detectMacWindowTarget(target: WindowTarget): Promise<WindowTargetResolution> {
+  if (target.mode === 'window-id' && target.windowId !== undefined) {
+    return {
+      ok: true,
+      target,
+      captureKind: 'window',
+      windowId: target.windowId,
+      appName: target.appName,
+      title: target.title,
+      coordinateSpace: target.coordinateSpace,
+      inputIsolation: target.inputIsolation,
+      schedulerLockId: schedulerLockIdForTarget(target, target.windowId),
+      source: 'config',
+      diagnostics: ['using configured macOS window id'],
+    };
+  }
+  const scriptPath = join(tmpdir(), `sciforge-window-target-${randomUUID()}.swift`);
+  await writeFile(scriptPath, macWindowTargetProbeScript(target), 'utf8');
+  try {
+    const result = await runCommand('swift', [scriptPath], { timeoutMs: 15000 });
+    if (result.exitCode !== 0) {
+      const reason = `macOS target-window probe failed: ${result.stderr || result.stdout || `exit ${result.exitCode}`}`;
+      return { ok: false, target, reason, diagnostics: [reason] };
+    }
+    const parsed = parseJson(result.stdout.trim());
+    if (!isRecord(parsed)) {
+      const reason = 'macOS target-window probe did not return JSON metadata.';
+      return { ok: false, target, reason, diagnostics: [reason, result.stdout.trim()].filter(Boolean) };
+    }
+    const windowId = numberConfig(parsed.windowId);
+    const bounds = parseWindowBounds(parsed.bounds);
+    if (windowId === undefined) {
+      const reason = String(parsed.reason || 'macOS target-window probe did not find a matching on-screen window.');
+      return { ok: false, target, reason, diagnostics: [reason] };
+    }
+    return {
+      ok: true,
+      target,
+      captureKind: 'window',
+      windowId,
+      appName: stringConfig(parsed.appName, target.appName),
+      title: stringConfig(parsed.title, target.title),
+      bounds,
+      coordinateSpace: target.coordinateSpace,
+      inputIsolation: target.inputIsolation,
+      schedulerLockId: schedulerLockIdForTarget(target, windowId),
+      source: target.mode === 'active-window' ? 'active-window' : 'config',
+      diagnostics: ['resolved macOS target window through CGWindowList'],
+    };
+  } finally {
+    await unlink(scriptPath).catch(() => undefined);
+  }
+}
+
+function macWindowTargetProbeScript(target: WindowTarget) {
+  return `
+import CoreGraphics
+import Foundation
+
+let targetMode = ${swiftString(target.mode)}
+let targetApp: String? = ${swiftOptionalString(target.appName)}
+let targetTitle: String? = ${swiftOptionalString(target.title)}
+let options = CGWindowListOption(arrayLiteral: .optionOnScreenOnly, .excludeDesktopElements)
+let windows = (CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]) ?? []
+
+func emit(_ value: [String: Any]) {
+  let data = try! JSONSerialization.data(withJSONObject: value, options: [])
+  print(String(data: data, encoding: .utf8)!)
+}
+
+for window in windows {
+  let layer = window[kCGWindowLayer as String] as? Int ?? 1
+  if layer != 0 { continue }
+  let appName = window[kCGWindowOwnerName as String] as? String ?? ""
+  let title = window[kCGWindowName as String] as? String ?? ""
+  if let targetApp, appName.range(of: targetApp, options: [.caseInsensitive]) == nil { continue }
+  if let targetTitle, title.range(of: targetTitle, options: [.caseInsensitive]) == nil { continue }
+  let windowId = window[kCGWindowNumber as String] as? UInt32 ?? 0
+  let bounds = window[kCGWindowBounds as String] as? [String: Any] ?? [:]
+  if targetMode == "active-window" || targetMode == "app-window" {
+    emit([
+      "windowId": Int(windowId),
+      "appName": appName,
+      "title": title,
+      "bounds": bounds,
+    ])
+    exit(0)
+  }
+}
+
+emit(["reason": "no matching target window"])
+exit(2)
+`;
+}
+
+function parseWindowBounds(value: unknown): WindowBounds | undefined {
+  if (!isRecord(value)) return undefined;
+  const x = numberConfig(value.X, value.x);
+  const y = numberConfig(value.Y, value.y);
+  const width = numberConfig(value.Width, value.width);
+  const height = numberConfig(value.Height, value.height);
+  return x === undefined || y === undefined || width === undefined || height === undefined
+    ? undefined
+    : { x, y, width, height };
+}
+
+function schedulerLockIdForTarget(target: WindowTarget, resolvedId: string | number) {
+  return sanitizeId([
+    'vision-window',
+    target.mode,
+    resolvedId,
+    target.appName,
+    target.title,
+  ].filter((part) => part !== undefined && part !== '').join('-')).toLowerCase();
+}
+
+async function captureWindowScreenshot(absPath: string, targetResolution: ResolvedWindowTarget, config: VisionSenseConfig) {
+  if (isDarwinPlatform(config.desktopPlatform) && targetResolution.windowId !== undefined) {
+    return runCommand('screencapture', ['-x', '-l', String(targetResolution.windowId), absPath], { timeoutMs: 15000 });
+  }
+  return {
+    exitCode: 125,
+    stdout: '',
+    stderr: 'Target-window capture requires a resolved windowId for the configured desktop platform.',
+  };
 }
 
 async function appendPlannerStep(params: {
@@ -638,7 +1051,22 @@ async function resolveActionGrounding(
 ): Promise<GroundingResolution> {
   if (action.type === 'click' || action.type === 'double_click') {
     if (typeof action.x === 'number' && typeof action.y === 'number') {
-      return { ok: true, action, grounding: groundingForAction(action) };
+      const executorPoint = screenshotToExecutorPoint(action.x, action.y, beforeRefs[0], config);
+      const executableAction = { ...action, x: executorPoint.x, y: executorPoint.y };
+      return {
+        ok: true,
+        action: executableAction,
+        grounding: {
+          ...groundingForAction(action),
+          screenshotX: action.x,
+          screenshotY: action.y,
+          executorX: executorPoint.x,
+          executorY: executorPoint.y,
+          executorCoordinateScale: executorPoint.scale,
+          coordinateSpace: executorPoint.coordinateSpace,
+          windowTarget: beforeRefs[0]?.windowTarget,
+        },
+      };
     }
     if (!action.targetDescription) {
       return {
@@ -669,13 +1097,37 @@ async function resolveActionGrounding(
         executorX: executorPoint.x,
         executorY: executorPoint.y,
         executorCoordinateScale: executorPoint.scale,
+        coordinateSpace: executorPoint.coordinateSpace,
+        windowTarget: beforeRefs[0]?.windowTarget,
       },
     };
   }
 
   if (action.type === 'drag') {
     const hasEndpoints = [action.fromX, action.fromY, action.toX, action.toY].every((value) => typeof value === 'number');
-    if (hasEndpoints) return { ok: true, action, grounding: groundingForAction(action) };
+    if (hasEndpoints) {
+      const fromExecutor = screenshotToExecutorPoint(action.fromX as number, action.fromY as number, beforeRefs[0], config);
+      const toExecutor = screenshotToExecutorPoint(action.toX as number, action.toY as number, beforeRefs[0], config);
+      const executableAction = { ...action, fromX: fromExecutor.x, fromY: fromExecutor.y, toX: toExecutor.x, toY: toExecutor.y };
+      return {
+        ok: true,
+        action: executableAction,
+        grounding: {
+          ...groundingForAction(action),
+          screenshotFromX: action.fromX,
+          screenshotFromY: action.fromY,
+          screenshotToX: action.toX,
+          screenshotToY: action.toY,
+          executorFromX: fromExecutor.x,
+          executorFromY: fromExecutor.y,
+          executorToX: toExecutor.x,
+          executorToY: toExecutor.y,
+          executorCoordinateScale: fromExecutor.scale,
+          coordinateSpace: fromExecutor.coordinateSpace,
+          windowTarget: beforeRefs[0]?.windowTarget,
+        },
+      };
+    }
     if (!action.fromTargetDescription || !action.toTargetDescription) {
       return {
         ok: false,
@@ -699,6 +1151,9 @@ async function resolveActionGrounding(
         from: from.grounding,
         to: to.grounding,
         targetDescription: action.targetDescription,
+        executorCoordinateScale: fromExecutor.scale,
+        coordinateSpace: fromExecutor.coordinateSpace,
+        windowTarget: beforeRefs[0]?.windowTarget,
       },
     };
   }
@@ -708,7 +1163,17 @@ async function resolveActionGrounding(
 
 function screenshotToExecutorPoint(x: number, y: number, screenshot: ScreenshotRef | undefined, config: VisionSenseConfig) {
   const scale = config.executorCoordinateScale ?? inferExecutorCoordinateScale(screenshot, config);
-  return { x: x / scale, y: y / scale, scale };
+  const bounds = isWindowLocalCoordinateSpace(screenshot?.windowTarget?.coordinateSpace) ? screenshot?.windowTarget?.bounds : undefined;
+  return {
+    x: (x + (bounds?.x ?? 0)) / scale,
+    y: (y + (bounds?.y ?? 0)) / scale,
+    scale,
+    coordinateSpace: screenshot?.windowTarget?.coordinateSpace ?? config.windowTarget.coordinateSpace,
+  };
+}
+
+function isWindowLocalCoordinateSpace(value: string | undefined) {
+  return value === 'window' || value === 'window-local';
 }
 
 function inferExecutorCoordinateScale(screenshot: ScreenshotRef | undefined, config: VisionSenseConfig) {
@@ -789,9 +1254,10 @@ async function requestGenericPlannerActions(
         'You are SciForge VisionPlanner for generic Computer Use.',
         'Return only JSON. Do not read DOM or accessibility. Do not output application-private APIs, scripts, selectors, files, or shortcuts that depend on one app.',
         `Execution environment: ${plannerEnvironmentDescription(config)}.`,
+        `Window target contract: ${plannerWindowTargetDescription(config)}.`,
         `Use only keys and modifiers supported by desktopPlatform="${config.desktopPlatform}". Do not use keys from another operating system family.`,
         'When an app must be opened, prefer open_app with appName. If open_app is unavailable for the configured executor, use the operating system app launcher visible from the current screenshot, expressed as generic keyboard/mouse actions. Do not assume a desktop icon exists unless it is visibly present.',
-        'For visual targets, output targetDescription text only; never output x/y/fromX/fromY/toX/toY coordinates.',
+        'For visual targets, output targetDescription text only; never output x/y/fromX/fromY/toX/toY coordinates. Coordinates are produced by the Grounder in the target-window screenshot coordinate system.',
         'Allowed action types: open_app, click, double_click, drag, type_text, press_key, hotkey, scroll, wait.',
         'Return {"done": boolean, "reason": string, "actions": [...]}. Set done=true only when the supplied screenshot shows the requested GUI task is complete; otherwise return the next generic action.',
         'The supplied screenshot is the observation state. Do not use wait as the only action to request another observation.',
@@ -856,6 +1322,137 @@ function plannerRetryInstruction(issue: PlannerContractIssue | undefined, config
 
 function plannerEnvironmentDescription(config: VisionSenseConfig) {
   return `${platformLabel(config.desktopPlatform)} desktop controlled by screenshots plus generic mouse/keyboard events`;
+}
+
+function plannerWindowTargetDescription(config: VisionSenseConfig) {
+  const target = config.windowTarget;
+  if (!target.enabled || target.mode === 'display') return 'display capture fallback; coordinates are interpreted in screen/display space';
+  return [
+    `mode=${target.mode}`,
+    `required=${target.required}`,
+    `coordinateSpace=${target.coordinateSpace}`,
+    `inputIsolation=${target.inputIsolation}`,
+    target.appName ? `appName=${JSON.stringify(target.appName)}` : '',
+    target.title ? `title=${JSON.stringify(target.title)}` : '',
+    target.windowId !== undefined ? `windowId=${target.windowId}` : '',
+  ].filter(Boolean).join(' ');
+}
+
+function windowTargetTraceConfig(target: WindowTarget) {
+  return {
+    enabled: target.enabled,
+    required: target.required,
+    mode: target.mode,
+    coordinateSpace: target.coordinateSpace,
+    inputIsolation: target.inputIsolation,
+    windowId: target.windowId,
+    appName: target.appName,
+    title: target.title,
+    bounds: target.bounds,
+  };
+}
+
+function toTraceWindowTarget(targetResolution: ResolvedWindowTarget): TraceWindowTarget {
+  return {
+    ...windowTargetTraceConfig(targetResolution.target),
+    captureKind: targetResolution.captureKind,
+    coordinateSpace: targetResolution.coordinateSpace,
+    inputIsolation: targetResolution.inputIsolation,
+    windowId: targetResolution.windowId,
+    appName: targetResolution.appName,
+    title: targetResolution.title,
+    bounds: targetResolution.bounds,
+    schedulerLockId: targetResolution.schedulerLockId,
+    source: targetResolution.source,
+    diagnostics: targetResolution.diagnostics.length ? targetResolution.diagnostics : undefined,
+  };
+}
+
+function inputChannelDescription(config: VisionSenseConfig, targetResolution: WindowTargetResolution) {
+  const executor = config.dryRun ? 'dry-run' : executorBoundary(config);
+  if (!targetResolution.ok) return `generic-mouse-keyboard:${executor}:blocked-unresolved-window-target`;
+  return [
+    'generic-mouse-keyboard',
+    executor,
+    targetResolution.captureKind === 'window' ? 'target-window' : 'display',
+    isWindowLocalCoordinateSpace(targetResolution.coordinateSpace) ? 'window-relative-grounding' : 'screen-relative-grounding',
+    targetResolution.inputIsolation,
+  ].join(':');
+}
+
+function schedulerStepMetadata(targetResolution: WindowTargetResolution, stepId: string): Record<string, unknown> {
+  if (!targetResolution.ok) {
+    return {
+      mode: 'blocked',
+      stepId,
+      lockId: 'unresolved-window-target',
+      reason: targetResolution.reason,
+      diagnostics: targetResolution.diagnostics,
+    };
+  }
+  return {
+    mode: 'serialized-window-actions',
+    stepId,
+    lockId: targetResolution.schedulerLockId,
+    captureKind: targetResolution.captureKind,
+    inputIsolation: targetResolution.inputIsolation,
+    failClosedIsolation: targetResolution.inputIsolation === 'require-focused-target',
+    targetWindow: toTraceWindowTarget(targetResolution),
+  };
+}
+
+function stepInputChannelMetadata(config: VisionSenseConfig, targetResolution: WindowTargetResolution): Record<string, unknown> {
+  return {
+    type: 'generic-mouse-keyboard',
+    executor: config.dryRun ? 'dry-run-generic-gui-executor' : executorBoundary(config),
+    isolation: targetResolution.ok ? targetResolution.inputIsolation : config.windowTarget.inputIsolation,
+    targetBound: targetResolution.ok && targetResolution.captureKind === 'window',
+  };
+}
+
+function localCoordinateMetadata(grounding: Record<string, unknown> | undefined, action: GenericVisionAction, screenshot: ScreenshotRef | undefined) {
+  const space = isWindowLocalCoordinateSpace(screenshot?.windowTarget?.coordinateSpace) ? 'window' : 'screen';
+  if (action.type === 'click' || action.type === 'double_click') {
+    return {
+      space,
+      x: numberConfig(grounding?.screenshotX, action.x),
+      y: numberConfig(grounding?.screenshotY, action.y),
+      screenshotRef: screenshot?.path,
+    };
+  }
+  if (action.type === 'drag') {
+    return {
+      space,
+      fromX: numberConfig(grounding?.screenshotFromX, action.fromX),
+      fromY: numberConfig(grounding?.screenshotFromY, action.fromY),
+      toX: numberConfig(grounding?.screenshotToX, action.toX),
+      toY: numberConfig(grounding?.screenshotToY, action.toY),
+      screenshotRef: screenshot?.path,
+    };
+  }
+  return { space, screenshotRef: screenshot?.path };
+}
+
+function mappedCoordinateMetadata(grounding: Record<string, unknown> | undefined, action: GenericVisionAction) {
+  if (action.type === 'click' || action.type === 'double_click') {
+    return {
+      space: 'executor',
+      x: numberConfig(grounding?.executorX, action.x),
+      y: numberConfig(grounding?.executorY, action.y),
+      scale: numberConfig(grounding?.executorCoordinateScale),
+    };
+  }
+  if (action.type === 'drag') {
+    return {
+      space: 'executor',
+      fromX: numberConfig(grounding?.executorFromX, action.fromX),
+      fromY: numberConfig(grounding?.executorFromY, action.fromY),
+      toX: numberConfig(grounding?.executorToX, action.toX),
+      toY: numberConfig(grounding?.executorToY, action.toY),
+      scale: numberConfig(grounding?.executorCoordinateScale),
+    };
+  }
+  return { space: 'executor' };
 }
 
 function platformActionIssue(action: GenericVisionAction, config: VisionSenseConfig) {
@@ -974,7 +1571,12 @@ async function groundTargetDescription(
   const startedAt = Date.now();
   const response = await postJsonWithTimeout(
     `${config.grounder.baseUrl.replace(/\/+$/, '')}/predict/`,
-    { image_path: imagePath.path, text_prompt: targetDescription },
+    {
+      image_path: imagePath.path,
+      text_prompt: targetDescription,
+      coordinate_space: screenshot.windowTarget?.coordinateSpace ?? 'screen',
+      window_target: screenshot.windowTarget,
+    },
     config.grounder.timeoutMs,
   );
   if (!response.ok) {
@@ -1040,7 +1642,7 @@ async function groundTargetWithVisionModel(
         role: 'system',
         content: [
           'You are SciForge Grounder for generic Computer Use.',
-          'Return only JSON with pixel coordinates in the screenshot coordinate system.',
+          'Return only JSON with pixel coordinates in the supplied target-window screenshot coordinate system.',
           'Do not use DOM, accessibility, selectors, app APIs, or private shortcuts.',
           'Schema: {"coordinates":[x,y],"confidence":0..1,"reason":"short visual evidence"}.',
         ].join(' '),
@@ -1048,7 +1650,7 @@ async function groundTargetWithVisionModel(
       {
         role: 'user',
         content: [
-          { type: 'text', text: `Locate this visual target: ${targetDescription}\nScreenshot size metadata: width=${screenshot.width ?? 'unknown'} height=${screenshot.height ?? 'unknown'}.` },
+          { type: 'text', text: `Locate this visual target: ${targetDescription}\nScreenshot size metadata: width=${screenshot.width ?? 'unknown'} height=${screenshot.height ?? 'unknown'}.\nWindow target metadata: ${JSON.stringify(screenshot.windowTarget ?? { mode: 'display', coordinateSpace: 'screen' })}.` },
           { type: 'image_url', image_url: { url: `data:image/png;base64,${imageBase64}` } },
         ],
       },
@@ -1251,6 +1853,7 @@ function genericLoopPayload(params: {
   actionCount: number;
   dryRun: boolean;
   desktopPlatform: string;
+  windowTarget?: TraceWindowTarget;
 }): ToolPayload {
   const traceRel = workspaceRel(params.workspace, params.tracePath);
   const allRefs = params.screenshotRefs;
@@ -1288,7 +1891,7 @@ function genericLoopPayload(params: {
       id: `EU-vision-sense-${params.runId}`,
       tool: VISION_TOOL_ID,
       status: params.status,
-      params: JSON.stringify({ prompt: params.request.prompt, runId: params.runId, actionCount: params.actionCount }),
+      params: JSON.stringify({ prompt: params.request.prompt, runId: params.runId, actionCount: params.actionCount, windowTarget: params.windowTarget }),
       hash: sha256(Buffer.from(`${params.runId}:${traceRel}:${params.status}`, 'utf8')).slice(0, 12),
       time: new Date().toISOString(),
       environment: params.dryRun
@@ -1303,10 +1906,10 @@ function genericLoopPayload(params: {
       beforeScreenshotRef: beforeRef?.path,
       failureReason: params.failureReason || undefined,
       routeDecision: { selectedRuntime: 'vision-sense-generic-computer-use-loop', selectedToolId: VISION_TOOL_ID },
-      requiredInputs: params.status === 'done' ? undefined : ['VisionPlanner', 'Grounder', 'GuiExecutor', 'Verifier'],
+      requiredInputs: params.status === 'done' ? undefined : ['WindowTargetProvider', 'VisionPlanner', 'Grounder', 'GuiExecutor', 'Verifier'],
       recoverActions: params.status === 'done' ? undefined : [
         'Provide a generic VisionPlanner that emits the action schema recorded in the trace.',
-        'Configure KV-Ground or another Grounder so target descriptions become screen coordinates.',
+        'Configure KV-Ground or another Grounder so target descriptions become target-window coordinates.',
         'Keep app-specific APIs out of the primary path; only mouse/keyboard executor actions should be required.',
       ],
     }],
@@ -1321,6 +1924,7 @@ function genericLoopPayload(params: {
         runId: params.runId,
         imageMemoryPolicy: 'file-ref-only',
         screenshotRefs: allRefs.map(toTraceScreenshotRef),
+        windowTarget: params.windowTarget,
         noInlineImages: true,
         appSpecificShortcuts: [],
       },
@@ -1383,8 +1987,15 @@ function genericBridgeBlockedPayload(
   };
 }
 
-async function executeGenericDesktopAction(action: GenericVisionAction, config: VisionSenseConfig) {
-  if (isDarwinPlatform(config.desktopPlatform)) return executeGenericMacAction(action);
+async function executeGenericDesktopAction(action: GenericVisionAction, config: VisionSenseConfig, targetResolution: WindowTargetResolution) {
+  if (!targetResolution.ok) {
+    return {
+      exitCode: 125,
+      stdout: '',
+      stderr: targetResolution.reason,
+    };
+  }
+  if (isDarwinPlatform(config.desktopPlatform)) return executeGenericMacAction(action, targetResolution);
   return {
     exitCode: 126,
     stdout: '',
@@ -1400,7 +2011,7 @@ function executorBoundary(config: VisionSenseConfig) {
   return `${sanitizeId(config.desktopPlatform).toLowerCase()}-generic-gui-executor`;
 }
 
-async function executeGenericMacAction(action: GenericVisionAction) {
+async function executeGenericMacAction(action: GenericVisionAction, targetResolution: ResolvedWindowTarget) {
   if (action.type === 'open_app') {
     const openResult = await runCommand('open', ['-a', action.appName], { timeoutMs: 30000 });
     if (openResult.exitCode !== 0) return openResult;
@@ -1413,6 +2024,8 @@ async function executeGenericMacAction(action: GenericVisionAction) {
           stderr: activateResult.stderr || activateResult.stdout || `activate ${action.appName} failed with exit ${activateResult.exitCode}`,
         };
   }
+  const isolation = await ensureMacInputTarget(action, targetResolution);
+  if (isolation.exitCode !== 0) return isolation;
   if (action.type === 'click' || action.type === 'double_click' || action.type === 'drag' || action.type === 'scroll') {
     const swiftResult = await executeSwiftGuiAction(action);
     if (swiftResult.exitCode === 0) return swiftResult;
@@ -1451,6 +2064,47 @@ async function activateMacApp(appName: string) {
     exitCode: lastResult.exitCode || 1,
     stdout: lastResult.stdout,
     stderr: lastResult.stderr || `App ${appName} did not become frontmost after open_app; frontmost=${lastResult.stdout.trim() || 'unknown'}`,
+  };
+}
+
+async function ensureMacInputTarget(action: GenericVisionAction, targetResolution: ResolvedWindowTarget) {
+  if (targetResolution.captureKind !== 'window') return { exitCode: 0, stdout: 'input-isolation=display-fallback', stderr: '' };
+  if (action.type === 'wait') return { exitCode: 0, stdout: 'input-isolation=not-required-for-wait', stderr: '' };
+  if (targetResolution.appName) {
+    const activateResult = await activateMacApp(targetResolution.appName);
+    if (activateResult.exitCode !== 0 && targetResolution.inputIsolation === 'require-focused-target') {
+      return {
+        exitCode: 125,
+        stdout: activateResult.stdout,
+        stderr: [
+          'Input isolation failed before executing Computer Use action.',
+          activateResult.stderr || `Could not focus target app ${targetResolution.appName}.`,
+        ].join(' '),
+      };
+    }
+  }
+  if (targetResolution.inputIsolation !== 'require-focused-target') {
+    return { exitCode: 0, stdout: 'input-isolation=best-effort', stderr: '' };
+  }
+  if (!targetResolution.appName) {
+    return {
+      exitCode: 125,
+      stdout: '',
+      stderr: 'Input isolation requires a target appName so the scheduler can verify focus before sending mouse/keyboard events.',
+    };
+  }
+  const frontmost = await runCommand('osascript', ['-e', 'tell application "System Events" to get name of first application process whose frontmost is true'], { timeoutMs: 10000 });
+  const frontmostApp = frontmost.stdout.trim();
+  if (frontmost.exitCode === 0 && frontmostApp === targetResolution.appName) {
+    return { exitCode: 0, stdout: `input-isolation=focused-target frontmost=${frontmostApp || 'unknown'}`, stderr: '' };
+  }
+  return {
+    exitCode: 125,
+    stdout: frontmost.stdout,
+    stderr: [
+      'Input isolation blocked Computer Use action because the focused window/app did not match the target window contract.',
+      `expectedApp=${targetResolution.appName ?? 'unknown'} frontmost=${frontmostApp || 'unknown'}`,
+    ].join(' '),
   };
 }
 
@@ -1744,6 +2398,7 @@ function toTraceScreenshotRef(ref: ScreenshotRef) {
     type: 'screenshot',
     path: ref.path,
     displayId: ref.displayId,
+    windowTarget: ref.windowTarget,
     width: ref.width,
     height: ref.height,
     sha256: ref.sha256,
@@ -1850,4 +2505,12 @@ function sha256(bytes: Buffer) {
 
 function appleScriptString(value: string) {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r?\n/g, '\\n')}"`;
+}
+
+function swiftString(value: string) {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r?\n/g, '\\n')}"`;
+}
+
+function swiftOptionalString(value: string | undefined) {
+  return value ? `Optional(${swiftString(value)})` : 'nil';
 }
