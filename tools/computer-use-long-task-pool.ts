@@ -417,6 +417,18 @@ export async function validateComputerUseLongTrace(options: {
     if (!focusPolicy || !/focus|fail-closed|best-effort/i.test(focusPolicy)) issues.push('trace.scheduler.focusPolicy must describe focus/isolation behavior');
     const interferenceRisk = firstString(traceScheduler.interferenceRisk, traceScheduler.risk);
     if (!interferenceRisk) issues.push('trace.scheduler.interferenceRisk must record user/device interference risk');
+    const executorLock = isRecord(traceScheduler.executorLock) ? traceScheduler.executorLock : {};
+    if (realGuiTrace) {
+      if (executorLock.provider !== 'filesystem-lease') {
+        issues.push('trace.scheduler.executorLock must declare filesystem-lease for real GUI execution');
+      }
+      if (typeof executorLock.timeoutMs !== 'number' || executorLock.timeoutMs < 1) {
+        issues.push('trace.scheduler.executorLock.timeoutMs must be positive for real GUI execution');
+      }
+      if (typeof executorLock.staleLockMs !== 'number' || executorLock.staleLockMs < 1) {
+        issues.push('trace.scheduler.executorLock.staleLockMs must be positive for real GUI execution');
+      }
+    }
   }
   const genericComputerUse = isRecord(trace.genericComputerUse) ? trace.genericComputerUse : {};
   const appSpecificShortcuts = Array.isArray(genericComputerUse.appSpecificShortcuts) ? genericComputerUse.appSpecificShortcuts : undefined;

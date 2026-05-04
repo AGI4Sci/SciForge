@@ -19,6 +19,8 @@ export async function executeGenericDesktopAction(action: GenericVisionAction, c
     targetResolution,
     runId: config.runId,
     stepId: action.type,
+    timeoutMs: config.schedulerLockTimeoutMs,
+    staleMs: config.schedulerStaleLockMs,
   });
   if (!lease.ok) {
     return {

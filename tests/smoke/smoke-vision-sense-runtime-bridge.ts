@@ -695,6 +695,8 @@ try {
         visionSenseConfig: {
           dryRun: true,
           executorCoordinateScale: 2,
+          schedulerLockTimeoutMs: 1234,
+          schedulerStaleLockMs: 5678,
           windowTarget: {
             enabled: true,
             required: true,
@@ -744,6 +746,10 @@ try {
     assert.equal(scheduler.analysisConcurrency, 'parallel-allowed');
     assert.equal(scheduler.focusPolicy, 'require-focused-target-before-action');
     assert.equal(scheduler.interferenceRisk, 'low-when-focused-target-verified');
+    assert.equal(((scheduler.executorLock as Record<string, unknown>)?.provider), 'filesystem-lease');
+    assert.equal(((scheduler.executorLock as Record<string, unknown>)?.appliesTo), 'none-dry-run');
+    assert.equal(((scheduler.executorLock as Record<string, unknown>)?.timeoutMs), 1234);
+    assert.equal(((scheduler.executorLock as Record<string, unknown>)?.staleLockMs), 5678);
     const windowStep = (windowTrace.steps as Array<Record<string, unknown>>).find((step) => step.id === 'step-001-execute-click');
     assert.ok(windowStep);
     assert.equal(((windowStep.plannedAction as Record<string, unknown>)?.x), 40);

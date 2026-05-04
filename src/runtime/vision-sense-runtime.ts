@@ -101,6 +101,16 @@ async function loadVisionSenseConfig(workspace: string, request: GatewayRequest)
       false,
     ),
     executorCoordinateScale: numberConfig(process.env.SCIFORGE_VISION_EXECUTOR_COORDINATE_SCALE, requestConfig.executorCoordinateScale, fileConfig.executorCoordinateScale),
+    schedulerLockTimeoutMs: numberConfig(
+      requestConfig.schedulerLockTimeoutMs,
+      process.env.SCIFORGE_VISION_SCHEDULER_LOCK_TIMEOUT_MS,
+      fileConfig.schedulerLockTimeoutMs,
+    ),
+    schedulerStaleLockMs: numberConfig(
+      requestConfig.schedulerStaleLockMs,
+      process.env.SCIFORGE_VISION_SCHEDULER_STALE_LOCK_MS,
+      fileConfig.schedulerStaleLockMs,
+    ),
     planner: {
       baseUrl: stringConfig(
         process.env.SCIFORGE_VISION_PLANNER_BASE_URL,
@@ -499,6 +509,8 @@ async function runGenericVisionComputerUseLoop(
       maxSteps: config.maxSteps,
       dryRun: config.dryRun,
       allowHighRiskActions: config.allowHighRiskActions,
+      schedulerLockTimeoutMs: config.schedulerLockTimeoutMs,
+      schedulerStaleLockMs: config.schedulerStaleLockMs,
     },
     imageMemory: {
       policy: 'file-ref-only',
@@ -537,6 +549,13 @@ async function runGenericVisionComputerUseLoop(
     ),
     scheduler: {
       ...schedulerRunMetadata(targetResolution),
+      executorLock: {
+        provider: 'filesystem-lease',
+        pathRoot: '/tmp/sciforge-computer-use-locks',
+        timeoutMs: config.schedulerLockTimeoutMs ?? 60000,
+        staleLockMs: config.schedulerStaleLockMs ?? 120000,
+        appliesTo: config.dryRun ? 'none-dry-run' : 'real-gui-executor',
+      },
     },
     validation: traceValidation,
     steps,

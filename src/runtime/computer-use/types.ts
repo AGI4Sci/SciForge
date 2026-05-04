@@ -30,6 +30,8 @@ export interface ComputerUseConfig {
   maxSteps: number;
   allowHighRiskActions: boolean;
   executorCoordinateScale?: number;
+  schedulerLockTimeoutMs?: number;
+  schedulerStaleLockMs?: number;
   planner: VisionPlannerConfig;
   grounder: VisionGrounderConfig;
   plannedActions: GenericVisionAction[];

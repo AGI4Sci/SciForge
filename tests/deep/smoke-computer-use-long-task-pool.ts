@@ -468,6 +468,16 @@ const realGuiTracePath = join(runDir, 'real-gui-vision-trace.json');
 await writeFile(realGuiTracePath, `${JSON.stringify({
   ...trace,
   config: { dryRun: false },
+  scheduler: {
+    ...fixtureScheduler,
+    executorLock: {
+      provider: 'filesystem-lease',
+      pathRoot: '/tmp/sciforge-computer-use-locks',
+      timeoutMs: 60000,
+      staleLockMs: 120000,
+      appliesTo: 'real-gui-executor',
+    },
+  },
   genericComputerUse: {
     ...(trace.genericComputerUse as Record<string, unknown>),
     inputChannelContract: {
