@@ -422,6 +422,22 @@ export async function validateComputerUseLongTrace(options: {
   for (const action of allowedActionTypes) {
     if (!actionSchema.has(action)) issues.push(`genericComputerUse.actionSchema missing ${action}`);
   }
+  const coordinateContract = isRecord(genericComputerUse.coordinateContract) ? genericComputerUse.coordinateContract : {};
+  const localFrame = firstString(coordinateContract.localCoordinateFrame, coordinateContract.grounderOutput, coordinateContract.executorInput);
+  if (!localFrame || !/window|target-window/i.test(localFrame)) {
+    issues.push('genericComputerUse.coordinateContract must declare window-local Grounder/executor coordinates');
+  }
+  const verifierContract = isRecord(genericComputerUse.verifierContract) ? genericComputerUse.verifierContract : {};
+  const verifierScope = firstString(verifierContract.screenshotScope, verifierContract.beforeAfterWindowConsistency, verifierContract.completionEvidence);
+  if (!verifierScope || !/window/i.test(verifierScope)) {
+    issues.push('genericComputerUse.verifierContract must require window-based before/after verification');
+  }
+
+  const windowLifecycle = isRecord(trace.windowLifecycle) ? trace.windowLifecycle : {};
+  const lifecyclePolicy = firstString(windowLifecycle.recoveryPolicy, windowLifecycle.status);
+  if (!lifecyclePolicy || !/window|recover|stable|migrated/i.test(lifecyclePolicy)) {
+    issues.push('trace.windowLifecycle must record window lifecycle/recovery evidence');
+  }
 
   const imageMemory = isRecord(trace.imageMemory) ? trace.imageMemory : {};
   if (imageMemory.policy !== 'file-ref-only') issues.push('imageMemory.policy must be file-ref-only');
@@ -469,6 +485,7 @@ export async function validateComputerUseLongTrace(options: {
       if (!isRecord(step.execution)) issues.push(`steps[${index}] missing execution record`);
       if (isRecord(step.execution) && !hasInputChannelMetadata(step.execution, action)) issues.push(`steps[${index}] execution missing input-channel metadata`);
       if (!isRecord(step.verifier)) issues.push(`steps[${index}] missing verifier record`);
+      if (isRecord(step.verifier) && !hasWindowVerifierMetadata(step.verifier)) issues.push(`steps[${index}] verifier missing window consistency metadata`);
       if ((type === 'click' || type === 'double_click' || type === 'drag') && status === 'done' && !isRecord(step.grounding)) {
         issues.push(`steps[${index}] ${type} action missing grounding record`);
       }
@@ -2040,6 +2057,12 @@ function hasSchedulerMetadata(step: Record<string, unknown>, traceScheduler: Rec
   const focusPolicy = firstString(scheduler.focusPolicy, scheduler.focus);
   const interferenceRisk = firstString(scheduler.interferenceRisk, scheduler.risk);
   return Boolean(mode && /serial|ordered|single|window/i.test(mode) && lockId && focusPolicy && interferenceRisk);
+}
+
+function hasWindowVerifierMetadata(verifier: Record<string, unknown>) {
+  const consistency = isRecord(verifier.windowConsistency) ? verifier.windowConsistency : verifier;
+  const status = firstString(consistency.status, consistency.scope, consistency.requiredScope);
+  return Boolean(status && /window|target|display/i.test(status));
 }
 
 function hasForbiddenPrivateFields(value: unknown): boolean {

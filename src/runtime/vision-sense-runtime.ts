@@ -222,6 +222,7 @@ async function runGenericVisionComputerUseLoop(
         reason: 'target window contract could not be resolved',
         diagnostics: targetResolution.diagnostics,
         windowTarget: windowTargetTraceConfig(targetResolution.target),
+        windowConsistency: windowConsistencyMetadata([], [], config),
       },
       failureReason,
     });
@@ -270,6 +271,7 @@ async function runGenericVisionComputerUseLoop(
         status: 'blocked',
         reason: 'missing VisionPlanner/Grounder action plan',
         pixelDiff: pixelDiffForScreenshotSets(beforeRefs, afterRefs),
+        windowConsistency: windowConsistencyMetadata(beforeRefs, afterRefs, config),
       },
       failureReason,
     });
@@ -307,6 +309,7 @@ async function runGenericVisionComputerUseLoop(
             status: 'blocked',
             reason: 'platform-incompatible Computer Use action',
             pixelDiff: pixelDiffForScreenshotSets(beforeRefs, afterRefs),
+            windowConsistency: windowConsistencyMetadata(beforeRefs, afterRefs, config),
           },
           failureReason,
         });
@@ -338,6 +341,7 @@ async function runGenericVisionComputerUseLoop(
             status: 'blocked',
             reason: 'high-risk action requires upstream confirmation',
             pixelDiff: pixelDiffForScreenshotSets(beforeRefs, afterRefs),
+            windowConsistency: windowConsistencyMetadata(beforeRefs, afterRefs, config),
           },
           failureReason,
         });
@@ -369,6 +373,7 @@ async function runGenericVisionComputerUseLoop(
             status: 'blocked',
             reason: 'grounding did not produce executable coordinates',
             pixelDiff: pixelDiffForScreenshotSets(beforeRefs, afterRefs),
+            windowConsistency: windowConsistencyMetadata(beforeRefs, afterRefs, config),
           },
           failureReason,
         });
@@ -416,8 +421,9 @@ async function runGenericVisionComputerUseLoop(
         scheduler: schedulerStepMetadata(targetResolution, `step-${stepNumber}`),
         verifier: {
           status: ok ? 'checked' : 'skipped-after-execution-failure',
-          method: 'pixel-diff',
+          method: 'window-pixel-diff',
           pixelDiff: pixelDiffForScreenshotSets(beforeRefs, afterRefs),
+          windowConsistency: windowConsistencyMetadata(beforeRefs, afterRefs, config),
         },
         failureReason: ok ? undefined : failureReason,
       });
@@ -503,10 +509,27 @@ async function runGenericVisionComputerUseLoop(
         planner: 'target descriptions only',
         grounderOutput: 'target-window screenshot coordinates',
         executorInput: targetResolution.ok ? targetResolution.coordinateSpace : config.windowTarget.coordinateSpace,
+        localCoordinateFrame: 'window screenshot pixels before executor mapping',
+        mappedCoordinateFrame: 'desktop executor coordinates after window-origin and scale mapping',
+      },
+      verifierContract: {
+        screenshotScope: 'target-window',
+        beforeAfterWindowConsistency: 'required-or-structured-window-lifecycle-diagnostics',
+        completionEvidence: 'window-local screenshots plus pixel diff, no DOM/accessibility',
       },
       inputIsolation: targetResolution.ok ? targetResolution.inputIsolation : config.windowTarget.inputIsolation,
       requires: ['WindowTargetProvider', 'VisionPlanner', 'Grounder', 'GuiExecutor', 'Verifier'],
     },
+    windowLifecycle: windowLifecycleTrace(
+      targetResolution.ok
+        ? toTraceWindowTarget(targetResolution)
+        : {
+            ...windowTargetTraceConfig(config.windowTarget),
+            captureKind: 'display',
+            source: 'display-fallback',
+          },
+      screenshotLedger,
+    ),
     scheduler: {
       ...schedulerRunMetadata(targetResolution),
     },
@@ -582,6 +605,8 @@ async function resolveActionGrounding(
           ...groundingForAction(action),
           screenshotX: action.x,
           screenshotY: action.y,
+          localX: action.x,
+          localY: action.y,
           executorX: executorPoint.x,
           executorY: executorPoint.y,
           executorCoordinateScale: executorPoint.scale,
@@ -616,6 +641,8 @@ async function resolveActionGrounding(
         ...grounded.grounding,
         screenshotX: grounded.x,
         screenshotY: grounded.y,
+        localX: grounded.x,
+        localY: grounded.y,
         executorX: executorPoint.x,
         executorY: executorPoint.y,
         executorCoordinateScale: executorPoint.scale,
@@ -640,6 +667,10 @@ async function resolveActionGrounding(
           screenshotFromY: action.fromY,
           screenshotToX: action.toX,
           screenshotToY: action.toY,
+          localFromX: action.fromX,
+          localFromY: action.fromY,
+          localToX: action.toX,
+          localToY: action.toY,
           executorFromX: fromExecutor.x,
           executorFromY: fromExecutor.y,
           executorToX: toExecutor.x,
@@ -673,6 +704,10 @@ async function resolveActionGrounding(
         from: from.grounding,
         to: to.grounding,
         targetDescription: action.targetDescription,
+        localFromX: from.x,
+        localFromY: from.y,
+        localToX: to.x,
+        localToY: to.y,
         executorCoordinateScale: fromExecutor.scale,
         coordinateSpace: fromExecutor.coordinateSpace,
         windowTarget: beforeRefs[0]?.windowTarget,
@@ -692,6 +727,76 @@ function screenshotToExecutorPoint(x: number, y: number, screenshot: ScreenshotR
     scale,
     coordinateSpace: screenshot?.windowTarget?.coordinateSpace ?? config.windowTarget.coordinateSpace,
   };
+}
+
+function windowConsistencyMetadata(beforeRefs: ScreenshotRef[], afterRefs: ScreenshotRef[], config: VisionSenseConfig) {
+  const before = beforeRefs[0];
+  const after = afterRefs[0];
+  const beforeTarget = before?.windowTarget;
+  const afterTarget = after?.windowTarget;
+  const beforeIdentity = windowIdentity(beforeTarget);
+  const afterIdentity = windowIdentity(afterTarget);
+  const sameWindow = Boolean(beforeIdentity && afterIdentity && beforeIdentity === afterIdentity);
+  const targetScope = config.windowTarget.enabled && config.windowTarget.mode !== 'display' ? 'window' : 'display';
+  const scopeOk = targetScope === 'display'
+    ? true
+    : beforeRefs.every((ref) => ref.captureScope === 'window') && afterRefs.every((ref) => ref.captureScope === 'window');
+  const lifecycle = [beforeTarget, afterTarget].filter(Boolean).map((target) => ({
+    identity: windowIdentity(target),
+    focused: target?.focused,
+    minimized: target?.minimized,
+    occluded: target?.occluded,
+    bounds: target?.bounds,
+    contentRect: target?.contentRect,
+    displayId: target?.displayId,
+    captureTimestamp: target?.captureTimestamp,
+  }));
+  return {
+    status: scopeOk && (targetScope === 'display' || sameWindow) ? 'same-target-window' : 'window-lifecycle-changed-or-unverified',
+    requiredScope: targetScope,
+    beforeWindowIdentity: beforeIdentity,
+    afterWindowIdentity: afterIdentity,
+    sameWindow,
+    scopeOk,
+    beforeScreenshotRefs: beforeRefs.map((ref) => ref.path),
+    afterScreenshotRefs: afterRefs.map((ref) => ref.path),
+    lifecycle,
+    recoveryPolicy: 'if identity/bounds/display/focus changes, re-resolve WindowTarget and re-capture before planning the next action',
+  };
+}
+
+function windowLifecycleTrace(target: TraceWindowTarget, refs: ScreenshotRef[]) {
+  const windowRefs = refs.filter((ref) => ref.captureScope === 'window' || ref.windowTarget?.captureKind === 'window');
+  const identities = uniqueStrings(windowRefs.map((ref) => windowIdentity(ref.windowTarget)).filter((value): value is string => Boolean(value)));
+  const displayIds = uniqueStrings(windowRefs.map((ref) => String(ref.displayId)).filter(Boolean));
+  const lifecycleSamples = windowRefs.slice(-5).map((ref) => ({
+    screenshotRef: ref.path,
+    identity: windowIdentity(ref.windowTarget),
+    displayId: ref.displayId,
+    bounds: ref.windowTarget?.bounds,
+    contentRect: ref.windowTarget?.contentRect,
+    focused: ref.windowTarget?.focused,
+    minimized: ref.windowTarget?.minimized,
+    occluded: ref.windowTarget?.occluded,
+    captureTimestamp: ref.captureTimestamp ?? ref.windowTarget?.captureTimestamp,
+  }));
+  return {
+    targetIdentity: windowIdentity(target),
+    observedIdentities: identities,
+    observedDisplayIds: displayIds,
+    sampleCount: windowRefs.length,
+    status: identities.length <= 1 ? 'stable-or-single-window' : 'window-migrated-or-recovered',
+    recoveryPolicy: 're-resolve target window by id/app/title when displayId, bounds, focus, minimized, or occlusion state changes',
+    samples: lifecycleSamples,
+  };
+}
+
+function windowIdentity(target: TraceWindowTarget | undefined) {
+  if (!target) return undefined;
+  return [
+    target.windowId ?? target.title ?? target.appName ?? target.bundleId ?? 'unknown-window',
+    target.bundleId ?? target.appName ?? 'unknown-app',
+  ].join(':');
 }
 
 function inferExecutorCoordinateScale(screenshot: ScreenshotRef | undefined, config: VisionSenseConfig) {
@@ -859,20 +964,34 @@ function plannerWindowTargetDescription(config: VisionSenseConfig) {
 function localCoordinateMetadata(grounding: Record<string, unknown> | undefined, action: GenericVisionAction, screenshot: ScreenshotRef | undefined) {
   const space = isWindowLocalCoordinateSpace(screenshot?.windowTarget?.coordinateSpace) ? 'window' : 'screen';
   if (action.type === 'click' || action.type === 'double_click') {
+    const x = numberConfig(grounding?.screenshotX, grounding?.localX, action.x);
+    const y = numberConfig(grounding?.screenshotY, grounding?.localY, action.y);
     return {
       space,
-      x: numberConfig(grounding?.screenshotX, action.x),
-      y: numberConfig(grounding?.screenshotY, action.y),
+      coordinateSpace: screenshot?.windowTarget?.coordinateSpace ?? space,
+      x,
+      y,
+      localX: x,
+      localY: y,
       screenshotRef: screenshot?.path,
     };
   }
   if (action.type === 'drag') {
+    const fromX = numberConfig(grounding?.screenshotFromX, grounding?.localFromX, action.fromX);
+    const fromY = numberConfig(grounding?.screenshotFromY, grounding?.localFromY, action.fromY);
+    const toX = numberConfig(grounding?.screenshotToX, grounding?.localToX, action.toX);
+    const toY = numberConfig(grounding?.screenshotToY, grounding?.localToY, action.toY);
     return {
       space,
-      fromX: numberConfig(grounding?.screenshotFromX, action.fromX),
-      fromY: numberConfig(grounding?.screenshotFromY, action.fromY),
-      toX: numberConfig(grounding?.screenshotToX, action.toX),
-      toY: numberConfig(grounding?.screenshotToY, action.toY),
+      coordinateSpace: screenshot?.windowTarget?.coordinateSpace ?? space,
+      fromX,
+      fromY,
+      toX,
+      toY,
+      localFromX: fromX,
+      localFromY: fromY,
+      localToX: toX,
+      localToY: toY,
       screenshotRef: screenshot?.path,
     };
   }

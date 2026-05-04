@@ -725,7 +725,12 @@ try {
     const generic = windowTrace.genericComputerUse as Record<string, unknown>;
     assert.equal(((generic.coordinateContract as Record<string, unknown>)?.grounderOutput), 'target-window screenshot coordinates');
     assert.equal(((generic.coordinateContract as Record<string, unknown>)?.executorInput), 'window-local');
+    assert.equal(((generic.coordinateContract as Record<string, unknown>)?.localCoordinateFrame), 'window screenshot pixels before executor mapping');
+    assert.equal(((generic.verifierContract as Record<string, unknown>)?.beforeAfterWindowConsistency), 'required-or-structured-window-lifecycle-diagnostics');
     assert.equal(generic.inputIsolation, 'require-focused-target');
+    const lifecycle = windowTrace.windowLifecycle as Record<string, unknown>;
+    assert.equal(lifecycle.status, 'stable-or-single-window');
+    assert.ok(Array.isArray(lifecycle.samples));
     const scheduler = windowTrace.scheduler as Record<string, unknown>;
     assert.equal(scheduler.lockScope, 'target-window');
     assert.equal(scheduler.actionConcurrency, 'one-real-gui-action-at-a-time-per-window');
@@ -738,11 +743,16 @@ try {
     assert.equal(((windowStep.plannedAction as Record<string, unknown>)?.y), 20);
     assert.equal(((windowStep.grounding as Record<string, unknown>)?.screenshotX), 80);
     assert.equal(((windowStep.grounding as Record<string, unknown>)?.screenshotY), 40);
+    assert.equal(((windowStep.grounding as Record<string, unknown>)?.localX), 80);
+    assert.equal(((windowStep.grounding as Record<string, unknown>)?.localY), 40);
     assert.equal(((windowStep.grounding as Record<string, unknown>)?.executorX), 40);
     assert.equal(((windowStep.grounding as Record<string, unknown>)?.executorY), 20);
     assert.equal(((windowStep.grounding as Record<string, unknown>)?.executorCoordinateScale), 2);
     assert.equal(((windowStep.windowTarget as Record<string, unknown>)?.captureKind), 'window');
     assert.equal(((windowStep.localCoordinate as Record<string, unknown>)?.space), 'window');
+    assert.equal(((windowStep.localCoordinate as Record<string, unknown>)?.coordinateSpace), 'window-local');
+    assert.equal(((windowStep.localCoordinate as Record<string, unknown>)?.localX), 80);
+    assert.equal(((windowStep.localCoordinate as Record<string, unknown>)?.localY), 40);
     assert.equal(((windowStep.mappedCoordinate as Record<string, unknown>)?.space), 'executor');
     assert.equal(((windowStep.inputChannel as Record<string, unknown>)?.type), 'generic-mouse-keyboard');
     assert.equal(((windowStep.inputChannel as Record<string, unknown>)?.pointerKeyboardOwnership), 'sciforge-computer-use-channel');
@@ -751,6 +761,8 @@ try {
     assert.equal(((windowStep.scheduler as Record<string, unknown>)?.focusPolicy), 'require-focused-target-before-action');
     assert.equal(((windowStep.scheduler as Record<string, unknown>)?.interferenceRisk), 'low-when-focused-target-verified');
     assert.equal(((windowStep.scheduler as Record<string, unknown>)?.failClosedIsolation), true);
+    assert.equal((((windowStep.verifier as Record<string, unknown>)?.windowConsistency as Record<string, unknown>)?.status), 'same-target-window');
+    assert.equal((((windowStep.verifier as Record<string, unknown>)?.windowConsistency as Record<string, unknown>)?.sameWindow), true);
   } finally {
     await new Promise<void>((resolve) => windowGrounderServer.close(() => resolve()));
   }

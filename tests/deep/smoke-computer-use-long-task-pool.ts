@@ -377,6 +377,20 @@ const trace = {
     actionSchema: ['click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait'],
     appSpecificShortcuts: [],
     inputChannel: 'generic-mouse-keyboard',
+    coordinateContract: {
+      planner: 'target descriptions only',
+      grounderOutput: 'target-window screenshot coordinates',
+      executorInput: 'window-local',
+      localCoordinateFrame: 'window screenshot pixels before executor mapping',
+    },
+    verifierContract: {
+      screenshotScope: 'target-window',
+      beforeAfterWindowConsistency: 'required-or-structured-window-lifecycle-diagnostics',
+    },
+  },
+  windowLifecycle: {
+    status: 'stable-or-single-window',
+    recoveryPolicy: 're-resolve target window by id/app/title when displayId, bounds, focus, minimized, or occlusion state changes',
   },
   imageMemory: {
     policy: 'file-ref-only',
@@ -414,7 +428,15 @@ const trace = {
       executor: 'dry-run-generic-gui-executor',
       inputChannel: 'generic-mouse-keyboard',
     },
-    verifier: { status: 'checked', method: 'pixel-diff' },
+    verifier: {
+      status: 'checked',
+      method: 'window-pixel-diff',
+      windowConsistency: {
+        status: 'same-target-window',
+        sameWindow: true,
+        requiredScope: 'window',
+      },
+    },
   }],
 };
 const tracePath = join(runDir, 'vision-trace.json');
@@ -450,6 +472,20 @@ const plannerOnlyTrace = {
     actionSchema: ['click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait'],
     appSpecificShortcuts: [],
     inputChannel: 'generic-mouse-keyboard',
+    coordinateContract: {
+      planner: 'target descriptions only',
+      grounderOutput: 'target-window screenshot coordinates',
+      executorInput: 'window-local',
+      localCoordinateFrame: 'window screenshot pixels before executor mapping',
+    },
+    verifierContract: {
+      screenshotScope: 'target-window',
+      beforeAfterWindowConsistency: 'required-or-structured-window-lifecycle-diagnostics',
+    },
+  },
+  windowLifecycle: {
+    status: 'stable-or-single-window',
+    recoveryPolicy: 're-resolve target window by id/app/title when displayId, bounds, focus, minimized, or occlusion state changes',
   },
   imageMemory: {
     policy: 'file-ref-only',
