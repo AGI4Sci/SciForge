@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { CaptureProviderError, captureDisplays } from '../../src/runtime/computer-use/capture.js';
 import { executeGenericDesktopAction } from '../../src/runtime/computer-use/executor.js';
 import type { ComputerUseConfig, WindowTargetResolution } from '../../src/runtime/computer-use/types.js';
+import { inputChannelContract } from '../../src/runtime/computer-use/window-target.js';
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
 
 const previousBridge = process.env.SCIFORGE_VISION_DESKTOP_BRIDGE;
@@ -697,6 +698,7 @@ try {
           executorCoordinateScale: 2,
           schedulerLockTimeoutMs: 1234,
           schedulerStaleLockMs: 5678,
+          inputAdapter: 'remote-desktop',
           windowTarget: {
             enabled: true,
             required: true,
@@ -716,6 +718,7 @@ try {
     assert.deepEqual((traceConfig.windowTarget as Record<string, unknown>)?.captureKind, 'window');
     assert.deepEqual((traceConfig.windowTarget as Record<string, unknown>)?.coordinateSpace, 'window-local');
     assert.deepEqual((traceConfig.windowTarget as Record<string, unknown>)?.inputIsolation, 'require-focused-target');
+    assert.equal(traceConfig.inputAdapter, 'remote-desktop');
     const windowRefs = (windowTrace.imageMemory as Record<string, unknown>).refs as Array<Record<string, unknown>>;
     assert.ok(windowRefs.length >= 2);
     assert.ok(windowRefs.every((ref) => /-window-/.test(String(ref.path))));
@@ -841,6 +844,34 @@ try {
   assert.equal(typeof (realExecutorLockResult.schedulerLease as Record<string, unknown>)?.acquiredAt, 'string');
   assert.equal(typeof (realExecutorLockResult.schedulerLease as Record<string, unknown>)?.releasedAt, 'string');
   assert.match(String((realExecutorLockResult.schedulerLease as Record<string, unknown>)?.lockPath), /sciforge-computer-use-locks/);
+  const independentInputContract = inputChannelContract({
+    ...providerFailureConfig,
+    dryRun: false,
+    desktopPlatform: 'darwin',
+    inputAdapter: 'remote-desktop',
+  }, {
+    ...providerFailureResolution,
+    captureKind: 'window',
+    inputIsolation: 'require-focused-target',
+  });
+  assert.equal(independentInputContract.currentIndependentAdapter, 'remote-desktop');
+  assert.equal(independentInputContract.pointerKeyboardOwnership, 'sciforge-independent-input-adapter');
+  assert.equal(independentInputContract.userDeviceImpact, 'none');
+  assert.equal(independentInputContract.independentAdapterRequiredForNoUserImpact, false);
+  assert.equal(independentInputContract.failClosed, false);
+  const sharedInputContract = inputChannelContract({
+    ...providerFailureConfig,
+    dryRun: false,
+    desktopPlatform: 'darwin',
+    allowSharedSystemInput: true,
+  }, {
+    ...providerFailureResolution,
+    captureKind: 'window',
+    inputIsolation: 'require-focused-target',
+  });
+  assert.equal(sharedInputContract.pointerKeyboardOwnership, 'shared-system-pointer-keyboard');
+  assert.equal(sharedInputContract.sharedSystemInputExplicitlyAllowed, true);
+  assert.equal(sharedInputContract.failClosed, false);
 
   const isolatedWindowWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-window-isolation-'));
   process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-window-isolation-smoke';

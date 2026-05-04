@@ -111,6 +111,19 @@ async function loadVisionSenseConfig(workspace: string, request: GatewayRequest)
       process.env.SCIFORGE_VISION_SCHEDULER_STALE_LOCK_MS,
       fileConfig.schedulerStaleLockMs,
     ),
+    inputAdapter: stringConfig(
+      requestConfig.inputAdapter,
+      requestConfig.independentInputAdapter,
+      process.env.SCIFORGE_VISION_INPUT_ADAPTER,
+      fileConfig.inputAdapter,
+      fileConfig.independentInputAdapter,
+    ),
+    allowSharedSystemInput: booleanConfig(
+      requestConfig.allowSharedSystemInput,
+      process.env.SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT,
+      fileConfig.allowSharedSystemInput,
+      false,
+    ),
     planner: {
       baseUrl: stringConfig(
         process.env.SCIFORGE_VISION_PLANNER_BASE_URL,
@@ -511,6 +524,8 @@ async function runGenericVisionComputerUseLoop(
       allowHighRiskActions: config.allowHighRiskActions,
       schedulerLockTimeoutMs: config.schedulerLockTimeoutMs,
       schedulerStaleLockMs: config.schedulerStaleLockMs,
+      inputAdapter: config.inputAdapter,
+      allowSharedSystemInput: config.allowSharedSystemInput,
     },
     imageMemory: {
       policy: 'file-ref-only',

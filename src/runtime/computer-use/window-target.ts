@@ -294,32 +294,44 @@ export function inputChannelContract(config: ComputerUseConfig, targetResolution
   const darwin = isDarwinPlatform(config.desktopPlatform);
   const dryRun = config.dryRun;
   const executor = dryRun ? 'dry-run-generic-gui-executor' : executorBoundary(config);
+  const independentAdapter = normalizeIndependentInputAdapter(config.inputAdapter);
+  const independentInput = !dryRun && Boolean(independentAdapter);
   const sharedSystemInput = !dryRun && darwin;
+  const sharedSystemAllowed = Boolean(config.allowSharedSystemInput);
   const strictTarget = targetBound && isolation === 'require-focused-target';
+  const provider = dryRun
+    ? 'dry-run-input-channel'
+    : independentInput
+      ? `${independentAdapter}-input-adapter`
+      : darwin
+        ? 'macos-cgevent-system-events'
+        : `${config.desktopPlatform}-input-provider-unavailable`;
+  const userDeviceImpact = dryRun || independentInput
+    ? 'none'
+    : strictTarget
+      ? 'may-use-system-input-after-focused-target-verification'
+      : 'may-affect-frontmost-window';
   return {
     type: 'generic-mouse-keyboard',
     executor,
     executorBoundary: dryRun ? 'dry-run' : executorBoundary(config),
-    provider: dryRun ? 'dry-run-input-channel' : darwin ? 'macos-cgevent-system-events' : `${config.desktopPlatform}-input-provider-unavailable`,
+    provider,
     isolation,
     targetBound,
-    pointerKeyboardOwnership: dryRun ? 'virtual-dry-run-channel' : sharedSystemInput ? 'shared-system-pointer-keyboard' : 'unavailable',
-    pointerMode: dryRun ? 'virtual-no-user-pointer-movement' : sharedSystemInput ? 'system-cursor-events' : 'none',
-    keyboardMode: dryRun ? 'virtual-no-user-keyboard-events' : sharedSystemInput ? 'system-key-events' : 'none',
-    userDeviceImpact: dryRun
-      ? 'none'
-      : strictTarget
-        ? 'may-use-system-input-after-focused-target-verification'
-        : 'may-affect-frontmost-window',
-    independentAdapterRequiredForNoUserImpact: !dryRun,
+    pointerKeyboardOwnership: dryRun ? 'virtual-dry-run-channel' : independentInput ? 'sciforge-independent-input-adapter' : sharedSystemInput ? 'shared-system-pointer-keyboard' : 'unavailable',
+    pointerMode: dryRun ? 'virtual-no-user-pointer-movement' : independentInput ? 'adapter-window-bound-pointer' : sharedSystemInput ? 'system-cursor-events' : 'none',
+    keyboardMode: dryRun ? 'virtual-no-user-keyboard-events' : independentInput ? 'adapter-window-bound-keyboard' : sharedSystemInput ? 'system-key-events' : 'none',
+    userDeviceImpact,
+    independentAdapterRequiredForNoUserImpact: !dryRun && !independentInput,
     availableIndependentAdapters: ['browser-sandbox-adapter', 'remote-desktop-session', 'virtual-hid-device', 'accessibility-per-window-adapter'],
-    currentIndependentAdapter: dryRun ? 'dry-run' : 'not-configured',
-    failClosed: !targetResolution.ok || (isolation === 'require-focused-target' && !targetBound),
+    currentIndependentAdapter: dryRun ? 'dry-run' : independentAdapter ?? 'not-configured',
+    sharedSystemInputExplicitlyAllowed: !dryRun && !independentInput ? sharedSystemAllowed : undefined,
+    failClosed: !targetResolution.ok || (isolation === 'require-focused-target' && !targetBound) || (!dryRun && !independentInput && !sharedSystemAllowed),
     highRiskConfirmationRequired: true,
     policy: [
       'Planner and Grounder may run in parallel from screenshots.',
       'Real GUI input must acquire the scheduler lock first.',
-      'If an independent adapter is unavailable, strict target focus must be verified before shared system input.',
+      'If an independent adapter is unavailable, strict target focus and explicit shared-system-input acknowledgement are required before shared system input.',
       'High-risk send/delete/pay/authorize/publish/submit actions require upstream confirmation before executor.',
     ],
   };
@@ -327,6 +339,16 @@ export function inputChannelContract(config: ComputerUseConfig, targetResolution
 
 export function isWindowLocalCoordinateSpace(value: string | undefined) {
   return value === 'window' || value === 'window-local';
+}
+
+function normalizeIndependentInputAdapter(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase().replace(/[_\s]+/g, '-');
+  if (!normalized) return undefined;
+  if (normalized === 'virtual-hid' || normalized === 'virtual-hid-device') return 'virtual-hid';
+  if (normalized === 'remote-desktop' || normalized === 'remote-desktop-session') return 'remote-desktop';
+  if (normalized === 'browser-sandbox' || normalized === 'browser-sandbox-adapter') return 'browser-sandbox';
+  if (normalized === 'accessibility-per-window' || normalized === 'accessibility-per-window-adapter') return 'accessibility-per-window';
+  return undefined;
 }
 
 function normalizeWindowTargetMode(value: string | undefined, target: { windowId?: number; appName?: string; title?: string }): WindowTarget['mode'] {

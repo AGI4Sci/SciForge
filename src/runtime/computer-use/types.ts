@@ -32,6 +32,8 @@ export interface ComputerUseConfig {
   executorCoordinateScale?: number;
   schedulerLockTimeoutMs?: number;
   schedulerStaleLockMs?: number;
+  inputAdapter?: string;
+  allowSharedSystemInput?: boolean;
   planner: VisionPlannerConfig;
   grounder: VisionGrounderConfig;
   plannedActions: GenericVisionAction[];
