@@ -39,9 +39,20 @@ def is_planner_only_evidence_task(text: str) -> bool:
     """Return true when a task can be answered from trace/file refs only."""
 
     value = text or ""
+    primary = _primary_task_text(value)
+    if PLANNER_ONLY_EVIDENCE_PATTERN.search(primary) and not GUI_ACTION_INTENT_PATTERN.search(primary):
+        return True
     if GUI_ACTION_INTENT_PATTERN.search(value):
         return False
     return bool(PLANNER_ONLY_EVIDENCE_PATTERN.search(value))
+
+
+def _primary_task_text(text: str) -> str:
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return text or ""
 
 
 def build_matrix_execution_plan(

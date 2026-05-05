@@ -90,29 +90,29 @@
 - [x] 失败记录：若选择错误显示器，保留全屏截图、目标描述、候选显示器摘要和下一步修复动作。
 
 ##### CU-LONG-004 长表单与菜单密集 UI 操作
-- [ ] Round 1：打开平台设置/偏好设置或当前窗口中已经可见的设置/表单区域，只执行低风险视觉操作；定位至少 8 个可见控件，覆盖文本框/搜索框、下拉或弹出菜单、复选框、切换开关、按钮。
-- [ ] Round 2：基于上一轮 screenshot refs 重新定位同一设置/表单区域，视觉修改或重新检查其中 3 个低风险控件；每个字段必须有 before/action/after 证据。
-- [ ] Round 3：在本地可见表单或设置搜索框中制造一个低风险校验/无结果状态，读取屏幕错误/空结果状态，再用视觉方式清除或修正字段；不得点击高风险提交、保存或授权按钮。
-- [ ] Round 4：让 SciForge 总结每个字段/控件的视觉证据和对应 action，只引用 screenshot refs、窗口目标、坐标和 action ledger，不允许出现 DOM selector 或 accessibility label。
-- [ ] 验收：至少 20 个通用动作、3 次 verifier 判断、1 次错误恢复、所有字段状态来自 screenshot refs。当前仅 dry-run contract 通过，不能算真实 GUI 完成；dry-run evidence: `/tmp/sciforge-t084-cu-long-004-005-current/matrix-20260505002955/CU-LONG-004/cu-long-004-matrix-20260505002955/manifest.json`；matrix summary `/tmp/sciforge-t084-cu-long-004-005-current/matrix-20260505002955/matrix-summary.json`；real preflight fail-closed evidence `/tmp/sciforge-t084-cu-long-004-005-current-real-preflight.md`。
+- [x] Round 1：打开平台设置/偏好设置或当前窗口中已经可见的设置/表单区域，只执行低风险视觉操作；定位至少 8 个可见控件，覆盖文本框/搜索框、下拉或弹出菜单、复选框、切换开关、按钮。
+- [x] Round 2：基于上一轮 screenshot refs 重新定位同一设置/表单区域，视觉修改或重新检查其中 3 个低风险控件；每个字段必须有 before/action/after 证据。
+- [x] Round 3：在本地可见表单或设置搜索框中制造一个低风险校验/无结果状态，读取屏幕错误/空结果状态，再用视觉方式清除或修正字段；不得点击高风险提交、保存或授权按钮。
+- [x] Round 4：让 SciForge 总结每个字段/控件的视觉证据和对应 action，只引用 screenshot refs、窗口目标、坐标和 action ledger，不允许出现 DOM selector 或 accessibility label。
+- [x] 验收：至少 20 个通用动作、3 次 verifier 判断、1 次错误恢复、所有字段状态来自 screenshot refs。真实 GUI passed evidence: `docs/test-artifacts/computer-use-long/T084-CU-LONG-004-006-real-rerun-20260506/matrix-20260505214537/matrix-summary.json`；scenario summary: `docs/test-artifacts/computer-use-long/T084-CU-LONG-004-006-real-rerun-20260506/matrix-20260505214537/CU-LONG-004/cu-long-004-matrix-20260505214537/scenario-summary.json`。
 - [x] 失败记录：若输入焦点错误，记录焦点前后截图、输入动作、预期字段、实际变化区域和修正动作。本轮已修复通用 coarse-to-fine/runtime contract：非指针目标描述动作补 coarse focus point，coarse-to-fine Python helper 改为文件级加载，dry-run trace 已包含 `visualFocus`、`focus-region` refs、`verifier.regionSemantic` 且 file-ref-only。真实 GUI observation 仍 pending，需独立输入适配器或显式授权的独占共享输入窗口。
 
 ##### CU-LONG-005 文件管理器、下载目录与跨窗口拖拽
-- [ ] Round 1：打开平台文件管理器，视觉定位下载目录或当前工作目录；创建或进入一个低风险测试文件夹，选择/预览已有测试文件或创建空白占位文件夹，记录文件列表 screenshot refs。
-- [ ] Round 2：在文件管理器里用可见控件完成低风险整理动作：至少一次 `drag` 或列表重排尝试、一次平台级 `hotkey` 恢复/切换、一次 `press_key` 导航/取消、一次 `click`/`double_click` 打开预览或选中文件。
-- [ ] Round 3：切换回 SciForge 或当前任务窗口，定位可见的本地文件引用/附件/打开区域；只选择或指向本地对象引用状态，不点击外发上传、发送、删除、覆盖或授权按钮。
-- [ ] Round 4：复盘 trace，检查文件路径是否只作为 refs 出现，并检查删除、覆盖、外发上传、授权等危险动作是否被 fail closed。
-- [ ] 验收：至少一次 drag、一次 hotkey、一次文件预览、一次高风险动作识别；trace 中文件路径作为 refs，不内联文件内容。当前仅 dry-run contract 通过，不能算真实 GUI 完成；dry-run evidence: `/tmp/sciforge-t084-cu-long-004-005-current/matrix-20260505002955/CU-LONG-005/cu-long-005-matrix-20260505002955/manifest.json`；matrix report `/tmp/sciforge-t084-cu-long-004-005-current/matrix-20260505002955/matrix-report.md`；repair plan `/tmp/sciforge-t084-cu-long-004-005-current/matrix-20260505002955/repair-plan.md`。
+- [x] Round 1：打开平台文件管理器，视觉定位下载目录或当前工作目录；创建或进入一个低风险测试文件夹，选择/预览已有测试文件或创建空白占位文件夹，记录文件列表 screenshot refs。
+- [x] Round 2：在文件管理器里用可见控件完成低风险整理动作：至少一次 `drag` 或列表重排尝试、一次平台级 `hotkey` 恢复/切换、一次 `press_key` 导航/取消、一次 `click`/`double_click` 打开预览或选中文件。
+- [x] Round 3：切换回 SciForge 或当前任务窗口，定位可见的本地文件引用/附件/打开区域；只选择或指向本地对象引用状态，不点击外发上传、发送、删除、覆盖或授权按钮。
+- [x] Round 4：复盘 trace，检查文件路径是否只作为 refs 出现，并检查删除、覆盖、外发上传、授权等危险动作是否被 fail closed。
+- [x] 验收：至少一次 drag、一次 hotkey、一次文件预览、一次高风险动作识别；trace 中文件路径作为 refs，不内联文件内容。真实 GUI passed evidence: `docs/test-artifacts/computer-use-long/T084-CU-LONG-004-006-real-rerun-20260506/matrix-20260505214537/matrix-summary.json`；scenario summary: `docs/test-artifacts/computer-use-long/T084-CU-LONG-004-006-real-rerun-20260506/matrix-20260505214537/CU-LONG-005/cu-long-005-matrix-20260505214537/scenario-summary.json`。
 - [x] 失败记录：若拖拽失败或文件名错位，记录鼠标起终点、目标区域截图、Finder/文件管理器当前排序状态。本轮 focused evidence 抽查：4 traces、4 `visualFocus` steps、8 `focus-region` refs、4 `regionSemantic` verifier records、0 `data:image`/base64 matches。真实 GUI observation 仍 pending，需独立输入适配器或显式授权的独占共享输入窗口。
 
 ##### CU-LONG-006 SciForge 自举测试：用 SciForge 测 SciForge
-- [ ] Round 1：在当前 SciForge/Codex 任务窗口中用 vision-sense 定位聊天输入框、发送/停止按钮、结果区、artifact/文件卡片和 trace/运行状态区域；发送一个低风险观察任务，若按钮显示为停止/运行中则先完成当前状态观察。
-- [ ] Round 2：继续追问上一轮 artifact/文件卡片，只允许引用 compact refs、文件路径、sha256/尺寸和 action ledger，不带截图 payload 或 base64。
-- [ ] Round 3：视觉切换 Scenario、Backend、结果筛选或相邻的低风险视图按钮；每次切换后检查当前结果区是否仍对应当前 run，而不是旧 run failure。
-- [ ] Round 4：在同一会话中触发一个预期失败但低风险的任务，例如请求一个不存在的本地 refs 摘要或要求验证不可用证据路径，验证 UI 优先显示当前 run 的 failed-with-reason。
-- [ ] Round 5：要求系统生成一份测试报告 artifact，引用所有 vision trace 文件路径、scenario summary 路径和关键失败诊断；只写 refs 和摘要，不内联截图或文件内容。
-- [ ] 验收：dry-run 自举链路已通过 `preflight -> run-scenario --rounds 5 -> validate-run`，accepted run 为 `docs/test-artifacts/computer-use-long/CU-LONG-006/cu-long-006-bootstrap-20260505-py313/manifest.json`；scenario summary 为 `docs/test-artifacts/computer-use-long/CU-LONG-006/cu-long-006-bootstrap-20260505-py313/scenario-summary.json`；dry-run 报告为 `docs/test-artifacts/computer-use-long/CU-LONG-006/cu-long-006-bootstrap-20260505-py313/bootstrap-report.md`。真实 GUI preflight 因 input isolation fail closed，报告为 `docs/test-artifacts/computer-use-long/CU-LONG-006/cu-long-006-real-preflight-20260505.md`；必须接入独立输入适配器，或在确认无其他线程使用同一窗口/鼠标/键盘后显式允许 shared system input，再由 SciForge 自己的 `local.vision-sense` / Computer Use 主路径重跑真实屏幕操作。
-- [ ] 失败记录：dry-run 每轮 trace、action ledger、failure diagnostics 已落在 `docs/test-artifacts/computer-use-long/CU-LONG-006/cu-long-006-bootstrap-20260505-py313/evidence/round-01` 到 `round-05`；诊断记录 planner dry-run 1x1 screenshot 被 VLM 拒绝后由 completionPolicy fallback 恢复，以及 `/usr/bin/python3` 过旧导致 `vision-sense` Python helper 不可用，最终用 `/opt/homebrew/bin/python3.13` 重跑通过。真实 GUI 当前阻断分类为 scheduler / input isolation。
+- [x] Round 1：在当前 SciForge/Codex 任务窗口中用 vision-sense 定位聊天输入框、发送/停止按钮、结果区、artifact/文件卡片和 trace/运行状态区域；发送一个低风险观察任务，若按钮显示为停止/运行中则先完成当前状态观察。
+- [x] Round 2：继续追问上一轮 artifact/文件卡片，只允许引用 compact refs、文件路径、sha256/尺寸和 action ledger，不带截图 payload 或 base64。
+- [x] Round 3：视觉切换 Scenario、Backend、结果筛选或相邻的低风险视图按钮；每次切换后检查当前结果区是否仍对应当前 run，而不是旧 run failure。
+- [x] Round 4：在同一会话中触发一个预期失败但低风险的任务，例如请求一个不存在的本地 refs 摘要或要求验证不可用证据路径，验证 UI 优先显示当前 run 的 failed-with-reason。
+- [x] Round 5：要求系统生成一份测试报告 artifact，引用所有 vision trace 文件路径、scenario summary 路径和关键失败诊断；只写 refs 和摘要，不内联截图或文件内容。
+- [x] 验收：真实 GUI passed evidence: `docs/test-artifacts/computer-use-long/T084-CU-LONG-004-006-real-rerun-20260506/matrix-20260505214537/matrix-summary.json`；scenario summary: `docs/test-artifacts/computer-use-long/T084-CU-LONG-004-006-real-rerun-20260506/matrix-20260505214537/CU-LONG-006/cu-long-006-matrix-20260505214537/scenario-summary.json`。
+- [x] 失败记录：dry-run 每轮 trace、action ledger、failure diagnostics 已落在 `docs/test-artifacts/computer-use-long/CU-LONG-006/cu-long-006-bootstrap-20260505-py313/evidence/round-01` 到 `round-05`；诊断记录 planner dry-run 1x1 screenshot 被 VLM 拒绝后由 completionPolicy fallback 恢复，以及 `/usr/bin/python3` 过旧导致 `vision-sense` Python helper 不可用，最终用 `/opt/homebrew/bin/python3.13` 重跑通过。真实 GUI 已在 `matrix-20260505214537` 中通过，scheduler/input-isolation 阻断由显式 shared-system-input 串行锁与通用窗口目标验证覆盖。
 
 ##### CU-LONG-007 Grounder / Planner 压力与恢复矩阵
 - [x] Round 1：选取 10 个不同大小的视觉目标，从大按钮到小图标，要求 grounder 输出坐标和置信度。

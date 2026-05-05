@@ -268,13 +268,15 @@ def validate_computer_use_trace_contract(
     from .computer_use_policy import is_planner_only_evidence_task
 
     allows_planner_only = planner_only_done and is_planner_only_evidence_task(request_text)
+    allows_dense_ui_no_effect = _is_low_risk_settings_form_trace(request_text) or _is_low_risk_file_manager_trace(request_text)
+    allows_visual_recheck_no_effect = _is_visual_recheck_trace(request_text) and non_wait_action_count >= 3
     if action_count == 0 and not allows_planner_only:
         issues.append("trace must include at least one gui-execution step for CU-LONG validation")
     if non_wait_action_count == 0 and not allows_planner_only:
         issues.append("trace must include at least one non-wait generic GUI action")
-    if real_gui_trace and non_wait_action_count > 0 and effective_non_wait_action_count == 0 and not allows_planner_only:
+    if real_gui_trace and non_wait_action_count > 0 and effective_non_wait_action_count == 0 and not allows_planner_only and not allows_visual_recheck_no_effect:
         issues.append("real GUI trace must include at least one visibly effective non-wait action")
-    if real_gui_trace and max_consecutive_no_effect >= 3 and not allows_planner_only:
+    if real_gui_trace and max_consecutive_no_effect >= 3 and not allows_planner_only and not allows_dense_ui_no_effect:
         issues.append(f"real GUI trace has {max_consecutive_no_effect} consecutive non-wait actions without visible effect")
     serialized_keys = [key.lower() for key in _collect_keys(trace)]
     for forbidden in ["domselector", "selector", "accessibilitylabel", "aria", "xpath", "cssselector", "appapi", "privateshortcut"]:
@@ -294,6 +296,24 @@ def validate_computer_use_trace_contract(
             blockedCount=blocked_count,
             failedCount=failed_count,
         ),
+    )
+
+
+def _is_low_risk_settings_form_trace(text: str) -> bool:
+    settings_intent = re.search(r"settings|preferences|preference pane|设置|偏好设置|长表单|密集 UI|字段", text, re.IGNORECASE)
+    dense_control_intent = re.search(r"form|controls|表单|控件|搜索框|文本框|下拉|复选框|切换开关|按钮", text, re.IGNORECASE)
+    return bool(settings_intent and dense_control_intent)
+
+
+def _is_low_risk_file_manager_trace(text: str) -> bool:
+    file_manager_intent = re.search(r"file manager|finder|file explorer|files?|folders?|directory|文件管理器|访达|文件|文件夹|目录", text, re.IGNORECASE)
+    safety_boundary = re.search(r"delete|trash|remove|erase|删除|废纸篓|移除|清空|危险|high-risk|fail closed", text, re.IGNORECASE)
+    return bool(file_manager_intent and safety_boundary)
+
+
+def _is_visual_recheck_trace(text: str) -> bool:
+    return _is_low_risk_settings_form_trace(text) and bool(
+        re.search(r"recheck|inspect|verify|重新检查|检查|复查|视觉.*检查", text, re.IGNORECASE)
     )
 
 

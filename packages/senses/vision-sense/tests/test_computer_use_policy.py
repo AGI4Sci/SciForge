@@ -19,6 +19,7 @@ class ComputerUsePolicyTest(unittest.TestCase):
     def test_planner_only_evidence_task_matches_trace_ref_requests(self) -> None:
         self.assertTrue(is_planner_only_evidence_task("Summarize trace refs, sha256, and action ledger only"))
         self.assertTrue(is_planner_only_evidence_task("汇总截图引用和失败诊断"))
+        self.assertTrue(is_planner_only_evidence_task("总结 screenshot refs 和 action ledger。\nFail closed before high-risk click actions."))
         self.assertFalse(is_planner_only_evidence_task("Click the Save button in the target window"))
 
     def test_matrix_plan_serializes_real_gui_and_parallelizes_dry_run(self) -> None:

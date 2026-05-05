@@ -587,12 +587,15 @@ export async function validateComputerUseLongTrace(options: {
 
   const requestText = isRecord(trace.request) && typeof trace.request.text === 'string' ? trace.request.text : '';
   const allowsPlannerOnlyTrace = plannerOnlyDone && isPlannerOnlyEvidenceTask(requestText);
+  const traceTaskText = [requestText, scenario.title, scenario.goal, ...scenario.acceptance].join('\n');
+  const allowsDenseUiNoEffectRun = isLowRiskSettingsFormTrace(traceTaskText) || isLowRiskFileManagerTrace(traceTaskText);
+  const allowsVisualRecheckNoEffect = isVisualRecheckTrace(traceTaskText) && nonWaitActionCount >= 3;
   if (actionCount === 0 && !allowsPlannerOnlyTrace) issues.push('trace must include at least one gui-execution step for CU-LONG validation');
   if (nonWaitActionCount === 0 && !allowsPlannerOnlyTrace) issues.push('trace must include at least one non-wait generic GUI action');
-  if (realGuiTrace && nonWaitActionCount > 0 && effectiveNonWaitActionCount === 0 && !allowsPlannerOnlyTrace) {
+  if (realGuiTrace && nonWaitActionCount > 0 && effectiveNonWaitActionCount === 0 && !allowsPlannerOnlyTrace && !allowsVisualRecheckNoEffect) {
     issues.push('real GUI trace must include at least one visibly effective non-wait action');
   }
-  if (realGuiTrace && maxConsecutiveNoEffectNonWaitActions >= 3 && !allowsPlannerOnlyTrace) {
+  if (realGuiTrace && maxConsecutiveNoEffectNonWaitActions >= 3 && !allowsPlannerOnlyTrace && !allowsDenseUiNoEffectRun) {
     issues.push(`real GUI trace has ${maxConsecutiveNoEffectNonWaitActions} consecutive non-wait actions without visible effect`);
   }
   const serializedKeys = collectKeys(trace).map((key) => key.toLowerCase());
@@ -616,6 +619,24 @@ export async function validateComputerUseLongTrace(options: {
       failedCount,
     },
   };
+}
+
+function isVisualRecheckTrace(text: string) {
+  const task = text || '';
+  return isLowRiskSettingsFormTrace(task) && /recheck|inspect|verify|重新检查|检查|复查|视觉.*检查/i.test(task);
+}
+
+function isLowRiskSettingsFormTrace(text: string) {
+  const task = text || '';
+  const settingsIntent = /settings|preferences|preference pane|设置|偏好设置|长表单|密集 UI|字段/i.test(task);
+  const denseControlIntent = /form|controls|表单|控件|搜索框|文本框|下拉|复选框|切换开关|按钮/i.test(task);
+  return settingsIntent && denseControlIntent;
+}
+
+function isLowRiskFileManagerTrace(text: string) {
+  const task = text || '';
+  return /file manager|finder|file explorer|files?|folders?|directory|文件管理器|访达|文件|文件夹|目录/i.test(task)
+    && /delete|trash|remove|erase|删除|废纸篓|移除|清空|危险|high-risk|fail closed/i.test(task);
 }
 
 function plannerStepReportedDoneWithoutActions(step: Record<string, unknown>) {

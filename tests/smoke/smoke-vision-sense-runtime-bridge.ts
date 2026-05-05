@@ -575,6 +575,41 @@ try {
     await new Promise<void>((resolve) => waitRetryGrounderServer.close(() => resolve()));
   }
 
+  const settingsFormWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-settings-form-ledger-'));
+  process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-settings-form-ledger-smoke';
+  process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN = '1';
+  process.env.SCIFORGE_VISION_MAX_STEPS = '12';
+  process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([
+    { type: 'click', x: 12, y: 12, targetDescription: 'visible settings search text input' },
+    { type: 'type_text', text: 'test', targetDescription: 'visible settings search text input' },
+    { type: 'click', x: 20, y: 20, targetDescription: 'visible preferences dropdown menu' },
+    { type: 'click', x: 30, y: 30, targetDescription: 'visible checkbox control' },
+    { type: 'click', x: 40, y: 40, targetDescription: 'visible toggle switch control' },
+    { type: 'click', x: 50, y: 50, targetDescription: 'visible cancel button' },
+    { type: 'scroll', direction: 'down', amount: 3, targetDescription: 'visible form controls panel' },
+    { type: 'click', x: 60, y: 60, targetDescription: 'visible close button' },
+    { type: 'click', x: 70, y: 70, targetDescription: 'unrelated extra control that should not run' },
+  ]);
+  delete process.env.SCIFORGE_VISION_PLANNER_BASE_URL;
+  delete process.env.SCIFORGE_VISION_PLANNER_API_KEY;
+  delete process.env.SCIFORGE_VISION_PLANNER_MODEL;
+  delete process.env.SCIFORGE_VISION_KV_GROUND_URL;
+  const settingsForm = await runWorkspaceRuntimeGateway({
+    skillDomain: 'literature',
+    prompt: 'Use generic computer use for a low-risk settings/preferences form-control coverage task; do not submit or save.',
+    workspacePath: settingsFormWorkspace,
+    selectedToolIds: ['local.vision-sense'],
+    uiState: { selectedToolIds: ['local.vision-sense'] },
+  });
+  assert.equal(settingsForm.executionUnits[0].status, 'done');
+  const settingsFormTraceArtifact = settingsForm.artifacts.find((artifact) => artifact.id === 'vision-sense-trace');
+  assert.ok(settingsFormTraceArtifact);
+  const settingsFormTrace = JSON.parse(await readFile(join(settingsFormWorkspace, String(settingsFormTraceArtifact.path)), 'utf8')) as Record<string, unknown>;
+  const settingsFormSteps = (settingsFormTrace.steps as Array<Record<string, unknown>>)
+    .filter((step) => step.kind === 'gui-execution');
+  assert.equal(settingsFormSteps.length, 8);
+  assert.match(JSON.stringify(settingsFormSteps.at(-1)?.verifier ?? {}), /settings\/form control workflow/);
+
   let coordinateRetryPlannerCalls = 0;
   const coordinateRetryPlannerServer = createServer((request, response) => {
     if (request.method !== 'POST' || request.url !== '/chat/completions') {

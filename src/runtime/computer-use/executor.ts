@@ -126,6 +126,8 @@ async function executeGenericMacAction(action: GenericVisionAction, config: Comp
     return executeSwiftGuiAction(action, targetResolution, Boolean(config.showVisualCursor));
   }
   if (action.type === 'click' || action.type === 'double_click' || action.type === 'drag') {
+    const swiftResult = await executeSwiftGuiAction(action, targetResolution, Boolean(config.showVisualCursor));
+    if (swiftResult.exitCode === 0) return swiftResult;
     const script = genericMacActionScript(action);
     const appleScriptResult = await runCommand('osascript', ['-e', script], { timeoutMs: 30000 });
     if (appleScriptResult.exitCode === 0) {
@@ -137,23 +139,14 @@ async function executeGenericMacAction(action: GenericVisionAction, config: Comp
         ].filter(Boolean).join('\n'),
       };
     }
-    const swiftResult = await executeSwiftGuiAction(action, targetResolution, Boolean(config.showVisualCursor));
-    return swiftResult.exitCode === 0
-      ? {
-          ...swiftResult,
-          stdout: [
-            `System Events executor failed before Swift fallback: ${appleScriptResult.stderr || appleScriptResult.stdout || `exit ${appleScriptResult.exitCode}`}`,
-            swiftResult.stdout,
-          ].filter(Boolean).join('\n'),
-        }
-      : {
-          exitCode: swiftResult.exitCode,
-          stdout: [appleScriptResult.stdout, swiftResult.stdout].filter(Boolean).join('\n'),
-          stderr: [
-            `System Events executor failed: ${appleScriptResult.stderr || appleScriptResult.stdout || `exit ${appleScriptResult.exitCode}`}`,
-            `Swift CGEvent executor failed: ${swiftResult.stderr || swiftResult.stdout || `exit ${swiftResult.exitCode}`}`,
-          ].join('\n'),
-        };
+    return {
+      exitCode: appleScriptResult.exitCode,
+      stdout: [swiftResult.stdout, appleScriptResult.stdout].filter(Boolean).join('\n'),
+      stderr: [
+        `Swift CGEvent executor failed: ${swiftResult.stderr || swiftResult.stdout || `exit ${swiftResult.exitCode}`}`,
+        `System Events executor failed: ${appleScriptResult.stderr || appleScriptResult.stdout || `exit ${appleScriptResult.exitCode}`}`,
+      ].join('\n'),
+    };
   }
   const script = genericMacActionScript(action);
   return runCommand('osascript', ['-e', script], { timeoutMs: action.type === 'wait' ? Math.max(1000, (action.ms ?? 500) + 1000) : 30000 });

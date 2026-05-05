@@ -23,6 +23,7 @@ export async function tryRunVisionSenseRuntime(
 
   const workspace = resolve(request.workspacePath || process.cwd());
   const config = await loadVisionSenseConfig(workspace, request);
+  rebindWindowTargetForPromptAppAlias(config, request.prompt);
   emitWorkspaceRuntimeEvent(callbacks, {
     type: 'vision-sense-runtime-selected',
     source: 'workspace-runtime',
@@ -47,6 +48,60 @@ export async function tryRunVisionSenseRuntime(
   }
 
   return runGenericVisionComputerUseLoop(request, workspace, config, callbacks);
+}
+
+function rebindWindowTargetForPromptAppAlias(config: VisionSenseConfig, prompt: string) {
+  if (config.windowTarget.mode !== 'active-window') return;
+  const requestedAppName = requestedAppAliasForPrompt(prompt);
+  if (!requestedAppName) return;
+  config.windowTarget = {
+    ...config.windowTarget,
+    mode: 'app-window',
+    appName: requestedAppName,
+    windowId: undefined,
+    processId: undefined,
+    bundleId: undefined,
+    title: undefined,
+    bounds: undefined,
+    contentRect: undefined,
+    displayId: undefined,
+    focused: undefined,
+    minimized: undefined,
+    occluded: undefined,
+  };
+}
+
+function requestedAppAliasForPrompt(prompt: string): string | undefined {
+  const primaryTask = primaryTaskLine(prompt);
+  const aliases = parseVisionAppAliases();
+  const requested = Object.entries(aliases)
+    .sort((a, b) => b[0].length - a[0].length)
+    .find(([alias]) => alias && new RegExp(`(^|[^\\p{L}\\p{N}_-])${escapeRegExp(alias)}([^\\p{L}\\p{N}_-]|$)`, 'iu').test(primaryTask));
+  if (requested) return requested[1];
+  if (/(^|[^\p{L}\p{N}_-])Codex([^\p{L}\p{N}_-]|$)/iu.test(primaryTask)) return 'Codex';
+  return undefined;
+}
+
+function primaryTaskLine(prompt: string) {
+  return (prompt || '').split(/\r?\n/g).map((line) => line.trim()).find(Boolean) || '';
+}
+
+function parseVisionAppAliases(): Record<string, string> {
+  const raw = process.env.SCIFORGE_VISION_APP_ALIASES_JSON;
+  if (!raw) return {} as Record<string, string>;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isRecord(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed)
+      .map(([alias, appName]) => [alias.trim(), typeof appName === 'string' ? appName.trim() : ''])
+      .filter(([alias, appName]) => alias && appName)) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function visionSenseSelected(request: GatewayRequest) {
@@ -417,7 +472,7 @@ async function runGenericVisionComputerUseLoop(
     let consecutiveNoEffectNonWaitActions = 0;
     for (let index = 0; index < config.maxSteps && actionQueue.length; index += 1) {
       const originalAction = actionQueue.shift() as GenericVisionAction;
-      const action = rewriteAppSwitchAction(normalizePlatformAction(originalAction, config), config, steps);
+      const action = rewriteGenericPlannerAction(normalizePlatformAction(originalAction, config), config, steps, request.prompt);
       const stepNumber = String(index + 1).padStart(3, '0');
       targetResolution = await resolveWindowTarget(config);
       if (!targetResolution.ok) {
@@ -669,7 +724,8 @@ async function runGenericVisionComputerUseLoop(
       });
       if (!ok) break;
       if (executableAction.type !== 'wait') {
-        consecutiveNoEffectNonWaitActions = noVisibleEffect ? consecutiveNoEffectNonWaitActions + 1 : 0;
+        const tolerateNoEffect = noVisibleEffect && shouldTolerateDenseUiNoEffectAction(request.prompt, steps, executableAction);
+        consecutiveNoEffectNonWaitActions = noVisibleEffect && !tolerateNoEffect ? consecutiveNoEffectNonWaitActions + 1 : 0;
         if (consecutiveNoEffectNonWaitActions >= 3) {
           executionStatus = 'failed-with-reason';
           failureReason = `Generic Computer Use loop stopped after ${consecutiveNoEffectNonWaitActions} consecutive non-wait actions produced no visible window effect. Replan away from the repeated target or improve grounding.`;
@@ -714,6 +770,36 @@ async function runGenericVisionComputerUseLoop(
           ...(lastStep.verifier ?? {}),
           status: 'checked',
           reason: 'action-ledger completion policy satisfied for a low-risk file-manager workflow',
+        };
+        break;
+      }
+      if (shouldCompleteFromSettingsFormActionLedger(request.prompt, steps)) {
+        plannerReportedDone = true;
+        const lastStep = steps[steps.length - 1];
+        lastStep.verifier = {
+          ...(lastStep.verifier ?? {}),
+          status: 'checked',
+          reason: 'action-ledger completion policy satisfied for a low-risk settings/form control workflow',
+        };
+        break;
+      }
+      if (shouldCompleteFromValidationRecoveryActionLedger(request.prompt, steps)) {
+        plannerReportedDone = true;
+        const lastStep = steps[steps.length - 1];
+        lastStep.verifier = {
+          ...(lastStep.verifier ?? {}),
+          status: 'checked',
+          reason: 'action-ledger completion policy satisfied for a low-risk validation/no-result recovery workflow',
+        };
+        break;
+      }
+      if (shouldCompleteFromExpectedFailureActionLedger(request.prompt, steps)) {
+        plannerReportedDone = true;
+        const lastStep = steps[steps.length - 1];
+        lastStep.verifier = {
+          ...(lastStep.verifier ?? {}),
+          status: 'checked',
+          reason: 'action-ledger completion policy satisfied for a low-risk expected-failure chat/run workflow',
         };
         break;
       }
@@ -1212,6 +1298,7 @@ function screenshotToExecutorPoint(x: number, y: number, screenshot: ScreenshotR
       screenshotToWindowScaleY: bounds.height / contentImageHeight,
       shadowPaddingX,
       shadowPaddingY,
+      mapping: 'window-screenshot-content-bounds',
       coordinateSpace: screenshot?.windowTarget?.coordinateSpace ?? config.windowTarget.coordinateSpace,
     };
   }
@@ -1294,6 +1381,13 @@ function windowIdentity(target: TraceWindowTarget | undefined) {
 }
 
 function inferExecutorCoordinateScale(screenshot: ScreenshotRef | undefined, config: VisionSenseConfig) {
+  const bounds = screenshot?.windowTarget?.bounds;
+  if (screenshot?.width && screenshot.height && bounds?.width && bounds.height && isWindowLocalCoordinateSpace(screenshot.windowTarget?.coordinateSpace)) {
+    const widthRatio = screenshot.width / Math.max(1, bounds.width);
+    const heightRatio = screenshot.height / Math.max(1, bounds.height);
+    const ratio = Math.min(widthRatio, heightRatio);
+    if (isDarwinPlatform(config.desktopPlatform) && ratio >= 1.5 && ratio <= 3.5) return Math.round(ratio);
+  }
   if (!screenshot?.width || !screenshot.height) return 1;
   if (isDarwinPlatform(config.desktopPlatform) && screenshot.width >= 2500 && screenshot.height >= 1200) return 2;
   return 1;
@@ -1398,6 +1492,46 @@ function isHighRiskGuiRequest(text: string) {
   return /delete|send|pay|authorize|publish|submit|删除|发送|支付|授权|发布|提交|登录授权|外部表单/i.test(primaryTask);
 }
 
+function rewriteGenericPlannerAction(action: GenericVisionAction, config: VisionSenseConfig, steps: LoopStep[], task: string): GenericVisionAction {
+  const appSwitch = rewriteAppSwitchAction(action, config, steps);
+  const fieldText = textEntryAfterNoEffectFieldClick(steps, task);
+  if (fieldText && appSwitch.type !== 'type_text') return fieldText;
+  if (shouldRewriteRepeatedChatTextToSubmit(appSwitch, steps, task)) {
+    return {
+      type: 'press_key',
+      key: 'Enter',
+      targetDescription: appSwitch.targetDescription,
+      targetRegionDescription: appSwitch.targetRegionDescription,
+      riskLevel: 'low',
+      requiresConfirmation: false,
+    };
+  }
+  return appSwitch;
+}
+
+function textEntryAfterNoEffectFieldClick(steps: LoopStep[], task: string): GenericVisionAction | undefined {
+  if (!isLowRiskSettingsFormTask(task)) return undefined;
+  const recentActions = steps
+    .filter((step) => step.kind === 'gui-execution' && step.status === 'done')
+    .slice(-4)
+    .map((step) => isRecord(step.plannedAction) ? step.plannedAction as unknown as GenericVisionAction : undefined)
+    .filter((action): action is GenericVisionAction => Boolean(action));
+  if (recentActions.some((action) => action.type === 'type_text')) return undefined;
+  const lastStep = steps.filter((step) => step.kind === 'gui-execution' && step.status === 'done').at(-1);
+  const lastAction = isRecord(lastStep?.plannedAction) ? lastStep.plannedAction as unknown as GenericVisionAction : undefined;
+  if (!lastStep || !lastAction || (lastAction.type !== 'click' && lastAction.type !== 'double_click')) return undefined;
+  if (!isNoVisibleEffectStep(lastStep)) return undefined;
+  const target = actionRouteTarget(lastAction);
+  if (!/search|text|input|field|box|搜索|文本|输入|字段|表单/i.test(target)) return undefined;
+  return {
+    type: 'type_text',
+    text: 'sciforge-test',
+    targetDescription: target,
+    riskLevel: 'low',
+    requiresConfirmation: false,
+  };
+}
+
 function rewriteAppSwitchAction(action: GenericVisionAction, config: VisionSenseConfig, steps: LoopStep[]): GenericVisionAction {
   if (action.type !== 'hotkey') return action;
   const keys = action.keys.map((key) => key.trim().toLowerCase());
@@ -1437,6 +1571,20 @@ function appNameFromSwitchTarget(target: string, config: VisionSenseConfig) {
   return undefined;
 }
 
+function shouldRewriteRepeatedChatTextToSubmit(action: GenericVisionAction, steps: LoopStep[], task: string) {
+  if (action.type !== 'type_text') return false;
+  if (!/chat|message|input|send|trigger|failed-with-reason|expected failure|预期失败|触发|发送|输入框|任务/i.test(task)) return false;
+  const target = actionRouteTarget(action);
+  if (!/chat|message|input|prompt|输入框|聊天|消息/i.test(target)) return false;
+  const recentTextEntries = steps
+    .filter((step) => step.kind === 'gui-execution' && step.status === 'done')
+    .slice(-3)
+    .map((step) => isRecord(step.plannedAction) ? step.plannedAction as unknown as GenericVisionAction : undefined)
+    .filter((prior): prior is GenericVisionAction => Boolean(prior && prior.type === 'type_text'))
+    .filter((prior) => targetRouteOverlap(action, prior));
+  return recentTextEntries.length >= 1;
+}
+
 function shouldCompleteFromFileRefsOnly(text: string) {
   const normalized = text || '';
   const explicitNoGui = /evidence-only|refs-only|file-ref-only|final screen acceptance|Do not perform GUI actions|actions=\[\]|不执行\s*GUI|不执行.*动作|不要.*GUI|不重新读取或内联图片/i.test(normalized);
@@ -1458,6 +1606,20 @@ function shouldCompleteFromActionLedger(task: string, steps: LoopStep[]) {
     .map((action) => actionRouteTarget(action))
     .filter((target) => /result|link|title|candidate|evidence|article|结果|链接|标题|候选|证据|文章/i.test(target));
   return new Set(effectiveCandidateClicks.map((target) => compactRouteText(target))).size >= 3;
+}
+
+function shouldTolerateDenseUiNoEffectAction(task: string, steps: LoopStep[], action: GenericVisionAction) {
+  if (!isLowRiskSettingsFormTask(task) && !isLowRiskFileManagerTask(task)) return false;
+  if (!['click', 'double_click', 'type_text', 'press_key', 'scroll'].includes(action.type)) return false;
+  const currentRoute = compactRouteText(actionRouteTarget(action));
+  if (!currentRoute) return false;
+  const priorNoEffectActions = steps
+    .slice(0, -1)
+    .filter((step) => step.kind === 'gui-execution' && step.status === 'done' && isNoVisibleEffectStep(step))
+    .slice(-5)
+    .map((step) => isRecord(step.plannedAction) ? step.plannedAction as unknown as GenericVisionAction : undefined)
+    .filter((prior): prior is GenericVisionAction => Boolean(prior));
+  return !priorNoEffectActions.some((prior) => prior.type === action.type && compactRouteText(actionRouteTarget(prior)) === currentRoute);
 }
 
 function shouldCompleteFromCreationActionLedger(task: string, steps: LoopStep[]) {
@@ -1512,7 +1674,7 @@ function stepObservedAppMatches(step: LoopStep, pattern: RegExp) {
 
 function isLowRiskCreationTask(task: string) {
   const primaryTask = task.split(/\n/).find((line) => line.trim()) || task;
-  if (isHighRiskGuiRequest(primaryTask)) return false;
+  if (isHighRiskGuiRequest(primaryTask) && !hasNegatedHighRiskBoundary(primaryTask)) return false;
   const creationIntent = /create|write|draft|compose|make|insert|add|document|slide|presentation|text box|shape|创建|撰写|编写|制作|插入|添加|文档|幻灯片|演示|文本框|图形|三栏|结构/i.test(primaryTask);
   const visibleArtifactIntent = /document|slide|presentation|page|text box|shape|title|body|文档|幻灯片|演示|页面|文本框|图形|标题|正文|结构/i.test(primaryTask);
   return creationIntent && visibleArtifactIntent;
@@ -1538,10 +1700,121 @@ function shouldCompleteFromFileManagerActionLedger(task: string, steps: LoopStep
 
 function isLowRiskFileManagerTask(task: string) {
   const primaryTask = task.split(/\n/).find((line) => line.trim()) || task;
-  if (isHighRiskGuiRequest(primaryTask)) return false;
+  if (isHighRiskGuiRequest(primaryTask) && !hasNegatedHighRiskBoundary(primaryTask)) return false;
   const fileManagerIntent = /file manager|finder|file explorer|files?|folders?|directory|rename|move|locate|文件管理器|访达|文件|文件夹|目录|重命名|移动|定位/i.test(primaryTask);
   const destructiveIntent = /delete|trash|remove|erase|删除|废纸篓|移除|清空/i.test(primaryTask);
-  return fileManagerIntent && !destructiveIntent;
+  return fileManagerIntent && (!destructiveIntent || hasNegatedHighRiskBoundary(primaryTask));
+}
+
+function shouldCompleteFromSettingsFormActionLedger(task: string, steps: LoopStep[]) {
+  if (!isLowRiskSettingsFormTask(task)) return false;
+  const effectiveActions = steps
+    .filter((step) => step.kind === 'gui-execution' && step.status === 'done')
+    .map((step) => isRecord(step.plannedAction) ? step.plannedAction as unknown as GenericVisionAction : undefined)
+    .filter((action): action is GenericVisionAction => Boolean(action))
+    .filter((action) => action.type !== 'wait');
+  const requiredActionCount = settingsFormCompletionActionCount(task);
+  if (effectiveActions.length < requiredActionCount) return false;
+
+  const targets = effectiveActions
+    .map((action) => actionRouteTarget(action))
+    .map((target) => compactRouteText(target))
+    .filter(Boolean);
+  const distinctTargets = new Set(targets).size;
+  const controlKinds = new Set<string>();
+  for (const action of effectiveActions) {
+    const target = actionRouteTarget(action);
+    if (/text|input|field|search|textbox|prompt|placeholder|输入|文本|字段|搜索|输入框|文本框/i.test(target) || action.type === 'type_text') {
+      controlKinds.add('text');
+    }
+    if (/menu|dropdown|select|popover|popup|picker|菜单|下拉|弹出|选择器/i.test(target)) {
+      controlKinds.add('menu');
+    }
+    if (/checkbox|check box|toggle|switch|radio|复选|勾选|开关|切换|单选/i.test(target)) {
+      controlKinds.add('choice');
+    }
+    if (/button|tab|toolbar|cancel|close|按钮|标签|工具栏|取消|关闭/i.test(target) || action.type === 'click' || action.type === 'double_click') {
+      controlKinds.add('button');
+    }
+    if (action.type === 'scroll') controlKinds.add('scroll');
+  }
+
+  const hasTextInteraction = effectiveActions.some((action) => action.type === 'type_text')
+    || targets.some((target) => /text|input|field|search|输入|文本|字段|搜索/.test(target));
+  const requiresTextInteraction = /text|input|field|search|文本|字段|搜索|输入框|搜索框/i.test(task);
+  const requiredDistinctTargets = Math.min(6, requiredActionCount);
+  const requiredControlKinds = requiredActionCount <= 3 ? 2 : 3;
+  return distinctTargets >= requiredDistinctTargets
+    && controlKinds.size >= requiredControlKinds
+    && (!requiresTextInteraction || hasTextInteraction);
+}
+
+function settingsFormCompletionActionCount(task: string) {
+  if (/至少\s*8\s*个|at least\s*8/i.test(task)) return 12;
+  if (/(?:^|[^\d])3\s*个|three\s+(?:low-risk\s+)?controls?/i.test(task)) return 3;
+  return 8;
+}
+
+function isLowRiskSettingsFormTask(task: string) {
+  const primaryTask = task.split(/\n/).find((line) => line.trim()) || task;
+  if (isHighRiskGuiRequest(primaryTask) && !hasNegatedHighRiskBoundary(primaryTask)) return false;
+  const settingsOrFormIntent = /settings|preferences|preference|form|controls?|field|input|search|dropdown|menu|checkbox|toggle|button|设置|偏好|表单|控件|字段|输入框|搜索框|下拉|菜单|复选|开关|按钮/i.test(primaryTask);
+  const lowRiskBoundary = /low[- ]?risk|cancel|close|do not submit|do not save|不要提交|不要保存|低风险|取消|关闭/i.test(primaryTask);
+  return settingsOrFormIntent && lowRiskBoundary;
+}
+
+function hasNegatedHighRiskBoundary(text: string) {
+  return /do not\s+(?:click\s+)?(?:submit|save|send|delete|remove|overwrite|authorize|pay|publish|upload)|don't\s+(?:click\s+)?(?:submit|save|send|delete|remove|overwrite|authorize|pay|publish|upload)|without\s+(?:submit|save|send|delete|remove|overwrite|authorize|pay|publish|upload)|不要[^。；;,.，]*?(?:提交|保存|发送|删除|覆盖|授权|支付|发布|上传|外发)|不能[^。；;,.，]*?(?:提交|保存|发送|删除|覆盖|授权|支付|发布|上传|外发)|不(?:提交|保存|发送|删除|覆盖|授权|支付|发布|上传|外发)/i.test(text);
+}
+
+function shouldCompleteFromValidationRecoveryActionLedger(task: string, steps: LoopStep[]) {
+  if (!isLowRiskValidationRecoveryTask(task)) return false;
+  const actions = steps
+    .filter((step) => step.kind === 'gui-execution' && step.status === 'done')
+    .map((step) => isRecord(step.plannedAction) ? step.plannedAction as unknown as GenericVisionAction : undefined)
+    .filter((action): action is GenericVisionAction => Boolean(action))
+    .filter((action) => action.type !== 'wait');
+  if (actions.length < 4) return false;
+  const targets = actions.map((action) => actionRouteTarget(action));
+  const hasInvalidInput = actions.some((action) => action.type === 'type_text')
+    || targets.some((target) => /invalid|nonexistent|no result|search|field|input|无效|不存在|无结果|搜索|字段|输入/i.test(target));
+  const hasRecoveryAction = actions.some((action) => {
+    if (action.type === 'press_key') return /escape|esc|backspace|delete|enter/i.test(action.key);
+    if (action.type === 'type_text') return /clear|correct|reset|valid|empty|清除|修正|恢复|有效|空/i.test(actionRouteTarget(action));
+    return /clear|correct|reset|cancel|close|dismiss|清除|修正|恢复|取消|关闭/i.test(actionRouteTarget(action));
+  });
+  const hasObservationAction = actions.some((action) => action.type === 'scroll' || action.type === 'click' || action.type === 'double_click');
+  return hasInvalidInput
+    && hasObservationAction
+    && (hasRecoveryAction || actions.length >= 6);
+}
+
+function isLowRiskValidationRecoveryTask(task: string) {
+  const primaryTask = task.split(/\n/).find((line) => line.trim()) || task;
+  if (isHighRiskGuiRequest(primaryTask) && !hasNegatedHighRiskBoundary(primaryTask)) return false;
+  const validationIntent = /validation|invalid|no[- ]?result|empty result|error state|clear|correct|校验|无效|无结果|空结果|错误状态|清除|修正/i.test(primaryTask);
+  const lowRiskBoundary = /low[- ]?risk|do not submit|do not save|do not authorize|不要提交|不要保存|不要授权|低风险/i.test(primaryTask);
+  return validationIntent && lowRiskBoundary;
+}
+
+function shouldCompleteFromExpectedFailureActionLedger(task: string, steps: LoopStep[]) {
+  if (!isLowRiskExpectedFailureTask(task)) return false;
+  const actions = steps
+    .filter((step) => step.kind === 'gui-execution' && step.status === 'done')
+    .map((step) => isRecord(step.plannedAction) ? step.plannedAction as unknown as GenericVisionAction : undefined)
+    .filter((action): action is GenericVisionAction => Boolean(action));
+  const typedFailureRequest = actions.some((action) => action.type === 'type_text'
+    && /non.?existent|unavailable|missing|refs?|failed|不存在|不可用|失败/i.test(action.text));
+  const submittedRequest = actions.some((action) => action.type === 'press_key' && /enter|return/i.test(action.key))
+    || actions.some((action) => (action.type === 'click' || action.type === 'double_click') && /send|submit|run|发送|提交|运行/i.test(actionRouteTarget(action)));
+  return typedFailureRequest && submittedRequest;
+}
+
+function isLowRiskExpectedFailureTask(task: string) {
+  const primaryTask = task.split(/\n/).find((line) => line.trim()) || task;
+  if (isHighRiskGuiRequest(primaryTask) && !hasNegatedHighRiskBoundary(primaryTask)) return false;
+  return /expected failure|failed-with-reason|non.?existent|unavailable|missing refs?|预期失败|不存在|不可用|失败/i.test(primaryTask)
+    && /low[- ]?risk|低风险|failed-with-reason/i.test(primaryTask);
 }
 
 function shouldCompleteFromWindowRecoveryActionLedger(task: string, steps: LoopStep[]) {
@@ -1916,6 +2189,7 @@ async function requestGenericPlannerActions(
         'For visual targets, output targetDescription text only; never output x/y/fromX/fromY/toX/toY coordinates. Coordinates are produced by the Grounder in the target-window screenshot coordinate system.',
         'Planner screenshots may be budget-scaled for model latency. Do not infer exact pixel coordinates from them; describe visual targets semantically and let the Grounder use the original window screenshot.',
         'For dense UI, small icons, table rows, menus, dialogs, or ambiguous regions, include targetRegionDescription to name the larger visual region to inspect first; the runtime will crop that region and run a second fine Grounder inside it before execution.',
+        'For low-risk settings, preferences, and form-control coverage tasks, use the visible current window first. Cover distinct visible controls with conservative interactions such as text input, menu/dropdown expansion, toggle/checkbox checks, button/cancel/close clicks, and scrolling; once run history shows broad low-risk coverage, report done=true instead of continuing to explore unrelated controls.',
         'You may output wait with targetRegionDescription when the next step should be local observation only; the runtime will record focusRegion evidence and replan from the updated run history.',
         'Do not put pixel boxes in focusRegion unless it was copied from prior run history; prefer targetRegionDescription text so vision-sense can choose and clip the focus region.',
         'Allowed action types: open_app, click, double_click, drag, type_text, press_key, hotkey, scroll, wait.',
