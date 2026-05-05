@@ -136,7 +136,7 @@ export type GroundingResolution =
   | { ok: true; action: GenericVisionAction; grounding?: Record<string, unknown> }
   | { ok: false; action: GenericVisionAction; grounding?: Record<string, unknown>; reason: string };
 
-export type PlannerContractIssue = 'coordinate-output' | 'platform-incompatible-action' | 'empty-message-content';
+export type PlannerContractIssue = 'coordinate-output' | 'platform-incompatible-action' | 'unsupported-action' | 'empty-message-content';
 
 export interface ScreenshotRef {
   id: string;

@@ -36,6 +36,11 @@ export function platformActionIssue(action: GenericVisionAction, config: Compute
     if (normalized.includes('tab') && (normalized.includes('alt') || normalized.includes('option')) && !normalized.some((key) => key === 'cmd' || key === 'command' || key === 'meta')) {
       return 'VisionPlanner emitted Alt+Tab/Option+Tab for macOS. Use Command+Tab for app switching on darwin, or choose a visible low-risk target in the active window.';
     }
+    const combo = normalized.filter((key) => key !== 'cmd' && key !== 'meta').sort().join('+');
+    const platformGenericCombos = new Set(['command+space', 'command+tab']);
+    if (!platformGenericCombos.has(combo)) {
+      return `VisionPlanner emitted hotkey "${action.keys.join('+')}", which may be an app-specific shortcut. Use visible generic GUI controls, open_app, press_key, click, scroll, or platform recovery hotkeys only.`;
+    }
   }
   return '';
 }
@@ -106,7 +111,7 @@ function isWindowsOnlyKey(key: string) {
 
 function normalizeGenericAction(value: unknown): GenericVisionAction | undefined {
   if (!isRecord(value)) return undefined;
-  const rawType = stringConfig(value.type, value.actionType, value.action, value.kind);
+  const rawType = stringConfig(value.type, value.actionType, value.action_type, value.action, value.kind);
   if (!rawType) return undefined;
   const type = normalizeActionType(rawType);
   const metadata = genericActionMetadata(value);

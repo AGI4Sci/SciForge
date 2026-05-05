@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 const allowedActionTypes = new Set(['open_app', 'click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait']);
@@ -621,6 +621,7 @@ export async function validateComputerUseLongTrace(options: {
 function plannerStepReportedDoneWithoutActions(step: Record<string, unknown>) {
   const execution = isRecord(step.execution) ? step.execution : undefined;
   const rawResponse = isRecord(execution?.rawResponse) ? execution.rawResponse : undefined;
+  if (rawResponse?.done === true && Array.isArray(rawResponse.actions) && rawResponse.actions.length === 0) return true;
   const choices = Array.isArray(rawResponse?.choices) ? rawResponse.choices.filter(isRecord) : [];
   for (const choice of choices) {
     const message = isRecord(choice.message) ? choice.message : undefined;
@@ -652,6 +653,18 @@ function extractJsonObject(text: string): unknown {
   }
 }
 
+async function withTaskPoolHardTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(new Error(message)), Math.max(1, timeoutMs));
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 export async function runComputerUseLongRound(options: {
   manifestPath: string;
   round: number;
@@ -680,6 +693,8 @@ export async function runComputerUseLongRound(options: {
   const runId = sanitizeRunId(options.runId || `${manifest.run.id}-round-${String(options.round).padStart(2, '0')}-${now.toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`);
   const prompt = await renderRoundRuntimePrompt(manifest, round, dirname(manifestPath), options.promptSuffix);
   const runtimePromptPath = join(evidenceDir, 'runtime-prompt.md');
+  const actionLedgerPath = join(evidenceDir, 'action-ledger.json');
+  const failureDiagnosticsPath = join(evidenceDir, 'failure-diagnostics.json');
   await writeFile(runtimePromptPath, `${prompt}\n`);
 
   manifest.status = 'running';
@@ -692,48 +707,91 @@ export async function runComputerUseLongRound(options: {
     title: options.targetTitle,
     mode: options.targetMode,
   });
-  const payload = await runWorkspaceRuntimeGateway({
-    skillDomain: 'knowledge',
-    prompt,
-    workspacePath,
-    selectedToolIds: ['local.vision-sense'],
-    uiState: {
+  const configuredRoundTimeoutMs = Number(process.env.SCIFORGE_CU_LONG_ROUND_TIMEOUT_MS);
+  const roundTimeoutMs = Number.isFinite(configuredRoundTimeoutMs) && configuredRoundTimeoutMs > 0
+    ? configuredRoundTimeoutMs
+    : options.dryRun ? 120_000 : 240_000;
+  const payload = await withTaskPoolHardTimeout(runWorkspaceRuntimeGateway({
+      skillDomain: 'knowledge',
+      prompt,
+      workspacePath,
       selectedToolIds: ['local.vision-sense'],
-      visionSenseConfig: {
-        desktopBridgeEnabled: true,
-        dryRun: options.dryRun ?? false,
-        maxSteps: options.maxSteps ?? 8,
-        runId,
-        actions: options.actionsJson ? JSON.parse(options.actionsJson) : [],
-        windowTarget,
-        completionPolicy: {
-          mode: options.dryRun ? 'one-successful-non-wait-action' : 'planner-confirmed',
-          reason: options.dryRun
-            ? 'Dry-run T084 CU-LONG rounds are evidence-generation probes; one verified non-wait GUI action produces the required round trace.'
-            : 'Real T084 CU-LONG rounds must continue until the planner confirms the visible task state is complete or maxSteps is exhausted.',
-          fallbackActions: [{
-            type: 'scroll',
-            direction: 'down',
-            amount: 4,
-            targetDescription: 'Main content area of the active SciForge target window',
-          }],
+      uiState: {
+        selectedToolIds: ['local.vision-sense'],
+        visionSenseConfig: {
+          desktopBridgeEnabled: true,
+          dryRun: options.dryRun ?? false,
+          maxSteps: options.maxSteps ?? 8,
+          runId,
+          actions: options.actionsJson ? JSON.parse(options.actionsJson) : [],
+          windowTarget,
+          completionPolicy: {
+            mode: options.dryRun ? 'one-successful-non-wait-action' : 'planner-confirmed',
+            reason: options.dryRun
+              ? 'Dry-run T084 CU-LONG rounds are evidence-generation probes; one verified non-wait GUI action produces the required round trace.'
+              : 'Real T084 CU-LONG rounds must continue until the planner confirms the visible task state is complete or maxSteps is exhausted.',
+            fallbackActions: [{
+              type: 'scroll',
+              direction: 'down',
+              amount: 4,
+              targetDescription: 'Main content area of the active target window',
+            }],
+          },
+        },
+        computerUseLong: {
+          scenarioId: manifest.scenarioId,
+          runId: manifest.run.id,
+          round: options.round,
+          requiredPipeline: manifest.universalPipeline,
+          safetyBoundary: manifest.safetyBoundary,
         },
       },
-      computerUseLong: {
+      artifacts: [],
+    }), roundTimeoutMs, `runWorkspaceRuntimeGateway timed out after ${roundTimeoutMs}ms for ${manifest.scenarioId} round ${options.round}`)
+    .catch(async (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      round.status = 'repair-needed';
+      round.actionLedgerRefs = [manifestRel(dirname(manifestPath), actionLedgerPath)];
+      round.failureDiagnosticsRefs = [manifestRel(dirname(manifestPath), failureDiagnosticsPath)];
+      round.observedBehavior = message;
+      manifest.status = 'repair-needed';
+      await writeFile(actionLedgerPath, `${JSON.stringify({
+        schemaVersion: 'sciforge.computer-use-long.action-ledger.v1',
         scenarioId: manifest.scenarioId,
-        runId: manifest.run.id,
         round: options.round,
-        requiredPipeline: manifest.universalPipeline,
-        safetyBoundary: manifest.safetyBoundary,
-      },
-    },
-    artifacts: [],
-  });
+        runtimePromptRef: manifestRel(dirname(manifestPath), runtimePromptPath),
+        actions: [],
+        status: 'repair-needed',
+        reason: message,
+      }, null, 2)}\n`);
+      await writeFile(failureDiagnosticsPath, `${JSON.stringify({
+        schemaVersion: 'sciforge.computer-use-long.failure-diagnostics.v1',
+        scenarioId: manifest.scenarioId,
+        round: options.round,
+        status: 'repair-needed',
+        issueCategories: ['runtime-timeout'],
+        issues: [message],
+        tracePath: undefined,
+      }, null, 2)}\n`);
+      await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      await writeScenarioSummaryForManifest(manifestPath, manifest, [{
+        manifestPath,
+        scenarioId: manifest.scenarioId,
+        round: options.round,
+        status: round.status,
+        actionLedgerPath,
+        failureDiagnosticsPath,
+        payloadMessage: message,
+      }]);
+      return {
+        message,
+        executionUnits: [{ status: 'failed-with-reason', failureReason: message }],
+        artifacts: [],
+      };
+    });
 
   const traceRef = findPayloadTraceRef(payload);
   const tracePath = traceRef ? resolveTraceArtifactPath(traceRef, workspacePath) : undefined;
-  const actionLedgerPath = join(evidenceDir, 'action-ledger.json');
-  const failureDiagnosticsPath = join(evidenceDir, 'failure-diagnostics.json');
   const screenshotRefs = tracePath ? await screenshotRefsFromTrace(tracePath) : [];
   const traceEvidencePath = tracePath ? join(evidenceDir, 'vision-trace.json') : undefined;
   if (tracePath && traceEvidencePath && tracePath !== traceEvidencePath) {
@@ -1563,7 +1621,10 @@ export async function preflightComputerUseLong(options: {
   const ok = checks.every((check) => check.status !== 'fail');
   const report = renderPreflightReport({ ok, scenarioIds, dryRun, workspacePath, checks });
   const reportPath = options.out ? resolve(options.out) : undefined;
-  if (reportPath) await writeFile(reportPath, report);
+  if (reportPath) {
+    await mkdir(dirname(reportPath), { recursive: true });
+    await writeFile(reportPath, report);
+  }
   return { ok, scenarioIds, dryRun, checks, reportPath };
 }
 
@@ -2123,12 +2184,51 @@ async function renderRoundRuntimePrompt(
 async function renderPriorRoundEvidence(manifest: PreparedComputerUseLongRun, currentRound: number, manifestDir: string) {
   const priorRounds = manifest.rounds.filter((item) => item.round < currentRound && item.status === 'passed');
   if (!priorRounds.length) return '';
-  const lines = ['Compact prior-round file refs for follow-up image memory. Reuse the vision-sense visual memory block as context only; do not inline image bytes:'];
+  const lines = [
+    'Vision temporary memory policy: file-ref-only.',
+    'Compact prior-round file refs for follow-up image memory. Reuse the vision-sense visual memory block as context only; do not inline image bytes:',
+  ];
   const memoryBlock = await buildVisualMemoryBlockFromVisionSense(priorRounds, manifestDir);
   if (memoryBlock) lines.push(memoryBlock);
+  if (!memoryBlock) lines.push(await buildFallbackVisualMemoryBlock(priorRounds, manifestDir));
   for (const prior of priorRounds) {
+    if (prior.visionTraceRef) lines.push(`- round ${prior.round} trace=${prior.visionTraceRef}`);
     for (const ref of prior.actionLedgerRefs) lines.push(`- round ${prior.round} actionLedger: ${ref}`);
     for (const ref of prior.failureDiagnosticsRefs) lines.push(`- round ${prior.round} failureDiagnostics: ${ref}`);
+  }
+  return lines.join('\n');
+}
+
+async function buildFallbackVisualMemoryBlock(priorRounds: PreparedComputerUseLongRun['rounds'], manifestDir: string) {
+  const lines = [
+    'Vision temporary memory policy: file-ref-only',
+    'Memory mode: cross-round-followup',
+  ];
+  for (const prior of priorRounds.filter((item) => item.visionTraceRef)) {
+    const trace = await readOptionalJson(resolveManifestRef(manifestDir, prior.visionTraceRef as string));
+    if (!isRecord(trace)) continue;
+    const steps = Array.isArray(trace.steps) ? trace.steps.filter(isRecord) : [];
+    const guiSteps = steps.filter((step) => step.kind === 'gui-execution');
+    const nonWait = guiSteps.filter((step) => !isRecord(step.plannedAction) || step.plannedAction.type !== 'wait');
+    const lifecycle = isRecord(trace.windowLifecycle) ? trace.windowLifecycle : {};
+    const displayIds = Array.isArray(lifecycle.observedDisplayIds) ? lifecycle.observedDisplayIds.map(String).join(',') : '';
+    const firstGui = guiSteps[0];
+    const scheduler = firstGui && isRecord(firstGui.scheduler) ? firstGui.scheduler : {};
+    const verifier = firstGui && isRecord(firstGui.verifier) ? firstGui.verifier : {};
+    const pixel = isRecord(verifier.pixelDiff) ? verifier.pixelDiff : {};
+    const window = isRecord(verifier.windowConsistency) ? verifier.windowConsistency : {};
+    const refs = isRecord(trace.imageMemory) && Array.isArray(trace.imageMemory.refs)
+      ? trace.imageMemory.refs.filter(isRecord)
+      : [];
+    const firstRef = refs[0];
+    lines.push(`- round ${prior.round} trace=${prior.visionTraceRef} actions=${guiSteps.length}; nonWait=${nonWait.length}`);
+    lines.push(`  windowTarget: ${String(lifecycle.targetIdentity || 'unknown')} observedDisplayIds=${displayIds}`);
+    lines.push(`  scheduler: mode=${String(scheduler.mode || 'unknown')} lockId=${String(scheduler.lockId || '')}`);
+    lines.push(`  verifierFeedback: pixel=${String(pixel.method || 'unknown')} noEffect=${String(pixel.possiblyNoEffect ?? '')}`);
+    lines.push(`  verifierFeedback: window=${String(window.status || 'unknown')} sameWindow=${String(window.sameWindow ?? '')}`);
+    if (firstRef) {
+      lines.push(`  screenshotMeta: ref=${String(firstRef.path || '')} sha256=${String(firstRef.sha256 || '')} size=${String(firstRef.width || '')}x${String(firstRef.height || '')} displayId=${String(firstRef.displayId || '')}`);
+    }
   }
   return lines.join('\n');
 }
@@ -2196,14 +2296,21 @@ function findPayloadTraceRef(payload: { artifacts?: Array<Record<string, unknown
 async function runVisionSensePythonJson(moduleName: string, request: Record<string, unknown>) {
   const python = process.env.SCIFORGE_VISION_SENSE_PYTHON || 'python3';
   const packageRoot = resolve('packages/senses/vision-sense');
+  const requestJson = JSON.stringify(request);
+  const requestFile = requestJson.length > 100_000
+    ? join('/tmp', `sciforge-vision-sense-request-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`)
+    : undefined;
+  if (requestFile) await writeFile(requestFile, requestJson, 'utf8');
   const code = [
     'import sys',
     `sys.path.insert(0, ${JSON.stringify(packageRoot)})`,
     `from ${moduleName} import main`,
-    'raise SystemExit(main([sys.argv[1]]))',
+    'arg = sys.argv[1]',
+    'arg = open(arg[1:], "r", encoding="utf-8").read() if arg.startswith("@") else arg',
+    'raise SystemExit(main([arg]))',
   ].join('; ');
   const result = await new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolvePromise) => {
-    const child = spawn(python, ['-c', code, JSON.stringify(request)], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(python, ['-c', code, requestFile ? `@${requestFile}` : requestJson], { stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     const timeout = setTimeout(() => child.kill('SIGTERM'), 10000);
@@ -2222,6 +2329,7 @@ async function runVisionSensePythonJson(moduleName: string, request: Record<stri
       resolvePromise({ exitCode: code ?? (signal ? 143 : 1), stdout, stderr });
     });
   });
+  if (requestFile) await unlink(requestFile).catch(() => undefined);
   if (result.exitCode !== 0) return undefined;
   const parsed = extractJsonObject(result.stdout.trim());
   return isRecord(parsed) && parsed.ok === true ? parsed.result : undefined;

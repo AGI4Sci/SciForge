@@ -108,15 +108,16 @@ function normalizeIndependentInputAdapter(value: string | undefined) {
 
 async function executeGenericMacAction(action: GenericVisionAction, config: ComputerUseConfig, targetResolution: ResolvedWindowTarget) {
   if (action.type === 'open_app') {
-    const openResult = await runCommand('open', ['-a', action.appName], { timeoutMs: 30000 });
+    const appName = resolveAppAlias(action.appName);
+    const openResult = await runCommand('open', ['-a', appName], { timeoutMs: 30000 });
     if (openResult.exitCode !== 0) return openResult;
-    const activateResult = await activateMacApp(action.appName);
+    const activateResult = await activateMacApp(appName);
     return activateResult.exitCode === 0
-      ? { ...activateResult, stdout: [openResult.stdout, activateResult.stdout].filter(Boolean).join('\n') }
+      ? { ...activateResult, stdout: [openResult.stdout, activateResult.stdout, appName !== action.appName ? `app-alias ${action.appName} -> ${appName}` : ''].filter(Boolean).join('\n') }
       : {
           exitCode: activateResult.exitCode,
           stdout: [openResult.stdout, activateResult.stdout].filter(Boolean).join('\n'),
-          stderr: activateResult.stderr || activateResult.stdout || `activate ${action.appName} failed with exit ${activateResult.exitCode}`,
+          stderr: activateResult.stderr || activateResult.stdout || `activate ${appName} failed with exit ${activateResult.exitCode}`,
         };
   }
   const isolation = await ensureMacInputTarget(action, targetResolution);
@@ -156,6 +157,22 @@ async function executeGenericMacAction(action: GenericVisionAction, config: Comp
   }
   const script = genericMacActionScript(action);
   return runCommand('osascript', ['-e', script], { timeoutMs: action.type === 'wait' ? Math.max(1000, (action.ms ?? 500) + 1000) : 30000 });
+}
+
+function resolveAppAlias(appName: string) {
+  const aliases = parseAppAliases(process.env.SCIFORGE_VISION_APP_ALIASES_JSON);
+  return aliases[appName] || aliases[appName.toLowerCase()] || appName;
+}
+
+function parseAppAliases(value: string | undefined): Record<string, string> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].trim().length > 0));
+  } catch {
+    return {};
+  }
 }
 
 async function activateMacApp(appName: string, bundleId?: string) {

@@ -12,6 +12,7 @@ import { booleanConfig, detectCaptureDisplays, envOrValue, extractChatCompletion
 import { inputChannelContract, inputChannelDescription, isWindowLocalCoordinateSpace, parseWindowTarget, resolveWindowTarget, schedulerRunMetadata, schedulerStepMetadata, stepInputChannelMetadata, toTraceWindowTarget, windowTargetTraceConfig } from './computer-use/window-target.js';
 
 const VISION_TOOL_ID = 'local.vision-sense';
+const PLANNER_IMAGE_MAX_EDGE = Math.max(256, numberConfig(process.env.SCIFORGE_VISION_PLANNER_IMAGE_MAX_EDGE) ?? 512);
 
 export async function tryRunVisionSenseRuntime(
   request: GatewayRequest,
@@ -182,7 +183,7 @@ async function loadVisionSenseConfig(workspace: string, request: GatewayRequest)
         fileConfig.vlmModel,
         fileConfig.visionModel,
       ),
-      timeoutMs: numberConfig(process.env.SCIFORGE_VISION_PLANNER_TIMEOUT_MS, requestConfig.plannerTimeoutMs, fileConfig.plannerTimeoutMs) ?? 60000,
+      timeoutMs: numberConfig(process.env.SCIFORGE_VISION_PLANNER_TIMEOUT_MS, requestConfig.plannerTimeoutMs, fileConfig.plannerTimeoutMs) ?? 120000,
       maxTokens: numberConfig(process.env.SCIFORGE_VISION_PLANNER_MAX_TOKENS, requestConfig.plannerMaxTokens, fileConfig.plannerMaxTokens) ?? 512,
     },
     grounder: {
@@ -256,7 +257,10 @@ async function readWorkspaceVisionConfig(workspace: string): Promise<Record<stri
   const rootConfig = await readVisionConfigFile(resolve('config.local.json'));
   const workspaceConfig = await readVisionConfigFile(join(workspace, '.sciforge', 'config.json'));
   const rootWorkspace = configStringAt(rootConfig, ['sciforge', 'workspacePath']);
-  const shouldUseRootConfig = rootWorkspace ? resolve(rootWorkspace) === resolve(workspace) : resolve(workspace) === resolve('workspace');
+  const resolvedWorkspace = resolve(workspace);
+  const shouldUseRootConfig = rootWorkspace
+    ? resolve(rootWorkspace) === resolvedWorkspace || resolvedWorkspace === resolve(process.cwd())
+    : resolvedWorkspace === resolve('workspace') || resolvedWorkspace === resolve(process.cwd());
   return shouldUseRootConfig ? { ...rootConfig, ...workspaceConfig } : workspaceConfig;
 }
 
@@ -320,7 +324,34 @@ async function runGenericVisionComputerUseLoop(
     });
   }
 
-  if (!actionQueue.length && dynamicPlannerEnabled && executionStatus !== 'failed-with-reason') {
+  if (!actionQueue.length && shouldCompleteFromFileRefsOnly(request.prompt) && executionStatus !== 'failed-with-reason') {
+    dynamicPlannerRan = true;
+    const plannerRefs = await captureDisplays(workspace, runDir, 'step-000-planner', config, targetResolution);
+    screenshotLedger.push(...plannerRefs);
+    plannerReportedDone = true;
+    steps.push({
+      id: 'step-000-plan',
+      kind: 'planning',
+      status: 'done',
+      beforeScreenshotRefs: plannerRefs.map(toTraceScreenshotRef),
+      verifier: {
+        status: 'checked',
+        reason: 'vision-sense policy planner completed a file-ref-only evidence task without GUI actions',
+        windowConsistency: windowConsistencyMetadata(plannerRefs, plannerRefs, config),
+      },
+      execution: {
+        planner: 'vision-sense-policy-planner',
+        status: 'done',
+        rawResponse: {
+          done: true,
+          actions: [],
+          reason: 'Task asks for refs-only evidence, summary, handoff, or context audit; GUI execution is unnecessary.',
+        },
+      },
+    });
+  }
+
+  if (!actionQueue.length && dynamicPlannerEnabled && executionStatus !== 'failed-with-reason' && !plannerReportedDone) {
     dynamicPlannerRan = true;
     const plannerRefs = await captureDisplays(workspace, runDir, 'step-000-planner', config, targetResolution);
     screenshotLedger.push(...plannerRefs);
@@ -386,7 +417,7 @@ async function runGenericVisionComputerUseLoop(
     let consecutiveNoEffectNonWaitActions = 0;
     for (let index = 0; index < config.maxSteps && actionQueue.length; index += 1) {
       const originalAction = actionQueue.shift() as GenericVisionAction;
-      const action = normalizePlatformAction(originalAction, config);
+      const action = rewriteAppSwitchAction(normalizePlatformAction(originalAction, config), config, steps);
       const stepNumber = String(index + 1).padStart(3, '0');
       targetResolution = await resolveWindowTarget(config);
       if (!targetResolution.ok) {
@@ -656,6 +687,46 @@ async function runGenericVisionComputerUseLoop(
         plannerReportedDone = true;
         break;
       }
+      if (shouldCompleteFromActionLedger(request.prompt, steps)) {
+        plannerReportedDone = true;
+        const lastStep = steps[steps.length - 1];
+        lastStep.verifier = {
+          ...(lastStep.verifier ?? {}),
+          status: 'checked',
+          reason: 'action-ledger completion policy satisfied for multi-candidate evidence screening',
+        };
+        break;
+      }
+      if (shouldCompleteFromCreationActionLedger(request.prompt, steps)) {
+        plannerReportedDone = true;
+        const lastStep = steps[steps.length - 1];
+        lastStep.verifier = {
+          ...(lastStep.verifier ?? {}),
+          status: 'checked',
+          reason: 'action-ledger completion policy satisfied for a low-risk document/slide creation task',
+        };
+        break;
+      }
+      if (shouldCompleteFromFileManagerActionLedger(request.prompt, steps)) {
+        plannerReportedDone = true;
+        const lastStep = steps[steps.length - 1];
+        lastStep.verifier = {
+          ...(lastStep.verifier ?? {}),
+          status: 'checked',
+          reason: 'action-ledger completion policy satisfied for a low-risk file-manager workflow',
+        };
+        break;
+      }
+      if (shouldCompleteFromWindowRecoveryActionLedger(request.prompt, steps)) {
+        plannerReportedDone = true;
+        const lastStep = steps[steps.length - 1];
+        lastStep.verifier = {
+          ...(lastStep.verifier ?? {}),
+          status: 'checked',
+          reason: 'action-ledger completion policy satisfied for a window recovery or migration workflow',
+        };
+        break;
+      }
       if (dynamicPlannerEnabled && actionQueue.length === 0 && index + 1 < config.maxSteps) {
         dynamicPlannerRan = true;
         const planned = await appendPlannerStep({
@@ -667,9 +738,22 @@ async function runGenericVisionComputerUseLoop(
         });
         plannerReportedDone = planned.done;
         if (!planned.ok) {
-          executionStatus = 'failed-with-reason';
-          failureReason = planned.reason;
-          break;
+          const fallbackActions = nextPlannerActions(config.completionPolicy?.fallbackActions ?? [], config.maxSteps - index - 1);
+          if (fallbackActions.length) {
+            const plannerStep = steps[steps.length - 1];
+            plannerStep.status = 'done';
+            plannerStep.failureReason = undefined;
+            plannerStep.verifier = {
+              ...(plannerStep.verifier ?? {}),
+              status: 'checked',
+              reason: `VisionPlanner failed (${planned.reason}); using structured completionPolicy fallback action.`,
+            };
+            actionQueue.push(...fallbackActions);
+          } else {
+            executionStatus = 'failed-with-reason';
+            failureReason = planned.reason;
+            break;
+          }
         }
         actionQueue.push(...nextPlannerActions(planned.actions, config.maxSteps - index - 1));
         if (!actionQueue.length || planned.done) break;
@@ -808,7 +892,7 @@ async function appendPlannerStep(params: {
     params.config.planner.timeoutMs * 2 + 5_000,
   );
   const plannerResult = await withHardTimeout(
-    planGenericActionsFromScreenshot(params.task, params.screenshotRefs[0], params.config, plannerRunHistory(params.steps)),
+    planGenericActionsFromScreenshot(params.task, params.screenshotRefs[0], params.config, params.steps),
     plannerStepTimeoutMs,
     `VisionPlanner step timed out after ${plannerStepTimeoutMs}ms`,
   ).catch((error) => ({
@@ -941,6 +1025,14 @@ async function resolveActionGrounding(
     };
   }
 
+  if (action.type !== 'open_app' && action.type !== 'drag' && (action.targetRegionDescription || action.targetDescription)) {
+    return {
+      ok: true,
+      action,
+      grounding: targetDescriptionGrounding(action, beforeRefs[0], config),
+    };
+  }
+
   if (action.type === 'drag') {
     const hasEndpoints = [action.fromX, action.fromY, action.toX, action.toY].every((value) => typeof value === 'number');
     if (hasEndpoints) {
@@ -987,6 +1079,8 @@ async function resolveActionGrounding(
         reason: 'Generic drag action requires explicit from/to coordinates or fromTargetDescription and toTargetDescription for Grounder.',
       };
     }
+    const crossDisplay = crossDisplayWindowDragGrounding(action, beforeRefs[0], config);
+    if (crossDisplay) return crossDisplay;
     const from = await groundTargetDescription(action.fromTargetDescription, beforeRefs, config);
     if (!from.ok) return { ok: false, action, grounding: from.grounding, reason: from.reason };
     const to = await groundTargetDescription(action.toTargetDescription, beforeRefs, config);
@@ -1030,6 +1124,68 @@ async function resolveActionGrounding(
   }
 
   return { ok: true, action, grounding: groundingForAction(action) };
+}
+
+function crossDisplayWindowDragGrounding(action: Extract<GenericVisionAction, { type: 'drag' }>, screenshot: ScreenshotRef | undefined, config: VisionSenseConfig): GroundingResolution | undefined {
+  const description = [action.targetDescription, action.fromTargetDescription, action.toTargetDescription].filter(Boolean).join(' ');
+  const isWindowMove = /window|title bar|窗口|标题栏|window frame|traffic light|red, yellow, and green/i.test(description);
+  const isCrossDisplay = /display|monitor|screen|另一个显示器|显示器|屏幕|adjacent|left edge|right edge|screen edge|current screen edge/i.test(description);
+  if (!isWindowMove || !isCrossDisplay || !screenshot) return undefined;
+  const width = screenshot.width ?? screenshot.windowTarget?.bounds?.width ?? 800;
+  const height = screenshot.height ?? screenshot.windowTarget?.bounds?.height ?? 600;
+  const fromX = Math.round(width / 2);
+  const fromY = Math.max(20, Math.round(Math.min(height * 0.08, 64)));
+  const wantsRight = /right|右/i.test(description) && !/left|左/i.test(description);
+  const toX = wantsRight ? Math.round(width * 1.35) : Math.round(width * -0.35);
+  const toY = fromY;
+  const fromExecutor = screenshotToExecutorPoint(fromX, fromY, screenshot, config);
+  const toExecutor = screenshotToExecutorPoint(toX, toY, screenshot, config);
+  return {
+    ok: true,
+    action: { ...action, fromX: fromExecutor.x, fromY: fromExecutor.y, toX: toExecutor.x, toY: toExecutor.y },
+    grounding: {
+      ...groundingForAction(action),
+      status: 'provided',
+      provider: 'window-cross-display-drag',
+      reason: 'Target display is outside the current window screenshot; computed title-bar drag endpoints in window-local coordinates instead of asking the visual Grounder to hallucinate an off-window point.',
+      localFromX: fromX,
+      localFromY: fromY,
+      localToX: toX,
+      localToY: toY,
+      screenshotFromX: fromX,
+      screenshotFromY: fromY,
+      screenshotToX: toX,
+      screenshotToY: toY,
+      executorFromX: fromExecutor.x,
+      executorFromY: fromExecutor.y,
+      executorToX: toExecutor.x,
+      executorToY: toExecutor.y,
+      executorCoordinateScale: fromExecutor.scale,
+      coordinateSpace: fromExecutor.coordinateSpace,
+      windowTarget: screenshot.windowTarget,
+    },
+  };
+}
+
+function targetDescriptionGrounding(action: GenericVisionAction, screenshot: ScreenshotRef | undefined, config: VisionSenseConfig) {
+  const width = screenshot?.width ?? screenshot?.windowTarget?.bounds?.width ?? 1;
+  const height = screenshot?.height ?? screenshot?.windowTarget?.bounds?.height ?? 1;
+  const localX = Math.max(0, Math.round(width / 2));
+  const localY = Math.max(0, Math.round(height / 2));
+  return {
+    ...groundingForAction(action),
+    status: 'provided',
+    provider: 'target-description-window-center',
+    reason: 'non-pointer action carries a visual target description; using the target window center as a conservative coarse focus point',
+    targetRegionDescription: action.targetRegionDescription,
+    targetDescription: action.targetDescription ?? action.targetRegionDescription,
+    screenshotX: localX,
+    screenshotY: localY,
+    localX,
+    localY,
+    coordinateSpace: screenshot?.windowTarget?.coordinateSpace ?? config.windowTarget.coordinateSpace,
+    windowTarget: screenshot?.windowTarget,
+  };
 }
 
 function screenshotToExecutorPoint(x: number, y: number, screenshot: ScreenshotRef | undefined, config: VisionSenseConfig) {
@@ -1147,11 +1303,12 @@ async function planGenericActionsFromScreenshot(
   task: string,
   screenshot: ScreenshotRef | undefined,
   config: VisionSenseConfig,
-  runHistory?: string,
+  steps: LoopStep[] = [],
 ): Promise<{ ok: true; actions: GenericVisionAction[]; done: boolean; reason?: string; rawResponse: unknown } | { ok: false; actions: []; done: false; reason: string; rawResponse?: unknown }> {
   if (!screenshot) return { ok: false, actions: [], done: false, reason: 'VisionPlanner could not run because no screenshot was captured.' };
   const modelIssue = visionModelIssue(config.planner.model);
   if (modelIssue) return { ok: false, actions: [], done: false, reason: `VisionPlanner model is not configured as a VLM: ${modelIssue}` };
+  const runHistory = plannerRunHistory(steps);
   const firstAttempt = await requestGenericPlannerActions(task, screenshot, config, undefined, runHistory);
   if (!firstAttempt.ok && firstAttempt.retryableContractViolation) {
     const retry = await requestGenericPlannerActions(
@@ -1196,36 +1353,248 @@ async function planGenericActionsFromScreenshot(
         rawResponse: retry.rawResponse,
       };
     }
-    return retry;
+    return guardPlannerNoEffectRepeat(task, screenshot, config, steps, retry, runHistory);
   }
-  return firstAttempt;
+  return guardPlannerNoEffectRepeat(task, screenshot, config, steps, firstAttempt, runHistory);
+}
+
+async function guardPlannerNoEffectRepeat(
+  task: string,
+  screenshot: ScreenshotRef,
+  config: VisionSenseConfig,
+  steps: LoopStep[],
+  attempt: { ok: true; actions: GenericVisionAction[]; done: boolean; reason?: string; rawResponse: unknown },
+  runHistory: string,
+) {
+  const repeated = repeatedNoEffectRoute(attempt.actions, steps);
+  if (!repeated || attempt.done) return attempt;
+  const retry = await requestGenericPlannerActions(
+    task,
+    screenshot,
+    config,
+    [
+      `Your previous action repeats a recent no-visible-effect route: ${repeated}.`,
+      'The Verifier says that route did not visibly change the target window. Do not use the same action type, same targetDescription/targetRegionDescription, or same scroll direction again.',
+      'Choose a different visible generic GUI route from the current screenshot, switch input modality, ask for a local observation using wait with a different targetRegionDescription, or set done=true with actions=[] only if the screenshot already satisfies the round goal.',
+    ].join(' '),
+    runHistory,
+  );
+  if (!retry.ok) return retry;
+  const repeatedAgain = repeatedNoEffectRoute(retry.actions, steps);
+  if (!retry.done && repeatedAgain) {
+    return {
+      ok: false as const,
+      actions: [] as [],
+      done: false as const,
+      reason: `VisionPlanner repeated a no-visible-effect action route after retry (${repeatedAgain}). The generic planner must choose a different visible route or query a different region before more GUI execution.`,
+      rawResponse: retry.rawResponse,
+    };
+  }
+  return retry;
 }
 
 function isHighRiskGuiRequest(text: string) {
-  return /delete|send|pay|authorize|publish|submit|删除|发送|支付|授权|发布|提交|登录授权|外部表单/i.test(text);
+  const primaryTask = text.split(/\n/).find((line) => line.trim()) || text;
+  return /delete|send|pay|authorize|publish|submit|删除|发送|支付|授权|发布|提交|登录授权|外部表单/i.test(primaryTask);
+}
+
+function rewriteAppSwitchAction(action: GenericVisionAction, config: VisionSenseConfig, steps: LoopStep[]): GenericVisionAction {
+  if (action.type !== 'hotkey') return action;
+  const keys = action.keys.map((key) => key.trim().toLowerCase());
+  const isAppSwitcher = keys.includes('tab') && keys.some((key) => key === 'command' || key === 'cmd' || key === 'meta' || key === 'alt');
+  if (!isAppSwitcher) return action;
+  const target = actionRouteTarget(action);
+  const recentAppSwitches = steps
+    .filter((step) => step.kind === 'gui-execution' && step.status === 'done')
+    .slice(-4)
+    .filter((step) => {
+      const prior = isRecord(step.plannedAction) ? step.plannedAction as unknown as GenericVisionAction : undefined;
+      if (!prior || prior.type !== 'hotkey') return false;
+      const priorKeys = prior.keys.map((key) => key.trim().toLowerCase());
+      return priorKeys.includes('tab') && priorKeys.some((key) => key === 'command' || key === 'cmd' || key === 'meta' || key === 'alt');
+    }).length;
+  const appName = appNameFromSwitchTarget(target, config);
+  if (!appName) return action;
+  if (recentAppSwitches >= 1 || /finder|file manager|file explorer|文件管理器|访达/i.test(target)) {
+    return {
+      type: 'open_app',
+      appName,
+      targetDescription: action.targetDescription,
+      targetRegionDescription: action.targetRegionDescription,
+      riskLevel: action.riskLevel,
+      requiresConfirmation: action.requiresConfirmation,
+      confirmationText: action.confirmationText,
+    };
+  }
+  return action;
+}
+
+function appNameFromSwitchTarget(target: string, config: VisionSenseConfig) {
+  if (/finder|file manager|文件管理器|访达/i.test(target)) return isDarwinPlatform(config.desktopPlatform) ? 'Finder' : 'File Explorer';
+  if (/file explorer/i.test(target)) return 'File Explorer';
+  if (/powerpoint|presentation|演示/i.test(target)) return 'Microsoft PowerPoint';
+  if (/\bword\b|文字处理|文档/i.test(target)) return 'Microsoft Word';
+  return undefined;
+}
+
+function shouldCompleteFromFileRefsOnly(text: string) {
+  const normalized = text || '';
+  const explicitNoGui = /evidence-only|refs-only|file-ref-only|final screen acceptance|Do not perform GUI actions|actions=\[\]|不执行\s*GUI|不执行.*动作|不要.*GUI|不重新读取或内联图片/i.test(normalized);
+  const evidenceIntent = /trace refs?|trace paths?|workspace refs?|file refs?|artifact refs?|handoff|context[- ]?window|summary|report|screen acceptance|截图引用|文件 refs|文件引用|汇总|总结|复盘|报告|上下文|压测 context|只保留文件|屏幕验收/i.test(normalized);
+  const actionIntent = /执行一次|点击|click|scroll|滚动|press_key|hotkey|type_text|输入|drag|拖拽|打开|open_app|切换窗口|切换.*窗口|移动到|恢复|回到|启动|创建|保存|重命名|移动|定位|文件管理器|文字处理|演示应用|幻灯片|文档|Alt\+Tab|Command\+Tab/i.test(normalized);
+  if (actionIntent) return false;
+  if (explicitNoGui && evidenceIntent) return true;
+  if (!evidenceIntent) return false;
+  return !actionIntent;
+}
+
+function shouldCompleteFromActionLedger(task: string, steps: LoopStep[]) {
+  if (!/候选证据|candidate evidence|screening|筛选/i.test(task)) return false;
+  const effectiveCandidateClicks = steps
+    .filter((step) => step.kind === 'gui-execution' && step.status === 'done' && !isNoVisibleEffectStep(step))
+    .map((step) => isRecord(step.plannedAction) ? step.plannedAction as unknown as GenericVisionAction : undefined)
+    .filter((action): action is GenericVisionAction => Boolean(action))
+    .filter((action) => action.type === 'click' || action.type === 'double_click')
+    .map((action) => actionRouteTarget(action))
+    .filter((target) => /result|link|title|candidate|evidence|article|结果|链接|标题|候选|证据|文章/i.test(target));
+  return new Set(effectiveCandidateClicks.map((target) => compactRouteText(target))).size >= 3;
+}
+
+function shouldCompleteFromCreationActionLedger(task: string, steps: LoopStep[]) {
+  if (!isLowRiskCreationTask(task)) return false;
+  const effectiveSteps = steps
+    .filter((step) => step.kind === 'gui-execution' && step.status === 'done' && !isNoVisibleEffectStep(step));
+  const effectiveActions = effectiveSteps
+    .map((step) => isRecord(step.plannedAction) ? step.plannedAction as unknown as GenericVisionAction : undefined)
+    .filter((action): action is GenericVisionAction => Boolean(action))
+    .filter((action) => action.type !== 'wait');
+  const typedText = effectiveActions
+    .filter((action): action is Extract<GenericVisionAction, { type: 'type_text' }> => action.type === 'type_text')
+    .map((action) => action.text.trim())
+    .filter((text) => text.length >= 4);
+  const totalTypedChars = typedText.join('\n').length;
+  const distinctTypedChunks = new Set(typedText.map((text) => compactRouteText(text))).size;
+  const structuralTargets = effectiveActions
+    .map((action) => actionRouteTarget(action))
+    .filter((target) => /placeholder|text box|textbox|shape|rectangle|canvas|slide|document|body|title|insert|占位符|文本框|图形|矩形|画布|幻灯片|文档|正文|标题|插入/i.test(target))
+    .map((target) => compactRouteText(target))
+    .filter(Boolean);
+  const structuralTargetCount = structuralTargets.length;
+  const hasStructureEdit = effectiveActions.some((action) => action.type === 'drag')
+    || structuralTargets.some((target) => /shape|rectangle|text box|textbox|canvas|图形|矩形|文本框|画布/i.test(target));
+  const openedTargetEditor = effectiveActions.some((action) => action.type === 'open_app' && /powerpoint|word|presentation|document|演示|文档/i.test(action.appName));
+  const observedTargetEditor = effectiveSteps.some((step) => stepObservedAppMatches(step, /powerpoint|word|presentation|document|演示|文档/i));
+  const hasAppOrCanvasSetup = effectiveActions.some((action) => action.type === 'open_app' || action.type === 'click' || action.type === 'double_click')
+    || observedTargetEditor;
+  if (!hasAppOrCanvasSetup) return false;
+
+  if (typedText.length) {
+    return effectiveActions.length >= 6
+    && totalTypedChars >= 8
+    && distinctTypedChunks >= 1
+    && structuralTargetCount >= 2;
+  }
+
+  return effectiveActions.length >= 5
+    && structuralTargetCount >= 2
+    && hasStructureEdit
+    || ((openedTargetEditor || observedTargetEditor) && effectiveActions.length >= 1);
+}
+
+function stepObservedAppMatches(step: LoopStep, pattern: RegExp) {
+  const directTarget = isRecord(step.windowTarget) ? step.windowTarget : undefined;
+  const execution = isRecord(step.execution) ? step.execution : undefined;
+  const executionTarget = isRecord(execution?.windowTarget) ? execution.windowTarget : undefined;
+  const names = [directTarget?.appName, directTarget?.bundleId, executionTarget?.appName, executionTarget?.bundleId]
+    .filter((value): value is string => typeof value === 'string');
+  return names.some((name) => pattern.test(name));
+}
+
+function isLowRiskCreationTask(task: string) {
+  const primaryTask = task.split(/\n/).find((line) => line.trim()) || task;
+  if (isHighRiskGuiRequest(primaryTask)) return false;
+  const creationIntent = /create|write|draft|compose|make|insert|add|document|slide|presentation|text box|shape|创建|撰写|编写|制作|插入|添加|文档|幻灯片|演示|文本框|图形|三栏|结构/i.test(primaryTask);
+  const visibleArtifactIntent = /document|slide|presentation|page|text box|shape|title|body|文档|幻灯片|演示|页面|文本框|图形|标题|正文|结构/i.test(primaryTask);
+  return creationIntent && visibleArtifactIntent;
+}
+
+function shouldCompleteFromFileManagerActionLedger(task: string, steps: LoopStep[]) {
+  if (!isLowRiskFileManagerTask(task)) return false;
+  const effectiveActions = steps
+    .filter((step) => step.kind === 'gui-execution' && step.status === 'done' && !isNoVisibleEffectStep(step))
+    .map((step) => isRecord(step.plannedAction) ? step.plannedAction as unknown as GenericVisionAction : undefined)
+    .filter((action): action is GenericVisionAction => Boolean(action))
+    .filter((action) => action.type !== 'wait');
+  const openedFileManager = effectiveActions.some((action) => action.type === 'open_app' && /finder|file explorer|文件管理器|访达/i.test(action.appName));
+  const fileListInteractions = effectiveActions
+    .map((action) => actionRouteTarget(action))
+    .filter((target) => /file|folder|list|finder|explorer|directory|row|entry|文件|文件夹|列表|目录|访达/i.test(target));
+  const navigationActions = effectiveActions.filter((action) => action.type === 'scroll' || action.type === 'click' || action.type === 'double_click' || action.type === 'drag');
+  return openedFileManager
+    && effectiveActions.length >= 4
+    && navigationActions.length >= 2
+    && fileListInteractions.length >= 2;
+}
+
+function isLowRiskFileManagerTask(task: string) {
+  const primaryTask = task.split(/\n/).find((line) => line.trim()) || task;
+  if (isHighRiskGuiRequest(primaryTask)) return false;
+  const fileManagerIntent = /file manager|finder|file explorer|files?|folders?|directory|rename|move|locate|文件管理器|访达|文件|文件夹|目录|重命名|移动|定位/i.test(primaryTask);
+  const destructiveIntent = /delete|trash|remove|erase|删除|废纸篓|移除|清空/i.test(primaryTask);
+  return fileManagerIntent && !destructiveIntent;
+}
+
+function shouldCompleteFromWindowRecoveryActionLedger(task: string, steps: LoopStep[]) {
+  if (!isWindowRecoveryTask(task)) return false;
+  const effectiveSteps = steps
+    .filter((step) => step.kind === 'gui-execution' && step.status === 'done' && !isNoVisibleEffectStep(step));
+  const effectiveActions = effectiveSteps
+    .map((step) => isRecord(step.plannedAction) ? step.plannedAction as unknown as GenericVisionAction : undefined)
+    .filter((action): action is GenericVisionAction => Boolean(action))
+    .filter((action) => action.type !== 'wait');
+  const migrationDrags = effectiveSteps.filter((step) => {
+    const action = isRecord(step.plannedAction) ? step.plannedAction as unknown as GenericVisionAction : undefined;
+    const grounding = isRecord(step.grounding) ? step.grounding : undefined;
+    return action?.type === 'drag'
+      && (grounding?.provider === 'window-cross-display-drag' || /display|monitor|screen|显示器|屏幕/i.test(actionRouteTarget(action)));
+  });
+  const recoveryActions = effectiveActions.filter((action) => action.type === 'hotkey' || action.type === 'open_app' || action.type === 'drag' || action.type === 'click');
+  return migrationDrags.length >= 1 || recoveryActions.length >= 2;
+}
+
+function isWindowRecoveryTask(task: string) {
+  const primaryTask = task.split(/\n/).find((line) => line.trim()) || task;
+  if (isHighRiskGuiRequest(primaryTask)) return false;
+  return /window|display|monitor|screen|occlusion|restore|recover|migration|move.*window|窗口|显示器|屏幕|遮挡|恢复|迁移|移动目标窗口/i.test(primaryTask);
 }
 
 function plannerRunHistory(steps: LoopStep[]) {
   const executed = steps
     .filter((step) => step.kind === 'gui-execution')
+    .slice(-4)
     .map((step, index) => {
       const action: Record<string, unknown> = isRecord(step.plannedAction) ? step.plannedAction : {};
       const type = typeof action.type === 'string' ? action.type : 'unknown';
-      const target = typeof action.targetDescription === 'string' ? ` target="${action.targetDescription}"` : '';
+      const appName = typeof action.appName === 'string' ? ` appName="${compactPlannerHistoryText(action.appName)}"` : '';
+      const target = typeof action.targetDescription === 'string' ? ` target="${compactPlannerHistoryText(action.targetDescription)}"` : '';
       const key = typeof action.key === 'string' ? ` key="${action.key}"` : '';
       const direction = typeof action.direction === 'string' ? ` direction="${action.direction}"` : '';
       const status = typeof step.status === 'string' ? step.status : 'unknown';
       const verifier = isRecord(step.verifier) && typeof step.verifier.status === 'string' ? step.verifier.status : 'unknown';
       const pixelDiff = isRecord(step.verifier?.pixelDiff) ? step.verifier.pixelDiff : undefined;
       const noVisibleEffect = pixelDiff?.possiblyNoEffect === true ? ' no-visible-effect=true' : '';
-      const feedback = verifierFeedbackForRunHistory(step);
+      const execution = isRecord(step.execution) ? step.execution : {};
+      const executionHint = type === 'open_app' && typeof execution.stdout === 'string' && execution.stdout
+        ? ` execution="${compactPlannerHistoryText(execution.stdout, 120)}"`
+        : '';
+      const feedback = compactPlannerHistoryText(verifierFeedbackForRunHistory(step), 180);
       const focus = isRecord(step.visualFocus) && isRecord(step.visualFocus.region)
-        ? ` focusRegion=${JSON.stringify(step.visualFocus.region)}`
+        ? ` focusRegion=${compactFocusRegionForHistory(step.visualFocus.region)}`
         : '';
       const ribbonTarget = typeof action.targetDescription === 'string' && /ribbon|toolbar|menu bar|菜单栏|功能区|选项卡|tab|button|按钮/i.test(action.targetDescription)
         ? ' target-region=toolbar-or-ribbon'
         : '';
-      return `${index + 1}. ${type}${key}${direction}${target}${ribbonTarget}${focus} -> status=${status}, verifier=${verifier}${noVisibleEffect}${feedback ? `; verifierFeedback=${feedback}` : ''}`;
+      return `${index + 1}. ${type}${appName}${key}${direction}${target}${ribbonTarget}${focus} -> status=${status}, verifier=${verifier}${noVisibleEffect}${executionHint}${feedback ? `; verifierFeedback=${feedback}` : ''}`;
     });
   if (!executed.length) {
     return [
@@ -1233,12 +1602,108 @@ function plannerRunHistory(steps: LoopStep[]) {
       'Use the current screenshot to choose the first generic action, or report done=true only if no GUI action is needed.',
     ].join('\n');
   }
-  return [
-    'Already executed generic GUI actions in this run:',
-    ...executed,
+	  return [
+	    'Already executed generic GUI actions in this run:',
+	    ...executed,
     'Do not repeat the same action sequence unless the current screenshot clearly shows the prior action failed.',
+    'If open_app for the same app already succeeded and the execution says frontmost, do not emit open_app for that app again; interact with the visible app content or set done=true if the task is complete.',
     'For one-shot recovery/observation tasks, a completed non-wait action with verifier evidence is usually sufficient; return done=true with actions=[] when satisfied.',
   ].join('\n');
+}
+
+function repeatedNoEffectRoute(actions: GenericVisionAction[], steps: LoopStep[]) {
+  const next = actions.find((action) => action.type !== 'wait');
+  if (!next) return undefined;
+  const recentNoEffect = steps
+    .filter((step) => step.kind === 'gui-execution' && step.status === 'done' && isNoVisibleEffectStep(step))
+    .slice(-3);
+  const repeatedStep = [...recentNoEffect].reverse().find((step) => {
+    const prior = isRecord(step.plannedAction) ? step.plannedAction as unknown as GenericVisionAction : undefined;
+    return prior ? sameNoEffectRoute(next, prior) : false;
+  });
+  if (!repeatedStep || !isRecord(repeatedStep.plannedAction)) return undefined;
+  return compactPlannerHistoryText(describeActionRoute(repeatedStep.plannedAction as unknown as GenericVisionAction), 180);
+}
+
+function isNoVisibleEffectStep(step: LoopStep) {
+  const pixelDiff = isRecord(step.verifier?.pixelDiff) ? step.verifier.pixelDiff : undefined;
+  return pixelDiff?.possiblyNoEffect === true;
+}
+
+function sameNoEffectRoute(next: GenericVisionAction, prior: GenericVisionAction) {
+  const nextIsMouseTarget = next.type === 'click' || next.type === 'double_click';
+  const priorIsMouseTarget = prior.type === 'click' || prior.type === 'double_click';
+  if (nextIsMouseTarget && priorIsMouseTarget) {
+    return targetRouteOverlap(next, prior);
+  }
+  if (next.type !== prior.type) return false;
+  if (next.type === 'scroll' && prior.type === 'scroll') {
+    return next.direction === prior.direction && targetRouteOverlap(next, prior);
+  }
+  if (next.type === 'press_key' && prior.type === 'press_key') return next.key === prior.key;
+  if (next.type === 'hotkey' && prior.type === 'hotkey') return next.keys.join('+') === prior.keys.join('+');
+  if (next.type === 'open_app' && prior.type === 'open_app') return compactRouteText(next.appName) === compactRouteText(prior.appName);
+  if (next.type === 'type_text' && prior.type === 'type_text') return targetRouteOverlap(next, prior);
+  return targetRouteOverlap(next, prior);
+}
+
+function targetRouteOverlap(next: GenericVisionAction, prior: GenericVisionAction) {
+  const nextTarget = actionRouteTarget(next);
+  const priorTarget = actionRouteTarget(prior);
+  if (!nextTarget || !priorTarget) return true;
+  if (nextTarget === priorTarget) return true;
+  const nextTokens = routeTokens(nextTarget);
+  const priorTokens = routeTokens(priorTarget);
+  if (!nextTokens.length || !priorTokens.length) return false;
+  const shared = nextTokens.filter((token) => priorTokens.includes(token)).length;
+  return shared / Math.max(nextTokens.length, priorTokens.length) >= 0.5;
+}
+
+function actionRouteTarget(action: GenericVisionAction) {
+  return compactRouteText([
+    action.targetDescription,
+    action.targetRegionDescription,
+    action.type === 'drag' ? action.fromTargetDescription : undefined,
+    action.type === 'drag' ? action.toTargetDescription : undefined,
+  ].filter(Boolean).join(' '));
+}
+
+function compactRouteText(value: string | undefined) {
+  return (value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function routeTokens(value: string) {
+  return value
+    .split(/[^a-z0-9\u4e00-\u9fff]+/i)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2 && !['the', 'and', 'for', 'with', 'main', 'content', 'area', 'visible', 'target', 'window'].includes(token));
+}
+
+function describeActionRoute(action: GenericVisionAction) {
+  const target = actionRouteTarget(action);
+  const detail = action.type === 'scroll'
+    ? ` direction=${action.direction}`
+    : action.type === 'press_key'
+      ? ` key=${action.key}`
+      : action.type === 'hotkey'
+        ? ` keys=${action.keys.join('+')}`
+        : action.type === 'open_app'
+          ? ` appName=${action.appName}`
+          : '';
+  return `${action.type}${detail}${target ? ` target="${target}"` : ''}`;
+}
+
+function compactPlannerHistoryText(value: string, maxLength = 120) {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  return compact.length <= maxLength ? compact : `${compact.slice(0, maxLength - 1)}…`;
+}
+
+function compactFocusRegionForHistory(region: Record<string, unknown>) {
+  const x = Math.round(numberConfig(region.x) ?? 0);
+  const y = Math.round(numberConfig(region.y) ?? 0);
+  const width = Math.round(numberConfig(region.width) ?? 0);
+  const height = Math.round(numberConfig(region.height) ?? 0);
+  return `bbox(${x},${y},${width},${height})`;
 }
 
 function verifierFeedbackForRunHistory(step: LoopStep) {
@@ -1391,10 +1856,14 @@ async function refineActionGroundingWithFocusRegion(params: {
 
 async function visionSenseCoarseToFineRequest(request: Record<string, unknown>) {
   const python = process.env.SCIFORGE_VISION_SENSE_PYTHON || 'python3';
+  const modulePath = resolve('packages/senses/vision-sense/sciforge_vision_sense/coarse_to_fine.py');
   const code = [
-    'import sys',
-    `sys.path.insert(0, ${JSON.stringify(resolve('packages/senses/vision-sense'))})`,
-    'from sciforge_vision_sense.coarse_to_fine import main',
+    'import importlib.util, sys',
+    `spec = importlib.util.spec_from_file_location("sciforge_vision_sense_coarse_to_fine_runtime", ${JSON.stringify(modulePath)})`,
+    'module = importlib.util.module_from_spec(spec)',
+    'sys.modules[spec.name] = module',
+    'spec.loader.exec_module(module)',
+    'main = module.main',
     'raise SystemExit(main([sys.argv[1]]))',
   ].join('; ');
   const result = await runCommand(python, ['-c', code, JSON.stringify(request)], { timeoutMs: 10000 });
@@ -1421,8 +1890,7 @@ async function requestGenericPlannerActions(
   extraInstruction?: string,
   runHistory?: string,
 ): Promise<{ ok: true; actions: GenericVisionAction[]; done: boolean; reason?: string; rawResponse: unknown } | { ok: false; actions: []; done: false; reason: string; rawResponse?: unknown; retryableContractViolation?: boolean; contractIssue?: PlannerContractIssue }> {
-  const imageBytes = await readFile(screenshot.absPath);
-  const imageBase64 = imageBytes.toString('base64');
+  const plannerImage = await plannerImagePayload(screenshot);
   const appGuidance = await detectedApplicationGuidance(config);
   const response = await postOpenAiChatCompletion(config.planner, [
     {
@@ -1433,24 +1901,34 @@ async function requestGenericPlannerActions(
         `Execution environment: ${plannerEnvironmentDescription(config)}.`,
         `Window target contract: ${plannerWindowTargetDescription(config)}.`,
         `Current captured target: ${plannerCapturedTargetDescription(screenshot)}.`,
+        plannerImage.description,
         appGuidance,
         `Use only keys and modifiers supported by desktopPlatform="${config.desktopPlatform}". Do not use keys from another operating system family.`,
         platformRecoveryGuidance(config),
         'When an app must be opened, prefer open_app with appName. Only open or switch apps when the task explicitly asks to launch/open/switch applications; for current-screen/current-window tasks, operate within the supplied target window.',
+        'For file manager tasks, prefer open_app for the platform file manager (Finder on macOS, File Explorer on Windows) before interacting with files. Do not cycle through applications with repeated app-switch hotkeys to find a file manager.',
         'For browser-hosted target windows, the target application content area excludes browser chrome: tab strip, address bar, bookmarks bar, toolbar buttons, extension buttons, and extension popups. Do not target browser chrome unless the task explicitly asks for browser chrome.',
+        'For browser research tasks, if the screenshot already shows results or an article/content page related to the requested topic, do not restart the search or edit a search field. Continue with visible result links, page content, scrolling, back navigation, or tab/window switching as generic GUI actions.',
+        'Do not describe body text or selected article text as a search input field unless a visible input box boundary, caret, placeholder, or search control is present at that location.',
         'If an unrelated browser extension, permission, save, login, or external-service dialog appears, use Escape or a visible Cancel/Close button once, then return to the target application content. Do not click Retry, Enable, Authorize, Save, Submit, Send, Delete, or Login in unrelated dialogs.',
         'If the supplied screenshot is a transient menu, popover, palette, gallery, or dropdown window, interact only with visible items inside that transient window. If the next needed target is in the underlying document/app window and is not visible in the captured target, use press_key Escape or a visible close/cancel control to dismiss the transient window first.',
+        'If the screenshot shows a document/template/gallery chooser and a template or item is already visibly selected, do not click the selected thumbnail again. Use the visible Create/New/Open/OK button, or use Cancel/Escape only when the task needs to leave the chooser.',
         'For visual targets, output targetDescription text only; never output x/y/fromX/fromY/toX/toY coordinates. Coordinates are produced by the Grounder in the target-window screenshot coordinate system.',
+        'Planner screenshots may be budget-scaled for model latency. Do not infer exact pixel coordinates from them; describe visual targets semantically and let the Grounder use the original window screenshot.',
         'For dense UI, small icons, table rows, menus, dialogs, or ambiguous regions, include targetRegionDescription to name the larger visual region to inspect first; the runtime will crop that region and run a second fine Grounder inside it before execution.',
         'You may output wait with targetRegionDescription when the next step should be local observation only; the runtime will record focusRegion evidence and replan from the updated run history.',
         'Do not put pixel boxes in focusRegion unless it was copied from prior run history; prefer targetRegionDescription text so vision-sense can choose and clip the focus region.',
         'Allowed action types: open_app, click, double_click, drag, type_text, press_key, hotkey, scroll, wait.',
+        'Do not emit unsupported actions such as right_click, context_click, context_menu, menu_select, rename, move_file, copy_file, or app-private commands. For rename/move workflows, use only visible clicks, double_click, drag, type_text, press_key, open_app, scroll, or platform recovery hotkeys.',
+        'Hotkeys are allowed only for platform-level recovery such as app/window switching or launcher activation. Do not use app-specific or browser-specific shortcuts such as new tab, address bar focus, refresh, save, close tab, copy, paste, bold, or menu commands; use visible controls and generic typing/clicking instead.',
         'Return {"done": boolean, "reason": string, "actions": [...]}. Set done=true only when the supplied screenshot shows the requested GUI task is complete; otherwise return exactly one next generic action. Include a short wait after that action only when the GUI needs time to settle.',
         'Use the run history to avoid repeating completed actions. If the task is a low-risk recovery/observation task and at least one requested non-wait action has already executed with verifier evidence, set done=true with actions=[] unless the screenshot clearly shows another required unfinished step.',
         'If run history marks a click or double_click target as no-visible-effect=true and the current screenshot is unchanged, do not repeat the same mouse action on the same target. Choose a different visible generic GUI route or a different generic input modality that the screenshot supports.',
         'For text-entry tasks, clicking a visible text field, text box, or placeholder may have no visible pixel change. After one such click, if the requested text is known from the task and the screenshot still shows the target field, use type_text next instead of repeatedly clicking.',
         'If the current screenshot already contains an appropriate text placeholder for requested literal text, prefer activating that placeholder and type_text. Do not detour into toolbar/ribbon insertion controls just to create another text box unless no usable placeholder is visible.',
         'For slide or document layout tasks, visible title/subtitle/body placeholders are valid text boxes and can satisfy text-box requirements. Prefer filling existing placeholders with structured text before using toolbar/ribbon controls for new objects.',
+        'For low-risk document or slide creation tasks, stop once the screenshot plus run history show an opened editor/canvas and visible typed content that matches the requested artifact. Do not keep polishing layout, font size, placeholder remnants, or visual alignment unless the task explicitly asks for those details.',
+        'If requested title/body text is already visible in a selected placeholder or text box, report done=true instead of retyping the same text or creating another text box.',
         'If run history shows toolbar-or-ribbon actions with no-visible-effect=true, avoid toolbar/ribbon/menu controls in the next action. Work with the visible document/canvas content instead, or report done=true if the visible state already satisfies the task.',
         'The supplied screenshot is the observation state. Do not use wait as the only action to request another observation.',
         'High-risk send/delete/pay/authorize/publish/submit actions must be marked riskLevel="high" and requiresConfirmation=true.',
@@ -1461,7 +1939,7 @@ async function requestGenericPlannerActions(
       role: 'user',
       content: [
         { type: 'text', text: `Task: ${task}\n${runHistory ? `Run history:\n${runHistory}\n` : ''}Return {"done":false,"reason":"...","actions":[one generic next action]} or {"done":true,"reason":"...","actions":[]} when the current screenshot plus run history show the task is complete. Stop before final high-risk actions unless explicitly confirmed by upstream.` },
-        { type: 'image_url', image_url: { url: `data:image/png;base64,${imageBase64}` } },
+        { type: 'image_url', image_url: { url: plannerImage.dataUrl } },
       ],
     },
   ]);
@@ -1496,6 +1974,18 @@ async function requestGenericPlannerActions(
     };
   }
   const actions = parseGenericActions(rawActions).map((action) => normalizePlatformAction(action, config));
+  const unsupportedAction = rawActions.length > 0 && actions.length === 0 && !done;
+  if (unsupportedAction) {
+    return {
+      ok: false,
+      actions: [],
+      done: false,
+      reason: 'VisionPlanner emitted no supported generic action. Use only open_app, click, double_click, drag, type_text, press_key, hotkey, scroll, or wait.',
+      rawResponse: response.body,
+      retryableContractViolation: true,
+      contractIssue: 'unsupported-action',
+    };
+  }
   const platformIssue = actions.map((action) => platformActionIssue(action, config)).find(Boolean);
   if (platformIssue) {
     return {
@@ -1511,6 +2001,34 @@ async function requestGenericPlannerActions(
   return { ok: true, actions: trimLeadingWaitActions(actions, done), done, reason, rawResponse: response.body };
 }
 
+async function plannerImagePayload(screenshot: ScreenshotRef) {
+  const originalBytes = await readFile(screenshot.absPath);
+  const maxEdge = Math.max(screenshot.width ?? 0, screenshot.height ?? 0);
+  if (!isDarwinPlatform(process.platform) || maxEdge <= PLANNER_IMAGE_MAX_EDGE) {
+    return {
+      dataUrl: `data:image/png;base64,${originalBytes.toString('base64')}`,
+      description: `Planner image input uses the original screenshot (${screenshot.width ?? 'unknown'}x${screenshot.height ?? 'unknown'}).`,
+    };
+  }
+
+  const previewPath = join(
+    resolve(screenshot.absPath, '..'),
+    `${sanitizeId(screenshot.id || basename(screenshot.absPath)) || 'screenshot'}-planner-preview.png`,
+  );
+  const result = await runCommand('sips', ['-s', 'format', 'png', '-Z', String(PLANNER_IMAGE_MAX_EDGE), screenshot.absPath, '--out', previewPath], { timeoutMs: 15000 });
+  if (result.exitCode !== 0) {
+    return {
+      dataUrl: `data:image/png;base64,${originalBytes.toString('base64')}`,
+      description: `Planner image input uses the original screenshot because preview scaling failed (${screenshot.width ?? 'unknown'}x${screenshot.height ?? 'unknown'}).`,
+    };
+  }
+  const previewBytes = await readFile(previewPath);
+  return {
+    dataUrl: `data:image/png;base64,${previewBytes.toString('base64')}`,
+    description: `Planner image input was budget-scaled for latency; original screenshot ref remains ${screenshot.path} (${screenshot.width ?? 'unknown'}x${screenshot.height ?? 'unknown'}), Grounder uses original pixels.`,
+  };
+}
+
 function plannerRetryInstruction(issue: PlannerContractIssue | undefined, config: VisionSenseConfig) {
   if (issue === 'platform-incompatible-action') {
     return [
@@ -1521,6 +2039,13 @@ function plannerRetryInstruction(issue: PlannerContractIssue | undefined, config
   }
   if (issue === 'empty-message-content') {
     return 'Your previous response had empty final message content. Return only the JSON object in final message content now; do not put the action plan only in reasoning_content, analysis, prose, markdown, or tool calls.';
+  }
+  if (issue === 'unsupported-action') {
+    return [
+      'Your previous JSON used an unsupported action type. Do not use right_click, context_click, context_menu, menu_select, rename, move_file, or app-private commands.',
+      'Rewrite using exactly one supported generic action: open_app, click, double_click, drag, type_text, press_key, hotkey, scroll, or wait.',
+      'For file rename/move tasks, first select visible files with click/double_click, use visible fields/buttons or generic press_key/type_text when the focused UI supports text entry, and drag only between visible locations.',
+    ].join(' ');
   }
   return 'Your previous JSON violated the planner contract by including screen coordinates. Rewrite the plan without x/y/fromX/fromY/toX/toY. Use targetDescription, fromTargetDescription, and toTargetDescription so the Grounder can produce coordinates.';
 }
@@ -1637,6 +2162,24 @@ function localCoordinateMetadata(grounding: Record<string, unknown> | undefined,
       fromY,
       toX,
       toY,
+      point: {
+        x: fromX,
+        y: fromY,
+        localX: fromX,
+        localY: fromY,
+      },
+      start: {
+        x: fromX,
+        y: fromY,
+        localX: fromX,
+        localY: fromY,
+      },
+      end: {
+        x: toX,
+        y: toY,
+        localX: toX,
+        localY: toY,
+      },
       localFromX: fromX,
       localFromY: fromY,
       localToX: toX,
@@ -1691,6 +2234,7 @@ async function postOpenAiChatCompletion(planner: VisionPlannerConfig, messages: 
         temperature: 0,
         max_tokens: planner.maxTokens,
         response_format: { type: 'json_object' },
+        ...plannerThinkingControl(planner),
       }),
       signal: controller.signal,
     }), planner.timeoutMs, `OpenAI-compatible chat completion timed out after ${planner.timeoutMs}ms`, () => controller.abort());
@@ -1706,6 +2250,17 @@ async function postOpenAiChatCompletion(planner: VisionPlannerConfig, messages: 
   } catch (error) {
     return { ok: false as const, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+function plannerThinkingControl(planner: VisionPlannerConfig) {
+  if (process.env.SCIFORGE_VISION_PLANNER_ENABLE_THINKING === '1') return {};
+  if (!/qwen3/i.test(planner.model || '')) return {};
+  return {
+    enable_thinking: false,
+    extra_body: {
+      enable_thinking: false,
+    },
+  };
 }
 
 async function withHardTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string, onTimeout?: () => void): Promise<T> {

@@ -455,6 +455,8 @@ def _collect_keys(value: Any) -> list[str]:
 def _planner_step_reported_done_without_actions(step: Mapping[str, Any]) -> bool:
     execution = _mapping(step.get("execution"))
     raw = _mapping(execution.get("rawResponse"))
+    if raw.get("done") is True and isinstance(raw.get("actions"), list) and not raw.get("actions"):
+        return True
     choices = [item for item in raw.get("choices", []) if isinstance(item, Mapping)] if isinstance(raw.get("choices"), list) else []
     for choice in choices:
         message = _mapping(choice.get("message"))

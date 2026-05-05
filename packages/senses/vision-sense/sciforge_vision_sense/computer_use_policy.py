@@ -19,6 +19,13 @@ PLANNER_ONLY_EVIDENCE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+GUI_ACTION_INTENT_PATTERN = re.compile(
+    r"执行一次|点击|click|scroll|滚动|press_key|hotkey|type_text|输入|drag|拖拽|打开|open_app|"
+    r"切换窗口|切换.*窗口|移动到|恢复|回到|启动|创建|保存|重命名|移动|定位|文件管理器|"
+    r"文字处理|演示应用|幻灯片|文档|Alt\+Tab|Command\+Tab",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class MatrixExecutionPlan:
@@ -31,7 +38,10 @@ class MatrixExecutionPlan:
 def is_planner_only_evidence_task(text: str) -> bool:
     """Return true when a task can be answered from trace/file refs only."""
 
-    return bool(PLANNER_ONLY_EVIDENCE_PATTERN.search(text or ""))
+    value = text or ""
+    if GUI_ACTION_INTENT_PATTERN.search(value):
+        return False
+    return bool(PLANNER_ONLY_EVIDENCE_PATTERN.search(value))
 
 
 def build_matrix_execution_plan(
