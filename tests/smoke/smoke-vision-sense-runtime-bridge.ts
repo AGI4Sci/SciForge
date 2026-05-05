@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { CaptureProviderError, captureDisplays } from '../../src/runtime/computer-use/capture.js';
+import { normalizePlatformAction, platformActionIssue } from '../../src/runtime/computer-use/actions.js';
 import { executeGenericDesktopAction } from '../../src/runtime/computer-use/executor.js';
 import type { ComputerUseConfig, WindowTargetResolution } from '../../src/runtime/computer-use/types.js';
 import { inputChannelContract } from '../../src/runtime/computer-use/window-target.js';
@@ -27,6 +28,11 @@ const previousMaxSteps = process.env.SCIFORGE_VISION_MAX_STEPS;
 const previousDesktopPlatform = process.env.SCIFORGE_VISION_DESKTOP_PLATFORM;
 
 try {
+  const darwinHotkeyConfig = { desktopPlatform: 'darwin' } as ComputerUseConfig;
+  const canonicalSwitch = normalizePlatformAction({ type: 'hotkey', keys: ['Alt', 'Tab'] }, darwinHotkeyConfig);
+  assert.deepEqual(canonicalSwitch, { type: 'hotkey', keys: ['command', 'tab'] });
+  assert.equal(platformActionIssue(canonicalSwitch, darwinHotkeyConfig), '');
+
   const blockedWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-bridge-blocked-'));
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE = '0';
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN = '0';
@@ -94,7 +100,7 @@ try {
     process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([
       { type: 'wait', ms: 1 },
       { type: 'hotkey', keys: ['command', 'n'] },
-      { actionType: 'hotkey', hotkey: 'alt+tab' },
+      { actionType: 'hotkey', hotkey: 'command+tab' },
       { actionType: 'scroll', scrollAmount: 300 },
       { type: 'type_text', text: 'GUI Agent generic action smoke' },
     ]);
@@ -163,7 +169,8 @@ try {
     });
     request.on('end', () => {
       const body = JSON.parse(raw) as Record<string, unknown>;
-      assert.equal(body.text_prompt, 'the generic search box');
+      assert.match(String(body.text_prompt), /click coordinates/i);
+      assert.match(String(body.text_prompt), /the generic search box/);
       assert.match(String(body.image_path), /step-001-before-display-1\.png$/);
       response.setHeader('Content-Type', 'application/json');
       response.end(JSON.stringify({ coordinates: [42, 24], image_size: { width: 100, height: 80 }, text: 'click' }));
@@ -194,7 +201,9 @@ try {
     const groundedStep = (groundedTrace.steps as Array<Record<string, unknown>>).find((step) => step.id === 'step-001-execute-click');
     assert.ok(groundedStep);
     assert.equal(((groundedStep.plannedAction as Record<string, unknown>)?.x), 42);
-    assert.equal(((groundedStep.grounding as Record<string, unknown>)?.provider), 'kv-ground');
+    assert.equal(((groundedStep.grounding as Record<string, unknown>)?.provider), 'coarse-to-fine');
+    assert.equal((((groundedStep.grounding as Record<string, unknown>)?.fineGrounding as Record<string, unknown>)?.stage), 'fine');
+    assert.equal((((groundedStep.verifier as Record<string, unknown>)?.regionSemantic as Record<string, unknown>)?.schemaVersion), 'sciforge.vision-sense.region-semantic-verifier.v1');
   } finally {
     await new Promise<void>((resolve) => grounderServer.close(() => resolve()));
   }
@@ -250,12 +259,14 @@ try {
     const visualStep = (visualTrace.steps as Array<Record<string, unknown>>).find((step) => step.id === 'step-001-execute-click');
     assert.ok(visualStep);
     assert.equal(((visualStep.plannedAction as Record<string, unknown>)?.x), 66);
-    assert.equal(((visualStep.grounding as Record<string, unknown>)?.provider), 'openai-compatible-vision-grounder');
+    assert.equal(((visualStep.grounding as Record<string, unknown>)?.provider), 'coarse-to-fine');
+    assert.equal((((visualStep.grounding as Record<string, unknown>)?.fineGrounding as Record<string, unknown>)?.stage), 'fine');
   } finally {
     await new Promise<void>((resolve) => visualGrounderServer.close(() => resolve()));
   }
 
   let plannerCalls = 0;
+  const plannerRawRequests: string[] = [];
   const plannerServer = createServer((request, response) => {
     if (request.method !== 'POST' || request.url !== '/chat/completions') {
       response.statusCode = 404;
@@ -268,6 +279,7 @@ try {
     });
     request.on('end', () => {
       plannerCalls += 1;
+      plannerRawRequests.push(raw);
       const body = JSON.parse(raw) as Record<string, unknown>;
       assert.equal(body.model, 'vision-planner-smoke-model');
       response.setHeader('Content-Type', 'application/json');
@@ -300,7 +312,8 @@ try {
     });
     request.on('end', () => {
       const body = JSON.parse(raw) as Record<string, unknown>;
-      assert.equal(body.text_prompt, 'the generic planner target');
+      assert.match(String(body.text_prompt), /click coordinates/i);
+      assert.match(String(body.text_prompt), /the generic planner target/);
       response.setHeader('Content-Type', 'application/json');
       response.end(JSON.stringify({ coordinates: [12, 34], image_size: { width: 100, height: 80 } }));
     });
@@ -336,6 +349,9 @@ try {
     const executeStep = (plannedTrace.steps as Array<Record<string, unknown>>).find((step) => step.id === 'step-001-execute-click');
     assert.ok(executeStep);
     assert.equal(((executeStep.plannedAction as Record<string, unknown>)?.x), 12);
+    assert.match(String((executeStep.verifier as Record<string, unknown>)?.planningFeedback), /pixel=.*window=.*grounding=/);
+    assert.match(plannerRawRequests[1] ?? '', /verifierFeedback=.*pixel=/);
+    assert.match(plannerRawRequests[1] ?? '', /no-visible-effect=true/);
     assert.deepEqual((plannedTrace.genericComputerUse as Record<string, unknown>).appSpecificShortcuts, []);
   } finally {
     await new Promise<void>((resolve) => plannerServer.close(() => resolve()));
@@ -519,7 +535,8 @@ try {
     });
     request.on('end', () => {
       const body = JSON.parse(raw) as Record<string, unknown>;
-      assert.equal(body.text_prompt, 'the retry target');
+      assert.match(String(body.text_prompt), /click coordinates/i);
+      assert.match(String(body.text_prompt), /the retry target/);
       response.setHeader('Content-Type', 'application/json');
       response.end(JSON.stringify({ coordinates: [22, 44], image_size: { width: 100, height: 80 } }));
     });
@@ -675,7 +692,8 @@ try {
     });
     request.on('end', () => {
       const body = JSON.parse(raw) as Record<string, unknown>;
-      assert.equal(body.text_prompt, 'generic window-local target');
+      assert.match(String(body.text_prompt), /click coordinates/i);
+      assert.match(String(body.text_prompt), /generic window-local target/);
       assert.match(String(body.image_path), /step-001-before-window-/);
       response.setHeader('Content-Type', 'application/json');
       response.end(JSON.stringify({ coordinates: [80, 40], image_size: { width: 160, height: 80 } }));
@@ -719,15 +737,18 @@ try {
     assert.deepEqual((traceConfig.windowTarget as Record<string, unknown>)?.coordinateSpace, 'window-local');
     assert.deepEqual((traceConfig.windowTarget as Record<string, unknown>)?.inputIsolation, 'require-focused-target');
     assert.equal(traceConfig.inputAdapter, 'remote-desktop');
-    const windowRefs = (windowTrace.imageMemory as Record<string, unknown>).refs as Array<Record<string, unknown>>;
+    const allWindowRefs = (windowTrace.imageMemory as Record<string, unknown>).refs as Array<Record<string, unknown>>;
+    const windowRefs = allWindowRefs.filter((ref) => ref.captureScope === 'window');
+    const focusRefs = allWindowRefs.filter((ref) => ref.captureScope === 'focus-region');
     assert.ok(windowRefs.length >= 2);
+    assert.ok(focusRefs.length >= 2);
     assert.ok(windowRefs.every((ref) => /-window-/.test(String(ref.path))));
-    assert.ok(windowRefs.every((ref) => ref.captureScope === 'window'));
+    assert.ok(focusRefs.every((ref) => /-focus-/.test(String(ref.path))));
     assert.ok(windowRefs.every((ref) => ref.captureProvider === 'dry-run-window-png'));
     assert.ok(windowRefs.every((ref) => typeof ref.captureTimestamp === 'string' && String(ref.captureTimestamp).length > 0));
     assert.ok(windowRefs.every((ref) => Array.isArray(ref.captureDiagnostics) && (ref.captureDiagnostics as unknown[]).length >= 1));
     assert.ok(windowRefs.every((ref) => (ref.captureDiagnostics as Array<Record<string, unknown>>).some((item) => item.code === 'capture.window.dry-run')));
-    assert.ok(windowRefs.every((ref) => ((ref.windowTarget as Record<string, unknown>)?.captureKind) === 'window'));
+    assert.ok(allWindowRefs.every((ref) => ((ref.windowTarget as Record<string, unknown>)?.captureKind) === 'window'));
     const generic = windowTrace.genericComputerUse as Record<string, unknown>;
     assert.equal(((generic.coordinateContract as Record<string, unknown>)?.grounderOutput), 'target-window screenshot coordinates');
     assert.equal(((generic.coordinateContract as Record<string, unknown>)?.executorInput), 'window-local');
@@ -855,21 +876,40 @@ try {
     inputIsolation: 'require-focused-target',
   });
   assert.equal(independentInputContract.currentIndependentAdapter, 'remote-desktop');
-  assert.equal(independentInputContract.pointerKeyboardOwnership, 'sciforge-independent-input-adapter');
-  assert.equal(independentInputContract.userDeviceImpact, 'none');
-  assert.equal(independentInputContract.independentAdapterRequiredForNoUserImpact, false);
-  assert.equal(independentInputContract.failClosed, false);
+  assert.equal(independentInputContract.independentAdapterStatus, 'configured-unimplemented');
+  assert.equal(independentInputContract.pointerKeyboardOwnership, 'unavailable');
+  assert.equal(independentInputContract.userDeviceImpact, 'fail-closed-unimplemented-independent-adapter');
+  assert.equal(independentInputContract.independentAdapterRequiredForNoUserImpact, true);
+  assert.equal(independentInputContract.failClosed, true);
+  const independentExecutorResult = await executeGenericDesktopAction({ type: 'click', x: 5, y: 5 }, {
+    ...providerFailureConfig,
+    dryRun: false,
+    desktopPlatform: 'darwin',
+    inputAdapter: 'remote-desktop',
+  }, {
+    ...providerFailureResolution,
+    captureKind: 'window',
+    inputIsolation: 'require-focused-target',
+    appName: 'Finder',
+  });
+  assert.equal(independentExecutorResult.exitCode, 125);
+  assert.match(independentExecutorResult.stderr, /no executable adapter provider|Failing closed/i);
+  assert.equal((independentExecutorResult.schedulerLease as Record<string, unknown> | undefined), undefined);
   const sharedInputContract = inputChannelContract({
     ...providerFailureConfig,
     dryRun: false,
     desktopPlatform: 'darwin',
     allowSharedSystemInput: true,
+    showVisualCursor: true,
   }, {
     ...providerFailureResolution,
     captureKind: 'window',
     inputIsolation: 'require-focused-target',
   });
   assert.equal(sharedInputContract.pointerKeyboardOwnership, 'shared-system-pointer-keyboard');
+  assert.equal(sharedInputContract.visualPointer, 'sciforge-distinct-overlay-cursor');
+  assert.equal(sharedInputContract.executorLockScope, 'global-shared-system-input');
+  assert.equal(sharedInputContract.executorLockId, 'shared-system-input');
   assert.equal(sharedInputContract.sharedSystemInputExplicitlyAllowed, true);
   assert.equal(sharedInputContract.failClosed, false);
 

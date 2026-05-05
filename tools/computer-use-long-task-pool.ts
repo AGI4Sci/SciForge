@@ -1,7 +1,8 @@
+import { spawn } from 'node:child_process';
 import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
-const allowedActionTypes = new Set(['click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait']);
+const allowedActionTypes = new Set(['open_app', 'click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait']);
 const requiredPipeline = ['WindowTarget', 'VisionPlanner', 'Grounder', 'GuiExecutor', 'Verifier', 'vision-trace'];
 const requiredTraceMetadata = [
   'windowTarget',
@@ -53,6 +54,7 @@ export interface ComputerUseLongTraceValidation {
     stepCount: number;
     actionCount: number;
     nonWaitActionCount: number;
+    effectiveNonWaitActionCount: number;
     screenshotCount: number;
     blockedCount: number;
     failedCount: number;
@@ -145,6 +147,9 @@ export interface ComputerUseLongRunValidation {
   metrics: {
     passedRounds: number;
     traceCount: number;
+    realTraceCount: number;
+    actionCount: number;
+    nonWaitActionCount: number;
     screenshotRefCount: number;
     actionLedgerCount: number;
     failureDiagnosticsCount: number;
@@ -373,8 +378,19 @@ export async function validateComputerUseLongTrace(options: {
   const scenario = pool.scenarios.find((item) => item.id === options.scenarioId);
   if (!scenario) throw new Error(`Unknown CU-LONG scenario: ${options.scenarioId}`);
   const tracePath = resolve(options.tracePath);
-  const workspacePath = resolve(options.workspacePath || dirname(tracePath));
+  const workspacePath = resolve(options.workspacePath || inferWorkspacePathFromTracePath(tracePath) || dirname(tracePath));
   const rawText = await readFile(tracePath, 'utf8');
+  const visionSenseContract = await validateTraceContractWithVisionSense({ tracePath, workspacePath, rawText });
+  if (visionSenseContract) {
+    return {
+      ok: visionSenseContract.issues.length === 0,
+      scenarioId: scenario.id,
+      tracePath,
+      checkedScreenshotRefs: visionSenseContract.checkedScreenshotRefs,
+      issues: visionSenseContract.issues,
+      metrics: visionSenseContract.metrics,
+    };
+  }
   const issues: string[] = [];
   if (/data:image|;base64,/i.test(rawText)) issues.push('trace must not include inline image dataUrl/base64 payloads');
   const trace = JSON.parse(rawText) as unknown;
@@ -412,7 +428,9 @@ export async function validateComputerUseLongTrace(options: {
     const lockId = firstString(traceScheduler.lockId, traceScheduler.schedulerLockId);
     if (!lockId) issues.push('trace.scheduler missing scheduler lock id');
     const lockScope = firstString(traceScheduler.lockScope, traceScheduler.scope);
-    if (!lockScope || !/window|display/i.test(lockScope)) issues.push('trace.scheduler.lockScope must bind actions to a target window or display fallback');
+    if (!lockScope || !/window|display|shared-system-input/i.test(lockScope)) {
+      issues.push('trace.scheduler.lockScope must bind actions to a target window, display fallback, or shared system input lock');
+    }
     const focusPolicy = firstString(traceScheduler.focusPolicy, traceScheduler.focus);
     if (!focusPolicy || !/focus|fail-closed|best-effort/i.test(focusPolicy)) issues.push('trace.scheduler.focusPolicy must describe focus/isolation behavior');
     const interferenceRisk = firstString(traceScheduler.interferenceRisk, traceScheduler.risk);
@@ -441,6 +459,13 @@ export async function validateComputerUseLongTrace(options: {
   const userDeviceImpact = firstString(inputChannelContract.userDeviceImpact, inputChannelContract.pointerMode, inputChannelContract.keyboardMode);
   if (!userDeviceImpact || !/none|fail-closed|focused-target|frontmost|system|virtual/i.test(userDeviceImpact)) {
     issues.push('genericComputerUse.inputChannelContract must declare user-device impact and isolation behavior');
+  }
+  const pointerOwnership = firstString(inputChannelContract.pointerKeyboardOwnership, inputChannelContract.pointerMode);
+  if (realGuiTrace && /shared-system-pointer-keyboard|system-cursor-events/i.test(pointerOwnership ?? '')) {
+    const visualPointer = firstString(inputChannelContract.visualPointer, traceConfig.showVisualCursor);
+    if (!visualPointer || !/sciforge|distinct|overlay|true/i.test(visualPointer)) {
+      issues.push('real shared-system Computer Use traces must declare a distinct SciForge visual pointer overlay');
+    }
   }
   if (inputChannelContract.highRiskConfirmationRequired !== true) {
     issues.push('genericComputerUse.inputChannelContract.highRiskConfirmationRequired must be true');
@@ -490,6 +515,9 @@ export async function validateComputerUseLongTrace(options: {
   if (!steps.length) issues.push('trace.steps must include step records');
   let actionCount = 0;
   let nonWaitActionCount = 0;
+  let effectiveNonWaitActionCount = 0;
+  let consecutiveNoEffectNonWaitActions = 0;
+  let maxConsecutiveNoEffectNonWaitActions = 0;
   let blockedCount = 0;
   let failedCount = 0;
   let plannerOnlyDone = false;
@@ -502,7 +530,8 @@ export async function validateComputerUseLongTrace(options: {
       const action = isRecord(step.plannedAction) ? step.plannedAction : undefined;
       const type = typeof action?.type === 'string' ? action.type : '';
       if (!allowedActionTypes.has(type)) issues.push(`steps[${index}].plannedAction.type is not a generic action`);
-      if (type && type !== 'wait') nonWaitActionCount += 1;
+      const nonWaitAction = Boolean(type && type !== 'wait');
+      if (nonWaitAction) nonWaitActionCount += 1;
       if (hasForbiddenPrivateFields(action)) issues.push(`steps[${index}].plannedAction contains DOM/accessibility/private-app fields`);
       if (!Array.isArray(step.beforeScreenshotRefs) || !step.beforeScreenshotRefs.length) issues.push(`steps[${index}] missing beforeScreenshotRefs`);
       if (!Array.isArray(step.afterScreenshotRefs) || !step.afterScreenshotRefs.length) issues.push(`steps[${index}] missing afterScreenshotRefs`);
@@ -513,6 +542,16 @@ export async function validateComputerUseLongTrace(options: {
       if (isRecord(step.execution) && !hasInputChannelMetadata(step.execution, action)) issues.push(`steps[${index}] execution missing input-channel metadata`);
       if (!isRecord(step.verifier)) issues.push(`steps[${index}] missing verifier record`);
       if (isRecord(step.verifier) && !hasWindowVerifierMetadata(step.verifier)) issues.push(`steps[${index}] verifier missing window consistency metadata`);
+      if (nonWaitAction && status === 'done') {
+        const noVisibleEffect = realGuiTrace && isRecord(step.verifier) && verifierReportsNoVisibleEffect(step.verifier);
+        if (noVisibleEffect) {
+          consecutiveNoEffectNonWaitActions += 1;
+          maxConsecutiveNoEffectNonWaitActions = Math.max(maxConsecutiveNoEffectNonWaitActions, consecutiveNoEffectNonWaitActions);
+        } else {
+          consecutiveNoEffectNonWaitActions = 0;
+          effectiveNonWaitActionCount += 1;
+        }
+      }
       if ((type === 'click' || type === 'double_click' || type === 'drag') && status === 'done' && !isRecord(step.grounding)) {
         issues.push(`steps[${index}] ${type} action missing grounding record`);
       }
@@ -550,6 +589,12 @@ export async function validateComputerUseLongTrace(options: {
   const allowsPlannerOnlyTrace = plannerOnlyDone && isPlannerOnlyEvidenceTask(requestText);
   if (actionCount === 0 && !allowsPlannerOnlyTrace) issues.push('trace must include at least one gui-execution step for CU-LONG validation');
   if (nonWaitActionCount === 0 && !allowsPlannerOnlyTrace) issues.push('trace must include at least one non-wait generic GUI action');
+  if (realGuiTrace && nonWaitActionCount > 0 && effectiveNonWaitActionCount === 0 && !allowsPlannerOnlyTrace) {
+    issues.push('real GUI trace must include at least one visibly effective non-wait action');
+  }
+  if (realGuiTrace && maxConsecutiveNoEffectNonWaitActions >= 3 && !allowsPlannerOnlyTrace) {
+    issues.push(`real GUI trace has ${maxConsecutiveNoEffectNonWaitActions} consecutive non-wait actions without visible effect`);
+  }
   const serializedKeys = collectKeys(trace).map((key) => key.toLowerCase());
   for (const forbidden of ['domselector', 'selector', 'accessibilitylabel', 'aria', 'xpath', 'cssselector', 'appapi', 'privateshortcut']) {
     if (serializedKeys.includes(forbidden.toLowerCase())) issues.push(`trace contains forbidden private field key: ${forbidden}`);
@@ -565,6 +610,7 @@ export async function validateComputerUseLongTrace(options: {
       stepCount: steps.length,
       actionCount,
       nonWaitActionCount,
+      effectiveNonWaitActionCount,
       screenshotCount: screenshotRefs.length,
       blockedCount,
       failedCount,
@@ -614,6 +660,9 @@ export async function runComputerUseLongRound(options: {
   runId?: string;
   actionsJson?: string;
   promptSuffix?: string;
+  targetAppName?: string;
+  targetTitle?: string;
+  targetMode?: 'active-window' | 'app-window' | 'window-id' | 'display';
   now?: Date;
 }): Promise<ComputerUseLongRoundRunResult> {
   const manifestPath = resolve(options.manifestPath);
@@ -629,7 +678,7 @@ export async function runComputerUseLongRound(options: {
   await mkdir(evidenceDir, { recursive: true });
   const now = options.now ?? new Date();
   const runId = sanitizeRunId(options.runId || `${manifest.run.id}-round-${String(options.round).padStart(2, '0')}-${now.toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`);
-  const prompt = renderRoundRuntimePrompt(manifest, round, options.promptSuffix);
+  const prompt = await renderRoundRuntimePrompt(manifest, round, dirname(manifestPath), options.promptSuffix);
   const runtimePromptPath = join(evidenceDir, 'runtime-prompt.md');
   await writeFile(runtimePromptPath, `${prompt}\n`);
 
@@ -638,7 +687,11 @@ export async function runComputerUseLongRound(options: {
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
   const { runWorkspaceRuntimeGateway } = await import('../src/runtime/workspace-runtime-gateway.js');
-  const windowTarget = defaultWindowTargetForRound(manifest, options.round);
+  const windowTarget = await defaultWindowTargetForRound(manifest, options.round, options.dryRun ?? false, {
+    appName: options.targetAppName,
+    title: options.targetTitle,
+    mode: options.targetMode,
+  });
   const payload = await runWorkspaceRuntimeGateway({
     skillDomain: 'knowledge',
     prompt,
@@ -653,6 +706,18 @@ export async function runComputerUseLongRound(options: {
         runId,
         actions: options.actionsJson ? JSON.parse(options.actionsJson) : [],
         windowTarget,
+        completionPolicy: {
+          mode: options.dryRun ? 'one-successful-non-wait-action' : 'planner-confirmed',
+          reason: options.dryRun
+            ? 'Dry-run T084 CU-LONG rounds are evidence-generation probes; one verified non-wait GUI action produces the required round trace.'
+            : 'Real T084 CU-LONG rounds must continue until the planner confirms the visible task state is complete or maxSteps is exhausted.',
+          fallbackActions: [{
+            type: 'scroll',
+            direction: 'down',
+            amount: 4,
+            targetDescription: 'Main content area of the active SciForge target window',
+          }],
+        },
       },
       computerUseLong: {
         scenarioId: manifest.scenarioId,
@@ -703,6 +768,17 @@ export async function runComputerUseLongRound(options: {
   await writeFile(actionLedgerPath, `${JSON.stringify(renderActionLedger(payload, validation, manifestRel(dirname(manifestPath), runtimePromptPath)), null, 2)}\n`);
   await writeFile(failureDiagnosticsPath, `${JSON.stringify(renderFailureDiagnostics(payload, validation, tracePath), null, 2)}\n`);
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  await writeScenarioSummaryForManifest(manifestPath, manifest, [{
+    manifestPath,
+    scenarioId: manifest.scenarioId,
+    round: options.round,
+    status: round.status,
+    tracePath,
+    validation,
+    actionLedgerPath,
+    failureDiagnosticsPath,
+    payloadMessage: payload.message,
+  }]);
 
   return {
     manifestPath,
@@ -715,6 +791,18 @@ export async function runComputerUseLongRound(options: {
     failureDiagnosticsPath,
     payloadMessage: payload.message,
   };
+}
+
+async function writeScenarioSummaryForManifest(
+  manifestPath: string,
+  manifest: PreparedComputerUseLongRun,
+  roundResults: ComputerUseLongRoundRunResult[],
+) {
+  const pool = await loadComputerUseLongTaskPool();
+  const scenario = pool.scenarios.find((item) => item.id === manifest.scenarioId);
+  if (!scenario) return;
+  const summaryPath = join(dirname(manifestPath), 'scenario-summary.json');
+  await writeFile(summaryPath, `${JSON.stringify(renderScenarioSummary(manifest, scenario, roundResults), null, 2)}\n`);
 }
 
 function isExpectedFailClosedRound(
@@ -736,6 +824,9 @@ export async function runComputerUseLongScenario(options: {
   maxSteps?: number;
   actionsJson?: string;
   promptSuffix?: string;
+  targetAppName?: string;
+  targetTitle?: string;
+  targetMode?: 'active-window' | 'app-window' | 'window-id' | 'display';
   now?: Date;
 }): Promise<ComputerUseLongScenarioRunResult> {
   const manifestPath = resolve(options.manifestPath);
@@ -763,6 +854,9 @@ export async function runComputerUseLongScenario(options: {
       runId: `${manifest.run.id}-round-${String(round.round).padStart(2, '0')}`,
       actionsJson: options.actionsJson,
       promptSuffix: options.promptSuffix,
+      targetAppName: options.targetAppName,
+      targetTitle: options.targetTitle,
+      targetMode: options.targetMode,
       now: options.now,
     });
     roundResults.push(result);
@@ -868,9 +962,13 @@ export async function validateComputerUseLongRun(options: {
   const checkedRounds: number[] = [];
   let passedRounds = 0;
   let traceCount = 0;
+  let realTraceCount = 0;
+  let totalActionCount = 0;
+  let totalNonWaitActionCount = 0;
   let screenshotRefCount = 0;
   let actionLedgerCount = 0;
   let failureDiagnosticsCount = 0;
+  const traceWindowTargets: Array<Record<string, unknown>> = [];
   for (const round of manifest.rounds) {
     if (round.status !== 'passed') continue;
     checkedRounds.push(round.round);
@@ -887,6 +985,14 @@ export async function validateComputerUseLongRun(options: {
       if (!traceValidation.ok) {
         for (const issue of traceValidation.issues) issues.push(`round ${round.round} trace: ${issue}`);
       }
+      const trace = await readOptionalJson(tracePath);
+      if (isRecord(trace)) {
+        if (isRealGuiTrace(trace)) realTraceCount += 1;
+        const target = traceWindowTargetFromTrace(trace);
+        if (target) traceWindowTargets.push(target);
+      }
+      totalActionCount += traceValidation.metrics.actionCount;
+      totalNonWaitActionCount += traceValidation.metrics.nonWaitActionCount;
       traceCount += 1;
     }
     if (!round.screenshotRefs.length) issues.push(`round ${round.round} missing screenshotRefs`);
@@ -929,6 +1035,19 @@ export async function validateComputerUseLongRun(options: {
   if (scenario && options.requirePassed !== false && passedRounds < scenario.minRounds) {
     issues.push(`passed rounds ${passedRounds} is below scenario minRounds ${scenario.minRounds}`);
   }
+  if (scenario && options.requirePassed !== false && realTraceCount > 0) {
+    const minActions = minimumAcceptanceCount(scenario.acceptance, /通用动作|generic actions?/i);
+    if (minActions !== undefined && totalActionCount < minActions) {
+      issues.push(`real run action count ${totalActionCount} is below acceptance minimum ${minActions}`);
+    }
+    const minNonWaitActions = minimumAcceptanceCount(scenario.acceptance, /非\s*wait|non[-\s]?wait/i);
+    if (minNonWaitActions !== undefined && totalNonWaitActionCount < minNonWaitActions) {
+      issues.push(`real run non-wait action count ${totalNonWaitActionCount} is below acceptance minimum ${minNonWaitActions}`);
+    }
+    if (scenarioExpectsBrowserTarget(scenario) && !traceWindowTargets.some(isBrowserWindowTarget)) {
+      issues.push('real browser scenario did not target a browser window in any trace');
+    }
+  }
 
   return {
     ok: issues.length === 0,
@@ -940,6 +1059,9 @@ export async function validateComputerUseLongRun(options: {
     metrics: {
       passedRounds,
       traceCount,
+      realTraceCount,
+      actionCount: totalActionCount,
+      nonWaitActionCount: totalNonWaitActionCount,
       screenshotRefCount,
       actionLedgerCount,
       failureDiagnosticsCount,
@@ -959,6 +1081,9 @@ export async function runComputerUseLongMatrix(options: {
   maxSteps?: number;
   maxConcurrency?: number;
   actionsJson?: string;
+  targetAppName?: string;
+  targetTitle?: string;
+  targetMode?: 'active-window' | 'app-window' | 'window-id' | 'display';
   now?: Date;
 }): Promise<ComputerUseLongMatrixRunResult> {
   const pool = await loadComputerUseLongTaskPool();
@@ -972,7 +1097,7 @@ export async function runComputerUseLongMatrix(options: {
   const matrixId = `matrix-${now.toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;
   const matrixDir = join(outRoot, matrixId);
   await mkdir(matrixDir, { recursive: true });
-  const executionPlan = matrixExecutionPlan(Boolean(options.dryRun), scenarioIds.length, options.maxConcurrency);
+  const executionPlan = await matrixExecutionPlanFromVisionSense(Boolean(options.dryRun), scenarioIds.length, options.maxConcurrency);
   const preflight = options.skipPreflight ? undefined : await preflightComputerUseLong({
     scenarioIds,
     workspacePath: options.workspacePath,
@@ -1014,6 +1139,9 @@ export async function runComputerUseLongMatrix(options: {
       dryRun: options.dryRun,
       maxSteps: options.maxSteps,
       actionsJson: options.actionsJson,
+      targetAppName: options.targetAppName,
+      targetTitle: options.targetTitle,
+      targetMode: options.targetMode,
       now,
     });
     const validation = await validateComputerUseLongRun({
@@ -1293,16 +1421,23 @@ export async function preflightComputerUseLong(options: {
     ]),
   ) || '');
   const independentInputReady = Boolean(independentInputAdapter && /virtual-hid|remote-desktop|browser-sandbox|accessibility-per-window/i.test(independentInputAdapter));
+  const independentInputExecutable = false;
   checks.push(dryRun ? {
     id: 'input-isolation',
     status: 'pass',
     category: 'scheduler',
     message: 'Dry-run uses a virtual input channel and cannot move the user pointer or type on the user keyboard.',
-  } : independentInputReady ? {
+  } : independentInputReady && independentInputExecutable ? {
     id: 'input-isolation',
     status: 'pass',
     category: 'scheduler',
     message: `Independent input adapter is configured: ${independentInputAdapter}.`,
+  } : independentInputReady ? {
+    id: 'input-isolation',
+    status: 'fail',
+    category: 'scheduler',
+    message: `Independent input adapter is configured (${independentInputAdapter}), but this runtime has no executable provider registered for it.`,
+    repairAction: 'Register a real input adapter provider before running full real CU-LONG matrices; do not mark adapter names as no-impact unless the executor routes through that adapter.',
   } : allowSharedSystemInput ? {
     id: 'input-isolation',
     status: 'warn',
@@ -1349,18 +1484,23 @@ export async function preflightComputerUseLong(options: {
     process.env.SCIFORGE_VISION_PLANNER_MODEL,
     ...configCandidates.flatMap((config) => [
       getConfigString(config, ['visionSense', 'plannerModel']),
-      getConfigString(config, ['modelName']),
-      getConfigString(config, ['llm', 'model']),
-      getConfigString(config, ['llm', 'modelName']),
-      getConfigString(config, ['llmEndpoint', 'modelName']),
+      getConfigString(config, ['visionSense', 'visionPlannerModel']),
+      getConfigString(config, ['visionSense', 'vlmModel']),
+      getConfigString(config, ['visionSense', 'visionModel']),
+      getConfigString(config, ['plannerModel']),
+      getConfigString(config, ['visionPlannerModel']),
+      getConfigString(config, ['vlmModel']),
+      getConfigString(config, ['visionModel']),
     ]),
   );
   const plannerReady = Boolean(plannerBaseUrl && plannerApiKey && plannerModel);
+  const plannerModelIssue = visionModelConfigIssue(plannerModel);
   checks.push(plannerReady ? {
     id: 'vision-planner',
-    status: hasStaticActions ? 'warn' : 'pass',
+    status: plannerModelIssue ? 'fail' : hasStaticActions ? 'warn' : 'pass',
     category: 'planner',
-    message: hasStaticActions ? 'VisionPlanner config exists, but static actions will bypass it.' : 'OpenAI-compatible VisionPlanner config is present.',
+    message: plannerModelIssue ? `VisionPlanner model is not vision-capable: ${plannerModelIssue}` : hasStaticActions ? 'VisionPlanner config exists, but static actions will bypass it.' : 'OpenAI-compatible VisionPlanner config is present.',
+    repairAction: plannerModelIssue ? 'Set visionSense.plannerModel or SCIFORGE_VISION_PLANNER_MODEL to a VLM such as qwen3.6-plus.' : undefined,
   } : {
     id: 'vision-planner',
     status: hasStaticActions ? 'warn' : 'fail',
@@ -1377,7 +1517,12 @@ export async function preflightComputerUseLong(options: {
   );
   const visualGrounderModel = firstString(
     process.env.SCIFORGE_VISION_GROUNDER_LLM_MODEL,
-    ...configCandidates.map((config) => getConfigString(config, ['visionSense', 'visualGrounderModel'])),
+    ...configCandidates.flatMap((config) => [
+      getConfigString(config, ['visionSense', 'visualGrounderModel']),
+      getConfigString(config, ['visionSense', 'grounderVisionModel']),
+      getConfigString(config, ['visualGrounderModel']),
+      getConfigString(config, ['grounderVisionModel']),
+    ]),
     plannerModel,
   );
   const visualGrounderApiKey = firstString(
@@ -1386,11 +1531,13 @@ export async function preflightComputerUseLong(options: {
     plannerApiKey,
   );
   const grounderReady = Boolean(kvGrounderUrl || (visualGrounderBaseUrl && visualGrounderApiKey && visualGrounderModel));
+  const visualGrounderModelIssue = kvGrounderUrl ? '' : visionModelConfigIssue(visualGrounderModel);
   checks.push(grounderReady ? {
     id: 'grounder',
-    status: hasStaticActions ? 'warn' : 'pass',
+    status: visualGrounderModelIssue ? 'fail' : hasStaticActions ? 'warn' : 'pass',
     category: 'grounder',
-    message: kvGrounderUrl ? 'KV-Ground-compatible endpoint is configured.' : 'OpenAI-compatible visual Grounder fallback is configured.',
+    message: visualGrounderModelIssue ? `Visual Grounder fallback model is not vision-capable: ${visualGrounderModelIssue}` : kvGrounderUrl ? 'KV-Ground-compatible endpoint is configured.' : 'OpenAI-compatible visual Grounder fallback is configured.',
+    repairAction: visualGrounderModelIssue ? 'Prefer SCIFORGE_VISION_KV_GROUND_URL for your self-hosted KV-Ground, or set SCIFORGE_VISION_GROUNDER_LLM_MODEL to a VLM such as qwen3.6-plus.' : undefined,
   } : {
     id: 'grounder',
     status: hasStaticActions ? 'warn' : 'fail',
@@ -1656,6 +1803,19 @@ function matrixExecutionPlan(dryRun: boolean, scenarioCount: number, requestedMa
     realGuiSerialized: true,
     reason: 'Dry-run scenarios produce file-ref evidence without touching real GUI input, so planner/grounder/verifier analysis can run concurrently.',
   };
+}
+
+async function matrixExecutionPlanFromVisionSense(dryRun: boolean, scenarioCount: number, requestedMaxConcurrency: number | undefined): Promise<NonNullable<ComputerUseLongMatrixRunResult['executionPlan']>> {
+  const result = await runVisionSensePythonJson('sciforge_vision_sense.computer_use_policy', {
+    mode: 'matrix-execution-plan',
+    dryRun,
+    scenarioCount,
+    requestedMaxConcurrency,
+  });
+  if (isRecord(result) && typeof result.mode === 'string' && typeof result.maxConcurrency === 'number') {
+    return result as NonNullable<ComputerUseLongMatrixRunResult['executionPlan']>;
+  }
+  return matrixExecutionPlan(dryRun, scenarioCount, requestedMaxConcurrency);
 }
 
 async function mapWithConcurrency<T, R>(items: T[], maxConcurrency: number, run: (item: T, index: number) => Promise<R>) {
@@ -1928,12 +2088,22 @@ function getConfigString(config: Record<string, unknown>, path: string[]) {
   return firstString(cursor);
 }
 
-function renderRoundRuntimePrompt(
+function visionModelConfigIssue(model: string | undefined) {
+  if (!model) return 'missing explicit vision model';
+  const normalized = model.trim().toLowerCase();
+  if (/deepseek[-_/]?v?4|deepseek[-_/]?v?3|deepseek[-_/]?r1/.test(normalized) && !/vision|vl|qwen-vl/.test(normalized)) {
+    return `model "${model}" appears to be text-only`;
+  }
+  return '';
+}
+
+async function renderRoundRuntimePrompt(
   manifest: PreparedComputerUseLongRun,
   round: PreparedComputerUseLongRun['rounds'][number],
+  manifestDir: string,
   suffix?: string,
 ) {
-  const priorEvidence = renderPriorRoundEvidence(manifest, round.round);
+  const priorEvidence = await renderPriorRoundEvidence(manifest, round.round, manifestDir);
   return [
     `[T084 ${manifest.scenarioId} round ${round.round}] ${round.prompt}`,
     '',
@@ -1950,20 +2120,63 @@ function renderRoundRuntimePrompt(
   ].filter(Boolean).join('\n');
 }
 
-function renderPriorRoundEvidence(manifest: PreparedComputerUseLongRun, currentRound: number) {
+async function renderPriorRoundEvidence(manifest: PreparedComputerUseLongRun, currentRound: number, manifestDir: string) {
   const priorRounds = manifest.rounds.filter((item) => item.round < currentRound && item.status === 'passed');
   if (!priorRounds.length) return '';
-  const lines = [
-    'Compact prior-round file refs for follow-up image memory. Reuse these refs as context only; do not inline image bytes:',
-  ];
+  const lines = ['Compact prior-round file refs for follow-up image memory. Reuse the vision-sense visual memory block as context only; do not inline image bytes:'];
+  const memoryBlock = await buildVisualMemoryBlockFromVisionSense(priorRounds, manifestDir);
+  if (memoryBlock) lines.push(memoryBlock);
   for (const prior of priorRounds) {
-    lines.push(`- round ${prior.round} trace: ${prior.visionTraceRef || 'missing'}`);
-    for (const ref of prior.screenshotRefs.slice(0, 8)) lines.push(`  screenshot: ${ref}`);
-    for (const ref of prior.actionLedgerRefs) lines.push(`  actionLedger: ${ref}`);
-    for (const ref of prior.failureDiagnosticsRefs) lines.push(`  failureDiagnostics: ${ref}`);
-    if (prior.screenshotRefs.length > 8) lines.push(`  screenshotRefsOmitted: ${prior.screenshotRefs.length - 8}`);
+    for (const ref of prior.actionLedgerRefs) lines.push(`- round ${prior.round} actionLedger: ${ref}`);
+    for (const ref of prior.failureDiagnosticsRefs) lines.push(`- round ${prior.round} failureDiagnostics: ${ref}`);
   }
   return lines.join('\n');
+}
+
+async function buildVisualMemoryBlockFromVisionSense(priorRounds: PreparedComputerUseLongRun['rounds'], manifestDir: string) {
+  const traces = priorRounds
+    .filter((prior) => prior.visionTraceRef)
+    .map((prior) => ({
+      label: `round ${prior.round}`,
+      ref: prior.visionTraceRef,
+      path: resolveManifestRef(manifestDir, prior.visionTraceRef as string),
+    }));
+  if (!traces.length) return '';
+  const request = {
+    mode: 'cross-round-followup',
+    traces,
+    maxScreenshotRefsPerTrace: 5,
+    maxFocusRefsPerTrace: 4,
+    maxVerifierFeedbackPerTrace: 5,
+    charBudget: 6000,
+  };
+  const result = await runVisionSensePythonJson('sciforge_vision_sense.visual_memory', request);
+  const block = isRecord(result) ? result : {};
+  return typeof block.text === 'string' ? block.text : '';
+}
+
+async function validateTraceContractWithVisionSense(options: { tracePath: string; workspacePath: string; rawText: string }) {
+  const result = await runVisionSensePythonJson('sciforge_vision_sense.trace_contract', {
+    tracePath: options.tracePath,
+    workspacePath: options.workspacePath,
+    rawText: options.rawText,
+  });
+  if (!isRecord(result)) return undefined;
+  const metrics = isRecord(result.metrics) ? result.metrics : {};
+  const issues = Array.isArray(result.issues) ? result.issues.map(String) : [];
+  return {
+    checkedScreenshotRefs: Array.isArray(result.checkedScreenshotRefs) ? result.checkedScreenshotRefs.map(String) : [],
+    issues,
+    metrics: {
+      stepCount: typeof metrics.stepCount === 'number' ? metrics.stepCount : 0,
+      actionCount: typeof metrics.actionCount === 'number' ? metrics.actionCount : 0,
+      nonWaitActionCount: typeof metrics.nonWaitActionCount === 'number' ? metrics.nonWaitActionCount : 0,
+      effectiveNonWaitActionCount: typeof metrics.effectiveNonWaitActionCount === 'number' ? metrics.effectiveNonWaitActionCount : 0,
+      screenshotCount: typeof metrics.screenshotCount === 'number' ? metrics.screenshotCount : 0,
+      blockedCount: typeof metrics.blockedCount === 'number' ? metrics.blockedCount : 0,
+      failedCount: typeof metrics.failedCount === 'number' ? metrics.failedCount : 0,
+    },
+  };
 }
 
 function findPayloadTraceRef(payload: { artifacts?: Array<Record<string, unknown>>; executionUnits?: Array<Record<string, unknown>> }) {
@@ -1978,6 +2191,40 @@ function findPayloadTraceRef(payload: { artifacts?: Array<Record<string, unknown
     if (typeof trace === 'string') return trace;
   }
   return undefined;
+}
+
+async function runVisionSensePythonJson(moduleName: string, request: Record<string, unknown>) {
+  const python = process.env.SCIFORGE_VISION_SENSE_PYTHON || 'python3';
+  const packageRoot = resolve('packages/senses/vision-sense');
+  const code = [
+    'import sys',
+    `sys.path.insert(0, ${JSON.stringify(packageRoot)})`,
+    `from ${moduleName} import main`,
+    'raise SystemExit(main([sys.argv[1]]))',
+  ].join('; ');
+  const result = await new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolvePromise) => {
+    const child = spawn(python, ['-c', code, JSON.stringify(request)], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    const timeout = setTimeout(() => child.kill('SIGTERM'), 10000);
+    child.stdout.on('data', (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on('error', (error) => {
+      clearTimeout(timeout);
+      resolvePromise({ exitCode: 127, stdout, stderr: stderr || error.message });
+    });
+    child.on('close', (code, signal) => {
+      clearTimeout(timeout);
+      resolvePromise({ exitCode: code ?? (signal ? 143 : 1), stdout, stderr });
+    });
+  });
+  if (result.exitCode !== 0) return undefined;
+  const parsed = extractJsonObject(result.stdout.trim());
+  return isRecord(parsed) && parsed.ok === true ? parsed.result : undefined;
 }
 
 function resolveTraceArtifactPath(traceRef: string, workspacePath: string) {
@@ -2053,11 +2300,83 @@ function renderFailureDiagnostics(
   };
 }
 
+function isRealGuiTrace(trace: Record<string, unknown>) {
+  const config = isRecord(trace.config) ? trace.config : {};
+  return config.dryRun === false;
+}
+
+function traceWindowTargetFromTrace(trace: Record<string, unknown>) {
+  const config = isRecord(trace.config) ? trace.config : {};
+  return isRecord(trace.windowTarget)
+    ? trace.windowTarget
+    : isRecord(trace.windowTargeting)
+      ? trace.windowTargeting
+      : isRecord(config.windowTarget)
+        ? config.windowTarget
+        : undefined;
+}
+
+function minimumAcceptanceCount(acceptance: string[], pattern: RegExp) {
+  const candidates: number[] = [];
+  for (const item of acceptance) {
+    if (!pattern.test(item)) continue;
+    const chinese = item.match(/至少\s*(\d+)/);
+    const english = item.match(/at least\s*(\d+)/i);
+    const numeric = Number(chinese?.[1] ?? english?.[1]);
+    if (Number.isFinite(numeric)) candidates.push(numeric);
+  }
+  return candidates.length ? Math.max(...candidates) : undefined;
+}
+
+function scenarioExpectsBrowserTarget(scenario: ComputerUseLongScenario) {
+  const text = [
+    scenario.title,
+    scenario.goal,
+    ...scenario.rounds.map((round) => round.prompt),
+    ...scenario.acceptance,
+  ].join('\n');
+  return /浏览器|browser/i.test(text);
+}
+
+function isBrowserWindowTarget(target: Record<string, unknown>) {
+  const text = [
+    firstString(target.appName, target.bundleId, target.title),
+  ].filter(Boolean).join(' ');
+  return /Microsoft Edge|Safari|Google Chrome|Firefox|Arc|Brave|com\.microsoft\.edgemac|com\.apple\.Safari|com\.google\.Chrome|org\.mozilla\.firefox|浏览器/i.test(text);
+}
+
 function manifestRel(root: string, path: string) {
   return relative(root, path).replace(/\\/g, '/');
 }
 
-function defaultWindowTargetForRound(manifest: PreparedComputerUseLongRun, round: number) {
+async function defaultWindowTargetForRound(
+  manifest: PreparedComputerUseLongRun,
+  round: number,
+  dryRun: boolean,
+  targetOverride: { appName?: string; title?: string; mode?: 'active-window' | 'app-window' | 'window-id' | 'display' } = {},
+) {
+  const result = await runVisionSensePythonJson('sciforge_vision_sense.computer_use_policy', {
+    mode: 'default-window-target',
+    scenarioId: manifest.scenarioId,
+    runId: manifest.run.id,
+    round,
+    dryRun,
+    appName: targetOverride.appName,
+    title: targetOverride.title,
+    targetMode: targetOverride.mode,
+  });
+  if (isRecord(result) && result.enabled === true && result.required === true) return result;
+  if (!dryRun) {
+    return {
+      enabled: true,
+      required: true,
+      mode: targetOverride.mode ?? (targetOverride.appName || targetOverride.title ? 'app-window' : 'active-window'),
+      appName: targetOverride.appName,
+      title: targetOverride.title,
+      coordinateSpace: 'window',
+      inputIsolation: 'require-focused-target',
+    };
+  }
   return {
     enabled: true,
     required: true,
@@ -2078,7 +2397,15 @@ function emptyTraceValidation(scenarioId: string, tracePath: string, issues: str
     tracePath,
     checkedScreenshotRefs: [],
     issues,
-    metrics: { stepCount: 0, actionCount: 0, nonWaitActionCount: 0, screenshotCount: 0, blockedCount: 0, failedCount: 0 },
+    metrics: {
+      stepCount: 0,
+      actionCount: 0,
+      nonWaitActionCount: 0,
+      effectiveNonWaitActionCount: 0,
+      screenshotCount: 0,
+      blockedCount: 0,
+      failedCount: 0,
+    },
   };
 }
 
@@ -2102,6 +2429,14 @@ function resolveTraceRefPath(refPath: string, workspacePath: string, traceDir: s
   const workspaceCandidate = resolve(workspacePath, refPath);
   if (workspacePath && refPath.startsWith('.sciforge/')) return workspaceCandidate;
   return resolve(traceDir, refPath);
+}
+
+function inferWorkspacePathFromTracePath(tracePath: string) {
+  const normalized = tracePath.replace(/\\/g, '/');
+  const marker = '/.sciforge/vision-runs/';
+  const markerIndex = normalized.indexOf(marker);
+  if (markerIndex < 1) return undefined;
+  return normalized.slice(0, markerIndex);
 }
 
 function hasWindowBounds(value: Record<string, unknown>) {
@@ -2171,6 +2506,13 @@ function hasWindowVerifierMetadata(verifier: Record<string, unknown>) {
   const consistency = isRecord(verifier.windowConsistency) ? verifier.windowConsistency : verifier;
   const status = firstString(consistency.status, consistency.scope, consistency.requiredScope);
   return Boolean(status && /window|target|display/i.test(status));
+}
+
+function verifierReportsNoVisibleEffect(verifier: Record<string, unknown>) {
+  const pixelDiff = isRecord(verifier.pixelDiff) ? verifier.pixelDiff : undefined;
+  if (pixelDiff?.possiblyNoEffect === true) return true;
+  const pairs = Array.isArray(pixelDiff?.pairs) ? pixelDiff.pairs.filter(isRecord) : [];
+  return pairs.length > 0 && pairs.every((pair) => pair.possiblyNoEffect === true);
 }
 
 function hasForbiddenPrivateFields(value: unknown): boolean {
@@ -2326,6 +2668,15 @@ function parseRunRoundArgs(args: string[]) {
     } else if (arg === '--run-id') {
       options.runId = readArgValue(args, index, arg);
       index += 1;
+    } else if (arg === '--target-app') {
+      options.targetAppName = readArgValue(args, index, arg);
+      index += 1;
+    } else if (arg === '--target-title') {
+      options.targetTitle = readArgValue(args, index, arg);
+      index += 1;
+    } else if (arg === '--target-mode') {
+      options.targetMode = normalizeCliTargetMode(readArgValue(args, index, arg));
+      index += 1;
     } else if (arg === '--actions-json') {
       options.actionsJson = readArgValue(args, index, arg);
       index += 1;
@@ -2358,6 +2709,15 @@ function parseRunScenarioArgs(args: string[]) {
       options.dryRun = false;
     } else if (arg === '--max-steps') {
       options.maxSteps = Number(readArgValue(args, index, arg));
+      index += 1;
+    } else if (arg === '--target-app') {
+      options.targetAppName = readArgValue(args, index, arg);
+      index += 1;
+    } else if (arg === '--target-title') {
+      options.targetTitle = readArgValue(args, index, arg);
+      index += 1;
+    } else if (arg === '--target-mode') {
+      options.targetMode = normalizeCliTargetMode(readArgValue(args, index, arg));
       index += 1;
     } else if (arg === '--actions-json') {
       options.actionsJson = readArgValue(args, index, arg);
@@ -2413,6 +2773,15 @@ function parseRunMatrixArgs(args: string[]) {
       index += 1;
     } else if (arg === '--actions-json') {
       options.actionsJson = readArgValue(args, index, arg);
+      index += 1;
+    } else if (arg === '--target-app') {
+      options.targetAppName = readArgValue(args, index, arg);
+      index += 1;
+    } else if (arg === '--target-title') {
+      options.targetTitle = readArgValue(args, index, arg);
+      index += 1;
+    } else if (arg === '--target-mode') {
+      options.targetMode = normalizeCliTargetMode(readArgValue(args, index, arg));
       index += 1;
     } else {
       throw new Error(`Unknown argument: ${arg}`);
@@ -2515,6 +2884,15 @@ function readArgValue(args: string[], index: number, name: string) {
   const value = args[index + 1];
   if (!value || value.startsWith('--')) throw new Error(`${name} requires a value`);
   return value;
+}
+
+function normalizeCliTargetMode(value: string): 'active-window' | 'app-window' | 'window-id' | 'display' {
+  const normalized = value.trim().toLowerCase().replace(/[_\s]+/g, '-');
+  if (normalized === 'active' || normalized === 'active-window' || normalized === 'frontmost') return 'active-window';
+  if (normalized === 'app' || normalized === 'app-window' || normalized === 'application') return 'app-window';
+  if (normalized === 'window' || normalized === 'window-id' || normalized === 'id') return 'window-id';
+  if (normalized === 'display' || normalized === 'screen') return 'display';
+  throw new Error(`Unsupported --target-mode: ${value}`);
 }
 
 function sanitizeRunId(value: string) {

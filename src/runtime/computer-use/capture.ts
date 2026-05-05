@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs';
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { copyFile, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 
-import type { CaptureDiagnostic, CaptureProviderFailure, ComputerUseConfig, ResolvedWindowTarget, ScreenshotRef, WindowTargetResolution } from './types.js';
+import type { CaptureDiagnostic, CaptureProviderFailure, FocusRegion, ComputerUseConfig, ResolvedWindowTarget, ScreenshotRef, WindowTargetResolution } from './types.js';
 import { toTraceScreenshotRef } from './types.js';
-import { isDarwinPlatform, pngDimensions, runCommand, sha256, workspaceRel } from './utils.js';
+import { isDarwinPlatform, pngDimensions, runCommand, sha256, sleep, workspaceRel } from './utils.js';
 import { toTraceWindowTarget } from './window-target.js';
 
 const ONE_BY_ONE_PNG = Buffer.from(
@@ -191,12 +191,131 @@ export function validateRuntimeTraceScreenshots(refs: ScreenshotRef[]) {
 
 export { toTraceScreenshotRef };
 
+export async function createFocusedCropRefs(
+  workspace: string,
+  runDir: string,
+  prefix: string,
+  sourceRefs: ScreenshotRef[],
+  focus: FocusRegion,
+  config: ComputerUseConfig,
+) {
+  const refs: ScreenshotRef[] = [];
+  for (const source of sourceRefs) {
+    const sourceWidth = source.width ?? 1;
+    const sourceHeight = source.height ?? 1;
+    const region = {
+      ...focus,
+      sourceWidth,
+      sourceHeight,
+      sourceScreenshotRef: source.path,
+    };
+    const absPath = join(runDir, `${prefix}-focus-${source.id}.png`);
+    const captureTimestamp = new Date().toISOString();
+    const captureProvider = config.dryRun ? 'dry-run-focus-region-copy' : 'sips-focus-region-crop';
+    const captureDiagnostics: CaptureDiagnostic[] = [
+      diagnostic('info', 'capture.focus-region.start', `Creating coarse-to-fine focus crop around ${Math.round(focus.centerX)},${Math.round(focus.centerY)}.`, {
+        provider: captureProvider,
+        captureScope: 'focus-region',
+        timestamp: captureTimestamp,
+      }),
+    ];
+    if (config.dryRun) {
+      await copyFile(source.absPath, absPath);
+      captureDiagnostics.push(diagnostic('info', 'capture.focus-region.dry-run', 'Copied dry-run screenshot as focus-region crop placeholder.', {
+        provider: captureProvider,
+        captureScope: 'focus-region',
+        timestamp: captureTimestamp,
+      }));
+    } else {
+      const crop = await cropPngWithSips(source.absPath, absPath, region);
+      captureDiagnostics.push(...crop.diagnostics);
+      if (crop.exitCode !== 0) {
+        await copyFile(source.absPath, absPath);
+        captureDiagnostics.push(diagnostic('warning', 'capture.focus-region.fallback-copy', 'Focus crop provider failed; copied source screenshot so the trace still has a file ref for verifier memory.', {
+          provider: captureProvider,
+          captureScope: 'focus-region',
+          timestamp: captureTimestamp,
+        }));
+      }
+    }
+    const stats = await stat(absPath);
+    const bytes = await readFile(absPath);
+    const dimensions = pngDimensions(bytes);
+    refs.push({
+      id: basename(absPath, '.png'),
+      path: workspaceRel(workspace, absPath),
+      absPath,
+      displayId: source.displayId,
+      windowTarget: source.windowTarget,
+      captureScope: 'focus-region',
+      captureProvider,
+      captureTimestamp,
+      diagnostics: [
+        ...(source.diagnostics ?? []),
+        `focus reason: ${focus.reason ?? 'vision-sense coarse-to-fine focus region'}`,
+        ...captureDiagnostics.map((item) => item.message),
+      ],
+      captureDiagnostics,
+      focusRegion: {
+        ...region,
+        sourceScreenshotRef: source.path,
+        sourceWidth,
+        sourceHeight,
+      },
+      width: dimensions?.width,
+      height: dimensions?.height,
+      sha256: sha256(bytes),
+      bytes: stats.size,
+    });
+  }
+  return refs;
+}
+
+async function cropPngWithSips(sourcePath: string, outPath: string, region: FocusRegion) {
+  const args = [
+    '--cropToHeightWidth',
+    String(Math.max(1, Math.round(region.height))),
+    String(Math.max(1, Math.round(region.width))),
+    '--cropOffset',
+    String(Math.max(0, Math.round(region.y))),
+    String(Math.max(0, Math.round(region.x))),
+    sourcePath,
+    '--out',
+    outPath,
+  ];
+  const result = await runCommand('sips', args, { timeoutMs: 15000 });
+  return {
+    ...result,
+    diagnostics: [
+      commandDiagnostic(result.exitCode === 0 ? 'info' : 'warning', 'capture.focus-region.provider-result', {
+        provider: 'sips-focus-region-crop',
+        captureScope: 'focus-region',
+        command: 'sips',
+        args,
+        exitCode: result.exitCode,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      }),
+    ],
+  };
+}
+
 async function captureWindowScreenshot(absPath: string, targetResolution: ResolvedWindowTarget, config: ComputerUseConfig) {
   if (isDarwinPlatform(config.desktopPlatform) && targetResolution.windowId !== undefined) {
     const args = ['-x', '-l', String(targetResolution.windowId), absPath];
-    const result = await runCommand('screencapture', args, { timeoutMs: 15000 });
+    let result = await runCommand('screencapture', args, { timeoutMs: 15000 });
+    const attempts = [result];
+    for (let attempt = 2; result.exitCode !== 0 && /could not create image from window|cannot create image|window/i.test(result.stderr || result.stdout) && attempt <= 4; attempt += 1) {
+      await sleep(350 * attempt);
+      result = await runCommand('screencapture', args, { timeoutMs: 15000 });
+      attempts.push(result);
+    }
+    const stderr = attempts.map((item, index) => item.stderr ? `attempt ${index + 1}: ${item.stderr}` : '').filter(Boolean).join('\n');
+    const stdout = attempts.map((item, index) => item.stdout ? `attempt ${index + 1}: ${item.stdout}` : '').filter(Boolean).join('\n');
     return {
       ...result,
+      stdout: stdout || result.stdout,
+      stderr: stderr || result.stderr,
       provider: 'macos-screencapture-window',
       diagnostics: [
         commandDiagnostic(result.exitCode === 0 ? 'info' : 'error', 'capture.window.provider-result', {
@@ -205,8 +324,8 @@ async function captureWindowScreenshot(absPath: string, targetResolution: Resolv
           command: 'screencapture',
           args,
           exitCode: result.exitCode,
-          stdout: result.stdout,
-          stderr: result.stderr,
+          stdout: stdout || result.stdout,
+          stderr: stderr || result.stderr,
         }),
       ],
     };

@@ -13,6 +13,8 @@ export type GenericSwiftGuiAction = Extract<GenericVisionAction, { type: 'click'
 
 export interface GenericActionMetadata {
   targetDescription?: string;
+  targetRegionDescription?: string;
+  focusRegion?: Partial<FocusRegion>;
   grounding?: Record<string, unknown>;
   riskLevel?: 'low' | 'medium' | 'high';
   requiresConfirmation?: boolean;
@@ -34,9 +36,17 @@ export interface ComputerUseConfig {
   schedulerStaleLockMs?: number;
   inputAdapter?: string;
   allowSharedSystemInput?: boolean;
+  showVisualCursor?: boolean;
+  completionPolicy?: VisionCompletionPolicy;
   planner: VisionPlannerConfig;
   grounder: VisionGrounderConfig;
   plannedActions: GenericVisionAction[];
+}
+
+export interface VisionCompletionPolicy {
+  mode?: 'planner-confirmed' | 'one-successful-non-wait-action';
+  reason?: string;
+  fallbackActions?: GenericVisionAction[];
 }
 
 export interface VisionPlannerConfig {
@@ -53,6 +63,15 @@ export interface VisionGrounderConfig {
   allowServiceLocalPaths: boolean;
   localPathPrefix?: string;
   remotePathPrefix?: string;
+  upload?: {
+    strategy?: 'scp' | 'inline';
+    host?: string;
+    user?: string;
+    port?: number;
+    remoteDir?: string;
+    identityFile?: string;
+    remoteUrlPrefix?: string;
+  };
   visionBaseUrl?: string;
   visionApiKey?: string;
   visionModel?: string;
@@ -117,7 +136,7 @@ export type GroundingResolution =
   | { ok: true; action: GenericVisionAction; grounding?: Record<string, unknown> }
   | { ok: false; action: GenericVisionAction; grounding?: Record<string, unknown>; reason: string };
 
-export type PlannerContractIssue = 'coordinate-output' | 'platform-incompatible-action';
+export type PlannerContractIssue = 'coordinate-output' | 'platform-incompatible-action' | 'empty-message-content';
 
 export interface ScreenshotRef {
   id: string;
@@ -125,15 +144,30 @@ export interface ScreenshotRef {
   absPath: string;
   displayId: number;
   windowTarget?: TraceWindowTarget;
-  captureScope?: 'display' | 'window';
+  captureScope?: 'display' | 'window' | 'focus-region';
   captureProvider?: string;
   captureTimestamp?: string;
   diagnostics?: string[];
   captureDiagnostics?: CaptureDiagnostic[];
+  focusRegion?: FocusRegion;
   width?: number;
   height?: number;
   sha256: string;
   bytes: number;
+}
+
+export interface FocusRegion {
+  sourceScreenshotRef: string;
+  coordinateFrame: 'source-screenshot-pixels';
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  centerX: number;
+  centerY: number;
+  sourceWidth?: number;
+  sourceHeight?: number;
+  reason?: string;
 }
 
 export interface CaptureDiagnostic {
@@ -141,7 +175,7 @@ export interface CaptureDiagnostic {
   code: string;
   message: string;
   provider?: string;
-  captureScope?: 'display' | 'window';
+  captureScope?: 'display' | 'window' | 'focus-region';
   command?: string;
   args?: string[];
   exitCode?: number;
@@ -200,6 +234,7 @@ export interface LoopStep {
   localCoordinate?: Record<string, unknown>;
   mappedCoordinate?: Record<string, unknown>;
   inputChannel?: Record<string, unknown>;
+  visualFocus?: Record<string, unknown>;
   verifier?: Record<string, unknown>;
   scheduler?: Record<string, unknown>;
   failureReason?: string;
@@ -217,6 +252,7 @@ export function toTraceScreenshotRef(ref: ScreenshotRef) {
     captureTimestamp: ref.captureTimestamp,
     diagnostics: ref.diagnostics,
     captureDiagnostics: ref.captureDiagnostics,
+    focusRegion: ref.focusRegion,
     width: ref.width,
     height: ref.height,
     sha256: ref.sha256,

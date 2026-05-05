@@ -10,6 +10,20 @@ export function parseGenericActions(value: unknown): GenericVisionAction[] {
   return parsed.map(normalizeGenericAction).filter((action): action is GenericVisionAction => Boolean(action));
 }
 
+export function normalizePlatformAction(action: GenericVisionAction, config: ComputerUseConfig): GenericVisionAction {
+  if (!isDarwinPlatform(config.desktopPlatform) || action.type !== 'hotkey') return action;
+  const normalizedKeys = action.keys.map((key) => {
+    const normalized = key.trim().toLowerCase();
+    return normalized === 'cmd' || normalized === 'meta' ? 'command' : key;
+  });
+  const lowerKeys = normalizedKeys.map((key) => key.trim().toLowerCase());
+  const isAltTabAlias = lowerKeys.includes('tab')
+    && (lowerKeys.includes('alt') || lowerKeys.includes('option'))
+    && !lowerKeys.includes('command');
+  if (isAltTabAlias) return { ...action, keys: ['command', 'tab'] };
+  return { ...action, keys: normalizedKeys };
+}
+
 export function platformActionIssue(action: GenericVisionAction, config: ComputerUseConfig) {
   if (!isDarwinPlatform(config.desktopPlatform)) return '';
   if (action.type === 'press_key' && isWindowsOnlyKey(action.key)) {
@@ -18,6 +32,10 @@ export function platformActionIssue(action: GenericVisionAction, config: Compute
   if (action.type === 'hotkey') {
     const badKey = action.keys.find(isWindowsOnlyKey);
     if (badKey) return `VisionPlanner emitted Windows-only hotkey modifier "${badKey}" for desktopPlatform="${config.desktopPlatform}".`;
+    const normalized = action.keys.map((key) => key.trim().toLowerCase());
+    if (normalized.includes('tab') && (normalized.includes('alt') || normalized.includes('option')) && !normalized.some((key) => key === 'cmd' || key === 'command' || key === 'meta')) {
+      return 'VisionPlanner emitted Alt+Tab/Option+Tab for macOS. Use Command+Tab for app switching on darwin, or choose a visible low-risk target in the active window.';
+    }
   }
   return '';
 }
@@ -140,6 +158,8 @@ function genericActionMetadata(value: Record<string, unknown>): GenericActionMet
   const requiresConfirmation = typeof value.requiresConfirmation === 'boolean' ? value.requiresConfirmation : undefined;
   return {
     targetDescription: stringConfig(value.targetDescription, value.target_description, value.target, value.description),
+    targetRegionDescription: stringConfig(value.targetRegionDescription, value.target_region_description, value.regionDescription, value.region_description),
+    focusRegion: isRecord(value.focusRegion) ? value.focusRegion : undefined,
     grounding: isRecord(value.grounding) ? value.grounding : undefined,
     riskLevel,
     requiresConfirmation,

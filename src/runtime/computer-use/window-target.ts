@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import type { ComputerUseConfig, ResolvedWindowTarget, TraceWindowTarget, WindowBounds, WindowTarget, WindowTargetResolution } from './types.js';
 import { executorBoundary } from './executor.js';
+import { computerUseSchedulerLockId } from './scheduler.js';
 import { booleanConfig, envOrValue, isDarwinPlatform, numberConfig, parseJson, runCommand, sanitizeId, stringConfig, swiftOptionalString, swiftString } from './utils.js';
 
 export function parseWindowTarget(requestConfig: Record<string, unknown>, fileConfig: Record<string, unknown>): WindowTarget {
@@ -214,7 +215,7 @@ export function inputChannelDescription(config: ComputerUseConfig, targetResolut
   ].join(':');
 }
 
-export function schedulerStepMetadata(targetResolution: WindowTargetResolution, stepId: string): Record<string, unknown> {
+export function schedulerStepMetadata(targetResolution: WindowTargetResolution, stepId: string, config?: ComputerUseConfig): Record<string, unknown> {
   if (!targetResolution.ok) {
     return {
       mode: 'blocked',
@@ -231,18 +232,28 @@ export function schedulerStepMetadata(targetResolution: WindowTargetResolution, 
   }
   const targetBound = targetResolution.captureKind === 'window';
   const strictFocus = targetResolution.inputIsolation === 'require-focused-target';
+  const sharedSystemInput = usesSharedSystemInput(config);
+  const lockId = computerUseSchedulerLockId(targetResolution, { sharedSystemInput });
   return {
     mode: 'serialized-window-actions',
     stepId,
-    lockId: targetResolution.schedulerLockId,
-    lockScope: targetBound ? 'target-window' : 'display-fallback',
-    actionConcurrency: targetBound ? 'one-real-gui-action-at-a-time-per-window' : 'one-real-gui-action-at-a-time-per-display',
+    lockId,
+    lockScope: sharedSystemInput ? 'shared-system-input' : targetBound ? 'target-window' : 'display-fallback',
+    actionConcurrency: sharedSystemInput
+      ? 'one-real-gui-action-at-a-time-globally-for-shared-system-input'
+      : targetBound
+        ? 'one-real-gui-action-at-a-time-per-window'
+        : 'one-real-gui-action-at-a-time-per-display',
     analysisConcurrency: 'planner-grounder-verifier-may-run-in-parallel-before-executor-lock',
     captureKind: targetResolution.captureKind,
     inputIsolation: targetResolution.inputIsolation,
     focusPolicy: strictFocus ? 'require-focused-target-before-action' : 'best-effort-focus',
     failClosedIsolation: strictFocus,
-    interferenceRisk: targetBound && strictFocus ? 'low-when-focused-target-verified' : 'elevated-display-or-best-effort-isolation',
+    interferenceRisk: sharedSystemInput
+      ? 'serialized-global-shared-system-input-may-still-affect-user-devices'
+      : targetBound && strictFocus
+        ? 'low-when-focused-target-verified'
+        : 'elevated-display-or-best-effort-isolation',
     windowLifecycle: {
       focused: targetResolution.focused,
       minimized: targetResolution.minimized,
@@ -253,7 +264,7 @@ export function schedulerStepMetadata(targetResolution: WindowTargetResolution, 
   };
 }
 
-export function schedulerRunMetadata(targetResolution: WindowTargetResolution): Record<string, unknown> {
+export function schedulerRunMetadata(targetResolution: WindowTargetResolution, config?: ComputerUseConfig): Record<string, unknown> {
   if (!targetResolution.ok) {
     return {
       mode: 'blocked',
@@ -270,16 +281,28 @@ export function schedulerRunMetadata(targetResolution: WindowTargetResolution): 
   }
   const targetBound = targetResolution.captureKind === 'window';
   const strictFocus = targetResolution.inputIsolation === 'require-focused-target';
+  const sharedSystemInput = usesSharedSystemInput(config);
+  const lockId = computerUseSchedulerLockId(targetResolution, { sharedSystemInput });
   return {
     mode: 'serialized-window-actions',
-    lockId: targetResolution.schedulerLockId,
-    lockScope: targetBound ? 'target-window' : 'display-fallback',
-    policy: 'one real GUI action stream per target window; planner/grounder/verifier analysis may run in parallel before the executor lock',
-    actionConcurrency: targetBound ? 'one-real-gui-action-at-a-time-per-window' : 'one-real-gui-action-at-a-time-per-display',
+    lockId,
+    lockScope: sharedSystemInput ? 'shared-system-input' : targetBound ? 'target-window' : 'display-fallback',
+    policy: sharedSystemInput
+      ? 'one real GUI action stream globally while using shared system mouse/keyboard; planner/grounder/verifier analysis may run in parallel before the executor lock'
+      : 'one real GUI action stream per target window; planner/grounder/verifier analysis may run in parallel before the executor lock',
+    actionConcurrency: sharedSystemInput
+      ? 'one-real-gui-action-at-a-time-globally-for-shared-system-input'
+      : targetBound
+        ? 'one-real-gui-action-at-a-time-per-window'
+        : 'one-real-gui-action-at-a-time-per-display',
     analysisConcurrency: 'parallel-allowed',
     focusPolicy: strictFocus ? 'require-focused-target-before-action' : 'best-effort-focus',
     failClosedIsolation: strictFocus,
-    interferenceRisk: targetBound && strictFocus ? 'low-when-focused-target-verified' : 'elevated-display-or-best-effort-isolation',
+    interferenceRisk: sharedSystemInput
+      ? 'serialized-global-shared-system-input-may-still-affect-user-devices'
+      : targetBound && strictFocus
+        ? 'low-when-focused-target-verified'
+        : 'elevated-display-or-best-effort-isolation',
     targetWindow: toTraceWindowTarget(targetResolution),
   };
 }
@@ -294,20 +317,25 @@ export function inputChannelContract(config: ComputerUseConfig, targetResolution
   const darwin = isDarwinPlatform(config.desktopPlatform);
   const dryRun = config.dryRun;
   const executor = dryRun ? 'dry-run-generic-gui-executor' : executorBoundary(config);
-  const independentAdapter = normalizeIndependentInputAdapter(config.inputAdapter);
-  const independentInput = !dryRun && Boolean(independentAdapter);
-  const sharedSystemInput = !dryRun && darwin;
+  const configuredIndependentAdapter = normalizeIndependentInputAdapter(config.inputAdapter);
+  const independentAdapterReady = false;
+  const independentInput = !dryRun && Boolean(configuredIndependentAdapter) && independentAdapterReady;
   const sharedSystemAllowed = Boolean(config.allowSharedSystemInput);
+  const sharedSystemInput = !dryRun && darwin && !configuredIndependentAdapter && sharedSystemAllowed;
   const strictTarget = targetBound && isolation === 'require-focused-target';
   const provider = dryRun
     ? 'dry-run-input-channel'
     : independentInput
-      ? `${independentAdapter}-input-adapter`
-      : darwin
+      ? `${configuredIndependentAdapter}-input-adapter`
+      : configuredIndependentAdapter
+        ? `${configuredIndependentAdapter}-input-adapter-unimplemented`
+        : darwin
         ? 'macos-cgevent-system-events'
         : `${config.desktopPlatform}-input-provider-unavailable`;
   const userDeviceImpact = dryRun || independentInput
     ? 'none'
+    : configuredIndependentAdapter
+      ? 'fail-closed-unimplemented-independent-adapter'
     : strictTarget
       ? 'may-use-system-input-after-focused-target-verification'
       : 'may-affect-frontmost-window';
@@ -321,12 +349,17 @@ export function inputChannelContract(config: ComputerUseConfig, targetResolution
     pointerKeyboardOwnership: dryRun ? 'virtual-dry-run-channel' : independentInput ? 'sciforge-independent-input-adapter' : sharedSystemInput ? 'shared-system-pointer-keyboard' : 'unavailable',
     pointerMode: dryRun ? 'virtual-no-user-pointer-movement' : independentInput ? 'adapter-window-bound-pointer' : sharedSystemInput ? 'system-cursor-events' : 'none',
     keyboardMode: dryRun ? 'virtual-no-user-keyboard-events' : independentInput ? 'adapter-window-bound-keyboard' : sharedSystemInput ? 'system-key-events' : 'none',
+    visualPointer: dryRun ? 'virtual-trace-only' : config.showVisualCursor ? 'sciforge-distinct-overlay-cursor' : 'off',
+    visualPointerShape: config.showVisualCursor ? 'cyan-diamond-magenta-outline-white-crosshair' : undefined,
+    executorLockScope: sharedSystemInput ? 'global-shared-system-input' : targetBound ? 'target-window' : 'display-fallback',
+    executorLockId: targetResolution.ok ? computerUseSchedulerLockId(targetResolution, { sharedSystemInput }) : 'unresolved-window-target',
     userDeviceImpact,
     independentAdapterRequiredForNoUserImpact: !dryRun && !independentInput,
     availableIndependentAdapters: ['browser-sandbox-adapter', 'remote-desktop-session', 'virtual-hid-device', 'accessibility-per-window-adapter'],
-    currentIndependentAdapter: dryRun ? 'dry-run' : independentAdapter ?? 'not-configured',
+    currentIndependentAdapter: dryRun ? 'dry-run' : configuredIndependentAdapter ?? 'not-configured',
+    independentAdapterStatus: dryRun ? 'dry-run' : configuredIndependentAdapter ? 'configured-unimplemented' : 'not-configured',
     sharedSystemInputExplicitlyAllowed: !dryRun && !independentInput ? sharedSystemAllowed : undefined,
-    failClosed: !targetResolution.ok || (isolation === 'require-focused-target' && !targetBound) || (!dryRun && !independentInput && !sharedSystemAllowed),
+    failClosed: !targetResolution.ok || (isolation === 'require-focused-target' && !targetBound) || (!dryRun && Boolean(configuredIndependentAdapter) && !independentAdapterReady) || (!dryRun && !configuredIndependentAdapter && !sharedSystemAllowed),
     highRiskConfirmationRequired: true,
     policy: [
       'Planner and Grounder may run in parallel from screenshots.',
@@ -335,6 +368,14 @@ export function inputChannelContract(config: ComputerUseConfig, targetResolution
       'High-risk send/delete/pay/authorize/publish/submit actions require upstream confirmation before executor.',
     ],
   };
+}
+
+function usesSharedSystemInput(config: ComputerUseConfig | undefined) {
+  if (!config) return false;
+  return !config.dryRun
+    && isDarwinPlatform(config.desktopPlatform)
+    && !normalizeIndependentInputAdapter(config.inputAdapter)
+    && Boolean(config.allowSharedSystemInput);
 }
 
 export function isWindowLocalCoordinateSpace(value: string | undefined) {
@@ -403,7 +444,7 @@ async function detectMacWindowTarget(target: WindowTarget): Promise<WindowTarget
   const scriptPath = join(tmpdir(), `sciforge-window-target-${randomUUID()}.swift`);
   await writeFile(scriptPath, macWindowTargetProbeScript(target), 'utf8');
   try {
-    const result = await runCommand('swift', [scriptPath], { timeoutMs: 15000 });
+    const result = await runMacWindowTargetProbe(scriptPath);
     if (result.exitCode !== 0) {
       const reason = `macOS target-window probe failed: ${result.stderr || result.stdout || `exit ${result.exitCode}`}`;
       return { ok: false, target, reason, diagnostics: [reason] };
@@ -416,6 +457,7 @@ async function detectMacWindowTarget(target: WindowTarget): Promise<WindowTarget
     const windowId = numberConfig(parsed.windowId);
     const bounds = parseWindowBounds(parsed.bounds);
     const contentRect = parseWindowBounds(parsed.contentRect);
+    const diagnostic = stringConfig(parsed.diagnostic);
     if (windowId === undefined) {
       const reason = String(parsed.reason || 'macOS target-window probe did not find a matching on-screen window.');
       return { ok: false, target, reason, diagnostics: [reason] };
@@ -441,10 +483,46 @@ async function detectMacWindowTarget(target: WindowTarget): Promise<WindowTarget
       schedulerLockId: schedulerLockIdForTarget(target, windowId),
       source: target.mode === 'active-window' ? 'active-window' : 'config',
       captureTimestamp: new Date().toISOString(),
-      diagnostics: ['resolved macOS target window through CGWindowList'],
+      diagnostics: diagnostic
+        ? ['resolved macOS target window through CGWindowList', diagnostic]
+        : ['resolved macOS target window through CGWindowList'],
     };
   } finally {
     await unlink(scriptPath).catch(() => undefined);
+  }
+}
+
+async function runMacWindowTargetProbe(scriptPath: string) {
+  const interpreted = await runCommand('swift', [scriptPath], { timeoutMs: 15000 });
+  if (interpreted.exitCode === 0 || !/JIT session error|Symbols not found|NSWorkspace|NSRunningApplication/i.test(`${interpreted.stderr}\n${interpreted.stdout}`)) {
+    return interpreted;
+  }
+  const binaryPath = join(tmpdir(), `sciforge-window-target-${randomUUID()}`);
+  try {
+    const compiled = await runCommand('swiftc', [scriptPath, '-o', binaryPath, '-framework', 'AppKit', '-framework', 'CoreGraphics'], { timeoutMs: 30000 });
+    if (compiled.exitCode !== 0) {
+      return {
+        exitCode: compiled.exitCode,
+        stdout: [interpreted.stdout, compiled.stdout].filter(Boolean).join('\n'),
+        stderr: [
+          `Swift interpreter failed: ${interpreted.stderr || interpreted.stdout || `exit ${interpreted.exitCode}`}`,
+          `swiftc AppKit fallback failed: ${compiled.stderr || compiled.stdout || `exit ${compiled.exitCode}`}`,
+        ].join('\n'),
+      };
+    }
+    const executed = await runCommand(binaryPath, [], { timeoutMs: 15000 });
+    return executed.exitCode === 0
+      ? executed
+      : {
+          exitCode: executed.exitCode,
+          stdout: [interpreted.stdout, compiled.stdout, executed.stdout].filter(Boolean).join('\n'),
+          stderr: [
+            `Swift interpreter failed: ${interpreted.stderr || interpreted.stdout || `exit ${interpreted.exitCode}`}`,
+            `compiled AppKit probe failed: ${executed.stderr || executed.stdout || `exit ${executed.exitCode}`}`,
+          ].join('\n'),
+        };
+  } finally {
+    await unlink(binaryPath).catch(() => undefined);
   }
 }
 
@@ -461,6 +539,7 @@ let targetBundle: String? = ${swiftOptionalString(target.bundleId)}
 let options = CGWindowListOption(arrayLiteral: .optionOnScreenOnly, .excludeDesktopElements)
 let windows = (CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]) ?? []
 let frontmostPid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+var titleDriftCandidates: [[String: Any]] = []
 
 func emit(_ value: [String: Any]) {
   let data = try! JSONSerialization.data(withJSONObject: value, options: [])
@@ -485,7 +564,6 @@ for window in windows {
   let bundleId = runningApp?.bundleIdentifier ?? ""
   if let targetApp, appName.range(of: targetApp, options: [.caseInsensitive]) == nil { continue }
   if let targetBundle, bundleId.range(of: targetBundle, options: [.caseInsensitive]) == nil { continue }
-  if let targetTitle, title.range(of: targetTitle, options: [.caseInsensitive]) == nil { continue }
   let windowId = window[kCGWindowNumber as String] as? UInt32 ?? 0
   let bounds = window[kCGWindowBounds as String] as? [String: Any] ?? [:]
   let x = bounds["X"] as? CGFloat ?? bounds["x"] as? CGFloat ?? 0
@@ -496,20 +574,46 @@ for window in windows {
   let displayId = displayIdFor(bounds: rect)
   let alpha = window[kCGWindowAlpha as String] as? Double ?? 1
   let isOnscreen = (window[kCGWindowIsOnscreen as String] as? Bool) ?? true
+  let focused = processId != nil && frontmostPid == processId
+  var payload: [String: Any] = [
+    "windowId": Int(windowId),
+    "processId": Int(processId ?? 0),
+    "bundleId": bundleId,
+    "appName": appName,
+    "title": title,
+    "bounds": bounds,
+    "contentRect": bounds,
+    "focused": focused,
+    "minimized": !isOnscreen,
+    "occluded": alpha <= 0 || !isOnscreen,
+  ]
+  if let displayId { payload["displayId"] = Int(displayId) }
+  if let targetTitle, title.range(of: targetTitle, options: [.caseInsensitive]) == nil {
+    if targetMode == "active-window" || targetMode == "app-window" {
+      var driftPayload = payload
+      driftPayload["titleDrift"] = true
+      driftPayload["requestedTitle"] = targetTitle
+      titleDriftCandidates.append(driftPayload)
+    }
+    continue
+  }
   if targetMode == "active-window" || targetMode == "app-window" {
-    var payload: [String: Any] = [
-      "windowId": Int(windowId),
-      "processId": Int(processId ?? 0),
-      "bundleId": bundleId,
-      "appName": appName,
-      "title": title,
-      "bounds": bounds,
-      "contentRect": bounds,
-      "focused": processId != nil && frontmostPid == processId,
-      "minimized": !isOnscreen,
-      "occluded": alpha <= 0 || !isOnscreen,
-    ]
-    if let displayId { payload["displayId"] = Int(displayId) }
+    emit(payload)
+    exit(0)
+  }
+}
+
+if targetMode == "active-window" || targetMode == "app-window" {
+  let focusedCandidates = titleDriftCandidates.filter { ($0["focused"] as? Bool) == true }
+  if focusedCandidates.count == 1 {
+    var payload = focusedCandidates[0]
+    payload["diagnostic"] = "target title drifted; recovered focused app/bundle window"
+    emit(payload)
+    exit(0)
+  }
+  if titleDriftCandidates.count == 1 {
+    var payload = titleDriftCandidates[0]
+    payload["diagnostic"] = "target title drifted; recovered sole app/bundle window"
     emit(payload)
     exit(0)
   }

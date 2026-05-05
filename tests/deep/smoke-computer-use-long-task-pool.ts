@@ -158,7 +158,8 @@ try {
     dryRun: false,
     actionsJson: smokeActionsJson,
   });
-  assert.equal(realIndependentInputPreflight.checks.find((check) => check.id === 'input-isolation')?.status, 'pass');
+  assert.equal(realIndependentInputPreflight.checks.find((check) => check.id === 'input-isolation')?.status, 'fail');
+  assert.match(String(realIndependentInputPreflight.checks.find((check) => check.id === 'input-isolation')?.message), /no executable provider/i);
   delete process.env.SCIFORGE_VISION_INPUT_ADAPTER;
   const staticPreflight = await preflightComputerUseLong({
     scenarioIds: ['CU-LONG-001'],
@@ -211,7 +212,7 @@ try {
   assert.equal(round2Run.status, 'passed');
   const round2Prompt = await readFile(join(prepared.runDir, 'evidence/round-02/runtime-prompt.md'), 'utf8');
   assert.match(round2Prompt, /Compact prior-round file refs/);
-  assert.match(round2Prompt, /round 1 trace: evidence\/round-01\/vision-trace\.json/);
+  assert.match(round2Prompt, /trace=evidence\/round-01\/vision-trace\.json/);
   assert.doesNotMatch(round2Prompt, /data:image|;base64,/i);
 
   const preparedScenario = await prepareComputerUseLongRun({
@@ -245,6 +246,16 @@ try {
   assert.equal(runValidation.metrics.traceCount, 5);
   assert.equal(runValidation.metrics.actionLedgerCount, 5);
   assert.equal(runValidation.metrics.failureDiagnosticsCount, 5);
+  const round2RuntimePrompt = await readFile(join(preparedScenario.runDir, 'evidence', 'round-02', 'runtime-prompt.md'), 'utf8');
+  assert.match(round2RuntimePrompt, /Vision temporary memory policy: file-ref-only/);
+  assert.match(round2RuntimePrompt, /Memory mode: cross-round-followup/);
+  assert.match(round2RuntimePrompt, /actions=1; nonWait=1/);
+  assert.match(round2RuntimePrompt, /windowTarget: .*observedDisplayIds=/);
+  assert.match(round2RuntimePrompt, /scheduler: .*lockId=/);
+  assert.match(round2RuntimePrompt, /verifierFeedback: .*pixel=/);
+  assert.match(round2RuntimePrompt, /verifierFeedback: .*window=/);
+  assert.match(round2RuntimePrompt, /screenshotMeta: .*sha256=.*size=.*displayId=/);
+  assert.doesNotMatch(round2RuntimePrompt, /data:image|;base64,/i);
   const brokenManifestPath = join(preparedScenario.runDir, 'broken-manifest.json');
   await copyFile(preparedScenario.manifestPath, brokenManifestPath);
   const brokenManifest = JSON.parse(await readFile(brokenManifestPath, 'utf8')) as Record<string, unknown>;
@@ -358,7 +369,18 @@ try {
     const firstDynamicTrace = JSON.parse(await readFile(firstDynamicTracePath, 'utf8')) as Record<string, unknown>;
     const firstDynamicSteps = firstDynamicTrace.steps as Array<Record<string, unknown>>;
     assert.ok(firstDynamicSteps.some((step) => ((step.execution as Record<string, unknown>)?.planner) === 'openai-compatible-vision-planner'));
-    assert.ok(firstDynamicSteps.some((step) => ((step.grounding as Record<string, unknown>)?.provider) === 'kv-ground'));
+    assert.ok(firstDynamicSteps.some((step) => ((step.grounding as Record<string, unknown>)?.provider) === 'coarse-to-fine'));
+    for (const result of dynamicVisualMatrix.results.filter((item) => item.scenarioId === 'CU-LONG-004' || item.scenarioId === 'CU-LONG-007')) {
+      const manifest = JSON.parse(await readFile(result.manifestPath, 'utf8')) as Record<string, unknown>;
+      const round = (manifest.rounds as Array<Record<string, unknown>>)[0];
+      const tracePath = join(dirname(result.manifestPath), String(round.visionTraceRef));
+      const trace = JSON.parse(await readFile(tracePath, 'utf8')) as Record<string, unknown>;
+      const steps = trace.steps as Array<Record<string, unknown>>;
+      assert.ok(steps.some((step) => typeof step.visualFocus === 'object' && step.visualFocus !== null && ((step.visualFocus as Record<string, unknown>)?.strategy) === 'coarse-to-fine-focus-region'), `${result.scenarioId} records focus-region evidence`);
+      assert.ok(steps.some((step) => typeof ((step.verifier as Record<string, unknown>)?.regionSemantic) === 'object' && ((step.verifier as Record<string, unknown>)?.regionSemantic) !== null), `${result.scenarioId} records region semantic verifier`);
+      const refs = ((trace.imageMemory as Record<string, unknown>).refs as Array<Record<string, unknown>>);
+      assert.ok(refs.some((ref) => ref.captureScope === 'focus-region'), `${result.scenarioId} image memory includes focus-region refs`);
+    }
   } finally {
     await new Promise<void>((resolve) => dynamicPlannerServer.close(() => resolve()));
     await new Promise<void>((resolve) => dynamicGrounderServer.close(() => resolve()));
@@ -490,7 +512,7 @@ const trace = {
   windowTarget: fixtureWindowTarget,
   scheduler: fixtureScheduler,
   genericComputerUse: {
-    actionSchema: ['click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait'],
+    actionSchema: ['open_app', 'click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait'],
     appSpecificShortcuts: [],
     inputChannel: 'generic-mouse-keyboard',
     inputChannelContract: {
@@ -555,6 +577,11 @@ const trace = {
     verifier: {
       status: 'checked',
       method: 'window-pixel-diff',
+      pixelDiff: {
+        method: 'sha256-and-byte-diff',
+        possiblyNoEffect: false,
+        pairs: [{ displayId: 1, changedByteRatio: 0.25, possiblyNoEffect: false }],
+      },
       windowConsistency: {
         status: 'same-target-window',
         sameWindow: true,
@@ -577,7 +604,7 @@ assert.equal(traceValidation.metrics.screenshotCount, 2);
 const realGuiTracePath = join(runDir, 'real-gui-vision-trace.json');
 await writeFile(realGuiTracePath, `${JSON.stringify({
   ...trace,
-  config: { dryRun: false },
+  config: { dryRun: false, showVisualCursor: true },
   scheduler: {
     ...fixtureScheduler,
     executorLock: {
@@ -595,6 +622,8 @@ await writeFile(realGuiTracePath, `${JSON.stringify({
       pointerKeyboardOwnership: 'shared-system-pointer-keyboard',
       pointerMode: 'system-cursor-events',
       keyboardMode: 'system-key-events',
+      visualPointer: 'sciforge-distinct-overlay-cursor',
+      visualPointerShape: 'cyan-diamond-magenta-outline-white-crosshair',
       userDeviceImpact: 'may-use-system-input-after-focused-target-verification',
       highRiskConfirmationRequired: true,
     },
@@ -640,7 +669,7 @@ const plannerOnlyTrace = {
     text: '[T084 fixture] Summarize prior trace refs, image memory, windowTarget, sha256, dimensions, scheduler metadata, and action ledger only.',
   },
   genericComputerUse: {
-    actionSchema: ['click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait'],
+    actionSchema: ['open_app', 'click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait'],
     appSpecificShortcuts: [],
     inputChannel: 'generic-mouse-keyboard',
     inputChannelContract: {
@@ -719,7 +748,7 @@ await writeFile(missingWindowTracePath, `${JSON.stringify({
     ],
   },
   genericComputerUse: {
-    actionSchema: ['click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait'],
+    actionSchema: ['open_app', 'click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait'],
     appSpecificShortcuts: [],
   },
 }, null, 2)}\n`);

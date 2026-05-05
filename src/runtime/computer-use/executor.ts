@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { unlink, writeFile } from 'node:fs/promises';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { ComputerUseConfig, GenericSwiftGuiAction, GenericVisionAction, ResolvedWindowTarget, WindowTargetResolution } from './types.js';
-import { acquireComputerUseSchedulerLease, schedulerLeaseTrace } from './scheduler.js';
+import { acquireComputerUseSchedulerLease, computerUseSchedulerLockId, schedulerLeaseTrace } from './scheduler.js';
 import { appleScriptString, isDarwinPlatform, runCommand, sanitizeId, sleep } from './utils.js';
 
 export async function executeGenericDesktopAction(action: GenericVisionAction, config: ComputerUseConfig, targetResolution: WindowTargetResolution) {
@@ -15,8 +15,17 @@ export async function executeGenericDesktopAction(action: GenericVisionAction, c
       stderr: targetResolution.reason,
     };
   }
+  const inputBlockReason = realInputBlockReason(action, config);
+  if (inputBlockReason) {
+    return {
+      exitCode: 125,
+      stdout: '',
+      stderr: inputBlockReason,
+    };
+  }
   const lease = await acquireComputerUseSchedulerLease({
     targetResolution,
+    lockId: computerUseSchedulerLockId(targetResolution, { sharedSystemInput: usesSharedSystemInput(config) }),
     runId: config.runId,
     stepId: action.type,
     timeoutMs: config.schedulerLockTimeoutMs,
@@ -40,7 +49,7 @@ export async function executeGenericDesktopAction(action: GenericVisionAction, c
   let result: { exitCode: number; stdout: string; stderr: string };
   try {
     if (isDarwinPlatform(config.desktopPlatform)) {
-      result = await executeGenericMacAction(action, targetResolution);
+      result = await executeGenericMacAction(action, config, targetResolution);
     } else {
       result = {
         exitCode: 126,
@@ -57,12 +66,47 @@ export async function executeGenericDesktopAction(action: GenericVisionAction, c
   return { ...result, schedulerLease: schedulerLeaseTrace(lease.lease) };
 }
 
+function usesSharedSystemInput(config: ComputerUseConfig) {
+  return !config.dryRun
+    && isDarwinPlatform(config.desktopPlatform)
+    && !normalizeIndependentInputAdapter(config.inputAdapter)
+    && Boolean(config.allowSharedSystemInput);
+}
+
 export function executorBoundary(config: ComputerUseConfig) {
   if (isDarwinPlatform(config.desktopPlatform)) return 'darwin-system-events-generic-gui-executor';
   return `${sanitizeId(config.desktopPlatform).toLowerCase()}-generic-gui-executor`;
 }
 
-async function executeGenericMacAction(action: GenericVisionAction, targetResolution: ResolvedWindowTarget) {
+function realInputBlockReason(action: GenericVisionAction, config: ComputerUseConfig) {
+  if (config.dryRun || action.type === 'wait') return '';
+  const independentAdapter = normalizeIndependentInputAdapter(config.inputAdapter);
+  if (independentAdapter) {
+    return [
+      `Independent input adapter "${independentAdapter}" is configured, but no executable adapter provider is registered in this runtime.`,
+      'Failing closed before sending macOS CGEvent/System Events input so SciForge does not move the user pointer or type on the user keyboard while claiming independent input.',
+    ].join(' ');
+  }
+  if (!config.allowSharedSystemInput) {
+    return [
+      'Real Computer Use action blocked before execution because no independent input adapter is available and shared system mouse/keyboard input was not explicitly allowed.',
+      'Configure a real independent input adapter provider, or set SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT=1 only for an acknowledged focused-window smoke.',
+    ].join(' ');
+  }
+  return '';
+}
+
+function normalizeIndependentInputAdapter(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase().replace(/[_\s]+/g, '-');
+  if (!normalized) return undefined;
+  if (normalized === 'virtual-hid' || normalized === 'virtual-hid-device') return 'virtual-hid';
+  if (normalized === 'remote-desktop' || normalized === 'remote-desktop-session') return 'remote-desktop';
+  if (normalized === 'browser-sandbox' || normalized === 'browser-sandbox-adapter') return 'browser-sandbox';
+  if (normalized === 'accessibility-per-window' || normalized === 'accessibility-per-window-adapter') return 'accessibility-per-window';
+  return undefined;
+}
+
+async function executeGenericMacAction(action: GenericVisionAction, config: ComputerUseConfig, targetResolution: ResolvedWindowTarget) {
   if (action.type === 'open_app') {
     const openResult = await runCommand('open', ['-a', action.appName], { timeoutMs: 30000 });
     if (openResult.exitCode !== 0) return openResult;
@@ -77,19 +121,36 @@ async function executeGenericMacAction(action: GenericVisionAction, targetResolu
   }
   const isolation = await ensureMacInputTarget(action, targetResolution);
   if (isolation.exitCode !== 0) return isolation;
-  if (action.type === 'click' || action.type === 'double_click' || action.type === 'drag' || action.type === 'scroll') {
-    const swiftResult = await executeSwiftGuiAction(action);
-    if (swiftResult.exitCode === 0) return swiftResult;
+  if (action.type === 'scroll') {
+    return executeSwiftGuiAction(action, targetResolution, Boolean(config.showVisualCursor));
+  }
+  if (action.type === 'click' || action.type === 'double_click' || action.type === 'drag') {
     const script = genericMacActionScript(action);
     const appleScriptResult = await runCommand('osascript', ['-e', script], { timeoutMs: 30000 });
-    return appleScriptResult.exitCode === 0
-      ? { ...appleScriptResult, stdout: [swiftResult.stdout, appleScriptResult.stdout].filter(Boolean).join('\n') }
+    if (appleScriptResult.exitCode === 0) {
+      return {
+        ...appleScriptResult,
+        stdout: [
+          appleScriptResult.stdout,
+          `system-events ${action.type} visualCursor=${config.showVisualCursor ? 'not-shown-system-events-primary' : 'off'}`,
+        ].filter(Boolean).join('\n'),
+      };
+    }
+    const swiftResult = await executeSwiftGuiAction(action, targetResolution, Boolean(config.showVisualCursor));
+    return swiftResult.exitCode === 0
+      ? {
+          ...swiftResult,
+          stdout: [
+            `System Events executor failed before Swift fallback: ${appleScriptResult.stderr || appleScriptResult.stdout || `exit ${appleScriptResult.exitCode}`}`,
+            swiftResult.stdout,
+          ].filter(Boolean).join('\n'),
+        }
       : {
-          exitCode: appleScriptResult.exitCode,
-          stdout: [swiftResult.stdout, appleScriptResult.stdout].filter(Boolean).join('\n'),
+          exitCode: swiftResult.exitCode,
+          stdout: [appleScriptResult.stdout, swiftResult.stdout].filter(Boolean).join('\n'),
           stderr: [
-            `Swift CGEvent executor failed: ${swiftResult.stderr || swiftResult.stdout || `exit ${swiftResult.exitCode}`}`,
             `System Events executor failed: ${appleScriptResult.stderr || appleScriptResult.stdout || `exit ${appleScriptResult.exitCode}`}`,
+            `Swift CGEvent executor failed: ${swiftResult.stderr || swiftResult.stdout || `exit ${swiftResult.exitCode}`}`,
           ].join('\n'),
         };
   }
@@ -97,32 +158,48 @@ async function executeGenericMacAction(action: GenericVisionAction, targetResolu
   return runCommand('osascript', ['-e', script], { timeoutMs: action.type === 'wait' ? Math.max(1000, (action.ms ?? 500) + 1000) : 30000 });
 }
 
-async function activateMacApp(appName: string) {
+async function activateMacApp(appName: string, bundleId?: string) {
   let lastResult = { exitCode: 1, stdout: '', stderr: '' };
   for (let attempt = 1; attempt <= 6; attempt += 1) {
+    const activationLine = bundleId
+      ? `tell application id ${appleScriptString(bundleId)} to activate`
+      : `tell application ${appleScriptString(appName)} to activate`;
     lastResult = await runCommand('osascript', ['-e', [
-      `tell application ${appleScriptString(appName)} to activate`,
+      activationLine,
       'delay 0.35',
-      'tell application "System Events" to get name of first application process whose frontmost is true',
+      'tell application "System Events"',
+      '  set frontProcess to first application process whose frontmost is true',
+      '  set frontName to name of frontProcess',
+      '  set frontBundle to bundle identifier of frontProcess',
+      'end tell',
+      'return frontName & "|" & frontBundle',
     ].join('\n')], { timeoutMs: 30000 });
-    const frontmost = lastResult.stdout.trim();
-    if (lastResult.exitCode === 0 && frontmost === appName) {
-      return { ...lastResult, stdout: `frontmost=${frontmost}` };
+    const frontmost = parseFrontmostProcess(lastResult.stdout);
+    if (lastResult.exitCode === 0 && frontmostMatches(frontmost, appName, bundleId)) {
+      return { ...lastResult, stdout: `frontmost=${frontmost.name || 'unknown'} bundle=${frontmost.bundleId || 'unknown'}` };
     }
     await sleep(250);
   }
+  const frontmost = parseFrontmostProcess(lastResult.stdout);
   return {
     exitCode: lastResult.exitCode || 1,
     stdout: lastResult.stdout,
-    stderr: lastResult.stderr || `App ${appName} did not become frontmost after open_app; frontmost=${lastResult.stdout.trim() || 'unknown'}`,
+    stderr: lastResult.stderr || `App ${appName} did not become frontmost after open_app; frontmost=${frontmost.name || 'unknown'} bundle=${frontmost.bundleId || 'unknown'}`,
   };
 }
 
 async function ensureMacInputTarget(action: GenericVisionAction, targetResolution: ResolvedWindowTarget) {
   if (targetResolution.captureKind !== 'window') return { exitCode: 0, stdout: 'input-isolation=display-fallback', stderr: '' };
   if (action.type === 'wait') return { exitCode: 0, stdout: 'input-isolation=not-required-for-wait', stderr: '' };
+  if (targetResolution.focused && targetResolution.inputIsolation === 'require-focused-target') {
+    return {
+      exitCode: 0,
+      stdout: `input-isolation=focused-target resolved-window app=${targetResolution.appName ?? 'unknown'} bundle=${targetResolution.bundleId ?? 'unknown'}`,
+      stderr: '',
+    };
+  }
   if (targetResolution.appName) {
-    const activateResult = await activateMacApp(targetResolution.appName);
+    const activateResult = await activateMacApp(targetResolution.appName, targetResolution.bundleId);
     if (activateResult.exitCode !== 0 && targetResolution.inputIsolation === 'require-focused-target') {
       return {
         exitCode: 125,
@@ -144,33 +221,79 @@ async function ensureMacInputTarget(action: GenericVisionAction, targetResolutio
       stderr: 'Input isolation requires a target appName so the scheduler can verify focus before sending mouse/keyboard events.',
     };
   }
-  const frontmost = await runCommand('osascript', ['-e', 'tell application "System Events" to get name of first application process whose frontmost is true'], { timeoutMs: 10000 });
-  const frontmostApp = frontmost.stdout.trim();
-  if (frontmost.exitCode === 0 && frontmostApp === targetResolution.appName) {
-    return { exitCode: 0, stdout: `input-isolation=focused-target frontmost=${frontmostApp || 'unknown'}`, stderr: '' };
+  const frontmost = await runCommand('osascript', ['-e', [
+    'tell application "System Events"',
+    '  set frontProcess to first application process whose frontmost is true',
+    '  set frontName to name of frontProcess',
+    '  set frontBundle to bundle identifier of frontProcess',
+    'end tell',
+    'return frontName & "|" & frontBundle',
+  ].join('\n')], { timeoutMs: 10000 });
+  const frontmostProcess = parseFrontmostProcess(frontmost.stdout);
+  if (frontmost.exitCode === 0 && frontmostMatches(frontmostProcess, targetResolution.appName, targetResolution.bundleId)) {
+    return { exitCode: 0, stdout: `input-isolation=focused-target frontmost=${frontmostProcess.name || 'unknown'} bundle=${frontmostProcess.bundleId || 'unknown'}`, stderr: '' };
   }
   return {
     exitCode: 125,
     stdout: frontmost.stdout,
     stderr: [
       'Input isolation blocked Computer Use action because the focused window/app did not match the target window contract.',
-      `expectedApp=${targetResolution.appName ?? 'unknown'} frontmost=${frontmostApp || 'unknown'}`,
+      `expectedApp=${targetResolution.appName ?? 'unknown'} expectedBundle=${targetResolution.bundleId ?? 'unknown'} frontmost=${frontmostProcess.name || 'unknown'} frontmostBundle=${frontmostProcess.bundleId || 'unknown'}`,
     ].join(' '),
   };
 }
 
-async function executeSwiftGuiAction(action: GenericSwiftGuiAction) {
+function parseFrontmostProcess(stdout: string) {
+  const [name = '', bundleId = ''] = stdout.trim().split('|');
+  return { name: name.trim(), bundleId: bundleId.trim() };
+}
+
+function frontmostMatches(frontmost: { name?: string; bundleId?: string }, appName?: string, bundleId?: string) {
+  if (bundleId && frontmost.bundleId && frontmost.bundleId.toLowerCase() === bundleId.toLowerCase()) return true;
+  if (!appName || !frontmost.name) return false;
+  return frontmost.name.toLowerCase() === appName.toLowerCase();
+}
+
+async function executeSwiftGuiAction(action: GenericSwiftGuiAction, targetResolution: ResolvedWindowTarget, showVisualCursor: boolean) {
   const scriptPath = join(tmpdir(), `sciforge-gui-${randomUUID()}.swift`);
-  await writeFile(scriptPath, swiftGuiActionScript(action), 'utf8');
+  await writeFile(scriptPath, swiftGuiActionScript(action, targetResolution, showVisualCursor), 'utf8');
   try {
-    return await runCommand('swift', [scriptPath], { timeoutMs: 30000 });
+    return await runSwiftGuiScript(scriptPath);
   } finally {
     await unlink(scriptPath).catch(() => undefined);
   }
 }
 
-function swiftGuiActionScript(action: GenericSwiftGuiAction) {
-  if (action.type === 'scroll') return swiftScrollActionScript(action);
+async function runSwiftGuiScript(scriptPath: string) {
+  const interpreted = await runCommand('swift', [scriptPath], { timeoutMs: 30000 });
+  if (interpreted.exitCode === 0) return interpreted;
+  const stderr = `${interpreted.stderr}\n${interpreted.stdout}`;
+  if (!/AppKit|NSApplication|NSWindow|NSView|JIT session error|Symbols not found/i.test(stderr)) return interpreted;
+  const buildDir = join(tmpdir(), `sciforge-gui-build-${randomUUID()}`);
+  const binaryPath = join(buildDir, 'sciforge-gui-action');
+  await mkdir(buildDir, { recursive: true });
+  try {
+    const compile = await runCommand('swiftc', ['-framework', 'AppKit', '-framework', 'CoreGraphics', scriptPath, '-o', binaryPath], { timeoutMs: 30000 });
+    if (compile.exitCode !== 0) {
+      return {
+        exitCode: compile.exitCode,
+        stdout: [interpreted.stdout, compile.stdout].filter(Boolean).join('\n'),
+        stderr: [interpreted.stderr, compile.stderr].filter(Boolean).join('\n'),
+      };
+    }
+    const executed = await runCommand(binaryPath, [], { timeoutMs: 30000 });
+    return {
+      exitCode: executed.exitCode,
+      stdout: [interpreted.stdout, executed.stdout].filter(Boolean).join('\n'),
+      stderr: executed.stderr,
+    };
+  } finally {
+    await unlink(binaryPath).catch(() => undefined);
+  }
+}
+
+function swiftGuiActionScript(action: GenericSwiftGuiAction, targetResolution: ResolvedWindowTarget, showVisualCursor: boolean) {
+  if (action.type === 'scroll') return swiftScrollActionScript(action, targetResolution, showVisualCursor);
   const clickCount = action.type === 'double_click' ? 2 : 1;
   const point = action.type === 'drag'
     ? { x: requiredCoordinate(action.fromX, 'fromX'), y: requiredCoordinate(action.fromY, 'fromY') }
@@ -178,7 +301,23 @@ function swiftGuiActionScript(action: GenericSwiftGuiAction) {
   const dragTo = action.type === 'drag'
     ? { x: requiredCoordinate(action.toX, 'toX'), y: requiredCoordinate(action.toY, 'toY') }
     : undefined;
-  return `
+  const actionBody = dragTo
+    ? `postMove(${point.x}, ${point.y})
+usleep(50000)
+let start = CGPoint(x: ${point.x}, y: ${point.y})
+let end = CGPoint(x: ${dragTo.x}, y: ${dragTo.y})
+CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: start, mouseButton: .left)?.post(tap: .cghidEventTap)
+usleep(100000)
+CGEvent(mouseEventSource: source, mouseType: .leftMouseDragged, mouseCursorPosition: end, mouseButton: .left)?.post(tap: .cghidEventTap)
+usleep(100000)
+CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: end, mouseButton: .left)?.post(tap: .cghidEventTap)
+print("swift-cgevent drag ${point.x},${point.y} -> ${dragTo.x},${dragTo.y} visualCursor=${showVisualCursor ? 'shown' : 'off'}")`
+    : `postMove(${point.x}, ${point.y})
+${Array.from({ length: clickCount }, () => `postClick(${point.x}, ${point.y})`).join('\n')}
+print("swift-cgevent ${action.type} ${point.x},${point.y} visualCursor=${showVisualCursor ? 'shown' : 'off'}")`;
+  return showVisualCursor
+    ? swiftVisualCursorScript({ x: point.x, y: point.y, toX: dragTo?.x, toY: dragTo?.y }, actionBody)
+    : `
 import CoreGraphics
 import Foundation
 
@@ -196,43 +335,150 @@ func postClick(_ x: Double, _ y: Double) {
   CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)?.post(tap: .cghidEventTap)
 }
 
-${dragTo
-    ? `postMove(${point.x}, ${point.y})
-usleep(50000)
-let start = CGPoint(x: ${point.x}, y: ${point.y})
-let end = CGPoint(x: ${dragTo.x}, y: ${dragTo.y})
-CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: start, mouseButton: .left)?.post(tap: .cghidEventTap)
-usleep(100000)
-CGEvent(mouseEventSource: source, mouseType: .leftMouseDragged, mouseCursorPosition: end, mouseButton: .left)?.post(tap: .cghidEventTap)
-usleep(100000)
-CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: end, mouseButton: .left)?.post(tap: .cghidEventTap)
-print("swift-cgevent drag ${point.x},${point.y} -> ${dragTo.x},${dragTo.y}")`
-    : `postMove(${point.x}, ${point.y})
-${Array.from({ length: clickCount }, () => `postClick(${point.x}, ${point.y})`).join('\n')}
-print("swift-cgevent ${action.type} ${point.x},${point.y}")`}
+${actionBody}
 `;
 }
 
-function swiftScrollActionScript(action: Extract<GenericVisionAction, { type: 'scroll' }>) {
+function swiftScrollActionScript(action: Extract<GenericVisionAction, { type: 'scroll' }>, targetResolution: ResolvedWindowTarget, showVisualCursor: boolean) {
   const amount = Math.max(1, Math.round(action.amount ?? 5));
   const pixelDelta = amount * 120;
   const vertical = action.direction === 'up' ? pixelDelta : action.direction === 'down' ? -pixelDelta : 0;
   const horizontal = action.direction === 'left' ? pixelDelta : action.direction === 'right' ? -pixelDelta : 0;
-  return `
-import CoreGraphics
-import Foundation
-
-let source = CGEventSource(stateID: .hidSystemState)
-CGEvent(
+  const center = targetWindowCenter(targetResolution);
+  const actionBody = `
+let location = CGPoint(x: ${center.x}, y: ${center.y})
+CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: location, mouseButton: .left)?.post(tap: .cghidEventTap)
+usleep(50000)
+let event = CGEvent(
   scrollWheelEvent2Source: source,
   units: .pixel,
   wheelCount: 2,
   wheel1: Int32(${vertical}),
   wheel2: Int32(${horizontal}),
   wheel3: 0
-)?.post(tap: .cghidEventTap)
-print("swift-cgevent scroll ${action.direction} ${amount}")
+)
+event?.location = location
+event?.post(tap: .cghidEventTap)
+print("swift-cgevent scroll ${action.direction} ${amount} at ${center.x},${center.y} visualCursor=${showVisualCursor ? 'shown' : 'off'}")
 `;
+  return showVisualCursor
+    ? swiftVisualCursorScript({ x: center.x, y: center.y }, actionBody)
+    : `
+import CoreGraphics
+import Foundation
+
+let source = CGEventSource(stateID: .hidSystemState)
+let location = CGPoint(x: ${center.x}, y: ${center.y})
+${actionBody}
+`;
+}
+
+function swiftVisualCursorScript(point: { x: number; y: number; toX?: number; toY?: number }, actionBody: string) {
+  return `
+import AppKit
+import CoreGraphics
+import Foundation
+
+let source = CGEventSource(stateID: .hidSystemState)
+
+func postMove(_ x: Double, _ y: Double) {
+  let point = CGPoint(x: x, y: y)
+  CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?.post(tap: .cghidEventTap)
+}
+
+func postClick(_ x: Double, _ y: Double) {
+  let point = CGPoint(x: x, y: y)
+  CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)?.post(tap: .cghidEventTap)
+  usleep(50000)
+  CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)?.post(tap: .cghidEventTap)
+}
+
+func appKitPoint(cgX: Double, cgY: Double) -> CGPoint {
+  for screen in NSScreen.screens {
+    let frame = screen.frame
+    if cgX >= frame.minX && cgX <= frame.maxX {
+      let convertedY = frame.maxY - cgY
+      if convertedY >= frame.minY && convertedY <= frame.maxY {
+        return CGPoint(x: cgX, y: convertedY)
+      }
+    }
+  }
+  let frame = NSScreen.main?.frame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+  return CGPoint(x: cgX, y: frame.maxY - cgY)
+}
+
+class SciForgeCursorView: NSView {
+  override func draw(_ dirtyRect: NSRect) {
+    NSColor.clear.setFill()
+    dirtyRect.fill()
+    let center = CGPoint(x: bounds.midX, y: bounds.midY)
+    NSColor(calibratedRed: 0.0, green: 1.0, blue: 0.85, alpha: 0.92).setFill()
+    NSColor(calibratedRed: 1.0, green: 0.18, blue: 0.55, alpha: 0.98).setStroke()
+    let diamond = NSBezierPath()
+    diamond.move(to: CGPoint(x: center.x, y: center.y + 18))
+    diamond.line(to: CGPoint(x: center.x + 18, y: center.y))
+    diamond.line(to: CGPoint(x: center.x, y: center.y - 18))
+    diamond.line(to: CGPoint(x: center.x - 18, y: center.y))
+    diamond.close()
+    diamond.fill()
+    diamond.lineWidth = 4
+    diamond.stroke()
+    NSColor.white.setStroke()
+    let crosshair = NSBezierPath()
+    crosshair.move(to: CGPoint(x: center.x - 24, y: center.y))
+    crosshair.line(to: CGPoint(x: center.x + 24, y: center.y))
+    crosshair.move(to: CGPoint(x: center.x, y: center.y - 24))
+    crosshair.line(to: CGPoint(x: center.x, y: center.y + 24))
+    crosshair.lineWidth = 2
+    crosshair.stroke()
+    let label = "SciForge"
+    let attributes: [NSAttributedString.Key: Any] = [
+      .font: NSFont.boldSystemFont(ofSize: 14),
+      .foregroundColor: NSColor.white,
+      .backgroundColor: NSColor(calibratedRed: 0.0, green: 0.0, blue: 0.0, alpha: 0.72)
+    ]
+    label.draw(at: CGPoint(x: center.x - 31, y: center.y - 46), withAttributes: attributes)
+  }
+}
+
+let cursorPoint = appKitPoint(cgX: ${point.x}, cgY: ${point.y})
+let size = CGSize(width: 116, height: 124)
+let window = NSWindow(
+  contentRect: CGRect(x: cursorPoint.x - size.width / 2, y: cursorPoint.y - size.height / 2, width: size.width, height: size.height),
+  styleMask: [.borderless],
+  backing: .buffered,
+  defer: false
+)
+window.isOpaque = false
+window.backgroundColor = .clear
+window.level = .screenSaver
+window.ignoresMouseEvents = true
+window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+window.contentView = SciForgeCursorView(frame: CGRect(origin: .zero, size: size))
+window.orderFrontRegardless()
+
+DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) {
+${indentSwift(actionBody, '  ')}
+}
+DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) {
+  NSApp.terminate(nil)
+}
+NSApplication.shared.setActivationPolicy(.accessory)
+NSApp.run()
+`;
+}
+
+function indentSwift(value: string, prefix: string) {
+  return value.trim().split('\n').map((line) => `${prefix}${line}`).join('\n');
+}
+
+function targetWindowCenter(targetResolution: ResolvedWindowTarget) {
+  const bounds = targetResolution.contentRect ?? targetResolution.bounds;
+  if (!bounds) return { x: 0, y: 0 };
+  return {
+    x: Math.round(bounds.x + bounds.width / 2),
+    y: Math.round(bounds.y + bounds.height / 2),
+  };
 }
 
 function genericMacActionScript(action: GenericVisionAction) {
@@ -250,7 +496,11 @@ function genericMacActionScript(action: GenericVisionAction) {
     lines.push('  delay 0.1');
     lines.push(`  mouse up at {${Math.round(requiredCoordinate(action.toX, 'toX'))}, ${Math.round(requiredCoordinate(action.toY, 'toY'))}}`);
   } else if (action.type === 'type_text') {
-    lines.push(`  keystroke ${appleScriptString(action.text)}`);
+    lines.push('  set previousClipboard to the clipboard');
+    lines.push(`  set the clipboard to ${appleScriptString(action.text)}`);
+    lines.push('  keystroke "v" using {command down}');
+    lines.push('  delay 0.1');
+    lines.push('  set the clipboard to previousClipboard');
   } else if (action.type === 'press_key') {
     lines.push(`  ${keyStrokeScript(action.key)}`);
   } else if (action.type === 'hotkey') {
@@ -288,6 +538,14 @@ function keyStrokeScript(key: string, modifiers: string[] = []) {
     delete: 51,
     backspace: 51,
     space: 49,
+    pagedown: 121,
+    page_down: 121,
+    'page down': 121,
+    pageup: 116,
+    page_up: 116,
+    'page up': 116,
+    home: 115,
+    end: 119,
     left: 123,
     right: 124,
     down: 125,

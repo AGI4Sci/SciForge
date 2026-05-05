@@ -24,6 +24,19 @@ from .computer_use import (
     sense_text_result_for_computer_use,
     text_signal_from_vision_step,
 )
+from .computer_use_policy import (
+    MatrixExecutionPlan,
+    build_default_window_target,
+    build_matrix_execution_plan,
+    is_planner_only_evidence_task,
+)
+from .coarse_to_fine import (
+    FocusRegion,
+    build_focus_region,
+    build_focus_region_from_trace,
+    build_region_semantic_verifier,
+    build_verifier_planning_feedback,
+)
 from .executor import ExecutionResult, GuiExecutor, Point, ScrollDirection
 from .kv_ground import (
     DEFAULT_REMOTE_PATH_PREFIXES,
@@ -110,6 +123,12 @@ from .trace import (
     validate_trace_payload,
     write_trace_artifact,
 )
+from .trace_contract import (
+    TraceContractMetrics,
+    TraceContractValidation,
+    validate_computer_use_trace_contract,
+    validate_computer_use_trace_contract_from_request,
+)
 from .upload import ScpUploadTarget, build_scp_command, scp_upload_image
 from .types import (
     GroundingResult,
@@ -125,6 +144,12 @@ from .types import (
     VisionStepRecord,
     VisionTaskRequest,
     VisionTaskResult,
+)
+from .visual_memory import (
+    VisionMemoryBlock,
+    VisionMemoryTraceInput,
+    build_visual_memory_block,
+    build_visual_memory_block_from_request,
 )
 from .verifier import (
     PixelChangeVerification,
@@ -155,6 +180,7 @@ __all__ = [
     "COMPUTER_USE_COMMAND_SCHEMA",
     "CoordinatePoint",
     "CaptureRect",
+    "FocusRegion",
     "DEFAULT_MANIFEST",
     "DEFAULT_REMOTE_PATH_PREFIXES",
     "DEFAULT_VLM_MODEL",
@@ -174,6 +200,7 @@ __all__ = [
     "MANIFEST_KV_GROUND_REMOTE_PATH_PREFIXES_ENV",
     "MANIFEST_KV_GROUND_URL_ENV",
     "MacOSScreencaptureProvider",
+    "MatrixExecutionPlan",
     "ModalityInput",
     "Observer",
     "ObserverScreenshotRef",
@@ -214,9 +241,13 @@ __all__ = [
     "TextAgentDecision",
     "TextVisionAgent",
     "TraceScreenshotStore",
+    "TraceContractMetrics",
+    "TraceContractValidation",
     "TraceValidationResult",
     "VerifierPixelDiffResult",
     "VisionAction",
+    "VisionMemoryBlock",
+    "VisionMemoryTraceInput",
     "VisionModel",
     "VisionStepRecord",
     "VisionTaskRequest",
@@ -225,14 +256,22 @@ __all__ = [
     "VisionVlmConfig",
     "VisionVlmError",
     "build_completion_check_prompt",
+    "build_focus_region",
+    "build_focus_region_from_trace",
     "build_crosshair_verification_prompt",
+    "build_region_semantic_verifier",
     "build_default_manifest",
+    "build_default_window_target",
+    "build_matrix_execution_plan",
     "build_macos_screencapture_command",
     "build_scp_command",
     "build_planner_prompt",
     "build_sense_plugin_request",
     "build_screen_summary_prompt",
     "build_user_message_with_image",
+    "build_verifier_planning_feedback",
+    "build_visual_memory_block",
+    "build_visual_memory_block_from_request",
     "build_visible_texts_prompt",
     "capture_screenshot_to_store",
     "classify_image_ref",
@@ -244,6 +283,7 @@ __all__ = [
     "encode_image_file",
     "envelope_to_text",
     "extract_json_object",
+    "is_planner_only_evidence_task",
     "normalized_to_pixel",
     "parse_completion_check_response",
     "parse_crosshair_verification_response",
@@ -265,6 +305,8 @@ __all__ = [
     "text_signal_from_vision_step",
     "text_envelope_from_vision_step",
     "validate_planner_action",
+    "validate_computer_use_trace_contract",
+    "validate_computer_use_trace_contract_from_request",
     "validate_trace_artifact",
     "validate_trace_payload",
     "verifier_pixel_diff",

@@ -18,12 +18,13 @@ export interface ComputerUseSchedulerLease {
 
 export async function acquireComputerUseSchedulerLease(params: {
   targetResolution: ResolvedWindowTarget;
+  lockId?: string;
   runId?: string;
   stepId?: string;
   timeoutMs?: number;
   staleMs?: number;
 }): Promise<{ ok: true; lease: ComputerUseSchedulerLease; release: () => Promise<ComputerUseSchedulerLease> } | { ok: false; reason: string; lockId: string; lockPath: string; waitMs: number }> {
-  const lockId = params.targetResolution.schedulerLockId || 'display-fallback';
+  const lockId = params.lockId || params.targetResolution.schedulerLockId || 'display-fallback';
   const lockPath = schedulerLockPath(lockId);
   const ownerId = sanitizeId(`${params.runId || 'unknown-run'}-${params.stepId || 'unknown-step'}-${Date.now()}`);
   const timeoutMs = Math.max(1, params.timeoutMs ?? 60_000);
@@ -94,6 +95,10 @@ export async function acquireComputerUseSchedulerLease(params: {
     lockPath,
     waitMs: Date.now() - startedAt,
   };
+}
+
+export function computerUseSchedulerLockId(targetResolution: ResolvedWindowTarget, options: { sharedSystemInput?: boolean } = {}) {
+  return options.sharedSystemInput ? 'shared-system-input' : targetResolution.schedulerLockId || 'display-fallback';
 }
 
 export function schedulerLeaseTrace(lease: ComputerUseSchedulerLease | undefined) {

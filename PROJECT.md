@@ -17,6 +17,27 @@
 
 ## 任务板
 
+### T085 Coarse-to-Fine Vision Grounding 与 Verifier 反馈闭环
+
+状态：已完成。本任务把长时复杂 Computer Use 的视觉理解从“整窗一次定位”升级为通用 coarse-to-fine 算法：先用目标窗口截图做全局观察和粗定位，再对关键区域生成 focus-region crop，用局部证据辅助定位、验证和后续规划。算法主体已沉到 `packages/senses/vision-sense/sciforge_vision_sense`，runtime 只负责调用 vision-sense 接口、执行截图/裁剪和写 trace，不把视觉推理策略写死在 SciForge runtime。
+
+#### 背景
+- T084 已补齐 window-based 主路径、调度锁、window verifier 和 file-ref-only image memory，但密集 UI、小图标、表格行、菜单、弹窗等场景仍需要“先看整体、再看局部”的视觉闭环。
+- Verifier 的反馈需要从“屏幕有没有变化”升级为“哪个区域变化/没变化、窗口是否一致、grounding 是否偏移、下一轮应该扩大 crop、换目标描述还是换输入 modality”。
+
+#### TODO
+- [x] 在 `vision-sense` package 中新增 coarse-to-fine 算法接口：`build_focus_region` / `build_focus_region_from_trace` / `build_verifier_planning_feedback`，统一负责 focus region 选择和 verifier 反馈摘要。
+- [x] runtime 改为调用 `vision-sense` 提供的 coarse-to-fine 接口：TS 只保留截图裁剪、trace 文件引用和 executor/verifier 接线，不在 runtime 内维护视觉区域选择算法。
+- [x] trace 增加 `visualFocus`：记录 `sourceScreenshotRef`、focus bbox、before/after focus screenshot refs、focus-region pixel diff 和算法 provider，继续保持 file-ref-only。
+- [x] 将临时多模态记忆机制收进 `vision-sense`：新增 `visual_memory.py`，由 package 统一读取 vision-trace refs 并输出 file-ref-only、预算化的 `VisionMemoryBlock`，包含截图 refs、focus refs、windowTarget、scheduler、action counts 和 verifier feedback；CU-LONG runner 只调用该接口拼接跨轮 prompt。
+- [x] 将通用 trace contract validation 收进 `vision-sense`：新增 `trace_contract.py`，统一校验 file-ref-only、windowTarget、window-local 坐标、generic input channel、scheduler metadata、window verifier、no DOM/accessibility/private fields 和真实 GUI executor lease；CU-LONG validator 只做 scenario 选择并调用该接口。
+- [x] 将通用 Computer Use policy 收进 `vision-sense`：新增 `computer_use_policy.py`，统一负责 planner-only evidence task 判定、dry-run/real GUI matrix execution plan 和默认 window target contract；CU-LONG runner 只消费策略结果。
+- [x] 更新 `docs/vision_tool/vision_computer_use_agent_mvp.md`，把 coarse-to-fine 从 Grounder 内部技巧提升为 Observer/Grounder/Verifier/Memory 共同使用的通用机制。
+- [x] 将动态 VisionPlanner prompt 显式支持 `targetRegionDescription` / `focusRegion`：dense UI、小图标、表格、菜单、弹窗场景可先给出 larger region，runtime 会生成局部 focus evidence；`wait + targetRegionDescription` 可作为 observation-only 局部观察步。
+- [x] 将 KV-Ground / visual Grounder 接入真正的二次 crop grounding：先在整窗截图粗定位 region，再裁剪 focus-region，在 crop 内用同一 Grounder 精定位，最后把 crop-local 坐标映射回 window-local/executor 坐标。
+- [x] 增加 region-level semantic verifier：`build_region_semantic_verifier` 会结合 action、focus crop diff、整窗 diff、grounding 和 focus bbox 输出 `regionSemantic` verdict、confidence、nextPlannerHint 和 summary，用于区分 focused target reacted、off-target/unrelated change、text-entry unverified 等局部语义状态。
+- [x] 给 CU-LONG-004 / CU-LONG-007 增加 coarse-to-fine 专项 smoke，验证小目标和密集表单 trace 中必须出现 `visualFocus`、`focus-region` screenshot refs 和 `verifier.regionSemantic` evidence。
+
 ### T084 Window-based Vision Computer Use 长测与优化
 
 状态：进行中。本任务承接批注要求：先不改代码，只把 CU-LONG-001 到 CU-LONG-010 迁入独立任务，并把后续测试/优化方向收束到通用窗口级算法。当前已补齐可校验的 WindowTarget / trace contract 和 CU-LONG dry-run 编排资产，并把 `vision-sense` 边界收紧为 `text + screenshot/image modalities -> text only`；Computer Use 规划/执行是独立的 modular consumer/provider，不属于 `vision-sense` package。本轮继续增强了 window-local Grounder 坐标契约、window lifecycle evidence、window-based verifier consistency metadata、输入通道隔离契约、CU-LONG parallel-analysis matrix、真实 GUI executor lock、可审计 scheduler lock policy、真实矩阵 input-isolation preflight、runtime input adapter trace 和 10 场景动态视觉矩阵 smoke。目标是让 SciForge 使用 `vision-sense` 观察屏幕应用，再由独立 Computer Use consumer/provider 操纵窗口，同时拥有独立的“鼠标/键盘”执行通道；在真实独立适配器不可用时必须 fail closed 或显式声明可能影响用户输入。
@@ -38,6 +59,7 @@
 - [x] 将 CU-LONG matrix 支持子 agent 并行测序：Planner/Grounder/Verifier 分析任务可并行；真实 GUI 执行动作按窗口锁串行或隔离执行，避免互相抢屏幕。当前 `run-matrix` 生成 `executionPlan`，dry-run 使用 bounded `parallel-analysis`，真实 GUI 强制 `serialized-real-gui`；每个 scenario 通过 per-request `visionSenseConfig` 注入 runId/actions/windowTarget，避免并发写全局 env 或互相踩 trace。
 - [x] 针对 CU-LONG-001 到 CU-LONG-010 逐个运行 preflight -> scenario -> validate-run -> matrix-report -> repair-plan，并把失败分类回写到通用算法 TODO，不写单场景补丁。已执行 full dry-run matrix：`/tmp/sciforge-t084-matrix/matrix-20260504092236/matrix-summary.json`，10/10 passed，`validate-matrix` passed，`matrix-report.md` 已生成，`repair-plan.md` actions=0；真实 GUI 全量矩阵仍需在独立输入适配器接入后按同一链路重跑。
 - [x] 针对长时复杂任务池补充动态视觉矩阵 smoke：全 10 个 CU-LONG 场景在不传 `actionsJson` 的情况下运行，mock OpenAI-compatible VisionPlanner 必须接收截图并输出 `targetDescription`，mock KV-Ground 必须接收截图路径并返回窗口坐标；测试同时保留外部 `SCIFORGE_VISION_ACTIONS_JSON=wait`，确认 CU-LONG runner 不会被旧静态动作污染。
+- [x] 优化 verifier 反馈记忆：step-level verifier 现在生成面向后续规划的 `planningFeedback`，压缩 pixel diff、window consistency、grounding 坐标、失败/阻断原因和下一步建议；同轮动态 replan 会把该反馈写入 run history，CU-LONG 跨轮 prompt 也会从 prior trace 中提取 `verifierFeedback`，让 VLM/LLM 后续规划避免重复无效目标并按窗口/grounding 证据修正。
 
 #### 长时复杂 Computer Use 测试任务池
 
