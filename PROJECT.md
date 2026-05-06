@@ -17,6 +17,38 @@
 
 ## 任务板
 
+### T090 会话 Workspace 状态变换职责边界优化
+
+状态：已完成。本任务继续拆分应用入口中的会话状态规则：新建聊天、删除当前聊天、恢复/清理归档会话、编辑/删除消息等 workspace state 变换下沉到独立模块。`SciForgeApp.tsx` 只负责响应 UI 事件并调用状态变换函数；会话规则不再散落在页面装配代码里，也不绑定任何特定场景。
+
+#### 原则落地
+- 单一职责：`workspace/sessionWorkspace.ts` 只负责会话和归档相关 state 变换；应用入口只负责调用与页面跳转。
+- 按职责拆分：会话生命周期、归档列表操作、消息编辑删除按 workspace 领域边界拆分，而不是继续堆在页面组件中。
+- 主流程清晰：`newChat`、`deleteChat`、`restoreArchivedSession` 等入口函数变成薄封装，主流程更容易阅读。
+- 接口明确：模块函数显式接收 workspace state、scenarioId、sessionId、时间戳和 fallback title，不读取 React state 或浏览器全局。
+- 减少耦合：新模块不 import 页面组件，不依赖 `ChatPanel`、DOM、配置或当前 active page。
+- 配置集中：归档数量限制集中在会话 workspace 模块默认值，调用方仍可显式覆盖。
+- 谨慎使用 utils：没有新增杂项工具箱，使用领域命名的 `workspace/sessionWorkspace.ts`。
+- 函数保持短小：每个函数只完成一个明确状态动作。
+- 命名表达意图：`startNewChat`、`deleteActiveChat`、`restoreArchivedSession`、`editSessionMessage` 等名称直接描述行为。
+- 稳定对外接口：外部 UI props 和 session/domain contract 不变，只移动内部状态规则。
+- 避免过度设计：不引入 reducer 框架或复杂 command bus，只抽纯 state transition 函数。
+- 方便测试复用：新增独立单测覆盖归档、恢复、清理和消息编辑删除。
+
+#### TODO
+- [x] 新增 `src/ui/src/workspace/sessionWorkspace.ts` 承载会话 workspace state 变换。
+- [x] 将新建聊天、删除当前聊天、恢复归档、删除/清空归档从 `SciForgeApp.tsx` 下沉到模块。
+- [x] 将编辑消息和删除消息下沉为显式 session transform。
+- [x] 保持模块不依赖 React、DOM、页面状态或具体科研场景。
+- [x] 为会话 workspace 模块增加独立单测。
+- [x] 通过 TypeScript 类型检查、相关单测和生产构建。
+
+#### 验收
+- [x] `SciForgeApp.tsx` 中会话生命周期函数只负责调用领域 state transition。
+- [x] 新模块可在任意 scenario/workspace state 上复用，不含当前案例硬编码。
+- [x] 单测覆盖归档恢复与消息变更的核心规则。
+- [x] `npm run typecheck`、相关单测和 `npm run build` 通过。
+
 ### T089 反馈捕获模型职责边界优化
 
 状态：已完成。本任务继续按结构优化原则拆分反馈批注入口：应用入口只负责装配全局页面；反馈捕获 React 层负责监听交互、展示菜单和提交状态；DOM target snapshot、runtime snapshot、选中文本压缩和 UI reference 构造下沉到领域命名模块。实现必须适用于任何页面、任何 scenario 和任何 UI 元素，不为当前批注截图或文献证据评估场景写专用分支。

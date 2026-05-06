@@ -104,7 +104,17 @@ import {
 } from '../domain';
 import { uiModuleRegistry, type PresentationDedupeScope, type RuntimeUIModule } from '../uiModuleRegistry';
 import type { VolcanoPoint } from '../charts';
-import { compactWorkspaceStateForStorage, createSession, loadWorkspaceState, resetSession, saveWorkspaceState, sessionActivityScore, shouldUsePersistedWorkspaceState, versionSession } from '../sessionStore';
+import { compactWorkspaceStateForStorage, createSession, loadWorkspaceState, saveWorkspaceState, shouldUsePersistedWorkspaceState, versionSession } from '../sessionStore';
+import {
+  activeSessionFor as workspaceActiveSessionFor,
+  clearArchivedSessions as clearScenarioArchivedSessions,
+  deleteActiveChat,
+  deleteArchivedSessions as deleteScenarioArchivedSessions,
+  deleteSessionMessage,
+  editSessionMessage,
+  restoreArchivedSession as restoreScenarioArchivedSession,
+  startNewChat,
+} from '../workspace/sessionWorkspace';
 import { defaultSciForgeConfig, loadSciForgeConfig, normalizeWorkspaceRootPath, saveSciForgeConfig, updateConfig } from '../config';
 import {
   acceptSkillPromotionProposal,
@@ -2156,94 +2166,42 @@ export function SciForgeApp() {
   }
 
   function activeSessionFor(state: SciForgeWorkspaceState, nextScenarioId: ScenarioInstanceId) {
-    return state.sessionsByScenario[nextScenarioId] ?? createSession(nextScenarioId, `${scenarioLabelForInstance(nextScenarioId)} 新聊天`);
+    return workspaceActiveSessionFor(state, nextScenarioId, `${scenarioLabelForInstance(nextScenarioId)} 新聊天`);
   }
 
   function newChat(nextScenarioId: ScenarioInstanceId) {
-    updateWorkspace((current) => {
-      const currentSession = versionSession(activeSessionFor(current, nextScenarioId), 'new chat archived previous session');
-      return {
-        ...current,
-        archivedSessions: [currentSession, ...current.archivedSessions].slice(0, 80),
-        sessionsByScenario: {
-          ...current.sessionsByScenario,
-          [nextScenarioId]: createSession(nextScenarioId, `${scenarioLabelForInstance(nextScenarioId)} 新聊天`),
-        },
-      };
-    });
+    updateWorkspace((current) => startNewChat(current, nextScenarioId, `${scenarioLabelForInstance(nextScenarioId)} 新聊天`));
   }
 
   function deleteChat(nextScenarioId: ScenarioInstanceId) {
-    updateWorkspace((current) => {
-      const deleted = versionSession(activeSessionFor(current, nextScenarioId), 'deleted current chat');
-      return {
-        ...current,
-        archivedSessions: [{ ...deleted, title: `${deleted.title}（已删除）` }, ...current.archivedSessions].slice(0, 80),
-        sessionsByScenario: {
-          ...current.sessionsByScenario,
-          [nextScenarioId]: resetSession(nextScenarioId),
-        },
-      };
-    });
+    updateWorkspace((current) => deleteActiveChat(current, nextScenarioId, `${scenarioLabelForInstance(nextScenarioId)} 新聊天`));
   }
 
   function restoreArchivedSession(nextScenarioId: ScenarioInstanceId, sessionId: string) {
-    updateWorkspace((current) => {
-      const restored = current.archivedSessions.find((session) => session.scenarioId === nextScenarioId && session.sessionId === sessionId);
-      if (!restored) return current;
-      const active = activeSessionFor(current, nextScenarioId);
-      const nextArchived = current.archivedSessions.filter((session) => session.sessionId !== sessionId);
-      const archivedActive = sessionActivityScore(active) > 0
-        ? [versionSession(active, `restored archived session ${sessionId}`), ...nextArchived]
-        : nextArchived;
-      return {
-        ...current,
-        archivedSessions: archivedActive.slice(0, 80),
-        sessionsByScenario: {
-          ...current.sessionsByScenario,
-          [nextScenarioId]: {
-            ...restored,
-            updatedAt: nowIso(),
-          },
-        },
-      };
-    });
+    updateWorkspace((current) => restoreScenarioArchivedSession(
+      current,
+      nextScenarioId,
+      sessionId,
+      nowIso(),
+      `${scenarioLabelForInstance(nextScenarioId)} 新聊天`,
+    ));
   }
 
   function deleteArchivedSessions(nextScenarioId: ScenarioInstanceId, sessionIds: string[]) {
     if (!sessionIds.length) return;
-    const selected = new Set(sessionIds);
-    updateWorkspace((current) => ({
-      ...current,
-      archivedSessions: current.archivedSessions.filter((session) => session.scenarioId !== nextScenarioId || !selected.has(session.sessionId)),
-    }));
+    updateWorkspace((current) => deleteScenarioArchivedSessions(current, nextScenarioId, sessionIds));
   }
 
   function clearArchivedSessions(nextScenarioId: ScenarioInstanceId) {
-    updateWorkspace((current) => ({
-      ...current,
-      archivedSessions: current.archivedSessions.filter((session) => session.scenarioId !== nextScenarioId),
-    }));
+    updateWorkspace((current) => clearScenarioArchivedSessions(current, nextScenarioId));
   }
 
   function editMessage(nextScenarioId: ScenarioInstanceId, messageId: string, content: string) {
-    const session = workspaceState.sessionsByScenario[nextScenarioId] ?? createSession(nextScenarioId);
-    const nextSession: SciForgeSession = {
-      ...session,
-      messages: session.messages.map((message) => message.id === messageId ? { ...message, content, updatedAt: nowIso() } as SciForgeMessage : message),
-      updatedAt: nowIso(),
-    };
-    updateSession(nextSession, `edit message ${messageId}`);
+    updateSession(editSessionMessage(workspaceState, nextScenarioId, messageId, content, nowIso()), `edit message ${messageId}`);
   }
 
   function deleteMessage(nextScenarioId: ScenarioInstanceId, messageId: string) {
-    const session = workspaceState.sessionsByScenario[nextScenarioId] ?? createSession(nextScenarioId);
-    const nextSession: SciForgeSession = {
-      ...session,
-      messages: session.messages.filter((message) => message.id !== messageId),
-      updatedAt: nowIso(),
-    };
-    updateSession(nextSession, `delete message ${messageId}`);
+    updateSession(deleteSessionMessage(workspaceState, nextScenarioId, messageId, nowIso()), `delete message ${messageId}`);
   }
 
   function markReusableRun(nextScenarioId: ScenarioInstanceId, runId: string) {
