@@ -58,10 +58,18 @@ import { buildBuiltInScenarioPackage, builtInScenarioPackageRef, type ScenarioPa
 import type { ScenarioLibraryItem } from '../scenarioCompiler/scenarioLibrary';
 import { compileSlotsForScenario } from '../scenarioCompiler/uiPlanCompiler';
 import { timeline } from '../demoData';
-import { createGithubIssue, fetchOpenGithubIssues } from '../api/githubIssuesApi';
 import { sendAgentMessageStream } from '../api/agentClient';
 import { sendSciForgeToolMessage } from '../api/sciforgeToolsClient';
 import { buildExecutionBundle, evaluateExecutionBundleExport } from '../exportPolicy';
+import {
+  buildFeedbackBundle,
+  buildFeedbackGithubIssueBody,
+  buildFeedbackGithubIssueTitle,
+  importGithubOpenIssuesAsFeedback as applyGithubOpenIssuesAsFeedback,
+  markFeedbackGithubIssueCreated,
+  submitFeedbackGithubIssue,
+  syncFeedbackGithubIssues,
+} from '../feedback/githubFeedback';
 import {
   makeId,
   nowIso,
@@ -1721,10 +1729,10 @@ function FeedbackInboxPage({
     .filter((comment) => statusFilter === 'all' || comment.status === statusFilter)
     .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
   const selectedComments = comments.filter((comment) => selectedIds.includes(comment.id));
-  const bundle = feedbackBundle(selectedComments.length ? selectedComments : visibleComments, requests);
+  const bundle = buildFeedbackBundle(selectedComments.length ? selectedComments : visibleComments, requests, APP_BUILD_ID);
   const issueScopeComments = selectedComments.length ? selectedComments : visibleComments;
-  const issueTitle = feedbackGithubIssueTitle(issueScopeComments);
-  const issueBody = feedbackGithubIssueBody(issueScopeComments, requests);
+  const issueTitle = buildFeedbackGithubIssueTitle(issueScopeComments);
+  const issueBody = buildFeedbackGithubIssueBody(issueScopeComments, requests, APP_BUILD_ID);
   const visibleIds = visibleComments.map((item) => item.id);
   const visibleSelectedCount = visibleIds.filter((id) => selectedIds.includes(id)).length;
 
@@ -1764,7 +1772,7 @@ function FeedbackInboxPage({
     }
     setGithubSubmitBusy(true);
     try {
-      const created = await createGithubIssue(repo, token, { title: issueTitle, body: issueBody });
+      const created = await submitFeedbackGithubIssue({ repo, token, title: issueTitle, body: issueBody });
       onGithubIssueCreated(issueScopeComments.map((comment) => comment.id), {
         number: created.number,
         htmlUrl: created.htmlUrl,
@@ -1789,19 +1797,8 @@ function FeedbackInboxPage({
     }
     setGithubSyncBusy(true);
     try {
-      const rows = await fetchOpenGithubIssues(repo, token);
       const syncedAt = nowIso();
-      const mapped: GithubSyncedOpenIssueRecord[] = rows.map((row) => ({
-        schemaVersion: 1,
-        number: row.number,
-        title: row.title,
-        body: row.body ?? '',
-        htmlUrl: row.html_url,
-        updatedAt: row.updated_at,
-        authorLogin: row.user?.login,
-        labels: (row.labels ?? []).map((label) => label.name ?? '').filter(Boolean),
-        syncedAt,
-      }));
+      const mapped = await syncFeedbackGithubIssues(repo, token, syncedAt);
       onReplaceGithubSyncedOpenIssues(mapped.slice(0, 500));
       const imported = onImportGithubOpenIssues(mapped.slice(0, 500));
       setGithubActionHint(`已同步 ${mapped.length} 条未关闭 Issue（不含 PR），导入/更新 ${imported} 条本地反馈。`);
@@ -2110,136 +2107,6 @@ function elementPath(element: Element) {
 
 function compactFeedbackText(text: string) {
   return text.replace(/\s+/g, ' ').trim().slice(0, 240);
-}
-
-function feedbackBundle(comments: FeedbackCommentRecord[], requests: NonNullable<SciForgeWorkspaceState['feedbackRequests']>) {
-  return {
-    schemaVersion: 1,
-    exportedAt: nowIso(),
-    appVersion: APP_BUILD_ID,
-    comments,
-    requests: requests.filter((request) => request.feedbackIds.some((id) => comments.some((comment) => comment.id === id))),
-    githubIssueHint: 'Use comments as source-of-truth; GitHub Issue should summarize and link this bundle instead of replacing it.',
-  };
-}
-
-function githubIssueFeedbackComment(issue: GithubSyncedOpenIssueRecord) {
-  const body = issue.body.trim();
-  return body
-    ? `${issue.title}\n\n${body.slice(0, 2400)}`
-    : issue.title;
-}
-
-function githubIssueToFeedbackComment(issue: GithubSyncedOpenIssueRecord, now: string): FeedbackCommentRecord {
-  return {
-    id: `feedback-github-${issue.number}`,
-    schemaVersion: 1,
-    authorId: issue.authorLogin ? `github:${issue.authorLogin}` : 'github',
-    authorName: issue.authorLogin ? `GitHub @${issue.authorLogin}` : 'GitHub',
-    comment: githubIssueFeedbackComment(issue),
-    status: 'open',
-    priority: issue.labels.some((label) => /urgent|high|p0|p1/i.test(label)) ? 'high' : 'normal',
-    tags: Array.from(new Set(['github', ...issue.labels])),
-    createdAt: issue.updatedAt || now,
-    updatedAt: now,
-    target: {
-      selector: `github-issue-${issue.number}`,
-      path: `github/issues/${issue.number}`,
-      text: issue.title,
-      tagName: 'github-issue',
-      role: 'issue',
-      ariaLabel: issue.title,
-      rect: { x: 0, y: 0, width: 0, height: 0 },
-    },
-    viewport: { width: 0, height: 0, devicePixelRatio: 1, scrollX: 0, scrollY: 0 },
-    runtime: {
-      page: 'github',
-      url: issue.htmlUrl,
-      scenarioId: 'github-feedback',
-      sessionTitle: issue.title,
-      appVersion: APP_BUILD_ID,
-    },
-    githubIssueUrl: issue.htmlUrl,
-    githubIssueNumber: issue.number,
-  };
-}
-
-function feedbackGithubIssueTitle(comments: FeedbackCommentRecord[]): string {
-  if (!comments.length) return '[SciForge] 反馈汇总';
-  if (comments.length === 1) {
-    const one = comments[0].comment.trim().slice(0, 88);
-    return `[SciForge] ${one || '反馈'}`;
-  }
-  const hint = requestTitleFromFeedback(comments).slice(0, 48);
-  return `[SciForge] 汇总 ×${comments.length} · ${hint}`;
-}
-
-function feedbackGithubIssueBody(
-  comments: FeedbackCommentRecord[],
-  requests: NonNullable<SciForgeWorkspaceState['feedbackRequests']>,
-): string {
-  const bundle = feedbackBundle(comments, requests);
-  const lines: string[] = [];
-  lines.push('## 概要');
-  lines.push('');
-  lines.push(`- **反馈条数**: ${comments.length}`);
-  lines.push(`- **导出时间**: ${bundle.exportedAt}`);
-  lines.push(`- **应用构建**: \`${bundle.appVersion}\``);
-  lines.push(`- **说明**: ${bundle.githubIssueHint}`);
-  lines.push('');
-  lines.push('---');
-  lines.push('');
-  comments.forEach((comment, index) => {
-    const heading = comment.comment.replace(/\s+/g, ' ').trim().slice(0, 120) || '(无摘要)';
-    lines.push(`### ${index + 1}. ${heading}`);
-    lines.push('');
-    lines.push('| 字段 | 值 |');
-    lines.push('| --- | --- |');
-    lines.push(`| 状态 | \`${comment.status}\` |`);
-    lines.push(`| 优先级 | \`${comment.priority}\` |`);
-    lines.push(`| 作者 | ${comment.authorName} |`);
-    lines.push(`| 创建时间 | ${comment.createdAt} |`);
-    lines.push(`| 页面 | \`${comment.runtime.page}\` |`);
-    lines.push(`| 场景 | \`${comment.runtime.scenarioId}\` |`);
-    lines.push(`| Session | ${comment.runtime.sessionId ?? '—'} |`);
-    lines.push(`| Active run | ${comment.runtime.activeRunId ?? '—'} |`);
-    lines.push(`| URL | ${comment.runtime.url} |`);
-    if (comment.tags.length) lines.push(`| 标签 | ${comment.tags.map((tag) => `\`${tag}\``).join(', ')} |`);
-    lines.push('');
-    lines.push('**评论原文**');
-    lines.push('');
-    lines.push('```');
-    lines.push(comment.comment);
-    lines.push('```');
-    lines.push('');
-    lines.push('**DOM selector**');
-    lines.push('');
-    lines.push('```css');
-    lines.push(comment.target.selector);
-    lines.push('```');
-    lines.push('');
-    lines.push('**元素**');
-    lines.push(`- tag: \`${comment.target.tagName}\`${comment.target.role ? ` · role: \`${comment.target.role}\`` : ''}`);
-    if (comment.target.ariaLabel) lines.push(`- aria-label: ${comment.target.ariaLabel}`);
-    lines.push(`- path: \`${comment.target.path}\``);
-    lines.push(`- rect: x=${Math.round(comment.target.rect.x)} y=${Math.round(comment.target.rect.y)} w=${Math.round(comment.target.rect.width)} h=${Math.round(comment.target.rect.height)}`);
-    if (comment.target.text.trim()) lines.push(`- text: ${compactFeedbackText(comment.target.text)}`);
-    lines.push('');
-    lines.push('**视口**');
-    lines.push(`- ${comment.viewport.width}×${comment.viewport.height} · dpr ${comment.viewport.devicePixelRatio} · scroll (${comment.viewport.scrollX}, ${comment.viewport.scrollY})`);
-    lines.push('');
-    lines.push('---');
-    lines.push('');
-  });
-  lines.push('<details>');
-  lines.push('<summary>反馈 Bundle JSON（机器可读）</summary>');
-  lines.push('');
-  lines.push('```json');
-  lines.push(JSON.stringify(bundle, null, 2));
-  lines.push('```');
-  lines.push('');
-  lines.push('</details>');
-  return lines.join('\n');
 }
 
 function requestTitleFromFeedback(comments: FeedbackCommentRecord[]) {
@@ -2556,86 +2423,13 @@ export function SciForgeApp() {
   }
 
   function recordGithubIssueCreated(commentIds: string[], issue: { number: number; htmlUrl: string; title: string }) {
-    const selected = new Set(commentIds);
-    const now = nowIso();
-    updateWorkspace((current) => ({
-      ...current,
-      feedbackComments: (current.feedbackComments ?? []).map((comment) => selected.has(comment.id)
-        ? {
-          ...comment,
-          status: comment.status === 'open' ? 'planned' : comment.status,
-          githubIssueUrl: issue.htmlUrl,
-          githubIssueNumber: issue.number,
-          updatedAt: now,
-        }
-        : comment),
-      feedbackRequests: (current.feedbackRequests ?? []).map((request) => request.feedbackIds.some((id) => selected.has(id))
-        ? {
-          ...request,
-          status: request.status === 'draft' || request.status === 'ready' ? 'in-progress' : request.status,
-          githubIssueUrl: issue.htmlUrl,
-          updatedAt: now,
-        }
-        : request),
-      githubSyncedOpenIssues: [
-        {
-          schemaVersion: 1 as const,
-          number: issue.number,
-          title: issue.title,
-          body: '',
-          htmlUrl: issue.htmlUrl,
-          updatedAt: now,
-          labels: [],
-          syncedAt: now,
-        },
-        ...(current.githubSyncedOpenIssues ?? []).filter((item) => item.number !== issue.number),
-      ].slice(0, 500),
-      updatedAt: now,
-    }));
+    updateWorkspace((current) => markFeedbackGithubIssueCreated(current, commentIds, issue));
   }
 
   function importGithubOpenIssuesAsFeedback(issues: GithubSyncedOpenIssueRecord[]) {
-    const now = nowIso();
-    const existingByNumber = new Map((workspaceState.feedbackComments ?? [])
-      .filter((comment) => typeof comment.githubIssueNumber === 'number')
-      .map((comment) => [comment.githubIssueNumber, comment]));
-    const changed = issues.filter((issue) => {
-      const existing = existingByNumber.get(issue.number);
-      return !existing
-        || existing.comment !== githubIssueFeedbackComment(issue)
-        || existing.githubIssueUrl !== issue.htmlUrl;
-    }).length;
-    updateWorkspace((current) => {
-      const existingByNumber = new Map((current.feedbackComments ?? [])
-        .filter((comment) => typeof comment.githubIssueNumber === 'number')
-        .map((comment) => [comment.githubIssueNumber, comment]));
-      const nextComments = [...(current.feedbackComments ?? [])];
-      for (const issue of issues) {
-        const existing = existingByNumber.get(issue.number);
-        const commentText = githubIssueFeedbackComment(issue);
-        if (existing) {
-          const index = nextComments.findIndex((comment) => comment.id === existing.id);
-          if (index >= 0) {
-            nextComments[index] = {
-              ...nextComments[index],
-              comment: commentText,
-              tags: Array.from(new Set([...nextComments[index].tags, 'github', ...issue.labels])),
-              githubIssueUrl: issue.htmlUrl,
-              githubIssueNumber: issue.number,
-              updatedAt: now,
-            };
-          }
-          continue;
-        }
-        nextComments.unshift(githubIssueToFeedbackComment(issue, now));
-      }
-      return {
-        ...current,
-        feedbackComments: nextComments.slice(0, 500),
-        updatedAt: now,
-      };
-    });
-    return changed;
+    const preview = applyGithubOpenIssuesAsFeedback(workspaceState, issues, nowIso(), APP_BUILD_ID);
+    updateWorkspace((current) => applyGithubOpenIssuesAsFeedback(current, issues, nowIso(), APP_BUILD_ID).state);
+    return preview.changed;
   }
 
   function setWorkspacePath(value: string) {

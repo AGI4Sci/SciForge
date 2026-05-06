@@ -2,7 +2,7 @@ import { normalizeFeedbackGithubRepo } from '../config';
 
 const GH_ACCEPT = 'application/vnd.github+json';
 
-type GithubIssueApiRow = {
+export type GithubIssueApiRow = {
   number: number;
   title: string;
   body: string | null;

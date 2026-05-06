@@ -1,6 +1,6 @@
 # SciForge - PROJECT.md
 
-最后更新：2026-05-06
+最后更新：2026-05-07
 
 ## 关键原则
 
@@ -16,6 +16,39 @@
 - Computer Use 必须走 window-based 主路径：观察、grounding、坐标映射和动作执行都绑定目标窗口/窗口内容坐标，而不是全屏全局猜测；并行长测必须隔离目标窗口、输入通道和 trace，不抢占用户真实鼠标键盘。
 
 ## 任务板
+
+### T088 项目结构职责边界优化
+
+状态：已完成。本任务按单一职责、明确接口、低耦合和可测试复用的原则，对近期膨胀最快的 UI feedback/GitHub 同步路径做第一轮结构优化：页面组件只负责状态与渲染，GitHub issue 格式化、同步、导入和 workspace 状态变换下沉到独立模块。后续所有结构优化都必须优先按职责边界拆分，而不是按文件长度机械切块。
+
+#### 原则落地
+- 单一职责：页面组件只串联用户操作；反馈 GitHub 模块只处理 issue 格式化、REST 编排、issue-to-feedback 映射和状态更新。
+- 按职责拆分：新增 `src/ui/src/feedback/githubFeedback.ts`，与低层 `src/ui/src/api/githubIssuesApi.ts` 分离；API 客户端只负责 HTTP，feedback 模块负责业务语义。
+- 主流程清晰：`FeedbackInboxPage` 的提交/同步流程只调用 `submitFeedbackGithubIssue`、`syncFeedbackGithubIssues` 和状态更新函数，不内联映射细节。
+- 接口明确：模块函数输入输出均为显式参数和返回值，不读取 React state、DOM、全局配置或当前场景。
+- 减少耦合：GitHub issue 导入统一标记为通用 `github-feedback` 来源，不绑定任何科研 scenario。
+- 配置集中：repo/token 仍由 `SciForgeConfig` 管理；模块只消费调用方传入的 repo/token/build id。
+- 谨慎使用 utils：没有新增杂项 `utils`，而是使用领域命名的 `feedback/githubFeedback.ts`。
+- 函数短小：Markdown 拼接、issue 映射、提交、同步、状态变更拆成独立动作。
+- 命名表达意图：`buildFeedbackGithubIssueBody`、`mapGithubIssueRows`、`markFeedbackGithubIssueCreated`、`importGithubOpenIssuesAsFeedback` 均表达行为。
+- 稳定对外接口：`FeedbackInboxPage` 对外 props 保持页面级语义，内部实现迁移不影响调用方。
+- 避免过度设计：不引入复杂 service class 或事件总线，只抽纯函数和小型 async 函数。
+- 方便测试复用：新增 `src/ui/src/feedback/githubFeedback.test.ts`，独立覆盖格式化、同步映射和状态更新。
+
+#### TODO
+- [x] 在 `PROJECT.md` 记录结构优化原则和本轮职责切分任务。
+- [x] 将 GitHub issue Markdown 格式化从 `SciForgeApp.tsx` 下沉到 `src/ui/src/feedback/githubFeedback.ts`。
+- [x] 将 GitHub issue row -> local feedback record 的映射下沉到独立模块，且不硬编码任何科研场景。
+- [x] 将“提交后回填本地反馈/Request 状态”和“同步后导入本地反馈”实现为纯 workspace state 变换函数。
+- [x] 保持 GitHub REST 客户端 `src/ui/src/api/githubIssuesApi.ts` 只负责 HTTP 与仓库解析。
+- [x] 为新模块增加独立单测，覆盖 title/body 格式、issue 导入和本地状态回填。
+- [x] 通过 TypeScript 类型检查、单元测试和生产构建。
+
+#### 验收
+- [x] `SciForgeApp.tsx` 不再包含 GitHub issue 格式化长函数和 issue-to-feedback 映射细节。
+- [x] 新模块不依赖 React、DOM 或当前 scenario，可被页面、脚本或未来后台同步任务复用。
+- [x] GitHub 导入使用通用 `github-feedback` runtime source，不为某个页面批注或科研场景写补丁。
+- [x] `npm run typecheck`、相关单测和 `npm run build` 通过。
 
 ### T087 Sense-agnostic Computer Use 独立 Python 包
 
