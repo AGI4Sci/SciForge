@@ -1127,6 +1127,14 @@ function SettingsDialog({
               onChange={(event) => onChange({ maxContextWindowTokens: Number(event.target.value) * 1000 })}
             />
           </label>
+          <label className="wide settings-check-row">
+            <input
+              type="checkbox"
+              checked={config.visionAllowSharedSystemInput}
+              onChange={(event) => onChange({ visionAllowSharedSystemInput: event.target.checked })}
+            />
+            <span>默认允许 vision-sense 使用共享系统鼠标/键盘</span>
+          </label>
           <label className="wide">
             <span>反馈 GitHub 仓库</span>
             <input
@@ -1259,7 +1267,8 @@ function Workbench({
   const baseScenarioId = builtInScenarioIdForInstance(scenarioId, scenarioOverride);
   const scenarioView = scenarios.find((item) => item.id === baseScenarioId) ?? scenarios[0];
   const scenarioSpec = SCENARIO_PRESETS[baseScenarioId];
-  const runtimeScenario: ScenarioRuntimeOverride = scenarioOverride ?? {
+  const visionSenseToolId = 'local.vision-sense';
+  const baseRuntimeScenario: ScenarioRuntimeOverride = scenarioOverride ?? {
     title: scenarioSpec.title,
     description: scenarioSpec.description,
     skillDomain: scenarioSpec.skillDomain,
@@ -1267,6 +1276,13 @@ function Workbench({
     defaultComponents: scenarioSpec.componentPolicy.defaultComponents,
     allowedComponents: scenarioSpec.componentPolicy.allowedComponents,
     fallbackComponent: scenarioSpec.componentPolicy.fallbackComponent,
+  };
+  const [visionSenseDefaultDisabled, setVisionSenseDefaultDisabled] = useState(false);
+  const runtimeScenario: ScenarioRuntimeOverride = {
+    ...baseRuntimeScenario,
+    selectedToolIds: visionSenseDefaultDisabled
+      ? (baseRuntimeScenario.selectedToolIds ?? []).filter((id) => id !== visionSenseToolId)
+      : Array.from(new Set([...(baseRuntimeScenario.selectedToolIds ?? []), visionSenseToolId])),
   };
   const [resultsCollapsed, setResultsCollapsed] = useState(false);
   const [workbenchChromeExpanded, setWorkbenchChromeExpanded] = useState(false);
@@ -1277,8 +1293,7 @@ function Workbench({
   const [chatColumnWidth, setChatColumnWidth] = useState(42);
   const workbenchResizeRef = useRef<{ startX: number; startWidth: number; gridWidth: number } | null>(null);
   const runtimeHealth = useRuntimeHealth(config);
-  const visionSenseToolId = 'local.vision-sense';
-  const visionSenseActive = (runtimeScenario.selectedToolIds ?? []).includes(visionSenseToolId);
+  const visionSenseActive = (runtimeScenario.selectedToolIds ?? [visionSenseToolId]).includes(visionSenseToolId);
   const defaultResultSlots = useMemo(
     () => compileScenarioIRFromSelection(defaultElementSelectionForScenario(baseScenarioId, runtimeScenario)).uiPlan.slots,
     [baseScenarioId, runtimeScenario],
@@ -1319,6 +1334,7 @@ function Workbench({
 
   function toggleVisionSense() {
     const currentToolIds = runtimeScenario.selectedToolIds ?? [];
+    setVisionSenseDefaultDisabled(currentToolIds.includes(visionSenseToolId));
     const selectedToolIds = currentToolIds.includes(visionSenseToolId)
       ? currentToolIds.filter((id) => id !== visionSenseToolId)
       : [...currentToolIds, visionSenseToolId];
@@ -1412,7 +1428,7 @@ function Workbench({
       </div>
       <div
         className={cx('workbench-grid', 'workbench-canvas', resultsCollapsed && 'results-collapsed')}
-        style={!resultsCollapsed ? { gridTemplateColumns: `minmax(360px, ${chatColumnWidth}%) 10px minmax(360px, 1fr)` } : undefined}
+        style={!resultsCollapsed && !mobileWorkbenchLayout ? { gridTemplateColumns: `minmax(280px, ${chatColumnWidth}%) 10px minmax(0, 1fr)` } : undefined}
       >
         <div className={cx('mobile-pane', mobilePane !== 'chat' && 'mobile-hidden')}>
           <ChatPanel
@@ -1436,7 +1452,7 @@ function Workbench({
             archivedCount={archivedCount}
             autoRunRequest={autoRunRequest}
             onAutoRunConsumed={onAutoRunConsumed}
-            scenarioOverride={scenarioOverride}
+            scenarioOverride={runtimeScenario}
             onConfigChange={onConfigChange}
             onTimelineEvent={onTimelineEvent}
             activeRunId={activeRunId}
@@ -1675,6 +1691,8 @@ function FeedbackInboxPage({
   feedbackGithubToken,
   githubSyncedOpenIssues,
   onReplaceGithubSyncedOpenIssues,
+  onImportGithubOpenIssues,
+  onGithubIssueCreated,
   onOpenGithubSettings,
 }: {
   comments: FeedbackCommentRecord[];
@@ -1686,6 +1704,8 @@ function FeedbackInboxPage({
   feedbackGithubToken?: string;
   githubSyncedOpenIssues: GithubSyncedOpenIssueRecord[];
   onReplaceGithubSyncedOpenIssues: (issues: GithubSyncedOpenIssueRecord[]) => void;
+  onImportGithubOpenIssues: (issues: GithubSyncedOpenIssueRecord[]) => number;
+  onGithubIssueCreated: (commentIds: string[], issue: { number: number; htmlUrl: string; title: string }) => void;
   onOpenGithubSettings: () => void;
 }) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -1745,6 +1765,11 @@ function FeedbackInboxPage({
     setGithubSubmitBusy(true);
     try {
       const created = await createGithubIssue(repo, token, { title: issueTitle, body: issueBody });
+      onGithubIssueCreated(issueScopeComments.map((comment) => comment.id), {
+        number: created.number,
+        htmlUrl: created.htmlUrl,
+        title: issueTitle,
+      });
       setGithubActionHint(`已创建 Issue #${created.number}，正在打开页面…`);
       window.open(created.htmlUrl, '_blank', 'noopener,noreferrer');
     } catch (error) {
@@ -1778,7 +1803,8 @@ function FeedbackInboxPage({
         syncedAt,
       }));
       onReplaceGithubSyncedOpenIssues(mapped.slice(0, 500));
-      setGithubActionHint(`已同步 ${mapped.length} 条未关闭 Issue（不含 PR）。`);
+      const imported = onImportGithubOpenIssues(mapped.slice(0, 500));
+      setGithubActionHint(`已同步 ${mapped.length} 条未关闭 Issue（不含 PR），导入/更新 ${imported} 条本地反馈。`);
     } catch (error) {
       setGithubActionHint(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1878,6 +1904,12 @@ function FeedbackInboxPage({
                   <Badge variant={item.priority === 'urgent' || item.priority === 'high' ? 'warning' : 'muted'}>{item.priority}</Badge>
                 </div>
                 <p>{item.authorName} · {formatSessionTime(item.createdAt)} · {item.runtime.page} · {item.runtime.scenarioId}</p>
+                {item.githubIssueUrl ? (
+                  <a className="feedback-github-card-link" href={item.githubIssueUrl} target="_blank" rel="noopener noreferrer">
+                    GitHub #{item.githubIssueNumber ?? '?'}
+                    <ExternalLink size={13} aria-hidden />
+                  </a>
+                ) : null}
                 <div className="feedback-target-summary compact">
                   <span>target</span>
                   <code>{item.target.selector}</code>
@@ -2088,6 +2120,47 @@ function feedbackBundle(comments: FeedbackCommentRecord[], requests: NonNullable
     comments,
     requests: requests.filter((request) => request.feedbackIds.some((id) => comments.some((comment) => comment.id === id))),
     githubIssueHint: 'Use comments as source-of-truth; GitHub Issue should summarize and link this bundle instead of replacing it.',
+  };
+}
+
+function githubIssueFeedbackComment(issue: GithubSyncedOpenIssueRecord) {
+  const body = issue.body.trim();
+  return body
+    ? `${issue.title}\n\n${body.slice(0, 2400)}`
+    : issue.title;
+}
+
+function githubIssueToFeedbackComment(issue: GithubSyncedOpenIssueRecord, now: string): FeedbackCommentRecord {
+  return {
+    id: `feedback-github-${issue.number}`,
+    schemaVersion: 1,
+    authorId: issue.authorLogin ? `github:${issue.authorLogin}` : 'github',
+    authorName: issue.authorLogin ? `GitHub @${issue.authorLogin}` : 'GitHub',
+    comment: githubIssueFeedbackComment(issue),
+    status: 'open',
+    priority: issue.labels.some((label) => /urgent|high|p0|p1/i.test(label)) ? 'high' : 'normal',
+    tags: Array.from(new Set(['github', ...issue.labels])),
+    createdAt: issue.updatedAt || now,
+    updatedAt: now,
+    target: {
+      selector: `github-issue-${issue.number}`,
+      path: `github/issues/${issue.number}`,
+      text: issue.title,
+      tagName: 'github-issue',
+      role: 'issue',
+      ariaLabel: issue.title,
+      rect: { x: 0, y: 0, width: 0, height: 0 },
+    },
+    viewport: { width: 0, height: 0, devicePixelRatio: 1, scrollX: 0, scrollY: 0 },
+    runtime: {
+      page: 'github',
+      url: issue.htmlUrl,
+      scenarioId: 'github-feedback',
+      sessionTitle: issue.title,
+      appVersion: APP_BUILD_ID,
+    },
+    githubIssueUrl: issue.htmlUrl,
+    githubIssueNumber: issue.number,
   };
 }
 
@@ -2480,6 +2553,89 @@ export function SciForgeApp() {
       githubSyncedOpenIssues: issues,
       updatedAt: nowIso(),
     }));
+  }
+
+  function recordGithubIssueCreated(commentIds: string[], issue: { number: number; htmlUrl: string; title: string }) {
+    const selected = new Set(commentIds);
+    const now = nowIso();
+    updateWorkspace((current) => ({
+      ...current,
+      feedbackComments: (current.feedbackComments ?? []).map((comment) => selected.has(comment.id)
+        ? {
+          ...comment,
+          status: comment.status === 'open' ? 'planned' : comment.status,
+          githubIssueUrl: issue.htmlUrl,
+          githubIssueNumber: issue.number,
+          updatedAt: now,
+        }
+        : comment),
+      feedbackRequests: (current.feedbackRequests ?? []).map((request) => request.feedbackIds.some((id) => selected.has(id))
+        ? {
+          ...request,
+          status: request.status === 'draft' || request.status === 'ready' ? 'in-progress' : request.status,
+          githubIssueUrl: issue.htmlUrl,
+          updatedAt: now,
+        }
+        : request),
+      githubSyncedOpenIssues: [
+        {
+          schemaVersion: 1 as const,
+          number: issue.number,
+          title: issue.title,
+          body: '',
+          htmlUrl: issue.htmlUrl,
+          updatedAt: now,
+          labels: [],
+          syncedAt: now,
+        },
+        ...(current.githubSyncedOpenIssues ?? []).filter((item) => item.number !== issue.number),
+      ].slice(0, 500),
+      updatedAt: now,
+    }));
+  }
+
+  function importGithubOpenIssuesAsFeedback(issues: GithubSyncedOpenIssueRecord[]) {
+    const now = nowIso();
+    const existingByNumber = new Map((workspaceState.feedbackComments ?? [])
+      .filter((comment) => typeof comment.githubIssueNumber === 'number')
+      .map((comment) => [comment.githubIssueNumber, comment]));
+    const changed = issues.filter((issue) => {
+      const existing = existingByNumber.get(issue.number);
+      return !existing
+        || existing.comment !== githubIssueFeedbackComment(issue)
+        || existing.githubIssueUrl !== issue.htmlUrl;
+    }).length;
+    updateWorkspace((current) => {
+      const existingByNumber = new Map((current.feedbackComments ?? [])
+        .filter((comment) => typeof comment.githubIssueNumber === 'number')
+        .map((comment) => [comment.githubIssueNumber, comment]));
+      const nextComments = [...(current.feedbackComments ?? [])];
+      for (const issue of issues) {
+        const existing = existingByNumber.get(issue.number);
+        const commentText = githubIssueFeedbackComment(issue);
+        if (existing) {
+          const index = nextComments.findIndex((comment) => comment.id === existing.id);
+          if (index >= 0) {
+            nextComments[index] = {
+              ...nextComments[index],
+              comment: commentText,
+              tags: Array.from(new Set([...nextComments[index].tags, 'github', ...issue.labels])),
+              githubIssueUrl: issue.htmlUrl,
+              githubIssueNumber: issue.number,
+              updatedAt: now,
+            };
+          }
+          continue;
+        }
+        nextComments.unshift(githubIssueToFeedbackComment(issue, now));
+      }
+      return {
+        ...current,
+        feedbackComments: nextComments.slice(0, 500),
+        updatedAt: now,
+      };
+    });
+    return changed;
   }
 
   function setWorkspacePath(value: string) {
@@ -2877,6 +3033,8 @@ export function SciForgeApp() {
               feedbackGithubToken={config.feedbackGithubToken}
               githubSyncedOpenIssues={workspaceState.githubSyncedOpenIssues ?? []}
               onReplaceGithubSyncedOpenIssues={replaceGithubSyncedOpenIssues}
+              onImportGithubOpenIssues={importGithubOpenIssuesAsFeedback}
+              onGithubIssueCreated={recordGithubIssueCreated}
               onOpenGithubSettings={() => setSettingsOpen(true)}
             />
           )}

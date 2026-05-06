@@ -402,6 +402,7 @@ function defaultConfig(): SciForgeConfig {
     apiKey: '',
     requestTimeoutMs: 900_000,
     maxContextWindowTokens: 200_000,
+    visionAllowSharedSystemInput: true,
     updatedAt: '2026-05-02T00:00:00.000Z',
   };
 }

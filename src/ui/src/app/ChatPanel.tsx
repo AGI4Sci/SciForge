@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
-import { CircleStop, Clock, Copy, Download, FileUp, MessageSquare, Plus, Quote, Sparkles, Trash2, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, CircleStop, Clock, Copy, Download, FileUp, MessageSquare, Plus, Quote, Sparkles, Trash2, X } from 'lucide-react';
 import { scenarios, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
 import { compactAgentContext, sendAgentMessageStream, validateSemanticTurnAcceptance } from '../api/agentClient';
@@ -144,7 +144,7 @@ export function ChatPanel({
   const [errorText, setErrorText] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [composerHeight, setComposerHeight] = useState(58);
-  const [messagesPaneHeight, setMessagesPaneHeight] = useState<number | null>(null);
+  const [composerExpanded, setComposerExpanded] = useState(false);
   const [streamEvents, setStreamEvents] = useState<AgentStreamEvent[]>([]);
   const [guidanceQueue, setGuidanceQueue] = useState<string[]>([]);
   const [referencePickMode, setReferencePickMode] = useState(false);
@@ -161,7 +161,6 @@ export function ChatPanel({
   const savedScrollTopRef = useRef(savedScrollTop);
   const reportedScrollTopRef = useRef(savedScrollTop);
   const resizeStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
-  const messagesResizeStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
   const messages = session.messages;
   const baseScenarioId = builtInScenarioIdForInstance(scenarioId, scenarioOverride);
   const scenario = scenarios.find((item) => item.id === baseScenarioId) ?? scenarios[0];
@@ -169,7 +168,7 @@ export function ChatPanel({
   const skillPlanRef = scenarioOverride?.skillPlanRef ?? `skill-plan.${baseScenarioId}.default`;
   const uiPlanRef = scenarioOverride?.uiPlanRef ?? `ui-plan.${baseScenarioId}.default`;
   const activeRun = activeRunId ? session.runs.find((run) => run.id === activeRunId) : undefined;
-  const visibleMessageStart = Math.max(0, messages.length - 24);
+  const visibleMessageStart = 0;
   const visibleMessages = messages.slice(visibleMessageStart);
   const liveTokenUsage = latestTokenUsage(streamEvents);
   const worklogCounts = streamEventCounts(streamEvents);
@@ -188,6 +187,10 @@ export function ChatPanel({
   useEffect(() => {
     savedScrollTopRef.current = savedScrollTop;
   }, [savedScrollTop]);
+
+  useEffect(() => {
+    if (input.trim() || pendingReferences.length || referencePickMode) setComposerExpanded(true);
+  }, [input, pendingReferences.length, referencePickMode]);
 
   useEffect(() => {
     guidanceQueueRef.current = guidanceQueue;
@@ -428,6 +431,7 @@ export function ChatPanel({
     inputRef.current = '';
     setPendingReferences([]);
     setReferencePickMode(false);
+    setComposerExpanded(false);
     setErrorText('');
     setStreamEvents([{
       id: makeId('evt'),
@@ -683,6 +687,7 @@ export function ChatPanel({
     onSessionChange(nextSession);
     onInputChange('');
     inputRef.current = '';
+    setComposerExpanded(false);
     setGuidanceQueue((current) => [...current, prompt]);
     setStreamEvents((current) => [...current.slice(-32), {
       id: makeId('evt'),
@@ -727,27 +732,6 @@ export function ChatPanel({
     };
     const handleUp = () => {
       resizeStateRef.current = null;
-      window.removeEventListener('mousemove', handleMove);
-      window.removeEventListener('mouseup', handleUp);
-    };
-    window.addEventListener('mousemove', handleMove);
-    window.addEventListener('mouseup', handleUp);
-  }
-
-  function beginMessagesResize(event: React.MouseEvent<HTMLDivElement>) {
-    event.preventDefault();
-    const el = messagesRef.current;
-    const startHeight = el?.getBoundingClientRect().height ?? 240;
-    messagesResizeStateRef.current = { startY: event.clientY, startHeight };
-    const handleMove = (moveEvent: MouseEvent) => {
-      const state = messagesResizeStateRef.current;
-      if (!state) return;
-      const delta = moveEvent.clientY - state.startY;
-      const nextHeight = Math.max(140, Math.min(Math.round(window.innerHeight * 0.78), state.startHeight + delta));
-      setMessagesPaneHeight(nextHeight);
-    };
-    const handleUp = () => {
-      messagesResizeStateRef.current = null;
       window.removeEventListener('mousemove', handleMove);
       window.removeEventListener('mouseup', handleUp);
     };
@@ -941,6 +925,15 @@ export function ChatPanel({
     onScrollTopChange(element.scrollTop);
   }
 
+  async function copyMessageContent(content: string) {
+    try {
+      await copyTextToClipboard(content);
+      setErrorText('');
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : '复制失败：浏览器拒绝访问剪贴板。');
+    }
+  }
+
   return (
     <div className="chat-panel">
       <div className="panel-title compact">
@@ -987,11 +980,6 @@ export function ChatPanel({
           className="messages"
           ref={messagesRef}
           onScroll={handleMessagesScroll}
-          style={
-            messagesPaneHeight != null
-              ? { flex: '0 0 auto', height: messagesPaneHeight, minHeight: 140 }
-              : undefined
-          }
         >
         {!messages.length ? (
           <div className="chat-empty">
@@ -1036,7 +1024,8 @@ export function ChatPanel({
                 ) : null}
                 <div className="message-actions">
                   <button
-                    onClick={() => void navigator.clipboard?.writeText(message.content)}
+                    type="button"
+                    onClick={() => void copyMessageContent(message.content)}
                     title="复制原始 Markdown"
                   >
                     复制
@@ -1105,36 +1094,7 @@ export function ChatPanel({
           </div>
         ) : null}
         </div>
-        <div
-          className="messages-resize-handle"
-          onMouseDown={beginMessagesResize}
-          title="拖拽调整对话区高度"
-        />
       </div>
-
-      {session.runs.length ? (
-        <div className="run-link-strip" aria-label="运行记录">
-          <span>Runs</span>
-          {session.runs.slice(-6).map((run) => (
-            <button
-              key={run.id}
-              type="button"
-              className={cx(activeRunId === run.id && 'active')}
-              onClick={() => onActiveRunChange(activeRunId === run.id ? undefined : run.id)}
-              data-run-id={run.id}
-              data-sciforge-reference={sciForgeReferenceAttribute(referenceForRun(run))}
-            >
-              {run.id.replace(/^run-/, '').slice(0, 8)}
-              <em>{run.status}</em>
-            </button>
-          ))}
-          {activeRun ? (
-            <button type="button" className="candidate-action" onClick={() => onMarkReusableRun(activeRun.id)}>
-              标记 reusable
-            </button>
-          ) : null}
-        </div>
-      ) : null}
 
       {errorText ? (
         <div className="composer-error">
@@ -1147,7 +1107,29 @@ export function ChatPanel({
         <span>{readiness.message}</span>
         <code>{scenarioPackageRef.id}@{scenarioPackageRef.version}</code>
       </div>
-      <div className="composer">
+      {!composerExpanded ? (
+        <button
+          type="button"
+          className="composer-collapsed"
+          onClick={() => setComposerExpanded(true)}
+          aria-expanded={false}
+          title="展开输入栏"
+        >
+          <Sparkles size={15} />
+          <span>输入研究问题，或点选对象后继续追问...</span>
+          <ChevronUp size={15} />
+        </button>
+      ) : (
+      <div className="composer" aria-expanded={true}>
+        <button
+          type="button"
+          className="composer-collapse-button"
+          onClick={() => setComposerExpanded(false)}
+          title="收起输入栏"
+          aria-label="收起输入栏"
+        >
+          <ChevronDown size={15} />
+        </button>
         <div className="composer-resize-handle" onMouseDown={beginComposerResize} title="拖拽调整输入框高度" />
         <div className="reference-composer">
           <button
@@ -1216,6 +1198,7 @@ export function ChatPanel({
           {isSending ? '引导' : '发送'}
         </ActionButton>
       </div>
+      )}
       {referenceContextMenu ? (
         <div
           className="reference-context-menu"
@@ -2704,4 +2687,30 @@ function formatSessionTime(value: string) {
   const time = Date.parse(value);
   if (!Number.isFinite(time)) return 'unknown time';
   return new Date(time).toLocaleString('zh-CN', { hour12: false });
+}
+
+async function copyTextToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall through to execCommand for embedded browsers or clipboard permission quirks.
+    }
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.top = '-1000px';
+  textarea.style.left = '-1000px';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  textarea.setSelectionRange(0, text.length);
+  try {
+    if (!document.execCommand('copy')) throw new Error('复制失败：浏览器拒绝访问剪贴板。');
+  } finally {
+    textarea.remove();
+  }
 }

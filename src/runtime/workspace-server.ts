@@ -1289,6 +1289,7 @@ async function readLocalSciForgeConfig() {
   const parsed = await readConfigLocalJson();
   const llm = isRecord(parsed.llm) ? parsed.llm : {};
   const sciforge = isRecord(parsed.sciforge) ? parsed.sciforge : {};
+  const visionSense = isRecord(parsed.visionSense) ? parsed.visionSense : {};
   return {
     schemaVersion: 1,
     agentServerBaseUrl: typeof sciforge.agentServerBaseUrl === 'string' ? sciforge.agentServerBaseUrl : 'http://127.0.0.1:18080',
@@ -1299,6 +1300,7 @@ async function readLocalSciForgeConfig() {
     modelName: typeof llm.model === 'string' ? llm.model : typeof llm.modelName === 'string' ? llm.modelName : '',
     apiKey: typeof llm.apiKey === 'string' ? llm.apiKey : '',
     requestTimeoutMs: typeof sciforge.requestTimeoutMs === 'number' ? sciforge.requestTimeoutMs : 900000,
+    visionAllowSharedSystemInput: typeof visionSense.allowSharedSystemInput === 'boolean' ? visionSense.allowSharedSystemInput : true,
     updatedAt: typeof sciforge.updatedAt === 'string' ? sciforge.updatedAt : new Date().toISOString(),
     source: 'config.local.json',
   };
@@ -1308,6 +1310,7 @@ async function writeLocalSciForgeConfig(config: Record<string, unknown>) {
   const parsed = await readConfigLocalJson();
   const llm = isRecord(parsed.llm) ? parsed.llm : {};
   const sciforge = isRecord(parsed.sciforge) ? parsed.sciforge : {};
+  const visionSense = isRecord(parsed.visionSense) ? parsed.visionSense : {};
   const next = {
     ...parsed,
     llm: {
@@ -1324,6 +1327,14 @@ async function writeLocalSciForgeConfig(config: Record<string, unknown>) {
       workspacePath: normalizeWorkspaceRootPath(typeof config.workspacePath === 'string' ? config.workspacePath : typeof sciforge.workspacePath === 'string' ? sciforge.workspacePath : ''),
       requestTimeoutMs: typeof config.requestTimeoutMs === 'number' ? config.requestTimeoutMs : sciforge.requestTimeoutMs,
       updatedAt: new Date().toISOString(),
+    },
+    visionSense: {
+      ...visionSense,
+      allowSharedSystemInput: typeof config.visionAllowSharedSystemInput === 'boolean'
+        ? config.visionAllowSharedSystemInput
+        : typeof visionSense.allowSharedSystemInput === 'boolean'
+          ? visionSense.allowSharedSystemInput
+          : true,
     },
   };
   await writeFile(configLocalPath(), JSON.stringify(next, null, 2));

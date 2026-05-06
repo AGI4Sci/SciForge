@@ -17,6 +17,7 @@ export const defaultSciForgeConfig: SciForgeConfig = {
   apiKey: '',
   requestTimeoutMs: 900_000,
   maxContextWindowTokens: 200_000,
+  visionAllowSharedSystemInput: true,
   updatedAt: new Date().toISOString(),
 };
 
@@ -75,6 +76,9 @@ export function normalizeConfig(value: unknown): SciForgeConfig {
     maxContextWindowTokens: typeof raw.maxContextWindowTokens === 'number' && Number.isFinite(raw.maxContextWindowTokens)
       ? Math.max(1_000, Math.trunc(raw.maxContextWindowTokens))
       : defaultSciForgeConfig.maxContextWindowTokens,
+    visionAllowSharedSystemInput: typeof raw.visionAllowSharedSystemInput === 'boolean'
+      ? raw.visionAllowSharedSystemInput
+      : defaultSciForgeConfig.visionAllowSharedSystemInput,
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString(),
     ...(feedbackGithubRepo ? { feedbackGithubRepo } : {}),
     ...(feedbackGithubToken ? { feedbackGithubToken } : {}),

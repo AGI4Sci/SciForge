@@ -24,6 +24,7 @@ const config: SciForgeConfig = {
   apiKey: '',
   requestTimeoutMs: 1000,
   maxContextWindowTokens: 1000,
+  visionAllowSharedSystemInput: true,
   updatedAt: '2026-05-03T00:00:00.000Z',
 };
 

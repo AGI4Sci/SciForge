@@ -44,7 +44,7 @@ async function readGithubError(response: Response): Promise<string> {
 export async function createGithubIssue(
   repoFull: string,
   token: string,
-  input: { title: string; body: string },
+  input: { title: string; body: string; labels?: string[] },
 ): Promise<{ htmlUrl: string; number: number }> {
   const parts = parseGithubRepoParts(repoFull);
   if (!parts) throw new Error('无效的 GitHub 仓库格式（需要 owner/repo）。');
@@ -52,7 +52,9 @@ export async function createGithubIssue(
   const response = await fetch(url, {
     method: 'POST',
     headers: githubHeaders(token.trim()),
-    body: JSON.stringify({ title: input.title, body: input.body }),
+    body: JSON.stringify(input.labels?.length
+      ? { title: input.title, body: input.body, labels: input.labels }
+      : { title: input.title, body: input.body }),
   });
   if (!response.ok) throw new Error(await readGithubError(response));
   const data = await response.json() as { html_url?: string; number?: number };

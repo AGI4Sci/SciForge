@@ -1,6 +1,6 @@
 # SciForge - PROJECT.md
 
-最后更新：2026-05-04
+最后更新：2026-05-06
 
 ## 关键原则
 
@@ -16,6 +16,61 @@
 - Computer Use 必须走 window-based 主路径：观察、grounding、坐标映射和动作执行都绑定目标窗口/窗口内容坐标，而不是全屏全局猜测；并行长测必须隔离目标窗口、输入通道和 trace，不抢占用户真实鼠标键盘。
 
 ## 任务板
+
+### T087 Sense-agnostic Computer Use 独立 Python 包
+
+状态：进行中。本任务把 Computer Use 从 `vision-sense-runtime` 中继续拆出，做成类似 `vision-sense` 的独立 Python 算法包：`vision-sense` 是可替换的“感官”，`computer-use` 是使用电脑的“手”和动作闭环，AgentServer/SciForge 对话栏是长程任务“大脑”。Computer Use 包不得直接依赖某一种视觉实现，而是依赖 `SenseProvider.observe/query/locate`、`ActionPlanner`、`GuiExecutor`、`Verifier` 等协议；这样未来可以把 vision-sense、OCR、browser sandbox、远程桌面、窗口元数据或安全 accessibility 摘要作为不同 sense provider 接入同一 action loop。
+
+#### 背景
+- 当前真实 GUI 长测已经证明 `WindowTarget -> VisionPlanner -> Grounder -> Executor -> Verifier -> Trace -> Scheduler` 路径可行，但算法和 orchestration 仍有较大部分在 `src/runtime/vision-sense-runtime.ts`；这个文件名也会让人误以为 Computer Use 属于 vision-sense。
+- 更好的边界是：Python `computer-use` 包维护 planner/grounder/verifier/safety/trace/loop 的通用算法；TS runtime 只做 SciForge routing、截图/桌面桥接、真实输入 adapter、artifact 包装和 UI 回传。
+- Computer Use 的核心输入输出必须是稳定 contract，不是场景 prompt 或测试 runner 私有结构；测试只能验证 contract 和行为，不承载成功策略。
+
+#### TODO
+- [x] 新增 `packages/computer-use` Python package，提供 `sciforge_computer_use` 公共模块和 `pyproject.toml`，可独立 pytest。
+- [x] 定义 sense-agnostic contract：`ComputerUseRequest`、`Observation`、`ActionPlan`、`ActionTarget`、`Grounding`、`ExecutionOutcome`、`Verification`、`LoopStep`、`ComputerUseResult`。
+- [x] 定义 provider 协议：`SenseProvider.observe/query/locate`、`ActionPlanner.plan`、`GuiExecutor.execute`、`Verifier.verify`，Computer Use loop 不 import `vision-sense`。
+- [x] 实现最小通用 action loop：每步 observe -> planner -> safety -> locate -> execute -> verify -> trace，支持 `completed`、`failed-with-reason`、`needs-confirmation` 和 `max-steps`。
+- [x] 实现通用高风险 fail-closed：send/delete/pay/authorize/publish/submit/upload/overwrite 等动作默认 `needs-confirmation` 或 blocked，不执行 executor。
+- [x] 实现 file-ref-only trace/compact handoff：输出 refs、query、action ledger、grounding、verification、failure diagnostics，不包含 screenshot payload/base64。
+- [x] 增加 Python 单测：验证 loop 可用任意 fake sense provider 完成任务、缺 grounding 结构化失败、高风险动作不执行、trace compact 不含 payload。
+- [ ] 将 `src/runtime/vision-sense-runtime.ts` 的 planner/loop/safety/trace policy 逐步迁移或委托给 Python `sciforge_computer_use`，TS 保留 routing/capture/executor adapter。
+- [ ] 把 `packages/senses/vision-sense/sciforge_vision_sense/computer_use_policy.py` 中 Computer Use 专属策略迁入 `packages/computer-use`，vision-sense 只保留视觉感官相关 helper。
+- [ ] 为 TS runtime 增加 Python package bridge：以 JSON contract 调用 `sciforge_computer_use.loop`，真实截图和 GUI executor 仍由 TS adapter 提供。
+- [ ] 更新 CU-LONG runner，使其消费 `computer-use` 包的通用 policy/trace validator，而不是在测试工具里保留可复用算法。
+- [ ] 将对话栏 T086 编排改为调用 `computer-use` 包的短程 action loop，sense provider 首选 `vision-sense`，但 contract 支持替换。
+
+#### 验收
+- [ ] Computer Use loop 在 Python 包内独立通过单元测试，且不 import SciForge app runtime 或 `vision-sense`。
+- [ ] 真实 GUI runtime 仍通过 T084 CU-LONG 已完成场景回归，trace contract 与旧 evidence 兼容。
+- [ ] 对话栏复杂科研任务可以通过同一 `computer-use` contract 调用“手”，而不是直接耦合 `vision-sense-runtime.ts` 的内部实现。
+
+### T086 对话栏复杂科研 GUI 任务编排
+
+状态：待启动。本任务承接批注要求：让 SciForge 对话栏把文本推理、`vision-sense` 视觉观察和通用 Window-based Computer Use 串成复杂科研工作流，而不是只在 CU-LONG 测试矩阵里证明能力。算法边界继续保持清晰：视觉记忆、coarse-to-fine、trace contract 和通用 Computer Use policy 位于 `packages/senses/vision-sense/sciforge_vision_sense`；窗口目标、截图、grounding 坐标映射、executor、verifier、scheduler 位于 `src/runtime/computer-use/*` 与 `src/runtime/vision-sense-runtime.ts`；测试代码只能放 fixture、smoke、matrix runner 和 evidence gate，不能承载真实成功路径。`vision-sense` + Computer Use 的目标不是“承诺完成任意不可见或高风险任务”，而是在可见窗口、可截图证据、低风险 GUI 操作和可用 planner/grounder/executor/verifier 的边界内，完成通用科研 GUI 任务；边界不满足时必须 `failed-with-reason`。
+
+#### 背景
+- 目前 CU-LONG-001 到 CU-LONG-008 已证明通用窗口级视觉操作、trace、file-ref-only image memory、coarse-to-fine 和安全闸门可以覆盖浏览器、文件管理器、密集控件、跨窗口和 SciForge 自举流程；但用户从对话栏发起“文献证据评估”这类科研任务时，还需要把 UI 可见状态、用户文字目标、引用文件、artifact、结果面板和当前 run 状态组织成一个端到端任务。
+- 对话栏要能在 “文献证据评估” 场景中综合使用文本能力做研究判断，使用视觉能力确认当前卡片、输入框、发送/停止按钮、结果区、artifact/文件卡片和 trace 状态，使用 Computer Use 做低风险点击、输入、切换、预览和等待，最后输出结构化科研 artifact。
+- 本任务不得新增场景专用快捷路径：失败时回到 `WindowTarget / VisionPlanner / Grounder / Executor / Verifier / Trace / Scheduler`、通用任务 prompt、artifact contract 或结果区隔离修复。
+
+#### TODO
+- [ ] 设计对话栏 `research-gui-task` contract：输入包含用户自然语言科研问题、当前 Scenario 卡片、选中文件/引用 refs、当前窗口 screenshot refs、run 状态和可用工具 contract；输出必须是通用 action plan、artifact expectation 和失败边界。
+- [ ] 增加“文献证据评估”复杂科研 GUI 场景规格：从对话栏发起研究问题，视觉确认 `文献证据评估` 卡片在线/归档/backend 状态，定位输入框、发送/停止按钮、上传/点选区域、结果视图、证据矩阵视图和 execution unit 视图。
+- [ ] 实现对话栏编排主路径：当 `vision-sense on` 且用户请求 GUI 科研任务时，优先绑定当前 SciForge/Codex 窗口为 `WindowTarget`，用 `local.vision-sense` 生成 screenshot refs 和 action ledger，再把 compact refs、文件路径、sha256/尺寸和 run 状态交给 AgentServer 做科研文本推理。
+- [ ] 建立文本 + 视觉分工：视觉路径只负责看见和操作 GUI，不读取 DOM/accessibility/private selector；文本后端负责检索计划、证据质量评估、冲突综合、摘要写作和 artifact schema 填充。
+- [ ] 定义科研 artifact contract：至少支持 `paper-list`、`evidence-matrix`、`claim-evidence-map`、`quality/risk-of-bias`、`conflict-table`、`research-report`、`run-log` 和 `vision-trace refs`；截图和文件内容只允许以 refs/摘要进入，不内联 base64 或全文。
+- [ ] 增加 current-run 结果隔离：发送前先观察发送/停止按钮和当前 run 状态；切换结果视图、证据矩阵、execution unit 或筛选按钮后，必须确认右侧结果区对应当前 run，不混入 archived/历史 failed run。
+- [ ] 增加高风险 fail-closed 策略：外发上传、删除、覆盖、授权、付费、发布、提交外部表单等动作默认 blocked；需要用户显式确认时只输出 pending confirmation，不借第三方页面文案当授权。
+- [ ] 把仍在测试/工具层的通用启发式回收进正式模块：如果 `tools/computer-use-long-task-pool.ts` 或 smoke 中出现可复用的 completion policy、task prompt policy、dense UI 恢复策略，迁入 `vision-sense` policy 或 `src/runtime/computer-use/*`，测试只保留断言。
+- [ ] 增加对话栏端到端验收：在本地浏览器/真实 GUI 中从聊天输入发起一个复杂文献证据评估任务，完成卡片选择、refs 绑定、低风险 GUI 操作、run 监控、artifact 生成和结果区展示；保留 `vision-trace.json`、scenario summary、action ledger 和 failure diagnostics。
+- [ ] 增加通用性验收：同一对话栏编排不改代码即可换成另一个科研 GUI 场景；若 planner、grounder、executor、verifier、截图或窗口绑定不可用，必须快速失败并给出下一步修复方向，不能扫描仓库或伪造 GUI 结果。
+
+#### 验收
+- [ ] 从 SciForge 对话栏输入复杂科研任务后，系统能自动使用文本 + 视觉 + Computer Use 生成并执行低风险 GUI plan，结果区展示当前 run 的科研 artifact 和 trace refs。
+- [ ] 真实 GUI trace 通过 file-ref-only、window-local coordinate、scheduler lock、window verifier、no DOM/accessibility/private selector 校验。
+- [ ] 文献证据评估场景至少产出一份 evidence matrix、一份 claim/evidence 摘要、一份质量/冲突评估和一份 run report，所有截图/文件只通过 refs 引用。
+- [ ] 任一高风险动作、不可见窗口、错误窗口绑定、运行中发送按钮、缺 planner/grounder/executor/verifier 或旧 run 混入都必须结构化失败，不得伪装完成。
 
 ### T085 Coarse-to-Fine Vision Grounding 与 Verifier 反馈闭环
 

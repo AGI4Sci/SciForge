@@ -585,6 +585,8 @@ export interface FeedbackCommentRecord {
   viewport: { width: number; height: number; devicePixelRatio: number; scrollX: number; scrollY: number };
   runtime: FeedbackRuntimeSnapshot;
   screenshotRef?: string;
+  githubIssueUrl?: string;
+  githubIssueNumber?: number;
 }
 
 export interface FeedbackRequestRecord {
@@ -665,6 +667,7 @@ export interface SciForgeConfig {
   apiKey: string;
   requestTimeoutMs: number;
   maxContextWindowTokens: number;
+  visionAllowSharedSystemInput: boolean;
   updatedAt: string;
 }
 

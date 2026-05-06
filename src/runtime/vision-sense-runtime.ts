@@ -51,13 +51,16 @@ export async function tryRunVisionSenseRuntime(
 }
 
 function rebindWindowTargetForPromptAppAlias(config: VisionSenseConfig, prompt: string) {
-  if (config.windowTarget.mode !== 'active-window') return;
+  if (config.windowTarget.mode !== 'display' && config.windowTarget.mode !== 'active-window') return;
   const requestedAppName = requestedAppAliasForPrompt(prompt);
   if (!requestedAppName) return;
   config.windowTarget = {
     ...config.windowTarget,
+    enabled: true,
+    required: false,
     mode: 'app-window',
     appName: requestedAppName,
+    coordinateSpace: config.windowTarget.coordinateSpace === 'screen' ? 'window-local' : config.windowTarget.coordinateSpace,
     windowId: undefined,
     processId: undefined,
     bundleId: undefined,
@@ -76,10 +79,18 @@ function requestedAppAliasForPrompt(prompt: string): string | undefined {
   const aliases = parseVisionAppAliases();
   const requested = Object.entries(aliases)
     .sort((a, b) => b[0].length - a[0].length)
-    .find(([alias]) => alias && new RegExp(`(^|[^\\p{L}\\p{N}_-])${escapeRegExp(alias)}([^\\p{L}\\p{N}_-]|$)`, 'iu').test(primaryTask));
+    .find(([alias]) => alias && promptAliasMatches(primaryTask, alias));
   if (requested) return requested[1];
-  if (/(^|[^\p{L}\p{N}_-])Codex([^\p{L}\p{N}_-]|$)/iu.test(primaryTask)) return 'Codex';
   return undefined;
+}
+
+function promptAliasMatches(task: string, alias: string) {
+  if (containsCjk(alias)) return task.includes(alias);
+  return new RegExp(`(^|[^A-Za-z0-9_-])${escapeRegExp(alias)}([^A-Za-z0-9_-]|$)`, 'iu').test(task);
+}
+
+function containsCjk(value: string) {
+  return /[\u3400-\u9FFF]/u.test(value);
 }
 
 function primaryTaskLine(prompt: string) {
@@ -667,6 +678,7 @@ async function runGenericVisionComputerUseLoop(
         executionStatus = 'failed-with-reason';
         failureReason = result.stderr || result.stdout || `Generic action ${action.type} failed with exit ${result.exitCode}`;
       }
+      if (ok) bindWindowTargetFromOpenAppAction(config, executableAction);
       const planningFeedback = await buildVerifierPlanningFeedbackFromVisionSense({
         action: executableAction,
         status: ok ? 'done' : 'failed',
@@ -865,6 +877,23 @@ async function runGenericVisionComputerUseLoop(
     }
   }
 
+  if (executionStatus !== 'failed-with-reason') {
+    const completionGap = visibleArtifactCompletionGap(request.prompt, steps);
+    if (completionGap) {
+      executionStatus = 'failed-with-reason';
+      failureReason = completionGap;
+      const lastStep = [...steps].reverse().find((step) => step.kind === 'gui-execution' || step.kind === 'planning');
+      if (lastStep && !lastStep.failureReason) {
+        lastStep.verifier = {
+          ...(lastStep.verifier ?? {}),
+          status: 'blocked',
+          reason: 'planner completion did not satisfy visible artifact acceptance',
+        };
+        lastStep.failureReason = failureReason;
+      }
+    }
+  }
+
   const completedAt = new Date().toISOString();
   const traceValidation = validateRuntimeTraceScreenshots(screenshotLedger);
   const trace = {
@@ -964,6 +993,30 @@ async function runGenericVisionComputerUseLoop(
     desktopPlatform: config.desktopPlatform,
     windowTarget: targetResolution.ok ? toTraceWindowTarget(targetResolution) : undefined,
   });
+}
+
+function bindWindowTargetFromOpenAppAction(config: VisionSenseConfig, action: GenericVisionAction) {
+  if (action.type !== 'open_app') return;
+  const appName = action.appName.trim();
+  if (!appName) return;
+  config.windowTarget = {
+    ...config.windowTarget,
+    enabled: true,
+    required: false,
+    mode: 'app-window',
+    appName,
+    coordinateSpace: config.windowTarget.coordinateSpace === 'screen' ? 'window-local' : config.windowTarget.coordinateSpace,
+    windowId: undefined,
+    processId: undefined,
+    bundleId: undefined,
+    title: undefined,
+    bounds: undefined,
+    contentRect: undefined,
+    displayId: undefined,
+    focused: undefined,
+    minimized: undefined,
+    occluded: undefined,
+  };
 }
 
 async function appendPlannerStep(params: {
@@ -1659,8 +1712,24 @@ function shouldCompleteFromCreationActionLedger(task: string, steps: LoopStep[])
 
   return effectiveActions.length >= 5
     && structuralTargetCount >= 2
-    && hasStructureEdit
-    || ((openedTargetEditor || observedTargetEditor) && effectiveActions.length >= 1);
+    && hasStructureEdit;
+}
+
+function visibleArtifactCompletionGap(task: string, steps: LoopStep[]) {
+  if (!isLowRiskCreationTask(task)) return '';
+  if (shouldCompleteFromCreationActionLedger(task, steps)) return '';
+  const effectiveActions = steps
+    .filter((step) => step.kind === 'gui-execution' && step.status === 'done' && !isNoVisibleEffectStep(step))
+    .map((step) => isRecord(step.plannedAction) ? step.plannedAction as unknown as GenericVisionAction : undefined)
+    .filter((action): action is GenericVisionAction => Boolean(action))
+    .filter((action) => action.type !== 'wait');
+  const actionSummary = effectiveActions.map((action) => action.type).join(', ') || 'none';
+  return [
+    'Visible artifact task did not satisfy completion acceptance.',
+    'Opening an editor, switching windows, or producing only generic navigation actions is not enough for create/write/slide/document requests.',
+    'The trace must show visible content entry or structure-edit actions that match the requested artifact before the runtime can report done.',
+    `Observed effective actions: ${actionSummary}.`,
+  ].join(' ');
 }
 
 function stepObservedAppMatches(step: LoopStep, pattern: RegExp) {
@@ -2583,8 +2652,9 @@ async function groundTargetDescription(
     'Return click coordinates only; do not return typing commands, text content, or action plans.',
     `Target: ${targetDescription}`,
   ].join(' ');
+  const grounderUrl = `${config.grounder.baseUrl.replace(/\/+$/, '')}/predict/`;
   const response = await postJsonWithTimeout(
-    `${config.grounder.baseUrl.replace(/\/+$/, '')}/predict/`,
+    grounderUrl,
     {
       ...(!imagePath.imageBase64 ? { image_path: imagePath.path } : {}),
       ...(imagePath.imageBase64 ? { image_base64: imagePath.imageBase64, image_mime_type: imagePath.imageMimeType ?? 'image/png' } : {}),
@@ -2595,10 +2665,25 @@ async function groundTargetDescription(
     config.grounder.timeoutMs,
   );
   if (!response.ok) {
+    const fallback = await groundTargetWithVisionModel(targetDescription, screenshot, config);
+    if (fallback.ok) {
+      return {
+        ...fallback,
+        grounding: {
+          ...fallback.grounding,
+          fallbackFrom: 'kv-ground',
+          kvGroundUrl: grounderUrl,
+          kvGroundFailure: response.error,
+        },
+      };
+    }
     return {
       ok: false,
-      reason: `Grounder request failed: ${response.error}`,
-      grounding: { status: 'failed', targetDescription, screenshotRef: screenshot.path, imagePath: imagePath.path, error: response.error },
+      reason: [
+        `KV Grounder request failed at ${grounderUrl}: ${response.error}.`,
+        `Fallback visual Grounder failed: ${fallback.reason}`,
+      ].join(' '),
+      grounding: { status: 'failed', targetDescription, screenshotRef: screenshot.path, imagePath: imagePath.path, provider: 'kv-ground', grounderUrl, error: response.error, fallbackReason: fallback.reason },
     };
   }
   const coordinates = parseGrounderCoordinates(response.body);

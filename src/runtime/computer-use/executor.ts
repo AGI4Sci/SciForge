@@ -79,7 +79,7 @@ export function executorBoundary(config: ComputerUseConfig) {
 }
 
 function realInputBlockReason(action: GenericVisionAction, config: ComputerUseConfig) {
-  if (config.dryRun || action.type === 'wait') return '';
+  if (config.dryRun || !requiresPointerKeyboardInput(action)) return '';
   const independentAdapter = normalizeIndependentInputAdapter(config.inputAdapter);
   if (independentAdapter) {
     return [
@@ -94,6 +94,10 @@ function realInputBlockReason(action: GenericVisionAction, config: ComputerUseCo
     ].join(' ');
   }
   return '';
+}
+
+function requiresPointerKeyboardInput(action: GenericVisionAction) {
+  return action.type !== 'wait' && action.type !== 'open_app';
 }
 
 function normalizeIndependentInputAdapter(value: string | undefined) {

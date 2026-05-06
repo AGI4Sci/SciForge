@@ -75,6 +75,11 @@ describe('SciForge config persistence', () => {
     assert.equal(updateConfig(defaultSciForgeConfig, { maxContextWindowTokens: 12 }).maxContextWindowTokens, 1000);
   });
 
+  it('defaults shared system input for vision-sense and preserves explicit opt-out', () => {
+    assert.equal(defaultSciForgeConfig.visionAllowSharedSystemInput, true);
+    assert.equal(updateConfig(defaultSciForgeConfig, { visionAllowSharedSystemInput: false }).visionAllowSharedSystemInput, false);
+  });
+
   it('normalizes feedback github repo to owner/repo', () => {
     assert.equal(normalizeFeedbackGithubRepo('acme/SciForge'), 'acme/SciForge');
     assert.equal(normalizeFeedbackGithubRepo('https://github.com/acme/SciForge.git'), 'acme/SciForge');

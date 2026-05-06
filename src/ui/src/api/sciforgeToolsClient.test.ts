@@ -1277,6 +1277,7 @@ function baseInput(): SendAgentMessageInput {
       apiKey: '',
       requestTimeoutMs: 300000,
       maxContextWindowTokens: 200000,
+      visionAllowSharedSystemInput: true,
       updatedAt: '2026-04-26T00:00:00.000Z',
     },
     scenarioOverride: {

@@ -94,6 +94,33 @@ try {
   assert.ok(Array.isArray(autoCaptureDisplays) && autoCaptureDisplays.length >= 1);
   assert.ok(autoCaptureDisplays.every((displayId) => Number.isInteger(displayId) && Number(displayId) > 0));
 
+  const appWindowBindWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-app-window-bind-'));
+  process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-app-window-bind-smoke';
+  process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN = '1';
+  process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([
+    { type: 'open_app', appName: 'Generic Research Workbench' },
+    { type: 'wait', ms: 1 },
+  ]);
+  const appWindowBind = await runWorkspaceRuntimeGateway({
+    skillDomain: 'literature',
+    prompt: 'Use generic computer use to open the requested app and observe its window on whichever display contains it.',
+    workspacePath: appWindowBindWorkspace,
+    selectedToolIds: ['local.vision-sense'],
+    uiState: { selectedToolIds: ['local.vision-sense'] },
+  });
+  assert.equal(appWindowBind.executionUnits[0].status, 'done');
+  const appWindowBindTraceArtifact = appWindowBind.artifacts.find((artifact) => artifact.id === 'vision-sense-trace');
+  assert.ok(appWindowBindTraceArtifact);
+  const appWindowBindTrace = JSON.parse(await readFile(join(appWindowBindWorkspace, String(appWindowBindTraceArtifact.path)), 'utf8')) as Record<string, unknown>;
+  const appWindowBindTarget = (appWindowBindTrace.config as Record<string, unknown>).windowTarget as Record<string, unknown>;
+  assert.equal(appWindowBindTarget.mode, 'app-window');
+  assert.equal(appWindowBindTarget.appName, 'Generic Research Workbench');
+  assert.equal(appWindowBindTarget.captureKind, 'window');
+  assert.equal(appWindowBindTarget.coordinateSpace, 'window-local');
+  const appWindowBindSteps = appWindowBindTrace.steps as Array<Record<string, unknown>>;
+  assert.ok(appWindowBindSteps.some((step) => step.id === 'step-001-execute-open_app'));
+  assert.ok(appWindowBindSteps.some((step) => step.id === 'step-002-execute-wait' && ((step.windowTarget as Record<string, unknown>)?.captureKind) === 'window'));
+
   const dryRunWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-generic-dryrun-'));
     process.env.SCIFORGE_VISION_CAPTURE_DISPLAYS = '1,2';
     process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-actions-smoke';
@@ -136,6 +163,26 @@ try {
   assert.ok((trace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-005-execute-type_text'));
   await stat(join(dryRunWorkspace, '.sciforge/vision-runs/generic-cu-actions-smoke/step-001-before-display-1.png'));
   await stat(join(dryRunWorkspace, '.sciforge/vision-runs/generic-cu-actions-smoke/step-005-after-display-2.png'));
+
+  const prematureCreationWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-premature-creation-'));
+  process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-premature-creation-smoke';
+  process.env.SCIFORGE_VISION_ACTIONS_JSON = JSON.stringify([
+    { type: 'open_app', appName: 'Microsoft PowerPoint' },
+  ]);
+  const prematureCreation = await runWorkspaceRuntimeGateway({
+    skillDomain: 'literature',
+    prompt: 'Use generic computer use to create one presentation slide with visible text about a virtual cell.',
+    workspacePath: prematureCreationWorkspace,
+    selectedToolIds: ['local.vision-sense'],
+    uiState: { selectedToolIds: ['local.vision-sense'] },
+  });
+  assert.equal(prematureCreation.executionUnits[0].status, 'failed-with-reason');
+  assert.match(String(prematureCreation.executionUnits[0].failureReason), /Visible artifact task did not satisfy completion acceptance/i);
+  const prematureTraceArtifact = prematureCreation.artifacts.find((artifact) => artifact.id === 'vision-sense-trace');
+  assert.ok(prematureTraceArtifact);
+  const prematureTrace = JSON.parse(await readFile(join(prematureCreationWorkspace, String(prematureTraceArtifact.path)), 'utf8')) as Record<string, unknown>;
+  const prematureLastStep = (prematureTrace.steps as Array<Record<string, unknown>>).at(-1);
+  assert.match(String(prematureLastStep?.failureReason), /visible content entry|structure-edit/i);
 
   const highRiskWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-high-risk-'));
   process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-high-risk-smoke';
@@ -238,7 +285,7 @@ try {
     assert.ok(address && typeof address === 'object');
     const visualGrounderWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-vision-visual-grounder-'));
     process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-visual-grounder-smoke';
-    delete process.env.SCIFORGE_VISION_KV_GROUND_URL;
+    process.env.SCIFORGE_VISION_KV_GROUND_URL = 'http://127.0.0.1:1';
     process.env.SCIFORGE_VISION_GROUNDER_LLM_BASE_URL = `http://127.0.0.1:${address.port}`;
     process.env.SCIFORGE_VISION_GROUNDER_LLM_API_KEY = 'visual-grounder-key';
     process.env.SCIFORGE_VISION_GROUNDER_LLM_MODEL = 'visual-grounder-smoke-model';
@@ -260,6 +307,8 @@ try {
     assert.ok(visualStep);
     assert.equal(((visualStep.plannedAction as Record<string, unknown>)?.x), 66);
     assert.equal(((visualStep.grounding as Record<string, unknown>)?.provider), 'coarse-to-fine');
+    assert.equal(((visualStep.grounding as Record<string, unknown>)?.fallbackFrom), 'kv-ground');
+    assert.equal(((visualStep.grounding as Record<string, unknown>)?.kvGroundUrl), 'http://127.0.0.1:1/predict/');
     assert.equal((((visualStep.grounding as Record<string, unknown>)?.fineGrounding as Record<string, unknown>)?.stage), 'fine');
   } finally {
     await new Promise<void>((resolve) => visualGrounderServer.close(() => resolve()));
@@ -900,6 +949,20 @@ try {
   assert.equal(typeof (realExecutorLockResult.schedulerLease as Record<string, unknown>)?.acquiredAt, 'string');
   assert.equal(typeof (realExecutorLockResult.schedulerLease as Record<string, unknown>)?.releasedAt, 'string');
   assert.match(String((realExecutorLockResult.schedulerLease as Record<string, unknown>)?.lockPath), /sciforge-computer-use-locks/);
+  const openAppNoPointerResult = await executeGenericDesktopAction({ type: 'open_app', appName: 'Example App' }, {
+    ...providerFailureConfig,
+    runId: 'open-app-no-pointer-smoke',
+    desktopPlatform: 'linux',
+    allowSharedSystemInput: false,
+  }, {
+    ...providerFailureResolution,
+    captureKind: 'display',
+    schedulerLockId: 'smoke-open-app-lock-424242',
+  });
+  assert.equal(openAppNoPointerResult.exitCode, 126);
+  assert.match(openAppNoPointerResult.stderr, /No real generic GUI executor is configured/i);
+  assert.doesNotMatch(openAppNoPointerResult.stderr, /shared system mouse\/keyboard input was not explicitly allowed/i);
+  assert.equal((openAppNoPointerResult.schedulerLease as Record<string, unknown>)?.lockId, 'smoke-open-app-lock-424242');
   const independentInputContract = inputChannelContract({
     ...providerFailureConfig,
     dryRun: false,

@@ -1168,6 +1168,21 @@
   font-size: 11px;
 }
 
+.feedback-github-card-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.feedback-github-card-link:hover {
+  text-decoration: underline;
+}
+
 .feedback-tags {
   display: flex;
   flex-wrap: wrap;

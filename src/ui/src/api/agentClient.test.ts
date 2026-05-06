@@ -511,6 +511,7 @@ function compactInput(): SendAgentMessageInput {
       apiKey: '',
       requestTimeoutMs: 300000,
       maxContextWindowTokens: 200000,
+      visionAllowSharedSystemInput: true,
       updatedAt: '2026-05-02T00:00:00.000Z',
     },
     scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'built-in' },

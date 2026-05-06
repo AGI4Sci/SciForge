@@ -193,6 +193,7 @@ function isSciForgeConfig(value: unknown): value is SciForgeConfig {
     && typeof record.apiKey === 'string'
     && typeof record.requestTimeoutMs === 'number'
     && (record.maxContextWindowTokens === undefined || typeof record.maxContextWindowTokens === 'number')
+    && (record.visionAllowSharedSystemInput === undefined || typeof record.visionAllowSharedSystemInput === 'boolean')
     && typeof record.updatedAt === 'string';
 }
 

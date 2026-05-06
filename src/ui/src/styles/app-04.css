@@ -46,7 +46,7 @@
   min-height: 0;
   height: 100%;
   display: grid;
-  grid-template-columns: minmax(360px, 42%) minmax(0, 1fr);
+  grid-template-columns: minmax(280px, 42%) minmax(0, 1fr);
   gap: 16px;
 }
 
@@ -128,7 +128,7 @@
 }
 
 .workbench-grid.results-collapsed {
-  grid-template-columns: minmax(360px, 1fr) 44px;
+  grid-template-columns: minmax(280px, 1fr) 44px;
 }
 
 .chat-panel,
@@ -255,29 +255,6 @@
   font-size: 15px;
   font-weight: 700;
   letter-spacing: -0.01em;
-}
-
-.messages-resize-handle {
-  flex-shrink: 0;
-  position: relative;
-  height: 7px;
-  cursor: ns-resize;
-}
-
-.messages-resize-handle::before {
-  content: '';
-  position: absolute;
-  left: 50%;
-  top: 3px;
-  transform: translateX(-50%);
-  width: 44px;
-  height: 3px;
-  border-radius: 999px;
-  background: rgba(123, 147, 176, 0.62);
-}
-
-.messages-resize-handle:hover::before {
-  background: rgba(0, 229, 160, 0.85);
 }
 
 .chat-empty {
@@ -1038,6 +1015,68 @@
   padding: 8px 10px 10px;
   border-top: 1px solid var(--border);
   background: var(--surface-panel);
+}
+
+.composer-collapsed {
+  position: relative;
+  z-index: 3;
+  width: auto;
+  min-height: 42px;
+  margin: 8px 10px 10px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--bio-300);
+  background: var(--surface-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: left;
+}
+
+.composer-collapsed span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-collapsed svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.composer-collapsed:hover,
+.composer-collapsed:focus-visible {
+  color: var(--bio-100);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.composer-collapse-button {
+  position: absolute;
+  top: 7px;
+  right: 10px;
+  z-index: 4;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  color: var(--bio-300);
+  background: var(--surface-input);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.composer-collapse-button:hover {
+  color: var(--accent);
+  border-color: var(--accent-border);
 }
 
 .reference-composer {

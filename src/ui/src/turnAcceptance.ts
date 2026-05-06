@@ -319,7 +319,8 @@ function evaluateTurnAcceptance(
 ): TurnAcceptance {
   const failures: TurnAcceptanceFailure[] = [];
   const content = response.message.content.trim();
-  const failedExecutionUnits = response.executionUnits.filter((unit) => isFailedExecutionStatus(unit.status));
+  const failedExecutionUnits = response.executionUnits.filter((unit) => isFailedExecutionStatus(unit.status)
+    && !isNonBlockingAcceptanceRepairFailure(unit, response));
   if (response.run.status === 'failed' || failedExecutionUnits.length) {
     const details = failedExecutionUnits.map((unit) => [
       unit.id,
@@ -451,6 +452,12 @@ function isFailedExecutionStatus(status: RuntimeExecutionUnit['status']) {
   return status === 'failed' || status === 'failed-with-reason' || status === 'repair-needed';
 }
 
+function isNonBlockingAcceptanceRepairFailure(unit: RuntimeExecutionUnit, response: NormalizedAgentResponse) {
+  const identity = `${unit.id} ${unit.tool} ${unit.failureReason ?? ''}`;
+  if (!/acceptance[- ]?repair|turn[- ]?acceptance|acceptance gate|unused-explicit-references/i.test(identity)) return false;
+  return Boolean(response.message.content.trim() || response.artifacts.length || response.uiManifest.length);
+}
+
 function hasReadableReport(response: NormalizedAgentResponse, objectReferences: ObjectReference[]) {
   if ((/^#{1,3}\s|\n#{1,3}\s|\.md\b|markdown/i.test(response.message.content)
     || (response.message.content.length > 400 && /摘要|方法|结果|结论|局限|证据/.test(response.message.content)))
@@ -497,6 +504,7 @@ function responseReflectsReferenceUse(reference: SciForgeReference, response: No
       artifact.path,
       artifact.dataRef,
       JSON.stringify(artifact.metadata ?? {}),
+      compactArtifactDataForReferenceReflection(artifact.data),
     ]),
     ...objectReferences.flatMap((objectRef) => [
       objectRef.id,
@@ -522,6 +530,16 @@ function responseReflectsReferenceUse(reference: SciForgeReference, response: No
     selectedText,
   ].filter((token): token is string => Boolean(token && token.trim()));
   return tokens.some((token) => containsMeaningfulReferenceToken(haystack, token));
+}
+
+function compactArtifactDataForReferenceReflection(data: unknown) {
+  if (typeof data === 'string') return data.slice(0, 8000);
+  if (!isRecord(data)) return '';
+  const values: string[] = [];
+  for (const key of ['markdown', 'report', 'content', 'summary', 'text', 'title']) {
+    if (typeof data[key] === 'string') values.push(String(data[key]).slice(0, 8000));
+  }
+  return values.join('\n');
 }
 
 function containsMeaningfulReferenceToken(haystack: string, token: string) {
