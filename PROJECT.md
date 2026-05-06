@@ -17,6 +17,38 @@
 
 ## 任务板
 
+### T091 反馈 Workspace 状态变换职责边界优化
+
+状态：已完成。本任务继续拆分反馈收件箱的本地状态规则：新增反馈、批量更新状态、删除反馈并清理 request 引用、从选中反馈创建 request、替换 GitHub open issue 缓存等纯 workspace state 变换下沉到反馈领域模块。页面入口只保留用户事件响应和异步编排，不再内联反馈数据变更细节。
+
+#### 原则落地
+- 单一职责：`feedback/feedbackWorkspace.ts` 只负责本地反馈 workspace state 变换；GitHub API/issue 格式仍在 `feedback/githubFeedback.ts`。
+- 按职责拆分：反馈评论、request、GitHub issue cache 的本地状态规则按 feedback 领域边界集中。
+- 主流程清晰：`SciForgeApp.tsx` 的反馈 handlers 变成薄调用，页面代码只串联 UI 事件。
+- 接口明确：模块函数显式接收 workspace state、ids、status、title 和时间戳，不读取 React state、DOM 或配置。
+- 减少耦合：新模块不依赖页面组件、当前 scenario、GitHub HTTP client 或浏览器全局。
+- 配置集中：反馈评论和 request 保留数量在模块中有明确默认值，调用方可覆盖。
+- 谨慎使用 utils：没有放入通用 `utils`，使用领域命名的 `feedbackWorkspace`。
+- 函数保持短小：每个函数对应一个明确反馈状态动作。
+- 命名表达意图：`addFeedbackCommentToWorkspace`、`deleteFeedbackCommentsFromWorkspace`、`createFeedbackRequestFromComments` 等名称直接表达行为。
+- 稳定对外接口：反馈记录、request 和 workspace schema 不变，只移动内部状态变换。
+- 避免过度设计：不引入 reducer 框架或状态机，只抽纯函数。
+- 方便测试复用：新增独立单测覆盖本地反馈状态核心规则。
+
+#### TODO
+- [x] 新增 `src/ui/src/feedback/feedbackWorkspace.ts` 承载本地反馈 workspace state 变换。
+- [x] 将新增反馈、更新状态、删除反馈、创建 request、替换 synced issue cache 从 `SciForgeApp.tsx` 下沉到模块。
+- [x] 保持 GitHub REST 和 issue Markdown 格式化继续由 `feedback/githubFeedback.ts` 负责，避免职责混杂。
+- [x] 保持新模块不依赖 React、DOM、当前页面或具体科研场景。
+- [x] 为反馈 workspace 模块增加独立单测。
+- [x] 通过 TypeScript 类型检查、相关单测和生产构建。
+
+#### 验收
+- [x] `SciForgeApp.tsx` 中反馈本地状态 handlers 只负责调用领域 state transition。
+- [x] 新模块可对任意 workspace feedback 数据复用，不含当前案例硬编码。
+- [x] 单测覆盖 comment、request 和 synced issue cache 的核心变更规则。
+- [x] `npm run typecheck`、相关单测和 `npm run build` 通过。
+
 ### T090 会话 Workspace 状态变换职责边界优化
 
 状态：已完成。本任务继续拆分应用入口中的会话状态规则：新建聊天、删除当前聊天、恢复/清理归档会话、编辑/删除消息等 workspace state 变换下沉到独立模块。`SciForgeApp.tsx` 只负责响应 UI 事件并调用状态变换函数；会话规则不再散落在页面装配代码里，也不绑定任何特定场景。

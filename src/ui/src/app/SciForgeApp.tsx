@@ -72,6 +72,13 @@ import {
   syncFeedbackGithubIssues,
 } from '../feedback/githubFeedback';
 import {
+  addFeedbackCommentToWorkspace,
+  createFeedbackRequestFromComments,
+  deleteFeedbackCommentsFromWorkspace,
+  replaceGithubSyncedOpenIssuesInWorkspace,
+  updateFeedbackCommentStatus,
+} from '../feedback/feedbackWorkspace';
+import {
   makeId,
   nowIso,
   type SciForgeMessage,
@@ -2029,10 +2036,7 @@ export function SciForgeApp() {
   }
 
   function addFeedbackComment(comment: FeedbackCommentRecord) {
-    updateWorkspace((current) => ({
-      ...current,
-      feedbackComments: [comment, ...(current.feedbackComments ?? [])].slice(0, 500),
-    }));
+    updateWorkspace((current) => addFeedbackCommentToWorkspace(current, comment));
   }
 
   function addContextReference(reference: SciForgeReference) {
@@ -2043,63 +2047,21 @@ export function SciForgeApp() {
 
   function updateFeedbackStatus(ids: string[], status: FeedbackCommentStatus) {
     if (!ids.length) return;
-    const selected = new Set(ids);
-    updateWorkspace((current) => ({
-      ...current,
-      feedbackComments: (current.feedbackComments ?? []).map((comment) => selected.has(comment.id)
-        ? { ...comment, status, updatedAt: nowIso() }
-        : comment),
-    }));
+    updateWorkspace((current) => updateFeedbackCommentStatus(current, ids, status, nowIso()));
   }
 
   function deleteFeedbackComments(ids: string[]) {
     if (!ids.length) return;
-    const selected = new Set(ids);
-    updateWorkspace((current) => ({
-      ...current,
-      feedbackComments: (current.feedbackComments ?? []).filter((comment) => !selected.has(comment.id)),
-      feedbackRequests: (current.feedbackRequests ?? []).map((request) => ({
-        ...request,
-        feedbackIds: request.feedbackIds.filter((id) => !selected.has(id)),
-      })),
-    }));
+    updateWorkspace((current) => deleteFeedbackCommentsFromWorkspace(current, ids));
   }
 
   function createFeedbackRequest(ids: string[], title: string) {
     if (!ids.length) return;
-    const now = nowIso();
-    const requestId = makeId('request');
-    updateWorkspace((current) => {
-      const request: NonNullable<SciForgeWorkspaceState['feedbackRequests']>[number] = {
-        id: requestId,
-        schemaVersion: 1,
-        title,
-        status: 'draft',
-        feedbackIds: ids,
-        summary: `Codex change request from ${ids.length} feedback comments.`,
-        acceptanceCriteria: ids.map((id) => {
-          const comment = current.feedbackComments?.find((item) => item.id === id);
-          return comment ? comment.comment : id;
-        }).slice(0, 12),
-        createdAt: now,
-        updatedAt: now,
-      };
-      return {
-        ...current,
-        feedbackRequests: [request, ...(current.feedbackRequests ?? [])].slice(0, 80),
-        feedbackComments: (current.feedbackComments ?? []).map((comment) => ids.includes(comment.id)
-          ? { ...comment, status: comment.status === 'open' ? 'triaged' : comment.status, requestId, updatedAt: now }
-          : comment),
-      };
-    });
+    updateWorkspace((current) => createFeedbackRequestFromComments(current, ids, title));
   }
 
   function replaceGithubSyncedOpenIssues(issues: GithubSyncedOpenIssueRecord[]) {
-    updateWorkspace((current) => ({
-      ...current,
-      githubSyncedOpenIssues: issues,
-      updatedAt: nowIso(),
-    }));
+    updateWorkspace((current) => replaceGithubSyncedOpenIssuesInWorkspace(current, issues, nowIso()));
   }
 
   function recordGithubIssueCreated(commentIds: string[], issue: { number: number; htmlUrl: string; title: string }) {
