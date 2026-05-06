@@ -61,6 +61,7 @@ import { timeline } from '../demoData';
 import { sendAgentMessageStream } from '../api/agentClient';
 import { sendSciForgeToolMessage } from '../api/sciforgeToolsClient';
 import { buildExecutionBundle, evaluateExecutionBundleExport } from '../exportPolicy';
+import { FeedbackCaptureLayer } from '../feedback/FeedbackCaptureLayer';
 import {
   buildFeedbackBundle,
   buildFeedbackGithubIssueBody,
@@ -86,8 +87,6 @@ import {
   type FeedbackCommentStatus,
   type GithubSyncedOpenIssueRecord,
   type FeedbackPriority,
-  type FeedbackRuntimeSnapshot,
-  type FeedbackTargetSnapshot,
   type NotebookRecord,
   type NormalizedAgentResponse,
   type ObjectAction,
@@ -1512,183 +1511,6 @@ function Workbench({
   );
 }
 
-function FeedbackCaptureLayer({
-  page,
-  scenarioId,
-  session,
-  author,
-  onAuthorChange,
-  onSubmit,
-  onReference,
-}: {
-  page: PageId;
-  scenarioId: ScenarioInstanceId;
-  session: SciForgeSession;
-  author: { authorId: string; authorName: string };
-  onAuthorChange: (author: { authorId: string; authorName: string }) => void;
-  onSubmit: (comment: FeedbackCommentRecord) => void;
-  onReference: (reference: SciForgeReference) => void;
-}) {
-  const [contextTarget, setContextTarget] = useState<{ x: number; y: number; target: FeedbackTargetSnapshot; selectedText: string; objectReference?: SciForgeReference; mode: 'menu' | 'comment' } | null>(null);
-  const [comment, setComment] = useState('');
-  const [priority, setPriority] = useState<FeedbackPriority>('normal');
-  const [tags, setTags] = useState('');
-
-  useEffect(() => {
-    function openMenu(event: MouseEvent) {
-      const element = event.target instanceof Element ? event.target : null;
-      if (!element || element.closest('[data-feedback-control="true"]')) return;
-      event.preventDefault();
-      event.stopPropagation();
-      setContextTarget({
-        x: Math.min(event.clientX, window.innerWidth - 230),
-        y: Math.min(event.clientY, window.innerHeight - 160),
-        target: feedbackTargetSnapshot(element),
-        selectedText: currentSelectedText(),
-        objectReference: sciForgeReferenceFromElement(element),
-        mode: 'menu',
-      });
-    }
-    function handleContextMenu(event: MouseEvent) {
-      openMenu(event);
-    }
-    function handleClick(event: MouseEvent) {
-      const element = event.target instanceof Element ? event.target : null;
-      if (element?.closest('[data-feedback-control="true"]')) return;
-      setContextTarget(null);
-    }
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') setContextTarget(null);
-    }
-    document.addEventListener('contextmenu', handleContextMenu, true);
-    document.addEventListener('click', handleClick, true);
-    document.addEventListener('keydown', handleKeyDown, true);
-    return () => {
-      document.removeEventListener('contextmenu', handleContextMenu, true);
-      document.removeEventListener('click', handleClick, true);
-      document.removeEventListener('keydown', handleKeyDown, true);
-    };
-  }, []);
-
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!contextTarget || !comment.trim()) return;
-    const now = nowIso();
-    onSubmit({
-      id: makeId('feedback'),
-      schemaVersion: 1,
-      authorId: author.authorId,
-      authorName: author.authorName.trim() || 'Anonymous',
-      comment: comment.trim(),
-      status: 'open',
-      priority,
-      tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean),
-      createdAt: now,
-      updatedAt: now,
-      target: contextTarget.target,
-      viewport: {
-        width: window.innerWidth,
-        height: window.innerHeight,
-        devicePixelRatio: window.devicePixelRatio || 1,
-        scrollX: window.scrollX,
-        scrollY: window.scrollY,
-      },
-      runtime: feedbackRuntimeSnapshot({ page, scenarioId, session }),
-    });
-    setContextTarget(null);
-    setComment('');
-    setTags('');
-    setPriority('normal');
-  }
-
-  function addReference(kind: 'object' | 'selection') {
-    if (!contextTarget) return;
-    const reference = kind === 'object' && contextTarget.objectReference
-      ? contextTarget.objectReference
-      : referenceForFeedbackTarget(contextTarget.target, contextTarget.selectedText, kind);
-    onReference(reference);
-    setContextTarget(null);
-    setComment('');
-    setTags('');
-    setPriority('normal');
-  }
-
-  function openComment() {
-    setContextTarget((current) => current
-      ? {
-        ...current,
-        x: Math.min(current.x, window.innerWidth - 380),
-        y: Math.min(current.y, window.innerHeight - 250),
-        mode: 'comment',
-      }
-      : current);
-  }
-
-  return (
-    <div className="feedback-layer" data-feedback-control="true" aria-live="polite">
-      {contextTarget?.mode === 'menu' ? (
-        <div
-          className="feedback-context-menu"
-          style={{ left: `${contextTarget.x}px`, top: `${contextTarget.y}px` }}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <button type="button" onClick={openComment}>添加评论</button>
-          <button type="button" onClick={() => addReference('object')}>引用对象到对话</button>
-          <button type="button" onClick={() => addReference('selection')} disabled={!contextTarget.selectedText}>引用选中内容</button>
-        </div>
-      ) : null}
-      {contextTarget?.mode === 'comment' ? (
-          <form
-            className="feedback-popover"
-            style={{ left: `${contextTarget.x}px`, top: `${contextTarget.y}px` }}
-            onSubmit={submit}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="feedback-popover-head">
-              <strong>添加评论</strong>
-              <button type="button" className="feedback-close" onClick={() => setContextTarget(null)}>关闭</button>
-            </div>
-            <div className="feedback-target-summary">
-              <span>selector</span>
-              <code>{contextTarget.target.selector}</code>
-              <span>position</span>
-              <code>{Math.round(contextTarget.target.rect.x)}, {Math.round(contextTarget.target.rect.y)} · {Math.round(contextTarget.target.rect.width)}x{Math.round(contextTarget.target.rect.height)}</code>
-            </div>
-            <label className="feedback-field wide">
-              <span>评论内容</span>
-              <textarea value={comment} onChange={(event) => setComment(event.target.value)} autoFocus placeholder="写下你希望这里如何改..." />
-            </label>
-            <div className="feedback-grid">
-              <label className="feedback-field">
-                <span>用户</span>
-                <input
-                  value={author.authorName}
-                  onChange={(event) => onAuthorChange({ ...author, authorName: event.target.value })}
-                />
-              </label>
-              <label className="feedback-field">
-                <span>优先级</span>
-                <select value={priority} onChange={(event) => setPriority(event.target.value as FeedbackPriority)}>
-                  <option value="normal">normal</option>
-                  <option value="high">high</option>
-                  <option value="urgent">urgent</option>
-                  <option value="low">low</option>
-                </select>
-              </label>
-              <label className="feedback-field wide">
-                <span>标签（逗号分隔）</span>
-                <input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="upload, history, ui" />
-              </label>
-            </div>
-            <div className="feedback-actions">
-              <ActionButton icon={Check} disabled={!comment.trim()}>保存反馈</ActionButton>
-            </div>
-          </form>
-      ) : null}
-    </div>
-  );
-}
-
 function FeedbackInboxPage({
   comments,
   requests,
@@ -1955,158 +1777,6 @@ function FeedbackInboxPage({
       </section>
     </main>
   );
-}
-
-function feedbackRuntimeSnapshot({
-  page,
-  scenarioId,
-  session,
-}: {
-  page: PageId;
-  scenarioId: ScenarioInstanceId;
-  session: SciForgeSession;
-}): FeedbackRuntimeSnapshot {
-  const activeRun = session.runs.at(-1);
-  return {
-    page,
-    url: window.location.href,
-    scenarioId,
-    sessionId: session.sessionId,
-    activeRunId: activeRun?.id,
-    sessionTitle: session.title,
-    messageCount: session.messages.length,
-    artifactSummary: session.artifacts.slice(0, 12).map((artifact) => ({
-      id: artifact.id,
-      type: artifact.type,
-      title: typeof artifact.metadata?.title === 'string' ? artifact.metadata.title : undefined,
-    })),
-    executionSummary: session.executionUnits.slice(0, 12).map((unit) => ({
-      id: unit.id,
-      tool: unit.tool,
-      status: unit.status,
-    })),
-    uiManifest: session.uiManifest.map((slot) => slot.componentId),
-    appVersion: APP_BUILD_ID,
-  };
-}
-
-function feedbackTargetSnapshot(element: Element): FeedbackTargetSnapshot {
-  const rect = element.getBoundingClientRect();
-  const htmlElement = element as HTMLElement;
-  return {
-    selector: cssSelectorForElement(element),
-    path: elementPath(element),
-    text: compactFeedbackText(htmlElement.innerText || element.textContent || ''),
-    tagName: element.tagName.toLowerCase(),
-    role: element.getAttribute('role') || undefined,
-    ariaLabel: element.getAttribute('aria-label') || htmlElement.title || undefined,
-    rect: {
-      x: rect.x,
-      y: rect.y,
-      width: rect.width,
-      height: rect.height,
-    },
-  };
-}
-
-function currentSelectedText() {
-  const text = window.getSelection()?.toString().replace(/\s+/g, ' ').trim() ?? '';
-  return text.length > 2400 ? `${text.slice(0, 2400)}...` : text;
-}
-
-function sciForgeReferenceFromElement(element: Element): SciForgeReference | undefined {
-  const referenceElement = element.closest<HTMLElement>('[data-sciforge-reference]');
-  const raw = referenceElement?.dataset.sciforgeReference;
-  if (!raw) return undefined;
-  try {
-    const parsed = JSON.parse(raw) as Partial<SciForgeReference>;
-    if (!parsed.id || !parsed.kind || !parsed.title || !parsed.ref) return undefined;
-    return parsed as SciForgeReference;
-  } catch {
-    return undefined;
-  }
-}
-
-function referenceForFeedbackTarget(target: FeedbackTargetSnapshot, selectedText: string, mode: 'object' | 'selection'): SciForgeReference {
-  const sourceRef = `ui:${target.selector}`;
-  if (mode === 'selection' && selectedText) {
-    const textHash = feedbackHash(`${sourceRef}:${selectedText}`);
-    return {
-      id: `ref-context-text-${textHash}`,
-      kind: 'ui',
-      title: `选中内容 · ${selectedText.slice(0, 28)}`,
-      ref: `ui-text:${sourceRef}#${textHash}`,
-      summary: selectedText,
-      locator: {
-        textRange: selectedText.slice(0, 160),
-        region: sourceRef,
-      },
-      payload: {
-        selectedText,
-        sourceTitle: target.text || target.ariaLabel || target.tagName,
-        sourceRef,
-        sourceKind: 'ui',
-        composerMarkerHint: 'selection',
-      },
-    };
-  }
-  return {
-    id: `ref-context-ui-${feedbackHash(sourceRef)}`,
-    kind: 'ui',
-    title: target.text || target.ariaLabel || `${target.tagName} 对象`,
-    ref: sourceRef,
-    summary: target.text || target.ariaLabel || target.path,
-    payload: {
-      tagName: target.tagName,
-      ariaLabel: target.ariaLabel,
-      selector: target.selector,
-      path: target.path,
-      textPreview: target.text,
-      composerMarkerHint: 'object',
-    },
-  };
-}
-
-function feedbackHash(value: string) {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = Math.imul(31, hash) + value.charCodeAt(index) | 0;
-  }
-  return Math.abs(hash).toString(36);
-}
-
-function cssSelectorForElement(element: Element) {
-  if (element.id) return `#${CSS.escape(element.id)}`;
-  const parts: string[] = [];
-  let current: Element | null = element;
-  while (current && current.nodeType === Node.ELEMENT_NODE && parts.length < 5) {
-    let part = current.tagName.toLowerCase();
-    const classNames = Array.from(current.classList).filter((name) => !/^active|selected|hover/.test(name)).slice(0, 2);
-    if (classNames.length) part += classNames.map((name) => `.${CSS.escape(name)}`).join('');
-    const parent: Element | null = current.parentElement;
-    if (parent) {
-      const siblings = Array.from(parent.children) as Element[];
-      const sameTagSiblings = siblings.filter((child) => child.tagName === current?.tagName);
-      if (sameTagSiblings.length > 1) part += `:nth-of-type(${sameTagSiblings.indexOf(current) + 1})`;
-    }
-    parts.unshift(part);
-    current = parent;
-  }
-  return parts.join(' > ');
-}
-
-function elementPath(element: Element) {
-  const parts: string[] = [];
-  let current: Element | null = element;
-  while (current && current.nodeType === Node.ELEMENT_NODE && parts.length < 8) {
-    parts.unshift(current.tagName.toLowerCase());
-    current = current.parentElement;
-  }
-  return parts.join(' > ');
-}
-
-function compactFeedbackText(text: string) {
-  return text.replace(/\s+/g, ' ').trim().slice(0, 240);
 }
 
 function requestTitleFromFeedback(comments: FeedbackCommentRecord[]) {
@@ -2838,6 +2508,7 @@ export function SciForgeApp() {
         page={page}
         scenarioId={scenarioId}
         session={activeSession}
+        appVersion={APP_BUILD_ID}
         author={feedbackAuthor}
         onAuthorChange={setFeedbackAuthor}
         onSubmit={addFeedbackComment}

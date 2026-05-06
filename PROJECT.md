@@ -17,6 +17,39 @@
 
 ## 任务板
 
+### T089 反馈捕获模型职责边界优化
+
+状态：已完成。本任务继续按结构优化原则拆分反馈批注入口：应用入口只负责装配全局页面；反馈捕获 React 层负责监听交互、展示菜单和提交状态；DOM target snapshot、runtime snapshot、选中文本压缩和 UI reference 构造下沉到领域命名模块。实现必须适用于任何页面、任何 scenario 和任何 UI 元素，不为当前批注截图或文献证据评估场景写专用分支。
+
+#### 原则落地
+- 单一职责：`SciForgeApp.tsx` 只装配页面；`FeedbackCaptureLayer.tsx` 只负责交互事件和表单状态；`feedback/captureModel.ts` 只负责捕获数据建模。
+- 按职责拆分：目标快照、运行时快照、选区压缩和引用构造聚合在 feedback 领域模块，不散落在页面入口文件。
+- 主流程清晰：提交反馈时页面只调用 `buildFeedbackRuntimeSnapshot` 和 `buildFeedbackTargetSnapshot` 串联流程。
+- 接口明确：模块函数显式接收 page、scenario、session、url、appVersion 和 target snapshot，不读取 React state。
+- 减少耦合：新模块不依赖 React，不硬编码某个 scenario、文案、selector 或截图批注。
+- 配置集中：构建版本、URL 和当前 session 均由调用方传入，模块不维护隐藏全局配置。
+- 谨慎使用 utils：没有新增 `utils`，使用明确的 `feedback/captureModel.ts` 领域边界。
+- 函数保持短小：snapshot、selection、reference 和 DOM selector 构造分别由短函数完成。
+- 命名表达意图：`buildFeedbackRuntimeSnapshot`、`buildFeedbackTargetSnapshot`、`referenceForFeedbackTarget` 均表达输出含义。
+- 稳定对外接口：反馈记录结构保持原 contract，仅调整内部构造位置。
+- 避免过度设计：不引入 class、store 或事件总线，只抽可复用纯函数和 DOM adapter。
+- 方便测试复用：新增独立单测覆盖运行时快照、选区压缩和 UI reference 构造。
+
+#### TODO
+- [x] 将反馈 runtime snapshot 从 `SciForgeApp.tsx` 下沉到 `src/ui/src/feedback/captureModel.ts`。
+- [x] 将 `FeedbackCaptureLayer` 从 `SciForgeApp.tsx` 下沉到 `src/ui/src/feedback/FeedbackCaptureLayer.tsx`。
+- [x] 将 DOM target snapshot、selector/path/text compact 构造下沉到反馈捕获模块。
+- [x] 将选中文本压缩与 UI object/selection reference 构造下沉到反馈捕获模块。
+- [x] 保持新模块不依赖 React state、不硬编码当前页面批注或具体科研场景。
+- [x] 为新模块增加独立单测，覆盖通用 session、通用 target 和通用 selected text。
+- [x] 通过 TypeScript 类型检查、相关单测和生产构建。
+
+#### 验收
+- [x] `SciForgeApp.tsx` 不再包含反馈捕获数据建模 helper，只保留交互和状态串联。
+- [x] 捕获模型可被任何页面/场景复用，所有上下文都通过显式参数传入。
+- [x] 新增测试不依赖当前截图、文案或特定科研案例。
+- [x] `npm run typecheck`、相关单测和 `npm run build` 通过。
+
 ### T088 项目结构职责边界优化
 
 状态：已完成。本任务按单一职责、明确接口、低耦合和可测试复用的原则，对近期膨胀最快的 UI feedback/GitHub 同步路径做第一轮结构优化：页面组件只负责状态与渲染，GitHub issue 格式化、同步、导入和 workspace 状态变换下沉到独立模块。后续所有结构优化都必须优先按职责边界拆分，而不是按文件长度机械切块。
