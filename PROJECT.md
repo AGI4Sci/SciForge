@@ -17,6 +17,38 @@
 
 ## 任务板
 
+### T092 Artifact Handoff Workspace 职责边界优化
+
+状态：已完成。本任务继续拆分应用入口中的 artifact handoff 流程：将 handoff message、artifact 去重写入、notebook 记录、timeline 事件和 session versioning 下沉到独立 workspace 模块。`SciForgeApp.tsx` 只负责根据当前 UI 选择目标场景、生成 auto-run prompt 和切换页面，不再内联 artifact handoff 数据写入细节。
+
+#### 原则落地
+- 单一职责：`workspace/artifactHandoff.ts` 只负责 artifact handoff 的 workspace state 写入；页面入口只负责导航和 auto-run 触发。
+- 按职责拆分：handoff message、notebook、timeline、artifact 去重和 session versioning 按 handoff 领域边界集中。
+- 主流程清晰：`handleArtifactHandoff` 只计算标签、调用 state transition、切换到 workbench。
+- 接口明确：模块函数显式接收 workspace state、target scenario、artifact、labels、时间戳和可选 id，不读取 React state 或浏览器全局。
+- 减少耦合：新模块不依赖 `ResultsRenderer`、页面组件、DOM、当前 active page 或具体科研场景。
+- 配置集中：handoff artifact/notebook/timeline 保留数量在模块内集中定义。
+- 谨慎使用 utils：没有新增杂项 `utils`，使用领域命名的 `workspace/artifactHandoff.ts`。
+- 函数保持短小：message 构造、session 写入和 timeline 构造各自独立。
+- 命名表达意图：`applyArtifactHandoffToWorkspace`、`buildArtifactHandoffMessage` 直接说明用途。
+- 稳定对外接口：artifact、session、timeline 和 notebook schema 不变，只移动内部实现。
+- 避免过度设计：不引入事件总线或 workflow engine，只抽纯 state transition。
+- 方便测试复用：新增独立单测覆盖 handoff message、session/notebook/timeline 写入和 artifact 去重。
+
+#### TODO
+- [x] 新增 `src/ui/src/workspace/artifactHandoff.ts` 承载 artifact handoff workspace state 写入。
+- [x] 将 handoff message、artifact 去重、notebook 记录、timeline 事件和 session versioning 从 `SciForgeApp.tsx` 下沉到模块。
+- [x] 保持 auto-run prompt 仍由结果视图相关 contract 提供，避免 handoff state 模块耦合 UI renderer。
+- [x] 保持新模块不依赖 React、DOM、当前页面或具体科研场景。
+- [x] 为 artifact handoff 模块增加独立单测。
+- [x] 通过 TypeScript 类型检查、相关单测和生产构建。
+
+#### 验收
+- [x] `SciForgeApp.tsx` 中 artifact handoff handler 只负责调用领域 state transition 和 UI 导航。
+- [x] 新模块可对任意 workspace/session/artifact 复用，不含当前案例硬编码。
+- [x] 单测覆盖 handoff 写入和 artifact 去重核心规则。
+- [x] `npm run typecheck`、相关单测和 `npm run build` 通过。
+
 ### T091 反馈 Workspace 状态变换职责边界优化
 
 状态：已完成。本任务继续拆分反馈收件箱的本地状态规则：新增反馈、批量更新状态、删除反馈并清理 request 引用、从选中反馈创建 request、替换 GitHub open issue 缓存等纯 workspace state 变换下沉到反馈领域模块。页面入口只保留用户事件响应和异步编排，不再内联反馈数据变更细节。

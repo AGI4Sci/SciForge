@@ -81,7 +81,6 @@ import {
 import {
   makeId,
   nowIso,
-  type SciForgeMessage,
   type SciForgeReference,
   type SciForgeRun,
   type SciForgeSession,
@@ -122,6 +121,7 @@ import {
   restoreArchivedSession as restoreScenarioArchivedSession,
   startNewChat,
 } from '../workspace/sessionWorkspace';
+import { applyArtifactHandoffToWorkspace } from '../workspace/artifactHandoff';
 import { defaultSciForgeConfig, loadSciForgeConfig, normalizeWorkspaceRootPath, saveSciForgeConfig, updateConfig } from '../config';
 import {
   acceptSkillPromotionProposal,
@@ -2233,63 +2233,15 @@ export function SciForgeApp() {
     const sourceScenario = scenarios.find((item) => item.id === artifact.producerScenario);
     const target = scenarios.find((item) => item.id === targetScenario);
     const now = nowIso();
-    const autoRunPrompt = handoffAutoRunPrompt(targetScenario, artifact, sourceScenario?.name ?? artifact.producerScenario, target?.name ?? targetScenario);
-    const handoffMessage: SciForgeMessage = {
-      id: makeId('handoff'),
-      role: 'user',
-      content: [
-        `请基于来自${sourceScenario?.name ?? artifact.producerScenario}的 artifact 继续分析。`,
-        `artifact id: ${artifact.id}`,
-        `artifact type: ${artifact.type}`,
-        `目标：按${target?.name ?? targetScenario}的 input contract 生成下一步 claims、ExecutionUnit 和 UIManifest。`,
-      ].join('\n'),
-      createdAt: now,
-      status: 'completed',
+    const labels = {
+      sourceScenarioName: sourceScenario?.name ?? artifact.producerScenario,
+      targetScenarioName: target?.name ?? targetScenario,
     };
-    setWorkspaceState((current) => {
-      const targetSession = current.sessionsByScenario[targetScenario];
-      const artifacts = targetSession.artifacts.some((item) => item.id === artifact.id)
-        ? targetSession.artifacts
-        : [artifact, ...targetSession.artifacts].slice(0, 24);
-      const nextTargetSession = versionSession({
-        ...targetSession,
-        messages: [...targetSession.messages, handoffMessage],
-        artifacts,
-        notebook: [{
-          id: makeId('note'),
-          time: new Date(now).toLocaleString('zh-CN', { hour12: false }),
-          scenario: targetScenario,
-          title: `接收 ${artifact.type}`,
-          desc: `来自 ${sourceScenario?.name ?? artifact.producerScenario} 的 ${artifact.id} 已进入当前 Scenario 上下文。`,
-          claimType: 'fact' as const,
-          confidence: 1,
-          artifactRefs: [artifact.id],
-          updateReason: 'artifact handoff',
-        }, ...targetSession.notebook].slice(0, 24),
-        updatedAt: now,
-      }, `handoff artifact ${artifact.id}`);
-      return {
-        ...current,
-        timelineEvents: [({
-          id: makeId('timeline'),
-          actor: 'SciForge Handoff',
-          action: 'artifact.handoff',
-          subject: `${artifact.producerScenario}:${artifact.id} -> ${targetScenario}`,
-          artifactRefs: [artifact.id],
-          executionUnitRefs: [],
-          beliefRefs: [],
-          branchId: targetScenario,
-          visibility: 'project-record',
-          decisionStatus: 'not-a-decision',
-          createdAt: now,
-        } satisfies TimelineEventRecord), ...(current.timelineEvents ?? [])].slice(0, 200),
-        sessionsByScenario: {
-          ...current.sessionsByScenario,
-          [targetScenario]: nextTargetSession,
-        },
-        updatedAt: now,
-      };
-    });
+    const autoRunPrompt = handoffAutoRunPrompt(targetScenario, artifact, labels.sourceScenarioName, labels.targetScenarioName);
+    setWorkspaceState((current) => applyArtifactHandoffToWorkspace(current, targetScenario, artifact, labels, {
+      now,
+      notebookTime: new Date(now).toLocaleString('zh-CN', { hour12: false }),
+    }));
     setScenarioId(targetScenario);
     setPage('workbench');
     setHandoffAutoRun({
