@@ -17,6 +17,59 @@
 
 ## 任务板
 
+### T098 大文件瘦身与 CLI/UI 共享能力路线图
+
+状态：进行中。本任务组面向当前仓库仍然偏大的单文件脚本和 UI/CLI 能力复用问题。原则是先抽共享 contract 和共同业务能力，再逐步瘦身大文件；不能为了减少行数而把逻辑切碎，也不能让 UI 聊天和 CLI 终端执行维护两套语义不同的任务协议。
+
+#### 必要瘦身清单
+- [x] T093：抽出 UI chat / CLI / workspace runtime 共享的 Agent handoff contract，统一 source、skill domain、默认 AgentServer URL、默认请求超时和调度原则。
+- [ ] T094：瘦身 `src/ui/src/api/sciforgeToolsClient.ts`，把 request body/context envelope 构造下沉到共享 builder，让 UI 聊天和 CLI 复用同一 handoff payload 语义。
+- [ ] T095：瘦身 `src/runtime/generation-gateway.ts`，继续把 AgentServer generation request、retry/compaction policy、direct payload normalization、repair diagnostics 拆到 `src/runtime/gateway/*` 子模块。
+- [ ] T096：瘦身 `src/ui/src/app/ResultsRenderer.tsx`，按 result shell、artifact cards、execution views、preview actions、handoff controls 拆组件和 hooks。
+- [ ] T097：瘦身 `src/ui/src/app/ChatPanel.tsx`，按 message list、composer、run status、archive drawer、acceptance panel 拆分。
+- [ ] T099：瘦身 `packages/skills/index.ts`，按 skill catalog、manifest schema、registry loader、availability validation、runtime matching 拆分。
+- [ ] T100：瘦身 `src/runtime/vision-sense-runtime.ts`，按 sense provider、computer-use bridge、trace policy、safety/verifier、runtime adapter 拆分，并与独立 `packages/computer-use` contract 对齐。
+
+#### 共享能力原则
+- CLI 和 UI 聊天都必须使用相同 Agent handoff source/contract 字段，区别只体现在 `handoffSource`，不复制 dispatch policy。
+- 用户可见答案仍由 AgentServer/backend 推理；UI 和 CLI 只提供上下文、refs、artifact policy、运行时配置和诊断。
+- 共享层放在 `src/shared/*`，不得 import React、DOM、Node fs/process 或某个页面组件。
+- Runtime/CLI 可以在缺省情况下回退到 `handoffSource=cli`；UI 聊天必须显式发送 `handoffSource=ui-chat`。
+- 新拆模块必须配套独立测试，优先覆盖 contract、payload normalization 和状态变换，而不是截图或当前案例。
+
+### T093 Agent Handoff 共享 Contract 职责边界优化
+
+状态：已完成。本任务为 UI 聊天、CLI/终端执行和 workspace runtime 建立共同 handoff contract：共享 skill domain、handoff source、默认 AgentServer URL、默认超时和 AgentServer 决策原则。这样 UI 和 CLI 未来可以复用同一任务协议，修改 dispatch/context/artifact policy 时只改共享层。
+
+#### 原则落地
+- 单一职责：`src/shared/agentHandoff.ts` 只负责跨 UI/runtime/CLI 的 Agent handoff contract 和默认值。
+- 按职责拆分：共享 contract 与 UI request body 细节、runtime gateway 执行细节分离。
+- 主流程清晰：UI 发送请求时显式带 `handoffSource=ui-chat`；runtime gateway normalization 统一补齐 contract，CLI 缺省为 `cli`。
+- 接口明确：共享模块导出 source/domain normalize、contract builder 和 source metadata，不读取全局变量。
+- 减少耦合：共享模块不依赖 React、DOM、Node runtime 或具体 scenario。
+- 配置集中：默认 AgentServer URL 和默认请求超时从 UI 私有常量上移到共享模块。
+- 谨慎使用 utils：没有新增 `utils`，用领域命名 `agentHandoff`。
+- 函数保持短小：normalize、contract builder、metadata builder 各自独立。
+- 命名表达意图：`buildSharedAgentHandoffContract`、`normalizeAgentHandoffSource`、`normalizeSharedSkillDomain` 清晰表达行为。
+- 稳定对外接口：现有 UI 和 runtime 调用方式保持兼容，旧测试构造的 `GatewayRequest` 仍可不传 source，由 runtime 补默认。
+- 避免过度设计：只抽 contract 和默认值，不引入复杂 SDK。
+- 方便测试复用：新增共享层单测，覆盖 source/domain/defaults。
+
+#### TODO
+- [x] 新增 `src/shared/agentHandoff.ts` 作为 UI/CLI/runtime 共同 contract 层。
+- [x] 将 UI 私有 AgentServer 默认 URL 和请求超时上移到共享模块。
+- [x] UI workspace tool 请求显式发送 `handoffSource=ui-chat` 和 `sharedAgentContract`。
+- [x] Runtime gateway normalization 使用共享 skill domain/source normalization，CLI 缺省为 `handoffSource=cli`。
+- [x] Runtime generation metadata 附带共享 handoff contract，便于追踪 UI/CLI 来源。
+- [x] 为共享 contract 增加独立单测。
+- [x] 通过 TypeScript 类型检查、相关单测和生产构建。
+
+#### 验收
+- [x] UI chat 与 CLI/runtime 至少共享 handoff source、skill domain、dispatch policy、默认 AgentServer URL 和默认超时。
+- [x] 共享模块不依赖 UI 或 Node-only API。
+- [x] 旧的直接 `GatewayRequest` 测试构造仍兼容，runtime 可补默认 contract。
+- [x] `npm run typecheck`、相关单测和 `npm run build` 通过。
+
 ### T092 Artifact Handoff Workspace 职责边界优化
 
 状态：已完成。本任务继续拆分应用入口中的 artifact handoff 流程：将 handoff message、artifact 去重写入、notebook 记录、timeline 事件和 session versioning 下沉到独立 workspace 模块。`SciForgeApp.tsx` 只负责根据当前 UI 选择目标场景、生成 auto-run prompt 和切换页面，不再内联 artifact handoff 数据写入细节。

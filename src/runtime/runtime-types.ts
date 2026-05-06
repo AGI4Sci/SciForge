@@ -1,3 +1,5 @@
+import type { SciForgeAgentHandoffSource, SharedAgentHandoffContract } from '../shared/agentHandoff.js';
+
 export type SciForgeSkillDomain = 'literature' | 'structure' | 'omics' | 'knowledge';
 
 export type ExecutionUnitStatus =
@@ -13,6 +15,8 @@ export type ExecutionUnitStatus =
 export interface GatewayRequest {
   skillDomain: SciForgeSkillDomain;
   prompt: string;
+  handoffSource?: SciForgeAgentHandoffSource;
+  sharedAgentContract?: SharedAgentHandoffContract;
   workspacePath?: string;
   agentServerBaseUrl?: string;
   agentBackend?: string;

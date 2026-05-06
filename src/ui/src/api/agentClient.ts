@@ -22,9 +22,9 @@ import { agentProtocolForPrompt, SCENARIO_SPECS } from '../scenarioSpecs';
 import { expectedArtifactsForCurrentTurn } from '../artifactIntent';
 import { SciForgeClientError, reasonFromResponseText, recoverActionsForService } from './clientError';
 import { promptWithScopeCheck, scopeCheck } from './scopeCheck';
+import { DEFAULT_AGENT_REQUEST_TIMEOUT_MS, DEFAULT_AGENT_SERVER_URL } from '../../../shared/agentHandoff';
 
-const DEFAULT_AGENT_SERVER_URL = 'http://127.0.0.1:18080';
-const DEFAULT_REQUEST_TIMEOUT_MS = 900_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = DEFAULT_AGENT_REQUEST_TIMEOUT_MS;
 
 const evidenceLevels: EvidenceLevel[] = ['meta', 'rct', 'cohort', 'case', 'experimental', 'review', 'database', 'preprint', 'prediction'];
 const claimTypes: ClaimType[] = ['fact', 'inference', 'hypothesis'];

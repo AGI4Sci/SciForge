@@ -12,12 +12,16 @@ import { normalizeBackendHandoff } from './workspace-task-input.js';
 import { normalizeGatewayRequest as normalizeGatewayRequestFromModule } from './gateway/gateway-request.js';
 import { tryRunVisionSenseRuntime } from './vision-sense-runtime.js';
 import { toolPackageManifests } from '../../packages/tools';
+import { agentHandoffSourceMetadata, buildSharedAgentHandoffContract, normalizeAgentHandoffSource, normalizeSharedSkillDomain } from '../shared/agentHandoff.js';
 
-const SKILL_DOMAIN_SET = new Set<SciForgeSkillDomain>(['literature', 'structure', 'omics', 'knowledge']);
 const AGENT_BACKEND_ANSWER_PRINCIPLE = [
   'All normal user-visible answers must be reasoned by the agent backend.',
   'SciForge must not use preset reply templates for user requests; local code may only provide protocol validation, execution recovery, safety-boundary diagnostics, and artifact display.',
 ].join(' ');
+
+function requestHandoffSource(request: GatewayRequest) {
+  return request.handoffSource ?? 'cli';
+}
 
 type AgentServerContextMode = 'full' | 'delta';
 
@@ -568,11 +572,14 @@ async function missingGeneratedTaskFileContents(
 }
 
 function normalizeGatewayRequest(body: Record<string, unknown>): GatewayRequest {
-  const skillDomain = String(body.skillDomain || '') as SciForgeSkillDomain;
-  if (!SKILL_DOMAIN_SET.has(skillDomain)) throw new Error(`Unsupported SciForge skill domain: ${String(body.skillDomain || '')}`);
+  const skillDomain = normalizeSharedSkillDomain(body.skillDomain) as SciForgeSkillDomain | undefined;
+  if (!skillDomain) throw new Error(`Unsupported SciForge skill domain: ${String(body.skillDomain || '')}`);
+  const handoffSource = normalizeAgentHandoffSource(body.handoffSource, 'cli');
   return {
     skillDomain,
     prompt: String(body.prompt || ''),
+    handoffSource,
+    sharedAgentContract: buildSharedAgentHandoffContract(handoffSource),
     workspacePath: typeof body.workspacePath === 'string' ? body.workspacePath : undefined,
     agentServerBaseUrl: typeof body.agentServerBaseUrl === 'string' ? cleanUrl(body.agentServerBaseUrl) : undefined,
     agentBackend: typeof body.agentBackend === 'string' ? body.agentBackend : undefined,
@@ -2237,6 +2244,7 @@ async function requestAgentServerGeneration(params: {
         metadata: {
           autoApprove: true,
           sandbox: 'danger-full-access',
+          ...agentHandoffSourceMetadata(requestHandoffSource(params.request)),
           source: 'sciforge-workspace-runtime-gateway',
           purpose: 'workspace-task-generation',
           maxContextWindowTokens: params.request.maxContextWindowTokens,
@@ -2249,6 +2257,7 @@ async function requestAgentServerGeneration(params: {
       },
       metadata: {
         project: 'SciForge',
+        ...agentHandoffSourceMetadata(requestHandoffSource(params.request)),
         source: 'workspace-runtime-gateway',
         task: 'generation',
         workspace: params.workspace,
@@ -3385,12 +3394,14 @@ async function requestAgentServerRepair(params: {
         metadata: {
           autoApprove: true,
           sandbox: 'danger-full-access',
+          ...agentHandoffSourceMetadata(requestHandoffSource(params.request)),
           source: 'sciforge-workspace-runtime-gateway',
           llmEndpointSource: llmRuntime.llmEndpoint ? llmEndpointSource : undefined,
         },
       },
       metadata: {
         project: 'SciForge',
+        ...agentHandoffSourceMetadata(requestHandoffSource(params.request)),
         source: 'workspace-runtime-gateway',
         taskId: params.run.spec.id,
         repairOf: params.run.spec.taskRel,

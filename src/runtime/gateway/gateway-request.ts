@@ -1,14 +1,16 @@
 import type { SciForgeSkillDomain, GatewayRequest, LlmEndpointConfig } from '../runtime-types.js';
 import { cleanUrl, isRecord, toStringList, uniqueStrings } from '../gateway-utils.js';
-
-const SKILL_DOMAIN_SET = new Set<SciForgeSkillDomain>(['literature', 'structure', 'omics', 'knowledge']);
+import { buildSharedAgentHandoffContract, normalizeAgentHandoffSource, normalizeSharedSkillDomain, type SciForgeAgentHandoffSource } from '../../shared/agentHandoff.js';
 
 export function normalizeGatewayRequest(body: Record<string, unknown>): GatewayRequest {
-  const skillDomain = String(body.skillDomain || '') as SciForgeSkillDomain;
-  if (!SKILL_DOMAIN_SET.has(skillDomain)) throw new Error(`Unsupported SciForge skill domain: ${String(body.skillDomain || '')}`);
+  const skillDomain = normalizeSharedSkillDomain(body.skillDomain) as SciForgeSkillDomain | undefined;
+  if (!skillDomain) throw new Error(`Unsupported SciForge skill domain: ${String(body.skillDomain || '')}`);
+  const handoffSource = normalizeAgentHandoffSource(body.handoffSource, 'cli');
   return {
     skillDomain,
     prompt: String(body.prompt || ''),
+    handoffSource,
+    sharedAgentContract: normalizeSharedAgentContract(body.sharedAgentContract, handoffSource),
     workspacePath: typeof body.workspacePath === 'string' ? body.workspacePath : undefined,
     agentServerBaseUrl: typeof body.agentServerBaseUrl === 'string' ? cleanUrl(body.agentServerBaseUrl) : undefined,
     agentBackend: typeof body.agentBackend === 'string' ? body.agentBackend : undefined,
@@ -26,6 +28,11 @@ export function normalizeGatewayRequest(body: Record<string, unknown>): GatewayR
     expectedArtifactTypes: Array.isArray(body.expectedArtifactTypes) ? uniqueStrings(body.expectedArtifactTypes.map(String)) : undefined,
     selectedComponentIds: Array.isArray(body.selectedComponentIds) ? uniqueStrings(body.selectedComponentIds.map(String)) : undefined,
   };
+}
+
+function normalizeSharedAgentContract(value: unknown, source: SciForgeAgentHandoffSource): GatewayRequest['sharedAgentContract'] {
+  if (!isRecord(value)) return buildSharedAgentHandoffContract(source);
+  return buildSharedAgentHandoffContract(normalizeAgentHandoffSource(value.source, source));
 }
 
 export function normalizeScenarioPackageRef(value: unknown): GatewayRequest['scenarioPackageRef'] {

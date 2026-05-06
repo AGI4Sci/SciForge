@@ -4,6 +4,7 @@ import { makeId, nowIso } from '../domain';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
 import { expectedArtifactsForCurrentTurn, selectedComponentsForCurrentTurn } from '../artifactIntent';
 import { normalizeAgentResponse } from './agentClient';
+import { DEFAULT_AGENT_REQUEST_TIMEOUT_MS, buildSharedAgentHandoffContract } from '../../../shared/agentHandoff';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -64,7 +65,7 @@ export async function sendSciForgeToolMessage(
   const timeout = globalThis.setTimeout(() => {
     timedOut = true;
     requestController.abort();
-  }, input.config.requestTimeoutMs || 900_000);
+  }, input.config.requestTimeoutMs || DEFAULT_AGENT_REQUEST_TIMEOUT_MS);
   const linkedAbort = () => requestController.abort();
   signal?.addEventListener('abort', linkedAbort, { once: true });
   let lastRealEventAt = Date.now();
@@ -94,8 +95,11 @@ export async function sendSciForgeToolMessage(
       callbacks.onEvent?.(toolEvent('repair-start', `正在修复：已发现上一轮 failureReason=${priorFailure}`));
     }
     callbacks.onEvent?.(toolEvent('project-tool-start', `SciForge ${builtInScenarioId} project tool started`));
+    const sharedAgentContract = buildSharedAgentHandoffContract('ui-chat');
     const requestBody = {
       scenarioId: builtInScenarioId,
+      handoffSource: 'ui-chat' as const,
+      sharedAgentContract,
       scenarioPackageRef: input.scenarioPackageRef,
       skillPlanRef: input.skillPlanRef,
       uiPlanRef: input.uiPlanRef,
@@ -120,8 +124,10 @@ export async function sendSciForgeToolMessage(
       uiState: {
         sessionId: input.sessionId,
         scopeCheck: {
-          source: 'structured-scenario-hint',
+          source: sharedAgentContract.source,
           decisionOwner: 'AgentServer',
+          dispatchPolicy: sharedAgentContract.dispatchPolicy,
+          answerPolicy: sharedAgentContract.answerPolicy,
           note: 'SciForge does not route or reject current-turn intent by keyword; AgentServer decides from rawUserPrompt and context.',
         },
         scenarioOverride: input.scenarioOverride,
@@ -148,6 +154,7 @@ export async function sendSciForgeToolMessage(
         rawUserPrompt: input.prompt,
         contextIsolation: contextPolicy,
         agentDispatchPolicy: 'agentserver-decides',
+        sharedAgentContract,
         agentContext: buildAgentContext(input, recentConversation, artifactSummary, recentExecutionRefs, configuredComponentIds, artifactAccessPolicy, selectedToolContracts),
       },
     };
@@ -196,7 +203,7 @@ export async function sendSciForgeToolMessage(
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new Error(timedOut
-        ? `SciForge project tool 超时：${input.config.requestTimeoutMs || 900_000}ms 内没有完成。流式面板已显示最后一个真实事件。`
+        ? `SciForge project tool 超时：${input.config.requestTimeoutMs || DEFAULT_AGENT_REQUEST_TIMEOUT_MS}ms 内没有完成。流式面板已显示最后一个真实事件。`
         : 'SciForge project tool 已取消。');
     }
     throw error;

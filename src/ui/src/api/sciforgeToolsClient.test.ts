@@ -364,11 +364,23 @@ describe('sendSciForgeToolMessage routing', () => {
     });
 
     assert.deepEqual(requestBody?.expectedArtifactTypes, ['paper-list', 'evidence-matrix', 'notebook-timeline', 'research-report']);
+    assert.equal(requestBody?.handoffSource, 'ui-chat');
+    assert.deepEqual(requestBody?.sharedAgentContract, {
+      schemaVersion: 1,
+      source: 'ui-chat',
+      decisionOwner: 'AgentServer',
+      dispatchPolicy: 'agentserver-decides',
+      answerPolicy: 'backend-reasons-user-visible-answer',
+      contextPolicy: 'refs-and-bounded-summaries',
+      artifactPolicy: 'explicit-current-turn-or-backend-decides',
+    });
     const uiState = requestBody?.uiState as Record<string, unknown>;
     assert.deepEqual(uiState.expectedArtifactTypes, ['paper-list', 'evidence-matrix', 'notebook-timeline', 'research-report']);
     assert.deepEqual(uiState.scopeCheck, {
-      source: 'structured-scenario-hint',
+      source: 'ui-chat',
       decisionOwner: 'AgentServer',
+      dispatchPolicy: 'agentserver-decides',
+      answerPolicy: 'backend-reasons-user-visible-answer',
       note: 'SciForge does not route or reject current-turn intent by keyword; AgentServer decides from rawUserPrompt and context.',
     });
   });
