@@ -1,33 +1,20 @@
 # @sciforge-ui/object-references
 
-SciForge object references are the stable memory pointers used by chat, results,
-feedback, workbench surfaces, and future timeline/notebook views.
+本包负责 SciForge 的 object reference 规范化和转换。Object reference 是聊天、结果区、反馈批注、Workbench、Notebook/Timeline 和未来 CLI 共享的长期记忆指针。
 
-This package owns normalization and conversion only. It does not render chips,
-open files, execute tasks, or decide what the agent should do.
+它只负责“如何表达引用”，不负责渲染 chip、打开文件、执行任务，也不决定 agent 应该做什么。
 
-## Agent Quick Contract
+## Agent 使用契约
 
-- Use `objectReferenceForArtifactSummary` for runtime artifacts that should be
-  focusable in the right pane.
-- Use `referenceForUploadedArtifact` and `objectReferenceForUploadedArtifact`
-  after an upload has been persisted as a `RuntimeArtifact`.
-- Use `referenceForObjectReference`, `referenceForArtifact`, and
-  `referenceForWorkspaceFileLike` when converting an object/file/artifact into a
-  chat context reference.
-- Use `artifactForObjectReference`, `pathForObjectReference`, and
-  `referenceToPreviewTarget` in preview surfaces instead of guessing refs.
-- Use `objectReferenceChipModel` to keep trusted references before unverified
-  references and to compute hidden chip counts consistently.
-- Use `referenceForUiElement`, `referenceForTextSelection`, and
-  `stableElementSelector` for DOM/feedback references.
+- runtime artifact 需要在右侧结果区聚焦时，使用 `objectReferenceForArtifactSummary`。
+- 上传文件持久化成 `RuntimeArtifact` 后，使用 `referenceForUploadedArtifact` 和 `objectReferenceForUploadedArtifact`。
+- 把 object/file/artifact 转成聊天上下文引用时，使用 `referenceForObjectReference`、`referenceForArtifact` 和 `referenceForWorkspaceFileLike`。
+- 预览区不要猜路径，使用 `artifactForObjectReference`、`pathForObjectReference` 和 `referenceToPreviewTarget`。
+- 引用 chip 排序和隐藏计数使用 `objectReferenceChipModel`，优先展示可信引用。
+- DOM/反馈引用使用 `referenceForUiElement`、`referenceForTextSelection` 和 `stableElementSelector`。
 
-## Human Notes
+## 设计原则
 
-Object references are long-lived pointers. Prefer workspace paths, artifact ids,
-run ids, hashes, and producer metadata over transient DOM labels. UI code may
-decorate references, but the reference payload should remain small and portable.
+Object reference 应尽量小、稳定、可跨 UI/CLI/AgentServer 解释。优先使用 workspace path、artifact id、run id、hash 和 producer metadata，不依赖短暂 DOM 文案或当前页面状态。
 
-References are trusted when they point to an available artifact/url or include
-provenance that can be checked later. AgentServer-only refs without workspace
-provenance stay untrusted until the user focuses or validates them.
+可信引用应指向已存在 artifact/url，或包含后续可检查的 provenance。只有 AgentServer 临时生成、缺少 workspace provenance 的引用，应保持 untrusted，直到用户聚焦、确认或 runtime 验证它。

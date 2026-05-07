@@ -6799,7 +6799,7 @@ export const skillPackageManifests = [
     "kind": "skill",
     "version": "1.0.0",
     "label": "vision-gui-task",
-    "description": "Template skill for converting low-risk GUI requests into SciForge VisionTaskRequest payloads and running the vision-sense tool.",
+    "description": "模板 skill：把低风险 GUI 请求转换为 SciForge VisionTaskRequest，并调用 vision-sense tool。",
     "source": "package",
     "skillDomains": [
       "knowledge"
@@ -6834,12 +6834,12 @@ export const skillPackageManifests = [
     ],
     "examplePrompts": [
       "vision gui task",
-      "template converting requests sciforge visiontaskrequest payloads running vision",
+      "sciforge visiontaskrequest vision",
       "Use vision gui task and return structured SciForge artifacts"
     ],
     "docs": {
       "readmePath": "packages/skills/installed/local/vision-gui-task/SKILL.md",
-      "agentSummary": "Template skill for converting low-risk GUI requests into SciForge VisionTaskRequest payloads and running the vision-sense tool."
+      "agentSummary": "模板 skill：把低风险 GUI 请求转换为 SciForge VisionTaskRequest，并调用 vision-sense tool。"
     },
     "packageRoot": "packages/skills/installed/local/vision-gui-task",
     "tags": [

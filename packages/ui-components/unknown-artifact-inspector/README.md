@@ -1,29 +1,31 @@
 # @sciforge-ui/unknown-artifact-inspector
 
-## Agent quick contract
-- componentId: `unknown-artifact-inspector`
-- accepts: `*`
-- requires: any artifact, ref, file, log, JSON, metadata object, or unsupported payload
-- outputs: none
-- events: `open-ref`
-- fallback: none
-- safety: no code execution; no external resources; final safe fallback for inspection only
-- demo fixtures: `fixtures/basic.ts`, `fixtures/empty.ts`, `fixtures/selection.ts`
-- primitive/preset: none; safe fallback inspector, not a planner primitive
+该包是 SciForge UI component registry 中的一个可发布 renderer。它负责把结构化 artifact 渲染为可读、可交互、可引用的视图；它不是 action provider，也不是 verifier provider。
 
-## Human notes
+## Agent quick contract / Agent 快速契约
+- componentId：`unknown-artifact-inspector`
+- accepts：`*`
+- requires：any artifact, ref, file, log, JSON, metadata object, 或 unsupported payload
+- outputs：none
+- events：`open-ref`
+- fallback：none
+- safety：不执行代码; 不访问外部资源; final safe fallback for inspection only
+- demo fixtures：`fixtures/basic.ts`, `fixtures/empty.ts`, `fixtures/selection.ts`
+- primitive/preset：none; safe fallback inspector, not a planner primitive
 
-### Data schema
-Accepts arbitrary `artifact.data`, `slot.props`, metadata, dataRef, and execution refs. Row-like payloads may display as compact tables; other payloads display as formatted JSON/ref chips.
+## Human notes / 维护说明
 
-### Interaction/edit output semantics
-`open-ref` asks the host to preview safe refs. The inspector must not infer domain semantics, execute code, parse unsafe content, or fetch undeclared resources.
+## 数据契约
+该组件优先接收 `*` 类型或兼容 alias 的 artifact。大型数据、图像、结构文件、日志和外部资源应通过 workspace refs、`dataRef`、`filePath` 或 manifest 声明资源传递，避免把完整 payload 塞进 agent 上下文。
 
-### Performance/resource limits
-Keep previews compact and conservative. Unsupported binary descriptors should show metadata and refs only.
+## 交互语义
+组件只发出已声明事件：`open-ref`。事件 payload 应携带稳定 artifact/object refs，例如 row id、node id、sequence range、plot point id、file ref 或 trace ref。屏幕坐标只能作为辅助证据，不能作为长期事实。
 
-### When not to use
-Do not select it when a registered component clearly accepts the artifact type, and do not use it to avoid creating a proper domain primitive for stable scientific data.
+## 安全边界
+该组件的安全约束是：不执行代码; 不访问外部资源; final safe fallback for inspection only。renderer 不应执行任意代码、不应绕过 manifest 访问外部资源、不应直接写 workspace，也不应自行给出 pass/fail/reward verdict。需要改变环境时交给 action provider；需要验证结论时交给 verifier。
 
-### Testing/publishing notes
-Cover arbitrary JSON, row-like payloads, empty payloads, dataRef/codeRef/log refs, and unsupported descriptors.
+## 何时不要使用该组件
+当 artifact 有更精确的领域 renderer 时，不要用 `unknown-artifact-inspector` 作为泛化替代。该组件也不应用于装饰性内容、隐藏命令入口、未声明网络访问，或任何会把用户交互直接变成外部副作用的流程。
+
+## 测试与发布
+发布前保持 `fixtures/basic.ts`, `fixtures/empty.ts`, `fixtures/selection.ts` 与 manifest 的 `workbenchDemo` 对齐，并运行 `npm run packages:check`、`npm run typecheck` 和相关 renderer 测试。

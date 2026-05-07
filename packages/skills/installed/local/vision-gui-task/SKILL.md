@@ -1,6 +1,6 @@
 ---
 name: vision-gui-task
-description: Template skill for converting low-risk GUI requests into SciForge VisionTaskRequest payloads and running the vision-sense tool.
+description: 模板 skill：把低风险 GUI 请求转换为 SciForge VisionTaskRequest，并调用 vision-sense tool。
 metadata:
   provider: local
   visionTaskRequest: packages/senses/vision-sense/sciforge_vision_sense/types.py:VisionTaskRequest
@@ -11,15 +11,15 @@ metadata:
 
 # vision-gui-task
 
-## Agent quick contract
+## Agent 快速契约
 
-- Use this skill only for low-risk GUI tasks that can be completed by looking at screenshots and executing `click`, `type_text`, `press_key`, or `scroll`.
-- Build a `VisionTaskRequest` with the user task, target app/window hint, `maxSteps` defaulting to 30, low-risk policy, shared LLM config reference, KV-Ground config, screenshot policy, and artifact output directory.
-- Inject runtime implementations for VLM, observer, grounder, and executor; then call the `vision-sense` tool package.
-- Preserve only lightweight trace refs and summaries in follow-up context: screenshot refs, planned action, grounding summary, crosshair checks, execution status, pixel diff, and failure reason.
-- Do not use DOM or accessibility tree data for the vision run.
+- 只用于低风险 GUI 任务：任务可以通过观察截图并执行 `click`、`type_text`、`press_key` 或 `scroll` 完成。
+- 构造 `VisionTaskRequest`，包含用户任务、目标 app/window hint、默认 `maxSteps=30`、低风险 policy、共享 LLM config ref、KV-Ground config、screenshot policy 和 artifact output directory。
+- 注入 VLM、observer、grounder 和 executor 的 runtime 实现，然后调用 `vision-sense` tool package。
+- 后续上下文只保留轻量 trace refs 和摘要：screenshot refs、planned action、grounding summary、crosshair checks、execution status、pixel diff 和 failure reason。
+- 视觉运行不使用 DOM 或 accessibility tree 数据。
 
-## Request template
+## Request 模板
 
 ```python
 from sciforge_vision_sense import VisionTaskRequest
@@ -45,8 +45,6 @@ request = VisionTaskRequest(
 )
 ```
 
-## Safety boundary
+## 安全边界
 
-Fail closed for sending, deleting, paying, authorizing, external publishing, or
-other irreversible actions unless a future upstream confirmation mechanism
-explicitly authorizes that action class.
+发送、删除、支付、授权、外部发布或其它不可逆动作必须 fail closed。除非未来上游确认机制明确授权该 action class，否则该模板 skill 不应继续执行高风险 GUI 流程。

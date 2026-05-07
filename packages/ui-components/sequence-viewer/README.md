@@ -1,29 +1,31 @@
 # @sciforge-ui/sequence-viewer
 
-## Agent quick contract
-- componentId: `sequence-viewer`
-- accepts: `sequence`, `sequence-record`, `fasta`, `fasta-file`, `sequence-alignment`
-- requires: one of `sequence`, `sequences`, `fasta`, `dataRef`, `filePath`, or `path`
-- outputs: `sequence`, `sequence-alignment`
-- events: `select-region`, `highlight-feature`, `copy-sequence`
-- fallback: `sequence-alignment-viewer`, `generic-data-table`, `generic-artifact-inspector`
-- safety: no code execution; external sequence files must be declared workspace refs
-- demo fixtures: `fixtures/basic.ts`, `fixtures/empty.ts`, `fixtures/selection.ts`
-- primitive/preset: `sequence-alignment` primitive with `aligned: false` for single-sequence payloads
+该包是 SciForge UI component registry 中的一个可发布 renderer。它负责把结构化 artifact 渲染为可读、可交互、可引用的视图；它不是 action provider，也不是 verifier provider。
 
-## Human notes
+## Agent quick contract / Agent 快速契约
+- componentId：`sequence-viewer`
+- accepts：`sequence`, `sequence-record`, `fasta`, `fasta-file`, `sequence-alignment`
+- requires：以下之一：`sequence`, `sequences`, `fasta`, `dataRef`, `filePath`, 或 `path`
+- outputs：`sequence`, `sequence-alignment`
+- events：`select-region`, `highlight-feature`, `copy-sequence`
+- fallback：`sequence-alignment-viewer`, `generic-data-table`, `generic-artifact-inspector`
+- safety：不执行代码; external sequence files must be declared workspace refs
+- demo fixtures：`fixtures/basic.ts`, `fixtures/empty.ts`, `fixtures/selection.ts`
+- primitive/preset：`sequence-alignment` primitive with `aligned: false` for single-sequence payloads
 
-### Data schema
-Prefer stable sequence identity, alphabet (`dna`, `rna`, or `protein`), optional coordinate system, and feature ranges using 1-based inclusive coordinates when possible.
+## Human notes / 维护说明
 
-### Interaction/edit output semantics
-`select-region` emits sequence id and coordinate range; `highlight-feature` emits feature id/range; `copy-sequence` is a user action, not an artifact mutation.
+## 数据契约
+该组件优先接收 `sequence`, `sequence-record`, `fasta`, `fasta-file`, `sequence-alignment` 类型或兼容 alias 的 artifact。大型数据、图像、结构文件、日志和外部资源应通过 workspace refs、`dataRef`、`filePath` 或 manifest 声明资源传递，避免把完整 payload 塞进 agent 上下文。
 
-### Performance/resource limits
-Large FASTA files should use dataRef/path/filePath plus a small preview sequence. Do not fetch undeclared external sequence files.
+## 交互语义
+组件只发出已声明事件：`select-region`, `highlight-feature`, `copy-sequence`。事件 payload 应携带稳定 artifact/object refs，例如 row id、node id、sequence range、plot point id、file ref 或 trace ref。屏幕坐标只能作为辅助证据，不能作为长期事实。
 
-### When not to use
-Do not use it for multiple sequence alignments, pileups, variant tables, genome browsers, chromatograms, or molecular structures.
+## 安全边界
+该组件的安全约束是：不执行代码; external sequence files must be declared workspace refs。renderer 不应执行任意代码、不应绕过 manifest 访问外部资源、不应直接写 workspace，也不应自行给出 pass/fail/reward verdict。需要改变环境时交给 action provider；需要验证结论时交给 verifier。
 
-### Testing/publishing notes
-Fixtures should cover basic single sequence, empty/missing sequence, and selected region/feature.
+## 何时不要使用该组件
+当 artifact 有更精确的领域 renderer 时，不要用 `sequence-viewer` 作为泛化替代。该组件也不应用于装饰性内容、隐藏命令入口、未声明网络访问，或任何会把用户交互直接变成外部副作用的流程。
+
+## 测试与发布
+发布前保持 `fixtures/basic.ts`, `fixtures/empty.ts`, `fixtures/selection.ts` 与 manifest 的 `workbenchDemo` 对齐，并运行 `npm run packages:check`、`npm run typecheck` 和相关 renderer 测试。

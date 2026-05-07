@@ -1,14 +1,26 @@
 # @sciforge/scenario-core
 
-## Agent quick contract
+`scenario-core` 是不依赖 UI 的 Scenario Package 编译核心。它接收 scenario selection、skill/tool/component manifests 和内置 specs，输出稳定 runtime contracts。
 
-`@sciforge/scenario-core` is the UI-independent compiler for SciForge scenario packages. It accepts package manifests and scenario selections, then emits stable runtime contracts:
+## 输入
 
-- inputs: skill manifests from `packages/skills`, tool manifests from `packages/tools`, UI component manifests from `packages/ui-components`, built-in scenario specs, and user draft or selection objects
-- outputs: `ScenarioPackage`, `ScenarioIR`, `SkillPlan`, `UIPlan`, `ValidationReport`, `ScenarioQualityReport`, and `ElementRegistry`
-- main API: `buildElementRegistry`, `compileScenarioIRFromSelection`, `compileScenarioDraft`, `buildBuiltInScenarioPackage`, `validateScenarioPackage`, `runScenarioRuntimeSmoke`, and `buildScenarioQualityReport`
+- `packages/skills` 中的 skill manifests
+- `packages/tools` 中的 tool manifests
+- `packages/ui-components` 中的 UI component manifests
+- 内置 scenario specs
+- 用户 draft 或 element selection
 
-Node callers can import the package directly:
+## 输出
+
+- `ScenarioPackage`
+- `ScenarioIR`
+- `SkillPlan`
+- `UIPlan`
+- `ValidationReport`
+- `ScenarioQualityReport`
+- `ElementRegistry`
+
+## 常用 API
 
 ```ts
 import { buildBuiltInScenarioPackage, runScenarioRuntimeSmoke } from '@sciforge/scenario-core';
@@ -17,14 +29,8 @@ const pkg = buildBuiltInScenarioPackage('literature-evidence-review');
 const smoke = await runScenarioRuntimeSmoke({ package: pkg, mode: 'dry-run' });
 ```
 
-## Human notes
+## 边界
 
-The compiler core should stay free of React components, browser APIs, and page-local state. Scenario Builder and other UI files may keep local interaction state, but they should call this package for contract compilation and validation.
+Compiler core 不应依赖 React、浏览器 API 或页面局部状态。Scenario Builder 可以保留交互状态，但 contract 编译、校验和 quality report 应调用本包。
 
-Extend the registry through package manifests:
-
-- add skills under `packages/skills` and regenerate the skill catalog
-- add tools under `packages/tools` and regenerate the tool catalog
-- add UI component manifests under `packages/ui-components`
-
-Do not hard-code page-only capabilities into compiler logic. If a new artifact, component, failure policy, or role rule is needed by AgentServer or CLI, model it as package/compiler data first, then let the UI render it.
+新增 artifact、component、failure policy 或角色规则时，优先建模为 package/compiler data，再让 UI 渲染它，不要把页面专用能力硬编码进 compiler。

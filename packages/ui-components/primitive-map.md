@@ -1,18 +1,18 @@
 # SciForge UI Data Primitive Map
 
-This file is the T080 compatibility source for mapping current UI components and legacy artifact/component IDs to stable data primitives. Do not create a parallel registry for primitive names, presets, or aliases; keep future renames and compatibility adapters aligned with this map.
+本文档是 T080 兼容迁移的真相源，用于把当前 UI components、legacy artifact/component ids 映射到稳定 data primitives。不要另建 primitive 名称、preset 或 alias registry；未来重命名和兼容 adapter 都应与此表保持一致。
 
-## Agent Quick Contract
+## Agent 快速契约
 
-- Prefer the `primitive` name for new artifact contracts and planner vocabulary.
-- Keep current `componentId`, `moduleId`, and legacy artifact types as compatibility aliases until manifests and app adapters are migrated.
-- Treat `volcano-plot`, `umap-viewer`, and future PCA/t-SNE/embedding scatter views as `point-set` presets.
-- Treat `heatmap-viewer` as a `matrix` preset.
-- Treat legacy component ids as compatibility aliases until the deletion checklist below is satisfied. Do not remove legacy directories simply because a route target exists.
-- Use `unknown-artifact-inspector` only as the fallback for unsupported payloads; it is not a new primitive.
-- Schema drafts live in `packages/ui-components/schemas/*.schema.json`; every schema includes an example payload.
+- 新 artifact contract 和 planner 词汇优先使用 `primitive` 名称。
+- 当前 `componentId`、`moduleId` 和 legacy artifact types 在 manifests 与 app adapters 完成迁移前保留为兼容 alias。
+- `volcano-plot`、`umap-viewer` 和未来 PCA/t-SNE/embedding scatter views 都视为 `point-set` presets。
+- `heatmap-viewer` 视为 `matrix` preset。
+- legacy component ids 在满足下方删除检查表之前只作为兼容 alias。不能因为已有 route target 就直接删除 legacy 目录。
+- `unknown-artifact-inspector` 只作为不支持 payload 的 fallback，不是新的 primitive。
+- Schema 草案位于 `packages/ui-components/schemas/*.schema.json`；每个 schema 都包含 example payload。
 
-## Current Component Mapping
+## 当前组件映射
 
 | Current componentId | Current moduleId | Current artifact aliases | Primitive | Preset/profile | Recommended renderer now | Future renderer target | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -43,13 +43,13 @@ This file is the T080 compatibility source for mapping current UI components and
 | `publication-figure-builder` | `publication-figure-builder` | `figure-spec`, `plot-spec`, `publication-figure`, `plot-export-bundle`, `visual-annotation` | `figure-spec` | `publication-figure` | `publication-figure-builder` | `figure-viewer` | Skeleton package for multi-panel Plotly-compatible figure specs and export profiles. |
 | `statistical-annotation-layer` | `statistical-annotation-layer` | `statistical-result`, `visual-annotation`, `plot-spec`, `figure-spec`, `comparison-summary` | `statistical-result` | `statistical-overlay` | `statistical-annotation-layer` | renderer overlay contract | Skeleton package for p value, CI, and effect-size visual annotations. |
 
-### Fallback Component
+### Fallback 组件
 
 | Current componentId | Current moduleId | Accepts | Primitive role | Recommended renderer | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `unknown-artifact-inspector` | `generic-artifact-inspector` | `*` | none/fallback | `unknown-artifact-inspector` | Safe JSON/ref/file/log fallback. It must not become a domain primitive or planner target unless no primitive renderer can accept the payload. |
 
-## Primitive Catalog
+## Primitive 目录
 
 | Primitive | Schema draft | Primary current component(s) | Recommended renderer target | Legacy aliases and compatibility notes |
 | --- | --- | --- | --- | --- |
@@ -73,26 +73,26 @@ This file is the T080 compatibility source for mapping current UI components and
 | `visual-annotation` | `schemas/visual-annotation.schema.json` | overlay/fallback | renderer overlay contract | Annotation overlays for image, volume, structure, graph, figure, matrix, and point-set renderers. |
 | `export-artifact` | `schemas/export-artifact.schema.json` | downloads/source bars/fallback | `export-artifact-viewer` | Export bundles, files, notebooks, PDFs, CSVs, HTML reports, or archive refs. |
 
-## Compatibility Alias Rules
+## 兼容 Alias 规则
 
-- `componentId` aliases stay accepted at the app boundary: `volcano-plot`, `umap-viewer`, `heatmap-viewer`, `molecule-viewer`, `network-graph`, `report-viewer`, `paper-card-list`, `evidence-matrix`, `execution-unit-table`, `notebook-timeline`, and `data-table`.
-- Legacy component ids remain accepted only as aliases to the replacement renderers: `data-table` -> `record-table`, `network-graph` -> `graph-viewer`, `volcano-plot` / `umap-viewer` -> `point-set-viewer`, `heatmap-viewer` -> `matrix-viewer`, and `molecule-viewer` / `molecule-viewer-3d` -> `structure-viewer`.
-- `moduleId` aliases stay accepted by the planner until manifests are renamed: `omics-volcano-plot`, `omics-umap-viewer`, `omics-heatmap-viewer`, `protein-structure-viewer`, `knowledge-network-graph`, `research-report-document`, `literature-paper-cards`, `evidence-matrix-panel`, `execution-provenance-table`, `notebook-research-timeline`, and `generic-data-table`.
-- Legacy artifact aliases should map before renderer selection. Example: `omics-differential-expression` with `points` maps to `point-set` preset `volcano`; with `umap` maps to `point-set` preset `umap`; with `heatmap` maps to `matrix` preset `heatmap`.
-- Presets are renderer profiles, not new primitives. Store them under `preset`, `profile`, or view params, while `primitive` remains stable.
-- Prefer explicit data refs for large assets. `structure-3d`, `image-volume`, `export-artifact`, and external literature resources must respect manifest safety policy and workspace refs.
+- app boundary 继续接受这些 `componentId` aliases：`volcano-plot`、`umap-viewer`、`heatmap-viewer`、`molecule-viewer`、`network-graph`、`report-viewer`、`paper-card-list`、`evidence-matrix`、`execution-unit-table`、`notebook-timeline` 和 `data-table`。
+- Legacy component ids 只作为 replacement renderers 的 alias：`data-table` -> `record-table`，`network-graph` -> `graph-viewer`，`volcano-plot` / `umap-viewer` -> `point-set-viewer`，`heatmap-viewer` -> `matrix-viewer`，`molecule-viewer` / `molecule-viewer-3d` -> `structure-viewer`。
+- planner 在 manifests 重命名前继续接受这些 `moduleId` aliases：`omics-volcano-plot`、`omics-umap-viewer`、`omics-heatmap-viewer`、`protein-structure-viewer`、`knowledge-network-graph`、`research-report-document`、`literature-paper-cards`、`evidence-matrix-panel`、`execution-provenance-table`、`notebook-research-timeline` 和 `generic-data-table`。
+- Legacy artifact aliases 应先于 renderer selection 映射。例如 `omics-differential-expression` 带 `points` 时映射到 `point-set` preset `volcano`；带 `umap` 时映射到 `point-set` preset `umap`；带 `heatmap` 时映射到 `matrix` preset `heatmap`。
+- Preset 是 renderer profile，不是新 primitive。把它们存入 `preset`、`profile` 或 view params，同时保持 `primitive` 稳定。
+- 大型资产优先使用明确 data refs。`structure-3d`、`image-volume`、`export-artifact` 和外部文献资源必须遵守 manifest safety policy 与 workspace refs。
 
-## Legacy Component Deletion Checklist
+## Legacy Component 删除检查表
 
-Do not delete legacy component directories during T080 compatibility migration unless every item below is true and documented in the same change:
+T080 兼容迁移期间，除非以下每项都满足并在同一变更中记录，否则不要删除 legacy component 目录：
 
-- The replacement component has renderer, fixtures, README, manifest, package exports, workbench demo, and focused tests that fully cover the legacy component behavior.
-- `rg` across the repository shows no direct import of the legacy component directory or renderer.
-- Historical artifact/component ids have an alias fallback in runtime UI manifest composition, scenario-core component selection, and UI module registry helpers.
-- `npm run packages:check`, `npm run typecheck`, and focused UI/runtime/scenario tests pass.
-- Existing scenario specs and historical runtime artifacts still render or fall back without losing their old `componentId`.
+- replacement component 已具备 renderer、fixtures、README、manifest、package exports、workbench demo 和覆盖 legacy 行为的 focused tests。
+- 仓库范围 `rg` 确认没有直接 import legacy component 目录或 renderer。
+- 历史 artifact/component ids 在 runtime UI manifest composition、scenario-core component selection 和 UI module registry helpers 中都有 alias fallback。
+- `npm run packages:check`、`npm run typecheck` 和相关 UI/runtime/scenario focused tests 通过。
+- 现有 scenario specs 与历史 runtime artifacts 仍能渲染或 fallback，且不丢失旧 `componentId`。
 
-Current deletion status:
+当前删除状态：
 
 | Legacy componentId | Route target | Status | Deletion decision |
 | --- | --- | --- | --- |

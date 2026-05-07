@@ -1,8 +1,8 @@
-# Skill Promotion Proposal
+# Skill 提升提案
 
-SciForge promotes a repeated successful workspace task into an installed skill only after a user review step. A proposal is a draft record, not an executable skill.
+SciForge 只有在用户审阅后，才会把一次或多次成功的 workspace task 提升为已安装 skill。Promotion proposal 是草稿记录，不是可执行 skill；它用于保留来源、泛化说明、验证计划和人工确认状态。
 
-Required shape:
+## Proposal 结构
 
 ```json
 {
@@ -25,7 +25,11 @@ Required shape:
     "skillDomains": ["structure"],
     "inputContract": {},
     "outputArtifactSchema": {},
-    "entrypoint": { "type": "workspace-task", "command": "python", "path": "tasks/example.py" },
+    "entrypoint": {
+      "type": "workspace-task",
+      "command": "python",
+      "path": "tasks/example.py"
+    },
     "environment": {},
     "validationSmoke": {},
     "examplePrompts": [],
@@ -49,9 +53,18 @@ Required shape:
 }
 ```
 
-Promotion rules:
+## 提升规则
 
-- The proposal must point to the exact task code, input, output, logs, and successful ExecutionUnit that motivated promotion.
-- The proposed skill stays unavailable until validation smoke passes and `userConfirmedPromotion` is true.
-- User-specific data paths, identifiers, credentials, and one-off thresholds must be parameterized or removed before acceptance.
-- Failed tasks can generate repair notes, but cannot be promoted until a later successful run exists.
+- Proposal 必须指向促成本次提升的准确 task code、input、output、logs 和成功 ExecutionUnit。
+- 只有 validation smoke 通过且 `userConfirmedPromotion=true` 后，拟议 skill 才能变为可用。
+- 用户特定路径、标识符、凭证、一次性阈值和临时 workspace 假设必须参数化或删除。
+- 失败任务可以生成 repair notes，但不能直接提升；必须等待后续成功 run。
+- skill manifest 中必须说明输入 contract、输出 artifact schema、失败模式和可复现入口。
+
+## 与 Scenario / Runtime 的关系
+
+Promotion 后的 skill 可以被 scenario package 选择，但 scenario 应引用 skill manifest 与版本，而不是复制 proposal 内容。Runtime 执行时继续记录 ExecutionUnit、artifact refs、stdout/stderr refs 和 verifier 结果，方便将来再次审计或升级 skill。
+
+## 安全边界
+
+Promotion 不是自动授权。任何会写文件、调用外部服务、操作 GUI、访问凭证或影响实验设备的能力，都必须在 manifest 中声明 action boundary、安全闸门和验证策略。可复用 skill 应尽量只表达任务知识和代码入口；外部环境动作交给 `packages/actions`。

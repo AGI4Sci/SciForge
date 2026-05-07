@@ -1,31 +1,31 @@
-# SciForge UI Component Package Boundary
+# SciForge UI 组件发布边界
 
-Run the boundary check before treating a UI component as independently publishable:
+把 UI component 当作可独立发布包之前，先运行边界检查：
 
 ```sh
 npm --workspace @sciforge-ui/components run packages:check
 ```
 
-From the repository root, the broader package gate also runs the UI component boundary check after the existing skill/package catalog check:
+从仓库根目录运行更完整的包门禁时，也会在现有 skill/package catalog 检查之后执行 UI component boundary check：
 
 ```sh
 npm run packages:check
 ```
 
-The check verifies that each component package has the minimum package surface:
+检查项会确认每个组件包具备最小发布表面：
 
-- `package.json`, `README.md`, and `manifest.ts`
-- `README.md` with an `Agent quick contract` section
-- `package.json` `files` coverage for README, manifest, fixtures, renderer, assets, and workbench demo assets when present
-- `package.json` `exports` coverage for manifest, README, `fixtures/basic`, `fixtures/empty`, renderer, assets, and workbench demo assets when present
-- `fixtures/basic` and `fixtures/empty` presence
-- interactive components include a selection/open-ref fixture
-- errors for app-private imports, sibling component relative imports, or any relative import that reaches outside the component package
-- `@sciforge-ui/runtime-contract` declared as a package dependency or peer dependency so manifests, fixtures, and renderers do not depend on parent-directory source files
-- whether `packages/ui-components/index.ts` exports the component manifest
+- `package.json`、`README.md` 和 `manifest.ts`。
+- `README.md` 包含 `Agent quick contract` 或 `Agent 快速契约`。
+- `package.json` 的 `files` 覆盖 README、manifest、fixtures、renderer、assets，以及存在时的 workbench demo assets。
+- `package.json` 的 `exports` 覆盖 manifest、README、`fixtures/basic`、`fixtures/empty`、renderer、assets，以及存在时的 workbench demo assets。
+- 存在 `fixtures/basic` 和 `fixtures/empty`。
+- 交互组件包含 selection/open-ref fixture。
+- 不存在 app-private imports、兄弟组件相对 imports，或任何越出组件包目录的相对 import。
+- `@sciforge-ui/runtime-contract` 作为 dependency 或 peer dependency 声明，确保 manifests、fixtures 和 renderers 不依赖父目录源码文件。
+- `packages/ui-components/index.ts` 是否导出该组件 manifest。
 
-Each child package must contain every resource it needs to operate after publishing. Shared runtime types should come from `@sciforge-ui/runtime-contract`; package code, fixtures, assets, and workbench demo files must not import or read from `packages/ui-components` parent files.
+每个子包必须包含发布后运行所需的全部资源。共享 runtime types 应来自 `@sciforge-ui/runtime-contract`；包代码、fixtures、assets 和 workbench demo 文件不得 import 或读取 `packages/ui-components` 父目录文件。
 
-Published components are strict: missing package resources fail the command. Draft skeleton packages are included in the same scan, but incomplete publish resources are reported as warnings so the acceptance gate can stay usable while draft package bodies are being filled in.
+已发布组件采用严格规则：缺失发布资源会使命令失败。草稿 skeleton package 也纳入同一扫描，但不完整发布资源会报告为 warning，保证草稿组件补齐期间 acceptance gate 仍可使用。
 
-The script is intentionally read-only for component implementation files. It reports missing resources so follow-up package work can add fixtures, renderers, assets, or root index exports without changing unrelated component logic.
+该脚本对组件实现文件只读。它只报告缺失资源，让后续包工作可以补 fixtures、renderers、assets 或 root index exports，而不改动无关组件逻辑。

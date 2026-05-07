@@ -1,29 +1,31 @@
 # @sciforge-ui/report-viewer
 
-## Agent quick contract
-- componentId: `report-viewer`
-- accepts: `research-report`, `markdown-report`
-- requires: one of `markdown`, `sections`, `report`, `summary`, `content`, or `dataRef`
-- outputs: `research-report`
-- events: `select-section`, `open-ref`
-- fallback: `generic-artifact-inspector`
-- safety: no code execution; no external resources; markdown is rendered as document content, not executed
-- demo fixtures: `fixtures/basic.ts`, `fixtures/empty.ts`, `fixtures/selection.ts`
-- primitive/preset: `document` primitive, markdown-report preset
+该包是 SciForge UI component registry 中的一个可发布 renderer。它负责把结构化 artifact 渲染为可读、可交互、可引用的视图；它不是 action provider，也不是 verifier provider。
 
-## Human notes
+## Agent quick contract / Agent 快速契约
+- componentId：`report-viewer`
+- accepts：`research-report`, `markdown-report`
+- requires：以下之一：`markdown`, `sections`, `report`, `summary`, `content`, 或 `dataRef`
+- outputs：`research-report`
+- events：`select-section`, `open-ref`
+- fallback：`generic-artifact-inspector`
+- safety：不执行代码; 不访问外部资源; markdown is rendered as document content, not executed
+- demo fixtures：`fixtures/basic.ts`, `fixtures/empty.ts`, `fixtures/selection.ts`
+- primitive/preset：`document` primitive, markdown-report preset
 
-### Data schema
-Preferred payload is `{ title?, markdown?, sections?, references? }`; `sections` should include id, title, content or markdown. Use dataRef/reportRef/markdownRef/path for external document bodies.
+## Human notes / 维护说明
 
-### Interaction/edit output semantics
-`select-section` emits section id/title; `open-ref` delegates reference preview to the host. The renderer does not execute notebooks or edit document content.
+## 数据契约
+该组件优先接收 `research-report`, `markdown-report` 类型或兼容 alias 的 artifact。大型数据、图像、结构文件、日志和外部资源应通过 workspace refs、`dataRef`、`filePath` 或 manifest 声明资源传递，避免把完整 payload 塞进 agent 上下文。
 
-### Performance/resource limits
-Large source files should stay as workspace refs. Keep inline markdown compact enough for Workbench preview.
+## 交互语义
+组件只发出已声明事件：`select-section`, `open-ref`。事件 payload 应携带稳定 artifact/object refs，例如 row id、node id、sequence range、plot point id、file ref 或 trace ref。屏幕坐标只能作为辅助证据，不能作为长期事实。
 
-### When not to use
-Do not use this for raw JSON inspection, execution logs, evidence comparison, or decorative summaries that duplicate the assistant message without an artifact contract.
+## 安全边界
+该组件的安全约束是：不执行代码; 不访问外部资源; markdown is rendered as document content, not executed。renderer 不应执行任意代码、不应绕过 manifest 访问外部资源、不应直接写 workspace，也不应自行给出 pass/fail/reward verdict。需要改变环境时交给 action provider；需要验证结论时交给 verifier。
 
-### Testing/publishing notes
-Smoke-test markdown, sectioned, ref-only, empty, and selection states. Publish fixtures with the package.
+## 何时不要使用该组件
+当 artifact 有更精确的领域 renderer 时，不要用 `report-viewer` 作为泛化替代。该组件也不应用于装饰性内容、隐藏命令入口、未声明网络访问，或任何会把用户交互直接变成外部副作用的流程。
+
+## 测试与发布
+发布前保持 `fixtures/basic.ts`, `fixtures/empty.ts`, `fixtures/selection.ts` 与 manifest 的 `workbenchDemo` 对齐，并运行 `npm run packages:check`、`npm run typecheck` 和相关 renderer 测试。

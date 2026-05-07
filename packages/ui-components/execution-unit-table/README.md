@@ -1,29 +1,31 @@
 # @sciforge-ui/execution-unit-table
 
-## Agent quick contract
-- componentId: `execution-unit-table`
-- accepts: `*`
-- requires: execution units, code refs, log refs, output refs, status records, or workflow provenance
-- outputs: none
-- events: `open-code-ref`, `open-log-ref`
-- fallback: `generic-artifact-inspector`
-- safety: no code execution; no external resources; refs are displayed or opened by host policy only
-- demo fixtures: `fixtures/basic.ts`, `fixtures/empty.ts`, `fixtures/selection.ts`
-- primitive/preset: `workflow-provenance` execution-unit table preset
+该包是 SciForge UI component registry 中的一个可发布 renderer。它负责把结构化 artifact 渲染为可读、可交互、可引用的视图；它不是 action provider，也不是 verifier provider。
 
-## Human notes
+## Agent quick contract / Agent 快速契约
+- componentId：`execution-unit-table`
+- accepts：`*`
+- requires：execution units, code refs, log refs, output refs, status records, 或 workflow provenance
+- outputs：none
+- events：`open-code-ref`, `open-log-ref`
+- fallback：`generic-artifact-inspector`
+- safety：不执行代码; 不访问外部资源; refs are displayed 或 opened by host policy only
+- demo fixtures：`fixtures/basic.ts`, `fixtures/empty.ts`, `fixtures/selection.ts`
+- primitive/preset：`workflow-provenance` execution-unit table preset
 
-### Data schema
-Preferred data is `{ executionUnits }` with id, tool, params, status, hash, language, codeRef, stdoutRef, stderrRef, outputRef, environment, dataFingerprint, and databaseVersions.
+## Human notes / 维护说明
 
-### Interaction/edit output semantics
-`open-code-ref` and `open-log-ref` request host previews of immutable refs. The table reports recorded provenance and has no edit output semantics.
+## 数据契约
+该组件优先接收 `*` 类型或兼容 alias 的 artifact。大型数据、图像、结构文件、日志和外部资源应通过 workspace refs、`dataRef`、`filePath` 或 manifest 声明资源传递，避免把完整 payload 塞进 agent 上下文。
 
-### Performance/resource limits
-Display concise execution metadata and refs. Do not execute code, rerun jobs, or fetch undeclared log/code resources.
+## 交互语义
+组件只发出已声明事件：`open-code-ref`, `open-log-ref`。事件 payload 应携带稳定 artifact/object refs，例如 row id、node id、sequence range、plot point id、file ref 或 trace ref。屏幕坐标只能作为辅助证据，不能作为长期事实。
 
-### When not to use
-Do not use it for ordinary result rows, literature evidence, narrative reports, or as a default companion artifact when no execution actually occurred.
+## 安全边界
+该组件的安全约束是：不执行代码; 不访问外部资源; refs are displayed 或 opened by host policy only。renderer 不应执行任意代码、不应绕过 manifest 访问外部资源、不应直接写 workspace，也不应自行给出 pass/fail/reward verdict。需要改变环境时交给 action provider；需要验证结论时交给 verifier。
 
-### Testing/publishing notes
-Cover successful, record-only, failed/repair-needed, empty, and selected-ref states. Keep refs as workspace-style strings.
+## 何时不要使用该组件
+当 artifact 有更精确的领域 renderer 时，不要用 `execution-unit-table` 作为泛化替代。该组件也不应用于装饰性内容、隐藏命令入口、未声明网络访问，或任何会把用户交互直接变成外部副作用的流程。
+
+## 测试与发布
+发布前保持 `fixtures/basic.ts`, `fixtures/empty.ts`, `fixtures/selection.ts` 与 manifest 的 `workbenchDemo` 对齐，并运行 `npm run packages:check`、`npm run typecheck` 和相关 renderer 测试。

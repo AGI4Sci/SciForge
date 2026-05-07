@@ -1,10 +1,14 @@
 # @sciforge-ui/artifact-preview
 
-## Agent quick contract
-- Use this package to normalize SciForge artifact/file references into `PreviewDescriptor` objects before rendering previews.
-- `normalizeArtifactPreviewDescriptor` preserves explicit artifact descriptors and infers stable fallback previews from path, dataRef, metadata, and artifact type.
-- PDF/image previews prefer streamable inline descriptors; text/table/json/html previews prefer extract descriptors; office/structure/binary previews keep system-open/copy-ref fallbacks.
-- Do not inline large file contents into chat context; use descriptor derivatives and locator hints instead.
+本包是 artifact/file 预览逻辑的迁移边界，用来把 SciForge 的 artifact、file ref、dataRef 和 metadata 规范化成 `PreviewDescriptor`。
 
-## Human notes
-This package is the migration boundary for artifact preview runtime logic. The app shell may still own layout and object focus state, but descriptor normalization, action selection, derivative merge, and hydration policy live here so preview behavior can be tested and published independently.
+## Agent 使用契约
+
+- 渲染预览前先使用本包生成 `PreviewDescriptor`。
+- `normalizeArtifactPreviewDescriptor` 会保留显式 descriptor，并从 path、dataRef、metadata 和 artifact type 推断 fallback preview。
+- PDF/image 优先使用可流式或 inline descriptor；text/table/json/html 优先使用 extract descriptor；office/structure/binary 保留 system-open/copy-ref fallback。
+- 不要把大文件内容内联到聊天上下文；使用 descriptor derivative、locator hint 和 workspace ref。
+
+## 边界
+
+App shell 可以继续拥有布局和 object focus state，但 descriptor 规范化、action 选择、derivative 合并和 hydration policy 应留在本包，方便独立测试和发布。

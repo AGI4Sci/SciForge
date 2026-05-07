@@ -18,8 +18,41 @@ SciForge 已完成从“内置 Scenario preset + runtime override”到可组合
 - UI 聊天、CLI/终端执行和 workspace runtime 已开始收敛到共享 Agent handoff contract：UI 使用 `handoffSource=ui-chat`，CLI 默认使用 `handoffSource=cli`，两者应共享 scenario、skill-domain、artifact、reference、sense、action、verification 和 failure contract。
 - Packages 的长期组织方式更新为 Observe / Reason / Action / Verify 闭环：`senses` 负责信息摄入，`skills` 负责推理策略和任务知识，`actions` 负责对环境产生影响，`verifiers` 负责 verdict/reward/critique，`ui-components` 保持为 interactive artifact views/renderers。
 - Verify 已明确为每个 run 必须考虑的闭环阶段；verifier provider 和验证强度可按风险选择。低风险草稿可轻量验证或标记 `unverified`，高风险动作、科研结论、外部副作用和发布类任务必须有强 verifier 或 human approval。
+- `vision-sense` 与 Computer Use 的职责边界已拆清：`vision-sense` 是 Observe/sense，只把截图、图像和视觉模态转换成可审计文本结果；Computer Use 是 Action/action provider，消费任意 sense provider 的观察结果，执行通用 GUI action loop。两者通过 file-ref-only trace、window-local coordinate、scheduler lock 和 verifier feedback 连接。
+- Runtime gateway 已按职责拆成语义模块：request normalization、context envelope、context window/compaction、AgentServer prompt/config、run output parsing、direct answer payload、payload validation、artifact reference context 和 backend diagnostics。主入口只保留 orchestration。
 
 下一阶段重点是产品化硬化与共享能力落地：浏览器端到端 smoke、workspace scenario 原生路由、build/code splitting、3Dmol 风险治理、quality gate UI、runtime diagnostics、`packages/actions` / `packages/verifiers` provider registry，以及 UI/CLI 共享 request builder。
+
+### 0.1 当前模块边界速览
+
+```text
+Observe:
+  packages/senses/vision-sense
+    instruction + screenshot/image refs -> text response / coordinates / diagnostics
+
+Reason:
+  packages/skills
+  AgentServer backend
+    scenario + refs + selected capabilities -> answer or workspace task code
+
+Action:
+  packages/computer-use
+  packages/actions/computer-use
+  src/runtime/computer-use/*
+    generic GUI plan -> grounding -> executor -> verification -> trace
+
+Verify:
+  packages/verifiers
+  src/shared/verification.ts
+    goal + artifact refs + trace refs + state refs -> verdict / reward / repair hints
+
+Present:
+  packages/ui-components
+  packages/interactive-views
+    artifact data + UIManifest + object refs -> interactive scientific views
+```
+
+这套分层的核心价值是：新增能力时先说明它属于 sense、skill、tool、action、verifier 还是 interactive view，再选择最低可靠集成等级，而不是把所有东西都塞进一个巨大工具列表。
 
 ---
 

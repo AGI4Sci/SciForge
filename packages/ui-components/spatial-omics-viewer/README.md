@@ -1,29 +1,31 @@
 # @sciforge-ui/spatial-omics-viewer
 
-## Agent quick contract
-- componentId: `spatial-omics-viewer`
-- accepts: `spatial-map`, `spatial-omics`, `visium-spots`, `cell-coordinates`, `tissue-expression-map`
-- requires: one of `spots`, `cells`, `coordinates`, `imageRef`, `features`, `expression`, or `dataRef`
-- outputs: `spatial-map`, `point-set`, `visual-annotation`
-- events: `select-spot`, `select-cell`, `select-region`, `change-feature`
-- fallback: `scientific-plot-viewer`, `generic-data-table`, `generic-artifact-inspector`
-- safety: sandboxed; tissue images and large matrices must be declared refs; no code execution
-- demo fixtures: `fixtures/basic.ts`, `fixtures/empty.ts`, `fixtures/selection.ts`
-- primitive/preset: `spatial-map` primitive with point-set and visual-annotation projections
+该包是 SciForge UI component registry 中的一个可发布 renderer。它负责把结构化 artifact 渲染为可读、可交互、可引用的视图；它不是 action provider，也不是 verifier provider。
 
-## Human notes
+## Agent quick contract / Agent 快速契约
+- componentId：`spatial-omics-viewer`
+- accepts：`spatial-map`, `spatial-omics`, `visium-spots`, `cell-coordinates`, `tissue-expression-map`
+- requires：以下之一：`spots`, `cells`, `coordinates`, `imageRef`, `features`, `expression`, 或 `dataRef`
+- outputs：`spatial-map`, `point-set`, `visual-annotation`
+- events：`select-spot`, `select-cell`, `select-region`, `change-feature`
+- fallback：`scientific-plot-viewer`, `generic-data-table`, `generic-artifact-inspector`
+- safety：沙箱渲染；组织图像和大型矩阵必须使用声明过的 refs；不执行代码
+- demo fixtures：`fixtures/basic.ts`, `fixtures/empty.ts`, `fixtures/selection.ts`
+- primitive/preset：`spatial-map` primitive，并可投影为 point-set 与 visual-annotation
 
-### Data schema
-Payloads should include sample identity, spot/cell coordinates, optional tissue image ref, feature list, expression preview, and dataRef for full expression matrices.
+## Human notes / 维护说明
 
-### Interaction/edit output semantics
-Spot/cell/region events emit stable ids and coordinates. Feature changes update the viewed overlay and may produce visual annotation or point-set projections.
+## 数据契约
+该组件优先接收 `spatial-map`, `spatial-omics`, `visium-spots`, `cell-coordinates`, `tissue-expression-map` 类型或兼容 alias 的 artifact。大型数据、图像、结构文件、日志和外部资源应通过 workspace refs、`dataRef`、`filePath` 或 manifest 声明资源传递，避免把完整 payload 塞进 agent 上下文。
 
-### Performance/resource limits
-No large scatter rendering, image tiling, or matrix loading is bundled in this skeleton. Use refs for tissue images and full matrices.
+## 交互语义
+组件只发出已声明事件：`select-spot`, `select-cell`, `select-region`, `change-feature`。事件 payload 应携带稳定 artifact/object refs，例如 row id、node id、sequence range、plot point id、file ref 或 trace ref。屏幕坐标只能作为辅助证据，不能作为长期事实。
 
-### When not to use
-Do not use it for ordinary UMAP/PCA scatter plots, generic images, plate layouts, or non-spatial expression matrices.
+## 安全边界
+该组件的安全约束是：沙箱渲染；组织图像和大型矩阵必须使用声明过的 refs；不执行代码。renderer 不应执行任意代码、不应绕过 manifest 访问外部资源、不应直接写 workspace，也不应自行给出 pass/fail/reward verdict。需要改变环境时交给 action provider；需要验证结论时交给 verifier。
 
-### Testing/publishing notes
-Keep `fixtures/basic.ts`, `fixtures/empty.ts`, and `fixtures/selection.ts` present and aligned with manifest `workbenchDemo`.
+## 何时不要使用该组件
+当 artifact 有更精确的领域 renderer 时，不要用 `spatial-omics-viewer` 作为泛化替代。该组件也不应用于装饰性内容、隐藏命令入口、未声明网络访问，或任何会把用户交互直接变成外部副作用的流程。
+
+## 测试与发布
+发布前保持 `fixtures/basic.ts`, `fixtures/empty.ts`, `fixtures/selection.ts` 与 manifest 的 `workbenchDemo` 对齐，并运行 `npm run packages:check`、`npm run typecheck` 和相关 renderer 测试。

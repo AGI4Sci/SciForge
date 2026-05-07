@@ -1,17 +1,18 @@
 # @sciforge-ui/components
 
-## Agent quick contract
+## Agent 快速契约
 - This package aggregates published SciForge UI component manifests.
-- Long-term capability name: interactive artifact views/renderers. `packages/ui-components` remains the stable registry compatibility layer.
-- Agents should read each selected component package's `README.md` `Agent quick contract` section first.
-- `primitive-map.md` is the compatibility source for mapping current component/artifact IDs to stable data primitives and future renderer names.
-- Schema drafts for primitives live in `schemas/*.schema.json`; each file includes an example payload for agent and workbench smoke usage.
-- Every component README must expose the same top-level contract fields: `componentId`, `accepts`, `requires`, `outputs`, `events`, `fallback`, `safety`, and `demo fixtures`.
-- `availableComponentIds` is an allowlist, not a command to generate every matching artifact.
-- If no selected component accepts an object, use `unknown-artifact-inspector` or the preview/system-open fallback path.
-- These renderers are not action providers and not verifier providers. They may host human verification interactions, but verifier packages own verdict/reward contracts.
+- 本包聚合已发布的 SciForge UI component manifests。
+- 长期能力名称是 interactive artifact views/renderers；`packages/ui-components` 继续作为稳定 registry 兼容层。
+- Agent 选择某个组件前，应先阅读该组件 README 中的 `Agent 快速契约` 或 `Agent quick contract`。
+- `primitive-map.md` 是当前 component/artifact id 到稳定 data primitive 与未来 renderer 名称的兼容映射源。
+- primitive schema 草案放在 `schemas/*.schema.json`；每个 schema 都包含可用于 agent 和 workbench smoke 的示例 payload。
+- 每个组件 README 必须暴露同一组顶层契约字段：`componentId`、`accepts`、`requires`、`outputs`、`events`、`fallback`、`safety` 和 `demo fixtures`。
+- `availableComponentIds` 是 allowlist，不是要求 agent 生成所有匹配 artifact 的命令。
+- 如果已选组件都不能接收某个对象，使用 `unknown-artifact-inspector`，或走 preview/system-open fallback。
+- 这些 renderer 不是 action provider，也不是 verifier provider。它们可以承载人工验证交互，但 verdict/reward 契约属于 verifier package。
 
-## Interactive artifact view contract
+## Interactive Artifact View 契约
 
 `packages/ui-components` 的长期职责是把结构化 artifact 渲染成可读、可操作、可引用的 interactive surface：
 
@@ -19,20 +20,20 @@
 artifact data + schema + view props + refs -> visible view + events + object refs
 ```
 
-### Data schema
+### Data Schema
 
 - 每个 renderer 必须通过 `manifest.ts` 声明 `acceptsArtifactTypes`、必要字段、可选 view params、fallback renderer 和安全限制。
 - `artifact.data` 与 `slot.props` 都视为不可信 runtime payload；renderer 只能按声明 schema 读取，并为缺失字段提供空态或降级。
 - 大型数据、文件、图像、notebook、trace 或外部对象应通过 `dataRef`、`path`、workspace ref 或 object reference 传递，不应把完整 payload 强塞进 agent 上下文。
 - Schema 草案放在 `schemas/*.schema.json`，组件 README 应说明该组件使用的 primitive schema 或 preset schema。
 
-### Visible affordance
+### 可见 Affordance
 
 - 可见 affordance 是用户和 agent 能观察到的操作入口，例如选择点/行/节点、展开详情、过滤、排序、缩放、重置视图、批注、导出、打开来源和查看 provenance。
 - affordance 必须在 README 和 `interactionEvents` 中声明；隐藏热键、隐式副作用和未声明网络访问都不属于稳定 contract。
 - 组件可以展示 human verification 控件，例如 accept、reject、revise、score、comment，但这些只是交互事件，不直接构成 verifier provider 的 verdict。
 
-### Object references
+### Object References
 
 - 组件输出的选择、批注和编辑意图应引用稳定 object refs，而不是只返回屏幕坐标或临时 DOM id。
 - object refs 应指向 artifact id、schema path、row/node/point/sequence range、file ref、trace ref 或 workspace ref，并能被 CLI/agent 在没有浏览器状态时解释。
@@ -51,26 +52,26 @@ artifact data + schema + view props + refs -> visible view + events + object ref
 - renderer 可以暴露代码级交互 API 给 workbench shell，例如 selection callback、render helpers、workspace file read helper；这些 API 仍只返回 refs/events/view state，不直接充当 action provider。
 - renderer 不负责验证结果真伪、运行测试、操作实验设备、写入 workspace 或调用 AgentServer。
 
-## Human notes
-Each child directory is intentionally shaped like a publishable UI component package. The manifest is the machine-readable contract; the README is split so agents can scan a short operational section while humans can maintain richer design and testing notes below it.
+## 维护说明
+每个子目录都刻意设计成可独立发布的 UI component package。`manifest.ts` 是机器可读契约；README 先提供 agent 可快速扫描的操作契约，再保留给人类维护的设计、测试和发布说明。
 
-### Component package structure
-- `package.json`: publishable package metadata. Keep `private` unset or `false`.
-- `manifest.ts`: machine-readable module contract consumed by the SciForge view planner.
-- `render.tsx`: package-native renderer entry. It receives `UIComponentRendererProps` and may use explicit shell helpers for app-owned chrome such as downloads, source bars, empty states, markdown, and workspace file reads.
-- `fixtures/`: minimal empty and populated payload examples for local debugging and regression tests.
-- `render.test.tsx`: lightweight renderer contract tests using fixtures.
-- `README.md`: agent-facing contract plus human maintenance notes.
+### 组件包结构
+- `package.json`：可发布 package metadata。`private` 保持未设置或 `false`。
+- `manifest.ts`：SciForge view planner 消费的机器可读模块契约。
+- `render.tsx`：包内 renderer 入口。它接收 `UIComponentRendererProps`，并可使用 shell helpers 处理下载、source bar、empty state、Markdown 和 workspace file read 等 app-owned chrome。
+- `fixtures/`：用于本地调试和回归测试的最小空 payload 与示例 payload。
+- `render.test.tsx`：基于 fixtures 的轻量 renderer contract tests。
+- `README.md`：agent-facing contract 与人类维护说明。
 
-### Renderer contract
-Renderers should treat `artifact.data` and `slot.props` as untrusted runtime payloads, render useful empty states, avoid fetching network resources unless the manifest declares them, and keep interaction events aligned with `manifest.ts`. New component packages should target this renderer interface; legacy in-app adapters only exist for components that have not been migrated yet.
+### Renderer 契约
+Renderer 应把 `artifact.data` 和 `slot.props` 都视为不可信 runtime payload，提供有用空态，避免在 manifest 未声明时获取网络资源，并让交互事件与 `manifest.ts` 保持一致。新组件包应面向这个 renderer interface；legacy in-app adapters 只服务尚未迁移的组件。
 
 `packages/interactive-views` 是本包的非破坏性别名和长期迁移目标。当前 registry 真相源仍是 `packages/ui-components`；别名只用于让新文档或新代码表达 interactive views/renderers 语义。未来如迁移目录，必须保留 `packages/ui-components` 的 manifest、componentId、alias 和 renderer 兼容导出。
 
-### README contract
-Each component README has an `Agent quick contract` followed by `Human notes`. Human notes should keep the same maintenance subsections: data schema, interaction/edit output semantics, performance/resource limits, when not to use, and testing/publishing notes. Preset components must name their underlying primitive, for example volcano and UMAP as `point-set` presets, heatmap as a `matrix` preset, and knowledge graph as a `graph` preset.
+### README 契约
+每个组件 README 应先给出 `Agent 快速契约` 或 `Agent quick contract`，再给出维护说明。维护说明保持这些小节：data schema、interaction/edit output semantics、performance/resource limits、when not to use、testing/publishing notes。Preset 组件必须说明底层 primitive，例如 volcano 和 UMAP 是 `point-set` preset，heatmap 是 `matrix` preset，knowledge graph 是 `graph` preset。
 
-Scientific plotting components are Plotly-first. `scientific-plot-viewer`, model evaluation, time-series plotting, statistical result views, publication figure builders, and export bundles should treat Plotly-compatible `plot-spec`/`figure-spec` as the editable source of truth. Matplotlib artifacts are fallback or advanced publication exports derived from the same spec, never the primary editing state.
+科学绘图组件优先采用 Plotly-compatible spec。`scientific-plot-viewer`、model evaluation、time-series plotting、statistical result views、publication figure builders 和 export bundles 应把 `plot-spec`/`figure-spec` 作为可编辑 source of truth。Matplotlib artifacts 是从同一 spec 派生出的 fallback 或高级出版导出，不是主要编辑状态。
 
-### Testing and publishing
-At minimum, published component packages must have `package.json`, `manifest.ts`, and `README.md`. The current sample packages, `report-viewer` and `data-table`, additionally require `render.tsx`, `fixtures/`, and renderer tests. Before publishing or changing a package contract, run `npm run packages:check`, `npm run typecheck`, and `npm run test`.
+### 测试与发布
+已发布组件包至少必须包含 `package.json`、`manifest.ts` 和 `README.md`。当前示例包还应包含 `render.tsx`、`fixtures/` 和 renderer tests。发布或修改包契约前，运行 `npm run packages:check`、`npm run typecheck` 和 `npm run test`。
