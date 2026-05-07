@@ -162,7 +162,7 @@ export async function sendSciForgeToolMessage(
         currentPrompt: input.prompt,
         maxContextWindowTokens: input.config.maxContextWindowTokens,
         recentConversation,
-        conversationLedger: buildConversationLedger(input),
+        conversationLedger: buildConversationLedger(input, contextPolicy.isolated),
         contextReusePolicy: buildContextReusePolicy(input, recentConversation),
         artifactAccessPolicy,
         currentReferences: referenceSummary,
@@ -174,7 +174,7 @@ export async function sendSciForgeToolMessage(
         contextIsolation: contextPolicy,
         agentDispatchPolicy: 'agentserver-decides',
       },
-      agentContext: buildAgentContext(input, recentConversation, artifactSummary, recentExecutionRefs, configuredComponentIds, artifactAccessPolicy, selectedToolContracts),
+      agentContext: buildAgentContext(input, recentConversation, artifactSummary, recentExecutionRefs, configuredComponentIds, artifactAccessPolicy, selectedToolContracts, contextPolicy.isolated),
     });
     const requestBodyText = JSON.stringify(requestBody);
     callbacks.onEvent?.(contextWindowTelemetryEvent(
@@ -252,6 +252,7 @@ export function currentTurnContextPolicy(
 ) {
   const prompt = input.prompt.trim();
   const hasExplicitReferences = (input.references?.length ?? 0) > 0;
+  if (hasExplicitReferences && !isPriorContinuationLikePrompt(prompt)) return { isolated: true, reason: 'explicit-current-reference' };
   if (hasExplicitReferences) return { isolated: false, reason: 'explicit-user-reference' };
   if (!artifacts.length && !recentExecutionRefs.length && !(input.runs?.length ?? 0)) {
     return { isolated: false, reason: 'no-prior-context' };
@@ -264,6 +265,10 @@ export function currentTurnContextPolicy(
 
 function isContinuationLikePrompt(prompt: string) {
   return /继续|基于|根据|上面|上述|这个|这个文件|该文件|这些|前面|之前|上一轮|刚才|已有|已上传|上传|PDF|pdf|总结已有|解释上一轮|修复|重试|重新跑|rerun|repair|retry|continue|existing|previous|uploaded/i.test(prompt);
+}
+
+function isPriorContinuationLikePrompt(prompt: string) {
+  return /继续|上面|上述|前面|之前|上一轮|上次|刚才|已有|已上传|总结已有|解释上一轮|修复|重试|重新跑|rerun|repair|retry|continue|existing|previous|prior|last\s+(round|run|turn)/i.test(prompt);
 }
 
 function isFreshRetrievalPrompt(prompt: string) {
@@ -851,6 +856,7 @@ function buildAgentContext(
   availableComponentIds: string[],
   artifactAccessPolicy = buildArtifactAccessPolicy(input, artifactSummary, recentExecutionRefs),
   selectedToolContracts = selectedRuntimeToolContracts(selectedRuntimeToolIds(input)),
+  isolated = false,
 ) {
   const scenario = input.scenarioOverride;
   return {
@@ -861,7 +867,7 @@ function buildAgentContext(
       markdownChars: scenario.scenarioMarkdown.length,
     } : undefined,
     recentConversation,
-    conversationLedger: buildConversationLedger(input),
+    conversationLedger: buildConversationLedger(input, isolated),
     contextReusePolicy: buildContextReusePolicy(input, recentConversation),
     artifactAccessPolicy,
     currentReferences: summarizeSciForgeReferences(input),
@@ -881,8 +887,10 @@ function buildAgentContext(
   };
 }
 
-function buildConversationLedger(input: SendAgentMessageInput) {
-  const messages = stableSessionMessages(input);
+function buildConversationLedger(input: SendAgentMessageInput, isolated = false) {
+  const messages = isolated
+    ? stableSessionMessages(input).filter((message) => normalizePromptText(message.content) === normalizePromptText(input.prompt)).slice(-1)
+    : stableSessionMessages(input);
   return messages.map((message, index) => {
     const isRecent = index >= Math.max(0, messages.length - 4);
     return {

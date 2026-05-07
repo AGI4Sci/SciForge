@@ -42,12 +42,14 @@ import {
   estimateWorkspaceContextWindowState,
   fetchAgentServerContextSnapshot,
   formatContextWindowState,
+  currentTurnReferences,
   handoffBudgetDecisionRecords,
   handoffContextWindowState,
   preflightAgentServerContextWindow,
   readBackendContextWindowState,
   workspaceContextWindowStateFromBackend,
 } from './gateway/agentserver-context-window.js';
+import { requestWithCurrentReferenceDigests } from './gateway/current-reference-digest.js';
 import {
   coerceAgentServerToolPayload,
   coerceWorkspaceTaskPayload,
@@ -74,6 +76,7 @@ import {
   requestAgentServerRepair,
   requiresUserLlmEndpoint,
   summarizeSkillsForAgentServer,
+  summarizeRuntimeCapabilitiesForAgentServer,
   summarizeToolsForAgentServer,
   writeAgentServerDebugArtifact,
 } from './gateway/agentserver-prompts.js';
@@ -661,13 +664,14 @@ async function requestAgentServerGeneration(params: {
   let runPayload: unknown;
   let contextRecovery: AgentServerGenerationFailureDiagnostics | undefined;
   try {
-    const { llmEndpointSource, ...llmRuntime } = await agentServerLlmRuntime(params.request, params.workspace);
-    const backend = agentServerBackend(params.request, llmRuntime.llmEndpoint);
+    const request = await requestWithCurrentReferenceDigests(params.request, params.workspace);
+    const { llmEndpointSource, ...llmRuntime } = await agentServerLlmRuntime(request, params.workspace);
+    const backend = agentServerBackend(request, llmRuntime.llmEndpoint);
     if (!llmRuntime.llmEndpoint && requiresUserLlmEndpoint(params.baseUrl)) {
       return { ok: false, error: missingUserLlmEndpointMessage() };
     }
     const adapter = agentBackendAdapter(backend);
-    const agentId = agentServerAgentId(params.request, 'task-generation');
+    const agentId = agentServerAgentId(request, 'task-generation');
     for (let dispatchAttempt = 1; dispatchAttempt <= 2; dispatchAttempt += 1) {
     const preflight = await preflightAgentServerContextWindow({
       adapter,
@@ -677,17 +681,19 @@ async function requestAgentServerGeneration(params: {
       callbacks: params.callbacks,
     });
     const workspaceTree = await workspaceTreeSummary(params.workspace);
-    const priorAttempts = summarizeTaskAttemptsForAgentServer(await readRecentTaskAttempts(params.workspace, params.request.skillDomain, 8, {
-      scenarioPackageId: params.request.scenarioPackageRef?.id,
-      skillPlanRef: params.request.skillPlanRef,
-      prompt: params.request.prompt,
-    }));
+    const priorAttempts = currentTurnReferences(request).length
+      ? []
+      : summarizeTaskAttemptsForAgentServer(await readRecentTaskAttempts(params.workspace, request.skillDomain, 8, {
+        scenarioPackageId: request.scenarioPackageRef?.id,
+        skillPlanRef: request.skillPlanRef,
+        prompt: request.prompt,
+      }));
     const agentServerSnapshot = preflight.state?.snapshot ?? await fetchAgentServerContextSnapshot(params.baseUrl, agentId);
-    const contextMode = contextEnvelopeMode(params.request, {
+    const contextMode = contextEnvelopeMode(request, {
       agentServerCoreAvailable: Boolean(agentServerSnapshot),
       forceSlimHandoff: preflight.forceSlimHandoff || Boolean(contextRecovery),
     });
-    const contextEnvelope: Record<string, unknown> = buildContextEnvelope(params.request, {
+    const contextEnvelope: Record<string, unknown> = buildContextEnvelope(request, {
       workspace: params.workspace,
       workspaceTreeSummary: workspaceTree,
       priorAttempts,
@@ -703,7 +709,7 @@ async function requestAgentServerGeneration(params: {
       contextEnvelope.backendRetryAudit = contextRecovery.retryAudit;
       contextEnvelope.retryReason = 'Previous AgentServer generation attempt hit provider/rate-limit or retry-budget pressure; this is the only compact retry.';
     }
-    const compactContext = buildAgentServerCompactContext(params.request, {
+    const compactContext = buildAgentServerCompactContext(request, {
       contextEnvelope,
       workspaceTree,
       priorAttempts,
@@ -712,19 +718,20 @@ async function requestAgentServerGeneration(params: {
       mode: contextMode,
     });
     const generationRequest = {
-      prompt: params.request.prompt,
-      skillDomain: params.request.skillDomain,
+      prompt: request.prompt,
+      skillDomain: request.skillDomain,
       contextEnvelope,
       workspaceTreeSummary: compactContext.workspaceTreeSummary,
       availableSkills: compactContext.availableSkills,
-      availableTools: summarizeToolsForAgentServer(params.request),
-      artifactSchema: expectedArtifactSchema(params.request),
+      availableTools: summarizeToolsForAgentServer(request),
+      availableRuntimeCapabilities: summarizeRuntimeCapabilitiesForAgentServer(request, compactContext.availableSkills),
+      artifactSchema: expectedArtifactSchema(request),
       uiManifestContract: { expectedKeys: ['componentId', 'artifactRef', 'encoding', 'layout', 'compare'] },
       uiStateSummary: compactContext.uiStateSummary,
       artifacts: compactContext.artifacts,
       recentExecutionRefs: compactContext.recentExecutionRefs,
-      expectedArtifactTypes: expectedArtifactTypesForRequest(params.request),
-      selectedComponentIds: params.request.selectedComponentIds ?? toStringList(params.request.uiState?.selectedComponentIds),
+      expectedArtifactTypes: expectedArtifactTypesForRequest(request),
+      selectedComponentIds: request.selectedComponentIds ?? toStringList(request.uiState?.selectedComponentIds),
       priorAttempts: compactContext.priorAttempts,
       strictTaskFilesReason: params.strictTaskFilesReason,
       retryAudit: contextRecovery?.retryAudit,
@@ -737,8 +744,8 @@ async function requestAgentServerGeneration(params: {
       message: 'Estimated context window before AgentServer dispatch',
       contextWindowState: estimateWorkspaceContextWindowState({
         backend,
-        modelName: llmRuntime.llmEndpoint?.modelName ?? params.request.modelName,
-        maxContextWindowTokens: params.request.maxContextWindowTokens,
+        modelName: llmRuntime.llmEndpoint?.modelName ?? request.modelName,
+        maxContextWindowTokens: request.maxContextWindowTokens,
         usedTokens: Math.ceil((contextEnvelopeBytes + generationPrompt.length) / 4),
         source: 'estimate',
       }),
@@ -746,7 +753,7 @@ async function requestAgentServerGeneration(params: {
     runPayload = {
       agent: {
         id: agentId,
-        name: `SciForge ${params.request.skillDomain} Task Generation`,
+        name: `SciForge ${request.skillDomain} Task Generation`,
         backend,
         workspace: params.workspace,
         workingDirectory: params.workspace,
@@ -755,6 +762,7 @@ async function requestAgentServerGeneration(params: {
           AGENT_BACKEND_ANSWER_PRINCIPLE,
           'You generate SciForge workspace-local task code.',
           'Write task files that accept inputPath and outputPath argv values and write a SciForge ToolPayload JSON object.',
+          'For current-reference document requests, use uiStateSummary.currentReferenceDigests/contextEnvelope.sessionFacts.currentReferenceDigests first; do not spend generation-stage tool calls dumping long files into model context.',
           'Do not create demo/default success artifacts; if the real task cannot be generated, explain the missing condition.',
         ].join(' '),
       },
@@ -763,7 +771,7 @@ async function requestAgentServerGeneration(params: {
         metadata: {
           project: 'SciForge',
           purpose: 'workspace-task-generation',
-          skillDomain: params.request.skillDomain,
+          skillDomain: request.skillDomain,
           skillId: params.skill.id,
           expectedArtifactTypes: generationRequest.expectedArtifactTypes,
           selectedComponentIds: generationRequest.selectedComponentIds,
@@ -773,16 +781,16 @@ async function requestAgentServerGeneration(params: {
           retryAudit: contextRecovery?.retryAudit,
           contextEnvelopeBytes,
           promptChars: generationPrompt.length,
-          maxContextWindowTokens: params.request.maxContextWindowTokens,
-          contextWindowLimit: params.request.maxContextWindowTokens,
-          modelContextWindow: params.request.maxContextWindowTokens,
+          maxContextWindowTokens: request.maxContextWindowTokens,
+          contextWindowLimit: request.maxContextWindowTokens,
+          modelContextWindow: request.maxContextWindowTokens,
           workspaceTreeEntryCount: workspaceTree.length,
           contextWindow: preflight.state ? contextWindowMetadata(preflight.state) : undefined,
           contextCompaction: preflight.compaction ? contextCompactionMetadata(preflight.compaction) : undefined,
           backendCapabilities: adapter.capabilities,
         },
       },
-      contextPolicy: agentServerContextPolicy(params.request),
+      contextPolicy: agentServerContextPolicy(request),
       runtime: {
         backend,
         cwd: params.workspace,
@@ -790,12 +798,12 @@ async function requestAgentServerGeneration(params: {
         metadata: {
           autoApprove: true,
           sandbox: 'danger-full-access',
-          ...agentHandoffSourceMetadata(requestHandoffSource(params.request)),
+          ...agentHandoffSourceMetadata(requestHandoffSource(request)),
           source: 'sciforge-workspace-runtime-gateway',
           purpose: 'workspace-task-generation',
-          maxContextWindowTokens: params.request.maxContextWindowTokens,
-          contextWindowLimit: params.request.maxContextWindowTokens,
-          modelContextWindow: params.request.maxContextWindowTokens,
+          maxContextWindowTokens: request.maxContextWindowTokens,
+          contextWindowLimit: request.maxContextWindowTokens,
+          modelContextWindow: request.maxContextWindowTokens,
           requiresNativeWorkspaceCapabilities: true,
           llmEndpointSource: llmRuntime.llmEndpoint ? llmEndpointSource : undefined,
           retryAudit: contextRecovery?.retryAudit,
@@ -803,14 +811,14 @@ async function requestAgentServerGeneration(params: {
       },
       metadata: {
         project: 'SciForge',
-        ...agentHandoffSourceMetadata(requestHandoffSource(params.request)),
+        ...agentHandoffSourceMetadata(requestHandoffSource(request)),
         source: 'workspace-runtime-gateway',
         task: 'generation',
         workspace: params.workspace,
         workingDirectory: params.workspace,
-        maxContextWindowTokens: params.request.maxContextWindowTokens,
-        contextWindowLimit: params.request.maxContextWindowTokens,
-        modelContextWindow: params.request.maxContextWindowTokens,
+        maxContextWindowTokens: request.maxContextWindowTokens,
+        contextWindowLimit: request.maxContextWindowTokens,
+        modelContextWindow: request.maxContextWindowTokens,
         orchestrator: {
           mode: 'multi_stage',
           planKind: 'implement-only',
@@ -846,8 +854,8 @@ async function requestAgentServerGeneration(params: {
       message: 'Estimated context window after handoff slimming',
       contextWindowState: handoffContextWindowState({
         backend,
-        modelName: llmRuntime.llmEndpoint?.modelName ?? params.request.modelName,
-        maxContextWindowTokens: params.request.maxContextWindowTokens,
+        modelName: llmRuntime.llmEndpoint?.modelName ?? request.modelName,
+        maxContextWindowTokens: request.maxContextWindowTokens,
         rawRef: normalizedHandoff.rawRef,
         rawSha1: normalizedHandoff.rawSha1,
         rawBytes: normalizedHandoff.rawBytes,
@@ -880,7 +888,7 @@ async function requestAgentServerGeneration(params: {
     const { json, run, error } = await readAgentServerRunStream(response, (event) => {
       emitWorkspaceRuntimeEvent(params.callbacks, withRequestContextWindowLimit(
         normalizeAgentServerWorkspaceEvent(event),
-        params.request,
+        request,
       ));
     });
     await writeAgentServerDebugArtifact(params.workspace, 'generation', runPayload, response.status, json);
@@ -896,8 +904,8 @@ async function requestAgentServerGeneration(params: {
         workspace: params.workspace,
         agentId,
         provider: llmRuntime.llmEndpoint?.provider,
-        model: llmRuntime.llmEndpoint?.modelName ?? params.request.modelName,
-        request: params.request,
+        model: llmRuntime.llmEndpoint?.modelName ?? request.modelName,
+        request,
         skill: params.skill,
         callbacks: params.callbacks,
         httpStatus: response.status,
@@ -921,8 +929,8 @@ async function requestAgentServerGeneration(params: {
         workspace: params.workspace,
         agentId,
         provider: llmRuntime.llmEndpoint?.provider,
-        model: llmRuntime.llmEndpoint?.modelName ?? params.request.modelName,
-        request: params.request,
+        model: llmRuntime.llmEndpoint?.modelName ?? request.modelName,
+        request,
         skill: params.skill,
         callbacks: params.callbacks,
         priorHandoff: normalizedHandoff,
@@ -945,8 +953,8 @@ async function requestAgentServerGeneration(params: {
         workspace: params.workspace,
         agentId,
         provider: llmRuntime.llmEndpoint?.provider,
-        model: llmRuntime.llmEndpoint?.modelName ?? params.request.modelName,
-        request: params.request,
+        model: llmRuntime.llmEndpoint?.modelName ?? request.modelName,
+        request,
         skill: params.skill,
         callbacks: params.callbacks,
         priorHandoff: normalizedHandoff,
@@ -967,7 +975,7 @@ async function requestAgentServerGeneration(params: {
         },
         contextRecovery,
         workspace: params.workspace,
-        request: params.request,
+        request,
         skill: params.skill,
         callbacks: params.callbacks,
       });
@@ -986,7 +994,7 @@ async function requestAgentServerGeneration(params: {
             },
             contextRecovery,
             workspace: params.workspace,
-        request: params.request,
+        request,
         skill: params.skill,
         callbacks: params.callbacks,
       });
@@ -995,11 +1003,11 @@ async function requestAgentServerGeneration(params: {
           result: {
           ok: true,
           runId: typeof run.id === 'string' ? run.id : undefined,
-          directPayload: toolPayloadFromPlainAgentOutput(directText, params.request),
+          directPayload: toolPayloadFromPlainAgentOutput(directText, request),
           },
           contextRecovery,
           workspace: params.workspace,
-        request: params.request,
+        request,
         skill: params.skill,
         callbacks: params.callbacks,
       });
@@ -1014,7 +1022,7 @@ async function requestAgentServerGeneration(params: {
       },
       contextRecovery,
       workspace: params.workspace,
-      request: params.request,
+      request,
       skill: params.skill,
       callbacks: params.callbacks,
     });

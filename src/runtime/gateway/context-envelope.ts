@@ -24,6 +24,8 @@ export function buildContextEnvelope(
   const recentExecutionRefs = toRecordList(uiState.recentExecutionRefs);
   const recentConversation = toStringList(uiState.recentConversation);
   const conversationLedger = toRecordList(uiState.conversationLedger);
+  const currentReferences = toRecordList(uiState.currentReferences);
+  const currentReferenceDigests = toRecordList(uiState.currentReferenceDigests);
   const contextReusePolicy = isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : undefined;
   const mode = params.mode ?? contextEnvelopeMode(request);
   const workspaceTree = params.workspaceTreeSummary ?? [];
@@ -127,6 +129,8 @@ export function buildContextEnvelope(
       sessionId: typeof uiState.sessionId === 'string' ? uiState.sessionId : undefined,
       currentPrompt: typeof uiState.currentPrompt === 'string' ? uiState.currentPrompt : request.prompt,
       currentUserRequest: currentUserRequestText(request.prompt),
+      currentReferences: currentReferences.length ? currentReferences.slice(0, 8).map((entry) => clipForAgentServerJson(entry, 2)) : undefined,
+      currentReferenceDigests: currentReferenceDigests.length ? currentReferenceDigests.slice(0, 8).map((entry) => clipForAgentServerJson(entry, 4)) : undefined,
       recentConversation: visibleRecentConversation,
       conversationLedger: summarizeConversationLedger(conversationLedger, mode),
       contextReusePolicy: contextReusePolicy ? clipForAgentServerJson(contextReusePolicy, 3) : undefined,
@@ -146,10 +150,14 @@ export function buildContextEnvelope(
     continuityRules: mode === 'full' ? [
       'Use workspace refs as the source of truth for files, logs, generated code, and artifacts.',
       'Use conversationLedger to recover long-running session continuity; use recentConversation only to infer current intent.',
+      'If sessionFacts.currentReferences is non-empty, the current answer/artifacts must use those refs as current-turn evidence or return failed-with-reason; objectReferences alone do not prove use.',
+      'If sessionFacts.currentReferenceDigests is present, use those bounded digests before reading large files; only generate workspace task code for deeper extraction instead of dumping full documents into backend context.',
       'For continuation or repair requests, continue from priorAttempts/artifacts instead of restarting an unrelated task.',
       'If a requested local ref does not exist, say so explicitly and point to the nearest available output/log/artifact ref.',
     ] : [
       'Workspace refs are source of truth.',
+      'If sessionFacts.currentReferences is non-empty, the current answer/artifacts must use those refs as current-turn evidence or return failed-with-reason; objectReferences alone do not prove use.',
+      'Use currentReferenceDigests before opening large current refs; if deeper reading is needed, write a workspace task that emits bounded artifacts.',
       'Continue from AgentServer session memory, conversationLedger, recentExecutionRefs, and artifacts; answer missing refs honestly.',
     ],
   };

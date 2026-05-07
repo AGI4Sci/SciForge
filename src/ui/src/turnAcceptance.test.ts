@@ -372,6 +372,79 @@ test('explicit references pass when selected evidence changes the answer', () =>
   assert.equal(accepted.message.acceptance?.pass, true);
 });
 
+test('file references must be reflected by answer or artifact content, not only object chips', () => {
+  const reference = {
+    id: 'ref-upload-current',
+    kind: 'file' as const,
+    title: 'current-upload.pdf',
+    ref: 'file:.sciforge/uploads/current-upload.pdf',
+    summary: 'Current turn upload for analysis.',
+  };
+  const snapshot = buildUserGoalSnapshot({
+    turnId: 'turn-file-reference-unused',
+    prompt: '阅读理解这份文件，写一份总结报告',
+    scenarioId: 'literature-evidence-review',
+    references: [reference],
+    expectedArtifacts: ['research-report'],
+  });
+  const response = responseWithContent('已完成报告。');
+  response.message.references = [reference];
+  response.run.references = [reference];
+  response.artifacts = [{
+    id: 'research-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { markdown: '这是一份旧上下文报告，没有使用当前上传文件。' },
+  }];
+  response.message.objectReferences = [{
+    id: 'obj-current-upload',
+    title: 'current-upload.pdf',
+    kind: 'file',
+    ref: 'file:.sciforge/uploads/current-upload.pdf',
+    actions: ['focus-right-pane'],
+    status: 'available',
+  }];
+
+  const accepted = acceptAndRepairAgentResponse({ snapshot, response, session: baseSession });
+
+  assert.equal(accepted.message.acceptance?.pass, false);
+  assert.equal(accepted.message.acceptance?.failures.some((failure) => failure.code === 'unused-explicit-references'), true);
+  assert.equal(shouldRunBackendAcceptanceRepair(accepted.message.acceptance), true);
+});
+
+test('uploaded file references can be reflected by filename stem instead of storage path', () => {
+  const reference = {
+    id: 'ref-upload-cellpulse',
+    kind: 'file' as const,
+    title: 'CellPulse.pdf',
+    ref: '.sciforge/uploads/session-literature/upload-mov3dd8l-eufu1k-CellPulse.pdf',
+    summary: 'Current turn uploaded PDF.',
+  };
+  const snapshot = buildUserGoalSnapshot({
+    turnId: 'turn-file-reference-stem',
+    prompt: '阅读理解这篇论文，写一份总结报告',
+    scenarioId: 'literature-evidence-review',
+    references: [reference],
+    expectedArtifacts: ['research-report'],
+  });
+  const response = responseWithContent('已阅读理解 CellPulse 论文并生成总结报告。');
+  response.message.references = [reference];
+  response.run.references = [reference];
+  response.artifacts = [{
+    id: 'cellpulse-summary-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { markdown: '# CellPulse 论文总结报告\n\n本文总结 CellPulse 的方法、结果和局限。' },
+  }];
+
+  const accepted = acceptAndRepairAgentResponse({ snapshot, response, session: baseSession });
+
+  assert.equal(accepted.message.acceptance?.failures.some((failure) => failure.code === 'unused-explicit-references'), false);
+  assert.equal(accepted.message.acceptance?.failures.some((failure) => failure.code === 'missing-readable-report'), false);
+});
+
 test('generic UI element references are preserved without forcing selector text into the answer', () => {
   const reference = {
     id: 'ref-ui-explorer-node',

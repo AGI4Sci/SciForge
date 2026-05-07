@@ -657,7 +657,7 @@ function compactUiStateSummary(value: Record<string, unknown>, path: string[], d
   for (const key of ['sessionId', 'activeScenarioId', 'activeRunId', 'scenarioPackageRef', 'skillPlanRef', 'uiPlanRef']) {
     if (value[key] !== undefined) out[key] = compactValue(value[key], [...path, key], depth + 1);
   }
-  for (const key of ['recentExecutionRefs', 'artifactRefs', 'runRefs']) {
+  for (const key of ['recentExecutionRefs', 'artifactRefs', 'runRefs', 'currentReferences']) {
     if (value[key] !== undefined) out[key] = compactValue(value[key], [...path, key], depth + 1);
   }
   return Object.keys(out).length ? out : compactLargeObject({}, value);

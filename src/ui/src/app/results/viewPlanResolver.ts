@@ -2,7 +2,7 @@ import { compileSlotsForScenario } from '../../scenarioCompiler/uiPlanCompiler';
 import { uiModuleRegistry, type PresentationDedupeScope, type RuntimeUIModule } from '../../uiModuleRegistry';
 import type { DisplayIntent, ObjectReference, ResolvedViewPlan, RuntimeArtifact, ScenarioInstanceId, SciForgeRun, SciForgeSession, UIManifestSlot, ViewPlanSection } from '../../domain';
 import type { ScenarioId } from '../../data';
-import { artifactForObjectReference, findArtifact, syntheticArtifactForObjectReference } from '../../../../../packages/object-references';
+import { artifactForObjectReference, syntheticArtifactForObjectReference } from '../../../../../packages/object-references';
 import type { ResultFocusMode } from './ResultShell';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -73,7 +73,11 @@ export function resolveViewPlan({
   focusedObjectReference?: ObjectReference;
   pinnedObjectReferences?: ObjectReference[];
 }): RuntimeResolvedViewPlan {
-  const displayIntent = extractDisplayIntent(activeRun) ?? inferDisplayIntentFromArtifacts(session, activeRun);
+  const effectiveRun = activeRun ?? session.runs.at(-1);
+  const resultArtifacts = artifactsForResultPresentation(session, effectiveRun);
+  const displayIntent = effectiveRun?.status === 'failed'
+    ? inferDisplayIntentFromArtifacts(session, effectiveRun, resultArtifacts)
+    : extractDisplayIntent(effectiveRun) ?? inferDisplayIntentFromArtifacts(session, effectiveRun, resultArtifacts);
   const runtimeSlots = session.runs.length && session.uiManifest.length ? session.uiManifest : [];
   const seedSlots = (runtimeSlots.length ? runtimeSlots : defaultSlots?.length ? defaultSlots : defaultSlotsForAgent(scenarioId))
     .slice()
@@ -138,11 +142,11 @@ export function resolveViewPlan({
       diagnostics.push(`UI module 未发布：${moduleId}`);
       continue;
     }
-    addItem(module, findBestArtifactForModule(session.artifacts, module), 'display-intent');
+    addItem(module, findBestArtifactForModule(resultArtifacts, module), 'display-intent');
   }
 
   for (const artifactType of displayIntent.requiredArtifactTypes ?? []) {
-    const artifact = findBestArtifactForType(session.artifacts, artifactType);
+    const artifact = findBestArtifactForType(resultArtifacts, artifactType);
     const module = findBestModuleForArtifactType(artifact?.type ?? artifactType, displayIntent.preferredModules);
     if (module) {
       addItem(module, artifact, 'display-intent', {}, artifact ? undefined : `等待 artifact type=${artifactType}`);
@@ -151,13 +155,13 @@ export function resolveViewPlan({
     }
   }
 
-  for (const artifact of session.artifacts.slice(0, 12)) {
+  for (const artifact of resultArtifacts.slice(0, 12)) {
     const module = findBestModuleForArtifact(artifact);
     if (module) addItem(module, artifact, 'artifact-inferred');
   }
 
   for (const slot of seedSlots) {
-    const artifact = findArtifact(session, slot.artifactRef);
+    const artifact = findRenderableArtifact(resultArtifacts, slot.artifactRef);
     const currentModule = uiModuleRegistry.find((module) => module.componentId === slot.componentId && moduleAcceptsArtifact(module, artifact?.type ?? slot.artifactRef));
     const replacementModule = artifact ? findBestModuleForArtifact(artifact) : uiModuleRegistry.find((module) => module.componentId === slot.componentId);
     const module = currentModule ?? replacementModule ?? moduleById('generic-artifact-inspector');
@@ -174,7 +178,7 @@ export function resolveViewPlan({
     });
   }
 
-  if (session.claims.length || session.artifacts.some((artifact) => artifact.type === 'evidence-matrix')) {
+  if (session.claims.length || resultArtifacts.some((artifact) => artifact.type === 'evidence-matrix')) {
     addItem(moduleById('evidence-matrix-panel') ?? uiModuleRegistry[3], undefined, 'fallback');
   }
   if (session.executionUnits.length) {
@@ -194,7 +198,7 @@ export function resolveViewPlan({
   };
   ordered.forEach((item) => sections[item.section].push(item));
 
-  const blockedDesign = blockedDesignForIntent(displayIntent, session, ordered, activeRun);
+  const blockedDesign = blockedDesignForIntent(displayIntent, resultArtifacts, ordered, effectiveRun);
   return {
     displayIntent,
     diagnostics,
@@ -226,8 +230,13 @@ function extractDisplayIntent(activeRun?: SciForgeRun): DisplayIntent | undefine
   return undefined;
 }
 
-function inferDisplayIntentFromArtifacts(session: SciForgeSession, activeRun?: SciForgeRun): DisplayIntent {
-  const artifactTypes = Array.from(new Set(session.artifacts.map((artifact) => artifact.type)));
+function artifactsForResultPresentation(session: SciForgeSession, activeRun?: SciForgeRun) {
+  if (activeRun?.status === 'failed') return [];
+  return session.artifacts;
+}
+
+function inferDisplayIntentFromArtifacts(session: SciForgeSession, activeRun?: SciForgeRun, artifacts = session.artifacts): DisplayIntent {
+  const artifactTypes = Array.from(new Set(artifacts.map((artifact) => artifact.type)));
   const text = `${activeRun?.prompt ?? ''}\n${activeRun?.response ?? ''}`.toLowerCase();
   const requiredArtifactTypes = prioritizeArtifactTypes(artifactTypes, text);
   const preferredModules = requiredArtifactTypes
@@ -315,6 +324,11 @@ function findBestArtifactForModule(artifacts: RuntimeArtifact[], module: Runtime
 function findBestArtifactForType(artifacts: RuntimeArtifact[], artifactType: string) {
   return artifacts.find((artifact) => artifact.type === artifactType || artifact.id === artifactType)
     ?? artifacts.find((artifact) => artifactTypeMatches(artifact.type, artifactType));
+}
+
+function findRenderableArtifact(artifacts: RuntimeArtifact[], artifactRef?: string) {
+  if (!artifactRef) return undefined;
+  return artifacts.find((artifact) => artifact.id === artifactRef || artifact.path === artifactRef || artifact.dataRef === artifactRef);
 }
 
 function artifactTypeMatches(actualType: string, requestedType: string) {
@@ -603,13 +617,13 @@ function sectionRank(section: ViewPlanSection) {
 
 function blockedDesignForIntent(
   displayIntent: DisplayIntent,
-  session: SciForgeSession,
+  artifacts: RuntimeArtifact[],
   items: ResolvedViewPlanItem[],
   activeRun?: SciForgeRun,
 ) {
   const requiredTypes = displayIntent.requiredArtifactTypes ?? [];
   const unsupportedType = requiredTypes.find((artifactType) => {
-    const artifact = findBestArtifactForType(session.artifacts, artifactType);
+    const artifact = findBestArtifactForType(artifacts, artifactType);
     if (!artifact) return false;
     const specialized = uiModuleRegistry.find((module) => module.componentId !== 'unknown-artifact-inspector' && moduleAcceptsArtifact(module, artifact.type));
     return !specialized;

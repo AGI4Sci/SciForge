@@ -380,6 +380,8 @@ export interface AgentServerGenerationRequest {
     entrypointType?: SkillManifest['entrypoint']['type'];
     scopeDeclaration?: Record<string, unknown>;
   }>;
+  availableTools?: Array<Record<string, unknown>>;
+  availableRuntimeCapabilities?: Record<string, unknown>;
   artifactSchema: Record<string, unknown>;
   uiManifestContract: Record<string, unknown>;
   uiStateSummary?: Record<string, unknown>;

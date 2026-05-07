@@ -5,13 +5,16 @@ import { join } from 'node:path';
 import { buildContextEnvelope, expectedArtifactSchema, workspaceTreeSummary } from '../../src/runtime/gateway/context-envelope.js';
 import { normalizeGatewayRequest, selectedComponentIdsForRequest } from '../../src/runtime/gateway/gateway-request.js';
 import { runAgentServerGeneratedTask } from '../../src/runtime/gateway/generated-task-runner.js';
+import { agentServerAgentId, currentTurnReferences } from '../../src/runtime/gateway/agentserver-context-window.js';
 import { normalizeArtifactsForPayload, persistArtifactRefsForPayload } from '../../src/runtime/gateway/artifact-materializer.js';
 import { classifyAgentServerBackendFailure, sanitizeAgentServerError } from '../../src/runtime/gateway/backend-failure-diagnostics.js';
-import { coerceAgentServerToolPayload, parseGenerationResponse } from '../../src/runtime/gateway/payload-normalizer.js';
+import { coerceAgentServerToolPayload, parseGenerationResponse, validateAndNormalizePayload } from '../../src/runtime/gateway/payload-normalizer.js';
 import { repairNeededPayload } from '../../src/runtime/gateway/repair-policy.js';
 import { applyRuntimeVerificationPolicy, normalizeRuntimeVerificationPolicy } from '../../src/runtime/gateway/verification-policy.js';
 import { normalizeRuntimeVerificationResults } from '../../src/runtime/gateway/verification-results.js';
 import { normalizeAgentServerWorkspaceEvent, withRequestContextWindowLimit } from '../../src/runtime/gateway/workspace-event-normalizer.js';
+import { requestWithCurrentReferenceDigests } from '../../src/runtime/gateway/current-reference-digest.js';
+import { summarizeRuntimeCapabilitiesForAgentServer, summarizeSkillsForAgentServer } from '../../src/runtime/gateway/agentserver-prompts.js';
 import { readTaskAttempts } from '../../src/runtime/task-attempt-history.js';
 import type { SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types.js';
 
@@ -158,6 +161,142 @@ try {
       promotionHistory: [],
     },
   };
+
+  const capabilityCatalog = summarizeRuntimeCapabilitiesForAgentServer({
+    ...request,
+    selectedToolIds: ['local.vision-sense'],
+    selectedSenseIds: ['local.vision-sense'],
+    selectedComponentIds: ['report-viewer'],
+    selectedVerifierIds: ['verifier.schema-artifact'],
+  }, summarizeSkillsForAgentServer([skill], skill, request.skillDomain));
+  assert.equal(capabilityCatalog.schemaVersion, 'sciforge.runtime-capability-catalog.v1');
+  assert.ok(capabilityCatalog.skills.some((entry) => entry.id === skill.id));
+  assert.ok(capabilityCatalog.senses.some((entry) => entry.id === 'local.vision-sense'));
+  assert.ok(capabilityCatalog.uiComponents.some((entry) => entry.componentId === 'report-viewer' && entry.selected === true));
+  assert.ok(capabilityCatalog.verifiers.some((entry) => entry.id === 'verifier.schema-artifact' && entry.selected === true));
+
+  const currentReferenceRequest = {
+    ...request,
+    uiState: {
+      ...request.uiState,
+      currentReferences: [{
+        kind: 'file',
+        title: 'current-input.pdf',
+        ref: 'file:.sciforge/uploads/current-input.pdf',
+        summary: 'Current turn uploaded file.',
+      }],
+    },
+  };
+  assert.equal(currentTurnReferences(currentReferenceRequest).length, 1);
+  assert.notEqual(
+    agentServerAgentId(request, 'task-generation'),
+    agentServerAgentId(currentReferenceRequest, 'task-generation'),
+    'current-turn references should get an isolated AgentServer session scope',
+  );
+  assert.notEqual(
+    agentServerAgentId(currentReferenceRequest, 'task-generation'),
+    agentServerAgentId({
+      ...currentReferenceRequest,
+      uiState: {
+        ...currentReferenceRequest.uiState,
+        conversationLedger: {
+          tail: [{
+            id: 'msg-new-current-reference-turn',
+            role: 'user',
+            contentPreview: 'Summarize the uploaded report',
+          }],
+        },
+      },
+    }, 'task-generation'),
+    'fresh current-reference turns should not reuse previous AgentServer session memory for the same file',
+  );
+  const digestRequest = await requestWithCurrentReferenceDigests({
+    ...request,
+    uiState: {
+      ...request.uiState,
+      currentReferences: [{ kind: 'file', title: 'report.md', ref: 'file:report.md' }],
+    },
+  }, workspace);
+  const digests = (digestRequest.uiState as Record<string, unknown>).currentReferenceDigests as Array<Record<string, unknown>>;
+  assert.equal(digests.length, 1);
+  assert.equal(digests[0].status, 'ready');
+  assert.match(String(digests[0].digestRef), /^file:\.sciforge\/artifacts\/current-reference-digests\//);
+  const digestEnvelope = buildContextEnvelope(digestRequest, { workspace, workspaceTreeSummary: tree });
+  assert.ok(Array.isArray(digestEnvelope.sessionFacts.currentReferenceDigests));
+  const missingReferenceUse = await validateAndNormalizePayload({
+    message: 'Generated a report.',
+    confidence: 0.8,
+    claimType: 'fact',
+    evidenceLevel: 'runtime',
+    reasoningTrace: 'runtime smoke',
+    claims: [],
+    uiManifest: [{ componentId: 'report-viewer', artifactRef: 'research-report' }],
+    executionUnits: [{ id: 'runtime-smoke', status: 'done', tool: 'smoke' }],
+    artifacts: [{ id: 'research-report', type: 'research-report', data: { markdown: 'Report content without the current reference.' } }],
+  }, currentReferenceRequest, skill, {
+    taskRel: '.sciforge/tasks/reference-smoke.py',
+    outputRel: '.sciforge/task-results/reference-smoke.json',
+    stdoutRel: '.sciforge/logs/reference-smoke.stdout.log',
+    stderrRel: '.sciforge/logs/reference-smoke.stderr.log',
+    runtimeFingerprint: { runtime: 'smoke' },
+  });
+  assert.ok(missingReferenceUse);
+  assert.ok(missingReferenceUse.executionUnits.some((unit) =>
+    unit.status === 'failed-with-reason'
+    && String('failureReason' in unit ? unit.failureReason : '').includes('Current-turn reference was not reflected')
+  ));
+
+  const reflectedReferenceUse = await validateAndNormalizePayload({
+    message: 'Generated a report from current-input.pdf.',
+    confidence: 0.8,
+    claimType: 'fact',
+    evidenceLevel: 'runtime',
+    reasoningTrace: 'runtime smoke',
+    claims: [],
+    uiManifest: [{ componentId: 'report-viewer', artifactRef: 'research-report' }],
+    executionUnits: [{ id: 'runtime-smoke', status: 'done', tool: 'smoke' }],
+    artifacts: [{ id: 'research-report', type: 'research-report', data: { markdown: 'Report based on current-input.pdf.' } }],
+  }, currentReferenceRequest, skill, {
+    taskRel: '.sciforge/tasks/reference-smoke-ok.py',
+    outputRel: '.sciforge/task-results/reference-smoke-ok.json',
+    stdoutRel: '.sciforge/logs/reference-smoke-ok.stdout.log',
+    stderrRel: '.sciforge/logs/reference-smoke-ok.stderr.log',
+    runtimeFingerprint: { runtime: 'smoke' },
+  });
+  assert.ok(reflectedReferenceUse);
+  assert.ok(!reflectedReferenceUse.executionUnits.some((unit) => unit.status === 'failed-with-reason'));
+
+  const uploadPathReferenceUse = await validateAndNormalizePayload({
+    message: 'Generated a CellPulse paper report.',
+    confidence: 0.8,
+    claimType: 'fact',
+    evidenceLevel: 'runtime',
+    reasoningTrace: 'runtime smoke',
+    claims: [],
+    uiManifest: [{ componentId: 'report-viewer', artifactRef: 'research-report' }],
+    executionUnits: [{ id: 'runtime-smoke', status: 'done', tool: 'smoke' }],
+    artifacts: [{ id: 'research-report', type: 'research-report', data: { markdown: '# CellPulse report\n\nSummary based on the uploaded paper.' } }],
+  }, {
+    ...request,
+    uiState: {
+      ...request.uiState,
+      currentReferences: [{
+        kind: 'file',
+        title: 'CellPulse.pdf',
+        ref: '.sciforge/uploads/session-literature/upload-mov3dd8l-eufu1k-CellPulse.pdf',
+        summary: 'Current turn uploaded file.',
+      }],
+    },
+  }, skill, {
+    taskRel: '.sciforge/tasks/reference-upload-stem-smoke.py',
+    outputRel: '.sciforge/task-results/reference-upload-stem-smoke.json',
+    stdoutRel: '.sciforge/logs/reference-upload-stem-smoke.stdout.log',
+    stderrRel: '.sciforge/logs/reference-upload-stem-smoke.stderr.log',
+    runtimeFingerprint: { runtime: 'smoke' },
+  });
+  assert.ok(uploadPathReferenceUse);
+  assert.ok(!uploadPathReferenceUse.executionUnits.some((unit) => unit.status === 'failed-with-reason'));
+
   const repair = repairNeededPayload(request, skill, 'AgentServer base URL missing', {}, { scenarioPackageId: 'smoke' });
   assert.equal(repair.executionUnits[0].status, 'repair-needed');
   assert.ok(String(repair.executionUnits[0].params).includes('AgentServer base URL missing'));
@@ -224,6 +363,145 @@ try {
   assert.ok(runnerAttemptId, 'generated runner should expose output ref containing task id');
   const runnerAttempts = await readTaskAttempts(workspace, runnerAttemptId);
   assert.equal(runnerAttempts[0]?.status, 'done');
+
+  const generatedReferencePayload = await runAgentServerGeneratedTask(currentReferenceRequest, skill, [skill], {}, {
+    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
+    requestAgentServerGeneration: async () => ({
+      ok: true,
+      runId: 'runner-current-ref-smoke-run',
+      response: {
+        taskFiles: [{
+          path: '.sciforge/tasks/runner-current-ref-smoke.py',
+          language: 'python',
+          content: [
+            'import json, sys',
+            '_, input_path, output_path = sys.argv',
+            'inp = json.load(open(input_path, encoding="utf-8"))',
+            'refs = inp.get("uiStateSummary", {}).get("currentReferences", [])',
+            'prior = inp.get("priorAttempts", [])',
+            'ref_title = refs[0].get("title", "missing-ref") if refs else "missing-ref"',
+            'payload = {',
+            '  "message": f"Generated a report from {ref_title}; priorAttempts={len(prior)}.",',
+            '  "confidence": 0.9,',
+            '  "claimType": "fact",',
+            '  "evidenceLevel": "runtime",',
+            '  "reasoningTrace": "current-reference runner smoke",',
+            '  "claims": [{"text": f"Current reference {ref_title} was used", "confidence": 0.9}],',
+            '  "uiManifest": [{"componentId": "report-viewer", "artifactRef": "runner-reference-report"}],',
+            '  "executionUnits": [{"id": "runner-current-reference", "status": "done", "tool": "python"}],',
+            '  "artifacts": [{"id": "runner-reference-report", "type": "research-report", "data": {"markdown": f"## Report based on {ref_title}\\n\\nPrior attempts visible: {len(prior)}"}}]',
+            '}',
+            'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
+          ].join('\n'),
+        }],
+        entrypoint: { language: 'python', path: '.sciforge/tasks/runner-current-ref-smoke.py' },
+        environmentRequirements: {},
+        validationCommand: '',
+        expectedArtifacts: ['research-report'],
+        patchSummary: 'current reference runner smoke task',
+      },
+    }),
+    agentServerGenerationFailureReason: (error) => error,
+    attemptPlanRefs: () => ({ scenarioPackageRef: request.scenarioPackageRef }),
+    repairNeededPayload: (req, selectedSkill, reason) => repairNeededPayload(req, selectedSkill, reason),
+    agentServerFailurePayloadRefs: () => ({}),
+    ensureDirectAnswerReportArtifact: (payload) => payload,
+    mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
+    validateAndNormalizePayload: async (payload, _req, selectedSkill, refs): Promise<ToolPayload> => ({
+      ...payload,
+      reasoningTrace: `${payload.reasoningTrace}\nSkill: ${selectedSkill.id}\nRuntime gateway refs: taskCodeRef=${refs.taskRel}, outputRef=${refs.outputRel}`,
+      executionUnits: payload.executionUnits.map((unit) => ({ ...unit, skillId: selectedSkill.id, outputRef: refs.outputRel })),
+      logs: [{ kind: 'stdout', ref: refs.stdoutRel }, { kind: 'stderr', ref: refs.stderrRel }],
+    }),
+    tryAgentServerRepairAndRerun: async () => undefined,
+    failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
+    coerceWorkspaceTaskPayload: (value) => coerceAgentServerToolPayload(value),
+    schemaErrors: (payload) => {
+      const record = payload as Record<string, unknown>;
+      return ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts'].filter((key) => !(key in record)).map((key) => `missing ${key}`);
+    },
+    firstPayloadFailureReason: () => undefined,
+    payloadHasFailureStatus: () => false,
+  });
+  assert.match(generatedReferencePayload?.message ?? '', /current-input\.pdf; priorAttempts=0/);
+
+  let staticTaskRetryCount = 0;
+  const staticTaskRetriedPayload = await runAgentServerGeneratedTask(currentReferenceRequest, skill, [skill], {}, {
+    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
+    requestAgentServerGeneration: async () => {
+      staticTaskRetryCount += 1;
+      if (staticTaskRetryCount === 1) {
+        return {
+          ok: true,
+          runId: 'runner-static-task-smoke-run',
+          response: {
+            taskFiles: [{
+              path: '.sciforge/tasks/static-report.py',
+              language: 'python',
+              content: [
+                'import json',
+                'payload = {',
+                '  "message": "Static report from current-input.pdf",',
+                '  "confidence": 0.9,',
+                '  "claimType": "fact",',
+                '  "evidenceLevel": "runtime",',
+                '  "reasoningTrace": "static task smoke",',
+                '  "claims": [],',
+                '  "uiManifest": [{"componentId": "report-viewer", "artifactRef": "static-report"}],',
+                '  "executionUnits": [{"id": "static", "status": "done", "tool": "python"}],',
+                '  "artifacts": [{"id": "static-report", "type": "research-report", "data": {"markdown": "Hard-coded current-input.pdf report"}}]',
+                '}',
+                'print(json.dumps(payload))',
+              ].join('\n'),
+            }],
+            entrypoint: { language: 'python', path: '.sciforge/tasks/static-report.py' },
+            environmentRequirements: {},
+            validationCommand: '',
+            expectedArtifacts: ['research-report'],
+            patchSummary: 'static report task should be retried',
+          },
+        };
+      }
+      return {
+        ok: true,
+        runId: 'runner-static-task-direct-run',
+        directPayload: {
+          message: 'Direct report from current-input.pdf after static task retry.',
+          confidence: 0.9,
+          claimType: 'fact',
+          evidenceLevel: 'runtime',
+          reasoningTrace: 'static generated task retry returned direct payload',
+          claims: [],
+          uiManifest: [{ componentId: 'report-viewer', artifactRef: 'direct-static-retry-report' }],
+          executionUnits: [{ id: 'direct-static-retry', status: 'done', tool: 'agentserver.direct' }],
+          artifacts: [{ id: 'direct-static-retry-report', type: 'research-report', data: { markdown: 'Report based on current-input.pdf.' } }],
+        },
+      };
+    },
+    agentServerGenerationFailureReason: (error) => error,
+    attemptPlanRefs: () => ({ scenarioPackageRef: request.scenarioPackageRef }),
+    repairNeededPayload: (req, selectedSkill, reason) => repairNeededPayload(req, selectedSkill, reason),
+    agentServerFailurePayloadRefs: () => ({}),
+    ensureDirectAnswerReportArtifact: (payload) => payload,
+    mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
+    validateAndNormalizePayload: async (payload, _req, selectedSkill, refs): Promise<ToolPayload> => ({
+      ...payload,
+      reasoningTrace: `${payload.reasoningTrace}\nSkill: ${selectedSkill.id}\nRuntime gateway refs: taskCodeRef=${refs.taskRel}, outputRef=${refs.outputRel}`,
+      executionUnits: payload.executionUnits.map((unit) => ({ ...unit, skillId: selectedSkill.id, outputRef: refs.outputRel })),
+      logs: [{ kind: 'stdout', ref: refs.stdoutRel }, { kind: 'stderr', ref: refs.stderrRel }],
+    }),
+    tryAgentServerRepairAndRerun: async () => undefined,
+    failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
+    coerceWorkspaceTaskPayload: (value) => coerceAgentServerToolPayload(value),
+    schemaErrors: (payload) => {
+      const record = payload as Record<string, unknown>;
+      return ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts'].filter((key) => !(key in record)).map((key) => `missing ${key}`);
+    },
+    firstPayloadFailureReason: () => undefined,
+    payloadHasFailureStatus: () => false,
+  });
+  assert.equal(staticTaskRetryCount, 2);
+  assert.match(staticTaskRetriedPayload?.message ?? '', /Direct report from current-input\.pdf/);
 
   const unverified = await applyRuntimeVerificationPolicy({
     message: 'Low risk answer',

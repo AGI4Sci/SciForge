@@ -322,7 +322,83 @@ describe('sendSciForgeToolMessage routing', () => {
       artifacts: [{ id: 'upload-pdf', type: 'uploaded-pdf', producerScenario: 'literature-evidence-review', schemaVersion: '1' }],
     });
 
-    assert.deepEqual(policy, { isolated: false, reason: 'explicit-user-reference' });
+    assert.deepEqual(policy, { isolated: true, reason: 'explicit-current-reference' });
+  });
+
+  it('isolates stale history when the current turn asks about an explicit uploaded file', async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    globalThis.fetch = (async (_url, init) => {
+      requestBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        ok: true,
+        result: {
+          message: 'current reference summarized',
+          confidence: 0.8,
+          claimType: 'fact',
+          evidenceLevel: 'runtime',
+          uiManifest: [],
+          executionUnits: [{ id: 'EU-current-reference', tool: 'sciforge.workspace-runtime-gateway', status: 'done' }],
+          artifacts: [],
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    await sendSciForgeToolMessage({
+      ...baseInput(),
+      scenarioId: 'literature-evidence-review',
+      agentName: 'Literature',
+      agentDomain: 'literature',
+      scenarioOverride: {
+        title: '通用分析场景',
+        description: '基于用户引用作答',
+        skillDomain: 'literature',
+        scenarioMarkdown: '按用户原始问题和本轮引用作答。',
+        defaultComponents: ['report-viewer', 'paper-card-list', 'execution-unit-table'],
+        allowedComponents: ['report-viewer', 'paper-card-list', 'execution-unit-table'],
+        fallbackComponent: 'unknown-artifact-inspector',
+      },
+      messages: [
+        { id: 'msg-old-user', role: 'user', content: '围绕旧主题 Alpha 检索资料并写综述。', createdAt: '2026-05-06T00:00:00.000Z' },
+        { id: 'msg-old-agent', role: 'scenario', content: '已生成旧主题 Alpha 的列表和报告。', createdAt: '2026-05-06T00:01:00.000Z' },
+        { id: 'msg-current', role: 'user', content: '阅读理解这份文件，写一份总结报告', createdAt: '2026-05-07T00:00:00.000Z' },
+      ],
+      runs: [{
+        id: 'run-old-topic',
+        scenarioId: 'literature-evidence-review',
+        status: 'completed',
+        prompt: '围绕旧主题 Alpha 检索资料并写综述。',
+        response: '旧主题 Alpha 报告',
+        createdAt: '2026-05-06T00:00:00.000Z',
+        completedAt: '2026-05-06T00:01:00.000Z',
+      }],
+      artifacts: [{
+        id: 'old-research-report',
+        type: 'research-report',
+        producerScenario: 'literature-evidence-review',
+        schemaVersion: '1',
+        data: { markdown: '旧主题 Alpha 报告' },
+      }],
+      references: [{
+        id: 'ref-current-file',
+        kind: 'file',
+        title: 'current-upload.pdf',
+        ref: 'file:.sciforge/uploads/session-upload/current-upload.pdf',
+        summary: '用户本轮上传的文件。',
+      }],
+      prompt: '阅读理解这份文件，写一份总结报告',
+    });
+
+    assert.deepEqual(requestBody?.artifacts, []);
+    const uiState = requestBody?.uiState as Record<string, unknown>;
+    assert.deepEqual(uiState.recentConversation, ['user: 阅读理解这份文件，写一份总结报告']);
+    assert.deepEqual(uiState.recentRuns, []);
+    assert.deepEqual(uiState.contextIsolation, { isolated: true, reason: 'explicit-current-reference' });
+    assert.equal(JSON.stringify(uiState.conversationLedger).includes('旧主题 Alpha'), false);
+    assert.equal(JSON.stringify(uiState.agentContext).includes('旧主题 Alpha'), false);
+    assert.equal((requestBody?.references as Array<Record<string, unknown>>)[0].title, 'current-upload.pdf');
   });
 
   it('passes scenario artifact hints into the AgentServer contract without prompt keyword routing', async () => {

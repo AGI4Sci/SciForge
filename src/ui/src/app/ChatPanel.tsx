@@ -910,7 +910,7 @@ function runReadiness({
   };
 }
 
-function runIdForMessage(
+export function runIdForMessage(
   message: SciForgeMessage,
   index: number,
   messages: SciForgeMessage[],
@@ -921,9 +921,10 @@ function runIdForMessage(
     const normalizedContent = normalizeRunPrompt(message.content);
     return [...runs].reverse().find((run) => normalizeRunPrompt(run.prompt) === normalizedContent)?.id;
   }
+  if (message.role !== 'scenario') return undefined;
   const responseIndex = messages
     .slice(0, index + 1)
-    .filter((item) => !item.id.startsWith('seed') && item.role !== 'user')
+    .filter((item) => !item.id.startsWith('seed') && item.role === 'scenario')
     .length - 1;
   return runs[responseIndex]?.id;
 }
@@ -1199,13 +1200,14 @@ function RunKeyInfo({
   onObjectFocus?: (reference: ObjectReference) => void;
 }) {
   const run = session.runs.find((item) => item.id === runId);
+  if (run?.status === 'failed') return null;
   const objectRefs = run?.objectReferences ?? [];
   const artifactRefIds = new Set(objectRefs.filter((ref) => ref.kind === 'artifact').map((ref) => ref.ref.replace(/^artifact:/, '')));
   const artifacts = session.artifacts
     .filter((artifact) => artifactRefIds.has(artifact.id) || artifact.metadata?.runId === runId)
     .slice(0, 4);
   const artifactReferences = artifacts.map((artifact) => objectReferenceForArtifactSummary(artifact, runId));
-  const claims = session.claims.slice(0, 3);
+  const claims = claimsForRun(session, runId, artifacts.map((artifact) => artifact.id)).slice(0, 3);
   if (!artifacts.length && !claims.length) return null;
   const objectNames = artifacts.map(artifactTitle).join('、') || '暂无新对象';
   return (
@@ -1235,6 +1237,28 @@ function RunKeyInfo({
 
 function artifactTitle(artifact: RuntimeArtifact) {
   return String(artifact.metadata?.title || artifact.metadata?.name || artifact.id);
+}
+
+function claimsForRun(session: SciForgeSession, runId: string, artifactIds: string[]) {
+  const run = session.runs.find((item) => item.id === runId);
+  const runRefTokens = new Set([
+    runId,
+    `run:${runId}`,
+    ...artifactIds,
+    ...artifactIds.map((id) => `artifact:${id}`),
+    ...(run?.objectReferences ?? []).map((reference) => reference.ref),
+  ].filter(Boolean));
+  const start = run?.createdAt ? Date.parse(run.createdAt) : Number.NaN;
+  const end = run?.completedAt ? Date.parse(run.completedAt) : Number.NaN;
+  return session.claims.filter((claim) => {
+    const refs = [...claim.supportingRefs, ...claim.opposingRefs, ...(claim.dependencyRefs ?? [])];
+    if (refs.some((ref) => runRefTokens.has(ref))) return true;
+    const updated = Date.parse(claim.updatedAt);
+    return Number.isFinite(start)
+      && Number.isFinite(updated)
+      && updated >= start
+      && (!Number.isFinite(end) || updated <= end + 5000);
+  });
 }
 
 function SciForgeReferenceChips({

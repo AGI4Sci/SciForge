@@ -495,7 +495,7 @@ function looksLikeDomSelector(value: string) {
 }
 
 function responseReflectsReferenceUse(reference: SciForgeReference, response: NormalizedAgentResponse, objectReferences: ObjectReference[]) {
-  const haystack = [
+  const answerAndArtifactHaystack = [
     response.message.content,
     response.run.response,
     ...response.artifacts.flatMap((artifact) => [
@@ -506,6 +506,14 @@ function responseReflectsReferenceUse(reference: SciForgeReference, response: No
       JSON.stringify(artifact.metadata ?? {}),
       compactArtifactDataForReferenceReflection(artifact.data),
     ]),
+    ...response.claims.flatMap((claim) => [
+      claim.text,
+      claim.supportingRefs.join(' '),
+      claim.opposingRefs.join(' '),
+      claim.dependencyRefs?.join(' '),
+    ]),
+  ].filter(Boolean).join('\n').toLowerCase();
+  const objectReferenceHaystack = [
     ...objectReferences.flatMap((objectRef) => [
       objectRef.id,
       objectRef.title,
@@ -514,6 +522,9 @@ function responseReflectsReferenceUse(reference: SciForgeReference, response: No
       objectRef.artifactType,
     ]),
   ].filter(Boolean).join('\n').toLowerCase();
+  const haystack = shouldAllowObjectReferenceOnlyReflection(reference)
+    ? `${answerAndArtifactHaystack}\n${objectReferenceHaystack}`
+    : answerAndArtifactHaystack;
   const payload = isRecord(reference.payload) ? reference.payload : {};
   const selectedText = typeof payload.selectedText === 'string' ? payload.selectedText : '';
   const composerMarker = typeof payload.composerMarker === 'string' ? payload.composerMarker : '';
@@ -532,6 +543,10 @@ function responseReflectsReferenceUse(reference: SciForgeReference, response: No
   return tokens.some((token) => containsMeaningfulReferenceToken(haystack, token));
 }
 
+function shouldAllowObjectReferenceOnlyReflection(reference: SciForgeReference) {
+  return reference.kind === 'ui' || reference.kind === 'chart';
+}
+
 function compactArtifactDataForReferenceReflection(data: unknown) {
   if (typeof data === 'string') return data.slice(0, 8000);
   if (!isRecord(data)) return '';
@@ -546,9 +561,38 @@ function containsMeaningfulReferenceToken(haystack: string, token: string) {
   const normalized = token.replace(/\s+/g, ' ').trim().toLowerCase();
   if (!normalized) return false;
   if (haystack.includes(normalized)) return true;
+  if (looksLikeReferencePathToken(normalized)) {
+    const basename = normalized.replace(/^file:/, '').split(/[\\/]/).filter(Boolean).pop();
+    return fileNameReflectionTokens(basename).some((candidate) => haystack.includes(candidate));
+  }
   if (normalized.length > 48 && haystack.includes(normalized.slice(0, 48))) return true;
   const words = normalized.match(/[\p{L}\p{N}_-]{4,}/gu) ?? [];
   return words.slice(0, 8).some((word) => haystack.includes(word));
+}
+
+function fileNameReflectionTokens(basename: string | undefined) {
+  if (!basename) return [];
+  const decoded = decodeURIComponentSafe(basename).toLowerCase();
+  const withoutQuery = decoded.split(/[?#]/)[0] ?? decoded;
+  const stem = withoutQuery.replace(/\.[a-z0-9]{1,12}$/i, '');
+  const suffixStem = stem.split('-').filter(Boolean).pop() ?? '';
+  return [withoutQuery, stem, suffixStem]
+    .map((token) => token.trim())
+    .filter((token, index, tokens) => token.length >= 4 && tokens.indexOf(token) === index);
+}
+
+function decodeURIComponentSafe(value: string) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function looksLikeReferencePathToken(value: string) {
+  return /^(?:file|artifact|folder|url):/i.test(value)
+    || /[\\/]/.test(value)
+    || /\.(?:pdf|docx?|xlsx?|csv|tsv|json|md|markdown|txt|png|jpe?g|gif|webp|svg|html?|pdb|cif|mmcif)$/i.test(value);
 }
 
 function presentationRepairMessage(content: string, acceptance: TurnAcceptance) {

@@ -1,5 +1,5 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import { appendTaskAttempt, readRecentTaskAttempts } from '../task-attempt-history.js';
 import type { AgentServerGenerationResponse, GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult } from '../runtime-types.js';
 import { fileExists, runWorkspaceTask, sha1 } from '../workspace-task-runner.js';
@@ -8,6 +8,7 @@ import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
 import { errorMessage, generatedTaskArchiveRel, isRecord, isTaskInputRel, safeWorkspaceRel, toRecordList, uniqueStrings } from '../gateway-utils.js';
 import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from './gateway-request.js';
 import { summarizeTaskAttemptsForAgentServer } from './context-envelope.js';
+import { currentTurnReferences } from './agentserver-context-window.js';
 import { sanitizeAgentServerError } from './backend-failure-diagnostics.js';
 
 type AgentServerGenerationResult =
@@ -153,6 +154,45 @@ export async function runAgentServerGeneratedTask(
     };
   }
 
+  const nonExecutableEntrypointReason = generatedEntrypointContractReason(generation.response);
+  if (nonExecutableEntrypointReason) {
+    emitWorkspaceRuntimeEvent(callbacks, {
+      type: 'agentserver-generation-retry',
+      source: 'workspace-runtime',
+      status: 'running',
+      message: nonExecutableEntrypointReason,
+      detail: 'Retrying AgentServer generation once; entrypoint must be executable code, while reports/data must be emitted as artifacts or direct ToolPayload content.',
+    });
+    const retriedGeneration = await requestAgentServerGeneration({
+      baseUrl,
+      request,
+      skill,
+      skills,
+      workspace,
+      callbacks,
+      strictTaskFilesReason: nonExecutableEntrypointReason,
+    });
+    if (!retriedGeneration.ok) return repairNeededPayload(request, skill, retriedGeneration.error);
+    if ('directPayload' in retriedGeneration) {
+      const directPayload = await mergeReusableContextArtifactsForDirectPayload(
+        ensureDirectAnswerReportArtifact(retriedGeneration.directPayload, request, 'agentserver-direct-payload'),
+        request,
+      );
+      return await validateAndNormalizePayload(directPayload, request, skill, {
+        taskRel: 'agentserver://direct-payload',
+        outputRel: `agentserver://${retriedGeneration.runId || 'unknown'}/output`,
+        stdoutRel: `agentserver://${retriedGeneration.runId || 'unknown'}/stdout`,
+        stderrRel: `agentserver://${retriedGeneration.runId || 'unknown'}/stderr`,
+        runtimeFingerprint: { runtime: 'AgentServer direct ToolPayload', runId: retriedGeneration.runId },
+      });
+    }
+    generation = retriedGeneration;
+    const retryReason = generatedEntrypointContractReason(generation.response);
+    if (retryReason) {
+      return repairNeededPayload(request, skill, `AgentServer generation contract violation: ${nonExecutableEntrypointReason}. Strict retry still returned invalid entrypoint: ${retryReason}`);
+    }
+  }
+
   const missingPathOnlyTaskFiles = await missingGeneratedTaskFileContents(workspace, generation.response.taskFiles);
   if (missingPathOnlyTaskFiles.length) {
     const reason = `AgentServer returned path-only taskFiles that were not present in the workspace and had no inline content: ${missingPathOnlyTaskFiles.join(', ')}`;
@@ -190,6 +230,47 @@ export async function runAgentServerGeneratedTask(
         `Strict retry still returned path-only taskFiles without inline content or workspace files: ${stillMissingPathOnlyTaskFiles.join(', ')}`,
       ].join('. ');
       return repairNeededPayload(request, skill, `AgentServer generation contract violation: ${contractReason}`);
+    }
+  }
+
+  const taskInterfaceReason = await generatedTaskInterfaceContractReason(workspace, generation.response);
+  if (taskInterfaceReason) {
+    emitWorkspaceRuntimeEvent(callbacks, {
+      type: 'agentserver-generation-retry',
+      source: 'workspace-runtime',
+      status: 'running',
+      message: taskInterfaceReason,
+      detail: 'Retrying AgentServer generation once; generated tasks must consume the SciForge task input and write the declared output payload, not bake the current answer into static code.',
+    });
+    const retriedGeneration = await requestAgentServerGeneration({
+      baseUrl,
+      request,
+      skill,
+      skills,
+      workspace,
+      callbacks,
+      strictTaskFilesReason: taskInterfaceReason,
+    });
+    if (!retriedGeneration.ok) {
+      return repairNeededPayload(request, skill, retriedGeneration.error);
+    }
+    if ('directPayload' in retriedGeneration) {
+      const directPayload = await mergeReusableContextArtifactsForDirectPayload(
+        ensureDirectAnswerReportArtifact(retriedGeneration.directPayload, request, 'agentserver-direct-payload'),
+        request,
+      );
+      return await validateAndNormalizePayload(directPayload, request, skill, {
+        taskRel: 'agentserver://direct-payload',
+        outputRel: `agentserver://${retriedGeneration.runId || 'unknown'}/output`,
+        stdoutRel: `agentserver://${retriedGeneration.runId || 'unknown'}/stdout`,
+        stderrRel: `agentserver://${retriedGeneration.runId || 'unknown'}/stderr`,
+        runtimeFingerprint: { runtime: 'AgentServer direct ToolPayload', runId: retriedGeneration.runId },
+      });
+    }
+    generation = retriedGeneration;
+    const retryInterfaceReason = await generatedTaskInterfaceContractReason(workspace, generation.response);
+    if (retryInterfaceReason) {
+      return repairNeededPayload(request, skill, `AgentServer generation contract violation: ${taskInterfaceReason}. Strict retry still returned a static/non-interface task: ${retryInterfaceReason}`);
     }
   }
 
@@ -245,11 +326,13 @@ export async function runAgentServerGeneratedTask(
       artifacts: request.artifacts,
       uiStateSummary: request.uiState,
       recentExecutionRefs: toRecordList(request.uiState?.recentExecutionRefs),
-      priorAttempts: summarizeTaskAttemptsForAgentServer(await readRecentTaskAttempts(workspace, request.skillDomain, 8, {
-        scenarioPackageId: request.scenarioPackageRef?.id,
-        skillPlanRef: request.skillPlanRef,
-        prompt: request.prompt,
-      })),
+      priorAttempts: currentTurnReferences(request).length
+        ? []
+        : summarizeTaskAttemptsForAgentServer(await readRecentTaskAttempts(workspace, request.skillDomain, 8, {
+          scenarioPackageId: request.scenarioPackageRef?.id,
+          skillPlanRef: request.skillPlanRef,
+          prompt: request.prompt,
+        })),
       expectedArtifacts: generatedExpectedArtifacts,
       selectedComponentIds: selectedComponentIdsForRequest(request),
     },
@@ -415,6 +498,65 @@ export async function runAgentServerGeneratedTask(
     if (repaired) return repaired;
     return failedTaskPayload(request, skill, run, failureReason);
   }
+}
+
+function generatedEntrypointContractReason(response: AgentServerGenerationResponse) {
+  const entryRel = safeWorkspaceRel(response.entrypoint.path);
+  const ext = extname(entryRel).toLowerCase();
+  const language = String(response.entrypoint.language || '').toLowerCase();
+  const executableExts = new Set(['.py', '.r', '.R', '.sh', '.bash', '.zsh', '.js', '.mjs', '.ts']);
+  const artifactExts = new Set(['.md', '.markdown', '.txt', '.json', '.csv', '.tsv', '.pdf', '.png', '.jpg', '.jpeg', '.html']);
+  if (artifactExts.has(ext) && !executableExts.has(ext)) {
+    return `AgentServer returned a non-executable artifact/report as entrypoint: ${entryRel}. Return a direct ToolPayload for report-only answers, or use an executable task file that writes the report artifact.`;
+  }
+  if ((language === 'python' || !language) && ext && !['.py'].includes(ext)) {
+    return `AgentServer entrypoint language/path mismatch: language=${language || 'python'} path=${entryRel}.`;
+  }
+  const entryFile = response.taskFiles.find((file) => safeWorkspaceRel(file.path) === entryRel);
+  if (entryFile && artifactExts.has(ext) && !/^(python|r|shell|cli|javascript|typescript)$/i.test(String(entryFile.language || ''))) {
+    return `AgentServer taskFiles marks artifact-like entrypoint ${entryRel} as ${entryFile.language || 'unknown'} instead of executable code.`;
+  }
+  return undefined;
+}
+
+async function generatedTaskInterfaceContractReason(workspace: string, response: AgentServerGenerationResponse) {
+  const entryRel = safeWorkspaceRel(response.entrypoint.path);
+  const content = response.taskFiles.find((file) => safeWorkspaceRel(file.path) === entryRel)?.content
+    ?? await readGeneratedTaskFileIfPresent(workspace, entryRel);
+  if (content === undefined) return undefined;
+  const language = String(response.entrypoint.language || '').toLowerCase();
+  const ext = extname(entryRel).toLowerCase();
+  const source = content.slice(0, 240_000);
+  const readsInput = taskSourceReadsInputArg(source, language, ext);
+  const writesOutput = taskSourceWritesOutputArg(source, language, ext);
+  if (!readsInput || !writesOutput) {
+    const missing = [
+      readsInput ? '' : 'read the SciForge inputPath argument',
+      writesOutput ? '' : 'write the SciForge outputPath argument',
+    ].filter(Boolean).join(' and ');
+    return [
+      `AgentServer generated task ${entryRel} does not ${missing}.`,
+      'Generated workspace tasks must be reusable adapters that read request/current-reference data from argv inputPath and write a valid ToolPayload to argv outputPath.',
+      'For report-only answers already reasoned by AgentServer, return a direct ToolPayload instead of static code that embeds the current report.',
+    ].join(' ');
+  }
+  return undefined;
+}
+
+function taskSourceReadsInputArg(source: string, language: string, ext: string) {
+  if (language === 'python' || ext === '.py') return /\bsys\.argv\b|argparse|click\.|typer\.|input[_-]?path/i.test(source);
+  if (['javascript', 'typescript', 'node'].includes(language) || ['.js', '.mjs', '.ts'].includes(ext)) return /\bprocess\.argv\b|parseArgs|input[_-]?path/i.test(source);
+  if (['shell', 'bash', 'zsh', 'sh'].includes(language) || ['.sh', '.bash', '.zsh'].includes(ext)) return /(^|[^\\])\$\{?1\}?|\binput[_-]?path\b/i.test(source);
+  if (language === 'r' || ['.r', '.R'].includes(ext)) return /commandArgs|input[_-]?path/i.test(source);
+  return /argv|args|input[_-]?path/i.test(source);
+}
+
+function taskSourceWritesOutputArg(source: string, language: string, ext: string) {
+  if (language === 'python' || ext === '.py') return /\bsys\.argv\b|argparse|click\.|typer\.|output[_-]?path/i.test(source);
+  if (['javascript', 'typescript', 'node'].includes(language) || ['.js', '.mjs', '.ts'].includes(ext)) return /\bprocess\.argv\b|parseArgs|output[_-]?path/i.test(source);
+  if (['shell', 'bash', 'zsh', 'sh'].includes(language) || ['.sh', '.bash', '.zsh'].includes(ext)) return /(^|[^\\])\$\{?2\}?|\boutput[_-]?path\b/i.test(source);
+  if (language === 'r' || ['.r', '.R'].includes(ext)) return /commandArgs|output[_-]?path/i.test(source);
+  return /argv|args|output[_-]?path/i.test(source);
 }
 
 async function tryAgentServerSupplementMissingArtifacts(params: {

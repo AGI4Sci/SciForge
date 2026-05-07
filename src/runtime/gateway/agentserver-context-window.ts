@@ -607,7 +607,8 @@ export function contextCompactionMetadata(compaction: BackendContextCompactionRe
 export function agentServerAgentId(request: GatewayRequest, _purpose: string) {
   const sessionId = typeof request.uiState?.sessionId === 'string' ? request.uiState.sessionId : '';
   const packageId = request.scenarioPackageRef?.id || request.skillDomain;
-  const stable = [packageId, sessionId || request.skillPlanRef || request.skillDomain]
+  const referenceScope = currentReferenceScopeKey(request);
+  const stable = [packageId, referenceScope || sessionId || request.skillPlanRef || request.skillDomain]
     .filter(Boolean)
     .join(':');
   return `sciforge-${request.skillDomain}-${sha1(stable).slice(0, 12)}`;
@@ -615,17 +616,48 @@ export function agentServerAgentId(request: GatewayRequest, _purpose: string) {
 
 export function agentServerContextPolicy(request: GatewayRequest) {
   const hasSession = typeof request.uiState?.sessionId === 'string' && request.uiState.sessionId.trim().length > 0;
+  const isolatedReferenceTurn = currentTurnReferences(request).length > 0;
   return {
-    includeCurrentWork: hasSession,
-    includeRecentTurns: hasSession,
+    includeCurrentWork: hasSession && !isolatedReferenceTurn,
+    includeRecentTurns: hasSession && !isolatedReferenceTurn,
     includePersistent: false,
     includeMemory: false,
-    persistRunSummary: hasSession,
+    persistRunSummary: hasSession && !isolatedReferenceTurn,
     persistExtractedConstraints: false,
     maxContextWindowTokens: request.maxContextWindowTokens,
     contextWindowLimit: request.maxContextWindowTokens,
     modelContextWindow: request.maxContextWindowTokens,
   };
+}
+
+export function currentTurnReferences(request: GatewayRequest) {
+  return toRecordList(request.uiState?.currentReferences);
+}
+
+function currentReferenceScopeKey(request: GatewayRequest) {
+  const refs = currentTurnReferences(request);
+  if (!refs.length) return '';
+  const stable = refs.map((ref) => ({
+    kind: ref.kind,
+    ref: ref.ref,
+    title: ref.title,
+    sourceId: ref.sourceId,
+  }));
+  const currentTurnId = currentReferenceTurnId(request);
+  return `current-refs:${sha1(JSON.stringify({ refs: stable, currentTurnId })).slice(0, 12)}`;
+}
+
+function currentReferenceTurnId(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const ledger = toRecordList(uiState.conversationLedger);
+  const tail = toRecordList(isRecord(uiState.conversationLedger) ? uiState.conversationLedger.tail : undefined);
+  const turns = tail.length ? tail : ledger;
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index];
+    if (String(turn.role || '').toLowerCase() !== 'user') continue;
+    return stringField(turn.id) || stringField(turn.turnId) || stringField(turn.createdAt) || stringField(turn.contentDigest);
+  }
+  return stringField(uiState.currentTurnId) || sha1(String(request.prompt || '')).slice(0, 12);
 }
 
 export function estimateWorkspaceContextWindowState(params: {

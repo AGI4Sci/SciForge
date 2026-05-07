@@ -11,6 +11,8 @@ import { readRecentTaskAttempts } from '../task-attempt-history.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { parseJsonErrorMessage, redactSecretText, sanitizeAgentServerError } from './backend-failure-diagnostics.js';
 import { toolPackageManifests } from '../../../packages/tools';
+import { uiComponentManifests } from '../../../packages/ui-components';
+import { defaultCapabilitySummaries } from '../../shared/capabilityRegistry.js';
 
 const AGENT_BACKEND_ANSWER_PRINCIPLE = [
   'All normal user-visible answers must be reasoned by the agent backend.',
@@ -508,6 +510,7 @@ export function buildAgentServerGenerationPrompt(request: {
     tags?: string[];
     sensePlugin?: Record<string, unknown>;
   }>;
+  availableRuntimeCapabilities?: Record<string, unknown>;
   artifactSchema: Record<string, unknown>;
   uiManifestContract: Record<string, unknown>;
   uiStateSummary?: Record<string, unknown>;
@@ -534,9 +537,14 @@ export function buildAgentServerGenerationPrompt(request: {
     'Hard contract: taskFiles MUST be an array of objects with path, language, and non-empty content unless the file was physically written in the workspace before returning. Never return taskFiles as string paths only.',
     'Hard contract: entrypoint.path MUST reference one of the returned taskFiles or a file that was physically written in the workspace before returning.',
     'If you physically write task files into the workspace, prefer a compact path-only taskFiles object (path + language, content may be omitted/empty) and return JSON immediately. Do not cat/read full generated source back into the final response just to inline it.',
+    'Entrypoint contract: entrypoint.path must be executable task code (.py/.r/.sh/.js etc.). Do not set a markdown/text/json/pdf/report artifact as entrypoint. For report-only answers, return a direct ToolPayload; for generated tasks, make the executable write report/data artifacts.',
+    'Generated task interface contract: executable task code must read the SciForge inputPath argument for prompt/current refs/artifacts and write a valid ToolPayload JSON to the outputPath argument. Do not generate static scripts that merely embed the current answer or a document-specific report in source code.',
     'Final output must be only compact JSON: either AgentServerGenerationResponse or SciForge ToolPayload.',
     'When returning a SciForge ToolPayload, use displayIntent to describe the user-visible view need, and objectReferences to cite key artifacts/files/runs that the user can click on demand.',
     'objectReferences refs must use controlled prefixes: artifact:*, file:*, folder:*, run:*, execution-unit:*, scenario-package:*, or url:*.',
+    'Current-reference contract: if uiStateSummary.currentReferences or contextEnvelope.sessionFacts.currentReferences is non-empty, treat those refs as explicit current-turn inputs. The final message, claims, or artifact content must reflect that each non-UI ref was actually read/used. Merely echoing it as objectReferences or preserving a file chip is not enough.',
+    'If the current refs cannot be read or do not contain enough information to answer, return executionUnits.status="failed-with-reason" with the missing/unreadable refs and a precise nextStep. Do not answer from old session memory, priorAttempts, or broad scenario defaults.',
+    'Current-reference digest contract: when uiStateSummary.currentReferenceDigests or contextEnvelope.sessionFacts.currentReferenceDigests exists, use those bounded digests first. Do not run generation-stage shell/browser loops that print full PDFs, long documents, or large logs into context; if more evidence is needed, return taskFiles for a workspace task that reads refs by path and writes bounded artifacts.',
     request.strictTaskFilesReason
       ? `Strict retry reason: ${request.strictTaskFilesReason}`
       : '',
@@ -544,6 +552,7 @@ export function buildAgentServerGenerationPrompt(request: {
     'Generate fresh task code only when the current turn truly asks for new work or no prior executable artifact can satisfy the request.',
     'Put generated task paths under .sciforge/tasks when possible. SciForge will archive any returned taskFiles under .sciforge/tasks/<run-id>/ before execution.',
     'Do not force self-contained task code when a better installed/workspace tool exists. Prefer the best available tool, record the tool id/version/command in ExecutionUnit, and write only the adapter/glue needed for reproducibility from inputPath and outputPath.',
+    'Runtime capability routing contract: use availableRuntimeCapabilities as the generic modular capability catalog. It lists selected and compatible skills, tools, senses, actions, verifiers, and UI components. Decide from that catalog and the current task; do not rely on scene-specific prompt branches or hard-coded examples.',
     'When availableTools or selectedToolIds includes id="local.vision-sense", treat the current turn as having an optional pure-vision Computer Use sense plugin available: construct text + screenshot/image modality requests, keep the package executor-agnostic, emit text-form click/type_text/press_key/scroll/wait commands or vision-trace artifacts, and preserve only compact screenshot refs/grounding/execution/pixel-diff summaries across turns. Do not read DOM or accessibility tree for that vision path, and fail closed for send/delete/pay/authorize/publish actions unless upstream confirmation is explicit.',
     'If the user explicitly asks to use Computer Use, GUI automation, desktop control, mouse, or keyboard, do not satisfy that request by substituting non-GUI generation code such as python-pptx, scripts, repository edits, or synthetic artifacts unless the user explicitly accepts a non-GUI fallback in the current turn. If the Computer Use path fails, return failed-with-reason with the exact failing provider, endpoint/path when available, trace ref, and recovery action instead of claiming the requested GUI task is complete.',
     'If local.vision-sense is selected but no GUI executor/browser/desktop bridge or screenshot input is configured for the current run, do not scan the repository to compensate. Return a concise ToolPayload diagnosis or failed-with-reason ExecutionUnit that says the vision sense contract was detected but the runtime executor bridge is missing, and include the next expected vision-trace file-ref shape instead of fabricating GUI results.',
@@ -625,6 +634,119 @@ export function summarizeToolsForAgentServer(request: GatewayRequest) {
     });
 }
 
+export function summarizeRuntimeCapabilitiesForAgentServer(
+  request: GatewayRequest,
+  availableSkills: ReturnType<typeof summarizeSkillsForAgentServer>,
+) {
+  const tools = summarizeToolsForAgentServer(request);
+  const selectedToolIds = new Set(uniqueStrings([
+    ...(request.selectedToolIds ?? []),
+    ...toStringList(request.uiState?.selectedToolIds),
+  ]));
+  const selectedSenseIds = new Set(uniqueStrings([
+    ...(request.selectedSenseIds ?? []),
+    ...toStringList(request.uiState?.selectedSenseIds),
+    ...[...selectedToolIds].filter((id) => id.includes('sense')),
+  ]));
+  const selectedActionIds = new Set(uniqueStrings([
+    ...(request.selectedActionIds ?? []),
+    ...toStringList(request.uiState?.selectedActionIds),
+  ]));
+  const selectedVerifierIds = new Set(uniqueStrings([
+    ...(request.selectedVerifierIds ?? []),
+    ...toStringList(request.uiState?.selectedVerifierIds),
+  ]));
+  const expectedArtifactTypes = expectedArtifactTypesForRequest(request);
+  const selectedComponentIds = selectedComponentIdsForRequest(request);
+  return {
+    schemaVersion: 'sciforge.runtime-capability-catalog.v1',
+    routingPolicy: {
+      decisionOwner: 'AgentServer',
+      loadContracts: 'lazy-load selected capability docs/contracts only when needed',
+      selectionRule: 'Prefer selected capabilities, then compatible domain/artifact capabilities; return failed-with-reason when a required executor/config is missing.',
+    },
+    selected: {
+      skillIds: availableSkills.map((skill) => skill.id),
+      toolIds: [...selectedToolIds],
+      senseIds: [...selectedSenseIds],
+      actionIds: [...selectedActionIds],
+      verifierIds: [...selectedVerifierIds],
+      componentIds: selectedComponentIds,
+    },
+    skills: availableSkills,
+    tools,
+    senses: tools.filter((tool) => tool.toolType === 'sense-plugin' || selectedSenseIds.has(tool.id)),
+    actions: summarizeCapabilitySummaries('action', selectedActionIds, request),
+    verifiers: summarizeCapabilitySummaries('verifier', selectedVerifierIds, request),
+    uiComponents: summarizeUiComponentsForAgentServer(request, expectedArtifactTypes, selectedComponentIds),
+  };
+}
+
+function summarizeCapabilitySummaries(
+  kind: 'action' | 'verifier',
+  selectedIds: Set<string>,
+  request: GatewayRequest,
+) {
+  return defaultCapabilitySummaries()
+    .filter((summary) => summary.kind === kind)
+    .filter((summary) => selectedIds.has(summary.id)
+      || summary.domains.includes(request.skillDomain)
+      || summary.domains.includes('workspace')
+      || summary.domains.includes('gui'))
+    .slice(0, 12)
+    .map((summary) => ({
+      id: summary.id,
+      kind: summary.kind,
+      category: summary.category,
+      oneLine: summary.oneLine,
+      selected: selectedIds.has(summary.id),
+      domains: summary.domains,
+      triggers: summary.triggers.slice(0, 8),
+      producesArtifactTypes: summary.producesArtifactTypes,
+      riskClass: summary.riskClass,
+      reliability: summary.reliability,
+      requiredConfig: summary.requiredConfig,
+      sideEffects: summary.sideEffects ?? [],
+      verifierTypes: summary.verifierTypes ?? [],
+      detailRef: summary.detailRef,
+    }));
+}
+
+function summarizeUiComponentsForAgentServer(
+  request: GatewayRequest,
+  expectedArtifactTypes: string[],
+  selectedComponentIds: string[],
+) {
+  const selected = new Set(selectedComponentIds);
+  const expected = new Set(expectedArtifactTypes);
+  return uiComponentManifests
+    .map((component) => {
+      const artifactMatch = component.acceptsArtifactTypes.some((type) => expected.has(type))
+        || (component.outputArtifactTypes ?? []).some((type) => expected.has(type));
+      const isSelected = selected.has(component.componentId);
+      return { component, score: (isSelected ? 100 : 0) + (artifactMatch ? 30 : 0) + (component.priority ?? 0) };
+    })
+    .filter((item) => item.score > 0 || item.component.lifecycle === 'published')
+    .sort((left, right) => right.score - left.score || left.component.componentId.localeCompare(right.component.componentId))
+    .slice(0, 24)
+    .map(({ component }) => ({
+      id: component.componentId,
+      componentId: component.componentId,
+      title: component.title,
+      description: clipForAgentServerPrompt(component.description, 320),
+      selected: selected.has(component.componentId),
+      lifecycle: component.lifecycle,
+      acceptsArtifactTypes: component.acceptsArtifactTypes,
+      outputArtifactTypes: component.outputArtifactTypes ?? [],
+      requiredFields: component.requiredFields ?? [],
+      requiredAnyFields: component.requiredAnyFields ?? [],
+      viewParams: component.viewParams ?? [],
+      interactionEvents: component.interactionEvents ?? [],
+      safety: component.safety,
+      docs: component.docs,
+    }));
+}
+
 export function uniqueById<T extends { id: string }>(values: readonly T[]) {
   const seen = new Set<string>();
   const out: T[] = [];
@@ -692,6 +814,9 @@ export function summarizeUiStateForAgentServer(uiState: unknown, mode: AgentServ
       .filter(Boolean),
     currentReferences: Array.isArray(uiState.currentReferences)
       ? uiState.currentReferences.slice(0, 8).map((entry) => clipForAgentServerJson(entry, 2))
+      : undefined,
+    currentReferenceDigests: Array.isArray(uiState.currentReferenceDigests)
+      ? uiState.currentReferenceDigests.slice(0, 8).map((entry) => clipForAgentServerJson(entry, 4))
       : undefined,
     scopeCheck: isRecord(uiState.scopeCheck) ? clipForAgentServerJson(uiState.scopeCheck, 3) : undefined,
     selectedComponentIds: toStringList(uiState.selectedComponentIds),
