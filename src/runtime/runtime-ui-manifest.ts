@@ -1,49 +1,11 @@
 import type { GatewayRequest } from './runtime-types.js';
+import { selectedComponentIdsForRequest } from './gateway/gateway-request.js';
+import { normalizeUIComponentId, uiComponentCompatibilityAliases, uiComponentManifests } from '../../packages/ui-components';
 
 const REGISTERED_COMPONENTS = new Set([
-  'report-viewer',
-  'paper-card-list',
-  'molecule-viewer',
-  'scientific-plot-viewer',
-  'volcano-plot',
-  'heatmap-viewer',
-  'umap-viewer',
-  'network-graph',
-  'data-table',
-  'record-table',
-  'graph-viewer',
-  'point-set-viewer',
-  'matrix-viewer',
-  'structure-viewer',
-  'sequence-viewer',
-  'alignment-viewer',
-  'genome-track-viewer',
-  'image-annotation-viewer',
-  'spatial-omics-viewer',
-  'time-series-viewer',
-  'plate-layout-viewer',
-  'model-eval-viewer',
-  'prediction-reviewer',
-  'protocol-editor',
-  'schema-form-editor',
-  'comparison-viewer',
-  'publication-figure-builder',
-  'statistical-annotation-layer',
-  'evidence-matrix',
-  'execution-unit-table',
-  'notebook-timeline',
-  'unknown-artifact-inspector',
+  ...uiComponentManifests.map((manifest) => manifest.componentId),
+  ...uiComponentCompatibilityAliases.map((alias) => alias.legacyComponentId),
 ]);
-
-const COMPONENT_ID_ALIASES: Record<string, string> = {
-  'data-table': 'record-table',
-  'network-graph': 'graph-viewer',
-  'volcano-plot': 'point-set-viewer',
-  'umap-viewer': 'point-set-viewer',
-  'heatmap-viewer': 'matrix-viewer',
-  'molecule-viewer': 'structure-viewer',
-  'molecule-viewer-3d': 'structure-viewer',
-};
 
 const COMPONENT_ALIASES: Array<{ id: string; patterns: RegExp[] }> = [
   { id: 'report-viewer', patterns: [/report[-\s]?viewer/i, /research[-\s]?report/i, /报告|总结|系统性整理/i] },
@@ -91,7 +53,7 @@ export function composeRuntimeUiManifest(
   const selectedComponents = normalizeComponentIds(selectedComponentIdsForRequest(request)).filter((id) => REGISTERED_COMPONENTS.has(id));
   const promptComponents = componentsRequestedByPrompt(request.prompt);
   const incomingComponents = incoming
-    .map((slot) => typeof slot.componentId === 'string' ? normalizeComponentId(slot.componentId) : undefined)
+    .map((slot) => typeof slot.componentId === 'string' ? normalizeUIComponentId(slot.componentId) : undefined)
     .filter((id): id is string => typeof id === 'string' && REGISTERED_COMPONENTS.has(id));
   const componentIds = uniqueStrings([
     ...overrideComponents,
@@ -101,7 +63,7 @@ export function composeRuntimeUiManifest(
     ...(overrideComponents.length || selectedComponents.length || promptComponents.length || incomingComponents.length ? [] : DOMAIN_DEFAULT_COMPONENTS[request.skillDomain] ?? []),
     ...(componentNegated(request.prompt, 'execution-unit-table') ? [] : ['execution-unit-table']),
   ]).slice(0, 8);
-  const sourceByComponent = new Map(incoming.map((slot) => [normalizeComponentId(String(slot.componentId || '')), slot]));
+  const sourceByComponent = new Map(incoming.map((slot) => [normalizeUIComponentId(String(slot.componentId || '')), slot]));
   return componentIds.map((componentId, index) => {
     const base = sourceByComponent.get(componentId) ?? {};
     return {
@@ -118,18 +80,11 @@ export function composeRuntimeUiManifest(
   });
 }
 
-function selectedComponentIdsForRequest(request: Pick<GatewayRequest, 'selectedComponentIds' | 'uiState'>) {
-  return uniqueStrings([
-    ...(request.selectedComponentIds ?? []),
-    ...toStringList(request.uiState?.selectedComponentIds),
-  ]);
-}
-
 function componentsRequestedByPrompt(prompt: string) {
   return COMPONENT_ALIASES
     .filter((entry) => entry.patterns.some((pattern) => pattern.test(prompt)))
     .filter((entry) => !componentNegated(prompt, entry.id))
-    .map((entry) => normalizeComponentId(entry.id));
+    .map((entry) => normalizeUIComponentId(entry.id));
 }
 
 function componentNegated(prompt: string, componentId: string) {
@@ -277,11 +232,7 @@ function uniqueStrings(values: string[]) {
 }
 
 function normalizeComponentIds(values: string[]) {
-  return uniqueStrings(values.map(normalizeComponentId));
-}
-
-function normalizeComponentId(value: string) {
-  return COMPONENT_ID_ALIASES[value] ?? value;
+  return uniqueStrings(values.map(normalizeUIComponentId));
 }
 
 function escapeRegExp(value: string) {

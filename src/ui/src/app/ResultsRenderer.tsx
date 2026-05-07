@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
-import { AlertTriangle, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Clock, Copy, Download, Eye, FileCode, FileText, Lock, Save, Shield, Sparkles, Target, Terminal, Trash2, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronUp, Clock, Copy, Download, FileCode, FileText, Lock, Save, Shield, Sparkles, Target, Terminal, X } from 'lucide-react';
 import { scenarios, type EvidenceLevel, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
 import { elementRegistry } from '../scenarioCompiler/elementRegistry';
-import { compileSlotsForScenario } from '../scenarioCompiler/uiPlanCompiler';
 import { buildExecutionBundle, evaluateExecutionBundleExport } from '../exportPolicy';
 import { artifactPreviewActions, objectReferenceKinds, previewDescriptorKinds, runtimeContractSchemas, schemaPreview, validateRuntimeContract } from '../runtimeContracts';
 import { openWorkspaceObject, readPreviewDerivative, readPreviewDescriptor, readWorkspaceFile, writeWorkspaceFile, type WorkspaceFileContent } from '../api/workspaceClient';
-import { uiModuleRegistry, type PresentationDedupeScope, type RuntimeUIModule } from '../uiModuleRegistry';
+import { uiModuleRegistry } from '../uiModuleRegistry';
 import {
   renderGraphViewer,
   renderMatrixViewer,
@@ -20,12 +19,37 @@ import {
 import {
   descriptorWithDiagnostic as packageDescriptorWithDiagnostic,
   mergePreviewDescriptors as packageMergePreviewDescriptors,
-  normalizeArtifactPreviewDescriptor as packageNormalizeArtifactPreviewDescriptor,
   shouldHydratePreviewDescriptor as packageShouldHydratePreviewDescriptor,
 } from '../../../../packages/artifact-preview';
 import { exportJsonFile, exportTextFile } from './exportUtils';
-import { ActionButton, Badge, Card, ClaimTag, ConfidenceBar, EmptyArtifactState, EvidenceTag, SectionHeader, TabBar, cx } from './uiPrimitives';
-import type { SciForgeConfig, SciForgeReference, SciForgeRun, SciForgeSession, DisplayIntent, EvidenceClaim, NotebookRecord, ObjectAction, ObjectReference, PreviewDerivative, PreviewDescriptor, ResolvedViewPlan, RuntimeArtifact, RuntimeExecutionUnit, ScenarioInstanceId, UIManifestSlot, ViewPlanSection } from '../domain';
+import { ActionButton, Badge, Card, ClaimTag, ConfidenceBar, EmptyArtifactState, EvidenceTag, SectionHeader, cx } from './uiPrimitives';
+import { ResultShell, type ResultFocusMode } from './results/ResultShell';
+import { HandoffPreview, HandoffTargetButtons } from './results/HandoffControls';
+import { PreviewDescriptorActions } from './results/PreviewActions';
+import { ArtifactCardControls } from './results/ArtifactCardControls';
+export { handoffAutoRunPrompt, previewPackageAutoRunPrompt } from './results/autoRunPrompts';
+import {
+  filterHiddenResultSlots,
+  itemsForFocusMode,
+  resolveViewPlan,
+  selectDefaultResultItems,
+  viewPlanSectionLabel,
+  type ResolvedViewPlanItem,
+  type RuntimeResolvedViewPlan,
+} from './results/viewPlanResolver';
+export { selectDefaultResultItems, type HandoffAutoRunRequest } from './results/viewPlanResolver';
+import { MarkdownBlock, hydrateInlineObjectReferenceButtons } from './results/reportContent';
+export { coerceReportPayload } from './results/reportContent';
+import { applyViewTransforms, arrayPayload, artifactDownloadItems } from './results/artifactData';
+import {
+  descriptorCanUseWorkspacePreview,
+  descriptorDerivativeKind,
+  fileKindForPath,
+  normalizeArtifactPreviewDescriptor,
+  previewNeedsPackage,
+  uploadedArtifactPreview,
+} from './results/previewDescriptor';
+import type { SciForgeConfig, SciForgeReference, SciForgeRun, SciForgeSession, EvidenceClaim, NotebookRecord, ObjectAction, ObjectReference, PreviewDescriptor, RuntimeArtifact, RuntimeExecutionUnit, ScenarioInstanceId, UIManifestSlot, ViewPlanSection } from '../domain';
 import {
   artifactForObjectReference,
   artifactReferenceKind as packageArtifactReferenceKind,
@@ -38,7 +62,6 @@ import {
   referenceForObjectReference,
   referenceForResultSlotLike,
   referenceForWorkspaceFileLike,
-  syntheticArtifactForObjectReference,
   withRegionLocator,
 } from '../../../../packages/object-references';
 
@@ -95,24 +118,6 @@ function executionUnitForArtifact(session: SciForgeSession, artifact?: RuntimeAr
   });
 }
 
-function slotPayload(slot: UIManifestSlot, artifact?: RuntimeArtifact): Record<string, unknown> {
-  const props = slot.props ?? {};
-  if (!artifact) return props;
-  const artifactRecord = artifact as RuntimeArtifact & Record<string, unknown>;
-  const artifactData = isRecord(artifact.data) ? artifact.data : {};
-  const nestedContent = isRecord(artifactRecord.content)
-    ? artifactRecord.content
-    : isRecord(artifactData.content)
-      ? artifactData.content
-      : {};
-  return {
-    ...props,
-    ...artifactRecord,
-    ...artifactData,
-    ...nestedContent,
-  };
-}
-
 function viewCompositionSummary(slot: UIManifestSlot) {
   const encoding = slot.encoding ?? {};
   const parts = [
@@ -125,40 +130,6 @@ function viewCompositionSummary(slot: UIManifestSlot) {
     slot.compare?.mode ? `compare=${slot.compare.mode}` : undefined,
   ].filter(Boolean);
   return parts.join(' · ');
-}
-
-function applyViewTransforms(rows: Record<string, unknown>[], slot: UIManifestSlot) {
-  return (slot.transform ?? []).reduce((current, transform) => {
-    if (transform.type === 'filter' && transform.field) {
-      return current.filter((row) => compareValue(row[transform.field ?? ''], transform.op ?? '==', transform.value));
-    }
-    if (transform.type === 'sort' && transform.field) {
-      return [...current].sort((left, right) => String(left[transform.field ?? ''] ?? '').localeCompare(String(right[transform.field ?? ''] ?? '')));
-    }
-    if (transform.type === 'limit') {
-      const limit = typeof transform.value === 'number' ? transform.value : Number(transform.value);
-      return Number.isFinite(limit) && limit >= 0 ? current.slice(0, limit) : current;
-    }
-    return current;
-  }, rows);
-}
-
-function compareValue(left: unknown, op: string, right: unknown) {
-  const leftNumber = typeof left === 'number' ? left : typeof left === 'string' ? Number(left) : Number.NaN;
-  const rightNumber = typeof right === 'number' ? right : typeof right === 'string' ? Number(right) : Number.NaN;
-  if (op === '<=' && Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) return leftNumber <= rightNumber;
-  if (op === '>=' && Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) return leftNumber >= rightNumber;
-  if (op === '<' && Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) return leftNumber < rightNumber;
-  if (op === '>' && Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) return leftNumber > rightNumber;
-  if (op === '!=' || op === '!==') return String(left ?? '') !== String(right ?? '');
-  return String(left ?? '') === String(right ?? '');
-}
-
-function arrayPayload(slot: UIManifestSlot, key: string, artifact?: RuntimeArtifact): Record<string, unknown>[] {
-  const payload = artifact?.data ?? slot.props?.[key] ?? slot.props;
-  if (Array.isArray(payload)) return payload.filter(isRecord);
-  if (isRecord(payload) && Array.isArray(payload[key])) return payload[key].filter(isRecord);
-  return [];
 }
 
 function asStringList(value: unknown): string[] {
@@ -299,7 +270,6 @@ export function ResultsRenderer({
   const [pinnedObjectReferences, setPinnedObjectReferences] = useState<ObjectReference[]>([]);
   const [objectActionError, setObjectActionError] = useState('');
   const [objectActionNotice, setObjectActionNotice] = useState('');
-  const scenario = scenarios.find((item) => item.id === scenarioId) ?? scenarios[0];
   const activeRun = activeRunId ? session.runs.find((run) => run.id === activeRunId) : undefined;
   useEffect(() => {
     const handleInlineReferenceFocus = (event: Event) => {
@@ -323,16 +293,12 @@ export function ResultsRenderer({
     focusedObjectReference,
     pinnedObjectReferences,
   }), [scenarioId, session, defaultSlots, activeRun, focusedObjectReference, pinnedObjectReferences]);
-  const tabs = [
-    { id: 'primary', label: '结果视图' },
-    { id: 'evidence', label: '证据矩阵' },
-  ];
-  const focusModes: Array<{ id: ResultFocusMode; label: string }> = [
-    { id: 'all', label: '全部' },
-    { id: 'visual', label: '只看图' },
-    { id: 'evidence', label: '只看证据' },
-    { id: 'execution', label: '只看执行单元' },
-  ];
+  function handleFocusModeChange(mode: ResultFocusMode) {
+    setFocusMode(mode);
+    if (mode === 'evidence') setResultTab('evidence');
+    if (mode === 'execution') setResultTab('primary');
+    if (mode === 'visual') setResultTab('primary');
+  }
   const handleObjectAction = async (reference: ObjectReference, action: ObjectAction) => {
     setObjectActionError('');
     setObjectActionNotice('');
@@ -391,47 +357,26 @@ export function ResultsRenderer({
   };
 
   return (
-    <div className={cx('results-panel', collapsed && 'collapsed')}>
-      <button
-        className="results-collapse-button"
-        type="button"
-        onClick={onToggleCollapse}
-        title={collapsed ? '展开结果面板' : '向右收缩结果面板'}
-      >
-        {collapsed ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
-      </button>
-      {!collapsed ? (
-        <>
-          <div className="result-tabs">
-            <TabBar tabs={tabs} active={resultTab} onChange={setResultTab} />
-            <div className="result-focus-mode" aria-label="结果区 focus mode">
-              {focusModes.map((mode) => (
-                <button
-                  key={mode.id}
-                  className={cx(focusMode === mode.id && 'active')}
-                  type="button"
-                  onClick={() => {
-                    setFocusMode(mode.id);
-                    if (mode.id === 'evidence') setResultTab('evidence');
-                    if (mode.id === 'execution') setResultTab('primary');
-                    if (mode.id === 'visual') setResultTab('primary');
-                  }}
-                >
-                  {mode.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="result-content">
-            {activeRun && !focusedObjectReference ? (
-              <div className="active-run-banner">
-                <div>
-                  <strong>当前聚焦 run</strong>
-                  <span>{activeRun.id} · {activeRun.status} · {activeRun.scenarioPackageRef ? `${activeRun.scenarioPackageRef.id}@${activeRun.scenarioPackageRef.version}` : scenarioId}</span>
-                </div>
-                <button type="button" onClick={() => onActiveRunChange(undefined)}>取消高亮</button>
-              </div>
-            ) : null}
+    <ResultShell
+      collapsed={collapsed}
+      resultTab={resultTab}
+      focusMode={focusMode}
+      activeRun={!focusedObjectReference ? activeRun : undefined}
+      scenarioId={scenarioId}
+      onToggleCollapse={onToggleCollapse}
+      onResultTabChange={setResultTab}
+      onFocusModeChange={handleFocusModeChange}
+      onActiveRunChange={onActiveRunChange}
+      drawer={inspectedArtifact ? (
+        <ArtifactInspectorDrawer
+          scenarioId={scenarioId}
+          session={session}
+          artifact={inspectedArtifact}
+          onClose={() => setInspectedArtifact(undefined)}
+          onArtifactHandoff={onArtifactHandoff}
+        />
+      ) : null}
+    >
             {workspaceFileEditor ? (
               <ResultPaneWorkspaceFileEditor
                 state={workspaceFileEditor}
@@ -477,21 +422,7 @@ export function ResultsRenderer({
             ) : resultTab === 'evidence' ? (
               <EvidenceMatrix claims={session.claims} artifacts={session.artifacts} />
             ) : null}
-          </div>
-          {inspectedArtifact ? (
-            <ArtifactInspectorDrawer
-              scenarioId={scenarioId}
-              session={session}
-              artifact={inspectedArtifact}
-              onClose={() => setInspectedArtifact(undefined)}
-              onArtifactHandoff={onArtifactHandoff}
-            />
-          ) : null}
-        </>
-      ) : (
-        <div className="results-collapsed-hint">结果</div>
-      )}
-    </div>
+    </ResultShell>
   );
 }
 
@@ -508,637 +439,6 @@ type RegistryEntry = {
   label: string;
   render: (props: RegistryRendererProps) => ReactNode;
 };
-
-type ResultFocusMode = 'all' | 'visual' | 'evidence' | 'execution';
-
-type ViewPlanSource = 'object-focus' | 'display-intent' | 'runtime-manifest' | 'artifact-inferred' | 'default-plan' | 'fallback';
-type ViewPlanBindingStatus = 'bound' | 'missing-artifact' | 'missing-fields' | 'fallback';
-
-type ResolvedViewPlanItem = {
-  id: string;
-  slot: UIManifestSlot;
-  module: RuntimeUIModule;
-  artifact?: RuntimeArtifact;
-  section: ViewPlanSection;
-  source: ViewPlanSource;
-  status: ViewPlanBindingStatus;
-  reason?: string;
-  missingFields?: string[];
-};
-
-function filterHiddenResultSlots(items: ResolvedViewPlanItem[], session: SciForgeSession): ResolvedViewPlanItem[] {
-  const hidden = session.hiddenResultSlotIds;
-  if (!hidden?.length) return items;
-  const drop = new Set(hidden);
-  return items.filter((item) => !drop.has(item.id));
-}
-
-type RuntimeResolvedViewPlan = Omit<ResolvedViewPlan, 'sections'> & {
-  sections: Record<ViewPlanSection, ResolvedViewPlanItem[]>;
-  allItems: ResolvedViewPlanItem[];
-};
-
-export interface HandoffAutoRunRequest {
-  id: string;
-  targetScenario: ScenarioInstanceId;
-  prompt: string;
-}
-
-function defaultSlotsForAgent(scenarioId: ScenarioId): UIManifestSlot[] {
-  return compileSlotsForScenario(scenarioId);
-}
-
-function resolveViewPlan({
-  scenarioId,
-  session,
-  defaultSlots,
-  activeRun,
-  focusedObjectReference,
-  pinnedObjectReferences = [],
-}: {
-  scenarioId: ScenarioId;
-  session: SciForgeSession;
-  defaultSlots?: UIManifestSlot[];
-  activeRun?: SciForgeRun;
-  focusedObjectReference?: ObjectReference;
-  pinnedObjectReferences?: ObjectReference[];
-}): RuntimeResolvedViewPlan {
-  const displayIntent = extractDisplayIntent(activeRun) ?? inferDisplayIntentFromArtifacts(session, activeRun);
-  const runtimeSlots = session.runs.length && session.uiManifest.length ? session.uiManifest : [];
-  const seedSlots = (runtimeSlots.length ? runtimeSlots : defaultSlots?.length ? defaultSlots : defaultSlotsForAgent(scenarioId))
-    .slice()
-    .sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99));
-  const diagnostics: string[] = [];
-  const items: ResolvedViewPlanItem[] = [];
-  const seen = new Set<string>();
-
-  const addItem = (
-    module: RuntimeUIModule,
-    artifact: RuntimeArtifact | undefined,
-    source: ViewPlanSource,
-    overrides: Partial<UIManifestSlot> = {},
-    reason?: string,
-  ) => {
-    const slot: UIManifestSlot = {
-      componentId: overrides.componentId ?? module.componentId,
-      title: overrides.title ?? module.title,
-      artifactRef: overrides.artifactRef ?? artifact?.id,
-      priority: overrides.priority ?? module.priority,
-      props: overrides.props,
-      encoding: overrides.encoding,
-      layout: overrides.layout,
-      selection: overrides.selection,
-      sync: overrides.sync,
-      transform: overrides.transform,
-      compare: overrides.compare,
-    };
-    const validation = validateModuleBinding(module, artifact);
-    const section = source === 'object-focus' ? 'primary' : sectionForModule(module, displayIntent, artifact);
-    const id = `${section}-${module.moduleId}-${artifact?.id ?? slot.artifactRef ?? slot.componentId}`;
-    if (seen.has(id)) return;
-    seen.add(id);
-    items.push({
-      id,
-      slot,
-      module,
-      artifact,
-      section,
-      source,
-      status: validation.status,
-      reason: reason ?? validation.reason,
-      missingFields: validation.missingFields,
-    });
-  };
-
-  for (const reference of [focusedObjectReference, ...pinnedObjectReferences].filter((item): item is ObjectReference => Boolean(item))) {
-    const artifact = artifactForObjectReference(reference, session) ?? syntheticArtifactForObjectReference(reference, scenarioId);
-    const module = moduleForObjectReference(reference, artifact) ?? (artifact ? findBestModuleForArtifact(artifact) : moduleById('generic-artifact-inspector'));
-    if (module) {
-      addItem(module, artifact, 'object-focus', {
-        title: reference.title,
-        artifactRef: artifact?.id ?? reference.ref,
-        priority: -10,
-      }, reference.summary || `object reference ${reference.ref}`);
-    }
-  }
-
-  for (const moduleId of displayIntent.preferredModules ?? []) {
-    const module = moduleById(moduleId);
-    if (!module) {
-      diagnostics.push(`UI module 未发布：${moduleId}`);
-      continue;
-    }
-    addItem(module, findBestArtifactForModule(session.artifacts, module), 'display-intent');
-  }
-
-  for (const artifactType of displayIntent.requiredArtifactTypes ?? []) {
-    const artifact = findBestArtifactForType(session.artifacts, artifactType);
-    const module = findBestModuleForArtifactType(artifact?.type ?? artifactType, displayIntent.preferredModules);
-    if (module) {
-      addItem(module, artifact, 'display-intent', {}, artifact ? undefined : `等待 artifact type=${artifactType}`);
-    } else {
-      diagnostics.push(`没有已发布 UI module 可消费 artifact type=${artifactType}`);
-    }
-  }
-
-  for (const artifact of session.artifacts.slice(0, 12)) {
-    const module = findBestModuleForArtifact(artifact);
-    if (module) addItem(module, artifact, 'artifact-inferred');
-  }
-
-  for (const slot of seedSlots) {
-    const artifact = findArtifact(session, slot.artifactRef);
-    const currentModule = uiModuleRegistry.find((module) => module.componentId === slot.componentId && moduleAcceptsArtifact(module, artifact?.type ?? slot.artifactRef));
-    const replacementModule = artifact ? findBestModuleForArtifact(artifact) : uiModuleRegistry.find((module) => module.componentId === slot.componentId);
-    const module = currentModule ?? replacementModule ?? moduleById('generic-artifact-inspector');
-    if (!module) continue;
-    if (artifact && slot.componentId !== module.componentId) {
-      diagnostics.push(`${slot.componentId} -> ${artifact.type} 已改由 ${module.componentId} 渲染，避免组件/artifact 错配。`);
-    }
-    addItem(module, artifact, runtimeSlots.includes(slot) ? 'runtime-manifest' : 'default-plan', {
-      ...slot,
-      componentId: module.componentId,
-      title: slot.title ?? module.title,
-      artifactRef: artifact?.id ?? slot.artifactRef,
-      priority: slot.priority ?? module.priority,
-    });
-  }
-
-  if (session.claims.length || session.artifacts.some((artifact) => artifact.type === 'evidence-matrix')) {
-    addItem(moduleById('evidence-matrix-panel') ?? uiModuleRegistry[3], undefined, 'fallback');
-  }
-  if (session.executionUnits.length) {
-    addItem(moduleById('execution-provenance-table') ?? uiModuleRegistry[4], undefined, 'fallback');
-  }
-
-  const ordered = compactViewPlanItems(items, session).sort((left, right) => {
-    const sectionDelta = sectionRank(left.section) - sectionRank(right.section);
-    if (sectionDelta) return sectionDelta;
-    return (left.slot.priority ?? left.module.priority ?? 99) - (right.slot.priority ?? right.module.priority ?? 99);
-  });
-  const sections: RuntimeResolvedViewPlan['sections'] = {
-    primary: [],
-    supporting: [],
-    provenance: [],
-    raw: [],
-  };
-  ordered.forEach((item) => sections[item.section].push(item));
-
-  const blockedDesign = blockedDesignForIntent(displayIntent, session, ordered, activeRun);
-  return {
-    displayIntent,
-    diagnostics,
-    sections,
-    allItems: ordered,
-    blockedDesign,
-  };
-}
-
-function extractDisplayIntent(activeRun?: SciForgeRun): DisplayIntent | undefined {
-  const candidates = [
-    activeRun?.raw,
-    isRecord(activeRun?.raw) ? activeRun?.raw.displayIntent : undefined,
-    parseMaybeJsonObject(activeRun?.response)?.displayIntent,
-  ];
-  for (const candidate of candidates) {
-    if (!isRecord(candidate)) continue;
-    const primaryGoal = asString(candidate.primaryGoal) || asString(candidate.goal) || asString(candidate.title);
-    if (!primaryGoal) continue;
-    return {
-      primaryGoal,
-      requiredArtifactTypes: asStringList(candidate.requiredArtifactTypes),
-      preferredModules: asStringList(candidate.preferredModules),
-      fallbackAcceptable: asStringList(candidate.fallbackAcceptable),
-      acceptanceCriteria: asStringList(candidate.acceptanceCriteria),
-      source: 'agentserver',
-    };
-  }
-  return undefined;
-}
-
-function inferDisplayIntentFromArtifacts(session: SciForgeSession, activeRun?: SciForgeRun): DisplayIntent {
-  const artifactTypes = Array.from(new Set(session.artifacts.map((artifact) => artifact.type)));
-  const text = `${activeRun?.prompt ?? ''}\n${activeRun?.response ?? ''}`.toLowerCase();
-  const requiredArtifactTypes = prioritizeArtifactTypes(artifactTypes, text);
-  const preferredModules = requiredArtifactTypes
-    .map((artifactType) => findBestModuleForArtifactType(artifactType)?.moduleId)
-    .filter((moduleId): moduleId is string => Boolean(moduleId));
-  return {
-    primaryGoal: activeRun?.prompt
-      ? `展示当前 run 的核心结果：${activeRun.prompt.slice(0, 80)}`
-      : '展示当前 session 的最新 runtime artifacts',
-    requiredArtifactTypes,
-    preferredModules: Array.from(new Set(preferredModules)),
-    fallbackAcceptable: ['generic-data-table', 'generic-artifact-inspector'],
-    acceptanceCriteria: ['primary result visible', 'artifact binding validated', 'fallback explains missing fields'],
-    source: 'fallback-inference',
-  };
-}
-
-function prioritizeArtifactTypes(artifactTypes: string[], text: string) {
-  const ranked = [...artifactTypes].sort((left, right) => artifactTypePriority(right, text) - artifactTypePriority(left, text));
-  return ranked.slice(0, 4);
-}
-
-function artifactTypePriority(type: string, text: string) {
-  let score = 0;
-  if (/structure|pdb|protein|molecule|蛋白|结构|3d/.test(type)) score += 60;
-  if (/report|markdown|summary|报告|文档/.test(type)) score += 50;
-  if (/evidence|claim|证据/.test(type)) score += 40;
-  if (/paper|literature|文献/.test(type)) score += 30;
-  if (/omics|expression|matrix|umap|heatmap|volcano|组学/.test(type)) score += 30;
-  if (text.includes('pdb') || text.includes('结构') || text.includes('3d')) score += /structure|pdb|protein|3d/.test(type) ? 30 : 0;
-  if (text.includes('markdown') || text.includes('报告')) score += /report|markdown/.test(type) ? 30 : 0;
-  return score;
-}
-
-function parseMaybeJsonObject(value: unknown): Record<string, unknown> | undefined {
-  if (isRecord(value)) return value;
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  if (!trimmed.startsWith('{')) return undefined;
-  try {
-    const parsed = JSON.parse(trimmed);
-    return isRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function moduleById(moduleId: string) {
-  return uiModuleRegistry.find((module) => module.moduleId === moduleId);
-}
-
-function moduleForObjectReference(reference: ObjectReference, artifact?: RuntimeArtifact) {
-  if (reference.preferredView) {
-    const preferred = uiModuleRegistry.find((module) => module.moduleId === reference.preferredView || module.componentId === reference.preferredView);
-    if (preferred && (!artifact || moduleAcceptsArtifact(preferred, artifact.type))) return preferred;
-  }
-  if (artifact) return findBestModuleForArtifact(artifact);
-  return moduleById('generic-artifact-inspector');
-}
-
-function moduleAcceptsArtifact(module: RuntimeUIModule, artifactType?: string) {
-  if (!artifactType) return module.acceptsArtifactTypes.includes('*');
-  return module.acceptsArtifactTypes.includes('*') || module.acceptsArtifactTypes.includes(artifactType);
-}
-
-function findBestModuleForArtifact(artifact: RuntimeArtifact) {
-  return findBestModuleForArtifactType(artifact.type);
-}
-
-function findBestModuleForArtifactType(artifactType: string, preferredModules: string[] = []) {
-  const preferred = preferredModules
-    .map(moduleById)
-    .find((module): module is RuntimeUIModule => Boolean(module && moduleAcceptsArtifact(module, artifactType)));
-  if (preferred) return preferred;
-  return uiModuleRegistry
-    .filter((module) => module.componentId !== 'unknown-artifact-inspector' && moduleAcceptsArtifact(module, artifactType))
-    .sort((left, right) => (left.priority ?? 99) - (right.priority ?? 99))[0]
-    ?? moduleById('generic-artifact-inspector');
-}
-
-function findBestArtifactForModule(artifacts: RuntimeArtifact[], module: RuntimeUIModule) {
-  return artifacts.find((artifact) => moduleAcceptsArtifact(module, artifact.type));
-}
-
-function findBestArtifactForType(artifacts: RuntimeArtifact[], artifactType: string) {
-  return artifacts.find((artifact) => artifact.type === artifactType || artifact.id === artifactType)
-    ?? artifacts.find((artifact) => artifactTypeMatches(artifact.type, artifactType));
-}
-
-function artifactTypeMatches(actualType: string, requestedType: string) {
-  if (actualType === requestedType) return true;
-  if (isStructureArtifactType(actualType) && isStructureArtifactType(requestedType)) return true;
-  return false;
-}
-
-function isStructureArtifactType(type: string) {
-  return /structure|pdb|protein|molecule|mmcif|cif|3d/i.test(type);
-}
-
-function validateModuleBinding(module: RuntimeUIModule, artifact?: RuntimeArtifact): { status: ViewPlanBindingStatus; reason?: string; missingFields?: string[] } {
-  if (!artifact && ['evidence-matrix', 'execution-unit-table', 'notebook-timeline'].includes(module.componentId)) {
-    return { status: 'bound' };
-  }
-  if (!artifact && !module.acceptsArtifactTypes.includes('*')) {
-    return { status: 'missing-artifact', reason: `等待 ${module.acceptsArtifactTypes.join('/')} artifact` };
-  }
-  if (artifact && !moduleAcceptsArtifact(module, artifact.type)) {
-    return { status: 'fallback', reason: `${module.moduleId} 不声明消费 ${artifact.type}` };
-  }
-  const missingFields = (module.requiredFields ?? []).filter((field) => !artifactHasField(artifact, field));
-  const missingAny = (module.requiredAnyFields ?? []).filter((group) => !group.some((field) => artifactHasField(artifact, field)));
-  if (missingFields.length || missingAny.length) {
-    return {
-      status: 'missing-fields',
-      reason: 'artifact 缺少模块必需字段',
-      missingFields: [...missingFields, ...missingAny.map((group) => group.join('|'))],
-    };
-  }
-  return { status: 'bound' };
-}
-
-function artifactHasField(artifact: RuntimeArtifact | undefined, field: string) {
-  if (!artifact) return false;
-  if (field === 'dataRef' && artifact.dataRef) return true;
-  if (field in artifact) return true;
-  if (isRecord(artifact.metadata) && field in artifact.metadata) return true;
-  const data = artifact.data;
-  if (isRecord(data) && field in data) return true;
-  if (field === 'rows' && Array.isArray(data)) return true;
-  return false;
-}
-
-function sectionForModule(module: RuntimeUIModule, displayIntent: DisplayIntent, artifact?: RuntimeArtifact): ViewPlanSection {
-  if (isPrimaryResultModule(module)) {
-    if (artifact && displayIntent.requiredArtifactTypes?.includes(artifact.type)) return 'primary';
-    if (displayIntent.preferredModules?.includes(module.moduleId)) return 'primary';
-  }
-  return module.defaultSection ?? 'supporting';
-}
-
-function isPrimaryResultModule(module: RuntimeUIModule) {
-  return [
-    'report-viewer',
-    'structure-viewer',
-    'molecule-viewer',
-    'point-set-viewer',
-    'volcano-plot',
-    'umap-viewer',
-    'matrix-viewer',
-    'heatmap-viewer',
-    'graph-viewer',
-    'network-graph',
-  ].includes(module.componentId);
-}
-
-function compactViewPlanItems(items: ResolvedViewPlanItem[], session: SciForgeSession) {
-  const strongestByArtifact = new Map<string, ResolvedViewPlanItem>();
-  const strongestByPresentationIdentity = new Map<string, ResolvedViewPlanItem>();
-  for (const item of items) {
-    const artifactKey = item.artifact?.id ?? item.slot.artifactRef;
-    if (artifactKey) {
-      const previous = strongestByArtifact.get(artifactKey);
-      if (!previous || resultPresentationRank(item, previous) < 0) strongestByArtifact.set(artifactKey, item);
-    }
-    const presentationKey = presentationIdentityKey(item);
-    if (presentationKey) {
-      const previous = strongestByPresentationIdentity.get(presentationKey);
-      if (!previous || presentationIdentityRank(item, previous) < 0) strongestByPresentationIdentity.set(presentationKey, item);
-    }
-  }
-  return items.filter((item) => {
-    if (item.status === 'missing-artifact' && item.section !== 'primary' && item.source !== 'display-intent') return false;
-    if (item.module.componentId === 'execution-unit-table' && !session.executionUnits.length) return false;
-    if (item.module.componentId === 'evidence-matrix' && !session.claims.length && !uploadedEvidenceArtifacts(session.artifacts).length && !item.artifact) return false;
-    if (item.module.componentId === 'notebook-timeline' && !session.notebook.length && !item.artifact) return false;
-    if (item.module.componentId === 'unknown-artifact-inspector' && !item.artifact) return false;
-    const artifactKey = item.artifact?.id ?? item.slot.artifactRef;
-    const strongest = artifactKey ? strongestByArtifact.get(artifactKey) : undefined;
-    if (strongest && strongest.id !== item.id && item.module.componentId === 'unknown-artifact-inspector') return false;
-    if (strongest && strongest.id !== item.id && (item.module.componentId === 'record-table' || item.module.componentId === 'data-table') && strongest.status === 'bound') return false;
-    const presentationKey = presentationIdentityKey(item);
-    const strongestPresentation = presentationKey ? strongestByPresentationIdentity.get(presentationKey) : undefined;
-    if (strongestPresentation && strongestPresentation.id !== item.id && isPresentationDedupeEnabled(item.module)) return false;
-    return true;
-  });
-}
-
-function isPresentationDedupeEnabled(module: RuntimeUIModule) {
-  return (module.presentation?.dedupeScope ?? 'entity') !== 'none';
-}
-
-function presentationIdentityKey(item: ResolvedViewPlanItem) {
-  if (!item.artifact || item.status === 'missing-artifact' || !isPresentationDedupeEnabled(item.module)) return undefined;
-  const scope = item.module.presentation?.dedupeScope ?? 'entity';
-  const identity = artifactPresentationIdentity(item.artifact, item.module, scope);
-  return identity ? `${item.module.componentId}:${scope}:${identity}` : undefined;
-}
-
-function artifactPresentationIdentity(
-  artifact: RuntimeArtifact,
-  module: RuntimeUIModule,
-  scope: PresentationDedupeScope,
-) {
-  const fields = module.presentation?.identityFields?.length
-    ? module.presentation.identityFields
-    : defaultPresentationIdentityFields;
-  const semanticIdentity = artifactSemanticIdentity(artifact, fields, scope);
-  if (semanticIdentity) return `semantic:${semanticIdentity}`;
-  const provenanceIdentity = artifactProvenanceIdentity(artifact);
-  if (provenanceIdentity) return `provenance:${provenanceIdentity}`;
-  return undefined;
-}
-
-const defaultPresentationIdentityFields = [
-  'presentationKey',
-  'resultKey',
-  'displayKey',
-  'semanticKey',
-  'entityKey',
-  'entityId',
-  'entity_id',
-  'targetId',
-  'target_id',
-  'subjectId',
-  'subject_id',
-  'accession',
-  'accessionId',
-  'accession_id',
-  'gene',
-  'symbol',
-  'compoundId',
-  'compound_id',
-  'datasetId',
-  'dataset_id',
-  'reportId',
-  'report_id',
-  'documentId',
-  'document_id',
-  'paperId',
-  'paper_id',
-  'doi',
-  'url',
-  'dataRef',
-  'outputRef',
-  'resultRef',
-];
-
-function artifactSemanticIdentity(
-  artifact: RuntimeArtifact,
-  fields: string[],
-  scope: PresentationDedupeScope,
-) {
-  const data = artifact.data;
-  const records = [
-    artifact.metadata,
-    artifactRecordForIdentity(artifact),
-    isRecord(data) ? data : undefined,
-    scope === 'entity' ? firstPayloadRecordForIdentity(data) : undefined,
-  ];
-  for (const record of records) {
-    const identity = identityFromRecord(record, fields);
-    if (identity) return identity;
-  }
-  return undefined;
-}
-
-function artifactRecordForIdentity(artifact: RuntimeArtifact): Record<string, unknown> {
-  return {
-    id: artifact.id,
-    type: artifact.type,
-    dataRef: artifact.dataRef,
-    path: artifact.path,
-  };
-}
-
-function firstPayloadRecordForIdentity(data: unknown): Record<string, unknown> | undefined {
-  if (Array.isArray(data)) return toRecordList(data)[0];
-  if (!isRecord(data)) return undefined;
-  for (const key of ['selected', 'primary', 'item', 'record', 'data', 'structures', 'rows', 'items', 'results', 'records']) {
-    const value = data[key];
-    if (isRecord(value)) return value;
-    const first = toRecordList(value)[0];
-    if (first) return first;
-  }
-  return undefined;
-}
-
-function identityFromRecord(record: Record<string, unknown> | undefined, fields: string[]) {
-  if (!record) return undefined;
-  const canonicalFields = new Set(fields.map(canonicalPresentationIdentityField));
-  for (const field of fields) {
-    const value = asString(record[field]);
-    const normalized = normalizePresentationIdentity(value);
-    if (normalized) return `${canonicalPresentationIdentityField(field)}:${normalized}`;
-  }
-  for (const [field, rawValue] of Object.entries(record)) {
-    const canonicalField = canonicalPresentationIdentityField(field);
-    if (!canonicalFields.has(canonicalField)) continue;
-    const normalized = normalizePresentationIdentity(asString(rawValue));
-    if (normalized) return `${canonicalField}:${normalized}`;
-  }
-  return undefined;
-}
-
-function canonicalPresentationIdentityField(field: string) {
-  return field.trim().toLowerCase().replace(/[_\-\s]+/g, '');
-}
-
-function artifactProvenanceIdentity(artifact: RuntimeArtifact) {
-  const metadata = artifact.metadata ?? {};
-  const values = [
-    artifact.dataRef,
-    artifact.path,
-    asString(metadata.outputRef),
-    asString(metadata.resultRef),
-    asString(metadata.dataRef),
-    asString(metadata.path),
-    asString(metadata.runId),
-    asString(metadata.agentServerRunId),
-    asString(metadata.provenanceRef),
-  ];
-  return values.map(normalizePresentationIdentity).find(Boolean);
-}
-
-function normalizePresentationIdentity(value?: string) {
-  const normalized = value?.trim().toLowerCase();
-  if (!normalized || normalized === 'unknown' || normalized === 'none' || normalized === 'null' || normalized === 'undefined') return undefined;
-  return normalized.replace(/\s+/g, ' ');
-}
-
-function presentationIdentityRank(left: ResolvedViewPlanItem, right: ResolvedViewPlanItem) {
-  const statusDelta = resultStatusRank(left.status) - resultStatusRank(right.status);
-  if (statusDelta) return statusDelta;
-  const payloadDelta = artifactPresentationPayloadRank(left.artifact) - artifactPresentationPayloadRank(right.artifact);
-  if (payloadDelta) return payloadDelta;
-  const sourceDelta = viewPlanSourceRank(left.source) - viewPlanSourceRank(right.source);
-  if (sourceDelta) return sourceDelta;
-  const sectionDelta = sectionRank(left.section) - sectionRank(right.section);
-  if (sectionDelta) return sectionDelta;
-  return (left.slot.priority ?? left.module.priority ?? 99) - (right.slot.priority ?? right.module.priority ?? 99);
-}
-
-function artifactPresentationPayloadRank(artifact?: RuntimeArtifact) {
-  if (!artifact) return 50;
-  const type = artifact.type.toLowerCase();
-  if (/(interactive|viewer|html|3d|image|figure|plot|chart|report|document|markdown)/i.test(type)) return 0;
-  if (/(file|coordinate|matrix|graph|network|table|dataset|dataframe|csv|tsv|json)/i.test(type)) return 1;
-  if (/(summary|profile|annotation|metadata)/i.test(type)) return 2;
-  if (/(list|collection|index|search-result)/i.test(type)) return 6;
-  if (artifact.dataRef || artifact.path) return 3;
-  return 8;
-}
-
-function viewPlanSourceRank(source: ViewPlanSource) {
-  if (source === 'object-focus') return -1;
-  if (source === 'display-intent') return 0;
-  if (source === 'runtime-manifest') return 1;
-  if (source === 'artifact-inferred') return 2;
-  if (source === 'default-plan') return 3;
-  return 4;
-}
-
-function sectionRank(section: ViewPlanSection) {
-  if (section === 'primary') return 0;
-  if (section === 'supporting') return 1;
-  if (section === 'provenance') return 2;
-  return 3;
-}
-
-function blockedDesignForIntent(
-  displayIntent: DisplayIntent,
-  session: SciForgeSession,
-  items: ResolvedViewPlanItem[],
-  activeRun?: SciForgeRun,
-) {
-  const requiredTypes = displayIntent.requiredArtifactTypes ?? [];
-  const unsupportedType = requiredTypes.find((artifactType) => {
-    const artifact = findBestArtifactForType(session.artifacts, artifactType);
-    if (!artifact) return false;
-    const specialized = uiModuleRegistry.find((module) => module.componentId !== 'unknown-artifact-inspector' && moduleAcceptsArtifact(module, artifact.type));
-    return !specialized;
-  });
-  const primaryBound = items.some((item) => item.section === 'primary' && item.status === 'bound');
-  if (!unsupportedType && (primaryBound || !requiredTypes.length)) return undefined;
-  if (unsupportedType) {
-    return {
-      reason: `没有已发布 UI module 可作为主视图渲染 artifact type=${unsupportedType}`,
-      requiredModuleCapability: `render ${unsupportedType} as primary result`,
-      resumeRunId: activeRun?.id,
-    };
-  }
-  return undefined;
-}
-
-function itemsForFocusMode(plan: RuntimeResolvedViewPlan, focusMode: ResultFocusMode) {
-  const sections = focusMode === 'evidence'
-    ? ['supporting'] as ViewPlanSection[]
-    : focusMode === 'execution'
-      ? ['provenance'] as ViewPlanSection[]
-      : ['primary', 'supporting', 'provenance', 'raw'] as ViewPlanSection[];
-  return sections.flatMap((section) => plan.sections[section])
-    .filter((item) => itemMatchesFocusMode(item, focusMode));
-}
-
-function itemMatchesFocusMode(item: ResolvedViewPlanItem, focusMode: ResultFocusMode) {
-  if (focusMode === 'all') return true;
-  if (focusMode === 'evidence') return item.module.componentId === 'evidence-matrix' || item.artifact?.type === 'evidence-matrix';
-  if (focusMode === 'execution') return item.module.componentId === 'execution-unit-table' || item.section === 'provenance';
-  return [
-    'structure-viewer',
-    'molecule-viewer',
-    'point-set-viewer',
-    'volcano-plot',
-    'umap-viewer',
-    'matrix-viewer',
-    'heatmap-viewer',
-    'graph-viewer',
-    'network-graph',
-    'report-viewer',
-  ].includes(item.module.componentId);
-}
 
 function PaperCardList({ slot, artifact, session }: RegistryRendererProps) {
   const records = applyViewTransforms(arrayPayload(slot, 'papers', artifact), slot);
@@ -1222,504 +522,6 @@ function UnknownArtifactInspector({ slot, artifact, session }: RegistryRendererP
   );
 }
 
-function ReportViewerSlot({ slot, artifact, config, session, onObjectReferenceFocus }: RegistryRendererProps) {
-  const payload = slotPayload(slot, artifact);
-  const report = coerceReportPayload(payload, artifact, relatedArtifactsForReport(session, artifact));
-  const [loadedReport, setLoadedReport] = useState<{ ref: string; markdown: string } | undefined>();
-  const [loadError, setLoadError] = useState('');
-  useEffect(() => {
-    const ref = report.reportRef;
-    if (!ref || loadedReport?.ref === ref) return undefined;
-    let cancelled = false;
-    setLoadError('');
-    void readWorkspaceFile(ref, config)
-      .then((file) => {
-        if (!cancelled) setLoadedReport({ ref, markdown: file.content });
-      })
-      .catch((error) => {
-        if (!cancelled) setLoadError(error instanceof Error ? error.message : String(error));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [config, loadedReport?.ref, report.reportRef]);
-  const markdown = loadedReport && loadedReport.ref === report.reportRef ? loadedReport.markdown : report.markdown;
-  const sections = report.sections;
-  if (!artifact || (!markdown && !sections.length)) {
-    return <ComponentEmptyState componentId="report-viewer" artifactType="research-report" detail={!artifact ? undefined : '当前 research-report 缺少 markdown/report/sections 字段；请检查 AgentServer 生成的 artifact contract。'} />;
-  }
-  return (
-    <div className="stack">
-      <div className="report-viewer">
-        <div className="report-actions">
-          <button type="button" onClick={() => void navigator.clipboard?.writeText(markdown || sectionsToMarkdown(sections))}>
-            复制 Markdown
-          </button>
-        </div>
-        {report.reportRef && !loadedReport && !loadError ? (
-          <p className="empty-state">正在读取 Markdown 报告正文：{report.reportRef}</p>
-        ) : null}
-        {loadError ? (
-          <details className="report-read-warning">
-            <summary>外部报告正文暂不可读，已展示可用 artifacts 生成的摘要</summary>
-            <p>{loadError}</p>
-          </details>
-        ) : null}
-        {sections.length ? sections.map((section, index) => (
-          <section key={`${asString(section.title) ?? 'section'}-${index}`}>
-            <h3>{asString(section.title) || `Section ${index + 1}`}</h3>
-            <MarkdownBlock markdown={asString(section.content) || asString(section.markdown) || recordToReadableText(section)} onObjectReferenceFocus={onObjectReferenceFocus} />
-          </section>
-        )) : <MarkdownBlock markdown={markdown} onObjectReferenceFocus={onObjectReferenceFocus} />}
-      </div>
-    </div>
-  );
-}
-
-export function coerceReportPayload(payload: Record<string, unknown>, artifact?: RuntimeArtifact, relatedArtifacts: RuntimeArtifact[] = []) {
-  const nested = parseNestedReport(payload);
-  const source = nested ?? payload;
-  const sections = toRecordList(source.sections);
-  const direct = firstString(source.markdown, source.report, source.summary, source.content);
-  const extracted = extractUserFacingReport(direct);
-  const relatedMarkdown = reportFromRelatedArtifacts(relatedArtifacts, artifact);
-  const extractedMarkdown = extracted.markdown && !isGeneratedReportShell(extracted.markdown) ? extracted.markdown : undefined;
-  const reportRef = extracted.reportRef
-    || reportRefFromPayload(source)
-    || reportRefFromText(direct)
-    || reportRefFromArtifact(artifact);
-  const markdown = extractedMarkdown
-    || (!looksLikeBackendPayloadText(direct) ? direct : undefined)
-    || (sections.length ? sectionsToMarkdown(sections) : undefined)
-    || reportFromKnownFields(source)
-    || relatedMarkdown
-    || extracted.markdown
-    || markdownShellForReportRef(reportRef);
-  return { markdown, sections, reportRef };
-}
-
-function markdownShellForReportRef(ref?: string) {
-  if (!ref || !/\.md($|[?#])|markdown/i.test(ref)) return undefined;
-  return [
-    '# Markdown report',
-    '',
-    `报告内容已作为 workspace ref 生成：\`${ref}\`。`,
-    '',
-    '当前 artifact 没有内联 markdown 内容，因此结果区保留可读文档壳和可复现引用；如需全文预览，请让任务把 markdown 正文写入 `research-report.markdown` 或 `sections` 字段。',
-  ].join('\n');
-}
-
-function isGeneratedReportShell(markdown: string) {
-  return /^# Markdown report\b/i.test(markdown) && /workspace ref|workspace 引用|artifact 没有内联 markdown/i.test(markdown);
-}
-
-function relatedArtifactsForReport(session: SciForgeSession, artifact?: RuntimeArtifact) {
-  const runId = asString(artifact?.metadata?.runId) || asString(artifact?.metadata?.agentServerRunId) || asString(artifact?.metadata?.producerRunId);
-  const candidates = session.artifacts.filter((item) => item.id !== artifact?.id);
-  const sameRun = runId
-    ? candidates.filter((item) => {
-      const metadata = item.metadata ?? {};
-      return asString(metadata.runId) === runId
-        || asString(metadata.agentServerRunId) === runId
-        || asString(metadata.producerRunId) === runId;
-    })
-    : [];
-  return (sameRun.length ? sameRun : candidates).filter((item) => isReportSupportingArtifact(item)).slice(0, 8);
-}
-
-function isReportSupportingArtifact(artifact: RuntimeArtifact) {
-  const haystack = `${artifact.id} ${artifact.type} ${artifact.path ?? ''} ${artifact.dataRef ?? ''}`;
-  return /paper|literature|evidence|matrix|table|csv|summary|result|graph|timeline|notebook/i.test(haystack);
-}
-
-function reportFromRelatedArtifacts(artifacts: RuntimeArtifact[], primary?: RuntimeArtifact) {
-  const sections: string[] = [];
-  const title = asString(primary?.metadata?.title) || asString(primary?.metadata?.name) || 'Research Report';
-  for (const artifact of artifacts) {
-    const section = reportSectionForArtifact(artifact);
-    if (section) sections.push(section);
-  }
-  if (!sections.length) return undefined;
-  return [
-    `# ${title}`,
-    '',
-    '以下内容由当前运行产生的结构化 artifacts 自动整理，便于直接阅读；原始 JSON 仍保留在对应 artifact 中。',
-    '',
-    ...sections,
-  ].join('\n');
-}
-
-function reportSectionForArtifact(artifact: RuntimeArtifact) {
-  const payload = isRecord(artifact.data) ? artifact.data : {};
-  const label = asString(artifact.metadata?.title) || asString(artifact.metadata?.name) || humanizeKey(artifact.type || artifact.id);
-  const papers = recordsFromArtifactPayload(payload, ['papers', 'items', 'records', 'rows']);
-  if (/paper|literature/i.test(`${artifact.type} ${artifact.id}`) && papers.length) {
-    return [
-      `## ${label}`,
-      '',
-      ...papers.slice(0, 12).map((paper, index) => readablePaperBullet(paper, index)),
-    ].join('\n');
-  }
-  const rows = recordsFromArtifactPayload(payload, ['rows', 'records', 'items', 'claims', 'entries']);
-  if (rows.length) {
-    return [
-      `## ${label}`,
-      '',
-      markdownTable(rows.slice(0, 10)),
-    ].join('\n');
-  }
-  const known = reportFromKnownFields(payload);
-  if (known) return `## ${label}\n\n${known.replace(/^# .+\n\n?/, '')}`;
-  const summary = firstString(payload.summary, payload.message, payload.description, artifact.dataRef, artifact.path);
-  if (summary) return `## ${label}\n\n${summary}`;
-  return undefined;
-}
-
-function recordsFromArtifactPayload(payload: Record<string, unknown>, keys: string[]) {
-  for (const key of keys) {
-    const value = payload[key];
-    if (Array.isArray(value)) return value.filter(isRecord);
-  }
-  return [];
-}
-
-function readablePaperBullet(paper: Record<string, unknown>, index: number) {
-  const title = firstString(paper.title, paper.name) || `Paper ${index + 1}`;
-  const authors = readableList(paper.authors);
-  const venue = firstString(paper.venue, paper.journal, paper.source, paper.publisher);
-  const year = firstString(paper.year, paper.published, paper.date, paper.publishedAt);
-  const url = firstString(paper.url, paper.doi, paper.arxivId, paper.id);
-  const summary = firstString(paper.summary, paper.abstract, paper.reason, paper.relevance, paper.finding);
-  const meta = [authors, venue, year, url].filter(Boolean).join(' · ');
-  return [`${index + 1}. **${title}**${meta ? ` (${meta})` : ''}`, summary ? `   - ${summary}` : ''].filter(Boolean).join('\n');
-}
-
-function readableList(value: unknown) {
-  if (Array.isArray(value)) return value.map((item) => typeof item === 'string' ? item : asString((item as Record<string, unknown>)?.name)).filter(Boolean).slice(0, 4).join(', ');
-  return asString(value);
-}
-
-function markdownTable(rows: Record<string, unknown>[]) {
-  if (!rows.length) return '';
-  const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 5);
-  if (!columns.length) return rows.map((row) => `- ${recordToReadableText(row).replace(/\n+/g, '; ')}`).join('\n');
-  const escapeCell = (value: unknown) => String(Array.isArray(value) ? value.join(', ') : isRecord(value) ? JSON.stringify(value) : value ?? '').replace(/\|/g, '\\|').slice(0, 220);
-  return [
-    `| ${columns.map(humanizeKey).join(' | ')} |`,
-    `| ${columns.map(() => '---').join(' | ')} |`,
-    ...rows.map((row) => `| ${columns.map((column) => escapeCell(row[column])).join(' | ')} |`),
-  ].join('\n');
-}
-
-function extractUserFacingReport(text?: string): { markdown?: string; reportRef?: string } {
-  if (!text) return {};
-  const parsedPayloads = parseJsonPayloadsFromText(text);
-  for (const payload of parsedPayloads) {
-    const fromPayload = reportFromStructuredPayload(payload);
-    if (fromPayload.markdown || fromPayload.reportRef) return fromPayload;
-  }
-  const reportRef = reportRefFromText(text);
-  return {
-    reportRef,
-    markdown: looksLikeBackendPayloadText(text) ? markdownShellForReportRef(reportRef) : undefined,
-  };
-}
-
-function reportFromStructuredPayload(payload: Record<string, unknown>): { markdown?: string; reportRef?: string } {
-  const artifacts = Array.isArray(payload.artifacts) ? payload.artifacts.filter(isRecord) : [];
-  for (const artifact of artifacts) {
-    const type = asString(artifact.type) || asString(artifact.id) || '';
-    if (!/report|markdown|document|summary/i.test(type)) continue;
-    const nested = isRecord(artifact.data) ? artifact.data : artifact;
-    const markdown = reportMarkdownFromRecord(nested);
-    const reportRef = reportRefFromPayload(nested) || reportRefFromPayload(artifact) || reportRefFromText(JSON.stringify(artifact));
-    if (markdown || reportRef) return { markdown, reportRef };
-  }
-  const markdown = reportMarkdownFromRecord(payload);
-  const reportRef = reportRefFromPayload(payload) || reportRefFromText(JSON.stringify(payload));
-  if (markdown || reportRef) return { markdown, reportRef };
-  const message = asString(payload.message);
-  return {
-    markdown: message && !looksLikeBackendPayloadText(message) ? message : undefined,
-    reportRef,
-  };
-}
-
-function reportMarkdownFromRecord(record: Record<string, unknown>): string | undefined {
-  const sections = toRecordList(record.sections);
-  const direct = firstString(record.markdown, record.report, record.content, record.summary);
-  if (direct && !looksLikeBackendPayloadText(direct)) return direct;
-  if (sections.length) return sectionsToMarkdown(sections);
-  return undefined;
-}
-
-function parseJsonPayloadsFromText(text: string): Record<string, unknown>[] {
-  const payloads: Record<string, unknown>[] = [];
-  for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
-    const parsed = parseJsonRecord(match[1]);
-    if (parsed) payloads.push(parsed);
-  }
-  const firstBrace = text.indexOf('{');
-  const lastBrace = text.lastIndexOf('}');
-  if (firstBrace !== -1 && lastBrace > firstBrace) {
-    const parsed = parseJsonRecord(text.slice(firstBrace, lastBrace + 1));
-    if (parsed) payloads.push(parsed);
-  }
-  if (!payloads.length) {
-    const messageMatch = text.match(/"message"\s*:\s*"((?:\\.|[^"\\])*)"/);
-    const message = messageMatch ? decodeJsonStringLiteral(messageMatch[1]) : undefined;
-    const ref = reportRefFromText(text);
-    if (message || ref) payloads.push({ message, reportRef: ref });
-  }
-  return payloads;
-}
-
-function parseJsonRecord(value: string): Record<string, unknown> | undefined {
-  try {
-    const parsed = JSON.parse(value);
-    return isRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function decodeJsonStringLiteral(value: string) {
-  try {
-    return JSON.parse(`"${value}"`) as string;
-  } catch {
-    return value;
-  }
-}
-
-function reportRefFromPayload(payload: Record<string, unknown>) {
-  return firstString(payload.reportRef, payload.markdownRef, payload.dataRef, payload.path, payload.outputRef);
-}
-
-function reportRefFromArtifact(artifact?: RuntimeArtifact) {
-  return artifact?.dataRef
-    || asString(artifact?.metadata?.reportRef)
-    || asString(artifact?.metadata?.markdownRef)
-    || asString(artifact?.metadata?.dataRef)
-    || asString(artifact?.metadata?.outputRef);
-}
-
-function reportRefFromText(text?: string) {
-  if (!text) return undefined;
-  return text.match(/(?:^|["'`\s(:：])((?:\.sciforge|workspace\/\.sciforge|\/[^"'`\s]+)[^"'`\s]*\.md)(?:$|["'`\s),，。])/i)?.[1]
-    || text.match(/([\w./-]*report[\w./-]*\.md)/i)?.[1];
-}
-
-function looksLikeBackendPayloadText(text?: string) {
-  if (!text) return false;
-  return /```json|ToolPayload|Returning the existing result|Let me inspect|prior attempt|\"artifacts\"\s*:|\"uiManifest\"\s*:|\"executionUnits\"\s*:/i.test(text);
-}
-
-function firstString(...values: unknown[]) {
-  return values.map(asString).find(Boolean);
-}
-
-function parseNestedReport(payload: Record<string, unknown>): Record<string, unknown> | undefined {
-  for (const key of ['data', 'content', 'report', 'markdown', 'result']) {
-    const value = payload[key];
-    if (isRecord(value)) return value;
-    if (typeof value !== 'string') continue;
-    const trimmed = value.trim();
-    if (!trimmed.startsWith('{')) continue;
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (isRecord(parsed)) {
-        if (isRecord(parsed.data)) return parsed.data;
-        return parsed;
-      }
-    } catch {
-      // The string may already be normal Markdown.
-    }
-  }
-  return undefined;
-}
-
-function sectionsToMarkdown(sections: Record<string, unknown>[]) {
-  return sections.map((section, index) => {
-    const title = asString(section.title) || `Section ${index + 1}`;
-    const content = asString(section.content) || asString(section.markdown) || recordToReadableText(section);
-    return `## ${title}\n\n${content}`;
-  }).join('\n\n');
-}
-
-function reportFromKnownFields(record: Record<string, unknown>) {
-  const parts: string[] = [];
-  const title = asString(record.title) || asString(record.name);
-  if (title) parts.push(`# ${title}`);
-  for (const key of ['executiveSummary', 'keyFindings', 'methods', 'limitations', 'conclusions']) {
-    const value = record[key];
-    if (typeof value === 'string' && value.trim()) parts.push(`## ${humanizeKey(key)}\n\n${value.trim()}`);
-    if (Array.isArray(value) && value.length) {
-      parts.push(`## ${humanizeKey(key)}\n\n${value.map((item) => `- ${typeof item === 'string' ? item : recordToReadableText(isRecord(item) ? item : { value: item })}`).join('\n')}`);
-    }
-  }
-  return parts.length ? parts.join('\n\n') : undefined;
-}
-
-function recordToReadableText(record: Record<string, unknown>) {
-  return Object.entries(record)
-    .filter(([key]) => key !== 'title')
-    .map(([key, value]) => {
-      if (typeof value === 'string') return `**${humanizeKey(key)}:** ${value}`;
-      if (typeof value === 'number' || typeof value === 'boolean') return `**${humanizeKey(key)}:** ${String(value)}`;
-      if (Array.isArray(value)) return `**${humanizeKey(key)}:**\n${value.map((item) => `- ${typeof item === 'string' ? item : JSON.stringify(item)}`).join('\n')}`;
-      return '';
-    })
-    .filter(Boolean)
-    .join('\n\n') || JSON.stringify(record, null, 2);
-}
-
-function humanizeKey(key: string) {
-  return key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function MarkdownBlock({ markdown, onObjectReferenceFocus }: { markdown?: string; onObjectReferenceFocus?: (reference: ObjectReference) => void }) {
-  const lines = (markdown || '').split('\n');
-  const nodes: ReactNode[] = [];
-  let list: string[] = [];
-  function flushList() {
-    if (!list.length) return;
-    nodes.push(<ul key={`list-${nodes.length}`}>{list.map((item, index) => <li key={index}>{inlineMarkdown(item, onObjectReferenceFocus)}</li>)}</ul>);
-    list = [];
-  }
-  lines.forEach((line, index) => {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      flushList();
-      return;
-    }
-    if (/^#{1,4}\s+/.test(trimmed)) {
-      flushList();
-      const level = trimmed.match(/^#+/)?.[0].length ?? 2;
-      const text = trimmed.replace(/^#{1,4}\s+/, '');
-      nodes.push(level <= 2 ? <h3 key={index}>{inlineMarkdown(text, onObjectReferenceFocus)}</h3> : <h4 key={index}>{inlineMarkdown(text, onObjectReferenceFocus)}</h4>);
-      return;
-    }
-    if (/^[-*]\s+/.test(trimmed)) {
-      list.push(trimmed.replace(/^[-*]\s+/, ''));
-      return;
-    }
-    flushList();
-    nodes.push(<p key={index}>{inlineMarkdown(trimmed, onObjectReferenceFocus)}</p>);
-  });
-  flushList();
-  return <div className="markdown-block">{nodes}</div>;
-}
-
-function inlineMarkdown(text: string, onObjectReferenceFocus?: (reference: ObjectReference) => void): ReactNode {
-  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean);
-  return parts.map((part, index) => {
-    if (part.startsWith('**') && part.endsWith('**')) return <strong key={index}>{inlinePlainText(part.slice(2, -2), onObjectReferenceFocus)}</strong>;
-    if (part.startsWith('`') && part.endsWith('`')) {
-      const codeText = part.slice(1, -1);
-      const reference = objectReferenceFromInlineRef(codeText);
-      return reference ? inlineObjectReferenceButton(reference, index, onObjectReferenceFocus) : <code key={index}>{codeText}</code>;
-    }
-    return <span key={index}>{inlinePlainText(part, onObjectReferenceFocus)}</span>;
-  });
-}
-
-function inlinePlainText(text: string, onObjectReferenceFocus?: (reference: ObjectReference) => void): ReactNode {
-  const parts = text.split(/((?:file|folder|artifact):[^\s\])}>,，。；;、|]+)/gi).filter(Boolean);
-  return parts.map((part, index) => {
-    const reference = objectReferenceFromInlineRef(part);
-    if (!reference) return <span key={index}>{part}</span>;
-    return inlineObjectReferenceButton(reference, index, onObjectReferenceFocus);
-  });
-}
-
-function inlineObjectReferenceButton(reference: ObjectReference, key: string | number, onObjectReferenceFocus?: (reference: ObjectReference) => void): ReactNode {
-  return (
-    <button
-      key={key}
-      type="button"
-      className="markdown-object-ref"
-      title={reference.ref}
-      onClick={() => focusInlineObjectReference(reference, onObjectReferenceFocus)}
-    >
-      {reference.title}
-    </button>
-  );
-}
-
-function hydrateInlineObjectReferenceButtons(root: ParentNode = document): () => void {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      const text = node.textContent || '';
-      if (!/(?:file|folder|artifact):/i.test(text)) return NodeFilter.FILTER_REJECT;
-      const parent = node.parentElement;
-      if (!parent || parent.closest('button,a,textarea,input,script,style')) return NodeFilter.FILTER_REJECT;
-      return NodeFilter.FILTER_ACCEPT;
-    },
-  });
-  const nodes: Text[] = [];
-  while (walker.nextNode()) nodes.push(walker.currentNode as Text);
-  for (const node of nodes) {
-    const text = node.textContent || '';
-    const parts = text.split(/((?:file|folder|artifact):[^\s\])}>,，。；;、|]+)/gi).filter(Boolean);
-    if (parts.length < 2) continue;
-    const fragment = document.createDocumentFragment();
-    let changed = false;
-    for (const part of parts) {
-      const reference = objectReferenceFromInlineRef(part);
-      if (!reference) {
-        fragment.append(document.createTextNode(part));
-        continue;
-      }
-      changed = true;
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'markdown-object-ref';
-      button.title = reference.ref;
-      button.textContent = reference.title;
-      button.addEventListener('click', () => focusInlineObjectReference(reference));
-      fragment.append(button);
-    }
-    if (!changed || !node.parentNode) continue;
-    node.parentNode.replaceChild(fragment, node);
-  }
-  return () => undefined;
-}
-
-function focusInlineObjectReference(reference: ObjectReference, onObjectReferenceFocus?: (reference: ObjectReference) => void) {
-  if (onObjectReferenceFocus) {
-    onObjectReferenceFocus(reference);
-    return;
-  }
-  window.dispatchEvent(new CustomEvent('sciforge-focus-object-reference', { detail: reference }));
-}
-
-function objectReferenceFromInlineRef(rawRef: string): ObjectReference | undefined {
-  const match = rawRef.match(/^(file|folder|artifact):(.+)$/i);
-  if (!match) return undefined;
-  const kind = match[1].toLowerCase() as 'file' | 'folder' | 'artifact';
-  const value = match[2].trim();
-  if (!value) return undefined;
-  const title = inlineReferenceTitle(kind, value);
-  const pathLike = kind === 'file' || kind === 'folder';
-  return {
-    id: `inline-${kind}-${value.replace(/[^a-z0-9_.-]+/gi, '-').slice(0, 80)}`,
-    kind,
-    title,
-    ref: `${kind}:${value}`,
-    artifactType: kind === 'artifact' ? value : undefined,
-    preferredView: /\.pdf(?:$|[?#])/i.test(value) ? 'pdf' : undefined,
-    actions: pathLike ? ['focus-right-pane', 'open-external', 'reveal-in-folder', 'copy-path', 'pin'] : ['focus-right-pane', 'inspect', 'pin'],
-    summary: value,
-    provenance: pathLike ? { path: value } : undefined,
-  };
-}
-
-function inlineReferenceTitle(kind: 'file' | 'folder' | 'artifact', value: string) {
-  if (kind === 'artifact') return value.replace(/^artifact:/i, '');
-  const clean = value.replace(/[?#].*$/, '').replace(/\/+$/, '');
-  return clean.split('/').filter(Boolean).at(-1) || value;
-}
-
 function ArtifactDownloads({ artifact }: { artifact?: RuntimeArtifact }) {
   const downloads = artifactDownloadItems(artifact);
   if (!downloads.length) return null;
@@ -1739,21 +541,7 @@ function ArtifactDownloads({ artifact }: { artifact?: RuntimeArtifact }) {
   );
 }
 
-function artifactDownloadItems(artifact?: RuntimeArtifact) {
-  const data = artifact?.data;
-  const raw = isRecord(data) && Array.isArray(data.downloads) ? data.downloads : [];
-  return raw
-    .filter(isRecord)
-    .map((item) => ({
-      key: asString(item.key),
-      name: asString(item.name) ?? asString(item.filename) ?? 'artifact-download.txt',
-      path: asString(item.path),
-      contentType: asString(item.contentType) ?? 'text/plain',
-      rowCount: asNumber(item.rowCount),
-      content: typeof item.content === 'string' ? item.content : '',
-    }))
-    .filter((item) => item.content.length > 0);
-}
+
 
 
 function ComponentEmptyState({
@@ -2263,7 +1051,7 @@ function WorkspaceObjectPreview({
     if (!path || (reference.kind !== 'file' && reference.kind !== 'artifact') || /^https?:\/\//i.test(path)) return undefined;
     let cancelled = false;
     setLoadingPath(path);
-    const staticDescriptor = packageNormalizeArtifactPreviewDescriptor(artifact, path);
+    const staticDescriptor = normalizeArtifactPreviewDescriptor(artifact, path);
     if (staticDescriptor) {
       setDescriptor(staticDescriptor);
       if (!packageShouldHydratePreviewDescriptor(staticDescriptor, path)) {
@@ -2406,45 +1194,6 @@ function WorkspaceObjectPreview({
   );
 }
 
-function shouldHydratePreviewDescriptor(descriptor: PreviewDescriptor, path: string) {
-  if (!path || /^agentserver:\/\//i.test(path) || /^data:/i.test(path) || /^https?:\/\//i.test(path)) return false;
-  if (!descriptor.rawUrl && (descriptor.kind === 'pdf' || descriptor.kind === 'image' || descriptor.inlinePolicy === 'stream')) return true;
-  if (!descriptor.derivatives?.length && descriptor.actions.some((action) => action === 'extract-text' || action === 'make-thumbnail' || action === 'select-rows')) return true;
-  return false;
-}
-
-function mergePreviewDescriptors(local: PreviewDescriptor, hydrated: PreviewDescriptor): PreviewDescriptor {
-  return {
-    ...local,
-    ...hydrated,
-    title: local.title || hydrated.title,
-    diagnostics: uniqueStrings([...(local.diagnostics ?? []), ...(hydrated.diagnostics ?? [])]),
-    derivatives: mergePreviewDerivatives(local.derivatives, hydrated.derivatives),
-    actions: uniqueStrings([...(local.actions ?? []), ...(hydrated.actions ?? [])]) as PreviewDescriptor['actions'],
-    locatorHints: uniqueStrings([...(local.locatorHints ?? []), ...(hydrated.locatorHints ?? [])]) as PreviewDescriptor['locatorHints'],
-  };
-}
-
-function descriptorWithDiagnostic(descriptor: PreviewDescriptor, error: unknown): PreviewDescriptor {
-  const message = error instanceof Error ? error.message : String(error);
-  return {
-    ...descriptor,
-    diagnostics: uniqueStrings([...(descriptor.diagnostics ?? []), `Workspace Writer descriptor hydration failed: ${message}`]),
-  };
-}
-
-function mergePreviewDerivatives(left: PreviewDescriptor['derivatives'], right: PreviewDescriptor['derivatives']) {
-  const byKey = new Map<string, NonNullable<PreviewDescriptor['derivatives']>[number]>();
-  for (const derivative of [...(left ?? []), ...(right ?? [])]) {
-    byKey.set(`${derivative.kind}:${derivative.ref}`, { ...byKey.get(`${derivative.kind}:${derivative.ref}`), ...derivative });
-  }
-  return byKey.size ? Array.from(byKey.values()) : undefined;
-}
-
-function uniqueStrings<T extends string>(values: T[]) {
-  return Array.from(new Set(values.filter(Boolean)));
-}
-
 function DescriptorPreview({ descriptor, config, reference }: { descriptor: PreviewDescriptor; config: SciForgeConfig; reference: SciForgeReference }) {
   const [derivedFile, setDerivedFile] = useState<WorkspaceFileContent | undefined>();
   const [derivedLabel, setDerivedLabel] = useState('');
@@ -2514,14 +1263,6 @@ function DescriptorPreview({ descriptor, config, reference }: { descriptor: Prev
   );
 }
 
-function descriptorCanUseWorkspacePreview(descriptor: PreviewDescriptor) {
-  return descriptor.kind === 'markdown'
-    || descriptor.kind === 'text'
-    || descriptor.kind === 'json'
-    || descriptor.kind === 'table'
-    || descriptor.kind === 'html';
-}
-
 async function loadDescriptorPreviewFile(descriptor: PreviewDescriptor, config: SciForgeConfig) {
   const shouldReadInline = descriptor.inlinePolicy === 'inline' && (descriptor.sizeBytes ?? 0) <= 1024 * 1024;
   if (shouldReadInline) {
@@ -2534,18 +1275,6 @@ async function loadDescriptorPreviewFile(descriptor: PreviewDescriptor, config: 
   const derivativeKind = descriptorDerivativeKind(descriptor);
   const derivative = await readPreviewDerivative(descriptor.ref, derivativeKind, config);
   return { file: await readWorkspaceFile(derivative.ref, config), label: `${derivative.kind} derivative` };
-}
-
-function descriptorDerivativeKind(descriptor: PreviewDescriptor): PreviewDerivative['kind'] {
-  if (descriptor.kind === 'json' || descriptor.kind === 'table') return 'schema';
-  if (descriptor.kind === 'html') return 'html';
-  return 'text';
-}
-
-function previewNeedsPackage(descriptor: PreviewDescriptor) {
-  if (descriptor.inlinePolicy === 'unsupported') return true;
-  if (descriptor.kind === 'binary' || descriptor.kind === 'office') return true;
-  return false;
 }
 
 function UnsupportedPreviewPackageNotice({
@@ -2584,34 +1313,6 @@ function UnsupportedPreviewPackageNotice({
         让 Agent 设计 preview package 并重试
       </button>
     </div>
-  );
-}
-
-function PreviewDescriptorActions({ descriptor, reference }: { descriptor: PreviewDescriptor; reference: SciForgeReference }) {
-  return (
-    <>
-      <div className="source-list">
-        <code>{descriptor.ref}</code>
-        {descriptor.mimeType ? <code>{descriptor.mimeType}</code> : null}
-        <button type="button" onClick={() => void navigator.clipboard?.writeText(JSON.stringify(reference, null, 2))}>复制引用</button>
-      </div>
-      {descriptor.derivatives?.length ? (
-        <details className="report-read-warning">
-          <summary>按需派生物</summary>
-          <div className="source-list">
-            {descriptor.derivatives.map((derivative) => (
-              <code key={`${derivative.kind}-${derivative.ref}`}>{derivative.kind}: {derivative.status || 'lazy'}</code>
-            ))}
-          </div>
-        </details>
-      ) : null}
-      {descriptor.diagnostics?.length ? (
-        <details className="report-read-warning">
-          <summary>preview diagnostics</summary>
-          <pre className="workspace-object-code">{descriptor.diagnostics.join('\n')}</pre>
-        </details>
-      ) : null}
-    </>
   );
 }
 
@@ -2676,93 +1377,6 @@ function officePreviewLabel(kind: string) {
   if (kind === 'spreadsheet') return '表格文件';
   if (kind === 'presentation') return '演示文稿';
   return '文档文件';
-}
-
-function uploadedArtifactPreview(artifact?: RuntimeArtifact) {
-  if (!artifact || !isRecord(artifact.data)) return undefined;
-  const dataUrl = asString(artifact.data.dataUrl);
-  const kind = asString(artifact.data.previewKind);
-  if (!dataUrl || (kind !== 'pdf' && kind !== 'image')) return undefined;
-  return {
-    kind: kind as 'pdf' | 'image',
-    dataUrl,
-    title: asString(artifact.metadata?.title) || asString(artifact.data.title) || artifact.id,
-    mimeType: asString(artifact.metadata?.mimeType) || asString(artifact.data.mimeType),
-    size: asNumber(artifact.metadata?.size) || asNumber(artifact.data.size),
-  };
-}
-
-function normalizeArtifactPreviewDescriptor(artifact: RuntimeArtifact | undefined, fallbackRef?: string): PreviewDescriptor | undefined {
-  if (!artifact) return undefined;
-  if (artifact.previewDescriptor) return artifact.previewDescriptor;
-  const metadata = artifact.metadata ?? {};
-  const nested = isRecord(metadata.previewDescriptor) ? metadata.previewDescriptor : undefined;
-  const rawKind = asString(nested?.kind) || asString(metadata.previewKind) || fileKindForPath(fallbackRef || artifact.path || artifact.dataRef || artifact.id, asString(metadata.language) || '');
-  const kind = previewKindFromArtifact(rawKind, artifact);
-  if (!kind) return undefined;
-  const rawUrl = asString(nested?.rawUrl) || asString(metadata.rawUrl);
-  return {
-    kind,
-    source: 'artifact',
-    ref: fallbackRef || artifact.path || artifact.dataRef || `artifact:${artifact.id}`,
-    mimeType: asString(nested?.mimeType) || asString(metadata.mimeType),
-    sizeBytes: asNumber(nested?.sizeBytes) || asNumber(metadata.size),
-    hash: asString(nested?.hash) || asString(metadata.hash),
-    title: asString(nested?.title) || asString(metadata.title) || artifact.id,
-    rawUrl,
-    inlinePolicy: rawUrl ? 'stream' : defaultInlinePolicyForKind(kind),
-    derivatives: Array.isArray(nested?.derivatives) ? nested.derivatives.map(normalizePreviewDerivative).filter((item): item is NonNullable<PreviewDescriptor['derivatives']>[number] => Boolean(item)) : undefined,
-    actions: previewActionsForDescriptorKind(kind),
-    diagnostics: asStringList(nested?.diagnostics),
-  };
-}
-
-function normalizePreviewDerivative(value: unknown): NonNullable<PreviewDescriptor['derivatives']>[number] | undefined {
-  if (!isRecord(value)) return undefined;
-  const kind = asString(value.kind);
-  const ref = asString(value.ref);
-  if (!kind || !ref) return undefined;
-  return {
-    kind: kind as NonNullable<PreviewDescriptor['derivatives']>[number]['kind'],
-    ref,
-    mimeType: asString(value.mimeType),
-    sizeBytes: asNumber(value.sizeBytes),
-    hash: asString(value.hash),
-    generatedAt: asString(value.generatedAt),
-    status: value.status === 'available' || value.status === 'lazy' || value.status === 'failed' || value.status === 'unsupported' ? value.status : undefined,
-    diagnostics: asStringList(value.diagnostics),
-  };
-}
-
-function previewKindFromArtifact(kind: string | undefined, artifact: RuntimeArtifact): PreviewDescriptor['kind'] | undefined {
-  const value = `${kind || ''} ${artifact.type} ${artifact.path || ''} ${artifact.dataRef || ''}`.toLowerCase();
-  if (/pdf/.test(value)) return 'pdf';
-  if (/image|png|jpe?g|gif|webp|svg/.test(value)) return 'image';
-  if (/markdown|\.md\b/.test(value)) return 'markdown';
-  if (/json/.test(value)) return 'json';
-  if (/csv|tsv|xlsx?|table|matrix/.test(value)) return 'table';
-  if (/html?/.test(value)) return 'html';
-  if (/pdb|cif|mmcif|structure|molecule/.test(value)) return 'structure';
-  if (/docx?|pptx?|office|presentation|document/.test(value)) return 'office';
-  if (/text|log|txt/.test(value)) return 'text';
-  if (artifact.path || artifact.dataRef) return 'binary';
-  return undefined;
-}
-
-function defaultInlinePolicyForKind(kind: PreviewDescriptor['kind']): PreviewDescriptor['inlinePolicy'] {
-  if (kind === 'pdf' || kind === 'image') return 'stream';
-  if (kind === 'markdown' || kind === 'text' || kind === 'json' || kind === 'table' || kind === 'html') return 'extract';
-  if (kind === 'office' || kind === 'structure') return 'external';
-  return kind === 'folder' ? 'extract' : 'unsupported';
-}
-
-function previewActionsForDescriptorKind(kind: PreviewDescriptor['kind']): PreviewDescriptor['actions'] {
-  const common: PreviewDescriptor['actions'] = ['system-open', 'copy-ref', 'inspect-metadata'];
-  if (kind === 'pdf') return ['open-inline', 'extract-text', 'make-thumbnail', 'select-page', 'select-region', ...common];
-  if (kind === 'image') return ['open-inline', 'make-thumbnail', 'select-region', ...common];
-  if (kind === 'table') return ['open-inline', 'select-rows', ...common];
-  if (kind === 'markdown' || kind === 'text' || kind === 'json' || kind === 'html') return ['open-inline', 'extract-text', ...common];
-  return common;
 }
 
 function UploadedDataUrlPreview({
@@ -2942,21 +1556,6 @@ function DelimitedTextPreview({ content, delimiter }: { content: string; delimit
   );
 }
 
-function fileKindForPath(path: string, language = '') {
-  const value = `${path} ${language}`.toLowerCase();
-  if (/markdown|\.md\b|\.markdown\b/.test(value)) return 'markdown';
-  if (/json|\.json\b/.test(value)) return 'json';
-  if (/\.csv\b/.test(value)) return 'csv';
-  if (/\.tsv\b/.test(value)) return 'tsv';
-  if (/\.pdf\b/.test(value)) return 'pdf';
-  if (/\.(png|jpe?g|gif|webp|svg)\b/.test(value)) return 'image';
-  if (/html|\.html?\b/.test(value)) return 'html';
-  if (/document|\.(docx?|rtf)\b/.test(value)) return 'document';
-  if (/spreadsheet|\.(xlsx?|ods)\b/.test(value)) return 'spreadsheet';
-  if (/presentation|\.(pptx?|odp)\b/.test(value)) return 'presentation';
-  return language || 'text';
-}
-
 function formatJsonLike(content: string) {
   try {
     return JSON.stringify(JSON.parse(content), null, 2);
@@ -3106,116 +1705,6 @@ function uiDesignLifecycleHint(step: string) {
   return '历史可复现，新任务不再默认选择';
 }
 
-function viewPlanSectionLabel(section: ViewPlanSection) {
-  if (section === 'primary') return '核心结果';
-  if (section === 'supporting') return '支撑证据';
-  if (section === 'provenance') return '执行记录';
-  return '原始数据 / fallback';
-}
-
-export function selectDefaultResultItems(items: ResolvedViewPlanItem[], focusMode: ResultFocusMode) {
-  const sorted = [...items].sort(resultPresentationRank);
-  const focused = sorted.filter((item) => item.source === 'object-focus');
-  if (focused.length && focusMode === 'all') {
-    const visibleItems: ResolvedViewPlanItem[] = [];
-    pushUniqueVisibleItems(visibleItems, focused, 2);
-    const visibleIds = new Set(visibleItems.map((item) => item.id));
-    return {
-      visibleItems,
-      deferredItems: sorted.filter((item) => !visibleIds.has(item.id) && !isAuditOnlyResultItem(item)),
-    };
-  }
-  if (focusMode === 'evidence' || focusMode === 'execution') {
-    const visibleItems: ResolvedViewPlanItem[] = [];
-    pushUniqueVisibleItems(visibleItems, sorted, 4);
-    const visibleIds = new Set(visibleItems.map((item) => item.id));
-    return {
-      visibleItems,
-      deferredItems: sorted.filter((item) => !visibleIds.has(item.id)),
-    };
-  }
-  const userFacing = sorted.filter((item) => !isAuditOnlyResultItem(item));
-  const primary = userFacing.filter((item) => item.section === 'primary');
-  const usefulPrimary = primary.filter((item) => item.status === 'bound' || item.status === 'missing-fields');
-  const visibleItems: ResolvedViewPlanItem[] = [];
-  pushUniqueVisibleItems(visibleItems, usefulPrimary.length ? usefulPrimary : primary, 2);
-  if (visibleItems.length < 2) {
-    const visibleIds = new Set(visibleItems.map((item) => item.id));
-    pushUniqueVisibleItems(
-      visibleItems,
-      userFacing.filter((item) => !visibleIds.has(item.id) && item.section === 'supporting' && item.status === 'bound'),
-      2,
-    );
-  }
-  const visibleIds = new Set(visibleItems.map((item) => item.id));
-  return {
-    visibleItems,
-    deferredItems: userFacing.filter((item) => !visibleIds.has(item.id)),
-  };
-}
-
-function isAuditOnlyResultItem(item: ResolvedViewPlanItem) {
-  return item.module.componentId === 'evidence-matrix'
-    || item.module.componentId === 'execution-unit-table'
-    || item.module.componentId === 'notebook-timeline'
-    || item.module.componentId === 'unknown-artifact-inspector'
-    || item.section === 'provenance'
-    || item.section === 'raw';
-}
-
-function pushUniqueVisibleItems(target: ResolvedViewPlanItem[], candidates: ResolvedViewPlanItem[], limit: number) {
-  const visibleKeys = new Set(target.map(visiblePresentationGroupKey));
-  for (const item of candidates) {
-    if (target.length >= limit) break;
-    const key = visiblePresentationGroupKey(item);
-    if (visibleKeys.has(key)) continue;
-    visibleKeys.add(key);
-    target.push(item);
-  }
-}
-
-function visiblePresentationGroupKey(item: ResolvedViewPlanItem) {
-  return `${item.section}:${item.module.componentId}`;
-}
-
-function resultPresentationRank(left: ResolvedViewPlanItem, right: ResolvedViewPlanItem) {
-  const sectionDelta = sectionRank(left.section) - sectionRank(right.section);
-  if (sectionDelta) return sectionDelta;
-  const statusDelta = resultStatusRank(left.status) - resultStatusRank(right.status);
-  if (statusDelta) return statusDelta;
-  const componentDelta = resultComponentRank(left.module.componentId) - resultComponentRank(right.module.componentId);
-  if (componentDelta) return componentDelta;
-  return (left.slot.priority ?? left.module.priority ?? 99) - (right.slot.priority ?? right.module.priority ?? 99);
-}
-
-function resultStatusRank(status: ResolvedViewPlanItem['status']) {
-  if (status === 'bound') return 0;
-  if (status === 'missing-fields') return 1;
-  if (status === 'fallback') return 2;
-  return 3;
-}
-
-function resultComponentRank(componentId: string) {
-  const order = [
-    'report-viewer',
-    'structure-viewer',
-    'molecule-viewer',
-    'evidence-matrix',
-    'paper-card-list',
-    'graph-viewer',
-    'network-graph',
-    'point-set-viewer',
-    'matrix-viewer',
-    'record-table',
-    'data-table',
-    'execution-unit-table',
-    'notebook-timeline',
-    'unknown-artifact-inspector',
-  ];
-  const index = order.indexOf(componentId);
-  return index === -1 ? 99 : index;
-}
-
 function ResultItemsSection({
   title,
   items,
@@ -3292,6 +1781,10 @@ function formatCellValue(value: unknown): string {
   return '';
 }
 
+function humanizeKey(key: string) {
+  return key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 function RegistrySlot({
   scenarioId,
   config,
@@ -3325,19 +1818,10 @@ function RegistrySlot({
         <SectionHeader icon={AlertTriangle} title={slot.title ?? '未注册组件'} subtitle={slot.componentId} />
         <p className="empty-state">Scenario 返回了未知 componentId。当前使用通用 inspector 展示 artifact、manifest 和日志引用。</p>
         {slot.artifactRef && !artifact ? <p className="empty-state">artifactRef 未找到：{slot.artifactRef}</p> : null}
-        {onDismissResultSlotPresentation ? (
-          <div className="artifact-card-actions">
-            <button
-              type="button"
-              className="registry-slot-dismiss"
-              onClick={() => onDismissResultSlotPresentation(item.id)}
-              title="从结果区移除本卡片（不删除 workspace 中的 artifact 或文件）"
-            >
-              <Trash2 size={13} />
-              删除视图
-            </button>
-          </div>
-        ) : null}
+        <ArtifactCardControls
+          presentationId={item.id}
+          onDismissResultSlotPresentation={onDismissResultSlotPresentation}
+        />
         <UnknownArtifactInspector scenarioId={scenarioId} config={config} session={session} slot={slot} artifact={artifact} />
       </Card>
     );
@@ -3348,39 +1832,14 @@ function RegistrySlot({
       data-sciforge-reference={sciForgeReferenceAttribute(artifact ? referenceForArtifact(artifact, artifactReferenceKind(artifact, slot.componentId)) : referenceForResultSlot(item))}
     >
       <SectionHeader icon={Target} title={slot.title ?? entry.label} subtitle={resultSlotSubtitle(item, artifact)} />
-      {artifact || onDismissResultSlotPresentation ? (
-        <div className="artifact-card-actions">
-          {artifact ? (
-            <button type="button" onClick={() => onInspectArtifact(artifact)}>
-              <Eye size={13} />
-              查看数据
-            </button>
-          ) : null}
-          {onDismissResultSlotPresentation ? (
-            <button
-              type="button"
-              className="registry-slot-dismiss"
-              onClick={() => onDismissResultSlotPresentation(item.id)}
-              title="从结果区移除本卡片（不删除 workspace 中的 artifact 或文件）"
-            >
-              <Trash2 size={13} />
-              删除视图
-            </button>
-          ) : null}
-        </div>
-      ) : null}
+      <ArtifactCardControls
+        artifact={artifact}
+        presentationId={item.id}
+        onInspectArtifact={onInspectArtifact}
+        onDismissResultSlotPresentation={onDismissResultSlotPresentation}
+      />
       {artifact && handoffTargets.length ? (
-        <div className="handoff-actions">
-          <span>发送 artifact 到</span>
-          {handoffTargets.map((target) => {
-            const targetScenario = scenarios.find((item) => item.id === target);
-            return (
-              <button key={target} onClick={() => setHandoffPreviewTarget(target)}>
-                {targetScenario?.name ?? target}
-              </button>
-            );
-          })}
-        </div>
+        <HandoffTargetButtons targets={handoffTargets} onPreview={setHandoffPreviewTarget} />
       ) : null}
       {artifact && handoffPreviewTarget ? (
         <HandoffPreview
@@ -3401,52 +1860,6 @@ function resultSlotSubtitle(item: ResolvedViewPlanItem, artifact?: RuntimeArtifa
   if (item.status === 'missing-fields') return `数据字段不完整 · ${item.slot.artifactRef ?? item.module.componentId}`;
   if (item.status === 'missing-artifact') return `等待 ${item.slot.artifactRef ?? item.module.acceptsArtifactTypes[0] ?? 'artifact'}`;
   return item.module.title;
-}
-
-function HandoffPreview({
-  sourceScenarioId,
-  targetScenarioId,
-  artifact,
-  onCancel,
-  onConfirm,
-}: {
-  sourceScenarioId: ScenarioId;
-  targetScenarioId: ScenarioId;
-  artifact: RuntimeArtifact;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const source = scenarios.find((item) => item.id === sourceScenarioId);
-  const target = scenarios.find((item) => item.id === targetScenarioId);
-  const autoRunPrompt = handoffAutoRunPrompt(targetScenarioId, artifact, source?.name ?? sourceScenarioId, target?.name ?? targetScenarioId);
-  const fields = [
-    ['artifact id', artifact.id],
-    ['artifact type', artifact.type],
-    ['schema', artifact.schemaVersion],
-    ['source', artifact.producerScenario],
-    ['new run', `${target?.name ?? targetScenarioId} auto-run draft`],
-  ];
-  return (
-    <div className="handoff-preview" role="group" aria-label="Handoff 确认预览">
-      <div>
-        <strong>确认 handoff</strong>
-        <p>会把 artifact 放入目标场景上下文，并创建一条可自动运行的用户输入草案。</p>
-      </div>
-      <div className="handoff-field-grid">
-        {fields.map(([label, value]) => (
-          <span key={label}>
-            <em>{label}</em>
-            <code>{value}</code>
-          </span>
-        ))}
-      </div>
-      <pre className="handoff-prompt-preview">{autoRunPrompt}</pre>
-      <div className="handoff-preview-actions">
-        <button type="button" onClick={onCancel}>取消</button>
-        <button type="button" onClick={onConfirm}>确认 handoff</button>
-      </div>
-    </div>
-  );
 }
 
 function ArtifactInspectorDrawer({
@@ -3837,76 +2250,4 @@ function NotebookTimeline({ scenarioId, notebook = [], embedded = false }: { sce
       </div>
     </div>
   );
-}
-
-export function handoffAutoRunPrompt(targetScenario: ScenarioId, artifact: RuntimeArtifact, sourceScenarioName: string, targetScenarioName: string): string {
-  const focus = artifactFocusTerm(artifact);
-  if (targetScenario === 'literature-evidence-review' && focus) {
-    return `${focus} clinical trials，返回 paper-list JSON artifact、claims、ExecutionUnit。`;
-  }
-  if (targetScenario === 'structure-exploration' && focus) {
-    return `分析 ${focus} 的结构，返回 structure-summary artifact、dataRef、质量指标和 ExecutionUnit。`;
-  }
-  if (targetScenario === 'biomedical-knowledge-graph' && focus) {
-    return `${focus} gene/protein knowledge graph，返回 knowledge-graph、来源链接、数据库访问日期和 ExecutionUnit。`;
-  }
-  return [
-    `消费 handoff artifact ${artifact.id} (${artifact.type})。`,
-    `来源 Scenario: ${sourceScenarioName}。`,
-    `请按${targetScenarioName}的 input contract 生成下一步 claims、ExecutionUnit、UIManifest 和 runtime artifact。`,
-  ].join('\n');
-}
-
-export function previewPackageAutoRunPrompt(reference: ObjectReference, path?: string, descriptor?: PreviewDescriptor): string {
-  const target = path || descriptor?.ref || reference.ref;
-  const ext = target.includes('.') ? target.split(/[?#]/)[0].split('.').pop() : undefined;
-  return [
-    `右侧预览点击了一个当前不支持内联 preview 的文件，但它仍然必须保持为可引用对象。`,
-    `请为这个文件类型设计并实现一个 SciForge preview package 插件，然后自动尝试再次 preview/review。`,
-    ``,
-    `目标文件引用：${reference.ref}`,
-    `目标文件路径：${target}`,
-    `文件扩展名：${ext || 'unknown'}`,
-    `当前 preview descriptor：${JSON.stringify({
-      kind: descriptor?.kind,
-      inlinePolicy: descriptor?.inlinePolicy,
-      mimeType: descriptor?.mimeType,
-      actions: descriptor?.actions,
-      diagnostics: descriptor?.diagnostics,
-    }, null, 2)}`,
-    ``,
-    `实施要求：`,
-    `1. 先检查 packages/ui-components 下已有组件和 manifest，优先复用现有 package；不够再新增专门的 preview package。`,
-    `2. 新 package 要包含 manifest、必要的 renderer/README/test，并接入 UI registry 或现有 preview 分发链路。`,
-    `3. 未能完整渲染时要给用户明确 unsupported 状态和 fallback 操作，不能让右侧面板空白或崩溃。`,
-    `4. 完成后运行相关测试/类型检查，并再次尝试聚焦 ${target}，报告 preview 是否已可用。`,
-  ].join('\n');
-}
-
-function artifactFocusTerm(artifact: RuntimeArtifact): string | undefined {
-  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
-  const data = isRecord(artifact.data) ? artifact.data : {};
-  return asString(metadata.entity)
-    || asString(metadata.accession)
-    || asString(metadata.uniprotAccession)
-    || asString(data.uniprotId)
-    || asString(data.pdbId)
-    || rowValue(data.rows, 'entity')
-    || rowValue(data.rows, 'uniprot_accession')
-    || nodeId(data.nodes, ['gene', 'protein']);
-}
-
-function rowValue(value: unknown, key: string): string | undefined {
-  const rows = Array.isArray(value) ? value.filter(isRecord) : [];
-  const found = rows.find((row) => asString(row.key)?.toLowerCase() === key.toLowerCase());
-  return asString(found?.value);
-}
-
-function nodeId(value: unknown, preferredTypes: string[]): string | undefined {
-  const nodes = Array.isArray(value) ? value.filter(isRecord) : [];
-  const found = nodes.find((node) => {
-    const type = asString(node.type)?.toLowerCase();
-    return type ? preferredTypes.includes(type) : false;
-  }) ?? nodes[0];
-  return asString(found?.id) || asString(found?.label);
 }

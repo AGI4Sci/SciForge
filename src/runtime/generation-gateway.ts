@@ -9,10 +9,45 @@ import { emitWorkspaceRuntimeEvent, throwIfRuntimeAborted } from './workspace-ru
 import { composeRuntimeUiManifest } from './runtime-ui-manifest.js';
 import { cleanUrl, clipForAgentServerJson, clipForAgentServerPrompt, errorMessage, excerptAroundFailureLine, extractLikelyErrorLine, generatedTaskArchiveRel, hashJson, headForAgentServer, isRecord, isTaskInputRel, readTextIfExists, safeWorkspaceRel, summarizeTextChange, tailForAgentServer, toRecordList, toStringList, uniqueStrings } from './gateway-utils.js';
 import { normalizeBackendHandoff } from './workspace-task-input.js';
-import { normalizeGatewayRequest as normalizeGatewayRequestFromModule } from './gateway/gateway-request.js';
+import {
+  expectedArtifactTypesForRequest,
+  normalizeGatewayRequest as normalizeGatewayRequestFromModule,
+  normalizeLlmEndpoint,
+  selectedComponentIdsForRequest,
+} from './gateway/gateway-request.js';
+import {
+  buildContextEnvelope,
+  expectedArtifactSchema,
+  summarizeArtifactRefs,
+  summarizeConversationLedger,
+  summarizeExecutionRefs,
+  summarizeTaskAttemptsForAgentServer,
+  workspaceTreeSummary,
+  type AgentServerContextMode,
+} from './gateway/context-envelope.js';
+import { applyRuntimeVerificationPolicy } from './gateway/verification-policy.js';
+import { repairNeededPayload as buildRepairNeededPayload, type RepairPolicyRefs } from './gateway/repair-policy.js';
+import {
+  normalizeAgentServerWorkspaceEvent as normalizeAgentServerWorkspaceEventFromModule,
+  withRequestContextWindowLimit as withRequestContextWindowLimitFromModule,
+} from './gateway/workspace-event-normalizer.js';
+import { runAgentServerGeneratedTask as runAgentServerGeneratedTaskFromModule } from './gateway/generated-task-runner.js';
+import {
+  boundedRateLimitBackoffMs,
+  classifyAgentServerBackendFailure,
+  isContextWindowExceededError,
+  parseJsonErrorMessage,
+  providerRateLimitDiagnosticMessage,
+  rateLimitRecoverActions,
+  redactSecretText,
+  retryAfterMsFromText,
+  sanitizeAgentServerError,
+  type AgentServerBackendFailureDiagnostic,
+  type AgentServerBackendFailureKind,
+} from './gateway/backend-failure-diagnostics.js';
 import { tryRunVisionSenseRuntime } from './vision-sense-runtime.js';
 import { toolPackageManifests } from '../../packages/tools';
-import { agentHandoffSourceMetadata, buildSharedAgentHandoffContract, normalizeAgentHandoffSource, normalizeSharedSkillDomain } from '../shared/agentHandoff.js';
+import { agentHandoffSourceMetadata } from '../shared/agentHandoff.js';
 
 const AGENT_BACKEND_ANSWER_PRINCIPLE = [
   'All normal user-visible answers must be reasoned by the agent backend.',
@@ -21,27 +56,6 @@ const AGENT_BACKEND_ANSWER_PRINCIPLE = [
 
 function requestHandoffSource(request: GatewayRequest) {
   return request.handoffSource ?? 'cli';
-}
-
-type AgentServerContextMode = 'full' | 'delta';
-
-type AgentServerBackendFailureKind =
-  | 'context-window'
-  | 'http-429'
-  | 'rate-limit'
-  | 'retry-budget'
-  | 'too-many-failed-attempts';
-
-interface AgentServerBackendFailureDiagnostic {
-  kind: AgentServerBackendFailureKind;
-  categories: AgentServerBackendFailureKind[];
-  backend?: string;
-  provider?: string;
-  model?: string;
-  httpStatus?: number;
-  retryAfterMs?: number;
-  resetAt?: string;
-  message: string;
 }
 
 interface AgentServerGenerationRetryAudit {
@@ -90,7 +104,7 @@ type AgentServerGenerationResult =
 export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, callbacks: WorkspaceRuntimeCallbacks = {}): Promise<ToolPayload> {
   const request = normalizeGatewayRequestFromModule(body);
   const visionSensePayload = await tryRunVisionSenseRuntime(request, callbacks);
-  if (visionSensePayload) return visionSensePayload;
+  if (visionSensePayload) return applyRuntimeVerificationPolicy(visionSensePayload, request);
   const skills = await loadSkillRegistry(request);
   const skill = agentServerGenerationSkill(request.skillDomain);
   emitWorkspaceRuntimeEvent(callbacks, {
@@ -99,7 +113,9 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
     message: `Selected skill ${skill.id} for ${request.skillDomain}`,
     detail: skill.manifest.entrypoint.type,
   });
-  return await runAgentServerGeneratedTask(request, skill, skills, callbacks) ?? repairNeededPayload(request, skill, 'AgentServer task generation did not produce a runnable task.');
+  const payload = await runAgentServerGeneratedTask(request, skill, skills, callbacks)
+    ?? repairNeededPayload(request, skill, 'AgentServer task generation did not produce a runnable task.');
+  return applyRuntimeVerificationPolicy(payload, request);
 }
 
 async function runAgentServerGeneratedTask(
@@ -109,517 +125,27 @@ async function runAgentServerGeneratedTask(
   callbacks: WorkspaceRuntimeCallbacks = {},
   options: { allowSupplement?: boolean } = {},
 ): Promise<ToolPayload | undefined> {
-  const workspace = resolve(request.workspacePath || process.cwd());
-  const baseUrl = request.agentServerBaseUrl || await readConfiguredAgentServerBaseUrl(workspace);
-  if (!baseUrl) {
-    return repairNeededPayload(request, skill, 'No validated local skill matched this request and no AgentServer base URL is configured.');
-  }
-  let generation = await requestAgentServerGeneration({
-    baseUrl,
-    request,
-    skill,
-    skills,
-    workspace,
-    callbacks,
-  });
-  if (!generation.ok) {
-    const failureReason = agentServerGenerationFailureReason(generation.error, generation.diagnostics);
-    const failedRequestId = `agentserver-generation-${request.skillDomain}-${sha1(`${request.prompt}:${generation.error}`).slice(0, 12)}`;
-    await appendTaskAttempt(workspace, {
-      id: failedRequestId,
-      prompt: request.prompt,
-      skillDomain: request.skillDomain,
-      ...attemptPlanRefs(request, skill, failureReason),
-      skillId: skill.id,
-      attempt: 1,
-      status: 'repair-needed',
-      failureReason,
-      contextRecovery: generation.diagnostics?.kind === 'contextWindowExceeded' ? {
-        kind: 'contextWindowExceeded',
-        backend: generation.diagnostics.backend,
-        provider: generation.diagnostics.provider,
-        agentId: generation.diagnostics.agentId,
-        sessionRef: generation.diagnostics.sessionRef,
-        originalErrorSummary: generation.diagnostics.originalErrorSummary,
-        compaction: generation.diagnostics.compaction,
-        retryAttempted: generation.diagnostics.retryAttempted,
-        retrySucceeded: generation.diagnostics.retrySucceeded,
-      } : undefined,
-      createdAt: new Date().toISOString(),
-    });
-    return repairNeededPayload(request, skill, failureReason, agentServerFailurePayloadRefs(generation.diagnostics));
-  }
-  if ('directPayload' in generation) {
-    const directGeneration = generation;
-    const directPayload = await mergeReusableContextArtifactsForDirectPayload(
-      ensureDirectAnswerReportArtifact(
-        directGeneration.directPayload,
-        request,
-        'agentserver-direct-payload',
-      ),
-      request,
-    );
-    const normalized = await validateAndNormalizePayload(directPayload, request, skill, {
-      taskRel: 'agentserver://direct-payload',
-      outputRel: `agentserver://${directGeneration.runId || 'unknown'}/output`,
-      stdoutRel: `agentserver://${directGeneration.runId || 'unknown'}/stdout`,
-      stderrRel: `agentserver://${directGeneration.runId || 'unknown'}/stderr`,
-      runtimeFingerprint: { runtime: 'AgentServer direct ToolPayload', runId: directGeneration.runId },
-    });
-    return {
-      ...normalized,
-      reasoningTrace: [
-        normalized.reasoningTrace,
-        `AgentServer generation run: ${directGeneration.runId || 'unknown'}`,
-        'AgentServer returned a SciForge ToolPayload directly; no workspace task archive was required.',
-      ].filter(Boolean).join('\n'),
-      executionUnits: normalized.executionUnits.map((unit) => isRecord(unit) ? {
-        ...unit,
-        ...attemptPlanRefs(request, skill),
-        agentServerGenerated: true,
-        agentServerRunId: directGeneration.runId,
-      } : unit),
-    };
-  }
-
-  const missingPathOnlyTaskFiles = await missingGeneratedTaskFileContents(workspace, generation.response.taskFiles);
-  if (missingPathOnlyTaskFiles.length) {
-    const reason = `AgentServer returned path-only taskFiles that were not present in the workspace and had no inline content: ${missingPathOnlyTaskFiles.join(', ')}`;
-    emitWorkspaceRuntimeEvent(callbacks, {
-      type: 'agentserver-generation-retry',
-      source: 'workspace-runtime',
-      status: 'running',
-      message: reason,
-      detail: 'Retrying AgentServer generation once; taskFiles must include inline content or be physically written before returning.',
-    });
-    const retriedGeneration = await requestAgentServerGeneration({
-      baseUrl,
-      request,
-      skill,
-      skills,
-      workspace,
-      callbacks,
-      strictTaskFilesReason: reason,
-    });
-    if (!retriedGeneration.ok) {
-      return repairNeededPayload(request, skill, retriedGeneration.error);
-    }
-    if ('directPayload' in retriedGeneration) {
-      return repairNeededPayload(
-        request,
-        skill,
-        `${reason}. Strict retry returned a direct ToolPayload instead of executable taskFiles.`,
-      );
-    }
-    generation = retriedGeneration;
-    const stillMissingPathOnlyTaskFiles = await missingGeneratedTaskFileContents(workspace, generation.response.taskFiles);
-    if (stillMissingPathOnlyTaskFiles.length) {
-      const contractReason = [
-        reason,
-        `Strict retry still returned path-only taskFiles without inline content or workspace files: ${stillMissingPathOnlyTaskFiles.join(', ')}`,
-      ].join('. ');
-      return repairNeededPayload(request, skill, `AgentServer generation contract violation: ${contractReason}`);
-    }
-  }
-
-  const taskId = `generated-${request.skillDomain}-${sha1(`${request.prompt}:${Date.now()}`).slice(0, 12)}`;
-  const generatedPathMap = new Map<string, string>();
-  const generatedInputRels: string[] = [];
-  try {
-    for (const file of generation.response.taskFiles) {
-      const declaredRel = safeWorkspaceRel(file.path);
-      const rel = generatedTaskArchiveRel(taskId, declaredRel);
-      generatedPathMap.set(declaredRel, rel);
-      if (isTaskInputRel(declaredRel)) generatedInputRels.push(declaredRel);
-      const content = file.content || await readGeneratedTaskFileIfPresent(workspace, file.path);
-      if (content === undefined) {
-        return repairNeededPayload(
-          request,
-          skill,
-          `AgentServer returned taskFiles path-only reference but SciForge could not read workspace file: ${declaredRel}`,
-        );
-      }
-      await mkdir(dirname(join(workspace, declaredRel)), { recursive: true });
-      await writeFile(join(workspace, declaredRel), content);
-      await mkdir(dirname(join(workspace, rel)), { recursive: true });
-      await writeFile(join(workspace, rel), content);
-      emitWorkspaceRuntimeEvent(callbacks, {
-        type: 'workspace-task-materialized',
-        source: 'workspace-runtime',
-        message: `Materialized AgentServer task file ${declaredRel}`,
-        detail: rel === declaredRel ? declaredRel : `${declaredRel} -> ${rel}`,
-      });
-    }
-  } catch (error) {
-    return repairNeededPayload(request, skill, `AgentServer generated task files could not be archived: ${sanitizeAgentServerError(errorMessage(error))}`);
-  }
-  const entrypointOriginalRel = safeWorkspaceRel(generation.response.entrypoint.path);
-  const taskRel = generatedPathMap.get(entrypointOriginalRel) ?? generatedTaskArchiveRel(taskId, generation.response.entrypoint.path);
-  const outputRel = `.sciforge/task-results/${taskId}.json`;
-  const stdoutRel = `.sciforge/logs/${taskId}.stdout.log`;
-  const stderrRel = `.sciforge/logs/${taskId}.stderr.log`;
-  const generatedExpectedArtifacts = expectedArtifactTypesForGeneratedRun(request, generation.response.expectedArtifacts);
-  const generatedSupplementScope = supplementScopeForGeneratedRun(request, generation.response.expectedArtifacts);
-  const run = await runWorkspaceTask(workspace, {
-    id: taskId,
-    language: generation.response.entrypoint.language,
-    entrypoint: generation.response.entrypoint.command || 'main',
-    entrypointArgs: generation.response.entrypoint.args,
-    taskRel,
-    input: {
-      prompt: request.prompt,
-      attempt: 1,
-      skillId: skill.id,
-      agentServerGenerated: true,
-      artifacts: request.artifacts,
-      uiStateSummary: request.uiState,
-      recentExecutionRefs: toRecordList(request.uiState?.recentExecutionRefs),
-      priorAttempts: summarizeTaskAttemptsForAgentServer(await readRecentTaskAttempts(workspace, request.skillDomain, 8, {
-        scenarioPackageId: request.scenarioPackageRef?.id,
-        skillPlanRef: request.skillPlanRef,
-        prompt: request.prompt,
-      })),
-      expectedArtifacts: generatedExpectedArtifacts,
-      selectedComponentIds: selectedComponentIdsForRequest(request),
-    },
-    retentionProtectedInputRels: generatedInputRels,
-    outputRel,
-    stdoutRel,
-    stderrRel,
-  });
-
-  if (run.exitCode !== 0 && !await fileExists(join(workspace, outputRel))) {
-    const failureReason = run.stderr || 'AgentServer generated task failed before writing output.';
-    await appendTaskAttempt(workspace, {
-      id: taskId,
-      prompt: request.prompt,
-      skillDomain: request.skillDomain,
-      ...attemptPlanRefs(request, skill),
-      skillId: skill.id,
-      attempt: 1,
-      status: 'repair-needed',
-      codeRef: taskRel,
-      inputRef: `.sciforge/task-inputs/${taskId}.json`,
-      outputRef: outputRel,
-      stdoutRef: stdoutRel,
-      stderrRef: stderrRel,
-      exitCode: run.exitCode,
-      failureReason,
-      createdAt: new Date().toISOString(),
-    });
-    const repaired = await tryAgentServerRepairAndRerun({
-      request,
-      skill,
-      taskId,
-      taskPrefix: 'generated',
-      run,
-      schemaErrors: [],
-      failureReason,
-      callbacks,
-    });
-    if (repaired) return repaired;
-    return failedTaskPayload(request, skill, run, failureReason);
-  }
-
-  try {
-    const rawPayload = JSON.parse(await readFile(join(workspace, outputRel), 'utf8')) as ToolPayload;
-    const payload = coerceWorkspaceTaskPayload(rawPayload) ?? rawPayload;
-    const errors = schemaErrors(payload);
-    const normalized = await validateAndNormalizePayload(payload, request, skill, {
-      taskRel,
-      outputRel,
-      stdoutRel,
-      stderrRel,
-      runtimeFingerprint: run.runtimeFingerprint,
-    });
-    const failureReason = firstPayloadFailureReason(payload, run);
-    const shouldRepairExecutionFailure = errors.length === 0 && run.exitCode !== 0 && Boolean(failureReason);
-    await appendTaskAttempt(workspace, {
-      id: taskId,
-      prompt: request.prompt,
-      skillDomain: request.skillDomain,
-      ...attemptPlanRefs(request, skill),
-      skillId: skill.id,
-      attempt: 1,
-      status: errors.length || shouldRepairExecutionFailure ? 'repair-needed' : payloadHasFailureStatus(payload) ? 'failed-with-reason' : 'done',
-      codeRef: taskRel,
-      inputRef: `.sciforge/task-inputs/${taskId}.json`,
-      outputRef: outputRel,
-      stdoutRef: stdoutRel,
-      stderrRef: stderrRel,
-      exitCode: run.exitCode,
-      schemaErrors: errors,
-      failureReason: errors.length ? `AgentServer generated task output failed schema validation: ${errors.join('; ')}` : failureReason,
-      createdAt: new Date().toISOString(),
-    });
-    if (errors.length || shouldRepairExecutionFailure) {
-      const repairFailureReason = errors.length
-        ? `AgentServer generated task output failed schema validation: ${errors.join('; ')}`
-        : `AgentServer generated task exited ${run.exitCode} with failed payload: ${failureReason}`;
-      const repaired = await tryAgentServerRepairAndRerun({
-        request,
-        skill,
-        taskId,
-        taskPrefix: 'generated',
-        run,
-        schemaErrors: errors,
-        failureReason: repairFailureReason,
-        callbacks,
-      });
-      if (repaired) return repaired;
-      return repairNeededPayload(request, skill, repairFailureReason);
-    }
-    if (options.allowSupplement !== false) {
-      const supplemented = await tryAgentServerSupplementMissingArtifacts({
-        request,
-        skill,
-        skills,
-        baseUrl,
-        workspace,
-        payload: normalized,
-        expectedArtifactTypes: generatedSupplementScope,
-        callbacks,
-      });
-      if (supplemented) return supplemented;
-    }
-    const proposal = await maybeWriteSkillPromotionProposal({
-      workspacePath: workspace,
-      request,
-      skill,
-      taskId,
-      taskRel,
-      inputRef: `.sciforge/task-inputs/${taskId}.json`,
-      outputRef: outputRel,
-      stdoutRef: stdoutRel,
-      stderrRef: stderrRel,
-      payload: normalized,
-      patchSummary: generation.response.patchSummary,
-    });
-    return {
-      ...normalized,
-      reasoningTrace: [
-        normalized.reasoningTrace,
-        `AgentServer generation run: ${generation.runId || 'unknown'}`,
-        `Generation summary: ${generation.response.patchSummary || 'task generated'}`,
-        proposal ? `Skill promotion proposal: .sciforge/skill-proposals/${proposal.id}` : '',
-      ].filter(Boolean).join('\n'),
-      executionUnits: normalized.executionUnits.map((unit) => isRecord(unit) ? {
-        ...unit,
-        ...attemptPlanRefs(request, skill),
-        agentServerGenerated: true,
-        agentServerRunId: generation.runId,
-        patchSummary: generation.response.patchSummary,
-      } : unit),
-    };
-  } catch (error) {
-    const failureReason = `AgentServer generated task output could not be parsed: ${errorMessage(error)}`;
-    await appendTaskAttempt(workspace, {
-      id: taskId,
-      prompt: request.prompt,
-      skillDomain: request.skillDomain,
-      ...attemptPlanRefs(request, skill),
-      skillId: skill.id,
-      attempt: 1,
-      status: 'repair-needed',
-      codeRef: taskRel,
-      inputRef: `.sciforge/task-inputs/${taskId}.json`,
-      outputRef: outputRel,
-      stdoutRef: stdoutRel,
-      stderrRef: stderrRel,
-      exitCode: run.exitCode,
-      failureReason,
-      createdAt: new Date().toISOString(),
-    });
-    const repaired = await tryAgentServerRepairAndRerun({
-      request,
-      skill,
-      taskId,
-      taskPrefix: 'generated',
-      run,
-      schemaErrors: ['output could not be parsed'],
-      failureReason,
-      callbacks,
-    });
-    if (repaired) return repaired;
-    return failedTaskPayload(request, skill, run, failureReason);
-  }
-}
-
-async function tryAgentServerSupplementMissingArtifacts(params: {
-  request: GatewayRequest;
-  skill: SkillAvailability;
-  skills: SkillAvailability[];
-  baseUrl: string;
-  workspace: string;
-  payload: ToolPayload;
-  expectedArtifactTypes?: string[];
-  callbacks?: WorkspaceRuntimeCallbacks;
-}) {
-  const missingTypes = missingExpectedArtifactTypes(params.request, params.payload.artifacts, params.expectedArtifactTypes);
-  if (!missingTypes.length) return undefined;
-  emitWorkspaceRuntimeEvent(params.callbacks, {
-    type: 'workspace-task-start',
-    source: 'workspace-runtime',
-    status: 'running',
-    message: 'Requesting supplemental AgentServer/backend generation',
-    detail: `Missing expected artifact types: ${missingTypes.join(', ')}`,
-  });
-  const existingTypes = uniqueStrings(params.payload.artifacts.map((artifact) => String(artifact.type || artifact.id || '')).filter(Boolean));
-  const supplementRequest: GatewayRequest = {
-    ...params.request,
-    prompt: [
-      params.request.prompt,
-      '',
-      `Supplement the previous local skill result. Missing expected artifact types: ${missingTypes.join(', ')}.`,
-      'Write reproducible workspace code that emits all missing artifacts and preserves existing artifacts if useful.',
-      `Existing artifact types: ${existingTypes.join(', ') || 'none'}.`,
-    ].join('\n'),
-    artifacts: params.payload.artifacts,
-    expectedArtifactTypes: missingTypes,
-  };
-  const supplement = await runAgentServerGeneratedTask(
-    supplementRequest,
-    params.skill,
-    params.skills,
-    params.callbacks,
-    { allowSupplement: false },
-  );
-  if (!supplement) return undefined;
-  const supplementedTypes = new Set(supplement.artifacts
-    .filter((artifact) => !artifactNeedsRepair(artifact))
-    .map((artifact) => String(artifact.type || artifact.id || ''))
-    .filter(Boolean));
-  const filled = missingTypes.filter((type) => supplementedTypes.has(type));
-  if (!filled.length) return undefined;
-  return mergeSupplementalPayload(params.payload, supplement, filled);
-}
-
-function missingExpectedArtifactTypes(request: GatewayRequest, artifacts: Array<Record<string, unknown>>, expectedArtifactTypes?: string[]) {
-  const present = new Set(artifacts
-    .filter((artifact) => !artifactNeedsRepair(artifact))
-    .map((artifact) => String(artifact.type || artifact.id || ''))
-    .filter(Boolean));
-  const expected = expectedArtifactTypes?.length ? expectedArtifactTypes : expectedArtifactTypesForRequest(request);
-  return uniqueStrings(expected).filter((type) => !present.has(type));
-}
-
-function expectedArtifactTypesForGeneratedRun(request: GatewayRequest, generatedExpectedArtifacts?: string[]) {
-  const generated = uniqueStrings((generatedExpectedArtifacts ?? []).map((type) => type.trim()).filter(Boolean));
-  return uniqueStrings([...expectedArtifactTypesForRequest(request), ...generated]);
-}
-
-function supplementScopeForGeneratedRun(request: GatewayRequest, generatedExpectedArtifacts?: string[]) {
-  const generated = uniqueStrings((generatedExpectedArtifacts ?? []).map((type) => type.trim()).filter(Boolean));
-  return generated.length ? generated : expectedArtifactTypesForRequest(request);
-}
-
-function mergeSupplementalPayload(base: ToolPayload, supplement: ToolPayload, filledTypes: string[]): ToolPayload {
-  const seenArtifacts = new Set<string>();
-  const artifacts = [...base.artifacts, ...supplement.artifacts].filter((artifact) => {
-    const key = [
-      String(artifact.type || artifact.id || ''),
-      String(artifact.id || ''),
-      String(artifact.dataRef || ''),
-      isRecord(artifact.metadata) ? String(artifact.metadata.artifactRef || artifact.metadata.outputRef || '') : '',
-    ].join('|');
-    if (seenArtifacts.has(key)) return false;
-    seenArtifacts.add(key);
-    return true;
-  });
-  const uiManifest = [...base.uiManifest, ...supplement.uiManifest].filter((slot, index, all) => {
-    const key = `${String(slot.componentId || '')}:${String(slot.artifactRef || '')}`;
-    return all.findIndex((candidate) => `${String(candidate.componentId || '')}:${String(candidate.artifactRef || '')}` === key) === index;
-  });
-  return {
-    ...base,
-    message: `${base.message}\n\nSupplemented missing artifacts: ${filledTypes.join(', ')}.`,
-    reasoningTrace: [
-      base.reasoningTrace,
-      `Supplemental AgentServer/backend generation filled: ${filledTypes.join(', ')}`,
-      supplement.reasoningTrace,
-    ].filter(Boolean).join('\n'),
-    claims: [...base.claims, ...supplement.claims],
-    uiManifest,
-    executionUnits: [...base.executionUnits, ...supplement.executionUnits],
-    artifacts,
-    logs: [...(base.logs ?? []), ...(supplement.logs ?? [])],
-  };
+  return runAgentServerGeneratedTaskFromModule(request, skill, skills, callbacks, {
+    agentServerFailurePayloadRefs,
+    agentServerGenerationFailureReason,
+    attemptPlanRefs,
+    coerceWorkspaceTaskPayload,
+    failedTaskPayload,
+    firstPayloadFailureReason,
+    mergeReusableContextArtifactsForDirectPayload,
+    payloadHasFailureStatus,
+    readConfiguredAgentServerBaseUrl,
+    repairNeededPayload,
+    requestAgentServerGeneration,
+    schemaErrors,
+    tryAgentServerRepairAndRerun,
+    validateAndNormalizePayload,
+    ensureDirectAnswerReportArtifact,
+  }, options);
 }
 
 function isBlockingAgentServerConfigurationFailure(reason: string) {
   return /User-side model configuration|llmEndpoint|openteam\.json defaults|Model Provider|Model Base URL|Model Name/i.test(reason);
-}
-
-async function readGeneratedTaskFileIfPresent(workspace: string, path: string) {
-  try {
-    return await readFile(join(workspace, safeWorkspaceRel(path)), 'utf8');
-  } catch {
-    return undefined;
-  }
-}
-
-async function missingGeneratedTaskFileContents(
-  workspace: string,
-  taskFiles: AgentServerGenerationResponse['taskFiles'],
-) {
-  const missing: string[] = [];
-  for (const file of taskFiles) {
-    if (file.content) continue;
-    const existing = await readGeneratedTaskFileIfPresent(workspace, file.path);
-    if (existing === undefined) missing.push(safeWorkspaceRel(file.path));
-  }
-  return missing;
-}
-
-function normalizeGatewayRequest(body: Record<string, unknown>): GatewayRequest {
-  const skillDomain = normalizeSharedSkillDomain(body.skillDomain) as SciForgeSkillDomain | undefined;
-  if (!skillDomain) throw new Error(`Unsupported SciForge skill domain: ${String(body.skillDomain || '')}`);
-  const handoffSource = normalizeAgentHandoffSource(body.handoffSource, 'cli');
-  return {
-    skillDomain,
-    prompt: String(body.prompt || ''),
-    handoffSource,
-    sharedAgentContract: buildSharedAgentHandoffContract(handoffSource),
-    workspacePath: typeof body.workspacePath === 'string' ? body.workspacePath : undefined,
-    agentServerBaseUrl: typeof body.agentServerBaseUrl === 'string' ? cleanUrl(body.agentServerBaseUrl) : undefined,
-    agentBackend: typeof body.agentBackend === 'string' ? body.agentBackend : undefined,
-    modelProvider: typeof body.modelProvider === 'string' ? body.modelProvider : undefined,
-    modelName: typeof body.modelName === 'string' ? body.modelName : undefined,
-    maxContextWindowTokens: finiteNumber(body.maxContextWindowTokens),
-    llmEndpoint: normalizeLlmEndpoint(body.llmEndpoint),
-    scenarioPackageRef: normalizeScenarioPackageRef(body.scenarioPackageRef),
-    skillPlanRef: typeof body.skillPlanRef === 'string' ? body.skillPlanRef : undefined,
-    uiPlanRef: typeof body.uiPlanRef === 'string' ? body.uiPlanRef : undefined,
-    artifacts: Array.isArray(body.artifacts) ? body.artifacts.filter(isRecord) : [],
-    uiState: isRecord(body.uiState) ? body.uiState : undefined,
-    availableSkills: Array.isArray(body.availableSkills) ? body.availableSkills.map(String) : undefined,
-    expectedArtifactTypes: Array.isArray(body.expectedArtifactTypes) ? uniqueStrings(body.expectedArtifactTypes.map(String)) : undefined,
-    selectedComponentIds: Array.isArray(body.selectedComponentIds) ? uniqueStrings(body.selectedComponentIds.map(String)) : undefined,
-    selectedToolIds: Array.isArray(body.selectedToolIds) ? uniqueStrings(body.selectedToolIds.map(String)) : undefined,
-  };
-}
-
-function normalizeScenarioPackageRef(value: unknown): GatewayRequest['scenarioPackageRef'] {
-  if (!isRecord(value)) return undefined;
-  const id = typeof value.id === 'string' ? value.id.trim() : '';
-  const version = typeof value.version === 'string' ? value.version.trim() : '';
-  const source = value.source === 'built-in' || value.source === 'workspace' || value.source === 'generated' ? value.source : undefined;
-  return id && version && source ? { id, version, source } : undefined;
-}
-
-function normalizeLlmEndpoint(value: unknown): LlmEndpointConfig | undefined {
-  if (!isRecord(value)) return undefined;
-  const provider = typeof value.provider === 'string' ? value.provider.trim() : '';
-  const baseUrl = typeof value.baseUrl === 'string' ? cleanUrl(value.baseUrl) : '';
-  const apiKey = typeof value.apiKey === 'string' ? value.apiKey.trim() : '';
-  const modelName = typeof value.modelName === 'string' ? value.modelName.trim() : '';
-  if (!baseUrl && !apiKey && !modelName) return undefined;
-  return {
-    provider: provider || undefined,
-    baseUrl: baseUrl || undefined,
-    apiKey: apiKey || undefined,
-    modelName: modelName || undefined,
-  };
 }
 
 async function collectArtifactReferenceContext(request: GatewayRequest) {
@@ -809,6 +335,20 @@ function artifactMatchesExecutionRef(artifact: Record<string, unknown>, outputRe
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function finiteNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function firstFiniteNumber(...values: unknown[]) {
+  return values.map(finiteNumber).find((value): value is number => value !== undefined);
+}
+
+function providerForBackend(backend: string) {
+  if (backend === 'openteam_agent') return 'self-hosted';
+  if (backend === 'hermes-agent') return 'hermes';
+  return backend || undefined;
 }
 
 function attemptPlanRefs(request: GatewayRequest, skill?: SkillAvailability, fallbackReason?: string) {
@@ -1822,7 +1362,7 @@ function normalizeExecutionUnitStatus(value: unknown) {
   if (status === 'failure' || status === 'errored' || status === 'error') return 'failed-with-reason';
   if (status === 'needs-repair' || status === 'repair_needed') return 'repair-needed';
   if (status === 'self_healed' || status === 'self-heal') return 'self-healed';
-  if (['planned', 'running', 'done', 'failed', 'record-only', 'repair-needed', 'self-healed', 'failed-with-reason'].includes(status)) return status;
+  if (['planned', 'running', 'done', 'failed', 'record-only', 'repair-needed', 'self-healed', 'failed-with-reason', 'needs-human'].includes(status)) return status;
   return 'done';
 }
 
@@ -2852,464 +2392,16 @@ async function finalizeAgentServerGenerationSuccess<T extends Extract<AgentServe
   return params.result;
 }
 
-function classifyAgentServerBackendFailure(
-  message: string,
-  context: {
-    httpStatus?: number;
-    headers?: Headers;
-    backend?: string;
-    provider?: string;
-    model?: string;
-  } = {},
-): AgentServerBackendFailureDiagnostic | undefined {
-  const text = parseJsonErrorMessage(message) || message;
-  const lower = text.toLowerCase();
-  const categories: AgentServerBackendFailureKind[] = [];
-  if (/contextwindowexceeded|context window exceeded|context_length|maximum context|token limit|context.*overflow/i.test(text)) categories.push('context-window');
-  if (context.httpStatus === 429 || /\b429\b|too many requests/.test(lower)) categories.push('http-429', 'rate-limit');
-  if (/rate[\s-]?limit|retry-after|reset/i.test(text)) categories.push('rate-limit');
-  if (/responseTooManyFailedAttempts|too many failed attempts/i.test(text)) categories.push('too-many-failed-attempts', 'retry-budget');
-  if (/exceeded retry limit|retry budget|too many retries|max retries/i.test(text)) categories.push('retry-budget');
-  const uniqueCategories = uniqueStrings(categories) as AgentServerBackendFailureKind[];
-  if (!uniqueCategories.length) return undefined;
-  const retryAfterMs = retryAfterMsFromHeaders(context.headers) ?? retryAfterMsFromText(text);
-  const resetAt = rateLimitResetAtFromHeaders(context.headers) ?? rateLimitResetAtFromText(text);
-  return {
-    kind: uniqueCategories[0],
-    categories: uniqueCategories,
-    backend: context.backend,
-    provider: context.provider,
-    model: context.model,
-    httpStatus: context.httpStatus,
-    retryAfterMs,
-    resetAt,
-    message: sanitizeBackendFailureDetail(text),
-  };
-}
-
-function providerRateLimitDiagnosticMessage(diagnostic: AgentServerBackendFailureDiagnostic, finalFailure: boolean) {
-  const labels = diagnostic.categories.join(', ');
-  const provider = [diagnostic.provider, diagnostic.model].filter(Boolean).join('/') || diagnostic.backend || 'unknown provider';
-  const retryAfter = diagnostic.retryAfterMs !== undefined ? ` retryAfterMs=${diagnostic.retryAfterMs}.` : '';
-  const resetAt = diagnostic.resetAt ? ` resetAt=${diagnostic.resetAt}.` : '';
-  const retry = finalFailure
-    ? ' SciForge already performed the single allowed compact/slim retry and will not retry again automatically.'
-    : ' SciForge will back off, compact/slim the handoff, and retry once.';
-  return `AgentServer/provider failure classified as ${labels} for ${provider}.${retryAfter}${resetAt}${retry} Detail: ${diagnostic.message}`;
-}
-
-function rateLimitRecoverActions(diagnostic: AgentServerBackendFailureDiagnostic) {
-  const wait = diagnostic.retryAfterMs
-    ? `Wait at least ${Math.ceil(diagnostic.retryAfterMs / 1000)}s or until provider retry-after/reset before rerunning.`
-    : 'Wait for the provider rate-limit or retry budget to reset before rerunning.';
-  return [
-    wait,
-    'Reduce concurrent AgentServer runs or switch to a model/provider with available quota.',
-    'Keep follow-up context compact by relying on workspace refs instead of resending full logs/artifacts.',
-  ];
-}
-
-function boundedRateLimitBackoffMs(diagnostic: AgentServerBackendFailureDiagnostic) {
-  const configuredMax = Number(process.env.SCIFORGE_AGENTSERVER_RATE_LIMIT_BACKOFF_MAX_MS || 1500);
-  const max = Number.isFinite(configuredMax) ? Math.max(0, Math.min(10_000, configuredMax)) : 1500;
-  const requested = diagnostic.retryAfterMs ?? 250;
-  return Math.min(max, Math.max(0, requested));
-}
-
-function retryAfterMsFromHeaders(headers?: Headers) {
-  const value = headers?.get('retry-after');
-  if (!value) return undefined;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds)) return Math.max(0, Math.round(seconds * 1000));
-  const at = Date.parse(value);
-  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : undefined;
-}
-
-function rateLimitResetAtFromHeaders(headers?: Headers) {
-  return headers?.get('x-ratelimit-reset') ?? headers?.get('x-rate-limit-reset') ?? undefined;
-}
-
-function retryAfterMsFromText(text: string) {
-  const seconds = text.match(/retry-after["'\s:=]+(\d+(?:\.\d+)?)/i)?.[1]
-    ?? text.match(/retry after\s+(\d+(?:\.\d+)?)\s*(?:s|sec|seconds)?/i)?.[1];
-  if (!seconds) return undefined;
-  const parsed = Number(seconds);
-  return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed * 1000)) : undefined;
-}
-
-function rateLimitResetAtFromText(text: string) {
-  return text.match(/(?:resetAt|reset_at|rate limit reset)["'\s:=]+([0-9T:.\-+Z]+)/i)?.[1];
-}
-
-function sanitizeBackendFailureDetail(text: string) {
-  return redactSecretText(text
-    .replace(/request id:\s*[^),\s]+/gi, 'request id: redacted')
-    .replace(/url:\s*\S+/gi, 'url: redacted')
-    .replace(/https?:\/\/[^\s|,)]+/gi, 'redacted-url'))
-    .slice(0, 320);
-}
-
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
 function normalizeAgentServerWorkspaceEvent(raw: unknown): WorkspaceRuntimeEvent {
-  const record = isRecord(raw) ? raw : {};
-  const rawType = typeof record.type === 'string' ? record.type : typeof record.kind === 'string' ? record.kind : 'agentserver-event';
-  const type = normalizeAgentServerWorkspaceEventType(rawType, record);
-  const toolName = typeof record.toolName === 'string' ? record.toolName : undefined;
-  const usage = normalizeWorkspaceTokenUsage(record.usage)
-    ?? normalizeWorkspaceTokenUsage(isRecord(record.output) ? record.output.usage : undefined)
-    ?? normalizeWorkspaceTokenUsage(isRecord(record.result) ? record.result.usage : undefined)
-    ?? normalizeWorkspaceTokenUsage(isRecord(record.result) && isRecord(record.result.output) ? record.result.output.usage : undefined);
-  const contextCompaction = normalizeWorkspaceContextCompaction(
-    record.contextCompaction ?? record.compaction ?? record.context_compaction ?? record.context_compressor ?? record.contextCompressor,
-    type,
-    record,
-  );
-  const rateLimit = normalizeWorkspaceRateLimit(
-    record.rateLimit ?? record.rate_limit ?? record.rateLimitDiagnostics ?? record.rate_limit_diagnostics ?? hermesCompatRateLimitRecord(record),
-    record,
-  );
-  const contextWindowState = normalizeWorkspaceContextWindowState(
-    workspaceContextWindowCandidate(record),
-    type,
-    record,
-  );
-  const baseDetail = typeof record.detail === 'string'
-    ? record.detail
-    : typeof record.message === 'string'
-      ? record.message
-      : typeof record.text === 'string'
-        ? record.text
-        : typeof record.output === 'string'
-        ? record.output.slice(0, 600)
-        : Array.isArray(record.plan)
-          ? record.plan.join(' -> ')
-        : record.error !== undefined
-          ? summarizeEventValue(record.error)
-        : record.result !== undefined
-          ? summarizeEventValue(record.result)
-        : undefined;
-  const usageDetail = formatWorkspaceTokenUsage(usage);
-  const detail = [baseDetail, usageDetail].filter(Boolean).join(' | ') || undefined;
-  return {
-    type,
-    source: 'agentserver',
-    toolName,
-    message: toolName ? `${type}: ${toolName}` : type,
-    detail,
-    text: typeof record.text === 'string' ? record.text : undefined,
-    output: typeof record.output === 'string' ? record.output.slice(0, 2000) : undefined,
-    usage,
-    contextWindowState,
-    contextCompaction,
-    rateLimit,
-    raw,
-  };
+  return normalizeAgentServerWorkspaceEventFromModule(raw);
 }
 
 function withRequestContextWindowLimit(event: WorkspaceRuntimeEvent, request: GatewayRequest): WorkspaceRuntimeEvent {
-  const state = event.contextWindowState;
-  const limit = request.maxContextWindowTokens;
-  if (!state || state.windowTokens !== undefined || limit === undefined) return event;
-  const ratio = state.usedTokens !== undefined ? state.usedTokens / limit : state.ratio;
-  return {
-    ...event,
-    contextWindowState: {
-      ...state,
-      window: limit,
-      windowTokens: limit,
-      ratio,
-      status: normalizeWorkspaceContextStatus(state.status, ratio, state.autoCompactThreshold),
-    },
-  };
-}
-
-function normalizeAgentServerWorkspaceEventType(type: string, record: Record<string, unknown>) {
-  const lower = type.toLowerCase();
-  if (lower === 'context_compressor' || lower === 'context-compressor') return 'contextCompaction';
-  if (lower === 'ratelimit' || lower === 'rate_limit' || lower === 'rate-limit') return 'rateLimit';
-  if (lower.includes('context_compressor') || record.context_compressor || record.contextCompressor) return 'contextCompaction';
-  if (lower.includes('rate-limit') || lower.includes('rate_limit') || record.rate_limit || record.rateLimit || record.rate_limit_reset || record.rate_limit_reset_at) return 'rateLimit';
-  return type;
-}
-
-function normalizeWorkspaceContextWindowState(
-  value: unknown,
-  type: string,
-  fallback: Record<string, unknown>,
-): WorkspaceRuntimeEvent['contextWindowState'] | undefined {
-  const record = isRecord(value) ? value : type === 'contextWindowState' && isRecord(fallback) ? fallback : undefined;
-  if (!record) return undefined;
-  const usage = isRecord(record.usage) ? record.usage : record;
-  const input = firstFiniteNumber(record.input, record.inputTokens, record.prompt_tokens, usage.input, usage.inputTokens, usage.promptTokens, usage.prompt_tokens);
-  const output = firstFiniteNumber(record.output, record.outputTokens, record.completion_tokens, usage.output, usage.outputTokens, usage.completionTokens, usage.completion_tokens);
-  const cacheRead = firstFiniteNumber(record.cacheRead, record.cache_read, record.cacheReadTokens, usage.cacheRead, usage.cache_read, usage.cacheReadTokens);
-  const cacheWrite = firstFiniteNumber(record.cacheWrite, record.cache_write, record.cacheWriteTokens, usage.cacheWrite, usage.cache_write, usage.cacheWriteTokens);
-  const cache = firstFiniteNumber(record.cache, record.cacheTokens, record.cache_tokens, usage.cache, usage.cacheTokens, usage.cache_tokens)
-    ?? (cacheRead !== undefined || cacheWrite !== undefined ? (cacheRead ?? 0) + (cacheWrite ?? 0) : undefined);
-  const explicitUsedTokens = finiteNumber(record.usedTokens)
-    ?? finiteNumber(record.used_tokens)
-    ?? finiteNumber(record.used)
-    ?? finiteNumber(record.contextWindowTokens)
-    ?? finiteNumber(record.context_window_tokens)
-    ?? finiteNumber(record.currentContextWindowTokens)
-    ?? finiteNumber(record.current_context_window_tokens)
-    ?? finiteNumber(record.contextLength)
-    ?? finiteNumber(record.context_length)
-    ?? finiteNumber(record.currentContextLength)
-    ?? finiteNumber(record.current_context_length)
-    ?? finiteNumber(record.tokens);
-  const usedTokens = explicitUsedTokens;
-  const windowTokens = finiteNumber(record.windowTokens)
-    ?? finiteNumber(record.window_tokens)
-    ?? finiteNumber(record.window)
-    ?? finiteNumber(record.contextWindowLimit)
-    ?? finiteNumber(record.context_window_limit)
-    ?? finiteNumber(record.limit)
-    ?? finiteNumber(record.contextWindow)
-    ?? finiteNumber(record.maxContextLength)
-    ?? finiteNumber(record.max_context_length)
-    ?? finiteNumber(record.contextLimit)
-    ?? finiteNumber(record.context_limit);
-  const ratio = finiteNumber(record.ratio)
-    ?? finiteNumber(record.contextWindowRatio)
-    ?? finiteNumber(record.context_window_ratio)
-    ?? finiteNumber(record.usageRatio)
-    ?? finiteNumber(record.usage_ratio)
-    ?? (usedTokens !== undefined && windowTokens ? usedTokens / windowTokens : undefined);
-  const rawAutoCompactThreshold = finiteNumber(record.autoCompactThreshold)
-    ?? finiteNumber(record.auto_compact_threshold)
-    ?? finiteNumber(record.compressionThreshold)
-    ?? finiteNumber(record.compression_threshold);
-  const autoCompactThreshold = rawAutoCompactThreshold && rawAutoCompactThreshold > 1 && windowTokens
-    ? rawAutoCompactThreshold / windowTokens
-    : rawAutoCompactThreshold;
-  const hasUsage = input !== undefined || output !== undefined || cache !== undefined || finiteNumber(usage.total) !== undefined;
-  const hasContextTelemetry = usedTokens !== undefined || windowTokens !== undefined || ratio !== undefined;
-  const explicitSource = stringField(record.source) ?? stringField(record.contextWindowSource) ?? stringField(record.context_window_source);
-  const source = explicitSource
-    ? (normalizeWorkspaceContextSource(explicitSource) === 'unknown' && hasUsage ? 'provider-usage' : normalizeWorkspaceContextSource(explicitSource))
-    : (hasUsage ? 'provider-usage' : 'unknown');
-  const state = {
-    backend: stringField(record.backend) ?? stringField(fallback.backend) ?? stringField(usage.provider),
-    provider: stringField(record.provider) ?? stringField(usage.provider),
-    model: stringField(record.model) ?? stringField(usage.model),
-    usedTokens,
-    input,
-    output,
-    cache,
-    window: windowTokens,
-    windowTokens,
-    ratio,
-    source,
-    status: normalizeWorkspaceContextStatus(stringField(record.status), ratio, autoCompactThreshold),
-    compactCapability: normalizeWorkspaceCompactCapability(stringField(record.compactCapability) ?? stringField(record.compactionCapability)),
-    budget: isRecord(record.budget) ? record.budget : undefined,
-    auditRefs: toStringList(record.auditRefs),
-    autoCompactThreshold,
-    watchThreshold: finiteNumber(record.watchThreshold),
-    nearLimitThreshold: finiteNumber(record.nearLimitThreshold),
-    lastCompactedAt: stringField(record.lastCompactedAt) ?? stringField(record.last_compacted_at) ?? stringField(record.lastCompressedAt) ?? stringField(record.last_compressed_at),
-    pendingCompact: typeof record.pendingCompact === 'boolean' ? record.pendingCompact : undefined,
-  };
-  if (state.compactCapability === 'unknown' && state.backend) {
-    state.compactCapability = compactCapabilityForBackend(state.backend);
-  }
-  return hasContextTelemetry
-    ? state
-    : undefined;
-}
-
-function workspaceContextWindowCandidate(record: Record<string, unknown>): unknown {
-  return record.contextWindowState
-    ?? record.contextWindow
-    ?? record.context_window
-    ?? record.context_compressor
-    ?? record.contextCompressor
-    ?? (isExplicitWorkspaceContextWindowRecord(record.usage) ? record.usage : undefined);
-}
-
-function isExplicitWorkspaceContextWindowRecord(value: unknown): value is Record<string, unknown> {
-  if (!isRecord(value)) return false;
-  return [
-    'usedTokens',
-    'used_tokens',
-    'contextWindowTokens',
-    'context_window_tokens',
-    'currentContextWindowTokens',
-    'current_context_window_tokens',
-    'contextLength',
-    'context_length',
-    'currentContextLength',
-    'current_context_length',
-    'windowTokens',
-    'window_tokens',
-    'contextWindowLimit',
-    'context_window_limit',
-    'modelContextWindow',
-    'model_context_window',
-    'contextWindowRatio',
-    'context_window_ratio',
-    'contextWindowSource',
-    'context_window_source',
-  ].some((key) => key in value);
-}
-
-function normalizeWorkspaceContextCompaction(
-  value: unknown,
-  type: string,
-  fallback: Record<string, unknown>,
-): WorkspaceRuntimeEvent['contextCompaction'] | undefined {
-  const record = isRecord(value) ? value : type === 'contextCompaction' && isRecord(fallback) ? fallback : undefined;
-  if (!record) return undefined;
-  const status = normalizeWorkspaceCompactionStatus(stringField(record.status) ?? stringField(record.result));
-  const completedAt = stringField(record.completedAt) ?? stringField(record.completed_at) ?? stringField(record.compressedAt) ?? stringField(record.compressed_at);
-  const lastCompactedAt = stringField(record.lastCompactedAt) ?? stringField(record.last_compacted_at) ?? stringField(record.lastCompressedAt) ?? stringField(record.last_compressed_at) ?? completedAt;
-  const reason = stringField(record.reason) ?? stringField(record.trigger);
-  const message = stringField(record.message) ?? stringField(record.summary);
-  return {
-    status,
-    source: normalizeWorkspaceContextSource(stringField(record.source) ?? 'native'),
-    backend: stringField(record.backend) ?? stringField(fallback.backend) ?? 'hermes-agent',
-    compactCapability: normalizeWorkspaceCompactCapability(stringField(record.compactCapability) ?? stringField(record.compactionCapability) ?? 'native'),
-    startedAt: stringField(record.startedAt) ?? stringField(record.started_at),
-    completedAt,
-    lastCompactedAt,
-    reason,
-    message,
-  };
-}
-
-function normalizeWorkspaceCompactionStatus(value?: string): NonNullable<WorkspaceRuntimeEvent['contextCompaction']>['status'] {
-  if (value === 'started' || value === 'completed' || value === 'failed' || value === 'pending' || value === 'skipped') return value;
-  if (value && /fail|error/i.test(value)) return 'failed';
-  if (value && /start|running|compact/i.test(value) && !/complete|done|success|compressed/i.test(value)) return 'started';
-  if (value && /skip|unsupported/i.test(value)) return 'skipped';
-  if (value && /complete|done|success|compressed/i.test(value)) return 'completed';
-  return 'completed';
-}
-
-function normalizeWorkspaceRateLimit(
-  value: unknown,
-  fallback: Record<string, unknown>,
-): WorkspaceRuntimeEvent['rateLimit'] | undefined {
-  const record = isRecord(value) ? value : {};
-  const rateLimit = {
-    limited: typeof record.limited === 'boolean'
-      ? record.limited
-      : typeof record.rate_limited === 'boolean'
-        ? record.rate_limited
-        : undefined,
-    retryAfterMs: finiteNumber(record.retryAfterMs) ?? finiteNumber(record.retry_after_ms) ?? retryAfterMsFromText(JSON.stringify(record)),
-    resetAt: stringField(record.resetAt)
-      ?? stringField(record.reset_at)
-      ?? stringField(record.rateLimitResetAt)
-      ?? stringField(record.rate_limit_reset_at)
-      ?? stringField(record.rate_limit_reset)
-      ?? stringField(fallback.rate_limit_reset_at)
-      ?? stringField(fallback.rate_limit_reset),
-    provider: stringField(record.provider) ?? stringField(fallback.provider),
-    model: stringField(record.model) ?? stringField(fallback.model),
-    backend: stringField(record.backend) ?? stringField(fallback.backend),
-    source: stringField(record.source) ?? 'agentserver',
-  };
-  return rateLimit.limited !== undefined || rateLimit.retryAfterMs !== undefined || rateLimit.resetAt ? rateLimit : undefined;
-}
-
-function normalizeWorkspaceContextSource(value?: string): WorkspaceRuntimeContextWindowSource {
-  if (value === 'native' || value === 'agentserver' || value === 'estimate' || value === 'unknown') return value;
-  if (value === 'usage' || value === 'provider' || value === 'provider-usage') return 'native';
-  if (value === 'backend') return 'native';
-  if (value === 'agentserver-estimate') return 'estimate';
-  if (value === 'handoff') return 'agentserver';
-  return 'unknown';
-}
-
-function normalizeWorkspaceCompactCapability(value?: string): NonNullable<WorkspaceRuntimeEvent['contextWindowState']>['compactCapability'] {
-  if (value === 'handoff-only') return 'handoff-slimming';
-  if (value === 'native' || value === 'agentserver' || value === 'handoff-slimming' || value === 'session-rotate' || value === 'none' || value === 'unknown') return value;
-  return 'unknown';
-}
-
-function normalizeWorkspaceContextStatus(
-  value: string | undefined,
-  ratio: number | undefined,
-  autoCompactThreshold: number | undefined,
-): NonNullable<WorkspaceRuntimeEvent['contextWindowState']>['status'] {
-  if (value === 'healthy' || value === 'watch' || value === 'near-limit' || value === 'exceeded' || value === 'compacting' || value === 'blocked' || value === 'unknown') return value;
-  if (value && /exceeded|overflow|max|full/i.test(value)) return 'exceeded';
-  if (value && /compact/i.test(value)) return 'compacting';
-  if (value && /blocked|rate/i.test(value)) return 'blocked';
-  if (value && /near|critical|warning/i.test(value)) return 'near-limit';
-  if (value && /watch/i.test(value)) return 'watch';
-  if (value && /healthy|ok|normal/i.test(value)) return 'healthy';
-  if (ratio !== undefined && ratio >= 1) return 'exceeded';
-  if (ratio !== undefined && ratio >= (autoCompactThreshold ?? 0.82)) return 'near-limit';
-  if (ratio !== undefined && ratio >= 0.68) return 'watch';
-  return ratio === undefined ? 'unknown' : 'healthy';
-}
-
-function normalizeWorkspaceTokenUsage(value: unknown): WorkspaceRuntimeEvent['usage'] | undefined {
-  if (!isRecord(value)) return undefined;
-  const usage = {
-    input: finiteNumber(value.input),
-    output: finiteNumber(value.output),
-    total: finiteNumber(value.total),
-    cacheRead: finiteNumber(value.cacheRead),
-    cacheWrite: finiteNumber(value.cacheWrite),
-    provider: stringField(value.provider),
-    model: stringField(value.model),
-    source: stringField(value.source),
-  };
-  if (
-    usage.input === undefined
-    && usage.output === undefined
-    && usage.total === undefined
-    && usage.cacheRead === undefined
-    && usage.cacheWrite === undefined
-  ) {
-    return undefined;
-  }
-  return usage;
-}
-
-function finiteNumber(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-function firstFiniteNumber(...values: unknown[]) {
-  return values.map(finiteNumber).find((value): value is number => value !== undefined);
-}
-
-function providerForBackend(backend: string) {
-  if (backend === 'openteam_agent') return 'self-hosted';
-  if (backend === 'hermes-agent') return 'hermes';
-  return backend || undefined;
-}
-
-function formatWorkspaceTokenUsage(usage: WorkspaceRuntimeEvent['usage'] | undefined) {
-  if (!usage) return undefined;
-  const parts = [
-    usage.input !== undefined ? `in ${usage.input}` : '',
-    usage.output !== undefined ? `out ${usage.output}` : '',
-    usage.total !== undefined ? `total ${usage.total}` : '',
-    usage.cacheRead !== undefined ? `cache read ${usage.cacheRead}` : '',
-    usage.cacheWrite !== undefined ? `cache write ${usage.cacheWrite}` : '',
-  ].filter(Boolean);
-  const model = [usage.provider, usage.model].filter(Boolean).join('/');
-  const suffix = [model, usage.source].filter(Boolean).join(' ');
-  return `tokens ${parts.join(', ')}${suffix ? ` (${suffix})` : ''}`;
-}
-
-function summarizeEventValue(value: unknown) {
-  if (typeof value === 'string') return value.slice(0, 1200);
-  try {
-    return JSON.stringify(redactSecrets(value)).slice(0, 1200);
-  } catch {
-    return String(value).slice(0, 1200);
-  }
+  return withRequestContextWindowLimitFromModule(event, request);
 }
 
 async function requestAgentServerRepair(params: {
@@ -3865,34 +2957,6 @@ function uniqueById<T extends { id: string }>(values: readonly T[]) {
   return out;
 }
 
-function summarizeTaskAttemptsForAgentServer(attempts: unknown[]) {
-  return attempts
-    .filter(isRecord)
-    .slice(0, 4)
-    .map((attempt) => ({
-      id: typeof attempt.id === 'string' ? attempt.id : undefined,
-      attempt: typeof attempt.attempt === 'number' ? attempt.attempt : undefined,
-      status: typeof attempt.status === 'string' ? attempt.status : undefined,
-      skillDomain: typeof attempt.skillDomain === 'string' ? attempt.skillDomain : undefined,
-      skillId: typeof attempt.skillId === 'string' ? attempt.skillId : undefined,
-      codeRef: typeof attempt.codeRef === 'string' ? attempt.codeRef : undefined,
-      inputRef: typeof attempt.inputRef === 'string' ? attempt.inputRef : undefined,
-      outputRef: typeof attempt.outputRef === 'string' ? attempt.outputRef : undefined,
-      stdoutRef: typeof attempt.stdoutRef === 'string' ? attempt.stdoutRef : undefined,
-      stderrRef: typeof attempt.stderrRef === 'string' ? attempt.stderrRef : undefined,
-      failureReason: clipForAgentServerPrompt(attempt.failureReason, 800),
-      schemaErrors: Array.isArray(attempt.schemaErrors)
-        ? attempt.schemaErrors.map((entry) => clipForAgentServerPrompt(entry, 240)).filter(Boolean).slice(0, 8)
-        : undefined,
-      patchSummary: clipForAgentServerPrompt(attempt.patchSummary, 800),
-      diffRef: typeof attempt.diffRef === 'string' ? attempt.diffRef : undefined,
-      scenarioPackageRef: isRecord(attempt.scenarioPackageRef) ? attempt.scenarioPackageRef : undefined,
-      skillPlanRef: typeof attempt.skillPlanRef === 'string' ? attempt.skillPlanRef : undefined,
-      uiPlanRef: typeof attempt.uiPlanRef === 'string' ? attempt.uiPlanRef : undefined,
-      createdAt: typeof attempt.createdAt === 'string' ? attempt.createdAt : undefined,
-    }));
-}
-
 function buildAgentServerCompactContext(
   request: GatewayRequest,
   params: {
@@ -3954,6 +3018,11 @@ function summarizeUiStateForAgentServer(uiState: unknown, mode: AgentServerConte
     selectedComponentIds: toStringList(uiState.selectedComponentIds),
     selectedSkillIds: toStringList(uiState.selectedSkillIds),
     selectedToolIds: toStringList(uiState.selectedToolIds),
+    selectedSenseIds: toStringList(uiState.selectedSenseIds),
+    selectedActionIds: toStringList(uiState.selectedActionIds),
+    selectedVerifierIds: toStringList(uiState.selectedVerifierIds),
+    verificationPolicy: isRecord(uiState.verificationPolicy) ? clipForAgentServerJson(uiState.verificationPolicy, 2) : undefined,
+    verificationResult: isRecord(uiState.verificationResult) ? clipForAgentServerJson(uiState.verificationResult, 2) : undefined,
     recentRuns: Array.isArray(uiState.recentRuns)
       ? uiState.recentRuns.slice(-4).map((entry) => clipForAgentServerJson(entry, 2))
       : undefined,
@@ -3961,241 +3030,6 @@ function summarizeUiStateForAgentServer(uiState: unknown, mode: AgentServerConte
     contextReusePolicy: contextReusePolicy ? clipForAgentServerJson(contextReusePolicy, 3) : undefined,
     contextMode: mode,
   };
-}
-
-function summarizeArtifactRefs(artifacts: Array<Record<string, unknown>>) {
-  return artifacts.slice(-8).map((artifact) => {
-    const id = typeof artifact.id === 'string' ? artifact.id : undefined;
-    const type = typeof artifact.type === 'string' ? artifact.type : undefined;
-    const title = typeof artifact.title === 'string'
-      ? artifact.title
-      : typeof artifact.name === 'string'
-        ? artifact.name
-        : undefined;
-    return {
-      id,
-      type,
-      title: clipForAgentServerPrompt(title, 240),
-      ref: typeof artifact.ref === 'string' ? artifact.ref : undefined,
-      path: typeof artifact.path === 'string' ? artifact.path : undefined,
-      outputRef: typeof artifact.outputRef === 'string' ? artifact.outputRef : undefined,
-      keys: Object.keys(artifact).slice(0, 12),
-      hash: hashJson(artifact),
-    };
-  });
-}
-
-function summarizeExecutionRefs(refs: Array<Record<string, unknown>>) {
-  return refs.slice(-12).map((entry) => ({
-    id: typeof entry.id === 'string' ? entry.id : undefined,
-    status: typeof entry.status === 'string' ? entry.status : undefined,
-    tool: typeof entry.tool === 'string' ? entry.tool : undefined,
-    codeRef: typeof entry.codeRef === 'string' ? entry.codeRef : undefined,
-    inputRef: typeof entry.inputRef === 'string' ? entry.inputRef : undefined,
-    outputRef: typeof entry.outputRef === 'string' ? entry.outputRef : undefined,
-    stdoutRef: typeof entry.stdoutRef === 'string' ? entry.stdoutRef : undefined,
-    stderrRef: typeof entry.stderrRef === 'string' ? entry.stderrRef : undefined,
-    failureReason: clipForAgentServerPrompt(entry.failureReason, 480),
-    hash: hashJson(entry),
-  }));
-}
-
-function summarizeConversationLedger(ledger: Array<Record<string, unknown>>, mode: AgentServerContextMode) {
-  if (!ledger.length) return undefined;
-  const budget = mode === 'full' ? 24 : 18;
-  const tail = ledger.slice(-budget).map((entry) => clipForAgentServerJson(entry, 3));
-  return {
-    totalTurns: ledger.length,
-    omittedPrefixTurns: Math.max(0, ledger.length - tail.length),
-    ordering: 'append-only-session-order',
-    tail,
-  };
-}
-
-function buildContextEnvelope(
-  request: GatewayRequest,
-  params: {
-    workspace: string;
-    workspaceTreeSummary?: Array<{ path: string; kind: 'file' | 'folder'; sizeBytes?: number }>;
-    priorAttempts?: unknown[];
-    selectedSkill?: SkillAvailability;
-    repairRefs?: Record<string, unknown>;
-    mode?: AgentServerContextMode;
-    agentId?: string;
-    agentServerCoreSnapshotAvailable?: boolean;
-  },
-) {
-  const uiState = isRecord(request.uiState) ? request.uiState : {};
-  const recentExecutionRefs = toRecordList(uiState.recentExecutionRefs);
-  const recentConversation = toStringList(uiState.recentConversation);
-  const conversationLedger = toRecordList(uiState.conversationLedger);
-  const contextReusePolicy = isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : undefined;
-  const mode = params.mode ?? contextEnvelopeMode(request);
-  const workspaceTree = params.workspaceTreeSummary ?? [];
-  const artifactRefs = summarizeArtifactRefs(request.artifacts);
-  const executionRefs = summarizeExecutionRefs(recentExecutionRefs);
-  const visibleRecentConversation = recentConversation
-    .slice(mode === 'full' ? -6 : -4)
-    .map((entry) => clipForAgentServerPrompt(entry, mode === 'full' ? 900 : 700))
-    .filter(Boolean);
-  return {
-    version: 'sciforge.context-envelope.v1',
-    mode,
-    createdAt: new Date().toISOString(),
-    hashes: {
-      workspaceTree: hashJson(workspaceTree),
-      artifacts: hashJson(request.artifacts),
-      recentExecutionRefs: hashJson(recentExecutionRefs),
-      priorAttempts: hashJson(params.priorAttempts ?? []),
-    },
-    projectFacts: mode === 'full' ? {
-      project: 'SciForge',
-      runtimeRole: 'scenario-first AI4Science workspace runtime',
-      taskCodePolicy: 'Generate or repair task code in the active workspace, but compose installed/workspace tools when they are a better fit than hand-written code.',
-      toolPayloadContract: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'displayIntent', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'],
-    } : {
-      project: 'SciForge',
-      taskCodePolicyRef: 'sciforge.generated-task.v1',
-      toolPayloadContractRef: 'sciforge.toolPayload.v1',
-    },
-    orchestrationBoundary: {
-      decisionOwner: 'AgentServer',
-      sciForgeRole: 'protocol validation, workspace execution, artifact/ref persistence, repair request dispatch, and UI display only',
-      currentUserRequestIsAuthoritative: true,
-      agentId: params.agentId,
-      agentServerCoreSnapshotAvailable: params.agentServerCoreSnapshotAvailable === true,
-      contextModeReason: mode === 'delta'
-        ? 'SciForge sent compact delta refs plus hashes for a multi-turn backend session.'
-        : 'SciForge sent a full handoff because AgentServer Core context was unavailable or the turn had no reusable session refs.',
-    },
-    workspaceFacts: mode === 'full' ? {
-      workspacePath: params.workspace,
-      sciforgeDir: '.sciforge',
-      taskDir: '.sciforge/tasks/',
-      taskResultDir: '.sciforge/task-results/',
-      logDir: '.sciforge/logs/',
-      artifactDir: '.sciforge/artifacts/',
-      workspaceTreeSummary: mode === 'full' ? workspaceTree : undefined,
-      workspaceTreeHash: hashJson(workspaceTree),
-      workspaceTreeEntryCount: workspaceTree.length,
-    } : {
-      workspacePath: params.workspace,
-      dirs: {
-        task: '.sciforge/tasks/',
-        result: '.sciforge/task-results/',
-        log: '.sciforge/logs/',
-        artifact: '.sciforge/artifacts/',
-      },
-      workspaceTreeHash: hashJson(workspaceTree),
-      workspaceTreeEntryCount: workspaceTree.length,
-    },
-    scenarioFacts: {
-      skillDomain: request.skillDomain,
-      scenarioPackageRef: request.scenarioPackageRef,
-      skillPlanRef: request.skillPlanRef,
-      uiPlanRef: request.uiPlanRef,
-      expectedArtifactTypes: expectedArtifactTypesForRequest(request),
-      selectedComponentIds: selectedComponentIdsForRequest(request),
-      selectedToolIds: request.selectedToolIds ?? toStringList(request.uiState?.selectedToolIds),
-      selectedSkill: params.selectedSkill ? {
-        id: params.selectedSkill.id,
-        kind: params.selectedSkill.kind,
-        entrypointType: params.selectedSkill.manifest.entrypoint.type,
-        manifestPath: params.selectedSkill.manifestPath,
-      } : undefined,
-    },
-    sessionFacts: {
-      sessionId: typeof uiState.sessionId === 'string' ? uiState.sessionId : undefined,
-      currentPrompt: typeof uiState.currentPrompt === 'string' ? uiState.currentPrompt : request.prompt,
-      currentUserRequest: currentUserRequestText(request.prompt),
-      recentConversation: visibleRecentConversation,
-      conversationLedger: summarizeConversationLedger(conversationLedger, mode),
-      contextReusePolicy: contextReusePolicy ? clipForAgentServerJson(contextReusePolicy, 3) : undefined,
-      recentRuns: Array.isArray(uiState.recentRuns)
-        ? (mode === 'full' ? uiState.recentRuns : uiState.recentRuns.slice(-4).map((entry) => clipForAgentServerJson(entry, 2)))
-        : undefined,
-    },
-    longTermRefs: {
-      artifacts: artifactRefs,
-      recentExecutionRefs: executionRefs,
-      priorAttempts: summarizeTaskAttemptsForAgentServer(params.priorAttempts ?? []).slice(0, mode === 'full' ? 4 : 2),
-      repairRefs: params.repairRefs,
-    },
-    continuityRules: mode === 'full' ? [
-      'Use workspace refs as the source of truth for files, logs, generated code, and artifacts.',
-      'Use conversationLedger to recover long-running session continuity; use recentConversation only to infer current intent.',
-      'For continuation or repair requests, continue from priorAttempts/artifacts instead of restarting an unrelated task.',
-      'If a requested local ref does not exist, say so explicitly and point to the nearest available output/log/artifact ref.',
-    ] : [
-      'Workspace refs are source of truth.',
-      'Continue from AgentServer session memory, conversationLedger, recentExecutionRefs, and artifacts; answer missing refs honestly.',
-    ],
-  };
-}
-
-async function workspaceTreeSummary(workspace: string) {
-  const root = resolve(workspace);
-  const out: Array<{ path: string; kind: 'file' | 'folder'; sizeBytes?: number }> = [];
-  async function walk(dir: string, prefix = '') {
-    if (out.length >= 80) return;
-    let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (out.length >= 80) return;
-      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (shouldSkipWorkspaceTreeEntry(rel, entry.name)) continue;
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        out.push({ path: rel, kind: 'folder' });
-        if (shouldDescendWorkspaceTreeEntry(rel)) await walk(path, rel);
-      } else if (entry.isFile()) {
-        let sizeBytes = 0;
-        try {
-          sizeBytes = (await stat(path)).size;
-        } catch {
-          // Size is optional.
-        }
-        out.push({ path: rel, kind: 'file', sizeBytes });
-      }
-    }
-  }
-  await walk(root);
-  return out;
-}
-
-function shouldSkipWorkspaceTreeEntry(rel: string, name: string) {
-  if (name === 'node_modules' || name === '.git') return true;
-  if (rel === '.bioagent' || rel.startsWith('.bioagent/')) return true;
-  if (rel.startsWith('.sciforge/') && rel.split('/').length > 2) return true;
-  if (/^\.sciforge\/(?:artifacts|task-results|logs|sessions|versions)\//.test(rel)) return true;
-  return false;
-}
-
-function shouldDescendWorkspaceTreeEntry(rel: string) {
-  if (rel.startsWith('.sciforge/')) return false;
-  if (/^\.sciforge\/(?:artifacts|task-results|logs|sessions|versions)$/.test(rel)) return false;
-  return rel.split('/').length < 3;
-}
-
-function expectedArtifactSchema(request: GatewayRequest | SciForgeSkillDomain): Record<string, unknown> {
-  const skillDomain = typeof request === 'string' ? request : request.skillDomain;
-  const types = typeof request === 'string' ? [] : expectedArtifactTypesForRequest(request);
-  if (types.length) return { types };
-  if (typeof request !== 'string') {
-    return {
-      types: [],
-      mode: 'backend-decides',
-      note: 'No current-turn artifact type was explicitly required; infer the minimal output from rawUserPrompt and explicit references.',
-    };
-  }
-  if (skillDomain === 'literature') return { type: 'paper-list' };
-  if (skillDomain === 'structure') return { type: 'structure-summary' };
-  if (skillDomain === 'omics') return { type: 'omics-differential-expression' };
-  return { type: 'knowledge-graph' };
 }
 
 function parseGenerationResponse(value: unknown): AgentServerGenerationResponse | undefined {
@@ -4451,45 +3285,6 @@ function extractAgentServerFailureDetail(run: Record<string, unknown>) {
   return undefined;
 }
 
-function parseJsonErrorMessage(text: string) {
-  try {
-    const parsed = JSON.parse(text);
-    if (isRecord(parsed.error) && typeof parsed.error.message === 'string') {
-      return parsed.error.message;
-    }
-    if (typeof parsed.message === 'string') return parsed.message;
-  } catch {
-    // Not JSON; keep the raw text for sanitization.
-  }
-  return undefined;
-}
-
-function sanitizeAgentServerError(text: string) {
-  const firstLine = text.split('\n').map((line) => line.trim()).find(Boolean) || text;
-  const providerDiagnostic = classifyAgentServerBackendFailure(firstLine);
-  if (providerDiagnostic) return providerRateLimitDiagnosticMessage(providerDiagnostic, false);
-  if (/429|too many requests|responseTooManyFailedAttempts|exceeded retry limit/i.test(firstLine)) {
-    return '上游模型/AgentServer 返回 429 Too Many Requests 或 exceeded retry limit；这更像速率限制/重试预算耗尽，不是典型 context window 超限。请稍后重试，或降低并发与本轮上下文体积。';
-  }
-  if (/context window|maximum context|context length|token limit/i.test(firstLine)) {
-    return '上游模型报告 context window/token limit 超限；需要压缩历史上下文、减少 artifacts/logs，或改用更大上下文模型。';
-  }
-  return redactSecretText(firstLine
-    .replace(/request id:\s*[^),\s]+/gi, 'request id: redacted')
-    .replace(/url:\s*\S+/gi, 'url: redacted')
-    .replace(/https?:\/\/[^\s|,)]+/gi, 'redacted-url'))
-    .slice(0, 320);
-}
-
-function isContextWindowExceededError(text: string) {
-  return /contextWindowExceeded|context window|maximum context|context length|token limit|tokens? exceeded|context.*exceed|input.*too long/i.test(text)
-    && !isRateLimitError(text);
-}
-
-function isRateLimitError(text: string) {
-  return /429|too many requests|responseTooManyFailedAttempts|exceeded retry limit|rate.?limit/i.test(text);
-}
-
 function agentServerSessionRef(baseUrl: string, agentId: string) {
   return `${cleanUrl(baseUrl)}/api/agent-server/agents/${encodeURIComponent(agentId)}`;
 }
@@ -4504,12 +3299,6 @@ function agentServerRequestFailureMessage(operation: 'generation' | 'repair', er
 
 function isAbortError(error: unknown) {
   return error instanceof Error && error.name === 'AbortError';
-}
-
-function redactSecretText(text: string) {
-  return text
-    .replace(/(api[-_]?key|token|authorization|secret|password|credential)(["'\s]*[:=]\s*["']?)([^"',\s)]+)/gi, '$1$2[redacted]')
-    .replace(/\b(sk|pk|ak)-[A-Za-z0-9_-]{12,}\b/g, '$1-[redacted]');
 }
 
 function isToolPayload(value: unknown): value is ToolPayload {
@@ -5332,83 +4121,13 @@ function markdownSections(markdown: string) {
   return sections;
 }
 
-function expectedArtifactTypesForRequest(request: GatewayRequest) {
-  return uniqueStrings([
-    ...(request.expectedArtifactTypes ?? []),
-    ...toStringList(request.uiState?.expectedArtifactTypes),
-  ]);
-}
-
-function selectedComponentIdsForRequest(request: Pick<GatewayRequest, 'selectedComponentIds' | 'uiState'>) {
-  return uniqueStrings([
-    ...(request.selectedComponentIds ?? []),
-    ...toStringList(request.uiState?.selectedComponentIds),
-  ]);
-}
-
 function repairNeededPayload(
   request: GatewayRequest,
   skill: SkillAvailability,
   reason: string,
-  refs: Partial<{
-    taskRel: string;
-    outputRel: string;
-    stdoutRel: string;
-    stderrRel: string;
-    blocker: string;
-    agentServerRefs: Record<string, unknown>;
-    recoverActions: string[];
-  }> = {},
+  refs: RepairPolicyRefs = {},
 ): ToolPayload {
-  const id = `EU-${request.skillDomain}-${sha1(`${request.prompt}:${reason}`).slice(0, 8)}`;
-  return {
-    message: `SciForge runtime gateway needs repair or AgentServer task generation: ${reason}`,
-    confidence: 0.2,
-    claimType: 'fact',
-    evidenceLevel: 'runtime',
-    reasoningTrace: [
-      reason,
-      `skillDomain=${request.skillDomain}`,
-      `skill=${skill.id}`,
-      'No demo/default/record-only success payload was substituted.',
-    ].join('\n'),
-    claims: [{
-      text: reason,
-      type: 'fact',
-      confidence: 0.2,
-      evidenceLevel: 'runtime',
-      supportingRefs: [skill.id],
-      opposingRefs: [],
-    }],
-    uiManifest: [
-      { componentId: 'execution-unit-table', title: 'Execution units', artifactRef: `${request.skillDomain}-runtime-result`, priority: 1 },
-    ],
-    executionUnits: [{
-      id,
-      tool: 'sciforge.workspace-runtime-gateway',
-      params: JSON.stringify({ prompt: request.prompt, skillDomain: request.skillDomain, skillId: skill.id, reason }),
-      status: 'repair-needed',
-      hash: sha1(`${id}:${reason}`).slice(0, 12),
-      time: new Date().toISOString(),
-      environment: 'SciForge workspace runtime gateway',
-      inputData: [request.prompt],
-      outputArtifacts: [],
-      artifacts: [],
-      codeRef: refs.taskRel,
-      outputRef: refs.outputRel,
-      stdoutRef: refs.stdoutRel,
-      stderrRef: refs.stderrRel,
-      blocker: refs.blocker,
-      refs: refs.agentServerRefs,
-      failureReason: reason,
-      ...attemptPlanRefs(request, skill, reason),
-      requiredInputs: requiredInputsForRepair(request, reason),
-      recoverActions: refs.recoverActions ?? recoverActionsForRepair(reason),
-      nextStep: nextStepForRepair(reason),
-      attempt: 1,
-    }],
-    artifacts: [],
-  };
+  return buildRepairNeededPayload(request, skill, reason, refs, attemptPlanRefs(request, skill, reason));
 }
 
 function agentServerGenerationFailureReason(error: string, diagnostics?: AgentServerGenerationFailureDiagnostics) {
@@ -5458,57 +4177,6 @@ function agentServerFailurePayloadRefs(diagnostics?: AgentServerGenerationFailur
       ],
     }
     : refs;
-}
-
-function requiredInputsForRepair(request: GatewayRequest, reason: string) {
-  const inputs = ['workspacePath', 'prompt', 'skillDomain'];
-  if (/agentserver|base url/i.test(reason)) inputs.push('agentServerBaseUrl');
-  if (/User-side model configuration|llmEndpoint|Model Provider|Model Base URL|Model Name/i.test(reason)) inputs.push('modelProvider', 'modelBaseUrl', 'modelName', 'apiKey');
-  if (/credential|token|api key/i.test(reason)) inputs.push('credentials');
-  if (/file|path|input/i.test(reason)) inputs.push('input artifacts or workspace files');
-  if (request.scenarioPackageRef) inputs.push(`scenarioPackage:${request.scenarioPackageRef.id}@${request.scenarioPackageRef.version}`);
-  return Array.from(new Set(inputs));
-}
-
-function recoverActionsForRepair(reason: string) {
-  if (/429|rate-limit|rate limit|retry budget|too many failed attempts|responseTooManyFailedAttempts|retry-after/i.test(reason)) {
-    return [
-      'Wait for the provider rate-limit/retry budget reset, then retry the same prompt.',
-      'Reduce concurrent AgentServer runs or switch to a provider/model with available quota.',
-      'Keep follow-up context compact by relying on workspace refs instead of resending full logs/artifacts.',
-    ];
-  }
-  if (/User-side model configuration|llmEndpoint|openteam\.json defaults/i.test(reason)) {
-    return [
-      'Open SciForge settings and fill Model Provider, Model Base URL, Model Name, and API Key.',
-      'Save config.local.json, then retry the same prompt so SciForge forwards the request-selected llmEndpoint.',
-      'Do not rely on AgentServer openteam.json defaults for generated workspace tasks.',
-    ];
-  }
-  if (/AgentServer|base URL|fetch|ECONNREFUSED/i.test(reason)) {
-    return [
-      'Start or configure AgentServer, then retry the same prompt.',
-      'If a local package skill package should handle this task, verify the skill registry match before using AgentServer fallback.',
-    ];
-  }
-  if (/schema|payload|parsed|validation/i.test(reason)) {
-    return [
-      'Open stdoutRef, stderrRef, and outputRef to inspect the generated task result.',
-      'Retry after the task returns message, claims, uiManifest, executionUnits, and artifacts.',
-    ];
-  }
-  return [
-    'Inspect stdoutRef, stderrRef, and outputRef when present.',
-    'Attach required inputs or choose a compatible skill/runtime before retrying.',
-  ];
-}
-
-function nextStepForRepair(reason: string) {
-  if (/429|rate-limit|rate limit|retry budget|too many failed attempts|responseTooManyFailedAttempts|retry-after/i.test(reason)) return 'Wait for provider quota/reset, then rerun with compact workspace refs; SciForge has already used its single automatic compact retry.';
-  if (/User-side model configuration|llmEndpoint|openteam\.json defaults/i.test(reason)) return 'Configure the user-side model endpoint in SciForge settings, then retry the same prompt.';
-  if (/AgentServer|base URL|fetch|ECONNREFUSED/i.test(reason)) return 'Start AgentServer or choose a local skill/runtime, then retry.';
-  if (/schema|payload|parsed|validation/i.test(reason)) return 'Repair the task output contract and rerun validation.';
-  return 'Review diagnostics, provide missing inputs, and rerun.';
 }
 
 function failedTaskPayload(

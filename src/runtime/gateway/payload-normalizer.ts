@@ -4,6 +4,7 @@ import { composeRuntimeUiManifest } from '../runtime-ui-manifest.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { expectedArtifactTypesForRequest } from './gateway-request.js';
 import { normalizeArtifactsForPayload, persistArtifactRefsForPayload, type RuntimeRefBundle } from './artifact-materializer.js';
+import { normalizeRuntimeVerificationResultsOrUndefined } from './verification-results.js';
 
 export function isToolPayload(value: unknown): value is ToolPayload {
   if (!isRecord(value)) return false;
@@ -31,6 +32,8 @@ export function coerceAgentServerToolPayload(value: unknown): ToolPayload | unde
     artifacts,
     displayIntent: isRecord(normalized.displayIntent) ? normalized.displayIntent : undefined,
     objectReferences: Array.isArray(normalized.objectReferences) ? normalized.objectReferences.filter(isRecord) : undefined,
+    verificationResults: normalizeRuntimeVerificationResultsOrUndefined(normalized.verificationResults ?? normalized.verificationResult),
+    verificationPolicy: isRecord(normalized.verificationPolicy) ? normalized.verificationPolicy as unknown as ToolPayload['verificationPolicy'] : undefined,
   };
 }
 
@@ -105,6 +108,8 @@ export async function validateAndNormalizePayload(
     } : unit),
     artifacts: persistedArtifacts,
     logs: [{ kind: 'stdout', ref: refs.stdoutRel }, { kind: 'stderr', ref: refs.stderrRel }],
+    verificationResults: payload.verificationResults,
+    verificationPolicy: payload.verificationPolicy,
   };
 }
 
@@ -115,6 +120,8 @@ export function normalizeToolPayloadShape(payload: ToolPayload): ToolPayload {
     uiManifest: Array.isArray(payload.uiManifest) ? payload.uiManifest : [],
     executionUnits: Array.isArray(payload.executionUnits) ? payload.executionUnits : [],
     artifacts: Array.isArray(payload.artifacts) ? payload.artifacts : [],
+    verificationResults: payload.verificationResults,
+    verificationPolicy: payload.verificationPolicy,
   };
 }
 
@@ -438,7 +445,7 @@ function extractJson(text: string): unknown {
 
 function normalizeExecutionUnitStatus(value: unknown) {
   const text = typeof value === 'string' ? value : '';
-  return ['planned', 'running', 'done', 'failed', 'record-only', 'repair-needed', 'self-healed', 'failed-with-reason'].includes(text) ? text : 'done';
+  return ['planned', 'running', 'done', 'failed', 'record-only', 'repair-needed', 'self-healed', 'failed-with-reason', 'needs-human'].includes(text) ? text : 'done';
 }
 
 function schemaErrors(payload: unknown) {

@@ -1,19 +1,7 @@
 import type { UIComponentElement } from './elementTypes';
-import { uiComponentManifests } from '../../ui-components';
+import { buildUIComponentArtifactTypeIndex, uiComponentCompatibilityAliases, uiComponentManifests } from '../../ui-components';
 
-const componentArtifactTypes: Record<string, string[]> = uiComponentManifests.reduce<Record<string, string[]>>((acc, module) => {
-  const current = acc[module.componentId] ?? [];
-  acc[module.componentId] = Array.from(new Set([...current, ...module.acceptsArtifactTypes]));
-  return acc;
-}, {});
-
-componentArtifactTypes['data-table'] = componentArtifactTypes['record-table'] ?? componentArtifactTypes['data-table'] ?? [];
-componentArtifactTypes['network-graph'] = componentArtifactTypes['graph-viewer'] ?? componentArtifactTypes['network-graph'] ?? [];
-componentArtifactTypes['volcano-plot'] = componentArtifactTypes['point-set-viewer'] ?? componentArtifactTypes['volcano-plot'] ?? [];
-componentArtifactTypes['umap-viewer'] = componentArtifactTypes['point-set-viewer'] ?? componentArtifactTypes['umap-viewer'] ?? [];
-componentArtifactTypes['heatmap-viewer'] = componentArtifactTypes['matrix-viewer'] ?? componentArtifactTypes['heatmap-viewer'] ?? [];
-componentArtifactTypes['molecule-viewer'] = componentArtifactTypes['structure-viewer'] ?? componentArtifactTypes['molecule-viewer'] ?? [];
-componentArtifactTypes['molecule-viewer-3d'] = componentArtifactTypes['structure-viewer'] ?? componentArtifactTypes['molecule-viewer'] ?? [];
+const componentArtifactTypes = buildUIComponentArtifactTypeIndex(uiComponentManifests);
 
 function acceptedArtifactTypesForComponent(componentId: string) {
   return componentArtifactTypes[componentId] ?? [];
@@ -245,6 +233,31 @@ const builtInUIComponentElements: UIComponentElement[] = [
 const builtInComponentIds = new Set(builtInUIComponentElements.map((component) => component.componentId));
 const componentIdByModuleId = new Map(uiComponentManifests.map((manifest) => [manifest.moduleId, manifest.componentId]));
 
+const aliasUIComponentElements: UIComponentElement[] = uiComponentCompatibilityAliases.map((alias) => {
+  const active = builtInUIComponentElements.find((component) => component.componentId === alias.activeComponentId)
+    ?? builtInUIComponentElements.find((component) => component.componentId === alias.routeComponentId);
+  return {
+    id: `component.${alias.legacyComponentId}`,
+    kind: 'ui-component',
+    version: active?.version ?? '1.0.0',
+    label: active ? `${active.label} compatibility alias` : `${alias.legacyComponentId} compatibility alias`,
+    description: `${alias.legacyComponentId} is a compatibility component id routed to ${alias.routeComponentId}. ${alias.note}`,
+    source: 'built-in',
+    componentId: alias.legacyComponentId,
+    acceptsArtifactTypes: acceptedArtifactTypesForComponent(alias.legacyComponentId),
+    requiredFields: active?.requiredFields ?? [],
+    emptyState: active?.emptyState ?? {
+      title: `等待 ${alias.legacyComponentId}`,
+      detail: `${alias.legacyComponentId} 是兼容别名；请提供匹配 artifact 或回退到通用 inspector。`,
+    },
+    recoverActions: active?.recoverActions ?? ['run-current-scenario', 'fallback-component:unknown-artifact-inspector'],
+    viewParams: active?.viewParams ?? [],
+    interactionEvents: active?.interactionEvents ?? [],
+    roleDefaults: active?.roleDefaults ?? [],
+    fallback: active?.fallback ?? 'unknown-artifact-inspector',
+  };
+});
+
 const manifestBackedComponentElements: UIComponentElement[] = uiComponentManifests
   .filter((manifest) => !builtInComponentIds.has(manifest.componentId))
   .map((manifest) => ({
@@ -273,11 +286,14 @@ const manifestBackedComponentElements: UIComponentElement[] = uiComponentManifes
   }));
 
 export const uiComponentElements: UIComponentElement[] = [
+  ...aliasUIComponentElements,
   ...builtInUIComponentElements,
   ...manifestBackedComponentElements,
 ];
 
 function fallbackComponentIdForManifest(fallbackModuleId?: string) {
   if (!fallbackModuleId) return 'unknown-artifact-inspector';
+  if (fallbackModuleId === 'generic-data-table') return 'record-table';
+  if (fallbackModuleId === 'generic-artifact-inspector') return 'unknown-artifact-inspector';
   return componentIdByModuleId.get(fallbackModuleId) ?? fallbackModuleId;
 }

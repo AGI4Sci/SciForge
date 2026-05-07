@@ -5,7 +5,7 @@ export type ScenarioInstanceId = ScenarioId | (string & {});
 
 export type MessageRole = 'user' | 'scenario' | 'system';
 export type RunStatus = 'idle' | 'running' | 'completed' | 'failed';
-export type ExecutionUnitStatus = 'planned' | 'running' | 'done' | 'failed' | 'record-only' | 'repair-needed' | 'self-healed' | 'failed-with-reason';
+export type ExecutionUnitStatus = 'planned' | 'running' | 'done' | 'failed' | 'record-only' | 'repair-needed' | 'self-healed' | 'failed-with-reason' | 'needs-human';
 export type ObjectReferenceKind = 'artifact' | 'file' | 'folder' | 'run' | 'execution-unit' | 'url' | 'scenario-package';
 export type ObjectReferenceStatus = 'available' | 'missing' | 'expired' | 'blocked' | 'external';
 export type ObjectAction = 'focus-right-pane' | 'inspect' | 'open-external' | 'reveal-in-folder' | 'copy-path' | 'pin' | 'compare';
@@ -455,6 +455,8 @@ export interface RuntimeExecutionUnit {
   requiredInputs?: string[];
   recoverActions?: string[];
   nextStep?: string;
+  verificationRef?: string;
+  verificationVerdict?: 'pass' | 'fail' | 'uncertain' | 'needs-human' | 'unverified';
 }
 
 export interface NotebookRecord {
@@ -689,6 +691,8 @@ export interface SendAgentMessageInput {
   scenarioPackageRef?: ScenarioPackageRef;
   skillPlanRef?: string;
   uiPlanRef?: string;
+  verificationResult?: Record<string, unknown>;
+  recentVerificationResults?: Array<Record<string, unknown>>;
 }
 
 export interface ScenarioPackageRef {
@@ -707,6 +711,15 @@ export interface ScenarioRuntimeOverride {
   fallbackComponent: string;
   selectedSkillIds?: string[];
   selectedToolIds?: string[];
+  selectedSenseIds?: string[];
+  selectedActionIds?: string[];
+  selectedVerifierIds?: string[];
+  artifactPolicy?: Record<string, unknown>;
+  referencePolicy?: Record<string, unknown>;
+  failureRecoveryPolicy?: Record<string, unknown>;
+  verificationPolicy?: Record<string, unknown>;
+  humanApprovalPolicy?: Record<string, unknown>;
+  unverifiedReason?: string;
   scenarioPackageRef?: ScenarioPackageRef;
   skillPlanRef?: string;
   uiPlanRef?: string;

@@ -11,11 +11,15 @@ await writeFile('packages/skills/types.ts', [
   '',
 ].join('\n'));
 
-await writeFile('packages/skills/index.ts', [
+await writeFile('packages/skills/catalog.ts', [
   "import type { SkillPackageManifest } from './types';",
   '',
   `export const skillPackageManifests = ${JSON.stringify(skills, null, 2)} as const satisfies readonly SkillPackageManifest[];`,
   '',
+].join('\n'));
+
+await writeFile('packages/skills/index.ts', [
+  "export { skillPackageManifests } from './catalog';",
   "export type { SkillPackageManifest, SkillPackageSource } from './types';",
   '',
 ].join('\n'));

@@ -1,0 +1,116 @@
+{
+  "schemaVersion": "sciforge.action-provider.manifest.v1",
+  "id": "example.generic-window-action",
+  "version": "0.1.0",
+  "kind": "action",
+  "displayName": "Generic Window Action",
+  "summary": "示例 provider，展示 window-bound GUI action 如何声明 schema、安全闸门、trace 和 verifier contract。",
+  "domains": ["gui", "automation"],
+  "triggers": ["click visible target", "type text", "press key", "operate window"],
+  "antiTriggers": ["render artifact", "answer without side effects"],
+  "integrationLevel": "schema-adapter",
+  "entrypoint": {
+    "type": "documentation-only",
+    "path": "packages/actions/examples/generic-window-action.manifest.json",
+    "notes": "示例 manifest，不绑定具体 runtime 实现。"
+  },
+  "actionSchema": {
+    "schemaRef": "sciforge.action.generic-window.v1",
+    "inputShape": {
+      "type": "object",
+      "required": ["task", "action"],
+      "properties": {
+        "task": { "type": "string" },
+        "action": {
+          "type": "object",
+          "properties": {
+            "kind": { "enum": ["click", "type_text", "press_key", "scroll", "wait"] },
+            "target": { "type": "object" },
+            "text": { "type": "string" },
+            "key": { "type": "string" }
+          }
+        },
+        "windowTarget": { "type": "object" },
+        "approval": { "type": "object" }
+      }
+    },
+    "outputShape": {
+      "type": "object",
+      "required": ["status", "traceRef"],
+      "properties": {
+        "status": { "enum": ["completed", "failed-with-reason", "needs-confirmation"] },
+        "reason": { "type": "string" },
+        "traceRef": { "type": "string" }
+      }
+    },
+    "examples": [
+      {
+        "task": "在目标窗口中点击可见的搜索框",
+        "action": { "kind": "click", "target": { "description": "search field" } },
+        "windowTarget": { "titleContains": "Search" }
+      }
+    ]
+  },
+  "environmentTargets": [
+    {
+      "type": "window",
+      "coordinatePolicy": "window-bound",
+      "sideEffects": ["pointer", "keyboard", "focused-window-state"],
+      "isolation": "provider 必须绑定目标窗口，不能用全屏坐标猜测。"
+    }
+  ],
+  "safetyGates": {
+    "riskClass": "medium",
+    "defaultPolicy": "require-confirmation",
+    "highRiskPolicy": "fail-closed",
+    "supportsDryRun": true,
+    "blockedActions": ["send-external-message", "delete-data", "payment", "credential-change"],
+    "requiresExplicitTarget": true,
+    "notes": "示例 provider 默认要求确认，真实 provider 可按动作风险下调。"
+  },
+  "confirmationRules": {
+    "requiredWhen": ["riskLevel=high", "external side effect", "destructive action"],
+    "approvalEvidence": ["approvalPolicy.id", "humanDecisionRef"],
+    "timeoutPolicy": "fail"
+  },
+  "traceContract": {
+    "schemaRef": "sciforge.action.trace.v1",
+    "storagePolicy": "ref-only",
+    "eventTypes": ["observe", "plan", "ground", "execute", "verify"],
+    "redaction": ["typedText", "credentials", "privateWindowTitle"],
+    "retention": "workspace trace refs，可由 runtime retention policy 清理。"
+  },
+  "verifierContract": {
+    "required": true,
+    "defaultVerifierTypes": ["environment", "human"],
+    "requiredWhen": ["riskLevel=high", "providerStatus=completed"],
+    "requestShape": {
+      "goal": "string",
+      "traceRefs": "string[]",
+      "stateRefs": "string[]",
+      "riskLevel": "low | medium | high"
+    },
+    "resultShape": {
+      "verdict": "pass | fail | uncertain | needs-human | unverified",
+      "confidence": "number",
+      "repairHints": "string[]"
+    }
+  },
+  "failureModes": [
+    {
+      "code": "target-not-found",
+      "stage": "targeting",
+      "recoverable": true,
+      "description": "目标在当前观察中不可定位。",
+      "repairHints": ["重新 observe", "要求 sense provider 聚焦目标区域", "请求用户选择目标窗口"]
+    },
+    {
+      "code": "confirmation-required",
+      "stage": "confirmation",
+      "recoverable": true,
+      "description": "动作风险超过当前 approval policy。",
+      "repairHints": ["请求人类确认", "改用 dry-run 或 preview"]
+    }
+  ]
+}
+

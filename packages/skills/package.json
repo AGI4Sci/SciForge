@@ -5,6 +5,7 @@
   "private": true,
   "exports": {
     ".": "./index.ts",
+    "./catalog": "./catalog.ts",
     "./types": "./types.ts"
   }
 }

@@ -9,9 +9,9 @@ export const basicReportViewerFixture: UIComponentRendererProps = {
     producerScenario: 'omics-differential-expression',
     schemaVersion: '1',
     data: {
-      title: 'IFN beta response summary',
+      title: 'Literature Report',
       markdown: [
-        '# IFN beta response summary',
+        '# Literature Report',
         '',
         'Three interferon-stimulated genes pass the mini-demo threshold of adjusted p-value < 0.05.',
         '',

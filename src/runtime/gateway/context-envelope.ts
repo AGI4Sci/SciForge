@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import type { SciForgeSkillDomain, GatewayRequest, SkillAvailability } from '../runtime-types.js';
 import { clipForAgentServerJson, clipForAgentServerPrompt, hashJson, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
 import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from './gateway-request.js';
+import { buildCapabilityBrief } from '../../shared/capabilityRegistry.js';
 
 export type AgentServerContextMode = 'full' | 'delta';
 
@@ -26,6 +27,21 @@ export function buildContextEnvelope(
   const contextReusePolicy = isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : undefined;
   const mode = params.mode ?? contextEnvelopeMode(request);
   const workspaceTree = params.workspaceTreeSummary ?? [];
+  const expectedArtifactTypes = expectedArtifactTypesForRequest(request);
+  const selectedComponentIds = selectedComponentIdsForRequest(request);
+  const capabilityBrief = buildCapabilityBrief({
+    prompt: request.prompt,
+    domain: request.skillDomain,
+    expectedArtifactTypes,
+    selectedToolIds: request.selectedToolIds ?? toStringList(request.uiState?.selectedToolIds),
+    selectedSenseIds: request.selectedSenseIds ?? toStringList(request.uiState?.selectedSenseIds),
+    selectedActionIds: request.selectedActionIds ?? toStringList(request.uiState?.selectedActionIds),
+    selectedVerifierIds: request.selectedVerifierIds ?? toStringList(request.uiState?.selectedVerifierIds),
+    selectedComponentIds,
+    riskLevel: request.riskLevel,
+    actionSideEffects: request.actionSideEffects ?? toStringList(request.uiState?.actionSideEffects),
+    userExplicitVerification: brokerVerificationMode(request.userExplicitVerification ?? request.verificationPolicy?.mode),
+  });
   const visibleRecentConversation = recentConversation
     .slice(mode === 'full' ? -6 : -4)
     .map((entry) => clipForAgentServerPrompt(entry, mode === 'full' ? 900 : 700))
@@ -86,9 +102,20 @@ export function buildContextEnvelope(
       scenarioPackageRef: request.scenarioPackageRef,
       skillPlanRef: request.skillPlanRef,
       uiPlanRef: request.uiPlanRef,
-      expectedArtifactTypes: expectedArtifactTypesForRequest(request),
-      selectedComponentIds: selectedComponentIdsForRequest(request),
+      expectedArtifactTypes,
+      selectedComponentIds,
       selectedToolIds: request.selectedToolIds ?? toStringList(request.uiState?.selectedToolIds),
+      selectedSenseIds: request.selectedSenseIds ?? toStringList(request.uiState?.selectedSenseIds),
+      selectedActionIds: request.selectedActionIds ?? toStringList(request.uiState?.selectedActionIds),
+      selectedVerifierIds: request.selectedVerifierIds ?? toStringList(request.uiState?.selectedVerifierIds),
+      artifactPolicy: request.artifactPolicy ?? (isRecord(uiState.artifactPolicy) ? uiState.artifactPolicy : undefined),
+      referencePolicy: request.referencePolicy ?? (isRecord(uiState.referencePolicy) ? uiState.referencePolicy : undefined),
+      failureRecoveryPolicy: request.failureRecoveryPolicy ?? (isRecord(uiState.failureRecoveryPolicy) ? uiState.failureRecoveryPolicy : undefined),
+      capabilityBrief,
+      verificationPolicy: request.verificationPolicy ?? capabilityBrief.verificationPolicy,
+      humanApprovalPolicy: request.humanApprovalPolicy ?? (isRecord(uiState.humanApprovalPolicy) ? uiState.humanApprovalPolicy : undefined),
+      unverifiedReason: request.unverifiedReason ?? (typeof uiState.unverifiedReason === 'string' ? uiState.unverifiedReason : undefined),
+      verificationBrief: capabilityBrief.verificationBrief,
       selectedSkill: params.selectedSkill ? {
         id: params.selectedSkill.id,
         kind: params.selectedSkill.kind,
@@ -106,10 +133,13 @@ export function buildContextEnvelope(
       recentRuns: Array.isArray(uiState.recentRuns)
         ? (mode === 'full' ? uiState.recentRuns : uiState.recentRuns.slice(-4).map((entry) => clipForAgentServerJson(entry, 2)))
         : undefined,
+      verificationResult: request.verificationResult ?? (isRecord(uiState.verificationResult) ? uiState.verificationResult : undefined),
+      recentVerificationResults: request.recentVerificationResults ?? toRecordList(uiState.recentVerificationResults),
     },
     longTermRefs: {
       artifacts: summarizeArtifactRefs(request.artifacts),
       recentExecutionRefs: summarizeExecutionRefs(recentExecutionRefs),
+      verificationResults: summarizeVerificationResults(request),
       priorAttempts: summarizeTaskAttemptsForAgentServer(params.priorAttempts ?? []).slice(0, mode === 'full' ? 4 : 2),
       repairRefs: params.repairRefs,
     },
@@ -202,21 +232,68 @@ function currentUserRequestText(prompt: string) {
   return userLine ? userLine.replace(/^user\s*:\s*/i, '') : prompt;
 }
 
-function summarizeArtifactRefs(artifacts: Array<Record<string, unknown>>) {
-  return artifacts.slice(-8).map((artifact) => ({
-    id: artifact.id,
-    type: artifact.type,
-    dataRef: artifact.dataRef,
-    metadata: isRecord(artifact.metadata) ? clipForAgentServerJson(artifact.metadata, 2) : undefined,
-    dataSummary: isRecord(artifact.data) ? clipForAgentServerJson(artifact.data, 2) : undefined,
+export function summarizeArtifactRefs(artifacts: Array<Record<string, unknown>>) {
+  return artifacts.slice(-8).map((artifact) => {
+    const id = typeof artifact.id === 'string' ? artifact.id : undefined;
+    const type = typeof artifact.type === 'string' ? artifact.type : undefined;
+    const title = typeof artifact.title === 'string'
+      ? artifact.title
+      : typeof artifact.name === 'string'
+        ? artifact.name
+        : undefined;
+    return {
+      id,
+      type,
+      title: clipForAgentServerPrompt(title, 240),
+      ref: typeof artifact.ref === 'string' ? artifact.ref : undefined,
+      path: typeof artifact.path === 'string' ? artifact.path : undefined,
+      dataRef: typeof artifact.dataRef === 'string' ? artifact.dataRef : undefined,
+      outputRef: typeof artifact.outputRef === 'string' ? artifact.outputRef : undefined,
+      metadata: isRecord(artifact.metadata) ? clipForAgentServerJson(artifact.metadata, 2) : undefined,
+      dataSummary: isRecord(artifact.data) ? clipForAgentServerJson(artifact.data, 2) : undefined,
+      keys: Object.keys(artifact).slice(0, 12),
+      hash: hashJson(artifact),
+    };
+  });
+}
+
+export function summarizeExecutionRefs(refs: Array<Record<string, unknown>>) {
+  return refs.slice(-12).map((entry) => ({
+    id: typeof entry.id === 'string' ? entry.id : undefined,
+    status: typeof entry.status === 'string' ? entry.status : undefined,
+    tool: typeof entry.tool === 'string' ? entry.tool : undefined,
+    codeRef: typeof entry.codeRef === 'string' ? entry.codeRef : undefined,
+    inputRef: typeof entry.inputRef === 'string' ? entry.inputRef : undefined,
+    outputRef: typeof entry.outputRef === 'string' ? entry.outputRef : undefined,
+    stdoutRef: typeof entry.stdoutRef === 'string' ? entry.stdoutRef : undefined,
+    stderrRef: typeof entry.stderrRef === 'string' ? entry.stderrRef : undefined,
+    failureReason: clipForAgentServerPrompt(entry.failureReason, 480),
+    hash: hashJson(entry),
   }));
 }
 
-function summarizeExecutionRefs(refs: Array<Record<string, unknown>>) {
-  return refs.slice(-8).map((ref) => clipForAgentServerJson(ref, 2));
+function summarizeVerificationResults(request: GatewayRequest) {
+  const fromArtifacts = request.artifacts
+    .filter((artifact) => String(artifact.type || artifact.id || '') === 'verification-result')
+    .map((artifact) => ({
+      id: artifact.id,
+      dataRef: artifact.dataRef,
+      metadata: isRecord(artifact.metadata) ? clipForAgentServerJson(artifact.metadata, 2) : undefined,
+      data: isRecord(artifact.data) ? clipForAgentServerJson(artifact.data, 2) : undefined,
+    }));
+  const fromUiState = toRecordList(request.uiState?.verificationResults)
+    .map((entry) => clipForAgentServerJson(entry, 2));
+  const explicit = request.verificationResult ? [clipForAgentServerJson(request.verificationResult, 2)] : [];
+  const recent = (request.recentVerificationResults ?? []).map((entry) => clipForAgentServerJson(entry, 2));
+  const combined = [...fromArtifacts, ...fromUiState, ...recent, ...explicit].slice(-6);
+  return combined.length ? combined : undefined;
 }
 
-function summarizeConversationLedger(ledger: Array<Record<string, unknown>>, mode: AgentServerContextMode) {
+function brokerVerificationMode(value: GatewayRequest['userExplicitVerification']): 'none' | 'lightweight' | 'automatic' | 'human' | 'hybrid' | undefined {
+  return value === 'unverified' ? 'none' : value;
+}
+
+export function summarizeConversationLedger(ledger: Array<Record<string, unknown>>, mode: AgentServerContextMode) {
   if (!ledger.length) return undefined;
   const budget = mode === 'full' ? 24 : 18;
   const tail = ledger.slice(-budget).map((entry) => clipForAgentServerJson(entry, 3));
@@ -229,6 +306,30 @@ function summarizeConversationLedger(ledger: Array<Record<string, unknown>>, mod
   };
 }
 
-function summarizeTaskAttemptsForAgentServer(attempts: unknown[]) {
-  return attempts.filter(isRecord).map((attempt) => clipForAgentServerJson(attempt, 2));
+export function summarizeTaskAttemptsForAgentServer(attempts: unknown[]) {
+  return attempts
+    .filter(isRecord)
+    .slice(0, 4)
+    .map((attempt) => ({
+      id: typeof attempt.id === 'string' ? attempt.id : undefined,
+      attempt: typeof attempt.attempt === 'number' ? attempt.attempt : undefined,
+      status: typeof attempt.status === 'string' ? attempt.status : undefined,
+      skillDomain: typeof attempt.skillDomain === 'string' ? attempt.skillDomain : undefined,
+      skillId: typeof attempt.skillId === 'string' ? attempt.skillId : undefined,
+      codeRef: typeof attempt.codeRef === 'string' ? attempt.codeRef : undefined,
+      inputRef: typeof attempt.inputRef === 'string' ? attempt.inputRef : undefined,
+      outputRef: typeof attempt.outputRef === 'string' ? attempt.outputRef : undefined,
+      stdoutRef: typeof attempt.stdoutRef === 'string' ? attempt.stdoutRef : undefined,
+      stderrRef: typeof attempt.stderrRef === 'string' ? attempt.stderrRef : undefined,
+      failureReason: clipForAgentServerPrompt(attempt.failureReason, 800),
+      schemaErrors: Array.isArray(attempt.schemaErrors)
+        ? attempt.schemaErrors.map((entry) => clipForAgentServerPrompt(entry, 240)).filter(Boolean).slice(0, 8)
+        : undefined,
+      patchSummary: clipForAgentServerPrompt(attempt.patchSummary, 800),
+      diffRef: typeof attempt.diffRef === 'string' ? attempt.diffRef : undefined,
+      scenarioPackageRef: isRecord(attempt.scenarioPackageRef) ? attempt.scenarioPackageRef : undefined,
+      skillPlanRef: typeof attempt.skillPlanRef === 'string' ? attempt.skillPlanRef : undefined,
+      uiPlanRef: typeof attempt.uiPlanRef === 'string' ? attempt.uiPlanRef : undefined,
+      createdAt: typeof attempt.createdAt === 'string' ? attempt.createdAt : undefined,
+    }));
 }

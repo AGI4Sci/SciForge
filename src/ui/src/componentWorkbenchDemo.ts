@@ -210,6 +210,13 @@ function cloneArtifact(artifact: RuntimeArtifact): RuntimeArtifact {
   };
 }
 
+function normalizeFixtureArtifactForModule(module: RuntimeUIModule, artifact: RuntimeArtifact): RuntimeArtifact {
+  if (module.componentId === 'data-table') {
+    return { ...artifact, id: 'de-table-mini', type: 'data-table' };
+  }
+  return artifact;
+}
+
 function fixtureForVariant(module: RuntimeUIModule, variant: WorkbenchDemoVariant): UIComponentRendererProps | undefined {
   return packageFixtures[module.componentId]?.[variant];
 }
@@ -217,7 +224,7 @@ function fixtureForVariant(module: RuntimeUIModule, variant: WorkbenchDemoVarian
 function fixtureArtifact(module: RuntimeUIModule, variant: WorkbenchDemoVariant): RuntimeArtifact | undefined {
   const fixture = fixtureForVariant(module, variant);
   const artifact = fixture?.artifact as RuntimeArtifact | undefined;
-  return artifact ? cloneArtifact(artifact) : undefined;
+  return artifact ? normalizeFixtureArtifactForModule(module, cloneArtifact(artifact)) : undefined;
 }
 
 function fixtureSlot(module: RuntimeUIModule, variant: WorkbenchDemoVariant): UIManifestSlot | undefined {
@@ -226,7 +233,7 @@ function fixtureSlot(module: RuntimeUIModule, variant: WorkbenchDemoVariant): UI
   return {
     ...(fixture.slot as UIManifestSlot),
     title: module.title,
-    componentId: fixture.slot.componentId || module.componentId,
+    componentId: module.componentId,
   };
 }
 
@@ -380,6 +387,18 @@ export function recommendWorkbenchComponents(
       if (fields.length && requiredAnyMatches(module.requiredAnyFields, fields)) {
         score += 4;
         reasons.push('required-any fields matched');
+      }
+      if (module.componentId === 'volcano-plot' && fields.some((field) => ['logFC', 'negLogP', 'gene'].includes(field))) {
+        score += 3;
+        reasons.push('volcano fields matched');
+      }
+      if (module.componentId === 'umap-viewer' && fields.some((field) => ['umap', 'x', 'y'].includes(field))) {
+        score += 3;
+        reasons.push('embedding fields matched');
+      }
+      if (module.componentId === 'scientific-plot-viewer' && artifactType === 'plot-spec') {
+        score += 6;
+        reasons.push('plot-spec primary renderer');
       }
       if (!artifactType && !fields.length && module.lifecycle === 'published') {
         score += 1;

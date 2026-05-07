@@ -1,0 +1,76 @@
+{
+  "schemaVersion": "sciforge.verifier-provider.manifest.v1",
+  "id": "fixture.human-approval",
+  "version": "0.1.0",
+  "kind": "verifier",
+  "verifierType": "human",
+  "displayName": "Human Approval Fixture",
+  "summary": "最小 human verifier fixture，把 accept、reject、revise、score 和 comment 转换成标准 VerificationResult。",
+  "domains": ["approval", "review"],
+  "triggers": ["needs human approval", "high risk action", "manual acceptance"],
+  "antiTriggers": ["fully automatic low risk validation"],
+  "integrationLevel": "markdown-first",
+  "entrypoint": {
+    "type": "human-interaction",
+    "notes": "由 UI/CLI 提供具体交互表面；provider contract 只规定事件到 VerificationResult 的映射。"
+  },
+  "requestContract": {
+    "schemaRef": "sciforge.verification.request.v1",
+    "requiredFields": ["goal", "resultRefs", "artifactRefs", "traceRefs", "verificationPolicy"],
+    "shape": {
+      "goal": "string",
+      "resultRefs": "string[]",
+      "artifactRefs": "string[]",
+      "traceRefs": "string[]",
+      "stateRefs": "string[]?",
+      "rubric": "string?",
+      "verificationPolicy": {
+        "required": "boolean",
+        "mode": "human | hybrid",
+        "riskLevel": "low | medium | high"
+      }
+    },
+    "acceptedArtifactTypes": ["any"]
+  },
+  "resultContract": {
+    "schemaRef": "sciforge.verification.result.v1",
+    "shape": {
+      "verdict": "pass | fail | uncertain | needs-human | unverified",
+      "reward": "number?",
+      "confidence": "number",
+      "critique": "string?",
+      "evidenceRefs": "string[]",
+      "repairHints": "string[]",
+      "diagnostics": "object?"
+    },
+    "verdicts": ["pass", "fail", "uncertain", "needs-human"],
+    "rewardRange": { "min": 0, "max": 1 }
+  },
+  "riskPolicy": {
+    "coversRiskLevels": ["low", "medium", "high"],
+    "defaultMode": "human",
+    "unverifiedAllowed": false,
+    "requiresHumanFor": ["high-risk action", "external side effect", "publication", "delete", "payment", "authorization"]
+  },
+  "evidencePolicy": {
+    "storagePolicy": "ref-only",
+    "evidenceRefsRequired": false,
+    "redaction": ["privateComment", "credentials"],
+    "retention": "保存 human decision ref、可见摘要和必要 comment，不保存敏感原文。"
+  },
+  "failureModes": [
+    {
+      "code": "human-timeout",
+      "recoverable": true,
+      "description": "等待人类确认超时。",
+      "repairHints": ["暂停 run", "返回 needs-human", "允许用户稍后继续"]
+    },
+    {
+      "code": "decision-ambiguous",
+      "recoverable": true,
+      "description": "人类反馈无法映射为明确 verdict。",
+      "repairHints": ["请求澄清", "保留 comment 并返回 uncertain"]
+    }
+  ]
+}
+

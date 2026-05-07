@@ -145,14 +145,18 @@ try {
   const traceArtifact = completed.artifacts.find((artifact) => artifact.id === 'vision-sense-trace');
   assert.ok(traceArtifact);
   assert.equal(traceArtifact.path, '.sciforge/vision-runs/generic-cu-actions-smoke/vision-trace.json');
-  assert.equal(completed.artifacts.length, 1);
+  assert.equal(completed.artifacts.filter((artifact) => artifact.id === 'vision-sense-trace').length, 1);
+  assert.ok(completed.artifacts.some((artifact) => artifact.type === 'verification-result'));
 
   const tracePath = join(dryRunWorkspace, String(traceArtifact.path));
   const traceText = await readFile(tracePath, 'utf8');
   assert.doesNotMatch(traceText, /base64|data:image/i);
   const trace = JSON.parse(traceText) as Record<string, unknown>;
+  assert.equal(trace.runtime, 'sciforge.workspace-runtime.vision-sense-generic-loop');
   assert.equal((trace.imageMemory as Record<string, unknown>).policy, 'file-ref-only');
-  assert.deepEqual((trace.genericComputerUse as Record<string, unknown>).appSpecificShortcuts, []);
+  const genericComputerUse = trace.genericComputerUse as Record<string, unknown>;
+  assert.deepEqual(genericComputerUse.appSpecificShortcuts, []);
+  assert.deepEqual(genericComputerUse.requires, ['WindowTargetProvider', 'VisionPlanner', 'Grounder', 'GuiExecutor', 'Verifier']);
   const refs = (trace.imageMemory as Record<string, unknown>).refs as Array<Record<string, unknown>>;
   assert.equal(refs.length, 20);
   assert.deepEqual(refs.map((ref) => ref.displayId), [1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2]);

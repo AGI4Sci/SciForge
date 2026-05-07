@@ -10,7 +10,33 @@ export type ExecutionUnitStatus =
   | 'record-only'
   | 'repair-needed'
   | 'self-healed'
-  | 'failed-with-reason';
+  | 'failed-with-reason'
+  | 'needs-human';
+
+export type VerificationVerdict = 'pass' | 'fail' | 'uncertain' | 'needs-human' | 'unverified';
+export type VerificationMode = 'none' | 'lightweight' | 'automatic' | 'human' | 'hybrid' | 'unverified';
+export type VerificationRiskLevel = 'low' | 'medium' | 'high';
+
+export interface VerificationPolicy {
+  required: boolean;
+  mode: VerificationMode;
+  riskLevel: VerificationRiskLevel;
+  reason: string;
+  selectedVerifierIds?: string[];
+  humanApprovalPolicy?: 'none' | 'optional' | 'required';
+  unverifiedReason?: string;
+}
+
+export interface VerificationResult {
+  id?: string;
+  verdict: VerificationVerdict;
+  reward?: number;
+  confidence: number;
+  critique?: string;
+  evidenceRefs: string[];
+  repairHints: string[];
+  diagnostics?: Record<string, unknown>;
+}
 
 export interface GatewayRequest {
   skillDomain: SciForgeSkillDomain;
@@ -31,8 +57,23 @@ export interface GatewayRequest {
   uiState?: Record<string, unknown>;
   availableSkills?: string[];
   selectedToolIds?: string[];
+  selectedSenseIds?: string[];
+  selectedActionIds?: string[];
   expectedArtifactTypes?: string[];
   selectedComponentIds?: string[];
+  selectedVerifierIds?: string[];
+  riskLevel?: VerificationRiskLevel;
+  actionSideEffects?: string[];
+  userExplicitVerification?: VerificationMode;
+  verificationPolicy?: VerificationPolicy;
+  artifactPolicy?: Record<string, unknown>;
+  referencePolicy?: Record<string, unknown>;
+  failureRecoveryPolicy?: Record<string, unknown>;
+  humanApprovalPolicy?: Record<string, unknown>;
+  humanApproval?: Record<string, unknown>;
+  unverifiedReason?: string;
+  verificationResult?: VerificationResult | Record<string, unknown>;
+  recentVerificationResults?: Array<VerificationResult | Record<string, unknown>>;
 }
 
 export interface WorkspaceRuntimeEvent {
@@ -156,6 +197,8 @@ export interface ToolPayload {
   logs?: Array<Record<string, unknown>>;
   displayIntent?: Record<string, unknown>;
   objectReferences?: Array<Record<string, unknown>>;
+  verificationResults?: VerificationResult[];
+  verificationPolicy?: VerificationPolicy;
 }
 
 export interface WorkspaceTaskSpec {

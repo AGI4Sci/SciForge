@@ -699,15 +699,25 @@ describe('sendSciForgeToolMessage routing', () => {
         fallbackComponent: 'unknown-artifact-inspector',
         selectedSkillIds: ['scp.biomedical-web-search'],
         selectedToolIds: ['clawhub.playwright-mcp'],
+        selectedActionIds: ['browser.search'],
+        selectedVerifierIds: ['schema.report'],
+        verificationPolicy: { required: true, mode: 'automatic', riskLevel: 'low', reason: '检查报告 schema。' },
+        humanApprovalPolicy: { required: false, mode: 'none' },
       },
       prompt: '检索并总结最新 agent 论文。',
     });
 
     assert.deepEqual(requestBody?.availableSkills, ['scp.biomedical-web-search', 'agentserver.generate.literature']);
     assert.deepEqual(requestBody?.selectedToolIds, ['clawhub.playwright-mcp']);
+    assert.deepEqual(requestBody?.selectedActionIds, ['browser.search']);
+    assert.deepEqual(requestBody?.selectedVerifierIds, ['schema.report']);
+    assert.deepEqual((requestBody?.verificationPolicy as Record<string, unknown>).mode, 'automatic');
     const uiState = requestBody?.uiState as Record<string, unknown>;
     assert.deepEqual(uiState.selectedSkillIds, ['scp.biomedical-web-search', 'agentserver.generate.literature']);
     assert.deepEqual(uiState.selectedToolIds, ['clawhub.playwright-mcp']);
+    assert.deepEqual(uiState.selectedActionIds, ['browser.search']);
+    assert.deepEqual(uiState.selectedVerifierIds, ['schema.report']);
+    assert.deepEqual((uiState.humanApprovalPolicy as Record<string, unknown>).mode, 'none');
   });
 
   it('passes the activated vision-sense contract into multi-turn agent context', async () => {
@@ -753,7 +763,9 @@ describe('sendSciForgeToolMessage routing', () => {
     });
 
     assert.deepEqual(requestBody?.selectedToolIds, ['local.vision-sense']);
+    assert.deepEqual(requestBody?.selectedSenseIds, ['local.vision-sense']);
     const uiState = requestBody?.uiState as Record<string, unknown>;
+    assert.deepEqual(uiState.selectedSenseIds, ['local.vision-sense']);
     const contracts = uiState.selectedToolContracts as Array<Record<string, unknown>>;
     assert.equal(contracts[0].id, 'local.vision-sense');
     assert.equal(contracts[0].executionBoundary, 'text-signal-only');

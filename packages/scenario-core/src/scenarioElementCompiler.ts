@@ -385,8 +385,21 @@ function compileSlotsFromSelection(
 }
 
 function defaultComponentIdsForArtifacts(artifacts: ArtifactSchemaElement[], registry: ElementRegistry) {
-  const ids = artifacts.map((artifact) => artifact.consumerComponentIds.find((componentId) => componentId !== 'unknown-artifact-inspector') ?? 'unknown-artifact-inspector');
+  const ids = artifacts.map((artifact) => preferredComponentIdForArtifact(artifact) ?? 'unknown-artifact-inspector');
   return unique([...ids, 'unknown-artifact-inspector']);
+}
+
+function preferredComponentIdForArtifact(artifact: ArtifactSchemaElement) {
+  const preferredByArtifactType: Record<string, string[]> = {
+    'knowledge-graph': ['network-graph', 'graph-viewer', 'data-table', 'record-table'],
+    'omics-differential-expression': ['volcano-plot', 'heatmap-viewer', 'umap-viewer', 'point-set-viewer', 'matrix-viewer', 'data-table'],
+    'structure-summary': ['molecule-viewer', 'structure-viewer', 'data-table'],
+    'paper-list': ['paper-card-list', 'data-table', 'record-table'],
+    'research-report': ['report-viewer'],
+  };
+  const candidates = artifact.consumerComponentIds.filter((componentId) => componentId !== 'unknown-artifact-inspector');
+  const preferred = preferredByArtifactType[artifact.artifactType]?.find((componentId) => candidates.includes(componentId));
+  return preferred ?? candidates[0];
 }
 
 function deriveInputContract(skills: SkillElement[], fallback: ScenarioInputField[]) {

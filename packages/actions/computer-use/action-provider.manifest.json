@@ -1,0 +1,138 @@
+{
+  "schemaVersion": "sciforge.action-provider.manifest.v1",
+  "id": "sciforge.computer-use",
+  "version": "0.1.0",
+  "kind": "action",
+  "displayName": "SciForge Computer Use",
+  "summary": "面向 GUI 的 sense-agnostic action loop，通过目标窗口观察、grounding、执行和验证完成通用电脑操作。",
+  "domains": ["gui", "automation", "workspace"],
+  "triggers": ["operate GUI", "click", "type", "scroll", "press key", "window-bound action"],
+  "antiTriggers": ["vision-only question", "artifact rendering", "schema-only validation"],
+  "integrationLevel": "native-runtime",
+  "entrypoint": {
+    "type": "python-package",
+    "package": "sciforge-computer-use",
+    "module": "sciforge_computer_use",
+    "symbol": "run_computer_use_task",
+    "path": "packages/computer-use",
+    "notes": "迁移期兼容入口。目标目录为 packages/actions/computer-use，但当前不移动旧测试入口。"
+  },
+  "actionSchema": {
+    "schemaRef": "sciforge.computer-use.request.v1",
+    "inputShape": {
+      "type": "object",
+      "required": ["task"],
+      "properties": {
+        "task": { "type": "string" },
+        "max_steps": { "type": "integer", "minimum": 1, "default": 12 },
+        "risk_policy": { "enum": ["fail-closed", "allow-confirmed"] },
+        "window_target": { "type": "object" },
+        "metadata": { "type": "object" }
+      }
+    },
+    "outputShape": {
+      "type": "object",
+      "required": ["status", "reason", "steps"],
+      "properties": {
+        "status": { "enum": ["completed", "failed-with-reason", "needs-confirmation", "max-steps"] },
+        "reason": { "type": "string" },
+        "steps": { "type": "array" },
+        "final_observation": { "type": ["object", "null"] },
+        "failure_diagnostics": { "type": "object" },
+        "metrics": { "type": "object" }
+      }
+    },
+    "examples": [
+      {
+        "task": "点击目标窗口中可见的搜索框",
+        "max_steps": 3,
+        "risk_policy": "fail-closed",
+        "window_target": { "titleContains": "SciForge" }
+      }
+    ]
+  },
+  "environmentTargets": [
+    {
+      "type": "window",
+      "coordinatePolicy": "window-bound",
+      "sideEffects": ["pointer", "keyboard", "focused-window-state"],
+      "isolation": "观察、坐标映射和执行都必须绑定目标窗口或窗口内容坐标。"
+    },
+    {
+      "type": "remote-desktop",
+      "coordinatePolicy": "provider-defined",
+      "sideEffects": ["remote-pointer", "remote-keyboard"],
+      "isolation": "远程会话必须隔离输入通道和 trace。"
+    }
+  ],
+  "safetyGates": {
+    "riskClass": "high",
+    "defaultPolicy": "fail-closed",
+    "highRiskPolicy": "fail-closed",
+    "supportsDryRun": false,
+    "blockedActions": ["payment", "credential-change", "destructive-delete", "external-send-without-approval"],
+    "requiresExplicitTarget": true,
+    "notes": "旧实现中 high risk action 在 fail-closed 策略下返回 needs-confirmation，不执行。"
+  },
+  "confirmationRules": {
+    "requiredWhen": ["riskLevel=high", "external side effect", "destructive action", "approvalPolicy missing"],
+    "approvalEvidence": ["ComputerUseRequest.risk_policy=allow-confirmed", "humanApprovalRef"],
+    "timeoutPolicy": "fail"
+  },
+  "traceContract": {
+    "schemaRef": "sciforge.computer-use.loop-trace.v1",
+    "storagePolicy": "ref-only",
+    "eventTypes": ["observe", "plan", "ground", "execute", "verify", "complete", "fail"],
+    "redaction": ["typedText", "credentials", "privateWindowTitle", "rawScreenshot"],
+    "retention": "trace 只保存 refs、紧凑摘要和结构化步骤，大 payload 进入 artifact store。"
+  },
+  "verifierContract": {
+    "required": true,
+    "defaultVerifierTypes": ["environment", "human"],
+    "requiredWhen": ["riskLevel=high", "status=completed", "external side effect"],
+    "requestShape": {
+      "goal": "ComputerUseRequest.task",
+      "traceRefs": "computer-use trace refs",
+      "stateRefs": "before/after observation refs",
+      "riskLevel": "ActionPlan.risk_level"
+    },
+    "resultShape": {
+      "verdict": "pass | fail | uncertain | needs-human | unverified",
+      "reward": "number?",
+      "confidence": "number",
+      "critique": "string?",
+      "repairHints": "string[]"
+    }
+  },
+  "failureModes": [
+    {
+      "code": "target-not-found",
+      "stage": "targeting",
+      "recoverable": true,
+      "description": "sense provider 无法把动作目标定位到观察坐标。",
+      "repairHints": ["重新观察目标窗口", "缩小目标区域", "请求更明确的目标描述"]
+    },
+    {
+      "code": "execution-blocked",
+      "stage": "execution",
+      "recoverable": true,
+      "description": "host adapter 拒绝执行或目标环境不可用。",
+      "repairHints": ["检查窗口绑定", "检查输入隔离", "切换到 dry-run 或请求用户介入"]
+    },
+    {
+      "code": "confirmation-required",
+      "stage": "confirmation",
+      "recoverable": true,
+      "description": "动作风险等级需要显式确认。",
+      "repairHints": ["请求 human approval", "降低动作风险或改为只观察"]
+    },
+    {
+      "code": "verification-failed",
+      "stage": "verification",
+      "recoverable": true,
+      "description": "执行后验证未通过或不确定。",
+      "repairHints": ["把 verification result 带入下一轮", "重新规划动作", "请求人类判断"]
+    }
+  ]
+}
+

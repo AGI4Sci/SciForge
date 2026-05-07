@@ -72,9 +72,17 @@ Verifier provider 可以是：
 
 ### UI Components
 
-UI component 负责渲染 artifact 或任务状态。它应声明自己支持的 artifact 类型、数据契约、交互事件和 fallback 行为。
+UI component 负责渲染 artifact 或任务状态。更准确的长期名称是 interactive artifact views/renderers；当前 `packages/ui-components` 名称保留为 registry 兼容层。
 
-UI component 不负责领域策略判断。它应该由 runtime 根据 artifact type、display intent、component manifest 和用户交互上下文选择。
+UI component 应声明自己支持的 artifact 类型、数据 schema、可见 affordance、object references、交互事件和 fallback 行为。它的稳定边界是：
+
+```text
+artifact data + schema + view props + refs -> visible view + events + object refs
+```
+
+UI component 不负责领域策略判断，也不是 action provider 或 verifier provider。它可以承载 human verification 交互，例如 accept、reject、revise、score、comment，但这些只是事件；上层 verifier provider 才能把事件转换成 `VerificationResult`、verdict、reward、critique 和 repair hints。
+
+鼠标、键盘和代码级交互只应改变 view-local 状态或发出声明过的事件。任何文件写入、远程 API、GUI 操作、实验设备动作、测试运行或验证结论，都必须交给 action/verifier/runtime contract，而不是藏在 renderer 内部。
 
 ## 集成等级
 

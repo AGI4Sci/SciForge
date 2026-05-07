@@ -34,7 +34,7 @@ packages/ui-components/ or packages/interactive-views/
 
 Verify 是闭环的必要阶段，但 verifier 的类型和强度可按风险选择。低风险草稿可以使用轻量规则或标记为 `unverified`；高风险动作、科研结论、外部副作用和发布类任务必须有明确 verifier 或 human approval。
 
-`packages/ui-components` 当前名称保留以兼容现有 registry。若未来改名，应把 `interactive-views` 作为别名/迁移目标，而不是把 UI components 放进 `actions`。
+`packages/ui-components` 当前名称保留以兼容现有 registry。`packages/interactive-views` 已作为非破坏性别名和长期迁移目标加入；它重新导出同一批 manifests，不移动 renderer，也不改变 component registry 真相源。未来如真实迁移目录，必须继续保留 `packages/ui-components` 的 registry、componentId、alias 和 renderer 兼容导出。
 
 ## 集成原则
 

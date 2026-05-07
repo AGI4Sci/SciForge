@@ -1,22 +1,27 @@
-import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
-import { ChevronDown, ChevronUp, CircleStop, Clock, Copy, Download, FileUp, MessageSquare, Plus, Quote, Sparkles, Trash2, X } from 'lucide-react';
+import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import { Copy, X } from 'lucide-react';
 import { scenarios, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
-import { compactAgentContext, sendAgentMessageStream, validateSemanticTurnAcceptance } from '../api/agentClient';
-import { sendSciForgeToolMessage } from '../api/sciforgeToolsClient';
-import { buildContextWindowMeterModel, estimateContextWindowState, latestContextWindowState, shouldStartContextCompaction } from '../contextWindow';
-import { buildContextCompactionFailureResult, buildContextCompactionOutcome } from '../contextCompaction';
+import { buildContextWindowMeterModel, estimateContextWindowState, latestContextWindowState } from '../contextWindow';
 import { builtInScenarioPackageRef } from '../scenarioCompiler/scenarioPackage';
 import { resetSession } from '../sessionStore';
 import { coalesceStreamEvents, formatAgentTokenUsage, latestRunningEvent, presentStreamEvent, streamEventCounts } from '../streamEventPresentation';
-import { acceptAndRepairAgentResponse, buildBackendAcceptanceRepairPrompt, buildUserGoalSnapshot, shouldRunBackendAcceptanceRepair } from '../turnAcceptance';
-import { expectedArtifactsForCurrentTurn, selectedComponentsForCurrentTurn } from '../artifactIntent';
-import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeRun, type SciForgeSession, type NormalizedAgentResponse, type ObjectAction, type ObjectReference, type ObjectReferenceKind, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
+import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeRun, type SciForgeSession, type ObjectReference, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
 import { writeWorkspaceFile } from '../api/workspaceClient';
 import { exportJsonFile } from './exportUtils';
-import { ActionButton, Badge, ClaimTag, ConfidenceBar, EvidenceTag, IconButton, cx } from './uiPrimitives';
+import { Badge, ClaimTag, ConfidenceBar, EvidenceTag, cx } from './uiPrimitives';
+import { AcceptancePanel } from './chat/AcceptancePanel';
+import { ArchiveDrawer } from './chat/ArchiveDrawer';
+import { ChatComposer } from './chat/ChatComposer';
+import { ChatPanelHeader } from './chat/ChatPanelHeader';
+import { ReferenceContextMenu } from './chat/ReferenceContextMenu';
+import { RunReadinessBar } from './chat/RunReadinessBar';
+import { MessageList } from './chat/MessageList';
+import { MessageContent, inlineObjectReferencesForMessage, objectReferencesFromInlineTokens, unmentionedObjectReferencesForMessage } from './chat/MessageContent';
+import { addComposerReferenceWithMarker, addPendingComposerReference, promptForComposerSend, removeComposerReference } from './chat/composerReferences';
+import { runPromptOrchestrator } from './chat/runOrchestrator';
+import { appendRunningGuidance, appendUploadMessageToSession, mergeAgentResponseIntoSession, rollbackSessionBeforeMessage } from './chat/sessionTransforms';
 import {
-  appendReferenceMarkerToInput,
   artifactTypeForUploadedFileLike as artifactTypeForUploadedFile,
   sciForgeReferenceAttribute,
   mergeObjectReferences,
@@ -34,12 +39,10 @@ import {
   referenceForTextSelection,
   referenceForUiElement,
   referenceForUploadedArtifact,
-  removeReferenceMarkerFromInput,
   uploadedDerivativeHintsForFileLike as uploadedDerivativeHints,
   uploadedInlinePolicyForFileLike as uploadedInlinePolicy,
   uploadedLocatorHintsForFileLike as uploadedLocatorHints,
   uploadedPreviewActionsForFileLike as uploadedPreviewActions,
-  withComposerMarker,
 } from '../../../../packages/object-references';
 
 export { objectReferenceKindLabel } from '../../../../packages/object-references';
@@ -68,11 +71,6 @@ function builtInScenarioIdForInstance(scenarioId: ScenarioInstanceId, scenarioOv
   if (skillDomain === 'literature') return 'literature-evidence-review';
   if (typeof scenarioId === 'string' && isBuiltInScenarioId(scenarioId)) return scenarioId;
   return 'literature-evidence-review';
-}
-
-function titleFromPrompt(prompt: string) {
-  const title = prompt.trim().replace(/s+/g, ' ').slice(0, 36);
-  return title || '新聊天';
 }
 
 export function ChatPanel({
@@ -316,7 +314,7 @@ export function ChatPanel({
   }, [scenarioId, session.sessionId]);
 
   async function handleSend() {
-    const prompt = input.trim() || (pendingReferences.length ? '请基于已引用对象继续分析。' : '');
+    const prompt = promptForComposerSend(input, pendingReferences);
     if (!prompt) return;
     if (isSending) {
       handleRunningGuidance(prompt);
@@ -331,22 +329,12 @@ export function ChatPanel({
     try {
       const uploaded = await Promise.all(selectedFiles.map((file) => fileToUploadedArtifact(file, scenarioId, config, activeSessionRef.current.sessionId)));
       const references = uploaded.map((artifact) => referenceForUploadedArtifact(artifact));
-      const now = nowIso();
-      const uploadMessage: SciForgeMessage = {
-        id: makeId('msg'),
-        role: 'system',
-        content: `已上传 ${uploaded.length} 个文件到证据矩阵：${uploaded.map((artifact) => artifact.metadata?.title ?? artifact.id).join('、')}`,
-        createdAt: now,
-        status: 'completed',
+      const nextSession = appendUploadMessageToSession({
+        session: activeSessionRef.current,
+        uploaded,
         references,
         objectReferences: uploaded.map((artifact) => objectReferenceForUploadedArtifact(artifact)),
-      };
-      const nextSession: SciForgeSession = {
-        ...activeSessionRef.current,
-        messages: [...activeSessionRef.current.messages, uploadMessage],
-        artifacts: mergeRuntimeArtifacts(uploaded, activeSessionRef.current.artifacts),
-        updatedAt: now,
-      };
+      });
       activeSessionRef.current = nextSession;
       onSessionChange(nextSession);
       references.forEach(addPendingReference);
@@ -359,27 +347,29 @@ export function ChatPanel({
   }
 
   function addPendingReference(reference: SciForgeReference) {
-    setPendingReferences((current) => {
-      if (current.some((item) => item.id === reference.id)) return current;
-      return [...current, reference].slice(0, 8);
-    });
+    setPendingReferences((current) => addPendingComposerReference(current, reference));
   }
 
   function addPendingReferenceToComposer(reference: SciForgeReference) {
-    const referenceWithMarker = withComposerMarker(reference, pendingReferences);
-    addPendingReference(referenceWithMarker);
-    const nextInput = appendReferenceMarkerToInput(inputRef.current, referenceWithMarker);
-    inputRef.current = nextInput;
-    onInputChange(nextInput);
+    const next = addComposerReferenceWithMarker({
+      input: inputRef.current,
+      pendingReferences,
+      reference,
+    });
+    setPendingReferences(next.pendingReferences);
+    inputRef.current = next.input;
+    onInputChange(next.input);
   }
 
   function removePendingReference(referenceId: string) {
-    const reference = pendingReferences.find((item) => item.id === referenceId);
-    setPendingReferences((current) => current.filter((item) => item.id !== referenceId));
-    if (!reference) return;
-    const nextInput = removeReferenceMarkerFromInput(inputRef.current, reference);
-    inputRef.current = nextInput;
-    onInputChange(nextInput);
+    const next = removeComposerReference({
+      input: inputRef.current,
+      pendingReferences,
+      referenceId,
+    });
+    setPendingReferences(next.pendingReferences);
+    inputRef.current = next.input;
+    onInputChange(next.input);
   }
 
   function focusPendingReference(reference: SciForgeReference) {
@@ -387,46 +377,6 @@ export function ChatPanel({
   }
 
   async function runPrompt(prompt: string, baseSession: SciForgeSession, references: SciForgeReference[] = []) {
-    const turnId = makeId('turn');
-    const turnComponentHints = selectedComponentsForCurrentTurn(
-      prompt,
-      availableComponentIds.length
-        ? availableComponentIds
-        : (scenarioOverride?.defaultComponents?.length
-          ? scenarioOverride.defaultComponents
-          : SCENARIO_SPECS[baseScenarioId].componentPolicy.defaultComponents),
-    );
-    const goalSnapshot = buildUserGoalSnapshot({
-      turnId,
-      prompt,
-      references,
-      scenarioId,
-      scenarioOverride,
-      expectedArtifacts: expectedArtifactsForCurrentTurn({
-        scenarioId: baseScenarioId,
-        prompt,
-        selectedComponentIds: turnComponentHints,
-      }),
-      recentMessages: baseSession.messages.slice(-8).map((message) => ({ role: message.role, content: message.content })),
-    });
-    const userMessage: SciForgeMessage = {
-      id: makeId('msg'),
-      role: 'user',
-      content: prompt,
-      createdAt: nowIso(),
-      status: 'completed',
-      references,
-      goalSnapshot,
-    };
-    const optimisticSession: SciForgeSession = {
-      ...baseSession,
-      title: baseSession.runs.length || baseSession.messages.some((message) => message.id.startsWith('msg'))
-        ? baseSession.title
-        : titleFromPrompt(prompt),
-      messages: [...baseSession.messages, userMessage],
-      updatedAt: nowIso(),
-    };
-    onSessionChange(optimisticSession);
     onInputChange('');
     inputRef.current = '';
     setPendingReferences([]);
@@ -445,216 +395,54 @@ export function ChatPanel({
     abortRef.current = controller;
     userAbortRequestedRef.current = false;
     try {
-      let latestRoundTokenUsage: AgentStreamEvent['usage'];
       const handleStreamEvent = (event: AgentStreamEvent) => {
-        if (event.usage) latestRoundTokenUsage = event.usage;
         setStreamEvents((current) => coalesceStreamEvents(current, event).slice(-32));
       };
-      const turnPayload = requestPayloadForTurn(optimisticSession, userMessage, references);
-      const request = {
-        sessionId: optimisticSession.sessionId,
-        scenarioId,
-        agentName: scenario.name,
-        agentDomain: scenario.domain,
+      const result = await runPromptOrchestrator({
         prompt,
+        baseSession,
         references,
-        roleView: role,
-        messages: turnPayload.messages,
-        artifacts: turnPayload.artifacts,
-        executionUnits: turnPayload.executionUnits,
-        runs: turnPayload.runs,
+        scenarioId,
+        baseScenarioId,
+        scenarioName: scenario.name,
+        scenarioDomain: scenario.domain,
+        role,
         config,
         scenarioOverride,
         availableComponentIds,
+        defaultComponentIds: scenarioOverride?.defaultComponents?.length
+          ? scenarioOverride.defaultComponents
+          : SCENARIO_SPECS[baseScenarioId].componentPolicy.defaultComponents,
         scenarioPackageRef,
         skillPlanRef,
         uiPlanRef,
-      };
-      const preflightState = latestContextWindowState(streamEvents)
-        ?? estimateContextWindowState(baseSession, config, streamEvents);
-      if (shouldStartContextCompaction({
-        state: preflightState,
-        running: false,
-        inFlight: false,
-        reason: 'auto-threshold-before-send',
-      })) {
-        const startedAt = nowIso();
-        setStreamEvents((current) => [...current.slice(-31), {
-          id: makeId('evt'),
-          type: 'contextCompaction',
-          label: '上下文压缩',
-          detail: '发送前达到阈值，正在请求 AgentServer/backend 原生压缩。',
-          contextWindowState: {
-            ...preflightState,
-            pendingCompact: true,
-            status: 'compacting',
-          },
-          contextCompaction: {
-            status: 'started',
-            source: 'agentserver',
-            backend: config.agentBackend,
-            compactCapability: preflightState.compactCapability,
-            before: preflightState,
-            startedAt,
-            reason: 'auto-threshold-before-send',
-            message: '发送前达到阈值，正在请求 AgentServer/backend 原生压缩。',
-          },
-          createdAt: startedAt,
-        }]);
-        try {
-          const compactResult = await compactAgentContext(request, 'auto-threshold-before-send', controller.signal);
-          const completedAt = nowIso();
-          const outcome = buildContextCompactionOutcome({
-            eventId: makeId('evt'),
-            messageId: makeId('msg'),
-            result: compactResult,
-            beforeState: preflightState,
-            reason: 'auto-threshold-before-send',
-            startedAt,
-            completedAt,
-            fallbackBackend: config.agentBackend,
-          });
-          setStreamEvents((current) => coalesceStreamEvents(current, outcome.event).slice(-32));
-        } catch (compactError) {
-          if (compactError instanceof DOMException && compactError.name === 'AbortError') throw compactError;
-          const completedAt = nowIso();
-          const outcome = buildContextCompactionOutcome({
-            eventId: makeId('evt'),
-            messageId: makeId('msg'),
-            result: buildContextCompactionFailureResult({
-              error: compactError,
-              reason: 'auto-threshold-before-send',
-              backend: config.agentBackend,
-              compactCapability: preflightState.compactCapability,
-              startedAt,
-            }),
-            beforeState: preflightState,
-            reason: 'auto-threshold-before-send',
-            startedAt,
-            completedAt,
-            fallbackBackend: config.agentBackend,
-          });
-          setStreamEvents((current) => coalesceStreamEvents(current, outcome.event).slice(-32));
-        }
-      }
-      let response: NormalizedAgentResponse;
-      try {
-        response = await sendSciForgeToolMessage(request, {
-          onEvent: handleStreamEvent,
-        }, controller.signal);
-      } catch (projectToolError) {
-        const detail = projectToolError instanceof Error ? projectToolError.message : String(projectToolError);
-        if (/cancel|abort|已取消|cancelled|canceled/i.test(detail)) {
-          throw projectToolError;
-        }
-        setStreamEvents((current) => [...current.slice(-32), {
-          id: makeId('evt'),
-          type: 'project-tool-fallback',
-          label: '项目工具',
-          detail: `SciForge project tool unavailable, falling back to AgentServer: ${detail}`,
-          createdAt: nowIso(),
-          raw: { error: detail },
-        }]);
-        response = await sendAgentMessageStream(request, {
-          onEvent: handleStreamEvent,
-        }, controller.signal);
-      }
-      const responseWithUsage = latestRoundTokenUsage
-        ? { ...response, message: { ...response.message, tokenUsage: latestRoundTokenUsage } }
-        : response;
-      const responseWithReferences = {
-        ...responseWithUsage,
-        run: {
-          ...responseWithUsage.run,
-          references,
-          goalSnapshot,
-        },
-        message: {
-          ...responseWithUsage.message,
-          references: responseWithUsage.message.references,
-          goalSnapshot,
-        },
-      };
-      const deterministicAcceptedResponse = acceptAndRepairAgentResponse({
-        snapshot: goalSnapshot,
-        response: responseWithReferences,
-        session: activeSessionRef.current,
-      });
-      const semanticAcceptance = shouldValidateSemanticAcceptance(deterministicAcceptedResponse)
-        ? await validateSemanticTurnAcceptance(request, {
-          snapshot: goalSnapshot,
-          response: deterministicAcceptedResponse,
-          deterministicAcceptance: deterministicAcceptedResponse.message.acceptance!,
-        }, controller.signal)
-        : undefined;
-      const acceptedResponse = semanticAcceptance
-        ? acceptAndRepairAgentResponse({
-          snapshot: goalSnapshot,
-          response: deterministicAcceptedResponse,
-          session: activeSessionRef.current,
-          semanticAcceptance,
-        })
-        : deterministicAcceptedResponse;
-      const finalResponse = await maybeRunBackendAcceptanceRepair({
-        prompt,
-        references,
-        request,
-        acceptedResponse,
-        goalSnapshot,
-        sessionBeforeMerge: activeSessionRef.current,
-        onStreamEvent: handleStreamEvent,
+        streamEvents,
         signal: controller.signal,
+        userAbortRequested: () => userAbortRequestedRef.current,
+        activeSession: () => activeSessionRef.current,
+        onStreamEvent: handleStreamEvent,
+        onOptimisticSession: (optimisticSession) => {
+          onSessionChange(optimisticSession);
+          activeSessionRef.current = optimisticSession;
+        },
       });
-      const mergedSession = mergeAgentResponse(activeSessionRef.current, finalResponse);
+      if (result.status === 'failed') {
+        setErrorText(result.message);
+        onSessionChange(result.failedSession);
+        activeSessionRef.current = result.failedSession;
+        onActiveRunChange(result.failedRunId);
+        return;
+      }
+      const mergedSession = mergeAgentResponseIntoSession({
+        baseSession: activeSessionRef.current,
+        response: result.finalResponse,
+        scenarioPackageRef,
+        skillPlanRef,
+        uiPlanRef,
+      });
       onSessionChange(mergedSession);
       activeSessionRef.current = mergedSession;
-      onActiveRunChange(finalResponse.run.id);
-    } catch (err) {
-      const rawMessage = err instanceof Error ? err.message : String(err);
-      const wasUserInterrupted = userAbortRequestedRef.current;
-      const wasSystemInterrupted = !wasUserInterrupted && (controller.signal.aborted || /cancel|abort|已取消|cancelled|canceled/i.test(rawMessage));
-      const message = wasUserInterrupted
-        ? '用户已中断当前 backend 运行。'
-        : wasSystemInterrupted
-          ? `当前 backend 运行被系统或网络中断：${rawMessage}`
-          : rawMessage;
-      setErrorText(message);
-      const failedRunId = makeId('run');
-      const failedAt = nowIso();
-      const failedRun = {
-        id: failedRunId,
-        scenarioId,
-        scenarioPackageRef,
-        skillPlanRef,
-        uiPlanRef,
-        status: 'failed' as const,
-        prompt,
-        response: message,
-        createdAt: failedAt,
-        completedAt: failedAt,
-        references,
-        goalSnapshot,
-      };
-      onSessionChange({
-        ...optimisticSession,
-        messages: [
-          ...optimisticSession.messages,
-          {
-            id: makeId('msg'),
-            role: 'system',
-            content: message,
-            createdAt: nowIso(),
-            status: 'failed',
-            goalSnapshot,
-          },
-        ],
-        runs: [
-          ...optimisticSession.runs,
-          failedRun,
-        ],
-        updatedAt: nowIso(),
-      });
-      onActiveRunChange(failedRunId);
+      onActiveRunChange(result.finalResponse.run.id);
     } finally {
       setIsSending(false);
       abortRef.current = null;
@@ -671,18 +459,7 @@ export function ChatPanel({
 
   function handleRunningGuidance(prompt: string) {
     const now = nowIso();
-    const guidanceMessage: SciForgeMessage = {
-      id: makeId('msg'),
-      role: 'user',
-      content: `运行中引导：${prompt}`,
-      createdAt: now,
-      status: 'running',
-    };
-    const nextSession: SciForgeSession = {
-      ...activeSessionRef.current,
-      messages: [...activeSessionRef.current.messages, guidanceMessage],
-      updatedAt: now,
-    };
+    const nextSession = appendRunningGuidance(activeSessionRef.current, prompt);
     activeSessionRef.current = nextSession;
     onSessionChange(nextSession);
     onInputChange('');
@@ -696,12 +473,6 @@ export function ChatPanel({
       detail: prompt,
       createdAt: now,
     }]);
-  }
-
-  function shouldValidateSemanticAcceptance(response: NormalizedAgentResponse) {
-    const acceptance = response.message.acceptance;
-    if (!acceptance || acceptance.pass) return false;
-    return shouldRunBackendAcceptanceRepair(acceptance, 1);
   }
 
   function handleAbort() {
@@ -737,146 +508,6 @@ export function ChatPanel({
     };
     window.addEventListener('mousemove', handleMove);
     window.addEventListener('mouseup', handleUp);
-  }
-
-  async function maybeRunBackendAcceptanceRepair({
-    prompt,
-    references,
-    request,
-    acceptedResponse,
-    goalSnapshot,
-    sessionBeforeMerge,
-    onStreamEvent,
-    signal,
-  }: {
-    prompt: string;
-    references: SciForgeReference[];
-    request: {
-      artifacts?: NormalizedAgentResponse['artifacts'];
-      executionUnits?: NormalizedAgentResponse['executionUnits'];
-      runs?: NormalizedAgentResponse['run'][];
-      messages: SciForgeMessage[];
-    } & Parameters<typeof sendSciForgeToolMessage>[0];
-    acceptedResponse: NormalizedAgentResponse;
-    goalSnapshot: NonNullable<SciForgeMessage['goalSnapshot']>;
-    sessionBeforeMerge: SciForgeSession;
-    onStreamEvent: (event: AgentStreamEvent) => void;
-    signal: AbortSignal;
-  }): Promise<NormalizedAgentResponse> {
-    const acceptance = acceptedResponse.message.acceptance;
-    if (!shouldRunBackendAcceptanceRepair(acceptance, 1)) return acceptedResponse;
-
-    const startedAt = nowIso();
-    const repairPrompt = buildBackendAcceptanceRepairPrompt({
-      snapshot: goalSnapshot,
-      acceptance: acceptance!,
-      response: acceptedResponse,
-      session: sessionBeforeMerge,
-    });
-    const action = acceptance!.failures.find((failure) => /artifact-repair|execution-repair/.test(failure.repairAction ?? ''))?.repairAction ?? 'artifact-repair';
-    const baseHistory = acceptance!.repairHistory ?? [];
-    setStreamEvents((current) => [...current.slice(-31), {
-      id: makeId('evt'),
-      type: 'acceptance-repair-start',
-      label: '验收修复',
-      detail: 'TurnAcceptanceGate 触发一次 backend artifact/execution repair rerun。',
-      createdAt: startedAt,
-      raw: { sourceRunId: acceptedResponse.run.id, failures: acceptance!.failures },
-    }]);
-
-    try {
-      const repairResponse = await sendSciForgeToolMessage({
-        ...request,
-        prompt: repairPrompt,
-        references,
-        messages: [
-          ...request.messages,
-          {
-            id: makeId('msg'),
-            role: 'system',
-            content: `Acceptance repair rerun for original user prompt: ${prompt}`,
-            createdAt: startedAt,
-            status: 'running',
-            goalSnapshot,
-          },
-        ],
-        artifacts: mergeRuntimeArtifacts(acceptedResponse.artifacts, request.artifacts ?? []),
-        executionUnits: mergeExecutionUnits(acceptedResponse.executionUnits, request.executionUnits ?? []),
-        runs: mergeRuns([acceptedResponse.run], request.runs ?? []),
-      }, {
-        onEvent: onStreamEvent,
-      }, signal);
-      const repairAccepted = acceptAndRepairAgentResponse({
-        snapshot: goalSnapshot,
-        response: {
-          ...repairResponse,
-          run: {
-            ...repairResponse.run,
-            references,
-            goalSnapshot,
-          },
-          message: {
-            ...repairResponse.message,
-            goalSnapshot,
-          },
-        },
-        session: {
-          ...sessionBeforeMerge,
-          artifacts: mergeRuntimeArtifacts(acceptedResponse.artifacts, sessionBeforeMerge.artifacts),
-          executionUnits: mergeExecutionUnits(acceptedResponse.executionUnits, sessionBeforeMerge.executionUnits),
-          runs: mergeRuns([acceptedResponse.run], sessionBeforeMerge.runs),
-        },
-      });
-      const completedAt = nowIso();
-      if (repairAccepted.message.acceptance?.pass && repairAccepted.run.status !== 'failed') {
-        const repairHistory = [...baseHistory, {
-          attempt: baseHistory.length + 1,
-          action,
-          status: 'completed' as const,
-          startedAt,
-          completedAt,
-          sourceRunId: acceptedResponse.run.id,
-          repairRunId: repairAccepted.run.id,
-          failureCodes: acceptance!.failures.map((failure) => failure.code),
-        }];
-        return mergeRepairSuccessResponse(acceptedResponse, repairAccepted, repairHistory);
-      }
-      return failedAcceptanceRepairResponse(
-        acceptedResponse,
-        repairAccepted,
-        action,
-        startedAt,
-        completedAt,
-        baseHistory,
-        repairAccepted.message.acceptance?.failures.map((failure) => `${failure.code}: ${failure.detail}`).join('; ')
-          || repairAccepted.executionUnits.find((unit) => unit.failureReason)?.failureReason
-          || 'repair rerun did not satisfy TurnAcceptanceGate',
-      );
-    } catch (error) {
-      const completedAt = nowIso();
-      const reason = error instanceof Error ? error.message : String(error);
-      return failedAcceptanceRepairResponse(acceptedResponse, undefined, action, startedAt, completedAt, baseHistory, reason);
-    }
-  }
-
-  function mergeAgentResponse(baseSession: SciForgeSession, response: NormalizedAgentResponse): SciForgeSession {
-    const versionedRun = {
-      ...response.run,
-      scenarioPackageRef: response.run.scenarioPackageRef ?? scenarioPackageRef,
-      skillPlanRef: response.run.skillPlanRef ?? skillPlanRef,
-      uiPlanRef: response.run.uiPlanRef ?? uiPlanRef,
-    };
-    return {
-      ...baseSession,
-      messages: [...baseSession.messages, response.message],
-      runs: [...baseSession.runs, versionedRun],
-      uiManifest: response.uiManifest.length ? response.uiManifest : baseSession.uiManifest,
-      claims: [...response.claims, ...baseSession.claims].slice(0, 24),
-      executionUnits: mergeExecutionUnits(response.executionUnits, baseSession.executionUnits),
-      artifacts: mergeRuntimeArtifacts(response.artifacts, baseSession.artifacts),
-      notebook: [...response.notebook, ...baseSession.notebook].slice(0, 24),
-      updatedAt: nowIso(),
-    };
   }
 
   function handleClear() {
@@ -936,35 +567,21 @@ export function ChatPanel({
 
   return (
     <div className="chat-panel">
-      <div className="panel-title compact">
-        <div className="scenario-mini" style={{ background: `${scenario.color}18`, color: scenario.color }}>
-          <scenario.icon size={18} />
-        </div>
-        <strong className="panel-scenario-name">{scenario.name}</strong>
-        <Badge variant="success" glow>在线</Badge>
-        {archivedCount ? <Badge variant="muted">{archivedCount} archived</Badge> : null}
-        <label className="backend-picker" title="选择本场景下一次 AgentServer 运行使用的 agent backend">
-          <span>backend</span>
-          <select value={config.agentBackend} onChange={(event) => onConfigChange({ agentBackend: event.target.value })}>
-            <option value="codex">Codex</option>
-            <option value="openteam_agent">OpenTeam</option>
-            <option value="claude-code">Claude Code</option>
-            <option value="hermes-agent">Hermes</option>
-            <option value="openclaw">OpenClaw</option>
-            <option value="gemini">Gemini</option>
-          </select>
-        </label>
-        <div className="panel-actions">
-          <IconButton icon={Plus} label="开启新聊天" onClick={onNewChat} />
-          <IconButton icon={Clock} label="历史会话" onClick={() => setHistoryOpen((value) => !value)} />
-          {isSending ? <IconButton icon={CircleStop} label="中断请求" onClick={handleAbort} /> : null}
-          <IconButton icon={Download} label="导出当前 Scenario 会话" onClick={handleExport} />
-          <IconButton icon={Trash2} label="删除当前聊天" onClick={onDeleteChat} />
-        </div>
-      </div>
+      <ChatPanelHeader
+        scenario={scenario}
+        config={config}
+        archivedCount={archivedCount}
+        isSending={isSending}
+        onConfigChange={onConfigChange}
+        onNewChat={onNewChat}
+        onToggleHistory={() => setHistoryOpen((value) => !value)}
+        onAbort={handleAbort}
+        onExport={handleExport}
+        onDeleteChat={onDeleteChat}
+      />
 
       {historyOpen ? (
-        <SessionHistoryPanel
+        <ArchiveDrawer
           currentSession={session}
           archivedSessions={archivedSessions}
           onRestore={(sessionId) => {
@@ -975,26 +592,31 @@ export function ChatPanel({
           onClear={onClearArchivedSessions}
         />
       ) : null}
-      <div className="messages-stack">
-        <div
-          className="messages"
-          ref={messagesRef}
-          onScroll={handleMessagesScroll}
-        >
-        {!messages.length ? (
-          <div className="chat-empty">
-            <MessageSquare size={18} />
-            <strong>新聊天已就绪</strong>
-            <span>输入研究问题，或先点选文件、历史消息、任务结果、图表和表格作为上下文。</span>
+      <MessageList
+        refObject={messagesRef}
+        hasMessages={messages.length > 0}
+        visibleMessageCount={visibleMessages.length}
+        collapsedBeforeCount={visibleMessageStart}
+        onScroll={handleMessagesScroll}
+        runningMessage={isSending ? (
+          <div className="message scenario">
+            <div className="message-body">
+              <div className="message-meta">
+                <strong>{scenario.name}</strong>
+                <Badge variant="info">running</Badge>
+              </div>
+              <MessageContent content={latestWorklogLine || '正在规划、生成或执行 workspace task，过程日志默认折叠。'} references={[]} onObjectFocus={onObjectFocus} />
+              <RunningWorkProcess
+                events={streamEvents}
+                counts={worklogCounts}
+                tokenUsage={liveTokenUsage}
+                backend={config.agentBackend}
+                guidanceCount={guidanceQueue.length}
+              />
+            </div>
           </div>
         ) : null}
-        {visibleMessageStart > 0 ? (
-          <div className="chat-empty compact-history-note">
-            <MessageSquare size={18} />
-            <strong>已折叠较早对话</strong>
-            <span>当前工作台仅渲染最近 {visibleMessages.length} 条消息，完整审计保留在 runs、ExecutionUnit 和 workspace artifacts 中。</span>
-          </div>
-        ) : null}
+      >
         {visibleMessages.map((message, visibleIndex) => {
           const index = visibleMessageStart + visibleIndex;
           const messageRunId = runIdForMessage(message, index, messages, session.runs);
@@ -1069,32 +691,13 @@ export function ChatPanel({
                 <SciForgeReferenceChips references={message.references} />
               ) : null}
               {message.acceptance && !message.acceptance.pass ? (
-                <TurnAcceptanceNotice acceptance={message.acceptance} />
+                <AcceptancePanel acceptance={message.acceptance} />
               ) : null}
             </div>
           </div>
           );
         })}
-        {isSending ? (
-          <div className="message scenario">
-            <div className="message-body">
-              <div className="message-meta">
-                <strong>{scenario.name}</strong>
-                <Badge variant="info">running</Badge>
-              </div>
-              <MessageContent content={latestWorklogLine || '正在规划、生成或执行 workspace task，过程日志默认折叠。'} references={[]} onObjectFocus={onObjectFocus} />
-              <RunningWorkProcess
-                events={streamEvents}
-                counts={worklogCounts}
-                tokenUsage={liveTokenUsage}
-                backend={config.agentBackend}
-                guidanceCount={guidanceQueue.length}
-              />
-            </div>
-          </div>
-        ) : null}
-        </div>
-      </div>
+      </MessageList>
 
       {errorText ? (
         <div className="composer-error">
@@ -1102,305 +705,50 @@ export function ChatPanel({
           <small>可检查 Runtime Health、启动缺失服务，或改用当前场景的 workspace capability 重试。</small>
         </div>
       ) : null}
-      <div className="run-readiness">
-        <Badge variant={readiness.ok ? 'success' : readiness.severity}>{readiness.ok ? 'ready' : 'action'}</Badge>
-        <span>{readiness.message}</span>
-        <code>{scenarioPackageRef.id}@{scenarioPackageRef.version}</code>
-      </div>
-      {!composerExpanded ? (
-        <button
-          type="button"
-          className="composer-collapsed"
-          onClick={() => setComposerExpanded(true)}
-          aria-expanded={false}
-          title="展开输入栏"
-        >
-          <Sparkles size={15} />
-          <span>输入研究问题，或点选对象后继续追问...</span>
-          <ChevronUp size={15} />
-        </button>
-      ) : (
-      <div className="composer" aria-expanded={true}>
-        <button
-          type="button"
-          className="composer-collapse-button"
-          onClick={() => setComposerExpanded(false)}
-          title="收起输入栏"
-          aria-label="收起输入栏"
-        >
-          <ChevronDown size={15} />
-        </button>
-        <div className="composer-resize-handle" onMouseDown={beginComposerResize} title="拖拽调整输入框高度" />
-        <div className="reference-composer">
-          <button
-            type="button"
-            className={cx('reference-trigger', referencePickMode && 'active')}
-            onClick={() => setReferencePickMode((value) => !value)}
-            title="点选模式引用整块 UI；选中文字可右键引用"
-          >
-            <Quote size={14} />
-            点选
-          </button>
-          <button
-            type="button"
-            className="reference-trigger"
-            onClick={() => fileInputRef.current?.click()}
-            title="上传 PDF、图片、表格或任意文件到证据矩阵"
-          >
-            <FileUp size={14} />
-            上传
-          </button>
-          <input
-            ref={fileInputRef}
-            className="sr-only-file-input"
-            type="file"
-            multiple
-            onChange={(event) => void handleFileUpload(event.currentTarget.files)}
+      <RunReadinessBar
+        ok={readiness.ok}
+        severity={readiness.severity}
+        message={readiness.message}
+        packageLabel={`${scenarioPackageRef.id}@${scenarioPackageRef.version}`}
+      />
+      <ChatComposer
+        expanded={composerExpanded}
+        input={input}
+        isSending={isSending}
+        composerHeight={composerHeight}
+        referencePickMode={referencePickMode}
+        pendingReferences={pendingReferences}
+        contextMeter={<ContextWindowMeter state={contextWindowState} running={isSending} />}
+        fileInputRef={fileInputRef}
+        referenceChips={(
+          <SciForgeReferenceChips
+            references={pendingReferences}
+            onRemove={removePendingReference}
+            onFocus={focusPendingReference}
           />
-          {pendingReferences.length ? (
-            <SciForgeReferenceChips
-              references={pendingReferences}
-              onRemove={removePendingReference}
-              onFocus={focusPendingReference}
-            />
-          ) : (
-            <span className="reference-hint">点选 SciForge 可见对象作为上下文</span>
-          )}
-        </div>
-        {referencePickMode ? (
-          <div className="reference-pick-banner">
-            <Quote size={14} />
-            点击页面对象引用整块 UI，Esc 取消
-          </div>
-        ) : null}
-        <textarea
-          value={input}
-          onChange={(event) => onInputChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
-            event.preventDefault();
-            void handleSend();
-          }}
-          placeholder={isSending ? '继续输入引导会排队；也可以中断当前运行...' : '输入研究问题，或点选对象后继续追问...'}
-          rows={1}
-          style={{ height: `${composerHeight}px` }}
-        />
-        <ContextWindowMeter
-          state={contextWindowState}
-          running={isSending}
-        />
-        {isSending ? (
-          <ActionButton icon={CircleStop} variant="coral" onClick={handleAbort}>
-            中断
-          </ActionButton>
-        ) : null}
-        <ActionButton icon={Sparkles} onClick={handleSend} disabled={!input.trim() && !pendingReferences.length} >
-          {isSending ? '引导' : '发送'}
-        </ActionButton>
-      </div>
-      )}
+        )}
+        onExpand={() => setComposerExpanded(true)}
+        onCollapse={() => setComposerExpanded(false)}
+        onToggleReferencePickMode={() => setReferencePickMode((value) => !value)}
+        onFileUpload={(files) => void handleFileUpload(files)}
+        onInputChange={onInputChange}
+        onSend={() => void handleSend()}
+        onAbort={handleAbort}
+        onBeginResize={beginComposerResize}
+      />
       {referenceContextMenu ? (
-        <div
-          className="reference-context-menu"
-          style={{ left: `${referenceContextMenu.x}px`, top: `${referenceContextMenu.y}px` }}
-          onClick={(event) => event.stopPropagation()}
-          role="menu"
-        >
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              addPendingReferenceToComposer(referenceContextMenu.reference);
-              setReferenceContextMenu(null);
-            }}
-          >
-            <Quote size={14} />
-            引用到对话栏
-          </button>
-        </div>
+        <ReferenceContextMenu
+          x={referenceContextMenu.x}
+          y={referenceContextMenu.y}
+          reference={referenceContextMenu.reference}
+          onAdd={(reference) => {
+            addPendingReferenceToComposer(reference);
+            setReferenceContextMenu(null);
+          }}
+        />
       ) : null}
     </div>
   );
-}
-
-function mergeRepairSuccessResponse(
-  original: NormalizedAgentResponse,
-  repair: NormalizedAgentResponse,
-  repairHistory: NonNullable<NonNullable<NormalizedAgentResponse['message']['acceptance']>['repairHistory']>,
-): NormalizedAgentResponse {
-  const objectReferences = mergeObjectReferences(repair.message.objectReferences ?? [], original.message.objectReferences ?? []);
-  const acceptance = repair.message.acceptance ? {
-    ...repair.message.acceptance,
-    objectReferences,
-    repairAttempt: repairHistory.length,
-    repairHistory,
-  } : undefined;
-  return {
-    ...repair,
-    message: {
-      ...repair.message,
-      objectReferences,
-      acceptance,
-    },
-    run: {
-      ...repair.run,
-      objectReferences,
-      acceptance,
-      raw: enrichRepairRaw(repair.run.raw, repairHistory, original.run.id),
-    },
-    uiManifest: repair.uiManifest.length ? repair.uiManifest : original.uiManifest,
-    claims: [...repair.claims, ...original.claims].slice(0, 24),
-    executionUnits: mergeExecutionUnits(repair.executionUnits, original.executionUnits),
-    artifacts: mergeRuntimeArtifacts(repair.artifacts, original.artifacts),
-    notebook: [...repair.notebook, ...original.notebook].slice(0, 24),
-  };
-}
-
-function failedAcceptanceRepairResponse(
-  original: NormalizedAgentResponse,
-  repair: NormalizedAgentResponse | undefined,
-  action: string,
-  startedAt: string,
-  completedAt: string,
-  baseHistory: NonNullable<NonNullable<NormalizedAgentResponse['message']['acceptance']>['repairHistory']>,
-  reason: string,
-): NormalizedAgentResponse {
-  const failureUnit: RuntimeExecutionUnit = {
-    id: makeId('EU-acceptance-repair'),
-    tool: 'sciforge.acceptance-repair-rerun',
-    params: `sourceRunId=${original.run.id}`,
-    status: 'failed-with-reason',
-    hash: original.run.id.slice(0, 10),
-    attempt: baseHistory.length + 1,
-    parentAttempt: 0,
-    failureReason: reason,
-    recoverActions: ['Review failureReason/stdoutRef/stderrRef/codeRef and rerun manually if needed.'],
-    nextStep: 'Repair rerun failed; return failed-with-reason to the user instead of presenting partial success.',
-  };
-  const repairHistory = [...baseHistory, {
-    attempt: baseHistory.length + 1,
-    action,
-    status: 'failed-with-reason' as const,
-    startedAt,
-    completedAt,
-    sourceRunId: original.run.id,
-    repairRunId: repair?.run.id,
-    failureCodes: original.message.acceptance?.failures.map((failure) => failure.code) ?? [],
-    reason,
-  }];
-  const objectReferences = mergeObjectReferences(repair?.message.objectReferences ?? [], original.message.objectReferences ?? []);
-  const acceptance = original.message.acceptance ? {
-    ...original.message.acceptance,
-    pass: false,
-    severity: 'failed' as const,
-    checkedAt: completedAt,
-    objectReferences,
-    repairAttempt: repairHistory.length,
-    repairHistory,
-    failures: [
-      ...original.message.acceptance.failures,
-      {
-        code: 'backend-repair-failed',
-        detail: reason,
-        repairAction: action,
-      },
-    ],
-  } : undefined;
-  const content = `failed-with-reason: 后台 artifact/execution repair 未能完成。${reason}`;
-  return {
-    ...original,
-    message: {
-      ...original.message,
-      content,
-      status: 'failed',
-      objectReferences,
-      acceptance,
-    },
-    run: {
-      ...original.run,
-      status: 'failed',
-      response: content,
-      completedAt,
-      objectReferences,
-      acceptance,
-      raw: enrichRepairRaw(original.run.raw, repairHistory, original.run.id, reason),
-    },
-    uiManifest: repair?.uiManifest.length ? repair.uiManifest : original.uiManifest,
-    claims: [...(repair?.claims ?? []), ...original.claims].slice(0, 24),
-    executionUnits: mergeExecutionUnits([failureUnit, ...(repair?.executionUnits ?? [])], original.executionUnits),
-    artifacts: mergeRuntimeArtifacts(repair?.artifacts ?? [], original.artifacts),
-    notebook: [...(repair?.notebook ?? []), ...original.notebook].slice(0, 24),
-  };
-}
-
-function requestPayloadForTurn(session: SciForgeSession, userMessage: SciForgeMessage, references: SciForgeReference[]) {
-  const hasExplicitReferences = references.length > 0;
-  const priorMessages = session.messages.filter((message) => message.id !== userMessage.id);
-  const hasRealPriorMessages = priorMessages.some((message) => !message.id.startsWith('seed'));
-  const hasPriorWork = hasRealPriorMessages
-    || session.runs.length > 0
-    || session.artifacts.length > 0
-    || session.executionUnits.length > 0;
-  if (hasPriorWork || hasExplicitReferences) {
-    return {
-      messages: session.messages.filter((message) => !message.id.startsWith('seed')),
-      artifacts: session.artifacts,
-      executionUnits: session.executionUnits,
-      runs: session.runs,
-    };
-  }
-  return {
-    messages: [userMessage],
-    artifacts: [],
-    executionUnits: [],
-    runs: [],
-  };
-}
-
-function rollbackSessionBeforeMessage(session: SciForgeSession, messageId: string): SciForgeSession {
-  const index = session.messages.findIndex((message) => message.id === messageId);
-  if (index < 0) return session;
-  const cutoff = session.messages[index]?.createdAt;
-  const runs = cutoff ? session.runs.filter((run) => run.createdAt < cutoff) : [];
-  const keptRunIds = new Set(runs.map((run) => run.id));
-  return {
-    ...session,
-    messages: session.messages.slice(0, index),
-    runs,
-    uiManifest: [],
-    claims: cutoff ? session.claims.filter((claim) => claim.updatedAt < cutoff) : [],
-    executionUnits: session.executionUnits.filter((unit) => {
-      const selectedAt = unit.routeDecision?.selectedAt;
-      return selectedAt ? selectedAt < cutoff : keptRunIds.size > 0;
-    }),
-    artifacts: keptRunIds.size ? session.artifacts : [],
-    notebook: cutoff ? session.notebook.filter((entry) => entry.time < cutoff) : [],
-    updatedAt: nowIso(),
-  };
-}
-
-function mergeRuntimeArtifacts(primary: NormalizedAgentResponse['artifacts'], secondary: NormalizedAgentResponse['artifacts']) {
-  const byKey = new Map<string, NormalizedAgentResponse['artifacts'][number]>();
-  for (const artifact of [...secondary, ...primary]) {
-    const key = artifact.id || artifact.path || artifact.dataRef || `${artifact.type}-${byKey.size}`;
-    byKey.set(key, { ...byKey.get(key), ...artifact });
-  }
-  return Array.from(byKey.values()).slice(0, 32);
-}
-
-function mergeExecutionUnits(primary: NormalizedAgentResponse['executionUnits'], secondary: NormalizedAgentResponse['executionUnits']) {
-  const byId = new Map<string, NormalizedAgentResponse['executionUnits'][number]>();
-  for (const unit of [...secondary, ...primary]) {
-    const key = unit.id || `${unit.tool}-${byId.size}`;
-    byId.set(key, { ...byId.get(key), ...unit });
-  }
-  return Array.from(byId.values()).slice(0, 32);
-}
-
-function mergeRuns(primary: NormalizedAgentResponse['run'][], secondary: NormalizedAgentResponse['run'][]) {
-  const byId = new Map<string, NormalizedAgentResponse['run']>();
-  for (const run of [...primary, ...secondary]) byId.set(run.id, { ...byId.get(run.id), ...run });
-  return Array.from(byId.values()).slice(-12);
 }
 
 async function fileToUploadedArtifact(file: File, scenarioId: ScenarioInstanceId, config: SciForgeConfig, sessionId: string): Promise<RuntimeArtifact> {
@@ -1584,259 +932,6 @@ function normalizeRunPrompt(value: string) {
   return value.replace(/^运行中引导：/, '').trim();
 }
 
-function MessageContent({
-  content,
-  references,
-  onObjectFocus,
-}: {
-  content: string;
-  references: ObjectReference[];
-  onObjectFocus: (reference: ObjectReference) => void;
-}) {
-  return (
-    <div className="message-content">
-      {renderMarkdownBlocks(content, references, onObjectFocus)}
-    </div>
-  );
-}
-
-type MarkdownBlock =
-  | { type: 'paragraph'; text: string }
-  | { type: 'heading'; depth: number; text: string }
-  | { type: 'blockquote'; text: string }
-  | { type: 'code'; language?: string; text: string }
-  | { type: 'list'; ordered: boolean; items: string[] }
-  | { type: 'table'; rows: string[][] }
-  | { type: 'rule' };
-
-function renderMarkdownBlocks(
-  markdown: string,
-  references: ObjectReference[],
-  onObjectFocus: (reference: ObjectReference) => void,
-): ReactNode[] {
-  const blocks = parseMarkdownBlocks(markdown);
-  return blocks.map((block, index) => {
-    const key = `md-${index}`;
-    if (block.type === 'heading') {
-      const children = renderInlineMarkdown(block.text, references, onObjectFocus, key);
-      if (block.depth === 1) return <h1 key={key}>{children}</h1>;
-      if (block.depth === 2) return <h2 key={key}>{children}</h2>;
-      if (block.depth === 3) return <h3 key={key}>{children}</h3>;
-      if (block.depth === 4) return <h4 key={key}>{children}</h4>;
-      if (block.depth === 5) return <h5 key={key}>{children}</h5>;
-      return <h6 key={key}>{children}</h6>;
-    }
-    if (block.type === 'blockquote') {
-      return <blockquote key={key}>{renderInlineMarkdown(block.text, references, onObjectFocus, key)}</blockquote>;
-    }
-    if (block.type === 'code') {
-      return (
-        <pre key={key} className="message-code-block">
-          {block.language ? <span className="message-code-lang">{block.language}</span> : null}
-          <code>{block.text}</code>
-        </pre>
-      );
-    }
-    if (block.type === 'list') {
-      const items = block.items.map((item, itemIndex) => (
-        <li key={`${key}-li-${itemIndex}`}>{renderInlineMarkdown(item, references, onObjectFocus, `${key}-${itemIndex}`)}</li>
-      ));
-      return block.ordered ? <ol key={key}>{items}</ol> : <ul key={key}>{items}</ul>;
-    }
-    if (block.type === 'table') {
-      const [head, ...body] = block.rows;
-      return (
-        <div key={key} className="message-table-scroll">
-          <table>
-            {head ? (
-              <thead>
-                <tr>{head.map((cell, cellIndex) => <th key={`${key}-th-${cellIndex}`}>{renderInlineMarkdown(cell, references, onObjectFocus, `${key}-h-${cellIndex}`)}</th>)}</tr>
-              </thead>
-            ) : null}
-            <tbody>
-              {body.map((row, rowIndex) => (
-                <tr key={`${key}-tr-${rowIndex}`}>
-                  {row.map((cell, cellIndex) => <td key={`${key}-td-${rowIndex}-${cellIndex}`}>{renderInlineMarkdown(cell, references, onObjectFocus, `${key}-c-${rowIndex}-${cellIndex}`)}</td>)}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      );
-    }
-    if (block.type === 'rule') return <hr key={key} />;
-    return <p key={key}>{renderInlineMarkdown(block.text, references, onObjectFocus, key)}</p>;
-  });
-}
-
-function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
-  const lines = markdown.replace(/\r\n?/g, '\n').split('\n');
-  const blocks: MarkdownBlock[] = [];
-  let index = 0;
-  while (index < lines.length) {
-    const line = lines[index];
-    if (!line.trim()) {
-      index += 1;
-      continue;
-    }
-    const fence = line.match(/^```([A-Za-z0-9_-]+)?\s*$/);
-    if (fence) {
-      const code: string[] = [];
-      index += 1;
-      while (index < lines.length && !/^```\s*$/.test(lines[index])) {
-        code.push(lines[index]);
-        index += 1;
-      }
-      if (index < lines.length) index += 1;
-      blocks.push({ type: 'code', language: fence[1], text: code.join('\n') });
-      continue;
-    }
-    const heading = line.match(/^(#{1,6})\s+(.+)$/);
-    if (heading) {
-      blocks.push({ type: 'heading', depth: heading[1].length, text: heading[2].trim() });
-      index += 1;
-      continue;
-    }
-    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
-      blocks.push({ type: 'rule' });
-      index += 1;
-      continue;
-    }
-    if (isMarkdownTableAt(lines, index)) {
-      const rows: string[][] = [];
-      rows.push(splitMarkdownTableRow(lines[index]));
-      index += 2;
-      while (index < lines.length && /^\s*\|.+\|\s*$/.test(lines[index])) {
-        rows.push(splitMarkdownTableRow(lines[index]));
-        index += 1;
-      }
-      blocks.push({ type: 'table', rows });
-      continue;
-    }
-    const unordered = line.match(/^\s*[-*+]\s+(.+)$/);
-    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
-    if (unordered || ordered) {
-      const items: string[] = [];
-      const orderedList = Boolean(ordered);
-      while (index < lines.length) {
-        const match = orderedList ? lines[index].match(/^\s*\d+[.)]\s+(.+)$/) : lines[index].match(/^\s*[-*+]\s+(.+)$/);
-        if (!match) break;
-        items.push(match[1].trim());
-        index += 1;
-      }
-      blocks.push({ type: 'list', ordered: orderedList, items });
-      continue;
-    }
-    if (/^\s*>\s?/.test(line)) {
-      const quote: string[] = [];
-      while (index < lines.length && /^\s*>\s?/.test(lines[index])) {
-        quote.push(lines[index].replace(/^\s*>\s?/, ''));
-        index += 1;
-      }
-      blocks.push({ type: 'blockquote', text: quote.join('\n') });
-      continue;
-    }
-    const paragraph: string[] = [];
-    while (index < lines.length && lines[index].trim() && !isMarkdownBlockStart(lines, index)) {
-      paragraph.push(lines[index]);
-      index += 1;
-    }
-    blocks.push({ type: 'paragraph', text: paragraph.join('\n') });
-  }
-  return blocks.length ? blocks : [{ type: 'paragraph', text: '' }];
-}
-
-function isMarkdownBlockStart(lines: string[], index: number) {
-  const line = lines[index];
-  return /^```/.test(line)
-    || /^(#{1,6})\s+/.test(line)
-    || /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)
-    || /^\s*[-*+]\s+/.test(line)
-    || /^\s*\d+[.)]\s+/.test(line)
-    || /^\s*>\s?/.test(line)
-    || isMarkdownTableAt(lines, index);
-}
-
-function isMarkdownTableAt(lines: string[], index: number) {
-  return index + 1 < lines.length
-    && /^\s*\|.+\|\s*$/.test(lines[index])
-    && /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[index + 1]);
-}
-
-function splitMarkdownTableRow(line: string) {
-  return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim());
-}
-
-function renderInlineMarkdown(
-  text: string,
-  references: ObjectReference[],
-  onObjectFocus: (reference: ObjectReference) => void,
-  keyPrefix: string,
-): ReactNode[] {
-  const pieces = linkifyObjectReferences(text, references);
-  const nodes: ReactNode[] = [];
-  pieces.forEach((piece, index) => {
-    if (piece.reference) {
-      nodes.push(
-        <button
-          key={`${keyPrefix}-ref-${index}`}
-          type="button"
-          className="message-object-link"
-          onClick={() => onObjectFocus(piece.reference as ObjectReference)}
-          title={piece.reference.summary || piece.reference.ref}
-          data-sciforge-reference={sciForgeReferenceAttribute(referenceForObjectReference(piece.reference))}
-        >
-          {piece.text}
-        </button>,
-      );
-    } else {
-      nodes.push(...renderInlineText(piece.text, `${keyPrefix}-txt-${index}`));
-    }
-  });
-  return nodes;
-}
-
-function renderInlineText(text: string, keyPrefix: string): ReactNode[] {
-  const nodes: ReactNode[] = [];
-  const pattern = /(`[^`\n]+`|\*\*[^*\n]+(?:\*[^*\n]+)*\*\*|\[[^\]\n]+\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+)\)|\*[^*\n]+\*)/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text))) {
-    appendPlainInlineText(nodes, text.slice(lastIndex, match.index), `${keyPrefix}-plain-${nodes.length}`);
-    const token = match[0];
-    if (token.startsWith('`')) {
-      nodes.push(<code key={`${keyPrefix}-code-${nodes.length}`}>{token.slice(1, -1)}</code>);
-    } else if (token.startsWith('**')) {
-      nodes.push(<strong key={`${keyPrefix}-strong-${nodes.length}`}>{renderInlineText(token.slice(2, -2), `${keyPrefix}-strong-${nodes.length}`)}</strong>);
-    } else if (token.startsWith('*')) {
-      nodes.push(<em key={`${keyPrefix}-em-${nodes.length}`}>{renderInlineText(token.slice(1, -1), `${keyPrefix}-em-${nodes.length}`)}</em>);
-    } else {
-      const link = token.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+)\)$/);
-      if (link) {
-        nodes.push(
-          <a key={`${keyPrefix}-link-${nodes.length}`} href={link[2]} target="_blank" rel="noreferrer">
-            {renderInlineText(link[1], `${keyPrefix}-link-${nodes.length}`)}
-          </a>,
-        );
-      } else {
-        appendPlainInlineText(nodes, token, `${keyPrefix}-fallback-${nodes.length}`);
-      }
-    }
-    lastIndex = match.index + token.length;
-  }
-  appendPlainInlineText(nodes, text.slice(lastIndex), `${keyPrefix}-tail-${nodes.length}`);
-  return nodes;
-}
-
-function appendPlainInlineText(nodes: ReactNode[], text: string, keyPrefix: string) {
-  if (!text) return;
-  const lines = text.split('\n');
-  lines.forEach((line, index) => {
-    if (line) nodes.push(<span key={`${keyPrefix}-${index}`}>{line}</span>);
-    if (index < lines.length - 1) nodes.push(<br key={`${keyPrefix}-br-${index}`} />);
-  });
-}
-
 function RunningWorkProcess({
   events,
   counts,
@@ -1888,156 +983,6 @@ function RunningWorkProcess({
       </div>
     </details>
   );
-}
-
-function inlineObjectReferencesForMessage(message: SciForgeMessage, session: SciForgeSession, runId?: string) {
-  const run = runId ? session.runs.find((item) => item.id === runId) : undefined;
-  const runArtifactRefs = new Set((run?.objectReferences ?? [])
-    .filter((reference) => reference.kind === 'artifact')
-    .map((reference) => reference.ref.replace(/^artifact:/, '')));
-  const runArtifacts = session.artifacts
-    .filter((artifact) => runArtifactRefs.has(artifact.id) || artifact.metadata?.runId === runId)
-    .map((artifact) => objectReferenceForArtifactSummary(artifact, runId));
-  const structuredReferences = mergeObjectReferences(message.objectReferences ?? [], mergeObjectReferences(run?.objectReferences ?? [], runArtifacts), 32);
-  return mergeObjectReferences(objectReferencesFromInlineTokens(message.content, runId), structuredReferences, 40);
-}
-
-function objectReferencesFromInlineTokens(content: string, runId?: string) {
-  const references: ObjectReference[] = [];
-  const seen = new Set<string>();
-  const tokenPattern = /\b(?:(?:artifact|file|folder|run|execution-unit|scenario-package)::?[^\s)\]）>，。；、,;]+|https?:\/\/[^\s)\]）>，。；、]+)[^\s)\]）>，。；、,;]*/gi;
-  for (const match of content.matchAll(tokenPattern)) {
-    const raw = match[0].replace(/[.,;，。；、]+$/, '');
-    const reference = objectReferenceFromInlineToken(raw, runId);
-    if (!reference || seen.has(reference.ref)) continue;
-    seen.add(reference.ref);
-    references.push(reference);
-  }
-  return references;
-}
-
-function objectReferenceFromInlineToken(raw: string, runId?: string): ObjectReference | undefined {
-  if (/^https?:\/\//i.test(raw)) {
-    return {
-      id: inlineObjectReferenceId('url', raw),
-      title: inlineReferenceTitle(raw),
-      kind: 'url',
-      ref: `url:${raw}`,
-      runId,
-      actions: ['focus-right-pane', 'open-external', 'copy-path'],
-      status: 'external',
-      summary: raw,
-      provenance: { dataRef: raw },
-    };
-  }
-  const tokenMatch = raw.match(/^([a-z-]+)::?(.+)$/i);
-  if (!tokenMatch) return undefined;
-  const prefix = tokenMatch[1].toLowerCase() as ObjectReferenceKind;
-  if (!['artifact', 'file', 'folder', 'run', 'execution-unit', 'scenario-package'].includes(prefix)) return undefined;
-  const target = tokenMatch[2];
-  return {
-    id: inlineObjectReferenceId(prefix, raw),
-    title: inlineReferenceTitle(target),
-    kind: prefix,
-    ref: raw,
-    runId,
-    actions: inlineObjectReferenceActions(prefix),
-    status: 'available',
-    summary: target,
-    provenance: prefix === 'file' || prefix === 'folder' ? { path: target } : { dataRef: target },
-  };
-}
-
-function inlineObjectReferenceActions(kind: ObjectReferenceKind): ObjectAction[] {
-  if (kind === 'file' || kind === 'folder') return ['focus-right-pane', 'reveal-in-folder', 'copy-path', 'pin'];
-  if (kind === 'url') return ['focus-right-pane', 'open-external', 'copy-path'];
-  return ['focus-right-pane', 'inspect', 'copy-path', 'pin'];
-}
-
-function inlineObjectReferenceId(kind: ObjectReferenceKind, ref: string) {
-  return `inline-${kind}-${ref.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80)}`;
-}
-
-function inlineReferenceTitle(ref: string) {
-  try {
-    const value = decodeURIComponent(ref.replace(/^url:/i, ''));
-    const trimmed = value.replace(/[?#].*$/, '').replace(/\/$/, '');
-    return trimmed.split('/').pop() || value;
-  } catch {
-    return ref;
-  }
-}
-
-function unmentionedObjectReferencesForMessage(message: SciForgeMessage, session: SciForgeSession, runId?: string) {
-  const mentioned = new Set(linkifyObjectReferences(message.content, inlineObjectReferencesForMessage(message, session, runId))
-    .flatMap((piece) => piece.reference ? [piece.reference.ref] : []));
-  return inlineObjectReferencesForMessage(message, session, runId).filter((reference) => !mentioned.has(reference.ref));
-}
-
-function linkifyObjectReferences(content: string, references: ObjectReference[]) {
-  if (!content || !references.length) return [{ text: content }];
-  const candidates = objectReferenceLinkCandidates(references);
-  if (!candidates.length) return [{ text: content }];
-  const pieces: Array<{ text: string; reference?: ObjectReference }> = [];
-  let cursor = 0;
-  while (cursor < content.length) {
-    const match = nextObjectReferenceMatch(content, cursor, candidates);
-    if (!match) {
-      pieces.push({ text: content.slice(cursor) });
-      break;
-    }
-    if (match.index > cursor) pieces.push({ text: content.slice(cursor, match.index) });
-    pieces.push({ text: content.slice(match.index, match.index + match.key.length), reference: match.reference });
-    cursor = match.index + match.key.length;
-  }
-  return pieces.filter((piece) => piece.text.length > 0);
-}
-
-function nextObjectReferenceMatch(
-  content: string,
-  cursor: number,
-  candidates: Array<{ key: string; reference: ObjectReference }>,
-) {
-  let best: { index: number; key: string; reference: ObjectReference } | undefined;
-  for (const candidate of candidates) {
-    const index = content.indexOf(candidate.key, cursor);
-    if (index < 0) continue;
-    if (!best || index < best.index || (index === best.index && candidate.key.length > best.key.length)) {
-      best = { index, key: candidate.key, reference: candidate.reference };
-    }
-  }
-  return best;
-}
-
-function objectReferenceLinkCandidates(references: ObjectReference[]) {
-  const candidates: Array<{ key: string; reference: ObjectReference }> = [];
-  const seen = new Set<string>();
-  for (const reference of references) {
-    for (const key of objectReferenceLinkKeys(reference)) {
-      const trimmed = key.trim();
-      if (trimmed.length < 4 || seen.has(trimmed)) continue;
-      seen.add(trimmed);
-      candidates.push({ key: trimmed, reference });
-    }
-  }
-  return candidates.sort((left, right) => right.key.length - left.key.length);
-}
-
-function objectReferenceLinkKeys(reference: ObjectReference) {
-  const keys = [
-    reference.ref,
-    reference.ref.replace(/^file:/i, 'file::'),
-    reference.ref.replace(/^folder:/i, 'folder::'),
-    reference.ref.replace(/^artifact:/i, ''),
-    reference.title,
-    reference.provenance?.path,
-    reference.provenance?.dataRef,
-    reference.provenance?.path ? `file:${reference.provenance.path}` : undefined,
-    reference.provenance?.path ? `file::${reference.provenance.path}` : undefined,
-    reference.provenance?.dataRef ? `file:${reference.provenance.dataRef}` : undefined,
-    reference.provenance?.dataRef ? `file::${reference.provenance.dataRef}` : undefined,
-  ];
-  return keys.filter((key): key is string => Boolean(key && key.trim()));
 }
 
 function ObjectReferenceChips({
@@ -2292,94 +1237,6 @@ function artifactTitle(artifact: RuntimeArtifact) {
   return String(artifact.metadata?.title || artifact.metadata?.name || artifact.id);
 }
 
-function TurnAcceptanceNotice({
-  acceptance,
-}: {
-  acceptance: NonNullable<SciForgeMessage['acceptance']>;
-}) {
-  const diagnostic = turnAcceptanceDiagnostic(acceptance);
-  return (
-    <div className="turn-acceptance-notice">
-      <Badge variant={acceptance.severity === 'repairable' ? 'warning' : 'danger'}>{acceptance.severity}</Badge>
-      <div className="turn-acceptance-copy">
-        <strong>{diagnostic.title}</strong>
-        <span>{diagnostic.summary}</span>
-        {diagnostic.recoverActions.length ? (
-          <ul>
-            {diagnostic.recoverActions.map((action) => <li key={action}>{action}</li>)}
-          </ul>
-        ) : null}
-        {diagnostic.secondary.length ? (
-          <div className="turn-acceptance-secondary">
-            {diagnostic.secondary.map((item) => <span key={item}>{item}</span>)}
-          </div>
-        ) : null}
-        <details className="turn-acceptance-raw">
-          <summary>查看原始诊断</summary>
-          <pre>{diagnostic.rawDetails}</pre>
-        </details>
-      </div>
-    </div>
-  );
-}
-
-function turnAcceptanceDiagnostic(acceptance: NonNullable<SciForgeMessage['acceptance']>) {
-  const rawDetails = acceptance.failures
-    .map((failure) => `${failure.code}: ${failure.detail}`)
-    .join('\n\n');
-  const haystack = rawDetails.toLowerCase();
-  const secondary = acceptance.failures
-    .filter((failure) => !/execution-failed|backend-repair-failed/i.test(failure.code))
-    .map((failure) => readableAcceptanceFailure(failure.code));
-  if (/http-429|429|rate-limit|too-many-failed-attempts|exceeded retry|retry-budget/.test(haystack)) {
-    return {
-      title: '后端模型限流，自动修复未完成',
-      summary: 'AgentServer 调用模型时触发 HTTP 429 / too-many-failed-attempts，SciForge 已做过一次 compact/slim retry；重试预算耗尽后停止，避免继续刷失败请求。',
-      recoverActions: [
-        '等待 provider 配额或 retry budget 恢复后重试同一问题。',
-        '切换到可用 quota 的 backend/model，再重试后续修复。',
-        '后续追问尽量引用已有 report/paper-list artifact，避免重新发送大段全文上下文。',
-      ],
-      secondary,
-      rawDetails,
-    };
-  }
-  if (/cancel|已取消|abort|timeout|超时/.test(haystack)) {
-    return {
-      title: '后端修复请求被中断',
-      summary: '本次 acceptance repair 没有完成，通常是用户中断、请求超时，或外层运行已经结束导致后台 stream 被取消。',
-      recoverActions: ['确认 Runtime Health 为 ready 后重新发送同一修复请求。'],
-      secondary,
-      rawDetails,
-    };
-  }
-  if (/missing-object-references|clickable object references|引用/.test(haystack)) {
-    return {
-      title: '结果缺少可点击引用',
-      summary: '回答里提到了路径或 artifact，但没有被规范化成 SciForge 可点击 object reference。',
-      recoverActions: ['要求后端基于已有 artifact 重新返回 objectReferences，不需要重新检索全文。'],
-      secondary,
-      rawDetails,
-    };
-  }
-  return {
-    title: '任务未通过验收',
-    summary: acceptance.failures.map((failure) => failure.detail).join('；'),
-    recoverActions: [],
-    secondary,
-    rawDetails,
-  };
-}
-
-function readableAcceptanceFailure(code: string) {
-  if (code === 'missing-object-references') return '缺少可点击对象引用';
-  if (code === 'missing-explicit-references') return '显式引用未保留';
-  if (code === 'unused-explicit-references') return '引用未体现在结果中';
-  if (code === 'empty-final-response') return '最终回答为空';
-  if (code === 'raw-payload-leak') return '暴露了原始 payload';
-  return code;
-}
-
 function SciForgeReferenceChips({
   references,
   onRemove,
@@ -2567,126 +1424,6 @@ function timelineEventFromStoredRun(session: SciForgeSession, run: SciForgeSessi
     decisionStatus: 'not-a-decision',
     createdAt: run.completedAt ?? run.createdAt ?? nowIso(),
   };
-}
-
-function SessionHistoryPanel({
-  currentSession,
-  archivedSessions,
-  onRestore,
-  onDelete,
-  onClear,
-}: {
-  currentSession: SciForgeSession;
-  archivedSessions: SciForgeSession[];
-  onRestore: (sessionId: string) => void;
-  onDelete: (sessionIds: string[]) => void;
-  onClear: () => void;
-}) {
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const currentStats = sessionHistoryStats(currentSession);
-  const allSelected = archivedSessions.length > 0 && selectedIds.length === archivedSessions.length;
-  function toggleSelected(sessionId: string) {
-    setSelectedIds((current) => current.includes(sessionId)
-      ? current.filter((id) => id !== sessionId)
-      : [...current, sessionId]);
-  }
-  function deleteSelected() {
-    if (!selectedIds.length) return;
-    onDelete(selectedIds);
-    setSelectedIds([]);
-  }
-  function clearAll() {
-    if (!archivedSessions.length) return;
-    onClear();
-    setSelectedIds([]);
-  }
-  return (
-    <div className="session-history-panel">
-      <div className="session-history-head">
-        <div>
-          <strong>历史会话</strong>
-          <span>当前：{currentSession.title}</span>
-        </div>
-        <Badge variant="muted">{currentStats}</Badge>
-      </div>
-      {archivedSessions.length ? (
-        <div className="session-history-bulkbar">
-          <label>
-            <input
-              type="checkbox"
-              checked={allSelected}
-              onChange={(event) => setSelectedIds(event.target.checked ? archivedSessions.map((item) => item.sessionId) : [])}
-            />
-            全选
-          </label>
-          <Badge variant={selectedIds.length ? 'info' : 'muted'}>{selectedIds.length} selected</Badge>
-          <button type="button" onClick={deleteSelected} disabled={!selectedIds.length}>删除选中</button>
-          <button type="button" onClick={clearAll}>清空历史</button>
-        </div>
-      ) : null}
-      {!archivedSessions.length ? (
-        <div className="empty-runtime-state compact">
-          <Badge variant="muted">empty</Badge>
-          <strong>暂无归档会话</strong>
-          <p>点击开启新聊天或删除当前聊天后，旧会话会进入这里。</p>
-        </div>
-      ) : (
-        <div className="session-history-list">
-          {archivedSessions.map((item) => (
-            <div className="session-history-row" key={item.sessionId}>
-              <input
-                type="checkbox"
-                checked={selectedIds.includes(item.sessionId)}
-                onChange={() => toggleSelected(item.sessionId)}
-                aria-label={`选择历史会话 ${item.title}`}
-              />
-              <div className="session-history-copy">
-                <strong>{item.title}</strong>
-                <span>{formatSessionTime(item.updatedAt || item.createdAt)} · {sessionHistoryStats(item)}</span>
-                <div className="session-history-meta">
-                  {sessionHistoryPackageLabel(item) ? <code>{sessionHistoryPackageLabel(item)}</code> : null}
-                  {sessionHistoryLastRunLabel(item) ? <Badge variant={sessionHistoryLastRunVariant(item)}>{sessionHistoryLastRunLabel(item)}</Badge> : <Badge variant="muted">no runs</Badge>}
-                </div>
-              </div>
-              <ActionButton icon={Clock} variant="secondary" onClick={() => onRestore(item.sessionId)}>恢复</ActionButton>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function sessionHistoryStats(session: SciForgeSession) {
-  const userMessages = session.messages.filter((message) => !message.id.startsWith('seed')).length;
-  return `${userMessages} messages · ${session.artifacts.length} artifacts · ${session.executionUnits.length} units`;
-}
-
-function sessionHistoryPackageLabel(session: SciForgeSession) {
-  const lastRun = session.runs.at(-1);
-  const ref = lastRun?.scenarioPackageRef;
-  if (!ref) return undefined;
-  return `${ref.id}@${ref.version}`;
-}
-
-function sessionHistoryLastRunLabel(session: SciForgeSession) {
-  const lastRun = session.runs.at(-1);
-  if (!lastRun) return undefined;
-  return `last run ${lastRun.status}`;
-}
-
-function sessionHistoryLastRunVariant(session: SciForgeSession): 'info' | 'success' | 'warning' | 'danger' | 'muted' {
-  const status = session.runs.at(-1)?.status;
-  if (status === 'completed') return 'success';
-  if (status === 'failed') return 'danger';
-  if (status === 'idle') return 'muted';
-  return 'info';
-}
-
-function formatSessionTime(value: string) {
-  const time = Date.parse(value);
-  if (!Number.isFinite(time)) return 'unknown time';
-  return new Date(time).toLocaleString('zh-CN', { hour12: false });
 }
 
 async function copyTextToClipboard(text: string) {

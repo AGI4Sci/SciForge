@@ -1,0 +1,76 @@
+{
+  "schemaVersion": "sciforge.verifier-provider.manifest.v1",
+  "id": "example.schema-test",
+  "version": "0.1.0",
+  "kind": "verifier",
+  "verifierType": "schema-test",
+  "displayName": "Minimal Schema/Test Verifier",
+  "summary": "示例 verifier，使用 schema 或测试命令检查 artifact/result 是否满足契约。",
+  "domains": ["contracts", "workspace"],
+  "triggers": ["validate schema", "run tests", "check artifact contract"],
+  "antiTriggers": ["needs human judgement", "operate external environment"],
+  "integrationLevel": "schema-adapter",
+  "entrypoint": {
+    "type": "test-command",
+    "command": "npm run test -- --test-name-pattern contract",
+    "notes": "示例命令，真实 provider 应由 runtime 按 workspace 和 package policy 注入。"
+  },
+  "requestContract": {
+    "schemaRef": "sciforge.verification.request.v1",
+    "requiredFields": ["goal", "artifactRefs", "traceRefs", "verificationPolicy"],
+    "shape": {
+      "goal": "string",
+      "resultRefs": "string[]",
+      "artifactRefs": "string[]",
+      "traceRefs": "string[]",
+      "rubric": "string?",
+      "verificationPolicy": {
+        "required": "boolean",
+        "mode": "lightweight | automatic | human | hybrid",
+        "riskLevel": "low | medium | high"
+      }
+    },
+    "acceptedArtifactTypes": ["json", "tool-payload", "execution-unit"]
+  },
+  "resultContract": {
+    "schemaRef": "sciforge.verification.result.v1",
+    "shape": {
+      "verdict": "pass | fail | uncertain | needs-human | unverified",
+      "reward": "number?",
+      "confidence": "number",
+      "critique": "string?",
+      "evidenceRefs": "string[]",
+      "repairHints": "string[]",
+      "diagnostics": "object?"
+    },
+    "verdicts": ["pass", "fail", "uncertain", "unverified"],
+    "rewardRange": { "min": 0, "max": 1 }
+  },
+  "riskPolicy": {
+    "coversRiskLevels": ["low", "medium"],
+    "defaultMode": "automatic",
+    "unverifiedAllowed": true,
+    "requiresHumanFor": ["high-risk external side effect", "ambiguous scientific claim"]
+  },
+  "evidencePolicy": {
+    "storagePolicy": "ref-only",
+    "evidenceRefsRequired": true,
+    "redaction": ["rawModelTranscript", "credentials"],
+    "retention": "保存 schema/test 输出摘要和日志 ref，不内联长日志。"
+  },
+  "failureModes": [
+    {
+      "code": "schema-missing",
+      "recoverable": true,
+      "description": "请求中没有提供可验证 schema 或 artifact contract。",
+      "repairHints": ["补充 artifact schema ref", "降级为 human 或 agent verifier"]
+    },
+    {
+      "code": "test-command-failed",
+      "recoverable": true,
+      "description": "测试命令执行失败或返回非零状态。",
+      "repairHints": ["把测试日志 ref 带入下一轮修复", "缩小失败用例"]
+    }
+  ]
+}
+

@@ -20,6 +20,7 @@
   "include": [
     "vite.config.ts",
     "src/runtime/**/*.ts",
+    "src/shared/**/*.ts",
     "tools/**/*.ts",
     "tests/deep/**/*.ts",
     "tests/smoke/**/*.ts",

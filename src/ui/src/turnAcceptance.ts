@@ -449,7 +449,7 @@ function semanticFailuresFromAcceptance(semantic: SemanticTurnAcceptance): TurnA
 }
 
 function isFailedExecutionStatus(status: RuntimeExecutionUnit['status']) {
-  return status === 'failed' || status === 'failed-with-reason' || status === 'repair-needed';
+  return status === 'failed' || status === 'failed-with-reason' || status === 'repair-needed' || status === 'needs-human';
 }
 
 function isNonBlockingAcceptanceRepairFailure(unit: RuntimeExecutionUnit, response: NormalizedAgentResponse) {

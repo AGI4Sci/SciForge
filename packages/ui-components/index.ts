@@ -64,6 +64,8 @@ export const uiComponentManifests: UIComponentManifest[] = [
   unknownArtifactInspector,
 ];
 
+export const interactiveViewManifests = uiComponentManifests;
+
 export const uiComponentCompatibilityAliases = [
   {
     legacyComponentId: 'data-table',
@@ -107,4 +109,33 @@ export const uiComponentCompatibilityAliases = [
     status: 'deprecated-alias',
     note: 'molecule-viewer is accepted only as a historical alias; new slots should use structure-viewer.',
   },
+  {
+    legacyComponentId: 'molecule-viewer-3d',
+    routeComponentId: 'structure-viewer',
+    activeComponentId: 'structure-viewer',
+    status: 'deprecated-alias',
+    note: 'molecule-viewer-3d is accepted only as a historical alias; new slots should use structure-viewer.',
+  },
 ] as const;
+
+export const interactiveViewCompatibilityAliases = uiComponentCompatibilityAliases;
+
+export const uiComponentAliasTargetMap: Record<string, string> = Object.fromEntries(
+  uiComponentCompatibilityAliases.map((alias) => [alias.legacyComponentId, alias.activeComponentId]),
+);
+
+export function normalizeUIComponentId(componentId: string) {
+  return uiComponentAliasTargetMap[componentId] ?? componentId;
+}
+
+export function buildUIComponentArtifactTypeIndex(manifests: UIComponentManifest[] = uiComponentManifests): Record<string, string[]> {
+  const artifactTypes = manifests.reduce<Record<string, string[]>>((acc, module) => {
+    const current = acc[module.componentId] ?? [];
+    acc[module.componentId] = Array.from(new Set([...current, ...module.acceptsArtifactTypes]));
+    return acc;
+  }, {});
+  for (const alias of uiComponentCompatibilityAliases) {
+    artifactTypes[alias.legacyComponentId] = artifactTypes[alias.activeComponentId] ?? artifactTypes[alias.routeComponentId] ?? [];
+  }
+  return artifactTypes;
+}

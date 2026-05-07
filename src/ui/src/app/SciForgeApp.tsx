@@ -106,11 +106,10 @@ import {
   type TimelineEventRecord,
   type UIManifestSlot,
   type ViewPlanSection,
-  type ReusableTaskCandidateRecord,
 } from '../domain';
 import { uiModuleRegistry, type PresentationDedupeScope, type RuntimeUIModule } from '../uiModuleRegistry';
 import type { VolcanoPoint } from '../charts';
-import { compactWorkspaceStateForStorage, createSession, loadWorkspaceState, saveWorkspaceState, shouldUsePersistedWorkspaceState, versionSession } from '../sessionStore';
+import { compactWorkspaceStateForStorage, createSession, loadWorkspaceState, saveWorkspaceState, shouldUsePersistedWorkspaceState } from '../sessionStore';
 import {
   activeSessionFor as workspaceActiveSessionFor,
   clearArchivedSessions as clearScenarioArchivedSessions,
@@ -121,7 +120,7 @@ import {
   restoreArchivedSession as restoreScenarioArchivedSession,
   startNewChat,
 } from '../workspace/sessionWorkspace';
-import { applyArtifactHandoffToWorkspace } from '../workspace/artifactHandoff';
+import { markReusableRunInWorkspace } from '../workspace/reusableTaskWorkspace';
 import { defaultSciForgeConfig, loadSciForgeConfig, normalizeWorkspaceRootPath, saveSciForgeConfig, updateConfig } from '../config';
 import {
   acceptSkillPromotionProposal,
@@ -154,14 +153,23 @@ import { runtimeContractSchemas, schemaPreview, validateRuntimeContract } from '
 import { TimelinePage } from './AlignmentPages';
 import { ComponentWorkbenchPage } from './ComponentWorkbenchPage';
 import { Dashboard } from './Dashboard';
-import { ResultsRenderer, handoffAutoRunPrompt, previewPackageAutoRunPrompt, type HandoffAutoRunRequest } from './ResultsRenderer';
+import { ResultsRenderer, previewPackageAutoRunPrompt } from './ResultsRenderer';
+import type { HandoffAutoRunRequest } from './results/viewPlanResolver';
 import { ScenarioBuilderPanel, defaultElementSelectionForScenario, scenarioPackageToOverride } from './ScenarioBuilderPanel';
 import { objectReferenceKindLabel } from '../../../../packages/object-references';
-import { ChatPanel, mergeRunTimelineEvents } from './ChatPanel';
+import { ChatPanel } from './ChatPanel';
 import { exportJsonFile, exportTextFile } from './exportUtils';
 import { RuntimeHealthPanel, useRuntimeHealth, type RuntimeHealthItem } from './runtimeHealthPanel';
 import { ActionButton, Badge, Card, ChartLoadingFallback, ClaimTag, ConfidenceBar, EmptyArtifactState, EvidenceTag, IconButton, SectionHeader, cx } from './uiPrimitives';
 import { HeatmapViewer, MoleculeViewer, NetworkGraph, UmapViewer } from '../visualizations';
+import { resolveSearchNavigation, workbenchNavigationForScenario } from './appShell/navigation';
+import {
+  appendTimelineEventToWorkspace,
+  applySessionUpdateToWorkspace,
+  createArtifactHandoffTransition,
+  createPreviewPackageAutoRunRequest,
+  touchWorkspaceUpdatedAt,
+} from './appShell/workspaceState';
 
 const chartTheme = {
   bg: '#0A0F1A',
@@ -2011,28 +2019,15 @@ export function SciForgeApp() {
   }, [feedbackAuthor]);
 
   function updateWorkspace(mutator: (state: SciForgeWorkspaceState) => SciForgeWorkspaceState) {
-    setWorkspaceState((current) => ({
-      ...mutator(current),
-      updatedAt: nowIso(),
-    }));
+    setWorkspaceState((current) => touchWorkspaceUpdatedAt(mutator(current), nowIso()));
   }
 
   function updateSession(nextSession: SciForgeSession, reason = 'session update') {
-    updateWorkspace((current) => ({
-      ...current,
-      sessionsByScenario: {
-        ...current.sessionsByScenario,
-        [nextSession.scenarioId]: versionSession(nextSession, reason),
-      },
-      timelineEvents: mergeRunTimelineEvents(current.timelineEvents ?? [], current.sessionsByScenario[nextSession.scenarioId], nextSession),
-    }));
+    updateWorkspace((current) => applySessionUpdateToWorkspace(current, nextSession, reason));
   }
 
   function appendTimelineEvent(event: TimelineEventRecord) {
-    updateWorkspace((current) => ({
-      ...current,
-      timelineEvents: [event, ...(current.timelineEvents ?? [])].slice(0, 200),
-    }));
+    updateWorkspace((current) => appendTimelineEventToWorkspace(current, event));
   }
 
   function addFeedbackComment(comment: FeedbackCommentRecord) {
@@ -2167,88 +2162,27 @@ export function SciForgeApp() {
   }
 
   function markReusableRun(nextScenarioId: ScenarioInstanceId, runId: string) {
-    updateWorkspace((current) => {
-      const session = current.sessionsByScenario[nextScenarioId];
-      const run = session?.runs.find((item) => item.id === runId);
-      if (!run) return current;
-      const candidate: ReusableTaskCandidateRecord = {
-        id: `reusable.${run.scenarioPackageRef?.id ?? nextScenarioId}.${run.id}`,
-        runId: run.id,
-        scenarioId: nextScenarioId,
-        scenarioPackageRef: run.scenarioPackageRef,
-        skillPlanRef: run.skillPlanRef,
-        uiPlanRef: run.uiPlanRef,
-        prompt: run.prompt,
-        status: run.status,
-        promotionState: 'candidate',
-        createdAt: nowIso(),
-      };
-      const existing = current.reusableTaskCandidates ?? [];
-      return {
-        ...current,
-        reusableTaskCandidates: [candidate, ...existing.filter((item) => item.id !== candidate.id)].slice(0, 80),
-        timelineEvents: [({
-          id: makeId('timeline'),
-          actor: 'SciForge Library',
-          action: 'package.reusable-candidate',
-          subject: `${candidate.scenarioPackageRef?.id ?? nextScenarioId}:${run.id}`,
-          artifactRefs: [],
-          executionUnitRefs: [run.id, run.skillPlanRef, run.uiPlanRef].filter((value): value is string => Boolean(value)),
-          beliefRefs: [],
-          branchId: nextScenarioId,
-          visibility: 'project-record',
-          decisionStatus: 'not-a-decision',
-          createdAt: candidate.createdAt,
-        } satisfies TimelineEventRecord), ...(current.timelineEvents ?? [])].slice(0, 200),
-      };
-    });
+    updateWorkspace((current) => markReusableRunInWorkspace(current, nextScenarioId, runId, nowIso()));
   }
 
   function handleSearch(query: string) {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return;
-    const matchedScenario = scenarios.find((scenario) =>
-      normalized.includes(scenario.id)
-      || normalized.includes(scenario.name.toLowerCase())
-      || normalized.includes(scenario.domain.toLowerCase())
-      || scenario.tools.some((tool) => normalized.includes(tool.toLowerCase())),
-    );
-    if (matchedScenario) {
-      setScenarioId(matchedScenario.id);
-      setPage('workbench');
-      return;
-    }
-    if (normalized.includes('timeline') || normalized.includes('时间线') || normalized.includes('notebook')) {
-      setPage('timeline');
-      return;
-    }
-    if (normalized.includes('align') || normalized.includes('对齐')) {
-      setPage('timeline');
-      return;
-    }
-    setPage('workbench');
+    const target = resolveSearchNavigation(query, scenarios);
+    if (!target) return;
+    if (target.scenarioId) setScenarioId(target.scenarioId);
+    setPage(target.page);
   }
 
   function handleArtifactHandoff(targetScenario: ScenarioId, artifact: RuntimeArtifact) {
-    const sourceScenario = scenarios.find((item) => item.id === artifact.producerScenario);
-    const target = scenarios.find((item) => item.id === targetScenario);
     const now = nowIso();
-    const labels = {
-      sourceScenarioName: sourceScenario?.name ?? artifact.producerScenario,
-      targetScenarioName: target?.name ?? targetScenario,
-    };
-    const autoRunPrompt = handoffAutoRunPrompt(targetScenario, artifact, labels.sourceScenarioName, labels.targetScenarioName);
-    setWorkspaceState((current) => applyArtifactHandoffToWorkspace(current, targetScenario, artifact, labels, {
+    const transition = createArtifactHandoffTransition(scenarios, targetScenario, artifact, {
       now,
       notebookTime: new Date(now).toLocaleString('zh-CN', { hour12: false }),
-    }));
-    setScenarioId(targetScenario);
-    setPage('workbench');
-    setHandoffAutoRun({
-      id: makeId('handoff-run'),
-      targetScenario,
-      prompt: autoRunPrompt,
     });
+    setWorkspaceState(transition.apply);
+    const target = workbenchNavigationForScenario(transition.targetScenario);
+    setScenarioId(target.scenarioId);
+    setPage(target.page);
+    setHandoffAutoRun(transition.autoRunRequest);
   }
 
   function consumeHandoffAutoRun(requestId: string) {
@@ -2261,13 +2195,10 @@ export function SciForgeApp() {
     path?: string,
     descriptor?: PreviewDescriptor,
   ) {
-    setScenarioId(targetScenario);
-    setPage('workbench');
-    setHandoffAutoRun({
-      id: makeId('preview-package-run'),
-      targetScenario,
-      prompt: previewPackageAutoRunPrompt(reference, path, descriptor),
-    });
+    const target = workbenchNavigationForScenario(targetScenario);
+    setScenarioId(target.scenarioId);
+    setPage(target.page);
+    setHandoffAutoRun(createPreviewPackageAutoRunRequest(targetScenario, previewPackageAutoRunPrompt(reference, path, descriptor)));
   }
 
   const activeScenarioOverride = scenarioOverrides[scenarioId];

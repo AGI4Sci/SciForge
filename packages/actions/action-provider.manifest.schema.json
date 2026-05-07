@@ -1,0 +1,235 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sciforge.local/schemas/action-provider.manifest.schema.json",
+  "title": "SciForge Action Provider Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "version",
+    "kind",
+    "displayName",
+    "summary",
+    "domains",
+    "actionSchema",
+    "environmentTargets",
+    "safetyGates",
+    "confirmationRules",
+    "traceContract",
+    "verifierContract",
+    "failureModes"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "sciforge.action-provider.manifest.v1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]*$"
+    },
+    "version": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string",
+      "const": "action"
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "domains": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "triggers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "antiTriggers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "integrationLevel": {
+      "type": "string",
+      "enum": ["markdown-first", "schema-adapter", "native-runtime"],
+      "default": "schema-adapter"
+    },
+    "entrypoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["python-package", "typescript-package", "mcp-server", "external-adapter", "documentation-only"]
+        },
+        "package": { "type": "string" },
+        "module": { "type": "string" },
+        "symbol": { "type": "string" },
+        "path": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    },
+    "actionSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaRef", "inputShape", "outputShape"],
+      "properties": {
+        "schemaRef": { "type": "string" },
+        "inputShape": { "type": "object" },
+        "outputShape": { "type": "object" },
+        "examples": {
+          "type": "array",
+          "items": { "type": "object" },
+          "default": []
+        }
+      }
+    },
+    "environmentTargets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "coordinatePolicy", "sideEffects"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "window",
+              "browser",
+              "filesystem",
+              "kernel",
+              "remote-desktop",
+              "external-api",
+              "lab-instrument",
+              "other"
+            ]
+          },
+          "coordinatePolicy": {
+            "type": "string",
+            "enum": ["not-applicable", "window-bound", "document-bound", "workspace-bound", "provider-defined"]
+          },
+          "sideEffects": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1
+          },
+          "isolation": { "type": "string" }
+        }
+      },
+      "minItems": 1
+    },
+    "safetyGates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["riskClass", "defaultPolicy", "highRiskPolicy"],
+      "properties": {
+        "riskClass": { "type": "string", "enum": ["low", "medium", "high"] },
+        "defaultPolicy": { "type": "string", "enum": ["allow", "dry-run", "require-confirmation", "fail-closed"] },
+        "highRiskPolicy": { "type": "string", "enum": ["require-confirmation", "fail-closed"] },
+        "supportsDryRun": { "type": "boolean", "default": false },
+        "blockedActions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "requiresExplicitTarget": { "type": "boolean", "default": true },
+        "notes": { "type": "string" }
+      }
+    },
+    "confirmationRules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requiredWhen", "approvalEvidence", "timeoutPolicy"],
+      "properties": {
+        "requiredWhen": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "approvalEvidence": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "timeoutPolicy": { "type": "string", "enum": ["fail", "pause", "provider-defined"] }
+      }
+    },
+    "traceContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaRef", "storagePolicy", "eventTypes"],
+      "properties": {
+        "schemaRef": { "type": "string" },
+        "storagePolicy": { "type": "string", "enum": ["ref-only", "inline-small", "provider-defined"] },
+        "eventTypes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "redaction": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "retention": { "type": "string" }
+      }
+    },
+    "verifierContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "defaultVerifierTypes", "requestShape", "resultShape"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "defaultVerifierTypes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["human", "agent", "schema-test", "environment", "simulator-reward-model"]
+          }
+        },
+        "requiredWhen": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "requestShape": { "type": "object" },
+        "resultShape": { "type": "object" }
+      }
+    },
+    "failureModes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "stage", "recoverable", "description"],
+        "properties": {
+          "code": { "type": "string" },
+          "stage": {
+            "type": "string",
+            "enum": ["planning", "targeting", "confirmation", "execution", "verification", "environment", "unknown"]
+          },
+          "recoverable": { "type": "boolean" },
+          "description": { "type": "string" },
+          "repairHints": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": []
+          }
+        }
+      },
+      "minItems": 1
+    }
+  }
+}
+

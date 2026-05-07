@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sciforge.local/schemas/verifier-provider.manifest.schema.json",
+  "title": "SciForge Verifier Provider Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "version",
+    "kind",
+    "verifierType",
+    "displayName",
+    "summary",
+    "domains",
+    "requestContract",
+    "resultContract",
+    "riskPolicy",
+    "evidencePolicy",
+    "failureModes"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "sciforge.verifier-provider.manifest.v1"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]*$"
+    },
+    "version": { "type": "string" },
+    "kind": {
+      "type": "string",
+      "const": "verifier"
+    },
+    "verifierType": {
+      "type": "string",
+      "enum": ["human", "agent", "schema-test", "environment", "simulator-reward-model"]
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "domains": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "triggers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "antiTriggers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "integrationLevel": {
+      "type": "string",
+      "enum": ["markdown-first", "schema-adapter", "native-runtime"],
+      "default": "schema-adapter"
+    },
+    "entrypoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["human-interaction", "agent-rubric", "test-command", "environment-adapter", "simulator", "documentation-only"]
+        },
+        "command": { "type": "string" },
+        "module": { "type": "string" },
+        "symbol": { "type": "string" },
+        "path": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    },
+    "requestContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaRef", "requiredFields", "shape"],
+      "properties": {
+        "schemaRef": { "type": "string" },
+        "requiredFields": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["goal", "resultRefs", "artifactRefs", "traceRefs", "stateRefs", "rubric", "verificationPolicy"]
+          },
+          "minItems": 1
+        },
+        "shape": { "type": "object" },
+        "acceptedArtifactTypes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        }
+      }
+    },
+    "resultContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaRef", "shape", "verdicts"],
+      "properties": {
+        "schemaRef": { "type": "string" },
+        "shape": { "type": "object" },
+        "verdicts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["pass", "fail", "uncertain", "needs-human", "unverified"]
+          },
+          "minItems": 1
+        },
+        "rewardRange": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["min", "max"],
+          "properties": {
+            "min": { "type": "number" },
+            "max": { "type": "number" }
+          }
+        }
+      }
+    },
+    "riskPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coversRiskLevels", "defaultMode", "unverifiedAllowed"],
+      "properties": {
+        "coversRiskLevels": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["low", "medium", "high"] },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "defaultMode": {
+          "type": "string",
+          "enum": ["lightweight", "automatic", "human", "hybrid"]
+        },
+        "unverifiedAllowed": { "type": "boolean" },
+        "requiresHumanFor": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        }
+      }
+    },
+    "evidencePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["storagePolicy", "evidenceRefsRequired"],
+      "properties": {
+        "storagePolicy": {
+          "type": "string",
+          "enum": ["ref-only", "inline-small", "provider-defined"]
+        },
+        "evidenceRefsRequired": { "type": "boolean" },
+        "redaction": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "retention": { "type": "string" }
+      }
+    },
+    "failureModes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "recoverable", "description"],
+        "properties": {
+          "code": { "type": "string" },
+          "recoverable": { "type": "boolean" },
+          "description": { "type": "string" },
+          "repairHints": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": []
+          }
+        }
+      },
+      "minItems": 1
+    }
+  }
+}
+

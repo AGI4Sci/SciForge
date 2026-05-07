@@ -13,9 +13,72 @@
 - 错误必须进入下一轮上下文：failureReason、日志/代码引用、缺失输入、recoverActions、nextStep 和 attempt history 都要保留。
 - 多轮对话要以 workspace refs 为长期事实来源，以最近消息为短期意图来源；“继续、修复、基于上一轮、文件在哪里”必须能接上当前 session。
 - 代码路径保持唯一真相源：发现冗余链路时删除、合并或降级旧链路，避免长期并行实现。
+- 代码膨胀必须自动触发治理：源码文件超过 1000 行进入 watch list；超过 1500 行必须在 PROJECT.md 有模块化拆分任务、语义 part 计划或生成文件豁免；超过 2000 行优先拆分；超过 3000 行视为维护风险。后续开发若让文件越过阈值，应优先抽模块、删除冗余逻辑或补拆分 TODO，而不是继续堆主文件。
+- 长文件拆分必须按职责命名，不能机械切成 `part1/part2`；如果暂时不能完全解耦，也要拆成有语义的文件，例如 `*-event-normalizer`、`*-runner`、`*-diagnostics`、`*-state-machine`，并保持主入口只做流程编排。
+- `npm run smoke:long-file-budget` 是代码膨胀守门 smoke：超过阈值且未被 PROJECT.md 跟踪的长文件应让验证失败，从而自动触发模块化、去重或任务补录。
 - Computer Use 必须走 window-based 主路径：观察、grounding、坐标映射和动作执行都绑定目标窗口/窗口内容坐标，而不是全屏全局猜测；并行长测必须隔离目标窗口、输入通道和 trace，不抢占用户真实鼠标键盘。
 
 ## 任务板
+
+### 当前治理任务索引
+
+- 任务板按倒序维护：最新任务组放在顶部，历史任务组向下沉淀。
+- T121-T136 长文件模块化与冗余逻辑治理见下方 `### T121 长文件模块化后续路线图`。该段记录当前长文件阈值、自动触发原则、已完成治理项和后续 TODO。
+- 当前已完成：T121-T136。
+- 当前待推进：暂无 T121-T136 未完成项；后续若长文件跨阈值继续按 watch list 触发新任务。
+- T131 是生成文件豁免说明，不手动拆分；`packages/skills/catalog.ts` 只能由生成器维护。
+
+### T121 长文件模块化后续路线图
+
+状态：进行中。目标是在 T094-T120 已完成的基础上继续处理超长文件，但只按真实职责边界拆分，不为了行数制造碎片。主入口文件应保留流程编排，纯 contract、诊断、状态变换、payload 规范化、adapter 交互和 UI 子视图应进入可单测模块。
+
+#### 拆分原则
+- 单一真相源：发现同一规则在 runtime、UI、scenario-core 或 tests 中重复维护时，保留更通用的一条，旧链路改为兼容调用或删除。
+- 主入口只编排：`generation-gateway.ts`、`ResultsRenderer.tsx`、`ChatPanel.tsx` 这类入口不再承载可复用业务规则。
+- 模块边界按职责命名：使用 `gateway/backend-failure-diagnostics`、`gateway/context-envelope`、`app/results/*`、`app/chat/*` 等领域名，不新增杂物型 `utils`。
+- 每次拆分必须有验证：至少跑 `npm run typecheck` 和相关 smoke/focused tests；影响共享 contract 时跑全量 `npm run test`。
+- 保持兼容层：对外 import、component id、handoff/request/verification contract 不因内部拆分破坏。
+- 自动触发：任何 PR/任务让非生成源码文件跨过 1500 行阈值时，必须同步执行三选一：完成一轮职责拆分、删除/合并冗余逻辑、或在本节新增明确拆分 TODO 并说明为何暂缓。
+
+#### 文件长度阈值
+- 800 行以下：一般不因行数拆分，除非职责明显混杂。
+- 1000 行以上：进入 watch list；后续改动时优先观察是否能抽出纯函数或子组件。
+- 1500 行以上：必须在 PROJECT.md 有明确拆分任务、语义 part 计划或生成文件豁免。
+- 2000 行以上：优先拆分；入口文件只保留流程编排。
+- 3000 行以上：视为维护风险，优先拆出可测试模块或语义 part 文件。
+
+#### TODO
+- [x] T121：继续瘦身 `src/runtime/generation-gateway.ts` 的 backend failure / rate-limit / context-window 诊断逻辑，抽到 `src/runtime/gateway/backend-failure-diagnostics.ts`。验收：错误分类、retry-after 解析、脱敏、rate-limit 恢复建议、context-window 判定均由新模块承载；主 gateway 只调用诊断结果；`smoke:runtime-gateway-modules` 覆盖分类和脱敏。
+- [x] T122：继续瘦身 `src/runtime/generation-gateway.ts` 的 AgentServer workspace event normalization，把 token usage、rate-limit、context-window state、context compaction event 归一化抽到 `src/runtime/gateway/workspace-event-normalizer.ts`，并保留当前 UI 可见事件语义。验收：`generation-gateway.ts` 调用 workspace event normalizer，`smoke:runtime-gateway-modules` 覆盖 token usage、rate-limit、context-window 和 compaction 归一化。
+- [x] T123：继续瘦身 `src/runtime/generation-gateway.ts` 的 generated task execution / validation path，把 taskFiles 写入、workspace run、payload validate/materialize 和 attempt history 串联下沉到 `src/runtime/gateway/generated-task-runner.ts`。验收：主 gateway 通过 `runAgentServerGeneratedTask` 兼容入口串联 generated task runner；runtime gateway modules smoke 覆盖 task file、payload validate/materialize 和 attempt history。
+- [x] T124：继续瘦身 `ResultsRenderer.tsx`，把 artifact data coercion、preview descriptor 决策和 object reference extraction 下沉到 `src/ui/src/app/results/*` 或 workspace artifact 模块；组件入口只负责组合视图。验收：artifact data、preview descriptor、view plan 和 report content 已拆到 `src/ui/src/app/results/*`，object reference 解析复用 package/shared reference helpers，入口保留组合视图和交互绑定。
+- [x] T125：继续瘦身 `ChatPanel.tsx`，把 session mutation、archive mutation、composer draft/reference 状态机下沉到纯函数模块，并补独立测试。验收：session transforms、composer references、archive/message list/composer/header 子组件已拆出，并有独立测试覆盖 session 与 composer 状态变换。
+- [x] T126：补充文件长度预算 smoke，列出超过 1500 行的入口文件并要求 PROJECT.md 中有对应拆分任务或明确生成文件豁免。验收：新增 `tools/check-long-file-budget.ts` 和 `npm run smoke:long-file-budget`；`verify:fast` 已串联该 smoke。
+- [x] T127：拆分 `src/runtime/vision-sense/computer-use-bridge.ts`。验收：已拆为 `computer-use-plan.ts`、`computer-use-window-session.ts`、`computer-use-action-loop.ts`、`computer-use-trace-output.ts` 等语义模块，bridge 入口负责串联窗口绑定、计划、动作循环和 trace；`smoke:vision-sense-runtime` 通过。
+- [x] T128：拆分 `tools/computer-use-long-task-pool.ts`。验收：入口脚本保持 11 行薄 CLI/compat facade；实现已按职责拆为 `contracts.ts`、`task-pool.ts`、`trace-contract.ts`、`run-core.ts`、`matrix-core.ts`、`support.ts` 和 CLI/facade 文件；`internal.ts` 保留 5 行兼容 re-export；所有 T128 子文件均低于 1000 行，`smoke:computer-use-long` 与 `smoke:long-file-budget` 通过。
+- [x] T129：拆分 `src/ui/src/app/SciForgeApp.tsx`。验收：workspace state mutation、timeline append、artifact handoff transition、routing/page selection 已下沉到 `src/ui/src/workspace/*` 和 `src/ui/src/app/appShell/*`，并补 appShell/workspace focused tests；入口仍较长，后续继续按 UI 区块治理但本轮职责拆分完成。
+- [x] T130：拆分 `src/ui/src/api/agentClient.ts`。验收：public API 入口已缩为兼容导出，streaming transport、response normalization、context compaction、semantic validation、run client 和 request payload 已拆到 `src/ui/src/api/agentClient/*`。
+- [x] T131：`packages/skills/catalog.ts` 是生成文件，由 `tools/generate-skill-catalog.ts` 维护；不手动拆分，但生成器必须继续输出稳定 public catalog，`packages/skills/index.ts` 保持薄兼容入口。验收：`smoke:long-file-budget` 以 generated catalog 豁免该文件，`packages/skills/index.ts` 保持薄兼容入口。
+- [x] T132：治理 `src/ui/src/app/ChatPanel.tsx` 的消息展示职责，把 Markdown block/inline 渲染和 inline object reference 解析抽到 `src/ui/src/app/chat/MessageContent.tsx`。验收：ChatPanel 不再内联消息 Markdown 解析器；MessageContent 模块独立承载消息内容渲染、引用 linkify 和 inline token 解析；类型检查通过。
+- [x] T133：继续治理 `src/ui/src/app/ChatPanel.tsx` 的运行编排职责，把 `runPrompt` 的 preflight context compaction、backend fallback、acceptance repair、失败 run 记录拆成 `chat/runOrchestrator` 或等价语义模块，保留 ChatPanel 只负责 UI 状态和事件绑定。验收：`src/ui/src/app/chat/runOrchestrator.ts` 承载 preflight compaction、backend fallback、acceptance repair 和 failed run response；ChatPanel 只调用 orchestrator 并合并 UI 状态。
+- [x] T134：继续治理 `src/ui/src/app/ResultsRenderer.tsx` 的 view-plan 决策职责，把 `resolveViewPlan`、binding validation、presentation dedupe 和 focus-mode 过滤拆成 `results/viewPlanResolver.ts`。验收：`resolveViewPlan`、focus-mode items、hidden slot filtering 和 view plan helper 已由 `results/viewPlanResolver.ts` 承载。
+- [x] T135：继续治理 `src/ui/src/app/ResultsRenderer.tsx` 的 report coercion/Markdown 展示职责，把 `coerceReportPayload`、report ref 提取、structured payload 转 Markdown 和 inline object reference button hydration 拆到 `results/reportContent.tsx`。验收：`coerceReportPayload`、report ref 提取、structured payload 转 Markdown、MarkdownBlock 和 inline object reference hydration 已拆到 `results/reportContent.tsx`，ResultsRenderer 保留兼容导出。
+- [x] T136：watch list 治理：`src/runtime/workspace-server.ts`、`src/ui/src/api/sciforgeToolsClient.ts`、`src/ui/src/app/Dashboard.tsx` 到 1500 行前优先抽模块；如果后续任务让它们跨过 1500 行，必须同步新增拆分 TODO 或完成拆分。验收：当前三者分别约 1372、922、1002 行，均低于 1500；watch list 继续保留，后续跨阈值时必须新增拆分 TODO 或完成拆分。
+
+#### 当前验收
+- [x] 已新增 `src/runtime/gateway/backend-failure-diagnostics.ts`，并从 `generation-gateway.ts` 删除重复的 backend failure 类型、分类、retry-after 解析、脱敏和恢复建议实现。
+- [x] 已在 `tests/smoke/smoke-runtime-gateway-modules.ts` 覆盖 backend failure 分类、retry-after 解析和 secret redaction。
+- [x] 已运行 `npm run typecheck` 通过；后续继续运行 smoke/test/build 校准。
+- [x] 已运行 `npm run smoke:long-file-budget`，当前超过 1500 行的非生成长文件均在 PROJECT.md 有拆分任务覆盖。
+- [x] 已新增 `src/ui/src/app/chat/MessageContent.tsx`，并继续把运行编排拆到 `runOrchestrator.ts`；`ChatPanel.tsx` 当前约 1453 行，T133 已完成。
+- [x] T122/T123 最终校准：`workspace-event-normalizer.ts` 与 `generated-task-runner.ts` 已接入 `generation-gateway.ts`，`smoke:runtime-gateway-modules` 通过。
+- [x] T124/T134/T135 最终校准：`ResultsRenderer.tsx` 保留 public 兼容导出，artifact data、preview descriptor、view plan、report content 和 inline reference hydration 已拆到 `src/ui/src/app/results/*`；focused tests 和全量测试通过。
+- [x] T125/T133 最终校准：`ChatPanel.tsx` 当前 1453 行，session/composer/run orchestration 已拆到 `src/ui/src/app/chat/*`，focused tests 和全量测试通过。
+- [x] T127 最终校准：vision computer-use bridge 已按 window session、plan、action loop 和 trace output 拆分，相关 smoke 通过。
+- [x] T128 最终校准：Computer Use long task pool 已按 typed contracts、task-pool loader/prepare、trace contract validator、run executor、matrix/preflight/report/repair plan 和 shared support 拆分；`internal.ts` 仅保留兼容导出，相关 smoke 通过。
+- [x] T129/T130 最终校准：SciForgeApp 的 workspace/appShell 职责拆分和 agentClient 薄兼容入口已完成，focused tests 和全量验证通过。
+- [x] T131 最终校准：`packages/skills/catalog.ts` 保持生成文件豁免，未手动拆分。
+- [x] T136 最终校准：watch list 文件未跨 1500 行，已记录继续治理原则。
 
 ### T111 Verify / Reward Feedback 闭环规划
 
@@ -37,21 +100,24 @@
 - [x] 在 PROJECT.md 记录 Verify 是必要阶段、provider/强度可选的设计结论。
 
 #### 后续实现 TODO
-- [ ] T112：定义共享 `VerificationPolicy` 与 `VerificationResult` contract，放入 `src/shared` 或 runtime contract 包，供 UI/CLI/runtime 共用。
-- [ ] T113：建立 `packages/verifiers/` 目录和 verifier provider manifest，支持 human、agent、schema/test、environment 和 simulator/reward model 类型。
-- [ ] T114：让 Capability Broker 根据 riskLevel、artifact type、action side effects 和用户显式要求选择 verifier，并生成紧凑 verification brief。
-- [ ] T115：让 UI 聊天和 CLI request builder 都能表达 selected verifiers、verification policy、human approval policy 和 `unverified` 原因。
-- [ ] T116：为 workspace runtime 增加验证结果写入：每个 run 的 final artifact、trace 和 ExecutionUnit 都能引用 verification result。
-- [ ] T117：为高风险 action 建立强制验证门槛：action provider 自报成功不能直接结束，必须有 verifier 或 human approval。
-- [ ] T118：为人类验证设计 interactive view 事件契约：accept、reject、revise、score、comment 都转换成标准 VerificationResult。
-- [ ] T119：为 agent verifier 设计 rubric contract，允许其它 agent 基于目标、artifact refs 和 trace refs 给出 critique/reward/repair hints。
-- [ ] T120：补充端到端 fixture，验证同一任务在 UI 和 CLI 中能进入同一 verification policy，并把 verification result 带入下一轮上下文。
+- [x] T112：定义共享 `VerificationPolicy` 与 `VerificationResult` contract，放入 `src/shared` 或 runtime contract 包，供 UI/CLI/runtime 共用。验收：`src/shared/verification.ts` 已定义共享策略、结果、Verifier capability brief、normalize/build helper；`pass/fail/uncertain/needs-human/unverified` 均有单测覆盖，且 `unverified` 通过 `isVerificationSuccess` 明确不是成功状态。
+- [x] T113：建立 `packages/verifiers/` 目录和 verifier provider manifest，支持 human、agent、schema/test、environment 和 simulator/reward model 类型。
+- [x] T114：让 Capability Broker 根据 riskLevel、artifact type、action side effects 和用户显式要求选择 verifier，并生成紧凑 verification brief。验收：新增共享 capability broker 会生成 `verificationBrief` / `verificationPolicy`；高风险 action 默认要求 verifier 或 human approval；低风险草稿可 `unverified`，但必须记录原因；新增单测覆盖 verifier 选择策略。
+- [x] T115：让 UI 聊天和 CLI request builder 都能表达 selected verifiers、verification policy、human approval policy 和 `unverified` 原因。验收：共享 `agentHandoffPayload` builder、UI `scenarioOverride` 和 runtime `GatewayRequest` 均支持 selected verifiers、verification policy、human approval policy 与 `unverifiedReason`；UI 显式 `handoffSource=ui-chat`，CLI builder 缺省为 `cli`。
+- [x] T116：为 workspace runtime 增加验证结果写入：每个 run 的 final artifact、trace 和 ExecutionUnit 都能引用 verification result。
+- [x] T117：为高风险 action 建立强制验证门槛：action provider 自报成功不能直接结束，必须有 verifier 或 human approval。
+- [x] T118：为人类验证设计 interactive view 事件契约：accept、reject、revise、score、comment 都转换成标准 VerificationResult。验收：`src/shared/verification.ts` 定义 human interactive event 到标准 `VerificationResult` 的转换，保留 ui-components/interactive view 只承载事件、不成为 verifier provider；新增单测覆盖 accept/reject/revise/score/comment 映射。
+- [x] T119：为 agent verifier 设计 rubric contract，允许其它 agent 基于目标、artifact refs 和 trace refs 给出 critique/reward/repair hints。验收：新增 `src/shared/verifiers/agentRubric.ts` 稳定 contract、`packages/verifiers/agent-rubric/fixture.ts` fixture 和 mock provider；单测覆盖 pass、缺 trace refs repair hints 与 reward/verdict 输出。
+- [x] T120：补充端到端 fixture，验证同一任务在 UI 和 CLI 中能进入同一 verification policy，并把 verification result 带入下一轮上下文。验收：`src/shared/agentHandoffPayload.test.ts` 覆盖 UI/CLI 同配置进入同一 `verificationPolicy`，并验证 `verificationResult` / `recentVerificationResults` 出现在下一轮 context envelope。
 
 #### 验收
 - [x] 文档明确回答：Verify 是必要闭环阶段，verifier provider 和强度可选。
 - [x] 文档明确 verifier 与 action、sense、interactive view 的职责边界。
 - [x] 后续实现任务已按共享 contract、provider registry、broker、UI/CLI、runtime 和测试拆分。
 - [x] 当前阶段未修改功能代码，只更新设计文档和 PROJECT.md 任务管理。
+- [x] T116 验收：runtime final payload 会写入 `.sciforge/verifications/*.json`，并在 verification-result artifact、reasoningTrace、ExecutionUnit `verificationRef`、objectReferences 和下一轮 context envelope 中暴露；`unverified` 以可见结果保留，不当作 pass。
+- [x] T117 验收：高风险 action 若只有 action provider 自报成功且缺少 passing verifier 或明确 human approval，会被降级为 `needs-human` 或 failed-with-reason，并写入结构化 failureReason、requiredInputs、recoverActions 和 verification result。
+- [x] T113 验收：已新增 `packages/verifiers/README.md`、`verifier-provider.manifest.schema.json`、schema/test 示例 manifest 和 human approval fixture；schema 枚举覆盖 human、agent、schema-test、environment、simulator-reward-model 类型。
 
 ### T101 CLI/UI 共享 Agent 文档与 Observe-Reasoning-Action 组织规划
 
@@ -80,34 +146,44 @@
 - [x] 在 PROJECT.md 记录后续修改原则和待办，当前阶段只列任务，不改功能代码。
 
 #### 后续实现 TODO
-- [ ] T102：定义统一 Sense Provider contract，包含 capability brief、输入模态、`instruction + modalities -> text-response` 输出格式、失败模式、成本/延迟和多次调用预期。
-- [ ] T103：为主 agent 增加通用 sense orchestration 规则，使其可根据任务主动选择、组合和多次调用 senses，并把调用记录写入可追踪 refs。
-- [ ] T104：建立 `packages/actions/` 目录和 action provider manifest，明确 action schema、环境目标、安全闸门、确认规则、trace contract、verifier contract 和失败模式。
-- [ ] T105：将 `packages/computer-use` 逐步迁移到 `packages/actions/computer-use`，迁移期间保留兼容导出、旧路径说明和测试入口。
-- [ ] T106：明确 `packages/ui-components` 作为 interactive artifact views/renderers 的 contract，声明数据 schema、可见 affordance、对象引用、事件和鼠标/键盘/代码交互边界。
-- [ ] T107：评估是否引入 `packages/interactive-views` 作为别名或迁移目标；若迁移，必须保留 `packages/ui-components` registry 兼容层。
-- [ ] T108：让 UI 聊天和 CLI 的 request builder 共享 selected senses、selected actions、selected verifiers、artifact policy、reference policy 和 failure-recovery 字段。
-- [ ] T109：补充 capability registry，使 agent 能按 observe/reasoning/action/verify/interactive-view 类别读取紧凑能力摘要，并只懒加载被选中的详细契约。
-- [ ] T110：为 CLI 与 UI 的共享请求 contract 增加端到端 fixture，验证相同 prompt、refs、senses/actions 配置在两端进入同一 workspace runtime 语义。
+- [x] T102：定义统一 Sense Provider contract，包含 capability brief、输入模态、`instruction + modalities -> text-response` 输出格式、失败模式、成本/延迟和多次调用预期。验收：`src/shared/senseProvider.ts` 已提供跨 UI/CLI/runtime 可复用的 pure TypeScript contract、normalize/build helper、安全/隐私边界、成本/延迟与重复调用策略；新增独立单测覆盖 capability brief、请求构造、模态规范化和响应规范化。
+- [x] T103：为主 agent 增加通用 sense orchestration 规则，使其可根据任务主动选择、组合和多次调用 senses，并把调用记录写入可追踪 refs。验收：新增 `src/shared/senseOrchestration.ts`，支持按 provider contract 选择 sense、同一图片多 instruction 多次调用、每次调用生成稳定 `callRef`/`traceRef` 记录和紧凑 trace refs；单测覆盖多次调用记录与 provider 缺失失败记录。
+- [x] T104：建立 `packages/actions/` 目录和 action provider manifest，明确 action schema、环境目标、安全闸门、确认规则、trace contract、verifier contract 和失败模式。
+- [x] T105：将 `packages/computer-use` 逐步迁移到 `packages/actions/computer-use`，迁移期间保留兼容导出、旧路径说明和测试入口。
+- [x] T106：明确 `packages/ui-components` 作为 interactive artifact views/renderers 的 contract，声明数据 schema、可见 affordance、对象引用、事件和鼠标/键盘/代码交互边界。
+- [x] T107：评估是否引入 `packages/interactive-views` 作为别名或迁移目标；若迁移，必须保留 `packages/ui-components` registry 兼容层。
+- [x] T108：让 UI 聊天和 CLI 的 request builder 共享 selected senses、selected actions、selected verifiers、artifact policy、reference policy 和 failure-recovery 字段。验收：新增共享 handoff payload builder 支持 selected senses/actions/verifiers、artifact/reference/failure-recovery policies；UI client 只收集当前轮摘要并调用 builder，runtime normalize 与 context envelope 保留同一字段语义。
+- [x] T109：补充 capability registry，使 agent 能按 observe/reasoning/action/verify/interactive-view 类别读取紧凑能力摘要，并只懒加载被选中的详细契约。验收：新增共享 capability registry / broker；agent handoff 中暴露紧凑 `capabilityBrief`，按 sense/action/verifier/interactive-view 等职责分类；registry `listBriefs` 只返回 brief，`loadContract` 只在选中 capability 后加载详细 contract；新增单测覆盖分类与懒加载。
+- [x] T110：为 CLI 与 UI 的共享请求 contract 增加端到端 fixture，验证相同 prompt、refs、senses/actions 配置在两端进入同一 workspace runtime 语义。验收：`src/shared/agentHandoffPayload.test.ts` 用同一 prompt/refs/senses/actions/verifiers 配置分别构造 UI 与 CLI payload，经 runtime normalize 和 context envelope 后得到一致 workspace runtime 语义。
 
 #### 验收
 - [x] 当前文档均用中文描述本次新增内容。
 - [x] `ui-components` 是否放入 `actions` 的边界已明确：不放入 actions，定位为 interactive views/renderers。
 - [x] senses/actions 的后续迁移任务已拆成可独立执行的 TODO。
 - [x] 当前阶段未修改功能代码，只更新文档和 PROJECT.md 任务管理。
+- [x] T104 验收：已新增 `packages/actions/README.md`、`action-provider.manifest.schema.json` 和示例 manifest，覆盖 action schema、环境目标、安全闸门、确认规则、trace contract、verifier contract 和失败模式；未把 `ui-components` 放入 actions。
+- [x] T105 验收：已新增 `packages/actions/computer-use` 兼容 provider 外壳和 manifest，旧 `packages/computer-use` 实现、README 指针和 pytest 测试入口保持可用，未移动业务实现。
 
 ### T098 大文件瘦身与 CLI/UI 共享能力路线图
 
-状态：进行中。本任务组面向当前仓库仍然偏大的单文件脚本和 UI/CLI 能力复用问题。原则是先抽共享 contract 和共同业务能力，再逐步瘦身大文件；不能为了减少行数而把逻辑切碎，也不能让 UI 聊天和 CLI 终端执行维护两套语义不同的任务协议。
+状态：已完成。本任务组面向当前仓库仍然偏大的单文件脚本和 UI/CLI 能力复用问题。原则是先抽共享 contract 和共同业务能力，再逐步瘦身大文件；不能为了减少行数而把逻辑切碎，也不能让 UI 聊天和 CLI 终端执行维护两套语义不同的任务协议。
+
+#### 最终集成校准（2026-05-07）
+- [x] T094-T120 最终一致性审查完成：共享 handoff、sense/action/verifier、verification policy/result、runtime verification gate、interactive-view alias 和 UI/CLI fixture 均通过类型检查、单测、生产构建及相关 smoke。
+- [x] 冗余 scenario contract 已收敛：`packages/scenario-core/src/scenarioSpecs.ts` 保留为唯一真相源，`src/ui/src/scenarioSpecs.ts` 仅作为兼容导出。
+- [x] interactive-view / ui-component 历史 ID 兼容已恢复：`data-table`、`network-graph`、`volcano-plot`、`umap-viewer`、`heatmap-viewer`、`molecule-viewer` 继续作为外部稳定 ID 可被 registry、workbench 和 scenario compiler 识别，底层渲染路由到新的 canonical renderer。
+- [x] unrelated tracked docs deletion 已恢复；`packages/senses/vision-sense/docs/` 迁移副本保留，不再造成 README 或历史文档断链。
+- [x] 验证命令：`npm run typecheck`、`npm run test`、`npm run build`、`npm run smoke:runtime-gateway-modules`、`npm run smoke:skill-registry`、`npm run smoke:vision-sense-runtime` 通过；T094-T120 相关 targeted tests 通过。
+- [x] 校准结论：T094-T120 当前均保持完成状态；未发现需要在本组内取消勾选的条目。
 
 #### 必要瘦身清单
 - [x] T093：抽出 UI chat / CLI / workspace runtime 共享的 Agent handoff contract，统一 source、skill domain、默认 AgentServer URL、默认请求超时和调度原则。
-- [ ] T094：瘦身 `src/ui/src/api/sciforgeToolsClient.ts`，把 request body/context envelope 构造下沉到共享 builder，让 UI 聊天和 CLI 复用同一 handoff payload 语义。
-- [ ] T095：瘦身 `src/runtime/generation-gateway.ts`，继续把 AgentServer generation request、retry/compaction policy、direct payload normalization、repair diagnostics 拆到 `src/runtime/gateway/*` 子模块。
-- [ ] T096：瘦身 `src/ui/src/app/ResultsRenderer.tsx`，按 result shell、artifact cards、execution views、preview actions、handoff controls 拆组件和 hooks。
-- [ ] T097：瘦身 `src/ui/src/app/ChatPanel.tsx`，按 message list、composer、run status、archive drawer、acceptance panel 拆分。
-- [ ] T099：瘦身 `packages/skills/index.ts`，按 skill catalog、manifest schema、registry loader、availability validation、runtime matching 拆分。
-- [ ] T100：瘦身 `src/runtime/vision-sense-runtime.ts`，按 sense provider、computer-use bridge、trace policy、safety/verifier、runtime adapter 拆分，并与独立 `packages/computer-use` contract 对齐。
+- [x] T094：瘦身 `src/ui/src/api/sciforgeToolsClient.ts`，把 request body/context envelope 构造下沉到共享 builder，让 UI 聊天和 CLI 复用同一 handoff payload 语义。验收：新增 `src/shared/agentHandoffPayload.ts` 统一构造 request body、`uiState` 和 agent context policy envelope；共享 builder 不依赖 React/DOM/页面组件，UI 显式发送 `handoffSource=ui-chat`，CLI 省略 source 时默认归一为 `cli`。
+- [x] T095：瘦身 `src/runtime/generation-gateway.ts`，继续把 AgentServer generation request、retry/compaction policy、direct payload normalization、repair diagnostics 拆到 `src/runtime/gateway/*` 子模块。
+- [x] T096：瘦身 `src/ui/src/app/ResultsRenderer.tsx`，按 result shell、artifact cards、execution views、preview actions、handoff controls 拆组件和 hooks。验收：新增 `src/ui/src/app/results/` 下的 result shell、artifact card controls、preview actions、handoff controls 与 auto-run prompt 模块，原渲染入口保持同一状态和 props 语义；类型检查与 ResultsRenderer 相关单测通过。
+- [x] T097：瘦身 `src/ui/src/app/ChatPanel.tsx`，按 message list、composer、run status、archive drawer、acceptance panel 拆分。验收：新增 `src/ui/src/app/chat/` 下的 message list、composer、run readiness、archive drawer、acceptance panel 和 header/context menu 组件，ChatPanel 保持发送、编辑、引用、上传、归档、验收提示等交互语义不变；类型检查通过。
+- [x] T099：瘦身 `packages/skills/index.ts`，按 skill catalog、manifest schema、registry loader、availability validation、runtime matching 拆分。
+- [x] T100：瘦身 `src/runtime/vision-sense-runtime.ts`，按 sense provider、computer-use bridge、trace policy、safety/verifier、runtime adapter 拆分，并与独立 `packages/computer-use` contract 对齐。验收：入口文件缩到薄 runtime adapter，配置/选择逻辑下沉到 `src/runtime/vision-sense/sense-provider.ts`，Computer Use 循环保留在独立 bridge，trace 常量和 safety/verifier contract 独立成模块；没有把 Computer Use 执行职责塞回 sense provider。
 
 #### 共享能力原则
 - CLI 和 UI 聊天都必须使用相同 Agent handoff source/contract 字段，区别只体现在 `handoffSource`，不复制 dispatch policy。
@@ -115,6 +191,20 @@
 - 共享层放在 `src/shared/*`，不得 import React、DOM、Node fs/process 或某个页面组件。
 - Runtime/CLI 可以在缺省情况下回退到 `handoffSource=cli`；UI 聊天必须显式发送 `handoffSource=ui-chat`。
 - 新拆模块必须配套独立测试，优先覆盖 contract、payload normalization 和状态变换，而不是截图或当前案例。
+
+#### T095 验收
+- [x] `generation-gateway.ts` 主入口改为先规范化 request、按 runtime 路由执行、再统一套 verification gate；直接 request normalization 继续由 `src/runtime/gateway/gateway-request.ts` 承担，repair diagnostics 复用 `src/runtime/gateway/repair-policy.ts`。
+- [x] 新增 `src/runtime/gateway/verification-policy.ts` 承载 verification result 写入、高风险门控和 unverified 可见化，避免把验证状态分散在主流程中。
+- [x] 相关 smoke 覆盖 request normalization、verification result 写入和高风险门控；`npm run smoke:runtime-gateway-modules` 与 `npm run typecheck` 通过。
+
+#### T099 / T106 / T107 验收
+- [x] `packages/skills/index.ts` 已瘦身为兼容导出入口，生成 catalog 移到 `packages/skills/catalog.ts`，`tools/generate-skill-catalog.ts` 后续也写入同一结构。
+- [x] skill registry runtime 已拆成 manifest schema、registry loader、availability validation、runtime matching 和 AgentServer fallback 模块；原 `src/runtime/skill-registry.ts` public exports 保持兼容。
+- [x] 新增 `packages/skills/index.test.ts` 覆盖 public export 与 catalog 兼容，保留 smoke skill registry 覆盖可用性和匹配行为。
+- [x] `packages/ui-components/README.md` 明确 interactive artifact views/renderers contract：data schema、visible affordance、object references、events，以及鼠标/键盘/代码交互边界。
+- [x] 文档明确 `ui-components` 不是 action provider，也不是 verifier provider，但可以承载 human verification 事件，由上层 verifier contract 转成 `VerificationResult`。
+- [x] 新增 `packages/interactive-views` 作为非破坏性别名和长期迁移目标，重新导出 `ui-components` manifests/aliases，并用单测确认 registry 兼容层不变。
+- [x] 相关测试已运行：`node --import tsx --test packages/skills/index.test.ts packages/interactive-views/index.test.ts packages/tools/vision-sense.test.ts`、`npm run smoke:skill-registry`、`npm run smoke:scp-skills`、`npm run typecheck` 通过。
 
 ### T093 Agent Handoff 共享 Contract 职责边界优化
 
