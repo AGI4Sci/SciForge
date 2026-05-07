@@ -33,6 +33,7 @@
 - [x] 在 packages README 中加入 `packages/verifiers` 边界和风险驱动验证策略。
 - [x] 在能力集成标准中加入 Verifier 能力类型、broker 选择字段、稳定 Verifier ABI、verification policy 和安全规则。
 - [x] 在 README Runtime 小节补充 UI/CLI 共享 verification contract。
+- [x] 更新项目总文档 `docs/SciForge_Project_Document.md`，同步 ORA-V 闭环、packages/verifiers、UI/CLI 共享 verification contract 和当前实现状态。
 - [x] 在 PROJECT.md 记录 Verify 是必要阶段、provider/强度可选的设计结论。
 
 #### 后续实现 TODO
