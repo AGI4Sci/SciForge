@@ -1,71 +1,175 @@
 # SciForge
 
-SciForge 是面向生命科学研究的 scenario-first AI4Science workbench。
+SciForge is a scenario-first AI4Science workbench for turning messy research questions into auditable scientific artifacts, executable workspace tasks, and reusable skills.
 
-产品形态不再是“一个 agent 对应一个页面”。用户进入一个研究场景，或从内置 Scenario preset 开始，在同一个聊天驱动的 workspace 中工作。Scenario contract 决定：
+Instead of treating every agent response as plain chat, SciForge organizes work around research scenarios: literature evidence review, molecular structure exploration, omics analysis, biomedical knowledge graphs, and custom scenario packages authored by users. Each run can produce structured artifacts, execution units, evidence claims, UI manifests, logs, and recovery diagnostics.
 
-- 用户想完成什么事情
-- 可用的 skill domain 和 seed/workspace skills
-- 预期的 input contract 和 artifact schemas
-- 哪些已注册 UI components 可以渲染结果
-- 真实能力边界和失败状态
+> Status: active research prototype. The project is designed for local workspace-backed experimentation, transparent failure states, and self-evolving skills rather than polished black-box automation.
 
-UI 通过 component registry 渲染结构化 runtime artifacts。LLM 可以通过 JSON 选择 components 和 View Composition 参数，但不能生成任意 UI 代码。
-Workspace-generated tasks 和 evolved skills 也经过同一个 UIManifest composition 层：任务请求的组件和用户编辑的 Scenario 设置可以在 React 渲染 component registry 前重排或替换默认 slots。
+## Why SciForge
 
-SciForge 将扩展能力分为两类：
+- **Scenario-first research workflows**: start from a domain scenario instead of a blank prompt.
+- **Structured scientific artifacts**: reports, evidence matrices, paper lists, graphs, omics tables, figures, execution logs, and notebook timelines.
+- **Auditable execution**: every real task can include `ExecutionUnit` records with code refs, stdout/stderr refs, output refs, runtime profile, and repair history.
+- **AgentServer-backed generation**: normal user-facing reasoning is delegated to the configured agent backend; SciForge handles contracts, routing, persistence, recovery, and display.
+- **Self-evolving skills**: workspace-local task code can be generated, repaired, verified, and later promoted into reusable skill packages.
+- **Component registry UI**: artifacts render through registered scientific components rather than arbitrary generated UI code.
+- **Failure is first-class**: missing inputs, backend errors, context-window pressure, schema failures, and repair hints are preserved for the next turn.
 
-- **Tools**：确定性的 MCP tools、database connectors、workspace runners 和 repair flows。
-- **Skills**：capability contracts、Markdown task knowledge，以及用户确认后沉淀的 evolved workspace skills。`skills/seed` 中的 seed skills 描述能力和 artifact contracts；runtime task code 会在当前 workspace 中生成，之后可经用户确认提升为稳定 skill。
+## Visual Tour
 
-## 仓库结构
-
-- `src/ui/`：React + Vite Scenario workbench。
-- `src/runtime/`：workspace server、runtime gateway、task runner、skill registry 和 shared runtime types。
-- `tests/smoke/`：端到端与 contract smoke scripts。
-- `skills/seed/`：带 `skill.json` 的内置 capability contracts。
-- `skills/installed/scp/`：从 SCP skill library 复制安装的 SCP Markdown skills。
-- `docs/`：产品和架构文档。
-- `docs/templates/scenario.md`：提出新 scenario case 的模板。
-- `workspace/`：默认忽略的 runtime workspace；SciForge 将生成文件写入 `workspace/.sciforge/`。
-
-## 产品模型
-
-核心链路：
+The repository does not currently include final marketing screenshots. These prompts are intentionally placed here so generated images can be added later.
 
 ```text
-scenario.md or built-in preset
-  -> ScenarioSpec
-  -> skill registry / AgentServer-generated workspace task / evolved skill repair
-  -> Artifact + ExecutionUnit + claims + UIManifest
-  -> registered scientific UI components
+IMAGE PROMPT: A crisp product screenshot mockup of SciForge, a dark scientific workbench UI with a left workspace file explorer, center scenario chat, and right structured results panel showing an evidence matrix, execution units, and artifact cards. Style: realistic SaaS app screenshot, subtle teal/coral accents, dense but readable research UI, no fake brand logos, 16:9.
 ```
 
-当前内置 Scenario presets 包括：
+```text
+IMAGE PROMPT: Editorial diagram showing the SciForge workflow: Research Scenario -> AgentServer reasoning -> workspace task code -> artifacts and ExecutionUnits -> registered scientific UI components -> reusable skill promotion. Style: clean technical architecture diagram, white background, precise labels, no cartoon characters.
+```
+
+```text
+IMAGE PROMPT: Scientific artifact gallery for SciForge: paper cards, claim-evidence matrix, molecular 3D structure panel, volcano plot, UMAP plot, knowledge graph, notebook timeline. Style: premium product collage, dark UI panels, high legibility, realistic data visualization shapes, 16:9.
+```
+
+## What You Can Build With It
+
+- Literature evidence reviews with paper lists, claim/evidence maps, conflict tables, and research reports.
+- Structure exploration workflows with molecule viewers, ligand/site summaries, and provenance.
+- Omics differential exploration with volcano plots, heatmaps, UMAPs, tables, and run logs.
+- Biomedical knowledge graph workflows with claims, edges, evidence refs, and update history.
+- Custom scenario packages that combine skills, tools, artifact schemas, UI components, and failure policies.
+
+## Quick Start
+
+Requirements:
+
+- Node.js 20+
+- npm
+- A local workspace directory where SciForge can write `.sciforge/` state
+- Optional but recommended: an AgentServer endpoint for real agent-backed task generation
+
+Install and run the full local app:
+
+```bash
+npm install
+npm run dev
+```
+
+Open:
+
+```text
+http://localhost:5173/
+```
+
+`npm run dev` starts the Vite UI and the workspace runtime used by scenario chat. To run only the UI:
+
+```bash
+npm run dev:ui
+```
+
+If you start the UI separately and still need workspace-backed runs or persisted chat state:
+
+```bash
+npm run workspace:server
+```
+
+## Configure Your Workspace
+
+Open Settings in the app and configure:
+
+- `Workspace Path`: where `.sciforge/` state, task files, logs, artifacts, and scenario packages are stored.
+- `AgentServer Base URL`: the backend used for agent reasoning and task generation.
+- `Agent Backend`: Codex, OpenTeam Agent, Claude Code, Gemini, Hermes, OpenClaw, or another configured backend path.
+- Model provider, base URL, model name, API key, request timeout, and context-window budget.
+
+SciForge writes workspace state under:
+
+```text
+<workspace>/.sciforge/
+```
+
+Common generated paths include:
+
+```text
+<workspace>/.sciforge/workspace-state.json
+<workspace>/.sciforge/sessions/*.json
+<workspace>/.sciforge/artifacts/*.json
+<workspace>/.sciforge/tasks/*
+<workspace>/.sciforge/task-results/*
+<workspace>/.sciforge/logs/*
+<workspace>/.sciforge/scenarios/*
+```
+
+## Core Concepts
+
+### Scenario
+
+A scenario describes the research job, input contract, expected artifact types, available skill domain, UI component policy, and failure behavior. Built-in presets currently include:
 
 - `literature-evidence-review`
 - `structure-exploration`
 - `omics-differential-exploration`
 - `biomedical-knowledge-graph`
 
-它们位于 `src/ui/src/scenarioSpecs.ts`。每个 preset 声明自己的 `skillDomain`、input contract、output artifacts、scope declaration、默认 UIManifest slots 和 component policy。这些 presets 不是独立页面，而是加载到同一个 Scenario workbench 的 contracts。
+Built-in specs live in:
 
-## Scenario Builder 与 Library
+```text
+src/ui/src/scenarioSpecs.ts
+```
 
-SciForge 现在可以编译可组合的 Scenario Packages。在 workbench 中，Scenario Builder 允许用户选择 skills、tools、artifact schemas、UI components 和 failure policies，并预览：
+### Artifact
 
-- `ScenarioIR`
-- `SkillPlan`
-- `UIPlan`
-- validation / quality reports
+Artifacts are structured outputs such as `research-report`, `paper-list`, `evidence-matrix`, `knowledge-graph`, `omics-differential-expression`, or `structure-summary`. They can be rendered by registered UI components and reused in later turns by reference.
 
-Draft 和 published packages 会写入：
+### ExecutionUnit
+
+An `ExecutionUnit` records what actually ran: tool, code ref, input/output refs, stdout/stderr refs, status, runtime profile, route decision, failure reason, recovery hints, and provenance. This is the backbone of reproducibility.
+
+### UIManifest
+
+The UI manifest selects registered components for artifacts. The agent can request views, but rendering stays inside the known component registry. Unknown components fall back to an inspector instead of executing arbitrary UI code.
+
+### Skill
+
+Skills are capability contracts and task knowledge. SciForge can generate workspace-local task code for a run, repair it, validate it, and later promote stable behavior into reusable skills after user confirmation.
+
+## Typical Workflow
+
+1. Pick a scenario or create a scenario package.
+2. Ask a research question in the chat.
+3. SciForge builds a compact handoff with scenario, artifacts, refs, selected tools, and runtime policy.
+4. AgentServer reasons about the request and either returns a direct structured answer or generates workspace task files.
+5. SciForge runs the task, validates the payload, persists artifacts/logs/refs, and renders results.
+6. If something fails, the failure reason and recovery context are saved for the next turn.
+7. Successful reusable behavior can be promoted into a skill/package candidate.
+
+## Repository Layout
+
+```text
+src/ui/                  React + Vite workbench
+src/runtime/             Workspace server, gateway, task runner, skill registry
+src/runtime/gateway/     Runtime gateway modules for payloads, context, diagnostics, repair
+src/shared/              Shared contracts for handoff, verification, capabilities
+packages/                Design system, tools, object refs, UI components, skills
+tests/smoke/             Smoke tests and contract checks
+tests/deep/              Longer regression workflows
+docs/                    Product, architecture, authoring, and test artifacts
+workspace/               Default local runtime workspace, ignored by git
+PROJECT.md               Living task board and engineering principles
+```
+
+## Scenario Builder And Library
+
+SciForge can compile scenario packages from selected skills, tools, artifact schemas, UI components, validation gates, and failure policies.
+
+Published packages are written to:
 
 ```text
 <workspace>/.sciforge/scenarios/<scenario-id>/
 ```
 
-拆分后的 package 文件包括：
+Package files include:
 
 ```text
 scenario.json
@@ -78,88 +182,47 @@ versions.json
 package.json
 ```
 
-Dashboard Scenario Library 会列出 workspace packages，并支持打开、复制和归档流程。Published runs 会保留 `scenarioPackageRef`、`skillPlanRef`、`uiPlanRef`、runtime profile 和 route decision，因此 package 变化后旧结果仍可复现。
-
-编写参考位于 `docs/ScenarioPackageAuthoring.md`；最小 fixture 位于 `docs/examples/workspace-scenario/`。
-
-## 运行 UI
-
-```bash
-npm install
-npm run dev
-```
-
-打开：
+Authoring guide:
 
 ```text
-http://localhost:5173/
+docs/ScenarioPackageAuthoring.md
 ```
 
-`npm run dev` 会同时启动 Vite UI 和 scenario chat 使用的 workspace runtime。若只运行 UI，使用：
-
-```bash
-npm run dev:ui
-```
-
-如果你单独启动了 UI，并且需要 workspace-backed runs 或持久化聊天记录，还需要启动：
-
-```bash
-npm run workspace:server
-```
-
-当前选中的 workspace 可在 Resource Explorer 或 Settings 对话框中配置。SciForge 会将结构化状态写入：
+Example package:
 
 ```text
-<workspace>/.sciforge/
+docs/examples/workspace-scenario/
 ```
 
-默认情况下，本仓库指向：
+## Runtime Architecture
 
 ```text
-./workspace/
+Scenario / prompt / workspace refs
+  -> SciForge gateway contract normalization
+  -> AgentServer reasoning or workspace task generation
+  -> task execution / repair / validation
+  -> ToolPayload
+  -> artifacts + ExecutionUnits + claims + UIManifest
+  -> registered scientific UI components
 ```
 
-## Runtime
-
-UI 聊天和 CLI/终端执行应共享同一套 Agent handoff contract。当前共享 contract 位于：
-
-```text
-src/shared/agentHandoff.ts
-```
-
-UI 聊天发送 `handoffSource=ui-chat`；终端/CLI 执行默认使用 `handoffSource=cli`。两条路径应复用相同的 scenario、skill-domain、artifact、reference、sense、action、verification 和 failure contract，只在呈现方式上不同：UI 使用 React components，CLI 使用紧凑日志、JSON 或 Markdown。
-
-共享边界和后续修改规则见 [`docs/CLI_UI_Shared_Agent_Usage.md`](docs/CLI_UI_Shared_Agent_Usage.md)。
-
-Workbench 会先调用 SciForge workspace runtime：
+Key endpoints during local development:
 
 ```text
 POST http://127.0.0.1:5174/api/sciforge/tools/run
-```
-
-请求以 scenario 为入口：UI 发送 `scenarioId` 和 scenario 内部的 `skillDomain`。Runtime 使用 skill domain 匹配 seed capability contracts、workspace/evolved skills 和已安装的 Markdown skills。Seed 和 Markdown skills 不指向固定源码脚本；需要执行时，SciForge 会请求 AgentServer 生成或修复 workspace-local task code。
-
-如果没有已验证的本地 skill 能满足请求，runtime 可以请求 AgentServer 生成或修复 workspace-local task code：
-
-```text
 POST http://127.0.0.1:18080/api/agent-server/runs
-```
-
-UI 也可以直接使用 AgentServer 作为结构化聊天响应的 fallback：
-
-```text
 POST http://127.0.0.1:18080/api/agent-server/runs/stream
 ```
 
-如果 workspace runtime 和 AgentServer 都不可用，SciForge 会记录用户消息并显示明确的连接错误，不会合成用于驱动图表的 demo artifacts。
+If the workspace runtime or AgentServer is unavailable, SciForge records the user message and shows a real connection error. It does not fabricate demo artifacts to make a failed run look successful.
 
-## 结构化输出契约
+## Structured Response Shape
 
-Scenario 响应可以同时包含自然语言和结构化 JSON：
+SciForge task responses are normalized into a `ToolPayload`:
 
 ```json
 {
-  "message": "...",
+  "message": "Short user-facing summary",
   "confidence": 0.86,
   "claimType": "inference",
   "evidenceLevel": "database",
@@ -170,36 +233,87 @@ Scenario 响应可以同时包含自然语言和结构化 JSON：
 }
 ```
 
-`uiManifest` 只能引用已注册组件，例如 `molecule-viewer`、`paper-card-list`、`volcano-plot`、`heatmap-viewer`、`umap-viewer`、`network-graph`、`data-table`、`evidence-matrix`、`execution-unit-table`、`notebook-timeline` 或 `unknown-artifact-inspector`。
+Common registered components include:
 
-未知组件会回退到 `UnknownArtifactInspector`；生成式 UI plugins 默认禁用，使用前必须经过 sandbox 隔离。
+- `report-viewer`
+- `paper-card-list`
+- `evidence-matrix`
+- `execution-unit-table`
+- `notebook-timeline`
+- `network-graph`
+- `molecule-viewer`
+- `volcano-plot`
+- `heatmap-viewer`
+- `umap-viewer`
+- `data-table`
+- `unknown-artifact-inspector`
 
-对于 workspace-backed runs，SciForge 会结合当前任务 prompt 和可编辑 Scenario 设置规范化返回的 `uiManifest`。这样 generated/evolved skills 可以保持稳定，同时仍允许用户用类似“只显示 data table + evidence matrix + execution unit”或“UMAP colorBy cellCycle splitBy batch”的 prompt，让同一 artifact 生成不同格式的 JSON manifest。
+## Development
 
-## Workspace 记录
+Run the main checks:
 
-聊天状态存储在 localStorage 中；当 workspace writer 可用时，会同步镜像到 workspace：
-
-```text
-workspace/.sciforge/workspace-state.json
-workspace/.sciforge/sessions/*.json
-workspace/.sciforge/artifacts/*.json
-workspace/.sciforge/versions/*.json
-workspace/.sciforge/config.json
+```bash
+npm run typecheck
+npm run test
+npm run smoke:all
+npm run build
 ```
 
-状态模型按 Scenario 保存 sessions、archived sessions、artifacts、ExecutionUnits、alignment contracts、timeline records，以及 collaboration/export policy 字段。
-
-## 验证
+Full fast verification:
 
 ```bash
 npm run verify
 ```
 
-`npm run verify` 会运行 typecheck、unit tests、smoke checks 和 production build。日常开发中可以使用：
+Long-file governance:
+
+```bash
+npm run smoke:long-file-budget
+```
+
+Runtime gateway focused smoke:
+
+```bash
+npm run smoke:runtime-gateway-modules
+```
+
+## Engineering Principles
+
+The short version:
+
+- Normal user requests should be handled by the configured agent backend, not preset local templates.
+- Real work should produce artifacts, logs, refs, and execution units.
+- Failures must preserve enough context for repair.
+- Long files must be split by responsibility, not by mechanical `part1` / `part2` chunks.
+- Generated files need explicit exemptions.
+- Scenario contracts, artifact schemas, and UI components should remain reusable across domains.
+
+The living task board and stricter project rules are in:
+
+```text
+PROJECT.md
+```
+
+## Contributing
+
+Good first contributions:
+
+- Add or improve scenario package examples.
+- Add fixtures for scientific artifact rendering.
+- Improve smoke coverage for runtime contracts.
+- Add documentation for a specific skill or package.
+- Split remaining watch-list files before they cross long-file thresholds.
+
+Before opening a PR, run:
 
 ```bash
 npm run typecheck
 npm run test
-npm run build
+npm run smoke:long-file-budget
 ```
+
+For UI-heavy changes, also run the app locally and inspect the affected scenario/results view.
+
+## License
+
+License information has not yet been finalized in this repository. Add a `LICENSE` file before distributing SciForge as a packaged product or dependency.

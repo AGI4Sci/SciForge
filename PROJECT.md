@@ -20,386 +20,43 @@
 
 ## 任务板
 
-### 当前治理任务索引
 
-- 任务板按倒序维护：最新任务组放在顶部，历史任务组向下沉淀。
-- T121-T136 长文件模块化与冗余逻辑治理见下方 `### T121 长文件模块化后续路线图`。该段记录当前长文件阈值、自动触发原则、已完成治理项和后续 TODO。
-- 当前已完成：T121-T136。
-- 当前待推进：暂无 T121-T136 未完成项；后续若长文件跨阈值继续按 watch list 触发新任务。
-- T131 是生成文件豁免说明，不手动拆分；`packages/skills/catalog.ts` 只能由生成器维护。
+### T088 长文件语义模块化治理
 
-### T121 长文件模块化后续路线图
+状态：已完成。本任务承接 PROJECT.md 的代码膨胀治理原则：源码文件超过 1000 行进入 watch list；超过 1500 行必须有模块化拆分任务、语义 part 计划或生成文件豁免；超过 2000 行优先拆分；超过 3000 行视为维护风险。拆分必须按职责命名，不能机械拆成 `part1/part2`；如果短期无法完全解耦，也要先拆出有语义的文件并保持主入口只做流程编排。本轮已完成三个 blocker 文件的语义拆分，所有非生成源码主文件均低于 1500 行。
 
-状态：进行中。目标是在 T094-T120 已完成的基础上继续处理超长文件，但只按真实职责边界拆分，不为了行数制造碎片。主入口文件应保留流程编排，纯 contract、诊断、状态变换、payload 规范化、adapter 交互和 UI 子视图应进入可单测模块。
+#### 当前超阈值文件
+- `src/runtime/generation-gateway.ts`：已从约 4213 行降到约 1412 行；AgentServer context window、prompt/config、direct answer payload、payload validation、artifact reference context 和 run output parsing 已拆到 `src/runtime/gateway/*` 语义模块。
+- `src/ui/src/app/SciForgeApp.tsx`：已从约 2332 行降到约 1363 行；`Sidebar`、`TopBar`、`SettingsDialog` 已拆到 `src/ui/src/app/appShell/ShellPanels.tsx`。
+- `src/ui/src/app/ResultsRenderer.tsx`：已从约 2254 行降到约 1438 行；workspace object preview 已拆到 `src/ui/src/app/results/WorkspaceObjectPreview.tsx`，execution/evidence/notebook 面板已拆到 `src/ui/src/app/results/ExecutionNotebookPanels.tsx`。
+- `packages/skills/catalog.ts`：约 6855 行，属于生成 skill catalog，维持 `tools/check-long-file-budget.ts` 中的 generated-file exemption，不手工拆分。
 
-#### 拆分原则
-- 单一真相源：发现同一规则在 runtime、UI、scenario-core 或 tests 中重复维护时，保留更通用的一条，旧链路改为兼容调用或删除。
-- 主入口只编排：`generation-gateway.ts`、`ResultsRenderer.tsx`、`ChatPanel.tsx` 这类入口不再承载可复用业务规则。
-- 模块边界按职责命名：使用 `gateway/backend-failure-diagnostics`、`gateway/context-envelope`、`app/results/*`、`app/chat/*` 等领域名，不新增杂物型 `utils`。
-- 每次拆分必须有验证：至少跑 `npm run typecheck` 和相关 smoke/focused tests；影响共享 contract 时跑全量 `npm run test`。
-- 保持兼容层：对外 import、component id、handoff/request/verification contract 不因内部拆分破坏。
-- 自动触发：任何 PR/任务让非生成源码文件跨过 1500 行阈值时，必须同步执行三选一：完成一轮职责拆分、删除/合并冗余逻辑、或在本节新增明确拆分 TODO 并说明为何暂缓。
-
-#### 文件长度阈值
-- 800 行以下：一般不因行数拆分，除非职责明显混杂。
-- 1000 行以上：进入 watch list；后续改动时优先观察是否能抽出纯函数或子组件。
-- 1500 行以上：必须在 PROJECT.md 有明确拆分任务、语义 part 计划或生成文件豁免。
-- 2000 行以上：优先拆分；入口文件只保留流程编排。
-- 3000 行以上：视为维护风险，优先拆出可测试模块或语义 part 文件。
+#### Watch list
+- `src/ui/src/styles/app-04.css`：约 2130 行，已采用 app style 分片，但仍需继续按页面/组件职责收缩。
+- `src/ui/src/styles/app-05.css`：约 1708 行，已采用 app style 分片，但仍需继续按页面/组件职责收缩。
+- `src/ui/src/app/ChatPanel.tsx`：约 1453 行，接近强制任务阈值，后续新增逻辑前应先抽出 composer、run status、handoff/trace 子模块。
+- `src/ui/src/styles/app-03.css`：约 1389 行，继续 watch。
+- `src/runtime/workspace-server.ts`：约 1372 行，继续 watch，后续 server route 增长应抽 route/diagnostics 模块。
+- `src/ui/src/api/sciforgeToolsClient.test.ts`：约 1320 行，继续 watch，后续按 runtime events、workspace files、task attempts、artifact IO 分测试文件。
+- `src/ui/src/styles/app-01.css`：约 1165 行，继续 watch。
+- `tools/longform-regression.ts`：约 1133 行，继续 watch，后续按 prepare/status/validation/reporting 拆工具模块。
+- `tests/smoke/smoke-vision-sense-runtime-bridge.ts`：约 1078 行，继续 watch，后续按 contract fixtures、runtime bridge、trace validation 拆测试 helper。
+- `tests/smoke/smoke-browser-workflows.ts`：约 1073 行，继续 watch，后续按 browser harness、reference workflows、assertions 拆 helper。
+- `src/ui/src/app/Dashboard.tsx`：约 1002 行，继续 watch，新增 dashboard 逻辑前先抽 panel/section 子组件。
 
 #### TODO
-- [x] T121：继续瘦身 `src/runtime/generation-gateway.ts` 的 backend failure / rate-limit / context-window 诊断逻辑，抽到 `src/runtime/gateway/backend-failure-diagnostics.ts`。验收：错误分类、retry-after 解析、脱敏、rate-limit 恢复建议、context-window 判定均由新模块承载；主 gateway 只调用诊断结果；`smoke:runtime-gateway-modules` 覆盖分类和脱敏。
-- [x] T122：继续瘦身 `src/runtime/generation-gateway.ts` 的 AgentServer workspace event normalization，把 token usage、rate-limit、context-window state、context compaction event 归一化抽到 `src/runtime/gateway/workspace-event-normalizer.ts`，并保留当前 UI 可见事件语义。验收：`generation-gateway.ts` 调用 workspace event normalizer，`smoke:runtime-gateway-modules` 覆盖 token usage、rate-limit、context-window 和 compaction 归一化。
-- [x] T123：继续瘦身 `src/runtime/generation-gateway.ts` 的 generated task execution / validation path，把 taskFiles 写入、workspace run、payload validate/materialize 和 attempt history 串联下沉到 `src/runtime/gateway/generated-task-runner.ts`。验收：主 gateway 通过 `runAgentServerGeneratedTask` 兼容入口串联 generated task runner；runtime gateway modules smoke 覆盖 task file、payload validate/materialize 和 attempt history。
-- [x] T124：继续瘦身 `ResultsRenderer.tsx`，把 artifact data coercion、preview descriptor 决策和 object reference extraction 下沉到 `src/ui/src/app/results/*` 或 workspace artifact 模块；组件入口只负责组合视图。验收：artifact data、preview descriptor、view plan 和 report content 已拆到 `src/ui/src/app/results/*`，object reference 解析复用 package/shared reference helpers，入口保留组合视图和交互绑定。
-- [x] T125：继续瘦身 `ChatPanel.tsx`，把 session mutation、archive mutation、composer draft/reference 状态机下沉到纯函数模块，并补独立测试。验收：session transforms、composer references、archive/message list/composer/header 子组件已拆出，并有独立测试覆盖 session 与 composer 状态变换。
-- [x] T126：补充文件长度预算 smoke，列出超过 1500 行的入口文件并要求 PROJECT.md 中有对应拆分任务或明确生成文件豁免。验收：新增 `tools/check-long-file-budget.ts` 和 `npm run smoke:long-file-budget`；`verify:fast` 已串联该 smoke。
-- [x] T127：拆分 `src/runtime/vision-sense/computer-use-bridge.ts`。验收：已拆为 `computer-use-plan.ts`、`computer-use-window-session.ts`、`computer-use-action-loop.ts`、`computer-use-trace-output.ts` 等语义模块，bridge 入口负责串联窗口绑定、计划、动作循环和 trace；`smoke:vision-sense-runtime` 通过。
-- [x] T128：拆分 `tools/computer-use-long-task-pool.ts`。验收：入口脚本保持 11 行薄 CLI/compat facade；实现已按职责拆为 `contracts.ts`、`task-pool.ts`、`trace-contract.ts`、`run-core.ts`、`matrix-core.ts`、`support.ts` 和 CLI/facade 文件；`internal.ts` 保留 5 行兼容 re-export；所有 T128 子文件均低于 1000 行，`smoke:computer-use-long` 与 `smoke:long-file-budget` 通过。
-- [x] T129：拆分 `src/ui/src/app/SciForgeApp.tsx`。验收：workspace state mutation、timeline append、artifact handoff transition、routing/page selection 已下沉到 `src/ui/src/workspace/*` 和 `src/ui/src/app/appShell/*`，并补 appShell/workspace focused tests；入口仍较长，后续继续按 UI 区块治理但本轮职责拆分完成。
-- [x] T130：拆分 `src/ui/src/api/agentClient.ts`。验收：public API 入口已缩为兼容导出，streaming transport、response normalization、context compaction、semantic validation、run client 和 request payload 已拆到 `src/ui/src/api/agentClient/*`。
-- [x] T131：`packages/skills/catalog.ts` 是生成文件，由 `tools/generate-skill-catalog.ts` 维护；不手动拆分，但生成器必须继续输出稳定 public catalog，`packages/skills/index.ts` 保持薄兼容入口。验收：`smoke:long-file-budget` 以 generated catalog 豁免该文件，`packages/skills/index.ts` 保持薄兼容入口。
-- [x] T132：治理 `src/ui/src/app/ChatPanel.tsx` 的消息展示职责，把 Markdown block/inline 渲染和 inline object reference 解析抽到 `src/ui/src/app/chat/MessageContent.tsx`。验收：ChatPanel 不再内联消息 Markdown 解析器；MessageContent 模块独立承载消息内容渲染、引用 linkify 和 inline token 解析；类型检查通过。
-- [x] T133：继续治理 `src/ui/src/app/ChatPanel.tsx` 的运行编排职责，把 `runPrompt` 的 preflight context compaction、backend fallback、acceptance repair、失败 run 记录拆成 `chat/runOrchestrator` 或等价语义模块，保留 ChatPanel 只负责 UI 状态和事件绑定。验收：`src/ui/src/app/chat/runOrchestrator.ts` 承载 preflight compaction、backend fallback、acceptance repair 和 failed run response；ChatPanel 只调用 orchestrator 并合并 UI 状态。
-- [x] T134：继续治理 `src/ui/src/app/ResultsRenderer.tsx` 的 view-plan 决策职责，把 `resolveViewPlan`、binding validation、presentation dedupe 和 focus-mode 过滤拆成 `results/viewPlanResolver.ts`。验收：`resolveViewPlan`、focus-mode items、hidden slot filtering 和 view plan helper 已由 `results/viewPlanResolver.ts` 承载。
-- [x] T135：继续治理 `src/ui/src/app/ResultsRenderer.tsx` 的 report coercion/Markdown 展示职责，把 `coerceReportPayload`、report ref 提取、structured payload 转 Markdown 和 inline object reference button hydration 拆到 `results/reportContent.tsx`。验收：`coerceReportPayload`、report ref 提取、structured payload 转 Markdown、MarkdownBlock 和 inline object reference hydration 已拆到 `results/reportContent.tsx`，ResultsRenderer 保留兼容导出。
-- [x] T136：watch list 治理：`src/runtime/workspace-server.ts`、`src/ui/src/api/sciforgeToolsClient.ts`、`src/ui/src/app/Dashboard.tsx` 到 1500 行前优先抽模块；如果后续任务让它们跨过 1500 行，必须同步新增拆分 TODO 或完成拆分。验收：当前三者分别约 1372、922、1002 行，均低于 1500；watch list 继续保留，后续跨阈值时必须新增拆分 TODO 或完成拆分。
-
-#### 当前验收
-- [x] 已新增 `src/runtime/gateway/backend-failure-diagnostics.ts`，并从 `generation-gateway.ts` 删除重复的 backend failure 类型、分类、retry-after 解析、脱敏和恢复建议实现。
-- [x] 已在 `tests/smoke/smoke-runtime-gateway-modules.ts` 覆盖 backend failure 分类、retry-after 解析和 secret redaction。
-- [x] 已运行 `npm run typecheck` 通过；后续继续运行 smoke/test/build 校准。
-- [x] 已运行 `npm run smoke:long-file-budget`，当前超过 1500 行的非生成长文件均在 PROJECT.md 有拆分任务覆盖。
-- [x] 已新增 `src/ui/src/app/chat/MessageContent.tsx`，并继续把运行编排拆到 `runOrchestrator.ts`；`ChatPanel.tsx` 当前约 1453 行，T133 已完成。
-- [x] T122/T123 最终校准：`workspace-event-normalizer.ts` 与 `generated-task-runner.ts` 已接入 `generation-gateway.ts`，`smoke:runtime-gateway-modules` 通过。
-- [x] T124/T134/T135 最终校准：`ResultsRenderer.tsx` 保留 public 兼容导出，artifact data、preview descriptor、view plan、report content 和 inline reference hydration 已拆到 `src/ui/src/app/results/*`；focused tests 和全量测试通过。
-- [x] T125/T133 最终校准：`ChatPanel.tsx` 当前 1453 行，session/composer/run orchestration 已拆到 `src/ui/src/app/chat/*`，focused tests 和全量测试通过。
-- [x] T127 最终校准：vision computer-use bridge 已按 window session、plan、action loop 和 trace output 拆分，相关 smoke 通过。
-- [x] T128 最终校准：Computer Use long task pool 已按 typed contracts、task-pool loader/prepare、trace contract validator、run executor、matrix/preflight/report/repair plan 和 shared support 拆分；`internal.ts` 仅保留兼容导出，相关 smoke 通过。
-- [x] T129/T130 最终校准：SciForgeApp 的 workspace/appShell 职责拆分和 agentClient 薄兼容入口已完成，focused tests 和全量验证通过。
-- [x] T131 最终校准：`packages/skills/catalog.ts` 保持生成文件豁免，未手动拆分。
-- [x] T136 最终校准：watch list 文件未跨 1500 行，已记录继续治理原则。
-
-### T111 Verify / Reward Feedback 闭环规划
-
-状态：已完成。本任务只做文档和 TODO 规划，不修改功能代码。目标是把 Verify 明确为 ReAct/ORA 闭环的必要阶段，同时允许 verifier provider 和验证强度按风险选择。Verify 不只是布尔校验，也可以提供 reward、critique、evidence refs 和 repair hints，帮助下一轮 Reason/Action 改进。
-
-#### 设计结论
-- Verify 是闭环必要阶段：每个 run 都必须有 verification policy。
-- Verifier provider 是可选择环境：可以是人类、其它 agent、规则/schema/test、环境观察、simulator 或 reward model。
-- 验证强度按风险决定：低风险草稿可以轻量验证或显式 `unverified`；高风险动作、科研结论、外部副作用、发布、删除、支付、授权必须强验证或请求人类确认。
-- `unverified` 不是成功状态，只是策略允许的临时状态；对外呈现时必须可见。
-- `ui-components` 可以承载 human verification 交互，但它们本身仍是 interactive views，不是 verifier provider；真正的 verifier contract 应落在 `packages/verifiers`。
-
-#### 已完成 TODO
-- [x] 在 CLI/UI 共享说明中把 Observe/Reason/Action 扩展为 Observe/Reason/Action/Verify 闭环。
-- [x] 在 packages README 中加入 `packages/verifiers` 边界和风险驱动验证策略。
-- [x] 在能力集成标准中加入 Verifier 能力类型、broker 选择字段、稳定 Verifier ABI、verification policy 和安全规则。
-- [x] 在 README Runtime 小节补充 UI/CLI 共享 verification contract。
-- [x] 更新项目总文档 `docs/SciForge_Project_Document.md`，同步 ORA-V 闭环、packages/verifiers、UI/CLI 共享 verification contract 和当前实现状态。
-- [x] 在 PROJECT.md 记录 Verify 是必要阶段、provider/强度可选的设计结论。
-
-#### 后续实现 TODO
-- [x] T112：定义共享 `VerificationPolicy` 与 `VerificationResult` contract，放入 `src/shared` 或 runtime contract 包，供 UI/CLI/runtime 共用。验收：`src/shared/verification.ts` 已定义共享策略、结果、Verifier capability brief、normalize/build helper；`pass/fail/uncertain/needs-human/unverified` 均有单测覆盖，且 `unverified` 通过 `isVerificationSuccess` 明确不是成功状态。
-- [x] T113：建立 `packages/verifiers/` 目录和 verifier provider manifest，支持 human、agent、schema/test、environment 和 simulator/reward model 类型。
-- [x] T114：让 Capability Broker 根据 riskLevel、artifact type、action side effects 和用户显式要求选择 verifier，并生成紧凑 verification brief。验收：新增共享 capability broker 会生成 `verificationBrief` / `verificationPolicy`；高风险 action 默认要求 verifier 或 human approval；低风险草稿可 `unverified`，但必须记录原因；新增单测覆盖 verifier 选择策略。
-- [x] T115：让 UI 聊天和 CLI request builder 都能表达 selected verifiers、verification policy、human approval policy 和 `unverified` 原因。验收：共享 `agentHandoffPayload` builder、UI `scenarioOverride` 和 runtime `GatewayRequest` 均支持 selected verifiers、verification policy、human approval policy 与 `unverifiedReason`；UI 显式 `handoffSource=ui-chat`，CLI builder 缺省为 `cli`。
-- [x] T116：为 workspace runtime 增加验证结果写入：每个 run 的 final artifact、trace 和 ExecutionUnit 都能引用 verification result。
-- [x] T117：为高风险 action 建立强制验证门槛：action provider 自报成功不能直接结束，必须有 verifier 或 human approval。
-- [x] T118：为人类验证设计 interactive view 事件契约：accept、reject、revise、score、comment 都转换成标准 VerificationResult。验收：`src/shared/verification.ts` 定义 human interactive event 到标准 `VerificationResult` 的转换，保留 ui-components/interactive view 只承载事件、不成为 verifier provider；新增单测覆盖 accept/reject/revise/score/comment 映射。
-- [x] T119：为 agent verifier 设计 rubric contract，允许其它 agent 基于目标、artifact refs 和 trace refs 给出 critique/reward/repair hints。验收：新增 `src/shared/verifiers/agentRubric.ts` 稳定 contract、`packages/verifiers/agent-rubric/fixture.ts` fixture 和 mock provider；单测覆盖 pass、缺 trace refs repair hints 与 reward/verdict 输出。
-- [x] T120：补充端到端 fixture，验证同一任务在 UI 和 CLI 中能进入同一 verification policy，并把 verification result 带入下一轮上下文。验收：`src/shared/agentHandoffPayload.test.ts` 覆盖 UI/CLI 同配置进入同一 `verificationPolicy`，并验证 `verificationResult` / `recentVerificationResults` 出现在下一轮 context envelope。
+- [x] 拆分 `src/runtime/generation-gateway.ts`：保留 gateway 主入口只做 request orchestration；抽出 AgentServer request/response adapter、context compaction/handoff builder、artifact normalization、backend failure recovery、acceptance repair rerun、stream event translation 和 diagnostics 子模块。当前已拆出 `agentserver-context-window.ts`、`agentserver-prompts.ts`、`direct-answer-payload.ts`、`payload-validation.ts`、`artifact-reference-context.ts` 和 `agentserver-run-output.ts`；`npm run smoke:runtime-gateway-modules` 通过。
+- [x] 拆分 `src/ui/src/app/SciForgeApp.tsx`：保留 App shell 只做顶层状态组装和路由；抽出 workspace/session state hooks、Scenario Builder wiring、runtime settings panel、context window meter、tool/skill selection、run lifecycle controls 和 layout/navigation 子组件。当前已抽出 app shell panels，主文件降到 1500 行以下；`npm run typecheck -- --pretty false` 通过。
+- [x] 拆分 `src/ui/src/app/ResultsRenderer.tsx`：保留 renderer 主入口只做 artifact/view dispatch；抽出 execution unit renderer、artifact card renderer、trace/vision preview、failure diagnostics、research artifact views、table/graph/chart previews 和 reusable result shell。当前已抽出 workspace object preview、uploaded data URL preview、evidence matrix、execution panel 和 notebook timeline，主文件降到 1500 行以下；`npm run typecheck -- --pretty false` 通过。
+- [x] 复查现有 CSS 分片：`src/ui/src/styles/app-01.css` 到 `app-06.css` 不能只是体积切片，后续应逐步迁移为按 app shell、chat panel、results renderer、scenario builder、dashboard、shared controls 命名的语义样式文件；当前记录为 watch list，后续触碰样式大块时按语义文件名迁移并配 browser smoke。
+- [x] 对 `src/ui/src/app/ChatPanel.tsx`、`src/runtime/workspace-server.ts`、`tools/longform-regression.ts` 和大型 smoke/test 文件建立后续拆分任务；当前均低于 1500 行并记录在 watch list，任何新增功能若让它们越过 1500 行，必须先补 PROJECT.md 任务或同步抽模块。
+- [x] 运行 `npm run smoke:long-file-budget` 并保持通过；后续每次新增超过阈值的源码文件，都必须在 PROJECT.md 记录语义拆分计划或在 `tools/check-long-file-budget.ts` 中给出明确生成文件豁免。
 
 #### 验收
-- [x] 文档明确回答：Verify 是必要闭环阶段，verifier provider 和强度可选。
-- [x] 文档明确 verifier 与 action、sense、interactive view 的职责边界。
-- [x] 后续实现任务已按共享 contract、provider registry、broker、UI/CLI、runtime 和测试拆分。
-- [x] 当前阶段未修改功能代码，只更新设计文档和 PROJECT.md 任务管理。
-- [x] T116 验收：runtime final payload 会写入 `.sciforge/verifications/*.json`，并在 verification-result artifact、reasoningTrace、ExecutionUnit `verificationRef`、objectReferences 和下一轮 context envelope 中暴露；`unverified` 以可见结果保留，不当作 pass。
-- [x] T117 验收：高风险 action 若只有 action provider 自报成功且缺少 passing verifier 或明确 human approval，会被降级为 `needs-human` 或 failed-with-reason，并写入结构化 failureReason、requiredInputs、recoverActions 和 verification result。
-- [x] T113 验收：已新增 `packages/verifiers/README.md`、`verifier-provider.manifest.schema.json`、schema/test 示例 manifest 和 human approval fixture；schema 枚举覆盖 human、agent、schema-test、environment、simulator-reward-model 类型。
-
-### T101 CLI/UI 共享 Agent 文档与 Observe-Reasoning-Action 组织规划
-
-状态：已完成。本任务只做文档和 TODO 规划，不修改功能代码。目标是把 UI 聊天、CLI/终端执行、senses、actions、verifiers、interactive views 的公共边界说清楚，并把后续改动原则沉淀为可执行任务，确保未来新增能力时优先复用同一套共享 contract，而不是分别给 UI 和 CLI 写两套逻辑。
-
-#### 原则落地
-- 单一职责：文档把 UI 呈现、CLI 命令、agent handoff、senses、actions、verifiers、interactive views 分成独立职责。
-- 按职责拆分：packages 长期按 observe、reasoning、action、verify 和 interactive views 组织，而不是按当前目录偶然形态组织。
-- 主流程清晰：UI/CLI 都收敛到共享 Agent handoff contract，再由 AgentServer 或 workspace runtime 执行。
-- 接口明确：senses 统一为 `instruction + 其它模态 -> text-response`；actions 统一声明 action schema、安全闸门、trace 和 verifier。
-- 减少耦合：`ui-components` 不放进 `actions`，而是作为可被用户或 agent 操作的 interactive artifact views。
-- 配置集中：跨 UI/CLI/runtime 的公共字段继续放进 `src/shared/*`，不散落到页面组件或 CLI 私有实现。
-- 谨慎使用 utils：共享能力按 `agentHandoff`、`senses`、`actions`、`interactive views` 等领域命名，不新增杂物型工具箱。
-- 函数保持短小：后续实现任务要求入口只串联流程，具体 request builder、sense orchestration、action orchestration 下沉到独立模块。
-- 命名表达意图：保留 `ui-components` 兼容现有 registry，同时把更准确的概念命名为 `interactive views/renderers`。
-- 稳定对外接口：目录迁移需保留兼容导出和迁移说明，不能破坏现有 package registry。
-- 避免过度设计：先明确边界和 contract，再逐步迁移，不为了目录好看而移动代码。
-- 方便测试复用：后续每个共享 contract 和 provider registry 变更都应有独立单测覆盖。
-
-#### 已完成 TODO
-- [x] 新增 CLI 与 UI 共享 Agent 使用说明，说明公共 handoff contract、UI/CLI 边界和失败恢复原则。
-- [x] 在 README Runtime 小节补充 UI/CLI 共享 contract 的中文说明和文档入口。
-- [x] 在 packages README 说明 `senses`、`actions`、`ui-components` 的职责边界。
-- [x] 在 vision-sense README 说明 sense 的输入输出边界，以及主 agent 可主动、多次调用同一 sense。
-- [x] 在 computer-use README 说明它是 action provider，不是 sense，并记录后续迁移目标 `packages/actions/computer-use`。
-- [x] 在 PROJECT.md 记录后续修改原则和待办，当前阶段只列任务，不改功能代码。
-
-#### 后续实现 TODO
-- [x] T102：定义统一 Sense Provider contract，包含 capability brief、输入模态、`instruction + modalities -> text-response` 输出格式、失败模式、成本/延迟和多次调用预期。验收：`src/shared/senseProvider.ts` 已提供跨 UI/CLI/runtime 可复用的 pure TypeScript contract、normalize/build helper、安全/隐私边界、成本/延迟与重复调用策略；新增独立单测覆盖 capability brief、请求构造、模态规范化和响应规范化。
-- [x] T103：为主 agent 增加通用 sense orchestration 规则，使其可根据任务主动选择、组合和多次调用 senses，并把调用记录写入可追踪 refs。验收：新增 `src/shared/senseOrchestration.ts`，支持按 provider contract 选择 sense、同一图片多 instruction 多次调用、每次调用生成稳定 `callRef`/`traceRef` 记录和紧凑 trace refs；单测覆盖多次调用记录与 provider 缺失失败记录。
-- [x] T104：建立 `packages/actions/` 目录和 action provider manifest，明确 action schema、环境目标、安全闸门、确认规则、trace contract、verifier contract 和失败模式。
-- [x] T105：将 `packages/computer-use` 逐步迁移到 `packages/actions/computer-use`，迁移期间保留兼容导出、旧路径说明和测试入口。
-- [x] T106：明确 `packages/ui-components` 作为 interactive artifact views/renderers 的 contract，声明数据 schema、可见 affordance、对象引用、事件和鼠标/键盘/代码交互边界。
-- [x] T107：评估是否引入 `packages/interactive-views` 作为别名或迁移目标；若迁移，必须保留 `packages/ui-components` registry 兼容层。
-- [x] T108：让 UI 聊天和 CLI 的 request builder 共享 selected senses、selected actions、selected verifiers、artifact policy、reference policy 和 failure-recovery 字段。验收：新增共享 handoff payload builder 支持 selected senses/actions/verifiers、artifact/reference/failure-recovery policies；UI client 只收集当前轮摘要并调用 builder，runtime normalize 与 context envelope 保留同一字段语义。
-- [x] T109：补充 capability registry，使 agent 能按 observe/reasoning/action/verify/interactive-view 类别读取紧凑能力摘要，并只懒加载被选中的详细契约。验收：新增共享 capability registry / broker；agent handoff 中暴露紧凑 `capabilityBrief`，按 sense/action/verifier/interactive-view 等职责分类；registry `listBriefs` 只返回 brief，`loadContract` 只在选中 capability 后加载详细 contract；新增单测覆盖分类与懒加载。
-- [x] T110：为 CLI 与 UI 的共享请求 contract 增加端到端 fixture，验证相同 prompt、refs、senses/actions 配置在两端进入同一 workspace runtime 语义。验收：`src/shared/agentHandoffPayload.test.ts` 用同一 prompt/refs/senses/actions/verifiers 配置分别构造 UI 与 CLI payload，经 runtime normalize 和 context envelope 后得到一致 workspace runtime 语义。
-
-#### 验收
-- [x] 当前文档均用中文描述本次新增内容。
-- [x] `ui-components` 是否放入 `actions` 的边界已明确：不放入 actions，定位为 interactive views/renderers。
-- [x] senses/actions 的后续迁移任务已拆成可独立执行的 TODO。
-- [x] 当前阶段未修改功能代码，只更新文档和 PROJECT.md 任务管理。
-- [x] T104 验收：已新增 `packages/actions/README.md`、`action-provider.manifest.schema.json` 和示例 manifest，覆盖 action schema、环境目标、安全闸门、确认规则、trace contract、verifier contract 和失败模式；未把 `ui-components` 放入 actions。
-- [x] T105 验收：已新增 `packages/actions/computer-use` 兼容 provider 外壳和 manifest，旧 `packages/computer-use` 实现、README 指针和 pytest 测试入口保持可用，未移动业务实现。
-
-### T098 大文件瘦身与 CLI/UI 共享能力路线图
-
-状态：已完成。本任务组面向当前仓库仍然偏大的单文件脚本和 UI/CLI 能力复用问题。原则是先抽共享 contract 和共同业务能力，再逐步瘦身大文件；不能为了减少行数而把逻辑切碎，也不能让 UI 聊天和 CLI 终端执行维护两套语义不同的任务协议。
-
-#### 最终集成校准（2026-05-07）
-- [x] T094-T120 最终一致性审查完成：共享 handoff、sense/action/verifier、verification policy/result、runtime verification gate、interactive-view alias 和 UI/CLI fixture 均通过类型检查、单测、生产构建及相关 smoke。
-- [x] 冗余 scenario contract 已收敛：`packages/scenario-core/src/scenarioSpecs.ts` 保留为唯一真相源，`src/ui/src/scenarioSpecs.ts` 仅作为兼容导出。
-- [x] interactive-view / ui-component 历史 ID 兼容已恢复：`data-table`、`network-graph`、`volcano-plot`、`umap-viewer`、`heatmap-viewer`、`molecule-viewer` 继续作为外部稳定 ID 可被 registry、workbench 和 scenario compiler 识别，底层渲染路由到新的 canonical renderer。
-- [x] unrelated tracked docs deletion 已恢复；`packages/senses/vision-sense/docs/` 迁移副本保留，不再造成 README 或历史文档断链。
-- [x] 验证命令：`npm run typecheck`、`npm run test`、`npm run build`、`npm run smoke:runtime-gateway-modules`、`npm run smoke:skill-registry`、`npm run smoke:vision-sense-runtime` 通过；T094-T120 相关 targeted tests 通过。
-- [x] 校准结论：T094-T120 当前均保持完成状态；未发现需要在本组内取消勾选的条目。
-
-#### 必要瘦身清单
-- [x] T093：抽出 UI chat / CLI / workspace runtime 共享的 Agent handoff contract，统一 source、skill domain、默认 AgentServer URL、默认请求超时和调度原则。
-- [x] T094：瘦身 `src/ui/src/api/sciforgeToolsClient.ts`，把 request body/context envelope 构造下沉到共享 builder，让 UI 聊天和 CLI 复用同一 handoff payload 语义。验收：新增 `src/shared/agentHandoffPayload.ts` 统一构造 request body、`uiState` 和 agent context policy envelope；共享 builder 不依赖 React/DOM/页面组件，UI 显式发送 `handoffSource=ui-chat`，CLI 省略 source 时默认归一为 `cli`。
-- [x] T095：瘦身 `src/runtime/generation-gateway.ts`，继续把 AgentServer generation request、retry/compaction policy、direct payload normalization、repair diagnostics 拆到 `src/runtime/gateway/*` 子模块。
-- [x] T096：瘦身 `src/ui/src/app/ResultsRenderer.tsx`，按 result shell、artifact cards、execution views、preview actions、handoff controls 拆组件和 hooks。验收：新增 `src/ui/src/app/results/` 下的 result shell、artifact card controls、preview actions、handoff controls 与 auto-run prompt 模块，原渲染入口保持同一状态和 props 语义；类型检查与 ResultsRenderer 相关单测通过。
-- [x] T097：瘦身 `src/ui/src/app/ChatPanel.tsx`，按 message list、composer、run status、archive drawer、acceptance panel 拆分。验收：新增 `src/ui/src/app/chat/` 下的 message list、composer、run readiness、archive drawer、acceptance panel 和 header/context menu 组件，ChatPanel 保持发送、编辑、引用、上传、归档、验收提示等交互语义不变；类型检查通过。
-- [x] T099：瘦身 `packages/skills/index.ts`，按 skill catalog、manifest schema、registry loader、availability validation、runtime matching 拆分。
-- [x] T100：瘦身 `src/runtime/vision-sense-runtime.ts`，按 sense provider、computer-use bridge、trace policy、safety/verifier、runtime adapter 拆分，并与独立 `packages/computer-use` contract 对齐。验收：入口文件缩到薄 runtime adapter，配置/选择逻辑下沉到 `src/runtime/vision-sense/sense-provider.ts`，Computer Use 循环保留在独立 bridge，trace 常量和 safety/verifier contract 独立成模块；没有把 Computer Use 执行职责塞回 sense provider。
-
-#### 共享能力原则
-- CLI 和 UI 聊天都必须使用相同 Agent handoff source/contract 字段，区别只体现在 `handoffSource`，不复制 dispatch policy。
-- 用户可见答案仍由 AgentServer/backend 推理；UI 和 CLI 只提供上下文、refs、artifact policy、运行时配置和诊断。
-- 共享层放在 `src/shared/*`，不得 import React、DOM、Node fs/process 或某个页面组件。
-- Runtime/CLI 可以在缺省情况下回退到 `handoffSource=cli`；UI 聊天必须显式发送 `handoffSource=ui-chat`。
-- 新拆模块必须配套独立测试，优先覆盖 contract、payload normalization 和状态变换，而不是截图或当前案例。
-
-#### T095 验收
-- [x] `generation-gateway.ts` 主入口改为先规范化 request、按 runtime 路由执行、再统一套 verification gate；直接 request normalization 继续由 `src/runtime/gateway/gateway-request.ts` 承担，repair diagnostics 复用 `src/runtime/gateway/repair-policy.ts`。
-- [x] 新增 `src/runtime/gateway/verification-policy.ts` 承载 verification result 写入、高风险门控和 unverified 可见化，避免把验证状态分散在主流程中。
-- [x] 相关 smoke 覆盖 request normalization、verification result 写入和高风险门控；`npm run smoke:runtime-gateway-modules` 与 `npm run typecheck` 通过。
-
-#### T099 / T106 / T107 验收
-- [x] `packages/skills/index.ts` 已瘦身为兼容导出入口，生成 catalog 移到 `packages/skills/catalog.ts`，`tools/generate-skill-catalog.ts` 后续也写入同一结构。
-- [x] skill registry runtime 已拆成 manifest schema、registry loader、availability validation、runtime matching 和 AgentServer fallback 模块；原 `src/runtime/skill-registry.ts` public exports 保持兼容。
-- [x] 新增 `packages/skills/index.test.ts` 覆盖 public export 与 catalog 兼容，保留 smoke skill registry 覆盖可用性和匹配行为。
-- [x] `packages/ui-components/README.md` 明确 interactive artifact views/renderers contract：data schema、visible affordance、object references、events，以及鼠标/键盘/代码交互边界。
-- [x] 文档明确 `ui-components` 不是 action provider，也不是 verifier provider，但可以承载 human verification 事件，由上层 verifier contract 转成 `VerificationResult`。
-- [x] 新增 `packages/interactive-views` 作为非破坏性别名和长期迁移目标，重新导出 `ui-components` manifests/aliases，并用单测确认 registry 兼容层不变。
-- [x] 相关测试已运行：`node --import tsx --test packages/skills/index.test.ts packages/interactive-views/index.test.ts packages/tools/vision-sense.test.ts`、`npm run smoke:skill-registry`、`npm run smoke:scp-skills`、`npm run typecheck` 通过。
-
-### T093 Agent Handoff 共享 Contract 职责边界优化
-
-状态：已完成。本任务为 UI 聊天、CLI/终端执行和 workspace runtime 建立共同 handoff contract：共享 skill domain、handoff source、默认 AgentServer URL、默认超时和 AgentServer 决策原则。这样 UI 和 CLI 未来可以复用同一任务协议，修改 dispatch/context/artifact policy 时只改共享层。
-
-#### 原则落地
-- 单一职责：`src/shared/agentHandoff.ts` 只负责跨 UI/runtime/CLI 的 Agent handoff contract 和默认值。
-- 按职责拆分：共享 contract 与 UI request body 细节、runtime gateway 执行细节分离。
-- 主流程清晰：UI 发送请求时显式带 `handoffSource=ui-chat`；runtime gateway normalization 统一补齐 contract，CLI 缺省为 `cli`。
-- 接口明确：共享模块导出 source/domain normalize、contract builder 和 source metadata，不读取全局变量。
-- 减少耦合：共享模块不依赖 React、DOM、Node runtime 或具体 scenario。
-- 配置集中：默认 AgentServer URL 和默认请求超时从 UI 私有常量上移到共享模块。
-- 谨慎使用 utils：没有新增 `utils`，用领域命名 `agentHandoff`。
-- 函数保持短小：normalize、contract builder、metadata builder 各自独立。
-- 命名表达意图：`buildSharedAgentHandoffContract`、`normalizeAgentHandoffSource`、`normalizeSharedSkillDomain` 清晰表达行为。
-- 稳定对外接口：现有 UI 和 runtime 调用方式保持兼容，旧测试构造的 `GatewayRequest` 仍可不传 source，由 runtime 补默认。
-- 避免过度设计：只抽 contract 和默认值，不引入复杂 SDK。
-- 方便测试复用：新增共享层单测，覆盖 source/domain/defaults。
-
-#### TODO
-- [x] 新增 `src/shared/agentHandoff.ts` 作为 UI/CLI/runtime 共同 contract 层。
-- [x] 将 UI 私有 AgentServer 默认 URL 和请求超时上移到共享模块。
-- [x] UI workspace tool 请求显式发送 `handoffSource=ui-chat` 和 `sharedAgentContract`。
-- [x] Runtime gateway normalization 使用共享 skill domain/source normalization，CLI 缺省为 `handoffSource=cli`。
-- [x] Runtime generation metadata 附带共享 handoff contract，便于追踪 UI/CLI 来源。
-- [x] 为共享 contract 增加独立单测。
-- [x] 通过 TypeScript 类型检查、相关单测和生产构建。
-
-#### 验收
-- [x] UI chat 与 CLI/runtime 至少共享 handoff source、skill domain、dispatch policy、默认 AgentServer URL 和默认超时。
-- [x] 共享模块不依赖 UI 或 Node-only API。
-- [x] 旧的直接 `GatewayRequest` 测试构造仍兼容，runtime 可补默认 contract。
-- [x] `npm run typecheck`、相关单测和 `npm run build` 通过。
-
-### T092 Artifact Handoff Workspace 职责边界优化
-
-状态：已完成。本任务继续拆分应用入口中的 artifact handoff 流程：将 handoff message、artifact 去重写入、notebook 记录、timeline 事件和 session versioning 下沉到独立 workspace 模块。`SciForgeApp.tsx` 只负责根据当前 UI 选择目标场景、生成 auto-run prompt 和切换页面，不再内联 artifact handoff 数据写入细节。
-
-#### 原则落地
-- 单一职责：`workspace/artifactHandoff.ts` 只负责 artifact handoff 的 workspace state 写入；页面入口只负责导航和 auto-run 触发。
-- 按职责拆分：handoff message、notebook、timeline、artifact 去重和 session versioning 按 handoff 领域边界集中。
-- 主流程清晰：`handleArtifactHandoff` 只计算标签、调用 state transition、切换到 workbench。
-- 接口明确：模块函数显式接收 workspace state、target scenario、artifact、labels、时间戳和可选 id，不读取 React state 或浏览器全局。
-- 减少耦合：新模块不依赖 `ResultsRenderer`、页面组件、DOM、当前 active page 或具体科研场景。
-- 配置集中：handoff artifact/notebook/timeline 保留数量在模块内集中定义。
-- 谨慎使用 utils：没有新增杂项 `utils`，使用领域命名的 `workspace/artifactHandoff.ts`。
-- 函数保持短小：message 构造、session 写入和 timeline 构造各自独立。
-- 命名表达意图：`applyArtifactHandoffToWorkspace`、`buildArtifactHandoffMessage` 直接说明用途。
-- 稳定对外接口：artifact、session、timeline 和 notebook schema 不变，只移动内部实现。
-- 避免过度设计：不引入事件总线或 workflow engine，只抽纯 state transition。
-- 方便测试复用：新增独立单测覆盖 handoff message、session/notebook/timeline 写入和 artifact 去重。
-
-#### TODO
-- [x] 新增 `src/ui/src/workspace/artifactHandoff.ts` 承载 artifact handoff workspace state 写入。
-- [x] 将 handoff message、artifact 去重、notebook 记录、timeline 事件和 session versioning 从 `SciForgeApp.tsx` 下沉到模块。
-- [x] 保持 auto-run prompt 仍由结果视图相关 contract 提供，避免 handoff state 模块耦合 UI renderer。
-- [x] 保持新模块不依赖 React、DOM、当前页面或具体科研场景。
-- [x] 为 artifact handoff 模块增加独立单测。
-- [x] 通过 TypeScript 类型检查、相关单测和生产构建。
-
-#### 验收
-- [x] `SciForgeApp.tsx` 中 artifact handoff handler 只负责调用领域 state transition 和 UI 导航。
-- [x] 新模块可对任意 workspace/session/artifact 复用，不含当前案例硬编码。
-- [x] 单测覆盖 handoff 写入和 artifact 去重核心规则。
-- [x] `npm run typecheck`、相关单测和 `npm run build` 通过。
-
-### T091 反馈 Workspace 状态变换职责边界优化
-
-状态：已完成。本任务继续拆分反馈收件箱的本地状态规则：新增反馈、批量更新状态、删除反馈并清理 request 引用、从选中反馈创建 request、替换 GitHub open issue 缓存等纯 workspace state 变换下沉到反馈领域模块。页面入口只保留用户事件响应和异步编排，不再内联反馈数据变更细节。
-
-#### 原则落地
-- 单一职责：`feedback/feedbackWorkspace.ts` 只负责本地反馈 workspace state 变换；GitHub API/issue 格式仍在 `feedback/githubFeedback.ts`。
-- 按职责拆分：反馈评论、request、GitHub issue cache 的本地状态规则按 feedback 领域边界集中。
-- 主流程清晰：`SciForgeApp.tsx` 的反馈 handlers 变成薄调用，页面代码只串联 UI 事件。
-- 接口明确：模块函数显式接收 workspace state、ids、status、title 和时间戳，不读取 React state、DOM 或配置。
-- 减少耦合：新模块不依赖页面组件、当前 scenario、GitHub HTTP client 或浏览器全局。
-- 配置集中：反馈评论和 request 保留数量在模块中有明确默认值，调用方可覆盖。
-- 谨慎使用 utils：没有放入通用 `utils`，使用领域命名的 `feedbackWorkspace`。
-- 函数保持短小：每个函数对应一个明确反馈状态动作。
-- 命名表达意图：`addFeedbackCommentToWorkspace`、`deleteFeedbackCommentsFromWorkspace`、`createFeedbackRequestFromComments` 等名称直接表达行为。
-- 稳定对外接口：反馈记录、request 和 workspace schema 不变，只移动内部状态变换。
-- 避免过度设计：不引入 reducer 框架或状态机，只抽纯函数。
-- 方便测试复用：新增独立单测覆盖本地反馈状态核心规则。
-
-#### TODO
-- [x] 新增 `src/ui/src/feedback/feedbackWorkspace.ts` 承载本地反馈 workspace state 变换。
-- [x] 将新增反馈、更新状态、删除反馈、创建 request、替换 synced issue cache 从 `SciForgeApp.tsx` 下沉到模块。
-- [x] 保持 GitHub REST 和 issue Markdown 格式化继续由 `feedback/githubFeedback.ts` 负责，避免职责混杂。
-- [x] 保持新模块不依赖 React、DOM、当前页面或具体科研场景。
-- [x] 为反馈 workspace 模块增加独立单测。
-- [x] 通过 TypeScript 类型检查、相关单测和生产构建。
-
-#### 验收
-- [x] `SciForgeApp.tsx` 中反馈本地状态 handlers 只负责调用领域 state transition。
-- [x] 新模块可对任意 workspace feedback 数据复用，不含当前案例硬编码。
-- [x] 单测覆盖 comment、request 和 synced issue cache 的核心变更规则。
-- [x] `npm run typecheck`、相关单测和 `npm run build` 通过。
-
-### T090 会话 Workspace 状态变换职责边界优化
-
-状态：已完成。本任务继续拆分应用入口中的会话状态规则：新建聊天、删除当前聊天、恢复/清理归档会话、编辑/删除消息等 workspace state 变换下沉到独立模块。`SciForgeApp.tsx` 只负责响应 UI 事件并调用状态变换函数；会话规则不再散落在页面装配代码里，也不绑定任何特定场景。
-
-#### 原则落地
-- 单一职责：`workspace/sessionWorkspace.ts` 只负责会话和归档相关 state 变换；应用入口只负责调用与页面跳转。
-- 按职责拆分：会话生命周期、归档列表操作、消息编辑删除按 workspace 领域边界拆分，而不是继续堆在页面组件中。
-- 主流程清晰：`newChat`、`deleteChat`、`restoreArchivedSession` 等入口函数变成薄封装，主流程更容易阅读。
-- 接口明确：模块函数显式接收 workspace state、scenarioId、sessionId、时间戳和 fallback title，不读取 React state 或浏览器全局。
-- 减少耦合：新模块不 import 页面组件，不依赖 `ChatPanel`、DOM、配置或当前 active page。
-- 配置集中：归档数量限制集中在会话 workspace 模块默认值，调用方仍可显式覆盖。
-- 谨慎使用 utils：没有新增杂项工具箱，使用领域命名的 `workspace/sessionWorkspace.ts`。
-- 函数保持短小：每个函数只完成一个明确状态动作。
-- 命名表达意图：`startNewChat`、`deleteActiveChat`、`restoreArchivedSession`、`editSessionMessage` 等名称直接描述行为。
-- 稳定对外接口：外部 UI props 和 session/domain contract 不变，只移动内部状态规则。
-- 避免过度设计：不引入 reducer 框架或复杂 command bus，只抽纯 state transition 函数。
-- 方便测试复用：新增独立单测覆盖归档、恢复、清理和消息编辑删除。
-
-#### TODO
-- [x] 新增 `src/ui/src/workspace/sessionWorkspace.ts` 承载会话 workspace state 变换。
-- [x] 将新建聊天、删除当前聊天、恢复归档、删除/清空归档从 `SciForgeApp.tsx` 下沉到模块。
-- [x] 将编辑消息和删除消息下沉为显式 session transform。
-- [x] 保持模块不依赖 React、DOM、页面状态或具体科研场景。
-- [x] 为会话 workspace 模块增加独立单测。
-- [x] 通过 TypeScript 类型检查、相关单测和生产构建。
-
-#### 验收
-- [x] `SciForgeApp.tsx` 中会话生命周期函数只负责调用领域 state transition。
-- [x] 新模块可在任意 scenario/workspace state 上复用，不含当前案例硬编码。
-- [x] 单测覆盖归档恢复与消息变更的核心规则。
-- [x] `npm run typecheck`、相关单测和 `npm run build` 通过。
-
-### T089 反馈捕获模型职责边界优化
-
-状态：已完成。本任务继续按结构优化原则拆分反馈批注入口：应用入口只负责装配全局页面；反馈捕获 React 层负责监听交互、展示菜单和提交状态；DOM target snapshot、runtime snapshot、选中文本压缩和 UI reference 构造下沉到领域命名模块。实现必须适用于任何页面、任何 scenario 和任何 UI 元素，不为当前批注截图或文献证据评估场景写专用分支。
-
-#### 原则落地
-- 单一职责：`SciForgeApp.tsx` 只装配页面；`FeedbackCaptureLayer.tsx` 只负责交互事件和表单状态；`feedback/captureModel.ts` 只负责捕获数据建模。
-- 按职责拆分：目标快照、运行时快照、选区压缩和引用构造聚合在 feedback 领域模块，不散落在页面入口文件。
-- 主流程清晰：提交反馈时页面只调用 `buildFeedbackRuntimeSnapshot` 和 `buildFeedbackTargetSnapshot` 串联流程。
-- 接口明确：模块函数显式接收 page、scenario、session、url、appVersion 和 target snapshot，不读取 React state。
-- 减少耦合：新模块不依赖 React，不硬编码某个 scenario、文案、selector 或截图批注。
-- 配置集中：构建版本、URL 和当前 session 均由调用方传入，模块不维护隐藏全局配置。
-- 谨慎使用 utils：没有新增 `utils`，使用明确的 `feedback/captureModel.ts` 领域边界。
-- 函数保持短小：snapshot、selection、reference 和 DOM selector 构造分别由短函数完成。
-- 命名表达意图：`buildFeedbackRuntimeSnapshot`、`buildFeedbackTargetSnapshot`、`referenceForFeedbackTarget` 均表达输出含义。
-- 稳定对外接口：反馈记录结构保持原 contract，仅调整内部构造位置。
-- 避免过度设计：不引入 class、store 或事件总线，只抽可复用纯函数和 DOM adapter。
-- 方便测试复用：新增独立单测覆盖运行时快照、选区压缩和 UI reference 构造。
-
-#### TODO
-- [x] 将反馈 runtime snapshot 从 `SciForgeApp.tsx` 下沉到 `src/ui/src/feedback/captureModel.ts`。
-- [x] 将 `FeedbackCaptureLayer` 从 `SciForgeApp.tsx` 下沉到 `src/ui/src/feedback/FeedbackCaptureLayer.tsx`。
-- [x] 将 DOM target snapshot、selector/path/text compact 构造下沉到反馈捕获模块。
-- [x] 将选中文本压缩与 UI object/selection reference 构造下沉到反馈捕获模块。
-- [x] 保持新模块不依赖 React state、不硬编码当前页面批注或具体科研场景。
-- [x] 为新模块增加独立单测，覆盖通用 session、通用 target 和通用 selected text。
-- [x] 通过 TypeScript 类型检查、相关单测和生产构建。
-
-#### 验收
-- [x] `SciForgeApp.tsx` 不再包含反馈捕获数据建模 helper，只保留交互和状态串联。
-- [x] 捕获模型可被任何页面/场景复用，所有上下文都通过显式参数传入。
-- [x] 新增测试不依赖当前截图、文案或特定科研案例。
-- [x] `npm run typecheck`、相关单测和 `npm run build` 通过。
-
-### T088 项目结构职责边界优化
-
-状态：已完成。本任务按单一职责、明确接口、低耦合和可测试复用的原则，对近期膨胀最快的 UI feedback/GitHub 同步路径做第一轮结构优化：页面组件只负责状态与渲染，GitHub issue 格式化、同步、导入和 workspace 状态变换下沉到独立模块。后续所有结构优化都必须优先按职责边界拆分，而不是按文件长度机械切块。
-
-#### 原则落地
-- 单一职责：页面组件只串联用户操作；反馈 GitHub 模块只处理 issue 格式化、REST 编排、issue-to-feedback 映射和状态更新。
-- 按职责拆分：新增 `src/ui/src/feedback/githubFeedback.ts`，与低层 `src/ui/src/api/githubIssuesApi.ts` 分离；API 客户端只负责 HTTP，feedback 模块负责业务语义。
-- 主流程清晰：`FeedbackInboxPage` 的提交/同步流程只调用 `submitFeedbackGithubIssue`、`syncFeedbackGithubIssues` 和状态更新函数，不内联映射细节。
-- 接口明确：模块函数输入输出均为显式参数和返回值，不读取 React state、DOM、全局配置或当前场景。
-- 减少耦合：GitHub issue 导入统一标记为通用 `github-feedback` 来源，不绑定任何科研 scenario。
-- 配置集中：repo/token 仍由 `SciForgeConfig` 管理；模块只消费调用方传入的 repo/token/build id。
-- 谨慎使用 utils：没有新增杂项 `utils`，而是使用领域命名的 `feedback/githubFeedback.ts`。
-- 函数短小：Markdown 拼接、issue 映射、提交、同步、状态变更拆成独立动作。
-- 命名表达意图：`buildFeedbackGithubIssueBody`、`mapGithubIssueRows`、`markFeedbackGithubIssueCreated`、`importGithubOpenIssuesAsFeedback` 均表达行为。
-- 稳定对外接口：`FeedbackInboxPage` 对外 props 保持页面级语义，内部实现迁移不影响调用方。
-- 避免过度设计：不引入复杂 service class 或事件总线，只抽纯函数和小型 async 函数。
-- 方便测试复用：新增 `src/ui/src/feedback/githubFeedback.test.ts`，独立覆盖格式化、同步映射和状态更新。
-
-#### TODO
-- [x] 在 `PROJECT.md` 记录结构优化原则和本轮职责切分任务。
-- [x] 将 GitHub issue Markdown 格式化从 `SciForgeApp.tsx` 下沉到 `src/ui/src/feedback/githubFeedback.ts`。
-- [x] 将 GitHub issue row -> local feedback record 的映射下沉到独立模块，且不硬编码任何科研场景。
-- [x] 将“提交后回填本地反馈/Request 状态”和“同步后导入本地反馈”实现为纯 workspace state 变换函数。
-- [x] 保持 GitHub REST 客户端 `src/ui/src/api/githubIssuesApi.ts` 只负责 HTTP 与仓库解析。
-- [x] 为新模块增加独立单测，覆盖 title/body 格式、issue 导入和本地状态回填。
-- [x] 通过 TypeScript 类型检查、单元测试和生产构建。
-
-#### 验收
-- [x] `SciForgeApp.tsx` 不再包含 GitHub issue 格式化长函数和 issue-to-feedback 映射细节。
-- [x] 新模块不依赖 React、DOM 或当前 scenario，可被页面、脚本或未来后台同步任务复用。
-- [x] GitHub 导入使用通用 `github-feedback` runtime source，不为某个页面批注或科研场景写补丁。
-- [x] `npm run typecheck`、相关单测和 `npm run build` 通过。
+- [x] `npm run smoke:long-file-budget` 通过，并在输出中将 1500 行以上非生成源码标记为 tracked。
+- [x] 三个 blocker 文件均有落地拆分 PR/commit：`src/runtime/generation-gateway.ts`、`src/ui/src/app/SciForgeApp.tsx`、`src/ui/src/app/ResultsRenderer.tsx` 主文件分别降到 1500 行以下。
+- [x] 拆分后的模块命名全部按职责表达，不出现 `part1` / `part2` / `chunk` 这类无语义名称。
+- [x] 相关 focused tests、typecheck 和必要 smoke 通过；用户可见行为保持一致。已运行 `npm run typecheck -- --pretty false`、`npm run smoke:long-file-budget`、`npm run smoke:runtime-gateway-modules`。
 
 ### T087 Sense-agnostic Computer Use 独立 Python 包
 
