@@ -1,6 +1,6 @@
 # CLI 与 UI 共享 Agent 使用说明
 
-本文档说明 SciForge 如何让 UI 聊天和终端/CLI 任务执行保持一致。UI 和 CLI 不需要拥有相同的呈现方式，但应该尽可能复用同一套推理、上下文、观察、动作、artifact 和失败恢复契约。
+本文档说明 SciForge 如何让 UI 聊天和终端/CLI 任务执行保持一致。UI 和 CLI 不需要拥有相同的呈现方式，但应该尽可能复用同一套推理、上下文、观察、动作、验证、artifact 和失败恢复契约。
 
 ## 共享核心
 
@@ -51,7 +51,7 @@ CLI 执行面向脚本化、可复现运行，负责：
 
 CLI 默认使用 `handoffSource=cli`。
 
-如果 CLI 命令收到与 UI 聊天相同的 prompt、references、workspace path、scenario package、selected senses/actions 和模型配置，它应该进入同样的 workspace runtime 语义。输出呈现可以不同：CLI 可以打印 JSON、Markdown、路径或紧凑状态行；UI 则用组件渲染同一个 ToolPayload。
+如果 CLI 命令收到与 UI 聊天相同的 prompt、references、workspace path、scenario package、selected senses/actions/verifiers 和模型配置，它应该进入同样的 workspace runtime 语义。输出呈现可以不同：CLI 可以打印 JSON、Markdown、路径或紧凑状态行；UI 则用组件渲染同一个 ToolPayload。
 
 ## 共享边界规则
 
@@ -62,15 +62,24 @@ CLI 默认使用 `handoffSource=cli`。
 - 为 UI 新增的 contract 必须能在 CLI 中表达，不依赖 browser-only state。
 - 为 CLI 新增的 contract 必须能被 UI 展示，不依赖 terminal-only output parsing。
 
-## Observe / Reason / Action 包模型
+## Observe / Reason / Action / Verify 闭环
 
-SciForge packages 应围绕三类能力组织：
+SciForge 的执行闭环应始终包含 verify 阶段：
+
+```text
+Observe -> Reason -> Action -> Verify -> 更新记忆/策略 -> 下一轮
+```
+
+Verify 是闭环的必要阶段，但不是每次都必须调用昂贵或人工 verifier。每个 run 都应明确自己的验证策略：低风险草稿可以使用轻量规则或记录为 `unverified`；会影响外部环境、科研结论、文件写入、发布、删除、支付、授权等任务必须使用更强 verifier，并在必要时请求人类确认。
+
+SciForge packages 应围绕以下能力组织：
 
 ```text
 packages/
   senses/        observe: instruction + modality -> text-response
   skills/        reasoning strategy and task knowledge
   actions/       action providers: instruction/action plan -> environment effect + trace
+  verifiers/     verification providers: result/trace/artifact/state -> verdict/reward/critique
   ui-components/ interactive artifact views/renderers
 ```
 
@@ -101,6 +110,33 @@ Actions 是会改变外部环境的模块，长期应迁移到 `packages/actions
 
 `computer-use` 应从当前独立 package 逐步迁移到 `packages/actions/computer-use`，迁移期间保留兼容导出。
 
+### Verifiers
+
+Verifiers 是给闭环提供反馈和 reward 的验证模块。它们接收任务目标、结果、artifact refs、trace refs、当前环境状态或验证 instruction，返回 verdict、reward、critique、evidence refs、repair hints 和 confidence。
+
+推荐输出形状：
+
+```json
+{
+  "verdict": "pass | fail | uncertain | needs-human | unverified",
+  "reward": 0.0,
+  "confidence": 0.82,
+  "critique": "...",
+  "evidenceRefs": [],
+  "repairHints": []
+}
+```
+
+Verifier provider 可以来自：
+
+- 人类反馈：用户验收、批注、打分、选择 accept/reject/revise。
+- 其它 agent：基于 rubric 检查答案、artifact 和 trace。
+- 规则或 schema：JSON schema、artifact contract、lint、typecheck、unit test。
+- 环境观察：GUI 状态、文件系统 diff、外部 API 状态、实验仪器状态。
+- Reward model 或 simulator：为下一轮 ReAct 提供可比较的 score。
+
+验证强度由风险和成本决定，而不是由 UI 或 CLI 入口决定。所有 run 都应有 `verificationPolicy`：至少记录为什么选择轻量验证、人工验证、自动验证或暂时 `unverified`。
+
 ### Interactive Views
 
 `ui-components` 不应放进 `actions`。它们更准确的定位是 interactive artifact views 或 renderers：
@@ -119,8 +155,9 @@ artifact + view props -> human/agent-readable interactive surface
 
 1. 模态理解放进 `packages/senses`。
 2. 改变环境的执行能力放进 `packages/actions`。
-3. 推理策略和任务知识放进 `packages/skills`。
-4. 展示和数据交互表面放进 `packages/ui-components`，或未来的 `packages/interactive-views` 别名。
-5. 跨 UI/CLI/runtime 的 contract 放进 `src/shared`。
-6. 确保 UI 聊天和 CLI 都能表达同一个请求 contract。
-7. 先为共享 contract 边界加测试，再接 UI 或 CLI 的特定呈现。
+3. 结果、trace、artifact 或状态验证放进 `packages/verifiers`。
+4. 推理策略和任务知识放进 `packages/skills`。
+5. 展示和数据交互表面放进 `packages/ui-components`，或未来的 `packages/interactive-views` 别名。
+6. 跨 UI/CLI/runtime 的 contract 放进 `src/shared`。
+7. 确保 UI 聊天和 CLI 都能表达同一个请求 contract，包括 selected senses/actions/verifiers 和 verification policy。
+8. 先为共享 contract 边界加测试，再接 UI 或 CLI 的特定呈现。

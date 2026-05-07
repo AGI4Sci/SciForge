@@ -17,13 +17,48 @@
 
 ## 任务板
 
+### T111 Verify / Reward Feedback 闭环规划
+
+状态：已完成。本任务只做文档和 TODO 规划，不修改功能代码。目标是把 Verify 明确为 ReAct/ORA 闭环的必要阶段，同时允许 verifier provider 和验证强度按风险选择。Verify 不只是布尔校验，也可以提供 reward、critique、evidence refs 和 repair hints，帮助下一轮 Reason/Action 改进。
+
+#### 设计结论
+- Verify 是闭环必要阶段：每个 run 都必须有 verification policy。
+- Verifier provider 是可选择环境：可以是人类、其它 agent、规则/schema/test、环境观察、simulator 或 reward model。
+- 验证强度按风险决定：低风险草稿可以轻量验证或显式 `unverified`；高风险动作、科研结论、外部副作用、发布、删除、支付、授权必须强验证或请求人类确认。
+- `unverified` 不是成功状态，只是策略允许的临时状态；对外呈现时必须可见。
+- `ui-components` 可以承载 human verification 交互，但它们本身仍是 interactive views，不是 verifier provider；真正的 verifier contract 应落在 `packages/verifiers`。
+
+#### 已完成 TODO
+- [x] 在 CLI/UI 共享说明中把 Observe/Reason/Action 扩展为 Observe/Reason/Action/Verify 闭环。
+- [x] 在 packages README 中加入 `packages/verifiers` 边界和风险驱动验证策略。
+- [x] 在能力集成标准中加入 Verifier 能力类型、broker 选择字段、稳定 Verifier ABI、verification policy 和安全规则。
+- [x] 在 README Runtime 小节补充 UI/CLI 共享 verification contract。
+- [x] 在 PROJECT.md 记录 Verify 是必要阶段、provider/强度可选的设计结论。
+
+#### 后续实现 TODO
+- [ ] T112：定义共享 `VerificationPolicy` 与 `VerificationResult` contract，放入 `src/shared` 或 runtime contract 包，供 UI/CLI/runtime 共用。
+- [ ] T113：建立 `packages/verifiers/` 目录和 verifier provider manifest，支持 human、agent、schema/test、environment 和 simulator/reward model 类型。
+- [ ] T114：让 Capability Broker 根据 riskLevel、artifact type、action side effects 和用户显式要求选择 verifier，并生成紧凑 verification brief。
+- [ ] T115：让 UI 聊天和 CLI request builder 都能表达 selected verifiers、verification policy、human approval policy 和 `unverified` 原因。
+- [ ] T116：为 workspace runtime 增加验证结果写入：每个 run 的 final artifact、trace 和 ExecutionUnit 都能引用 verification result。
+- [ ] T117：为高风险 action 建立强制验证门槛：action provider 自报成功不能直接结束，必须有 verifier 或 human approval。
+- [ ] T118：为人类验证设计 interactive view 事件契约：accept、reject、revise、score、comment 都转换成标准 VerificationResult。
+- [ ] T119：为 agent verifier 设计 rubric contract，允许其它 agent 基于目标、artifact refs 和 trace refs 给出 critique/reward/repair hints。
+- [ ] T120：补充端到端 fixture，验证同一任务在 UI 和 CLI 中能进入同一 verification policy，并把 verification result 带入下一轮上下文。
+
+#### 验收
+- [x] 文档明确回答：Verify 是必要闭环阶段，verifier provider 和强度可选。
+- [x] 文档明确 verifier 与 action、sense、interactive view 的职责边界。
+- [x] 后续实现任务已按共享 contract、provider registry、broker、UI/CLI、runtime 和测试拆分。
+- [x] 当前阶段未修改功能代码，只更新设计文档和 PROJECT.md 任务管理。
+
 ### T101 CLI/UI 共享 Agent 文档与 Observe-Reasoning-Action 组织规划
 
-状态：已完成。本任务只做文档和 TODO 规划，不修改功能代码。目标是把 UI 聊天、CLI/终端执行、senses、actions、interactive views 的公共边界说清楚，并把后续改动原则沉淀为可执行任务，确保未来新增能力时优先复用同一套共享 contract，而不是分别给 UI 和 CLI 写两套逻辑。
+状态：已完成。本任务只做文档和 TODO 规划，不修改功能代码。目标是把 UI 聊天、CLI/终端执行、senses、actions、verifiers、interactive views 的公共边界说清楚，并把后续改动原则沉淀为可执行任务，确保未来新增能力时优先复用同一套共享 contract，而不是分别给 UI 和 CLI 写两套逻辑。
 
 #### 原则落地
-- 单一职责：文档把 UI 呈现、CLI 命令、agent handoff、senses、actions、interactive views 分成独立职责。
-- 按职责拆分：packages 长期按 observe、reasoning、action 和 interactive views 组织，而不是按当前目录偶然形态组织。
+- 单一职责：文档把 UI 呈现、CLI 命令、agent handoff、senses、actions、verifiers、interactive views 分成独立职责。
+- 按职责拆分：packages 长期按 observe、reasoning、action、verify 和 interactive views 组织，而不是按当前目录偶然形态组织。
 - 主流程清晰：UI/CLI 都收敛到共享 Agent handoff contract，再由 AgentServer 或 workspace runtime 执行。
 - 接口明确：senses 统一为 `instruction + 其它模态 -> text-response`；actions 统一声明 action schema、安全闸门、trace 和 verifier。
 - 减少耦合：`ui-components` 不放进 `actions`，而是作为可被用户或 agent 操作的 interactive artifact views。
@@ -50,8 +85,8 @@
 - [ ] T105：将 `packages/computer-use` 逐步迁移到 `packages/actions/computer-use`，迁移期间保留兼容导出、旧路径说明和测试入口。
 - [ ] T106：明确 `packages/ui-components` 作为 interactive artifact views/renderers 的 contract，声明数据 schema、可见 affordance、对象引用、事件和鼠标/键盘/代码交互边界。
 - [ ] T107：评估是否引入 `packages/interactive-views` 作为别名或迁移目标；若迁移，必须保留 `packages/ui-components` registry 兼容层。
-- [ ] T108：让 UI 聊天和 CLI 的 request builder 共享 selected senses、selected actions、artifact policy、reference policy 和 failure-recovery 字段。
-- [ ] T109：补充 capability registry，使 agent 能按 observe/reasoning/action/interactive-view 类别读取紧凑能力摘要，并只懒加载被选中的详细契约。
+- [ ] T108：让 UI 聊天和 CLI 的 request builder 共享 selected senses、selected actions、selected verifiers、artifact policy、reference policy 和 failure-recovery 字段。
+- [ ] T109：补充 capability registry，使 agent 能按 observe/reasoning/action/verify/interactive-view 类别读取紧凑能力摘要，并只懒加载被选中的详细契约。
 - [ ] T110：为 CLI 与 UI 的共享请求 contract 增加端到端 fixture，验证相同 prompt、refs、senses/actions 配置在两端进入同一 workspace runtime 语义。
 
 #### 验收
