@@ -7,8 +7,8 @@
 - AgentServer 是项目无关的通用大脑和 fallback backend；SciForge 不维护写死工具清单，优先通过 skill registry、workspace-local task code 和 AgentServer 动态探索/写代码解决请求。
 - 正常用户请求必须交给 AgentServer/agent backend 真实理解和回答；SciForge 不设置、不维护、不返回预设回复模板，只允许输出协议校验、执行恢复、安全边界和错误诊断类系统信息。
 - Self-evolving skills 是核心原则：任务代码先在当前 workspace 中生成、修复和验证；稳定成功后，经用户确认再沉淀到 skill library 或 package skill package 候选。
-- 开发者不应为一次任务缺口手工写死专用科研脚本；只能补通用协议、权限、安全边界、runner 能力、context contract、promotion 机制和 UI/artifact contract。
-- TypeScript 主要负责 Web UI、workspace writer、artifact/session 协议、组件 registry 和轻量编排；科学任务执行代码优先作为 workspace-local Python/R/notebook/CLI artifact 生成。
+- 所有修改必须通用、可泛化到任何场景，不能在代码里面硬编码和为当前案例打补丁
+- 算法相关的代码优先用Python实现，方便人类用户优化、检查算法
 - 真实任务应输出标准 artifact JSON、日志和 ExecutionUnit；不得用 demo/空结果伪装成功。
 - 错误必须进入下一轮上下文：failureReason、日志/代码引用、缺失输入、recoverActions、nextStep 和 attempt history 都要保留。
 - 多轮对话要以 workspace refs 为长期事实来源，以最近消息为短期意图来源；“继续、修复、基于上一轮、文件在哪里”必须能接上当前 session。
@@ -16,6 +16,49 @@
 - Computer Use 必须走 window-based 主路径：观察、grounding、坐标映射和动作执行都绑定目标窗口/窗口内容坐标，而不是全屏全局猜测；并行长测必须隔离目标窗口、输入通道和 trace，不抢占用户真实鼠标键盘。
 
 ## 任务板
+
+### T101 CLI/UI 共享 Agent 文档与 Observe-Reasoning-Action 组织规划
+
+状态：已完成。本任务只做文档和 TODO 规划，不修改功能代码。目标是把 UI 聊天、CLI/终端执行、senses、actions、interactive views 的公共边界说清楚，并把后续改动原则沉淀为可执行任务，确保未来新增能力时优先复用同一套共享 contract，而不是分别给 UI 和 CLI 写两套逻辑。
+
+#### 原则落地
+- 单一职责：文档把 UI 呈现、CLI 命令、agent handoff、senses、actions、interactive views 分成独立职责。
+- 按职责拆分：packages 长期按 observe、reasoning、action 和 interactive views 组织，而不是按当前目录偶然形态组织。
+- 主流程清晰：UI/CLI 都收敛到共享 Agent handoff contract，再由 AgentServer 或 workspace runtime 执行。
+- 接口明确：senses 统一为 `instruction + 其它模态 -> text-response`；actions 统一声明 action schema、安全闸门、trace 和 verifier。
+- 减少耦合：`ui-components` 不放进 `actions`，而是作为可被用户或 agent 操作的 interactive artifact views。
+- 配置集中：跨 UI/CLI/runtime 的公共字段继续放进 `src/shared/*`，不散落到页面组件或 CLI 私有实现。
+- 谨慎使用 utils：共享能力按 `agentHandoff`、`senses`、`actions`、`interactive views` 等领域命名，不新增杂物型工具箱。
+- 函数保持短小：后续实现任务要求入口只串联流程，具体 request builder、sense orchestration、action orchestration 下沉到独立模块。
+- 命名表达意图：保留 `ui-components` 兼容现有 registry，同时把更准确的概念命名为 `interactive views/renderers`。
+- 稳定对外接口：目录迁移需保留兼容导出和迁移说明，不能破坏现有 package registry。
+- 避免过度设计：先明确边界和 contract，再逐步迁移，不为了目录好看而移动代码。
+- 方便测试复用：后续每个共享 contract 和 provider registry 变更都应有独立单测覆盖。
+
+#### 已完成 TODO
+- [x] 新增 CLI 与 UI 共享 Agent 使用说明，说明公共 handoff contract、UI/CLI 边界和失败恢复原则。
+- [x] 在 README Runtime 小节补充 UI/CLI 共享 contract 的中文说明和文档入口。
+- [x] 在 packages README 说明 `senses`、`actions`、`ui-components` 的职责边界。
+- [x] 在 vision-sense README 说明 sense 的输入输出边界，以及主 agent 可主动、多次调用同一 sense。
+- [x] 在 computer-use README 说明它是 action provider，不是 sense，并记录后续迁移目标 `packages/actions/computer-use`。
+- [x] 在 PROJECT.md 记录后续修改原则和待办，当前阶段只列任务，不改功能代码。
+
+#### 后续实现 TODO
+- [ ] T102：定义统一 Sense Provider contract，包含 capability brief、输入模态、`instruction + modalities -> text-response` 输出格式、失败模式、成本/延迟和多次调用预期。
+- [ ] T103：为主 agent 增加通用 sense orchestration 规则，使其可根据任务主动选择、组合和多次调用 senses，并把调用记录写入可追踪 refs。
+- [ ] T104：建立 `packages/actions/` 目录和 action provider manifest，明确 action schema、环境目标、安全闸门、确认规则、trace contract、verifier contract 和失败模式。
+- [ ] T105：将 `packages/computer-use` 逐步迁移到 `packages/actions/computer-use`，迁移期间保留兼容导出、旧路径说明和测试入口。
+- [ ] T106：明确 `packages/ui-components` 作为 interactive artifact views/renderers 的 contract，声明数据 schema、可见 affordance、对象引用、事件和鼠标/键盘/代码交互边界。
+- [ ] T107：评估是否引入 `packages/interactive-views` 作为别名或迁移目标；若迁移，必须保留 `packages/ui-components` registry 兼容层。
+- [ ] T108：让 UI 聊天和 CLI 的 request builder 共享 selected senses、selected actions、artifact policy、reference policy 和 failure-recovery 字段。
+- [ ] T109：补充 capability registry，使 agent 能按 observe/reasoning/action/interactive-view 类别读取紧凑能力摘要，并只懒加载被选中的详细契约。
+- [ ] T110：为 CLI 与 UI 的共享请求 contract 增加端到端 fixture，验证相同 prompt、refs、senses/actions 配置在两端进入同一 workspace runtime 语义。
+
+#### 验收
+- [x] 当前文档均用中文描述本次新增内容。
+- [x] `ui-components` 是否放入 `actions` 的边界已明确：不放入 actions，定位为 interactive views/renderers。
+- [x] senses/actions 的后续迁移任务已拆成可独立执行的 TODO。
+- [x] 当前阶段未修改功能代码，只更新文档和 PROJECT.md 任务管理。
 
 ### T098 大文件瘦身与 CLI/UI 共享能力路线图
 

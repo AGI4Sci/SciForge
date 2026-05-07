@@ -1,18 +1,14 @@
 # SciForge Computer Use
 
-`sciforge-computer-use` is the sense-agnostic action loop for GUI work.
+`sciforge-computer-use` 是面向 GUI 工作的 sense-agnostic action loop。它是 action provider，不是 sense。目标包位置是 `packages/actions/computer-use`；当前 `packages/computer-use` 路径在迁移完成前作为兼容位置保留。
 
-It intentionally does not import `vision-sense` or the SciForge TypeScript
-runtime. The package defines stable Python contracts for:
+它有意不 import `vision-sense` 或 SciForge TypeScript runtime。本包定义稳定的 Python contract，用于：
 
-- observing a target through any sense provider,
-- planning one generic GUI action,
-- locating a visual/logical target,
-- executing through a host adapter,
-- verifying the result,
-- writing file-ref-only trace data.
+- 通过任意 sense provider 观察目标。
+- 规划一个通用 GUI action。
+- 定位视觉/逻辑目标。
+- 通过 host adapter 执行动作。
+- 验证结果。
+- 写入 file-ref-only trace data。
 
-`vision-sense` can be one sense provider, but the loop can also consume OCR,
-browser sandbox screenshots, remote desktop frames, window metadata, or future
-safe accessibility summaries.
-
+`vision-sense` 可以作为其中一个 sense provider，但 action loop 也可以消费 OCR、浏览器沙箱截图、远程桌面帧、窗口元数据，或未来安全的 accessibility summary。

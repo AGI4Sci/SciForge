@@ -1,6 +1,8 @@
 # SciForge Vision Sense
 
-`vision-sense` 是 SciForge 的视觉感官包。它只负责把 `文本 + 图像/截图` 转成可审计的文本结果，例如 JSON、NDJSON、坐标、操作指令或普通文本。真实桌面执行由外部 Computer Use executor 负责；本包不拥有桌面、浏览器、DOM、accessibility tree 或 MCP 会话。
+`vision-sense` 是 SciForge 的视觉感官包。它只负责把 `instruction + 图像/截图/其它视觉模态` 转成可审计的 `text-response`，例如 JSON、NDJSON、坐标、操作指令、区域摘要、OCR 或普通文本。真实桌面执行由外部 action provider（例如 Computer Use executor）负责；本包不拥有桌面、浏览器、DOM、accessibility tree 或 MCP 会话。
+
+上层主 agent 可以主动、多次调用本 sense。一次视觉 instruction 不需要覆盖图片全貌；主 agent 可以先问整体布局，再问局部文本、图例、坐标、异常区域或 verifier 复查。`vision-sense` 的职责是回答当前 instruction 并暴露不确定性、能力边界和下一步建议。
 
 核心链路：
 
