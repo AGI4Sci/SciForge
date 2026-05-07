@@ -50,8 +50,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-if (await isListening(WORKSPACE_PORT)) {
+const workspaceHealth = await readHealth(WORKSPACE_PORT);
+if (workspaceHealth.ok) {
   console.log(`SciForge workspace writer already running: http://127.0.0.1:${WORKSPACE_PORT}`);
+} else if (await isListening(WORKSPACE_PORT)) {
+  console.warn(`SciForge workspace writer is running on http://127.0.0.1:${WORKSPACE_PORT}, but its health check failed. Stop the old workspace server and rerun npm run dev.`);
 } else {
   children.push(start('workspace', ['run', 'workspace:server']));
 }
@@ -119,4 +122,17 @@ function isListening(port: number) {
     });
     socket.once('error', () => resolve(false));
   });
+}
+
+async function readHealth(port: number) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1200) });
+    const json = await response.json().catch(() => ({})) as { capabilities?: unknown };
+    return {
+      ok: response.ok,
+      capabilities: Array.isArray(json.capabilities) ? json.capabilities.map(String) : [],
+    };
+  } catch {
+    return { ok: false, capabilities: [] };
+  }
 }

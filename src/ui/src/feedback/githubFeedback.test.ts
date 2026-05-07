@@ -70,6 +70,47 @@ test('formats feedback as a GitHub issue without page state dependencies', () =>
   assert.equal(bundle.requests.length, 1);
 });
 
+test('formats screenshot evidence for GitHub without inlining large data in bundle JSON', () => {
+  const withScreenshot: FeedbackCommentRecord = {
+    ...feedback,
+    screenshot: {
+      schemaVersion: 1,
+      dataUrl: 'data:image/jpeg;base64,abc123',
+      mediaType: 'image/jpeg',
+      width: 640,
+      height: 360,
+      capturedAt: '2026-05-07T00:00:00.000Z',
+      targetRect: { x: 1, y: 2, width: 3, height: 4 },
+      includeForAgent: false,
+    },
+  };
+  const body = buildFeedbackGithubIssueBody([withScreenshot], [], 'test-build');
+
+  assert.match(body, /截图证据/);
+  assert.match(body, /data:image\/jpeg;base64,abc123/);
+  assert.match(body, /omitted from GitHub JSON/);
+});
+
+test('omits oversized screenshot data from GitHub markdown image', () => {
+  const withLargeScreenshot: FeedbackCommentRecord = {
+    ...feedback,
+    screenshot: {
+      schemaVersion: 1,
+      dataUrl: `data:image/jpeg;base64,${'a'.repeat(49_000)}`,
+      mediaType: 'image/jpeg',
+      width: 640,
+      height: 360,
+      capturedAt: '2026-05-07T00:00:00.000Z',
+      targetRect: { x: 1, y: 2, width: 3, height: 4 },
+      includeForAgent: false,
+    },
+  };
+  const body = buildFeedbackGithubIssueBody([withLargeScreenshot], [], 'test-build');
+
+  assert.match(body, /截图过大/);
+  assert.doesNotMatch(body, /<img src=/);
+});
+
 test('maps open GitHub issues into local feedback records generically', () => {
   const issues = mapGithubIssueRows([{
     number: 42,

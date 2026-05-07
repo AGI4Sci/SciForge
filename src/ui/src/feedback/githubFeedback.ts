@@ -1,4 +1,4 @@
-import { createGithubIssue, fetchOpenGithubIssues, type GithubIssueApiRow } from '../api/githubIssuesApi';
+import { checkGithubIssueWriteAccess, checkGithubRepoAccess, createGithubIssue, fetchOpenGithubIssues, type GithubIssueApiRow } from '../api/githubIssuesApi';
 import { nowIso, type FeedbackCommentRecord, type GithubSyncedOpenIssueRecord, type SciForgeWorkspaceState } from '../domain';
 
 const GITHUB_FEEDBACK_SOURCE = 'github-feedback';
@@ -60,7 +60,7 @@ export function buildFeedbackGithubIssueBody(
   lines.push('<summary>反馈 Bundle JSON（机器可读）</summary>');
   lines.push('');
   lines.push('```json');
-  lines.push(JSON.stringify(bundle, null, 2));
+  lines.push(JSON.stringify(redactFeedbackBundleScreenshots(bundle), null, 2));
   lines.push('```');
   lines.push('');
   lines.push('</details>');
@@ -73,10 +73,13 @@ export async function submitFeedbackGithubIssue(params: {
   title: string;
   body: string;
 }) {
+  await checkGithubRepoAccess(params.repo, params.token);
+  await checkGithubIssueWriteAccess(params.repo, params.token);
   return createGithubIssue(params.repo, params.token, { title: params.title, body: params.body });
 }
 
 export async function syncFeedbackGithubIssues(repo: string, token: string, syncedAt = nowIso()) {
+  await checkGithubRepoAccess(repo, token);
   const rows = await fetchOpenGithubIssues(repo, token);
   return mapGithubIssueRows(rows, syncedAt);
 }
@@ -262,11 +265,40 @@ function appendFeedbackCommentMarkdown(lines: string[], comment: FeedbackComment
   lines.push(`- rect: x=${Math.round(comment.target.rect.x)} y=${Math.round(comment.target.rect.y)} w=${Math.round(comment.target.rect.width)} h=${Math.round(comment.target.rect.height)}`);
   if (comment.target.text.trim()) lines.push(`- text: ${compactFeedbackText(comment.target.text)}`);
   lines.push('');
+  if (comment.screenshot?.dataUrl) {
+    lines.push('**截图证据（默认不自动进入 agent 上下文）**');
+    lines.push('');
+    if (comment.screenshot.dataUrl.length <= 48_000) {
+      lines.push(`<img src="${comment.screenshot.dataUrl}" alt="feedback screenshot ${index + 1}" width="760" />`);
+    } else {
+      lines.push('- 截图过大，GitHub issue 正文省略图片；本地 Bundle 保留原始 dataUrl。');
+    }
+    lines.push(`- capturedAt: ${comment.screenshot.capturedAt}`);
+    lines.push(`- targetRect: x=${Math.round(comment.screenshot.targetRect.x)} y=${Math.round(comment.screenshot.targetRect.y)} w=${Math.round(comment.screenshot.targetRect.width)} h=${Math.round(comment.screenshot.targetRect.height)}`);
+    lines.push(`- includeForAgent: \`${comment.screenshot.includeForAgent === true}\``);
+    if (comment.screenshot.note) lines.push(`- note: ${comment.screenshot.note}`);
+    lines.push('');
+  }
   lines.push('**视口**');
   lines.push(`- ${comment.viewport.width}×${comment.viewport.height} · dpr ${comment.viewport.devicePixelRatio} · scroll (${comment.viewport.scrollX}, ${comment.viewport.scrollY})`);
   lines.push('');
   lines.push('---');
   lines.push('');
+}
+
+function redactFeedbackBundleScreenshots(bundle: FeedbackBundle): FeedbackBundle {
+  return {
+    ...bundle,
+    comments: bundle.comments.map((comment) => comment.screenshot
+      ? {
+        ...comment,
+        screenshot: {
+          ...comment.screenshot,
+          dataUrl: `[omitted from GitHub JSON; rendered above when <= 48000 chars, original retained in exported local Bundle]`,
+        },
+      }
+      : comment),
+  };
 }
 
 function compactFeedbackText(text: string) {

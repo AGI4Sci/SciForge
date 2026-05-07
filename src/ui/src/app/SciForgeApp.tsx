@@ -1,15 +1,12 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import {
   AlertTriangle,
   ArrowRight,
-  Check,
   ChevronLeft,
   ChevronDown,
   ChevronRight,
   ChevronUp,
   ChevronsUp,
-  CircleStop,
-  Clock,
   Copy,
   ExternalLink,
   Loader2,
@@ -71,6 +68,7 @@ import {
   submitFeedbackGithubIssue,
   syncFeedbackGithubIssues,
 } from '../feedback/githubFeedback';
+import { FeedbackScreenshotPreview } from '../feedback/FeedbackScreenshotPreview';
 import {
   addFeedbackCommentToWorkspace,
   createFeedbackRequestFromComments,
@@ -161,6 +159,7 @@ import { ChatPanel } from './ChatPanel';
 import { exportJsonFile, exportTextFile } from './exportUtils';
 import { RuntimeHealthPanel, useRuntimeHealth, type RuntimeHealthItem } from './runtimeHealthPanel';
 import { ActionButton, Badge, Card, ChartLoadingFallback, ClaimTag, ConfidenceBar, EmptyArtifactState, EvidenceTag, IconButton, SectionHeader, cx } from './uiPrimitives';
+import { DelayedHelpButton } from './DelayedHelpButton';
 import { HeatmapViewer, MoleculeViewer, NetworkGraph, UmapViewer } from '../visualizations';
 import { resolveSearchNavigation, workbenchNavigationForScenario } from './appShell/navigation';
 import { SettingsDialog, Sidebar, TopBar, type ConfigSaveState } from './appShell/ShellPanels';
@@ -252,6 +251,29 @@ function hasUsableModelConfig(config: SciForgeConfig) {
     return Boolean(config.modelName.trim() || config.modelBaseUrl.trim() || config.apiKey.trim());
   }
   return Boolean(config.modelBaseUrl.trim() && config.apiKey.trim());
+}
+
+function mergeFileBackedConfig(current: SciForgeConfig, fileConfig: SciForgeConfig): SciForgeConfig {
+  const preserve: Partial<SciForgeConfig> = {};
+  const currentHasModel = hasUsableModelConfig(current);
+  const fileHasModel = hasUsableModelConfig(fileConfig);
+  if (currentHasModel && !fileHasModel) {
+    preserve.modelProvider = current.modelProvider;
+    preserve.modelBaseUrl = current.modelBaseUrl;
+    preserve.modelName = current.modelName;
+    preserve.apiKey = current.apiKey;
+  }
+  if (current.feedbackGithubToken?.trim() && !fileConfig.feedbackGithubToken?.trim()) {
+    preserve.feedbackGithubToken = current.feedbackGithubToken;
+  }
+  const fileRepoIsDefault = !fileConfig.feedbackGithubRepo?.trim()
+    || fileConfig.feedbackGithubRepo.trim() === defaultSciForgeConfig.feedbackGithubRepo;
+  if (current.feedbackGithubRepo?.trim()
+    && current.feedbackGithubRepo.trim() !== defaultSciForgeConfig.feedbackGithubRepo
+    && fileRepoIsDefault) {
+    preserve.feedbackGithubRepo = current.feedbackGithubRepo;
+  }
+  return Object.keys(preserve).length ? updateConfig(fileConfig, preserve) : fileConfig;
 }
 
 function formatSessionTime(value: string) {
@@ -568,6 +590,7 @@ function Workbench({
 }
 
 function FeedbackInboxPage({
+  config,
   comments,
   requests,
   onStatusChange,
@@ -581,6 +604,7 @@ function FeedbackInboxPage({
   onGithubIssueCreated,
   onOpenGithubSettings,
 }: {
+  config: SciForgeConfig;
   comments: FeedbackCommentRecord[];
   requests: NonNullable<SciForgeWorkspaceState['feedbackRequests']>;
   onStatusChange: (ids: string[], status: FeedbackCommentStatus) => void;
@@ -613,23 +637,6 @@ function FeedbackInboxPage({
   const issueBody = buildFeedbackGithubIssueBody(issueScopeComments, requests, APP_BUILD_ID);
   const visibleIds = visibleComments.map((item) => item.id);
   const visibleSelectedCount = visibleIds.filter((id) => selectedIds.includes(id)).length;
-
-  useEffect(() => {
-    if (!githubActionHint) return;
-    const timer = window.setTimeout(() => setGithubActionHint(''), 3800);
-    return () => window.clearTimeout(timer);
-  }, [githubActionHint]);
-
-  async function copyGithubIssueMarkdown() {
-    if (!issueScopeComments.length) return;
-    const doc = `# ${issueTitle}\n\n${issueBody}`;
-    try {
-      await navigator.clipboard.writeText(doc);
-      setGithubActionHint('已复制 GitHub Issue 标题与正文（Markdown）。');
-    } catch {
-      setGithubActionHint('复制失败：请检查浏览器剪贴板权限。');
-    }
-  }
 
   function ensureGithubTokenOrOpenSettings(): boolean {
     const token = feedbackGithubToken?.trim();
@@ -699,6 +706,12 @@ function FeedbackInboxPage({
     setSelectedIds((current) => current.filter((id) => !ids.includes(id)));
   }
 
+  function openGithubIssue(event: ReactMouseEvent<HTMLAnchorElement>, url: string) {
+    event.preventDefault();
+    if (!url.trim()) return;
+    window.location.assign(url);
+  }
+
   return (
     <main className="feedback-page">
       <section className="feedback-hero">
@@ -725,35 +738,65 @@ function FeedbackInboxPage({
           <option value="wont-fix">wont-fix</option>
         </select>
         <span className="feedback-selection-count">{selectedIds.length ? `已选择 ${selectedIds.length} 条` : `当前列表 ${visibleComments.length} 条`}</span>
-        <button type="button" onClick={() => setSelectedIds(visibleIds)} disabled={!visibleIds.length || visibleSelectedCount === visibleIds.length}>选择当前列表</button>
-        <button type="button" onClick={() => setSelectedIds([])}>清除选择</button>
-        <button type="button" onClick={() => onStatusChange(selectedIds, 'triaged')} disabled={!selectedIds.length}>标记 triaged</button>
-        <button type="button" onClick={() => onStatusChange(selectedIds, 'fixed')} disabled={!selectedIds.length}>标记 fixed</button>
-        <button type="button" className="danger" onClick={() => deleteSelected(selectedIds)} disabled={!selectedIds.length}>删除选中</button>
-        <button type="button" className="danger" onClick={() => deleteSelected(visibleIds)} disabled={!visibleIds.length}>删除当前列表</button>
-        <button type="button" onClick={() => onCreateRequest(selectedIds, requestTitleFromFeedback(selectedComments))} disabled={!selectedIds.length}>生成 Request</button>
-        <button type="button" onClick={() => exportJsonFile(`sciforge-feedback-${nowIso().slice(0, 10)}.json`, bundle)}>导出 Bundle</button>
-        <button type="button" onClick={() => void navigator.clipboard?.writeText(JSON.stringify(bundle, null, 2))}>复制 Bundle</button>
-        <button type="button" onClick={() => void copyGithubIssueMarkdown()} disabled={!issueScopeComments.length}>复制 GitHub Issue</button>
-        <button
-          type="button"
+        <DelayedHelpButton
+          onClick={() => setSelectedIds(visibleIds)}
+          disabled={!visibleIds.length || visibleSelectedCount === visibleIds.length}
+          help="选择当前筛选结果中的所有反馈，适合批量标记、生成 Request 或提交到 GitHub。"
+        >
+          选择当前列表
+        </DelayedHelpButton>
+        <DelayedHelpButton
+          onClick={() => onStatusChange(selectedIds, 'triaged')}
+          disabled={!selectedIds.length}
+          help="把已选反馈标为 triaged，表示已经确认并进入处理队列。"
+        >
+          标记 triaged
+        </DelayedHelpButton>
+        <DelayedHelpButton
+          onClick={() => onStatusChange(selectedIds, 'fixed')}
+          disabled={!selectedIds.length}
+          help="把已选反馈标为 fixed，适合修复完成后回写状态。"
+        >
+          标记 fixed
+        </DelayedHelpButton>
+        <DelayedHelpButton
+          className="danger"
+          onClick={() => deleteSelected(selectedIds)}
+          disabled={!selectedIds.length}
+          help="删除已选本地反馈；不会删除已经导出的 Bundle 或 GitHub Issue。"
+        >
+          删除选中
+        </DelayedHelpButton>
+        <DelayedHelpButton
+          onClick={() => onCreateRequest(selectedIds, requestTitleFromFeedback(selectedComments))}
+          disabled={!selectedIds.length}
+          help="把已选反馈合并成一个本地 Request，便于后续按任务追踪。"
+        >
+          生成 Request
+        </DelayedHelpButton>
+        <DelayedHelpButton
+          onClick={() => exportJsonFile(`sciforge-feedback-${nowIso().slice(0, 10)}.json`, bundle)}
+          help="导出当前选择或当前列表的反馈 Bundle，供离线归档或交给 Codex 批量处理。"
+        >
+          导出 Bundle
+        </DelayedHelpButton>
+        <DelayedHelpButton
           className="feedback-github-primary"
           onClick={() => void submitGithubIssueApi()}
           disabled={!issueScopeComments.length || githubSubmitBusy}
-          title={`向 ${effectiveGithubRepo || '…'} 创建 Issue（需先在设置填写 PAT）`}
+          help={`向 ${effectiveGithubRepo || '配置仓库'} 创建 GitHub Issue；需要在设置中填写具备 Issues 读写权限的 PAT。`}
         >
           {githubSubmitBusy ? <Loader2 size={15} className="feedback-inline-spin" aria-hidden /> : null}
           提交到 GitHub
-        </button>
-        <button
-          type="button"
+        </DelayedHelpButton>
+        <DelayedHelpButton
           onClick={() => void syncGithubOpenIssues()}
           disabled={githubSyncBusy}
-          title={`从 ${effectiveGithubRepo || '…'} 拉取未关闭 Issue（需 PAT；不含 PR）`}
+          help={`从 ${effectiveGithubRepo || '配置仓库'} 拉取未关闭 Issue，并导入为本地反馈；Pull Request 会自动排除。`}
         >
           {githubSyncBusy ? <Loader2 size={15} className="feedback-inline-spin" aria-hidden /> : null}
           从 GitHub 同步
-        </button>
+        </DelayedHelpButton>
         {!feedbackGithubToken?.trim() ? (
           <span className="feedback-toolbar-token-note" title="GitHub API 匿名不可用">
             未配置 Token：点「提交 / 同步」将打开设置并提示填写 PAT
@@ -775,12 +818,19 @@ function FeedbackInboxPage({
               <div className="feedback-card-main">
                 <div className="feedback-card-head">
                   <strong>{item.comment}</strong>
-                  <Badge variant={feedbackStatusVariant(item.status)}>{item.status}</Badge>
-                  <Badge variant={item.priority === 'urgent' || item.priority === 'high' ? 'warning' : 'muted'}>{item.priority}</Badge>
+                  <div className="feedback-card-head-actions">
+                    <Badge variant={feedbackStatusVariant(item.status)}>{item.status}</Badge>
+                    <Badge variant={item.priority === 'urgent' || item.priority === 'high' ? 'warning' : 'muted'}>{item.priority}</Badge>
+                  </div>
                 </div>
                 <p>{item.authorName} · {formatSessionTime(item.createdAt)} · {item.runtime.page} · {item.runtime.scenarioId}</p>
                 {item.githubIssueUrl ? (
-                  <a className="feedback-github-card-link" href={item.githubIssueUrl} target="_blank" rel="noopener noreferrer">
+                  <a
+                    className="feedback-github-card-link"
+                    href={item.githubIssueUrl}
+                    onClick={(event) => openGithubIssue(event, item.githubIssueUrl!)}
+                    title="打开对应的 GitHub Issue"
+                  >
                     GitHub #{item.githubIssueNumber ?? '?'}
                     <ExternalLink size={13} aria-hidden />
                   </a>
@@ -791,6 +841,7 @@ function FeedbackInboxPage({
                   <span>runtime</span>
                   <code>{item.runtime.sessionId ?? 'no-session'} / {item.runtime.activeRunId ?? 'no-run'}</code>
                 </div>
+                <FeedbackScreenshotPreview item={item} />
                 {item.tags.length ? <div className="feedback-tags">{item.tags.map((tag) => <code key={tag}>{tag}</code>)}</div> : null}
               </div>
             </article>
@@ -807,7 +858,12 @@ function FeedbackInboxPage({
             {githubSyncedOpenIssues.map((issue) => (
               <li key={issue.number}>
                 <div className="feedback-github-issue-row">
-                  <a className="feedback-github-issue-link" href={issue.htmlUrl} target="_blank" rel="noopener noreferrer">
+                  <a
+                    className="feedback-github-issue-link"
+                    href={issue.htmlUrl}
+                    onClick={(event) => openGithubIssue(event, issue.htmlUrl)}
+                    title="打开对应的 GitHub Issue"
+                  >
                     <span className="feedback-github-issue-num">#{issue.number}</span>
                     <strong>{issue.title}</strong>
                     <ExternalLink size={14} aria-hidden className="feedback-github-issue-ext" />
@@ -914,16 +970,7 @@ export function SciForgeApp() {
         if (cancelled) return;
         if (fileConfig) {
           setConfig((current) => {
-            const currentHasModel = hasUsableModelConfig(current);
-            const fileHasModel = hasUsableModelConfig(fileConfig);
-            const next = currentHasModel && !fileHasModel
-              ? updateConfig(fileConfig, {
-                modelProvider: current.modelProvider,
-                modelBaseUrl: current.modelBaseUrl,
-                modelName: current.modelName,
-                apiKey: current.apiKey,
-              })
-              : fileConfig;
+            const next = mergeFileBackedConfig(current, fileConfig);
             saveSciForgeConfig(next);
             return next;
           });
@@ -1322,6 +1369,7 @@ export function SciForgeApp() {
             }} />
           ) : (
             <FeedbackInboxPage
+              config={config}
               comments={workspaceState.feedbackComments ?? []}
               requests={workspaceState.feedbackRequests ?? []}
               onStatusChange={updateFeedbackStatus}

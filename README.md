@@ -169,6 +169,21 @@ Computer Use 是 Action 层，不是 sense。当前实现分两部分：
 
 关键原则：Computer Use 可以消费 `vision-sense`、OCR、浏览器沙箱、远程桌面帧或窗口元数据，但不把某个 sense 实现硬编码进 action loop。高风险动作如发送、删除、支付、授权、发布、外部提交默认 fail closed，必须有明确用户确认或 verifier/human approval。
 
+### 双实例 Agent 互修（规划中）
+
+SciForge 不再采用单个应用内置 Repair Agent 的方案。新的方向是维护两个彼此独立、地位并列的 SciForge Agent/App 实例：一个实例作为当前稳定执行者，去修改另一个实例的代码；被修改的一方可以变化，正在执行修复的一方必须保持稳定。
+
+反馈收件箱仍负责收集页面评论、元素定位、运行时上下文和 GitHub Issue 信息，但它只生成修复 handoff，不再直接启动内嵌 repair runner。后续 UI 会把修复请求交给另一个稳定实例处理，并展示目标实例、执行状态、diff、测试证据、人工核验结果和 GitHub 回写结果。
+
+双实例互修的边界：
+
+- Main Agent 与 Repair Agent 都是完整 SciForge 实例，拥有独立端口、Workspace Writer、状态目录、日志、配置和 git worktree。
+- A 修复 B 时，A 的运行代码、执行器、权限策略和配置不得被本次任务修改；B 修复 A 时同理。
+- 修复完成后必须提供测试结果和证据；证据不足时不能标记为已修复。
+- 只有当双方都稳定、测试通过，并且用户显式确认后，才能把较新的稳定版本同步给落后的一方。同步必须保留备份和回滚点。
+
+具体实施任务见 `PROJECT.md` 的 T092。
+
 ### Verifier
 
 Verifier 是 Verify 层。它可以是人类、其它 agent、schema/test、环境观察、simulator 或 reward model。低风险草稿可以轻量验证或标记 `unverified`；高风险动作、科研结论、外部副作用和发布类任务必须进入强验证或 human approval。

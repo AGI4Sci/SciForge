@@ -14,6 +14,7 @@ import { ActionButton } from '../app/uiPrimitives';
 import {
   buildFeedbackRuntimeSnapshot,
   buildFeedbackTargetSnapshot,
+  captureFeedbackScreenshotEvidence,
   compactSelectedText,
   referenceForFeedbackTarget,
   sciForgeReferenceFromElement,
@@ -95,10 +96,11 @@ export function FeedbackCaptureLayer({
     };
   }, []);
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
     if (!contextTarget || !comment.trim()) return;
     const now = nowIso();
+    const screenshot = await captureFeedbackScreenshotEvidence(contextTarget.target, now);
     onSubmit({
       id: makeId('feedback'),
       schemaVersion: 1,
@@ -119,6 +121,7 @@ export function FeedbackCaptureLayer({
         scrollY: window.scrollY,
       },
       runtime: buildFeedbackRuntimeSnapshot({ page, scenarioId, session, url: window.location.href, appVersion }),
+      screenshot,
     });
     resetDraft();
   }

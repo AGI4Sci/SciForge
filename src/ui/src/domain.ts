@@ -571,6 +571,18 @@ export interface FeedbackRuntimeSnapshot {
   appVersion?: string;
 }
 
+export interface FeedbackScreenshotEvidence {
+  schemaVersion: 1;
+  dataUrl: string;
+  mediaType: 'image/jpeg' | 'image/png';
+  width: number;
+  height: number;
+  capturedAt: string;
+  targetRect: { x: number; y: number; width: number; height: number };
+  includeForAgent?: boolean;
+  note?: string;
+}
+
 export interface FeedbackCommentRecord {
   id: string;
   schemaVersion: 1;
@@ -587,6 +599,7 @@ export interface FeedbackCommentRecord {
   viewport: { width: number; height: number; devicePixelRatio: number; scrollX: number; scrollY: number };
   runtime: FeedbackRuntimeSnapshot;
   screenshotRef?: string;
+  screenshot?: FeedbackScreenshotEvidence;
   githubIssueUrl?: string;
   githubIssueNumber?: number;
 }

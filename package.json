@@ -131,6 +131,7 @@
   "dependencies": {
     "3dmol": "^2.5.4",
     "d3": "^7.9.0",
+    "html2canvas": "^1.4.1",
     "lucide-react": "^1.8.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",

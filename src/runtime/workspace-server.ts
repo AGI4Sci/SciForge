@@ -21,7 +21,17 @@ createServer(async (req, res) => {
     return;
   }
   if (req.url === '/health') {
-    writeJson(res, 200, { ok: true, service: 'sciforge-workspace-writer' });
+    writeJson(res, 200, {
+      ok: true,
+      service: 'sciforge-workspace-writer',
+      schemaVersion: 1,
+      capabilities: [
+        'workspace-snapshot',
+        'workspace-files',
+        'sciforge-tools',
+      ],
+      endpoints: {},
+    });
     return;
   }
   const url = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
@@ -607,6 +617,10 @@ function writeStreamEnvelope(res: ServerResponse, body: unknown) {
 
 function safeName(value: string) {
   return basename(value.replace(/[^a-zA-Z0-9._-]+/g, '_')).slice(0, 120);
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
 
 function languageForPath(path: string) {
@@ -1300,6 +1314,8 @@ async function readLocalSciForgeConfig() {
     modelName: typeof llm.model === 'string' ? llm.model : typeof llm.modelName === 'string' ? llm.modelName : '',
     apiKey: typeof llm.apiKey === 'string' ? llm.apiKey : '',
     requestTimeoutMs: typeof sciforge.requestTimeoutMs === 'number' ? sciforge.requestTimeoutMs : 900000,
+    feedbackGithubRepo: typeof sciforge.feedbackGithubRepo === 'string' ? sciforge.feedbackGithubRepo : undefined,
+    feedbackGithubToken: typeof sciforge.feedbackGithubToken === 'string' ? sciforge.feedbackGithubToken : undefined,
     visionAllowSharedSystemInput: typeof visionSense.allowSharedSystemInput === 'boolean' ? visionSense.allowSharedSystemInput : true,
     updatedAt: typeof sciforge.updatedAt === 'string' ? sciforge.updatedAt : new Date().toISOString(),
     source: 'config.local.json',
@@ -1326,6 +1342,8 @@ async function writeLocalSciForgeConfig(config: Record<string, unknown>) {
       workspaceWriterBaseUrl: typeof config.workspaceWriterBaseUrl === 'string' ? config.workspaceWriterBaseUrl : sciforge.workspaceWriterBaseUrl,
       workspacePath: normalizeWorkspaceRootPath(typeof config.workspacePath === 'string' ? config.workspacePath : typeof sciforge.workspacePath === 'string' ? sciforge.workspacePath : ''),
       requestTimeoutMs: typeof config.requestTimeoutMs === 'number' ? config.requestTimeoutMs : sciforge.requestTimeoutMs,
+      feedbackGithubRepo: typeof config.feedbackGithubRepo === 'string' ? config.feedbackGithubRepo : sciforge.feedbackGithubRepo,
+      feedbackGithubToken: preserveConfiguredSecretString(config.feedbackGithubToken, sciforge.feedbackGithubToken),
       updatedAt: new Date().toISOString(),
     },
     visionSense: {

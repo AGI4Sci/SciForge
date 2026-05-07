@@ -5,13 +5,13 @@ import { spawn } from 'node:child_process';
 import { createWriteStream, existsSync, readFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { connect } from 'node:net';
 import { join, resolve } from 'node:path';
 
 const WORKSPACE_PORT = Number(process.env.SCIFORGE_WORKSPACE_PORT || 5174);
 const AGENT_SERVER_PORT = Number(process.env.SCIFORGE_AGENT_SERVER_PORT || 18080);
 const AGENT_SERVER_ROOT = resolve(process.env.SCIFORGE_AGENT_SERVER_ROOT || '../AgentServer');
 const runtimeChildren = new Map<string, ReturnType<typeof spawn>>();
+const STARTUP_TIMEOUT_MS = Number(process.env.SCIFORGE_RUNTIME_START_TIMEOUT_MS || 30_000);
 
 export default defineConfig({
   plugins: [react(), sciForgeRuntimeLauncher()],
@@ -58,6 +58,7 @@ function sciForgeRuntimeLauncher() {
               id: 'workspace',
               label: 'Workspace Writer',
               port: WORKSPACE_PORT,
+              healthUrl: `http://127.0.0.1:${WORKSPACE_PORT}/health`,
               cwd: process.cwd(),
               args: ['run', 'workspace:server'],
             }),
@@ -65,6 +66,7 @@ function sciForgeRuntimeLauncher() {
               id: 'agentserver',
               label: 'AgentServer',
               port: AGENT_SERVER_PORT,
+              healthUrl: `http://127.0.0.1:${AGENT_SERVER_PORT}/health`,
               cwd: AGENT_SERVER_ROOT,
               args: ['run', 'dev'],
               env: agentServerEnv(),
@@ -85,17 +87,22 @@ async function ensureRuntimeProcess(options: {
   id: string;
   label: string;
   port: number;
+  healthUrl: string;
   cwd: string;
   args: string[];
   env?: Record<string, string>;
   enabled?: boolean;
   missingReason?: string;
+  requiredCapability?: string;
 }) {
   if (options.enabled === false) return { id: options.id, label: options.label, ok: false, status: 'missing', detail: options.missingReason };
-  if (await isListening(options.port)) return { id: options.id, label: options.label, ok: true, status: 'online', detail: `http://127.0.0.1:${options.port}` };
+  const health = await readHealth(options.healthUrl);
+  if (health.ok && (!options.requiredCapability || health.capabilities.includes(options.requiredCapability))) {
+    return { id: options.id, label: options.label, ok: true, status: 'online', detail: options.healthUrl };
+  }
   const existing = runtimeChildren.get(options.id);
   if (existing && existing.exitCode === null && !existing.killed) {
-    return { id: options.id, label: options.label, ok: true, status: 'starting', detail: `http://127.0.0.1:${options.port}` };
+    await stopRuntimeChild(options.id, existing);
   }
   await mkdir(join(process.cwd(), 'workspace/.sciforge/logs'), { recursive: true });
   const logPath = join(process.cwd(), `workspace/.sciforge/logs/${options.id}-runtime.log`);
@@ -115,7 +122,32 @@ async function ensureRuntimeProcess(options: {
     runtimeChildren.delete(options.id);
   });
   runtimeChildren.set(options.id, child);
-  return { id: options.id, label: options.label, ok: true, status: 'starting', detail: `http://127.0.0.1:${options.port}`, logPath };
+  const healthy = await waitForHealthy(options.healthUrl, STARTUP_TIMEOUT_MS, options.requiredCapability);
+  if (healthy) {
+    return { id: options.id, label: options.label, ok: true, status: 'online', detail: options.healthUrl, logPath };
+  }
+  const stillRunning = child.exitCode === null && !child.killed;
+  return {
+    id: options.id,
+    label: options.label,
+    ok: false,
+    status: stillRunning ? 'starting-timeout' : 'failed',
+    detail: stillRunning
+      ? `${options.healthUrl} 未在 ${STARTUP_TIMEOUT_MS}ms 内通过 health check`
+      : `${options.label} 启动后已退出`,
+    logPath,
+  };
+}
+
+async function stopRuntimeChild(id: string, child: ReturnType<typeof spawn>) {
+  if (child.exitCode !== null || child.killed) {
+    runtimeChildren.delete(id);
+    return;
+  }
+  child.kill('SIGTERM');
+  await sleep(1200);
+  if (child.exitCode === null && !child.killed) child.kill('SIGKILL');
+  runtimeChildren.delete(id);
 }
 
 function agentServerEnv() {
@@ -151,15 +183,31 @@ function mergeNodeOptions(existing: string | undefined, required: string) {
   return current.includes('--max-old-space-size') ? current : [current, required].filter(Boolean).join(' ');
 }
 
-function isListening(port: number) {
-  return new Promise<boolean>((resolve) => {
-    const socket = connect({ host: '127.0.0.1', port });
-    socket.once('connect', () => {
-      socket.destroy();
-      resolve(true);
-    });
-    socket.once('error', () => resolve(false));
-  });
+async function readHealth(url: string) {
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(1200) });
+    const json = await response.json().catch(() => ({})) as { capabilities?: unknown };
+    return {
+      ok: response.ok,
+      capabilities: Array.isArray(json.capabilities) ? json.capabilities.map(String) : [],
+    };
+  } catch {
+    return { ok: false, capabilities: [] };
+  }
+}
+
+async function waitForHealthy(url: string, timeoutMs: number, requiredCapability?: string) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const health = await readHealth(url);
+    if (health.ok && (!requiredCapability || health.capabilities.includes(requiredCapability))) return true;
+    await sleep(350);
+  }
+  return false;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

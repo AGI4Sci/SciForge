@@ -1,4 +1,5 @@
 import type {
+  FeedbackScreenshotEvidence,
   FeedbackRuntimeSnapshot,
   FeedbackTargetSnapshot,
   SciForgeReference,
@@ -61,6 +62,51 @@ export function buildFeedbackTargetSnapshot(element: Element): FeedbackTargetSna
       height: rect.height,
     },
   };
+}
+
+export async function captureFeedbackScreenshotEvidence(
+  target: FeedbackTargetSnapshot,
+  capturedAt: string,
+): Promise<FeedbackScreenshotEvidence | undefined> {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return undefined;
+  const controls = Array.from(document.querySelectorAll<HTMLElement>('[data-feedback-control="true"]'));
+  const previousVisibility = controls.map((element) => element.style.visibility);
+  controls.forEach((element) => {
+    element.style.visibility = 'hidden';
+  });
+  try {
+    const { default: html2canvas } = await import('html2canvas');
+    const canvas = await html2canvas(document.body, {
+      backgroundColor: '#0a0f1a',
+      logging: false,
+      scale: 0.55,
+      width: window.innerWidth,
+      height: window.innerHeight,
+      x: window.scrollX,
+      y: window.scrollY,
+      windowWidth: window.innerWidth,
+      windowHeight: window.innerHeight,
+      ignoreElements: (element) => element instanceof HTMLElement && element.dataset.feedbackControl === 'true',
+    });
+    const annotated = annotateFeedbackCanvas(canvas, target.rect);
+    return {
+      schemaVersion: 1,
+      dataUrl: annotated.toDataURL('image/jpeg', 0.48),
+      mediaType: 'image/jpeg',
+      width: annotated.width,
+      height: annotated.height,
+      capturedAt,
+      targetRect: { ...target.rect },
+      includeForAgent: false,
+      note: 'Screenshot evidence is stored for human review; include it in agent context only when visual reasoning is necessary.',
+    };
+  } catch {
+    return undefined;
+  } finally {
+    controls.forEach((element, index) => {
+      element.style.visibility = previousVisibility[index] ?? '';
+    });
+  }
 }
 
 export function compactSelectedText(text: string) {
@@ -161,4 +207,31 @@ function elementPath(element: Element) {
 
 function compactFeedbackText(text: string) {
   return text.replace(/\s+/g, ' ').trim().slice(0, 240);
+}
+
+function annotateFeedbackCanvas(source: HTMLCanvasElement, rect: FeedbackTargetSnapshot['rect']) {
+  const maxWidth = 760;
+  const scale = Math.min(1, maxWidth / source.width);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(source.width * scale));
+  canvas.height = Math.max(1, Math.round(source.height * scale));
+  const context = canvas.getContext('2d');
+  if (!context) return source;
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  const captureScaleX = source.width / window.innerWidth;
+  const captureScaleY = source.height / window.innerHeight;
+  const x = rect.x * captureScaleX * scale;
+  const y = rect.y * captureScaleY * scale;
+  const width = Math.max(10, rect.width * captureScaleX * scale);
+  const height = Math.max(10, rect.height * captureScaleY * scale);
+  context.save();
+  context.fillStyle = 'rgba(0, 229, 160, 0.12)';
+  context.strokeStyle = '#00e5a0';
+  context.lineWidth = Math.max(3, 3 * scale);
+  context.shadowColor = 'rgba(0, 229, 160, 0.8)';
+  context.shadowBlur = 14;
+  context.fillRect(x, y, width, height);
+  context.strokeRect(x, y, width, height);
+  context.restore();
+  return canvas;
 }

@@ -21,6 +21,7 @@ export function ChatComposer({
   onSend,
   onAbort,
   onBeginResize,
+  copy,
 }: {
   expanded: boolean;
   input: string;
@@ -39,7 +40,21 @@ export function ChatComposer({
   onSend: () => void;
   onAbort: () => void;
   onBeginResize: (event: React.MouseEvent<HTMLDivElement>) => void;
+  copy?: {
+    collapsedText?: string;
+    referenceHint?: string;
+    placeholder?: string;
+    sendingPlaceholder?: string;
+    sendLabel?: string;
+    sendingLabel?: string;
+  };
 }) {
+  const collapsedText = copy?.collapsedText ?? '输入研究问题，或点选对象后继续追问...';
+  const referenceHint = copy?.referenceHint ?? '点选 SciForge 可见对象作为上下文';
+  const placeholder = copy?.placeholder ?? '输入研究问题，或点选对象后继续追问...';
+  const sendingPlaceholder = copy?.sendingPlaceholder ?? '继续输入引导会排队；也可以中断当前运行...';
+  const sendLabel = copy?.sendLabel ?? '发送';
+  const sendingLabel = copy?.sendingLabel ?? '引导';
   if (!expanded) {
     return (
       <button
@@ -50,7 +65,7 @@ export function ChatComposer({
         title="展开输入栏"
       >
         <Sparkles size={15} />
-        <span>输入研究问题，或点选对象后继续追问...</span>
+        <span>{collapsedText}</span>
         <ChevronUp size={15} />
       </button>
     );
@@ -94,7 +109,7 @@ export function ChatComposer({
           multiple
           onChange={(event) => onFileUpload(event.currentTarget.files)}
         />
-        {pendingReferences.length ? referenceChips : <span className="reference-hint">点选 SciForge 可见对象作为上下文</span>}
+        {pendingReferences.length ? referenceChips : <span className="reference-hint">{referenceHint}</span>}
       </div>
       {referencePickMode ? (
         <div className="reference-pick-banner">
@@ -110,7 +125,7 @@ export function ChatComposer({
           event.preventDefault();
           onSend();
         }}
-        placeholder={isSending ? '继续输入引导会排队；也可以中断当前运行...' : '输入研究问题，或点选对象后继续追问...'}
+        placeholder={isSending ? sendingPlaceholder : placeholder}
         rows={1}
         style={{ height: `${composerHeight}px` }}
       />
@@ -121,7 +136,7 @@ export function ChatComposer({
         </ActionButton>
       ) : null}
       <ActionButton icon={Sparkles} onClick={onSend} disabled={!input.trim() && !pendingReferences.length}>
-        {isSending ? '引导' : '发送'}
+        {isSending ? sendingLabel : sendLabel}
       </ActionButton>
     </div>
   );
