@@ -54,7 +54,6 @@ import { buildBuiltInScenarioPackage, builtInScenarioPackageRef, type ScenarioPa
 import type { ScenarioLibraryItem } from '../scenarioCompiler/scenarioLibrary';
 import { compileSlotsForScenario } from '../scenarioCompiler/uiPlanCompiler';
 import { timeline } from '../demoData';
-import { sendAgentMessageStream } from '../api/agentClient';
 import { sendSciForgeToolMessage } from '../api/sciforgeToolsClient';
 import { buildExecutionBundle, evaluateExecutionBundleExport } from '../exportPolicy';
 import { FeedbackCaptureLayer } from '../feedback/FeedbackCaptureLayer';

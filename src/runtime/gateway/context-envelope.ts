@@ -3,7 +3,6 @@ import { join, resolve } from 'node:path';
 import type { SciForgeSkillDomain, GatewayRequest, SkillAvailability } from '../runtime-types.js';
 import { clipForAgentServerJson, clipForAgentServerPrompt, hashJson, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
 import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from './gateway-request.js';
-import { buildCapabilityBrief } from '../../shared/capabilityRegistry.js';
 
 export type AgentServerContextMode = 'full' | 'delta';
 
@@ -22,7 +21,7 @@ export function buildContextEnvelope(
 ) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const recentExecutionRefs = toRecordList(uiState.recentExecutionRefs);
-  const recentConversation = toStringList(uiState.recentConversation);
+  const recentConversation = policyConversationEntries(uiState.recentConversation);
   const conversationLedger = toRecordList(uiState.conversationLedger);
   const currentReferences = toRecordList(uiState.currentReferences);
   const currentReferenceDigests = toRecordList(uiState.currentReferenceDigests);
@@ -31,19 +30,15 @@ export function buildContextEnvelope(
   const workspaceTree = params.workspaceTreeSummary ?? [];
   const expectedArtifactTypes = expectedArtifactTypesForRequest(request);
   const selectedComponentIds = selectedComponentIdsForRequest(request);
-  const capabilityBrief = buildCapabilityBrief({
-    prompt: request.prompt,
-    domain: request.skillDomain,
-    expectedArtifactTypes,
-    selectedToolIds: request.selectedToolIds ?? toStringList(request.uiState?.selectedToolIds),
-    selectedSenseIds: request.selectedSenseIds ?? toStringList(request.uiState?.selectedSenseIds),
-    selectedActionIds: request.selectedActionIds ?? toStringList(request.uiState?.selectedActionIds),
-    selectedVerifierIds: request.selectedVerifierIds ?? toStringList(request.uiState?.selectedVerifierIds),
-    selectedComponentIds,
-    riskLevel: request.riskLevel,
-    actionSideEffects: request.actionSideEffects ?? toStringList(request.uiState?.actionSideEffects),
-    userExplicitVerification: brokerVerificationMode(request.userExplicitVerification ?? request.verificationPolicy?.mode),
-  });
+  const capabilityBrief = isRecord(uiState.capabilityBrief)
+    ? uiState.capabilityBrief
+    : {
+      schemaVersion: 'sciforge.capability-brief.transport-fallback.v1',
+      selected: [],
+      excluded: [],
+      needsMoreDiscovery: true,
+      reason: 'Python conversation policy did not provide a capability brief.',
+    };
   const visibleRecentConversation = recentConversation
     .slice(mode === 'full' ? -6 : -4)
     .map((entry) => clipForAgentServerPrompt(entry, mode === 'full' ? 900 : 700))
@@ -211,6 +206,21 @@ function shouldDescendWorkspaceTreeEntry(rel: string) {
   return rel.split('/').length < 3;
 }
 
+function policyConversationEntries(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (typeof entry === 'string') return [entry];
+    if (!isRecord(entry)) return [];
+    const role = typeof entry.role === 'string' ? entry.role : 'unknown';
+    const content = typeof entry.content === 'string'
+      ? entry.content
+      : typeof entry.summary === 'string'
+        ? entry.summary
+        : '';
+    return content.trim() ? [`${role}: ${content}`] : [];
+  });
+}
+
 export function expectedArtifactSchema(request: GatewayRequest | SciForgeSkillDomain): Record<string, unknown> {
   const skillDomain = typeof request === 'string' ? request : request.skillDomain;
   const types = typeof request === 'string' ? [] : expectedArtifactTypesForRequest(request);
@@ -295,10 +305,6 @@ function summarizeVerificationResults(request: GatewayRequest) {
   const recent = (request.recentVerificationResults ?? []).map((entry) => clipForAgentServerJson(entry, 2));
   const combined = [...fromArtifacts, ...fromUiState, ...recent, ...explicit].slice(-6);
   return combined.length ? combined : undefined;
-}
-
-function brokerVerificationMode(value: GatewayRequest['userExplicitVerification']): 'none' | 'lightweight' | 'automatic' | 'human' | 'hybrid' | undefined {
-  return value === 'unverified' ? 'none' : value;
 }
 
 export function summarizeConversationLedger(ledger: Array<Record<string, unknown>>, mode: AgentServerContextMode) {

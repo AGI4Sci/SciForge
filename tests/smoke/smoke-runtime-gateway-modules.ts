@@ -13,7 +13,7 @@ import { repairNeededPayload } from '../../src/runtime/gateway/repair-policy.js'
 import { applyRuntimeVerificationPolicy, normalizeRuntimeVerificationPolicy } from '../../src/runtime/gateway/verification-policy.js';
 import { normalizeRuntimeVerificationResults } from '../../src/runtime/gateway/verification-results.js';
 import { normalizeAgentServerWorkspaceEvent, withRequestContextWindowLimit } from '../../src/runtime/gateway/workspace-event-normalizer.js';
-import { requestWithCurrentReferenceDigests } from '../../src/runtime/gateway/current-reference-digest.js';
+import { applyConversationPolicy } from '../../src/runtime/conversation-policy/apply.js';
 import { summarizeRuntimeCapabilitiesForAgentServer, summarizeSkillsForAgentServer } from '../../src/runtime/gateway/agentserver-prompts.js';
 import { readTaskAttempts } from '../../src/runtime/task-attempt-history.js';
 import type { SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types.js';
@@ -210,17 +210,26 @@ try {
     }, 'task-generation'),
     'fresh current-reference turns should not reuse previous AgentServer session memory for the same file',
   );
-  const digestRequest = await requestWithCurrentReferenceDigests({
+  const digestRequest = (await applyConversationPolicy(normalizeGatewayRequest({
     ...request,
     uiState: {
       ...request.uiState,
       currentReferences: [{ kind: 'file', title: 'report.md', ref: 'file:report.md' }],
     },
-  }, workspace);
+  }), {}, {
+    workspace,
+    config: {
+      mode: 'active',
+      command: 'python3',
+      args: ['-m', 'sciforge_conversation.service'],
+      timeoutMs: 5000,
+      pythonPath: join(process.cwd(), 'packages/conversation-policy-python/src'),
+    },
+  })).request;
   const digests = (digestRequest.uiState as Record<string, unknown>).currentReferenceDigests as Array<Record<string, unknown>>;
   assert.equal(digests.length, 1);
-  assert.equal(digests[0].status, 'ready');
-  assert.match(String(digests[0].digestRef), /^file:\.sciforge\/artifacts\/current-reference-digests\//);
+  assert.equal(digests[0].status, 'ok');
+  assert.ok(String(digests[0].digestText || '').length > 0);
   const digestEnvelope = buildContextEnvelope(digestRequest, { workspace, workspaceTreeSummary: tree });
   assert.ok(Array.isArray(digestEnvelope.sessionFacts.currentReferenceDigests));
   const missingReferenceUse = await validateAndNormalizePayload({

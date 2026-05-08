@@ -1,0 +1,14 @@
+{
+  "id": "ui.table.viewer",
+  "kind": "ui-component",
+  "domain": ["table", "artifact"],
+  "summary": "Render structured table artifacts.",
+  "triggers": ["table", "csv", "record set"],
+  "antiTriggers": ["not needed until structured table artifact exists"],
+  "artifacts": ["table", "csv", "record-set"],
+  "cost": "free",
+  "latency": "instant",
+  "risk": [],
+  "sideEffects": [],
+  "adapter": "ts:ui.table"
+}

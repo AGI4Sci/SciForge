@@ -590,6 +590,65 @@
   margin-top: 8px;
 }
 
+.process-progress-card {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid rgba(121, 214, 255, 0.22);
+  border-radius: 7px;
+  background: rgba(121, 214, 255, 0.08);
+}
+
+.process-progress-card.phase-wait {
+  border-color: rgba(255, 211, 105, 0.28);
+  background: rgba(255, 211, 105, 0.08);
+}
+
+.process-progress-card.phase-error {
+  border-color: rgba(255, 92, 122, 0.28);
+  background: rgba(255, 92, 122, 0.08);
+}
+
+.process-progress-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--bio-050);
+  font-size: 12px;
+}
+
+.process-progress-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 6px;
+}
+
+.process-progress-item {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.process-progress-item span {
+  color: var(--bio-300);
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.process-progress-item strong,
+.process-progress-card p {
+  min-width: 0;
+  margin: 0;
+  color: var(--bio-100);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .running-work-live {
   display: grid;
   gap: 6px;

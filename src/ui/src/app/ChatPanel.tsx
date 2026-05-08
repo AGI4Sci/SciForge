@@ -5,7 +5,8 @@ import { SCENARIO_SPECS } from '../scenarioSpecs';
 import { buildContextWindowMeterModel, estimateContextWindowState, latestContextWindowState } from '../contextWindow';
 import { builtInScenarioPackageRef } from '../scenarioCompiler/scenarioPackage';
 import { resetSession } from '../sessionStore';
-import { coalesceStreamEvents, formatAgentTokenUsage, latestRunningEvent, presentStreamEvent, streamEventCounts } from '../streamEventPresentation';
+import { formatProgressHeadline, latestProgressModel } from '../processProgress';
+import { coalesceStreamEvents, latestRunningEvent, presentStreamEvent, streamEventCounts } from '../streamEventPresentation';
 import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type NormalizedAgentResponse, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeRun, type SciForgeSession, type ObjectReference, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
 import { writeWorkspaceFile } from '../api/workspaceClient';
 import { exportJsonFile } from './exportUtils';
@@ -17,6 +18,7 @@ import { ChatPanelHeader } from './chat/ChatPanelHeader';
 import { ReferenceContextMenu } from './chat/ReferenceContextMenu';
 import { RunReadinessBar } from './chat/RunReadinessBar';
 import { MessageList } from './chat/MessageList';
+import { RunningWorkProcess, streamProcessTranscript } from './chat/RunningWorkProcess';
 import { TargetInstanceSelector } from './chat/TargetInstanceSelector';
 import { CURRENT_TARGET_INSTANCE_VALUE, enabledPeerInstances, selectedPeerInstance } from './chat/targetInstance';
 import { MessageContent, inlineObjectReferencesForMessage, objectReferencesFromInlineTokens, unmentionedObjectReferencesForMessage } from './chat/MessageContent';
@@ -174,7 +176,7 @@ export function ChatPanel({
   const visibleMessages = messages.slice(visibleMessageStart);
   const liveTokenUsage = latestTokenUsage(streamEvents);
   const worklogCounts = streamEventCounts(streamEvents);
-  const latestWorklogLine = latestRunningEvent(streamEvents);
+  const latestWorklogLine = formatProgressHeadline(latestProgressModel(streamEvents), latestRunningEvent(streamEvents));
   const contextWindowState = latestContextWindowState(streamEvents)
     ?? estimateContextWindowState(session, config, streamEvents);
   const targetPeers = useMemo(() => enabledPeerInstances(config), [config.peerInstances]);
@@ -962,90 +964,6 @@ function normalizeRunPrompt(value: string) {
   return value.replace(/^运行中引导：/, '').trim();
 }
 
-function RunningWorkProcess({
-  events,
-  counts,
-  tokenUsage,
-  backend,
-  guidanceCount,
-}: {
-  events: AgentStreamEvent[];
-  counts: ReturnType<typeof streamEventCounts>;
-  tokenUsage?: AgentStreamEvent['usage'];
-  backend: string;
-  guidanceCount: number;
-}) {
-  const visibleEvents = events.slice(-48);
-  const highlightedEvents = latestVisibleWorkEvents(events, 10);
-  const usageLabel = formatAgentTokenUsage(tokenUsage);
-  if (!visibleEvents.length && !guidanceCount && !usageLabel) return null;
-  return (
-    <div className="running-work-process">
-      {highlightedEvents.length ? (
-        <div className="running-work-live">
-          {highlightedEvents.map((event) => {
-            const presentation = presentStreamEvent(event);
-            return (
-              <div className={cx('running-work-live-row', presentation.uiClass)} key={`${event.id}-live`}>
-                <Badge variant={presentation.tone}>{event.label}</Badge>
-                <span>{presentation.shortDetail || presentation.detail || presentation.usageDetail || presentation.typeLabel}</span>
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
-      <details className="message-fold depth-2 running-work-process-raw" open>
-      <summary>
-        完整工作过程 · {counts.key} 关键 · {counts.background} 过程
-        {usageLabel ? ` · ${usageLabel}` : ''}
-      </summary>
-      <div className="running-work-process-body">
-        <div className="running-work-process-meta">
-          <Badge variant="muted">{backend}</Badge>
-          {guidanceCount ? <Badge variant="warning">{guidanceCount} 条引导排队</Badge> : null}
-          {counts.debug ? <Badge variant="muted">{counts.debug} debug</Badge> : null}
-        </div>
-        <div className="stream-events-list inline">
-          {visibleEvents.map((event) => {
-            const presentation = presentStreamEvent(event);
-            const copyPayload = JSON.stringify(event.raw ?? { type: event.type, label: event.label, detail: event.detail }, null, 2);
-            return (
-              <details className={cx('stream-event', presentation.uiClass)} key={event.id} open={!presentation.initiallyCollapsed}>
-                <summary>
-                  <Badge variant={presentation.tone}>{event.label}</Badge>
-                  <span className="stream-event-type">{presentation.typeLabel}</span>
-                  {presentation.usageDetail ? <span className="stream-event-usage">{presentation.usageDetail}</span> : null}
-                  <span className="stream-event-detail compact">{presentation.shortDetail || '无详细文本'}</span>
-                </summary>
-                <div className="stream-event-expanded">
-                  {presentation.detail ? <pre>{presentation.detail}</pre> : <span>无额外详情。</span>}
-                  <button type="button" onClick={() => void navigator.clipboard?.writeText(copyPayload)}>复制 raw</button>
-                </div>
-              </details>
-            );
-          })}
-        </div>
-      </div>
-      </details>
-    </div>
-  );
-}
-
-function latestVisibleWorkEvents(events: AgentStreamEvent[], limit: number) {
-  const seen = new Set<string>();
-  return events
-    .filter((event) => {
-      const presentation = presentStreamEvent(event);
-      if (!presentation.detail && !presentation.usageDetail) return false;
-      if (presentation.importance === 'debug') return false;
-      const key = `${event.type}:${presentation.shortDetail}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(-limit);
-}
-
 function attachStreamProcessToResponse(response: NormalizedAgentResponse, events: AgentStreamEvent[]): NormalizedAgentResponse {
   const transcript = streamProcessTranscript(events);
   if (!transcript) return response;
@@ -1072,18 +990,6 @@ function attachStreamProcessToResponse(response: NormalizedAgentResponse, events
       },
     },
   };
-}
-
-function streamProcessTranscript(events: AgentStreamEvent[]) {
-  const lines = latestVisibleWorkEvents(events, 24)
-    .map((event) => {
-      const presentation = presentStreamEvent(event);
-      const detail = presentation.detail || presentation.usageDetail || presentation.shortDetail;
-      return detail ? `- ${event.label || presentation.typeLabel}: ${detail}` : '';
-    })
-    .filter(Boolean);
-  if (!lines.length) return '';
-  return ['工作过程摘要:', ...lines].join('\n');
 }
 
 function ObjectReferenceChips({

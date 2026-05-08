@@ -1,0 +1,15 @@
+{
+  "id": "action.workspace.delete",
+  "kind": "action",
+  "domain": ["workspace"],
+  "summary": "Delete workspace files after explicit user approval.",
+  "triggers": ["delete", "remove files"],
+  "artifacts": ["deletion-log.json"],
+  "cost": "low",
+  "latency": "interactive",
+  "riskLevel": "high",
+  "risk": ["writes-workspace"],
+  "sideEffects": ["delete"],
+  "allowedOperations": ["preview-delete", "delete"],
+  "adapter": "python:workspace.delete"
+}

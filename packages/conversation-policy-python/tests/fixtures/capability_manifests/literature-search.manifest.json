@@ -1,0 +1,16 @@
+{
+  "id": "literature.arxiv.search",
+  "kind": "skill",
+  "domain": ["literature", "research"],
+  "summary": "Search and normalize recent arXiv papers.",
+  "triggers": ["arxiv", "paper", "recent literature"],
+  "antiTriggers": ["private database only"],
+  "artifacts": ["research-report.md", "papers.json"],
+  "cost": "low",
+  "latency": "interactive",
+  "risk": ["network"],
+  "sideEffects": ["download-files"],
+  "allowedOperations": ["search", "download", "summarize"],
+  "adapter": "python:literature.search",
+  "successRate": 0.92
+}

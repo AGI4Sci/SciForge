@@ -1,0 +1,11 @@
+{
+  "study": {
+    "id": "S-001",
+    "species": "human",
+    "assays": [
+      {"name": "rna-seq", "samples": 24},
+      {"name": "proteomics", "samples": 12}
+    ]
+  },
+  "decision": "use bounded digest"
+}

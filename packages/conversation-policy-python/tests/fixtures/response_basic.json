@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "sciforge.conversation-policy.response.v1",
+  "requestId": "fixture-request-001",
+  "status": "ok",
+  "goalSnapshot": {
+    "schemaVersion": "sciforge.conversation.goal-snapshot.v1",
+    "rawPrompt": "Continue the previous literature review and produce a markdown report.",
+    "taskRelation": "continue",
+    "goalType": "report"
+  },
+  "contextPolicy": {
+    "schemaVersion": "sciforge.conversation.context-policy.v1",
+    "mode": "continue"
+  },
+  "memoryPlan": {
+    "schemaVersion": "sciforge.conversation.memory-plan.v1"
+  },
+  "currentReferences": [],
+  "currentReferenceDigests": [],
+  "artifactIndex": {
+    "schemaVersion": "sciforge.artifact-index.v1"
+  },
+  "capabilityBrief": {
+    "schemaVersion": 1,
+    "selected": [],
+    "excluded": [],
+    "auditTrace": []
+  },
+  "handoffPlan": {
+    "schemaVersion": "sciforge.conversation.handoff-plan.v1",
+    "status": "ready"
+  },
+  "acceptancePlan": {
+    "schemaVersion": "sciforge.conversation.acceptance-plan.v1"
+  },
+  "recoveryPlan": {
+    "schemaVersion": "sciforge.conversation.recovery-plan.v1"
+  },
+  "userVisiblePlan": [],
+  "processStage": {
+    "phase": "planning",
+    "summary": "Conversation policy request evaluated.",
+    "metadata": {}
+  },
+  "auditTrace": [],
+  "errors": [],
+  "metadata": {
+    "service": "sciforge_conversation.service"
+  }
+}

@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { requestWithCurrentReferenceDigests } from '../../src/runtime/gateway/current-reference-digest.js';
-import type { GatewayRequest } from '../../src/runtime/runtime-types.js';
+import { applyConversationPolicy } from '../../src/runtime/conversation-policy/apply.js';
+import { normalizeGatewayRequest } from '../../src/runtime/gateway/gateway-request.js';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-prompt-ref-digests-'));
 const artifactDir = join(workspace, '.sciforge', 'artifacts', 'manual-review');
@@ -12,26 +12,32 @@ await mkdir(artifactDir, { recursive: true });
 await writeFile(join(artifactDir, 'research-report.md'), '# Report\n\nAutonomous agents and tool use.\n', 'utf8');
 await writeFile(join(artifactDir, 'paper-list.json'), JSON.stringify([{ title: 'Agent paper', categories: ['cs.AI'] }]), 'utf8');
 
-const request = {
+const request = normalizeGatewayRequest({
   prompt: '基于 workspace/.sciforge/artifacts/manual-review/research-report.md 和 paper-list.json 总结，不要重新检索。',
   skillDomain: 'literature',
+  workspacePath: workspace,
   uiState: {},
-} as GatewayRequest;
+});
 
-const updated = await requestWithCurrentReferenceDigests(request, workspace);
+const updated = (await applyConversationPolicy(request, {}, {
+  workspace,
+  config: {
+    mode: 'active',
+    command: 'python3',
+    args: ['-m', 'sciforge_conversation.service'],
+    timeoutMs: 5000,
+    pythonPath: join(process.cwd(), 'packages/conversation-policy-python/src'),
+  },
+})).request;
 const refs = Array.isArray(updated.uiState?.currentReferences) ? updated.uiState.currentReferences : [];
 const digests = Array.isArray(updated.uiState?.currentReferenceDigests) ? updated.uiState.currentReferenceDigests : [];
 
-assert.deepEqual(refs.map((entry) => entry.ref), [
+assert.deepEqual(refs.map((entry: Record<string, unknown>) => entry.ref), [
   '.sciforge/artifacts/manual-review/research-report.md',
   '.sciforge/artifacts/manual-review/paper-list.json',
 ]);
 assert.equal(digests.length, 2);
-assert.ok(digests.every((entry) => entry.status === 'ready'));
-for (const digest of digests) {
-  const digestRef = String(digest.digestRef || '').replace(/^file:/, '');
-  const text = await readFile(join(workspace, digestRef), 'utf8');
-  assert.ok(text.length > 0);
-}
+assert.ok(digests.every((entry: Record<string, unknown>) => entry.status === 'ok'));
+assert.ok(digests.every((entry: Record<string, unknown>) => typeof entry.digestText === 'string' && entry.digestText.length > 0));
 
 console.log('[ok] prompt workspace paths are promoted to current refs with bounded digests');

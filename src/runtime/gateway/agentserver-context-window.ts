@@ -635,10 +635,19 @@ export function agentServerContextPolicy(request: GatewayRequest) {
 }
 
 export function requestNeedsAgentServerContinuity(request: GatewayRequest) {
+  const policy = isRecord(request.uiState?.contextReusePolicy)
+    ? request.uiState.contextReusePolicy
+    : isRecord(request.uiState?.contextIsolation)
+      ? request.uiState.contextIsolation
+      : undefined;
+  if (policy) {
+    const mode = typeof policy.mode === 'string' ? policy.mode : '';
+    const historyReuse = isRecord(policy.historyReuse) ? policy.historyReuse : {};
+    return historyReuse.allowed === true || mode === 'continue' || mode === 'repair';
+  }
   if (toRecordList(request.uiState?.recentExecutionRefs).length) return true;
   if (request.artifacts.length) return true;
-  const prompt = String(request.prompt || '');
-  return /(?:继续|接着|上一轮|上次|前一次|之前|修复|重试|重跑|重新跑|复现|失败|报错|诊断|follow\s*up|continue|resume|repair|retry|rerun|again|previous|prior|last\s+(?:run|attempt|task)|failed|failure|error|debug)/i.test(prompt);
+  return false;
 }
 
 export function currentTurnReferences(request: GatewayRequest) {

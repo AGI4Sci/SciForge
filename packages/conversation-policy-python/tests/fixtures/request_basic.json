@@ -1,0 +1,60 @@
+{
+  "schemaVersion": "sciforge.conversation-policy.request.v1",
+  "requestId": "fixture-request-001",
+  "turn": {
+    "role": "user",
+    "turnId": "turn-003",
+    "text": "Continue the previous literature review and produce a markdown report.",
+    "refs": [
+      {
+        "kind": "path",
+        "ref": "/workspace/papers/review-seed.md",
+        "title": "Review seed",
+        "mimeType": "text/markdown"
+      }
+    ]
+  },
+  "history": [
+    {
+      "role": "user",
+      "turnId": "turn-001",
+      "text": "Find recent evidence about the pathway."
+    },
+    {
+      "role": "assistant",
+      "turnId": "turn-002",
+      "text": "Collected initial sources and draft notes."
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "reference-digest",
+      "title": "Reference Digest",
+      "description": "Digest markdown, PDF, JSON, CSV, and path references into bounded summaries.",
+      "keywords": ["reference", "digest", "markdown", "pdf", "literature"],
+      "inputTypes": ["path", "markdown", "pdf"],
+      "outputTypes": ["referenceDigest", "artifactIndex"],
+      "riskLevel": "low",
+      "internalAgent": false
+    },
+    {
+      "id": "computer-use",
+      "title": "Computer Use",
+      "description": "Operate GUI windows for open-ended desktop tasks.",
+      "keywords": ["gui", "desktop", "browser"],
+      "inputTypes": ["window"],
+      "outputTypes": ["trace"],
+      "riskLevel": "medium",
+      "internalAgent": true
+    }
+  ],
+  "policyHints": {
+    "maxHistoryTurns": 2,
+    "maxCapabilities": 3,
+    "requiredArtifacts": ["markdownReport"],
+    "acceptanceHints": ["Report must cite explicit references before older history."]
+  },
+  "metadata": {
+    "fixture": true
+  }
+}

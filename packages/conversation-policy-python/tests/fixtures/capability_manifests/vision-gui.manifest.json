@@ -1,0 +1,17 @@
+{
+  "id": "sense.vision.gui",
+  "kind": "sense",
+  "domain": ["gui", "vision"],
+  "summary": "Inspect screenshots and GUI state through a typed observation service.",
+  "triggers": ["screenshot", "visual", "gui", "computer use"],
+  "artifacts": ["observation.json", "trace.json"],
+  "modalities": ["image", "screenshot"],
+  "cost": "medium",
+  "latency": "interactive",
+  "risk": ["gui"],
+  "sideEffects": [],
+  "allowedOperations": ["observe", "ground"],
+  "adapter": "python:vision.observe",
+  "internalAgent": "optional",
+  "successRate": 0.81
+}

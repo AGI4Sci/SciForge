@@ -1,7 +1,7 @@
 import { nowIso, type AgentStreamEvent, type SendAgentMessageInput } from '../../domain';
 import { DEFAULT_AGENT_SERVER_URL } from '../../../../shared/agentHandoff';
 import { SCENARIO_SPECS } from '../../scenarioSpecs';
-import { builtInScenarioIdForInput, normalizeAgentBackend } from './requestPayload';
+import { builtInScenarioIdForInput, normalizeAgentBackend } from './runtimeConfig';
 import { compactCapabilityForBackend, normalizeContextCompaction } from './contextTelemetry';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -102,4 +102,3 @@ export async function compactAgentContext(input: SendAgentMessageInput, reason: 
     auditRefs: [`agentserver-compact-unavailable:${input.sessionId ?? 'no-session'}:${reason}`],
   };
 }
-

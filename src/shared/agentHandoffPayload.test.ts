@@ -75,12 +75,13 @@ test('verificationPolicy 和 verificationResult 会进入下一轮上下文', ()
   }));
   const envelope = buildContextEnvelope(request, { workspace: common.workspacePath });
 
+  const verificationPolicy = envelope.scenarioFacts.verificationPolicy as Record<string, unknown> | undefined;
   assert.deepEqual({
-    required: envelope.scenarioFacts.verificationPolicy?.required,
-    mode: envelope.scenarioFacts.verificationPolicy?.mode,
-    riskLevel: envelope.scenarioFacts.verificationPolicy?.riskLevel,
-    reason: envelope.scenarioFacts.verificationPolicy?.reason,
-    selectedVerifierIds: envelope.scenarioFacts.verificationPolicy?.selectedVerifierIds,
+    required: verificationPolicy?.required,
+    mode: verificationPolicy?.mode,
+    riskLevel: verificationPolicy?.riskLevel,
+    reason: verificationPolicy?.reason,
+    selectedVerifierIds: verificationPolicy?.selectedVerifierIds,
   }, common.verificationPolicy);
   assert.deepEqual(envelope.sessionFacts.verificationResult, verificationResult);
   assert.ok(envelope.longTermRefs.verificationResults?.some((entry) => (entry as Record<string, unknown>).id === 'verify-1'));

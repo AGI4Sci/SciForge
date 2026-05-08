@@ -22,6 +22,7 @@ export function normalizeGatewayRequest(body: Record<string, unknown>): GatewayR
     skillPlanRef: typeof body.skillPlanRef === 'string' ? body.skillPlanRef : undefined,
     uiPlanRef: typeof body.uiPlanRef === 'string' ? body.uiPlanRef : undefined,
     artifacts: Array.isArray(body.artifacts) ? body.artifacts.filter(isRecord) : [],
+    references: Array.isArray(body.references) ? body.references.filter(isRecord) : undefined,
     uiState: isRecord(body.uiState) ? body.uiState : undefined,
     availableSkills: Array.isArray(body.availableSkills) ? body.availableSkills.map(String) : undefined,
     selectedToolIds: Array.isArray(body.selectedToolIds) ? uniqueStrings(body.selectedToolIds.map(String)) : undefined,

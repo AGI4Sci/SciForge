@@ -112,6 +112,8 @@ export function readableStreamEventDetail(event: AgentStreamEvent) {
   }
   const rawDetail = detailFromRawToolEvent(event);
   if (rawDetail) return rawDetail;
+  const progressDetail = detailFromRawProgressEvent(event);
+  if (progressDetail) return progressDetail;
   if (!event.detail) return '';
   const detail = event.type === 'text-delta'
     ? normalizeStreamTextDelta(event.detail)
@@ -138,6 +140,7 @@ function streamEventImportance(event: AgentStreamEvent, detail: string): StreamE
     return isScriptOrArtifactGenerationDetail(detail) ? 'key' : 'background';
   }
   if (type === 'usage-update') return 'background';
+  if (type === 'process-progress') return 'key';
   if (/(current-plan|run-plan|stage-start|tool-call|project-tool-start|project-tool-done|repair-start|acceptance-repair|guidance-queued|backend-silent|status)/.test(type)) {
     return 'key';
   }
@@ -156,6 +159,7 @@ function streamEventTypeLabel(type: string, event?: AgentStreamEvent, detail = '
   if (type === 'run-plan') return '执行计划';
   if (type === 'stage-start') return '阶段开始';
   if (type === 'usage-update') return '用量';
+  if (type === 'process-progress') return '工作过程';
   return type;
 }
 
@@ -234,6 +238,23 @@ function detailFromRawToolEvent(event: AgentStreamEvent) {
     return tidyReadableText(`${detail}\n${tailText(output, 1400)}`);
   }
   return '';
+}
+
+function detailFromRawProgressEvent(event: AgentStreamEvent) {
+  const raw = isRecord(event.raw) ? event.raw : {};
+  const progress = isRecord(raw.progress) ? raw.progress : undefined;
+  if (!progress) return '';
+  const title = typeof progress.title === 'string' ? progress.title : event.detail || event.label;
+  const parts = [title];
+  const reading = Array.isArray(progress.reading) ? progress.reading.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
+  const writing = Array.isArray(progress.writing) ? progress.writing.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
+  const waitingFor = typeof progress.waitingFor === 'string' ? progress.waitingFor : '';
+  const nextStep = typeof progress.nextStep === 'string' ? progress.nextStep : '';
+  if (reading.length) parts.push(`正在读：${reading.join('、')}`);
+  if (writing.length) parts.push(`正在写：${writing.join('、')}`);
+  if (waitingFor) parts.push(`正在等：${waitingFor}`);
+  if (nextStep) parts.push(`下一步：${nextStep}`);
+  return tidyReadableText(parts.filter(Boolean).join('\n'));
 }
 
 function parseJsonObject(value: string): Record<string, unknown> | undefined {

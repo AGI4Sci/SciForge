@@ -54,6 +54,7 @@ export interface GatewayRequest {
   skillPlanRef?: string;
   uiPlanRef?: string;
   artifacts: Array<Record<string, unknown>>;
+  references?: Array<Record<string, unknown>>;
   uiState?: Record<string, unknown>;
   availableSkills?: string[];
   selectedToolIds?: string[];

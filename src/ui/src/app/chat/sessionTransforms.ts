@@ -28,7 +28,7 @@ export function createOptimisticUserTurnSession({
   baseSession: SciForgeSession;
   prompt: string;
   references: SciForgeReference[];
-  goalSnapshot: UserGoalSnapshot;
+  goalSnapshot?: UserGoalSnapshot;
   targetInstanceLabel?: string;
 }) {
   const now = nowIso();
@@ -148,7 +148,7 @@ export function appendFailedRunToSession({
   prompt: string;
   message: string;
   references: SciForgeReference[];
-  goalSnapshot: UserGoalSnapshot;
+  goalSnapshot?: UserGoalSnapshot;
 }) {
   const failedRunId = makeId('run');
   const failedAt = nowIso();

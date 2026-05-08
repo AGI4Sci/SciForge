@@ -50,7 +50,6 @@ import {
   requestNeedsAgentServerContinuity,
   workspaceContextWindowStateFromBackend,
 } from './gateway/agentserver-context-window.js';
-import { requestWithCurrentReferenceDigests } from './gateway/current-reference-digest.js';
 import {
   coerceAgentServerToolPayload,
   coerceWorkspaceTaskPayload,
@@ -113,6 +112,7 @@ import {
   type AgentServerBackendFailureKind,
 } from './gateway/backend-failure-diagnostics.js';
 import { tryRunVisionSenseRuntime } from './vision-sense-runtime.js';
+import { applyConversationPolicy } from './conversation-policy/apply.js';
 import { toolPackageManifests } from '../../packages/tools';
 import { agentHandoffSourceMetadata } from '../shared/agentHandoff.js';
 
@@ -172,7 +172,9 @@ type AgentServerGenerationResult =
   | { ok: false; error: string; diagnostics?: AgentServerGenerationFailureDiagnostics };
 
 export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, callbacks: WorkspaceRuntimeCallbacks = {}): Promise<ToolPayload> {
-  const request = normalizeGatewayRequestFromModule(body);
+  const normalizedRequest = normalizeGatewayRequestFromModule(body);
+  const policyApplication = await applyConversationPolicy(normalizedRequest, callbacks, { workspace: normalizedRequest.workspacePath });
+  const request = policyApplication.request;
   const visionSensePayload = await tryRunVisionSenseRuntime(request, callbacks);
   if (visionSensePayload) return applyRuntimeVerificationPolicy(visionSensePayload, request);
   const skills = await loadSkillRegistry(request);
@@ -665,7 +667,7 @@ async function requestAgentServerGeneration(params: {
   let runPayload: unknown;
   let contextRecovery: AgentServerGenerationFailureDiagnostics | undefined;
   try {
-    const request = await requestWithCurrentReferenceDigests(params.request, params.workspace);
+    const request = params.request;
     const { llmEndpointSource, ...llmRuntime } = await agentServerLlmRuntime(request, params.workspace);
     const backend = agentServerBackend(request, llmRuntime.llmEndpoint);
     const needsContinuity = requestNeedsAgentServerContinuity(request);

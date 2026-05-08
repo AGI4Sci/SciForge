@@ -460,6 +460,7 @@ function streamEventLabel(type: string, source?: string, toolName?: string) {
   if (type === 'contextCompaction') return '上下文压缩';
   if (type === 'run-plan') return '计划';
   if (type === 'stage-start') return '阶段';
+  if (type === 'process-progress') return '过程';
   if (type === 'text-delta') return '思考';
   if (type === 'tool-call') return toolName ? `调用 ${toolName}` : '工具调用';
   if (type === 'tool-result') return toolName ? `结果 ${toolName}` : '工具结果';

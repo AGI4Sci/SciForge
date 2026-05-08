@@ -10,7 +10,6 @@ import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from 
 import { summarizeTaskAttemptsForAgentServer } from './context-envelope.js';
 import { currentTurnReferences } from './agentserver-context-window.js';
 import { sanitizeAgentServerError } from './backend-failure-diagnostics.js';
-import { requestWithCurrentReferenceDigests } from './current-reference-digest.js';
 
 type AgentServerGenerationResult =
   | { ok: true; runId?: string; response: AgentServerGenerationResponse }
@@ -525,28 +524,43 @@ async function currentReferenceDigestRecoveryPayload(
   failureReason: string,
 ): Promise<ToolPayload | undefined> {
   if (!/convergence guard|silent stream guard|context window|token/i.test(failureReason)) return undefined;
-  const enrichedRequest = await requestWithCurrentReferenceDigests(request, workspace);
-  const digests = toRecordList(enrichedRequest.uiState?.currentReferenceDigests)
-    .filter((entry) => String(entry.status || '') === 'ready');
+  const digests = toRecordList(request.uiState?.currentReferenceDigests)
+    .filter((entry) => /^(ok|ready)$/i.test(String(entry.status || '')));
   if (!digests.length) return undefined;
   const sources: Array<{ sourceRef: string; digestRef: string; text: string }> = [];
   for (const digest of digests.slice(0, 6)) {
-    const digestRef = typeof digest.digestRef === 'string' ? digest.digestRef.replace(/^file:/, '') : '';
-    if (!digestRef) continue;
-    const abs = resolve(workspace, safeWorkspaceRel(digestRef));
-    try {
-      const text = await readFile(abs, 'utf8');
+    const digestRef = typeof digest.digestRef === 'string'
+      ? digest.digestRef.replace(/^file:/, '')
+      : typeof digest.clickableRef === 'string'
+        ? digest.clickableRef.replace(/^file:/, '')
+        : typeof digest.path === 'string'
+          ? digest.path
+          : '';
+    const inlineText = typeof digest.digestText === 'string' ? digest.digestText : '';
+    if (inlineText.trim()) {
       sources.push({
-        sourceRef: String(digest.sourceRef || digestRef),
-        digestRef,
-        text,
+        sourceRef: String(digest.sourceRef || digestRef || digest.id || 'current-reference'),
+        digestRef: digestRef || String(digest.clickableRef || digest.sourceRef || digest.id || 'current-reference'),
+        text: inlineText,
       });
-    } catch {
-      // A missing digest should not block other current references.
+      continue;
+    }
+    if (digestRef) {
+      const abs = resolve(workspace, safeWorkspaceRel(digestRef));
+      try {
+        const text = await readFile(abs, 'utf8');
+        sources.push({
+          sourceRef: String(digest.sourceRef || digestRef),
+          digestRef,
+          text,
+        });
+      } catch {
+        // A missing digest should not block other current references.
+      }
     }
   }
   if (!sources.length) return undefined;
-  const markdown = buildDigestRecoveryMarkdown(enrichedRequest, sources, failureReason);
+  const markdown = buildDigestRecoveryMarkdown(request, sources, failureReason);
   const reportId = 'research-report';
   const digestRefs = sources.flatMap((source) => [
     { id: `source-${sha1(source.sourceRef).slice(0, 8)}`, kind: 'file', title: source.sourceRef.split('/').pop() || source.sourceRef, ref: `file:${source.sourceRef}` },

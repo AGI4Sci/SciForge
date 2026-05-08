@@ -96,3 +96,29 @@ test('script generation and write-file events stay visible in the running chat m
   assert.match(write.detail, /arxiv_agent_literature_review\.py/);
   assert.match(latestRunningEvent([generationEvent, writeEvent]) || '', /正在写入脚本/);
 });
+
+test('process-progress events expose read write wait and next step details', () => {
+  const processEvent = event({
+    type: 'process-progress',
+    label: '过程',
+    detail: '正在等待 AgentServer 返回',
+    raw: {
+      progress: {
+        phase: 'wait',
+        title: '正在等待 AgentServer 返回',
+        reading: ['/workspace/input/papers.csv'],
+        writing: ['/workspace/tasks/review.py'],
+        waitingFor: 'AgentServer 返回',
+        nextStep: '收到新事件后继续执行。',
+      },
+    },
+  });
+
+  const presentation = presentStreamEvent(processEvent);
+
+  assert.equal(presentation.importance, 'key');
+  assert.equal(presentation.visibleInRunningMessage, true);
+  assert.match(presentation.detail, /正在读：\/workspace\/input\/papers\.csv/);
+  assert.match(presentation.detail, /正在写：\/workspace\/tasks\/review\.py/);
+  assert.match(presentation.detail, /下一步：收到新事件后继续执行/);
+});

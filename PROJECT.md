@@ -9,6 +9,7 @@
 - Self-evolving skills 是核心原则：任务代码先在当前 workspace 中生成、修复和验证；稳定成功后，经用户确认再沉淀到 skill library 或 package skill package 候选。
 - 所有修改必须通用、可泛化到任何场景，不能在代码里面硬编码和为当前案例打补丁
 - 算法相关的代码优先用Python实现，方便人类用户优化、检查算法
+- Python conversation-policy package 是多轮对话策略算法的唯一真相源；TypeScript 只能保留 transport、runtime 执行边界和 UI 渲染，不再维护一套并行的策略推断算法。
 - 当 senses、skills、tools、verifiers、ui-components 增多时，主 agent 只消费 capability broker 生成的紧凑 capability brief；能力模块默认是 typed service/adapter，只有开放式、多步推理模块才声明内部 planner/小 agent，UI components 只负责按 schema 渲染。
 - 真实任务应输出标准 artifact JSON、日志和 ExecutionUnit；不得用 demo/空结果伪装成功。
 - 错误必须进入下一轮上下文：failureReason、日志/代码引用、缺失输入、recoverActions、nextStep 和 attempt history 都要保留。
@@ -23,38 +24,38 @@
 
 ### T093 Python Conversation Policy 与 Capability Broker 模块化改造
 
-状态：计划中。承接 `docs/SciForgeConversationSessionRecovery.md` 的“模块化 Python 改造建议”和“Capability Broker 与模块化能力感知”。目标是把多轮对话策略、历史恢复、引用摘要、验收恢复和能力选择从 TypeScript runtime 里的散落规则，逐步迁移为可分工、可测试、可审计的 Python policy engine；TypeScript 保留 UI、stream、workspace writer 和 AgentServer 调用壳。
+状态：已完成。承接 `docs/SciForgeConversationSessionRecovery.md` 的“模块化 Python 改造建议”和“Capability Broker 与模块化能力感知”。目标是把多轮对话策略、历史恢复、引用摘要、验收恢复和能力选择从 TypeScript runtime 里的散落规则，逐步迁移为可分工、可测试、可审计的 Python policy engine；TypeScript 保留 UI、stream、workspace writer 和 AgentServer 调用壳。
 
 核心原则：
 
 - Python 负责算法：goal snapshot、context policy、memory/retrieval、reference digest、artifact index、capability broker、handoff plan、acceptance、recovery、process events。
-- TypeScript 负责工程壳：React UI 状态、HTTP/stream/abort、workspace writer、AgentServer payload、结果渲染和 bridge fallback。
+- TypeScript 负责工程壳：React UI 状态、HTTP/stream/abort、workspace writer、AgentServer payload、结果渲染和 Python bridge。
 - 主 agent 不读取完整 capability registry，只读取 broker 生成的少量 capability brief。
 - 能力模块默认是 typed service/adapter；内部 LLM/小 agent 只用于 GUI/vision/computer-use、复杂文献检索、代码修复、多步实验设计等开放式复杂模块，并且必须藏在稳定 schema 后面。
 - UI components 不做推理，只声明可渲染 artifact/schema，由 runtime 根据 broker 和 artifact type 选择。
-- 所有 Python/TS 交互走版本化 JSON contract；先 mirror/灰度，再切换主路径，最后删除重复 TS 启发式。
+- 所有 Python/TS 交互走版本化 JSON contract；runtime 主路径直接应用 Python policy response，旧 TS 策略启发式不再保留。
 
 Todo：
 
-- [ ] 新建 `packages/conversation-policy-python/`：包含 `pyproject.toml`、`src/sciforge_conversation/`、`tests/fixtures/`，先实现 `contracts.py`、`service.py` 和 request/response schema version。
-- [ ] 实现 `goal_snapshot.py`、`context_policy.py`、`memory.py`：覆盖新任务隔离、继续上一轮、修复上一轮、显式引用优先、历史污染防护。
-- [ ] 实现 `reference_digest.py`、`artifact_index.py`：支持 Markdown/PDF/JSON/CSV/path refs 的 bounded digest，输出 clickable/ref-safe artifact index，不直接把长正文塞进 handoff。
-- [ ] 实现 `capability_broker.py`：读取 capability manifest，按 prompt/goal/refs/场景/风险/成本/历史信号筛选 top-k，输出 compact brief、excluded reasons 和 audit trace。
-- [ ] 实现 `handoff_planner.py`、`acceptance.py`、`recovery.py`：把 handoff budget、必需 artifact、markdown report/ref 验收、silent stream、missing output、repair/digest recovery 做成 Python 决策。
-- [ ] 实现 `process_events.py`：把 raw backend/tool/workspace 事件归纳为用户可读阶段，保证多轮长任务能看到“正在读什么、写什么、等待什么、下一步是什么”。
-- [ ] 增加 TS bridge/mirror mode：TypeScript runtime 能调用 Python policy engine，同时保留现有 TS fallback；记录 TS/Python 决策差异，不影响现有用户流程。
-- [ ] 增加测试：Python fixture unit tests、golden tests、过去失败场景 regression、TS bridge smoke、长任务多轮对话 smoke。
-- [ ] 更新文档：把真实 contract、manifest 字段、迁移开关、fallback 策略和调试方法同步到 `docs/SciForgeConversationSessionRecovery.md` 与相关 runtime 文档。
+- [x] 新建 `packages/conversation-policy-python/`：包含 `pyproject.toml`、`src/sciforge_conversation/`、`tests/fixtures/`，先实现 `contracts.py`、`service.py` 和 request/response schema version。
+- [x] 实现 `goal_snapshot.py`、`context_policy.py`、`memory.py`：覆盖新任务隔离、继续上一轮、修复上一轮、显式引用优先、历史污染防护。
+- [x] 实现 `reference_digest.py`、`artifact_index.py`：支持 Markdown/PDF/JSON/CSV/path refs 的 bounded digest，输出 clickable/ref-safe artifact index，不直接把长正文塞进 handoff。
+- [x] 实现 `capability_broker.py`：读取 capability manifest，按 prompt/goal/refs/场景/风险/成本/历史信号筛选 top-k，输出 compact brief、excluded reasons 和 audit trace。
+- [x] 实现 `handoff_planner.py`、`acceptance.py`、`recovery.py`：把 handoff budget、必需 artifact、markdown report/ref 验收、silent stream、missing output、repair/digest recovery 做成 Python 决策。
+- [x] 实现 `process_events.py`：把 raw backend/tool/workspace 事件归纳为用户可读阶段，保证多轮长任务能看到“正在读什么、写什么、等待什么、下一步是什么”。
+- [x] 增加 TS bridge active mode：TypeScript runtime 调用 Python policy engine，并把 Python response 写回 context/handoff/digest/capability/acceptance/recovery 运行态。
+- [x] 增加测试：Python fixture unit tests、golden tests、过去失败场景 regression、TS bridge smoke、长任务多轮对话 smoke。
+- [x] 更新文档：把真实 contract、manifest 字段、迁移开关、fallback 策略和调试方法同步到 `docs/SciForgeConversationSessionRecovery.md` 与相关 runtime 文档。
 
 验收标准：
 
-- [ ] Python package 可独立运行单测，不依赖真实 AgentServer 或前端页面。
-- [ ] TS runtime 能在 mirror mode 调 Python，并在失败时自动 fallback 到现有路径。
-- [ ] capability brief 小而可解释；主 agent 不需要看到完整 registry 才能选择能力。
-- [ ] 默认能力模块没有内部 agent；只有 manifest 明确声明 `internalAgent` 的复杂能力可以使用内部 planner/小 agent。
-- [ ] 用户可见过程信息从 raw stream 变成稳定阶段模型，长任务不会只显示永久 running。
-- [ ] 覆盖关键回归：上下文隔离、继续上一轮、显式 refs、digest recovery、缺 markdown report、silent stream、运行中追加引导。
-- [ ] `npm run typecheck -- --pretty false`、相关 TS smoke、Python pytest/golden tests 均通过。
+- [x] Python package 可独立运行单测，不依赖真实 AgentServer 或前端页面。
+- [x] TS runtime 主路径调用 Python policy；浏览器端不再维护 goal/context/memory/reference digest/acceptance 的并行算法。
+- [x] capability brief 小而可解释；主 agent 不需要看到完整 registry 才能选择能力。
+- [x] 默认能力模块没有内部 agent；只有 manifest 明确声明 `internalAgent` 的复杂能力可以使用内部 planner/小 agent。
+- [x] 用户可见过程信息从 raw stream 变成稳定阶段模型，长任务不会只显示永久 running。
+- [x] 覆盖关键回归：上下文隔离、继续上一轮、显式 refs、digest recovery、缺 markdown report、silent stream、运行中追加引导。
+- [x] `npm run typecheck -- --pretty false`、相关 TS smoke、Python pytest/golden tests 均通过。
 
 ### T092 双实例 Agent 互修与稳定同步
 
