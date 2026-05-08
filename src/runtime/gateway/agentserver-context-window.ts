@@ -608,7 +608,10 @@ export function agentServerAgentId(request: GatewayRequest, _purpose: string) {
   const sessionId = typeof request.uiState?.sessionId === 'string' ? request.uiState.sessionId : '';
   const packageId = request.scenarioPackageRef?.id || request.skillDomain;
   const referenceScope = currentReferenceScopeKey(request);
-  const stable = [packageId, referenceScope || sessionId || request.skillPlanRef || request.skillDomain]
+  const continuityScope = requestNeedsAgentServerContinuity(request)
+    ? referenceScope || sessionId || request.skillPlanRef || request.skillDomain
+    : `fresh:${sha1(`${request.prompt}:${Date.now()}:${Math.random()}`).slice(0, 12)}`;
+  const stable = [packageId, continuityScope]
     .filter(Boolean)
     .join(':');
   return `sciforge-${request.skillDomain}-${sha1(stable).slice(0, 12)}`;
@@ -617,17 +620,25 @@ export function agentServerAgentId(request: GatewayRequest, _purpose: string) {
 export function agentServerContextPolicy(request: GatewayRequest) {
   const hasSession = typeof request.uiState?.sessionId === 'string' && request.uiState.sessionId.trim().length > 0;
   const isolatedReferenceTurn = currentTurnReferences(request).length > 0;
+  const useContinuity = requestNeedsAgentServerContinuity(request);
   return {
-    includeCurrentWork: hasSession && !isolatedReferenceTurn,
-    includeRecentTurns: hasSession && !isolatedReferenceTurn,
+    includeCurrentWork: hasSession && useContinuity && !isolatedReferenceTurn,
+    includeRecentTurns: hasSession && useContinuity && !isolatedReferenceTurn,
     includePersistent: false,
     includeMemory: false,
-    persistRunSummary: hasSession && !isolatedReferenceTurn,
+    persistRunSummary: hasSession && useContinuity && !isolatedReferenceTurn,
     persistExtractedConstraints: false,
     maxContextWindowTokens: request.maxContextWindowTokens,
     contextWindowLimit: request.maxContextWindowTokens,
     modelContextWindow: request.maxContextWindowTokens,
   };
+}
+
+export function requestNeedsAgentServerContinuity(request: GatewayRequest) {
+  if (toRecordList(request.uiState?.recentExecutionRefs).length) return true;
+  if (request.artifacts.length) return true;
+  const prompt = String(request.prompt || '');
+  return /(?:继续|接着|上一轮|上次|前一次|之前|修复|重试|重跑|重新跑|复现|失败|报错|诊断|follow\s*up|continue|resume|repair|retry|rerun|again|previous|prior|last\s+(?:run|attempt|task)|failed|failure|error|debug)/i.test(prompt);
 }
 
 export function currentTurnReferences(request: GatewayRequest) {

@@ -527,7 +527,7 @@ function normalizeAgentServerArtifacts(value: unknown, message?: string): Array<
   }
   return artifacts.map((artifact) => {
     const type = String(artifact.type || artifact.artifactType || artifact.id || '');
-    const id = String(artifact.id || type || 'artifact');
+    const id = String(artifact.id || artifact.ref || type || 'artifact');
     const normalizedArtifact = { ...artifact, id, type };
     const data = isRecord(artifact.data) ? artifact.data : artifactDataFromLooseArtifact(normalizedArtifact);
     return Object.keys(data).length ? { ...normalizedArtifact, data } : normalizedArtifact;

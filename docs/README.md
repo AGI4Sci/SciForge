@@ -17,6 +17,7 @@
 - [`TimelineDecisionCollaborationModel.md`](TimelineDecisionCollaborationModel.md)：研究时间线、决策记录、协作和导出模型。
 - [`CLI_UI_Shared_Agent_Usage.md`](CLI_UI_Shared_Agent_Usage.md)：UI 聊天与 CLI/终端如何共享同一套 Agent handoff contract。
 - [`AgentServerTaskGenerationProtocol.md`](AgentServerTaskGenerationProtocol.md)：AgentServer 如何生成或修复 workspace-local task code，并返回 `ToolPayload`。
+- [`SciForgeConversationSessionRecovery.md`](SciForgeConversationSessionRecovery.md)：多轮对话、历史 session 恢复、上下文选择和 Python 化策略层建议。
 
 ## 模块文档
 
@@ -26,7 +27,7 @@
 - [`../packages/senses/vision-sense/vision_docs/vision_computer_use_agent_mvp.md`](../packages/senses/vision-sense/vision_docs/vision_computer_use_agent_mvp.md)：Vision + Computer Use 最小闭环。
 - [`../packages/senses/vision-sense/vision_docs/vision_computer_use_agent_design_v2.md`](../packages/senses/vision-sense/vision_docs/vision_computer_use_agent_design_v2.md)：Vision + Computer Use 设计细节。
 - [`../packages/senses/vision-sense/vision_docs/VISION_FIRST_HYBRID_COMPUTER_USE_STRATEGY.md`](../packages/senses/vision-sense/vision_docs/VISION_FIRST_HYBRID_COMPUTER_USE_STRATEGY.md)：视觉优先的混合 Computer Use 策略。
-- [`../packages/senses/vision-sense/vision_docs/KV_GROUND_ERVICE_GUIDANCE.md`](../packages/senses/vision-sense/vision_docs/KV_GROUND_ERVICE_GUIDANCE.md)：KV-Ground 部署、路径映射和排障。
+- [`../packages/senses/vision-sense/vision_docs/KV_GROUND_SERVICE_GUIDANCE.md`](../packages/senses/vision-sense/vision_docs/KV_GROUND_SERVICE_GUIDANCE.md)：KV-Ground 部署、路径映射和排障。
 
 ## 示例
 

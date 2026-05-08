@@ -47,6 +47,7 @@ import {
   handoffContextWindowState,
   preflightAgentServerContextWindow,
   readBackendContextWindowState,
+  requestNeedsAgentServerContinuity,
   workspaceContextWindowStateFromBackend,
 } from './gateway/agentserver-context-window.js';
 import { requestWithCurrentReferenceDigests } from './gateway/current-reference-digest.js';
@@ -667,6 +668,8 @@ async function requestAgentServerGeneration(params: {
     const request = await requestWithCurrentReferenceDigests(params.request, params.workspace);
     const { llmEndpointSource, ...llmRuntime } = await agentServerLlmRuntime(request, params.workspace);
     const backend = agentServerBackend(request, llmRuntime.llmEndpoint);
+    const needsContinuity = requestNeedsAgentServerContinuity(request);
+    const generationPurpose = needsContinuity ? 'workspace-task-generation' : 'workspace-task-generation-inline';
     if (!llmRuntime.llmEndpoint && requiresUserLlmEndpoint(params.baseUrl)) {
       return { ok: false, error: missingUserLlmEndpointMessage() };
     }
@@ -681,7 +684,8 @@ async function requestAgentServerGeneration(params: {
       callbacks: params.callbacks,
     });
     const workspaceTree = await workspaceTreeSummary(params.workspace);
-    const priorAttempts = currentTurnReferences(request).length
+    const attachPriorAttempts = needsContinuity;
+    const priorAttempts = currentTurnReferences(request).length || !attachPriorAttempts
       ? []
       : summarizeTaskAttemptsForAgentServer(await readRecentTaskAttempts(params.workspace, request.skillDomain, 8, {
         scenarioPackageId: request.scenarioPackageRef?.id,
@@ -735,6 +739,7 @@ async function requestAgentServerGeneration(params: {
       priorAttempts: compactContext.priorAttempts,
       strictTaskFilesReason: params.strictTaskFilesReason,
       retryAudit: contextRecovery?.retryAudit,
+      freshCurrentTurn: !needsContinuity,
     };
     const generationPrompt = buildAgentServerGenerationPrompt(generationRequest);
     const contextEnvelopeBytes = Buffer.byteLength(JSON.stringify(contextEnvelope), 'utf8');
@@ -757,12 +762,16 @@ async function requestAgentServerGeneration(params: {
         backend,
         workspace: params.workspace,
         workingDirectory: params.workspace,
-        reconcileExisting: true,
+        reconcileExisting: needsContinuity,
         systemPrompt: [
           AGENT_BACKEND_ANSWER_PRINCIPLE,
           'You generate SciForge workspace-local task code.',
+          !needsContinuity
+            ? 'Fresh-generation hard rule: do not call shell/filesystem/browser tools to inspect the workspace, .sciforge, old task attempts, logs, artifacts, installed packages, or prior generated code before returning. Your first substantive assistant output must be the final compact JSON for a direct ToolPayload or a runnable AgentServerGenerationResponse.'
+            : 'Continuity-generation mode: inspect only the specific prior refs needed for the user-requested continuation, repair, or rerun.',
           'Write task files that accept inputPath and outputPath argv values and write a SciForge ToolPayload JSON object.',
           'For current-reference document requests, use uiStateSummary.currentReferenceDigests/contextEnvelope.sessionFacts.currentReferenceDigests first; do not spend generation-stage tool calls dumping long files into model context.',
+          'For fresh current-turn requests, do not browse old .sciforge task attempts, logs, artifacts, or generated tasks for diagnostics; generate the requested runnable task or direct ToolPayload from the current turn.',
           'Do not create demo/default success artifacts; if the real task cannot be generated, explain the missing condition.',
         ].join(' '),
       },
@@ -770,7 +779,7 @@ async function requestAgentServerGeneration(params: {
         text: generationPrompt,
         metadata: {
           project: 'SciForge',
-          purpose: 'workspace-task-generation',
+          purpose: generationPurpose,
           skillDomain: request.skillDomain,
           skillId: params.skill.id,
           expectedArtifactTypes: generationRequest.expectedArtifactTypes,
@@ -804,7 +813,8 @@ async function requestAgentServerGeneration(params: {
           maxContextWindowTokens: request.maxContextWindowTokens,
           contextWindowLimit: request.maxContextWindowTokens,
           modelContextWindow: request.maxContextWindowTokens,
-          requiresNativeWorkspaceCapabilities: true,
+          requiresNativeWorkspaceCapabilities: needsContinuity,
+          nativeToolFirst: needsContinuity,
           llmEndpointSource: llmRuntime.llmEndpoint ? llmEndpointSource : undefined,
           retryAudit: contextRecovery?.retryAudit,
         },
@@ -814,6 +824,7 @@ async function requestAgentServerGeneration(params: {
         ...agentHandoffSourceMetadata(requestHandoffSource(request)),
         source: 'workspace-runtime-gateway',
         task: 'generation',
+        purpose: generationPurpose,
         workspace: params.workspace,
         workingDirectory: params.workspace,
         maxContextWindowTokens: request.maxContextWindowTokens,
@@ -885,11 +896,34 @@ async function requestAgentServerGeneration(params: {
       signal: controller.signal,
       body: JSON.stringify(runPayload),
     });
-    const { json, run, error } = await readAgentServerRunStream(response, (event) => {
+    const { json, run, error, streamText } = await readAgentServerRunStream(response, (event) => {
       emitWorkspaceRuntimeEvent(params.callbacks, withRequestContextWindowLimit(
         normalizeAgentServerWorkspaceEvent(event),
         request,
       ));
+    }, {
+      maxTotalUsage: currentReferenceDigestGuardLimit(request),
+      maxSilentMs: currentReferenceDigestSilentGuardMs(request),
+      onGuardTrip: (message) => {
+        controller.abort();
+        emitWorkspaceRuntimeEvent(params.callbacks, {
+          type: 'agentserver-convergence-guard',
+          source: 'workspace-runtime',
+          status: 'failed-with-reason',
+          message,
+          detail: 'Current-reference digests are already available; SciForge will recover from bounded refs instead of letting the backend replay large files indefinitely.',
+        });
+      },
+      onSilentTimeout: (message) => {
+        controller.abort();
+        emitWorkspaceRuntimeEvent(params.callbacks, {
+          type: 'agentserver-silent-stream-guard',
+          source: 'workspace-runtime',
+          status: 'failed-with-reason',
+          message,
+          detail: 'Current-reference digests are already available; SciForge will recover from bounded refs instead of waiting on a silent backend stream indefinitely.',
+        });
+      },
     });
     await writeAgentServerDebugArtifact(params.workspace, 'generation', runPayload, response.status, json);
     if (!response.ok) {
@@ -980,8 +1014,9 @@ async function requestAgentServerGeneration(params: {
         callbacks: params.callbacks,
       });
     }
-    const directText = extractAgentServerOutputText(run);
-    const parsed = parseGenerationResponse(run.output) ?? parseGenerationResponse(run);
+    const directText = extractAgentServerOutputText(run) || streamText || '';
+    const parsedRaw = parseGenerationResponse(run.output) ?? parseGenerationResponse(run) ?? parseGenerationResponse(streamText);
+    const parsed = parsedRaw && directText ? hydrateGeneratedTaskResponseFromText(parsedRaw, directText) : parsedRaw;
     if (!parsed) {
       if (directText) {
         const parsedTextGeneration = parseGenerationResponseFromStandaloneText(directText);
@@ -1075,13 +1110,59 @@ async function appendContextRecoveryAuditAttempt(params: {
 
 function parseGenerationResponseFromStandaloneText(text: string) {
   const parsed = extractStandaloneJson(text);
-  return parseGenerationResponse(parsed);
+  const response = parseGenerationResponse(parsed);
+  if (!response) return undefined;
+  return hydrateGeneratedTaskResponseFromText(response, text);
+}
+
+function hydrateGeneratedTaskResponseFromText(response: AgentServerGenerationResponse, text: string): AgentServerGenerationResponse {
+  return {
+    ...response,
+    taskFiles: response.taskFiles.map((file) => file.content ? file : {
+      ...file,
+      content: fencedTaskFileContentForPath(text, file.path) ?? file.content,
+    }),
+  };
+}
+
+function fencedTaskFileContentForPath(text: string, path: string) {
+  const normalizedPath = safeWorkspaceRel(path);
+  for (const match of text.matchAll(/```([a-zA-Z0-9_+.-]*)\s*\n([\s\S]*?)```/g)) {
+    const language = match[1]?.trim().toLowerCase() || '';
+    if (language === 'json') continue;
+    const body = match[2] ?? '';
+    const lines = body.replace(/\r\n/g, '\n').split('\n');
+    const firstMeaningfulIndex = lines.findIndex((line) => line.trim().length > 0);
+    const firstMeaningful = firstMeaningfulIndex >= 0 ? lines[firstMeaningfulIndex].trim() : '';
+    const declaredPath = firstMeaningful.match(/^#\s+(.+)$/)?.[1]?.trim();
+    if (declaredPath && safeWorkspaceRel(declaredPath) !== normalizedPath) continue;
+    if (!declaredPath && !languageLooksCompatibleWithPath(language, normalizedPath)) continue;
+    const content = declaredPath ? lines.slice(firstMeaningfulIndex + 1).join('\n').trimStart() : body.trimStart();
+    if (content.trim()) return content;
+  }
+  return undefined;
+}
+
+function languageLooksCompatibleWithPath(language: string, path: string) {
+  if (!language) return false;
+  if (path.endsWith('.py')) return /python|py/.test(language);
+  if (path.endsWith('.js') || path.endsWith('.mjs')) return /javascript|js|node/.test(language);
+  if (path.endsWith('.ts')) return /typescript|ts/.test(language);
+  if (path.endsWith('.r') || path.endsWith('.R')) return /^r$|rscript/.test(language);
+  if (path.endsWith('.sh')) return /bash|shell|sh|zsh/.test(language);
+  return false;
 }
 
 async function readAgentServerRunStream(
   response: Response,
   onEvent: (event: unknown) => void,
-): Promise<{ json: unknown; run: Record<string, unknown>; error?: string }> {
+  options: {
+    maxTotalUsage?: number;
+    onGuardTrip?: (message: string) => void;
+    maxSilentMs?: number;
+    onSilentTimeout?: (message: string) => void;
+  } = {},
+): Promise<{ json: unknown; run: Record<string, unknown>; error?: string; streamText?: string }> {
   if (!response.body) {
     const text = await response.text();
     let json: unknown = text;
@@ -1103,18 +1184,45 @@ async function readAgentServerRunStream(
   let buffer = '';
   let finalResult: unknown;
   let streamError = '';
+  let lastEnvelopeAt = Date.now();
+  const streamTextParts: string[] = [];
   function consumeLine(rawLine: string) {
     const line = rawLine.trim();
     if (!line) return;
+    lastEnvelopeAt = Date.now();
     const envelope = JSON.parse(line) as unknown;
     envelopes.push(envelope);
     if (!isRecord(envelope)) return;
-    if ('event' in envelope) onEvent(envelope.event);
+    if ('event' in envelope) {
+      const event = envelope.event;
+      if (isRecord(event) && typeof event.text === 'string') streamTextParts.push(event.text);
+      onEvent(event);
+      const totalUsage = agentServerEventTotalUsage(event);
+      if (options.maxTotalUsage && totalUsage && totalUsage > options.maxTotalUsage) {
+        const message = `AgentServer generation stopped by convergence guard after ${totalUsage} total tokens; bounded current-reference digests should be used instead of repeated full-file reads.`;
+        options.onGuardTrip?.(message);
+        throw new Error(message);
+      }
+    }
     if ('result' in envelope) finalResult = envelope.result;
     if ('error' in envelope) streamError = String(envelope.error || '');
   }
   for (;;) {
-    const { value, done } = await reader.read();
+    const readResult = options.maxSilentMs
+      ? await Promise.race([
+        reader.read(),
+        new Promise<{ silentTimeout: true }>((resolve) => {
+          setTimeout(() => resolve({ silentTimeout: true }), options.maxSilentMs);
+        }),
+      ])
+      : await reader.read();
+    if ('silentTimeout' in readResult) {
+      const silentMs = Date.now() - lastEnvelopeAt;
+      const message = `AgentServer generation stopped by silent stream guard after ${silentMs}ms without stream events; bounded current-reference digests should be used instead of waiting indefinitely.`;
+      options.onSilentTimeout?.(message);
+      throw new Error(message);
+    }
+    const { value, done } = readResult;
     buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
     while (buffer.includes('\n')) {
       const index = buffer.indexOf('\n');
@@ -1129,7 +1237,45 @@ async function readAgentServerRunStream(
     json: finalResult ?? { envelopes, error: streamError },
     run: isRecord(data.run) ? data.run : {},
     error: streamError || undefined,
+    streamText: streamTextParts.join(''),
   };
+}
+
+function currentReferenceDigestGuardLimit(request: GatewayRequest) {
+  const digests = Array.isArray(request.uiState?.currentReferenceDigests)
+    ? request.uiState.currentReferenceDigests
+    : [];
+  if (!digests.length) return undefined;
+  const configured = typeof request.maxContextWindowTokens === 'number' && Number.isFinite(request.maxContextWindowTokens)
+    ? request.maxContextWindowTokens
+    : 200_000;
+  return Math.max(40_000, Math.min(80_000, Math.floor(configured * 0.4)));
+}
+
+function currentReferenceDigestSilentGuardMs(request: GatewayRequest) {
+  const digests = Array.isArray(request.uiState?.currentReferenceDigests)
+    ? request.uiState.currentReferenceDigests
+    : [];
+  if (!digests.length) return undefined;
+  return 45_000;
+}
+
+function agentServerEventTotalUsage(event: unknown) {
+  if (!isRecord(event)) return undefined;
+  const usage = isRecord(event.usage) ? event.usage : isRecord(event.output) && isRecord(event.output.usage) ? event.output.usage : undefined;
+  const candidates = [
+    event.total,
+    event.totalTokens,
+    event.tokens,
+    usage?.total,
+    usage?.totalTokens,
+    usage?.input && usage?.output ? Number(usage.input) + Number(usage.output) : undefined,
+    usage?.inputTokens && usage?.outputTokens ? Number(usage.inputTokens) + Number(usage.outputTokens) : undefined,
+    usage?.promptTokens && usage?.completionTokens ? Number(usage.promptTokens) + Number(usage.completionTokens) : undefined,
+  ];
+  return candidates
+    .map((value) => typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN)
+    .find((value) => Number.isFinite(value) && value > 0);
 }
 
 async function recoverOrReturnAgentServerGenerationFailure(params: {

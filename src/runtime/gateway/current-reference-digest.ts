@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { extname, join, resolve } from 'node:path';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { GatewayRequest } from '../runtime-types.js';
 import { clipForAgentServerPrompt, isRecord, safeWorkspaceRel, toRecordList, uniqueStrings } from '../gateway-utils.js';
@@ -11,18 +11,118 @@ const MAX_EXTRACT_CHARS = 700_000;
 const MAX_DIGEST_EXCERPT_CHARS = 8_000;
 
 export async function requestWithCurrentReferenceDigests(request: GatewayRequest, workspace: string): Promise<GatewayRequest> {
-  const currentReferences = toRecordList(request.uiState?.currentReferences);
+  const currentReferences = [
+    ...toRecordList(request.uiState?.currentReferences),
+    ...await promptPathReferences(request.prompt, workspace),
+  ];
   if (!currentReferences.length) return request;
   const digests = (await Promise.all(currentReferences.map((entry) => digestCurrentReference(entry, workspace))))
     .filter((entry) => Boolean(entry));
   if (!digests.length) return request;
+  const mergedReferences = mergeReferenceRecords(toRecordList(request.uiState?.currentReferences), currentReferences);
   return {
     ...request,
     uiState: {
       ...(isRecord(request.uiState) ? request.uiState : {}),
+      currentReferences: mergedReferences,
       currentReferenceDigests: digests,
     },
   };
+}
+
+async function promptPathReferences(prompt: string, workspace: string) {
+  const explicitRefs = extractWorkspaceLikeRefs(prompt);
+  const siblingDirs = uniqueStrings(explicitRefs
+    .map((ref) => dirname(ref.replace(/^file:/, '')))
+    .filter((dir) => dir && dir !== '.'));
+  const bareNames = extractBareFileNames(prompt)
+    .filter((name) => !explicitRefs.some((ref) => basename(ref.replace(/^file:/, '')) === name));
+  const resolvedBareRefs = await resolveBareFileRefs(bareNames, siblingDirs, workspace);
+  return uniqueStrings([...explicitRefs, ...resolvedBareRefs])
+    .map((ref) => ({
+      ref,
+      path: ref,
+      source: 'prompt-path',
+      label: basename(ref),
+    }));
+}
+
+function extractWorkspaceLikeRefs(prompt: string) {
+  const refs: string[] = [];
+  const pattern = /(?:^|[\s"'`(\[，。；：、])((?:file:)?(?:\/[^\s"'`)\]，。；：、]+|(?:workspace\/|\.sciforge\/|\.\/workspace\/)[^\s"'`)\]，。；：、]+?\.(?:pdf|txt|md|markdown|csv|tsv|json|log)))(?=$|[\s"'`)\]，。；：、])/gi;
+  for (const match of prompt.matchAll(pattern)) {
+    const normalized = normalizePromptRef(match[1]);
+    if (normalized) refs.push(normalized);
+  }
+  return uniqueStrings(refs);
+}
+
+function extractBareFileNames(prompt: string) {
+  const refs: string[] = [];
+  const pattern = /(?:^|[\s"'`(\[，。；：、])([A-Za-z0-9._-]+\.(?:pdf|txt|md|markdown|csv|tsv|json|log))(?=$|[\s"'`)\]，。；：、])/gi;
+  for (const match of prompt.matchAll(pattern)) refs.push(match[1]);
+  return uniqueStrings(refs);
+}
+
+function normalizePromptRef(value: string) {
+  let ref = value.trim().replace(/^file:/, '').replace(/^\.\/workspace\//, 'workspace/');
+  if (ref.startsWith('workspace/')) ref = ref.slice('workspace/'.length);
+  return ref || undefined;
+}
+
+async function resolveBareFileRefs(names: string[], siblingDirs: string[], workspace: string) {
+  if (!names.length) return [];
+  const resolved: string[] = [];
+  for (const name of names) {
+    const sibling = siblingDirs
+      .map((dir) => join(dir, name))
+      .find((candidate) => workspacePath(workspace, candidate));
+    if (sibling && await fileExists(workspacePath(workspace, sibling) || '')) {
+      resolved.push(sibling);
+      continue;
+    }
+    const matches = await findWorkspaceFilesByBasename(workspace, name, 2);
+    if (matches.length === 1) resolved.push(matches[0]);
+  }
+  return uniqueStrings(resolved);
+}
+
+async function findWorkspaceFilesByBasename(workspace: string, name: string, maxMatches: number) {
+  const root = resolve(workspace);
+  const matches: string[] = [];
+  async function visit(dir: string, depth: number): Promise<void> {
+    if (matches.length >= maxMatches || depth > 7) return;
+    let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (matches.length >= maxMatches) return;
+      if (entry.name === '.git' || entry.name === 'node_modules') continue;
+      const abs = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await visit(abs, depth + 1);
+      } else if (entry.isFile() && entry.name === name) {
+        matches.push(abs.slice(root.length + 1));
+      }
+    }
+  }
+  await visit(root, 0);
+  return matches;
+}
+
+function mergeReferenceRecords(existing: Record<string, unknown>[], discovered: Record<string, unknown>[]) {
+  const merged: Record<string, unknown>[] = [];
+  const seen = new Set<string>();
+  for (const entry of [...existing, ...discovered]) {
+    const key = pickReferencePath(entry);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(entry);
+  }
+  return merged;
 }
 
 async function digestCurrentReference(entry: Record<string, unknown>, workspace: string) {
@@ -73,6 +173,11 @@ function workspacePath(workspace: string, ref: string) {
   try {
     const root = resolve(workspace);
     const path = ref.startsWith('/') ? resolve(ref) : resolve(root, safeWorkspaceRel(ref));
+    if (!path.startsWith(`${root}/`) && path !== root && ref.startsWith('workspace/')) {
+      const withoutWorkspace = ref.slice('workspace/'.length);
+      const fallback = resolve(root, safeWorkspaceRel(withoutWorkspace));
+      return fallback === root || fallback.startsWith(`${root}/`) ? fallback : undefined;
+    }
     return path === root || path.startsWith(`${root}/`) ? path : undefined;
   } catch {
     return undefined;

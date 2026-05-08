@@ -1,4 +1,4 @@
-import { access, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -38,6 +38,7 @@ export async function runWorkspaceTask(workspacePath: string, spec: WorkspaceTas
     stdoutRef: spec.stdoutRel,
     stderrRef: spec.stderrRel,
   }), null, 2));
+  await ensureWorkspaceCompatibilityRefs(workspace);
   await pruneTaskInputRetention(workspace, {
     protectedRels: [inputRel, ...(spec.retentionProtectedInputRels ?? [])],
   });
@@ -90,6 +91,32 @@ export async function runWorkspaceTask(workspacePath: string, spec: WorkspaceTas
       stderr,
       runtimeFingerprint,
     };
+  }
+}
+
+async function ensureWorkspaceCompatibilityRefs(workspace: string) {
+  const sciforgeRoot = join(workspace, '.sciforge');
+  await Promise.all([
+    ensureCompatibilityLink(join(sciforgeRoot, '.sciforge', 'artifacts'), join(sciforgeRoot, 'artifacts')),
+    ensureCompatibilityLink(join(sciforgeRoot, '.sciforge', 'uploads'), join(sciforgeRoot, 'uploads')),
+    ensureCompatibilityLink(join(sciforgeRoot, 'task-inputs', '.sciforge', 'artifacts'), join(sciforgeRoot, 'artifacts')),
+    ensureCompatibilityLink(join(sciforgeRoot, 'task-inputs', '.sciforge', 'uploads'), join(sciforgeRoot, 'uploads')),
+  ]);
+}
+
+async function ensureCompatibilityLink(linkPath: string, targetPath: string) {
+  try {
+    await access(linkPath);
+    return;
+  } catch {
+    // Create below.
+  }
+  try {
+    await mkdir(targetPath, { recursive: true });
+    await mkdir(dirname(linkPath), { recursive: true });
+    await symlink(targetPath, linkPath, 'dir');
+  } catch {
+    // Compatibility refs are best-effort; task execution still uses canonical workspace paths.
   }
 }
 

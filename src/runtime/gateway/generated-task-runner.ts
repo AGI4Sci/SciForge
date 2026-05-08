@@ -10,6 +10,7 @@ import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from 
 import { summarizeTaskAttemptsForAgentServer } from './context-envelope.js';
 import { currentTurnReferences } from './agentserver-context-window.js';
 import { sanitizeAgentServerError } from './backend-failure-diagnostics.js';
+import { requestWithCurrentReferenceDigests } from './current-reference-digest.js';
 
 type AgentServerGenerationResult =
   | { ok: true; runId?: string; response: AgentServerGenerationResponse }
@@ -95,6 +96,23 @@ export async function runAgentServerGeneratedTask(
     callbacks,
   });
   if (!generation.ok) {
+    const digestRecovery = await currentReferenceDigestRecoveryPayload(request, skill, workspace, generation.error);
+    if (digestRecovery) {
+      emitWorkspaceRuntimeEvent(callbacks, {
+        type: 'agentserver-digest-recovery',
+        source: 'workspace-runtime',
+        status: 'self-healed',
+        message: 'AgentServer did not converge, so SciForge recovered from bounded current-reference digests.',
+        detail: 'The recovery output keeps the same user-visible contract: report artifact, object references, and execution audit.',
+      });
+      return await validateAndNormalizePayload(digestRecovery, request, skill, {
+        taskRel: 'agentserver://current-reference-digest-recovery',
+        outputRel: `agentserver://current-reference-digest-recovery/${sha1(request.prompt).slice(0, 8)}/output`,
+        stdoutRel: `agentserver://current-reference-digest-recovery/${sha1(request.prompt).slice(0, 8)}/stdout`,
+        stderrRel: `agentserver://current-reference-digest-recovery/${sha1(request.prompt).slice(0, 8)}/stderr`,
+        runtimeFingerprint: { runtime: 'SciForge current-reference digest recovery', error: generation.error },
+      });
+    }
     const failureReason = agentServerGenerationFailureReason(generation.error, generation.diagnostics);
     const failedRequestId = `agentserver-generation-${request.skillDomain}-${sha1(`${request.prompt}:${generation.error}`).slice(0, 12)}`;
     await appendTaskAttempt(workspace, {
@@ -498,6 +516,210 @@ export async function runAgentServerGeneratedTask(
     if (repaired) return repaired;
     return failedTaskPayload(request, skill, run, failureReason);
   }
+}
+
+async function currentReferenceDigestRecoveryPayload(
+  request: GatewayRequest,
+  skill: SkillAvailability,
+  workspace: string,
+  failureReason: string,
+): Promise<ToolPayload | undefined> {
+  if (!/convergence guard|silent stream guard|context window|token/i.test(failureReason)) return undefined;
+  const enrichedRequest = await requestWithCurrentReferenceDigests(request, workspace);
+  const digests = toRecordList(enrichedRequest.uiState?.currentReferenceDigests)
+    .filter((entry) => String(entry.status || '') === 'ready');
+  if (!digests.length) return undefined;
+  const sources: Array<{ sourceRef: string; digestRef: string; text: string }> = [];
+  for (const digest of digests.slice(0, 6)) {
+    const digestRef = typeof digest.digestRef === 'string' ? digest.digestRef.replace(/^file:/, '') : '';
+    if (!digestRef) continue;
+    const abs = resolve(workspace, safeWorkspaceRel(digestRef));
+    try {
+      const text = await readFile(abs, 'utf8');
+      sources.push({
+        sourceRef: String(digest.sourceRef || digestRef),
+        digestRef,
+        text,
+      });
+    } catch {
+      // A missing digest should not block other current references.
+    }
+  }
+  if (!sources.length) return undefined;
+  const markdown = buildDigestRecoveryMarkdown(enrichedRequest, sources, failureReason);
+  const reportId = 'research-report';
+  const digestRefs = sources.flatMap((source) => [
+    { id: `source-${sha1(source.sourceRef).slice(0, 8)}`, kind: 'file', title: source.sourceRef.split('/').pop() || source.sourceRef, ref: `file:${source.sourceRef}` },
+    { id: `digest-${sha1(source.digestRef).slice(0, 8)}`, kind: 'file', title: source.digestRef.split('/').pop() || source.digestRef, ref: `file:${source.digestRef}` },
+  ]);
+  return {
+    message: firstParagraph(markdown) || '已根据本轮引用摘要生成恢复性结果。',
+    confidence: 0.68,
+    claimType: 'current-reference-digest-recovery',
+    evidenceLevel: 'bounded-current-reference-digest',
+    reasoningTrace: [
+      'AgentServer generation was stopped by convergence guard.',
+      'SciForge recovered from bounded current-reference digests instead of replaying full files into the backend context.',
+      `Failure reason: ${failureReason}`,
+    ].join('\n'),
+    claims: [{
+      text: firstParagraph(markdown) || 'Current-reference digest recovery produced a report from bounded workspace refs.',
+      type: 'inference',
+      confidence: 0.68,
+      evidenceLevel: 'bounded-current-reference-digest',
+      supportingRefs: sources.map((source) => `file:${source.sourceRef}`),
+      opposingRefs: [],
+    }],
+    uiManifest: [
+      { componentId: 'report-viewer', artifactRef: reportId, priority: 1 },
+      { componentId: 'execution-unit-table', artifactRef: `${request.skillDomain}-runtime-result`, priority: 2 },
+    ],
+    executionUnits: [{
+      id: `current-reference-digest-recovery-${sha1(markdown).slice(0, 8)}`,
+      status: 'self-healed',
+      tool: 'sciforge.current-reference-digest-recovery',
+      params: JSON.stringify({
+        skillId: skill.id,
+        sourceRefs: sources.map((source) => source.sourceRef),
+        digestRefs: sources.map((source) => source.digestRef),
+      }),
+      stdoutRef: sources[0] ? `file:${sources[0].digestRef}` : undefined,
+    }],
+    artifacts: [{
+      id: reportId,
+      type: 'research-report',
+      producerScenario: request.skillDomain,
+      producer: 'sciforge.current-reference-digest-recovery',
+      schemaVersion: '1',
+      metadata: {
+        source: 'current-reference-digest-recovery',
+        markdownRef: sources.find((source) => /\.(md|markdown)$/i.test(source.sourceRef))?.sourceRef,
+        sourceRefs: sources.map((source) => source.sourceRef),
+        digestRefs: sources.map((source) => source.digestRef),
+        failureReason,
+      },
+      data: {
+        markdown,
+        sections: markdownSections(markdown),
+      },
+    }],
+    objectReferences: digestRefs,
+  };
+}
+
+function buildDigestRecoveryMarkdown(
+  request: GatewayRequest,
+  sources: Array<{ sourceRef: string; digestRef: string; text: string }>,
+  failureReason: string,
+) {
+  const combined = sources.map((source) => `# Source: ${source.sourceRef}\n\n${source.text}`).join('\n\n');
+  const executive = extractSection(combined, ['Executive Summary', '摘要', 'Summary']) || firstUsefulLines(combined, 8);
+  const stats = extractSection(combined, ['Key Statistics', 'Statistics', '统计']) || summarizeJsonLikeSources(sources);
+  const topics = extractTopicSections(combined);
+  const opportunities = extractSection(combined, ['Opportunities', '机会', 'Future Directions', 'Research Opportunities']) || inferOpportunities(topics);
+  const risks = extractSection(combined, ['Risks', 'Limitations', '风险', '局限']) || inferRisks(topics);
+  const refs = sources.map((source) => `- \`${source.sourceRef}\`（digest: \`${source.digestRef}\`）`).join('\n');
+  return [
+    '# Current Reference Digest Recovery Report',
+    '',
+    `用户问题：${request.prompt}`,
+    '',
+    '## 摘要',
+    executive,
+    '',
+    '## 关键统计',
+    stats,
+    '',
+    '## 方向聚类',
+    topics.length ? topics.map((topic) => `### ${topic.title}\n${topic.body}`).join('\n\n') : firstUsefulLines(combined, 12),
+    '',
+    '## 机会',
+    opportunities,
+    '',
+    '## 风险',
+    risks,
+    '',
+    '## 可审计引用',
+    refs,
+    '',
+    '## 恢复说明',
+    `AgentServer 未能在收敛阈值内完成（${failureReason}）。本报告使用本轮显式引用的 bounded digest 生成，避免重复全量读取大文件。`,
+  ].join('\n');
+}
+
+function extractSection(text: string, names: string[]) {
+  for (const name of names) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = text.match(new RegExp(`(?:^|\\n)#{1,3}\\s*${escaped}\\s*\\n([\\s\\S]*?)(?=\\n#{1,3}\\s|\\n# Source:|$)`, 'i'));
+    if (match?.[1]?.trim()) return clipLines(match[1], 18);
+  }
+  return '';
+}
+
+function extractTopicSections(text: string) {
+  const topics: Array<{ title: string; body: string }> = [];
+  const pattern = /(?:^|\n)##\s+Topic:\s*([^\n]+)\n([\s\S]*?)(?=\n##\s+Topic:|\n##\s+[A-Z\u4e00-\u9fff]|$)/g;
+  for (const match of text.matchAll(pattern)) {
+    const title = match[1]?.trim();
+    const body = clipLines(match[2] || '', 10);
+    if (title && body) topics.push({ title, body });
+  }
+  return topics.slice(0, 10);
+}
+
+function summarizeJsonLikeSources(sources: Array<{ sourceRef: string; text: string }>) {
+  const lines: string[] = [];
+  for (const source of sources) {
+    if (!/\.json$/i.test(source.sourceRef)) continue;
+    try {
+      const parsed = JSON.parse(source.text);
+      const content = isRecord(parsed) && Array.isArray(parsed.content) ? parsed.content : Array.isArray(parsed) ? parsed : undefined;
+      if (content) lines.push(`- \`${source.sourceRef}\`: ${content.length} 条记录。`);
+    } catch {
+      // Digest text may be clipped or normalized; ignore parse failures.
+    }
+  }
+  return lines.join('\n') || '未发现结构化统计字段；请查看下方可审计引用。';
+}
+
+function inferOpportunities(topics: Array<{ title: string }>) {
+  if (!topics.length) return '可优先围绕高频方向做复现基准、工具链集成、可靠性评估和跨任务迁移验证。';
+  return topics.slice(0, 6).map((topic) => `- ${topic.title}: 适合继续追踪可复现 benchmark、真实用户工作流和与现有工具链的集成机会。`).join('\n');
+}
+
+function inferRisks(topics: Array<{ title: string }>) {
+  if (!topics.length) return '主要风险包括评估不充分、上下文成本过高、工具调用不可复现、以及结论依赖未验证来源。';
+  return topics.slice(0, 6).map((topic) => `- ${topic.title}: 需关注评估外推、数据污染、工具调用失败和安全/可靠性边界。`).join('\n');
+}
+
+function markdownSections(markdown: string) {
+  const sections: Array<{ title: string; content: string }> = [];
+  const parts = markdown.split(/\n##\s+/);
+  for (const part of parts.slice(1)) {
+    const [titleLine, ...rest] = part.split('\n');
+    const title = titleLine.trim();
+    const content = rest.join('\n').trim();
+    if (title && content) sections.push({ title, content });
+  }
+  return sections;
+}
+
+function firstParagraph(text: string) {
+  return text.split(/\n{2,}/).map((part) => part.replace(/^#+\s*/, '').trim()).find((part) => part && !part.startsWith('用户问题'))?.slice(0, 400);
+}
+
+function firstUsefulLines(text: string, count: number) {
+  return clipLines(text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('{') && !line.startsWith('}') && !line.startsWith('"'))
+    .slice(0, count)
+    .join('\n'), count);
+}
+
+function clipLines(text: string, maxLines: number) {
+  const lines = text.split('\n').map((line) => line.trimEnd()).filter((line) => line.trim());
+  return lines.slice(0, maxLines).join('\n').slice(0, 3600);
 }
 
 function generatedEntrypointContractReason(response: AgentServerGenerationResponse) {

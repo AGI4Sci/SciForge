@@ -6,7 +6,7 @@ import { buildContextWindowMeterModel, estimateContextWindowState, latestContext
 import { builtInScenarioPackageRef } from '../scenarioCompiler/scenarioPackage';
 import { resetSession } from '../sessionStore';
 import { coalesceStreamEvents, formatAgentTokenUsage, latestRunningEvent, presentStreamEvent, streamEventCounts } from '../streamEventPresentation';
-import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeRun, type SciForgeSession, type ObjectReference, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
+import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type NormalizedAgentResponse, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeRun, type SciForgeSession, type ObjectReference, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
 import { writeWorkspaceFile } from '../api/workspaceClient';
 import { exportJsonFile } from './exportUtils';
 import { Badge, ClaimTag, ConfidenceBar, EvidenceTag, cx } from './uiPrimitives';
@@ -154,6 +154,7 @@ export function ChatPanel({
   const activeSessionRef = useRef(session);
   const inputRef = useRef(input);
   const guidanceQueueRef = useRef<string[]>([]);
+  const streamEventsRef = useRef<AgentStreamEvent[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const userAbortRequestedRef = useRef(false);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -200,7 +201,12 @@ export function ChatPanel({
   }, [guidanceQueue]);
 
   useEffect(() => {
+    streamEventsRef.current = streamEvents;
+  }, [streamEvents]);
+
+  useEffect(() => {
     setStreamEvents([]);
+    streamEventsRef.current = [];
     setGuidanceQueue([]);
     setErrorText('');
   }, [scenarioId, session.sessionId]);
@@ -218,7 +224,7 @@ export function ChatPanel({
         element.scrollTo({ top: element.scrollHeight, behavior: 'auto' });
       });
     }
-  }, [messages.length, isSending]);
+  }, [messages.length, isSending, streamEvents.length]);
 
   useEffect(() => {
     if (!referencePickMode) return undefined;
@@ -393,20 +399,24 @@ export function ChatPanel({
     setReferencePickMode(false);
     setComposerExpanded(false);
     setErrorText('');
-    setStreamEvents([{
+    const queuedEvent: AgentStreamEvent = {
       id: makeId('evt'),
       type: 'queued',
       label: '已提交',
       detail: prompt,
       createdAt: nowIso(),
-    }]);
+    };
+    streamEventsRef.current = [queuedEvent];
+    setStreamEvents([queuedEvent]);
     setIsSending(true);
     const controller = new AbortController();
     abortRef.current = controller;
     userAbortRequestedRef.current = false;
     try {
       const handleStreamEvent = (event: AgentStreamEvent) => {
-        setStreamEvents((current) => coalesceStreamEvents(current, event).slice(-32));
+        const next = coalesceStreamEvents(streamEventsRef.current, event).slice(-160);
+        streamEventsRef.current = next;
+        setStreamEvents(next);
       };
       const result = await runPromptOrchestrator({
         prompt,
@@ -444,16 +454,17 @@ export function ChatPanel({
         onActiveRunChange(result.failedRunId);
         return;
       }
+      const finalResponseWithProcess = attachStreamProcessToResponse(result.finalResponse, streamEventsRef.current);
       const mergedSession = mergeAgentResponseIntoSession({
         baseSession: activeSessionRef.current,
-        response: result.finalResponse,
+        response: finalResponseWithProcess,
         scenarioPackageRef,
         skillPlanRef,
         uiPlanRef,
       });
       onSessionChange(mergedSession);
       activeSessionRef.current = mergedSession;
-      onActiveRunChange(result.finalResponse.run.id);
+      onActiveRunChange(finalResponseWithProcess.run.id);
     } finally {
       setIsSending(false);
       abortRef.current = null;
@@ -964,13 +975,28 @@ function RunningWorkProcess({
   backend: string;
   guidanceCount: number;
 }) {
-  const visibleEvents = events.slice(-24);
+  const visibleEvents = events.slice(-48);
+  const highlightedEvents = latestVisibleWorkEvents(events, 10);
   const usageLabel = formatAgentTokenUsage(tokenUsage);
   if (!visibleEvents.length && !guidanceCount && !usageLabel) return null;
   return (
-    <details className="message-fold depth-2 running-work-process">
+    <div className="running-work-process">
+      {highlightedEvents.length ? (
+        <div className="running-work-live">
+          {highlightedEvents.map((event) => {
+            const presentation = presentStreamEvent(event);
+            return (
+              <div className={cx('running-work-live-row', presentation.uiClass)} key={`${event.id}-live`}>
+                <Badge variant={presentation.tone}>{event.label}</Badge>
+                <span>{presentation.shortDetail || presentation.detail || presentation.usageDetail || presentation.typeLabel}</span>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+      <details className="message-fold depth-2 running-work-process-raw" open>
       <summary>
-        工作过程 · {counts.key} 关键 · {counts.background} 过程
+        完整工作过程 · {counts.key} 关键 · {counts.background} 过程
         {usageLabel ? ` · ${usageLabel}` : ''}
       </summary>
       <div className="running-work-process-body">
@@ -1000,8 +1026,64 @@ function RunningWorkProcess({
           })}
         </div>
       </div>
-    </details>
+      </details>
+    </div>
   );
+}
+
+function latestVisibleWorkEvents(events: AgentStreamEvent[], limit: number) {
+  const seen = new Set<string>();
+  return events
+    .filter((event) => {
+      const presentation = presentStreamEvent(event);
+      if (!presentation.detail && !presentation.usageDetail) return false;
+      if (presentation.importance === 'debug') return false;
+      const key = `${event.type}:${presentation.shortDetail}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(-limit);
+}
+
+function attachStreamProcessToResponse(response: NormalizedAgentResponse, events: AgentStreamEvent[]): NormalizedAgentResponse {
+  const transcript = streamProcessTranscript(events);
+  if (!transcript) return response;
+  const expandable = [response.message.expandable, transcript].filter(Boolean).join('\n\n');
+  return {
+    ...response,
+    message: {
+      ...response.message,
+      expandable,
+    },
+    run: {
+      ...response.run,
+      raw: {
+        ...(typeof response.run.raw === 'object' && response.run.raw !== null ? response.run.raw : {}),
+        streamProcess: {
+          eventCount: events.length,
+          events: events.slice(-80).map((event) => ({
+            type: event.type,
+            label: event.label,
+            detail: presentStreamEvent(event).detail || presentStreamEvent(event).usageDetail,
+            createdAt: event.createdAt,
+          })),
+        },
+      },
+    },
+  };
+}
+
+function streamProcessTranscript(events: AgentStreamEvent[]) {
+  const lines = latestVisibleWorkEvents(events, 24)
+    .map((event) => {
+      const presentation = presentStreamEvent(event);
+      const detail = presentation.detail || presentation.usageDetail || presentation.shortDetail;
+      return detail ? `- ${event.label || presentation.typeLabel}: ${detail}` : '';
+    })
+    .filter(Boolean);
+  if (!lines.length) return '';
+  return ['工作过程摘要:', ...lines].join('\n');
 }
 
 function ObjectReferenceChips({
@@ -1073,7 +1155,7 @@ function RunExecutionProcess({
   );
   const summary = executionProcessSummary(units);
   return (
-    <details className="message-fold depth-2 execution-process-fold">
+    <details className="message-fold depth-2 execution-process-fold" open>
       <summary>执行审计 · {summary}</summary>
       <div className="execution-process-body">
         <MessageContent

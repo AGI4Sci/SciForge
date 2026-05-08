@@ -252,6 +252,30 @@ describe('normalizeAgentResponse', () => {
     assert.equal(response.artifacts[0].type, 'research-report');
   });
 
+  it('keeps report artifact refs aligned with uiManifest and markdown preview paths', () => {
+    const response = normalizeAgentResponse('literature-evidence-review', '生成 markdown report', {
+      ok: true,
+      data: {
+        message: '已生成报告。',
+        artifacts: [{
+          type: 'research-report',
+          ref: 'trend-summary',
+          content: '# Trend Summary\n\nReadable markdown body.',
+          encoding: 'markdown',
+          markdownRef: '.sciforge/artifacts/run/research-report.md',
+          dataRef: '.sciforge/task-results/run-output.json',
+        }],
+        uiManifest: [{ componentId: 'report-viewer', artifactRef: 'trend-summary' }],
+      },
+    });
+
+    assert.equal(response.artifacts[0].id, 'trend-summary');
+    assert.equal(response.uiManifest[0].artifactRef, 'trend-summary');
+    assert.equal(response.artifacts[0].metadata?.markdownRef, '.sciforge/artifacts/run/research-report.md');
+    assert.equal(response.artifacts[0].path, '.sciforge/artifacts/run/research-report.md');
+    assert.equal(response.message.objectReferences?.[0]?.provenance?.path, '.sciforge/artifacts/run/research-report.md');
+  });
+
   it('normalizes text-like artifact string data without changing array artifacts', () => {
     const response = normalizeAgentResponse('literature-evidence-review', 'artifact shapes', {
       ok: true,

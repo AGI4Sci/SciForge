@@ -50,7 +50,14 @@ export function visionSenseSelected(request: GatewayRequest) {
 }
 
 export function looksLikeComputerUseRequest(prompt: string) {
-  return /computer\s*use|gui|desktop|screen|screenshot|mouse|keyboard|click|type|scroll|drag|browser|word|powerpoint|ppt|电脑|桌面|屏幕|截图|鼠标|键盘|点击|输入|滚动|拖拽|操作|使用|打开|创建|保存|文档|演示文稿|应用/i.test(prompt);
+  const text = prompt.trim();
+  if (!text) return false;
+  if (/\b(computer\s*use|gui|desktop|screen|screenshot|mouse|keyboard|click|type|scroll|drag)\b/i.test(text)) return true;
+  if (/\b(browser|word|powerpoint|ppt)\b/i.test(text) && /\b(open|click|type|scroll|drag|operate|control|use)\b/i.test(text)) return true;
+  if (/截图|屏幕|桌面|鼠标|键盘|点击|滚动|拖拽/.test(text)) return true;
+  if (/(浏览器|网页|页面|窗口|应用|软件|文档|演示文稿).{0,24}(打开|点击|输入|滚动|拖拽|操作|控制|切换|保存|创建)/.test(text)) return true;
+  if (/(打开|点击|输入|滚动|拖拽|操作|控制|切换|保存|创建).{0,24}(浏览器|网页|页面|窗口|应用|软件|文档|演示文稿)/.test(text)) return true;
+  return false;
 }
 
 export async function loadVisionSenseConfig(workspace: string, request: GatewayRequest): Promise<VisionSenseConfig> {

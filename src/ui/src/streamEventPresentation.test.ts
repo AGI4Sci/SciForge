@@ -66,3 +66,33 @@ test('text deltas coalesce and remain folded as background process detail', () =
   assert.equal(presentation.initiallyCollapsed, true);
   assert.equal(latestRunningEvent(events), '后台正在探索或执行，过程日志已折叠。');
 });
+
+test('script generation and write-file events stay visible in the running chat message', () => {
+  const generationEvent = event({
+    type: 'text-delta',
+    label: '思考',
+    detail: '{"taskFiles":[{"path":"tasks/arxiv_agent_literature_review.py","language":"python","content":"print(1)"}],"entrypoint":{"path":"tasks/arxiv_agent_literature_review.py"}}',
+  });
+  const writeEvent = event({
+    type: 'tool-call',
+    label: '调用 write_file',
+    detail: '{"path":"/workspace/tasks/arxiv_agent_literature_review.py","content":"#!/usr/bin/env python3\\nprint(1)"}',
+    raw: {
+      type: 'tool-call',
+      toolName: 'write_file',
+      detail: '{"path":"/workspace/tasks/arxiv_agent_literature_review.py","content":"#!/usr/bin/env python3\\nprint(1)"}',
+    },
+  });
+
+  const generation = presentStreamEvent(generationEvent);
+  const write = presentStreamEvent(writeEvent);
+
+  assert.equal(generation.importance, 'key');
+  assert.equal(generation.visibleInRunningMessage, true);
+  assert.match(generation.typeLabel, /生成脚本/);
+  assert.equal(write.importance, 'key');
+  assert.equal(write.visibleInRunningMessage, true);
+  assert.match(write.typeLabel, /写入脚本/);
+  assert.match(write.detail, /arxiv_agent_literature_review\.py/);
+  assert.match(latestRunningEvent([generationEvent, writeEvent]) || '', /正在写入脚本/);
+});

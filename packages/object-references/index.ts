@@ -48,7 +48,7 @@ function asNumber(value: unknown): number | undefined {
 
 function titleForArtifact(artifact: RuntimeArtifact) {
   if (artifact.type === 'vision-trace') return String(artifact.metadata?.title || (isRecord(artifact.data) ? artifact.data.task : undefined) || artifact.path || artifact.dataRef || artifact.id);
-  return String(artifact.metadata?.title || artifact.metadata?.name || artifact.path || artifact.dataRef || artifact.id);
+  return String(artifact.metadata?.title || artifact.metadata?.name || preferredArtifactPath(artifact) || artifact.id);
 }
 
 function idSegment(value: string) {
@@ -88,13 +88,8 @@ export function artifactForObjectReference(reference: ObjectReference, session: 
 
 export function pathForObjectReference(reference: ObjectReference, session: Pick<SciForgeSession, 'artifacts'>): string | undefined {
   const artifact = artifactForObjectReference(reference, session);
-  const artifactDataRef = asString(artifact?.dataRef);
   if (artifact) {
-    return artifact.path
-      || asString(artifact.metadata?.path)
-      || asString(artifact.metadata?.filePath)
-      || asString(artifact.metadata?.localPath)
-      || (artifactDataRef && !artifactDataRef.startsWith('upload:') ? artifactDataRef : undefined)
+    return preferredArtifactPath(artifact)
       || reference.provenance?.path
       || reference.provenance?.dataRef;
   }
@@ -227,19 +222,20 @@ export function objectReferenceForUploadedArtifact(artifact: RuntimeArtifact): O
 
 export function objectReferenceForArtifactSummary(artifact: RuntimeArtifact, runId?: string): ObjectReference {
   const finalScreenshotRef = visionTraceFinalScreenshotRef(artifact);
+  const preferredPath = preferredArtifactPath(artifact);
   return {
     id: runId ? `chat-key-${artifact.id}` : `obj-artifact-${artifact.id}`,
     kind: 'artifact',
     title: titleForArtifact(artifact),
     ref: `artifact:${artifact.id}`,
     artifactType: artifact.type,
-    preferredView: artifact.type === 'uploaded-image' || artifact.type === 'uploaded-pdf' ? 'preview' : 'generic-artifact-inspector',
+    preferredView: artifact.type === 'research-report' ? 'report-viewer' : artifact.type === 'uploaded-image' || artifact.type === 'uploaded-pdf' ? 'preview' : 'generic-artifact-inspector',
     runId,
     status: 'available',
     summary: artifact.type === 'vision-trace' && finalScreenshotRef ? `Vision trace; final screenshot: ${finalScreenshotRef}` : undefined,
     provenance: {
       dataRef: artifact.dataRef,
-      path: artifact.path,
+      path: preferredPath,
       producer: artifact.producerScenario,
       screenshotRef: finalScreenshotRef,
     },
@@ -248,19 +244,20 @@ export function objectReferenceForArtifactSummary(artifact: RuntimeArtifact, run
 
 export function referenceForArtifact(artifact: RuntimeArtifact, kind: SciForgeReferenceKind = 'file-region'): SciForgeReference {
   const title = titleForArtifact(artifact).slice(0, 52);
+  const preferredPath = preferredArtifactPath(artifact);
   return {
     id: `ref-${kind}-${artifact.id}`,
     kind,
     title,
-    ref: artifact.path && kind === 'file' ? `file:${artifact.path}` : `artifact:${artifact.id}`,
+    ref: preferredPath && kind === 'file' ? `file:${preferredPath}` : `artifact:${artifact.id}`,
     sourceId: artifact.id,
     runId: asString(artifact.metadata?.runId) || asString(artifact.metadata?.agentServerRunId),
-    summary: `${artifact.type}${artifact.path ? ` · ${artifact.path}` : ''}${artifact.dataRef ? ` · ${artifact.dataRef}` : ''}`,
+    summary: `${artifact.type}${preferredPath ? ` · ${preferredPath}` : ''}${artifact.dataRef && artifact.dataRef !== preferredPath ? ` · ${artifact.dataRef}` : ''}`,
     payload: {
       id: artifact.id,
       type: artifact.type,
       schemaVersion: artifact.schemaVersion,
-      path: artifact.path,
+      path: preferredPath,
       dataRef: artifact.dataRef,
       metadata: artifact.metadata,
       dataSummary: summarizeReferencePayload(artifact.data),
@@ -631,12 +628,37 @@ export function uploadedLocatorHintsForFileLike(file: { name: string; type?: str
 
 export function artifactReferenceKind(artifact: RuntimeArtifact, componentId = '', rowCount?: number): SciForgeReference['kind'] {
   const haystack = `${artifact.type} ${artifact.id} ${componentId}`;
-  if (artifact.path || artifact.dataRef || artifact.metadata?.filePath || artifact.metadata?.path) {
-    if (/\.(pdf|docx?|pptx?|md|txt|png|jpe?g|csv|tsv|xlsx?|pdb|cif|html?)$/i.test(`${artifact.path ?? ''} ${artifact.dataRef ?? ''}`)) return 'file';
+  const preferredPath = preferredArtifactPath(artifact);
+  if (preferredPath || artifact.metadata?.filePath || artifact.metadata?.path) {
+    if (/\.(pdf|docx?|pptx?|md|markdown|txt|png|jpe?g|csv|tsv|xlsx?|pdb|cif|html?)$/i.test(`${preferredPath ?? ''}`)) return 'file';
   }
   if (/chart|plot|graph|visual|pca|umap|volcano|heatmap|histogram|scatter|molecule|viewer/i.test(haystack)) return 'chart';
   if (/table|matrix|csv|tsv|dataframe|spreadsheet|gene-list|evidence/i.test(haystack) || Boolean(rowCount)) return 'table';
   return 'file-region';
+}
+
+function preferredArtifactPath(artifact: RuntimeArtifact | undefined) {
+  if (!artifact) return undefined;
+  const metadata = artifact.metadata ?? {};
+  const markdownRef = firstMatchingPath([
+    metadata.markdownRef,
+    metadata.reportRef,
+    metadata.path,
+    metadata.filePath,
+    artifact.path,
+    artifact.dataRef,
+  ], /\.m(?:d|arkdown)$/i);
+  if (markdownRef) return markdownRef;
+  const artifactDataRef = asString(artifact.dataRef);
+  return artifact.path
+    || asString(metadata.path)
+    || asString(metadata.filePath)
+    || asString(metadata.localPath)
+    || (artifactDataRef && !artifactDataRef.startsWith('upload:') ? artifactDataRef : undefined);
+}
+
+function firstMatchingPath(values: unknown[], pattern: RegExp) {
+  return values.map(asString).find((value) => Boolean(value && pattern.test(value)));
 }
 
 function summarizeReferencePayload(data: unknown) {

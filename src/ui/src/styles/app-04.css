@@ -584,6 +584,41 @@
   gap: 7px;
 }
 
+.running-work-process {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.running-work-live {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid rgba(0, 229, 160, 0.18);
+  border-radius: 7px;
+  background: rgba(0, 229, 160, 0.06);
+}
+
+.running-work-live-row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  color: var(--bio-100);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.running-work-live-row span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.running-work-live-row.background,
+.running-work-live-row.debug {
+  color: var(--bio-300);
+}
+
 .running-work-process-meta {
   display: flex;
   flex-wrap: wrap;

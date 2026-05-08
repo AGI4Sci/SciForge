@@ -52,11 +52,11 @@ function parseNestedReport(payload: Record<string, unknown>) {
 }
 
 function reportRefFromPayload(payload: Record<string, unknown>) {
-  return firstString(payload.reportRef, payload.markdownRef, payload.path, payload.dataRef, payload.outputRef, payload.resultRef);
+  return firstMarkdownRef(payload.markdownRef, payload.reportRef, payload.path, payload.dataRef, payload.outputRef, payload.resultRef);
 }
 
 function reportRefFromArtifact(artifact?: UIComponentRuntimeArtifact) {
-  return firstString(artifact?.path, artifact?.dataRef, artifact?.metadata?.path, artifact?.metadata?.filePath, artifact?.metadata?.markdownRef, artifact?.metadata?.reportRef);
+  return firstMarkdownRef(artifact?.metadata?.markdownRef, artifact?.metadata?.reportRef, artifact?.path, artifact?.metadata?.path, artifact?.metadata?.filePath, artifact?.dataRef);
 }
 
 function reportRefFromText(text?: string) {
@@ -67,6 +67,10 @@ function reportRefFromText(text?: string) {
 
 function looksLikeBackendPayloadText(text?: string) {
   return Boolean(text && /ToolPayload|uiManifest|"artifacts"|"message"\s*:|```json/i.test(text));
+}
+
+function firstMarkdownRef(...values: unknown[]) {
+  return values.map(asString).find((value) => Boolean(value && /\.m(?:d|arkdown)(?:$|[?#])/i.test(value)));
 }
 
 function markdownShellForReportRef(ref?: string) {

@@ -7,6 +7,7 @@ import {
   objectReferenceForArtifactSummary,
   objectReferenceForUploadedArtifact,
   pathForObjectReference,
+  referenceForArtifact,
   referenceForObjectReference,
   referenceForTextSelection,
   referenceForUploadedArtifact,
@@ -65,6 +66,25 @@ const uploaded = {
 };
 assert.equal(referenceForUploadedArtifact(uploaded).ref, uploaded.dataRef);
 assert.equal(objectReferenceForUploadedArtifact(uploaded).preferredView, 'preview');
+
+const reportArtifact: RuntimeArtifact = {
+  id: 'research-report',
+  type: 'research-report',
+  producerScenario: 'literature-evidence-review',
+  schemaVersion: '1',
+  dataRef: '.sciforge/task-results/run-output.json',
+  metadata: {
+    title: 'Research report',
+    markdownRef: '.sciforge/artifacts/run/research-report.md',
+    outputRef: '.sciforge/task-results/run-output.json',
+  },
+};
+const reportObject = objectReferenceForArtifactSummary(reportArtifact, 'run-2');
+assert.equal(reportObject.preferredView, 'report-viewer');
+assert.equal(reportObject.provenance?.path, '.sciforge/artifacts/run/research-report.md');
+assert.equal(pathForObjectReference(reportObject, { artifacts: [reportArtifact] } as SciForgeSession), '.sciforge/artifacts/run/research-report.md');
+assert.equal(referenceForArtifact(reportArtifact, 'file').ref, 'file:.sciforge/artifacts/run/research-report.md');
+assert.equal(artifactReferenceKind(reportArtifact, 'report-viewer'), 'file');
 
 const converted = referenceForObjectReference({ ...artifactRef, artifactType: 'volcano-plot' });
 assert.equal(converted.kind, 'chart');

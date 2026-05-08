@@ -329,15 +329,23 @@ function payloadLikeRecord(value: Record<string, unknown>) {
 function normalizeRuntimeArtifacts(value: unknown, scenarioId: ScenarioInstanceId): RuntimeArtifact[] {
   return Array.isArray(value) ? value.filter(isRecord).map((artifact) => {
     const artifactType = asString(artifact.type) || 'scenario-output';
+    const artifactId = asString(artifact.id) || asString(artifact.ref) || artifactType || makeId('artifact');
+    const path = asString(artifact.path) || asString(artifact.markdownRef) || asString(artifact.reportRef);
+    const metadata = {
+      ...(isRecord(artifact.metadata) ? artifact.metadata : {}),
+      ...(asString(artifact.ref) ? { artifactRef: asString(artifact.ref) } : {}),
+      ...(asString(artifact.markdownRef) ? { markdownRef: asString(artifact.markdownRef) } : {}),
+      ...(asString(artifact.reportRef) ? { reportRef: asString(artifact.reportRef) } : {}),
+    };
     return {
-      id: asString(artifact.id) || artifactType || makeId('artifact'),
+      id: artifactId,
       type: artifactType,
       producerScenario: scenarioId,
       schemaVersion: asString(artifact.schemaVersion) || '1',
-      metadata: isRecord(artifact.metadata) ? artifact.metadata : undefined,
+      metadata: Object.keys(metadata).length ? metadata : undefined,
       data: normalizeArtifactData(artifactType, artifact),
       dataRef: asString(artifact.dataRef),
-      path: asString(artifact.path),
+      path,
       visibility: asTimelineVisibility(artifact.visibility),
       audience: asStringArray(artifact.audience),
       sensitiveDataFlags: asStringArray(artifact.sensitiveDataFlags),
@@ -399,7 +407,7 @@ function normalizeObjectReference(record: Record<string, unknown>, artifacts: Ru
 }
 
 function objectReferenceFromArtifact(artifact: RuntimeArtifact, runId: string): ObjectReference {
-  const path = artifact.path || asString(artifact.metadata?.path) || asString(artifact.metadata?.filePath);
+  const path = preferredArtifactPreviewPath(artifact);
   return {
     id: stableObjectId(`artifact:${artifact.id}`),
     title: asString(artifact.metadata?.title) || artifact.id || artifact.type,
@@ -420,6 +428,24 @@ function objectReferenceFromArtifact(artifact: RuntimeArtifact, runId: string): 
       size: asNumber(artifact.metadata?.size),
     },
   };
+}
+
+function preferredArtifactPreviewPath(artifact: RuntimeArtifact) {
+  return firstMarkdownPath(
+    artifact.metadata?.markdownRef,
+    artifact.metadata?.reportRef,
+    artifact.path,
+    artifact.metadata?.path,
+    artifact.metadata?.filePath,
+    artifact.dataRef,
+  )
+    || artifact.path
+    || asString(artifact.metadata?.path)
+    || asString(artifact.metadata?.filePath);
+}
+
+function firstMarkdownPath(...values: unknown[]) {
+  return values.map(asString).find((value) => Boolean(value && /\.m(?:d|arkdown)(?:$|[?#])/i.test(value)));
 }
 
 function objectRefFromRecord(record: Record<string, unknown>) {

@@ -46,6 +46,26 @@ test('coerceReportPayload keeps normal markdown report bodies unchanged', () => 
   assert.equal(report.reportRef, undefined);
 });
 
+test('coerceReportPayload prefers markdown refs over JSON data refs', () => {
+  const artifact: RuntimeArtifact = {
+    id: 'research-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    dataRef: '.sciforge/task-results/run-output.json',
+    metadata: {
+      markdownRef: '.sciforge/artifacts/run/research-report.md',
+      outputRef: '.sciforge/task-results/run-output.json',
+    },
+    data: { summary: 'fallback summary' },
+  };
+
+  const report = coerceReportPayload({ dataRef: artifact.dataRef }, artifact);
+
+  assert.equal(report.reportRef, '.sciforge/artifacts/run/research-report.md');
+  assert.notEqual(report.reportRef, '.sciforge/task-results/run-output.json');
+});
+
 test('coerceReportPayload synthesizes readable report sections from related artifacts', () => {
   const reportArtifact: RuntimeArtifact = {
     id: 'research-report',

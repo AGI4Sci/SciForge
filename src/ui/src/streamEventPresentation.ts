@@ -1,6 +1,10 @@
 import { buildContextWindowMeterModel } from './contextWindow';
 import type { AgentStreamEvent } from './domain';
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 export type StreamEventImportance = 'key' | 'background' | 'debug';
 export type StreamEventTone = 'info' | 'warning' | 'danger' | 'success' | 'muted';
 
@@ -20,7 +24,7 @@ export function presentStreamEvent(event: AgentStreamEvent): StreamEventPresenta
   const detail = readableStreamEventDetail(event);
   const usageDetail = formatAgentTokenUsage(event.usage);
   const importance = streamEventImportance(event, detail);
-  const typeLabel = streamEventTypeLabel(event.type);
+  const typeLabel = streamEventTypeLabel(event.type, event, detail);
   const tone = streamEventTone(event.type, importance);
   return {
     typeLabel,
@@ -74,6 +78,9 @@ export function coalesceStreamEvents(events: AgentStreamEvent[], next: AgentStre
   if (!detail) return events;
   const last = events.at(-1);
   if (!last || last.type !== 'text-delta') return [...events, { ...next, detail }];
+  if (isScriptOrArtifactGenerationDetail(last.detail || '') || isScriptOrArtifactGenerationDetail(detail)) {
+    return [...events, { ...next, detail }];
+  }
   const mergedDetail = mergeTextDeltaDetail(last.detail || '', detail);
   return [
     ...events.slice(0, -1),
@@ -103,6 +110,8 @@ export function readableStreamEventDetail(event: AgentStreamEvent) {
       .filter(Boolean)
       .join(' · ');
   }
+  const rawDetail = detailFromRawToolEvent(event);
+  if (rawDetail) return rawDetail;
   if (!event.detail) return '';
   const detail = event.type === 'text-delta'
     ? normalizeStreamTextDelta(event.detail)
@@ -125,7 +134,10 @@ function streamEventImportance(event: AgentStreamEvent, detail: string): StreamE
     }
     return ratio !== undefined && ratio >= (state.watchThreshold ?? 0.7) ? 'key' : 'background';
   }
-  if (type === 'usage-update' || type === 'text-delta') return 'background';
+  if (type === 'text-delta') {
+    return isScriptOrArtifactGenerationDetail(detail) ? 'key' : 'background';
+  }
+  if (type === 'usage-update') return 'background';
   if (/(current-plan|run-plan|stage-start|tool-call|project-tool-start|project-tool-done|repair-start|acceptance-repair|guidance-queued|backend-silent|status)/.test(type)) {
     return 'key';
   }
@@ -135,12 +147,12 @@ function streamEventImportance(event: AgentStreamEvent, detail: string): StreamE
   return detail.length > 400 ? 'background' : 'key';
 }
 
-function streamEventTypeLabel(type: string) {
+function streamEventTypeLabel(type: string, event?: AgentStreamEvent, detail = '') {
   if (type === 'contextWindowState') return '上下文窗口';
   if (type === 'contextCompaction') return '上下文压缩';
-  if (type === 'text-delta') return '生成内容';
-  if (type === 'tool-call') return '工具调用';
-  if (type === 'tool-result') return '工具结果';
+  if (type === 'text-delta') return isScriptOrArtifactGenerationDetail(detail) ? '生成脚本/任务' : '生成内容';
+  if (type === 'tool-call') return toolEventActionLabel(event, detail, '工具调用');
+  if (type === 'tool-result') return toolEventActionLabel(event, detail, '工具结果');
   if (type === 'run-plan') return '执行计划';
   if (type === 'stage-start') return '阶段开始';
   if (type === 'usage-update') return '用量';
@@ -161,6 +173,7 @@ function streamEventUiClass(type: string, importance: StreamEventImportance) {
   const classes: string[] = [importance];
   if (type === 'contextWindowState' || type === 'contextCompaction') classes.push('context');
   if (type === 'tool-call' || type === 'tool-result') classes.push('tool');
+  if (importance === 'key' && (type === 'text-delta' || type === 'tool-call' || type === 'tool-result')) classes.push('artifact-work');
   if (type === 'text-delta' || importance !== 'key') classes.push('thinking');
   if (type === 'run-plan' || type === 'stage-start') classes.push('plan');
   if (type.includes('error') || type.includes('failed')) classes.push('error');
@@ -185,6 +198,69 @@ function normalizeStreamTextDelta(value?: string) {
   if (!value) return '';
   const extracted = extractProtocolText(value);
   return tidyReadableText(extracted || value);
+}
+
+function isScriptOrArtifactGenerationDetail(value: string) {
+  return /(?:taskFiles|entrypoint|write_file|wrote \d+ bytes|cat\s*>\s*.*\.(?:py|js|ts|r|sh)|\.sciforge\/tasks|\/tasks\/|\.py\b|\.R\b|\.sh\b|research-report|paper-list|evidence-matrix|ToolPayload|AgentServerGenerationResponse)/i.test(value);
+}
+
+function toolEventActionLabel(event: AgentStreamEvent | undefined, detail: string, fallback: string) {
+  const raw = isRecord(event?.raw) ? event.raw : {};
+  const toolName = typeof raw.toolName === 'string' ? raw.toolName : '';
+  const haystack = `${toolName}\n${detail}`;
+  if (/write_file|cat\s*>|wrote \d+ bytes|\.py\b|\.R\b|\.sh\b/i.test(haystack)) return event?.type === 'tool-result' ? '写入完成' : '写入脚本';
+  if (/run_command|python3?|bash|sh\s+-lc|npm|pytest|tsx/i.test(haystack)) return event?.type === 'tool-result' ? '命令结果' : '执行命令';
+  return fallback;
+}
+
+function detailFromRawToolEvent(event: AgentStreamEvent) {
+  if (event.type !== 'tool-call' && event.type !== 'tool-result') return '';
+  const raw = isRecord(event.raw) ? event.raw : {};
+  const toolName = typeof raw.toolName === 'string' ? raw.toolName : '';
+  const detail = typeof raw.detail === 'string' ? raw.detail : event.detail || '';
+  const output = typeof raw.output === 'string' ? raw.output : '';
+  if (toolName === 'write_file' || /write_file/i.test(detail)) {
+    const parsed = parseJsonObject(detail);
+    const path = typeof parsed?.path === 'string' ? parsed.path : extractPathLike(detail);
+    const content = typeof parsed?.content === 'string' ? parsed.content : '';
+    if (event.type === 'tool-result') return tidyReadableText(`写入完成${path ? `：${path}` : ''}${output ? `\n${output}` : ''}`);
+    return tidyReadableText(`正在写入脚本${path ? `：${path}` : ''}${content ? `\n${previewCode(content)}` : ''}`);
+  }
+  if (/cat\s*>\s*.+?\.(?:py|js|ts|r|sh)\b/i.test(detail)) {
+    const path = extractPathLike(detail);
+    return tidyReadableText(`${event.type === 'tool-result' ? '脚本写入完成' : '正在写入脚本'}${path ? `：${path}` : ''}${output ? `\n${output}` : ''}`);
+  }
+  if (output && /Traceback|Error|Exception|failed|失败|timeout/i.test(output)) {
+    return tidyReadableText(`${detail}\n${tailText(output, 1400)}`);
+  }
+  return '';
+}
+
+function parseJsonObject(value: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractPathLike(value: string) {
+  return value.match(/(?:^|["'\s])((?:\/|\.?\/)?[A-Za-z0-9._/@-]+\/[A-Za-z0-9._/@-]+\.(?:py|js|ts|r|R|sh|json|md))(?:["'\s]|$)/)?.[1];
+}
+
+function previewCode(value: string) {
+  const lines = value
+    .replace(/\\n/g, '\n')
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .slice(0, 8);
+  return lines.length ? lines.join('\n') : value.slice(0, 500);
+}
+
+function tailText(value: string, limit: number) {
+  return value.length <= limit ? value : value.slice(-limit);
 }
 
 function extractProtocolText(value: string) {

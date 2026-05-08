@@ -69,20 +69,28 @@ export async function sendSciForgeToolMessage(
   });
   const artifactAccessPolicy = buildArtifactAccessPolicy(input, artifactSummary, recentExecutionRefs);
   const priorFailure = hasPriorFailure(artifactSummary, recentExecutionRefs);
-  const requestController = new AbortController();
+  let activeRequestController: AbortController | undefined;
   let timedOut = false;
+  let retryForSilentFirstEvent = false;
+  let sawBackendEvent = false;
+  let lastSilentNoticeAt = 0;
   const timeout = globalThis.setTimeout(() => {
     timedOut = true;
-    requestController.abort();
+    activeRequestController?.abort();
   }, input.config.requestTimeoutMs || DEFAULT_AGENT_REQUEST_TIMEOUT_MS);
-  const linkedAbort = () => requestController.abort();
+  const linkedAbort = () => activeRequestController?.abort();
   signal?.addEventListener('abort', linkedAbort, { once: true });
   let lastRealEventAt = Date.now();
   const silenceWatchdog = globalThis.setInterval(() => {
     const seconds = Math.round((Date.now() - lastRealEventAt) / 1000);
-    if (seconds < 20) return;
+    if (seconds < 20 || Date.now() - lastSilentNoticeAt < 18_000) return;
+    lastSilentNoticeAt = Date.now();
     callbacks.onEvent?.(toolEvent('backend-silent', `后端 ${seconds}s 没有输出新事件；HTTP stream 仍在等待 ${input.config.agentBackend || 'codex'} 返回。`));
-    lastRealEventAt = Date.now();
+    if (!sawBackendEvent && seconds >= 45 && !timedOut && !signal?.aborted && activeRequestController) {
+      retryForSilentFirstEvent = true;
+      callbacks.onEvent?.(toolEvent('backend-stream-retry', `首个后端事件 ${seconds}s 未返回；自动中断当前 HTTP stream 并重连一次，避免旧连接/死流让多轮任务挂起。`));
+      activeRequestController.abort();
+    }
   }, 10_000);
   try {
     callbacks.onEvent?.(toolEvent('current-plan', `当前计划：发送用户原始请求到 AgentServer/workspace runtime，由后台判断回答、生成、修复或执行；UI 仅附带本轮显式 artifacts=${expectedArtifactTypes.join(', ') || 'backend-decides'}`));
@@ -187,21 +195,46 @@ export async function sendSciForgeToolMessage(
       requestBodyText,
       'AgentServer handoff preflight estimate',
     ));
-    const response = await fetch(`${input.config.workspaceWriterBaseUrl}/api/sciforge/tools/run/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: requestBodyText,
-      signal: requestController.signal,
-    });
-  const { result, error } = await readWorkspaceToolStream(response, (event) => {
-    lastRealEventAt = Date.now();
-    callbacks.onEvent?.(withConfiguredContextWindowLimit(
-      normalizeWorkspaceRuntimeEvent(event),
-      input.config.maxContextWindowTokens,
-    ));
-  });
-  if (!response.ok || error || !isRecord(result)) {
-    throw new Error(error || `SciForge project tool failed: HTTP ${response.status}`);
+    let response: Response | undefined;
+    let result: unknown;
+    let error: string | undefined;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      activeRequestController = new AbortController();
+      retryForSilentFirstEvent = false;
+      sawBackendEvent = false;
+      lastRealEventAt = Date.now();
+      lastSilentNoticeAt = 0;
+      if (attempt > 1) {
+        callbacks.onEvent?.(toolEvent('backend-stream-retry-start', `正在重连 workspace stream（第 ${attempt}/2 次），复用同一个请求 payload。`));
+      }
+      try {
+        response = await fetch(`${input.config.workspaceWriterBaseUrl}/api/sciforge/tools/run/stream`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: requestBodyText,
+          signal: activeRequestController.signal,
+        });
+        const stream = await readWorkspaceToolStream(response, (event) => {
+          sawBackendEvent = true;
+          lastRealEventAt = Date.now();
+          callbacks.onEvent?.(withConfiguredContextWindowLimit(
+            normalizeWorkspaceRuntimeEvent(event),
+            input.config.maxContextWindowTokens,
+          ));
+        });
+        result = stream.result;
+        error = stream.error;
+        break;
+      } catch (streamError) {
+        if (retryForSilentFirstEvent && attempt < 2) {
+          callbacks.onEvent?.(toolEvent('backend-stream-retry', '首个 stream 已中断；准备重新发送同一请求。'));
+          continue;
+        }
+        throw streamError;
+      }
+    }
+  if (!response?.ok || error || !isRecord(result)) {
+    throw new Error(error || `SciForge project tool failed: HTTP ${response?.status ?? 'no-response'}`);
   }
   const completion = workspaceResultCompletion(result);
   callbacks.onEvent?.(toolEvent('project-tool-done', completion.status === 'failed'
@@ -623,7 +656,9 @@ function buildHumanApprovalPolicy(input: SendAgentMessageInput, selectedActionId
 }
 
 function summarizeSciForgeReferences(input: SendAgentMessageInput) {
-  return (input.references ?? []).slice(0, 8).map(compactSciForgeReference);
+  const explicit = (input.references ?? []).map(compactSciForgeReference);
+  const promptRefs = promptPathReferences(input.prompt, explicit.map((reference) => reference.ref));
+  return [...explicit, ...promptRefs].slice(0, 8);
 }
 
 function compactSciForgeReference(reference: NonNullable<SendAgentMessageInput['references']>[number]) {
@@ -638,6 +673,49 @@ function compactSciForgeReference(reference: NonNullable<SendAgentMessageInput['
     summary: reference.summary,
     payload: compactReferencePayload(reference.payload),
   };
+}
+
+function promptPathReferences(prompt: string, existingRefs: string[]) {
+  const explicitRefs = extractPromptWorkspaceRefs(prompt);
+  const siblingDirs = uniqueStrings(explicitRefs
+    .map((ref) => ref.replace(/\/[^/]+$/, ''))
+    .filter((dir) => dir && dir !== refBasename(dir)));
+  const bareRefs = extractPromptBareFileRefs(prompt)
+    .filter((name) => !explicitRefs.some((ref) => refBasename(ref) === name))
+    .flatMap((name) => siblingDirs.length ? siblingDirs.map((dir) => `${dir}/${name}`) : []);
+  const seen = new Set(existingRefs);
+  return uniqueStrings([...explicitRefs, ...bareRefs])
+    .filter((ref) => !seen.has(ref))
+    .map((ref) => ({
+      id: `prompt-ref-${stableTextDigest(ref)}`,
+      kind: 'file' as const,
+      title: refBasename(ref),
+      ref,
+      summary: 'Current-turn file path mentioned in the user prompt.',
+      sourceId: 'prompt-path',
+    }));
+}
+
+function extractPromptWorkspaceRefs(prompt: string) {
+  const refs: string[] = [];
+  const pattern = /(?:^|[\s"'`(\[，。；：、])((?:file:)?(?:workspace\/|\.\/workspace\/|\.sciforge\/)[^\s"'`)\]，。；：、]+?\.(?:pdf|txt|md|markdown|csv|tsv|json|log))(?=$|[\s"'`)\]，。；：、])/gi;
+  for (const match of prompt.matchAll(pattern)) {
+    let ref = match[1].trim().replace(/^file:/, '').replace(/^\.\/workspace\//, 'workspace/');
+    if (ref.startsWith('workspace/')) ref = ref.slice('workspace/'.length);
+    refs.push(ref);
+  }
+  return uniqueStrings(refs);
+}
+
+function extractPromptBareFileRefs(prompt: string) {
+  const refs: string[] = [];
+  const pattern = /(?:^|[\s"'`(\[，。；：、])([A-Za-z0-9._-]+\.(?:pdf|txt|md|markdown|csv|tsv|json|log))(?=$|[\s"'`)\]，。；：、])/gi;
+  for (const match of prompt.matchAll(pattern)) refs.push(match[1]);
+  return uniqueStrings(refs);
+}
+
+function refBasename(ref: string) {
+  return ref.split('/').filter(Boolean).at(-1) || ref;
 }
 
 function compactReferencePayload(payload: unknown): unknown {

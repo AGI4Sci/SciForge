@@ -521,8 +521,34 @@ export function buildAgentServerGenerationPrompt(request: {
   priorAttempts: unknown[];
   strictTaskFilesReason?: string;
   retryAudit?: unknown;
+  freshCurrentTurn?: boolean;
 }) {
+  const contextEnvelope = isRecord(request.contextEnvelope) ? request.contextEnvelope : {};
+  const sessionFacts = isRecord(contextEnvelope.sessionFacts) ? contextEnvelope.sessionFacts : {};
+  const scenarioFacts = isRecord(contextEnvelope.scenarioFacts) ? contextEnvelope.scenarioFacts : {};
+  const currentTurnSnapshot = {
+    kind: 'SciForgeCurrentTurnSnapshot',
+    prompt: request.prompt,
+    currentUserRequest: stringField(sessionFacts.currentUserRequest) ?? currentUserRequestText(request.prompt),
+    skillDomain: request.skillDomain,
+    expectedArtifactTypes: request.expectedArtifactTypes ?? [],
+    selectedComponentIds: request.selectedComponentIds ?? [],
+    selectedToolIds: toStringList(scenarioFacts.selectedToolIds),
+    selectedSenseIds: toStringList(scenarioFacts.selectedSenseIds),
+    currentReferences: Array.isArray(sessionFacts.currentReferences) ? sessionFacts.currentReferences : undefined,
+    currentReferenceDigests: Array.isArray(sessionFacts.currentReferenceDigests) ? sessionFacts.currentReferenceDigests : undefined,
+    strictTaskFilesReason: request.strictTaskFilesReason,
+    outputContract: {
+      finalOutput: 'exactly one compact JSON object',
+      alternatives: ['AgentServerGenerationResponse', 'SciForge ToolPayload'],
+      taskFiles: 'array of { path, language, content } unless physically written in workspace',
+      taskEntrypoint: 'executable code path only; report/data files are artifacts, not entrypoints',
+    },
+  };
   return [
+    'CURRENT TURN SNAPSHOT (authoritative; preserve this even when context is compacted):',
+    JSON.stringify(clipForAgentServerJson(currentTurnSnapshot), null, 2),
+    '',
     request.contextEnvelope ? JSON.stringify({
       version: request.contextEnvelope.version,
       workspaceFacts: Boolean(request.contextEnvelope.workspaceFacts),
@@ -530,7 +556,11 @@ export function buildAgentServerGenerationPrompt(request: {
     }, null, 2) : '',
     'Handle this SciForge request as the agent backend decision-maker.',
     'AgentServer owns orchestration, domain reasoning, tool choice, continuation, and repair strategy. SciForge only validates protocol, runs returned workspace tasks, persists refs/artifacts, and reports contract failures.',
-    'First infer the current-turn intent from prompt, recentConversation, priorAttempts, artifacts, recentExecutionRefs, and workspace refs. SciForge is only the protocol/execution layer; you decide whether to answer, continue, repair, rerun, retrieve, or generate new workspace task code.',
+    request.freshCurrentTurn
+      ? 'FRESH GENERATION MODE: do not call tools before returning. Do not inspect workspace directories, .sciforge, old task attempts, old artifacts, logs, installed packages, or previous generated code. Return final compact JSON immediately; generated task code can perform runtime inspection/retrieval later using inputPath/outputPath.'
+      : 'CONTINUITY MODE: inspect only the concrete prior refs needed for the current continuation/repair/rerun request.',
+    'First infer the current-turn intent from the CURRENT TURN SNAPSHOT and recentConversation. Use priorAttempts, artifacts, recentExecutionRefs, and workspace refs only when the current turn explicitly asks to continue, repair, rerun, or inspect a previous task.',
+    'Fresh current-turn requests must move directly to either a direct ToolPayload or generated task code. Do not spend generation-stage tool calls browsing historical .sciforge/task-attempts, logs, artifacts, or old generated tasks unless the current turn explicitly asks for that history.',
     'Return exactly one JSON object, with no markdown before or after it.',
     'If the user only needs an answer from existing context, return a valid SciForge ToolPayload JSON directly, preserving useful existing artifacts/refs.',
     'If the user asks to continue, repair, rerun, retrieve, analyze files, or produce artifacts, return JSON matching AgentServerGenerationResponse: taskFiles, entrypoint, environmentRequirements, validationCommand, expectedArtifacts, and patchSummary.',
@@ -549,6 +579,7 @@ export function buildAgentServerGenerationPrompt(request: {
       ? `Strict retry reason: ${request.strictTaskFilesReason}`
       : '',
     'If a prior task already exists and the user asks to continue, repair, or rerun it, prefer returning taskFiles that reference that existing workspace task path or a minimal patched task instead of starting an unrelated fresh analysis.',
+    'For fresh retrieval/analysis/report requests, do not inspect prior task-attempt files to learn old failures. Generate an inputPath/outputPath task that performs the requested retrieval/analysis at execution time and writes bounded artifacts.',
     'Generate fresh task code only when the current turn truly asks for new work or no prior executable artifact can satisfy the request.',
     'Put generated task paths under .sciforge/tasks when possible. SciForge will archive any returned taskFiles under .sciforge/tasks/<run-id>/ before execution.',
     'Do not force self-contained task code when a better installed/workspace tool exists. Prefer the best available tool, record the tool id/version/command in ExecutionUnit, and write only the adapter/glue needed for reproducibility from inputPath and outputPath.',

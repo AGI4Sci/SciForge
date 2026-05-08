@@ -341,15 +341,18 @@ function decodeJsonStringLiteral(value: string) {
 }
 
 function reportRefFromPayload(payload: Record<string, unknown>) {
-  return firstString(payload.reportRef, payload.markdownRef, payload.dataRef, payload.path, payload.outputRef);
+  return firstMarkdownRef(payload.markdownRef, payload.reportRef, payload.path, payload.dataRef, payload.outputRef);
 }
 
 function reportRefFromArtifact(artifact?: RuntimeArtifact) {
-  return artifact?.dataRef
-    || asString(artifact?.metadata?.reportRef)
-    || asString(artifact?.metadata?.markdownRef)
-    || asString(artifact?.metadata?.dataRef)
-    || asString(artifact?.metadata?.outputRef);
+  return firstMarkdownRef(
+    artifact?.metadata?.markdownRef,
+    artifact?.metadata?.reportRef,
+    artifact?.path,
+    artifact?.dataRef,
+    artifact?.metadata?.dataRef,
+    artifact?.metadata?.outputRef,
+  );
 }
 
 function reportRefFromText(text?: string) {
@@ -365,6 +368,10 @@ function looksLikeBackendPayloadText(text?: string) {
 
 function firstString(...values: unknown[]) {
   return values.map(asString).find(Boolean);
+}
+
+function firstMarkdownRef(...values: unknown[]) {
+  return values.map(asString).find((value) => Boolean(value && /\.m(?:d|arkdown)(?:$|[?#])/i.test(value)));
 }
 
 function parseNestedReport(payload: Record<string, unknown>): Record<string, unknown> | undefined {
