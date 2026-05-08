@@ -44,7 +44,7 @@ export const toolPackageManifests = [
     "kind": "tool",
     "version": "1.0.0",
     "label": "vision-sense",
-    "description": "Vision Sense 插件：把文本指令加截图/图像模态转成 text-only 视觉观察和可审计 vision trace。",
+    "description": "Vision Sense 插件：把文本指令加截图/图像模态转成 text-only 视觉观察和可审计 vision trace。Computer Use execution is owned by a separate modular consumer/provider.",
     "source": "package",
     "toolType": "sense-plugin",
     "skillDomains": [
@@ -60,7 +60,7 @@ export const toolPackageManifests = [
     ],
     "docs": {
       "readmePath": "packages/tools/local/vision-sense/SKILL.md",
-      "agentSummary": "Vision Sense 插件：把文本指令加截图/图像模态转成 text-only 视觉观察和可审计 vision trace。"
+      "agentSummary": "Vision Sense 插件：把文本指令加截图/图像模态转成 text-only 视觉观察和可审计 vision trace。Computer Use execution is owned by a separate modular consumer/provider."
     },
     "packageRoot": "packages/senses/vision-sense",
     "tags": [
@@ -89,62 +89,10 @@ export const toolPackageManifests = [
       "outputContract": {
         "kind": "text",
         "formats": [
+          "text/plain",
           "application/json",
-          "application/x-ndjson",
-          "text/x-computer-use-command"
-        ],
-        "commandSchema": {
-          "type": "object",
-          "required": [
-            "action"
-          ],
-          "properties": {
-            "action": {
-              "enum": [
-                "click",
-                "type_text",
-                "press_key",
-                "scroll",
-                "wait"
-              ]
-            },
-            "target": {
-              "type": "object",
-              "properties": {
-                "x": {
-                  "type": "number"
-                },
-                "y": {
-                  "type": "number"
-                },
-                "description": {
-                  "type": "string"
-                }
-              }
-            },
-            "text": {
-              "type": "string"
-            },
-            "key": {
-              "type": "string"
-            },
-            "direction": {
-              "enum": [
-                "up",
-                "down",
-                "left",
-                "right"
-              ]
-            },
-            "riskLevel": {
-              "enum": [
-                "low",
-                "medium",
-                "high"
-              ]
-            }
-          }
-        }
+          "application/x-ndjson"
+        ]
       },
       "executionBoundary": "text-signal-only",
       "safety": {

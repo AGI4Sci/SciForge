@@ -149,6 +149,12 @@ export function parseWorkspaceState(value: unknown): SciForgeWorkspaceState {
     feedbackRequests: Array.isArray(raw.feedbackRequests)
       ? raw.feedbackRequests.filter(isFeedbackRequest)
       : [],
+    feedbackRepairRuns: Array.isArray(raw.feedbackRepairRuns)
+      ? raw.feedbackRepairRuns.filter(isFeedbackRepairRun)
+      : [],
+    feedbackRepairResults: Array.isArray(raw.feedbackRepairResults)
+      ? raw.feedbackRepairResults.filter(isFeedbackRepairResult)
+      : [],
     githubSyncedOpenIssues: Array.isArray(raw.githubSyncedOpenIssues)
       ? raw.githubSyncedOpenIssues.filter(isGithubSyncedOpenIssue)
       : [],
@@ -239,6 +245,29 @@ function isFeedbackRequest(value: unknown) {
     && typeof record.updatedAt === 'string';
 }
 
+function isFeedbackRepairRun(value: unknown) {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return record.schemaVersion === 1
+    && typeof record.id === 'string'
+    && typeof record.issueId === 'string'
+    && typeof record.status === 'string'
+    && typeof record.startedAt === 'string';
+}
+
+function isFeedbackRepairResult(value: unknown) {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return record.schemaVersion === 1
+    && typeof record.id === 'string'
+    && typeof record.issueId === 'string'
+    && typeof record.verdict === 'string'
+    && typeof record.summary === 'string'
+    && Array.isArray(record.changedFiles)
+    && Array.isArray(record.evidenceRefs)
+    && typeof record.completedAt === 'string';
+}
+
 export function saveWorkspaceState(state: SciForgeWorkspaceState) {
   if (typeof window === 'undefined') return;
   const compact = compactWorkspaceStateForStorage(state);
@@ -276,6 +305,8 @@ export function compactWorkspaceStateForStorage(
     archivedSessions: (state.archivedSessions ?? []).slice(0, limits.archived).map((session) => compactSessionForStorage(session, limits)),
     feedbackComments: state.feedbackComments?.slice(0, mode === 'minimal' ? 20 : 120),
     feedbackRequests: state.feedbackRequests?.slice(0, mode === 'minimal' ? 8 : 40),
+    feedbackRepairRuns: state.feedbackRepairRuns?.slice(0, mode === 'minimal' ? 20 : 120),
+    feedbackRepairResults: state.feedbackRepairResults?.slice(0, mode === 'minimal' ? 20 : 120),
     githubSyncedOpenIssues: state.githubSyncedOpenIssues?.slice(0, mode === 'minimal' ? 40 : 120),
     timelineEvents: state.timelineEvents?.slice(0, limits.timeline),
     reusableTaskCandidates: state.reusableTaskCandidates?.slice(0, limits.reusable),

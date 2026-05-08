@@ -13,6 +13,7 @@ export function ChatComposer({
   contextMeter,
   fileInputRef,
   referenceChips,
+  topAddon,
   onExpand,
   onCollapse,
   onToggleReferencePickMode,
@@ -32,6 +33,7 @@ export function ChatComposer({
   contextMeter: ReactNode;
   fileInputRef: RefObject<HTMLInputElement | null>;
   referenceChips: ReactNode;
+  topAddon?: ReactNode;
   onExpand: () => void;
   onCollapse: () => void;
   onToggleReferencePickMode: () => void;
@@ -83,6 +85,7 @@ export function ChatComposer({
         <ChevronDown size={15} />
       </button>
       <div className="composer-resize-handle" onMouseDown={onBeginResize} title="拖拽调整输入框高度" />
+      {topAddon}
       <div className="reference-composer">
         <button
           type="button"

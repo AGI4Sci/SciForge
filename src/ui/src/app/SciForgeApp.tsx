@@ -1,7 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import {
   AlertTriangle,
-  ArrowRight,
   ChevronLeft,
   ChevronDown,
   ChevronRight,
@@ -69,11 +68,14 @@ import {
   syncFeedbackGithubIssues,
 } from '../feedback/githubFeedback';
 import { FeedbackScreenshotPreview } from '../feedback/FeedbackScreenshotPreview';
+import { FeedbackRepairAuditPanel } from '../feedback/FeedbackRepairAuditPanel';
 import {
   addFeedbackCommentToWorkspace,
   createFeedbackRequestFromComments,
   deleteFeedbackCommentsFromWorkspace,
   replaceGithubSyncedOpenIssuesInWorkspace,
+  feedbackRepairAuditForIssue,
+  upsertFeedbackRepairRunInWorkspace,
   updateFeedbackCommentStatus,
 } from '../feedback/feedbackWorkspace';
 import {
@@ -89,6 +91,8 @@ import {
   type EvidenceClaim,
   type FeedbackCommentRecord,
   type FeedbackCommentStatus,
+  type FeedbackRepairRunRecord,
+  type FeedbackRepairResultRecord,
   type GithubSyncedOpenIssueRecord,
   type FeedbackPriority,
   type NotebookRecord,
@@ -126,7 +130,9 @@ import {
   archiveWorkspaceScenario,
   deleteWorkspaceScenario,
   listSkillPromotionProposals,
+  loadFeedbackIssueHandoffBundle,
   listWorkspace,
+  loadSciForgeInstanceManifest,
   loadFileBackedSciForgeConfig,
   loadPersistedWorkspaceState,
   loadScenarioLibrary,
@@ -593,9 +599,12 @@ function FeedbackInboxPage({
   config,
   comments,
   requests,
+  repairRuns,
+  repairResults,
   onStatusChange,
   onDelete,
   onCreateRequest,
+  onRepairRunWritten,
   feedbackGithubRepo,
   feedbackGithubToken,
   githubSyncedOpenIssues,
@@ -607,9 +616,12 @@ function FeedbackInboxPage({
   config: SciForgeConfig;
   comments: FeedbackCommentRecord[];
   requests: NonNullable<SciForgeWorkspaceState['feedbackRequests']>;
+  repairRuns: FeedbackRepairRunRecord[];
+  repairResults: FeedbackRepairResultRecord[];
   onStatusChange: (ids: string[], status: FeedbackCommentStatus) => void;
   onDelete: (ids: string[]) => void;
   onCreateRequest: (ids: string[], title: string) => void;
+  onRepairRunWritten: (run: FeedbackRepairRunRecord) => void;
   feedbackGithubRepo?: string;
   feedbackGithubToken?: string;
   githubSyncedOpenIssues: GithubSyncedOpenIssueRecord[];
@@ -623,9 +635,16 @@ function FeedbackInboxPage({
   const [githubActionHint, setGithubActionHint] = useState('');
   const [githubSubmitBusy, setGithubSubmitBusy] = useState(false);
   const [githubSyncBusy, setGithubSyncBusy] = useState(false);
+  const [handoffBusyById, setHandoffBusyById] = useState<Record<string, boolean>>({});
+  const [handoffTargetById, setHandoffTargetById] = useState<Record<string, string>>({});
+  const [handoffHintById, setHandoffHintById] = useState<Record<string, string>>({});
   const effectiveGithubRepo = useMemo(
     () => (feedbackGithubRepo?.trim() || defaultSciForgeConfig.feedbackGithubRepo || '').trim(),
     [feedbackGithubRepo],
+  );
+  const repairTargets = useMemo(
+    () => (config.peerInstances ?? []).filter((peer) => peer.enabled && peer.trustLevel === 'repair'),
+    [config.peerInstances],
   );
   const visibleComments = comments
     .filter((comment) => statusFilter === 'all' || comment.status === statusFilter)
@@ -710,6 +729,59 @@ function FeedbackInboxPage({
     event.preventDefault();
     if (!url.trim()) return;
     window.location.assign(url);
+  }
+
+  async function handoffFeedbackIssue(item: FeedbackCommentRecord) {
+    const targetName = handoffTargetById[item.id] || repairTargets[0]?.name || '';
+    const target = repairTargets.find((peer) => peer.name === targetName);
+    if (!target) {
+      setHandoffHintById((current) => ({ ...current, [item.id]: '没有可用的 repair 目标实例。请先配置 enabled + repair trust 的 peer instance。' }));
+      return;
+    }
+    const targetConfig = {
+      ...config,
+      workspaceWriterBaseUrl: target.workspaceWriterUrl,
+      workspacePath: target.workspacePath,
+    };
+    setHandoffBusyById((current) => ({ ...current, [item.id]: true }));
+    setHandoffHintById((current) => ({ ...current, [item.id]: `正在准备交给 ${target.name}...` }));
+    try {
+      const bundlePromise = loadFeedbackIssueHandoffBundle(config, item.id);
+      const manifestPromise = loadSciForgeInstanceManifest(targetConfig, target.workspacePath);
+      const [bundleResult, manifestResult] = await Promise.allSettled([bundlePromise, manifestPromise]);
+      const bundle = bundleResult.status === 'fulfilled' ? bundleResult.value : undefined;
+      const manifest = manifestResult.status === 'fulfilled' ? manifestResult.value : undefined;
+      const executorName = manifest?.instance.name || target.name;
+      const executorId = manifest?.instance.id || target.name;
+      const run: FeedbackRepairRunRecord = {
+        schemaVersion: 1,
+        id: makeId('feedback-repair-run'),
+        issueId: item.id,
+        status: 'assigned',
+        externalInstanceId: executorId,
+        externalInstanceName: executorName,
+        actor: 'feedback-inbox',
+        startedAt: nowIso(),
+        note: `已交给 ${executorName}。收件箱只记录 handoff 和审计，不运行修复 runner。`,
+        metadata: {
+          handoffKind: 'feedback-repair',
+          sourceWorkspacePath: config.workspacePath || bundle?.workspacePath,
+          targetWorkspacePath: target.workspacePath,
+          targetAppUrl: target.appUrl,
+          targetWorkspaceWriterUrl: target.workspaceWriterUrl,
+          handoffBundle: bundle,
+          targetManifest: manifest,
+          targetManifestUnavailable: manifestResult.status === 'rejected' ? String(manifestResult.reason) : undefined,
+        },
+      };
+      onRepairRunWritten(run);
+      setHandoffHintById((current) => ({ ...current, [item.id]: `已交给 ${executorName}；等待外部实例写回 repair result。` }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setHandoffHintById((current) => ({ ...current, [item.id]: `Handoff 记录失败：${message}` }));
+    } finally {
+      setHandoffBusyById((current) => ({ ...current, [item.id]: false }));
+    }
   }
 
   return (
@@ -816,11 +888,17 @@ function FeedbackInboxPage({
             <article className={cx('feedback-card', selectedIds.includes(item.id) && 'selected')} key={item.id}>
               <input type="checkbox" checked={selectedIds.includes(item.id)} onChange={() => toggle(item.id)} aria-label={`选择反馈 ${item.id}`} />
               <div className="feedback-card-main">
+                {(() => {
+                  const audit = feedbackRepairAuditForIssue(item.id, repairRuns, repairResults);
+                  const targetValue = handoffTargetById[item.id] || repairTargets[0]?.name || '';
+                  return (
+                    <>
                 <div className="feedback-card-head">
                   <strong>{item.comment}</strong>
                   <div className="feedback-card-head-actions">
                     <Badge variant={feedbackStatusVariant(item.status)}>{item.status}</Badge>
                     <Badge variant={item.priority === 'urgent' || item.priority === 'high' ? 'warning' : 'muted'}>{item.priority}</Badge>
+                    <Badge variant={audit.badge}>{audit.label}</Badge>
                   </div>
                 </div>
                 <p>{item.authorName} · {formatSessionTime(item.createdAt)} · {item.runtime.page} · {item.runtime.scenarioId}</p>
@@ -841,8 +919,20 @@ function FeedbackInboxPage({
                   <span>runtime</span>
                   <code>{item.runtime.sessionId ?? 'no-session'} / {item.runtime.activeRunId ?? 'no-run'}</code>
                 </div>
+                <FeedbackRepairAuditPanel
+                  audit={audit}
+                  repairTargets={repairTargets}
+                  targetValue={targetValue}
+                  busy={handoffBusyById[item.id]}
+                  hint={handoffHintById[item.id]}
+                  onTargetChange={(targetName) => setHandoffTargetById((current) => ({ ...current, [item.id]: targetName }))}
+                  onHandoff={() => void handoffFeedbackIssue(item)}
+                />
                 <FeedbackScreenshotPreview item={item} />
                 {item.tags.length ? <div className="feedback-tags">{item.tags.map((tag) => <code key={tag}>{tag}</code>)}</div> : null}
+                    </>
+                  );
+                })()}
               </div>
             </article>
           ))}
@@ -1133,6 +1223,10 @@ export function SciForgeApp() {
     updateWorkspace((current) => createFeedbackRequestFromComments(current, ids, title));
   }
 
+  function recordFeedbackRepairRun(run: FeedbackRepairRunRecord) {
+    updateWorkspace((current) => upsertFeedbackRepairRunInWorkspace(current, run));
+  }
+
   function replaceGithubSyncedOpenIssues(issues: GithubSyncedOpenIssueRecord[]) {
     updateWorkspace((current) => replaceGithubSyncedOpenIssuesInWorkspace(current, issues, nowIso()));
   }
@@ -1372,9 +1466,12 @@ export function SciForgeApp() {
               config={config}
               comments={workspaceState.feedbackComments ?? []}
               requests={workspaceState.feedbackRequests ?? []}
+              repairRuns={workspaceState.feedbackRepairRuns ?? []}
+              repairResults={workspaceState.feedbackRepairResults ?? []}
               onStatusChange={updateFeedbackStatus}
               onDelete={deleteFeedbackComments}
               onCreateRequest={createFeedbackRequest}
+              onRepairRunWritten={recordFeedbackRepairRun}
               feedbackGithubRepo={config.feedbackGithubRepo}
               feedbackGithubToken={config.feedbackGithubToken}
               githubSyncedOpenIssues={workspaceState.githubSyncedOpenIssues ?? []}

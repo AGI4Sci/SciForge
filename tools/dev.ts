@@ -1,12 +1,15 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { connect } from 'node:net';
 import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
+
+applyInstanceDefaults();
 
 const WORKSPACE_PORT = Number(process.env.SCIFORGE_WORKSPACE_PORT || 5174);
 const UI_PORT = Number(process.env.SCIFORGE_UI_PORT || 5173);
 const AGENT_SERVER_PORT = Number(process.env.SCIFORGE_AGENT_SERVER_PORT || 18080);
 const AGENT_SERVER_ROOT = resolve(process.env.SCIFORGE_AGENT_SERVER_ROOT || '../AgentServer');
+const CONFIG_LOCAL_PATH = resolve(process.env.SCIFORGE_CONFIG_PATH || 'config.local.json');
 const children: ChildProcess[] = [];
 let shuttingDown = false;
 
@@ -26,7 +29,7 @@ if (process.env.SCIFORGE_AGENT_SERVER_AUTOSTART !== '0') {
 }
 
 function agentServerModelEnvFromLocalConfig() {
-  const configPath = join(process.cwd(), 'config.local.json');
+  const configPath = CONFIG_LOCAL_PATH;
   if (!existsSync(configPath)) return {};
   try {
     const parsed = JSON.parse(readFileSync(configPath, 'utf8'));
@@ -62,7 +65,7 @@ if (workspaceHealth.ok) {
 if (await isListening(UI_PORT)) {
   console.log(`SciForge UI already running: http://127.0.0.1:${UI_PORT}`);
 } else {
-  children.push(start('ui', ['run', 'dev:ui']));
+  children.push(start('ui', ['run', 'dev:ui', '--', '--host', '0.0.0.0', '--port', String(UI_PORT), '--strictPort']));
 }
 
 process.once('SIGINT', shutdown);
@@ -135,4 +138,64 @@ async function readHealth(port: number) {
   } catch {
     return { ok: false, capabilities: [] };
   }
+}
+
+function applyInstanceDefaults() {
+  const instanceArg = readArgValue('--instance') || readArgValue('-i');
+  const instance = normalizeInstanceName(instanceArg || process.env.SCIFORGE_INSTANCE || '');
+  if (!instance) return;
+  const profile = instance === 'b'
+    ? {
+      id: 'B',
+      role: 'repair',
+      uiPort: '5273',
+      workspacePort: '5274',
+      workspacePath: '.',
+      stateDir: '.sciforge-b',
+      logDir: '.sciforge-b/logs',
+      configPath: 'config.b.local.json',
+      agentAutostart: '0',
+      counterpart: { agentId: 'A', appUrl: 'http://127.0.0.1:5173', workspaceWriterUrl: 'http://127.0.0.1:5174' },
+    }
+    : {
+      id: 'A',
+      role: 'main',
+      uiPort: '5173',
+      workspacePort: '5174',
+      workspacePath: '.',
+      stateDir: '.sciforge-a',
+      logDir: '.sciforge-a/logs',
+      configPath: 'config.a.local.json',
+      agentAutostart: undefined,
+      counterpart: { agentId: 'B', appUrl: 'http://127.0.0.1:5273', workspaceWriterUrl: 'http://127.0.0.1:5274' },
+    };
+  process.env.SCIFORGE_INSTANCE = profile.id;
+  process.env.SCIFORGE_INSTANCE_ID ||= profile.id;
+  process.env.SCIFORGE_INSTANCE_ROLE ||= profile.role;
+  process.env.SCIFORGE_UI_PORT ||= profile.uiPort;
+  process.env.SCIFORGE_WORKSPACE_PORT ||= profile.workspacePort;
+  process.env.SCIFORGE_WORKSPACE_PATH ||= resolve(profile.workspacePath);
+  process.env.SCIFORGE_STATE_DIR ||= resolve(profile.stateDir);
+  process.env.SCIFORGE_LOG_DIR ||= resolve(profile.logDir);
+  process.env.SCIFORGE_CONFIG_PATH ||= resolve(profile.configPath);
+  process.env.SCIFORGE_WORKSPACE_WRITER_URL ||= `http://127.0.0.1:${process.env.SCIFORGE_WORKSPACE_PORT}`;
+  process.env.SCIFORGE_AGENT_SERVER_URL ||= `http://127.0.0.1:${process.env.SCIFORGE_AGENT_SERVER_PORT || 18080}`;
+  process.env.SCIFORGE_COUNTERPART_JSON ||= JSON.stringify(profile.counterpart);
+  if (profile.agentAutostart && process.env.SCIFORGE_AGENT_SERVER_AUTOSTART === undefined) {
+    process.env.SCIFORGE_AGENT_SERVER_AUTOSTART = profile.agentAutostart;
+  }
+}
+
+function normalizeInstanceName(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'repair' || normalized === 'b' || normalized === 'sciforge-b') return 'b';
+  if (normalized === 'main' || normalized === 'a' || normalized === 'sciforge-a') return 'a';
+  return normalized;
+}
+
+function readArgValue(name: string) {
+  const exact = process.argv.find((arg) => arg.startsWith(`${name}=`));
+  if (exact) return exact.slice(name.length + 1);
+  const index = process.argv.indexOf(name);
+  return index >= 0 ? process.argv[index + 1] : undefined;
 }

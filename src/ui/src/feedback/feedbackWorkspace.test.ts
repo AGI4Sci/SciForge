@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { FeedbackCommentRecord, SciForgeWorkspaceState } from '../domain';
+import type { FeedbackCommentRecord, FeedbackRepairResultRecord, FeedbackRepairRunRecord, SciForgeWorkspaceState } from '../domain';
 import {
   addFeedbackCommentToWorkspace,
   createFeedbackRequestFromComments,
   deleteFeedbackCommentsFromWorkspace,
+  feedbackRepairAuditForIssue,
   replaceGithubSyncedOpenIssuesInWorkspace,
+  upsertFeedbackRepairResultInWorkspace,
+  upsertFeedbackRepairRunInWorkspace,
   updateFeedbackCommentStatus,
 } from './feedbackWorkspace';
 
@@ -130,3 +133,137 @@ test('replaces synced GitHub issue cache with explicit timestamp', () => {
   assert.equal(next.githubSyncedOpenIssues?.[0].number, 7);
   assert.equal(next.updatedAt, '2026-05-07T03:00:00.000Z');
 });
+
+test('maps repair run statuses into audit copy', () => {
+  const statuses: Array<[FeedbackRepairRunRecord['status'], string]> = [
+    ['assigned', '已交给实例'],
+    ['analyzing', '分析中'],
+    ['patching', '改代码中'],
+    ['testing', '测试中'],
+    ['needs-human-verification', '需人工核验'],
+    ['blocked', '修复受阻'],
+  ];
+
+  for (const [status, label] of statuses) {
+    const audit = feedbackRepairAuditForIssue('feedback-1', [repairRun(status)], []);
+    assert.equal(audit.status, status);
+    assert.equal(audit.label, label);
+  }
+});
+
+test('renders fixed repair result with structured evidence and passing tests', () => {
+  const result = repairResult({
+    status: 'github-synced',
+    verdict: 'fixed',
+    executorInstance: { id: 'repair-peer', name: 'Repair Peer' },
+    changedFiles: ['src/ui/src/app/SciForgeApp.tsx'],
+    diffRef: 'diff://repair-1',
+    commit: 'abc1234',
+    refs: { commitSha: 'abc1234', commitUrl: 'https://github.com/org/repo/commit/abc1234', prUrl: 'https://github.com/org/repo/pull/9', patchRef: 'patch://repair-1' },
+    tests: [{ command: 'npm test -- feedbackWorkspace', status: 'passed', outputRef: 'stdout://1' }],
+    humanVerification: { status: 'not-required' },
+    githubSyncStatus: 'synced',
+    githubCommentUrl: 'https://github.com/org/repo/issues/7#issuecomment-1',
+  });
+
+  const audit = feedbackRepairAuditForIssue('feedback-1', [], [result]);
+
+  assert.equal(audit.status, 'github-synced');
+  assert.equal(audit.testsPassed, true);
+  assert.equal(audit.githubSynced, true);
+  assert.equal(audit.latestRunStatus, 'not-started');
+  assert.equal(audit.latestResultVerdict, 'fixed');
+  assert.equal(audit.githubSyncStatus, 'synced');
+  assert.equal(audit.refs?.prUrl, 'https://github.com/org/repo/pull/9');
+  assert.equal(audit.missingTestEvidence, false);
+  assert.equal(audit.executorInstance, 'Repair Peer (repair-peer)');
+  assert.deepEqual(audit.changedFiles, ['src/ui/src/app/SciForgeApp.tsx']);
+  assert.equal(audit.headline, '测试通过，已同步 GitHub。');
+});
+
+test('flags fixed repair result that has no test evidence', () => {
+  const audit = feedbackRepairAuditForIssue('feedback-1', [], [repairResult({ verdict: 'fixed', status: 'fixed', tests: [] })]);
+
+  assert.equal(audit.status, 'needs-human-verification');
+  assert.equal(audit.badge, 'warning');
+  assert.equal(audit.missingTestEvidence, true);
+  assert.match(audit.headline, /缺测试证据/);
+});
+
+test('blocks fixed repair result that has failed tests', () => {
+  const audit = feedbackRepairAuditForIssue('feedback-1', [], [repairResult({
+    verdict: 'fixed',
+    status: 'github-synced',
+    tests: [{ command: 'npm test', status: 'failed', summary: '1 failing test' }],
+    githubCommentUrl: 'https://github.com/org/repo/issues/7#issuecomment-1',
+  })]);
+
+  assert.equal(audit.status, 'blocked');
+  assert.equal(audit.badge, 'danger');
+  assert.equal(audit.testsPassed, false);
+  assert.match(audit.headline, /失败测试/);
+});
+
+test('surfaces assigned executor and active processing copy without requiring an embedded runner', () => {
+  const assigned = feedbackRepairAuditForIssue('feedback-1', [repairRun('assigned')], []);
+  const running = feedbackRepairAuditForIssue('feedback-1', [{ ...repairRun('assigned'), status: 'running' }], []);
+
+  assert.equal(assigned.status, 'assigned');
+  assert.equal(assigned.executorInstance, 'Repair Peer (repair-peer)');
+  assert.match(assigned.headline, /已交给目标实例/);
+  assert.equal(running.status, 'analyzing');
+  assert.match(running.headline, /正在处理/);
+});
+
+test('marks human verification as explicit instead of ambiguous confirmation', () => {
+  const audit = feedbackRepairAuditForIssue('feedback-1', [], [repairResult({
+    verdict: 'needs-follow-up',
+    humanVerification: { status: 'required', verifier: 'product-owner', conclusion: '视觉影响需要产品 owner 复核', evidenceRefs: ['workspace://screenshots/after.png'], verifiedAt: '2026-05-07T05:30:00.000Z' },
+  })]);
+
+  assert.equal(audit.status, 'needs-human-verification');
+  assert.equal(audit.needsHumanVerification, true);
+  assert.match(audit.headline, /需要人工核验/);
+  assert.match(audit.humanVerification ?? '', /workspace:\/\/screenshots\/after\.png/);
+  assert.doesNotMatch(audit.headline + audit.detail + (audit.humanVerification ?? ''), /需确认但不知道怎么确认/);
+});
+
+test('upserts feedback repair handoff records without duplicating ids', () => {
+  const run = repairRun('assigned');
+  const result = repairResult({ id: 'repair-result-1' });
+  const withRun = upsertFeedbackRepairRunInWorkspace(workspace(), run);
+  const withReplacedRun = upsertFeedbackRepairRunInWorkspace(withRun, { ...run, status: 'testing' });
+  const withResult = upsertFeedbackRepairResultInWorkspace(withReplacedRun, result);
+  const withReplacedResult = upsertFeedbackRepairResultInWorkspace(withResult, { ...result, summary: 'updated' });
+
+  assert.equal(withReplacedResult.feedbackRepairRuns?.length, 1);
+  assert.equal(withReplacedResult.feedbackRepairRuns?.[0].status, 'testing');
+  assert.equal(withReplacedResult.feedbackRepairResults?.length, 1);
+  assert.equal(withReplacedResult.feedbackRepairResults?.[0].summary, 'updated');
+});
+
+function repairRun(status: FeedbackRepairRunRecord['status']): FeedbackRepairRunRecord {
+  return {
+    schemaVersion: 1,
+    id: 'repair-run-1',
+    issueId: 'feedback-1',
+    status,
+    externalInstanceId: 'repair-peer',
+    externalInstanceName: 'Repair Peer',
+    startedAt: '2026-05-07T04:00:00.000Z',
+  };
+}
+
+function repairResult(overrides: Partial<FeedbackRepairResultRecord> = {}): FeedbackRepairResultRecord {
+  return {
+    schemaVersion: 1,
+    id: 'repair-result-1',
+    issueId: 'feedback-1',
+    verdict: 'fixed',
+    summary: 'Fixed the feedback.',
+    changedFiles: [],
+    evidenceRefs: [],
+    completedAt: '2026-05-07T05:00:00.000Z',
+    ...overrides,
+  };
+}

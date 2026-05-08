@@ -239,35 +239,12 @@ function buildSensePluginManifest(safeName: string, frontmatter: Record<string, 
     },
     outputContract: {
       kind: 'text',
-      formats: ['application/json', 'application/x-ndjson', 'text/x-computer-use-command'],
-      commandSchema: modality === 'vision' ? computerUseCommandSchema() : undefined,
+      formats: ['text/plain', 'application/json', 'application/x-ndjson'],
     },
     executionBoundary: 'text-signal-only',
     safety: {
       defaultRiskLevel: 'low',
       highRiskPolicy: 'reject',
-    },
-  };
-}
-
-function computerUseCommandSchema(): Record<string, unknown> {
-  return {
-    type: 'object',
-    required: ['action'],
-    properties: {
-      action: { enum: ['click', 'type_text', 'press_key', 'scroll', 'wait'] },
-      target: {
-        type: 'object',
-        properties: {
-          x: { type: 'number' },
-          y: { type: 'number' },
-          description: { type: 'string' },
-        },
-      },
-      text: { type: 'string' },
-      key: { type: 'string' },
-      direction: { enum: ['up', 'down', 'left', 'right'] },
-      riskLevel: { enum: ['low', 'medium', 'high'] },
     },
   };
 }

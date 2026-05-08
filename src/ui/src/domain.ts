@@ -532,6 +532,8 @@ export interface SciForgeWorkspaceState {
   alignmentContracts: AlignmentContractRecord[];
   feedbackComments?: FeedbackCommentRecord[];
   feedbackRequests?: FeedbackRequestRecord[];
+  feedbackRepairRuns?: FeedbackRepairRunRecord[];
+  feedbackRepairResults?: FeedbackRepairResultRecord[];
   /** Open GitHub Issues synced from the configured feedback repo (PRs excluded). Replaced on each sync. */
   githubSyncedOpenIssues?: GithubSyncedOpenIssueRecord[];
   beliefGraphs?: BeliefDependencyGraph[];
@@ -617,6 +619,175 @@ export interface FeedbackRequestRecord {
   updatedAt: string;
 }
 
+export interface SciForgeInstanceManifest {
+  schemaVersion: 1;
+  instance: {
+    id: string;
+    name: string;
+  };
+  workspacePath: string;
+  repo: {
+    detected: boolean;
+    root?: string;
+    branch?: string;
+    commit?: string;
+    remote?: string;
+    dirty?: boolean;
+  };
+  stableVersion?: {
+    schemaVersion: 1;
+    instanceId: string;
+    role: string;
+    repoRoot: string;
+    branch?: string;
+    commit?: string;
+    versionLabel: string;
+    promotedAt: string;
+    tests: Array<{
+      name?: string;
+      command?: string;
+      status: 'passed' | 'failed' | 'skipped' | 'unknown';
+      summary?: string;
+      outputRef?: string;
+      completedAt?: string;
+    }>;
+    promotedBy: string;
+    sourceInstance?: string;
+    syncState: {
+      status: 'local-stable' | 'promoted-from-source' | 'pending-sync' | 'synced' | 'rolled-back';
+      sourceCommit?: string;
+      targetCommit?: string;
+      planId?: string;
+      notes?: string[];
+    };
+  };
+  capabilities: string[];
+}
+
+export interface FeedbackScreenshotMetadata {
+  screenshotRef?: string;
+  schemaVersion?: 1;
+  mediaType?: FeedbackScreenshotEvidence['mediaType'];
+  width?: number;
+  height?: number;
+  capturedAt?: string;
+  targetRect?: FeedbackScreenshotEvidence['targetRect'];
+  includeForAgent?: boolean;
+  note?: string;
+  hasDataUrl: boolean;
+  dataUrlBytes?: number;
+}
+
+export interface FeedbackIssueGithubMetadata {
+  issueNumber?: number;
+  issueUrl?: string;
+  openIssue?: GithubSyncedOpenIssueRecord;
+}
+
+export type FeedbackRepairStatus =
+  | 'assigned'
+  | 'analyzing'
+  | 'patching'
+  | 'testing'
+  | 'needs-human-verification'
+  | 'fixed'
+  | 'blocked'
+  | 'github-synced';
+
+export interface FeedbackRepairExecutorInstance {
+  id?: string;
+  name?: string;
+  appUrl?: string;
+  workspaceWriterUrl?: string;
+  workspacePath?: string;
+}
+
+export interface FeedbackRepairTestEvidence {
+  name?: string;
+  command?: string;
+  status: 'passed' | 'failed' | 'skipped' | 'unknown';
+  outputRef?: string;
+  summary?: string;
+}
+
+export interface FeedbackRepairHumanVerification {
+  status: 'not-required' | 'required' | 'pending' | 'passed' | 'failed' | 'verified' | 'rejected' | 'not-run';
+  verifier?: string;
+  conclusion?: string;
+  evidenceRefs?: string[];
+  verifiedAt?: string;
+  reviewer?: string;
+  note?: string;
+}
+
+export interface FeedbackIssueSummary {
+  schemaVersion: 1;
+  id: string;
+  kind: 'feedback-comment';
+  title: string;
+  status: FeedbackCommentStatus;
+  priority: FeedbackPriority;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+  comment: string;
+  requestId?: string;
+  runtime: Pick<FeedbackRuntimeSnapshot, 'page' | 'scenarioId' | 'sessionId' | 'activeRunId'>;
+  screenshot?: FeedbackScreenshotMetadata;
+  github?: FeedbackIssueGithubMetadata;
+}
+
+export interface FeedbackRepairRunRecord {
+  schemaVersion: 1;
+  id: string;
+  issueId: string;
+  status: FeedbackRepairStatus | 'running';
+  externalInstanceId?: string;
+  externalInstanceName?: string;
+  actor?: string;
+  startedAt: string;
+  handoffRef?: string;
+  note?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface FeedbackRepairResultRecord {
+  schemaVersion: 1;
+  id: string;
+  issueId: string;
+  repairRunId?: string;
+  status?: FeedbackRepairStatus;
+  verdict: 'fixed' | 'partially-fixed' | 'wont-fix' | 'needs-follow-up' | 'failed';
+  summary: string;
+  executorInstance?: FeedbackRepairExecutorInstance;
+  targetInstance?: FeedbackRepairExecutorInstance;
+  changedFiles: string[];
+  diffRef?: string;
+  commit?: string;
+  refs?: { commitSha?: string; commitUrl?: string; prUrl?: string; patchRef?: string };
+  tests?: FeedbackRepairTestEvidence[];
+  testResults?: FeedbackRepairTestEvidence[];
+  humanVerification?: FeedbackRepairHumanVerification;
+  githubSyncStatus?: 'skipped' | 'synced' | 'failed';
+  githubSyncError?: string;
+  githubSyncedAt?: string;
+  githubCommentUrl?: string;
+  evidenceRefs: string[];
+  followUp?: string;
+  completedAt: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface FeedbackIssueHandoffBundle extends Omit<FeedbackIssueSummary, 'comment' | 'runtime'> {
+  workspacePath: string;
+  request?: FeedbackRequestRecord;
+  comment: FeedbackCommentRecord;
+  target: FeedbackTargetSnapshot;
+  runtime: FeedbackRuntimeSnapshot;
+  repairRuns: FeedbackRepairRunRecord[];
+  repairResults: FeedbackRepairResultRecord[];
+}
+
 export interface ReusableTaskCandidateRecord {
   id: string;
   runId: string;
@@ -670,6 +841,7 @@ export interface SciForgeConfig {
   agentServerBaseUrl: string;
   workspaceWriterBaseUrl: string;
   workspacePath: string;
+  peerInstances?: PeerInstance[];
   /** `owner/repo` or full `https://github.com/owner/repo` — feedback inbox creates/syncs issues against this repo. */
   feedbackGithubRepo?: string;
   /** GitHub PAT with Issues read (sync) + write (create). Stored like API keys (local config only). */
@@ -684,6 +856,38 @@ export interface SciForgeConfig {
   maxContextWindowTokens: number;
   visionAllowSharedSystemInput: boolean;
   updatedAt: string;
+}
+
+export type PeerInstanceRole = 'main' | 'repair' | 'peer';
+export type PeerInstanceTrustLevel = 'readonly' | 'repair' | 'sync';
+
+export interface PeerInstance {
+  name: string;
+  appUrl: string;
+  workspaceWriterUrl: string;
+  workspacePath: string;
+  role: PeerInstanceRole;
+  trustLevel: PeerInstanceTrustLevel;
+  enabled: boolean;
+}
+
+export interface TargetInstanceContext {
+  mode: 'current' | 'peer';
+  selectedAt: string;
+  banner: string;
+  peer?: Pick<PeerInstance, 'name' | 'appUrl' | 'workspaceWriterUrl' | 'workspacePath' | 'role' | 'trustLevel'>;
+  issueLookup?: {
+    trigger: 'feedback-id' | 'github-number' | 'issue-summaries';
+    query: string;
+    workspaceWriterUrl: string;
+    workspacePath: string;
+    summaries?: FeedbackIssueSummary[];
+    bundle?: FeedbackIssueHandoffBundle;
+    matchedIssueId?: string;
+    githubIssueNumber?: number;
+    status: 'resolved' | 'not-found' | 'failed';
+    error?: string;
+  };
 }
 
 export interface SendAgentMessageInput {
@@ -704,6 +908,7 @@ export interface SendAgentMessageInput {
   scenarioPackageRef?: ScenarioPackageRef;
   skillPlanRef?: string;
   uiPlanRef?: string;
+  targetInstanceContext?: TargetInstanceContext;
   verificationResult?: Record<string, unknown>;
   recentVerificationResults?: Array<Record<string, unknown>>;
 }

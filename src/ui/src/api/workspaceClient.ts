@@ -1,4 +1,15 @@
-import type { SciForgeConfig, SciForgeWorkspaceState, PreviewDescriptor, PreviewDerivative, RuntimeExecutionUnit } from '../domain';
+import type {
+  FeedbackIssueHandoffBundle,
+  FeedbackIssueSummary,
+  FeedbackRepairResultRecord,
+  FeedbackRepairRunRecord,
+  SciForgeConfig,
+  SciForgeInstanceManifest,
+  SciForgeWorkspaceState,
+  PreviewDescriptor,
+  PreviewDerivative,
+  RuntimeExecutionUnit,
+} from '../domain';
 import type { ScenarioLibraryState } from '../scenarioCompiler/scenarioLibrary';
 import type { ScenarioPackage } from '../scenarioCompiler/scenarioPackage';
 import { parseWorkspaceState } from '../sessionStore';
@@ -113,6 +124,8 @@ export interface SkillPromotionValidationResult {
   missingArtifactTypes: string[];
 }
 
+export type FeedbackRepairResultInput = Pick<FeedbackRepairResultRecord, 'verdict' | 'summary'> & Partial<Omit<FeedbackRepairResultRecord, 'schemaVersion' | 'issueId' | 'verdict' | 'summary' | 'completedAt'>>;
+
 export async function loadFileBackedSciForgeConfig(config: SciForgeConfig): Promise<SciForgeConfig | undefined> {
   const response = await fetchWorkspaceConfigWithFallback(config);
   if (response.status === 404) return undefined;
@@ -187,6 +200,7 @@ function isSciForgeConfig(value: unknown): value is SciForgeConfig {
     && typeof record.agentServerBaseUrl === 'string'
     && typeof record.workspaceWriterBaseUrl === 'string'
     && typeof record.workspacePath === 'string'
+    && (record.peerInstances === undefined || Array.isArray(record.peerInstances))
     && typeof record.modelProvider === 'string'
     && typeof record.modelBaseUrl === 'string'
     && typeof record.modelName === 'string'
@@ -399,6 +413,69 @@ export async function loadWorkspaceTaskAttempts(
   return Array.isArray(json.attempts) ? json.attempts : [];
 }
 
+export async function loadSciForgeInstanceManifest(
+  config: SciForgeConfig,
+  workspacePath = config.workspacePath,
+): Promise<SciForgeInstanceManifest> {
+  const url = new URL(`${config.workspaceWriterBaseUrl}/api/sciforge/instance/manifest`);
+  if (workspacePath.trim()) url.searchParams.set('workspacePath', workspacePath);
+  const response = await fetchWorkspace(config, `load instance manifest ${workspacePath || 'last workspace'}`, url);
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Load instance manifest failed: HTTP ${response.status}`));
+  const json = await response.json() as { manifest?: SciForgeInstanceManifest };
+  if (!json.manifest) throw new Error('Instance manifest returned no manifest payload.');
+  return json.manifest;
+}
+
+export async function listFeedbackIssues(
+  config: SciForgeConfig,
+  workspacePath = config.workspacePath,
+): Promise<FeedbackIssueSummary[]> {
+  if (!workspacePath.trim()) return [];
+  const url = new URL(`${config.workspaceWriterBaseUrl}/api/sciforge/feedback/issues`);
+  url.searchParams.set('workspacePath', workspacePath);
+  const response = await fetchWorkspace(config, `list feedback issues ${workspacePath}`, url);
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `List feedback issues failed: HTTP ${response.status}`));
+  const json = await response.json() as { issues?: FeedbackIssueSummary[] };
+  return Array.isArray(json.issues) ? json.issues : [];
+}
+
+export async function loadFeedbackIssueHandoffBundle(
+  config: SciForgeConfig,
+  id: string,
+  workspacePath = config.workspacePath,
+): Promise<FeedbackIssueHandoffBundle> {
+  if (!workspacePath.trim() || !id.trim()) throw new Error('workspacePath and id are required');
+  const url = new URL(`${config.workspaceWriterBaseUrl}/api/sciforge/feedback/issues/${encodeURIComponent(id)}`);
+  url.searchParams.set('workspacePath', workspacePath);
+  const response = await fetchWorkspace(config, `load feedback issue ${id}`, url);
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Load feedback issue failed: HTTP ${response.status}`));
+  const json = await response.json() as { issue?: FeedbackIssueHandoffBundle };
+  if (!json.issue) throw new Error(`Feedback issue ${id} returned no handoff bundle.`);
+  return json.issue;
+}
+
+export async function startFeedbackIssueRepairRun(
+  config: SciForgeConfig,
+  id: string,
+  input: Partial<Omit<FeedbackRepairRunRecord, 'schemaVersion' | 'issueId' | 'status' | 'startedAt'>> & { startedAt?: string } = {},
+  workspacePath = config.workspacePath,
+): Promise<FeedbackRepairRunRecord> {
+  const json = await mutateFeedbackIssue(config, id, 'repair-runs', { workspacePath, ...input }, 'start feedback repair run') as { run?: FeedbackRepairRunRecord };
+  if (!json.run) throw new Error(`Start feedback repair run for ${id} returned no run.`);
+  return json.run;
+}
+
+export async function saveFeedbackIssueRepairResult(
+  config: SciForgeConfig,
+  id: string,
+  result: FeedbackRepairResultInput,
+  workspacePath = config.workspacePath,
+): Promise<FeedbackRepairResultRecord> {
+  const json = await mutateFeedbackIssue(config, id, 'repair-result', { workspacePath, result }, 'save feedback repair result') as { result?: FeedbackRepairResultRecord };
+  if (!json.result) throw new Error(`Save feedback repair result for ${id} returned no result.`);
+  return json.result;
+}
+
 export async function listSkillPromotionProposals(
   config: SciForgeConfig,
   workspacePath = config.workspacePath,
@@ -443,6 +520,17 @@ async function mutateSkillPromotionProposal(config: SciForgeConfig, action: 'acc
     body: JSON.stringify(body),
   });
   if (!response.ok) throw new Error(await workspaceResponseError(response, `${action} skill proposal failed: HTTP ${response.status}`));
+  return response.json();
+}
+
+async function mutateFeedbackIssue(config: SciForgeConfig, id: string, action: 'repair-runs' | 'repair-result', body: Record<string, unknown>, operation: string) {
+  if (!id.trim()) throw new Error('id is required');
+  const response = await fetchWorkspace(config, operation, `${config.workspaceWriterBaseUrl}/api/sciforge/feedback/issues/${encodeURIComponent(id)}/${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `${operation} failed: HTTP ${response.status}`));
   return response.json();
 }
 

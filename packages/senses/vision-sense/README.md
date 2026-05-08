@@ -4,6 +4,15 @@
 
 上层主 agent 可以主动、多次调用本 sense。一次视觉 instruction 不需要覆盖图片全貌；主 agent 可以先问整体布局，再问局部文本、图例、坐标、异常区域或 verifier 复查。`vision-sense` 的职责是回答当前 instruction 并暴露不确定性、能力边界和下一步建议。
 
+## 设计文档
+
+Vision/Computer Use 的模块级设计文档位于 `vision_docs/`：
+
+- [`vision_docs/vision_computer_use_agent_mvp.md`](vision_docs/vision_computer_use_agent_mvp.md)：Vision + Computer Use 最小闭环。
+- [`vision_docs/vision_computer_use_agent_design_v2.md`](vision_docs/vision_computer_use_agent_design_v2.md)：Vision + Computer Use 设计细节。
+- [`vision_docs/VISION_FIRST_HYBRID_COMPUTER_USE_STRATEGY.md`](vision_docs/VISION_FIRST_HYBRID_COMPUTER_USE_STRATEGY.md)：视觉优先的混合 Computer Use 策略。
+- [`vision_docs/KV_GROUND_ERVICE_GUIDANCE.md`](vision_docs/KV_GROUND_ERVICE_GUIDANCE.md)：KV-Ground 部署、路径映射和排障。
+
 核心链路：
 
 ```text

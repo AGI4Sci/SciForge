@@ -111,6 +111,8 @@ export async function sendSciForgeToolMessage(
     const verificationPolicy = buildVerificationPolicy(input);
     const humanApprovalPolicy = buildHumanApprovalPolicy(input, selectedActionIds);
     const failureRecoveryPolicy = buildFailureRecoveryPolicy(priorFailure);
+    const targetInstanceContext = compactTargetInstanceContext(input);
+    const repairHandoffRunner = buildRepairHandoffRunnerPayload(input);
     const requestBody = buildAgentHandoffPayload({
       scenarioId: builtInScenarioId,
       handoffSource: 'ui-chat',
@@ -166,6 +168,9 @@ export async function sendSciForgeToolMessage(
         contextReusePolicy: buildContextReusePolicy(input, recentConversation),
         artifactAccessPolicy,
         currentReferences: referenceSummary,
+        targetInstance: targetInstanceContext,
+        targetInstanceContext,
+        repairHandoffRunner,
         recentExecutionRefs,
         recentRuns: contextPolicy.isolated ? [] : summarizeRuns(input),
         workspacePersistence: workspacePersistenceSummary(input),
@@ -174,7 +179,7 @@ export async function sendSciForgeToolMessage(
         contextIsolation: contextPolicy,
         agentDispatchPolicy: 'agentserver-decides',
       },
-      agentContext: buildAgentContext(input, recentConversation, artifactSummary, recentExecutionRefs, configuredComponentIds, artifactAccessPolicy, selectedToolContracts, contextPolicy.isolated),
+      agentContext: buildAgentContext(input, recentConversation, artifactSummary, recentExecutionRefs, configuredComponentIds, artifactAccessPolicy, selectedToolContracts, contextPolicy.isolated, repairHandoffRunner),
     });
     const requestBodyText = JSON.stringify(requestBody);
     callbacks.onEvent?.(contextWindowTelemetryEvent(
@@ -230,6 +235,81 @@ export async function sendSciForgeToolMessage(
     globalThis.clearInterval(silenceWatchdog);
     signal?.removeEventListener('abort', linkedAbort);
   }
+}
+
+function compactTargetInstanceContext(input: SendAgentMessageInput) {
+  const target = input.targetInstanceContext;
+  if (!target) return undefined;
+  return {
+    mode: target.mode,
+    banner: target.banner,
+    selectedAt: target.selectedAt,
+    peer: target.peer,
+    issueLookup: target.issueLookup ? {
+      trigger: target.issueLookup.trigger,
+      query: target.issueLookup.query,
+      workspaceWriterUrl: target.issueLookup.workspaceWriterUrl,
+      workspacePath: target.issueLookup.workspacePath,
+      matchedIssueId: target.issueLookup.matchedIssueId,
+      githubIssueNumber: target.issueLookup.githubIssueNumber,
+      status: target.issueLookup.status,
+      error: target.issueLookup.error,
+      summaries: target.issueLookup.summaries?.slice(0, 8).map((issue) => ({
+        id: issue.id,
+        title: issue.title,
+        status: issue.status,
+        priority: issue.priority,
+        github: issue.github,
+        runtime: issue.runtime,
+        comment: issue.comment.slice(0, 360),
+      })),
+      bundle: target.issueLookup.bundle ? compactReferencePayload(target.issueLookup.bundle) : undefined,
+    } : undefined,
+    executionBoundary: target.mode === 'peer' ? {
+      mode: 'repair-handoff-runner-target-worktree',
+      targetWorkspacePath: target.peer?.workspacePath || undefined,
+      targetWorkspaceWriterUrl: target.peer?.workspaceWriterUrl || undefined,
+      preventExecutorWorkspaceFallback: true,
+    } : undefined,
+  };
+}
+
+function buildRepairHandoffRunnerPayload(input: SendAgentMessageInput) {
+  const target = input.targetInstanceContext;
+  const peer = target?.peer;
+  const bundle = target?.issueLookup?.bundle;
+  if (!target || target.mode !== 'peer' || !peer || !bundle || peer.trustLevel === 'readonly') return undefined;
+  if (!peer.workspacePath.trim()) return undefined;
+  return {
+    endpoint: `${input.config.workspaceWriterBaseUrl.replace(/\/+$/, '')}/api/sciforge/repair-handoff/run`,
+    method: 'POST',
+    contract: {
+      executorInstance: {
+        id: 'current',
+        name: input.agentName,
+        workspaceWriterUrl: input.config.workspaceWriterBaseUrl,
+        workspacePath: input.config.workspacePath,
+      },
+      targetInstance: {
+        name: peer.name,
+        appUrl: peer.appUrl,
+        workspaceWriterUrl: peer.workspaceWriterUrl,
+        workspacePath: peer.workspacePath,
+      },
+      targetWorkspacePath: peer.workspacePath,
+      targetWorkspaceWriterUrl: peer.workspaceWriterUrl,
+      issueBundle: bundle,
+      expectedTests: [],
+      githubSyncRequired: Boolean(bundle.github?.issueNumber || bundle.github?.issueUrl),
+      agentServerBaseUrl: input.config.agentServerBaseUrl,
+      executionBoundary: {
+        mode: 'target-isolated-worktree',
+        targetWorkspacePath: peer.workspacePath,
+        targetWorkspaceWriterUrl: peer.workspaceWriterUrl,
+        forbidExecutorWorkspace: true,
+      },
+    },
+  };
 }
 
 function builtInScenarioIdForInput(input: SendAgentMessageInput): ScenarioId {
@@ -469,7 +549,7 @@ function selectedRuntimeToolContracts(selectedToolIds: string[]) {
       },
       outputContract: {
         kind: 'text',
-        formats: ['application/json', 'application/x-ndjson', 'text/x-computer-use-command'],
+        formats: ['text/plain', 'application/json', 'application/x-ndjson'],
         actions: ['click', 'type_text', 'press_key', 'scroll', 'wait'],
       },
       executionBoundary: 'text-signal-only',
@@ -857,7 +937,9 @@ function buildAgentContext(
   artifactAccessPolicy = buildArtifactAccessPolicy(input, artifactSummary, recentExecutionRefs),
   selectedToolContracts = selectedRuntimeToolContracts(selectedRuntimeToolIds(input)),
   isolated = false,
+  repairHandoffRunner?: ReturnType<typeof buildRepairHandoffRunnerPayload>,
 ) {
+  const targetInstanceContext = compactTargetInstanceContext(input);
   const scenario = input.scenarioOverride;
   return {
     scenario: scenario ? {
@@ -871,6 +953,9 @@ function buildAgentContext(
     contextReusePolicy: buildContextReusePolicy(input, recentConversation),
     artifactAccessPolicy,
     currentReferences: summarizeSciForgeReferences(input),
+    targetInstance: targetInstanceContext,
+    targetInstanceContext,
+    repairHandoffRunner,
     availableComponentIds,
     selectedToolIds: selectedRuntimeToolIds(input),
     selectedToolContracts,

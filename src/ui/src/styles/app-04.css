@@ -1087,6 +1087,77 @@
   min-height: 24px;
 }
 
+.target-instance-selector {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  padding-top: 6px;
+}
+
+.target-instance-selector label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  max-width: 100%;
+  color: var(--bio-300);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.target-instance-selector svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.target-instance-selector select {
+  min-height: 24px;
+  max-width: min(280px, 54vw);
+  color: var(--bio-100);
+  background: var(--surface-input);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.target-instance-selector[data-peer-active="true"] select {
+  border-color: rgba(255, 196, 87, 0.7);
+  background: rgba(255, 196, 87, 0.08);
+}
+
+.target-instance-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 6px 9px;
+  color: #ffe0a3;
+  background: rgba(255, 196, 87, 0.11);
+  border: 1px solid rgba(255, 196, 87, 0.42);
+  border-radius: 7px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.target-instance-warning strong,
+.target-instance-warning span {
+  min-width: 0;
+}
+
+.target-instance-warning strong {
+  flex-shrink: 0;
+}
+
+.target-instance-warning span {
+  overflow: hidden;
+  color: var(--bio-200);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .reference-trigger {
   display: inline-flex;
   flex-shrink: 0;

@@ -8,8 +8,18 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { runSciForgeTool } from './sciforge-tools.js';
 import { readRecentTaskAttempts, readTaskAttempts } from './task-attempt-history.js';
 import { acceptSkillPromotionProposal, archiveSkillPromotionProposal, listSkillPromotionProposals, rejectSkillPromotionProposal, runAcceptedSkillValidationSmoke } from './skill-promotion.js';
+import { syncRepairResultToGithubIssue } from './github-repair-sync.js';
+import { runRepairHandoff } from './repair-handoff-runner.js';
+import { buildStableVersionSyncPlan, promoteStableVersion, readStableVersion, stableVersionRegistryPath } from './stable-version-registry.js';
 
 const PORT = Number(process.env.SCIFORGE_WORKSPACE_PORT || 5174);
+const INSTANCE_ID = process.env.SCIFORGE_INSTANCE_ID || process.env.SCIFORGE_INSTANCE || 'default';
+const INSTANCE_ROLE = process.env.SCIFORGE_INSTANCE_ROLE || INSTANCE_ID;
+const UI_PORT = Number(process.env.SCIFORGE_UI_PORT || 5173);
+const STATE_DIR = resolve(process.env.SCIFORGE_STATE_DIR || join(process.cwd(), '.sciforge'));
+const LOG_DIR = resolve(process.env.SCIFORGE_LOG_DIR || join(STATE_DIR, 'logs'));
+const CONFIG_LOCAL_PATH = resolve(process.env.SCIFORGE_CONFIG_PATH || join(process.cwd(), 'config.local.json'));
+const DEFAULT_WORKSPACE_PATH = normalizeWorkspaceRootPath(resolve(process.env.SCIFORGE_WORKSPACE_PATH || join(process.cwd(), 'workspace')));
 
 createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -29,6 +39,8 @@ createServer(async (req, res) => {
         'workspace-snapshot',
         'workspace-files',
         'sciforge-tools',
+        'repair-handoff-runner',
+        'stable-version-registry',
       ],
       endpoints: {},
     });
@@ -53,6 +65,126 @@ createServer(async (req, res) => {
       writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
     }
     return;
+  }
+  if (url.pathname === '/api/sciforge/instance/manifest' && req.method === 'GET') {
+    try {
+      const root = await workspaceRootFromRequest(url);
+      writeJson(res, 200, {
+        ok: true,
+        manifest: await buildInstanceManifest(root),
+      });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  if (url.pathname === '/api/sciforge/instance/stable-version' && req.method === 'GET') {
+    try {
+      writeJson(res, 200, {
+        ok: true,
+        path: stableVersionRegistryPathForResponse(),
+        stableVersion: await readStableVersion(STATE_DIR),
+      });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  if (url.pathname === '/api/sciforge/instance/stable-version/promote' && req.method === 'POST') {
+    try {
+      const body = await readJson(req);
+      const root = await workspaceRootFromBodyOrRequest(body, url);
+      const env = await stableVersionEnvironment(root);
+      const promoted = await promoteStableVersion(env, body);
+      writeJson(res, 200, { ok: true, path: promoted.path, stableVersion: promoted.record });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  if (url.pathname === '/api/sciforge/instance/stable-version/sync-plan' && req.method === 'POST') {
+    try {
+      const body = await readJson(req);
+      const root = await workspaceRootFromBodyOrRequest(body, url);
+      const env = await stableVersionEnvironment(root);
+      writeJson(res, 200, {
+        ok: true,
+        plan: await buildStableVersionSyncPlan(env, body),
+      });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  if (url.pathname === '/api/sciforge/repair-handoff/run' && req.method === 'POST') {
+    try {
+      const body = await readJson(req);
+      const result = await runRepairHandoff(normalizeRepairHandoffContract(body), {
+        executorRepoPath: process.cwd(),
+        executorStateDir: STATE_DIR,
+        executorLogDir: LOG_DIR,
+        executorConfigLocalPath: CONFIG_LOCAL_PATH,
+      });
+      writeJson(res, 200, { ok: true, result });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  if (url.pathname === '/api/sciforge/feedback/issues' && req.method === 'GET') {
+    try {
+      const root = await workspaceRootFromRequest(url);
+      const state = await readWorkspaceStateFile(root);
+      writeJson(res, 200, {
+        ok: true,
+        workspacePath: root,
+        issues: buildFeedbackIssueSummaries(state),
+      });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  const feedbackIssueMatch = /^\/api\/sciforge\/feedback\/issues\/([^/]+)(?:\/(repair-runs|repair-result))?$/.exec(url.pathname);
+  if (feedbackIssueMatch) {
+    const issueId = decodeURIComponent(feedbackIssueMatch[1]);
+    const action = feedbackIssueMatch[2];
+    if (!action && req.method === 'GET') {
+      try {
+        const root = await workspaceRootFromRequest(url);
+        const state = await readWorkspaceStateFile(root);
+        const bundle = await buildFeedbackIssueBundle(root, state, issueId);
+        writeJson(res, 200, { ok: true, workspacePath: root, issue: bundle });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        writeJson(res, message.includes('not found') ? 404 : 400, { ok: false, error: message });
+      }
+      return;
+    }
+    if (action === 'repair-runs' && req.method === 'POST') {
+      try {
+        const body = await readJson(req);
+        const root = await workspaceRootFromBodyOrRequest(body, url);
+        const run = await recordFeedbackRepairRun(root, issueId, body);
+        writeJson(res, 200, { ok: true, workspacePath: root, run });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        writeJson(res, message.includes('not found') ? 404 : 400, { ok: false, error: message });
+      }
+      return;
+    }
+    if (action === 'repair-result' && req.method === 'POST') {
+      try {
+        const body = await readJson(req);
+        const root = await workspaceRootFromBodyOrRequest(body, url);
+        const result = await recordFeedbackRepairResult(root, issueId, body);
+        writeJson(res, 200, { ok: true, workspacePath: root, result });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        writeJson(res, message.includes('not found') ? 404 : 400, { ok: false, error: message });
+      }
+      return;
+    }
   }
   if (url.pathname === '/api/sciforge/workspace/list' && req.method === 'GET') {
     try {
@@ -615,6 +747,422 @@ function writeStreamEnvelope(res: ServerResponse, body: unknown) {
   res.write(`${JSON.stringify(body)}\n`);
 }
 
+function normalizeRepairHandoffContract(body: Record<string, unknown>) {
+  const contract = isRecord(body.contract) ? body.contract : body;
+  if (!isRecord(contract.executorInstance)) throw new Error('executorInstance is required');
+  if (!isRecord(contract.targetInstance)) throw new Error('targetInstance is required');
+  if (!isRecord(contract.issueBundle)) throw new Error('issueBundle is required');
+  return {
+    executorInstance: normalizeRepairHandoffInstance(contract.executorInstance),
+    targetInstance: normalizeRepairHandoffInstance(contract.targetInstance),
+    targetWorkspacePath: typeof contract.targetWorkspacePath === 'string' ? contract.targetWorkspacePath : '',
+    targetWorkspaceWriterUrl: typeof contract.targetWorkspaceWriterUrl === 'string' ? contract.targetWorkspaceWriterUrl : '',
+    issueBundle: contract.issueBundle,
+    expectedTests: Array.isArray(contract.expectedTests) ? contract.expectedTests.filter((item) => typeof item === 'string' || isRecord(item)) as Array<string | { name?: string; command: string }> : [],
+    githubSyncRequired: contract.githubSyncRequired === true,
+    agentServerBaseUrl: typeof contract.agentServerBaseUrl === 'string' ? contract.agentServerBaseUrl : undefined,
+    repairRunId: typeof contract.repairRunId === 'string' ? contract.repairRunId : undefined,
+  };
+}
+
+function normalizeRepairHandoffInstance(value: Record<string, unknown>) {
+  return {
+    id: typeof value.id === 'string' ? value.id : undefined,
+    name: typeof value.name === 'string' ? value.name : undefined,
+    appUrl: typeof value.appUrl === 'string' ? value.appUrl : undefined,
+    workspaceWriterUrl: typeof value.workspaceWriterUrl === 'string' ? value.workspaceWriterUrl : undefined,
+    workspacePath: typeof value.workspacePath === 'string' ? value.workspacePath : undefined,
+  };
+}
+
+async function workspaceRootFromRequest(url: URL) {
+  const requested = url.searchParams.get('workspacePath')?.trim() || url.searchParams.get('path')?.trim() || '';
+  if (requested) return normalizeWorkspaceRootPath(resolve(requested));
+  const configured = await readLocalSciForgeConfig().catch(() => undefined);
+  if (configured?.workspacePath) return normalizeWorkspaceRootPath(resolve(configured.workspacePath));
+  return readLastWorkspacePath();
+}
+
+async function workspaceRootFromBodyOrRequest(body: Record<string, unknown>, url: URL) {
+  const workspacePath = typeof body.workspacePath === 'string' ? body.workspacePath.trim() : '';
+  if (workspacePath) return normalizeWorkspaceRootPath(resolve(workspacePath));
+  return workspaceRootFromRequest(url);
+}
+
+async function readWorkspaceStateFile(root: string): Promise<Record<string, unknown>> {
+  const parsed = JSON.parse(await readFile(join(root, '.sciforge', 'workspace-state.json'), 'utf8'));
+  if (!isRecord(parsed)) throw new Error('workspace-state.json is invalid');
+  return parsed;
+}
+
+async function writeWorkspaceStateFile(root: string, state: Record<string, unknown>) {
+  await mkdir(join(root, '.sciforge'), { recursive: true });
+  await writeFile(join(root, '.sciforge', 'workspace-state.json'), JSON.stringify(state, null, 2));
+}
+
+async function buildInstanceManifest(root: string) {
+  const state = await readWorkspaceStateFile(root).catch(() => undefined);
+  const config = await readWorkspaceConfig(root);
+  const localConfig = await readLocalSciForgeConfig();
+  const repo = await readRepoInfo(root);
+  const stableVersion = await readStableVersion(STATE_DIR);
+  return {
+    schemaVersion: 1,
+    agentId: INSTANCE_ID,
+    role: INSTANCE_ROLE,
+    appPort: UI_PORT,
+    workspaceWriterPort: PORT,
+    appUrl: `http://127.0.0.1:${UI_PORT}`,
+    workspaceWriterUrl: localConfig.workspaceWriterBaseUrl,
+    agentServerBaseUrl: localConfig.agentServerBaseUrl,
+    repoPath: process.cwd(),
+    stateDir: STATE_DIR,
+    logDir: LOG_DIR,
+    configLocalPath: CONFIG_LOCAL_PATH,
+    counterpart: parseJsonEnv(process.env.SCIFORGE_COUNTERPART_JSON),
+    generatedAt: new Date().toISOString(),
+    instance: {
+      id: INSTANCE_ID !== 'default' ? INSTANCE_ID : instanceIdForWorkspace(root, state),
+      name: typeof config.name === 'string' && config.name.trim() ? config.name.trim() : basename(root) || 'SciForge workspace',
+      role: INSTANCE_ROLE,
+    },
+    workspacePath: root,
+    repo,
+    stableVersion,
+    capabilities: [
+      'instance-manifest',
+      'stable-version-registry',
+      'stable-version-promote',
+      'stable-version-sync-plan',
+      'feedback-issues-list',
+      'feedback-issue-handoff-bundle',
+      'feedback-repair-run-record',
+      'feedback-repair-result-record',
+      'repair-handoff-runner',
+      'workspace-snapshot',
+      'workspace-files',
+      'artifact-preview',
+      'sciforge-tools',
+    ],
+  };
+}
+
+async function stableVersionEnvironment(root: string) {
+  const repo = await readRepoInfo(root);
+  return {
+    instanceId: INSTANCE_ID !== 'default' ? INSTANCE_ID : instanceIdForWorkspace(root, await readWorkspaceStateFile(root).catch(() => undefined)),
+    role: INSTANCE_ROLE,
+    stateDir: STATE_DIR,
+    repoRoot: repo.detected && typeof repo.root === 'string' ? repo.root : root,
+    branch: repo.detected && typeof repo.branch === 'string' ? repo.branch : undefined,
+    commit: repo.detected && typeof repo.commit === 'string' ? repo.commit : undefined,
+  };
+}
+
+function stableVersionRegistryPathForResponse() {
+  return stableVersionRegistryPath(STATE_DIR);
+}
+
+function instanceIdForWorkspace(root: string, state: Record<string, unknown> | undefined) {
+  if (state && typeof state.instanceId === 'string' && state.instanceId.trim()) return state.instanceId.trim();
+  return `sciforge-${createHash('sha256').update(root).digest('hex').slice(0, 16)}`;
+}
+
+async function readWorkspaceConfig(root: string): Promise<Record<string, unknown>> {
+  const parsed = await readOptionalJson(join(root, '.sciforge', 'config.json'));
+  return isRecord(parsed) ? parsed : {};
+}
+
+async function readRepoInfo(root: string) {
+  const [topLevel, branch, commit] = await Promise.all([
+    gitOutput(root, ['rev-parse', '--show-toplevel']),
+    gitOutput(root, ['rev-parse', '--abbrev-ref', 'HEAD']),
+    gitOutput(root, ['rev-parse', 'HEAD']),
+  ]);
+  if (!topLevel) return { detected: false };
+  const remote = await gitOutput(root, ['config', '--get', 'remote.origin.url']);
+  const status = await gitOutput(root, ['status', '--porcelain']);
+  return {
+    detected: true,
+    root: topLevel,
+    branch: branch || undefined,
+    commit: commit || undefined,
+    remote: remote || undefined,
+    dirty: Boolean(status),
+  };
+}
+
+async function gitOutput(cwd: string, args: string[]) {
+  return new Promise<string>((resolveOutput) => {
+    const child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'ignore'] });
+    const chunks: Buffer[] = [];
+    child.stdout?.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))));
+    child.on('error', () => resolveOutput(''));
+    child.on('close', (code) => resolveOutput(code === 0 ? Buffer.concat(chunks).toString('utf8').trim() : ''));
+  });
+}
+
+function buildFeedbackIssueSummaries(state: Record<string, unknown>) {
+  return handoffFeedbackComments(state).map((comment) => feedbackIssueSummary(state, comment));
+}
+
+async function buildFeedbackIssueBundle(root: string, state: Record<string, unknown>, issueId: string) {
+  const comment = findFeedbackComment(state, issueId);
+  if (!comment) throw new Error(`feedback issue not found: ${issueId}`);
+  const request = feedbackRequestForComment(state, comment);
+  const github = githubMetadataForComment(state, comment);
+  const canonicalIssueId = String(comment.id || issueId);
+  return {
+    ...feedbackIssueSummary(state, comment),
+    schemaVersion: 1,
+    workspacePath: root,
+    request,
+    comment,
+    target: isRecord(comment.target) ? comment.target : undefined,
+    runtime: isRecord(comment.runtime) ? comment.runtime : undefined,
+    screenshot: screenshotMetadataForComment(comment),
+    github,
+    repairRuns: repairRecordsForIssue(state, 'feedbackRepairRuns', canonicalIssueId),
+    repairResults: repairRecordsForIssue(state, 'feedbackRepairResults', canonicalIssueId),
+  };
+}
+
+async function recordFeedbackRepairRun(root: string, issueId: string, body: Record<string, unknown>) {
+  const state = await readWorkspaceStateFile(root);
+  const comment = findFeedbackComment(state, issueId);
+  if (!comment) throw new Error(`feedback issue not found: ${issueId}`);
+  const canonicalIssueId = String(comment.id || issueId);
+  const now = new Date().toISOString();
+  const run = {
+    schemaVersion: 1,
+    id: typeof body.id === 'string' && body.id.trim() ? body.id.trim() : `repair-run-${Date.now()}`,
+    issueId: canonicalIssueId,
+    status: 'running',
+    externalInstanceId: typeof body.externalInstanceId === 'string' ? body.externalInstanceId : undefined,
+    externalInstanceName: typeof body.externalInstanceName === 'string' ? body.externalInstanceName : undefined,
+    actor: typeof body.actor === 'string' ? body.actor : undefined,
+    startedAt: typeof body.startedAt === 'string' ? body.startedAt : now,
+    note: typeof body.note === 'string' ? body.note : undefined,
+    metadata: isRecord(body.metadata) ? body.metadata : undefined,
+  };
+  const next = appendStateRecord(state, 'feedbackRepairRuns', run);
+  await persistFeedbackRecord(root, 'repair-runs', run.id, run);
+  await writeWorkspaceStateFile(root, next);
+  return run;
+}
+
+async function recordFeedbackRepairResult(root: string, issueId: string, body: Record<string, unknown>) {
+  const state = await readWorkspaceStateFile(root);
+  const comment = findFeedbackComment(state, issueId);
+  if (!comment) throw new Error(`feedback issue not found: ${issueId}`);
+  const canonicalIssueId = String(comment.id || issueId);
+  const now = new Date().toISOString();
+  const rawResult = isRecord(body.result) ? body.result : body;
+  const verdict = typeof rawResult.verdict === 'string' && ['fixed', 'partially-fixed', 'wont-fix', 'needs-follow-up', 'failed'].includes(rawResult.verdict)
+    ? rawResult.verdict
+    : 'needs-follow-up';
+  const result = {
+    schemaVersion: 1,
+    id: typeof rawResult.id === 'string' && rawResult.id.trim() ? rawResult.id.trim() : `repair-result-${Date.now()}`,
+    issueId: canonicalIssueId,
+    repairRunId: typeof rawResult.repairRunId === 'string' ? rawResult.repairRunId : typeof body.repairRunId === 'string' ? body.repairRunId : undefined,
+    verdict,
+    summary: typeof rawResult.summary === 'string' ? rawResult.summary : '',
+    changedFiles: Array.isArray(rawResult.changedFiles) ? rawResult.changedFiles.filter((item): item is string => typeof item === 'string') : [],
+    diffRef: typeof rawResult.diffRef === 'string' ? rawResult.diffRef : undefined,
+    commit: typeof rawResult.commit === 'string' ? rawResult.commit : undefined,
+    evidenceRefs: Array.isArray(rawResult.evidenceRefs) ? rawResult.evidenceRefs.filter((item): item is string => typeof item === 'string') : [],
+    testResults: normalizeRepairTestResults(rawResult.testResults),
+    humanVerification: normalizeRepairHumanVerification(rawResult.humanVerification),
+    refs: normalizeRepairRefs(rawResult.refs),
+    executorInstance: normalizeRepairInstanceRef(rawResult.executorInstance),
+    targetInstance: normalizeRepairInstanceRef(rawResult.targetInstance),
+    followUp: typeof rawResult.followUp === 'string' ? rawResult.followUp : undefined,
+    completedAt: typeof rawResult.completedAt === 'string' ? rawResult.completedAt : now,
+    metadata: isRecord(rawResult.metadata) ? rawResult.metadata : undefined,
+  };
+  const saved = appendStateRecord(state, 'feedbackRepairResults', result);
+  await persistFeedbackRecord(root, 'repair-results', result.id, result);
+  await writeWorkspaceStateFile(root, saved);
+  const githubSync = await syncRepairResultGithubComment(comment, result);
+  const syncedResult = {
+    ...result,
+    githubSyncStatus: githubSync.status,
+    githubSyncError: githubSync.error,
+    githubSyncedAt: githubSync.syncedAt,
+    githubCommentUrl: githubSync.commentUrl,
+  };
+  const next = appendStateRecord(saved, 'feedbackRepairResults', syncedResult);
+  await persistFeedbackRecord(root, 'repair-results', syncedResult.id, syncedResult);
+  await writeWorkspaceStateFile(root, next);
+  return syncedResult;
+}
+
+async function syncRepairResultGithubComment(comment: Record<string, unknown>, result: Record<string, unknown>) {
+  const localConfig = await readLocalSciForgeConfig();
+  return syncRepairResultToGithubIssue({
+    issue: {
+      issueNumber: typeof comment.githubIssueNumber === 'number' ? comment.githubIssueNumber : undefined,
+      issueUrl: typeof comment.githubIssueUrl === 'string' ? comment.githubIssueUrl : undefined,
+    },
+    config: {
+      repo: typeof localConfig.feedbackGithubRepo === 'string' ? localConfig.feedbackGithubRepo : undefined,
+      token: typeof localConfig.feedbackGithubToken === 'string' ? localConfig.feedbackGithubToken : undefined,
+    },
+    result: result as Parameters<typeof syncRepairResultToGithubIssue>[0]['result'],
+  });
+}
+
+function normalizeRepairTestResults(value: unknown) {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter(isRecord).map((item) => ({
+    name: typeof item.name === 'string' ? item.name : undefined,
+    command: typeof item.command === 'string' ? item.command : undefined,
+    status: item.status === 'passed' || item.status === 'failed' || item.status === 'skipped' ? item.status : 'skipped',
+    summary: typeof item.summary === 'string' ? item.summary : undefined,
+    outputRef: typeof item.outputRef === 'string' ? item.outputRef : undefined,
+  }));
+}
+
+function normalizeRepairHumanVerification(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  return {
+    status: value.status === 'verified' || value.status === 'rejected' || value.status === 'pending' || value.status === 'not-run'
+      || value.status === 'required' || value.status === 'not-required' || value.status === 'passed' || value.status === 'failed'
+      ? value.status
+      : undefined,
+    verifier: typeof value.verifier === 'string' ? value.verifier : undefined,
+    conclusion: typeof value.conclusion === 'string' ? value.conclusion : undefined,
+    evidenceRefs: Array.isArray(value.evidenceRefs) ? value.evidenceRefs.filter((item): item is string => typeof item === 'string') : undefined,
+    verifiedAt: typeof value.verifiedAt === 'string' ? value.verifiedAt : undefined,
+  };
+}
+
+function normalizeRepairRefs(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  return {
+    commitSha: typeof value.commitSha === 'string' ? value.commitSha : undefined,
+    commitUrl: typeof value.commitUrl === 'string' ? value.commitUrl : undefined,
+    prUrl: typeof value.prUrl === 'string' ? value.prUrl : undefined,
+    patchRef: typeof value.patchRef === 'string' ? value.patchRef : undefined,
+  };
+}
+
+function normalizeRepairInstanceRef(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  return {
+    id: typeof value.id === 'string' ? value.id : undefined,
+    name: typeof value.name === 'string' ? value.name : undefined,
+    workspacePath: typeof value.workspacePath === 'string' ? value.workspacePath : undefined,
+  };
+}
+
+function appendStateRecord(state: Record<string, unknown>, key: string, record: Record<string, unknown>) {
+  const records = Array.isArray(state[key]) ? state[key].filter(isRecord) : [];
+  return {
+    ...state,
+    [key]: [record, ...records.filter((item) => item.id !== record.id)].slice(0, 200),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function persistFeedbackRecord(root: string, folder: string, id: string, record: Record<string, unknown>) {
+  const dir = join(root, '.sciforge', 'feedback', folder);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, `${safeName(id)}.json`), JSON.stringify(record, null, 2));
+}
+
+function handoffFeedbackComments(state: Record<string, unknown>) {
+  const comments = Array.isArray(state.feedbackComments) ? state.feedbackComments.filter(isRecord) : [];
+  return comments
+    .filter((comment) => {
+      const status = typeof comment.status === 'string' ? comment.status : 'open';
+      return !['fixed', 'wont-fix'].includes(status);
+    })
+    .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
+}
+
+function findFeedbackComment(state: Record<string, unknown>, issueId: string) {
+  return handoffFeedbackComments(state).find((comment) => comment.id === issueId || String(comment.githubIssueNumber || '') === issueId);
+}
+
+function feedbackIssueSummary(state: Record<string, unknown>, comment: Record<string, unknown>) {
+  const request = feedbackRequestForComment(state, comment);
+  const github = githubMetadataForComment(state, comment);
+  const runtime = isRecord(comment.runtime) ? comment.runtime : {};
+  return {
+    schemaVersion: 1,
+    id: String(comment.id || ''),
+    kind: 'feedback-comment',
+    title: request && typeof request.title === 'string' && request.title.trim()
+      ? request.title
+      : compactString(typeof comment.comment === 'string' ? comment.comment : '', 80) || 'SciForge feedback issue',
+    status: typeof comment.status === 'string' ? comment.status : 'open',
+    priority: typeof comment.priority === 'string' ? comment.priority : 'normal',
+    tags: Array.isArray(comment.tags) ? comment.tags.filter((tag): tag is string => typeof tag === 'string') : [],
+    createdAt: typeof comment.createdAt === 'string' ? comment.createdAt : '',
+    updatedAt: typeof comment.updatedAt === 'string' ? comment.updatedAt : '',
+    comment: compactString(typeof comment.comment === 'string' ? comment.comment : '', 240),
+    requestId: typeof comment.requestId === 'string' ? comment.requestId : request && typeof request.id === 'string' ? request.id : undefined,
+    runtime: {
+      page: typeof runtime.page === 'string' ? runtime.page : '',
+      scenarioId: typeof runtime.scenarioId === 'string' ? runtime.scenarioId : '',
+      sessionId: typeof runtime.sessionId === 'string' ? runtime.sessionId : undefined,
+      activeRunId: typeof runtime.activeRunId === 'string' ? runtime.activeRunId : undefined,
+    },
+    screenshot: screenshotMetadataForComment(comment),
+    github,
+  };
+}
+
+function feedbackRequestForComment(state: Record<string, unknown>, comment: Record<string, unknown>) {
+  const requests = Array.isArray(state.feedbackRequests) ? state.feedbackRequests.filter(isRecord) : [];
+  const requestId = typeof comment.requestId === 'string' ? comment.requestId : '';
+  return requests.find((request) => request.id === requestId || (Array.isArray(request.feedbackIds) && request.feedbackIds.includes(comment.id)));
+}
+
+function githubMetadataForComment(state: Record<string, unknown>, comment: Record<string, unknown>) {
+  const issueNumber = typeof comment.githubIssueNumber === 'number' ? comment.githubIssueNumber : undefined;
+  const synced = Array.isArray(state.githubSyncedOpenIssues)
+    ? state.githubSyncedOpenIssues.filter(isRecord).find((issue) => issue.number === issueNumber || issue.htmlUrl === comment.githubIssueUrl)
+    : undefined;
+  if (!issueNumber && typeof comment.githubIssueUrl !== 'string' && !synced) return undefined;
+  return {
+    issueNumber,
+    issueUrl: typeof comment.githubIssueUrl === 'string' ? comment.githubIssueUrl : synced && typeof synced.htmlUrl === 'string' ? synced.htmlUrl : undefined,
+    openIssue: synced,
+  };
+}
+
+function screenshotMetadataForComment(comment: Record<string, unknown>) {
+  const screenshot = isRecord(comment.screenshot) ? comment.screenshot : undefined;
+  if (!screenshot && typeof comment.screenshotRef !== 'string') return undefined;
+  return {
+    screenshotRef: typeof comment.screenshotRef === 'string' ? comment.screenshotRef : undefined,
+    schemaVersion: screenshot?.schemaVersion,
+    mediaType: typeof screenshot?.mediaType === 'string' ? screenshot.mediaType : undefined,
+    width: typeof screenshot?.width === 'number' ? screenshot.width : undefined,
+    height: typeof screenshot?.height === 'number' ? screenshot.height : undefined,
+    capturedAt: typeof screenshot?.capturedAt === 'string' ? screenshot.capturedAt : undefined,
+    targetRect: isRecord(screenshot?.targetRect) ? screenshot?.targetRect : undefined,
+    includeForAgent: typeof screenshot?.includeForAgent === 'boolean' ? screenshot.includeForAgent : undefined,
+    note: typeof screenshot?.note === 'string' ? screenshot.note : undefined,
+    hasDataUrl: typeof screenshot?.dataUrl === 'string' && screenshot.dataUrl.length > 0,
+    dataUrlBytes: typeof screenshot?.dataUrl === 'string' ? Buffer.byteLength(screenshot.dataUrl, 'utf8') : undefined,
+  };
+}
+
+function repairRecordsForIssue(state: Record<string, unknown>, key: string, issueId: string) {
+  return (Array.isArray(state[key]) ? state[key].filter(isRecord) : [])
+    .filter((record) => record.issueId === issueId)
+    .sort((left, right) => String(right.startedAt || right.completedAt || '').localeCompare(String(left.startedAt || left.completedAt || '')));
+}
+
+function compactString(value: string, limit: number) {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  return compact.length > limit ? `${compact.slice(0, Math.max(0, limit - 3))}...` : compact;
+}
+
 function safeName(value: string) {
   return basename(value.replace(/[^a-zA-Z0-9._-]+/g, '_')).slice(0, 120);
 }
@@ -1145,8 +1693,7 @@ async function readLastWorkspacePath() {
 
 async function rememberWorkspace(workspacePath: string, state: Record<string, unknown>) {
   workspacePath = normalizeWorkspaceRootPath(workspacePath);
-  const appBioagentDir = join(process.cwd(), '.sciforge');
-  await mkdir(appBioagentDir, { recursive: true });
+  await mkdir(STATE_DIR, { recursive: true });
   const score = workspaceActivityScore(state);
   const updatedAt = new Date().toISOString();
   const history = await readWorkspaceHistory();
@@ -1221,11 +1768,11 @@ function workspaceActivityScore(state: Record<string, unknown>): number {
 }
 
 function lastWorkspaceFile() {
-  return join(process.cwd(), '.sciforge', 'last-workspace.json');
+  return join(STATE_DIR, 'last-workspace.json');
 }
 
 function workspaceHistoryFile() {
-  return join(process.cwd(), '.sciforge', 'workspace-history.json');
+  return join(STATE_DIR, 'workspace-history.json');
 }
 
 function resolveWorkspaceOpenPath(workspacePath: string, rawPath: string) {
@@ -1304,11 +1851,18 @@ async function readLocalSciForgeConfig() {
   const llm = isRecord(parsed.llm) ? parsed.llm : {};
   const sciforge = isRecord(parsed.sciforge) ? parsed.sciforge : {};
   const visionSense = isRecord(parsed.visionSense) ? parsed.visionSense : {};
+  const agentServerBaseUrl = process.env.SCIFORGE_AGENT_SERVER_URL
+    || (typeof sciforge.agentServerBaseUrl === 'string' ? sciforge.agentServerBaseUrl : 'http://127.0.0.1:18080');
+  const workspaceWriterBaseUrl = process.env.SCIFORGE_WORKSPACE_WRITER_URL
+    || (typeof sciforge.workspaceWriterBaseUrl === 'string' ? sciforge.workspaceWriterBaseUrl : `http://127.0.0.1:${PORT}`);
+  const workspacePath = process.env.SCIFORGE_WORKSPACE_PATH
+    || (typeof sciforge.workspacePath === 'string' ? sciforge.workspacePath : DEFAULT_WORKSPACE_PATH);
   return {
     schemaVersion: 1,
-    agentServerBaseUrl: typeof sciforge.agentServerBaseUrl === 'string' ? sciforge.agentServerBaseUrl : 'http://127.0.0.1:18080',
-    workspaceWriterBaseUrl: typeof sciforge.workspaceWriterBaseUrl === 'string' ? sciforge.workspaceWriterBaseUrl : `http://127.0.0.1:${PORT}`,
-    workspacePath: normalizeWorkspaceRootPath(typeof sciforge.workspacePath === 'string' ? sciforge.workspacePath : join(process.cwd(), 'workspace')),
+    agentServerBaseUrl,
+    workspaceWriterBaseUrl,
+    workspacePath: normalizeWorkspaceRootPath(workspacePath),
+    peerInstances: normalizePeerInstances(sciforge.peerInstances),
     modelProvider: typeof llm.provider === 'string' ? llm.provider : 'native',
     modelBaseUrl: typeof llm.baseUrl === 'string' ? llm.baseUrl.replace(/\/+$/, '') : '',
     modelName: typeof llm.model === 'string' ? llm.model : typeof llm.modelName === 'string' ? llm.modelName : '',
@@ -1341,6 +1895,7 @@ async function writeLocalSciForgeConfig(config: Record<string, unknown>) {
       agentServerBaseUrl: typeof config.agentServerBaseUrl === 'string' ? config.agentServerBaseUrl : sciforge.agentServerBaseUrl,
       workspaceWriterBaseUrl: typeof config.workspaceWriterBaseUrl === 'string' ? config.workspaceWriterBaseUrl : sciforge.workspaceWriterBaseUrl,
       workspacePath: normalizeWorkspaceRootPath(typeof config.workspacePath === 'string' ? config.workspacePath : typeof sciforge.workspacePath === 'string' ? sciforge.workspacePath : ''),
+      peerInstances: Array.isArray(config.peerInstances) ? normalizePeerInstances(config.peerInstances) : normalizePeerInstances(sciforge.peerInstances),
       requestTimeoutMs: typeof config.requestTimeoutMs === 'number' ? config.requestTimeoutMs : sciforge.requestTimeoutMs,
       feedbackGithubRepo: typeof config.feedbackGithubRepo === 'string' ? config.feedbackGithubRepo : sciforge.feedbackGithubRepo,
       feedbackGithubToken: preserveConfiguredSecretString(config.feedbackGithubToken, sciforge.feedbackGithubToken),
@@ -1355,6 +1910,7 @@ async function writeLocalSciForgeConfig(config: Record<string, unknown>) {
           : true,
     },
   };
+  await mkdir(dirname(configLocalPath()), { recursive: true });
   await writeFile(configLocalPath(), JSON.stringify(next, null, 2));
 }
 
@@ -1376,7 +1932,16 @@ async function readConfigLocalJson(): Promise<Record<string, unknown>> {
 }
 
 function configLocalPath() {
-  return join(process.cwd(), 'config.local.json');
+  return CONFIG_LOCAL_PATH;
+}
+
+function parseJsonEnv(value: string | undefined) {
+  if (!value?.trim()) return undefined;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 }
 
 function normalizeWorkspaceRootPath(value: string) {
@@ -1387,4 +1952,23 @@ function normalizeWorkspaceRootPath(value: string) {
   if (nestedIndex >= 0) return trimmed.slice(0, nestedIndex);
   if (trimmed.endsWith('/.sciforge')) return trimmed.slice(0, -'/.sciforge'.length);
   return trimmed;
+}
+
+function normalizePeerInstances(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is Record<string, unknown> => isRecord(item))
+    .map((item) => ({
+      name: typeof item.name === 'string' ? item.name.trim() : '',
+      appUrl: cleanUrlString(item.appUrl),
+      workspaceWriterUrl: cleanUrlString(item.workspaceWriterUrl),
+      workspacePath: normalizeWorkspaceRootPath(typeof item.workspacePath === 'string' ? item.workspacePath : ''),
+      role: item.role === 'main' || item.role === 'repair' || item.role === 'peer' ? item.role : 'peer',
+      trustLevel: item.trustLevel === 'readonly' || item.trustLevel === 'repair' || item.trustLevel === 'sync' ? item.trustLevel : 'readonly',
+      enabled: typeof item.enabled === 'boolean' ? item.enabled : true,
+    }));
+}
+
+function cleanUrlString(value: unknown) {
+  return typeof value === 'string' ? value.trim().replace(/\/+$/, '') : '';
 }

@@ -8,8 +8,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join, resolve } from 'node:path';
 
 const WORKSPACE_PORT = Number(process.env.SCIFORGE_WORKSPACE_PORT || 5174);
+const UI_PORT = Number(process.env.SCIFORGE_UI_PORT || 5173);
 const AGENT_SERVER_PORT = Number(process.env.SCIFORGE_AGENT_SERVER_PORT || 18080);
 const AGENT_SERVER_ROOT = resolve(process.env.SCIFORGE_AGENT_SERVER_ROOT || '../AgentServer');
+const CONFIG_LOCAL_PATH = resolve(process.env.SCIFORGE_CONFIG_PATH || 'config.local.json');
+const RUNTIME_LOG_DIR = resolve(process.env.SCIFORGE_LOG_DIR || 'workspace/.sciforge/logs');
 const runtimeChildren = new Map<string, ReturnType<typeof spawn>>();
 const STARTUP_TIMEOUT_MS = Number(process.env.SCIFORGE_RUNTIME_START_TIMEOUT_MS || 30_000);
 
@@ -33,7 +36,7 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    port: UI_PORT,
     strictPort: true,
   },
 });
@@ -104,8 +107,8 @@ async function ensureRuntimeProcess(options: {
   if (existing && existing.exitCode === null && !existing.killed) {
     await stopRuntimeChild(options.id, existing);
   }
-  await mkdir(join(process.cwd(), 'workspace/.sciforge/logs'), { recursive: true });
-  const logPath = join(process.cwd(), `workspace/.sciforge/logs/${options.id}-runtime.log`);
+  await mkdir(RUNTIME_LOG_DIR, { recursive: true });
+  const logPath = join(RUNTIME_LOG_DIR, `${options.id}-runtime.log`);
   const log = createWriteStream(logPath, { flags: 'a' });
   log.write(`\n\n[${new Date().toISOString()}] starting ${options.label}: npm ${options.args.join(' ')}\n`);
   const child = spawn('npm', options.args, {
@@ -161,7 +164,7 @@ function agentServerEnv() {
 
 function agentServerModelEnvFromLocalConfig() {
   try {
-    const parsed = JSON.parse(readFileSync(resolve('config.local.json'), 'utf8'));
+    const parsed = JSON.parse(readFileSync(CONFIG_LOCAL_PATH, 'utf8'));
     const llm = isRecord(parsed?.llm) ? parsed.llm : {};
     const provider = typeof llm.provider === 'string' ? llm.provider.trim() : '';
     const baseUrl = typeof llm.baseUrl === 'string' ? llm.baseUrl.trim().replace(/\/+$/, '') : '';

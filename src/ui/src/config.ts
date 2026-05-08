@@ -1,4 +1,4 @@
-import type { SciForgeConfig } from './domain';
+import type { PeerInstance, PeerInstanceRole, PeerInstanceTrustLevel, SciForgeConfig } from './domain';
 
 const CONFIG_STORAGE_KEY = 'sciforge.config.v1';
 
@@ -7,6 +7,7 @@ export const defaultSciForgeConfig: SciForgeConfig = {
   agentServerBaseUrl: 'http://127.0.0.1:18080',
   workspaceWriterBaseUrl: 'http://127.0.0.1:5174',
   workspacePath: '/Applications/workspace/ailab/research/app/SciForge/workspace',
+  peerInstances: [],
   /** Default feedback inbox target; override in settings if you fork or use another repo. */
   feedbackGithubRepo: 'AGI4Sci/SciForge',
   theme: 'dark',
@@ -64,6 +65,7 @@ export function normalizeConfig(value: unknown): SciForgeConfig {
     agentServerBaseUrl: cleanUrl(raw.agentServerBaseUrl) || defaultSciForgeConfig.agentServerBaseUrl,
     workspaceWriterBaseUrl: cleanUrl(raw.workspaceWriterBaseUrl) || defaultSciForgeConfig.workspaceWriterBaseUrl,
     workspacePath: normalizeWorkspaceRootPath(typeof raw.workspacePath === 'string' ? raw.workspacePath : defaultSciForgeConfig.workspacePath),
+    peerInstances: normalizePeerInstances(raw.peerInstances),
     theme: raw.theme === 'light' ? 'light' : 'dark',
     agentBackend: normalizeAgentBackend(raw.agentBackend),
     modelProvider: typeof raw.modelProvider === 'string' ? raw.modelProvider : defaultSciForgeConfig.modelProvider,
@@ -85,6 +87,43 @@ export function normalizeConfig(value: unknown): SciForgeConfig {
   };
 }
 
+export function normalizePeerInstances(value: unknown): PeerInstance[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null && !Array.isArray(item))
+    .map((item) => ({
+      name: typeof item.name === 'string' ? item.name.trim() : '',
+      appUrl: cleanUrl(item.appUrl),
+      workspaceWriterUrl: cleanUrl(item.workspaceWriterUrl),
+      workspacePath: normalizeWorkspaceRootPath(typeof item.workspacePath === 'string' ? item.workspacePath : ''),
+      role: normalizePeerRole(item.role),
+      trustLevel: normalizePeerTrustLevel(item.trustLevel),
+      enabled: typeof item.enabled === 'boolean' ? item.enabled : true,
+    }));
+}
+
+export function validatePeerInstances(peerInstances: PeerInstance[]): string[] {
+  const errors: string[] = [];
+  const seenNames = new Map<string, number>();
+  peerInstances.forEach((peer, index) => {
+    const label = peer.name.trim() || `Peer ${index + 1}`;
+    const normalizedName = peer.name.trim().toLowerCase();
+    if (!peer.name.trim()) errors.push(`${label}: name is required.`);
+    if (normalizedName) {
+      const count = seenNames.get(normalizedName) ?? 0;
+      seenNames.set(normalizedName, count + 1);
+      if (count > 0) errors.push(`${label}: name must be unique.`);
+    }
+    if (peer.appUrl.trim() && !isValidHttpUrl(peer.appUrl)) errors.push(`${label}: appUrl must be a valid http(s) URL.`);
+    if (!peer.workspaceWriterUrl.trim()) {
+      errors.push(`${label}: workspaceWriterUrl is required.`);
+    } else if (!isValidHttpUrl(peer.workspaceWriterUrl)) {
+      errors.push(`${label}: workspaceWriterUrl must be a valid http(s) URL.`);
+    }
+  });
+  return errors;
+}
+
 export function updateConfig(config: SciForgeConfig, patch: Partial<SciForgeConfig>): SciForgeConfig {
   return normalizeConfig({
     ...config,
@@ -102,6 +141,23 @@ function normalizeAgentBackend(value: unknown) {
   return ['codex', 'openteam_agent', 'claude-code', 'hermes-agent', 'openclaw', 'gemini'].includes(backend)
     ? backend
     : defaultSciForgeConfig.agentBackend;
+}
+
+function normalizePeerRole(value: unknown): PeerInstanceRole {
+  return value === 'main' || value === 'repair' || value === 'peer' ? value : 'peer';
+}
+
+function normalizePeerTrustLevel(value: unknown): PeerInstanceTrustLevel {
+  return value === 'readonly' || value === 'repair' || value === 'sync' ? value : 'readonly';
+}
+
+function isValidHttpUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 export function normalizeWorkspaceRootPath(value: string) {

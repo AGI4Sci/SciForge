@@ -22,35 +22,50 @@
 
 ### T092 双实例 Agent 互修与稳定同步
 
-状态：进行中。本任务取代此前内嵌 Repair Agent System 方案。SciForge 不再在单个运行中的应用里放置一个自修复 agent，也不再让反馈收件箱直接启动内嵌修复 runner。新方向是维护两个彼此独立、地位并列的 SciForge Agent/App 实例：一个稳定实例可以修复另一个实例的代码，被修复的一方可以变动，执行修复的一方必须保持稳定；当双方都通过核验后，用户或主 Agent 可以显式把较新的稳定版本同步给落后的一方。
+状态：进行中。本任务取代此前内嵌 Repair Agent System 方案。SciForge 不再在单个运行中的应用里放置一个自修复 agent，也不再让反馈收件箱直接启动内嵌修复 runner。新方向是维护两个彼此独立、地位并列的 SciForge Agent/App 实例：一个稳定实例可以修复另一个实例的代码，被修复的一方可以变动，执行修复的一方必须保持稳定；当双方都通过核验后，用户或主 Agent 可以显式把较新的稳定版本同步给落后的一方。用户体验上采用“修改方主对话栏交互式修复，被修改方反馈收件箱结构化沉淀结论”的模式：A 的主聊天栏选择目标实例 B，用户用自然语言引导 A 修复 B 的 issue；B 的反馈收件箱只展示修复状态、diff/commit、测试证据、人工核验结论和 GitHub 同步结果。
 
 核心原则：
 
-- 双实例并列：例如 Main Agent 和 Repair Agent 都是完整 SciForge 应用/agent 实例，拥有独立进程、端口、workspace writer、状态目录、日志、配置和 git worktree。
+- 双实例并列：例如 Main Agent 和 Repair Agent 都是完整 SciForge 应用/agent 实例，拥有独立进程、端口、workspace writer、状态目录、日志、配置和 git worktree；真实互修优先使用 `SciForge-A/` 与 `SciForge-B/` 两个 git worktree，而不是只在同一个 checkout 内创建两个 workspace 子目录。
 - 修复别人时自己稳定：A 修复 B 时，A 的运行代码、执行器、权限策略和配置不得被本次任务修改；B 修复 A 时同理。
 - 交替修复：允许 A 修 B，也允许 B 修 A，但每次只能由当前稳定的一方执行修复。
 - 显式同步：只有修复完成、测试证据充分、人工核验或自动核验通过后，才能把最新稳定版本复制/同步给另一方；同步不是运行中自动漂移。
 - 反馈收件箱降级为 handoff：反馈收件箱继续负责收集评论、页面定位、运行时上下文和 GitHub Issue 同步，但不再内嵌 Repair Agent 面板或直接执行修复。
+- 对话栏承担交互：复杂澄清、修复策略选择、重试和用户纠偏都发生在执行方 A 的主对话栏；被修改方 B 不弹出小型 agent 工作台。
+- 结构化 API 优先：A 不通过视觉/DOM 探索 B 的页面来找 issue，而是读取 B 暴露的 instance manifest、feedback issue、handoff bundle 和 repair result API。
 
 Todo：
 
 - [x] 删除单实例内嵌 Repair Agent 代码路径，包括 `repair-agent-system/`、反馈卡片修复按钮、Repair Agent 面板、Workspace Writer repair endpoint、runner contract 和相关样式。
-- [ ] 定义双实例配置契约：`agentId`、`role`、`appPort`、`workspaceWriterPort`、`workspacePath`、`repoPath`、`stateDir`、`logDir`、`counterpart`。
-- [ ] 支持开发环境同时启动两个独立 SciForge 实例，并确保端口、状态目录、workspace writer、runtime session 和日志互不共享。
-- [ ] 实现互修 handoff 协议：稳定实例接收 issue/bundle，打开对方 repo/worktree，创建隔离分支或 worktree，执行修改、测试、证据收集和回写。
-- [ ] 实现稳定版本注册表：记录每个实例的稳定 commit、版本、测试结果、promotedAt、来源实例和同步状态。
-- [ ] 实现显式同步动作：在双方都稳定且用户确认后，把较新的稳定版本同步给落后实例；同步过程必须保留备份和回滚点。
-- [ ] 在 UI 中把“修复”改为“交给另一实例处理”或同类 handoff 入口，展示目标实例、当前状态、测试证据、GitHub 回写结果和下一步，而不是展示内嵌 Repair Agent 过程。
-- [ ] 增加 smoke：启动两个实例，验证 A 能修改 B 的代码且 A 自身文件不变；再验证 B 能修改 A 的代码且 B 自身文件不变。
-- [ ] 更新 README 的运行说明、故障排查和安全边界，让用户知道双实例如何启动、互修、核验、同步和回滚。
+- [x] 定义双实例开发配置契约：`agentId`、`role`、`appPort`、`workspaceWriterPort`、`workspacePath`、`repoPath`、`stateDir`、`logDir`、`configLocalPath`、`counterpart`；由 Workspace Writer manifest 和 dev env/profile 暴露，后续 UI peer settings 可复用。
+- [x] 定义 peer instances 配置与设置页 UI：保存 Main/Repair/Peer 实例的 `name`、`appUrl`、`workspaceWriterUrl`、`workspacePath`、`role`、`trustLevel` 和 `enabled`。
+- [x] 支持开发环境同时启动两个独立 SciForge 实例，并确保端口、状态目录、workspace writer、runtime session 和日志互不共享；`npm run dev:dual` 默认从 `SciForge-A/` 与 `SciForge-B/` worktree 启动，A 使用 `5173/5174` + `.sciforge-a/`，B 使用 `5273/5274` + `.sciforge-b/`。
+- [x] 文档明确 worktree-first 推荐部署：`SciForge-A/` 与 `SciForge-B/` 各自运行一份应用，`workspacePath` 指向对应 worktree 根目录，AgentServer 默认共享 `18080`。
+- [x] 增加 worktree-first 开发脚本与 smoke：`npm run worktree:dual -- status|create|clean` 支持检测/创建/清理 `SciForge-A` 与 `SciForge-B`；`npm run smoke:dual-worktree-instance` 临时创建双 worktree、启动 A/B writer，并验证 manifest repo root、workspacePath、stateDir、configLocalPath 和跨实例写入隔离。
+- [x] 实现互修 handoff 协议与 runner contract：`executorInstance`、`targetInstance`、`targetWorkspacePath`、`targetWorkspaceWriterUrl`、`issueBundle`、`expectedTests`、`githubSyncRequired`；稳定实例 A 可通过 `/api/sciforge/repair-handoff/run` 接收 B 的 issue bundle，在 B repo 下创建 `.sciforge/repair-worktrees/<run>` 与 `codex/repair-handoff/...` 隔离分支/worktree，使用目标 worktree 作为 AgentServer `cwd/workingDirectory` 执行修复、测试、diff/patch 证据收集，并写回 B 的 `/repair-result`。
+- [x] Runner 明确 fail-closed：`targetWorkspacePath` 不能等于或包含/被包含于 executor repo/worktree，且不能与 executor `stateDir`、`configLocalPath`、`logDir` 相交；runner 自身测试日志和 patch artifact 不混入业务 changed files。
+- [x] Runner 输出结构化 result：`summary`、`changedFiles`、`diffRef`、`refs.patchRef`、`testResults`、`humanVerification`、`executorInstance`、`targetInstance`、隔离 branch/worktree metadata；目标实例 `/repair-result` 保存 `diffRef` 和 `commit` 字段。
+- [x] 给主对话栏增加 Target Instance 选择器：默认当前实例，可选择 Peer 实例；选中 Peer 后，聊天任务明确标记为“读取并修改目标实例 workspace”。
+- [x] 主对话栏支持从目标实例拉取 issue：用户可说“修复 B 的反馈 #id / GitHub #number”，A 通过 B 的结构化 API 获取 issue、页面定位、截图证据、GitHub 元数据和验收要求，并在 AgentServer payload 中携带可调用的 repair handoff runner endpoint/contract。
+- [x] 被修改方反馈收件箱增加 handoff / repair result 状态：展示 `assigned`、`analyzing`、`patching`、`testing`、`needs-human-verification`、`fixed`、`blocked`、`github-synced`。
+- [x] 实现目标实例 API：`GET /api/sciforge/instance/manifest`、`GET /api/sciforge/feedback/issues`、`GET /api/sciforge/feedback/issues/:id`、`POST /api/sciforge/feedback/issues/:id/repair-runs`、`POST /api/sciforge/feedback/issues/:id/repair-result`。
+- [x] 实现 GitHub 回写链路：被修改方收到 repair result 后，把摘要、changed files、测试结果、人工核验结论和 commit/PR/patch ref 追加到关联 GitHub Issue；不自动关闭 Issue；未配置 token 时 fail-safe 标记 `skipped` 并记录原因，不提交真实 token。
+- [x] 实现稳定版本注册表：记录每个实例的稳定 commit、版本、测试结果、promotedAt、来源实例和同步状态；`promote` 必须显式确认且有测试证据。
+- [x] 实现显式稳定同步计划动作：`sync-plan` 只生成 diff、测试要求、备份点和回滚说明，不写入目标实例，不自动漂移。
+- [x] 在 UI 中把“修复”改为“交给另一实例处理”或同类 handoff 入口，展示目标实例、当前状态、测试证据、GitHub 回写结果和下一步，而不是展示内嵌 Repair Agent 过程。
+- [x] 增加 focused smoke：`npm run smoke:repair-handoff-runner` 模拟 A 执行 B 的修复，确认写入发生在 B 的 isolated repair worktree，不发生在 A 或 B 当前 checkout，并验证 executor 路径 fail-closed；`npm run smoke:dual-worktree-instance` 覆盖双 worktree writer 隔离。
+- [x] 更新 README 的 worktree-first 运行说明、环境变量示例、smoke 命令和故障排查；后续真实互修、核验、同步和回滚说明随 handoff / stable registry 落地继续补充。
 
 验收标准：
 
-- [ ] 单实例应用中不再出现内嵌 Repair Agent runner、repair endpoint 或自修复面板。
-- [ ] 两个实例可以并行运行，且配置、端口、状态目录、日志互不污染。
-- [ ] 当前稳定实例可以对另一个实例的代码做真实修改，并输出 diff、测试日志和结论。
-- [ ] 任一实例修复另一个实例时，自己的运行代码和稳定版本注册信息不会被本次修复任务改写。
-- [ ] 同步较新稳定版本必须是显式动作，并且有测试证据、备份和回滚说明。
+- [x] 单实例应用中不再出现内嵌 Repair Agent runner、repair endpoint 或自修复面板。
+- [x] 两个实例可以并行运行，且配置、端口、状态目录、日志互不污染。
+- [x] 当前稳定实例可以对另一个实例的代码做真实修改，并输出 diff、测试日志和结论；已通过 `npm run smoke:repair-handoff-runner` 验证 A 修 B 的真实 isolated worktree 路径。
+- [x] 默认 dev profile 和 smoke 覆盖 worktree 模式：验证 `workspacePath` 指向两个不同 git worktree 根目录时，A 写 B 的 repair result / patch artifact 不会污染 A，B 写 A 同理；已运行 `npm run typecheck`、`npm run smoke:dual-instance`、`npm run smoke:dual-worktree-instance`。
+- [x] 用户可以在 A 的主对话栏选择 B 作为 Target Instance，并通过一句自然语言触发对 B 的指定反馈/GitHub Issue 修复。
+- [x] B 的反馈收件箱能在无需用户复制粘贴的情况下看到 A 写回的结构化修复结论、测试证据和 GitHub 同步状态。
+- [x] 任一实例修复另一个实例时，自己的运行代码和稳定版本注册信息不会被本次修复任务改写；runner 对 executor repo/worktree、stateDir、configLocalPath、logDir 执行 fail-closed 边界检查。
+- [x] 同步较新稳定版本必须是显式动作，并且有测试证据、备份和回滚说明；当前实现提供显式 `promote` / `sync-plan`，不自动应用同步。
 
 ### T088 长文件语义模块化治理
 

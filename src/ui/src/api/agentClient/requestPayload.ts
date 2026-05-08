@@ -28,6 +28,7 @@ function agentSystemPrompt(input: SendAgentMessageInput) {
     protocol,
     runtimeScenario ? '用户编辑后的 Scenario 设置:' : '',
     runtimeScenario ? JSON.stringify(runtimeScenario, null, 2) : '',
+    targetInstanceInstructions(input),
     selectedRuntimeToolInstructions(input),
   ].join('\n');
 }
@@ -64,6 +65,8 @@ function buildPrompt(input: SendAgentMessageInput) {
     artifactContext.length ? JSON.stringify(artifactAccessPolicy, null, 2) : '',
     referenceContext.length ? '用户本轮显式引用对象:' : '',
     referenceContext.length ? JSON.stringify(referenceContext, null, 2) : '',
+    input.targetInstanceContext ? 'Target Instance context（本轮目标 workspace，用户选择优先于当前实例）:' : '',
+    input.targetInstanceContext ? JSON.stringify(compactTargetInstanceContext(input.targetInstanceContext), null, 2) : '',
     selectedRuntimeToolInstructions(input),
     '',
     'Scope check metadata:',
@@ -81,6 +84,8 @@ export function buildRunPayload(input: SendAgentMessageInput): AgentServerRunPay
     prompt: input.prompt,
   });
   const artifactSummary = summarizeArtifacts(input.artifacts ?? []);
+  const repairHandoffRunner = buildRepairHandoffRunnerPayload(input);
+  const targetInstanceContext = compactTargetInstanceContext(input.targetInstanceContext);
   return {
     agent: {
       id: scenario.runtimeId,
@@ -101,6 +106,9 @@ export function buildRunPayload(input: SendAgentMessageInput): AgentServerRunPay
         fallbackTools: scenario.fallbackTools,
         selectedToolIds: input.scenarioOverride?.selectedToolIds ?? [],
         selectedToolContracts: selectedRuntimeToolContracts(input.scenarioOverride?.selectedToolIds ?? []),
+        targetInstance: targetInstanceContext,
+        targetInstanceContext,
+        repairHandoffRunner,
       },
     },
     input: {
@@ -121,6 +129,9 @@ export function buildRunPayload(input: SendAgentMessageInput): AgentServerRunPay
         artifacts: artifactSummary,
         artifactAccessPolicy: buildArtifactAccessPolicy(input, artifactSummary),
         references: summarizeSciForgeReferences(input.references ?? []),
+        targetInstance: targetInstanceContext,
+        targetInstanceContext,
+        repairHandoffRunner,
         scopeCheck: scopeCheck(builtInScenarioId, input.prompt),
       },
     },
@@ -134,9 +145,101 @@ export function buildRunPayload(input: SendAgentMessageInput): AgentServerRunPay
         modelProvider: input.config.modelProvider,
         modelBaseUrl: input.config.modelBaseUrl,
         modelName: input.config.modelName,
+        workspaceWriterBaseUrl: input.config.workspaceWriterBaseUrl,
         maxContextWindowTokens: input.config.maxContextWindowTokens,
         agentServerBaseUrl: input.config.agentServerBaseUrl,
         workspacePath: input.config.workspacePath,
+        targetInstance: targetInstanceContext,
+        targetInstanceContext,
+        repairHandoffRunner,
+      },
+    },
+  };
+}
+
+function targetInstanceInstructions(input: SendAgentMessageInput) {
+  const target = input.targetInstanceContext;
+  if (!target || target.mode !== 'peer') return '';
+  return [
+    'Target Instance policy:',
+    '用户已选择 peer target；本轮需要读取并修改目标实例 workspace，而不是当前实例 workspace。',
+    `目标实例: ${target.peer?.name ?? 'unknown'}`,
+    `目标 workspaceWriterUrl: ${target.peer?.workspaceWriterUrl ?? ''}`,
+    `目标 workspacePath: ${target.peer?.workspacePath ?? ''}`,
+    target.issueLookup ? `已预取 issue context: ${target.issueLookup.status} ${target.issueLookup.matchedIssueId ?? target.issueLookup.query}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+function compactTargetInstanceContext(target: SendAgentMessageInput['targetInstanceContext']) {
+  if (!target) return undefined;
+  return {
+    mode: target.mode,
+    banner: target.banner,
+    selectedAt: target.selectedAt,
+    peer: target.peer,
+    issueLookup: target.issueLookup ? {
+      trigger: target.issueLookup.trigger,
+      query: target.issueLookup.query,
+      workspaceWriterUrl: target.issueLookup.workspaceWriterUrl,
+      workspacePath: target.issueLookup.workspacePath,
+      matchedIssueId: target.issueLookup.matchedIssueId,
+      githubIssueNumber: target.issueLookup.githubIssueNumber,
+      status: target.issueLookup.status,
+      error: target.issueLookup.error,
+      summaries: target.issueLookup.summaries?.slice(0, 8).map((issue) => ({
+        id: issue.id,
+        title: issue.title,
+        status: issue.status,
+        priority: issue.priority,
+        updatedAt: issue.updatedAt,
+        github: issue.github,
+        runtime: issue.runtime,
+        comment: clipPromptText(issue.comment, 360),
+      })),
+      bundle: target.issueLookup.bundle ? previewReferencePayload(target.issueLookup.bundle) : undefined,
+    } : undefined,
+    executionBoundary: target.mode === 'peer' ? {
+      mode: 'repair-handoff-runner-target-worktree',
+      targetWorkspacePath: target.peer?.workspacePath || undefined,
+      targetWorkspaceWriterUrl: target.peer?.workspaceWriterUrl || undefined,
+      preventExecutorWorkspaceFallback: true,
+    } : undefined,
+  };
+}
+
+function buildRepairHandoffRunnerPayload(input: SendAgentMessageInput) {
+  const target = input.targetInstanceContext;
+  const peer = target?.peer;
+  const bundle = target?.issueLookup?.bundle;
+  if (!target || target.mode !== 'peer' || !peer || !bundle || peer.trustLevel === 'readonly') return undefined;
+  if (!peer.workspacePath.trim()) return undefined;
+  return {
+    endpoint: `${input.config.workspaceWriterBaseUrl.replace(/\/+$/, '')}/api/sciforge/repair-handoff/run`,
+    method: 'POST',
+    contract: {
+      executorInstance: {
+        id: 'current',
+        name: input.agentName,
+        workspaceWriterUrl: input.config.workspaceWriterBaseUrl,
+        workspacePath: input.config.workspacePath,
+      },
+      targetInstance: {
+        name: peer.name,
+        appUrl: peer.appUrl,
+        workspaceWriterUrl: peer.workspaceWriterUrl,
+        workspacePath: peer.workspacePath,
+      },
+      targetWorkspacePath: peer.workspacePath,
+      targetWorkspaceWriterUrl: peer.workspaceWriterUrl,
+      issueBundle: bundle,
+      expectedTests: [],
+      githubSyncRequired: Boolean(bundle.github?.issueNumber || bundle.github?.issueUrl),
+      agentServerBaseUrl: input.config.agentServerBaseUrl,
+      executionBoundary: {
+        mode: 'target-isolated-worktree',
+        targetWorkspacePath: peer.workspacePath,
+        targetWorkspaceWriterUrl: peer.workspaceWriterUrl,
+        forbidExecutorWorkspace: true,
       },
     },
   };
@@ -362,7 +465,7 @@ function selectedRuntimeToolContracts(selectedToolIds: string[]) {
       },
       outputContract: {
         kind: 'text',
-        formats: ['application/json', 'application/x-ndjson', 'text/x-computer-use-command'],
+        formats: ['text/plain', 'application/json', 'application/x-ndjson'],
         actions: ['click', 'type_text', 'press_key', 'scroll', 'wait'],
       },
       executionBoundary: 'text-signal-only',

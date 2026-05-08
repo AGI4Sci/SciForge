@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUp, Copy, File, FileCode, FilePlus, FileText, Folder, FolderOpen, FolderPlus, Moon, RefreshCw, Save, Search, Settings, Sun, Target } from 'lucide-react';
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronsUp, Copy, File, FileCode, FilePlus, FileText, Folder, FolderOpen, FolderPlus, Moon, Plus, RefreshCw, Save, Search, Settings, Sun, Target, Trash2 } from 'lucide-react';
 import { navItems, type PageId, type ScenarioId } from '../../data';
-import type { SciForgeConfig, ScenarioInstanceId } from '../../domain';
+import type { PeerInstance, SciForgeConfig, ScenarioInstanceId } from '../../domain';
 import { listWorkspace, mutateWorkspaceFile, openWorkspaceObject, readWorkspaceFile, writeWorkspaceFile, type WorkspaceEntry, type WorkspaceFileContent } from '../../api/workspaceClient';
 import { ActionButton, Badge, IconButton, cx } from '../uiPrimitives';
 import { RuntimeHealthPanel, useRuntimeHealth, type RuntimeHealthItem } from '../runtimeHealthPanel';
+import { validatePeerInstances } from '../../config';
 
 function explorerWorkspaceRoot(config: SciForgeConfig): string {
   return (config.workspacePath || '').replace(/\/+$/, '');
@@ -820,6 +821,39 @@ export function SettingsDialog({
   onClose: () => void;
 }) {
   const healthItems = useRuntimeHealth(config);
+  const peerInstances = config.peerInstances ?? [];
+  const peerValidationErrors = validatePeerInstances(peerInstances);
+  const updatePeerInstance = (index: number, patch: Partial<PeerInstance>) => {
+    onChange({
+      peerInstances: peerInstances.map((peer, peerIndex) => (peerIndex === index ? { ...peer, ...patch } : peer)),
+    });
+  };
+  const addPeerInstance = () => {
+    const existingNames = new Set(peerInstances.map((peer) => peer.name.trim().toLowerCase()).filter(Boolean));
+    let suffix = peerInstances.length + 1;
+    let name = `peer-${suffix}`;
+    while (existingNames.has(name.toLowerCase())) {
+      suffix += 1;
+      name = `peer-${suffix}`;
+    }
+    onChange({
+      peerInstances: [
+        ...peerInstances,
+        {
+          name,
+          appUrl: '',
+          workspaceWriterUrl: '',
+          workspacePath: '',
+          role: 'peer',
+          trustLevel: 'readonly',
+          enabled: true,
+        },
+      ],
+    });
+  };
+  const removePeerInstance = (index: number) => {
+    onChange({ peerInstances: peerInstances.filter((_, peerIndex) => peerIndex !== index) });
+  };
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') onClose();
@@ -858,6 +892,68 @@ export function SettingsDialog({
             <span>Workspace Path</span>
             <input value={config.workspacePath} onChange={(event) => onChange({ workspacePath: event.target.value })} />
           </label>
+          <div className="wide settings-peer-section">
+            <div className="settings-peer-section-head">
+              <span>Peer Instances</span>
+              <ActionButton icon={Plus} variant="secondary" onClick={addPeerInstance}>新增 Peer</ActionButton>
+            </div>
+            {peerInstances.length ? (
+              <div className="settings-peer-list">
+                {peerInstances.map((peer, index) => (
+                  <div className="settings-peer-card" key={`${peer.name}-${index}`}>
+                    <label className="settings-check-row settings-peer-enabled">
+                      <input
+                        type="checkbox"
+                        checked={peer.enabled}
+                        onChange={(event) => updatePeerInstance(index, { enabled: event.target.checked })}
+                      />
+                      <span>{peer.enabled ? '启用' : '禁用'}</span>
+                    </label>
+                    <label>
+                      <span>Name</span>
+                      <input value={peer.name} onChange={(event) => updatePeerInstance(index, { name: event.target.value })} />
+                    </label>
+                    <label>
+                      <span>Role</span>
+                      <select value={peer.role} onChange={(event) => updatePeerInstance(index, { role: event.target.value as PeerInstance['role'] })}>
+                        <option value="main">main</option>
+                        <option value="repair">repair</option>
+                        <option value="peer">peer</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>Trust Level</span>
+                      <select value={peer.trustLevel} onChange={(event) => updatePeerInstance(index, { trustLevel: event.target.value as PeerInstance['trustLevel'] })}>
+                        <option value="readonly">readonly</option>
+                        <option value="repair">repair</option>
+                        <option value="sync">sync</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>App URL</span>
+                      <input value={peer.appUrl} onChange={(event) => updatePeerInstance(index, { appUrl: event.target.value })} placeholder="http://127.0.0.1:5173" />
+                    </label>
+                    <label>
+                      <span>Workspace Writer URL</span>
+                      <input value={peer.workspaceWriterUrl} onChange={(event) => updatePeerInstance(index, { workspaceWriterUrl: event.target.value })} placeholder="http://127.0.0.1:5174" />
+                    </label>
+                    <label className="settings-peer-path">
+                      <span>Workspace Path</span>
+                      <input value={peer.workspacePath} onChange={(event) => updatePeerInstance(index, { workspacePath: event.target.value })} />
+                    </label>
+                    <ActionButton icon={Trash2} variant="secondary" onClick={() => removePeerInstance(index)}>删除</ActionButton>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="settings-peer-empty">还没有配置 Peer Instance。</p>
+            )}
+            {peerValidationErrors.length ? (
+              <div className="settings-validation" role="alert">
+                {peerValidationErrors.map((error) => <p key={error}>{error}</p>)}
+              </div>
+            ) : null}
+          </div>
           <label>
             <span>Agent Backend</span>
             <select value={config.agentBackend} onChange={(event) => onChange({ agentBackend: event.target.value })}>
@@ -950,7 +1046,7 @@ export function SettingsDialog({
             <strong>{config.modelProvider || 'native'}</strong>
             {config.modelName.trim() ? <code>{config.modelName.trim()}</code> : <em>user model not set</em>}
           </span>
-          <ActionButton icon={Save} variant="primary" onClick={onSave} disabled={saveState.status === 'saving'}>
+          <ActionButton icon={Save} variant="primary" onClick={onSave} disabled={saveState.status === 'saving' || peerValidationErrors.length > 0}>
             {saveState.status === 'saving' ? '保存中' : '保存并生效'}
           </ActionButton>
           <ActionButton icon={RefreshCw} variant="secondary" onClick={() => window.location.reload()}>重新检测连接</ActionButton>

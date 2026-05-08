@@ -1,7 +1,7 @@
 {
   "llm": {
     "provider": "openai-compatible",
-    "baseUrl": "http://35.220.164.252:3888/v1",
+    "baseUrl": "https://your-openai-compatible-endpoint.example/v1",
     "apiKey": "replace-with-your-llm-api-key",
     "model": "glm-5.1"
   },
@@ -11,7 +11,18 @@
   "sciforge": {
     "agentServerBaseUrl": "http://127.0.0.1:18080",
     "workspaceWriterBaseUrl": "http://127.0.0.1:5174",
-    "workspacePath": "/Applications/workspace/ailab/research/app/SciForge/workspace",
+    "workspacePath": "../SciForge-A",
+    "peerInstances": [
+      {
+        "name": "SciForge-B",
+        "appUrl": "http://127.0.0.1:5273",
+        "workspaceWriterUrl": "http://127.0.0.1:5274",
+        "workspacePath": "../SciForge-B",
+        "role": "repair",
+        "trustLevel": "repair",
+        "enabled": true
+      }
+    ],
     "feedbackGithubRepo": "AGI4Sci/SciForge",
     "feedbackGithubToken": "replace-with-github-pat-with-issues-read-write"
   }

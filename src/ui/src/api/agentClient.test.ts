@@ -5,6 +5,7 @@ import { SCENARIO_SPECS } from '../scenarioSpecs';
 import type { ScenarioId } from '../data';
 import type { SendAgentMessageInput } from '../domain';
 import { compactAgentContext, normalizeAgentResponse } from './agentClient';
+import { buildRunPayload } from './agentClient/requestPayload';
 
 const originalFetch = globalThis.fetch;
 
@@ -13,6 +14,105 @@ afterEach(() => {
 });
 
 describe('normalizeAgentResponse', () => {
+  it('injects selected target instance context into AgentServer run payload', () => {
+    const input: SendAgentMessageInput = {
+      ...compactInput(),
+      prompt: '修复 B 的 GitHub #42',
+      targetInstanceContext: {
+        mode: 'peer',
+        selectedAt: '2026-05-07T00:04:00.000Z',
+        banner: '当前正在读取并修改目标实例 workspace：Repair B',
+        peer: {
+          name: 'Repair B',
+          appUrl: 'http://127.0.0.1:6273',
+          workspaceWriterUrl: 'http://127.0.0.1:6274',
+          workspacePath: '/tmp/target-b',
+          role: 'repair',
+          trustLevel: 'repair',
+        },
+        issueLookup: {
+          trigger: 'github-number',
+          query: '#42',
+          workspaceWriterUrl: 'http://127.0.0.1:6274',
+          workspacePath: '/tmp/target-b',
+          matchedIssueId: 'feedback-42',
+          githubIssueNumber: 42,
+          status: 'resolved',
+          bundle: {
+            schemaVersion: 1,
+            id: 'feedback-42',
+            kind: 'feedback-comment',
+            title: 'Fix chart legend',
+            status: 'open',
+            priority: 'high',
+            tags: [],
+            createdAt: '2026-05-07T00:00:00.000Z',
+            updatedAt: '2026-05-07T00:01:00.000Z',
+            workspacePath: '/tmp/target-b',
+            comment: {
+              id: 'feedback-42',
+              schemaVersion: 1,
+              authorId: 'u1',
+              authorName: 'User',
+              comment: 'Legend is clipped.',
+              status: 'open',
+              priority: 'high',
+              tags: [],
+              createdAt: '2026-05-07T00:00:00.000Z',
+              updatedAt: '2026-05-07T00:01:00.000Z',
+              target: { selector: '.legend', path: 'body .legend', text: 'Legend', tagName: 'div', rect: { x: 0, y: 0, width: 10, height: 10 } },
+              viewport: { width: 1000, height: 800, devicePixelRatio: 1, scrollX: 0, scrollY: 0 },
+              runtime: { page: 'workbench', url: 'http://target-b', scenarioId: 'omics-differential-exploration' },
+              githubIssueNumber: 42,
+              githubIssueUrl: 'https://github.com/acme/sciforge/issues/42',
+            },
+            target: { selector: '.legend', path: 'body .legend', text: 'Legend', tagName: 'div', rect: { x: 0, y: 0, width: 10, height: 10 } },
+            runtime: { page: 'workbench', url: 'http://target-b', scenarioId: 'omics-differential-exploration' },
+            repairRuns: [],
+            repairResults: [],
+            github: { issueNumber: 42, issueUrl: 'https://github.com/acme/sciforge/issues/42' },
+          },
+          summaries: [{
+            schemaVersion: 1,
+            id: 'feedback-42',
+            kind: 'feedback-comment',
+            title: 'Fix chart legend',
+            status: 'open',
+            priority: 'high',
+            tags: [],
+            createdAt: '2026-05-07T00:00:00.000Z',
+            updatedAt: '2026-05-07T00:01:00.000Z',
+            comment: 'Legend is clipped.',
+            runtime: { page: 'workbench', scenarioId: 'omics-differential-exploration' },
+            github: { issueNumber: 42, issueUrl: 'https://github.com/acme/sciforge/issues/42' },
+          }],
+        },
+      },
+    };
+
+    const payload = buildRunPayload(input);
+
+    const agentTarget = payload.agent.metadata.targetInstance as Record<string, unknown>;
+    const agentTargetContext = payload.agent.metadata.targetInstanceContext as Record<string, unknown>;
+    const inputTarget = payload.input.metadata.targetInstance as Record<string, unknown>;
+    const runner = payload.input.metadata.repairHandoffRunner as Record<string, unknown>;
+    const runnerContract = runner.contract as Record<string, unknown>;
+    assert.equal(agentTarget.mode, 'peer');
+    assert.equal(agentTargetContext.mode, 'peer');
+    assert.equal(agentTarget.peer instanceof Object, true);
+    assert.equal(inputTarget.issueLookup instanceof Object, true);
+    assert.equal((payload.input.metadata.targetInstanceContext as Record<string, unknown>).mode, 'peer');
+    assert.equal(runnerContract.targetWorkspacePath, '/tmp/target-b');
+    assert.equal(runnerContract.targetWorkspaceWriterUrl, 'http://127.0.0.1:6274');
+    assert.equal((runnerContract.issueBundle as Record<string, unknown>).id, 'feedback-42');
+    assert.equal((runnerContract.executorInstance as Record<string, unknown>).workspacePath, '/tmp/sciforge-test-workspace');
+    assert.notEqual(runnerContract.targetWorkspacePath, '/tmp/sciforge-test-workspace');
+    assert.match(payload.input.text, /"workspaceWriterUrl": "http:\/\/127\.0\.0\.1:6274"/);
+    assert.match(payload.agent.systemPrompt, /目标 workspaceWriterUrl: http:\/\/127\.0\.0\.1:6274/);
+    assert.deepEqual((payload.metadata.runtimeConfig as Record<string, unknown>).targetInstance, payload.input.metadata.targetInstance);
+    assert.deepEqual((payload.metadata.runtimeConfig as Record<string, unknown>).targetInstanceContext, payload.input.metadata.targetInstanceContext);
+  });
+
   it('normalizes structured AgentServer JSON embedded in text', () => {
     const response = normalizeAgentResponse('literature-evidence-review', 'KRAS evidence?', {
       ok: true,

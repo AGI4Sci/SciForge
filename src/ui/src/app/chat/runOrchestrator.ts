@@ -7,6 +7,7 @@ import type { ScenarioId } from '../../data';
 import type {
   AgentStreamEvent,
   NormalizedAgentResponse,
+  PeerInstance,
   ScenarioInstanceId,
   ScenarioPackageRef,
   ScenarioRuntimeOverride,
@@ -17,6 +18,7 @@ import type {
   UserGoalSnapshot,
 } from '../../domain';
 import { makeId, nowIso } from '../../domain';
+import { buildTargetInstanceContextForPrompt, targetIssueLookupFailureMessage } from './targetInstance';
 import {
   acceptAndRepairAgentResponse,
   buildBackendAcceptanceRepairPrompt,
@@ -46,6 +48,7 @@ export interface RunPromptOrchestratorInput {
   scenarioDomain: string;
   role: string;
   config: SciForgeConfig;
+  targetPeer?: PeerInstance;
   scenarioOverride?: ScenarioRuntimeOverride;
   availableComponentIds: string[];
   defaultComponentIds: string[];
@@ -96,6 +99,7 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
     prompt: input.prompt,
     references: input.references,
     goalSnapshot,
+    targetInstanceLabel: input.targetPeer ? `${input.targetPeer.name} workspace` : undefined,
   });
   input.onOptimisticSession?.(optimisticSession);
 
@@ -106,6 +110,26 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
       input.onStreamEvent(event);
     };
     const turnPayload = requestPayloadForTurn(optimisticSession, userMessage, input.references);
+    const targetInstanceContext = await buildTargetInstanceContextForPrompt({
+      config: input.config,
+      peer: input.targetPeer,
+      prompt: input.prompt,
+    });
+    const targetLookupFailure = targetIssueLookupFailureMessage(targetInstanceContext);
+    if (targetLookupFailure) {
+      input.onStreamEvent({
+        id: makeId('evt'),
+        type: 'target-issue-lookup-failed',
+        label: '目标 issue',
+        detail: targetLookupFailure,
+        createdAt: nowIso(),
+        raw: targetInstanceContext,
+      });
+      throw new Error(targetLookupFailure);
+    }
+    if (targetInstanceContext.mode === 'peer') {
+      emitTargetInstanceEvents(targetInstanceContext, input.onStreamEvent);
+    }
     const request: AgentRequest = {
       sessionId: optimisticSession.sessionId,
       scenarioId: input.scenarioId,
@@ -124,6 +148,7 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
       scenarioPackageRef: input.scenarioPackageRef,
       skillPlanRef: input.skillPlanRef,
       uiPlanRef: input.uiPlanRef,
+      targetInstanceContext,
     };
 
     await runPreflightContextCompaction({
@@ -135,7 +160,10 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
       onStreamEvent: input.onStreamEvent,
     });
 
+    emitPeerRepairStage(targetInstanceContext, input.onStreamEvent, 'target-repair-modifying', '正在修改 B');
     const response = await runWithBackendFallback(request, input.signal, handleStreamEvent, input.onStreamEvent);
+    emitPeerRepairStage(targetInstanceContext, input.onStreamEvent, 'target-repair-testing', '正在测试');
+    emitPeerRepairStage(targetInstanceContext, input.onStreamEvent, 'target-repair-written-back', '已写回 B');
     const responseWithUsage = latestRoundTokenUsage
       ? { ...response, message: { ...response.message, tokenUsage: latestRoundTokenUsage } }
       : response;
@@ -212,6 +240,56 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
       message,
     };
   }
+}
+
+function emitTargetInstanceEvents(
+  targetInstanceContext: Awaited<ReturnType<typeof buildTargetInstanceContextForPrompt>>,
+  onStreamEvent: (event: AgentStreamEvent) => void,
+) {
+  const peerName = targetInstanceContext.peer?.name ?? 'B';
+  if (targetInstanceContext.issueLookup?.bundle) {
+    onStreamEvent({
+      id: makeId('evt'),
+      type: 'target-issue-read',
+      label: '已读取 B issue',
+      detail: `已从 ${peerName} 读取 issue bundle ${targetInstanceContext.issueLookup.matchedIssueId}。`,
+      createdAt: nowIso(),
+      raw: targetInstanceContext,
+    });
+    emitPeerRepairStage(targetInstanceContext, onStreamEvent, 'target-worktree-preparing', '正在准备 B worktree');
+    return;
+  }
+  onStreamEvent({
+    id: makeId('evt'),
+    type: 'target-instance-context',
+    label: '目标实例',
+    detail: targetInstanceContext.issueLookup?.summaries
+      ? `已从 ${peerName} 读取 ${targetInstanceContext.issueLookup.summaries.length} 条 issue 摘要。`
+      : targetInstanceContext.banner,
+    createdAt: nowIso(),
+    raw: targetInstanceContext,
+  });
+}
+
+function emitPeerRepairStage(
+  targetInstanceContext: Awaited<ReturnType<typeof buildTargetInstanceContextForPrompt>>,
+  onStreamEvent: (event: AgentStreamEvent) => void,
+  type: string,
+  label: string,
+) {
+  if (targetInstanceContext.mode !== 'peer' || !targetInstanceContext.issueLookup?.bundle) return;
+  onStreamEvent({
+    id: makeId('evt'),
+    type,
+    label,
+    detail: `${label}：${targetInstanceContext.peer?.name ?? '目标实例'} / ${targetInstanceContext.issueLookup.matchedIssueId ?? targetInstanceContext.issueLookup.query}`,
+    createdAt: nowIso(),
+    raw: {
+      targetInstance: targetInstanceContext.peer,
+      issueId: targetInstanceContext.issueLookup.matchedIssueId,
+      executionBoundary: 'repair-handoff-runner-target-worktree',
+    },
+  });
 }
 
 export async function runPreflightContextCompaction({

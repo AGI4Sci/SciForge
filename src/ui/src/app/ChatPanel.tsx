@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Copy, X } from 'lucide-react';
 import { scenarios, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
@@ -17,6 +17,8 @@ import { ChatPanelHeader } from './chat/ChatPanelHeader';
 import { ReferenceContextMenu } from './chat/ReferenceContextMenu';
 import { RunReadinessBar } from './chat/RunReadinessBar';
 import { MessageList } from './chat/MessageList';
+import { TargetInstanceSelector } from './chat/TargetInstanceSelector';
+import { CURRENT_TARGET_INSTANCE_VALUE, enabledPeerInstances, selectedPeerInstance } from './chat/targetInstance';
 import { MessageContent, inlineObjectReferencesForMessage, objectReferencesFromInlineTokens, unmentionedObjectReferencesForMessage } from './chat/MessageContent';
 import { addComposerReferenceWithMarker, addPendingComposerReference, promptForComposerSend, removeComposerReference } from './chat/composerReferences';
 import { runPromptOrchestrator } from './chat/runOrchestrator';
@@ -146,6 +148,7 @@ export function ChatPanel({
   const [streamEvents, setStreamEvents] = useState<AgentStreamEvent[]>([]);
   const [guidanceQueue, setGuidanceQueue] = useState<string[]>([]);
   const [referencePickMode, setReferencePickMode] = useState(false);
+  const [targetInstanceName, setTargetInstanceName] = useState(CURRENT_TARGET_INSTANCE_VALUE);
   const [pendingReferences, setPendingReferences] = useState<SciForgeReference[]>([]);
   const [referenceContextMenu, setReferenceContextMenu] = useState<ReferenceContextMenuState | null>(null);
   const activeSessionRef = useRef(session);
@@ -173,6 +176,8 @@ export function ChatPanel({
   const latestWorklogLine = latestRunningEvent(streamEvents);
   const contextWindowState = latestContextWindowState(streamEvents)
     ?? estimateContextWindowState(session, config, streamEvents);
+  const targetPeers = useMemo(() => enabledPeerInstances(config), [config.peerInstances]);
+  const targetPeer = useMemo(() => selectedPeerInstance(config, targetInstanceName), [config.peerInstances, targetInstanceName]);
 
   useEffect(() => {
     activeSessionRef.current = session;
@@ -199,6 +204,11 @@ export function ChatPanel({
     setGuidanceQueue([]);
     setErrorText('');
   }, [scenarioId, session.sessionId]);
+
+  useEffect(() => {
+    if (targetInstanceName === CURRENT_TARGET_INSTANCE_VALUE) return;
+    if (!targetPeer) setTargetInstanceName(CURRENT_TARGET_INSTANCE_VALUE);
+  }, [targetInstanceName, targetPeer]);
 
   useEffect(() => {
     if (autoScrollRef.current) {
@@ -408,6 +418,7 @@ export function ChatPanel({
         scenarioDomain: scenario.domain,
         role,
         config,
+        targetPeer,
         scenarioOverride,
         availableComponentIds,
         defaultComponentIds: scenarioOverride?.defaultComponents?.length
@@ -720,6 +731,13 @@ export function ChatPanel({
         pendingReferences={pendingReferences}
         contextMeter={<ContextWindowMeter state={contextWindowState} running={isSending} />}
         fileInputRef={fileInputRef}
+        topAddon={(
+          <TargetInstanceSelector
+            peers={targetPeers}
+            selected={targetPeer ? targetPeer.name : CURRENT_TARGET_INSTANCE_VALUE}
+            onSelect={setTargetInstanceName}
+          />
+        )}
         referenceChips={(
           <SciForgeReferenceChips
             references={pendingReferences}

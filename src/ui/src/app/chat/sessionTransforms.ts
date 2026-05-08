@@ -23,17 +23,19 @@ export function createOptimisticUserTurnSession({
   prompt,
   references,
   goalSnapshot,
+  targetInstanceLabel,
 }: {
   baseSession: SciForgeSession;
   prompt: string;
   references: SciForgeReference[];
   goalSnapshot: UserGoalSnapshot;
+  targetInstanceLabel?: string;
 }) {
   const now = nowIso();
   const userMessage: SciForgeMessage = {
     id: makeId('msg'),
     role: 'user',
-    content: prompt,
+    content: targetInstanceLabel ? `目标实例：${targetInstanceLabel}\n${prompt}` : prompt,
     createdAt: now,
     status: 'completed',
     references,

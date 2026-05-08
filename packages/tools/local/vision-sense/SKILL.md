@@ -1,6 +1,6 @@
 ---
 name: vision-sense
-description: Vision Sense 插件：把文本指令加截图/图像模态转成 text-only 视觉观察和可审计 vision trace。
+description: Vision Sense 插件：把文本指令加截图/图像模态转成 text-only 视觉观察和可审计 vision trace。Computer Use execution is owned by a separate modular consumer/provider.
 metadata:
   provider: local
   packageRoot: packages/senses/vision-sense
