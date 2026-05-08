@@ -24,7 +24,7 @@
 
 ### T093 Python Conversation Policy 与 Capability Broker 模块化改造
 
-状态：已完成。承接 `docs/SciForgeConversationSessionRecovery.md` 的“模块化 Python 改造建议”和“Capability Broker 与模块化能力感知”。目标是把多轮对话策略、历史恢复、引用摘要、验收恢复和能力选择从 TypeScript runtime 里的散落规则，逐步迁移为可分工、可测试、可审计的 Python policy engine；TypeScript 保留 UI、stream、workspace writer 和 AgentServer 调用壳。
+状态：已完成。承接已合并到 `docs/Architecture.md` 的多轮对话恢复与 Capability Broker 设计。目标是把多轮对话策略、历史恢复、引用摘要、验收恢复和能力选择从 TypeScript runtime 里的散落规则，逐步迁移为可分工、可测试、可审计的 Python policy engine；TypeScript 保留 UI、stream、workspace writer 和 AgentServer 调用壳。
 
 核心原则：
 
@@ -45,7 +45,7 @@ Todo：
 - [x] 实现 `process_events.py`：把 raw backend/tool/workspace 事件归纳为用户可读阶段，保证多轮长任务能看到“正在读什么、写什么、等待什么、下一步是什么”。
 - [x] 增加 TS bridge active mode：TypeScript runtime 调用 Python policy engine，并把 Python response 写回 context/handoff/digest/capability/acceptance/recovery 运行态。
 - [x] 增加测试：Python fixture unit tests、golden tests、过去失败场景 regression、TS bridge smoke、长任务多轮对话 smoke。
-- [x] 更新文档：把真实 contract、manifest 字段、迁移开关、fallback 策略和调试方法同步到 `docs/SciForgeConversationSessionRecovery.md` 与相关 runtime 文档。
+- [x] 更新文档：把真实 contract、manifest 字段、迁移开关、fallback 策略和调试方法同步到 `docs/Architecture.md` 与 `docs/Extending.md`。
 
 验收标准：
 

@@ -291,7 +291,7 @@ export function defaultCapabilitySummaries(): CapabilitySummary[] {
       requiresNetwork: false,
       requiredConfig: [],
       verifierTypes: ['schema'],
-      detailRef: 'docs/CapabilityIntegrationStandard.md#稳定-verifier-abi',
+      detailRef: 'docs/Extending.md#verifier-contract',
     },
     {
       id: 'verifier.agent-rubric',
@@ -310,7 +310,7 @@ export function defaultCapabilitySummaries(): CapabilitySummary[] {
       requiresNetwork: false,
       requiredConfig: [],
       verifierTypes: ['agent'],
-      detailRef: 'docs/CapabilityIntegrationStandard.md#稳定-verifier-abi',
+      detailRef: 'docs/Extending.md#verifier-contract',
     },
     {
       id: 'verifier.environment-diff',
@@ -329,7 +329,7 @@ export function defaultCapabilitySummaries(): CapabilitySummary[] {
       requiresNetwork: false,
       requiredConfig: [],
       verifierTypes: ['environment'],
-      detailRef: 'docs/CapabilityIntegrationStandard.md#安全和风险',
+      detailRef: 'docs/Extending.md#安全与晋升',
     },
     {
       id: 'verifier.human-approval',
@@ -348,7 +348,7 @@ export function defaultCapabilitySummaries(): CapabilitySummary[] {
       requiresNetwork: false,
       requiredConfig: [],
       verifierTypes: ['human'],
-      detailRef: 'docs/CLI_UI_Shared_Agent_Usage.md#verifiers',
+      detailRef: 'docs/Extending.md#verifier-contract',
     },
     {
       id: 'view.artifact-inspector',

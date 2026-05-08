@@ -149,7 +149,7 @@ npm run workspace:server
 
 ## 使用说明
 
-更完整的操作流程见：[docs/UsageInstructions.md](docs/UsageInstructions.md)。
+更完整的操作流程见：[docs/Usage.md](docs/Usage.md)。
 
 这份说明会持续补充截图，当前覆盖：
 
@@ -186,7 +186,7 @@ npm run smoke:repair-handoff-runner
 npm run smoke:stable-version-registry
 ```
 
-更详细的 handoff、稳定同步和排障步骤见：[docs/UsageInstructions.md](docs/UsageInstructions.md#3-自我进化修复)。
+更详细的 handoff、稳定同步和排障步骤见：[docs/Usage.md#双实例互修](docs/Usage.md#双实例互修)。
 
 ## 仓库结构
 

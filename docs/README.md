@@ -1,42 +1,43 @@
-# SciForge 文档索引
+# SciForge 文档
 
-本目录只保留帮助用户、研究者和贡献者理解 SciForge 的项目级文档。某个算法、模块或 provider 的细节文档应放回对应模块目录，例如 vision-sense 的文档位于 `packages/senses/vision-sense/vision_docs/`。
+最后更新：2026-05-08
 
-## 用户入口
+`docs/` 只保留项目级真相源。模块内部的 API、renderer、skill 或 provider 细节继续放在对应 package 的 README 或源码旁边，避免同一个 contract 在多处漂移。
 
-1. [`../README.md`](../README.md)：项目首页，说明 SciForge 的定位、独特性、核心场景和快速启动。
-2. [`UsageInstructions.md`](UsageInstructions.md)：实际操作说明，覆盖论文复现、自我进化修复、Computer Use、多 backend 切换和常用命令。
-3. [`SciForge_Project_Document.md`](SciForge_Project_Document.md)：产品愿景、设计原则、当前模块边界和长期路线。
+## 权威文档
 
-## 架构与扩展
+- [`Usage.md`](Usage.md)：启动、配置、常用工作流、双实例互修、Computer Use 和验证命令。
+- [`Architecture.md`](Architecture.md)：真实运行链路、会话策略、AgentServer/backend gateway、workspace writer、时间线和互修边界。
+- [`Extending.md`](Extending.md)：scenario package、capability brief、sense/action/verifier、UIManifest、interactive view 和 skill promotion 的扩展契约。
+- [`SciForgeConversationSessionRecovery.md`](SciForgeConversationSessionRecovery.md)：多轮对话、session 恢复、上下文选择和 Python 策略层的算法开发参考。
 
-- [`CapabilityIntegrationStandard.md`](CapabilityIntegrationStandard.md)：sense、skill、tool、action、verifier、interactive view 的集成标准。
-- [`ScenarioPackageAuthoring.md`](ScenarioPackageAuthoring.md)：如何编写、验证、发布和复用 scenario package。
-- [`ViewCompositionSchema.md`](ViewCompositionSchema.md)：artifact 如何通过 UIManifest 和 View Composition 渲染。
-- [`SkillPromotionProposal.md`](SkillPromotionProposal.md)：workspace task 如何沉淀为可复用 skill。
-- [`TimelineDecisionCollaborationModel.md`](TimelineDecisionCollaborationModel.md)：研究时间线、决策记录、协作和导出模型。
-- [`CLI_UI_Shared_Agent_Usage.md`](CLI_UI_Shared_Agent_Usage.md)：UI 聊天与 CLI/终端如何共享同一套 Agent handoff contract。
-- [`AgentServerTaskGenerationProtocol.md`](AgentServerTaskGenerationProtocol.md)：AgentServer 如何生成或修复 workspace-local task code，并返回 `ToolPayload`。
-- [`SciForgeConversationSessionRecovery.md`](SciForgeConversationSessionRecovery.md)：多轮对话、历史 session 恢复、上下文选择和 Python 化策略层建议。
+根目录 [`../README.md`](../README.md) 是产品入口和快速开始；本目录的文档是实现细节入口。若出现冲突，以代码和这里列出的文档为准。
 
-## 模块文档
+## 代码真相源
 
-这些文档不放在项目级 `docs/` 下，但对理解对应模块很有用：
+- 启动脚本和 smoke：[`../package.json`](../package.json)
+- UI 配置默认值：[`../src/ui/src/config.ts`](../src/ui/src/config.ts)
+- UI 到 runtime 的 handoff：[`../src/ui/src/api/sciforgeToolsClient.ts`](../src/ui/src/api/sciforgeToolsClient.ts)
+- Workspace writer API：[`../src/runtime/workspace-server.ts`](../src/runtime/workspace-server.ts)
+- Runtime gateway：[`../src/runtime/generation-gateway.ts`](../src/runtime/generation-gateway.ts)
+- Python conversation policy bridge：[`../src/runtime/conversation-policy/apply.ts`](../src/runtime/conversation-policy/apply.ts)、[`../packages/conversation-policy-python/src/sciforge_conversation`](../packages/conversation-policy-python/src/sciforge_conversation)
+- Scenario contracts：[`../packages/scenario-core/src`](../packages/scenario-core/src)
+- Capability registry：[`../src/shared/capabilityRegistry.ts`](../src/shared/capabilityRegistry.ts)
+- Sense / verifier ABI：[`../src/shared/senseProvider.ts`](../src/shared/senseProvider.ts)、[`../src/shared/verification.ts`](../src/shared/verification.ts)
+- Interactive view registry：[`../packages/ui-components/README.md`](../packages/ui-components/README.md)
+- Skill registry：[`../packages/skills/README.md`](../packages/skills/README.md)
+- Vision sense：[`../packages/senses/vision-sense/README.md`](../packages/senses/vision-sense/README.md)
+- Computer Use action loop：[`../packages/computer-use/README.md`](../packages/computer-use/README.md)
 
-- [`../packages/senses/vision-sense/README.md`](../packages/senses/vision-sense/README.md)：vision-sense 的能力边界、配置和测试。
-- [`../packages/senses/vision-sense/vision_docs/vision_computer_use_agent_mvp.md`](../packages/senses/vision-sense/vision_docs/vision_computer_use_agent_mvp.md)：Vision + Computer Use 最小闭环。
-- [`../packages/senses/vision-sense/vision_docs/vision_computer_use_agent_design_v2.md`](../packages/senses/vision-sense/vision_docs/vision_computer_use_agent_design_v2.md)：Vision + Computer Use 设计细节。
-- [`../packages/senses/vision-sense/vision_docs/VISION_FIRST_HYBRID_COMPUTER_USE_STRATEGY.md`](../packages/senses/vision-sense/vision_docs/VISION_FIRST_HYBRID_COMPUTER_USE_STRATEGY.md)：视觉优先的混合 Computer Use 策略。
-- [`../packages/senses/vision-sense/vision_docs/KV_GROUND_SERVICE_GUIDANCE.md`](../packages/senses/vision-sense/vision_docs/KV_GROUND_SERVICE_GUIDANCE.md)：KV-Ground 部署、路径映射和排障。
+## 当前状态
 
-## 示例
+SciForge 是活跃研发原型。当前实现重点是 workspace-backed 科研工作台、真实 AgentServer/backend 调用、结构化 artifact、可审计 ExecutionUnit、Python conversation-policy、多 backend 切换、vision-sense/Computer Use 通路、反馈收件箱和双实例互修。
 
-- [`examples/workspace-scenario/package.json`](examples/workspace-scenario/package.json)：workspace scenario package 示例。
+默认内置 4 个 scenario：文献证据评估、结构探索、组学差异分析、生物医学知识图谱。它们的真实 contract 来自 [`../packages/scenario-core/src/scenarioSpecs.ts`](../packages/scenario-core/src/scenarioSpecs.ts)，UI 中的页面配置来自 [`../src/ui/src/data.ts`](../src/ui/src/data.ts)。
 
-## 文档维护规则
+## 维护规则
 
-- 项目级 `docs/` 只放能帮助理解 SciForge 整体产品、架构、使用和扩展方式的文档。
-- 算法、模块、provider、runner 或具体实现细节文档放在对应 package/module 内，并在本索引中引用。
-- 项目自有文档使用中文；代码标识、协议字段、命令和 package 名称可保留英文。
-- 不把 demo/placeholder 说成已完成能力；失败边界必须写清楚。
-- 新增核心能力时，同步更新 README、本索引和对应 package README。
+- 不再新增项目级长文档。新内容优先合并到 `Usage.md`、`Architecture.md` 或 `Extending.md`；多轮对话算法细节继续沉淀到 `SciForgeConversationSessionRecovery.md`。
+- 文档描述字段、命令或协议时，必须指向代码真相源。
+- 模块专有细节留在模块目录，例如 `packages/ui-components/*/README.md` 或 `packages/senses/vision-sense/vision_docs/`。
+- 删除或重命名文档时，同步更新 README、代码里的 `detailRef` 和 smoke 测试。

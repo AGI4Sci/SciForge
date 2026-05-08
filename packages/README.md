@@ -3,7 +3,7 @@
 该目录包含 SciForge 的可复用能力和运行时支持包。
 
 在新增或修改 package 之前，请先遵循集成标准：
-[`docs/CapabilityIntegrationStandard.md`](../docs/CapabilityIntegrationStandard.md)。
+[`docs/Extending.md`](../docs/Extending.md)。
 
 这份标准定义了 `senses`、`actions`、`verifiers`、`ui-components`、`skills`、`tools` 以及其它能力应该如何暴露给 agent，避免 agent 因可用能力过多而分散注意力，同时保留灵活选择能力的空间。
 

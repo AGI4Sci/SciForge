@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { cp, mkdtemp, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { buildBuiltInScenarioPackage } from '../../packages/scenario-core/src/scenarioPackage.js';
 
 const requiredDocs = [
-  'docs/SciForge_Project_Document.md',
-  'docs/ScenarioPackageAuthoring.md',
-  'docs/DependencyRiskRegister.md',
+  'docs/README.md',
+  'docs/Usage.md',
+  'docs/Architecture.md',
+  'docs/Extending.md',
+  'docs/SciForgeConversationSessionRecovery.md',
   'README.md',
 ];
 
@@ -16,8 +19,24 @@ for (const path of requiredDocs) {
   assert.ok(text.length > 200, `${path} should not be empty`);
 }
 
+const docsIndex = await readFile('docs/README.md', 'utf8');
+assert.match(docsIndex, /\[`Usage\.md`\]\(Usage\.md\)/);
+assert.match(docsIndex, /\[`Architecture\.md`\]\(Architecture\.md\)/);
+assert.match(docsIndex, /\[`Extending\.md`\]\(Extending\.md\)/);
+assert.match(docsIndex, /\[`SciForgeConversationSessionRecovery\.md`\]\(SciForgeConversationSessionRecovery\.md\)/);
+
+const usageText = await readFile('docs/Usage.md', 'utf8');
+assert.match(usageText, /npm run dev/);
+const architectureText = await readFile('docs/Architecture.md', 'utf8');
+assert.match(architectureText, /\/api\/agent-server\/runs\/stream/);
+const extendingText = await readFile('docs/Extending.md', 'utf8');
+assert.match(extendingText, /\.sciforge\/scenarios\/<safe-id>/);
+
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-docs-scenario-'));
-await cp('docs/examples/workspace-scenario', join(workspace, '.sciforge', 'scenarios', 'example-literature-service'), { recursive: true });
+const scenarioPackage = buildBuiltInScenarioPackage('literature-evidence-review', '2026-05-08T00:00:00.000Z');
+const scenarioDir = join(workspace, '.sciforge', 'scenarios', scenarioPackage.id);
+await mkdir(scenarioDir, { recursive: true });
+await writeFile(join(scenarioDir, 'package.json'), JSON.stringify(scenarioPackage, null, 2));
 
 const port = 20080 + Math.floor(Math.random() * 1000);
 const child = spawn(process.execPath, ['--import', 'tsx', 'src/runtime/workspace-server.ts'], {
@@ -31,13 +50,13 @@ const child = spawn(process.execPath, ['--import', 'tsx', 'src/runtime/workspace
 
 try {
   await waitForHealth(port);
-  const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/scenarios/get?workspacePath=${encodeURIComponent(workspace)}&id=example-literature-service`);
+  const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/scenarios/get?workspacePath=${encodeURIComponent(workspace)}&id=${scenarioPackage.id}`);
   const text = await response.text();
   assert.equal(response.status, 200, text);
-  const json = JSON.parse(text) as { package: { id: string; qualityReport?: { ok: boolean } } };
-  assert.equal(json.package.id, 'example-literature-service');
-  assert.equal(json.package.qualityReport?.ok, true);
-  console.log('[ok] docs and example scenario package are readable by workspace API');
+  const json = JSON.parse(text) as { package: { id: string; scenario?: { skillDomain?: string } } };
+  assert.equal(json.package.id, scenarioPackage.id);
+  assert.equal(json.package.scenario?.skillDomain, 'literature');
+  console.log('[ok] consolidated docs and scenario package contract are readable');
 } finally {
   child.kill('SIGTERM');
 }
