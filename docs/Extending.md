@@ -131,6 +131,13 @@ Provider kind 包括 `human`、`agent`、`rule`、`schema`、`test`、`environme
 
 ## Module Boundaries
 
+新增模块先判断它属于 `src` 固定平台秩序，还是 `packages` 插拔能力语义：
+
+- 回答“系统怎么运行”的逻辑进 `src/`：app shell、workspace writer、runtime server、transport、stream lifecycle、registry loader、broker shell、provider dispatch、validation/repair loop、ref resolver、artifact persistence、permission/safety、ledger writer 和 boundary smoke。
+- 回答“系统能做什么”的逻辑进 `packages/`：observe、skills、actions、verifiers、views、import/export、scenario package、provider adapter、mock fixture 和 composed capability。
+- 高频稳定路径如果只是平台生命周期或安全秩序，留在 `src/`；如果表达领域语义、artifact/component/provider/scenario 选择或能力组合，必须做成 package capability。
+- `src` 不硬编码 package-owned 领域语义；`packages` 不绕过 `src` 的 refs、validation、persistence、permission 和 safety 边界。
+
 新增代码默认落点：
 
 - `packages/*` 放可复用 capability、renderer、contract 和 skill。它们不能 import `src/ui/src/**`、`src/runtime/**` 或 `src/shared/**` 私有文件；共享类型先放到 `packages/contracts/runtime`、`packages/scenarios/core` 或包自己的 public export。
@@ -141,6 +148,22 @@ Provider kind 包括 `human`、`agent`、`rule`、`schema`、`test`、`environme
 - `src/ui/src/app/**` 放 app shell、页面组合和用户交互 orchestration。UI 代码应 import package root 或 package.json 明确 export 的 subpath，不直接深 import package `src` internals。
 - `src/shared/**` 不作为长期目录。共享协议进 packages contract，执行逻辑进 runtime，界面逻辑进 ui。
 
+Package capability 至少声明：
+
+- manifest：id、version、owner package、brief、routing tags、side effects、safety、lifecycle layer 和 provider variants。
+- schema：输入、输出、artifact refs、evidence refs、失败形态和可选 fallback policy。
+- validator：校验 output、refs、artifact、evidence、side effects 和 provider diagnostics。
+- provider：真实实现、mock/test fixture 或 external adapter；有副作用时必须通过 action contract。
+- repair hints：给 backend 的结构化失败原因、可恢复动作、相关 refs、stdout/stderr/log refs 和下一步建议。
+
+Package manifest、README 或 skill contract 不能声称拥有 runtime lifecycle ownership。以下职责只能由 `src` 编排或授权：
+
+- backend run lifecycle、stream resume/poll、global routing shell。
+- workspace ref resolution、artifact persistence、materialization、ledger 写入。
+- global permission/safety policy、sandbox policy、approval gate。
+- contract validation / repair loop 主编排、provider dispatch 主流程。
+- app shell、session state、UI orchestration 和 workspace writer 生命周期。
+
 边界 smoke：
 
 ```bash
@@ -148,6 +171,18 @@ npm run smoke:module-boundaries
 ```
 
 当前少量历史例外由 [`../tools/check-module-boundaries.ts`](../tools/check-module-boundaries.ts) 以 warning 打印，并在 T099 后续迁移中收敛；新增未登记的 package -> app/runtime 私有 import 或 UI -> package internal deep import 会失败。
+
+T122 相关 smoke 的目的：
+
+- `smoke:fixed-platform-boundary`：检查新增逻辑是否把平台秩序留在 `src`、能力语义放进 `packages`。
+- `smoke:no-src-capability-semantics`：扫描 `src/**`，阻止新增 artifact id、component id、provider id、scenario id、domain regex 等 package-owned 语义；当前历史命中按 file/rule 计数基线追踪，迁移后应下调基线。
+- `smoke:capability-manifest-registry`：要求 package-owned capabilities 从 manifest/catalog 发现，而不是只在 `src` 硬编码。
+- `smoke:workspace-package-metadata`：检查嵌套 package 是否有 name/version、workspace 覆盖，且能声明或继承 SciForge metadata，避免 package 只靠目录约定被发现。
+- `smoke:package-runtime-boundary`：阻止 package manifest、README 和 SKILL contract 声称 persistence、global safety、stream lifecycle、workspace ref resolution 等 runtime ownership。
+
+维护 allowlist/baseline 时只登记历史迁移项或明确的短期 adapter。每条例外都应写清 owner、迁移任务、删除条件和具体符号/路径；不要用宽泛 glob 掩盖新增违规，迁移删除旧语义后同步降低基线。
+
+在 T122 迁移完全完成前，新增模块也应按上述规则自检；脚本中的 tracked warnings 只代表已登记的历史迁移面。
 
 ## UIManifest 与 View Composition
 
@@ -234,8 +269,11 @@ Proposal 写入：
 
 - [ ] 找到源码真相源，避免复制旧文档里的字段。
 - [ ] 写清楚输入 refs、输出 artifact、失败模式和 side effects。
+- [ ] 先判断该模块属于 `src` 固定平台秩序还是 `packages` 插拔能力语义。
+- [ ] 如果是 package capability，补 manifest、schema、validator、provider 和 repair hints。
 - [ ] 如果是 scenario，补 `tests`、validation report 和 quality report。
 - [ ] 如果是 UI component，补 manifest、fixtures、README 和 renderer test。
 - [ ] 如果是 sense/action/verifier，补 brief、request/response 或 result contract。
+- [ ] 不在 package contract 中声称 runtime lifecycle ownership。
 - [ ] 如果会被 agent 选择，只给主 agent brief，把大说明放在懒加载 README/contract。
 - [ ] 跑 `npm run typecheck`、`npm run test`、`npm run smoke:module-boundaries` 和相关 smoke。

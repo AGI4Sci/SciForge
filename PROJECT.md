@@ -68,15 +68,15 @@ Todo：
 - [ ] `packages -> src` P2：评估 `packages/scenarios/core/src/uiPlanCompiler.ts`、`validationGate.ts`、`scenarioPackage.ts` 中 platform-wide compile/validation 行为；scenario specs、contracts、elementTypes 留在 package，运行期编译/校验进入 `src/runtime/scenario-policy` 或 UI compiler。
 - [ ] 明确保留在 `src`：`src/runtime/workspace-server.ts`、`src/runtime/server/**`、`generation-gateway.ts`、`workspace-runtime-gateway.ts`、`workspace-task-runner.ts`、`task-projects.ts`、gateway adapter/orchestration 文件、`src/ui/src/app/**` React app shell。
 - [ ] 明确保留在 `packages`：`packages/presentation/components/**`、`packages/presentation/interactive-views/**`、`packages/presentation/design-system/**`、`packages/skills/**`、`packages/actions/computer-use/**`、`packages/observe/vision/**`、`packages/verifiers/**`、`packages/contracts/runtime/**`、`packages/scenarios/core/src/{scenarioSpecs,contracts,elementTypes}.ts`。
-- [ ] 增加 `smoke:fixed-platform-boundary`，实现为 `tools/check-fixed-platform-boundary.ts` 或扩展 `tools/check-module-boundaries.ts`，检查 `src` 固定平台与 `packages` 插拔能力边界。
-- [ ] 增加 `smoke:no-src-capability-semantics`，扫描 `src/**` 是否硬编码 package-owned artifact ids、component ids、provider ids、scenario ids、domain regex；临时 allowlist 必须关联本任务迁移项。
-- [ ] 将 `smoke:no-src-capability-semantics` 种子设为当前发现：`src/runtime/runtime-ui-manifest.ts` 的 prompt regex/domain defaults/component-to-artifact mapping；`src/runtime/gateway/artifact-reference-context.ts` 的 `paper-list`/`research-report`/skillDomain regex；`src/ui/src/app/chat/runOrchestrator.ts` 的 follow-up intent regex 和 `research-report -> report-viewer`；`src/ui/src/app/results/viewPlanResolver.ts` 的 artifact display intent、domain regex ranking 和 primary result ranking。
-- [ ] 增加 `smoke:capability-manifest-registry`，要求 package-owned capabilities 从 manifest/catalog 发现，而不是只在 `src` 中硬编码。
-- [ ] 增加 `smoke:workspace-package-metadata`，扩展当前 package metadata 检查到嵌套 package，覆盖现有多个 `package.json`。
-- [ ] 增加 `smoke:package-runtime-boundary`，禁止 package manifests 声称或实现 persistence、global safety、stream lifecycle、workspace ref resolution 等 runtime lifecycle ownership。
+- [x] 增加 `smoke:fixed-platform-boundary`，实现为 `tools/check-fixed-platform-boundary.ts` 或扩展 `tools/check-module-boundaries.ts`，检查 `src` 固定平台与 `packages` 插拔能力边界。
+- [x] 增加 `smoke:no-src-capability-semantics`，扫描 `src/**` 是否硬编码 package-owned artifact ids、component ids、provider ids、scenario ids、domain regex；临时 allowlist 必须关联本任务迁移项。
+- [x] 将 `smoke:no-src-capability-semantics` 种子设为当前发现：`src/runtime/runtime-ui-manifest.ts` 的 prompt regex/domain defaults/component-to-artifact mapping；`src/runtime/gateway/artifact-reference-context.ts` 的 `paper-list`/`research-report`/skillDomain regex；`src/ui/src/app/chat/runOrchestrator.ts` 的 follow-up intent regex 和 `research-report -> report-viewer`；`src/ui/src/app/results/viewPlanResolver.ts` 的 artifact display intent、domain regex ranking 和 primary result ranking。
+- [x] 增加 `smoke:capability-manifest-registry`，要求 package-owned capabilities 从 manifest/catalog 发现，而不是只在 `src` 中硬编码。
+- [x] 增加 `smoke:workspace-package-metadata`，扩展当前 package metadata 检查到嵌套 package，覆盖现有多个 `package.json`。
+- [x] 增加 `smoke:package-runtime-boundary`，禁止 package manifests 声称或实现 persistence、global safety、stream lifecycle、workspace ref resolution 等 runtime lifecycle ownership。
 - [ ] 更新 `tools/check-module-boundaries.ts`、`tools/check-package-catalog.ts`、`scripts/check-ui-components-package-boundaries.ts`、`package.json`、`docs/Extending.md`、`packages/README.md`，把上述 smoke 纳入验证。
 - [ ] 针对 boundary-heavy 长文件补拆分计划或降低阈值：`src/runtime/generation-gateway.ts`、`src/runtime/workspace-server.ts`、`src/ui/src/app/ResultsRenderer.tsx`、`src/ui/src/app/ChatPanel.tsx`、`src/runtime/workspace-task-input.ts`、`src/runtime/gateway/agentserver-prompts.ts`。
-- [ ] 更新 `docs/Extending.md` 和 `packages/README.md`：新增模块应先判断属于平台秩序还是能力语义，再选择 `src/` 或 `packages/`。
+- [x] 更新 `docs/Extending.md` 和 `packages/README.md`：新增模块应先判断属于平台秩序还是能力语义，再选择 `src/` 或 `packages/`。
 - [ ] 删除与该边界冲突的旧 registry、旧 adapter 和旧 direct import。
 
 验收标准：
