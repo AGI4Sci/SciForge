@@ -1,5 +1,5 @@
-import type { ScenarioPackage } from './scenarioPackage';
-import { validateScenarioPackage, type ValidationReport } from './validationGate';
+import type { ScenarioPackage } from '@sciforge/scenario-core/scenario-package';
+import { validateScenarioPackage, type ValidationReport } from '@sciforge/scenario-core/validation-gate';
 
 export type ScenarioRuntimeSmokeMode = 'dry-run' | 'execute-package-skill';
 
@@ -30,7 +30,9 @@ export interface ScenarioRuntimeSmokeResult {
   };
 }
 
-export type ScenarioRuntimeSmokeExecutor = (request: ScenarioRuntimeSmokeRequest) => Promise<Pick<ScenarioRuntimeSmokeResult, 'ok' | 'execution'>>;
+export type ScenarioRuntimeSmokeExecutor = (
+  request: ScenarioRuntimeSmokeRequest,
+) => Promise<Pick<ScenarioRuntimeSmokeResult, 'ok' | 'execution'>>;
 
 export async function runScenarioRuntimeSmoke(
   request: ScenarioRuntimeSmokeRequest,

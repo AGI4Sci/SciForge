@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  looksLikeVisionSenseComputerUseRequest,
+  parseVisionSenseAppAliases,
+  requestedVisionSenseAppNameForPrompt,
   visionSenseCompletionPolicyModes,
   visionSenseFocusRegionGroundingId,
   visionSenseGroundingIds,
@@ -26,4 +29,32 @@ test('vision-sense package owns planner domain prompt policy', () => {
   assert.ok(visionSensePlannerPromptPolicy.domainTaskInstructions.length >= 3);
   assert.ok(visionSensePlannerPromptPolicy.domainTaskInstructions.some((instruction) => instruction.includes('document or slide creation tasks')));
   assert.ok(visionSensePlannerPromptPolicy.domainTaskInstructions.some((instruction) => instruction.includes('toolbar-or-ribbon actions')));
+});
+
+test('vision-sense package owns computer-use intent prompt policy', () => {
+  assert.equal(
+    looksLikeVisionSenseComputerUseRequest('第二轮：基于上一轮结论，请挑出最值得跟进的 5 篇论文。不要重新检索，继续使用上一轮上下文。'),
+    false,
+  );
+  assert.equal(looksLikeVisionSenseComputerUseRequest('点击浏览器里的搜索框并输入 KRAS G12D。'), true);
+  assert.equal(
+    looksLikeVisionSenseComputerUseRequest('Open the desktop presentation app and create a GUI Agent slide through computer use.'),
+    true,
+  );
+});
+
+test('vision-sense package owns app alias prompt line extraction policy', () => {
+  const aliases = parseVisionSenseAppAliases(JSON.stringify({
+    Browser: 'Google Chrome',
+    browser: 'Should lose to longer case-insensitive boundary match order',
+    浏览器: 'Safari',
+  }));
+
+  assert.equal(
+    requestedVisionSenseAppNameForPrompt('\n  Click in Browser and type KRAS.\nIgnore later browser mentions.', aliases),
+    'Google Chrome',
+  );
+  assert.equal(requestedVisionSenseAppNameForPrompt('打开浏览器并输入 KRAS。', aliases), 'Safari');
+  assert.equal(requestedVisionSenseAppNameForPrompt('Use the filebrowser helper.', aliases), undefined);
+  assert.deepEqual(parseVisionSenseAppAliases('{bad json'), {});
 });

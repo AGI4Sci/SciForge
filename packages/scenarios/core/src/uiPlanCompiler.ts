@@ -1,7 +1,7 @@
 import type { ScenarioId, UIManifestSlot } from './contracts';
 import { SCENARIO_SPECS } from './scenarioSpecs';
 import { elementRegistry } from './elementRegistry';
-import type { ArtifactSchemaElement, ElementRegistry, UIComponentElement } from './elementTypes';
+import type { ArtifactSchemaElement, ElementRegistry, RegistryValidationIssue, UIComponentElement } from './elementTypes';
 
 export interface UIPlan {
   id: string;
@@ -63,6 +63,35 @@ export function compileUIPlanForScenario(
 
 export function compileSlotsForScenario(scenarioId: ScenarioId): UIManifestSlot[] {
   return compileUIPlanForScenario(scenarioId).slots;
+}
+
+export interface UIPlanValidationScenario {
+  outputArtifacts: Array<{ type: string }>;
+  fallbackComponentId: string;
+}
+
+export function validateUIPlanAgainstScenario(
+  scenario: UIPlanValidationScenario,
+  uiPlan: Pick<UIPlan, 'slots'>,
+  registry: ElementRegistry = elementRegistry,
+): RegistryValidationIssue[] {
+  const issues: RegistryValidationIssue[] = [];
+  const componentIds = new Set(registry.components.map((component) => component.componentId));
+
+  for (const slot of uiPlan.slots) {
+    if (!componentIds.has(slot.componentId)) {
+      issues.push({ severity: 'error', code: 'unknown-ui-component', message: `Unknown UI component: ${slot.componentId}`, elementId: slot.componentId });
+    }
+    if (slot.artifactRef && !scenario.outputArtifacts.some((artifact) => artifact.type === slot.artifactRef)) {
+      issues.push({ severity: 'warning', code: 'slot-artifact-not-produced-by-scenario', message: `${slot.componentId} references artifact outside scenario outputs: ${slot.artifactRef}`, elementId: slot.componentId });
+    }
+  }
+
+  if (!componentIds.has(scenario.fallbackComponentId)) {
+    issues.push({ severity: 'error', code: 'missing-scenario-fallback', message: `Scenario fallback component is missing: ${scenario.fallbackComponentId}`, elementId: scenario.fallbackComponentId });
+  }
+
+  return issues;
 }
 
 function pickComponentForSlot(

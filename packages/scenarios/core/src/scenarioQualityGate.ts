@@ -1,6 +1,5 @@
 import type { ExportPolicyDecision } from './contracts';
 import type { ScenarioPackage } from './scenarioPackage';
-import type { ScenarioRuntimeSmokeResult } from './runtimeSmoke';
 import { validateScenarioPackage, type ValidationReport } from './validationGate';
 
 export type QualitySeverity = 'blocking' | 'warning' | 'note';
@@ -32,7 +31,6 @@ export interface ScenarioQualityReport {
   };
   items: ScenarioQualityItem[];
   validationReport: ValidationReport;
-  runtimeSmoke?: ScenarioRuntimeSmokeResult;
   runtimeHealth?: ScenarioRuntimeHealthItem[];
   exportPolicy?: ExportPolicyDecision;
   versionDiff?: ScenarioPackageDiff;
@@ -49,7 +47,6 @@ export function buildScenarioQualityReport(params: {
   package: ScenarioPackage;
   previousPackage?: ScenarioPackage;
   validationReport?: ValidationReport;
-  runtimeSmoke?: ScenarioRuntimeSmokeResult;
   runtimeHealth?: ScenarioRuntimeHealthItem[];
   exportPolicy?: ExportPolicyDecision;
   checkedAt?: string;
@@ -66,15 +63,6 @@ export function buildScenarioQualityReport(params: {
       recoverActions: issue.severity === 'error' ? ['fix-validation-error', 'save-as-draft'] : ['review-warning'],
     })),
   ];
-
-  if (params.runtimeSmoke && !params.runtimeSmoke.ok) {
-    items.push({
-      severity: 'blocking',
-      code: 'runtime-smoke-failed',
-      message: params.runtimeSmoke.execution?.reason || 'Runtime smoke failed.',
-      recoverActions: params.runtimeSmoke.execution?.recoverActions ?? ['inspect-runtime-smoke', 'save-as-draft'],
-    });
-  }
 
   for (const health of params.runtimeHealth ?? []) {
     if (health.status === 'offline') {
@@ -131,7 +119,6 @@ export function buildScenarioQualityReport(params: {
     },
     items,
     validationReport,
-    runtimeSmoke: params.runtimeSmoke,
     runtimeHealth: params.runtimeHealth,
     exportPolicy: params.exportPolicy,
     versionDiff,

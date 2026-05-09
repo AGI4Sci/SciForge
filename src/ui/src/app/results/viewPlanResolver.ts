@@ -5,20 +5,26 @@ import type { ScenarioId } from '../../data';
 import { artifactForObjectReference, syntheticArtifactForObjectReference } from '../../../../../packages/support/object-references';
 import type { ResultFocusMode } from './ResultShell';
 import {
+  blockedInteractiveViewDesignForIntent,
   componentMatchesInteractiveViewFocus,
   compactInteractiveViewPlanItems,
-  compareInteractiveViewModulesForArtifact,
   compareInteractiveViewPlanOrder,
   compareInteractiveViewResultPresentationItems,
-  defaultInteractiveViewAcceptanceCriteria,
-  defaultInteractiveViewFallbackAcceptable,
+  findBestInteractiveArtifactForModule,
+  findBestInteractiveArtifactForType,
+  findBestInteractiveViewModuleForArtifact,
+  findBestInteractiveViewModuleForArtifactType,
+  findInteractiveViewModuleById,
+  findInteractiveViewModuleForObjectReference,
+  findRenderableInteractiveArtifact,
+  inferDisplayIntentFromInteractiveArtifacts,
   interactiveViewFallbackModuleIds,
   interactiveViewModuleAcceptsArtifact,
+  interactiveViewPlanSourceIds,
   interactiveViewVisiblePresentationGroupKey,
   isAuditOnlyInteractiveViewPlanItem,
   isEvidenceInteractiveArtifactType,
   isEvidenceInteractiveViewComponent,
-  isUnknownArtifactInspectorComponent,
   resolveInteractiveViewPlanSection,
   validateInteractiveViewModuleBinding,
   type InteractiveViewBindingStatus,
@@ -92,8 +98,8 @@ export function resolveViewPlan({
   const effectiveRun = activeRun ?? session.runs.at(-1);
   const resultArtifacts = artifactsForResultPresentation(session, effectiveRun);
   const displayIntent = effectiveRun?.status === 'failed'
-    ? inferDisplayIntentFromArtifacts(resultArtifacts)
-    : extractDisplayIntent(effectiveRun) ?? inferDisplayIntentFromArtifacts(resultArtifacts);
+    ? inferDisplayIntentFromInteractiveArtifacts(resultArtifacts, uiModuleRegistry)
+    : extractDisplayIntent(effectiveRun) ?? inferDisplayIntentFromInteractiveArtifacts(resultArtifacts, uiModuleRegistry);
   const runtimeSlots = session.runs.length && session.uiManifest.length ? session.uiManifest : [];
   const seedSlots = (runtimeSlots.length ? runtimeSlots : defaultSlots?.length ? defaultSlots : defaultSlotsForAgent(scenarioId))
     .slice()
@@ -142,9 +148,10 @@ export function resolveViewPlan({
 
   for (const reference of [focusedObjectReference, ...pinnedObjectReferences].filter((item): item is ObjectReference => Boolean(item))) {
     const artifact = artifactForObjectReference(reference, session) ?? syntheticArtifactForObjectReference(reference, scenarioId);
-    const module = moduleForObjectReference(reference, artifact) ?? (artifact ? findBestModuleForArtifact(artifact) : moduleById(interactiveViewFallbackModuleIds.genericInspector));
+    const module = findInteractiveViewModuleForObjectReference({ reference, artifact, modules: uiModuleRegistry })
+      ?? (artifact ? findBestInteractiveViewModuleForArtifact(uiModuleRegistry, artifact) : findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.genericInspector));
     if (module) {
-      addItem(module, artifact, 'object-focus', {
+      addItem(module, artifact, interactiveViewPlanSourceIds.objectFocus, {
         title: reference.title,
         artifactRef: artifact?.id ?? reference.ref,
         priority: -10,
@@ -153,39 +160,39 @@ export function resolveViewPlan({
   }
 
   for (const moduleId of displayIntent.preferredModules ?? []) {
-    const module = moduleById(moduleId);
+    const module = findInteractiveViewModuleById(uiModuleRegistry, moduleId);
     if (!module) {
       diagnostics.push(`UI module 未发布：${moduleId}`);
       continue;
     }
-    addItem(module, findBestArtifactForModule(resultArtifacts, module), 'display-intent');
+    addItem(module, findBestInteractiveArtifactForModule(resultArtifacts, module), interactiveViewPlanSourceIds.displayIntent);
   }
 
   for (const artifactType of displayIntent.requiredArtifactTypes ?? []) {
-    const artifact = findBestArtifactForType(resultArtifacts, artifactType);
-    const module = findBestModuleForArtifactType(artifact?.type ?? artifactType, displayIntent.preferredModules);
+    const artifact = findBestInteractiveArtifactForType(resultArtifacts, artifactType);
+    const module = findBestInteractiveViewModuleForArtifactType(uiModuleRegistry, artifact?.type ?? artifactType, displayIntent.preferredModules);
     if (module) {
-      addItem(module, artifact, 'display-intent', {}, artifact ? undefined : `等待 artifact type=${artifactType}`);
+      addItem(module, artifact, interactiveViewPlanSourceIds.displayIntent, {}, artifact ? undefined : `等待 artifact type=${artifactType}`);
     } else {
       diagnostics.push(`没有已发布 UI module 可消费 artifact type=${artifactType}`);
     }
   }
 
   for (const artifact of resultArtifacts.slice(0, 12)) {
-    const module = findBestModuleForArtifact(artifact);
-    if (module) addItem(module, artifact, 'artifact-inferred');
+    const module = findBestInteractiveViewModuleForArtifact(uiModuleRegistry, artifact);
+    if (module) addItem(module, artifact, interactiveViewPlanSourceIds.artifactInferred);
   }
 
   for (const slot of seedSlots) {
-    const artifact = findRenderableArtifact(resultArtifacts, slot.artifactRef);
-    const currentModule = uiModuleRegistry.find((module) => module.componentId === slot.componentId && moduleAcceptsArtifact(module, artifact?.type ?? slot.artifactRef));
-    const replacementModule = artifact ? findBestModuleForArtifact(artifact) : uiModuleRegistry.find((module) => module.componentId === slot.componentId);
-    const module = currentModule ?? replacementModule ?? moduleById(interactiveViewFallbackModuleIds.genericInspector);
+    const artifact = findRenderableInteractiveArtifact(resultArtifacts, slot.artifactRef);
+    const currentModule = uiModuleRegistry.find((module) => module.componentId === slot.componentId && interactiveViewModuleAcceptsArtifact(module, artifact?.type ?? slot.artifactRef));
+    const replacementModule = artifact ? findBestInteractiveViewModuleForArtifact(uiModuleRegistry, artifact) : uiModuleRegistry.find((module) => module.componentId === slot.componentId);
+    const module = currentModule ?? replacementModule ?? findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.genericInspector);
     if (!module) continue;
     if (artifact && slot.componentId !== module.componentId) {
       diagnostics.push(`${slot.componentId} -> ${artifact.type} 已改由 ${module.componentId} 渲染，避免组件/artifact 错配。`);
     }
-    addItem(module, artifact, runtimeSlots.includes(slot) ? 'runtime-manifest' : 'default-plan', {
+    addItem(module, artifact, runtimeSlots.includes(slot) ? interactiveViewPlanSourceIds.runtimeManifest : interactiveViewPlanSourceIds.defaultPlan, {
       ...slot,
       componentId: module.componentId,
       title: slot.title ?? module.title,
@@ -195,10 +202,10 @@ export function resolveViewPlan({
   }
 
   if (session.claims.length || resultArtifacts.some((artifact) => isEvidenceInteractiveArtifactType(artifact.type))) {
-    addItem(moduleById(interactiveViewFallbackModuleIds.evidenceMatrix) ?? uiModuleRegistry[3], undefined, 'fallback');
+    addItem(findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.evidenceMatrix) ?? uiModuleRegistry[3], undefined, interactiveViewPlanSourceIds.fallback);
   }
   if (session.executionUnits.length) {
-    addItem(moduleById(interactiveViewFallbackModuleIds.executionProvenance) ?? uiModuleRegistry[4], undefined, 'fallback');
+    addItem(findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.executionProvenance) ?? uiModuleRegistry[4], undefined, interactiveViewPlanSourceIds.fallback);
   }
 
   const ordered = compactInteractiveViewPlanItems(items, {
@@ -215,7 +222,13 @@ export function resolveViewPlan({
   };
   ordered.forEach((item) => sections[item.section].push(item));
 
-  const blockedDesign = blockedDesignForIntent(displayIntent, resultArtifacts, ordered, effectiveRun);
+  const blockedDesign = blockedInteractiveViewDesignForIntent({
+    displayIntent,
+    artifacts: resultArtifacts,
+    items: ordered,
+    modules: uiModuleRegistry,
+    resumeRunId: effectiveRun?.id,
+  });
   return {
     displayIntent,
     diagnostics,
@@ -252,22 +265,6 @@ function artifactsForResultPresentation(session: SciForgeSession, activeRun?: Sc
   return session.artifacts;
 }
 
-function inferDisplayIntentFromArtifacts(artifacts: RuntimeArtifact[] = []): DisplayIntent {
-  const artifactTypes = Array.from(new Set(artifacts.map((artifact) => artifact.type)));
-  const requiredArtifactTypes = artifactTypes.slice(0, 4);
-  const preferredModules = requiredArtifactTypes
-    .map((artifactType) => findBestModuleForArtifactType(artifactType)?.moduleId)
-    .filter((moduleId): moduleId is string => Boolean(moduleId));
-  return {
-    primaryGoal: '展示当前 session 的 runtime artifacts',
-    requiredArtifactTypes,
-    preferredModules: Array.from(new Set(preferredModules)),
-    fallbackAcceptable: defaultInteractiveViewFallbackAcceptable,
-    acceptanceCriteria: defaultInteractiveViewAcceptanceCriteria,
-    source: 'fallback-inference',
-  };
-}
-
 function parseMaybeJsonObject(value: unknown): Record<string, unknown> | undefined {
   if (isRecord(value)) return value;
   if (typeof value !== 'string') return undefined;
@@ -279,76 +276,6 @@ function parseMaybeJsonObject(value: unknown): Record<string, unknown> | undefin
   } catch {
     return undefined;
   }
-}
-
-function moduleById(moduleId: string) {
-  return uiModuleRegistry.find((module) => module.moduleId === moduleId);
-}
-
-function moduleForObjectReference(reference: ObjectReference, artifact?: RuntimeArtifact) {
-  if (reference.preferredView) {
-    const preferred = uiModuleRegistry.find((module) => module.moduleId === reference.preferredView || module.componentId === reference.preferredView);
-    if (preferred && (!artifact || moduleAcceptsArtifact(preferred, artifact.type))) return preferred;
-  }
-  if (artifact) return findBestModuleForArtifact(artifact);
-  return moduleById(interactiveViewFallbackModuleIds.genericInspector);
-}
-
-function moduleAcceptsArtifact(module: RuntimeUIModule, artifactType?: string) {
-  return interactiveViewModuleAcceptsArtifact(module, artifactType);
-}
-
-function findBestModuleForArtifact(artifact: RuntimeArtifact) {
-  return findBestModuleForArtifactType(artifact.type);
-}
-
-function findBestModuleForArtifactType(artifactType: string, preferredModules: string[] = []) {
-  const preferred = preferredModules
-    .map(moduleById)
-    .find((module): module is RuntimeUIModule => Boolean(module && moduleAcceptsArtifact(module, artifactType)));
-  if (preferred) return preferred;
-  return uiModuleRegistry
-    .filter((module) => !isUnknownArtifactInspectorComponent(module.componentId) && moduleAcceptsArtifact(module, artifactType))
-    .sort((left, right) => compareInteractiveViewModulesForArtifact(left, right, artifactType, preferredModules))[0]
-    ?? moduleById(interactiveViewFallbackModuleIds.genericInspector);
-}
-
-function findBestArtifactForModule(artifacts: RuntimeArtifact[], module: RuntimeUIModule) {
-  return artifacts.find((artifact) => moduleAcceptsArtifact(module, artifact.type));
-}
-
-function findBestArtifactForType(artifacts: RuntimeArtifact[], artifactType: string) {
-  return artifacts.find((artifact) => artifact.type === artifactType || artifact.id === artifactType);
-}
-
-function findRenderableArtifact(artifacts: RuntimeArtifact[], artifactRef?: string) {
-  if (!artifactRef) return undefined;
-  return artifacts.find((artifact) => artifact.id === artifactRef || artifact.path === artifactRef || artifact.dataRef === artifactRef);
-}
-
-function blockedDesignForIntent(
-  displayIntent: DisplayIntent,
-  artifacts: RuntimeArtifact[],
-  items: ResolvedViewPlanItem[],
-  activeRun?: SciForgeRun,
-) {
-  const requiredTypes = displayIntent.requiredArtifactTypes ?? [];
-  const unsupportedType = requiredTypes.find((artifactType) => {
-    const artifact = findBestArtifactForType(artifacts, artifactType);
-    if (!artifact) return false;
-    const specialized = uiModuleRegistry.find((module) => !isUnknownArtifactInspectorComponent(module.componentId) && moduleAcceptsArtifact(module, artifact.type));
-    return !specialized;
-  });
-  const primaryBound = items.some((item) => item.section === 'primary' && item.status === 'bound');
-  if (!unsupportedType && (primaryBound || !requiredTypes.length)) return undefined;
-  if (unsupportedType) {
-    return {
-      reason: `没有已发布 UI module 可作为主视图渲染 artifact type=${unsupportedType}`,
-      requiredModuleCapability: `render ${unsupportedType} as primary result`,
-      resumeRunId: activeRun?.id,
-    };
-  }
-  return undefined;
 }
 
 export function itemsForFocusMode(plan: RuntimeResolvedViewPlan, focusMode: ResultFocusMode) {

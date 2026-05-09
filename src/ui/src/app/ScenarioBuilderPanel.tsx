@@ -7,7 +7,6 @@ import {
   compileScenarioIRFromSelection,
   elementRegistry,
   recommendScenarioElements,
-  runScenarioRuntimeSmoke,
   scenarioIdBySkillDomain,
   type ScenarioBuilderDraft,
   type ScenarioElementSelection,
@@ -208,11 +207,9 @@ export function ScenarioBuilderPanel({
   async function saveCompiled(status: 'draft' | 'published') {
     try {
       setPublishStatus(status === 'draft' ? '保存中...' : '发布中...');
-      const smoke = await runScenarioRuntimeSmoke({ package: compileResult.package, mode: 'dry-run' });
       const quality = buildScenarioQualityReport({
         package: compileResult.package,
-        validationReport: smoke.validationReport,
-        runtimeSmoke: smoke,
+        validationReport: compileResult.validationReport,
         runtimeHealth,
       });
       const pkg = {
@@ -230,7 +227,7 @@ export function ScenarioBuilderPanel({
             selectedArtifactTypes: selection.selectedArtifactTypes,
           },
         },
-        validationReport: smoke.validationReport,
+        validationReport: compileResult.validationReport,
         qualityReport: quality,
       };
       if (status === 'published') {

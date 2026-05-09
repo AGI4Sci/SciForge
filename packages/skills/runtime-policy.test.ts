@@ -6,6 +6,7 @@ import {
   agentServerExternalIoReliabilityContractLines,
   agentServerFreshRetrievalPromptPolicyLines,
   agentServerGeneratedTaskPromptPolicyLines,
+  agentServerRepairPromptPolicyLines,
 } from './runtime-policy';
 
 test('skills runtime policy owns AgentServer retrieval and task prompt snippets', () => {
@@ -20,6 +21,10 @@ test('skills runtime policy owns AgentServer retrieval and task prompt snippets'
 
   const freshRetrieval = agentServerFreshRetrievalPromptPolicyLines().join('\n');
   assert.match(freshRetrieval, /fresh retrieval\/analysis\/report requests/);
+
+  const repair = agentServerRepairPromptPolicyLines().join('\n');
+  assert.match(repair, /failureReason/);
+  assert.match(repair, /logs are readable/);
 
   const externalIo = agentServerExternalIoReliabilityContractLines().join('\n');
   assert.match(externalIo, /External I\/O reliability contract/);

@@ -23,10 +23,10 @@
 ## 常用 API
 
 ```ts
-import { buildBuiltInScenarioPackage, runScenarioRuntimeSmoke } from '@sciforge/scenario-core';
+import { buildBuiltInScenarioPackage, validateScenarioPackage } from '@sciforge/scenario-core';
 
 const pkg = buildBuiltInScenarioPackage('literature-evidence-review');
-const smoke = await runScenarioRuntimeSmoke({ package: pkg, mode: 'dry-run' });
+const validation = validateScenarioPackage(pkg);
 ```
 
 ## 边界

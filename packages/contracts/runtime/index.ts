@@ -19,6 +19,8 @@ export type {
 } from './artifact-reference-policy';
 export {
   agentServerArtifactSelectionPromptPolicyLines,
+  agentServerBibliographicVerificationPromptPolicyLines,
+  agentServerCurrentReferencePromptPolicyLines,
   agentServerToolPayloadProtocolContractLines,
   defaultArtifactSchemaForSkillDomain,
 } from './artifact-policy';
@@ -152,6 +154,9 @@ export {
   validateCapabilityManifestRegistry,
   validateCapabilityManifestShape,
 } from './capability-manifest';
+export {
+  agentServerCapabilityRoutingPolicy,
+} from './capabilities';
 export type {
   CapabilityEvolutionCompactRecord,
   CapabilityEvolutionCompactSummary,

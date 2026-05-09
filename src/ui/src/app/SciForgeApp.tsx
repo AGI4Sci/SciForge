@@ -48,7 +48,6 @@ import { SCENARIO_SPECS, SCENARIO_PRESETS, componentManifest } from '@sciforge/s
 import { compileScenarioDraft, scenarioIdBySkillDomain, type ScenarioBuilderDraft } from '@sciforge/scenario-core/scenario-draft-compiler';
 import { compileScenarioIRFromSelection, recommendScenarioElements, type ScenarioElementSelection } from '@sciforge/scenario-core/scenario-element-compiler';
 import { elementRegistry } from '@sciforge/scenario-core/element-registry';
-import { runScenarioRuntimeSmoke } from '@sciforge/scenario-core/runtime-smoke';
 import { buildScenarioQualityReport } from '@sciforge/scenario-core/scenario-quality-gate';
 import { buildBuiltInScenarioPackage, builtInScenarioPackageRef, type ScenarioPackage } from '@sciforge/scenario-core/scenario-package';
 import type { ScenarioLibraryItem } from '@sciforge/scenario-core/scenario-library';

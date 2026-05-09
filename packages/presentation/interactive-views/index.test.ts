@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  blockedInteractiveViewDesignForIntent,
   componentMatchesInteractiveViewFocus,
   compactInteractiveViewPlanItems,
   composeRuntimeUiManifestSlots,
@@ -12,9 +13,16 @@ import {
   existingArtifactFollowupPromptPolicy,
   existingArtifactFollowupUiManifest,
   expectedArtifactTypesForIntent,
+  findBestInteractiveArtifactForModule,
+  findBestInteractiveArtifactForType,
+  findBestInteractiveViewModuleForArtifactType,
+  findInteractiveViewModuleForObjectReference,
+  findRenderableInteractiveArtifact,
+  inferDisplayIntentFromInteractiveArtifacts,
   interactiveViewComponentRank,
   interactiveViewCompatibilityAliases,
   interactiveViewManifests,
+  interactiveViewPlanSourceIds,
   markdownTextForDirectAnswerArtifact,
   normalizeDirectAnswerArtifacts,
   normalizeDirectAnswerUiManifest,
@@ -158,6 +166,59 @@ test('interactive view policy owns result binding, section, and presentation ded
   ]);
 
   assert.deepEqual(compacted.map((item) => item.artifact?.id), ['backend-pdb']);
+});
+
+test('interactive view policy owns resolver artifact and module selection semantics', () => {
+  const reportViewer = interactiveViewManifests.find((module) => module.componentId === 'report-viewer');
+  assert.ok(reportViewer);
+
+  const reportArtifact = {
+    id: 'report-ready',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    path: '/workspace/report.md',
+    data: { markdown: '# Ready' },
+  };
+  const opaqueArtifact = {
+    id: 'opaque-result',
+    type: 'opaque-result',
+    producerScenario: 'custom-runner',
+    schemaVersion: '1',
+    dataRef: 'workspace://artifacts/opaque.json',
+  };
+
+  const displayIntent = inferDisplayIntentFromInteractiveArtifacts([reportArtifact], interactiveViewManifests);
+  assert.deepEqual(displayIntent.requiredArtifactTypes, ['research-report']);
+  assert.deepEqual(displayIntent.preferredModules, [reportViewer.moduleId]);
+  assert.equal(displayIntent.source, 'fallback-inference');
+
+  assert.equal(
+    findBestInteractiveViewModuleForArtifactType(interactiveViewManifests, 'research-report')?.componentId,
+    'report-viewer',
+  );
+  assert.equal(findBestInteractiveArtifactForModule([reportArtifact], reportViewer)?.id, 'report-ready');
+  assert.equal(findBestInteractiveArtifactForType([reportArtifact], 'report-ready')?.type, 'research-report');
+  assert.equal(findRenderableInteractiveArtifact([reportArtifact], '/workspace/report.md')?.id, 'report-ready');
+  assert.equal(
+    findInteractiveViewModuleForObjectReference({
+      reference: { preferredView: 'report-viewer' },
+      artifact: reportArtifact,
+      modules: interactiveViewManifests,
+    })?.componentId,
+    'report-viewer',
+  );
+
+  const blocked = blockedInteractiveViewDesignForIntent({
+    displayIntent: { primaryGoal: 'custom result', requiredArtifactTypes: ['opaque-result'] },
+    artifacts: [opaqueArtifact],
+    items: [],
+    modules: [reportViewer],
+    resumeRunId: 'run-custom',
+  });
+  assert.equal(blocked?.requiredModuleCapability, 'render opaque-result as primary result');
+  assert.equal(blocked?.resumeRunId, 'run-custom');
+  assert.equal(interactiveViewPlanSourceIds.runtimeManifest, 'runtime-manifest');
 });
 
 test('interactive view policy owns report runtime result slots', () => {

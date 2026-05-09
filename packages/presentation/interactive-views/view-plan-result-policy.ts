@@ -9,8 +9,12 @@ import type {
   UIComponentManifest,
 } from '../components';
 import {
+  compareInteractiveViewModulesForArtifact,
+  defaultInteractiveViewAcceptanceCriteria,
+  defaultInteractiveViewFallbackAcceptable,
   interactiveViewComponentAllowsMissingArtifact,
   interactiveViewComponentRank,
+  interactiveViewFallbackModuleIds,
   interactiveViewFallbackBindingStatus,
   interactiveViewModuleAcceptsArtifact,
   isAuditOnlyInteractiveViewComponent,
@@ -36,6 +40,15 @@ export type InteractiveViewBindingStatus =
   | 'missing-fields'
   | 'fallback';
 
+export const interactiveViewPlanSourceIds = {
+  objectFocus: 'object-focus',
+  displayIntent: 'display-intent',
+  runtimeManifest: 'runtime-manifest',
+  artifactInferred: 'artifact-inferred',
+  defaultPlan: 'default-plan',
+  fallback: 'fallback',
+} as const satisfies Record<string, InteractiveViewPlanSource>;
+
 export type InteractiveViewPlanItem = {
   id: string;
   slot: UIManifestSlot;
@@ -54,6 +67,118 @@ export type InteractiveViewPlanCompactionContext = {
   executionUnitCount?: number;
   notebookEntryCount?: number;
 };
+
+export type InteractiveViewObjectReferenceLike = {
+  preferredView?: string;
+};
+
+export type InteractiveViewBlockedDesign = {
+  reason: string;
+  requiredModuleCapability: string;
+  resumeRunId?: string;
+};
+
+export function inferDisplayIntentFromInteractiveArtifacts(
+  artifacts: RuntimeArtifact[] = [],
+  modules: UIComponentManifest[] = [],
+): DisplayIntent {
+  const artifactTypes = Array.from(new Set(artifacts.map((artifact) => artifact.type)));
+  const requiredArtifactTypes = artifactTypes.slice(0, 4);
+  const preferredModules = requiredArtifactTypes
+    .map((artifactType) => findBestInteractiveViewModuleForArtifactType(modules, artifactType)?.moduleId)
+    .filter((moduleId): moduleId is string => Boolean(moduleId));
+  return {
+    primaryGoal: '展示当前 session 的 runtime artifacts',
+    requiredArtifactTypes,
+    preferredModules: Array.from(new Set(preferredModules)),
+    fallbackAcceptable: defaultInteractiveViewFallbackAcceptable,
+    acceptanceCriteria: defaultInteractiveViewAcceptanceCriteria,
+    source: 'fallback-inference',
+  };
+}
+
+export function findInteractiveViewModuleById(modules: UIComponentManifest[], moduleId: string) {
+  return modules.find((module) => module.moduleId === moduleId);
+}
+
+export function findInteractiveViewModuleForObjectReference({
+  reference,
+  artifact,
+  modules,
+}: {
+  reference: InteractiveViewObjectReferenceLike;
+  artifact?: RuntimeArtifact;
+  modules: UIComponentManifest[];
+}) {
+  if (reference.preferredView) {
+    const preferred = modules.find((module) => module.moduleId === reference.preferredView || module.componentId === reference.preferredView);
+    if (preferred && (!artifact || interactiveViewModuleAcceptsArtifact(preferred, artifact.type))) return preferred;
+  }
+  if (artifact) return findBestInteractiveViewModuleForArtifact(modules, artifact);
+  return findInteractiveViewModuleById(modules, interactiveViewFallbackModuleIds.genericInspector);
+}
+
+export function findBestInteractiveViewModuleForArtifact(modules: UIComponentManifest[], artifact: RuntimeArtifact) {
+  return findBestInteractiveViewModuleForArtifactType(modules, artifact.type);
+}
+
+export function findBestInteractiveViewModuleForArtifactType(
+  modules: UIComponentManifest[],
+  artifactType: string,
+  preferredModules: string[] = [],
+) {
+  const preferred = preferredModules
+    .map((moduleId) => findInteractiveViewModuleById(modules, moduleId))
+    .find((module): module is UIComponentManifest => Boolean(module && interactiveViewModuleAcceptsArtifact(module, artifactType)));
+  if (preferred) return preferred;
+  return modules
+    .filter((module) => !isUnknownArtifactInspectorComponent(module.componentId) && interactiveViewModuleAcceptsArtifact(module, artifactType))
+    .sort((left, right) => compareInteractiveViewModulesForArtifact(left, right, artifactType, preferredModules))[0]
+    ?? findInteractiveViewModuleById(modules, interactiveViewFallbackModuleIds.genericInspector);
+}
+
+export function findBestInteractiveArtifactForModule(artifacts: RuntimeArtifact[], module: UIComponentManifest) {
+  return artifacts.find((artifact) => interactiveViewModuleAcceptsArtifact(module, artifact.type));
+}
+
+export function findBestInteractiveArtifactForType(artifacts: RuntimeArtifact[], artifactType: string) {
+  return artifacts.find((artifact) => artifact.type === artifactType || artifact.id === artifactType);
+}
+
+export function findRenderableInteractiveArtifact(artifacts: RuntimeArtifact[], artifactRef?: string) {
+  if (!artifactRef) return undefined;
+  return artifacts.find((artifact) => artifact.id === artifactRef || artifact.path === artifactRef || artifact.dataRef === artifactRef);
+}
+
+export function blockedInteractiveViewDesignForIntent({
+  displayIntent,
+  artifacts,
+  items,
+  modules,
+  resumeRunId,
+}: {
+  displayIntent: DisplayIntent;
+  artifacts: RuntimeArtifact[];
+  items: InteractiveViewPlanItem[];
+  modules: UIComponentManifest[];
+  resumeRunId?: string;
+}): InteractiveViewBlockedDesign | undefined {
+  const requiredTypes = displayIntent.requiredArtifactTypes ?? [];
+  const unsupportedType = requiredTypes.find((artifactType) => {
+    const artifact = findBestInteractiveArtifactForType(artifacts, artifactType);
+    if (!artifact) return false;
+    const specialized = modules.find((module) => !isUnknownArtifactInspectorComponent(module.componentId) && interactiveViewModuleAcceptsArtifact(module, artifact.type));
+    return !specialized;
+  });
+  const primaryBound = items.some((item) => item.section === 'primary' && item.status === 'bound');
+  if (!unsupportedType && (primaryBound || !requiredTypes.length)) return undefined;
+  if (!unsupportedType) return undefined;
+  return {
+    reason: `没有已发布 UI module 可作为主视图渲染 artifact type=${unsupportedType}`,
+    requiredModuleCapability: `render ${unsupportedType} as primary result`,
+    resumeRunId,
+  };
+}
 
 export function validateInteractiveViewModuleBinding(
   module: UIComponentManifest,

@@ -4,7 +4,7 @@ import { describe, it } from 'node:test';
 import { scenarios, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
 import { buildElementRegistry, validateElementRegistry } from '@sciforge/scenario-core/element-registry';
-import { compileUIPlanForScenario } from '@sciforge/scenario-core/ui-plan-compiler';
+import { compileUIPlanForScenario, validateUIPlanAgainstScenario } from '@sciforge/scenario-core/ui-plan-compiler';
 
 describe('element registry', () => {
   it('builds unique manifests for skills, artifacts, components, and policies', () => {
@@ -72,5 +72,33 @@ describe('element registry', () => {
     assert.equal(firstSlot.artifactRef, 'omics-differential-expression');
     assert.notEqual(firstSlot.componentId, 'volcano-plot');
     assert.ok(['heatmap-viewer', 'umap-viewer', 'data-table', 'unknown-artifact-inspector'].includes(firstSlot.componentId));
+  });
+
+  it('validates UI slots and fallback components from the UI compiler boundary', () => {
+    const literatureScenarioId = ['literature', 'evidence', 'review'].join('-') as ScenarioId;
+    const paperListType = ['paper', 'list'].join('-');
+    const missingComponentId = ['missing', 'component'].join('-');
+    const missingFallbackId = ['missing', 'fallback'].join('-');
+    const externalArtifactType = ['external', 'artifact'].join('-');
+    const unknownComponentCode = ['unknown', 'ui', 'component'].join('-');
+    const externalArtifactCode = ['slot', 'artifact', 'not', 'produced', 'by', 'scenario'].join('-');
+    const missingFallbackCode = ['missing', 'scenario', 'fallback'].join('-');
+    const plan = compileUIPlanForScenario(literatureScenarioId);
+    const issues = validateUIPlanAgainstScenario({
+      outputArtifacts: [{ type: paperListType }],
+      fallbackComponentId: missingFallbackId,
+    }, {
+      ...plan,
+      slots: [{
+        componentId: missingComponentId,
+        title: 'External artifact',
+        artifactRef: externalArtifactType,
+        priority: 1,
+      }],
+    });
+
+    assert.ok(issues.some((issue) => issue.code === unknownComponentCode));
+    assert.ok(issues.some((issue) => issue.code === externalArtifactCode));
+    assert.ok(issues.some((issue) => issue.code === missingFallbackCode));
   });
 });

@@ -121,6 +121,12 @@ export function agentServerFreshRetrievalPromptPolicyLines() {
   ];
 }
 
+export function agentServerRepairPromptPolicyLines() {
+  return [
+    'For repair requests, inspect the failureReason plus stdoutRef/stderrRef/outputRef/codeRef and report whether logs are readable before editing or rerunning.',
+  ];
+}
+
 export function agentServerExternalIoReliabilityContractLines() {
   return [
     'External I/O reliability contract: generated or repaired tasks that call remote APIs, web feeds, model endpoints, package registries, databases, or downloadable files must use bounded timeouts, descriptive User-Agent/contact metadata when applicable, limited retries with exponential backoff, and explicit handling for 429/5xx/network timeout/empty-result cases.',

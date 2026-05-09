@@ -15,11 +15,16 @@ import {
   supportsBuiltinDesktopBridge,
 } from '../computer-use/utils.js';
 import { parseWindowTarget } from '../computer-use/window-target.js';
+import {
+  looksLikeVisionSenseComputerUseRequest,
+  parseVisionSenseAppAliases,
+  requestedVisionSenseAppNameForPrompt,
+} from '../../../packages/observe/vision/computer-use-runtime-policy.js';
 import { VISION_TOOL_ID } from './trace-policy.js';
 
 export function rebindWindowTargetForPromptAppAlias(config: VisionSenseConfig, prompt: string) {
   if (config.windowTarget.mode !== 'display' && config.windowTarget.mode !== 'active-window') return;
-  const requestedAppName = requestedAppAliasForPrompt(prompt);
+  const requestedAppName = requestedVisionSenseAppNameForPrompt(prompt, parseVisionAppAliases());
   if (!requestedAppName) return;
   config.windowTarget = {
     ...config.windowTarget,
@@ -50,14 +55,7 @@ export function visionSenseSelected(request: GatewayRequest) {
 }
 
 export function looksLikeComputerUseRequest(prompt: string) {
-  const text = prompt.trim();
-  if (!text) return false;
-  if (/\b(computer\s*use|gui|desktop|screen|screenshot|mouse|keyboard|click|type|scroll|drag)\b/i.test(text)) return true;
-  if (/\b(browser|word|powerpoint|ppt)\b/i.test(text) && /\b(open|click|type|scroll|drag|operate|control|use)\b/i.test(text)) return true;
-  if (/截图|屏幕|桌面|鼠标|键盘|点击|滚动|拖拽/.test(text)) return true;
-  if (/(浏览器|网页|页面|窗口|应用|软件|文档|演示文稿).{0,24}(打开|点击|输入|滚动|拖拽|操作|控制|切换|保存|创建)/.test(text)) return true;
-  if (/(打开|点击|输入|滚动|拖拽|操作|控制|切换|保存|创建).{0,24}(浏览器|网页|页面|窗口|应用|软件|文档|演示文稿)/.test(text)) return true;
-  return false;
+  return looksLikeVisionSenseComputerUseRequest(prompt);
 }
 
 export async function loadVisionSenseConfig(workspace: string, request: GatewayRequest): Promise<VisionSenseConfig> {
@@ -232,45 +230,8 @@ export async function loadVisionSenseConfig(workspace: string, request: GatewayR
   };
 }
 
-function requestedAppAliasForPrompt(prompt: string): string | undefined {
-  const primaryTask = primaryTaskLine(prompt);
-  const aliases = parseVisionAppAliases();
-  const requested = Object.entries(aliases)
-    .sort((a, b) => b[0].length - a[0].length)
-    .find(([alias]) => alias && promptAliasMatches(primaryTask, alias));
-  if (requested) return requested[1];
-  return undefined;
-}
-
-function promptAliasMatches(task: string, alias: string) {
-  if (containsCjk(alias)) return task.includes(alias);
-  return new RegExp(`(^|[^A-Za-z0-9_-])${escapeRegExp(alias)}([^A-Za-z0-9_-]|$)`, 'iu').test(task);
-}
-
-function containsCjk(value: string) {
-  return /[\u3400-\u9FFF]/u.test(value);
-}
-
-function primaryTaskLine(prompt: string) {
-  return (prompt || '').split(/\r?\n/g).map((line) => line.trim()).find(Boolean) || '';
-}
-
 function parseVisionAppAliases(): Record<string, string> {
-  const raw = process.env.SCIFORGE_VISION_APP_ALIASES_JSON;
-  if (!raw) return {} as Record<string, string>;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!isRecord(parsed)) return {};
-    return Object.fromEntries(Object.entries(parsed)
-      .map(([alias, appName]) => [alias.trim(), typeof appName === 'string' ? appName.trim() : ''])
-      .filter(([alias, appName]) => alias && appName)) as Record<string, string>;
-  } catch {
-    return {};
-  }
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return parseVisionSenseAppAliases(process.env.SCIFORGE_VISION_APP_ALIASES_JSON);
 }
 
 function normalizeGrounderUploadStrategy(value: string | undefined): 'scp' | 'inline' | undefined {

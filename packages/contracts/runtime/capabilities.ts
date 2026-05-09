@@ -47,6 +47,14 @@ export interface CapabilityRegistry {
   loadContract(id: string): Promise<CapabilityContract | undefined>;
 }
 
+export function agentServerCapabilityRoutingPolicy(): Record<string, string> {
+  return {
+    decisionOwner: 'AgentServer',
+    loadContracts: 'lazy-load selected capability docs/contracts only when needed',
+    selectionRule: 'Prefer selected capabilities, then compatible domain/artifact capabilities; return failed-with-reason when a required executor/config is missing.',
+  };
+}
+
 export function createCapabilityRegistry(entries: CapabilityRegistryEntry[]): CapabilityRegistry {
   const byId = new Map(entries.map((entry) => [entry.summary.id, entry]));
   return {

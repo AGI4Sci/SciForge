@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 
 import { scenarios, type ScenarioId } from '../../src/ui/src/data';
-import { runScenarioRuntimeSmoke } from '@sciforge/scenario-core/runtime-smoke';
 import {
   buildBuiltInScenarioPackage,
   findScenarioPackagePolicyOnlyViolations,
   SCENARIO_PACKAGE_POLICY_FIELDS,
 } from '@sciforge/scenario-core/scenario-package';
 import { validateScenarioPackage } from '@sciforge/scenario-core/validation-gate';
+import { runScenarioRuntimeSmoke } from './scenario-runtime-smoke-harness';
 
 const scenarioIds = scenarios.map((scenario) => scenario.id);
 

@@ -16,7 +16,6 @@
     "./contracts": "./src/contracts.ts",
     "./element-registry": "./src/elementRegistry.ts",
     "./element-types": "./src/elementTypes.ts",
-    "./runtime-smoke": "./src/runtimeSmoke.ts",
     "./scenario-draft-compiler": "./src/scenarioDraftCompiler.ts",
     "./scenario-element-compiler": "./src/scenarioElementCompiler.ts",
     "./scenario-library": "./src/scenarioLibrary.ts",

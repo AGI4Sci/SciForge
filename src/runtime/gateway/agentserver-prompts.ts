@@ -11,9 +11,10 @@ import { readRecentTaskAttempts } from '../task-attempt-history.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { parseJsonErrorMessage, redactSecretText, sanitizeAgentServerError } from './backend-failure-diagnostics.js';
-import { agentServerArtifactSelectionPromptPolicyLines, agentServerToolPayloadProtocolContractLines } from '@sciforge-ui/runtime-contract/artifact-policy';
+import { agentServerArtifactSelectionPromptPolicyLines, agentServerBibliographicVerificationPromptPolicyLines, agentServerCurrentReferencePromptPolicyLines, agentServerToolPayloadProtocolContractLines } from '@sciforge-ui/runtime-contract/artifact-policy';
+import { agentServerCapabilityRoutingPolicy } from '@sciforge-ui/runtime-contract/capabilities';
 import { toolPackageManifests } from '../../../packages/skills/tool_skills';
-import { agentServerExecutionModePromptPolicyLines, agentServerExternalIoReliabilityContractLines, agentServerFreshRetrievalPromptPolicyLines, agentServerGeneratedTaskPromptPolicyLines } from '../../../packages/skills/runtime-policy';
+import { agentServerExecutionModePromptPolicyLines, agentServerExternalIoReliabilityContractLines, agentServerFreshRetrievalPromptPolicyLines, agentServerGeneratedTaskPromptPolicyLines, agentServerRepairPromptPolicyLines } from '../../../packages/skills/runtime-policy';
 import { uiComponentManifests } from '../../../packages/presentation/components';
 import { minimalValidInteractiveToolPayloadExample } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy';
 import { defaultCapabilitySummaries } from '@sciforge-ui/runtime-contract/capabilities';
@@ -616,9 +617,7 @@ export function buildAgentServerGenerationPrompt(request: {
     'Final output must be only compact JSON: either AgentServerGenerationResponse or SciForge ToolPayload.',
     'When returning a SciForge ToolPayload, use displayIntent to describe the user-visible view need, and objectReferences to cite key artifacts/files/runs that the user can click on demand.',
     'objectReferences refs must use controlled prefixes: artifact:*, file:*, folder:*, run:*, execution-unit:*, scenario-package:*, or url:*.',
-    'Current-reference contract: if uiStateSummary.currentReferences or contextEnvelope.sessionFacts.currentReferences is non-empty, treat those refs as explicit current-turn inputs. The final message, claims, or artifact content must reflect that each non-UI ref was actually read/used. Merely echoing it as objectReferences or preserving a file chip is not enough.',
-    'If the current refs cannot be read or do not contain enough information to answer, return executionUnits.status="failed-with-reason" with the missing/unreadable refs and a precise nextStep. Do not answer from old session memory, priorAttempts, or broad scenario defaults.',
-    'Current-reference digest contract: when uiStateSummary.currentReferenceDigests or contextEnvelope.sessionFacts.currentReferenceDigests exists, use those bounded digests first. Do not run generation-stage shell/browser loops that print full PDFs, long documents, or large logs into context; if more evidence is needed, return taskFiles for a workspace task that reads refs by path and writes bounded artifacts.',
+    ...agentServerCurrentReferencePromptPolicyLines(),
     request.strictTaskFilesReason
       ? `Strict retry reason: ${request.strictTaskFilesReason}`
       : '',
@@ -633,13 +632,11 @@ export function buildAgentServerGenerationPrompt(request: {
     'If local.vision-sense is selected but no GUI executor/browser/desktop bridge or screenshot input is configured for the current run, do not scan the repository to compensate. Return a concise ToolPayload diagnosis or failed-with-reason ExecutionUnit that says the vision sense contract was detected but the runtime executor bridge is missing, and include the next expected vision-trace file-ref shape instead of fabricating GUI results.',
     'Large-file contract: uploaded PDFs, images, spreadsheets, binary blobs, extracted full text, and large logs must stay as workspace refs. Do not inline base64, do not print full extracted text to stdout/stderr, and do not paste full document text into final JSON.',
     'For uploaded PDFs or long documents, generated tasks should read the file by path/dataRef, write any full extraction to .sciforge/artifacts or .sciforge/task-results, and return only bounded excerpts, section summaries, page/figure locators, hashes, and clickable file/artifact refs.',
-    'Bibliographic verification contract: never mark a PMID, DOI, trial id, citation, or paper record as corrected/verified unless the returned title, year, journal, and identifier correspond to the same work as the source claim.',
-    'If an identifier lookup returns a title mismatch, topic mismatch, unrelated journal, or only a broad review when the source claim is a trial/cohort/paper, preserve the original claim and mark it needs-verification with the mismatch reason and search terms. Do not substitute the unrelated record as a correction.',
-    'For literature artifacts, keep original_title, verified_title, title_match, identifier_match, verification_status, and verification_notes fields when correcting references so SciForge and users can audit the match.',
+    ...agentServerBibliographicVerificationPromptPolicyLines(),
     ...agentServerArtifactSelectionPromptPolicyLines(),
     'Use selectedComponentIds only when the current user turn explicitly requested those views; do not preserve default UI slots as output requirements.',
     'For continuation requests, continue the scenario goal using recentConversation, artifacts, recentExecutionRefs, and priorAttempts. Do not restart an unrelated analysis.',
-    'For repair requests, inspect the failureReason plus stdoutRef/stderrRef/outputRef/codeRef and report whether logs are readable before editing or rerunning.',
+    ...agentServerRepairPromptPolicyLines(),
     'If a required input, remote file, credential, or executable is missing, write a valid ToolPayload with executionUnits.status="failed-with-reason" and a precise failureReason instead of fabricating outputs.',
     request.priorAttempts?.length ? [
       'RECENT PRIOR ATTEMPTS (authoritative repair/continuation context; preserve failureReason):',
@@ -801,11 +798,7 @@ export function summarizeRuntimeCapabilitiesForAgentServer(
   const selectedComponentIds = selectedComponentIdsForRequest(request);
   return {
     schemaVersion: 'sciforge.runtime-capability-catalog.v1',
-    routingPolicy: {
-      decisionOwner: 'AgentServer',
-      loadContracts: 'lazy-load selected capability docs/contracts only when needed',
-      selectionRule: 'Prefer selected capabilities, then compatible domain/artifact capabilities; return failed-with-reason when a required executor/config is missing.',
-    },
+    routingPolicy: agentServerCapabilityRoutingPolicy(),
     selected: {
       skillIds: availableSkills.map((skill) => skill.id),
       toolIds: [...selectedToolIds],
