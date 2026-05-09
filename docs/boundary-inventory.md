@@ -1,6 +1,6 @@
-# T122 Boundary Inventory
+# T122 边界清单
 
-最后更新：2026-05-09
+最后更新：2026-05-10
 
 机器可读来源是 [`../tools/check-boundary-inventory.ts`](../tools/check-boundary-inventory.ts)。运行方式：
 
@@ -17,6 +17,8 @@ npm run smoke:module-boundaries
 npm run smoke:no-src-capability-semantics
 npm run smoke:long-file-budget
 ```
+
+当前 T122 cutover 已完成：`smoke:fixed-platform-boundary`、`smoke:no-src-capability-semantics` 和 `smoke:no-legacy-paths` 都应保持 0 tracked warnings/findings。新增代码如果重新打开 guard 面，必须同时更新本 inventory、对应 smoke baseline、owner、删除条件和 focused smoke 证据。
 
 ## Fixed Platform Inventory
 
@@ -62,7 +64,7 @@ npm run smoke:long-file-budget
 
 ## Boundary-Heavy Long Files
 
-`smoke:long-file-budget` 的硬阈值是 1500 行，1000 行以上为 watch。T122 当前 boundary-heavy 文件都低于硬阈值，但需要保持拆分方向明确：
+`smoke:long-file-budget` 的硬阈值是 1500 行，1000 行以上为 watch。T122 cutover 后，boundary-heavy 文件都不应再吸收 package-owned 语义；若继续增长，应优先拆分 runtime 子流程、prompt contract 或 UI shell，而不是新增领域/provider/scenario 特例：
 
 | File | Current target | Extraction direction |
 | --- | --- | --- |
@@ -73,4 +75,4 @@ npm run smoke:long-file-budget
 | `src/runtime/workspace-task-input.ts` | bounded handoff assembly | artifact digest、retention/budget reducers、fixture builders 拆到 runtime helpers |
 | `src/runtime/gateway/agentserver-prompts.ts` | prompt contract text only | mode/capability/repair copy 分块，但仍留在 `src/runtime/gateway` |
 
-阈值策略暂不调整：1500 行继续作为必须在 `PROJECT.md` 覆盖的 hard budget，1000 行继续作为 watch 输出。当前计划的价值是防止这些文件在并行 T122 后续工作中继续吸收 package-owned 语义或 runtime 子流程。
+阈值策略暂不调整：1500 行继续作为必须在 `PROJECT.md` 覆盖的 hard budget，1000 行继续作为 watch 输出。当前计划的价值是防止这些文件在后续产品迭代中继续吸收 package-owned 语义或 runtime 子流程。

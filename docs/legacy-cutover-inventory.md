@@ -1,79 +1,68 @@
-# Legacy Cutover Inventory
+# 旧链路收口清单
 
-This inventory is the human-readable companion to `smoke:no-legacy-paths`.
-It records the legacy route classes that were removed while the backend-first
-capability architecture cut over to one source of truth.
+最后更新：2026-05-10
 
-The smoke remains the enforcement mechanism. This document explains what each
-legacy class means, where it should move, and what must be true before the
-baseline can be reduced.
+本文是 `smoke:no-legacy-paths` 的人工可读说明，记录 backend-first capability architecture cutover 期间被删除的旧链路类型、当前新真相源和未来如果回归时的处理规则。
 
-This file is not a completion checklist. A PROJECT item can be checked only
-after the source path is migrated, the matching baseline in
-`tools/check-no-legacy-paths.ts` is reduced, and the relevant smoke passes.
-As of the T120 final cutover, `smoke:no-legacy-paths` reports 0 tracked
-findings and there is no open baseline left to reduce.
+当前状态：T120/T122 cutover 已完成，`smoke:no-legacy-paths` 扫描结果为 0 tracked findings。本文不是待办清单；它是已关闭清单。只有未来某个旧链路 guard 面被重新打开时，才需要在这里新增 owner、删除条件和证据。
 
-## How To Use This Inventory
+## 使用方式
 
-1. Pick one row from "Closed Cutover Queue" only if a future regression reopens
-   that guard surface.
-2. Move behavior to the listed source of truth without adding another prompt,
-   scenario, provider, fallback, compat, or legacy branch.
-3. Run `npm run smoke:no-legacy-paths` and the focused smoke for the touched
-   runtime/package/UI area.
-4. Lower only the exact file/rule baseline that shrank.
-5. Update this inventory with the evidence and then update PROJECT if the
-   milestone acceptance criteria are actually satisfied.
+1. 如果 `npm run smoke:no-legacy-paths` 失败，先定位失败属于下面哪一类旧链路。
+2. 把行为迁回对应的新真相源，不要再新增 prompt、scenario、provider、fallback、compat 或 legacy 分支。
+3. 运行 `npm run smoke:no-legacy-paths` 和触及区域的 focused smoke。
+4. 只有在同一变更中写清 owner、删除条件、baseline 变化和验证证据时，才允许新增临时 baseline。
+5. PROJECT 只能在代码迁移、baseline 更新和相关 smoke 都完成后更新；文档说明本身不能关闭任务。
 
-## Closed Legacy Classes
+## 已关闭旧链路类型
 
-| Class | Removed Surface | New Source Of Truth | Cutover Rule |
+| 类型 | 已删除表面 | 新真相源 | 规则 |
 | --- | --- | --- | --- |
-| UI semantic fallback | UI response normalization, result view planning, workbench fallback display, scenario builder fallback hints | Backend response, object refs, UIManifest, package-owned view manifests | UI may explain missing bindings, but it must not infer user intent, artifact type, or renderer choice from prompts or hardcoded domain strings. |
-| Provider/scenario/prompt special cases | Gateway prompt text, runtime UI manifest prompt parsing, skill registry prompt matching, skill catalog provider normalization | Capability manifests, package catalog metadata, broker policy, runtime transport contracts | Runtime can enforce transport and safety policy; provider, scenario, prompt, and domain selection must be manifest/catalog driven. |
-| Legacy package facade re-exports | `src/ui/src/scenarioCompiler/*` and `src/ui/src/scenarioSpecs.ts` package facades | Stable `@sciforge/scenario-core/*` package entrypoints | UI callers should import stable package entrypoints directly once thin-shell migration removes compatibility facades. |
-| Legacy adapter/compat re-export | Package or src modules exporting adapter/compat paths | Stable runtime entrypoints or package public exports | New code must use stable entrypoints; compatibility exports should shrink only with an explicit migration and baseline reduction. |
-| Old payload normalizer / repair fallback | Runtime repair-needed assembly and direct payload fallback paths that predate `ContractValidationFailure` | `ContractValidationFailure`, backend repair contract, validation-to-repair pipeline | Failures should carry structured validation failure, recover actions, and related refs instead of free-text-only repair prompts. |
-| Old preview resolver / object ref inference | UI preview and artifact helpers that infer display behavior from artifact/domain names | Backend artifact tools, stable object refs, package-owned view policy | Preview follows object refs and manifest bindings; no direct reliance on temporary `agentserver://` previews as final truth. |
+| UI 语义 fallback | UI response normalization、result view planning、workbench fallback display、scenario builder fallback hints | Backend response、object refs、UIManifest、package-owned view manifests | UI 可以解释缺失 binding，但不能根据 prompt、artifact type 或硬编码领域词推断用户意图、artifact 类型或 renderer 选择。 |
+| Provider / scenario / prompt 特例 | Gateway prompt text、runtime UI manifest prompt parsing、skill registry prompt matching、skill catalog provider normalization | Capability manifest、package catalog metadata、broker policy、runtime transport contracts | Runtime 可以执行 transport 和 safety policy；provider、scenario、prompt、domain 选择必须 manifest/catalog/broker 驱动。 |
+| Legacy package facade re-export | `src/ui/src/scenarioCompiler/*` 和 `src/ui/src/scenarioSpecs.ts` facade | 稳定 `@sciforge/scenario-core/*` package entrypoints | UI 调用稳定 package entrypoints；不再保留 UI facade 作为并行真相源。 |
+| Legacy adapter / compat re-export | package 或 `src` 中导出的 adapter/compat 路径 | 稳定 runtime entrypoints 或 package public exports | 新代码必须使用稳定入口；compat export 只能带 owner、删除条件和 baseline 证据短期存在。 |
+| 旧 payload normalizer / repair fallback | 早于 `ContractValidationFailure` 的 repair-needed assembly 和 direct payload fallback | `ContractValidationFailure`、backend repair contract、validation-to-repair pipeline | 失败必须携带结构化 validation failure、recover actions 和 related refs，不能只给 free-text repair prompt。 |
+| 旧 preview resolver / object ref inference | UI preview 和 artifact helper 从 artifact/domain 名称推断 display 行为 | Backend artifact tools、stable object refs、package-owned view policy | Preview 跟随 object refs 和 manifest bindings；临时 `agentserver://` preview 不能作为最终 UI 真相源。 |
 
-## Current Guard State
+## 当前 Guard 状态
 
-`tools/check-no-legacy-paths.ts` now carries only 0-count tracked entries for
-the historical T120 guard surfaces. A passing smoke means there are no tolerated
-UI semantic fallback routes, provider/scenario/prompt special cases, legacy
-scenario facade re-exports, or legacy adapter/compat re-exports in scanned
-source files.
+`tools/check-no-legacy-paths.ts` 目前只保留历史 guard surface 的 0-count tracked entries。一个通过的 smoke 表示扫描源码中没有被容忍的 UI semantic fallback、provider/scenario/prompt 特例、legacy scenario facade re-export、legacy adapter/compat re-export 或旧 validation failure assembly。
 
-Package-owned manifest fallback, primitive compatibility aliases, and the
-`unknown-artifact-inspector` safety renderer remain valid package policy. They
-are not UI/runtime semantic fallback paths.
+以下仍然合法，因为它们是 package/runtime contract 的正常安全边界，不属于旧 UI/runtime semantic fallback：
 
-## Closed Cutover Queue
+- package-owned manifest fallback。
+- primitive compatibility alias。
+- `unknown-artifact-inspector` safety renderer。
+- 用于证明 legacy full catalog 不会进入 backend handoff 的 smoke fixture sentinel。
 
-| Priority | Tracked Guard Surface | Owner Boundary | First Migration Step | Evidence Before Baseline Reduction |
+## 已关闭 Cutover 记录
+
+| 优先级 | Guard surface | Owner 边界 | 已完成迁移 | 关闭证据 |
 | --- | --- | --- | --- | --- |
-| P0 | `src/ui/src/api/agentClient/responseNormalization.ts#ui-semantic-fallback` | UI display only | Keep failure and object-ref projection, but move artifact/view intent inference to backend payload refs and UIManifest bindings. | Closed: no tracked finding remains; response normalization tests assert no invented UIManifest component choices or preferred views from artifact semantics. |
-| P0 | `src/ui/src/app/results/viewPlanResolver.ts#ui-semantic-fallback` | Package view manifests | Replace local fallback ranking with accepted artifact types and component aliases from `packages/presentation/components`. | Closed: no tracked finding remains; view resolver tests cover manifest-driven fallback display intent without prompt semantics. |
-| P0 | `src/runtime/runtime-ui-manifest.ts#provider-scenario-prompt-special-case` | Runtime binding shell plus package view policy | Keep slot validation in runtime, move prompt-driven component defaults to scenario/view package policy. | Closed: no tracked finding remains; runtime UI manifest smoke remains part of `smoke:all`. |
-| P1 | `src/runtime/gateway/agentserver-prompts.ts#provider-scenario-prompt-special-case` | Backend handoff contract | Replace provider-specific prompt text with capability brief, policy refs, and validation contract refs. | Closed: no tracked finding remains; gateway prompt policy is package-owned. |
-| P1 | `src/runtime/skill-registry/runtime-matching.ts#provider-scenario-prompt-special-case` | Skill package manifests/catalog | Move prompt/provider matching hints into generated skill catalog metadata. | Closed: no tracked finding remains; `packages:check` regenerates and validates package catalog metadata. |
-| P1 | `src/runtime/skill-markdown-catalog.ts#provider-scenario-prompt-special-case` | Skill package metadata | Store provider normalization in package metadata instead of runtime string rules. | Closed: no tracked finding remains; skill catalog generation is part of `packages:check`. |
-| P2 | `src/ui/src/scenarioCompiler/*#legacy-package-facade-reexport` | `@sciforge/scenario-core/*` public exports | Change UI callers to package entrypoints, then delete the thin facade file by file. | Closed: facade files were deleted and `typecheck` passes. |
-| P2 | `src/ui/src/scenarioSpecs.ts#legacy-package-facade-reexport` | `@sciforge/scenario-core/*` public exports | Replace imports with stable scenario-core entrypoints and delete the UI facade. | Closed: facade file was deleted and `typecheck` passes. |
-| P2 | Package/src `adapter`/`compat` re-exports | Stable package/runtime entrypoints | Add or document the stable entrypoint first, migrate callers, then remove compatibility exports. | Closed for T120 guard surfaces: no tracked re-export warning remains. |
+| P0 | `src/ui/src/api/agentClient/responseNormalization.ts#ui-semantic-fallback` | UI display only | 保留 failure/object-ref projection；artifact/view intent inference 迁到 backend payload refs 和 UIManifest bindings。 | no tracked finding；response normalization tests 断言不从 artifact 语义发明 UIManifest component choices 或 preferred views。 |
+| P0 | `src/ui/src/app/results/viewPlanResolver.ts#ui-semantic-fallback` | Package view manifests | 本地 fallback ranking 被 package component manifests、accepted artifact types 和 compatibility aliases 替代。 | no tracked finding；view resolver tests 覆盖 manifest-driven fallback display。 |
+| P0 | `src/runtime/runtime-ui-manifest.ts#provider-scenario-prompt-special-case` | Runtime binding shell + package view policy | runtime 只做 slot validation/binding，prompt-driven component defaults 迁到 scenario/view package policy。 | no tracked finding；`smoke:runtime-ui-manifest` 仍在 `smoke:all`。 |
+| P1 | `src/runtime/gateway/agentserver-prompts.ts#provider-scenario-prompt-special-case` | Backend handoff contract | provider-specific prompt text 被 capability brief、policy refs 和 validation contract refs 替代。 | no tracked finding；`smoke-agentserver-broker-payload` 断言只暴露 compact broker brief。 |
+| P1 | `src/runtime/skill-registry/runtime-matching.ts#provider-scenario-prompt-special-case` | Skill package manifests/catalog | prompt/provider matching hints 迁到 generated skill catalog metadata。 | no tracked finding；`packages:check` 重新生成并验证 package catalog metadata。 |
+| P1 | `src/runtime/skill-markdown-catalog.ts#provider-scenario-prompt-special-case` | Skill package metadata | provider normalization 迁到 package metadata，runtime 不维护字符串分支。 | no tracked finding；skill catalog generation 属于 `packages:check`。 |
+| P2 | `src/ui/src/scenarioCompiler/*#legacy-package-facade-reexport` | `@sciforge/scenario-core/*` public exports | UI caller 改用 package entrypoints，facade 文件删除。 | facade files deleted；`typecheck` 通过。 |
+| P2 | `src/ui/src/scenarioSpecs.ts#legacy-package-facade-reexport` | `@sciforge/scenario-core/*` public exports | UI caller 改用 stable scenario-core entrypoints，UI facade 删除。 | facade file deleted；`typecheck` 通过。 |
+| P2 | package/src `adapter` / `compat` re-export | Stable package/runtime entrypoints | 稳定 entrypoint 已补齐，caller 已迁移，T120 guard surface 无剩余 warning。 | no tracked re-export warning。 |
 
-## Reduction Rules
+## Baseline 规则
 
-- Lower `tools/check-no-legacy-paths.ts` baseline only in the same change that removes or migrates the matching legacy path.
-- Add a migration note for every new tolerated baseline entry. Untracked entries should fail CI.
-- Prefer a new capability manifest, broker rule, runtime contract, or backend tool over another UI/runtime special case.
-- When a legacy path is removed, update this inventory, the smoke baseline, and the relevant PROJECT item together.
-- Do not update PROJECT for documentation-only clarification. Docs can mark the path, but code and guard evidence close the milestone.
+- 降低或新增 `tools/check-no-legacy-paths.ts` baseline 必须和对应源码迁移在同一个 commit。
+- 新增 tolerated baseline entry 必须写明 owner、迁移任务、删除条件、具体符号/路径和 focused smoke。
+- 优先补 capability manifest、broker rule、runtime contract 或 backend tool；不要补 UI/runtime 特例。
+- 删除旧路径时，同步更新本文、smoke baseline 和相关 PROJECT 证据。
+- 文档只能说明事实，不能代替代码迁移或 smoke 通过。
 
-## Target End State
+## 目标状态
 
-- Backend-first request handling is the only successful answer path.
-- Capability registry, broker, validation loop, artifact tools, and object refs are the only truth sources for routing and continuation.
-- UI renders state, refs, artifacts, validation failures, and recover actions; it does not synthesize semantic answers.
-- Packages own capability semantics; `src/` owns transport, safety, workspace refs, validation, repair, persistence, and ledger writing.
+目标状态已经达成并由 guard 维护：
+
+- Backend-first request handling 是唯一成功回答路径。
+- Capability registry、broker、validation loop、artifact tools 和 object refs 是 routing/continuation 真相源。
+- UI 渲染 state、refs、artifacts、validation failures 和 recover actions；不合成语义答案。
+- Packages 拥有 capability semantics；`src/` 拥有 transport、safety、workspace refs、validation、repair、persistence 和 ledger writing。

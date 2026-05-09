@@ -1,6 +1,6 @@
 # SciForge 文档
 
-最后更新：2026-05-09
+最后更新：2026-05-10
 
 `docs/` 只保留项目级真相源。模块内部的 API、renderer、skill 或 provider 细节继续放在对应 package 的 README 或源码旁边，避免同一个 contract 在多处漂移。
 
@@ -31,7 +31,14 @@
 
 ## 当前状态
 
-SciForge 是活跃研发原型。当前实现重点是 workspace-backed 科研工作台、真实 AgentServer/backend 调用、结构化 artifact、可审计 ExecutionUnit、Python conversation-policy、多 backend 切换、vision-sense/Computer Use 通路、反馈收件箱和双实例互修。
+SciForge 是活跃研发原型，但架构主线已经完成 backend-first / contract-enforced / capability-driven cutover。当前实现重点是 workspace-backed 科研工作台、真实 AgentServer/backend 调用、compact capability broker、统一 `CapabilityManifest` registry、结构化 artifact、可审计 ExecutionUnit、`ContractValidationFailure` repair loop、Python conversation-policy、多 backend 切换、vision-sense/Computer Use 通路、反馈收件箱和双实例互修。
+
+当前守门状态：
+
+- `smoke:no-legacy-paths` 和 `smoke:no-src-capability-semantics` baseline 均为 0。
+- `packages:check` 覆盖 skill catalog generation、capability manifest registry、workspace package metadata、package runtime boundary 和 UI component publication checks。
+- `smoke:official-packages` 锁定 scenario package policy-only 边界。
+- `smoke:capability-broker` 和 `smoke:agentserver-broker-payload` 锁定 broker compact 默认暴露与 lazy expansion。
 
 默认内置 4 个 scenario：文献证据评估、结构探索、组学差异分析、生物医学知识图谱。它们的真实 contract 来自 [`../packages/scenarios/core/src/scenarioSpecs.ts`](../packages/scenarios/core/src/scenarioSpecs.ts)，UI 中的页面配置来自 [`../src/ui/src/data.ts`](../src/ui/src/data.ts)。
 

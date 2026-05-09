@@ -4,7 +4,7 @@
 
 SciForge 不是“聊天框 + 工具列表”。它把科学数据、论文、代码、可交互 UI、执行轨迹和人类反馈组织成一个可以持续学习的研究系统：Agent 不只回答问题，还能看见科学对象、操作软件、生成可审计 artifact，并在双实例互修机制中迭代 SciForge 自己。
 
-> 当前状态：活跃研发原型。SciForge 优先服务本地 workspace-backed 科研实验、透明执行轨迹、敏感数据保护和 self-evolving agent/software，而不是把复杂自动化包装成黑盒。
+> 当前状态：活跃研发原型，架构主线已经完成 backend-first / contract-enforced / capability-driven cutover。SciForge 优先服务本地 workspace-backed 科研实验、透明执行轨迹、敏感数据保护和 self-evolving agent/software，而不是把复杂自动化包装成黑盒。
 
 ![SciForge 产品界面截图](docs/assets/sciforge-product-overview.png)
 
@@ -45,6 +45,8 @@ SciForge 通过 AgentServer/backend gateway 连接不同推理后端。配置后
 
 后端负责理解、规划和生成任务；SciForge 负责 workspace contract、artifact schema、UI 渲染、执行轨迹、失败恢复、反馈交接和版本化。这样可以比较不同模型/Agent 的科研能力，同时保留同一套可审计数据层。
 
+当前默认 handoff 只把与本轮相关的 compact capability broker brief 交给 backend；schema、examples、repair hints 和失败日志 refs 只在选中能力或修复时按需展开。UI 和 scenario 不再通过 prompt/scenario/artifact type 特例决定答案。
+
 ### 5. 为什么需要自建 Agent
 
 自建不是为了重复造一个聊天机器人，而是为了科学场景里的三件事：
@@ -83,6 +85,7 @@ Scientific question / paper / dataset / UI feedback
   -> Capability broker
   -> Agent backend reasoning
   -> workspace task code / tool calls / computer use
+  -> ContractValidationFailure repair loop when needed
   -> artifacts + ExecutionUnits + traces
   -> registered interactive scientific views
   -> comments / verification / repair handoff

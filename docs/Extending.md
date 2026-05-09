@@ -1,6 +1,6 @@
 # SciForge 扩展契约
 
-最后更新：2026-05-09
+最后更新：2026-05-10
 
 本文合并原能力集成、scenario package、view schema 和 skill promotion 文档。具体字段以源码为准。
 
@@ -63,19 +63,23 @@ writer 支持两种读取格式：
 
 ## Capability Brief
 
-能力分为 5 类，类型真相源在 `packages/contracts/runtime/capabilities.ts`：
+能力现在以 `CapabilityManifest` 为统一真相源。核心 manifest contract 在 [`../packages/contracts/runtime/capability-manifest.ts`](../packages/contracts/runtime/capability-manifest.ts)，legacy brief 投影在 [`../packages/contracts/runtime/capabilities.ts`](../packages/contracts/runtime/capabilities.ts)。新增能力应先声明 manifest，再由 registry/broker 暴露 compact brief。
+
+`CapabilityManifestKind` 覆盖：
 
 - `observe`：只读观察能力，例如 vision、OCR、网页/文件观察。
-- `reasoning`：确定性策略或 planner，例如 conversation policy。
-- `action`：会改变环境的动作，例如 workspace task。
-- `verify`：schema、agent rubric、environment diff、人类确认。
-- `interactive-view`：artifact renderer。
+- `skill` / `composed`：AgentServer generation、科研技能、组合能力和可晋升热路径。
+- `action`：会改变环境的动作，例如 workspace task、命令运行、Computer Use。
+- `verifier`：schema、agent rubric、environment diff、人类确认。
+- `view`：artifact renderer 和 interactive view。
+- `memory`、`importer`、`exporter`、`runtime-adapter`：上下文、导入导出和 runtime 固定能力适配。
 
 主 agent 默认只消费 compact brief：
 
-- `summary` 包含 id、kind、category、oneLine、domains、triggers、risk、cost、reliability、sideEffects。
-- `contract` 懒加载，只在选中能力后读取。
-- `capabilityBrief` 有候选预算，避免把完整 registry 塞进上下文。
+- broker 输入来自 prompt、object refs、artifact index、failure history、scenario policy、runtime policy 和 available providers。
+- broker 输出 `sciforge.agentserver.capability-broker-brief.v1`，默认不包含 full schema、examples、repair hints 或日志。
+- 选中 capability 后可通过 expansion API 按需展开 schema、examples、repair hints、providers 和当前 failure history 中属于该 capability 的 stdout/stderr/trace refs。
+- `defaultCapabilitySummaries()` 只是从 `CORE_CAPABILITY_MANIFESTS` 派生的兼容投影；不要再维护第二份 capability list。
 
 当前 UI handoff 会把 scenario override 中的 `selectedSkillIds`、`selectedToolIds`、`selectedSenseIds`、`selectedActionIds`、`selectedVerifierIds`、`selectedComponentIds` 传给 runtime；Python conversation-policy 会进一步生成能力摘要和 handoff plan。新增能力应使用 `skills/tool_skills`、`observe`、`actions` 和 `verifiers` 命名，旧 `tool` / `sense` 字段只作为兼容输入存在，不能成为新 package 或新 prompt policy 的真相源。
 
@@ -133,7 +137,7 @@ Provider kind 包括 `human`、`agent`、`rule`、`schema`、`test`、`environme
 
 新增模块先判断它属于 `src` 固定平台秩序，还是 `packages` 插拔能力语义：
 
-当前 ownership inventory 见 [`boundary-inventory.md`](boundary-inventory.md)，机器可读来源是 [`../tools/check-boundary-inventory.ts`](../tools/check-boundary-inventory.ts)。旧链路 cutover 队列见 [`legacy-cutover-inventory.md`](legacy-cutover-inventory.md)。新增或迁移模块时先对照 inventory 的 `fixedPlatform` / `pluggableCapabilities`，再选择落点；如果新增 ownership 类型，先补 inventory，再补 smoke baseline 或 package metadata。
+当前 ownership inventory 见 [`boundary-inventory.md`](boundary-inventory.md)，机器可读来源是 [`../tools/check-boundary-inventory.ts`](../tools/check-boundary-inventory.ts)。旧链路 cutover 清单见 [`legacy-cutover-inventory.md`](legacy-cutover-inventory.md)，当前所有已登记旧链路类型都已关闭，`smoke:no-legacy-paths` baseline 为 0。新增或迁移模块时先对照 inventory 的 `fixedPlatform` / `pluggableCapabilities`，再选择落点；如果新增 ownership 类型，先补 inventory，再补 smoke baseline 或 package metadata。
 
 - 回答“系统怎么运行”的逻辑进 `src/`：app shell、workspace writer、runtime server、transport、stream lifecycle、registry loader、broker shell、provider dispatch、validation/repair loop、ref resolver、artifact persistence、permission/safety、ledger writer 和 boundary smoke。
 - 回答“系统能做什么”的逻辑进 `packages/`：observe、skills、actions、verifiers、views、import/export、scenario package、provider adapter、mock fixture 和 composed capability。
@@ -172,7 +176,7 @@ Package manifest、README 或 skill contract 不能声称拥有 runtime lifecycl
 npm run smoke:module-boundaries
 ```
 
-`smoke:module-boundaries` 只负责 import topology：package 不能反向 import app/runtime 私有文件，UI 不能相对路径深 import package internals，`src/shared` 不能继续扩散。当前少量历史例外由 [`../tools/check-module-boundaries.ts`](../tools/check-module-boundaries.ts) 以 warning 打印，并在 T099/T122 后续迁移中收敛；新增未登记的 package -> app/runtime 私有 import 或 UI -> package internal deep import 会失败。
+`smoke:module-boundaries` 只负责 import topology：package 不能反向 import app/runtime 私有文件，UI 不能相对路径深 import package internals，`src/shared` 不能继续扩散。当前架构完成后，新增未登记的 package -> app/runtime 私有 import 或 UI -> package internal deep import 会失败；历史兼容面只能按 inventory 记录并逐项删除。
 
 T122 相关 smoke 的目的：
 
@@ -192,7 +196,7 @@ npm run packages:check
 
 维护 allowlist/baseline 时只登记历史迁移项或明确的短期 adapter。每条例外都应写清 owner、迁移任务、删除条件和具体符号/路径；不要用宽泛 glob 掩盖新增违规，迁移删除旧语义后同步降低基线。
 
-在 T122 迁移完全完成前，新增模块也应按上述规则自检；脚本中的 tracked warnings 只代表已登记的历史迁移面。
+T122 迁移已经完成；新增模块不应再依赖“迁移中”例外。若确有短期 adapter，必须在同一变更中写明 owner、删除条件、guard baseline 和 focused smoke。
 
 ## UIManifest 与 View Composition
 
@@ -287,4 +291,4 @@ Proposal 写入：
 - [ ] 如果是 sense/action/verifier，补 brief、request/response 或 result contract。
 - [ ] 不在 package contract 中声称 runtime lifecycle ownership。
 - [ ] 如果会被 agent 选择，只给主 agent brief，把大说明放在懒加载 README/contract。
-- [ ] 跑 `npm run typecheck`、`npm run test`、`npm run smoke:module-boundaries`；package/capability 改动再跑 `npm run packages:check`，涉及 `src`/`packages` ownership 再跑对应 T122 smoke。只有实际删除旧路径时，才同步降低 `tools/check-no-legacy-paths.ts` baseline 并更新 PROJECT。
+- [ ] 跑 `npm run typecheck`、`npm run test`、`npm run smoke:module-boundaries`；package/capability 改动再跑 `npm run packages:check`，涉及 `src`/`packages` ownership 再跑 `smoke:fixed-platform-boundary`、`smoke:no-src-capability-semantics` 和 `smoke:no-legacy-paths`。只有实际删除或新增 guard 面时，才同步更新 inventory、baseline 和 PROJECT。

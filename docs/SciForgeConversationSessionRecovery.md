@@ -1,6 +1,8 @@
 # SciForge 多轮对话与 Session 恢复机制
 
-本文面向重新设计对话机制的人。它不追踪每个函数的实现细节，而是解释当前 SciForge 怎么理解一轮对话、怎么带上历史、怎么恢复旧 session，以及当前已经落地的 Python conversation-policy 策略层。尚未完成的部分统一放在后面的“修改建议”里。
+最后更新：2026-05-10
+
+本文面向维护对话机制的人。它不追踪每个函数的实现细节，而是解释当前 SciForge 怎么理解一轮对话、怎么带上历史、怎么恢复旧 session，以及已经落地的 Python conversation-policy 策略层和 TypeScript capability broker。仍需产品化优化的内容统一放在后面的“修改建议”里。
 
 ## 一句话模型
 
@@ -22,7 +24,7 @@ SciForge 当前把对话看成一条可恢复的研究时间线：
 | Reference | 用户显式点选或提到的对象 | 文件、artifact、UI 选区、上传文件、run |
 | Conversation Ledger | 历史对话账本 | 长 session 的轻量连续性记录 |
 | Current Reference Digest | 当前引用摘要 | 大文件的 bounded 摘要，避免全文塞进模型 |
-| Capability Brief | 当前轮可用能力摘要 | Python broker 从 sense/skill/tool/verifier/ui-component manifest 中筛出的少量候选能力 |
+| Capability Brief | 当前轮可用能力摘要 | TypeScript capability broker 从 `CapabilityManifest`、refs、failure history 和 scenario policy 中筛出的少量候选能力 |
 | Process Progress | 用户可见工作过程 | Python 将底层事件归纳为“读、写、执行、等待、下一步”等阶段，前端只负责渲染 |
 | Acceptance | 结果验收 | 判断是否缺报告、缺 artifact、缺引用、是否需要修复 |
 
@@ -233,7 +235,7 @@ flowchart TD
 | `memory.py` | 构建 recent window、ledger、历史检索排序 |
 | `reference_digest.py` | 文件路径抽取、Markdown/JSON/CSV 解析、bounded digest；PDF 暂记录 metadata |
 | `artifact_index.py` | 建立 artifact/ref/execution 索引 |
-| `capability_broker.py` | 从 capability manifest 中筛选 top-k brief，并解释 selected/excluded |
+| `capability_broker.py` | Python 策略侧的能力计划/兼容输入；AgentServer handoff 主 broker 在 `src/runtime/capability-broker.ts` |
 | `handoff_planner.py` | 决定 handoff 中放哪些 refs、summary、budget |
 | `acceptance.py` | 检查结果是否满足本轮承诺 |
 | `recovery.py` | 决定何时 repair、何时 digest recovery、何时 failed-with-reason |
@@ -330,7 +332,7 @@ Python 输出：
 - TypeScript bridge 会自动设置本地 `packages/reasoning/conversation-policy/src` 为 `PYTHONPATH`。
 - runtime 目前以 active mode 调用 Python policy engine，主路径使用 Python response 影响 context、handoff、digest、capability、acceptance 和 recovery。
 - Python `process_events.py` 是工作过程阶段归纳真相源；前端只渲染 `process-progress`，不再对普通 raw stream 维护第二套推断算法。
-- capability broker 已进入 Python package；根目录不保留第二份 broker。
+- capability broker 主路径在 [`../src/runtime/capability-broker.ts`](../src/runtime/capability-broker.ts)；Python policy 可以产出能力/上下文计划，但 AgentServer 默认 handoff 使用 TypeScript broker 的 compact brief。
 
 ## 修改建议：仍需继续完善的地方
 
@@ -339,7 +341,7 @@ Python 输出：
 | Python policy 主路径接管 | 已接入 runtime active path，旧 TS 策略文件已删除 | 继续补充端到端 fixtures，覆盖更多真实多轮 session |
 | PDF digest | 当前记录 hash、大小和 unsupported 状态 | 增加 PDF 文本抽取、页级摘要和引用定位 |
 | 历史检索与排序 | 已有 recent window、ledger、污染防护 | 增加可解释 scoring、confidence、同主题聚类和跨 session retrieval |
-| capability manifest 来源 | 已能处理传入 manifest 和 selected runtime capability | 接入完整 skill/tool/sense/verifier/ui-component registry，并持续生成 compact brief |
+| capability manifest 来源 | `CapabilityManifest` registry 已成为核心能力真相源，legacy summary 由 manifest 投影派生，AgentServer handoff 使用 compact broker brief | 继续把更多 package/provider 的专有能力沉淀为 manifest，而不是扩展 runtime 特例 |
 | acceptance/recovery 主链路 | Python 已表达 acceptance/recovery plan，浏览器端 TurnAcceptance 算法已删除 | 继续让 workspace runner 更完整地消费 Python recovery plan |
 | session 存储 | localStorage 和 workspace state 仍然双轨 | 让 workspace `.sciforge/` 成为主存储，前端 localStorage 只做 cache |
 | 用户过程事件 | Python 已有 process event model，前端能渲染 | 让 backend/workspace runner 更稳定地发 `process-progress`，减少只靠普通日志展示过程 |
@@ -453,7 +455,8 @@ packages/reasoning/conversation-policy/
 | `memory.py` | 选择 recent conversation 和 ledger | messages, runs | recent window, ledger |
 | `artifact_index.py` | 建立 artifact/ref/execution 索引 | artifacts, execution units | searchable refs |
 | `reference_digest.py` | 抽取 prompt 路径、生成 bounded digest | prompt, refs, workspace | current refs + digests |
-| `capability_broker.py` | 从 sense/skill/tool/ui-component registry 中选出本轮候选能力 | prompt, goal, refs, manifests | capability brief + audit |
+| `capability_broker.py` | Python 策略侧的能力计划/兼容输入 | prompt, goal, refs, manifests | capability plan hints |
+| `src/runtime/capability-broker.ts` | AgentServer handoff 主 broker：从 manifest、refs、failure history、scenario policy、provider availability 中筛选 compact brief，并支持 lazy expansion | prompt, object refs, artifact index, failure history, scenario/runtime policy, providers | compact broker brief + audit + selected capability expansion |
 | `handoff_planner.py` | 决定 handoff 放什么、不放什么 | goal, policy, memory, digests | handoff plan |
 | `acceptance.py` | 检查结果是否满足本轮承诺 | goal, response, session | pass/fail + failures |
 | `recovery.py` | 决定 repair、digest recovery、failed-with-reason | failure, digests, attempts | recovery plan |
@@ -500,7 +503,7 @@ sequenceDiagram
    负责 `handoff_planner.py`。他们决定 handoff budget、refs 排序、哪些字段发给 AgentServer。
 
 4. **能力编排组**  
-   负责 `capability_broker.py` 和 capability manifest schema。他们决定主 agent 在本轮能看到哪些 sense、skill、tool、verifier、ui-component 摘要。
+   负责 `src/runtime/capability-broker.ts`、`capability_broker.py` 兼容输入和 capability manifest schema。他们决定主 agent 在本轮能看到哪些 observe、skill、action、verifier、view、runtime-adapter 摘要。
 
 5. **验收与恢复组**  
    负责 `acceptance.py`、`recovery.py`。他们保证失败可解释、可修复，不把部分结果伪装成成功。
@@ -562,10 +565,10 @@ sequenceDiagram
 
 ## 附录：Capability Broker 与模块化能力感知
 
-当系统里有很多模块化的 senses、skills、tools、verifiers、ui-components 时，不让主 agent 直接阅读完整 registry，也不让每个模块默认内置一个小 LLM。当前原则是：
+当系统里有很多模块化 observe、skills、actions、verifiers、views、runtime adapters 时，不让主 agent 直接阅读完整 registry，也不让每个模块默认内置一个小 LLM。当前原则是：
 
 - **主 agent 负责目标、策略和取舍**：它看到的是本轮任务相关的少量 capability brief，而不是所有模块细节。
-- **Capability Broker 负责感知能力空间**：它读取 manifest，按任务目标、显式引用、场景、风险、成本和历史成功率筛出 top-k 能力。
+- **Capability Broker 负责感知能力空间**：它读取 `CapabilityManifest`，按任务目标、显式引用、artifact index、failure history、scenario policy、risk 和 provider availability 筛出 top-k 能力。
 - **模块默认是 typed service/adapter**：大部分 sense、skill、tool、verifier 只需要稳定输入输出 schema，不需要自己思考。
 - **内部小 agent 只用于开放式复杂模块**：例如 GUI/vision/computer-use、复杂文献检索、代码修复、多步实验设计。这类模块可以声明 `internalAgent: optional|required`，但必须被包在 typed interface 后面。
 - **UI components 不内置 LLM**：UI component 只负责按 schema 渲染 artifact、trace、表格、图、报告和交互控件。选择哪个 component 应由 broker/runtime 决定。
@@ -575,43 +578,42 @@ sequenceDiagram
 ```json
 {
   "id": "literature.arxiv.search",
-  "kind": "skill | tool | sense | verifier | ui-component",
-  "domain": ["literature", "research"],
-  "summary": "Search and normalize recent arXiv papers.",
+  "kind": "observe | skill | action | verifier | view | memory | importer | exporter | runtime-adapter | composed",
+  "domains": ["literature", "research"],
+  "brief": "Search and normalize recent arXiv papers.",
   "inputSchema": {},
   "outputSchema": {},
-  "triggers": ["arxiv", "paper", "recent literature"],
-  "antiTriggers": ["private database only"],
-  "artifacts": ["markdown", "json", "pdf"],
-  "cost": "low | medium | high",
-  "latency": "interactive | batch",
-  "risk": ["network", "writes-workspace"],
-  "sideEffects": ["download-files"],
-  "adapter": "python:function or ts:endpoint",
-  "internalAgent": "none | optional | required"
+  "routingTags": ["arxiv", "paper", "recent literature"],
+  "sideEffects": ["network", "workspace-write"],
+  "safety": { "risk": "low | medium | high", "dataScopes": ["workspace"] },
+  "providers": [{ "id": "literature.arxiv.provider", "kind": "package", "requiredConfig": [] }],
+  "validators": [{ "id": "literature.arxiv.schema", "kind": "schema" }],
+  "repairHints": [{ "failureCode": "empty-result", "recoverActions": ["broaden-query"] }]
 }
 ```
 
-`capability_broker.py` 的输出短小、可审计，例如：
+AgentServer handoff 中的 broker 输出短小、可审计，例如：
 
 ```json
 {
-  "selected": [
+  "schemaVersion": "sciforge.agentserver.capability-broker-brief.v1",
+  "briefs": [
     {
       "id": "literature.arxiv.search",
       "kind": "skill",
-      "why": "prompt asks for recent arXiv agent papers",
-      "allowedOperations": ["search", "download", "summarize"],
-      "expectedArtifacts": ["research-report.md", "papers.json"]
+      "brief": "Search and normalize recent arXiv papers.",
+      "routingTags": ["arxiv", "paper"],
+      "providerIds": ["literature.arxiv.provider"],
+      "matchedSignals": ["routing/domain match: paper"]
     }
   ],
   "excluded": [
     {
-      "id": "ui.table.viewer",
-      "why": "not needed until structured table artifact exists"
+      "id": "action.desktop-publish",
+      "reason": "side effect outside runtime policy"
     }
   ],
-  "needsMoreDiscovery": false
+  "inputSummary": { "objectRefs": 1, "failureHistoryEntries": 0 }
 }
 ```
 
