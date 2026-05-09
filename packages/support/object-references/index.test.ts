@@ -5,6 +5,7 @@ import {
   artifactTypeForPath,
   linkifyObjectReferences,
   normalizeResponseObjectReferences,
+  normalizeWorkspacePath,
   objectReferenceChipModel,
   objectReferenceForArtifactSummary,
   objectReferenceForUploadedArtifact,
@@ -16,7 +17,13 @@ import {
   referenceForUploadedArtifact,
   referenceToPreviewTarget,
   syntheticArtifactForObjectReference,
+  toWorkspaceRelativePath,
   withComposerMarker,
+  workspaceOnboardingErrorMessage,
+  workspaceOnboardingReason,
+  workspaceParentPath,
+  workspacePathBasename,
+  workspacePathNeedsOnboarding,
 } from './index';
 import type { RuntimeArtifact } from '@sciforge-ui/runtime-contract/artifacts';
 import type { ObjectReference } from '@sciforge-ui/runtime-contract/references';
@@ -47,6 +54,16 @@ assert.equal(artifactForObjectReference(artifactRef, session)?.id, 'artifact-1')
 assert.equal(pathForObjectReference(artifactRef, session), 'results/table.csv');
 assert.equal(referenceToPreviewTarget(artifactRef, session).status, 'resolved');
 assert.equal(artifactReferenceKind(artifact, 'data-table', 1), 'file');
+assert.equal(normalizeWorkspacePath('/tmp/workspace///'), '/tmp/workspace');
+assert.equal(workspacePathBasename('/tmp/workspace/'), 'workspace');
+assert.equal(workspaceParentPath('/tmp/workspace/file.md'), '/tmp/workspace');
+assert.equal(toWorkspaceRelativePath('/tmp/workspace', '/tmp/workspace/src/app.ts'), 'src/app.ts');
+assert.equal(toWorkspaceRelativePath('/tmp/workspace', '/tmp/workspace'), '.');
+assert.equal(workspacePathNeedsOnboarding('', '', ''), true);
+assert.equal(workspacePathNeedsOnboarding('/tmp/project', 'ENOENT workspace-state.json', ''), true);
+assert.match(workspaceOnboardingReason('/tmp/project/', '', ''), /\/tmp\/project\/\.sciforge/);
+assert.match(workspaceOnboardingReason('/tmp/project', 'EACCES', ''), /权限不足/);
+assert.match(workspaceOnboardingErrorMessage(new Error('Failed to fetch')), /Workspace Writer 未连接/);
 
 const fileRef: ObjectReference = {
   id: 'file-1',

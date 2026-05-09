@@ -40,6 +40,7 @@ import { isToolPayload } from './gateway/tool-payload-contract.js';
 import { evaluateToolPayloadEvidence } from './gateway/work-evidence-guard.js';
 import { collectWorkEvidence, parseWorkEvidence, type WorkEvidence } from './gateway/work-evidence-types.js';
 import { taskProjectSkillDomain } from '@sciforge-ui/runtime-contract/handoff';
+import { taskProjectStageAdapterSkillAvailability } from '../../packages/skills/runtime-policy';
 import { maybeWriteSkillPromotionProposal } from './skill-promotion.js';
 import { buildTaskProjectHandoffSummary } from './task-project-handoff.js';
 import {
@@ -905,27 +906,7 @@ function languageForCodeRef(codeRel: string): WorkspaceTaskSpec['language'] {
 }
 
 function defaultTaskProjectStageAdapterSkill(skillDomain: GatewayRequest['skillDomain']): SkillAvailability {
-  return {
-    id: `agentserver.generate.${skillDomain}.task-project-stage-adapter`,
-    kind: 'installed',
-    available: true,
-    reason: 'TaskProject stable stage adapter promotion candidate.',
-    checkedAt: new Date().toISOString(),
-    manifestPath: 'agentserver://task-project-stage-adapter',
-    manifest: {
-      id: `agentserver.generate.${skillDomain}.task-project-stage-adapter`,
-      kind: 'installed',
-      description: 'Generic AgentServer TaskProject stage adapter generation fallback.',
-      skillDomains: [skillDomain],
-      inputContract: { prompt: 'string', projectId: 'string', stageId: 'string' },
-      outputArtifactSchema: { type: 'runtime-artifact' },
-      entrypoint: { type: 'agentserver-generation' },
-      environment: { runtime: 'AgentServer', sourceRuntime: 'task-project' },
-      validationSmoke: { mode: 'delegated-task-project-stage' },
-      examplePrompts: [],
-      promotionHistory: [],
-    },
-  };
+  return taskProjectStageAdapterSkillAvailability(skillDomain, new Date().toISOString()) as SkillAvailability;
 }
 
 function requiredStageRef(value: string | undefined, name: string) {

@@ -2,17 +2,9 @@ import { spawn } from 'node:child_process';
 import { stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { normalizeWorkspaceOpenAction, workspaceOpenExternalBlockedExtensionReason, type WorkspaceOpenResult } from '@sciforge-ui/runtime-contract/workspace-open';
 import { normalizeWorkspaceRootPath } from '../workspace-paths.js';
 import { isBinaryPreviewFile } from './file-preview.js';
-
-export type WorkspaceOpenAction = 'open-external' | 'reveal-in-folder' | 'copy-path';
-
-export interface WorkspaceOpenResult {
-  action: WorkspaceOpenAction;
-  path: string;
-  workspacePath: string;
-  dryRun: boolean;
-}
 
 export async function runWorkspaceOpenAction(input: {
   workspacePath: string;
@@ -56,11 +48,6 @@ export function resolveWorkspaceOpenPath(workspacePath: string, rawPath: string)
   return targetPath;
 }
 
-function normalizeWorkspaceOpenAction(action: string): WorkspaceOpenAction {
-  if (action === 'open-external' || action === 'reveal-in-folder' || action === 'copy-path') return action;
-  throw new Error(`Unsupported workspace open action: ${action}`);
-}
-
 function isAllowedGeneratedPreviewPath(targetPath: string) {
   if (!isBinaryPreviewFile(targetPath)) return false;
   const tempRoots = Array.from(new Set([
@@ -79,29 +66,6 @@ function isAllowedGeneratedPreviewPath(targetPath: string) {
 function assertCanOpenExternal(targetPath: string, isDirectory: boolean) {
   if (isDirectory) return;
   const extension = extname(targetPath).toLowerCase();
-  const blocked = new Set([
-    '.app',
-    '.bat',
-    '.cmd',
-    '.com',
-    '.dmg',
-    '.exe',
-    '.pkg',
-    '.ps1',
-    '.scr',
-    '.sh',
-    '.bash',
-    '.zsh',
-    '.fish',
-    '.command',
-    '.scpt',
-    '.workflow',
-    '.docm',
-    '.xlsm',
-    '.pptm',
-    '.jar',
-  ]);
-  if (blocked.has(extension)) {
-    throw new Error(`Workspace Open Gateway blocked high-risk file type: ${extension}`);
-  }
+  const blockedReason = workspaceOpenExternalBlockedExtensionReason(extension);
+  if (blockedReason) throw new Error(blockedReason);
 }

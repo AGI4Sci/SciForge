@@ -22,8 +22,10 @@ export {
   runtimeAgentBackendRateLimitRecoverActions,
   runtimeAgentBackendRecoverActions,
   runtimeAgentBackendHandoffFallbackCompactCapability,
+  runtimeAcceptanceDiagnostic,
   runtimeAgentBackendSupported,
   runtimeAgentBackendUsesAgentServerManagedCompaction,
+  readableRuntimeAcceptanceFailure,
   redactRuntimeAgentBackendSecretText,
   sanitizeRuntimeAgentBackendFailureDetail,
   withRuntimeAgentBackendUserFacingDiagnostic,
@@ -34,6 +36,8 @@ export type {
   RuntimeBackendContextWindowSource,
   RuntimeAgentBackendFailureDiagnostic,
   RuntimeAgentBackendFailureKind,
+  RuntimeAcceptanceDiagnostic,
+  RuntimeAcceptanceFailureLike,
   RuntimeLlmEndpointConfig,
 } from './agent-backend-policy';
 export {
@@ -163,6 +167,15 @@ export type {
   ContractValidationFailureKind,
   ContractValidationIssue,
 } from './validation-failure';
+export {
+  WORKSPACE_OPEN_ACTIONS,
+  normalizeWorkspaceOpenAction,
+  workspaceOpenExternalBlockedExtensionReason,
+} from './workspace-open';
+export type {
+  WorkspaceOpenAction,
+  WorkspaceOpenResult,
+} from './workspace-open';
 export {
   WORK_EVIDENCE_KINDS,
   WORK_EVIDENCE_SCHEMA,
@@ -296,6 +309,7 @@ export type {
   BackgroundCompletionRuntimeEvent,
   BackgroundCompletionStatus,
   ProjectToolEventType,
+  RuntimeRequestAcceptedProgressCopy,
   RuntimeEventIdentity,
   TargetIssueEventType,
   WorkspaceRuntimePolicyEvent,
@@ -357,6 +371,7 @@ export {
   agentServerGenerationRetrySucceededEvent,
   agentServerSilentStreamGuardEvent,
   compactCapabilityForBackend,
+  compactRuntimePromptSummary,
   conversationPolicyStartedEvent,
   directContextFastPathEvent,
   firstBlockingRuntimeResultReason,
@@ -380,6 +395,7 @@ export {
   runtimeDetailIndicatesAbort,
   runtimeEventIsBackend,
   runtimeEventIsUserVisible,
+  runtimeRequestAcceptedProgressCopy,
   runtimeStreamEventLabel,
   targetInstanceContextEvent,
   targetIssueLookupFailedEvent,

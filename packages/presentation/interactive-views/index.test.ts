@@ -28,6 +28,7 @@ import {
   interactiveViewManifests,
   interactiveViewPackageRendererForComponent,
   interactiveViewPlanSourceIds,
+  interactiveViewResultSummaryPresentation,
   markdownTextForDirectAnswerArtifact,
   normalizeDirectAnswerArtifacts,
   normalizeDirectAnswerUiManifest,
@@ -45,6 +46,7 @@ import {
   stripDirectAnswerJsonFence,
   uiComponentCompatibilityAliases,
   uiComponentManifests,
+  uploadedInteractiveEvidenceArtifacts,
   validateInteractiveViewModuleBinding,
   visionSenseTraceOutputViews,
 } from './index';
@@ -338,6 +340,40 @@ test('interactive view policy owns resolver artifact and module selection semant
   assert.equal(blocked?.requiredModuleCapability, 'render opaque-result as primary result');
   assert.equal(blocked?.resumeRunId, 'run-custom');
   assert.equal(interactiveViewPlanSourceIds.runtimeManifest, 'runtime-manifest');
+});
+
+test('interactive view policy owns result summary status semantics', () => {
+  const partial = interactiveViewResultSummaryPresentation({
+    items: [
+      { status: 'bound' },
+      { status: 'missing-artifact' },
+      { status: 'missing-fields' },
+      { status: 'fallback' },
+    ],
+  });
+  assert.equal(partial.badgeVariant, 'warning');
+  assert.equal(partial.badgeLabel, 'partial result');
+  assert.equal(partial.boundCount, 1);
+  assert.equal(partial.waitingCount, 2);
+  assert.match(partial.summaryText, /2 个结果等待 artifact 或字段/);
+
+  const diagnostic = interactiveViewResultSummaryPresentation({
+    items: [{ status: 'bound' }, { status: 'missing-artifact' }],
+    diagnosticCount: 1,
+  });
+  assert.equal(diagnostic.badgeVariant, 'danger');
+  assert.equal(diagnostic.badgeLabel, 'diagnostic result');
+  assert.equal(diagnostic.summaryText, '1 个诊断视图可用；未合成成功答案');
+});
+
+test('interactive view policy owns uploaded evidence artifact matching', () => {
+  const uploads = uploadedInteractiveEvidenceArtifacts([
+    { id: 'image', type: 'uploaded-image', producerScenario: 'literature-evidence-review', schemaVersion: '1', data: {} },
+    { id: 'metadata', type: 'file', producerScenario: 'literature-evidence-review', schemaVersion: '1', metadata: { source: 'user-upload' }, data: {} },
+    { id: 'runtime', type: 'paper-list', producerScenario: 'literature-evidence-review', schemaVersion: '1', data: {} },
+  ]);
+
+  assert.deepEqual(uploads.map((artifact) => artifact.id), ['image', 'metadata']);
 });
 
 test('paper-card-list component policy owns paper-list presentation semantics', () => {

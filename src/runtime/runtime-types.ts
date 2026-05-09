@@ -1,4 +1,6 @@
 import type { SciForgeAgentHandoffSource, SciForgeSharedSkillDomain, SharedAgentHandoffContract } from '@sciforge-ui/runtime-contract/handoff';
+import type { AgentCompactCapability, AgentContextWindowSource, RuntimeVerificationVerdict } from '@sciforge-ui/runtime-contract';
+import type { RuntimeBackendContextWindowSource } from '@sciforge-ui/runtime-contract/agent-backend-policy';
 import type { SkillEntrypointType } from '@sciforge-skill/packages/runtime-policy';
 import type { WorkEvidence } from './gateway/work-evidence-types.js';
 
@@ -15,7 +17,7 @@ export type ExecutionUnitStatus =
   | 'failed-with-reason'
   | 'needs-human';
 
-export type VerificationVerdict = 'pass' | 'fail' | 'uncertain' | 'needs-human' | 'unverified';
+export type VerificationVerdict = RuntimeVerificationVerdict;
 export type VerificationMode = 'none' | 'lightweight' | 'automatic' | 'human' | 'hybrid' | 'unverified';
 export type VerificationRiskLevel = 'low' | 'medium' | 'high';
 
@@ -96,7 +98,7 @@ export interface WorkspaceRuntimeEvent {
   raw?: unknown;
 }
 
-export type WorkspaceRuntimeContextWindowSource = 'native' | 'provider-usage' | 'agentserver-estimate' | 'agentserver' | 'estimate' | 'unknown';
+export type WorkspaceRuntimeContextWindowSource = AgentContextWindowSource;
 
 export interface WorkspaceRuntimeContextWindowState {
   backend?: string;
@@ -111,7 +113,7 @@ export interface WorkspaceRuntimeContextWindowState {
   ratio?: number;
   source: WorkspaceRuntimeContextWindowSource;
   status?: 'healthy' | 'watch' | 'near-limit' | 'exceeded' | 'compacting' | 'blocked' | 'unknown';
-  compactCapability?: 'native' | 'agentserver' | 'handoff-only' | 'handoff-slimming' | 'session-rotate' | 'none' | 'unknown';
+  compactCapability?: AgentCompactCapability;
   budget?: WorkspaceRuntimeContextBudget;
   auditRefs?: string[];
   autoCompactThreshold?: number;
@@ -284,7 +286,7 @@ export interface BackendContextWindowState {
   cache?: number;
   window?: number;
   ratio?: number;
-  source: 'native' | 'provider-usage' | 'agentserver-estimate' | 'unknown';
+  source: RuntimeBackendContextWindowSource;
   status: 'healthy' | 'watch' | 'near-limit' | 'exceeded' | 'unknown';
   contextWindowTokens?: number;
   contextWindowLimit?: number;
@@ -296,7 +298,7 @@ export interface BackendContextWindowState {
     retryAfterMs?: number;
     resetAt?: string;
   };
-  compactCapability: 'native' | 'agentserver' | 'handoff-only' | 'session-rotate' | 'none';
+  compactCapability: Exclude<AgentCompactCapability, 'handoff-slimming' | 'unknown'>;
   budget?: WorkspaceRuntimeContextBudget;
   auditRefs?: string[];
   snapshot?: Record<string, unknown>;

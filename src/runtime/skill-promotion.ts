@@ -1,7 +1,15 @@
 import { copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { CapabilityEvolutionCandidate, CapabilityEvolutionCandidateSet, CapabilityEvolutionCompactSummary } from '../../packages/contracts/runtime/capability-evolution.js';
-import { skillPromotionDomain } from '../../packages/skills/runtime-policy';
+import {
+  SKILL_ENTRYPOINT_TYPE,
+  skillManifestHasWorkspaceTaskEntrypoint,
+  skillManifestPathIsEvolvedWorkspaceSkill,
+  skillPromotionDomain,
+  skillPromotionShouldPropose,
+  skillRuntimeLanguageForManifest,
+  skillRuntimeTaskFileNameForManifest,
+} from '../../packages/skills/runtime-policy';
 import { buildCapabilityEvolutionCandidateSet } from './capability-evolution-ledger.js';
 import type { GatewayRequest, SkillAvailability, SkillManifest, SkillPromotionProposal, ToolPayload } from './runtime-types.js';
 import { loadSkillRegistry } from './skill-registry.js';
@@ -113,14 +121,14 @@ export async function acceptSkillPromotionProposal(workspacePath: string, propos
   }
   const skillDir = join(workspace, '.sciforge', 'evolved-skills', safeName(manifest.id));
   await mkdir(skillDir, { recursive: true });
-  const taskName = taskFileNameForManifest(manifest);
+  const taskName = skillRuntimeTaskFileNameForManifest(manifest);
   await copyFile(sourceTask, join(skillDir, taskName));
   const installedManifest: SkillManifest = {
     ...manifest,
     kind: 'workspace',
     entrypoint: {
       ...manifest.entrypoint,
-      type: 'workspace-task',
+      type: SKILL_ENTRYPOINT_TYPE.WORKSPACE_TASK,
       command: manifest.entrypoint.command || 'python',
       path: `./${taskName}`,
     },
@@ -180,9 +188,9 @@ async function updateSkillPromotionProposalStatus(
 export async function runAcceptedSkillValidationSmoke(workspacePath: string, skillId: string) {
   const workspace = resolve(workspacePath || process.cwd());
   const registry = await loadSkillRegistry({ workspacePath: workspace });
-  const skill = registry.find((item) => item.id === skillId && item.available && item.manifestPath.includes(`${join('.sciforge', 'evolved-skills')}`));
+  const skill = registry.find((item) => item.id === skillId && item.available && skillManifestPathIsEvolvedWorkspaceSkill(item.manifestPath));
   if (!skill) throw new Error(`Accepted evolved skill is not discoverable in registry: ${skillId}`);
-  if (skill.manifest.entrypoint.type !== 'workspace-task' || !skill.manifest.entrypoint.path) {
+  if (!skillManifestHasWorkspaceTaskEntrypoint(skill.manifest)) {
     throw new Error(`Accepted evolved skill is not a workspace task: ${skillId}`);
   }
   const entrypointPath = resolve(dirname(skill.manifestPath), skill.manifest.entrypoint.path);
@@ -192,7 +200,7 @@ export async function runAcceptedSkillValidationSmoke(workspacePath: string, ski
   const runId = `validation-${safeName(skill.id)}-${sha1(`${skill.id}:${Date.now()}`).slice(0, 8)}`;
   const run = await runWorkspaceTask(workspace, {
     id: runId,
-    language: languageForManifest(skill.manifest),
+    language: skillRuntimeLanguageForManifest(skill.manifest),
     entrypoint: basename(entrypointPath),
     codeTemplatePath: entrypointPath,
     input: {
@@ -229,11 +237,14 @@ export async function runAcceptedSkillValidationSmoke(workspacePath: string, ski
 }
 
 function shouldProposeSkill(skill: SkillAvailability, taskRel: string, selfHealed?: boolean) {
-  if (skill.kind === 'workspace' && skill.manifestPath.includes(`${join('.sciforge', 'evolved-skills')}`)) return false;
-  if (selfHealed) return true;
-  if (skill.manifest.entrypoint.type === 'agentserver-generation') return true;
-  if (skill.id.startsWith('agentserver.generate.')) return true;
-  return taskRel.includes('/generated-');
+  return skillPromotionShouldPropose({
+    skillKind: skill.kind,
+    skillId: skill.id,
+    manifestPath: skill.manifestPath,
+    entrypoint: skill.manifest.entrypoint,
+    taskRel,
+    selfHealed,
+  });
 }
 
 function buildSkillPromotionProposal(params: {
@@ -271,7 +282,7 @@ function buildSkillPromotionProposal(params: {
     },
     outputArtifactSchema: artifactTypes.length === 1 ? { type: artifactTypes[0] } : { types: artifactTypes },
     entrypoint: {
-      type: 'workspace-task',
+      type: SKILL_ENTRYPOINT_TYPE.WORKSPACE_TASK,
       command: 'python',
       path: './task.py',
     },
@@ -383,7 +394,7 @@ function buildLedgerSkillPromotionProposal(params: {
       supportingRecordRefs: params.candidate.supportingRecordRefs,
     },
     entrypoint: {
-      type: 'markdown-skill',
+      type: SKILL_ENTRYPOINT_TYPE.MARKDOWN_SKILL,
     },
     environment: {
       sourceRuntime: 'capability-evolution-ledger',
@@ -535,18 +546,6 @@ function payloadSchemaErrors(payload: unknown) {
   if (!Array.isArray(payload.executionUnits)) errors.push('executionUnits must be an array');
   if (!Array.isArray(payload.artifacts)) errors.push('artifacts must be an array');
   return errors;
-}
-
-function languageForManifest(manifest: SkillManifest) {
-  const language = String(manifest.environment.language || manifest.entrypoint.command || 'python').toLowerCase();
-  if (language.includes('r')) return 'r' as const;
-  if (language.includes('shell') || language.includes('sh')) return 'shell' as const;
-  return 'python' as const;
-}
-
-function taskFileNameForManifest(manifest: SkillManifest) {
-  const current = typeof manifest.entrypoint.path === 'string' ? basename(manifest.entrypoint.path) : 'task.py';
-  return current.endsWith('.py') ? current : 'task.py';
 }
 
 function slugForPrompt(prompt: string) {

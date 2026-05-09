@@ -13,6 +13,7 @@ import {
   interactiveUnknownComponentFallbackPolicy,
   interactiveViewComponentLabel,
   interactiveViewPackageRendererForComponent,
+  interactiveViewResultSummaryPresentation,
   isEvidenceInteractiveViewComponent,
   isExecutionInteractiveViewComponent,
   isNotebookInteractiveViewComponent,
@@ -1112,20 +1113,19 @@ function rawAuditItems(session: SciForgeSession, activeRun: SciForgeRun | undefi
 }
 
 function ViewPlanSummary({ viewPlan, session, activeRun }: { viewPlan: RuntimeResolvedViewPlan; session: SciForgeSession; activeRun?: SciForgeRun }) {
-  const boundCount = viewPlan.allItems.filter((item) => item.status === 'bound').length;
-  const waitingCount = viewPlan.allItems.filter((item) => item.status === 'missing-artifact' || item.status === 'missing-fields').length;
   const diagnosticCount = contractValidationFailures(session, activeRun).length + failedExecutionUnits(session, activeRun).length;
   const runFailed = (activeRun ?? session.runs.at(-1))?.status === 'failed';
+  const summary = interactiveViewResultSummaryPresentation({
+    items: viewPlan.allItems,
+    diagnosticCount,
+    runFailed,
+  });
   return (
     <div className="view-plan-summary">
       <div>
-        <Badge variant={diagnosticCount || runFailed ? 'danger' : waitingCount ? 'warning' : 'success'}>
-          {diagnosticCount || runFailed ? 'diagnostic result' : waitingCount ? 'partial result' : 'ready result'}
-        </Badge>
+        <Badge variant={summary.badgeVariant}>{summary.badgeLabel}</Badge>
         <strong>{viewPlan.displayIntent.primaryGoal}</strong>
-        <span>{diagnosticCount || runFailed
-          ? `${boundCount} 个诊断视图可用；未合成成功答案`
-          : `${boundCount} 个结果可用${waitingCount ? `，${waitingCount} 个结果等待 artifact 或字段` : ''}`}</span>
+        <span>{summary.summaryText}</span>
       </div>
     </div>
   );

@@ -78,6 +78,14 @@ export type InteractiveViewBlockedDesign = {
   resumeRunId?: string;
 };
 
+export type InteractiveViewResultSummaryPresentation = {
+  badgeVariant: 'danger' | 'warning' | 'success';
+  badgeLabel: string;
+  boundCount: number;
+  waitingCount: number;
+  summaryText: string;
+};
+
 export function inferDisplayIntentFromInteractiveArtifacts(
   artifacts: RuntimeArtifact[] = [],
   modules: UIComponentManifest[] = [],
@@ -310,7 +318,34 @@ export function interactiveViewPlanStatusRank(status: InteractiveViewBindingStat
   return 3;
 }
 
-function uploadedInteractiveEvidenceArtifacts(artifacts: RuntimeArtifact[]) {
+export function interactiveViewResultSummaryPresentation({
+  items,
+  diagnosticCount = 0,
+  runFailed = false,
+}: {
+  items: Array<Pick<InteractiveViewPlanItem, 'status'>>;
+  diagnosticCount?: number;
+  runFailed?: boolean;
+}): InteractiveViewResultSummaryPresentation {
+  const boundCount = items.filter((item) => item.status === 'bound').length;
+  const waitingCount = items.filter(interactiveViewPlanItemWaitingForArtifactData).length;
+  const hasDiagnostic = diagnosticCount > 0 || runFailed;
+  return {
+    badgeVariant: hasDiagnostic ? 'danger' : waitingCount ? 'warning' : 'success',
+    badgeLabel: hasDiagnostic ? 'diagnostic result' : waitingCount ? 'partial result' : 'ready result',
+    boundCount,
+    waitingCount,
+    summaryText: hasDiagnostic
+      ? `${boundCount} 个诊断视图可用；未合成成功答案`
+      : `${boundCount} 个结果可用${waitingCount ? `，${waitingCount} 个结果等待 artifact 或字段` : ''}`,
+  };
+}
+
+function interactiveViewPlanItemWaitingForArtifactData(item: Pick<InteractiveViewPlanItem, 'status'>) {
+  return item.status === 'missing-artifact' || item.status === 'missing-fields';
+}
+
+export function uploadedInteractiveEvidenceArtifacts(artifacts: RuntimeArtifact[]) {
   return artifacts.filter((artifact) => artifact.metadata?.source === 'user-upload' || /^uploaded-/.test(artifact.type));
 }
 

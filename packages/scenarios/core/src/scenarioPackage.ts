@@ -92,6 +92,7 @@ export interface ScenarioPackage {
   status: ScenarioPublishStatus;
   scenario: ScenarioIR;
   policy?: ScenarioPackagePolicy;
+  metadata?: Record<string, unknown>;
   skillPlan: SkillPlan;
   uiPlan: UIPlan;
   validationReport?: ValidationReport;

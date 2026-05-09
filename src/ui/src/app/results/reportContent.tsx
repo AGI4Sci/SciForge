@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import type { SciForgeConfig, SciForgeSession, ObjectReference, RuntimeArtifact, UIManifestSlot } from '../../domain';
 import { readWorkspaceFile } from '../../api/workspaceClient';
 import { elementRegistry } from '@sciforge/scenario-core/element-registry';
+import { scenarioReportViewerEmptyStatePolicy } from '@sciforge/scenario-core/scenario-builder-display-policy';
 import { EmptyArtifactState } from '../uiPrimitives';
 import {
   coerceArtifactReportPayload,
@@ -11,9 +12,9 @@ import {
   reportRecordToReadableText,
   reportSectionsToMarkdown,
   splitInlineObjectReferenceText,
-} from '../../../../../packages/support/artifact-preview';
+} from '@sciforge-ui/artifact-preview';
 
-export { coerceArtifactReportPayload as coerceReportPayload } from '../../../../../packages/support/artifact-preview';
+export { coerceArtifactReportPayload as coerceReportPayload } from '@sciforge-ui/artifact-preview';
 
 export type ReportViewerSlotProps = {
   scenarioId: unknown;
@@ -102,7 +103,7 @@ export function ReportViewerSlot({ slot, artifact, config, session, onObjectRefe
   const markdown = loadedReport && loadedReport.ref === report.reportRef ? loadedReport.markdown : report.markdown;
   const sections = report.sections;
   if (!artifact || (!markdown && !sections.length)) {
-    return <ComponentEmptyState componentId="report-viewer" artifactType="research-report" detail={!artifact ? undefined : '当前 research-report 缺少 markdown/report/sections 字段；请检查 AgentServer 生成的 artifact contract。'} />;
+    return <ComponentEmptyState {...scenarioReportViewerEmptyStatePolicy({ hasArtifact: Boolean(artifact) })} />;
   }
   return (
     <div className="stack">

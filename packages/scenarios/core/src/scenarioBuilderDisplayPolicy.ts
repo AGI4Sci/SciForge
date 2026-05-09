@@ -1,11 +1,13 @@
 import { elementRegistry } from './elementRegistry';
 import type { ArtifactSchemaElement, ElementRegistry, SkillElement, UIComponentElement } from './elementTypes';
 import type { ScenarioBuilderDraft } from './scenarioDraftCompiler';
-import type { ScenarioElementSelection } from './scenarioElementCompiler';
-import type { ScenarioId } from './contracts';
+import { recommendScenarioElements, type ScenarioElementSelection } from './scenarioElementCompiler';
+import type { ScenarioId, ScenarioPackageRef, ScenarioRuntimeOverride } from './contracts';
 import type { ScenarioPackage } from './scenarioPackage';
 import { SCENARIO_SPECS, type ScenarioArtifactSchema, type SkillDomain } from './scenarioSpecs';
 import { scenarioIdBySkillDomain } from './scenarioRoutingPolicy';
+import type { ScenarioQualityReport } from './scenarioQualityGate';
+import type { ValidationReport } from './validationGate';
 
 export interface ScenarioBuilderComponentDisplay {
   label: string;
@@ -123,6 +125,17 @@ export interface ScenarioBuilderRecommendationInput {
   skillStepCount: number;
 }
 
+export interface ScenarioPackageRuntimeOverride extends ScenarioRuntimeOverride {
+  selectedSkillIds?: string[];
+  selectedToolIds?: string[];
+}
+
+export interface ScenarioReportViewerEmptyStatePolicy {
+  componentId: string;
+  artifactType: string;
+  detail?: string;
+}
+
 export const scenarioBuilderQualityChecklistText = '发布前会检查 producer/consumer、fallback、runtime profile 和 package quality gate。';
 export const scenarioBuilderDefaultPrompt = '我想比较KRAS G12D突变相关文献证据，并在需要时联动蛋白结构和知识图谱。';
 export const scenarioBuilderPromptPlaceholder = '例如：帮我构建一个场景，读取单细胞表达矩阵，比较处理组和对照组，并展示火山图、热图和UMAP。';
@@ -227,6 +240,144 @@ export function scenarioPackagePreviewFields(input: {
 
 export function scenarioPackageExportFileName(input: { id: string; version: string }) {
   return `${input.id}-${input.version}.scenario-package.json`;
+}
+
+export function scenarioReportViewerEmptyStatePolicy(input: { hasArtifact: boolean }): ScenarioReportViewerEmptyStatePolicy {
+  return {
+    componentId: 'report-viewer',
+    artifactType: 'research-report',
+    detail: input.hasArtifact ? '当前 research-report 缺少 markdown/report/sections 字段；请检查 AgentServer 生成的 artifact contract。' : undefined,
+  };
+}
+
+export function scenarioPackageIdentityLabel(input?: { id: string; version: string }, fallback = 'n/a') {
+  return input ? `${input.id}@${input.version}` : fallback;
+}
+
+export function scenarioPackageRefLabel(
+  ref?: Pick<ScenarioPackageRef, 'id' | 'version' | 'source'>,
+  options: { includeSource?: boolean; fallback?: string } = {},
+) {
+  if (!ref) return options.fallback ?? 'n/a';
+  const label = scenarioPackageIdentityLabel(ref);
+  return options.includeSource ? `${label}:${ref.source}` : label;
+}
+
+export function scenarioPackageValidationSummary(input: {
+  package: Pick<ScenarioPackage, 'id' | 'version'>;
+  validationReport: Pick<ValidationReport, 'ok'>;
+}) {
+  return `${scenarioPackageIdentityLabel(input.package)} · ${input.validationReport.ok ? 'valid' : 'needs fixes'}`;
+}
+
+export function scenarioBuilderPackageForWorkspaceSave(input: {
+  package: ScenarioPackage;
+  status: ScenarioPackage['status'];
+  validationReport: ValidationReport;
+  qualityReport: ScenarioQualityReport;
+  recommendationReasons: string[];
+  builderStep: string;
+  selection: Pick<ScenarioElementSelection, 'skillDomain' | 'selectedSkillIds' | 'selectedToolIds' | 'selectedComponentIds' | 'selectedArtifactTypes'>;
+  fallbackSkillDomain: SkillDomain;
+}): ScenarioPackage {
+  return {
+    ...input.package,
+    status: input.status,
+    metadata: {
+      ...input.package.metadata,
+      recommendationReasons: input.recommendationReasons,
+      compiledFrom: {
+        builderStep: input.builderStep,
+        skillDomain: input.selection.skillDomain ?? input.fallbackSkillDomain,
+        selectedSkillIds: input.selection.selectedSkillIds,
+        selectedToolIds: input.selection.selectedToolIds,
+        selectedComponentIds: input.selection.selectedComponentIds,
+        selectedArtifactTypes: input.selection.selectedArtifactTypes,
+      },
+    },
+    validationReport: input.validationReport,
+    qualityReport: input.qualityReport,
+  };
+}
+
+export function scenarioPackageToRuntimeOverride(pkg: Pick<ScenarioPackage, 'id' | 'version' | 'scenario' | 'skillPlan' | 'uiPlan'>): ScenarioPackageRuntimeOverride {
+  const base = SCENARIO_SPECS[scenarioIdBySkillDomain[pkg.scenario.skillDomain]];
+  const defaultComponents = pkg.scenario.selectedComponentIds.length ? pkg.scenario.selectedComponentIds : base.componentPolicy.defaultComponents;
+  return {
+    title: pkg.scenario.title,
+    description: pkg.scenario.description,
+    skillDomain: pkg.scenario.skillDomain,
+    scenarioMarkdown: pkg.scenario.scenarioMarkdown,
+    defaultComponents,
+    allowedComponents: Array.from(new Set([...base.componentPolicy.allowedComponents, ...defaultComponents])),
+    fallbackComponent: pkg.scenario.fallbackComponentId || base.componentPolicy.fallbackComponent,
+    selectedSkillIds: pkg.scenario.selectedSkillIds,
+    selectedToolIds: pkg.scenario.selectedToolIds,
+    scenarioPackageRef: { id: pkg.id, version: pkg.version, source: 'workspace' },
+    skillPlanRef: pkg.skillPlan.id,
+    uiPlanRef: pkg.uiPlan.id,
+  };
+}
+
+export function scenarioDefaultElementSelectionForRuntimeOverride(
+  scenarioId: ScenarioId,
+  scenario: ScenarioPackageRuntimeOverride,
+): ScenarioElementSelection {
+  const spec = SCENARIO_SPECS[scenarioId];
+  const compiledHints = scenario as ScenarioPackageRuntimeOverride & Partial<Pick<ScenarioBuilderDraft, 'recommendedSkillIds' | 'recommendedArtifactTypes' | 'recommendedComponentIds'>>;
+  const recommendation = recommendScenarioElements([
+    scenario.title,
+    scenario.description,
+  ].join('\n'));
+  return {
+    id: `${scenarioId}-workspace-draft`,
+    title: scenario.title,
+    description: scenario.description,
+    skillDomain: scenario.skillDomain,
+    scenarioMarkdown: scenario.scenarioMarkdown,
+    selectedSkillIds: scenario.selectedSkillIds?.length
+      ? scenario.selectedSkillIds
+      : compiledHints.recommendedSkillIds?.length
+      ? compiledHints.recommendedSkillIds
+      : recommendation.selectedSkillIds.length
+      ? recommendation.selectedSkillIds
+      : [`agentserver.generate.${scenario.skillDomain}`],
+    selectedToolIds: scenario.selectedToolIds?.length
+      ? scenario.selectedToolIds
+      : recommendation.selectedToolIds.length
+      ? recommendation.selectedToolIds
+      : elementRegistry.tools.filter((tool) => tool.skillDomains.includes(scenario.skillDomain)).slice(0, 5).map((tool) => tool.id),
+    selectedArtifactTypes: compiledHints.recommendedArtifactTypes?.length
+      ? compiledHints.recommendedArtifactTypes
+      : recommendation.selectedArtifactTypes.length
+      ? recommendation.selectedArtifactTypes
+      : spec.outputArtifacts.map((artifact) => artifact.type),
+    selectedComponentIds: compiledHints.recommendedComponentIds?.length
+      ? compiledHints.recommendedComponentIds
+      : recommendation.selectedComponentIds.length
+      ? recommendation.selectedComponentIds
+      : scenario.defaultComponents,
+    selectedFailurePolicyIds: ['failure.missing-input', 'failure.schema-mismatch', 'failure.backend-unavailable'],
+    fallbackComponentId: scenario.fallbackComponent,
+    status: 'draft',
+  };
+}
+
+export function scenarioBuilderPrioritizeBySelectionAndDomain<T extends { id: string; tags?: string[]; skillDomains?: string[] }>(
+  values: T[],
+  selectedIds: string[],
+  domain: SkillDomain,
+  idForItem: (item: T) => string = (item) => item.id,
+) {
+  return [...values].sort((left, right) => {
+    const leftSelected = selectedIds.includes(idForItem(left)) ? 0 : 1;
+    const rightSelected = selectedIds.includes(idForItem(right)) ? 0 : 1;
+    if (leftSelected !== rightSelected) return leftSelected - rightSelected;
+    const leftDomain = left.skillDomains?.includes(domain) || left.tags?.includes(domain) ? 0 : 1;
+    const rightDomain = right.skillDomains?.includes(domain) || right.tags?.includes(domain) ? 0 : 1;
+    if (leftDomain !== rightDomain) return leftDomain - rightDomain;
+    return idForItem(left).localeCompare(idForItem(right));
+  });
 }
 
 export function scenarioPackageManifestPreview(pkg: ScenarioPackage, workspacePath: string): ScenarioPackageManifestPreview {

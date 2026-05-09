@@ -99,6 +99,57 @@ export function normalizeArtifactRef(ref: string) {
   return ref.replace(/^artifact:\/\//i, '').replace(/^artifact:/i, '');
 }
 
+export function normalizeWorkspacePath(path: string) {
+  return path.replace(/\/+$/, '');
+}
+
+export function workspacePathBasename(path: string): string {
+  const clean = normalizeWorkspacePath(path);
+  if (!clean) return '';
+  const index = clean.lastIndexOf('/');
+  return index >= 0 ? clean.slice(index + 1) : clean;
+}
+
+export function workspaceParentPath(path: string) {
+  const clean = normalizeWorkspacePath(path);
+  if (!clean || clean === '/') return clean || '/';
+  const index = clean.lastIndexOf('/');
+  return index <= 0 ? '/' : clean.slice(0, index);
+}
+
+export function workspacePathNeedsOnboarding(path: string, workspaceError: string, workspaceStatus: string) {
+  if (!path.trim()) return true;
+  const combined = `${workspaceError} ${workspaceStatus}`;
+  return /ENOENT|no such file|not found|未找到|不存在/i.test(combined);
+}
+
+export function workspaceOnboardingReason(path: string, workspaceError: string, workspaceStatus: string) {
+  if (!path.trim()) return '当前还没有 workspace path；填写一个本机目录后可以创建 .sciforge 资源结构。';
+  const combined = `${workspaceError} ${workspaceStatus}`;
+  if (/EACCES|EPERM|permission|权限/i.test(combined)) {
+    return '当前路径权限不足；请选择可写目录，或修复目录权限后再创建。';
+  }
+  if (/Workspace Writer 未连接|Failed to fetch|无法访问|connection/i.test(combined)) {
+    return 'Workspace Writer 当前不可用；请启动 npm run workspace:server 后再创建。';
+  }
+  return `未找到 ${normalizeWorkspacePath(path)}/.sciforge/workspace-state.json；可以创建标准 .sciforge 目录结构作为新工作区。`;
+}
+
+export function workspaceOnboardingErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/EACCES|EPERM|permission/i.test(message)) return `创建失败：权限不足。${message}`;
+  if (/Workspace Writer 未连接|Failed to fetch|fetch/i.test(message)) return `创建失败：Workspace Writer 未连接。${message}`;
+  return `创建失败：${message}`;
+}
+
+export function toWorkspaceRelativePath(rootPath: string, path: string): string {
+  const root = normalizeWorkspacePath(rootPath);
+  const current = normalizeWorkspacePath(path);
+  if (root && current.startsWith(`${root}/`)) return current.slice(root.length + 1);
+  if (root && current === root) return '.';
+  return current;
+}
+
 export const objectReferenceArtifactTypeIds = {
   externalUrl: 'external-url',
   workspaceFolder: 'workspace-folder',

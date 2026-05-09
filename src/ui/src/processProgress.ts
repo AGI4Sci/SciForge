@@ -1,4 +1,4 @@
-import { GUIDANCE_QUEUED_EVENT_TYPE, PROCESS_PROGRESS_EVENT_TYPE, USER_INTERRUPT_EVENT_TYPE } from '@sciforge-ui/runtime-contract';
+import { GUIDANCE_QUEUED_EVENT_TYPE, PROCESS_PROGRESS_EVENT_TYPE, USER_INTERRUPT_EVENT_TYPE, runtimeRequestAcceptedProgressCopy } from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
 import { makeId, nowIso } from './domain';
 import type { RuntimeResponsePlan } from './latencyPolicy';
@@ -147,16 +147,14 @@ export function buildInitialResponseProgressEvent(responsePlan: RuntimeResponseP
 }
 
 export function buildRequestAcceptedProgressEvent(prompt: string): AgentStreamEvent {
-  const compactPrompt = prompt.replace(/\s+/g, ' ').trim().slice(0, 160);
+  const copy = runtimeRequestAcceptedProgressCopy(prompt);
   return progressEvent({
     phase: 'plan',
     title: '已收到请求',
-    detail: compactPrompt
-      ? `正在把本轮请求交给 workspace runtime：${compactPrompt}`
-      : '正在把本轮请求交给 workspace runtime。',
-    waitingFor: 'workspace runtime 首个事件',
-    nextStep: '收到后端事件后继续展示读取、执行、写入和验证进展。',
-    reason: 'request-accepted-before-backend-stream',
+    detail: copy.detail,
+    waitingFor: copy.waitingFor,
+    nextStep: copy.nextStep,
+    reason: copy.reason,
   });
 }
 

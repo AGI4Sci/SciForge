@@ -27,6 +27,7 @@ import {
   runtimeAgentBackendSanitizedFailureUserReason,
   runtimeAgentBackendSupported,
   runtimeAgentBackendUsesAgentServerManagedCompaction,
+  runtimeAcceptanceDiagnostic,
   sanitizeRuntimeAgentBackendFailureDetail,
   withRuntimeAgentBackendUserFacingDiagnostic,
 } from './agent-backend-policy';
@@ -122,6 +123,7 @@ test('runtime agent backend policy owns failure classification and recovery text
   assert.match(runtimeAgentBackendSanitizedFailureUserReason(contextDiagnostic), /context window\/token limit/);
   assert.ok(runtimeAgentBackendRecoverActions(contextDiagnostic).some((action) => /currentReferenceDigests/.test(action)));
   assert.deepEqual(runtimeAgentBackendFailureCategories('429 retry-after: 2', 429), ['http-429', 'rate-limit']);
+  assert.deepEqual(runtimeAgentBackendFailureCategories('too-many-failed-attempts retry-budget exhausted', undefined), ['too-many-failed-attempts', 'retry-budget']);
   assert.equal(runtimeCapabilityEvolutionFailureCode({
     failureReason: 'AgentServer request failed: ECONNREFUSED at configured Model Base URL',
   }), 'provider-unavailable');
@@ -144,4 +146,27 @@ test('runtime agent backend policy owns failure classification and recovery text
   assert.match(runtimeAgentBackendProviderFailureMessage(diagnostic, true), /will not retry again automatically/);
   const compactDetail = sanitizeRuntimeAgentBackendFailureDetail(`${'x'.repeat(380)} | compact=failed:handoff-slimming:unsupported compact | retryResult=failed`);
   assert.match(compactDetail, /handoff-slimming/);
+});
+
+test('runtime agent backend policy owns acceptance recovery diagnostics', () => {
+  const rateLimit = runtimeAcceptanceDiagnostic({
+    failures: [
+      { code: 'backend-repair-failed', detail: 'too-many-failed-attempts; exceeded retry-budget' },
+      { code: 'missing-object-references', detail: 'clickable object references missing' },
+    ],
+  });
+  assert.equal(rateLimit.title, '后端模型限流，自动修复未完成');
+  assert.ok(rateLimit.recoverActions.some((action) => /retry budget/.test(action)));
+  assert.deepEqual(rateLimit.secondary, ['缺少可点击对象引用']);
+  assert.match(rateLimit.rawDetails, /backend-repair-failed: too-many-failed-attempts/);
+
+  const cancelled = runtimeAcceptanceDiagnostic({
+    failures: [{ code: 'backend-repair-failed', detail: 'request abort timeout' }],
+  });
+  assert.equal(cancelled.title, '后端修复请求被中断');
+
+  const objectRefs = runtimeAcceptanceDiagnostic({
+    failures: [{ code: 'missing-object-references', detail: 'clickable object references missing' }],
+  });
+  assert.equal(objectRefs.title, '结果缺少可点击引用');
 });

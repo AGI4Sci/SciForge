@@ -24,13 +24,15 @@ const rules: Rule[] = [
   {
     id: 'component-id-hardcode',
     message: 'src file hardcodes package-owned UI component ids.',
-    match: (line) => /[`'"][a-z0-9]+(?:-[a-z0-9]+)+[`'"]/.test(line)
+    match: (line) => isCapabilitySemanticCandidateLine(line)
+      && /[`'"][a-z0-9]+(?:-[a-z0-9]+)+[`'"]/.test(line)
       && /\b(componentId|COMPONENT|component|module|viewer|table|matrix|graph|inspector|timeline|editor)\b/.test(line),
   },
   {
     id: 'artifact-id-hardcode',
     message: 'src file hardcodes package-owned artifact ids or artifact type routing.',
-    match: (line) => !isPlatformContractLine(line)
+    match: (line) => isCapabilitySemanticCandidateLine(line)
+      && !isPlatformContractLine(line)
       && !isCapabilityEvolutionFailureCodeLine(line)
       && !/\bartifact-schema\b/.test(line)
       && /[`'"][a-z0-9]+(?:-[a-z0-9]+)+[`'"]/.test(line)
@@ -39,14 +41,17 @@ const rules: Rule[] = [
   {
     id: 'domain-prompt-regex',
     message: 'src file contains prompt/domain regex semantics that should move into package-owned capability policy.',
-    match: (line) => isCodeLine(line)
+    match: (line) => isCapabilitySemanticCandidateLine(line)
+      && isCodeLine(line)
+      && !isJsxClosingTagRenderLine(line)
       && (/\/[^/\n]+\/[a-z]*|new RegExp|\.match\(|\.test\(/.test(line))
       && /(prompt|skillDomain|domain|report|paper|literature|structure|omics|knowledge|blast|alignment|protein|molecule|markdown|summary|报告|文献|结构|组学|知识)/i.test(line),
   },
   {
     id: 'scenario-provider-id-hardcode',
     message: 'src file hardcodes scenario/provider/tool ids that should come from capability manifests.',
-    match: (line) => !isPlatformContractLine(line)
+    match: (line) => isCapabilitySemanticCandidateLine(line)
+      && !isPlatformContractLine(line)
       && !isBackendToolNameLine(line)
       && /\b(scenario|provider|tool)\b/i.test(line)
       && /[`'"][a-z0-9]+(?:[._-][a-z0-9]+){2,}[`'"]/.test(line),
@@ -54,7 +59,8 @@ const rules: Rule[] = [
   {
     id: 'domain-default-routing',
     message: 'src file carries domain default/ranking policy that belongs in package-owned scenario or view capability policy.',
-    match: (line) => /\b(literature|structure|omics|knowledge)\b/.test(line)
+    match: (line) => isCapabilitySemanticCandidateLine(line)
+      && /\b(literature|structure|omics|knowledge)\b/.test(line)
       && /[`'"]|DOMAIN_DEFAULT|skillDomain|score|rank|Priority/.test(line),
   },
 ];
@@ -63,9 +69,9 @@ const rules: Rule[] = [
 // seed files. New files or increased counts fail unless the legacy line is first
 // migrated into a package-owned policy or this baseline is deliberately updated.
 const trackedBaselineCounts: Record<string, number> = {
-  'src/runtime/conversation-policy/apply.ts#artifact-id-hardcode': 2,
+  'src/runtime/conversation-policy/apply.ts#artifact-id-hardcode': 0,
   'src/runtime/conversation-policy/contracts.ts#component-id-hardcode': 0,
-  'src/runtime/gateway/agentserver-context-window.ts#artifact-id-hardcode': 1,
+  'src/runtime/gateway/agentserver-context-window.ts#artifact-id-hardcode': 0,
   'src/runtime/gateway/agentserver-prompts.ts#artifact-id-hardcode': 0,
   'src/runtime/gateway/agentserver-prompts.ts#component-id-hardcode': 0,
   'src/runtime/gateway/agentserver-prompts.ts#domain-default-routing': 0,
@@ -80,8 +86,8 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/gateway/context-envelope.ts#component-id-hardcode': 0,
   'src/runtime/gateway/context-envelope.ts#domain-default-routing': 0,
   'src/runtime/gateway/context-envelope.ts#domain-prompt-regex': 0,
-  'src/runtime/gateway/direct-answer-payload.ts#artifact-id-hardcode': 5,
-  'src/runtime/gateway/direct-answer-payload.ts#domain-prompt-regex': 1,
+  'src/runtime/gateway/direct-answer-payload.ts#artifact-id-hardcode': 0,
+  'src/runtime/gateway/direct-answer-payload.ts#domain-prompt-regex': 0,
   'src/runtime/gateway/direct-answer-payload.ts#scenario-provider-id-hardcode': 0,
   'src/runtime/gateway/direct-context-fast-path.ts#artifact-id-hardcode': 0,
   'src/runtime/gateway/direct-context-fast-path.ts#component-id-hardcode': 0,
@@ -91,7 +97,7 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/gateway/generated-task-runner.ts#component-id-hardcode': 0,
   'src/runtime/gateway/generated-task-runner.ts#domain-prompt-regex': 0,
   'src/runtime/gateway/generated-task-runner.ts#scenario-provider-id-hardcode': 0,
-  'src/runtime/gateway/latency-telemetry.ts#artifact-id-hardcode': 4,
+  'src/runtime/gateway/latency-telemetry.ts#artifact-id-hardcode': 0,
   'src/runtime/gateway/payload-validation.ts#domain-prompt-regex': 0,
   'src/runtime/gateway/payload-validation.ts#scenario-provider-id-hardcode': 0,
   'src/runtime/gateway/repair-policy.ts#component-id-hardcode': 0,
@@ -101,22 +107,22 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/gateway/verification-policy.ts#artifact-id-hardcode': 0,
   'src/runtime/gateway/work-evidence-guard.ts#artifact-id-hardcode': 0,
   'src/runtime/gateway/work-evidence-guard.ts#domain-prompt-regex': 0,
-  'src/runtime/gateway/workspace-event-normalizer.ts#artifact-id-hardcode': 1,
-  'src/runtime/generation-gateway.ts#artifact-id-hardcode': 13,
-  'src/runtime/generation-gateway.ts#domain-prompt-regex': 1,
+  'src/runtime/gateway/workspace-event-normalizer.ts#artifact-id-hardcode': 0,
+  'src/runtime/generation-gateway.ts#artifact-id-hardcode': 0,
+  'src/runtime/generation-gateway.ts#domain-prompt-regex': 0,
   'src/runtime/observe/orchestration.ts#scenario-provider-id-hardcode': 0,
-  'src/runtime/runtime-types.ts#artifact-id-hardcode': 3,
-  'src/runtime/runtime-types.ts#component-id-hardcode': 1,
+  'src/runtime/runtime-types.ts#artifact-id-hardcode': 0,
+  'src/runtime/runtime-types.ts#component-id-hardcode': 0,
   'src/runtime/runtime-types.ts#domain-default-routing': 0,
   'src/runtime/server/file-preview.ts#component-id-hardcode': 0,
   'src/runtime/server/file-preview.ts#domain-default-routing': 0,
   'src/runtime/server/file-preview.ts#domain-prompt-regex': 0,
   'src/runtime/server/scenario-library-routes.ts#scenario-provider-id-hardcode': 0,
-  'src/runtime/server/workspace-open.ts#artifact-id-hardcode': 1,
-  'src/runtime/skill-promotion.ts#artifact-id-hardcode': 5,
+  'src/runtime/server/workspace-open.ts#artifact-id-hardcode': 0,
+  'src/runtime/skill-promotion.ts#artifact-id-hardcode': 0,
   'src/runtime/skill-promotion.ts#domain-default-routing': 0,
   'src/runtime/task-project-contracts.ts#artifact-id-hardcode': 2,
-  'src/runtime/task-projects.ts#artifact-id-hardcode': 2,
+  'src/runtime/task-projects.ts#artifact-id-hardcode': 0,
   'src/runtime/task-projects.ts#domain-default-routing': 0,
   'src/runtime/vision-sense-runtime.ts#artifact-id-hardcode': 0,
   'src/runtime/vision-sense/computer-use-action-loop.ts#artifact-id-hardcode': 0,
@@ -133,7 +139,7 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/ui/src/api/agentClient/responseNormalization.ts#component-id-hardcode': 0,
   'src/ui/src/api/agentClient/responseNormalization.ts#domain-default-routing': 0,
   'src/ui/src/api/agentClient/responseNormalization.ts#domain-prompt-regex': 0,
-  'src/ui/src/api/sciforgeToolsClient.ts#scenario-provider-id-hardcode': 2,
+  'src/ui/src/api/sciforgeToolsClient.ts#scenario-provider-id-hardcode': 0,
   'src/ui/src/api/sciforgeToolsClient/runtimeEvents.ts#artifact-id-hardcode': 0,
   'src/ui/src/api/sciforgeToolsClient/runtimeEvents.ts#domain-prompt-regex': 0,
   'src/ui/src/api/scopeCheck.ts#component-id-hardcode': 0,
@@ -143,91 +149,91 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/ui/src/app/AlignmentPages.tsx#domain-default-routing': 0,
   'src/ui/src/app/AlignmentPages.tsx#domain-prompt-regex': 0,
   'src/ui/src/app/AlignmentPages.tsx#scenario-provider-id-hardcode': 0,
-  'src/ui/src/app/ChatPanel.tsx#artifact-id-hardcode': 3,
-  'src/ui/src/app/ChatPanel.tsx#component-id-hardcode': 1,
+  'src/ui/src/app/ChatPanel.tsx#artifact-id-hardcode': 0,
+  'src/ui/src/app/ChatPanel.tsx#component-id-hardcode': 0,
   'src/ui/src/app/ChatPanel.tsx#domain-default-routing': 0,
-  'src/ui/src/app/ComponentWorkbenchPage.tsx#artifact-id-hardcode': 1,
-  'src/ui/src/app/ComponentWorkbenchPage.tsx#component-id-hardcode': 32,
-  'src/ui/src/app/ComponentWorkbenchPage.tsx#domain-default-routing': 1,
-  'src/ui/src/app/Dashboard.tsx#component-id-hardcode': 5,
+  'src/ui/src/app/ComponentWorkbenchPage.tsx#artifact-id-hardcode': 0,
+  'src/ui/src/app/ComponentWorkbenchPage.tsx#component-id-hardcode': 1,
+  'src/ui/src/app/ComponentWorkbenchPage.tsx#domain-default-routing': 0,
+  'src/ui/src/app/Dashboard.tsx#component-id-hardcode': 0,
   'src/ui/src/app/Dashboard.tsx#domain-default-routing': 0,
   'src/ui/src/app/Dashboard.tsx#domain-prompt-regex': 0,
-  'src/ui/src/app/Dashboard.tsx#scenario-provider-id-hardcode': 3,
-  'src/ui/src/app/ResultsRenderer.tsx#artifact-id-hardcode': 16,
-  'src/ui/src/app/ResultsRenderer.tsx#component-id-hardcode': 38,
-  'src/ui/src/app/ResultsRenderer.tsx#domain-default-routing': 1,
+  'src/ui/src/app/Dashboard.tsx#scenario-provider-id-hardcode': 0,
+  'src/ui/src/app/ResultsRenderer.tsx#artifact-id-hardcode': 0,
+  'src/ui/src/app/ResultsRenderer.tsx#component-id-hardcode': 0,
+  'src/ui/src/app/ResultsRenderer.tsx#domain-default-routing': 0,
   'src/ui/src/app/ResultsRenderer.tsx#domain-prompt-regex': 0,
-  'src/ui/src/app/ScenarioBuilderPanel.tsx#artifact-id-hardcode': 4,
-  'src/ui/src/app/ScenarioBuilderPanel.tsx#component-id-hardcode': 3,
-  'src/ui/src/app/ScenarioBuilderPanel.tsx#domain-prompt-regex': 2,
-  'src/ui/src/app/ScenarioBuilderPanel.tsx#scenario-provider-id-hardcode': 16,
-  'src/ui/src/app/SciForgeApp.tsx#component-id-hardcode': 3,
-  'src/ui/src/app/SciForgeApp.tsx#domain-default-routing': 14,
-  'src/ui/src/app/SciForgeApp.tsx#domain-prompt-regex': 1,
-  'src/ui/src/app/appShell/ShellPanels.tsx#artifact-id-hardcode': 9,
-  'src/ui/src/app/appShell/ShellPanels.tsx#scenario-provider-id-hardcode': 1,
-  'src/ui/src/app/appShell/dashboardModels.ts#artifact-id-hardcode': 1,
+  'src/ui/src/app/ScenarioBuilderPanel.tsx#artifact-id-hardcode': 0,
+  'src/ui/src/app/ScenarioBuilderPanel.tsx#component-id-hardcode': 0,
+  'src/ui/src/app/ScenarioBuilderPanel.tsx#domain-prompt-regex': 0,
+  'src/ui/src/app/ScenarioBuilderPanel.tsx#scenario-provider-id-hardcode': 0,
+  'src/ui/src/app/SciForgeApp.tsx#component-id-hardcode': 0,
+  'src/ui/src/app/SciForgeApp.tsx#domain-default-routing': 0,
+  'src/ui/src/app/SciForgeApp.tsx#domain-prompt-regex': 0,
+  'src/ui/src/app/appShell/ShellPanels.tsx#artifact-id-hardcode': 2,
+  'src/ui/src/app/appShell/ShellPanels.tsx#scenario-provider-id-hardcode': 0,
+  'src/ui/src/app/appShell/dashboardModels.ts#artifact-id-hardcode': 0,
   'src/ui/src/app/appShell/explorerModels.ts#artifact-id-hardcode': 1,
-  'src/ui/src/app/appShell/explorerModels.ts#domain-prompt-regex': 1,
-  'src/ui/src/app/appShell/workspaceState.ts#domain-prompt-regex': 1,
-  'src/ui/src/app/chat/AcceptancePanel.tsx#domain-prompt-regex': 1,
-  'src/ui/src/app/chat/ChatPanelHeader.tsx#scenario-provider-id-hardcode': 1,
+  'src/ui/src/app/appShell/explorerModels.ts#domain-prompt-regex': 0,
+  'src/ui/src/app/appShell/workspaceState.ts#domain-prompt-regex': 0,
+  'src/ui/src/app/chat/AcceptancePanel.tsx#domain-prompt-regex': 0,
+  'src/ui/src/app/chat/ChatPanelHeader.tsx#scenario-provider-id-hardcode': 0,
   'src/ui/src/app/chat/MessageContent.tsx#artifact-id-hardcode': 0,
   'src/ui/src/app/chat/MessageContent.tsx#component-id-hardcode': 0,
   'src/ui/src/app/chat/MessageContent.tsx#domain-prompt-regex': 0,
-  'src/ui/src/app/chat/runOrchestrator.ts#artifact-id-hardcode': 3,
+  'src/ui/src/app/chat/runOrchestrator.ts#artifact-id-hardcode': 0,
   'src/ui/src/app/chat/runOrchestrator.ts#component-id-hardcode': 0,
   'src/ui/src/app/chat/runOrchestrator.ts#domain-prompt-regex': 0,
   'src/ui/src/app/chat/runOrchestrator.ts#scenario-provider-id-hardcode': 0,
-  'src/ui/src/app/chat/sessionTransforms.ts#domain-prompt-regex': 2,
+  'src/ui/src/app/chat/sessionTransforms.ts#domain-prompt-regex': 0,
   'src/ui/src/app/chat/sessionTransforms.ts#scenario-provider-id-hardcode': 2,
-  'src/ui/src/app/results/ArtifactCardControls.tsx#artifact-id-hardcode': 1,
+  'src/ui/src/app/results/ArtifactCardControls.tsx#artifact-id-hardcode': 0,
   'src/ui/src/app/results/ExecutionNotebookPanels.tsx#artifact-id-hardcode': 1,
-  'src/ui/src/app/results/ExecutionNotebookPanels.tsx#component-id-hardcode': 5,
-  'src/ui/src/app/results/ExecutionNotebookPanels.tsx#domain-default-routing': 1,
-  'src/ui/src/app/results/WorkspaceObjectPreview.tsx#artifact-id-hardcode': 2,
-  'src/ui/src/app/results/WorkspaceObjectPreview.tsx#component-id-hardcode': 1,
-  'src/ui/src/app/results/autoRunPrompts.ts#component-id-hardcode': 1,
-  'src/ui/src/app/results/autoRunPrompts.ts#domain-default-routing': 5,
-  'src/ui/src/app/results/previewDescriptor.ts#component-id-hardcode': 1,
-  'src/ui/src/app/results/previewDescriptor.ts#domain-default-routing': 2,
-  'src/ui/src/app/results/previewDescriptor.ts#domain-prompt-regex': 3,
+  'src/ui/src/app/results/ExecutionNotebookPanels.tsx#component-id-hardcode': 0,
+  'src/ui/src/app/results/ExecutionNotebookPanels.tsx#domain-default-routing': 0,
+  'src/ui/src/app/results/WorkspaceObjectPreview.tsx#artifact-id-hardcode': 1,
+  'src/ui/src/app/results/WorkspaceObjectPreview.tsx#component-id-hardcode': 0,
+  'src/ui/src/app/results/autoRunPrompts.ts#component-id-hardcode': 0,
+  'src/ui/src/app/results/autoRunPrompts.ts#domain-default-routing': 0,
+  'src/ui/src/app/results/previewDescriptor.ts#component-id-hardcode': 0,
+  'src/ui/src/app/results/previewDescriptor.ts#domain-default-routing': 0,
+  'src/ui/src/app/results/previewDescriptor.ts#domain-prompt-regex': 0,
   'src/ui/src/app/results/reportContent.tsx#artifact-id-hardcode': 1,
-  'src/ui/src/app/results/reportContent.tsx#component-id-hardcode': 2,
-  'src/ui/src/app/results/reportContent.tsx#domain-default-routing': 1,
-  'src/ui/src/app/results/reportContent.tsx#domain-prompt-regex': 9,
-  'src/ui/src/app/results/resultArtifactHelpers.ts#artifact-id-hardcode': 2,
-  'src/ui/src/app/results/resultArtifactHelpers.ts#domain-default-routing': 1,
-  'src/ui/src/app/results/resultArtifactHelpers.ts#domain-prompt-regex': 1,
+  'src/ui/src/app/results/reportContent.tsx#component-id-hardcode': 1,
+  'src/ui/src/app/results/reportContent.tsx#domain-default-routing': 0,
+  'src/ui/src/app/results/reportContent.tsx#domain-prompt-regex': 3,
+  'src/ui/src/app/results/resultArtifactHelpers.ts#artifact-id-hardcode': 1,
+  'src/ui/src/app/results/resultArtifactHelpers.ts#domain-default-routing': 0,
+  'src/ui/src/app/results/resultArtifactHelpers.ts#domain-prompt-regex': 0,
   'src/ui/src/app/results/viewPlanResolver.ts#artifact-id-hardcode': 0,
   'src/ui/src/app/results/viewPlanResolver.ts#component-id-hardcode': 0,
   'src/ui/src/app/uiPrimitives.tsx#artifact-id-hardcode': 1,
   'src/ui/src/app/uiPrimitives.tsx#component-id-hardcode': 1,
   'src/ui/src/app/uiPrimitives.tsx#scenario-provider-id-hardcode': 3,
-  'src/ui/src/componentWorkbenchDemo.ts#artifact-id-hardcode': 4,
-  'src/ui/src/componentWorkbenchDemo.ts#component-id-hardcode': 24,
-  'src/ui/src/componentWorkbenchDemo.ts#domain-default-routing': 5,
-  'src/ui/src/data.ts#artifact-id-hardcode': 1,
-  'src/ui/src/data.ts#component-id-hardcode': 5,
-  'src/ui/src/data.ts#domain-default-routing': 10,
-  'src/ui/src/demoData.ts#artifact-id-hardcode': 1,
-  'src/ui/src/demoData.ts#component-id-hardcode': 2,
-  'src/ui/src/demoData.ts#domain-default-routing': 14,
-  'src/ui/src/demoData.ts#domain-prompt-regex': 2,
-  'src/ui/src/demoData.ts#scenario-provider-id-hardcode': 3,
+  'src/ui/src/componentWorkbenchDemo.ts#artifact-id-hardcode': 0,
+  'src/ui/src/componentWorkbenchDemo.ts#component-id-hardcode': 0,
+  'src/ui/src/componentWorkbenchDemo.ts#domain-default-routing': 0,
+  'src/ui/src/data.ts#artifact-id-hardcode': 0,
+  'src/ui/src/data.ts#component-id-hardcode': 0,
+  'src/ui/src/data.ts#domain-default-routing': 0,
+  'src/ui/src/demoData.ts#artifact-id-hardcode': 0,
+  'src/ui/src/demoData.ts#component-id-hardcode': 0,
+  'src/ui/src/demoData.ts#domain-default-routing': 0,
+  'src/ui/src/demoData.ts#domain-prompt-regex': 0,
+  'src/ui/src/demoData.ts#scenario-provider-id-hardcode': 0,
   'src/ui/src/domain.ts#artifact-id-hardcode': 7,
   'src/ui/src/domain.ts#domain-default-routing': 1,
-  'src/ui/src/feedback/FeedbackCaptureLayer.tsx#artifact-id-hardcode': 1,
-  'src/ui/src/processProgress.ts#artifact-id-hardcode': 7,
-  'src/ui/src/processProgress.ts#domain-prompt-regex': 1,
-  'src/ui/src/runtimeContracts.ts#artifact-id-hardcode': 2,
-  'src/ui/src/runtimeContracts.ts#domain-default-routing': 3,
+  'src/ui/src/feedback/FeedbackCaptureLayer.tsx#artifact-id-hardcode': 0,
+  'src/ui/src/processProgress.ts#artifact-id-hardcode': 6,
+  'src/ui/src/processProgress.ts#domain-prompt-regex': 0,
+  'src/ui/src/runtimeContracts.ts#artifact-id-hardcode': 1,
+  'src/ui/src/runtimeContracts.ts#domain-default-routing': 1,
   'src/ui/src/runtimeHealth.ts#artifact-id-hardcode': 1,
   'src/ui/src/sessionStore.ts#artifact-id-hardcode': 1,
   'src/ui/src/streamEventPresentation.ts#artifact-id-hardcode': 24,
   'src/ui/src/streamEventPresentation.ts#domain-prompt-regex': 1,
-  'src/ui/src/visualizations.tsx#artifact-id-hardcode': 3,
-  'src/ui/src/visualizations.tsx#component-id-hardcode': 4,
+  'src/ui/src/visualizations.tsx#artifact-id-hardcode': 0,
+  'src/ui/src/visualizations.tsx#component-id-hardcode': 0,
   'src/ui/src/visualizations.tsx#domain-default-routing': 2,
   'src/ui/src/workEventAtoms.ts#artifact-id-hardcode': 2,
   'src/ui/src/workEventAtoms.ts#domain-prompt-regex': 3,
@@ -331,11 +337,34 @@ function groupBy<T>(items: T[], keyFor: (item: T) => string) {
 function isCodeLine(line: string) {
   const trimmed = line.trim();
   return trimmed.length > 0
-    && !trimmed.startsWith('import ')
+    && !isImportOnlyLine(line)
     && !trimmed.startsWith('export ')
-    && !trimmed.startsWith('} from ')
     && !trimmed.startsWith('//')
     && !trimmed.startsWith('*');
+}
+
+function isCapabilitySemanticCandidateLine(line: string) {
+  return !isImportOnlyLine(line) && !isClassNameOnlyStyleLine(line);
+}
+
+function isImportOnlyLine(line: string) {
+  const trimmed = line.trim();
+  return trimmed.startsWith('import ')
+    || trimmed.startsWith('} from ')
+    || /^from\s+['"]/.test(trimmed);
+}
+
+function isClassNameOnlyStyleLine(line: string) {
+  return /\bclassName\b/.test(line) && !hasExplicitCapabilitySemantics(line);
+}
+
+function isJsxClosingTagRenderLine(line: string) {
+  return /<\/[A-Za-z][^>]*>/.test(line);
+}
+
+function hasExplicitCapabilitySemantics(line: string) {
+  return /\b(?:componentId|scenarioId|prompt(?:Regex|Pattern|Matcher|SpecialCases?)?)\b/i.test(line)
+    || /\btype\s*:/.test(line);
 }
 
 function isPlatformContractLine(line: string) {

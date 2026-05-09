@@ -27,6 +27,7 @@ import {
   agentServerGenerationRecoveryStartEvent,
   agentServerGenerationRetrySucceededEvent,
   agentServerSilentStreamGuardEvent,
+  compactRuntimePromptSummary,
   conversationPolicyStartedEvent,
   directContextFastPathEvent,
   gatewayRequestReceivedEvent,
@@ -44,6 +45,7 @@ import {
   runtimeDetailIndicatesAbort,
   runtimeEventIsBackend,
   runtimeEventIsUserVisible,
+  runtimeRequestAcceptedProgressCopy,
   runtimeStreamEventLabel,
   targetIssueLookupFailedEvent,
   targetIssueReadEvent,
@@ -105,6 +107,18 @@ test('runtime events policy owns gateway event classification and latency refs',
   assert.equal(LATENCY_DIAGNOSTICS_REF, 'runtime://latency-diagnostics');
   assert.equal(PROCESS_EVENTS_SCHEMA_VERSION, 'sciforge.process-events.v1');
   assert.equal(runtimeStreamEventLabel(PROCESS_PROGRESS_EVENT_TYPE), '过程');
+});
+
+test('runtime events policy owns accepted prompt compaction copy', () => {
+  assert.equal(compactRuntimePromptSummary('  first\n\nsecond\tthird  '), 'first second third');
+  assert.equal(compactRuntimePromptSummary('x'.repeat(200)).length, 160);
+  assert.deepEqual(runtimeRequestAcceptedProgressCopy('  compare\nartifacts  '), {
+    detail: '正在把本轮请求交给 workspace runtime：compare artifacts',
+    waitingFor: 'workspace runtime 首个事件',
+    nextStep: '收到后端事件后继续展示读取、执行、写入和验证进展。',
+    reason: 'request-accepted-before-backend-stream',
+  });
+  assert.match(runtimeRequestAcceptedProgressCopy('').detail, /workspace runtime。/);
 });
 
 test('project tool event projection owns stable ids and user-visible copy', () => {

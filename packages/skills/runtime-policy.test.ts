@@ -18,8 +18,17 @@ import {
   agentServerPayloadTaskDomain,
   agentServerRepairPromptPolicyLines,
   agentServerStablePayloadTaskId,
+  EVOLVED_SKILLS_RELATIVE_DIR,
+  SKILL_ENTRYPOINT_TYPE,
+  skillManifestHasWorkspaceTaskEntrypoint,
+  skillManifestPathIsEvolvedWorkspaceSkill,
+  skillManifestUsesAgentServerGeneration,
+  skillPromotionShouldPropose,
+  skillRuntimeLanguageForManifest,
+  skillRuntimeTaskFileNameForManifest,
   skillRuntimeRoutePolicy,
   skillPromotionDomain,
+  taskProjectStageAdapterSkillAvailability,
   workspaceTaskPythonCommandCandidates,
 } from './runtime-policy';
 
@@ -94,6 +103,52 @@ test('skills runtime policy owns skill promotion domain normalization', () => {
   assert.equal(skillPromotionDomain('omics'), 'omics');
   assert.equal(skillPromotionDomain(undefined), 'literature');
   assert.equal(skillPromotionDomain('unknown'), 'literature');
+});
+
+test('skills runtime policy owns skill promotion entrypoint checks', () => {
+  const workspaceManifest = {
+    entrypoint: { type: SKILL_ENTRYPOINT_TYPE.WORKSPACE_TASK, command: 'python', path: './run.py' },
+    environment: { language: 'python' },
+  };
+  assert.equal(skillManifestHasWorkspaceTaskEntrypoint(workspaceManifest), true);
+  assert.equal(skillRuntimeLanguageForManifest(workspaceManifest), 'python');
+  assert.equal(skillRuntimeTaskFileNameForManifest(workspaceManifest), 'run.py');
+  assert.equal(skillRuntimeTaskFileNameForManifest({
+    entrypoint: { type: SKILL_ENTRYPOINT_TYPE.WORKSPACE_TASK, path: './report.md' },
+  }), 'task.py');
+  assert.equal(skillManifestUsesAgentServerGeneration({
+    entrypoint: { type: SKILL_ENTRYPOINT_TYPE.AGENTSERVER_GENERATION },
+  }), true);
+  assert.equal(skillManifestPathIsEvolvedWorkspaceSkill(`/tmp/ws/${EVOLVED_SKILLS_RELATIVE_DIR}/skill.json`), true);
+  assert.equal(skillPromotionShouldPropose({
+    skillKind: 'workspace',
+    skillId: 'workspace.accepted',
+    manifestPath: `/tmp/ws/${EVOLVED_SKILLS_RELATIVE_DIR}/skill.json`,
+    entrypoint: { type: SKILL_ENTRYPOINT_TYPE.WORKSPACE_TASK },
+    taskRel: '.sciforge/tasks/generated-run.py',
+  }), false);
+  assert.equal(skillPromotionShouldPropose({
+    skillKind: 'installed',
+    skillId: 'agentserver.generate.omics',
+    manifestPath: 'agentserver://fallback',
+    entrypoint: { type: SKILL_ENTRYPOINT_TYPE.AGENTSERVER_GENERATION },
+    taskRel: '.sciforge/tasks/run.py',
+  }), true);
+  assert.equal(skillPromotionShouldPropose({
+    skillKind: 'installed',
+    skillId: 'workspace.repaired',
+    manifestPath: '/tmp/skill.json',
+    entrypoint: { type: SKILL_ENTRYPOINT_TYPE.WORKSPACE_TASK },
+    taskRel: '.sciforge/tasks/run.py',
+    selfHealed: true,
+  }), true);
+});
+
+test('skills runtime policy owns TaskProject adapter fallback manifest', () => {
+  const fallback = taskProjectStageAdapterSkillAvailability('omics', '2026-01-01T00:00:00.000Z');
+  assert.equal(fallback.id, 'agentserver.generate.omics.task-project-stage-adapter');
+  assert.equal(fallback.checkedAt, '2026-01-01T00:00:00.000Z');
+  assert.equal(fallback.manifest.entrypoint.type, SKILL_ENTRYPOINT_TYPE.AGENTSERVER_GENERATION);
 });
 
 test('skills runtime policy owns entrypoint route labels and profile ids', () => {

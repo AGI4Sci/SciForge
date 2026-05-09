@@ -1,29 +1,30 @@
 import { useEffect, useId, useMemo, useRef, useState, type RefObject } from 'react';
 import { ChevronDown, ChevronUp, Download, FileCode, FilePlus, Play } from 'lucide-react';
 import { type ScenarioId } from '../data';
-import { SCENARIO_SPECS, componentManifest } from '@sciforge/scenario-core/scenario-specs';
 import {
   buildScenarioQualityReport,
   compileScenarioIRFromSelection,
   elementRegistry,
-  recommendScenarioElements,
+  scenarioBuilderPackageForWorkspaceSave,
   scenarioBuilderChromeFallbackPane,
   scenarioBuilderChromeNavItems,
   scenarioBuilderChromePaneIds,
   scenarioBuilderComponentSelectorCopy,
   scenarioBuilderComponentSelectorOptions,
+  scenarioBuilderPrioritizeBySelectionAndDomain,
+  scenarioDefaultElementSelectionForRuntimeOverride,
   scenarioBuilderElementSelectorCopy,
   scenarioBuilderElementSelectorRegistryAriaLabel,
   scenarioBuilderElementSelectorSummary,
   scenarioBuilderQualityChecklistText,
   scenarioBuilderRecommendationReasons,
-  scenarioIdBySkillDomain,
+  scenarioPackageExportFileName,
+  scenarioPackageToRuntimeOverride,
+  scenarioPackageValidationSummary,
   type ScenarioBuilderChromePaneId,
-  type ScenarioBuilderDraft,
   type ScenarioBuilderElementSelectorOption,
   type ScenarioElementSelection,
-  type ScenarioPackage,
-} from '../../../../packages/scenarios/core';
+} from '@sciforge/scenario-core';
 import { saveWorkspaceScenario, publishWorkspaceScenario } from '../api/workspaceClient';
 import type { SciForgeConfig, ScenarioRuntimeOverride } from '../domain';
 import type { RuntimeHealthItem } from '../runtimeHealth';
@@ -109,7 +110,7 @@ export function ScenarioBuilderPanel({
   useEffect(() => {
     setSelection(initialSelection);
   }, [initialSelection]);
-  const componentOptions = prioritizeBySelectionAndDomain(
+  const componentOptions = scenarioBuilderPrioritizeBySelectionAndDomain(
     elementRegistry.components,
     selection.selectedComponentIds ?? [],
     selection.skillDomain ?? scenario.skillDomain,
@@ -127,19 +128,19 @@ export function ScenarioBuilderPanel({
     warning: qualityReport.items.filter((item) => item.severity === 'warning').length,
     note: qualityReport.items.filter((item) => item.severity === 'note').length,
   }), [qualityReport]);
-  const skillOptions = prioritizeBySelectionAndDomain(
+  const skillOptions = scenarioBuilderPrioritizeBySelectionAndDomain(
     elementRegistry.skills,
     selection.selectedSkillIds,
     selection.skillDomain ?? scenario.skillDomain,
     (skill) => skill.id,
   );
-  const artifactOptions = prioritizeBySelectionAndDomain(
+  const artifactOptions = scenarioBuilderPrioritizeBySelectionAndDomain(
     elementRegistry.artifacts,
     selection.selectedArtifactTypes,
     selection.skillDomain ?? scenario.skillDomain,
     (artifact) => artifact.artifactType,
   );
-  const toolOptions = prioritizeBySelectionAndDomain(
+  const toolOptions = scenarioBuilderPrioritizeBySelectionAndDomain(
     elementRegistry.tools,
     selection.selectedToolIds ?? [],
     selection.skillDomain ?? scenario.skillDomain,
@@ -203,24 +204,16 @@ export function ScenarioBuilderPanel({
         validationReport: compileResult.validationReport,
         runtimeHealth,
       });
-      const pkg = {
-        ...compileResult.package,
+      const pkg = scenarioBuilderPackageForWorkspaceSave({
+        package: compileResult.package,
         status,
-        metadata: {
-          ...(compileResult.package as ScenarioPackage & { metadata?: Record<string, unknown> }).metadata,
-          recommendationReasons,
-          compiledFrom: {
-            builderStep: metadataBuilderStep,
-            skillDomain: selection.skillDomain ?? scenario.skillDomain,
-            selectedSkillIds: selection.selectedSkillIds,
-            selectedToolIds: selection.selectedToolIds,
-            selectedComponentIds: selection.selectedComponentIds,
-            selectedArtifactTypes: selection.selectedArtifactTypes,
-          },
-        },
         validationReport: compileResult.validationReport,
         qualityReport: quality,
-      };
+        recommendationReasons,
+        builderStep: metadataBuilderStep,
+        selection,
+        fallbackSkillDomain: scenario.skillDomain,
+      });
       if (status === 'published') {
         if (!quality.ok) {
           setPublishStatus('quality gate blocking errors，已保持为 draft。');
@@ -384,14 +377,14 @@ export function ScenarioBuilderPanel({
           <FileCode size={16} />
           <span>Scenario Builder</span>
           <strong>{scenario.skillDomain}</strong>
-          <em>{compileResult.package.id}@{compileResult.package.version} · {compileResult.validationReport.ok ? 'valid' : 'needs fixes'}</em>
+          <em>{scenarioPackageValidationSummary(compileResult)}</em>
         </div>
       ) : (
         <button type="button" className="scenario-settings-summary" onClick={onToggle}>
           <FileCode size={16} />
           <span>Scenario Builder</span>
           <strong>{scenario.skillDomain}</strong>
-          <em>{compileResult.package.id}@{compileResult.package.version} · {compileResult.validationReport.ok ? 'valid' : 'needs fixes'}</em>
+          <em>{scenarioPackageValidationSummary(compileResult)}</em>
           {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
         </button>
       )}
@@ -507,7 +500,7 @@ export function ScenarioBuilderPanel({
                   <div>
                     <ActionButton icon={FilePlus} variant="secondary" onClick={() => void saveCompiled('draft')}>保存 draft</ActionButton>
                     <ActionButton icon={Play} disabled={!compileResult.validationReport.ok} onClick={() => void saveCompiled('published')}>发布</ActionButton>
-                    {publishStatus.includes('已发布') ? <ActionButton icon={Download} variant="secondary" onClick={() => exportJsonFile(`${compileResult.package.id}-${compileResult.package.version}.scenario-package.json`, compileResult.package)}>导出 package</ActionButton> : null}
+                    {publishStatus.includes('已发布') ? <ActionButton icon={Download} variant="secondary" onClick={() => exportJsonFile(scenarioPackageExportFileName(compileResult.package), compileResult.package)}>导出 package</ActionButton> : null}
                   </div>
                 </div>
               ) : null}
@@ -608,7 +601,7 @@ export function ScenarioBuilderPanel({
                 <div>
                   <ActionButton icon={FilePlus} variant="secondary" onClick={() => void saveCompiled('draft')}>保存 draft</ActionButton>
                   <ActionButton icon={Play} disabled={!compileResult.validationReport.ok} onClick={() => void saveCompiled('published')}>发布</ActionButton>
-                  {publishStatus.includes('已发布') ? <ActionButton icon={Download} variant="secondary" onClick={() => exportJsonFile(`${compileResult.package.id}-${compileResult.package.version}.scenario-package.json`, compileResult.package)}>导出 package</ActionButton> : null}
+                  {publishStatus.includes('已发布') ? <ActionButton icon={Download} variant="secondary" onClick={() => exportJsonFile(scenarioPackageExportFileName(compileResult.package), compileResult.package)}>导出 package</ActionButton> : null}
                 </div>
               </div>
             </section>
@@ -620,64 +613,11 @@ export function ScenarioBuilderPanel({
 }
 
 export function defaultElementSelectionForScenario(scenarioId: ScenarioId, scenario: ScenarioRuntimeOverride): ScenarioElementSelection {
-  const spec = SCENARIO_SPECS[scenarioId];
-  const compiledHints = scenario as ScenarioRuntimeOverride & Partial<Pick<ScenarioBuilderDraft, 'recommendedSkillIds' | 'recommendedArtifactTypes' | 'recommendedComponentIds'>>;
-  const recommendation = recommendScenarioElements([
-    scenario.title,
-    scenario.description,
-  ].join('\n'));
-  return {
-    id: `${scenarioId}-workspace-draft`,
-    title: scenario.title,
-    description: scenario.description,
-    skillDomain: scenario.skillDomain,
-    scenarioMarkdown: scenario.scenarioMarkdown,
-    selectedSkillIds: scenario.selectedSkillIds?.length
-      ? scenario.selectedSkillIds
-      : compiledHints.recommendedSkillIds?.length
-      ? compiledHints.recommendedSkillIds
-      : recommendation.selectedSkillIds.length
-      ? recommendation.selectedSkillIds
-      : [`agentserver.generate.${scenario.skillDomain}`],
-    selectedToolIds: scenario.selectedToolIds?.length
-      ? scenario.selectedToolIds
-      : recommendation.selectedToolIds.length
-      ? recommendation.selectedToolIds
-      : elementRegistry.tools.filter((tool) => tool.skillDomains.includes(scenario.skillDomain)).slice(0, 5).map((tool) => tool.id),
-    selectedArtifactTypes: compiledHints.recommendedArtifactTypes?.length
-      ? compiledHints.recommendedArtifactTypes
-      : recommendation.selectedArtifactTypes.length
-      ? recommendation.selectedArtifactTypes
-      : spec.outputArtifacts.map((artifact) => artifact.type),
-    selectedComponentIds: compiledHints.recommendedComponentIds?.length
-      ? compiledHints.recommendedComponentIds
-      : recommendation.selectedComponentIds.length
-      ? recommendation.selectedComponentIds
-      : scenario.defaultComponents,
-    selectedFailurePolicyIds: ['failure.missing-input', 'failure.schema-mismatch', 'failure.backend-unavailable'],
-    fallbackComponentId: scenario.fallbackComponent,
-    status: 'draft',
-  };
+  return scenarioDefaultElementSelectionForRuntimeOverride(scenarioId, scenario);
 }
 
-export function scenarioPackageToOverride(pkg: { scenario: { title: string; description: string; skillDomain: ScenarioRuntimeOverride['skillDomain']; scenarioMarkdown: string; selectedComponentIds: string[]; fallbackComponentId: string } }): ScenarioRuntimeOverride {
-  const base = SCENARIO_SPECS[scenarioIdBySkillDomain[pkg.scenario.skillDomain]];
-  const defaultComponents = pkg.scenario.selectedComponentIds.length ? pkg.scenario.selectedComponentIds : base.componentPolicy.defaultComponents;
-  const packageLike = pkg as { id?: string; version?: string; skillPlan?: { id?: string }; uiPlan?: { id?: string } };
-  return {
-    title: pkg.scenario.title,
-    description: pkg.scenario.description,
-    skillDomain: pkg.scenario.skillDomain,
-    scenarioMarkdown: pkg.scenario.scenarioMarkdown,
-    defaultComponents,
-    allowedComponents: Array.from(new Set([...base.componentPolicy.allowedComponents, ...defaultComponents])),
-    fallbackComponent: pkg.scenario.fallbackComponentId || base.componentPolicy.fallbackComponent,
-    selectedSkillIds: (pkg.scenario as typeof pkg.scenario & { selectedSkillIds?: string[] }).selectedSkillIds,
-    selectedToolIds: (pkg.scenario as typeof pkg.scenario & { selectedToolIds?: string[] }).selectedToolIds,
-    scenarioPackageRef: packageLike.id && packageLike.version ? { id: packageLike.id, version: packageLike.version, source: 'workspace' } : undefined,
-    skillPlanRef: packageLike.skillPlan?.id,
-    uiPlanRef: packageLike.uiPlan?.id,
-  };
+export function scenarioPackageToOverride(pkg: Parameters<typeof scenarioPackageToRuntimeOverride>[0]): ScenarioRuntimeOverride {
+  return scenarioPackageToRuntimeOverride(pkg);
 }
 
 function toggleList(values: string[], value: string) {
@@ -686,23 +626,6 @@ function toggleList(values: string[], value: string) {
 
 function unique(values: string[]) {
   return Array.from(new Set(values)).filter(Boolean);
-}
-
-function prioritizeBySelectionAndDomain<T extends { label?: string; id: string; tags?: string[]; skillDomains?: string[] }>(
-  values: T[],
-  selectedIds: string[],
-  domain: ScenarioRuntimeOverride['skillDomain'],
-  idForItem: (item: T) => string,
-) {
-  return [...values].sort((left, right) => {
-    const leftSelected = selectedIds.includes(idForItem(left)) ? 0 : 1;
-    const rightSelected = selectedIds.includes(idForItem(right)) ? 0 : 1;
-    if (leftSelected !== rightSelected) return leftSelected - rightSelected;
-    const leftDomain = left.skillDomains?.includes(domain) || left.tags?.includes(domain) ? 0 : 1;
-    const rightDomain = right.skillDomains?.includes(domain) || right.tags?.includes(domain) ? 0 : 1;
-    if (leftDomain !== rightDomain) return leftDomain - rightDomain;
-    return idForItem(left).localeCompare(idForItem(right));
-  });
 }
 
 function ElementPopover({ label, detail, meta }: { label: string; detail: string; meta: string }) {

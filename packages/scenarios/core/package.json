@@ -22,6 +22,7 @@
     "./scenario-routing-policy": "./src/scenarioRoutingPolicy.ts",
     "./scenario-builder-display-policy": "./src/scenarioBuilderDisplayPolicy.ts",
     "./scenario-auto-run-prompt-policy": "./src/scenarioAutoRunPromptPolicy.ts",
+    "./scenario-demo-data": "./src/scenarioDemoData.ts",
     "./alignment-display-policy": "./src/alignmentDisplayPolicy.ts",
     "./scenario-package": "./src/scenarioPackage.ts",
     "./scenario-quality-gate": "./src/scenarioQualityGate.ts",

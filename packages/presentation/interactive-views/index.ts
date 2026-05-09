@@ -100,10 +100,12 @@ export {
   interactiveViewArtifactHasField,
   interactiveViewPlanSectionRank,
   interactiveViewPlanStatusRank,
+  interactiveViewResultSummaryPresentation,
   interactiveViewPlanSourceIds,
   interactiveViewVisiblePresentationGroupKey,
   isAuditOnlyInteractiveViewPlanItem,
   resolveInteractiveViewPlanSection,
+  uploadedInteractiveEvidenceArtifacts,
   validateInteractiveViewModuleBinding,
   type InteractiveViewBlockedDesign,
   type InteractiveViewBindingStatus,
@@ -111,6 +113,7 @@ export {
   type InteractiveViewPlanCompactionContext,
   type InteractiveViewPlanItem,
   type InteractiveViewPlanSource,
+  type InteractiveViewResultSummaryPresentation,
 } from './view-plan-result-policy';
 export type {
   PresentationDedupeScope,

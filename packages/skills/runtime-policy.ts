@@ -1,8 +1,15 @@
-import { dirname, extname, join, resolve } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 
 export type SkillPackageDomain = 'literature' | 'structure' | 'omics' | 'knowledge';
 export const SKILL_ENTRYPOINT_TYPES = ['workspace-task', 'inspector', 'agentserver-generation', 'markdown-skill'] as const;
 export type SkillEntrypointType = typeof SKILL_ENTRYPOINT_TYPES[number];
+export const SKILL_ENTRYPOINT_TYPE = {
+  WORKSPACE_TASK: 'workspace-task',
+  INSPECTOR: 'inspector',
+  AGENTSERVER_GENERATION: 'agentserver-generation',
+  MARKDOWN_SKILL: 'markdown-skill',
+} as const satisfies Record<string, SkillEntrypointType>;
+export const EVOLVED_SKILLS_RELATIVE_DIR = '.sciforge/evolved-skills';
 
 export interface RuntimePolicySkillManifest {
   id: string;
@@ -115,7 +122,7 @@ export function agentServerGenerationSkillAvailability(
       skillDomains: [skillDomain],
       inputContract: { prompt: 'string', workspacePath: 'string' },
       outputArtifactSchema: { type: 'runtime-artifact' },
-      entrypoint: { type: 'agentserver-generation' },
+      entrypoint: { type: SKILL_ENTRYPOINT_TYPE.AGENTSERVER_GENERATION },
       environment: { runtime: 'AgentServer' },
       validationSmoke: { mode: 'delegated' },
       examplePrompts: [],
@@ -124,21 +131,48 @@ export function agentServerGenerationSkillAvailability(
   };
 }
 
+export function taskProjectStageAdapterSkillAvailability(
+  skillDomain: SkillPackageDomain,
+  checkedAt: string,
+): RuntimePolicySkillAvailability {
+  return {
+    id: `agentserver.generate.${skillDomain}.task-project-stage-adapter`,
+    kind: 'installed',
+    available: true,
+    reason: 'TaskProject stable stage adapter promotion candidate.',
+    checkedAt,
+    manifestPath: '@sciforge/skills/runtime-policy#task-project-stage-adapter',
+    manifest: {
+      id: `agentserver.generate.${skillDomain}.task-project-stage-adapter`,
+      kind: 'installed',
+      description: 'Generic AgentServer TaskProject stage adapter generation fallback.',
+      skillDomains: [skillDomain],
+      inputContract: { prompt: 'string', projectId: 'string', stageId: 'string' },
+      outputArtifactSchema: { type: 'runtime-artifact' },
+      entrypoint: { type: SKILL_ENTRYPOINT_TYPE.AGENTSERVER_GENERATION },
+      environment: { runtime: 'AgentServer', sourceRuntime: 'task-project' },
+      validationSmoke: { mode: 'delegated-task-project-stage' },
+      examplePrompts: [],
+      promotionHistory: [],
+    },
+  };
+}
+
 export function skillRuntimeRoutePolicy(input: SkillRuntimeRoutePolicyInput): SkillRuntimeRoutePolicy {
   const entrypointType = input.entrypoint?.type;
-  if (entrypointType === 'agentserver-generation') {
+  if (entrypointType === SKILL_ENTRYPOINT_TYPE.AGENTSERVER_GENERATION) {
     return {
       runtimeProfileId: input.agentServerRuntimeProfileId,
       selectedRuntime: 'agentserver-generation',
     };
   }
-  if (entrypointType === 'markdown-skill') {
+  if (entrypointType === SKILL_ENTRYPOINT_TYPE.MARKDOWN_SKILL) {
     return {
       runtimeProfileId: input.agentServerRuntimeProfileId,
       selectedRuntime: 'agentserver-markdown-skill',
     };
   }
-  if (entrypointType === 'workspace-task') {
+  if (entrypointType === SKILL_ENTRYPOINT_TYPE.WORKSPACE_TASK) {
     return {
       runtimeProfileId: 'workspace-python',
       selectedRuntime: 'workspace-python',
@@ -159,6 +193,51 @@ export function skillPromotionDomain(input: unknown): SkillPackageDomain {
   return isSkillPackageDomain(input) ? input : skillPromotionDomainFallback;
 }
 
+export function skillManifestPathIsEvolvedWorkspaceSkill(manifestPath: string) {
+  return normalizePath(manifestPath).includes(EVOLVED_SKILLS_RELATIVE_DIR);
+}
+
+export function skillEntrypointIsWorkspaceTask(entrypoint: { type?: string; path?: string } | undefined): entrypoint is { type: typeof SKILL_ENTRYPOINT_TYPE.WORKSPACE_TASK; path: string } {
+  return entrypoint?.type === SKILL_ENTRYPOINT_TYPE.WORKSPACE_TASK && typeof entrypoint.path === 'string' && entrypoint.path.length > 0;
+}
+
+export function skillManifestHasWorkspaceTaskEntrypoint(
+  manifest: Pick<RuntimePolicySkillManifest, 'entrypoint'>,
+): manifest is Pick<RuntimePolicySkillManifest, 'entrypoint'> & { entrypoint: { type: typeof SKILL_ENTRYPOINT_TYPE.WORKSPACE_TASK; command?: string; path: string } } {
+  return skillEntrypointIsWorkspaceTask(manifest.entrypoint);
+}
+
+export function skillManifestUsesAgentServerGeneration(manifest: Pick<RuntimePolicySkillManifest, 'entrypoint'>) {
+  return manifest.entrypoint.type === SKILL_ENTRYPOINT_TYPE.AGENTSERVER_GENERATION;
+}
+
+export function skillPromotionShouldPropose(input: {
+  skillKind: RuntimePolicySkillManifest['kind'];
+  skillId: string;
+  manifestPath: string;
+  entrypoint?: RuntimePolicySkillManifest['entrypoint'] | { type?: string };
+  taskRel: string;
+  selfHealed?: boolean;
+}) {
+  if (input.skillKind === 'workspace' && skillManifestPathIsEvolvedWorkspaceSkill(input.manifestPath)) return false;
+  if (input.selfHealed) return true;
+  if (input.entrypoint?.type === SKILL_ENTRYPOINT_TYPE.AGENTSERVER_GENERATION) return true;
+  if (input.skillId.startsWith('agentserver.generate.')) return true;
+  return normalizePath(input.taskRel).includes('/generated-');
+}
+
+export function skillRuntimeLanguageForManifest(manifest: Pick<RuntimePolicySkillManifest, 'environment' | 'entrypoint'>) {
+  const language = String(manifest.environment.language || manifest.entrypoint.command || 'python').toLowerCase();
+  if (language.includes('r')) return 'r' as const;
+  if (language.includes('shell') || language.includes('sh')) return 'shell' as const;
+  return 'python' as const;
+}
+
+export function skillRuntimeTaskFileNameForManifest(manifest: Pick<RuntimePolicySkillManifest, 'entrypoint'>) {
+  const current = typeof manifest.entrypoint.path === 'string' ? basename(manifest.entrypoint.path) : 'task.py';
+  return current.endsWith('.py') ? current : 'task.py';
+}
+
 export function workspaceTaskPythonCommandCandidates(workspacePath: string) {
   const workspace = resolve(workspacePath || '.');
   return [
@@ -169,6 +248,10 @@ export function workspaceTaskPythonCommandCandidates(workspacePath: string) {
 
 function isSkillPackageDomain(value: unknown): value is SkillPackageDomain {
   return typeof value === 'string' && skillPackageDomainSet.has(value as SkillPackageDomain);
+}
+
+function normalizePath(value: string) {
+  return value.replaceAll('\\', '/');
 }
 
 export function agentServerExecutionModePromptPolicyLines() {
@@ -327,7 +410,7 @@ function entrypointFileProbes(
   manifest: RuntimePolicySkillManifest,
   context: { manifestPath: string; cwd: string },
 ): SkillAvailabilityFileProbe[] {
-  if (manifest.entrypoint.type === 'workspace-task' && manifest.entrypoint.path) {
+  if (manifest.entrypoint.type === SKILL_ENTRYPOINT_TYPE.WORKSPACE_TASK && manifest.entrypoint.path) {
     const entrypointPath = resolve(dirname(context.manifestPath), manifest.entrypoint.path);
     return [{
       id: 'entrypoint',
@@ -335,7 +418,7 @@ function entrypointFileProbes(
       unavailableReason: `Entrypoint not found: ${entrypointPath}`,
     }];
   }
-  if (manifest.entrypoint.type === 'markdown-skill' && manifest.entrypoint.path) {
+  if (manifest.entrypoint.type === SKILL_ENTRYPOINT_TYPE.MARKDOWN_SKILL && manifest.entrypoint.path) {
     const markdownPath = resolve(context.cwd, manifest.entrypoint.path);
     return [{
       id: 'markdown-skill',

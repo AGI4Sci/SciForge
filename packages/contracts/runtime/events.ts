@@ -138,6 +138,13 @@ export interface WorkspaceRuntimePolicyEvent {
   raw?: unknown;
 }
 
+export interface RuntimeRequestAcceptedProgressCopy {
+  detail: string;
+  waitingFor: string;
+  nextStep: string;
+  reason: string;
+}
+
 const BLOCKING_RUNTIME_STATUSES = new Set(['repair-needed', 'failed-with-reason', 'failed']);
 const SUCCESSFUL_RUNTIME_STATUSES = new Set(['done', 'record-only', 'self-healed', 'completed', 'success']);
 
@@ -199,6 +206,22 @@ export function latencyDiagnosticsCachePolicy(policy: Record<string, unknown>) {
     else if (policy[key] === false) misses.push(key);
   }
   return { hits, misses };
+}
+
+export function compactRuntimePromptSummary(prompt: string, limit = 160) {
+  return prompt.replace(/\s+/g, ' ').trim().slice(0, limit);
+}
+
+export function runtimeRequestAcceptedProgressCopy(prompt: string): RuntimeRequestAcceptedProgressCopy {
+  const compactPrompt = compactRuntimePromptSummary(prompt);
+  return {
+    detail: compactPrompt
+      ? `正在把本轮请求交给 workspace runtime：${compactPrompt}`
+      : '正在把本轮请求交给 workspace runtime。',
+    waitingFor: 'workspace runtime 首个事件',
+    nextStep: '收到后端事件后继续展示读取、执行、写入和验证进展。',
+    reason: 'request-accepted-before-backend-stream',
+  };
 }
 
 export function gatewayRequestReceivedEvent(skillDomain: string): WorkspaceRuntimePolicyEvent {

@@ -6,7 +6,7 @@ import {
   artifactProvenanceSource,
   artifactProvenanceSourceVariant,
   type ArtifactProvenanceSource,
-} from '../../../../../packages/support/artifact-preview';
+} from '@sciforge-ui/artifact-preview';
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -29,12 +29,12 @@ export function artifactMeta(artifact?: RuntimeArtifact) {
   return `${artifact.type} · ${artifact.schemaVersion}`;
 }
 
-export function artifactSource(artifact?: RuntimeArtifact): 'project-tool' | 'record-only' | 'empty' {
+export function artifactSource(artifact?: RuntimeArtifact): ArtifactProvenanceSource {
   return artifactProvenanceSource(artifact);
 }
 
 export function sourceVariant(source: ReturnType<typeof artifactSource>): 'success' | 'muted' | 'warning' {
-  return artifactProvenanceSourceVariant(source as ArtifactProvenanceSource);
+  return artifactProvenanceSourceVariant(source);
 }
 
 export function executionUnitForArtifact(session: SciForgeSession, artifact?: RuntimeArtifact): RuntimeExecutionUnit | undefined {

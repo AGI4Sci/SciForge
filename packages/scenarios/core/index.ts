@@ -17,3 +17,4 @@ export * from './src/scenarioRoutingPolicy';
 export * from './src/scenarioBuilderDisplayPolicy';
 export * from './src/alignmentDisplayPolicy';
 export * from './src/scenarioAutoRunPromptPolicy';
+export * from './src/scenarioDemoData';

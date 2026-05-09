@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { structureSummaryMetricPresentation } from '@sciforge/interactive-views';
+import { structureSummaryMetricPresentation, uploadedInteractiveEvidenceArtifacts } from '@sciforge/interactive-views';
+import { scenarioPackageRefLabel } from '@sciforge/scenario-core/scenario-builder-display-policy';
 import { ChevronDown, ChevronUp, Clock, Download, FileCode, Lock, Shield } from 'lucide-react';
 import { buildExecutionBundle, evaluateExecutionBundleExport } from '../../exportPolicy';
 import { scenarios, type ScenarioId } from '../../data';
@@ -54,14 +55,10 @@ export function MetricGrid({ metrics = {} }: { metrics?: Record<string, unknown>
   );
 }
 
-function uploadedEvidenceArtifacts(artifacts: RuntimeArtifact[]) {
-  return artifacts.filter((artifact) => artifact.metadata?.source === 'user-upload' || /^uploaded-/.test(artifact.type));
-}
-
 export function EvidenceMatrix({ claims, artifacts = [] }: { claims: EvidenceClaim[]; artifacts?: RuntimeArtifact[] }) {
   const [expandedClaim, setExpandedClaim] = useState<string | null>(null);
   const [expandedUpload, setExpandedUpload] = useState<string | null>(null);
-  const uploads = uploadedEvidenceArtifacts(artifacts);
+  const uploads = uploadedInteractiveEvidenceArtifacts(artifacts);
   const rows = claims.map((claim, index) => ({
     id: `${claim.id || 'claim'}-${index}`,
     claim: claim.text,
@@ -217,7 +214,7 @@ function executionStatusDetail(unit: RuntimeExecutionUnit) {
     unit.routeDecision?.selectedSkill ? `selectedSkill=${unit.routeDecision.selectedSkill}` : undefined,
     unit.routeDecision?.selectedRuntime ? `selectedRuntime=${unit.routeDecision.selectedRuntime}` : undefined,
     unit.routeDecision?.fallbackReason ? `fallback=${unit.routeDecision.fallbackReason}` : undefined,
-    unit.scenarioPackageRef ? `package=${unit.scenarioPackageRef.id}@${unit.scenarioPackageRef.version}` : undefined,
+    unit.scenarioPackageRef ? `package=${scenarioPackageRefLabel(unit.scenarioPackageRef)}` : undefined,
     unit.skillPlanRef ? `skillPlan=${unit.skillPlanRef}` : undefined,
     unit.uiPlanRef ? `uiPlan=${unit.uiPlanRef}` : undefined,
     unit.selfHealReason ? `selfHealReason=${unit.selfHealReason}` : undefined,
@@ -250,7 +247,7 @@ function executionEnvironmentText(rows: RuntimeExecutionUnit[]) {
     `selectedSkill: ${unit.routeDecision?.selectedSkill || 'n/a'}`,
     `selectedRuntime: ${unit.routeDecision?.selectedRuntime || 'n/a'}`,
     `fallbackReason: ${unit.routeDecision?.fallbackReason || 'n/a'}`,
-    `scenarioPackageRef: ${unit.scenarioPackageRef ? `${unit.scenarioPackageRef.id}@${unit.scenarioPackageRef.version}:${unit.scenarioPackageRef.source}` : 'n/a'}`,
+    `scenarioPackageRef: ${scenarioPackageRefLabel(unit.scenarioPackageRef, { includeSource: true })}`,
     `skillPlanRef: ${unit.skillPlanRef || 'n/a'}`,
     `uiPlanRef: ${unit.uiPlanRef || 'n/a'}`,
     `attempt: ${unit.attempt || 'n/a'}`,

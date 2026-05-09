@@ -14,11 +14,19 @@ import {
   scenarioBuilderDraftPreviewModel,
   scenarioBuilderElementSelectorRegistryAriaLabel,
   scenarioBuilderElementSelectorSummary,
+  scenarioBuilderPackageForWorkspaceSave,
+  scenarioBuilderPrioritizeBySelectionAndDomain,
   scenarioDashboardPrimaryImportAction,
+  scenarioDefaultElementSelectionForRuntimeOverride,
   scenarioPackageCopyId,
   scenarioPackageExportFileName,
+  scenarioPackageIdentityLabel,
   scenarioPackageManifestPreview,
   scenarioPackagePreviewFields,
+  scenarioPackageRefLabel,
+  scenarioPackageToRuntimeOverride,
+  scenarioPackageValidationSummary,
+  scenarioReportViewerEmptyStatePolicy,
   scenarioBuilderQualityChecklistText,
   scenarioBuilderRecommendationReasons,
   scenarioSkillDomainFilterOptions,
@@ -150,6 +158,50 @@ describe('scenario builder display policy', () => {
 
     assert.deepEqual(fields.map((field) => field.label), ['scenario', 'domain', 'quality', 'export file']);
     assert.deepEqual(fields.map((field) => field.value), ['Workspace review', 'literature', 'quality pass', 'workspace-review-1.0.0.scenario-package.json']);
+    assert.equal(scenarioPackageIdentityLabel({ id: 'workspace-review', version: '1.0.0' }), 'workspace-review@1.0.0');
+    assert.equal(scenarioPackageRefLabel({ id: 'workspace-review', version: '1.0.0', source: 'workspace' }, { includeSource: true }), 'workspace-review@1.0.0:workspace');
+    assert.equal(scenarioPackageRefLabel(undefined), 'n/a');
+  });
+
+  it('owns report viewer empty state package ids and copy', () => {
+    assert.deepEqual(scenarioReportViewerEmptyStatePolicy({ hasArtifact: false }), {
+      componentId: 'report-viewer',
+      artifactType: 'research-report',
+      detail: undefined,
+    });
+    assert.match(scenarioReportViewerEmptyStatePolicy({ hasArtifact: true }).detail ?? '', /markdown\/report\/sections/);
+  });
+
+  it('owns package validation and workspace save display policy', () => {
+    const pkg = buildBuiltInScenarioPackage('literature-evidence-review', '2026-04-25T00:00:00.000Z');
+    const validationReport = { ok: false, checkedAt: '2026-05-10T00:00:00.000Z', issues: [] };
+    const saved = scenarioBuilderPackageForWorkspaceSave({
+      package: pkg,
+      status: 'published',
+      validationReport,
+      qualityReport: {
+        ok: true,
+        checkedAt: '2026-05-10T00:00:00.000Z',
+        packageRef: { id: pkg.id, version: pkg.version, status: 'published' },
+        items: [],
+        validationReport,
+      },
+      recommendationReasons: ['reason'],
+      builderStep: 'publish',
+      selection: {
+        skillDomain: 'literature',
+        selectedSkillIds: ['agentserver.generate.literature'],
+        selectedToolIds: ['tool.pubmed'],
+        selectedComponentIds: ['paper-card-list'],
+        selectedArtifactTypes: ['paper-list'],
+      },
+      fallbackSkillDomain: 'literature',
+    });
+
+    assert.equal(scenarioPackageValidationSummary({ package: pkg, validationReport }), 'literature-evidence-review@1.0.0 · needs fixes');
+    assert.equal(saved.status, 'published');
+    assert.deepEqual(saved.metadata?.recommendationReasons, ['reason']);
+    assert.deepEqual((saved.metadata?.compiledFrom as { selectedArtifactTypes?: string[] }).selectedArtifactTypes, ['paper-list']);
   });
 
   it('owns dashboard package import and copy ids in package policy', () => {
@@ -183,6 +235,37 @@ describe('scenario builder display policy', () => {
     assert.equal(preview.manifest.id, 'literature-evidence-review');
     assert.deepEqual(preview.manifest.uiPlan.components, pkg.uiPlan.compiledFrom.componentIds);
     assert.deepEqual(preview.manifest.tests[0].expectedArtifactTypes, pkg.tests[0].expectedArtifactTypes);
+  });
+
+  it('maps scenario packages into runtime override policy', () => {
+    const pkg = buildBuiltInScenarioPackage('literature-evidence-review', '2026-04-25T00:00:00.000Z');
+    const override = scenarioPackageToRuntimeOverride(pkg);
+
+    assert.deepEqual(override.defaultComponents, pkg.scenario.selectedComponentIds);
+    assert.deepEqual(override.scenarioPackageRef, { id: pkg.id, version: pkg.version, source: 'workspace' });
+    assert.equal(override.skillPlanRef, pkg.skillPlan.id);
+  });
+
+  it('owns builder default selection and selector ordering policy', () => {
+    const spec = SCENARIO_SPECS['omics-differential-exploration'];
+    const selection = scenarioDefaultElementSelectionForRuntimeOverride('omics-differential-exploration', {
+      title: spec.title,
+      description: spec.description,
+      skillDomain: spec.skillDomain,
+      scenarioMarkdown: spec.scenarioMarkdown,
+      defaultComponents: spec.componentPolicy.defaultComponents,
+      allowedComponents: spec.componentPolicy.allowedComponents,
+      fallbackComponent: spec.componentPolicy.fallbackComponent,
+    });
+    const ordered = scenarioBuilderPrioritizeBySelectionAndDomain([
+      { id: 'structure-secondary', skillDomains: ['structure'] },
+      { id: 'omics-selected', skillDomains: ['structure'] },
+      { id: 'omics-domain', skillDomains: ['omics'] },
+    ], ['omics-selected'], 'omics');
+
+    assert.equal(selection.skillDomain, 'omics');
+    assert.ok(selection.selectedArtifactTypes.length > 0);
+    assert.deepEqual(ordered.map((item) => item.id), ['omics-selected', 'omics-domain', 'structure-secondary']);
   });
 
   it('turns scenario builder draft ids into display tokens for UI preview', () => {
