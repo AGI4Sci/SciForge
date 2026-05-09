@@ -19,6 +19,14 @@ import { makeId, nowIso } from '../../domain';
 import { mergeObjectReferences } from '../../../../../packages/support/object-references';
 
 const BACKGROUND_COMPLETION_CONTRACT = 'sciforge.background-completion.v1';
+const REQUEST_PAYLOAD_MESSAGE_LIMIT = 12;
+const REQUEST_PAYLOAD_ARTIFACT_LIMIT = 16;
+const REQUEST_PAYLOAD_EXECUTION_UNIT_LIMIT = 16;
+const REQUEST_PAYLOAD_RUN_LIMIT = 8;
+const REQUEST_PAYLOAD_MESSAGE_TEXT_LIMIT = 6_000;
+const REQUEST_PAYLOAD_RUN_TEXT_LIMIT = 2_000;
+const REQUEST_PAYLOAD_RAW_TEXT_LIMIT = 2_500;
+const REQUEST_PAYLOAD_INLINE_DATA_LIMIT = 3_000;
 
 export function titleFromPrompt(prompt: string) {
   const title = prompt.trim().replace(/\s+/g, ' ').slice(0, 36);
@@ -614,11 +622,12 @@ export function requestPayloadForTurn(session: SciForgeSession, userMessage: Sci
     || session.artifacts.length > 0
     || session.executionUnits.length > 0;
   if (hasPriorWork || hasExplicitReferences) {
+    const messages = compactMessagesForRequestPayload(session.messages);
     return {
-      messages: session.messages.filter((message) => !message.id.startsWith('seed')),
-      artifacts: session.artifacts,
-      executionUnits: session.executionUnits,
-      runs: session.runs,
+      messages,
+      artifacts: session.artifacts.slice(-REQUEST_PAYLOAD_ARTIFACT_LIMIT).map(compactArtifactForRequestPayload),
+      executionUnits: session.executionUnits.slice(-REQUEST_PAYLOAD_EXECUTION_UNIT_LIMIT).map(compactExecutionUnitForRequestPayload),
+      runs: session.runs.slice(-REQUEST_PAYLOAD_RUN_LIMIT).map(compactRunForRequestPayload),
     };
   }
   return {
@@ -627,6 +636,124 @@ export function requestPayloadForTurn(session: SciForgeSession, userMessage: Sci
     executionUnits: [],
     runs: [],
   };
+}
+
+function compactMessagesForRequestPayload(messages: SciForgeMessage[]) {
+  return messages
+    .filter((message) => !message.id.startsWith('seed'))
+    .slice(-REQUEST_PAYLOAD_MESSAGE_LIMIT)
+    .map((message) => ({
+      ...message,
+      content: clipText(message.content, REQUEST_PAYLOAD_MESSAGE_TEXT_LIMIT),
+      expandable: clipOptionalText(message.expandable, REQUEST_PAYLOAD_MESSAGE_TEXT_LIMIT),
+      references: message.references?.slice(-8),
+      objectReferences: message.objectReferences?.slice(-12),
+    }));
+}
+
+function compactArtifactForRequestPayload(artifact: RuntimeArtifact): RuntimeArtifact {
+  const compacted: RuntimeArtifact = {
+    ...artifact,
+    metadata: compactRecord(artifact.metadata, 1_500),
+  };
+  if (artifact.data === undefined) return compacted;
+  if (artifact.dataRef || artifact.path) {
+    compacted.metadata = {
+      ...(compacted.metadata ?? {}),
+      inlineDataOmittedFromChatPayload: true,
+    };
+    delete compacted.data;
+    return compacted;
+  }
+  const compactedData = compactInlineValue(artifact.data, REQUEST_PAYLOAD_INLINE_DATA_LIMIT);
+  if (compactedData.omitted) {
+    compacted.metadata = {
+      ...(compacted.metadata ?? {}),
+      inlineDataOmittedFromChatPayload: true,
+      inlineDataApproxBytes: compactedData.approxBytes,
+    };
+    delete compacted.data;
+    return compacted;
+  }
+  compacted.data = compactedData.value;
+  return compacted;
+}
+
+function compactExecutionUnitForRequestPayload(unit: RuntimeExecutionUnit): RuntimeExecutionUnit {
+  return {
+    ...unit,
+    params: clipText(unit.params, 1_500),
+    code: clipOptionalText(unit.code, 2_000),
+    selfHealReason: clipOptionalText(unit.selfHealReason, 1_000),
+    patchSummary: clipOptionalText(unit.patchSummary, 1_000),
+    failureReason: clipOptionalText(unit.failureReason, 1_500),
+    nextStep: clipOptionalText(unit.nextStep, 1_000),
+    recoverActions: unit.recoverActions?.map((action) => clipText(action, 600)).slice(-6),
+  };
+}
+
+function compactRunForRequestPayload(run: SciForgeRun): SciForgeRun {
+  return {
+    ...run,
+    prompt: clipText(run.prompt, REQUEST_PAYLOAD_RUN_TEXT_LIMIT),
+    response: clipText(run.response, REQUEST_PAYLOAD_RUN_TEXT_LIMIT),
+    raw: compactRunRaw(run.raw),
+    references: run.references?.slice(-8),
+    objectReferences: run.objectReferences?.slice(-12),
+  };
+}
+
+function compactRunRaw(raw: unknown) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return compactInlineValue(raw, REQUEST_PAYLOAD_RAW_TEXT_LIMIT).value;
+  const record = raw as Record<string, unknown>;
+  const streamProcess = record.streamProcess && typeof record.streamProcess === 'object' && !Array.isArray(record.streamProcess)
+    ? record.streamProcess as Record<string, unknown>
+    : undefined;
+  return {
+    ...compactRecord(record, REQUEST_PAYLOAD_RAW_TEXT_LIMIT),
+    streamProcess: streamProcess
+      ? {
+          eventCount: streamProcess.eventCount,
+          summary: clipOptionalText(typeof streamProcess.summary === 'string' ? streamProcess.summary : undefined, REQUEST_PAYLOAD_RUN_TEXT_LIMIT),
+        }
+      : undefined,
+  };
+}
+
+function compactRecord(record: Record<string, unknown> | undefined, maxChars: number) {
+  if (!record) return undefined;
+  const compacted: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (key === 'data' || key === 'events') continue;
+    compacted[key] = compactInlineValue(value, maxChars).value;
+  }
+  return compacted;
+}
+
+function compactInlineValue(value: unknown, maxChars: number): { value: unknown; omitted: boolean; approxBytes?: number } {
+  if (typeof value === 'string') {
+    return value.length > maxChars
+      ? { value: clipText(value, maxChars), omitted: false, approxBytes: value.length }
+      : { value, omitted: false };
+  }
+  if (value === undefined || value === null || typeof value === 'number' || typeof value === 'boolean') {
+    return { value, omitted: false };
+  }
+  try {
+    const serialized = JSON.stringify(value);
+    if (serialized.length <= maxChars) return { value, omitted: false };
+    return { value: `[omitted from chat payload: ${serialized.length} chars]`, omitted: true, approxBytes: serialized.length };
+  } catch {
+    return { value: '[omitted from chat payload: unserializable value]', omitted: true };
+  }
+}
+
+function clipOptionalText(value: string | undefined, maxChars: number) {
+  return value === undefined ? undefined : clipText(value, maxChars);
+}
+
+function clipText(value: string, maxChars: number) {
+  return value.length > maxChars ? `${value.slice(0, maxChars)}...[truncated]` : value;
 }
 
 export function rollbackSessionBeforeMessage(session: SciForgeSession, messageId: string): SciForgeSession {

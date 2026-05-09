@@ -229,6 +229,54 @@ test('flags verified claims without evidence refs', () => {
   assert.equal(finding?.severity, 'repair-needed');
 });
 
+test('does not treat natural-language verification words as structured verified claims', () => {
+  const finding = evaluateToolPayloadEvidence(payload({
+    message: 'Status updates were validated and displayed to the user.',
+    reasoningTrace: 'Runtime emitted visible progress events before backend completion.',
+    claims: [{
+      text: 'Validated progress events were visible in the chat panel.',
+      type: 'observation',
+      confidence: 0.72,
+      evidenceLevel: 'runtime-status',
+    }],
+    executionUnits: [{ id: 'status', status: 'done', tool: 'workspace-runtime.status' }],
+  }), {
+    prompt: '请用一句话确认收到，并说明当前场景是什么。',
+  } as GatewayRequest);
+
+  assert.equal(finding, undefined);
+});
+
+test('allows lightweight confirmation wording without evidence refs', () => {
+  const finding = evaluateToolPayloadEvidence(payload({
+    message: '已确认收到，当前场景是 SciForge 多轮聊天调试。',
+    reasoningTrace: 'Answered a lightweight acknowledgement request without claiming external evidence.',
+    claims: [{
+      text: '已确认收到，当前场景是 SciForge 多轮聊天调试。',
+      type: 'observation',
+      confidence: 0.7,
+      evidenceLevel: 'meta',
+    }],
+    executionUnits: [{ id: 'ack', status: 'done', tool: 'direct-answer' }],
+  }), {
+    prompt: '请用一句话确认收到，并说明当前场景是什么。',
+  } as GatewayRequest);
+
+  assert.equal(finding, undefined);
+});
+
+test('still flags structured verified claims without evidence refs', () => {
+  const finding = evaluateToolPayloadEvidence(payload({
+    message: '结果已核验。',
+    claims: [{ text: '轻量确认已完成', verificationStatus: 'verified', confidence: 0.8 }],
+    executionUnits: [{ id: 'ack', status: 'done', tool: 'direct-answer' }],
+  }), {
+    prompt: '请确认当前状态',
+  } as GatewayRequest);
+
+  assert.equal(finding?.kind, 'verified-claim-without-evidence');
+});
+
 test('allows verified claims when evidence refs are present', () => {
   const finding = evaluateToolPayloadEvidence(payload({
     message: 'Claim verified.',

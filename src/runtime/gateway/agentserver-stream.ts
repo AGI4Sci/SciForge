@@ -180,8 +180,7 @@ export function currentReferenceDigestSilentGuardMs(request: GatewayRequest) {
   const digests = Array.isArray(request.uiState?.currentReferenceDigests)
     ? request.uiState.currentReferenceDigests
     : [];
-  if (!digests.length) return undefined;
-  return 45_000;
+  return digests.length ? 45_000 : 30_000;
 }
 
 function agentServerEventTotalUsage(event: unknown) {

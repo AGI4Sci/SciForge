@@ -4,8 +4,8 @@ import { SCENARIO_SPECS } from '../scenarioSpecs';
 import { estimateContextWindowState, latestContextWindowState } from '../contextWindow';
 import { builtInScenarioPackageRef } from '../scenarioCompiler/scenarioPackage';
 import { resetSession } from '../sessionStore';
-import { SILENT_STREAM_WAIT_THRESHOLD_MS, buildSilentStreamProgressEvent, formatProgressHeadline, latestProgressModel } from '../processProgress';
-import { coalesceStreamEvents, latestRunningEvent, streamEventCounts } from '../streamEventPresentation';
+import { SILENT_STREAM_WAIT_THRESHOLD_MS, buildRequestAcceptedProgressEvent, buildSilentStreamProgressEvent, formatProgressHeadline, latestProgressModel } from '../processProgress';
+import { assistantDraftFromStreamEvents, coalesceStreamEvents, latestRunningEvent, streamEventCounts } from '../streamEventPresentation';
 import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type GuidanceQueueRecord, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeRun, type SciForgeSession, type ObjectReference, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
 import { writeWorkspaceFile } from '../api/workspaceClient';
 import { exportJsonFile } from './exportUtils';
@@ -147,6 +147,7 @@ export function ChatPanel({
   const [composerHeight, setComposerHeight] = useState(58);
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [streamEvents, setStreamEvents] = useState<AgentStreamEvent[]>([]);
+  const [assistantDraft, setAssistantDraft] = useState('');
   const [retainedContextWindowState, setRetainedContextWindowState] = useState<AgentContextWindowState | undefined>();
   const [guidanceQueue, setGuidanceQueue] = useState<GuidanceQueueRecord[]>([]);
   const [referencePickMode, setReferencePickMode] = useState(false);
@@ -177,6 +178,7 @@ export function ChatPanel({
   const liveTokenUsage = latestTokenUsage(streamEvents);
   const worklogCounts = streamEventCounts(streamEvents);
   const latestWorklogLine = formatProgressHeadline(latestProgressModel(streamEvents), latestRunningEvent(streamEvents));
+  const runningMessageContent = assistantDraft || latestWorklogLine || '正在规划、生成或执行 workspace task，过程日志默认折叠。';
   const latestStreamEventAt = streamEvents.at(-1)?.createdAt;
   const contextWindowState = latestContextWindowState(streamEvents)
     ?? retainedContextWindowState
@@ -211,6 +213,7 @@ export function ChatPanel({
   useEffect(() => {
     setStreamEvents([]);
     streamEventsRef.current = [];
+    setAssistantDraft('');
     setRetainedContextWindowState(undefined);
     setGuidanceQueue([]);
     setErrorText('');
@@ -444,9 +447,13 @@ export function ChatPanel({
       detail: prompt,
       createdAt: nowIso(),
     };
-    streamEventsRef.current = [queuedEvent];
-    setStreamEvents([queuedEvent]);
+    const acceptedEvent = buildRequestAcceptedProgressEvent(prompt);
+    const initialEvents = [queuedEvent, acceptedEvent];
+    streamEventsRef.current = initialEvents;
+    setStreamEvents(initialEvents);
+    setAssistantDraft('');
     setIsSending(true);
+    await nextAnimationFrame();
     const controller = new AbortController();
     abortRef.current = controller;
     userAbortRequestedRef.current = false;
@@ -457,6 +464,7 @@ export function ChatPanel({
         const latestContext = latestContextWindowState(next);
         if (latestContext) setRetainedContextWindowState(latestContext);
         setStreamEvents(next);
+        setAssistantDraft(assistantDraftFromStreamEvents(next));
       };
       const result = await runPromptOrchestrator({
         prompt,
@@ -515,6 +523,7 @@ export function ChatPanel({
       onActiveRunChange(finalResponseWithProcess.run.id);
     } finally {
       setIsSending(false);
+      setAssistantDraft('');
       abortRef.current = null;
       userAbortRequestedRef.current = false;
       const [nextGuidance, ...rest] = guidanceQueueRef.current;
@@ -700,7 +709,7 @@ export function ChatPanel({
                 <strong>{scenario.name}</strong>
                 <Badge variant="info">running</Badge>
               </div>
-              <MessageContent content={latestWorklogLine || '正在规划、生成或执行 workspace task，过程日志默认折叠。'} references={[]} onObjectFocus={onObjectFocus} />
+              <MessageContent content={runningMessageContent} references={[]} onObjectFocus={onObjectFocus} />
               <RunningWorkProcess
                 events={streamEvents}
                 counts={worklogCounts}
@@ -1246,4 +1255,10 @@ async function copyTextToClipboard(text: string) {
   } finally {
     textarea.remove();
   }
+}
+
+function nextAnimationFrame() {
+  return new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => resolve());
+  });
 }

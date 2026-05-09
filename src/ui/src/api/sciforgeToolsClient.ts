@@ -17,6 +17,11 @@ import {
   workspaceResultCompletion,
 } from './sciforgeToolsClient/runtimeEvents';
 
+const TRANSPORT_SESSION_MESSAGE_LIMIT = 12;
+const TRANSPORT_RUN_LIMIT = 8;
+const TRANSPORT_EXECUTION_UNIT_LIMIT = 16;
+const TRANSPORT_ARTIFACT_LIMIT = 16;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -42,8 +47,8 @@ export async function sendSciForgeToolMessage(
 ): Promise<NormalizedAgentResponse> {
   const builtInScenarioId = builtInScenarioIdForInput(input);
   const referenceSummary = (input.references ?? []).map(compactSciForgeReference);
-  const artifactSummary = (input.artifacts ?? []).map(sanitizeTransportArtifact);
-  const recentExecutionRefs = input.executionUnits ?? [];
+  const artifactSummary = (input.artifacts ?? []).slice(-TRANSPORT_ARTIFACT_LIMIT).map(sanitizeTransportArtifact);
+  const recentExecutionRefs = compactTransportExecutionUnits(input.executionUnits ?? []);
   const skillDomain = input.scenarioOverride?.skillDomain ?? SCENARIO_SPECS[builtInScenarioId].skillDomain;
   const configuredComponentIds = input.availableComponentIds?.length
     ? input.availableComponentIds
@@ -163,7 +168,7 @@ export async function sendSciForgeToolMessage(
         targetInstanceContext,
         repairHandoffRunner,
         recentExecutionRefs,
-        recentRuns: input.runs ?? [],
+        recentRuns: compactTransportRuns(input.runs ?? []),
         failureRecoveryPolicy,
         workspacePersistence: workspacePersistenceSummary(input),
         artifactExpectationMode: expectedArtifactTypes.length ? 'explicit-current-turn' : 'backend-decides',
@@ -192,6 +197,7 @@ export async function sendSciForgeToolMessage(
         callbacks.onEvent?.(toolEvent('backend-stream-retry-start', `正在重连 workspace stream（第 ${attempt}/2 次），复用同一个请求 payload。`));
       }
       try {
+        if (signal?.aborted) activeRequestController.abort();
         response = await fetch(`${input.config.workspaceWriterBaseUrl}/api/sciforge/tools/run/stream`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -354,7 +360,23 @@ function builtInScenarioIdForInput(input: SendAgentMessageInput): ScenarioId {
 }
 
 function stableSessionMessages(input: SendAgentMessageInput) {
-  return (input.messages ?? []).filter((message) => !message.id.startsWith('seed'));
+  return (input.messages ?? [])
+    .filter((message) => !message.id.startsWith('seed'))
+    .slice(-TRANSPORT_SESSION_MESSAGE_LIMIT)
+    .map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: compactConversationContent(message.content, 1600),
+      createdAt: message.createdAt,
+      status: message.status,
+      references: message.references?.slice(-8).map(compactSciForgeReference),
+      objectReferences: message.objectReferences?.slice(-12),
+      guidanceQueue: message.guidanceQueue ? {
+        ...message.guidanceQueue,
+        prompt: compactConversationContent(message.guidanceQueue.prompt, 800),
+        reason: message.guidanceQueue.reason ? compactConversationContent(message.guidanceQueue.reason, 500) : undefined,
+      } : undefined,
+    }));
 }
 
 function compactConversationContent(value: string, maxChars = 1200) {
@@ -374,6 +396,66 @@ function uniqueStrings(values: Array<string | undefined>) {
     out.push(value);
   }
   return out;
+}
+
+function compactTransportExecutionUnits(units: NonNullable<SendAgentMessageInput['executionUnits']>) {
+  return units.slice(-TRANSPORT_EXECUTION_UNIT_LIMIT).map((unit) => ({
+    id: unit.id,
+    tool: unit.tool,
+    status: unit.status,
+    hash: unit.hash,
+    params: compactConversationContent(unit.params, 1000),
+    codeRef: unit.codeRef,
+    stdoutRef: unit.stdoutRef,
+    stderrRef: unit.stderrRef,
+    outputRef: unit.outputRef,
+    diffRef: unit.diffRef,
+    failureReason: unit.failureReason ? compactConversationContent(unit.failureReason, 1200) : undefined,
+    patchSummary: unit.patchSummary ? compactConversationContent(unit.patchSummary, 800) : undefined,
+    recoverActions: unit.recoverActions?.slice(-6).map((action) => compactConversationContent(action, 500)),
+    nextStep: unit.nextStep ? compactConversationContent(unit.nextStep, 600) : undefined,
+    verificationRef: unit.verificationRef,
+    verificationVerdict: unit.verificationVerdict,
+    routeDecision: unit.routeDecision,
+    scenarioPackageRef: unit.scenarioPackageRef,
+    skillPlanRef: unit.skillPlanRef,
+    uiPlanRef: unit.uiPlanRef,
+  }));
+}
+
+function compactTransportRuns(runs: NonNullable<SendAgentMessageInput['runs']>) {
+  return runs.slice(-TRANSPORT_RUN_LIMIT).map((run) => ({
+    id: run.id,
+    scenarioId: run.scenarioId,
+    status: run.status,
+    prompt: compactConversationContent(run.prompt, 1200),
+    response: compactConversationContent(run.response, 1600),
+    createdAt: run.createdAt,
+    completedAt: run.completedAt,
+    references: run.references?.slice(-8).map(compactSciForgeReference),
+    objectReferences: run.objectReferences?.slice(-12),
+    scenarioPackageRef: run.scenarioPackageRef,
+    skillPlanRef: run.skillPlanRef,
+    uiPlanRef: run.uiPlanRef,
+    guidanceQueue: run.guidanceQueue?.slice(-8).map((record) => ({
+      ...record,
+      prompt: compactConversationContent(record.prompt, 800),
+      reason: record.reason ? compactConversationContent(record.reason, 500) : undefined,
+    })),
+    raw: compactTransportRunRaw(run.raw),
+  }));
+}
+
+function compactTransportRunRaw(raw: unknown) {
+  if (!isRecord(raw)) return undefined;
+  const streamProcess = isRecord(raw.streamProcess) ? raw.streamProcess : undefined;
+  return {
+    ...compactRecord(raw),
+    streamProcess: streamProcess ? {
+      eventCount: typeof streamProcess.eventCount === 'number' ? streamProcess.eventCount : undefined,
+      summary: typeof streamProcess.summary === 'string' ? compactConversationContent(streamProcess.summary, 1400) : undefined,
+    } : undefined,
+  };
 }
 
 function selectedRuntimeSkillIds(input: SendAgentMessageInput, skillDomain: string) {

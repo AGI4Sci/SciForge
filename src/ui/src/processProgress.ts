@@ -24,7 +24,7 @@ export interface ProcessProgressModel {
   status: 'running' | 'completed' | 'failed';
 }
 
-export const SILENT_STREAM_WAIT_THRESHOLD_MS = 60_000;
+export const SILENT_STREAM_WAIT_THRESHOLD_MS = 5_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -143,6 +143,20 @@ export function buildInitialResponseProgressEvent(responsePlan: RuntimeResponseP
     });
   }
   return undefined;
+}
+
+export function buildRequestAcceptedProgressEvent(prompt: string): AgentStreamEvent {
+  const compactPrompt = prompt.replace(/\s+/g, ' ').trim().slice(0, 160);
+  return progressEvent({
+    phase: 'plan',
+    title: '已收到请求',
+    detail: compactPrompt
+      ? `正在把本轮请求交给 workspace runtime：${compactPrompt}`
+      : '正在把本轮请求交给 workspace runtime。',
+    waitingFor: 'workspace runtime 首个事件',
+    nextStep: '收到后端事件后继续展示读取、执行、写入和验证进展。',
+    reason: 'request-accepted-before-backend-stream',
+  });
 }
 
 function progressEvent({

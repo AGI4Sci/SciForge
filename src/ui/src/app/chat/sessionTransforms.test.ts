@@ -88,6 +88,65 @@ test('builds minimal first-turn payload but retains prior work and explicit refe
   assert.deepEqual(requestPayloadForTurn(seeded, userMessage, [{ id: 'ref-1', kind: 'message', title: 'ref', ref: 'message:1' }]).messages.map((item) => item.id), ['msg-user']);
 });
 
+test('compacts prior work payloads for multi-turn requests', () => {
+  const messages = Array.from({ length: 18 }, (_, index) => message(
+    `msg-${index}`,
+    index % 2 ? 'scenario' : 'user',
+    `message ${index} ${'x'.repeat(700)}`,
+    `2026-05-07T00:${String(index).padStart(2, '0')}:00.000Z`,
+  ));
+  const userMessage = message('msg-user', 'user', 'continue', '2026-05-07T01:00:00.000Z');
+  const artifacts: RuntimeArtifact[] = Array.from({ length: 20 }, (_, index) => ({
+    id: `artifact-${index}`,
+    type: 'table',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    dataRef: `file:.sciforge/artifacts/${index}.json`,
+    data: { rows: Array.from({ length: 200 }, () => ({ value: 'large inline value' })) },
+  }));
+  const executionUnits: RuntimeExecutionUnit[] = Array.from({ length: 20 }, (_, index) => ({
+    id: `unit-${index}`,
+    tool: 'shell',
+    params: 'p'.repeat(2_000),
+    status: 'done',
+    hash: `hash-${index}`,
+  }));
+  const runs = Array.from({ length: 10 }, (_, index) => ({
+    id: `run-${index}`,
+    scenarioId: 'literature-evidence-review' as const,
+    status: 'completed' as const,
+    prompt: 'prompt '.repeat(600),
+    response: 'response '.repeat(600),
+    createdAt: `2026-05-07T02:${String(index).padStart(2, '0')}:00.000Z`,
+    raw: {
+      streamProcess: {
+        eventCount: 40,
+        summary: 'recent status '.repeat(300),
+        events: Array.from({ length: 40 }, (_, eventIndex) => ({ label: `event-${eventIndex}` })),
+      },
+      trace: 't'.repeat(4_000),
+    },
+  }));
+
+  const payload = requestPayloadForTurn(session({
+    messages: [...messages, userMessage],
+    artifacts,
+    executionUnits,
+    runs,
+  }), userMessage, []);
+
+  assert.equal(payload.messages.length, 12);
+  assert.equal(payload.messages.at(-1)?.id, 'msg-user');
+  assert.equal(payload.artifacts.length, 16);
+  assert.equal(payload.executionUnits.length, 16);
+  assert.equal(payload.runs.length, 8);
+  assert.equal(payload.artifacts[0]?.data, undefined);
+  assert.equal(payload.artifacts[0]?.metadata?.inlineDataOmittedFromChatPayload, true);
+  assert.ok((payload.executionUnits[0]?.params.length ?? 0) < 1_600);
+  assert.doesNotMatch(JSON.stringify(payload.runs[0]?.raw), /event-39/);
+  assert.match((payload.runs[0]?.raw as { streamProcess?: { summary?: string } }).streamProcess?.summary ?? '', /recent status/);
+});
+
 test('rolls back an edited user message and prunes later run-owned state', () => {
   const before: RuntimeExecutionUnit = {
     id: 'unit-before',

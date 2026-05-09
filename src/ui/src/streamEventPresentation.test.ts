@@ -4,7 +4,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { AgentStreamEvent } from './domain';
-import { coalesceStreamEvents, latestRunningEvent, presentStreamEvent, presentStreamWorklog, streamEventCounts } from './streamEventPresentation';
+import { assistantDraftDeltaFromStreamEvent, assistantDraftFromStreamEvents, coalesceStreamEvents, latestRunningEvent, presentStreamEvent, presentStreamWorklog, streamEventCounts } from './streamEventPresentation';
 import { RunningWorkProcess, visibleRunningWorkEntries } from './app/chat/RunningWorkProcess';
 import { normalizeWorkspaceRuntimeEvent } from './api/sciforgeToolsClient/runtimeEvents';
 
@@ -69,6 +69,36 @@ test('text deltas coalesce and remain folded as background process detail', () =
   assert.equal(presentation.importance, 'background');
   assert.equal(presentation.initiallyCollapsed, true);
   assert.equal(latestRunningEvent(events), '后台正在探索或执行，过程日志已折叠。');
+});
+
+test('assistant draft extracts natural language text deltas but skips task JSON', () => {
+  const draft = assistantDraftFromStreamEvents([
+    event({ id: 'delta-1', type: 'text-delta', label: '生成内容', detail: '已确认收到，' }),
+    event({ id: 'delta-2', type: 'text-delta', label: '生成内容', detail: '当前正在整理结果。' }),
+    event({
+      id: 'task-json',
+      type: 'text-delta',
+      label: '生成内容',
+      detail: '{"taskFiles":[{"path":"tasks/report.py","content":"print(1)"}],"entrypoint":{"path":"tasks/report.py"}}',
+    }),
+  ]);
+
+  assert.match(draft, /已确认收到/);
+  assert.match(draft, /当前正在整理结果/);
+  assert.doesNotMatch(draft, /taskFiles/);
+});
+
+test('assistant draft can use output events when they contain natural language', () => {
+  assert.equal(assistantDraftDeltaFromStreamEvent(event({
+    type: 'output',
+    label: '输出',
+    detail: '这里是运行中的自然语言草稿。',
+  })), '这里是运行中的自然语言草稿。');
+  assert.equal(assistantDraftDeltaFromStreamEvent(event({
+    type: 'output',
+    label: '输出',
+    detail: '{"message":"structured payload"}',
+  })), '');
 });
 
 test('script generation and write-file events stay visible in the running chat message', () => {

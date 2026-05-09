@@ -255,7 +255,7 @@ function hasEvidenceBearingRef(record: Record<string, unknown>) {
 }
 
 function recordClaimsVerified(record: Record<string, unknown>) {
-  return ['status', 'verdict', 'verificationStatus', 'verification', 'evidenceLevel', 'text', 'summary']
+  return ['status', 'verdict', 'verificationStatus', 'verification', 'evidenceLevel']
     .some((key) => verifiedText(record[key]));
 }
 

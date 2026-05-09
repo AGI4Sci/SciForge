@@ -195,6 +195,20 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
   const normalizedRequest = normalizeGatewayRequestFromModule(body);
   const telemetry = createLatencyTelemetry(normalizedRequest, callbacks);
   try {
+    emitWorkspaceRuntimeEvent(telemetry.callbacks, {
+      type: 'gateway-request-received',
+      source: 'workspace-runtime',
+      status: 'running',
+      message: 'Workspace runtime received the chat turn and is preparing policy and execution routing.',
+      detail: normalizedRequest.skillDomain,
+    });
+    emitWorkspaceRuntimeEvent(telemetry.callbacks, {
+      type: 'conversation-policy-started',
+      source: 'workspace-runtime',
+      status: 'running',
+      message: 'Starting Python conversation policy.',
+      detail: 'Selecting memory, latency, recovery, and execution plans before dispatch.',
+    });
     const policyApplication = await applyConversationPolicy(normalizedRequest, telemetry.callbacks, { workspace: normalizedRequest.workspacePath });
     telemetry.markPolicyApplication(policyApplication);
     const request = policyApplication.request;
@@ -604,6 +618,9 @@ async function requestAgentServerGeneration(params: {
   const controller = new AbortController();
   const timeoutMs = Number(process.env.SCIFORGE_AGENTSERVER_GENERATION_TIMEOUT_MS || 900000);
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const abortGeneration = () => controller.abort();
+  params.callbacks?.signal?.addEventListener('abort', abortGeneration, { once: true });
+  if (params.callbacks?.signal?.aborted) controller.abort();
   let runPayload: unknown;
   let contextRecovery: AgentServerGenerationFailureDiagnostics | undefined;
   try {
@@ -1009,6 +1026,7 @@ async function requestAgentServerGeneration(params: {
     return { ok: false, error: agentServerRequestFailureMessage('generation', error, timeoutMs) };
   } finally {
     clearTimeout(timeout);
+    params.callbacks?.signal?.removeEventListener('abort', abortGeneration);
   }
 }
 

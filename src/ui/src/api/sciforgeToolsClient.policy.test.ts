@@ -103,6 +103,102 @@ test('UI handoff does not synthesize verification or human approval policy defau
   assert.equal(bodies[1]?.unverifiedReason, 'explicitly allowed for draft handoff');
 });
 
+test('UI handoff compacts large multi-turn session context before transport', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return streamResponse([
+      {
+        result: {
+          message: 'Workspace result ready.',
+          executionUnits: [{ id: 'unit-1', status: 'done' }],
+          artifacts: [],
+        },
+      },
+    ]);
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    messages: Array.from({ length: 20 }, (_, index) => ({
+      id: `msg-${index}`,
+      role: index % 2 ? 'scenario' : 'user',
+      content: `message ${index} ${'x'.repeat(4_000)}`,
+      createdAt: `2026-05-07T00:${String(index).padStart(2, '0')}:00.000Z`,
+      status: 'completed',
+    })),
+    artifacts: Array.from({ length: 20 }, (_, index) => ({
+      id: `artifact-${index}`,
+      type: 'table',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      path: `/tmp/artifact-${index}.json`,
+      data: { rows: Array.from({ length: 120 }, () => ({ value: 'large inline value' })) },
+    })),
+    executionUnits: Array.from({ length: 20 }, (_, index) => ({
+      id: `unit-${index}`,
+      tool: 'shell',
+      params: 'p'.repeat(4_000),
+      status: 'done',
+      hash: `hash-${index}`,
+      failureReason: 'f'.repeat(3_000),
+    })),
+    runs: Array.from({ length: 12 }, (_, index) => ({
+      id: `run-${index}`,
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'prompt '.repeat(800),
+      response: 'response '.repeat(800),
+      createdAt: `2026-05-07T02:${String(index).padStart(2, '0')}:00.000Z`,
+      raw: {
+        streamProcess: {
+          eventCount: 50,
+          summary: 'wait '.repeat(800),
+          events: Array.from({ length: 50 }, (_, eventIndex) => ({ label: `event-${eventIndex}` })),
+        },
+      },
+    })),
+  }), {});
+
+  const uiState = bodies[0]?.uiState as {
+    sessionMessages?: Array<{ content: string }>;
+    recentRuns?: Array<{ raw?: unknown; response: string }>;
+    recentExecutionRefs?: Array<{ params: string; failureReason?: string }>;
+  };
+  assert.equal(uiState.sessionMessages?.length, 12);
+  assert.ok((uiState.sessionMessages?.[0]?.content.length ?? 0) < 1_900);
+  assert.equal(uiState.recentRuns?.length, 8);
+  assert.doesNotMatch(JSON.stringify(uiState.recentRuns?.[0]?.raw), /event-49/);
+  assert.equal(uiState.recentExecutionRefs?.length, 16);
+  assert.ok((uiState.recentExecutionRefs?.[0]?.params.length ?? 0) < 1_200);
+  assert.ok((JSON.stringify(bodies[0]).length), 'body should be serializable after compaction');
+});
+
+test('pre-aborted signal cancels the workspace stream request controller', async () => {
+  let requestSignal: AbortSignal | undefined;
+  globalThis.fetch = (async (_input, init) => {
+    requestSignal = init?.signal as AbortSignal | undefined;
+    if (requestSignal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError');
+    return streamResponse([
+      {
+        result: {
+          message: 'Workspace result ready.',
+          executionUnits: [{ id: 'unit-1', status: 'done' }],
+          artifacts: [],
+        },
+      },
+    ]);
+  }) as typeof fetch;
+
+  const controller = new AbortController();
+  controller.abort();
+
+  await assert.rejects(
+    sendSciForgeToolMessage(messageInput(), {}, controller.signal),
+    /已取消|aborted|AbortError/i,
+  );
+  assert.equal(requestSignal?.aborted, true);
+});
+
 function streamResponse(items: unknown[]) {
   const encoder = new TextEncoder();
   return new Response(new ReadableStream({
@@ -115,7 +211,10 @@ function streamResponse(items: unknown[]) {
   }), { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } });
 }
 
-function messageInput(scenarioOverride?: Partial<NonNullable<SendAgentMessageInput['scenarioOverride']>>): SendAgentMessageInput {
+function messageInput(
+  scenarioOverride?: Partial<NonNullable<SendAgentMessageInput['scenarioOverride']>>,
+  overrides: Partial<SendAgentMessageInput> = {},
+): SendAgentMessageInput {
   return {
     sessionId: 'session-test',
     scenarioId: 'literature-evidence-review',
@@ -157,5 +256,6 @@ function messageInput(scenarioOverride?: Partial<NonNullable<SendAgentMessageInp
       fallbackComponent: '',
       ...scenarioOverride,
     } : undefined,
+    ...overrides,
   };
 }

@@ -208,6 +208,25 @@ export function coalesceStreamEvents(events: AgentStreamEvent[], next: AgentStre
   ];
 }
 
+export function assistantDraftFromStreamEvents(events: AgentStreamEvent[]) {
+  let draft = '';
+  for (const event of events) {
+    const delta = assistantDraftDeltaFromStreamEvent(event);
+    if (!delta) continue;
+    draft = mergeTextDeltaDetail(draft, delta);
+    if (draft.length > 6_000) draft = draft.slice(-6_000).replace(/^\S+\s+/, '');
+  }
+  return draft;
+}
+
+export function assistantDraftDeltaFromStreamEvent(event: AgentStreamEvent) {
+  const type = event.type.toLowerCase();
+  if (type !== 'text-delta' && type !== 'output') return '';
+  const detail = readableStreamEventDetail(event);
+  if (!detail || isScriptOrArtifactGenerationDetail(detail) || looksLikeTransportJson(detail)) return '';
+  return detail;
+}
+
 export function readableStreamEventDetail(event: AgentStreamEvent) {
   if (event.contextWindowState) {
     const state = event.contextWindowState;
@@ -328,6 +347,11 @@ function normalizeStreamTextDelta(value?: string) {
 
 function isScriptOrArtifactGenerationDetail(value: string) {
   return /(?:taskFiles|entrypoint|write_file|wrote \d+ bytes|cat\s*>\s*.*\.(?:py|js|ts|r|sh)|\.sciforge\/tasks|\/tasks\/|\.py\b|\.R\b|\.sh\b|research-report|paper-list|evidence-matrix|ToolPayload|AgentServerGenerationResponse)/i.test(value);
+}
+
+function looksLikeTransportJson(value: string) {
+  const trimmed = value.trim();
+  return (trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'));
 }
 
 function toolEventActionLabel(event: AgentStreamEvent | undefined, detail: string, fallback: string) {

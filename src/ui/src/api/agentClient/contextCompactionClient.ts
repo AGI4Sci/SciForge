@@ -45,12 +45,22 @@ export async function compactAgentContext(input: SendAgentMessageInput, reason: 
   ];
   const errors: string[] = [];
   for (const endpoint of endpoints) {
+    const endpointTimeoutMs = 2_500;
+    const endpointController = new AbortController();
+    let endpointTimedOut = false;
+    const timeout = globalThis.setTimeout(() => {
+      endpointTimedOut = true;
+      endpointController.abort();
+    }, endpointTimeoutMs);
+    const abortEndpoint = () => endpointController.abort();
+    signal?.addEventListener('abort', abortEndpoint, { once: true });
+    if (signal?.aborted) endpointController.abort();
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-        signal,
+        signal: endpointController.signal,
       });
       const text = await response.text();
       if (!response.ok) {
@@ -88,8 +98,13 @@ export async function compactAgentContext(input: SendAgentMessageInput, reason: 
         auditRefs: [`agentserver-compact:${input.sessionId ?? 'no-session'}:${reason}`],
       };
     } catch (err) {
-      if (err instanceof DOMException && err.name === 'AbortError') throw err;
-      errors.push(err instanceof Error ? err.message : String(err));
+      if (err instanceof DOMException && err.name === 'AbortError' && !endpointTimedOut) throw err;
+      errors.push(endpointTimedOut
+        ? `timeout ${endpointTimeoutMs}ms ${endpoint}`
+        : err instanceof Error ? err.message : String(err));
+    } finally {
+      globalThis.clearTimeout(timeout);
+      signal?.removeEventListener('abort', abortEndpoint);
     }
   }
   return {
