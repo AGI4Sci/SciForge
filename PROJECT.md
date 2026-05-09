@@ -49,7 +49,7 @@ Todo：
 - [ ] 建立 `packages/` 插拔能力清单：observe、skills、actions、verifiers、views、importers/exporters、scenario packages、provider adapters、composed capabilities、mock fixtures。
 - [ ] `src -> packages` P0：迁移 `src/runtime/computer-use/**` 的 action provider 语义到 `packages/actions/computer-use`；`src` 只保留 gateway config、workspace refs、event emission 和 host bridge adapter。
 - [ ] `src -> packages` P0：迁移 `src/runtime/vision-sense/**` 中 planner、grounding、focus refinement、semantic verifier feedback、trace policy 到 `packages/observe/vision`；会修改 GUI 的执行部分通过 `packages/actions/computer-use` 暴露。
-- [ ] `src -> packages` P0：删除或迁移 `src/runtime/capability-profiles.ts`，统一到 `packages/scenarios/core/src/runtimeCapabilityProfiles.ts` 或 `packages/contracts/runtime/capabilities.ts`，避免重复 capability profile 真相源。
+- [x] `src -> packages` P0：删除或迁移 `src/runtime/capability-profiles.ts`，统一到 `packages/scenarios/core/src/runtimeCapabilityProfiles.ts` 或 `packages/contracts/runtime/capabilities.ts`，避免重复 capability profile 真相源。
 - [ ] `src -> packages` P1：迁移 `src/runtime/runtime-ui-manifest.ts` 中 renderer aliases、domain defaults、artifact-to-component routing、title/layout/encoding inference 到 `packages/presentation/interactive-views` 或 scenario UI policy；`src` 只保留 composition adapter。
 - [ ] `src -> packages` P1：迁移 `src/ui/src/uiModuleRegistry.ts` 中 component manifest alias/index 构造到 `packages/presentation/components` 或 `packages/presentation/interactive-views` public export；UI 只消费 package registry。
 - [ ] `src -> packages` P1：迁移 `src/ui/src/artifactIntent.ts`、`src/ui/src/app/results/viewPlanResolver.ts` 中 artifact/component/domain ranking 和 prompt/domain regex 到 scenario/view capability policy。

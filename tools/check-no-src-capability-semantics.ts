@@ -62,7 +62,6 @@ const rules: Rule[] = [
 // seed files. New files or increased counts fail unless the legacy line is first
 // migrated into a package-owned policy or this baseline is deliberately updated.
 const trackedBaselineCounts: Record<string, number> = {
-  'src/runtime/capability-profiles.ts#artifact-id-hardcode': 7,
   'src/runtime/computer-use/capture.ts#scenario-provider-id-hardcode': 8,
   'src/runtime/computer-use/executor.ts#artifact-id-hardcode': 1,
   'src/runtime/computer-use/types.ts#artifact-id-hardcode': 1,
