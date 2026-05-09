@@ -83,12 +83,31 @@ export interface CapabilityLatencyCostSummary {
   executionCount?: number;
 }
 
+export type CapabilityPromotionProposalKind =
+  | 'composed-capability'
+  | 'validator-update'
+  | 'fallback-policy-update'
+  | 'repair-hint-update';
+
+export interface CapabilityEvolutionSuggestedUpdates {
+  capabilityIds?: string[];
+  validatorIds?: string[];
+  failureCodes?: string[];
+  fallbackTriggers?: CapabilityFallbackTrigger[];
+  repairHints?: string[];
+}
+
 export interface CapabilityPromotionCandidate {
   eligible: boolean;
   reason?: string;
   candidateId?: string;
   suggestedCapabilityId?: string;
   supportingRecordRefs?: string[];
+  proposalKind?: CapabilityPromotionProposalKind;
+  supportCount?: number;
+  confidence?: number;
+  observedPattern?: string;
+  suggestedUpdates?: CapabilityEvolutionSuggestedUpdates;
 }
 
 export interface ComposedCapabilityFallbackPolicy {

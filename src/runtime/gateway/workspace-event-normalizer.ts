@@ -7,9 +7,11 @@ import { isRecord, toStringList } from '../gateway-utils.js';
 import { redactSecretText, retryAfterMsFromText } from './backend-failure-diagnostics.js';
 import { collectWorkEvidenceFromBackendEvent } from './work-evidence-types.js';
 
+const DEFAULT_WORKSPACE_EVENT_KIND = 'runtime-event';
+
 export function normalizeAgentServerWorkspaceEvent(raw: unknown): WorkspaceRuntimeEvent {
   const record = isRecord(raw) ? raw : {};
-  const rawType = typeof record.type === 'string' ? record.type : typeof record.kind === 'string' ? record.kind : 'agentserver-event';
+  const rawType = typeof record.type === 'string' ? record.type : typeof record.kind === 'string' ? record.kind : DEFAULT_WORKSPACE_EVENT_KIND;
   const type = normalizeAgentServerWorkspaceEventType(rawType, record);
   const toolName = typeof record.toolName === 'string' ? record.toolName : undefined;
   const usage = normalizeWorkspaceTokenUsage(record.usage)
@@ -250,6 +252,148 @@ export function normalizeWorkspaceTokenUsage(value: unknown): WorkspaceRuntimeEv
   return usage;
 }
 
+export type WorkspaceProcessProgressPhase = 'read' | 'write' | 'execute' | 'wait' | 'plan' | 'complete' | 'error' | 'observe';
+
+export interface WorkspaceProcessProgressStep {
+  id: string;
+  phase: WorkspaceProcessProgressPhase;
+  title: string;
+  detail: string;
+  reading: string[];
+  writing: string[];
+  waitingFor?: string;
+  nextStep?: string;
+  lastEvent?: Record<string, string>;
+  reason?: string;
+  recoveryHint?: string;
+  canAbort?: boolean;
+  canContinue?: boolean;
+  sourceEventType?: string;
+  status: string;
+}
+
+export interface WorkspaceProcessProgressSummary {
+  schemaVersion: 'sciforge.process-events.v1';
+  current: Record<string, unknown> | null;
+  summary: string;
+  timeline: Array<Record<string, unknown>>;
+  events: Array<WorkspaceRuntimeEvent & {
+    label: string;
+    progress: Record<string, unknown>;
+    raw: Record<string, unknown>;
+  }>;
+}
+
+const processPathPattern = /(?<path>(?:\/|\.?\/)?(?:[\w.@-]+\/)+[\w.@-]+\.(?:py|ts|tsx|js|json|md|csv|tsv|txt|log|pdf|r|R|sh|yaml|yml))/g;
+
+export function normalizeWorkspaceProcessEvents(rawEvents: unknown): WorkspaceProcessProgressSummary {
+  const events = workspaceProcessEventList(rawEvents);
+  const steps: WorkspaceProcessProgressStep[] = [];
+  const seen = new Set<string>();
+  events.forEach((raw, index) => {
+    const step = summarizeWorkspaceProcessEvent(raw, index);
+    if (!step) return;
+    const key = `${step.phase}\0${step.title}\0${step.detail}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    steps.push(step);
+  });
+
+  const current = currentWorkspaceProcessProgress(steps);
+  return {
+    schemaVersion: 'sciforge.process-events.v1',
+    current: current ? workspaceProcessProgressPayload(current) : null,
+    summary: workspaceProcessSummary(steps, current),
+    timeline: steps.map(workspaceProcessRawStep),
+    events: steps.map(workspaceProcessProgressEvent),
+  };
+}
+
+export function summarizeWorkspaceProcessEvent(raw: Record<string, unknown>, index = 0): WorkspaceProcessProgressStep | undefined {
+  const eventType = processText(raw.type) ?? processText(raw.kind) ?? 'event';
+  const status = processText(raw.status) ?? 'running';
+  const toolName = processText(raw.toolName) ?? processText(raw.tool_name) ?? '';
+  const detail = processFirstText(raw, 'detail', 'message', 'text', 'output', 'error') ?? safeProcessJson(raw);
+  const haystack = [eventType, status, toolName, detail].filter(Boolean).join('\n');
+  const paths = processPathsFrom(raw, detail);
+  const lower = haystack.toLowerCase();
+
+  if (looksLikeBackendWaiting(raw, lower)) {
+    return backendWaitingProcessStep(raw, index, eventType, status, detail);
+  }
+
+  if (looksLikeProcessFailure(lower)) {
+    return processStep(index, 'error', '遇到阻断', trimProcessText(detail || '后端返回失败事件。'), { sourceEventType: eventType, status: 'failed' });
+  }
+
+  if (looksLikeProcessPlan(lower) && ['stage-start', 'current-plan', 'plan'].includes(eventType)) {
+    return processStep(index, 'plan', '正在规划下一步', trimProcessText(detail || '正在整理计划。'), {
+      nextStep: detail ? trimProcessText(detail, 180) : '生成可执行计划。',
+      sourceEventType: eventType,
+      status,
+    });
+  }
+
+  if (looksLikeProcessWrite(lower, toolName)) {
+    const target = pickProcessPath(paths, raw, ['path', 'outputRef', 'output_ref', 'artifactRef', 'artifact_ref']);
+    const title = target ? `正在写入 ${target}` : '正在写入工作文件';
+    return processStep(index, 'write', title, trimProcessText(detail || title), {
+      writing: target ? [target] : paths.slice(0, 3),
+      nextStep: '写入完成后执行或校验生成内容。',
+      sourceEventType: eventType,
+      status,
+    });
+  }
+
+  if (looksLikeProcessRead(lower, toolName)) {
+    const target = pickProcessPath(paths, raw, ['path', 'inputRef', 'input_ref', 'stdoutRef', 'stderrRef', 'outputRef']);
+    const title = target ? `正在读取 ${target}` : '正在读取上下文或文件';
+    return processStep(index, 'read', title, trimProcessText(detail || title), {
+      reading: target ? [target] : paths.slice(0, 3),
+      nextStep: '读取完成后归纳证据并决定下一步。',
+      sourceEventType: eventType,
+      status,
+    });
+  }
+
+  if (looksLikeProcessWait(lower)) {
+    const waitingFor = processWaitingTarget(detail, lower);
+    return processStep(index, 'wait', `正在等待 ${waitingFor}`, trimProcessText(detail || `等待 ${waitingFor} 返回。`), {
+      waitingFor,
+      nextStep: '收到新事件后继续执行，若超时会给出恢复建议。',
+      sourceEventType: eventType,
+      status,
+    });
+  }
+
+  if (looksLikeProcessExecute(lower, toolName)) {
+    const command = trimProcessText(processFirstText(raw, 'command', 'cmd') ?? detail ?? toolName ?? 'workspace task', 180);
+    return processStep(index, 'execute', `正在执行 ${command}`, trimProcessText(detail || command), {
+      reading: paths.slice(0, 2),
+      nextStep: '执行完成后读取 stdout/stderr 和产物。',
+      sourceEventType: eventType,
+      status,
+    });
+  }
+
+  if (looksLikeProcessComplete(lower)) {
+    return processStep(index, 'complete', '阶段完成', trimProcessText(detail || '当前阶段已完成。'), { sourceEventType: eventType, status: 'completed' });
+  }
+
+  if (looksLikeProcessPlan(lower)) {
+    return processStep(index, 'plan', '正在规划下一步', trimProcessText(detail || '正在整理计划。'), {
+      nextStep: detail ? trimProcessText(detail, 180) : '生成可执行计划。',
+      sourceEventType: eventType,
+      status,
+    });
+  }
+
+  if (detail && detail.length <= 360) {
+    return processStep(index, 'observe', '正在观察后端状态', trimProcessText(detail), { sourceEventType: eventType, status });
+  }
+  return undefined;
+}
+
 function workspaceContextWindowCandidate(record: Record<string, unknown>): unknown {
   return record.contextWindowState
     ?? record.contextWindow
@@ -257,6 +401,299 @@ function workspaceContextWindowCandidate(record: Record<string, unknown>): unkno
     ?? record.context_compressor
     ?? record.contextCompressor
     ?? (isExplicitWorkspaceContextWindowRecord(record.usage) ? record.usage : undefined);
+}
+
+function workspaceProcessEventList(rawEvents: unknown): Array<Record<string, unknown>> {
+  if (isRecord(rawEvents)) {
+    return Array.isArray(rawEvents.events)
+      ? rawEvents.events.filter(isRecord)
+      : [rawEvents];
+  }
+  return Array.isArray(rawEvents) ? rawEvents.filter(isRecord) : [];
+}
+
+function processStep(
+  index: number,
+  phase: WorkspaceProcessProgressPhase,
+  title: string,
+  detail: string,
+  options: {
+    reading?: string[];
+    writing?: string[];
+    waitingFor?: string;
+    nextStep?: string;
+    lastEvent?: unknown;
+    reason?: string;
+    recoveryHint?: string;
+    canAbort?: boolean;
+    canContinue?: boolean;
+    sourceEventType?: string;
+    status?: string;
+  } = {},
+): WorkspaceProcessProgressStep {
+  return {
+    id: `process-${String(index).padStart(4, '0')}-${phase}`,
+    phase,
+    title: trimProcessText(title, 160),
+    detail: trimProcessText(detail),
+    reading: uniqueProcessStrings(options.reading ?? []),
+    writing: uniqueProcessStrings(options.writing ?? []),
+    waitingFor: options.waitingFor,
+    nextStep: options.nextStep,
+    lastEvent: lastProcessEventSummary(options.lastEvent),
+    reason: options.reason,
+    recoveryHint: options.recoveryHint,
+    canAbort: options.canAbort,
+    canContinue: options.canContinue,
+    sourceEventType: options.sourceEventType,
+    status: processStatus(options.status ?? 'running', phase),
+  };
+}
+
+function backendWaitingProcessStep(raw: Record<string, unknown>, index: number, eventType: string, status: string, detail: string): WorkspaceProcessProgressStep {
+  const elapsedMs = processNumber(raw.elapsedMs) ?? processNumber(raw.elapsed_ms);
+  const lastEvent = isRecord(raw.lastEvent) ? raw.lastEvent : raw.last_event;
+  const elapsedText = elapsedMs !== undefined ? `已 ${Math.trunc(elapsedMs / 1000)}s 没有收到新事件` : '长时间没有收到新事件';
+  const last = lastProcessEventSummary(isRecord(lastEvent) ? lastEvent : undefined);
+  const lastText = last ? `最近事件：${last.label} - ${last.detail}` : '还没有可展示的后端事件。';
+  const waitingFor = backendWaitingTarget(detail, `${eventType} ${detail}`.toLowerCase());
+  return processStep(index, 'wait', `正在等待 ${waitingFor}`, trimProcessText(detail || `HTTP stream 仍在等待；${elapsedText}。${lastText}`), {
+    waitingFor,
+    nextStep: '收到新事件后继续执行；也可以安全中止当前 stream 或继续补充指令排队。',
+    lastEvent: isRecord(lastEvent) ? lastEvent : undefined,
+    reason: 'backend-waiting',
+    recoveryHint: '保留最近真实事件和等待原因，下一轮可基于这些线索继续或恢复。',
+    canAbort: true,
+    canContinue: true,
+    sourceEventType: eventType,
+    status,
+  });
+}
+
+function currentWorkspaceProcessProgress(steps: WorkspaceProcessProgressStep[]) {
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const step = steps[index];
+    if (step.phase !== 'error' && step.status !== 'completed') return step;
+  }
+  return steps.length ? steps[steps.length - 1] : undefined;
+}
+
+function workspaceProcessSummary(steps: WorkspaceProcessProgressStep[], current: WorkspaceProcessProgressStep | undefined) {
+  if (!current) return '还没有收到可归纳的过程事件。';
+  const parts = [current.title];
+  if (current.reading.length) parts.push(`读：${current.reading.slice(0, 2).join(', ')}`);
+  if (current.writing.length) parts.push(`写：${current.writing.slice(0, 2).join(', ')}`);
+  if (current.waitingFor) parts.push(`等待：${current.waitingFor}`);
+  if (current.nextStep) parts.push(`下一步：${current.nextStep}`);
+  return parts.join('；');
+}
+
+function workspaceProcessProgressEvent(step: WorkspaceProcessProgressStep): WorkspaceProcessProgressSummary['events'][number] {
+  return {
+    type: 'process-progress',
+    label: labelForProcessPhase(step.phase),
+    status: step.status,
+    message: step.title,
+    detail: step.detail,
+    progress: workspaceProcessProgressPayload(step),
+    raw: workspaceProcessRawStep(step),
+  };
+}
+
+function workspaceProcessProgressPayload(step: WorkspaceProcessProgressStep): Record<string, unknown> {
+  return compactProcessRecord({
+    phase: step.phase,
+    title: step.title,
+    detail: step.detail,
+    reading: step.reading,
+    writing: step.writing,
+    waitingFor: step.waitingFor,
+    nextStep: step.nextStep,
+    lastEvent: step.lastEvent,
+    reason: step.reason,
+    recoveryHint: step.recoveryHint,
+    canAbort: step.canAbort,
+    canContinue: step.canContinue,
+    status: step.status,
+  });
+}
+
+function workspaceProcessRawStep(step: WorkspaceProcessProgressStep): Record<string, unknown> {
+  return compactProcessRecord({
+    id: step.id,
+    phase: step.phase,
+    title: step.title,
+    detail: step.detail,
+    reading: step.reading,
+    writing: step.writing,
+    waiting_for: step.waitingFor,
+    next_step: step.nextStep,
+    last_event: step.lastEvent,
+    reason: step.reason,
+    recovery_hint: step.recoveryHint,
+    can_abort: step.canAbort,
+    can_continue: step.canContinue,
+    source_event_type: step.sourceEventType,
+    status: step.status,
+  });
+}
+
+function processPathsFrom(raw: Record<string, unknown>, detail: string): string[] {
+  const values: string[] = [];
+  for (const key of ['path', 'inputRef', 'input_ref', 'outputRef', 'output_ref', 'stdoutRef', 'stderrRef', 'artifactRef', 'artifact_ref']) {
+    const value = processText(raw[key]);
+    if (value) values.push(value);
+  }
+  for (const match of detail.matchAll(processPathPattern)) {
+    const path = match.groups?.path;
+    if (path) values.push(path);
+  }
+  if (isRecord(raw.raw)) values.push(...processPathsFrom(raw.raw, safeProcessJson(raw.raw)));
+  return uniqueProcessStrings(values);
+}
+
+function pickProcessPath(paths: string[], raw: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = processText(raw[key]);
+    if (value) return value;
+  }
+  return paths[0];
+}
+
+function processFirstText(raw: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = processText(raw[key]);
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function processText(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function safeProcessJson(value: unknown) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function trimProcessText(value: string, limit = 900) {
+  const normalized = value.replace(/\\n/g, '\n').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  return normalized.length <= limit ? normalized : `${normalized.slice(0, limit - 32).trimEnd()} ... ${normalized.slice(-24)}`;
+}
+
+function uniqueProcessStrings(values: Iterable<string>) {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const clean = value.trim();
+    if (!clean || seen.has(clean)) continue;
+    seen.add(clean);
+    out.push(clean);
+  }
+  return out;
+}
+
+function processStatus(value: string, phase: WorkspaceProcessProgressPhase) {
+  const lowered = value.toLowerCase();
+  if (phase === 'error' || lowered.includes('fail') || lowered.includes('error')) return 'failed';
+  if (phase === 'complete' || ['done', 'completed', 'success', 'succeeded'].includes(lowered)) return 'completed';
+  return 'running';
+}
+
+function processNumber(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function lastProcessEventSummary(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) return undefined;
+  const label = processText(value.label) ?? processText(value.type) ?? '事件';
+  const detail = processFirstText(value, 'detail', 'message', 'text', 'output') ?? '';
+  const createdAt = processText(value.createdAt) ?? processText(value.created_at);
+  const summary: Record<string, string> = {
+    label: trimProcessText(label, 80),
+    detail: trimProcessText(detail || label, 180),
+  };
+  if (createdAt) summary.createdAt = createdAt;
+  return summary;
+}
+
+function labelForProcessPhase(phase: WorkspaceProcessProgressPhase) {
+  return {
+    read: '读取',
+    write: '写入',
+    execute: '执行',
+    wait: '等待',
+    plan: '下一步',
+    complete: '完成',
+    error: '阻断',
+    observe: '状态',
+  }[phase];
+}
+
+function looksLikeProcessFailure(lower: string) {
+  return /\b(error|failed|exception|traceback|timeout|interrupt)\b|失败|报错|中断/.test(lower);
+}
+
+function looksLikeProcessWrite(lower: string, toolName: string) {
+  return toolName.toLowerCase().includes('write_file') || /write_file|wrote \d+ bytes|writing|write|保存|写入|生成.*(?:文件|脚本|artifact)/.test(lower);
+}
+
+function looksLikeProcessRead(lower: string, toolName: string) {
+  return toolName.toLowerCase().includes('read_file') || /read_file|reading|read |cat |sed |rg |grep |open|读取|正在读/.test(lower);
+}
+
+function looksLikeProcessWait(lower: string) {
+  return /silent|waiting|wait |rate.?limit|retry|poll|pending|等待|排队|配额/.test(lower);
+}
+
+function looksLikeBackendWaiting(raw: Record<string, unknown>, lower: string) {
+  const eventType = (processText(raw.type) ?? processText(raw.kind) ?? '').toLowerCase();
+  if (['backend-waiting', 'backend-silent', 'silent-stream-wait', 'process-waiting'].includes(eventType)) return true;
+  return lower.includes('http stream') && /still waiting|仍在等待|没有.*新事件|no new events?/.test(lower);
+}
+
+function looksLikeProcessExecute(lower: string, toolName: string) {
+  return toolName.toLowerCase().includes('run_command') || /run_command|execute|executing|python3?|pytest|npm |tsx|bash|workspace task|执行|运行/.test(lower);
+}
+
+function looksLikeProcessComplete(lower: string) {
+  return /\b(done|completed|success|succeeded)\b|完成|成功/.test(lower);
+}
+
+function looksLikeProcessPlan(lower: string) {
+  return /plan|next step|stage-start|current-plan|规划|计划|下一步/.test(lower);
+}
+
+function processWaitingTarget(detail: string, lower: string) {
+  if (lower.includes('rate') || lower.includes('配额')) return 'provider 配额或 retry budget';
+  if (lower.includes('agentserver')) return 'AgentServer 返回';
+  if (lower.includes('workspace')) return 'workspace task 返回';
+  const match = detail.match(/waiting(?: for)? ([^.;。]+)/i);
+  return match?.[1] ? trimProcessText(match[1], 80) : '后端返回新事件';
+}
+
+function backendWaitingTarget(detail: string, lower: string) {
+  if (lower.includes('rate') || lower.includes('配额')) return 'provider 配额或 retry budget';
+  if (lower.includes('agentserver')) return 'AgentServer 返回';
+  if (lower.includes('workspace')) return 'workspace task 返回';
+  return '后端返回新事件';
+}
+
+function compactProcessRecord(record: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => {
+    if (value === undefined || value === null || value === '' || value === false) return false;
+    if (Array.isArray(value) && value.length === 0) return false;
+    return true;
+  }));
 }
 
 function isExplicitWorkspaceContextWindowRecord(value: unknown): value is Record<string, unknown> {

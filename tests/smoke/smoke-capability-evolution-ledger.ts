@@ -279,8 +279,39 @@ try {
   const realPathSummary = await buildCapabilityEvolutionCompactSummary({ workspacePath: workspace });
   assert.equal(realPathSummary.recentRecords.at(-1)?.recordRef, `${CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH}#L4`);
   assert.equal(JSON.stringify(realPathSummary).includes('ledger-real-path-code'), false);
+
+  const failureProposal = realPathSummary.promotionCandidates.find((entry) => entry.promotionCandidate?.proposalKind === 'validator-update');
+  assert.ok(failureProposal, 'repeated schema failures should propose validator/repair-hint improvements');
+  assert.equal(failureProposal.promotionCandidate?.supportCount, 2);
+  assert.deepEqual(failureProposal.promotionCandidate?.supportingRecordRefs, [
+    `${CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH}#L2`,
+    `${CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH}#L4`,
+  ]);
+  assert.deepEqual(failureProposal.promotionCandidate?.suggestedUpdates?.failureCodes, ['schema-invalid']);
+  assert.equal((failureProposal.promotionCandidate?.suggestedUpdates?.repairHints?.length ?? 0) >= 1, true);
+
+  await appendCapabilityEvolutionRecord({ workspacePath: workspace }, {
+    ...record,
+    id: 'cel-smoke-1-repeat',
+    recordedAt: '2026-05-09T00:04:00.000Z',
+    runId: 'run-smoke-1-repeat',
+    promotionCandidate: { eligible: false, reason: 'aggregate helper should decide after repeated success' },
+  });
+  const promotionProposalSummary = await buildCapabilityEvolutionCompactSummary({ workspacePath: workspace });
+  const composedProposal = promotionProposalSummary.promotionCandidates.find((entry) => entry.promotionCandidate?.proposalKind === 'composed-capability');
+  assert.ok(composedProposal, 'repeated successful capability combinations should propose a composed capability');
+  assert.equal(composedProposal.promotionCandidate?.supportCount, 2);
+  assert.equal(composedProposal.promotionCandidate?.suggestedCapabilityId, 'capability.composed.atomic-extract-atomic-render');
+  assert.deepEqual(composedProposal.promotionCandidate?.supportingRecordRefs, [
+    `${CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH}#L1`,
+    `${CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH}#L5`,
+  ]);
+  assert.deepEqual(composedProposal.promotionCandidate?.suggestedUpdates?.capabilityIds, [
+    'capability.atomic.extract',
+    'capability.atomic.render',
+  ]);
 } finally {
   await rm(workspace, { recursive: true, force: true });
 }
 
-console.log('[ok] capability evolution ledger writes JSONL fallback/repair records and runtime events build compact ref-only summaries');
+console.log('[ok] capability evolution ledger writes compact summaries with fallback/repair evidence and promotion proposals');

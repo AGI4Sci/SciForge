@@ -169,15 +169,15 @@ export async function runAgentServerGeneratedTask(
     const evidenceFinding = evaluateToolPayloadEvidence(normalized, request);
     const guidanceFinding = evaluateGuidanceAdoption(normalized, request);
     const workEvidenceSummary = summarizeWorkEvidenceForHandoff(normalized);
-    const payloadFailureReason = firstPayloadFailureReason(normalized);
-    const payloadFailureStatus = payloadHasFailureStatus(normalized);
+    const payloadFailureReason = firstPayloadFailureReason(normalized) ?? firstRepairOrFailurePayloadReason(normalized);
+    const payloadFailureStatus = payloadHasFailureStatus(normalized) || payloadHasRepairOrFailureStatus(normalized);
     const failureReason = payloadFailureReason ?? (!payloadFailureStatus ? guidanceFinding?.reason ?? evidenceFinding?.reason : undefined);
     const attemptStatus = guidanceFinding
       ? guidanceFinding.severity
       : evidenceFinding
         ? evidenceFinding.severity
       : payloadFailureStatus
-        ? 'failed-with-reason'
+        ? payloadAttemptStatus(normalized)
         : 'done';
     await appendTaskAttempt(workspace, {
       id: `agentserver-direct-${skill.id}-${sha1(`${request.prompt}:${directGeneration.runId || 'unknown'}`).slice(0, 12)}`,
@@ -198,6 +198,7 @@ export async function runAgentServerGeneratedTask(
     if (guidanceFinding || evidenceFinding) {
       return repairNeededPayload(request, skill, guidanceFinding?.reason ?? evidenceFinding?.reason ?? 'AgentServer payload failed runtime guard.');
     }
+    if (payloadFailureStatus) return normalized;
     const completed = {
       ...normalized,
       reasoningTrace: [
@@ -500,18 +501,21 @@ export async function runAgentServerGeneratedTask(
     const evidenceFinding = normalized ? evaluateToolPayloadEvidence(normalized, request) : undefined;
     const guidanceFinding = normalized ? evaluateGuidanceAdoption(normalized, request) : undefined;
     const workEvidenceSummary = summarizeWorkEvidenceForHandoff(normalized ?? payload);
-    const payloadFailureReason = firstPayloadFailureReason(payload, run);
-    const payloadFailureStatus = payloadHasFailureStatus(payload);
+    const normalizedFailureReason = normalized ? firstPayloadFailureReason(normalized, run) ?? firstRepairOrFailurePayloadReason(normalized) : undefined;
+    const normalizedFailureStatus = normalized ? payloadHasFailureStatus(normalized) || payloadHasRepairOrFailureStatus(normalized) : false;
+    const normalizedRepairNeeded = normalized ? payloadHasRepairNeededStatus(normalized) : false;
+    const payloadFailureReason = firstPayloadFailureReason(payload, run) ?? firstRepairOrFailurePayloadReason(payload) ?? normalizedFailureReason;
+    const payloadFailureStatus = payloadHasFailureStatus(payload) || payloadHasRepairOrFailureStatus(payload) || normalizedFailureStatus;
     const evidenceFailureReason = !payloadFailureStatus ? guidanceFinding?.reason ?? evidenceFinding?.reason : undefined;
     const failureReason = payloadFailureReason ?? evidenceFailureReason;
     const shouldRepairExecutionFailure = errors.length === 0 && Boolean(failureReason)
-      && (run.exitCode !== 0 || Boolean(evidenceFailureReason));
+      && (run.exitCode !== 0 || Boolean(evidenceFailureReason) || normalizedRepairNeeded);
     const attemptStatus = errors.length
       ? 'repair-needed'
       : shouldRepairExecutionFailure
-        ? guidanceFinding?.severity ?? evidenceFinding?.severity ?? 'repair-needed'
+        ? normalizedRepairNeeded ? 'repair-needed' : guidanceFinding?.severity ?? evidenceFinding?.severity ?? 'repair-needed'
         : payloadFailureStatus
-          ? 'failed-with-reason'
+          ? normalized ? payloadAttemptStatus(normalized) : payloadAttemptStatus(payload)
           : 'done';
     await appendTaskAttempt(workspace, {
       id: taskId,
@@ -535,7 +539,9 @@ export async function runAgentServerGeneratedTask(
     if (errors.length || shouldRepairExecutionFailure) {
       const repairFailureReason = errors.length
         ? `AgentServer generated task output failed schema validation: ${errors.join('; ')}`
-        : evidenceFailureReason ?? `AgentServer generated task exited ${run.exitCode} with failed payload: ${failureReason}`;
+        : normalizedRepairNeeded
+          ? String(failureReason)
+          : evidenceFailureReason ?? `AgentServer generated task exited ${run.exitCode} with failed payload: ${failureReason}`;
       await writeCapabilityEvolutionEventBestEffort({
         workspacePath: workspace,
         request,
@@ -591,11 +597,13 @@ export async function runAgentServerGeneratedTask(
         });
         return repaired;
       }
+      if (normalizedRepairNeeded && normalized) return normalized;
       return repairNeededPayload(request, skill, repairFailureReason);
     }
     if (!normalized) {
       return repairNeededPayload(request, skill, 'AgentServer generated task output could not be normalized after schema validation.');
     }
+    if (normalizedFailureStatus) return normalized;
     if (options.allowSupplement !== false) {
       const supplemented = await tryAgentServerSupplementMissingArtifacts({
         request,
@@ -722,6 +730,34 @@ function backendPayloadRefs(taskId: string, taskRel: string): RuntimeRefBundle {
     stdoutRel: `.sciforge/logs/${taskId}.stdout.log`,
     stderrRel: `.sciforge/logs/${taskId}.stderr.log`,
   };
+}
+
+function payloadHasRepairOrFailureStatus(payload: ToolPayload) {
+  return payloadHasRepairNeededStatus(payload)
+    || (Array.isArray(payload.executionUnits) ? payload.executionUnits : [])
+      .some((unit) => isRecord(unit) && /failed|error|needs-human/i.test(String(unit.status || '')));
+}
+
+function payloadHasRepairNeededStatus(payload: ToolPayload) {
+  if (/repair-needed|needs-human/i.test(String(payload.claimType || ''))) return true;
+  return (Array.isArray(payload.executionUnits) ? payload.executionUnits : [])
+    .some((unit) => isRecord(unit) && /repair-needed|needs-human/i.test(String(unit.status || '')));
+}
+
+function firstRepairOrFailurePayloadReason(payload: ToolPayload) {
+  const units = Array.isArray(payload.executionUnits) ? payload.executionUnits : [];
+  const unit = units.find((entry) => isRecord(entry) && /repair-needed|failed|error|needs-human/i.test(String(entry.status || '')));
+  return isRecord(unit)
+    ? stringField(unit.failureReason) ?? stringField(unit.error) ?? stringField(unit.message)
+    : undefined;
+}
+
+function payloadAttemptStatus(payload: ToolPayload): 'repair-needed' | 'failed-with-reason' {
+  return payloadHasRepairNeededStatus(payload) ? 'repair-needed' : 'failed-with-reason';
+}
+
+function stringField(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 async function writeCapabilityEvolutionEventBestEffort(

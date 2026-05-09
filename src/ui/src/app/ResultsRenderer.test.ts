@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { coerceReportPayload, shouldOpenRunAuditDetails } from './ResultsRenderer';
-import type { RuntimeArtifact, SciForgeSession } from '../domain';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { backendRepairStates, coerceReportPayload, contractValidationFailures, ResultsRenderer, runAuditRefs, runRecoverActions, shouldOpenRunAuditDetails } from './ResultsRenderer';
+import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract';
+import type { RuntimeArtifact, SciForgeConfig, SciForgeSession } from '../domain';
 
 test('coerceReportPayload extracts report refs from backend ToolPayload text instead of rendering raw JSON', () => {
   const payloadText = [
@@ -142,3 +145,137 @@ test('completed runs with partial retrieval notes do not open failure audit by d
 
   assert.equal(shouldOpenRunAuditDetails(session, session.runs[0]), false);
 });
+
+test('failure audit extracts ContractValidationFailure recover actions, related refs, and backend repair state', () => {
+  const session = contractFailureSession();
+
+  assert.equal(shouldOpenRunAuditDetails(session, session.runs[0]), true);
+  assert.equal(contractValidationFailures(session, session.runs[0]).length, 1);
+  assert.deepEqual(runRecoverActions(session, session.runs[0]), [
+    'regenerate report artifact with markdownRef',
+    'inspect repair stderr and rerun bounded validator',
+    'rerun validator after artifact repair',
+  ]);
+  assert.ok(runAuditRefs(session, session.runs[0]).includes('execution-unit:EU-report'));
+  assert.ok(runAuditRefs(session, session.runs[0]).includes('agentserver://repair/stderr'));
+  assert.equal(backendRepairStates(session, session.runs[0])[0]?.failureReason, 'backend artifact repair timed out');
+});
+
+test('ResultsRenderer renders ContractValidationFailure diagnostics without synthesizing a successful answer', () => {
+  const session = contractFailureSession();
+  const html = renderToStaticMarkup(createElement(ResultsRenderer, {
+    scenarioId: 'literature-evidence-review',
+    config: testConfig(),
+    session,
+    defaultSlots: [],
+    onArtifactHandoff: () => undefined,
+    collapsed: false,
+    onToggleCollapse: () => undefined,
+    activeRunId: 'run-contract-failure',
+    onActiveRunChange: () => undefined,
+    onFocusedObjectChange: () => undefined,
+    workspaceFileEditor: null,
+    onWorkspaceFileEditorChange: () => undefined,
+  }));
+
+  assert.match(html, /ContractValidationFailure/);
+  assert.match(html, /artifact-schema/);
+  assert.match(html, /relatedRef: execution-unit:EU-report/);
+  assert.match(html, /Backend repair state/);
+  assert.match(html, /backend artifact repair timed out/);
+  assert.match(html, /regenerate report artifact with markdownRef/);
+  assert.match(html, /未合成成功答案/);
+  assert.doesNotMatch(html, /已完成报告|ready result/);
+});
+
+function contractFailureSession(): SciForgeSession {
+  const failure: ContractValidationFailure = {
+    contract: 'sciforge.contract-validation-failure.v1',
+    schemaPath: '/artifacts/0/data',
+    contractId: 'research-report.v1',
+    capabilityId: 'report-viewer',
+    failureKind: 'artifact-schema',
+    expected: { required: ['markdown'] },
+    actual: { summary: 'only summary' },
+    missingFields: ['data.markdown'],
+    invalidRefs: ['artifact:research-report'],
+    unresolvedUris: ['file::.sciforge/missing/report.md'],
+    failureReason: 'research-report artifact is missing markdown content.',
+    recoverActions: ['regenerate report artifact with markdownRef'],
+    nextStep: 'Repair the artifact payload before showing the report.',
+    relatedRefs: ['execution-unit:EU-report', 'artifact:research-report'],
+    issues: [{ path: '/data/markdown', message: 'required field missing', missingField: 'data.markdown' }],
+    createdAt: '2026-05-09T00:00:00.000Z',
+  };
+  return {
+    schemaVersion: 2,
+    sessionId: 'session-contract-failure',
+    scenarioId: 'literature-evidence-review',
+    title: 'contract failure',
+    createdAt: '2026-05-09T00:00:00.000Z',
+    messages: [],
+    runs: [{
+      id: 'run-contract-failure',
+      scenarioId: 'literature-evidence-review',
+      status: 'failed',
+      prompt: 'generate report',
+      response: `failed-with-reason: ${failure.failureReason}`,
+      createdAt: '2026-05-09T00:00:00.000Z',
+      completedAt: '2026-05-09T00:01:00.000Z',
+      raw: {
+        contractValidationFailure: failure,
+        acceptanceRepair: {
+          sourceRunId: 'run-original',
+          repairRunId: 'run-repair-1',
+          failureReason: 'backend artifact repair timed out',
+          recoverActions: ['inspect repair stderr and rerun bounded validator'],
+          refs: [{ ref: 'agentserver://repair/stderr' }],
+          repairHistory: [{
+            attempt: 1,
+            action: 'artifact-contract-repair',
+            status: 'failed-with-reason',
+            startedAt: '2026-05-09T00:00:10.000Z',
+            completedAt: '2026-05-09T00:00:40.000Z',
+            sourceRunId: 'run-original',
+            repairRunId: 'run-repair-1',
+            reason: 'backend artifact repair timed out',
+          }],
+        },
+      },
+    }],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [{
+      id: 'EU-report',
+      tool: 'report.validate',
+      params: '{}',
+      status: 'repair-needed',
+      hash: 'hash-report',
+      failureReason: 'data.markdown is missing',
+      outputRef: 'artifact:research-report',
+      recoverActions: ['rerun validator after artifact repair'],
+    }],
+    artifacts: [],
+    notebook: [],
+    versions: [],
+    updatedAt: '2026-05-09T00:01:00.000Z',
+  };
+}
+
+function testConfig(): SciForgeConfig {
+  return {
+    schemaVersion: 1,
+    agentServerBaseUrl: 'http://127.0.0.1:5174',
+    workspaceWriterBaseUrl: 'http://127.0.0.1:5175',
+    workspacePath: '/tmp/sciforge',
+    agentBackend: 'codex',
+    modelProvider: 'openai',
+    modelBaseUrl: '',
+    modelName: 'test-model',
+    apiKey: '',
+    requestTimeoutMs: 30000,
+    maxContextWindowTokens: 128000,
+    visionAllowSharedSystemInput: false,
+    updatedAt: '2026-05-09T00:00:00.000Z',
+  };
+}

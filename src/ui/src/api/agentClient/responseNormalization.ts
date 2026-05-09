@@ -1,8 +1,11 @@
 import type { ClaimType, EvidenceLevel } from '../../data';
+import type { ContractValidationFailure, ContractValidationFailureKind } from '@sciforge-ui/runtime-contract';
 import { makeId, nowIso, type NormalizedAgentResponse, type ObjectAction, type ObjectReference, type ObjectReferenceKind, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId } from '../../domain';
 
 const evidenceLevels: EvidenceLevel[] = ['meta', 'rct', 'cohort', 'case', 'experimental', 'review', 'database', 'preprint', 'prediction'];
 const claimTypes: ClaimType[] = ['fact', 'inference', 'hypothesis'];
+const CONTRACT_VALIDATION_FAILURE_CONTRACT = 'sciforge.contract-validation-failure.v1';
+const contractValidationFailureKinds: ContractValidationFailureKind[] = ['payload-schema', 'artifact-schema', 'reference', 'ui-manifest', 'work-evidence', 'verifier', 'unknown'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -24,6 +27,10 @@ function asStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const entries = value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
   return entries.length ? entries : undefined;
+}
+
+function asStringList(value: unknown): string[] {
+  return asStringArray(value) ?? [];
 }
 
 function pickEvidence(value: unknown): EvidenceLevel {
@@ -223,12 +230,15 @@ export function normalizeAgentResponse(
   const runRecord = isRecord(root.run) ? root.run : {};
   const outputText = extractOutputText(root);
   const structured = extractJsonObject(outputText) ?? payloadLikeRecord(root) ?? {};
+  const contractValidationFailure = findContractValidationFailure(structured, root, runRecord);
   const now = nowIso();
   const runId = asString(runRecord.id) || makeId('run');
-  const runStatus = runRecord.status === 'failed' ? 'failed' : 'completed';
+  const runStatus = runRecord.status === 'failed' || contractValidationFailure ? 'failed' : 'completed';
   const cleanOutputText = outputText.replace(/```(?:json)?[\s\S]*?```/gi, '').trim() || outputText;
   const hasStructuredOutput = Object.keys(structured).length > 0;
-  const messageText = runStatus === 'failed' && !hasStructuredOutput
+  const messageText = contractValidationFailure
+    ? messageFromContractValidationFailure(contractValidationFailure)
+    : runStatus === 'failed' && !hasStructuredOutput
     ? `AgentServer 后端运行失败：${cleanOutputText}`
     : readableMessageFromStructured(structured, cleanOutputText);
   const confidence = asNumber(structured.confidence) ?? 0.78;
@@ -238,9 +248,13 @@ export function normalizeAgentResponse(
     id: `EU-${runId.slice(-6)}`,
     tool: `${scenarioId}.scenario-server-run`,
     params: `prompt=${prompt.slice(0, 80)}`,
-    status: runStatus === 'completed' ? 'done' : 'failed',
+    status: contractValidationFailure ? 'failed-with-reason' : runStatus === 'completed' ? 'done' : 'failed',
     hash: runId.slice(0, 10),
     time: asString(runRecord.completedAt) ? 'archived' : undefined,
+    failureReason: contractValidationFailure?.failureReason,
+    recoverActions: contractValidationFailure?.recoverActions,
+    nextStep: contractValidationFailure?.nextStep,
+    outputRef: contractValidationFailure?.relatedRefs[0],
   };
 
   const claims = Array.isArray(structured.claims) ? structured.claims.map((item, index) => {
@@ -268,8 +282,8 @@ export function normalizeAgentResponse(
     updatedAt: now,
   }];
   const artifacts = normalizeRuntimeArtifacts(structured.artifacts, scenarioId);
-  const objectReferences = normalizeObjectReferences(structured.objectReferences, artifacts, runId);
-  const normalizedRaw = withRuntimePresentationMetadata(raw, structured, objectReferences);
+  const objectReferences = normalizeObjectReferences(structured.objectReferences, artifacts, runId, contractValidationFailure?.relatedRefs);
+  const normalizedRaw = withRuntimePresentationMetadata(raw, structured, objectReferences, contractValidationFailure);
 
   return {
     message: {
@@ -326,9 +340,23 @@ export function normalizeAgentResponse(
 }
 
 function payloadLikeRecord(value: Record<string, unknown>) {
-  if (Array.isArray(value.artifacts) || Array.isArray(value.uiManifest) || Array.isArray(value.objectReferences) || isRecord(value.displayIntent)) return value;
+  if (Array.isArray(value.artifacts)
+    || Array.isArray(value.uiManifest)
+    || Array.isArray(value.objectReferences)
+    || isRecord(value.displayIntent)
+    || isContractValidationFailureRecord(value)
+    || isRecord(value.contractValidationFailure)
+    || Array.isArray(value.contractValidationFailures)
+  ) return value;
   const output = isRecord(value.output) ? value.output : undefined;
-  if (output && (Array.isArray(output.artifacts) || Array.isArray(output.uiManifest) || Array.isArray(output.objectReferences) || isRecord(output.displayIntent))) return output;
+  if (output && (Array.isArray(output.artifacts)
+    || Array.isArray(output.uiManifest)
+    || Array.isArray(output.objectReferences)
+    || isRecord(output.displayIntent)
+    || isContractValidationFailureRecord(output)
+    || isRecord(output.contractValidationFailure)
+    || Array.isArray(output.contractValidationFailures)
+  )) return output;
   return undefined;
 }
 
@@ -360,7 +388,7 @@ function normalizeRuntimeArtifacts(value: unknown, scenarioId: ScenarioInstanceI
   }) : [];
 }
 
-function normalizeObjectReferences(value: unknown, artifacts: RuntimeArtifact[], runId: string): ObjectReference[] {
+function normalizeObjectReferences(value: unknown, artifacts: RuntimeArtifact[], runId: string, relatedRefs: string[] = []): ObjectReference[] {
   const explicit = Array.isArray(value)
     ? value.filter(isRecord).flatMap((record) => {
       const normalized = normalizeObjectReference(record, artifacts, runId);
@@ -368,8 +396,12 @@ function normalizeObjectReferences(value: unknown, artifacts: RuntimeArtifact[],
     })
     : [];
   const autoIndexed = artifacts.map((artifact) => objectReferenceFromArtifact(artifact, runId));
+  const related = relatedRefs.flatMap((ref) => {
+    const normalized = objectReferenceFromRelatedRef(ref, artifacts, runId);
+    return normalized ? [normalized] : [];
+  });
   const byRef = new Map<string, ObjectReference>();
-  for (const reference of [...explicit, ...autoIndexed]) {
+  for (const reference of [...explicit, ...autoIndexed, ...related]) {
     const key = reference.ref || reference.id;
     if (!byRef.has(key)) {
       byRef.set(key, reference);
@@ -382,6 +414,26 @@ function normalizeObjectReferences(value: unknown, artifacts: RuntimeArtifact[],
     });
   }
   return Array.from(byRef.values()).slice(0, 16);
+}
+
+function objectReferenceFromRelatedRef(ref: string, artifacts: RuntimeArtifact[], runId: string): ObjectReference | undefined {
+  const kind = inferObjectKindFromRef(ref);
+  if (!kind) return undefined;
+  const matchedArtifact = kind === 'artifact' ? findArtifactForObjectRef(ref, artifacts) : undefined;
+  return {
+    id: stableObjectId(ref),
+    title: matchedArtifact?.id || ref.replace(/^[a-z-]+:{1,2}/i, ''),
+    kind,
+    ref,
+    artifactType: matchedArtifact?.type,
+    runId,
+    executionUnitId: kind === 'execution-unit' ? ref.replace(/^execution-unit:{1,2}/i, '') : undefined,
+    preferredView: preferredViewForArtifactType(matchedArtifact?.type),
+    actions: normalizeObjectActions(undefined, kind, matchedArtifact),
+    status: matchedArtifact || kind !== 'artifact' ? 'available' : 'missing',
+    summary: 'contract validation related ref',
+    provenance: normalizeObjectProvenance(undefined, matchedArtifact),
+  };
 }
 
 function normalizeObjectReference(record: Record<string, unknown>, artifacts: RuntimeArtifact[], runId: string): ObjectReference | undefined {
@@ -546,7 +598,7 @@ function uniqueStringList(values: string[]) {
   return Array.from(new Set(values.filter(Boolean)));
 }
 
-function withRuntimePresentationMetadata(raw: unknown, structured: Record<string, unknown>, objectReferences: ObjectReference[]) {
+function withRuntimePresentationMetadata(raw: unknown, structured: Record<string, unknown>, objectReferences: ObjectReference[], contractValidationFailure?: ContractValidationFailure) {
   const metadata = {
     displayIntent: isRecord(structured.displayIntent) ? structured.displayIntent : undefined,
     verificationResults: Array.isArray(structured.verificationResults)
@@ -555,9 +607,95 @@ function withRuntimePresentationMetadata(raw: unknown, structured: Record<string
         ? [structured.verificationResult]
         : undefined,
     objectReferences,
+    contractValidationFailure,
+    contractValidationFailures: contractValidationFailure ? [contractValidationFailure] : undefined,
   };
   if (isRecord(raw)) return { ...raw, ...metadata };
   return { raw, ...metadata };
+}
+
+function findContractValidationFailure(...values: unknown[]): ContractValidationFailure | undefined {
+  for (const value of values) {
+    const found = contractValidationFailureCandidates(value).map(normalizeContractValidationFailure).find(Boolean);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function contractValidationFailureCandidates(value: unknown): Record<string, unknown>[] {
+  if (!isRecord(value)) return [];
+  const direct = isContractValidationFailureRecord(value) ? [value] : [];
+  return [
+    ...direct,
+    ...recordList(value.contractValidationFailures),
+    ...recordList(value.validationFailures),
+    ...recordList(value.failures).filter(isContractValidationFailureRecord),
+    ...singleRecord(value.contractValidationFailure),
+    ...singleRecord(value.validationFailure),
+    ...singleRecord(value.failure).filter(isContractValidationFailureRecord),
+  ];
+}
+
+function normalizeContractValidationFailure(record: Record<string, unknown>): ContractValidationFailure | undefined {
+  if (!isContractValidationFailureRecord(record)) return undefined;
+  const failureKind = contractValidationFailureKinds.includes(record.failureKind as ContractValidationFailureKind)
+    ? record.failureKind as ContractValidationFailureKind
+    : 'unknown';
+  return {
+    contract: CONTRACT_VALIDATION_FAILURE_CONTRACT,
+    schemaPath: asString(record.schemaPath) || '',
+    contractId: asString(record.contractId) || asString(record.contract) || CONTRACT_VALIDATION_FAILURE_CONTRACT,
+    capabilityId: asString(record.capabilityId) || asString(record.capability) || 'unknown-capability',
+    failureKind,
+    expected: record.expected,
+    actual: record.actual,
+    missingFields: asStringList(record.missingFields),
+    invalidRefs: asStringList(record.invalidRefs),
+    unresolvedUris: asStringList(record.unresolvedUris),
+    failureReason: asString(record.failureReason) || asString(record.reason) || asString(record.message) || 'Contract validation failed.',
+    recoverActions: asStringList(record.recoverActions),
+    nextStep: asString(record.nextStep) || asString(record.repairAction) || 'Inspect the related refs and rerun after repairing the contract payload.',
+    relatedRefs: uniqueStringList([
+      ...asStringList(record.relatedRefs),
+      ...asStringList(record.refs),
+      ...asStringList(record.invalidRefs),
+      ...asStringList(record.unresolvedUris),
+    ]),
+    issues: recordList(record.issues).map((issue) => ({
+      path: asString(issue.path) || '',
+      message: asString(issue.message) || asString(issue.detail) || 'Contract validation issue.',
+      expected: asString(issue.expected),
+      actual: asString(issue.actual),
+      missingField: asString(issue.missingField),
+      invalidRef: asString(issue.invalidRef),
+      unresolvedUri: asString(issue.unresolvedUri),
+    })),
+    createdAt: asString(record.createdAt),
+  };
+}
+
+function isContractValidationFailureRecord(value: Record<string, unknown>) {
+  return value.contract === CONTRACT_VALIDATION_FAILURE_CONTRACT
+    || (typeof value.failureKind === 'string'
+      && (Array.isArray(value.issues) || Array.isArray(value.recoverActions) || Array.isArray(value.relatedRefs))
+      && (typeof value.failureReason === 'string' || typeof value.message === 'string' || typeof value.reason === 'string'));
+}
+
+function messageFromContractValidationFailure(failure: ContractValidationFailure) {
+  return [
+    `failed-with-reason: ContractValidationFailure(${failure.failureKind}) ${failure.failureReason}`,
+    failure.nextStep ? `nextStep: ${failure.nextStep}` : '',
+    failure.recoverActions.length ? `recoverActions: ${failure.recoverActions.join('；')}` : '',
+    failure.relatedRefs.length ? `relatedRefs: ${failure.relatedRefs.join('；')}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+function singleRecord(value: unknown): Record<string, unknown>[] {
+  return isRecord(value) ? [value] : [];
+}
+
+function recordList(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
 }
 
 function normalizeArtifactData(type: string, artifact: Record<string, unknown>) {

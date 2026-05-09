@@ -1,6 +1,7 @@
 import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
 import { collectWorkEvidence, type WorkEvidence } from './work-evidence-types.js';
+import { contractValidationFailureFromRepairReason } from './payload-validation.js';
 
 export interface WorkEvidenceGuardFinding {
   kind:
@@ -12,6 +13,13 @@ export interface WorkEvidenceGuardFinding {
     | 'referenced-artifact-without-data-contract';
   severity: 'repair-needed' | 'failed-with-reason';
   reason: string;
+}
+
+export function contractValidationFailureFromWorkEvidenceFinding(
+  finding: WorkEvidenceGuardFinding,
+  options: Parameters<typeof contractValidationFailureFromRepairReason>[1],
+) {
+  return contractValidationFailureFromRepairReason(finding.reason, options);
 }
 
 export function evaluateToolPayloadEvidence(payload: ToolPayload, request: GatewayRequest): WorkEvidenceGuardFinding | undefined {

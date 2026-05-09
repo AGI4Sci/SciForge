@@ -37,3 +37,43 @@ test('normalizes verification metadata without leaking Verification footer into 
   const raw = response.run.raw as Record<string, unknown>;
   assert.equal((raw.verificationResults as Array<Record<string, unknown>>)[0]?.verdict, 'unverified');
 });
+
+test('normalizes ContractValidationFailure as failed diagnostic output with recover actions and related refs', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', '生成报告', {
+    ok: true,
+    data: {
+      run: { id: 'run-contract-failure', status: 'completed' },
+      output: {
+        message: JSON.stringify({
+          contractValidationFailure: {
+            contract: 'sciforge.contract-validation-failure.v1',
+            schemaPath: '/artifacts/0/data',
+            contractId: 'research-report.v1',
+            capabilityId: 'report-viewer',
+            failureKind: 'artifact-schema',
+            missingFields: ['data.markdown'],
+            invalidRefs: ['artifact:research-report'],
+            unresolvedUris: ['file::.sciforge/missing/report.md'],
+            failureReason: 'research-report artifact is missing markdown content.',
+            recoverActions: ['regenerate report artifact with markdownRef'],
+            nextStep: 'Repair the artifact payload before showing the report.',
+            relatedRefs: ['execution-unit:EU-report', 'artifact:research-report'],
+            issues: [{ path: '/data/markdown', message: 'required field missing' }],
+          },
+          executionUnits: [],
+          artifacts: [],
+        }),
+      },
+    },
+  });
+
+  assert.equal(response.run.status, 'failed');
+  assert.equal(response.message.status, 'failed');
+  assert.match(response.message.content, /ContractValidationFailure\(artifact-schema\)/);
+  assert.doesNotMatch(response.message.content, /"contractValidationFailure"/);
+  assert.equal(response.executionUnits[0]?.status, 'failed-with-reason');
+  assert.deepEqual(response.executionUnits[0]?.recoverActions, ['regenerate report artifact with markdownRef']);
+  assert.ok(response.message.objectReferences?.some((reference) => reference.ref === 'execution-unit:EU-report'));
+  const raw = response.run.raw as Record<string, unknown>;
+  assert.equal((raw.contractValidationFailure as Record<string, unknown>)?.failureReason, 'research-report artifact is missing markdown content.');
+});

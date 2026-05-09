@@ -94,6 +94,8 @@ backend 主要理解 `packages/` 暴露的 capability meta 和 `src/` 暴露的 
 
 固定平台和插拔能力的当前 inventory 维护在 [`boundary-inventory.md`](boundary-inventory.md)，机器可读来源是 [`../tools/check-boundary-inventory.ts`](../tools/check-boundary-inventory.ts)。该 inventory 只记录 ownership 和拆分计划；实际 enforcement 仍由 `smoke:fixed-platform-boundary`、`packages:check`、`smoke:module-boundaries`、`smoke:no-src-capability-semantics` 和 `smoke:long-file-budget` 执行。
 
+最终 cutover 的旧链路清单维护在 [`legacy-cutover-inventory.md`](legacy-cutover-inventory.md)，`smoke:no-legacy-paths` 负责冻结 UI 语义 fallback、provider/scenario/prompt 特例和 legacy facade/re-export 基线。
+
 ### 一切模块都是 Capability
 
 以下模块都应收敛到统一 capability contract，而不是散落成隐式调用约定：

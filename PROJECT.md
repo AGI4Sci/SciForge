@@ -100,7 +100,7 @@ Todo：
 - [x] 将 composed capability result 标准化为 `status`、`failureCode`、`fallbackable`、`confidence`、`coverage`、`recoverActions`、`atomicTrace`、related refs。
 - [x] generated task validation/repair 真实路径 best-effort 写入 Capability Evolution Ledger，并只返回 `ledgerRef`、`recordRef` 和 compact summary。
 - [ ] 在 backend 动态写胶水代码、composed capability 执行、fallback 到原子能力等更完整路径写入 ledger record。
-- [ ] 建立 promotion proposal 规则：高频成功组合可提议晋升为 composed capability；高频失败模式可提议更新 validator、fallbackPolicy 或 repair hints。
+- [x] 建立 promotion proposal 规则：高频成功组合可提议晋升为 composed capability；高频失败模式可提议更新 validator、fallbackPolicy 或 repair hints。
 - [ ] broker 只消费 ledger 的 compact summary，不直接展开完整胶水代码和日志；需要复用/修复时再按 ref 展开。
 - [x] 增加 smoke：generated task schema invalid / repair completion 后 ledger 记录原失败、下钻路径和最终 artifact refs，compact summary 不展开胶水代码。
 - [ ] 增加 smoke：composed capability schema invalid 后 fallback 到 atomic capabilities，并记录 fallback 决策与 atomic trace。
@@ -121,8 +121,8 @@ Todo：
 
 Todo：
 
-- [ ] 列出所有旧链路：UI prompt regex、场景 id 分支、provider 特例、旧 payload normalizer、旧 fallback、旧 preview resolver、旧 task adapter、旧 compatibility re-export。
-- [ ] 为每条旧链路标注新的唯一真相源：capability manifest、broker、resolver、validator、runtime executor 或 backend tool。
+- [x] 列出所有旧链路：UI prompt regex、场景 id 分支、provider 特例、旧 payload normalizer、旧 fallback、旧 preview resolver、旧 task adapter、旧 compatibility re-export。
+- [x] 为每条旧链路标注新的唯一真相源：capability manifest、broker、resolver、validator、runtime executor 或 backend tool。
 - [ ] 删除旧链路和对应测试夹具；只保留验证新路径的 tests/smoke。
 - [x] 增加 `no-legacy-paths` smoke，禁止重新引入 UI 语义兜底、provider/scenario/prompt 特例和重复 source of truth。
 - [ ] 更新 docs/Architecture、docs/Extending、packages/README，删除旧架构描述。
@@ -150,7 +150,7 @@ Todo：
 验收标准：
 
 - [ ] UI 不含 prompt regex、scenario id 分支或 artifact type 特例来决定用户语义。
-- [ ] UI 能完整展示 `ContractValidationFailure`、recoverActions、related refs 和 backend repair state。
+- [x] UI 能完整展示 `ContractValidationFailure`、recoverActions、related refs 和 backend repair state。
 - [ ] 删除旧 UI fallback 后，多轮 report/artifact/repair fixtures 仍通过。
 
 ### T118 Backend-first Artifact and Run Tools
@@ -166,8 +166,8 @@ Todo：
   说明：当前已覆盖 artifact/file/run/executionUnit refs 与 `resume_run` contract；workspace refs 和 `agentserver://` refs 仍需补完整 smoke。
 - [x] 收敛 workspace file ref 解析到 `src/runtime/workspace-paths.ts` helper，并让 task attempts 复用该 helper 读取 outputRef 摘要；覆盖 `file:`、`.sciforge/*`、managed shorthand 和 workspace 越界拒绝。
 - [x] run completed 前将 backend 输出 materialize 到 `.sciforge/task-results/*.json|md` 并返回稳定 object refs。
-- [ ] backend completed contract 禁止 “I will retrieve...” 这类计划句伪装完成；必须交付文本、artifact 或稳定 ref。
-- [ ] 建立三条最小多轮 fixtures：生成 report 后要 markdown、基于刚才 artifact 继续处理、按 failed run 原因修复。
+- [x] backend completed contract 禁止 “I will retrieve...” 这类计划句伪装完成；必须交付文本、artifact 或稳定 ref。
+- [x] 建立三条最小多轮 fixtures：生成 report 后要 markdown、基于刚才 artifact 继续处理、按 failed run 原因修复。
 
 验收标准：
 
@@ -186,7 +186,7 @@ Todo：
 - [x] 定义 `ContractValidationFailure` contract：schema path、contract id、capability id、expected/actual、missing fields、invalid refs、unresolved URI、failureReason、recoverActions、nextStep、related refs。
 - [x] 收窄 handoff payload contract：为 `failureRecoveryPolicy`、`referencePolicy`、`artifactPolicy`、verification snapshots 和 attempt refs 定义窄类型/guards，同时保持 loose transport record 兼容。
 - [x] 将 payload schema、artifact schema、UIManifest schema 和 current-turn ref validation failure 映射到 `ContractValidationFailure`。
-- [ ] 将 WorkEvidence guard 和 verifier failure 映射到 `ContractValidationFailure`。
+- [x] 将 WorkEvidence guard 和 verifier failure 映射到 `ContractValidationFailure`。
 - [ ] repair prompt/handoff 只消费结构化 failure，不读取散乱错误文本。
 - [ ] 删除旧的分散 repair-needed/failed-with-reason 组装逻辑，保留统一 validation-to-repair 管线。
 - [ ] 增加 fixtures：schema 缺字段、invalid ref、artifact 空结果、verifier fail、stdout/stderr 指向修复。

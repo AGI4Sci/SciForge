@@ -9,7 +9,8 @@ import {
   type ContractValidationFailure,
 } from '@sciforge-ui/runtime-contract/validation-failure';
 import { normalizeGatewayRequest } from '../../src/runtime/gateway/gateway-request.js';
-import { validateAndNormalizePayload } from '../../src/runtime/gateway/payload-validation.js';
+import { repairNeededPayload, validateAndNormalizePayload } from '../../src/runtime/gateway/payload-validation.js';
+import { contractValidationFailureFromVerificationResults } from '../../src/runtime/gateway/verification-results.js';
 import type { SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types.js';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-contract-validation-'));
@@ -139,6 +140,55 @@ try {
   assert.deepEqual(refFailure.invalidRefs, ['file:.sciforge/uploads/current-input.pdf']);
   assert.ok(refFailure.relatedRefs.includes('file:.sciforge/uploads/current-input.pdf'));
   assert.match(JSON.stringify(refFailure), /Current-turn reference was not reflected/);
+
+  const planOnlyPayload = await validateAndNormalizePayload({
+    message: 'I will retrieve the latest papers and analyze the results.',
+    confidence: 0.9,
+    claimType: 'fact',
+    evidenceLevel: 'runtime',
+    reasoningTrace: 'backend completed without doing the retrieval',
+    claims: [],
+    uiManifest: [],
+    executionUnits: [{ id: 'backend-plan-only', status: 'done', tool: 'agentserver.direct' }],
+    artifacts: [],
+  }, request, skill, refs);
+  const planUnit = planOnlyPayload.executionUnits[0] as Record<string, unknown>;
+  assert.equal(planUnit.status, 'repair-needed');
+  assert.ok(recoverActionsFromUnit(planUnit).some((action) => /Run the promised retrieval\/analysis work/.test(action)));
+  const planFailure = validationFailureFromUnit(planUnit);
+  assert.equal(planFailure.failureKind, 'work-evidence');
+  assert.equal(planFailure.contractId, 'sciforge.completed-payload.v1');
+  assert.match(planFailure.failureReason, /only plan\/promise text/);
+  assert.ok(planFailure.recoverActions.some((action) => /failed-with-reason|repair-needed/.test(action)));
+
+  const workEvidenceRepair = repairNeededPayload(
+    request,
+    skill,
+    'A command reports a non-zero exitCode while the payload is marked as successful or high confidence.',
+    refs,
+  );
+  const workEvidenceFailure = validationFailureFromUnit(workEvidenceRepair.executionUnits[0]);
+  assert.equal(workEvidenceFailure.failureKind, 'work-evidence');
+  assert.equal(workEvidenceFailure.contractId, 'sciforge.work-evidence.v1');
+  assert.equal(workEvidenceFailure.issues[0]?.path, 'executionUnits[].exitCode');
+  assert.ok(workEvidenceFailure.relatedRefs.includes(refs.outputRel));
+  assert.ok(recoverActionsFromUnit(workEvidenceRepair.executionUnits[0]).some((action) => /WorkEvidence/i.test(action)));
+
+  const verifierFailure = contractValidationFailureFromVerificationResults({
+    id: 'schema.verifier',
+    verdict: 'fail',
+    confidence: 0.96,
+    critique: 'Artifact schema verifier failed.',
+    evidenceRefs: ['file:.sciforge/verifications/schema.verifier.json'],
+    repairHints: ['Regenerate the report artifact with the required schema.'],
+  }, {
+    capabilityId: skill.id,
+    relatedRefs: ['file:.sciforge/verifications/schema.verifier.json'],
+  });
+  assert.ok(verifierFailure);
+  assert.equal(verifierFailure.failureKind, 'verifier');
+  assert.equal(verifierFailure.contractId, 'sciforge.verification-result.v1');
+  assert.ok(verifierFailure.relatedRefs.includes('file:.sciforge/verifications/schema.verifier.json'));
 } finally {
   await rm(workspace, { recursive: true, force: true });
 }
@@ -150,4 +200,11 @@ function validationFailureFromUnit(unit: Record<string, unknown> | undefined) {
   return refs.validationFailure;
 }
 
-console.log('[ok] contract validation failures serialize payload, artifact, uiManifest, and current-turn ref failures');
+function recoverActionsFromUnit(unit: unknown) {
+  assert.ok(unit && typeof unit === 'object' && !Array.isArray(unit));
+  const actions = (unit as Record<string, unknown>).recoverActions;
+  assert.ok(Array.isArray(actions));
+  return actions.filter((action): action is string => typeof action === 'string');
+}
+
+console.log('[ok] contract validation failures serialize payload, artifact, uiManifest, ref, completed-plan, WorkEvidence, and verifier failures');

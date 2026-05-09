@@ -8,13 +8,13 @@ import { runAgentServerGeneratedTask } from '../../src/runtime/gateway/generated
 import { agentServerAgentId, currentTurnReferences } from '../../src/runtime/gateway/agentserver-context-window.js';
 import { materializeBackendPayloadOutput, normalizeArtifactsForPayload, persistArtifactRefsForPayload } from '../../src/runtime/gateway/artifact-materializer.js';
 import { classifyAgentServerBackendFailure, sanitizeAgentServerError } from '../../src/runtime/gateway/backend-failure-diagnostics.js';
-import { coerceAgentServerToolPayload, coerceWorkspaceTaskPayload } from '../../src/runtime/gateway/direct-answer-payload.js';
-import { validateAndNormalizePayload } from '../../src/runtime/gateway/payload-validation.js';
+import { coerceAgentServerToolPayload, coerceWorkspaceTaskPayload, ensureDirectAnswerReportArtifact } from '../../src/runtime/gateway/direct-answer-payload.js';
+import { repairNeededPayload, validateAndNormalizePayload } from '../../src/runtime/gateway/payload-validation.js';
 import { parseGenerationResponse } from '../../src/runtime/gateway/agentserver-run-output.js';
-import { repairNeededPayload } from '../../src/runtime/gateway/repair-policy.js';
+import { schemaErrors as toolPayloadSchemaErrors } from '../../src/runtime/gateway/tool-payload-contract.js';
 import { applyRuntimeVerificationPolicy, normalizeRuntimeVerificationPolicy } from '../../src/runtime/gateway/verification-policy.js';
 import { normalizeRuntimeVerificationResults } from '../../src/runtime/gateway/verification-results.js';
-import { normalizeAgentServerWorkspaceEvent, withRequestContextWindowLimit } from '../../src/runtime/gateway/workspace-event-normalizer.js';
+import { normalizeAgentServerWorkspaceEvent, normalizeWorkspaceProcessEvents, withRequestContextWindowLimit } from '../../src/runtime/gateway/workspace-event-normalizer.js';
 import { applyConversationPolicy } from '../../src/runtime/conversation-policy/apply.js';
 import { buildAgentServerRepairPrompt, summarizeRuntimeCapabilitiesForAgentServer, summarizeSkillsForAgentServer } from '../../src/runtime/gateway/agentserver-prompts.js';
 import { readTaskAttempts } from '../../src/runtime/task-attempt-history.js';
@@ -235,6 +235,18 @@ try {
   assert.equal(normalizedEvent.contextCompaction?.status, 'completed');
   assert.equal(normalizedEvent.rateLimit?.resetAt, '2026-05-07T00:01:00.000Z');
 
+  const processProgress = normalizeWorkspaceProcessEvents([
+    { type: 'tool-call', toolName: 'read_file', detail: '{"path":"/workspace/input/papers.csv"}' },
+    { type: 'tool-call', toolName: 'write_file', detail: '{"path":"/workspace/tasks/review.py","content":"print(1)"}' },
+    { type: 'backend-silent', message: 'AgentServer 45s 没有输出新事件，HTTP stream still waiting.' },
+  ]);
+  assert.equal(processProgress.schemaVersion, 'sciforge.process-events.v1');
+  assert.equal(processProgress.current?.phase, 'wait');
+  assert.equal(processProgress.current?.waitingFor, 'AgentServer 返回');
+  assert.deepEqual(processProgress.timeline[0].reading, ['/workspace/input/papers.csv']);
+  assert.deepEqual(processProgress.timeline[1].writing, ['/workspace/tasks/review.py']);
+  assert.ok(processProgress.events.every((event) => event.type === 'process-progress'));
+
   const skill: SkillAvailability = {
     id: 'agentserver.generation.literature',
     kind: 'installed',
@@ -401,7 +413,7 @@ try {
   assert.ok(uploadPathReferenceUse);
   assert.ok(!uploadPathReferenceUse.executionUnits.some((unit) => unit.status === 'failed-with-reason'));
 
-  const repair = repairNeededPayload(request, skill, 'AgentServer base URL missing', {}, { scenarioPackageId: 'smoke' });
+  const repair = repairNeededPayload(request, skill, 'AgentServer base URL missing', {});
   assert.equal(repair.executionUnits[0].status, 'repair-needed');
   assert.ok(String(repair.executionUnits[0].params).includes('AgentServer base URL missing'));
 
@@ -540,6 +552,7 @@ try {
   assert.equal(emptyRetrievalRepairCalled, true);
   assert.equal(emptyRetrievalPayload?.executionUnits[0]?.status, 'repair-needed');
   assert.match(emptyRetrievalPayload?.message ?? '', /External retrieval returned zero results/);
+  assert.equal((emptyRetrievalPayload?.executionUnits[0]?.refs as { validationFailure?: { failureKind?: string } } | undefined)?.validationFailure?.failureKind, 'work-evidence');
   const emptyRetrievalAttempt = await readTaskAttempts(workspace, emptyRetrievalTaskId);
   assert.equal(emptyRetrievalAttempt[0]?.status, 'repair-needed');
   assert.match(emptyRetrievalAttempt[0]?.failureReason ?? '', /External retrieval returned zero results/);
@@ -610,6 +623,98 @@ try {
   assert.equal(providerDiagnosticsRepairCalled, false);
   assert.equal(providerDiagnosticsPayload?.executionUnits[0]?.status, 'done');
 
+  const directPlanOnlyPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, {
+    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
+    requestAgentServerGeneration: async () => ({
+      ok: true,
+      runId: 'runner-direct-plan-only-run',
+      directPayload: {
+        message: 'I will retrieve the latest papers and analyze the results.',
+        confidence: 0.9,
+        claimType: 'fact',
+        evidenceLevel: 'runtime',
+        reasoningTrace: 'backend direct payload returned a plan sentence as completed',
+        claims: [],
+        uiManifest: [],
+        executionUnits: [{ id: 'direct-plan-only', status: 'done', tool: 'agentserver.direct' }],
+        artifacts: [],
+      },
+    }),
+    agentServerGenerationFailureReason: (error) => error,
+    attemptPlanRefs: () => ({ scenarioPackageRef: request.scenarioPackageRef }),
+    repairNeededPayload: (req, selectedSkill, reason, refs) => repairNeededPayload(req, selectedSkill, reason, refs),
+    agentServerFailurePayloadRefs: () => ({}),
+    ensureDirectAnswerReportArtifact,
+    mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
+    validateAndNormalizePayload,
+    tryAgentServerRepairAndRerun: async () => undefined,
+    failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
+    coerceWorkspaceTaskPayload,
+    schemaErrors: toolPayloadSchemaErrors,
+    firstPayloadFailureReason: () => undefined,
+    payloadHasFailureStatus: () => false,
+  });
+  assert.equal(directPlanOnlyPayload?.executionUnits[0]?.status, 'repair-needed');
+  assert.match(directPlanOnlyPayload?.message ?? '', /completed payload/i);
+  assert.ok((directPlanOnlyPayload?.executionUnits[0]?.recoverActions as string[] | undefined)?.some((action) => /promised retrieval\/analysis/.test(action)));
+
+  let generatedPlanRepairCalled = false;
+  const generatedPlanOnlyPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, {
+    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
+    requestAgentServerGeneration: async () => ({
+      ok: true,
+      runId: 'runner-generated-plan-only-run',
+      response: {
+        taskFiles: [{
+          path: '.sciforge/tasks/runner-plan-only.py',
+          language: 'python',
+          content: [
+            'import json, sys',
+            '_, input_path, output_path = sys.argv',
+            'payload = {',
+            '  "message": "I will retrieve the latest papers and analyze the results.",',
+            '  "confidence": 0.9,',
+            '  "claimType": "fact",',
+            '  "evidenceLevel": "runtime",',
+            '  "reasoningTrace": "generated task wrote a plan sentence as completed",',
+            '  "claims": [],',
+            '  "uiManifest": [],',
+            '  "executionUnits": [{"id": "generated-plan-only", "status": "done", "tool": "python"}],',
+            '  "artifacts": []',
+            '}',
+            'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
+          ].join('\n'),
+        }],
+        entrypoint: { language: 'python', path: '.sciforge/tasks/runner-plan-only.py' },
+        environmentRequirements: {},
+        validationCommand: '',
+        expectedArtifacts: ['research-report'],
+        patchSummary: 'plan-only generated payload must not complete',
+      },
+    }),
+    agentServerGenerationFailureReason: (error) => error,
+    attemptPlanRefs: () => ({ scenarioPackageRef: request.scenarioPackageRef }),
+    repairNeededPayload: (req, selectedSkill, reason, refs) => repairNeededPayload(req, selectedSkill, reason, refs),
+    agentServerFailurePayloadRefs: () => ({}),
+    ensureDirectAnswerReportArtifact,
+    mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
+    validateAndNormalizePayload,
+    tryAgentServerRepairAndRerun: async (_params) => {
+      generatedPlanRepairCalled = true;
+      assert.match(_params.failureReason, /only plan\/promise text/);
+      return undefined;
+    },
+    failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
+    coerceWorkspaceTaskPayload,
+    schemaErrors: toolPayloadSchemaErrors,
+    firstPayloadFailureReason: () => undefined,
+    payloadHasFailureStatus: () => false,
+  });
+  assert.equal(generatedPlanRepairCalled, true);
+  assert.equal(generatedPlanOnlyPayload?.executionUnits[0]?.status, 'repair-needed');
+  assert.match(generatedPlanOnlyPayload?.message ?? '', /completed payload/i);
+  assert.ok((generatedPlanOnlyPayload?.executionUnits[0]?.recoverActions as string[] | undefined)?.some((action) => /failed-with-reason|repair-needed/.test(action)));
+
   let commandFailedRepairCalled = false;
   let commandFailedTaskId = '';
   const commandFailedPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, {
@@ -674,6 +779,8 @@ try {
   });
   assert.equal(commandFailedRepairCalled, true);
   assert.equal(commandFailedPayload?.executionUnits[0]?.status, 'repair-needed');
+  assert.equal((commandFailedPayload?.executionUnits[0]?.refs as { validationFailure?: { failureKind?: string; contractId?: string } } | undefined)?.validationFailure?.failureKind, 'work-evidence');
+  assert.equal((commandFailedPayload?.executionUnits[0]?.refs as { validationFailure?: { contractId?: string } } | undefined)?.validationFailure?.contractId, 'sciforge.work-evidence.v1');
   const commandFailedAttempt = await readTaskAttempts(workspace, commandFailedTaskId);
   assert.equal(commandFailedAttempt[0]?.status, 'repair-needed');
   assert.match(commandFailedAttempt[0]?.failureReason ?? '', /non-zero exitCode/);

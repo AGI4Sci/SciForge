@@ -20,6 +20,7 @@ import {
   mergePreviewDescriptors as packageMergePreviewDescriptors,
   shouldHydratePreviewDescriptor as packageShouldHydratePreviewDescriptor,
 } from '../../../../packages/support/artifact-preview';
+import type { ContractValidationFailure, ContractValidationFailureKind } from '@sciforge-ui/runtime-contract';
 import { exportJsonFile, exportTextFile } from './exportUtils';
 import { ActionButton, Badge, Card, ClaimTag, ConfidenceBar, EmptyArtifactState, EvidenceTag, SectionHeader, cx } from './uiPrimitives';
 import { ResultShell, type ResultFocusMode } from './results/ResultShell';
@@ -424,7 +425,7 @@ function UnknownArtifactInspector({ slot, artifact, session }: RegistryRendererP
         {viewCompositionSummary(slot) ? <code>{viewCompositionSummary(slot)}</code> : null}
       </div>
       {refs.length ? (
-        <div className="inspector-ref-list">
+        <div className="slot-meta">
           {refs.map((ref) => (
             <code key={`${ref.label}-${ref.value}`}>{ref.label}: {ref.value}</code>
           ))}
@@ -710,7 +711,7 @@ function PrimaryResult({
             <span>视图状态</span>
             <Badge variant="muted">{viewPlan.allItems.length} modules</Badge>
           </summary>
-          <ViewPlanSummary viewPlan={viewPlan} />
+          <ViewPlanSummary viewPlan={viewPlan} session={session} activeRun={activeRun} />
         </details>
       ) : null}
     </div>
@@ -721,13 +722,15 @@ function RunStatusSummary({ session, activeRun }: { session: SciForgeSession; ac
   const failures = failedExecutionUnits(session, activeRun);
   const run = activeRun ?? session.runs.at(-1);
   const blockers = runAuditBlockers(session, activeRun);
+  const validationFailures = contractValidationFailures(session, activeRun);
+  const repairStates = backendRepairStates(session, activeRun);
   const recoverActions = runRecoverActions(session, activeRun).slice(0, 4);
-  if (!failures.length && !blockers.length && !recoverActions.length && run?.status !== 'failed') return null;
+  if (!failures.length && !blockers.length && !validationFailures.length && !repairStates.length && !recoverActions.length && run?.status !== 'failed') return null;
   return (
-    <Card className={cx('run-status-summary', failures.length || run?.status === 'failed' ? 'failed' : 'recoverable')}>
+    <Card className={cx('run-status-summary', failures.length || validationFailures.length || run?.status === 'failed' ? 'failed' : 'recoverable')}>
       <SectionHeader
         icon={AlertTriangle}
-        title={failures.length || run?.status === 'failed' ? '运行需要处理' : '可恢复建议'}
+        title={failures.length || validationFailures.length || run?.status === 'failed' ? '运行需要处理' : '可恢复建议'}
         subtitle={run ? `${run.id} · ${run.status}` : '当前 session'}
       />
       {blockers.length ? (
@@ -744,6 +747,8 @@ function RunStatusSummary({ session, activeRun }: { session: SciForgeSession; ac
           </div>
         </div>
       ))}
+      {validationFailures.map((failure) => <ContractValidationFailureSummary key={contractValidationFailureKey(failure)} failure={failure} compact />)}
+      {repairStates.map((state) => <BackendRepairStateSummary key={state.id} state={state} compact />)}
       {recoverActions.length ? (
         <div className="run-recover-actions">
           {recoverActions.map((action) => <code key={action}>{action}</code>)}
@@ -798,6 +803,8 @@ function RunAuditOverview({ session, activeRun }: { session: SciForgeSession; ac
   const blockers = runAuditBlockers(session, activeRun);
   const refs = runAuditRefs(session, activeRun);
   const recoverActions = runRecoverActions(session, activeRun);
+  const validationFailures = contractValidationFailures(session, activeRun);
+  const repairStates = backendRepairStates(session, activeRun);
   return (
     <Card className="audit-overview">
       <SectionHeader icon={Shield} title="审计摘要" subtitle="失败原因、恢复动作和可复现引用" />
@@ -811,8 +818,18 @@ function RunAuditOverview({ session, activeRun }: { session: SciForgeSession; ac
           {recoverActions.map((action) => <code key={action}>{action}</code>)}
         </div>
       ) : null}
+      {validationFailures.length ? (
+        <div className="stack">
+          {validationFailures.map((failure) => <ContractValidationFailureSummary key={contractValidationFailureKey(failure)} failure={failure} />)}
+        </div>
+      ) : null}
+      {repairStates.length ? (
+        <div className="stack">
+          {repairStates.map((state) => <BackendRepairStateSummary key={state.id} state={state} />)}
+        </div>
+      ) : null}
       {refs.length ? (
-        <div className="inspector-ref-list">
+        <div className="slot-meta">
           {refs.map((ref) => <code key={ref}>{ref}</code>)}
         </div>
       ) : null}
@@ -821,7 +838,12 @@ function RunAuditOverview({ session, activeRun }: { session: SciForgeSession; ac
 }
 
 export function shouldOpenRunAuditDetails(session: SciForgeSession, activeRun?: SciForgeRun) {
-  return Boolean((activeRun ?? session.runs.at(-1))?.status === 'failed' || failedExecutionUnits(session, activeRun).length);
+  return Boolean(
+    (activeRun ?? session.runs.at(-1))?.status === 'failed'
+    || failedExecutionUnits(session, activeRun).length
+    || contractValidationFailures(session, activeRun).length
+    || backendRepairStates(session, activeRun).some((state) => state.failureReason || state.status === 'failed' || state.status === 'failed-with-reason'),
+  );
 }
 
 function failedExecutionUnits(session: SciForgeSession, activeRun?: SciForgeRun) {
@@ -849,6 +871,8 @@ function runAuditBlockers(session: SciForgeSession, activeRun?: SciForgeRun) {
     asString(raw?.blocker) ? `blocker: ${asString(raw?.blocker)}` : undefined,
     asString(raw?.failureReason) ? `failureReason: ${asString(raw?.failureReason)}` : undefined,
     ...failedExecutionUnits(session, activeRun).map((unit) => `failureReason: ${unit.failureReason || unit.id}`),
+    ...contractValidationFailures(session, activeRun).map((failure) => `ContractValidationFailure(${failure.failureKind}): ${failure.failureReason}`),
+    ...backendRepairStates(session, activeRun).flatMap((state) => state.failureReason ? [`backend repair ${state.label}: ${state.failureReason}`] : []),
   ].filter((line): line is string => Boolean(line));
   return Array.from(new Set(lines));
 }
@@ -858,20 +882,272 @@ export function runRecoverActions(session: SciForgeSession, activeRun?: SciForge
   const raw = isRecord(run?.raw) ? run?.raw : undefined;
   return Array.from(new Set([
     ...asStringList(raw?.recoverActions),
+    ...contractValidationFailures(session, activeRun).flatMap((failure) => failure.recoverActions),
+    ...backendRepairStates(session, activeRun).flatMap((state) => state.recoverActions),
     ...failedExecutionUnits(session, activeRun).flatMap((unit) => unit.recoverActions ?? []),
     ...session.executionUnits.flatMap((unit) => unit.status === 'repair-needed' ? unit.recoverActions ?? [] : []),
   ]));
 }
 
-function runAuditRefs(session: SciForgeSession, activeRun?: SciForgeRun) {
+export function runAuditRefs(session: SciForgeSession, activeRun?: SciForgeRun) {
   const run = activeRun ?? session.runs.at(-1);
   const raw = isRecord(run?.raw) ? run?.raw : undefined;
   return Array.from(new Set([
     ...asStringList(raw?.refs),
     ...asStringList(raw?.auditRefs),
+    ...contractValidationFailures(session, activeRun).flatMap((failure) => [
+      ...failure.relatedRefs,
+      ...failure.invalidRefs,
+      ...failure.unresolvedUris,
+    ]),
+    ...backendRepairStates(session, activeRun).flatMap((state) => state.refs),
     ...(run?.references ?? []).map((ref) => ref.ref),
     ...session.executionUnits.flatMap((unit) => [unit.codeRef, unit.stdoutRef, unit.stderrRef, unit.outputRef, unit.diffRef]).filter((ref): ref is string => Boolean(ref)),
   ]));
+}
+
+const CONTRACT_VALIDATION_FAILURE_CONTRACT = 'sciforge.contract-validation-failure.v1';
+const contractValidationFailureKinds: ContractValidationFailureKind[] = ['payload-schema', 'artifact-schema', 'reference', 'ui-manifest', 'work-evidence', 'verifier', 'unknown'];
+
+export function contractValidationFailures(session: SciForgeSession, activeRun?: SciForgeRun): ContractValidationFailure[] {
+  const run = activeRun ?? session.runs.at(-1);
+  const failures = [
+    ...contractValidationFailureCandidates(run?.raw),
+    ...contractValidationFailureCandidates(parseMaybeJsonObject(run?.response ?? '')),
+  ].map(normalizeContractValidationFailure).filter((failure): failure is ContractValidationFailure => Boolean(failure));
+  const byKey = new Map<string, ContractValidationFailure>();
+  for (const failure of failures) byKey.set(contractValidationFailureKey(failure), failure);
+  return Array.from(byKey.values());
+}
+
+function ContractValidationFailureSummary({ failure, compact = false }: { failure: ContractValidationFailure; compact?: boolean }) {
+  const issueLines = failure.issues.map((issue) => [
+    issue.path || issue.missingField || issue.invalidRef || issue.unresolvedUri || 'issue',
+    issue.message,
+  ].filter(Boolean).join(': '));
+  return (
+    <div className="run-failure-card">
+      <strong>ContractValidationFailure · {failure.failureKind}</strong>
+      <p>{failure.failureReason}</p>
+      <div className="slot-meta">
+        <code>contractId={failure.contractId}</code>
+        <code>capabilityId={failure.capabilityId}</code>
+        {failure.schemaPath ? <code>schemaPath={failure.schemaPath}</code> : null}
+      </div>
+      {failure.missingFields.length || failure.invalidRefs.length || failure.unresolvedUris.length ? (
+        <div className="slot-meta">
+          {failure.missingFields.map((field) => <code key={`missing-${field}`}>missingField: {field}</code>)}
+          {failure.invalidRefs.map((ref) => <code key={`invalid-${ref}`}>invalidRef: {ref}</code>)}
+          {failure.unresolvedUris.map((uri) => <code key={`unresolved-${uri}`}>unresolvedUri: {uri}</code>)}
+        </div>
+      ) : null}
+      {!compact && issueLines.length ? (
+        <div className="run-status-lines">
+          {issueLines.slice(0, 6).map((line) => <span key={line}>{line}</span>)}
+        </div>
+      ) : null}
+      {failure.relatedRefs.length ? (
+        <div className="inspector-ref-list">
+          {failure.relatedRefs.map((ref) => <code key={`related-${ref}`}>relatedRef: {ref}</code>)}
+        </div>
+      ) : null}
+      {failure.nextStep ? <p className="empty-state">nextStep: {failure.nextStep}</p> : null}
+    </div>
+  );
+}
+
+type BackendRepairState = {
+  id: string;
+  label: string;
+  status?: string;
+  sourceRunId?: string;
+  repairRunId?: string;
+  failureReason?: string;
+  recoverActions: string[];
+  refs: string[];
+  history: string[];
+};
+
+export function backendRepairStates(session: SciForgeSession, activeRun?: SciForgeRun): BackendRepairState[] {
+  const run = activeRun ?? session.runs.at(-1);
+  const raw = isRecord(run?.raw) ? run?.raw : undefined;
+  const candidates = [
+    backendRepairStateFromRecord('acceptanceRepair', raw?.acceptanceRepair),
+    backendRepairStateFromRecord('backendRepair', raw?.backendRepair),
+    backendRepairStateFromRecord('repairState', raw?.repairState),
+    backendRepairStateFromRecord('backgroundCompletion', raw?.backgroundCompletion),
+    run?.acceptance?.repairHistory?.length ? {
+      id: `acceptance-${run.id}`,
+      label: 'acceptance.repairHistory',
+      status: run.acceptance.severity,
+      failureReason: run.acceptance.failures.at(-1)?.detail,
+      recoverActions: run.acceptance.failures.map((failure) => failure.repairAction).filter((action): action is string => Boolean(action)),
+      refs: run.acceptance.objectReferences.map((reference) => reference.ref),
+      history: run.acceptance.repairHistory.map((entry) => `${entry.status}: attempt=${entry.attempt}; action=${entry.action}; repairRunId=${entry.repairRunId ?? 'n/a'}${entry.reason ? `; reason=${entry.reason}` : ''}`),
+    } : undefined,
+  ].filter((state): state is BackendRepairState => Boolean(state));
+  const byId = new Map<string, BackendRepairState>();
+  for (const state of candidates) byId.set(state.id, state);
+  return Array.from(byId.values());
+}
+
+function BackendRepairStateSummary({ state, compact = false }: { state: BackendRepairState; compact?: boolean }) {
+  return (
+    <div className="run-failure-card">
+      <strong>Backend repair state · {state.label}</strong>
+      <p>{[state.status ? `status=${state.status}` : undefined, state.failureReason].filter(Boolean).join(' · ') || 'repair metadata recorded'}</p>
+      <div className="slot-meta">
+        {state.sourceRunId ? <code>sourceRunId={state.sourceRunId}</code> : null}
+        {state.repairRunId ? <code>repairRunId={state.repairRunId}</code> : null}
+      </div>
+      {state.refs.length ? (
+        <div className="inspector-ref-list">
+          {state.refs.map((ref) => <code key={`${state.id}-${ref}`}>{ref}</code>)}
+        </div>
+      ) : null}
+      {!compact && state.history.length ? (
+        <div className="run-status-lines">
+          {state.history.slice(0, 6).map((line) => <span key={line}>{line}</span>)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function backendRepairStateFromRecord(label: string, value: unknown): BackendRepairState | undefined {
+  if (!isRecord(value)) return undefined;
+  const repairHistory = Array.isArray(value.repairHistory) ? value.repairHistory.filter(isRecord) : [];
+  const stages = Array.isArray(value.stages) ? value.stages.filter(isRecord) : [];
+  const refs = [
+    ...asStringList(value.refs),
+    ...recordRefs(value.refs),
+    ...recordRefs(value.objectReferences),
+    ...stages.flatMap((stage) => [
+      asString(stage.ref),
+      ...asStringList(stage.artifactRefs),
+      ...asStringList(stage.executionUnitRefs),
+      ...asStringList(stage.verificationRefs),
+      ...asStringList(stage.workEvidenceRefs),
+    ]),
+  ].filter((ref): ref is string => Boolean(ref));
+  const recoverActions = [
+    ...asStringList(value.recoverActions),
+    ...stages.flatMap((stage) => asStringList(stage.recoverActions)),
+  ];
+  const history = [
+    ...repairHistory.map((entry) => [
+      asString(entry.status) ?? 'repair',
+      asString(entry.action) ? `action=${asString(entry.action)}` : undefined,
+      asString(entry.sourceRunId) ? `sourceRunId=${asString(entry.sourceRunId)}` : undefined,
+      asString(entry.repairRunId) ? `repairRunId=${asString(entry.repairRunId)}` : undefined,
+      asString(entry.reason) ? `reason=${asString(entry.reason)}` : undefined,
+    ].filter(Boolean).join('; ')),
+    ...stages.map((stage) => [
+      asString(stage.status) ?? 'stage',
+      asString(stage.stageId) ? `stageId=${asString(stage.stageId)}` : undefined,
+      asString(stage.failureReason) ? `failureReason=${asString(stage.failureReason)}` : undefined,
+      asString(stage.nextStep) ? `nextStep=${asString(stage.nextStep)}` : undefined,
+    ].filter(Boolean).join('; ')),
+  ];
+  const state: BackendRepairState = {
+    id: `${label}-${asString(value.sourceRunId) ?? asString(value.runId) ?? asString(value.repairRunId) ?? 'current'}`,
+    label,
+    status: asString(value.status),
+    sourceRunId: asString(value.sourceRunId) ?? asString(value.runId),
+    repairRunId: asString(value.repairRunId),
+    failureReason: asString(value.failureReason) ?? asString(value.reason),
+    recoverActions: Array.from(new Set(recoverActions)),
+    refs: Array.from(new Set(refs)),
+    history,
+  };
+  if (!state.status && !state.failureReason && !state.recoverActions.length && !state.refs.length && !state.history.length) return undefined;
+  return state;
+}
+
+function normalizeContractValidationFailure(record: Record<string, unknown>): ContractValidationFailure | undefined {
+  if (!isContractValidationFailureRecord(record)) return undefined;
+  const failureKind = contractValidationFailureKinds.includes(record.failureKind as ContractValidationFailureKind)
+    ? record.failureKind as ContractValidationFailureKind
+    : 'unknown';
+  return {
+    contract: CONTRACT_VALIDATION_FAILURE_CONTRACT,
+    schemaPath: asString(record.schemaPath) || '',
+    contractId: asString(record.contractId) || asString(record.contract) || CONTRACT_VALIDATION_FAILURE_CONTRACT,
+    capabilityId: asString(record.capabilityId) || asString(record.capability) || 'unknown-capability',
+    failureKind,
+    expected: record.expected,
+    actual: record.actual,
+    missingFields: asStringList(record.missingFields),
+    invalidRefs: asStringList(record.invalidRefs),
+    unresolvedUris: asStringList(record.unresolvedUris),
+    failureReason: asString(record.failureReason) || asString(record.reason) || asString(record.message) || 'Contract validation failed.',
+    recoverActions: asStringList(record.recoverActions),
+    nextStep: asString(record.nextStep) || asString(record.repairAction) || '',
+    relatedRefs: Array.from(new Set([
+      ...asStringList(record.relatedRefs),
+      ...asStringList(record.refs),
+      ...asStringList(record.invalidRefs),
+      ...asStringList(record.unresolvedUris),
+    ])),
+    issues: recordList(record.issues).map((issue) => ({
+      path: asString(issue.path) || '',
+      message: asString(issue.message) || asString(issue.detail) || 'Contract validation issue.',
+      expected: asString(issue.expected),
+      actual: asString(issue.actual),
+      missingField: asString(issue.missingField),
+      invalidRef: asString(issue.invalidRef),
+      unresolvedUri: asString(issue.unresolvedUri),
+    })),
+    createdAt: asString(record.createdAt),
+  };
+}
+
+function contractValidationFailureCandidates(value: unknown): Record<string, unknown>[] {
+  if (!isRecord(value)) return [];
+  const direct = isContractValidationFailureRecord(value) ? [value] : [];
+  return [
+    ...direct,
+    ...recordList(value.contractValidationFailures),
+    ...recordList(value.validationFailures),
+    ...recordList(value.failures).filter(isContractValidationFailureRecord),
+    ...singleRecord(value.contractValidationFailure),
+    ...singleRecord(value.validationFailure),
+    ...singleRecord(value.failure).filter(isContractValidationFailureRecord),
+  ];
+}
+
+function isContractValidationFailureRecord(value: Record<string, unknown>) {
+  return value.contract === CONTRACT_VALIDATION_FAILURE_CONTRACT
+    || (typeof value.failureKind === 'string'
+      && (Array.isArray(value.issues) || Array.isArray(value.recoverActions) || Array.isArray(value.relatedRefs))
+      && (typeof value.failureReason === 'string' || typeof value.message === 'string' || typeof value.reason === 'string'));
+}
+
+function contractValidationFailureKey(failure: ContractValidationFailure) {
+  return [failure.contractId, failure.capabilityId, failure.schemaPath, failure.failureKind, failure.failureReason].join('|');
+}
+
+function singleRecord(value: unknown): Record<string, unknown>[] {
+  return isRecord(value) ? [value] : [];
+}
+
+function recordList(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function recordRefs(value: unknown): string[] {
+  return recordList(value).map((record) => asString(record.ref) || asString(record.path) || asString(record.url)).filter((ref): ref is string => Boolean(ref));
+}
+
+function parseMaybeJsonObject(value: string): Record<string, unknown> | undefined {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return undefined;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function rawAuditItems(session: SciForgeSession, activeRun: SciForgeRun | undefined, viewPlan: RuntimeResolvedViewPlan) {
@@ -885,15 +1161,21 @@ function rawAuditItems(session: SciForgeSession, activeRun: SciForgeRun | undefi
   ].filter((item): item is { id: string; label: string; value: string } => Boolean(item));
 }
 
-function ViewPlanSummary({ viewPlan }: { viewPlan: RuntimeResolvedViewPlan }) {
+function ViewPlanSummary({ viewPlan, session, activeRun }: { viewPlan: RuntimeResolvedViewPlan; session: SciForgeSession; activeRun?: SciForgeRun }) {
   const boundCount = viewPlan.allItems.filter((item) => item.status === 'bound').length;
   const waitingCount = viewPlan.allItems.filter((item) => item.status === 'missing-artifact' || item.status === 'missing-fields').length;
+  const diagnosticCount = contractValidationFailures(session, activeRun).length + failedExecutionUnits(session, activeRun).length;
+  const runFailed = (activeRun ?? session.runs.at(-1))?.status === 'failed';
   return (
     <div className="view-plan-summary">
       <div>
-        <Badge variant={waitingCount ? 'warning' : 'success'}>{waitingCount ? 'partial result' : 'ready result'}</Badge>
+        <Badge variant={diagnosticCount || runFailed ? 'danger' : waitingCount ? 'warning' : 'success'}>
+          {diagnosticCount || runFailed ? 'diagnostic result' : waitingCount ? 'partial result' : 'ready result'}
+        </Badge>
         <strong>{viewPlan.displayIntent.primaryGoal}</strong>
-        <span>{boundCount} 个结果可用{waitingCount ? `，${waitingCount} 个结果等待 artifact 或字段` : ''}</span>
+        <span>{diagnosticCount || runFailed
+          ? `${boundCount} 个诊断视图可用；未合成成功答案`
+          : `${boundCount} 个结果可用${waitingCount ? `，${waitingCount} 个结果等待 artifact 或字段` : ''}`}</span>
       </div>
     </div>
   );
