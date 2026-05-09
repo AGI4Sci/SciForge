@@ -1,4 +1,4 @@
-import { dirname, resolve } from 'node:path';
+import { dirname, extname, resolve } from 'node:path';
 
 export type SkillPackageDomain = 'literature' | 'structure' | 'omics' | 'knowledge';
 
@@ -41,6 +41,18 @@ export interface SkillAvailabilityValidationPlan {
   missingFields: string[];
   missingDomainsReason?: string;
   fileProbes: SkillAvailabilityFileProbe[];
+}
+
+export interface AgentServerGeneratedTaskContractResponse {
+  entrypoint: {
+    path: string;
+    language?: string;
+  };
+  taskFiles: Array<{
+    path: string;
+    language?: string;
+    content?: string;
+  }>;
 }
 
 export function planSkillAvailabilityValidation(
@@ -115,6 +127,81 @@ export function agentServerGeneratedTaskPromptPolicyLines() {
   ];
 }
 
+export function agentServerGeneratedTaskRetryDetail(kind: 'entrypoint' | 'path-only-task-files' | 'task-interface') {
+  if (kind === 'entrypoint') {
+    return 'Retrying AgentServer generation once; entrypoint must be executable code, while reports/data must be emitted as artifacts or direct ToolPayload content.';
+  }
+  if (kind === 'path-only-task-files') {
+    return 'Retrying AgentServer generation once; taskFiles must include inline content or be physically written before returning.';
+  }
+  return 'Retrying AgentServer generation once; generated tasks must consume the SciForge task input and write the declared output payload, not bake the current answer into static code.';
+}
+
+export function agentServerGeneratedEntrypointContractReason(
+  response: AgentServerGeneratedTaskContractResponse,
+  options: { normalizePath?: (path: string) => string } = {},
+) {
+  const normalizePath = options.normalizePath ?? ((path: string) => path);
+  const entryRel = normalizePath(response.entrypoint.path);
+  const ext = extname(entryRel).toLowerCase();
+  const language = String(response.entrypoint.language || '').toLowerCase();
+  const executableExts = new Set(['.py', '.r', '.R', '.sh', '.bash', '.zsh']);
+  const artifactExts = new Set(['.md', '.markdown', '.txt', '.json', '.csv', '.tsv', '.pdf', '.png', '.jpg', '.jpeg', '.html']);
+  if (artifactExts.has(ext) && !executableExts.has(ext)) {
+    return `AgentServer returned a non-executable artifact/report as entrypoint: ${entryRel}. Return a direct ToolPayload for report-only answers, or use an executable task file that writes the report artifact.`;
+  }
+  if ((language === 'python' || !language) && ext && !['.py'].includes(ext)) {
+    return `AgentServer entrypoint language/path mismatch: language=${language || 'python'} path=${entryRel}.`;
+  }
+  if (['.js', '.mjs', '.ts'].includes(ext) && language !== 'cli') {
+    return `AgentServer entrypoint ${entryRel} uses ${ext}, but SciForge generated task runner supports python/r/shell paths or explicit cli commands.`;
+  }
+  const entryFile = response.taskFiles.find((file) => normalizePath(file.path) === entryRel);
+  if (entryFile && artifactExts.has(ext) && !/^(python|r|shell|cli)$/i.test(String(entryFile.language || ''))) {
+    return `AgentServer taskFiles marks artifact-like entrypoint ${entryRel} as ${entryFile.language || 'unknown'} instead of executable code.`;
+  }
+  return undefined;
+}
+
+export function agentServerGeneratedTaskInterfaceContractReason(input: {
+  entryRel: string;
+  language?: string;
+  source: string;
+}) {
+  const language = String(input.language || '').toLowerCase();
+  const ext = extname(input.entryRel).toLowerCase();
+  const source = input.source.slice(0, 240_000);
+  const readsInput = generatedTaskSourceReadsInputArg(source, language, ext);
+  const writesOutput = generatedTaskSourceWritesOutputArg(source, language, ext);
+  if (!readsInput || !writesOutput) {
+    const missing = [
+      readsInput ? '' : 'read the SciForge inputPath argument',
+      writesOutput ? '' : 'write the SciForge outputPath argument',
+    ].filter(Boolean).join(' and ');
+    return [
+      `AgentServer generated task ${input.entryRel} does not ${missing}.`,
+      'Generated workspace tasks must be reusable adapters that read request/current-reference data from argv inputPath and write a valid ToolPayload to argv outputPath.',
+      'For report-only answers already reasoned by AgentServer, return a direct ToolPayload instead of static code that embeds the current report.',
+    ].join(' ');
+  }
+  return undefined;
+}
+
+export function agentServerPathOnlyTaskFilesReason(files: string[]) {
+  return `AgentServer returned path-only taskFiles that were not present in the workspace and had no inline content: ${files.join(', ')}`;
+}
+
+export function agentServerPathOnlyStrictRetryDirectPayloadReason(reason: string) {
+  return `${reason}. Strict retry returned a direct ToolPayload instead of executable taskFiles.`;
+}
+
+export function agentServerPathOnlyStrictRetryStillMissingReason(reason: string, files: string[]) {
+  return [
+    reason,
+    `Strict retry still returned path-only taskFiles without inline content or workspace files: ${files.join(', ')}`,
+  ].join('. ');
+}
+
 export function agentServerFreshRetrievalPromptPolicyLines() {
   return [
     'For fresh retrieval/analysis/report requests, do not inspect prior task-attempt files to learn old failures. Generate an inputPath/outputPath task that performs the requested retrieval/analysis at execution time and writes bounded artifacts.',
@@ -172,4 +259,20 @@ function entrypointFileProbes(
     }];
   }
   return [];
+}
+
+function generatedTaskSourceReadsInputArg(source: string, language: string, ext: string) {
+  if (language === 'python' || ext === '.py') return /\bsys\.argv\b|argparse|click\.|typer\.|input[_-]?path/i.test(source);
+  if (['javascript', 'typescript', 'node'].includes(language) || ['.js', '.mjs', '.ts'].includes(ext)) return /\bprocess\.argv\b|parseArgs|input[_-]?path/i.test(source);
+  if (['shell', 'bash', 'zsh', 'sh'].includes(language) || ['.sh', '.bash', '.zsh'].includes(ext)) return /(^|[^\\])\$\{?1\}?|\binput[_-]?path\b/i.test(source);
+  if (language === 'r' || ['.r', '.R'].includes(ext)) return /commandArgs|input[_-]?path/i.test(source);
+  return /argv|args|input[_-]?path/i.test(source);
+}
+
+function generatedTaskSourceWritesOutputArg(source: string, language: string, ext: string) {
+  if (language === 'python' || ext === '.py') return /\bsys\.argv\b|argparse|click\.|typer\.|output[_-]?path/i.test(source);
+  if (['javascript', 'typescript', 'node'].includes(language) || ['.js', '.mjs', '.ts'].includes(ext)) return /\bprocess\.argv\b|parseArgs|output[_-]?path/i.test(source);
+  if (['shell', 'bash', 'zsh', 'sh'].includes(language) || ['.sh', '.bash', '.zsh'].includes(ext)) return /(^|[^\\])\$\{?2\}?|\boutput[_-]?path\b/i.test(source);
+  if (language === 'r' || ['.r', '.R'].includes(ext)) return /commandArgs|output[_-]?path/i.test(source);
+  return /argv|args|output[_-]?path/i.test(source);
 }

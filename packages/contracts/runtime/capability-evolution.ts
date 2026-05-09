@@ -1,5 +1,9 @@
 import type { CapabilityKind } from './capabilities';
 
+export const CAPABILITY_EVOLUTION_RECORD_CONTRACT_ID = 'sciforge.capability-evolution-record.v1' as const;
+export const CAPABILITY_EVOLUTION_COMPACT_SUMMARY_CONTRACT_ID = 'sciforge.capability-evolution-compact-summary.v1' as const;
+export const CAPABILITY_EVOLUTION_BROKER_DIGEST_CONTRACT_ID = 'sciforge.capability-evolution-broker-digest.v1' as const;
+
 export type CapabilityEvolutionRecordStatus =
   | 'succeeded'
   | 'failed'
@@ -179,7 +183,7 @@ export interface CapabilityAtomicTraceSummary {
 }
 
 export interface CapabilityEvolutionRecord {
-  schemaVersion: 'sciforge.capability-evolution-record.v1';
+  schemaVersion: typeof CAPABILITY_EVOLUTION_RECORD_CONTRACT_ID;
   id: string;
   recordedAt: string;
   runId?: string;
@@ -226,7 +230,7 @@ export interface CapabilityEvolutionCompactRecord {
 }
 
 export interface CapabilityEvolutionCompactSummary {
-  schemaVersion: 'sciforge.capability-evolution-compact-summary.v1';
+  schemaVersion: typeof CAPABILITY_EVOLUTION_COMPACT_SUMMARY_CONTRACT_ID;
   generatedAt: string;
   sourceRef?: string;
   totalRecords: number;
@@ -238,7 +242,7 @@ export interface CapabilityEvolutionCompactSummary {
 }
 
 export interface CapabilityEvolutionBrokerDigest {
-  schemaVersion: 'sciforge.capability-evolution-broker-digest.v1';
+  schemaVersion: typeof CAPABILITY_EVOLUTION_BROKER_DIGEST_CONTRACT_ID;
   generatedAt: string;
   sourceRef?: string;
   totalRecords: number;

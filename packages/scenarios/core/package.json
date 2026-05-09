@@ -22,6 +22,7 @@
     "./scenario-routing-policy": "./src/scenarioRoutingPolicy.ts",
     "./scenario-package": "./src/scenarioPackage.ts",
     "./scenario-quality-gate": "./src/scenarioQualityGate.ts",
+    "./validation-issue-policy": "./src/validationIssuePolicy.ts",
     "./skill-plan-compiler": "./src/skillPlanCompiler.ts",
     "./ui-plan-compiler": "./src/uiPlanCompiler.ts",
     "./validation-gate": "./src/validationGate.ts",

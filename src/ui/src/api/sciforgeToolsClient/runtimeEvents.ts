@@ -1,5 +1,15 @@
 import type { AgentStreamEvent, SendAgentMessageInput } from '../../domain';
 import { makeId, nowIso } from '../../domain';
+import {
+  WORKSPACE_RUNTIME_EVENT_TYPE,
+  compactCapabilityForBackend,
+  normalizeRuntimeCompactCapability,
+  normalizeRuntimeContextCompactionStatus,
+  normalizeRuntimeContextWindowSource,
+  normalizeRuntimeContextWindowStatus,
+  runtimeStreamEventLabel,
+  workspaceRuntimeResultCompletion,
+} from '@sciforge-ui/runtime-contract';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -34,7 +44,7 @@ export function withConfiguredContextWindowLimit(event: AgentStreamEvent, maxCon
       window: maxContextWindowTokens,
       windowTokens: maxContextWindowTokens,
       ratio,
-      status: normalizeContextWindowStatus(state.status, ratio, state.autoCompactThreshold),
+      status: normalizeRuntimeContextWindowStatus(state.status, ratio, state.autoCompactThreshold),
     },
   };
 }
@@ -61,7 +71,7 @@ export function contextWindowTelemetryEvent(
       windowTokens,
       ratio,
       source: 'agentserver-estimate',
-      status: normalizeContextWindowStatus(undefined, ratio, autoCompactThreshold),
+      status: normalizeRuntimeContextWindowStatus(undefined, ratio, autoCompactThreshold),
       compactCapability: compactCapabilityForBackend(input.config.agentBackend),
       autoCompactThreshold,
       watchThreshold: 0.68,
@@ -75,68 +85,7 @@ export function contextWindowTelemetryEvent(
 }
 
 export function workspaceResultCompletion(result: Record<string, unknown>): { status: 'completed' | 'failed'; reason?: string } {
-  const failure = firstBlockingResultReason(result);
-  return failure ? { status: 'failed', reason: failure } : { status: 'completed' };
-}
-
-function firstBlockingResultReason(result: Record<string, unknown>) {
-  const units = arrayRecords(result.executionUnits);
-  for (const unit of units) {
-    const status = String(unit.status || '').trim().toLowerCase();
-    if (status === 'repair-needed' || status === 'failed-with-reason' || status === 'failed') {
-      return asString(unit.failureReason)
-        || asString(unit.message)
-        || `${asString(unit.id) || 'execution unit'} status=${status}`;
-    }
-  }
-  const artifacts = arrayRecords(result.artifacts);
-  for (const artifact of artifacts) {
-    const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
-    const data = isRecord(artifact.data) ? artifact.data : {};
-    const status = String(metadata.status || data.status || '').trim().toLowerCase();
-    if (status === 'repair-needed' || status === 'failed-with-reason' || status === 'failed') {
-      return asString(metadata.failureReason)
-        || asString(data.failureReason)
-        || `${asString(artifact.id) || asString(artifact.type) || 'artifact'} status=${status}`;
-    }
-  }
-  const message = asString(result.message);
-  if (message && /\brepair-needed\b|\bfailed-with-reason\b/i.test(message) && shouldTreatMessageAsBlocking(message, units, artifacts)) {
-    return message.slice(0, 240);
-  }
-  return undefined;
-}
-
-function shouldTreatMessageAsBlocking(message: string, units: Record<string, unknown>[], artifacts: Record<string, unknown>[]) {
-  if (/^\s*(?:repair-needed|failed-with-reason|failed)\s*$/i.test(message)) return true;
-  if (looksLikeBlockingDiagnosticMessage(message)) return true;
-  return !hasSuccessfulResultEvidence(units, artifacts);
-}
-
-function looksLikeBlockingDiagnosticMessage(message: string) {
-  return /^(?:SciForge runtime gateway needs repair|Agent backend .* failed|AgentServer .* failed|No validated local skill|Task output failed|AgentServer .* did not|Generated artifacts did not)/i.test(message)
-    || /\b(?:execution unit|artifact|research-report|paper-list)\s+status=(?:repair-needed|failed-with-reason|failed)\b/i.test(message);
-}
-
-function hasSuccessfulResultEvidence(units: Record<string, unknown>[], artifacts: Record<string, unknown>[]) {
-  const hasCompletedUnit = units.some((unit) => {
-    const status = String(unit.status || '').trim().toLowerCase();
-    return status === 'done' || status === 'record-only' || status === 'self-healed' || status === 'completed' || status === 'success';
-  });
-  const hasUsableArtifact = artifacts.some((artifact) => {
-    const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
-    const data = isRecord(artifact.data) ? artifact.data : {};
-    const status = String(metadata.status || data.status || '').trim().toLowerCase();
-    return status !== 'repair-needed'
-      && status !== 'failed-with-reason'
-      && status !== 'failed'
-      && Boolean(asString(artifact.id) || asString(artifact.type));
-  });
-  return hasCompletedUnit || hasUsableArtifact;
-}
-
-function arrayRecords(value: unknown) {
-  return Array.isArray(value) ? value.filter(isRecord) : [];
+  return workspaceRuntimeResultCompletion(result);
 }
 
 export async function readWorkspaceToolStream(
@@ -184,7 +133,7 @@ export async function readWorkspaceToolStream(
 
 export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
   const record = isRecord(raw) ? raw : {};
-  const type = asString(record.type) || asString(record.kind) || 'workspace-runtime-event';
+  const type = asString(record.type) || asString(record.kind) || WORKSPACE_RUNTIME_EVENT_TYPE;
   const source = asString(record.source);
   const toolName = asString(record.toolName);
   const usage = normalizeTokenUsage(record.usage)
@@ -206,7 +155,7 @@ export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
   return {
     id: makeId('evt'),
     type,
-    label: streamEventLabel(type, source, toolName),
+    label: runtimeStreamEventLabel(type, source, toolName),
     detail,
     usage,
     contextWindowState,
@@ -264,8 +213,9 @@ function normalizeContextWindowState(value: unknown, type: string, fallback: Rec
   const hasUsage = input !== undefined || output !== undefined || cache !== undefined || asNumber(usage.total) !== undefined;
   const hasContextTelemetry = usedTokens !== undefined || windowTokens !== undefined || ratio !== undefined;
   const explicitSource = asString(record.source) ?? asString(record.contextWindowSource) ?? asString(record.context_window_source);
+  const normalizedSource = explicitSource ? normalizeRuntimeContextWindowSource(explicitSource) : 'unknown';
   const source = explicitSource
-    ? (normalizeContextWindowSource(explicitSource) === 'unknown' && hasUsage ? 'provider-usage' : normalizeContextWindowSource(explicitSource))
+    ? (normalizedSource === 'unknown' && hasUsage ? 'provider-usage' : normalizedSource)
     : (hasUsage ? 'provider-usage' : 'unknown');
   const state = {
     backend: asString(record.backend) ?? asString(usage.provider),
@@ -279,8 +229,8 @@ function normalizeContextWindowState(value: unknown, type: string, fallback: Rec
     windowTokens,
     ratio,
     source,
-    status: normalizeContextWindowStatus(asString(record.status), ratio, clampRatio(asNumber(record.autoCompactThreshold))),
-    compactCapability: normalizeCompactCapability(asString(record.compactCapability) ?? asString(record.compactionCapability)),
+    status: normalizeRuntimeContextWindowStatus(asString(record.status), ratio, clampRatio(asNumber(record.autoCompactThreshold))),
+    compactCapability: normalizeRuntimeCompactCapability(asString(record.compactCapability) ?? asString(record.compactionCapability)),
     budget: normalizeContextBudget(record.budget),
     auditRefs: asStringArray(record.auditRefs),
     autoCompactThreshold: clampRatio(asNumber(record.autoCompactThreshold)),
@@ -339,15 +289,15 @@ function normalizeContextCompaction(value: unknown, type: string, fallback: Reco
   const message = asString(record.message) ?? asString(record.userVisibleSummary) ?? asString(record.detail)
     ?? (isTag ? `${record.kind === 'partial_compaction' ? 'partial' : 'full'} compaction tag ${asString(record.id) ?? ''}`.trim() : undefined);
   return {
-    status: normalizeCompactionStatus(asString(record.status), {
+    status: normalizeRuntimeContextCompactionStatus(asString(record.status), {
       ok: asBoolean(record.ok) ?? (isTag ? true : undefined),
       completedAt,
       lastCompactedAt,
       message,
     }),
-    source: normalizeContextWindowSource(asString(record.source)),
+    source: normalizeRuntimeContextWindowSource(asString(record.source)),
     backend: asString(record.backend),
-    compactCapability: normalizeCompactCapability(asString(record.compactCapability) ?? asString(record.compactionCapability) ?? (isTag ? 'agentserver' : undefined)),
+    compactCapability: normalizeRuntimeCompactCapability(asString(record.compactCapability) ?? asString(record.compactionCapability) ?? (isTag ? 'agentserver' : undefined)),
     before: normalizeContextWindowState(record.before, 'contextWindowState', {}),
     after: normalizeContextWindowState(record.after, 'contextWindowState', {}),
     auditRefs: asStringArray(record.auditRefs) ?? (isTag && asString(record.id) ? [`agentserver-compaction:${asString(record.id)}`] : undefined),
@@ -357,46 +307,6 @@ function normalizeContextCompaction(value: unknown, type: string, fallback: Reco
     reason: asString(record.reason) ?? (isTag ? 'agentserver-compact' : undefined),
     message,
   };
-}
-
-function normalizeContextWindowSource(value?: string): NonNullable<AgentStreamEvent['contextWindowState']>['source'] {
-  if (value === 'native' || value === 'provider-usage' || value === 'agentserver-estimate' || value === 'agentserver' || value === 'estimate' || value === 'unknown') return value;
-  if (value === 'usage' || value === 'provider') return 'provider-usage';
-  if (value === 'backend') return 'native';
-  if (value === 'handoff') return 'agentserver-estimate';
-  return 'unknown';
-}
-
-function normalizeCompactCapability(value?: string): NonNullable<AgentStreamEvent['contextWindowState']>['compactCapability'] {
-  if (value === 'native' || value === 'agentserver' || value === 'handoff-only' || value === 'handoff-slimming' || value === 'session-rotate' || value === 'none' || value === 'unknown') return value;
-  return 'unknown';
-}
-
-function compactCapabilityForBackend(backend: string): NonNullable<AgentStreamEvent['contextWindowState']>['compactCapability'] {
-  if (backend === 'codex') return 'native';
-  if (backend === 'openteam_agent' || backend === 'hermes-agent') return 'agentserver';
-  if (backend === 'gemini') return 'session-rotate';
-  if (backend === 'claude-code' || backend === 'openclaw') return 'handoff-only';
-  return 'unknown';
-}
-
-function normalizeContextWindowStatus(
-  value: string | undefined,
-  ratio: number | undefined,
-  autoCompactThreshold: number | undefined,
-): NonNullable<AgentStreamEvent['contextWindowState']>['status'] {
-  if (ratio !== undefined && ratio >= 1) return 'exceeded';
-  if (ratio !== undefined && ratio >= (autoCompactThreshold ?? 0.82) && (!value || value === 'healthy' || value === 'ok' || value === 'normal')) return 'near-limit';
-  if (value === 'healthy' || value === 'watch' || value === 'near-limit' || value === 'exceeded' || value === 'compacting' || value === 'blocked' || value === 'unknown') return value;
-  if (value && /exceeded|overflow|max|full/i.test(value)) return 'exceeded';
-  if (value && /compact/i.test(value)) return 'compacting';
-  if (value && /blocked|rate/i.test(value)) return 'blocked';
-  if (value && /near|critical|warning/i.test(value)) return 'near-limit';
-  if (value && /watch/i.test(value)) return 'watch';
-  if (value && /healthy|ok|normal/i.test(value)) return 'healthy';
-  if (ratio !== undefined && ratio >= (autoCompactThreshold ?? 0.82)) return 'near-limit';
-  if (ratio !== undefined && ratio >= 0.68) return 'watch';
-  return ratio === undefined ? 'unknown' : 'healthy';
 }
 
 function normalizeContextBudget(value: unknown): NonNullable<AgentStreamEvent['contextWindowState']>['budget'] | undefined {
@@ -413,21 +323,6 @@ function normalizeContextBudget(value: unknown): NonNullable<AgentStreamEvent['c
     normalizedBudgetRatio: clampRatio(asNumber(value.normalizedBudgetRatio)),
     decisions: Array.isArray(value.decisions) ? value.decisions.filter(isRecord) : undefined,
   };
-}
-
-function normalizeCompactionStatus(
-  value?: string,
-  inferred: { ok?: boolean; completedAt?: string; lastCompactedAt?: string; message?: string } = {},
-): NonNullable<AgentStreamEvent['contextCompaction']>['status'] {
-  if (value === 'started' || value === 'completed' || value === 'failed' || value === 'pending' || value === 'skipped') return value;
-  if (value === 'compacted') return 'completed';
-  if (value === 'unsupported') return 'skipped';
-  if (value && /fail|error/i.test(value)) return 'failed';
-  if (value && /skip|unsupported|handoff/i.test(value)) return 'skipped';
-  if (value && /complete|done|success|compact(ed)?|compressed/i.test(value)) return 'completed';
-  if (inferred.ok === true || inferred.completedAt || inferred.lastCompactedAt || (inferred.message && /complete|done|success|compact(ed)?|compressed|完成/i.test(inferred.message))) return 'completed';
-  if (inferred.ok === false || (inferred.message && /fail|error|失败|未完成/i.test(inferred.message))) return 'failed';
-  return 'pending';
 }
 
 function clampRatio(value?: number) {
@@ -472,22 +367,6 @@ function formatTokenUsage(usage: AgentStreamEvent['usage'] | undefined) {
   const suffix = [model, usage.source].filter(Boolean).join(' ');
   return `tokens ${parts.join(', ')}${suffix ? ` (${suffix})` : ''}`;
 }
-
-function streamEventLabel(type: string, source?: string, toolName?: string) {
-  if (type === 'contextWindowState') return '上下文窗口';
-  if (type === 'contextCompaction') return '上下文压缩';
-  if (type === 'run-plan') return '计划';
-  if (type === 'stage-start') return '阶段';
-  if (type === 'process-progress') return '过程';
-  if (type === 'text-delta') return '思考';
-  if (type === 'tool-call') return toolName ? `调用 ${toolName}` : '工具调用';
-  if (type === 'tool-result') return toolName ? `结果 ${toolName}` : '工具结果';
-  if (type === 'status') return source === 'agentserver' ? 'AgentServer 状态' : '运行状态';
-  if (type.includes('error')) return '错误';
-  if (type.includes('silent')) return '等待';
-  return source === 'agentserver' ? 'AgentServer' : 'Workspace Runtime';
-}
-
 
 export function toolEvent(type: string, detail: string): AgentStreamEvent {
   return {

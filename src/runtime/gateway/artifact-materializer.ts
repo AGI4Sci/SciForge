@@ -1,5 +1,12 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import {
+  artifactDataForUnparsedPathText,
+  artifactDataReadRequestsForPolicy,
+  materializedMarkdownMetadataForArtifact,
+  materializedMarkdownTextForArtifact,
+  normalizeArtifactDataWithPolicy,
+} from '@sciforge-ui/runtime-contract/artifact-policy';
 import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
 import { clipForAgentServerJson, isRecord } from '../gateway-utils.js';
 import { sha1 } from '../workspace-task-runner.js';
@@ -23,7 +30,7 @@ export async function materializeBackendPayloadOutput(
   const markdownRefs: string[] = [];
   const artifacts = await Promise.all(payload.artifacts.map(async (artifact) => {
     const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
-    const markdown = markdownTextForArtifact(artifact);
+    const markdown = materializedMarkdownTextForArtifact(artifact);
     const markdownRel = markdown
       ? markdownTaskResultRel(outputRel, artifact)
       : undefined;
@@ -42,8 +49,7 @@ export async function materializeBackendPayloadOutput(
         taskCodeRef: stableWorkspaceRef(stringField(metadata.taskCodeRef)) ?? refs.taskRel,
         stdoutRef: stableWorkspaceRef(stringField(metadata.stdoutRef)) ?? refs.stdoutRel,
         stderrRef: stableWorkspaceRef(stringField(metadata.stderrRef)) ?? refs.stderrRel,
-        reportRef: stringField(metadata.reportRef) ?? markdownRel,
-        markdownRef: stringField(metadata.markdownRef) ?? markdownRel,
+        ...materializedMarkdownMetadataForArtifact(metadata, markdownRel),
         materializedOutputRef: outputRel,
         materializedAt: new Date().toISOString(),
       },
@@ -125,17 +131,6 @@ function markdownTaskResultRel(outputRel: string, artifact: Record<string, unkno
   const outputStem = outputName.replace(/\.[^.]+$/, '') || 'result';
   const id = safeArtifactId(String(artifact.id || artifact.type || 'artifact'));
   return `.sciforge/task-results/${safeArtifactId(outputStem)}-${id}.md`;
-}
-
-function markdownTextForArtifact(artifact: Record<string, unknown>) {
-  const data = isRecord(artifact.data) ? artifact.data : {};
-  return stringField(data.markdown)
-    ?? stringField(data.report)
-    ?? stringField(data.content)
-    ?? stringField(artifact.markdown)
-    ?? stringField(artifact.report)
-    ?? stringField(artifact.content)
-    ?? (typeof artifact.data === 'string' ? artifact.data : undefined);
 }
 
 function backendOutputObjectReferences(
@@ -228,69 +223,18 @@ export async function normalizeArtifactsForPayload(
 }
 
 export async function enrichArtifactDataFromFileRefs(artifact: Record<string, unknown>, workspace: string) {
-  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
   const currentData = isPlainDataRecord(artifact.data) ? artifact.data : {};
-  const type = String(artifact.type || artifact.id || '');
-  const data: Record<string, unknown> = {
+  const readResults: Record<string, unknown> = {};
+  for (const request of artifactDataReadRequestsForPolicy(artifact)) {
+    readResults[request.key] = request.kind === 'csv'
+      ? await readCsvRef(request.ref, workspace)
+      : await readTextRef(request.ref, workspace);
+  }
+  const data = normalizeArtifactDataWithPolicy(artifact, {
     ...await artifactDataFromPayloadRef(artifact, workspace),
     ...await artifactDataFromArtifactPath(artifact, workspace),
     ...currentData,
-  };
-
-  if (type === 'research-report') {
-    const markdown = await readTextRef(metadata.reportRef, workspace);
-    const realDataPlanText = await readTextRef(metadata.realDataPlanRef, workspace);
-    if (markdown) {
-      data.markdown = markdown;
-      if (!Array.isArray(data.sections)) data.sections = markdownSections(markdown);
-    }
-    const inlineMarkdown = stringField(data.markdown)
-      ?? stringField(data.report)
-      ?? stringField(data.content)
-      ?? stringField(artifact.data)
-      ?? stringField(artifact.markdown)
-      ?? stringField(artifact.report)
-      ?? stringField(artifact.content);
-    if (inlineMarkdown) {
-      data.markdown = inlineMarkdown;
-      data.report = stringField(data.report) ?? inlineMarkdown;
-      if (!Array.isArray(data.sections)) data.sections = markdownSections(inlineMarkdown);
-    }
-    if (realDataPlanText) {
-      try {
-        data.realDataPlan = JSON.parse(realDataPlanText);
-      } catch {
-        data.realDataPlan = realDataPlanText;
-      }
-    }
-  }
-
-  if (type === 'omics-differential-expression') {
-    const markerRows = await readCsvRef(metadata.markerRef, workspace);
-    const qcRows = await readCsvRef(metadata.qcRef, workspace);
-    const compositionRows = await readCsvRef(metadata.compositionRef, workspace);
-    const volcanoRows = await readCsvRef(metadata.volcanoRef, workspace);
-    const umapSvgText = await readTextRef(metadata.umapSvgRef, workspace);
-    const heatmapSvgText = await readTextRef(metadata.heatmapSvgRef, workspace);
-    if (markerRows.length) data.markers = markerRows;
-    if (qcRows.length) data.qc = qcRows;
-    if (compositionRows.length) data.composition = compositionRows;
-    if (volcanoRows.length) {
-      data.volcano = volcanoRows;
-      data.points = volcanoRows.map((row, index) => {
-        const negLogP = numberFrom(row.negLogP ?? row.neg_log10_pval ?? row.neg_log10_p ?? row.pValue ?? row.pval_adj);
-        return {
-          gene: String(row.gene || row.label || `Gene${index + 1}`),
-          logFC: numberFrom(row.logFC ?? row.log2FC ?? row.logfoldchange) ?? 0,
-          negLogP,
-          significant: Boolean((negLogP ?? 0) >= 1.3),
-          cluster: String(row.cluster || row.cell_type || ''),
-        };
-      });
-    }
-    if (umapSvgText) data.umapSvgText = umapSvgText;
-    if (heatmapSvgText) data.heatmapSvgText = heatmapSvgText;
-  }
+  }, readResults);
 
   const pathRef = stringField(artifact.path);
   return Object.keys(data).length
@@ -306,8 +250,7 @@ async function artifactDataFromArtifactPath(artifact: Record<string, unknown>, w
     parsed = JSON.parse(await readFile(path, 'utf8'));
   } catch {
     const text = await readTextRef(artifact.path, workspace);
-    const type = String(artifact.type || artifact.id || '');
-    return text && /report|summary|markdown|text/i.test(type) ? { markdown: text, content: text } : {};
+    return artifactDataForUnparsedPathText(artifact, text);
   }
   if (!isRecord(parsed)) return {};
   const { type: _type, id: _id, ...rest } = parsed;
@@ -434,27 +377,6 @@ function coerceCsvValue(value: string) {
   if (!trimmed) return '';
   const numeric = Number(trimmed);
   return Number.isFinite(numeric) ? numeric : trimmed;
-}
-
-function numberFrom(value: unknown) {
-  const numeric = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
-  return Number.isFinite(numeric) ? numeric : undefined;
-}
-
-function markdownSections(markdown: string) {
-  const sections: Array<{ title: string; content: string }> = [];
-  let current: { title: string; content: string } | undefined;
-  for (const line of markdown.split('\n')) {
-    const heading = line.match(/^##\s+(.+)$/);
-    if (heading) {
-      if (current) sections.push({ ...current, content: current.content.trim() });
-      current = { title: heading[1].trim(), content: '' };
-      continue;
-    }
-    if (current) current.content += `${line}\n`;
-  }
-  if (current) sections.push({ ...current, content: current.content.trim() });
-  return sections;
 }
 
 function stringField(value: unknown) {

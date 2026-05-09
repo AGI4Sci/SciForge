@@ -1,9 +1,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { PreviewDescriptor } from './index';
-import { descriptorWithDiagnostic, mergePreviewDescriptors, normalizePreviewDerivative, uniquePreviewStrings } from './index';
+import {
+  STRUCTURE_BUNDLE_PREVIEW_DERIVATIVE_KIND,
+  descriptorWithDiagnostic,
+  derivativeDescriptorsForPreviewTarget,
+  inlinePolicyForPreviewKind,
+  locatorHintsForPreviewKind,
+  mergePreviewDescriptors,
+  normalizePreviewDerivative,
+  previewActionsForPreviewKind,
+  previewDerivativeExtensionForKind,
+  previewDerivativeMimeTypeForKind,
+  previewDescriptorKindForPath,
+  previewStructureBundleStatus,
+  uniquePreviewStrings,
+} from './index';
 
-test('merges descriptor derivatives and diagnostics without owning preview policy', () => {
+test('merges descriptor derivatives and diagnostics', () => {
   const local: PreviewDescriptor = {
     kind: 'image',
     source: 'artifact',
@@ -21,6 +35,22 @@ test('merges descriptor derivatives and diagnostics without owning preview polic
   assert.equal(merged.derivatives?.[0]?.kind, 'thumb');
   assert.deepEqual(merged.diagnostics, ['hydrated']);
   assert.match(descriptorWithDiagnostic(merged, new Error('boom')).diagnostics?.join('\n') ?? '', /boom/);
+});
+
+test('owns file preview kind, derivative, action, and locator policy', () => {
+  assert.equal(previewDescriptorKindForPath('report.md'), 'markdown');
+  assert.equal(previewDescriptorKindForPath('1crn.cif'), 'structure');
+  assert.equal(inlinePolicyForPreviewKind('markdown', 512), 'inline');
+  assert.equal(inlinePolicyForPreviewKind('structure', 512), 'external');
+  assert.deepEqual(derivativeDescriptorsForPreviewTarget('1crn.cif', 'structure', 10), [
+    { kind: 'metadata', ref: '1crn.cif#metadata', mimeType: 'application/json', status: 'lazy' },
+    { kind: STRUCTURE_BUNDLE_PREVIEW_DERIVATIVE_KIND, ref: '1crn.cif#structure-bundle', mimeType: 'application/json', status: 'lazy' },
+  ]);
+  assert.equal(previewDerivativeExtensionForKind(STRUCTURE_BUNDLE_PREVIEW_DERIVATIVE_KIND, 'structure', '1crn.cif'), 'json');
+  assert.equal(previewDerivativeMimeTypeForKind(STRUCTURE_BUNDLE_PREVIEW_DERIVATIVE_KIND, 'structure', 'chemical/x-cif'), 'application/json');
+  assert.ok(previewActionsForPreviewKind('table').includes('select-rows'));
+  assert.deepEqual(locatorHintsForPreviewKind('table'), ['row-range', 'column-range']);
+  assert.equal(previewStructureBundleStatus('structure'), 'metadata-only-bundle');
 });
 
 test('normalizes derivative records and unique strings as contract helpers', () => {

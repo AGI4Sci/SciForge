@@ -9,6 +9,7 @@ export * from './src/scenarioPackage';
 export * from './src/scenarioDraftCompiler';
 export * from './src/scenarioElementCompiler';
 export * from './src/validationGate';
+export * from './src/validationIssuePolicy';
 export * from './src/scenarioQualityGate';
 export * from './src/scenarioLibrary';
 export * from './src/runtimeCapabilityProfiles';

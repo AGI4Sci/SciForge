@@ -352,6 +352,77 @@ try {
     'capability.atomic.extract',
     'capability.atomic.render',
   ]);
+
+  let supplementGenerationCalls = 0;
+  const supplementalFallbackPayload = await runAgentServerGeneratedTask({
+    ...request,
+    prompt: 'Generate a report and fill any missing evidence matrix through backend fallback.',
+    expectedArtifactTypes: ['research-report', 'evidence-matrix'],
+    selectedComponentIds: ['report-viewer', 'evidence-matrix'],
+  }, skill, [skill], {}, {
+    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
+    requestAgentServerGeneration: async (_params) => {
+      supplementGenerationCalls += 1;
+      const isSupplement = supplementGenerationCalls === 2;
+      return {
+        ok: true,
+        runId: isSupplement ? 'agentserver-run-ledger-supplement-atomic' : 'agentserver-run-ledger-composed-primary',
+        response: {
+          taskFiles: [{
+            path: isSupplement ? '.sciforge/tasks/ledger-supplement.py' : '.sciforge/tasks/ledger-primary.py',
+            language: 'python',
+            content: [
+              'import json, sys',
+              '_, input_path, output_path = sys.argv',
+              isSupplement
+                ? 'payload = {"message": "supplement filled matrix", "confidence": 0.91, "claimType": "fact", "evidenceLevel": "runtime", "reasoningTrace": "atomic supplement", "claims": [{"text": "matrix filled", "confidence": 0.91}], "uiManifest": [{"componentId": "evidence-matrix", "artifactRef": "supplement-matrix"}], "executionUnits": [{"id": "atomic-supplement", "status": "done", "tool": "python"}], "artifacts": [{"id": "supplement-matrix", "type": "evidence-matrix", "schema": {"type": "object"}, "data": {"rows": []}}]}'
+                : 'payload = {"message": "primary report only", "confidence": 0.88, "claimType": "fact", "evidenceLevel": "runtime", "reasoningTrace": "primary composed path", "claims": [{"text": "report filled", "confidence": 0.88}], "uiManifest": [{"componentId": "report-viewer", "artifactRef": "primary-report"}], "executionUnits": [{"id": "composed-primary", "status": "done", "tool": "python"}], "artifacts": [{"id": "primary-report", "type": "research-report", "schema": {"type": "object"}, "data": {"markdown": "primary"}}]}',
+              'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
+            ].join('\n'),
+          }],
+          entrypoint: {
+            language: 'python',
+            path: isSupplement ? '.sciforge/tasks/ledger-supplement.py' : '.sciforge/tasks/ledger-primary.py',
+          },
+          environmentRequirements: {},
+          validationCommand: '',
+          expectedArtifacts: isSupplement ? ['evidence-matrix'] : ['research-report', 'evidence-matrix'],
+          patchSummary: isSupplement ? 'ledger atomic supplement fallback smoke' : 'ledger composed primary fallback smoke',
+        },
+      };
+    },
+    agentServerGenerationFailureReason: (error) => error,
+    attemptPlanRefs: () => ({}),
+    repairNeededPayload: (req, selectedSkill, reason) => repairNeededPayload(req, selectedSkill, reason),
+    agentServerFailurePayloadRefs: () => ({}),
+    ensureDirectAnswerReportArtifact: (payload) => payload,
+    mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
+    validateAndNormalizePayload: async (payload): Promise<ToolPayload> => payload,
+    tryAgentServerRepairAndRerun: async () => undefined,
+    failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
+    coerceWorkspaceTaskPayload: () => undefined,
+    schemaErrors: (payload) => {
+      const record = payload as Record<string, unknown>;
+      return ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts'].filter((key) => !(key in record)).map((key) => `missing ${key}`);
+    },
+    firstPayloadFailureReason: () => undefined,
+    payloadHasFailureStatus: () => false,
+  });
+  assert.equal(supplementGenerationCalls, 2);
+  assert.ok(supplementalFallbackPayload?.artifacts.some((artifact) => artifact.id === 'primary-report'));
+  assert.ok(supplementalFallbackPayload?.artifacts.some((artifact) => artifact.id === 'supplement-matrix'));
+  const recordsAfterSupplementalFallback = await readCapabilityEvolutionRecords({ workspacePath: workspace });
+  const supplementalFallbackRecord = recordsAfterSupplementalFallback.find((entry) => entry.metadata?.eventKind === 'composed-capability-fallback');
+  assert.ok(supplementalFallbackRecord, 'supplemental backend fallback should write a composed fallback ledger record');
+  assert.equal(supplementalFallbackRecord.finalStatus, 'fallback-succeeded');
+  assert.equal(supplementalFallbackRecord.failureCode, 'missing-artifact');
+  assert.equal(supplementalFallbackRecord.fallbackPolicy?.fallbackContext?.reason, 'Missing expected artifact types: evidence-matrix');
+  assert.deepEqual(supplementalFallbackRecord.composedResult?.atomicTrace.map((entry) => entry.capabilityId), ['runtime.python-task']);
+  assert.ok(supplementalFallbackRecord.executionUnitRefs.some((ref) => ref.includes('composed-primary')));
+  assert.ok(supplementalFallbackRecord.artifactRefs.some((ref) => ref.includes('supplement-matrix')));
+  const dynamicGlueSuccess = recordsAfterSupplementalFallback.find((entry) => entry.metadata?.eventKind === 'dynamic-glue-execution');
+  assert.ok(dynamicGlueSuccess, 'successful supplemental backend glue should be recorded');
+  assert.equal(dynamicGlueSuccess.finalStatus, 'succeeded');
 } finally {
   await rm(workspace, { recursive: true, force: true });
 }

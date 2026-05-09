@@ -1,5 +1,9 @@
 import type { ScenarioPackage } from '@sciforge/scenario-core/scenario-package';
-import { validateScenarioPackage, type ValidationReport } from '@sciforge/scenario-core/validation-gate';
+
+import {
+  validateRuntimeScenarioPackage,
+  type ScenarioPackageValidationReport,
+} from '../../src/runtime/scenario-policy/scenario-package-validation.js';
 
 export type ScenarioRuntimeSmokeMode = 'dry-run' | 'execute-package-skill';
 
@@ -19,7 +23,7 @@ export interface ScenarioRuntimeSmokeResult {
     version: string;
     source: ScenarioPackage['scenario']['source'];
   };
-  validationReport: ValidationReport;
+  validationReport: ScenarioPackageValidationReport;
   selectedSkillIds: string[];
   expectedArtifactTypes: string[];
   execution?: {
@@ -39,7 +43,7 @@ export async function runScenarioRuntimeSmoke(
   executor?: ScenarioRuntimeSmokeExecutor,
 ): Promise<ScenarioRuntimeSmokeResult> {
   const mode = request.mode ?? 'dry-run';
-  const validationReport = validateScenarioPackage(request.package);
+  const validationReport = validateRuntimeScenarioPackage(request.package);
   const base: ScenarioRuntimeSmokeResult = {
     ok: validationReport.ok,
     mode,

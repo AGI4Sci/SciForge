@@ -1,10 +1,17 @@
 import type {
+  CapabilityProviderRef,
   CapabilityEvolutionCompactSummary,
   CapabilityEvolutionRecord,
   CapabilityEvolutionRecordStatus,
   CapabilityFallbackTrigger,
+  ComposedCapabilityAtomicTrace,
+  ComposedCapabilityFallbackPolicy,
+  ComposedCapabilityResult,
   CapabilityValidationResultRef,
   SelectedCapabilityRef,
+} from '../../../packages/contracts/runtime/capability-evolution.js';
+import {
+  CAPABILITY_EVOLUTION_RECORD_CONTRACT_ID,
 } from '../../../packages/contracts/runtime/capability-evolution.js';
 import {
   appendCapabilityEvolutionRecord,
@@ -29,9 +36,20 @@ export interface CapabilityEvolutionRuntimeEventInput {
   stdoutRel?: string;
   stderrRel?: string;
   failureReason?: string;
+  fallbackReason?: string;
   schemaErrors?: string[];
   finalStatus?: CapabilityEvolutionRecordStatus;
   recoverActions?: string[];
+  eventKind?: string;
+  selectedCapabilities?: SelectedCapabilityRef[];
+  providers?: CapabilityProviderRef[];
+  inputSchemaRefs?: string[];
+  outputSchemaRefs?: string[];
+  validationResult?: CapabilityValidationResultRef;
+  fallbackCapabilities?: SelectedCapabilityRef[];
+  atomicTrace?: ComposedCapabilityAtomicTrace[];
+  fallbackPolicy?: ComposedCapabilityFallbackPolicy;
+  composedResult?: ComposedCapabilityResult;
   repairAttempt?: {
     id?: string;
     status: 'attempted' | 'succeeded' | 'failed' | 'skipped';
@@ -59,44 +77,49 @@ export async function recordCapabilityEvolutionRuntimeEvent(
   const now = input.now ?? (() => new Date());
   const recordedAt = now().toISOString();
   const failureCode = failureCodeForCapabilityEvent(input);
-  const validationResult = validationResultForCapabilityEvent(input, failureCode);
+  const validationResult = input.validationResult ?? validationResultForCapabilityEvent(input, failureCode);
   const executionUnitRefs = executionUnitRefsForCapabilityEvent(input);
   const artifactRefs = artifactRefsForCapabilityEvent(input);
   const finalStatus = input.finalStatus ?? finalStatusForCapabilityEvent(input);
   const recoverActions = input.recoverActions ?? recoverActionsForCapabilityEvent(input, finalStatus);
+  const fallbackEvidence = fallbackEvidenceForCapabilityEvent(input, finalStatus, failureCode, validationResult, executionUnitRefs, artifactRefs, recoverActions);
   const recordId = `cel-${sha1([
     input.taskId,
     input.runId ?? '',
     recordedAt,
     input.failureReason ?? '',
+    input.fallbackReason ?? '',
     finalStatus,
   ].join(':')).slice(0, 16)}`;
 
   const record: CapabilityEvolutionRecord = {
-    schemaVersion: 'sciforge.capability-evolution-record.v1',
+    schemaVersion: CAPABILITY_EVOLUTION_RECORD_CONTRACT_ID,
     id: recordId,
     recordedAt,
     runId: input.runId ?? input.taskId,
     sessionId: sessionIdForRequest(input.request),
     goalSummary: compactGoalSummary(input.request.prompt),
     selectedCapabilities: selectedCapabilitiesForCapabilityEvent(input, validationResult),
-    providers: [
+    providers: uniqueProviders([
       { id: 'sciforge.workspace-runtime', kind: 'local-runtime' },
       {
         id: input.skill.id,
         kind: providerKindForSkill(input.skill),
         ...(input.skill.manifestPath ? { detailRef: input.skill.manifestPath } : {}),
       },
-    ],
+      ...(input.providers ?? []),
+    ]),
     inputSchemaRefs: uniqueNonEmptyStrings([
       `skill-domain:${input.request.skillDomain}`,
       input.inputRel,
       input.request.skillPlanRef,
       input.request.scenarioPackageRef ? `scenario-package:${input.request.scenarioPackageRef.id}@${input.request.scenarioPackageRef.version}` : '',
+      ...(input.inputSchemaRefs ?? []),
     ]),
     outputSchemaRefs: uniqueNonEmptyStrings([
       ...expectedArtifactRefs(input.request),
       input.outputRel,
+      ...(input.outputSchemaRefs ?? []),
     ]),
     glueCodeRef: input.taskRel,
     executionUnitRefs,
@@ -114,43 +137,8 @@ export async function recordCapabilityEvolutionRuntimeEvent(
       validationResult: input.repairAttempt.validationResult,
       completedAt: input.repairAttempt.status === 'succeeded' || input.repairAttempt.status === 'failed' ? recordedAt : undefined,
     }] : [],
-    fallbackPolicy: {
-      atomicCapabilities: fallbackCapabilitiesForEvent(input),
-      fallbackToAtomicWhen: fallbackTriggersForEvent(failureCode),
-      doNotFallbackWhen: ['unsafe-side-effect', 'requires-human-approval', 'budget-exhausted'],
-      retryBudget: { maxRetries: 1, maxRepairAttempts: 1, maxFallbackAttempts: 1 },
-      fallbackContext: {
-        preserveArtifactRefs: artifactRefs,
-        preserveExecutionUnitRefs: executionUnitRefs,
-        validationResultRefs: validationResult?.resultRef ? [validationResult.resultRef] : [],
-        reason: input.failureReason,
-      },
-    },
-    composedResult: {
-      status: composedStatusForRecord(finalStatus),
-      failureCode,
-      fallbackable: finalStatus !== 'needs-human',
-      confidence: input.payload?.confidence,
-      recoverActions,
-      atomicTrace: fallbackCapabilitiesForEvent(input).map((capability) => ({
-        capabilityId: capability.id,
-        providerId: capability.providerId,
-        status: finalStatus === 'repair-failed' || finalStatus === 'failed' ? 'failed' : 'succeeded',
-        failureCode,
-        executionUnitRefs,
-        artifactRefs,
-        validationResult,
-      })),
-      relatedRefs: {
-        runId: input.runId ?? input.taskId,
-        glueCodeRef: input.taskRel,
-        inputSchemaRefs: uniqueNonEmptyStrings([input.inputRel]),
-        outputSchemaRefs: uniqueNonEmptyStrings([input.outputRel]),
-        executionUnitRefs,
-        artifactRefs,
-        validationResultRefs: validationResult?.resultRef ? [validationResult.resultRef] : [],
-      },
-    },
+    fallbackPolicy: fallbackEvidence?.fallbackPolicy,
+    composedResult: fallbackEvidence?.composedResult,
     finalStatus,
     latencyCostSummary: {
       executionCount: executionUnitRefs.length || 1,
@@ -189,7 +177,7 @@ function selectedCapabilitiesForCapabilityEvent(
   input: CapabilityEvolutionRuntimeEventInput,
   validationResult?: CapabilityValidationResultRef,
 ): SelectedCapabilityRef[] {
-  const selected: SelectedCapabilityRef[] = [{
+  const selected: SelectedCapabilityRef[] = [...(input.selectedCapabilities ?? []), {
     id: input.skill.id,
     kind: capabilityKindForSkill(input.skill),
     providerId: input.skill.id,
@@ -212,11 +200,11 @@ function selectedCapabilitiesForCapabilityEvent(
       role: 'repair',
     });
   }
-  return selected;
+  return uniqueCapabilities(selected);
 }
 
 function fallbackCapabilitiesForEvent(input: CapabilityEvolutionRuntimeEventInput): SelectedCapabilityRef[] {
-  const fallback: SelectedCapabilityRef[] = [{
+  const fallback: SelectedCapabilityRef[] = [...(input.fallbackCapabilities ?? []), {
     id: 'sciforge.generated-task-runner',
     kind: 'tool',
     providerId: 'sciforge.workspace-runtime',
@@ -230,7 +218,73 @@ function fallbackCapabilitiesForEvent(input: CapabilityEvolutionRuntimeEventInpu
       role: 'repair',
     });
   }
-  return fallback;
+  return uniqueCapabilities(fallback);
+}
+
+function fallbackEvidenceForCapabilityEvent(
+  input: CapabilityEvolutionRuntimeEventInput,
+  finalStatus: CapabilityEvolutionRecordStatus,
+  failureCode: string | undefined,
+  validationResult: CapabilityValidationResultRef | undefined,
+  executionUnitRefs: string[],
+  artifactRefs: string[],
+  recoverActions: string[],
+): { fallbackPolicy?: ComposedCapabilityFallbackPolicy; composedResult?: ComposedCapabilityResult } | undefined {
+  if (input.fallbackPolicy || input.composedResult) {
+    return {
+      fallbackPolicy: input.fallbackPolicy,
+      composedResult: input.composedResult,
+    };
+  }
+  const hasFallbackEvidence = Boolean(input.fallbackReason)
+    || finalStatus.startsWith('fallback-')
+    || Boolean(input.atomicTrace?.length)
+    || Boolean(input.fallbackCapabilities?.length)
+    || Boolean(input.repairAttempt)
+    || Boolean(input.schemaErrors?.length)
+    || Boolean(input.failureReason && finalStatus !== 'succeeded');
+  if (!hasFallbackEvidence) return undefined;
+  const fallbackCapabilities = fallbackCapabilitiesForEvent(input);
+  const validationResultRefs = validationResult?.resultRef ? [validationResult.resultRef] : [];
+  const atomicTrace = input.atomicTrace ?? fallbackCapabilities.map((capability) => ({
+    capabilityId: capability.id,
+    providerId: capability.providerId,
+    status: finalStatus === 'repair-failed' || finalStatus === 'failed' || finalStatus === 'fallback-failed' ? 'failed' : 'succeeded',
+    failureCode,
+    executionUnitRefs,
+    artifactRefs,
+    validationResult,
+  } satisfies ComposedCapabilityAtomicTrace));
+  const fallbackPolicy: ComposedCapabilityFallbackPolicy = {
+    atomicCapabilities: fallbackCapabilities,
+    fallbackToAtomicWhen: fallbackTriggersForEvent(failureCode),
+    doNotFallbackWhen: ['unsafe-side-effect', 'requires-human-approval', 'budget-exhausted'],
+    retryBudget: { maxRetries: 1, maxRepairAttempts: 1, maxFallbackAttempts: 1 },
+    fallbackContext: {
+      preserveArtifactRefs: artifactRefs,
+      preserveExecutionUnitRefs: executionUnitRefs,
+      validationResultRefs,
+      reason: input.fallbackReason ?? input.failureReason,
+    },
+  };
+  const composedResult: ComposedCapabilityResult = {
+    status: composedStatusForRecord(finalStatus),
+    failureCode,
+    fallbackable: finalStatus !== 'needs-human',
+    confidence: input.payload?.confidence,
+    recoverActions,
+    atomicTrace,
+    relatedRefs: {
+      runId: input.runId ?? input.taskId,
+      glueCodeRef: input.taskRel,
+      inputSchemaRefs: uniqueNonEmptyStrings([input.inputRel, ...(input.inputSchemaRefs ?? [])]),
+      outputSchemaRefs: uniqueNonEmptyStrings([input.outputRel, ...(input.outputSchemaRefs ?? [])]),
+      executionUnitRefs,
+      artifactRefs,
+      validationResultRefs,
+    },
+  };
+  return { fallbackPolicy, composedResult };
 }
 
 function finalStatusForCapabilityEvent(input: CapabilityEvolutionRuntimeEventInput): CapabilityEvolutionRecordStatus {
@@ -265,7 +319,9 @@ function validationResultForCapabilityEvent(
 }
 
 function failureCodeForCapabilityEvent(input: CapabilityEvolutionRuntimeEventInput) {
-  const text = `${input.failureReason ?? ''} ${(input.schemaErrors ?? []).join(' ')}`;
+  if (input.validationResult?.failureCode) return input.validationResult.failureCode;
+  if (input.composedResult?.failureCode) return input.composedResult.failureCode;
+  const text = `${input.failureReason ?? ''} ${input.fallbackReason ?? ''} ${(input.schemaErrors ?? []).join(' ')}`;
   if (input.schemaErrors?.length || /schema|contract|payload|validation/i.test(text)) return 'schema-invalid';
   if (/timeout|timed out|cancelled/i.test(text)) return 'timeout';
   if (/missing artifact|artifact/i.test(text)) return 'missing-artifact';
@@ -329,7 +385,7 @@ function artifactRefsForCapabilityEvent(input: CapabilityEvolutionRuntimeEventIn
 
 function compactCapabilityEventMetadata(input: CapabilityEvolutionRuntimeEventInput): Record<string, unknown> {
   return {
-    eventKind: input.repairAttempt ? 'repair-completion' : input.schemaErrors?.length ? 'validation-failure' : 'runtime-event',
+    eventKind: input.eventKind ?? (input.repairAttempt ? 'repair-completion' : input.schemaErrors?.length ? 'validation-failure' : 'runtime-event'),
     skillDomain: input.request.skillDomain,
     taskRef: input.taskRel,
     outputRef: input.outputRel,
@@ -337,6 +393,7 @@ function compactCapabilityEventMetadata(input: CapabilityEvolutionRuntimeEventIn
     stderrRef: input.stderrRel,
     exitCode: input.run?.exitCode,
     failureReasonPreview: compactText(input.failureReason ?? '', 500),
+    fallbackReasonPreview: compactText(input.fallbackReason ?? '', 500),
     schemaErrorCount: input.schemaErrors?.length ?? 0,
     runtimeFingerprint: compactRuntimeFingerprint(input.run?.runtimeFingerprint),
   };
@@ -373,6 +430,25 @@ function capabilityKindForSkill(skill: SkillAvailability) {
   if (/verifier/i.test(skill.id)) return 'verifier' as const;
   if (/tool|runner|agentserver/i.test(skill.id)) return 'tool' as const;
   return 'skill' as const;
+}
+
+function uniqueCapabilities(values: SelectedCapabilityRef[]) {
+  const byKey = new Map<string, SelectedCapabilityRef>();
+  for (const value of values) {
+    if (!value.id?.trim()) continue;
+    const key = `${value.id}:${value.role ?? ''}`;
+    if (!byKey.has(key)) byKey.set(key, value);
+  }
+  return [...byKey.values()];
+}
+
+function uniqueProviders(values: CapabilityProviderRef[]) {
+  const byId = new Map<string, CapabilityProviderRef>();
+  for (const value of values) {
+    if (!value.id?.trim()) continue;
+    if (!byId.has(value.id)) byId.set(value.id, value);
+  }
+  return [...byId.values()];
 }
 
 function sessionIdForRequest(request: GatewayRequest) {

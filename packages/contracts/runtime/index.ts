@@ -18,12 +18,47 @@ export type {
   ArtifactReferenceScope,
 } from './artifact-reference-policy';
 export {
+  CURRENT_REFERENCE_DIGEST_RECOVERY_CLAIM_TYPE,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_DETAIL,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_MESSAGE,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_EVIDENCE_LEVEL,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_LOG_LINE,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_REF_PATH,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_REPORT_ARTIFACT_ID,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_REPORT_ARTIFACT_TYPE,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_RUNTIME_LABEL,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_TOOL_ID,
   CURRENT_REFERENCE_GATE_TOOL_ID,
+  DIRECT_CONTEXT_FAST_PATH_POLICY,
   agentServerArtifactSelectionPromptPolicyLines,
   agentServerBibliographicVerificationPromptPolicyLines,
   agentServerCurrentReferencePromptPolicyLines,
   agentServerToolPayloadProtocolContractLines,
+  artifactDataForUnparsedPathText,
+  artifactDataReadRequestsForPolicy,
+  buildCurrentReferenceDigestRecoveryMarkdown,
+  buildCurrentReferenceDigestRecoveryPayload,
+  buildDirectContextFastPathItems,
+  currentReferenceDigestFailureCanRecover,
+  currentReferenceDigestRecoveryCandidates,
+  currentReferenceDigestRecoveryMarkdownSections,
   defaultArtifactSchemaForSkillDomain,
+  directContextFastPathMessage,
+  directContextFastPathSupportingRefs,
+  materializedMarkdownMetadataForArtifact,
+  materializedMarkdownTextForArtifact,
+  normalizeArtifactDataWithPolicy,
+} from './artifact-policy';
+export type {
+  ArtifactPolicyReadKind,
+  ArtifactPolicyReadRequest,
+  ArtifactPolicyReadResults,
+  ArtifactPolicyRecord,
+  CurrentReferenceDigestRecoveryCandidate,
+  CurrentReferenceDigestRecoveryPayloadRequest,
+  CurrentReferenceDigestRecoverySource,
+  DirectContextFastPathInputs,
+  DirectContextFastPathItem,
 } from './artifact-policy';
 export type {
   BackendArtifactToolName,
@@ -148,6 +183,11 @@ export type {
   CapabilityValidatorManifest,
 } from './capability-manifest';
 export {
+  CAPABILITY_EVOLUTION_BROKER_DIGEST_CONTRACT_ID,
+  CAPABILITY_EVOLUTION_COMPACT_SUMMARY_CONTRACT_ID,
+  CAPABILITY_EVOLUTION_RECORD_CONTRACT_ID,
+} from './capability-evolution';
+export {
   CAPABILITY_MANIFEST_CONTRACT_ID,
   CORE_CAPABILITY_MANIFESTS,
   capabilityManifestSchema,
@@ -187,6 +227,22 @@ export type {
   BackgroundCompletionRef,
   BackgroundCompletionRuntimeEvent,
   BackgroundCompletionStatus,
+  WorkspaceRuntimeCompletionStatus,
+  WorkspaceRuntimeResultCompletion,
+} from './events';
+export {
+  PROJECT_TOOL_FAILED_EVENT_TYPE,
+  WORKSPACE_RUNTIME_EVENT_TYPE,
+  compactCapabilityForBackend,
+  firstBlockingRuntimeResultReason,
+  normalizeRuntimeCompactCapability,
+  normalizeRuntimeContextCompactionStatus,
+  normalizeRuntimeContextWindowSource,
+  normalizeRuntimeContextWindowStatus,
+  projectToolFailureDetail,
+  runtimeDetailIndicatesAbort,
+  runtimeStreamEventLabel,
+  workspaceRuntimeResultCompletion,
 } from './events';
 export type {
   GuidanceQueueRecord,

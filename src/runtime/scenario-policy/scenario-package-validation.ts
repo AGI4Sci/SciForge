@@ -1,20 +1,22 @@
-import type { ElementRegistry, RegistryValidationIssue } from './elementTypes';
-import { elementRegistry } from './elementRegistry';
-import type { ScenarioPackage } from './scenarioPackage';
-import { validateUIPlanAgainstScenario } from './uiPlanCompiler';
-import { SCENARIO_VALIDATION_ISSUE_CODES, SCENARIO_VALIDATION_MESSAGES } from './validationIssuePolicy';
+import { elementRegistry } from '@sciforge/scenario-core/element-registry';
+import type { ElementRegistry, RegistryValidationIssue } from '@sciforge/scenario-core/element-types';
+import type { ScenarioPackage } from '@sciforge/scenario-core/scenario-package';
+import { validateUIPlanAgainstScenario } from '@sciforge/scenario-core/ui-plan-compiler';
+import { SCENARIO_VALIDATION_ISSUE_CODES, SCENARIO_VALIDATION_MESSAGES } from '@sciforge/scenario-core/validation-issue-policy';
 
-export interface ValidationReport {
+import { findScenarioPackagePolicyOnlyViolations } from './scenario-package-policy.js';
+
+export interface ScenarioPackageValidationReport {
   ok: boolean;
   issues: RegistryValidationIssue[];
   checkedAt: string;
 }
 
-export function validateScenarioPackage(
+export function validateRuntimeScenarioPackage(
   pkg: ScenarioPackage,
   registry: ElementRegistry = elementRegistry,
   checkedAt = new Date().toISOString(),
-): ValidationReport {
+): ScenarioPackageValidationReport {
   const issues: RegistryValidationIssue[] = [];
   const artifactTypes = new Set(registry.artifacts.map((artifact) => artifact.artifactType));
   const skillIds = new Set(registry.skills.map((skill) => skill.id));
@@ -53,6 +55,14 @@ export function validateScenarioPackage(
 
   if (!pkg.tests.length) {
     issues.push({ severity: 'warning', code: SCENARIO_VALIDATION_ISSUE_CODES.missingSmokeTest, message: SCENARIO_VALIDATION_MESSAGES.missingSmokeTest });
+  }
+
+  for (const violation of findScenarioPackagePolicyOnlyViolations(pkg)) {
+    issues.push({
+      severity: 'error',
+      code: SCENARIO_VALIDATION_ISSUE_CODES.policyOnlyViolation,
+      message: violation,
+    });
   }
 
   return {

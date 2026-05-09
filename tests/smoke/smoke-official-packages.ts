@@ -5,18 +5,18 @@ import {
   buildBuiltInScenarioPackage,
   SCENARIO_PACKAGE_POLICY_FIELDS,
 } from '@sciforge/scenario-core/scenario-package';
-import { validateScenarioPackage } from '@sciforge/scenario-core/validation-gate';
 import {
   findScenarioPackagePolicyOnlyViolations,
   withScenarioPackagePolicy,
 } from '../../src/runtime/scenario-policy/scenario-package-policy.js';
+import { validateRuntimeScenarioPackage } from '../../src/runtime/scenario-policy/scenario-package-validation.js';
 import { runScenarioRuntimeSmoke } from './scenario-runtime-smoke-harness';
 
 const scenarioIds = scenarios.map((scenario) => scenario.id);
 
 for (const scenarioId of scenarioIds) {
   const pkg = withScenarioPackagePolicy(buildBuiltInScenarioPackage(scenarioId as ScenarioId, '2026-04-25T00:00:00.000Z'));
-  const validation = validateScenarioPackage(pkg);
+  const validation = validateRuntimeScenarioPackage(pkg);
   assert.equal(validation.ok, true, `${scenarioId} package should pass validation`);
   assert.equal(pkg.status, 'published', `${scenarioId} package should be published`);
   assert.equal(pkg.scenario.id, scenarioId);
@@ -63,6 +63,17 @@ const executionCodeViolations = findScenarioPackagePolicyOnlyViolations({
 assert.ok(
   executionCodeViolations.some((violation) => violation.includes('policy.executionCode')),
   'scenario packages must reject embedded execution code',
+);
+assert.equal(
+  validateRuntimeScenarioPackage(({
+    ...policyOnlyFixture,
+    policy: {
+      ...policyOnlyFixture.policy,
+      executionCode: 'await runScenario();',
+    },
+  }) as typeof policyOnlyFixture).ok,
+  false,
+  'runtime scenario package validation must reject embedded execution code',
 );
 
 const promptRegexViolations = findScenarioPackagePolicyOnlyViolations({

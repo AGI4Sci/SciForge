@@ -11,6 +11,10 @@ import type {
   CapabilityPromotionCandidate,
   CapabilityAtomicTraceSummary,
 } from '../../packages/contracts/runtime/capability-evolution.js';
+import {
+  CAPABILITY_EVOLUTION_BROKER_DIGEST_CONTRACT_ID,
+  CAPABILITY_EVOLUTION_COMPACT_SUMMARY_CONTRACT_ID,
+} from '../../packages/contracts/runtime/capability-evolution.js';
 import { normalizeWorkspaceRootPath } from './workspace-paths.js';
 
 export const CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH = '.sciforge/capability-evolution-ledger/records.jsonl';
@@ -98,7 +102,7 @@ export async function buildCapabilityEvolutionCompactSummary(
   }
   const compactRecordsWithProposals = applyCapabilityEvolutionPromotionProposals(records, compactRecords);
   return {
-    schemaVersion: 'sciforge.capability-evolution-compact-summary.v1',
+    schemaVersion: CAPABILITY_EVOLUTION_COMPACT_SUMMARY_CONTRACT_ID,
     generatedAt: (options.now ?? (() => new Date()))().toISOString(),
     sourceRef,
     totalRecords: records.length,
@@ -140,7 +144,7 @@ export function sanitizeCapabilityEvolutionCompactSummaryForBroker(
   value: unknown,
   options: { maxRecords?: number; maxPromotionCandidates?: number } = {},
 ): CapabilityEvolutionCompactSummary | undefined {
-  if (!isJsonRecord(value) || value.schemaVersion !== 'sciforge.capability-evolution-compact-summary.v1') return undefined;
+  if (!isJsonRecord(value) || value.schemaVersion !== CAPABILITY_EVOLUTION_COMPACT_SUMMARY_CONTRACT_ID) return undefined;
   const maxRecords = Math.max(0, options.maxRecords ?? 8);
   const maxPromotionCandidates = Math.max(0, options.maxPromotionCandidates ?? 4);
   const recentRecords = toJsonRecordList(value.recentRecords)
@@ -152,7 +156,7 @@ export function sanitizeCapabilityEvolutionCompactSummaryForBroker(
     .filter((record): record is CapabilityEvolutionCompactRecord => Boolean(record?.promotionCandidate?.eligible))
     .slice(-maxPromotionCandidates);
   return {
-    schemaVersion: 'sciforge.capability-evolution-compact-summary.v1',
+    schemaVersion: CAPABILITY_EVOLUTION_COMPACT_SUMMARY_CONTRACT_ID,
     generatedAt: stringValue(value.generatedAt) ?? new Date(0).toISOString(),
     sourceRef: stringValue(value.sourceRef),
     totalRecords: numberValue(value.totalRecords) ?? recentRecords.length,
@@ -169,7 +173,7 @@ export function buildCapabilityEvolutionBrokerDigest(
 ): CapabilityEvolutionBrokerDigest {
   const records = [...summary.recentRecords, ...summary.promotionCandidates];
   return {
-    schemaVersion: 'sciforge.capability-evolution-broker-digest.v1',
+    schemaVersion: CAPABILITY_EVOLUTION_BROKER_DIGEST_CONTRACT_ID,
     generatedAt: summary.generatedAt,
     sourceRef: summary.sourceRef,
     totalRecords: summary.totalRecords,

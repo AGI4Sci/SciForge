@@ -3,7 +3,22 @@ import { createReadStream } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, dirname, extname, join, resolve } from 'node:path';
-import type { ArtifactPreviewAction, PreviewDescriptor } from '@sciforge-ui/runtime-contract/preview';
+import {
+  STRUCTURE_BUNDLE_PREVIEW_DERIVATIVE_KIND,
+  canReadPreviewAsText,
+  derivativeDescriptorsForPreviewTarget,
+  inlinePolicyForPreviewKind,
+  locatorHintsForPreviewKind,
+  previewActionsForPreviewKind,
+  previewDerivativeExtensionForKind,
+  previewDerivativeMimeTypeForKind,
+  previewDescriptorKindForPath,
+  previewKindHasJsonSchema,
+  previewKindHasTableSchema,
+  previewKindSupportsStructureBundle,
+  previewStructureBundleStatus,
+} from '@sciforge-ui/artifact-preview';
+import type { PreviewDescriptor } from '@sciforge-ui/runtime-contract/preview';
 import { normalizeWorkspaceRootPath, resolveWorkspacePreviewRef } from '../workspace-paths.js';
 
 export function languageForPath(path: string) {
@@ -51,7 +66,7 @@ export function previewRequestBaseUrl(req: IncomingMessage, fallbackPort: number
 export async function previewDescriptorForRef(rawRef: string, workspacePath: string, baseUrl: string): Promise<PreviewDescriptor> {
   const filePath = resolveWorkspacePreviewRef(rawRef, workspacePath);
   const info = await stat(filePath);
-  const kind = previewKindForPath(filePath, info.isDirectory());
+  const kind = previewDescriptorKindForPath(filePath, info.isDirectory());
   const mimeType = info.isDirectory() ? 'inode/directory' : mimeTypeForPath(filePath);
   const hash = info.isFile() ? await fileHash(filePath, info.size) : undefined;
   const rawUrl = new URL(`${baseUrl}/api/sciforge/preview/raw`);
@@ -66,10 +81,10 @@ export async function previewDescriptorForRef(rawRef: string, workspacePath: str
     hash,
     title: basename(filePath),
     rawUrl: info.isFile() ? rawUrl.toString() : undefined,
-    inlinePolicy: inlinePolicyForPreview(kind, info.size),
-    derivatives: derivativeDescriptorsForPreview(filePath, kind, info.size),
-    actions: previewActionsForKind(kind),
-    locatorHints: locatorHintsForKind(kind),
+    inlinePolicy: inlinePolicyForPreviewKind(kind, info.size),
+    derivatives: derivativeDescriptorsForPreviewTarget(filePath, kind, info.size, mimeType),
+    actions: previewActionsForPreviewKind(kind),
+    locatorHints: locatorHintsForPreviewKind(kind),
     diagnostics: info.isFile() && info.size > 25 * 1024 * 1024 && (kind === 'pdf' || kind === 'image')
       ? ['Large file uses streaming preview; derived text/thumb/page indexes are generated only on demand.']
       : [],
@@ -79,13 +94,13 @@ export async function previewDescriptorForRef(rawRef: string, workspacePath: str
 export async function previewDerivativeForRef(rawRef: string, workspacePath: string, kind: string) {
   const filePath = resolveWorkspacePreviewRef(rawRef, workspacePath);
   const info = await stat(filePath);
-  const previewKind = previewKindForPath(filePath, info.isDirectory());
+  const previewKind = previewDescriptorKindForPath(filePath, info.isDirectory());
   const cacheDir = join(workspacePath.trim() ? normalizeWorkspaceRootPath(resolve(workspacePath)) : dirname(filePath), '.sciforge', 'preview-cache');
   await mkdir(cacheDir, { recursive: true });
   const cacheKey = createHash('sha256').update(JSON.stringify({ filePath, mtime: info.mtimeMs, size: info.size, kind })).digest('hex').slice(0, 24);
-  const outPath = join(cacheDir, `${cacheKey}.${derivativeExtension(kind, previewKind, filePath)}`);
+  const outPath = join(cacheDir, `${cacheKey}.${previewDerivativeExtensionForKind(kind, previewKind, filePath)}`);
   const existing = await stat(outPath).catch(() => undefined);
-  if (existing?.isFile()) return derivativeRecord(kind, outPath, existing.size, 'available', derivativeMimeType(kind, previewKind, filePath));
+  if (existing?.isFile()) return derivativeRecord(kind, outPath, existing.size, 'available', previewDerivativeMimeTypeForKind(kind, previewKind, mimeTypeForPath(filePath)));
   if (kind === 'metadata') {
     await writeFile(outPath, JSON.stringify({ path: filePath, name: basename(filePath), previewKind, mimeType: mimeTypeForPath(filePath), sizeBytes: info.size, modifiedAt: info.mtime.toISOString() }, null, 2), 'utf8');
   } else if (kind === 'schema') {
@@ -102,13 +117,13 @@ export async function previewDerivativeForRef(rawRef: string, workspacePath: str
     }
   } else if (kind === 'html') {
     await writeFile(outPath, await htmlPreviewForFile(filePath, previewKind), 'utf8');
-  } else if (kind === 'structure-bundle') {
+  } else if (kind === STRUCTURE_BUNDLE_PREVIEW_DERIVATIVE_KIND) {
     await writeFile(outPath, JSON.stringify(await structureBundleForFile(filePath, previewKind), null, 2), 'utf8');
   } else {
     throw new Error(`Unsupported derivative kind: ${kind}`);
   }
   const generated = await stat(outPath);
-  return derivativeRecord(kind, outPath, generated.size, 'available', derivativeMimeType(kind, previewKind, filePath));
+  return derivativeRecord(kind, outPath, generated.size, 'available', previewDerivativeMimeTypeForKind(kind, previewKind, mimeTypeForPath(filePath)));
 }
 
 export function streamWorkspacePreviewFile(req: IncomingMessage, res: ServerResponse, path: string, size: number) {
@@ -174,38 +189,19 @@ function derivativeRecord(kind: string, path: string, sizeBytes: number, status:
   };
 }
 
-function derivativeExtension(kind: string, previewKind: string, path: string) {
-  if (kind === 'thumb' && previewKind === 'image') {
-    const ext = extname(path).toLowerCase().replace(/^\./, '');
-    return ext || 'bin';
-  }
-  if (kind === 'thumb') return 'svg';
-  if (kind === 'html') return 'html';
-  if (kind === 'schema' || kind === 'pages' || kind === 'metadata' || kind === 'structure-bundle') return 'json';
-  return 'txt';
-}
-
-function derivativeMimeType(kind: string, previewKind: string, path: string) {
-  if (kind === 'thumb' && previewKind === 'image') return mimeTypeForPath(path);
-  if (kind === 'thumb') return 'image/svg+xml';
-  if (kind === 'html') return 'text/html';
-  if (kind === 'schema' || kind === 'pages' || kind === 'metadata' || kind === 'structure-bundle') return 'application/json';
-  return 'text/plain';
-}
-
 async function textPreviewForFile(path: string, previewKind: string) {
-  if (previewKind === 'text' || previewKind === 'markdown' || previewKind === 'html' || previewKind === 'json' || previewKind === 'table') {
+  if (canReadPreviewAsText(previewKind as PreviewDescriptor['kind'])) {
     return (await readFile(path, 'utf8')).slice(0, 200_000);
   }
   return `Text extraction is not available for ${previewKind} without an optional parser. Use rawUrl/system-open or request a task-specific extractor.`;
 }
 
 async function schemaPreviewForFile(path: string, previewKind: string) {
-  if (previewKind === 'json') {
+  if (previewKindHasJsonSchema(previewKind as PreviewDescriptor['kind'])) {
     const parsed = JSON.parse(await readFile(path, 'utf8')) as unknown;
     return summarizeJsonSchema(parsed);
   }
-  if (previewKind === 'table') {
+  if (previewKindHasTableSchema(previewKind as PreviewDescriptor['kind'])) {
     const text = await readFile(path, 'utf8');
     const rows = text.split(/\r?\n/).filter(Boolean).slice(0, 25).map((line) => line.split(extname(path).toLowerCase() === '.tsv' ? '\t' : ','));
     return { rowsPreviewed: rows.length, columns: rows[0]?.map((name, index) => ({ index, name: name || `column_${index + 1}` })) ?? [] };
@@ -220,7 +216,8 @@ async function htmlPreviewForFile(path: string, previewKind: string) {
 }
 
 async function structureBundleForFile(path: string, previewKind: string) {
-  const text = previewKind === 'structure' ? (await readFile(path, 'utf8')).slice(0, 200_000) : '';
+  const kind = previewKind as PreviewDescriptor['kind'];
+  const text = previewKindSupportsStructureBundle(kind) ? (await readFile(path, 'utf8')).slice(0, 200_000) : '';
   const chains = Array.from(new Set(Array.from(text.matchAll(/^(?:ATOM|HETATM).{17}(.).*/gm)).map((match) => match[1].trim()).filter(Boolean)));
   return {
     path,
@@ -229,7 +226,7 @@ async function structureBundleForFile(path: string, previewKind: string) {
     format: extname(path).replace(/^\./, ''),
     chains,
     rawRef: path,
-    status: previewKind === 'structure' ? 'metadata-only-bundle' : 'unsupported',
+    status: previewStructureBundleStatus(kind),
   };
 }
 
@@ -261,64 +258,6 @@ function summarizeJsonSchema(value: unknown): unknown {
     };
   }
   return { type: value === null ? 'null' : typeof value };
-}
-
-function previewKindForPath(path: string, isDirectory = false): PreviewDescriptor['kind'] {
-  if (isDirectory) return 'folder';
-  const ext = extname(path).toLowerCase();
-  if (ext === '.pdf') return 'pdf';
-  if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'].includes(ext)) return 'image';
-  if (['.md', '.markdown'].includes(ext)) return 'markdown';
-  if (['.json', '.jsonl'].includes(ext)) return 'json';
-  if (['.csv', '.tsv', '.xlsx', '.xls'].includes(ext)) return 'table';
-  if (['.html', '.htm'].includes(ext)) return 'html';
-  if (['.pdb', '.cif', '.mmcif'].includes(ext)) return 'structure';
-  if (['.doc', '.docx', '.ppt', '.pptx'].includes(ext)) return 'office';
-  if (['.txt', '.log', '.ts', '.tsx', '.js', '.jsx', '.py', '.r', '.sh', '.css'].includes(ext)) return 'text';
-  return 'binary';
-}
-
-function inlinePolicyForPreview(kind: PreviewDescriptor['kind'], size: number): PreviewDescriptor['inlinePolicy'] {
-  if (kind === 'pdf' || kind === 'image') return 'stream';
-  if (kind === 'markdown' || kind === 'text' || kind === 'json' || kind === 'table' || kind === 'html') return size <= 1024 * 1024 ? 'inline' : 'extract';
-  if (kind === 'folder') return 'extract';
-  if (kind === 'office' || kind === 'structure') return 'external';
-  return 'unsupported';
-}
-
-function derivativeDescriptorsForPreview(path: string, kind: PreviewDescriptor['kind'], size: number): PreviewDescriptor['derivatives'] {
-  const lazy = (derivativeKind: NonNullable<PreviewDescriptor['derivatives']>[number]['kind'], mimeType: string) => ({
-    kind: derivativeKind,
-    ref: `${path}#${derivativeKind}`,
-    mimeType,
-    status: 'lazy' as const,
-  });
-  if (kind === 'pdf') return [lazy('text', 'text/plain'), lazy('pages', 'application/json'), lazy('thumb', 'image/png')];
-  if (kind === 'image') return [lazy('thumb', mimeTypeForPath(path))];
-  if (kind === 'json') return [lazy('schema', 'application/json'), ...(size > 1024 * 1024 ? [lazy('text', 'text/plain')] : [])];
-  if (kind === 'table') return [lazy('schema', 'application/json')];
-  if (kind === 'markdown' || kind === 'text' || kind === 'html') return size > 1024 * 1024 ? [lazy('text', 'text/plain')] : [];
-  if (kind === 'structure') return [lazy('metadata', 'application/json'), lazy('structure-bundle', 'application/json')];
-  if (kind === 'office' || kind === 'folder' || kind === 'binary') return [lazy('metadata', 'application/json')];
-  return [];
-}
-
-function previewActionsForKind(kind: PreviewDescriptor['kind']): ArtifactPreviewAction[] {
-  const common: ArtifactPreviewAction[] = ['system-open', 'copy-ref', 'inspect-metadata'];
-  if (kind === 'pdf') return ['open-inline', 'extract-text', 'make-thumbnail', 'select-page', 'select-region', ...common];
-  if (kind === 'image') return ['open-inline', 'make-thumbnail', 'select-region', ...common];
-  if (kind === 'table') return ['open-inline', 'select-rows', ...common];
-  if (kind === 'markdown' || kind === 'text' || kind === 'json' || kind === 'html') return ['open-inline', 'extract-text', ...common];
-  return common;
-}
-
-function locatorHintsForKind(kind: PreviewDescriptor['kind']): PreviewDescriptor['locatorHints'] {
-  if (kind === 'pdf') return ['page', 'region'];
-  if (kind === 'image') return ['region'];
-  if (kind === 'table') return ['row-range', 'column-range'];
-  if (kind === 'structure') return ['structure-selection'];
-  if (kind === 'markdown' || kind === 'text' || kind === 'json' || kind === 'html') return ['text-range'];
-  return [];
 }
 
 async function fileHash(path: string, size: number) {

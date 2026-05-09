@@ -1,6 +1,7 @@
 import { compactAgentContext } from '../../api/agentClient';
 import { sendSciForgeToolMessage } from '../../api/sciforgeToolsClient';
 import { buildContextCompactionFailureResult, buildContextCompactionOutcome } from '../../contextCompaction';
+import { PROJECT_TOOL_FAILED_EVENT_TYPE, projectToolFailureDetail, runtimeDetailIndicatesAbort } from '@sciforge-ui/runtime-contract';
 import { estimateContextWindowState, latestContextWindowState, shouldStartContextCompaction } from '../../contextWindow';
 import type { ScenarioId } from '../../data';
 import { latestLatencyPolicy, latestResponsePlan } from '../../latencyPolicy';
@@ -155,7 +156,7 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
   } catch (err) {
     const rawMessage = err instanceof Error ? err.message : String(err);
     const wasUserInterrupted = input.userAbortRequested();
-    const wasSystemInterrupted = !wasUserInterrupted && (input.signal.aborted || /cancel|abort|已取消|cancelled|canceled/i.test(rawMessage));
+    const wasSystemInterrupted = !wasUserInterrupted && (input.signal.aborted || runtimeDetailIndicatesAbort(rawMessage));
     const message = wasUserInterrupted
       ? '用户已中断当前 backend 运行。'
       : wasSystemInterrupted
@@ -343,12 +344,12 @@ export async function runWithBackendFallback(
     return await sendSciForgeToolMessage(request, { onEvent }, signal);
   } catch (projectToolError) {
     const detail = projectToolError instanceof Error ? projectToolError.message : String(projectToolError);
-    if (/cancel|abort|已取消|cancelled|canceled/i.test(detail)) throw projectToolError;
+    if (runtimeDetailIndicatesAbort(detail)) throw projectToolError;
     emitEvent({
       id: makeId('evt'),
-      type: 'project-tool-failed',
+      type: PROJECT_TOOL_FAILED_EVENT_TYPE,
       label: '项目工具',
-      detail: `SciForge project tool unavailable: ${detail}`,
+      detail: projectToolFailureDetail(detail),
       createdAt: nowIso(),
       raw: { error: detail },
     });

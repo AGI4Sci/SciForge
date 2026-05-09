@@ -16,6 +16,26 @@ import { evaluateGuidanceAdoption } from './guidance-adoption-guard.js';
 import { materializeBackendPayloadOutput, type RuntimeRefBundle } from './artifact-materializer.js';
 import { recordCapabilityEvolutionRuntimeEvent } from './capability-evolution-events.js';
 import { reportRuntimeResultViewSlots } from '../../../packages/presentation/interactive-views';
+import {
+  CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_DETAIL,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_MESSAGE,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_LOG_LINE,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_REF_PATH,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_REPORT_ARTIFACT_ID,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_RUNTIME_LABEL,
+  buildCurrentReferenceDigestRecoveryPayload,
+  currentReferenceDigestFailureCanRecover,
+  currentReferenceDigestRecoveryCandidates,
+  type CurrentReferenceDigestRecoverySource,
+} from '../../../packages/contracts/runtime/artifact-policy';
+import {
+  agentServerGeneratedEntrypointContractReason,
+  agentServerGeneratedTaskInterfaceContractReason,
+  agentServerGeneratedTaskRetryDetail,
+  agentServerPathOnlyStrictRetryDirectPayloadReason,
+  agentServerPathOnlyStrictRetryStillMissingReason,
+  agentServerPathOnlyTaskFilesReason,
+} from '../../../packages/skills/runtime-policy';
 
 type AgentServerGenerationResult =
   | { ok: true; runId?: string; response: AgentServerGenerationResponse }
@@ -107,17 +127,17 @@ export async function runAgentServerGeneratedTask(
         type: 'agentserver-digest-recovery',
         source: 'workspace-runtime',
         status: 'self-healed',
-        message: 'AgentServer did not converge, so SciForge recovered from bounded current-reference digests.',
-        detail: 'The recovery output keeps the same user-visible contract: report artifact, object references, and execution audit.',
+        message: CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_MESSAGE,
+        detail: CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_DETAIL,
       });
       const recoveryRefs = backendPayloadRefs(
         stableAgentServerPayloadTaskId('digest-recovery', request, skill, sha1(request.prompt).slice(0, 8)),
-        'agentserver://current-reference-digest-recovery',
+        `agentserver://${CURRENT_REFERENCE_DIGEST_RECOVERY_REF_PATH}`,
       );
-      await writeBackendPayloadLogs(workspace, recoveryRefs, 'SciForge recovered from bounded current-reference digests.\n');
+      await writeBackendPayloadLogs(workspace, recoveryRefs, CURRENT_REFERENCE_DIGEST_RECOVERY_LOG_LINE);
       const normalizedRecovery = await validateAndNormalizePayload(digestRecovery, request, skill, {
         ...recoveryRefs,
-        runtimeFingerprint: { runtime: 'SciForge current-reference digest recovery', error: generation.error },
+        runtimeFingerprint: { runtime: CURRENT_REFERENCE_DIGEST_RECOVERY_RUNTIME_LABEL, error: generation.error },
       });
       return await materializeBackendPayloadOutput(workspace, request, normalizedRecovery, recoveryRefs);
     }
@@ -217,14 +237,14 @@ export async function runAgentServerGeneratedTask(
     return await materializeBackendPayloadOutput(workspace, request, completed, directRefs);
   }
 
-  const nonExecutableEntrypointReason = generatedEntrypointContractReason(generation.response);
+  const nonExecutableEntrypointReason = agentServerGeneratedEntrypointContractReason(generation.response, { normalizePath: safeWorkspaceRel });
   if (nonExecutableEntrypointReason) {
     emitWorkspaceRuntimeEvent(callbacks, {
       type: 'agentserver-generation-retry',
       source: 'workspace-runtime',
       status: 'running',
       message: nonExecutableEntrypointReason,
-      detail: 'Retrying AgentServer generation once; entrypoint must be executable code, while reports/data must be emitted as artifacts or direct ToolPayload content.',
+      detail: agentServerGeneratedTaskRetryDetail('entrypoint'),
     });
     const retriedGeneration = await requestAgentServerGeneration({
       baseUrl,
@@ -253,7 +273,7 @@ export async function runAgentServerGeneratedTask(
       return await materializeBackendPayloadOutput(workspace, request, normalizedDirect, retryDirectRefs);
     }
     generation = retriedGeneration;
-    const retryReason = generatedEntrypointContractReason(generation.response);
+    const retryReason = agentServerGeneratedEntrypointContractReason(generation.response, { normalizePath: safeWorkspaceRel });
     if (retryReason) {
       return repairNeededPayload(request, skill, `AgentServer generation contract violation: ${nonExecutableEntrypointReason}. Strict retry still returned invalid entrypoint: ${retryReason}`);
     }
@@ -261,13 +281,13 @@ export async function runAgentServerGeneratedTask(
 
   const missingPathOnlyTaskFiles = await missingGeneratedTaskFileContents(workspace, generation.response.taskFiles);
   if (missingPathOnlyTaskFiles.length) {
-    const reason = `AgentServer returned path-only taskFiles that were not present in the workspace and had no inline content: ${missingPathOnlyTaskFiles.join(', ')}`;
+    const reason = agentServerPathOnlyTaskFilesReason(missingPathOnlyTaskFiles);
     emitWorkspaceRuntimeEvent(callbacks, {
       type: 'agentserver-generation-retry',
       source: 'workspace-runtime',
       status: 'running',
       message: reason,
-      detail: 'Retrying AgentServer generation once; taskFiles must include inline content or be physically written before returning.',
+      detail: agentServerGeneratedTaskRetryDetail('path-only-task-files'),
     });
     const retriedGeneration = await requestAgentServerGeneration({
       baseUrl,
@@ -285,16 +305,13 @@ export async function runAgentServerGeneratedTask(
       return repairNeededPayload(
         request,
         skill,
-        `${reason}. Strict retry returned a direct ToolPayload instead of executable taskFiles.`,
+        agentServerPathOnlyStrictRetryDirectPayloadReason(reason),
       );
     }
     generation = retriedGeneration;
     const stillMissingPathOnlyTaskFiles = await missingGeneratedTaskFileContents(workspace, generation.response.taskFiles);
     if (stillMissingPathOnlyTaskFiles.length) {
-      const contractReason = [
-        reason,
-        `Strict retry still returned path-only taskFiles without inline content or workspace files: ${stillMissingPathOnlyTaskFiles.join(', ')}`,
-      ].join('. ');
+      const contractReason = agentServerPathOnlyStrictRetryStillMissingReason(reason, stillMissingPathOnlyTaskFiles);
       return repairNeededPayload(request, skill, `AgentServer generation contract violation: ${contractReason}`);
     }
   }
@@ -306,7 +323,7 @@ export async function runAgentServerGeneratedTask(
       source: 'workspace-runtime',
       status: 'running',
       message: taskInterfaceReason,
-      detail: 'Retrying AgentServer generation once; generated tasks must consume the SciForge task input and write the declared output payload, not bake the current answer into static code.',
+      detail: agentServerGeneratedTaskRetryDetail('task-interface'),
     });
     const retriedGeneration = await requestAgentServerGeneration({
       baseUrl,
@@ -613,6 +630,10 @@ export async function runAgentServerGeneratedTask(
         baseUrl,
         workspace,
         payload: normalized,
+        primaryTaskId: taskId,
+        primaryRunId: generation.runId,
+        primaryRun: run,
+        primaryRefs: { taskRel, outputRel, stdoutRel, stderrRel },
         expectedArtifactTypes: generatedSupplementScope,
         callbacks,
         deps,
@@ -648,6 +669,24 @@ export async function runAgentServerGeneratedTask(
         patchSummary: generation.response.patchSummary,
       } : unit),
     };
+    await writeCapabilityEvolutionEventBestEffort({
+      workspacePath: workspace,
+      request,
+      skill,
+      taskId,
+      runId: generation.runId,
+      run,
+      payload: completed,
+      taskRel,
+      inputRel: `.sciforge/task-inputs/${taskId}.json`,
+      outputRel,
+      stdoutRel,
+      stderrRel,
+      finalStatus: 'succeeded',
+      recoverActions: ['record-successful-dynamic-glue', 'preserve-runtime-evidence-refs'],
+      eventKind: 'dynamic-glue-execution',
+      promotionReason: 'Successful dynamic glue execution is ledger evidence; repeated compatible records can become promotion candidates.',
+    });
     return await materializeBackendPayloadOutput(workspace, request, completed, { taskRel, outputRel, stdoutRel, stderrRel });
   } catch (error) {
     const failureReason = `AgentServer generated task output could not be parsed: ${errorMessage(error)}`;
@@ -808,35 +847,26 @@ async function currentReferenceDigestRecoveryPayload(
   workspace: string,
   failureReason: string,
 ): Promise<ToolPayload | undefined> {
-  if (!/convergence guard|silent stream guard|context window|token/i.test(failureReason)) return undefined;
-  const digests = toRecordList(request.uiState?.currentReferenceDigests)
-    .filter((entry) => /^(ok|ready)$/i.test(String(entry.status || '')));
-  if (!digests.length) return undefined;
-  const sources: Array<{ sourceRef: string; digestRef: string; text: string }> = [];
-  for (const digest of digests.slice(0, 6)) {
-    const digestRef = typeof digest.digestRef === 'string'
-      ? digest.digestRef.replace(/^file:/, '')
-      : typeof digest.clickableRef === 'string'
-        ? digest.clickableRef.replace(/^file:/, '')
-        : typeof digest.path === 'string'
-          ? digest.path
-          : '';
-    const inlineText = typeof digest.digestText === 'string' ? digest.digestText : '';
-    if (inlineText.trim()) {
+  if (!currentReferenceDigestFailureCanRecover(failureReason)) return undefined;
+  const candidates = currentReferenceDigestRecoveryCandidates(request.uiState?.currentReferenceDigests);
+  if (!candidates.length) return undefined;
+  const sources: CurrentReferenceDigestRecoverySource[] = [];
+  for (const digest of candidates) {
+    if (digest.inlineText) {
       sources.push({
-        sourceRef: String(digest.sourceRef || digestRef || digest.id || 'current-reference'),
-        digestRef: digestRef || String(digest.clickableRef || digest.sourceRef || digest.id || 'current-reference'),
-        text: inlineText,
+        sourceRef: digest.sourceRef,
+        digestRef: digest.digestRef,
+        text: digest.inlineText,
       });
       continue;
     }
-    if (digestRef) {
-      const abs = resolve(workspace, safeWorkspaceRel(digestRef));
+    if (digest.digestRef) {
+      const abs = resolve(workspace, safeWorkspaceRel(digest.digestRef));
       try {
         const text = await readFile(abs, 'utf8');
         sources.push({
-          sourceRef: String(digest.sourceRef || digestRef),
-          digestRef,
+          sourceRef: digest.sourceRef,
+          digestRef: digest.digestRef,
           text,
         });
       } catch {
@@ -845,199 +875,18 @@ async function currentReferenceDigestRecoveryPayload(
     }
   }
   if (!sources.length) return undefined;
-  const markdown = buildDigestRecoveryMarkdown(request, sources, failureReason);
-  const reportId = 'research-report';
-  const digestRefs = sources.flatMap((source) => [
-    { id: `source-${sha1(source.sourceRef).slice(0, 8)}`, kind: 'file', title: source.sourceRef.split('/').pop() || source.sourceRef, ref: `file:${source.sourceRef}` },
-    { id: `digest-${sha1(source.digestRef).slice(0, 8)}`, kind: 'file', title: source.digestRef.split('/').pop() || source.digestRef, ref: `file:${source.digestRef}` },
-  ]);
-  return {
-    message: firstParagraph(markdown) || '已根据本轮引用摘要生成恢复性结果。',
-    confidence: 0.68,
-    claimType: 'current-reference-digest-recovery',
-    evidenceLevel: 'bounded-current-reference-digest',
-    reasoningTrace: [
-      'AgentServer generation was stopped by convergence guard.',
-      'SciForge recovered from bounded current-reference digests instead of replaying full files into the backend context.',
-      `Failure reason: ${failureReason}`,
-    ].join('\n'),
-    claims: [{
-      text: firstParagraph(markdown) || 'Current-reference digest recovery produced a report from bounded workspace refs.',
-      type: 'inference',
-      confidence: 0.68,
-      evidenceLevel: 'bounded-current-reference-digest',
-      supportingRefs: sources.map((source) => `file:${source.sourceRef}`),
-      opposingRefs: [],
-    }],
-    uiManifest: reportRuntimeResultViewSlots(reportId, `${request.skillDomain}-runtime-result`),
-    executionUnits: [{
-      id: `current-reference-digest-recovery-${sha1(markdown).slice(0, 8)}`,
-      status: 'self-healed',
-      tool: 'sciforge.current-reference-digest-recovery',
-      params: JSON.stringify({
-        skillId: skill.id,
-        sourceRefs: sources.map((source) => source.sourceRef),
-        digestRefs: sources.map((source) => source.digestRef),
-      }),
-      stdoutRef: sources[0] ? `file:${sources[0].digestRef}` : undefined,
-    }],
-    artifacts: [{
-      id: reportId,
-      type: 'research-report',
-      producerScenario: request.skillDomain,
-      producer: 'sciforge.current-reference-digest-recovery',
-      schemaVersion: '1',
-      metadata: {
-        source: 'current-reference-digest-recovery',
-        markdownRef: sources.find((source) => /\.(md|markdown)$/i.test(source.sourceRef))?.sourceRef,
-        sourceRefs: sources.map((source) => source.sourceRef),
-        digestRefs: sources.map((source) => source.digestRef),
-        failureReason,
-      },
-      data: {
-        markdown,
-        sections: markdownSections(markdown),
-      },
-    }],
-    objectReferences: digestRefs,
-  };
-}
-
-function buildDigestRecoveryMarkdown(
-  request: GatewayRequest,
-  sources: Array<{ sourceRef: string; digestRef: string; text: string }>,
-  failureReason: string,
-) {
-  const combined = sources.map((source) => `# Source: ${source.sourceRef}\n\n${source.text}`).join('\n\n');
-  const executive = extractSection(combined, ['Executive Summary', '摘要', 'Summary']) || firstUsefulLines(combined, 8);
-  const stats = extractSection(combined, ['Key Statistics', 'Statistics', '统计']) || summarizeJsonLikeSources(sources);
-  const topics = extractTopicSections(combined);
-  const opportunities = extractSection(combined, ['Opportunities', '机会', 'Future Directions', 'Research Opportunities']) || inferOpportunities(topics);
-  const risks = extractSection(combined, ['Risks', 'Limitations', '风险', '局限']) || inferRisks(topics);
-  const refs = sources.map((source) => `- \`${source.sourceRef}\`（digest: \`${source.digestRef}\`）`).join('\n');
-  return [
-    '# Current Reference Digest Recovery Report',
-    '',
-    `用户问题：${request.prompt}`,
-    '',
-    '## 摘要',
-    executive,
-    '',
-    '## 关键统计',
-    stats,
-    '',
-    '## 方向聚类',
-    topics.length ? topics.map((topic) => `### ${topic.title}\n${topic.body}`).join('\n\n') : firstUsefulLines(combined, 12),
-    '',
-    '## 机会',
-    opportunities,
-    '',
-    '## 风险',
-    risks,
-    '',
-    '## 可审计引用',
-    refs,
-    '',
-    '## 恢复说明',
-    `AgentServer 未能在收敛阈值内完成（${failureReason}）。本报告使用本轮显式引用的 bounded digest 生成，避免重复全量读取大文件。`,
-  ].join('\n');
-}
-
-function extractSection(text: string, names: string[]) {
-  for (const name of names) {
-    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const match = text.match(new RegExp(`(?:^|\\n)#{1,3}\\s*${escaped}\\s*\\n([\\s\\S]*?)(?=\\n#{1,3}\\s|\\n# Source:|$)`, 'i'));
-    if (match?.[1]?.trim()) return clipLines(match[1], 18);
-  }
-  return '';
-}
-
-function extractTopicSections(text: string) {
-  const topics: Array<{ title: string; body: string }> = [];
-  const pattern = /(?:^|\n)##\s+Topic:\s*([^\n]+)\n([\s\S]*?)(?=\n##\s+Topic:|\n##\s+[A-Z\u4e00-\u9fff]|$)/g;
-  for (const match of text.matchAll(pattern)) {
-    const title = match[1]?.trim();
-    const body = clipLines(match[2] || '', 10);
-    if (title && body) topics.push({ title, body });
-  }
-  return topics.slice(0, 10);
-}
-
-function summarizeJsonLikeSources(sources: Array<{ sourceRef: string; text: string }>) {
-  const lines: string[] = [];
-  for (const source of sources) {
-    if (!/\.json$/i.test(source.sourceRef)) continue;
-    try {
-      const parsed = JSON.parse(source.text);
-      const content = isRecord(parsed) && Array.isArray(parsed.content) ? parsed.content : Array.isArray(parsed) ? parsed : undefined;
-      if (content) lines.push(`- \`${source.sourceRef}\`: ${content.length} 条记录。`);
-    } catch {
-      // Digest text may be clipped or normalized; ignore parse failures.
-    }
-  }
-  return lines.join('\n') || '未发现结构化统计字段；请查看下方可审计引用。';
-}
-
-function inferOpportunities(topics: Array<{ title: string }>) {
-  if (!topics.length) return '可优先围绕高频方向做复现基准、工具链集成、可靠性评估和跨任务迁移验证。';
-  return topics.slice(0, 6).map((topic) => `- ${topic.title}: 适合继续追踪可复现 benchmark、真实用户工作流和与现有工具链的集成机会。`).join('\n');
-}
-
-function inferRisks(topics: Array<{ title: string }>) {
-  if (!topics.length) return '主要风险包括评估不充分、上下文成本过高、工具调用不可复现、以及结论依赖未验证来源。';
-  return topics.slice(0, 6).map((topic) => `- ${topic.title}: 需关注评估外推、数据污染、工具调用失败和安全/可靠性边界。`).join('\n');
-}
-
-function markdownSections(markdown: string) {
-  const sections: Array<{ title: string; content: string }> = [];
-  const parts = markdown.split(/\n##\s+/);
-  for (const part of parts.slice(1)) {
-    const [titleLine, ...rest] = part.split('\n');
-    const title = titleLine.trim();
-    const content = rest.join('\n').trim();
-    if (title && content) sections.push({ title, content });
-  }
-  return sections;
-}
-
-function firstParagraph(text: string) {
-  return text.split(/\n{2,}/).map((part) => part.replace(/^#+\s*/, '').trim()).find((part) => part && !part.startsWith('用户问题'))?.slice(0, 400);
-}
-
-function firstUsefulLines(text: string, count: number) {
-  return clipLines(text
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith('{') && !line.startsWith('}') && !line.startsWith('"'))
-    .slice(0, count)
-    .join('\n'), count);
-}
-
-function clipLines(text: string, maxLines: number) {
-  const lines = text.split('\n').map((line) => line.trimEnd()).filter((line) => line.trim());
-  return lines.slice(0, maxLines).join('\n').slice(0, 3600);
-}
-
-function generatedEntrypointContractReason(response: AgentServerGenerationResponse) {
-  const entryRel = safeWorkspaceRel(response.entrypoint.path);
-  const ext = extname(entryRel).toLowerCase();
-  const language = String(response.entrypoint.language || '').toLowerCase();
-  const executableExts = new Set(['.py', '.r', '.R', '.sh', '.bash', '.zsh']);
-  const artifactExts = new Set(['.md', '.markdown', '.txt', '.json', '.csv', '.tsv', '.pdf', '.png', '.jpg', '.jpeg', '.html']);
-  if (artifactExts.has(ext) && !executableExts.has(ext)) {
-    return `AgentServer returned a non-executable artifact/report as entrypoint: ${entryRel}. Return a direct ToolPayload for report-only answers, or use an executable task file that writes the report artifact.`;
-  }
-  if ((language === 'python' || !language) && ext && !['.py'].includes(ext)) {
-    return `AgentServer entrypoint language/path mismatch: language=${language || 'python'} path=${entryRel}.`;
-  }
-  if (['.js', '.mjs', '.ts'].includes(ext) && language !== 'cli') {
-    return `AgentServer entrypoint ${entryRel} uses ${ext}, but SciForge generated task runner supports python/r/shell paths or explicit cli commands.`;
-  }
-  const entryFile = response.taskFiles.find((file) => safeWorkspaceRel(file.path) === entryRel);
-  if (entryFile && artifactExts.has(ext) && !/^(python|r|shell|cli)$/i.test(String(entryFile.language || ''))) {
-    return `AgentServer taskFiles marks artifact-like entrypoint ${entryRel} as ${entryFile.language || 'unknown'} instead of executable code.`;
-  }
-  return undefined;
+  return buildCurrentReferenceDigestRecoveryPayload({
+    prompt: request.prompt,
+    skillDomain: request.skillDomain,
+    skillId: skill.id,
+    failureReason,
+    sources,
+    uiManifest: reportRuntimeResultViewSlots(
+      CURRENT_REFERENCE_DIGEST_RECOVERY_REPORT_ARTIFACT_ID,
+      `${request.skillDomain}-runtime-result`,
+    ),
+    shortHash: (value) => sha1(value).slice(0, 8),
+  }) as ToolPayload;
 }
 
 async function generatedTaskInterfaceContractReason(workspace: string, response: AgentServerGenerationResponse) {
@@ -1046,38 +895,7 @@ async function generatedTaskInterfaceContractReason(workspace: string, response:
     ?? await readGeneratedTaskFileIfPresent(workspace, entryRel);
   if (content === undefined) return undefined;
   const language = String(response.entrypoint.language || '').toLowerCase();
-  const ext = extname(entryRel).toLowerCase();
-  const source = content.slice(0, 240_000);
-  const readsInput = taskSourceReadsInputArg(source, language, ext);
-  const writesOutput = taskSourceWritesOutputArg(source, language, ext);
-  if (!readsInput || !writesOutput) {
-    const missing = [
-      readsInput ? '' : 'read the SciForge inputPath argument',
-      writesOutput ? '' : 'write the SciForge outputPath argument',
-    ].filter(Boolean).join(' and ');
-    return [
-      `AgentServer generated task ${entryRel} does not ${missing}.`,
-      'Generated workspace tasks must be reusable adapters that read request/current-reference data from argv inputPath and write a valid ToolPayload to argv outputPath.',
-      'For report-only answers already reasoned by AgentServer, return a direct ToolPayload instead of static code that embeds the current report.',
-    ].join(' ');
-  }
-  return undefined;
-}
-
-function taskSourceReadsInputArg(source: string, language: string, ext: string) {
-  if (language === 'python' || ext === '.py') return /\bsys\.argv\b|argparse|click\.|typer\.|input[_-]?path/i.test(source);
-  if (['javascript', 'typescript', 'node'].includes(language) || ['.js', '.mjs', '.ts'].includes(ext)) return /\bprocess\.argv\b|parseArgs|input[_-]?path/i.test(source);
-  if (['shell', 'bash', 'zsh', 'sh'].includes(language) || ['.sh', '.bash', '.zsh'].includes(ext)) return /(^|[^\\])\$\{?1\}?|\binput[_-]?path\b/i.test(source);
-  if (language === 'r' || ['.r', '.R'].includes(ext)) return /commandArgs|input[_-]?path/i.test(source);
-  return /argv|args|input[_-]?path/i.test(source);
-}
-
-function taskSourceWritesOutputArg(source: string, language: string, ext: string) {
-  if (language === 'python' || ext === '.py') return /\bsys\.argv\b|argparse|click\.|typer\.|output[_-]?path/i.test(source);
-  if (['javascript', 'typescript', 'node'].includes(language) || ['.js', '.mjs', '.ts'].includes(ext)) return /\bprocess\.argv\b|parseArgs|output[_-]?path/i.test(source);
-  if (['shell', 'bash', 'zsh', 'sh'].includes(language) || ['.sh', '.bash', '.zsh'].includes(ext)) return /(^|[^\\])\$\{?2\}?|\boutput[_-]?path\b/i.test(source);
-  if (language === 'r' || ['.r', '.R'].includes(ext)) return /commandArgs|output[_-]?path/i.test(source);
-  return /argv|args|output[_-]?path/i.test(source);
+  return agentServerGeneratedTaskInterfaceContractReason({ entryRel, language, source: content });
 }
 
 function activeGuidanceQueueForTaskInput(request: GatewayRequest) {
@@ -1101,18 +919,23 @@ async function tryAgentServerSupplementMissingArtifacts(params: {
   baseUrl: string;
   workspace: string;
   payload: ToolPayload;
+  primaryTaskId: string;
+  primaryRunId?: string;
+  primaryRun: WorkspaceTaskRunResult;
+  primaryRefs: RuntimeRefBundle;
   expectedArtifactTypes?: string[];
   callbacks?: WorkspaceRuntimeCallbacks;
   deps: GeneratedTaskRunnerDeps;
 }) {
   const missingTypes = missingExpectedArtifactTypes(params.request, params.payload.artifacts, params.expectedArtifactTypes);
   if (!missingTypes.length) return undefined;
+  const fallbackReason = `Missing expected artifact types: ${missingTypes.join(', ')}`;
   emitWorkspaceRuntimeEvent(params.callbacks, {
     type: 'workspace-task-start',
     source: 'workspace-runtime',
     status: 'running',
     message: 'Requesting supplemental AgentServer/backend generation',
-    detail: `Missing expected artifact types: ${missingTypes.join(', ')}`,
+    detail: fallbackReason,
   });
   const existingTypes = uniqueStrings(params.payload.artifacts.map((artifact) => String(artifact.type || artifact.id || '')).filter(Boolean));
   const supplementRequest: GatewayRequest = {
@@ -1135,14 +958,149 @@ async function tryAgentServerSupplementMissingArtifacts(params: {
     params.deps,
     { allowSupplement: false },
   );
-  if (!supplement) return undefined;
+  if (!supplement) {
+    await recordSupplementalFallbackLedger(params, {
+      status: 'fallback-failed',
+      fallbackReason,
+      missingTypes,
+      payload: params.payload,
+      supplement,
+      filled: [],
+    });
+    return undefined;
+  }
   const supplementedTypes = new Set(supplement.artifacts
     .filter((artifact) => !artifactNeedsRepair(artifact))
     .map((artifact) => String(artifact.type || artifact.id || ''))
     .filter(Boolean));
   const filled = missingTypes.filter((type) => supplementedTypes.has(type));
-  if (!filled.length) return undefined;
-  return mergeSupplementalPayload(params.payload, supplement, filled);
+  if (!filled.length) {
+    await recordSupplementalFallbackLedger(params, {
+      status: 'fallback-failed',
+      fallbackReason,
+      missingTypes,
+      payload: params.payload,
+      supplement,
+      filled,
+    });
+    return undefined;
+  }
+  const merged = mergeSupplementalPayload(params.payload, supplement, filled);
+  await recordSupplementalFallbackLedger(params, {
+    status: 'fallback-succeeded',
+    fallbackReason,
+    missingTypes,
+    payload: merged,
+    supplement,
+    filled,
+  });
+  return merged;
+}
+
+async function recordSupplementalFallbackLedger(
+  params: {
+    request: GatewayRequest;
+    skill: SkillAvailability;
+    workspace: string;
+    payload: ToolPayload;
+    primaryTaskId: string;
+    primaryRunId?: string;
+    primaryRun: WorkspaceTaskRunResult;
+    primaryRefs: RuntimeRefBundle;
+  },
+  outcome: {
+    status: 'fallback-succeeded' | 'fallback-failed';
+    fallbackReason: string;
+    missingTypes: string[];
+    payload: ToolPayload;
+    supplement?: ToolPayload;
+    filled: string[];
+  },
+) {
+  const fallbackSucceeded = outcome.status === 'fallback-succeeded';
+  const supplementExecutionUnitRefs = executionUnitRefsFromPayload(outcome.supplement);
+  const supplementArtifactRefs = artifactRefsFromPayload(outcome.supplement);
+  const validationResult = {
+    verdict: 'fail' as const,
+    validatorId: 'sciforge.expected-artifact-contract',
+    failureCode: 'missing-artifact',
+    summary: outcome.fallbackReason,
+    resultRef: params.primaryRefs.outputRel,
+  };
+  await writeCapabilityEvolutionEventBestEffort({
+    workspacePath: params.workspace,
+    request: params.request,
+    skill: params.skill,
+    taskId: params.primaryTaskId,
+    runId: params.primaryRunId,
+    run: params.primaryRun,
+    payload: outcome.payload,
+    taskRel: params.primaryRefs.taskRel,
+    inputRel: `.sciforge/task-inputs/${params.primaryTaskId}.json`,
+    outputRel: params.primaryRefs.outputRel,
+    stdoutRel: params.primaryRefs.stdoutRel,
+    stderrRel: params.primaryRefs.stderrRel,
+    finalStatus: outcome.status,
+    failureReason: fallbackSucceeded
+      ? undefined
+      : `Supplemental fallback did not fill missing artifact types: ${outcome.missingTypes.join(', ')}`,
+    fallbackReason: outcome.fallbackReason,
+    eventKind: 'composed-capability-fallback',
+    validationResult,
+    selectedCapabilities: [{
+      id: `capability.composed.${params.request.skillDomain}.expected-artifacts`,
+      kind: 'composed',
+      providerId: params.skill.id,
+      role: 'primary',
+    }],
+    fallbackCapabilities: [
+      {
+        id: 'runtime.python-task',
+        kind: 'tool',
+        providerId: 'sciforge.core.runtime.python-task',
+        role: 'fallback',
+      },
+      {
+        id: 'runtime.workspace-write',
+        kind: 'action',
+        providerId: 'sciforge.core.runtime.workspace-write',
+        role: 'fallback',
+      },
+      {
+        id: 'verifier.schema',
+        kind: 'verifier',
+        providerId: 'sciforge.core.verifier.schema',
+        role: 'validator',
+      },
+    ],
+    providers: [
+      { id: 'sciforge.core.runtime.python-task', kind: 'local-runtime' },
+      { id: 'sciforge.core.runtime.workspace-write', kind: 'local-runtime' },
+      { id: 'sciforge.core.verifier.schema', kind: 'local-runtime' },
+    ],
+    inputSchemaRefs: [`capability-fallback:${params.request.skillDomain}:expected-artifacts`],
+    outputSchemaRefs: outcome.missingTypes.map((type) => `artifact-schema:${type}`),
+    recoverActions: fallbackSucceeded
+      ? ['fallback-to-atomic', 'supplement-missing-artifacts', 'merge-supplemental-payload']
+      : ['fallback-to-atomic', 'supplement-missing-artifacts', 'preserve-failure-evidence-refs'],
+    atomicTrace: [{
+      capabilityId: 'runtime.python-task',
+      providerId: 'sciforge.core.runtime.python-task',
+      status: fallbackSucceeded ? 'succeeded' : 'failed',
+      failureCode: fallbackSucceeded ? undefined : 'missing-artifact',
+      executionUnitRefs: supplementExecutionUnitRefs,
+      artifactRefs: supplementArtifactRefs,
+      validationResult: {
+        verdict: fallbackSucceeded ? 'pass' : 'fail',
+        validatorId: 'sciforge.expected-artifact-contract',
+        failureCode: fallbackSucceeded ? undefined : 'missing-artifact',
+        summary: fallbackSucceeded
+          ? `Supplemental fallback filled artifact types: ${outcome.filled.join(', ')}`
+          : `Supplemental fallback did not fill artifact types: ${outcome.missingTypes.join(', ')}`,
+        resultRef: params.primaryRefs.outputRel,
+      },
+    }],
+  });
 }
 
 function missingExpectedArtifactTypes(request: GatewayRequest, artifacts: Array<Record<string, unknown>>, expectedArtifactTypes?: string[]) {
@@ -1152,6 +1110,20 @@ function missingExpectedArtifactTypes(request: GatewayRequest, artifacts: Array<
     .filter(Boolean));
   const expected = expectedArtifactTypes?.length ? expectedArtifactTypes : expectedArtifactTypesForRequest(request);
   return uniqueStrings(expected).filter((type) => !present.has(type));
+}
+
+function executionUnitRefsFromPayload(payload: ToolPayload | undefined) {
+  return uniqueStrings((payload?.executionUnits ?? []).flatMap((unit) => {
+    const id = isRecord(unit) && typeof unit.id === 'string' ? unit.id : '';
+    return id ? [`execution-unit:${id}`] : [];
+  }));
+}
+
+function artifactRefsFromPayload(payload: ToolPayload | undefined) {
+  return uniqueStrings((payload?.artifacts ?? []).flatMap((artifact) => {
+    const id = isRecord(artifact) && typeof artifact.id === 'string' ? artifact.id : '';
+    return id ? [`artifact:${id}`] : [];
+  }));
 }
 
 function expectedArtifactTypesForGeneratedRun(request: GatewayRequest, generatedExpectedArtifacts?: string[]) {
