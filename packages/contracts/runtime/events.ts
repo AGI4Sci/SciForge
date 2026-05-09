@@ -62,6 +62,12 @@ export const TARGET_REPAIR_TESTING_EVENT_TYPE = 'target-repair-testing';
 export const TARGET_REPAIR_WRITTEN_BACK_EVENT_TYPE = 'target-repair-written-back';
 export const DEFAULT_WORKSPACE_EVENT_TYPE = 'runtime-event' as const;
 export const TEXT_DELTA_EVENT_TYPE = 'text-delta' as const;
+export const OUTPUT_EVENT_TYPE = 'output' as const;
+export const TOOL_CALL_EVENT_TYPE = 'tool-call' as const;
+export const TOOL_RESULT_EVENT_TYPE = 'tool-result' as const;
+export const RUN_PLAN_EVENT_TYPE = 'run-plan' as const;
+export const STAGE_START_EVENT_TYPE = 'stage-start' as const;
+export const USAGE_UPDATE_EVENT_TYPE = 'usage-update' as const;
 export const CONTEXT_COMPACTION_EVENT_TYPE = 'contextCompaction' as const;
 export const CONTEXT_WINDOW_STATE_EVENT_TYPE = 'contextWindowState' as const;
 export const RATE_LIMIT_EVENT_TYPE = 'rateLimit' as const;
@@ -145,7 +151,21 @@ export const USER_VISIBLE_EVENT_EXCLUSION_TYPES = [
   CONTEXT_WINDOW_STATE_EVENT_TYPE,
 ] as const;
 
+export const STREAM_EVENT_TYPE = {
+  TEXT_DELTA: TEXT_DELTA_EVENT_TYPE,
+  OUTPUT: OUTPUT_EVENT_TYPE,
+  TOOL_CALL: TOOL_CALL_EVENT_TYPE,
+  TOOL_RESULT: TOOL_RESULT_EVENT_TYPE,
+  RUN_PLAN: RUN_PLAN_EVENT_TYPE,
+  STAGE_START: STAGE_START_EVENT_TYPE,
+  USAGE_UPDATE: USAGE_UPDATE_EVENT_TYPE,
+  PROCESS_PROGRESS: PROCESS_PROGRESS_EVENT_TYPE,
+} as const;
+
+export const STREAM_EVENT_TYPES = Object.values(STREAM_EVENT_TYPE);
+
 export type WorkspaceRuntimeCompletionStatus = 'completed' | 'failed';
+export type RuntimeStreamEventType = typeof STREAM_EVENT_TYPE[keyof typeof STREAM_EVENT_TYPE];
 export type ProcessProgressPhase = typeof PROCESS_PROGRESS_PHASE[keyof typeof PROCESS_PROGRESS_PHASE];
 export type ProcessProgressReason = typeof PROCESS_PROGRESS_REASON[keyof typeof PROCESS_PROGRESS_REASON];
 export type ProcessProgressStatus = typeof PROCESS_PROGRESS_STATUS[keyof typeof PROCESS_PROGRESS_STATUS];
@@ -351,7 +371,7 @@ export function workspaceRuntimeResultCompletion(result: Record<string, unknown>
 }
 
 export function classifyRuntimeWorkEventKind(input: RuntimeWorkEventClassificationInput): RuntimeWorkEventKind {
-  if (input.hasContextWindowState || input.hasContextCompaction || input.hasUsageUpdate || input.type === 'usage-update') return 'diagnostic';
+  if (input.hasContextWindowState || input.hasContextCompaction || input.hasUsageUpdate || input.type === USAGE_UPDATE_EVENT_TYPE) return 'diagnostic';
   if (input.operationKind) return input.operationKind;
   const haystack = [
     input.type,
@@ -794,12 +814,12 @@ export function normalizeRuntimeContextCompactionStatus(
 export function runtimeStreamEventLabel(type: string, source?: string, toolName?: string) {
   if (type === CONTEXT_WINDOW_STATE_EVENT_TYPE) return '上下文窗口';
   if (type === CONTEXT_COMPACTION_EVENT_TYPE) return '上下文压缩';
-  if (type === 'run-plan') return '计划';
-  if (type === 'stage-start') return '阶段';
+  if (type === RUN_PLAN_EVENT_TYPE) return '计划';
+  if (type === STAGE_START_EVENT_TYPE) return '阶段';
   if (type === PROCESS_PROGRESS_EVENT_TYPE) return '过程';
   if (type === TEXT_DELTA_EVENT_TYPE) return '思考';
-  if (type === 'tool-call') return toolName ? `调用 ${toolName}` : '工具调用';
-  if (type === 'tool-result') return toolName ? `结果 ${toolName}` : '工具结果';
+  if (type === TOOL_CALL_EVENT_TYPE) return toolName ? `调用 ${toolName}` : '工具调用';
+  if (type === TOOL_RESULT_EVENT_TYPE) return toolName ? `结果 ${toolName}` : '工具结果';
   if (type === 'status') return source === 'agentserver' ? 'AgentServer 状态' : '运行状态';
   if (type.includes('error')) return '错误';
   if (type.includes('silent')) return '等待';

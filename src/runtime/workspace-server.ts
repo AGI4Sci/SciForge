@@ -12,6 +12,7 @@ import { isRecord, readJson, readOptionalJson, safeName, writeJson, writeStreamE
 import {
   ALIGNMENT_CONTRACT_ARTIFACT_TYPE,
   ALIGNMENT_CONTRACT_VERSION_ARTIFACT_TYPE,
+  WORKSPACE_RUNTIME_ARTIFACT_PREVIEW_CAPABILITY_ID,
 } from '@sciforge-ui/runtime-contract';
 import {
   isBinaryPreviewFile,
@@ -574,7 +575,7 @@ async function buildInstanceManifest(root: string) {
       'repair-handoff-runner',
       'workspace-snapshot',
       'workspace-files',
-      'artifact-preview',
+      WORKSPACE_RUNTIME_ARTIFACT_PREVIEW_CAPABILITY_ID,
       'sciforge-tools',
     ],
   };

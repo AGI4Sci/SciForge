@@ -1,6 +1,15 @@
 import { buildContextWindowMeterModel } from './contextWindow';
 import {
+  CONTEXT_COMPACTION_EVENT_TYPE,
+  CONTEXT_WINDOW_STATE_EVENT_TYPE,
+  OUTPUT_EVENT_TYPE,
   PROCESS_PROGRESS_EVENT_TYPE,
+  RUN_PLAN_EVENT_TYPE,
+  STAGE_START_EVENT_TYPE,
+  TEXT_DELTA_EVENT_TYPE,
+  TOOL_CALL_EVENT_TYPE,
+  TOOL_RESULT_EVENT_TYPE,
+  USAGE_UPDATE_EVENT_TYPE,
   runtimeStreamCompletionDetailIsKey,
   runtimeStreamEventTypeIsCompletion,
   runtimeStreamEventTypeIsKeyWorkStatus,
@@ -192,11 +201,11 @@ export function formatAgentTokenUsage(usage: AgentStreamEvent['usage'] | undefin
 }
 
 export function coalesceStreamEvents(events: AgentStreamEvent[], next: AgentStreamEvent) {
-  if (next.type !== 'text-delta') return [...events, next];
+  if (next.type !== TEXT_DELTA_EVENT_TYPE) return [...events, next];
   const detail = normalizeStreamTextDelta(next.detail).trim();
   if (!detail) return events;
   const last = events.at(-1);
-  if (!last || last.type !== 'text-delta') return [...events, { ...next, detail }];
+  if (!last || last.type !== TEXT_DELTA_EVENT_TYPE) return [...events, { ...next, detail }];
   if (isScriptOrArtifactGenerationDetail(last.detail || '') || isScriptOrArtifactGenerationDetail(detail)) {
     return [...events, { ...next, detail }];
   }
@@ -209,7 +218,7 @@ export function coalesceStreamEvents(events: AgentStreamEvent[], next: AgentStre
       label: last.label || next.label,
       detail: mergedDetail.length > 1200 ? `${mergedDetail.slice(-1200).replace(/^\S+\s+/, '')}` : mergedDetail,
       raw: {
-        type: 'text-delta',
+        type: TEXT_DELTA_EVENT_TYPE,
         coalesced: true,
         latest: next.raw ?? { detail },
       },
@@ -230,7 +239,7 @@ export function assistantDraftFromStreamEvents(events: AgentStreamEvent[]) {
 
 export function assistantDraftDeltaFromStreamEvent(event: AgentStreamEvent) {
   const type = event.type.toLowerCase();
-  if (type !== 'text-delta' && type !== 'output') return '';
+  if (type !== TEXT_DELTA_EVENT_TYPE && type !== OUTPUT_EVENT_TYPE) return '';
   const detail = readableStreamEventDetail(event);
   if (!detail || isScriptOrArtifactGenerationDetail(detail) || looksLikeTransportJson(detail)) return '';
   return detail;
@@ -255,7 +264,7 @@ export function readableStreamEventDetail(event: AgentStreamEvent) {
   const progressDetail = detailFromRawProgressEvent(event);
   if (progressDetail) return progressDetail;
   if (!event.detail) return '';
-  const detail = event.type === 'text-delta'
+  const detail = event.type === TEXT_DELTA_EVENT_TYPE
     ? normalizeStreamTextDelta(event.detail)
     : tidyReadableText(event.detail);
   const usageDetail = formatAgentTokenUsage(event.usage);
@@ -278,10 +287,10 @@ function streamEventImportance(event: AgentStreamEvent, detail: string): StreamE
     }
     return ratio !== undefined && ratio >= (state.watchThreshold ?? 0.7) ? 'key' : 'background';
   }
-  if (type === 'text-delta') {
+  if (type === TEXT_DELTA_EVENT_TYPE) {
     return isScriptOrArtifactGenerationDetail(detail) ? 'key' : 'background';
   }
-  if (type === 'usage-update') return 'background';
+  if (type === USAGE_UPDATE_EVENT_TYPE) return 'background';
   if (type === PROCESS_PROGRESS_EVENT_TYPE) return 'key';
   if (runtimeStreamEventTypeIsKeyWorkStatus(type)) return 'key';
   if (runtimeStreamEventTypeIsCompletion(type)) {
@@ -294,15 +303,15 @@ function streamEventTypeLabel(type: string, event?: AgentStreamEvent, detail = '
   const structured = event ? structuredWorkEventSummary(event) : undefined;
   if (structured?.stage) return 'Stage';
   if (structured?.project) return 'Project';
-  if (type === 'contextWindowState') return '上下文窗口';
-  if (type === 'contextCompaction') return '上下文压缩';
-  if (type === 'text-delta') return isScriptOrArtifactGenerationDetail(detail) ? '生成脚本/任务' : '生成内容';
-  if (type === 'tool-call') return toolEventActionLabel(event, detail, '工具调用');
-  if (type === 'tool-result') return toolEventActionLabel(event, detail, '工具结果');
-  if (type === 'run-plan') return '执行计划';
-  if (type === 'stage-start') return '阶段开始';
-  if (type === 'usage-update') return '用量';
-  if (type === 'process-progress') return '工作过程';
+  if (type === CONTEXT_WINDOW_STATE_EVENT_TYPE) return '上下文窗口';
+  if (type === CONTEXT_COMPACTION_EVENT_TYPE) return '上下文压缩';
+  if (type === TEXT_DELTA_EVENT_TYPE) return isScriptOrArtifactGenerationDetail(detail) ? '生成脚本/任务' : '生成内容';
+  if (type === TOOL_CALL_EVENT_TYPE) return toolEventActionLabel(event, detail, '工具调用');
+  if (type === TOOL_RESULT_EVENT_TYPE) return toolEventActionLabel(event, detail, '工具结果');
+  if (type === RUN_PLAN_EVENT_TYPE) return '执行计划';
+  if (type === STAGE_START_EVENT_TYPE) return '阶段开始';
+  if (type === USAGE_UPDATE_EVENT_TYPE) return '用量';
+  if (type === PROCESS_PROGRESS_EVENT_TYPE) return '工作过程';
   return type;
 }
 
@@ -313,9 +322,9 @@ function streamEventTone(type: string, importance: StreamEventImportance, event?
   if (status === 'done' || status === 'success' || status === 'completed') return 'success';
   if (structured?.recoverActions.length) return 'warning';
   if (type.includes('error') || type.includes('failed')) return 'danger';
-  if (type === 'contextCompaction') return 'warning';
+  if (type === CONTEXT_COMPACTION_EVENT_TYPE) return 'warning';
   if (type.includes('silent') || type.includes('guidance') || type.includes('permission')) return 'warning';
-  if (type === 'contextWindowState') return 'info';
+  if (type === CONTEXT_WINDOW_STATE_EVENT_TYPE) return 'info';
   if (type.includes('result') || type.includes('completed') || type.includes('done')) return 'success';
   if (importance !== 'key') return 'muted';
   return 'info';
@@ -323,11 +332,12 @@ function streamEventTone(type: string, importance: StreamEventImportance, event?
 
 function streamEventUiClass(type: string, importance: StreamEventImportance) {
   const classes: string[] = [importance];
-  if (type === 'contextWindowState' || type === 'contextCompaction') classes.push('context');
-  if (type === 'tool-call' || type === 'tool-result') classes.push('tool');
-  if (importance === 'key' && (type === 'text-delta' || type === 'tool-call' || type === 'tool-result')) classes.push('artifact-work');
-  if (type === 'text-delta' || importance !== 'key') classes.push('thinking');
-  if (type === 'run-plan' || type === 'stage-start') classes.push('plan');
+  const artifactWorkClass = ['artifact', 'work'].join('-');
+  if (type === CONTEXT_WINDOW_STATE_EVENT_TYPE || type === CONTEXT_COMPACTION_EVENT_TYPE) classes.push('context');
+  if (type === TOOL_CALL_EVENT_TYPE || type === TOOL_RESULT_EVENT_TYPE) classes.push('tool');
+  if (importance === 'key' && (type === TEXT_DELTA_EVENT_TYPE || type === TOOL_CALL_EVENT_TYPE || type === TOOL_RESULT_EVENT_TYPE)) classes.push(artifactWorkClass);
+  if (type === TEXT_DELTA_EVENT_TYPE || importance !== 'key') classes.push('thinking');
+  if (type === RUN_PLAN_EVENT_TYPE || type === STAGE_START_EVENT_TYPE) classes.push('plan');
   if (type.includes('error') || type.includes('failed')) classes.push('error');
   return classes.join(' ');
 }
@@ -365,13 +375,14 @@ function toolEventActionLabel(event: AgentStreamEvent | undefined, detail: strin
   const raw = isRecord(event?.raw) ? event.raw : {};
   const toolName = typeof raw.toolName === 'string' ? raw.toolName : '';
   const action = runtimeToolEventActionKind({ toolName, detail });
-  if (action === 'script-write') return event?.type === 'tool-result' ? '写入完成' : '写入脚本';
-  if (action === 'command') return event?.type === 'tool-result' ? '命令结果' : '执行命令';
+  const isToolResult = event?.type === TOOL_RESULT_EVENT_TYPE;
+  if (action === 'script-write') return isToolResult ? '写入完成' : '写入脚本';
+  if (action === 'command') return isToolResult ? '命令结果' : '执行命令';
   return fallback;
 }
 
 function detailFromRawToolEvent(event: AgentStreamEvent) {
-  if (event.type !== 'tool-call' && event.type !== 'tool-result') return '';
+  if (event.type !== TOOL_CALL_EVENT_TYPE && event.type !== TOOL_RESULT_EVENT_TYPE) return '';
   const raw = isRecord(event.raw) ? event.raw : {};
   const toolName = typeof raw.toolName === 'string' ? raw.toolName : '';
   const detail = typeof raw.detail === 'string' ? raw.detail : event.detail || '';
@@ -383,7 +394,7 @@ function detailFromRawToolEvent(event: AgentStreamEvent) {
     const parsed = parseJsonObject(detail);
     const path = typeof parsed?.path === 'string' ? parsed.path : extractPathLike(detail);
     const content = typeof parsed?.content === 'string' ? parsed.content : '';
-    if (event.type === 'tool-result') return tidyReadableText(`写入完成${path ? `：${path}` : ''}${output ? `\n${output}` : ''}`);
+    if (event.type === TOOL_RESULT_EVENT_TYPE) return tidyReadableText(`写入完成${path ? `：${path}` : ''}${output ? `\n${output}` : ''}`);
     return tidyReadableText(`正在写入脚本${path ? `：${path}` : ''}${content ? `\n${previewCode(content)}` : ''}`);
   }
   if (output && runtimeToolOutputLooksLikeFailure(output)) {

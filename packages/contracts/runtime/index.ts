@@ -199,6 +199,31 @@ export type {
   WorkspaceOpenResult,
 } from './workspace-open';
 export {
+  BELIEF_EDGE_KINDS,
+  BELIEF_NODE_KINDS,
+  DECISION_REVISION_STATUSES,
+  FEEDBACK_COMMENT_STATUSES,
+  FEEDBACK_PRIORITIES,
+  RESEARCHER_DECISION_STATUSES,
+  TIMELINE_DECISION_STATUSES,
+  TIMELINE_VARIANT_KINDS,
+  TIMELINE_VISIBILITIES,
+  isFeedbackCommentStatus,
+  isTimelineDecisionStatus,
+  isTimelineVisibility,
+} from './research-workspace';
+export type {
+  BeliefEdgeKind,
+  BeliefNodeKind,
+  DecisionRevisionStatus,
+  FeedbackCommentStatus,
+  FeedbackPriority,
+  ResearcherDecisionStatus,
+  TimelineDecisionStatus,
+  TimelineVariantKind,
+  TimelineVisibility,
+} from './research-workspace';
+export {
   WORK_EVIDENCE_KINDS,
   WORK_EVIDENCE_SCHEMA,
   WORK_EVIDENCE_STATUSES,
@@ -305,6 +330,7 @@ export {
 } from './capability-manifest';
 export {
   agentServerCapabilityRoutingPolicy,
+  WORKSPACE_RUNTIME_ARTIFACT_PREVIEW_CAPABILITY_ID,
   WORKSPACE_RUNTIME_GATEWAY_REPAIR_TOOL_ID,
 } from './capabilities';
 export type {
@@ -346,6 +372,7 @@ export type {
   RuntimeHealthStatus,
   RuntimeRecoverAction,
   RuntimeRequestAcceptedProgressCopy,
+  RuntimeStreamEventType,
   RuntimeEventIdentity,
   RuntimeStageRecordLike,
   RuntimeToolEventActionKind,
@@ -385,6 +412,7 @@ export {
   LATENCY_DIAGNOSTICS_LOG_KIND,
   LATENCY_DIAGNOSTICS_REF,
   LATENCY_DIAGNOSTICS_SCHEMA_VERSION,
+  OUTPUT_EVENT_TYPE,
   PROCESS_EVENTS_SCHEMA_VERSION,
   PROCESS_PROGRESS_EVENT_TYPE,
   PROCESS_PROGRESS_PHASE,
@@ -401,6 +429,10 @@ export {
   SCIFORGE_RUNTIME_PROVIDER,
   RUNTIME_HEALTH_STATUS,
   RUNTIME_HEALTH_STATUSES,
+  RUN_PLAN_EVENT_TYPE,
+  STAGE_START_EVENT_TYPE,
+  STREAM_EVENT_TYPE,
+  STREAM_EVENT_TYPES,
   TARGET_INSTANCE_CONTEXT_EVENT_TYPE,
   TARGET_ISSUE_LOOKUP_FAILED_EVENT_TYPE,
   TARGET_ISSUE_READ_EVENT_TYPE,
@@ -409,8 +441,11 @@ export {
   TARGET_REPAIR_WRITTEN_BACK_EVENT_TYPE,
   TARGET_WORKTREE_PREPARING_EVENT_TYPE,
   TEXT_DELTA_EVENT_TYPE,
+  TOOL_CALL_EVENT_TYPE,
+  TOOL_RESULT_EVENT_TYPE,
   USER_VISIBLE_EVENT_EXCLUSION_TYPES,
   USER_INTERRUPT_EVENT_TYPE,
+  USAGE_UPDATE_EVENT_TYPE,
   WORKSPACE_SKILL_SELECTED_EVENT_TYPE,
   WORKSPACE_RUNTIME_EVENT_TYPE,
   WORKSPACE_RUNTIME_SOURCE,

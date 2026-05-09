@@ -1,3 +1,7 @@
+import {
+  TIMELINE_DECISION_STATUSES,
+  TIMELINE_VISIBILITIES,
+} from '@sciforge-ui/runtime-contract/research-workspace';
 import type { TimelineDecisionStatus, TimelineEventRecord, TimelineVisibility } from './domain';
 
 export const timelineEventSchemaVersion = '1.0.0';
@@ -6,20 +10,9 @@ export const timelineActionPrefixes = ['package', 'run', 'artifact', 'handoff', 
 
 export type TimelineActionPrefix = typeof timelineActionPrefixes[number];
 
-export const timelineVisibilityValues: TimelineVisibility[] = [
-  'private-draft',
-  'team-visible',
-  'project-record',
-  'restricted-sensitive',
-];
+export const timelineVisibilityValues: TimelineVisibility[] = [...TIMELINE_VISIBILITIES];
 
-export const timelineDecisionStatusValues: TimelineDecisionStatus[] = [
-  'supported',
-  'not-supported',
-  'inconclusive',
-  'needs-repeat',
-  'not-a-decision',
-];
+export const timelineDecisionStatusValues: TimelineDecisionStatus[] = [...TIMELINE_DECISION_STATUSES];
 
 export interface TimelineEventSchema {
   schemaVersion: typeof timelineEventSchemaVersion;

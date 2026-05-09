@@ -1,4 +1,5 @@
 import {
+  USAGE_UPDATE_EVENT_TYPE,
   classifyRuntimeWorkEventKind,
   runtimeOperationKindForStage,
   runtimeOperationKindForWorkEvidence,
@@ -100,7 +101,7 @@ export function classifyWorkEvent(
     operationKind: structured?.operationKind,
     hasContextWindowState: Boolean(event.contextWindowState),
     hasContextCompaction: Boolean(event.contextCompaction),
-    hasUsageUpdate: event.type === 'usage-update',
+    hasUsageUpdate: event.type === USAGE_UPDATE_EVENT_TYPE,
   });
 }
 

@@ -48,6 +48,7 @@ export interface CapabilityRegistry {
 }
 
 export const WORKSPACE_RUNTIME_GATEWAY_REPAIR_TOOL_ID = 'sciforge.workspace-runtime-gateway' as const;
+export const WORKSPACE_RUNTIME_ARTIFACT_PREVIEW_CAPABILITY_ID = 'artifact-preview' as const;
 
 export function agentServerCapabilityRoutingPolicy(): Record<string, string> {
   return {

@@ -4,12 +4,14 @@ import {
   createCapabilityRegistry,
   defaultCapabilityRegistry,
   defaultCapabilitySummaries,
+  WORKSPACE_RUNTIME_ARTIFACT_PREVIEW_CAPABILITY_ID,
   WORKSPACE_RUNTIME_GATEWAY_REPAIR_TOOL_ID,
   type CapabilityContract,
 } from './capabilities';
 
 test('default summaries 只提供 capability metadata，不再在 TS 里生成策略 brief', () => {
   assert.equal(WORKSPACE_RUNTIME_GATEWAY_REPAIR_TOOL_ID, 'sciforge.workspace-runtime-gateway');
+  assert.equal(WORKSPACE_RUNTIME_ARTIFACT_PREVIEW_CAPABILITY_ID, 'artifact-preview');
   const summaries = defaultCapabilitySummaries();
   const categories = new Set(summaries.map((summary) => summary.category));
   const ids = summaries.map((summary) => summary.id);

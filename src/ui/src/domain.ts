@@ -4,9 +4,14 @@ import type { SkillDomain } from '@sciforge/scenario-core/scenario-routing-polic
 import type {
   AgentStreamEvent,
   AlignmentContractRecord,
+  BeliefEdgeKind,
+  BeliefNodeKind,
+  DecisionRevisionStatus,
   DisplayIntent,
   EvidenceClaim,
   ExecutionUnitStatus,
+  FeedbackCommentStatus,
+  FeedbackPriority,
   GuidanceQueueRecord,
   NotebookRecord,
   ObjectAction,
@@ -22,6 +27,10 @@ import type {
   SciForgeMessage,
   SciForgeRun,
   SciForgeSession,
+  ResearcherDecisionStatus,
+  TimelineDecisionStatus,
+  TimelineVariantKind,
+  TimelineVisibility,
   UIManifestSlot,
   ViewPlanSection,
 } from '@sciforge-ui/runtime-contract';
@@ -46,9 +55,14 @@ export type {
   BackgroundCompletionRef,
   BackgroundCompletionRuntimeEvent,
   BackgroundCompletionStatus,
+  BeliefEdgeKind,
+  BeliefNodeKind,
+  DecisionRevisionStatus,
   DisplayIntent,
   EvidenceClaim,
   ExecutionUnitStatus,
+  FeedbackCommentStatus,
+  FeedbackPriority,
   GuidanceQueueRecord,
   GuidanceQueueStatus,
   MessageRole,
@@ -75,8 +89,12 @@ export type {
   SciForgeMessage,
   SciForgeRun,
   SciForgeSession,
+  ResearcherDecisionStatus,
   SemanticTurnAcceptance,
   SessionVersionRecord,
+  TimelineDecisionStatus,
+  TimelineVariantKind,
+  TimelineVisibility,
   TurnAcceptance,
   TurnAcceptanceFailure,
   TurnAcceptanceSeverity,
@@ -94,9 +112,6 @@ export type {
   ViewSync,
   ViewTransform,
 } from '@sciforge-ui/runtime-contract';
-
-export type BeliefNodeKind = 'claim' | 'evidence' | 'artifact' | 'assumption' | 'decision';
-export type BeliefEdgeKind = 'supports' | 'opposes' | 'depends-on' | 'derived-from' | 'supersedes';
 
 export interface BeliefGraphNode {
   id: string;
@@ -127,9 +142,6 @@ export interface BeliefDependencyGraph {
   updatedAt: string;
 }
 
-export type ResearcherDecisionStatus = 'supported' | 'not-supported' | 'inconclusive' | 'needs-repeat';
-export type DecisionRevisionStatus = 'original' | 'supersede' | 'retract' | 'amend' | 'reaffirm';
-
 export interface ResearcherDecisionRecord {
   id: string;
   status: ResearcherDecisionStatus;
@@ -151,10 +163,6 @@ export interface WetLabEvidenceSummary {
   recommendedNextActions: string[];
   researcherDecisionRefs?: string[];
 }
-
-export type TimelineVisibility = 'private-draft' | 'team-visible' | 'project-record' | 'restricted-sensitive';
-export type TimelineVariantKind = 'parameter' | 'method' | 'hypothesis';
-export type TimelineDecisionStatus = ResearcherDecisionStatus | 'not-a-decision';
 
 export interface TimelineEventRecord {
   id: string;
@@ -224,9 +232,6 @@ export interface SciForgeWorkspaceState {
   collaborationPolicy?: CollaborationPolicy;
   updatedAt: string;
 }
-
-export type FeedbackCommentStatus = 'open' | 'triaged' | 'planned' | 'fixed' | 'needs-discussion' | 'wont-fix';
-export type FeedbackPriority = 'low' | 'normal' | 'high' | 'urgent';
 
 export interface FeedbackTargetSnapshot {
   selector: string;
