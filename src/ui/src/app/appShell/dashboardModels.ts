@@ -1,7 +1,6 @@
 import type { LucideIcon } from 'lucide-react';
 import { scenarios, type ScenarioId } from '../../data';
 import type { SciForgeRun, SciForgeWorkspaceState, ScenarioInstanceId } from '../../domain';
-import { nowIso } from '../../domain';
 import { compileScenarioIRFromSelection, recommendScenarioElements } from '@sciforge/scenario-core/scenario-element-compiler';
 import type { ScenarioBuilderDraft } from '@sciforge/scenario-core/scenario-draft-compiler';
 import { buildBuiltInScenarioPackage, type ScenarioPackage } from '@sciforge/scenario-core/scenario-package';
@@ -41,27 +40,6 @@ export function parseScenarioPackageJson(value: unknown): ScenarioPackage {
   if (!Array.isArray(value.tests)) throw new Error('Package tests 必须是数组。');
   if (!Array.isArray(value.versions)) throw new Error('Package versions 必须是数组。');
   return value as unknown as ScenarioPackage;
-}
-
-export function renameScenarioPackageForImport(pkg: ScenarioPackage, nextId: string): ScenarioPackage {
-  return {
-    ...pkg,
-    id: nextId,
-    status: pkg.status === 'archived' ? 'draft' : pkg.status,
-    scenario: {
-      ...pkg.scenario,
-      id: nextId,
-      title: pkg.scenario.title.endsWith(' copy') ? pkg.scenario.title : `${pkg.scenario.title} copy`,
-      source: 'workspace',
-    },
-    versions: [{
-      version: pkg.version,
-      status: 'draft',
-      createdAt: nowIso(),
-      summary: `Imported as ${nextId} to avoid package id conflict.`,
-      scenarioHash: `import-${nextId}`,
-    }, ...pkg.versions],
-  };
 }
 
 export function scenarioPackageToLibraryDisplayItem(
@@ -163,53 +141,6 @@ export function buildPackageRunStats(workspaceState: SciForgeWorkspaceState): Re
   return stats;
 }
 
-export function packageManifestPreview(pkg: ScenarioPackage, workspacePath: string) {
-  const json = JSON.stringify(pkg, null, 2);
-  const sensitiveRefs = extractSensitiveWorkspaceRefs(json, workspacePath);
-  const qualityOk = pkg.qualityReport?.ok ?? pkg.validationReport?.ok ?? true;
-  return {
-    hasSensitiveRefs: sensitiveRefs.length > 0,
-    sensitiveRefs,
-    slotCount: pkg.uiPlan.slots.length,
-    skillCount: pkg.skillPlan.skillIRs.length,
-    testCount: pkg.tests.length,
-    versionCount: pkg.versions.length || 1,
-    qualityLabel: qualityOk ? 'quality pass' : 'quality warnings',
-    manifest: {
-      schemaVersion: pkg.schemaVersion,
-      id: pkg.id,
-      version: pkg.version,
-      status: pkg.status,
-      scenario: {
-        id: pkg.scenario.id,
-        title: pkg.scenario.title,
-        skillDomain: pkg.scenario.skillDomain,
-        source: pkg.scenario.source,
-      },
-      skillPlan: {
-        id: pkg.skillPlan.id,
-        skills: pkg.skillPlan.skillIRs.map((skill) => skill.skillId),
-      },
-      uiPlan: {
-        id: pkg.uiPlan.id,
-        components: pkg.uiPlan.compiledFrom.componentIds,
-        artifacts: pkg.uiPlan.compiledFrom.artifactTypes,
-      },
-      tests: pkg.tests.map((test) => ({ id: test.id, expectedArtifactTypes: test.expectedArtifactTypes })),
-      quality: {
-        ok: qualityOk,
-        issues: pkg.qualityReport?.items.length ?? pkg.validationReport?.issues.length ?? 0,
-      },
-      versions: pkg.versions.map((version) => ({
-        version: version.version,
-        status: version.status,
-        createdAt: version.createdAt,
-        summary: version.summary,
-      })),
-    },
-  };
-}
-
 export function scenarioInstanceIdForDraft(draft: ScenarioBuilderDraft): ScenarioInstanceId {
   return `workspace-${draft.baseScenarioId}-${safeInstanceId(draft.title || draft.description)}-${Date.now().toString(36)}`;
 }
@@ -254,15 +185,4 @@ function scenarioRankScore(item: ScenarioLibraryItem, runStats?: PackageRunStats
 
 function safeInstanceId(value: string) {
   return value.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5_.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || Date.now().toString(36);
-}
-
-function extractSensitiveWorkspaceRefs(json: string, workspacePath: string) {
-  const refs = new Set<string>();
-  const normalizedWorkspace = workspacePath.trim();
-  if (normalizedWorkspace && json.includes(normalizedWorkspace)) refs.add(normalizedWorkspace);
-  const pathPattern = /(?:\/Users\/|\/Applications\/workspace\/|[A-Za-z]:\\)[^"',\s)]+/g;
-  for (const match of json.matchAll(pathPattern)) {
-    refs.add(match[0]);
-  }
-  return Array.from(refs).slice(0, 12);
 }

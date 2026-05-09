@@ -76,6 +76,15 @@ export {
   type VisionSenseTraceOutputViewRefs,
 } from './vision-sense-trace-output-policy';
 export {
+  previewPackageAutoRunPromptPolicy,
+  type PreviewPackageAutoRunPromptRequest,
+} from './auto-run-prompt-policy';
+export {
+  structureSummaryMetricPresentation,
+  type StructureSummaryMetricPresentation,
+  type StructureSummaryMetricRow,
+} from './structure-summary-presentation-policy';
+export {
   blockedInteractiveViewDesignForIntent,
   compactInteractiveViewPlanItems,
   compareInteractiveViewPlanOrder,

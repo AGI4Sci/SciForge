@@ -12,6 +12,8 @@
   },
   "exports": {
     ".": "./index.ts",
+    "./auto-run-prompt-policy": "./auto-run-prompt-policy.ts",
+    "./structure-summary-presentation-policy": "./structure-summary-presentation-policy.ts",
     "./runtime-ui-manifest-policy": "./runtime-ui-manifest-policy.ts"
   }
 }

@@ -3,6 +3,9 @@ import { test } from 'node:test';
 
 import {
   CONTEXT_COMPACTION_EVENT_TYPE,
+  DIRECT_CONTEXT_FAST_PATH_EVENT_TYPE,
+  GUIDANCE_QUEUED_EVENT_TYPE,
+  GUIDANCE_QUEUE_RUN_ORCHESTRATION_CONTRACT,
   LATENCY_DIAGNOSTICS_EVENT_TYPE,
   LATENCY_DIAGNOSTICS_REF,
   PROCESS_EVENTS_SCHEMA_VERSION,
@@ -15,7 +18,19 @@ import {
   TARGET_REPAIR_MODIFYING_EVENT_TYPE,
   TARGET_REPAIR_WRITTEN_BACK_EVENT_TYPE,
   TARGET_WORKTREE_PREPARING_EVENT_TYPE,
+  USER_INTERRUPT_EVENT_TYPE,
   WORKSPACE_RUNTIME_EVENT_TYPE,
+  agentServerConvergenceGuardEvent,
+  agentServerContextWindowRecoverySucceededEvent,
+  agentServerDispatchEvent,
+  agentServerGenerationRecoveryEventType,
+  agentServerGenerationRecoveryStartEvent,
+  agentServerGenerationRetrySucceededEvent,
+  agentServerSilentStreamGuardEvent,
+  conversationPolicyStartedEvent,
+  directContextFastPathEvent,
+  gatewayRequestReceivedEvent,
+  guidanceQueuedEvent,
   latencyDiagnosticsCachePolicy,
   normalizeRuntimeContextCompactionStatus,
   normalizeRuntimeContextWindowStatus,
@@ -24,6 +39,8 @@ import {
   projectToolFailedEvent,
   projectToolStartedEvent,
   projectToolFailureDetail,
+  repairAttemptResultEvent,
+  repairAttemptStartEvent,
   runtimeDetailIndicatesAbort,
   runtimeEventIsBackend,
   runtimeEventIsUserVisible,
@@ -33,6 +50,7 @@ import {
   targetRepairModifyingEvent,
   targetRepairWrittenBackEvent,
   targetWorktreePreparingEvent,
+  userInterruptEvent,
   workspaceRuntimeResultCompletion,
 } from './events';
 
@@ -109,6 +127,37 @@ test('project tool event projection owns stable ids and user-visible copy', () =
   assert.deepEqual(projectToolFailedEvent(identity, 'network down').raw, { error: 'network down' });
 });
 
+test('chat shell event projection owns guidance and interrupt contracts', () => {
+  const identity = { id: 'evt-chat', createdAt: '2026-05-08T00:01:00.000Z' };
+  const guidance = {
+    id: 'guidance-1',
+    prompt: 'skip broad web fetches',
+    status: 'queued' as const,
+    receivedAt: identity.createdAt,
+    activeRunId: 'run-active',
+    reason: 'backend run is active',
+  };
+
+  assert.deepEqual(guidanceQueuedEvent(identity, guidance), {
+    id: identity.id,
+    type: GUIDANCE_QUEUED_EVENT_TYPE,
+    label: '引导已排队',
+    detail: `${guidance.prompt}\n状态：已排队，等待当前 run 结束后合并到下一轮。`,
+    createdAt: identity.createdAt,
+    raw: {
+      guidanceQueue: guidance,
+      contract: GUIDANCE_QUEUE_RUN_ORCHESTRATION_CONTRACT,
+    },
+  });
+  assert.deepEqual(userInterruptEvent(identity), {
+    id: identity.id,
+    type: USER_INTERRUPT_EVENT_TYPE,
+    label: '中断请求',
+    detail: '用户请求中断当前 backend 运行；已关闭当前 HTTP stream，并清空排队引导。',
+    createdAt: identity.createdAt,
+  });
+});
+
 test('target issue event projection owns repair handoff event types and payloads', () => {
   const identity = { id: 'evt-target', createdAt: '2026-05-07T00:00:00.000Z' };
   assert.equal(targetIssueLookupFailedEvent(identity, 'missing', { status: 'failed' }).type, TARGET_ISSUE_LOOKUP_FAILED_EVENT_TYPE);
@@ -127,4 +176,38 @@ test('target issue event projection owns repair handoff event types and payloads
   assert.equal(targetWorktreePreparingEvent(identity, { targetName: 'Repair B', issueRef: 'feedback-1' }).type, TARGET_WORKTREE_PREPARING_EVENT_TYPE);
   assert.equal(targetRepairModifyingEvent(identity, { targetName: 'Repair B', issueRef: 'feedback-1' }).type, TARGET_REPAIR_MODIFYING_EVENT_TYPE);
   assert.equal(targetRepairWrittenBackEvent(identity, { targetName: 'Repair B', issueRef: 'feedback-1' }).type, TARGET_REPAIR_WRITTEN_BACK_EVENT_TYPE);
+});
+
+test('gateway event projection owns runtime generation event ids and copy', () => {
+  assert.deepEqual(gatewayRequestReceivedEvent('literature'), {
+    type: 'gateway-request-received',
+    source: 'workspace-runtime',
+    status: 'running',
+    message: 'Workspace runtime received the chat turn and is preparing policy and execution routing.',
+    detail: 'literature',
+  });
+  assert.equal(conversationPolicyStartedEvent().type, 'conversation-policy-started');
+  assert.equal(directContextFastPathEvent({ plan: 'direct' }).type, DIRECT_CONTEXT_FAST_PATH_EVENT_TYPE);
+  assert.deepEqual(repairAttemptStartEvent({ attempt: 2, maxAttempts: 3, failureReason: 'schema mismatch' }), {
+    type: 'repair-attempt-start',
+    source: 'workspace-runtime',
+    status: 'running',
+    message: 'AgentServer repair attempt 2/3',
+    detail: 'schema mismatch',
+  });
+  assert.equal(repairAttemptResultEvent({ attempt: 2, maxAttempts: 3, exitCode: 1, stderr: 'failed' }).status, 'failed');
+  assert.equal(agentServerDispatchEvent({
+    backend: 'codex',
+    baseUrl: 'http://agent',
+    normalizedBytes: 12,
+    maxPayloadBytes: 100,
+    rawRef: 'raw.json',
+  }).type, 'agentserver-dispatch');
+  assert.equal(agentServerConvergenceGuardEvent('guard tripped').type, 'agentserver-convergence-guard');
+  assert.equal(agentServerSilentStreamGuardEvent('silent').type, 'agentserver-silent-stream-guard');
+  assert.equal(agentServerGenerationRecoveryEventType(['context-window']), 'agentserver-context-window-recovery');
+  assert.equal(agentServerGenerationRecoveryEventType(['rate-limit']), 'agentserver-generation-retry');
+  assert.equal(agentServerGenerationRecoveryStartEvent({ categories: ['http-429'], detail: 'retry later', raw: {} }).type, 'agentserver-generation-retry');
+  assert.equal(agentServerContextWindowRecoverySucceededEvent({ detail: 'ok', raw: {} }).type, 'agentserver-context-window-recovery');
+  assert.equal(agentServerGenerationRetrySucceededEvent({ detail: 'ok', raw: {} }).type, 'agentserver-generation-retry');
 });

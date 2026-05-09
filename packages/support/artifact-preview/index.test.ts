@@ -3,8 +3,12 @@ import test from 'node:test';
 import type { PreviewDescriptor } from './index';
 import {
   STRUCTURE_BUNDLE_PREVIEW_DERIVATIVE_KIND,
+  artifactProvenanceSource,
+  artifactProvenanceSourceVariant,
+  coerceArtifactReportPayload,
   descriptorWithDiagnostic,
   derivativeDescriptorsForPreviewTarget,
+  inlineObjectReferenceFromMarkdownRef,
   inlinePolicyForPreviewKind,
   locatorHintsForPreviewKind,
   lightweightPreviewNoticeForDescriptor,
@@ -20,6 +24,8 @@ import {
   previewPathHasRecognizedFileExtension,
   previewPathHasStableDeliverableExtension,
   previewStructureBundleStatus,
+  relatedArtifactsForReportPolicy,
+  splitInlineObjectReferenceText,
   unsupportedPreviewNoticeModel,
   uniquePreviewStrings,
   uploadedArtifactPreview,
@@ -155,4 +161,78 @@ test('builds package-owned preview notice copy from contract actions', () => {
   assert.equal(notice.kindLabel, 'binary');
   assert.equal(notice.requestLabel, '让 Agent 设计 preview package 并重试');
   assert.deepEqual(notice.codeLabels, ['outputs/archive.bin', 'inlinePolicy: unsupported']);
+});
+
+test('owns report markdown ref and backend placeholder shell policy', () => {
+  const payloadText = [
+    'Returning the existing result as a ToolPayload.',
+    '```json',
+    '{"artifacts":[{"id":"research-report","type":"research-report","data":{"markdownRef":".sciforge/run/report.md"}}],"uiManifest":[{"componentId":"report-viewer"}]}',
+    '```',
+  ].join('\n');
+  const report = coerceArtifactReportPayload({ markdown: payloadText }, {
+    id: 'research-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { markdown: payloadText },
+  });
+
+  assert.equal(report.reportRef, '.sciforge/run/report.md');
+  assert.match(report.markdown ?? '', /Markdown report/);
+  assert.doesNotMatch(report.markdown ?? '', /uiManifest/);
+});
+
+test('owns report related artifact fallback for paper and table artifacts', () => {
+  const primary = {
+    id: 'research-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    metadata: { runId: 'run-1' },
+    data: { reportRef: 'agentserver://run/output' },
+  };
+  const paperList = {
+    id: 'paper-list',
+    type: 'paper-list',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    metadata: { runId: 'run-1' },
+    data: {
+      papers: [{ title: 'Agentic Retrieval for Scientific Discovery', authors: ['A. Researcher'], year: 2026, summary: 'Literature triage workflow.' }],
+    },
+  };
+  const evidenceMatrix = {
+    id: 'evidence-matrix',
+    type: 'evidence-matrix',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    metadata: { runId: 'run-1' },
+    data: { rows: [{ claim: 'Agents improve triage', confidence: 0.72 }] },
+  };
+
+  const related = relatedArtifactsForReportPolicy([primary, paperList, evidenceMatrix], primary);
+  const report = coerceArtifactReportPayload({ reportRef: 'agentserver://run/output' }, primary, related);
+
+  assert.deepEqual(related.map((artifact) => artifact.id), ['paper-list', 'evidence-matrix']);
+  assert.match(report.markdown ?? '', /Agentic Retrieval for Scientific Discovery/);
+  assert.match(report.markdown ?? '', /Agents improve triage/);
+});
+
+test('owns inline markdown object reference detection policy', () => {
+  const reference = inlineObjectReferenceFromMarkdownRef('file:.sciforge/reports/final.pdf');
+  assert.equal(reference?.kind, 'file');
+  assert.equal(reference?.preferredView, 'pdf');
+  assert.equal(reference?.provenance?.path, '.sciforge/reports/final.pdf');
+
+  const split = splitInlineObjectReferenceText('See artifact:paper-list and file:.sciforge/reports/final.pdf.');
+  assert.deepEqual(split.filter((part) => part.reference).map((part) => part.reference?.kind), ['artifact', 'file']);
+});
+
+test('owns artifact provenance source and badge variant policy', () => {
+  assert.equal(artifactProvenanceSource(undefined), 'empty');
+  assert.equal(artifactProvenanceSource({ id: 'record', type: 'record-set', data: {}, metadata: { mode: 'record-only' } }), 'record-only');
+  assert.equal(artifactProvenanceSource({ id: 'omics', type: 'matrix', data: {}, dataRef: '.sciforge/omics/run/matrix.csv' }), 'project-tool');
+  assert.equal(artifactProvenanceSourceVariant('record-only'), 'warning');
+  assert.equal(artifactProvenanceSourceVariant('project-tool'), 'success');
 });

@@ -7,11 +7,20 @@ import {
   compileScenarioIRFromSelection,
   elementRegistry,
   recommendScenarioElements,
-  scenarioBuilderComponentDisplay,
+  scenarioBuilderChromeFallbackPane,
+  scenarioBuilderChromeNavItems,
+  scenarioBuilderChromePaneIds,
+  scenarioBuilderComponentSelectorCopy,
+  scenarioBuilderComponentSelectorOptions,
+  scenarioBuilderElementSelectorCopy,
+  scenarioBuilderElementSelectorRegistryAriaLabel,
+  scenarioBuilderElementSelectorSummary,
   scenarioBuilderQualityChecklistText,
   scenarioBuilderRecommendationReasons,
   scenarioIdBySkillDomain,
+  type ScenarioBuilderChromePaneId,
   type ScenarioBuilderDraft,
+  type ScenarioBuilderElementSelectorOption,
   type ScenarioElementSelection,
   type ScenarioPackage,
 } from '../../../../packages/scenarios/core';
@@ -22,18 +31,6 @@ import { exportJsonFile } from './exportUtils';
 import { ActionButton, Badge, cx } from './uiPrimitives';
 
 type BuilderLegacyStepId = 'describe' | 'elements' | 'contract' | 'quality' | 'publish';
-
-type BuilderChromePaneId =
-  | 'scene-info'
-  | 'agent-runtime-ui'
-  | 'scenario-package-ui'
-  | 'skills'
-  | 'tools'
-  | 'artifacts'
-  | 'failure-policies'
-  | 'contract'
-  | 'quality'
-  | 'publish';
 
 export function ScenarioBuilderPanel({
   scenarioId,
@@ -57,7 +54,7 @@ export function ScenarioBuilderPanel({
   /** When set (e.g. workbench), exposes AgentServer `availableComponentIds` as the same selectable component list as the scenario UI allowlist. */
   agentRuntimeComponentIds?: string[];
   onAgentRuntimeComponentIdsChange?: (ids: string[]) => void;
-  /** Workbench: single chrome toggle expands this panel body directly (no nested summary row). */
+  /** Embedded shell: single toggle expands this panel body directly. */
   chromeEmbedded?: boolean;
 }) {
   const initialSelection = useMemo(
@@ -73,7 +70,7 @@ export function ScenarioBuilderPanel({
   );
   const [selection, setSelection] = useState<ScenarioElementSelection>(initialSelection);
   const [legacyStep, setLegacyStep] = useState<BuilderLegacyStepId>('describe');
-  const [chromePane, setChromePane] = useState<BuilderChromePaneId>('scene-info');
+  const [chromePane, setChromePane] = useState<ScenarioBuilderChromePaneId>(scenarioBuilderChromePaneIds.sceneInfo);
   const describeSectionRef = useRef<HTMLElement>(null);
   const elementsSectionRef = useRef<HTMLElement>(null);
   const contractSectionRef = useRef<HTMLElement>(null);
@@ -86,31 +83,16 @@ export function ScenarioBuilderPanel({
     quality: qualitySectionRef,
     publish: publishSectionRef,
   };
-  const chromeNavItems = useMemo((): Array<{ id: BuilderChromePaneId; label: string }> => {
-    const items: Array<{ id: BuilderChromePaneId; label: string }> = [
-      { id: 'scene-info', label: '场景信息' },
-    ];
-    if (onAgentRuntimeComponentIdsChange) {
-      items.push({ id: 'agent-runtime-ui', label: 'Agent 运行时 UI' });
-    }
-    items.push(
-      { id: 'scenario-package-ui', label: '场景 UI allowlist' },
-      { id: 'skills', label: 'Skills' },
-      { id: 'tools', label: 'Tools' },
-      { id: 'artifacts', label: 'Artifacts' },
-      { id: 'failure-policies', label: '失败策略' },
-      { id: 'contract', label: '场景契约' },
-      { id: 'quality', label: '质量检查' },
-      { id: 'publish', label: '发布运行' },
-    );
-    return items;
-  }, [onAgentRuntimeComponentIdsChange]);
+  const includeAgentRuntimeUi = Boolean(onAgentRuntimeComponentIdsChange);
+  const chromeNavItems = useMemo(
+    () => scenarioBuilderChromeNavItems({ includeAgentRuntimeUi }),
+    [includeAgentRuntimeUi],
+  );
   useEffect(() => {
     if (!chromeEmbedded) return;
-    if (chromePane === 'agent-runtime-ui' && !onAgentRuntimeComponentIdsChange) {
-      setChromePane('scenario-package-ui');
-    }
-  }, [chromeEmbedded, chromePane, onAgentRuntimeComponentIdsChange]);
+    const nextPane = scenarioBuilderChromeFallbackPane({ pane: chromePane, includeAgentRuntimeUi });
+    if (nextPane !== chromePane) setChromePane(nextPane);
+  }, [chromeEmbedded, chromePane, includeAgentRuntimeUi]);
   function navigateLegacyStep(step: BuilderLegacyStepId) {
     setLegacyStep(step);
     requestAnimationFrame(() => {
@@ -133,6 +115,7 @@ export function ScenarioBuilderPanel({
     selection.skillDomain ?? scenario.skillDomain,
     (component) => component.componentId,
   );
+  const componentSelectorOptions = scenarioBuilderComponentSelectorOptions(componentOptions);
   const compileResult = useMemo(() => compileScenarioIRFromSelection(selection), [selection]);
   const qualityReport = useMemo(() => buildScenarioQualityReport({
     package: compileResult.package,
@@ -292,17 +275,9 @@ export function ScenarioBuilderPanel({
     if (!onAgentRuntimeComponentIdsChange) return null;
     return (
       <ElementSelector
-        title="Agent 运行时 UI 白名单"
-        description="发往 AgentServer 的 availableComponentIds；每行包含组件 ID、标题与说明。与左侧「组件工作台」勾选列表一致。"
-        options={componentOptions.map((component) => {
-          const popover = scenarioBuilderComponentDisplay(component.componentId);
-          return {
-            id: component.componentId,
-            label: component.label,
-            detail: component.description,
-            meta: popover.meta,
-          };
-        })}
+        title={scenarioBuilderComponentSelectorCopy.agentRuntimeUi.title}
+        description={scenarioBuilderComponentSelectorCopy.agentRuntimeUi.description}
+        options={componentSelectorOptions}
         selected={agentRuntimeComponentIds ?? []}
         onToggle={(id) => {
           const current = agentRuntimeComponentIds ?? [];
@@ -318,17 +293,9 @@ export function ScenarioBuilderPanel({
   function ScenarioPackageUiSelector() {
     return (
       <ElementSelector
-        title="场景 UI allowlist（Scenario package）"
-        description="每行一个可渲染 UI 组件；勾选项写入 Scenario 的 defaultComponents，用于编译 UI plan 与默认视图。"
-        options={componentOptions.map((component) => {
-          const popover = scenarioBuilderComponentDisplay(component.componentId);
-          return {
-            id: component.componentId,
-            label: component.label,
-            detail: component.description,
-            meta: popover.meta,
-          };
-        })}
+        title={scenarioBuilderComponentSelectorCopy.scenarioPackageUi.title}
+        description={scenarioBuilderComponentSelectorCopy.scenarioPackageUi.description}
+        options={componentSelectorOptions}
         selected={scenario.defaultComponents}
         onToggle={toggleComponent}
         onSelectMany={(ids) => setSelectedComponents(unique([...scenario.defaultComponents, ...ids]))}
@@ -445,42 +412,42 @@ export function ScenarioBuilderPanel({
               ))}
             </nav>
             <div className="builder-chrome-pane">
-              {chromePane === 'scene-info' ? (
+              {chromePane === scenarioBuilderChromePaneIds.sceneInfo ? (
                 <div className="builder-step-panel">
                   <DescribeFields />
                 </div>
               ) : null}
-              {chromePane === 'agent-runtime-ui' && onAgentRuntimeComponentIdsChange ? (
+              {chromePane === scenarioBuilderChromePaneIds.agentRuntimeUi && onAgentRuntimeComponentIdsChange ? (
                 <div className="builder-step-panel">
                   <AgentRuntimeUiSelector />
                 </div>
               ) : null}
-              {chromePane === 'scenario-package-ui' ? (
+              {chromePane === scenarioBuilderChromePaneIds.scenarioPackageUi ? (
                 <div className="builder-step-panel">
                   <ScenarioPackageUiSelector />
                 </div>
               ) : null}
-              {chromePane === 'skills' ? (
+              {chromePane === scenarioBuilderChromePaneIds.skills ? (
                 <div className="builder-step-panel">
                   <SkillsSelector />
                 </div>
               ) : null}
-              {chromePane === 'tools' ? (
+              {chromePane === scenarioBuilderChromePaneIds.tools ? (
                 <div className="builder-step-panel">
                   <ToolsSelector />
                 </div>
               ) : null}
-              {chromePane === 'artifacts' ? (
+              {chromePane === scenarioBuilderChromePaneIds.artifacts ? (
                 <div className="builder-step-panel">
                   <ArtifactsSelector />
                 </div>
               ) : null}
-              {chromePane === 'failure-policies' ? (
+              {chromePane === scenarioBuilderChromePaneIds.failurePolicies ? (
                 <div className="builder-step-panel">
                   <FailurePoliciesSelector />
                 </div>
               ) : null}
-              {chromePane === 'contract' ? (
+              {chromePane === scenarioBuilderChromePaneIds.contract ? (
                 <>
                   <div className="builder-step-panel">
                     <label className="wide">
@@ -520,7 +487,7 @@ export function ScenarioBuilderPanel({
                   </div>
                 </>
               ) : null}
-              {chromePane === 'quality' ? (
+              {chromePane === scenarioBuilderChromePaneIds.quality ? (
                 <div className="manifest-diagnostics">
                   <strong>Quality gate</strong>
                   <span><Badge variant={qualityCounts.blocking ? 'danger' : 'success'}>{qualityCounts.blocking} blocking</Badge></span>
@@ -529,7 +496,7 @@ export function ScenarioBuilderPanel({
                   <code>{qualityReport.items.slice(0, 3).map((item) => `${item.severity}:${item.code}`).join(' · ') || 'ready'}</code>
                 </div>
               ) : null}
-              {chromePane === 'publish' ? (
+              {chromePane === scenarioBuilderChromePaneIds.publish ? (
                 <div className="scenario-publish-row">
                   <div>
                     <Badge variant={compileResult.validationReport.ok ? 'success' : 'warning'}>
@@ -759,7 +726,7 @@ function ElementSelector({
 }: {
   title: string;
   description?: string;
-  options: Array<{ id: string; label: string; detail?: string; meta?: string }>;
+  options: ScenarioBuilderElementSelectorOption[];
   selected: string[];
   onToggle: (id: string) => void;
   onSelectMany?: (ids: string[]) => void;
@@ -785,7 +752,7 @@ function ElementSelector({
           className="element-selector-collapse"
           aria-expanded={bodyOpen}
           aria-controls={bodyId}
-          title={bodyOpen ? '收起列表' : '展开列表'}
+          title={bodyOpen ? scenarioBuilderElementSelectorCopy.collapseOpenTitle : scenarioBuilderElementSelectorCopy.collapseClosedTitle}
           onClick={() => setBodyOpen((value) => !value)}
         >
           {bodyOpen ? <ChevronUp size={16} aria-hidden /> : <ChevronDown size={16} aria-hidden />}
@@ -793,28 +760,33 @@ function ElementSelector({
         <div className="element-selector-title-block">
           <span>{title}</span>
           {description ? <p>{description}</p> : null}
-          <small>{selectedCount} selected · {visibleOptions.length}/{options.length} shown{excludedVisibleCount ? ` · ${excludedVisibleCount} excluded` : ''}</small>
+          <small>{scenarioBuilderElementSelectorSummary({
+            selectedCount,
+            visibleCount: visibleOptions.length,
+            totalCount: options.length,
+            excludedCount: excludedVisibleCount,
+          })}</small>
         </div>
       </div>
       {bodyOpen ? (
         <>
           <div className="element-selector-controls">
             <label className="element-selector-search">
-              <span>搜索</span>
+              <span>{scenarioBuilderElementSelectorCopy.searchLabel}</span>
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="名称、说明、artifact、capability..."
+                placeholder={scenarioBuilderElementSelectorCopy.searchPlaceholder}
               />
             </label>
             <div className="element-selector-actions">
-              <button type="button" onClick={() => onSelectMany?.(visibleIds)} disabled={!visibleIds.length}>选中当前</button>
-              <button type="button" onClick={() => onClearMany?.(visibleIds)} disabled={!visibleIds.length}>取消当前</button>
-              <button type="button" onClick={() => setExcluded((current) => unique([...current, ...visibleIds]))} disabled={!visibleIds.length}>排除当前</button>
-              <button type="button" onClick={() => setExcluded([])} disabled={!excluded.length}>恢复排除</button>
+              <button type="button" onClick={() => onSelectMany?.(visibleIds)} disabled={!visibleIds.length}>{scenarioBuilderElementSelectorCopy.selectVisible}</button>
+              <button type="button" onClick={() => onClearMany?.(visibleIds)} disabled={!visibleIds.length}>{scenarioBuilderElementSelectorCopy.clearVisible}</button>
+              <button type="button" onClick={() => setExcluded((current) => unique([...current, ...visibleIds]))} disabled={!visibleIds.length}>{scenarioBuilderElementSelectorCopy.excludeVisible}</button>
+              <button type="button" onClick={() => setExcluded([])} disabled={!excluded.length}>{scenarioBuilderElementSelectorCopy.restoreExcluded}</button>
             </div>
           </div>
-          <div id={bodyId} className="element-selector-table" role="list" aria-label={`${title} registry`}>
+          <div id={bodyId} className="element-selector-table" role="list" aria-label={scenarioBuilderElementSelectorRegistryAriaLabel(title)}>
         {visibleOptions.map((option) => {
           const isSelected = selected.includes(option.id);
           return (
@@ -828,17 +800,17 @@ function ElementSelector({
               </label>
               <p>{option.detail ?? option.id}</p>
               <details>
-                <summary>详细</summary>
-                <em>{option.meta ?? 'no additional profile'}</em>
+                <summary>{scenarioBuilderElementSelectorCopy.detailLabel}</summary>
+                <em>{option.meta ?? scenarioBuilderElementSelectorCopy.defaultMeta}</em>
               </details>
               <button type="button" className="element-selector-exclude" onClick={() => setExcluded((current) => unique([...current, option.id]))}>
-                排除
+                {scenarioBuilderElementSelectorCopy.rowExclude}
               </button>
             </article>
           );
         })}
             {!visibleOptions.length ? (
-              <div className="element-selector-empty">没有匹配项。可以清空搜索或恢复排除。</div>
+              <div className="element-selector-empty">{scenarioBuilderElementSelectorCopy.emptyState}</div>
             ) : null}
           </div>
         </>

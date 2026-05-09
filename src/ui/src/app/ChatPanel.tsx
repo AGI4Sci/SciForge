@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { scenarios, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
+import { guidanceQueuedEvent, userInterruptEvent } from '@sciforge-ui/runtime-contract';
 import { estimateContextWindowState, latestContextWindowState } from '../contextWindow';
 import { builtInScenarioPackageRef } from '@sciforge/scenario-core/scenario-package';
 import { builtInScenarioIdForRuntimeInput } from '@sciforge/scenario-core/scenario-routing-policy';
@@ -548,17 +549,7 @@ export function ChatPanel({
     inputRef.current = '';
     setComposerExpanded(false);
     setGuidanceQueue((current) => [...current, guidance]);
-    setStreamEvents((current) => [...current.slice(-32), {
-      id: makeId('evt'),
-      type: 'guidance-queued',
-      label: '引导已排队',
-      detail: `${prompt}\n状态：已排队，等待当前 run 结束后合并到下一轮。`,
-      createdAt: now,
-      raw: {
-        guidanceQueue: guidance,
-        contract: 'guidance-queue/run-orchestration',
-      },
-    }]);
+    setStreamEvents((current) => [...current.slice(-32), guidanceQueuedEvent({ id: makeId('evt'), createdAt: now }, guidance)]);
   }
 
   function handleAbort() {
@@ -575,13 +566,7 @@ export function ChatPanel({
     }
     guidanceQueueRef.current = [];
     setGuidanceQueue([]);
-    setStreamEvents((current) => [...current.slice(-31), {
-      id: makeId('evt'),
-      type: 'user-interrupt',
-      label: '中断请求',
-      detail: '用户请求中断当前 backend 运行；已关闭当前 HTTP stream，并清空排队引导。',
-      createdAt: interruptedAt,
-    }]);
+    setStreamEvents((current) => [...current.slice(-31), userInterruptEvent({ id: makeId('evt'), createdAt: interruptedAt })]);
     userAbortRequestedRef.current = true;
     abortRef.current.abort();
   }

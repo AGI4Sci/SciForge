@@ -2,20 +2,92 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  copyScenarioPackageForWorkspace,
+  renameScenarioPackageForImport,
+  scenarioBuilderChromeFallbackPane,
+  scenarioBuilderChromeNavItems,
+  scenarioBuilderChromePaneIds,
   scenarioBuilderDefaultPrompt,
   scenarioBuilderComponentDisplay,
+  scenarioBuilderComponentSelectorCopy,
+  scenarioBuilderComponentSelectorOptions,
   scenarioBuilderDraftPreviewModel,
+  scenarioBuilderElementSelectorRegistryAriaLabel,
+  scenarioBuilderElementSelectorSummary,
   scenarioDashboardPrimaryImportAction,
+  scenarioPackageCopyId,
   scenarioPackageExportFileName,
+  scenarioPackageManifestPreview,
   scenarioPackagePreviewFields,
   scenarioBuilderQualityChecklistText,
   scenarioBuilderRecommendationReasons,
   scenarioSkillDomainFilterOptions,
 } from './scenarioBuilderDisplayPolicy';
 import { compileScenarioDraft } from './scenarioDraftCompiler';
+import { elementRegistry } from './elementRegistry';
 import { SCENARIO_SPECS } from './scenarioSpecs';
+import { buildBuiltInScenarioPackage } from './scenarioPackage';
 
 describe('scenario builder display policy', () => {
+  it('owns chrome pane ids and labels for the embedded builder shell', () => {
+    const withoutAgentRuntime = scenarioBuilderChromeNavItems();
+    const withAgentRuntime = scenarioBuilderChromeNavItems({ includeAgentRuntimeUi: true });
+
+    assert.deepEqual(withoutAgentRuntime.map((item) => item.id), [
+      scenarioBuilderChromePaneIds.sceneInfo,
+      scenarioBuilderChromePaneIds.scenarioPackageUi,
+      scenarioBuilderChromePaneIds.skills,
+      scenarioBuilderChromePaneIds.tools,
+      scenarioBuilderChromePaneIds.artifacts,
+      scenarioBuilderChromePaneIds.failurePolicies,
+      scenarioBuilderChromePaneIds.contract,
+      scenarioBuilderChromePaneIds.quality,
+      scenarioBuilderChromePaneIds.publish,
+    ]);
+    assert.deepEqual(withAgentRuntime.slice(0, 3).map((item) => item.id), [
+      scenarioBuilderChromePaneIds.sceneInfo,
+      scenarioBuilderChromePaneIds.agentRuntimeUi,
+      scenarioBuilderChromePaneIds.scenarioPackageUi,
+    ]);
+    assert.ok(withAgentRuntime.some((item) => item.label === '场景 UI allowlist'));
+  });
+
+  it('keeps chrome fallback policy next to pane ids', () => {
+    assert.equal(
+      scenarioBuilderChromeFallbackPane({ pane: scenarioBuilderChromePaneIds.agentRuntimeUi }),
+      scenarioBuilderChromePaneIds.scenarioPackageUi,
+    );
+    assert.equal(
+      scenarioBuilderChromeFallbackPane({
+        pane: scenarioBuilderChromePaneIds.agentRuntimeUi,
+        includeAgentRuntimeUi: true,
+      }),
+      scenarioBuilderChromePaneIds.agentRuntimeUi,
+    );
+  });
+
+  it('owns scenario package allowlist selector display policy', () => {
+    const reportViewer = elementRegistry.components.find((component) => component.componentId === 'report-viewer');
+    assert.ok(reportViewer);
+    const options = scenarioBuilderComponentSelectorOptions([reportViewer]);
+
+    assert.equal(scenarioBuilderComponentSelectorCopy.scenarioPackageUi.title, '场景 UI allowlist（Scenario package）');
+    assert.match(scenarioBuilderComponentSelectorCopy.scenarioPackageUi.description, /defaultComponents/);
+    assert.equal(options[0].id, 'report-viewer');
+    assert.equal(options[0].label, 'Markdown report document');
+    assert.match(options[0].meta ?? '', /fallback/);
+    assert.equal(scenarioBuilderElementSelectorSummary({
+      selectedCount: 2,
+      visibleCount: 3,
+      totalCount: 5,
+      excludedCount: 1,
+    }), '2 selected · 3/5 shown · 1 excluded');
+    assert.equal(
+      scenarioBuilderElementSelectorRegistryAriaLabel(scenarioBuilderComponentSelectorCopy.scenarioPackageUi.title),
+      '场景 UI allowlist（Scenario package） registry',
+    );
+  });
+
   it('owns builder readiness copy in the scenario package boundary', () => {
     assert.match(scenarioBuilderQualityChecklistText, /producer\/consumer/);
     assert.match(scenarioBuilderQualityChecklistText, /fallback/);
@@ -78,6 +150,39 @@ describe('scenario builder display policy', () => {
 
     assert.deepEqual(fields.map((field) => field.label), ['scenario', 'domain', 'quality', 'export file']);
     assert.deepEqual(fields.map((field) => field.value), ['Workspace review', 'literature', 'quality pass', 'workspace-review-1.0.0.scenario-package.json']);
+  });
+
+  it('owns dashboard package import and copy ids in package policy', () => {
+    const pkg = buildBuiltInScenarioPackage('literature-evidence-review', '2026-04-25T00:00:00.000Z');
+
+    assert.equal(scenarioPackageCopyId(pkg, 123456), 'literature-evidence-review-copy-2n9c');
+
+    const copy = copyScenarioPackageForWorkspace(pkg, 'literature-copy');
+    assert.equal(copy.id, 'literature-copy');
+    assert.equal(copy.status, 'draft');
+    assert.equal(copy.scenario.id, 'literature-copy');
+    assert.equal(copy.scenario.source, 'workspace');
+    assert.match(copy.scenario.title, / copy$/);
+
+    const renamed = renameScenarioPackageForImport(
+      { ...pkg, status: 'archived' },
+      'literature-import',
+      '2026-05-10T00:00:00.000Z',
+    );
+    assert.equal(renamed.status, 'draft');
+    assert.equal(renamed.scenario.id, 'literature-import');
+    assert.equal(renamed.versions[0].createdAt, '2026-05-10T00:00:00.000Z');
+    assert.equal(renamed.versions[0].scenarioHash, 'import-literature-import');
+  });
+
+  it('builds dashboard package export preview from package policy', () => {
+    const pkg = buildBuiltInScenarioPackage('literature-evidence-review', '2026-04-25T00:00:00.000Z');
+    const preview = scenarioPackageManifestPreview(pkg, '/Applications/workspace/demo');
+
+    assert.equal(preview.qualityLabel, 'quality pass');
+    assert.equal(preview.manifest.id, 'literature-evidence-review');
+    assert.deepEqual(preview.manifest.uiPlan.components, pkg.uiPlan.compiledFrom.componentIds);
+    assert.deepEqual(preview.manifest.tests[0].expectedArtifactTypes, pkg.tests[0].expectedArtifactTypes);
   });
 
   it('turns scenario builder draft ids into display tokens for UI preview', () => {

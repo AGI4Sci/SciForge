@@ -9,7 +9,10 @@ import {
   scenarioBuilderDraftPreviewModel,
   scenarioBuilderPromptPlaceholder,
   scenarioDashboardPrimaryImportAction,
+  copyScenarioPackageForWorkspace,
+  renameScenarioPackageForImport,
   scenarioPackageExportFileName,
+  scenarioPackageManifestPreview,
   scenarioPackagePreviewFields,
   scenarioSkillDomainFilterOptions,
 } from '@sciforge/scenario-core/scenario-builder-display-policy';
@@ -38,9 +41,7 @@ import {
   buildPackageRunStats,
   compileScenarioPackageForDraft,
   filterScenarioLibraryItems,
-  packageManifestPreview,
   parseScenarioPackageJson,
-  renameScenarioPackageForImport,
   scenarioInstanceIdForDraft,
   type DashboardLibraryItem,
   type PackageRunStats,
@@ -60,7 +61,7 @@ function PackageExportPreviewDialog({
   onClose: () => void;
   onConfirm: () => void;
 }) {
-  const preview = packageManifestPreview(pkg, workspacePath);
+  const preview = scenarioPackageManifestPreview(pkg, workspacePath);
   const exportFileName = scenarioPackageExportFileName(pkg);
   const previewFields = scenarioPackagePreviewFields({
     title: pkg.scenario.title,
@@ -237,18 +238,7 @@ export function Dashboard({
   async function copyWorkspaceScenario(id: string) {
     const pkg = await loadWorkspaceScenario(config, id);
     if (!pkg) return;
-    const copyId = `${pkg.id}-copy-${Date.now().toString(36)}`;
-    await saveWorkspaceScenario(config, {
-      ...pkg,
-      id: copyId,
-      version: '1.0.0',
-      status: 'draft',
-      scenario: {
-        ...pkg.scenario,
-        id: copyId,
-        title: `${pkg.scenario.title} copy`,
-      },
-    });
+    await saveWorkspaceScenario(config, copyScenarioPackageForWorkspace(pkg));
     await refreshScenarioLibrary();
     setLibraryStatus('已复制为 draft。');
   }

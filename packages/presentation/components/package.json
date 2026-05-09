@@ -49,5 +49,8 @@
   "peerDependencies": {
     "@sciforge-ui/runtime-contract": "^1.0.0",
     "react": "^19.2.5"
+  },
+  "dependencies": {
+    "@sciforge-ui/artifact-preview": "^1.0.0"
   }
 }

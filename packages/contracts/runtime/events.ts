@@ -1,6 +1,7 @@
 import type { RuntimeArtifact } from './artifacts';
 import type { AgentCompactCapability, AgentContextCompaction, AgentContextWindowSource, AgentContextWindowState, AgentStreamEvent } from './stream';
 import type { RuntimeExecutionUnit } from './execution';
+import type { GuidanceQueueRecord } from './messages';
 import type { ObjectReference } from './references';
 
 export type BackgroundCompletionEventType =
@@ -63,6 +64,9 @@ export const RATE_LIMIT_EVENT_TYPE = 'rateLimit' as const;
 export const BACKEND_EVENT_TYPE = 'backend-event' as const;
 export const AGENTSERVER_EVENT_TYPE_PREFIX = 'agentserver-' as const;
 export const PROCESS_PROGRESS_EVENT_TYPE = 'process-progress' as const;
+export const GUIDANCE_QUEUED_EVENT_TYPE = 'guidance-queued' as const;
+export const USER_INTERRUPT_EVENT_TYPE = 'user-interrupt' as const;
+export const GUIDANCE_QUEUE_RUN_ORCHESTRATION_CONTRACT = 'guidance-queue/run-orchestration' as const;
 export const PROCESS_EVENTS_SCHEMA_VERSION = 'sciforge.process-events.v1' as const;
 export const LATENCY_DIAGNOSTICS_SCHEMA_VERSION = 'sciforge.latency-diagnostics.v1' as const;
 export const LATENCY_DIAGNOSTICS_EVENT_TYPE = 'latency-diagnostics' as const;
@@ -72,6 +76,18 @@ export const WORKSPACE_RUNTIME_SOURCE = 'workspace-runtime' as const;
 export const SCIFORGE_RUNTIME_PROVIDER = 'sciforge-runtime' as const;
 export const CONVERSATION_POLICY_EVENT_TYPE = 'conversation-policy' as const;
 export const AGENTSERVER_CONTEXT_WINDOW_STATE_EVENT_TYPE = 'agentserver-context-window-state' as const;
+export const GATEWAY_REQUEST_RECEIVED_EVENT_TYPE = 'gateway-request-received' as const;
+export const CONVERSATION_POLICY_STARTED_EVENT_TYPE = 'conversation-policy-started' as const;
+export const DIRECT_CONTEXT_FAST_PATH_EVENT_TYPE = 'direct-context-fast-path' as const;
+export const WORKSPACE_SKILL_SELECTED_EVENT_TYPE = 'workspace-skill-selected' as const;
+export const REPAIR_ATTEMPT_START_EVENT_TYPE = 'repair-attempt-start' as const;
+export const REPAIR_ATTEMPT_RESULT_EVENT_TYPE = 'repair-attempt-result' as const;
+export const AGENTSERVER_DISPATCH_EVENT_TYPE = 'agentserver-dispatch' as const;
+export const AGENTSERVER_CONVERGENCE_GUARD_EVENT_TYPE = 'agentserver-convergence-guard' as const;
+export const AGENTSERVER_SILENT_STREAM_GUARD_EVENT_TYPE = 'agentserver-silent-stream-guard' as const;
+export const AGENTSERVER_CONTEXT_WINDOW_RECOVERY_EVENT_TYPE = 'agentserver-context-window-recovery' as const;
+export const AGENTSERVER_GENERATION_RETRY_EVENT_TYPE = 'agentserver-generation-retry' as const;
+export const AGENTSERVER_GENERATION_RETRY_SCHEMA_VERSION = 'sciforge.agentserver-generation-retry.v1' as const;
 
 export const LATENCY_DIAGNOSTICS_CACHE_POLICY_KEYS = [
   'reuseScenarioPlan',
@@ -111,6 +127,15 @@ export interface WorkspaceRuntimeResultCompletion {
 export interface RuntimeEventIdentity {
   id: string;
   createdAt: string;
+}
+
+export interface WorkspaceRuntimePolicyEvent {
+  type: string;
+  message?: string;
+  detail?: string;
+  status?: string;
+  source?: string;
+  raw?: unknown;
 }
 
 const BLOCKING_RUNTIME_STATUSES = new Set(['repair-needed', 'failed-with-reason', 'failed']);
@@ -174,6 +199,177 @@ export function latencyDiagnosticsCachePolicy(policy: Record<string, unknown>) {
     else if (policy[key] === false) misses.push(key);
   }
   return { hits, misses };
+}
+
+export function gatewayRequestReceivedEvent(skillDomain: string): WorkspaceRuntimePolicyEvent {
+  return {
+    type: GATEWAY_REQUEST_RECEIVED_EVENT_TYPE,
+    source: WORKSPACE_RUNTIME_SOURCE,
+    status: 'running',
+    message: 'Workspace runtime received the chat turn and is preparing policy and execution routing.',
+    detail: skillDomain,
+  };
+}
+
+export function conversationPolicyStartedEvent(): WorkspaceRuntimePolicyEvent {
+  return {
+    type: CONVERSATION_POLICY_STARTED_EVENT_TYPE,
+    source: WORKSPACE_RUNTIME_SOURCE,
+    status: 'running',
+    message: 'Starting Python conversation policy.',
+    detail: 'Selecting memory, latency, recovery, and execution plans before dispatch.',
+  };
+}
+
+export function directContextFastPathEvent(raw: unknown): WorkspaceRuntimePolicyEvent {
+  return {
+    type: DIRECT_CONTEXT_FAST_PATH_EVENT_TYPE,
+    source: WORKSPACE_RUNTIME_SOURCE,
+    status: 'completed',
+    message: 'Python policy selected direct-context-answer; answered from existing session context without starting a workspace task.',
+    raw,
+  };
+}
+
+export function workspaceSkillSelectedEvent(input: {
+  skillId: string;
+  skillDomain: string;
+  entrypointType?: string;
+}): WorkspaceRuntimePolicyEvent {
+  return {
+    type: WORKSPACE_SKILL_SELECTED_EVENT_TYPE,
+    source: WORKSPACE_RUNTIME_SOURCE,
+    message: `Selected skill ${input.skillId} for ${input.skillDomain}`,
+    detail: input.entrypointType,
+  };
+}
+
+export function repairAttemptStartEvent(input: {
+  attempt: number;
+  maxAttempts: number;
+  failureReason: string;
+}): WorkspaceRuntimePolicyEvent {
+  return {
+    type: REPAIR_ATTEMPT_START_EVENT_TYPE,
+    source: WORKSPACE_RUNTIME_SOURCE,
+    status: 'running',
+    message: `AgentServer repair attempt ${input.attempt}/${input.maxAttempts}`,
+    detail: input.failureReason,
+  };
+}
+
+export function repairAttemptResultEvent(input: {
+  attempt: number;
+  maxAttempts: number;
+  exitCode: number;
+  stdout?: string;
+  stderr?: string;
+}): WorkspaceRuntimePolicyEvent {
+  return {
+    type: REPAIR_ATTEMPT_RESULT_EVENT_TYPE,
+    source: WORKSPACE_RUNTIME_SOURCE,
+    status: input.exitCode === 0 ? 'completed' : 'failed',
+    message: `AgentServer repair attempt ${input.attempt}/${input.maxAttempts} rerun exited ${input.exitCode}`,
+    detail: [input.stdout?.slice(0, 1000), input.stderr?.slice(0, 1000)].filter(Boolean).join('\n'),
+  };
+}
+
+export function agentServerDispatchEvent(input: {
+  backend: string;
+  baseUrl: string;
+  normalizedBytes: number;
+  maxPayloadBytes: number;
+  rawRef: string;
+}): WorkspaceRuntimePolicyEvent {
+  return {
+    type: AGENTSERVER_DISPATCH_EVENT_TYPE,
+    source: WORKSPACE_RUNTIME_SOURCE,
+    message: `Dispatching to AgentServer ${input.backend}`,
+    detail: `${input.baseUrl} · handoff ${input.normalizedBytes}/${input.maxPayloadBytes} bytes · raw ${input.rawRef}`,
+  };
+}
+
+export function agentServerConvergenceGuardEvent(message: string): WorkspaceRuntimePolicyEvent {
+  return {
+    type: AGENTSERVER_CONVERGENCE_GUARD_EVENT_TYPE,
+    source: WORKSPACE_RUNTIME_SOURCE,
+    status: 'failed-with-reason',
+    message,
+    detail: 'Current-reference digests are already available; SciForge will recover from bounded refs instead of letting the backend replay large files indefinitely.',
+  };
+}
+
+export function agentServerSilentStreamGuardEvent(message: string): WorkspaceRuntimePolicyEvent {
+  return {
+    type: AGENTSERVER_SILENT_STREAM_GUARD_EVENT_TYPE,
+    source: WORKSPACE_RUNTIME_SOURCE,
+    status: 'failed-with-reason',
+    message,
+    detail: 'Current-reference digests are already available; SciForge will recover from bounded refs instead of waiting on a silent backend stream indefinitely.',
+  };
+}
+
+export function agentServerContextWindowRecoveryStartEvent(input: {
+  detail: string;
+  raw: unknown;
+}): WorkspaceRuntimePolicyEvent {
+  return {
+    type: AGENTSERVER_CONTEXT_WINDOW_RECOVERY_EVENT_TYPE,
+    source: WORKSPACE_RUNTIME_SOURCE,
+    status: 'running',
+    message: 'AgentServer reported context window exceeded; compacting context before one retry.',
+    detail: input.detail,
+    raw: input.raw,
+  };
+}
+
+export function agentServerGenerationRecoveryEventType(categories: readonly unknown[]) {
+  return categories.includes('context-window')
+    ? AGENTSERVER_CONTEXT_WINDOW_RECOVERY_EVENT_TYPE
+    : AGENTSERVER_GENERATION_RETRY_EVENT_TYPE;
+}
+
+export function agentServerGenerationRecoveryStartEvent(input: {
+  categories: readonly unknown[];
+  detail: string;
+  raw: unknown;
+}): WorkspaceRuntimePolicyEvent {
+  return {
+    type: agentServerGenerationRecoveryEventType(input.categories),
+    source: WORKSPACE_RUNTIME_SOURCE,
+    status: 'running',
+    message: 'AgentServer provider/rate-limit recovery: compacting context and retrying once.',
+    detail: input.detail,
+    raw: input.raw,
+  };
+}
+
+export function agentServerContextWindowRecoverySucceededEvent(input: {
+  detail?: string;
+  raw: unknown;
+}): WorkspaceRuntimePolicyEvent {
+  return {
+    type: AGENTSERVER_CONTEXT_WINDOW_RECOVERY_EVENT_TYPE,
+    source: WORKSPACE_RUNTIME_SOURCE,
+    status: 'completed',
+    message: 'AgentServer generation succeeded after context compaction retry.',
+    detail: input.detail,
+    raw: input.raw,
+  };
+}
+
+export function agentServerGenerationRetrySucceededEvent(input: {
+  detail: string;
+  raw: unknown;
+}): WorkspaceRuntimePolicyEvent {
+  return {
+    type: AGENTSERVER_GENERATION_RETRY_EVENT_TYPE,
+    source: WORKSPACE_RUNTIME_SOURCE,
+    status: 'completed',
+    message: 'AgentServer provider/rate-limit recovery succeeded after one compact retry.',
+    detail: input.detail,
+    raw: input.raw,
+  };
 }
 
 export function firstBlockingRuntimeResultReason(result: Record<string, unknown>): string | undefined {
@@ -352,6 +548,30 @@ export function projectToolFailedEvent(identity: RuntimeEventIdentity, detail: s
   return {
     ...projectToolEvent(identity, PROJECT_TOOL_FAILED_EVENT_TYPE, eventDetail),
     raw: { error: detail },
+  };
+}
+
+export function guidanceQueuedEvent(identity: RuntimeEventIdentity, guidance: GuidanceQueueRecord): AgentStreamEvent {
+  return {
+    id: identity.id,
+    type: GUIDANCE_QUEUED_EVENT_TYPE,
+    label: '引导已排队',
+    detail: `${guidance.prompt}\n状态：已排队，等待当前 run 结束后合并到下一轮。`,
+    createdAt: identity.createdAt,
+    raw: {
+      guidanceQueue: guidance,
+      contract: GUIDANCE_QUEUE_RUN_ORCHESTRATION_CONTRACT,
+    },
+  };
+}
+
+export function userInterruptEvent(identity: RuntimeEventIdentity): AgentStreamEvent {
+  return {
+    id: identity.id,
+    type: USER_INTERRUPT_EVENT_TYPE,
+    label: '中断请求',
+    detail: '用户请求中断当前 backend 运行；已关闭当前 HTTP stream，并清空排队引导。',
+    createdAt: identity.createdAt,
   };
 }
 

@@ -7,6 +7,27 @@ export type {
   PreviewDescriptorSource,
   PreviewInlinePolicy,
 } from '@sciforge-ui/runtime-contract/preview';
+export {
+  artifactProvenanceSource,
+  artifactProvenanceSourceVariant,
+  coerceArtifactReportPayload,
+  hasInlineObjectReferenceText,
+  inlineObjectReferenceFromMarkdownRef,
+  isGeneratedReportShell,
+  isReportPolicyRecord,
+  looksLikeBackendPayloadText,
+  markdownShellForReportRef,
+  relatedArtifactsForReportPolicy,
+  reportPolicyRecordList,
+  reportPolicyString,
+  reportRecordToReadableText,
+  reportRefFromText,
+  reportSectionsToMarkdown,
+  splitInlineObjectReferenceText,
+  type ArtifactProvenanceSource,
+  type ArtifactProvenanceSourceVariant,
+  type ReportPolicyRuntimeArtifactLike,
+} from './report-policy';
 
 import type { PreviewDescriptor } from '@sciforge-ui/runtime-contract/preview';
 import type { RuntimeArtifact } from '@sciforge-ui/runtime-contract/artifacts';

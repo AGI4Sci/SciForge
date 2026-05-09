@@ -140,6 +140,22 @@ import { tryRunVisionSenseRuntime } from './vision-sense-runtime.js';
 import { applyConversationPolicy } from './conversation-policy/apply.js';
 import { toolPackageManifests } from '../../packages/skills/tool_skills';
 import { agentHandoffSourceMetadata } from '@sciforge-ui/runtime-contract/handoff';
+import {
+  AGENTSERVER_GENERATION_RETRY_SCHEMA_VERSION,
+  agentServerConvergenceGuardEvent,
+  agentServerContextWindowRecoveryStartEvent,
+  agentServerContextWindowRecoverySucceededEvent,
+  agentServerDispatchEvent,
+  agentServerGenerationRecoveryStartEvent,
+  agentServerGenerationRetrySucceededEvent,
+  agentServerSilentStreamGuardEvent,
+  conversationPolicyStartedEvent,
+  directContextFastPathEvent,
+  gatewayRequestReceivedEvent,
+  repairAttemptResultEvent,
+  repairAttemptStartEvent,
+  workspaceSkillSelectedEvent,
+} from '@sciforge-ui/runtime-contract/events';
 
 configureDirectAnswerArtifactContext(collectArtifactReferenceContext);
 configurePayloadValidationContext(attemptPlanRefs);
@@ -149,7 +165,7 @@ function requestHandoffSource(request: GatewayRequest) {
 }
 
 interface AgentServerGenerationRetryAudit {
-  schemaVersion: 'sciforge.agentserver-generation-retry.v1';
+  schemaVersion: typeof AGENTSERVER_GENERATION_RETRY_SCHEMA_VERSION;
   attempt: 2;
   maxAttempts: 2;
   trigger: AgentServerBackendFailureDiagnostic;
@@ -195,36 +211,18 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
   const normalizedRequest = normalizeGatewayRequestFromModule(body);
   const telemetry = createLatencyTelemetry(normalizedRequest, callbacks);
   try {
-    emitWorkspaceRuntimeEvent(telemetry.callbacks, {
-      type: 'gateway-request-received',
-      source: 'workspace-runtime',
-      status: 'running',
-      message: 'Workspace runtime received the chat turn and is preparing policy and execution routing.',
-      detail: normalizedRequest.skillDomain,
-    });
-    emitWorkspaceRuntimeEvent(telemetry.callbacks, {
-      type: 'conversation-policy-started',
-      source: 'workspace-runtime',
-      status: 'running',
-      message: 'Starting Python conversation policy.',
-      detail: 'Selecting memory, latency, recovery, and execution plans before dispatch.',
-    });
+    emitWorkspaceRuntimeEvent(telemetry.callbacks, gatewayRequestReceivedEvent(normalizedRequest.skillDomain));
+    emitWorkspaceRuntimeEvent(telemetry.callbacks, conversationPolicyStartedEvent());
     const policyApplication = await applyConversationPolicy(normalizedRequest, telemetry.callbacks, { workspace: normalizedRequest.workspacePath });
     telemetry.markPolicyApplication(policyApplication);
     const request = policyApplication.request;
     const directContextPayload = directContextFastPathPayload(request);
     if (directContextPayload) {
-      emitWorkspaceRuntimeEvent(telemetry.callbacks, {
-        type: 'direct-context-fast-path',
-        source: 'workspace-runtime',
-        status: 'completed',
-        message: 'Python policy selected direct-context-answer; answered from existing session context without starting a workspace task.',
-        raw: {
-          executionModePlan: request.uiState?.executionModePlan,
-          responsePlan: request.uiState?.responsePlan,
-          latencyPolicy: request.uiState?.latencyPolicy,
-        },
-      });
+      emitWorkspaceRuntimeEvent(telemetry.callbacks, directContextFastPathEvent({
+        executionModePlan: request.uiState?.executionModePlan,
+        responsePlan: request.uiState?.responsePlan,
+        latencyPolicy: request.uiState?.latencyPolicy,
+      }));
       telemetry.markVerificationStart();
       const verified = await applyRuntimeVerificationPolicy(directContextPayload, request);
       telemetry.markVerificationEnd();
@@ -239,12 +237,11 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
     }
     const skills = await loadSkillRegistry(request);
     const skill = agentServerGenerationSkill(request.skillDomain);
-    emitWorkspaceRuntimeEvent(telemetry.callbacks, {
-      type: 'workspace-skill-selected',
-      source: 'workspace-runtime',
-      message: `Selected skill ${skill.id} for ${request.skillDomain}`,
-      detail: skill.manifest.entrypoint.type,
-    });
+    emitWorkspaceRuntimeEvent(telemetry.callbacks, workspaceSkillSelectedEvent({
+      skillId: skill.id,
+      skillDomain: request.skillDomain,
+      entrypointType: skill.manifest.entrypoint.type,
+    }));
     const payload = await runAgentServerGeneratedTask(request, skill, skills, telemetry.callbacks)
       ?? repairNeededPayload(request, skill, 'AgentServer task generation did not produce a runnable task.');
     telemetry.markVerificationStart();
@@ -338,13 +335,11 @@ async function tryAgentServerRepairAndRerun(params: {
   const attempt = Math.max(2, priorAttempts.length + 1);
   const parentAttempt = attempt - 1;
   if (attempt > maxAttempts) return undefined;
-  emitWorkspaceRuntimeEvent(params.callbacks, {
-    type: 'repair-attempt-start',
-    source: 'workspace-runtime',
-    status: 'running',
-    message: `AgentServer repair attempt ${attempt}/${maxAttempts}`,
-    detail: params.failureReason,
-  });
+  emitWorkspaceRuntimeEvent(params.callbacks, repairAttemptStartEvent({
+    attempt,
+    maxAttempts,
+    failureReason: params.failureReason,
+  }));
   const repair = await requestAgentServerRepair({
     baseUrl,
     request: params.request,
@@ -415,13 +410,13 @@ async function tryAgentServerRepairAndRerun(params: {
     stderrRel,
   });
   throwIfRuntimeAborted(params.callbacks);
-  emitWorkspaceRuntimeEvent(params.callbacks, {
-    type: 'repair-attempt-result',
-    source: 'workspace-runtime',
-    status: rerun.exitCode === 0 ? 'completed' : 'failed',
-    message: `AgentServer repair attempt ${attempt}/${maxAttempts} rerun exited ${rerun.exitCode}`,
-    detail: [rerun.stdout?.slice(0, 1000), rerun.stderr?.slice(0, 1000)].filter(Boolean).join('\n'),
-  });
+  emitWorkspaceRuntimeEvent(params.callbacks, repairAttemptResultEvent({
+    attempt,
+    maxAttempts,
+    exitCode: rerun.exitCode,
+    stdout: rerun.stdout,
+    stderr: rerun.stderr,
+  }));
 
   if (rerun.exitCode !== 0 && !await fileExists(join(workspace, outputRel))) {
     await appendTaskAttempt(workspace, {
@@ -852,12 +847,13 @@ async function requestAgentServerGeneration(params: {
         auditRefs: normalizedHandoff.auditRefs,
       },
     });
-    emitWorkspaceRuntimeEvent(params.callbacks, {
-      type: 'agentserver-dispatch',
-      source: 'workspace-runtime',
-      message: `Dispatching to AgentServer ${backend}`,
-      detail: `${params.baseUrl} · handoff ${normalizedHandoff.normalizedBytes}/${normalizedHandoff.budget.maxPayloadBytes} bytes · raw ${normalizedHandoff.rawRef}`,
-    });
+    emitWorkspaceRuntimeEvent(params.callbacks, agentServerDispatchEvent({
+      backend,
+      baseUrl: params.baseUrl,
+      normalizedBytes: normalizedHandoff.normalizedBytes,
+      maxPayloadBytes: normalizedHandoff.budget.maxPayloadBytes,
+      rawRef: normalizedHandoff.rawRef,
+    }));
     const response = await fetch(`${params.baseUrl}/api/agent-server/runs/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -874,23 +870,11 @@ async function requestAgentServerGeneration(params: {
       maxSilentMs: currentReferenceDigestSilentGuardMs(request),
       onGuardTrip: (message) => {
         controller.abort();
-        emitWorkspaceRuntimeEvent(params.callbacks, {
-          type: 'agentserver-convergence-guard',
-          source: 'workspace-runtime',
-          status: 'failed-with-reason',
-          message,
-          detail: 'Current-reference digests are already available; SciForge will recover from bounded refs instead of letting the backend replay large files indefinitely.',
-        });
+        emitWorkspaceRuntimeEvent(params.callbacks, agentServerConvergenceGuardEvent(message));
       },
       onSilentTimeout: (message) => {
         controller.abort();
-        emitWorkspaceRuntimeEvent(params.callbacks, {
-          type: 'agentserver-silent-stream-guard',
-          source: 'workspace-runtime',
-          status: 'failed-with-reason',
-          message,
-          detail: 'Current-reference digests are already available; SciForge will recover from bounded refs instead of waiting on a silent backend stream indefinitely.',
-        });
+        emitWorkspaceRuntimeEvent(params.callbacks, agentServerSilentStreamGuardEvent(message));
       },
     });
     await writeAgentServerDebugArtifact(params.workspace, 'generation', runPayload, response.status, json);
@@ -1114,11 +1098,7 @@ async function recoverOrReturnAgentServerGenerationFailure(params: {
         },
       };
     }
-    emitWorkspaceRuntimeEvent(params.callbacks, {
-      type: 'agentserver-context-window-recovery',
-      source: 'workspace-runtime',
-      status: 'running',
-      message: 'AgentServer reported context window exceeded; compacting context before one retry.',
+    emitWorkspaceRuntimeEvent(params.callbacks, agentServerContextWindowRecoveryStartEvent({
       detail: originalErrorSummary,
       raw: {
         backend: params.adapter.backend,
@@ -1128,7 +1108,7 @@ async function recoverOrReturnAgentServerGenerationFailure(params: {
         sessionRef: contextSessionRef,
         priorHandoff: params.priorHandoff,
       },
-    });
+    }));
     const compaction = await params.adapter.compactContext?.(
       { agentId: params.agentId, workspace: params.workspace, baseUrl: params.baseUrl },
       `contextWindowExceeded:${originalErrorSummary}`,
@@ -1222,14 +1202,11 @@ async function recoverOrReturnAgentServerGenerationFailure(params: {
   }
 
   const backoffMs = boundedRateLimitBackoffMs(diagnostic);
-  emitWorkspaceRuntimeEvent(params.callbacks, {
-    type: diagnostic.categories.includes('context-window') ? 'agentserver-context-window-recovery' : 'agentserver-generation-retry',
-    source: 'workspace-runtime',
-    status: 'running',
-    message: 'AgentServer provider/rate-limit recovery: compacting context and retrying once.',
+  emitWorkspaceRuntimeEvent(params.callbacks, agentServerGenerationRecoveryStartEvent({
+    categories: diagnostic.categories,
     detail: providerRateLimitDiagnosticMessage(diagnostic, false),
     raw: diagnostic,
-  });
+  }));
   if (backoffMs > 0) {
     await sleep(backoffMs);
   }
@@ -1256,7 +1233,7 @@ async function recoverOrReturnAgentServerGenerationFailure(params: {
   }
 
   const retryAudit: AgentServerGenerationRetryAudit = {
-    schemaVersion: 'sciforge.agentserver-generation-retry.v1',
+    schemaVersion: AGENTSERVER_GENERATION_RETRY_SCHEMA_VERSION,
     attempt: 2,
     maxAttempts: 2,
     trigger: diagnostic,
@@ -1308,14 +1285,10 @@ async function finalizeAgentServerGenerationSuccess<T extends Extract<AgentServe
   if (!params.contextRecovery) return params.result;
   params.contextRecovery.retrySucceeded = true;
   if (String(params.contextRecovery.kind) === 'contextWindowExceeded') {
-    emitWorkspaceRuntimeEvent(params.callbacks, {
-      type: 'agentserver-context-window-recovery',
-      source: 'workspace-runtime',
-      status: 'completed',
-      message: 'AgentServer generation succeeded after context compaction retry.',
+    emitWorkspaceRuntimeEvent(params.callbacks, agentServerContextWindowRecoverySucceededEvent({
       detail: params.contextRecovery.compaction?.message || params.contextRecovery.originalErrorSummary,
       raw: params.contextRecovery,
-    });
+    }));
     await appendContextRecoveryAuditAttempt({
       workspace: params.workspace,
       request: params.request,
@@ -1326,14 +1299,10 @@ async function finalizeAgentServerGenerationSuccess<T extends Extract<AgentServe
     });
     return params.result;
   }
-  emitWorkspaceRuntimeEvent(params.callbacks, {
-    type: 'agentserver-generation-retry',
-    source: 'workspace-runtime',
-    status: 'completed',
-    message: 'AgentServer provider/rate-limit recovery succeeded after one compact retry.',
+  emitWorkspaceRuntimeEvent(params.callbacks, agentServerGenerationRetrySucceededEvent({
     detail: params.contextRecovery.originalErrorSummary,
     raw: params.contextRecovery,
-  });
+  }));
   return params.result;
 }
 

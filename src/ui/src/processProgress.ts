@@ -1,3 +1,4 @@
+import { GUIDANCE_QUEUED_EVENT_TYPE, PROCESS_PROGRESS_EVENT_TYPE, USER_INTERRUPT_EVENT_TYPE } from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
 import { makeId, nowIso } from './domain';
 import type { RuntimeResponsePlan } from './latencyPolicy';
@@ -226,8 +227,8 @@ function latestNonSyntheticEvent(events: AgentStreamEvent[]) {
   for (const event of [...events].reverse()) {
     const raw = isRecord(event.raw) ? event.raw : {};
     if (raw.silentStreamWaiting === true) continue;
-    if (event.type === 'process-progress' && isRecord(raw.progress) && raw.progress.reason === 'backend-waiting') continue;
-    if (event.type === 'queued' || event.type === 'guidance-queued' || event.type === 'user-interrupt') continue;
+    if (event.type === PROCESS_PROGRESS_EVENT_TYPE && isRecord(raw.progress) && raw.progress.reason === 'backend-waiting') continue;
+    if (event.type === 'queued' || event.type === GUIDANCE_QUEUED_EVENT_TYPE || event.type === USER_INTERRUPT_EVENT_TYPE) continue;
     return event;
   }
   return undefined;

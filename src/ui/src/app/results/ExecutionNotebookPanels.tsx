@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { structureSummaryMetricPresentation } from '@sciforge/interactive-views';
 import { ChevronDown, ChevronUp, Clock, Download, FileCode, Lock, Shield } from 'lucide-react';
 import { buildExecutionBundle, evaluateExecutionBundleExport } from '../../exportPolicy';
 import { scenarios, type ScenarioId } from '../../data';
@@ -9,10 +10,6 @@ import { UploadedDataUrlPreview } from './WorkspaceObjectPreview';
 
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -39,19 +36,15 @@ function formatResultFileBytes(value: number) {
 }
 
 export function MetricGrid({ metrics = {} }: { metrics?: Record<string, unknown> }) {
-  const rows = [
-    ['Pocket volume', asString(metrics.pocketVolume) || (asNumber(metrics.pocketVolume) ? `${asNumber(metrics.pocketVolume)} A3` : undefined), '#00E5A0'],
-    ['pLDDT mean', asString(metrics.pLDDT) || asString(metrics.plddt) || (asNumber(metrics.pLDDT) ?? asNumber(metrics.plddt))?.toString(), '#4ECDC4'],
-    ['Resolution', asString(metrics.resolution) || (asNumber(metrics.resolution) ? `${asNumber(metrics.resolution)} A` : undefined), '#FFD54F'],
-    ['Mutation risk', asString(metrics.mutationRisk), '#FF7043'],
-    ['Method', asString(metrics.method), '#B0C4D8'],
-  ].filter((row): row is [string, string, string] => typeof row[1] === 'string' && row[1].trim().length > 0);
+  const presentation = structureSummaryMetricPresentation(metrics);
+  const rows = presentation.rows;
   if (!rows.length) {
-    return <EmptyArtifactState title="没有结构指标" detail="structure-summary 未提供 metrics；UI 不再填充默认分辨率或 pLDDT。" />;
+    const emptyState = presentation.emptyState!;
+    return <EmptyArtifactState title={emptyState.title} detail={emptyState.detail} />;
   }
   return (
     <div className="metric-grid">
-      {rows.map(([label, value, color]) => (
+      {rows.map(({ label, value, color }) => (
         <Card className="metric" key={label}>
           <span>{label}</span>
           <strong style={{ color }}>{value}</strong>

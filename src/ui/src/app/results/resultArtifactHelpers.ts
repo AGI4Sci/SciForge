@@ -2,6 +2,11 @@ import type { EvidenceLevel } from '../../data';
 import type { RuntimeArtifact, RuntimeExecutionUnit, SciForgeSession, UIManifestSlot } from '../../domain';
 import { buildExecutionBundle, evaluateExecutionBundleExport } from '../../exportPolicy';
 import { exportJsonFile } from '../exportUtils';
+import {
+  artifactProvenanceSource,
+  artifactProvenanceSourceVariant,
+  type ArtifactProvenanceSource,
+} from '../../../../../packages/support/artifact-preview';
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -25,18 +30,11 @@ export function artifactMeta(artifact?: RuntimeArtifact) {
 }
 
 export function artifactSource(artifact?: RuntimeArtifact): 'project-tool' | 'record-only' | 'empty' {
-  if (!artifact) return 'empty';
-  const mode = asString(artifact.metadata?.mode);
-  const runner = asString(artifact.metadata?.runner);
-  if (mode?.includes('record')) return 'record-only';
-  if (runner?.includes('local-csv') || artifact.dataRef?.includes('.sciforge/omics/')) return 'project-tool';
-  return 'project-tool';
+  return artifactProvenanceSource(artifact);
 }
 
 export function sourceVariant(source: ReturnType<typeof artifactSource>): 'success' | 'muted' | 'warning' {
-  if (source === 'project-tool') return 'success';
-  if (source === 'record-only') return 'warning';
-  return 'muted';
+  return artifactProvenanceSourceVariant(source as ArtifactProvenanceSource);
 }
 
 export function executionUnitForArtifact(session: SciForgeSession, artifact?: RuntimeArtifact): RuntimeExecutionUnit | undefined {

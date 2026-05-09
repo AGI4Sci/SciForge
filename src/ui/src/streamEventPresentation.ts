@@ -1,4 +1,5 @@
 import { buildContextWindowMeterModel } from './contextWindow';
+import { GUIDANCE_QUEUED_EVENT_TYPE } from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
 import {
   classifyWorkEvent,
@@ -274,7 +275,10 @@ function streamEventImportance(event: AgentStreamEvent, detail: string): StreamE
   }
   if (type === 'usage-update') return 'background';
   if (type === 'process-progress') return 'key';
-  if (/(current-plan|run-plan|stage-start|tool-call|project-tool-start|project-tool-done|repair-start|acceptance-repair|guidance-queued|backend-silent|status)/.test(type)) {
+  if (
+    type === GUIDANCE_QUEUED_EVENT_TYPE
+    || /(current-plan|run-plan|stage-start|tool-call|project-tool-start|project-tool-done|repair-start|acceptance-repair|backend-silent|status)/.test(type)
+  ) {
     return 'key';
   }
   if (/(tool-result|result|completed|done)/.test(type)) {

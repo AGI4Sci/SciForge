@@ -35,11 +35,13 @@ import {
   preferredExistingArtifactFollowupArtifact,
   preferredInteractiveViewComponentForArtifactType,
   preferredInteractiveViewComponentForPreviewKind,
+  previewPackageAutoRunPromptPolicy,
   repairDiagnosticViewSlotPolicy,
   reportRuntimeResultViewSlots,
   resolveInteractiveViewPlanSection,
   selectedViewComponentsForIntent,
   standaloneWorkspaceArtifactPayloadPolicy,
+  structureSummaryMetricPresentation,
   stripDirectAnswerJsonFence,
   uiComponentCompatibilityAliases,
   uiComponentManifests,
@@ -173,6 +175,47 @@ test('interactive view policy owns preview descriptor view choice', () => {
   assert.equal(preferredInteractiveViewComponentForPreviewKind('structure'), 'structure-viewer');
   assert.equal(preferredInteractiveViewComponentForPreviewKind('table'), 'record-table');
   assert.equal(preferredInteractiveViewComponentForPreviewKind('binary'), 'unknown-artifact-inspector');
+});
+
+test('interactive view policy owns preview package auto-run prompt copy', () => {
+  const prompt = previewPackageAutoRunPromptPolicy({
+    reference: {
+      id: 'file-data',
+      title: 'data.xyz',
+      kind: 'file',
+      ref: 'workspace://inputs/data.xyz',
+      status: 'available',
+    },
+    descriptor: {
+      kind: 'binary',
+      source: 'path',
+      ref: 'workspace://inputs/data.xyz',
+      inlinePolicy: 'unsupported',
+      mimeType: 'chemical/x-xyz',
+      actions: [],
+    },
+  });
+
+  assert.match(prompt, /preview package/);
+  assert.match(prompt, /文件扩展名：xyz/);
+  assert.match(prompt, /packages\/presentation\/components/);
+});
+
+test('interactive view policy owns structure summary metric presentation', () => {
+  const metrics = structureSummaryMetricPresentation({
+    pocketVolume: 42,
+    pLDDT: 91.5,
+    method: 'AlphaFold DB',
+  });
+
+  assert.deepEqual(metrics.rows.map((row) => row.label), ['Pocket volume', 'pLDDT mean', 'Method']);
+  assert.equal(metrics.rows[0]?.value, '42 A3');
+  assert.equal(metrics.emptyState, undefined);
+
+  assert.deepEqual(structureSummaryMetricPresentation({}).emptyState, {
+    title: '没有结构指标',
+    detail: 'structure-summary 未提供 metrics；UI 不再填充默认分辨率或 pLDDT。',
+  });
 });
 
 test('interactive view policy owns result binding, section, and presentation dedupe', () => {

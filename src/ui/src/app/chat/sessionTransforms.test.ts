@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { guidanceQueuedEvent } from '@sciforge-ui/runtime-contract';
 import type { BackgroundCompletionRuntimeEvent, NormalizedAgentResponse, RuntimeArtifact, RuntimeExecutionUnit, SciForgeMessage, SciForgeSession, UserGoalSnapshot } from '../../domain';
 import {
   applyBackgroundCompletionEventToSession,
@@ -257,17 +258,7 @@ test('running guidance keeps queue status in UI message, event transcript, final
   const queued = appendRunningGuidanceRecord(session({
     messages: [message('msg-active', 'user', 'prepare an evidence report', '2026-05-08T00:00:00.000Z')],
   }), guidance).session;
-  const events = [{
-    id: 'evt-guidance',
-    type: 'guidance-queued',
-    label: '引导已排队',
-    detail: `${guidance.prompt}\n状态：已排队，等待当前 run 结束后合并到下一轮。`,
-    createdAt: guidance.receivedAt,
-    raw: {
-      guidanceQueue: guidance,
-      contract: 'guidance-queue/run-orchestration',
-    },
-  }];
+  const events = [guidanceQueuedEvent({ id: 'evt-guidance', createdAt: guidance.receivedAt }, guidance)];
   const response: NormalizedAgentResponse = {
     message: message('msg-response', 'scenario', 'active run finished', '2026-05-08T00:02:00.000Z'),
     run: {
