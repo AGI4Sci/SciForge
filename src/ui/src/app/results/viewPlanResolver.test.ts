@@ -84,3 +84,38 @@ test('latest failed run suppresses core artifacts after active run focus is rest
 
   assert.equal([...visibleItems, ...deferredItems].some((item) => item.artifact?.id === 'research-report'), false);
 });
+
+test('fallback display intent keeps artifact order instead of reading prompt semantics', () => {
+  const matrix: RuntimeArtifact = {
+    id: 'matrix-result',
+    type: 'expression-matrix',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { rows: [] },
+  };
+  const report: RuntimeArtifact = {
+    id: 'report-result',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { markdown: '# Report' },
+  };
+  const activeRun: SciForgeRun = {
+    id: 'run-semantic-prompt',
+    scenarioId: 'literature-evidence-review',
+    status: 'completed',
+    prompt: 'Prefer a markdown report and PDB structure view',
+    response: 'The answer mentions report, structure, and markdown.',
+    createdAt: '2026-05-07T00:00:01.000Z',
+  };
+  const session = baseSession({
+    runs: [activeRun],
+    artifacts: [matrix, report],
+  });
+
+  const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun, defaultSlots: [] });
+
+  assert.deepEqual(plan.displayIntent.requiredArtifactTypes, ['expression-matrix', 'research-report']);
+  assert.equal(plan.displayIntent.primaryGoal, '展示当前 session 的 runtime artifacts');
+  assert.equal(plan.displayIntent.source, 'fallback-inference');
+});

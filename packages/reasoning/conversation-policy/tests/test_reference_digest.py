@@ -57,6 +57,18 @@ class ReferenceDigestTest(unittest.TestCase):
         self.assertEqual(digest.refSafe, True)
         self.assertNotIn("secret raw body", digest.digestText)
 
+    def test_prompt_filename_resolves_unique_workspace_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            nested = root / "notes"
+            nested.mkdir()
+            (nested / "unique-ref.md").write_text("# Unique\nbridge preserved prompt lookup", encoding="utf-8")
+
+            digest = build_reference_digests([], prompt="Please inspect unique-ref.md", workspace_root=str(root))[0]
+
+        self.assertEqual(digest.status, "ok")
+        self.assertEqual(digest.path, "notes/unique-ref.md")
+
 
 if __name__ == "__main__":
     unittest.main()

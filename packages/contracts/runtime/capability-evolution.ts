@@ -159,6 +159,25 @@ export interface ComposedCapabilityResult {
   };
 }
 
+export interface CapabilityFallbackDecisionSummary {
+  trigger?: CapabilityFallbackTrigger;
+  reason?: string;
+  fallbackable: boolean;
+  atomicCapabilityIds: string[];
+  blockedBy: CapabilityFallbackBlocker[];
+  recoverActions: string[];
+}
+
+export interface CapabilityAtomicTraceSummary {
+  capabilityId: string;
+  providerId?: string;
+  status: ComposedCapabilityAtomicTrace['status'];
+  failureCode?: string;
+  executionUnitRefs: string[];
+  artifactRefs: string[];
+  validationSummary?: string;
+}
+
 export interface CapabilityEvolutionRecord {
   schemaVersion: 'sciforge.capability-evolution-record.v1';
   id: string;
@@ -195,6 +214,8 @@ export interface CapabilityEvolutionCompactRecord {
   finalStatus: CapabilityEvolutionRecordStatus;
   failureCode?: string;
   fallbackable?: boolean;
+  fallbackDecision?: CapabilityFallbackDecisionSummary;
+  atomicTrace?: CapabilityAtomicTraceSummary[];
   recoverActions: string[];
   repairAttemptCount: number;
   artifactRefs: string[];

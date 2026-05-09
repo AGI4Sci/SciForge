@@ -36,6 +36,20 @@ await writeFile(join(workspace, '.sciforge', 'artifacts', `${sessionId}-research
     outputRef,
   },
 }, null, 2), 'utf8');
+await writeFile(join(workspace, '.sciforge', 'artifacts', `${sessionId}-agentserver-report.json`), JSON.stringify({
+  id: 'agentserver-report',
+  type: 'research-report',
+  producerScenario: 'literature',
+  producerSessionId: sessionId,
+  schemaVersion: '1',
+  dataRef: `agentserver://${sessionId}/live-report.md`,
+  data: {
+    markdown: '# Materialized AgentServer Report\n\n- Temporary backend refs resolve through stable artifacts.',
+  },
+  metadata: {
+    title: 'Materialized AgentServer Report',
+  },
+}, null, 2), 'utf8');
 await writeFile(join(workspace, 'notes', 'summary.md'), '# File Ref\n\nWorkspace file refs are readable.', 'utf8');
 await writeFile(join(workspace, '.sciforge', 'logs', 'session-tool-smoke.stdout.log'), 'stdout ok', 'utf8');
 await writeFile(join(workspace, '.sciforge', 'logs', 'session-tool-smoke.stderr.log'), '', 'utf8');
@@ -83,10 +97,11 @@ const list = await listSessionArtifacts({
 });
 
 assert.equal(list.tool, 'list_session_artifacts');
-assert.equal(list.artifacts.length, 1);
-assert.equal(list.artifacts[0].id, 'research-report');
-assert.equal(list.objectReferences[0].ref, 'artifact:research-report');
-assert.equal(list.objectReferences[0].preferredView, undefined);
+assert.equal(list.artifacts.length, 2);
+const listedReport = list.artifacts.find((artifact) => artifact.id === 'research-report');
+assert.ok(listedReport);
+assert.ok(list.objectReferences.some((reference) => reference.ref === 'artifact:research-report'));
+assert.equal(list.objectReferences.find((reference) => reference.ref === 'artifact:research-report')?.preferredView, undefined);
 
 const resolved = await resolveObjectReference({
   workspacePath: workspace,
@@ -141,6 +156,25 @@ const fileRead = await readArtifact({
 assert.equal(fileRead.status, 'read');
 assert.equal(fileRead.mimeType, 'text/markdown');
 assert.match(fileRead.text ?? '', /Workspace file refs are readable/);
+
+const workspaceResolved = await resolveObjectReference({
+  workspacePath: workspace,
+  ref: 'workspace:notes/summary.md',
+});
+
+assert.equal(workspaceResolved.status, 'resolved');
+assert.equal(workspaceResolved.refKind, 'workspace');
+assert.equal(workspaceResolved.reference.kind, 'file');
+assert.equal(workspaceResolved.reference.ref, 'workspace:notes/summary.md');
+
+const workspaceUriRead = await readArtifact({
+  workspacePath: workspace,
+  ref: 'workspace://notes/summary.md',
+});
+
+assert.equal(workspaceUriRead.status, 'read');
+assert.equal(workspaceUriRead.mimeType, 'text/markdown');
+assert.match(workspaceUriRead.text ?? '', /Workspace file refs are readable/);
 
 const runResolved = await resolveObjectReference({
   workspacePath: workspace,
@@ -198,4 +232,57 @@ assert.equal(resumed.runRef, `run:${runId}`);
 assert.ok(resumed.objectReferences.some((reference) => reference.kind === 'run' && reference.runId === runId));
 assert.ok(resumed.objectReferences.some((reference) => reference.kind === 'file' && reference.ref === `file:${outputRef}`));
 
-console.log('[ok] backend artifact tools resolve/read/render artifact, file, run, execution-unit refs and resume_run contract');
+const materializedAgentServerResolved = await resolveObjectReference({
+  workspacePath: workspace,
+  sessionId,
+  skillDomain: 'literature',
+  ref: `agentserver://${sessionId}/live-report.md`,
+});
+
+assert.equal(materializedAgentServerResolved.status, 'resolved');
+assert.equal(materializedAgentServerResolved.refKind, 'agentserver');
+assert.equal(materializedAgentServerResolved.reference.kind, 'artifact');
+assert.equal(materializedAgentServerResolved.artifact?.id, 'agentserver-report');
+
+const materializedAgentServerRead = await readArtifact({
+  workspacePath: workspace,
+  sessionId,
+  skillDomain: 'literature',
+  ref: `agentserver://${sessionId}/live-report.md`,
+});
+
+assert.equal(materializedAgentServerRead.status, 'read');
+assert.match(materializedAgentServerRead.text ?? '', /Materialized AgentServer Report/);
+
+const transientAgentServerResolved = await resolveObjectReference({
+  workspacePath: workspace,
+  sessionId,
+  skillDomain: 'literature',
+  ref: 'agentserver://unmaterialized/live-output',
+});
+
+assert.equal(transientAgentServerResolved.status, 'blocked');
+assert.equal(transientAgentServerResolved.refKind, 'agentserver');
+assert.equal(transientAgentServerResolved.reference.kind, 'url');
+
+const transientAgentServerRead = await readArtifact({
+  workspacePath: workspace,
+  sessionId,
+  skillDomain: 'literature',
+  ref: 'agentserver://unmaterialized/live-output',
+});
+
+assert.equal(transientAgentServerRead.status, 'blocked');
+assert.match(transientAgentServerRead.reason ?? '', /transient backend URIs/);
+
+const transientAgentServerRendered = await renderArtifact({
+  workspacePath: workspace,
+  sessionId,
+  skillDomain: 'literature',
+  ref: 'agentserver://unmaterialized/live-output',
+  format: 'markdown',
+});
+
+assert.equal(transientAgentServerRendered.status, 'blocked');
+
+console.log('[ok] backend artifact tools resolve/read/render artifact, workspace, file, run, execution-unit, agentserver refs and resume_run contract');

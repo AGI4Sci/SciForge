@@ -86,7 +86,6 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/ui/src/app/ComponentWorkbenchPage.tsx#ui-semantic-fallback': 3,
   'src/ui/src/app/ScenarioBuilderPanel.tsx#ui-semantic-fallback': 6,
   'src/ui/src/app/results/WorkspaceObjectPreview.tsx#ui-semantic-fallback': 1,
-  'src/ui/src/app/results/viewPlanResolver.ts#provider-scenario-prompt-special-case': 1,
   'src/ui/src/app/results/viewPlanResolver.ts#ui-semantic-fallback': 4,
   'src/ui/src/app/uiPrimitives.tsx#ui-semantic-fallback': 1,
   'src/ui/src/runtimeContracts.ts#ui-semantic-fallback': 1,

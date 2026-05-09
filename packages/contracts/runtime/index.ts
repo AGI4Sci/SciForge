@@ -54,6 +54,23 @@ export type {
   ContractValidationIssue,
 } from './validation-failure';
 export type {
+  CapabilityManifest,
+  CapabilityManifestBrief,
+  CapabilityManifestKind,
+  CapabilityManifestLifecycle,
+  CapabilityManifestRisk,
+  CapabilityManifestSideEffect,
+  CapabilityProviderManifest,
+  CapabilityRepairHint,
+  CapabilityValidatorManifest,
+} from './capability-manifest';
+export {
+  CAPABILITY_MANIFEST_CONTRACT_ID,
+  capabilityManifestSchema,
+  compactCapabilityManifestBrief,
+  validateCapabilityManifestShape,
+} from './capability-manifest';
+export type {
   CapabilityEvolutionCompactRecord,
   CapabilityEvolutionCompactSummary,
   CapabilityEvolutionRecord,

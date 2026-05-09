@@ -123,6 +123,30 @@ try {
   assert.equal(summary.fallbackRecordCount, 1);
   assert.equal(summary.repairRecordCount, 1);
   assert.equal(summary.recentRecords[0]?.failureCode, 'schema-invalid');
+  assert.deepEqual(summary.recentRecords[0]?.fallbackDecision, {
+    trigger: 'schema-invalid',
+    reason: 'Schema validation failed before user-visible delivery.',
+    fallbackable: true,
+    atomicCapabilityIds: ['capability.atomic.extract', 'capability.atomic.render'],
+    blockedBy: ['unsafe-side-effect', 'requires-human-approval'],
+    recoverActions: ['fallback-to-atomic', 'repair-output-schema'],
+  });
+  assert.deepEqual(summary.recentRecords[0]?.atomicTrace, [
+    {
+      capabilityId: 'capability.atomic.extract',
+      providerId: 'provider-runtime',
+      status: 'succeeded',
+      executionUnitRefs: ['execution-unit:atomic-1'],
+      artifactRefs: ['artifact:intermediate-1'],
+    },
+    {
+      capabilityId: 'capability.atomic.render',
+      providerId: 'provider-runtime',
+      status: 'succeeded',
+      executionUnitRefs: ['execution-unit:repair-1'],
+      artifactRefs: ['artifact:summary-1'],
+    },
+  ]);
   assert.deepEqual(summary.recentRecords[0]?.artifactRefs, ['artifact:summary-1']);
   assert.deepEqual(summary.recentRecords[0]?.executionUnitRefs, [
     'execution-unit:composed-1',

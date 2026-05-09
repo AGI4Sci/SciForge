@@ -1,5 +1,5 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import type {
   BackendObjectRefKind,
@@ -53,10 +53,36 @@ export async function resolveObjectReference(input: ResolveObjectReferenceInput)
     };
   }
 
+  if (refKind === 'agentserver') {
+    const artifacts = await collectBackendArtifacts(input, workspace);
+    const artifact = findArtifactByRef(artifacts, ref);
+    if (artifact) {
+      const reference = artifactObjectReference(artifact);
+      return {
+        tool: 'resolve_object_reference',
+        refKind,
+        reference,
+        status: 'resolved',
+        artifact,
+        path: artifactPath(workspace, artifact),
+        actions: reference.actions ?? [],
+      };
+    }
+    const reference = genericObjectReference(ref, refKind);
+    return {
+      tool: 'resolve_object_reference',
+      refKind,
+      reference,
+      status: 'blocked',
+      reason: 'AgentServer refs are transient backend URIs; materialize them to artifact, file, run, or workspace refs before reading.',
+      actions: reference.actions ?? [],
+    };
+  }
+
   if (refKind === 'file' || refKind === 'workspace') {
-    const path = resolveFileLikeRef(ref, workspace);
+    const path = refKind === 'workspace' ? resolveWorkspaceRef(ref, workspace) : resolveFileLikeRef(ref, workspace);
     if (!path) return missingResolution(ref, refKind, 'File reference could not be resolved inside the workspace.');
-    const reference = fileObjectReference(ref, path);
+    const reference = refKind === 'workspace' ? workspaceObjectReference(ref, path) : fileObjectReference(ref, path);
     return {
       tool: 'resolve_object_reference',
       refKind,
@@ -459,6 +485,19 @@ function fileObjectReference(ref: string, path: string): ObjectReference {
   };
 }
 
+function workspaceObjectReference(ref: string, path: string): ObjectReference {
+  const kind = existsSync(path) && statSync(path).isDirectory() ? 'folder' : 'file';
+  return {
+    id: `workspace:${stripWorkspaceRef(ref)}`,
+    title: basename(path),
+    kind,
+    ref,
+    actions: kind === 'folder' ? ['inspect', 'reveal-in-folder', 'copy-path', 'pin'] : ['inspect', 'reveal-in-folder', 'copy-path'],
+    status: existsSync(path) ? 'available' : 'missing',
+    provenance: { path },
+  };
+}
+
 function runObjectReference(run: BackendRunResolution): ObjectReference {
   const attempt = run.attempt;
   return {
@@ -538,6 +577,7 @@ function missingResolution(ref: string, refKind: BackendObjectRefKind, reason: s
 
 function classifyBackendRef(ref: string): BackendObjectRefKind {
   if (/^agentserver:\/\//i.test(ref)) return 'agentserver';
+  if (/^workspace:(\/\/)?/i.test(ref)) return 'workspace';
   if (/^artifact:/i.test(ref)) return 'artifact';
   if (/^run:[^#]+#execution-?unit:/i.test(ref)) return 'execution-unit';
   if (/^execution-?unit:/i.test(ref)) return 'execution-unit';
@@ -573,6 +613,20 @@ function resolveFileLikeRef(ref: string, workspace: string) {
   } catch {
     return undefined;
   }
+}
+
+function resolveWorkspaceRef(ref: string, workspace: string) {
+  try {
+    return resolveWorkspacePreviewRef(stripWorkspaceRef(ref), workspace);
+  } catch {
+    return undefined;
+  }
+}
+
+function stripWorkspaceRef(ref: string) {
+  return ref.trim()
+    .replace(/^workspace:\/\//i, '')
+    .replace(/^workspace:/i, '');
 }
 
 function artifactPath(workspace: string, artifact: RuntimeArtifact) {

@@ -60,7 +60,7 @@ Todo：
 - [ ] `packages -> src` P0：迁移 `packages/reasoning/conversation-policy/src/sciforge_conversation/service.py`、`execution_classifier.py`、`context_policy.py`、`cache_policy.py`、`memory.py`、`recovery.py`、`response_plan.py`、`latency_policy.py`、`acceptance.py` 到 `src/runtime/conversation-policy` ownership；这是平台 turn lifecycle，不是可插拔能力。
 - [ ] `packages -> src` P0：迁移 `packages/reasoning/conversation-policy/src/sciforge_conversation/capability_broker.py` 的 broker shell/main flow 到 `src/runtime/capability-broker` 或 `src/runtime/skill-registry`；packages 只提供 manifests 和 schemas。
 - [ ] `packages -> src` P0：迁移 `handoff_planner.py` 到 `src/runtime/gateway`，`reference_digest.py` 到 `src/runtime/workspace-references` 或 gateway，`artifact_index.py` 到 `src/runtime/gateway/artifact-reference-context.ts` / `workspace-paths.ts`，因为它们处理 handoff budget、safe file IO、workspace refs 和 artifact persistence lifecycle。
-- [ ] `packages -> src` P1：迁移 `process_events.py` 的 stream/process event normalization 到 `src/runtime/gateway/workspace-event-normalizer.ts`，删除 Python 侧重复路径。
+- [x] `packages -> src` P1：迁移 `process_events.py` 的 stream/process event normalization 到 `src/runtime/gateway/workspace-event-normalizer.ts`，删除 Python 侧重复路径。
 - [ ] `packages -> src` P1：拆分 `packages/support/object-references/index.ts`，session lookup、action availability、composer marker allocation、synthetic artifact creation 进入 `src/runtime/references` 或 UI；packages 只保留纯 contract-adjacent normalizers。
 - [ ] `packages -> src` P1：拆分 `packages/support/artifact-preview/index.ts`，preview hydration、inline policy、default preview actions、file-kind inference 进入 `src/runtime/server/file-preview.ts` 和 UI results；`PreviewDescriptor` contract 留在 `packages/contracts/runtime`。
 - [ ] `packages -> src/tests` P1：迁移 `packages/scenarios/core/src/runtimeSmoke.ts` 到 `tests/smoke` 或 runtime scenario harness；scenario package 只保留 policy/schema validation。
@@ -103,7 +103,7 @@ Todo：
 - [x] 建立 promotion proposal 规则：高频成功组合可提议晋升为 composed capability；高频失败模式可提议更新 validator、fallbackPolicy 或 repair hints。
 - [ ] broker 只消费 ledger 的 compact summary，不直接展开完整胶水代码和日志；需要复用/修复时再按 ref 展开。
 - [x] 增加 smoke：generated task schema invalid / repair completion 后 ledger 记录原失败、下钻路径和最终 artifact refs，compact summary 不展开胶水代码。
-- [ ] 增加 smoke：composed capability schema invalid 后 fallback 到 atomic capabilities，并记录 fallback 决策与 atomic trace。
+- [x] 增加 smoke：composed capability schema invalid 后 fallback 到 atomic capabilities，并记录 fallback 决策与 atomic trace。
 - [ ] 删除任何散落的“成功胶水代码缓存”或“失败样例记录”临时实现，统一归入 ledger。
 
 验收标准：
@@ -125,7 +125,7 @@ Todo：
 - [x] 为每条旧链路标注新的唯一真相源：capability manifest、broker、resolver、validator、runtime executor 或 backend tool。
 - [ ] 删除旧链路和对应测试夹具；只保留验证新路径的 tests/smoke。
 - [x] 增加 `no-legacy-paths` smoke，禁止重新引入 UI 语义兜底、provider/scenario/prompt 特例和重复 source of truth。
-- [ ] 更新 docs/Architecture、docs/Extending、packages/README，删除旧架构描述。
+- [x] 更新 docs/Architecture、docs/Extending、packages/README，删除旧架构描述。
 
 验收标准：
 
@@ -162,8 +162,8 @@ Todo：
 Todo：
 
 - [x] 定义并暴露 backend 工具 contract：`list_session_artifacts`、`resolve_object_reference`、`read_artifact`、`render_artifact`、`resume_run`。
-- [ ] 支持 workspace refs、artifact refs、executionUnit refs、run refs、file refs 和 `agentserver://` refs 的统一解析。
-  说明：当前已覆盖 artifact/file/run/executionUnit refs 与 `resume_run` contract；workspace refs 和 `agentserver://` refs 仍需补完整 smoke。
+- [x] 支持 workspace refs、artifact refs、executionUnit refs、run refs、file refs 和 `agentserver://` refs 的统一解析。
+  说明：`agentserver://` 只在已 materialize 为稳定 artifact/file ref 时可读；未 materialize 的临时 URI 会返回 blocked，要求先转为稳定 refs。
 - [x] 收敛 workspace file ref 解析到 `src/runtime/workspace-paths.ts` helper，并让 task attempts 复用该 helper 读取 outputRef 摘要；覆盖 `file:`、`.sciforge/*`、managed shorthand 和 workspace 越界拒绝。
 - [x] run completed 前将 backend 输出 materialize 到 `.sciforge/task-results/*.json|md` 并返回稳定 object refs。
 - [x] backend completed contract 禁止 “I will retrieve...” 这类计划句伪装完成；必须交付文本、artifact 或稳定 ref。
@@ -187,7 +187,7 @@ Todo：
 - [x] 收窄 handoff payload contract：为 `failureRecoveryPolicy`、`referencePolicy`、`artifactPolicy`、verification snapshots 和 attempt refs 定义窄类型/guards，同时保持 loose transport record 兼容。
 - [x] 将 payload schema、artifact schema、UIManifest schema 和 current-turn ref validation failure 映射到 `ContractValidationFailure`。
 - [x] 将 WorkEvidence guard 和 verifier failure 映射到 `ContractValidationFailure`。
-- [ ] repair prompt/handoff 只消费结构化 failure，不读取散乱错误文本。
+- [x] repair prompt/handoff 只消费结构化 failure，不读取散乱错误文本。
 - [ ] 删除旧的分散 repair-needed/failed-with-reason 组装逻辑，保留统一 validation-to-repair 管线。
 - [ ] 增加 fixtures：schema 缺字段、invalid ref、artifact 空结果、verifier fail、stdout/stderr 指向修复。
 
@@ -225,7 +225,7 @@ Todo：
 
 Todo：
 
-- [ ] 定义 `CapabilityManifest` contract：name、version、owner package、brief、routing tags、inputSchema、outputSchema、sideEffects、safety、examples、validator、repairHints、providers、lifecycle metadata。
+- [x] 定义 `CapabilityManifest` contract：name、version、owner package、brief、routing tags、inputSchema、outputSchema、sideEffects、safety、examples、validator、repairHints、providers、lifecycle metadata。
 - [ ] 梳理现有模块并分类：observe、skills、actions、verifiers、views、memory/context、importers/exporters、runtime adapters。
 - [ ] 为首批核心能力补 manifest：artifact resolver/read/render、workspace read/write、run command、Python task、vision observe、computer-use action、report viewer、evidence matrix、schema verifier。
 - [ ] 建立 registry loader 和 package boundary smoke，禁止核心能力无 manifest 暴露。

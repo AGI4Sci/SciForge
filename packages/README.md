@@ -7,11 +7,13 @@
 
 这份标准定义了 `observe`、`actions`、`verifiers`、`ui-components`、`skills` 以及其它能力应该如何暴露给 agent，避免 agent 因可用能力过多而分散注意力，同时保留灵活选择能力的空间。
 
-`packages/senses` 和顶层 `packages/tools` 是迁移前历史名称。新增能力不要再放进这两个目录：
+`packages/senses` 和顶层 `packages/tools` 是迁移前历史名称。它们只作为旧会话、旧 fixture 或短期 alias 的兼容面存在，新增能力不要再放进这两个目录：
 
 - 新增观察能力进入 `packages/observe`。
 - 新增 `SKILL.md` 面向 agent 的能力进入 `packages/skills/{tool_skills,pipeline_skills,domain_skills,meta_skills}`。
 - 真正会改变环境的执行 provider 进入 `packages/actions`。
+
+如果迁移旧目录中的能力，先给目标 package 补 manifest/schema/validator/README，再把调用方切到稳定 package entrypoint。只有旧 facade 或 adapter 真的删除后，才降低 `smoke:no-legacy-paths` baseline，并在 [`../docs/legacy-cutover-inventory.md`](../docs/legacy-cutover-inventory.md) 记录证据。
 
 ## Package 边界
 
@@ -123,6 +125,13 @@ npm run packages:check
 `packages:check` 会刷新 `packages/skills` 生成索引，并顺序运行 capability manifest registry、workspace package metadata、package runtime boundary 和 `@sciforge-ui/components` publication checks。UI component 的 package.json exports、files、fixtures、README 和 sibling import 规则由 [`../scripts/check-ui-components-package-boundaries.ts`](../scripts/check-ui-components-package-boundaries.ts) 负责；generic catalog smoke 只负责 manifest/catalog discovery，不重复检查 UI component 发布面。
 
 allowlist/baseline 只用于历史迁移项和短期 adapter。每条例外都要绑定 owner、迁移任务、删除条件和具体符号/路径；不要用宽泛 glob 给新增违规开口，迁移删除旧语义后同步降低基线。
+
+对 package 作者来说，这意味着：
+
+- 不新增 `adapter`、`compat`、`legacy` re-export 作为公开入口；需要兼容时在现有入口旁写明删除条件。
+- 不在 README、manifest 或 SKILL contract 中声明自己拥有 stream lifecycle、workspace refs、artifact persistence、global safety 或 validation loop。
+- 不把旧 `sense` / `tool` 名称扩散到新 package；只在 compatibility alias 表里保留映射。
+- 不通过 UI fallback 或 prompt 关键词选择 package；把 routing tags、accepted artifacts 和 fallback policy 写进 manifest。
 
 ## Scaffold
 

@@ -5,8 +5,10 @@ import type {
   CapabilityEvolutionCompactSummary,
   CapabilityEvolutionRecord,
   CapabilityEvolutionRecordStatus,
+  CapabilityFallbackDecisionSummary,
   CapabilityFallbackTrigger,
   CapabilityPromotionCandidate,
+  CapabilityAtomicTraceSummary,
 } from '../../packages/contracts/runtime/capability-evolution.js';
 import { normalizeWorkspaceRootPath } from './workspace-paths.js';
 
@@ -112,6 +114,8 @@ export function compactCapabilityEvolutionRecord(
     finalStatus: record.finalStatus,
     failureCode: record.failureCode ?? record.validationResult?.failureCode ?? record.composedResult?.failureCode,
     fallbackable: record.composedResult?.fallbackable,
+    fallbackDecision: compactFallbackDecision(record),
+    atomicTrace: compactAtomicTrace(record),
     recoverActions: record.recoverActions,
     repairAttemptCount: record.repairAttempts.length,
     artifactRefs: record.artifactRefs,
@@ -124,6 +128,47 @@ export function compactCapabilityEvolutionRecord(
 
 function isFallbackRecord(record: CapabilityEvolutionRecord) {
   return record.finalStatus.startsWith('fallback-') || (record.composedResult?.atomicTrace.length ?? 0) > 0;
+}
+
+function compactFallbackDecision(record: CapabilityEvolutionRecord): CapabilityFallbackDecisionSummary | undefined {
+  const fallbackPolicy = record.fallbackPolicy;
+  const composedResult = record.composedResult;
+  if (!fallbackPolicy && !composedResult) return undefined;
+  const failureCode = record.failureCode ?? record.validationResult?.failureCode ?? composedResult?.failureCode;
+  const trigger = fallbackTriggerForFailureCode(failureCode, fallbackPolicy?.fallbackToAtomicWhen);
+  const atomicCapabilityIds = uniqueSortedStrings([
+    ...(fallbackPolicy?.atomicCapabilities ?? []).map((capability) => capability.id),
+    ...(composedResult?.atomicTrace ?? []).map((trace) => trace.capabilityId),
+  ]);
+  const recoverActions = uniqueSortedStrings([
+    ...record.recoverActions,
+    ...(composedResult?.recoverActions ?? []),
+  ]);
+  return {
+    trigger,
+    reason: fallbackPolicy?.fallbackContext?.reason ?? record.validationResult?.summary,
+    fallbackable: composedResult?.fallbackable ?? atomicCapabilityIds.length > 0,
+    atomicCapabilityIds,
+    blockedBy: fallbackPolicy?.doNotFallbackWhen ?? [],
+    recoverActions,
+  };
+}
+
+function compactAtomicTrace(record: CapabilityEvolutionRecord): CapabilityAtomicTraceSummary[] | undefined {
+  const trace = record.composedResult?.atomicTrace;
+  if (!trace?.length) return undefined;
+  return trace.map((entry) => {
+    const summary: CapabilityAtomicTraceSummary = {
+      capabilityId: entry.capabilityId,
+      status: entry.status,
+      executionUnitRefs: entry.executionUnitRefs ?? [],
+      artifactRefs: entry.artifactRefs ?? [],
+    };
+    if (entry.providerId) summary.providerId = entry.providerId;
+    if (entry.failureCode) summary.failureCode = entry.failureCode;
+    if (entry.validationResult?.summary) summary.validationSummary = entry.validationResult.summary;
+    return summary;
+  });
 }
 
 function applyCapabilityEvolutionPromotionProposals(
@@ -286,6 +331,30 @@ function repairHintsForFailurePattern(failureCode: string) {
 
 function uniqueFallbackTriggers(values: CapabilityFallbackTrigger[]) {
   return uniqueSortedStrings(values) as CapabilityFallbackTrigger[];
+}
+
+function fallbackTriggerForFailureCode(
+  failureCode: string | undefined,
+  allowedTriggers: CapabilityFallbackTrigger[] | undefined,
+): CapabilityFallbackTrigger | undefined {
+  if (!failureCode) return undefined;
+  if (isCapabilityFallbackTrigger(failureCode)) {
+    if (!allowedTriggers?.length || allowedTriggers.includes(failureCode)) return failureCode;
+  }
+  return allowedTriggers?.[0];
+}
+
+function isCapabilityFallbackTrigger(value: string): value is CapabilityFallbackTrigger {
+  return [
+    'schema-invalid',
+    'validation-failed',
+    'provider-unavailable',
+    'timeout',
+    'missing-artifact',
+    'execution-failed',
+    'low-confidence',
+    'policy',
+  ].includes(value);
 }
 
 function uniqueSortedStrings(values: string[]) {

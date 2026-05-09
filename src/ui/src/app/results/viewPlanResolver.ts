@@ -76,8 +76,8 @@ export function resolveViewPlan({
   const effectiveRun = activeRun ?? session.runs.at(-1);
   const resultArtifacts = artifactsForResultPresentation(session, effectiveRun);
   const displayIntent = effectiveRun?.status === 'failed'
-    ? inferDisplayIntentFromArtifacts(session, effectiveRun, resultArtifacts)
-    : extractDisplayIntent(effectiveRun) ?? inferDisplayIntentFromArtifacts(session, effectiveRun, resultArtifacts);
+    ? inferDisplayIntentFromArtifacts(resultArtifacts)
+    : extractDisplayIntent(effectiveRun) ?? inferDisplayIntentFromArtifacts(resultArtifacts);
   const runtimeSlots = session.runs.length && session.uiManifest.length ? session.uiManifest : [];
   const seedSlots = (runtimeSlots.length ? runtimeSlots : defaultSlots?.length ? defaultSlots : defaultSlotsForAgent(scenarioId))
     .slice()
@@ -235,40 +235,20 @@ function artifactsForResultPresentation(session: SciForgeSession, activeRun?: Sc
   return session.artifacts;
 }
 
-function inferDisplayIntentFromArtifacts(session: SciForgeSession, activeRun?: SciForgeRun, artifacts = session.artifacts): DisplayIntent {
+function inferDisplayIntentFromArtifacts(artifacts: RuntimeArtifact[] = []): DisplayIntent {
   const artifactTypes = Array.from(new Set(artifacts.map((artifact) => artifact.type)));
-  const text = `${activeRun?.prompt ?? ''}\n${activeRun?.response ?? ''}`.toLowerCase();
-  const requiredArtifactTypes = prioritizeArtifactTypes(artifactTypes, text);
+  const requiredArtifactTypes = artifactTypes.slice(0, 4);
   const preferredModules = requiredArtifactTypes
     .map((artifactType) => findBestModuleForArtifactType(artifactType)?.moduleId)
     .filter((moduleId): moduleId is string => Boolean(moduleId));
   return {
-    primaryGoal: activeRun?.prompt
-      ? `展示当前 run 的核心结果：${activeRun.prompt.slice(0, 80)}`
-      : '展示当前 session 的最新 runtime artifacts',
+    primaryGoal: '展示当前 session 的 runtime artifacts',
     requiredArtifactTypes,
     preferredModules: Array.from(new Set(preferredModules)),
     fallbackAcceptable: ['generic-data-table', 'generic-artifact-inspector'],
     acceptanceCriteria: ['primary result visible', 'artifact binding validated', 'fallback explains missing fields'],
     source: 'fallback-inference',
   };
-}
-
-function prioritizeArtifactTypes(artifactTypes: string[], text: string) {
-  const ranked = [...artifactTypes].sort((left, right) => artifactTypePriority(right, text) - artifactTypePriority(left, text));
-  return ranked.slice(0, 4);
-}
-
-function artifactTypePriority(type: string, text: string) {
-  let score = 0;
-  if (/structure|pdb|protein|molecule|蛋白|结构|3d/.test(type)) score += 60;
-  if (/report|markdown|summary|报告|文档/.test(type)) score += 50;
-  if (/evidence|claim|证据/.test(type)) score += 40;
-  if (/paper|literature|文献/.test(type)) score += 30;
-  if (/omics|expression|matrix|umap|heatmap|volcano|组学/.test(type)) score += 30;
-  if (text.includes('pdb') || text.includes('结构') || text.includes('3d')) score += /structure|pdb|protein|3d/.test(type) ? 30 : 0;
-  if (text.includes('markdown') || text.includes('报告')) score += /report|markdown/.test(type) ? 30 : 0;
-  return score;
 }
 
 function parseMaybeJsonObject(value: unknown): Record<string, unknown> | undefined {

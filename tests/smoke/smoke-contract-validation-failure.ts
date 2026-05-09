@@ -10,6 +10,7 @@ import {
 } from '@sciforge-ui/runtime-contract/validation-failure';
 import { normalizeGatewayRequest } from '../../src/runtime/gateway/gateway-request.js';
 import { repairNeededPayload, validateAndNormalizePayload } from '../../src/runtime/gateway/payload-validation.js';
+import { repairNeededPayload as repairPolicyRepairNeededPayload } from '../../src/runtime/gateway/repair-policy.js';
 import { contractValidationFailureFromVerificationResults } from '../../src/runtime/gateway/verification-results.js';
 import type { SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types.js';
 
@@ -174,6 +175,24 @@ try {
   assert.ok(workEvidenceFailure.relatedRefs.includes(refs.outputRel));
   assert.ok(recoverActionsFromUnit(workEvidenceRepair.executionUnits[0]).some((action) => /WorkEvidence/i.test(action)));
 
+  const rawScatteredReason = 'RAW_SCATTERED_REASON_SHOULD_NOT_APPEAR_IN_STRUCTURED_REPAIR';
+  const structuredRepair = repairPolicyRepairNeededPayload(request, skill, rawScatteredReason, {
+    ...refs,
+    validationFailure: workEvidenceFailure,
+  });
+  const structuredRepairUnit = structuredRepair.executionUnits[0] as Record<string, unknown>;
+  const structuredRepairText = JSON.stringify(structuredRepair);
+  assert.doesNotMatch(structuredRepairText, new RegExp(rawScatteredReason));
+  assert.match(structuredRepair.message, /ContractValidationFailure work-evidence/);
+  assert.match(String(structuredRepairUnit.reasoningTrace ?? structuredRepair.reasoningTrace), /structuredValidationFailure=ContractValidationFailure/);
+  assert.equal(structuredRepairUnit.failureReason, structuredRepair.message.replace(/^SciForge runtime gateway needs repair or AgentServer task generation: /, ''));
+  assert.deepEqual(recoverActionsFromUnit(structuredRepairUnit), workEvidenceFailure.recoverActions);
+  assert.equal(structuredRepairUnit.nextStep, workEvidenceFailure.nextStep);
+  assert.ok(requiredInputsFromUnit(structuredRepairUnit).includes(`contract:${workEvidenceFailure.contractId}`));
+  const repairParams = JSON.parse(String(structuredRepairUnit.params)) as Record<string, unknown>;
+  assert.ok(!('reason' in repairParams));
+  assert.deepEqual((repairParams.validationFailure as Record<string, unknown> | undefined)?.invalidRefs, workEvidenceFailure.invalidRefs);
+
   const verifierFailure = contractValidationFailureFromVerificationResults({
     id: 'schema.verifier',
     verdict: 'fail',
@@ -207,4 +226,11 @@ function recoverActionsFromUnit(unit: unknown) {
   return actions.filter((action): action is string => typeof action === 'string');
 }
 
-console.log('[ok] contract validation failures serialize payload, artifact, uiManifest, ref, completed-plan, WorkEvidence, and verifier failures');
+function requiredInputsFromUnit(unit: unknown) {
+  assert.ok(unit && typeof unit === 'object' && !Array.isArray(unit));
+  const inputs = (unit as Record<string, unknown>).requiredInputs;
+  assert.ok(Array.isArray(inputs));
+  return inputs.filter((input): input is string => typeof input === 'string');
+}
+
+console.log('[ok] contract validation failures serialize payload, artifact, uiManifest, ref, completed-plan, WorkEvidence, structured repair, and verifier failures');
