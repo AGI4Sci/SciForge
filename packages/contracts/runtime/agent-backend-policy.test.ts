@@ -5,6 +5,8 @@ import {
   compactCapabilityForAgentBackend,
   estimateRuntimeAgentBackendModelContextWindow,
   normalizeRuntimeAgentBackendContextWindowSource,
+  normalizeRuntimeWorkspaceCompactCapability,
+  normalizeRuntimeWorkspaceContextWindowSource,
   runtimeAgentBackendCapabilities,
   runtimeAgentBackendConfigurationFailureIsBlocking,
   runtimeAgentBackendFailureCategories,
@@ -43,6 +45,26 @@ test('runtime agent backend policy owns context source and model window normaliz
   }), 'native');
   assert.equal(estimateRuntimeAgentBackendModelContextWindow('gpt-5'), 200_000);
   assert.equal(estimateRuntimeAgentBackendModelContextWindow('gemini-2.0-pro'), 1_000_000);
+});
+
+test('runtime agent backend policy owns workspace event context source aliases', () => {
+  assert.equal(normalizeRuntimeWorkspaceContextWindowSource({
+    value: 'provider',
+    hasUsage: true,
+  }), 'provider-usage');
+  assert.equal(normalizeRuntimeWorkspaceContextWindowSource({
+    value: 'handoff',
+  }), 'agentserver-estimate');
+  assert.equal(normalizeRuntimeWorkspaceContextWindowSource({
+    backend: 'codex',
+    capabilities: { nativeCompaction: true },
+    hasContextWindowTelemetry: true,
+  }), 'native');
+  assert.equal(normalizeRuntimeWorkspaceContextWindowSource({
+    hasUsage: true,
+  }), 'provider-usage');
+  assert.equal(normalizeRuntimeWorkspaceCompactCapability('handoff-only'), 'handoff-slimming');
+  assert.equal(normalizeRuntimeWorkspaceCompactCapability(compactCapabilityForAgentBackend('gemini')), 'session-rotate');
 });
 
 test('runtime agent backend policy owns failure classification and recovery text', () => {

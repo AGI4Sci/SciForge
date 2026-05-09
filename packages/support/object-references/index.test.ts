@@ -4,6 +4,7 @@ import {
   artifactReferenceKind,
   artifactTypeForPath,
   linkifyObjectReferences,
+  normalizeResponseObjectReferences,
   objectReferenceChipModel,
   objectReferenceForArtifactSummary,
   objectReferenceForUploadedArtifact,
@@ -89,6 +90,23 @@ assert.equal(reportObject.provenance?.path, '.sciforge/artifacts/run/research-re
 assert.equal(pathForObjectReference(reportObject, { artifacts: [reportArtifact] }), '.sciforge/artifacts/run/research-report.md');
 assert.equal(referenceForArtifact(reportArtifact, 'file').ref, 'file:.sciforge/artifacts/run/research-report.md');
 assert.equal(artifactReferenceKind(reportArtifact, 'report-viewer'), 'file');
+
+const normalizedResponseRefs = normalizeResponseObjectReferences({
+  objectReferences: [{
+    ref: 'artifact:research-report',
+    kind: 'artifact',
+    title: 'Backend report',
+    actions: ['focus-right-pane'],
+  }],
+  artifacts: [reportArtifact],
+  runId: 'run-response',
+  relatedRefs: ['execution-unit:EU-report', 'artifact:missing-report'],
+});
+assert.equal(normalizedResponseRefs.find((reference) => reference.ref === 'artifact:research-report')?.title, 'Backend report');
+assert.deepEqual(normalizedResponseRefs.find((reference) => reference.ref === 'artifact:research-report')?.actions, ['focus-right-pane', 'inspect', 'pin', 'compare']);
+assert.equal(normalizedResponseRefs.find((reference) => reference.ref === 'artifact:research-report')?.provenance?.dataRef, '.sciforge/task-results/run-output.json');
+assert.equal(normalizedResponseRefs.find((reference) => reference.ref === 'execution-unit:EU-report')?.kind, 'execution-unit');
+assert.equal(normalizedResponseRefs.find((reference) => reference.ref === 'artifact:missing-report')?.status, 'missing');
 
 const converted = referenceForObjectReference({ ...artifactRef, artifactType: 'volcano-plot' });
 assert.equal(converted.kind, 'chart');

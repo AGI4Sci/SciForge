@@ -1,6 +1,7 @@
 import type { ClaimType, EvidenceLevel } from '../../data';
 import type { ContractValidationFailure, ContractValidationFailureKind } from '@sciforge-ui/runtime-contract';
-import { makeId, nowIso, type NormalizedAgentResponse, type ObjectAction, type ObjectReference, type ObjectReferenceKind, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId } from '../../domain';
+import { makeId, nowIso, type NormalizedAgentResponse, type ObjectReference, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId } from '../../domain';
+import { normalizeResponseObjectReferences } from '../../../../../packages/support/object-references';
 
 const evidenceLevels: EvidenceLevel[] = ['meta', 'rct', 'cohort', 'case', 'experimental', 'review', 'database', 'preprint', 'prediction'];
 const claimTypes: ClaimType[] = ['fact', 'inference', 'hypothesis'];
@@ -225,7 +226,12 @@ export function normalizeAgentResponse(
     updatedAt: now,
   }];
   const artifacts = normalizeRuntimeArtifacts(structured.artifacts, scenarioId);
-  const objectReferences = normalizeObjectReferences(structured.objectReferences, artifacts, runId, contractValidationFailure?.relatedRefs);
+  const objectReferences = normalizeResponseObjectReferences({
+    objectReferences: structured.objectReferences,
+    artifacts,
+    runId,
+    relatedRefs: contractValidationFailure?.relatedRefs,
+  });
   const normalizedRaw = withRuntimePresentationMetadata(raw, structured, objectReferences, contractValidationFailure);
 
   return {
@@ -329,199 +335,6 @@ function normalizeRuntimeArtifacts(value: unknown, scenarioId: ScenarioInstanceI
       exportPolicy: asExportPolicy(artifact.exportPolicy),
     };
   }) : [];
-}
-
-function normalizeObjectReferences(value: unknown, artifacts: RuntimeArtifact[], runId: string, relatedRefs: string[] = []): ObjectReference[] {
-  const explicit = Array.isArray(value)
-    ? value.filter(isRecord).flatMap((record) => {
-      const normalized = normalizeObjectReference(record, artifacts, runId);
-      return normalized ? [normalized] : [];
-    })
-    : [];
-  const autoIndexed = artifacts.map((artifact) => objectReferenceFromArtifact(artifact, runId));
-  const related = relatedRefs.flatMap((ref) => {
-    const normalized = objectReferenceFromRelatedRef(ref, artifacts, runId);
-    return normalized ? [normalized] : [];
-  });
-  const byRef = new Map<string, ObjectReference>();
-  for (const reference of [...explicit, ...autoIndexed, ...related]) {
-    const key = reference.ref || reference.id;
-    if (!byRef.has(key)) {
-      byRef.set(key, reference);
-      continue;
-    }
-    byRef.set(key, {
-      ...reference,
-      ...byRef.get(key),
-      actions: uniqueStringList([...(byRef.get(key)?.actions ?? []), ...(reference.actions ?? [])]) as ObjectAction[],
-    });
-  }
-  return Array.from(byRef.values()).slice(0, 16);
-}
-
-function objectReferenceFromRelatedRef(ref: string, artifacts: RuntimeArtifact[], runId: string): ObjectReference | undefined {
-  const kind = inferObjectKindFromRef(ref);
-  if (!kind) return undefined;
-  const matchedArtifact = kind === 'artifact' ? findArtifactForObjectRef(ref, artifacts) : undefined;
-  return {
-    id: stableObjectId(ref),
-    title: matchedArtifact?.id || ref.replace(/^[a-z-]+:{1,2}/i, ''),
-    kind,
-    ref,
-    artifactType: matchedArtifact?.type,
-    runId,
-    executionUnitId: kind === 'execution-unit' ? ref.replace(/^execution-unit:{1,2}/i, '') : undefined,
-    actions: normalizeObjectActions(undefined, kind, matchedArtifact),
-    status: matchedArtifact || kind !== 'artifact' ? 'available' : 'missing',
-    summary: 'contract validation related ref',
-    provenance: normalizeObjectProvenance(undefined, matchedArtifact),
-  };
-}
-
-function normalizeObjectReference(record: Record<string, unknown>, artifacts: RuntimeArtifact[], runId: string): ObjectReference | undefined {
-  const ref = asString(record.ref)
-    || objectRefFromRecord(record);
-  if (!ref) return undefined;
-  const kind = normalizeObjectKind(record.kind) ?? inferObjectKindFromRef(ref);
-  if (!kind) return undefined;
-  const matchedArtifact = kind === 'artifact' ? findArtifactForObjectRef(ref, artifacts) : undefined;
-  const title = asString(record.title)
-    || asString(matchedArtifact?.metadata?.title)
-    || matchedArtifact?.id
-    || ref.replace(/^[a-z-]+:/i, '');
-  const actions = normalizeObjectActions(record.actions, kind, matchedArtifact);
-  return {
-    id: asString(record.id) || stableObjectId(ref),
-    title,
-    kind,
-    ref,
-    artifactType: asString(record.artifactType) || matchedArtifact?.type,
-    runId: asString(record.runId) || runId,
-    executionUnitId: asString(record.executionUnitId),
-    preferredView: asString(record.preferredView),
-    actions,
-    status: normalizeObjectStatus(record.status) || 'available',
-    summary: asString(record.summary),
-    provenance: normalizeObjectProvenance(record.provenance, matchedArtifact),
-  };
-}
-
-function objectReferenceFromArtifact(artifact: RuntimeArtifact, runId: string): ObjectReference {
-  const path = preferredArtifactPreviewPath(artifact);
-  return {
-    id: stableObjectId(`artifact:${artifact.id}`),
-    title: asString(artifact.metadata?.title) || artifact.id || artifact.type,
-    kind: 'artifact',
-    ref: `artifact:${artifact.id}`,
-    artifactType: artifact.type,
-    runId,
-    actions: objectActionsForArtifact(artifact),
-    status: 'available',
-    summary: artifactSummary(artifact),
-    provenance: {
-      dataRef: artifact.dataRef,
-      path,
-      producer: asString(artifact.metadata?.producer) || asString(artifact.metadata?.executionUnitId),
-      version: artifact.schemaVersion,
-      hash: asString(artifact.metadata?.hash),
-      size: asNumber(artifact.metadata?.size),
-    },
-  };
-}
-
-function preferredArtifactPreviewPath(artifact: RuntimeArtifact) {
-  return firstMarkdownPath(
-    artifact.metadata?.markdownRef,
-    artifact.metadata?.reportRef,
-    artifact.path,
-    artifact.metadata?.path,
-    artifact.metadata?.filePath,
-    artifact.dataRef,
-  )
-    || artifact.path
-    || asString(artifact.metadata?.path)
-    || asString(artifact.metadata?.filePath);
-}
-
-function firstMarkdownPath(...values: unknown[]) {
-  return values.map(asString).find((value) => Boolean(value && /\.m(?:d|arkdown)(?:$|[?#])/i.test(value)));
-}
-
-function objectRefFromRecord(record: Record<string, unknown>) {
-  const artifactId = asString(record.artifactId) || asString(record.artifactRef);
-  if (artifactId) return artifactId.startsWith('artifact:') ? artifactId : `artifact:${artifactId}`;
-  const path = asString(record.path) || asString(record.filePath);
-  if (path) return `${record.kind === 'folder' ? 'folder' : 'file'}:${path}`;
-  const url = asString(record.url);
-  if (url) return `url:${url}`;
-  return undefined;
-}
-
-function normalizeObjectKind(value: unknown): ObjectReferenceKind | undefined {
-  const kind = asString(value);
-  if (kind === 'artifact' || kind === 'file' || kind === 'folder' || kind === 'run' || kind === 'execution-unit' || kind === 'url' || kind === 'scenario-package') return kind;
-  return undefined;
-}
-
-function inferObjectKindFromRef(ref: string): ObjectReferenceKind | undefined {
-  const prefix = ref.split(':', 1)[0]?.toLowerCase();
-  if (prefix === 'artifact' || prefix === 'file' || prefix === 'folder' || prefix === 'run' || prefix === 'execution-unit' || prefix === 'url' || prefix === 'scenario-package') return prefix;
-  if (/^https?:\/\//i.test(ref)) return 'url';
-  return undefined;
-}
-
-function normalizeObjectActions(value: unknown, kind: ObjectReferenceKind, artifact?: RuntimeArtifact): ObjectAction[] {
-  const allowed = ['focus-right-pane', 'inspect', 'open-external', 'reveal-in-folder', 'copy-path', 'pin', 'compare'];
-  const declared = Array.isArray(value) ? value.filter((item): item is ObjectAction => typeof item === 'string' && allowed.includes(item)) : [];
-  const defaults: ObjectAction[] = kind === 'artifact'
-    ? objectActionsForArtifact(artifact)
-    : kind === 'file' || kind === 'folder'
-      ? ['focus-right-pane', 'open-external', 'reveal-in-folder', 'copy-path', 'pin']
-      : kind === 'url'
-        ? ['focus-right-pane', 'copy-path', 'pin']
-        : ['focus-right-pane', 'pin'];
-  return uniqueStringList([...declared, ...defaults]) as ObjectAction[];
-}
-
-function objectActionsForArtifact(artifact?: RuntimeArtifact): ObjectAction[] {
-  const fileLike = Boolean(artifact?.path || artifact?.metadata?.path || artifact?.metadata?.filePath || artifact?.metadata?.localPath);
-  return fileLike
-    ? ['focus-right-pane', 'inspect', 'open-external', 'reveal-in-folder', 'copy-path', 'pin', 'compare']
-    : ['focus-right-pane', 'inspect', 'pin', 'compare'];
-}
-
-function normalizeObjectStatus(value: unknown): ObjectReference['status'] | undefined {
-  const status = asString(value);
-  if (status === 'available' || status === 'missing' || status === 'expired' || status === 'blocked' || status === 'external') return status;
-  return undefined;
-}
-
-function normalizeObjectProvenance(value: unknown, artifact?: RuntimeArtifact): ObjectReference['provenance'] {
-  const record = isRecord(value) ? value : {};
-  const path = asString(record.path) || artifact?.path || asString(artifact?.metadata?.path) || asString(artifact?.metadata?.filePath);
-  return {
-    dataRef: asString(record.dataRef) || artifact?.dataRef,
-    path,
-    producer: asString(record.producer) || asString(artifact?.metadata?.producer) || asString(artifact?.metadata?.executionUnitId),
-    version: asString(record.version) || artifact?.schemaVersion,
-    hash: asString(record.hash) || asString(artifact?.metadata?.hash),
-    size: asNumber(record.size) ?? asNumber(artifact?.metadata?.size),
-  };
-}
-
-function findArtifactForObjectRef(ref: string, artifacts: RuntimeArtifact[]) {
-  const id = ref.replace(/^artifact:/i, '');
-  return artifacts.find((artifact) => artifact.id === id || artifact.type === id || artifact.dataRef === id || artifact.path === id);
-}
-
-function artifactSummary(artifact: RuntimeArtifact) {
-  const rows = isRecord(artifact.data) ? asNumber(artifact.data.rows) : undefined;
-  const count = Array.isArray(artifact.data) ? artifact.data.length : rows;
-  return `${artifact.type}${count ? ` · ${count} records` : ''}`;
-}
-
-function stableObjectId(ref: string) {
-  return `obj-${ref.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 52) || makeId('ref')}`;
 }
 
 function uniqueStringList(values: string[]) {

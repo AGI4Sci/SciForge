@@ -32,6 +32,8 @@ import {
   reportRuntimeResultViewSlots,
   resolveInteractiveViewPlanSection,
   selectedViewComponentsForIntent,
+  standaloneWorkspaceArtifactPayloadPolicy,
+  stripDirectAnswerJsonFence,
   uiComponentCompatibilityAliases,
   uiComponentManifests,
   validateInteractiveViewModuleBinding,
@@ -290,6 +292,19 @@ test('direct answer result policy owns loose artifact component binding and norm
     manifest.map((slot) => slot.artifactRef),
     ['updated-research-report', 'updated-research-report'],
   );
+
+  const loosePayload = standaloneWorkspaceArtifactPayloadPolicy({
+    id: 'kg-result',
+    type: 'knowledge-graph',
+    nodes: [{ id: 'BRAF' }],
+  });
+  assert.equal(loosePayload?.claimType, 'artifact-generation');
+  assert.equal(loosePayload?.evidenceLevel, 'workspace-artifact');
+  assert.equal(loosePayload?.uiManifest[0].componentId, 'graph-viewer');
+  assert.equal(loosePayload?.executionUnits[0].tool, directAnswerResultPolicyIds.workspaceArtifactJsonTool);
+  assert.deepEqual((loosePayload?.artifacts[0].data as Record<string, unknown>).nodes, [{ id: 'BRAF' }]);
+  assert.equal(standaloneWorkspaceArtifactPayloadPolicy({ type: 'tool-payload' }), undefined);
+  assert.equal(stripDirectAnswerJsonFence('```markdown\n# Report\n```'), '# Report');
 });
 
 test('direct answer result policy owns existing artifact follow-up semantics', () => {

@@ -200,8 +200,8 @@ export function recommendScenarioElements(
     reasons: [
       `Inferred domain=${inferredDomain}; target artifacts=${selectedArtifactTypes.join(', ') || 'runtime-artifact'}.`,
       complexOpenEnded
-        ? 'Open-ended or multi-step request: compiled with AgentServer/native backend generated capability as the stable runtime producer.'
-        : 'Request matches registered deterministic capabilities; backend generation remains available if no local route can satisfy runtime execution.',
+        ? 'Open-ended or multi-step request: compiled with generated capability policy as the stable artifact producer.'
+        : 'Request matches registered deterministic capabilities; generated capability policy remains available when no local declared capability is enough.',
       options.allowAgentServer && options.agentServerBaseUrl
         ? 'AgentServer recommendation API is reserved; deterministic heuristic recommendations remain available offline.'
         : 'Matched local element manifests by description, tags, examples, and skill domain.',
@@ -419,7 +419,7 @@ function deriveInputContract(skills: SkillElement[], fallback: ScenarioInputFiel
 function buildScopeDeclaration(selection: ScenarioElementSelection, outputArtifacts: ScenarioArtifactSchema[]): ScenarioScopeDeclaration {
   return {
     supportedTasks: [
-      `Run selected skills for ${selection.title || selection.id}`,
+      `Select declared skills for ${selection.title || selection.id}`,
       ...outputArtifacts.map((artifact) => `Produce ${artifact.type}`),
     ],
     requiredInputs: ['published input contract'],
@@ -439,7 +439,7 @@ function buildScenarioMarkdown(selection: ScenarioElementSelection, outputArtifa
     '',
     `Output artifacts: ${outputArtifacts.map((artifact) => artifact.type).join(', ') || 'none'}.`,
     '',
-    'Runtime boundary: dynamic recommendation is allowed before publish; published execution uses this compiled contract.',
+    'Runtime boundary: the package declares capability and artifact policy; execution remains owned by runtime adapters.',
   ].join('\n');
 }
 

@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import type { GatewayRequest, LlmEndpointConfig, SciForgeSkillDomain, SkillAvailability, TaskAttemptRecord, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult } from '../runtime-types.js';
 import { agentHandoffSourceMetadata } from '@sciforge-ui/runtime-contract/handoff';
 import { expectedArtifactTypesForRequest, normalizeLlmEndpoint, selectedComponentIdsForRequest } from './gateway-request.js';
-import { buildContextEnvelope, expectedArtifactSchema, summarizeArtifactRefs, summarizeConversationLedger, summarizeConversationPolicyForAgentServer, summarizeExecutionRefs, summarizeTaskAttemptsForAgentServer, workspaceTreeSummary, type AgentServerContextMode } from './context-envelope.js';
+import { buildCapabilityBrokerBriefForAgentServer, buildContextEnvelope, expectedArtifactSchema, summarizeArtifactRefs, summarizeConversationLedger, summarizeConversationPolicyForAgentServer, summarizeExecutionRefs, summarizeTaskAttemptsForAgentServer, workspaceTreeSummary, type AgentServerContextMode } from './context-envelope.js';
 import { agentServerAgentId, agentServerContextPolicy, contextWindowMetadata, fetchAgentServerContextSnapshot } from './agentserver-context-window.js';
 import { cleanUrl, clipForAgentServerJson, clipForAgentServerPrompt, errorMessage, excerptAroundFailureLine, extractLikelyErrorLine, hashJson, headForAgentServer, isRecord, readTextIfExists, tailForAgentServer, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
 import { normalizeBackendHandoff } from '../workspace-task-input.js';
@@ -12,12 +12,8 @@ import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { parseJsonErrorMessage, redactSecretText, sanitizeAgentServerError } from './backend-failure-diagnostics.js';
 import { agentServerArtifactSelectionPromptPolicyLines, agentServerBibliographicVerificationPromptPolicyLines, agentServerCurrentReferencePromptPolicyLines, agentServerToolPayloadProtocolContractLines } from '@sciforge-ui/runtime-contract/artifact-policy';
-import { agentServerCapabilityRoutingPolicy } from '@sciforge-ui/runtime-contract/capabilities';
-import { toolPackageManifests } from '../../../packages/skills/tool_skills';
 import { agentServerExecutionModePromptPolicyLines, agentServerExternalIoReliabilityContractLines, agentServerFreshRetrievalPromptPolicyLines, agentServerGeneratedTaskPromptPolicyLines, agentServerRepairPromptPolicyLines } from '../../../packages/skills/runtime-policy';
-import { uiComponentManifests } from '../../../packages/presentation/components';
 import { minimalValidInteractiveToolPayloadExample } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy';
-import { defaultCapabilitySummaries } from '@sciforge-ui/runtime-contract/capabilities';
 
 export const AGENT_BACKEND_ANSWER_PRINCIPLE = [
   'All normal user-visible answers must be reasoned by the agent backend.',
@@ -743,153 +739,15 @@ export function summarizeSkillsForAgentServer(
   }));
 }
 
-export function summarizeToolsForAgentServer(request: GatewayRequest) {
-  const selectedIds = new Set(uniqueStrings([
-    ...(request.selectedToolIds ?? []),
-    ...toStringList(request.uiState?.selectedToolIds),
-  ]));
-  const selectedTools = toolPackageManifests.filter((tool) => selectedIds.has(tool.id));
-  const domainTools = toolPackageManifests
-    .filter((tool) => (tool.skillDomains as readonly string[]).includes(request.skillDomain))
-    .slice(0, 12);
-  return uniqueById([...selectedTools, ...domainTools])
-    .slice(0, 16)
-    .map((tool) => {
-      const sensePlugin = 'sensePlugin' in tool ? tool.sensePlugin : undefined;
-      return {
-        id: tool.id,
-        label: tool.label,
-        toolType: tool.toolType,
-        description: clipForAgentServerPrompt(tool.description, 420) || '',
-        producesArtifactTypes: [...(tool.producesArtifactTypes ?? [])],
-        selected: selectedIds.has(tool.id),
-        docs: tool.docs,
-        packageRoot: tool.packageRoot,
-        requiredConfig: [...(tool.requiredConfig ?? [])],
-        tags: [...tool.tags],
-        sensePlugin: sensePlugin ? clipForAgentServerJson(sensePlugin, 4) as Record<string, unknown> : undefined,
-      };
-    });
+export function summarizeToolsForAgentServer(_request: GatewayRequest) {
+  return [];
 }
 
 export function summarizeRuntimeCapabilitiesForAgentServer(
   request: GatewayRequest,
-  availableSkills: ReturnType<typeof summarizeSkillsForAgentServer>,
+  _availableSkills?: ReturnType<typeof summarizeSkillsForAgentServer>,
 ) {
-  const tools = summarizeToolsForAgentServer(request);
-  const selectedToolIds = new Set(uniqueStrings([
-    ...(request.selectedToolIds ?? []),
-    ...toStringList(request.uiState?.selectedToolIds),
-  ]));
-  const selectedSenseIds = new Set(uniqueStrings([
-    ...(request.selectedSenseIds ?? []),
-    ...toStringList(request.uiState?.selectedSenseIds),
-    ...[...selectedToolIds].filter((id) => id.includes('sense')),
-  ]));
-  const selectedActionIds = new Set(uniqueStrings([
-    ...(request.selectedActionIds ?? []),
-    ...toStringList(request.uiState?.selectedActionIds),
-  ]));
-  const selectedVerifierIds = new Set(uniqueStrings([
-    ...(request.selectedVerifierIds ?? []),
-    ...toStringList(request.uiState?.selectedVerifierIds),
-  ]));
-  const expectedArtifactTypes = expectedArtifactTypesForRequest(request);
-  const selectedComponentIds = selectedComponentIdsForRequest(request);
-  return {
-    schemaVersion: 'sciforge.runtime-capability-catalog.v1',
-    routingPolicy: agentServerCapabilityRoutingPolicy(),
-    selected: {
-      skillIds: availableSkills.map((skill) => skill.id),
-      toolIds: [...selectedToolIds],
-      senseIds: [...selectedSenseIds],
-      actionIds: [...selectedActionIds],
-      verifierIds: [...selectedVerifierIds],
-      componentIds: selectedComponentIds,
-    },
-    skills: availableSkills,
-    tools,
-    senses: tools.filter((tool) => tool.toolType === 'sense-plugin' || selectedSenseIds.has(tool.id)),
-    actions: summarizeCapabilitySummaries('action', selectedActionIds, request),
-    verifiers: summarizeCapabilitySummaries('verifier', selectedVerifierIds, request),
-    uiComponents: summarizeUiComponentsForAgentServer(request, expectedArtifactTypes, selectedComponentIds),
-  };
-}
-
-function summarizeCapabilitySummaries(
-  kind: 'action' | 'verifier',
-  selectedIds: Set<string>,
-  request: GatewayRequest,
-) {
-  return defaultCapabilitySummaries()
-    .filter((summary) => summary.kind === kind)
-    .filter((summary) => selectedIds.has(summary.id)
-      || summary.domains.includes(request.skillDomain)
-      || summary.domains.includes('workspace')
-      || summary.domains.includes('gui'))
-    .slice(0, 12)
-    .map((summary) => ({
-      id: summary.id,
-      kind: summary.kind,
-      category: summary.category,
-      oneLine: summary.oneLine,
-      selected: selectedIds.has(summary.id),
-      domains: summary.domains,
-      triggers: summary.triggers.slice(0, 8),
-      producesArtifactTypes: summary.producesArtifactTypes,
-      riskClass: summary.riskClass,
-      reliability: summary.reliability,
-      requiredConfig: summary.requiredConfig,
-      sideEffects: summary.sideEffects ?? [],
-      verifierTypes: summary.verifierTypes ?? [],
-      detailRef: summary.detailRef,
-    }));
-}
-
-function summarizeUiComponentsForAgentServer(
-  request: GatewayRequest,
-  expectedArtifactTypes: string[],
-  selectedComponentIds: string[],
-) {
-  const selected = new Set(selectedComponentIds);
-  const expected = new Set(expectedArtifactTypes);
-  return uiComponentManifests
-    .map((component) => {
-      const artifactMatch = component.acceptsArtifactTypes.some((type) => expected.has(type))
-        || (component.outputArtifactTypes ?? []).some((type) => expected.has(type));
-      const isSelected = selected.has(component.componentId);
-      return { component, score: (isSelected ? 100 : 0) + (artifactMatch ? 30 : 0) + (component.priority ?? 0) };
-    })
-    .filter((item) => item.score > 0 || item.component.lifecycle === 'published')
-    .sort((left, right) => right.score - left.score || left.component.componentId.localeCompare(right.component.componentId))
-    .slice(0, 24)
-    .map(({ component }) => ({
-      id: component.componentId,
-      componentId: component.componentId,
-      title: component.title,
-      description: clipForAgentServerPrompt(component.description, 320),
-      selected: selected.has(component.componentId),
-      lifecycle: component.lifecycle,
-      acceptsArtifactTypes: component.acceptsArtifactTypes,
-      outputArtifactTypes: component.outputArtifactTypes ?? [],
-      requiredFields: component.requiredFields ?? [],
-      requiredAnyFields: component.requiredAnyFields ?? [],
-      viewParams: component.viewParams ?? [],
-      interactionEvents: component.interactionEvents ?? [],
-      safety: component.safety,
-      docs: component.docs,
-    }));
-}
-
-export function uniqueById<T extends { id: string }>(values: readonly T[]) {
-  const seen = new Set<string>();
-  const out: T[] = [];
-  for (const value of values) {
-    if (seen.has(value.id)) continue;
-    seen.add(value.id);
-    out.push(value);
-  }
-  return out;
+  return buildCapabilityBrokerBriefForAgentServer(request);
 }
 
 export function buildAgentServerCompactContext(

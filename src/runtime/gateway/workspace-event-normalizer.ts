@@ -1,8 +1,13 @@
 import type {
   GatewayRequest,
-  WorkspaceRuntimeContextWindowSource,
   WorkspaceRuntimeEvent,
 } from '../runtime-types.js';
+import {
+  compactCapabilityForAgentBackend,
+  normalizeRuntimeWorkspaceCompactCapability,
+  normalizeRuntimeWorkspaceContextWindowSource,
+  runtimeAgentBackendCapabilities,
+} from '@sciforge-ui/runtime-contract/agent-backend-policy';
 import { isRecord, toStringList } from '../gateway-utils.js';
 import { redactSecretText, retryAfterMsFromText } from './backend-failure-diagnostics.js';
 import { collectWorkEvidenceFromBackendEvent } from './work-evidence-types.js';
@@ -147,11 +152,16 @@ export function normalizeWorkspaceContextWindowState(
   const hasUsage = input !== undefined || output !== undefined || cache !== undefined || finiteNumber(usage.total) !== undefined;
   const hasContextTelemetry = usedTokens !== undefined || windowTokens !== undefined || ratio !== undefined;
   const explicitSource = stringField(record.source) ?? stringField(record.contextWindowSource) ?? stringField(record.context_window_source);
-  const source = explicitSource
-    ? (normalizeWorkspaceContextSource(explicitSource) === 'unknown' && hasUsage ? 'provider-usage' : normalizeWorkspaceContextSource(explicitSource))
-    : (hasUsage ? 'provider-usage' : 'unknown');
+  const backend = stringField(record.backend) ?? stringField(fallback.backend) ?? stringField(usage.provider);
+  const source = normalizeRuntimeWorkspaceContextWindowSource({
+    value: explicitSource,
+    backend,
+    capabilities: backend ? runtimeAgentBackendCapabilities(backend) : undefined,
+    hasContextWindowTelemetry: hasContextTelemetry,
+    hasUsage,
+  });
   const state = {
-    backend: stringField(record.backend) ?? stringField(fallback.backend) ?? stringField(usage.provider),
+    backend,
     provider: stringField(record.provider) ?? stringField(usage.provider),
     model: stringField(record.model) ?? stringField(usage.model),
     usedTokens,
@@ -173,7 +183,7 @@ export function normalizeWorkspaceContextWindowState(
     pendingCompact: typeof record.pendingCompact === 'boolean' ? record.pendingCompact : undefined,
   };
   if (state.compactCapability === 'unknown' && state.backend) {
-    state.compactCapability = compactCapabilityForBackend(state.backend);
+    state.compactCapability = normalizeRuntimeWorkspaceCompactCapability(compactCapabilityForAgentBackend(state.backend));
   }
   return hasContextTelemetry ? state : undefined;
 }
@@ -190,7 +200,7 @@ export function normalizeWorkspaceContextCompaction(
   const lastCompactedAt = stringField(record.lastCompactedAt) ?? stringField(record.last_compacted_at) ?? stringField(record.lastCompressedAt) ?? stringField(record.last_compressed_at) ?? completedAt;
   return {
     status,
-    source: normalizeWorkspaceContextSource(stringField(record.source) ?? 'native'),
+    source: normalizeRuntimeWorkspaceContextWindowSource({ value: stringField(record.source) ?? 'native' }),
     backend: stringField(record.backend) ?? stringField(fallback.backend) ?? 'hermes-agent',
     compactCapability: normalizeWorkspaceCompactCapability(stringField(record.compactCapability) ?? stringField(record.compactionCapability) ?? 'native'),
     startedAt: stringField(record.startedAt) ?? stringField(record.started_at),
@@ -750,19 +760,8 @@ function normalizeWorkspaceCompactionStatus(value?: string): NonNullable<Workspa
   return 'completed';
 }
 
-function normalizeWorkspaceContextSource(value?: string): WorkspaceRuntimeContextWindowSource {
-  if (value === 'native' || value === 'agentserver' || value === 'estimate' || value === 'unknown') return value;
-  if (value === 'usage' || value === 'provider' || value === 'provider-usage') return 'native';
-  if (value === 'backend') return 'native';
-  if (value === 'agentserver-estimate') return 'estimate';
-  if (value === 'handoff') return 'agentserver';
-  return 'unknown';
-}
-
 function normalizeWorkspaceCompactCapability(value?: string): NonNullable<WorkspaceRuntimeEvent['contextWindowState']>['compactCapability'] {
-  if (value === 'handoff-only') return 'handoff-slimming';
-  if (value === 'native' || value === 'agentserver' || value === 'handoff-slimming' || value === 'session-rotate' || value === 'none' || value === 'unknown') return value;
-  return 'unknown';
+  return normalizeRuntimeWorkspaceCompactCapability(value);
 }
 
 function normalizeWorkspaceContextStatus(
@@ -781,14 +780,6 @@ function normalizeWorkspaceContextStatus(
   if (ratio !== undefined && ratio >= (autoCompactThreshold ?? 0.82)) return 'near-limit';
   if (ratio !== undefined && ratio >= 0.68) return 'watch';
   return ratio === undefined ? 'unknown' : 'healthy';
-}
-
-function compactCapabilityForBackend(backend: string): 'native' | 'agentserver' | 'handoff-only' | 'handoff-slimming' | 'session-rotate' | 'none' | 'unknown' {
-  if (backend === 'codex') return 'native';
-  if (backend === 'openteam_agent' || backend === 'hermes-agent') return 'agentserver';
-  if (backend === 'gemini') return 'session-rotate';
-  if (backend === 'claude-code' || backend === 'openclaw') return 'handoff-only';
-  return 'unknown';
 }
 
 function formatWorkspaceTokenUsage(usage: WorkspaceRuntimeEvent['usage'] | undefined) {

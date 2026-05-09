@@ -48,8 +48,11 @@ export {
   normalizeDirectAnswerUiManifest,
   preferredExistingArtifactFollowupArtifact,
   preferredInteractiveViewComponentForArtifactType,
+  standaloneWorkspaceArtifactPayloadPolicy,
+  stripDirectAnswerJsonFence,
   type DirectAnswerPayloadLike,
   type DirectAnswerResultPolicyRequest,
+  type StandaloneWorkspaceArtifactPayloadLike,
 } from './direct-answer-result-policy';
 export {
   visionSenseTraceOutputViews,

@@ -17,6 +17,18 @@ export type ExistingArtifactFollowupArtifactLike = {
   metadata?: unknown;
 };
 
+export type StandaloneWorkspaceArtifactPayloadLike = {
+  message: string;
+  confidence: number;
+  claimType: string;
+  evidenceLevel: string;
+  reasoningTrace: string;
+  claims: Array<Record<string, unknown>>;
+  uiManifest: Array<Record<string, unknown>>;
+  executionUnits: Array<Record<string, unknown>>;
+  artifacts: Array<Record<string, unknown>>;
+};
+
 const REPORT_ARTIFACT_TYPE = 'research-report';
 const REPORT_VIEW_COMPONENT = 'report-viewer';
 const EXECUTION_VIEW_COMPONENT = 'execution-unit-table';
@@ -26,6 +38,7 @@ const UNKNOWN_ARTIFACT_COMPONENT = 'unknown-artifact-inspector';
 export const directAnswerResultPolicyIds = {
   structuredAnswerSource: 'agentserver-structured-answer',
   directTextTool: 'agentserver.direct-text',
+  existingContextSource: 'existing-context',
   workspaceArtifactJsonSource: 'workspace-task-artifact-json',
   workspaceArtifactJsonTool: 'workspace-task.artifact-json',
 } as const;
@@ -96,6 +109,57 @@ export function ensureDirectAnswerReportArtifactPolicy<T extends DirectAnswerPay
 
 export function preferredInteractiveViewComponentForArtifactType(artifactType: string) {
   return ARTIFACT_COMPONENTS[artifactType.toLowerCase()] ?? UNKNOWN_ARTIFACT_COMPONENT;
+}
+
+export function standaloneWorkspaceArtifactPayloadPolicy(value: Record<string, unknown>): StandaloneWorkspaceArtifactPayloadLike | undefined {
+  const type = stringField(value.type) ?? stringField(value.artifactType);
+  if (!type) return undefined;
+  if (type === 'tool-payload' || type === 'ToolPayload') return undefined;
+  const id = stringField(value.id) ?? type;
+  const entity = stringField(value.entity);
+  const artifact = {
+    ...value,
+    id,
+    type,
+    schemaVersion: stringField(value.schemaVersion) ?? '1',
+    data: isRecord(value.data) ? value.data : artifactDataFromLooseArtifact({ ...value, id, type }),
+    metadata: {
+      ...(isRecord(value.metadata) ? value.metadata : {}),
+      source: stringField(isRecord(value.metadata) ? value.metadata.source : undefined) ?? directAnswerResultPolicyIds.workspaceArtifactJsonSource,
+      wrappedAsToolPayload: true,
+    },
+  };
+  const message = [
+    entity,
+    `${type} artifact generated from workspace task output.`,
+  ].filter(Boolean).join(' ');
+  return {
+    message,
+    confidence: typeof value.confidence === 'number' ? value.confidence : 0.72,
+    claimType: String(value.claimType || 'artifact-generation'),
+    evidenceLevel: String(value.evidenceLevel || 'workspace-artifact'),
+    reasoningTrace: 'Workspace task returned a standalone artifact JSON; SciForge wrapped it into a ToolPayload for display, persistence, and follow-up reuse.',
+    claims: [{
+      id: `${id}-claim`,
+      text: message,
+      type: 'fact',
+      confidence: typeof value.confidence === 'number' ? value.confidence : 0.72,
+      evidenceLevel: String(value.evidenceLevel || 'workspace-artifact'),
+      supportingRefs: [id],
+      opposingRefs: [],
+    }],
+    uiManifest: [{
+      componentId: preferredInteractiveViewComponentForArtifactType(type),
+      artifactRef: id,
+      priority: 1,
+    }],
+    executionUnits: [{
+      id: `${id}-workspace-artifact-json`,
+      status: 'done',
+      tool: directAnswerResultPolicyIds.workspaceArtifactJsonTool,
+    }],
+    artifacts: [artifact],
+  };
 }
 
 export function normalizeDirectAnswerUiManifest(value: unknown, artifacts: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
@@ -300,9 +364,17 @@ function firstStringField(record: Record<string, unknown>, keys: string[]) {
   return undefined;
 }
 
+function stringField(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
 function stripOuterJsonFence(text: string) {
   const fenced = text.match(/^```(?:json|markdown|md)?\s*([\s\S]*?)\s*```$/i);
   return fenced?.[1]?.trim() || text;
+}
+
+export function stripDirectAnswerJsonFence(text: string) {
+  return stripOuterJsonFence(text);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

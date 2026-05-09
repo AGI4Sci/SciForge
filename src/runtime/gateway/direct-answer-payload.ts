@@ -11,7 +11,8 @@ import {
   ensureDirectAnswerReportArtifactPolicy,
   normalizeDirectAnswerArtifacts,
   normalizeDirectAnswerUiManifest,
-  preferredInteractiveViewComponentForArtifactType,
+  standaloneWorkspaceArtifactPayloadPolicy,
+  stripDirectAnswerJsonFence,
 } from '../../../packages/presentation/interactive-views';
 
 type ArtifactReferenceContextCollector = (request: GatewayRequest) => Promise<{ combinedArtifacts: Array<Record<string, unknown>> } | undefined>;
@@ -81,7 +82,7 @@ function mergeExistingContextArtifactsForDirectAnswer(
       ...artifact,
       metadata: {
         ...(isRecord(artifact.metadata) ? artifact.metadata : {}),
-        source: stringField(isRecord(artifact.metadata) ? artifact.metadata.source : undefined) ?? 'existing-context',
+        source: stringField(isRecord(artifact.metadata) ? artifact.metadata.source : undefined) ?? directAnswerResultPolicyIds.existingContextSource,
         reusedForContextAnswer: true,
       },
     });
@@ -158,54 +159,7 @@ export function coerceWorkspaceTaskPayload(value: unknown): ToolPayload | undefi
 }
 
 function coerceStandaloneArtifactPayload(value: Record<string, unknown>): ToolPayload | undefined {
-  const type = stringField(value.type) ?? stringField(value.artifactType);
-  if (!type) return undefined;
-  if (type === 'tool-payload' || type === 'ToolPayload') return undefined;
-  const id = stringField(value.id) ?? type;
-  const entity = stringField(value.entity);
-  const artifact = {
-    ...value,
-    id,
-    type,
-    schemaVersion: stringField(value.schemaVersion) ?? '1',
-    data: isRecord(value.data) ? value.data : artifactDataFromLooseArtifact({ ...value, id, type }),
-    metadata: {
-      ...(isRecord(value.metadata) ? value.metadata : {}),
-      source: stringField(isRecord(value.metadata) ? value.metadata.source : undefined) ?? directAnswerResultPolicyIds.workspaceArtifactJsonSource,
-      wrappedAsToolPayload: true,
-    },
-  };
-  const message = [
-    entity,
-    `${type} artifact generated from workspace task output.`,
-  ].filter(Boolean).join(' ');
-  return {
-    message,
-    confidence: typeof value.confidence === 'number' ? value.confidence : 0.72,
-    claimType: String(value.claimType || 'artifact-generation'),
-    evidenceLevel: String(value.evidenceLevel || 'workspace-artifact'),
-    reasoningTrace: 'Workspace task returned a standalone artifact JSON; SciForge wrapped it into a ToolPayload for display, persistence, and follow-up reuse.',
-    claims: [{
-      id: `${id}-claim`,
-      text: message,
-      type: 'fact',
-      confidence: typeof value.confidence === 'number' ? value.confidence : 0.72,
-      evidenceLevel: String(value.evidenceLevel || 'workspace-artifact'),
-      supportingRefs: [id],
-      opposingRefs: [],
-    }],
-    uiManifest: [{
-      componentId: preferredInteractiveViewComponentForArtifactType(type),
-      artifactRef: id,
-      priority: 1,
-    }],
-    executionUnits: [{
-      id: `${id}-workspace-artifact-json`,
-      status: 'done',
-      tool: directAnswerResultPolicyIds.workspaceArtifactJsonTool,
-    }],
-    artifacts: [artifact],
-  };
+  return standaloneWorkspaceArtifactPayloadPolicy(value) as ToolPayload | undefined;
 }
 
 export function normalizeToolPayloadShape(payload: ToolPayload): ToolPayload {
@@ -333,18 +287,8 @@ function normalizeAgentServerExecutionUnits(value: unknown): Array<Record<string
   }];
 }
 
-function artifactDataFromLooseArtifact(artifact: Record<string, unknown>) {
-  const data: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(artifact)) {
-    if (['id', 'type', 'artifactType', 'schemaVersion', 'metadata', 'dataRef', 'visibility', 'audience', 'sensitiveDataFlags', 'exportPolicy'].includes(key)) continue;
-    data[key] = value;
-  }
-  return data;
-}
-
 function stripOuterJsonFence(text: string) {
-  const fenced = text.match(/^```(?:json|markdown|md)?\s*([\s\S]*?)\s*```$/i);
-  return fenced?.[1]?.trim() || text;
+  return stripDirectAnswerJsonFence(text);
 }
 
 export function extractStandaloneJson(text: string): unknown {

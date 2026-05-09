@@ -5,6 +5,8 @@ export {
   compactCapabilityForAgentBackend,
   estimateRuntimeAgentBackendModelContextWindow,
   normalizeRuntimeAgentBackendContextWindowSource,
+  normalizeRuntimeWorkspaceCompactCapability,
+  normalizeRuntimeWorkspaceContextWindowSource,
   runtimeAgentBackendCapabilities,
   runtimeAgentBackendConfigurationFailureIsBlocking,
   runtimeAgentBackendFailureCategories,

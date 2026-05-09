@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { promisify } from 'node:util';
 import type { CapabilityEvolutionRecord } from '../../packages/contracts/runtime/capability-evolution.js';
 import {
   appendCapabilityEvolutionRecord,
@@ -18,6 +20,7 @@ import { repairNeededPayload } from '../../src/runtime/gateway/repair-policy.js'
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types.js';
 import { listSkillPromotionProposals, writeSkillPromotionProposalsFromCapabilityEvolutionSummary } from '../../src/runtime/skill-promotion.js';
 
+const execFileAsync = promisify(execFile);
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-capability-ledger-'));
 
 try {
@@ -379,6 +382,10 @@ try {
   const ledgerProposalText = JSON.stringify(ledgerSkillProposals[0]);
   assert.equal(ledgerProposalText.includes('task.py'), false, 'ledger-sourced skill proposal should not expose glue code refs');
   assert.equal(ledgerProposalText.includes('stdout.log'), false, 'ledger-sourced skill proposal should not expose logs');
+  const ledgerProposalReadme = await readFile(join(workspace, '.sciforge', 'skill-proposals', ledgerSkillProposals[0]!.id, 'README.md'), 'utf8');
+  assert.equal(ledgerProposalReadme.includes(CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH), true);
+  assert.equal(ledgerProposalReadme.includes('task.py'), false, 'ledger proposal review README should point at ledger refs, not task code');
+  assert.equal(ledgerProposalReadme.includes('stdout.log'), false, 'ledger proposal review README should not point at stdout logs');
   const listedLedgerProposals = await listSkillPromotionProposals(workspace);
   assert.ok(listedLedgerProposals.some((proposal) => proposal.id === ledgerSkillProposals[0]?.id));
 
@@ -452,8 +459,46 @@ try {
   const dynamicGlueSuccess = recordsAfterSupplementalFallback.find((entry) => entry.metadata?.eventKind === 'dynamic-glue-execution');
   assert.ok(dynamicGlueSuccess, 'successful supplemental backend glue should be recorded');
   assert.equal(dynamicGlueSuccess.finalStatus, 'succeeded');
+
+  await assertNoScatteredGlueOrRepairCaches();
 } finally {
   await rm(workspace, { recursive: true, force: true });
 }
 
 console.log('[ok] capability evolution ledger writes compact summaries with fallback/repair evidence and promotion proposals');
+
+async function assertNoScatteredGlueOrRepairCaches() {
+  const patterns = [
+    ['success', '(?:ful)?', '[-_ ]+glue[-_ ]+(?:code[-_ ]+)?(?:cache|sample|record)'].join(''),
+    ['failure[-_ ]+(?:sample|example|cache)(?:[-_ ]+(?:record|cache))?'].join(''),
+    ['repair[-_ ]+(?:sample|example|cache)'].join(''),
+    ['\\.sciforge/(?:success-glue-cache|failure-samples|repair-samples|repair-cache|skill-promotion-cache|capability-evolution-cache)'].join(''),
+  ];
+  for (const pattern of patterns) {
+    const matches = await rg(pattern, [
+      'src/runtime',
+      'packages/contracts/runtime',
+      'tests/smoke',
+    ]);
+    assert.equal(matches.trim(), '', `T121 guard: temporary glue/repair cache path must migrate to capability evolution ledger:\n${matches}`);
+  }
+}
+
+async function rg(pattern: string, paths: string[]) {
+  try {
+    const result = await execFileAsync('rg', [
+      '-n',
+      '--pcre2',
+      '-i',
+      '--glob',
+      '!tests/smoke/smoke-capability-evolution-ledger.ts',
+      pattern,
+      ...paths,
+    ], { cwd: process.cwd(), maxBuffer: 1024 * 1024 });
+    return result.stdout;
+  } catch (error) {
+    const maybeExit = error as { code?: number; stdout?: string; stderr?: string };
+    if (maybeExit.code === 1) return '';
+    throw new Error(`rg failed for ${pattern}: ${maybeExit.stderr ?? String(error)}`);
+  }
+}

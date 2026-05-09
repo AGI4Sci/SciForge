@@ -1,4 +1,4 @@
-import type { AgentCompactCapability } from './stream';
+import type { AgentCompactCapability, AgentContextWindowSource } from './stream';
 
 export type RuntimeAgentBackendFailureKind =
   | 'context-window'
@@ -277,6 +277,35 @@ export function normalizeRuntimeAgentBackendContextWindowSource(input: {
   if (input.hasContextWindowTelemetry && input.capabilities.nativeCompaction && (input.backend === 'codex' || input.backend === 'hermes-agent')) return 'native';
   if (input.hasUsage) return 'provider-usage';
   if (input.hasContextWindowTelemetry) return 'agentserver-estimate';
+  return 'unknown';
+}
+
+export function normalizeRuntimeWorkspaceContextWindowSource(input: {
+  value?: string;
+  backend?: string;
+  capabilities?: Partial<Pick<RuntimeAgentBackendCapabilities, 'nativeCompaction'>>;
+  hasContextWindowTelemetry?: boolean;
+  hasUsage?: boolean;
+}): AgentContextWindowSource {
+  return normalizeRuntimeAgentBackendContextWindowSource({
+    value: input.value,
+    backend: input.backend ?? '',
+    capabilities: { nativeCompaction: input.capabilities?.nativeCompaction ?? false },
+    hasContextWindowTelemetry: input.hasContextWindowTelemetry ?? false,
+    hasUsage: input.hasUsage ?? false,
+  });
+}
+
+export function normalizeRuntimeWorkspaceCompactCapability(value?: string): AgentCompactCapability {
+  if (value === 'handoff-only') return 'handoff-slimming';
+  if (
+    value === 'native'
+    || value === 'agentserver'
+    || value === 'handoff-slimming'
+    || value === 'session-rotate'
+    || value === 'none'
+    || value === 'unknown'
+  ) return value;
   return 'unknown';
 }
 

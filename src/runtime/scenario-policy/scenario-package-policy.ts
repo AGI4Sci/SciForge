@@ -77,16 +77,44 @@ export function withScenarioPackagePolicy(
 }
 
 const disallowedScenarioPackagePolicyKeys = new Set([
+  'backendbranch',
+  'backendbranches',
+  'backendprovider',
+  'backendrouting',
+  'conversationrouter',
   'command',
   'execute',
   'executor',
+  'followupintent',
+  'followupmatcher',
   'handler',
+  'modelbranch',
+  'modelbranches',
+  'modelprovider',
+  'multiturn',
+  'multiturnjudge',
+  'multiturnsemanticjudge',
   'promptmatcher',
   'promptpattern',
+  'promptcase',
+  'promptcases',
   'promptregex',
+  'promptspecialcase',
+  'promptspecialcases',
+  'provider',
+  'providerbranch',
+  'providerbranches',
+  'providerrouting',
   'regexp',
   'regex',
   'runtimecode',
+  'semanticclassifier',
+  'semanticdecision',
+  'semanticjudge',
+  'semanticjudgment',
+  'semanticmatcher',
+  'semanticrouter',
+  'semanticrouting',
   'script',
   'shell',
   'sourcecode',
@@ -130,7 +158,7 @@ function scanScenarioPackagePolicyOnlyViolations(value: unknown, path: string[],
     const normalizedKey = key.replace(/[-_]/g, '').toLowerCase();
     const childPath = [...path, key];
     if (disallowedScenarioPackagePolicyKeys.has(normalizedKey)) {
-      violations.push(`${formatPath(childPath)} uses a disallowed execution or prompt-regex field`);
+      violations.push(`${formatPath(childPath)} uses a disallowed execution, prompt-regex, provider, or semantic routing field`);
     }
     scanScenarioPackagePolicyOnlyViolations(child, childPath, violations);
   }

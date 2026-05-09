@@ -32,4 +32,29 @@ describe('runtime scenario package validation policy', () => {
     assert.equal(report.ok, false);
     assert.ok(report.issues.some((issue) => issue.code === 'scenario-package-policy-only-violation'));
   });
+
+  it('blocks provider branches and multi-turn semantic judgment fields', () => {
+    const pkg = withScenarioPackagePolicy(buildBuiltInScenarioPackage('literature-evidence-review', '2026-04-25T00:00:00.000Z'));
+    const report = validateRuntimeScenarioPackage(({
+      ...pkg,
+      policy: {
+        ...pkg.policy,
+        capabilities: {
+          ...pkg.policy?.capabilities,
+          providerBranches: {
+            openai: ['literature.web_search'],
+            local: ['literature.pubmed_search'],
+          },
+        },
+        verifierPolicy: {
+          ...pkg.policy?.verifierPolicy,
+          multiTurnSemanticJudge: 'use prior prompt to decide answer mode',
+        },
+      },
+    }) as typeof pkg, undefined, '2026-04-25T00:00:00.000Z');
+
+    assert.equal(report.ok, false);
+    assert.ok(report.issues.some((issue) => issue.message.includes('providerBranches')));
+    assert.ok(report.issues.some((issue) => issue.message.includes('multiTurnSemanticJudge')));
+  });
 });

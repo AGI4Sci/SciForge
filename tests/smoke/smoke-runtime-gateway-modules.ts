@@ -16,7 +16,7 @@ import { applyRuntimeVerificationPolicy, normalizeRuntimeVerificationPolicy } fr
 import { normalizeRuntimeVerificationResults } from '../../src/runtime/gateway/verification-results.js';
 import { normalizeAgentServerWorkspaceEvent, normalizeWorkspaceProcessEvents, withRequestContextWindowLimit } from '../../src/runtime/gateway/workspace-event-normalizer.js';
 import { applyConversationPolicy } from '../../src/runtime/conversation-policy/apply.js';
-import { buildAgentServerRepairPrompt, summarizeRuntimeCapabilitiesForAgentServer, summarizeSkillsForAgentServer } from '../../src/runtime/gateway/agentserver-prompts.js';
+import { buildAgentServerRepairPrompt } from '../../src/runtime/gateway/agentserver-prompts.js';
 import { readTaskAttempts } from '../../src/runtime/task-attempt-history.js';
 import type { SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types.js';
 
@@ -269,18 +269,34 @@ try {
     },
   };
 
-  const capabilityCatalog = summarizeRuntimeCapabilitiesForAgentServer({
+  const brokerEnvelope = buildContextEnvelope({
     ...request,
-    selectedToolIds: ['local.vision-sense'],
-    selectedSenseIds: ['local.vision-sense'],
+    prompt: 'Read the report artifact, validate its schema, render markdown, and inspect the screenshot with vision if needed.',
+    references: [{
+      ref: 'artifact:prior-report',
+      kind: 'artifact',
+      artifactType: 'research-report',
+      title: 'Prior report',
+    }],
+    selectedToolIds: ['observe.vision'],
+    selectedSenseIds: ['observe.vision'],
     selectedComponentIds: ['report-viewer'],
-    selectedVerifierIds: ['verifier.schema-artifact'],
-  }, summarizeSkillsForAgentServer([skill], skill, request.skillDomain));
-  assert.equal(capabilityCatalog.schemaVersion, 'sciforge.runtime-capability-catalog.v1');
-  assert.ok(capabilityCatalog.skills.some((entry) => entry.id === skill.id));
-  assert.ok(capabilityCatalog.senses.some((entry) => entry.id === 'local.vision-sense'));
-  assert.ok(capabilityCatalog.uiComponents.some((entry) => entry.componentId === 'report-viewer' && entry.selected === true));
-  assert.ok(capabilityCatalog.verifiers.some((entry) => entry.id === 'verifier.schema-artifact' && entry.selected === true));
+    selectedVerifierIds: ['verifier.schema'],
+  }, {
+    workspace,
+    workspaceTreeSummary: [],
+    priorAttempts: [],
+    selectedSkill: skill,
+    mode: 'full',
+  });
+  const brokerBrief = (brokerEnvelope.scenarioFacts as Record<string, unknown>).capabilityBrokerBrief as Record<string, unknown>;
+  const brokerBriefText = JSON.stringify(brokerBrief);
+  assert.equal(brokerBrief.schemaVersion, 'sciforge.agentserver.capability-broker-brief.v1');
+  assert.equal(brokerBrief.contract, 'sciforge.capability-broker-output.v1');
+  assert.match(brokerBriefText, /view\.report/);
+  assert.match(brokerBriefText, /verifier\.schema/);
+  assert.match(brokerBriefText, /observe\.vision/);
+  assert.equal(brokerBriefText.includes('sciforge.runtime-capability-catalog.v1'), false);
 
   const currentReferenceRequest = {
     ...request,

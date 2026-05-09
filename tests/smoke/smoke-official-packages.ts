@@ -91,4 +91,65 @@ assert.ok(
   'scenario packages must reject prompt regex routing policy',
 );
 
+const runtimeLikePolicyFixtures = [
+  {
+    label: 'provider branches',
+    package: {
+      ...policyOnlyFixture,
+      policy: {
+        ...policyOnlyFixture.policy,
+        capabilities: {
+          ...policyOnlyFixture.policy?.capabilities,
+          providerBranches: {
+            openai: ['agentserver.generate.literature'],
+            local: ['literature.pubmed_search'],
+          },
+        },
+      },
+    },
+    expectedPath: 'policy.capabilities.providerBranches',
+  },
+  {
+    label: 'multi-turn semantic judgment',
+    package: {
+      ...policyOnlyFixture,
+      policy: {
+        ...policyOnlyFixture.policy,
+        verifierPolicy: {
+          ...policyOnlyFixture.policy?.verifierPolicy,
+          multiTurnSemanticJudge: 'infer whether the next turn is a repair request',
+        },
+      },
+    },
+    expectedPath: 'policy.verifierPolicy.multiTurnSemanticJudge',
+  },
+  {
+    label: 'prompt special cases',
+    package: {
+      ...policyOnlyFixture,
+      policy: {
+        ...policyOnlyFixture.policy,
+        domainVocabulary: {
+          ...policyOnlyFixture.policy?.domainVocabulary,
+          promptSpecialCases: ['if prompt mentions latest, force web backend'],
+        },
+      },
+    },
+    expectedPath: 'policy.domainVocabulary.promptSpecialCases',
+  },
+] as const;
+
+for (const fixture of runtimeLikePolicyFixtures) {
+  const violations = findScenarioPackagePolicyOnlyViolations(fixture.package);
+  assert.ok(
+    violations.some((violation) => violation.includes(fixture.expectedPath)),
+    `scenario packages must reject ${fixture.label}`,
+  );
+  assert.equal(
+    validateRuntimeScenarioPackage(fixture.package as typeof policyOnlyFixture).ok,
+    false,
+    `runtime scenario package validation must reject ${fixture.label}`,
+  );
+}
+
 console.log(`[ok] official package smoke validated ${scenarioIds.length} built-in packages`);
