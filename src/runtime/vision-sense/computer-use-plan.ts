@@ -250,17 +250,6 @@ function shouldRewriteRepeatedChatTextToSubmit(action: GenericVisionAction, step
   return recentTextEntries.length >= 1;
 }
 
-export function shouldCompleteFromFileRefsOnly(text: string) {
-  const normalized = text || '';
-  const explicitNoGui = /evidence-only|refs-only|file-ref-only|final screen acceptance|Do not perform GUI actions|actions=\[\]|不执行\s*GUI|不执行.*动作|不要.*GUI|不重新读取或内联图片/i.test(normalized);
-  const evidenceIntent = /trace refs?|trace paths?|workspace refs?|file refs?|artifact refs?|handoff|context[- ]?window|summary|report|screen acceptance|截图引用|文件 refs|文件引用|汇总|总结|复盘|报告|上下文|压测 context|只保留文件|屏幕验收/i.test(normalized);
-  const actionIntent = /执行一次|点击|click|scroll|滚动|press_key|hotkey|type_text|输入|drag|拖拽|打开|open_app|切换窗口|切换.*窗口|移动到|恢复|回到|启动|创建|保存|重命名|移动|定位|文件管理器|文字处理|演示应用|幻灯片|文档|Alt\+Tab|Command\+Tab/i.test(normalized);
-  if (actionIntent) return false;
-  if (explicitNoGui && evidenceIntent) return true;
-  if (!evidenceIntent) return false;
-  return !actionIntent;
-}
-
 export function shouldCompleteFromActionLedger(task: string, steps: LoopStep[]) {
   if (!/候选证据|candidate evidence|screening|筛选/i.test(task)) return false;
   const effectiveCandidateClicks = steps
@@ -995,4 +984,3 @@ export async function withHardTimeout<T>(promise: Promise<T>, timeoutMs: number,
     if (timeout) clearTimeout(timeout);
   }
 }
-

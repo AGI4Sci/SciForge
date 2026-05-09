@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { discoverMarkdownSkillPackages, discoverMarkdownToolPackages } from '../src/runtime/skill-markdown-catalog.js';
+import { discoverMarkdownSkillPackages, discoverMarkdownToolPackages } from '../packages/skills/markdown-catalog';
 import { skillPackageManifests } from '../packages/skills';
 import { toolPackageManifests } from '../packages/skills/tool_skills';
 import { uiComponentManifests } from '../packages/presentation/components';

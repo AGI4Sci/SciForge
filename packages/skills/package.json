@@ -19,6 +19,7 @@
   "exports": {
     ".": "./index.ts",
     "./catalog": "./catalog.ts",
+    "./markdown-catalog": "./markdown-catalog.ts",
     "./matching-policy": "./matching-policy.ts",
     "./types": "./types.ts"
   }

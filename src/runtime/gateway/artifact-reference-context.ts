@@ -78,14 +78,6 @@ function artifactBelongsToRequest(artifact: Record<string, unknown>, request: Ga
   return true;
 }
 
-function currentUserRequestText(prompt: string) {
-  const current = prompt.match(/Current user request:\s*([\s\S]*?)(?:\n[A-Z][^\n:]{2,80}:\s|\nWork requirements:\s|$)/);
-  if (current?.[1]?.trim()) return current[1].trim();
-  const recent = prompt.match(/当前用户请求[:：]\s*([\s\S]*?)(?:\n[A-Z][^\n:]{2,80}:\s|\n工作要求[:：]\s|$)/);
-  if (recent?.[1]?.trim()) return recent[1].trim();
-  return prompt;
-}
-
 function pickLatestReferenceAttempt(attempts: TaskAttemptRecord[]) {
   return attempts.find((attempt) => hasExecutionFileRefs(attempt)) ?? attempts[0];
 }

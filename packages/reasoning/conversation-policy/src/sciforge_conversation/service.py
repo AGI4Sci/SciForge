@@ -29,11 +29,8 @@ from .latency_policy import build_latency_policy
 from .memory import build_memory_plan
 from .recovery import plan_recovery
 from .response_plan import build_background_plan, build_response_plan
+from .service_plan import build_service_plan
 
-_process_progress_bridge = getattr(
-    importlib.import_module(".process" + "_events", __package__),
-    "process" + "_events",
-)
 _build_ref_digest_bundle = getattr(
     importlib.import_module(".reference" + "_digest", __package__),
     "build_reference" + "_digests_from_request",
@@ -126,7 +123,14 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
     response_plan = build_response_plan(policy_outputs)
     background_plan = build_background_plan(policy_outputs)
     cache_policy = build_cache_policy(policy_outputs)
-    user_visible_plan = _user_visible_plan(policy_input, goal_snapshot, context_policy, handoff_plan)
+    service_plan = build_service_plan({
+        **policy_outputs,
+        "requestSchemaVersion": request.schemaVersion,
+        "responseSchemaVersion": RESPONSE_SCHEMA_VERSION,
+        "responsePlan": response_plan,
+        "backgroundPlan": background_plan,
+        "cachePolicy": cache_policy,
+    })
     current_references = policy_outputs["currentReferences"]
     response = ConversationPolicyResponse(
         requestId=request.requestId,
@@ -139,37 +143,16 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         capabilityBrief=capability_brief,
         executionModePlan=execution_mode_plan,
         handoffPlan=handoff_plan,
-        acceptancePlan=_acceptance_plan(goal_snapshot, handoff_plan),
+        acceptancePlan=_mapping_from_plan(service_plan, "acceptancePlan"),
         recoveryPlan=recovery_plan,
         latencyPolicy=latency_policy,
         responsePlan=response_plan,
         backgroundPlan=background_plan,
         cachePolicy=cache_policy,
-        userVisiblePlan=user_visible_plan,
-        processStage=ProcessStage(
-            phase="planning",
-            summary="Conversation policy request evaluated.",
-            visibleDetail="Goal, context, references, capabilities, handoff, and recovery plans are ready.",
-        ),
-        auditTrace=[
-            {
-                "event": "schema.accepted",
-                "requestSchemaVersion": request.schemaVersion,
-                "responseSchemaVersion": RESPONSE_SCHEMA_VERSION,
-            },
-            {"event": "module.goal_snapshot", "schemaVersion": goal_snapshot.get("schemaVersion")},
-            {"event": "module.context_policy", "schemaVersion": context_policy.get("schemaVersion")},
-            {"event": "module.memory", "schemaVersion": memory_plan.get("schemaVersion")},
-            {"event": "module.current_refs", "count": len(current_reference_digests)},
-            {"event": "module.capability_broker", "selected": len(capability_brief.get("selected", []))},
-            {"event": "module.execution_classifier", "mode": execution_mode_plan.get("executionMode")},
-            {"event": "module.handoff_planner", "status": handoff_plan.get("status")},
-            {"event": "module.latency_policy", "schemaVersion": latency_policy.get("schemaVersion")},
-            {"event": "module.response_plan", "schemaVersion": response_plan.get("schemaVersion")},
-            {"event": "module.background_plan", "schemaVersion": background_plan.get("schemaVersion")},
-            {"event": "module.cache_policy", "schemaVersion": cache_policy.get("schemaVersion")},
-        ],
-        metadata={"service": "sciforge_conversation.service"},
+        userVisiblePlan=_mapping_list_from_plan(service_plan, "userVisiblePlan"),
+        processStage=_process_stage_from_plan(service_plan),
+        auditTrace=_mapping_list_from_plan(service_plan, "auditTrace"),
+        metadata=_mapping_from_plan(service_plan, "metadata"),
     )
     return response
 
@@ -346,16 +329,6 @@ def _current_references(
     return refs
 
 
-def _acceptance_plan(goal_snapshot: JsonMap, handoff_plan: JsonMap) -> JsonMap:
-    return {
-        "schemaVersion": "sciforge.conversation.acceptance-plan.v1",
-        "deferEvaluationUntilOutput": True,
-        "criteria": goal_snapshot.get("acceptanceCriteria", []),
-        "requiredArtifacts": handoff_plan.get("requiredArtifacts", []),
-        "policy": "do-not-mark-success-until-required-artifacts-and-refs-pass",
-    }
-
-
 def _recovery_plan(policy_input: JsonMap) -> JsonMap:
     hints = policy_input.get("policyHints", {})
     failure = hints.get("failure") or policy_input.get("metadata", {}).get("failure")
@@ -448,33 +421,26 @@ def _selected_policy_list(policy_input: JsonMap, *keys: str) -> list[Any]:
     return []
 
 
-def _user_visible_plan(
-    policy_input: JsonMap,
-    goal_snapshot: JsonMap,
-    context_policy: JsonMap,
-    handoff_plan: JsonMap,
-) -> list[JsonMap]:
-    raw_events = policy_input.get("metadata", {}).get("rawEvents")
-    if isinstance(raw_events, (list, dict)):
-        events = _process_progress_bridge(raw_events).get("events", [])
-        return [event for event in events if isinstance(event, dict)]
-    return [
-        {
-            "phase": "plan",
-            "title": "识别当前目标",
-            "detail": goal_snapshot.get("normalizedPrompt") or policy_input.get("prompt", ""),
-        },
-        {
-            "phase": "plan",
-            "title": "选择上下文策略",
-            "detail": context_policy.get("pollutionGuard", {}).get("reason") or context_policy.get("mode"),
-        },
-        {
-            "phase": "plan",
-            "title": "准备执行交接",
-            "detail": handoff_plan.get("status", "ready"),
-        },
-    ]
+def _mapping_from_plan(plan: JsonMap, key: str) -> JsonMap:
+    value = plan.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _mapping_list_from_plan(plan: JsonMap, key: str) -> list[JsonMap]:
+    value = plan.get(key)
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _process_stage_from_plan(plan: JsonMap) -> ProcessStage:
+    stage = _mapping_from_plan(plan, "processStage")
+    return ProcessStage(
+        phase=stage.get("phase", "planning"),
+        summary=stage.get("summary", "Conversation policy request accepted."),
+        visibleDetail=stage.get("visibleDetail"),
+        metadata=stage.get("metadata") if isinstance(stage.get("metadata"), dict) else {},
+    )
 
 
 def _error_response(exc: Exception) -> str:

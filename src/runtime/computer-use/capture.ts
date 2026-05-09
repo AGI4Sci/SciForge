@@ -2,6 +2,12 @@ import { readFileSync } from 'node:fs';
 import { copyFile, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 
+import {
+  computerUseCaptureDiagnostics,
+  computerUseCaptureProviderIds,
+  computerUseCaptureProviderName,
+  computerUseWindowCaptureProvider,
+} from '../../../packages/actions/computer-use/provider-policy.js';
 import type { CaptureDiagnostic, CaptureProviderFailure, FocusRegion, ComputerUseConfig, ResolvedWindowTarget, ScreenshotRef, WindowTargetResolution } from './types.js';
 import { toTraceScreenshotRef } from './types.js';
 import { isDarwinPlatform, pngDimensions, runCommand, sha256, sleep, workspaceRel } from './utils.js';
@@ -91,7 +97,7 @@ export async function captureDisplays(
     const absPath = join(runDir, `${prefix}-display-${displayId}.png`);
     const captureTimestamp = new Date().toISOString();
     const captureScope = 'display' as const;
-    const captureProvider = config.dryRun ? 'dry-run-display-png' : captureProviderName(config, captureScope);
+    const captureProvider = config.dryRun ? computerUseCaptureProviderIds.dryRunDisplayPng : captureProviderName(config, captureScope);
     const captureDiagnostics: CaptureDiagnostic[] = [
       diagnostic('info', 'capture.display.start', `Starting display screenshot capture for display ${displayId}.`, {
         provider: captureProvider,
@@ -109,7 +115,7 @@ export async function captureDisplays(
     } else {
       const args = ['-x', '-D', String(displayId), absPath];
       const result = await runCommand('screencapture', args, { timeoutMs: 15000 });
-      captureDiagnostics.push(commandDiagnostic(result.exitCode === 0 ? 'info' : 'error', 'capture.display.provider-result', {
+      captureDiagnostics.push(commandDiagnostic(result.exitCode === 0 ? 'info' : 'error', computerUseCaptureDiagnostics.displayProviderResult.code, {
         provider: captureProvider,
         captureScope,
         command: 'screencapture',
@@ -211,7 +217,7 @@ export async function createFocusedCropRefs(
     };
     const absPath = join(runDir, `${prefix}-focus-${source.id}.png`);
     const captureTimestamp = new Date().toISOString();
-    const captureProvider = config.dryRun ? 'dry-run-focus-region-copy' : 'sips-focus-region-crop';
+    const captureProvider = config.dryRun ? computerUseCaptureProviderIds.dryRunFocusRegionCopy : computerUseCaptureProviderIds.sipsFocusRegionCrop;
     const captureDiagnostics: CaptureDiagnostic[] = [
       diagnostic('info', 'capture.focus-region.start', `Creating coarse-to-fine focus crop around ${Math.round(focus.centerX)},${Math.round(focus.centerY)}.`, {
         provider: captureProvider,
@@ -231,7 +237,7 @@ export async function createFocusedCropRefs(
       captureDiagnostics.push(...crop.diagnostics);
       if (crop.exitCode !== 0) {
         await copyFile(source.absPath, absPath);
-        captureDiagnostics.push(diagnostic('warning', 'capture.focus-region.fallback-copy', 'Focus crop provider failed; copied source screenshot so the trace still has a file ref for verifier memory.', {
+        captureDiagnostics.push(diagnostic('warning', computerUseCaptureDiagnostics.focusRegionFallbackCopy.code, computerUseCaptureDiagnostics.focusRegionFallbackCopy.message, {
           provider: captureProvider,
           captureScope: 'focus-region',
           timestamp: captureTimestamp,
@@ -287,8 +293,8 @@ async function cropPngWithSips(sourcePath: string, outPath: string, region: Focu
   return {
     ...result,
     diagnostics: [
-      commandDiagnostic(result.exitCode === 0 ? 'info' : 'warning', 'capture.focus-region.provider-result', {
-        provider: 'sips-focus-region-crop',
+      commandDiagnostic(result.exitCode === 0 ? 'info' : 'warning', computerUseCaptureDiagnostics.focusRegionProviderResult.code, {
+        provider: computerUseCaptureProviderIds.sipsFocusRegionCrop,
         captureScope: 'focus-region',
         command: 'sips',
         args,
@@ -316,10 +322,10 @@ async function captureWindowScreenshot(absPath: string, targetResolution: Resolv
       ...result,
       stdout: stdout || result.stdout,
       stderr: stderr || result.stderr,
-      provider: 'macos-screencapture-window',
+      provider: computerUseCaptureProviderIds.macosWindowCapture,
       diagnostics: [
-        commandDiagnostic(result.exitCode === 0 ? 'info' : 'error', 'capture.window.provider-result', {
-          provider: 'macos-screencapture-window',
+        commandDiagnostic(result.exitCode === 0 ? 'info' : 'error', computerUseCaptureDiagnostics.windowProviderResult.code, {
+          provider: computerUseCaptureProviderIds.macosWindowCapture,
           captureScope: 'window',
           command: 'screencapture',
           args,
@@ -334,10 +340,10 @@ async function captureWindowScreenshot(absPath: string, targetResolution: Resolv
   return {
     exitCode: 125,
     stdout: '',
-    stderr: 'Target-window capture requires a macOS screencapture-compatible windowId provider for the configured desktop platform.',
+    stderr: computerUseCaptureDiagnostics.windowUnsupportedProvider.stderr,
     provider,
     diagnostics: [
-      diagnostic('error', 'capture.window.unsupported-provider', 'Target-window screenshot capture is not available for the configured desktop platform/provider.', {
+      diagnostic('error', computerUseCaptureDiagnostics.windowUnsupportedProvider.code, computerUseCaptureDiagnostics.windowUnsupportedProvider.message, {
         provider,
         captureScope: 'window',
       }),
@@ -346,14 +352,15 @@ async function captureWindowScreenshot(absPath: string, targetResolution: Resolv
 }
 
 function captureProviderName(config: ComputerUseConfig, scope: 'display' | 'window') {
-  if (isDarwinPlatform(config.desktopPlatform)) return scope === 'window' ? 'macos-screencapture-window' : 'macos-screencapture-display';
-  return `${config.desktopPlatform}-${scope}-capture-provider`;
+  return computerUseCaptureProviderName({ desktopPlatform: config.desktopPlatform, captureScope: scope });
 }
 
 function windowCaptureProvider(targetResolution: ResolvedWindowTarget, config: ComputerUseConfig) {
-  if (config.dryRun) return 'dry-run-window-png';
-  if (isDarwinPlatform(config.desktopPlatform) && targetResolution.windowId !== undefined) return 'macos-screencapture-window';
-  return `${config.desktopPlatform || 'unknown'}-window-provider-unavailable`;
+  return computerUseWindowCaptureProvider({
+    desktopPlatform: config.desktopPlatform,
+    dryRun: config.dryRun,
+    windowId: targetResolution.windowId,
+  });
 }
 
 function diagnostic(

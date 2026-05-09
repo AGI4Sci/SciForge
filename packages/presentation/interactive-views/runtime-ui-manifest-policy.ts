@@ -11,6 +11,21 @@ export type RuntimeUiManifestPolicyRequest = {
   selectedComponentIds?: string[];
 };
 
+export type ArtifactIntentPolicyRequest = {
+  scenarioId: string;
+  prompt: string;
+  selectedComponentIds?: string[];
+};
+
+type ViewPolicyModule = {
+  componentId: string;
+  moduleId?: string;
+  priority?: number;
+  acceptsArtifactTypes?: string[];
+  outputArtifactTypes?: string[];
+  defaultSection?: string;
+};
+
 const REGISTERED_COMPONENTS = new Set([
   ...uiComponentManifests.map((manifest) => manifest.componentId),
   ...uiComponentCompatibilityAliases.map((alias) => alias.legacyComponentId),
@@ -52,6 +67,116 @@ const DOMAIN_DEFAULT_COMPONENTS: Record<string, string[]> = {
   knowledge: ['graph-viewer', 'record-table', 'evidence-matrix', 'execution-unit-table'],
 };
 
+const ARTIFACT_ALIASES: Record<string, string[]> = {
+  'paper-list': ['paper-list', '文献列表', '论文列表', 'paper list'],
+  'evidence-matrix': ['evidence-matrix', '证据矩阵', '证据表', 'evidence table', 'claim matrix'],
+  'notebook-timeline': ['notebook-timeline', '研究记录', '实验记录', '时间线', 'timeline', 'notebook'],
+  'research-report': ['research-report', 'summary-report', 'markdown-report', '阅读报告', '调研报告', '研究报告', '报告', '总结', '摘要', 'markdown', 'report', 'summary'],
+  'structure-summary': ['structure-summary', 'PDB', 'AlphaFold', '蛋白结构', '分子结构', '结构查看', 'molecule', 'protein structure'],
+  'omics-differential-expression': ['omics-differential-expression', 'omics', '差异表达', '表达矩阵', 'DESeq', 'Scanpy', 'UMAP', '火山图', 'heatmap', 'volcano'],
+  'knowledge-graph': ['knowledge-graph', '知识图谱', '关系网络', '网络图', 'graph', 'network'],
+  'data-table': ['data-table', 'CSV', 'TSV', '表格文件', '数据表格', 'table artifact'],
+};
+
+const ARTIFACT_COMPONENTS: Record<string, string> = {
+  'research-report': 'report-viewer',
+  'paper-list': 'paper-card-list',
+  'evidence-matrix': 'evidence-matrix',
+  'notebook-timeline': 'notebook-timeline',
+  'structure-summary': 'structure-viewer',
+  'omics-differential-expression': 'point-set-viewer',
+  'knowledge-graph': 'graph-viewer',
+  'data-table': 'record-table',
+};
+
+const INTENT_ARTIFACT_RULES: Array<{ artifactType: string; matches: (text: string) => boolean }> = [
+  {
+    artifactType: 'research-report',
+    matches: (text) => /\b(research-report|summary-report|markdown-report)\b|阅读报告|调研报告|研究报告|报告|总结|摘要|markdown|\.md\b|report|summary/i.test(text),
+  },
+  {
+    artifactType: 'paper-list',
+    matches: (text) => /\bpaper-list\b|文献列表|论文列表|paper list/i.test(text)
+      || (
+        /检索|搜索|查找|最新|今天|今日|arxiv|pubmed|semantic scholar|google scholar|bioRxiv|medRxiv|search|retrieve|latest|recent/i.test(text)
+        && /论文|文献|paper|article|preprint/i.test(text)
+      )
+      || (
+        /比较|评估|梳理|review|compare|evaluate/i.test(text)
+        && /论文|文献|paper|article|preprint/i.test(text)
+      ),
+  },
+  {
+    artifactType: 'evidence-matrix',
+    matches: (text) => /\bevidence-matrix\b|证据矩阵|证据表|文献证据|证据|evidence table|claim matrix|evidence/i.test(text),
+  },
+  {
+    artifactType: 'notebook-timeline',
+    matches: (text) => /\bnotebook-timeline\b|研究记录|实验记录|时间线|timeline|notebook/i.test(text),
+  },
+  {
+    artifactType: 'structure-summary',
+    matches: (text) => /structure-summary|PDB|AlphaFold|蛋白结构|分子结构|结构查看|molecule|protein structure/i.test(text),
+  },
+  {
+    artifactType: 'omics-differential-expression',
+    matches: (text) => /omics|差异表达|表达矩阵|DESeq|Scanpy|UMAP|火山图|heatmap|volcano/i.test(text),
+  },
+  {
+    artifactType: 'knowledge-graph',
+    matches: (text) => /knowledge-graph|知识图谱|关系网络|网络图|graph|network/i.test(text),
+  },
+  {
+    artifactType: 'data-table',
+    matches: (text) => /\bdata-table\b|CSV|TSV|表格文件|数据表格|table artifact/i.test(text),
+  },
+];
+
+const ARTIFACT_INTENT_COMPONENT_EXCLUSIONS = new Set(['graph', 'structure-3d', 'pdb-file', 'mmcif-file']);
+const EVIDENCE_ARTIFACT_TYPES = new Set(['evidence-matrix']);
+
+const PRESENTATION_ONLY_COMPONENTS = new Set(['evidence-matrix', 'execution-unit-table', 'notebook-timeline']);
+const AUDIT_COMPONENTS = new Set([...PRESENTATION_ONLY_COMPONENTS, 'unknown-artifact-inspector']);
+const TABULAR_COMPONENTS = new Set(['record-table', 'data-table']);
+const PRIMARY_RESULT_COMPONENTS = new Set([
+  'report-viewer',
+  'structure-viewer',
+  'molecule-viewer',
+  'point-set-viewer',
+  'volcano-plot',
+  'umap-viewer',
+  'matrix-viewer',
+  'heatmap-viewer',
+  'graph-viewer',
+  'network-graph',
+]);
+const DEFAULT_RESULT_COMPONENT_ORDER = [
+  'report-viewer',
+  'structure-viewer',
+  'molecule-viewer',
+  'evidence-matrix',
+  'paper-card-list',
+  'graph-viewer',
+  'network-graph',
+  'point-set-viewer',
+  'matrix-viewer',
+  'record-table',
+  'data-table',
+  'execution-unit-table',
+  'notebook-timeline',
+  'unknown-artifact-inspector',
+];
+
+export const interactiveViewFallbackModuleIds = {
+  genericInspector: 'generic-artifact-inspector',
+  evidenceMatrix: 'evidence-matrix-panel',
+  executionProvenance: 'execution-provenance-table',
+} as const;
+
+export const defaultInteractiveViewFallbackAcceptable = ['generic-data-table', interactiveViewFallbackModuleIds.genericInspector];
+export const defaultInteractiveViewAcceptanceCriteria = ['primary result visible', 'artifact binding validated', 'fallback explains missing fields'];
+export const interactiveViewFallbackBindingStatus = 'fallback';
+
 export function composeRuntimeUiManifestSlots(
   incoming: Array<Record<string, unknown>>,
   artifacts: Array<Record<string, unknown>>,
@@ -88,11 +213,149 @@ export function composeRuntimeUiManifestSlots(
   });
 }
 
+export function expectedArtifactTypesForIntent(request: ArtifactIntentPolicyRequest) {
+  const text = normalizeIntentText(request.prompt);
+  const artifacts = new Set<string>();
+  for (const rule of INTENT_ARTIFACT_RULES) {
+    if (rule.matches(text)) artifacts.add(rule.artifactType);
+  }
+  for (const componentId of selectedViewComponentsForIntent(request.prompt, request.selectedComponentIds)) {
+    for (const artifactType of primaryArtifactTypesForComponent(componentId)) artifacts.add(artifactType);
+  }
+  return orderArtifactsByPrompt(Array.from(artifacts), text);
+}
+
+export function selectedViewComponentsForIntent(prompt: string, configuredComponentIds: string[] = []) {
+  const text = normalizeIntentText(prompt);
+  const configured = normalizeComponentIds(configuredComponentIds);
+  const mentioned = configured.filter((componentId) => componentMentioned(text, componentId));
+  const inferred = expectedArtifactsForPromptOnly(text)
+    .map((artifactType) => ARTIFACT_COMPONENTS[artifactType])
+    .filter((componentId): componentId is string => Boolean(componentId));
+  return uniqueStrings([...mentioned, ...inferred]);
+}
+
+export function interactiveViewModuleAcceptsArtifact(module: ViewPolicyModule, artifactType?: string) {
+  const accepted = module.acceptsArtifactTypes ?? [];
+  if (!artifactType) return accepted.includes('*');
+  return accepted.includes('*') || accepted.includes(artifactType);
+}
+
+export function compareInteractiveViewModulesForArtifact(
+  left: ViewPolicyModule,
+  right: ViewPolicyModule,
+  artifactType?: string,
+  preferredModuleIds: string[] = [],
+) {
+  const leftPreferred = modulePreferred(left, preferredModuleIds) ? 0 : 1;
+  const rightPreferred = modulePreferred(right, preferredModuleIds) ? 0 : 1;
+  if (leftPreferred !== rightPreferred) return leftPreferred - rightPreferred;
+  const leftAccepts = interactiveViewModuleAcceptsArtifact(left, artifactType) ? 0 : 1;
+  const rightAccepts = interactiveViewModuleAcceptsArtifact(right, artifactType) ? 0 : 1;
+  if (leftAccepts !== rightAccepts) return leftAccepts - rightAccepts;
+  return (left.priority ?? 99) - (right.priority ?? 99);
+}
+
+export function isPrimaryInteractiveResultComponent(componentId: string) {
+  return PRIMARY_RESULT_COMPONENTS.has(normalizeUIComponentId(componentId));
+}
+
+export function interactiveViewComponentAllowsMissingArtifact(componentId: string) {
+  return PRESENTATION_ONLY_COMPONENTS.has(normalizeUIComponentId(componentId));
+}
+
+export function isAuditOnlyInteractiveViewComponent(componentId: string) {
+  return AUDIT_COMPONENTS.has(normalizeUIComponentId(componentId));
+}
+
+export function isUnknownArtifactInspectorComponent(componentId: string) {
+  return normalizeUIComponentId(componentId) === 'unknown-artifact-inspector';
+}
+
+export function isTabularInteractiveViewComponent(componentId: string) {
+  return TABULAR_COMPONENTS.has(normalizeUIComponentId(componentId));
+}
+
+export function isExecutionInteractiveViewComponent(componentId: string) {
+  return normalizeUIComponentId(componentId) === 'execution-unit-table';
+}
+
+export function isEvidenceInteractiveViewComponent(componentId: string) {
+  return normalizeUIComponentId(componentId) === 'evidence-matrix';
+}
+
+export function isEvidenceInteractiveArtifactType(artifactType: string) {
+  return EVIDENCE_ARTIFACT_TYPES.has(artifactType);
+}
+
+export function isNotebookInteractiveViewComponent(componentId: string) {
+  return normalizeUIComponentId(componentId) === 'notebook-timeline';
+}
+
+export function interactiveViewComponentRank(componentId: string) {
+  const index = DEFAULT_RESULT_COMPONENT_ORDER.indexOf(normalizeUIComponentId(componentId));
+  return index === -1 ? 99 : index;
+}
+
+export function componentMatchesInteractiveViewFocus(componentId: string, focusMode: 'all' | 'visual' | 'evidence' | 'execution' | 'results') {
+  if (focusMode === 'all') return true;
+  if (focusMode === 'evidence') return isEvidenceInteractiveViewComponent(componentId);
+  if (focusMode === 'execution') return isExecutionInteractiveViewComponent(componentId);
+  return isPrimaryInteractiveResultComponent(componentId);
+}
+
 function componentsRequestedByPrompt(prompt: string) {
   return COMPONENT_ALIASES
     .filter((entry) => entry.patterns.some((pattern) => pattern.test(prompt)))
     .filter((entry) => !componentNegated(prompt, entry.id))
     .map((entry) => normalizeUIComponentId(entry.id));
+}
+
+function expectedArtifactsForPromptOnly(text: string) {
+  return INTENT_ARTIFACT_RULES
+    .filter((rule) => rule.matches(text))
+    .map((rule) => rule.artifactType);
+}
+
+function componentMentioned(text: string, componentId: string) {
+  if (componentIdMentioned(text, componentId)) return true;
+  return COMPONENT_ALIASES
+    .filter((entry) => normalizeUIComponentId(entry.id) === normalizeUIComponentId(componentId))
+    .some((entry) => entry.patterns.some((pattern) => pattern.test(text)));
+}
+
+function componentIdMentioned(text: string, componentId: string) {
+  const escaped = escapeRegExp(componentId);
+  return new RegExp(`\\b${escaped}\\b`, 'i').test(text);
+}
+
+function primaryArtifactTypesForComponent(componentId: string) {
+  const normalized = normalizeUIComponentId(componentId);
+  const direct = Object.entries(ARTIFACT_COMPONENTS)
+    .filter(([, component]) => normalizeUIComponentId(component) === normalized)
+    .map(([artifact]) => artifact);
+  if (direct.length) return direct;
+  const manifestTypes = uiComponentManifests
+    .filter((manifest) => normalizeUIComponentId(manifest.componentId) === normalized)
+    .flatMap((manifest) => manifest.outputArtifactTypes ?? []);
+  return uniqueStrings(manifestTypes).filter((type) => !ARTIFACT_INTENT_COMPONENT_EXCLUSIONS.has(type));
+}
+
+function orderArtifactsByPrompt(types: string[], text: string) {
+  return [...types].sort((left, right) => artifactMentionIndex(left, text) - artifactMentionIndex(right, text));
+}
+
+function artifactMentionIndex(type: string, text: string) {
+  const aliases = ARTIFACT_ALIASES[type] ?? [type];
+  const indexes = aliases
+    .map((alias) => text.toLowerCase().indexOf(alias.toLowerCase()))
+    .filter((index) => index >= 0);
+  if (indexes.length) return Math.min(...indexes);
+  return 100_000 + Object.keys(ARTIFACT_COMPONENTS).indexOf(type);
+}
+
+function modulePreferred(module: ViewPolicyModule, preferredModuleIds: string[]) {
+  return preferredModuleIds.includes(module.moduleId ?? '') || preferredModuleIds.includes(module.componentId);
 }
 
 function componentNegated(prompt: string, componentId: string) {
@@ -241,6 +504,10 @@ function uniqueStrings(values: string[]) {
 
 function normalizeComponentIds(values: string[]) {
   return uniqueStrings(values.map(normalizeUIComponentId));
+}
+
+function normalizeIntentText(value: string) {
+  return value.trim().toLowerCase();
 }
 
 function escapeRegExp(value: string) {

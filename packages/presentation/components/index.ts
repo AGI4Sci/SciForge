@@ -124,9 +124,53 @@ export const uiComponentAliasTargetMap: Record<string, string> = Object.fromEntr
   uiComponentCompatibilityAliases.map((alias) => [alias.legacyComponentId, alias.activeComponentId]),
 );
 
+export type UIComponentCompatibilityAlias = typeof uiComponentCompatibilityAliases[number];
+
 export function normalizeUIComponentId(componentId: string) {
   return uiComponentAliasTargetMap[componentId] ?? componentId;
 }
+
+function compatibilityAliasManifest(
+  alias: UIComponentCompatibilityAlias,
+  manifests: UIComponentManifest[],
+): UIComponentManifest {
+  const target = manifests.find((module) => module.componentId === alias.activeComponentId)
+    ?? manifests.find((module) => module.componentId === alias.routeComponentId);
+  return {
+    ...(target ?? manifests.find((module) => module.componentId === 'unknown-artifact-inspector') ?? manifests[0]),
+    packageName: target?.packageName ?? `@sciforge-ui/${alias.legacyComponentId}`,
+    moduleId: alias.legacyComponentId,
+    title: target ? `${target.title} (${alias.legacyComponentId})` : alias.legacyComponentId,
+    description: target ? `${alias.note} Routed to ${alias.routeComponentId}.` : alias.note,
+    componentId: alias.legacyComponentId,
+    acceptsArtifactTypes: target?.acceptsArtifactTypes ?? [],
+    outputArtifactTypes: target?.outputArtifactTypes ?? [],
+    fallbackModuleIds: Array.from(new Set([
+      ...(target?.fallbackModuleIds ?? []),
+      ...(alias.legacyComponentId === 'volcano-plot' ? ['generic-data-table'] : []),
+    ])),
+    docs: {
+      readmePath: target?.docs.readmePath ?? 'packages/presentation/components/README.md',
+      agentSummary: `${alias.legacyComponentId} is a compatibility alias for ${alias.routeComponentId}.`,
+    },
+  };
+}
+
+export function buildUIComponentRuntimeRegistry(
+  manifests: UIComponentManifest[] = uiComponentManifests,
+  aliases: readonly UIComponentCompatibilityAlias[] = uiComponentCompatibilityAliases,
+): UIComponentManifest[] {
+  return Array.from(
+    new Map(
+      [
+        ...manifests,
+        ...aliases.map((alias) => compatibilityAliasManifest(alias, manifests)),
+      ].map((module) => [`${module.moduleId}@${module.version}:${module.componentId}`, module]),
+    ).values(),
+  );
+}
+
+export const uiComponentRuntimeRegistry: UIComponentManifest[] = buildUIComponentRuntimeRegistry();
 
 export function buildUIComponentArtifactTypeIndex(manifests: UIComponentManifest[] = uiComponentManifests): Record<string, string[]> {
   const artifactTypes = manifests.reduce<Record<string, string[]>>((acc, module) => {

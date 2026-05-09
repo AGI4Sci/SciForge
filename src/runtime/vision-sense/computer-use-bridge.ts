@@ -8,7 +8,8 @@ import type { ComputerUseConfig as VisionSenseConfig, LoopStep, ScreenshotRef } 
 import { sanitizeId, workspaceRel } from '../computer-use/utils.js';
 import { inputChannelContract, inputChannelDescription, resolveWindowTarget, schedulerRunMetadata, toTraceWindowTarget, windowTargetTraceConfig } from '../computer-use/window-target.js';
 import { runComputerUseActionLoop } from './computer-use-action-loop.js';
-import { appendPlannerStep, nextPlannerActions, shouldCompleteFromFileRefsOnly } from './computer-use-plan.js';
+import { appendPlannerStep, nextPlannerActions } from './computer-use-plan.js';
+import { shouldCompleteFromFileRefsOnlyPolicy } from './computer-use-policy-bridge.js';
 import { genericBridgeBlockedPayload, genericLoopPayload, VISION_TOOL_ID } from './computer-use-trace-output.js';
 import { windowConsistencyMetadata, windowLifecycleTrace } from './computer-use-window-session.js';
 
@@ -51,7 +52,7 @@ export async function runGenericVisionComputerUseLoop(
     });
   }
 
-  if (!actionQueue.length && shouldCompleteFromFileRefsOnly(request.prompt) && executionStatus !== 'failed-with-reason') {
+  if (!actionQueue.length && await shouldCompleteFromFileRefsOnlyPolicy(request.prompt) && executionStatus !== 'failed-with-reason') {
     dynamicPlannerRan = true;
     const plannerRefs = await captureDisplays(workspace, runDir, 'step-000-planner', config, targetResolution);
     screenshotLedger.push(...plannerRefs);

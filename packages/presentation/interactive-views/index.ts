@@ -7,6 +7,26 @@ export {
 } from '../components';
 export {
   composeRuntimeUiManifestSlots,
+  componentMatchesInteractiveViewFocus,
+  compareInteractiveViewModulesForArtifact,
+  defaultInteractiveViewAcceptanceCriteria,
+  defaultInteractiveViewFallbackAcceptable,
+  expectedArtifactTypesForIntent,
+  interactiveViewComponentAllowsMissingArtifact,
+  interactiveViewComponentRank,
+  interactiveViewFallbackModuleIds,
+  interactiveViewFallbackBindingStatus,
+  interactiveViewModuleAcceptsArtifact,
+  isAuditOnlyInteractiveViewComponent,
+  isEvidenceInteractiveArtifactType,
+  isEvidenceInteractiveViewComponent,
+  isExecutionInteractiveViewComponent,
+  isNotebookInteractiveViewComponent,
+  isPrimaryInteractiveResultComponent,
+  isTabularInteractiveViewComponent,
+  isUnknownArtifactInspectorComponent,
+  selectedViewComponentsForIntent,
+  type ArtifactIntentPolicyRequest,
   type RuntimeUiManifestPolicyRequest,
 } from './runtime-ui-manifest-policy';
 export type {

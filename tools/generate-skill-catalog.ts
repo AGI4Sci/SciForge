@@ -1,6 +1,6 @@
 import { writeFile } from 'node:fs/promises';
 
-import { discoverMarkdownSkillPackages, discoverMarkdownToolPackages } from '../src/runtime/skill-markdown-catalog.js';
+import { discoverMarkdownSkillPackages, discoverMarkdownToolPackages } from '../packages/skills/markdown-catalog';
 
 const skills = await discoverMarkdownSkillPackages();
 const tools = await discoverMarkdownToolPackages();
@@ -20,7 +20,13 @@ await writeFile('packages/skills/catalog.ts', [
 
 await writeFile('packages/skills/index.ts', [
   "export { skillPackageManifests } from './catalog';",
+  "export {",
+  "  discoverMarkdownSkillPackages,",
+  "  discoverMarkdownToolPackages,",
+  "  markdownCatalogRuntimeDefaults,",
+  "} from './markdown-catalog';",
   "export { scoreSkillByPackagePolicy, skillAllowedByPackagePolicy } from './matching-policy';",
+  "export type { MarkdownSkillPackage, MarkdownToolPackage, SensePluginManifest, ToolPackageType } from './markdown-catalog';",
   "export type { MatchableSkill, MatchableSkillManifest, SkillDomain } from './matching-policy';",
   "export type { SkillPackageManifest, SkillPackageSource } from './types';",
   '',

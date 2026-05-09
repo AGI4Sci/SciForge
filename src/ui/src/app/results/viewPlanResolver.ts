@@ -4,6 +4,25 @@ import type { DisplayIntent, ObjectReference, ResolvedViewPlan, RuntimeArtifact,
 import type { ScenarioId } from '../../data';
 import { artifactForObjectReference, syntheticArtifactForObjectReference } from '../../../../../packages/support/object-references';
 import type { ResultFocusMode } from './ResultShell';
+import {
+  componentMatchesInteractiveViewFocus,
+  compareInteractiveViewModulesForArtifact,
+  defaultInteractiveViewAcceptanceCriteria,
+  defaultInteractiveViewFallbackAcceptable,
+  interactiveViewComponentAllowsMissingArtifact,
+  interactiveViewComponentRank,
+  interactiveViewFallbackModuleIds,
+  interactiveViewFallbackBindingStatus,
+  interactiveViewModuleAcceptsArtifact,
+  isAuditOnlyInteractiveViewComponent,
+  isEvidenceInteractiveArtifactType,
+  isEvidenceInteractiveViewComponent,
+  isExecutionInteractiveViewComponent,
+  isNotebookInteractiveViewComponent,
+  isPrimaryInteractiveResultComponent,
+  isTabularInteractiveViewComponent,
+  isUnknownArtifactInspectorComponent,
+} from '../../../../../packages/presentation/interactive-views';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -21,8 +40,18 @@ function toRecordList(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
 }
 
-type ViewPlanSource = 'object-focus' | 'display-intent' | 'runtime-manifest' | 'artifact-inferred' | 'default-plan' | 'fallback';
-type ViewPlanBindingStatus = 'bound' | 'missing-artifact' | 'missing-fields' | 'fallback';
+type ViewPlanSource =
+  | 'object-focus'
+  | 'display-intent'
+  | 'runtime-manifest'
+  | 'artifact-inferred'
+  | 'default-plan'
+  | 'fallback';
+type ViewPlanBindingStatus =
+  | 'bound'
+  | 'missing-artifact'
+  | 'missing-fields'
+  | 'fallback';
 
 export type ResolvedViewPlanItem = {
   id: string;
@@ -126,7 +155,7 @@ export function resolveViewPlan({
 
   for (const reference of [focusedObjectReference, ...pinnedObjectReferences].filter((item): item is ObjectReference => Boolean(item))) {
     const artifact = artifactForObjectReference(reference, session) ?? syntheticArtifactForObjectReference(reference, scenarioId);
-    const module = moduleForObjectReference(reference, artifact) ?? (artifact ? findBestModuleForArtifact(artifact) : moduleById('generic-artifact-inspector'));
+    const module = moduleForObjectReference(reference, artifact) ?? (artifact ? findBestModuleForArtifact(artifact) : moduleById(interactiveViewFallbackModuleIds.genericInspector));
     if (module) {
       addItem(module, artifact, 'object-focus', {
         title: reference.title,
@@ -164,7 +193,7 @@ export function resolveViewPlan({
     const artifact = findRenderableArtifact(resultArtifacts, slot.artifactRef);
     const currentModule = uiModuleRegistry.find((module) => module.componentId === slot.componentId && moduleAcceptsArtifact(module, artifact?.type ?? slot.artifactRef));
     const replacementModule = artifact ? findBestModuleForArtifact(artifact) : uiModuleRegistry.find((module) => module.componentId === slot.componentId);
-    const module = currentModule ?? replacementModule ?? moduleById('generic-artifact-inspector');
+    const module = currentModule ?? replacementModule ?? moduleById(interactiveViewFallbackModuleIds.genericInspector);
     if (!module) continue;
     if (artifact && slot.componentId !== module.componentId) {
       diagnostics.push(`${slot.componentId} -> ${artifact.type} 已改由 ${module.componentId} 渲染，避免组件/artifact 错配。`);
@@ -178,11 +207,11 @@ export function resolveViewPlan({
     });
   }
 
-  if (session.claims.length || resultArtifacts.some((artifact) => artifact.type === 'evidence-matrix')) {
-    addItem(moduleById('evidence-matrix-panel') ?? uiModuleRegistry[3], undefined, 'fallback');
+  if (session.claims.length || resultArtifacts.some((artifact) => isEvidenceInteractiveArtifactType(artifact.type))) {
+    addItem(moduleById(interactiveViewFallbackModuleIds.evidenceMatrix) ?? uiModuleRegistry[3], undefined, 'fallback');
   }
   if (session.executionUnits.length) {
-    addItem(moduleById('execution-provenance-table') ?? uiModuleRegistry[4], undefined, 'fallback');
+    addItem(moduleById(interactiveViewFallbackModuleIds.executionProvenance) ?? uiModuleRegistry[4], undefined, 'fallback');
   }
 
   const ordered = compactViewPlanItems(items, session).sort((left, right) => {
@@ -245,8 +274,8 @@ function inferDisplayIntentFromArtifacts(artifacts: RuntimeArtifact[] = []): Dis
     primaryGoal: '展示当前 session 的 runtime artifacts',
     requiredArtifactTypes,
     preferredModules: Array.from(new Set(preferredModules)),
-    fallbackAcceptable: ['generic-data-table', 'generic-artifact-inspector'],
-    acceptanceCriteria: ['primary result visible', 'artifact binding validated', 'fallback explains missing fields'],
+    fallbackAcceptable: defaultInteractiveViewFallbackAcceptable,
+    acceptanceCriteria: defaultInteractiveViewAcceptanceCriteria,
     source: 'fallback-inference',
   };
 }
@@ -274,12 +303,11 @@ function moduleForObjectReference(reference: ObjectReference, artifact?: Runtime
     if (preferred && (!artifact || moduleAcceptsArtifact(preferred, artifact.type))) return preferred;
   }
   if (artifact) return findBestModuleForArtifact(artifact);
-  return moduleById('generic-artifact-inspector');
+  return moduleById(interactiveViewFallbackModuleIds.genericInspector);
 }
 
 function moduleAcceptsArtifact(module: RuntimeUIModule, artifactType?: string) {
-  if (!artifactType) return module.acceptsArtifactTypes.includes('*');
-  return module.acceptsArtifactTypes.includes('*') || module.acceptsArtifactTypes.includes(artifactType);
+  return interactiveViewModuleAcceptsArtifact(module, artifactType);
 }
 
 function findBestModuleForArtifact(artifact: RuntimeArtifact) {
@@ -292,9 +320,9 @@ function findBestModuleForArtifactType(artifactType: string, preferredModules: s
     .find((module): module is RuntimeUIModule => Boolean(module && moduleAcceptsArtifact(module, artifactType)));
   if (preferred) return preferred;
   return uiModuleRegistry
-    .filter((module) => module.componentId !== 'unknown-artifact-inspector' && moduleAcceptsArtifact(module, artifactType))
-    .sort((left, right) => (left.priority ?? 99) - (right.priority ?? 99))[0]
-    ?? moduleById('generic-artifact-inspector');
+    .filter((module) => !isUnknownArtifactInspectorComponent(module.componentId) && moduleAcceptsArtifact(module, artifactType))
+    .sort((left, right) => compareInteractiveViewModulesForArtifact(left, right, artifactType, preferredModules))[0]
+    ?? moduleById(interactiveViewFallbackModuleIds.genericInspector);
 }
 
 function findBestArtifactForModule(artifacts: RuntimeArtifact[], module: RuntimeUIModule) {
@@ -311,14 +339,14 @@ function findRenderableArtifact(artifacts: RuntimeArtifact[], artifactRef?: stri
 }
 
 function validateModuleBinding(module: RuntimeUIModule, artifact?: RuntimeArtifact): { status: ViewPlanBindingStatus; reason?: string; missingFields?: string[] } {
-  if (!artifact && ['evidence-matrix', 'execution-unit-table', 'notebook-timeline'].includes(module.componentId)) {
+  if (!artifact && interactiveViewComponentAllowsMissingArtifact(module.componentId)) {
     return { status: 'bound' };
   }
   if (!artifact && !module.acceptsArtifactTypes.includes('*')) {
     return { status: 'missing-artifact', reason: `等待 ${module.acceptsArtifactTypes.join('/')} artifact` };
   }
   if (artifact && !moduleAcceptsArtifact(module, artifact.type)) {
-    return { status: 'fallback', reason: `${module.moduleId} 不声明消费 ${artifact.type}` };
+    return { status: interactiveViewFallbackBindingStatus as ViewPlanBindingStatus, reason: `${module.moduleId} 不声明消费 ${artifact.type}` };
   }
   const missingFields = (module.requiredFields ?? []).filter((field) => !artifactHasField(artifact, field));
   const missingAny = (module.requiredAnyFields ?? []).filter((group) => !group.some((field) => artifactHasField(artifact, field)));
@@ -348,26 +376,11 @@ function uploadedEvidenceArtifacts(artifacts: RuntimeArtifact[]) {
 }
 
 function sectionForModule(module: RuntimeUIModule, displayIntent: DisplayIntent, artifact?: RuntimeArtifact): ViewPlanSection {
-  if (isPrimaryResultModule(module)) {
+  if (isPrimaryInteractiveResultComponent(module.componentId)) {
     if (artifact && displayIntent.requiredArtifactTypes?.includes(artifact.type)) return 'primary';
     if (displayIntent.preferredModules?.includes(module.moduleId)) return 'primary';
   }
   return module.defaultSection ?? 'supporting';
-}
-
-function isPrimaryResultModule(module: RuntimeUIModule) {
-  return [
-    'report-viewer',
-    'structure-viewer',
-    'molecule-viewer',
-    'point-set-viewer',
-    'volcano-plot',
-    'umap-viewer',
-    'matrix-viewer',
-    'heatmap-viewer',
-    'graph-viewer',
-    'network-graph',
-  ].includes(module.componentId);
 }
 
 function compactViewPlanItems(items: ResolvedViewPlanItem[], session: SciForgeSession) {
@@ -387,14 +400,14 @@ function compactViewPlanItems(items: ResolvedViewPlanItem[], session: SciForgeSe
   }
   return items.filter((item) => {
     if (item.status === 'missing-artifact' && item.section !== 'primary' && item.source !== 'display-intent') return false;
-    if (item.module.componentId === 'execution-unit-table' && !session.executionUnits.length) return false;
-    if (item.module.componentId === 'evidence-matrix' && !session.claims.length && !uploadedEvidenceArtifacts(session.artifacts).length && !item.artifact) return false;
-    if (item.module.componentId === 'notebook-timeline' && !session.notebook.length && !item.artifact) return false;
-    if (item.module.componentId === 'unknown-artifact-inspector' && !item.artifact) return false;
+    if (isExecutionInteractiveViewComponent(item.module.componentId) && !session.executionUnits.length) return false;
+    if (isEvidenceInteractiveViewComponent(item.module.componentId) && !session.claims.length && !uploadedEvidenceArtifacts(session.artifacts).length && !item.artifact) return false;
+    if (isNotebookInteractiveViewComponent(item.module.componentId) && !session.notebook.length && !item.artifact) return false;
+    if (isUnknownArtifactInspectorComponent(item.module.componentId) && !item.artifact) return false;
     const artifactKey = item.artifact?.id ?? item.slot.artifactRef;
     const strongest = artifactKey ? strongestByArtifact.get(artifactKey) : undefined;
-    if (strongest && strongest.id !== item.id && item.module.componentId === 'unknown-artifact-inspector') return false;
-    if (strongest && strongest.id !== item.id && (item.module.componentId === 'record-table' || item.module.componentId === 'data-table') && strongest.status === 'bound') return false;
+    if (strongest && strongest.id !== item.id && isUnknownArtifactInspectorComponent(item.module.componentId)) return false;
+    if (strongest && strongest.id !== item.id && isTabularInteractiveViewComponent(item.module.componentId) && strongest.status === 'bound') return false;
     const presentationKey = presentationIdentityKey(item);
     const strongestPresentation = presentationKey ? strongestByPresentationIdentity.get(presentationKey) : undefined;
     if (strongestPresentation && strongestPresentation.id !== item.id && isPresentationDedupeEnabled(item.module)) return false;
@@ -581,7 +594,7 @@ function blockedDesignForIntent(
   const unsupportedType = requiredTypes.find((artifactType) => {
     const artifact = findBestArtifactForType(artifacts, artifactType);
     if (!artifact) return false;
-    const specialized = uiModuleRegistry.find((module) => module.componentId !== 'unknown-artifact-inspector' && moduleAcceptsArtifact(module, artifact.type));
+    const specialized = uiModuleRegistry.find((module) => !isUnknownArtifactInspectorComponent(module.componentId) && moduleAcceptsArtifact(module, artifact.type));
     return !specialized;
   });
   const primaryBound = items.some((item) => item.section === 'primary' && item.status === 'bound');
@@ -607,21 +620,9 @@ export function itemsForFocusMode(plan: RuntimeResolvedViewPlan, focusMode: Resu
 }
 
 function itemMatchesFocusMode(item: ResolvedViewPlanItem, focusMode: ResultFocusMode) {
-  if (focusMode === 'all') return true;
-  if (focusMode === 'evidence') return item.module.componentId === 'evidence-matrix' || item.artifact?.type === 'evidence-matrix';
-  if (focusMode === 'execution') return item.module.componentId === 'execution-unit-table' || item.section === 'provenance';
-  return [
-    'structure-viewer',
-    'molecule-viewer',
-    'point-set-viewer',
-    'volcano-plot',
-    'umap-viewer',
-    'matrix-viewer',
-    'heatmap-viewer',
-    'graph-viewer',
-    'network-graph',
-    'report-viewer',
-  ].includes(item.module.componentId);
+  if (focusMode === 'execution' && item.section === 'provenance') return true;
+  if (focusMode === 'evidence' && isEvidenceInteractiveViewComponent(item.artifact?.type ?? '')) return true;
+  return componentMatchesInteractiveViewFocus(item.module.componentId, focusMode);
 }
 
 
@@ -675,10 +676,7 @@ export function selectDefaultResultItems(items: ResolvedViewPlanItem[], focusMod
 }
 
 function isAuditOnlyResultItem(item: ResolvedViewPlanItem) {
-  return item.module.componentId === 'evidence-matrix'
-    || item.module.componentId === 'execution-unit-table'
-    || item.module.componentId === 'notebook-timeline'
-    || item.module.componentId === 'unknown-artifact-inspector'
+  return isAuditOnlyInteractiveViewComponent(item.module.componentId)
     || item.section === 'provenance'
     || item.section === 'raw';
 }
@@ -703,7 +701,7 @@ function resultPresentationRank(left: ResolvedViewPlanItem, right: ResolvedViewP
   if (sectionDelta) return sectionDelta;
   const statusDelta = resultStatusRank(left.status) - resultStatusRank(right.status);
   if (statusDelta) return statusDelta;
-  const componentDelta = resultComponentRank(left.module.componentId) - resultComponentRank(right.module.componentId);
+  const componentDelta = interactiveViewComponentRank(left.module.componentId) - interactiveViewComponentRank(right.module.componentId);
   if (componentDelta) return componentDelta;
   return (left.slot.priority ?? left.module.priority ?? 99) - (right.slot.priority ?? right.module.priority ?? 99);
 }
@@ -713,25 +711,4 @@ function resultStatusRank(status: ResolvedViewPlanItem['status']) {
   if (status === 'missing-fields') return 1;
   if (status === 'fallback') return 2;
   return 3;
-}
-
-function resultComponentRank(componentId: string) {
-  const order = [
-    'report-viewer',
-    'structure-viewer',
-    'molecule-viewer',
-    'evidence-matrix',
-    'paper-card-list',
-    'graph-viewer',
-    'network-graph',
-    'point-set-viewer',
-    'matrix-viewer',
-    'record-table',
-    'data-table',
-    'execution-unit-table',
-    'notebook-timeline',
-    'unknown-artifact-inspector',
-  ];
-  const index = order.indexOf(componentId);
-  return index === -1 ? 99 : index;
 }
