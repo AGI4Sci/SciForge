@@ -1,29 +1,18 @@
-import { GUIDANCE_QUEUED_EVENT_TYPE, PROCESS_PROGRESS_EVENT_TYPE, USER_INTERRUPT_EVENT_TYPE, runtimeRequestAcceptedProgressCopy } from '@sciforge-ui/runtime-contract';
+import {
+  GUIDANCE_QUEUED_EVENT_TYPE,
+  PROCESS_PROGRESS_EVENT_TYPE,
+  PROCESS_PROGRESS_PHASE,
+  PROCESS_PROGRESS_REASON,
+  PROCESS_PROGRESS_STATUS,
+  USER_INTERRUPT_EVENT_TYPE,
+  runtimeRequestAcceptedProgressCopy,
+} from '@sciforge-ui/runtime-contract';
+import type { ProcessProgressModel, ProcessProgressPhase } from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
 import { makeId, nowIso } from './domain';
 import type { RuntimeResponsePlan } from './latencyPolicy';
 
-export type ProcessProgressPhase = 'read' | 'write' | 'execute' | 'wait' | 'plan' | 'complete' | 'error' | 'observe';
-
-export interface ProcessProgressModel {
-  phase: ProcessProgressPhase;
-  title: string;
-  detail: string;
-  reading: string[];
-  writing: string[];
-  waitingFor?: string;
-  nextStep?: string;
-  lastEvent?: {
-    label: string;
-    detail: string;
-    createdAt?: string;
-  };
-  reason?: string;
-  recoveryHint?: string;
-  canAbort?: boolean;
-  canContinue?: boolean;
-  status: 'running' | 'completed' | 'failed';
-}
+export type { ProcessProgressModel, ProcessProgressPhase } from '@sciforge-ui/runtime-contract';
 
 export const SILENT_STREAM_WAIT_THRESHOLD_MS = 5_000;
 
@@ -44,7 +33,7 @@ export function progressModelFromEvent(event: AgentStreamEvent): ProcessProgress
   const raw = isRecord(event.raw) ? event.raw : {};
   const progress = isRecord(raw.progress) ? raw.progress : isRecord(raw.raw) && isRecord(raw.raw.progress) ? raw.raw.progress : undefined;
   if (progress) return normalizeProgressModel(progress, event);
-  if (event.type === 'process-progress') return normalizeProgressModel(raw, event);
+  if (event.type === PROCESS_PROGRESS_EVENT_TYPE) return normalizeProgressModel(raw, event);
   return undefined;
 }
 
@@ -89,24 +78,24 @@ export function buildSilentStreamProgressEvent({
     : `HTTP stream 仍在等待；已 ${elapsedSeconds}s 没有收到新事件，尚无可展示的后端事件。`;
   return {
     id: 'evt-silent-stream-wait',
-    type: 'process-progress',
+    type: PROCESS_PROGRESS_EVENT_TYPE,
     label: '等待',
     detail,
     createdAt: new Date(nowMs).toISOString(),
     raw: {
-      type: 'process-progress',
+      type: PROCESS_PROGRESS_EVENT_TYPE,
       progress: {
-        phase: 'wait',
+        phase: PROCESS_PROGRESS_PHASE.WAIT,
         title: '正在等待后端返回新事件',
         detail,
         waitingFor: '后端返回新事件',
         nextStep: '收到新事件后继续执行；也可以安全中止当前 stream 或继续补充指令排队。',
         lastEvent: lastEventSummary,
-        reason: 'backend-waiting',
+        reason: PROCESS_PROGRESS_REASON.BACKEND_WAITING,
         recoveryHint: '保留最近真实事件和等待原因，下一轮可基于这些线索继续或恢复。',
         canAbort: true,
         canContinue: true,
-        status: 'running',
+        status: PROCESS_PROGRESS_STATUS.RUNNING,
       },
       silentStreamWaiting: true,
       backend,
@@ -122,7 +111,7 @@ export function buildInitialResponseProgressEvent(responsePlan: RuntimeResponseP
   if (!mode) return undefined;
   if (mode === 'wait-for-result') {
     return progressEvent({
-      phase: 'plan',
+      phase: PROCESS_PROGRESS_PHASE.PLAN,
       title: '正在规划工作区任务',
       detail: '已收到请求，正在规划需要执行和验证的工作。',
       waitingFor: '工作区任务进展',
@@ -133,7 +122,7 @@ export function buildInitialResponseProgressEvent(responsePlan: RuntimeResponseP
   if (mode === 'quick-status' || mode === 'direct-context-answer' || mode === 'streaming-draft') {
     const direct = mode === 'direct-context-answer';
     return progressEvent({
-      phase: direct ? 'read' : 'plan',
+      phase: direct ? PROCESS_PROGRESS_PHASE.READ : PROCESS_PROGRESS_PHASE.PLAN,
       title: direct ? '正在整理当前上下文' : '正在准备可读进展',
       detail: direct
         ? '已收到请求，正在基于当前上下文整理可读回复。'
@@ -149,7 +138,7 @@ export function buildInitialResponseProgressEvent(responsePlan: RuntimeResponseP
 export function buildRequestAcceptedProgressEvent(prompt: string): AgentStreamEvent {
   const copy = runtimeRequestAcceptedProgressCopy(prompt);
   return progressEvent({
-    phase: 'plan',
+    phase: PROCESS_PROGRESS_PHASE.PLAN,
     title: '已收到请求',
     detail: copy.detail,
     waitingFor: copy.waitingFor,
@@ -175,12 +164,12 @@ function progressEvent({
 }): AgentStreamEvent {
   return {
     id: makeId('evt'),
-    type: 'process-progress',
+    type: PROCESS_PROGRESS_EVENT_TYPE,
     label: '进展',
     detail,
     createdAt: nowIso(),
     raw: {
-      type: 'process-progress',
+      type: PROCESS_PROGRESS_EVENT_TYPE,
       progress: {
         phase,
         title,
@@ -190,7 +179,7 @@ function progressEvent({
         reason,
         canAbort: true,
         canContinue: true,
-        status: 'running',
+        status: PROCESS_PROGRESS_STATUS.RUNNING,
       },
       responsePlanInitialStatus: true,
     },
@@ -225,7 +214,7 @@ function latestNonSyntheticEvent(events: AgentStreamEvent[]) {
   for (const event of [...events].reverse()) {
     const raw = isRecord(event.raw) ? event.raw : {};
     if (raw.silentStreamWaiting === true) continue;
-    if (event.type === PROCESS_PROGRESS_EVENT_TYPE && isRecord(raw.progress) && raw.progress.reason === 'backend-waiting') continue;
+    if (event.type === PROCESS_PROGRESS_EVENT_TYPE && isRecord(raw.progress) && raw.progress.reason === PROCESS_PROGRESS_REASON.BACKEND_WAITING) continue;
     if (event.type === 'queued' || event.type === GUIDANCE_QUEUED_EVENT_TYPE || event.type === USER_INTERRUPT_EVENT_TYPE) continue;
     return event;
   }
@@ -254,29 +243,29 @@ function normalizeLastEvent(value: unknown): ProcessProgressModel['lastEvent'] |
 
 function normalizePhase(value: string): ProcessProgressPhase {
   const lowered = value.toLowerCase();
-  if (/write|写/.test(lowered)) return 'write';
-  if (/read|读/.test(lowered)) return 'read';
-  if (/wait|silent|pending|等待|配额/.test(lowered)) return 'wait';
-  if (/plan|next|stage|计划|下一步/.test(lowered)) return 'plan';
-  if (/complete|done|success|完成/.test(lowered)) return 'complete';
-  if (/error|fail|traceback|失败|报错/.test(lowered)) return 'error';
-  if (/execute|run|command|执行|运行/.test(lowered)) return 'execute';
-  return 'observe';
+  if (/write|写/.test(lowered)) return PROCESS_PROGRESS_PHASE.WRITE;
+  if (/read|读/.test(lowered)) return PROCESS_PROGRESS_PHASE.READ;
+  if (/wait|silent|pending|等待|配额/.test(lowered)) return PROCESS_PROGRESS_PHASE.WAIT;
+  if (/plan|next|stage|计划|下一步/.test(lowered)) return PROCESS_PROGRESS_PHASE.PLAN;
+  if (/complete|done|success|完成/.test(lowered)) return PROCESS_PROGRESS_PHASE.COMPLETE;
+  if (/error|fail|traceback|失败|报错/.test(lowered)) return PROCESS_PROGRESS_PHASE.ERROR;
+  if (/execute|run|command|执行|运行/.test(lowered)) return PROCESS_PROGRESS_PHASE.EXECUTE;
+  return PROCESS_PROGRESS_PHASE.OBSERVE;
 }
 
 function normalizeStatus(value: string | undefined, phase: ProcessProgressPhase): ProcessProgressModel['status'] {
-  if (phase === 'error' || /fail|error|失败/.test(value ?? '')) return 'failed';
-  if (phase === 'complete' || /done|complete|success|完成/.test(value ?? '')) return 'completed';
-  return 'running';
+  if (phase === PROCESS_PROGRESS_PHASE.ERROR || /fail|error|失败/.test(value ?? '')) return PROCESS_PROGRESS_STATUS.FAILED;
+  if (phase === PROCESS_PROGRESS_PHASE.COMPLETE || /done|complete|success|完成/.test(value ?? '')) return PROCESS_PROGRESS_STATUS.COMPLETED;
+  return PROCESS_PROGRESS_STATUS.RUNNING;
 }
 
 function titleForPhase(phase: ProcessProgressPhase, fallback: string) {
-  if (phase === 'read') return '正在读取';
-  if (phase === 'write') return '正在写入';
-  if (phase === 'execute') return '正在执行';
-  if (phase === 'wait') return '正在等待';
-  if (phase === 'plan') return '正在规划下一步';
-  if (phase === 'complete') return '阶段完成';
-  if (phase === 'error') return '遇到阻断';
+  if (phase === PROCESS_PROGRESS_PHASE.READ) return '正在读取';
+  if (phase === PROCESS_PROGRESS_PHASE.WRITE) return '正在写入';
+  if (phase === PROCESS_PROGRESS_PHASE.EXECUTE) return '正在执行';
+  if (phase === PROCESS_PROGRESS_PHASE.WAIT) return '正在等待';
+  if (phase === PROCESS_PROGRESS_PHASE.PLAN) return '正在规划下一步';
+  if (phase === PROCESS_PROGRESS_PHASE.COMPLETE) return '阶段完成';
+  if (phase === PROCESS_PROGRESS_PHASE.ERROR) return '遇到阻断';
   return fallback || '正在观察后端状态';
 }

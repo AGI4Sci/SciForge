@@ -1,6 +1,8 @@
+import { RUNTIME_HEALTH_STATUS } from '@sciforge-ui/runtime-contract';
+import type { RuntimeHealthStatus } from '@sciforge-ui/runtime-contract';
 import type { SciForgeConfig } from './domain';
 
-export type RuntimeHealthStatus = 'checking' | 'online' | 'offline' | 'optional' | 'not-configured';
+export type { RuntimeHealthStatus } from '@sciforge-ui/runtime-contract';
 
 export interface RuntimeHealthItem {
   id: 'ui' | 'workspace' | 'agentserver' | 'model' | 'library';
@@ -20,7 +22,7 @@ export function modelHealth(config: SciForgeConfig): RuntimeHealthItem {
       return {
         id: 'model',
         label: 'Model Backend',
-        status: 'not-configured',
+        status: RUNTIME_HEALTH_STATUS.NOT_CONFIGURED,
         detail: 'native · user model not set',
         recoverAction: '填写用户侧 Model Name / Base URL / API Key；生成任务不会回退到 AgentServer 默认模型',
       };
@@ -28,15 +30,15 @@ export function modelHealth(config: SciForgeConfig): RuntimeHealthItem {
     return {
       id: 'model',
       label: 'Model Backend',
-      status: 'online',
+      status: RUNTIME_HEALTH_STATUS.ONLINE,
       detail: `native${nativeModel ? ` · ${nativeModel}` : ''}${nativeBaseUrl ? ` · ${nativeBaseUrl}` : ''}`,
     };
   }
   if (!config.modelBaseUrl.trim()) {
-    return { id: 'model', label: 'Model Backend', status: 'not-configured', detail: provider, recoverAction: '填写 Model Base URL 或切回 native' };
+    return { id: 'model', label: 'Model Backend', status: RUNTIME_HEALTH_STATUS.NOT_CONFIGURED, detail: provider, recoverAction: '填写 Model Base URL 或切回 native' };
   }
   if (!config.apiKey.trim()) {
-    return { id: 'model', label: 'Model Backend', status: 'not-configured', detail: provider, recoverAction: '填写 API Key 或使用 native backend' };
+    return { id: 'model', label: 'Model Backend', status: RUNTIME_HEALTH_STATUS.NOT_CONFIGURED, detail: provider, recoverAction: '填写 API Key 或使用 native backend' };
   }
-  return { id: 'model', label: 'Model Backend', status: 'online', detail: `${provider}${config.modelName.trim() ? ` · ${config.modelName.trim()}` : ''}` };
+  return { id: 'model', label: 'Model Backend', status: RUNTIME_HEALTH_STATUS.ONLINE, detail: `${provider}${config.modelName.trim() ? ` · ${config.modelName.trim()}` : ''}` };
 }

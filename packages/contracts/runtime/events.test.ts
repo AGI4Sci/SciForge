@@ -13,6 +13,11 @@ import {
   LATENCY_DIAGNOSTICS_REF,
   PROCESS_EVENTS_SCHEMA_VERSION,
   PROCESS_PROGRESS_EVENT_TYPE,
+  PROCESS_PROGRESS_PHASE,
+  PROCESS_PROGRESS_PHASES,
+  PROCESS_PROGRESS_REASON,
+  PROCESS_PROGRESS_STATUS,
+  PROCESS_PROGRESS_STATUSES,
   PROJECT_TOOL_DONE_EVENT_TYPE,
   PROJECT_TOOL_FAILED_EVENT_TYPE,
   PROJECT_TOOL_STARTED_EVENT_TYPE,
@@ -23,6 +28,8 @@ import {
   TARGET_WORKTREE_PREPARING_EVENT_TYPE,
   USER_INTERRUPT_EVENT_TYPE,
   WORKSPACE_RUNTIME_EVENT_TYPE,
+  RUNTIME_HEALTH_STATUS,
+  RUNTIME_HEALTH_STATUSES,
   agentServerConvergenceGuardEvent,
   agentServerContextWindowRecoverySucceededEvent,
   agentServerDispatchEvent,
@@ -162,9 +169,37 @@ test('runtime events policy owns accepted prompt compaction copy', () => {
     detail: '正在把本轮请求交给 workspace runtime：compare artifacts',
     waitingFor: 'workspace runtime 首个事件',
     nextStep: '收到后端事件后继续展示读取、执行、写入和验证进展。',
-    reason: 'request-accepted-before-backend-stream',
+    reason: PROCESS_PROGRESS_REASON.REQUEST_ACCEPTED_BEFORE_BACKEND_STREAM,
   });
   assert.match(runtimeRequestAcceptedProgressCopy('').detail, /workspace runtime。/);
+});
+
+test('runtime events policy owns process progress and health status literals', () => {
+  assert.equal(PROCESS_PROGRESS_EVENT_TYPE, 'process-progress');
+  assert.deepEqual(PROCESS_PROGRESS_PHASES, [
+    PROCESS_PROGRESS_PHASE.READ,
+    PROCESS_PROGRESS_PHASE.WRITE,
+    PROCESS_PROGRESS_PHASE.EXECUTE,
+    PROCESS_PROGRESS_PHASE.WAIT,
+    PROCESS_PROGRESS_PHASE.PLAN,
+    PROCESS_PROGRESS_PHASE.COMPLETE,
+    PROCESS_PROGRESS_PHASE.ERROR,
+    PROCESS_PROGRESS_PHASE.OBSERVE,
+  ]);
+  assert.deepEqual(PROCESS_PROGRESS_STATUSES, [
+    PROCESS_PROGRESS_STATUS.RUNNING,
+    PROCESS_PROGRESS_STATUS.COMPLETED,
+    PROCESS_PROGRESS_STATUS.FAILED,
+  ]);
+  assert.equal(runtimeRequestAcceptedProgressCopy('x').reason, PROCESS_PROGRESS_REASON.REQUEST_ACCEPTED_BEFORE_BACKEND_STREAM);
+  assert.equal(PROCESS_PROGRESS_REASON.BACKEND_WAITING, 'backend-waiting');
+  assert.deepEqual(RUNTIME_HEALTH_STATUSES, [
+    RUNTIME_HEALTH_STATUS.CHECKING,
+    RUNTIME_HEALTH_STATUS.ONLINE,
+    RUNTIME_HEALTH_STATUS.OFFLINE,
+    RUNTIME_HEALTH_STATUS.OPTIONAL,
+    RUNTIME_HEALTH_STATUS.NOT_CONFIGURED,
+  ]);
 });
 
 test('project tool event projection owns stable ids and user-visible copy', () => {

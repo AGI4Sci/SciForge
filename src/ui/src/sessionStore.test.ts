@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import {
+  ALIGNMENT_CONTRACT_ARTIFACT_TYPE,
+  ALIGNMENT_CONTRACT_SCHEMA_VERSION,
+} from './domain';
 import { compactWorkspaceStateForStorage, parseWorkspaceState, saveWorkspaceState, shouldUsePersistedWorkspaceState } from './sessionStore';
 
 test('parseWorkspaceState preserves built-in and workspace scenario sessions', () => {
@@ -120,6 +124,35 @@ test('parseWorkspaceState preserves hidden official package preferences', () => 
   });
 
   assert.deepEqual(state.hiddenOfficialPackageIds, ['structure-exploration']);
+});
+
+test('parseWorkspaceState preserves package-owned alignment contract records', () => {
+  const state = parseWorkspaceState({
+    schemaVersion: 2,
+    workspacePath: '/tmp/sciforge-workspace',
+    sessionsByScenario: {},
+    archivedSessions: [],
+    alignmentContracts: [{
+      id: 'alignment-contract-legacy',
+      type: ALIGNMENT_CONTRACT_ARTIFACT_TYPE,
+      schemaVersion: ALIGNMENT_CONTRACT_SCHEMA_VERSION,
+      title: 'Legacy alignment',
+      createdAt: '2026-04-25T00:00:00.000Z',
+      updatedAt: '2026-04-25T00:00:00.000Z',
+      reason: 'legacy state load',
+      checksum: 'abc123',
+      sourceRefs: [],
+      assumptionRefs: [],
+      decisionAuthority: 'researcher',
+      confirmationStatus: 'needs-data',
+      data: { researchGoal: 'align assumptions' },
+    }],
+    updatedAt: '2026-04-25T00:00:00.000Z',
+  });
+
+  assert.equal(state.alignmentContracts.length, 1);
+  assert.equal(state.alignmentContracts[0]?.type, ALIGNMENT_CONTRACT_ARTIFACT_TYPE);
+  assert.equal(state.alignmentContracts[0]?.schemaVersion, ALIGNMENT_CONTRACT_SCHEMA_VERSION);
 });
 
 test('saveWorkspaceState compacts instead of crashing on localStorage quota', () => {

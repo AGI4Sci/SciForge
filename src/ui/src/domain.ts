@@ -3,6 +3,7 @@ import type { RuntimeAgentBackend } from '@sciforge-ui/runtime-contract/agent-ba
 import type { SkillDomain } from '@sciforge/scenario-core/scenario-routing-policy';
 import type {
   AgentStreamEvent,
+  AlignmentContractRecord,
   DisplayIntent,
   EvidenceClaim,
   ExecutionUnitStatus,
@@ -25,8 +26,15 @@ import type {
   ViewPlanSection,
 } from '@sciforge-ui/runtime-contract';
 
+export {
+  ALIGNMENT_CONTRACT_ARTIFACT_TYPE,
+  ALIGNMENT_CONTRACT_SCHEMA_VERSION,
+  ALIGNMENT_CONTRACT_VERSION_ARTIFACT_TYPE,
+} from '@sciforge-ui/runtime-contract';
+
 export type BuiltInScenarioId = ScenarioId;
 export type {
+  AlignmentContractRecord,
   ArtifactPreviewAction,
   AgentCompactCapability,
   AgentContextCompaction,
@@ -470,41 +478,6 @@ export interface ReusableTaskCandidateRecord {
   status: RunStatus;
   promotionState: 'candidate' | 'promoted' | 'rejected';
   createdAt: string;
-}
-
-export interface AlignmentContractRecord {
-  id: string;
-  type: 'alignment-contract';
-  schemaVersion: '1';
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-  reason: string;
-  checksum: string;
-  sourceRefs: string[];
-  assumptionRefs: string[];
-  decisionAuthority: string;
-  confirmationStatus: 'draft' | 'user-confirmed' | 'needs-data';
-  confirmedBy?: string;
-  confirmedAt?: string;
-  sourceContractVersion?: string;
-  data: {
-    dataReality: string;
-    aiAssessment: string;
-    bioReality: string;
-    feasibilityMatrix: string;
-    researchGoal: string;
-    technicalRoute: string;
-    successCriteria: string;
-    knownRisks: string;
-    recalibrationRecord: string;
-    dataAssetsChecklist: string;
-    sampleSizeChecklist: string;
-    labelQualityChecklist: string;
-    batchEffectChecklist: string;
-    experimentalConstraints: string;
-    feasibilitySourceNotes: string;
-  };
 }
 
 export interface SciForgeConfig {

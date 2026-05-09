@@ -93,6 +93,42 @@ export const AGENTSERVER_CONTEXT_WINDOW_RECOVERY_EVENT_TYPE = 'agentserver-conte
 export const AGENTSERVER_GENERATION_RETRY_EVENT_TYPE = 'agentserver-generation-retry' as const;
 export const AGENTSERVER_GENERATION_RETRY_SCHEMA_VERSION = 'sciforge.agentserver-generation-retry.v1' as const;
 
+export const PROCESS_PROGRESS_PHASE = {
+  READ: 'read',
+  WRITE: 'write',
+  EXECUTE: 'execute',
+  WAIT: 'wait',
+  PLAN: 'plan',
+  COMPLETE: 'complete',
+  ERROR: 'error',
+  OBSERVE: 'observe',
+} as const;
+
+export const PROCESS_PROGRESS_PHASES = Object.values(PROCESS_PROGRESS_PHASE);
+
+export const PROCESS_PROGRESS_STATUS = {
+  RUNNING: 'running',
+  COMPLETED: 'completed',
+  FAILED: 'failed',
+} as const;
+
+export const PROCESS_PROGRESS_STATUSES = Object.values(PROCESS_PROGRESS_STATUS);
+
+export const PROCESS_PROGRESS_REASON = {
+  BACKEND_WAITING: 'backend-waiting',
+  REQUEST_ACCEPTED_BEFORE_BACKEND_STREAM: 'request-accepted-before-backend-stream',
+} as const;
+
+export const RUNTIME_HEALTH_STATUS = {
+  CHECKING: 'checking',
+  ONLINE: 'online',
+  OFFLINE: 'offline',
+  OPTIONAL: 'optional',
+  NOT_CONFIGURED: 'not-configured',
+} as const;
+
+export const RUNTIME_HEALTH_STATUSES = Object.values(RUNTIME_HEALTH_STATUS);
+
 export const LATENCY_DIAGNOSTICS_CACHE_POLICY_KEYS = [
   'reuseScenarioPlan',
   'reuseSkillPlan',
@@ -110,6 +146,10 @@ export const USER_VISIBLE_EVENT_EXCLUSION_TYPES = [
 ] as const;
 
 export type WorkspaceRuntimeCompletionStatus = 'completed' | 'failed';
+export type ProcessProgressPhase = typeof PROCESS_PROGRESS_PHASE[keyof typeof PROCESS_PROGRESS_PHASE];
+export type ProcessProgressReason = typeof PROCESS_PROGRESS_REASON[keyof typeof PROCESS_PROGRESS_REASON];
+export type ProcessProgressStatus = typeof PROCESS_PROGRESS_STATUS[keyof typeof PROCESS_PROGRESS_STATUS];
+export type RuntimeHealthStatus = typeof RUNTIME_HEALTH_STATUS[keyof typeof RUNTIME_HEALTH_STATUS];
 export type RuntimeWorkEventKind =
   | 'plan'
   | 'explore'
@@ -163,7 +203,27 @@ export interface RuntimeRequestAcceptedProgressCopy {
   detail: string;
   waitingFor: string;
   nextStep: string;
-  reason: string;
+  reason: typeof PROCESS_PROGRESS_REASON.REQUEST_ACCEPTED_BEFORE_BACKEND_STREAM;
+}
+
+export interface ProcessProgressModel {
+  phase: ProcessProgressPhase;
+  title: string;
+  detail: string;
+  reading: string[];
+  writing: string[];
+  waitingFor?: string;
+  nextStep?: string;
+  lastEvent?: {
+    label: string;
+    detail: string;
+    createdAt?: string;
+  };
+  reason?: ProcessProgressReason | string;
+  recoveryHint?: string;
+  canAbort?: boolean;
+  canContinue?: boolean;
+  status: ProcessProgressStatus;
 }
 
 export interface RuntimeWorkEventClassificationInput {
@@ -432,7 +492,7 @@ export function runtimeRequestAcceptedProgressCopy(prompt: string): RuntimeReque
       : '正在把本轮请求交给 workspace runtime。',
     waitingFor: 'workspace runtime 首个事件',
     nextStep: '收到后端事件后继续展示读取、执行、写入和验证进展。',
-    reason: 'request-accepted-before-backend-stream',
+    reason: PROCESS_PROGRESS_REASON.REQUEST_ACCEPTED_BEFORE_BACKEND_STREAM,
   };
 }
 

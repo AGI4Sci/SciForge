@@ -1,5 +1,6 @@
 import type { ClaimType, EvidenceLevel } from '../data';
 import { Badge, EmptyState } from '@agi4sci/design-system';
+import { claimTypeDisplay, evidenceLevelDisplay } from '@sciforge/scenario-core/scenario-demo-data';
 import {
   DEFAULT_EMPTY_ARTIFACT_RECOVER_ACTIONS,
   runtimeRecoverActionLabel,
@@ -35,39 +36,13 @@ export function ChartLoadingFallback({ label }: { label: string }) {
 }
 
 export function EvidenceTag({ level }: { level: EvidenceLevel }) {
-  const labels: Record<EvidenceLevel, string> = {
-    meta: 'Meta分析',
-    rct: 'RCT/临床',
-    cohort: '队列研究',
-    case: '案例报告',
-    experimental: '实验验证',
-    review: '综述',
-    database: '数据库',
-    preprint: '预印本',
-    prediction: '计算预测',
-  };
-  const variant: Record<EvidenceLevel, 'success' | 'info' | 'warning' | 'coral' | 'muted'> = {
-    meta: 'success',
-    rct: 'info',
-    cohort: 'warning',
-    case: 'coral',
-    experimental: 'success',
-    review: 'info',
-    database: 'muted',
-    preprint: 'warning',
-    prediction: 'muted',
-  };
-  return <Badge variant={variant[level]}>{labels[level]}</Badge>;
+  const display = evidenceLevelDisplay(level);
+  return <Badge variant={display.variant}>{display.label}</Badge>;
 }
 
 export function ClaimTag({ type }: { type: ClaimType }) {
-  const labels: Record<ClaimType, string> = { fact: '事实', inference: '推断', hypothesis: '假设' };
-  const variant: Record<ClaimType, 'success' | 'warning' | 'coral'> = {
-    fact: 'success',
-    inference: 'warning',
-    hypothesis: 'coral',
-  };
-  return <Badge variant={variant[type]}>{labels[type]}</Badge>;
+  const display = claimTypeDisplay(type);
+  return <Badge variant={display.variant}>{display.label}</Badge>;
 }
 
 export function ConfidenceBar({ value }: { value: number }) {

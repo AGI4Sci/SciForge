@@ -5,6 +5,7 @@ export type { ScenarioId } from './contracts';
 
 export type ClaimType = 'fact' | 'inference' | 'hypothesis';
 export type EvidenceLevel = 'meta' | 'rct' | 'cohort' | 'case' | 'experimental' | 'review' | 'database' | 'preprint' | 'prediction';
+export type ScenarioTagBadgeVariant = 'success' | 'info' | 'warning' | 'coral' | 'muted';
 
 export type ScenarioDisplayIconKey = 'bookOpen' | 'flaskConical' | 'dna' | 'database';
 export type OverviewStatIconKey = 'brain' | 'shield' | 'fileText' | 'barChart3';
@@ -35,6 +36,32 @@ export interface DemoScenarioMessage {
   evidence?: EvidenceLevel;
   claimType?: ClaimType;
   expandable?: string;
+}
+
+const evidenceDisplay: Record<EvidenceLevel, { label: string; variant: ScenarioTagBadgeVariant }> = {
+  meta: { label: 'Meta分析', variant: 'success' },
+  rct: { label: 'RCT/临床', variant: 'info' },
+  cohort: { label: '队列研究', variant: 'warning' },
+  case: { label: '案例报告', variant: 'coral' },
+  experimental: { label: '实验验证', variant: 'success' },
+  review: { label: '综述', variant: 'info' },
+  database: { label: '数据库', variant: 'muted' },
+  preprint: { label: '预印本', variant: 'warning' },
+  prediction: { label: '计算预测', variant: 'muted' },
+};
+
+const claimDisplay: Record<ClaimType, { label: string; variant: ScenarioTagBadgeVariant }> = {
+  fact: { label: '事实', variant: 'success' },
+  inference: { label: '推断', variant: 'warning' },
+  hypothesis: { label: '假设', variant: 'coral' },
+};
+
+export function evidenceLevelDisplay(level: EvidenceLevel) {
+  return evidenceDisplay[level];
+}
+
+export function claimTypeDisplay(type: ClaimType) {
+  return claimDisplay[type];
 }
 
 export const builtInScenarioDisplayData: ScenarioDisplayConfig[] = [

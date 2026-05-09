@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { RUNTIME_HEALTH_STATUS } from '@sciforge-ui/runtime-contract';
 import { defaultSciForgeConfig, updateConfig } from './config';
 import { modelHealth } from './runtimeHealth';
 
@@ -13,7 +14,7 @@ describe('runtime health model status', () => {
       apiKey: '',
     }));
 
-    assert.equal(health.status, 'not-configured');
+    assert.equal(health.status, RUNTIME_HEALTH_STATUS.NOT_CONFIGURED);
     assert.equal(health.detail, 'native · user model not set');
     assert.match(String(health.recoverAction), /不会回退到 AgentServer 默认模型/);
   });
@@ -26,7 +27,7 @@ describe('runtime health model status', () => {
       apiKey: 'test-key',
     }));
 
-    assert.equal(health.status, 'online');
+    assert.equal(health.status, RUNTIME_HEALTH_STATUS.ONLINE);
     assert.match(health.detail, /sciforge-model/);
     assert.match(health.detail, /models\.example\.test/);
   });
@@ -39,7 +40,7 @@ describe('runtime health model status', () => {
       apiKey: '',
     }));
 
-    assert.equal(health.status, 'not-configured');
+    assert.equal(health.status, RUNTIME_HEALTH_STATUS.NOT_CONFIGURED);
     assert.equal(health.recoverAction, '填写 API Key 或使用 native backend');
   });
 });

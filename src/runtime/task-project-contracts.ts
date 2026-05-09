@@ -1,5 +1,14 @@
 import type { GatewayRequest, SkillAvailability, SkillPromotionProposal, ToolPayload, WorkspaceTaskRunResult, WorkspaceTaskSpec } from './runtime-types.js';
 import type { WorkEvidence } from './gateway/work-evidence-types.js';
+import type {
+  TaskProjectStatus as RuntimeTaskProjectStatus,
+  TaskStageStatus as RuntimeTaskStageStatus,
+} from '@sciforge-ui/runtime-contract';
+
+export {
+  TASK_PROJECT_STATUSES,
+  TASK_STAGE_STATUSES,
+} from '@sciforge-ui/runtime-contract';
 
 export const TASK_PROJECT_SCHEMA_VERSION = 'sciforge.task-project.v1';
 export const TASK_PROJECT_PLAN_SCHEMA_VERSION = 'sciforge.task-project-plan.v1';
@@ -7,7 +16,7 @@ export const TASK_STAGE_SCHEMA_VERSION = 'sciforge.task-stage.v1';
 export const TASK_PROJECT_HANDOFF_SCHEMA_VERSION = 'sciforge.task-project-handoff.v1';
 export const TASK_PROJECT_STAGE_HANDOFF_SCHEMA_VERSION = 'sciforge.task-project-stage-handoff.v1';
 
-export type TaskProjectStatus = 'planned' | 'running' | 'done' | 'failed' | 'repair-needed' | 'blocked';
+export type TaskProjectStatus = RuntimeTaskProjectStatus;
 export type TaskProjectGuidanceStatus = 'queued' | 'adopted' | 'deferred' | 'rejected';
 export type TaskStageKind =
   | 'plan'
@@ -19,7 +28,7 @@ export type TaskStageKind =
   | 'repair'
   | 'summarize'
   | (string & {});
-export type TaskStageStatus = 'planned' | 'running' | 'done' | 'failed' | 'repair-needed' | 'skipped' | 'blocked';
+export type TaskStageStatus = RuntimeTaskStageStatus;
 
 export interface TaskProjectPaths {
   root: string;

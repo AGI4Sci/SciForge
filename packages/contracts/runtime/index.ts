@@ -70,6 +70,20 @@ export type {
   RuntimeArtifactVisibility,
 } from './artifacts';
 export {
+  ALIGNMENT_CONTRACT_ARTIFACT_TYPE,
+  ALIGNMENT_CONTRACT_SCHEMA_VERSION,
+  ALIGNMENT_CONTRACT_VERSION_ARTIFACT_TYPE,
+} from './alignment';
+export type {
+  AlignmentContractArtifactType,
+  AlignmentContractConfirmationStatus,
+  AlignmentContractData,
+  AlignmentContractRecord,
+  AlignmentContractSchemaVersion,
+  AlignmentContractVersionArtifactType,
+  AlignmentContractVersionRecord,
+} from './alignment';
+export {
   artifactMatchesReferenceScope,
 } from './artifact-reference-policy';
 export type {
@@ -202,6 +216,14 @@ export type {
   WorkEvidenceStatus,
 } from './work-evidence';
 export {
+  TASK_PROJECT_STATUSES,
+  TASK_STAGE_STATUSES,
+} from './task-project';
+export type {
+  TaskProjectStatus,
+  TaskStageStatus,
+} from './task-project';
+export {
   adaptBackendToolEventToWorkEvidence,
 } from './work-evidence-adapter';
 export type {
@@ -316,7 +338,12 @@ export type {
   BackgroundCompletionRef,
   BackgroundCompletionRuntimeEvent,
   BackgroundCompletionStatus,
+  ProcessProgressModel,
+  ProcessProgressPhase,
+  ProcessProgressReason,
+  ProcessProgressStatus,
   ProjectToolEventType,
+  RuntimeHealthStatus,
   RuntimeRecoverAction,
   RuntimeRequestAcceptedProgressCopy,
   RuntimeEventIdentity,
@@ -360,6 +387,11 @@ export {
   LATENCY_DIAGNOSTICS_SCHEMA_VERSION,
   PROCESS_EVENTS_SCHEMA_VERSION,
   PROCESS_PROGRESS_EVENT_TYPE,
+  PROCESS_PROGRESS_PHASE,
+  PROCESS_PROGRESS_PHASES,
+  PROCESS_PROGRESS_REASON,
+  PROCESS_PROGRESS_STATUS,
+  PROCESS_PROGRESS_STATUSES,
   PROJECT_TOOL_DONE_EVENT_TYPE,
   PROJECT_TOOL_FAILED_EVENT_TYPE,
   PROJECT_TOOL_STARTED_EVENT_TYPE,
@@ -367,6 +399,8 @@ export {
   REPAIR_ATTEMPT_RESULT_EVENT_TYPE,
   REPAIR_ATTEMPT_START_EVENT_TYPE,
   SCIFORGE_RUNTIME_PROVIDER,
+  RUNTIME_HEALTH_STATUS,
+  RUNTIME_HEALTH_STATUSES,
   TARGET_INSTANCE_CONTEXT_EVENT_TYPE,
   TARGET_ISSUE_LOOKUP_FAILED_EVENT_TYPE,
   TARGET_ISSUE_READ_EVENT_TYPE,

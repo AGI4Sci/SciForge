@@ -10,6 +10,10 @@ import { buildStableVersionSyncPlan, promoteStableVersion, readStableVersion, st
 import { normalizeWorkspaceRootPath, resolveWorkspaceFilePreviewPath, resolveWorkspacePreviewRef } from './workspace-paths.js';
 import { isRecord, readJson, readOptionalJson, safeName, writeJson, writeStreamEnvelope } from './server/http.js';
 import {
+  ALIGNMENT_CONTRACT_ARTIFACT_TYPE,
+  ALIGNMENT_CONTRACT_VERSION_ARTIFACT_TYPE,
+} from '@sciforge-ui/runtime-contract';
+import {
   isBinaryPreviewFile,
   languageForPath,
   mimeTypeForPath,
@@ -416,11 +420,11 @@ createServer(async (req, res) => {
       }
       const alignmentContracts = Array.isArray(state.alignmentContracts) ? state.alignmentContracts : [];
       for (const contract of alignmentContracts as Array<Record<string, unknown>>) {
-        const contractId = safeName(String(contract.id || 'alignment-contract'));
+        const contractId = safeName(String(contract.id || ALIGNMENT_CONTRACT_ARTIFACT_TYPE));
         await writeFile(join(sciforgeDir, 'artifacts', `${contractId}.json`), JSON.stringify(contract, null, 2));
         await writeFile(join(sciforgeDir, 'versions', `${contractId}.json`), JSON.stringify({
           id: contractId,
-          type: 'alignment-contract-version',
+          type: ALIGNMENT_CONTRACT_VERSION_ARTIFACT_TYPE,
           createdAt: contract.updatedAt,
           reason: contract.reason,
           checksum: contract.checksum,

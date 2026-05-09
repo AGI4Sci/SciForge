@@ -3,8 +3,10 @@ import { describe, it } from 'node:test';
 
 import {
   builtInScenarioDisplayData,
+  claimTypeDisplay,
   demoMessagesByScenario,
   demoTimeline,
+  evidenceLevelDisplay,
   overviewStats,
   scenarioDisplayMatchesSpec,
 } from './scenarioDemoData';
@@ -43,5 +45,10 @@ describe('scenario demo data policy', () => {
 
   it('derives overview count from the display scenario list', () => {
     assert.equal(overviewStats[0]?.value, String(builtInScenarioDisplayData.length));
+  });
+
+  it('owns claim and evidence tag display policy for UI primitives', () => {
+    assert.deepEqual(evidenceLevelDisplay('rct'), { label: 'RCT/临床', variant: 'info' });
+    assert.deepEqual(claimTypeDisplay('hypothesis'), { label: '假设', variant: 'coral' });
   });
 });

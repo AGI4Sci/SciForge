@@ -2,6 +2,8 @@ import { type ScenarioId } from './data';
 import { scenarios } from './data';
 import { messagesByScenario } from './demoData';
 import {
+  ALIGNMENT_CONTRACT_ARTIFACT_TYPE,
+  ALIGNMENT_CONTRACT_SCHEMA_VERSION,
   type AlignmentContractRecord,
   makeId,
   nowIso,
@@ -186,8 +188,8 @@ function isReusableTaskCandidate(value: unknown) {
 function isAlignmentContract(value: unknown): value is AlignmentContractRecord {
   return typeof value === 'object'
     && value !== null
-    && (value as AlignmentContractRecord).type === 'alignment-contract'
-    && (value as AlignmentContractRecord).schemaVersion === '1'
+    && (value as AlignmentContractRecord).type === ALIGNMENT_CONTRACT_ARTIFACT_TYPE
+    && (value as AlignmentContractRecord).schemaVersion === ALIGNMENT_CONTRACT_SCHEMA_VERSION
     && typeof (value as AlignmentContractRecord).id === 'string'
     && typeof (value as AlignmentContractRecord).title === 'string'
     && typeof (value as AlignmentContractRecord).checksum === 'string'

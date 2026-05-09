@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { PROCESS_PROGRESS_EVENT_TYPE, PROCESS_PROGRESS_PHASE, PROCESS_PROGRESS_REASON, PROCESS_PROGRESS_STATUS } from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
 import { buildInitialResponseProgressEvent, buildRequestAcceptedProgressEvent, buildSilentStreamProgressEvent, formatProgressHeadline, progressModelFromEvent } from './processProgress';
 
@@ -16,13 +17,13 @@ function event(partial: Partial<AgentStreamEvent>): AgentStreamEvent {
 
 test('normalizes Python process-progress events into visible work model', () => {
   const progressEvent = event({
-    type: 'process-progress',
+    type: PROCESS_PROGRESS_EVENT_TYPE,
     label: '过程',
     detail: '正在等待 AgentServer 返回',
     raw: {
-      type: 'process-progress',
+      type: PROCESS_PROGRESS_EVENT_TYPE,
       progress: {
-        phase: 'wait',
+        phase: PROCESS_PROGRESS_PHASE.WAIT,
         title: '正在等待 AgentServer 返回',
         detail: 'HTTP stream still waiting.',
         reading: ['/workspace/input/papers.csv'],
@@ -34,7 +35,7 @@ test('normalizes Python process-progress events into visible work model', () => 
   });
 
   const model = progressModelFromEvent(progressEvent);
-  assert.equal(model?.phase, 'wait');
+  assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.WAIT);
   assert.deepEqual(model?.reading, ['/workspace/input/papers.csv']);
   assert.deepEqual(model?.writing, ['/workspace/tasks/review.py']);
   assert.match(formatProgressHeadline(model) ?? '', /下一步 收到新事件后继续执行/);
@@ -51,8 +52,8 @@ test('builds generic waiting progress after 5s without new backend events and ke
   });
 
   const model = silent ? progressModelFromEvent(silent) : undefined;
-  assert.equal(model?.phase, 'wait');
-  assert.equal(model?.reason, 'backend-waiting');
+  assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.WAIT);
+  assert.equal(model?.reason, PROCESS_PROGRESS_REASON.BACKEND_WAITING);
   assert.equal(model?.waitingFor, '后端返回新事件');
   assert.equal(model?.lastEvent?.label, '读取');
   assert.equal(model?.canAbort, true);
@@ -69,7 +70,7 @@ test('builds generic waiting progress after 5s without any real backend event', 
   });
 
   const model = silent ? progressModelFromEvent(silent) : undefined;
-  assert.equal(model?.phase, 'wait');
+  assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.WAIT);
   assert.equal(model?.lastEvent, undefined);
   assert.match(model?.detail ?? '', /尚无可展示的后端事件/);
   assert.match(model?.nextStep ?? '', /中止当前 stream/);
@@ -90,8 +91,9 @@ test('builds immediate request accepted progress before backend stream starts', 
   const progress = buildRequestAcceptedProgressEvent('继续上一轮，修复缺失的验证并给出结果');
   const model = progressModelFromEvent(progress);
 
-  assert.equal(model?.phase, 'plan');
-  assert.equal(model?.reason, 'request-accepted-before-backend-stream');
+  assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.PLAN);
+  assert.equal(progress.type, PROCESS_PROGRESS_EVENT_TYPE);
+  assert.equal(model?.reason, PROCESS_PROGRESS_REASON.REQUEST_ACCEPTED_BEFORE_BACKEND_STREAM);
   assert.equal(model?.waitingFor, 'workspace runtime 首个事件');
   assert.match(model?.detail ?? '', /继续上一轮/);
 });
@@ -99,14 +101,14 @@ test('builds immediate request accepted progress before backend stream starts', 
 test('builds visible quick status from responsePlan without waiting for workspace completion', () => {
   const progress = buildInitialResponseProgressEvent({
     initialResponseMode: 'quick-status',
-    userVisibleProgress: ['plan', 'execute', 'emit'],
+    userVisibleProgress: [PROCESS_PROGRESS_PHASE.PLAN, PROCESS_PROGRESS_PHASE.EXECUTE, 'emit'],
   });
 
   const model = progress ? progressModelFromEvent(progress) : undefined;
-  assert.equal(model?.phase, 'plan');
-  assert.equal(model?.status, 'running');
+  assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.PLAN);
+  assert.equal(model?.status, PROCESS_PROGRESS_STATUS.RUNNING);
   assert.match(model?.detail ?? '', /已收到请求/);
-  assert.equal(model?.nextStep, 'plan');
+  assert.equal(model?.nextStep, PROCESS_PROGRESS_PHASE.PLAN);
 });
 
 test('builds direct-context visible status from responsePlan', () => {
@@ -116,7 +118,7 @@ test('builds direct-context visible status from responsePlan', () => {
   });
 
   const model = progress ? progressModelFromEvent(progress) : undefined;
-  assert.equal(model?.phase, 'read');
+  assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.READ);
   assert.equal(model?.waitingFor, undefined);
   assert.match(formatProgressHeadline(model) ?? '', /正在整理当前上下文/);
 });
