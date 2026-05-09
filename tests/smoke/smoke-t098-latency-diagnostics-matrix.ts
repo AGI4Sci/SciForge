@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { delimiter, resolve } from 'node:path';
+import { join } from 'node:path';
 
 import { requestWithPolicyResponse } from '../../src/runtime/conversation-policy/apply.js';
 import { CONVERSATION_POLICY_RESPONSE_VERSION, normalizeConversationPolicyResponse } from '../../src/runtime/conversation-policy/contracts.js';
 import type { GatewayRequest, WorkspaceRuntimeEvent } from '../../src/runtime/runtime-types.js';
 import { createLatencyTelemetry } from '../../src/runtime/gateway/latency-telemetry.js';
+import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
 import { applyBackgroundCompletionEventToSession } from '../../src/ui/src/app/chat/sessionTransforms.js';
 import type { SciForgeSession } from '../../src/ui/src/domain.js';
 
@@ -219,6 +223,40 @@ const sessionAfterBackground = applyBackgroundCompletionEventToSession(emptySess
 });
 const backgroundRaw = sessionAfterBackground.runs[0].raw as { backgroundCompletion?: { diagnostics?: { backgroundCompletionDurationMs?: number } } };
 assert.equal(backgroundRaw.backgroundCompletion?.diagnostics?.backgroundCompletionDurationMs, 150000);
+
+const directWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-t098-direct-context-'));
+const directEvents: WorkspaceRuntimeEvent[] = [];
+const direct = await runWorkspaceRuntimeGateway({
+  skillDomain: 'literature',
+  prompt: '解释这个已有结果表的置信区间是什么意思。',
+  workspacePath: directWorkspace,
+  artifacts: [{
+    id: 'metrics-table',
+    type: 'table',
+    artifactType: 'table',
+    producerScenario: 'literature',
+    schemaVersion: '1',
+    dataRef: '.sciforge/artifacts/metrics-table.json',
+    data: { markdown: 'Prior table: confidence interval summarizes uncertainty around the model estimate.' },
+  }],
+  uiState: {
+    sessionId: 'session-t098-direct-context',
+    recentConversation: ['user: generate metrics table', 'assistant: metrics table is ready'],
+    recentExecutionRefs: [{
+      id: 'unit-metrics',
+      status: 'done',
+      outputRef: '.sciforge/task-results/metrics.json',
+      stdoutRef: '.sciforge/logs/metrics.stdout.log',
+      stderrRef: '.sciforge/logs/metrics.stderr.log',
+    }],
+  },
+}, { onEvent: (event) => directEvents.push(event) });
+assert.ok(directEvents.some((event) => event.type === 'direct-context-fast-path'));
+assert.match(direct.message, /不启动新的 workspace task/);
+assert.equal(direct.executionUnits.some((unit) => unit.tool === 'sciforge.direct-context-fast-path'), true);
+assert.equal(direct.verificationResults?.[0]?.verdict, 'unverified');
+assert.equal((direct.displayIntent?.verification as { nonBlocking?: boolean } | undefined)?.nonBlocking, true);
+assert.equal(direct.artifacts.some((artifact) => artifact.type === 'verification-result' && (artifact.metadata as { nonBlocking?: boolean } | undefined)?.nonBlocking === true), true);
 
 console.log('[ok] T098 latency diagnostics matrix covers Python-owned policy fields, TS pass-through, cache hit/miss telemetry, waits, silent-stream timing, and background duration without external providers');
 

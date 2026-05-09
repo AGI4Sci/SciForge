@@ -370,11 +370,23 @@ def _coerce_input(request: ExecutionClassifierInput | Mapping[str, Any] | Any) -
 
 def _selected_action_items(req: ExecutionClassifierInput) -> list[Any]:
     return [
-        *list(req.selected_capabilities),
+        *[item for item in req.selected_capabilities if not _is_runtime_planning_capability(item)],
         *list(req.selected_tools),
         *list(req.selected_senses),
         *list(req.selected_verifiers),
     ]
+
+
+def _is_runtime_planning_capability(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    kind = _text(value.get("kind")).lower()
+    adapter = _text(value.get("adapter")).lower()
+    capability_id = _text(value.get("id")).lower()
+    return kind == "skill" and (
+        adapter.startswith("agentserver:generation")
+        or capability_id.startswith("scenario.") and capability_id.endswith(".agentserver-generation")
+    )
 
 
 def _has_external_action(actions: Sequence[Any]) -> bool:

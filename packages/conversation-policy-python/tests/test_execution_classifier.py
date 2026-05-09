@@ -16,6 +16,25 @@ def test_existing_artifact_explanation_uses_direct_context_answer():
     assert decision["complexityScore"] < 0.25
 
 
+def test_runtime_planning_skill_does_not_force_workspace_execution_for_direct_context():
+    decision = classify_execution_mode(
+        {
+            "prompt": "解释这个已有结果表的置信区间是什么意思。",
+            "artifacts": [{"artifactType": "table", "status": "done", "summary": "model metrics"}],
+            "selectedCapabilities": [{
+                "id": "scenario.literature.agentserver-generation",
+                "kind": "skill",
+                "adapter": "agentserver:generation",
+                "summary": "Runtime planning skill for literature tasks.",
+            }],
+        }
+    )
+
+    assert decision["executionMode"] == "direct-context-answer"
+    assert "selected-action" not in decision["signals"]
+    assert "external-action" not in decision["signals"]
+
+
 def test_simple_current_events_search_uses_thin_reproducible_adapter():
     decision = classify_execution_mode(
         {

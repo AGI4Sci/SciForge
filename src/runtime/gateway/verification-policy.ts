@@ -10,6 +10,7 @@ export async function applyRuntimeVerificationPolicy(
   request: GatewayRequest,
 ): Promise<ToolPayload> {
   const policy = normalizeRuntimeVerificationPolicy(request, payload);
+  const nonBlocking = verificationIsNonBlocking(request, policy);
   const provided = normalizeRuntimeVerificationResults([
     ...(payload.verificationResults ?? []),
     (payload as unknown as Record<string, unknown>).verificationResult,
@@ -28,9 +29,9 @@ export async function applyRuntimeVerificationPolicy(
     result: resultWithId,
   }, null, 2), 'utf8');
 
-  const artifact = verificationArtifact(resultWithId, policy, verificationRel);
+  const artifact = verificationArtifact(resultWithId, policy, verificationRel, nonBlocking);
   const gatedPayload = gate.blocked ? failClosedPayload(payload, gate.reason, resultWithId, verificationRel) : payload;
-  return attachVerificationRefs(gatedPayload, policy, resultWithId, verificationRel, artifact);
+  return attachVerificationRefs(gatedPayload, policy, resultWithId, verificationRel, artifact, nonBlocking);
 }
 
 export function normalizeRuntimeVerificationPolicy(
@@ -144,6 +145,7 @@ function attachVerificationRefs(
   result: VerificationResult,
   verificationRel: string,
   verificationArtifactRecord: Record<string, unknown>,
+  nonBlocking = false,
 ): ToolPayload {
   return {
     ...payload,
@@ -168,6 +170,7 @@ function attachVerificationRefs(
         verdict: result.verdict,
         ref: verificationRel,
         visible: true,
+        nonBlocking,
       },
     },
   };
@@ -209,7 +212,7 @@ function failClosedPayload(payload: ToolPayload, reason: string | undefined, res
   };
 }
 
-function verificationArtifact(result: VerificationResult, policy: VerificationPolicy, verificationRel: string): Record<string, unknown> {
+function verificationArtifact(result: VerificationResult, policy: VerificationPolicy, verificationRel: string, nonBlocking = false): Record<string, unknown> {
   return {
     id: result.id ?? 'verification-result',
     type: 'verification-result',
@@ -219,10 +222,19 @@ function verificationArtifact(result: VerificationResult, policy: VerificationPo
       verdict: result.verdict,
       policy: `${policy.mode}/${policy.riskLevel}`,
       visible: true,
+      nonBlocking,
       unverifiedIsNotPass: result.verdict === 'unverified' ? true : undefined,
     },
     data: { result, policy },
   };
+}
+
+function verificationIsNonBlocking(request: GatewayRequest, policy: VerificationPolicy) {
+  const latency = isRecord(request.uiState?.latencyPolicy) ? request.uiState.latencyPolicy : {};
+  return latency.blockOnVerification === false
+    && policy.riskLevel !== 'high'
+    && policy.humanApprovalPolicy !== 'required'
+    && !policy.required;
 }
 
 function mostDecisiveVerificationResult(results: VerificationResult[]) {

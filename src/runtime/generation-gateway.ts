@@ -61,6 +61,7 @@ import {
   normalizeToolPayloadShape,
   toolPayloadFromPlainAgentOutput,
 } from './gateway/direct-answer-payload.js';
+import { directContextFastPathPayload } from './gateway/direct-context-fast-path.js';
 import {
   agentServerLlmRuntime,
   buildAgentServerCompactContext,
@@ -182,6 +183,24 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
     const policyApplication = await applyConversationPolicy(normalizedRequest, telemetry.callbacks, { workspace: normalizedRequest.workspacePath });
     telemetry.markPolicyApplication(policyApplication);
     const request = policyApplication.request;
+    const directContextPayload = directContextFastPathPayload(request);
+    if (directContextPayload) {
+      emitWorkspaceRuntimeEvent(telemetry.callbacks, {
+        type: 'direct-context-fast-path',
+        source: 'workspace-runtime',
+        status: 'completed',
+        message: 'Python policy selected direct-context-answer; answered from existing session context without starting a workspace task.',
+        raw: {
+          executionModePlan: request.uiState?.executionModePlan,
+          responsePlan: request.uiState?.responsePlan,
+          latencyPolicy: request.uiState?.latencyPolicy,
+        },
+      });
+      telemetry.markVerificationStart();
+      const verified = await applyRuntimeVerificationPolicy(directContextPayload, request);
+      telemetry.markVerificationEnd();
+      return telemetry.emitFinal(verified) ?? verified;
+    }
     const visionSensePayload = await tryRunVisionSenseRuntime(request, telemetry.callbacks);
     if (visionSensePayload) {
       telemetry.markVerificationStart();
