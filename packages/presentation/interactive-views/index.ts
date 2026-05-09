@@ -32,14 +32,23 @@ export {
 export {
   directAnswerArtifactNeedsRepair,
   directAnswerNeedsReportArtifact,
+  existingArtifactFollowupPreferredView,
+  existingArtifactFollowupPromptPolicy,
+  existingArtifactFollowupUiManifest,
   directAnswerPlainTextResultPolicy,
   ensureDirectAnswerReportArtifactPolicy,
+  markdownTextForDirectAnswerArtifact,
   normalizeDirectAnswerArtifacts,
   normalizeDirectAnswerUiManifest,
+  preferredExistingArtifactFollowupArtifact,
   preferredInteractiveViewComponentForArtifactType,
   type DirectAnswerPayloadLike,
   type DirectAnswerResultPolicyRequest,
 } from './direct-answer-result-policy';
+export {
+  visionSenseTraceOutputViews,
+  type VisionSenseTraceOutputViewRefs,
+} from './vision-sense-trace-output-policy';
 export type {
   PresentationDedupeScope,
   UIComponentManifest as InteractiveViewManifest,

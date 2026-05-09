@@ -3,6 +3,7 @@ import { scenarios, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
 import { estimateContextWindowState, latestContextWindowState } from '../contextWindow';
 import { builtInScenarioPackageRef } from '@sciforge/scenario-core/scenario-package';
+import { builtInScenarioIdForRuntimeInput } from '@sciforge/scenario-core/scenario-routing-policy';
 import { resetSession } from '../sessionStore';
 import { SILENT_STREAM_WAIT_THRESHOLD_MS, buildRequestAcceptedProgressEvent, buildSilentStreamProgressEvent, formatProgressHeadline, latestProgressModel } from '../processProgress';
 import { assistantDraftFromStreamEvents, coalesceStreamEvents, latestRunningEvent, streamEventCounts } from '../streamEventPresentation';
@@ -62,18 +63,8 @@ interface ReferenceContextMenuState {
   reference: SciForgeReference;
 }
 
-function isBuiltInScenarioId(value: string): value is ScenarioId {
-  return Object.prototype.hasOwnProperty.call(SCENARIO_SPECS, value);
-}
-
 function builtInScenarioIdForInstance(scenarioId: ScenarioInstanceId, scenarioOverride?: ScenarioRuntimeOverride): ScenarioId {
-  const skillDomain = scenarioOverride?.skillDomain;
-  if (skillDomain === 'structure') return 'structure-exploration';
-  if (skillDomain === 'omics') return 'omics-differential-exploration';
-  if (skillDomain === 'knowledge') return 'biomedical-knowledge-graph';
-  if (skillDomain === 'literature') return 'literature-evidence-review';
-  if (typeof scenarioId === 'string' && isBuiltInScenarioId(scenarioId)) return scenarioId;
-  return 'literature-evidence-review';
+  return builtInScenarioIdForRuntimeInput({ scenarioId, scenarioOverride });
 }
 
 export function ChatPanel({

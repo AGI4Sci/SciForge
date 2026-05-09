@@ -30,7 +30,6 @@ const artifact: RuntimeArtifact = {
   data: { rows: [{ gene: 'TP53' }] },
 };
 
-const session: ObjectReferenceSessionLike = { artifacts: [artifact] };
 const artifactRef: ObjectReference = {
   id: 'obj-1',
   title: 'DE genes',
@@ -40,6 +39,7 @@ const artifactRef: ObjectReference = {
   status: 'available',
 };
 
+const session: ObjectReferenceSessionLike = { artifacts: [artifact] };
 assert.equal(artifactForObjectReference(artifactRef, session)?.id, 'artifact-1');
 assert.equal(pathForObjectReference(artifactRef, session), 'results/table.csv');
 assert.equal(referenceToPreviewTarget(artifactRef, session).status, 'resolved');

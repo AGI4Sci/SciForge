@@ -2,10 +2,13 @@ import type { SciForgeReference } from '../../domain';
 import {
   appendReferenceMarkerToInput,
   removeReferenceMarkerFromInput,
+  referenceComposerMarker,
   withComposerMarker,
 } from '../../../../../packages/support/object-references';
 
 const MAX_COMPOSER_REFERENCES = 8;
+
+export { appendReferenceMarkerToInput, removeReferenceMarkerFromInput, referenceComposerMarker, withComposerMarker };
 
 export function addPendingComposerReference(
   current: SciForgeReference[],

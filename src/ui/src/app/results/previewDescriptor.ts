@@ -21,6 +21,33 @@ export function previewNeedsPackage(descriptor: PreviewDescriptor) {
   return false;
 }
 
+export function shouldHydratePreviewDescriptor(descriptor: PreviewDescriptor, path: string) {
+  if (!path || /^agentserver:\/\//i.test(path) || /^data:/i.test(path) || /^https?:\/\//i.test(path)) return false;
+  if (!descriptor.rawUrl && (descriptor.kind === 'pdf' || descriptor.kind === 'image' || descriptor.inlinePolicy === 'stream')) return true;
+  if (!descriptor.derivatives?.length && descriptor.actions.some((action) => action === 'extract-text' || action === 'make-thumbnail' || action === 'select-rows')) return true;
+  return false;
+}
+
+export function mergePreviewDescriptors(local: PreviewDescriptor, hydrated: PreviewDescriptor): PreviewDescriptor {
+  return {
+    ...local,
+    ...hydrated,
+    title: local.title || hydrated.title,
+    diagnostics: uniqueStrings([...(local.diagnostics ?? []), ...(hydrated.diagnostics ?? [])]),
+    derivatives: mergePreviewDerivatives(local.derivatives, hydrated.derivatives),
+    actions: uniqueStrings([...(local.actions ?? []), ...(hydrated.actions ?? [])]) as PreviewDescriptor['actions'],
+    locatorHints: uniqueStrings([...(local.locatorHints ?? []), ...(hydrated.locatorHints ?? [])]) as PreviewDescriptor['locatorHints'],
+  };
+}
+
+export function descriptorWithDiagnostic(descriptor: PreviewDescriptor, error: unknown): PreviewDescriptor {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    ...descriptor,
+    diagnostics: uniqueStrings([...(descriptor.diagnostics ?? []), `Workspace Writer descriptor hydration failed: ${message}`]),
+  };
+}
+
 export function uploadedArtifactPreview(artifact?: RuntimeArtifact) {
   if (!artifact || !isRecord(artifact.data)) return undefined;
   const dataUrl = asString(artifact.data.dataUrl);
@@ -75,6 +102,18 @@ function normalizePreviewDerivative(value: unknown): NonNullable<PreviewDescript
     status: value.status === 'available' || value.status === 'lazy' || value.status === 'failed' || value.status === 'unsupported' ? value.status : undefined,
     diagnostics: asStringList(value.diagnostics),
   };
+}
+
+function uniqueStrings<T extends string>(values: T[]) {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function mergePreviewDerivatives(left: PreviewDescriptor['derivatives'], right: PreviewDescriptor['derivatives']) {
+  const byKey = new Map<string, NonNullable<PreviewDescriptor['derivatives']>[number]>();
+  for (const derivative of [...(left ?? []), ...(right ?? [])]) {
+    byKey.set(`${derivative.kind}:${derivative.ref}`, { ...byKey.get(`${derivative.kind}:${derivative.ref}`), ...derivative });
+  }
+  return byKey.size ? Array.from(byKey.values()) : undefined;
 }
 
 function previewKindFromArtifact(kind: string | undefined, artifact: RuntimeArtifact): PreviewDescriptor['kind'] | undefined {

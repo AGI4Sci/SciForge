@@ -1,10 +1,18 @@
 import { resolve } from 'node:path';
 import {
+  VERIFICATION_RESULT_CONTRACT_ID,
+  VERIFICATION_RESULT_SCHEMA_PATH,
+} from '@sciforge-ui/runtime-contract/verification-result';
+import {
   CONTRACT_VALIDATION_FAILURE_CONTRACT_ID,
   type ContractValidationFailure,
   type ContractValidationFailureKind,
   type ContractValidationIssue,
 } from '@sciforge-ui/runtime-contract/validation-failure';
+import {
+  WORK_EVIDENCE_POLICY_CONTRACT_ID,
+  WORK_EVIDENCE_POLICY_SCHEMA_PATH,
+} from '@sciforge-ui/runtime-contract/work-evidence-policy';
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-types.js';
 import { runWorkspaceTask } from '../workspace-task-runner.js';
 import { composeRuntimeUiManifest } from '../runtime-ui-manifest.js';
@@ -391,8 +399,8 @@ function validationScopeForRepairReason(reason: string): (Required<Pick<Contract
   if (isWorkEvidenceContractReason(reason)) {
     return {
       failureKind: 'work-evidence',
-      schemaPath: 'src/runtime/gateway/work-evidence-guard.ts#evaluateToolPayloadEvidence',
-      contractId: 'sciforge.work-evidence.v1',
+      schemaPath: WORK_EVIDENCE_POLICY_SCHEMA_PATH,
+      contractId: WORK_EVIDENCE_POLICY_CONTRACT_ID,
       expected: 'Claims, executionUnits, artifacts, and WorkEvidence expose durable evidence refs or honest failed/repair-needed status',
       actual: reason,
     };
@@ -400,8 +408,8 @@ function validationScopeForRepairReason(reason: string): (Required<Pick<Contract
   if (isVerifierContractReason(reason)) {
     return {
       failureKind: 'verifier',
-      schemaPath: 'src/runtime/gateway/verification-results.ts#normalizeRuntimeVerificationResults',
-      contractId: 'sciforge.verification-result.v1',
+      schemaPath: VERIFICATION_RESULT_SCHEMA_PATH,
+      contractId: VERIFICATION_RESULT_CONTRACT_ID,
       expected: 'Required verifier path supplies a passing verifier result or explicit human approval before completion',
       actual: reason,
     };

@@ -1,5 +1,6 @@
 import { readdir, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { defaultArtifactSchemaForSkillDomain } from '@sciforge-ui/runtime-contract/artifact-policy';
 import type { SciForgeSkillDomain, GatewayRequest, SkillAvailability } from '../runtime-types.js';
 import { clipForAgentServerJson, clipForAgentServerPrompt, hashJson, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
 import { brokerCapabilities, CapabilityManifestRegistry as BrokerCapabilityManifestRegistry, type CapabilityBrokerArtifactIndexEntry, type CapabilityBrokerFailureHistoryEntry, type CapabilityBrokerObjectRef, type CapabilityBrokerOutput } from '../capability-broker.js';
@@ -485,10 +486,7 @@ export function expectedArtifactSchema(request: GatewayRequest | SciForgeSkillDo
       note: 'No current-turn artifact type was explicitly required; infer the minimal output from rawUserPrompt and explicit references.',
     };
   }
-  if (skillDomain === 'literature') return { type: 'paper-list' };
-  if (skillDomain === 'structure') return { type: 'structure-summary' };
-  if (skillDomain === 'omics') return { type: 'omics-differential-expression' };
-  return { type: 'knowledge-graph' };
+  return defaultArtifactSchemaForSkillDomain(skillDomain);
 }
 
 function contextEnvelopeMode(request: GatewayRequest): AgentServerContextMode {

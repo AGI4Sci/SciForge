@@ -3,6 +3,7 @@ import { createReadStream } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { basename, dirname, extname, join, resolve } from 'node:path';
+import type { ArtifactPreviewAction, PreviewDescriptor } from '@sciforge-ui/runtime-contract/preview';
 import { normalizeWorkspaceRootPath, resolveWorkspacePreviewRef } from '../workspace-paths.js';
 
 export function languageForPath(path: string) {
@@ -47,7 +48,7 @@ export function previewRequestBaseUrl(req: IncomingMessage, fallbackPort: number
   return `http://${req.headers.host || `127.0.0.1:${fallbackPort}`}`;
 }
 
-export async function previewDescriptorForRef(rawRef: string, workspacePath: string, baseUrl: string) {
+export async function previewDescriptorForRef(rawRef: string, workspacePath: string, baseUrl: string): Promise<PreviewDescriptor> {
   const filePath = resolveWorkspacePreviewRef(rawRef, workspacePath);
   const info = await stat(filePath);
   const kind = previewKindForPath(filePath, info.isDirectory());
@@ -262,7 +263,7 @@ function summarizeJsonSchema(value: unknown): unknown {
   return { type: value === null ? 'null' : typeof value };
 }
 
-function previewKindForPath(path: string, isDirectory = false) {
+function previewKindForPath(path: string, isDirectory = false): PreviewDescriptor['kind'] {
   if (isDirectory) return 'folder';
   const ext = extname(path).toLowerCase();
   if (ext === '.pdf') return 'pdf';
@@ -277,7 +278,7 @@ function previewKindForPath(path: string, isDirectory = false) {
   return 'binary';
 }
 
-function inlinePolicyForPreview(kind: string, size: number) {
+function inlinePolicyForPreview(kind: PreviewDescriptor['kind'], size: number): PreviewDescriptor['inlinePolicy'] {
   if (kind === 'pdf' || kind === 'image') return 'stream';
   if (kind === 'markdown' || kind === 'text' || kind === 'json' || kind === 'table' || kind === 'html') return size <= 1024 * 1024 ? 'inline' : 'extract';
   if (kind === 'folder') return 'extract';
@@ -285,8 +286,13 @@ function inlinePolicyForPreview(kind: string, size: number) {
   return 'unsupported';
 }
 
-function derivativeDescriptorsForPreview(path: string, kind: string, size: number) {
-  const lazy = (derivativeKind: string, mimeType: string) => ({ kind: derivativeKind, ref: `${path}#${derivativeKind}`, mimeType, status: 'lazy' });
+function derivativeDescriptorsForPreview(path: string, kind: PreviewDescriptor['kind'], size: number): PreviewDescriptor['derivatives'] {
+  const lazy = (derivativeKind: NonNullable<PreviewDescriptor['derivatives']>[number]['kind'], mimeType: string) => ({
+    kind: derivativeKind,
+    ref: `${path}#${derivativeKind}`,
+    mimeType,
+    status: 'lazy' as const,
+  });
   if (kind === 'pdf') return [lazy('text', 'text/plain'), lazy('pages', 'application/json'), lazy('thumb', 'image/png')];
   if (kind === 'image') return [lazy('thumb', mimeTypeForPath(path))];
   if (kind === 'json') return [lazy('schema', 'application/json'), ...(size > 1024 * 1024 ? [lazy('text', 'text/plain')] : [])];
@@ -297,8 +303,8 @@ function derivativeDescriptorsForPreview(path: string, kind: string, size: numbe
   return [];
 }
 
-function previewActionsForKind(kind: string) {
-  const common = ['system-open', 'copy-ref', 'inspect-metadata'];
+function previewActionsForKind(kind: PreviewDescriptor['kind']): ArtifactPreviewAction[] {
+  const common: ArtifactPreviewAction[] = ['system-open', 'copy-ref', 'inspect-metadata'];
   if (kind === 'pdf') return ['open-inline', 'extract-text', 'make-thumbnail', 'select-page', 'select-region', ...common];
   if (kind === 'image') return ['open-inline', 'make-thumbnail', 'select-region', ...common];
   if (kind === 'table') return ['open-inline', 'select-rows', ...common];
@@ -306,7 +312,7 @@ function previewActionsForKind(kind: string) {
   return common;
 }
 
-function locatorHintsForKind(kind: string) {
+function locatorHintsForKind(kind: PreviewDescriptor['kind']): PreviewDescriptor['locatorHints'] {
   if (kind === 'pdf') return ['page', 'region'];
   if (kind === 'image') return ['region'];
   if (kind === 'table') return ['row-range', 'column-range'];

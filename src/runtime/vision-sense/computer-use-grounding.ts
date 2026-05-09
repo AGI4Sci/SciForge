@@ -7,6 +7,10 @@ import { toTraceScreenshotRef } from '../computer-use/capture.js';
 import type { ComputerUseConfig as VisionSenseConfig, FocusRegion, GenericVisionAction, GroundingResolution, ScreenshotRef } from '../computer-use/types.js';
 import { extractChatCompletionContent, extractJsonObject, isDarwinPlatform, numberConfig, parseJson, runCommand, sanitizeId } from '../computer-use/utils.js';
 import { isWindowLocalCoordinateSpace } from '../computer-use/window-target.js';
+import {
+  visionSenseFocusRegionGroundingId,
+  visionSenseGroundingIds,
+} from '../../../packages/observe/vision/computer-use-runtime-policy.js';
 import { postOpenAiChatCompletion, visionModelIssue, withHardTimeout } from './computer-use-plan.js';
 import { inferExecutorCoordinateScale } from './computer-use-window-session.js';
 export async function resolveActionGrounding(
@@ -226,7 +230,7 @@ function crossDisplayWindowDragGrounding(action: Extract<GenericVisionAction, { 
     grounding: {
       ...groundingForAction(action),
       status: 'provided',
-      provider: 'window-cross-display-drag',
+      provider: visionSenseGroundingIds.windowCrossDisplayDrag,
       reason: 'Target display is outside the current window screenshot; computed title-bar drag endpoints in window-local coordinates instead of asking the visual Grounder to hallucinate an off-window point.',
       localFromX: fromX,
       localFromY: fromY,
@@ -255,7 +259,7 @@ function targetDescriptionGrounding(action: GenericVisionAction, screenshot: Scr
   return {
     ...groundingForAction(action),
     status: 'provided',
-    provider: 'target-description-window-center',
+    provider: visionSenseGroundingIds.targetDescriptionWindowCenter,
     reason: 'non-pointer action carries a visual target description; using the target window center as a conservative coarse focus point',
     targetRegionDescription: action.targetRegionDescription,
     targetDescription: action.targetDescription ?? action.targetRegionDescription,
@@ -382,7 +386,7 @@ export async function refineActionGroundingWithFocusRegion(params: {
       action,
       grounding: {
         status: 'failed',
-        provider: 'coarse-to-fine-focus-region',
+        provider: visionSenseGroundingIds.coarseToFineFocusRegion,
         stage: 'fine',
         targetDescription: fineTargetDescription,
         focusRegion,
@@ -400,7 +404,7 @@ export async function refineActionGroundingWithFocusRegion(params: {
   const fineGrounding = {
     ...fine.grounding,
     status: 'ok',
-    provider: `${String(fine.grounding.provider || 'grounder')}-focus-region`,
+    provider: visionSenseFocusRegionGroundingId(fine.grounding.provider),
     stage: 'fine',
     targetDescription: fineTargetDescription,
     focusScreenshotRef: focusRef.path,
@@ -413,7 +417,7 @@ export async function refineActionGroundingWithFocusRegion(params: {
   const mergedGrounding = {
     ...(grounding ?? {}),
     status: 'ok',
-    provider: 'coarse-to-fine',
+    provider: visionSenseGroundingIds.coarseToFine,
     coarseGrounding: grounding,
     fineGrounding,
     targetDescription: action.targetDescription,
@@ -514,7 +518,7 @@ async function groundTargetDescription(
         ...fallback,
         grounding: {
           ...fallback.grounding,
-          fallbackFrom: 'kv-ground',
+          fallbackFrom: visionSenseGroundingIds.kvGround,
           kvGroundUrl: grounderUrl,
           kvGroundFailure: response.error,
         },
@@ -526,7 +530,7 @@ async function groundTargetDescription(
         `KV Grounder request failed at ${grounderUrl}: ${response.error}.`,
         `Fallback visual Grounder failed: ${fallback.reason}`,
       ].join(' '),
-      grounding: { status: 'failed', targetDescription, screenshotRef: screenshot.path, imagePath: imagePath.path, provider: 'kv-ground', grounderUrl, error: response.error, fallbackReason: fallback.reason },
+      grounding: { status: 'failed', targetDescription, screenshotRef: screenshot.path, imagePath: imagePath.path, provider: visionSenseGroundingIds.kvGround, grounderUrl, error: response.error, fallbackReason: fallback.reason },
     };
   }
   const coordinates = parseGrounderCoordinates(response.body);
@@ -537,7 +541,7 @@ async function groundTargetDescription(
         ...fallback,
         grounding: {
           ...fallback.grounding,
-          fallbackFrom: 'kv-ground',
+          fallbackFrom: visionSenseGroundingIds.kvGround,
           kvGroundFailure: 'response did not include usable coordinates',
           kvGroundRawResponse: response.body,
         },
@@ -557,7 +561,7 @@ async function groundTargetDescription(
     y: coordinates.y,
     grounding: {
       status: 'ok',
-      provider: 'kv-ground',
+      provider: visionSenseGroundingIds.kvGround,
       targetDescription,
       screenshotRef: screenshot.path,
       imagePath: imagePath.path,
@@ -590,7 +594,7 @@ async function groundTargetWithVisionModel(
     return {
       ok: false,
       reason: `OpenAI-compatible visual Grounder model is not configured as a VLM: ${modelIssue}`,
-      grounding: { status: 'failed', provider: 'openai-compatible-vision-grounder', targetDescription, screenshotRef: screenshot.path, reason: 'text-only model configured for visual grounding' },
+      grounding: { status: 'failed', provider: visionSenseGroundingIds.openAiCompatibleVisionGrounder, targetDescription, screenshotRef: screenshot.path, reason: 'text-only model configured for visual grounding' },
     };
   }
   const startedAt = Date.now();
@@ -626,7 +630,7 @@ async function groundTargetWithVisionModel(
     return {
       ok: false,
       reason: `OpenAI-compatible visual Grounder request failed: ${response.error}`,
-      grounding: { status: 'failed', provider: 'openai-compatible-vision-grounder', targetDescription, screenshotRef: screenshot.path, error: response.error },
+      grounding: { status: 'failed', provider: visionSenseGroundingIds.openAiCompatibleVisionGrounder, targetDescription, screenshotRef: screenshot.path, error: response.error },
     };
   }
   const content = extractChatCompletionContent(response.body);
@@ -636,7 +640,7 @@ async function groundTargetWithVisionModel(
     return {
       ok: false,
       reason: 'OpenAI-compatible visual Grounder response did not include usable coordinates.',
-      grounding: { status: 'failed', provider: 'openai-compatible-vision-grounder', targetDescription, screenshotRef: screenshot.path, rawResponse: response.body },
+      grounding: { status: 'failed', provider: visionSenseGroundingIds.openAiCompatibleVisionGrounder, targetDescription, screenshotRef: screenshot.path, rawResponse: response.body },
     };
   }
   return {
@@ -645,7 +649,7 @@ async function groundTargetWithVisionModel(
     y: coordinates.y,
     grounding: {
       status: 'ok',
-      provider: 'openai-compatible-vision-grounder',
+      provider: visionSenseGroundingIds.openAiCompatibleVisionGrounder,
       targetDescription,
       screenshotRef: screenshot.path,
       x: coordinates.x,
@@ -761,4 +765,3 @@ function parseGrounderCoordinates(value: unknown): { x: number; y: number } | un
   }
   return undefined;
 }
-

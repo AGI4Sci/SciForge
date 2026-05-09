@@ -75,7 +75,7 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/gateway/gateway-request.ts#provider-scenario-prompt-special-case': 1,
   'src/runtime/gateway/capability-evolution-events.ts#provider-scenario-prompt-special-case': 1,
   'src/runtime/gateway/repair-policy.ts#provider-scenario-prompt-special-case': 2,
-  'src/runtime/gateway/work-evidence-guard.ts#provider-scenario-prompt-special-case': 4,
+  'src/runtime/gateway/work-evidence-guard.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/workspace-event-normalizer.ts#provider-scenario-prompt-special-case': 3,
   'src/ui/src/app/ComponentWorkbenchPage.tsx#ui-semantic-fallback': 3,
   'src/ui/src/app/ScenarioBuilderPanel.tsx#ui-semantic-fallback': 6,

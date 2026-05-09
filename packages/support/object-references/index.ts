@@ -86,6 +86,37 @@ export function normalizeArtifactRef(ref: string) {
   return ref.replace(/^artifact:\/\//i, '').replace(/^artifact:/i, '');
 }
 
+export const objectReferenceArtifactTypeIds = {
+  externalUrl: 'external-url',
+  workspaceFolder: 'workspace-folder',
+  researchReport: 'research-report',
+  pdfDocument: 'pdf-document',
+  wordDocument: 'word-document',
+  slideDeck: 'slide-deck',
+  image: 'image',
+  dataTable: 'data-table',
+  structureSummary: 'structure-summary',
+  htmlDocument: 'html-document',
+  workspaceFile: 'workspace-file',
+} as const;
+
+const objectReferencePathTypeRules: Array<{ pattern: RegExp; type: string }> = [
+  { pattern: /\.md$/i, type: objectReferenceArtifactTypeIds.researchReport },
+  { pattern: /\.pdf$/i, type: objectReferenceArtifactTypeIds.pdfDocument },
+  { pattern: /\.(docx?|rtf)$/i, type: objectReferenceArtifactTypeIds.wordDocument },
+  { pattern: /\.(pptx?|key)$/i, type: objectReferenceArtifactTypeIds.slideDeck },
+  { pattern: /\.(png|jpe?g|gif|webp|svg)$/i, type: objectReferenceArtifactTypeIds.image },
+  { pattern: /\.(csv|tsv|xlsx?)$/i, type: objectReferenceArtifactTypeIds.dataTable },
+  { pattern: /\.(pdb|cif|mmcif)$/i, type: objectReferenceArtifactTypeIds.structureSummary },
+  { pattern: /\.html?$/i, type: objectReferenceArtifactTypeIds.htmlDocument },
+];
+
+export function artifactTypeForPath(path: string, kind: ObjectReference['kind']) {
+  if (kind === 'folder') return objectReferenceArtifactTypeIds.workspaceFolder;
+  return objectReferencePathTypeRules.find((rule) => rule.pattern.test(path))?.type
+    ?? objectReferenceArtifactTypeIds.workspaceFile;
+}
+
 export function findArtifact(session: Pick<ObjectReferenceSessionLike, 'artifacts'>, ref?: string): RuntimeArtifact | undefined {
   if (!ref) return undefined;
   const normalizedRef = normalizeArtifactRef(ref);
@@ -122,7 +153,7 @@ export function syntheticArtifactForObjectReference(reference: ObjectReference, 
   const path = reference.ref.replace(/^(file|folder|url):/i, '');
   return {
     id: reference.id,
-    type: reference.kind === 'url' ? 'external-url' : artifactTypeForPath(path, reference.kind),
+    type: reference.kind === 'url' ? objectReferenceArtifactTypeIds.externalUrl : artifactTypeForPath(path, reference.kind),
     producerScenario: scenarioId,
     schemaVersion: '1',
     metadata: {
@@ -142,19 +173,6 @@ export function syntheticArtifactForObjectReference(reference: ObjectReference, 
       url: reference.kind === 'url' ? path : undefined,
     },
   };
-}
-
-export function artifactTypeForPath(path: string, kind: ObjectReference['kind']) {
-  if (kind === 'folder') return 'workspace-folder';
-  if (/\.md$/i.test(path)) return 'research-report';
-  if (/\.pdf$/i.test(path)) return 'pdf-document';
-  if (/\.(docx?|rtf)$/i.test(path)) return 'word-document';
-  if (/\.(pptx?|key)$/i.test(path)) return 'slide-deck';
-  if (/\.(png|jpe?g|gif|webp|svg)$/i.test(path)) return 'image';
-  if (/\.(csv|tsv|xlsx?)$/i.test(path)) return 'data-table';
-  if (/\.(pdb|cif|mmcif)$/i.test(path)) return 'structure-summary';
-  if (/\.html?$/i.test(path)) return 'html-document';
-  return 'workspace-file';
 }
 
 export function referenceToPreviewTarget(reference: ObjectReference, session: Pick<ObjectReferenceSessionLike, 'artifacts'>) {

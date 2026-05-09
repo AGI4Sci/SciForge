@@ -17,6 +17,9 @@ export type {
   ArtifactReferencePolicyRecord,
   ArtifactReferenceScope,
 } from './artifact-reference-policy';
+export {
+  defaultArtifactSchemaForSkillDomain,
+} from './artifact-policy';
 export type {
   BackendArtifactToolName,
   BackendObjectRefKind,
@@ -83,6 +86,30 @@ export {
 export type {
   BackendToolWorkEvidenceAdapterOptions,
 } from './work-evidence-adapter';
+export {
+  WORK_EVIDENCE_POLICY_CONTRACT_ID,
+  WORK_EVIDENCE_POLICY_SCHEMA_PATH,
+  evaluateWorkEvidencePolicy,
+} from './work-evidence-policy';
+export type {
+  WorkEvidencePolicyFinding,
+  WorkEvidencePolicyPayload,
+  WorkEvidencePolicyRequest,
+} from './work-evidence-policy';
+export {
+  VERIFICATION_RESULT_CONTRACT_ID,
+  VERIFICATION_RESULT_SCHEMA_PATH,
+  failedRuntimeVerificationResults,
+  normalizeRuntimeVerificationResults,
+  normalizeRuntimeVerificationResultsOrUndefined,
+  normalizeRuntimeVerificationVerdict,
+  verificationResultFailureActual,
+  verificationResultFailureMessages,
+} from './verification-result';
+export type {
+  RuntimeVerificationResult,
+  RuntimeVerificationVerdict,
+} from './verification-result';
 export type {
   CapabilityManifest,
   CapabilityManifestBrief,

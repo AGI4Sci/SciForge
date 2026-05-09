@@ -5,6 +5,13 @@ import { estimateContextWindowState, latestContextWindowState, shouldStartContex
 import type { ScenarioId } from '../../data';
 import { latestLatencyPolicy, latestResponsePlan } from '../../latencyPolicy';
 import { buildInitialResponseProgressEvent } from '../../processProgress';
+import {
+  existingArtifactFollowupPreferredView,
+  existingArtifactFollowupPromptPolicy,
+  existingArtifactFollowupUiManifest,
+  markdownTextForDirectAnswerArtifact,
+  preferredExistingArtifactFollowupArtifact,
+} from '../../../../../packages/presentation/interactive-views';
 import type {
   AgentStreamEvent,
   NormalizedAgentResponse,
@@ -287,45 +294,19 @@ export function recoverExistingArtifactFollowupAfterInterruption({
 }
 
 function isExistingArtifactFollowupPrompt(prompt: string) {
-  const text = prompt.trim().toLowerCase();
-  if (!text) return false;
-  const asksForExistingArtifact = /markdown|\bmd\b|报告|report|查看|看看|看一下|展示|show|view|复制|copy|导出|export|下载报告|download report|格式|format/.test(text);
-  if (!asksForExistingArtifact) return false;
-  const explicitlyFreshWork = /重新|重跑|再跑|再检索|重新检索|检索一下|搜索|查找|最新|过去一周|下载并阅读|阅读全文|生成新的|rerun|run again|search|retrieve|fetch|latest/.test(text);
-  const pointsToPriorResult = /已有|现有|当前|刚才|上面|之前|previous|existing|current|that report|this report/.test(text);
-  return !explicitlyFreshWork || pointsToPriorResult;
+  return existingArtifactFollowupPromptPolicy(prompt);
 }
 
 function preferredReportArtifact(artifacts: RuntimeArtifact[]) {
-  const withMarkdown = artifacts.filter((artifact) => Boolean(markdownTextForArtifact(artifact)));
-  return withMarkdown.find((artifact) => artifact.type === 'research-report')
-    ?? withMarkdown.find((artifact) => /report|markdown|summary/i.test(artifact.type))
-    ?? withMarkdown[0];
+  return preferredExistingArtifactFollowupArtifact(artifacts);
 }
 
 function markdownTextForArtifact(artifact: RuntimeArtifact): string | undefined {
-  const direct = stringField(artifact as unknown as Record<string, unknown>, ['markdown', 'content', 'report', 'text']);
-  if (direct) return direct;
-  if (!artifact.data || typeof artifact.data !== 'object' || Array.isArray(artifact.data)) return undefined;
-  return stringField(artifact.data as Record<string, unknown>, ['markdown', 'content', 'report', 'text', 'summary']);
-}
-
-function stringField(record: Record<string, unknown>, keys: string[]) {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === 'string' && value.trim()) return value;
-  }
-  return undefined;
+  return markdownTextForDirectAnswerArtifact(artifact);
 }
 
 function uiManifestForArtifact(existing: SciForgeSession['uiManifest'], artifact: RuntimeArtifact) {
-  const matching = existing.filter((slot) => slot.artifactRef === artifact.id);
-  if (matching.length) return matching;
-  return [{
-    componentId: artifact.type === 'research-report' ? 'report-viewer' : 'artifact-viewer',
-    artifactRef: artifact.id,
-    priority: 1,
-  }];
+  return existingArtifactFollowupUiManifest(existing, artifact);
 }
 
 function objectReferencesForArtifact(artifact: RuntimeArtifact, runId: string): ObjectReference[] {
@@ -336,7 +317,7 @@ function objectReferencesForArtifact(artifact: RuntimeArtifact, runId: string): 
     ref: artifact.id,
     artifactType: artifact.type,
     runId,
-    preferredView: artifact.type === 'research-report' ? 'report-viewer' : undefined,
+    preferredView: existingArtifactFollowupPreferredView(artifact),
     actions: ['focus-right-pane', 'inspect', 'copy-path'],
     status: 'available',
     summary: typeof artifact.metadata?.summary === 'string' ? artifact.metadata.summary : undefined,

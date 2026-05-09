@@ -10,9 +10,17 @@ export type DirectAnswerPayloadLike = {
   uiManifest: Array<Record<string, unknown>>;
 };
 
+export type ExistingArtifactFollowupArtifactLike = {
+  id?: string;
+  type?: string;
+  data?: unknown;
+  metadata?: unknown;
+};
+
 const REPORT_ARTIFACT_TYPE = 'research-report';
 const REPORT_VIEW_COMPONENT = 'report-viewer';
 const EXECUTION_VIEW_COMPONENT = 'execution-unit-table';
+const GENERIC_ARTIFACT_COMPONENT = 'artifact-viewer';
 const UNKNOWN_ARTIFACT_COMPONENT = 'unknown-artifact-inspector';
 
 const ARTIFACT_COMPONENTS: Record<string, string> = {
@@ -154,6 +162,52 @@ export function directAnswerArtifactNeedsRepair(artifact: Record<string, unknown
   const status = String(artifact.status || metadata.status || '').toLowerCase();
   const reason = String(artifact.failureReason || metadata.failureReason || '').toLowerCase();
   return status.includes('repair') || status.includes('fail') || /placeholder|missing|failed|repair/.test(reason);
+}
+
+export function existingArtifactFollowupPromptPolicy(prompt: string) {
+  const text = prompt.trim().toLowerCase();
+  if (!text) return false;
+  const asksForExistingArtifact = /markdown|\bmd\b|报告|report|查看|看看|看一下|展示|show|view|复制|copy|导出|export|下载报告|download report|格式|format/.test(text);
+  if (!asksForExistingArtifact) return false;
+  const explicitlyFreshWork = /重新|重跑|再跑|再检索|重新检索|检索一下|搜索|查找|最新|过去一周|下载并阅读|阅读全文|生成新的|rerun|run again|search|retrieve|fetch|latest/.test(text);
+  const pointsToPriorResult = /已有|现有|当前|刚才|上面|之前|previous|existing|current|that report|this report/.test(text);
+  return !explicitlyFreshWork || pointsToPriorResult;
+}
+
+export function preferredExistingArtifactFollowupArtifact<T extends ExistingArtifactFollowupArtifactLike>(artifacts: T[]) {
+  const withMarkdown = artifacts.filter((artifact) => Boolean(markdownTextForDirectAnswerArtifact(artifact)));
+  return withMarkdown.find((artifact) => artifact.type === REPORT_ARTIFACT_TYPE)
+    ?? withMarkdown.find((artifact) => /report|markdown|summary/i.test(String(artifact.type || '')))
+    ?? withMarkdown[0];
+}
+
+export function markdownTextForDirectAnswerArtifact(artifact: ExistingArtifactFollowupArtifactLike): string | undefined {
+  const direct = firstStringField(artifact as Record<string, unknown>, ['markdown', 'content', 'report', 'text']);
+  if (direct) return direct;
+  if (!isRecord(artifact.data)) return undefined;
+  return firstStringField(artifact.data, ['markdown', 'content', 'report', 'text', 'summary']);
+}
+
+export function existingArtifactFollowupUiManifest(
+  existing: Array<{ artifactRef?: string; componentId: string; priority?: number }>,
+  artifact: ExistingArtifactFollowupArtifactLike,
+) {
+  const artifactId = String(artifact.id || artifact.type || 'artifact');
+  const matching = existing.filter((slot) => slot.artifactRef === artifactId);
+  if (matching.length) return matching;
+  return [{
+    componentId: existingArtifactFollowupComponentForArtifact(artifact),
+    artifactRef: artifactId,
+    priority: 1,
+  }];
+}
+
+export function existingArtifactFollowupPreferredView(artifact: ExistingArtifactFollowupArtifactLike) {
+  return artifact.type === REPORT_ARTIFACT_TYPE ? REPORT_VIEW_COMPONENT : undefined;
+}
+
+function existingArtifactFollowupComponentForArtifact(artifact: ExistingArtifactFollowupArtifactLike) {
+  return artifact.type === REPORT_ARTIFACT_TYPE ? REPORT_VIEW_COMPONENT : GENERIC_ARTIFACT_COMPONENT;
 }
 
 function directAnswerReportArtifact(message: string, skillDomain: string, source: string, mode: 'plain-text' | 'structured-answer'): Record<string, unknown> {

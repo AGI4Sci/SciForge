@@ -4,7 +4,10 @@ import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
 import type { ScreenshotRef, TraceWindowTarget } from '../computer-use/types.js';
 import { platformLabel, sanitizeId, sha256, workspaceRel } from '../computer-use/utils.js';
 import { toTraceScreenshotRef } from '../computer-use/capture.js';
-export const VISION_TOOL_ID = 'local.vision-sense';
+import { visionSenseTraceIds } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
+import { visionSenseTraceOutputViews } from '../../../packages/presentation/interactive-views';
+
+export const VISION_TOOL_ID = visionSenseTraceIds.tool;
 
 export function genericLoopPayload(params: {
   request: GatewayRequest;
@@ -47,10 +50,10 @@ export function genericLoopPayload(params: {
       supportingRefs: [traceRel],
       opposingRefs: [],
     }],
-    uiManifest: [
-      { componentId: 'execution-unit-table', title: 'Execution units', artifactRef: 'vision-sense-generic-execution', priority: 1 },
-      { componentId: 'unknown-artifact-inspector', title: 'Vision trace', artifactRef: 'vision-sense-trace', priority: 2 },
-    ],
+    uiManifest: visionSenseTraceOutputViews({
+      includeTrace: true,
+      refs: { execution: visionSenseTraceIds.execution, trace: visionSenseTraceIds.trace },
+    }),
     executionUnits: [{
       id: `EU-vision-sense-${params.runId}`,
       tool: VISION_TOOL_ID,
@@ -69,7 +72,7 @@ export function genericLoopPayload(params: {
       screenshotRef: afterRef?.path,
       beforeScreenshotRef: beforeRef?.path,
       failureReason: params.failureReason || undefined,
-      routeDecision: { selectedRuntime: 'vision-sense-generic-computer-use-loop', selectedToolId: VISION_TOOL_ID },
+      routeDecision: { selectedRuntime: visionSenseTraceIds.runtime, selectedToolId: VISION_TOOL_ID },
       requiredInputs: params.status === 'done' ? undefined : ['WindowTargetProvider', 'VisionPlanner', 'Grounder', 'GuiExecutor', 'Verifier'],
       recoverActions: params.status === 'done' ? undefined : [
         'Provide a generic VisionPlanner that emits the action schema recorded in the trace.',
@@ -78,12 +81,12 @@ export function genericLoopPayload(params: {
       ],
     }],
     artifacts: [{
-      id: 'vision-sense-trace',
-      type: 'vision-trace',
+      id: visionSenseTraceIds.trace,
+      type: visionSenseTraceIds.traceKind,
       path: traceRel,
       dataRef: traceRel,
       producerTool: VISION_TOOL_ID,
-      schemaVersion: 'sciforge.vision-trace.v1',
+      schemaVersion: visionSenseTraceIds.traceSchema,
       metadata: {
         runId: params.runId,
         imageMemoryPolicy: 'file-ref-only',
@@ -123,9 +126,9 @@ export function genericBridgeBlockedPayload(
       supportingRefs: [VISION_TOOL_ID],
       opposingRefs: [],
     }],
-    uiManifest: [
-      { componentId: 'execution-unit-table', title: 'Execution units', artifactRef: 'vision-sense-generic-execution', priority: 1 },
-    ],
+    uiManifest: visionSenseTraceOutputViews({
+      refs: { execution: visionSenseTraceIds.execution, trace: visionSenseTraceIds.trace },
+    }),
     executionUnits: [{
       id: `EU-${runId}`,
       tool: VISION_TOOL_ID,

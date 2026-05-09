@@ -12,7 +12,7 @@
 - 上传文件持久化成 `RuntimeArtifact` 后，使用 `referenceForUploadedArtifact` 和 `objectReferenceForUploadedArtifact`。
 - 把 object/file/artifact 转成聊天上下文引用时，使用 `referenceForObjectReference`、`referenceForArtifact` 和 `referenceForWorkspaceFileLike`。
 - 预览区不要猜路径，使用 `artifactForObjectReference`、`pathForObjectReference` 和 `referenceToPreviewTarget`。
-- 引用 chip 排序和隐藏计数使用 `objectReferenceChipModel`，优先展示可信引用。
+- 引用 chip 排序和 composer marker 分配使用 `objectReferenceChipModel`、`withComposerMarker` 和 `referenceComposerMarker`，保持 UI/CLI 一致。
 - DOM/反馈引用使用 `referenceForUiElement`、`referenceForTextSelection` 和 `stableElementSelector`。
 
 ## 设计原则

@@ -6,13 +6,25 @@ import { artifactPreviewActions } from '../../runtimeContracts';
 import { Badge, cx } from '../uiPrimitives';
 import { MarkdownBlock } from './reportContent';
 import { PreviewDescriptorActions } from './PreviewActions';
-import { descriptorCanUseWorkspacePreview, descriptorDerivativeKind, fileKindForPath, normalizeArtifactPreviewDescriptor, previewNeedsPackage, uploadedArtifactPreview } from './previewDescriptor';
 import {
-  descriptorWithDiagnostic as packageDescriptorWithDiagnostic,
-  mergePreviewDescriptors as packageMergePreviewDescriptors,
-  shouldHydratePreviewDescriptor as packageShouldHydratePreviewDescriptor,
-} from '../../../../../packages/support/artifact-preview';
-import { artifactForObjectReference, sciForgeReferenceAttribute, pathForObjectReference, referenceForObjectReference, referenceForWorkspaceFileLike, withRegionLocator } from '../../../../../packages/support/object-references';
+  descriptorCanUseWorkspacePreview,
+  descriptorDerivativeKind,
+  descriptorWithDiagnostic,
+  fileKindForPath,
+  mergePreviewDescriptors,
+  normalizeArtifactPreviewDescriptor,
+  previewNeedsPackage,
+  shouldHydratePreviewDescriptor,
+  uploadedArtifactPreview,
+} from './previewDescriptor';
+import {
+  artifactForObjectReference,
+  pathForObjectReference,
+  sciForgeReferenceAttribute,
+  referenceForObjectReference,
+  referenceForWorkspaceFileLike,
+  withRegionLocator,
+} from '../../../../../packages/support/object-references';
 
 const WORKSPACE_OBJECT_PREVIEW_TIMEOUT_MS = 8_000;
 
@@ -46,7 +58,7 @@ export function WorkspaceObjectPreview({
     const staticDescriptor = normalizeArtifactPreviewDescriptor(artifact, path);
     if (staticDescriptor) {
       setDescriptor(staticDescriptor);
-      if (!packageShouldHydratePreviewDescriptor(staticDescriptor, path)) {
+      if (!shouldHydratePreviewDescriptor(staticDescriptor, path)) {
         setLoadingPath('');
         return () => {
           cancelled = true;
@@ -55,11 +67,11 @@ export function WorkspaceObjectPreview({
     }
     void withWorkspacePreviewTimeout(readPreviewDescriptor(path, previewConfig), `preview descriptor ${path}`)
       .then((nextDescriptor) => {
-        if (!cancelled) setDescriptor(staticDescriptor ? packageMergePreviewDescriptors(staticDescriptor, nextDescriptor) : nextDescriptor);
+        if (!cancelled) setDescriptor(staticDescriptor ? mergePreviewDescriptors(staticDescriptor, nextDescriptor) : nextDescriptor);
       })
       .catch(async (descriptorError) => {
         if (staticDescriptor) {
-          if (!cancelled) setDescriptor(packageDescriptorWithDiagnostic(staticDescriptor, descriptorError));
+          if (!cancelled) setDescriptor(descriptorWithDiagnostic(staticDescriptor, descriptorError));
           return;
         }
         try {

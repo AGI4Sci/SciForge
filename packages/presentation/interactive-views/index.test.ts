@@ -6,16 +6,22 @@ import {
   composeRuntimeUiManifestSlots,
   directAnswerPlainTextResultPolicy,
   ensureDirectAnswerReportArtifactPolicy,
+  existingArtifactFollowupPreferredView,
+  existingArtifactFollowupPromptPolicy,
+  existingArtifactFollowupUiManifest,
   expectedArtifactTypesForIntent,
   interactiveViewComponentRank,
   interactiveViewCompatibilityAliases,
   interactiveViewManifests,
+  markdownTextForDirectAnswerArtifact,
   normalizeDirectAnswerArtifacts,
   normalizeDirectAnswerUiManifest,
+  preferredExistingArtifactFollowupArtifact,
   preferredInteractiveViewComponentForArtifactType,
   selectedViewComponentsForIntent,
   uiComponentCompatibilityAliases,
   uiComponentManifests,
+  visionSenseTraceOutputViews,
 } from './index';
 
 test('interactive views alias preserves ui-components registry compatibility', () => {
@@ -129,5 +135,36 @@ test('direct answer result policy owns loose artifact component binding and norm
   assert.deepEqual(
     manifest.map((slot) => slot.artifactRef),
     ['updated-research-report', 'updated-research-report'],
+  );
+});
+
+test('direct answer result policy owns existing artifact follow-up semantics', () => {
+  assert.equal(existingArtifactFollowupPromptPolicy('给我刚才报告的 markdown 格式'), true);
+  assert.equal(existingArtifactFollowupPromptPolicy('重新检索最新论文'), false);
+
+  const artifacts = [
+    { id: 'table', type: 'data-table', data: { markdown: 'table markdown' } },
+    { id: 'report', type: 'research-report', data: { markdown: '# Report' } },
+  ];
+  const preferred = preferredExistingArtifactFollowupArtifact(artifacts);
+  assert.equal(preferred?.id, 'report');
+  assert.equal(markdownTextForDirectAnswerArtifact(preferred ?? {}), '# Report');
+  assert.deepEqual(existingArtifactFollowupUiManifest([], preferred ?? {}).map((slot) => slot.componentId), ['report-viewer']);
+  assert.equal(existingArtifactFollowupPreferredView(preferred ?? {}), 'report-viewer');
+});
+
+test('interactive view policy owns vision-sense trace output views', () => {
+  const views = visionSenseTraceOutputViews({
+    includeTrace: true,
+    refs: { execution: 'execution-ref', trace: 'trace-ref' },
+  });
+
+  assert.deepEqual(
+    views.map((view) => view.componentId),
+    ['execution-unit-table', 'unknown-artifact-inspector'],
+  );
+  assert.deepEqual(
+    views.map((view) => view.artifactRef),
+    ['execution-ref', 'trace-ref'],
   );
 });

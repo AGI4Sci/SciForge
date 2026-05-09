@@ -15,11 +15,6 @@ import {
   renderStructureViewer,
   type UIComponentRendererProps,
 } from '../../../../packages/presentation/components';
-import {
-  descriptorWithDiagnostic as packageDescriptorWithDiagnostic,
-  mergePreviewDescriptors as packageMergePreviewDescriptors,
-  shouldHydratePreviewDescriptor as packageShouldHydratePreviewDescriptor,
-} from '../../../../packages/support/artifact-preview';
 import type { ContractValidationFailure, ContractValidationFailureKind } from '@sciforge-ui/runtime-contract';
 import { exportJsonFile, exportTextFile } from './exportUtils';
 import { ActionButton, Badge, Card, ClaimTag, ConfidenceBar, EmptyArtifactState, EvidenceTag, SectionHeader, cx } from './uiPrimitives';
@@ -70,12 +65,14 @@ import { UploadedDataUrlPreview, WorkspaceObjectPreview } from './results/Worksp
 import type { SciForgeConfig, SciForgeReference, SciForgeRun, SciForgeSession, EvidenceClaim, NotebookRecord, ObjectAction, ObjectReference, PreviewDescriptor, RuntimeArtifact, RuntimeExecutionUnit, ScenarioInstanceId, UIManifestSlot, ViewPlanSection } from '../domain';
 import {
   artifactForObjectReference,
-  artifactReferenceKind as packageArtifactReferenceKind,
   availableObjectActions,
-  sciForgeReferenceAttribute,
   findArtifact,
-  objectReferenceKindLabel,
   pathForObjectReference,
+} from '../../../../packages/support/object-references';
+import {
+  artifactReferenceKind as packageArtifactReferenceKind,
+  sciForgeReferenceAttribute,
+  objectReferenceKindLabel,
   referenceForArtifact,
   referenceForObjectReference,
   referenceForResultSlotLike,

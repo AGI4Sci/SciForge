@@ -15,6 +15,7 @@
   "types": "./index.ts",
   "files": [
     "README.md",
+    "artifact-policy.ts",
     "app.ts",
     "artifact-reference-policy.ts",
     "artifacts.ts",
@@ -36,11 +37,14 @@
     "validation-failure.ts",
     "work-evidence.ts",
     "work-evidence-adapter.ts",
+    "work-evidence-policy.ts",
+    "verification-result.ts",
     "view.ts",
     "package.json"
   ],
   "exports": {
     ".": "./index.ts",
+    "./artifact-policy": "./artifact-policy.ts",
     "./app": "./app.ts",
     "./artifact-reference-policy": "./artifact-reference-policy.ts",
     "./artifacts": "./artifacts.ts",
@@ -61,6 +65,8 @@
     "./validation-failure": "./validation-failure.ts",
     "./work-evidence": "./work-evidence.ts",
     "./work-evidence-adapter": "./work-evidence-adapter.ts",
+    "./work-evidence-policy": "./work-evidence-policy.ts",
+    "./verification-result": "./verification-result.ts",
     "./view": "./view.ts"
   },
   "peerDependencies": {
