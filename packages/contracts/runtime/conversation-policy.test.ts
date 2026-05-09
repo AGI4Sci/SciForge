@@ -6,6 +6,7 @@ import {
   CONVERSATION_POLICY_RESPONSE_VERSION,
   SAFE_DEFAULT_BACKGROUND_PLAN,
   SAFE_DEFAULT_CACHE_POLICY,
+  currentUserRequestFromPrompt,
   normalizeConversationPolicyResponse,
   type ConversationPolicyRequest,
 } from './conversation-policy';
@@ -44,4 +45,10 @@ test('conversation policy response normalizer fails closed for missing strategy 
 test('conversation policy response normalizer rejects unsupported schemas', () => {
   assert.equal(normalizeConversationPolicyResponse({ schemaVersion: 'sciforge.conversation-policy.response.v0' }), undefined);
   assert.equal(normalizeConversationPolicyResponse({}), undefined);
+});
+
+test('conversation policy extracts the current user request from labeled prompt transcripts', () => {
+  assert.equal(currentUserRequestFromPrompt('system: keep context\nuser: Continue from prior refs'), 'Continue from prior refs');
+  assert.equal(currentUserRequestFromPrompt('User : 重新运行失败步骤'), '重新运行失败步骤');
+  assert.equal(currentUserRequestFromPrompt('plain current request'), 'plain current request');
 });

@@ -4,6 +4,7 @@ export {
   SUPPORTED_RUNTIME_AGENT_BACKENDS,
   compactCapabilityForAgentBackend,
   estimateRuntimeAgentBackendModelContextWindow,
+  normalizeRuntimeLlmEndpoint,
   normalizeRuntimeAgentBackendContextWindowSource,
   normalizeRuntimeWorkspaceCompactCapability,
   normalizeRuntimeWorkspaceContextWindowSource,
@@ -27,7 +28,15 @@ export type {
   RuntimeBackendContextWindowSource,
   RuntimeAgentBackendFailureDiagnostic,
   RuntimeAgentBackendFailureKind,
+  RuntimeLlmEndpointConfig,
 } from './agent-backend-policy';
+export {
+  extractAgentServerCurrentUserRequest,
+  normalizeConfiguredAgentServerLlmEndpoint,
+} from './agentserver-prompt-policy';
+export type {
+  ConfiguredAgentServerLlmEndpoint,
+} from './agentserver-prompt-policy';
 export type {
   BuiltInScenarioId,
   ScenarioInstanceId,
@@ -113,6 +122,13 @@ export type {
   PreviewDescriptorSource,
   PreviewInlinePolicy,
 } from './preview';
+export {
+  artifactPreviewActions,
+  previewDerivativeKinds,
+  previewDescriptorKinds,
+  previewDescriptorSources,
+  previewInlinePolicies,
+} from './preview';
 export type {
   ObjectAction,
   ObjectReference,
@@ -121,6 +137,10 @@ export type {
   ObjectResolution,
   SciForgeReference,
   SciForgeReferenceKind,
+} from './references';
+export {
+  objectActions,
+  objectReferenceKinds,
 } from './references';
 export {
   CONTRACT_VALIDATION_FAILURE_CONTRACT_ID,
@@ -188,14 +208,18 @@ export type {
 export {
   VERIFICATION_RESULT_CONTRACT_ID,
   VERIFICATION_RESULT_SCHEMA_PATH,
+  VERIFICATION_RESULT_ARTIFACT_TYPE,
   failedRuntimeVerificationResults,
+  isRuntimeVerificationResultArtifact,
   normalizeRuntimeVerificationResults,
   normalizeRuntimeVerificationResultsOrUndefined,
   normalizeRuntimeVerificationVerdict,
+  runtimeVerificationResultArtifacts,
   verificationResultFailureActual,
   verificationResultFailureMessages,
 } from './verification-result';
 export type {
+  RuntimeVerificationArtifactRecord,
   RuntimeVerificationResult,
   RuntimeVerificationVerdict,
 } from './verification-result';
@@ -340,6 +364,9 @@ export type {
   ViewSelection,
   ViewSync,
   ViewTransform,
+} from './view';
+export {
+  displayIntentSources,
 } from './view';
 
 export type UIComponentLifecycle = 'draft' | 'validated' | 'published' | 'deprecated';

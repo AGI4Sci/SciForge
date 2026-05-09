@@ -41,6 +41,22 @@ export interface RuntimeAgentBackendFailureDiagnostic {
   evidenceRefs?: string[];
 }
 
+export interface RuntimeLlmEndpointConfig {
+  provider?: string;
+  baseUrl?: string;
+  apiKey?: string;
+  modelName?: string;
+}
+
+export interface RuntimeCapabilityEvolutionFailureClassificationInput {
+  validationFailureCode?: string;
+  composedFailureCode?: string;
+  failureReason?: string;
+  fallbackReason?: string;
+  schemaErrors?: string[];
+  exitCode?: number;
+}
+
 export const SUPPORTED_RUNTIME_AGENT_BACKENDS = ['openteam_agent', 'claude-code', 'codex', 'hermes-agent', 'openclaw', 'gemini'] as const;
 export type RuntimeAgentBackend = typeof SUPPORTED_RUNTIME_AGENT_BACKENDS[number];
 export type RuntimeBackendContextWindowSource = 'native' | 'provider-usage' | 'agentserver-estimate' | 'unknown';
@@ -194,6 +210,21 @@ export function runtimeAgentBackendConfigurationNextStep(reason: string) {
     : undefined;
 }
 
+export function normalizeRuntimeLlmEndpoint(value: unknown): RuntimeLlmEndpointConfig | undefined {
+  if (!isRuntimePolicyRecord(value)) return undefined;
+  const provider = trimmedPolicyString(value.provider);
+  const baseUrl = cleanRuntimeLlmEndpointUrl(value.baseUrl);
+  const apiKey = trimmedPolicyString(value.apiKey);
+  const modelName = trimmedPolicyString(value.modelName);
+  if (!baseUrl && !apiKey && !modelName) return undefined;
+  return {
+    provider,
+    baseUrl,
+    apiKey,
+    modelName,
+  };
+}
+
 export function runtimeAgentBackendFailureCategories(text: string, httpStatus?: number): RuntimeAgentBackendFailureKind[] {
   const lower = text.toLowerCase();
   const categories: RuntimeAgentBackendFailureKind[] = [];
@@ -211,6 +242,26 @@ export function runtimeAgentBackendFailureCategories(text: string, httpStatus?: 
   if (/responseTooManyFailedAttempts|too many failed attempts/i.test(text)) categories.push('too-many-failed-attempts', 'retry-budget');
   if (/exceeded retry limit|retry budget|too many retries|max retries/i.test(text)) categories.push('retry-budget');
   return uniquePolicyStrings(categories) as RuntimeAgentBackendFailureKind[];
+}
+
+export function runtimeCapabilityEvolutionFailureCode(
+  input: RuntimeCapabilityEvolutionFailureClassificationInput,
+): string | undefined {
+  if (input.validationFailureCode) return input.validationFailureCode;
+  if (input.composedFailureCode) return input.composedFailureCode;
+  const text = [
+    input.failureReason ?? '',
+    input.fallbackReason ?? '',
+    ...(input.schemaErrors ?? []),
+  ].join(' ');
+  if (input.schemaErrors?.length || /schema|contract|payload|validation/i.test(text)) return 'schema-invalid';
+  if (/timeout|timed out|cancelled/i.test(text)) return 'timeout';
+  if (/missing artifact|artifact/i.test(text)) return 'missing-artifact';
+  const categories = runtimeAgentBackendFailureCategories(text);
+  if (runtimeCapabilityEvolutionProviderUnavailable(text, categories)) return 'provider-unavailable';
+  if (typeof input.exitCode === 'number' && input.exitCode !== 0) return 'execution-failed';
+  if (/confidence/i.test(text)) return 'low-confidence';
+  return input.failureReason ? 'validation-failed' : undefined;
 }
 
 export function withRuntimeAgentBackendUserFacingDiagnostic(
@@ -256,6 +307,18 @@ export function runtimeAgentBackendRateLimitRecoverActions(
     'Reduce concurrent AgentServer runs or switch to a model/provider with available quota.',
     'Keep follow-up context compact by relying on workspace refs instead of resending full logs/artifacts.',
   ];
+}
+
+function runtimeCapabilityEvolutionProviderUnavailable(text: string, categories: RuntimeAgentBackendFailureKind[]) {
+  return categories.some((category) => category === 'network'
+    || category === 'model'
+    || category === 'auth'
+    || category === 'http-429'
+    || category === 'rate-limit'
+    || category === 'retry-budget'
+    || category === 'too-many-failed-attempts')
+    || runtimeAgentBackendConfigurationFailureIsBlocking(text)
+    || /provider|base url|AgentServer|ECONNREFUSED|429|rate/i.test(text);
 }
 
 export function sanitizeRuntimeAgentBackendFailureDetail(text: string, limit = 320) {
@@ -338,4 +401,17 @@ export function estimateRuntimeAgentBackendModelContextWindow(modelName?: string
 
 function uniquePolicyStrings(values: string[]) {
   return Array.from(new Set(values));
+}
+
+function isRuntimePolicyRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function trimmedPolicyString(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function cleanRuntimeLlmEndpointUrl(value: unknown) {
+  const text = trimmedPolicyString(value);
+  return text ? text.replace(/\/+$/, '') : undefined;
 }

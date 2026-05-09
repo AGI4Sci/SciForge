@@ -7,6 +7,7 @@ import {
   derivativeDescriptorsForPreviewTarget,
   inlinePolicyForPreviewKind,
   locatorHintsForPreviewKind,
+  lightweightPreviewNoticeForDescriptor,
   mergePreviewDescriptors,
   normalizePreviewDerivative,
   previewActionsForPreviewKind,
@@ -18,6 +19,7 @@ import {
   previewPathHasRecognizedFileExtension,
   previewPathHasStableDeliverableExtension,
   previewStructureBundleStatus,
+  unsupportedPreviewNoticeModel,
   uniquePreviewStrings,
 } from './index';
 
@@ -75,4 +77,23 @@ test('normalizes derivative records and unique strings as contract helpers', () 
     diagnostics: [],
   });
   assert.equal(normalizePreviewDerivative({ kind: 'text' }), undefined);
+});
+
+test('builds package-owned preview notice copy from contract actions', () => {
+  const descriptor: PreviewDescriptor = {
+    kind: 'binary',
+    source: 'path',
+    ref: 'outputs/archive.bin',
+    inlinePolicy: 'unsupported',
+    actions: ['system-open', 'copy-ref', 'inspect-metadata'],
+  };
+  assert.match(lightweightPreviewNoticeForDescriptor(descriptor), /metadata\/system-open\/copy-ref|system-open\/copy-ref\/metadata/);
+  const notice = unsupportedPreviewNoticeModel({
+    reference: { ref: 'file:outputs/archive.bin', artifactType: 'workspace-file' },
+    path: 'outputs/archive.bin',
+    descriptor,
+  });
+  assert.equal(notice.kindLabel, 'binary');
+  assert.equal(notice.requestLabel, '让 Agent 设计 preview package 并重试');
+  assert.deepEqual(notice.codeLabels, ['outputs/archive.bin', 'inlinePolicy: unsupported']);
 });

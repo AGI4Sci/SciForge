@@ -25,6 +25,10 @@ export function normalizeSharedSkillDomain(value: unknown): SciForgeSharedSkillD
   return isSharedSkillDomain(value) ? value : undefined;
 }
 
+export function taskProjectSkillDomain(value: unknown): SciForgeSharedSkillDomain {
+  return normalizeSharedSkillDomain(value) ?? 'knowledge';
+}
+
 export function normalizeAgentHandoffSource(value: unknown, fallback: SciForgeAgentHandoffSource): SciForgeAgentHandoffSource {
   return typeof value === 'string' && (SCIFORGE_AGENT_HANDOFF_SOURCES as readonly string[]).includes(value)
     ? value as SciForgeAgentHandoffSource

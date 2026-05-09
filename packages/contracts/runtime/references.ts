@@ -3,6 +3,27 @@ import type { RuntimeArtifact } from './artifacts';
 export type ObjectReferenceKind = 'artifact' | 'file' | 'folder' | 'run' | 'execution-unit' | 'url' | 'scenario-package';
 export type ObjectReferenceStatus = 'available' | 'missing' | 'expired' | 'blocked' | 'external';
 export type ObjectAction = 'focus-right-pane' | 'inspect' | 'open-external' | 'reveal-in-folder' | 'copy-path' | 'pin' | 'compare';
+
+export const objectReferenceKinds = [
+  'artifact',
+  'file',
+  'folder',
+  'run',
+  'execution-unit',
+  'url',
+  'scenario-package',
+] as const satisfies readonly ObjectReferenceKind[];
+
+export const objectActions = [
+  'focus-right-pane',
+  'inspect',
+  'open-external',
+  'reveal-in-folder',
+  'copy-path',
+  'pin',
+  'compare',
+] as const satisfies readonly ObjectAction[];
+
 export type SciForgeReferenceKind =
   | 'file'
   | 'file-region'

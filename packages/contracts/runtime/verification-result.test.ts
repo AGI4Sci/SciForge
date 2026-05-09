@@ -3,7 +3,9 @@ import test from 'node:test';
 
 import {
   failedRuntimeVerificationResults,
+  isRuntimeVerificationResultArtifact,
   normalizeRuntimeVerificationResults,
+  runtimeVerificationResultArtifacts,
   verificationResultFailureActual,
   verificationResultFailureMessages,
 } from './verification-result';
@@ -40,4 +42,18 @@ test('package verification result contract exposes fail-closed verifier failure 
     evidenceRefs: ['file:.sciforge/verifications/schema.json'],
     repairHints: ['Regenerate the artifact.'],
   });
+});
+
+test('package verification result contract owns verification artifact filtering', () => {
+  const artifacts = runtimeVerificationResultArtifacts([
+    { id: 'plot', type: 'figure' },
+    { id: 'verify-1', type: 'verification-result', dataRef: '.sciforge/verifications/verify-1.json' },
+    { id: 'verification-result', data: { verdict: 'pass' } },
+  ]);
+
+  assert.equal(isRuntimeVerificationResultArtifact({ type: 'verification-result' }), true);
+  assert.deepEqual(artifacts.map((artifact) => artifact.dataRef ?? artifact.id), [
+    '.sciforge/verifications/verify-1.json',
+    'verification-result',
+  ]);
 });

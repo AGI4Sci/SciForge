@@ -39,6 +39,7 @@ import { runWorkspaceTask } from './workspace-task-runner.js';
 import { isToolPayload } from './gateway/tool-payload-contract.js';
 import { evaluateToolPayloadEvidence } from './gateway/work-evidence-guard.js';
 import { collectWorkEvidence, parseWorkEvidence, type WorkEvidence } from './gateway/work-evidence-types.js';
+import { taskProjectSkillDomain } from '@sciforge-ui/runtime-contract/handoff';
 import { maybeWriteSkillPromotionProposal } from './skill-promotion.js';
 import { buildTaskProjectHandoffSummary } from './task-project-handoff.js';
 import {
@@ -647,7 +648,7 @@ export async function maybePromoteTaskProjectStageAdapter(
   const payloadFailureReason = toolPayloadFailureReason(parsed.output);
   if (payloadFailureReason) return undefined;
   const request: GatewayRequest = {
-    skillDomain: options.request?.skillDomain ?? 'knowledge',
+    skillDomain: taskProjectSkillDomain(options.request?.skillDomain),
     prompt: options.request?.prompt ?? `${project.goal}\n\nPromote stable stage adapter ${stage.id}: ${stage.goal}`,
     workspacePath: options.request?.workspacePath ?? workspaceRoot,
     artifacts: options.request?.artifacts ?? [],
@@ -777,7 +778,7 @@ function gatewayRequestForStage(
   request: Partial<GatewayRequest> | undefined,
 ): GatewayRequest {
   return {
-    skillDomain: request?.skillDomain ?? 'knowledge',
+    skillDomain: taskProjectSkillDomain(request?.skillDomain),
     prompt: request?.prompt ?? `${project.goal}\n\nStage ${stage.id}: ${stage.goal}`,
     workspacePath: request?.workspacePath ?? workspaceRoot,
     artifacts: request?.artifacts ?? [],

@@ -13,6 +13,7 @@ import type {
 import {
   CAPABILITY_EVOLUTION_RECORD_CONTRACT_ID,
 } from '../../../packages/contracts/runtime/capability-evolution.js';
+import { runtimeCapabilityEvolutionFailureCode } from '@sciforge-ui/runtime-contract/agent-backend-policy';
 import {
   appendCapabilityEvolutionRecord,
   buildCapabilityEvolutionCompactSummary,
@@ -319,16 +320,14 @@ function validationResultForCapabilityEvent(
 }
 
 function failureCodeForCapabilityEvent(input: CapabilityEvolutionRuntimeEventInput) {
-  if (input.validationResult?.failureCode) return input.validationResult.failureCode;
-  if (input.composedResult?.failureCode) return input.composedResult.failureCode;
-  const text = `${input.failureReason ?? ''} ${input.fallbackReason ?? ''} ${(input.schemaErrors ?? []).join(' ')}`;
-  if (input.schemaErrors?.length || /schema|contract|payload|validation/i.test(text)) return 'schema-invalid';
-  if (/timeout|timed out|cancelled/i.test(text)) return 'timeout';
-  if (/missing artifact|artifact/i.test(text)) return 'missing-artifact';
-  if (/provider|base url|AgentServer|ECONNREFUSED|429|rate/i.test(text)) return 'provider-unavailable';
-  if (typeof input.run?.exitCode === 'number' && input.run.exitCode !== 0) return 'execution-failed';
-  if (/confidence/i.test(text)) return 'low-confidence';
-  return input.failureReason ? 'validation-failed' : undefined;
+  return runtimeCapabilityEvolutionFailureCode({
+    validationFailureCode: input.validationResult?.failureCode,
+    composedFailureCode: input.composedResult?.failureCode,
+    failureReason: input.failureReason,
+    fallbackReason: input.fallbackReason,
+    schemaErrors: input.schemaErrors,
+    exitCode: input.run?.exitCode,
+  });
 }
 
 function fallbackTriggersForEvent(failureCode?: string): CapabilityFallbackTrigger[] {

@@ -13,6 +13,15 @@ export interface RuntimeVerificationResult {
 
 export const VERIFICATION_RESULT_CONTRACT_ID = 'sciforge.verification-result.v1';
 export const VERIFICATION_RESULT_SCHEMA_PATH = 'packages/contracts/runtime/verification-result.ts#normalizeRuntimeVerificationResults';
+export const VERIFICATION_RESULT_ARTIFACT_TYPE = 'verification-result' as const;
+
+export interface RuntimeVerificationArtifactRecord {
+  id?: unknown;
+  type?: unknown;
+  dataRef?: unknown;
+  metadata?: unknown;
+  data?: unknown;
+}
 
 export function normalizeRuntimeVerificationResults(value: unknown): RuntimeVerificationResult[] {
   const values = Array.isArray(value) ? value : value === undefined ? [] : [value];
@@ -66,6 +75,15 @@ export function verificationResultFailureActual(value: unknown) {
     evidenceRefs: result.evidenceRefs,
     repairHints: result.repairHints,
   }));
+}
+
+export function isRuntimeVerificationResultArtifact(value: unknown): value is RuntimeVerificationArtifactRecord {
+  if (!isRecord(value)) return false;
+  return String(value.type || value.id || '') === VERIFICATION_RESULT_ARTIFACT_TYPE;
+}
+
+export function runtimeVerificationResultArtifacts(value: unknown): RuntimeVerificationArtifactRecord[] {
+  return Array.isArray(value) ? value.filter(isRuntimeVerificationResultArtifact) : [];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

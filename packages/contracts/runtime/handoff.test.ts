@@ -7,12 +7,15 @@ import {
   buildSharedAgentHandoffContract,
   normalizeAgentHandoffSource,
   normalizeSharedSkillDomain,
+  taskProjectSkillDomain,
 } from './handoff';
 
 test('normalizes shared skill domains for UI and CLI callers', () => {
   assert.equal(normalizeSharedSkillDomain('literature'), 'literature');
   assert.equal(normalizeSharedSkillDomain('unknown'), undefined);
   assert.equal(normalizeSharedSkillDomain(undefined), undefined);
+  assert.equal(taskProjectSkillDomain('omics'), 'omics');
+  assert.equal(taskProjectSkillDomain(undefined), 'knowledge');
 });
 
 test('normalizes agent handoff sources with an explicit fallback', () => {

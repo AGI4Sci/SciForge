@@ -14,3 +14,4 @@ export * from './src/scenarioQualityGate';
 export * from './src/scenarioLibrary';
 export * from './src/runtimeCapabilityProfiles';
 export * from './src/scenarioRoutingPolicy';
+export * from './src/scenarioBuilderDisplayPolicy';

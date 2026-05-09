@@ -460,6 +460,25 @@ try {
   assert.ok(dynamicGlueSuccess, 'successful supplemental backend glue should be recorded');
   assert.equal(dynamicGlueSuccess.finalStatus, 'succeeded');
 
+  const providerUnavailable = await recordCapabilityEvolutionRuntimeEvent({
+    workspacePath: workspace,
+    request,
+    skill,
+    taskId: 'generated-literature-provider-unavailable',
+    runId: 'agentserver-run-provider-unavailable',
+    taskRel: '.sciforge/tasks/generated-literature-provider-unavailable/task.py',
+    inputRel: '.sciforge/task-inputs/generated-literature-provider-unavailable.json',
+    outputRel: '.sciforge/task-results/generated-literature-provider-unavailable.json',
+    stdoutRel: '.sciforge/logs/generated-literature-provider-unavailable.stdout.log',
+    stderrRel: '.sciforge/logs/generated-literature-provider-unavailable.stderr.log',
+    failureReason: 'AgentServer request failed at configured Model Base URL: ECONNREFUSED; provider later returned HTTP 429 rate limit.',
+    now: () => new Date('2026-05-09T00:06:00.000Z'),
+  });
+  assert.equal(providerUnavailable.record.failureCode, 'provider-unavailable');
+  assert.equal(providerUnavailable.record.validationResult?.failureCode, 'provider-unavailable');
+  assert.deepEqual(providerUnavailable.record.fallbackPolicy?.fallbackToAtomicWhen, ['provider-unavailable']);
+  assert.equal(providerUnavailable.compactSummary.recentRecords.at(-1)?.failureCode, 'provider-unavailable');
+
   await assertNoScatteredGlueOrRepairCaches();
 } finally {
   await rm(workspace, { recursive: true, force: true });

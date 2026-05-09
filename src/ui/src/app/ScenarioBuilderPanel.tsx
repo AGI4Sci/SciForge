@@ -7,6 +7,9 @@ import {
   compileScenarioIRFromSelection,
   elementRegistry,
   recommendScenarioElements,
+  scenarioBuilderComponentDisplay,
+  scenarioBuilderQualityChecklistText,
+  scenarioBuilderRecommendationReasons,
   scenarioIdBySkillDomain,
   type ScenarioBuilderDraft,
   type ScenarioElementSelection,
@@ -159,7 +162,12 @@ export function ScenarioBuilderPanel({
     selection.skillDomain ?? scenario.skillDomain,
     (tool) => tool.id,
   );
-  const recommendationReasons = builderRecommendationReasons(selection, scenario, compileResult.uiPlan.slots.length, compileResult.skillPlan.skillIRs.length);
+  const recommendationReasons = scenarioBuilderRecommendationReasons({
+    selection,
+    scenario,
+    uiSlotCount: compileResult.uiPlan.slots.length,
+    skillStepCount: compileResult.skillPlan.skillIRs.length,
+  });
   function patch(patchValue: Partial<ScenarioRuntimeOverride>) {
     onChange({ ...scenario, ...patchValue });
   }
@@ -287,7 +295,7 @@ export function ScenarioBuilderPanel({
         title="Agent 运行时 UI 白名单"
         description="发往 AgentServer 的 availableComponentIds；每行包含组件 ID、标题与说明。与左侧「组件工作台」勾选列表一致。"
         options={componentOptions.map((component) => {
-          const popover = componentElementPopover(component.componentId);
+          const popover = scenarioBuilderComponentDisplay(component.componentId);
           return {
             id: component.componentId,
             label: component.label,
@@ -313,7 +321,7 @@ export function ScenarioBuilderPanel({
         title="场景 UI allowlist（Scenario package）"
         description="每行一个可渲染 UI 组件；勾选项写入 Scenario 的 defaultComponents，用于编译 UI plan 与默认视图。"
         options={componentOptions.map((component) => {
-          const popover = componentElementPopover(component.componentId);
+          const popover = scenarioBuilderComponentDisplay(component.componentId);
           return {
             id: component.componentId,
             label: component.label,
@@ -489,7 +497,7 @@ export function ScenarioBuilderPanel({
                   <div className="builder-recommendation-summary">
                     <strong>推荐组合</strong>
                     <span>基于 skill domain={selection.skillDomain ?? scenario.skillDomain}，当前会生成 {compileResult.uiPlan.slots.length} 个 UI slot、{compileResult.skillPlan.skillIRs.length} 个 skill step。</span>
-                    <span>发布前会检查 producer/consumer、fallback、runtime profile 和 package quality gate。</span>
+                    <span>{scenarioBuilderQualityChecklistText}</span>
                     <ul>
                       {recommendationReasons.map((reason) => <li key={reason}>{reason}</li>)}
                     </ul>
@@ -591,7 +599,7 @@ export function ScenarioBuilderPanel({
               <div className={cx('builder-recommendation-summary', legacyStepMuted('contract') && 'muted')}>
                 <strong>推荐组合</strong>
                 <span>基于 skill domain={selection.skillDomain ?? scenario.skillDomain}，当前会生成 {compileResult.uiPlan.slots.length} 个 UI slot、{compileResult.skillPlan.skillIRs.length} 个 skill step。</span>
-                <span>发布前会检查 producer/consumer、fallback、runtime profile 和 package quality gate。</span>
+                <span>{scenarioBuilderQualityChecklistText}</span>
                 <ul>
                   {recommendationReasons.map((reason) => <li key={reason}>{reason}</li>)}
                 </ul>
@@ -728,37 +736,6 @@ function prioritizeBySelectionAndDomain<T extends { label?: string; id: string; 
     if (leftDomain !== rightDomain) return leftDomain - rightDomain;
     return idForItem(left).localeCompare(idForItem(right));
   });
-}
-
-function builderRecommendationReasons(
-  selection: ScenarioElementSelection,
-  scenario: ScenarioRuntimeOverride,
-  uiSlotCount: number,
-  skillStepCount: number,
-) {
-  const domain = selection.skillDomain ?? scenario.skillDomain;
-  return [
-    `skill domain ${domain} 决定默认 skill/tool/profile 搜索空间。`,
-    `${selection.selectedSkillIds.length} 个 skill 覆盖 ${selection.selectedArtifactTypes.length} 个 artifact contract。`,
-    `${uiSlotCount} 个 UI slot 由已选 artifact consumer 自动编译，fallback=${scenario.fallbackComponent}。`,
-    `${skillStepCount} 个 skill step 会进入 package metadata，便于后续 diff 和复现。`,
-  ];
-}
-
-function componentElementPopover(componentId: string) {
-  const component = elementRegistry.components.find((item) => item.componentId === componentId);
-  if (!component) {
-    return {
-      label: componentId,
-      detail: '未注册组件会使用 unknown-artifact-inspector fallback。',
-      meta: 'producer/consumer unknown · fallback unknown-artifact-inspector',
-    };
-  }
-  return {
-    label: component.label,
-    detail: component.description,
-    meta: `accepts ${component.acceptsArtifactTypes.join(', ') || '*'} · fields ${component.requiredFields.join(', ') || 'none'} · fallback ${component.fallback}`,
-  };
 }
 
 function ElementPopover({ label, detail, meta }: { label: string; detail: string; meta: string }) {

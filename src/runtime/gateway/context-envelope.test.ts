@@ -4,9 +4,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 
+import { VERIFICATION_RESULT_ARTIFACT_TYPE } from '@sciforge-ui/runtime-contract/verification-result';
 import type { GatewayRequest, SkillAvailability, WorkspaceTaskRunResult } from '../runtime-types';
 import { buildCompactRepairContext } from './agentserver-prompts';
-import { summarizeTaskAttemptsForAgentServer } from './context-envelope';
+import { buildContextEnvelope, summarizeTaskAttemptsForAgentServer } from './context-envelope';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types';
 
 test('attempt summaries carry bounded WorkEvidence facts without raw payloads', () => {
@@ -40,6 +41,23 @@ test('attempt summaries carry bounded WorkEvidence facts without raw payloads', 
   assert.equal(summary[0]?.workEvidenceSummary?.items[0]?.resultCount, 0);
   assert.deepEqual(summary[0]?.workEvidenceSummary?.items[0]?.diagnostics, ['primary status 200', 'fallback status 200']);
   assert.doesNotMatch(JSON.stringify(summary), /RAW_PAYLOAD_SHOULD_NOT_APPEAR/);
+});
+
+test('context envelope uses package policy for current request and verification artifact summaries', () => {
+  const envelope = buildContextEnvelope({
+    skillDomain: 'knowledge',
+    prompt: 'assistant: previous answer\nUSER: 继续验证刚才的结果',
+    artifacts: [
+      { id: 'report-1', type: 'research-report', dataRef: '.sciforge/artifacts/report.md' },
+      { id: 'verify-1', type: VERIFICATION_RESULT_ARTIFACT_TYPE, dataRef: '.sciforge/verifications/verify-1.json' },
+    ],
+    uiState: {},
+  } as GatewayRequest, { workspace: '/tmp/sciforge-test' });
+
+  assert.equal(envelope.sessionFacts.currentUserRequest, '继续验证刚才的结果');
+  assert.deepEqual(envelope.longTermRefs.verificationResults?.map((entry) => (entry as { dataRef?: string }).dataRef), [
+    '.sciforge/verifications/verify-1.json',
+  ]);
 });
 
 test('repair context extracts WorkEvidence summary from failed output ref', async () => {

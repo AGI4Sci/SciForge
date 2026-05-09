@@ -1,76 +1,28 @@
 import type { ArtifactPreviewAction, ObjectAction, ObjectReferenceKind, PreviewDescriptorKind, PreviewDescriptorSource, PreviewDerivativeKind, PreviewInlinePolicy, TurnAcceptanceSeverity, UserGoalType } from './domain';
+import {
+  artifactPreviewActions as contractArtifactPreviewActions,
+  displayIntentSources as contractDisplayIntentSources,
+  objectActions as contractObjectActions,
+  objectReferenceKinds as contractObjectReferenceKinds,
+  previewDerivativeKinds as contractPreviewDerivativeKinds,
+  previewDescriptorKinds as contractPreviewDescriptorKinds,
+  previewDescriptorSources as contractPreviewDescriptorSources,
+  previewInlinePolicies as contractPreviewInlinePolicies,
+} from '@sciforge-ui/runtime-contract';
 
-export const objectReferenceKinds = [
-  'artifact',
-  'file',
-  'folder',
-  'run',
-  'execution-unit',
-  'url',
-  'scenario-package',
-] as const satisfies readonly ObjectReferenceKind[];
+export const objectReferenceKinds = contractObjectReferenceKinds satisfies readonly ObjectReferenceKind[];
 
-export const objectActions = [
-  'focus-right-pane',
-  'inspect',
-  'open-external',
-  'reveal-in-folder',
-  'copy-path',
-  'pin',
-  'compare',
-] as const satisfies readonly ObjectAction[];
+export const objectActions = contractObjectActions satisfies readonly ObjectAction[];
 
-export const previewDescriptorKinds = [
-  'pdf',
-  'image',
-  'markdown',
-  'text',
-  'json',
-  'table',
-  'html',
-  'structure',
-  'office',
-  'folder',
-  'binary',
-] as const satisfies readonly PreviewDescriptorKind[];
+export const previewDescriptorKinds = contractPreviewDescriptorKinds satisfies readonly PreviewDescriptorKind[];
 
-export const previewDescriptorSources = [
-  'path',
-  'dataRef',
-  'artifact',
-  'url',
-] as const satisfies readonly PreviewDescriptorSource[];
+export const previewDescriptorSources = contractPreviewDescriptorSources satisfies readonly PreviewDescriptorSource[];
 
-export const previewInlinePolicies = [
-  'inline',
-  'stream',
-  'thumbnail',
-  'extract',
-  'external',
-  'unsupported',
-] as const satisfies readonly PreviewInlinePolicy[];
+export const previewInlinePolicies = contractPreviewInlinePolicies satisfies readonly PreviewInlinePolicy[];
 
-export const previewDerivativeKinds = [
-  'text',
-  'thumb',
-  'pages',
-  'schema',
-  'html',
-  'structure-bundle',
-  'metadata',
-] as const satisfies readonly PreviewDerivativeKind[];
+export const previewDerivativeKinds = contractPreviewDerivativeKinds satisfies readonly PreviewDerivativeKind[];
 
-export const artifactPreviewActions = [
-  'open-inline',
-  'system-open',
-  'copy-ref',
-  'extract-text',
-  'make-thumbnail',
-  'select-region',
-  'select-page',
-  'select-rows',
-  'inspect-metadata',
-] as const satisfies readonly ArtifactPreviewAction[];
+export const artifactPreviewActions = contractArtifactPreviewActions satisfies readonly ArtifactPreviewAction[];
 
 export const userGoalTypes = [
   'answer',
@@ -129,7 +81,7 @@ export const runtimeContractSchemas = {
       preferredModules: { type: 'array', items: { type: 'string' } },
       fallbackAcceptable: { type: 'array', items: { type: 'string' } },
       acceptanceCriteria: { type: 'array', items: { type: 'string' } },
-      source: { enum: ['agentserver', 'runtime-artifact', 'ui-design-studio', 'fallback-inference'] },
+      source: { enum: contractDisplayIntentSources },
     },
   },
   resolvedViewPlan: {

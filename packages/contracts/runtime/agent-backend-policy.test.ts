@@ -5,8 +5,10 @@ import {
   compactCapabilityForAgentBackend,
   estimateRuntimeAgentBackendModelContextWindow,
   normalizeRuntimeAgentBackendContextWindowSource,
+  normalizeRuntimeLlmEndpoint,
   normalizeRuntimeWorkspaceCompactCapability,
   normalizeRuntimeWorkspaceContextWindowSource,
+  runtimeCapabilityEvolutionFailureCode,
   runtimeAgentBackendCapabilities,
   runtimeAgentBackendConfigurationNextStep,
   runtimeAgentBackendConfigurationFailureIsBlocking,
@@ -49,6 +51,22 @@ test('runtime agent backend policy owns context source and model window normaliz
   assert.equal(estimateRuntimeAgentBackendModelContextWindow('gemini-2.0-pro'), 1_000_000);
 });
 
+test('runtime agent backend policy owns LLM endpoint normalization', () => {
+  assert.deepEqual(normalizeRuntimeLlmEndpoint({
+    provider: '  openai-compatible  ',
+    baseUrl: ' http://llm.example.test/v1/// ',
+    apiKey: ' test-secret ',
+    modelName: ' qwen-test ',
+  }), {
+    provider: 'openai-compatible',
+    baseUrl: 'http://llm.example.test/v1',
+    apiKey: 'test-secret',
+    modelName: 'qwen-test',
+  });
+  assert.equal(normalizeRuntimeLlmEndpoint({ provider: ' native ' }), undefined);
+  assert.equal(normalizeRuntimeLlmEndpoint(null), undefined);
+});
+
 test('runtime agent backend policy owns workspace event context source aliases', () => {
   assert.equal(normalizeRuntimeWorkspaceContextWindowSource({
     value: 'provider',
@@ -76,6 +94,16 @@ test('runtime agent backend policy owns failure classification and recovery text
   assert.deepEqual(runtimeAgentBackendFailureCategories('model provider returned empty completion response', undefined), ['model']);
   assert.deepEqual(runtimeAgentBackendFailureCategories('contextWindowExceeded after provider retryResult=failed', undefined), ['context-window']);
   assert.deepEqual(runtimeAgentBackendFailureCategories('429 retry-after: 2', 429), ['http-429', 'rate-limit']);
+  assert.equal(runtimeCapabilityEvolutionFailureCode({
+    failureReason: 'AgentServer request failed: ECONNREFUSED at configured Model Base URL',
+  }), 'provider-unavailable');
+  assert.equal(runtimeCapabilityEvolutionFailureCode({
+    failureReason: 'HTTP 429 rate limit from provider',
+  }), 'provider-unavailable');
+  assert.equal(runtimeCapabilityEvolutionFailureCode({
+    schemaErrors: ['payload missing artifacts'],
+    failureReason: 'provider returned schema-invalid payload',
+  }), 'schema-invalid');
   const diagnostic = withRuntimeAgentBackendUserFacingDiagnostic({
     kind: 'rate-limit',
     categories: ['rate-limit'],

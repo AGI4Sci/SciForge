@@ -1,6 +1,7 @@
 import type { SciForgeSkillDomain, GatewayRequest, LlmEndpointConfig, VerificationMode, VerificationRiskLevel } from '../runtime-types.js';
 import { cleanUrl, isRecord, toStringList, uniqueStrings } from '../gateway-utils.js';
 import { buildSharedAgentHandoffContract, normalizeAgentHandoffSource, normalizeSharedSkillDomain, type SciForgeAgentHandoffSource } from '@sciforge-ui/runtime-contract/handoff';
+import { normalizeRuntimeLlmEndpoint } from '@sciforge-ui/runtime-contract/agent-backend-policy';
 
 export function normalizeGatewayRequest(body: Record<string, unknown>): GatewayRequest {
   const skillDomain = normalizeSharedSkillDomain(body.skillDomain) as SciForgeSkillDomain | undefined;
@@ -76,18 +77,7 @@ export function normalizeScenarioPackageRef(value: unknown): GatewayRequest['sce
 }
 
 export function normalizeLlmEndpoint(value: unknown): LlmEndpointConfig | undefined {
-  if (!isRecord(value)) return undefined;
-  const provider = typeof value.provider === 'string' ? value.provider.trim() : '';
-  const baseUrl = typeof value.baseUrl === 'string' ? cleanUrl(value.baseUrl) : '';
-  const apiKey = typeof value.apiKey === 'string' ? value.apiKey.trim() : '';
-  const modelName = typeof value.modelName === 'string' ? value.modelName.trim() : '';
-  if (!baseUrl && !apiKey && !modelName) return undefined;
-  return {
-    provider: provider || undefined,
-    baseUrl: baseUrl || undefined,
-    apiKey: apiKey || undefined,
-    modelName: modelName || undefined,
-  };
+  return normalizeRuntimeLlmEndpoint(value) as LlmEndpointConfig | undefined;
 }
 
 export function expectedArtifactTypesForRequest(request: GatewayRequest) {

@@ -162,6 +162,43 @@ export function previewActionsForPreviewKind(kind: PreviewDescriptor['kind']): P
   return common;
 }
 
+export interface PreviewNoticeReferenceInput {
+  ref: string;
+  artifactType?: string;
+}
+
+export interface UnsupportedPreviewNoticeInput {
+  reference: PreviewNoticeReferenceInput;
+  path?: string;
+  descriptor?: PreviewDescriptor;
+}
+
+export interface UnsupportedPreviewNoticeModel {
+  kindLabel: string;
+  message: string;
+  requestLabel: string;
+  codeLabels: string[];
+}
+
+export function lightweightPreviewNoticeForDescriptor(descriptor: PreviewDescriptor) {
+  return `${descriptor.title || descriptor.ref} 已作为轻量 artifact 聚焦。当前类型使用 ${stablePreviewActionSummary(descriptor)} 作为稳定预览动作，派生内容按需生成。`;
+}
+
+export function unsupportedPreviewNoticeModel(input: UnsupportedPreviewNoticeInput): UnsupportedPreviewNoticeModel {
+  const kindLabel = input.descriptor?.kind || input.reference.artifactType || 'unknown';
+  const codeLabels = [
+    input.path || input.descriptor?.ref || input.reference.ref,
+    input.descriptor?.mimeType,
+    input.descriptor?.inlinePolicy ? `inlinePolicy: ${input.descriptor.inlinePolicy}` : undefined,
+  ].filter((label): label is string => Boolean(label));
+  return {
+    kindLabel,
+    message: `这个文件仍然可以作为对象引用传给 Agent，但右侧暂不支持内联预览${kindLabel ? `（${kindLabel}）` : ''}。需要设计一个匹配该文件类型的 preview package 插件后，才能在这里稳定渲染。`,
+    requestLabel: '让 Agent 设计 preview package 并重试',
+    codeLabels,
+  };
+}
+
 export function locatorHintsForPreviewKind(kind: PreviewDescriptor['kind']): PreviewDescriptor['locatorHints'] {
   if (kind === 'pdf') return ['page', 'region'];
   if (kind === 'image') return ['region'];
@@ -215,6 +252,18 @@ export function previewFileExtensionForPath(path: string) {
 
 function normalizePreviewExtension(extension: string) {
   return extension.toLowerCase().replace(/^\./, '');
+}
+
+function stablePreviewActionSummary(descriptor: PreviewDescriptor) {
+  const stableActions = descriptor.actions.filter((action) => action === 'inspect-metadata' || action === 'system-open' || action === 'copy-ref');
+  return (stableActions.length ? stableActions : previewActionsForPreviewKind(descriptor.kind).filter((action) => action === 'inspect-metadata' || action === 'system-open' || action === 'copy-ref'))
+    .map(previewActionLabel)
+    .join('/');
+}
+
+function previewActionLabel(action: PreviewDescriptor['actions'][number]) {
+  if (action === 'inspect-metadata') return 'metadata';
+  return action;
 }
 
 function mergePreviewDerivatives(left: PreviewDescriptor['derivatives'], right: PreviewDescriptor['derivatives']) {

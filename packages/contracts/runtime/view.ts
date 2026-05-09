@@ -98,6 +98,13 @@ export interface DisplayIntent {
   source?: 'agentserver' | 'runtime-artifact' | 'ui-design-studio' | 'fallback-inference';
 }
 
+export const displayIntentSources = [
+  'agentserver',
+  'runtime-artifact',
+  'ui-design-studio',
+  'fallback-inference',
+] as const satisfies readonly NonNullable<DisplayIntent['source']>[];
+
 export interface ResolvedViewPlan {
   displayIntent: DisplayIntent;
   sections: Record<ViewPlanSection, UIManifestSlot[]>;

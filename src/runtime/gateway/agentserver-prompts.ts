@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { GatewayRequest, LlmEndpointConfig, SciForgeSkillDomain, SkillAvailability, TaskAttemptRecord, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult } from '../runtime-types.js';
 import { agentHandoffSourceMetadata } from '@sciforge-ui/runtime-contract/handoff';
+import { extractAgentServerCurrentUserRequest, normalizeConfiguredAgentServerLlmEndpoint } from '@sciforge-ui/runtime-contract/agentserver-prompt-policy';
 import { expectedArtifactTypesForRequest, normalizeLlmEndpoint, selectedComponentIdsForRequest } from './gateway-request.js';
 import { buildCapabilityBrokerBriefForAgentServer, buildContextEnvelope, expectedArtifactSchema, summarizeArtifactRefs, summarizeConversationLedger, summarizeConversationPolicyForAgentServer, summarizeExecutionRefs, summarizeTaskAttemptsForAgentServer, workspaceTreeSummary, type AgentServerContextMode } from './context-envelope.js';
 import { agentServerAgentId, agentServerContextPolicy, contextWindowMetadata, fetchAgentServerContextSnapshot } from './agentserver-context-window.js';
@@ -36,12 +37,6 @@ function agentServerBackend(request?: GatewayRequest, llmEndpoint?: LlmEndpointC
   const endpoint = llmEndpoint ?? request?.llmEndpoint;
   if (endpoint?.baseUrl?.trim()) return 'openteam_agent';
   return 'codex';
-}
-
-function currentUserRequestText(prompt: string) {
-  const marker = 'Current user request:';
-  const index = prompt.lastIndexOf(marker);
-  return index >= 0 ? prompt.slice(index + marker.length).trim() : prompt.trim();
 }
 
 function stringField(value: unknown) {
@@ -381,7 +376,7 @@ export async function buildCompactRepairContext(params: {
       toolPayloadContract: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'displayIntent', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'],
     },
     currentGoal: {
-      currentUserRequest: clipForAgentServerPrompt(currentUserRequestText(params.request.prompt), 4000),
+      currentUserRequest: clipForAgentServerPrompt(extractAgentServerCurrentUserRequest(params.request.prompt), 4000),
       skillDomain: params.request.skillDomain,
       expectedArtifactTypes: expectedArtifactTypesForRequest(params.request),
       selectedComponentIds: selectedComponentIdsForRequest(params.request),
@@ -449,24 +444,7 @@ export async function readConfiguredLlmEndpoint(path: string, source: string): P
 } | undefined> {
   try {
     const parsed = JSON.parse(await readFile(path, 'utf8'));
-    if (!isRecord(parsed)) return undefined;
-    const llm = isRecord(parsed.llm) ? parsed.llm : parsed;
-    const provider = typeof llm.provider === 'string' ? llm.provider.trim() : '';
-    const baseUrl = typeof llm.baseUrl === 'string' ? cleanUrl(llm.baseUrl) : '';
-    const apiKey = typeof llm.apiKey === 'string' ? llm.apiKey.trim() : '';
-    const modelName = typeof llm.modelName === 'string'
-      ? llm.modelName.trim()
-      : typeof llm.model === 'string'
-        ? llm.model.trim()
-        : '';
-    const endpoint = normalizeLlmEndpoint({ provider, baseUrl, apiKey, modelName });
-    if (!endpoint) return undefined;
-    return {
-      modelProvider: provider || endpoint.provider,
-      modelName: modelName || endpoint.modelName,
-      llmEndpoint: endpoint,
-      llmEndpointSource: source,
-    };
+    return normalizeConfiguredAgentServerLlmEndpoint(parsed, source);
   } catch {
     return undefined;
   }
@@ -545,7 +523,7 @@ export function buildAgentServerGenerationPrompt(request: {
   const contextEnvelope = isRecord(request.contextEnvelope) ? request.contextEnvelope : {};
   const sessionFacts = isRecord(contextEnvelope.sessionFacts) ? contextEnvelope.sessionFacts : {};
   const scenarioFacts = isRecord(contextEnvelope.scenarioFacts) ? contextEnvelope.scenarioFacts : {};
-  const currentUserRequest = stringField(sessionFacts.currentUserRequest) ?? currentUserRequestText(request.prompt);
+  const currentUserRequest = stringField(sessionFacts.currentUserRequest) ?? extractAgentServerCurrentUserRequest(request.prompt);
   const executionMode = executionModeDecisionForPrompt(sessionFacts, scenarioFacts);
   const conversationPolicySummary = isRecord(sessionFacts.conversationPolicySummary)
     ? sessionFacts.conversationPolicySummary

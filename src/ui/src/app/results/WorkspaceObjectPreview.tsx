@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEven
 import { Sparkles } from 'lucide-react';
 import type { SciForgeConfig, SciForgeReference, SciForgeSession, ObjectReference, PreviewDescriptor } from '../../domain';
 import { readPreviewDerivative, readPreviewDescriptor, readWorkspaceFile, type WorkspaceFileContent } from '../../api/workspaceClient';
-import { artifactPreviewActions } from '../../runtimeContracts';
 import { Badge, cx } from '../uiPrimitives';
 import { MarkdownBlock } from './reportContent';
 import { PreviewDescriptorActions } from './PreviewActions';
+import { lightweightPreviewNoticeForDescriptor, unsupportedPreviewNoticeModel } from '../../../../../packages/support/artifact-preview';
 import {
   descriptorCanUseWorkspacePreview,
   descriptorDerivativeKind,
@@ -262,7 +262,7 @@ function DescriptorPreview({ descriptor, config, reference }: { descriptor: Prev
   }
   return (
     <div className="workspace-object-media-note">
-      <p>{descriptor.title || descriptor.ref} 已作为轻量 artifact 聚焦。当前类型使用 metadata/system-open/copy-ref 作为稳定 fallback，派生内容按需生成。</p>
+      <p>{lightweightPreviewNoticeForDescriptor(descriptor)}</p>
       <PreviewDescriptorActions descriptor={descriptor} reference={reference} />
     </div>
   );
@@ -309,17 +309,12 @@ function UnsupportedPreviewPackageNotice({
   diagnostic?: string;
   onRequest?: (reference: ObjectReference, path?: string, descriptor?: PreviewDescriptor) => void;
 }) {
-  const kind = descriptor?.kind || reference.artifactType || 'unknown';
+  const notice = unsupportedPreviewNoticeModel({ reference, path, descriptor });
   return (
     <div className="unsupported-preview-package">
-      <p>
-        这个文件仍然可以作为对象引用传给 Agent，但右侧暂不支持内联预览
-        {kind ? `（${kind}）` : ''}。需要设计一个匹配该文件类型的 preview package 插件后，才能在这里稳定渲染。
-      </p>
+      <p>{notice.message}</p>
       <div className="source-list">
-        <code>{path || descriptor?.ref || reference.ref}</code>
-        {descriptor?.mimeType ? <code>{descriptor.mimeType}</code> : null}
-        {descriptor?.inlinePolicy ? <code>inlinePolicy: {descriptor.inlinePolicy}</code> : null}
+        {notice.codeLabels.map((label) => <code key={label}>{label}</code>)}
       </div>
       {diagnostic ? <pre className="workspace-object-code">{diagnostic}</pre> : null}
       <button
@@ -329,7 +324,7 @@ function UnsupportedPreviewPackageNotice({
         disabled={!onRequest}
       >
         <Sparkles size={14} />
-        让 Agent 设计 preview package 并重试
+        {notice.requestLabel}
       </button>
     </div>
   );

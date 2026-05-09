@@ -99,6 +99,12 @@ export const SAFE_DEFAULT_CACHE_POLICY: Record<string, unknown> = {
   reason: 'Python conversation policy did not provide cachePolicy; do not reuse cached planning or execution state.',
 };
 
+export function currentUserRequestFromPrompt(prompt: string): string {
+  const lines = prompt.split('\n').map((line) => line.trim()).filter(Boolean);
+  const userLine = [...lines].reverse().find((line) => /^user\s*:/i.test(line));
+  return userLine ? userLine.replace(/^user\s*:\s*/i, '') : prompt;
+}
+
 export function normalizeConversationPolicyResponse(value: unknown): ConversationPolicyResponse | undefined {
   const record = isRecord(value) && isRecord(value.data) ? value.data : value;
   if (!isRecord(record)) return undefined;

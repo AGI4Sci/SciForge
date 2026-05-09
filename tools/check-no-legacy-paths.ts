@@ -69,19 +69,19 @@ const rules: Rule[] = [
 const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/gateway/agent-backend-config.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/agentserver-context-window.ts#provider-scenario-prompt-special-case': 0,
-  'src/runtime/gateway/agentserver-prompts.ts#provider-scenario-prompt-special-case': 2,
+  'src/runtime/gateway/agentserver-prompts.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/backend-failure-diagnostics.ts#provider-scenario-prompt-special-case': 0,
-  'src/runtime/gateway/context-envelope.ts#provider-scenario-prompt-special-case': 1,
-  'src/runtime/gateway/gateway-request.ts#provider-scenario-prompt-special-case': 1,
-  'src/runtime/gateway/capability-evolution-events.ts#provider-scenario-prompt-special-case': 1,
+  'src/runtime/gateway/context-envelope.ts#provider-scenario-prompt-special-case': 0,
+  'src/runtime/gateway/gateway-request.ts#provider-scenario-prompt-special-case': 0,
+  'src/runtime/gateway/capability-evolution-events.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/repair-policy.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/work-evidence-guard.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/workspace-event-normalizer.ts#provider-scenario-prompt-special-case': 0,
   'src/ui/src/app/ComponentWorkbenchPage.tsx#ui-semantic-fallback': 0,
-  'src/ui/src/app/ScenarioBuilderPanel.tsx#ui-semantic-fallback': 6,
-  'src/ui/src/app/results/WorkspaceObjectPreview.tsx#ui-semantic-fallback': 1,
+  'src/ui/src/app/ScenarioBuilderPanel.tsx#ui-semantic-fallback': 0,
+  'src/ui/src/app/results/WorkspaceObjectPreview.tsx#ui-semantic-fallback': 0,
   'src/ui/src/app/uiPrimitives.tsx#ui-semantic-fallback': 0,
-  'src/ui/src/runtimeContracts.ts#ui-semantic-fallback': 1,
+  'src/ui/src/runtimeContracts.ts#ui-semantic-fallback': 0,
 };
 
 const migrationByFile: Array<{ file: RegExp; migration: string }> = [

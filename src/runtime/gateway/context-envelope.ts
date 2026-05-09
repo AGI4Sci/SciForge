@@ -1,6 +1,8 @@
 import { readdir, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { currentUserRequestFromPrompt } from '@sciforge-ui/runtime-contract/conversation-policy';
 import { defaultArtifactSchemaForSkillDomain } from '@sciforge-ui/runtime-contract/artifact-policy';
+import { runtimeVerificationResultArtifacts } from '@sciforge-ui/runtime-contract/verification-result';
 import type { SciForgeSkillDomain, GatewayRequest, SkillAvailability } from '../runtime-types.js';
 import { clipForAgentServerJson, clipForAgentServerPrompt, hashJson, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
 import { brokerCapabilities, CapabilityManifestRegistry as BrokerCapabilityManifestRegistry, type CapabilityBrokerArtifactIndexEntry, type CapabilityBrokerFailureHistoryEntry, type CapabilityBrokerObjectRef, type CapabilityBrokerOutput } from '../capability-broker.js';
@@ -136,7 +138,7 @@ export function buildContextEnvelope(
     sessionFacts: {
       sessionId: typeof uiState.sessionId === 'string' ? uiState.sessionId : undefined,
       currentPrompt: typeof uiState.currentPrompt === 'string' ? uiState.currentPrompt : request.prompt,
-      currentUserRequest: currentUserRequestText(request.prompt),
+      currentUserRequest: currentUserRequestFromPrompt(request.prompt),
       currentReferences: currentReferences.length ? currentReferences.slice(0, 8).map((entry) => clipForAgentServerJson(entry, 2)) : undefined,
       currentReferenceDigests: currentReferenceDigests.length ? currentReferenceDigests.slice(0, 8).map((entry) => clipForAgentServerJson(entry, 4)) : undefined,
       conversationPolicySummary,
@@ -508,12 +510,6 @@ function contextEnvelopeMode(request: GatewayRequest): AgentServerContextMode {
   return recentConversation.length > 1 || recentExecutionRefs.length > 0 || request.artifacts.length > 0 ? 'delta' : 'full';
 }
 
-function currentUserRequestText(prompt: string) {
-  const lines = prompt.split('\n').map((line) => line.trim()).filter(Boolean);
-  const userLine = [...lines].reverse().find((line) => /^user\s*:/i.test(line));
-  return userLine ? userLine.replace(/^user\s*:\s*/i, '') : prompt;
-}
-
 export function summarizeArtifactRefs(artifacts: Array<Record<string, unknown>>) {
   return artifacts.slice(-8).map((artifact) => {
     const id = typeof artifact.id === 'string' ? artifact.id : undefined;
@@ -598,8 +594,7 @@ export function summarizeConversationPolicyForAgentServer(value: unknown) {
 }
 
 function summarizeVerificationResults(request: GatewayRequest) {
-  const fromArtifacts = request.artifacts
-    .filter((artifact) => String(artifact.type || artifact.id || '') === 'verification-result')
+  const fromArtifacts = runtimeVerificationResultArtifacts(request.artifacts)
     .map((artifact) => ({
       id: artifact.id,
       dataRef: artifact.dataRef,
