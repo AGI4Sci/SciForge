@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { SciForgeConfig, SciForgeSession, ObjectReference, RuntimeArtifact, UIManifestSlot } from '../../domain';
 import { readWorkspaceFile } from '../../api/workspaceClient';
-import { elementRegistry } from '../../scenarioCompiler/elementRegistry';
+import { elementRegistry } from '@sciforge/scenario-core/element-registry';
 import { EmptyArtifactState } from '../uiPrimitives';
 
 export type ReportViewerSlotProps = {

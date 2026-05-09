@@ -44,17 +44,11 @@ const packageRuntimeOwnershipRules: Rule[] = [
 ];
 
 const trackedPackageBaselineCounts: Record<string, number> = {
-  'packages/reasoning/conversation-policy/src/sciforge_conversation/artifact_index.py#package-artifact-persistence-lifecycle': 3,
-  'packages/reasoning/conversation-policy/src/sciforge_conversation/artifact_index.py#package-workspace-ref-resolution': 2,
   'packages/reasoning/conversation-policy/src/sciforge_conversation/cache_policy.py#package-artifact-persistence-lifecycle': 2,
-  'packages/reasoning/conversation-policy/src/sciforge_conversation/capability_broker.py#package-global-safety-lifecycle': 1,
   'packages/reasoning/conversation-policy/src/sciforge_conversation/latency_policy.py#package-global-safety-lifecycle': 2,
-  'packages/reasoning/conversation-policy/src/sciforge_conversation/process_events.py#package-stream-lifecycle': 1,
   'packages/reasoning/conversation-policy/src/sciforge_conversation/recovery.py#package-workspace-ref-resolution': 1,
-  'packages/reasoning/conversation-policy/src/sciforge_conversation/reference_digest.py#package-workspace-ref-resolution': 2,
+  'packages/reasoning/conversation-policy/src/sciforge_conversation/reference_digest.py#package-workspace-ref-resolution': 1,
   'packages/reasoning/conversation-policy/src/sciforge_conversation/response_plan.py#package-stream-lifecycle': 6,
-  'packages/reasoning/conversation-policy/src/sciforge_conversation/service.py#package-artifact-persistence-lifecycle': 4,
-  'packages/reasoning/conversation-policy/src/sciforge_conversation/service.py#package-stream-lifecycle': 2,
   'packages/reasoning/conversation-policy/src/sciforge_conversation/service.py#package-workspace-ref-resolution': 2,
 };
 

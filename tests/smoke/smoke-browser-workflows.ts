@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { chromium, type Browser, type Locator, type Page } from 'playwright-core';
-import { buildBuiltInScenarioPackage } from '../../src/ui/src/scenarioCompiler/scenarioPackage';
+import { buildBuiltInScenarioPackage } from '@sciforge/scenario-core/scenario-package';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-browser-smoke-'));
 const artifactsDir = resolve('docs', 'test-artifacts');

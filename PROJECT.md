@@ -58,7 +58,7 @@ Todo：
 - [ ] `src -> packages` P2：拆分 `src/runtime/gateway/verification-policy.ts`，policy/result contract 和 verifier semantics 进入 packages，workspace 写入和 runtime gating 留在 `src`。
 - [ ] `src -> packages` P2：评估 `src/runtime/conversation-policy/contracts.ts`，纯 TS/Python contract 可迁入 `packages/contracts/runtime` 或 owner package；`python-bridge.ts`、`apply.ts` 继续留在 `src`。
 - [ ] `packages -> src` P0：迁移 `packages/reasoning/conversation-policy/src/sciforge_conversation/service.py`、`execution_classifier.py`、`context_policy.py`、`cache_policy.py`、`memory.py`、`recovery.py`、`response_plan.py`、`latency_policy.py`、`acceptance.py` 到 `src/runtime/conversation-policy` ownership；这是平台 turn lifecycle，不是可插拔能力。
-- [ ] `packages -> src` P0：迁移 `packages/reasoning/conversation-policy/src/sciforge_conversation/capability_broker.py` 的 broker shell/main flow 到 `src/runtime/capability-broker` 或 `src/runtime/skill-registry`；packages 只提供 manifests 和 schemas。
+- [x] `packages -> src` P0：迁移 `packages/reasoning/conversation-policy/src/sciforge_conversation/capability_broker.py` 的 broker shell/main flow 到 `src/runtime/capability-broker`；Python 侧只保留兼容 brief envelope bridge，packages 只提供 manifests 和 schemas。
 - [ ] `packages -> src` P0：迁移 `handoff_planner.py` 到 `src/runtime/gateway`，因为它处理 handoff budget、safe file IO、workspace refs 和 artifact persistence lifecycle。
 - [x] `packages -> src` P0：迁移 `reference_digest.py` 的 meaningful lifecycle 到 `src/runtime/gateway/conversation-reference-digest.ts`，Python 侧只保留兼容 bridge。
 - [x] `packages -> src` P0：迁移 `artifact_index.py` 的 clickable refs、workspace path metadata、hash/size、execution refs、digest refs、pathRefs 摘要和 dedupe 到 `src/runtime/gateway/conversation-artifact-index.ts`，Python 侧只保留兼容 bridge。
@@ -82,7 +82,7 @@ Todo：
 - [x] 更新 `docs/Extending.md` 和 `packages/README.md`：新增模块应先判断属于平台秩序还是能力语义，再选择 `src/` 或 `packages/`。
 - [ ] 删除与该边界冲突的旧 registry、旧 adapter 和旧 direct import。
 
-进度备注：`smoke:fixed-platform-boundary` 当前剩余 17 个 tracked warnings；`smoke:no-src-capability-semantics` 当前保持 1045 个 tracked findings，无新增。
+进度备注：`smoke:fixed-platform-boundary` 当前剩余 14 个 tracked warnings；`smoke:no-src-capability-semantics` 当前保持 1019 个 tracked findings，无新增。
 
 验收标准：
 
@@ -128,6 +128,7 @@ Todo：
 - [x] 列出所有旧链路：UI prompt regex、场景 id 分支、provider 特例、旧 payload normalizer、旧 fallback、旧 preview resolver、旧 task adapter、旧 compatibility re-export。
 - [x] 为每条旧链路标注新的唯一真相源：capability manifest、broker、resolver、validator、runtime executor 或 backend tool。
 - [ ] 删除旧链路和对应测试夹具；只保留验证新路径的 tests/smoke。
+- [x] 删除 12 个 `src/ui/src/scenarioCompiler/*` package facade re-export 文件，并将 UI/smoke/test 调用方改为直接导入 `@sciforge/scenario-core/*` 稳定入口。
 - [x] 增加 `no-legacy-paths` smoke，禁止重新引入 UI 语义兜底、provider/scenario/prompt 特例和重复 source of truth。
 - [x] 更新 docs/Architecture、docs/Extending、packages/README，删除旧架构描述。
 
@@ -193,6 +194,7 @@ Todo：
 - [x] 将 WorkEvidence guard 和 verifier failure 映射到 `ContractValidationFailure`。
 - [x] repair prompt/handoff 只消费结构化 failure，不读取散乱错误文本。
 - [ ] 删除旧的分散 repair-needed/failed-with-reason 组装逻辑，保留统一 validation-to-repair 管线。
+- [x] `repair-policy` handoff 统一携带 `validationFailure` 或结构化 `backendFailure`，不再把 loose `reason` 作为 repair 主入口。
 - [x] 增加 fixtures：schema 缺字段、invalid ref、artifact 空结果、verifier fail、stdout/stderr 指向修复。
 
 验收标准：
@@ -212,12 +214,12 @@ Todo：
 - [x] 建立 capability broker 输入：prompt、object refs、artifact index、failure history、scenario policy、runtime policy、available providers。
 - [x] broker 输出 compact capability brief 列表，默认不展开 full schema。
 - [x] 定义 expansion API：`brief -> contract summary -> full schema/examples/repair hints`。
-- [ ] 将 backend request payload 改为消费 broker 输出，而不是散落的 skills/views/tools 列表。
+- [x] 将 backend request payload 改为消费 broker 输出，而不是散落的 skills/views/tools 列表。
 - [ ] 删除旧 capability 拼接逻辑和重复 prompt context builder。
 
 验收标准：
 
-- [ ] backend 默认只看到相关能力 brief，而不是全量协议。
+- [x] backend 默认只看到相关能力 brief，而不是全量协议。
 - [ ] 选择能力后可按需展开 schema；失败修复时可展开 repair hints 和日志 refs。
 - [ ] 旧的多处 capability list 构造逻辑被删除或合并到 broker。
 

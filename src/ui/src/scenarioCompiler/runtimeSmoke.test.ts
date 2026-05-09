@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { buildBuiltInScenarioPackage } from './scenarioPackage';
-import { runScenarioRuntimeSmoke } from './runtimeSmoke';
+import { runScenarioRuntimeSmoke } from '@sciforge/scenario-core/runtime-smoke';
+import { buildBuiltInScenarioPackage } from '@sciforge/scenario-core/scenario-package';
 
 describe('scenario runtime smoke hook', () => {
   it('dry-runs a package by validating contracts without executing workspace code', async () => {

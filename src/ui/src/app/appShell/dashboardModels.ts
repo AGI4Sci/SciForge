@@ -2,10 +2,10 @@ import type { LucideIcon } from 'lucide-react';
 import { scenarios, type ScenarioId } from '../../data';
 import type { SciForgeRun, SciForgeWorkspaceState, ScenarioInstanceId } from '../../domain';
 import { nowIso } from '../../domain';
-import { compileScenarioIRFromSelection, recommendScenarioElements } from '../../scenarioCompiler/scenarioElementCompiler';
-import type { ScenarioBuilderDraft } from '../../scenarioCompiler/scenarioDraftCompiler';
-import { buildBuiltInScenarioPackage, type ScenarioPackage } from '../../scenarioCompiler/scenarioPackage';
-import type { ScenarioLibraryItem } from '../../scenarioCompiler/scenarioLibrary';
+import { compileScenarioIRFromSelection, recommendScenarioElements } from '@sciforge/scenario-core/scenario-element-compiler';
+import type { ScenarioBuilderDraft } from '@sciforge/scenario-core/scenario-draft-compiler';
+import { buildBuiltInScenarioPackage, type ScenarioPackage } from '@sciforge/scenario-core/scenario-package';
+import type { ScenarioLibraryItem } from '@sciforge/scenario-core/scenario-library';
 
 export const officialScenarioPackages = scenarios.map((scenario) => ({
   scenario,

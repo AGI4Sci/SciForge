@@ -3,11 +3,11 @@ import { describe, it } from 'node:test';
 
 import { scenarios, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
-import { compileScenarioDraft } from './scenarioDraftCompiler';
-import { compileScenarioIRFromSelection, recommendScenarioElements } from './scenarioElementCompiler';
-import { buildBuiltInScenarioPackage } from './scenarioPackage';
-import { compileSkillPlan } from './skillPlanCompiler';
-import { validateScenarioPackage } from './validationGate';
+import { compileScenarioDraft } from '@sciforge/scenario-core/scenario-draft-compiler';
+import { compileScenarioIRFromSelection, recommendScenarioElements } from '@sciforge/scenario-core/scenario-element-compiler';
+import { buildBuiltInScenarioPackage } from '@sciforge/scenario-core/scenario-package';
+import { compileSkillPlan } from '@sciforge/scenario-core/skill-plan-compiler';
+import { validateScenarioPackage } from '@sciforge/scenario-core/validation-gate';
 
 describe('scenario compiler package model', () => {
   it('exports each built-in scenario as a published scenario package', () => {

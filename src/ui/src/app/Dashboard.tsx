@@ -1,9 +1,9 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { AlertTriangle, Check, ChevronDown, ChevronLeft, Download, FilePlus, FileUp, Play, RefreshCw, Settings, Shield, Sparkles, Target, Trash2 } from 'lucide-react';
 import { stats, type PageId, type ScenarioId } from '../data';
-import { compileScenarioDraft, type ScenarioBuilderDraft } from '../scenarioCompiler/scenarioDraftCompiler';
-import { buildBuiltInScenarioPackage, type ScenarioPackage } from '../scenarioCompiler/scenarioPackage';
-import type { ScenarioLibraryItem } from '../scenarioCompiler/scenarioLibrary';
+import { compileScenarioDraft, type ScenarioBuilderDraft } from '@sciforge/scenario-core/scenario-draft-compiler';
+import { buildBuiltInScenarioPackage, type ScenarioPackage } from '@sciforge/scenario-core/scenario-package';
+import type { ScenarioLibraryItem } from '@sciforge/scenario-core/scenario-library';
 import type { SciForgeConfig, SciForgeWorkspaceState, ScenarioInstanceId, ScenarioRuntimeOverride } from '../domain';
 import {
   acceptSkillPromotionProposal,

@@ -45,14 +45,14 @@ import {
   type PageId,
 } from '../data';
 import { SCENARIO_SPECS, SCENARIO_PRESETS, componentManifest } from '../scenarioSpecs';
-import { compileScenarioDraft, scenarioIdBySkillDomain, type ScenarioBuilderDraft } from '../scenarioCompiler/scenarioDraftCompiler';
-import { compileScenarioIRFromSelection, recommendScenarioElements, type ScenarioElementSelection } from '../scenarioCompiler/scenarioElementCompiler';
-import { elementRegistry } from '../scenarioCompiler/elementRegistry';
-import { runScenarioRuntimeSmoke } from '../scenarioCompiler/runtimeSmoke';
-import { buildScenarioQualityReport } from '../scenarioCompiler/scenarioQualityGate';
-import { buildBuiltInScenarioPackage, builtInScenarioPackageRef, type ScenarioPackage } from '../scenarioCompiler/scenarioPackage';
-import type { ScenarioLibraryItem } from '../scenarioCompiler/scenarioLibrary';
-import { compileSlotsForScenario } from '../scenarioCompiler/uiPlanCompiler';
+import { compileScenarioDraft, scenarioIdBySkillDomain, type ScenarioBuilderDraft } from '@sciforge/scenario-core/scenario-draft-compiler';
+import { compileScenarioIRFromSelection, recommendScenarioElements, type ScenarioElementSelection } from '@sciforge/scenario-core/scenario-element-compiler';
+import { elementRegistry } from '@sciforge/scenario-core/element-registry';
+import { runScenarioRuntimeSmoke } from '@sciforge/scenario-core/runtime-smoke';
+import { buildScenarioQualityReport } from '@sciforge/scenario-core/scenario-quality-gate';
+import { buildBuiltInScenarioPackage, builtInScenarioPackageRef, type ScenarioPackage } from '@sciforge/scenario-core/scenario-package';
+import type { ScenarioLibraryItem } from '@sciforge/scenario-core/scenario-library';
+import { compileSlotsForScenario } from '@sciforge/scenario-core/ui-plan-compiler';
 import { timeline } from '../demoData';
 import { sendSciForgeToolMessage } from '../api/sciforgeToolsClient';
 import { buildExecutionBundle, evaluateExecutionBundleExport } from '../exportPolicy';

@@ -70,6 +70,19 @@ export interface CapabilityBrokerInput {
   availableProviders?: CapabilityBrokerProviderAvailability[] | string[];
 }
 
+export interface CapabilityBrokerRequestShape {
+  prompt?: string;
+  goal?: string;
+  refs?: Array<string | CapabilityBrokerObjectRef>;
+  scenario?: string;
+  riskTolerance?: CapabilityManifest['safety']['risk'];
+  topK?: number;
+  expectedArtifacts?: string[];
+  explicitCapabilityIds?: string[];
+  failureHistory?: CapabilityBrokerFailureHistoryEntry[];
+  availableProviders?: CapabilityBrokerProviderAvailability[] | string[];
+}
+
 export interface BrokeredCapabilityBrief extends CapabilityManifestBrief {
   score: number;
   matchedSignals: string[];
@@ -237,6 +250,32 @@ export function brokerCapabilities(input: CapabilityBrokerInput, registry: Capab
   };
 }
 
+export function brokerCapabilitiesForRequestShape(
+  request: CapabilityBrokerRequestShape,
+  registry: CapabilityManifestRegistry,
+): CapabilityBrokerOutput {
+  return brokerCapabilities(capabilityBrokerInputFromRequestShape(request), registry);
+}
+
+export function capabilityBrokerInputFromRequestShape(request: CapabilityBrokerRequestShape): CapabilityBrokerInput {
+  const prompt = [request.prompt, request.goal].filter((item): item is string => Boolean(item?.trim())).join('\n');
+  return {
+    prompt,
+    objectRefs: request.refs?.map(toObjectRef),
+    artifactIndex: request.expectedArtifacts?.map((artifactType) => ({ artifactType, tags: [...tokens(artifactType)] })),
+    failureHistory: request.failureHistory,
+    scenarioPolicy: {
+      id: request.scenario,
+      preferredCapabilityIds: request.explicitCapabilityIds,
+    },
+    runtimePolicy: {
+      topK: request.topK,
+      riskTolerance: request.riskTolerance,
+    },
+    availableProviders: request.availableProviders,
+  };
+}
+
 export function expandCapabilityManifest(manifest: CapabilityManifest, options: CapabilityExpansionOptions = {}): CapabilityExpansion {
   const brief = compactCapabilityManifestBrief(manifest);
   const expansion: CapabilityExpansion = {
@@ -392,6 +431,10 @@ function normalizeAvailableProviders(input: CapabilityBrokerInput['availableProv
     }
   }
   return result;
+}
+
+function toObjectRef(ref: string | CapabilityBrokerObjectRef): CapabilityBrokerObjectRef {
+  return typeof ref === 'string' ? { ref } : { ...ref };
 }
 
 function refTexts(refs: CapabilityBrokerObjectRef[]): string[] {

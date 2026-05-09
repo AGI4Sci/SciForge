@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { scenarios, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
 import { estimateContextWindowState, latestContextWindowState } from '../contextWindow';
-import { builtInScenarioPackageRef } from '../scenarioCompiler/scenarioPackage';
+import { builtInScenarioPackageRef } from '@sciforge/scenario-core/scenario-package';
 import { resetSession } from '../sessionStore';
 import { SILENT_STREAM_WAIT_THRESHOLD_MS, buildRequestAcceptedProgressEvent, buildSilentStreamProgressEvent, formatProgressHeadline, latestProgressModel } from '../processProgress';
 import { assistantDraftFromStreamEvents, coalesceStreamEvents, latestRunningEvent, streamEventCounts } from '../streamEventPresentation';

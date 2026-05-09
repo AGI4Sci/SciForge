@@ -552,6 +552,11 @@ export function buildAgentServerGenerationPrompt(request: {
     : isRecord(scenarioFacts.conversationPolicySummary)
       ? scenarioFacts.conversationPolicySummary
       : summarizeConversationPolicyForAgentServer(request.uiStateSummary);
+  const capabilityBrokerBrief = isRecord(scenarioFacts.capabilityBrokerBrief)
+    ? scenarioFacts.capabilityBrokerBrief
+    : isRecord(request.availableRuntimeCapabilities) && request.availableRuntimeCapabilities.schemaVersion === 'sciforge.agentserver.capability-broker-brief.v1'
+      ? request.availableRuntimeCapabilities
+      : undefined;
   const currentTurnSnapshot = {
     kind: 'SciForgeCurrentTurnSnapshot',
     prompt: request.prompt,
@@ -569,6 +574,7 @@ export function buildAgentServerGenerationPrompt(request: {
     executionScope: 'backend-decides',
     selectedToolIds: toStringList(scenarioFacts.selectedToolIds),
     selectedSenseIds: toStringList(scenarioFacts.selectedSenseIds),
+    capabilityBrokerBrief,
     currentReferences: Array.isArray(sessionFacts.currentReferences) ? sessionFacts.currentReferences : undefined,
     currentReferenceDigests: Array.isArray(sessionFacts.currentReferenceDigests) ? sessionFacts.currentReferenceDigests : undefined,
     strictTaskFilesReason: request.strictTaskFilesReason,
@@ -630,8 +636,8 @@ export function buildAgentServerGenerationPrompt(request: {
     'Generate fresh task code only when the current turn truly asks for new work or no prior executable artifact can satisfy the request.',
     'Put generated task paths under .sciforge/tasks when possible. SciForge will archive any returned taskFiles under .sciforge/tasks/<run-id>/ before execution.',
     'Do not force self-contained task code when a better installed/workspace tool exists. Prefer the best available tool, record the tool id/version/command in ExecutionUnit, and write only the adapter/glue needed for reproducibility from inputPath and outputPath.',
-    'Runtime capability routing contract: use availableRuntimeCapabilities as the generic modular capability catalog. It lists selected and compatible skills, tools, senses, actions, verifiers, and UI components. Decide from that catalog and the current task; do not rely on scene-specific prompt branches or hard-coded examples.',
-    'When availableTools or selectedToolIds includes id="local.vision-sense", treat the current turn as having an optional pure-vision Computer Use sense plugin available: construct text + screenshot/image modality requests, keep the package executor-agnostic, emit text-form click/type_text/press_key/scroll/wait commands or vision-trace artifacts, and preserve only compact screenshot refs/grounding/execution/pixel-diff summaries across turns. Do not read DOM or accessibility tree for that vision path, and fail closed for send/delete/pay/authorize/publish actions unless upstream confirmation is explicit.',
+    'Runtime capability routing contract: use capabilityBrokerBrief as the compact broker-ranked capability list; the old scattered capability catalog is omitted by default, and full schemas, examples, implementation notes, and repair hints stay lazy until execution or repair needs them.',
+    'When capabilityBrokerBrief or selectedToolIds includes local.vision-sense/observe.vision, treat the current turn as having an optional pure-vision Computer Use sense plugin available: construct text + screenshot/image modality requests, keep the package executor-agnostic, emit text-form click/type_text/press_key/scroll/wait commands or vision-trace artifacts, and preserve only compact screenshot refs/grounding/execution/pixel-diff summaries across turns. Do not read DOM or accessibility tree for that vision path, and fail closed for send/delete/pay/authorize/publish actions unless upstream confirmation is explicit.',
     'If the user explicitly asks to use Computer Use, GUI automation, desktop control, mouse, or keyboard, do not satisfy that request by substituting non-GUI generation code such as python-pptx, scripts, repository edits, or synthetic artifacts unless the user explicitly accepts a non-GUI fallback in the current turn. If the Computer Use path fails, return failed-with-reason with the exact failing provider, endpoint/path when available, trace ref, and recovery action instead of claiming the requested GUI task is complete.',
     'If local.vision-sense is selected but no GUI executor/browser/desktop bridge or screenshot input is configured for the current run, do not scan the repository to compensate. Return a concise ToolPayload diagnosis or failed-with-reason ExecutionUnit that says the vision sense contract was detected but the runtime executor bridge is missing, and include the next expected vision-trace file-ref shape instead of fabricating GUI results.',
     'Large-file contract: uploaded PDFs, images, spreadsheets, binary blobs, extracted full text, and large logs must stay as workspace refs. Do not inline base64, do not print full extracted text to stdout/stderr, and do not paste full document text into final JSON.',
@@ -652,13 +658,35 @@ export function buildAgentServerGenerationPrompt(request: {
     ...externalIoReliabilityContractLines(),
     '',
     JSON.stringify(clipForAgentServerJson({
-      ...request,
+      ...compactGenerationRequestForAgentServer(request, capabilityBrokerBrief),
       taskContract: {
         argv: ['inputPath', 'outputPath'],
         outputPayloadKeys: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'displayIntent', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'],
       },
     }), null, 2),
   ].join('\n');
+}
+
+function compactGenerationRequestForAgentServer(
+  request: Parameters<typeof buildAgentServerGenerationPrompt>[0],
+  capabilityBrokerBrief: Record<string, unknown> | undefined,
+) {
+  const {
+    availableSkills: _availableSkills,
+    availableTools: _availableTools,
+    availableRuntimeCapabilities: _availableRuntimeCapabilities,
+    ...rest
+  } = request;
+  return {
+    ...rest,
+    capabilityBrokerBrief,
+    omittedCapabilityCatalog: {
+      omitted: true,
+      source: 'typescript-capability-broker',
+      omittedCategories: ['legacy skill catalog', 'legacy tool catalog', 'legacy component catalog'],
+      reason: 'T116 default backend handoff consumes compact broker briefs and keeps full schemas/examples/docs lazy.',
+    },
+  };
 }
 
 function externalIoReliabilityContractLines() {

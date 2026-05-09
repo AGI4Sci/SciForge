@@ -263,6 +263,10 @@ try {
   assert.equal(stderrDrivenUnit.stderrRef, refs.stderrRel);
   assertRepairEvidenceRefs(stderrDrivenRepair, refs.stdoutRel, refs.stderrRel);
   assert.ok(recoverActionsFromUnit(stderrDrivenUnit).some((action) => /stdoutRef.*stderrRef.*outputRef|stdoutRef|stderrRef/i.test(action)));
+  const stderrDrivenParams = JSON.parse(String(stderrDrivenUnit.params)) as Record<string, unknown>;
+  assert.ok(!('reason' in stderrDrivenParams));
+  assert.equal((stderrDrivenParams.backendFailure as Record<string, unknown> | undefined)?.contract, 'sciforge.backend-repair-failure.v1');
+  assert.equal(((stderrDrivenUnit.refs as Record<string, unknown>).backendFailure as Record<string, unknown> | undefined)?.failureKind, 'backend-diagnostic');
 
   const verifierFailure = contractValidationFailureFromVerificationResults({
     id: 'schema.verifier',

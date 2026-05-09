@@ -96,3 +96,72 @@ test('does not synthesize notebook records when backend omits notebook timeline'
 
   assert.deepEqual(response.notebook, []);
 });
+
+test('preserves backend-provided UIManifest slots without replacing component ids', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', '展示后端视图', {
+    ok: true,
+    data: {
+      run: { id: 'run-ui-manifest', status: 'completed' },
+      output: {
+        message: JSON.stringify({
+          message: '后端提供了视图 manifest。',
+          uiManifest: [{
+            componentId: 'report-viewer',
+            title: 'Backend report',
+            props: { dense: true },
+            artifactRef: 'artifact:report-1',
+            priority: 2,
+            encoding: { colorBy: 'confidence' },
+            layout: { mode: 'single', height: 420 },
+            selection: { id: 'claim-1', values: ['claim-1'] },
+            sync: { selectionIds: ['claim-1'] },
+            transform: [{ type: 'limit', value: 5 }],
+            compare: { artifactRefs: ['artifact:report-2'], mode: 'side-by-side' },
+          }],
+          artifacts: [{ id: 'report-1', type: 'research-report', data: { markdown: '# Backend' } }],
+          executionUnits: [{ id: 'EU-1', tool: 'analysis.task', status: 'done', params: '{}' }],
+        }),
+      },
+    },
+  });
+
+  assert.deepEqual(response.uiManifest, [{
+    componentId: 'report-viewer',
+    title: 'Backend report',
+    props: { dense: true },
+    artifactRef: 'artifact:report-1',
+    priority: 2,
+    encoding: { colorBy: 'confidence' },
+    layout: { mode: 'single', height: 420 },
+    selection: { id: 'claim-1', values: ['claim-1'] },
+    sync: { selectionIds: ['claim-1'] },
+    transform: [{ type: 'limit', value: 5 }],
+    compare: { artifactRefs: ['artifact:report-2'], mode: 'side-by-side' },
+  }]);
+});
+
+test('does not invent UIManifest component choices or preferred views from artifact semantics', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', '展示报告', {
+    ok: true,
+    data: {
+      run: { id: 'run-no-ui-manifest', status: 'completed' },
+      output: {
+        message: JSON.stringify({
+          message: '后端只返回 artifacts，没有 manifest。',
+          uiManifest: [{ id: 'paper-card-list', artifactRef: 'papers' }],
+          artifacts: [
+            { id: 'report-1', type: 'research-report', data: '# Report' },
+            { id: 'papers', type: 'paper-list', data: [{ title: 'Paper' }] },
+          ],
+          objectReferences: [{ ref: 'artifact:report-1', kind: 'artifact', title: 'Report artifact' }],
+          executionUnits: [{ id: 'EU-1', tool: 'analysis.task', status: 'done', params: '{}' }],
+        }),
+      },
+    },
+  });
+
+  assert.deepEqual(response.uiManifest, []);
+  assert.equal(response.artifacts[0]?.data, '# Report');
+  assert.equal(response.message.objectReferences?.find((reference) => reference.ref === 'artifact:report-1')?.preferredView, undefined);
+  assert.equal(response.message.objectReferences?.find((reference) => reference.ref === 'artifact:papers')?.preferredView, undefined);
+});

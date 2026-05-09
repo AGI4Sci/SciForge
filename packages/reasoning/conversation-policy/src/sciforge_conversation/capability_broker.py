@@ -1,8 +1,8 @@
-"""Capability broker for compact, auditable SciForge capability briefs.
+"""Compatibility helpers for compact SciForge capability briefs.
 
-The broker is intentionally deterministic and dependency-free. It reads small
-capability manifests, scores them against the current prompt/goal/refs/scenario,
-then returns a bounded brief instead of exposing the full registry to the agent.
+Runtime selection now lives in ``src/runtime/capability-broker.ts``. This
+module remains for Python callers that still import the historical
+``build_capability_brief`` API and need the legacy response envelope.
 """
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
-import re
 from typing import Any, Iterable, Literal, Mapping, Sequence
 
 
@@ -18,9 +17,6 @@ CapabilityKind = Literal["skill", "tool", "sense", "action", "verifier", "ui-com
 InternalAgentMode = Literal["none", "optional", "required"]
 
 _VALID_KINDS: set[str] = {"skill", "tool", "sense", "action", "verifier", "ui-component"}
-_RISK_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
-_COST_RANK = {"free": 0, "low": 1, "medium": 2, "variable": 2, "high": 3}
-_LATENCY_RANK = {"instant": 0, "interactive": 1, "batch": 2, "slow": 3, "variable": 2}
 _DEFAULT_KIND_LIMITS = {
     "skill": 3,
     "tool": 5,
@@ -29,7 +25,6 @@ _DEFAULT_KIND_LIMITS = {
     "verifier": 2,
     "ui-component": 3,
 }
-_TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9_.:/+-]*", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -62,13 +57,7 @@ class ScoredCapability:
 
 
 def load_capability_manifests(paths: str | Path | Sequence[str | Path]) -> list[dict[str, Any]]:
-    """Load JSON capability manifests from files or directories.
-
-    Directories are searched recursively for ``*.manifest.json`` and
-    ``manifest.json`` files. Invalid JSON files raise ``ValueError`` with the
-    path, while non-object JSON payloads are ignored because they cannot be
-    capability manifests.
-    """
+    """Load JSON manifest files from paths while preserving their payloads."""
 
     if isinstance(paths, (str, Path)):
         path_list: Sequence[str | Path] = [paths]
@@ -110,102 +99,71 @@ def build_capability_brief(
     *,
     kind_limits: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
-    """Return a compact capability brief with selected, excluded, and audit data."""
+    """Return the legacy Python envelope for already-discovered capabilities."""
 
     req = _coerce_request(request)
+    if isinstance(request, Mapping):
+        bridged = _from_runtime_output(request, req)
+        if bridged is not None:
+            return bridged
+
     limits = {**_DEFAULT_KIND_LIMITS, **dict(kind_limits or {})}
+    selected: list[dict[str, Any]] = []
+    excluded: list[dict[str, str]] = []
     audit: list[dict[str, Any]] = []
-    excluded_by_id: dict[str, str] = {}
-    scored: list[ScoredCapability] = []
-
-    for index, manifest in enumerate(manifests):
-        normalized, validation_reason = _normalize_manifest(manifest, index)
-        capability_id = _text(normalized.get("id")) or f"capability:{index}"
-        if validation_reason:
-            excluded_by_id[capability_id] = validation_reason
-            audit.append(_audit_entry(capability_id, 0, [], [validation_reason], excluded=True))
-            continue
-
-        exclusion = _hard_exclusion_reason(req, normalized)
-        scored_capability = _score_manifest(req, normalized)
-        if exclusion:
-            excluded_by_id[capability_id] = exclusion
-            audit.append(
-                _audit_entry(
-                    capability_id,
-                    scored_capability.score,
-                    scored_capability.reasons,
-                    [*scored_capability.penalties, exclusion],
-                    excluded=True,
-                )
-            )
-            continue
-
-        scored.append(scored_capability)
-        audit.append(
-            _audit_entry(
-                capability_id,
-                scored_capability.score,
-                scored_capability.reasons,
-                scored_capability.penalties,
-                excluded=False,
-            )
-        )
-
-    scored.sort(key=lambda item: (-item.score, _text(item.manifest.get("kind")), _text(item.manifest.get("id"))))
-    selected_scored: list[ScoredCapability] = []
-    selected_ids: set[str] = set()
     selected_by_kind: dict[str, int] = {}
-
-    for item in scored:
-        capability_id = _text(item.manifest.get("id"))
-        kind = _text(item.manifest.get("kind"))
-        explicit = capability_id in set(req.explicit_capability_ids)
-        if len(selected_scored) >= max(0, req.top_k) and not explicit:
-            excluded_by_id.setdefault(capability_id, "outside top-k after scoring")
-            continue
-        if selected_by_kind.get(kind, 0) >= limits.get(kind, 0) and not explicit:
-            excluded_by_id.setdefault(capability_id, f"{kind} kind limit reached")
-            continue
-        if item.score <= 0 and not explicit:
-            excluded_by_id.setdefault(capability_id, "insufficient relevance to prompt, goal, refs, or scenario")
-            continue
-        selected_scored.append(item)
-        selected_ids.add(capability_id)
-        selected_by_kind[kind] = selected_by_kind.get(kind, 0) + 1
-
-    for item in scored:
-        capability_id = _text(item.manifest.get("id"))
-        if capability_id not in selected_ids:
-            excluded_by_id.setdefault(capability_id, "outside selected candidate set")
-
-    selected = [_compact_summary(item.manifest, item.reasons, item.score) for item in selected_scored]
-    excluded = [
-        {"id": capability_id, "reason": reason}
-        for capability_id, reason in sorted(excluded_by_id.items(), key=lambda item: item[0])
-        if capability_id not in selected_ids
+    explicit_ids = set(req.explicit_capability_ids)
+    normalized_items = [
+        (index, *_normalize_manifest(manifest, index))
+        for index, manifest in enumerate(manifests)
     ]
 
-    intent = _infer_intent(req, selected)
-    selected_by_output_kind = _group_selected(selected)
-    verification_policy = _verification_policy(req, selected)
-    brief = {
+    def selection_key(item: tuple[int, dict[str, Any], str | None]) -> tuple[int, int]:
+        index, manifest, _reason = item
+        capability_id = _text(manifest.get("id"))
+        return (0 if capability_id in explicit_ids else 1, index)
+
+    for _index, manifest, validation_reason in sorted(normalized_items, key=selection_key):
+        capability_id = _text(manifest.get("id")) or f"capability:{len(audit)}"
+        if validation_reason:
+            excluded.append({"id": capability_id, "reason": validation_reason})
+            audit.append(_audit_entry(capability_id, [], [validation_reason], excluded=True))
+            continue
+
+        kind = _text(manifest.get("kind"))
+        explicit = capability_id in explicit_ids
+        if len(selected) >= max(0, req.top_k) and not explicit:
+            excluded.append({"id": capability_id, "reason": "outside compatibility top-k"})
+            audit.append(_audit_entry(capability_id, [], ["outside compatibility top-k"], excluded=True))
+            continue
+        if selected_by_kind.get(kind, 0) >= limits.get(kind, 0) and not explicit:
+            excluded.append({"id": capability_id, "reason": f"{kind} kind limit reached"})
+            audit.append(_audit_entry(capability_id, [], [f"{kind} kind limit reached"], excluded=True))
+            continue
+
+        why = "explicit capability id requested" if explicit else "provided by request capability list"
+        summary = _compact_summary(manifest, why)
+        selected.append(summary)
+        selected_by_kind[kind] = selected_by_kind.get(kind, 0) + 1
+        audit.append(_audit_entry(capability_id, [summary["why"]], [], excluded=False))
+
+    selected_groups = _group_selected(selected)
+    return {
         "schemaVersion": 1,
-        "intent": intent,
+        "intent": _intent(req, selected),
         "selected": selected,
-        "excluded": excluded,
-        "excludedCapabilities": excluded,
+        "excluded": sorted(excluded, key=lambda item: item["id"]),
+        "excludedCapabilities": sorted(excluded, key=lambda item: item["id"]),
         "auditTrace": sorted(audit, key=lambda item: item["id"]),
         "needsMoreDiscovery": len(selected) == 0 and len(list(manifests)) == 0,
-        "verificationPolicy": verification_policy,
+        "verificationPolicy": _verification_policy(selected),
         "invocationBudget": {
             "maxCandidates": req.top_k,
             "maxDocsToLoad": req.max_docs_to_load,
             "maxContextTokens": req.max_context_tokens,
         },
-        **selected_by_output_kind,
+        **selected_groups,
     }
-    return brief
 
 
 def select_capabilities(
@@ -214,7 +172,7 @@ def select_capabilities(
     *,
     kind_limits: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
-    """Compatibility alias for callers that name the service as a selector."""
+    """Compatibility alias for callers that use the old selector name."""
 
     return build_capability_brief(request, manifests, kind_limits=kind_limits)
 
@@ -224,12 +182,55 @@ def broker_capabilities(
     manifest_paths: str | Path | Sequence[str | Path] | None = None,
     manifests: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Load manifests when paths are provided and build the broker brief."""
+    """Load manifests when requested and return the compatibility envelope."""
 
     loaded = list(manifests or [])
     if manifest_paths is not None:
         loaded.extend(load_capability_manifests(manifest_paths))
     return build_capability_brief(request, loaded)
+
+
+def _from_runtime_output(payload: Mapping[str, Any], req: CapabilityRequest) -> dict[str, Any] | None:
+    if payload.get("contract") != "sciforge.capability-broker-output.v1":
+        return None
+    briefs = _mapping_list(payload.get("briefs"))
+    excluded = [
+        {"id": _text(item.get("id")), "reason": _text(item.get("reason"))}
+        for item in _mapping_list(payload.get("excluded"))
+        if _text(item.get("id"))
+    ]
+    selected = [_compact_summary(brief, _text(brief.get("matchedSignals")) or "selected by runtime") for brief in briefs]
+    audit = []
+    for item in _mapping_list(payload.get("audit")):
+        capability_id = _text(item.get("id"))
+        if not capability_id:
+            continue
+        excluded_reason = _text(item.get("excluded"))
+        audit.append(
+            _audit_entry(
+                capability_id,
+                _list(item.get("matchedSignals")),
+                [*_list(item.get("penalties")), *([excluded_reason] if excluded_reason else [])],
+                excluded=bool(excluded_reason),
+                score=_float(item.get("score")),
+            )
+        )
+    return {
+        "schemaVersion": 1,
+        "intent": _intent(req, selected),
+        "selected": selected,
+        "excluded": sorted(excluded, key=lambda item: item["id"]),
+        "excludedCapabilities": sorted(excluded, key=lambda item: item["id"]),
+        "auditTrace": sorted(audit, key=lambda item: item["id"]),
+        "needsMoreDiscovery": len(selected) == 0,
+        "verificationPolicy": _verification_policy(selected),
+        "invocationBudget": {
+            "maxCandidates": req.top_k,
+            "maxDocsToLoad": req.max_docs_to_load,
+            "maxContextTokens": req.max_context_tokens,
+        },
+        **_group_selected(selected),
+    }
 
 
 def _coerce_request(request: CapabilityRequest | Mapping[str, Any]) -> CapabilityRequest:
@@ -264,169 +265,25 @@ def _normalize_manifest(manifest: Mapping[str, Any], index: int) -> tuple[dict[s
     if not kind:
         return normalized, f"{capability_id} has unsupported or missing kind"
     normalized["kind"] = kind
-    normalized["summary"] = _text(
-        normalized.get("summary")
-        or normalized.get("description")
-        or normalized.get("title")
-        or capability_id
-    )
-    normalized["domain"] = _list(normalized.get("domain", normalized.get("domains")))
-    normalized["triggers"] = _unique([
-        *_list(normalized.get("triggers")),
-        *_list(normalized.get("keywords")),
-    ])
-    normalized["antiTriggers"] = _list(normalized.get("antiTriggers", normalized.get("anti_triggers")))
-    normalized["artifacts"] = _unique([
-        *_list(normalized.get("artifacts", normalized.get("expectedArtifacts"))),
-        *_list(normalized.get("outputTypes")),
-    ])
-    normalized["risk"] = _list(normalized.get("risk"))
-    normalized["sideEffects"] = _list(normalized.get("sideEffects", normalized.get("side_effects")))
-    normalized["modalities"] = _list(normalized.get("modalities"))
-    normalized["requiredConfig"] = _list(normalized.get("requiredConfig", normalized.get("required_config")))
-    normalized["allowedOperations"] = _list(normalized.get("allowedOperations", normalized.get("operations")))
-    normalized["successRate"] = _float(normalized.get("successRate", normalized.get("historicalSuccessRate")), default=None)
     return normalized, None
 
 
-def _score_manifest(req: CapabilityRequest, manifest: Mapping[str, Any]) -> ScoredCapability:
-    text = " ".join(
-        [
-            req.prompt,
-            req.goal,
-            req.scenario,
-            req.task_type,
-            " ".join(_ref_text(ref) for ref in req.refs),
-            " ".join(req.expected_artifacts),
-            " ".join(req.modalities),
-        ]
-    )
-    request_tokens = _tokens(text)
-    capability_id = _text(manifest.get("id"))
-    reasons: list[str] = []
-    penalties: list[str] = []
-    score = 0.0
-
-    if capability_id in set(req.explicit_capability_ids):
-        score += 100
-        reasons.append("explicit capability id requested")
-
-    trigger_matches = _matches(request_tokens, _list(manifest.get("triggers")))
-    if trigger_matches:
-        score += 9 * len(trigger_matches)
-        reasons.append(f"trigger match: {', '.join(trigger_matches[:4])}")
-
-    domain_matches = _matches(request_tokens, _list(manifest.get("domain")))
-    if domain_matches:
-        score += 5 * len(domain_matches)
-        reasons.append(f"domain match: {', '.join(domain_matches[:4])}")
-
-    artifact_matches = _matches(request_tokens, _list(manifest.get("artifacts")))
-    if artifact_matches:
-        score += 4 * len(artifact_matches)
-        reasons.append(f"artifact match: {', '.join(artifact_matches[:4])}")
-
-    modality_matches = _matches(request_tokens, _list(manifest.get("modalities")))
-    if modality_matches:
-        score += 4 * len(modality_matches)
-        reasons.append(f"modality match: {', '.join(modality_matches[:4])}")
-
-    summary_matches = _summary_matches(request_tokens, manifest)
-    if summary_matches:
-        score += min(8, 2 * len(summary_matches))
-        reasons.append(f"summary match: {', '.join(summary_matches[:4])}")
-
-    ref_matches = _ref_matches(req.refs, manifest)
-    if ref_matches:
-        score += 12 * len(ref_matches)
-        reasons.append(f"ref match: {', '.join(ref_matches[:3])}")
-
-    history_delta = _history_delta(req.history, capability_id)
-    if history_delta > 0:
-        score += history_delta
-        reasons.append("positive history signal")
-    elif history_delta < 0:
-        score += history_delta
-        penalties.append("negative history signal")
-
-    success_rate = _float(manifest.get("successRate"), default=None)
-    if success_rate is not None:
-        if success_rate >= 0.85:
-            score += 4
-            reasons.append("strong validation history")
-        elif success_rate < 0.5:
-            score -= 4
-            penalties.append("weak validation history")
-
-    cost_penalty = max(0, _rank(_text(manifest.get("cost")), _COST_RANK) - _rank(req.cost_budget, _COST_RANK))
-    latency_penalty = max(0, _rank(_text(manifest.get("latency")), _LATENCY_RANK) - _rank(req.latency_budget, _LATENCY_RANK))
-    if cost_penalty:
-        score -= cost_penalty * 3
-        penalties.append("cost exceeds preferred budget")
-    if latency_penalty:
-        score -= latency_penalty * 2
-        penalties.append("latency exceeds preferred budget")
-
-    risk_level = _manifest_risk_level(manifest)
-    if risk_level in {"high", "critical"}:
-        score -= 2
-        penalties.append(f"{risk_level} risk capability")
-
-    anti_matches = _matches(request_tokens, _list(manifest.get("antiTriggers")))
-    if anti_matches:
-        score -= 25 * len(anti_matches)
-        penalties.append(f"anti-trigger match: {', '.join(anti_matches[:4])}")
-
-    if not reasons:
-        reasons.append("no strong request match")
-    return ScoredCapability(manifest=manifest, score=round(score, 3), reasons=tuple(reasons), penalties=tuple(penalties))
-
-
-def _hard_exclusion_reason(req: CapabilityRequest, manifest: Mapping[str, Any]) -> str | None:
-    capability_id = _text(manifest.get("id"))
-    if capability_id in set(req.explicit_capability_ids):
-        return None
-
-    request_tokens = _tokens(
-        " ".join([req.prompt, req.goal, req.scenario, req.task_type, " ".join(_ref_text(ref) for ref in req.refs)])
-    )
-    anti_matches = _matches(request_tokens, _list(manifest.get("antiTriggers")))
-    if anti_matches:
-        return f"anti-trigger matched: {', '.join(anti_matches[:4])}"
-
-    missing_config = [key for key in _list(manifest.get("requiredConfig")) if not req.available_config.get(key)]
-    if missing_config:
-        return f"missing required config: {', '.join(missing_config)}"
-
-    risk_level = _manifest_risk_level(manifest)
-    if _rank(risk_level, _RISK_RANK) > _rank(req.risk_tolerance, _RISK_RANK):
-        return f"risk {risk_level} exceeds tolerance {req.risk_tolerance}"
-
-    high_risk_side_effects = {"delete", "payment", "publish", "send-message", "modify-credentials", "external-write"}
-    if not req.approval_granted and high_risk_side_effects.intersection(_tokens(" ".join(_list(manifest.get("sideEffects"))))):
-        return "high-risk side effect requires explicit approval"
-
-    cost = _text(manifest.get("cost"))
-    if _rank(cost, _COST_RANK) > _rank(req.cost_budget, _COST_RANK) + 1:
-        return f"cost {cost or 'unknown'} exceeds budget {req.cost_budget}"
-
-    return None
-
-
-def _compact_summary(manifest: Mapping[str, Any], reasons: Sequence[str], score: float) -> dict[str, Any]:
+def _compact_summary(manifest: Mapping[str, Any], why: str) -> dict[str, Any]:
+    domains = _list(manifest.get("domain", manifest.get("domains")))
+    artifacts = _list(manifest.get("artifacts", manifest.get("expectedArtifacts", manifest.get("outputTypes"))))
     summary = {
         "id": _text(manifest.get("id")),
-        "kind": _text(manifest.get("kind")),
-        "summary": _truncate(_text(manifest.get("summary", manifest.get("description"))), 180),
-        "why": _truncate("; ".join(reasons), 220),
-        "score": score,
-        "domains": _list(manifest.get("domain"))[:5],
-        "allowedOperations": _list(manifest.get("allowedOperations"))[:6],
-        "expectedArtifacts": _list(manifest.get("artifacts"))[:6],
+        "kind": _normalize_kind(manifest.get("kind")) or _text(manifest.get("kind")),
+        "summary": _truncate(_text(manifest.get("summary") or manifest.get("brief") or manifest.get("description") or manifest.get("title")), 180),
+        "why": _truncate(why, 220),
+        "score": _float(manifest.get("score")),
+        "domains": domains[:5],
+        "allowedOperations": _list(manifest.get("allowedOperations", manifest.get("operations")))[:6],
+        "expectedArtifacts": artifacts[:6],
         "cost": _text(manifest.get("cost")) or "unknown",
         "latency": _text(manifest.get("latency")) or "unknown",
-        "risk": _list(manifest.get("risk"))[:6],
-        "sideEffects": _list(manifest.get("sideEffects"))[:6],
+        "risk": _risk_list(manifest)[:6],
+        "sideEffects": _list(manifest.get("sideEffects", manifest.get("side_effects")))[:6],
         "adapter": _text(manifest.get("adapter")),
         "typedService": True,
     }
@@ -460,8 +317,8 @@ def _group_selected(selected: Sequence[Mapping[str, Any]]) -> dict[str, list[Map
     return groups
 
 
-def _infer_intent(req: CapabilityRequest, selected: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    domains = _unique([domain for item in selected for domain in _list(item.get("domains"))])
+def _intent(req: CapabilityRequest, selected: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    domains = _unique(domain for item in selected for domain in _list(item.get("domains")))
     artifact_types = _unique([*req.expected_artifacts, *[artifact for item in selected for artifact in _list(item.get("expectedArtifacts"))]])
     return {
         "domain": domains[0] if domains else "general",
@@ -473,26 +330,22 @@ def _infer_intent(req: CapabilityRequest, selected: Sequence[Mapping[str, Any]])
     }
 
 
-def _verification_policy(req: CapabilityRequest, selected: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def _verification_policy(selected: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     has_verifier = any(item.get("kind") == "verifier" for item in selected)
-    selected_risk = max((_manifest_summary_risk(item) for item in selected), default=0)
-    if selected_risk >= _RISK_RANK["high"]:
-        mode = "hybrid" if has_verifier else "human"
-        return {"required": True, "mode": mode, "reason": "high-risk capability path requires verification"}
     if has_verifier:
         return {"required": True, "mode": "automatic", "reason": "selected verifier can validate expected artifacts"}
     if selected:
-        return {"required": False, "mode": "lightweight", "reason": "low/medium risk selected capabilities"}
+        return {"required": False, "mode": "lightweight", "reason": "selected capabilities provided by runtime or request"}
     return {"required": False, "mode": "none", "reason": "no capability selected"}
 
 
 def _audit_entry(
     capability_id: str,
-    score: float,
     reasons: Sequence[str],
     penalties: Sequence[str],
     *,
     excluded: bool,
+    score: float = 0,
 ) -> dict[str, Any]:
     return {
         "id": capability_id,
@@ -505,37 +358,17 @@ def _audit_entry(
 
 def _normalize_kind(value: Any) -> str:
     kind = _text(value).lower()
-    aliases = {"ui": "ui-component", "component": "ui-component", "actions": "action", "skills": "skill"}
+    aliases = {
+        "ui": "ui-component",
+        "component": "ui-component",
+        "view": "ui-component",
+        "observe": "sense",
+        "actions": "action",
+        "skills": "skill",
+        "runtime-adapter": "tool",
+    }
     kind = aliases.get(kind, kind)
     return kind if kind in _VALID_KINDS else ""
-
-
-def _manifest_risk_level(manifest: Mapping[str, Any]) -> str:
-    explicit = _text(manifest.get("riskLevel", manifest.get("risk_level"))).lower()
-    if explicit in _RISK_RANK:
-        return explicit
-    risk_tokens = _tokens(" ".join(_list(manifest.get("risk")) + _list(manifest.get("sideEffects"))))
-    if risk_tokens.intersection({"delete", "payment", "publish", "credential", "credentials", "external-write"}):
-        return "high"
-    if risk_tokens.intersection({"network", "writes-workspace", "write", "download-files", "gui"}):
-        return "medium"
-    if risk_tokens:
-        return "low"
-    return "low"
-
-
-def _manifest_summary_risk(summary: Mapping[str, Any]) -> int:
-    risk_level = _text(summary.get("riskLevel")).lower()
-    if risk_level in _RISK_RANK:
-        return _RISK_RANK[risk_level]
-    risk_tokens = _tokens(" ".join(_list(summary.get("risk")) + _list(summary.get("sideEffects"))))
-    if risk_tokens.intersection({"delete", "payment", "publish", "credential", "credentials", "external-write"}):
-        return _RISK_RANK["high"]
-    if risk_tokens.intersection({"network", "writes-workspace", "write", "download-files", "gui"}):
-        return _RISK_RANK["medium"]
-    if risk_tokens:
-        return _RISK_RANK["low"]
-    return _RISK_RANK["low"]
 
 
 def _internal_agent_mode(manifest: Mapping[str, Any]) -> InternalAgentMode:
@@ -546,85 +379,17 @@ def _internal_agent_mode(manifest: Mapping[str, Any]) -> InternalAgentMode:
     return value if value in {"optional", "required"} else "none"
 
 
-def _matches(request_tokens: set[str], candidates: Sequence[str]) -> list[str]:
-    matches: list[str] = []
-    for candidate in candidates:
-        candidate_tokens = _tokens(candidate)
-        if not candidate_tokens:
-            continue
-        if candidate_tokens.issubset(request_tokens) or candidate.lower() in request_tokens:
-            matches.append(candidate)
-        elif candidate_tokens.intersection(request_tokens) and any(len(token) >= 5 for token in candidate_tokens):
-            matches.append(candidate)
-    return _unique(matches)
+def _risk_list(manifest: Mapping[str, Any]) -> list[str]:
+    safety = manifest.get("safety")
+    if isinstance(safety, Mapping):
+        return _list(safety.get("risk"))
+    return _list(manifest.get("risk", manifest.get("riskLevel", manifest.get("risk_level"))))
 
 
-def _summary_matches(request_tokens: set[str], manifest: Mapping[str, Any]) -> list[str]:
-    summary_text = " ".join(
-        [
-            _text(manifest.get("id")),
-            _text(manifest.get("summary")),
-            _text(manifest.get("description")),
-            _text(manifest.get("adapter")),
-        ]
-    )
-    stop_words = {"the", "and", "for", "with", "into", "from", "that", "this", "task", "agent"}
-    return sorted(token for token in _tokens(summary_text).intersection(request_tokens) if len(token) > 3 and token not in stop_words)
-
-
-def _ref_matches(refs: Sequence[str | Mapping[str, Any]], manifest: Mapping[str, Any]) -> list[str]:
-    haystack = _tokens(
-        " ".join(
-            [
-                _text(manifest.get("id")),
-                " ".join(_list(manifest.get("artifacts"))),
-                " ".join(_list(manifest.get("domain"))),
-                " ".join(_list(manifest.get("triggers"))),
-            ]
-        )
-    )
-    matches: list[str] = []
-    for ref in refs:
-        ref_text = _ref_text(ref)
-        ref_tokens = _tokens(ref_text)
-        if ref_tokens.intersection(haystack):
-            matches.append(_truncate(ref_text, 60))
-    return _unique(matches)
-
-
-def _history_delta(history: Mapping[str, Any], capability_id: str) -> float:
-    if not capability_id:
-        return 0
-    raw = history.get(capability_id)
-    if isinstance(raw, Mapping):
-        successes = _float(raw.get("successes"), default=0) or 0
-        failures = _float(raw.get("failures"), default=0) or 0
-        return min(6, successes * 1.5) - min(8, failures * 2)
-    if isinstance(raw, (int, float)):
-        return max(-8, min(6, float(raw)))
-    return 0
-
-
-def _rank(value: str, ranks: Mapping[str, int]) -> int:
-    normalized = _text(value).lower()
-    if not normalized:
-        return 0
-    return ranks.get(normalized, max(ranks.values()))
-
-
-def _tokens(value: str) -> set[str]:
-    normalized = value.lower().replace("_", "-")
-    tokens = set(_TOKEN_RE.findall(normalized))
-    expanded: set[str] = set(tokens)
-    for token in tokens:
-        expanded.update(part for part in re.split(r"[-_./:]+", token) if part)
-    return expanded
-
-
-def _ref_text(ref: str | Mapping[str, Any]) -> str:
-    if isinstance(ref, Mapping):
-        return " ".join(_text(ref.get(key)) for key in ("id", "ref", "type", "title", "summary", "path", "artifactType"))
-    return _text(ref)
+def _mapping_list(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, Iterable) or isinstance(value, (str, bytes, Mapping)):
+        return []
+    return [item for item in value if isinstance(item, Mapping)]
 
 
 def _list(value: Any) -> list[str]:
@@ -657,7 +422,7 @@ def _text(value: Any) -> str:
     return str(value).strip()
 
 
-def _float(value: Any, *, default: float | None = 0) -> float | None:
+def _float(value: Any, *, default: float = 0) -> float:
     try:
         if value is None or value == "":
             return default
@@ -670,7 +435,7 @@ def _truncate(value: str, limit: int) -> str:
     text = value.strip()
     if len(text) <= limit:
         return text
-    return text[: max(0, limit - 1)].rstrip() + "…"
+    return text[: max(0, limit - 1)].rstrip() + "..."
 
 
 __all__ = [

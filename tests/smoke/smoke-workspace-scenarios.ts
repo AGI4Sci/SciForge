@@ -6,8 +6,8 @@ import { join } from 'node:path';
 
 import { maybeWriteSkillPromotionProposal } from '../../src/runtime/skill-promotion.js';
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types.js';
-import { buildBuiltInScenarioPackage } from '../../src/ui/src/scenarioCompiler/scenarioPackage';
-import { buildScenarioQualityReport } from '../../src/ui/src/scenarioCompiler/scenarioQualityGate';
+import { buildBuiltInScenarioPackage } from '@sciforge/scenario-core/scenario-package';
+import { buildScenarioQualityReport } from '@sciforge/scenario-core/scenario-quality-gate';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-scenarios-'));
 const port = 19080 + Math.floor(Math.random() * 1000);

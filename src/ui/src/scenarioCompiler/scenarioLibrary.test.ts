@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { buildBuiltInScenarioPackage } from './scenarioPackage';
 import {
   buildScenarioLibraryState,
   promoteReusableTaskCandidate,
   promoteViewPresetCandidate,
   rejectViewPresetCandidate,
   type ScenarioLibraryState,
-} from './scenarioLibrary';
+} from '@sciforge/scenario-core/scenario-library';
+import { buildBuiltInScenarioPackage } from '@sciforge/scenario-core/scenario-package';
 
 describe('scenario library promotion workflow', () => {
   it('builds library state and promotes view preset candidates', () => {

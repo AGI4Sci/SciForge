@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 
 import {
   brokerCapabilities,
+  brokerCapabilitiesForRequestShape,
+  capabilityBrokerInputFromRequestShape,
   CapabilityManifestRegistry,
 } from '../../src/runtime/capability-broker.js';
 import {
@@ -121,6 +123,37 @@ assert.equal(schemaExpansion.providers?.[0]?.id, 'verifier.schema.provider');
 assert.throws(
   () => new CapabilityManifestRegistry([manifests[0]!, { ...manifests[0]! }]),
   /Duplicate capability manifest id/,
+);
+
+const requestShapedInput = capabilityBrokerInputFromRequestShape({
+  prompt: 'Read an artifact report and validate the schema.',
+  goal: 'Render markdown for the current workspace.',
+  refs: ['artifact:report-1'],
+  scenario: 'literature-review',
+  expectedArtifacts: ['markdown'],
+  topK: 2,
+  riskTolerance: 'medium',
+  explicitCapabilityIds: ['view.report'],
+  availableProviders: ['runtime.artifact-read.provider', 'view.report.provider', 'verifier.schema.provider'],
+});
+assert.equal(requestShapedInput.objectRefs?.[0]?.ref, 'artifact:report-1');
+assert.equal(requestShapedInput.scenarioPolicy?.preferredCapabilityIds?.[0], 'view.report');
+assert.equal(requestShapedInput.artifactIndex?.[0]?.artifactType, 'markdown');
+
+const requestShapedBrokered = brokerCapabilitiesForRequestShape({
+  prompt: 'Read an artifact report and validate the schema.',
+  goal: 'Render markdown for the current workspace.',
+  refs: ['artifact:report-1'],
+  scenario: 'literature-review',
+  expectedArtifacts: ['markdown'],
+  topK: 2,
+  riskTolerance: 'medium',
+  explicitCapabilityIds: ['view.report'],
+  availableProviders: ['runtime.artifact-read.provider', 'view.report.provider', 'verifier.schema.provider'],
+}, registry);
+assert.deepEqual(
+  requestShapedBrokered.briefs.map((brief) => brief.id),
+  ['view.report', 'runtime.artifact-read'],
 );
 
 console.log('[ok] capability broker returns compact briefs and expands selected manifests on demand');

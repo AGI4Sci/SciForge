@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
-import { compileScenarioIRFromSelection } from '../../src/ui/src/scenarioCompiler/scenarioElementCompiler';
-import { runScenarioRuntimeSmoke } from '../../src/ui/src/scenarioCompiler/runtimeSmoke';
+import { compileScenarioIRFromSelection } from '@sciforge/scenario-core/scenario-element-compiler';
+import { runScenarioRuntimeSmoke } from '@sciforge/scenario-core/runtime-smoke';
 
 const stableSeed = compileScenarioIRFromSelection({
   id: 'stable-literature-offline',

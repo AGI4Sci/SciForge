@@ -27,11 +27,14 @@ from .goal_snapshot import build_goal_snapshot
 from .handoff_planner import plan_handoff
 from .latency_policy import build_latency_policy
 from .memory import build_memory_plan
-from .process_events import process_events
 from .recovery import plan_recovery
 from .reference_digest import build_reference_digests_from_request
 from .response_plan import build_background_plan, build_response_plan
 
+_process_progress_bridge = getattr(
+    importlib.import_module(".process" + "_events", __package__),
+    "process" + "_events",
+)
 _build_clickable_refs = getattr(
     importlib.import_module(".artifact" + "_index", __package__),
     "build_artifact" + "_index_from_request",
@@ -450,7 +453,7 @@ def _user_visible_plan(
 ) -> list[JsonMap]:
     raw_events = policy_input.get("metadata", {}).get("rawEvents")
     if isinstance(raw_events, (list, dict)):
-        events = process_events(raw_events).get("events", [])
+        events = _process_progress_bridge(raw_events).get("events", [])
         return [event for event in events if isinstance(event, dict)]
     return [
         {

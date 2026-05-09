@@ -11,7 +11,7 @@ from sciforge_conversation.capability_broker import (
 FIXTURES = Path(__file__).parent / "fixtures" / "capability_manifests"
 
 
-def test_loads_manifest_directory_and_selects_top_relevant_capabilities():
+def test_loads_manifest_directory_and_builds_legacy_envelope():
     manifests = load_capability_manifests(FIXTURES)
 
     brief = build_capability_brief(
@@ -40,9 +40,9 @@ def test_loads_manifest_directory_and_selects_top_relevant_capabilities():
     assert selected["expectedArtifacts"] == ["research-report.md", "papers.json"]
 
     excluded = {item["id"]: item["reason"] for item in brief["excluded"]}
-    assert excluded["action.workspace.delete"] == "risk high exceeds tolerance medium"
-    assert excluded["ui.table.viewer"] == "anti-trigger matched: not needed until structured table artifact exists"
-    assert "sense.vision.gui" in excluded
+    assert excluded["action.workspace.delete"] == "outside compatibility top-k"
+    assert excluded["ui.table.viewer"] == "outside compatibility top-k"
+    assert excluded["sense.vision.gui"] == "outside compatibility top-k"
     assert any(entry["id"] == "literature.arxiv.search" and not entry["excluded"] for entry in brief["auditTrace"])
 
 
@@ -104,18 +104,59 @@ def test_explicit_capability_id_can_override_relevance_and_kind_limit():
     assert brief["selected"][0]["why"] == "explicit capability id requested"
 
 
-def test_missing_config_and_invalid_manifest_are_audited_as_excluded():
+def test_invalid_manifest_shapes_are_audited_as_excluded():
     brief = build_capability_brief(
         {"prompt": "Search private assay database.", "availableConfig": {}},
         [
-            {"id": "tool.private.assay", "kind": "tool", "triggers": ["assay"], "requiredConfig": ["ASSAY_TOKEN"]},
             {"id": "broken.kind", "kind": "widget"},
             {"kind": "tool"},
         ],
     )
 
     excluded = {item["id"]: item["reason"] for item in brief["excluded"]}
-    assert excluded["tool.private.assay"] == "missing required config: ASSAY_TOKEN"
     assert excluded["broken.kind"] == "broken.kind has unsupported or missing kind"
-    assert excluded["capability:2"] == "manifest at index 2 is missing id"
-    assert len(brief["auditTrace"]) == 3
+    assert excluded["capability:1"] == "manifest at index 1 is missing id"
+    assert len(brief["auditTrace"]) == 2
+
+
+def test_runtime_output_is_formatted_for_legacy_callers():
+    brief = build_capability_brief(
+        {
+            "contract": "sciforge.capability-broker-output.v1",
+            "prompt": "Render and verify the report.",
+            "topK": 2,
+            "expectedArtifacts": ["research-report.md"],
+            "briefs": [
+                {
+                    "id": "view.report",
+                    "kind": "view",
+                    "brief": "Render report markdown artifacts.",
+                    "domains": ["presentation"],
+                    "sideEffects": ["none"],
+                    "score": 42,
+                    "matchedSignals": ["scenario preferred capability"],
+                },
+                {
+                    "id": "verifier.schema",
+                    "kind": "verifier",
+                    "brief": "Validate payloads against schema contracts.",
+                    "domains": ["workspace"],
+                    "sideEffects": ["none"],
+                    "score": 20,
+                    "matchedSignals": ["brief match: schema"],
+                },
+            ],
+            "excluded": [{"id": "action.publish", "reason": "blocked by scenario policy"}],
+            "audit": [
+                {"id": "view.report", "score": 42, "matchedSignals": ["scenario preferred capability"]},
+                {"id": "action.publish", "score": 1, "matchedSignals": [], "excluded": "blocked by scenario policy"},
+            ],
+        },
+        [],
+    )
+
+    assert [item["id"] for item in brief["selected"]] == ["view.report", "verifier.schema"]
+    assert brief["selectedComponents"][0]["id"] == "view.report"
+    assert brief["selectedVerifiers"][0]["id"] == "verifier.schema"
+    assert brief["excluded"] == [{"id": "action.publish", "reason": "blocked by scenario policy"}]
+    assert brief["verificationPolicy"]["mode"] == "automatic"

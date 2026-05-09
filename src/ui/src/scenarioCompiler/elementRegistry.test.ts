@@ -3,8 +3,8 @@ import { describe, it } from 'node:test';
 
 import { scenarios, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
-import { compileUIPlanForScenario } from './uiPlanCompiler';
-import { buildElementRegistry, validateElementRegistry } from './elementRegistry';
+import { buildElementRegistry, validateElementRegistry } from '@sciforge/scenario-core/element-registry';
+import { compileUIPlanForScenario } from '@sciforge/scenario-core/ui-plan-compiler';
 
 describe('element registry', () => {
   it('builds unique manifests for skills, artifacts, components, and policies', () => {

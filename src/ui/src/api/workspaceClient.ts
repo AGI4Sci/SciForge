@@ -10,8 +10,8 @@ import type {
   PreviewDerivative,
   RuntimeExecutionUnit,
 } from '../domain';
-import type { ScenarioLibraryState } from '../scenarioCompiler/scenarioLibrary';
-import type { ScenarioPackage } from '../scenarioCompiler/scenarioPackage';
+import type { ScenarioLibraryState } from '@sciforge/scenario-core/scenario-library';
+import type { ScenarioPackage } from '@sciforge/scenario-core/scenario-package';
 import { parseWorkspaceState } from '../sessionStore';
 import { defaultSciForgeConfig, normalizeConfig, normalizeWorkspaceRootPath } from '../config';
 import { SciForgeClientError, reasonFromResponseText, recoverActionsForService } from './clientError';

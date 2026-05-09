@@ -6,8 +6,8 @@ import { join } from 'node:path';
 
 import type { SciForgeSession } from '../../src/ui/src/domain';
 import { buildExecutionBundle, evaluateExecutionBundleExport } from '../../src/ui/src/exportPolicy';
-import { runScenarioRuntimeSmoke } from '../../src/ui/src/scenarioCompiler/runtimeSmoke';
-import { buildBuiltInScenarioPackage } from '../../src/ui/src/scenarioCompiler/scenarioPackage';
+import { runScenarioRuntimeSmoke } from '@sciforge/scenario-core/runtime-smoke';
+import { buildBuiltInScenarioPackage } from '@sciforge/scenario-core/scenario-package';
 
 const sourceWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-bundle-source-'));
 const targetWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-bundle-target-'));

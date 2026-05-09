@@ -2,6 +2,8 @@ import { readdir, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { SciForgeSkillDomain, GatewayRequest, SkillAvailability } from '../runtime-types.js';
 import { clipForAgentServerJson, clipForAgentServerPrompt, hashJson, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
+import { brokerCapabilities, CapabilityManifestRegistry as BrokerCapabilityManifestRegistry, type CapabilityBrokerArtifactIndexEntry, type CapabilityBrokerFailureHistoryEntry, type CapabilityBrokerObjectRef, type CapabilityBrokerOutput } from '../capability-broker.js';
+import { loadCoreCapabilityManifestRegistry } from '../capability-manifest-registry.js';
 import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from './gateway-request.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 
@@ -44,6 +46,7 @@ export function buildContextEnvelope(
       needsMoreDiscovery: true,
       reason: 'Python conversation policy did not provide a capability brief.',
     };
+  const capabilityBrokerBrief = buildCapabilityBrokerBriefForAgentServer(request);
   const visibleRecentConversation = recentConversation
     .slice(mode === 'full' ? -6 : -4)
     .map((entry) => clipForAgentServerPrompt(entry, mode === 'full' ? 900 : 700))
@@ -113,6 +116,7 @@ export function buildContextEnvelope(
       artifactPolicy: request.artifactPolicy ?? (isRecord(uiState.artifactPolicy) ? uiState.artifactPolicy : undefined),
       referencePolicy: request.referencePolicy ?? (isRecord(uiState.referencePolicy) ? uiState.referencePolicy : undefined),
       failureRecoveryPolicy,
+      capabilityBrokerBrief,
       capabilityBrief,
       verificationPolicy: request.verificationPolicy ?? capabilityBrief.verificationPolicy,
       humanApprovalPolicy: request.humanApprovalPolicy ?? (isRecord(uiState.humanApprovalPolicy) ? uiState.humanApprovalPolicy : undefined),
@@ -169,6 +173,151 @@ export function buildContextEnvelope(
       'For failure follow-ups, use sessionFacts.recentFailures and longTermRefs.failureEvidenceRefs before asking the user to repeat context.',
     ],
   };
+}
+
+export function buildCapabilityBrokerBriefForAgentServer(request: GatewayRequest) {
+  const registry = new BrokerCapabilityManifestRegistry(loadCoreCapabilityManifestRegistry().manifests);
+  const brokered = brokerCapabilities({
+    prompt: request.prompt,
+    objectRefs: brokerObjectRefsForRequest(request),
+    artifactIndex: brokerArtifactIndexForRequest(request),
+    failureHistory: brokerFailureHistoryForRequest(request),
+    scenarioPolicy: {
+      id: request.scenarioPackageRef?.id ?? request.skillDomain,
+      preferredCapabilityIds: preferredCapabilityIdsForRequest(request),
+      requiredTags: uniqueStrings([
+        request.skillDomain,
+        ...expectedArtifactTypesForRequest(request),
+        ...selectedComponentIdsForRequest(request),
+        ...(request.selectedToolIds ?? []),
+        ...toStringList(request.uiState?.selectedToolIds),
+        ...(request.selectedSenseIds ?? []),
+        ...toStringList(request.uiState?.selectedSenseIds),
+        ...(request.selectedVerifierIds ?? []),
+        ...toStringList(request.uiState?.selectedVerifierIds),
+      ]),
+    },
+    runtimePolicy: {
+      topK: 8,
+      maxPerKind: {
+        action: 3,
+        observe: 2,
+        'runtime-adapter': 3,
+        verifier: 2,
+        view: 2,
+      },
+      riskTolerance: request.riskLevel ?? 'medium',
+    },
+  }, registry);
+  return compactBrokerOutputForAgentServer(brokered);
+}
+
+function compactBrokerOutputForAgentServer(brokered: CapabilityBrokerOutput) {
+  return {
+    schemaVersion: 'sciforge.agentserver.capability-broker-brief.v1',
+    source: 'typescript-capability-broker',
+    contract: brokered.contract,
+    routingPolicy: {
+      decisionOwner: 'AgentServer',
+      contractExpansion: 'lazy-load selected schemas/examples/repair hints only when needed',
+      defaultPayload: 'compact briefs only; full capability catalog omitted',
+    },
+    briefs: brokered.briefs.map((brief) => clipForAgentServerJson(brief, 3)),
+    excluded: brokered.excluded.slice(0, 12),
+    audit: brokered.audit
+      .filter((entry) => brokered.briefs.some((brief) => brief.id === entry.id) || entry.excluded)
+      .slice(0, 16)
+      .map((entry) => clipForAgentServerJson(entry, 2)),
+    inputSummary: brokered.inputSummary,
+  };
+}
+
+function brokerObjectRefsForRequest(request: GatewayRequest): CapabilityBrokerObjectRef[] {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  return mergeBrokerRefs([
+    ...toRecordList(request.references),
+    ...toRecordList(uiState.currentReferences),
+    ...toRecordList(uiState.objectReferences),
+    ...toRecordList(uiState.currentReferenceDigests),
+  ]).slice(0, 24);
+}
+
+function brokerArtifactIndexForRequest(request: GatewayRequest): CapabilityBrokerArtifactIndexEntry[] {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  return [
+    ...request.artifacts.map((artifact) => brokerArtifactIndexEntry(artifact)),
+    ...toRecordList(uiState.artifactIndex).map((artifact) => brokerArtifactIndexEntry(artifact)),
+  ].filter((entry) => entry.id || entry.ref || entry.artifactType || entry.title || entry.summary || entry.path).slice(0, 32);
+}
+
+function brokerFailureHistoryForRequest(request: GatewayRequest): CapabilityBrokerFailureHistoryEntry[] {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const policy = request.failureRecoveryPolicy ?? (isRecord(uiState.failureRecoveryPolicy) ? uiState.failureRecoveryPolicy : undefined);
+  const failures = [
+    ...toRecordList(policy),
+    ...toRecordList(isRecord(policy) ? policy.attemptHistory : undefined),
+    ...toRecordList(uiState.recentVerificationResults),
+  ];
+  const entries: CapabilityBrokerFailureHistoryEntry[] = [];
+  for (const failure of failures) {
+    const capabilityId = stringField(failure.capabilityId) ?? stringField(failure.skillId) ?? stringField(failure.tool);
+    if (!capabilityId) continue;
+    const entry: CapabilityBrokerFailureHistoryEntry = {
+      capabilityId,
+      recoverActions: toStringList(failure.recoverActions).slice(0, 6),
+      refs: failureEvidenceRefs(failure),
+    };
+    const failureCode = stringField(failure.failureCode) ?? stringField(failure.code) ?? stringField(failure.verdict);
+    if (failureCode) entry.failureCode = failureCode;
+    entries.push(entry);
+  }
+  return entries.slice(-12);
+}
+
+function preferredCapabilityIdsForRequest(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const policy = isRecord(uiState.capabilityBrokerPolicy) ? uiState.capabilityBrokerPolicy : {};
+  return uniqueStrings([
+    ...toStringList(uiState.preferredCapabilityIds),
+    ...toStringList(policy.preferredCapabilityIds),
+  ]);
+}
+
+function mergeBrokerRefs(values: Array<Record<string, unknown>>): CapabilityBrokerObjectRef[] {
+  const seen = new Set<string>();
+  const out: CapabilityBrokerObjectRef[] = [];
+  for (const value of values) {
+    const ref = stringField(value.ref) ?? stringField(value.dataRef) ?? stringField(value.path);
+    const key = ref ?? stringField(value.id) ?? JSON.stringify(clipForAgentServerJson(value, 1));
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      id: stringField(value.id),
+      ref,
+      kind: stringField(value.kind) ?? stringField(value.type),
+      artifactType: stringField(value.artifactType) ?? stringField(value.type),
+      title: stringField(value.title) ?? stringField(value.name),
+      summary: stringField(value.summary) ?? stringField(value.description),
+      path: stringField(value.path),
+    });
+  }
+  return out;
+}
+
+function brokerArtifactIndexEntry(value: Record<string, unknown>): CapabilityBrokerArtifactIndexEntry {
+  return {
+    id: stringField(value.id),
+    ref: stringField(value.ref) ?? stringField(value.dataRef),
+    artifactType: stringField(value.artifactType) ?? stringField(value.type),
+    title: stringField(value.title) ?? stringField(value.name),
+    summary: stringField(value.summary) ?? stringField(value.description) ?? stringField(value.message),
+    path: stringField(value.path),
+    tags: toStringList(value.tags).slice(0, 8),
+  };
+}
+
+function uniqueStrings(values: unknown[]) {
+  return [...new Set(toStringList(values))];
 }
 
 function summarizeFailureRecoveryPolicy(value: unknown) {

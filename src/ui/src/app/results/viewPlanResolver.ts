@@ -1,4 +1,4 @@
-import { compileSlotsForScenario } from '../../scenarioCompiler/uiPlanCompiler';
+import { compileSlotsForScenario } from '@sciforge/scenario-core/ui-plan-compiler';
 import { uiModuleRegistry, type PresentationDedupeScope, type RuntimeUIModule } from '../../uiModuleRegistry';
 import type { DisplayIntent, ObjectReference, ResolvedViewPlan, RuntimeArtifact, ScenarioInstanceId, SciForgeRun, SciForgeSession, UIManifestSlot, ViewPlanSection } from '../../domain';
 import type { ScenarioId } from '../../data';

@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 
 import { scenarios, type ScenarioId } from '../../src/ui/src/data';
-import { runScenarioRuntimeSmoke } from '../../src/ui/src/scenarioCompiler/runtimeSmoke';
+import { runScenarioRuntimeSmoke } from '@sciforge/scenario-core/runtime-smoke';
 import {
   buildBuiltInScenarioPackage,
   findScenarioPackagePolicyOnlyViolations,
   SCENARIO_PACKAGE_POLICY_FIELDS,
-} from '../../src/ui/src/scenarioCompiler/scenarioPackage';
-import { validateScenarioPackage } from '../../src/ui/src/scenarioCompiler/validationGate';
+} from '@sciforge/scenario-core/scenario-package';
+import { validateScenarioPackage } from '@sciforge/scenario-core/validation-gate';
 
 const scenarioIds = scenarios.map((scenario) => scenario.id);
 

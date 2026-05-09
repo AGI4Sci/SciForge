@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { buildBuiltInScenarioPackage } from './scenarioPackage';
-import { buildScenarioQualityReport, diffScenarioPackages } from './scenarioQualityGate';
+import { buildBuiltInScenarioPackage } from '@sciforge/scenario-core/scenario-package';
+import { buildScenarioQualityReport, diffScenarioPackages } from '@sciforge/scenario-core/scenario-quality-gate';
 
 describe('scenario quality gate', () => {
   it('passes a valid built-in package without blocking items', () => {

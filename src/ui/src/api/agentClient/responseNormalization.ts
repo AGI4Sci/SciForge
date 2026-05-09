@@ -59,10 +59,6 @@ function extractJsonObject(text: string): Record<string, unknown> | undefined {
 function readableMessageFromStructured(structured: Record<string, unknown>, fallback: string) {
   const direct = asString(structured.message);
   if (direct && !looksLikeRawJson(direct)) return stripVerificationFooter(direct);
-  const report = reportMarkdownFromArtifacts(structured.artifacts);
-  if (report) return report;
-  const markdown = reportMarkdownFromPayload(structured);
-  if (markdown) return markdown;
   return stripVerificationFooter(direct || fallback);
 }
 
@@ -70,59 +66,6 @@ function stripVerificationFooter(value: string) {
   return value
     .replace(/\n{1,3}Verification:\s*(?:pass|fail|uncertain|needs-human|unverified)\b[^\n]*(?:\n[^\n]*)?$/i, '')
     .trim();
-}
-
-function reportMarkdownFromArtifacts(value: unknown) {
-  if (!Array.isArray(value)) return undefined;
-  for (const item of value) {
-    if (!isRecord(item) || item.type !== 'research-report') continue;
-    const markdown = reportMarkdownFromPayload(isRecord(item.data) ? item.data : item);
-    if (markdown) return markdown;
-  }
-  return undefined;
-}
-
-function reportMarkdownFromPayload(payload: Record<string, unknown>): string | undefined {
-  const nested = parseReportPayload(payload) ?? payload;
-  const direct = asString(nested.markdown) || asString(nested.report) || asString(nested.summary) || asString(nested.content);
-  if (direct && !looksLikeRawJson(direct)) return direct;
-  const sections = Array.isArray(nested.sections) ? nested.sections.filter(isRecord) : [];
-  if (sections.length) {
-    return sections.map((section, index) => {
-      const title = asString(section.title) || `Section ${index + 1}`;
-      const content = asString(section.content) || asString(section.markdown) || readableRecord(section);
-      return `## ${title}\n\n${content}`;
-    }).join('\n\n');
-  }
-  return undefined;
-}
-
-function parseReportPayload(payload: Record<string, unknown>) {
-  for (const key of ['data', 'content', 'report', 'result']) {
-    const value = payload[key];
-    if (isRecord(value)) return value;
-    if (typeof value !== 'string' || !value.trim().startsWith('{')) continue;
-    try {
-      const parsed = JSON.parse(value);
-      if (isRecord(parsed)) return isRecord(parsed.data) ? parsed.data : parsed;
-    } catch {
-      // Keep natural-language report strings unchanged.
-    }
-  }
-  return undefined;
-}
-
-function readableRecord(record: Record<string, unknown>) {
-  return Object.entries(record)
-    .filter(([key]) => key !== 'title')
-    .map(([key, value]) => {
-      if (typeof value === 'string') return `**${key}:** ${value}`;
-      if (Array.isArray(value)) return `**${key}:**\n${value.map((item) => `- ${typeof item === 'string' ? item : JSON.stringify(item)}`).join('\n')}`;
-      if (typeof value === 'number' || typeof value === 'boolean') return `**${key}:** ${String(value)}`;
-      return '';
-    })
-    .filter(Boolean)
-    .join('\n\n');
 }
 
 function looksLikeRawJson(value: string) {
@@ -309,19 +252,23 @@ export function normalizeAgentResponse(
       raw: normalizedRaw,
       objectReferences,
     },
-    uiManifest: Array.isArray(structured.uiManifest) ? structured.uiManifest.filter(isRecord).map((slot) => ({
-      componentId: asString(slot.componentId) || asString(slot.id) || 'paper-card-list',
-      title: asString(slot.title),
-      props: isRecord(slot.props) ? slot.props : undefined,
-      artifactRef: asString(slot.artifactRef),
-      priority: asNumber(slot.priority),
-      encoding: isRecord(slot.encoding) ? slot.encoding : undefined,
-      layout: isRecord(slot.layout) ? slot.layout : undefined,
-      selection: isRecord(slot.selection) ? slot.selection : undefined,
-      sync: isRecord(slot.sync) ? slot.sync : undefined,
-      transform: Array.isArray(slot.transform) ? slot.transform.filter(isViewTransform) : undefined,
-      compare: isRecord(slot.compare) ? slot.compare : undefined,
-    })) : [],
+    uiManifest: Array.isArray(structured.uiManifest) ? structured.uiManifest.filter(isRecord).flatMap((slot) => {
+      const componentId = asString(slot.componentId);
+      if (!componentId) return [];
+      return [{
+        componentId,
+        title: asString(slot.title),
+        props: isRecord(slot.props) ? slot.props : undefined,
+        artifactRef: asString(slot.artifactRef),
+        priority: asNumber(slot.priority),
+        encoding: isRecord(slot.encoding) ? slot.encoding : undefined,
+        layout: isRecord(slot.layout) ? slot.layout : undefined,
+        selection: isRecord(slot.selection) ? slot.selection : undefined,
+        sync: isRecord(slot.sync) ? slot.sync : undefined,
+        transform: Array.isArray(slot.transform) ? slot.transform.filter(isViewTransform) : undefined,
+        compare: isRecord(slot.compare) ? slot.compare : undefined,
+      }];
+    }) : [],
     claims,
     executionUnits: normalizeExecutionUnits(structured.executionUnits, fallbackExecutionUnit),
     artifacts,
@@ -358,7 +305,7 @@ function payloadLikeRecord(value: Record<string, unknown>) {
 
 function normalizeRuntimeArtifacts(value: unknown, scenarioId: ScenarioInstanceId): RuntimeArtifact[] {
   return Array.isArray(value) ? value.filter(isRecord).map((artifact) => {
-    const artifactType = asString(artifact.type) || 'scenario-output';
+    const artifactType = asString(artifact.type) || 'artifact';
     const artifactId = asString(artifact.id) || asString(artifact.ref) || artifactType || makeId('artifact');
     const path = asString(artifact.path) || asString(artifact.markdownRef) || asString(artifact.reportRef);
     const metadata = {
@@ -373,7 +320,7 @@ function normalizeRuntimeArtifacts(value: unknown, scenarioId: ScenarioInstanceI
       producerScenario: scenarioId,
       schemaVersion: asString(artifact.schemaVersion) || '1',
       metadata: Object.keys(metadata).length ? metadata : undefined,
-      data: normalizeArtifactData(artifactType, artifact),
+      data: normalizeArtifactData(artifact),
       dataRef: asString(artifact.dataRef),
       path,
       visibility: asTimelineVisibility(artifact.visibility),
@@ -424,7 +371,6 @@ function objectReferenceFromRelatedRef(ref: string, artifacts: RuntimeArtifact[]
     artifactType: matchedArtifact?.type,
     runId,
     executionUnitId: kind === 'execution-unit' ? ref.replace(/^execution-unit:{1,2}/i, '') : undefined,
-    preferredView: preferredViewForArtifactType(matchedArtifact?.type),
     actions: normalizeObjectActions(undefined, kind, matchedArtifact),
     status: matchedArtifact || kind !== 'artifact' ? 'available' : 'missing',
     summary: 'contract validation related ref',
@@ -452,7 +398,7 @@ function normalizeObjectReference(record: Record<string, unknown>, artifacts: Ru
     artifactType: asString(record.artifactType) || matchedArtifact?.type,
     runId: asString(record.runId) || runId,
     executionUnitId: asString(record.executionUnitId),
-    preferredView: asString(record.preferredView) || preferredViewForArtifactType(matchedArtifact?.type),
+    preferredView: asString(record.preferredView),
     actions,
     status: normalizeObjectStatus(record.status) || 'available',
     summary: asString(record.summary),
@@ -469,7 +415,6 @@ function objectReferenceFromArtifact(artifact: RuntimeArtifact, runId: string): 
     ref: `artifact:${artifact.id}`,
     artifactType: artifact.type,
     runId,
-    preferredView: preferredViewForArtifactType(artifact.type),
     actions: objectActionsForArtifact(artifact),
     status: 'available',
     summary: artifactSummary(artifact),
@@ -567,17 +512,6 @@ function normalizeObjectProvenance(value: unknown, artifact?: RuntimeArtifact): 
 function findArtifactForObjectRef(ref: string, artifacts: RuntimeArtifact[]) {
   const id = ref.replace(/^artifact:/i, '');
   return artifacts.find((artifact) => artifact.id === id || artifact.type === id || artifact.dataRef === id || artifact.path === id);
-}
-
-function preferredViewForArtifactType(type?: string) {
-  if (!type) return undefined;
-  if (/structure|pdb|protein|molecule|mmcif|cif|3d/i.test(type)) return 'structure-viewer';
-  if (/report|markdown|document|summary/i.test(type)) return 'report-viewer';
-  if (/evidence/i.test(type)) return 'evidence-matrix-panel';
-  if (/paper|literature/i.test(type)) return 'literature-paper-cards';
-  if (/network|graph|knowledge/i.test(type)) return 'graph-viewer';
-  if (/table|matrix|csv|tsv|dataframe/i.test(type)) return 'record-table';
-  return 'generic-artifact-inspector';
 }
 
 function artifactSummary(artifact: RuntimeArtifact) {
@@ -694,38 +628,13 @@ function recordList(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
 }
 
-function normalizeArtifactData(type: string, artifact: Record<string, unknown>) {
-  const data = 'data' in artifact
-    ? artifact.data
-    : artifact.content ?? artifact.markdown ?? artifact.report ?? artifact.summary;
-  const encoding = asString(artifact.encoding) || asString(isRecord(artifact.metadata) ? artifact.metadata.encoding : undefined);
-  if (typeof data === 'string' && isTextLikeArtifact(type, encoding)) {
-    return {
-      markdown: data,
-      text: data,
-      report: data,
-    };
-  }
-  if (typeof data === 'string' && isJsonLikeArtifact(type, encoding)) {
-    try {
-      return JSON.parse(data) as unknown;
-    } catch {
-      return {
-        text: data,
-      };
-    }
-  }
-  return data;
-}
-
-function isTextLikeArtifact(type: string, encoding?: string) {
-  return /markdown|md|text/i.test(encoding || '')
-    || /report|summary|notebook|document|markdown|text|note|protocol|plan|narrative/i.test(type);
-}
-
-function isJsonLikeArtifact(type: string, encoding?: string) {
-  return /json/i.test(encoding || '')
-    || /list|table|matrix|graph|records|items|rows/i.test(type);
+function normalizeArtifactData(artifact: Record<string, unknown>) {
+  if ('data' in artifact) return artifact.data;
+  if ('content' in artifact) return artifact.content;
+  if ('markdown' in artifact) return artifact.markdown;
+  if ('report' in artifact) return artifact.report;
+  if ('summary' in artifact) return artifact.summary;
+  return undefined;
 }
 
 function normalizeNotebookRecords(

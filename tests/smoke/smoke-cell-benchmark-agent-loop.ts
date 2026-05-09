@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
-import { recommendScenarioElements } from '../../src/ui/src/scenarioCompiler/scenarioElementCompiler.js';
+import { recommendScenarioElements } from '@sciforge/scenario-core/scenario-element-compiler';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cell-benchmark-agent-loop-'));
 const seenPrompts: Array<{ purpose: string; text: string }> = [];
