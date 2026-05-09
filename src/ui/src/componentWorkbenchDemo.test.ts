@@ -8,6 +8,7 @@ import {
   buildWorkbenchInteractionEventLog,
   moduleHasWorkbenchDemo,
   recommendWorkbenchComponents,
+  workbenchModuleDisplayLabels,
 } from './componentWorkbenchDemo';
 import type { RuntimeArtifact, SciForgeConfig } from './domain';
 import { uiModuleRegistry, type RuntimeUIModule } from './uiModuleRegistry';
@@ -117,6 +118,13 @@ test('workbench recommends components from artifact type and schema fields', () 
     artifactSchema: { required: ['data', 'layout', 'config'] },
   });
   assert.equal(plotRecommendations[0]?.componentId, 'scientific-plot-viewer');
+});
+
+test('workbench resolves alternate display labels from component manifests', () => {
+  assert.deepEqual(
+    workbenchModuleDisplayLabels(uiModuleRegistry, ['scientific-plot-viewer', 'record-table', 'missing-package-module']),
+    ['Scientific plot viewer', 'Record table', 'missing-package-module'],
+  );
 });
 
 test('workbench extracts figure QA for Plotly publication export artifacts', () => {

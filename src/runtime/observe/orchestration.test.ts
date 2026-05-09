@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  OBSERVE_PROVIDER_UNAVAILABLE_DIAGNOSTIC_CODE,
+  OBSERVE_PROVIDER_UNAVAILABLE_FAILURE_MODE,
+} from '@sciforge-ui/runtime-contract/observe';
+import {
   buildObserveInvocationPlan,
   compactObserveTraceRefs,
   runObserveInvocationPlan,
@@ -63,5 +67,6 @@ test('observe orchestration records unavailable provider failures without losing
   const records = await runObserveInvocationPlan(plan, []);
   assert.equal(records[0].callRef, 'run:missing-provider:observe:001');
   assert.equal(records[0].status, 'failed');
-  assert.equal(records[0].diagnostics?.code, 'observe-provider-unavailable');
+  assert.equal(records[0].diagnostics?.code, OBSERVE_PROVIDER_UNAVAILABLE_DIAGNOSTIC_CODE);
+  assert.equal(records[0].diagnostics?.failureMode, OBSERVE_PROVIDER_UNAVAILABLE_FAILURE_MODE);
 });

@@ -1,5 +1,10 @@
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-types.js';
 import { WORKSPACE_RUNTIME_GATEWAY_REPAIR_TOOL_ID } from '@sciforge-ui/runtime-contract/capabilities';
+import {
+  runtimeAgentBackendConfigurationFailureIsBlocking,
+  runtimeAgentBackendConfigurationNextStep,
+  runtimeAgentBackendConfigurationRecoverActions,
+} from '@sciforge-ui/runtime-contract/agent-backend-policy';
 import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract/validation-failure';
 import { repairDiagnosticViewSlotPolicy } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy';
 import { sha1 } from '../workspace-task-runner.js';
@@ -144,10 +149,10 @@ export function backendRepairFailureFromReason(
     evidenceRefs: options.evidenceRefs,
   });
   const recoverActions = options.recoverActions
-    ?? userModelConfigRecoverActions(reason)
+    ?? runtimeAgentBackendConfigurationRecoverActions(reason)
     ?? diagnostic.recoverActions
     ?? backendDiagnosticRecoverActions(diagnostic);
-  const nextStep = userModelConfigNextStep(reason)
+  const nextStep = runtimeAgentBackendConfigurationNextStep(reason)
     ?? diagnostic.nextStep
     ?? backendDiagnosticNextStep(diagnostic);
   return {
@@ -314,7 +319,10 @@ export function requiredInputsForRepair(request: GatewayRequest, problem: Struct
   }
   const categories = new Set(problem.diagnostic.categories);
   if (categories.has('network')) inputs.push('agentServerBaseUrl');
-  if (isUserModelConfigReason(problem.diagnostic.message) || isUserModelConfigReason(problem.failureReason)) inputs.push('modelProvider', 'modelBaseUrl', 'modelName', 'apiKey');
+  if (
+    runtimeAgentBackendConfigurationFailureIsBlocking(problem.diagnostic.message)
+    || runtimeAgentBackendConfigurationFailureIsBlocking(problem.failureReason)
+  ) inputs.push('modelProvider', 'modelBaseUrl', 'modelName', 'apiKey');
   if (categories.has('auth')) inputs.push('credentials');
   if (categories.has('missing-input')) inputs.push('input artifacts or workspace files');
   if (request.scenarioPackageRef) inputs.push(`scenarioPackage:${request.scenarioPackageRef.id}@${request.scenarioPackageRef.version}`);
@@ -338,7 +346,7 @@ export function recoverActionsForRepair(problem: StructuredRepairFailure) {
 }
 
 function backendDiagnosticRecoverActions(diagnostic: AgentServerBackendFailureDiagnostic) {
-  const userModelActions = userModelConfigRecoverActions(diagnostic.message);
+  const userModelActions = runtimeAgentBackendConfigurationRecoverActions(diagnostic.message);
   if (userModelActions) return userModelActions;
   const categories = new Set(diagnostic.categories);
   if (categories.has('network')) {
@@ -371,7 +379,7 @@ export function nextStepForRepair(problem: StructuredRepairFailure) {
 }
 
 function backendDiagnosticNextStep(diagnostic: AgentServerBackendFailureDiagnostic) {
-  return userModelConfigNextStep(diagnostic.message)
+  return runtimeAgentBackendConfigurationNextStep(diagnostic.message)
     ?? diagnostic.nextStep
     ?? 'Review diagnostics, provide missing inputs, and rerun.';
 }
@@ -382,23 +390,4 @@ function isContractValidationFailure(problem: StructuredRepairFailure): problem 
 
 function isBackendRepairFailure(problem: StructuredRepairFailure): problem is BackendRepairFailure {
   return problem.contract === BACKEND_REPAIR_FAILURE_CONTRACT_ID;
-}
-
-function isUserModelConfigReason(reason: string) {
-  return /User-side model configuration|llmEndpoint|Model Provider|Model Base URL|Model Name|openteam\.json defaults/i.test(reason);
-}
-
-function userModelConfigRecoverActions(reason: string) {
-  if (!isUserModelConfigReason(reason)) return undefined;
-  return [
-    'Open SciForge settings and fill Model Provider, Model Base URL, Model Name, and API Key.',
-    'Save config.local.json, then retry the same prompt so SciForge forwards the request-selected llmEndpoint.',
-    'Do not rely on AgentServer openteam.json defaults for generated workspace tasks.',
-  ];
-}
-
-function userModelConfigNextStep(reason: string) {
-  return isUserModelConfigReason(reason)
-    ? 'Configure the user-side model endpoint in SciForge settings, then retry the same prompt.'
-    : undefined;
 }

@@ -2,9 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  OBSERVE_PROVIDER_UNAVAILABLE_DIAGNOSTIC_CODE,
+  OBSERVE_PROVIDER_UNAVAILABLE_FAILURE_MODE,
   buildObserveProviderCapabilityBrief,
+  buildObserveProviderUnavailableRecord,
   buildObserveRequest,
   normalizeObserveInputModality,
+  normalizeObserveInvocationDiagnostics,
   normalizeObserveResponse,
 } from './observe.js';
 
@@ -91,4 +95,26 @@ test('normalizes observe responses without inlining modality payloads', () => {
   assert.equal(response.confidence, 1);
   assert.deepEqual(response.artifactRefs, ['artifact://trace-1']);
   assert.equal(response.latencyMs, 0);
+});
+
+test('contracts own observe provider unavailable diagnostics', () => {
+  const record = buildObserveProviderUnavailableRecord({
+    callRef: 'run:observe:001',
+    providerId: 'local.example-observe',
+    instruction: 'Read the screenshot title.',
+    modalities: [{ kind: 'screenshot', ref: 'artifact://screen-1' }],
+  });
+
+  assert.equal(record.status, 'failed');
+  assert.deepEqual(record.artifactRefs, []);
+  assert.match(record.compactSummary, /local\.example-observe/);
+  assert.equal(record.diagnostics?.code, OBSERVE_PROVIDER_UNAVAILABLE_DIAGNOSTIC_CODE);
+  assert.equal(record.diagnostics?.failureMode, OBSERVE_PROVIDER_UNAVAILABLE_FAILURE_MODE);
+  assert.equal(record.diagnostics?.providerId, 'local.example-observe');
+
+  assert.deepEqual(normalizeObserveInvocationDiagnostics({
+    code: OBSERVE_PROVIDER_UNAVAILABLE_FAILURE_MODE,
+  }), {
+    code: OBSERVE_PROVIDER_UNAVAILABLE_DIAGNOSTIC_CODE,
+  });
 });

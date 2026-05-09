@@ -1,3 +1,7 @@
+import {
+  buildObserveProviderUnavailableRecord,
+  normalizeObserveInvocationDiagnostics,
+} from '@sciforge-ui/runtime-contract/observe';
 import type {
   ObserveIntent,
   ObserveInvocation,
@@ -50,13 +54,7 @@ export async function runObserveInvocationPlan(
   for (const invocation of plan.invocations) {
     const provider = registry.get(invocation.providerId);
     if (!provider) {
-      records.push({
-        ...invocation,
-        status: 'failed',
-        artifactRefs: [],
-        compactSummary: `Observe provider ${invocation.providerId} is unavailable.`,
-        diagnostics: { code: 'observe-provider-unavailable' },
-      });
+      records.push(buildObserveProviderUnavailableRecord(invocation));
       continue;
     }
     const result = await provider.invoke(invocation);
@@ -67,7 +65,7 @@ export async function runObserveInvocationPlan(
       artifactRefs: result.artifactRefs ?? [],
       traceRef: result.traceRef,
       compactSummary: result.compactSummary,
-      diagnostics: result.diagnostics,
+      diagnostics: normalizeObserveInvocationDiagnostics(result.diagnostics),
     });
   }
   return records;

@@ -8,7 +8,8 @@
     "fixtures",
     "manifest.json",
     "manifest.ts",
-    "package.json"
+    "package.json",
+    "render.tsx"
   ],
   "exports": {
     ".": "./manifest.ts",
@@ -16,9 +17,11 @@
     "./README.md": "./README.md",
     "./fixtures/basic": "./fixtures/basic.ts",
     "./fixtures/empty": "./fixtures/empty.ts",
-    "./fixtures/selection": "./fixtures/selection.ts"
+    "./fixtures/selection": "./fixtures/selection.ts",
+    "./render": "./render.tsx"
   },
   "peerDependencies": {
+    "react": "^19.2.5",
     "@sciforge-ui/runtime-contract": "^1.0.0"
   }
 }

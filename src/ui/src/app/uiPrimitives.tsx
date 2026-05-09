@@ -95,7 +95,7 @@ export function EmptyArtifactState({ title, detail, recoverActions }: { title: s
   );
 }
 
-function recoverActionLabel(action: string) {
+export function recoverActionLabel(action: string) {
   const labels: Record<string, string> = {
     'run-current-scenario': '运行当前场景',
     'rerun-current-scenario': '重试当前运行',
@@ -114,7 +114,6 @@ function recoverActionLabel(action: string) {
   if (action.startsWith('run-skill:')) return `运行 skill ${action.slice('run-skill:'.length)}`;
   if (action.startsWith('inspect-artifact-schema:')) return `检查 ${action.slice('inspect-artifact-schema:'.length)} schema`;
   if (action.startsWith('import-package:')) return `导入 ${action.slice('import-package:'.length)} package`;
-  if (action.startsWith('fallback-component:')) return `改用 ${action.slice('fallback-component:'.length)} 组件`;
   if (action.startsWith('add-field:')) return `补齐字段 ${action.slice('add-field:'.length)}`;
   if (action.startsWith('add-fields:')) return `补齐字段 ${action.slice('add-fields:'.length)}`;
   if (action.startsWith('map-fields:')) return `映射字段 ${action.slice('map-fields:'.length)}`;

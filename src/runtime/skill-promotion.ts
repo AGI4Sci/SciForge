@@ -1,6 +1,7 @@
 import { copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { CapabilityEvolutionCandidate, CapabilityEvolutionCandidateSet, CapabilityEvolutionCompactSummary } from '../../packages/contracts/runtime/capability-evolution.js';
+import { skillPromotionDomain } from '../../packages/skills/runtime-policy';
 import { buildCapabilityEvolutionCandidateSet } from './capability-evolution-ledger.js';
 import type { GatewayRequest, SkillAvailability, SkillManifest, SkillPromotionProposal, ToolPayload } from './runtime-types.js';
 import { loadSkillRegistry } from './skill-registry.js';
@@ -359,7 +360,7 @@ function buildLedgerSkillPromotionProposal(params: {
   createdAt: string;
 }): SkillPromotionProposal {
   const capabilityIds = uniqueStrings(params.candidate.suggestedUpdates?.capabilityIds ?? []);
-  const skillDomain = params.request?.skillDomain ?? 'literature';
+  const skillDomain = skillPromotionDomain(params.request?.skillDomain);
   const skillId = params.candidate.suggestedCapabilityId
     ?? `workspace.${skillDomain}.${slugForPrompt(params.candidate.observedPattern ?? params.candidate.id)}`;
   const proposalId = `ledger.${safeName(params.candidate.id.replace(/^proposal:/, ''))}`;

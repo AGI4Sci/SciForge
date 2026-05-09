@@ -6,6 +6,11 @@ export {
   uiComponentManifests,
 } from '../components';
 export {
+  paperCardListPresentationPolicy,
+  renderPaperCardList,
+  type PaperCardPresentation,
+} from '../components';
+export {
   composeRuntimeUiManifestSlots,
   componentMatchesInteractiveViewFocus,
   compareInteractiveViewModulesForArtifact,

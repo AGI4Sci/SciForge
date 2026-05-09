@@ -15,7 +15,14 @@ import { runScenarioRuntimeSmoke } from './scenario-runtime-smoke-harness';
 const scenarioIds = scenarios.map((scenario) => scenario.id);
 
 for (const scenarioId of scenarioIds) {
-  const pkg = withScenarioPackagePolicy(buildBuiltInScenarioPackage(scenarioId as ScenarioId, '2026-04-25T00:00:00.000Z'));
+  const packageContract = buildBuiltInScenarioPackage(scenarioId as ScenarioId, '2026-04-25T00:00:00.000Z');
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(packageContract, 'policy'),
+    false,
+    `${scenarioId} package builder should only emit package contract shape; runtime policy compilation stays in src/runtime/scenario-policy`,
+  );
+
+  const pkg = withScenarioPackagePolicy(packageContract);
   const validation = validateRuntimeScenarioPackage(pkg);
   assert.equal(validation.ok, true, `${scenarioId} package should pass validation`);
   assert.equal(pkg.status, 'published', `${scenarioId} package should be published`);

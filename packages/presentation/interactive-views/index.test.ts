@@ -26,6 +26,7 @@ import {
   markdownTextForDirectAnswerArtifact,
   normalizeDirectAnswerArtifacts,
   normalizeDirectAnswerUiManifest,
+  paperCardListPresentationPolicy,
   preferredExistingArtifactFollowupArtifact,
   preferredInteractiveViewComponentForArtifactType,
   repairDiagnosticViewSlotPolicy,
@@ -222,6 +223,35 @@ test('interactive view policy owns resolver artifact and module selection semant
   assert.equal(blocked?.requiredModuleCapability, 'render opaque-result as primary result');
   assert.equal(blocked?.resumeRunId, 'run-custom');
   assert.equal(interactiveViewPlanSourceIds.runtimeManifest, 'runtime-manifest');
+});
+
+test('paper-card-list component policy owns paper-list presentation semantics', () => {
+  const papers = paperCardListPresentationPolicy({
+    slot: {
+      componentId: 'paper-card-list',
+      transform: [{ type: 'limit', value: 1 }],
+    },
+    artifact: {
+      id: 'paper-list-result',
+      type: 'paper-list',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      data: {
+        rows: [
+          { name: 'Rows fallback paper', venue: 'Package Policy Conf', year: 2026, evidenceLevel: 'review' },
+          { title: 'Hidden by limit', source: 'Overflow' },
+        ],
+      },
+    },
+  });
+
+  assert.deepEqual(papers, [{
+    title: 'Rows fallback paper',
+    source: 'Package Policy Conf',
+    year: '2026',
+    url: undefined,
+    evidenceLevel: 'review',
+  }]);
 });
 
 test('interactive view policy owns report runtime result slots', () => {

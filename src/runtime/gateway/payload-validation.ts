@@ -5,6 +5,10 @@ import {
   VERIFICATION_RESULT_SCHEMA_PATH,
 } from '@sciforge-ui/runtime-contract';
 import {
+  previewPathHasRecognizedFileExtension,
+  previewPathHasStableDeliverableExtension,
+} from '@sciforge-ui/artifact-preview';
+import {
   CONTRACT_VALIDATION_FAILURE_CONTRACT_ID,
   type ContractValidationFailure,
   type ContractValidationFailureKind,
@@ -543,29 +547,8 @@ function stringFields(...values: unknown[]) {
   return values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
 }
 
-const stableDeliverablePathSuffixes = [
-  '.md',
-  '.markdown',
-  '.json',
-  '.csv',
-  '.tsv',
-  '.txt',
-  '.pdf',
-  '.doc',
-  '.docx',
-  '.xls',
-  '.xlsx',
-  '.png',
-  '.jpg',
-  '.jpeg',
-  '.webp',
-  '.html',
-  '.htm',
-];
-
 function hasStableDeliverablePathSuffix(value: string) {
-  const pathWithoutQuery = value.toLowerCase().split(/[?#]/)[0] ?? '';
-  return stableDeliverablePathSuffixes.some((suffix) => pathWithoutQuery.endsWith(suffix));
+  return previewPathHasStableDeliverableExtension(value);
 }
 
 function currentTurnReferenceRecords(request: GatewayRequest) {
@@ -676,7 +659,7 @@ function decodeURIComponentSafe(value: string) {
 function looksLikeReferencePath(value: string) {
   return /^(?:file|artifact|folder|url):/i.test(value)
     || /[\\/]/.test(value)
-    || /\.(?:pdf|docx?|xlsx?|csv|tsv|json|md|markdown|txt|png|jpe?g|gif|webp|svg|html?|pdb|cif|mmcif)$/i.test(value);
+    || previewPathHasRecognizedFileExtension(value);
 }
 
 export function repairNeededPayload(

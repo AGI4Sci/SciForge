@@ -146,6 +146,7 @@ export interface WorkbenchComponentRecommendation {
   score: number;
   reasons: string[];
   fallbackModuleIds: string[];
+  alternateModuleLabels: string[];
 }
 
 export interface WorkbenchArtifactShapeExample {
@@ -362,6 +363,14 @@ export function buildWorkbenchArtifactShapeExample(module: RuntimeUIModule, vari
   };
 }
 
+export function workbenchModuleDisplayLabels(modules: RuntimeUIModule[], moduleIds: string[] | undefined): string[] {
+  if (!moduleIds?.length) return [];
+  return moduleIds.map((moduleId) => {
+    const match = modules.find((module) => module.moduleId === moduleId || module.componentId === moduleId);
+    return match?.title ?? moduleId;
+  });
+}
+
 export function recommendWorkbenchComponents(
   modules: RuntimeUIModule[],
   input: { artifactType?: string; artifactSchema?: unknown; artifactData?: unknown },
@@ -411,6 +420,7 @@ export function recommendWorkbenchComponents(
         score,
         reasons,
         fallbackModuleIds: module.fallbackModuleIds ?? [],
+        alternateModuleLabels: workbenchModuleDisplayLabels(modules, module.fallbackModuleIds),
       };
     })
     .filter((item) => item.score > 0)

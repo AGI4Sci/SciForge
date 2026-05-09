@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { backendRepairStates, coerceReportPayload, contractValidationFailures, ResultsRenderer, runAuditRefs, runRecoverActions, shouldOpenRunAuditDetails } from './ResultsRenderer';
+import { backendRepairStates, coerceReportPayload, contractValidationFailures, renderRegisteredWorkbenchSlot, ResultsRenderer, runAuditRefs, runRecoverActions, shouldOpenRunAuditDetails } from './ResultsRenderer';
 import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract';
 import type { RuntimeArtifact, SciForgeConfig, SciForgeSession } from '../domain';
 
@@ -188,6 +188,35 @@ test('ResultsRenderer renders ContractValidationFailure diagnostics without synt
   assert.doesNotMatch(html, /已完成报告|ready result/);
 });
 
+test('paper-card-list workbench slot is rendered by package policy', () => {
+  const artifact: RuntimeArtifact = {
+    id: 'papers',
+    type: 'paper-list',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: {
+      papers: [
+        { title: 'Package-owned paper renderer', journal: 'SciForge Journal', year: 2026, evidenceLevel: 'review' },
+      ],
+    },
+  };
+  const session = {
+    ...emptySession(),
+    artifacts: [artifact],
+  };
+  const html = renderToStaticMarkup(createElement(() => renderRegisteredWorkbenchSlot({
+    scenarioId: 'literature-evidence-review',
+    config: testConfig(),
+    session,
+    slot: { componentId: 'paper-card-list', artifactRef: 'papers' } as never,
+    artifact,
+  })));
+
+  assert.match(html, /Package-owned paper renderer/);
+  assert.match(html, /SciForge Journal/);
+  assert.doesNotMatch(html, /缺少 papers\/rows 数组/);
+});
+
 function contractFailureSession(): SciForgeSession {
   const failure: ContractValidationFailure = {
     contract: 'sciforge.contract-validation-failure.v1',
@@ -259,6 +288,25 @@ function contractFailureSession(): SciForgeSession {
     notebook: [],
     versions: [],
     updatedAt: '2026-05-09T00:01:00.000Z',
+  };
+}
+
+function emptySession(): SciForgeSession {
+  return {
+    schemaVersion: 2,
+    sessionId: 'session-empty',
+    scenarioId: 'literature-evidence-review',
+    title: 'empty',
+    createdAt: '2026-05-09T00:00:00.000Z',
+    messages: [],
+    runs: [],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [],
+    notebook: [],
+    versions: [],
+    updatedAt: '2026-05-09T00:00:00.000Z',
   };
 }
 

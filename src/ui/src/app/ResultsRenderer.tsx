@@ -9,6 +9,7 @@ import { uiModuleRegistry } from '../uiModuleRegistry';
 import {
   renderGraphViewer,
   renderMatrixViewer,
+  renderPaperCardList,
   renderPointSetViewer,
   renderRecordTable,
   renderReportViewer,
@@ -17,7 +18,7 @@ import {
 } from '../../../../packages/presentation/components';
 import type { ContractValidationFailure, ContractValidationFailureKind } from '@sciforge-ui/runtime-contract';
 import { exportJsonFile, exportTextFile } from './exportUtils';
-import { ActionButton, Badge, Card, ClaimTag, ConfidenceBar, EmptyArtifactState, EvidenceTag, SectionHeader, cx } from './uiPrimitives';
+import { ActionButton, Badge, Card, ClaimTag, ConfidenceBar, EmptyArtifactState, SectionHeader, cx } from './uiPrimitives';
 import { ResultShell, type ResultFocusMode } from './results/ResultShell';
 import { HandoffPreview, HandoffTargetButtons } from './results/HandoffControls';
 import { PreviewDescriptorActions } from './results/PreviewActions';
@@ -36,9 +37,8 @@ import {
 export { selectDefaultResultItems, type HandoffAutoRunRequest } from './results/viewPlanResolver';
 import { MarkdownBlock, hydrateInlineObjectReferenceButtons } from './results/reportContent';
 export { coerceReportPayload } from './results/reportContent';
-import { applyViewTransforms, arrayPayload, artifactDownloadItems } from './results/artifactData';
+import { artifactDownloadItems } from './results/artifactData';
 import {
-  asNumber,
   asString,
   asStringList,
   artifactMeta,
@@ -48,7 +48,6 @@ import {
   exportExecutionBundle,
   formatResultFileBytes,
   isRecord,
-  pickEvidenceLevel,
   sourceVariant,
   toRecordList,
   viewCompositionSummary,
@@ -364,38 +363,6 @@ type RegistryEntry = {
   render: (props: RegistryRendererProps) => ReactNode;
 };
 
-function PaperCardList({ slot, artifact, session }: RegistryRendererProps) {
-  const records = applyViewTransforms(arrayPayload(slot, 'papers', artifact), slot);
-  const papers = records.map((record, index) => ({
-    title: asString(record.title) || asString(record.name) || `Paper ${index + 1}`,
-    source: asString(record.source) || asString(record.journal) || asString(record.venue) || 'unknown source',
-    year: asString(record.year) || String(asNumber(record.year) ?? 'unknown'),
-    url: asString(record.url),
-    level: pickEvidenceLevel(record.evidenceLevel),
-  }));
-  if (!artifact || !papers.length) {
-    return <ComponentEmptyState componentId="paper-card-list" artifactType="paper-list" detail={!artifact ? undefined : '当前 paper-list artifact 缺少 papers 数组；请检查字段映射或修复 skill 输出。'} />;
-  }
-  return (
-    <div className="stack">
-      <ArtifactSourceBar artifact={artifact} session={session} />
-      {viewCompositionSummary(slot) ? <div className="composition-strip"><code>{viewCompositionSummary(slot)}</code></div> : null}
-      <div className="paper-list">
-        {papers.map((paper) => (
-          <Card key={`${paper.title}-${paper.source}`} className="paper-card">
-            <div>
-              <h3>{paper.url ? <a href={paper.url} target="_blank" rel="noreferrer">{paper.title}</a> : paper.title}</h3>
-              <p>{paper.source} · {paper.year}</p>
-            </div>
-            <EvidenceTag level={paper.level} />
-            <Badge variant="success">runtime</Badge>
-          </Card>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function UnknownArtifactInspector({ slot, artifact, session }: RegistryRendererProps) {
   const payload = artifact?.data ?? slot.props ?? {};
   const rows = Array.isArray(payload)
@@ -555,6 +522,10 @@ function PackageReportViewer(props: UIComponentRendererProps) {
   return <>{renderReportViewer(props)}</>;
 }
 
+function PackagePaperCardList(props: UIComponentRendererProps) {
+  return <>{renderPaperCardList(props)}</>;
+}
+
 function PackageRecordTable(props: UIComponentRendererProps) {
   return <>{renderRecordTable(props)}</>;
 }
@@ -577,7 +548,7 @@ function PackageStructureViewer(props: UIComponentRendererProps) {
 
 const componentRegistry: Record<string, RegistryEntry> = {
   'report-viewer': { label: 'ReportViewer', render: (props) => <PackageReportViewer {...packageRendererProps(props)} /> },
-  'paper-card-list': { label: 'PaperCardList', render: (props) => <PaperCardList {...props} /> },
+  'paper-card-list': { label: 'PaperCardList', render: (props) => <PackagePaperCardList {...packageRendererProps(props)} /> },
   'structure-viewer': { label: 'StructureViewer', render: (props) => <PackageStructureViewer {...packageRendererProps(props)} /> },
   'molecule-viewer': { label: 'MoleculeViewer', render: (props) => <PackageStructureViewer {...packageRendererProps(props)} /> },
   'molecule-viewer-3d': { label: 'MoleculeViewer3D', render: (props) => <PackageStructureViewer {...packageRendererProps(props)} /> },

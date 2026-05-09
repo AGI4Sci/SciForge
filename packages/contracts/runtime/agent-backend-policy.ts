@@ -179,6 +179,21 @@ export function runtimeAgentBackendConfigurationFailureIsBlocking(reason: string
   return /User-side model configuration|llmEndpoint|openteam\.json defaults|Model Provider|Model Base URL|Model Name/i.test(reason);
 }
 
+export function runtimeAgentBackendConfigurationRecoverActions(reason: string) {
+  if (!runtimeAgentBackendConfigurationFailureIsBlocking(reason)) return undefined;
+  return [
+    'Open SciForge settings and fill Model Provider, Model Base URL, Model Name, and API Key.',
+    'Save config.local.json, then retry the same prompt so SciForge forwards the request-selected llmEndpoint.',
+    'Do not rely on AgentServer openteam.json defaults for generated workspace tasks.',
+  ];
+}
+
+export function runtimeAgentBackendConfigurationNextStep(reason: string) {
+  return runtimeAgentBackendConfigurationFailureIsBlocking(reason)
+    ? 'Configure the user-side model endpoint in SciForge settings, then retry the same prompt.'
+    : undefined;
+}
+
 export function runtimeAgentBackendFailureCategories(text: string, httpStatus?: number): RuntimeAgentBackendFailureKind[] {
   const lower = text.toLowerCase();
   const categories: RuntimeAgentBackendFailureKind[] = [];

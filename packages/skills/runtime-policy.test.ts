@@ -18,6 +18,7 @@ import {
   agentServerPayloadTaskDomain,
   agentServerRepairPromptPolicyLines,
   agentServerStablePayloadTaskId,
+  skillPromotionDomain,
 } from './runtime-policy';
 
 test('skills runtime policy owns AgentServer retrieval and task prompt snippets', () => {
@@ -85,4 +86,10 @@ test('skills runtime policy owns generated runner event and stable id policy', (
     runId: undefined,
     shortHash: () => 'abc123',
   }), 'agentserver-direct-omics-spatial-abc123');
+});
+
+test('skills runtime policy owns skill promotion domain normalization', () => {
+  assert.equal(skillPromotionDomain('omics'), 'omics');
+  assert.equal(skillPromotionDomain(undefined), 'literature');
+  assert.equal(skillPromotionDomain('unknown'), 'literature');
 });

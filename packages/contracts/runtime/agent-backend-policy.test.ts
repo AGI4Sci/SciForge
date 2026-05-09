@@ -8,7 +8,9 @@ import {
   normalizeRuntimeWorkspaceCompactCapability,
   normalizeRuntimeWorkspaceContextWindowSource,
   runtimeAgentBackendCapabilities,
+  runtimeAgentBackendConfigurationNextStep,
   runtimeAgentBackendConfigurationFailureIsBlocking,
+  runtimeAgentBackendConfigurationRecoverActions,
   runtimeAgentBackendFailureCategories,
   runtimeAgentBackendProvider,
   runtimeAgentBackendProviderLabel,
@@ -69,6 +71,8 @@ test('runtime agent backend policy owns workspace event context source aliases',
 
 test('runtime agent backend policy owns failure classification and recovery text', () => {
   assert.equal(runtimeAgentBackendConfigurationFailureIsBlocking('Model Provider is missing'), true);
+  assert.ok(runtimeAgentBackendConfigurationRecoverActions('Model Provider is missing')?.some((action) => /Model Base URL/.test(action)));
+  assert.match(runtimeAgentBackendConfigurationNextStep('llmEndpoint missing') ?? '', /user-side model endpoint/);
   assert.deepEqual(runtimeAgentBackendFailureCategories('model provider returned empty completion response', undefined), ['model']);
   assert.deepEqual(runtimeAgentBackendFailureCategories('contextWindowExceeded after provider retryResult=failed', undefined), ['context-window']);
   assert.deepEqual(runtimeAgentBackendFailureCategories('429 retry-after: 2', 429), ['http-429', 'rate-limit']);

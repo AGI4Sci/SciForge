@@ -13,6 +13,10 @@ import {
   previewDerivativeExtensionForKind,
   previewDerivativeMimeTypeForKind,
   previewDescriptorKindForPath,
+  previewDescriptorKindForExtension,
+  previewFileExtensionForPath,
+  previewPathHasRecognizedFileExtension,
+  previewPathHasStableDeliverableExtension,
   previewStructureBundleStatus,
   uniquePreviewStrings,
 } from './index';
@@ -39,6 +43,11 @@ test('merges descriptor derivatives and diagnostics', () => {
 
 test('owns file preview kind, derivative, action, and locator policy', () => {
   assert.equal(previewDescriptorKindForPath('report.md'), 'markdown');
+  assert.equal(previewDescriptorKindForExtension('.cif'), 'structure');
+  assert.equal(previewFileExtensionForPath('reports/final.csv?download=1'), 'csv');
+  assert.equal(previewPathHasRecognizedFileExtension('src/runtime/payload-validation.ts'), true);
+  assert.equal(previewPathHasStableDeliverableExtension('src/runtime/payload-validation.ts'), false);
+  assert.equal(previewPathHasStableDeliverableExtension('reports/final.csv?download=1'), true);
   assert.equal(previewDescriptorKindForPath('1crn.cif'), 'structure');
   assert.equal(inlinePolicyForPreviewKind('markdown', 512), 'inline');
   assert.equal(inlinePolicyForPreviewKind('structure', 512), 'external');

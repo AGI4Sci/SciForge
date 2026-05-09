@@ -149,6 +149,30 @@ try {
   assert.ok(refFailure.relatedRefs.includes('file:.sciforge/uploads/current-input.pdf'));
   assert.match(JSON.stringify(refFailure), /Current-turn reference was not reflected/);
 
+  const structureRefRequest = normalizeGatewayRequest({
+    ...request,
+    uiState: {
+      currentReferences: [{
+        kind: 'file',
+        title: '1crn.cif',
+        ref: 'file:.sciforge/uploads/1crn.cif',
+        summary: 'Current turn uploaded structure file.',
+      }],
+    },
+  });
+  const structureRefPayload = await validateAndNormalizePayload({
+    message: 'Analyzed 1crn structure and extracted the key contact summary.',
+    confidence: 0.82,
+    claimType: 'fact',
+    evidenceLevel: 'runtime',
+    reasoningTrace: 'runtime smoke',
+    claims: [],
+    uiManifest: [],
+    executionUnits: [{ id: 'structure-ref-smoke', status: 'done', tool: 'smoke' }],
+    artifacts: [],
+  }, structureRefRequest, skill, refs);
+  assert.equal(structureRefPayload.executionUnits.some((unit) => unit.status === 'failed-with-reason'), false);
+
   const planOnlyPayload = await validateAndNormalizePayload({
     message: 'I will retrieve the latest papers and analyze the results.',
     confidence: 0.9,
@@ -169,6 +193,23 @@ try {
   assert.equal(planFailure.contractId, 'sciforge.completed-payload.v1');
   assert.match(planFailure.failureReason, /only plan\/promise text/);
   assert.ok(planFailure.recoverActions.some((action) => /failed-with-reason|repair-needed/.test(action)));
+
+  const planWithPreviewDeliverablePayload = await validateAndNormalizePayload({
+    message: 'I will retrieve the latest papers and analyze the results.',
+    confidence: 0.9,
+    claimType: 'fact',
+    evidenceLevel: 'runtime',
+    reasoningTrace: 'backend completed with a stable table artifact ref',
+    claims: [],
+    uiManifest: [],
+    executionUnits: [{ id: 'backend-stable-preview-ref', status: 'done', tool: 'agentserver.direct' }],
+    artifacts: [{
+      id: 'paper-table',
+      type: 'table',
+      dataRef: 'outputs/paper-table.csv?download=1',
+    }],
+  }, request, skill, refs);
+  assert.equal(planWithPreviewDeliverablePayload.executionUnits[0]?.status, 'done');
 
   const workEvidenceRepair = repairNeededPayload(
     request,
@@ -345,4 +386,4 @@ function requiredInputsFromUnit(unit: unknown) {
   return inputs.filter((input): input is string => typeof input === 'string');
 }
 
-console.log('[ok] contract validation failures serialize payload, artifact, uiManifest, ref, completed-plan, WorkEvidence, empty-result, stdout/stderr repair, structured repair, and verifier failures');
+console.log('[ok] contract validation failures serialize payload, artifact, uiManifest, ref, completed-plan, preview extension refs, WorkEvidence, empty-result, stdout/stderr repair, structured repair, and verifier failures');

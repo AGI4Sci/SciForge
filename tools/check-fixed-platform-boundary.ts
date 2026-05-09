@@ -43,6 +43,30 @@ const packageRuntimeOwnershipRules: Rule[] = [
   },
 ];
 
+const scenarioPackagePolicyContractFiles = new Set([
+  'packages/scenarios/core/src/scenarioPackage.ts',
+  'packages/scenarios/core/src/uiPlanCompiler.ts',
+  'packages/scenarios/core/src/validationGate.ts',
+]);
+
+const scenarioPackagePolicyContractRules: Rule[] = [
+  {
+    id: 'scenario-package-runtime-policy-import',
+    message: 'Scenario package contract files must not import runtime-owned scenario policy compilation, validation, or smoke harnesses.',
+    pattern: /\bfrom\s+['"].*(?:src\/runtime|runtime\/scenario-policy|scenario-package-policy|scenario-package-validation|scenario-runtime-smoke-harness|tests\/smoke)['"]/,
+  },
+  {
+    id: 'scenario-package-runtime-policy-helper',
+    message: 'Scenario package contract files must not own runtime scenario policy compilation or readiness validation helpers.',
+    pattern: /\b(validateRuntimeScenarioPackage|withScenarioPackagePolicy|buildScenarioPackagePolicy|findScenarioPackagePolicyOnlyViolations|runScenarioRuntimeSmoke)\b/,
+  },
+  {
+    id: 'scenario-package-runtime-like-field',
+    message: 'Scenario package contract files must not grow runtime-like provider, prompt-regex, semantic routing, or executable fields.',
+    pattern: /\b(providerBranches?|providerRouting|backendRouting|modelBranches?|multiTurnSemanticJudge|semantic(?:Classifier|Decision|Judge|Matcher|Router|Routing)|prompt(?:Regex|Pattern|Matcher|SpecialCases?)|executionCode|runtimeCode|sourceCode|executor|handler|shell)\b/,
+  },
+];
+
 const trackedPackageBaselineCounts: Record<string, number> = {};
 
 async function main() {
@@ -73,6 +97,19 @@ async function main() {
           text: line.trim(),
           migration: trackedMigration(rel, rule.id),
         });
+      }
+      if (scenarioPackagePolicyContractFiles.has(rel)) {
+        for (const rule of scenarioPackagePolicyContractRules) {
+          if (!rule.pattern.test(line)) continue;
+          findings.push({
+            file: rel,
+            line: index + 1,
+            rule: rule.id,
+            message: rule.message,
+            text: line.trim(),
+            migration: trackedMigration(rel, rule.id),
+          });
+        }
       }
     });
   }

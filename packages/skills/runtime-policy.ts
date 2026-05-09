@@ -59,6 +59,9 @@ export const AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE = 'agentserver-generati
 export const AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE = 'workspace-task-materialized' as const;
 export const AGENTSERVER_SUPPLEMENTAL_GENERATION_EVENT_TYPE = 'workspace-task-start' as const;
 
+const skillPromotionDomainFallback: SkillPackageDomain = 'literature';
+const skillPackageDomainSet = new Set<SkillPackageDomain>(['literature', 'structure', 'omics', 'knowledge']);
+
 export function planSkillAvailabilityValidation(
   manifest: RuntimePolicySkillManifest,
   context: { manifestPath: string; cwd: string },
@@ -105,6 +108,14 @@ export function agentServerGenerationSkillAvailability(
       promotionHistory: [],
     },
   };
+}
+
+export function skillPromotionDomain(input: unknown): SkillPackageDomain {
+  return isSkillPackageDomain(input) ? input : skillPromotionDomainFallback;
+}
+
+function isSkillPackageDomain(value: unknown): value is SkillPackageDomain {
+  return typeof value === 'string' && skillPackageDomainSet.has(value as SkillPackageDomain);
 }
 
 export function agentServerExecutionModePromptPolicyLines() {

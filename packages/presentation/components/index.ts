@@ -29,6 +29,7 @@ import type { UIComponentManifest } from './types';
 export type { PresentationDedupeScope, UIComponentManifest, UIComponentWorkbenchDemo } from './types';
 export type { UIComponentRenderer, UIComponentRendererProps } from './types';
 export { renderReportViewer, coerceReportPayload as coerceReportViewerPayload } from './report-viewer/render';
+export { renderPaperCardList, paperCardListPresentationPolicy, type PaperCardPresentation } from './paper-card-list/render';
 export { renderRecordTable } from './record-table/render';
 export { renderGraphViewer } from './graph-viewer/render';
 export { renderPointSetViewer } from './point-set-viewer/render';

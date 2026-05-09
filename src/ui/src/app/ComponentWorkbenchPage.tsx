@@ -6,6 +6,7 @@ import {
   buildWorkbenchDemoRenderProps,
   buildWorkbenchFigureQA,
   buildWorkbenchInteractionEventLog,
+  workbenchModuleDisplayLabels,
   moduleHasWorkbenchDemo,
   recommendWorkbenchComponents,
   type WorkbenchDemoVariant,
@@ -58,8 +59,8 @@ function lifecycleVariant(lifecycle: RuntimeUIModule['lifecycle']) {
   return 'muted';
 }
 
-function formatList(values: string[] | undefined, fallback = 'none') {
-  if (!values?.length) return <span className="component-muted">{fallback}</span>;
+function formatList(values: string[] | undefined, emptyLabel = 'none') {
+  if (!values?.length) return <span className="component-muted">{emptyLabel}</span>;
   return values.map((value) => <code key={value}>{value}</code>);
 }
 
@@ -369,8 +370,8 @@ export function ComponentWorkbenchPage({
                     <div>{formatList(safetySummary(module))}</div>
                   </div>
                   <div>
-                    <span>fallback</span>
-                    <div>{formatList(module.fallbackModuleIds)}</div>
+                    <span>alternate displays</span>
+                    <div>{formatList(workbenchModuleDisplayLabels(uiModuleRegistry, module.fallbackModuleIds))}</div>
                   </div>
                   <div>
                     <span>view params</span>
@@ -385,7 +386,7 @@ export function ComponentWorkbenchPage({
           <div className="component-contract-header">
             <div>
               <strong>Agent 视角推荐</strong>
-              <span>输入 artifact type/schema，查看推荐组件和 fallback</span>
+              <span>输入 artifact type/schema，查看 package manifest 推荐项和备用显示标签</span>
             </div>
           </div>
           <label className="component-search">
@@ -408,13 +409,13 @@ export function ComponentWorkbenchPage({
                 <div>
                   <strong>{item.title}</strong>
                   <p>{item.reasons.join('; ')}</p>
-                  <small>fallback: {item.fallbackModuleIds.length ? item.fallbackModuleIds.join(', ') : 'none'}</small>
+                  <small>alternates: {item.alternateModuleLabels.length ? item.alternateModuleLabels.join(', ') : 'none'}</small>
                 </div>
               </div>
             )) : (
               <div>
                 <span>recommendation</span>
-                <div>No matching component; use backend-decides or generic inspector fallback.</div>
+                <div>No matching component; waiting for package manifest recommendation.</div>
               </div>
             )}
           </div>

@@ -12,6 +12,42 @@ import type { PreviewDescriptor } from '@sciforge-ui/runtime-contract/preview';
 
 export const STRUCTURE_BUNDLE_PREVIEW_DERIVATIVE_KIND = 'structure-bundle' as const;
 const PREVIEW_TEXT_INLINE_SIZE_LIMIT = 1024 * 1024;
+export const PREVIEW_FILE_EXTENSIONS_BY_KIND = {
+  pdf: ['pdf'],
+  image: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'],
+  markdown: ['md', 'markdown'],
+  json: ['json', 'jsonl'],
+  table: ['csv', 'tsv', 'xlsx', 'xls'],
+  html: ['html', 'htm'],
+  structure: ['pdb', 'cif', 'mmcif'],
+  office: ['doc', 'docx', 'ppt', 'pptx'],
+  text: ['txt', 'log', 'ts', 'tsx', 'js', 'jsx', 'py', 'r', 'sh', 'css'],
+} as const satisfies Partial<Record<PreviewDescriptor['kind'], readonly string[]>>;
+
+const STABLE_PREVIEW_DELIVERABLE_EXTENSIONS = new Set([
+  'md',
+  'markdown',
+  'json',
+  'csv',
+  'tsv',
+  'txt',
+  'pdf',
+  'doc',
+  'docx',
+  'xls',
+  'xlsx',
+  'png',
+  'jpg',
+  'jpeg',
+  'webp',
+  'html',
+  'htm',
+]);
+
+const PREVIEW_KIND_BY_EXTENSION = new Map<string, PreviewDescriptor['kind']>(
+  Object.entries(PREVIEW_FILE_EXTENSIONS_BY_KIND)
+    .flatMap(([kind, extensions]) => extensions.map((extension) => [extension, kind as PreviewDescriptor['kind']] as const)),
+);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -72,17 +108,19 @@ export function normalizePreviewDerivative(value: unknown): NonNullable<PreviewD
 
 export function previewDescriptorKindForPath(path: string, isDirectory = false): PreviewDescriptor['kind'] {
   if (isDirectory) return 'folder';
-  const extension = previewExtension(path);
-  if (extension === 'pdf') return 'pdf';
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(extension)) return 'image';
-  if (extension === 'md' || extension === 'markdown') return 'markdown';
-  if (extension === 'json' || extension === 'jsonl') return 'json';
-  if (['csv', 'tsv', 'xlsx', 'xls'].includes(extension)) return 'table';
-  if (extension === 'html' || extension === 'htm') return 'html';
-  if (extension === 'pdb' || extension === 'cif' || extension === 'mmcif') return 'structure';
-  if (['doc', 'docx', 'ppt', 'pptx'].includes(extension)) return 'office';
-  if (['txt', 'log', 'ts', 'tsx', 'js', 'jsx', 'py', 'r', 'sh', 'css'].includes(extension)) return 'text';
-  return 'binary';
+  return previewDescriptorKindForExtension(previewFileExtensionForPath(path));
+}
+
+export function previewDescriptorKindForExtension(extension: string): PreviewDescriptor['kind'] {
+  return PREVIEW_KIND_BY_EXTENSION.get(normalizePreviewExtension(extension)) ?? 'binary';
+}
+
+export function previewPathHasRecognizedFileExtension(path: string) {
+  return PREVIEW_KIND_BY_EXTENSION.has(previewFileExtensionForPath(path));
+}
+
+export function previewPathHasStableDeliverableExtension(path: string) {
+  return STABLE_PREVIEW_DELIVERABLE_EXTENSIONS.has(previewFileExtensionForPath(path));
 }
 
 export function inlinePolicyForPreviewKind(kind: PreviewDescriptor['kind'], sizeBytes: number): PreviewDescriptor['inlinePolicy'] {
@@ -134,7 +172,7 @@ export function locatorHintsForPreviewKind(kind: PreviewDescriptor['kind']): Pre
 }
 
 export function previewDerivativeExtensionForKind(kind: string, previewKind: PreviewDescriptor['kind'], path: string) {
-  if (kind === 'thumb' && previewKind === 'image') return previewExtension(path) || 'bin';
+  if (kind === 'thumb' && previewKind === 'image') return previewFileExtensionForPath(path) || 'bin';
   if (kind === 'thumb') return 'svg';
   if (kind === 'html') return 'html';
   if (kind === 'schema' || kind === 'pages' || kind === 'metadata' || kind === STRUCTURE_BUNDLE_PREVIEW_DERIVATIVE_KIND) return 'json';
@@ -169,10 +207,14 @@ export function previewStructureBundleStatus(kind: PreviewDescriptor['kind']) {
   return previewKindSupportsStructureBundle(kind) ? 'metadata-only-bundle' : 'unsupported';
 }
 
-function previewExtension(path: string) {
-  const name = path.toLowerCase().split(/[\\/]/).pop() ?? '';
+export function previewFileExtensionForPath(path: string) {
+  const name = path.toLowerCase().split(/[\\/]/).pop()?.split(/[?#]/)[0] ?? '';
   const dotIndex = name.lastIndexOf('.');
-  return dotIndex >= 0 ? name.slice(dotIndex + 1) : '';
+  return dotIndex >= 0 ? normalizePreviewExtension(name.slice(dotIndex + 1)) : '';
+}
+
+function normalizePreviewExtension(extension: string) {
+  return extension.toLowerCase().replace(/^\./, '');
 }
 
 function mergePreviewDerivatives(left: PreviewDescriptor['derivatives'], right: PreviewDescriptor['derivatives']) {

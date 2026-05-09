@@ -35,6 +35,9 @@ export const OBSERVE_FAILURE_MODES = [
 
 export type ObserveFailureMode = typeof OBSERVE_FAILURE_MODES[number];
 
+export const OBSERVE_PROVIDER_UNAVAILABLE_FAILURE_MODE = 'provider-unavailable' satisfies ObserveFailureMode;
+export const OBSERVE_PROVIDER_UNAVAILABLE_DIAGNOSTIC_CODE = 'observe-provider-unavailable';
+
 export const CAPABILITY_COST_CLASSES = ['free', 'low', 'medium', 'high', 'variable', 'unknown'] as const;
 export type CapabilityCostClass = typeof CAPABILITY_COST_CLASSES[number];
 
@@ -188,13 +191,20 @@ export interface ObserveInvocationRecord extends ObserveInvocation {
   artifactRefs: string[];
   traceRef?: string;
   compactSummary: string;
-  diagnostics?: Record<string, unknown>;
+  diagnostics?: ObserveInvocationDiagnostics;
 }
 
 export interface ObserveInvocationPlan {
   goal: string;
   runRef: string;
   invocations: ObserveInvocation[];
+}
+
+export interface ObserveInvocationDiagnostics extends Record<string, unknown> {
+  code?: string;
+  failureMode?: ObserveFailureMode;
+  providerId?: string;
+  message?: string;
 }
 
 export function isObserveInputModalityKind(value: unknown): value is ObserveInputModalityKind {
@@ -320,6 +330,35 @@ export function normalizeObserveResponse(value: unknown): ObserveResponse {
   };
 }
 
+export function normalizeObserveInvocationDiagnostics(value: unknown): ObserveInvocationDiagnostics | undefined {
+  if (!isRecord(value)) return undefined;
+  const failureMode = normalizeObserveFailureMode(value.failureMode);
+  const code = normalizeObserveInvocationDiagnosticCode(value.code, failureMode);
+  const providerId = optionalString(value.providerId);
+  const message = optionalString(value.message);
+  const diagnostics: ObserveInvocationDiagnostics = { ...value };
+  if (code) diagnostics.code = code;
+  else delete diagnostics.code;
+  if (failureMode) diagnostics.failureMode = failureMode;
+  else delete diagnostics.failureMode;
+  if (providerId) diagnostics.providerId = providerId;
+  else delete diagnostics.providerId;
+  if (message) diagnostics.message = message;
+  else delete diagnostics.message;
+  return Object.keys(diagnostics).length ? diagnostics : undefined;
+}
+
+export function buildObserveProviderUnavailableRecord(invocation: ObserveInvocation): ObserveInvocationRecord {
+  const compactSummary = observeProviderUnavailableSummary(invocation.providerId);
+  return {
+    ...invocation,
+    status: 'failed',
+    artifactRefs: [],
+    compactSummary,
+    diagnostics: observeProviderUnavailableDiagnostics(invocation.providerId, compactSummary),
+  };
+}
+
 export type SenseInputModalityKind = ObserveInputModalityKind;
 export type SenseModalityKind = ObserveModalityKind;
 export type SenseResponseStatus = ObserveResponseStatus;
@@ -348,6 +387,29 @@ export const normalizeSenseInputModality = normalizeObserveInputModality;
 export const buildSenseRequest = buildObserveRequest;
 export const buildSenseProviderCapabilityBrief = buildObserveProviderCapabilityBrief;
 export const normalizeSenseResponse = normalizeObserveResponse;
+export const buildSenseProviderUnavailableRecord = buildObserveProviderUnavailableRecord;
+export const normalizeSenseInvocationDiagnostics = normalizeObserveInvocationDiagnostics;
+
+function observeProviderUnavailableSummary(providerId: string) {
+  return `Observe provider ${providerId} is unavailable.`;
+}
+
+function observeProviderUnavailableDiagnostics(providerId: string, message: string): ObserveInvocationDiagnostics {
+  return normalizeObserveInvocationDiagnostics({
+    code: OBSERVE_PROVIDER_UNAVAILABLE_DIAGNOSTIC_CODE,
+    failureMode: OBSERVE_PROVIDER_UNAVAILABLE_FAILURE_MODE,
+    providerId,
+    message,
+  }) ?? { code: OBSERVE_PROVIDER_UNAVAILABLE_DIAGNOSTIC_CODE };
+}
+
+function normalizeObserveInvocationDiagnosticCode(value: unknown, failureMode?: ObserveFailureMode): string | undefined {
+  const code = optionalString(value);
+  if (code === OBSERVE_PROVIDER_UNAVAILABLE_FAILURE_MODE) return OBSERVE_PROVIDER_UNAVAILABLE_DIAGNOSTIC_CODE;
+  if (code) return code;
+  if (failureMode === OBSERVE_PROVIDER_UNAVAILABLE_FAILURE_MODE) return OBSERVE_PROVIDER_UNAVAILABLE_DIAGNOSTIC_CODE;
+  return undefined;
+}
 
 function normalizeObserveFailureMode(value: unknown): ObserveFailureMode | undefined {
   return typeof value === 'string' && (OBSERVE_FAILURE_MODES as readonly string[]).includes(value)
