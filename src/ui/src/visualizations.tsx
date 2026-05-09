@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pause, Play, RotateCcw } from 'lucide-react';
 import type { GLViewer } from '3dmol';
+import { defaultStructureViewerRuntimeInput } from '@sciforge/interactive-views';
 
 export interface NetworkNodeInput {
   id?: string;
@@ -340,9 +341,9 @@ function FallbackMoleculeCanvas({
 }
 
 export function MoleculeViewer({
-  pdbId = 'runtime-structure',
-  ligand = 'none',
-  pocketLabel = 'Runtime structure',
+  pdbId = defaultStructureViewerRuntimeInput.pdbId,
+  ligand = defaultStructureViewerRuntimeInput.ligand,
+  pocketLabel = defaultStructureViewerRuntimeInput.pocketLabel,
   structureUrl,
   highlightResidues = [],
   atoms: runtimeAtoms = [],

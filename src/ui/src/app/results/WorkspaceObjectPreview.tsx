@@ -22,6 +22,8 @@ import {
   pathForObjectReference,
   sciForgeReferenceAttribute,
   referenceForObjectReference,
+  referenceKindForWorkspaceFileLike,
+  referenceKindForWorkspacePreviewKind,
   referenceForWorkspaceFileLike,
   withRegionLocator,
 } from '../../../../../packages/support/object-references';
@@ -118,7 +120,7 @@ export function WorkspaceObjectPreview({
   }
   if (reference.kind !== 'file' && reference.kind !== 'artifact') return null;
   if (inlinePreview) {
-    const previewReference = referenceForObjectReference(reference, inlinePreview.kind === 'pdf' || inlinePreview.kind === 'image' ? 'file-region' : 'file');
+    const previewReference = referenceForObjectReference(reference, referenceKindForWorkspacePreviewKind(inlinePreview.kind));
     return (
       <div className="workspace-object-preview" data-sciforge-reference={sciForgeReferenceAttribute(previewReference)}>
         <div className="workspace-object-preview-head">
@@ -165,8 +167,9 @@ export function WorkspaceObjectPreview({
     );
   }
   if (descriptor) {
+    const descriptorReference = referenceForObjectReference(reference, referenceKindForWorkspacePreviewKind(descriptor.kind));
     return (
-      <div className="workspace-object-preview" data-sciforge-reference={sciForgeReferenceAttribute(referenceForObjectReference(reference, descriptor.kind === 'pdf' || descriptor.kind === 'image' ? 'file-region' : 'file'))}>
+      <div className="workspace-object-preview" data-sciforge-reference={sciForgeReferenceAttribute(descriptorReference)}>
         <div className="workspace-object-preview-head">
           <Badge variant="info">{descriptor.kind}</Badge>
           <strong>{descriptor.title || descriptor.ref}</strong>
@@ -180,14 +183,15 @@ export function WorkspaceObjectPreview({
             onRequest={onPreviewPackageRequest}
           />
         ) : (
-          <DescriptorPreview descriptor={descriptor} config={config} reference={referenceForObjectReference(reference, descriptor.kind === 'pdf' || descriptor.kind === 'image' ? 'file-region' : 'file')} />
+          <DescriptorPreview descriptor={descriptor} config={config} reference={descriptorReference} />
         )}
       </div>
     );
   }
   if (!file) return null;
+  const fileReference = referenceForObjectReference(reference, referenceKindForWorkspaceFileLike(file));
   return (
-    <div className="workspace-object-preview" data-sciforge-reference={sciForgeReferenceAttribute(referenceForObjectReference(reference, fileKindForPath(file.path, file.language) === 'pdf' ? 'file-region' : 'file'))}>
+    <div className="workspace-object-preview" data-sciforge-reference={sciForgeReferenceAttribute(fileReference)}>
       <div className="workspace-object-preview-head">
         <Badge variant="info">{file.language || fileKindForPath(file.path)}</Badge>
         <strong>{file.path}</strong>
@@ -351,6 +355,7 @@ function WorkspaceFileInlineViewer({ file }: { file: WorkspaceFileContent }) {
     );
   }
   if (kind === 'pdf') {
+    const pdfReference = referenceForWorkspaceFile(file);
     if (file.encoding === 'base64') {
       return (
         <UploadedDataUrlPreview
@@ -358,7 +363,7 @@ function WorkspaceFileInlineViewer({ file }: { file: WorkspaceFileContent }) {
           dataUrl={`data:${file.mimeType || 'application/pdf'};base64,${file.content}`}
           title={file.name}
           mimeType={file.mimeType || 'application/pdf'}
-          reference={referenceForWorkspaceFile(file, 'file-region')}
+          reference={pdfReference}
         />
       );
     }
@@ -367,7 +372,7 @@ function WorkspaceFileInlineViewer({ file }: { file: WorkspaceFileContent }) {
         <p>PDF 已作为可点击文件引用聚焦。点击对话栏“点选”后选中这张卡片，即可把 PDF 文件作为上下文；如需页码、段落或图表区域，请在问题中补充页码/图号/坐标描述。</p>
         <div className="source-list">
           <code>{file.path}</code>
-          <button type="button" onClick={() => void navigator.clipboard?.writeText(JSON.stringify(referenceForWorkspaceFile(file, 'file-region'), null, 2))}>复制 PDF 引用</button>
+          <button type="button" onClick={() => void navigator.clipboard?.writeText(JSON.stringify(pdfReference, null, 2))}>复制 PDF 引用</button>
         </div>
       </div>
     );
@@ -544,8 +549,8 @@ function clamp01(value: number) {
   return Math.min(1, Math.max(0, value));
 }
 
-function referenceForWorkspaceFile(file: WorkspaceFileContent, kind: SciForgeReference['kind'] = 'file'): SciForgeReference {
-  return referenceForWorkspaceFileLike(file, kind);
+function referenceForWorkspaceFile(file: WorkspaceFileContent): SciForgeReference {
+  return referenceForWorkspaceFileLike(file, referenceKindForWorkspaceFileLike(file));
 }
 
 function DelimitedTextPreview({ content, delimiter }: { content: string; delimiter: ',' | '\t' }) {

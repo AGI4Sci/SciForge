@@ -1,10 +1,12 @@
 import type { ScenarioId } from '../../data';
 import type { AgentBackendId, SendAgentMessageInput } from '../../domain';
 import { builtInScenarioIdForRuntimeInput } from '@sciforge/scenario-core/scenario-routing-policy';
+import { SUPPORTED_RUNTIME_AGENT_BACKENDS } from '@sciforge-ui/runtime-contract/agent-backend-policy';
 
 export function normalizeAgentBackend(value: string): AgentBackendId {
-  return ['codex', 'openteam_agent', 'claude-code', 'hermes-agent', 'openclaw', 'gemini'].includes(value)
-    ? value as AgentBackendId
+  const backend = value.trim();
+  return (SUPPORTED_RUNTIME_AGENT_BACKENDS as readonly string[]).includes(backend)
+    ? backend as AgentBackendId
     : 'codex';
 }
 

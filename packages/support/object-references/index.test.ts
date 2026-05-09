@@ -15,10 +15,14 @@ import {
   referenceForObjectReference,
   referenceForTextSelection,
   referenceForUploadedArtifact,
+  referenceKindForWorkspaceFileLike,
+  referenceKindForWorkspacePreviewKind,
   referenceToPreviewTarget,
   syntheticArtifactForObjectReference,
   toWorkspaceRelativePath,
   withComposerMarker,
+  workspaceActionIds,
+  workspaceActionSuccessMessage,
   workspaceOnboardingErrorMessage,
   workspaceOnboardingReason,
   workspaceParentPath,
@@ -64,6 +68,15 @@ assert.equal(workspacePathNeedsOnboarding('/tmp/project', 'ENOENT workspace-stat
 assert.match(workspaceOnboardingReason('/tmp/project/', '', ''), /\/tmp\/project\/\.sciforge/);
 assert.match(workspaceOnboardingReason('/tmp/project', 'EACCES', ''), /权限不足/);
 assert.match(workspaceOnboardingErrorMessage(new Error('Failed to fetch')), /Workspace Writer 未连接/);
+assert.equal(workspaceActionIds.createFile, 'create-file');
+assert.equal(workspaceActionIds.createFolder, 'create-folder');
+assert.equal(workspaceActionSuccessMessage(workspaceActionIds.rename), '资源已重命名。');
+assert.equal(referenceKindForWorkspacePreviewKind('pdf'), 'file-region');
+assert.equal(referenceKindForWorkspacePreviewKind('image'), 'file-region');
+assert.equal(referenceKindForWorkspacePreviewKind('markdown'), 'file');
+assert.equal(referenceKindForWorkspaceFileLike({ path: 'figures/result.png', language: 'image' }), 'file');
+assert.equal(referenceKindForWorkspaceFileLike({ path: 'papers/result.pdf', language: 'pdf' }), 'file-region');
+assert.equal(referenceKindForWorkspaceFileLike({ path: 'notes/report.md', language: 'markdown' }), 'file');
 
 const fileRef: ObjectReference = {
   id: 'file-1',

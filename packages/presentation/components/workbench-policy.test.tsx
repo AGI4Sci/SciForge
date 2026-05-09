@@ -11,8 +11,10 @@ import {
   shouldBuildWorkbenchFigureQA,
   workbenchComponentFixtures,
   workbenchComponentRecommendationBoost,
+  workbenchExecutionSafetyLabel,
   workbenchListEmptyLabels,
   workbenchModuleDisplayLabels,
+  workbenchSafetySummary,
 } from './index';
 import { uiComponentRuntimeRegistry } from './index';
 
@@ -23,6 +25,12 @@ test('component package owns workbench defaults and empty labels', () => {
   assert.equal(defaultWorkbenchDemoContext.fallbackArtifactType, 'runtime-artifact');
   assert.equal(workbenchListEmptyLabels.backendDecides, 'backend-decides');
   assert.equal(workbenchListEmptyLabels.noInteractionEvents, 'no interaction events declared');
+  assert.equal(workbenchExecutionSafetyLabel({ sandbox: false, externalResources: 'none', executesCode: false }), 'no-code-exec');
+  assert.deepEqual(workbenchSafetySummary({ sandbox: true, externalResources: 'declared-only', executesCode: true }), [
+    'sandbox',
+    'external:declared-only',
+    'executes-code',
+  ]);
 });
 
 test('component package owns workbench fixture and alias artifact policy', () => {

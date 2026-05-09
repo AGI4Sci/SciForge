@@ -80,6 +80,17 @@ export const artifactPreviewActions = [
   'inspect-metadata',
 ] as const satisfies readonly ArtifactPreviewAction[];
 
+export const previewLocatorHintKinds = [
+  'page',
+  'region',
+  'row-range',
+  'column-range',
+  'structure-selection',
+  'text-range',
+] as const;
+
+export type PreviewLocatorHintKind = typeof previewLocatorHintKinds[number];
+
 export interface PreviewDerivative {
   kind: PreviewDerivativeKind;
   ref: string;
@@ -104,5 +115,5 @@ export interface PreviewDescriptor {
   derivatives?: PreviewDerivative[];
   actions: ArtifactPreviewAction[];
   diagnostics?: string[];
-  locatorHints?: Array<'page' | 'region' | 'row-range' | 'column-range' | 'structure-selection' | 'text-range'>;
+  locatorHints?: PreviewLocatorHintKind[];
 }

@@ -16,6 +16,7 @@ import {
   scenarioRuntimeOverrideForRuntimeInput,
   scopeCheck,
   skillDomainForRuntimeInput,
+  SUPPORTED_SCENARIO_SKILL_DOMAINS,
 } from './scenarioRoutingPolicy';
 
 describe('scenarioRoutingPolicy', () => {
@@ -23,6 +24,10 @@ describe('scenarioRoutingPolicy', () => {
     const specScenarioIds = Object.keys(SCENARIO_SPECS).sort();
 
     assert.deepEqual([...builtInScenarioIds].sort(), specScenarioIds);
+    assert.deepEqual(
+      [...SUPPORTED_SCENARIO_SKILL_DOMAINS].sort(),
+      [...new Set(Object.values(SCENARIO_SPECS).map((spec) => spec.skillDomain))].sort(),
+    );
     for (const [scenarioId, spec] of Object.entries(SCENARIO_SPECS)) {
       assert.equal(scenarioIdBySkillDomain[spec.skillDomain], scenarioId);
       assert.equal(scenarioIdForSkillDomain(spec.skillDomain), scenarioId);

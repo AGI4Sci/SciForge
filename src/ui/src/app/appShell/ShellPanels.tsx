@@ -15,6 +15,7 @@ import {
   syntheticFolderEntry,
   toWorkspaceRelativePath,
   workspaceActionSuccessMessage,
+  workspaceActions,
   workspaceNeedsOnboarding,
   workspaceOnboardingError,
   workspaceOnboardingReason,
@@ -232,20 +233,20 @@ export function Sidebar({
     const selectedPath = entry?.path || selectedEntry?.path || root;
     let targetPath = selectedPath;
     let renameTarget: string | undefined;
-    if (action === 'create-file') {
+    if (action === workspaceActions.createFile) {
       const name = window.prompt('新文件名', 'notes.md');
       if (!name) return;
       targetPath = `${basePath.replace(/\/+$/, '')}/${name}`;
-    } else if (action === 'create-folder') {
+    } else if (action === workspaceActions.createFolder) {
       const name = window.prompt('新文件夹名', 'new-folder');
       if (!name) return;
       targetPath = `${basePath.replace(/\/+$/, '')}/${name}`;
-    } else if (action === 'rename') {
+    } else if (action === workspaceActions.rename) {
       if (!entry) return;
       const name = window.prompt('重命名为', entry.name);
       if (!name || name === entry.name) return;
       renameTarget = `${entry.path.slice(0, -entry.name.length)}${name}`;
-    } else if (action === 'delete') {
+    } else if (action === workspaceActions.delete) {
       if (!entry || !window.confirm(`删除 ${entry.name}？`)) return;
     }
     try {
@@ -277,10 +278,10 @@ export function Sidebar({
     try {
       setWorkspaceError('');
       setWorkspaceNotice('正在创建 SciForge workspace...');
-      await mutateWorkspaceFile(config, 'create-folder', { path: root });
-      await mutateWorkspaceFile(config, 'create-folder', { path: `${root.replace(/\/+$/, '')}/.sciforge` });
+      await mutateWorkspaceFile(config, workspaceActions.createFolder, { path: root });
+      await mutateWorkspaceFile(config, workspaceActions.createFolder, { path: `${root.replace(/\/+$/, '')}/.sciforge` });
       for (const resource of ['tasks', 'logs', 'task-results', 'scenarios', 'exports', 'artifacts', 'sessions', 'versions']) {
-        await mutateWorkspaceFile(config, 'create-folder', { path: `${root.replace(/\/+$/, '')}/.sciforge/${resource}` });
+        await mutateWorkspaceFile(config, workspaceActions.createFolder, { path: `${root.replace(/\/+$/, '')}/.sciforge/${resource}` });
       }
       await refreshExplorer();
       setWorkspaceNotice('SciForge workspace 已创建；可以导入 package 或运行场景。');
@@ -505,7 +506,7 @@ export function Sidebar({
                   <button
                     type="button"
                     className="explorer-icon-btn"
-                    onClick={() => void runWorkspaceAction('create-file')}
+                    onClick={() => void runWorkspaceAction(workspaceActions.createFile)}
                     title="新建文件"
                     aria-label="新建文件"
                   >
@@ -514,7 +515,7 @@ export function Sidebar({
                   <button
                     type="button"
                     className="explorer-icon-btn"
-                    onClick={() => void runWorkspaceAction('create-folder')}
+                    onClick={() => void runWorkspaceAction(workspaceActions.createFolder)}
                     title="新建文件夹"
                     aria-label="新建文件夹"
                   >
@@ -650,9 +651,9 @@ export function Sidebar({
                       <button type="button" onClick={() => void handleContextMenuOpenInWorkbench()}>在工作台打开</button>
                     ) : null}
                     <hr className="context-menu-separator" />
-                    <button type="button" onClick={() => void handleContextMenuAction('create-file')}>新建文件</button>
-                    <button type="button" onClick={() => void handleContextMenuAction('create-folder')}>新建文件夹</button>
-                    {contextMenu.entry ? <button type="button" onClick={() => void handleContextMenuAction('rename')}>重命名</button> : null}
+                    <button type="button" onClick={() => void handleContextMenuAction(workspaceActions.createFile)}>新建文件</button>
+                    <button type="button" onClick={() => void handleContextMenuAction(workspaceActions.createFolder)}>新建文件夹</button>
+                    {contextMenu.entry ? <button type="button" onClick={() => void handleContextMenuAction(workspaceActions.rename)}>重命名</button> : null}
                     {contextMenu.entry ? (
                       <button type="button" onClick={() => void handleContextMenuCopyPath()}>复制路径</button>
                     ) : null}
@@ -665,7 +666,7 @@ export function Sidebar({
                     {contextMenu.entry ? (
                       <button type="button" onClick={() => void handleContextMenuOpenExternal()}>系统默认程序打开</button>
                     ) : null}
-                    {contextMenu.entry ? <button type="button" className="danger" onClick={() => void handleContextMenuAction('delete')}>删除</button> : null}
+                    {contextMenu.entry ? <button type="button" className="danger" onClick={() => void handleContextMenuAction(workspaceActions.delete)}>删除</button> : null}
                   </div>
                 ) : null}
                 <details className="explorer-folder-picker">

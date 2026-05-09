@@ -1,16 +1,20 @@
 import {
   normalizeWorkspacePath,
   toWorkspaceRelativePath as supportToWorkspaceRelativePath,
+  workspaceActionIds,
+  workspaceActionSuccessMessage as supportWorkspaceActionSuccessMessage,
   workspaceOnboardingErrorMessage,
   workspaceOnboardingReason as supportWorkspaceOnboardingReason,
   workspaceParentPath,
   workspacePathBasename,
   workspacePathNeedsOnboarding,
+  type WorkspaceActionId,
 } from '@sciforge-ui/object-references';
 import type { SciForgeConfig } from '../../domain';
 import type { WorkspaceEntry } from '../../api/workspaceClient';
 
-export type WorkspaceAction = 'create-file' | 'create-folder' | 'rename' | 'delete';
+export const workspaceActions = workspaceActionIds;
+export type WorkspaceAction = WorkspaceActionId;
 
 export function explorerWorkspaceRoot(config: SciForgeConfig): string {
   return normalizeWorkspacePath(config.workspacePath || '');
@@ -37,10 +41,7 @@ export function syntheticFolderEntry(path: string): WorkspaceEntry {
 }
 
 export function workspaceActionSuccessMessage(action: WorkspaceAction) {
-  if (action === 'create-file') return '文件已创建。';
-  if (action === 'create-folder') return '文件夹已创建。';
-  if (action === 'rename') return '资源已重命名。';
-  return '资源已删除。';
+  return supportWorkspaceActionSuccessMessage(action);
 }
 
 export function workspaceNeedsOnboarding(path: string, workspaceError: string, workspaceStatus: string) {

@@ -40,6 +40,22 @@ export interface WorkspaceFileReferenceLike {
   size?: number;
 }
 
+export const workspaceActionIds = {
+  createFile: 'create-file',
+  createFolder: 'create-folder',
+  rename: 'rename',
+  delete: 'delete',
+} as const;
+
+export type WorkspaceActionId = typeof workspaceActionIds[keyof typeof workspaceActionIds];
+
+export function workspaceActionSuccessMessage(action: WorkspaceActionId) {
+  if (action === workspaceActionIds.createFile) return '文件已创建。';
+  if (action === workspaceActionIds.createFolder) return '文件夹已创建。';
+  if (action === workspaceActionIds.rename) return '资源已重命名。';
+  return '资源已删除。';
+}
+
 export interface TextSelectionReferenceInput {
   sourceReference: SciForgeReference;
   selectedText: string;
@@ -781,6 +797,14 @@ export function referenceForWorkspaceFileLike(file: WorkspaceFileReferenceLike, 
       size: file.size,
     },
   };
+}
+
+export function referenceKindForWorkspaceFileLike(file: WorkspaceFileReferenceLike): SciForgeReferenceKind {
+  return fileKindForPath(file.path, file.language) === 'pdf' ? 'file-region' : 'file';
+}
+
+export function referenceKindForWorkspacePreviewKind(kind: string | undefined): SciForgeReferenceKind {
+  return kind === 'pdf' || kind === 'image' ? 'file-region' : 'file';
 }
 
 export function referenceForResultSlotLike(item: {

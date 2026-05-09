@@ -36,8 +36,10 @@ export {
   workbenchComponentFixtures,
   workbenchComponentRecommendationBoost,
   workbenchDemoVariants,
+  workbenchExecutionSafetyLabel,
   workbenchListEmptyLabels,
   workbenchModuleDisplayLabels,
+  workbenchSafetySummary,
   type WorkbenchDemoVariant,
 } from './workbench-policy';
 export { renderPackageWorkbenchPreview } from './workbench-renderers';

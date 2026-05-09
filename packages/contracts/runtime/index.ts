@@ -143,6 +143,7 @@ export type {
   PreviewDescriptorKind,
   PreviewDescriptorSource,
   PreviewInlinePolicy,
+  PreviewLocatorHintKind,
 } from './preview';
 export {
   artifactPreviewActions,
@@ -150,6 +151,7 @@ export {
   previewDescriptorKinds,
   previewDescriptorSources,
   previewInlinePolicies,
+  previewLocatorHintKinds,
 } from './preview';
 export type {
   ObjectAction,

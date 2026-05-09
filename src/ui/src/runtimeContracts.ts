@@ -1,4 +1,5 @@
 import type { ArtifactPreviewAction, ObjectAction, ObjectReferenceKind, PreviewDescriptorKind, PreviewDescriptorSource, PreviewDerivativeKind, PreviewInlinePolicy, TurnAcceptanceSeverity, UserGoalType } from './domain';
+import type { PreviewLocatorHintKind } from '@sciforge-ui/runtime-contract';
 import {
   artifactPreviewActions as contractArtifactPreviewActions,
   displayIntentSources as contractDisplayIntentSources,
@@ -8,6 +9,7 @@ import {
   previewDescriptorKinds as contractPreviewDescriptorKinds,
   previewDescriptorSources as contractPreviewDescriptorSources,
   previewInlinePolicies as contractPreviewInlinePolicies,
+  previewLocatorHintKinds as contractPreviewLocatorHintKinds,
 } from '@sciforge-ui/runtime-contract';
 
 export const objectReferenceKinds = contractObjectReferenceKinds satisfies readonly ObjectReferenceKind[];
@@ -23,6 +25,8 @@ export const previewInlinePolicies = contractPreviewInlinePolicies satisfies rea
 export const previewDerivativeKinds = contractPreviewDerivativeKinds satisfies readonly PreviewDerivativeKind[];
 
 export const artifactPreviewActions = contractArtifactPreviewActions satisfies readonly ArtifactPreviewAction[];
+
+export const previewLocatorHintKinds = contractPreviewLocatorHintKinds satisfies readonly PreviewLocatorHintKind[];
 
 export const userGoalTypes = [
   'answer',
@@ -150,7 +154,7 @@ export const runtimeContractSchemas = {
       },
       actions: { type: 'array', items: { enum: artifactPreviewActions } },
       diagnostics: { type: 'array', items: { type: 'string' } },
-      locatorHints: { type: 'array', items: { enum: ['page', 'region', 'row-range', 'column-range', 'structure-selection', 'text-range'] } },
+      locatorHints: { type: 'array', items: { enum: previewLocatorHintKinds } },
     },
   },
   userGoalSnapshot: {

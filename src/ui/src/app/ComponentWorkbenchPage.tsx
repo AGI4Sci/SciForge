@@ -15,7 +15,13 @@ import type { SciForgeConfig } from '../domain';
 import { acceptedArtifactTypesForComponent, artifactTypesForComponents, uiModuleRegistry, type RuntimeUIModule } from '../uiModuleRegistry';
 import { renderRegisteredWorkbenchSlot } from './ResultsRenderer';
 import { ActionButton, Badge, SectionHeader, cx } from './uiPrimitives';
-import { defaultWorkbenchRecommendationInput, renderPackageWorkbenchPreview, workbenchListEmptyLabels } from '@sciforge-ui/components';
+import {
+  defaultWorkbenchRecommendationInput,
+  renderPackageWorkbenchPreview,
+  workbenchExecutionSafetyLabel,
+  workbenchListEmptyLabels,
+  workbenchSafetySummary,
+} from '@sciforge-ui/components';
 
 type LifecycleFilter = 'all' | RuntimeUIModule['lifecycle'];
 
@@ -69,12 +75,7 @@ function requiredContract(module: RuntimeUIModule) {
 }
 
 function safetySummary(module: RuntimeUIModule) {
-  const safety = module.safety ?? {};
-  return [
-    safety.sandbox ? 'sandbox' : 'no-sandbox',
-    `external:${safety.externalResources ?? 'unspecified'}`,
-    safety.executesCode ? 'executes-code' : 'no-code-exec',
-  ];
+  return workbenchSafetySummary(module.safety);
 }
 
 function variantLabel(variant: WorkbenchDemoVariant) {
@@ -257,7 +258,7 @@ export function ComponentWorkbenchPage({
                       <code>{module.componentId}</code>
                       <code>{module.moduleId}@{module.version}</code>
                       <Badge variant={module.safety?.executesCode ? 'warning' : 'success'}>
-                        <ShieldCheck size={12} /> {module.safety?.executesCode ? 'executes-code' : 'no-code-exec'}
+                        <ShieldCheck size={12} /> {workbenchExecutionSafetyLabel(module.safety)}
                       </Badge>
                     </div>
                   </div>

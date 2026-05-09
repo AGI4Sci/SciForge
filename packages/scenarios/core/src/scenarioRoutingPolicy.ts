@@ -1,6 +1,8 @@
 import type { ScenarioId, ScenarioRuntimeOverride } from './contracts';
 import { SCENARIO_PRESETS, SCENARIO_SPECS, type SkillDomain } from './scenarioSpecs';
 
+export type { SkillDomain } from './scenarioSpecs';
+
 export type ScenarioRoutingInput = {
   scenarioId?: string;
   scenarioOverride?: {
@@ -23,9 +25,12 @@ export const defaultBuiltInScenarioId: ScenarioId = 'literature-evidence-review'
 export const scenarioIdBySkillDomain = Object.fromEntries(
   builtInScenarioIds.map((scenarioId) => [SCENARIO_SPECS[scenarioId].skillDomain, scenarioId]),
 ) as Record<ScenarioRuntimeOverride['skillDomain'], ScenarioId>;
+export const SUPPORTED_SCENARIO_SKILL_DOMAINS: readonly SkillDomain[] = Object.freeze(
+  Object.keys(scenarioIdBySkillDomain) as SkillDomain[],
+);
 
 const builtInScenarioIdSet = new Set<string>(builtInScenarioIds);
-const skillDomainSet = new Set<string>(Object.keys(scenarioIdBySkillDomain));
+const skillDomainSet = new Set<string>(SUPPORTED_SCENARIO_SKILL_DOMAINS);
 
 const scenarioPromptSignals: Record<ScenarioId, RegExp[]> = {
   'literature-evidence-review': [/\b(pubmed|paper|literature|evidence|review|clinical trial|trial|文献|证据|综述|临床试验)\b/i],

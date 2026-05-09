@@ -6,6 +6,7 @@ import {
   componentMatchesInteractiveViewFocus,
   compactInteractiveViewPlanItems,
   composeRuntimeUiManifestSlots,
+  defaultStructureViewerRuntimeInput,
   directAnswerPlainTextResultPolicy,
   directAnswerResultPolicyIds,
   ensureDirectAnswerReportArtifactPolicy,
@@ -204,6 +205,12 @@ test('interactive view policy owns preview package auto-run prompt copy', () => 
 });
 
 test('interactive view policy owns structure summary metric presentation', () => {
+  assert.deepEqual(defaultStructureViewerRuntimeInput, {
+    pdbId: 'runtime-structure',
+    ligand: 'none',
+    pocketLabel: 'Runtime structure',
+  });
+
   const metrics = structureSummaryMetricPresentation({
     pocketVolume: 42,
     pLDDT: 91.5,

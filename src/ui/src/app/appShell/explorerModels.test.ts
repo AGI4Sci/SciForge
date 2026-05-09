@@ -6,6 +6,8 @@ import {
   pathBasename,
   sortWorkspaceEntries,
   toWorkspaceRelativePath,
+  workspaceActionSuccessMessage,
+  workspaceActions,
   workspaceNeedsOnboarding,
   workspaceOnboardingReason,
 } from './explorerModels';
@@ -30,6 +32,12 @@ test('projects explorer paths and display labels', () => {
   assert.equal(toWorkspaceRelativePath('/tmp/workspace', '/tmp/workspace/src/app.ts'), 'src/app.ts');
   assert.equal(toWorkspaceRelativePath('/tmp/workspace', '/tmp/workspace'), '.');
   assert.equal(formatBytes(1536), '1.5 KB');
+});
+
+test('exposes package-owned workspace action ids and messages', () => {
+  assert.equal(workspaceActions.createFile, 'create-file');
+  assert.equal(workspaceActions.delete, 'delete');
+  assert.equal(workspaceActionSuccessMessage(workspaceActions.createFolder), '文件夹已创建。');
 });
 
 test('detects workspace onboarding states from path and status text', () => {

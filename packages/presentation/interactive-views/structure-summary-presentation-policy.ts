@@ -12,6 +12,12 @@ export interface StructureSummaryMetricPresentation {
   };
 }
 
+export const defaultStructureViewerRuntimeInput = {
+  pdbId: 'runtime-structure',
+  ligand: 'none',
+  pocketLabel: 'Runtime structure',
+} as const;
+
 export function structureSummaryMetricPresentation(metrics: Record<string, unknown> = {}): StructureSummaryMetricPresentation {
   const rows = [
     metricRow('Pocket volume', asString(metrics.pocketVolume) || formatNumberWithUnit(metrics.pocketVolume, 'A3'), '#00E5A0'),

@@ -80,6 +80,7 @@ export {
   type PreviewPackageAutoRunPromptRequest,
 } from './auto-run-prompt-policy';
 export {
+  defaultStructureViewerRuntimeInput,
   structureSummaryMetricPresentation,
   type StructureSummaryMetricPresentation,
   type StructureSummaryMetricRow,

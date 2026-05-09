@@ -54,6 +54,18 @@ export const defaultWorkbenchDemoContext = {
   fallbackArtifactType: 'runtime-artifact',
 } as const;
 
+export function workbenchExecutionSafetyLabel(safety: UIComponentManifest['safety'] | undefined) {
+  return safety?.executesCode ? 'executes-code' : 'no-code-exec';
+}
+
+export function workbenchSafetySummary(safety: UIComponentManifest['safety'] | undefined) {
+  return [
+    safety?.sandbox ? 'sandbox' : 'no-sandbox',
+    `external:${safety?.externalResources ?? 'unspecified'}`,
+    workbenchExecutionSafetyLabel(safety),
+  ];
+}
+
 export const workbenchComponentFixtures: Record<string, Partial<Record<WorkbenchDemoVariant, UIComponentRendererProps>>> = {
   'data-table': {
     basic: basicRecordTableFixture,

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { validateRuntimeContract } from '../../src/ui/src/runtimeContracts';
+import { previewLocatorHintKinds } from '@sciforge-ui/runtime-contract';
+import { runtimeContractSchemas, validateRuntimeContract } from '../../src/ui/src/runtimeContracts';
 
 const displayIntent = {
   primaryGoal: 'inspect protein structure',
@@ -44,6 +45,10 @@ const previewDescriptor = {
 };
 
 assert.deepEqual(validateRuntimeContract('previewDescriptor', previewDescriptor), []);
+assert.deepEqual(
+  runtimeContractSchemas.previewDescriptor.properties.locatorHints.items.enum,
+  previewLocatorHintKinds,
+);
 assert.ok(validateRuntimeContract('previewDescriptor', { ...previewDescriptor, inlinePolicy: 'base64' }).some((error) => error.includes('inlinePolicy')));
 assert.ok(validateRuntimeContract('previewDescriptor', { ...previewDescriptor, derivatives: [{ kind: 'oops' }] }).some((error) => error.includes('derivatives.0.kind')));
 

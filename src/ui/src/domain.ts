@@ -1,4 +1,6 @@
 import type { ScenarioId } from './data';
+import type { RuntimeAgentBackend } from '@sciforge-ui/runtime-contract/agent-backend-policy';
+import type { SkillDomain } from '@sciforge/scenario-core/scenario-routing-policy';
 import type {
   AgentStreamEvent,
   DisplayIntent,
@@ -585,7 +587,7 @@ export interface SendAgentMessageInput {
 export interface ScenarioRuntimeOverride {
   title: string;
   description: string;
-  skillDomain: 'literature' | 'structure' | 'omics' | 'knowledge';
+  skillDomain: SkillDomain;
   scenarioMarkdown: string;
   defaultComponents: string[];
   allowedComponents: string[];
@@ -616,7 +618,7 @@ export interface NormalizedAgentResponse {
   notebook: NotebookRecord[];
 }
 
-export type AgentBackendId = 'codex' | 'openteam_agent' | 'claude-code' | 'hermes-agent' | 'openclaw' | 'gemini';
+export type AgentBackendId = RuntimeAgentBackend;
 
 export interface AgentServerRunPayload {
   agent: {
