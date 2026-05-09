@@ -36,6 +36,12 @@ export const SCENARIO_PACKAGE_POLICY_FIELDS = [
 
 export type ScenarioPackagePolicyField = typeof SCENARIO_PACKAGE_POLICY_FIELDS[number];
 
+export const DEFAULT_SCENARIO_PACKAGE_VERSION = '1.0.0' as const;
+
+export function normalizeScenarioPackageVersion(value: unknown, fallback = DEFAULT_SCENARIO_PACKAGE_VERSION) {
+  return typeof value === 'string' && value.trim() ? value : fallback;
+}
+
 export interface ScenarioPackagePolicy {
   artifactSchemas: ScenarioArtifactSchema[];
   defaultViews: UIManifestSlot[];
@@ -125,7 +131,7 @@ export function buildBuiltInScenarioPackage(scenarioId: ScenarioId, createdAt = 
   return {
     schemaVersion: '1',
     id: scenarioId,
-    version: '1.0.0',
+    version: DEFAULT_SCENARIO_PACKAGE_VERSION,
     status: 'published',
     scenario,
     skillPlan,
@@ -136,7 +142,7 @@ export function buildBuiltInScenarioPackage(scenarioId: ScenarioId, createdAt = 
       expectedArtifactTypes: spec.outputArtifacts.map((artifact) => artifact.type),
     }],
     versions: [{
-      version: '1.0.0',
+      version: DEFAULT_SCENARIO_PACKAGE_VERSION,
       status: 'published',
       createdAt,
       summary: `Built-in package for ${spec.title}.`,
@@ -148,7 +154,7 @@ export function buildBuiltInScenarioPackage(scenarioId: ScenarioId, createdAt = 
 export function builtInScenarioPackageRef(scenarioId: ScenarioId): ScenarioPackageRef {
   return {
     id: scenarioId,
-    version: '1.0.0',
+    version: DEFAULT_SCENARIO_PACKAGE_VERSION,
     source: 'built-in',
   };
 }

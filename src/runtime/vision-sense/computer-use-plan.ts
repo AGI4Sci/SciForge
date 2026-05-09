@@ -93,7 +93,7 @@ async function planGenericActionsFromScreenshot(
       task,
       screenshot,
       config,
-      `The current screenshot has already been captured. Do not return an empty action list or wait as the only action unless done=true. For an underspecified GUI sub-task, choose a conservative non-destructive screen action from the current screenshot, such as scroll on the main visible content, press Escape to dismiss transient overlays, ${platformRecoveryGuidance(config)}, or click a clearly described visible low-risk target. Return at least one non-wait action: click, double_click, drag, type_text, press_key, hotkey, or scroll; or set done=true with actions=[] if the task is complete.`,
+      visionSensePlannerPromptPolicy.buildEmptyActionRetryInstruction(platformRecoveryGuidance(config)),
       runHistory,
     );
     if (!retry.ok) return retry;
@@ -101,12 +101,7 @@ async function planGenericActionsFromScreenshot(
       if (isHighRiskVisionSenseGuiRequest(task)) {
         return {
           ok: true,
-          actions: [{
-            type: 'click',
-            targetDescription: 'the visible high-risk control requested by the task',
-            riskLevel: 'high',
-            requiresConfirmation: true,
-          }],
+          actions: [visionSensePlannerPromptPolicy.highRiskFallbackAction()],
           done: false,
           reason: 'High-risk GUI request must fail closed before executor until upstream confirmation is present.',
           rawResponse: retry.rawResponse,
@@ -139,11 +134,7 @@ async function guardPlannerNoEffectRepeat(
     task,
     screenshot,
     config,
-    [
-      `Your previous action repeats a recent no-visible-effect route: ${repeated}.`,
-      'The Verifier says that route did not visibly change the target window. Do not use the same action type, same targetDescription/targetRegionDescription, or same scroll direction again.',
-      'Choose a different visible generic GUI route from the current screenshot, switch input modality, ask for a local observation using wait with a different targetRegionDescription, or set done=true with actions=[] only if the screenshot already satisfies the round goal.',
-    ].join(' '),
+    visionSensePlannerPromptPolicy.buildNoEffectRetryInstruction(repeated),
     runHistory,
   );
   if (!retry.ok) return retry;
@@ -153,7 +144,7 @@ async function guardPlannerNoEffectRepeat(
       ok: false as const,
       actions: [] as [],
       done: false as const,
-      reason: `VisionPlanner repeated a no-visible-effect action route after retry (${repeatedAgain}). The generic planner must choose a different visible route or query a different region before more GUI execution.`,
+      reason: visionSensePlannerPromptPolicy.noEffectRepeatFailureReason(repeatedAgain),
       rawResponse: retry.rawResponse,
     };
   }
@@ -343,45 +334,21 @@ async function requestGenericPlannerActions(
   const response = await postOpenAiChatCompletion(config.planner, [
     {
       role: 'system',
-      content: [
-        'You are SciForge VisionPlanner for generic Computer Use.',
-        'Return only JSON. Do not read DOM or accessibility. Do not output application-private APIs, scripts, selectors, files, or shortcuts that depend on one app.',
-        `Execution environment: ${plannerEnvironmentDescription(config)}.`,
-        `Window target contract: ${plannerWindowTargetDescription(config)}.`,
-        `Current captured target: ${plannerCapturedTargetDescription(screenshot)}.`,
-        plannerImage.description,
-        appGuidance,
-        `Use only keys and modifiers supported by desktopPlatform="${config.desktopPlatform}". Do not use keys from another operating system family.`,
-        platformRecoveryGuidance(config),
-        'When an app must be opened, prefer open_app with appName. Only open or switch apps when the task explicitly asks to launch/open/switch applications; for current-screen/current-window tasks, operate within the supplied target window.',
-        'For file manager tasks, prefer open_app for the platform file manager (Finder on macOS, File Explorer on Windows) before interacting with files. Do not cycle through applications with repeated app-switch hotkeys to find a file manager.',
-        'For browser-hosted target windows, the target application content area excludes browser chrome: tab strip, address bar, bookmarks bar, toolbar buttons, extension buttons, and extension popups. Do not target browser chrome unless the task explicitly asks for browser chrome.',
-        'For browser research tasks, if the screenshot already shows results or an article/content page related to the requested topic, do not restart the search or edit a search field. Continue with visible result links, page content, scrolling, back navigation, or tab/window switching as generic GUI actions.',
-        'Do not describe body text or selected article text as a search input field unless a visible input box boundary, caret, placeholder, or search control is present at that location.',
-        'If an unrelated browser extension, permission, save, login, or external-service dialog appears, use Escape or a visible Cancel/Close button once, then return to the target application content. Do not click Retry, Enable, Authorize, Save, Submit, Send, Delete, or Login in unrelated dialogs.',
-        'If the supplied screenshot is a transient menu, popover, palette, gallery, or dropdown window, interact only with visible items inside that transient window. If the next needed target is in the underlying document/app window and is not visible in the captured target, use press_key Escape or a visible close/cancel control to dismiss the transient window first.',
-        'If the screenshot shows a document/template/gallery chooser and a template or item is already visibly selected, do not click the selected thumbnail again. Use the visible Create/New/Open/OK button, or use Cancel/Escape only when the task needs to leave the chooser.',
-        'For visual targets, output targetDescription text only; never output x/y/fromX/fromY/toX/toY coordinates. Coordinates are produced by the Grounder in the target-window screenshot coordinate system.',
-        'Planner screenshots may be budget-scaled for model latency. Do not infer exact pixel coordinates from them; describe visual targets semantically and let the Grounder use the original window screenshot.',
-        'For dense UI, small icons, table rows, menus, dialogs, or ambiguous regions, include targetRegionDescription to name the larger visual region to inspect first; the runtime will crop that region and run a second fine Grounder inside it before execution.',
-        'You may output wait with targetRegionDescription when the next step should be local observation only; the runtime will record focusRegion evidence and replan from the updated run history.',
-        'Do not put pixel boxes in focusRegion unless it was copied from prior run history; prefer targetRegionDescription text so vision-sense can choose and clip the focus region.',
-        'Allowed action types: open_app, click, double_click, drag, type_text, press_key, hotkey, scroll, wait.',
-        'Do not emit unsupported actions such as right_click, context_click, context_menu, menu_select, rename, move_file, copy_file, or app-private commands. For rename/move workflows, use only visible clicks, double_click, drag, type_text, press_key, open_app, scroll, or platform recovery hotkeys.',
-        'Hotkeys are allowed only for platform-level recovery such as app/window switching or launcher activation. Do not use app-specific or browser-specific shortcuts such as new tab, address bar focus, refresh, save, close tab, copy, paste, bold, or menu commands; use visible controls and generic typing/clicking instead.',
-        'Return {"done": boolean, "reason": string, "actions": [...]}. Set done=true only when the supplied screenshot shows the requested GUI task is complete; otherwise return exactly one next generic action. Include a short wait after that action only when the GUI needs time to settle.',
-        'Use the run history to avoid repeating completed actions. If the task is a low-risk recovery/observation task and at least one requested non-wait action has already executed with verifier evidence, set done=true with actions=[] unless the screenshot clearly shows another required unfinished step.',
-        'If run history marks a click or double_click target as no-visible-effect=true and the current screenshot is unchanged, do not repeat the same mouse action on the same target. Choose a different visible generic GUI route or a different generic input modality that the screenshot supports.',
-        ...visionSensePlannerPromptPolicy.domainTaskInstructions,
-        'The supplied screenshot is the observation state. Do not use wait as the only action to request another observation.',
-        visionSensePlannerPromptPolicy.highRiskActionInstruction,
+      content: visionSensePlannerPromptPolicy.buildSystemPrompt({
+        environmentDescription: plannerEnvironmentDescription(config),
+        windowTargetDescription: plannerWindowTargetDescription(config),
+        capturedTargetDescription: plannerCapturedTargetDescription(screenshot),
+        plannerImageDescription: plannerImage.description,
+        applicationGuidance: appGuidance,
+        desktopPlatform: config.desktopPlatform,
+        platformRecoveryGuidance: platformRecoveryGuidance(config),
         extraInstruction,
-      ].join(' '),
+      }),
     },
     {
       role: 'user',
       content: [
-        { type: 'text', text: `Task: ${task}\n${runHistory ? `Run history:\n${runHistory}\n` : ''}Return {"done":false,"reason":"...","actions":[one generic next action]} or {"done":true,"reason":"...","actions":[]} when the current screenshot plus run history show the task is complete. Stop before final high-risk actions unless explicitly confirmed by upstream.` },
+        { type: 'text', text: visionSensePlannerPromptPolicy.buildUserPrompt(task, runHistory) },
         { type: 'image_url', image_url: { url: plannerImage.dataUrl } },
       ],
     },
@@ -473,24 +440,11 @@ async function plannerImagePayload(screenshot: ScreenshotRef) {
 }
 
 function plannerRetryInstruction(issue: PlannerContractIssue | undefined, config: VisionSenseConfig) {
-  if (issue === 'platform-incompatible-action') {
-    return [
-      'Your previous JSON used an action that cannot be executed in the current operating system.',
-      `Rewrite for ${plannerEnvironmentDescription(config)} using only supported keys/modifiers and generic visible GUI actions.`,
-      platformLauncherGuidance(config.desktopPlatform),
-    ].join(' ');
-  }
-  if (issue === 'empty-message-content') {
-    return 'Your previous response had empty final message content. Return only the JSON object in final message content now; do not put the action plan only in reasoning_content, analysis, prose, markdown, or tool calls.';
-  }
-  if (issue === 'unsupported-action') {
-    return [
-      'Your previous JSON used an unsupported action type. Do not use right_click, context_click, context_menu, menu_select, rename, move_file, or app-private commands.',
-      'Rewrite using exactly one supported generic action: open_app, click, double_click, drag, type_text, press_key, hotkey, scroll, or wait.',
-      'For file rename/move tasks, first select visible files with click/double_click, use visible fields/buttons or generic press_key/type_text when the focused UI supports text entry, and drag only between visible locations.',
-    ].join(' ');
-  }
-  return 'Your previous JSON violated the planner contract by including screen coordinates. Rewrite the plan without x/y/fromX/fromY/toX/toY. Use targetDescription, fromTargetDescription, and toTargetDescription so the Grounder can produce coordinates.';
+  return visionSensePlannerPromptPolicy.buildPlannerRetryInstruction({
+    issue,
+    environmentDescription: plannerEnvironmentDescription(config),
+    platformLauncherGuidance: platformLauncherGuidance(config.desktopPlatform),
+  });
 }
 
 function plannerEnvironmentDescription(config: VisionSenseConfig) {
@@ -498,39 +452,24 @@ function plannerEnvironmentDescription(config: VisionSenseConfig) {
 }
 
 function platformRecoveryGuidance(config: VisionSenseConfig) {
-  if (isDarwinPlatform(config.desktopPlatform)) {
-    return 'use Command+Tab for app/window recovery on macOS; treat task text that says Alt+Tab as the cross-platform intent for Command+Tab on darwin';
-  }
-  return 'use the platform-native app/window switch hotkey only when the task explicitly asks to switch/recover windows';
+  return visionSensePlannerPromptPolicy.platformRecoveryGuidance(config.desktopPlatform);
 }
 
 async function detectedApplicationGuidance(config: VisionSenseConfig) {
   if (!isDarwinPlatform(config.desktopPlatform)) return '';
-  const candidates = [
-    { name: 'Microsoft Word', paths: ['/Applications/Microsoft Word.app'] },
-    { name: 'Microsoft PowerPoint', paths: ['/Applications/Microsoft PowerPoint.app'] },
-    { name: 'Microsoft Excel', paths: ['/Applications/Microsoft Excel.app'] },
-    { name: 'Keynote', paths: ['/Applications/Keynote.app', '/System/Applications/Keynote.app'] },
-    { name: 'Pages', paths: ['/Applications/Pages.app', '/System/Applications/Pages.app'] },
-    { name: 'TextEdit', paths: ['/System/Applications/TextEdit.app', '/Applications/TextEdit.app'] },
-    { name: 'Finder', paths: ['/System/Library/CoreServices/Finder.app'] },
-  ];
   const installed: string[] = [];
   const missing: string[] = [];
-  for (const candidate of candidates) {
+  for (const candidate of visionSensePlannerPromptPolicy.knownGuiApplicationCandidates) {
     if (await anyPathExists(candidate.paths)) {
       installed.push(candidate.name);
     } else {
       missing.push(candidate.name);
     }
   }
-  return [
-    `Detected installed GUI applications for this run: ${installed.length ? installed.join(', ') : 'unknown'}.`,
-    missing.length ? `Do not choose these application names unless they are visibly present or explicitly opened by the user: ${missing.join(', ')}.` : '',
-  ].filter(Boolean).join(' ');
+  return visionSensePlannerPromptPolicy.detectedApplicationGuidance(installed, missing);
 }
 
-async function anyPathExists(paths: string[]) {
+async function anyPathExists(paths: readonly string[]) {
   for (const path of paths) {
     try {
       const info = await stat(path);

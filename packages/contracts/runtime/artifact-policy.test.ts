@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   CURRENT_REFERENCE_DIGEST_RECOVERY_REF_PATH,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_TYPE,
   CURRENT_REFERENCE_DIGEST_RECOVERY_REPORT_ARTIFACT_ID,
   CURRENT_REFERENCE_DIGEST_RECOVERY_TOOL_ID,
   DIRECT_CONTEXT_FAST_PATH_POLICY,
@@ -48,6 +49,7 @@ test('runtime artifact policy owns AgentServer ToolPayload prompt contract', () 
 
 test('runtime artifact policy owns current-reference digest recovery payload shape', () => {
   assert.equal(CURRENT_REFERENCE_DIGEST_RECOVERY_TOOL_ID, 'sciforge.current-reference-digest-recovery');
+  assert.equal(CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_TYPE, 'agentserver-digest-recovery');
   assert.equal(CURRENT_REFERENCE_DIGEST_RECOVERY_REF_PATH, 'current-reference-digest-recovery');
   assert.equal(currentReferenceDigestFailureCanRecover('context window exceeded'), true);
   assert.equal(currentReferenceDigestFailureCanRecover('plain validation failure'), false);

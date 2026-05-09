@@ -13,7 +13,6 @@ from .cache_policy import build_cache_policy
 from .capability_broker import build_capability_brief
 from .context_policy import build_context_policy
 from .contracts import (
-    REQUEST_SCHEMA_VERSION,
     RESPONSE_SCHEMA_VERSION,
     ConversationPolicyRequest,
     ConversationPolicyResponse,
@@ -27,9 +26,8 @@ from .goal_snapshot import build_goal_snapshot
 from .handoff_planner import plan_handoff
 from .latency_policy import build_latency_policy
 from .memory import build_memory_plan
-from .recovery import plan_recovery
 from .response_plan import build_background_plan, build_response_plan
-from .service_plan import build_service_plan, build_turn_composition
+from .service_plan import build_error_response, build_policy_input, build_service_plan, build_turn_composition
 
 _build_ref_digest_bundle = getattr(
     importlib.import_module(".reference" + "_digest", __package__),
@@ -53,11 +51,17 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         "contextPolicy": context_policy,
     })
     current_reference_digests = _build_ref_digest_bundle(policy_input)
+    capability_brief = build_capability_brief(
+        _capability_request(policy_input, goal_snapshot),
+        policy_input["capabilities"],
+    )
     turn_composition = build_turn_composition({
         "policyInput": policy_input,
+        "goalSnapshot": goal_snapshot,
         "contextPolicy": context_policy,
         "memoryPlan": memory_plan,
         "currentReferenceDigests": current_reference_digests,
+        "capabilityBrief": capability_brief,
     })
     context_session = _mapping_from_plan(turn_composition, "contextSession")
     clickable_refs = _build_clickable_refs({
@@ -65,24 +69,8 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         "session": context_session,
         "currentReferenceDigests": current_reference_digests,
     })
-    capability_brief = build_capability_brief(
-        _capability_request(policy_input, goal_snapshot),
-        policy_input["capabilities"],
-    )
     execution_mode_plan = classify_execution_mode(
-        {
-            "prompt": policy_input["prompt"],
-            "refs": policy_input["references"],
-            "artifacts": context_session.get("artifacts", []),
-            "expectedArtifactTypes": goal_snapshot.get("requiredArtifacts", []),
-            "selectedCapabilities": capability_brief.get("selected", []),
-            "selectedTools": _selected_policy_list(policy_input, "selectedTools", "tools"),
-            "selectedSenses": _selected_policy_list(policy_input, "selectedSenses", "senses"),
-            "selectedVerifiers": _selected_policy_list(policy_input, "selectedVerifiers", "verifiers"),
-            "recentFailures": _recent_failures(policy_input),
-            "priorAttempts": _prior_attempts(policy_input),
-            "userGuidanceQueue": _user_guidance_queue(policy_input),
-        }
+        _mapping_from_plan(turn_composition, "executionClassifierInput")
     )
     handoff_plan = plan_handoff({
         "prompt": policy_input["prompt"],
@@ -94,7 +82,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         "requiredArtifacts": goal_snapshot.get("requiredArtifacts", []),
         "budget": _handoff_budget(policy_input),
     })
-    recovery_plan = _recovery_plan(policy_input)
+    recovery_plan = _mapping_from_plan(turn_composition, "recoveryPlan")
     latency_policy = build_latency_policy({
         "policyInput": policy_input,
         "goalSnapshot": goal_snapshot,
@@ -119,7 +107,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         "session": context_session,
         "references": policy_input.get("references", []),
         "refs": policy_input.get("refs", []),
-        "recentFailures": _recent_failures(policy_input),
+        "recentFailures": _list_from_plan(turn_composition, "recentFailures"),
     }
     response_plan = build_response_plan(policy_outputs)
     background_plan = build_background_plan(policy_outputs)
@@ -224,38 +212,7 @@ def _json_chunks(data: str) -> Iterable[str]:
 
 
 def _policy_input(request: ConversationPolicyRequest) -> JsonMap:
-    turn = to_json_dict(request.turn)
-    history = [to_json_dict(item) for item in request.history]
-    session = dict(request.session)
-    if not session.get("messages") and history:
-        session["messages"] = history
-    if not session.get("artifacts"):
-        session["artifacts"] = []
-    if not session.get("executionUnits"):
-        session["executionUnits"] = []
-    limits = {**request.limits, **request.policyHints}
-    return {
-        "schemaVersion": request.schemaVersion,
-        "requestId": request.requestId,
-        "turn": {
-            "turnId": request.turn.turnId,
-            "prompt": request.turn.text,
-            "references": [to_json_dict(item) for item in request.turn.refs],
-        },
-        "prompt": request.turn.text,
-        "turnId": request.turn.turnId,
-        "references": [to_json_dict(item) for item in request.turn.refs],
-        "refs": [to_json_dict(item) for item in request.turn.refs],
-        "history": history,
-        "session": session,
-        "workspace": request.workspace,
-        "limits": limits,
-        "policyHints": request.policyHints,
-        "capabilities": [to_json_dict(item) for item in request.capabilities],
-        "tsDecisions": request.tsDecisions,
-        "metadata": request.metadata,
-        "rawTurn": turn,
-    }
+    return build_policy_input(request)
 
 
 def _capability_request(policy_input: JsonMap, goal_snapshot: JsonMap) -> JsonMap:
@@ -294,101 +251,14 @@ def _handoff_budget(policy_input: JsonMap) -> JsonMap:
     }
 
 
-def _recovery_plan(policy_input: JsonMap) -> JsonMap:
-    hints = policy_input.get("policyHints", {})
-    failure = hints.get("failure") or policy_input.get("metadata", {}).get("failure")
-    if isinstance(failure, dict):
-        return plan_recovery(
-            failure,
-            policy_input.get("currentReferenceDigests", []),
-            policy_input.get("session", {}).get("runs", []),
-        )
-    return {
-        "schemaVersion": "sciforge.conversation.recovery-plan.v1",
-        "status": "ready",
-        "retryable": True,
-        "strategies": [
-            "repair-on-acceptance-failed",
-            "digest-recovery-on-silent-stream",
-            "failed-with-reason-after-budget",
-        ],
-    }
-
-
-def _recent_failures(policy_input: JsonMap) -> list[Any]:
-    hints = policy_input.get("policyHints", {})
-    failures: list[Any] = []
-    for candidate in (
-        hints.get("recentFailures"),
-        hints.get("failures"),
-        [hints.get("failure")] if hints.get("failure") else None,
-        policy_input.get("metadata", {}).get("recentFailures"),
-    ):
-        if isinstance(candidate, list):
-            failures.extend(candidate)
-    session = policy_input.get("session", {})
-    runs = session.get("runs")
-    if isinstance(runs, list):
-        failures.extend(
-            run
-            for run in runs
-            if isinstance(run, dict) and str(run.get("status", "")).lower() in {"failed", "error"}
-        )
-    return failures
-
-
-def _prior_attempts(policy_input: JsonMap) -> list[Any]:
-    hints = policy_input.get("policyHints", {})
-    metadata = policy_input.get("metadata", {})
-    session = policy_input.get("session", {})
-    attempts: list[Any] = []
-    for candidate in (
-        hints.get("priorAttempts"),
-        hints.get("attempts"),
-        metadata.get("priorAttempts"),
-        metadata.get("attempts"),
-        session.get("attempts"),
-        session.get("runs"),
-        session.get("executionUnits"),
-    ):
-        if isinstance(candidate, list):
-            attempts.extend(candidate)
-    return attempts
-
-
-def _user_guidance_queue(policy_input: JsonMap) -> list[Any]:
-    hints = policy_input.get("policyHints", {})
-    metadata = policy_input.get("metadata", {})
-    session = policy_input.get("session", {})
-    for candidate in (
-        hints.get("userGuidanceQueue"),
-        hints.get("guidanceQueue"),
-        metadata.get("userGuidanceQueue"),
-        session.get("userGuidanceQueue"),
-        session.get("guidanceQueue"),
-    ):
-        if isinstance(candidate, list):
-            return candidate
-    return []
-
-
-def _selected_policy_list(policy_input: JsonMap, *keys: str) -> list[Any]:
-    hints = policy_input.get("policyHints", {})
-    metadata = policy_input.get("metadata", {})
-    ts_decisions = policy_input.get("tsDecisions", {})
-    for source in (hints, metadata, ts_decisions):
-        if not isinstance(source, dict):
-            continue
-        for key in keys:
-            value = source.get(key)
-            if isinstance(value, list):
-                return value
-    return []
-
-
 def _mapping_from_plan(plan: JsonMap, key: str) -> JsonMap:
     value = plan.get(key)
     return value if isinstance(value, dict) else {}
+
+
+def _list_from_plan(plan: JsonMap, key: str) -> list[Any]:
+    value = plan.get(key)
+    return value if isinstance(value, list) else []
 
 
 def _mapping_list_from_plan(plan: JsonMap, key: str) -> list[JsonMap]:
@@ -409,73 +279,9 @@ def _process_stage_from_plan(plan: JsonMap) -> ProcessStage:
 
 
 def _error_response(exc: Exception) -> str:
-    payload: dict[str, Any] = {
-        "schemaVersion": RESPONSE_SCHEMA_VERSION,
-        "requestId": None,
-        "status": "failed",
-        "goalSnapshot": {"text": "", "mode": "ambiguous", "explicitRefs": []},
-        "contextPolicy": {"mode": "ambiguous"},
-        "memoryPlan": {},
-        "currentReferences": [],
-        "currentReferenceDigests": [],
-        "artifactIndex": {},
-        "capabilityBrief": {"selected": [], "excluded": [], "auditTrace": []},
-        "executionModePlan": {},
-        "handoffPlan": {"fallback": {"tsRuntimeFallback": True}},
-        "acceptancePlan": {},
-        "recoveryPlan": {},
-        "latencyPolicy": {
-            "schemaVersion": "sciforge.conversation.latency-policy.v1",
-            "firstVisibleResponseMs": 8000,
-            "firstEventWarningMs": 18000,
-            "silentRetryMs": 60000,
-            "allowBackgroundCompletion": False,
-            "blockOnContextCompaction": True,
-            "blockOnVerification": True,
-            "reason": "safe default after policy service failure",
-        },
-        "responsePlan": {
-            "schemaVersion": "sciforge.conversation.response-plan.v1",
-            "initialResponseMode": "wait-for-result",
-            "finalizationMode": "append-final",
-            "userVisibleProgress": ["failed"],
-            "fallbackMessagePolicy": "safety-first-status-with-required-confirmation",
-            "reason": "safe default after policy service failure",
-        },
-        "backgroundPlan": {
-            "schemaVersion": "sciforge.conversation.background-plan.v1",
-            "enabled": False,
-            "tasks": [],
-            "handoffRefsRequired": True,
-            "cancelOnNewUserTurn": True,
-            "reason": "safe default after policy service failure",
-        },
-        "cachePolicy": {
-            "schemaVersion": "sciforge.conversation.cache-policy.v1",
-            "reuseScenarioPlan": False,
-            "reuseSkillPlan": False,
-            "reuseUiPlan": False,
-            "reuseUIPlan": False,
-            "reuseReferenceDigests": False,
-            "reuseArtifactIndex": False,
-            "reuseLastSuccessfulStage": False,
-            "reuseBackendSession": False,
-            "reason": "safe default after policy service failure",
-        },
-        "userVisiblePlan": [],
-        "processStage": {
-            "phase": "failed",
-            "summary": "Conversation policy request failed.",
-        },
-        "auditTrace": [
-            {
-                "event": "schema.rejected",
-                "expectedRequestSchemaVersion": REQUEST_SCHEMA_VERSION,
-            }
-        ],
-        "errors": [{"type": type(exc).__name__, "message": str(exc)}],
-        "metadata": {"service": "sciforge_conversation.service"},
-    }
+    payload = build_error_response({
+        "error": {"type": type(exc).__name__, "message": str(exc)},
+    })
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 

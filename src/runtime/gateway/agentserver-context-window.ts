@@ -1,4 +1,11 @@
 import type { AgentBackendAdapter, AgentBackendCapabilities, BackendContextCompactionResult, BackendContextWindowState, GatewayRequest, WorkspaceRuntimeCallbacks, WorkspaceRuntimeContextBudget, WorkspaceRuntimeContextCompaction, WorkspaceRuntimeEvent } from '../runtime-types.js';
+import {
+  compactCapabilityForAgentBackend,
+  estimateRuntimeAgentBackendModelContextWindow,
+  normalizeRuntimeAgentBackendContextWindowSource,
+  runtimeAgentBackendCapabilities,
+  runtimeAgentBackendProviderLabel,
+} from '@sciforge-ui/runtime-contract/agent-backend-policy';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { clipForAgentServerJson, clipForAgentServerPrompt, errorMessage, isRecord, toRecordList } from '../gateway-utils.js';
@@ -20,45 +27,8 @@ function firstFiniteNumber(...values: unknown[]) {
   return undefined;
 }
 
-function providerForBackend(backend: string) {
-  if (backend === 'codex') return 'OpenAI';
-  if (backend === 'openteam_agent') return 'OpenTeam';
-  if (backend === 'claude-code') return 'Anthropic';
-  if (backend === 'gemini') return 'Google';
-  if (backend === 'hermes-agent') return 'Hermes';
-  if (backend === 'openclaw') return 'OpenClaw';
-  return 'unknown';
-}
-
 function agentBackendCapabilities(backend: string): AgentBackendCapabilities {
-  switch (backend) {
-    case 'codex':
-      return {
-        nativeCompaction: true,
-        contextWindowTelemetry: true,
-        compactionDuringTurn: true,
-        rateLimitTelemetry: true,
-        sessionRotationSafe: false,
-      };
-    case 'openteam_agent':
-      return {
-        nativeCompaction: false,
-        contextWindowTelemetry: true,
-        compactionDuringTurn: false,
-        rateLimitTelemetry: true,
-        sessionRotationSafe: false,
-      };
-    case 'claude-code':
-      return { nativeCompaction: false, contextWindowTelemetry: false, compactionDuringTurn: false, rateLimitTelemetry: true, sessionRotationSafe: true };
-    case 'gemini':
-      return { nativeCompaction: false, contextWindowTelemetry: true, compactionDuringTurn: false, rateLimitTelemetry: true, sessionRotationSafe: true };
-    case 'hermes-agent':
-      return { nativeCompaction: true, contextWindowTelemetry: true, compactionDuringTurn: false, rateLimitTelemetry: true, sessionRotationSafe: true };
-    case 'openclaw':
-      return { nativeCompaction: false, contextWindowTelemetry: false, compactionDuringTurn: false, rateLimitTelemetry: true, sessionRotationSafe: true };
-    default:
-      return { nativeCompaction: false, contextWindowTelemetry: false, compactionDuringTurn: false, rateLimitTelemetry: false, sessionRotationSafe: true };
-  }
+  return runtimeAgentBackendCapabilities(backend);
 }
 
 export async function preflightAgentServerContextWindow(params: {
@@ -335,15 +305,15 @@ function normalizeBackendContextWindowState(
     : rawAutoCompactThreshold ?? 0.82;
   const rawStatus = stringField(contextWindow.status) ?? stringField(workBudget.status);
   const status = normalizeContextWindowStatus(rawStatus, ratio, autoCompactThreshold);
-  const provider = stringField(contextWindow.provider) ?? stringField(usage.provider) ?? providerForBackend(backend);
+  const provider = stringField(contextWindow.provider) ?? stringField(usage.provider) ?? runtimeAgentBackendProviderLabel(backend);
   const model = stringField(contextWindow.model) ?? stringField(usage.model) ?? stringField(data.model) ?? stringField(data.modelName);
-  const source = normalizeBackendContextWindowSource(
-    stringField(contextWindow.source) ?? stringField(usage.source) ?? stringField(data.source),
+  const source = normalizeRuntimeAgentBackendContextWindowSource({
+    value: stringField(contextWindow.source) ?? stringField(usage.source) ?? stringField(data.source),
     backend,
     capabilities,
-    Boolean(tokens !== undefined || limit !== undefined || ratio !== undefined),
-    Boolean(input !== undefined || output !== undefined || cache !== undefined || finiteNumber(usage.total) !== undefined),
-  );
+    hasContextWindowTelemetry: Boolean(tokens !== undefined || limit !== undefined || ratio !== undefined),
+    hasUsage: Boolean(input !== undefined || output !== undefined || cache !== undefined || finiteNumber(usage.total) !== undefined),
+  });
   return {
     backend,
     agentId,
@@ -378,7 +348,7 @@ function fallbackContextWindowState(agentId: string, backend: string, capabiliti
   return {
     backend,
     agentId,
-    provider: providerForBackend(backend),
+    provider: runtimeAgentBackendProviderLabel(backend),
     source: 'unknown',
     status: 'unknown',
     compactCapability: fallbackCompactCapabilityForBackend(backend, capabilities),
@@ -442,22 +412,6 @@ function markHandoffSlimmingState(
     status: 'watch',
     compactCapability: backend === 'gemini' ? 'session-rotate' : 'handoff-only',
   };
-}
-
-function normalizeBackendContextWindowSource(
-  value: string | undefined,
-  backend: string,
-  capabilities: AgentBackendCapabilities,
-  hasContextWindowTelemetry: boolean,
-  hasUsage: boolean,
-): BackendContextWindowState['source'] {
-  if (value === 'native') return 'native';
-  if (value === 'provider-usage' || value === 'usage' || value === 'provider') return 'provider-usage';
-  if (value === 'agentserver-estimate' || value === 'agentserver' || value === 'estimate' || value === 'handoff') return 'agentserver-estimate';
-  if (hasContextWindowTelemetry && capabilities.nativeCompaction && (backend === 'codex' || backend === 'hermes-agent')) return 'native';
-  if (hasUsage) return 'provider-usage';
-  if (hasContextWindowTelemetry) return 'agentserver-estimate';
-  return 'unknown';
 }
 
 function firstRecord(...values: unknown[]) {
@@ -693,7 +647,7 @@ export function estimateWorkspaceContextWindowState(params: {
   const ratio = windowTokens ? params.usedTokens / windowTokens : undefined;
   return {
     backend: params.backend,
-    provider: providerForBackend(params.backend),
+    provider: runtimeAgentBackendProviderLabel(params.backend),
     model: params.modelName,
     usedTokens: params.usedTokens,
     window: windowTokens,
@@ -752,23 +706,11 @@ export function handoffBudgetDecisionRecords(decisions: unknown[]): Array<Record
 }
 
 export function estimateModelContextWindow(modelName?: string) {
-  const model = (modelName ?? '').toLowerCase();
-  if (!model) return undefined;
-  if (/1m|1000k|gemini-1\.5-pro|gemini-2\./.test(model)) return 1_000_000;
-  if (/400k|claude.*sonnet-4|claude.*opus-4/.test(model)) return 400_000;
-  if (/200k|claude|gpt-4\.1|gpt-5|o3|o4/.test(model)) return 200_000;
-  if (/128k|gpt-4o|gemini/.test(model)) return 128_000;
-  if (/32k/.test(model)) return 32_000;
-  if (/16k/.test(model)) return 16_000;
-  return undefined;
+  return estimateRuntimeAgentBackendModelContextWindow(modelName);
 }
 
 export function compactCapabilityForBackend(backend: string): 'native' | 'agentserver' | 'handoff-only' | 'handoff-slimming' | 'session-rotate' | 'none' | 'unknown' {
-  if (backend === 'codex') return 'native';
-  if (backend === 'openteam_agent' || backend === 'hermes-agent') return 'agentserver';
-  if (backend === 'gemini') return 'session-rotate';
-  if (backend === 'claude-code' || backend === 'openclaw') return 'handoff-only';
-  return 'unknown';
+  return compactCapabilityForAgentBackend(backend);
 }
 
 export async function fetchAgentServerContextSnapshot(baseUrl: string, agentId: string) {

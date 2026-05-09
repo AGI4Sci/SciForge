@@ -1,5 +1,7 @@
 import { copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
+import type { CapabilityEvolutionCandidate, CapabilityEvolutionCandidateSet, CapabilityEvolutionCompactSummary } from '../../packages/contracts/runtime/capability-evolution.js';
+import { buildCapabilityEvolutionCandidateSet } from './capability-evolution-ledger.js';
 import type { GatewayRequest, SkillAvailability, SkillManifest, SkillPromotionProposal, ToolPayload } from './runtime-types.js';
 import { loadSkillRegistry } from './skill-registry.js';
 import { fileExists, runWorkspaceTask, sha1 } from './workspace-task-runner.js';
@@ -33,6 +35,46 @@ export async function maybeWriteSkillPromotionProposal(params: {
   return proposal;
 }
 
+export async function writeSkillPromotionProposalsFromCapabilityEvolutionSummary(params: {
+  workspacePath: string;
+  summary: CapabilityEvolutionCompactSummary;
+  request?: Pick<GatewayRequest, 'prompt' | 'skillDomain'>;
+  now?: () => Date;
+}): Promise<SkillPromotionProposal[]> {
+  return writeSkillPromotionProposalsFromCapabilityEvolutionCandidates({
+    workspacePath: params.workspacePath,
+    candidateSet: buildCapabilityEvolutionCandidateSet(params.summary),
+    request: params.request,
+    now: params.now,
+  });
+}
+
+export async function writeSkillPromotionProposalsFromCapabilityEvolutionCandidates(params: {
+  workspacePath: string;
+  candidateSet: CapabilityEvolutionCandidateSet;
+  request?: Pick<GatewayRequest, 'prompt' | 'skillDomain'>;
+  now?: () => Date;
+}): Promise<SkillPromotionProposal[]> {
+  const workspace = resolve(params.workspacePath || process.cwd());
+  const createdAt = (params.now ?? (() => new Date()))().toISOString();
+  const proposals = params.candidateSet.promotionCandidates
+    .filter((candidate) => candidate.proposalKind === 'composed-capability')
+    .map((candidate) => buildLedgerSkillPromotionProposal({
+      workspacePath: workspace,
+      candidate,
+      candidateSet: params.candidateSet,
+      request: params.request,
+      createdAt,
+    }));
+  for (const proposal of proposals) {
+    const proposalDir = join(workspace, '.sciforge', 'skill-proposals', safeName(proposal.id));
+    await mkdir(proposalDir, { recursive: true });
+    await writeFile(join(proposalDir, 'proposal.json'), JSON.stringify(proposal, null, 2));
+    await writeFile(join(proposalDir, 'README.md'), proposalReadme(proposal), 'utf8');
+  }
+  return proposals;
+}
+
 export async function listSkillPromotionProposals(workspacePath: string): Promise<SkillPromotionProposal[]> {
   const workspace = resolve(workspacePath || process.cwd());
   const root = join(workspace, '.sciforge', 'skill-proposals');
@@ -57,6 +99,9 @@ export async function acceptSkillPromotionProposal(workspacePath: string, propos
   if (!isSkillPromotionProposal(parsed)) throw new Error(`Invalid skill promotion proposal: ${proposalId}`);
   if (parsed.status === 'rejected' || parsed.status === 'archived') {
     throw new Error(`Skill promotion proposal is ${parsed.status}: ${proposalId}`);
+  }
+  if (parsed.source.kind === 'capability-evolution-ledger') {
+    throw new Error(`Ledger-sourced skill promotion proposal must be materialized before accept: ${proposalId}`);
   }
   const manifest = parsed.proposedManifest;
   const sourceTask = join(workspace, parsed.source.taskCodeRef);
@@ -301,6 +346,115 @@ function buildSkillPromotionProposal(params: {
       reproducibleEntrypoint: true,
       artifactSchemaValidated: true,
       failureModeIsExplicit: params.payload.executionUnits.every((unit) => !isRecord(unit) || unit.status === 'done' || unit.status === 'self-healed'),
+      userConfirmedPromotion: false,
+    },
+  };
+}
+
+function buildLedgerSkillPromotionProposal(params: {
+  workspacePath: string;
+  candidate: CapabilityEvolutionCandidate;
+  candidateSet: CapabilityEvolutionCandidateSet;
+  request?: Pick<GatewayRequest, 'prompt' | 'skillDomain'>;
+  createdAt: string;
+}): SkillPromotionProposal {
+  const capabilityIds = uniqueStrings(params.candidate.suggestedUpdates?.capabilityIds ?? []);
+  const skillDomain = params.request?.skillDomain ?? 'literature';
+  const skillId = params.candidate.suggestedCapabilityId
+    ?? `workspace.${skillDomain}.${slugForPrompt(params.candidate.observedPattern ?? params.candidate.id)}`;
+  const proposalId = `ledger.${safeName(params.candidate.id.replace(/^proposal:/, ''))}`;
+  const prompt = params.request?.prompt
+    ?? params.candidate.reason
+    ?? `Review ledger promotion candidate ${params.candidate.id}`;
+  const manifest: SkillManifest = {
+    id: skillId,
+    kind: 'workspace',
+    description: `Ledger-suggested composed skill candidate from ${params.candidate.supportCount} supporting records.`,
+    skillDomains: [skillDomain],
+    inputContract: {
+      source: 'capability-evolution-ledger',
+      observedPattern: params.candidate.observedPattern,
+      capabilityIds,
+      sourceRef: params.candidate.sourceRef,
+    },
+    outputArtifactSchema: {
+      source: 'ledger-evidence',
+      supportingRecordRefs: params.candidate.supportingRecordRefs,
+    },
+    entrypoint: {
+      type: 'markdown-skill',
+    },
+    environment: {
+      sourceRuntime: 'capability-evolution-ledger',
+      supportCount: params.candidate.supportCount,
+      confidence: params.candidate.confidence,
+    },
+    validationSmoke: {
+      mode: 'ledger-evidence-review',
+      prompt,
+      sourceRef: params.candidate.sourceRef,
+      supportingRecordRefs: params.candidate.supportingRecordRefs,
+    },
+    examplePrompts: [prompt],
+    promotionHistory: [{
+      source: 'capability-evolution-ledger',
+      candidateId: params.candidate.id,
+      candidateSetRef: params.candidateSet.sourceRef,
+      supportingRecordRefs: params.candidate.supportingRecordRefs,
+      supportCount: params.candidate.supportCount,
+      confidence: params.candidate.confidence,
+      createdAt: params.createdAt,
+    }],
+    scopeDeclaration: {
+      source: 'capability-evolution-ledger',
+      status: 'needs-user-confirmation',
+      supportedTasks: [`Compose and review repeated capability chain: ${capabilityIds.join(', ') || params.candidate.observedPattern || params.candidate.id}.`],
+      unsupportedTasks: ['Accepting without materializing a package manifest, validator, repair hints, and executable provider.'],
+    },
+  };
+  return {
+    id: proposalId,
+    status: 'needs-user-confirmation',
+    createdAt: params.createdAt,
+    source: {
+      kind: 'capability-evolution-ledger',
+      workspacePath: params.workspacePath,
+      taskCodeRef: params.candidate.sourceRef ?? params.candidate.supportingRecordRefs[0] ?? '.sciforge/capability-evolution-ledger/records.jsonl',
+      successfulExecutionUnitRefs: [],
+      ledgerSourceRef: params.candidate.sourceRef,
+      ledgerCandidateRef: params.candidate.id,
+      ledgerRecordRefs: params.candidate.supportingRecordRefs,
+    },
+    proposedManifest: manifest,
+    generalizationNotes: [
+      'Generated from Capability Evolution Ledger compact evidence.',
+      'Review the supporting ledger records by ref; this proposal intentionally does not inline glue code, stdout, stderr, or full logs.',
+      'Materialize a package composed capability with manifest, validator, repair hints, and provider before accepting into the registry.',
+    ],
+    validationPlan: {
+      smokePrompts: [prompt],
+      expectedArtifactTypes: [],
+      requiredEnvironment: manifest.environment,
+    },
+    securityGate: {
+      passed: true,
+      checks: {
+        noHardCodedAbsolutePaths: true,
+        noCredentialLikeText: true,
+        noPrivateFileReferences: true,
+        reproducibleDependencies: true,
+      },
+      findings: [],
+    },
+    reviewChecklist: {
+      noHardCodedUserData: false,
+      noHardCodedAbsolutePaths: true,
+      noCredentialLikeText: true,
+      noPrivateFileReferences: true,
+      reproducibleDependencies: true,
+      reproducibleEntrypoint: false,
+      artifactSchemaValidated: false,
+      failureModeIsExplicit: true,
       userConfirmedPromotion: false,
     },
   };

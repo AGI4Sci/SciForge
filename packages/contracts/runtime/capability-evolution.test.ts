@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import {
   CAPABILITY_EVOLUTION_BROKER_DIGEST_CONTRACT_ID,
+  CAPABILITY_EVOLUTION_CANDIDATE_SET_CONTRACT_ID,
   CAPABILITY_EVOLUTION_COMPACT_SUMMARY_CONTRACT_ID,
   CAPABILITY_EVOLUTION_RECORD_CONTRACT_ID,
   type CapabilityEvolutionBrokerDigest,
+  type CapabilityEvolutionCandidateSet,
   type CapabilityEvolutionCompactSummary,
   type CapabilityEvolutionRecord,
 } from './capability-evolution';
@@ -112,9 +114,44 @@ const compactSummary = {
     artifactRefs: ['artifact:report'],
     executionUnitRefs: ['execution-unit:primary', 'execution-unit:atomic'],
     validationSummary: 'Primary composed output missed an expected report artifact.',
+    promotionCandidate: {
+      eligible: true,
+      proposalKind: 'fallback-policy-update',
+      candidateId: 'proposal:repair-pattern:missing-artifact',
+      supportCount: 2,
+      confidence: 0.75,
+      supportingRecordRefs: ['.sciforge/capability-evolution-ledger/records.jsonl#L1'],
+      suggestedUpdates: {
+        failureCodes: ['missing-artifact'],
+        fallbackTriggers: ['missing-artifact'],
+        repairHints: ['Map expected artifact types to generated artifact ids before rerun.'],
+      },
+    },
     recordRef: '.sciforge/capability-evolution-ledger/records.jsonl#L1',
   }],
 } satisfies CapabilityEvolutionCompactSummary;
+
+const candidateSet = {
+  schemaVersion: CAPABILITY_EVOLUTION_CANDIDATE_SET_CONTRACT_ID,
+  generatedAt: compactSummary.generatedAt,
+  sourceRef: compactSummary.sourceRef,
+  totalCandidates: 1,
+  promotionCandidates: [],
+  repairHintImprovementCandidates: [{
+    id: 'proposal:repair-pattern:missing-artifact',
+    kind: 'repair-hint-improvement',
+    proposalKind: 'fallback-policy-update',
+    sourceRef: compactSummary.sourceRef,
+    supportingRecordRefs: ['.sciforge/capability-evolution-ledger/records.jsonl#L1'],
+    supportCount: 2,
+    confidence: 0.75,
+    suggestedUpdates: {
+      failureCodes: ['missing-artifact'],
+      fallbackTriggers: ['missing-artifact'],
+      repairHints: ['Map expected artifact types to generated artifact ids before rerun.'],
+    },
+  }],
+} satisfies CapabilityEvolutionCandidateSet;
 
 const brokerDigest = {
   schemaVersion: CAPABILITY_EVOLUTION_BROKER_DIGEST_CONTRACT_ID,
@@ -125,11 +162,14 @@ const brokerDigest = {
   selectedCapabilityIds: ['capability.composed.report', 'runtime.python-task'],
   failureCodes: ['missing-artifact'],
   recoverActions: ['fallback-to-atomic', 'merge-supplemental-payload'],
-  promotionCandidateCount: 0,
+  promotionCandidateCount: 1,
+  repairHintImprovementCandidateCount: 1,
 } satisfies CapabilityEvolutionBrokerDigest;
 
 assert.equal(compactSummary.schemaVersion, CAPABILITY_EVOLUTION_COMPACT_SUMMARY_CONTRACT_ID);
 assert.equal(compactSummary.recentRecords[0]?.fallbackDecision?.trigger, 'missing-artifact');
+assert.equal(candidateSet.schemaVersion, CAPABILITY_EVOLUTION_CANDIDATE_SET_CONTRACT_ID);
+assert.equal(candidateSet.repairHintImprovementCandidates[0]?.suggestedUpdates?.repairHints?.length, 1);
 assert.equal(brokerDigest.schemaVersion, CAPABILITY_EVOLUTION_BROKER_DIGEST_CONTRACT_ID);
 
 console.log('[ok] capability evolution runtime contracts preserve fallback reason, atomic trace, run refs, execution units, and artifact refs');

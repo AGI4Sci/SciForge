@@ -19,6 +19,7 @@ export const CURRENT_REFERENCE_DIGEST_RECOVERY_REPORT_ARTIFACT_TYPE = 'research-
 export const CURRENT_REFERENCE_DIGEST_RECOVERY_CLAIM_TYPE = 'current-reference-digest-recovery' as const;
 export const CURRENT_REFERENCE_DIGEST_RECOVERY_EVIDENCE_LEVEL = 'bounded-current-reference-digest' as const;
 export const CURRENT_REFERENCE_DIGEST_RECOVERY_RUNTIME_LABEL = 'SciForge current-reference digest recovery' as const;
+export const CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_TYPE = 'agentserver-digest-recovery' as const;
 export const CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_MESSAGE =
   'AgentServer did not converge, so SciForge recovered from bounded current-reference digests.' as const;
 export const CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_DETAIL =

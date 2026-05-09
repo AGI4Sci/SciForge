@@ -6,7 +6,7 @@ import { captureDisplays, createFocusedCropRefs, pixelDiffForScreenshotSets, toT
 import { executeGenericDesktopAction, executorBoundary } from '../computer-use/executor.js';
 import type { ComputerUseConfig as VisionSenseConfig, GenericVisionAction, LoopStep, ScreenshotRef, WindowTargetResolution } from '../computer-use/types.js';
 import { inputChannelDescription, resolveWindowTarget, schedulerStepMetadata, stepInputChannelMetadata, toTraceWindowTarget, windowTargetTraceConfig } from '../computer-use/window-target.js';
-import { visionSenseCompletionPolicyModes, visionSenseRuntimeEventTypes } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
+import { visionSenseCompletionPolicyModes, visionSenseRuntimeEventTypes, visionSenseTraceContractPolicy } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
 import { VISION_TOOL_ID } from './computer-use-trace-output.js';
 import {
   actionLedgerCompletion,
@@ -242,8 +242,7 @@ export async function runComputerUseActionLoop(params: {
       const noVisibleEffect = !config.dryRun && ok && executableAction.type !== 'wait' && verifierPixelDiff.possiblyNoEffect === true;
       const windowConsistency = windowConsistencyMetadata(beforeRefs, afterRefs, config);
       const visualFocus = focusRegion ? {
-        strategy: 'coarse-to-fine-focus-region',
-        algorithmProvider: 'sciforge_vision_sense.coarse_to_fine',
+        ...visionSenseTraceContractPolicy.visualFocus,
         region: focusRegion,
         beforeFocusScreenshotRefs: beforeFocusRefs.map(toTraceScreenshotRef),
         afterFocusScreenshotRefs: afterFocusRefs.map(toTraceScreenshotRef),

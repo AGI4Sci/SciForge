@@ -4,7 +4,7 @@ import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
 import type { ScreenshotRef, TraceWindowTarget } from '../computer-use/types.js';
 import { platformLabel, sanitizeId, sha256, workspaceRel } from '../computer-use/utils.js';
 import { toTraceScreenshotRef } from '../computer-use/capture.js';
-import { visionSenseTraceIds } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
+import { visionSenseTraceContractPolicy, visionSenseTraceIds, visionSenseTraceOutputPolicy } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
 import { visionSenseTraceOutputViews } from '../../../packages/presentation/interactive-views';
 
 export const VISION_TOOL_ID = visionSenseTraceIds.tool;
@@ -35,14 +35,14 @@ export function genericLoopPayload(params: {
     claimType: 'execution',
     evidenceLevel: 'runtime',
     reasoningTrace: [
-      'local.vision-sense was selected and routed to the generic Computer Use loop.',
-      'The runtime uses app-agnostic screenshot refs and generic mouse/keyboard action schema.',
+      visionSenseTraceOutputPolicy.selectedRuntimeReason,
+      visionSenseTraceOutputPolicy.genericActionSchemaReason,
       params.failureReason || `Executed ${params.actionCount} generic action(s).`,
-      'No app-specific shortcut or AgentServer repository scan was used.',
+      visionSenseTraceOutputPolicy.noAppSpecificShortcutReason,
     ].filter(Boolean).join('\n'),
     claims: [{
       text: isDone
-        ? 'SciForge executed generic Computer Use actions and wrote file-ref-only visual memory.'
+        ? visionSenseTraceOutputPolicy.successClaim
         : params.failureReason,
       type: isDone ? 'execution' : 'failure',
       confidence: isDone ? 0.72 : 0.35,
@@ -73,12 +73,8 @@ export function genericLoopPayload(params: {
       beforeScreenshotRef: beforeRef?.path,
       failureReason: params.failureReason || undefined,
       routeDecision: { selectedRuntime: visionSenseTraceIds.runtime, selectedToolId: VISION_TOOL_ID },
-      requiredInputs: params.status === 'done' ? undefined : ['WindowTargetProvider', 'VisionPlanner', 'Grounder', 'GuiExecutor', 'Verifier'],
-      recoverActions: params.status === 'done' ? undefined : [
-        'Provide a generic VisionPlanner that emits the action schema recorded in the trace.',
-        'Configure KV-Ground or another Grounder so target descriptions become target-window coordinates.',
-        'Keep app-specific APIs out of the primary path; only mouse/keyboard executor actions should be required.',
-      ],
+      requiredInputs: params.status === 'done' ? undefined : [...visionSenseTraceOutputPolicy.requiredInputs],
+      recoverActions: params.status === 'done' ? undefined : [...visionSenseTraceOutputPolicy.recoverActions],
     }],
     artifacts: [{
       id: visionSenseTraceIds.trace,
@@ -89,7 +85,7 @@ export function genericLoopPayload(params: {
       schemaVersion: visionSenseTraceIds.traceSchema,
       metadata: {
         runId: params.runId,
-        imageMemoryPolicy: 'file-ref-only',
+        imageMemoryPolicy: visionSenseTraceContractPolicy.imageMemory.policy,
         screenshotRefs: allRefs.map(toTraceScreenshotRef),
         windowTarget: params.windowTarget,
         noInlineImages: true,
@@ -142,12 +138,8 @@ export function genericBridgeBlockedPayload(
       artifacts: [],
       failureReason: reason,
       routeDecision,
-      requiredInputs: ['ScreenCaptureProvider', 'VisionPlanner', 'Grounder', 'GuiExecutor', 'Verifier'],
-      recoverActions: [
-        'Enable the generic desktop bridge with SCIFORGE_VISION_DESKTOP_BRIDGE=1 or .sciforge/config.json visionSense.desktopBridgeEnabled=true.',
-        'Configure capture displays with SCIFORGE_VISION_CAPTURE_DISPLAYS=1,2 or visionSense.captureDisplays.',
-        'Provide a planner/grounder that emits app-agnostic mouse and keyboard actions.',
-      ],
+      requiredInputs: ['ScreenCaptureProvider', ...visionSenseTraceOutputPolicy.requiredInputs.slice(1)],
+      recoverActions: [...visionSenseTraceOutputPolicy.bridgeRecoverActions],
       nextStep: 'Configure the generic vision loop dependencies, then rerun the same request.',
     }],
     artifacts: [],

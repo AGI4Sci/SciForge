@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { readRecentTaskAttempts, readTaskAttempts } from '../task-attempt-history.js';
+import { normalizeScenarioPackageVersion } from '@sciforge/scenario-core/scenario-package';
 import {
   acceptSkillPromotionProposal,
   archiveSkillPromotionProposal,
@@ -294,7 +295,7 @@ function scenarioWorkspaceRootFromBody(body: Record<string, unknown>) {
 async function writeScenarioPackage(root: string, pkg: Record<string, unknown>, status: string) {
   const id = typeof pkg.id === 'string' && pkg.id.trim() ? pkg.id : isRecord(pkg.scenario) && typeof pkg.scenario.id === 'string' ? pkg.scenario.id : '';
   if (!id) throw new Error('package.id is required');
-  const version = typeof pkg.version === 'string' && pkg.version.trim() ? pkg.version : '1.0.0';
+  const version = normalizeScenarioPackageVersion(pkg.version);
   const scenarioDir = join(root, '.sciforge', 'scenarios', safeName(id));
   await mkdir(scenarioDir, { recursive: true });
   const nextPackage: Record<string, unknown> = { ...pkg, id, version, status };
@@ -339,7 +340,7 @@ async function readScenarioPackageFromDir(dir: string): Promise<Record<string, u
   return {
     schemaVersion: '1',
     id: String(scenario.id || basename(dir)),
-    version: typeof scenario.version === 'string' ? scenario.version : '1.0.0',
+    version: normalizeScenarioPackageVersion(scenario.version),
     status: typeof scenario.status === 'string' ? scenario.status : 'draft',
     scenario,
     skillPlan,
@@ -374,7 +375,7 @@ function scenarioListItem(pkg: Record<string, unknown>) {
   const scenario = isRecord(pkg.scenario) ? pkg.scenario : {};
   return {
     id: typeof pkg.id === 'string' ? pkg.id : String(scenario.id || ''),
-    version: typeof pkg.version === 'string' ? pkg.version : '1.0.0',
+    version: normalizeScenarioPackageVersion(pkg.version),
     status: typeof pkg.status === 'string' ? pkg.status : statusFromPackage(pkg) || 'draft',
     title: typeof scenario.title === 'string' ? scenario.title : typeof pkg.id === 'string' ? pkg.id : 'Untitled scenario',
     description: typeof scenario.description === 'string' ? scenario.description : '',

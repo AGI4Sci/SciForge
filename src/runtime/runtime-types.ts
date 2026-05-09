@@ -332,6 +332,7 @@ export interface SkillPromotionProposal {
   statusUpdatedAt?: string;
   statusReason?: string;
   source: {
+    kind?: 'workspace-task' | 'capability-evolution-ledger';
     workspacePath: string;
     taskCodeRef: string;
     inputRef?: string;
@@ -339,6 +340,9 @@ export interface SkillPromotionProposal {
     stdoutRef?: string;
     stderrRef?: string;
     successfulExecutionUnitRefs: string[];
+    ledgerSourceRef?: string;
+    ledgerCandidateRef?: string;
+    ledgerRecordRefs?: string[];
   };
   proposedManifest: SkillManifest;
   generalizationNotes: string[];

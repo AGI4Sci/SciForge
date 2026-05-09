@@ -3,6 +3,7 @@ import type { CapabilityKind } from './capabilities';
 export const CAPABILITY_EVOLUTION_RECORD_CONTRACT_ID = 'sciforge.capability-evolution-record.v1' as const;
 export const CAPABILITY_EVOLUTION_COMPACT_SUMMARY_CONTRACT_ID = 'sciforge.capability-evolution-compact-summary.v1' as const;
 export const CAPABILITY_EVOLUTION_BROKER_DIGEST_CONTRACT_ID = 'sciforge.capability-evolution-broker-digest.v1' as const;
+export const CAPABILITY_EVOLUTION_CANDIDATE_SET_CONTRACT_ID = 'sciforge.capability-evolution-candidate-set.v1' as const;
 
 export type CapabilityEvolutionRecordStatus =
   | 'succeeded'
@@ -112,6 +113,33 @@ export interface CapabilityPromotionCandidate {
   confidence?: number;
   observedPattern?: string;
   suggestedUpdates?: CapabilityEvolutionSuggestedUpdates;
+}
+
+export type CapabilityEvolutionCandidateKind =
+  | 'promotion'
+  | 'repair-hint-improvement';
+
+export interface CapabilityEvolutionCandidate {
+  id: string;
+  kind: CapabilityEvolutionCandidateKind;
+  proposalKind: CapabilityPromotionProposalKind;
+  sourceRef?: string;
+  supportingRecordRefs: string[];
+  supportCount: number;
+  confidence?: number;
+  reason?: string;
+  observedPattern?: string;
+  suggestedCapabilityId?: string;
+  suggestedUpdates?: CapabilityEvolutionSuggestedUpdates;
+}
+
+export interface CapabilityEvolutionCandidateSet {
+  schemaVersion: typeof CAPABILITY_EVOLUTION_CANDIDATE_SET_CONTRACT_ID;
+  generatedAt: string;
+  sourceRef?: string;
+  totalCandidates: number;
+  promotionCandidates: CapabilityEvolutionCandidate[];
+  repairHintImprovementCandidates: CapabilityEvolutionCandidate[];
 }
 
 export interface ComposedCapabilityFallbackPolicy {
@@ -251,4 +279,5 @@ export interface CapabilityEvolutionBrokerDigest {
   failureCodes: string[];
   recoverActions: string[];
   promotionCandidateCount: number;
+  repairHintImprovementCandidateCount: number;
 }

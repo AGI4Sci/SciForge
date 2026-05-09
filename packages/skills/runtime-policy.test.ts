@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE,
+  AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE,
+  AGENTSERVER_SUPPLEMENTAL_GENERATION_EVENT_TYPE,
   agentServerGeneratedEntrypointContractReason,
   agentServerGeneratedTaskInterfaceContractReason,
   agentServerExecutionModePromptPolicyLines,
@@ -12,7 +15,9 @@ import {
   agentServerPathOnlyStrictRetryDirectPayloadReason,
   agentServerPathOnlyStrictRetryStillMissingReason,
   agentServerPathOnlyTaskFilesReason,
+  agentServerPayloadTaskDomain,
   agentServerRepairPromptPolicyLines,
+  agentServerStablePayloadTaskId,
 } from './runtime-policy';
 
 test('skills runtime policy owns AgentServer retrieval and task prompt snippets', () => {
@@ -64,4 +69,20 @@ test('skills runtime policy owns generated task retry and interface contract sem
   assert.match(pathOnly, /path-only taskFiles/);
   assert.match(agentServerPathOnlyStrictRetryDirectPayloadReason(pathOnly), /direct ToolPayload/);
   assert.match(agentServerPathOnlyStrictRetryStillMissingReason(pathOnly, ['.sciforge/tasks/a.py']), /Strict retry still returned path-only/);
+});
+
+test('skills runtime policy owns generated runner event and stable id policy', () => {
+  assert.equal(AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE, 'agentserver-generation-retry');
+  assert.equal(AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE, 'workspace-task-materialized');
+  assert.equal(AGENTSERVER_SUPPLEMENTAL_GENERATION_EVENT_TYPE, 'workspace-task-start');
+  assert.equal(agentServerPayloadTaskDomain('omics / spatial'), 'omics-spatial');
+  assert.equal(agentServerPayloadTaskDomain('###'), 'runtime');
+  assert.equal(agentServerStablePayloadTaskId({
+    kind: 'direct',
+    skillDomain: 'omics / spatial',
+    skillId: 'agentserver.generate.omics',
+    prompt: 'make report',
+    runId: undefined,
+    shortHash: () => 'abc123',
+  }), 'agentserver-direct-omics-spatial-abc123');
 });

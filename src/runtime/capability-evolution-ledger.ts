@@ -2,6 +2,8 @@ import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type {
   CapabilityEvolutionBrokerDigest,
+  CapabilityEvolutionCandidate,
+  CapabilityEvolutionCandidateSet,
   CapabilityEvolutionCompactRecord,
   CapabilityEvolutionCompactSummary,
   CapabilityEvolutionRecord,
@@ -13,6 +15,7 @@ import type {
 } from '../../packages/contracts/runtime/capability-evolution.js';
 import {
   CAPABILITY_EVOLUTION_BROKER_DIGEST_CONTRACT_ID,
+  CAPABILITY_EVOLUTION_CANDIDATE_SET_CONTRACT_ID,
   CAPABILITY_EVOLUTION_COMPACT_SUMMARY_CONTRACT_ID,
 } from '../../packages/contracts/runtime/capability-evolution.js';
 import { normalizeWorkspaceRootPath } from './workspace-paths.js';
@@ -171,6 +174,7 @@ export function sanitizeCapabilityEvolutionCompactSummaryForBroker(
 export function buildCapabilityEvolutionBrokerDigest(
   summary: CapabilityEvolutionCompactSummary,
 ): CapabilityEvolutionBrokerDigest {
+  const candidateSet = buildCapabilityEvolutionCandidateSet(summary);
   const records = [...summary.recentRecords, ...summary.promotionCandidates];
   return {
     schemaVersion: CAPABILITY_EVOLUTION_BROKER_DIGEST_CONTRACT_ID,
@@ -182,6 +186,24 @@ export function buildCapabilityEvolutionBrokerDigest(
     failureCodes: uniqueSortedStrings(records.flatMap((record) => record.failureCode ? [record.failureCode] : [])),
     recoverActions: uniqueSortedStrings(records.flatMap((record) => record.recoverActions)),
     promotionCandidateCount: summary.promotionCandidates.filter((record) => record.promotionCandidate?.eligible).length,
+    repairHintImprovementCandidateCount: candidateSet.repairHintImprovementCandidates.length,
+  };
+}
+
+export function buildCapabilityEvolutionCandidateSet(
+  summary: CapabilityEvolutionCompactSummary,
+): CapabilityEvolutionCandidateSet {
+  const candidates = summary.promotionCandidates
+    .flatMap((record) => candidateFromCompactRecord(summary, record) ?? []);
+  const promotionCandidates = candidates.filter((candidate) => candidate.kind === 'promotion');
+  const repairHintImprovementCandidates = candidates.filter((candidate) => candidate.kind === 'repair-hint-improvement');
+  return {
+    schemaVersion: CAPABILITY_EVOLUTION_CANDIDATE_SET_CONTRACT_ID,
+    generatedAt: summary.generatedAt,
+    sourceRef: summary.sourceRef,
+    totalCandidates: candidates.length,
+    promotionCandidates,
+    repairHintImprovementCandidates,
   };
 }
 
@@ -427,6 +449,41 @@ function compactRecordCapabilityIds(record: CapabilityEvolutionCompactRecord) {
     ...(record.promotionCandidate?.suggestedUpdates?.capabilityIds ?? []),
     record.promotionCandidate?.suggestedCapabilityId ?? '',
   ].filter(Boolean);
+}
+
+function candidateFromCompactRecord(
+  summary: CapabilityEvolutionCompactSummary,
+  record: CapabilityEvolutionCompactRecord,
+): CapabilityEvolutionCandidate | undefined {
+  const candidate = record.promotionCandidate;
+  if (!candidate?.eligible || !candidate.proposalKind) return undefined;
+  const supportingRecordRefs = uniqueSortedStrings(candidate.supportingRecordRefs?.length
+    ? candidate.supportingRecordRefs
+    : record.recordRef
+      ? [record.recordRef]
+      : []);
+  const repairHints = candidate.suggestedUpdates?.repairHints ?? [];
+  const kind: CapabilityEvolutionCandidate['kind'] = candidate.proposalKind === 'composed-capability'
+    ? 'promotion'
+    : 'repair-hint-improvement';
+  if (kind === 'repair-hint-improvement' && repairHints.length === 0) return undefined;
+  return {
+    id: candidate.candidateId ?? `proposal:${candidate.proposalKind}:${shortStableHash([
+      summary.sourceRef ?? '',
+      candidate.observedPattern ?? '',
+      supportingRecordRefs.join('|'),
+    ].join(':'))}`,
+    kind,
+    proposalKind: candidate.proposalKind,
+    sourceRef: summary.sourceRef,
+    supportingRecordRefs,
+    supportCount: candidate.supportCount ?? supportingRecordRefs.length,
+    confidence: candidate.confidence,
+    reason: candidate.reason,
+    observedPattern: candidate.observedPattern,
+    suggestedCapabilityId: candidate.suggestedCapabilityId,
+    suggestedUpdates: candidate.suggestedUpdates,
+  };
 }
 
 function sanitizeCompactRecord(value: Record<string, unknown>): CapabilityEvolutionCompactRecord | undefined {

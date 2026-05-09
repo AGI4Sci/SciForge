@@ -6,6 +6,7 @@ import type { CapabilityEvolutionRecord } from '../../packages/contracts/runtime
 import {
   appendCapabilityEvolutionRecord,
   buildCapabilityEvolutionBrokerDigest,
+  buildCapabilityEvolutionCandidateSet,
   buildCapabilityEvolutionCompactSummary,
   CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH,
   readCapabilityEvolutionRecords,
@@ -15,6 +16,7 @@ import { recordCapabilityEvolutionRuntimeEvent } from '../../src/runtime/gateway
 import { runAgentServerGeneratedTask } from '../../src/runtime/gateway/generated-task-runner.js';
 import { repairNeededPayload } from '../../src/runtime/gateway/repair-policy.js';
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types.js';
+import { listSkillPromotionProposals, writeSkillPromotionProposalsFromCapabilityEvolutionSummary } from '../../src/runtime/skill-promotion.js';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-capability-ledger-'));
 
@@ -173,6 +175,7 @@ try {
   assert.equal(brokerDigest.schemaVersion, 'sciforge.capability-evolution-broker-digest.v1');
   assert.deepEqual(brokerDigest.consumedRecordRefs, [`${CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH}#L1`]);
   assert.deepEqual(brokerDigest.failureCodes, ['schema-invalid']);
+  assert.equal(brokerDigest.repairHintImprovementCandidateCount, 0);
 
   const request: GatewayRequest = {
     skillDomain: 'literature',
@@ -331,6 +334,12 @@ try {
   ]);
   assert.deepEqual(failureProposal.promotionCandidate?.suggestedUpdates?.failureCodes, ['schema-invalid']);
   assert.equal((failureProposal.promotionCandidate?.suggestedUpdates?.repairHints?.length ?? 0) >= 1, true);
+  const failureCandidateSet = buildCapabilityEvolutionCandidateSet(realPathSummary);
+  assert.equal(failureCandidateSet.schemaVersion, 'sciforge.capability-evolution-candidate-set.v1');
+  assert.equal(failureCandidateSet.repairHintImprovementCandidates.length, 1);
+  assert.equal(failureCandidateSet.repairHintImprovementCandidates[0]?.proposalKind, 'validator-update');
+  assert.equal(JSON.stringify(failureCandidateSet).includes('task.py'), false);
+  assert.equal(JSON.stringify(failureCandidateSet).includes('stdout.log'), false);
 
   await appendCapabilityEvolutionRecord({ workspacePath: workspace }, {
     ...record,
@@ -352,6 +361,26 @@ try {
     'capability.atomic.extract',
     'capability.atomic.render',
   ]);
+  const promotionCandidateSet = buildCapabilityEvolutionCandidateSet(promotionProposalSummary);
+  assert.equal(promotionCandidateSet.promotionCandidates.length, 1);
+  assert.equal(promotionCandidateSet.promotionCandidates[0]?.suggestedCapabilityId, 'capability.composed.atomic-extract-atomic-render');
+  const ledgerSkillProposals = await writeSkillPromotionProposalsFromCapabilityEvolutionSummary({
+    workspacePath: workspace,
+    summary: promotionProposalSummary,
+    request,
+    now: () => new Date('2026-05-09T00:05:00.000Z'),
+  });
+  assert.equal(ledgerSkillProposals.length, 1);
+  assert.equal(ledgerSkillProposals[0]?.source.kind, 'capability-evolution-ledger');
+  assert.deepEqual(ledgerSkillProposals[0]?.source.ledgerRecordRefs, [
+    `${CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH}#L1`,
+    `${CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH}#L5`,
+  ]);
+  const ledgerProposalText = JSON.stringify(ledgerSkillProposals[0]);
+  assert.equal(ledgerProposalText.includes('task.py'), false, 'ledger-sourced skill proposal should not expose glue code refs');
+  assert.equal(ledgerProposalText.includes('stdout.log'), false, 'ledger-sourced skill proposal should not expose logs');
+  const listedLedgerProposals = await listSkillPromotionProposals(workspace);
+  assert.ok(listedLedgerProposals.some((proposal) => proposal.id === ledgerSkillProposals[0]?.id));
 
   let supplementGenerationCalls = 0;
   const supplementalFallbackPayload = await runAgentServerGeneratedTask({

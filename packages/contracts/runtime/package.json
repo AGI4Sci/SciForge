@@ -16,6 +16,7 @@
   "files": [
     "README.md",
     "artifact-policy.ts",
+    "agent-backend-policy.ts",
     "app.ts",
     "artifact-reference-policy.ts",
     "artifacts.ts",
@@ -47,6 +48,7 @@
   "exports": {
     ".": "./index.ts",
     "./artifact-policy": "./artifact-policy.ts",
+    "./agent-backend-policy": "./agent-backend-policy.ts",
     "./app": "./app.ts",
     "./artifact-reference-policy": "./artifact-reference-policy.ts",
     "./artifacts": "./artifacts.ts",

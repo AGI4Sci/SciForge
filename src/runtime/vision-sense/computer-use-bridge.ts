@@ -7,6 +7,7 @@ import { executorBoundary } from '../computer-use/executor.js';
 import type { ComputerUseConfig as VisionSenseConfig, LoopStep, ScreenshotRef } from '../computer-use/types.js';
 import { sanitizeId, workspaceRel } from '../computer-use/utils.js';
 import { inputChannelContract, inputChannelDescription, resolveWindowTarget, schedulerRunMetadata, toTraceWindowTarget, windowTargetTraceConfig } from '../computer-use/window-target.js';
+import { visionSensePlannerOnlyEvidencePolicy, visionSenseTraceContractPolicy, visionSenseTraceIds } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
 import { runComputerUseActionLoop } from './computer-use-action-loop.js';
 import { appendPlannerStep, nextPlannerActions } from './computer-use-plan.js';
 import { shouldCompleteFromFileRefsOnlyPolicy } from './computer-use-policy-bridge.js';
@@ -64,16 +65,16 @@ export async function runGenericVisionComputerUseLoop(
       beforeScreenshotRefs: plannerRefs.map(toTraceScreenshotRef),
       verifier: {
         status: 'checked',
-        reason: 'vision-sense policy planner completed a file-ref-only evidence task without GUI actions',
+        reason: visionSensePlannerOnlyEvidencePolicy.verifierReason,
         windowConsistency: windowConsistencyMetadata(plannerRefs, plannerRefs, config),
       },
       execution: {
-        planner: 'vision-sense-policy-planner',
+        planner: visionSensePlannerOnlyEvidencePolicy.plannerId,
         status: 'done',
         rawResponse: {
           done: true,
           actions: [],
-          reason: 'Task asks for refs-only evidence, summary, handoff, or context audit; GUI execution is unnecessary.',
+          reason: visionSensePlannerOnlyEvidencePolicy.rawReason,
         },
       },
     });
@@ -166,10 +167,10 @@ export async function runGenericVisionComputerUseLoop(
   const completedAt = new Date().toISOString();
   const traceValidation = validateRuntimeTraceScreenshots(screenshotLedger);
   const trace = {
-    schemaVersion: 'sciforge.vision-trace.v1',
+    schemaVersion: visionSenseTraceIds.traceSchema,
     runId,
     tool: VISION_TOOL_ID,
-    runtime: 'sciforge.workspace-runtime.vision-sense-generic-loop',
+    runtime: visionSenseTraceIds.workspaceRuntime,
     executionBoundary: config.dryRun ? 'dry-run-generic-gui-executor' : executorBoundary(config),
     createdAt,
     completedAt,
@@ -199,29 +200,20 @@ export async function runGenericVisionComputerUseLoop(
       completionPolicy: config.completionPolicy,
     },
     imageMemory: {
-      policy: 'file-ref-only',
-      reason: 'Multi-turn memory keeps screenshot paths, hashes, dimensions, and display ids; it never stores inline image payloads.',
+      ...visionSenseTraceContractPolicy.imageMemory,
       refs: screenshotLedger.map(toTraceScreenshotRef),
     },
     genericComputerUse: {
-      actionSchema: ['open_app', 'click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait'],
-      appSpecificShortcuts: [],
+      actionSchema: visionSenseTraceContractPolicy.genericActionSchema,
+      appSpecificShortcuts: visionSenseTraceContractPolicy.appSpecificShortcuts,
       inputChannel: inputChannelDescription(config, targetResolution),
       inputChannelContract: inputChannelContract(config, targetResolution),
-      coordinateContract: {
-        planner: 'target descriptions only',
-        grounderOutput: 'target-window screenshot coordinates',
-        executorInput: targetResolution.ok ? targetResolution.coordinateSpace : config.windowTarget.coordinateSpace,
-        localCoordinateFrame: 'window screenshot pixels before executor mapping',
-        mappedCoordinateFrame: 'desktop executor coordinates after window-origin and scale mapping',
-      },
-      verifierContract: {
-        screenshotScope: 'target-window',
-        beforeAfterWindowConsistency: 'required-or-structured-window-lifecycle-diagnostics',
-        completionEvidence: 'window-local screenshots plus pixel diff, no DOM/accessibility',
-      },
+      coordinateContract: visionSenseTraceContractPolicy.coordinateContract(
+        targetResolution.ok ? targetResolution.coordinateSpace : config.windowTarget.coordinateSpace,
+      ),
+      verifierContract: visionSenseTraceContractPolicy.verifierContract,
       inputIsolation: targetResolution.ok ? targetResolution.inputIsolation : config.windowTarget.inputIsolation,
-      requires: ['WindowTargetProvider', 'VisionPlanner', 'Grounder', 'GuiExecutor', 'Verifier'],
+      requires: visionSenseTraceContractPolicy.requires,
     },
     windowLifecycle: windowLifecycleTrace(
       targetResolution.ok

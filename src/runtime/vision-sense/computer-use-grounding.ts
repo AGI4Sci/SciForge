@@ -8,6 +8,7 @@ import type { ComputerUseConfig as VisionSenseConfig, FocusRegion, GenericVision
 import { extractChatCompletionContent, extractJsonObject, isDarwinPlatform, numberConfig, parseJson, runCommand, sanitizeId } from '../computer-use/utils.js';
 import { isWindowLocalCoordinateSpace } from '../computer-use/window-target.js';
 import {
+  visionSenseCrossDisplayWindowDragPolicy,
   visionSenseFocusRegionGroundingId,
   visionSenseGroundingIds,
 } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
@@ -212,16 +213,12 @@ export async function resolveActionGrounding(
 
 function crossDisplayWindowDragGrounding(action: Extract<GenericVisionAction, { type: 'drag' }>, screenshot: ScreenshotRef | undefined, config: VisionSenseConfig): GroundingResolution | undefined {
   const description = [action.targetDescription, action.fromTargetDescription, action.toTargetDescription].filter(Boolean).join(' ');
-  const isWindowMove = /window|title bar|窗口|标题栏|window frame|traffic light|red, yellow, and green/i.test(description);
-  const isCrossDisplay = /display|monitor|screen|另一个显示器|显示器|屏幕|adjacent|left edge|right edge|screen edge|current screen edge/i.test(description);
-  if (!isWindowMove || !isCrossDisplay || !screenshot) return undefined;
+  if (!screenshot) return undefined;
   const width = screenshot.width ?? screenshot.windowTarget?.bounds?.width ?? 800;
   const height = screenshot.height ?? screenshot.windowTarget?.bounds?.height ?? 600;
-  const fromX = Math.round(width / 2);
-  const fromY = Math.max(20, Math.round(Math.min(height * 0.08, 64)));
-  const wantsRight = /right|右/i.test(description) && !/left|左/i.test(description);
-  const toX = wantsRight ? Math.round(width * 1.35) : Math.round(width * -0.35);
-  const toY = fromY;
+  const dragPolicy = visionSenseCrossDisplayWindowDragPolicy({ description, width, height });
+  if (!dragPolicy) return undefined;
+  const { fromX, fromY, toX, toY } = dragPolicy;
   const fromExecutor = screenshotToExecutorPoint(fromX, fromY, screenshot, config);
   const toExecutor = screenshotToExecutorPoint(toX, toY, screenshot, config);
   return {
@@ -230,8 +227,8 @@ function crossDisplayWindowDragGrounding(action: Extract<GenericVisionAction, { 
     grounding: {
       ...groundingForAction(action),
       status: 'provided',
-      provider: visionSenseGroundingIds.windowCrossDisplayDrag,
-      reason: 'Target display is outside the current window screenshot; computed title-bar drag endpoints in window-local coordinates instead of asking the visual Grounder to hallucinate an off-window point.',
+      provider: dragPolicy.provider,
+      reason: dragPolicy.reason,
       localFromX: fromX,
       localFromY: fromY,
       localToX: toX,

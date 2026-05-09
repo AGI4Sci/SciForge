@@ -19,6 +19,7 @@ import { reportRuntimeResultViewSlots } from '../../../packages/presentation/int
 import {
   CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_DETAIL,
   CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_MESSAGE,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_TYPE,
   CURRENT_REFERENCE_DIGEST_RECOVERY_LOG_LINE,
   CURRENT_REFERENCE_DIGEST_RECOVERY_REF_PATH,
   CURRENT_REFERENCE_DIGEST_RECOVERY_REPORT_ARTIFACT_ID,
@@ -29,13 +30,19 @@ import {
   type CurrentReferenceDigestRecoverySource,
 } from '../../../packages/contracts/runtime/artifact-policy';
 import {
+  AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE,
+  AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE,
+  AGENTSERVER_SUPPLEMENTAL_GENERATION_EVENT_TYPE,
   agentServerGeneratedEntrypointContractReason,
   agentServerGeneratedTaskInterfaceContractReason,
   agentServerGeneratedTaskRetryDetail,
   agentServerPathOnlyStrictRetryDirectPayloadReason,
   agentServerPathOnlyStrictRetryStillMissingReason,
   agentServerPathOnlyTaskFilesReason,
+  agentServerStablePayloadTaskId,
 } from '../../../packages/skills/runtime-policy';
+
+const AGENTSERVER_DIRECT_PAYLOAD_TASK_REF = 'agentserver://direct-payload' as const;
 
 type AgentServerGenerationResult =
   | { ok: true; runId?: string; response: AgentServerGenerationResponse }
@@ -124,7 +131,7 @@ export async function runAgentServerGeneratedTask(
     const digestRecovery = await currentReferenceDigestRecoveryPayload(request, skill, workspace, generation.error);
     if (digestRecovery) {
       emitWorkspaceRuntimeEvent(callbacks, {
-        type: 'agentserver-digest-recovery',
+        type: CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_TYPE,
         source: 'workspace-runtime',
         status: 'self-healed',
         message: CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_MESSAGE,
@@ -171,7 +178,7 @@ export async function runAgentServerGeneratedTask(
     const directGeneration = generation;
     const directRefs = backendPayloadRefs(
       stableAgentServerPayloadTaskId('direct', request, skill, directGeneration.runId),
-      'agentserver://direct-payload',
+      AGENTSERVER_DIRECT_PAYLOAD_TASK_REF,
     );
     await writeBackendPayloadLogs(workspace, directRefs, `AgentServer direct ToolPayload run: ${directGeneration.runId || 'unknown'}\n`);
     const directPayload = await mergeReusableContextArtifactsForDirectPayload(
@@ -240,7 +247,7 @@ export async function runAgentServerGeneratedTask(
   const nonExecutableEntrypointReason = agentServerGeneratedEntrypointContractReason(generation.response, { normalizePath: safeWorkspaceRel });
   if (nonExecutableEntrypointReason) {
     emitWorkspaceRuntimeEvent(callbacks, {
-      type: 'agentserver-generation-retry',
+      type: AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE,
       source: 'workspace-runtime',
       status: 'running',
       message: nonExecutableEntrypointReason,
@@ -259,7 +266,7 @@ export async function runAgentServerGeneratedTask(
     if ('directPayload' in retriedGeneration) {
       const retryDirectRefs = backendPayloadRefs(
         stableAgentServerPayloadTaskId('direct-retry-entrypoint', request, skill, retriedGeneration.runId),
-        'agentserver://direct-payload',
+        AGENTSERVER_DIRECT_PAYLOAD_TASK_REF,
       );
       await writeBackendPayloadLogs(workspace, retryDirectRefs, `AgentServer strict retry direct ToolPayload run: ${retriedGeneration.runId || 'unknown'}\n`);
       const directPayload = await mergeReusableContextArtifactsForDirectPayload(
@@ -283,7 +290,7 @@ export async function runAgentServerGeneratedTask(
   if (missingPathOnlyTaskFiles.length) {
     const reason = agentServerPathOnlyTaskFilesReason(missingPathOnlyTaskFiles);
     emitWorkspaceRuntimeEvent(callbacks, {
-      type: 'agentserver-generation-retry',
+      type: AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE,
       source: 'workspace-runtime',
       status: 'running',
       message: reason,
@@ -319,7 +326,7 @@ export async function runAgentServerGeneratedTask(
   const taskInterfaceReason = await generatedTaskInterfaceContractReason(workspace, generation.response);
   if (taskInterfaceReason) {
     emitWorkspaceRuntimeEvent(callbacks, {
-      type: 'agentserver-generation-retry',
+      type: AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE,
       source: 'workspace-runtime',
       status: 'running',
       message: taskInterfaceReason,
@@ -340,7 +347,7 @@ export async function runAgentServerGeneratedTask(
     if ('directPayload' in retriedGeneration) {
       const retryDirectRefs = backendPayloadRefs(
         stableAgentServerPayloadTaskId('direct-retry-interface', request, skill, retriedGeneration.runId),
-        'agentserver://direct-payload',
+        AGENTSERVER_DIRECT_PAYLOAD_TASK_REF,
       );
       await writeBackendPayloadLogs(workspace, retryDirectRefs, `AgentServer interface retry direct ToolPayload run: ${retriedGeneration.runId || 'unknown'}\n`);
       const directPayload = await mergeReusableContextArtifactsForDirectPayload(
@@ -382,7 +389,7 @@ export async function runAgentServerGeneratedTask(
       await mkdir(dirname(join(workspace, rel)), { recursive: true });
       await writeFile(join(workspace, rel), content);
       emitWorkspaceRuntimeEvent(callbacks, {
-        type: 'workspace-task-materialized',
+        type: AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE,
         source: 'workspace-runtime',
         message: `Materialized AgentServer task file ${declaredRel}`,
         detail: rel === declaredRel ? declaredRel : `${declaredRel} -> ${rel}`,
@@ -816,9 +823,14 @@ function stableAgentServerPayloadTaskId(
   skill: SkillAvailability,
   runId: string | undefined,
 ) {
-  const domain = request.skillDomain.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'runtime';
-  const hash = sha1(`${kind}:${skill.id}:${request.prompt}:${runId || 'unknown'}`).slice(0, 12);
-  return `agentserver-${kind}-${domain}-${hash}`;
+  return agentServerStablePayloadTaskId({
+    kind,
+    skillDomain: request.skillDomain,
+    skillId: skill.id,
+    prompt: request.prompt,
+    runId,
+    shortHash: (value) => sha1(value).slice(0, 12),
+  });
 }
 
 async function writeBackendPayloadLogs(
@@ -931,7 +943,7 @@ async function tryAgentServerSupplementMissingArtifacts(params: {
   if (!missingTypes.length) return undefined;
   const fallbackReason = `Missing expected artifact types: ${missingTypes.join(', ')}`;
   emitWorkspaceRuntimeEvent(params.callbacks, {
-    type: 'workspace-task-start',
+    type: AGENTSERVER_SUPPLEMENTAL_GENERATION_EVENT_TYPE,
     source: 'workspace-runtime',
     status: 'running',
     message: 'Requesting supplemental AgentServer/backend generation',

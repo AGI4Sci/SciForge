@@ -55,6 +55,10 @@ export interface AgentServerGeneratedTaskContractResponse {
   }>;
 }
 
+export const AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE = 'agentserver-generation-retry' as const;
+export const AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE = 'workspace-task-materialized' as const;
+export const AGENTSERVER_SUPPLEMENTAL_GENERATION_EVENT_TYPE = 'workspace-task-start' as const;
+
 export function planSkillAvailabilityValidation(
   manifest: RuntimePolicySkillManifest,
   context: { manifestPath: string; cwd: string },
@@ -200,6 +204,23 @@ export function agentServerPathOnlyStrictRetryStillMissingReason(reason: string,
     reason,
     `Strict retry still returned path-only taskFiles without inline content or workspace files: ${files.join(', ')}`,
   ].join('. ');
+}
+
+export function agentServerStablePayloadTaskId(input: {
+  kind: string;
+  skillDomain: string;
+  skillId: string;
+  prompt: string;
+  runId?: string;
+  shortHash: (value: string) => string;
+}) {
+  const domain = agentServerPayloadTaskDomain(input.skillDomain);
+  const hash = input.shortHash(`${input.kind}:${input.skillId}:${input.prompt}:${input.runId || 'unknown'}`);
+  return `agentserver-${input.kind}-${domain}-${hash}`;
+}
+
+export function agentServerPayloadTaskDomain(skillDomain: string) {
+  return skillDomain.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'runtime';
 }
 
 export function agentServerFreshRetrievalPromptPolicyLines() {

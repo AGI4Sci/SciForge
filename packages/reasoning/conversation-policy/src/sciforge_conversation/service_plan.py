@@ -75,13 +75,33 @@ def _jsonable(value: Any) -> Any:
 
 
 def build_service_plan(request: Mapping[str, Any] | Any) -> JsonMap:
-    payload = request if isinstance(request, Mapping) else {}
+    payload = _payload(request)
     return _from_gateway(payload)
 
 
 def build_turn_composition(request: Mapping[str, Any] | Any) -> JsonMap:
-    payload = request if isinstance(request, Mapping) else {}
+    payload = _payload(request)
     return _from_gateway(payload, "buildConversationTurnComposition")
 
 
-__all__ = ["build_service_plan", "build_turn_composition"]
+def build_policy_input(request: Mapping[str, Any] | Any) -> JsonMap:
+    payload = _payload(request)
+    return _from_gateway(payload, "buildConversationPolicyInput")
+
+
+def build_error_response(request: Mapping[str, Any] | Any) -> JsonMap:
+    payload = _payload(request)
+    return _from_gateway(payload, "buildConversationServiceErrorResponse")
+
+
+def _payload(value: Mapping[str, Any] | Any) -> JsonMap:
+    jsonable = _jsonable(value)
+    return jsonable if isinstance(jsonable, dict) else {}
+
+
+__all__ = [
+    "build_service_plan",
+    "build_turn_composition",
+    "build_policy_input",
+    "build_error_response",
+]

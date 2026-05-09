@@ -1,37 +1,17 @@
-import { isRecord, uniqueStrings } from '../gateway-utils.js';
+import {
+  runtimeAgentBackendFailureCategories,
+  runtimeAgentBackendRateLimitRecoverActions,
+  runtimeAgentBackendRecoverActions,
+  redactRuntimeAgentBackendSecretText,
+  sanitizeRuntimeAgentBackendFailureDetail,
+  withRuntimeAgentBackendUserFacingDiagnostic,
+  type RuntimeAgentBackendFailureDiagnostic,
+  type RuntimeAgentBackendFailureKind,
+} from '@sciforge-ui/runtime-contract/agent-backend-policy';
+import { isRecord } from '../gateway-utils.js';
 
-export type AgentServerBackendFailureKind =
-  | 'context-window'
-  | 'network'
-  | 'model'
-  | 'tool'
-  | 'acceptance'
-  | 'auth'
-  | 'timeout'
-  | 'schema'
-  | 'missing-input'
-  | 'http-429'
-  | 'rate-limit'
-  | 'retry-budget'
-  | 'too-many-failed-attempts'
-  | 'unknown';
-
-export interface AgentServerBackendFailureDiagnostic {
-  kind: AgentServerBackendFailureKind;
-  categories: AgentServerBackendFailureKind[];
-  backend?: string;
-  provider?: string;
-  model?: string;
-  httpStatus?: number;
-  retryAfterMs?: number;
-  resetAt?: string;
-  message: string;
-  title?: string;
-  userReason?: string;
-  recoverActions?: string[];
-  nextStep?: string;
-  evidenceRefs?: string[];
-}
+export type AgentServerBackendFailureKind = RuntimeAgentBackendFailureKind;
+export type AgentServerBackendFailureDiagnostic = RuntimeAgentBackendFailureDiagnostic;
 
 export function classifyAgentServerBackendFailure(
   message: string,
@@ -45,22 +25,7 @@ export function classifyAgentServerBackendFailure(
   } = {},
 ): AgentServerBackendFailureDiagnostic | undefined {
   const text = parseJsonErrorMessage(message) || message;
-  const lower = text.toLowerCase();
-  const categories: AgentServerBackendFailureKind[] = [];
-  if (/\b(fetch|network|econnrefused|econnreset|enotfound|etimedout|socket|dns|connection refused|connection reset|offline)\b/i.test(text)) categories.push('network');
-  if (/\b(timeout|timed out|abort|cancelled|canceled)\b/i.test(text)) categories.push('timeout');
-  if (/\b(unauthorized|forbidden|credential|api[-_ ]?key|token|permission denied|access denied|401|403)\b/i.test(text)) categories.push('auth');
-  if (/\b(model|provider|llm|completion|response)\b/i.test(text) && /\b(failed|error|unavailable|invalid|refused|empty)\b/i.test(text)) categories.push('model');
-  if (/\b(tool|command|process|exit code|stderr|stdout|executable|dependency|module not found|enoent)\b/i.test(text)) categories.push('tool');
-  if (/\b(schema|payload|json|parse|validation|contract)\b/i.test(text)) categories.push('schema');
-  if (/\b(missing|required|not found|unreadable)\b/i.test(text) && /\b(input|file|artifact|ref|path|credential)\b/i.test(text)) categories.push('missing-input');
-  if (/\b(acceptance|verifier|verification|gate|rubric)\b/i.test(text) && /\b(fail|failed|missing|blocked|repair)\b/i.test(text)) categories.push('acceptance');
-  if (/contextwindowexceeded|context window exceeded|context_length|maximum context|token limit|context.*overflow/i.test(text)) categories.push('context-window');
-  if (context.httpStatus === 429 || /\b429\b|too many requests/.test(lower)) categories.push('http-429', 'rate-limit');
-  if (/rate[\s-]?limit|retry-after|reset/i.test(text)) categories.push('rate-limit');
-  if (/responseTooManyFailedAttempts|too many failed attempts/i.test(text)) categories.push('too-many-failed-attempts', 'retry-budget');
-  if (/exceeded retry limit|retry budget|too many retries|max retries/i.test(text)) categories.push('retry-budget');
-  const uniqueCategories = uniqueStrings(categories) as AgentServerBackendFailureKind[];
+  const uniqueCategories = runtimeAgentBackendFailureCategories(text, context.httpStatus);
   if (!uniqueCategories.length) return undefined;
   const diagnostic = {
     kind: uniqueCategories[0],
@@ -101,63 +66,11 @@ export function diagnosticForFailure(
 }
 
 export function withUserFacingDiagnostic(diagnostic: AgentServerBackendFailureDiagnostic): AgentServerBackendFailureDiagnostic {
-  const primary = diagnostic.categories[0] ?? diagnostic.kind;
-  const titleByKind: Record<AgentServerBackendFailureKind, string> = {
-    'context-window': '上下文窗口超限',
-    network: '网络或连接失败',
-    model: '模型/提供方失败',
-    tool: '工具执行失败',
-    acceptance: '验收未通过',
-    auth: '认证或权限失败',
-    timeout: '请求超时或被取消',
-    schema: '响应结构不符合契约',
-    'missing-input': '缺少必要输入或引用',
-    'http-429': '模型限流',
-    'rate-limit': '模型限流',
-    'retry-budget': '重试预算耗尽',
-    'too-many-failed-attempts': '重试预算耗尽',
-    unknown: '运行失败',
-  };
-  const nextStepByKind: Record<AgentServerBackendFailureKind, string> = {
-    'context-window': '压缩上下文或减少日志/artifact 后重试。',
-    network: '确认服务可达后重试同一请求。',
-    model: '保留本轮证据，换可用模型/提供方或稍后重试。',
-    tool: '打开工具日志，修复依赖、命令或输入后重跑。',
-    acceptance: '基于失败的验收项做 repair，不把当前输出标为成功。',
-    auth: '补齐凭据或权限后重试。',
-    timeout: '使用已有失败证据继续，必要时缩小任务范围后重试。',
-    schema: '要求后端按 ToolPayload/contract 重新返回结构化结果。',
-    'missing-input': '补充缺失输入、文件或引用后继续。',
-    'http-429': '等待限流/重试预算 reset 后用紧凑上下文重试。',
-    'rate-limit': '等待限流/重试预算 reset 后用紧凑上下文重试。',
-    'retry-budget': '停止自动重试，等待预算恢复或换可用模型。',
-    'too-many-failed-attempts': '停止自动重试，等待预算恢复或换可用模型。',
-    unknown: '查看失败证据并决定补输入、换路由或手动重跑。',
-  };
-  return {
-    ...diagnostic,
-    title: diagnostic.title ?? titleByKind[primary],
-    userReason: diagnostic.userReason ?? `${titleByKind[primary]}：${diagnostic.message}`,
-    recoverActions: diagnostic.recoverActions ?? recoverActionsForDiagnostic(diagnostic),
-    nextStep: diagnostic.nextStep ?? nextStepByKind[primary],
-  };
+  return withRuntimeAgentBackendUserFacingDiagnostic(diagnostic);
 }
 
 export function recoverActionsForDiagnostic(diagnostic: Pick<AgentServerBackendFailureDiagnostic, 'categories' | 'retryAfterMs' | 'resetAt'>) {
-  const categories = new Set(diagnostic.categories);
-  if (categories.has('http-429') || categories.has('rate-limit') || categories.has('retry-budget') || categories.has('too-many-failed-attempts')) {
-    return rateLimitRecoverActions(diagnostic as AgentServerBackendFailureDiagnostic);
-  }
-  if (categories.has('network')) return ['检查 AgentServer/网络是否可达。', '保留本轮 evidence refs，服务恢复后重试同一请求。'];
-  if (categories.has('auth')) return ['检查模型或工具凭据/权限配置。', '凭据修复后重试，避免在 prompt 中粘贴密钥。'];
-  if (categories.has('tool')) return ['打开 stdoutRef/stderrRef/outputRef 查看工具证据。', '修复依赖、命令、路径或输入后重跑该 execution unit。'];
-  if (categories.has('acceptance')) return ['按 acceptance failures 运行 repair。', '保留失败摘要和证据引用，下一轮从失败点继续。'];
-  if (categories.has('schema')) return ['要求后端重新返回符合 ToolPayload/contract 的结构化 payload。', '保留原始 outputRef 作为协议失败证据。'];
-  if (categories.has('context-window')) return ['减少传入历史、日志和 artifact 体积。', '优先使用 workspace refs/currentReferenceDigests，再重试。'];
-  if (categories.has('missing-input')) return ['补充缺失文件、artifact、ref 或凭据。', '若 ref 不存在，改用最近可用的输出或日志引用。'];
-  if (categories.has('timeout')) return ['缩小任务范围或延长超时后重试。', '下一轮使用已记录的 attempt history 继续，不从头解释失败。'];
-  if (categories.has('model')) return ['稍后重试或切换到可用模型/提供方。', '保持上下文紧凑，只传 workspace refs 和失败摘要。'];
-  return ['查看失败摘要和证据引用。', '补充缺失输入、换路由或手动重跑。'];
+  return runtimeAgentBackendRecoverActions(diagnostic);
 }
 
 export function providerRateLimitDiagnosticMessage(diagnostic: AgentServerBackendFailureDiagnostic, finalFailure: boolean) {
@@ -172,14 +85,7 @@ export function providerRateLimitDiagnosticMessage(diagnostic: AgentServerBacken
 }
 
 export function rateLimitRecoverActions(diagnostic: AgentServerBackendFailureDiagnostic) {
-  const wait = diagnostic.retryAfterMs
-    ? `Wait at least ${Math.ceil(diagnostic.retryAfterMs / 1000)}s or until provider retry-after/reset before rerunning.`
-    : 'Wait for the provider rate-limit or retry budget to reset before rerunning.';
-  return [
-    wait,
-    'Reduce concurrent AgentServer runs or switch to a model/provider with available quota.',
-    'Keep follow-up context compact by relying on workspace refs instead of resending full logs/artifacts.',
-  ];
+  return runtimeAgentBackendRateLimitRecoverActions(diagnostic);
 }
 
 export function boundedRateLimitBackoffMs(diagnostic: AgentServerBackendFailureDiagnostic) {
@@ -240,9 +146,7 @@ export function retryAfterMsFromText(text: string) {
 }
 
 export function redactSecretText(text: string) {
-  return text
-    .replace(/(api[-_]?key|token|authorization|secret|password|credential)(["'\s]*[:=]\s*["']?)([^"',\s)]+)/gi, '$1$2[redacted]')
-    .replace(/\b(sk|pk|ak)-[A-Za-z0-9_-]{12,}\b/g, '$1-[redacted]');
+  return redactRuntimeAgentBackendSecretText(text);
 }
 
 function retryAfterMsFromHeaders(headers?: Headers) {
@@ -263,9 +167,5 @@ function rateLimitResetAtFromText(text: string) {
 }
 
 function sanitizeBackendFailureDetail(text: string) {
-  return redactSecretText(text
-    .replace(/request id:\s*[^),\s]+/gi, 'request id: redacted')
-    .replace(/url:\s*\S+/gi, 'url: redacted')
-    .replace(/https?:\/\/[^\s|,)]+/gi, 'redacted-url'))
-    .slice(0, 320);
+  return sanitizeRuntimeAgentBackendFailureDetail(text);
 }

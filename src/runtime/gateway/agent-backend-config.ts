@@ -1,28 +1,30 @@
 import type { AgentBackendAdapter, AgentBackendCapabilities, GatewayRequest, LlmEndpointConfig } from '../runtime-types.js';
 import {
+  runtimeAgentBackendCapabilities,
+  runtimeAgentBackendConfigurationFailureIsBlocking,
+  runtimeAgentBackendProvider,
+  runtimeAgentBackendSupported,
+} from '@sciforge-ui/runtime-contract/agent-backend-policy';
+import {
   compactBackendContext,
   readBackendContextWindowState,
 } from './agentserver-context-window.js';
 
-const SUPPORTED_AGENT_BACKENDS = ['openteam_agent', 'claude-code', 'codex', 'hermes-agent', 'openclaw', 'gemini'];
-
 export function isBlockingAgentServerConfigurationFailure(reason: string) {
-  return /User-side model configuration|llmEndpoint|openteam\.json defaults|Model Provider|Model Base URL|Model Name/i.test(reason);
+  return runtimeAgentBackendConfigurationFailureIsBlocking(reason);
 }
 
 export function providerForBackend(backend: string) {
-  if (backend === 'openteam_agent') return 'self-hosted';
-  if (backend === 'hermes-agent') return 'hermes';
-  return backend || undefined;
+  return runtimeAgentBackendProvider(backend);
 }
 
 export function agentServerBackend(request?: GatewayRequest, llmEndpoint?: LlmEndpointConfig) {
   const requestBackend = request?.agentBackend?.trim();
-  if (requestBackend && SUPPORTED_AGENT_BACKENDS.includes(requestBackend)) {
+  if (runtimeAgentBackendSupported(requestBackend)) {
     return requestBackend;
   }
   const requested = process.env.SCIFORGE_AGENTSERVER_BACKEND?.trim();
-  if (requested && SUPPORTED_AGENT_BACKENDS.includes(requested)) {
+  if (runtimeAgentBackendSupported(requested)) {
     return requested;
   }
   const endpoint = llmEndpoint ?? request?.llmEndpoint;
@@ -41,56 +43,5 @@ export function agentBackendAdapter(backend: string): AgentBackendAdapter {
 }
 
 export function agentBackendCapabilities(backend: string): AgentBackendCapabilities {
-  if (backend === 'codex') {
-    return {
-      contextWindowTelemetry: true,
-      nativeCompaction: true,
-      compactionDuringTurn: true,
-      rateLimitTelemetry: true,
-      sessionRotationSafe: true,
-    };
-  }
-  if (backend === 'hermes-agent') {
-    return {
-      contextWindowTelemetry: true,
-      nativeCompaction: true,
-      compactionDuringTurn: false,
-      rateLimitTelemetry: true,
-      sessionRotationSafe: true,
-    };
-  }
-  if (backend === 'gemini') {
-    return {
-      contextWindowTelemetry: true,
-      nativeCompaction: false,
-      compactionDuringTurn: false,
-      rateLimitTelemetry: true,
-      sessionRotationSafe: true,
-    };
-  }
-  if (backend === 'openteam_agent') {
-    return {
-      contextWindowTelemetry: true,
-      nativeCompaction: false,
-      compactionDuringTurn: false,
-      rateLimitTelemetry: true,
-      sessionRotationSafe: true,
-    };
-  }
-  if (backend === 'claude-code') {
-    return {
-      contextWindowTelemetry: false,
-      nativeCompaction: false,
-      compactionDuringTurn: false,
-      rateLimitTelemetry: true,
-      sessionRotationSafe: true,
-    };
-  }
-  return {
-    contextWindowTelemetry: false,
-    nativeCompaction: false,
-    compactionDuringTurn: false,
-    rateLimitTelemetry: false,
-    sessionRotationSafe: true,
-  };
+  return runtimeAgentBackendCapabilities(backend);
 }

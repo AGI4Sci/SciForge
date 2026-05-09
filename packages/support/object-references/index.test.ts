@@ -3,9 +3,11 @@ import {
   artifactForObjectReference,
   artifactReferenceKind,
   artifactTypeForPath,
+  linkifyObjectReferences,
   objectReferenceChipModel,
   objectReferenceForArtifactSummary,
   objectReferenceForUploadedArtifact,
+  objectReferencesFromInlineTokens,
   pathForObjectReference,
   referenceForArtifact,
   referenceForObjectReference,
@@ -123,4 +125,23 @@ const model = objectReferenceChipModel([
 assert.deepEqual(model.visible.map((item) => item.id), ['obj-1', 'url']);
 assert.equal(model.hiddenCount, 1);
 
-console.log('[ok] object reference package normalizes artifacts, files, selections, uploads, and chip ordering');
+const inlineRefs = objectReferencesFromInlineTokens(
+  '查看 artifact:artifact-1、file::reports/final.md 和 https://example.org/paper?id=1。',
+  'run-inline',
+);
+assert.deepEqual(inlineRefs.map((reference) => reference.kind), ['artifact', 'file', 'url']);
+assert.equal(inlineRefs[0].runId, 'run-inline');
+assert.deepEqual(inlineRefs[1].actions, ['focus-right-pane', 'reveal-in-folder', 'copy-path', 'pin']);
+assert.equal(inlineRefs[1].provenance?.path, 'reports/final.md');
+assert.equal(inlineRefs[2].status, 'external');
+
+const linked = linkifyObjectReferences(
+  '打开 file:reports/final.md 或 artifact-1。',
+  [fileRef, artifactRef],
+);
+assert.deepEqual(
+  linked.filter((piece) => piece.reference).map((piece) => piece.reference?.ref),
+  ['file:reports/final.md', 'artifact:artifact-1'],
+);
+
+console.log('[ok] object reference package normalizes artifacts, files, selections, uploads, chips, and inline text refs');

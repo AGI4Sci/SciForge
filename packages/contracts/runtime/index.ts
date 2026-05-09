@@ -1,5 +1,29 @@
 import type { ReactNode } from 'react';
 
+export {
+  SUPPORTED_RUNTIME_AGENT_BACKENDS,
+  compactCapabilityForAgentBackend,
+  estimateRuntimeAgentBackendModelContextWindow,
+  normalizeRuntimeAgentBackendContextWindowSource,
+  runtimeAgentBackendCapabilities,
+  runtimeAgentBackendConfigurationFailureIsBlocking,
+  runtimeAgentBackendFailureCategories,
+  runtimeAgentBackendProvider,
+  runtimeAgentBackendProviderLabel,
+  runtimeAgentBackendRateLimitRecoverActions,
+  runtimeAgentBackendRecoverActions,
+  runtimeAgentBackendSupported,
+  redactRuntimeAgentBackendSecretText,
+  sanitizeRuntimeAgentBackendFailureDetail,
+  withRuntimeAgentBackendUserFacingDiagnostic,
+} from './agent-backend-policy';
+export type {
+  RuntimeAgentBackendCapabilities,
+  RuntimeAgentBackend,
+  RuntimeBackendContextWindowSource,
+  RuntimeAgentBackendFailureDiagnostic,
+  RuntimeAgentBackendFailureKind,
+} from './agent-backend-policy';
 export type {
   BuiltInScenarioId,
   ScenarioInstanceId,
@@ -184,6 +208,7 @@ export type {
 } from './capability-manifest';
 export {
   CAPABILITY_EVOLUTION_BROKER_DIGEST_CONTRACT_ID,
+  CAPABILITY_EVOLUTION_CANDIDATE_SET_CONTRACT_ID,
   CAPABILITY_EVOLUTION_COMPACT_SUMMARY_CONTRACT_ID,
   CAPABILITY_EVOLUTION_RECORD_CONTRACT_ID,
 } from './capability-evolution';
@@ -201,6 +226,9 @@ export {
 } from './capabilities';
 export type {
   CapabilityEvolutionBrokerDigest,
+  CapabilityEvolutionCandidate,
+  CapabilityEvolutionCandidateKind,
+  CapabilityEvolutionCandidateSet,
   CapabilityEvolutionCompactRecord,
   CapabilityEvolutionCompactSummary,
   CapabilityEvolutionRecord,

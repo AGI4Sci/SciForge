@@ -67,10 +67,10 @@ const rules: Rule[] = [
 // increases or a new untracked file/rule appears. When a migration removes one
 // of these paths, lower the matching count in this table in the same change.
 const trackedBaselineCounts: Record<string, number> = {
-  'src/runtime/gateway/agent-backend-config.ts#provider-scenario-prompt-special-case': 1,
-  'src/runtime/gateway/agentserver-context-window.ts#provider-scenario-prompt-special-case': 2,
+  'src/runtime/gateway/agent-backend-config.ts#provider-scenario-prompt-special-case': 0,
+  'src/runtime/gateway/agentserver-context-window.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/agentserver-prompts.ts#provider-scenario-prompt-special-case': 2,
-  'src/runtime/gateway/backend-failure-diagnostics.ts#provider-scenario-prompt-special-case': 2,
+  'src/runtime/gateway/backend-failure-diagnostics.ts#provider-scenario-prompt-special-case': 0,
   'src/runtime/gateway/context-envelope.ts#provider-scenario-prompt-special-case': 1,
   'src/runtime/gateway/gateway-request.ts#provider-scenario-prompt-special-case': 1,
   'src/runtime/gateway/capability-evolution-events.ts#provider-scenario-prompt-special-case': 1,
