@@ -1,27 +1,28 @@
 import { compileSlotsForScenario } from '@sciforge/scenario-core/ui-plan-compiler';
-import { uiModuleRegistry, type PresentationDedupeScope, type RuntimeUIModule } from '../../uiModuleRegistry';
+import { uiModuleRegistry, type RuntimeUIModule } from '../../uiModuleRegistry';
 import type { DisplayIntent, ObjectReference, ResolvedViewPlan, RuntimeArtifact, ScenarioInstanceId, SciForgeRun, SciForgeSession, UIManifestSlot, ViewPlanSection } from '../../domain';
 import type { ScenarioId } from '../../data';
 import { artifactForObjectReference, syntheticArtifactForObjectReference } from '../../../../../packages/support/object-references';
 import type { ResultFocusMode } from './ResultShell';
 import {
   componentMatchesInteractiveViewFocus,
+  compactInteractiveViewPlanItems,
   compareInteractiveViewModulesForArtifact,
+  compareInteractiveViewPlanOrder,
+  compareInteractiveViewResultPresentationItems,
   defaultInteractiveViewAcceptanceCriteria,
   defaultInteractiveViewFallbackAcceptable,
-  interactiveViewComponentAllowsMissingArtifact,
-  interactiveViewComponentRank,
   interactiveViewFallbackModuleIds,
-  interactiveViewFallbackBindingStatus,
   interactiveViewModuleAcceptsArtifact,
-  isAuditOnlyInteractiveViewComponent,
+  interactiveViewVisiblePresentationGroupKey,
+  isAuditOnlyInteractiveViewPlanItem,
   isEvidenceInteractiveArtifactType,
   isEvidenceInteractiveViewComponent,
-  isExecutionInteractiveViewComponent,
-  isNotebookInteractiveViewComponent,
-  isPrimaryInteractiveResultComponent,
-  isTabularInteractiveViewComponent,
   isUnknownArtifactInspectorComponent,
+  resolveInteractiveViewPlanSection,
+  validateInteractiveViewModuleBinding,
+  type InteractiveViewBindingStatus,
+  type InteractiveViewPlanSource,
 } from '../../../../../packages/presentation/interactive-views';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -36,22 +37,8 @@ function asStringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : [];
 }
 
-function toRecordList(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value) ? value.filter(isRecord) : [];
-}
-
-type ViewPlanSource =
-  | 'object-focus'
-  | 'display-intent'
-  | 'runtime-manifest'
-  | 'artifact-inferred'
-  | 'default-plan'
-  | 'fallback';
-type ViewPlanBindingStatus =
-  | 'bound'
-  | 'missing-artifact'
-  | 'missing-fields'
-  | 'fallback';
+type ViewPlanSource = InteractiveViewPlanSource;
+type ViewPlanBindingStatus = InteractiveViewBindingStatus;
 
 export type ResolvedViewPlanItem = {
   id: string;
@@ -135,8 +122,8 @@ export function resolveViewPlan({
       transform: overrides.transform,
       compare: overrides.compare,
     };
-    const validation = validateModuleBinding(module, artifact);
-    const section = source === 'object-focus' ? 'primary' : sectionForModule(module, displayIntent, artifact);
+    const validation = validateInteractiveViewModuleBinding(module, artifact);
+    const section = resolveInteractiveViewPlanSection({ module, displayIntent, artifact, source });
     const id = `${section}-${module.moduleId}-${artifact?.id ?? slot.artifactRef ?? slot.componentId}`;
     if (seen.has(id)) return;
     seen.add(id);
@@ -214,11 +201,12 @@ export function resolveViewPlan({
     addItem(moduleById(interactiveViewFallbackModuleIds.executionProvenance) ?? uiModuleRegistry[4], undefined, 'fallback');
   }
 
-  const ordered = compactViewPlanItems(items, session).sort((left, right) => {
-    const sectionDelta = sectionRank(left.section) - sectionRank(right.section);
-    if (sectionDelta) return sectionDelta;
-    return (left.slot.priority ?? left.module.priority ?? 99) - (right.slot.priority ?? right.module.priority ?? 99);
-  });
+  const ordered = compactInteractiveViewPlanItems(items, {
+    artifacts: session.artifacts,
+    claimCount: session.claims.length,
+    executionUnitCount: session.executionUnits.length,
+    notebookEntryCount: session.notebook.length,
+  }).sort(compareInteractiveViewPlanOrder);
   const sections: RuntimeResolvedViewPlan['sections'] = {
     primary: [],
     supporting: [],
@@ -338,252 +326,6 @@ function findRenderableArtifact(artifacts: RuntimeArtifact[], artifactRef?: stri
   return artifacts.find((artifact) => artifact.id === artifactRef || artifact.path === artifactRef || artifact.dataRef === artifactRef);
 }
 
-function validateModuleBinding(module: RuntimeUIModule, artifact?: RuntimeArtifact): { status: ViewPlanBindingStatus; reason?: string; missingFields?: string[] } {
-  if (!artifact && interactiveViewComponentAllowsMissingArtifact(module.componentId)) {
-    return { status: 'bound' };
-  }
-  if (!artifact && !module.acceptsArtifactTypes.includes('*')) {
-    return { status: 'missing-artifact', reason: `等待 ${module.acceptsArtifactTypes.join('/')} artifact` };
-  }
-  if (artifact && !moduleAcceptsArtifact(module, artifact.type)) {
-    return { status: interactiveViewFallbackBindingStatus as ViewPlanBindingStatus, reason: `${module.moduleId} 不声明消费 ${artifact.type}` };
-  }
-  const missingFields = (module.requiredFields ?? []).filter((field) => !artifactHasField(artifact, field));
-  const missingAny = (module.requiredAnyFields ?? []).filter((group) => !group.some((field) => artifactHasField(artifact, field)));
-  if (missingFields.length || missingAny.length) {
-    return {
-      status: 'missing-fields',
-      reason: 'artifact 缺少模块必需字段',
-      missingFields: [...missingFields, ...missingAny.map((group) => group.join('|'))],
-    };
-  }
-  return { status: 'bound' };
-}
-
-function artifactHasField(artifact: RuntimeArtifact | undefined, field: string) {
-  if (!artifact) return false;
-  if (field === 'dataRef' && artifact.dataRef) return true;
-  if (field in artifact) return true;
-  if (isRecord(artifact.metadata) && field in artifact.metadata) return true;
-  const data = artifact.data;
-  if (isRecord(data) && field in data) return true;
-  if (field === 'rows' && Array.isArray(data)) return true;
-  return false;
-}
-
-function uploadedEvidenceArtifacts(artifacts: RuntimeArtifact[]) {
-  return artifacts.filter((artifact) => artifact.metadata?.source === 'user-upload' || /^uploaded-/.test(artifact.type));
-}
-
-function sectionForModule(module: RuntimeUIModule, displayIntent: DisplayIntent, artifact?: RuntimeArtifact): ViewPlanSection {
-  if (isPrimaryInteractiveResultComponent(module.componentId)) {
-    if (artifact && displayIntent.requiredArtifactTypes?.includes(artifact.type)) return 'primary';
-    if (displayIntent.preferredModules?.includes(module.moduleId)) return 'primary';
-  }
-  return module.defaultSection ?? 'supporting';
-}
-
-function compactViewPlanItems(items: ResolvedViewPlanItem[], session: SciForgeSession) {
-  const strongestByArtifact = new Map<string, ResolvedViewPlanItem>();
-  const strongestByPresentationIdentity = new Map<string, ResolvedViewPlanItem>();
-  for (const item of items) {
-    const artifactKey = item.artifact?.id ?? item.slot.artifactRef;
-    if (artifactKey) {
-      const previous = strongestByArtifact.get(artifactKey);
-      if (!previous || resultPresentationRank(item, previous) < 0) strongestByArtifact.set(artifactKey, item);
-    }
-    const presentationKey = presentationIdentityKey(item);
-    if (presentationKey) {
-      const previous = strongestByPresentationIdentity.get(presentationKey);
-      if (!previous || presentationIdentityRank(item, previous) < 0) strongestByPresentationIdentity.set(presentationKey, item);
-    }
-  }
-  return items.filter((item) => {
-    if (item.status === 'missing-artifact' && item.section !== 'primary' && item.source !== 'display-intent') return false;
-    if (isExecutionInteractiveViewComponent(item.module.componentId) && !session.executionUnits.length) return false;
-    if (isEvidenceInteractiveViewComponent(item.module.componentId) && !session.claims.length && !uploadedEvidenceArtifacts(session.artifacts).length && !item.artifact) return false;
-    if (isNotebookInteractiveViewComponent(item.module.componentId) && !session.notebook.length && !item.artifact) return false;
-    if (isUnknownArtifactInspectorComponent(item.module.componentId) && !item.artifact) return false;
-    const artifactKey = item.artifact?.id ?? item.slot.artifactRef;
-    const strongest = artifactKey ? strongestByArtifact.get(artifactKey) : undefined;
-    if (strongest && strongest.id !== item.id && isUnknownArtifactInspectorComponent(item.module.componentId)) return false;
-    if (strongest && strongest.id !== item.id && isTabularInteractiveViewComponent(item.module.componentId) && strongest.status === 'bound') return false;
-    const presentationKey = presentationIdentityKey(item);
-    const strongestPresentation = presentationKey ? strongestByPresentationIdentity.get(presentationKey) : undefined;
-    if (strongestPresentation && strongestPresentation.id !== item.id && isPresentationDedupeEnabled(item.module)) return false;
-    return true;
-  });
-}
-
-function isPresentationDedupeEnabled(module: RuntimeUIModule) {
-  return (module.presentation?.dedupeScope ?? 'entity') !== 'none';
-}
-
-function presentationIdentityKey(item: ResolvedViewPlanItem) {
-  if (!item.artifact || item.status === 'missing-artifact' || !isPresentationDedupeEnabled(item.module)) return undefined;
-  const scope = item.module.presentation?.dedupeScope ?? 'entity';
-  const identity = artifactPresentationIdentity(item.artifact, item.module, scope);
-  return identity ? `${item.module.componentId}:${scope}:${identity}` : undefined;
-}
-
-function artifactPresentationIdentity(
-  artifact: RuntimeArtifact,
-  module: RuntimeUIModule,
-  scope: PresentationDedupeScope,
-) {
-  const fields = module.presentation?.identityFields?.length
-    ? module.presentation.identityFields
-    : defaultPresentationIdentityFields;
-  const semanticIdentity = artifactSemanticIdentity(artifact, fields, scope);
-  if (semanticIdentity) return `semantic:${semanticIdentity}`;
-  const provenanceIdentity = artifactProvenanceIdentity(artifact);
-  if (provenanceIdentity) return `provenance:${provenanceIdentity}`;
-  return undefined;
-}
-
-const defaultPresentationIdentityFields = [
-  'presentationKey',
-  'resultKey',
-  'displayKey',
-  'semanticKey',
-  'entityKey',
-  'entityId',
-  'entity_id',
-  'targetId',
-  'target_id',
-  'subjectId',
-  'subject_id',
-  'accession',
-  'accessionId',
-  'accession_id',
-  'gene',
-  'symbol',
-  'compoundId',
-  'compound_id',
-  'datasetId',
-  'dataset_id',
-  'reportId',
-  'report_id',
-  'documentId',
-  'document_id',
-  'paperId',
-  'paper_id',
-  'doi',
-  'url',
-  'dataRef',
-  'outputRef',
-  'resultRef',
-];
-
-function artifactSemanticIdentity(
-  artifact: RuntimeArtifact,
-  fields: string[],
-  scope: PresentationDedupeScope,
-) {
-  const data = artifact.data;
-  const records = [
-    artifact.metadata,
-    artifactRecordForIdentity(artifact),
-    isRecord(data) ? data : undefined,
-    scope === 'entity' ? firstPayloadRecordForIdentity(data) : undefined,
-  ];
-  for (const record of records) {
-    const identity = identityFromRecord(record, fields);
-    if (identity) return identity;
-  }
-  return undefined;
-}
-
-function artifactRecordForIdentity(artifact: RuntimeArtifact): Record<string, unknown> {
-  return {
-    id: artifact.id,
-    type: artifact.type,
-    dataRef: artifact.dataRef,
-    path: artifact.path,
-  };
-}
-
-function firstPayloadRecordForIdentity(data: unknown): Record<string, unknown> | undefined {
-  if (Array.isArray(data)) return toRecordList(data)[0];
-  if (!isRecord(data)) return undefined;
-  for (const key of ['selected', 'primary', 'item', 'record', 'data', 'structures', 'rows', 'items', 'results', 'records']) {
-    const value = data[key];
-    if (isRecord(value)) return value;
-    const first = toRecordList(value)[0];
-    if (first) return first;
-  }
-  return undefined;
-}
-
-function identityFromRecord(record: Record<string, unknown> | undefined, fields: string[]) {
-  if (!record) return undefined;
-  const canonicalFields = new Set(fields.map(canonicalPresentationIdentityField));
-  for (const field of fields) {
-    const value = asString(record[field]);
-    const normalized = normalizePresentationIdentity(value);
-    if (normalized) return `${canonicalPresentationIdentityField(field)}:${normalized}`;
-  }
-  for (const [field, rawValue] of Object.entries(record)) {
-    const canonicalField = canonicalPresentationIdentityField(field);
-    if (!canonicalFields.has(canonicalField)) continue;
-    const normalized = normalizePresentationIdentity(asString(rawValue));
-    if (normalized) return `${canonicalField}:${normalized}`;
-  }
-  return undefined;
-}
-
-function canonicalPresentationIdentityField(field: string) {
-  return field.trim().toLowerCase().replace(/[_\-\s]+/g, '');
-}
-
-function artifactProvenanceIdentity(artifact: RuntimeArtifact) {
-  const metadata = artifact.metadata ?? {};
-  const values = [
-    artifact.dataRef,
-    artifact.path,
-    asString(metadata.outputRef),
-    asString(metadata.resultRef),
-    asString(metadata.dataRef),
-    asString(metadata.path),
-    asString(metadata.runId),
-    asString(metadata.agentServerRunId),
-    asString(metadata.provenanceRef),
-  ];
-  return values.map(normalizePresentationIdentity).find(Boolean);
-}
-
-function normalizePresentationIdentity(value?: string) {
-  const normalized = value?.trim().toLowerCase();
-  if (!normalized || normalized === 'unknown' || normalized === 'none' || normalized === 'null' || normalized === 'undefined') return undefined;
-  return normalized.replace(/\s+/g, ' ');
-}
-
-function presentationIdentityRank(left: ResolvedViewPlanItem, right: ResolvedViewPlanItem) {
-  const statusDelta = resultStatusRank(left.status) - resultStatusRank(right.status);
-  if (statusDelta) return statusDelta;
-  const sourceDelta = viewPlanSourceRank(left.source) - viewPlanSourceRank(right.source);
-  if (sourceDelta) return sourceDelta;
-  const sectionDelta = sectionRank(left.section) - sectionRank(right.section);
-  if (sectionDelta) return sectionDelta;
-  return (left.slot.priority ?? left.module.priority ?? 99) - (right.slot.priority ?? right.module.priority ?? 99);
-}
-
-function viewPlanSourceRank(source: ViewPlanSource) {
-  if (source === 'object-focus') return -1;
-  if (source === 'display-intent') return 0;
-  if (source === 'runtime-manifest') return 1;
-  if (source === 'artifact-inferred') return 2;
-  if (source === 'default-plan') return 3;
-  return 4;
-}
-
-function sectionRank(section: ViewPlanSection) {
-  if (section === 'primary') return 0;
-  if (section === 'supporting') return 1;
-  if (section === 'provenance') return 2;
-  return 3;
-}
-
 function blockedDesignForIntent(
   displayIntent: DisplayIntent,
   artifacts: RuntimeArtifact[],
@@ -635,7 +377,7 @@ export function viewPlanSectionLabel(section: ViewPlanSection) {
 }
 
 export function selectDefaultResultItems(items: ResolvedViewPlanItem[], focusMode: ResultFocusMode) {
-  const sorted = [...items].sort(resultPresentationRank);
+  const sorted = [...items].sort(compareInteractiveViewResultPresentationItems);
   const focused = sorted.filter((item) => item.source === 'object-focus');
   if (focused.length && focusMode === 'all') {
     const visibleItems: ResolvedViewPlanItem[] = [];
@@ -643,7 +385,7 @@ export function selectDefaultResultItems(items: ResolvedViewPlanItem[], focusMod
     const visibleIds = new Set(visibleItems.map((item) => item.id));
     return {
       visibleItems,
-      deferredItems: sorted.filter((item) => !visibleIds.has(item.id) && !isAuditOnlyResultItem(item)),
+      deferredItems: sorted.filter((item) => !visibleIds.has(item.id) && !isAuditOnlyInteractiveViewPlanItem(item)),
     };
   }
   if (focusMode === 'evidence' || focusMode === 'execution') {
@@ -655,7 +397,7 @@ export function selectDefaultResultItems(items: ResolvedViewPlanItem[], focusMod
       deferredItems: sorted.filter((item) => !visibleIds.has(item.id)),
     };
   }
-  const userFacing = sorted.filter((item) => !isAuditOnlyResultItem(item));
+  const userFacing = sorted.filter((item) => !isAuditOnlyInteractiveViewPlanItem(item));
   const primary = userFacing.filter((item) => item.section === 'primary');
   const usefulPrimary = primary.filter((item) => item.status === 'bound' || item.status === 'missing-fields');
   const visibleItems: ResolvedViewPlanItem[] = [];
@@ -675,40 +417,13 @@ export function selectDefaultResultItems(items: ResolvedViewPlanItem[], focusMod
   };
 }
 
-function isAuditOnlyResultItem(item: ResolvedViewPlanItem) {
-  return isAuditOnlyInteractiveViewComponent(item.module.componentId)
-    || item.section === 'provenance'
-    || item.section === 'raw';
-}
-
 function pushUniqueVisibleItems(target: ResolvedViewPlanItem[], candidates: ResolvedViewPlanItem[], limit: number) {
-  const visibleKeys = new Set(target.map(visiblePresentationGroupKey));
+  const visibleKeys = new Set(target.map(interactiveViewVisiblePresentationGroupKey));
   for (const item of candidates) {
     if (target.length >= limit) break;
-    const key = visiblePresentationGroupKey(item);
+    const key = interactiveViewVisiblePresentationGroupKey(item);
     if (visibleKeys.has(key)) continue;
     visibleKeys.add(key);
     target.push(item);
   }
-}
-
-function visiblePresentationGroupKey(item: ResolvedViewPlanItem) {
-  return `${item.section}:${item.module.componentId}`;
-}
-
-function resultPresentationRank(left: ResolvedViewPlanItem, right: ResolvedViewPlanItem) {
-  const sectionDelta = sectionRank(left.section) - sectionRank(right.section);
-  if (sectionDelta) return sectionDelta;
-  const statusDelta = resultStatusRank(left.status) - resultStatusRank(right.status);
-  if (statusDelta) return statusDelta;
-  const componentDelta = interactiveViewComponentRank(left.module.componentId) - interactiveViewComponentRank(right.module.componentId);
-  if (componentDelta) return componentDelta;
-  return (left.slot.priority ?? left.module.priority ?? 99) - (right.slot.priority ?? right.module.priority ?? 99);
-}
-
-function resultStatusRank(status: ResolvedViewPlanItem['status']) {
-  if (status === 'bound') return 0;
-  if (status === 'missing-fields') return 1;
-  if (status === 'fallback') return 2;
-  return 3;
 }

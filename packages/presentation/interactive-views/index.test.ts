@@ -3,8 +3,10 @@ import { test } from 'node:test';
 
 import {
   componentMatchesInteractiveViewFocus,
+  compactInteractiveViewPlanItems,
   composeRuntimeUiManifestSlots,
   directAnswerPlainTextResultPolicy,
+  directAnswerResultPolicyIds,
   ensureDirectAnswerReportArtifactPolicy,
   existingArtifactFollowupPreferredView,
   existingArtifactFollowupPromptPolicy,
@@ -18,9 +20,12 @@ import {
   normalizeDirectAnswerUiManifest,
   preferredExistingArtifactFollowupArtifact,
   preferredInteractiveViewComponentForArtifactType,
+  reportRuntimeResultViewSlots,
+  resolveInteractiveViewPlanSection,
   selectedViewComponentsForIntent,
   uiComponentCompatibilityAliases,
   uiComponentManifests,
+  validateInteractiveViewModuleBinding,
   visionSenseTraceOutputViews,
 } from './index';
 
@@ -86,7 +91,88 @@ test('interactive view policy owns result focus and component ranking', () => {
   assert.equal(interactiveViewComponentRank('report-viewer') < interactiveViewComponentRank('record-table'), true);
 });
 
+test('interactive view policy owns result binding, section, and presentation dedupe', () => {
+  const reportViewer = interactiveViewManifests.find((module) => module.componentId === 'report-viewer');
+  const structureViewer = interactiveViewManifests.find((module) => module.componentId === 'structure-viewer');
+  assert.ok(reportViewer);
+  assert.ok(structureViewer);
+
+  assert.equal(validateInteractiveViewModuleBinding(reportViewer, undefined).status, 'missing-artifact');
+  assert.equal(
+    validateInteractiveViewModuleBinding(reportViewer, {
+      id: 'report-empty',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      data: {},
+    }).status,
+    'missing-fields',
+  );
+  assert.equal(resolveInteractiveViewPlanSection({
+    module: reportViewer,
+    displayIntent: { primaryGoal: 'report', requiredArtifactTypes: ['research-report'] },
+    artifact: {
+      id: 'report-ready',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      data: { markdown: '# Ready' },
+    },
+  }), 'primary');
+
+  const weakerArtifact = {
+    id: 'semantic-html',
+    type: 'structure-3d-html',
+    producerScenario: 'structure-preview',
+    schemaVersion: '1',
+    dataRef: 'workspace://same.html',
+    metadata: { accession: '1ABC' },
+  };
+  const strongerArtifact = {
+    id: 'backend-pdb',
+    type: 'pdb-file',
+    producerScenario: 'structure-preview',
+    schemaVersion: '1',
+    dataRef: 'workspace://same.pdb',
+    metadata: { accession: '1ABC' },
+  };
+  const compacted = compactInteractiveViewPlanItems([
+    {
+      id: 'supporting-structure-viewer-semantic-html',
+      slot: { componentId: 'structure-viewer', artifactRef: weakerArtifact.id, priority: 5 },
+      module: structureViewer,
+      artifact: weakerArtifact,
+      section: 'supporting',
+      source: 'artifact-inferred',
+      status: 'bound',
+    },
+    {
+      id: 'primary-structure-viewer-backend-pdb',
+      slot: { componentId: 'structure-viewer', artifactRef: strongerArtifact.id, priority: 1 },
+      module: structureViewer,
+      artifact: strongerArtifact,
+      section: 'primary',
+      source: 'display-intent',
+      status: 'bound',
+    },
+  ]);
+
+  assert.deepEqual(compacted.map((item) => item.artifact?.id), ['backend-pdb']);
+});
+
+test('interactive view policy owns report runtime result slots', () => {
+  assert.deepEqual(
+    reportRuntimeResultViewSlots('digest-report', 'knowledge-runtime-result'),
+    [
+      { componentId: 'report-viewer', artifactRef: 'digest-report', priority: 1 },
+      { componentId: 'execution-unit-table', artifactRef: 'knowledge-runtime-result', priority: 2 },
+    ],
+  );
+});
+
 test('direct answer result policy owns report artifact and view selection semantics', () => {
+  assert.equal(directAnswerResultPolicyIds.directTextTool, 'agentserver.direct-text');
+  assert.equal(directAnswerResultPolicyIds.workspaceArtifactJsonTool, 'workspace-task.artifact-json');
   const plain = directAnswerPlainTextResultPolicy('Final markdown report', {
     skillDomain: 'literature',
     prompt: '请总结成报告',

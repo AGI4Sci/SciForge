@@ -1,6 +1,7 @@
 import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
 import { clipForAgentServerJson, isRecord, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
 import { sha1 } from '../workspace-task-runner.js';
+import { reportRuntimeResultViewSlots } from '../../../packages/presentation/interactive-views';
 
 export function directContextFastPathPayload(request: GatewayRequest): ToolPayload | undefined {
   if (request.agentServerBaseUrl) return undefined;
@@ -31,10 +32,7 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
       supportingRefs: uniqueStrings(context.map((item) => item.ref).filter((ref): ref is string => Boolean(ref))),
       opposingRefs: [],
     }],
-    uiManifest: [
-      { componentId: 'report-viewer', artifactRef: reportId, priority: 1 },
-      { componentId: 'execution-unit-table', artifactRef: 'direct-context-fast-path', priority: 2 },
-    ],
+    uiManifest: reportRuntimeResultViewSlots(reportId, 'direct-context-fast-path'),
     executionUnits: [{
       id: `EU-direct-context-${sha1(JSON.stringify(context)).slice(0, 8)}`,
       tool: 'sciforge.direct-context-fast-path',

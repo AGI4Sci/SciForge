@@ -17,6 +17,8 @@ export {
   interactiveViewFallbackModuleIds,
   interactiveViewFallbackBindingStatus,
   interactiveViewModuleAcceptsArtifact,
+  reportRuntimeResultViewSlots,
+  runtimeResultViewSlotsPolicy,
   isAuditOnlyInteractiveViewComponent,
   isEvidenceInteractiveArtifactType,
   isEvidenceInteractiveViewComponent,
@@ -27,6 +29,7 @@ export {
   isUnknownArtifactInspectorComponent,
   selectedViewComponentsForIntent,
   type ArtifactIntentPolicyRequest,
+  type RuntimeResultViewSlotsPolicyRequest,
   type RuntimeUiManifestPolicyRequest,
 } from './runtime-ui-manifest-policy';
 export {
@@ -36,6 +39,7 @@ export {
   existingArtifactFollowupPromptPolicy,
   existingArtifactFollowupUiManifest,
   directAnswerPlainTextResultPolicy,
+  directAnswerResultPolicyIds,
   ensureDirectAnswerReportArtifactPolicy,
   markdownTextForDirectAnswerArtifact,
   normalizeDirectAnswerArtifacts,
@@ -49,6 +53,22 @@ export {
   visionSenseTraceOutputViews,
   type VisionSenseTraceOutputViewRefs,
 } from './vision-sense-trace-output-policy';
+export {
+  compactInteractiveViewPlanItems,
+  compareInteractiveViewPlanOrder,
+  compareInteractiveViewResultPresentationItems,
+  interactiveViewArtifactHasField,
+  interactiveViewPlanSectionRank,
+  interactiveViewPlanStatusRank,
+  interactiveViewVisiblePresentationGroupKey,
+  isAuditOnlyInteractiveViewPlanItem,
+  resolveInteractiveViewPlanSection,
+  validateInteractiveViewModuleBinding,
+  type InteractiveViewBindingStatus,
+  type InteractiveViewPlanCompactionContext,
+  type InteractiveViewPlanItem,
+  type InteractiveViewPlanSource,
+} from './view-plan-result-policy';
 export type {
   PresentationDedupeScope,
   UIComponentManifest as InteractiveViewManifest,

@@ -1,7 +1,13 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import type { GatewayRequest, ToolPayload, VerificationPolicy, VerificationResult, VerificationRiskLevel, VerificationVerdict } from '../runtime-types.js';
-import { clipForAgentServerJson, isRecord, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
+import {
+  createRuntimeVerificationArtifact,
+  evaluateRuntimeVerificationGate,
+  normalizeRuntimeVerificationPolicy as normalizeRuntimeVerificationPolicyFromContract,
+  verificationIsNonBlocking,
+} from '@sciforge-ui/runtime-contract/verification-policy';
+import type { GatewayRequest, ToolPayload, VerificationPolicy, VerificationResult, VerificationVerdict } from '../runtime-types.js';
+import { isRecord, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { normalizeRuntimeVerificationResults } from './verification-results.js';
 
@@ -22,14 +28,14 @@ export async function applyRuntimeVerificationPolicy(
   const resultId = result.id ?? `verification-${sha1(`${request.prompt}:${Date.now()}:${result.verdict}`).slice(0, 12)}`;
   const resultWithId = { ...result, id: resultId };
   const verificationRel = `.sciforge/verifications/${resultId}.json`;
+  const artifact = createRuntimeVerificationArtifact(resultWithId, policy, verificationRel, nonBlocking);
   await mkdir(dirname(join(workspace, verificationRel)), { recursive: true });
   await writeFile(join(workspace, verificationRel), JSON.stringify({
-    schemaVersion: 'sciforge.verification-result.v1',
+    schemaVersion: artifact.schemaVersion,
     policy,
     result: resultWithId,
   }, null, 2), 'utf8');
 
-  const artifact = verificationArtifact(resultWithId, policy, verificationRel, nonBlocking);
   const gatedPayload = gate.blocked ? failClosedPayload(payload, gate.reason, resultWithId, verificationRel) : payload;
   return attachVerificationRefs(gatedPayload, policy, resultWithId, verificationRel, artifact, nonBlocking);
 }
@@ -38,35 +44,7 @@ export function normalizeRuntimeVerificationPolicy(
   request: GatewayRequest,
   payload?: ToolPayload,
 ): VerificationPolicy {
-  const explicit = request.verificationPolicy ?? (isRecord(payload?.verificationPolicy) ? payload?.verificationPolicy : undefined);
-  const riskLevel = explicit?.riskLevel ?? inferVerificationRiskLevel(request, payload);
-  const selectedVerifierIds = uniqueStrings([
-    ...(request.selectedVerifierIds ?? []),
-    ...(explicit?.selectedVerifierIds ?? []),
-    ...toStringList(request.uiState?.selectedVerifierIds),
-  ]);
-  if (explicit) {
-    return {
-      ...explicit,
-      riskLevel,
-      selectedVerifierIds,
-      required: riskLevel === 'high' ? true : explicit.required,
-      mode: riskLevel === 'high' && explicit.mode === 'none' ? 'hybrid' : explicit.mode,
-      humanApprovalPolicy: riskLevel === 'high'
-        ? (explicit.humanApprovalPolicy === 'none' ? 'required' : explicit.humanApprovalPolicy ?? 'required')
-        : explicit.humanApprovalPolicy,
-    };
-  }
-  return {
-    required: riskLevel === 'high',
-    mode: riskLevel === 'high' ? 'hybrid' : 'lightweight',
-    riskLevel,
-    reason: riskLevel === 'high'
-      ? 'Runtime inferred a high-risk action; verifier or explicit human approval is required.'
-      : 'No strong verifier was selected; runtime records an explicit unverified result instead of treating it as pass.',
-    selectedVerifierIds,
-    humanApprovalPolicy: riskLevel === 'high' ? 'required' : 'optional',
-  };
+  return normalizeRuntimeVerificationPolicyFromContract(request, payload) as VerificationPolicy;
 }
 
 export function evaluateVerificationGate(
@@ -75,68 +53,7 @@ export function evaluateVerificationGate(
   policy: VerificationPolicy,
   providedResults: VerificationResult[] = [],
 ): { blocked: boolean; reason?: string; result: VerificationResult } {
-  const decisive = mostDecisiveVerificationResult(providedResults);
-  const approval = normalizeHumanApproval(request.humanApproval ?? request.uiState?.humanApproval);
-  const highRiskAction = policy.riskLevel === 'high' || hasHighRiskActionSignal(request, payload);
-  if (decisive?.verdict === 'pass') return { blocked: false, result: decisive };
-  if (approval?.approved) {
-    return {
-      blocked: false,
-      result: {
-        id: decisive?.id,
-        verdict: 'pass',
-        reward: 1,
-        confidence: 0.9,
-        critique: 'Human approval satisfied the verification gate.',
-        evidenceRefs: uniqueStrings([approval.ref, ...(decisive?.evidenceRefs ?? [])].filter((value): value is string => typeof value === 'string' && value.length > 0)),
-        repairHints: decisive?.repairHints ?? [],
-        diagnostics: { source: 'human-approval', approval },
-      },
-    };
-  }
-  if (highRiskAction && actionProviderSelfReportsSuccess(payload)) {
-    const reason = policy.selectedVerifierIds?.length
-      ? 'High-risk action did not receive a passing verifier result or explicit human approval.'
-      : 'High-risk action has no verifier or explicit human approval; action provider self-reported success cannot close the run.';
-    return {
-      blocked: true,
-      reason,
-      result: decisive ?? {
-        verdict: policy.selectedVerifierIds?.length ? 'fail' : 'needs-human',
-        reward: -1,
-        confidence: 0.98,
-        critique: reason,
-        evidenceRefs: executionUnitRefs(payload),
-        repairHints: [
-          'Attach a verifier result with verdict=pass, or collect explicit human approval before marking the high-risk action complete.',
-          'If no verifier exists, return needs-human instead of a successful action payload.',
-        ],
-        diagnostics: {
-          riskLevel: 'high',
-          selectedVerifierIds: policy.selectedVerifierIds ?? [],
-          actionProviderSelfReportedSuccess: true,
-        },
-      },
-    };
-  }
-  if (decisive) return { blocked: policy.required, result: decisive };
-  return {
-    blocked: false,
-    result: {
-      verdict: 'unverified',
-      reward: 0,
-      confidence: 0,
-      critique: policy.reason,
-      evidenceRefs: executionUnitRefs(payload),
-      repairHints: policy.required ? ['Run an appropriate verifier or request human approval.'] : [],
-      diagnostics: {
-        riskLevel: policy.riskLevel,
-        mode: policy.mode,
-        required: policy.required,
-        visibleUnverified: true,
-      },
-    },
-  };
+  return evaluateRuntimeVerificationGate(payload, request, policy, providedResults) as { blocked: boolean; reason?: string; result: VerificationResult };
 }
 
 function attachVerificationRefs(
@@ -212,138 +129,6 @@ function failClosedPayload(payload: ToolPayload, reason: string | undefined, res
   };
 }
 
-function verificationArtifact(result: VerificationResult, policy: VerificationPolicy, verificationRel: string, nonBlocking = false): Record<string, unknown> {
-  return {
-    id: result.id ?? 'verification-result',
-    type: 'verification-result',
-    dataRef: verificationRel,
-    schemaVersion: 'sciforge.verification-result.v1',
-    metadata: {
-      verdict: result.verdict,
-      policy: `${policy.mode}/${policy.riskLevel}`,
-      visible: true,
-      nonBlocking,
-      unverifiedIsNotPass: result.verdict === 'unverified' ? true : undefined,
-    },
-    data: { result, policy },
-  };
-}
-
-function verificationIsNonBlocking(request: GatewayRequest, policy: VerificationPolicy) {
-  const latency = isRecord(request.uiState?.latencyPolicy) ? request.uiState.latencyPolicy : {};
-  return latency.blockOnVerification === false
-    && policy.riskLevel !== 'high'
-    && policy.humanApprovalPolicy !== 'required'
-    && !policy.required;
-}
-
-function mostDecisiveVerificationResult(results: VerificationResult[]) {
-  return results.find((result) => result.verdict === 'fail')
-    ?? results.find((result) => result.verdict === 'needs-human')
-    ?? results.find((result) => result.verdict === 'pass')
-    ?? results.find((result) => result.verdict === 'uncertain')
-    ?? results.find((result) => result.verdict === 'unverified');
-}
-
-function normalizeHumanApproval(value: unknown): { approved: boolean; ref?: string; by?: string; at?: string } | undefined {
-  if (!isRecord(value)) return undefined;
-  const approved = value.approved === true || value.status === 'approved' || value.verdict === 'approved' || value.decision === 'accept';
-  return {
-    approved,
-    ref: typeof value.ref === 'string' ? value.ref : typeof value.approvalRef === 'string' ? value.approvalRef : undefined,
-    by: typeof value.by === 'string' ? value.by : undefined,
-    at: typeof value.at === 'string' ? value.at : typeof value.approvedAt === 'string' ? value.approvedAt : undefined,
-  };
-}
-
-function inferVerificationRiskLevel(request: GatewayRequest, payload?: ToolPayload): VerificationRiskLevel {
-  const candidates = [
-    request.riskLevel,
-    request.verificationPolicy,
-    payload?.verificationPolicy,
-    request.uiState?.riskLevel,
-    request.uiState?.actionRiskLevel,
-    request.uiState?.safetyPolicy,
-    request.uiState?.capabilityBrief,
-    request.uiState?.conversationPolicy,
-    request.uiState?.latencyPolicy,
-    request.uiState?.executionModeDecision,
-    request.uiState?.executionModePlan,
-    ...toRecordList(request.uiState?.selectedActions),
-    ...toRecordList(payload?.executionUnits),
-  ];
-  if (candidates.some((candidate) => recordOrTextIncludesRisk(candidate, 'high'))) return 'high';
-  if (hasStructuredHighRiskActionSignal(request, payload)) return 'high';
-  if (candidates.some((candidate) => recordOrTextIncludesRisk(candidate, 'medium'))) return 'medium';
-  return 'low';
-}
-
-function hasHighRiskActionSignal(request: GatewayRequest, payload: ToolPayload) {
-  return inferVerificationRiskLevel(request, payload) === 'high';
-}
-
-function recordOrTextIncludesRisk(value: unknown, risk: VerificationRiskLevel) {
-  if (value === risk) return true;
-  if (typeof value === 'string') return value.toLowerCase() === risk;
-  if (!isRecord(value)) return false;
-  const clipped = JSON.stringify(clipForAgentServerJson(value, 3)).toLowerCase();
-  return clipped.includes(`"risklevel":"${risk}"`)
-    || clipped.includes(`"risk_level":"${risk}"`)
-    || clipped.includes(`"risk":"${risk}"`);
-}
-
-function hasStructuredHighRiskActionSignal(request: GatewayRequest, payload?: ToolPayload) {
-  const text = structuredActionEvidenceText(request);
-  if (highRiskActionToken(text)) return true;
-  return (payload?.executionUnits ?? []).some((unit) => isRecord(unit) && executionUnitHasHighRiskActionSignal(unit));
-}
-
-function structuredActionEvidenceText(request: GatewayRequest) {
-  return [
-    request.actionSideEffects,
-    request.selectedActionIds,
-    request.humanApprovalPolicy,
-    request.uiState?.actionSideEffects,
-    request.uiState?.selectedActionIds,
-    request.uiState?.selectedActions,
-    request.uiState?.humanApprovalPolicy,
-  ].map(compactEvidenceText).join('\n').toLowerCase();
-}
-
-function executionUnitHasHighRiskActionSignal(unit: Record<string, unknown>) {
-  return looksLikeActionProvider(unit) && highRiskActionToken(actionProviderEvidenceText(unit));
-}
-
-function highRiskActionToken(text: string) {
-  return /\b(delete|remove|destroy|drop|publish|send|pay|purchase|authorize|credential|secret|external-write|production)\b|删除|发布|发送|支付|授权|凭据|生产环境/.test(text.toLowerCase());
-}
-
-function actionProviderSelfReportsSuccess(payload: ToolPayload) {
-  return payload.executionUnits.some((unit) => isRecord(unit) && isSuccessfulStatus(unit.status) && looksLikeActionProvider(unit));
-}
-
-function looksLikeActionProvider(unit: Record<string, unknown>) {
-  return /action|computer-use|vision-sense|gui|browser|desktop|mouse|keyboard|executor|external|send|delete|publish|authorize|pay/.test(actionProviderEvidenceText(unit));
-}
-
-function actionProviderEvidenceText(unit: Record<string, unknown>) {
-  return [
-    unit.tool,
-    unit.provider,
-    unit.routeDecision,
-    unit.params,
-    unit.environment,
-    unit.action,
-    unit.kind,
-  ].map(compactEvidenceText).join('\n').toLowerCase();
-}
-
-function compactEvidenceText(value: unknown) {
-  if (typeof value === 'string') return value;
-  if (value === undefined || value === null) return '';
-  return JSON.stringify(clipForAgentServerJson(value, 2)) ?? '';
-}
-
 function isSuccessfulStatus(value: unknown) {
   const status = String(value || '').trim().toLowerCase();
   return status === 'done' || status === 'self-healed';
@@ -359,11 +144,4 @@ function attachRefToRecord(record: Record<string, unknown>, verificationRel: str
       verificationResult: verificationRel,
     },
   };
-}
-
-function executionUnitRefs(payload: ToolPayload) {
-  return payload.executionUnits
-    .filter(isRecord)
-    .map((unit) => typeof unit.id === 'string' ? `execution-unit:${unit.id}` : undefined)
-    .filter((value): value is string => Boolean(value));
 }

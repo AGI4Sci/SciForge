@@ -7,6 +7,7 @@ import { visionSenseSafetyVerifierContract } from './vision-sense/safety-verifie
 import { loadVisionSenseConfig, looksLikeComputerUseRequest, rebindWindowTargetForPromptAppAlias, visionSenseSelected } from './vision-sense/sense-provider.js';
 import { VISION_SENSE_RUNTIME_ID, VISION_TOOL_ID } from './vision-sense/trace-policy.js';
 import { windowTargetTraceConfig } from './computer-use/window-target.js';
+import { visionSenseRuntimeEventTypes } from '../../packages/observe/vision/computer-use-runtime-policy.js';
 
 export async function tryRunVisionSenseRuntime(
   request: GatewayRequest,
@@ -19,7 +20,7 @@ export async function tryRunVisionSenseRuntime(
   const config = await loadVisionSenseConfig(workspace, request);
   rebindWindowTargetForPromptAppAlias(config, request.prompt);
   emitWorkspaceRuntimeEvent(callbacks, {
-    type: 'vision-sense-runtime-selected',
+    type: visionSenseRuntimeEventTypes.runtimeSelected,
     source: 'workspace-runtime',
     toolName: VISION_TOOL_ID,
     status: 'running',

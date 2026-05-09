@@ -5,7 +5,7 @@ import {
   mergeReusableContextArtifactsForDirectPayload,
 } from '../../src/runtime/gateway/direct-answer-payload.js';
 import { requestWithPolicyResponse } from '../../src/runtime/conversation-policy/apply.js';
-import type { ConversationPolicyResponse } from '../../src/runtime/conversation-policy/contracts.js';
+import type { ConversationPolicyResponse } from '@sciforge-ui/runtime-contract/conversation-policy';
 import type { GatewayRequest, ToolPayload } from '../../src/runtime/runtime-types.js';
 
 const baseRequest: GatewayRequest = {

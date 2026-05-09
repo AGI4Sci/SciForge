@@ -11,8 +11,11 @@ import { readRecentTaskAttempts } from '../task-attempt-history.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { parseJsonErrorMessage, redactSecretText, sanitizeAgentServerError } from './backend-failure-diagnostics.js';
+import { agentServerArtifactSelectionPromptPolicyLines, agentServerToolPayloadProtocolContractLines } from '@sciforge-ui/runtime-contract/artifact-policy';
 import { toolPackageManifests } from '../../../packages/skills/tool_skills';
+import { agentServerExecutionModePromptPolicyLines, agentServerExternalIoReliabilityContractLines, agentServerFreshRetrievalPromptPolicyLines, agentServerGeneratedTaskPromptPolicyLines } from '../../../packages/skills/runtime-policy';
 import { uiComponentManifests } from '../../../packages/presentation/components';
+import { minimalValidInteractiveToolPayloadExample } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy';
 import { defaultCapabilitySummaries } from '@sciforge-ui/runtime-contract/capabilities';
 
 export const AGENT_BACKEND_ANSWER_PRINCIPLE = [
@@ -486,15 +489,15 @@ export function buildAgentServerRepairPrompt(params: {
     'Use the compact repair context below: it contains the current user goal, workspace refs, failure evidence, and relevant code/log excerpts.',
     'Edit the referenced task file or adjacent helper files only as needed. SciForge will rerun the task after you finish.',
     'The repaired task must execute the user goal end-to-end, not merely generate code or report that code was generated.',
-    ...externalIoReliabilityContractLines(),
-    ...toolPayloadProtocolContractLines(),
+    ...agentServerExternalIoReliabilityContractLines(),
+    ...agentServerToolPayloadProtocolContractLines(),
     'Preserve failureReason in the next ToolPayload only if the real blocker remains after repair.',
     'Do not fabricate success or replace the user goal with an unrelated demo task.',
     '',
     JSON.stringify({
       repairContext: params.repairContext,
       expectedPayloadKeys: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'displayIntent', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'],
-      minimalValidToolPayload: minimalValidToolPayloadExample(params.request),
+      minimalValidToolPayload: minimalValidInteractiveToolPayloadExample(params.request),
     }, null, 2),
     '',
     'Return a concise summary of files changed, tests or commands run, and any remaining blocker.',
@@ -604,24 +607,12 @@ export function buildAgentServerGenerationPrompt(request: {
     'First infer the current-turn intent from the CURRENT TURN SNAPSHOT and recentConversation. Use priorAttempts, artifacts, recentExecutionRefs, and workspace refs only when the current turn explicitly asks to continue, repair, rerun, or inspect a previous task.',
     'Fresh current-turn requests must move directly to either a direct ToolPayload or generated task code. Do not spend generation-stage tool calls browsing historical .sciforge/task-attempts, logs, artifacts, or old generated tasks unless the current turn explicitly asks for that history.',
     'Return exactly one JSON object, with no markdown before or after it.',
-    'Do not ask SciForge to decide scientific, topical, retrieval, or domain intent. The executionModeRecommendation fields are advisory handoff metadata; AgentServer must make the actual domain/tool/stage decision.',
-    'executionModeRecommendation=direct-context-answer: only use this when the answer can be produced entirely from existing context, current refs/digests, artifacts, or prior execution refs already present in the handoff. Do not use direct-context-answer for fresh search/fetch/current-events, even if the user asks a simple question.',
-    'executionModeRecommendation=thin-reproducible-adapter: use this for simple search/fetch/current-events lookups with no explicit report/table/download/batch requirement. Keep it lightweight, but preserve code/input/output/log/evidence refs: return AgentServerGenerationResponse with a minimal bounded adapter task unless the backend already has durable tool/result refs it can expose in a ToolPayload.',
-    'executionModeRecommendation=single-stage-task: use this for one bounded local computation, file transform, narrow analysis, or simple artifact generation that can be run and validated in one workspace task. Return one AgentServerGenerationResponse, not a multi-stage project plan.',
-    'executionModeRecommendation=multi-stage-project: use this for complex research, durable artifacts, multi-file outputs, local-file processing, code/command execution, batch retrieval, full-document reading, reports/tables/notebooks, or multi-artifact validation. Do not generate a complete end-to-end pipeline in one response; return only the next stage spec/patch/task plus the expected refs/artifacts for that stage.',
-    'executionModeRecommendation=repair-or-continue-project: use this when the current turn refers to a previous failure, existing project/stage, user guidance queue, continuation, repair, or rerun. Inspect only the cited project/stage refs and return a minimal repair/continue stage instead of starting unrelated fresh work.',
-    'Multi-stage/project guidance: for multi-stage-project, plan the durable project internally but return only the immediately executable next stage; later stages must be represented as bounded stage hints, not as a one-shot generated pipeline.',
-    'Project guidance adoption contract: when a TaskProject handoff includes userGuidanceQueue, the next stage plan/result must declare every queued or deferred guidance item as adopted, deferred, or rejected, with a short reason in executionUnits[].guidanceDecisions. Do not silently ignore guidance.',
-    'Reproducibility principle: when the answer depends on fresh external retrieval, local files, commands, or generated artifacts, prefer AgentServerGenerationResponse so SciForge can archive runnable code/input/output/log refs.',
-    'For lightweight search/news/current-events lookups with no explicit report/table/download/batch requirement, still keep the work reproducible, but use a minimal bounded adapter task: one executable file, small provider list, capped results, short timeouts, no workspace exploration, no full-document download, and no bespoke long research pipeline.',
-    'Return a direct ToolPayload for lightweight retrieval only when the backend already has durable tool/result refs and can expose WorkEvidence-style provider/query/status/resultCount/evidenceRefs/failureReason/recoverActions/nextStep in the payload; otherwise generate the minimal adapter task.',
-    'For heavy or durable work, return AgentServerGenerationResponse with taskFiles, entrypoint, environmentRequirements, validationCommand, expectedArtifacts, and patchSummary. Heavy work includes local file processing, code/command execution, batch retrieval, full-document download/reading, explicit report/table/notebook deliverables, multi-file outputs, or repair/rerun of a prior task. For multi-stage-project, scope this to the next stage only.',
+    ...agentServerExecutionModePromptPolicyLines(),
     'Hard contract: taskFiles MUST be an array of objects with path, language, and non-empty content unless the file was physically written in the workspace before returning. Never return taskFiles as string paths only.',
     'Hard contract: entrypoint.path MUST reference one of the returned taskFiles or a file that was physically written in the workspace before returning.',
     'If you physically write task files into the workspace, prefer a compact path-only taskFiles object (path + language, content may be omitted/empty) and return JSON immediately. Do not cat/read full generated source back into the final response just to inline it.',
-    'Entrypoint contract: entrypoint.path must be executable task code supported by the runner (.py/.r/.sh, or language=cli with an explicit command). Do not set a markdown/text/json/pdf/report artifact as entrypoint. For report-only answers, return a direct ToolPayload; for generated tasks, make the executable write report/data artifacts.',
-    'Generated task interface contract: executable task code must read the SciForge inputPath argument for prompt/current refs/artifacts and write a valid ToolPayload JSON to the outputPath argument. Do not generate static scripts that merely embed the current answer or a document-specific report in source code.',
-    ...toolPayloadProtocolContractLines(),
+    ...agentServerGeneratedTaskPromptPolicyLines(),
+    ...agentServerToolPayloadProtocolContractLines(),
     'Final output must be only compact JSON: either AgentServerGenerationResponse or SciForge ToolPayload.',
     'When returning a SciForge ToolPayload, use displayIntent to describe the user-visible view need, and objectReferences to cite key artifacts/files/runs that the user can click on demand.',
     'objectReferences refs must use controlled prefixes: artifact:*, file:*, folder:*, run:*, execution-unit:*, scenario-package:*, or url:*.',
@@ -632,7 +623,7 @@ export function buildAgentServerGenerationPrompt(request: {
       ? `Strict retry reason: ${request.strictTaskFilesReason}`
       : '',
     'If a prior task already exists and the user asks to continue, repair, or rerun it, prefer returning taskFiles that reference that existing workspace task path or a minimal patched task instead of starting an unrelated fresh analysis.',
-    'For fresh retrieval/analysis/report requests, do not inspect prior task-attempt files to learn old failures. Generate an inputPath/outputPath task that performs the requested retrieval/analysis at execution time and writes bounded artifacts.',
+    ...agentServerFreshRetrievalPromptPolicyLines(),
     'Generate fresh task code only when the current turn truly asks for new work or no prior executable artifact can satisfy the request.',
     'Put generated task paths under .sciforge/tasks when possible. SciForge will archive any returned taskFiles under .sciforge/tasks/<run-id>/ before execution.',
     'Do not force self-contained task code when a better installed/workspace tool exists. Prefer the best available tool, record the tool id/version/command in ExecutionUnit, and write only the adapter/glue needed for reproducibility from inputPath and outputPath.',
@@ -645,8 +636,7 @@ export function buildAgentServerGenerationPrompt(request: {
     'Bibliographic verification contract: never mark a PMID, DOI, trial id, citation, or paper record as corrected/verified unless the returned title, year, journal, and identifier correspond to the same work as the source claim.',
     'If an identifier lookup returns a title mismatch, topic mismatch, unrelated journal, or only a broad review when the source claim is a trial/cohort/paper, preserve the original claim and mark it needs-verification with the mismatch reason and search terms. Do not substitute the unrelated record as a correction.',
     'For literature artifacts, keep original_title, verified_title, title_match, identifier_match, verification_status, and verification_notes fields when correcting references so SciForge and users can audit the match.',
-    'Only treat expectedArtifactTypes as required when the list is non-empty. If it is empty, infer the minimal output from the raw user prompt and do not add scenario-default artifacts.',
-    'If expectedArtifactTypes contains multiple artifacts, generate a coordinated Python task or small Python module set that emits every requested artifact type. A partial package skill result is not enough unless the missing artifact has a clear failed-with-reason ExecutionUnit.',
+    ...agentServerArtifactSelectionPromptPolicyLines(),
     'Use selectedComponentIds only when the current user turn explicitly requested those views; do not preserve default UI slots as output requirements.',
     'For continuation requests, continue the scenario goal using recentConversation, artifacts, recentExecutionRefs, and priorAttempts. Do not restart an unrelated analysis.',
     'For repair requests, inspect the failureReason plus stdoutRef/stderrRef/outputRef/codeRef and report whether logs are readable before editing or rerunning.',
@@ -655,7 +645,7 @@ export function buildAgentServerGenerationPrompt(request: {
       'RECENT PRIOR ATTEMPTS (authoritative repair/continuation context; preserve failureReason):',
       JSON.stringify(summarizeTaskAttemptsForAgentServer(request.priorAttempts).slice(0, 4), null, 2),
     ].join('\n') : '',
-    ...externalIoReliabilityContractLines(),
+    ...agentServerExternalIoReliabilityContractLines(),
     '',
     JSON.stringify(clipForAgentServerJson({
       ...compactGenerationRequestForAgentServer(request, capabilityBrokerBrief),
@@ -686,59 +676,6 @@ function compactGenerationRequestForAgentServer(
       omittedCategories: ['legacy skill catalog', 'legacy tool catalog', 'legacy component catalog'],
       reason: 'T116 default backend handoff consumes compact broker briefs and keeps full schemas/examples/docs lazy.',
     },
-  };
-}
-
-function externalIoReliabilityContractLines() {
-  return [
-    'External I/O reliability contract: generated or repaired tasks that call remote APIs, web feeds, model endpoints, package registries, databases, or downloadable files must use bounded timeouts, descriptive User-Agent/contact metadata when applicable, limited retries with exponential backoff, and explicit handling for 429/5xx/network timeout/empty-result cases.',
-    'Binary/text contract: downloadable binary resources such as PDFs, images, archives, and model files must be fetched and processed as bytes until an explicit decoder/parser converts them to text. Do not apply bytes regex/patterns to decoded strings or string regex/patterns to bytes; keep helpers named and typed distinctly, for example fetch_bytes versus fetch_text.',
-    'Batch retrieval budget contract: for multi-item external retrieval, enforce an overall wall-clock budget, per-item timeouts, and a capped expensive-fetch subset; before the budget is exhausted, write a valid ToolPayload with partial/failed-with-reason execution units and honest retrieval notes instead of timing out without an output file.',
-    'For provider-specific APIs, follow the provider query syntax and prefer standard URL encoders/client libraries over handwritten query strings; when a strict query is empty or invalid, record that fact and try a broader/provider-appropriate fallback before concluding no results.',
-    'An empty external search is not a successful literature result by itself: record the exact query strings, HTTP statuses/errors, totalResults when available, fallback attempts, and whether the empty result came from rate limiting, invalid query syntax, no matching records, or network failure.',
-    'If all external retrieval attempts fail, the task must still write a valid ToolPayload with executionUnits.status="failed-with-reason", concise failureReason, stdoutRef/stderrRef/outputRef evidence refs when available, recoverActions, nextStep, and any partial artifacts that are honest and useful. Do not leave the user with only a traceback, an endless stream wait, or a missing output file.',
-    'Prefer installed/workspace client libraries or capability tools for remote retrieval when they provide rate-limit handling, pagination, or caching; otherwise keep custom HTTP code small, auditable, and source-agnostic.',
-  ];
-}
-
-function toolPayloadProtocolContractLines() {
-  return [
-    'ToolPayload schema is strict: uiManifest, claims, executionUnits, and artifacts must be arrays; every uiManifest slot must be an object with componentId and a string artifactRef when present; every artifact must have non-empty id and type. Do not put result rows inside uiManifest; put data in artifacts[].data or artifacts[].dataRef.',
-    'Use uiManifest only as view routing metadata. All user-visible result content, tables, lists, reports, raw provider traces, and files must be represented as artifacts with durable dataRef/path or inline data that SciForge can persist.',
-    'When repairing schema failures, preserve the task-specific componentId/artifactRef/artifact type from selectedComponentIds, expectedArtifactTypes, incoming uiManifest, or generated artifacts. If none is known, use a generic unknown-artifact-inspector slot bound to a runtime-result artifact; do not force literature/report-specific components into unrelated scenarios.',
-  ];
-}
-
-function minimalValidToolPayloadExample(request: Pick<GatewayRequest, 'skillDomain' | 'prompt' | 'uiState' | 'selectedComponentIds' | 'expectedArtifactTypes'>) {
-  const uiState = isRecord(request.uiState) ? request.uiState : {};
-  const selectedComponent = uniqueStrings([
-    ...toStringList(request.selectedComponentIds),
-    ...toStringList(uiState.selectedComponentIds),
-  ]).find(Boolean);
-  const expectedArtifact = uniqueStrings([
-    ...toStringList(request.expectedArtifactTypes),
-    ...toStringList(uiState.expectedArtifactTypes),
-  ]).find(Boolean);
-  const artifactType = expectedArtifact || `${request.skillDomain}-runtime-result`;
-  const artifactId = expectedArtifact || `${request.skillDomain}-runtime-result`;
-  return {
-    message: 'Concise user-visible result or honest failure summary.',
-    confidence: 0.5,
-    claimType: 'evidence-summary',
-    evidenceLevel: 'workspace-task',
-    reasoningTrace: 'Brief audit of sources/tools/retries used by the task.',
-    claims: [],
-    displayIntent: { primaryView: selectedComponent || 'generic-artifact-inspector' },
-    uiManifest: [
-      { componentId: selectedComponent || 'unknown-artifact-inspector', artifactRef: artifactId, priority: 1 },
-    ],
-    executionUnits: [
-      { id: `${request.skillDomain}-task`, tool: 'agentserver.generated.task', status: 'done' },
-    ],
-    artifacts: [
-      { id: artifactId, type: artifactType, data: { summary: 'Result content goes here.', rows: [] } },
-    ],
-    objectReferences: [],
   };
 }
 

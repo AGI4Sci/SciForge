@@ -23,6 +23,13 @@ const EXECUTION_VIEW_COMPONENT = 'execution-unit-table';
 const GENERIC_ARTIFACT_COMPONENT = 'artifact-viewer';
 const UNKNOWN_ARTIFACT_COMPONENT = 'unknown-artifact-inspector';
 
+export const directAnswerResultPolicyIds = {
+  structuredAnswerSource: 'agentserver-structured-answer',
+  directTextTool: 'agentserver.direct-text',
+  workspaceArtifactJsonSource: 'workspace-task-artifact-json',
+  workspaceArtifactJsonTool: 'workspace-task.artifact-json',
+} as const;
+
 const ARTIFACT_COMPONENTS: Record<string, string> = {
   [REPORT_ARTIFACT_TYPE]: REPORT_VIEW_COMPONENT,
   'paper-list': 'paper-card-list',

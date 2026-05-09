@@ -6,6 +6,7 @@ import { captureDisplays, createFocusedCropRefs, pixelDiffForScreenshotSets, toT
 import { executeGenericDesktopAction, executorBoundary } from '../computer-use/executor.js';
 import type { ComputerUseConfig as VisionSenseConfig, GenericVisionAction, LoopStep, ScreenshotRef, WindowTargetResolution } from '../computer-use/types.js';
 import { inputChannelDescription, resolveWindowTarget, schedulerStepMetadata, stepInputChannelMetadata, toTraceWindowTarget, windowTargetTraceConfig } from '../computer-use/window-target.js';
+import { visionSenseCompletionPolicyModes, visionSenseRuntimeEventTypes } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
 import { VISION_TOOL_ID } from './computer-use-trace-output.js';
 import {
   actionLedgerCompletion,
@@ -215,7 +216,7 @@ export async function runComputerUseActionLoop(params: {
         }
       }
       emitWorkspaceRuntimeEvent(callbacks, {
-        type: 'vision-sense-generic-action',
+        type: visionSenseRuntimeEventTypes.genericAction,
         source: 'workspace-runtime',
         toolName: VISION_TOOL_ID,
         status: 'running',
@@ -326,7 +327,7 @@ export async function runComputerUseActionLoop(params: {
           break;
         }
       }
-      if (config.completionPolicy?.mode === 'one-successful-non-wait-action' && executableAction.type !== 'wait') {
+      if (config.completionPolicy?.mode === visionSenseCompletionPolicyModes.oneSuccessfulNonWaitAction && executableAction.type !== 'wait') {
         plannerReportedDone = true;
         break;
       }

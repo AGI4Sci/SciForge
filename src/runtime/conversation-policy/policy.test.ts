@@ -5,7 +5,7 @@ import type { GatewayRequest } from '../runtime-types';
 import { buildAgentServerGenerationPrompt, summarizeUiStateForAgentServer } from '../gateway/agentserver-prompts';
 import { buildContextEnvelope } from '../gateway/context-envelope';
 import { requestWithPolicyResponse } from './apply';
-import { CONVERSATION_POLICY_RESPONSE_VERSION, normalizeConversationPolicyResponse, type ConversationPolicyResponse } from './contracts';
+import { CONVERSATION_POLICY_RESPONSE_VERSION, normalizeConversationPolicyResponse, type ConversationPolicyResponse } from '@sciforge-ui/runtime-contract/conversation-policy';
 
 test('normalizes T098 strategy fields and request enrichment exposes stable uiState paths', () => {
   const response = normalizeConversationPolicyResponse({

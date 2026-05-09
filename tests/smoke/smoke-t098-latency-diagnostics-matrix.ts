@@ -6,7 +6,7 @@ import { delimiter, resolve } from 'node:path';
 import { join } from 'node:path';
 
 import { requestWithPolicyResponse } from '../../src/runtime/conversation-policy/apply.js';
-import { CONVERSATION_POLICY_RESPONSE_VERSION, normalizeConversationPolicyResponse } from '../../src/runtime/conversation-policy/contracts.js';
+import { CONVERSATION_POLICY_RESPONSE_VERSION, normalizeConversationPolicyResponse } from '@sciforge-ui/runtime-contract/conversation-policy';
 import type { GatewayRequest, WorkspaceRuntimeEvent } from '../../src/runtime/runtime-types.js';
 import { createLatencyTelemetry } from '../../src/runtime/gateway/latency-telemetry.js';
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';

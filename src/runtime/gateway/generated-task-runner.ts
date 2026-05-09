@@ -15,6 +15,7 @@ import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import { evaluateGuidanceAdoption } from './guidance-adoption-guard.js';
 import { materializeBackendPayloadOutput, type RuntimeRefBundle } from './artifact-materializer.js';
 import { recordCapabilityEvolutionRuntimeEvent } from './capability-evolution-events.js';
+import { reportRuntimeResultViewSlots } from '../../../packages/presentation/interactive-views';
 
 type AgentServerGenerationResult =
   | { ok: true; runId?: string; response: AgentServerGenerationResponse }
@@ -868,10 +869,7 @@ async function currentReferenceDigestRecoveryPayload(
       supportingRefs: sources.map((source) => `file:${source.sourceRef}`),
       opposingRefs: [],
     }],
-    uiManifest: [
-      { componentId: 'report-viewer', artifactRef: reportId, priority: 1 },
-      { componentId: 'execution-unit-table', artifactRef: `${request.skillDomain}-runtime-result`, priority: 2 },
-    ],
+    uiManifest: reportRuntimeResultViewSlots(reportId, `${request.skillDomain}-runtime-result`),
     executionUnits: [{
       id: `current-reference-digest-recovery-${sha1(markdown).slice(0, 8)}`,
       status: 'self-healed',

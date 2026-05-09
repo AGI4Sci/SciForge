@@ -1,8 +1,11 @@
-import type { GatewayRequest } from '../runtime-types.js';
-import { isRecord, toRecordList, toStringList } from '../gateway-utils.js';
-
 export const CONVERSATION_POLICY_REQUEST_VERSION = 'sciforge.conversation-policy.request.v1' as const;
 export const CONVERSATION_POLICY_RESPONSE_VERSION = 'sciforge.conversation-policy.response.v1' as const;
+export const CONVERSATION_POLICY_SELECTED_TOOL_ADAPTER = 'runtime:selected-tool' as const;
+export const CONVERSATION_POLICY_SELECTED_SENSE_ADAPTER = 'runtime:selected-sense' as const;
+export const CONVERSATION_POLICY_SELECTED_VERIFIER_ADAPTER = 'runtime:selected-verifier' as const;
+export const CONVERSATION_POLICY_SELECTED_COMPONENT_KIND = 'ui-component' as const;
+export const CONVERSATION_POLICY_SELECTED_COMPONENT_ADAPTER = 'ui:component' as const;
+export const CONVERSATION_POLICY_AGENTSERVER_GENERATION_ADAPTER = 'agentserver:generation' as const;
 
 export interface ConversationPolicyRequest {
   schemaVersion: typeof CONVERSATION_POLICY_REQUEST_VERSION;
@@ -69,8 +72,8 @@ export const SAFE_DEFAULT_RESPONSE_PLAN: Record<string, unknown> = {
   finalizationMode: 'append-final',
   userVisibleProgress: ['received', 'planning', 'running'],
   progressPhases: ['received', 'planning', 'running'],
-  fallbackMessagePolicy: 'truthful-status-without-background-completion-claim',
-  backgroundCompletionSummary: 'No background completion may be declared without a Python backgroundPlan.',
+  fallbackMessagePolicy: 'truthful-status-without-deferred-result-claim',
+  backgroundCompletionSummary: 'No deferred result may be declared without a Python backgroundPlan.',
   reason: 'Python conversation policy did not provide responsePlan; use foreground-safe status defaults.',
 };
 
@@ -80,7 +83,7 @@ export const SAFE_DEFAULT_BACKGROUND_PLAN: Record<string, unknown> = {
   tasks: [],
   handoffRefsRequired: true,
   cancelOnNewUserTurn: true,
-  reason: 'Python conversation policy did not provide backgroundPlan; do not claim background completion.',
+  reason: 'Python conversation policy did not provide backgroundPlan; do not claim deferred work.',
 };
 
 export const SAFE_DEFAULT_CACHE_POLICY: Record<string, unknown> = {
@@ -95,53 +98,6 @@ export const SAFE_DEFAULT_CACHE_POLICY: Record<string, unknown> = {
   reuseBackendSession: false,
   reason: 'Python conversation policy did not provide cachePolicy; do not reuse cached planning or execution state.',
 };
-
-export function buildConversationPolicyRequest(
-  request: GatewayRequest,
-  params: {
-    workspace?: string;
-    tsDecisions: Record<string, unknown>;
-  },
-): ConversationPolicyRequest {
-  const uiState = isRecord(request.uiState) ? request.uiState : {};
-  const ledger = toRecordList(uiState.conversationLedger);
-  const ledgerTail = toRecordList(isRecord(uiState.conversationLedger) ? uiState.conversationLedger.tail : undefined);
-  const currentReferences = mergeRecordsByRef([
-    ...toRecordList(request.references),
-    ...toRecordList(uiState.currentReferences),
-  ]);
-  const sessionMessages = toRecordList(uiState.sessionMessages).length
-    ? toRecordList(uiState.sessionMessages)
-    : toRecordList(uiState.messages);
-  return {
-    schemaVersion: CONVERSATION_POLICY_REQUEST_VERSION,
-    turn: {
-      turnId: stringField(uiState.currentTurnId) ?? stringField(uiState.turnId),
-      prompt: request.prompt,
-      references: currentReferences.slice(0, 24),
-    },
-    session: {
-      sessionId: stringField(uiState.sessionId),
-      scenarioId: request.scenarioPackageRef?.id ?? request.skillDomain,
-      messages: sessionMessages.length
-        ? sessionMessages.slice(-24)
-        : toStringList(uiState.recentConversation).slice(-12),
-      runs: toRecordList(uiState.recentRuns).slice(-12),
-      artifacts: request.artifacts.slice(-24),
-      executionUnits: ledgerTail.length ? ledgerTail.slice(-24) : ledger.slice(-24),
-      contextReusePolicy: isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : undefined,
-    },
-    workspace: {
-      root: params.workspace ?? request.workspacePath,
-    },
-    capabilities: capabilityManifestsForPolicy(request),
-    limits: {
-      maxContextWindowTokens: request.maxContextWindowTokens,
-      maxInlineChars: 2400,
-    },
-    tsDecisions: params.tsDecisions,
-  };
-}
 
 export function normalizeConversationPolicyResponse(value: unknown): ConversationPolicyResponse | undefined {
   const record = isRecord(value) && isRecord(value.data) ? value.data : value;
@@ -169,6 +125,10 @@ export function normalizeConversationPolicyResponse(value: unknown): Conversatio
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 function optionalRecord(value: unknown) {
   return isRecord(value) ? value : undefined;
 }
@@ -179,92 +139,4 @@ function policyRecord(value: unknown, fallback: Record<string, unknown>) {
 
 function optionalRecordList(value: unknown) {
   return Array.isArray(value) ? value.filter(isRecord) : undefined;
-}
-
-function stringField(value: unknown) {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function capabilityManifestsForPolicy(request: GatewayRequest) {
-  const manifests: Array<Record<string, unknown>> = [];
-  for (const id of uniqueStrings([
-    ...(request.selectedToolIds ?? []),
-    ...toStringList(request.uiState?.selectedToolIds),
-  ])) {
-    manifests.push({
-      id,
-      kind: id.includes('sense') ? 'sense' : 'tool',
-      summary: `Selected runtime capability ${id}.`,
-      triggers: id.split(/[./:_-]+/).filter(Boolean),
-      adapter: 'runtime:selected-tool',
-      internalAgent: id.includes('vision') || id.includes('computer') ? 'optional' : 'none',
-    });
-  }
-  for (const id of uniqueStrings(request.selectedSenseIds ?? [])) {
-    manifests.push({
-      id,
-      kind: 'sense',
-      summary: `Selected sense capability ${id}.`,
-      triggers: id.split(/[./:_-]+/).filter(Boolean),
-      adapter: 'runtime:selected-sense',
-      internalAgent: id.includes('vision') || id.includes('computer') ? 'optional' : 'none',
-    });
-  }
-  for (const id of uniqueStrings(request.selectedVerifierIds ?? [])) {
-    manifests.push({
-      id,
-      kind: 'verifier',
-      summary: `Selected verifier ${id}.`,
-      triggers: id.split(/[./:_-]+/).filter(Boolean),
-      adapter: 'runtime:selected-verifier',
-      internalAgent: 'none',
-    });
-  }
-  for (const id of uniqueStrings(request.selectedComponentIds ?? toStringList(request.uiState?.selectedComponentIds))) {
-    manifests.push({
-      id,
-      kind: 'ui-component',
-      summary: `Selected UI component ${id}.`,
-      triggers: id.split(/[./:_-]+/).filter(Boolean),
-      adapter: 'ui:component',
-      internalAgent: 'none',
-    });
-  }
-  manifests.push({
-    id: `scenario.${request.skillDomain}.agentserver-generation`,
-    kind: 'skill',
-    domain: [request.skillDomain],
-    summary: `General AgentServer generation for ${request.skillDomain} tasks.`,
-    triggers: [request.skillDomain, 'agentserver', 'generation'],
-    artifacts: request.expectedArtifactTypes ?? [],
-    adapter: 'agentserver:generation',
-    internalAgent: 'required',
-  });
-  return uniqueById(manifests);
-}
-
-function uniqueStrings(values: unknown[]) {
-  return [...new Set(toStringList(values))];
-}
-
-function uniqueById(values: Array<Record<string, unknown>>) {
-  const seen = new Set<string>();
-  return values.filter((value) => {
-    const id = stringField(value.id);
-    if (!id || seen.has(id)) return false;
-    seen.add(id);
-    return true;
-  });
-}
-
-function mergeRecordsByRef(values: Array<Record<string, unknown>>) {
-  const out: Array<Record<string, unknown>> = [];
-  const seen = new Set<string>();
-  for (const value of values) {
-    const key = stringField(value.ref) ?? stringField(value.path) ?? stringField(value.id) ?? JSON.stringify(value);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(value);
-  }
-  return out;
 }

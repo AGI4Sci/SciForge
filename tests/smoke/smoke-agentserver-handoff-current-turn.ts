@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { buildAgentServerGenerationPrompt } from '../../src/runtime/gateway/agentserver-prompts.js';
 import { buildContextEnvelope } from '../../src/runtime/gateway/context-envelope.js';
 import { requestWithPolicyResponse } from '../../src/runtime/conversation-policy/apply.js';
-import type { ConversationPolicyResponse } from '../../src/runtime/conversation-policy/contracts.js';
+import type { ConversationPolicyResponse } from '@sciforge-ui/runtime-contract/conversation-policy';
 import type { GatewayRequest } from '../../src/runtime/runtime-types.js';
 import { normalizeBackendHandoff } from '../../src/runtime/workspace-task-input.js';
 

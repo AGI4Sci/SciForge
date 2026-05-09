@@ -17,6 +17,13 @@ export type ArtifactIntentPolicyRequest = {
   selectedComponentIds?: string[];
 };
 
+export type RuntimeResultViewSlotsPolicyRequest = {
+  primaryArtifactRef?: string;
+  primaryArtifactType?: string;
+  runtimeResultRef: string;
+  priorityStart?: number;
+};
+
 type ViewPolicyModule = {
   componentId: string;
   moduleId?: string;
@@ -213,6 +220,33 @@ export function composeRuntimeUiManifestSlots(
   });
 }
 
+export function runtimeResultViewSlotsPolicy(request: RuntimeResultViewSlotsPolicyRequest): Array<Record<string, unknown>> {
+  const priorityStart = typeof request.priorityStart === 'number' ? request.priorityStart : 1;
+  const slots: Array<Record<string, unknown>> = [];
+  const primaryComponent = request.primaryArtifactType ? ARTIFACT_COMPONENTS[request.primaryArtifactType] : undefined;
+  if (request.primaryArtifactRef && primaryComponent) {
+    slots.push({
+      componentId: primaryComponent,
+      artifactRef: request.primaryArtifactRef,
+      priority: priorityStart,
+    });
+  }
+  slots.push({
+    componentId: 'execution-unit-table',
+    artifactRef: request.runtimeResultRef,
+    priority: priorityStart + slots.length,
+  });
+  return slots;
+}
+
+export function reportRuntimeResultViewSlots(reportArtifactRef: string, runtimeResultRef: string) {
+  return runtimeResultViewSlotsPolicy({
+    primaryArtifactRef: reportArtifactRef,
+    primaryArtifactType: 'research-report',
+    runtimeResultRef,
+  });
+}
+
 export function expectedArtifactTypesForIntent(request: ArtifactIntentPolicyRequest) {
   const text = normalizeIntentText(request.prompt);
   const artifacts = new Set<string>();
@@ -233,6 +267,46 @@ export function selectedViewComponentsForIntent(prompt: string, configuredCompon
     .map((artifactType) => ARTIFACT_COMPONENTS[artifactType])
     .filter((componentId): componentId is string => Boolean(componentId));
   return uniqueStrings([...mentioned, ...inferred]);
+}
+
+export type MinimalInteractiveToolPayloadExampleRequest = {
+  skillDomain: string;
+  uiState?: unknown;
+  selectedComponentIds?: string[];
+  expectedArtifactTypes?: string[];
+};
+
+export function minimalValidInteractiveToolPayloadExample(request: MinimalInteractiveToolPayloadExampleRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const selectedComponent = uniqueStrings([
+    ...toStringList(request.selectedComponentIds),
+    ...toStringList(uiState.selectedComponentIds),
+  ]).find(Boolean);
+  const expectedArtifact = uniqueStrings([
+    ...toStringList(request.expectedArtifactTypes),
+    ...toStringList(uiState.expectedArtifactTypes),
+  ]).find(Boolean);
+  const artifactType = expectedArtifact || `${request.skillDomain}-runtime-result`;
+  const artifactId = expectedArtifact || `${request.skillDomain}-runtime-result`;
+  return {
+    message: 'Concise user-visible result or honest failure summary.',
+    confidence: 0.5,
+    claimType: 'evidence-summary',
+    evidenceLevel: 'workspace-task',
+    reasoningTrace: 'Brief audit of sources/tools/retries used by the task.',
+    claims: [],
+    displayIntent: { primaryView: selectedComponent || 'generic-artifact-inspector' },
+    uiManifest: [
+      { componentId: selectedComponent || 'unknown-artifact-inspector', artifactRef: artifactId, priority: 1 },
+    ],
+    executionUnits: [
+      { id: `${request.skillDomain}-task`, tool: 'agentserver.generated.task', status: 'done' },
+    ],
+    artifacts: [
+      { id: artifactId, type: artifactType, data: { summary: 'Result content goes here.', rows: [] } },
+    ],
+    objectReferences: [],
+  };
 }
 
 export function interactiveViewModuleAcceptsArtifact(module: ViewPolicyModule, artifactType?: string) {
@@ -500,6 +574,10 @@ function titleForComponent(componentId: string) {
 
 function uniqueStrings(values: string[]) {
   return Array.from(new Set(values.filter(Boolean)));
+}
+
+function toStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String).map((item) => item.trim()).filter(Boolean) : [];
 }
 
 function normalizeComponentIds(values: string[]) {

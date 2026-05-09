@@ -1,8 +1,11 @@
 import { spawn } from 'node:child_process';
 import { delimiter, resolve } from 'node:path';
-import type { ConversationPolicyRequest, ConversationPolicyResponse } from './contracts.js';
-import { normalizeConversationPolicyResponse } from './contracts.js';
 import { errorMessage } from '../gateway-utils.js';
+import {
+  normalizeConversationPolicyResponse,
+  type ConversationPolicyRequest,
+  type ConversationPolicyResponse,
+} from '@sciforge-ui/runtime-contract/conversation-policy';
 
 export type ConversationPolicyBridgeMode = 'off' | 'active';
 

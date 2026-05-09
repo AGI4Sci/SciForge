@@ -7,6 +7,7 @@ import { normalizeRuntimeVerificationResultsOrUndefined } from './verification-r
 import {
   directAnswerArtifactNeedsRepair,
   directAnswerPlainTextResultPolicy,
+  directAnswerResultPolicyIds,
   ensureDirectAnswerReportArtifactPolicy,
   normalizeDirectAnswerArtifacts,
   normalizeDirectAnswerUiManifest,
@@ -30,9 +31,9 @@ function artifactNeedsRepair(artifact: Record<string, unknown>) {
 
 export function toolPayloadFromPlainAgentOutput(text: string, request: GatewayRequest): ToolPayload {
   const structured = coerceAgentServerToolPayload(extractJson(text));
-  if (structured) return ensureDirectAnswerReportArtifact(structured, request, 'agentserver-structured-answer');
+  if (structured) return ensureDirectAnswerReportArtifact(structured, request, directAnswerResultPolicyIds.structuredAnswerSource);
   const nested = extractNestedAgentServerPayloadFromText(text);
-  if (nested) return ensureDirectAnswerReportArtifact(nested, request, 'agentserver-structured-answer');
+  if (nested) return ensureDirectAnswerReportArtifact(nested, request, directAnswerResultPolicyIds.structuredAnswerSource);
   const expected = expectedArtifactTypesForRequest(request);
   const directAnswerPolicy = directAnswerPlainTextResultPolicy(text, {
     prompt: request.prompt,
@@ -57,7 +58,7 @@ export function toolPayloadFromPlainAgentOutput(text: string, request: GatewayRe
     executionUnits: [{
       id: `agentserver-direct-${sha1(text).slice(0, 8)}`,
       status: 'done',
-      tool: 'agentserver.direct-text',
+      tool: directAnswerResultPolicyIds.directTextTool,
       params: JSON.stringify({ expectedArtifactTypes: expected, prompt: request.prompt.slice(0, 200) }),
     }],
     artifacts: directAnswerPolicy.artifacts,
@@ -170,7 +171,7 @@ function coerceStandaloneArtifactPayload(value: Record<string, unknown>): ToolPa
     data: isRecord(value.data) ? value.data : artifactDataFromLooseArtifact({ ...value, id, type }),
     metadata: {
       ...(isRecord(value.metadata) ? value.metadata : {}),
-      source: stringField(isRecord(value.metadata) ? value.metadata.source : undefined) ?? 'workspace-task-artifact-json',
+      source: stringField(isRecord(value.metadata) ? value.metadata.source : undefined) ?? directAnswerResultPolicyIds.workspaceArtifactJsonSource,
       wrappedAsToolPayload: true,
     },
   };
@@ -201,7 +202,7 @@ function coerceStandaloneArtifactPayload(value: Record<string, unknown>): ToolPa
     executionUnits: [{
       id: `${id}-workspace-artifact-json`,
       status: 'done',
-      tool: 'workspace-task.artifact-json',
+      tool: directAnswerResultPolicyIds.workspaceArtifactJsonTool,
     }],
     artifacts: [artifact],
   };
@@ -327,7 +328,7 @@ function normalizeAgentServerExecutionUnits(value: unknown): Array<Record<string
   return [{
     id: `agentserver-direct-${sha1(JSON.stringify(value ?? {})).slice(0, 8)}`,
     status: 'done',
-    tool: 'agentserver.direct-text',
+    tool: directAnswerResultPolicyIds.directTextTool,
     params: '{}',
   }];
 }
