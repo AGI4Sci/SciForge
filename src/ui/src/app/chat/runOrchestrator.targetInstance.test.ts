@@ -223,6 +223,111 @@ describe('runPromptOrchestrator target instance guard', () => {
     assert.notEqual(result.finalResponse.executionUnits[0]?.tool, 'sciforge.existing-artifact-followup');
   });
 
+  it('dispatches non-report artifact follow-ups to the backend with session artifact context', async () => {
+    const session = sessionWithGenericArtifact();
+    const prompt = '继续解释刚才 artifact 的异常点，并给出下一步处理建议';
+    const requestBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return streamResponse([{
+        result: {
+          message: 'Backend inspected artifact follow-up.',
+          executionUnits: [{
+            id: 'unit-artifact-followup',
+            tool: 'capability.artifact.followup',
+            params: '{}',
+            status: 'done',
+            hash: 'hash-artifact-followup',
+            artifacts: ['volcano-plot'],
+            outputArtifacts: ['volcano-plot'],
+          }],
+          artifacts: [{
+            id: 'volcano-plot',
+            type: 'figure',
+            schemaVersion: '1',
+            data: { points: [{ gene: 'TP53', logfc: 2.4, p: 0.001 }] },
+          }],
+          uiManifest: [{
+            componentId: 'generic-artifact-inspector',
+            artifactRef: 'volcano-plot',
+            priority: 1,
+          }],
+        },
+      }]);
+    }) as typeof fetch;
+
+    const result = await runPromptOrchestrator(orchestratorInput({
+      prompt,
+      baseSession: session,
+      activeSession: () => session,
+    }));
+
+    assert.equal(result.status, 'completed');
+    assert.equal(requestBodies.length, 1);
+    assert.equal(requestBodies[0].prompt, prompt);
+    assert.equal((requestBodies[0].uiState as { rawUserPrompt?: string }).rawUserPrompt, prompt);
+    assert.equal((requestBodies[0].uiState as { agentDispatchPolicy?: string }).agentDispatchPolicy, 'agentserver-decides');
+    assert.equal((requestBodies[0].artifacts as Array<{ id?: string; type?: string }>)[0]?.id, 'volcano-plot');
+    assert.equal((requestBodies[0].artifacts as Array<{ id?: string; type?: string }>)[0]?.type, 'figure');
+    assert.equal(result.finalResponse.message.content, 'Backend inspected artifact follow-up.');
+    assert.equal(result.finalResponse.executionUnits[0]?.tool, 'capability.artifact.followup');
+    assert.notEqual(result.finalResponse.executionUnits[0]?.tool, 'sciforge.existing-artifact-followup');
+  });
+
+  it('dispatches failed-run repair follow-ups to backend recovery policy instead of UI self-heal fallback', async () => {
+    const session = sessionWithFailedRun();
+    const prompt = '修复上一轮失败并继续';
+    const requestBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return streamResponse([{
+        result: {
+          message: 'Backend repaired the failed run.',
+          executionUnits: [{
+            id: 'unit-failure-repair',
+            tool: 'capability.failure.repair',
+            params: '{}',
+            status: 'done',
+            hash: 'hash-failure-repair',
+            recoverActions: ['reran schema-valid artifact generation'],
+          }],
+          artifacts: [{
+            id: 'repaired-output',
+            type: 'repair-summary',
+            schemaVersion: '1',
+            data: { status: 'repaired' },
+          }],
+        },
+      }]);
+    }) as typeof fetch;
+
+    const result = await runPromptOrchestrator(orchestratorInput({
+      prompt,
+      baseSession: session,
+      activeSession: () => session,
+    }));
+
+    const failureRecoveryPolicy = requestBodies[0]?.failureRecoveryPolicy as {
+      mode?: string;
+      priorFailureReason?: string;
+      recoverActions?: string[];
+      attemptHistory?: Array<{ id?: string; tool?: string; status?: string; failureReason?: string }>;
+    };
+    assert.equal(result.status, 'completed');
+    assert.equal(requestBodies.length, 1);
+    assert.equal(requestBodies[0].prompt, prompt);
+    assert.equal((requestBodies[0].uiState as { rawUserPrompt?: string }).rawUserPrompt, prompt);
+    assert.equal((requestBodies[0].uiState as { agentDispatchPolicy?: string }).agentDispatchPolicy, 'agentserver-decides');
+    assert.equal(failureRecoveryPolicy.mode, 'preserve-context');
+    assert.match(failureRecoveryPolicy.priorFailureReason ?? '', /schema validation failed/);
+    assert.deepEqual(failureRecoveryPolicy.recoverActions, ['Regenerate the report artifact with schemaVersion=1.']);
+    assert.equal(failureRecoveryPolicy.attemptHistory?.[0]?.tool, 'capability.report.generate');
+    assert.deepEqual((requestBodies[0].uiState as { failureRecoveryPolicy?: unknown }).failureRecoveryPolicy, requestBodies[0].failureRecoveryPolicy);
+    assert.equal(result.finalResponse.message.content, 'Backend repaired the failed run.');
+    assert.equal(result.finalResponse.executionUnits[0]?.tool, 'capability.failure.repair');
+    assert.equal(result.finalResponse.executionUnits.some((unit) => unit.status === 'self-healed'), false);
+  });
+
   it('fails interrupted report follow-ups instead of synthesizing existing-artifact answers', async () => {
     const session = sessionWithReportArtifact();
     globalThis.fetch = (async () => {
@@ -262,6 +367,30 @@ function emptySession(): SciForgeSession {
   };
 }
 
+function sessionWithGenericArtifact(): SciForgeSession {
+  return {
+    ...emptySession(),
+    artifacts: [{
+      id: 'volcano-plot',
+      type: 'figure',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      metadata: { title: 'Volcano plot' },
+      data: {
+        points: [
+          { gene: 'TP53', logfc: 2.4, p: 0.001 },
+          { gene: 'EGFR', logfc: -1.2, p: 0.04 },
+        ],
+      },
+    }],
+    uiManifest: [{
+      componentId: 'generic-artifact-inspector',
+      artifactRef: 'volcano-plot',
+      priority: 1,
+    }],
+  };
+}
+
 function sessionWithReportArtifact(): SciForgeSession {
   return {
     ...emptySession(),
@@ -279,6 +408,50 @@ function sessionWithReportArtifact(): SciForgeSession {
       componentId: 'report-viewer',
       artifactRef: 'research-report',
       priority: 1,
+    }],
+  };
+}
+
+function sessionWithFailedRun(): SciForgeSession {
+  return {
+    ...emptySession(),
+    messages: [{
+      id: 'msg-failed-user',
+      role: 'user',
+      content: 'materialize report',
+      createdAt: '2026-05-07T00:00:00.000Z',
+      status: 'completed',
+    }, {
+      id: 'msg-failed-scenario',
+      role: 'scenario',
+      content: 'schema validation failed for research-report',
+      createdAt: '2026-05-07T00:01:00.000Z',
+      status: 'failed',
+    }],
+    runs: [{
+      id: 'run-failed-report',
+      scenarioId: 'literature-evidence-review',
+      status: 'failed',
+      prompt: 'materialize report',
+      response: 'schema validation failed for research-report',
+      createdAt: '2026-05-07T00:00:00.000Z',
+      completedAt: '2026-05-07T00:01:00.000Z',
+      raw: {
+        streamProcess: {
+          summary: 'artifact materialization failed; backend requested repair.',
+        },
+      },
+    }],
+    executionUnits: [{
+      id: 'unit-failed-report',
+      tool: 'capability.report.generate',
+      params: '{}',
+      status: 'failed-with-reason',
+      hash: 'hash-failed-report',
+      failureReason: 'schema validation failed for research-report',
+      recoverActions: ['Regenerate the report artifact with schemaVersion=1.'],
+      nextStep: 'Retry artifact materialization before presenting success.',
+      outputRef: '.sciforge/task-results/run-failed-report.json',
     }],
   };
 }

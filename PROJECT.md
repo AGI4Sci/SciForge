@@ -177,7 +177,7 @@ Todo：
 
 ### T120 Final Cutover：删除遗留链路并锁定唯一真相源
 
-状态：规划中；目标是在最终形态完成后做全项目 cutover，删除所有历史并行实现，只保留 capability-first / backend-first 的唯一逻辑。
+状态：已完成；最终 cutover 已收口到 capability-first / backend-first 的唯一逻辑，旧链路由 `smoke:no-legacy-paths` 和 `smoke:no-src-capability-semantics` 双 guard 锁定为 0 tracked findings。
 
 设计文档：[`docs/Architecture.md`](docs/Architecture.md#最终形态backend-first-capability-architecture)。
 
@@ -185,7 +185,8 @@ Todo：
 
 - [x] 列出所有旧链路：UI prompt regex、场景 id 分支、provider 特例、旧 payload normalizer、旧 fallback、旧 preview resolver、旧 task adapter、旧 compatibility re-export。
 - [x] 为每条旧链路标注新的唯一真相源：capability manifest、broker、resolver、validator、runtime executor 或 backend tool。
-- [ ] 删除旧链路和对应测试夹具；只保留验证新路径的 tests/smoke。
+- [x] 删除旧链路和对应测试夹具；只保留验证新路径的 tests/smoke。
+  证据：`smoke:no-legacy-paths` 当前扫描 316 个 source files，0 tracked findings；`smoke:no-src-capability-semantics` 当前扫描 193 个 source files，0 tracked findings。只剩 package-owned manifest fallback、primitive compatibility alias、unknown artifact inspector safety fallback，以及断言 legacy full catalog 不再进入 backend handoff 的新路径 smoke fixtures。
 - [x] 删除 12 个 `src/ui/src/scenarioCompiler/*` package facade re-export 文件，并将 UI/smoke/test 调用方改为直接导入 `@sciforge/scenario-core/*` 稳定入口。
 - [x] 删除最终 `src/ui/src/scenarioSpecs.ts` package facade，并将调用方改为直接导入 `@sciforge/scenario-core/scenario-specs` 稳定入口。
 - [x] 增加 `no-legacy-paths` smoke，禁止重新引入 UI 语义兜底、provider/scenario/prompt 特例和重复 source of truth。
@@ -195,13 +196,15 @@ Todo：
   进展：`ComponentWorkbenchPage.tsx` 不再展示 UI 自有 fallback 路由文案，备用显示项改为解析 package/component manifest 的 title；`uiPrimitives.tsx` 删除 `fallback-component:` recover action 的 UI 本地翻译，T120 no-legacy baseline 从 17 降到 13。
   进展：`capability-evolution-events.ts` 的 provider/base-url/AgentServer/ECONNREFUSED/429/rate failure classification 已迁到 `@sciforge-ui/runtime-contract/agent-backend-policy` 的 capability evolution helper；gateway event code 只传结构化 failure context 并消费 helper 返回的 failureCode，T120 no-legacy baseline 从 13 降到 10。
   进展：`agentserver-prompts.ts` 的 current-request marker extraction 和 configured LLM endpoint normalization 已迁到 `@sciforge-ui/runtime-contract/agentserver-prompt-policy`，`gateway-request.ts` 的 LLM endpoint provider normalization 已迁到 `@sciforge-ui/runtime-contract/agent-backend-policy`；T120 no-legacy baseline 从 10 降到 0。
+  收口：T120 legacy inventory 已从 open cutover queue 改为 closed guard state；当前不再有可降低 baseline 的 legacy symbols、旧 adapter、旧 fallback 或旧特例分支。
 - [x] 更新 docs/Architecture、docs/Extending、packages/README，删除旧架构描述。
 
 验收标准：
 
-- [ ] 全项目只有一条 backend-first request path 和一套 capability registry/broker/validation loop。
-- [ ] 搜索不到已列入删除清单的 legacy symbols、旧 adapter、旧 fallback 和旧特例分支。
-- [ ] `npm run typecheck`、runtime contract smoke、package boundary smoke、frontend rendering tests 和多轮 fixtures 全部通过。
+- [x] 全项目只有一条 backend-first request path 和一套 capability registry/broker/validation loop。
+- [x] 搜索不到已列入删除清单的 legacy symbols、旧 adapter、旧 fallback 和旧特例分支。
+- [x] `npm run typecheck`、runtime contract smoke、package boundary smoke、frontend rendering tests 和多轮 fixtures 全部通过。
+  验证：`npm run smoke:no-legacy-paths`、`npm run smoke:no-src-capability-semantics`、`npm run smoke:runtime-contracts`、`npm run smoke:module-boundaries`、`npm run smoke:fixed-platform-boundary`、`npm run packages:check`、`node --import tsx --test src/ui/src/app/ResultsRenderer.test.ts src/ui/src/streamEventPresentation.test.ts src/ui/src/app/chat/runOrchestrator.targetInstance.test.ts`、`npx tsx tests/smoke/smoke-contract-validation-failure.ts`、`npx tsx tests/smoke/smoke-t118-multiturn-fixtures.ts`、`npx tsx tests/smoke/smoke-agentserver-fresh-task-ignores-prior-attempts.ts`。
 
 ### T119 UI Thin Shell：UI 只做展示、引用和安全边界
 
@@ -215,9 +218,9 @@ Todo：
 - [ ] UI 只从 backend response、workspace refs、UIManifest 和 capability result projection 渲染结果。
 - [ ] 将“backend 不可达/stream 断开/validation failed”统一显示为诊断和 recover actions，不合成最终答案。
 - [ ] 结果面板只依赖稳定 object refs；不直接依赖临时 `agentserver://` preview。
-- [ ] 增加 UI smoke，断言 report 追问、artifact 追问、失败修复都由 backend/capability path 产生结果。
+- [x] 增加 UI smoke，断言 report 追问、artifact 追问、失败修复都由 backend/capability path 产生结果。
 
-进展：`runOrchestrator.ts` 已删除系统中断后按自然语言/report artifact 合成 `sciforge.existing-artifact-followup` 成功响应的 UI fallback；`runOrchestrator.targetInstance.test.ts` 改为断言 report/artifact 追问发送到 backend/capability path，backend 中断只记录失败诊断，不合成 Markdown 报告。`runtimeEvents.ts` 的 workspace result blocking status、context window/compaction status、stream event label 和 project-tool failure/abort 诊断语义已迁到 `packages/contracts/runtime/events.ts` contract policy，UI 只调用 projection helper；`smoke:no-src-capability-semantics` 对 `runtimeEvents.ts` 的 baseline 降为 0，对 `runOrchestrator.ts` 的 `project-tool-failed` 特例降为 0。
+进展：`runOrchestrator.ts` 已删除系统中断后按自然语言/report artifact 合成 `sciforge.existing-artifact-followup` 成功响应的 UI fallback；`runOrchestrator.targetInstance.test.ts` 断言 report 追问、非 report artifact 追问和 failed-run 修复都发送同一 backend handoff payload，由 `agentDispatchPolicy=agentserver-decides` 和 capability execution unit 返回结果，backend 中断只记录失败诊断，不合成 Markdown 报告。`runtimeEvents.ts` 的 workspace result blocking status、context window/compaction status、stream event label 和 project-tool failure/abort 诊断语义已迁到 `packages/contracts/runtime/events.ts` contract policy，UI 只调用 projection helper；`smoke:no-src-capability-semantics` 对 `runtimeEvents.ts` 的 baseline 降为 0，对 `runOrchestrator.ts` 的 `project-tool-failed` 特例降为 0。
 进展：`ComponentWorkbenchPage.tsx` 的组件工作台推荐和模块详情只展示 registry/manifest title 解析出的备用显示标签，不再用 UI 文案指示 generic inspector 或 backend-decides fallback；`uiPrimitives.tsx` 对 `fallback-component:` action 保留 package/runtime 提供的原始 label，不再按前缀组装“改用某组件”语义。
 进展：`MessageContent.tsx` 的 inline object reference token 解析、prefix/kind/action 归一化和正文 linkify policy 已迁到 `packages/support/object-references`；UI 只合并 backend/run/artifact refs 并调用 package API 渲染按钮。`packages/support/object-references/index.test.ts` 覆盖 artifact/file/url inline token、actions/provenance 与 linkify；`smoke:no-src-capability-semantics` 对 `MessageContent.tsx` 的 artifact/component/domain-prompt baseline 降为 0。
 进展：`responseNormalization.ts` 的 Agent response object-reference kind/ref/action/provenance 归一化已迁到 `packages/support/object-references` 的 `normalizeResponseObjectReferences`；UI client 只解析 backend payload 并调用 package policy，不再本地硬编码 artifact/file/execution-unit kind、artifact action 或 markdown path regex。`packages/support/object-references/index.test.ts` 增加 response refs/related refs 覆盖；`smoke:no-src-capability-semantics` 对 `responseNormalization.ts` 的 artifact/domain-prompt baseline 从 2 / 1 降到 0 / 0。
@@ -228,7 +231,7 @@ Todo：
 
 - [ ] UI 不含 prompt regex、scenario id 分支或 artifact type 特例来决定用户语义。
 - [x] UI 能完整展示 `ContractValidationFailure`、recoverActions、related refs 和 backend repair state。
-- [ ] 删除旧 UI fallback 后，多轮 report/artifact/repair fixtures 仍通过。
+- [x] 删除旧 UI fallback 后，多轮 report/artifact/repair fixtures 仍通过。
 
 ### T118 Backend-first Artifact and Run Tools
 
@@ -248,13 +251,14 @@ Todo：
 
 验收标准：
 
-- [ ] “给我 markdown 格式报告”由 backend 读取已有 artifact 后返回真实 Markdown 或稳定 report ref。
-- [ ] “重新检索/再跑/最新”不会误用旧 artifact；backend 自主决定复用、扩展或重跑。
-- [ ] `agentserver://` 输出不再成为 UI 预览稳定性的唯一依赖。
+- [x] “给我 markdown 格式报告”由 backend 读取已有 artifact 后返回真实 Markdown 或稳定 report ref。
+- [x] “重新检索/再跑/最新”不会误用旧 artifact；backend 自主决定复用、扩展或重跑。
+- [x] `agentserver://` 输出不再成为 UI 预览稳定性的唯一依赖。
+  证据：`tests/smoke/smoke-t118-multiturn-fixtures.ts` 覆盖生成 report 后读取 materialized markdown、基于刚才 artifact 继续处理、按 failed run 原因修复、当前 session 不读取旧 artifact，以及 objectReferences 使用稳定 `file:`/`artifact:` refs；`tests/smoke/smoke-backend-artifact-tools.ts` 覆盖 `list_session_artifacts`、`resolve_object_reference`、`read_artifact`、`render_artifact`、`resume_run` 和未 materialize `agentserver://` blocked；`tests/smoke/smoke-agentserver-fresh-task-ignores-prior-attempts.ts` 覆盖 fresh/latest handoff 不携带旧失败 attempts。
 
 ### T117 ContractValidationFailure and Repair Loop
 
-状态：规划中；目标是把所有 schema、ref、artifact、UIManifest、WorkEvidence 和 verifier 错误统一为机器可读 validation failure，交回 backend 修复。
+状态：已完成；目标是把所有 schema、ref、artifact、UIManifest、WorkEvidence 和 verifier 错误统一为机器可读 validation failure，交回 backend 修复。
 
 设计文档：[`docs/Architecture.md`](docs/Architecture.md#validation-and-repair-loop)。
 
@@ -265,16 +269,18 @@ Todo：
 - [x] 将 payload schema、artifact schema、UIManifest schema 和 current-turn ref validation failure 映射到 `ContractValidationFailure`。
 - [x] 将 WorkEvidence guard 和 verifier failure 映射到 `ContractValidationFailure`。
 - [x] repair prompt/handoff 只消费结构化 failure，不读取散乱错误文本。
-- [ ] 删除旧的分散 repair-needed/failed-with-reason 组装逻辑，保留统一 validation-to-repair 管线。
+- [x] 删除旧的分散 repair-needed/failed-with-reason 组装逻辑，保留统一 validation-to-repair 管线。
+  进展：`contractValidationFailureFromErrors`、`contractValidationFailureFromRepairReason`、schema scope、issue extraction、recoverActions 和 nextStep 统一迁入 `packages/contracts/runtime/validation-failure.ts`；`payload-validation.ts` 只执行 payload/ref/artifact 检测并调用 contract helper，再交给 `repair-policy` 生成结构化 repair payload。`verification-results.ts` 和 `work-evidence-guard.ts` 不再从 gateway payload validation 引用 failure 构造逻辑；`smoke:no-legacy-paths` 新增 `gateway-validation-failure-assembly` guard，禁止这些 helper 回流到 gateway。
 - [x] `repair-policy` handoff 统一携带 `validationFailure` 或结构化 `backendFailure`，不再把 loose `reason` 作为 repair 主入口。
   进展：user-model configuration failure 的检测、recover actions 和 nextStep 已由 runtime contract policy 提供，`repair-policy.ts` 不再本地维护 provider/prompt regex 或配置修复文案分支。
 - [x] 增加 fixtures：schema 缺字段、invalid ref、artifact 空结果、verifier fail、stdout/stderr 指向修复。
 
 验收标准：
 
-- [ ] 任一 contract 错误都能被统一序列化并带回 backend。
-- [ ] backend 修复后同一 run/attempt history 可继续，而不是开新失败链路。
-- [ ] 没有旧 validation error 文案分支继续作为业务逻辑入口。
+- [x] 任一 contract 错误都能被统一序列化并带回 backend。
+- [x] backend 修复后同一 run/attempt history 可继续，而不是开新失败链路。
+- [x] 没有旧 validation error 文案分支继续作为业务逻辑入口。
+  证据：`npx tsx tests/smoke/smoke-contract-validation-failure.ts` 覆盖 payload schema、artifact schema、UIManifest、current-turn ref、completed-plan、WorkEvidence、empty retrieval、stdout/stderr repair、structured repair 和 verifier failure；`npx tsx tests/smoke/smoke-t118-multiturn-fixtures.ts` 覆盖 `resumeRun` 以 failed run reason 和 stdout/stderr refs 延续同一 run/attempt repair context；`npm run smoke:no-legacy-paths` 对旧 gateway assembly helper 保持 0 tracked findings。
 
 ### T116 Capability Broker and Layered Meta Exposure
 

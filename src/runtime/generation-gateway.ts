@@ -643,9 +643,7 @@ async function requestAgentServerGeneration(params: {
         skillPlanRef: request.skillPlanRef,
         prompt: request.prompt,
       });
-    const attachPriorAttempts = needsContinuity || recentAttempts.some((attempt) =>
-      typeof attempt.failureReason === 'string' && attempt.failureReason.trim().length > 0
-    );
+    const attachPriorAttempts = needsContinuity;
     const priorAttempts = currentTurnReferences(request).length || !attachPriorAttempts
       ? []
       : summarizeTaskAttemptsForAgentServer(recentAttempts);

@@ -21,9 +21,21 @@ import type { AgentServerGenerationResponse, GatewayRequest, SkillAvailability, 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-t118-multiturn-fixtures-'));
 await mkdir(join(workspace, '.sciforge', 'task-results'), { recursive: true });
 await mkdir(join(workspace, '.sciforge', 'logs'), { recursive: true });
+await mkdir(join(workspace, '.sciforge', 'artifacts'), { recursive: true });
 const skill = agentServerGenerationSkill('literature');
 const scenarioPackageRef = { id: 't118-multiturn-fixtures', version: '1.0.0', source: 'built-in' as const };
 const skillPlanRef = 't118-minimal-multiround';
+
+await writeFile(join(workspace, '.sciforge', 'artifacts', 'session-t118-stale-report.json'), JSON.stringify({
+  id: 't118-stale-report',
+  type: 'research-report',
+  producerScenario: 'literature',
+  producerSessionId: 'session-t118-stale',
+  schemaVersion: '1',
+  data: {
+    markdown: '# Stale T118 Report\n\nSHOULD_NOT_USE_STALE_ARTIFACT',
+  },
+}, null, 2), 'utf8');
 
 const round1 = await runGenerated(roundRequest({
   prompt: 'T118 Round 1: generate a backend research report artifact and persist markdown.',
@@ -35,6 +47,9 @@ assert.ok(round1Report, 'round 1 should include the report artifact');
 const round1MarkdownRef = metadataString(round1Report, 'markdownRef');
 assert.ok(round1MarkdownRef, 'report artifact should have a materialized markdownRef');
 assert.match(await readFile(join(workspace, round1MarkdownRef), 'utf8'), /# T118 Round 1 Report/);
+assert.ok(round1.objectReferences?.some((reference) => isRecord(reference) && reference.ref === `file:${round1MarkdownRef}`));
+assert.ok(round1.objectReferences?.some((reference) => isRecord(reference) && reference.ref === 'artifact:t118-round1-report'));
+assert.equal(round1.objectReferences?.some((reference) => isRecord(reference) && String(reference.ref).startsWith('agentserver://')), false);
 
 const round1Rendered = await renderArtifact({
   workspacePath: workspace,
@@ -57,6 +72,24 @@ const listedAfterRound1 = await listSessionArtifacts({
   skillDomain: 'literature',
 });
 assert.ok(listedAfterRound1.objectReferences.some((reference) => reference.ref === 'artifact:t118-round1-report'));
+
+const currentSessionArtifacts = await listSessionArtifacts({
+  workspacePath: workspace,
+  sessionId: 'session-t118-round1',
+  skillDomain: 'literature',
+  artifacts: [round1Report],
+});
+assert.ok(currentSessionArtifacts.objectReferences.some((reference) => reference.ref === 'artifact:t118-round1-report'));
+assert.equal(currentSessionArtifacts.objectReferences.some((reference) => reference.ref === 'artifact:t118-stale-report'), false);
+
+const staleInCurrentSession = await readArtifact({
+  workspacePath: workspace,
+  sessionId: 'session-t118-round1',
+  skillDomain: 'literature',
+  ref: 'artifact:t118-stale-report',
+});
+assert.equal(staleInCurrentSession.status, 'missing');
+assert.doesNotMatch(staleInCurrentSession.text ?? '', /SHOULD_NOT_USE_STALE_ARTIFACT/);
 
 const round2 = await runGenerated(roundRequest({
   prompt: 'T118 Round 2: continue only from artifact:t118-round1-report and add a follow-up report section.',

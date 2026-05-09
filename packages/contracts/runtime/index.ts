@@ -182,11 +182,15 @@ export {
 } from './references';
 export {
   CONTRACT_VALIDATION_FAILURE_CONTRACT_ID,
+  contractValidationFailureFromErrors,
+  contractValidationFailureFromRepairReason,
   contractValidationFailureSchema,
+  validationScopeForToolPayloadSchemaErrors,
 } from './validation-failure';
 export type {
   ContractValidationFailure,
   ContractValidationFailureKind,
+  ContractValidationFailureOptions,
   ContractValidationIssue,
 } from './validation-failure';
 export {

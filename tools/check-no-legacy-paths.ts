@@ -60,6 +60,13 @@ const rules: Rule[] = [
       && /\bfrom\s+['"]@sciforge\/scenario-core\//.test(line)
       && (/^src\/ui\/src\/scenarioCompiler\//.test(file) || file === 'src/ui/src/scenarioSpecs.ts'),
   },
+  {
+    id: 'gateway-validation-failure-assembly',
+    message: 'Gateway owns ContractValidationFailure assembly that should stay in packages/contracts/runtime/validation-failure.',
+    appliesTo: (file) => file === 'src/runtime/gateway/payload-validation.ts',
+    match: (line) => isCodeLine(line)
+      && /^(?:export\s+)?(?:function|interface)\s+(?:contractValidationFailureFromErrors|contractValidationFailureFromRepairReason|ContractValidationFailureOptions|contractValidationIssueFromError|runtimeGuardIssueForError|recoverActionsForValidationFailure|nextStepForValidationFailure|validationScopeForSchemaErrors|validationScopeForRepairReason)\b/.test(line.trim()),
+  },
 ];
 
 // Current T120 final-cutover baseline. This guard is deliberately conservative:

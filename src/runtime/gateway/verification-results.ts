@@ -7,8 +7,8 @@ import {
   verificationResultFailureActual,
   verificationResultFailureMessages,
 } from '@sciforge-ui/runtime-contract/verification-result';
+import { contractValidationFailureFromErrors } from '@sciforge-ui/runtime-contract/validation-failure';
 import type { VerificationResult, VerificationVerdict } from '../runtime-types.js';
-import { contractValidationFailureFromErrors } from './payload-validation.js';
 
 export function normalizeRuntimeVerificationResults(value: unknown): VerificationResult[] {
   return normalizeRuntimeVerificationResultsFromContract(value) as VerificationResult[];
