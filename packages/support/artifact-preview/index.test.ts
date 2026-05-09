@@ -9,6 +9,7 @@ import {
   locatorHintsForPreviewKind,
   lightweightPreviewNoticeForDescriptor,
   mergePreviewDescriptors,
+  normalizeArtifactPreviewDescriptor,
   normalizePreviewDerivative,
   previewActionsForPreviewKind,
   previewDerivativeExtensionForKind,
@@ -21,6 +22,7 @@ import {
   previewStructureBundleStatus,
   unsupportedPreviewNoticeModel,
   uniquePreviewStrings,
+  uploadedArtifactPreview,
 } from './index';
 
 test('merges descriptor derivatives and diagnostics', () => {
@@ -77,6 +79,63 @@ test('normalizes derivative records and unique strings as contract helpers', () 
     diagnostics: [],
   });
   assert.equal(normalizePreviewDerivative({ kind: 'text' }), undefined);
+});
+
+test('normalizes artifact preview descriptors from payload shape and path policy', () => {
+  const markdown = normalizeArtifactPreviewDescriptor({
+    id: 'report-1',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { markdown: '# Result' },
+  });
+  assert.equal(markdown?.kind, 'markdown');
+  assert.ok(markdown?.actions.includes('extract-text'));
+
+  const structure = normalizeArtifactPreviewDescriptor({
+    id: 'structure-1',
+    type: 'workspace-artifact',
+    producerScenario: 'structure-exploration',
+    schemaVersion: '1',
+    path: 'workspace/1crn.cif',
+  });
+  assert.equal(structure?.kind, 'structure');
+  assert.equal(structure?.inlinePolicy, 'external');
+  assert.ok(structure?.derivatives?.some((derivative) => derivative.kind === STRUCTURE_BUNDLE_PREVIEW_DERIVATIVE_KIND));
+
+  const table = normalizeArtifactPreviewDescriptor({
+    id: 'table-1',
+    type: 'workspace-artifact',
+    producerScenario: 'knowledge-graph-mining',
+    schemaVersion: '1',
+    data: { rows: [{ gene: 'TP53' }] },
+  });
+  assert.equal(table?.kind, 'table');
+  assert.ok(table?.actions.includes('select-rows'));
+
+  const unknown = normalizeArtifactPreviewDescriptor({
+    id: 'opaque-1',
+    type: 'workspace-artifact',
+    producerScenario: 'general',
+    schemaVersion: '1',
+    path: 'outputs/model.weights',
+  });
+  assert.equal(unknown?.kind, 'binary');
+  assert.equal(unknown?.inlinePolicy, 'unsupported');
+});
+
+test('normalizes uploaded artifact data-url preview payloads', () => {
+  const preview = uploadedArtifactPreview({
+    id: 'upload-1',
+    type: 'uploaded-image',
+    producerScenario: 'general',
+    schemaVersion: '1',
+    metadata: { title: 'Gel image', size: 12 },
+    data: { previewKind: 'image', dataUrl: 'data:image/png;base64,abc' },
+  });
+  assert.equal(preview?.kind, 'image');
+  assert.equal(preview?.title, 'Gel image');
+  assert.equal(preview?.size, 12);
 });
 
 test('builds package-owned preview notice copy from contract actions', () => {

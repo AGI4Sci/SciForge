@@ -44,7 +44,6 @@ import {
   type EvidenceLevel,
   type PageId,
 } from '../data';
-import { SCENARIO_SPECS, SCENARIO_PRESETS, componentManifest } from '@sciforge/scenario-core/scenario-specs';
 import { compileScenarioDraft, scenarioIdBySkillDomain, type ScenarioBuilderDraft } from '@sciforge/scenario-core/scenario-draft-compiler';
 import { compileScenarioIRFromSelection, recommendScenarioElements, type ScenarioElementSelection } from '@sciforge/scenario-core/scenario-element-compiler';
 import { elementRegistry } from '@sciforge/scenario-core/element-registry';
@@ -52,6 +51,12 @@ import { buildScenarioQualityReport } from '@sciforge/scenario-core/scenario-qua
 import { buildBuiltInScenarioPackage, builtInScenarioPackageRef, type ScenarioPackage } from '@sciforge/scenario-core/scenario-package';
 import type { ScenarioLibraryItem } from '@sciforge/scenario-core/scenario-library';
 import { compileSlotsForScenario } from '@sciforge/scenario-core/ui-plan-compiler';
+import {
+  builtInScenarioIdForRuntimeInput,
+  createBuiltInScenarioRecord,
+  defaultBuiltInScenarioId,
+  scenarioRuntimeOverrideForBuiltInScenario,
+} from '@sciforge/scenario-core/scenario-routing-policy';
 import { timeline } from '../demoData';
 import { sendSciForgeToolMessage } from '../api/sciforgeToolsClient';
 import { buildExecutionBundle, evaluateExecutionBundleExport } from '../exportPolicy';
@@ -207,27 +212,6 @@ const officialScenarioPackages = scenarios.map((scenario) => ({
   package: buildBuiltInScenarioPackage(scenario.id, '2026-04-25T00:00:00.000Z'),
 }));
 
-
-function isBuiltInScenarioId(value: string): value is ScenarioId {
-  return Object.prototype.hasOwnProperty.call(SCENARIO_SPECS, value);
-}
-
-function builtInScenarioIdForInstance(scenarioId: ScenarioInstanceId, scenarioOverride?: ScenarioRuntimeOverride): ScenarioId {
-  const skillDomain = scenarioOverride?.skillDomain;
-  if (skillDomain === 'structure') return 'structure-exploration';
-  if (skillDomain === 'omics') return 'omics-differential-exploration';
-  if (skillDomain === 'knowledge') return 'biomedical-knowledge-graph';
-  if (skillDomain === 'literature') return 'literature-evidence-review';
-  if (typeof scenarioId === 'string' && isBuiltInScenarioId(scenarioId)) return scenarioId;
-  return 'literature-evidence-review';
-}
-
-
-function titleFromPrompt(prompt: string) {
-  const title = prompt.trim().replace(/\s+/g, ' ').slice(0, 36);
-  return title || '新聊天';
-}
-
 function Workbench({
   scenarioId,
   config,
@@ -295,19 +279,10 @@ function Workbench({
   availableComponentIds: string[];
   onAvailableComponentIdsChange: (ids: string[]) => void;
 }) {
-  const baseScenarioId = builtInScenarioIdForInstance(scenarioId, scenarioOverride);
+  const baseScenarioId = builtInScenarioIdForRuntimeInput({ scenarioId, scenarioOverride });
   const scenarioView = scenarios.find((item) => item.id === baseScenarioId) ?? scenarios[0];
-  const scenarioSpec = SCENARIO_PRESETS[baseScenarioId];
   const visionSenseToolId = 'local.vision-sense';
-  const baseRuntimeScenario: ScenarioRuntimeOverride = scenarioOverride ?? {
-    title: scenarioSpec.title,
-    description: scenarioSpec.description,
-    skillDomain: scenarioSpec.skillDomain,
-    scenarioMarkdown: scenarioSpec.scenarioMarkdown,
-    defaultComponents: scenarioSpec.componentPolicy.defaultComponents,
-    allowedComponents: scenarioSpec.componentPolicy.allowedComponents,
-    fallbackComponent: scenarioSpec.componentPolicy.fallbackComponent,
-  };
+  const baseRuntimeScenario: ScenarioRuntimeOverride = scenarioOverride ?? scenarioRuntimeOverrideForBuiltInScenario(baseScenarioId);
   const [visionSenseDefaultDisabled, setVisionSenseDefaultDisabled] = useState(false);
   const runtimeScenario: ScenarioRuntimeOverride = {
     ...baseRuntimeScenario,
@@ -923,7 +898,7 @@ function FeedbackInboxPage({
 
 export function SciForgeApp() {
   const [page, setPage] = useState<PageId>('dashboard');
-  const [scenarioId, setScenarioId] = useState<ScenarioInstanceId>('literature-evidence-review');
+  const [scenarioId, setScenarioId] = useState<ScenarioInstanceId>(defaultBuiltInScenarioId);
   const [config, setConfig] = useState<SciForgeConfig>(() => loadSciForgeConfig());
   const [configFileHydrated, setConfigFileHydrated] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -943,18 +918,8 @@ export function SciForgeApp() {
   const [selectedRuntimeComponentIds, setSelectedRuntimeComponentIds] = useState<string[]>(() => (
     Array.from(new Set(uiModuleRegistry.filter((module) => module.lifecycle === 'published').map((module) => module.componentId))).sort()
   ));
-  const [drafts, setDrafts] = useState<Record<ScenarioInstanceId, string>>({
-    'literature-evidence-review': '',
-    'structure-exploration': '',
-    'omics-differential-exploration': '',
-    'biomedical-knowledge-graph': '',
-  });
-  const [messageScrollTops, setMessageScrollTops] = useState<Record<ScenarioInstanceId, number>>({
-    'literature-evidence-review': 0,
-    'structure-exploration': 0,
-    'omics-differential-exploration': 0,
-    'biomedical-knowledge-graph': 0,
-  });
+  const [drafts, setDrafts] = useState<Record<ScenarioInstanceId, string>>(() => createBuiltInScenarioRecord(''));
+  const [messageScrollTops, setMessageScrollTops] = useState<Record<ScenarioInstanceId, number>>(() => createBuiltInScenarioRecord(0));
 
   const sessions = workspaceState.sessionsByScenario;
   const archivedSessionsByAgent = useMemo(() => {
@@ -1297,7 +1262,7 @@ export function SciForgeApp() {
   }
 
   const activeScenarioOverride = scenarioOverrides[scenarioId];
-  const activeBuiltInScenarioId = builtInScenarioIdForInstance(scenarioId, activeScenarioOverride);
+  const activeBuiltInScenarioId = builtInScenarioIdForRuntimeInput({ scenarioId, scenarioOverride: activeScenarioOverride });
   const activeSession = sessions[scenarioId] ?? createSession(scenarioId, `${scenarioLabelForInstance(scenarioId)} 新聊天`);
   const appHealthItems = useRuntimeHealth(config, Object.keys(sessions).length);
 

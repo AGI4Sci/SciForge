@@ -1,4 +1,15 @@
 export {
+  interactiveArtifactDownloadItems,
+  interactiveArtifactInspectorTablePolicy,
+  interactiveResultSlotSubtitle,
+  interactiveUnknownComponentFallbackPolicy,
+  interactiveViewComponentLabel,
+  interactiveViewPackageRendererForComponent,
+  type InteractiveArtifactDownloadItem,
+  type InteractiveArtifactInspectorTablePolicy,
+  type InteractiveViewPackageRendererEntry,
+} from './renderer-mapping';
+export {
   interactiveViewCompatibilityAliases,
   interactiveViewManifests,
   normalizeUIComponentId,
@@ -22,6 +33,7 @@ export {
   interactiveViewFallbackModuleIds,
   interactiveViewFallbackBindingStatus,
   interactiveViewModuleAcceptsArtifact,
+  preferredInteractiveViewComponentForPreviewKind,
   reportRuntimeResultViewSlots,
   repairDiagnosticViewSlotPolicy,
   runtimeResultViewSlotsPolicy,

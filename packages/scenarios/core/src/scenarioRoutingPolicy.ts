@@ -1,5 +1,5 @@
 import type { ScenarioId, ScenarioRuntimeOverride } from './contracts';
-import { SCENARIO_SPECS, type SkillDomain } from './scenarioSpecs';
+import { SCENARIO_PRESETS, SCENARIO_SPECS, type SkillDomain } from './scenarioSpecs';
 
 export type ScenarioRoutingInput = {
   scenarioId?: string;
@@ -18,6 +18,7 @@ export interface ScenarioScopeCheckResult {
 }
 
 export const builtInScenarioIds = Object.keys(SCENARIO_SPECS) as ScenarioId[];
+export const defaultBuiltInScenarioId: ScenarioId = 'literature-evidence-review';
 
 export const scenarioIdBySkillDomain = Object.fromEntries(
   builtInScenarioIds.map((scenarioId) => [SCENARIO_SPECS[scenarioId].skillDomain, scenarioId]),
@@ -49,13 +50,49 @@ export function builtInScenarioIdForRuntimeInput(input: ScenarioRoutingInput): S
   const overrideScenarioId = scenarioIdForSkillDomain(input.scenarioOverride?.skillDomain);
   if (overrideScenarioId) return overrideScenarioId;
   if (isBuiltInScenarioId(input.scenarioId)) return input.scenarioId;
-  return 'literature-evidence-review';
+  return defaultBuiltInScenarioId;
 }
 
 export function skillDomainForRuntimeInput(input: ScenarioRoutingInput): SkillDomain {
   const overrideSkillDomain = input.scenarioOverride?.skillDomain;
   if (isSkillDomain(overrideSkillDomain)) return overrideSkillDomain;
   return SCENARIO_SPECS[builtInScenarioIdForRuntimeInput(input)].skillDomain;
+}
+
+export function createBuiltInScenarioRecord<T>(
+  valueForScenario: T | ((scenarioId: ScenarioId) => T),
+): Record<ScenarioId, T> {
+  return Object.fromEntries(builtInScenarioIds.map((scenarioId) => [
+    scenarioId,
+    typeof valueForScenario === 'function'
+      ? (valueForScenario as (scenarioId: ScenarioId) => T)(scenarioId)
+      : valueForScenario,
+  ])) as Record<ScenarioId, T>;
+}
+
+export function scenarioRuntimeOverrideForBuiltInScenario(scenarioId: ScenarioId): ScenarioRuntimeOverride {
+  const scenario = SCENARIO_PRESETS[scenarioId];
+  return {
+    title: scenario.title,
+    description: scenario.description,
+    skillDomain: scenario.skillDomain,
+    scenarioMarkdown: scenario.scenarioMarkdown,
+    defaultComponents: scenario.componentPolicy.defaultComponents,
+    allowedComponents: scenario.componentPolicy.allowedComponents,
+    fallbackComponent: scenario.componentPolicy.fallbackComponent,
+  };
+}
+
+export function scenarioRuntimeOverrideForRuntimeInput(input: ScenarioRoutingInput): ScenarioRuntimeOverride {
+  return scenarioRuntimeOverrideForBuiltInScenario(builtInScenarioIdForRuntimeInput(input));
+}
+
+export function normalizeScenarioPromptTitle(
+  prompt: string,
+  { fallbackTitle = '新聊天', maxLength = 36 }: { fallbackTitle?: string; maxLength?: number } = {},
+) {
+  const title = prompt.trim().replace(/\s+/g, ' ').slice(0, maxLength);
+  return title || fallbackTitle;
 }
 
 export function matchedScenariosForPrompt(prompt: string): ScenarioId[] {

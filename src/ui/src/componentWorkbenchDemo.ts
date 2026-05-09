@@ -7,137 +7,20 @@ import {
 } from './domain';
 import { createSession } from './sessionStore';
 import type { RuntimeUIModule } from './uiModuleRegistry';
-import type { UIComponentRendererProps } from '@sciforge-ui/components/types';
-import { basicEvidenceMatrixFixture } from '@sciforge-ui/components/evidence-matrix/fixtures/basic';
-import { emptyEvidenceMatrixFixture } from '@sciforge-ui/components/evidence-matrix/fixtures/empty';
-import { selectionEvidenceMatrixFixture } from '@sciforge-ui/components/evidence-matrix/fixtures/selection';
-import { basicExecutionUnitTableFixture } from '@sciforge-ui/components/execution-unit-table/fixtures/basic';
-import { emptyExecutionUnitTableFixture } from '@sciforge-ui/components/execution-unit-table/fixtures/empty';
-import { selectionExecutionUnitTableFixture } from '@sciforge-ui/components/execution-unit-table/fixtures/selection';
-import { basicGraphViewerFixture } from '@sciforge-ui/components/graph-viewer/fixtures/basic';
-import { emptyGraphViewerFixture } from '@sciforge-ui/components/graph-viewer/fixtures/empty';
-import { selectionGraphViewerFixture } from '@sciforge-ui/components/graph-viewer/fixtures/selection';
-import { basicMatrixViewerFixture } from '@sciforge-ui/components/matrix-viewer/fixtures/basic';
-import { emptyMatrixViewerFixture } from '@sciforge-ui/components/matrix-viewer/fixtures/empty';
-import { selectionMatrixViewerFixture } from '@sciforge-ui/components/matrix-viewer/fixtures/selection';
-import { basicNotebookTimelineFixture } from '@sciforge-ui/components/notebook-timeline/fixtures/basic';
-import { emptyNotebookTimelineFixture } from '@sciforge-ui/components/notebook-timeline/fixtures/empty';
-import { selectionNotebookTimelineFixture } from '@sciforge-ui/components/notebook-timeline/fixtures/selection';
-import { basicPaperCardListFixture } from '@sciforge-ui/components/paper-card-list/fixtures/basic';
-import { emptyPaperCardListFixture } from '@sciforge-ui/components/paper-card-list/fixtures/empty';
-import { selectionPaperCardListFixture } from '@sciforge-ui/components/paper-card-list/fixtures/selection';
-import { basicPointSetViewerFixture } from '@sciforge-ui/components/point-set-viewer/fixtures/basic';
-import { emptyPointSetViewerFixture } from '@sciforge-ui/components/point-set-viewer/fixtures/empty';
-import { selectionPointSetViewerFixture } from '@sciforge-ui/components/point-set-viewer/fixtures/selection';
-import { basicRecordTableFixture } from '@sciforge-ui/components/record-table/fixtures/basic';
-import { emptyRecordTableFixture } from '@sciforge-ui/components/record-table/fixtures/empty';
-import { selectionRecordTableFixture } from '@sciforge-ui/components/record-table/fixtures/selection';
-import { basicReportViewerFixture } from '@sciforge-ui/components/report-viewer/fixtures/basic';
-import { emptyReportViewerFixture } from '@sciforge-ui/components/report-viewer/fixtures/empty';
-import { selectionReportViewerFixture } from '@sciforge-ui/components/report-viewer/fixtures/selection';
-import { basicPlotlyScatterLineFixture } from '@sciforge-ui/components/scientific-plot-viewer/fixtures/basic';
-import { basicStructureViewerFixture } from '@sciforge-ui/components/structure-viewer/fixtures/basic';
-import { emptyStructureViewerFixture } from '@sciforge-ui/components/structure-viewer/fixtures/empty';
-import { selectionStructureViewerFixture } from '@sciforge-ui/components/structure-viewer/fixtures/selection';
-import { basicUnknownArtifactInspectorFixture } from '@sciforge-ui/components/unknown-artifact-inspector/fixtures/basic';
-import { emptyUnknownArtifactInspectorFixture } from '@sciforge-ui/components/unknown-artifact-inspector/fixtures/empty';
-import { selectionUnknownArtifactInspectorFixture } from '@sciforge-ui/components/unknown-artifact-inspector/fixtures/selection';
+import {
+  defaultWorkbenchDemoContext,
+  normalizeWorkbenchFixtureArtifact,
+  shouldBuildWorkbenchFigureQA,
+  workbenchComponentFixtures,
+  workbenchComponentRecommendationBoost,
+  workbenchDemoVariants,
+  workbenchModuleDisplayLabels as packageWorkbenchModuleDisplayLabels,
+  type WorkbenchDemoVariant,
+} from '@sciforge-ui/components';
 
-const DEMO_SCENARIO: ScenarioId = 'literature-evidence-review';
-export type WorkbenchDemoVariant = 'basic' | 'empty' | 'selection';
+const DEMO_SCENARIO = defaultWorkbenchDemoContext.scenarioId as ScenarioId;
 
-const DEMO_VARIANTS: WorkbenchDemoVariant[] = ['basic', 'empty', 'selection'];
-
-const packageFixtures: Record<string, Partial<Record<WorkbenchDemoVariant, UIComponentRendererProps>>> = {
-  'data-table': {
-    basic: basicRecordTableFixture,
-    empty: emptyRecordTableFixture,
-    selection: selectionRecordTableFixture,
-  },
-  'record-table': {
-    basic: basicRecordTableFixture,
-    empty: emptyRecordTableFixture,
-    selection: selectionRecordTableFixture,
-  },
-  'evidence-matrix': {
-    basic: basicEvidenceMatrixFixture,
-    empty: emptyEvidenceMatrixFixture,
-    selection: selectionEvidenceMatrixFixture,
-  },
-  'execution-unit-table': {
-    basic: basicExecutionUnitTableFixture,
-    empty: emptyExecutionUnitTableFixture,
-    selection: selectionExecutionUnitTableFixture,
-  },
-  'heatmap-viewer': {
-    basic: basicMatrixViewerFixture,
-    empty: emptyMatrixViewerFixture,
-    selection: selectionMatrixViewerFixture,
-  },
-  'matrix-viewer': {
-    basic: basicMatrixViewerFixture,
-    empty: emptyMatrixViewerFixture,
-    selection: selectionMatrixViewerFixture,
-  },
-  'molecule-viewer': {
-    basic: basicStructureViewerFixture,
-    empty: emptyStructureViewerFixture,
-    selection: selectionStructureViewerFixture,
-  },
-  'structure-viewer': {
-    basic: basicStructureViewerFixture,
-    empty: emptyStructureViewerFixture,
-    selection: selectionStructureViewerFixture,
-  },
-  'network-graph': {
-    basic: basicGraphViewerFixture,
-    empty: emptyGraphViewerFixture,
-    selection: selectionGraphViewerFixture,
-  },
-  'graph-viewer': {
-    basic: basicGraphViewerFixture,
-    empty: emptyGraphViewerFixture,
-    selection: selectionGraphViewerFixture,
-  },
-  'notebook-timeline': {
-    basic: basicNotebookTimelineFixture,
-    empty: emptyNotebookTimelineFixture,
-    selection: selectionNotebookTimelineFixture,
-  },
-  'paper-card-list': {
-    basic: basicPaperCardListFixture,
-    empty: emptyPaperCardListFixture,
-    selection: selectionPaperCardListFixture,
-  },
-  'report-viewer': {
-    basic: basicReportViewerFixture,
-    empty: emptyReportViewerFixture,
-    selection: selectionReportViewerFixture,
-  },
-  'scientific-plot-viewer': {
-    basic: basicPlotlyScatterLineFixture,
-  },
-  'umap-viewer': {
-    basic: basicPointSetViewerFixture,
-    empty: emptyPointSetViewerFixture,
-    selection: selectionPointSetViewerFixture,
-  },
-  'point-set-viewer': {
-    basic: basicPointSetViewerFixture,
-    empty: emptyPointSetViewerFixture,
-    selection: selectionPointSetViewerFixture,
-  },
-  'unknown-artifact-inspector': {
-    basic: basicUnknownArtifactInspectorFixture,
-    empty: emptyUnknownArtifactInspectorFixture,
-    selection: selectionUnknownArtifactInspectorFixture,
-  },
-  'volcano-plot': {
-    basic: basicPointSetViewerFixture,
-    empty: emptyPointSetViewerFixture,
-    selection: selectionPointSetViewerFixture,
-  },
-};
+export type { WorkbenchDemoVariant };
 
 export interface WorkbenchComponentRecommendation {
   componentId: string;
@@ -211,21 +94,14 @@ function cloneArtifact(artifact: RuntimeArtifact): RuntimeArtifact {
   };
 }
 
-function normalizeFixtureArtifactForModule(module: RuntimeUIModule, artifact: RuntimeArtifact): RuntimeArtifact {
-  if (module.componentId === 'data-table') {
-    return { ...artifact, id: 'de-table-mini', type: 'data-table' };
-  }
-  return artifact;
-}
-
-function fixtureForVariant(module: RuntimeUIModule, variant: WorkbenchDemoVariant): UIComponentRendererProps | undefined {
-  return packageFixtures[module.componentId]?.[variant];
+function fixtureForVariant(module: RuntimeUIModule, variant: WorkbenchDemoVariant) {
+  return workbenchComponentFixtures[module.componentId]?.[variant];
 }
 
 function fixtureArtifact(module: RuntimeUIModule, variant: WorkbenchDemoVariant): RuntimeArtifact | undefined {
   const fixture = fixtureForVariant(module, variant);
   const artifact = fixture?.artifact as RuntimeArtifact | undefined;
-  return artifact ? normalizeFixtureArtifactForModule(module, cloneArtifact(artifact)) : undefined;
+  return artifact ? normalizeWorkbenchFixtureArtifact(module.componentId, cloneArtifact(artifact)) as RuntimeArtifact : undefined;
 }
 
 function fixtureSlot(module: RuntimeUIModule, variant: WorkbenchDemoVariant): UIManifestSlot | undefined {
@@ -243,7 +119,7 @@ function demoArtifact(module: RuntimeUIModule): RuntimeArtifact | undefined {
   if (!demo?.artifactData) return undefined;
   return {
     id: `workbench-demo-${module.moduleId}`,
-    type: demo.artifactType ?? module.acceptsArtifactTypes[0] ?? 'runtime-artifact',
+    type: demo.artifactType ?? module.acceptsArtifactTypes[0] ?? defaultWorkbenchDemoContext.fallbackArtifactType,
     producerScenario: DEMO_SCENARIO,
     schemaVersion: demo.schemaVersion ?? '1',
     data: demo.artifactData,
@@ -342,8 +218,8 @@ function mergeSessionForComponent(base: SciForgeSession, module: RuntimeUIModule
 }
 
 export function availableWorkbenchDemoVariants(module: RuntimeUIModule): WorkbenchDemoVariant[] {
-  const fixtureVariants = packageFixtures[module.componentId] ?? {};
-  const variants = DEMO_VARIANTS.filter((variant) => Boolean(fixtureVariants[variant]));
+  const fixtureVariants = workbenchComponentFixtures[module.componentId] ?? {};
+  const variants = workbenchDemoVariants.filter((variant) => Boolean(fixtureVariants[variant]));
   if (!variants.length && module.workbenchDemo?.artifactData) variants.push('basic');
   return variants;
 }
@@ -355,7 +231,7 @@ export function moduleHasWorkbenchDemo(module: RuntimeUIModule): boolean {
 export function buildWorkbenchArtifactShapeExample(module: RuntimeUIModule, variant: WorkbenchDemoVariant = 'basic'): WorkbenchArtifactShapeExample {
   const artifact = artifactForShape(module, variant);
   return {
-    artifactType: artifact?.type ?? module.acceptsArtifactTypes[0] ?? 'runtime-artifact',
+    artifactType: artifact?.type ?? module.acceptsArtifactTypes[0] ?? defaultWorkbenchDemoContext.fallbackArtifactType,
     schemaVersion: artifact?.schemaVersion ?? module.workbenchDemo?.schemaVersion ?? '1',
     requiredFields: module.requiredFields ?? [],
     requiredAnyFields: module.requiredAnyFields ?? [],
@@ -363,13 +239,7 @@ export function buildWorkbenchArtifactShapeExample(module: RuntimeUIModule, vari
   };
 }
 
-export function workbenchModuleDisplayLabels(modules: RuntimeUIModule[], moduleIds: string[] | undefined): string[] {
-  if (!moduleIds?.length) return [];
-  return moduleIds.map((moduleId) => {
-    const match = modules.find((module) => module.moduleId === moduleId || module.componentId === moduleId);
-    return match?.title ?? moduleId;
-  });
-}
+export const workbenchModuleDisplayLabels = packageWorkbenchModuleDisplayLabels;
 
 export function recommendWorkbenchComponents(
   modules: RuntimeUIModule[],
@@ -397,18 +267,9 @@ export function recommendWorkbenchComponents(
         score += 4;
         reasons.push('required-any fields matched');
       }
-      if (module.componentId === 'volcano-plot' && fields.some((field) => ['logFC', 'negLogP', 'gene'].includes(field))) {
-        score += 3;
-        reasons.push('volcano fields matched');
-      }
-      if (module.componentId === 'umap-viewer' && fields.some((field) => ['umap', 'x', 'y'].includes(field))) {
-        score += 3;
-        reasons.push('embedding fields matched');
-      }
-      if (module.componentId === 'scientific-plot-viewer' && artifactType === 'plot-spec') {
-        score += 6;
-        reasons.push('plot-spec primary renderer');
-      }
+      const boost = workbenchComponentRecommendationBoost({ componentId: module.componentId, artifactType, fields });
+      score += boost.score;
+      reasons.push(...boost.reasons);
       if (!artifactType && !fields.length && module.lifecycle === 'published') {
         score += 1;
         reasons.push('published component');
@@ -445,7 +306,7 @@ export function buildWorkbenchInteractionEventLog(module: RuntimeUIModule, varia
 }
 
 export function buildWorkbenchFigureQA(module: RuntimeUIModule, variant: WorkbenchDemoVariant = 'basic', artifactOverride?: RuntimeArtifact): WorkbenchFigureQA | undefined {
-  if (!['scientific-plot-viewer', 'publication-figure-builder'].includes(module.componentId)) return undefined;
+  if (!shouldBuildWorkbenchFigureQA(module.componentId)) return undefined;
   const artifact = artifactOverride ?? artifactForShape(module, variant);
   const spec = artifactDataForFigureQA(artifact);
   if (!spec) return undefined;

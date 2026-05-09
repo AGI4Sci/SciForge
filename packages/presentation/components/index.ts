@@ -28,6 +28,19 @@ import type { UIComponentManifest } from './types';
 
 export type { PresentationDedupeScope, UIComponentManifest, UIComponentWorkbenchDemo } from './types';
 export type { UIComponentRenderer, UIComponentRendererProps } from './types';
+export {
+  defaultWorkbenchRecommendationInput,
+  defaultWorkbenchDemoContext,
+  normalizeWorkbenchFixtureArtifact,
+  shouldBuildWorkbenchFigureQA,
+  workbenchComponentFixtures,
+  workbenchComponentRecommendationBoost,
+  workbenchDemoVariants,
+  workbenchListEmptyLabels,
+  workbenchModuleDisplayLabels,
+  type WorkbenchDemoVariant,
+} from './workbench-policy';
+export { renderPackageWorkbenchPreview } from './workbench-renderers';
 export { renderReportViewer, coerceReportPayload as coerceReportViewerPayload } from './report-viewer/render';
 export { renderPaperCardList, paperCardListPresentationPolicy, type PaperCardPresentation } from './paper-card-list/render';
 export { renderRecordTable } from './record-table/render';

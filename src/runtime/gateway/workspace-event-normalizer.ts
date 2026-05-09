@@ -8,15 +8,19 @@ import {
   normalizeRuntimeWorkspaceContextWindowSource,
   runtimeAgentBackendCapabilities,
 } from '@sciforge-ui/runtime-contract/agent-backend-policy';
+import {
+  DEFAULT_WORKSPACE_EVENT_TYPE,
+  PROCESS_EVENTS_SCHEMA_VERSION,
+  PROCESS_PROGRESS_EVENT_TYPE,
+  normalizeRuntimeWorkspaceEventType,
+} from '@sciforge-ui/runtime-contract/events';
 import { isRecord, toStringList } from '../gateway-utils.js';
 import { redactSecretText, retryAfterMsFromText } from './backend-failure-diagnostics.js';
 import { collectWorkEvidenceFromBackendEvent } from './work-evidence-types.js';
 
-const DEFAULT_WORKSPACE_EVENT_KIND = 'runtime-event';
-
 export function normalizeAgentServerWorkspaceEvent(raw: unknown): WorkspaceRuntimeEvent {
   const record = isRecord(raw) ? raw : {};
-  const rawType = typeof record.type === 'string' ? record.type : typeof record.kind === 'string' ? record.kind : DEFAULT_WORKSPACE_EVENT_KIND;
+  const rawType = typeof record.type === 'string' ? record.type : typeof record.kind === 'string' ? record.kind : DEFAULT_WORKSPACE_EVENT_TYPE;
   const type = normalizeAgentServerWorkspaceEventType(rawType, record);
   const toolName = typeof record.toolName === 'string' ? record.toolName : undefined;
   const usage = normalizeWorkspaceTokenUsage(record.usage)
@@ -90,13 +94,7 @@ export function withRequestContextWindowLimit(event: WorkspaceRuntimeEvent, requ
 }
 
 export function normalizeAgentServerWorkspaceEventType(type: string, record: Record<string, unknown>) {
-  const lower = type.toLowerCase();
-  if (lower === 'text_delta' || lower === 'token_delta' || lower === 'content_delta') return 'text-delta';
-  if (lower === 'context_compressor' || lower === 'context-compressor') return 'contextCompaction';
-  if (lower === 'ratelimit' || lower === 'rate_limit' || lower === 'rate-limit') return 'rateLimit';
-  if (lower.includes('context_compressor') || record.context_compressor || record.contextCompressor) return 'contextCompaction';
-  if (lower.includes('rate-limit') || lower.includes('rate_limit') || record.rate_limit || record.rateLimit || record.rate_limit_reset || record.rate_limit_reset_at) return 'rateLimit';
-  return type;
+  return normalizeRuntimeWorkspaceEventType(type, record);
 }
 
 export function normalizeWorkspaceContextWindowState(
@@ -283,7 +281,7 @@ export interface WorkspaceProcessProgressStep {
 }
 
 export interface WorkspaceProcessProgressSummary {
-  schemaVersion: 'sciforge.process-events.v1';
+  schemaVersion: typeof PROCESS_EVENTS_SCHEMA_VERSION;
   current: Record<string, unknown> | null;
   summary: string;
   timeline: Array<Record<string, unknown>>;
@@ -311,7 +309,7 @@ export function normalizeWorkspaceProcessEvents(rawEvents: unknown): WorkspacePr
 
   const current = currentWorkspaceProcessProgress(steps);
   return {
-    schemaVersion: 'sciforge.process-events.v1',
+    schemaVersion: PROCESS_EVENTS_SCHEMA_VERSION,
     current: current ? workspaceProcessProgressPayload(current) : null,
     summary: workspaceProcessSummary(steps, current),
     timeline: steps.map(workspaceProcessRawStep),
@@ -500,7 +498,7 @@ function workspaceProcessSummary(steps: WorkspaceProcessProgressStep[], current:
 
 function workspaceProcessProgressEvent(step: WorkspaceProcessProgressStep): WorkspaceProcessProgressSummary['events'][number] {
   return {
-    type: 'process-progress',
+    type: PROCESS_PROGRESS_EVENT_TYPE,
     label: labelForProcessPhase(step.phase),
     status: step.status,
     message: step.title,

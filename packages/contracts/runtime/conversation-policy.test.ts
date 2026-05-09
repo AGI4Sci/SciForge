@@ -8,6 +8,7 @@ import {
   SAFE_DEFAULT_CACHE_POLICY,
   currentUserRequestFromPrompt,
   normalizeConversationPolicyResponse,
+  selectedConversationPolicyCapabilityManifests,
   type ConversationPolicyRequest,
 } from './conversation-policy';
 
@@ -51,4 +52,25 @@ test('conversation policy extracts the current user request from labeled prompt 
   assert.equal(currentUserRequestFromPrompt('system: keep context\nuser: Continue from prior refs'), 'Continue from prior refs');
   assert.equal(currentUserRequestFromPrompt('User : 重新运行失败步骤'), '重新运行失败步骤');
   assert.equal(currentUserRequestFromPrompt('plain current request'), 'plain current request');
+});
+
+test('conversation policy owns selected capability manifest projection', () => {
+  const manifests = selectedConversationPolicyCapabilityManifests({
+    skillDomain: 'literature',
+    selectedToolIds: ['tool.search', 'tool.search'],
+    selectedSenseIds: ['vision-sense'],
+    selectedVerifierIds: ['citation-verifier'],
+    selectedComponentIds: ['paper-table'],
+    expectedArtifactTypes: ['paper-list'],
+  });
+
+  assert.deepEqual(manifests.map((item) => item.id), [
+    'tool.search',
+    'vision-sense',
+    'citation-verifier',
+    'paper-table',
+    'scenario.literature.agentserver-generation',
+  ]);
+  assert.equal(manifests[1].internalAgent, 'optional');
+  assert.deepEqual(manifests[4].artifacts, ['paper-list']);
 });

@@ -9,6 +9,7 @@ import { expectedArtifactsForCurrentTurn, selectedComponentsForCurrentTurn } fro
 import { normalizeAgentResponse } from './agentClient';
 import { DEFAULT_AGENT_REQUEST_TIMEOUT_MS, buildSharedAgentHandoffContract } from '@sciforge-ui/runtime-contract/handoff';
 import { buildAgentHandoffPayload } from '@sciforge-ui/runtime-contract/handoff-payload';
+import { projectToolDoneEvent, projectToolStartedEvent } from '@sciforge-ui/runtime-contract';
 import {
   contextWindowTelemetryEvent,
   normalizeWorkspaceRuntimeEvent,
@@ -103,7 +104,7 @@ export async function sendSciForgeToolMessage(
   }, 10_000);
   try {
     callbacks.onEvent?.(toolEvent('current-plan', `当前计划：发送用户原始请求、显式引用和 session 事实到 workspace runtime；上下文选择、digest、能力筛选、验收和恢复由 Python conversation-policy 决定。`));
-    callbacks.onEvent?.(toolEvent('project-tool-start', `SciForge ${builtInScenarioId} project tool started`));
+    callbacks.onEvent?.(projectToolStartedEvent({ id: makeId('evt'), createdAt: nowIso() }, builtInScenarioId));
     const sharedAgentContract = buildSharedAgentHandoffContract('ui-chat');
     const selectedSenseIds = selectedRuntimeSenseIds(input, selectedToolIds);
     const selectedActionIds = selectedRuntimeActionIds(input);
@@ -241,9 +242,7 @@ export async function sendSciForgeToolMessage(
     throw new Error(error || `SciForge project tool failed: HTTP ${response?.status ?? 'no-response'}`);
   }
   const completion = workspaceResultCompletion(result);
-  callbacks.onEvent?.(toolEvent('project-tool-done', completion.status === 'failed'
-    ? `SciForge ${builtInScenarioId} 未完成：${completion.reason ?? '后台返回 repair-needed/failed-with-reason 诊断，未产出用户要求的最终结果。'}`
-    : `SciForge ${builtInScenarioId} project tool completed`));
+  callbacks.onEvent?.(projectToolDoneEvent({ id: makeId('evt'), createdAt: nowIso() }, builtInScenarioId, completion));
   return normalizeAgentResponse(builtInScenarioId, input.prompt, {
     ok: true,
     data: {

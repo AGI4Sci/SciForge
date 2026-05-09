@@ -3,6 +3,7 @@ import {
   uiComponentCompatibilityAliases,
   uiComponentManifests,
 } from '../components';
+import type { PreviewDescriptorKind } from '@sciforge-ui/runtime-contract/preview';
 
 export type RuntimeUiManifestPolicyRequest = {
   prompt: string;
@@ -100,6 +101,15 @@ const ARTIFACT_COMPONENTS: Record<string, string> = {
   'omics-differential-expression': 'point-set-viewer',
   'knowledge-graph': 'graph-viewer',
   'data-table': 'record-table',
+};
+
+const PREVIEW_KIND_COMPONENTS: Partial<Record<PreviewDescriptorKind, string>> = {
+  markdown: 'report-viewer',
+  text: 'report-viewer',
+  json: 'unknown-artifact-inspector',
+  table: 'record-table',
+  html: 'report-viewer',
+  structure: 'structure-viewer',
 };
 
 const INTENT_ARTIFACT_RULES: Array<{ artifactType: string; matches: (text: string) => boolean }> = [
@@ -243,6 +253,10 @@ export function runtimeResultViewSlotsPolicy(request: RuntimeResultViewSlotsPoli
     priority: priorityStart + slots.length,
   });
   return slots;
+}
+
+export function preferredInteractiveViewComponentForPreviewKind(kind: PreviewDescriptorKind) {
+  return PREVIEW_KIND_COMPONENTS[kind] ?? 'unknown-artifact-inspector';
 }
 
 export function reportRuntimeResultViewSlots(reportArtifactRef: string, runtimeResultRef: string) {

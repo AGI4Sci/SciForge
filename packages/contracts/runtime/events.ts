@@ -1,5 +1,5 @@
 import type { RuntimeArtifact } from './artifacts';
-import type { AgentCompactCapability, AgentContextCompaction, AgentContextWindowSource, AgentContextWindowState } from './stream';
+import type { AgentCompactCapability, AgentContextCompaction, AgentContextWindowSource, AgentContextWindowState, AgentStreamEvent } from './stream';
 import type { RuntimeExecutionUnit } from './execution';
 import type { ObjectReference } from './references';
 
@@ -45,13 +45,72 @@ export interface BackgroundCompletionRuntimeEvent {
 }
 
 export const WORKSPACE_RUNTIME_EVENT_TYPE = 'workspace-runtime-event';
+export const PROJECT_TOOL_STARTED_EVENT_TYPE = 'project-tool-start';
+export const PROJECT_TOOL_DONE_EVENT_TYPE = 'project-tool-done';
 export const PROJECT_TOOL_FAILED_EVENT_TYPE = 'project-tool-failed';
+export const TARGET_ISSUE_LOOKUP_FAILED_EVENT_TYPE = 'target-issue-lookup-failed';
+export const TARGET_ISSUE_READ_EVENT_TYPE = 'target-issue-read';
+export const TARGET_INSTANCE_CONTEXT_EVENT_TYPE = 'target-instance-context';
+export const TARGET_WORKTREE_PREPARING_EVENT_TYPE = 'target-worktree-preparing';
+export const TARGET_REPAIR_MODIFYING_EVENT_TYPE = 'target-repair-modifying';
+export const TARGET_REPAIR_TESTING_EVENT_TYPE = 'target-repair-testing';
+export const TARGET_REPAIR_WRITTEN_BACK_EVENT_TYPE = 'target-repair-written-back';
+export const DEFAULT_WORKSPACE_EVENT_TYPE = 'runtime-event' as const;
+export const TEXT_DELTA_EVENT_TYPE = 'text-delta' as const;
+export const CONTEXT_COMPACTION_EVENT_TYPE = 'contextCompaction' as const;
+export const CONTEXT_WINDOW_STATE_EVENT_TYPE = 'contextWindowState' as const;
+export const RATE_LIMIT_EVENT_TYPE = 'rateLimit' as const;
+export const BACKEND_EVENT_TYPE = 'backend-event' as const;
+export const AGENTSERVER_EVENT_TYPE_PREFIX = 'agentserver-' as const;
+export const PROCESS_PROGRESS_EVENT_TYPE = 'process-progress' as const;
+export const PROCESS_EVENTS_SCHEMA_VERSION = 'sciforge.process-events.v1' as const;
+export const LATENCY_DIAGNOSTICS_SCHEMA_VERSION = 'sciforge.latency-diagnostics.v1' as const;
+export const LATENCY_DIAGNOSTICS_EVENT_TYPE = 'latency-diagnostics' as const;
+export const LATENCY_DIAGNOSTICS_REF = 'runtime://latency-diagnostics' as const;
+export const LATENCY_DIAGNOSTICS_LOG_KIND = 'latency-diagnostics' as const;
+export const WORKSPACE_RUNTIME_SOURCE = 'workspace-runtime' as const;
+export const SCIFORGE_RUNTIME_PROVIDER = 'sciforge-runtime' as const;
+export const CONVERSATION_POLICY_EVENT_TYPE = 'conversation-policy' as const;
+export const AGENTSERVER_CONTEXT_WINDOW_STATE_EVENT_TYPE = 'agentserver-context-window-state' as const;
+
+export const LATENCY_DIAGNOSTICS_CACHE_POLICY_KEYS = [
+  'reuseScenarioPlan',
+  'reuseSkillPlan',
+  'reuseUiPlan',
+  'reuseReferenceDigests',
+  'reuseArtifactIndex',
+  'reuseLastSuccessfulStage',
+  'reuseBackendSession',
+] as const;
+
+export const USER_VISIBLE_EVENT_EXCLUSION_TYPES = [
+  LATENCY_DIAGNOSTICS_EVENT_TYPE,
+  CONVERSATION_POLICY_EVENT_TYPE,
+  CONTEXT_WINDOW_STATE_EVENT_TYPE,
+] as const;
 
 export type WorkspaceRuntimeCompletionStatus = 'completed' | 'failed';
+export type ProjectToolEventType =
+  | typeof PROJECT_TOOL_STARTED_EVENT_TYPE
+  | typeof PROJECT_TOOL_DONE_EVENT_TYPE
+  | typeof PROJECT_TOOL_FAILED_EVENT_TYPE;
+export type TargetIssueEventType =
+  | typeof TARGET_ISSUE_LOOKUP_FAILED_EVENT_TYPE
+  | typeof TARGET_ISSUE_READ_EVENT_TYPE
+  | typeof TARGET_INSTANCE_CONTEXT_EVENT_TYPE
+  | typeof TARGET_WORKTREE_PREPARING_EVENT_TYPE
+  | typeof TARGET_REPAIR_MODIFYING_EVENT_TYPE
+  | typeof TARGET_REPAIR_TESTING_EVENT_TYPE
+  | typeof TARGET_REPAIR_WRITTEN_BACK_EVENT_TYPE;
 
 export interface WorkspaceRuntimeResultCompletion {
   status: WorkspaceRuntimeCompletionStatus;
   reason?: string;
+}
+
+export interface RuntimeEventIdentity {
+  id: string;
+  createdAt: string;
 }
 
 const BLOCKING_RUNTIME_STATUSES = new Set(['repair-needed', 'failed-with-reason', 'failed']);
@@ -76,6 +135,45 @@ function normalizedStatus(value: unknown) {
 export function workspaceRuntimeResultCompletion(result: Record<string, unknown>): WorkspaceRuntimeResultCompletion {
   const failure = firstBlockingRuntimeResultReason(result);
   return failure ? { status: 'failed', reason: failure } : { status: 'completed' };
+}
+
+export function normalizeRuntimeWorkspaceEventType(type: string, record: Record<string, unknown>) {
+  const lower = type.toLowerCase();
+  if (lower === 'text_delta' || lower === 'token_delta' || lower === 'content_delta') return TEXT_DELTA_EVENT_TYPE;
+  if (lower === 'context_compressor' || lower === 'context-compressor') return CONTEXT_COMPACTION_EVENT_TYPE;
+  if (lower === 'ratelimit' || lower === 'rate_limit' || lower === 'rate-limit') return RATE_LIMIT_EVENT_TYPE;
+  if (lower.includes('context_compressor') || record.context_compressor || record.contextCompressor) return CONTEXT_COMPACTION_EVENT_TYPE;
+  if (lower.includes('rate-limit') || lower.includes('rate_limit') || record.rate_limit || record.rateLimit || record.rate_limit_reset || record.rate_limit_reset_at) return RATE_LIMIT_EVENT_TYPE;
+  return type;
+}
+
+export function runtimeEventIsUserVisible(event: {
+  type: string;
+  text?: unknown;
+  output?: unknown;
+  message?: unknown;
+}) {
+  if ((USER_VISIBLE_EVENT_EXCLUSION_TYPES as readonly string[]).includes(event.type)) return false;
+  if (event.text || event.output) return true;
+  return Boolean(event.message);
+}
+
+export function runtimeEventIsBackend(event: {
+  type: string;
+  source?: unknown;
+}) {
+  if (typeof event.source === 'string' && event.source && event.source !== WORKSPACE_RUNTIME_SOURCE) return true;
+  return event.type.startsWith(AGENTSERVER_EVENT_TYPE_PREFIX) || event.type === BACKEND_EVENT_TYPE;
+}
+
+export function latencyDiagnosticsCachePolicy(policy: Record<string, unknown>) {
+  const hits: string[] = [];
+  const misses: string[] = [];
+  for (const key of LATENCY_DIAGNOSTICS_CACHE_POLICY_KEYS) {
+    if (policy[key] === true) hits.push(key);
+    else if (policy[key] === false) misses.push(key);
+  }
+  return { hits, misses };
 }
 
 export function firstBlockingRuntimeResultReason(result: Record<string, unknown>): string | undefined {
@@ -190,12 +288,12 @@ export function normalizeRuntimeContextCompactionStatus(
 }
 
 export function runtimeStreamEventLabel(type: string, source?: string, toolName?: string) {
-  if (type === 'contextWindowState') return '上下文窗口';
-  if (type === 'contextCompaction') return '上下文压缩';
+  if (type === CONTEXT_WINDOW_STATE_EVENT_TYPE) return '上下文窗口';
+  if (type === CONTEXT_COMPACTION_EVENT_TYPE) return '上下文压缩';
   if (type === 'run-plan') return '计划';
   if (type === 'stage-start') return '阶段';
-  if (type === 'process-progress') return '过程';
-  if (type === 'text-delta') return '思考';
+  if (type === PROCESS_PROGRESS_EVENT_TYPE) return '过程';
+  if (type === TEXT_DELTA_EVENT_TYPE) return '思考';
   if (type === 'tool-call') return toolName ? `调用 ${toolName}` : '工具调用';
   if (type === 'tool-result') return toolName ? `结果 ${toolName}` : '工具结果';
   if (type === 'status') return source === 'agentserver' ? 'AgentServer 状态' : '运行状态';
@@ -210,4 +308,149 @@ export function runtimeDetailIndicatesAbort(detail: string) {
 
 export function projectToolFailureDetail(detail: string) {
   return `SciForge project tool unavailable: ${detail}`;
+}
+
+export function projectToolStartDetail(scenarioId: string) {
+  return `SciForge ${scenarioId} project tool started`;
+}
+
+export function projectToolDoneDetail(scenarioId: string, completion: WorkspaceRuntimeResultCompletion) {
+  return completion.status === 'failed'
+    ? `SciForge ${scenarioId} 未完成：${completion.reason ?? '后台返回 repair-needed/failed-with-reason 诊断，未产出用户要求的最终结果。'}`
+    : `SciForge ${scenarioId} project tool completed`;
+}
+
+export function projectToolEvent(
+  identity: RuntimeEventIdentity,
+  type: ProjectToolEventType,
+  detail: string,
+): AgentStreamEvent {
+  return {
+    id: identity.id,
+    type,
+    label: '项目工具',
+    detail,
+    createdAt: identity.createdAt,
+    raw: { type, detail },
+  };
+}
+
+export function projectToolStartedEvent(identity: RuntimeEventIdentity, scenarioId: string): AgentStreamEvent {
+  return projectToolEvent(identity, PROJECT_TOOL_STARTED_EVENT_TYPE, projectToolStartDetail(scenarioId));
+}
+
+export function projectToolDoneEvent(
+  identity: RuntimeEventIdentity,
+  scenarioId: string,
+  completion: WorkspaceRuntimeResultCompletion,
+): AgentStreamEvent {
+  return projectToolEvent(identity, PROJECT_TOOL_DONE_EVENT_TYPE, projectToolDoneDetail(scenarioId, completion));
+}
+
+export function projectToolFailedEvent(identity: RuntimeEventIdentity, detail: string): AgentStreamEvent {
+  const eventDetail = projectToolFailureDetail(detail);
+  return {
+    ...projectToolEvent(identity, PROJECT_TOOL_FAILED_EVENT_TYPE, eventDetail),
+    raw: { error: detail },
+  };
+}
+
+export function targetIssueLookupFailedEvent(
+  identity: RuntimeEventIdentity,
+  detail: string,
+  raw?: unknown,
+): AgentStreamEvent {
+  return {
+    id: identity.id,
+    type: TARGET_ISSUE_LOOKUP_FAILED_EVENT_TYPE,
+    label: '目标 issue',
+    detail,
+    createdAt: identity.createdAt,
+    raw,
+  };
+}
+
+export function targetIssueReadEvent(
+  identity: RuntimeEventIdentity,
+  input: { peerName: string; issueId?: string; raw?: unknown },
+): AgentStreamEvent {
+  return {
+    id: identity.id,
+    type: TARGET_ISSUE_READ_EVENT_TYPE,
+    label: '已读取 B issue',
+    detail: `已从 ${input.peerName} 读取 issue bundle ${input.issueId ?? ''}。`,
+    createdAt: identity.createdAt,
+    raw: input.raw,
+  };
+}
+
+export function targetInstanceContextEvent(
+  identity: RuntimeEventIdentity,
+  input: { peerName: string; summaryCount?: number; banner: string; raw?: unknown },
+): AgentStreamEvent {
+  return {
+    id: identity.id,
+    type: TARGET_INSTANCE_CONTEXT_EVENT_TYPE,
+    label: '目标实例',
+    detail: input.summaryCount !== undefined
+      ? `已从 ${input.peerName} 读取 ${input.summaryCount} 条 issue 摘要。`
+      : input.banner,
+    createdAt: identity.createdAt,
+    raw: input.raw,
+  };
+}
+
+export function targetWorktreePreparingEvent(
+  identity: RuntimeEventIdentity,
+  input: TargetRepairStageEventInput,
+): AgentStreamEvent {
+  return targetRepairStageEvent(identity, TARGET_WORKTREE_PREPARING_EVENT_TYPE, '正在准备 B worktree', input);
+}
+
+export function targetRepairModifyingEvent(
+  identity: RuntimeEventIdentity,
+  input: TargetRepairStageEventInput,
+): AgentStreamEvent {
+  return targetRepairStageEvent(identity, TARGET_REPAIR_MODIFYING_EVENT_TYPE, '正在修改 B', input);
+}
+
+export function targetRepairTestingEvent(
+  identity: RuntimeEventIdentity,
+  input: TargetRepairStageEventInput,
+): AgentStreamEvent {
+  return targetRepairStageEvent(identity, TARGET_REPAIR_TESTING_EVENT_TYPE, '正在测试', input);
+}
+
+export function targetRepairWrittenBackEvent(
+  identity: RuntimeEventIdentity,
+  input: TargetRepairStageEventInput,
+): AgentStreamEvent {
+  return targetRepairStageEvent(identity, TARGET_REPAIR_WRITTEN_BACK_EVENT_TYPE, '已写回 B', input);
+}
+
+interface TargetRepairStageEventInput {
+  targetName: string;
+  issueRef?: string;
+  targetInstance?: unknown;
+  issueId?: string;
+}
+
+function targetRepairStageEvent(
+  identity: RuntimeEventIdentity,
+  type: TargetIssueEventType,
+  label: string,
+  input: TargetRepairStageEventInput,
+): AgentStreamEvent {
+  return {
+    id: identity.id,
+    type,
+    label,
+    detail: `${label}：${input.targetName} / ${input.issueRef ?? ''}`,
+    createdAt: identity.createdAt,
+    raw: {
+      targetInstance: input.targetInstance,
+      issueId: input.issueId,
+      executionBoundary: 'repair-handoff-runner-target-worktree',
+    },
+  };
 }

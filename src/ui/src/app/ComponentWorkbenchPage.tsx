@@ -15,7 +15,7 @@ import type { SciForgeConfig } from '../domain';
 import { acceptedArtifactTypesForComponent, artifactTypesForComponents, uiModuleRegistry, type RuntimeUIModule } from '../uiModuleRegistry';
 import { renderRegisteredWorkbenchSlot } from './ResultsRenderer';
 import { ActionButton, Badge, SectionHeader, cx } from './uiPrimitives';
-import { renderScientificPlotViewer } from '@sciforge-ui/components/scientific-plot-viewer/render';
+import { defaultWorkbenchRecommendationInput, renderPackageWorkbenchPreview, workbenchListEmptyLabels } from '@sciforge-ui/components';
 
 type LifecycleFilter = 'all' | RuntimeUIModule['lifecycle'];
 
@@ -59,7 +59,7 @@ function lifecycleVariant(lifecycle: RuntimeUIModule['lifecycle']) {
   return 'muted';
 }
 
-function formatList(values: string[] | undefined, emptyLabel = 'none') {
+function formatList(values: string[] | undefined, emptyLabel: string = workbenchListEmptyLabels.default) {
   if (!values?.length) return <span className="component-muted">{emptyLabel}</span>;
   return values.map((value) => <code key={value}>{value}</code>);
 }
@@ -112,9 +112,8 @@ function figureQaRows(qa: ReturnType<typeof buildWorkbenchFigureQA>) {
   ];
 }
 
-function renderWorkbenchPreview(module: RuntimeUIModule, props: ReturnType<typeof buildWorkbenchDemoRenderProps>) {
-  if (module.componentId === 'scientific-plot-viewer') return <>{renderScientificPlotViewer(props)}</>;
-  return renderRegisteredWorkbenchSlot(props);
+function renderWorkbenchPreview(props: ReturnType<typeof buildWorkbenchDemoRenderProps>) {
+  return renderPackageWorkbenchPreview(props, renderRegisteredWorkbenchSlot);
 }
 
 export function ComponentWorkbenchPage({
@@ -132,8 +131,8 @@ export function ComponentWorkbenchPage({
   const [copiedArtifactId, setCopiedArtifactId] = useState<string | null>(null);
   const [demoModuleKey, setDemoModuleKey] = useState<string | null>(null);
   const [demoVariant, setDemoVariant] = useState<WorkbenchDemoVariant>('basic');
-  const [agentArtifactType, setAgentArtifactType] = useState('omics-differential-expression');
-  const [agentArtifactSchema, setAgentArtifactSchema] = useState('points logFC negLogP gene');
+  const [agentArtifactType, setAgentArtifactType] = useState<string>(defaultWorkbenchRecommendationInput.artifactType);
+  const [agentArtifactSchema, setAgentArtifactSchema] = useState<string>(defaultWorkbenchRecommendationInput.artifactSchemaText);
   const allComponentIds = useMemo(() => uniqueComponentIds(), []);
   const publishedComponentIds = useMemo(
     () => allComponentIds.filter((componentId) => modulesForComponent(componentId).some((module) => module.lifecycle === 'published')),
@@ -312,7 +311,7 @@ export function ComponentWorkbenchPage({
                         {copiedArtifactId === artifactJsonId ? '已复制 artifact JSON' : '复制 artifact JSON'}
                       </button>
                     </div>
-                    {renderWorkbenchPreview(module, demoProps)}
+                    {renderWorkbenchPreview(demoProps)}
                     <div className="component-row-grid" aria-label="Agent artifact shape">
                       <div>
                         <span>artifact shape</span>
@@ -326,7 +325,7 @@ export function ComponentWorkbenchPage({
                       </div>
                       <div>
                         <span>interaction event log</span>
-                        <pre>{eventLog.length ? eventLog.join('\n') : 'no interaction events declared'}</pre>
+                        <pre>{eventLog.length ? eventLog.join('\n') : workbenchListEmptyLabels.noInteractionEvents}</pre>
                       </div>
                     </div>
                     {qaRows.length ? (
@@ -359,7 +358,7 @@ export function ComponentWorkbenchPage({
                   </div>
                   <div>
                     <span>outputs</span>
-                    <div>{formatList(module.outputArtifactTypes, 'backend-decides')}</div>
+                    <div>{formatList(module.outputArtifactTypes, workbenchListEmptyLabels.backendDecides)}</div>
                   </div>
                   <div>
                     <span>events</span>
@@ -422,7 +421,7 @@ export function ComponentWorkbenchPage({
           <div className="component-contract-header">
             <div>
               <strong>运行时组件 Contract</strong>
-              <span>{selectedComponentIds.length ? selectedComponentIds.join(', ') : '未选择组件，运行时回到 backend-decides'}</span>
+              <span>{selectedComponentIds.length ? selectedComponentIds.join(', ') : `未选择组件，运行时回到 ${workbenchListEmptyLabels.backendDecides}`}</span>
             </div>
             <button type="button" onClick={copyContract} title="复制 contract" aria-label="复制 contract">
               <Copy size={15} />

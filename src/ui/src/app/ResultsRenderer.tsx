@@ -7,15 +7,18 @@ import { artifactPreviewActions, objectReferenceKinds, previewDescriptorKinds, r
 import { openWorkspaceObject, readPreviewDerivative, readPreviewDescriptor, readWorkspaceFile, writeWorkspaceFile, type WorkspaceFileContent } from '../api/workspaceClient';
 import { uiModuleRegistry } from '../uiModuleRegistry';
 import {
-  renderGraphViewer,
-  renderMatrixViewer,
-  renderPaperCardList,
-  renderPointSetViewer,
-  renderRecordTable,
-  renderReportViewer,
-  renderStructureViewer,
+  interactiveArtifactDownloadItems,
+  interactiveArtifactInspectorTablePolicy,
+  interactiveResultSlotSubtitle,
+  interactiveUnknownComponentFallbackPolicy,
+  interactiveViewComponentLabel,
+  interactiveViewPackageRendererForComponent,
+  isEvidenceInteractiveViewComponent,
+  isExecutionInteractiveViewComponent,
+  isNotebookInteractiveViewComponent,
+  isUnknownArtifactInspectorComponent,
   type UIComponentRendererProps,
-} from '../../../../packages/presentation/components';
+} from '../../../../packages/presentation/interactive-views';
 import type { ContractValidationFailure, ContractValidationFailureKind } from '@sciforge-ui/runtime-contract';
 import { exportJsonFile, exportTextFile } from './exportUtils';
 import { ActionButton, Badge, Card, ClaimTag, ConfidenceBar, EmptyArtifactState, SectionHeader, cx } from './uiPrimitives';
@@ -37,11 +40,9 @@ import {
 export { selectDefaultResultItems, type HandoffAutoRunRequest } from './results/viewPlanResolver';
 import { MarkdownBlock, hydrateInlineObjectReferenceButtons } from './results/reportContent';
 export { coerceReportPayload } from './results/reportContent';
-import { artifactDownloadItems } from './results/artifactData';
 import {
   asString,
   asStringList,
-  artifactMeta,
   artifactSource,
   compactParams,
   executionUnitForArtifact,
@@ -365,11 +366,7 @@ type RegistryEntry = {
 
 function UnknownArtifactInspector({ slot, artifact, session }: RegistryRendererProps) {
   const payload = artifact?.data ?? slot.props ?? {};
-  const rows = Array.isArray(payload)
-    ? payload.filter(isRecord)
-    : isRecord(payload) && Array.isArray(payload.rows)
-      ? payload.rows.filter(isRecord)
-      : [];
+  const table = interactiveArtifactInspectorTablePolicy(payload);
   const unit = session ? executionUnitForArtifact(session, artifact) : undefined;
   const refs = [
     artifact?.dataRef ? { label: 'dataRef', value: artifact.dataRef } : undefined,
@@ -378,7 +375,6 @@ function UnknownArtifactInspector({ slot, artifact, session }: RegistryRendererP
     unit?.stderrRef ? { label: 'stderrRef', value: unit.stderrRef } : undefined,
     unit?.outputRef ? { label: 'outputRef', value: unit.outputRef } : undefined,
   ].filter((item): item is { label: string; value: string } => Boolean(item));
-  const columns = rows.length ? Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 6) : [];
   return (
     <div className="stack">
       <ArtifactSourceBar artifact={artifact} session={session} />
@@ -395,14 +391,14 @@ function UnknownArtifactInspector({ slot, artifact, session }: RegistryRendererP
           ))}
         </div>
       ) : null}
-      {rows.length ? (
+      {table.rows.length ? (
         <div className="artifact-table">
-          <div className="artifact-table-head" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(120px, 1fr))` }}>
-            {columns.map((column) => <span key={column}>{column}</span>)}
+          <div className="artifact-table-head" style={{ gridTemplateColumns: table.gridTemplateColumns }}>
+            {table.columns.map((column) => <span key={column}>{column}</span>)}
           </div>
-          {rows.slice(0, 20).map((row, index) => (
-            <div className="artifact-table-row" key={index} style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(120px, 1fr))` }}>
-              {columns.map((column) => <span key={column}>{String(row[column] ?? '-')}</span>)}
+          {table.rows.slice(0, table.rowLimit).map((row, index) => (
+            <div className="artifact-table-row" key={index} style={{ gridTemplateColumns: table.gridTemplateColumns }}>
+              {table.columns.map((column) => <span key={column}>{String(row[column] ?? '-')}</span>)}
             </div>
           ))}
         </div>
@@ -414,7 +410,7 @@ function UnknownArtifactInspector({ slot, artifact, session }: RegistryRendererP
 }
 
 function ArtifactDownloads({ artifact }: { artifact?: RuntimeArtifact }) {
-  const downloads = artifactDownloadItems(artifact);
+  const downloads = interactiveArtifactDownloadItems(artifact);
   if (!downloads.length) return null;
   return (
     <div className="artifact-downloads">
@@ -518,63 +514,49 @@ function packageRendererProps(props: RegistryRendererProps): UIComponentRenderer
   };
 }
 
-function PackageReportViewer(props: UIComponentRendererProps) {
-  return <>{renderReportViewer(props)}</>;
+function registryEntryForComponent(componentId: string): RegistryEntry | undefined {
+  const packageEntry = interactiveViewPackageRendererForComponent(componentId);
+  if (packageEntry) {
+    return {
+      label: packageEntry.label,
+      render: (props) => <>{packageEntry.render(packageRendererProps(props))}</>,
+    };
+  }
+  if (isEvidenceInteractiveViewComponent(componentId)) {
+    return {
+      label: interactiveViewComponentLabel(componentId),
+      render: ({ session }) => <EvidenceMatrix claims={session.claims} artifacts={session.artifacts} />,
+    };
+  }
+  if (isExecutionInteractiveViewComponent(componentId)) {
+    return {
+      label: interactiveViewComponentLabel(componentId),
+      render: ({ session }) => <ExecutionPanel session={session} executionUnits={session.executionUnits} embedded />,
+    };
+  }
+  if (isNotebookInteractiveViewComponent(componentId)) {
+    return {
+      label: interactiveViewComponentLabel(componentId),
+      render: ({ scenarioId, session }) => <NotebookTimeline scenarioId={scenarioId} notebook={session.notebook} />,
+    };
+  }
+  if (isUnknownArtifactInspectorComponent(componentId)) {
+    return {
+      label: interactiveViewComponentLabel(componentId),
+      render: (props) => <UnknownArtifactInspector {...props} />,
+    };
+  }
+  return undefined;
 }
-
-function PackagePaperCardList(props: UIComponentRendererProps) {
-  return <>{renderPaperCardList(props)}</>;
-}
-
-function PackageRecordTable(props: UIComponentRendererProps) {
-  return <>{renderRecordTable(props)}</>;
-}
-
-function PackageGraphViewer(props: UIComponentRendererProps) {
-  return <>{renderGraphViewer(props)}</>;
-}
-
-function PackagePointSetViewer(props: UIComponentRendererProps) {
-  return <>{renderPointSetViewer(props)}</>;
-}
-
-function PackageMatrixViewer(props: UIComponentRendererProps) {
-  return <>{renderMatrixViewer(props)}</>;
-}
-
-function PackageStructureViewer(props: UIComponentRendererProps) {
-  return <>{renderStructureViewer(props)}</>;
-}
-
-const componentRegistry: Record<string, RegistryEntry> = {
-  'report-viewer': { label: 'ReportViewer', render: (props) => <PackageReportViewer {...packageRendererProps(props)} /> },
-  'paper-card-list': { label: 'PaperCardList', render: (props) => <PackagePaperCardList {...packageRendererProps(props)} /> },
-  'structure-viewer': { label: 'StructureViewer', render: (props) => <PackageStructureViewer {...packageRendererProps(props)} /> },
-  'molecule-viewer': { label: 'MoleculeViewer', render: (props) => <PackageStructureViewer {...packageRendererProps(props)} /> },
-  'molecule-viewer-3d': { label: 'MoleculeViewer3D', render: (props) => <PackageStructureViewer {...packageRendererProps(props)} /> },
-  'point-set-viewer': { label: 'PointSetViewer', render: (props) => <PackagePointSetViewer {...packageRendererProps(props)} /> },
-  'volcano-plot': { label: 'VolcanoPlot', render: (props) => <PackagePointSetViewer {...packageRendererProps(props)} /> },
-  'umap-viewer': { label: 'UmapViewer', render: (props) => <PackagePointSetViewer {...packageRendererProps(props)} /> },
-  'matrix-viewer': { label: 'MatrixViewer', render: (props) => <PackageMatrixViewer {...packageRendererProps(props)} /> },
-  'heatmap-viewer': { label: 'HeatmapViewer', render: (props) => <PackageMatrixViewer {...packageRendererProps(props)} /> },
-  'graph-viewer': { label: 'GraphViewer', render: (props) => <PackageGraphViewer {...packageRendererProps(props)} /> },
-  'network-graph': { label: 'NetworkGraph', render: (props) => <PackageGraphViewer {...packageRendererProps(props)} /> },
-  'evidence-matrix': { label: 'EvidenceMatrix', render: ({ session }) => <EvidenceMatrix claims={session.claims} artifacts={session.artifacts} /> },
-  'execution-unit-table': { label: 'ExecutionUnitTable', render: ({ session }) => <ExecutionPanel session={session} executionUnits={session.executionUnits} embedded /> },
-  'notebook-timeline': { label: 'NotebookTimeline', render: ({ scenarioId, session }) => <NotebookTimeline scenarioId={scenarioId} notebook={session.notebook} /> },
-  'record-table': { label: 'RecordTable', render: (props) => <PackageRecordTable {...packageRendererProps(props)} /> },
-  'data-table': { label: 'DataTable', render: (props) => <PackageRecordTable {...packageRendererProps(props)} /> },
-  'unknown-artifact-inspector': { label: 'UnknownArtifactInspector', render: (props) => <UnknownArtifactInspector {...props} /> },
-};
 
 export type WorkbenchSlotRenderProps = RegistryRendererProps;
 
 export function renderRegisteredWorkbenchSlot(props: RegistryRendererProps): ReactNode {
-  const entry = componentRegistry[props.slot.componentId];
+  const entry = registryEntryForComponent(props.slot.componentId);
   if (!entry) {
     return (
       <EmptyArtifactState
-        title="未注册组件"
+        title={interactiveUnknownComponentFallbackPolicy({ componentId: props.slot.componentId }).title}
         detail={`componentId: ${props.slot.componentId}`}
       />
     );
@@ -1445,17 +1427,23 @@ function RegistrySlot({
   const [handoffPreviewTarget, setHandoffPreviewTarget] = useState<ScenarioId | undefined>();
   const { slot, module } = item;
   const artifact = item.artifact ?? findArtifact(session, slot.artifactRef);
-  const entry = componentRegistry[slot.componentId];
+  const entry = registryEntryForComponent(slot.componentId);
   const handoffTargets = artifact ? handoffTargetsForArtifact(artifact, scenarioId) : [];
   if (!entry) {
+    const fallback = interactiveUnknownComponentFallbackPolicy({
+      componentId: slot.componentId,
+      artifactRef: slot.artifactRef,
+      artifactFound: Boolean(artifact),
+      slotTitle: slot.title,
+    });
     return (
       <Card
         className="registry-slot"
         data-sciforge-reference={sciForgeReferenceAttribute(artifact ? referenceForArtifact(artifact, artifactReferenceKind(artifact)) : referenceForResultSlot(item))}
       >
-        <SectionHeader icon={AlertTriangle} title={slot.title ?? '未注册组件'} subtitle={slot.componentId} />
-        <p className="empty-state">Scenario 返回了未知 componentId。当前使用通用 inspector 展示 artifact、manifest 和日志引用。</p>
-        {slot.artifactRef && !artifact ? <p className="empty-state">artifactRef 未找到：{slot.artifactRef}</p> : null}
+        <SectionHeader icon={AlertTriangle} title={fallback.title} subtitle={fallback.subtitle} />
+        <p className="empty-state">{fallback.detail}</p>
+        {fallback.missingArtifactDetail ? <p className="empty-state">{fallback.missingArtifactDetail}</p> : null}
         <ArtifactCardControls
           presentationId={item.id}
           onDismissResultSlotPresentation={onDismissResultSlotPresentation}
@@ -1494,10 +1482,7 @@ function RegistrySlot({
 }
 
 function resultSlotSubtitle(item: ResolvedViewPlanItem, artifact?: RuntimeArtifact) {
-  if (artifact) return `${artifact.type} · ${artifact.id}`;
-  if (item.status === 'missing-fields') return `数据字段不完整 · ${item.slot.artifactRef ?? item.module.componentId}`;
-  if (item.status === 'missing-artifact') return `等待 ${item.slot.artifactRef ?? item.module.acceptsArtifactTypes[0] ?? 'artifact'}`;
-  return item.module.title;
+  return interactiveResultSlotSubtitle(item, artifact);
 }
 
 function ArtifactInspectorDrawer({
@@ -1521,7 +1506,7 @@ function ArtifactInspectorDrawer({
     unit?.stdoutRef ? ['stdoutRef', unit.stdoutRef] : undefined,
     unit?.stderrRef ? ['stderrRef', unit.stderrRef] : undefined,
     unit?.outputRef ? ['outputRef', unit.outputRef] : undefined,
-    ...artifactDownloadItems(artifact).map((item) => [item.name, item.path || item.key || 'download payload'] as [string, string]),
+    ...interactiveArtifactDownloadItems(artifact).map((item) => [item.name, item.path || item.key || 'download payload'] as [string, string]),
   ].filter((item): item is [string, string] => Boolean(item));
   const lineage = [
     ['producer scenario', artifact.producerScenario],

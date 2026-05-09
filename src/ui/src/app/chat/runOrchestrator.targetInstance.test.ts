@@ -3,6 +3,14 @@ import { afterEach, describe, it } from 'node:test';
 
 import type { AgentStreamEvent, PeerInstance, SciForgeConfig, SciForgeSession } from '../../domain';
 import {
+  TARGET_ISSUE_LOOKUP_FAILED_EVENT_TYPE,
+  TARGET_ISSUE_READ_EVENT_TYPE,
+  TARGET_REPAIR_MODIFYING_EVENT_TYPE,
+  TARGET_REPAIR_TESTING_EVENT_TYPE,
+  TARGET_REPAIR_WRITTEN_BACK_EVENT_TYPE,
+  TARGET_WORKTREE_PREPARING_EVENT_TYPE,
+} from '@sciforge-ui/runtime-contract';
+import {
   runPreflightContextCompaction,
   runPromptOrchestrator,
   shouldBlockOnPreflightContextCompaction,
@@ -50,7 +58,69 @@ describe('runPromptOrchestrator target instance guard', () => {
     assert.equal(result.status, 'failed');
     assert.match(result.message, /未启动修复，避免误改当前实例/);
     assert.deepEqual(fetched, ['http://127.0.0.1:6274/api/sciforge/feedback/issues/feedback-missing?workspacePath=%2Ftmp%2Ftarget-b']);
-    assert.equal(events.some((event) => event.type === 'target-issue-lookup-failed'), true);
+    assert.equal(events.some((event) => event.type === TARGET_ISSUE_LOOKUP_FAILED_EVENT_TYPE), true);
+    assert.equal(events[0]?.label, '目标 issue');
+  });
+
+  it('emits target issue repair handoff events through runtime contract projection', async () => {
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.startsWith('http://127.0.0.1:6274/api/sciforge/feedback/issues/feedback-1')) {
+        return jsonResponse({
+          issue: {
+            id: 'feedback-1',
+            title: 'Broken report renderer',
+            status: 'open',
+            priority: 'high',
+            comment: 'Renderer fails on report artifacts.',
+          },
+        });
+      }
+      if (url === 'http://127.0.0.1:5174/api/sciforge/tools/run/stream') {
+        return streamResponse([{
+          result: {
+            message: 'Repair completed.',
+            executionUnits: [{ id: 'unit-1', status: 'done' }],
+            artifacts: [],
+          },
+        }]);
+      }
+      return jsonResponse({ ok: false, error: `unexpected ${url}` }, 404);
+    }) as typeof fetch;
+
+    const events: AgentStreamEvent[] = [];
+    const result = await runPromptOrchestrator(orchestratorInput({
+      prompt: '修复 B 的 feedback #feedback-1',
+      targetPeer: peer(),
+      onStreamEvent: (event) => events.push(event),
+    }));
+
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(
+      events
+        .filter((event) => event.type.startsWith('target-'))
+        .map((event) => event.type),
+      [
+        TARGET_ISSUE_READ_EVENT_TYPE,
+        TARGET_WORKTREE_PREPARING_EVENT_TYPE,
+        TARGET_REPAIR_MODIFYING_EVENT_TYPE,
+        TARGET_REPAIR_TESTING_EVENT_TYPE,
+        TARGET_REPAIR_WRITTEN_BACK_EVENT_TYPE,
+      ],
+    );
+    assert.equal(events.find((event) => event.type === TARGET_ISSUE_READ_EVENT_TYPE)?.detail, '已从 Repair B 读取 issue bundle feedback-1。');
+    assert.deepEqual(events.find((event) => event.type === TARGET_REPAIR_MODIFYING_EVENT_TYPE)?.raw, {
+      targetInstance: {
+        name: 'Repair B',
+        appUrl: 'http://127.0.0.1:6273',
+        workspaceWriterUrl: 'http://127.0.0.1:6274',
+        workspacePath: '/tmp/target-b',
+        role: 'repair',
+        trustLevel: 'repair',
+      },
+      issueId: 'feedback-1',
+      executionBoundary: 'repair-handoff-runner-target-worktree',
+    });
   });
 
   it('does not block preflight context compaction when latency policy allows background compaction', async () => {

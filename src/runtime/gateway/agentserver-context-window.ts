@@ -2,10 +2,20 @@ import type { AgentBackendAdapter, AgentBackendCapabilities, BackendContextCompa
 import {
   compactCapabilityForAgentBackend,
   estimateRuntimeAgentBackendModelContextWindow,
+  fallbackCompactCapabilityForRuntimeAgentBackend,
   normalizeRuntimeAgentBackendContextWindowSource,
+  runtimeAgentBackendFallbackCompactionMessage,
+  runtimeAgentBackendFallbackCompactionStrategy,
+  runtimeAgentBackendHandoffFallbackCompactCapability,
   runtimeAgentBackendCapabilities,
   runtimeAgentBackendProviderLabel,
+  runtimeAgentBackendUsesAgentServerManagedCompaction,
 } from '@sciforge-ui/runtime-contract/agent-backend-policy';
+import {
+  AGENTSERVER_CONTEXT_WINDOW_STATE_EVENT_TYPE,
+  CONTEXT_COMPACTION_EVENT_TYPE,
+  WORKSPACE_RUNTIME_SOURCE,
+} from '@sciforge-ui/runtime-contract/events';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { clipForAgentServerJson, clipForAgentServerPrompt, errorMessage, isRecord, toRecordList } from '../gateway-utils.js';
@@ -46,8 +56,8 @@ export async function preflightAgentServerContextWindow(params: {
   const state = await params.adapter.readContextWindowState?.(sessionRef);
   if (state) {
     emitWorkspaceRuntimeEvent(params.callbacks, {
-      type: 'agentserver-context-window-state',
-      source: 'workspace-runtime',
+      type: AGENTSERVER_CONTEXT_WINDOW_STATE_EVENT_TYPE,
+      source: WORKSPACE_RUNTIME_SOURCE,
       status: state.status,
       message: `AgentServer context window ${state.status}`,
       detail: formatContextWindowState(state),
@@ -65,8 +75,8 @@ export async function preflightAgentServerContextWindow(params: {
       ? 'skipped'
       : compaction.ok ? 'completed' : 'failed';
     emitWorkspaceRuntimeEvent(params.callbacks, {
-      type: 'contextCompaction',
-      source: 'workspace-runtime',
+      type: CONTEXT_COMPACTION_EVENT_TYPE,
+      source: WORKSPACE_RUNTIME_SOURCE,
       status: compactionStatus,
       message: `AgentServer context compaction ${compaction.strategy}`,
       detail: compaction.message || compaction.reason,
@@ -115,7 +125,7 @@ export async function compactBackendContext(
   reason: string,
 ): Promise<BackendContextCompactionResult> {
   const before = await readBackendContextWindowState(sessionRef, backend, capabilities);
-  const managedByAgentServer = isAgentServerManagedCompactionBackend(backend);
+  const managedByAgentServer = runtimeAgentBackendUsesAgentServerManagedCompaction(backend);
   if (!capabilities.nativeCompaction) {
     const agentServerCompaction = await requestAgentServerCompact(sessionRef, backend, reason, before);
     if (agentServerCompaction.ok) return agentServerCompaction;
@@ -138,15 +148,13 @@ export async function compactBackendContext(
       status: agentServerCompaction.status === 'unsupported' ? 'unsupported' : 'skipped',
       backend,
       agentId: sessionRef.agentId,
-      strategy: backend === 'gemini' && capabilities.sessionRotationSafe ? 'session-rotate' : capabilities.sessionRotationSafe ? 'handoff-slimming' : 'none',
-      reason,
-      before,
-      after: markHandoffSlimmingState(before, sessionRef.agentId, backend),
-      message: agentServerCompaction.message || (backend === 'gemini'
-        ? 'Gemini SDK/API has no native compaction/reset; using AgentServer context compaction and session rotation fallback.'
-        : 'Backend has no native compaction; using compact handoff refs for this turn.'),
-      auditRefs: agentServerCompaction.auditRefs,
-    };
+        strategy: runtimeAgentBackendFallbackCompactionStrategy(backend, capabilities),
+        reason,
+        before,
+        after: markHandoffSlimmingState(before, sessionRef.agentId, backend),
+        message: agentServerCompaction.message || runtimeAgentBackendFallbackCompactionMessage(backend),
+        auditRefs: agentServerCompaction.auditRefs,
+      };
   }
   const native = await requestAgentServerCompact(sessionRef, backend, reason, before);
   if (native.ok) return native;
@@ -181,8 +189,8 @@ async function requestAgentServerCompact(
         reason,
         backend,
         workspace: sessionRef.workspace,
-        compactionScope: isAgentServerManagedCompactionBackend(backend) ? 'session-current-work' : 'backend-context',
-        strategy: isAgentServerManagedCompactionBackend(backend) ? 'agentserver-session-current-work' : undefined,
+        compactionScope: runtimeAgentBackendUsesAgentServerManagedCompaction(backend) ? 'session-current-work' : 'backend-context',
+        strategy: runtimeAgentBackendUsesAgentServerManagedCompaction(backend) ? 'agentserver-session-current-work' : undefined,
         contextWindow: before ? contextWindowMetadata(before) : undefined,
       }),
     });
@@ -351,25 +359,8 @@ function fallbackContextWindowState(agentId: string, backend: string, capabiliti
     provider: runtimeAgentBackendProviderLabel(backend),
     source: 'unknown',
     status: 'unknown',
-    compactCapability: fallbackCompactCapabilityForBackend(backend, capabilities),
+    compactCapability: fallbackCompactCapabilityForRuntimeAgentBackend(backend, capabilities) as BackendContextWindowState['compactCapability'],
   };
-}
-
-function fallbackCompactCapabilityForBackend(
-  backend: string,
-  capabilities: AgentBackendCapabilities,
-): BackendContextWindowState['compactCapability'] {
-  if (capabilities.nativeCompaction) return 'native';
-  const capability = compactCapabilityForBackend(backend);
-  if (capability === 'agentserver' || capability === 'handoff-only' || capability === 'session-rotate' || capability === 'none') {
-    return capability;
-  }
-  if (backend === 'gemini' && capabilities.sessionRotationSafe) return 'session-rotate';
-  return capabilities.sessionRotationSafe ? 'handoff-only' : 'none';
-}
-
-function isAgentServerManagedCompactionBackend(backend: string) {
-  return backend === 'openteam_agent';
 }
 
 function markAgentServerManagedFallbackState(
@@ -410,7 +401,7 @@ function markHandoffSlimmingState(
     agentId,
     source: 'agentserver-estimate',
     status: 'watch',
-    compactCapability: backend === 'gemini' ? 'session-rotate' : 'handoff-only',
+    compactCapability: runtimeAgentBackendHandoffFallbackCompactCapability(backend),
   };
 }
 

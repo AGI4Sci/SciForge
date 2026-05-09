@@ -1,4 +1,5 @@
 import type { SciForgeAgentHandoffSource, SciForgeSharedSkillDomain, SharedAgentHandoffContract } from '@sciforge-ui/runtime-contract/handoff';
+import type { SkillEntrypointType } from '@sciforge-skill/packages/runtime-policy';
 import type { WorkEvidence } from './gateway/work-evidence-types.js';
 
 export type SciForgeSkillDomain = SciForgeSharedSkillDomain;
@@ -243,7 +244,7 @@ export interface SkillManifest {
   inputContract: Record<string, unknown>;
   outputArtifactSchema: Record<string, unknown>;
   entrypoint: {
-    type: 'workspace-task' | 'inspector' | 'agentserver-generation' | 'markdown-skill';
+    type: SkillEntrypointType;
     command?: string;
     path?: string;
   };

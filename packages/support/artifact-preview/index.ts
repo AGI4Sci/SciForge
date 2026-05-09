@@ -9,6 +9,7 @@ export type {
 } from '@sciforge-ui/runtime-contract/preview';
 
 import type { PreviewDescriptor } from '@sciforge-ui/runtime-contract/preview';
+import type { RuntimeArtifact } from '@sciforge-ui/runtime-contract/artifacts';
 
 export const STRUCTURE_BUNDLE_PREVIEW_DERIVATIVE_KIND = 'structure-bundle' as const;
 const PREVIEW_TEXT_INLINE_SIZE_LIMIT = 1024 * 1024;
@@ -87,6 +88,125 @@ export function descriptorWithDiagnostic(descriptor: PreviewDescriptor, error: u
     ...descriptor,
     diagnostics: uniquePreviewStrings([...(descriptor.diagnostics ?? []), `Workspace Writer descriptor hydration failed: ${message}`]),
   };
+}
+
+export type ArtifactPreviewRuntimeArtifactLike =
+  Pick<RuntimeArtifact, 'id' | 'type' | 'metadata' | 'data' | 'dataRef' | 'path' | 'previewDescriptor'>
+  & Partial<Pick<RuntimeArtifact, 'producerScenario' | 'schemaVersion'>>;
+
+export type UploadedArtifactPreview = {
+  kind: 'pdf' | 'image';
+  dataUrl: string;
+  title: string;
+  mimeType?: string;
+  size?: number;
+};
+
+export function descriptorCanUseWorkspacePreview(descriptor: PreviewDescriptor) {
+  return canReadPreviewAsText(descriptor.kind);
+}
+
+export function descriptorDerivativeKind(descriptor: PreviewDescriptor): NonNullable<PreviewDescriptor['derivatives']>[number]['kind'] {
+  if (descriptor.kind === 'json' || descriptor.kind === 'table') return 'schema';
+  if (descriptor.kind === 'html') return 'html';
+  return 'text';
+}
+
+export function previewNeedsPackage(descriptor: PreviewDescriptor) {
+  if (descriptor.inlinePolicy === 'unsupported') return true;
+  if (descriptor.kind === 'binary' || descriptor.kind === 'office') return true;
+  return false;
+}
+
+export function shouldHydratePreviewDescriptor(descriptor: PreviewDescriptor, path: string) {
+  if (!path || /^agentserver:\/\//i.test(path) || /^data:/i.test(path) || /^https?:\/\//i.test(path)) return false;
+  if (!descriptor.rawUrl && (descriptor.kind === 'pdf' || descriptor.kind === 'image' || descriptor.inlinePolicy === 'stream')) return true;
+  if (!descriptor.derivatives?.length && descriptor.actions.some((action) => action === 'extract-text' || action === 'make-thumbnail' || action === 'select-rows')) return true;
+  return false;
+}
+
+export function uploadedArtifactPreview(artifact?: ArtifactPreviewRuntimeArtifactLike): UploadedArtifactPreview | undefined {
+  if (!artifact || !isRecord(artifact.data)) return undefined;
+  const dataUrl = asString(artifact.data.dataUrl);
+  const kind = asString(artifact.data.previewKind);
+  if (!dataUrl || (kind !== 'pdf' && kind !== 'image')) return undefined;
+  return {
+    kind,
+    dataUrl,
+    title: asString(artifact.metadata?.title) || asString(artifact.data.title) || artifact.id,
+    mimeType: asString(artifact.metadata?.mimeType) || asString(artifact.data.mimeType),
+    size: asNumber(artifact.metadata?.size) || asNumber(artifact.data.size),
+  };
+}
+
+export function normalizeArtifactPreviewDescriptor(artifact: ArtifactPreviewRuntimeArtifactLike | undefined, fallbackRef?: string): PreviewDescriptor | undefined {
+  if (!artifact) return undefined;
+  if (artifact.previewDescriptor) return artifact.previewDescriptor;
+  const metadata = artifact.metadata ?? {};
+  const nested = isRecord(metadata.previewDescriptor) ? metadata.previewDescriptor : undefined;
+  const kind = previewDescriptorKindForArtifact(artifact, fallbackRef, nested);
+  if (!kind) return undefined;
+  const ref = fallbackRef || artifact.path || artifact.dataRef || `artifact:${artifact.id}`;
+  const rawUrl = asString(nested?.rawUrl) || asString(metadata.rawUrl);
+  const sizeBytes = asNumber(nested?.sizeBytes) || asNumber(metadata.size);
+  const derivatives: PreviewDescriptor['derivatives'] = Array.isArray(nested?.derivatives)
+    ? nested.derivatives.map(normalizePreviewDerivative).filter((item): item is NonNullable<PreviewDescriptor['derivatives']>[number] => Boolean(item))
+    : derivativeDescriptorsForPreviewTarget(ref, kind, sizeBytes ?? 0, asString(nested?.mimeType) || asString(metadata.mimeType) || 'image/*');
+  return {
+    kind,
+    source: 'artifact',
+    ref,
+    mimeType: asString(nested?.mimeType) || asString(metadata.mimeType),
+    sizeBytes,
+    hash: asString(nested?.hash) || asString(metadata.hash),
+    title: asString(nested?.title) || asString(metadata.title) || artifact.id,
+    rawUrl,
+    inlinePolicy: rawUrl ? 'stream' : inlinePolicyForPreviewKind(kind, sizeBytes ?? 0),
+    derivatives: derivatives?.length ? derivatives : undefined,
+    actions: previewActionsForPreviewKind(kind),
+    diagnostics: asStringList(nested?.diagnostics),
+    locatorHints: locatorHintsForPreviewKind(kind),
+  };
+}
+
+export function previewDescriptorKindForArtifact(
+  artifact: ArtifactPreviewRuntimeArtifactLike,
+  fallbackRef = '',
+  nestedPreviewDescriptor?: Record<string, unknown>,
+): PreviewDescriptor['kind'] | undefined {
+  const explicitKind = previewDescriptorKindFromLooseValue(asString(nestedPreviewDescriptor?.kind) || asString(artifact.metadata?.previewKind));
+  if (explicitKind) return explicitKind;
+  const languageKind = previewDescriptorKindFromLooseValue(asString(artifact.metadata?.language));
+  if (languageKind && languageKind !== 'text') return languageKind;
+  const pathKind = previewDescriptorKindFromArtifactPath(fallbackRef || artifact.path || artifact.dataRef || artifact.id);
+  if (pathKind !== 'binary') return pathKind;
+  const typeKind = previewDescriptorKindFromLooseValue(`${artifact.type} ${artifact.id}`);
+  if (typeKind && typeKind !== 'text') return typeKind;
+  const payloadKind = previewDescriptorKindFromPayloadShape(artifact.data);
+  if (payloadKind) return payloadKind;
+  if (artifact.path || artifact.dataRef) return 'binary';
+  return undefined;
+}
+
+export function previewDescriptorKindFromArtifactPath(path: string, language = ''): PreviewDescriptor['kind'] {
+  const pathKind = previewDescriptorKindForPath(path);
+  if (pathKind !== 'binary') return pathKind;
+  return previewDescriptorKindFromLooseValue(language) ?? 'binary';
+}
+
+export function fileKindForPath(path: string, language = '') {
+  const kind = previewDescriptorKindFromArtifactPath(path, language);
+  if (kind === 'table') {
+    const extension = previewFileExtensionForPath(path);
+    if (extension === 'csv' || extension === 'tsv') return extension;
+  }
+  if (kind === 'office') {
+    const extension = previewFileExtensionForPath(path);
+    if (extension === 'xls' || extension === 'xlsx') return 'spreadsheet';
+    if (extension === 'ppt' || extension === 'pptx') return 'presentation';
+    return 'document';
+  }
+  return kind === 'binary' && language ? language : kind;
 }
 
 export function normalizePreviewDerivative(value: unknown): NonNullable<PreviewDescriptor['derivatives']>[number] | undefined {
@@ -248,6 +368,38 @@ export function previewFileExtensionForPath(path: string) {
   const name = path.toLowerCase().split(/[\\/]/).pop()?.split(/[?#]/)[0] ?? '';
   const dotIndex = name.lastIndexOf('.');
   return dotIndex >= 0 ? normalizePreviewExtension(name.slice(dotIndex + 1)) : '';
+}
+
+function previewDescriptorKindFromPayloadShape(payload: unknown): PreviewDescriptor['kind'] | undefined {
+  if (Array.isArray(payload)) return payload.length && payload.every(isRecord) ? 'table' : 'json';
+  if (!isRecord(payload)) {
+    return typeof payload === 'string' && payload.trim() ? 'text' : undefined;
+  }
+  if (firstString(payload.markdown, payload.report, payload.summary, payload.content)) return 'markdown';
+  if (Array.isArray(payload.sections)) return 'markdown';
+  if (Array.isArray(payload.rows) || Array.isArray(payload.columns) || Array.isArray(payload.records)) return 'table';
+  if (isRecord(payload.table) || isRecord(payload.dataFrame)) return 'table';
+  if (firstString(payload.pdb, payload.cif, payload.mmcif, payload.structureRef) || isRecord(payload.structure)) return 'structure';
+  return undefined;
+}
+
+function previewDescriptorKindFromLooseValue(value: string | undefined): PreviewDescriptor['kind'] | undefined {
+  const text = value?.trim().toLowerCase();
+  if (!text) return undefined;
+  if (/\b(pdf|application\/pdf)\b|\.pdf\b/.test(text)) return 'pdf';
+  if (/\b(image|png|jpg|jpeg|gif|webp|svg)\b|\.(png|jpe?g|gif|webp|svg)\b/.test(text)) return 'image';
+  if (/\b(markdown|md|report|summary)\b|\.m(?:d|arkdown)\b/.test(text)) return 'markdown';
+  if (/\b(json|jsonl|application\/json)\b|\.jsonl?\b/.test(text)) return 'json';
+  if (/\b(csv|tsv|xlsx?|table|matrix|spreadsheet)\b|\.(csv|tsv|xlsx?)\b/.test(text)) return 'table';
+  if (/\b(html?)\b|\.html?\b/.test(text)) return 'html';
+  if (/\b(pdb|cif|mmcif|structure|molecule)\b|\.(pdb|cif|mmcif)\b/.test(text)) return 'structure';
+  if (/\b(docx?|pptx?|office|presentation|document)\b|\.(docx?|pptx?|rtf|odp|ods)\b/.test(text)) return 'office';
+  if (/\b(text|log|txt)\b|\.(txt|log)\b/.test(text)) return 'text';
+  return undefined;
+}
+
+function firstString(...values: unknown[]) {
+  return values.find((value): value is string => typeof value === 'string' && value.trim().length > 0);
 }
 
 function normalizePreviewExtension(extension: string) {

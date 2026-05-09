@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   compactCapabilityForAgentBackend,
   estimateRuntimeAgentBackendModelContextWindow,
+  fallbackCompactCapabilityForRuntimeAgentBackend,
   normalizeRuntimeAgentBackendContextWindowSource,
   normalizeRuntimeLlmEndpoint,
   normalizeRuntimeWorkspaceCompactCapability,
@@ -13,6 +14,8 @@ import {
   runtimeAgentBackendConfigurationNextStep,
   runtimeAgentBackendConfigurationFailureIsBlocking,
   runtimeAgentBackendConfigurationRecoverActions,
+  runtimeAgentBackendFallbackCompactionMessage,
+  runtimeAgentBackendFallbackCompactionStrategy,
   runtimeAgentBackendFailureCategories,
   runtimeAgentBackendFailureIsContextWindowExceeded,
   runtimeAgentBackendProvider,
@@ -20,8 +23,10 @@ import {
   runtimeAgentBackendProviderFailureMessage,
   runtimeAgentBackendRateLimitRecoverActions,
   runtimeAgentBackendRecoverActions,
+  runtimeAgentBackendHandoffFallbackCompactCapability,
   runtimeAgentBackendSanitizedFailureUserReason,
   runtimeAgentBackendSupported,
+  runtimeAgentBackendUsesAgentServerManagedCompaction,
   sanitizeRuntimeAgentBackendFailureDetail,
   withRuntimeAgentBackendUserFacingDiagnostic,
 } from './agent-backend-policy';
@@ -35,6 +40,15 @@ test('runtime agent backend policy owns provider and capability normalization', 
   assert.equal(runtimeAgentBackendCapabilities('openclaw').nativeCompaction, false);
   assert.equal(compactCapabilityForAgentBackend('gemini'), 'session-rotate');
   assert.equal(compactCapabilityForAgentBackend('codex'), 'native');
+  assert.equal(runtimeAgentBackendUsesAgentServerManagedCompaction('openteam_agent'), true);
+  assert.equal(runtimeAgentBackendUsesAgentServerManagedCompaction('gemini'), false);
+  assert.equal(fallbackCompactCapabilityForRuntimeAgentBackend('unknown-backend', {
+    nativeCompaction: false,
+    sessionRotationSafe: true,
+  }), 'handoff-only');
+  assert.equal(runtimeAgentBackendFallbackCompactionStrategy('gemini', { sessionRotationSafe: true }), 'session-rotate');
+  assert.equal(runtimeAgentBackendHandoffFallbackCompactCapability('gemini'), 'session-rotate');
+  assert.match(runtimeAgentBackendFallbackCompactionMessage('gemini'), /session rotation fallback/);
 });
 
 test('runtime agent backend policy owns context source and model window normalization', () => {

@@ -7,6 +7,15 @@ export const CONVERSATION_POLICY_SELECTED_COMPONENT_KIND = 'ui-component' as con
 export const CONVERSATION_POLICY_SELECTED_COMPONENT_ADAPTER = 'ui:component' as const;
 export const CONVERSATION_POLICY_AGENTSERVER_GENERATION_ADAPTER = 'agentserver:generation' as const;
 
+export interface SelectedConversationPolicyCapabilityManifestInput {
+  skillDomain: string;
+  selectedToolIds?: unknown[];
+  selectedSenseIds?: unknown[];
+  selectedVerifierIds?: unknown[];
+  selectedComponentIds?: unknown[];
+  expectedArtifactTypes?: unknown[];
+}
+
 export interface ConversationPolicyRequest {
   schemaVersion: typeof CONVERSATION_POLICY_REQUEST_VERSION;
   turn: {
@@ -53,6 +62,63 @@ export interface ConversationPolicyResponse {
   cachePolicy?: Record<string, unknown>;
   userVisiblePlan?: Array<Record<string, unknown>>;
   diagnostics?: Record<string, unknown>;
+}
+
+export function selectedConversationPolicyCapabilityManifests(
+  input: SelectedConversationPolicyCapabilityManifestInput,
+) {
+  const manifests: Array<Record<string, unknown>> = [];
+  for (const id of uniquePolicyStrings(input.selectedToolIds ?? [])) {
+    manifests.push({
+      id,
+      kind: id.includes('sense') ? 'sense' : 'tool',
+      summary: `Selected runtime capability ${id}.`,
+      triggers: conversationPolicyCapabilityTriggers(id),
+      adapter: CONVERSATION_POLICY_SELECTED_TOOL_ADAPTER,
+      internalAgent: conversationPolicyCapabilityUsesInternalAgent(id) ? 'optional' : 'none',
+    });
+  }
+  for (const id of uniquePolicyStrings(input.selectedSenseIds ?? [])) {
+    manifests.push({
+      id,
+      kind: 'sense',
+      summary: `Selected sense capability ${id}.`,
+      triggers: conversationPolicyCapabilityTriggers(id),
+      adapter: CONVERSATION_POLICY_SELECTED_SENSE_ADAPTER,
+      internalAgent: conversationPolicyCapabilityUsesInternalAgent(id) ? 'optional' : 'none',
+    });
+  }
+  for (const id of uniquePolicyStrings(input.selectedVerifierIds ?? [])) {
+    manifests.push({
+      id,
+      kind: 'verifier',
+      summary: `Selected verifier ${id}.`,
+      triggers: conversationPolicyCapabilityTriggers(id),
+      adapter: CONVERSATION_POLICY_SELECTED_VERIFIER_ADAPTER,
+      internalAgent: 'none',
+    });
+  }
+  for (const id of uniquePolicyStrings(input.selectedComponentIds ?? [])) {
+    manifests.push({
+      id,
+      kind: CONVERSATION_POLICY_SELECTED_COMPONENT_KIND,
+      summary: `Selected UI component ${id}.`,
+      triggers: conversationPolicyCapabilityTriggers(id),
+      adapter: CONVERSATION_POLICY_SELECTED_COMPONENT_ADAPTER,
+      internalAgent: 'none',
+    });
+  }
+  manifests.push({
+    id: `scenario.${input.skillDomain}.agentserver-generation`,
+    kind: 'skill',
+    domain: [input.skillDomain],
+    summary: `General AgentServer generation for ${input.skillDomain} tasks.`,
+    triggers: [input.skillDomain, 'agentserver', 'generation'],
+    artifacts: uniquePolicyStrings(input.expectedArtifactTypes ?? []),
+    adapter: CONVERSATION_POLICY_AGENTSERVER_GENERATION_ADAPTER,
+    internalAgent: 'required',
+  });
+  return uniquePolicyManifestsById(manifests);
 }
 
 export const SAFE_DEFAULT_LATENCY_POLICY: Record<string, unknown> = {
@@ -145,4 +211,26 @@ function policyRecord(value: unknown, fallback: Record<string, unknown>) {
 
 function optionalRecordList(value: unknown) {
   return Array.isArray(value) ? value.filter(isRecord) : undefined;
+}
+
+function conversationPolicyCapabilityTriggers(id: string) {
+  return id.split(/[./:_-]+/).filter(Boolean);
+}
+
+function conversationPolicyCapabilityUsesInternalAgent(id: string) {
+  return id.includes('vision') || id.includes('computer');
+}
+
+function uniquePolicyStrings(values: unknown[]) {
+  return [...new Set(values.filter((value): value is string => typeof value === 'string' && Boolean(value.trim())).map((value) => value.trim()))];
+}
+
+function uniquePolicyManifestsById(values: Array<Record<string, unknown>>) {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const id = typeof value.id === 'string' && value.id.trim() ? value.id.trim() : undefined;
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
 }

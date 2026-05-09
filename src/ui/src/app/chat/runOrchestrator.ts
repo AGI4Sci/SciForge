@@ -1,7 +1,17 @@
 import { compactAgentContext } from '../../api/agentClient';
 import { sendSciForgeToolMessage } from '../../api/sciforgeToolsClient';
 import { buildContextCompactionFailureResult, buildContextCompactionOutcome } from '../../contextCompaction';
-import { PROJECT_TOOL_FAILED_EVENT_TYPE, projectToolFailureDetail, runtimeDetailIndicatesAbort } from '@sciforge-ui/runtime-contract';
+import {
+  projectToolFailedEvent,
+  runtimeDetailIndicatesAbort,
+  targetInstanceContextEvent,
+  targetIssueLookupFailedEvent,
+  targetIssueReadEvent,
+  targetRepairModifyingEvent,
+  targetRepairTestingEvent,
+  targetRepairWrittenBackEvent,
+  targetWorktreePreparingEvent,
+} from '@sciforge-ui/runtime-contract';
 import { estimateContextWindowState, latestContextWindowState, shouldStartContextCompaction } from '../../contextWindow';
 import type { ScenarioId } from '../../data';
 import { latestLatencyPolicy, latestResponsePlan } from '../../latencyPolicy';
@@ -27,6 +37,12 @@ import {
 } from './sessionTransforms';
 
 type AgentRequest = Parameters<typeof sendSciForgeToolMessage>[0];
+type TargetInstanceContext = Awaited<ReturnType<typeof buildTargetInstanceContextForPrompt>>;
+type TargetRepairStageEventBuilder = typeof targetRepairModifyingEvent;
+
+function runtimeEventIdentity() {
+  return { id: makeId('evt'), createdAt: nowIso() };
+}
 
 export interface RunPromptOrchestratorInput {
   prompt: string;
@@ -88,14 +104,7 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
     });
     const targetLookupFailure = targetIssueLookupFailureMessage(targetInstanceContext);
     if (targetLookupFailure) {
-      input.onStreamEvent({
-        id: makeId('evt'),
-        type: 'target-issue-lookup-failed',
-        label: '目标 issue',
-        detail: targetLookupFailure,
-        createdAt: nowIso(),
-        raw: targetInstanceContext,
-      });
+      input.onStreamEvent(targetIssueLookupFailedEvent(runtimeEventIdentity(), targetLookupFailure, targetInstanceContext));
       throw new Error(targetLookupFailure);
     }
     if (targetInstanceContext.mode === 'peer') {
@@ -134,10 +143,10 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
       onStreamEvent: input.onStreamEvent,
     });
 
-    emitPeerRepairStage(targetInstanceContext, input.onStreamEvent, 'target-repair-modifying', '正在修改 B');
+    emitPeerRepairStage(targetInstanceContext, input.onStreamEvent, targetRepairModifyingEvent);
     const response = await runWithBackendFallback(request, input.signal, handleStreamEvent, input.onStreamEvent);
-    emitPeerRepairStage(targetInstanceContext, input.onStreamEvent, 'target-repair-testing', '正在测试');
-    emitPeerRepairStage(targetInstanceContext, input.onStreamEvent, 'target-repair-written-back', '已写回 B');
+    emitPeerRepairStage(targetInstanceContext, input.onStreamEvent, targetRepairTestingEvent);
+    emitPeerRepairStage(targetInstanceContext, input.onStreamEvent, targetRepairWrittenBackEvent);
     const responseWithUsage = latestRoundTokenUsage
       ? { ...response, message: { ...response.message, tokenUsage: latestRoundTokenUsage } }
       : response;
@@ -183,53 +192,39 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
 }
 
 function emitTargetInstanceEvents(
-  targetInstanceContext: Awaited<ReturnType<typeof buildTargetInstanceContextForPrompt>>,
+  targetInstanceContext: TargetInstanceContext,
   onStreamEvent: (event: AgentStreamEvent) => void,
 ) {
   const peerName = targetInstanceContext.peer?.name ?? 'B';
   if (targetInstanceContext.issueLookup?.bundle) {
-    onStreamEvent({
-      id: makeId('evt'),
-      type: 'target-issue-read',
-      label: '已读取 B issue',
-      detail: `已从 ${peerName} 读取 issue bundle ${targetInstanceContext.issueLookup.matchedIssueId}。`,
-      createdAt: nowIso(),
+    onStreamEvent(targetIssueReadEvent(runtimeEventIdentity(), {
+      peerName,
+      issueId: targetInstanceContext.issueLookup.matchedIssueId,
       raw: targetInstanceContext,
-    });
-    emitPeerRepairStage(targetInstanceContext, onStreamEvent, 'target-worktree-preparing', '正在准备 B worktree');
+    }));
+    emitPeerRepairStage(targetInstanceContext, onStreamEvent, targetWorktreePreparingEvent);
     return;
   }
-  onStreamEvent({
-    id: makeId('evt'),
-    type: 'target-instance-context',
-    label: '目标实例',
-    detail: targetInstanceContext.issueLookup?.summaries
-      ? `已从 ${peerName} 读取 ${targetInstanceContext.issueLookup.summaries.length} 条 issue 摘要。`
-      : targetInstanceContext.banner,
-    createdAt: nowIso(),
+  onStreamEvent(targetInstanceContextEvent(runtimeEventIdentity(), {
+    peerName,
+    summaryCount: targetInstanceContext.issueLookup?.summaries?.length,
+    banner: targetInstanceContext.banner,
     raw: targetInstanceContext,
-  });
+  }));
 }
 
 function emitPeerRepairStage(
-  targetInstanceContext: Awaited<ReturnType<typeof buildTargetInstanceContextForPrompt>>,
+  targetInstanceContext: TargetInstanceContext,
   onStreamEvent: (event: AgentStreamEvent) => void,
-  type: string,
-  label: string,
+  buildEvent: TargetRepairStageEventBuilder,
 ) {
   if (targetInstanceContext.mode !== 'peer' || !targetInstanceContext.issueLookup?.bundle) return;
-  onStreamEvent({
-    id: makeId('evt'),
-    type,
-    label,
-    detail: `${label}：${targetInstanceContext.peer?.name ?? '目标实例'} / ${targetInstanceContext.issueLookup.matchedIssueId ?? targetInstanceContext.issueLookup.query}`,
-    createdAt: nowIso(),
-    raw: {
-      targetInstance: targetInstanceContext.peer,
-      issueId: targetInstanceContext.issueLookup.matchedIssueId,
-      executionBoundary: 'repair-handoff-runner-target-worktree',
-    },
-  });
+  onStreamEvent(buildEvent(runtimeEventIdentity(), {
+    targetName: targetInstanceContext.peer?.name ?? '目标实例',
+    issueRef: targetInstanceContext.issueLookup.matchedIssueId ?? targetInstanceContext.issueLookup.query,
+    targetInstance: targetInstanceContext.peer,
+    issueId: targetInstanceContext.issueLookup.matchedIssueId,
+  }));
 }
 
 export async function runPreflightContextCompaction({
@@ -345,14 +340,7 @@ export async function runWithBackendFallback(
   } catch (projectToolError) {
     const detail = projectToolError instanceof Error ? projectToolError.message : String(projectToolError);
     if (runtimeDetailIndicatesAbort(detail)) throw projectToolError;
-    emitEvent({
-      id: makeId('evt'),
-      type: PROJECT_TOOL_FAILED_EVENT_TYPE,
-      label: '项目工具',
-      detail: projectToolFailureDetail(detail),
-      createdAt: nowIso(),
-      raw: { error: detail },
-    });
+    emitEvent(projectToolFailedEvent(runtimeEventIdentity(), detail));
     throw projectToolError;
   }
 }

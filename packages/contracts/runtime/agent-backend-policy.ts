@@ -60,6 +60,7 @@ export interface RuntimeCapabilityEvolutionFailureClassificationInput {
 export const SUPPORTED_RUNTIME_AGENT_BACKENDS = ['openteam_agent', 'claude-code', 'codex', 'hermes-agent', 'openclaw', 'gemini'] as const;
 export type RuntimeAgentBackend = typeof SUPPORTED_RUNTIME_AGENT_BACKENDS[number];
 export type RuntimeBackendContextWindowSource = 'native' | 'provider-usage' | 'agentserver-estimate' | 'unknown';
+export const RUNTIME_AGENTSERVER_MANAGED_COMPACTION_BACKENDS = ['openteam_agent'] as const;
 
 const PROVIDER_BY_BACKEND: Record<string, string> = {
   openteam_agent: 'self-hosted',
@@ -189,6 +190,38 @@ export function runtimeAgentBackendCapabilities(backend: string): RuntimeAgentBa
 
 export function compactCapabilityForAgentBackend(backend: string): AgentCompactCapability {
   return COMPACT_CAPABILITY_BY_BACKEND[backend] ?? 'unknown';
+}
+
+export function runtimeAgentBackendUsesAgentServerManagedCompaction(backend: string) {
+  return (RUNTIME_AGENTSERVER_MANAGED_COMPACTION_BACKENDS as readonly string[]).includes(backend);
+}
+
+export function fallbackCompactCapabilityForRuntimeAgentBackend(
+  backend: string,
+  capabilities: Pick<RuntimeAgentBackendCapabilities, 'nativeCompaction' | 'sessionRotationSafe'>,
+): AgentCompactCapability {
+  if (capabilities.nativeCompaction) return 'native';
+  const capability = compactCapabilityForAgentBackend(backend);
+  if (capability !== 'unknown') return capability;
+  return capabilities.sessionRotationSafe ? 'handoff-only' : 'none';
+}
+
+export function runtimeAgentBackendFallbackCompactionStrategy(
+  backend: string,
+  capabilities: Pick<RuntimeAgentBackendCapabilities, 'sessionRotationSafe'>,
+) {
+  if (compactCapabilityForAgentBackend(backend) === 'session-rotate' && capabilities.sessionRotationSafe) return 'session-rotate';
+  return capabilities.sessionRotationSafe ? 'handoff-slimming' : 'none';
+}
+
+export function runtimeAgentBackendFallbackCompactionMessage(backend: string) {
+  return compactCapabilityForAgentBackend(backend) === 'session-rotate'
+    ? 'Gemini SDK/API has no native compaction/reset; using AgentServer context compaction and session rotation fallback.'
+    : 'Backend has no native compaction; using compact handoff context for this turn.';
+}
+
+export function runtimeAgentBackendHandoffFallbackCompactCapability(backend: string) {
+  return compactCapabilityForAgentBackend(backend) === 'session-rotate' ? 'session-rotate' : 'handoff-only';
 }
 
 export function runtimeAgentBackendConfigurationFailureIsBlocking(reason: string) {

@@ -5,10 +5,15 @@ import { SCENARIO_SPECS } from './scenarioSpecs';
 import {
   builtInScenarioIdForRuntimeInput,
   builtInScenarioIds,
+  createBuiltInScenarioRecord,
+  defaultBuiltInScenarioId,
   matchedScenariosForPrompt,
+  normalizeScenarioPromptTitle,
   promptWithScopeCheck,
   scenarioIdBySkillDomain,
   scenarioIdForSkillDomain,
+  scenarioRuntimeOverrideForBuiltInScenario,
+  scenarioRuntimeOverrideForRuntimeInput,
   scopeCheck,
   skillDomainForRuntimeInput,
 } from './scenarioRoutingPolicy';
@@ -30,8 +35,32 @@ describe('scenarioRoutingPolicy', () => {
       scenarioId: 'structure-exploration',
       scenarioOverride: { skillDomain: 'omics' },
     }), 'omics-differential-exploration');
-    assert.equal(builtInScenarioIdForRuntimeInput({ scenarioId: 'workspace-generated-scenario' }), 'literature-evidence-review');
+    assert.equal(defaultBuiltInScenarioId, 'literature-evidence-review');
+    assert.equal(builtInScenarioIdForRuntimeInput({ scenarioId: 'workspace-generated-scenario' }), defaultBuiltInScenarioId);
     assert.equal(skillDomainForRuntimeInput({ scenarioId: 'biomedical-knowledge-graph' }), 'knowledge');
+  });
+
+  it('builds app-facing scenario defaults from package-owned policy', () => {
+    assert.deepEqual(createBuiltInScenarioRecord(0), {
+      'literature-evidence-review': 0,
+      'structure-exploration': 0,
+      'omics-differential-exploration': 0,
+      'biomedical-knowledge-graph': 0,
+    });
+
+    const structure = scenarioRuntimeOverrideForBuiltInScenario('structure-exploration');
+    assert.equal(structure.skillDomain, 'structure');
+    assert.equal(structure.fallbackComponent, SCENARIO_SPECS['structure-exploration'].componentPolicy.fallbackComponent);
+    assert.equal(
+      scenarioRuntimeOverrideForRuntimeInput({ scenarioId: 'workspace-generated-scenario', scenarioOverride: { skillDomain: 'knowledge' } }).skillDomain,
+      'knowledge',
+    );
+  });
+
+  it('normalizes prompt titles through package-owned policy', () => {
+    assert.equal(normalizeScenarioPromptTitle('  a   b  '), 'a b');
+    assert.equal(normalizeScenarioPromptTitle(''), '新聊天');
+    assert.equal(normalizeScenarioPromptTitle('0123456789'.repeat(5)), '012345678901234567890123456789012345');
   });
 
   it('owns prompt domain signal matching for scope checks', () => {

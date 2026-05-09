@@ -1,6 +1,8 @@
 import { dirname, extname, join, resolve } from 'node:path';
 
 export type SkillPackageDomain = 'literature' | 'structure' | 'omics' | 'knowledge';
+export const SKILL_ENTRYPOINT_TYPES = ['workspace-task', 'inspector', 'agentserver-generation', 'markdown-skill'] as const;
+export type SkillEntrypointType = typeof SKILL_ENTRYPOINT_TYPES[number];
 
 export interface RuntimePolicySkillManifest {
   id: string;
@@ -10,7 +12,7 @@ export interface RuntimePolicySkillManifest {
   inputContract: Record<string, unknown>;
   outputArtifactSchema: Record<string, unknown>;
   entrypoint: {
-    type: 'workspace-task' | 'inspector' | 'agentserver-generation' | 'markdown-skill';
+    type: SkillEntrypointType;
     command?: string;
     path?: string;
   };

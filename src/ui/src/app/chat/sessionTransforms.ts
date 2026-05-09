@@ -17,6 +17,7 @@ import type {
 } from '../../domain';
 import { makeId, nowIso } from '../../domain';
 import { mergeObjectReferences } from '../../../../../packages/support/object-references';
+import { normalizeScenarioPromptTitle } from '@sciforge/scenario-core/scenario-routing-policy';
 
 const BACKGROUND_COMPLETION_CONTRACT = 'sciforge.background-completion.v1';
 const REQUEST_PAYLOAD_MESSAGE_LIMIT = 12;
@@ -29,8 +30,7 @@ const REQUEST_PAYLOAD_RAW_TEXT_LIMIT = 2_500;
 const REQUEST_PAYLOAD_INLINE_DATA_LIMIT = 3_000;
 
 export function titleFromPrompt(prompt: string) {
-  const title = prompt.trim().replace(/\s+/g, ' ').slice(0, 36);
-  return title || '新聊天';
+  return normalizeScenarioPromptTitle(prompt);
 }
 
 export function createOptimisticUserTurnSession({

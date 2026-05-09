@@ -5,6 +5,10 @@ import { latencyThresholdsFromPolicy } from '../latencyPolicy';
 import { progressModelFromEvent } from '../processProgress';
 import type { AgentStreamEvent, SciForgeConfig, SendAgentMessageInput } from '../domain';
 import { sendSciForgeToolMessage } from './sciforgeToolsClient';
+import {
+  PROJECT_TOOL_DONE_EVENT_TYPE,
+  PROJECT_TOOL_STARTED_EVENT_TYPE,
+} from '@sciforge-ui/runtime-contract';
 
 const originalFetch = globalThis.fetch;
 
@@ -70,6 +74,35 @@ test('conversation policy stream event makes quick status visible before workspa
   });
   assert.ok(quick, 'quick status process-progress event should be visible before final result normalization');
   assert.ok(events.find((event) => event.type === 'conversation-policy'));
+});
+
+test('project tool runtime events are projected from contract helpers', async () => {
+  globalThis.fetch = (async () => streamResponse([
+    {
+      result: {
+        message: 'Workspace result needs repair.',
+        executionUnits: [{ id: 'unit-1', status: 'repair-needed', failureReason: 'missing expected artifact' }],
+        artifacts: [],
+      },
+    },
+  ])) as typeof fetch;
+
+  const events: AgentStreamEvent[] = [];
+  await sendSciForgeToolMessage(messageInput(), {
+    onEvent: (event) => events.push(event),
+  });
+
+  const started = events.find((event) => event.type === PROJECT_TOOL_STARTED_EVENT_TYPE);
+  const done = events.find((event) => event.type === PROJECT_TOOL_DONE_EVENT_TYPE);
+  assert.equal(started?.label, '项目工具');
+  assert.equal(started?.detail, 'SciForge literature-evidence-review project tool started');
+  assert.deepEqual(started?.raw, {
+    type: PROJECT_TOOL_STARTED_EVENT_TYPE,
+    detail: 'SciForge literature-evidence-review project tool started',
+  });
+  assert.equal(done?.label, '项目工具');
+  assert.match(done?.detail ?? '', /未完成：missing expected artifact/);
+  assert.equal((done?.raw as { type?: string } | undefined)?.type, PROJECT_TOOL_DONE_EVENT_TYPE);
 });
 
 test('UI handoff does not synthesize verification or human approval policy defaults', async () => {

@@ -2,8 +2,19 @@ import type { GatewayRequest, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceR
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
 import { isRecord } from '../gateway-utils.js';
 import type { ConversationPolicyApplication } from '../conversation-policy/apply.js';
+import {
+  LATENCY_DIAGNOSTICS_EVENT_TYPE,
+  LATENCY_DIAGNOSTICS_LOG_KIND,
+  LATENCY_DIAGNOSTICS_REF,
+  LATENCY_DIAGNOSTICS_SCHEMA_VERSION,
+  SCIFORGE_RUNTIME_PROVIDER,
+  WORKSPACE_RUNTIME_SOURCE,
+  latencyDiagnosticsCachePolicy,
+  runtimeEventIsBackend,
+  runtimeEventIsUserVisible,
+} from '@sciforge-ui/runtime-contract/events';
 
-export const LATENCY_DIAGNOSTICS_SCHEMA_VERSION = 'sciforge.latency-diagnostics.v1' as const;
+export { LATENCY_DIAGNOSTICS_SCHEMA_VERSION } from '@sciforge-ui/runtime-contract/events';
 
 export interface LatencyDiagnostics {
   schemaVersion: typeof LATENCY_DIAGNOSTICS_SCHEMA_VERSION;
@@ -51,10 +62,10 @@ export function createLatencyTelemetry(
 
   function observeEvent(event: WorkspaceRuntimeEvent) {
     const elapsed = Math.max(0, Math.round(now() - startedAt));
-    if (firstVisibleResponseMs === undefined && isUserVisibleEvent(event)) {
+    if (firstVisibleResponseMs === undefined && runtimeEventIsUserVisible(event)) {
       firstVisibleResponseMs = elapsed;
     }
-    if (firstBackendEventMs === undefined && isBackendEvent(event)) {
+    if (firstBackendEventMs === undefined && runtimeEventIsBackend(event)) {
       firstBackendEventMs = elapsed;
     }
     observeCompaction(event);
@@ -144,8 +155,8 @@ export function createLatencyTelemetry(
   function emitFinal(payload?: ToolPayload): ToolPayload | undefined {
     const summary = diagnostics();
     emitWorkspaceRuntimeEvent(callbacks, {
-      type: 'latency-diagnostics',
-      source: 'workspace-runtime',
+      type: LATENCY_DIAGNOSTICS_EVENT_TYPE,
+      source: WORKSPACE_RUNTIME_SOURCE,
       status: fallbackReason ? 'completed-with-fallback' : 'completed',
       message: 'SciForge latency diagnostics captured.',
       detail: lowNoiseSummary(summary),
@@ -156,18 +167,18 @@ export function createLatencyTelemetry(
       ...payload,
       logs: [
         ...(payload.logs ?? []),
-        { kind: 'latency-diagnostics', ref: 'runtime://latency-diagnostics', data: summary },
+        { kind: LATENCY_DIAGNOSTICS_LOG_KIND, ref: LATENCY_DIAGNOSTICS_REF, data: summary },
       ],
       workEvidence: [
         ...(payload.workEvidence ?? []),
         {
           kind: 'other',
           status: 'success',
-          provider: 'sciforge-runtime',
+          provider: SCIFORGE_RUNTIME_PROVIDER,
           input: { policySource: summary.policySource },
           resultCount: 1,
           outputSummary: lowNoiseSummary(summary),
-          evidenceRefs: ['runtime://latency-diagnostics'],
+          evidenceRefs: [LATENCY_DIAGNOSTICS_REF],
           recoverActions: [],
           diagnostics: [
             `timeToFirstVisibleResponseMs=${summary.timeToFirstVisibleResponseMs ?? 'n/a'}`,
@@ -178,7 +189,7 @@ export function createLatencyTelemetry(
             `cacheMiss=${summary.cache.misses.join(',') || 'none'}`,
             summary.fallbackReason ? `fallbackReason=${summary.fallbackReason}` : 'fallbackReason=none',
           ],
-          rawRef: 'runtime://latency-diagnostics',
+          rawRef: LATENCY_DIAGNOSTICS_REF,
         },
       ],
     };
@@ -198,34 +209,7 @@ export function createLatencyTelemetry(
 
 function cacheDiagnostics(request: GatewayRequest) {
   const policy = isRecord(request.uiState?.cachePolicy) ? request.uiState.cachePolicy : {};
-  const keys = [
-    'reuseScenarioPlan',
-    'reuseSkillPlan',
-    'reuseUiPlan',
-    'reuseReferenceDigests',
-    'reuseArtifactIndex',
-    'reuseLastSuccessfulStage',
-    'reuseBackendSession',
-  ];
-  const hits: string[] = [];
-  const misses: string[] = [];
-  for (const key of keys) {
-    if (policy[key] === true) hits.push(key);
-    else if (policy[key] === false) misses.push(key);
-  }
-  return { hits, misses };
-}
-
-function isUserVisibleEvent(event: WorkspaceRuntimeEvent) {
-  if (event.type === 'latency-diagnostics') return false;
-  if (event.text || event.output) return true;
-  if (!event.message) return false;
-  return !['conversation-policy', 'contextWindowState'].includes(event.type);
-}
-
-function isBackendEvent(event: WorkspaceRuntimeEvent) {
-  if (event.source && event.source !== 'workspace-runtime') return true;
-  return event.type.startsWith('agentserver-') || event.type === 'backend-event';
+  return latencyDiagnosticsCachePolicy(policy);
 }
 
 function lowNoiseSummary(diagnostics: LatencyDiagnostics) {

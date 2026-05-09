@@ -19,9 +19,14 @@ import {
   findInteractiveViewModuleForObjectReference,
   findRenderableInteractiveArtifact,
   inferDisplayIntentFromInteractiveArtifacts,
+  interactiveArtifactDownloadItems,
+  interactiveArtifactInspectorTablePolicy,
+  interactiveResultSlotSubtitle,
+  interactiveUnknownComponentFallbackPolicy,
   interactiveViewComponentRank,
   interactiveViewCompatibilityAliases,
   interactiveViewManifests,
+  interactiveViewPackageRendererForComponent,
   interactiveViewPlanSourceIds,
   markdownTextForDirectAnswerArtifact,
   normalizeDirectAnswerArtifacts,
@@ -29,6 +34,7 @@ import {
   paperCardListPresentationPolicy,
   preferredExistingArtifactFollowupArtifact,
   preferredInteractiveViewComponentForArtifactType,
+  preferredInteractiveViewComponentForPreviewKind,
   repairDiagnosticViewSlotPolicy,
   reportRuntimeResultViewSlots,
   resolveInteractiveViewPlanSection,
@@ -46,6 +52,65 @@ test('interactive views alias preserves ui-components registry compatibility', (
   assert.equal(interactiveViewCompatibilityAliases, uiComponentCompatibilityAliases);
   assert.ok(interactiveViewManifests.some((manifest) => manifest.componentId === 'record-table'));
   assert.ok(uiComponentCompatibilityAliases.some((alias) => alias.legacyComponentId === 'data-table'));
+});
+
+test('interactive view renderer mapping owns package renderer aliases and fallback labels', () => {
+  const alias = interactiveViewPackageRendererForComponent('data-table');
+  assert.equal(alias?.activeComponentId, 'record-table');
+  assert.equal(alias?.label, 'Record table');
+  assert.equal(typeof alias?.render, 'function');
+  assert.equal(interactiveViewPackageRendererForComponent('scientific-plot-viewer')?.label, 'Scientific plot viewer');
+
+  const fallback = interactiveUnknownComponentFallbackPolicy({
+    componentId: 'custom-result-view',
+    artifactRef: 'missing-artifact',
+    artifactFound: false,
+  });
+  assert.equal(fallback.title, '未注册组件');
+  assert.match(fallback.detail, /通用 inspector/);
+  assert.match(fallback.missingArtifactDetail ?? '', /missing-artifact/);
+  assert.equal(interactiveUnknownComponentFallbackPolicy({
+    componentId: 'custom-view',
+    slotTitle: 'Custom slot',
+  }).title, 'Custom slot');
+});
+
+test('interactive view renderer mapping owns artifact table, download, and subtitle policy', () => {
+  const table = interactiveArtifactInspectorTablePolicy({
+    rows: [
+      { sample: 'A', score: 1, hidden: 'x' },
+      { sample: 'B', score: 2, extra: true },
+    ],
+  }, { columnLimit: 2, rowLimit: 1 });
+  assert.deepEqual(table.columns, ['sample', 'score']);
+  assert.equal(table.rowLimit, 1);
+  assert.equal(table.gridTemplateColumns, 'repeat(2, minmax(120px, 1fr))');
+
+  assert.deepEqual(interactiveArtifactDownloadItems({
+    id: 'artifact',
+    type: 'record-set',
+    producerScenario: 'demo',
+    schemaVersion: '1',
+    data: {
+      downloads: [
+        { filename: 'rows.csv', contentType: 'text/csv', rowCount: 2, content: 'sample,score\nA,1' },
+        { filename: 'empty.txt', content: '' },
+      ],
+    },
+  }), [{
+    key: undefined,
+    name: 'rows.csv',
+    path: undefined,
+    contentType: 'text/csv',
+    rowCount: 2,
+    content: 'sample,score\nA,1',
+  }]);
+
+  assert.equal(interactiveResultSlotSubtitle({
+    status: 'missing-artifact',
+    slot: {},
+    module: { componentId: 'record-table', title: 'Record table', acceptsArtifactTypes: ['record-set'] },
+  }), '等待 record-set');
 });
 
 test('runtime ui manifest policy composes package-owned view semantics', () => {
@@ -101,6 +166,13 @@ test('interactive view policy owns result focus and component ranking', () => {
   assert.equal(componentMatchesInteractiveViewFocus('graph-viewer', 'results'), true);
   assert.equal(componentMatchesInteractiveViewFocus('evidence-matrix', 'results'), false);
   assert.equal(interactiveViewComponentRank('report-viewer') < interactiveViewComponentRank('record-table'), true);
+});
+
+test('interactive view policy owns preview descriptor view choice', () => {
+  assert.equal(preferredInteractiveViewComponentForPreviewKind('markdown'), 'report-viewer');
+  assert.equal(preferredInteractiveViewComponentForPreviewKind('structure'), 'structure-viewer');
+  assert.equal(preferredInteractiveViewComponentForPreviewKind('table'), 'record-table');
+  assert.equal(preferredInteractiveViewComponentForPreviewKind('binary'), 'unknown-artifact-inspector');
 });
 
 test('interactive view policy owns result binding, section, and presentation dedupe', () => {
