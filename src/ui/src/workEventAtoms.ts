@@ -1,22 +1,14 @@
+import {
+  classifyRuntimeWorkEventKind,
+  runtimeOperationKindForStage,
+  runtimeOperationKindForWorkEvidence,
+  summarizeRuntimeGeneratedTaskFiles,
+  type RuntimeWorkEventKind,
+} from '@sciforge-ui/runtime-contract';
+
 import type { AgentStreamEvent } from './domain';
 
-export type WorkEventKind =
-  | 'plan'
-  | 'explore'
-  | 'search'
-  | 'fetch'
-  | 'analyze'
-  | 'read'
-  | 'write'
-  | 'command'
-  | 'wait'
-  | 'validate'
-  | 'emit'
-  | 'artifact'
-  | 'recover'
-  | 'diagnostic'
-  | 'message'
-  | 'other';
+export type WorkEventKind = RuntimeWorkEventKind;
 
 export type WorkEventCounts = Record<WorkEventKind, number> & { total: number };
 
@@ -96,30 +88,20 @@ export function classifyWorkEvent(
   detail = '',
   shortDetail = '',
 ): WorkEventKind {
-  if (event.contextWindowState || event.contextCompaction || event.type === 'usage-update') return 'diagnostic';
   const structured = structuredWorkEventSummary(event);
-  if (structured?.operationKind) return structured.operationKind;
   const raw = isRecord(event.raw) ? event.raw : {};
   const toolName = typeof raw.toolName === 'string' ? raw.toolName : '';
-  const haystack = `${event.type} ${event.label} ${toolName} ${detail} ${shortDetail}`.toLowerCase();
-
-  if (/current-plan|run-plan|stage-start|plan:|计划|规划/.test(haystack)) return 'plan';
-  if (/acceptance-repair|repair|recover|retry|fallback|恢复|重试|修复/.test(haystack)) return 'recover';
-  if (/verifier|validation|validate|acceptance|验收|校验|验证/.test(haystack)) return 'validate';
-  if (/taskfiles|agentservergenerationresponse|write_file|wrote \d+ bytes|\.sciforge\/tasks|生成任务文件|生成脚本|写入脚本|\.(?:py|r|sh|js|ts)\b/.test(haystack)) return 'write';
-  if (/search|grep|rg\b|检索|搜索/.test(haystack)) return 'search';
-  if (/fetch|curl|wget|download|抓取|下载/.test(haystack)) return 'fetch';
-  if (/analy[sz]e|analysis|reason|infer|summari[sz]e|compare|统计|分析|推理|总结|比对/.test(haystack)) return 'analyze';
-  if (/explore|browse|list|ls\b|find\b|tree\b|scan|discover|探索|列出|浏览|枚举/.test(haystack)) return 'explore';
-  if (/\bread\b|cat\b|sed\b|open\b|读取|查看/.test(haystack)) return 'read';
-  if (/write|patch|edit|save|create|写入|编辑|修改/.test(haystack)) return 'write';
-  if (/run_command|command|python|node|npm|pnpm|yarn|tsx|pytest|bash|执行命令|运行/.test(haystack)) return 'command';
-  if (/wait|waiting|silent|等待|stream 仍在等待/.test(haystack)) return 'wait';
-  if (/emit|final|publish|report|输出|发布|汇总/.test(haystack)) return 'emit';
-  if (/artifact|object reference|executionunit|paper-list|evidence-matrix|产物|报告对象/.test(haystack)) return 'artifact';
-  if (/error|failed|failure|blocked|timeout|exception|失败|阻断|超时/.test(haystack)) return 'diagnostic';
-  if (event.type === 'text-delta') return 'message';
-  return 'other';
+  return classifyRuntimeWorkEventKind({
+    type: event.type,
+    label: event.label,
+    toolName,
+    detail,
+    shortDetail,
+    operationKind: structured?.operationKind,
+    hasContextWindowState: Boolean(event.contextWindowState),
+    hasContextCompaction: Boolean(event.contextCompaction),
+    hasUsageUpdate: event.type === 'usage-update',
+  });
 }
 
 export function summarizeWorkEvent(kind: WorkEventKind, detail: string) {
@@ -271,13 +253,7 @@ function uniqueWorkEvidence(records: Record<string, unknown>[]) {
 }
 
 export function summarizeGeneratedTaskFiles(value: string) {
-  if (!/taskFiles|AgentServerGenerationResponse/i.test(value)) return '';
-  const paths = Array.from(value.matchAll(/"path"\s*:\s*"([^"]+)"/g))
-    .map((match) => match[1])
-    .filter((path) => /(?:^|\/)tasks\/|\.py$|\.R$|\.sh$|\.js$|\.ts$/i.test(path));
-  const uniquePaths = Array.from(new Set(paths)).slice(0, 3);
-  if (!uniquePaths.length) return '生成任务文件与运行入口。';
-  return `生成任务文件：${uniquePaths.join('、')}`;
+  return summarizeRuntimeGeneratedTaskFiles(value);
 }
 
 export function isVisibleRunningWorkKind(kind: WorkEventKind) {
@@ -329,37 +305,11 @@ function collectRecords(value: unknown, depth = 0): Record<string, unknown>[] {
 }
 
 function operationKindForEvidence(evidence: Record<string, unknown>): WorkEventKind {
-  const kind = stringField(evidence.kind)?.toLowerCase() ?? '';
-  const status = stringField(evidence.status)?.toLowerCase() ?? '';
-  if (status === 'failed' || status === 'repair-needed' || status === 'failed-with-reason') return stringList(evidence.recoverActions).length ? 'recover' : 'diagnostic';
-  if (kind === 'retrieval' || kind === 'search') return 'search';
-  if (kind === 'fetch') return 'fetch';
-  if (kind === 'read') return 'read';
-  if (kind === 'validate' || kind === 'verification') return 'validate';
-  if (kind === 'command') return 'command';
-  if (kind === 'artifact' || kind === 'emit') return 'emit';
-  if (kind === 'claim' || kind === 'analysis') return 'analyze';
-  return 'other';
+  return runtimeOperationKindForWorkEvidence(evidence);
 }
 
 function operationKindForStage(stage: Record<string, unknown>): WorkEventKind {
-  const status = stringField(stage.status)?.toLowerCase() ?? '';
-  const failure = isRecord(stage.failure) ? stage.failure : undefined;
-  const stageEvidence = Array.isArray(stage.workEvidence) ? stage.workEvidence.filter(isRecord).find(isWorkEvidenceRecord) : undefined;
-  const evidenceStatus = stringField(stageEvidence?.status)?.toLowerCase() ?? '';
-  if (status === 'failed' || status === 'blocked' || status === 'repair-needed') {
-    return stringList(failure?.recoverActions).length || stringList(stage.recoverActions).length ? 'recover' : 'diagnostic';
-  }
-  if (evidenceStatus === 'failed' || evidenceStatus === 'blocked' || evidenceStatus === 'repair-needed' || evidenceStatus === 'failed-with-reason') {
-    return stringList(stageEvidence?.recoverActions).length || stringList(stage.recoverActions).length ? 'recover' : 'diagnostic';
-  }
-  const kind = stringField(stage.kind)?.toLowerCase() ?? '';
-  if (/search|retriev|query/.test(kind)) return 'search';
-  if (/fetch|download|crawl/.test(kind)) return 'fetch';
-  if (/valid|verify|check|accept/.test(kind)) return 'validate';
-  if (/emit|report|final|artifact|publish|output/.test(kind)) return 'emit';
-  if (/analy|summar|reason|compare|compute|stat/.test(kind)) return 'analyze';
-  return 'other';
+  return runtimeOperationKindForStage(stage);
 }
 
 function isTaskStageRecord(record: Record<string, unknown>) {

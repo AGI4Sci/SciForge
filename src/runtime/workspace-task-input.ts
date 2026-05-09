@@ -1,7 +1,13 @@
 import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { buildBackendInputTextAnchors } from '@sciforge-ui/runtime-contract/handoff-input-policy';
+import {
+  buildBackendInputTextAnchors,
+  handoffArtifactDataSummaryReason,
+  handoffStringCompactionSchema,
+  inferHandoffJsonSchema,
+  isBinaryLikeHandoffString,
+} from '@sciforge-ui/runtime-contract/handoff-input-policy';
 
 export interface WorkspaceTaskInputRefs {
   workspacePath: string;
@@ -180,7 +186,7 @@ export async function normalizeBackendHandoff<T = unknown>(
       rawRef,
       rawSha1,
       rawBytes: Buffer.byteLength(rawJson, 'utf8'),
-      schema: inferJsonSchema(input),
+      schema: inferHandoffJsonSchema(input),
       head: rawJson.slice(0, Math.min(1000, budget.headChars)),
       tail: rawJson.slice(-Math.min(1000, budget.tailChars)),
     }, {
@@ -315,8 +321,8 @@ function normalizeHandoffArtifact(value: Record<string, unknown>, context: {
   if (value.data !== undefined) {
     const dataContext = { ...context, path: [...context.path, 'data'], depth: context.depth + 1 };
     out.dataSummary = {
-      ...handoffSummary(value.data, dataContext, isBinaryLikeArtifact(value) ? 'binary-artifact-data' : 'artifact-data'),
-      schema: inferJsonSchema(value.data),
+      ...handoffSummary(value.data, dataContext, handoffArtifactDataSummaryReason(value)),
+      schema: inferHandoffJsonSchema(value.data),
     };
     out.dataOmitted = true;
   }
@@ -352,7 +358,7 @@ function normalizeHandoffArray(value: unknown[], context: {
     sha1: sha1Json(value),
     rawRef: context.rawRef,
     pointer: jsonPointer(context.path),
-    schema: inferJsonSchema(value),
+    schema: inferHandoffJsonSchema(value),
     head: normalizedItems,
     tail: value.length > context.budget.maxArrayItems
       ? value.slice(-Math.min(3, context.budget.maxArrayItems)).map((item, index) => normalizeHandoffValue(item, {
@@ -379,7 +385,7 @@ function normalizeHandoffString(value: string, context: {
     : key === 'stderr'
       ? context.siblingRefs.stderrRef
       : undefined;
-  const binaryLike = isBinaryLikeString(value) || /^(pdf|image|binary|blob|base64|content)$/i.test(key) && value.length > 512;
+  const binaryLike = isBinaryLikeHandoffString(value, key);
   const mustCompact = value.length > context.budget.maxInlineStringChars || binaryLike || key === 'stdout' || key === 'stderr';
   if (!mustCompact) return value;
   context.decisions.push({
@@ -396,7 +402,7 @@ function normalizeHandoffString(value: string, context: {
     sha1: sha1Text(value),
     rawRef: logRef ?? context.rawRef,
     pointer: logRef ? undefined : jsonPointer(context.path),
-    schema: binaryLike ? { type: 'string', contentEncoding: 'base64-or-data-url' } : { type: 'string' },
+    schema: handoffStringCompactionSchema(binaryLike),
     head: value.slice(0, context.budget.headChars),
     tail: value.length > context.budget.headChars ? value.slice(-context.budget.tailChars) : undefined,
   };
@@ -510,7 +516,7 @@ function handoffSummary(value: unknown, context: {
     sha1: sha1Text(json),
     rawRef: context.rawRef,
     pointer: jsonPointer(context.path),
-    schema: inferJsonSchema(value),
+    schema: inferHandoffJsonSchema(value),
     head: json.slice(0, context.budget.headChars),
     tail: json.length > context.budget.headChars ? json.slice(-context.budget.tailChars) : undefined,
   };
@@ -615,7 +621,7 @@ function compactArtifact(artifact: Record<string, unknown>, path: string[], dept
   if (artifact.data !== undefined) {
     const dataBytes = estimateBytes(artifact.data);
     if (dataBytes > MAX_INLINE_VALUE_BYTES || artifact.dataRef || artifact.path) {
-      out.dataSummary = compactSummary(artifact.data, 'artifact-data');
+      out.dataSummary = compactSummary(artifact.data, handoffArtifactDataSummaryReason(artifact));
       out.dataOmitted = true;
     } else {
       out.data = compactValue(artifact.data, [...path, 'data'], depth + 1);
@@ -824,40 +830,6 @@ function safeToken(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'handoff';
 }
 
-function isBinaryLikeArtifact(value: Record<string, unknown>) {
-  const mime = String(value.mimeType || value.contentType || value.mediaType || '').toLowerCase();
-  const type = String(value.type || value.id || '').toLowerCase();
-  return /image|pdf|octet-stream|binary/.test(mime) || /image|pdf|binary/.test(type);
-}
-
-function isBinaryLikeString(value: string) {
-  if (/^data:(?:image|application\/pdf|application\/octet-stream)[^,]*;base64,/i.test(value)) return true;
-  if (value.length < 1024) return false;
-  if (!/^[A-Za-z0-9+/=\r\n]+$/.test(value)) return false;
-  const compact = value.replace(/\s+/g, '');
-  return compact.length % 4 === 0 && compact.length > 1024;
-}
-
-function inferJsonSchema(value: unknown, depth = 0): unknown {
-  if (value === null) return { type: 'null' };
-  if (Array.isArray(value)) {
-    return {
-      type: 'array',
-      itemCount: value.length,
-      items: value.length && depth < 2 ? inferJsonSchema(value[0], depth + 1) : undefined,
-    };
-  }
-  if (typeof value !== 'object') return { type: typeof value };
-  if (!isRecord(value)) return { type: 'object' };
-  const entries = Object.entries(value).slice(0, 24);
-  return {
-    type: 'object',
-    keys: Object.keys(value).slice(0, 40),
-    properties: depth < 2
-      ? Object.fromEntries(entries.map(([key, nested]) => [key, inferJsonSchema(nested, depth + 1)]))
-      : undefined,
-  };
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

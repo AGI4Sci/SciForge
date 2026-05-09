@@ -1,5 +1,9 @@
 import type { ClaimType, EvidenceLevel } from '../data';
 import { Badge, EmptyState } from '@agi4sci/design-system';
+import {
+  DEFAULT_EMPTY_ARTIFACT_RECOVER_ACTIONS,
+  runtimeRecoverActionLabel,
+} from '@sciforge-ui/runtime-contract/events';
 
 export {
   ActionButton,
@@ -80,7 +84,7 @@ export function ConfidenceBar({ value }: { value: number }) {
 }
 
 export function EmptyArtifactState({ title, detail, recoverActions }: { title: string; detail: string; recoverActions?: string[] }) {
-  const actions = recoverActions?.length ? recoverActions : ['run-current-scenario', 'import-matching-package', 'inspect-artifact-schema'];
+  const actions = recoverActions?.length ? recoverActions : [...DEFAULT_EMPTY_ARTIFACT_RECOVER_ACTIONS];
   return (
     <EmptyState label="empty" title={title} detail={detail}>
       <details className="empty-recover-details">
@@ -96,28 +100,5 @@ export function EmptyArtifactState({ title, detail, recoverActions }: { title: s
 }
 
 export function recoverActionLabel(action: string) {
-  const labels: Record<string, string> = {
-    'run-current-scenario': '运行当前场景',
-    'rerun-current-scenario': '重试当前运行',
-    'import-matching-package': '导入匹配 package',
-    'inspect-artifact-schema': '检查 artifact schema',
-    'inspect-artifact': '打开 Artifact Inspector',
-    'inspect-ui-manifest': '检查 UIManifest',
-    'inspect-claims': '检查 claims',
-    'inspect-runtime-route': '查看 runtime route',
-    'export-diagnostics': '导出诊断包',
-    'repair-ui-plan': '修复 UIPlan',
-    'create-timeline-event': '创建 timeline event',
-    'import-research-bundle': '导入研究 bundle',
-  };
-  if (labels[action]) return labels[action];
-  if (action.startsWith('run-skill:')) return `运行 skill ${action.slice('run-skill:'.length)}`;
-  if (action.startsWith('inspect-artifact-schema:')) return `检查 ${action.slice('inspect-artifact-schema:'.length)} schema`;
-  if (action.startsWith('import-package:')) return `导入 ${action.slice('import-package:'.length)} package`;
-  if (action.startsWith('add-field:')) return `补齐字段 ${action.slice('add-field:'.length)}`;
-  if (action.startsWith('add-fields:')) return `补齐字段 ${action.slice('add-fields:'.length)}`;
-  if (action.startsWith('map-fields:')) return `映射字段 ${action.slice('map-fields:'.length)}`;
-  if (action.startsWith('map-array-field:')) return `映射数组字段 ${action.slice('map-array-field:'.length)}`;
-  if (action.startsWith('repair-task:')) return `修复任务 ${action.slice('repair-task:'.length)}`;
-  return action;
+  return runtimeRecoverActionLabel(action);
 }

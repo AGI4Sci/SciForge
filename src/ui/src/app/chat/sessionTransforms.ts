@@ -18,8 +18,12 @@ import type {
 import { makeId, nowIso } from '../../domain';
 import { mergeObjectReferences } from '../../../../../packages/support/object-references';
 import { normalizeScenarioPromptTitle } from '@sciforge/scenario-core/scenario-routing-policy';
+import {
+  ACCEPTANCE_REPAIR_RERUN_TOOL_ID,
+  BACKGROUND_COMPLETION_CONTRACT_ID,
+  BACKGROUND_COMPLETION_TOOL_ID,
+} from '@sciforge-ui/runtime-contract/events';
 
-const BACKGROUND_COMPLETION_CONTRACT = 'sciforge.background-completion.v1';
 const REQUEST_PAYLOAD_MESSAGE_LIMIT = 12;
 const REQUEST_PAYLOAD_ARTIFACT_LIMIT = 16;
 const REQUEST_PAYLOAD_EXECUTION_UNIT_LIMIT = 16;
@@ -375,7 +379,7 @@ function normalizeBackgroundExecutionUnits(event: BackgroundCompletionRuntimeEve
       : 'failed-with-reason';
   const evidenceUnit: RuntimeExecutionUnit = {
     id: `EU-${event.runId}-${event.stageId ?? 'background'}`,
-    tool: 'sciforge.background-completion',
+    tool: BACKGROUND_COMPLETION_TOOL_ID,
     params: `runId=${event.runId};stageId=${event.stageId ?? 'run'}`,
     status,
     hash: `${event.runId}:${event.stageId ?? 'run'}`.slice(0, 48),
@@ -412,7 +416,7 @@ function mergeBackgroundRaw(raw: unknown, event: BackgroundCompletionRuntimeEven
     ...base,
     backgroundCompletion: {
       ...previousBackground,
-      contract: BACKGROUND_COMPLETION_CONTRACT,
+      contract: BACKGROUND_COMPLETION_CONTRACT_ID,
       runId: event.runId,
       messageId,
       status: event.status,
@@ -503,7 +507,7 @@ function objectReferenceForBackgroundRun(run: SciForgeRun, event: BackgroundComp
     status: 'available',
     summary: event.stageId ? `background stage ${event.stageId} · ${event.status}` : `background completion · ${event.status}`,
     provenance: {
-      producer: BACKGROUND_COMPLETION_CONTRACT,
+      producer: BACKGROUND_COMPLETION_CONTRACT_ID,
     },
   };
 }
@@ -846,7 +850,7 @@ export function failedAcceptanceRepairResponse(
 ): NormalizedAgentResponse {
   const failureUnit: RuntimeExecutionUnit = {
     id: makeId('EU-acceptance-repair'),
-    tool: 'sciforge.acceptance-repair-rerun',
+    tool: ACCEPTANCE_REPAIR_RERUN_TOOL_ID,
     params: `sourceRunId=${original.run.id}`,
     status: 'failed-with-reason',
     hash: original.run.id.slice(0, 10),

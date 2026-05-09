@@ -2,6 +2,54 @@ export interface BackendInputTextAnchorOptions {
   maxInlineStringChars: number;
 }
 
+export type HandoffArtifactDataSummaryReason = 'artifact-data' | 'binary-artifact-data';
+
+export const HANDOFF_BINARY_STRING_CONTENT_ENCODING = 'base64-or-data-url';
+
+export function handoffArtifactDataSummaryReason(artifact: Record<string, unknown>): HandoffArtifactDataSummaryReason {
+  return isBinaryLikeHandoffArtifact(artifact) ? 'binary-artifact-data' : 'artifact-data';
+}
+
+export function isBinaryLikeHandoffArtifact(artifact: Record<string, unknown>) {
+  const mime = String(artifact.mimeType || artifact.contentType || artifact.mediaType || '').toLowerCase();
+  const type = String(artifact.type || artifact.id || '').toLowerCase();
+  return /image|pdf|octet-stream|binary/.test(mime) || /image|pdf|binary/.test(type);
+}
+
+export function isBinaryLikeHandoffString(value: string, fieldKey = '') {
+  if (/^data:(?:image|application\/pdf|application\/octet-stream)[^,]*;base64,/i.test(value)) return true;
+  if (value.length < 1024) return false;
+  if (fieldKey && /^(pdf|image|binary|blob|base64|content)$/i.test(fieldKey) && value.length > 512) return true;
+  if (!/^[A-Za-z0-9+/=\r\n]+$/.test(value)) return false;
+  const compact = value.replace(/\s+/g, '');
+  return compact.length % 4 === 0 && compact.length > 1024;
+}
+
+export function handoffStringCompactionSchema(binaryLike: boolean) {
+  return binaryLike ? { type: 'string', contentEncoding: HANDOFF_BINARY_STRING_CONTENT_ENCODING } : { type: 'string' };
+}
+
+export function inferHandoffJsonSchema(value: unknown, depth = 0): unknown {
+  if (value === null) return { type: 'null' };
+  if (Array.isArray(value)) {
+    return {
+      type: 'array',
+      itemCount: value.length,
+      items: value.length && depth < 2 ? inferHandoffJsonSchema(value[0], depth + 1) : undefined,
+    };
+  }
+  if (typeof value !== 'object') return { type: typeof value };
+  if (!isRecord(value)) return { type: 'object' };
+  const entries = Object.entries(value).slice(0, 24);
+  return {
+    type: 'object',
+    keys: Object.keys(value).slice(0, 40),
+    properties: depth < 2
+      ? Object.fromEntries(entries.map(([key, nested]) => [key, inferHandoffJsonSchema(nested, depth + 1)]))
+      : undefined,
+  };
+}
+
 export function buildBackendInputTextAnchors(value: string, options: BackendInputTextAnchorOptions): string[] {
   const anchors: string[] = [];
   const snapshot = extractCurrentTurnSnapshot(value);
@@ -168,7 +216,7 @@ function handoffAnchorSummary(value: unknown) {
   return {
     _sciforgeCompacted: true,
     kind: Array.isArray(value) ? 'array' : typeof value,
-    schema: inferJsonSchema(value),
+    schema: inferHandoffJsonSchema(value),
   };
 }
 
@@ -183,27 +231,6 @@ function excerptAroundPattern(value: string, pattern: RegExp, maxChars: number) 
     value.slice(start, end),
     end < value.length ? '[...]' : '',
   ].join('');
-}
-
-function inferJsonSchema(value: unknown, depth = 0): unknown {
-  if (value === null) return { type: 'null' };
-  if (Array.isArray(value)) {
-    return {
-      type: 'array',
-      itemCount: value.length,
-      items: value.length && depth < 2 ? inferJsonSchema(value[0], depth + 1) : undefined,
-    };
-  }
-  if (typeof value !== 'object') return { type: typeof value };
-  if (!isRecord(value)) return { type: 'object' };
-  const entries = Object.entries(value).slice(0, 24);
-  return {
-    type: 'object',
-    keys: Object.keys(value).slice(0, 40),
-    properties: depth < 2
-      ? Object.fromEntries(entries.map(([key, nested]) => [key, inferJsonSchema(nested, depth + 1)]))
-      : undefined,
-  };
 }
 
 function stringifyJson(value: unknown) {

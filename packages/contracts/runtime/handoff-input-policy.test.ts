@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildBackendInputTextAnchors } from './handoff-input-policy';
+import {
+  HANDOFF_BINARY_STRING_CONTENT_ENCODING,
+  buildBackendInputTextAnchors,
+  handoffArtifactDataSummaryReason,
+  handoffStringCompactionSchema,
+  inferHandoffJsonSchema,
+  isBinaryLikeHandoffString,
+} from './handoff-input-policy';
 
 test('backend input anchors preserve current turn snapshot and output contract', () => {
   const anchors = buildBackendInputTextAnchors([
@@ -50,4 +57,35 @@ test('backend input anchors fall back to current turn and recovery excerpts', ()
   assert.match(text, /继续上一轮失败任务/);
   assert.match(text, /RECOVERY CONTEXT EXCERPT/);
   assert.match(text, /failureReason/);
+});
+
+test('handoff input policy classifies binary strings, schemas, and artifact summary reasons', () => {
+  const longBase64 = 'A'.repeat(1028);
+  const pngDataUrl = `data:image/png;base64,${'A'.repeat(64)}`;
+
+  assert.equal(isBinaryLikeHandoffString(pngDataUrl), true);
+  assert.equal(isBinaryLikeHandoffString(longBase64, 'content'), true);
+  assert.equal(isBinaryLikeHandoffString('short text', 'content'), false);
+  assert.deepEqual(handoffStringCompactionSchema(true), {
+    type: 'string',
+    contentEncoding: HANDOFF_BINARY_STRING_CONTENT_ENCODING,
+  });
+  assert.deepEqual(handoffStringCompactionSchema(false), { type: 'string' });
+
+  assert.deepEqual(inferHandoffJsonSchema({
+    content: pngDataUrl,
+    pages: 2,
+    tags: ['figure'],
+  }), {
+    type: 'object',
+    keys: ['content', 'pages', 'tags'],
+    properties: {
+      content: { type: 'string' },
+      pages: { type: 'number' },
+      tags: { type: 'array', itemCount: 1, items: { type: 'string' } },
+    },
+  });
+
+  assert.equal(handoffArtifactDataSummaryReason({ id: 'figure-1', mimeType: 'image/png' }), 'binary-artifact-data');
+  assert.equal(handoffArtifactDataSummaryReason({ id: 'table-1', type: 'paper-list' }), 'artifact-data');
 });

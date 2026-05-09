@@ -1,12 +1,20 @@
 import { buildContextWindowMeterModel } from './contextWindow';
-import { GUIDANCE_QUEUED_EVENT_TYPE } from '@sciforge-ui/runtime-contract';
+import {
+  PROCESS_PROGRESS_EVENT_TYPE,
+  runtimeStreamCompletionDetailIsKey,
+  runtimeStreamEventTypeIsCompletion,
+  runtimeStreamEventTypeIsKeyWorkStatus,
+  runtimeTextLooksLikeGeneratedWorkDetail,
+  runtimeToolEventActionKind,
+  runtimeToolOutputLooksLikeFailure,
+  summarizeRuntimeGeneratedTaskFiles,
+} from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
 import {
   classifyWorkEvent,
   emptyWorkEventCounts,
   formatRawWorkEventOutput,
   structuredWorkEventSummary,
-  summarizeGeneratedTaskFiles,
   summarizeWorkEvent,
   summarizeWorklog,
   type StructuredWorkEventSummary,
@@ -274,15 +282,10 @@ function streamEventImportance(event: AgentStreamEvent, detail: string): StreamE
     return isScriptOrArtifactGenerationDetail(detail) ? 'key' : 'background';
   }
   if (type === 'usage-update') return 'background';
-  if (type === 'process-progress') return 'key';
-  if (
-    type === GUIDANCE_QUEUED_EVENT_TYPE
-    || /(current-plan|run-plan|stage-start|tool-call|project-tool-start|project-tool-done|repair-start|acceptance-repair|backend-silent|status)/.test(type)
-  ) {
-    return 'key';
-  }
-  if (/(tool-result|result|completed|done)/.test(type)) {
-    return /failed|repair|blocked|completed|done|成功|失败|修复|中断/i.test(detail) ? 'key' : 'background';
+  if (type === PROCESS_PROGRESS_EVENT_TYPE) return 'key';
+  if (runtimeStreamEventTypeIsKeyWorkStatus(type)) return 'key';
+  if (runtimeStreamEventTypeIsCompletion(type)) {
+    return runtimeStreamCompletionDetailIsKey(detail) ? 'key' : 'background';
   }
   return detail.length > 400 ? 'background' : 'key';
 }
@@ -350,7 +353,7 @@ function normalizeStreamTextDelta(value?: string) {
 }
 
 function isScriptOrArtifactGenerationDetail(value: string) {
-  return /(?:taskFiles|entrypoint|write_file|wrote \d+ bytes|cat\s*>\s*.*\.(?:py|js|ts|r|sh)|\.sciforge\/tasks|\/tasks\/|\.py\b|\.R\b|\.sh\b|research-report|paper-list|evidence-matrix|ToolPayload|AgentServerGenerationResponse)/i.test(value);
+  return runtimeTextLooksLikeGeneratedWorkDetail(value);
 }
 
 function looksLikeTransportJson(value: string) {
@@ -361,9 +364,9 @@ function looksLikeTransportJson(value: string) {
 function toolEventActionLabel(event: AgentStreamEvent | undefined, detail: string, fallback: string) {
   const raw = isRecord(event?.raw) ? event.raw : {};
   const toolName = typeof raw.toolName === 'string' ? raw.toolName : '';
-  const haystack = `${toolName}\n${detail}`;
-  if (/write_file|cat\s*>|wrote \d+ bytes|\.py\b|\.R\b|\.sh\b/i.test(haystack)) return event?.type === 'tool-result' ? '写入完成' : '写入脚本';
-  if (/run_command|python3?|bash|sh\s+-lc|npm|pytest|tsx/i.test(haystack)) return event?.type === 'tool-result' ? '命令结果' : '执行命令';
+  const action = runtimeToolEventActionKind({ toolName, detail });
+  if (action === 'script-write') return event?.type === 'tool-result' ? '写入完成' : '写入脚本';
+  if (action === 'command') return event?.type === 'tool-result' ? '命令结果' : '执行命令';
   return fallback;
 }
 
@@ -373,20 +376,17 @@ function detailFromRawToolEvent(event: AgentStreamEvent) {
   const toolName = typeof raw.toolName === 'string' ? raw.toolName : '';
   const detail = typeof raw.detail === 'string' ? raw.detail : event.detail || '';
   const output = typeof raw.output === 'string' ? raw.output : '';
-  const generatedTaskSummary = summarizeGeneratedTaskFiles(detail || output || event.detail || '');
+  const generatedTaskSummary = summarizeRuntimeGeneratedTaskFiles(detail || output || event.detail || '');
   if (generatedTaskSummary) return generatedTaskSummary;
-  if (toolName === 'write_file' || /write_file/i.test(detail)) {
+  const action = runtimeToolEventActionKind({ toolName, detail });
+  if (action === 'script-write') {
     const parsed = parseJsonObject(detail);
     const path = typeof parsed?.path === 'string' ? parsed.path : extractPathLike(detail);
     const content = typeof parsed?.content === 'string' ? parsed.content : '';
     if (event.type === 'tool-result') return tidyReadableText(`写入完成${path ? `：${path}` : ''}${output ? `\n${output}` : ''}`);
     return tidyReadableText(`正在写入脚本${path ? `：${path}` : ''}${content ? `\n${previewCode(content)}` : ''}`);
   }
-  if (/cat\s*>\s*.+?\.(?:py|js|ts|r|sh)\b/i.test(detail)) {
-    const path = extractPathLike(detail);
-    return tidyReadableText(`${event.type === 'tool-result' ? '脚本写入完成' : '正在写入脚本'}${path ? `：${path}` : ''}${output ? `\n${output}` : ''}`);
-  }
-  if (output && /Traceback|Error|Exception|failed|失败|timeout/i.test(output)) {
+  if (output && runtimeToolOutputLooksLikeFailure(output)) {
     return tidyReadableText(`${detail}\n${tailText(output, 1400)}`);
   }
   return '';

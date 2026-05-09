@@ -11,6 +11,10 @@ export type BackgroundCompletionEventType =
 
 export type BackgroundCompletionStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 
+export const BACKGROUND_COMPLETION_CONTRACT_ID = 'sciforge.background-completion.v1' as const;
+export const BACKGROUND_COMPLETION_TOOL_ID = 'sciforge.background-completion' as const;
+export const ACCEPTANCE_REPAIR_RERUN_TOOL_ID = 'sciforge.acceptance-repair-rerun' as const;
+
 export interface BackgroundCompletionRef {
   ref: string;
   kind: 'run' | 'stage' | 'message' | 'artifact' | 'execution-unit' | 'verification' | 'work-evidence' | 'file' | 'url';
@@ -20,7 +24,7 @@ export interface BackgroundCompletionRef {
 }
 
 export interface BackgroundCompletionRuntimeEvent {
-  contract: 'sciforge.background-completion.v1';
+  contract: typeof BACKGROUND_COMPLETION_CONTRACT_ID;
   type: BackgroundCompletionEventType;
   runId: string;
   stageId?: string;
@@ -106,6 +110,23 @@ export const USER_VISIBLE_EVENT_EXCLUSION_TYPES = [
 ] as const;
 
 export type WorkspaceRuntimeCompletionStatus = 'completed' | 'failed';
+export type RuntimeWorkEventKind =
+  | 'plan'
+  | 'explore'
+  | 'search'
+  | 'fetch'
+  | 'analyze'
+  | 'read'
+  | 'write'
+  | 'command'
+  | 'wait'
+  | 'validate'
+  | 'emit'
+  | 'artifact'
+  | 'recover'
+  | 'diagnostic'
+  | 'message'
+  | 'other';
 export type ProjectToolEventType =
   | typeof PROJECT_TOOL_STARTED_EVENT_TYPE
   | typeof PROJECT_TOOL_DONE_EVENT_TYPE
@@ -145,8 +166,104 @@ export interface RuntimeRequestAcceptedProgressCopy {
   reason: string;
 }
 
+export interface RuntimeWorkEventClassificationInput {
+  type?: string;
+  label?: string;
+  toolName?: string;
+  detail?: string;
+  shortDetail?: string;
+  operationKind?: RuntimeWorkEventKind;
+  hasContextWindowState?: boolean;
+  hasContextCompaction?: boolean;
+  hasUsageUpdate?: boolean;
+}
+
+export interface RuntimeWorkEventRecordLike {
+  kind?: unknown;
+  status?: unknown;
+  recoverActions?: unknown;
+}
+
+export interface RuntimeStageRecordLike extends RuntimeWorkEventRecordLike {
+  failure?: unknown;
+  workEvidence?: unknown;
+}
+
+export type RuntimeToolEventActionKind = 'script-write' | 'command' | 'other';
+
+export const DEFAULT_EMPTY_ARTIFACT_RECOVER_ACTIONS = [
+  'run-current-scenario',
+  'import-matching-package',
+  'inspect-artifact-schema',
+] as const;
+
+export type RuntimeRecoverAction = typeof DEFAULT_EMPTY_ARTIFACT_RECOVER_ACTIONS[number] | string;
+
+const RUNTIME_RECOVER_ACTION_LABELS: Record<string, string> = {
+  'run-current-scenario': '运行当前场景',
+  'rerun-current-scenario': '重试当前运行',
+  'import-matching-package': '导入匹配 package',
+  'inspect-artifact-schema': '检查 artifact schema',
+  'inspect-artifact': '打开 Artifact Inspector',
+  'inspect-ui-manifest': '检查 UIManifest',
+  'inspect-claims': '检查 claims',
+  'inspect-runtime-route': '查看 runtime route',
+  'export-diagnostics': '导出诊断包',
+  'repair-ui-plan': '修复 UIPlan',
+  'create-timeline-event': '创建 timeline event',
+  'import-research-bundle': '导入研究 bundle',
+};
+
 const BLOCKING_RUNTIME_STATUSES = new Set(['repair-needed', 'failed-with-reason', 'failed']);
 const SUCCESSFUL_RUNTIME_STATUSES = new Set(['done', 'record-only', 'self-healed', 'completed', 'success']);
+const RUNTIME_WORK_EVENT_FAILED_STATUSES = new Set(['failed', 'blocked', 'repair-needed', 'failed-with-reason']);
+
+const runtimeWorkEventKeywordRules: Array<{ kind: RuntimeWorkEventKind; pattern: RegExp }> = [
+  { kind: 'plan', pattern: /current-plan|run-plan|stage-start|plan:|计划|规划/ },
+  { kind: 'recover', pattern: /acceptance-repair|repair|recover|retry|fallback|恢复|重试|修复/ },
+  { kind: 'validate', pattern: /verifier|validation|validate|acceptance|验收|校验|验证/ },
+  { kind: 'write', pattern: /taskfiles|agentservergenerationresponse|write_file|wrote \d+ bytes|\.sciforge\/tasks|生成任务文件|生成脚本|写入脚本|\.(?:py|r|sh|js|ts)\b/ },
+  { kind: 'search', pattern: /search|grep|rg\b|检索|搜索/ },
+  { kind: 'fetch', pattern: /fetch|curl|wget|download|抓取|下载/ },
+  { kind: 'analyze', pattern: /analy[sz]e|analysis|reason|infer|summari[sz]e|compare|统计|分析|推理|总结|比对/ },
+  { kind: 'explore', pattern: /explore|browse|list|ls\b|find\b|tree\b|scan|discover|探索|列出|浏览|枚举/ },
+  { kind: 'read', pattern: /\bread\b|cat\b|sed\b|open\b|读取|查看/ },
+  { kind: 'write', pattern: /write|patch|edit|save|create|写入|编辑|修改/ },
+  { kind: 'command', pattern: /run_command|command|python|node|npm|pnpm|yarn|tsx|pytest|bash|执行命令|运行/ },
+  { kind: 'wait', pattern: /wait|waiting|silent|等待|stream 仍在等待/ },
+  { kind: 'emit', pattern: /emit|final|publish|report|输出|发布|汇总/ },
+  { kind: 'artifact', pattern: /artifact|object reference|executionunit|paper-list|evidence-matrix|产物|报告对象/ },
+  { kind: 'diagnostic', pattern: /error|failed|failure|blocked|timeout|exception|失败|阻断|超时/ },
+];
+
+const runtimeEvidenceKindRules: Array<{ kind: RuntimeWorkEventKind; pattern: RegExp }> = [
+  { kind: 'search', pattern: /^(retrieval|search)$/ },
+  { kind: 'fetch', pattern: /^fetch$/ },
+  { kind: 'read', pattern: /^read$/ },
+  { kind: 'validate', pattern: /^(validate|verification)$/ },
+  { kind: 'command', pattern: /^command$/ },
+  { kind: 'emit', pattern: /^(artifact|emit)$/ },
+  { kind: 'analyze', pattern: /^(claim|analysis)$/ },
+];
+
+const runtimeStageKindRules: Array<{ kind: RuntimeWorkEventKind; pattern: RegExp }> = [
+  { kind: 'search', pattern: /search|retriev|query/ },
+  { kind: 'fetch', pattern: /fetch|download|crawl/ },
+  { kind: 'validate', pattern: /valid|verify|check|accept/ },
+  { kind: 'emit', pattern: /emit|report|final|artifact|publish|output/ },
+  { kind: 'analyze', pattern: /analy|summar|reason|compare|compute|stat/ },
+];
+
+const runtimeKeyWorkEventTypePattern = /(current-plan|run-plan|stage-start|tool-call|project-tool-start|project-tool-done|repair-start|acceptance-repair|backend-silent|status)/;
+const runtimeCompletionEventTypePattern = /(tool-result|result|completed|done)/;
+const runtimeCompletionDetailPattern = /failed|repair|blocked|completed|done|成功|失败|修复|中断/i;
+const runtimeGeneratedWorkDetailPattern = /(?:taskFiles|entrypoint|write_file|wrote \d+ bytes|cat\s*>\s*.*\.(?:py|js|ts|r|sh)|\.sciforge\/tasks|\/tasks\/|\.py\b|\.R\b|\.sh\b|research-report|paper-list|evidence-matrix|ToolPayload|AgentServerGenerationResponse)/i;
+const runtimeScriptWritePattern = /write_file|cat\s*>|wrote \d+ bytes|\.py\b|\.R\b|\.sh\b/i;
+const runtimeCommandPattern = /run_command|python3?|bash|sh\s+-lc|npm|pytest|tsx/i;
+const runtimeToolFailureOutputPattern = /Traceback|Error|Exception|failed|失败|timeout/i;
+const runtimeTaskPayloadMarkerPattern = /taskFiles|AgentServerGenerationResponse/i;
+const runtimeTaskPathPattern = /"path"\s*:\s*"([^"]+)"/g;
+const runtimeTaskFilePathPattern = /(?:^|\/)tasks\/|\.py$|\.R$|\.sh$|\.js$|\.ts$/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -160,6 +277,10 @@ function arrayRecords(value: unknown) {
   return Array.isArray(value) ? value.filter(isRecord) : [];
 }
 
+function stringList(value: unknown) {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : [];
+}
+
 function normalizedStatus(value: unknown) {
   return String(value || '').trim().toLowerCase();
 }
@@ -167,6 +288,97 @@ function normalizedStatus(value: unknown) {
 export function workspaceRuntimeResultCompletion(result: Record<string, unknown>): WorkspaceRuntimeResultCompletion {
   const failure = firstBlockingRuntimeResultReason(result);
   return failure ? { status: 'failed', reason: failure } : { status: 'completed' };
+}
+
+export function classifyRuntimeWorkEventKind(input: RuntimeWorkEventClassificationInput): RuntimeWorkEventKind {
+  if (input.hasContextWindowState || input.hasContextCompaction || input.hasUsageUpdate || input.type === 'usage-update') return 'diagnostic';
+  if (input.operationKind) return input.operationKind;
+  const haystack = [
+    input.type,
+    input.label,
+    input.toolName,
+    input.detail,
+    input.shortDetail,
+  ].filter(Boolean).join(' ').toLowerCase();
+  for (const rule of runtimeWorkEventKeywordRules) {
+    if (rule.pattern.test(haystack)) return rule.kind;
+  }
+  return input.type === TEXT_DELTA_EVENT_TYPE ? 'message' : 'other';
+}
+
+export function runtimeOperationKindForWorkEvidence(evidence: RuntimeWorkEventRecordLike): RuntimeWorkEventKind {
+  const kind = normalizedStatus(evidence.kind);
+  const status = normalizedStatus(evidence.status);
+  if (RUNTIME_WORK_EVENT_FAILED_STATUSES.has(status)) return stringList(evidence.recoverActions).length ? 'recover' : 'diagnostic';
+  return runtimeEvidenceKindRules.find((rule) => rule.pattern.test(kind))?.kind ?? 'other';
+}
+
+export function runtimeOperationKindForStage(stage: RuntimeStageRecordLike): RuntimeWorkEventKind {
+  const status = normalizedStatus(stage.status);
+  const failure = isRecord(stage.failure) ? stage.failure : undefined;
+  const stageEvidence = arrayRecords(stage.workEvidence).find(isRuntimeWorkEvidenceLike);
+  const evidenceStatus = normalizedStatus(stageEvidence?.status);
+  if (RUNTIME_WORK_EVENT_FAILED_STATUSES.has(status)) {
+    return stringList(failure?.recoverActions).length || stringList(stage.recoverActions).length ? 'recover' : 'diagnostic';
+  }
+  if (RUNTIME_WORK_EVENT_FAILED_STATUSES.has(evidenceStatus)) {
+    return stringList(stageEvidence?.recoverActions).length || stringList(stage.recoverActions).length ? 'recover' : 'diagnostic';
+  }
+  const kind = normalizedStatus(stage.kind);
+  return runtimeStageKindRules.find((rule) => rule.pattern.test(kind))?.kind ?? 'other';
+}
+
+export function runtimeStreamEventTypeIsKeyWorkStatus(type: string) {
+  return type === GUIDANCE_QUEUED_EVENT_TYPE || runtimeKeyWorkEventTypePattern.test(type);
+}
+
+export function runtimeStreamEventTypeIsCompletion(type: string) {
+  return runtimeCompletionEventTypePattern.test(type);
+}
+
+export function runtimeStreamCompletionDetailIsKey(detail: string) {
+  return runtimeCompletionDetailPattern.test(detail);
+}
+
+export function runtimeTextLooksLikeGeneratedWorkDetail(value: string) {
+  return runtimeGeneratedWorkDetailPattern.test(value);
+}
+
+export function runtimeToolEventActionKind(input: { toolName?: string; detail?: string }): RuntimeToolEventActionKind {
+  const haystack = `${input.toolName || ''}\n${input.detail || ''}`;
+  if (runtimeScriptWritePattern.test(haystack)) return 'script-write';
+  if (runtimeCommandPattern.test(haystack)) return 'command';
+  return 'other';
+}
+
+export function runtimeToolOutputLooksLikeFailure(output: string) {
+  return runtimeToolFailureOutputPattern.test(output);
+}
+
+export function summarizeRuntimeGeneratedTaskFiles(value: string) {
+  if (!runtimeTaskPayloadMarkerPattern.test(value)) return '';
+  const paths = Array.from(value.matchAll(runtimeTaskPathPattern))
+    .map((match) => match[1])
+    .filter((path) => runtimeTaskFilePathPattern.test(path));
+  const uniquePaths = Array.from(new Set(paths)).slice(0, 3);
+  if (!uniquePaths.length) return '生成任务文件与运行入口。';
+  return `生成任务文件：${uniquePaths.join('、')}`;
+}
+
+function isRuntimeWorkEvidenceLike(record: Record<string, unknown>) {
+  return Boolean(asString(record.kind)) && Boolean(asString(record.status));
+}
+
+export function backgroundCompletionContractId() {
+  return BACKGROUND_COMPLETION_CONTRACT_ID;
+}
+
+export function backgroundCompletionToolId() {
+  return BACKGROUND_COMPLETION_TOOL_ID;
+}
+
+export function acceptanceRepairRerunToolId() {
+  return ACCEPTANCE_REPAIR_RERUN_TOOL_ID;
 }
 
 export function normalizeRuntimeWorkspaceEventType(type: string, record: Record<string, unknown>) {
@@ -222,6 +434,19 @@ export function runtimeRequestAcceptedProgressCopy(prompt: string): RuntimeReque
     nextStep: '收到后端事件后继续展示读取、执行、写入和验证进展。',
     reason: 'request-accepted-before-backend-stream',
   };
+}
+
+export function runtimeRecoverActionLabel(action: RuntimeRecoverAction) {
+  if (RUNTIME_RECOVER_ACTION_LABELS[action]) return RUNTIME_RECOVER_ACTION_LABELS[action];
+  if (action.startsWith('run-skill:')) return `运行 skill ${action.slice('run-skill:'.length)}`;
+  if (action.startsWith('inspect-artifact-schema:')) return `检查 ${action.slice('inspect-artifact-schema:'.length)} schema`;
+  if (action.startsWith('import-package:')) return `导入 ${action.slice('import-package:'.length)} package`;
+  if (action.startsWith('add-field:')) return `补齐字段 ${action.slice('add-field:'.length)}`;
+  if (action.startsWith('add-fields:')) return `补齐字段 ${action.slice('add-fields:'.length)}`;
+  if (action.startsWith('map-fields:')) return `映射字段 ${action.slice('map-fields:'.length)}`;
+  if (action.startsWith('map-array-field:')) return `映射数组字段 ${action.slice('map-array-field:'.length)}`;
+  if (action.startsWith('repair-task:')) return `修复任务 ${action.slice('repair-task:'.length)}`;
+  return action;
 }
 
 export function gatewayRequestReceivedEvent(skillDomain: string): WorkspaceRuntimePolicyEvent {

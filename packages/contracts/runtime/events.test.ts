@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  ACCEPTANCE_REPAIR_RERUN_TOOL_ID,
+  BACKGROUND_COMPLETION_CONTRACT_ID,
+  BACKGROUND_COMPLETION_TOOL_ID,
   CONTEXT_COMPACTION_EVENT_TYPE,
   DIRECT_CONTEXT_FAST_PATH_EVENT_TYPE,
   GUIDANCE_QUEUED_EVENT_TYPE,
@@ -27,6 +30,9 @@ import {
   agentServerGenerationRecoveryStartEvent,
   agentServerGenerationRetrySucceededEvent,
   agentServerSilentStreamGuardEvent,
+  acceptanceRepairRerunToolId,
+  backgroundCompletionContractId,
+  backgroundCompletionToolId,
   compactRuntimePromptSummary,
   conversationPolicyStartedEvent,
   directContextFastPathEvent,
@@ -45,8 +51,12 @@ import {
   runtimeDetailIndicatesAbort,
   runtimeEventIsBackend,
   runtimeEventIsUserVisible,
+  runtimeRecoverActionLabel,
   runtimeRequestAcceptedProgressCopy,
   runtimeStreamEventLabel,
+  runtimeTextLooksLikeGeneratedWorkDetail,
+  runtimeToolEventActionKind,
+  summarizeRuntimeGeneratedTaskFiles,
   targetIssueLookupFailedEvent,
   targetIssueReadEvent,
   targetRepairModifyingEvent,
@@ -87,6 +97,42 @@ test('runtime event projection exports stable fallback types and diagnostics', (
   assert.equal(runtimeStreamEventLabel('tool-call', 'workspace-runtime', 'read_artifact'), '调用 read_artifact');
   assert.equal(runtimeDetailIndicatesAbort('request cancelled by user'), true);
   assert.equal(projectToolFailureDetail('network down'), 'SciForge project tool unavailable: network down');
+});
+
+test('runtime events policy owns background completion tool ids and helper labels', () => {
+  assert.equal(BACKGROUND_COMPLETION_CONTRACT_ID, 'sciforge.background-completion.v1');
+  assert.equal(BACKGROUND_COMPLETION_TOOL_ID, 'sciforge.background-completion');
+  assert.equal(ACCEPTANCE_REPAIR_RERUN_TOOL_ID, 'sciforge.acceptance-repair-rerun');
+  assert.equal(backgroundCompletionContractId(), BACKGROUND_COMPLETION_CONTRACT_ID);
+  assert.equal(backgroundCompletionToolId(), BACKGROUND_COMPLETION_TOOL_ID);
+  assert.equal(acceptanceRepairRerunToolId(), ACCEPTANCE_REPAIR_RERUN_TOOL_ID);
+
+  assert.equal(runtimeRecoverActionLabel('run-current-scenario'), '运行当前场景');
+  assert.equal(runtimeRecoverActionLabel('inspect-artifact-schema:paper-list'), '检查 paper-list schema');
+  assert.equal(runtimeRecoverActionLabel('import-package:literature-review'), '导入 literature-review package');
+  assert.equal(runtimeRecoverActionLabel('custom-manual-step'), 'custom-manual-step');
+});
+
+test('runtime generated-work helpers identify task files and action kinds', () => {
+  const payload = JSON.stringify({
+    taskFiles: [
+      { path: '.sciforge/tasks/generated/report.py' },
+      { path: '.sciforge/tasks/generated/report.py' },
+      { path: '.sciforge/tasks/generated/run.sh' },
+      { path: '.sciforge/notes/readme.md' },
+    ],
+    entrypoint: '.sciforge/tasks/generated/report.py',
+  });
+
+  assert.equal(runtimeTextLooksLikeGeneratedWorkDetail(payload), true);
+  assert.equal(runtimeTextLooksLikeGeneratedWorkDetail('plain backend heartbeat'), false);
+  assert.equal(
+    summarizeRuntimeGeneratedTaskFiles(payload),
+    '生成任务文件：.sciforge/tasks/generated/report.py、.sciforge/tasks/generated/run.sh',
+  );
+  assert.equal(summarizeRuntimeGeneratedTaskFiles('no task marker'), '');
+  assert.equal(runtimeToolEventActionKind({ detail: 'write_file .sciforge/tasks/generated/report.py' }), 'script-write');
+  assert.equal(runtimeToolEventActionKind({ toolName: 'run_command', detail: 'python -m pytest' }), 'command');
 });
 
 test('runtime events policy owns gateway event classification and latency refs', () => {
