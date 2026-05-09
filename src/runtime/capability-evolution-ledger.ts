@@ -1,6 +1,7 @@
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type {
+  CapabilityEvolutionBrokerDigest,
   CapabilityEvolutionCompactRecord,
   CapabilityEvolutionCompactSummary,
   CapabilityEvolutionRecord,
@@ -35,6 +36,15 @@ export interface CapabilityEvolutionSummaryOptions extends CapabilityEvolutionLe
 }
 
 const PROMOTION_PROPOSAL_MIN_SUPPORT = 2;
+const CAPABILITY_EVOLUTION_RECORD_STATUSES: CapabilityEvolutionRecordStatus[] = [
+  'succeeded',
+  'failed',
+  'fallback-succeeded',
+  'fallback-failed',
+  'repair-succeeded',
+  'repair-failed',
+  'needs-human',
+];
 
 export function resolveCapabilityEvolutionLedgerPath(options: CapabilityEvolutionLedgerOptions) {
   const workspaceRoot = normalizeWorkspaceRootPath(resolve(options.workspacePath));
@@ -123,6 +133,51 @@ export function compactCapabilityEvolutionRecord(
     validationSummary: record.validationResult?.summary,
     promotionCandidate: record.promotionCandidate,
     recordRef,
+  };
+}
+
+export function sanitizeCapabilityEvolutionCompactSummaryForBroker(
+  value: unknown,
+  options: { maxRecords?: number; maxPromotionCandidates?: number } = {},
+): CapabilityEvolutionCompactSummary | undefined {
+  if (!isJsonRecord(value) || value.schemaVersion !== 'sciforge.capability-evolution-compact-summary.v1') return undefined;
+  const maxRecords = Math.max(0, options.maxRecords ?? 8);
+  const maxPromotionCandidates = Math.max(0, options.maxPromotionCandidates ?? 4);
+  const recentRecords = toJsonRecordList(value.recentRecords)
+    .map(sanitizeCompactRecord)
+    .filter((record): record is CapabilityEvolutionCompactRecord => Boolean(record))
+    .slice(-maxRecords);
+  const promotionCandidates = toJsonRecordList(value.promotionCandidates)
+    .map(sanitizeCompactRecord)
+    .filter((record): record is CapabilityEvolutionCompactRecord => Boolean(record?.promotionCandidate?.eligible))
+    .slice(-maxPromotionCandidates);
+  return {
+    schemaVersion: 'sciforge.capability-evolution-compact-summary.v1',
+    generatedAt: stringValue(value.generatedAt) ?? new Date(0).toISOString(),
+    sourceRef: stringValue(value.sourceRef),
+    totalRecords: numberValue(value.totalRecords) ?? recentRecords.length,
+    statusCounts: sanitizeStatusCounts(value.statusCounts),
+    fallbackRecordCount: numberValue(value.fallbackRecordCount) ?? recentRecords.filter((record) => record.finalStatus.startsWith('fallback-')).length,
+    repairRecordCount: numberValue(value.repairRecordCount) ?? recentRecords.filter((record) => record.repairAttemptCount > 0 || record.finalStatus.startsWith('repair-')).length,
+    promotionCandidates,
+    recentRecords,
+  };
+}
+
+export function buildCapabilityEvolutionBrokerDigest(
+  summary: CapabilityEvolutionCompactSummary,
+): CapabilityEvolutionBrokerDigest {
+  const records = [...summary.recentRecords, ...summary.promotionCandidates];
+  return {
+    schemaVersion: 'sciforge.capability-evolution-broker-digest.v1',
+    generatedAt: summary.generatedAt,
+    sourceRef: summary.sourceRef,
+    totalRecords: summary.totalRecords,
+    consumedRecordRefs: uniqueSortedStrings(records.flatMap((record) => record.recordRef ? [record.recordRef] : [])),
+    selectedCapabilityIds: uniqueSortedStrings(records.flatMap(compactRecordCapabilityIds)),
+    failureCodes: uniqueSortedStrings(records.flatMap((record) => record.failureCode ? [record.failureCode] : [])),
+    recoverActions: uniqueSortedStrings(records.flatMap((record) => record.recoverActions)),
+    promotionCandidateCount: summary.promotionCandidates.filter((record) => record.promotionCandidate?.eligible).length,
   };
 }
 
@@ -359,6 +414,163 @@ function isCapabilityFallbackTrigger(value: string): value is CapabilityFallback
 
 function uniqueSortedStrings(values: string[]) {
   return Array.from(new Set(values.filter(Boolean))).sort();
+}
+
+function compactRecordCapabilityIds(record: CapabilityEvolutionCompactRecord) {
+  return [
+    ...record.selectedCapabilityIds,
+    ...(record.atomicTrace ?? []).map((entry) => entry.capabilityId),
+    ...(record.promotionCandidate?.suggestedUpdates?.capabilityIds ?? []),
+    record.promotionCandidate?.suggestedCapabilityId ?? '',
+  ].filter(Boolean);
+}
+
+function sanitizeCompactRecord(value: Record<string, unknown>): CapabilityEvolutionCompactRecord | undefined {
+  const id = stringValue(value.id);
+  const recordedAt = stringValue(value.recordedAt);
+  const goalSummary = stringValue(value.goalSummary);
+  const finalStatus = recordStatusValue(value.finalStatus);
+  if (!id || !recordedAt || !goalSummary || !finalStatus) return undefined;
+  const record: CapabilityEvolutionCompactRecord = {
+    id,
+    recordedAt,
+    runId: stringValue(value.runId),
+    goalSummary: compactText(goalSummary, 280),
+    selectedCapabilityIds: stringList(value.selectedCapabilityIds, 16),
+    providerIds: stringList(value.providerIds, 16),
+    finalStatus,
+    failureCode: stringValue(value.failureCode),
+    fallbackable: typeof value.fallbackable === 'boolean' ? value.fallbackable : undefined,
+    fallbackDecision: sanitizeFallbackDecision(value.fallbackDecision),
+    atomicTrace: sanitizeAtomicTrace(value.atomicTrace),
+    recoverActions: stringList(value.recoverActions, 12),
+    repairAttemptCount: numberValue(value.repairAttemptCount) ?? 0,
+    artifactRefs: stringList(value.artifactRefs, 12),
+    executionUnitRefs: stringList(value.executionUnitRefs, 12),
+    validationSummary: compactText(stringValue(value.validationSummary) ?? '', 240) || undefined,
+    promotionCandidate: sanitizePromotionCandidate(value.promotionCandidate),
+    recordRef: stringValue(value.recordRef),
+  };
+  return record;
+}
+
+function sanitizeFallbackDecision(value: unknown): CapabilityFallbackDecisionSummary | undefined {
+  if (!isJsonRecord(value)) return undefined;
+  const trigger = stringValue(value.trigger);
+  return {
+    trigger: trigger && isCapabilityFallbackTrigger(trigger) ? trigger : undefined,
+    reason: compactText(stringValue(value.reason) ?? '', 240) || undefined,
+    fallbackable: typeof value.fallbackable === 'boolean' ? value.fallbackable : false,
+    atomicCapabilityIds: stringList(value.atomicCapabilityIds, 16),
+    blockedBy: stringList(value.blockedBy, 8).filter((item) => [
+      'unsafe-side-effect',
+      'requires-human-approval',
+      'atomic-capability-unavailable',
+      'data-loss-risk',
+      'privacy-risk',
+      'budget-exhausted',
+      'policy',
+    ].includes(item)) as CapabilityFallbackDecisionSummary['blockedBy'],
+    recoverActions: stringList(value.recoverActions, 12),
+  };
+}
+
+function sanitizeAtomicTrace(value: unknown): CapabilityAtomicTraceSummary[] | undefined {
+  const trace = toJsonRecordList(value)
+    .map((entry) => {
+      const capabilityId = stringValue(entry.capabilityId);
+      const status = String(entry.status ?? '');
+      if (!capabilityId || !['planned', 'running', 'succeeded', 'failed', 'skipped'].includes(status)) return undefined;
+      const summary: CapabilityAtomicTraceSummary = {
+        capabilityId,
+        status: status as CapabilityAtomicTraceSummary['status'],
+        executionUnitRefs: stringList(entry.executionUnitRefs, 8),
+        artifactRefs: stringList(entry.artifactRefs, 8),
+      };
+      const providerId = stringValue(entry.providerId);
+      const failureCode = stringValue(entry.failureCode);
+      const validationSummary = compactText(stringValue(entry.validationSummary) ?? '', 180);
+      if (providerId) summary.providerId = providerId;
+      if (failureCode) summary.failureCode = failureCode;
+      if (validationSummary) summary.validationSummary = validationSummary;
+      return summary;
+    })
+    .filter((entry): entry is CapabilityAtomicTraceSummary => Boolean(entry))
+    .slice(0, 16);
+  return trace.length ? trace : undefined;
+}
+
+function sanitizePromotionCandidate(value: unknown): CapabilityPromotionCandidate | undefined {
+  if (!isJsonRecord(value)) return undefined;
+  return {
+    eligible: value.eligible === true,
+    reason: compactText(stringValue(value.reason) ?? '', 240) || undefined,
+    candidateId: stringValue(value.candidateId),
+    suggestedCapabilityId: stringValue(value.suggestedCapabilityId),
+    supportingRecordRefs: stringList(value.supportingRecordRefs, 12),
+    proposalKind: sanitizeProposalKind(value.proposalKind),
+    supportCount: numberValue(value.supportCount),
+    confidence: numberValue(value.confidence),
+    observedPattern: compactText(stringValue(value.observedPattern) ?? '', 240) || undefined,
+    suggestedUpdates: isJsonRecord(value.suggestedUpdates) ? {
+      capabilityIds: stringList(value.suggestedUpdates.capabilityIds, 16),
+      validatorIds: stringList(value.suggestedUpdates.validatorIds, 16),
+      failureCodes: stringList(value.suggestedUpdates.failureCodes, 16),
+      fallbackTriggers: stringList(value.suggestedUpdates.fallbackTriggers, 8).filter(isCapabilityFallbackTrigger),
+      repairHints: stringList(value.suggestedUpdates.repairHints, 8).map((hint) => compactText(hint, 220)).filter(Boolean),
+    } : undefined,
+  };
+}
+
+function sanitizeProposalKind(value: unknown): CapabilityPromotionCandidate['proposalKind'] | undefined {
+  return value === 'composed-capability'
+    || value === 'validator-update'
+    || value === 'fallback-policy-update'
+    || value === 'repair-hint-update'
+    ? value
+    : undefined;
+}
+
+function sanitizeStatusCounts(value: unknown): Partial<Record<CapabilityEvolutionRecordStatus, number>> {
+  if (!isJsonRecord(value)) return {};
+  const out: Partial<Record<CapabilityEvolutionRecordStatus, number>> = {};
+  for (const status of CAPABILITY_EVOLUTION_RECORD_STATUSES) {
+    const count = numberValue(value[status]);
+    if (typeof count === 'number') out[status] = count;
+  }
+  return out;
+}
+
+function recordStatusValue(value: unknown): CapabilityEvolutionRecordStatus | undefined {
+  return CAPABILITY_EVOLUTION_RECORD_STATUSES.includes(value as CapabilityEvolutionRecordStatus)
+    ? value as CapabilityEvolutionRecordStatus
+    : undefined;
+}
+
+function stringList(value: unknown, limit: number) {
+  return Array.isArray(value)
+    ? value.flatMap((entry) => typeof entry === 'string' && entry.trim() ? [compactText(entry.trim(), 180)] : []).slice(0, limit)
+    : [];
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function numberValue(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function toJsonRecordList(value: unknown) {
+  return Array.isArray(value) ? value.filter(isJsonRecord) : [];
+}
+
+function compactText(value: string, maxLength: number) {
+  return value.length <= maxLength ? value : `${value.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
 function capabilitySlug(ids: string[]) {

@@ -10,6 +10,7 @@ import {
   CAPABILITY_MANIFEST_CONTRACT_ID,
   type CapabilityManifest,
 } from '../../packages/contracts/runtime/capability-manifest.js';
+import type { CapabilityEvolutionCompactSummary } from '../../packages/contracts/runtime/capability-evolution.js';
 
 const manifests = [
   manifest({
@@ -156,7 +157,73 @@ assert.deepEqual(
   ['view.report', 'runtime.artifact-read'],
 );
 
-console.log('[ok] capability broker returns compact briefs and expands selected manifests on demand');
+const ledgerSummaryWithPrivateFields = {
+  schemaVersion: 'sciforge.capability-evolution-compact-summary.v1',
+  generatedAt: '2026-05-09T00:10:00.000Z',
+  sourceRef: '.sciforge/capability-evolution-ledger/records.jsonl',
+  totalRecords: 2,
+  statusCounts: { succeeded: 1, 'repair-failed': 1 },
+  fallbackRecordCount: 0,
+  repairRecordCount: 1,
+  promotionCandidates: [],
+  recentRecords: [{
+    id: 'cel-broker-success',
+    recordedAt: '2026-05-09T00:09:00.000Z',
+    goalSummary: 'Read bounded artifact refs.',
+    selectedCapabilityIds: ['runtime.artifact-read'],
+    providerIds: ['runtime.artifact-read.provider'],
+    finalStatus: 'succeeded',
+    recoverActions: [],
+    repairAttemptCount: 0,
+    artifactRefs: ['artifact:report-1'],
+    executionUnitRefs: ['.sciforge/logs/ledger-success.stdout.log'],
+    recordRef: '.sciforge/capability-evolution-ledger/records.jsonl#L1',
+  }, {
+    id: 'cel-broker-schema-failure',
+    recordedAt: '2026-05-09T00:10:00.000Z',
+    goalSummary: 'Validate report payload without exposing generated code.',
+    selectedCapabilityIds: ['verifier.schema'],
+    providerIds: ['verifier.schema.provider'],
+    finalStatus: 'repair-failed',
+    failureCode: 'schema-invalid',
+    recoverActions: ['reload-schema'],
+    repairAttemptCount: 1,
+    artifactRefs: ['artifact:broken-report'],
+    executionUnitRefs: ['.sciforge/logs/schema-failure.stderr.log'],
+    validationSummary: 'Schema validation failed.',
+    recordRef: '.sciforge/capability-evolution-ledger/records.jsonl#L2',
+    metadata: { glueCode: 'LEDGER_GLUE_CODE_SENTINEL', stdout: 'LEDGER_FULL_LOG_SENTINEL' },
+  }],
+} as unknown as CapabilityEvolutionCompactSummary;
+
+const brokeredFromLedgerSummary = brokerCapabilities({
+  prompt: 'Continue from the prior capability ledger and validate the schema.',
+  capabilityEvolutionSummary: ledgerSummaryWithPrivateFields,
+  runtimePolicy: {
+    topK: 3,
+    riskTolerance: 'medium',
+    allowSideEffects: ['none', 'workspace-read'],
+  },
+  availableProviders: ['runtime.artifact-read.provider', 'view.report.provider', 'verifier.schema.provider'],
+}, registry);
+assert.equal(brokeredFromLedgerSummary.inputSummary.capabilityEvolutionRecords, 2);
+assert.equal(brokeredFromLedgerSummary.inputSummary.capabilityEvolutionPromotionCandidates, 0);
+assert.ok(
+  brokeredFromLedgerSummary.briefs
+    .find((brief) => brief.id === 'runtime.artifact-read')
+    ?.matchedSignals.some((signal) => signal.includes('capability evolution ledger success')),
+);
+assert.ok(
+  brokeredFromLedgerSummary.audit
+    .find((entry) => entry.id === 'verifier.schema')
+    ?.penalties.some((penalty) => penalty.includes('capability evolution ledger failure')),
+);
+const ledgerBrokerPayload = JSON.stringify(brokeredFromLedgerSummary);
+assert.equal(ledgerBrokerPayload.includes('LEDGER_GLUE_CODE_SENTINEL'), false, 'broker must not expand ledger glue code');
+assert.equal(ledgerBrokerPayload.includes('LEDGER_FULL_LOG_SENTINEL'), false, 'broker must not expand ledger logs');
+assert.equal(ledgerBrokerPayload.includes('schema-failure.stderr.log'), false, 'broker output should stay on compact signals, not log refs');
+
+console.log('[ok] capability broker returns compact briefs, consumes ledger summaries, and expands selected manifests on demand');
 
 function manifest(options: {
   id: string;

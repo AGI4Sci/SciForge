@@ -236,3 +236,15 @@ export interface CapabilityEvolutionCompactSummary {
   promotionCandidates: CapabilityEvolutionCompactRecord[];
   recentRecords: CapabilityEvolutionCompactRecord[];
 }
+
+export interface CapabilityEvolutionBrokerDigest {
+  schemaVersion: 'sciforge.capability-evolution-broker-digest.v1';
+  generatedAt: string;
+  sourceRef?: string;
+  totalRecords: number;
+  consumedRecordRefs: string[];
+  selectedCapabilityIds: string[];
+  failureCodes: string[];
+  recoverActions: string[];
+  promotionCandidateCount: number;
+}

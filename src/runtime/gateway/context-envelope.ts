@@ -4,6 +4,7 @@ import { defaultArtifactSchemaForSkillDomain } from '@sciforge-ui/runtime-contra
 import type { SciForgeSkillDomain, GatewayRequest, SkillAvailability } from '../runtime-types.js';
 import { clipForAgentServerJson, clipForAgentServerPrompt, hashJson, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
 import { brokerCapabilities, CapabilityManifestRegistry as BrokerCapabilityManifestRegistry, type CapabilityBrokerArtifactIndexEntry, type CapabilityBrokerFailureHistoryEntry, type CapabilityBrokerObjectRef, type CapabilityBrokerOutput } from '../capability-broker.js';
+import { sanitizeCapabilityEvolutionCompactSummaryForBroker } from '../capability-evolution-ledger.js';
 import { loadCoreCapabilityManifestRegistry } from '../capability-manifest-registry.js';
 import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from './gateway-request.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
@@ -183,6 +184,7 @@ export function buildCapabilityBrokerBriefForAgentServer(request: GatewayRequest
     objectRefs: brokerObjectRefsForRequest(request),
     artifactIndex: brokerArtifactIndexForRequest(request),
     failureHistory: brokerFailureHistoryForRequest(request),
+    capabilityEvolutionSummary: brokerCapabilityEvolutionSummaryForRequest(request),
     scenarioPolicy: {
       id: request.scenarioPackageRef?.id ?? request.skillDomain,
       preferredCapabilityIds: preferredCapabilityIdsForRequest(request),
@@ -211,6 +213,17 @@ export function buildCapabilityBrokerBriefForAgentServer(request: GatewayRequest
     },
   }, registry);
   return compactBrokerOutputForAgentServer(brokered);
+}
+
+function brokerCapabilityEvolutionSummaryForRequest(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const direct = sanitizeCapabilityEvolutionCompactSummaryForBroker(uiState.capabilityEvolutionCompactSummary)
+    ?? sanitizeCapabilityEvolutionCompactSummaryForBroker(uiState.capabilityEvolutionLedgerSummary)
+    ?? sanitizeCapabilityEvolutionCompactSummaryForBroker(uiState.capabilityEvolutionSummary);
+  if (direct) return direct;
+  return sanitizeCapabilityEvolutionCompactSummaryForBroker(isRecord(uiState.capabilityEvolutionLedger)
+    ? uiState.capabilityEvolutionLedger.compactSummary
+    : undefined);
 }
 
 function compactBrokerOutputForAgentServer(brokered: CapabilityBrokerOutput) {

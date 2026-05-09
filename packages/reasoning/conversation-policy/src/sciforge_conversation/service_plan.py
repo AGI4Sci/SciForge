@@ -32,15 +32,15 @@ def _runner(root: Path) -> list[str]:
     return ["npx", "tsx"]
 
 
-def _from_gateway(payload: Mapping[str, Any]) -> JsonMap:
+def _from_gateway(payload: Mapping[str, Any], export_name: str = "buildConversationServicePlan") -> JsonMap:
     root = _repo_root()
     env = os.environ.copy()
     env["PATH"] = env.get("PATH") or "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-    script = """
-import { readFileSync } from 'node:fs';
-import { buildConversationServicePlan } from './src/runtime/gateway/conversation-service-plan.ts';
+    script = f"""
+import {{ readFileSync }} from 'node:fs';
+import {{ {export_name} }} from './src/runtime/gateway/conversation-service-plan.ts';
 const input = JSON.parse(readFileSync(0, 'utf8'));
-process.stdout.write(JSON.stringify(buildConversationServicePlan(input)));
+process.stdout.write(JSON.stringify({export_name}(input)));
 """
     completed = subprocess.run(
         [*_runner(root), "--eval", script],
@@ -79,4 +79,9 @@ def build_service_plan(request: Mapping[str, Any] | Any) -> JsonMap:
     return _from_gateway(payload)
 
 
-__all__ = ["build_service_plan"]
+def build_turn_composition(request: Mapping[str, Any] | Any) -> JsonMap:
+    payload = request if isinstance(request, Mapping) else {}
+    return _from_gateway(payload, "buildConversationTurnComposition")
+
+
+__all__ = ["build_service_plan", "build_turn_composition"]

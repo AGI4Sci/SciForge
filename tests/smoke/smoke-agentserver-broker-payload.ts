@@ -34,6 +34,31 @@ const request: GatewayRequest = {
       title: 'Prior report',
       summary: 'Current report ref.',
     }],
+    capabilityEvolutionCompactSummary: {
+      schemaVersion: 'sciforge.capability-evolution-compact-summary.v1',
+      generatedAt: '2026-05-09T00:12:00.000Z',
+      sourceRef: '.sciforge/capability-evolution-ledger/records.jsonl',
+      totalRecords: 1,
+      statusCounts: { succeeded: 1 },
+      fallbackRecordCount: 0,
+      repairRecordCount: 0,
+      promotionCandidates: [],
+      recentRecords: [{
+        id: 'cel-agentserver-broker-smoke',
+        recordedAt: '2026-05-09T00:12:00.000Z',
+        goalSummary: 'Read artifact report through compact refs only.',
+        selectedCapabilityIds: ['runtime.artifact-read'],
+        providerIds: ['sciforge.core.runtime.artifact-read'],
+        finalStatus: 'succeeded',
+        recoverActions: [],
+        repairAttemptCount: 0,
+        artifactRefs: ['artifact:artifact.report-1'],
+        executionUnitRefs: ['.sciforge/logs/cel-agentserver-broker-smoke.stdout.log'],
+        recordRef: '.sciforge/capability-evolution-ledger/records.jsonl#L1',
+        glueCodeRef: '.sciforge/tasks/LEDGER_GLUE_CODE_SENTINEL.py',
+        fullLog: 'LEDGER_FULL_LOG_SENTINEL',
+      }],
+    },
   },
 };
 
@@ -51,10 +76,15 @@ assert.equal(brokerBrief.schemaVersion, 'sciforge.agentserver.capability-broker-
 assert.equal(brokerBrief.contract, 'sciforge.capability-broker-output.v1');
 assert.match(brokerText, /view\.report/);
 assert.match(brokerText, /verifier\.schema/);
+assert.match(brokerText, /capabilityEvolutionRecords/);
+assert.match(brokerText, /capability evolution ledger success/);
 assert.equal(brokerText.includes('inputSchema'), false, 'broker brief must not expand full input schema');
 assert.equal(brokerText.includes('outputSchema'), false, 'broker brief must not expand full output schema');
 assert.equal(brokerText.includes('contract:example-input'), false, 'broker brief must not expand examples');
 assert.equal(brokerText.includes('Regenerate payload according to this capability manifest contract'), false, 'broker brief must not expand repair hints');
+assert.equal(brokerText.includes('LEDGER_GLUE_CODE_SENTINEL'), false, 'broker brief must not expand ledger glue code refs');
+assert.equal(brokerText.includes('LEDGER_FULL_LOG_SENTINEL'), false, 'broker brief must not expand full ledger logs');
+assert.equal(brokerText.includes('cel-agentserver-broker-smoke.stdout.log'), false, 'broker brief must not include log refs from compact ledger input');
 
 const prompt = buildAgentServerGenerationPrompt({
   prompt: request.prompt,

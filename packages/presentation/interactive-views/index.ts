@@ -18,6 +18,7 @@ export {
   interactiveViewFallbackBindingStatus,
   interactiveViewModuleAcceptsArtifact,
   reportRuntimeResultViewSlots,
+  repairDiagnosticViewSlotPolicy,
   runtimeResultViewSlotsPolicy,
   isAuditOnlyInteractiveViewComponent,
   isEvidenceInteractiveArtifactType,
@@ -29,6 +30,7 @@ export {
   isUnknownArtifactInspectorComponent,
   selectedViewComponentsForIntent,
   type ArtifactIntentPolicyRequest,
+  type RepairDiagnosticViewSlotPolicyRequest,
   type RuntimeResultViewSlotsPolicyRequest,
   type RuntimeUiManifestPolicyRequest,
 } from './runtime-ui-manifest-policy';

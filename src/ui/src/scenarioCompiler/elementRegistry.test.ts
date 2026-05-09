@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { scenarios, type ScenarioId } from '../data';
+import { uiComponentElements } from '@sciforge/scenario-core/component-elements';
 import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
 import { buildElementRegistry, validateElementRegistry } from '@sciforge/scenario-core/element-registry';
 import { compileUIPlanForScenario, validateUIPlanAgainstScenario } from '@sciforge/scenario-core/ui-plan-compiler';
@@ -47,6 +48,27 @@ describe('element registry', () => {
     }
   });
 
+  it('keeps runtime fallback and component alias policy out of scenario component elements', () => {
+    const forbiddenRecoverActions = new Set([
+      'provide-compatible-artifact',
+      'select-supported-component',
+      'select-fallback-runtime',
+      'repair-task',
+      'run-skill',
+    ]);
+
+    assert.ok(uiComponentElements.some((component) => component.componentId === 'data-table'), 'component aliases come only from the UI component runtime registry');
+    for (const component of uiComponentElements) {
+      assert.equal(component.fallback, '', `${component.componentId} should not adapt runtime fallbackModuleIds into scenario policy`);
+      assert.equal(component.emptyState.detail.includes('fallback'), false, `${component.componentId} should not mention runtime fallback selection`);
+      assert.deepEqual(
+        component.recoverActions.filter((action) => forbiddenRecoverActions.has(action)),
+        [],
+        `${component.componentId} should not expose runtime recovery action vocabulary`,
+      );
+    }
+  });
+
   it('compiles default UI plans equivalent to built-in scenario default slots', () => {
     for (const scenario of scenarios) {
       const scenarioId = scenario.id as ScenarioId;
@@ -69,9 +91,14 @@ describe('element registry', () => {
     });
 
     const firstSlot = plan.slots[0];
+    const selectedComponent = registry.components.find((component) => component.componentId === firstSlot.componentId);
     assert.equal(firstSlot.artifactRef, 'omics-differential-expression');
     assert.notEqual(firstSlot.componentId, 'volcano-plot');
-    assert.ok(['heatmap-viewer', 'umap-viewer', 'data-table', 'unknown-artifact-inspector'].includes(firstSlot.componentId));
+    assert.ok(selectedComponent, `fallback component should be registered: ${firstSlot.componentId}`);
+    assert.ok(
+      selectedComponent.acceptsArtifactTypes.includes(firstSlot.artifactRef) || selectedComponent.acceptsArtifactTypes.includes('*'),
+      `fallback component should consume ${firstSlot.artifactRef}: ${firstSlot.componentId}`,
+    );
   });
 
   it('validates UI slots and fallback components from the UI compiler boundary', () => {

@@ -3,7 +3,6 @@ import { afterEach, describe, it } from 'node:test';
 
 import type { AgentStreamEvent, PeerInstance, SciForgeConfig, SciForgeSession } from '../../domain';
 import {
-  recoverExistingArtifactFollowupAfterInterruption,
   runPreflightContextCompaction,
   runPromptOrchestrator,
   shouldBlockOnPreflightContextCompaction,
@@ -104,41 +103,73 @@ describe('runPromptOrchestrator target instance guard', () => {
     assert.match(emitted[0]?.detail ?? '', /非阻塞上下文压缩/);
   });
 
-  it('recovers report-view follow-ups from existing artifacts after a system interruption', () => {
+  it('dispatches report artifact follow-ups to the backend instead of resolving them in the UI', async () => {
     const session = sessionWithReportArtifact();
+    const prompt = '给我markdown格式的报告，我需要看';
+    const requestBodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return streamResponse([{
+        result: {
+          message: 'Backend rendered report follow-up.',
+          executionUnits: [{
+            id: 'unit-backend-followup',
+            tool: 'capability.report.followup',
+            params: '{}',
+            status: 'done',
+            hash: 'hash-backend-followup',
+            artifacts: ['research-report'],
+            outputArtifacts: ['research-report'],
+          }],
+          artifacts: [{
+            id: 'research-report',
+            type: 'research-report',
+            schemaVersion: '1',
+            data: { markdown: '# Backend Report' },
+          }],
+          uiManifest: [{
+            componentId: 'report-viewer',
+            artifactRef: 'research-report',
+            priority: 1,
+          }],
+        },
+      }]);
+    }) as typeof fetch;
 
-    const response = recoverExistingArtifactFollowupAfterInterruption({
-      prompt: '给我markdown格式的报告，我需要看',
-      session,
-      scenarioId: 'literature-evidence-review',
-      scenarioPackageRef: { id: 'literature-evidence-review', version: '1', source: 'built-in' },
-      skillPlanRef: 'skill-plan.test',
-      uiPlanRef: 'ui-plan.test',
-      references: [],
-      interruptedMessage: '当前 backend 运行被系统或网络中断：SciForge project tool 已取消。',
-    });
+    const result = await runPromptOrchestrator(orchestratorInput({
+      prompt,
+      baseSession: session,
+      activeSession: () => session,
+    }));
 
-    assert.ok(response);
-    assert.equal(response.run.status, 'completed');
-    assert.match(response.message.content, /^# AgentServer Report/);
-    assert.equal(response.artifacts[0]?.id, 'research-report');
-    assert.equal(response.uiManifest[0]?.componentId, 'report-viewer');
-    assert.equal(response.executionUnits[0]?.status, 'self-healed');
+    assert.equal(result.status, 'completed');
+    assert.equal(requestBodies.length, 1);
+    assert.equal(requestBodies[0].prompt, prompt);
+    assert.equal((requestBodies[0].uiState as { rawUserPrompt?: string }).rawUserPrompt, prompt);
+    assert.equal((requestBodies[0].uiState as { agentDispatchPolicy?: string }).agentDispatchPolicy, 'agentserver-decides');
+    assert.equal((requestBodies[0].artifacts as Array<{ id?: string }>)[0]?.id, 'research-report');
+    assert.equal(result.finalResponse.message.content, 'Backend rendered report follow-up.');
+    assert.equal(result.finalResponse.executionUnits[0]?.tool, 'capability.report.followup');
+    assert.notEqual(result.finalResponse.executionUnits[0]?.tool, 'sciforge.existing-artifact-followup');
   });
 
-  it('does not recover fresh retrieval prompts from stale report artifacts', () => {
-    const response = recoverExistingArtifactFollowupAfterInterruption({
-      prompt: '帮我重新检索过去一周 arxiv 上 AI Agent 相关论文',
-      session: sessionWithReportArtifact(),
-      scenarioId: 'literature-evidence-review',
-      scenarioPackageRef: { id: 'literature-evidence-review', version: '1', source: 'built-in' },
-      skillPlanRef: 'skill-plan.test',
-      uiPlanRef: 'ui-plan.test',
-      references: [],
-      interruptedMessage: '当前 backend 运行被系统或网络中断：SciForge project tool 已取消。',
-    });
+  it('fails interrupted report follow-ups instead of synthesizing existing-artifact answers', async () => {
+    const session = sessionWithReportArtifact();
+    globalThis.fetch = (async () => {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }) as typeof fetch;
 
-    assert.equal(response, undefined);
+    const result = await runPromptOrchestrator(orchestratorInput({
+      prompt: '帮我重新检索过去一周 arxiv 上 AI Agent 相关论文',
+      baseSession: session,
+      activeSession: () => session,
+    }));
+
+    assert.equal(result.status, 'failed');
+    assert.match(result.message, /当前 backend 运行被系统或网络中断/);
+    assert.equal(result.failedSession.runs[0]?.status, 'failed');
+    assert.doesNotMatch(result.failedSession.runs[0]?.response ?? '', /^# AgentServer Report/);
+    assert.equal(result.failedSession.executionUnits.some((unit) => unit.status === 'self-healed'), false);
   });
 });
 
@@ -219,6 +250,18 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+function streamResponse(items: unknown[]) {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    start(controller) {
+      for (const item of items) {
+        controller.enqueue(encoder.encode(`${JSON.stringify(item)}\n`));
+      }
+      controller.close();
+    },
+  }), { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } });
+}
+
 function event(partial: Partial<AgentStreamEvent>): AgentStreamEvent {
   return {
     id: partial.id ?? `evt-${partial.type ?? 'test'}`,
@@ -226,6 +269,32 @@ function event(partial: Partial<AgentStreamEvent>): AgentStreamEvent {
     label: partial.label ?? partial.type ?? 'event',
     createdAt: partial.createdAt ?? '2026-05-07T00:00:00.000Z',
     ...partial,
+  };
+}
+
+function orchestratorInput(overrides: Partial<Parameters<typeof runPromptOrchestrator>[0]> = {}): Parameters<typeof runPromptOrchestrator>[0] {
+  const baseSession = overrides.baseSession ?? emptySession();
+  return {
+    prompt: 'test',
+    baseSession,
+    references: [],
+    scenarioId: 'literature-evidence-review',
+    baseScenarioId: 'literature-evidence-review',
+    scenarioName: 'Literature',
+    scenarioDomain: 'literature',
+    role: 'researcher',
+    config: testConfig(),
+    availableComponentIds: [],
+    defaultComponentIds: [],
+    scenarioPackageRef: { id: 'literature-evidence-review', version: '1', source: 'built-in' },
+    skillPlanRef: 'skill-plan.test',
+    uiPlanRef: 'ui-plan.test',
+    streamEvents: [],
+    signal: new AbortController().signal,
+    userAbortRequested: () => false,
+    activeSession: () => baseSession,
+    onStreamEvent: () => undefined,
+    ...overrides,
   };
 }
 

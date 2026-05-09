@@ -5,20 +5,10 @@ import { estimateContextWindowState, latestContextWindowState, shouldStartContex
 import type { ScenarioId } from '../../data';
 import { latestLatencyPolicy, latestResponsePlan } from '../../latencyPolicy';
 import { buildInitialResponseProgressEvent } from '../../processProgress';
-import {
-  existingArtifactFollowupPreferredView,
-  existingArtifactFollowupPromptPolicy,
-  existingArtifactFollowupUiManifest,
-  markdownTextForDirectAnswerArtifact,
-  preferredExistingArtifactFollowupArtifact,
-} from '../../../../../packages/presentation/interactive-views';
 import type {
   AgentStreamEvent,
   NormalizedAgentResponse,
-  ObjectReference,
   PeerInstance,
-  RuntimeArtifact,
-  RuntimeExecutionUnit,
   ScenarioInstanceId,
   ScenarioPackageRef,
   ScenarioRuntimeOverride,
@@ -171,21 +161,6 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
       : wasSystemInterrupted
         ? `当前 backend 运行被系统或网络中断：${rawMessage}`
         : rawMessage;
-    const recoveredResponse = !wasUserInterrupted && wasSystemInterrupted
-      ? recoverExistingArtifactFollowupAfterInterruption({
-          prompt: input.prompt,
-          session: input.activeSession() ?? optimisticSession,
-          scenarioId: input.scenarioId,
-          scenarioPackageRef: input.scenarioPackageRef,
-          skillPlanRef: input.skillPlanRef,
-          uiPlanRef: input.uiPlanRef,
-          references: input.references,
-          interruptedMessage: message,
-        })
-      : undefined;
-    if (recoveredResponse) {
-      return { status: 'completed', optimisticSession, finalResponse: recoveredResponse };
-    }
     const { failedRunId, session } = appendFailedRunToSession({
       optimisticSession,
       scenarioId: input.scenarioId,
@@ -204,130 +179,6 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
       message,
     };
   }
-}
-
-export function recoverExistingArtifactFollowupAfterInterruption({
-  prompt,
-  session,
-  scenarioId,
-  scenarioPackageRef,
-  skillPlanRef,
-  uiPlanRef,
-  references,
-  interruptedMessage,
-}: {
-  prompt: string;
-  session: SciForgeSession;
-  scenarioId: ScenarioInstanceId;
-  scenarioPackageRef: ScenarioPackageRef;
-  skillPlanRef: string;
-  uiPlanRef: string;
-  references: SciForgeReference[];
-  interruptedMessage: string;
-}): NormalizedAgentResponse | undefined {
-  if (!isExistingArtifactFollowupPrompt(prompt)) return undefined;
-  const artifact = preferredReportArtifact(session.artifacts);
-  if (!artifact) return undefined;
-  const markdown = markdownTextForArtifact(artifact);
-  if (!markdown) return undefined;
-
-  const now = nowIso();
-  const runId = makeId('run');
-  const executionUnit: RuntimeExecutionUnit = {
-    id: makeId('eu'),
-    tool: 'sciforge.existing-artifact-followup',
-    params: JSON.stringify({
-      prompt,
-      sourceArtifactId: artifact.id,
-      reason: 'system-interruption-existing-artifact',
-    }),
-    status: 'self-healed',
-    hash: `${artifact.id}:${artifact.schemaVersion ?? artifact.type}`,
-    artifacts: [artifact.id],
-    outputArtifacts: [artifact.id],
-    scenarioPackageRef,
-    skillPlanRef,
-    uiPlanRef,
-    selfHealReason: interruptedMessage,
-    nextStep: 'Recovered the follow-up from an existing artifact instead of failing the turn.',
-  };
-  const objectReferences = objectReferencesForArtifact(artifact, runId);
-  const content = markdown.length <= 8_000
-    ? markdown
-    : `${markdown.slice(0, 8_000)}\n\n...（报告较长，已在结果视图中保留完整 Markdown。）`;
-
-  return {
-    message: {
-      id: makeId('msg'),
-      role: 'system',
-      content,
-      createdAt: now,
-      status: 'completed',
-      references,
-      objectReferences,
-    },
-    run: {
-      id: runId,
-      scenarioId,
-      scenarioPackageRef,
-      skillPlanRef,
-      uiPlanRef,
-      status: 'completed',
-      prompt,
-      response: content,
-      createdAt: now,
-      completedAt: now,
-      references,
-      objectReferences,
-      raw: {
-        recoveredFrom: 'system-interruption-existing-artifact',
-        interruptedMessage,
-        sourceArtifactId: artifact.id,
-      },
-    },
-    uiManifest: uiManifestForArtifact(session.uiManifest, artifact),
-    claims: [],
-    executionUnits: [executionUnit],
-    artifacts: [artifact],
-    notebook: [],
-  };
-}
-
-function isExistingArtifactFollowupPrompt(prompt: string) {
-  return existingArtifactFollowupPromptPolicy(prompt);
-}
-
-function preferredReportArtifact(artifacts: RuntimeArtifact[]) {
-  return preferredExistingArtifactFollowupArtifact(artifacts);
-}
-
-function markdownTextForArtifact(artifact: RuntimeArtifact): string | undefined {
-  return markdownTextForDirectAnswerArtifact(artifact);
-}
-
-function uiManifestForArtifact(existing: SciForgeSession['uiManifest'], artifact: RuntimeArtifact) {
-  return existingArtifactFollowupUiManifest(existing, artifact);
-}
-
-function objectReferencesForArtifact(artifact: RuntimeArtifact, runId: string): ObjectReference[] {
-  return [{
-    id: `obj-${artifact.id}`,
-    title: typeof artifact.metadata?.title === 'string' ? artifact.metadata.title : artifact.id,
-    kind: 'artifact',
-    ref: artifact.id,
-    artifactType: artifact.type,
-    runId,
-    preferredView: existingArtifactFollowupPreferredView(artifact),
-    actions: ['focus-right-pane', 'inspect', 'copy-path'],
-    status: 'available',
-    summary: typeof artifact.metadata?.summary === 'string' ? artifact.metadata.summary : undefined,
-    provenance: {
-      dataRef: artifact.dataRef,
-      path: artifact.path,
-      producer: artifact.producerScenario,
-      version: artifact.schemaVersion,
-    },
-  }];
 }
 
 function emitTargetInstanceEvents(

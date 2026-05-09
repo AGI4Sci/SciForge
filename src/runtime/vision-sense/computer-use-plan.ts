@@ -7,7 +7,7 @@ import { toTraceScreenshotRef } from '../computer-use/capture.js';
 import type { ComputerUseConfig as VisionSenseConfig, FocusRegion, GenericVisionAction, GroundingResolution, LoopStep, PlannerContractIssue, ScreenshotRef, TraceWindowTarget, VisionPlannerConfig } from '../computer-use/types.js';
 import { extractChatCompletionContent, extractJsonObject, isDarwinPlatform, numberConfig, parseJson, platformLabel, runCommand, sanitizeId } from '../computer-use/utils.js';
 import { isWindowLocalCoordinateSpace } from '../computer-use/window-target.js';
-import { visionSensePlannerPromptPolicy } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
+import { isHighRiskVisionSenseGuiRequest, visionSensePlannerPromptPolicy } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
 import {
   actionLedgerCompletionPolicy,
   rewriteGenericPlannerActionPolicy,
@@ -98,7 +98,7 @@ async function planGenericActionsFromScreenshot(
     );
     if (!retry.ok) return retry;
     if (!retry.done && (retry.actions.length === 0 || retry.actions.every((action) => action.type === 'wait'))) {
-      if (isHighRiskGuiRequest(task)) {
+      if (isHighRiskVisionSenseGuiRequest(task)) {
         return {
           ok: true,
           actions: [{
@@ -158,11 +158,6 @@ async function guardPlannerNoEffectRepeat(
     };
   }
   return retry;
-}
-
-function isHighRiskGuiRequest(text: string) {
-  const primaryTask = text.split(/\n/).find((line) => line.trim()) || text;
-  return /delete|send|pay|authorize|publish|submit|删除|发送|支付|授权|发布|提交|登录授权|外部表单/i.test(primaryTask);
 }
 
 export async function rewriteGenericPlannerAction(action: GenericVisionAction, config: VisionSenseConfig, steps: LoopStep[], task: string): Promise<GenericVisionAction> {
@@ -379,7 +374,7 @@ async function requestGenericPlannerActions(
         'If run history marks a click or double_click target as no-visible-effect=true and the current screenshot is unchanged, do not repeat the same mouse action on the same target. Choose a different visible generic GUI route or a different generic input modality that the screenshot supports.',
         ...visionSensePlannerPromptPolicy.domainTaskInstructions,
         'The supplied screenshot is the observation state. Do not use wait as the only action to request another observation.',
-        'High-risk send/delete/pay/authorize/publish/submit actions must be marked riskLevel="high" and requiresConfirmation=true.',
+        visionSensePlannerPromptPolicy.highRiskActionInstruction,
         extraInstruction,
       ].join(' '),
     },

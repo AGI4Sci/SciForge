@@ -1,6 +1,6 @@
 # SciForge - PROJECT.md
 
-最后更新：2026-05-09
+最后更新：2026-05-10
 
 ## 关键原则
 - 所有修改必须通用、可泛化到任何场景，不能在代码里面硬编码和为当前案例打补丁
@@ -50,7 +50,7 @@ Todo：
 - [x] `src -> packages` P0：迁移 `src/runtime/computer-use/**` 的 action provider 语义到 `packages/actions/computer-use`；`src` 只保留 gateway config、workspace refs、event emission 和 host bridge adapter。
   进展：`capture.ts` provider/fallback/diagnostic policy 已迁到 `packages/actions/computer-use/provider-policy.ts`；executor/input-channel/window-target taxonomy、scheduler policy、adapter aliases 和 planner issue literals 已迁到 `packages/actions/computer-use/runtime-policy.ts`，`src/runtime/computer-use/**` no-src baseline 清零。
 - [ ] `src -> packages` P0：迁移 `src/runtime/vision-sense/**` 中 planner、grounding、focus refinement、semantic verifier feedback、trace policy 到 `packages/observe/vision`；会修改 GUI 的执行部分通过 `packages/actions/computer-use` 暴露。
-  进展：refs-only / planner-only evidence completion、action-ledger completion、planner action rewrite 和 dense/no-effect tolerance policy 已迁到 `packages/observe/vision/sciforge_vision_sense/computer_use_policy.py`，并通过 `src/runtime/vision-sense/computer-use-policy-bridge.ts` 作为 runtime bridge 使用；vision-sense runtime/tool/trace/grounding ids、runtime event ids、completion mode、planner domain/task prompt instructions、Computer Use intent prompt policy 和 app-alias prompt line extraction 已迁到 `packages/observe/vision/computer-use-runtime-policy.ts`，trace output view slots 已迁到 `packages/presentation/interactive-views/vision-sense-trace-output-policy.ts`；`computer-use-plan.ts#domain-prompt-regex` baseline 已从 8 降到 1，runtime/action-loop/grounding/trace-output/sense-provider src capability baseline 已清零。
+  进展：refs-only / planner-only evidence completion、action-ledger completion、planner action rewrite 和 dense/no-effect tolerance policy 已迁到 `packages/observe/vision/sciforge_vision_sense/computer_use_policy.py`，并通过 `src/runtime/vision-sense/computer-use-policy-bridge.ts` 作为 runtime bridge 使用；vision-sense runtime/tool/trace/grounding ids、runtime event ids、completion mode、planner domain/task prompt instructions、Computer Use intent prompt policy、high-risk planner request policy 和 app-alias prompt line extraction 已迁到 `packages/observe/vision/computer-use-runtime-policy.ts`，trace output view slots 已迁到 `packages/presentation/interactive-views/vision-sense-trace-output-policy.ts`；`computer-use-plan.ts#domain-prompt-regex` baseline 已从 8 降到 0，runtime/action-loop/grounding/trace-output/sense-provider src capability baseline 已清零。
 - [x] `src -> packages` P0：删除或迁移 `src/runtime/capability-profiles.ts`，统一到 `packages/scenarios/core/src/runtimeCapabilityProfiles.ts` 或 `packages/contracts/runtime/capabilities.ts`，避免重复 capability profile 真相源。
 - [x] `src -> packages` P1：迁移 `src/runtime/runtime-ui-manifest.ts` 中 renderer aliases、domain defaults、artifact-to-component routing、title/layout/encoding inference 到 `packages/presentation/interactive-views`；`src` 只保留 composition adapter。
 - [x] `src -> packages` P1：迁移 `src/ui/src/uiModuleRegistry.ts` 中 component manifest alias/index 构造到 `packages/presentation/components` 或 `packages/presentation/interactive-views` public export；UI 只消费 package registry。
@@ -66,7 +66,7 @@ Todo：
 - [x] `src -> packages` P1：迁移 `src/ui/src/api/{runtimeConfig,sciforgeToolsClient,scopeCheck}.ts` 和 `src/ui/src/app/ChatPanel.tsx` 中 scenario/domain/scope routing semantics 到 `packages/scenarios/core/src/scenarioRoutingPolicy.ts`；UI 只消费 package-owned routing policy。
 - [x] `src -> packages` P2：拆分 `src/runtime/gateway/verification-policy.ts`，policy/result contract 和 verifier semantics 进入 `packages/contracts/runtime/verification-policy.ts`，workspace 写入和 runtime gating 留在 `src` adapter。
 - [x] `src -> packages` P2：评估 `src/runtime/conversation-policy/contracts.ts`，纯 TS/Python contract 已迁入 `packages/contracts/runtime/conversation-policy.ts`；`python-bridge.ts`、`apply.ts` 继续留在 `src`，旧 `contracts.ts` 已删除。
-- [ ] `packages -> src` P0：继续收敛 `packages/reasoning/conversation-policy/src/sciforge_conversation/service.py` 剩余 turn composition ownership；当前已删除 direct reference digest import 和 workspace-ref audit 语义，`acceptancePlan` / `userVisiblePlan` / `processStage` / `auditTrace` / `metadata` 组合已迁到 `src/runtime/gateway/conversation-service-plan.ts`，`smoke:fixed-platform-boundary` 已清零。
+- [ ] `packages -> src` P0：继续收敛 `packages/reasoning/conversation-policy/src/sciforge_conversation/service.py` 剩余 turn composition ownership；当前已删除 direct reference digest import 和 workspace-ref audit 语义，`acceptancePlan` / `userVisiblePlan` / `processStage` / `auditTrace` / `metadata` 组合已迁到 `src/runtime/gateway/conversation-service-plan.ts`，并将 context-scoped session / currentReferences turn composition 迁到 `buildConversationTurnComposition`，Python 侧只通过 service compat bridge 读取结果，`smoke:fixed-platform-boundary` 已清零。
 - [x] `packages -> src` P0：迁移 `acceptance.py` output acceptance gate 到 `src/runtime/gateway/conversation-acceptance-policy.ts`，Python 侧只保留兼容 bridge。
 - [x] `packages -> src` P0：迁移 `execution_classifier.py` execution mode / risk / stage hint lifecycle 到 `src/runtime/gateway/conversation-execution-classifier.ts`，Python 侧只保留兼容 bridge 和 dataclass API。
 - [x] `packages -> src` P0：迁移 `context_policy.py` context reuse / isolation / repair scope lifecycle 到 `src/runtime/gateway/conversation-context-policy.ts`，Python 侧只保留兼容 bridge。
@@ -83,9 +83,9 @@ Todo：
 - [x] `packages -> src` P1：重新定界 `packages/support/object-references/index.ts` 为 package-owned reference policy：session lookup、action availability、composer marker allocation、synthetic artifact creation 和 chip ordering 保留在 package helper 中，UI 只调用 package API，避免把 artifact/path/domain mapping 搬回 thin shell。
 - [x] `packages -> src` P1：拆分 `packages/support/artifact-preview/index.ts`，preview hydration、inline policy、default preview actions、file-kind inference 进入 `src/runtime/server/file-preview.ts` 和 UI results；`PreviewDescriptor` contract 留在 `packages/contracts/runtime`。
 - [x] `packages -> src/tests` P1：迁移 `packages/scenarios/core/src/runtimeSmoke.ts` 到 `tests/smoke/scenario-runtime-smoke-harness.ts`；scenario package 只保留 policy/schema validation。
-- [ ] `packages -> src/delete` P1：拆分 `packages/scenarios/core/src/componentElements.ts`，runtime recover actions、fallback components、compat aliases 不应作为 scenario policy；短期可迁入 `src/runtime/runtime-ui-manifest.ts` / UI compiler，长期由 registry-driven UI manifest 取代并删除。
-  进展：`componentElements.ts` 已改为从 `packages/presentation/components` 的 `uiComponentRuntimeRegistry` 适配组件元素，删除 scenario-owned built-in/compat alias catalog 和 run-skill/repair-task/fallback-component recover action vocabulary；scenario core 只保留 contract-facing component element shape。
-- [ ] `packages -> src` P2：评估 `packages/scenarios/core/src/uiPlanCompiler.ts`、`validationGate.ts`、`scenarioPackage.ts` 中 platform-wide compile/validation 行为；scenario specs、contracts、elementTypes 留在 package，运行期编译/校验进入 `src/runtime/scenario-policy` 或 UI compiler。进展：UI slot / fallback component validation 已从 `validationGate.ts` 收敛到 `uiPlanCompiler.ts`，package gate 只组合 artifact/skill/tool/failure-policy 校验和 UI compiler 结果。
+- [x] `packages -> src/delete` P1：拆分 `packages/scenarios/core/src/componentElements.ts`，runtime recover actions、fallback components、compat aliases 不应作为 scenario policy；短期可迁入 `src/runtime/runtime-ui-manifest.ts` / UI compiler，长期由 registry-driven UI manifest 取代并删除。
+  证据：`componentElements.ts` 只从 `packages/presentation/components` 的 `uiComponentRuntimeRegistry` 适配 contract-facing component element shape；已删除 scenario-owned fallbackModuleIds -> componentId 映射、`generic-data-table` / `generic-artifact-inspector` fallback adapter、component alias normalize/sort 逻辑和 `provide-compatible-artifact` / `select-supported-component` 等 runtime recover vocabulary。组件 alias 只来自 presentation component runtime registry。
+- [ ] `packages -> src` P2：评估 `packages/scenarios/core/src/uiPlanCompiler.ts`、`validationGate.ts`、`scenarioPackage.ts` 中 platform-wide compile/validation 行为；scenario specs、contracts、elementTypes 留在 package，运行期编译/校验进入 `src/runtime/scenario-policy` 或 UI compiler。进展：UI slot / fallback component validation 已从 `validationGate.ts` 收敛到 `uiPlanCompiler.ts`，package gate 只组合 artifact/skill/tool/failure-policy 校验和 UI compiler 结果；scenario package policy compilation / policy-only violation scanning 已迁到 `src/runtime/scenario-policy/scenario-package-policy.ts`，package 仅保留 policy contract shape 与 allowed-field 常量。
 - [x] 明确保留在 `src`：`src/runtime/workspace-server.ts`、`src/runtime/server/**`、`generation-gateway.ts`、`workspace-runtime-gateway.ts`、`workspace-task-runner.ts`、`task-projects.ts`、gateway adapter/orchestration 文件、`src/ui/src/app/**` React app shell。
 - [x] 明确保留在 `packages`：`packages/presentation/components/**`、`packages/presentation/interactive-views/**`、`packages/presentation/design-system/**`、`packages/skills/**`、`packages/actions/computer-use/**`、`packages/observe/vision/**`、`packages/verifiers/**`、`packages/contracts/runtime/**`、`packages/scenarios/core/src/{scenarioSpecs,contracts,elementTypes}.ts`。
 - [x] 增加 `smoke:fixed-platform-boundary`，实现为 `tools/check-fixed-platform-boundary.ts` 或扩展 `tools/check-module-boundaries.ts`，检查 `src` 固定平台与 `packages` 插拔能力边界。
@@ -101,7 +101,7 @@ Todo：
 - [x] 更新 `docs/Extending.md` 和 `packages/README.md`：新增模块应先判断属于平台秩序还是能力语义，再选择 `src/` 或 `packages/`。
 - [ ] 删除与该边界冲突的旧 registry、旧 adapter 和旧 direct import。
 
-进度备注：`smoke:fixed-platform-boundary` 当前剩余 0 个 tracked warnings；`smoke:no-src-capability-semantics` 当前收敛到 492 个 tracked findings，无新增；`smoke:no-legacy-paths` 当前收敛到 27 个 tracked findings，无新增。
+进度备注：`smoke:fixed-platform-boundary` 当前剩余 0 个 tracked warnings；`smoke:no-src-capability-semantics` 当前收敛到 486 个 tracked findings，无新增；`smoke:no-legacy-paths` 当前收敛到 27 个 tracked findings，无新增。
 
 验收标准：
 
@@ -124,7 +124,8 @@ Todo：
 - [x] generated task validation/repair 真实路径 best-effort 写入 Capability Evolution Ledger，并只返回 `ledgerRef`、`recordRef` 和 compact summary。
 - [ ] 在 backend 动态写胶水代码、composed capability 执行、fallback 到原子能力等更完整路径写入 ledger record。
 - [x] 建立 promotion proposal 规则：高频成功组合可提议晋升为 composed capability；高频失败模式可提议更新 validator、fallbackPolicy 或 repair hints。
-- [ ] broker 只消费 ledger 的 compact summary，不直接展开完整胶水代码和日志；需要复用/修复时再按 ref 展开。
+- [x] broker 只消费 ledger 的 compact summary，不直接展开完整胶水代码和日志；需要复用/修复时再按 ref 展开。
+  进展：`CapabilityEvolutionBrokerDigest`、broker-safe compact summary sanitizer 和 TypeScript capability broker scoring 已接入；AgentServer handoff 只传 ledger record counts / matched signals / refs，不展开 glue code、stdout/stderr 或完整 JSONL。
 - [x] 增加 smoke：generated task schema invalid / repair completion 后 ledger 记录原失败、下钻路径和最终 artifact refs，compact summary 不展开胶水代码。
 - [x] 增加 smoke：composed capability schema invalid 后 fallback 到 atomic capabilities，并记录 fallback 决策与 atomic trace。
 - [ ] 删除任何散落的“成功胶水代码缓存”或“失败样例记录”临时实现，统一归入 ledger。
@@ -134,7 +135,7 @@ Todo：
 - [ ] 每次动态 glue code 或 composed capability fallback 都有 ledger record，可追溯到 run、execution units、artifacts 和 validation failures。
 - [ ] fallback 是否发生由 validator/failureCode/fallbackPolicy/retryBudget 决定，不由 UI 或 LLM 自由猜测。
 - [ ] ledger 能生成 promotion candidates 和 repair-hint improvement candidates。
-- [ ] broker 默认只读取 ledger brief/digest，不造成每轮 token 暴涨。
+- [x] broker 默认只读取 ledger brief/digest，不造成每轮 token 暴涨。
 
 ### T120 Final Cutover：删除遗留链路并锁定唯一真相源
 
@@ -171,6 +172,8 @@ Todo：
 - [ ] 将“backend 不可达/stream 断开/validation failed”统一显示为诊断和 recover actions，不合成最终答案。
 - [ ] 结果面板只依赖稳定 object refs；不直接依赖临时 `agentserver://` preview。
 - [ ] 增加 UI smoke，断言 report 追问、artifact 追问、失败修复都由 backend/capability path 产生结果。
+
+进展：`runOrchestrator.ts` 已删除系统中断后按自然语言/report artifact 合成 `sciforge.existing-artifact-followup` 成功响应的 UI fallback；`runOrchestrator.targetInstance.test.ts` 改为断言 report/artifact 追问发送到 backend/capability path，backend 中断只记录失败诊断，不合成 Markdown 报告。
 
 验收标准：
 

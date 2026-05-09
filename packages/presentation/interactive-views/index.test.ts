@@ -28,6 +28,7 @@ import {
   normalizeDirectAnswerUiManifest,
   preferredExistingArtifactFollowupArtifact,
   preferredInteractiveViewComponentForArtifactType,
+  repairDiagnosticViewSlotPolicy,
   reportRuntimeResultViewSlots,
   resolveInteractiveViewPlanSection,
   selectedViewComponentsForIntent,
@@ -229,6 +230,12 @@ test('interactive view policy owns report runtime result slots', () => {
       { componentId: 'execution-unit-table', artifactRef: 'knowledge-runtime-result', priority: 2 },
     ],
   );
+  assert.deepEqual(repairDiagnosticViewSlotPolicy({ skillDomain: 'literature' }), {
+    componentId: 'execution-unit-table',
+    title: 'Execution units',
+    artifactRef: 'literature-runtime-result',
+    priority: 1,
+  });
 });
 
 test('direct answer result policy owns report artifact and view selection semantics', () => {

@@ -13,6 +13,11 @@ export interface ConversationServicePlan {
   metadata: JsonMap;
 }
 
+export interface ConversationTurnComposition {
+  contextSession: JsonMap;
+  currentReferences: JsonMap[];
+}
+
 export function buildConversationServicePlan(request: unknown): ConversationServicePlan {
   const data = recordValue(request);
   const policyInput = recordValue(data.policyInput);
@@ -34,6 +39,22 @@ export function buildConversationServicePlan(request: unknown): ConversationServ
 }
 
 export const buildConversationServicePlanFromRequest = buildConversationServicePlan;
+
+export function buildConversationTurnComposition(request: unknown): ConversationTurnComposition {
+  const data = recordValue(request);
+  const policyInput = recordValue(data.policyInput);
+  const session = recordValue(policyInput.session ?? data.session);
+  const contextPolicy = recordValue(data.contextPolicy);
+  const memoryPlan = recordValue(data.memoryPlan);
+  const currentReferenceDigests = recordList(data.currentReferenceDigests);
+
+  return {
+    contextSession: contextSessionForPolicy(session, contextPolicy, memoryPlan),
+    currentReferences: currentReferencesForTurn(policyInput, currentReferenceDigests),
+  };
+}
+
+export const buildConversationTurnCompositionFromRequest = buildConversationTurnComposition;
 
 function acceptancePlan(goalSnapshot: JsonMap, handoffPlan: JsonMap): JsonMap {
   return {
@@ -73,6 +94,41 @@ function userVisiblePlan(
       detail: stringValue(handoffPlan.status) ?? 'ready',
     },
   ];
+}
+
+function contextSessionForPolicy(session: JsonMap, contextPolicy: JsonMap, memoryPlan: JsonMap): JsonMap {
+  const mode = stringValue(contextPolicy.mode) ?? '';
+  const historyReuse = recordValue(contextPolicy.historyReuse);
+  const allowHistory = historyReuse.allowed === true || ['continue', 'repair'].includes(mode);
+  const explicitRefs = Array.isArray(memoryPlan.currentReferenceFocus) ? memoryPlan.currentReferenceFocus : [];
+  if (allowHistory || explicitRefs.length > 0) return session;
+  return {
+    ...session,
+    artifacts: [],
+    executionUnits: [],
+    runs: [],
+  };
+}
+
+function currentReferencesForTurn(policyInput: JsonMap, currentReferenceDigests: JsonMap[]): JsonMap[] {
+  const explicit = recordList(policyInput.references).length > 0
+    ? recordList(policyInput.references)
+    : recordList(policyInput.refs);
+  if (explicit.length > 0) return explicit;
+  return currentReferenceDigests.flatMap((digest) => {
+    const sourceRef = stringValue(digest.path)
+      ?? stringValue(digest.sourceRef)
+      ?? stringValue(digest.clickableRef);
+    if (!sourceRef) return [];
+    const ref = sourceRef.replace(/^file:/, '');
+    return [{
+      kind: 'file',
+      ref,
+      title: ref.split('/').filter(Boolean).at(-1) ?? ref,
+      source: 'python-reference-digest',
+      digestId: digest.id,
+    }];
+  });
 }
 
 function auditTrace(data: JsonMap): JsonMap[] {
@@ -117,6 +173,10 @@ function recordValue(value: unknown): JsonMap {
 
 function arrayValue(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
+}
+
+function recordList(value: unknown): JsonMap[] {
+  return Array.isArray(value) ? value.filter(isRecord).map((item) => ({ ...item })) : [];
 }
 
 function stringValue(value: unknown): string | undefined {

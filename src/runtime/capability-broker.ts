@@ -7,6 +7,10 @@ import {
   type CapabilityRepairHint,
   type CapabilityValidatorManifest,
 } from '../../packages/contracts/runtime/capability-manifest.js';
+import type {
+  CapabilityEvolutionCompactRecord,
+  CapabilityEvolutionCompactSummary,
+} from '../../packages/contracts/runtime/capability-evolution.js';
 
 export interface CapabilityBrokerObjectRef {
   id?: string;
@@ -65,6 +69,7 @@ export interface CapabilityBrokerInput {
   objectRefs?: CapabilityBrokerObjectRef[];
   artifactIndex?: CapabilityBrokerArtifactIndexEntry[];
   failureHistory?: CapabilityBrokerFailureHistoryEntry[];
+  capabilityEvolutionSummary?: CapabilityEvolutionCompactSummary;
   scenarioPolicy?: CapabilityBrokerScenarioPolicy;
   runtimePolicy?: CapabilityBrokerRuntimePolicy;
   availableProviders?: CapabilityBrokerProviderAvailability[] | string[];
@@ -111,6 +116,8 @@ export interface CapabilityBrokerOutput {
     artifactIndexEntries: number;
     failureHistoryEntries: number;
     availableProviders: number;
+    capabilityEvolutionRecords: number;
+    capabilityEvolutionPromotionCandidates: number;
   };
 }
 
@@ -246,6 +253,8 @@ export function brokerCapabilities(input: CapabilityBrokerInput, registry: Capab
       artifactIndexEntries: input.artifactIndex?.length ?? 0,
       failureHistoryEntries: input.failureHistory?.length ?? 0,
       availableProviders: availableProviders.size,
+      capabilityEvolutionRecords: compactLedgerRecords(input.capabilityEvolutionSummary).length,
+      capabilityEvolutionPromotionCandidates: input.capabilityEvolutionSummary?.promotionCandidates.length ?? 0,
     },
   };
 }
@@ -349,6 +358,11 @@ function scoreCapability(
     matchedSignals.push(`artifact index match: ${artifactMatches.slice(0, 4).join(', ')}`);
   }
 
+  const ledgerSignals = scoreCapabilityEvolutionLedger(input.capabilityEvolutionSummary, manifest);
+  if (ledgerSignals.scoreDelta !== 0) score += ledgerSignals.scoreDelta;
+  matchedSignals.push(...ledgerSignals.matchedSignals);
+  penalties.push(...ledgerSignals.penalties);
+
   const scenario = input.scenarioPolicy;
   if (scenario?.preferredCapabilityIds?.includes(manifest.id)) {
     score += 30;
@@ -415,6 +429,75 @@ function toBrokeredBrief(item: ScoredCapability): BrokeredCapabilityBrief {
     score: item.score,
     matchedSignals: [...item.matchedSignals],
   };
+}
+
+function scoreCapabilityEvolutionLedger(
+  summary: CapabilityEvolutionCompactSummary | undefined,
+  manifest: CapabilityManifest,
+) {
+  const matchedSignals: string[] = [];
+  const penalties: string[] = [];
+  let scoreDelta = 0;
+  const records = compactLedgerRecords(summary);
+  if (!records.length) return { scoreDelta, matchedSignals, penalties };
+
+  const matchingRecords = records.filter((record) => compactRecordCapabilityIds(record).includes(manifest.id));
+  const successfulRecords = matchingRecords.filter(isSuccessfulLedgerRecord);
+  const failedRecords = matchingRecords.filter(isFailedLedgerRecord);
+  if (successfulRecords.length > 0) {
+    scoreDelta += Math.min(16, successfulRecords.length * 4);
+    matchedSignals.push(`capability evolution ledger success: ${successfulRecords.length}`);
+  }
+  if (failedRecords.length > 0) {
+    scoreDelta -= Math.min(16, failedRecords.length * 4);
+    penalties.push(`capability evolution ledger failure: ${failedRecords.length}`);
+  }
+
+  const repairableFailureCodes = new Set(manifest.repairHints.map((hint) => hint.failureCode));
+  const repairableFailures = records.filter((record) => record.failureCode && repairableFailureCodes.has(record.failureCode));
+  if (repairableFailures.length > 0) {
+    scoreDelta += Math.min(12, repairableFailures.length * 4);
+    matchedSignals.push(`capability evolution repair hint match: ${[...new Set(repairableFailures.map((record) => record.failureCode))].slice(0, 3).join(', ')}`);
+  }
+
+  const promotionMatches = (summary?.promotionCandidates ?? []).filter((record) => {
+    const candidate = record.promotionCandidate;
+    return candidate?.suggestedCapabilityId === manifest.id
+      || Boolean(candidate?.suggestedUpdates?.capabilityIds?.includes(manifest.id))
+      || compactRecordCapabilityIds(record).includes(manifest.id);
+  });
+  if (promotionMatches.length > 0) {
+    scoreDelta += Math.min(14, promotionMatches.length * 7);
+    matchedSignals.push(`capability evolution promotion candidate: ${promotionMatches.length}`);
+  }
+
+  return { scoreDelta, matchedSignals, penalties };
+}
+
+function compactLedgerRecords(summary: CapabilityEvolutionCompactSummary | undefined) {
+  return summary ? [...summary.recentRecords, ...summary.promotionCandidates] : [];
+}
+
+function compactRecordCapabilityIds(record: CapabilityEvolutionCompactRecord) {
+  return unique([
+    ...record.selectedCapabilityIds,
+    ...(record.atomicTrace ?? []).map((entry) => entry.capabilityId),
+    ...(record.promotionCandidate?.suggestedUpdates?.capabilityIds ?? []),
+    record.promotionCandidate?.suggestedCapabilityId ?? '',
+  ].filter(Boolean));
+}
+
+function isSuccessfulLedgerRecord(record: CapabilityEvolutionCompactRecord) {
+  return record.finalStatus === 'succeeded'
+    || record.finalStatus === 'fallback-succeeded'
+    || record.finalStatus === 'repair-succeeded';
+}
+
+function isFailedLedgerRecord(record: CapabilityEvolutionCompactRecord) {
+  return record.finalStatus === 'failed'
+    || record.finalStatus === 'fallback-failed'
+    || record.finalStatus === 'repair-failed'
+    || record.finalStatus === 'needs-human';
 }
 
 function compareScoredCapability(left: ScoredCapability, right: ScoredCapability): number {

@@ -47,6 +47,8 @@ export interface CapabilityRegistry {
   loadContract(id: string): Promise<CapabilityContract | undefined>;
 }
 
+export const WORKSPACE_RUNTIME_GATEWAY_REPAIR_TOOL_ID = 'sciforge.workspace-runtime-gateway' as const;
+
 export function agentServerCapabilityRoutingPolicy(): Record<string, string> {
   return {
     decisionOwner: 'AgentServer',

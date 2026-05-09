@@ -1,8 +1,9 @@
 import { resolve } from 'node:path';
 import {
+  CURRENT_REFERENCE_GATE_TOOL_ID,
   VERIFICATION_RESULT_CONTRACT_ID,
   VERIFICATION_RESULT_SCHEMA_PATH,
-} from '@sciforge-ui/runtime-contract/verification-result';
+} from '@sciforge-ui/runtime-contract';
 import {
   CONTRACT_VALIDATION_FAILURE_CONTRACT_ID,
   type ContractValidationFailure,
@@ -130,7 +131,7 @@ export async function validateAndNormalizePayload(
   const referenceFailureUnits = referenceFailures.map((failure, index) => ({
     id: `current-reference-usage-${index + 1}`,
     status: 'failed-with-reason',
-    tool: 'sciforge.current-reference-gate',
+    tool: CURRENT_REFERENCE_GATE_TOOL_ID,
     failureReason: failure,
     recoverActions: [
       'Read the current-turn reference by ref/path/dataRef.',

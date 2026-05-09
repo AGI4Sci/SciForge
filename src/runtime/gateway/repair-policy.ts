@@ -1,5 +1,7 @@
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-types.js';
+import { WORKSPACE_RUNTIME_GATEWAY_REPAIR_TOOL_ID } from '@sciforge-ui/runtime-contract/capabilities';
 import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract/validation-failure';
+import { repairDiagnosticViewSlotPolicy } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy';
 import { sha1 } from '../workspace-task-runner.js';
 import { uniqueStrings } from '../gateway-utils.js';
 import { diagnosticForFailure, type AgentServerBackendFailureDiagnostic } from './backend-failure-diagnostics.js';
@@ -88,7 +90,7 @@ export function repairNeededPayload(
     uiManifest: [defaultRepairDiagnosticSlot(request)],
     executionUnits: [{
       id,
-      tool: 'sciforge.workspace-runtime-gateway',
+      tool: WORKSPACE_RUNTIME_GATEWAY_REPAIR_TOOL_ID,
       params: JSON.stringify(repairParams(request, skill, repairFailure)),
       status: 'repair-needed',
       hash: sha1(`${id}:${repairReason}`).slice(0, 12),
@@ -294,12 +296,7 @@ function objectReferencesForEvidence(executionUnitId: string, refs: string[]) {
 }
 
 function defaultRepairDiagnosticSlot(request: GatewayRequest) {
-  return {
-    componentId: 'execution-unit-table',
-    title: 'Execution units',
-    artifactRef: `${request.skillDomain}-runtime-result`,
-    priority: 1,
-  };
+  return repairDiagnosticViewSlotPolicy({ skillDomain: request.skillDomain });
 }
 
 export function requiredInputsForRepair(request: GatewayRequest, problem: StructuredRepairFailure) {

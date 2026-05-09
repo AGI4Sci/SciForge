@@ -5,9 +5,11 @@ import { tmpdir } from 'node:os';
 import type { CapabilityEvolutionRecord } from '../../packages/contracts/runtime/capability-evolution.js';
 import {
   appendCapabilityEvolutionRecord,
+  buildCapabilityEvolutionBrokerDigest,
   buildCapabilityEvolutionCompactSummary,
   CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH,
   readCapabilityEvolutionRecords,
+  sanitizeCapabilityEvolutionCompactSummaryForBroker,
 } from '../../src/runtime/capability-evolution-ledger.js';
 import { recordCapabilityEvolutionRuntimeEvent } from '../../src/runtime/gateway/capability-evolution-events.js';
 import { runAgentServerGeneratedTask } from '../../src/runtime/gateway/generated-task-runner.js';
@@ -155,6 +157,22 @@ try {
   ]);
   assert.equal(JSON.stringify(summary).includes('print('), false, 'compact summary must not expand glue code content');
   assert.equal(summary.recentRecords[0]?.recordRef, `${CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH}#L1`);
+  const brokerSafeSummary = sanitizeCapabilityEvolutionCompactSummaryForBroker({
+    ...summary,
+    recentRecords: [{
+      ...summary.recentRecords[0],
+      glueCodeRef: '.sciforge/tasks/LEDGER_GLUE_CODE_SENTINEL.py',
+      fullLog: 'LEDGER_FULL_LOG_SENTINEL',
+    }],
+  });
+  assert.ok(brokerSafeSummary);
+  const brokerSafeText = JSON.stringify(brokerSafeSummary);
+  assert.equal(brokerSafeText.includes('LEDGER_GLUE_CODE_SENTINEL'), false);
+  assert.equal(brokerSafeText.includes('LEDGER_FULL_LOG_SENTINEL'), false);
+  const brokerDigest = buildCapabilityEvolutionBrokerDigest(brokerSafeSummary);
+  assert.equal(brokerDigest.schemaVersion, 'sciforge.capability-evolution-broker-digest.v1');
+  assert.deepEqual(brokerDigest.consumedRecordRefs, [`${CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH}#L1`]);
+  assert.deepEqual(brokerDigest.failureCodes, ['schema-invalid']);
 
   const request: GatewayRequest = {
     skillDomain: 'literature',

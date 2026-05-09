@@ -6,10 +6,12 @@ import {
   agentServerBibliographicVerificationPromptPolicyLines,
   agentServerCurrentReferencePromptPolicyLines,
   agentServerToolPayloadProtocolContractLines,
+  CURRENT_REFERENCE_GATE_TOOL_ID,
   defaultArtifactSchemaForSkillDomain,
 } from './artifact-policy';
 
 test('runtime artifact policy owns AgentServer ToolPayload prompt contract', () => {
+  assert.equal(CURRENT_REFERENCE_GATE_TOOL_ID, 'sciforge.current-reference-gate');
   assert.deepEqual(defaultArtifactSchemaForSkillDomain('literature'), { type: 'paper-list' });
 
   const protocol = agentServerToolPayloadProtocolContractLines().join('\n');

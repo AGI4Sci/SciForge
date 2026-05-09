@@ -18,6 +18,7 @@ export type {
   ArtifactReferenceScope,
 } from './artifact-reference-policy';
 export {
+  CURRENT_REFERENCE_GATE_TOOL_ID,
   agentServerArtifactSelectionPromptPolicyLines,
   agentServerBibliographicVerificationPromptPolicyLines,
   agentServerCurrentReferencePromptPolicyLines,
@@ -156,8 +157,10 @@ export {
 } from './capability-manifest';
 export {
   agentServerCapabilityRoutingPolicy,
+  WORKSPACE_RUNTIME_GATEWAY_REPAIR_TOOL_ID,
 } from './capabilities';
 export type {
+  CapabilityEvolutionBrokerDigest,
   CapabilityEvolutionCompactRecord,
   CapabilityEvolutionCompactSummary,
   CapabilityEvolutionRecord,

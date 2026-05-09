@@ -24,6 +24,12 @@ export type RuntimeResultViewSlotsPolicyRequest = {
   priorityStart?: number;
 };
 
+export type RepairDiagnosticViewSlotPolicyRequest = {
+  skillDomain: string;
+  title?: string;
+  priority?: number;
+};
+
 type ViewPolicyModule = {
   componentId: string;
   moduleId?: string;
@@ -245,6 +251,15 @@ export function reportRuntimeResultViewSlots(reportArtifactRef: string, runtimeR
     primaryArtifactType: 'research-report',
     runtimeResultRef,
   });
+}
+
+export function repairDiagnosticViewSlotPolicy(request: RepairDiagnosticViewSlotPolicyRequest): Record<string, unknown> {
+  return {
+    componentId: 'execution-unit-table',
+    title: request.title ?? 'Execution units',
+    artifactRef: `${request.skillDomain}-runtime-result`,
+    priority: request.priority ?? 1,
+  };
 }
 
 export function expectedArtifactTypesForIntent(request: ArtifactIntentPolicyRequest) {

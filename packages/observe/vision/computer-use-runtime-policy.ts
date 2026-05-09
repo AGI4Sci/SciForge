@@ -40,7 +40,14 @@ export const visionSensePlannerPromptPolicy = {
     'If requested title/body text is already visible in a selected placeholder or text box, report done=true instead of retyping the same text or creating another text box.',
     'If run history shows toolbar-or-ribbon actions with no-visible-effect=true, avoid toolbar/ribbon/menu controls in the next action. Work with the visible document/canvas content instead, or report done=true if the visible state already satisfies the task.',
   ],
+  highRiskActionInstruction: 'High-risk send/delete/pay/authorize/publish/submit actions must be marked riskLevel="high" and requiresConfirmation=true.',
 } as const;
+
+const highRiskVisionSenseGuiRequestPattern = /delete|send|pay|authorize|publish|submit|删除|发送|支付|授权|发布|提交|登录授权|外部表单/i;
+
+export function isHighRiskVisionSenseGuiRequest(prompt: string) {
+  return highRiskVisionSenseGuiRequestPattern.test(primaryVisionSenseTaskLine(prompt));
+}
 
 export function looksLikeVisionSenseComputerUseRequest(prompt: string) {
   const text = prompt.trim();

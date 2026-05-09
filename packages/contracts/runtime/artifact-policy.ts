@@ -7,6 +7,8 @@ const DEFAULT_ARTIFACT_TYPE_BY_SKILL_DOMAIN: Record<SciForgeSharedSkillDomain, s
   knowledge: 'knowledge-graph',
 };
 
+export const CURRENT_REFERENCE_GATE_TOOL_ID = 'sciforge.current-reference-gate' as const;
+
 export function defaultArtifactSchemaForSkillDomain(skillDomain: SciForgeSharedSkillDomain): Record<string, unknown> {
   return { type: DEFAULT_ARTIFACT_TYPE_BY_SKILL_DOMAIN[skillDomain] };
 }

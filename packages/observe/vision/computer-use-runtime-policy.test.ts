@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  isHighRiskVisionSenseGuiRequest,
   looksLikeVisionSenseComputerUseRequest,
   parseVisionSenseAppAliases,
   requestedVisionSenseAppNameForPrompt,
@@ -29,6 +30,13 @@ test('vision-sense package owns planner domain prompt policy', () => {
   assert.ok(visionSensePlannerPromptPolicy.domainTaskInstructions.length >= 3);
   assert.ok(visionSensePlannerPromptPolicy.domainTaskInstructions.some((instruction) => instruction.includes('document or slide creation tasks')));
   assert.ok(visionSensePlannerPromptPolicy.domainTaskInstructions.some((instruction) => instruction.includes('toolbar-or-ribbon actions')));
+  assert.ok(visionSensePlannerPromptPolicy.highRiskActionInstruction.includes('requiresConfirmation=true'));
+});
+
+test('vision-sense package owns high-risk planner request policy', () => {
+  assert.equal(isHighRiskVisionSenseGuiRequest('Submit the visible form.'), true);
+  assert.equal(isHighRiskVisionSenseGuiRequest('点击发送按钮。'), true);
+  assert.equal(isHighRiskVisionSenseGuiRequest('Inspect the settings.\nLater mention submit for context only.'), false);
 });
 
 test('vision-sense package owns computer-use intent prompt policy', () => {

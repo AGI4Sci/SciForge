@@ -29,7 +29,7 @@ from .latency_policy import build_latency_policy
 from .memory import build_memory_plan
 from .recovery import plan_recovery
 from .response_plan import build_background_plan, build_response_plan
-from .service_plan import build_service_plan
+from .service_plan import build_service_plan, build_turn_composition
 
 _build_ref_digest_bundle = getattr(
     importlib.import_module(".reference" + "_digest", __package__),
@@ -42,12 +42,7 @@ _build_clickable_refs = getattr(
 
 
 def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyResponse:
-    """Evaluate one turn by composing the Python policy modules.
-
-    This service is the only orchestration entrypoint for conversation-policy
-    algorithms. TypeScript callers should treat its JSON response as the policy
-    truth source and keep JS code limited to transport, fallback, and rendering.
-    """
+    """Evaluate one turn through compatibility bridges and package-local policies."""
 
     policy_input = _policy_input(request)
     goal_snapshot = build_goal_snapshot(policy_input)
@@ -57,8 +52,14 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         "goalSnapshot": goal_snapshot,
         "contextPolicy": context_policy,
     })
-    context_session = _session_for_context_policy(policy_input["session"], context_policy, memory_plan)
     current_reference_digests = _build_ref_digest_bundle(policy_input)
+    turn_composition = build_turn_composition({
+        "policyInput": policy_input,
+        "contextPolicy": context_policy,
+        "memoryPlan": memory_plan,
+        "currentReferenceDigests": current_reference_digests,
+    })
+    context_session = _mapping_from_plan(turn_composition, "contextSession")
     clickable_refs = _build_clickable_refs({
         **policy_input,
         "session": context_session,
@@ -107,7 +108,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         "goalSnapshot": goal_snapshot,
         "contextPolicy": context_policy,
         "memoryPlan": memory_plan,
-        "currentReferences": _current_references(request, current_reference_digests),
+        "currentReferences": _mapping_list_from_plan(turn_composition, "currentReferences"),
         "currentReferenceDigests": current_reference_digests,
         "artifactIndex": clickable_refs,
         "capabilityBrief": capability_brief,
@@ -291,42 +292,6 @@ def _handoff_budget(policy_input: JsonMap) -> JsonMap:
         }.items()
         if value is not None
     }
-
-
-def _session_for_context_policy(session: JsonMap, context_policy: JsonMap, memory_plan: JsonMap) -> JsonMap:
-    mode = str(context_policy.get("mode") or "")
-    history_reuse = context_policy.get("historyReuse") if isinstance(context_policy.get("historyReuse"), dict) else {}
-    allow_history = history_reuse.get("allowed") is True or mode in {"continue", "repair"}
-    explicit_refs = memory_plan.get("currentReferenceFocus") if isinstance(memory_plan.get("currentReferenceFocus"), list) else []
-    if allow_history or explicit_refs:
-        return session
-    scoped = dict(session)
-    scoped["artifacts"] = []
-    scoped["executionUnits"] = []
-    scoped["runs"] = []
-    return scoped
-
-
-def _current_references(
-    request: ConversationPolicyRequest,
-    current_reference_digests: list[JsonMap] | None = None,
-) -> list[JsonMap]:
-    explicit = [to_json_dict(item) for item in request.turn.refs]
-    if explicit:
-        return explicit
-    refs: list[JsonMap] = []
-    for digest in current_reference_digests or []:
-        source_ref = digest.get("path") or digest.get("sourceRef") or digest.get("clickableRef")
-        if not source_ref:
-            continue
-        refs.append({
-            "kind": "file",
-            "ref": str(source_ref).removeprefix("file:"),
-            "title": str(source_ref).removeprefix("file:").split("/")[-1],
-            "source": "python-reference-digest",
-            "digestId": digest.get("id"),
-        })
-    return refs
 
 
 def _recovery_plan(policy_input: JsonMap) -> JsonMap:
