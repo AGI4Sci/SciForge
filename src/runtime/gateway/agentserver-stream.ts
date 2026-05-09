@@ -44,10 +44,16 @@ export async function readAgentServerRunStream(
     const envelope = JSON.parse(line) as unknown;
     envelopes.push(envelope);
     if (!isRecord(envelope)) return;
-    if ('event' in envelope) {
-      const event = envelope.event;
+    for (const event of streamEventsFromEnvelope(envelope)) {
       workEvidence.push(...collectWorkEvidenceFromBackendEvent(event));
-      if (isRecord(event) && typeof event.text === 'string') streamTextParts.push(event.text);
+      if (isRecord(event)) {
+        const text = typeof event.text === 'string'
+          ? event.text
+          : typeof event.delta === 'string'
+            ? event.delta
+            : undefined;
+        if (text) streamTextParts.push(text);
+      }
       onEvent(event);
       const totalUsage = agentServerEventTotalUsage(event);
       if (options.maxTotalUsage && totalUsage && totalUsage > options.maxTotalUsage) {
@@ -91,6 +97,43 @@ export async function readAgentServerRunStream(
     error: streamError || undefined,
     streamText: streamTextParts.join(''),
     workEvidence: dedupeWorkEvidence(workEvidence),
+  };
+}
+
+function streamEventsFromEnvelope(envelope: Record<string, unknown>) {
+  if ('event' in envelope) return [envelope.event];
+  const events = Array.isArray(envelope.events) ? envelope.events : undefined;
+  if (events) return events;
+  if (looksLikeAgentServerStreamEvent(envelope)) return [normalizeTopLevelStreamEvent(envelope)];
+  return [];
+}
+
+function looksLikeAgentServerStreamEvent(value: Record<string, unknown>) {
+  if ('result' in value || 'error' in value && !('type' in value) && !('kind' in value)) return false;
+  return typeof value.type === 'string'
+    || typeof value.kind === 'string'
+    || typeof value.delta === 'string'
+    || typeof value.text === 'string'
+    || isRecord(value.progress)
+    || isRecord(value.usage);
+}
+
+function normalizeTopLevelStreamEvent(value: Record<string, unknown>) {
+  const rawType = typeof value.type === 'string'
+    ? value.type
+    : typeof value.kind === 'string'
+      ? value.kind
+      : typeof value.delta === 'string'
+        ? 'text-delta'
+        : 'status';
+  const type = rawType === 'text_delta' || rawType === 'token_delta' || rawType === 'content_delta'
+    ? 'text-delta'
+    : rawType;
+  if (type === rawType && typeof value.delta !== 'string') return value;
+  return {
+    ...value,
+    type,
+    text: typeof value.text === 'string' ? value.text : typeof value.delta === 'string' ? value.delta : undefined,
   };
 }
 

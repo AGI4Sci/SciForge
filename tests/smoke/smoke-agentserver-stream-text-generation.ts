@@ -40,7 +40,8 @@ const server = createServer(async (req, res) => {
     return;
   }
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
-  res.write(JSON.stringify({ event: { type: 'text-delta', text: generationJson } }) + '\n');
+  res.write(JSON.stringify({ type: 'status', status: 'running', message: 'AgentServer is searching and writing task code.' }) + '\n');
+  res.write(JSON.stringify({ type: 'text_delta', delta: generationJson }) + '\n');
   res.end(JSON.stringify({
     result: {
       ok: true,
@@ -60,6 +61,7 @@ const address = server.address();
 assert.ok(address && typeof address === 'object');
 
 try {
+  const events: Array<{ type: string; detail?: string }> = [];
   const result = await runWorkspaceRuntimeGateway({
     skillDomain: 'literature',
     prompt: 'Generate from streamed AgentServer text when HTTP result is truncated.',
@@ -67,9 +69,13 @@ try {
     agentServerBaseUrl: `http://127.0.0.1:${address.port}`,
     expectedArtifactTypes: ['research-report'],
     artifacts: [],
+  }, {
+    onEvent: (event) => events.push(event),
   });
   assert.equal(result.executionUnits[0]?.status, 'done');
   assert.ok(result.artifacts.some((artifact) => artifact.id === 'stream-report'));
+  assert.ok(events.some((event) => event.type === 'status' && String(event.detail || '').includes('searching and writing')));
+  assert.ok(events.some((event) => event.type === 'text-delta'));
   console.log('[ok] AgentServer streamed generation JSON is parsed when HTTP result is truncated');
 } finally {
   await new Promise<void>((resolve) => server.close(() => resolve()));

@@ -84,6 +84,7 @@ export function withRequestContextWindowLimit(event: WorkspaceRuntimeEvent, requ
 
 export function normalizeAgentServerWorkspaceEventType(type: string, record: Record<string, unknown>) {
   const lower = type.toLowerCase();
+  if (lower === 'text_delta' || lower === 'token_delta' || lower === 'content_delta') return 'text-delta';
   if (lower === 'context_compressor' || lower === 'context-compressor') return 'contextCompaction';
   if (lower === 'ratelimit' || lower === 'rate_limit' || lower === 'rate-limit') return 'rateLimit';
   if (lower.includes('context_compressor') || record.context_compressor || record.contextCompressor) return 'contextCompaction';

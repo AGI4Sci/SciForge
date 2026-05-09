@@ -107,6 +107,8 @@ AgentServer 可以返回两类成功结果：
 - 直接 `ToolPayload`：用于已经由 backend 推理完的 report-only 或结构化答案。
 - `AgentServerGenerationResponse`：包含 `taskFiles`、`entrypoint`、`environmentRequirements`、`validationCommand` 和 `expectedArtifacts`，随后由 SciForge 写入 workspace 并执行。
 
+stream 过程会透传 AgentServer normalized events。SciForge 支持标准 `{ "event": ... }` envelope，也兼容 AgentServer/上游 backend 直接输出的顶层 `status`、`text-delta`/`text_delta`、`tool-call`、`tool-result`、`usage-update`、`contextWindowState` 等 NDJSON 事件。非最终 `result` 的进度事件会先经过 `normalizeAgentServerWorkspaceEvent`，再作为 workspace runtime event 进入 UI worklog；这样用户可以看到 backend 正在检索、写文件、调用工具、等待权限或仍在运行，而不是只看到 HTTP stream silent wait。
+
 生成的 workspace task 必须通过 `inputPath` 和 `outputPath` argv 读写，最终输出合法 `ToolPayload`。如果 entrypoint 不是可执行代码，runtime 会进行严格重试；如果任务失败或 schema 不合格，runtime 会尝试 repair rerun，最后返回 `repair-needed` 或 `failed-with-reason`。
 
 ## Conversation Policy
