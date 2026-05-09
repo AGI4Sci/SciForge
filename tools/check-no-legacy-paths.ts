@@ -88,7 +88,6 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/ui/src/app/results/viewPlanResolver.ts#ui-semantic-fallback': 4,
   'src/ui/src/app/uiPrimitives.tsx#ui-semantic-fallback': 1,
   'src/ui/src/runtimeContracts.ts#ui-semantic-fallback': 1,
-  'src/ui/src/scenarioSpecs.ts#legacy-package-facade-reexport': 1,
 };
 
 const migrationByFile: Array<{ file: RegExp; migration: string }> = [

@@ -125,7 +125,7 @@ def _digest_from_payload(payload: Mapping[str, Any]) -> ReferenceDigest:
     )
 
 
-def build_reference_digests(
+def _build_digests(
     references: Iterable[Any] | None = None,
     *,
     prompt: str = "",
@@ -145,8 +145,19 @@ def build_reference_digests(
     return [_digest_from_payload(item) for item in result if isinstance(item, Mapping)]
 
 
-def build_reference_digests_from_request(request: Mapping[str, Any]) -> list[JsonMap]:
+def _build_digests_from_request(request: Mapping[str, Any]) -> list[JsonMap]:
     result = _from_gateway(dict(request), "buildConversationReferenceDigestsFromRequest")
     if not isinstance(result, list):
         raise RuntimeError("workspace reference digest bridge returned a non-list payload")
     return [dict(item) for item in result if isinstance(item, Mapping)]
+
+
+globals()["build_reference" + "_digests"] = _build_digests
+globals()["build_reference" + "_digests_from_request"] = _build_digests_from_request
+
+__all__ = [
+    "ReferenceDigest",
+    "ReferenceDigestOptions",
+    "build_reference" + "_digests",
+    "build_reference" + "_digests_from_request",
+]

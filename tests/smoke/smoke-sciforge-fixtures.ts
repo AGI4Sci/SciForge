@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-import { SCENARIO_SPECS } from '../../src/ui/src/scenarioSpecs';
+import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
 import type { ScenarioId } from '../../src/ui/src/data';
 import { normalizeAgentResponse } from '../../src/ui/src/api/agentClient';
 

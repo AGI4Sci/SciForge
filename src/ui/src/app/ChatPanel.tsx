@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { scenarios, type ScenarioId } from '../data';
-import { SCENARIO_SPECS } from '../scenarioSpecs';
+import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
 import { estimateContextWindowState, latestContextWindowState } from '../contextWindow';
 import { builtInScenarioPackageRef } from '@sciforge/scenario-core/scenario-package';
 import { resetSession } from '../sessionStore';

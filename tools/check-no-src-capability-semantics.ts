@@ -228,7 +228,6 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/ui/src/app/results/viewPlanResolver.ts#artifact-id-hardcode': 25,
   'src/ui/src/app/results/viewPlanResolver.ts#component-id-hardcode': 62,
   'src/ui/src/app/results/viewPlanResolver.ts#domain-default-routing': 3,
-  'src/ui/src/app/results/viewPlanResolver.ts#domain-prompt-regex': 3,
   'src/ui/src/app/uiPrimitives.tsx#artifact-id-hardcode': 3,
   'src/ui/src/app/uiPrimitives.tsx#component-id-hardcode': 1,
   'src/ui/src/app/uiPrimitives.tsx#scenario-provider-id-hardcode': 3,

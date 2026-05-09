@@ -3,7 +3,7 @@ import type { ScenarioId } from '../data';
 import { makeId, nowIso } from '../domain';
 import { extractLatencyPolicy, extractResponsePlan, latencyThresholdsFromPolicy, type RuntimeLatencyThresholds } from '../latencyPolicy';
 import { buildInitialResponseProgressEvent } from '../processProgress';
-import { SCENARIO_SPECS } from '../scenarioSpecs';
+import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
 import { expectedArtifactsForCurrentTurn, selectedComponentsForCurrentTurn } from '../artifactIntent';
 import { normalizeAgentResponse } from './agentClient';
 import { DEFAULT_AGENT_REQUEST_TIMEOUT_MS, buildSharedAgentHandoffContract } from '@sciforge-ui/runtime-contract/handoff';

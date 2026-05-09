@@ -44,7 +44,7 @@ import {
   type EvidenceLevel,
   type PageId,
 } from '../data';
-import { SCENARIO_SPECS, SCENARIO_PRESETS, componentManifest } from '../scenarioSpecs';
+import { SCENARIO_SPECS, SCENARIO_PRESETS, componentManifest } from '@sciforge/scenario-core/scenario-specs';
 import { compileScenarioDraft, scenarioIdBySkillDomain, type ScenarioBuilderDraft } from '@sciforge/scenario-core/scenario-draft-compiler';
 import { compileScenarioIRFromSelection, recommendScenarioElements, type ScenarioElementSelection } from '@sciforge/scenario-core/scenario-element-compiler';
 import { elementRegistry } from '@sciforge/scenario-core/element-registry';

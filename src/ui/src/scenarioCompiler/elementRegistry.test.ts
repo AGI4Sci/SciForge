@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { scenarios, type ScenarioId } from '../data';
-import { SCENARIO_SPECS } from '../scenarioSpecs';
+import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
 import { buildElementRegistry, validateElementRegistry } from '@sciforge/scenario-core/element-registry';
 import { compileUIPlanForScenario } from '@sciforge/scenario-core/ui-plan-compiler';
 

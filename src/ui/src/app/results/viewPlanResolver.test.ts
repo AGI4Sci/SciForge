@@ -119,3 +119,83 @@ test('fallback display intent keeps artifact order instead of reading prompt sem
   assert.equal(plan.displayIntent.primaryGoal, '展示当前 session 的 runtime artifacts');
   assert.equal(plan.displayIntent.source, 'fallback-inference');
 });
+
+test('display intent and UI manifest selection outrank artifact type wording during presentation dedupe', () => {
+  const pdbArtifact: RuntimeArtifact = {
+    id: 'backend-selected-pdb',
+    type: 'pdb-file',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    dataRef: 'workspace://artifacts/backend-selected.pdb',
+    metadata: { accession: 'same-structure' },
+  };
+  const htmlArtifact: RuntimeArtifact = {
+    id: 'semantic-looking-html',
+    type: 'structure-3d-html',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    dataRef: 'workspace://artifacts/semantic-looking.html',
+    metadata: { accession: 'same-structure' },
+  };
+  const activeRun: SciForgeRun = {
+    id: 'run-backend-selected-artifact',
+    scenarioId: 'literature-evidence-review',
+    status: 'completed',
+    prompt: 'Show the structure result',
+    response: 'The backend selected a concrete artifact ref.',
+    createdAt: '2026-05-07T00:00:01.000Z',
+    raw: {
+      displayIntent: {
+        primaryGoal: 'Show backend selected PDB artifact',
+        requiredArtifactTypes: ['pdb-file'],
+        preferredModules: ['structure-viewer'],
+      },
+    },
+  };
+  const session = baseSession({
+    runs: [activeRun],
+    artifacts: [pdbArtifact, htmlArtifact],
+    uiManifest: [{ componentId: 'structure-viewer', artifactRef: 'backend-selected-pdb', title: 'Backend selected structure' }],
+  });
+
+  const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun, defaultSlots: [] });
+
+  assert.equal(plan.allItems.some((item) => item.artifact?.id === 'backend-selected-pdb'), true);
+  assert.equal(plan.allItems.some((item) => item.artifact?.id === 'semantic-looking-html'), false);
+});
+
+test('required artifact type matching is exact and does not invent structure-family aliases', () => {
+  const pdbArtifact: RuntimeArtifact = {
+    id: 'pdb-result',
+    type: 'pdb-file',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    dataRef: 'workspace://artifacts/result.pdb',
+    metadata: { accession: '1abc' },
+  };
+  const activeRun: SciForgeRun = {
+    id: 'run-exact-artifact-type',
+    scenarioId: 'literature-evidence-review',
+    status: 'completed',
+    prompt: 'Show the structure',
+    response: 'The backend requested an artifact type that was not produced.',
+    createdAt: '2026-05-07T00:00:01.000Z',
+    raw: {
+      displayIntent: {
+        primaryGoal: 'Show required structure artifact',
+        requiredArtifactTypes: ['structure'],
+        preferredModules: [],
+      },
+    },
+  };
+  const session = baseSession({
+    runs: [activeRun],
+    artifacts: [pdbArtifact],
+  });
+
+  const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun, defaultSlots: [] });
+  const displayIntentItems = plan.allItems.filter((item) => item.source === 'display-intent');
+
+  assert.equal(displayIntentItems.some((item) => item.artifact?.id === 'pdb-result'), false);
+  assert.equal(displayIntentItems.length, 0);
+});

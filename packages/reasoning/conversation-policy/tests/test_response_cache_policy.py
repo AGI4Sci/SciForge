@@ -49,7 +49,7 @@ def test_response_and_background_plan_cover_every_execution_mode(mode):
         assert response["initialResponseMode"] == "direct-context-answer"
         assert background["enabled"] is False
     if mode == "multi-stage-project":
-        assert "artifact-materialization" in background["tasks"]
+        assert "output-materialization" in background["tasks"]
 
 
 @pytest.mark.parametrize(

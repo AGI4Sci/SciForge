@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { scenarios, type ScenarioId } from '../data';
-import { SCENARIO_SPECS } from '../scenarioSpecs';
+import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
 import { compileScenarioDraft } from '@sciforge/scenario-core/scenario-draft-compiler';
 import { compileScenarioIRFromSelection, recommendScenarioElements } from '@sciforge/scenario-core/scenario-element-compiler';
 import { buildBuiltInScenarioPackage } from '@sciforge/scenario-core/scenario-package';

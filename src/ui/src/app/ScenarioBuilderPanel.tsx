@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type RefObject } from 'react';
 import { ChevronDown, ChevronUp, Download, FileCode, FilePlus, Play } from 'lucide-react';
 import { type ScenarioId } from '../data';
-import { SCENARIO_SPECS, componentManifest } from '../scenarioSpecs';
+import { SCENARIO_SPECS, componentManifest } from '@sciforge/scenario-core/scenario-specs';
 import {
   buildScenarioQualityReport,
   compileScenarioIRFromSelection,

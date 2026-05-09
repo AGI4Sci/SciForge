@@ -1,5 +1,5 @@
 import type { ScenarioId } from '../data';
-import { SCENARIO_SPECS } from '../scenarioSpecs';
+import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
 
 const domainSignals: Record<ScenarioId, RegExp[]> = {
   'literature-evidence-review': [/\b(pubmed|paper|literature|evidence|review|clinical trial|trial|文献|证据|综述|临床试验)\b/i],

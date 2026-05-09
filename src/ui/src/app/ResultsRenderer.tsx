@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { AlertTriangle, ChevronDown, ChevronUp, Clock, Copy, Download, FileCode, FileText, Lock, Save, Shield, Sparkles, Target, Terminal, X } from 'lucide-react';
 import { scenarios, type ScenarioId } from '../data';
-import { SCENARIO_SPECS } from '../scenarioSpecs';
+import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
 import { elementRegistry } from '@sciforge/scenario-core/element-registry';
 import { artifactPreviewActions, objectReferenceKinds, previewDescriptorKinds, runtimeContractSchemas, schemaPreview, validateRuntimeContract } from '../runtimeContracts';
 import { openWorkspaceObject, readPreviewDerivative, readPreviewDescriptor, readWorkspaceFile, writeWorkspaceFile, type WorkspaceFileContent } from '../api/workspaceClient';

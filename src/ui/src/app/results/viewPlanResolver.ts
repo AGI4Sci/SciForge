@@ -302,23 +302,12 @@ function findBestArtifactForModule(artifacts: RuntimeArtifact[], module: Runtime
 }
 
 function findBestArtifactForType(artifacts: RuntimeArtifact[], artifactType: string) {
-  return artifacts.find((artifact) => artifact.type === artifactType || artifact.id === artifactType)
-    ?? artifacts.find((artifact) => artifactTypeMatches(artifact.type, artifactType));
+  return artifacts.find((artifact) => artifact.type === artifactType || artifact.id === artifactType);
 }
 
 function findRenderableArtifact(artifacts: RuntimeArtifact[], artifactRef?: string) {
   if (!artifactRef) return undefined;
   return artifacts.find((artifact) => artifact.id === artifactRef || artifact.path === artifactRef || artifact.dataRef === artifactRef);
-}
-
-function artifactTypeMatches(actualType: string, requestedType: string) {
-  if (actualType === requestedType) return true;
-  if (isStructureArtifactType(actualType) && isStructureArtifactType(requestedType)) return true;
-  return false;
-}
-
-function isStructureArtifactType(type: string) {
-  return /structure|pdb|protein|molecule|mmcif|cif|3d/i.test(type);
 }
 
 function validateModuleBinding(module: RuntimeUIModule, artifact?: RuntimeArtifact): { status: ViewPlanBindingStatus; reason?: string; missingFields?: string[] } {
@@ -559,24 +548,11 @@ function normalizePresentationIdentity(value?: string) {
 function presentationIdentityRank(left: ResolvedViewPlanItem, right: ResolvedViewPlanItem) {
   const statusDelta = resultStatusRank(left.status) - resultStatusRank(right.status);
   if (statusDelta) return statusDelta;
-  const payloadDelta = artifactPresentationPayloadRank(left.artifact) - artifactPresentationPayloadRank(right.artifact);
-  if (payloadDelta) return payloadDelta;
   const sourceDelta = viewPlanSourceRank(left.source) - viewPlanSourceRank(right.source);
   if (sourceDelta) return sourceDelta;
   const sectionDelta = sectionRank(left.section) - sectionRank(right.section);
   if (sectionDelta) return sectionDelta;
   return (left.slot.priority ?? left.module.priority ?? 99) - (right.slot.priority ?? right.module.priority ?? 99);
-}
-
-function artifactPresentationPayloadRank(artifact?: RuntimeArtifact) {
-  if (!artifact) return 50;
-  const type = artifact.type.toLowerCase();
-  if (/(interactive|viewer|html|3d|image|figure|plot|chart|report|document|markdown)/i.test(type)) return 0;
-  if (/(file|coordinate|matrix|graph|network|table|dataset|dataframe|csv|tsv|json)/i.test(type)) return 1;
-  if (/(summary|profile|annotation|metadata)/i.test(type)) return 2;
-  if (/(list|collection|index|search-result)/i.test(type)) return 6;
-  if (artifact.dataRef || artifact.path) return 3;
-  return 8;
 }
 
 function viewPlanSourceRank(source: ViewPlanSource) {
