@@ -59,7 +59,9 @@ Todo：
 - [ ] `src -> packages` P2：评估 `src/runtime/conversation-policy/contracts.ts`，纯 TS/Python contract 可迁入 `packages/contracts/runtime` 或 owner package；`python-bridge.ts`、`apply.ts` 继续留在 `src`。
 - [ ] `packages -> src` P0：迁移 `packages/reasoning/conversation-policy/src/sciforge_conversation/service.py`、`execution_classifier.py`、`context_policy.py`、`cache_policy.py`、`memory.py`、`recovery.py`、`response_plan.py`、`latency_policy.py`、`acceptance.py` 到 `src/runtime/conversation-policy` ownership；这是平台 turn lifecycle，不是可插拔能力。
 - [ ] `packages -> src` P0：迁移 `packages/reasoning/conversation-policy/src/sciforge_conversation/capability_broker.py` 的 broker shell/main flow 到 `src/runtime/capability-broker` 或 `src/runtime/skill-registry`；packages 只提供 manifests 和 schemas。
-- [ ] `packages -> src` P0：迁移 `handoff_planner.py` 到 `src/runtime/gateway`，`reference_digest.py` 到 `src/runtime/workspace-references` 或 gateway，`artifact_index.py` 到 `src/runtime/gateway/artifact-reference-context.ts` / `workspace-paths.ts`，因为它们处理 handoff budget、safe file IO、workspace refs 和 artifact persistence lifecycle。
+- [ ] `packages -> src` P0：迁移 `handoff_planner.py` 到 `src/runtime/gateway`，因为它处理 handoff budget、safe file IO、workspace refs 和 artifact persistence lifecycle。
+- [x] `packages -> src` P0：迁移 `reference_digest.py` 的 meaningful lifecycle 到 `src/runtime/gateway/conversation-reference-digest.ts`，Python 侧只保留兼容 bridge。
+- [x] `packages -> src` P0：迁移 `artifact_index.py` 的 clickable refs、workspace path metadata、hash/size、execution refs、digest refs、pathRefs 摘要和 dedupe 到 `src/runtime/gateway/conversation-artifact-index.ts`，Python 侧只保留兼容 bridge。
 - [x] `packages -> src` P1：迁移 `process_events.py` 的 stream/process event normalization 到 `src/runtime/gateway/workspace-event-normalizer.ts`，删除 Python 侧重复路径。
 - [ ] `packages -> src` P1：拆分 `packages/support/object-references/index.ts`，session lookup、action availability、composer marker allocation、synthetic artifact creation 进入 `src/runtime/references` 或 UI；packages 只保留纯 contract-adjacent normalizers。
 - [ ] `packages -> src` P1：拆分 `packages/support/artifact-preview/index.ts`，preview hydration、inline policy、default preview actions、file-kind inference 进入 `src/runtime/server/file-preview.ts` 和 UI results；`PreviewDescriptor` contract 留在 `packages/contracts/runtime`。
@@ -79,6 +81,8 @@ Todo：
 - [x] 针对 boundary-heavy 长文件补拆分计划或降低阈值：`src/runtime/generation-gateway.ts`、`src/runtime/workspace-server.ts`、`src/ui/src/app/ResultsRenderer.tsx`、`src/ui/src/app/ChatPanel.tsx`、`src/runtime/workspace-task-input.ts`、`src/runtime/gateway/agentserver-prompts.ts`。
 - [x] 更新 `docs/Extending.md` 和 `packages/README.md`：新增模块应先判断属于平台秩序还是能力语义，再选择 `src/` 或 `packages/`。
 - [ ] 删除与该边界冲突的旧 registry、旧 adapter 和旧 direct import。
+
+进度备注：`smoke:fixed-platform-boundary` 当前剩余 17 个 tracked warnings；`smoke:no-src-capability-semantics` 当前保持 1045 个 tracked findings，无新增。
 
 验收标准：
 
@@ -189,7 +193,7 @@ Todo：
 - [x] 将 WorkEvidence guard 和 verifier failure 映射到 `ContractValidationFailure`。
 - [x] repair prompt/handoff 只消费结构化 failure，不读取散乱错误文本。
 - [ ] 删除旧的分散 repair-needed/failed-with-reason 组装逻辑，保留统一 validation-to-repair 管线。
-- [ ] 增加 fixtures：schema 缺字段、invalid ref、artifact 空结果、verifier fail、stdout/stderr 指向修复。
+- [x] 增加 fixtures：schema 缺字段、invalid ref、artifact 空结果、verifier fail、stdout/stderr 指向修复。
 
 验收标准：
 
@@ -205,9 +209,9 @@ Todo：
 
 Todo：
 
-- [ ] 建立 capability broker 输入：prompt、object refs、artifact index、failure history、scenario policy、runtime policy、available providers。
-- [ ] broker 输出 compact capability brief 列表，默认不展开 full schema。
-- [ ] 定义 expansion API：`brief -> contract summary -> full schema/examples/repair hints`。
+- [x] 建立 capability broker 输入：prompt、object refs、artifact index、failure history、scenario policy、runtime policy、available providers。
+- [x] broker 输出 compact capability brief 列表，默认不展开 full schema。
+- [x] 定义 expansion API：`brief -> contract summary -> full schema/examples/repair hints`。
 - [ ] 将 backend request payload 改为消费 broker 输出，而不是散落的 skills/views/tools 列表。
 - [ ] 删除旧 capability 拼接逻辑和重复 prompt context builder。
 
@@ -227,15 +231,15 @@ Todo：
 
 - [x] 定义 `CapabilityManifest` contract：name、version、owner package、brief、routing tags、inputSchema、outputSchema、sideEffects、safety、examples、validator、repairHints、providers、lifecycle metadata。
 - [ ] 梳理现有模块并分类：observe、skills、actions、verifiers、views、memory/context、importers/exporters、runtime adapters。
-- [ ] 为首批核心能力补 manifest：artifact resolver/read/render、workspace read/write、run command、Python task、vision observe、computer-use action、report viewer、evidence matrix、schema verifier。
-- [ ] 建立 registry loader 和 package boundary smoke，禁止核心能力无 manifest 暴露。
+- [x] 为首批核心能力补 manifest：artifact resolver/read/render、workspace read/write、run command、Python task、vision observe、computer-use action、report viewer、evidence matrix、schema verifier。
+- [x] 建立 registry loader 和 package boundary smoke，禁止核心能力无 manifest 暴露。
 - [ ] 删除旧 registry、旧 skill list、旧 view registry 中与 manifest 重复的真相源。
 
 验收标准：
 
-- [ ] 至少 8 个核心能力拥有 manifest，并能由 registry 统一加载。
-- [ ] 同一 capability 可声明多个 provider，但 contract 保持唯一。
-- [ ] package boundary smoke 能阻止无 contract 的核心能力扩散。
+- [x] 至少 8 个核心能力拥有 manifest，并能由 registry 统一加载。
+- [x] 同一 capability 可声明多个 provider，但 contract 保持唯一。
+- [x] package boundary smoke 能阻止无 contract 的核心能力扩散。
 
 ### T114 Scenario Packages as Policy Only
 
@@ -245,14 +249,14 @@ Todo：
 
 Todo：
 
-- [ ] 定义 scenario package 允许字段：artifact schemas、default views、allowed/required capabilities、domain vocabulary、verifier policy、privacy/safety boundaries。
+- [x] 定义 scenario package 允许字段：artifact schemas、default views、allowed/required capabilities、domain vocabulary、verifier policy、privacy/safety boundaries。
 - [ ] 删除 scenario 中的执行逻辑、prompt 特例、多轮语义判断和 provider 分支。
 - [ ] scenario 只影响 capability broker 的筛选和 policy，不直接决定 backend 回答。
-- [ ] 增加 scenario package smoke，禁止新增执行代码或 prompt regex。
+- [x] 增加 scenario package smoke，禁止新增执行代码或 prompt regex。
 
 验收标准：
 
-- [ ] 所有 scenario package 都能被解释为 capability policy。
+- [x] 所有 scenario package 都能被解释为 capability policy。
 - [ ] backend 使用 scenario policy 选择能力，但任务理解和执行仍走通用 backend/capability path。
 - [ ] 旧 scenario-specific execution path 被删除。
 

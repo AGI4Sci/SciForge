@@ -12,6 +12,10 @@ import { normalizeGatewayRequest } from '../../src/runtime/gateway/gateway-reque
 import { repairNeededPayload, validateAndNormalizePayload } from '../../src/runtime/gateway/payload-validation.js';
 import { repairNeededPayload as repairPolicyRepairNeededPayload } from '../../src/runtime/gateway/repair-policy.js';
 import { contractValidationFailureFromVerificationResults } from '../../src/runtime/gateway/verification-results.js';
+import {
+  contractValidationFailureFromWorkEvidenceFinding,
+  evaluateToolPayloadEvidence,
+} from '../../src/runtime/gateway/work-evidence-guard.js';
 import type { SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types.js';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-contract-validation-'));
@@ -64,6 +68,7 @@ try {
     artifacts: [],
   } as unknown as ToolPayload, request, skill, refs);
   const schemaFailure = validationFailureFromUnit(missingFieldsPayload.executionUnits[0]);
+  assertSerializableContractFailure(schemaFailure);
   assert.equal(schemaFailure.contract, CONTRACT_VALIDATION_FAILURE_CONTRACT_ID);
   assert.equal(schemaFailure.failureKind, 'payload-schema');
   assert.equal(schemaFailure.contractId, 'sciforge.tool-payload.v1');
@@ -83,6 +88,7 @@ try {
     artifacts: [{ id: '', type: '', data: { markdown: '# Report' } }],
   } as unknown as ToolPayload, request, skill, refs);
   const artifactFailure = validationFailureFromUnit(artifactFailurePayload.executionUnits[0]);
+  assertSerializableContractFailure(artifactFailure);
   assert.equal(artifactFailure.failureKind, 'artifact-schema');
   assert.equal(artifactFailure.contractId, 'sciforge.artifact.v1');
   assert.ok(artifactFailure.missingFields.includes('artifacts[0].type'));
@@ -137,6 +143,7 @@ try {
   const refUnit = invalidRefPayload.executionUnits.find((unit) => unit.status === 'failed-with-reason');
   assert.ok(refUnit);
   const refFailure = validationFailureFromUnit(refUnit);
+  assertSerializableContractFailure(refFailure);
   assert.equal(refFailure.failureKind, 'reference');
   assert.deepEqual(refFailure.invalidRefs, ['file:.sciforge/uploads/current-input.pdf']);
   assert.ok(refFailure.relatedRefs.includes('file:.sciforge/uploads/current-input.pdf'));
@@ -157,6 +164,7 @@ try {
   assert.equal(planUnit.status, 'repair-needed');
   assert.ok(recoverActionsFromUnit(planUnit).some((action) => /Run the promised retrieval\/analysis work/.test(action)));
   const planFailure = validationFailureFromUnit(planUnit);
+  assertSerializableContractFailure(planFailure);
   assert.equal(planFailure.failureKind, 'work-evidence');
   assert.equal(planFailure.contractId, 'sciforge.completed-payload.v1');
   assert.match(planFailure.failureReason, /only plan\/promise text/);
@@ -169,11 +177,61 @@ try {
     refs,
   );
   const workEvidenceFailure = validationFailureFromUnit(workEvidenceRepair.executionUnits[0]);
+  assertSerializableContractFailure(workEvidenceFailure);
   assert.equal(workEvidenceFailure.failureKind, 'work-evidence');
   assert.equal(workEvidenceFailure.contractId, 'sciforge.work-evidence.v1');
   assert.equal(workEvidenceFailure.issues[0]?.path, 'executionUnits[].exitCode');
   assert.ok(workEvidenceFailure.relatedRefs.includes(refs.outputRel));
   assert.ok(recoverActionsFromUnit(workEvidenceRepair.executionUnits[0]).some((action) => /WorkEvidence/i.test(action)));
+  assertRepairEvidenceRefs(workEvidenceRepair, refs.stdoutRel, refs.stderrRel);
+
+  const emptyRetrievalRequest = normalizeGatewayRequest({
+    ...request,
+    prompt: 'Retrieve the latest papers about contract-aware scientific agents.',
+  });
+  const emptyRetrievalPayload: ToolPayload = {
+    message: 'Completed literature retrieval. Web search retrieved 0 papers for the requested query.',
+    confidence: 0.92,
+    claimType: 'fact',
+    evidenceLevel: 'runtime',
+    reasoningTrace: 'Search task completed successfully with 0 records.',
+    claims: [],
+    uiManifest: [{ componentId: 'report-viewer', artifactRef: 'empty-results' }],
+    executionUnits: [{ id: 'empty-retrieval', status: 'done', tool: 'literature.search' }],
+    artifacts: [{
+      id: 'empty-results',
+      type: 'search-results',
+      data: { query: 'contract-aware scientific agents', results: [] },
+      dataRef: 'file:.sciforge/task-results/empty-retrieval.json',
+    }],
+    workEvidence: [{
+      kind: 'retrieval',
+      status: 'success',
+      input: { query: 'contract-aware scientific agents' },
+      resultCount: 0,
+      outputSummary: 'retrieved 0 papers',
+      evidenceRefs: ['file:.sciforge/task-results/empty-retrieval.json'],
+      recoverActions: [],
+    }],
+  };
+  const emptyRetrievalFinding = evaluateToolPayloadEvidence(emptyRetrievalPayload, emptyRetrievalRequest);
+  assert.equal(emptyRetrievalFinding?.kind, 'external-empty-result-without-diagnostics');
+  const emptyRetrievalFailure = contractValidationFailureFromWorkEvidenceFinding(emptyRetrievalFinding, {
+    capabilityId: skill.id,
+    refs,
+  });
+  assert.ok(emptyRetrievalFailure);
+  assertSerializableContractFailure(emptyRetrievalFailure);
+  assert.equal(emptyRetrievalFailure.failureKind, 'work-evidence');
+  assert.match(emptyRetrievalFailure.issues[0]?.message ?? '', /External retrieval returned zero results/);
+  assert.ok(emptyRetrievalFailure.relatedRefs.includes(refs.stdoutRel));
+  const emptyRetrievalRepair = repairPolicyRepairNeededPayload(request, skill, 'RAW_EMPTY_RESULT_REASON_SHOULD_NOT_APPEAR', {
+    ...refs,
+    validationFailure: emptyRetrievalFailure,
+  });
+  assert.match(emptyRetrievalRepair.message, /ContractValidationFailure work-evidence/);
+  assert.doesNotMatch(JSON.stringify(emptyRetrievalRepair), /RAW_EMPTY_RESULT_REASON_SHOULD_NOT_APPEAR/);
+  assertRepairEvidenceRefs(emptyRetrievalRepair, refs.stdoutRel, refs.stderrRel);
 
   const rawScatteredReason = 'RAW_SCATTERED_REASON_SHOULD_NOT_APPEAR_IN_STRUCTURED_REPAIR';
   const structuredRepair = repairPolicyRepairNeededPayload(request, skill, rawScatteredReason, {
@@ -189,9 +247,22 @@ try {
   assert.deepEqual(recoverActionsFromUnit(structuredRepairUnit), workEvidenceFailure.recoverActions);
   assert.equal(structuredRepairUnit.nextStep, workEvidenceFailure.nextStep);
   assert.ok(requiredInputsFromUnit(structuredRepairUnit).includes(`contract:${workEvidenceFailure.contractId}`));
+  assertRepairEvidenceRefs(structuredRepair, refs.stdoutRel, refs.stderrRel);
   const repairParams = JSON.parse(String(structuredRepairUnit.params)) as Record<string, unknown>;
   assert.ok(!('reason' in repairParams));
   assert.deepEqual((repairParams.validationFailure as Record<string, unknown> | undefined)?.invalidRefs, workEvidenceFailure.invalidRefs);
+
+  const stderrDrivenRepair = repairPolicyRepairNeededPayload(
+    request,
+    skill,
+    'Task output parsed validation failed; stderr contains a JSON parse error and stdout has partial output.',
+    refs,
+  );
+  const stderrDrivenUnit = stderrDrivenRepair.executionUnits[0] as Record<string, unknown>;
+  assert.equal(stderrDrivenUnit.stdoutRef, refs.stdoutRel);
+  assert.equal(stderrDrivenUnit.stderrRef, refs.stderrRel);
+  assertRepairEvidenceRefs(stderrDrivenRepair, refs.stdoutRel, refs.stderrRel);
+  assert.ok(recoverActionsFromUnit(stderrDrivenUnit).some((action) => /stdoutRef.*stderrRef.*outputRef|stdoutRef|stderrRef/i.test(action)));
 
   const verifierFailure = contractValidationFailureFromVerificationResults({
     id: 'schema.verifier',
@@ -205,6 +276,7 @@ try {
     relatedRefs: ['file:.sciforge/verifications/schema.verifier.json'],
   });
   assert.ok(verifierFailure);
+  assertSerializableContractFailure(verifierFailure);
   assert.equal(verifierFailure.failureKind, 'verifier');
   assert.equal(verifierFailure.contractId, 'sciforge.verification-result.v1');
   assert.ok(verifierFailure.relatedRefs.includes('file:.sciforge/verifications/schema.verifier.json'));
@@ -217,6 +289,42 @@ function validationFailureFromUnit(unit: Record<string, unknown> | undefined) {
   const refs = unit.refs as { validationFailure?: ContractValidationFailure } | undefined;
   assert.ok(refs?.validationFailure);
   return refs.validationFailure;
+}
+
+function assertSerializableContractFailure(failure: ContractValidationFailure) {
+  const serialized = JSON.parse(JSON.stringify(failure)) as Record<string, unknown>;
+  for (const key of contractValidationFailureSchema.required) {
+    assert.ok(key in serialized, `serialized ContractValidationFailure missing ${key}`);
+  }
+  assert.equal(serialized.contract, CONTRACT_VALIDATION_FAILURE_CONTRACT_ID);
+  assert.equal(typeof serialized.schemaPath, 'string');
+  assert.equal(typeof serialized.contractId, 'string');
+  assert.equal(typeof serialized.failureReason, 'string');
+  assert.ok(Array.isArray(serialized.missingFields));
+  assert.ok(Array.isArray(serialized.invalidRefs));
+  assert.ok(Array.isArray(serialized.unresolvedUris));
+  assert.ok(Array.isArray(serialized.recoverActions));
+  assert.ok(Array.isArray(serialized.relatedRefs));
+  assert.ok(Array.isArray(serialized.issues));
+}
+
+function assertRepairEvidenceRefs(payload: ToolPayload, stdoutRel: string, stderrRel: string) {
+  const unit = payload.executionUnits[0] as Record<string, unknown> | undefined;
+  assert.ok(unit);
+  assert.equal(unit.stdoutRef, stdoutRel);
+  assert.equal(unit.stderrRef, stderrRel);
+  const diagnostic = (unit.refs as { diagnostic?: { evidenceRefs?: string[] } } | undefined)?.diagnostic;
+  const evidenceRefs = diagnostic?.evidenceRefs;
+  assert.ok(Array.isArray(evidenceRefs));
+  assert.ok(evidenceRefs.includes(stdoutRel));
+  assert.ok(evidenceRefs.includes(stderrRel));
+  const objectRefs = Array.isArray(payload.objectReferences) ? payload.objectReferences : [];
+  assert.ok(objectRefs.some((ref) => isRecordWithRef(ref, stdoutRel)));
+  assert.ok(objectRefs.some((ref) => isRecordWithRef(ref, stderrRel)));
+}
+
+function isRecordWithRef(value: unknown, ref: string) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && (value as Record<string, unknown>).ref === `file:${ref}`);
 }
 
 function recoverActionsFromUnit(unit: unknown) {
@@ -233,4 +341,4 @@ function requiredInputsFromUnit(unit: unknown) {
   return inputs.filter((input): input is string => typeof input === 'string');
 }
 
-console.log('[ok] contract validation failures serialize payload, artifact, uiManifest, ref, completed-plan, WorkEvidence, structured repair, and verifier failures');
+console.log('[ok] contract validation failures serialize payload, artifact, uiManifest, ref, completed-plan, WorkEvidence, empty-result, stdout/stderr repair, structured repair, and verifier failures');

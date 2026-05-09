@@ -66,8 +66,10 @@ export type {
 } from './capability-manifest';
 export {
   CAPABILITY_MANIFEST_CONTRACT_ID,
+  CORE_CAPABILITY_MANIFESTS,
   capabilityManifestSchema,
   compactCapabilityManifestBrief,
+  validateCapabilityManifestRegistry,
   validateCapabilityManifestShape,
 } from './capability-manifest';
 export type {

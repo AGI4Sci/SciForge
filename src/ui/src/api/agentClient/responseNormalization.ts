@@ -327,14 +327,10 @@ export function normalizeAgentResponse(
     artifacts,
     notebook: normalizeNotebookRecords(structured.notebook, {
       scenarioId,
-      prompt,
       messageText,
       claimType,
       confidence,
       now,
-      claims,
-      artifacts: Array.isArray(structured.artifacts) ? structured.artifacts.filter(isRecord) : [],
-      executionUnits: Array.isArray(structured.executionUnits) ? structured.executionUnits.filter(isRecord) : [],
     }),
   };
 }
@@ -734,52 +730,30 @@ function isJsonLikeArtifact(type: string, encoding?: string) {
 
 function normalizeNotebookRecords(
   value: unknown,
-    fallback: {
+  defaults: {
     scenarioId: ScenarioInstanceId;
-    prompt: string;
     messageText: string;
     claimType: ClaimType;
     confidence: number;
     now: string;
-    claims: Array<{ id: string; dependencyRefs?: string[]; updateReason?: string }>;
-    artifacts: Record<string, unknown>[];
-    executionUnits: Record<string, unknown>[];
   },
 ) {
-  const defaultRecord = {
-    id: makeId('note'),
-    time: new Date(fallback.now).toLocaleString('zh-CN', { hour12: false }),
-    scenario: fallback.scenarioId,
-    title: fallback.prompt.slice(0, 32) || 'Scenario 对话',
-    desc: fallback.messageText.slice(0, 96),
-    claimType: fallback.claimType,
-    confidence: fallback.confidence,
-    artifactRefs: fallback.artifacts.map((artifact) => asString(artifact.id) || asString(artifact.type)).filter((item): item is string => Boolean(item)),
-    executionUnitRefs: fallback.executionUnits.map((unit) => asString(unit.id) || asString(unit.tool)).filter((item): item is string => Boolean(item)),
-    beliefRefs: fallback.claims.map((claim) => claim.id).filter(Boolean),
-    dependencyRefs: uniqueStrings(fallback.claims.flatMap((claim) => claim.dependencyRefs ?? [])),
-    updateReason: fallback.claims.map((claim) => claim.updateReason).find(Boolean),
-  };
-  if (!Array.isArray(value)) return [defaultRecord];
+  if (!Array.isArray(value)) return [];
   const records = value.filter(isRecord).map((record) => ({
     id: asString(record.id) || makeId('note'),
-    time: asString(record.time) || new Date(fallback.now).toLocaleString('zh-CN', { hour12: false }),
-    scenario: asString(record.scenario) || fallback.scenarioId,
-    title: asString(record.title) || fallback.prompt.slice(0, 32) || 'Scenario 对话',
-    desc: asString(record.desc) || asString(record.description) || fallback.messageText.slice(0, 96),
+    time: asString(record.time) || new Date(defaults.now).toLocaleString('zh-CN', { hour12: false }),
+    scenario: asString(record.scenario) || defaults.scenarioId,
+    title: asString(record.title) || asString(record.id) || 'Notebook record',
+    desc: asString(record.desc) || asString(record.description) || defaults.messageText.slice(0, 96),
     claimType: pickClaimType(record.claimType),
-    confidence: asNumber(record.confidence) ?? fallback.confidence,
+    confidence: asNumber(record.confidence) ?? defaults.confidence,
     artifactRefs: asStringArray(record.artifactRefs),
     executionUnitRefs: asStringArray(record.executionUnitRefs),
     beliefRefs: asStringArray(record.beliefRefs),
     dependencyRefs: asStringArray(record.dependencyRefs),
     updateReason: asString(record.updateReason),
   }));
-  return records.length ? records : [defaultRecord];
-}
-
-function uniqueStrings(values: string[] | undefined) {
-  return [...new Set(values ?? [])];
+  return records;
 }
 
 function asTimelineVisibility(value: unknown) {

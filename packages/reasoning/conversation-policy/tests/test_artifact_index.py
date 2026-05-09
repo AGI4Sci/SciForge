@@ -9,7 +9,7 @@ import unittest
 PACKAGE_ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PACKAGE_ROOT / "src"))
 
-from sciforge_conversation.artifact_index import build_artifact_index  # noqa: E402
+from sciforge_conversation.artifact_index import build_artifact_index, build_artifact_index_from_request  # noqa: E402
 from sciforge_conversation.reference_digest import build_reference_digests  # noqa: E402
 
 
@@ -50,6 +50,25 @@ class ArtifactIndexTest(unittest.TestCase):
         self.assertIn("inlineFieldsExcluded", payload["entries"][0]["audit"])
         self.assertNotIn("raw raw raw", str(payload))
         self.assertGreaterEqual(payload["omitted"]["unresolvedRefs"], 1)
+
+    def test_request_bridge_builds_path_ref_digest_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            table = root / "results.csv"
+            table.write_text("gene,score\nTP53,0.9\nBRCA1,0.8\n", encoding="utf-8")
+            payload = build_artifact_index_from_request(
+                {
+                    "workspace": {"root": str(root)},
+                    "session": {"artifacts": []},
+                    "pathRefs": ["results.csv"],
+                    "limits": {"maxArtifactIndexEntries": 4},
+                }
+            )
+
+        self.assertEqual(payload["schemaVersion"], "sciforge.artifact-index.v1")
+        self.assertEqual(payload["digestRefs"], ["file:results.csv"])
+        self.assertEqual(payload["entries"][0]["kind"], "reference-digest")
+        self.assertIn("CSV digest", payload["entries"][0]["summary"])
 
 
 if __name__ == "__main__":

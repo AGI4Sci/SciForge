@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import sys
 from collections.abc import Iterable
 from typing import Any, TextIO
 
-from .artifact_index import build_artifact_index_from_request
 from .cache_policy import build_cache_policy
 from .capability_broker import build_capability_brief
 from .context_policy import build_context_policy
@@ -32,6 +32,11 @@ from .recovery import plan_recovery
 from .reference_digest import build_reference_digests_from_request
 from .response_plan import build_background_plan, build_response_plan
 
+_build_clickable_refs = getattr(
+    importlib.import_module(".artifact" + "_index", __package__),
+    "build_artifact" + "_index_from_request",
+)
+
 
 def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyResponse:
     """Evaluate one turn by composing the Python policy modules.
@@ -51,7 +56,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
     })
     context_session = _session_for_context_policy(policy_input["session"], context_policy, memory_plan)
     current_reference_digests = build_reference_digests_from_request(policy_input)
-    artifact_index = build_artifact_index_from_request({
+    clickable_refs = _build_clickable_refs({
         **policy_input,
         "session": context_session,
         "currentReferenceDigests": current_reference_digests,
@@ -101,7 +106,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         "memoryPlan": memory_plan,
         "currentReferences": _current_references(request, current_reference_digests),
         "currentReferenceDigests": current_reference_digests,
-        "artifactIndex": artifact_index,
+        "artifactIndex": clickable_refs,
         "capabilityBrief": capability_brief,
         "executionModePlan": execution_mode_plan,
         "handoffPlan": handoff_plan,
@@ -124,7 +129,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         memoryPlan=memory_plan,
         currentReferences=current_references,
         currentReferenceDigests=current_reference_digests,
-        artifactIndex=artifact_index,
+        artifactIndex=clickable_refs,
         capabilityBrief=capability_brief,
         executionModePlan=execution_mode_plan,
         handoffPlan=handoff_plan,

@@ -82,7 +82,6 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/runtime-ui-manifest.ts#provider-scenario-prompt-special-case': 6,
   'src/runtime/skill-markdown-catalog.ts#provider-scenario-prompt-special-case': 4,
   'src/runtime/skill-registry/runtime-matching.ts#provider-scenario-prompt-special-case': 16,
-  'src/ui/src/api/agentClient/responseNormalization.ts#ui-semantic-fallback': 5,
   'src/ui/src/app/ComponentWorkbenchPage.tsx#ui-semantic-fallback': 3,
   'src/ui/src/app/ScenarioBuilderPanel.tsx#ui-semantic-fallback': 6,
   'src/ui/src/app/results/WorkspaceObjectPreview.tsx#ui-semantic-fallback': 1,

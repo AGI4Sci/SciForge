@@ -86,6 +86,13 @@ export type CapabilityManifestBrief = Pick<
   repairFailureCodes: string[];
 };
 
+export interface CapabilityManifestRegistry {
+  manifests: CapabilityManifest[];
+  briefs: CapabilityManifestBrief[];
+  manifestIds: string[];
+  providerIds: string[];
+}
+
 export const capabilityManifestSchema = {
   $id: 'sciforge.capability-manifest.schema.json',
   type: 'object',
@@ -182,4 +189,90 @@ export function validateCapabilityManifestShape(manifest: CapabilityManifest): s
   if (!manifest.lifecycle.sourceRef.trim()) failures.push('lifecycle.sourceRef must be non-empty');
   if (manifest.sideEffects.includes('none') && manifest.sideEffects.length > 1) failures.push('sideEffects none cannot be combined with other side effects');
   return failures;
+}
+
+export function validateCapabilityManifestRegistry(manifests: CapabilityManifest[]): string[] {
+  const failures = manifests.flatMap((manifest) =>
+    validateCapabilityManifestShape(manifest).map((failure) => `${manifest.id || '<missing-id>'}: ${failure}`),
+  );
+  const manifestIds = new Set<string>();
+  const providerIds = new Set<string>();
+  for (const manifest of manifests) {
+    if (manifestIds.has(manifest.id)) failures.push(`${manifest.id}: duplicate manifest id`);
+    manifestIds.add(manifest.id);
+    for (const provider of manifest.providers) {
+      if (providerIds.has(provider.id)) failures.push(`${manifest.id}: duplicate provider id ${provider.id}`);
+      providerIds.add(provider.id);
+    }
+  }
+  return failures;
+}
+
+export const CORE_CAPABILITY_MANIFESTS: CapabilityManifest[] = [
+  coreCapabilityManifest('runtime.artifact-resolve', 'Resolve object references to workspace-backed facts.', 'runtime-adapter', 'src/runtime/backend-artifact-tools.ts', ['workspace-read']),
+  coreCapabilityManifest('runtime.artifact-read', 'Read bounded artifact, file, run, and execution-unit refs.', 'runtime-adapter', 'src/runtime/backend-artifact-tools.ts', ['workspace-read']),
+  coreCapabilityManifest('runtime.artifact-render', 'Render artifacts into markdown, text, JSON, or preview-safe refs.', 'runtime-adapter', 'src/runtime/backend-artifact-tools.ts', ['workspace-read']),
+  coreCapabilityManifest('runtime.workspace-read', 'Read allowed workspace paths through the runtime path contract.', 'action', 'src/runtime/workspace-paths.ts', ['workspace-read']),
+  coreCapabilityManifest('runtime.workspace-write', 'Write managed workspace outputs with stable refs.', 'action', 'src/runtime/workspace-task-runner.ts', ['workspace-write']),
+  coreCapabilityManifest('runtime.command-run', 'Run bounded workspace commands and capture stdout, stderr, and output refs.', 'action', 'src/runtime/workspace-task-runner.ts', ['workspace-write']),
+  coreCapabilityManifest('runtime.python-task', 'Execute generated Python tasks against inputPath and outputPath contracts.', 'action', 'src/runtime/workspace-task-runner.ts', ['workspace-write']),
+  coreCapabilityManifest('observe.vision', 'Observe screenshots or images and return bounded visual evidence refs.', 'observe', 'packages/observe/vision', ['workspace-read']),
+  coreCapabilityManifest('action.computer-use', 'Perform guarded desktop actions with trace evidence.', 'action', 'packages/actions/computer-use', ['desktop']),
+  coreCapabilityManifest('view.report', 'Render report artifacts from manifest-bound refs.', 'view', 'packages/presentation/components', ['none']),
+  coreCapabilityManifest('view.evidence-matrix', 'Render evidence matrices from manifest-bound refs.', 'view', 'packages/presentation/components', ['none']),
+  coreCapabilityManifest('verifier.schema', 'Validate payloads, artifacts, refs, and UI manifests before completion.', 'verifier', 'packages/verifiers/schema', ['none']),
+];
+
+function coreCapabilityManifest(
+  id: string,
+  brief: string,
+  kind: CapabilityManifest['kind'],
+  sourceRef: string,
+  sideEffects: CapabilityManifest['sideEffects'],
+): CapabilityManifest {
+  const providerId = `sciforge.core.${id}`;
+  return {
+    contract: CAPABILITY_MANIFEST_CONTRACT_ID,
+    id,
+    name: id.split('.').slice(1).join(' '),
+    version: '0.1.0',
+    ownerPackage: sourceRef.startsWith('packages/') ? sourceRef.split('/').slice(0, 3).join('/') : 'src/runtime',
+    kind,
+    brief,
+    routingTags: id.split(/[.-]/).filter(Boolean),
+    domains: ['workspace'],
+    inputSchema: { type: 'object' },
+    outputSchema: { type: 'object' },
+    sideEffects,
+    safety: {
+      risk: sideEffects.includes('desktop') || sideEffects.includes('workspace-write') ? 'medium' : 'low',
+      dataScopes: sideEffects.includes('none') ? [] : ['workspace'],
+    },
+    examples: [{
+      title: `${id} smoke`,
+      inputRef: 'contract:example-input',
+      outputRef: 'contract:example-output',
+    }],
+    validators: [{
+      id: `${providerId}.schema`,
+      kind: 'schema',
+      contractRef: `${id}#schema`,
+    }],
+    repairHints: [{
+      failureCode: 'contract-invalid',
+      summary: 'Regenerate payload according to this capability manifest contract.',
+      recoverActions: ['reload-manifest', 'validate-io-schema', 'preserve-related-refs'],
+    }],
+    providers: [{
+      id: providerId,
+      label: `${id} provider`,
+      kind: sourceRef.startsWith('packages/') ? 'package' : 'built-in',
+      contractRef: sourceRef,
+      requiredConfig: [],
+    }],
+    lifecycle: {
+      status: 'draft',
+      sourceRef,
+    },
+  };
 }

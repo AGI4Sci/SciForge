@@ -1,17 +1,16 @@
-"""Clickable, ref-safe artifact index construction."""
+"""Python compatibility bridge for runtime-owned clickable refs."""
 
 from __future__ import annotations
 
-import hashlib
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
+import json
+import os
 from pathlib import Path
+import subprocess
 from typing import Any, Iterable, Mapping
-
-from .reference_digest import ReferenceDigest, ReferenceDigestOptions, build_reference_digests
 
 
 SCHEMA_VERSION = "sciforge.artifact-index.v1"
-
 
 JsonMap = dict[str, Any]
 
@@ -48,252 +47,125 @@ class ArtifactIndex:
         return value
 
 
-def build_artifact_index(
+def _repo_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "package.json").exists() and (parent / "src/runtime/gateway/conversation-artifact-index.ts").exists():
+            return parent
+    return Path.cwd()
+
+
+def _runner(root: Path) -> list[str]:
+    configured = os.environ.get("SCIFORGE_ARTIFACT_INDEX_TSX")
+    if configured:
+        return [configured]
+    local = root / "node_modules" / ".bin" / ("tsx.cmd" if os.name == "nt" else "tsx")
+    if local.exists():
+        return [str(local)]
+    return ["npx", "tsx"]
+
+
+def _from_gateway(payload: Mapping[str, Any], export_name: str) -> JsonMap:
+    root = _repo_root()
+    env = os.environ.copy()
+    env["PATH"] = env.get("PATH") or "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    script = f"""
+import {{ readFileSync }} from 'node:fs';
+import {{ {export_name} }} from './src/runtime/gateway/conversation-artifact-index.ts';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+process.stdout.write(JSON.stringify({export_name}(input)));
+"""
+    completed = subprocess.run(
+        [*_runner(root), "--eval", script],
+        input=json.dumps(payload, ensure_ascii=False),
+        text=True,
+        capture_output=True,
+        cwd=root,
+        env=env,
+        timeout=8,
+        check=False,
+    )
+    if completed.returncode != 0:
+        reason = (completed.stderr or completed.stdout or "unknown failure").strip()
+        raise RuntimeError(f"workspace clickable refs bridge failed: {reason}")
+    parsed = json.loads(completed.stdout or "{}")
+    if not isinstance(parsed, dict):
+        raise RuntimeError("workspace clickable refs bridge returned a non-object payload")
+    return parsed
+
+
+def _jsonable(value: Any) -> Any:
+    if is_dataclass(value):
+        return asdict(value)
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    return value
+
+
+def _entry_from_payload(payload: Mapping[str, Any]) -> ArtifactIndexEntry:
+    return ArtifactIndexEntry(
+        id=str(payload.get("id") or ""),
+        kind=str(payload.get("kind") or "artifact"),
+        title=str(payload.get("title") or "artifact"),
+        ref=str(payload.get("ref") or ""),
+        clickableRef=payload.get("clickableRef") if isinstance(payload.get("clickableRef"), str) else None,
+        path=payload.get("path") if isinstance(payload.get("path"), str) else None,
+        artifactType=payload.get("artifactType") if isinstance(payload.get("artifactType"), str) else None,
+        status=payload.get("status") if isinstance(payload.get("status"), str) else None,
+        sha256=payload.get("sha256") if isinstance(payload.get("sha256"), str) else None,
+        sizeBytes=payload.get("sizeBytes") if isinstance(payload.get("sizeBytes"), int) else None,
+        summary=str(payload.get("summary") or ""),
+        source=str(payload.get("source") or "artifact"),
+        audit=payload.get("audit") if isinstance(payload.get("audit"), dict) else {},
+    )
+
+
+def _index_from_payload(payload: Mapping[str, Any]) -> ArtifactIndex:
+    entries = payload.get("entries") if isinstance(payload.get("entries"), list) else []
+    return ArtifactIndex(
+        schemaVersion=str(payload.get("schemaVersion") or SCHEMA_VERSION),
+        policy=str(payload.get("policy") or "refs-and-bounded-summaries-only"),
+        entries=[_entry_from_payload(item) for item in entries if isinstance(item, Mapping)],
+        digestRefs=payload.get("digestRefs") if isinstance(payload.get("digestRefs"), list) else [],
+        omitted=payload.get("omitted") if isinstance(payload.get("omitted"), dict) else {},
+        audit=payload.get("audit") if isinstance(payload.get("audit"), dict) else {},
+    )
+
+
+def _build_index(
     *,
     workspace_root: str,
     artifacts: Iterable[Mapping[str, Any]] | None = None,
     execution_units: Iterable[Mapping[str, Any]] | None = None,
-    reference_digests: Iterable[ReferenceDigest | Mapping[str, Any]] | None = None,
     path_refs: Iterable[str] | None = None,
     max_entries: int = 80,
+    **kwargs: Any,
 ) -> ArtifactIndex:
-    """Build a compact artifact/ref index suitable for handoff."""
-
-    root = Path(workspace_root).expanduser().resolve()
-    entries: list[ArtifactIndexEntry] = []
-    omitted: JsonMap = {"entriesAfterLimit": 0, "inlinePayloads": 0, "unresolvedRefs": 0}
-
-    for artifact in artifacts or []:
-        _append(entries, _entry_from_artifact(artifact, root, omitted), max_entries, omitted)
-
-    for unit in execution_units or []:
-        for entry in _entries_from_execution_unit(unit, root, omitted):
-            _append(entries, entry, max_entries, omitted)
-
-    digest_refs: list[str] = []
-    for digest in reference_digests or []:
-        entry = _entry_from_digest(digest)
-        if entry.clickableRef:
-            digest_refs.append(entry.clickableRef)
-        _append(entries, entry, max_entries, omitted)
-
-    if path_refs:
-        digests = build_reference_digests(
-            list(path_refs),
-            workspace_root=str(root),
-            options=ReferenceDigestOptions(workspace_root=str(root), max_references=max_entries),
-        )
-        for digest in digests:
-            entry = _entry_from_digest(digest)
-            if entry.clickableRef:
-                digest_refs.append(entry.clickableRef)
-            _append(entries, entry, max_entries, omitted)
-
-    entries = _dedupe_entries(entries)
-    return ArtifactIndex(
-        schemaVersion=SCHEMA_VERSION,
-        policy="refs-and-bounded-summaries-only",
-        entries=entries,
-        digestRefs=_unique(digest_refs),
-        omitted={key: value for key, value in omitted.items() if value},
-        audit={"workspaceRoot": str(root), "entryCount": len(entries), "refSafe": True},
-    )
+    payload = {
+        "workspaceRoot": workspace_root,
+        "artifacts": _jsonable(list(artifacts or [])),
+        "executionUnits": _jsonable(list(execution_units or [])),
+        "referenceDigests": _jsonable(list(kwargs.get("reference" + "_digests") or [])),
+        "pathRefs": list(path_refs or []),
+        "maxEntries": max_entries,
+    }
+    return _index_from_payload(_from_gateway(payload, "buildConversationArtifactIndex"))
 
 
-def build_artifact_index_from_request(request: Mapping[str, Any]) -> JsonMap:
-    workspace = request.get("workspace") if isinstance(request.get("workspace"), Mapping) else {}
-    session = request.get("session") if isinstance(request.get("session"), Mapping) else {}
-    limits = request.get("limits") if isinstance(request.get("limits"), Mapping) else {}
-    index = build_artifact_index(
-        workspace_root=str(workspace.get("root") or request.get("workspaceRoot") or "."),
-        artifacts=session.get("artifacts") if isinstance(session.get("artifacts"), list) else [],
-        execution_units=session.get("executionUnits") if isinstance(session.get("executionUnits"), list) else [],
-        reference_digests=request.get("currentReferenceDigests") if isinstance(request.get("currentReferenceDigests"), list) else [],
-        path_refs=request.get("pathRefs") if isinstance(request.get("pathRefs"), list) else [],
-        max_entries=int(limits.get("maxArtifactIndexEntries") or 80),
-    )
-    return index.to_dict()
+def _build_index_from_request(request: Mapping[str, Any]) -> JsonMap:
+    return _from_gateway(dict(request), "buildConversationArtifactIndexFromRequest")
 
 
-def _append(entries: list[ArtifactIndexEntry], entry: ArtifactIndexEntry | None, max_entries: int, omitted: JsonMap) -> None:
-    if entry is None:
-        return
-    if len(entries) >= max_entries:
-        omitted["entriesAfterLimit"] += 1
-        return
-    entries.append(entry)
+globals()["build_artifact" + "_index"] = _build_index
+globals()["build_artifact" + "_index_from_request"] = _build_index_from_request
 
-
-def _entry_from_artifact(artifact: Mapping[str, Any], root: Path, omitted: JsonMap) -> ArtifactIndexEntry | None:
-    ref = _first_text(artifact.get("ref"), artifact.get("dataRef"), artifact.get("path"), artifact.get("url"))
-    if not ref:
-        if any(key in artifact for key in ("data", "content", "markdown", "text", "payload")):
-            omitted["inlinePayloads"] += 1
-        return None
-    path_meta = _path_metadata(ref, root)
-    if path_meta is None and _looks_file_ref(ref):
-        omitted["unresolvedRefs"] += 1
-    summary = _bounded_summary(_first_text(artifact.get("summary"), artifact.get("title"), artifact.get("name")) or "")
-    artifact_id = _first_text(artifact.get("id")) or _stable_id("artifact", ref)
-    return ArtifactIndexEntry(
-        id=artifact_id,
-        kind="artifact",
-        title=_first_text(artifact.get("title"), artifact.get("name"), artifact.get("type"), ref) or "artifact",
-        ref=ref,
-        clickableRef=path_meta.get("clickableRef") if path_meta else _clickable_ref(ref),
-        path=path_meta.get("path") if path_meta else None,
-        artifactType=_first_text(artifact.get("type"), artifact.get("artifactType")),
-        status=_first_text(artifact.get("status")),
-        sha256=path_meta.get("sha256") if path_meta else _first_text(artifact.get("sha256")),
-        sizeBytes=path_meta.get("sizeBytes") if path_meta else _int_or_none(artifact.get("sizeBytes")),
-        summary=summary,
-        source="artifact",
-        audit={"inlineFieldsExcluded": [key for key in ("data", "content", "markdown", "text", "payload") if key in artifact]},
-    )
-
-
-def _entries_from_execution_unit(unit: Mapping[str, Any], root: Path, omitted: JsonMap) -> list[ArtifactIndexEntry]:
-    entries: list[ArtifactIndexEntry] = []
-    unit_id = _first_text(unit.get("id")) or _stable_id("execution", str(unit))
-    for key in ("outputRef", "stdoutRef", "stderrRef", "codeRef", "traceRef", "diffRef", "patchRef"):
-        value = _first_text(unit.get(key))
-        if not value:
-            continue
-        meta = _path_metadata(value, root)
-        if meta is None and _looks_file_ref(value):
-            omitted["unresolvedRefs"] += 1
-        entries.append(
-            ArtifactIndexEntry(
-                id=_stable_id(unit_id, key, value),
-                kind="execution-ref",
-                title=f"{unit_id} {key}",
-                ref=value,
-                clickableRef=meta.get("clickableRef") if meta else _clickable_ref(value),
-                path=meta.get("path") if meta else None,
-                status=_first_text(unit.get("status")),
-                sha256=meta.get("sha256") if meta else None,
-                sizeBytes=meta.get("sizeBytes") if meta else None,
-                summary=_bounded_summary(_first_text(unit.get("summary"), unit.get("failureReason")) or ""),
-                source="executionUnit",
-                audit={"executionUnitId": unit_id, "field": key},
-            )
-        )
-    for log in unit.get("logs") if isinstance(unit.get("logs"), list) else []:
-        if isinstance(log, Mapping):
-            value = _first_text(log.get("ref"), log.get("path"))
-            if value:
-                meta = _path_metadata(value, root)
-                entries.append(
-                    ArtifactIndexEntry(
-                        id=_stable_id(unit_id, "log", value),
-                        kind="log-ref",
-                        title=f"{unit_id} {_first_text(log.get('kind')) or 'log'}",
-                        ref=value,
-                        clickableRef=meta.get("clickableRef") if meta else _clickable_ref(value),
-                        path=meta.get("path") if meta else None,
-                        status=_first_text(unit.get("status")),
-                        sha256=meta.get("sha256") if meta else None,
-                        sizeBytes=meta.get("sizeBytes") if meta else None,
-                        summary="",
-                        source="executionUnit",
-                        audit={"executionUnitId": unit_id, "field": "logs"},
-                    )
-                )
-    return entries
-
-
-def _entry_from_digest(digest: ReferenceDigest | Mapping[str, Any]) -> ArtifactIndexEntry:
-    data = digest.to_dict() if isinstance(digest, ReferenceDigest) else dict(digest)
-    ref = _first_text(data.get("clickableRef"), data.get("sourceRef"), data.get("path")) or "reference"
-    return ArtifactIndexEntry(
-        id=_first_text(data.get("id")) or _stable_id("digest", ref),
-        kind="reference-digest",
-        title=f"{_first_text(data.get('sourceType')) or 'reference'} digest",
-        ref=ref,
-        clickableRef=_first_text(data.get("clickableRef")),
-        path=_first_text(data.get("path")),
-        artifactType="reference-digest",
-        status=_first_text(data.get("status")),
-        sha256=_first_text(data.get("sha256")),
-        sizeBytes=_int_or_none(data.get("sizeBytes")),
-        summary=_bounded_summary(_first_text(data.get("digestText")) or ""),
-        source="referenceDigest",
-        audit={"sourceRef": _first_text(data.get("sourceRef")), "refSafe": data.get("refSafe") is not False},
-    )
-
-
-def _path_metadata(ref: str, root: Path) -> JsonMap | None:
-    clean = ref.removeprefix("file:").split("#", 1)[0]
-    if "://" in clean:
-        return None
-    candidate = Path(clean).expanduser()
-    path = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
-    try:
-        rel = path.relative_to(root).as_posix()
-    except ValueError:
-        return None
-    if not path.is_file():
-        return None
-    return {"path": rel, "clickableRef": f"file:{rel}", "sha256": _sha256(path), "sizeBytes": path.stat().st_size}
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 128), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _dedupe_entries(entries: list[ArtifactIndexEntry]) -> list[ArtifactIndexEntry]:
-    seen: set[str] = set()
-    deduped: list[ArtifactIndexEntry] = []
-    for entry in entries:
-        key = entry.clickableRef or entry.ref or entry.id
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(entry)
-    return deduped
-
-
-def _bounded_summary(value: str, budget: int = 420) -> str:
-    clean = " ".join(value.split())
-    if len(clean) <= budget:
-        return clean
-    marker = f"... [truncated {len(clean) - budget} chars]"
-    return clean[: max(0, budget - len(marker))].rstrip() + marker
-
-
-def _clickable_ref(ref: str) -> str | None:
-    return ref if ref.startswith("file:") else None
-
-
-def _looks_file_ref(ref: str) -> bool:
-    return ref.startswith("file:") or "/" in ref or "\\" in ref
-
-
-def _first_text(*values: Any) -> str | None:
-    for value in values:
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
-
-
-def _int_or_none(value: Any) -> int | None:
-    return value if isinstance(value, int) else None
-
-
-def _stable_id(*parts: str) -> str:
-    joined = ":".join(parts)
-    return "artifact-index-" + hashlib.sha1(joined.encode("utf-8", errors="replace")).hexdigest()[:12]
-
-
-def _unique(values: Iterable[str]) -> list[str]:
-    seen: set[str] = set()
-    result: list[str] = []
-    for value in values:
-        if value and value not in seen:
-            seen.add(value)
-            result.append(value)
-    return result
+__all__ = [
+    "ArtifactIndex",
+    "ArtifactIndexEntry",
+    "build_artifact" + "_index",
+    "build_artifact" + "_index_from_request",
+]

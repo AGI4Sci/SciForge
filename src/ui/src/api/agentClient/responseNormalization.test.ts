@@ -77,3 +77,22 @@ test('normalizes ContractValidationFailure as failed diagnostic output with reco
   const raw = response.run.raw as Record<string, unknown>;
   assert.equal((raw.contractValidationFailure as Record<string, unknown>)?.failureReason, 'research-report artifact is missing markdown content.');
 });
+
+test('does not synthesize notebook records when backend omits notebook timeline', () => {
+  const response = normalizeAgentResponse('literature-evidence-review', '生成 notebook 摘要', {
+    ok: true,
+    data: {
+      run: { id: 'run-no-notebook', status: 'completed' },
+      output: {
+        message: JSON.stringify({
+          message: '后端返回了回答，但没有 notebook timeline。',
+          claims: [],
+          artifacts: [{ id: 'report-1', type: 'research-report', data: '报告正文' }],
+          executionUnits: [{ id: 'EU-1', tool: 'analysis.task', status: 'done', params: '{}' }],
+        }),
+      },
+    },
+  });
+
+  assert.deepEqual(response.notebook, []);
+});
