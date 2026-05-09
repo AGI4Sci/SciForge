@@ -199,6 +199,8 @@ export function coerceAgentServerToolPayload(value: unknown): ToolPayload | unde
 export function coerceWorkspaceTaskPayload(value: unknown): ToolPayload | undefined {
   if (isToolPayload(value)) return normalizeToolPayloadShape(value);
   if (!isRecord(value)) return undefined;
+  const normalizedCandidate = normalizeToolPayloadShape(value as unknown as ToolPayload);
+  if (isToolPayload(normalizedCandidate)) return normalizedCandidate;
   const strictNested = strictToolPayloadCandidate(value);
   if (strictNested) return normalizeToolPayloadShape(strictNested);
   const artifactPayload = coerceStandaloneArtifactPayload(value);
@@ -270,12 +272,22 @@ function componentForStandaloneArtifact(type: string) {
 }
 
 export function normalizeToolPayloadShape(payload: ToolPayload): ToolPayload {
+  const artifacts = Array.isArray(payload.artifacts) ? payload.artifacts : [];
+  const rawDisplayIntent: unknown = payload.displayIntent;
   return {
     ...payload,
+    reasoningTrace: Array.isArray(payload.reasoningTrace)
+      ? payload.reasoningTrace.map(String).filter(Boolean).join('\n')
+      : String(payload.reasoningTrace || ''),
+    displayIntent: isRecord(rawDisplayIntent)
+      ? payload.displayIntent
+      : typeof rawDisplayIntent === 'string' && rawDisplayIntent.trim()
+        ? { primaryView: rawDisplayIntent.trim() }
+        : undefined,
+    uiManifest: normalizeAgentServerUiManifest(payload.uiManifest, artifacts),
     executionUnits: normalizeAgentServerExecutionUnits(payload.executionUnits),
-    artifacts: normalizeAgentServerArtifacts(payload.artifacts, payload.message),
+    artifacts: normalizeAgentServerArtifacts(artifacts, payload.message),
     objectReferences: Array.isArray(payload.objectReferences) ? payload.objectReferences.filter(isRecord) : undefined,
-    displayIntent: isRecord(payload.displayIntent) ? payload.displayIntent : undefined,
   };
 }
 
@@ -373,20 +385,68 @@ function normalizeAgentServerClaims(value: unknown, message?: string): Array<Rec
 
 function normalizeAgentServerUiManifest(value: unknown, artifacts: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
   if (Array.isArray(value)) {
-    const manifest = value.map((slot) => isRecord(slot) ? slot : undefined).filter(isRecord);
+    const manifest = value
+      .flatMap((slot, index) => normalizeUiManifestSlot(slot, artifacts, index))
+      .filter(isRecord);
     if (manifest.length) return manifest;
   }
-  if (isRecord(value) && Array.isArray(value.components)) {
+  if (isRecord(value) && (Array.isArray(value.components) || Array.isArray(value.componentIds))) {
     const primaryArtifact = String(artifacts[0]?.id || artifacts[0]?.type || 'research-report');
-    const manifest = value.components
+    const components: unknown[] = Array.isArray(value.components) ? value.components : Array.isArray(value.componentIds) ? value.componentIds : [];
+    const manifest = components
       .filter((component): component is string => typeof component === 'string' && component.trim().length > 0)
       .map((componentId, index) => ({ componentId, artifactRef: primaryArtifact, priority: index + 1 }));
+    if (manifest.length) return manifest;
+  }
+  if (isRecord(value)) {
+    const manifest = normalizeUiManifestSlot(value, artifacts, 0);
     if (manifest.length) return manifest;
   }
   if (artifacts.some((artifact) => artifact.type === 'research-report')) {
     return [{ componentId: 'report-viewer', artifactRef: 'research-report', priority: 1 }];
   }
   return [{ componentId: 'execution-unit-table', artifactRef: 'agentserver-runtime-result', priority: 1 }];
+}
+
+function normalizeUiManifestSlot(slot: unknown, artifacts: Array<Record<string, unknown>>, index: number): Array<Record<string, unknown>> {
+  if (typeof slot === 'string' && slot.trim()) {
+    return [{ componentId: slot.trim(), artifactRef: firstArtifactIdOrType(artifacts), priority: index + 1 }];
+  }
+  if (!isRecord(slot)) return [];
+  const componentId = firstStringField(slot, ['componentId', 'component', 'moduleId', 'view', 'type', 'renderer']);
+  if (componentId) {
+    const props = isRecord(slot.props) ? slot.props : {};
+    const artifactRef = firstStringField(slot, ['artifactRef', 'artifactId', 'artifact', 'dataRef', 'ref'])
+      ?? artifactRefForArtifactType(firstStringField(props, ['artifactType', 'type']), artifacts)
+      ?? firstArtifactIdOrType(artifacts);
+    return [{
+      ...slot,
+      componentId,
+      artifactRef,
+      priority: typeof slot.priority === 'number' ? slot.priority : index + 1,
+    }];
+  }
+  const nestedComponents = Array.isArray(slot.components) ? slot.components : Array.isArray(slot.componentIds) ? slot.componentIds : undefined;
+  if (nestedComponents) {
+    return nestedComponents
+      .filter((component): component is string => typeof component === 'string' && component.trim().length > 0)
+      .map((nestedComponentId, nestedIndex) => ({
+        componentId: nestedComponentId,
+        artifactRef: firstArtifactIdOrType(artifacts),
+        priority: index + nestedIndex + 1,
+      }));
+  }
+  return [];
+}
+
+function artifactRefForArtifactType(type: string | undefined, artifacts: Array<Record<string, unknown>>) {
+  if (!type) return undefined;
+  const artifact = artifacts.find((candidate) => candidate.type === type || candidate.id === type);
+  return firstStringField(artifact ?? {}, ['id', 'type']);
+}
+
+function firstArtifactIdOrType(artifacts: Array<Record<string, unknown>>) {
+  return firstStringField(artifacts[0] ?? {}, ['id', 'type']);
 }
 
 function normalizeAgentServerExecutionUnits(value: unknown): Array<Record<string, unknown>> {
@@ -429,12 +489,15 @@ function normalizeAgentServerArtifacts(value: unknown, message?: string): Array<
       return Object.keys(data).length ? { ...normalizedArtifact, data } : normalizedArtifact;
     }
     if (isRecord(artifact.data)) return normalizedArtifact;
+    const markdown = firstStringField(data, ['markdown', 'content', 'text', 'report', 'summary'])
+      || message
+      || String(artifact.dataRef || artifact.id || '');
     return {
       ...normalizedArtifact,
       data: {
         ...data,
-        markdown: message || String(artifact.dataRef || artifact.id || ''),
-        sections: [{ title: String(isRecord(artifact.metadata) ? artifact.metadata.title || 'AgentServer Report' : 'AgentServer Report'), content: message || '' }],
+        markdown,
+        sections: [{ title: String(isRecord(artifact.metadata) ? artifact.metadata.title || 'AgentServer Report' : 'AgentServer Report'), content: markdown }],
       },
     };
   });

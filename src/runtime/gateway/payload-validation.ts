@@ -7,6 +7,7 @@ import { repairNeededPayload as buildRepairNeededPayload, type RepairPolicyRefs 
 import { contextCompactionMetadata } from './agentserver-context-window.js';
 import { normalizeArtifactsForPayload, persistArtifactRefsForPayload } from './artifact-materializer.js';
 import { schemaErrors as toolPayloadSchemaErrors } from './tool-payload-contract.js';
+import { normalizeToolPayloadShape } from './direct-answer-payload.js';
 
 type AttemptPlanRefsBuilder = (request: GatewayRequest, skill?: SkillAvailability, fallbackReason?: string) => Record<string, unknown>;
 let attemptPlanRefsBuilder: AttemptPlanRefsBuilder = () => ({});
@@ -43,13 +44,14 @@ export async function validateAndNormalizePayload(
   skill: SkillAvailability,
   refs: { taskRel: string; outputRel: string; stdoutRel: string; stderrRel: string; runtimeFingerprint: Record<string, unknown> },
 ) {
-  const errors = toolPayloadSchemaErrors(payload);
+  const contractPayload = normalizeToolPayloadShape(payload);
+  const errors = toolPayloadSchemaErrors(contractPayload);
   if (errors.length) {
     return repairNeededPayload(request, skill, `Task output failed schema validation: ${errors.join('; ')}`, refs);
   }
   const workspace = resolve(request.workspacePath || process.cwd());
   const normalizedArtifacts = await normalizeArtifactsForPayload(
-    Array.isArray(payload.artifacts) ? payload.artifacts : [],
+    Array.isArray(contractPayload.artifacts) ? contractPayload.artifacts : [],
     workspace,
     refs,
   );
@@ -59,7 +61,7 @@ export async function validateAndNormalizePayload(
     normalizedArtifacts,
     refs,
   );
-  const referenceFailures = currentReferenceUsageFailures(payload, persistedArtifacts, request);
+  const referenceFailures = currentReferenceUsageFailures(contractPayload, persistedArtifacts, request);
   const referenceFailureUnits = referenceFailures.map((failure, index) => ({
     id: `current-reference-usage-${index + 1}`,
     status: 'failed-with-reason',
@@ -78,18 +80,18 @@ export async function validateAndNormalizePayload(
     claimType: String(payload.claimType || 'fact'),
     evidenceLevel: String(payload.evidenceLevel || 'runtime'),
     reasoningTrace: [
-      String(payload.reasoningTrace || ''),
+      String(contractPayload.reasoningTrace || ''),
       `Skill: ${skill.id}`,
       `Runtime gateway refs: taskCodeRef=${refs.taskRel}, outputRef=${refs.outputRel}, stdoutRef=${refs.stdoutRel}, stderrRef=${refs.stderrRel}`,
     ].filter(Boolean).join('\n'),
-    claims: Array.isArray(payload.claims) ? payload.claims : [],
+    claims: Array.isArray(contractPayload.claims) ? contractPayload.claims : [],
     uiManifest: composeRuntimeUiManifest(
-      Array.isArray(payload.uiManifest) ? payload.uiManifest : [],
-      Array.isArray(payload.artifacts) ? payload.artifacts : [],
+      Array.isArray(contractPayload.uiManifest) ? contractPayload.uiManifest : [],
+      Array.isArray(contractPayload.artifacts) ? contractPayload.artifacts : [],
       request,
     ),
     executionUnits: [
-      ...(Array.isArray(payload.executionUnits) ? payload.executionUnits : []).map((unit) => isRecord(unit) ? {
+      ...(Array.isArray(contractPayload.executionUnits) ? contractPayload.executionUnits : []).map((unit) => isRecord(unit) ? {
         language: 'python',
         codeRef: refs.taskRel,
         stdoutRef: refs.stdoutRel,
@@ -105,9 +107,9 @@ export async function validateAndNormalizePayload(
     ],
     artifacts: persistedArtifacts,
     logs: [{ kind: 'stdout', ref: refs.stdoutRel }, { kind: 'stderr', ref: refs.stderrRel }],
-    verificationResults: payload.verificationResults,
-    verificationPolicy: payload.verificationPolicy,
-    workEvidence: payload.workEvidence,
+    verificationResults: contractPayload.verificationResults,
+    verificationPolicy: contractPayload.verificationPolicy,
+    workEvidence: contractPayload.workEvidence,
   };
 }
 

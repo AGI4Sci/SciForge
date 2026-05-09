@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { coerceReportPayload } from './ResultsRenderer';
-import type { RuntimeArtifact } from '../domain';
+import { coerceReportPayload, shouldOpenRunAuditDetails } from './ResultsRenderer';
+import type { RuntimeArtifact, SciForgeSession } from '../domain';
 
 test('coerceReportPayload extracts report refs from backend ToolPayload text instead of rendering raw JSON', () => {
   const payloadText = [
@@ -104,4 +104,41 @@ test('coerceReportPayload synthesizes readable report sections from related arti
   assert.match(report.markdown ?? '', /Agentic Retrieval for Scientific Discovery/);
   assert.match(report.markdown ?? '', /Agents improve triage/);
   assert.doesNotMatch(report.markdown ?? '', /ENOENT/);
+});
+
+test('completed runs with partial retrieval notes do not open failure audit by default', () => {
+  const session: SciForgeSession = {
+    schemaVersion: 2,
+    sessionId: 'session-partial-retrieval',
+    scenarioId: 'literature-evidence-review',
+    title: 'partial retrieval',
+    createdAt: '2026-05-09T00:00:00.000Z',
+    messages: [],
+    runs: [{
+      id: 'project-literature-evidence-review-run',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'fetch papers',
+      response: 'completed with partial PDF retrieval',
+      createdAt: '2026-05-09T00:00:00.000Z',
+      completedAt: '2026-05-09T00:01:00.000Z',
+    }],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [{
+      id: 'fetch-full-text',
+      tool: 'arxiv.fetch',
+      params: '{}',
+      status: 'partial' as never,
+      hash: 'hash-partial',
+      failureReason: 'Some papers could not be fully retrieved',
+      outputRef: '.sciforge/task-results/project-literature-evidence-review-run.json',
+    }],
+    artifacts: [],
+    notebook: [],
+    versions: [],
+    updatedAt: '2026-05-09T00:01:00.000Z',
+  };
+
+  assert.equal(shouldOpenRunAuditDetails(session, session.runs[0]), false);
 });

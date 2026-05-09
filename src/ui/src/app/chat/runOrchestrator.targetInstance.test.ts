@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 
 import type { AgentStreamEvent, PeerInstance, SciForgeConfig, SciForgeSession } from '../../domain';
-import { runPreflightContextCompaction, runPromptOrchestrator, shouldBlockOnPreflightContextCompaction } from './runOrchestrator';
+import {
+  recoverExistingArtifactFollowupAfterInterruption,
+  runPreflightContextCompaction,
+  runPromptOrchestrator,
+  shouldBlockOnPreflightContextCompaction,
+} from './runOrchestrator';
 
 const originalFetch = globalThis.fetch;
 
@@ -98,6 +103,43 @@ describe('runPromptOrchestrator target instance guard', () => {
     assert.ok(Date.now() - started < 25, 'preflight compaction should return before background compact fetch resolves');
     assert.match(emitted[0]?.detail ?? '', /非阻塞上下文压缩/);
   });
+
+  it('recovers report-view follow-ups from existing artifacts after a system interruption', () => {
+    const session = sessionWithReportArtifact();
+
+    const response = recoverExistingArtifactFollowupAfterInterruption({
+      prompt: '给我markdown格式的报告，我需要看',
+      session,
+      scenarioId: 'literature-evidence-review',
+      scenarioPackageRef: { id: 'literature-evidence-review', version: '1', source: 'built-in' },
+      skillPlanRef: 'skill-plan.test',
+      uiPlanRef: 'ui-plan.test',
+      references: [],
+      interruptedMessage: '当前 backend 运行被系统或网络中断：SciForge project tool 已取消。',
+    });
+
+    assert.ok(response);
+    assert.equal(response.run.status, 'completed');
+    assert.match(response.message.content, /^# AgentServer Report/);
+    assert.equal(response.artifacts[0]?.id, 'research-report');
+    assert.equal(response.uiManifest[0]?.componentId, 'report-viewer');
+    assert.equal(response.executionUnits[0]?.status, 'self-healed');
+  });
+
+  it('does not recover fresh retrieval prompts from stale report artifacts', () => {
+    const response = recoverExistingArtifactFollowupAfterInterruption({
+      prompt: '帮我重新检索过去一周 arxiv 上 AI Agent 相关论文',
+      session: sessionWithReportArtifact(),
+      scenarioId: 'literature-evidence-review',
+      scenarioPackageRef: { id: 'literature-evidence-review', version: '1', source: 'built-in' },
+      skillPlanRef: 'skill-plan.test',
+      uiPlanRef: 'ui-plan.test',
+      references: [],
+      interruptedMessage: '当前 backend 运行被系统或网络中断：SciForge project tool 已取消。',
+    });
+
+    assert.equal(response, undefined);
+  });
 });
 
 function emptySession(): SciForgeSession {
@@ -116,6 +158,27 @@ function emptySession(): SciForgeSession {
     notebook: [],
     versions: [],
     updatedAt: '2026-05-07T00:00:00.000Z',
+  };
+}
+
+function sessionWithReportArtifact(): SciForgeSession {
+  return {
+    ...emptySession(),
+    artifacts: [{
+      id: 'research-report',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      metadata: { title: 'AgentServer Report' },
+      data: {
+        markdown: '# AgentServer Report\n\nFound 50 AI Agent papers from the past week on arxiv.',
+      },
+    }],
+    uiManifest: [{
+      componentId: 'report-viewer',
+      artifactRef: 'research-report',
+      priority: 1,
+    }],
   };
 }
 

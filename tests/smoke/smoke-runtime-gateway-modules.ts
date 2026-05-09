@@ -144,6 +144,31 @@ try {
   assert.equal(directPayload?.message, 'Direct answer');
   assert.equal(directPayload?.uiManifest[0].componentId, 'report-viewer');
 
+  const aliasedManifestPayload = coerceWorkspaceTaskPayload({
+    message: 'arXiv retrieval hit a provider error and returned auditable artifacts.',
+    confidence: 0,
+    claimType: 'error',
+    evidenceLevel: 'none',
+    reasoningTrace: ['queried arXiv API', 'provider returned HTTP 500'],
+    claims: [{ text: 'arXiv provider returned HTTP 500', confidence: 0 }],
+    displayIntent: 'show-report',
+    uiManifest: [
+      { component: 'report-viewer', props: { artifactType: 'research-report' } },
+      { component: 'paper-card-list', props: { artifactType: 'paper-list' } },
+    ],
+    executionUnits: [{ id: 'arxiv-search', status: 'failed-with-reason', failureReason: 'HTTP 500' }],
+    artifacts: [
+      { id: 'paper-list', type: 'paper-list', content: '[]' },
+      { id: 'research-report', type: 'research-report', content: '# Error' },
+    ],
+  });
+  assert.equal(aliasedManifestPayload?.uiManifest[0].componentId, 'report-viewer');
+  assert.equal(aliasedManifestPayload?.uiManifest[0].artifactRef, 'research-report');
+  assert.equal(aliasedManifestPayload?.uiManifest[1].componentId, 'paper-card-list');
+  assert.equal(aliasedManifestPayload?.uiManifest[1].artifactRef, 'paper-list');
+  assert.equal(aliasedManifestPayload?.reasoningTrace, 'queried arXiv API\nprovider returned HTTP 500');
+  assert.equal((aliasedManifestPayload?.artifacts.find((artifact) => artifact.id === 'research-report')?.data as { markdown?: string } | undefined)?.markdown, '# Error');
+
   const malformedPayload = coerceWorkspaceTaskPayload({
     message: '搜索到 2 条结果。',
     claims: [],

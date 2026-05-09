@@ -827,11 +827,18 @@ export function shouldOpenRunAuditDetails(session: SciForgeSession, activeRun?: 
 function failedExecutionUnits(session: SciForgeSession, activeRun?: SciForgeRun) {
   const runRefs = new Set([activeRun?.id].filter((id): id is string => Boolean(id)));
   return session.executionUnits.filter((unit) => {
-    const failed = unit.status === 'failed' || unit.status === 'failed-with-reason' || unit.status === 'repair-needed' || Boolean(unit.failureReason);
+    const failed = isBlockingExecutionUnitStatus(unit.status);
     if (!failed) return false;
     if (!runRefs.size) return true;
     return !unit.outputRef || Array.from(runRefs).some((runId) => unit.outputRef?.includes(runId));
   });
+}
+
+function isBlockingExecutionUnitStatus(status: unknown) {
+  return status === 'failed'
+    || status === 'failed-with-reason'
+    || status === 'repair-needed'
+    || status === 'needs-human';
 }
 
 function runAuditBlockers(session: SciForgeSession, activeRun?: SciForgeRun) {

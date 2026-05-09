@@ -8,7 +8,10 @@ import { buildInitialResponseProgressEvent } from '../../processProgress';
 import type {
   AgentStreamEvent,
   NormalizedAgentResponse,
+  ObjectReference,
   PeerInstance,
+  RuntimeArtifact,
+  RuntimeExecutionUnit,
   ScenarioInstanceId,
   ScenarioPackageRef,
   ScenarioRuntimeOverride,
@@ -161,6 +164,21 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
       : wasSystemInterrupted
         ? `当前 backend 运行被系统或网络中断：${rawMessage}`
         : rawMessage;
+    const recoveredResponse = !wasUserInterrupted && wasSystemInterrupted
+      ? recoverExistingArtifactFollowupAfterInterruption({
+          prompt: input.prompt,
+          session: input.activeSession() ?? optimisticSession,
+          scenarioId: input.scenarioId,
+          scenarioPackageRef: input.scenarioPackageRef,
+          skillPlanRef: input.skillPlanRef,
+          uiPlanRef: input.uiPlanRef,
+          references: input.references,
+          interruptedMessage: message,
+        })
+      : undefined;
+    if (recoveredResponse) {
+      return { status: 'completed', optimisticSession, finalResponse: recoveredResponse };
+    }
     const { failedRunId, session } = appendFailedRunToSession({
       optimisticSession,
       scenarioId: input.scenarioId,
@@ -179,6 +197,156 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
       message,
     };
   }
+}
+
+export function recoverExistingArtifactFollowupAfterInterruption({
+  prompt,
+  session,
+  scenarioId,
+  scenarioPackageRef,
+  skillPlanRef,
+  uiPlanRef,
+  references,
+  interruptedMessage,
+}: {
+  prompt: string;
+  session: SciForgeSession;
+  scenarioId: ScenarioInstanceId;
+  scenarioPackageRef: ScenarioPackageRef;
+  skillPlanRef: string;
+  uiPlanRef: string;
+  references: SciForgeReference[];
+  interruptedMessage: string;
+}): NormalizedAgentResponse | undefined {
+  if (!isExistingArtifactFollowupPrompt(prompt)) return undefined;
+  const artifact = preferredReportArtifact(session.artifacts);
+  if (!artifact) return undefined;
+  const markdown = markdownTextForArtifact(artifact);
+  if (!markdown) return undefined;
+
+  const now = nowIso();
+  const runId = makeId('run');
+  const executionUnit: RuntimeExecutionUnit = {
+    id: makeId('eu'),
+    tool: 'sciforge.existing-artifact-followup',
+    params: JSON.stringify({
+      prompt,
+      sourceArtifactId: artifact.id,
+      reason: 'system-interruption-existing-artifact',
+    }),
+    status: 'self-healed',
+    hash: `${artifact.id}:${artifact.schemaVersion ?? artifact.type}`,
+    artifacts: [artifact.id],
+    outputArtifacts: [artifact.id],
+    scenarioPackageRef,
+    skillPlanRef,
+    uiPlanRef,
+    selfHealReason: interruptedMessage,
+    nextStep: 'Recovered the follow-up from an existing artifact instead of failing the turn.',
+  };
+  const objectReferences = objectReferencesForArtifact(artifact, runId);
+  const content = markdown.length <= 8_000
+    ? markdown
+    : `${markdown.slice(0, 8_000)}\n\n...（报告较长，已在结果视图中保留完整 Markdown。）`;
+
+  return {
+    message: {
+      id: makeId('msg'),
+      role: 'system',
+      content,
+      createdAt: now,
+      status: 'completed',
+      references,
+      objectReferences,
+    },
+    run: {
+      id: runId,
+      scenarioId,
+      scenarioPackageRef,
+      skillPlanRef,
+      uiPlanRef,
+      status: 'completed',
+      prompt,
+      response: content,
+      createdAt: now,
+      completedAt: now,
+      references,
+      objectReferences,
+      raw: {
+        recoveredFrom: 'system-interruption-existing-artifact',
+        interruptedMessage,
+        sourceArtifactId: artifact.id,
+      },
+    },
+    uiManifest: uiManifestForArtifact(session.uiManifest, artifact),
+    claims: [],
+    executionUnits: [executionUnit],
+    artifacts: [artifact],
+    notebook: [],
+  };
+}
+
+function isExistingArtifactFollowupPrompt(prompt: string) {
+  const text = prompt.trim().toLowerCase();
+  if (!text) return false;
+  const asksForExistingArtifact = /markdown|\bmd\b|报告|report|查看|看看|看一下|展示|show|view|复制|copy|导出|export|下载报告|download report|格式|format/.test(text);
+  if (!asksForExistingArtifact) return false;
+  const explicitlyFreshWork = /重新|重跑|再跑|再检索|重新检索|检索一下|搜索|查找|最新|过去一周|下载并阅读|阅读全文|生成新的|rerun|run again|search|retrieve|fetch|latest/.test(text);
+  const pointsToPriorResult = /已有|现有|当前|刚才|上面|之前|previous|existing|current|that report|this report/.test(text);
+  return !explicitlyFreshWork || pointsToPriorResult;
+}
+
+function preferredReportArtifact(artifacts: RuntimeArtifact[]) {
+  const withMarkdown = artifacts.filter((artifact) => Boolean(markdownTextForArtifact(artifact)));
+  return withMarkdown.find((artifact) => artifact.type === 'research-report')
+    ?? withMarkdown.find((artifact) => /report|markdown|summary/i.test(artifact.type))
+    ?? withMarkdown[0];
+}
+
+function markdownTextForArtifact(artifact: RuntimeArtifact): string | undefined {
+  const direct = stringField(artifact as unknown as Record<string, unknown>, ['markdown', 'content', 'report', 'text']);
+  if (direct) return direct;
+  if (!artifact.data || typeof artifact.data !== 'object' || Array.isArray(artifact.data)) return undefined;
+  return stringField(artifact.data as Record<string, unknown>, ['markdown', 'content', 'report', 'text', 'summary']);
+}
+
+function stringField(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return undefined;
+}
+
+function uiManifestForArtifact(existing: SciForgeSession['uiManifest'], artifact: RuntimeArtifact) {
+  const matching = existing.filter((slot) => slot.artifactRef === artifact.id);
+  if (matching.length) return matching;
+  return [{
+    componentId: artifact.type === 'research-report' ? 'report-viewer' : 'artifact-viewer',
+    artifactRef: artifact.id,
+    priority: 1,
+  }];
+}
+
+function objectReferencesForArtifact(artifact: RuntimeArtifact, runId: string): ObjectReference[] {
+  return [{
+    id: `obj-${artifact.id}`,
+    title: typeof artifact.metadata?.title === 'string' ? artifact.metadata.title : artifact.id,
+    kind: 'artifact',
+    ref: artifact.id,
+    artifactType: artifact.type,
+    runId,
+    preferredView: artifact.type === 'research-report' ? 'report-viewer' : undefined,
+    actions: ['focus-right-pane', 'inspect', 'copy-path'],
+    status: 'available',
+    summary: typeof artifact.metadata?.summary === 'string' ? artifact.metadata.summary : undefined,
+    provenance: {
+      dataRef: artifact.dataRef,
+      path: artifact.path,
+      producer: artifact.producerScenario,
+      version: artifact.schemaVersion,
+    },
+  }];
 }
 
 function emitTargetInstanceEvents(

@@ -43,6 +43,55 @@ User intent
 - Packages：不只是代码复用单元，而是 capability contract 单元。每个 package 都应能声明自己暴露的能力、输入输出协议、side effects、validator、repair hints 和 provider variants。
 - UI：只负责把 session、artifact、object refs、views、execution units、validation errors 和 recover actions 可视化；不作为语义路由层或第二个 agent。
 
+### src 与 packages 边界：固定平台 vs 插拔能力
+
+最终版本采用清晰的工程边界：
+
+```text
+src/
+  fixed platform logic
+  owns: lifecycle, loading, routing shell, validation loop, persistence, safety
+
+packages/
+  pluggable capabilities
+  owns: manifests, schemas, validators, providers, examples, repair hints
+```
+
+判断规则：
+
+- 如果逻辑回答“系统怎么运行”，放 `src/`。
+- 如果逻辑回答“系统能做什么”，放 `packages/`。
+- 如果高频稳定逻辑是平台秩序，放 `src/`；如果是能力组合，放 `packages/` 作为 composed capability。
+
+`src/` 是产品固定逻辑和运行时骨架，适合写死：
+
+- app shell、UI 状态管理、workspace writer、runtime server。
+- request/stream transport、backend run 生命周期、stream resume/poll。
+- capability registry loader、capability broker 主流程、provider dispatch。
+- contract validation / repair loop 编排、`ContractValidationFailure` 生成。
+- workspace ref resolver 主流程、artifact persistence、materialization。
+- permission / safety boundary、sandbox、外部动作确认。
+- Capability Evolution Ledger 写入、module boundary smoke、no-legacy-paths guard。
+
+`packages/` 是即插即用能力生态，适合承载：
+
+- observe providers、skills、actions、verifiers、views。
+- importers/exporters、domain scenario packages、mock/test fixtures。
+- capability manifests、schemas、validators、examples、repair hints。
+- provider-specific adapters，例如 external API、本地 Python、browser/computer-use provider。
+- composed capabilities，例如 `artifact_to_markdown_report`、`paper_search_to_evidence_matrix`、`failed_run_repair_loop`。
+
+示例边界：
+
+- `read_artifact` 的权限、路径约束、ref resolver 生命周期属于 `src/`。
+- `render_research_report_to_markdown` 属于 `packages/` capability。
+- capability broker 的筛选框架属于 `src/`。
+- biomedical 文献检索能力的 manifest、schema、provider 和 validator 属于 `packages/`。
+- validation loop 编排属于 `src/`。
+- evidence matrix schema validator 属于 `packages/`。
+
+backend 主要理解 `packages/` 暴露的 capability meta 和 `src/` 暴露的 runtime contract；不需要理解 `src/` 内部实现。`src/` 不应硬编码某个 package 的领域语义，`packages/` 不应绕过 `src/` 的安全、refs、validation 和 persistence 边界。
+
 ### 一切模块都是 Capability
 
 以下模块都应收敛到统一 capability contract，而不是散落成隐式调用约定：
@@ -83,6 +132,66 @@ User intent
 - 稳定重复性工作交给代码。
 - 不确定性、跨能力组合和异常修复交给 backend。
 - 固化的是“可声明、可验证、可替换的组合能力”，不是不可见的业务特例。
+
+### Composed Capability Fallback and Evolution Ledger
+
+Composed capability 失败时是否回退到原子能力，不由 LLM 主观判断，而由代码校验、failure classifier 和 capability manifest 中的 fallback policy 共同决定。backend 决定“回退后如何重组”，SciForge runtime 决定“是否允许回退、暴露哪些原子能力、携带哪些失败上下文”。
+
+推荐流程：
+
+```text
+run composed capability
+  -> validator checks output
+  -> failure classifier assigns failureCode
+  -> fallbackPolicy decides fallbackable / non-fallbackable
+  -> if fallbackable and retry budget remains:
+       expose atomicCapabilities + contract summaries + failure context
+       backend writes new glue code or selects alternate provider
+       runtime executes and validates again
+     else if needs user/action/safety:
+       return needs-human with recoverActions
+     else:
+       return structured ContractValidationFailure
+  -> append success/failure trace to Capability Evolution Ledger
+```
+
+每个 composed capability manifest 应声明：
+
+- `atomicCapabilities`：可下钻的原子能力列表。
+- `fallbackPolicy.fallbackToAtomicWhen`：允许下钻的失败类型，例如 `schema_invalid`、`missing_required_artifact`、`invalid_ref`、`empty_result`、`partial_result_below_threshold`、`provider_timeout`、`verifier_failed`、`repair_attempts_exhausted`。
+- `fallbackPolicy.doNotFallbackWhen`：不应自动下钻的失败类型，例如 `permission_denied`、`missing_user_input`、`safety_blocked`、`quota_exceeded`、`unsupported_task`。
+- `retryBudget`：最大下钻次数、最大耗时、最大外部调用次数和可接受成本。
+- `fallbackContext`：下钻时必须交给 backend 的 related refs、partial artifacts、stdout/stderr/log refs、failureReason、recoverActions 和 validator details。
+
+capability result 至少应能表达：
+
+- `status`: `success` / `partial` / `failed` / `needs-human`。
+- `failureCode` 和 `failureReason`。
+- `fallbackable`。
+- `confidence` / `coverage`，用于判断部分成功是否可接受。
+- `recoverActions`。
+- `atomicTrace` / `executionUnitRefs`。
+- `relatedArtifactRefs` / `relatedRunRefs`。
+
+胶水代码和修复轨迹本身是项目资产，应进入 **Capability Evolution Ledger**。每次 backend 为能力组合生成胶水代码、执行 composed capability、下钻原子能力或完成 repair loop，都应记录：
+
+- user goal summary。
+- selected capabilities 和 provider。
+- input/output schema refs。
+- glue code ref / patch ref / generated task ref。
+- execution trace、stdoutRef、stderrRef、logRef。
+- validation result、failureCode、recoverActions。
+- repair attempts 和最终状态。
+- produced artifacts / views / WorkEvidence refs。
+- latency、外部调用次数、可选成本摘要。
+- 是否建议沉淀为 composed capability、改进 validator 或更新 repair hints。
+
+Ledger 的作用不是让 backend 每轮读取全部历史，而是为 capability broker、文档、测试和后续固化提供事实依据：
+
+- 高频且稳定成功的胶水代码可以提议晋升为 composed capability。
+- 高频失败模式可以改进 validator、fallbackPolicy 和 repair hints。
+- 常见能力组合可以形成 capability graph，帮助 broker 更快筛选相关能力。
+- 已固化能力失败时，ledger 可以提供历史成功路径和失败边界，但仍只通过 refs/digests/briefs 分层暴露。
 
 ### Validation and Repair Loop
 
