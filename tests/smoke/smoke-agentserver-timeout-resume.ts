@@ -13,6 +13,7 @@ let secondPromptText = '';
 
 const generatedTask = [
   'import json, sys',
+  'json.load(open(sys.argv[1], encoding="utf-8"))',
   'payload = {"message":"resumed ok","confidence":0.82,"claimType":"evidence-summary","evidenceLevel":"mock-agentserver","reasoningTrace":"retry resumed from timeout priorAttempts","claims":[],"uiManifest":[],"executionUnits":[{"id":"resume-eu","status":"done","tool":"agentserver.resume"}],"artifacts":[]}',
   'json.dump(payload, open(sys.argv[2], "w"))',
 ].join('\n');
@@ -59,7 +60,7 @@ const server = createServer(async (req, res) => {
         output: {
           result: {
             taskFiles: [{ path: '.sciforge/tasks/resume.py', language: 'python', content: generatedTask }],
-            entrypoint: '.sciforge/tasks/resume.py',
+            entrypoint: { language: 'python', path: '.sciforge/tasks/resume.py' },
             expectedArtifacts: [],
           },
         },

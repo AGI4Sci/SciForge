@@ -158,11 +158,11 @@ export async function runAgentServerGeneratedTask(
       stderrRel: `agentserver://${directGeneration.runId || 'unknown'}/stderr`,
       runtimeFingerprint: { runtime: 'AgentServer direct ToolPayload', runId: directGeneration.runId },
     });
-    const evidenceFinding = evaluateToolPayloadEvidence(directPayload, request);
-    const guidanceFinding = evaluateGuidanceAdoption(directPayload, request);
-    const workEvidenceSummary = summarizeWorkEvidenceForHandoff(directPayload);
-    const payloadFailureReason = firstPayloadFailureReason(directPayload);
-    const payloadFailureStatus = payloadHasFailureStatus(directPayload);
+    const evidenceFinding = evaluateToolPayloadEvidence(normalized, request);
+    const guidanceFinding = evaluateGuidanceAdoption(normalized, request);
+    const workEvidenceSummary = summarizeWorkEvidenceForHandoff(normalized);
+    const payloadFailureReason = firstPayloadFailureReason(normalized);
+    const payloadFailureStatus = payloadHasFailureStatus(normalized);
     const failureReason = payloadFailureReason ?? (!payloadFailureStatus ? guidanceFinding?.reason ?? evidenceFinding?.reason : undefined);
     const attemptStatus = guidanceFinding
       ? guidanceFinding.severity
@@ -433,16 +433,16 @@ export async function runAgentServerGeneratedTask(
     const rawPayload = JSON.parse(await readFile(join(workspace, outputRel), 'utf8')) as ToolPayload;
     const payload = coerceWorkspaceTaskPayload(rawPayload) ?? rawPayload;
     const errors = schemaErrors(payload);
-    const normalized = await validateAndNormalizePayload(payload, request, skill, {
+    const normalized = errors.length ? undefined : await validateAndNormalizePayload(payload, request, skill, {
       taskRel,
       outputRel,
       stdoutRel,
       stderrRel,
       runtimeFingerprint: run.runtimeFingerprint,
     });
-    const evidenceFinding = evaluateToolPayloadEvidence(payload, request);
-    const guidanceFinding = evaluateGuidanceAdoption(payload, request);
-    const workEvidenceSummary = summarizeWorkEvidenceForHandoff(payload);
+    const evidenceFinding = normalized ? evaluateToolPayloadEvidence(normalized, request) : undefined;
+    const guidanceFinding = normalized ? evaluateGuidanceAdoption(normalized, request) : undefined;
+    const workEvidenceSummary = summarizeWorkEvidenceForHandoff(normalized ?? payload);
     const payloadFailureReason = firstPayloadFailureReason(payload, run);
     const payloadFailureStatus = payloadHasFailureStatus(payload);
     const evidenceFailureReason = !payloadFailureStatus ? guidanceFinding?.reason ?? evidenceFinding?.reason : undefined;
@@ -491,6 +491,9 @@ export async function runAgentServerGeneratedTask(
       });
       if (repaired) return repaired;
       return repairNeededPayload(request, skill, repairFailureReason);
+    }
+    if (!normalized) {
+      return repairNeededPayload(request, skill, 'AgentServer generated task output could not be normalized after schema validation.');
     }
     if (options.allowSupplement !== false) {
       const supplemented = await tryAgentServerSupplementMissingArtifacts({
@@ -792,7 +795,7 @@ function generatedEntrypointContractReason(response: AgentServerGenerationRespon
   const entryRel = safeWorkspaceRel(response.entrypoint.path);
   const ext = extname(entryRel).toLowerCase();
   const language = String(response.entrypoint.language || '').toLowerCase();
-  const executableExts = new Set(['.py', '.r', '.R', '.sh', '.bash', '.zsh', '.js', '.mjs', '.ts']);
+  const executableExts = new Set(['.py', '.r', '.R', '.sh', '.bash', '.zsh']);
   const artifactExts = new Set(['.md', '.markdown', '.txt', '.json', '.csv', '.tsv', '.pdf', '.png', '.jpg', '.jpeg', '.html']);
   if (artifactExts.has(ext) && !executableExts.has(ext)) {
     return `AgentServer returned a non-executable artifact/report as entrypoint: ${entryRel}. Return a direct ToolPayload for report-only answers, or use an executable task file that writes the report artifact.`;
@@ -800,8 +803,11 @@ function generatedEntrypointContractReason(response: AgentServerGenerationRespon
   if ((language === 'python' || !language) && ext && !['.py'].includes(ext)) {
     return `AgentServer entrypoint language/path mismatch: language=${language || 'python'} path=${entryRel}.`;
   }
+  if (['.js', '.mjs', '.ts'].includes(ext) && language !== 'cli') {
+    return `AgentServer entrypoint ${entryRel} uses ${ext}, but SciForge generated task runner supports python/r/shell paths or explicit cli commands.`;
+  }
   const entryFile = response.taskFiles.find((file) => safeWorkspaceRel(file.path) === entryRel);
-  if (entryFile && artifactExts.has(ext) && !/^(python|r|shell|cli|javascript|typescript)$/i.test(String(entryFile.language || ''))) {
+  if (entryFile && artifactExts.has(ext) && !/^(python|r|shell|cli)$/i.test(String(entryFile.language || ''))) {
     return `AgentServer taskFiles marks artifact-like entrypoint ${entryRel} as ${entryFile.language || 'unknown'} instead of executable code.`;
   }
   return undefined;

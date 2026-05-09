@@ -91,6 +91,7 @@ export async function enrichArtifactDataFromFileRefs(artifact: Record<string, un
 
   if (type === 'research-report') {
     const markdown = await readTextRef(metadata.reportRef, workspace);
+    const realDataPlanText = await readTextRef(metadata.realDataPlanRef, workspace);
     if (markdown) {
       data.markdown = markdown;
       if (!Array.isArray(data.sections)) data.sections = markdownSections(markdown);
@@ -107,6 +108,40 @@ export async function enrichArtifactDataFromFileRefs(artifact: Record<string, un
       data.report = stringField(data.report) ?? inlineMarkdown;
       if (!Array.isArray(data.sections)) data.sections = markdownSections(inlineMarkdown);
     }
+    if (realDataPlanText) {
+      try {
+        data.realDataPlan = JSON.parse(realDataPlanText);
+      } catch {
+        data.realDataPlan = realDataPlanText;
+      }
+    }
+  }
+
+  if (type === 'omics-differential-expression') {
+    const markerRows = await readCsvRef(metadata.markerRef, workspace);
+    const qcRows = await readCsvRef(metadata.qcRef, workspace);
+    const compositionRows = await readCsvRef(metadata.compositionRef, workspace);
+    const volcanoRows = await readCsvRef(metadata.volcanoRef, workspace);
+    const umapSvgText = await readTextRef(metadata.umapSvgRef, workspace);
+    const heatmapSvgText = await readTextRef(metadata.heatmapSvgRef, workspace);
+    if (markerRows.length) data.markers = markerRows;
+    if (qcRows.length) data.qc = qcRows;
+    if (compositionRows.length) data.composition = compositionRows;
+    if (volcanoRows.length) {
+      data.volcano = volcanoRows;
+      data.points = volcanoRows.map((row, index) => {
+        const negLogP = numberFrom(row.negLogP ?? row.neg_log10_pval ?? row.neg_log10_p ?? row.pValue ?? row.pval_adj);
+        return {
+          gene: String(row.gene || row.label || `Gene${index + 1}`),
+          logFC: numberFrom(row.logFC ?? row.log2FC ?? row.logfoldchange) ?? 0,
+          negLogP,
+          significant: Boolean((negLogP ?? 0) >= 1.3),
+          cluster: String(row.cluster || row.cell_type || ''),
+        };
+      });
+    }
+    if (umapSvgText) data.umapSvgText = umapSvgText;
+    if (heatmapSvgText) data.heatmapSvgText = heatmapSvgText;
   }
 
   const pathRef = stringField(artifact.path);
@@ -170,8 +205,19 @@ async function readTextRef(value: unknown, workspace: string) {
   try {
     return await readFile(path, 'utf8');
   } catch {
-    return undefined;
+    const scanpyFallback = scanpyFigureFallbackPath(path, workspace);
+    if (!scanpyFallback) return undefined;
+    try {
+      return await readFile(scanpyFallback, 'utf8');
+    } catch {
+      return undefined;
+    }
   }
+}
+
+async function readCsvRef(value: unknown, workspace: string) {
+  const text = await readTextRef(value, workspace);
+  return text ? parseCsvRows(text) : [];
 }
 
 function safeWorkspaceFilePath(value: unknown, workspace: string) {
@@ -180,6 +226,71 @@ function safeWorkspaceFilePath(value: unknown, workspace: string) {
   const workspaceRoot = resolve(workspace);
   const absolute = candidate.startsWith('/') ? resolve(candidate) : resolve(workspaceRoot, candidate);
   return absolute.startsWith(`${workspaceRoot}/`) || absolute === workspaceRoot ? absolute : undefined;
+}
+
+function scanpyFigureFallbackPath(path: string, workspace: string) {
+  if (!path.replaceAll('\\', '/').includes('/.sciforge/task-results/figures/')) return undefined;
+  const basename = path.split('/').pop();
+  if (!basename) return undefined;
+  const normalizedName = basename.replace(/^rank_genes_groups_/, '');
+  const candidate = resolve(workspace, 'figures', normalizedName);
+  return candidate.startsWith(`${resolve(workspace)}/`) ? candidate : undefined;
+}
+
+function parseCsvRows(text: string) {
+  const rows = parseCsv(text).filter((row) => row.some((cell) => cell.trim().length));
+  const header = rows[0]?.map((cell) => cell.trim()) ?? [];
+  if (!header.length) return [];
+  return rows.slice(1).map((row) => Object.fromEntries(header.map((key, index) => [key, coerceCsvValue(row[index] ?? '')])));
+}
+
+function parseCsv(text: string) {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (char === '"' && quoted && next === '"') {
+      cell += '"';
+      index += 1;
+      continue;
+    }
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (char === ',' && !quoted) {
+      row.push(cell);
+      cell = '';
+      continue;
+    }
+    if ((char === '\n' || char === '\r') && !quoted) {
+      if (char === '\r' && next === '\n') index += 1;
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = '';
+      continue;
+    }
+    cell += char;
+  }
+  row.push(cell);
+  rows.push(row);
+  return rows;
+}
+
+function coerceCsvValue(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const numeric = Number(trimmed);
+  return Number.isFinite(numeric) ? numeric : trimmed;
+}
+
+function numberFrom(value: unknown) {
+  const numeric = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
+  return Number.isFinite(numeric) ? numeric : undefined;
 }
 
 function markdownSections(markdown: string) {

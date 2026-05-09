@@ -52,7 +52,7 @@ export const scenarios: ScenarioViewConfig[] = [
     color: '#FF7043',
     tools: ['PDB', 'AlphaFold DB', 'Mol*'],
     status: 'active',
-    defaultResult: 'molecule-viewer',
+    defaultResult: 'structure-viewer',
   },
   {
     id: 'omics-differential-exploration',
@@ -63,7 +63,7 @@ export const scenarios: ScenarioViewConfig[] = [
     color: '#4ECDC4',
     tools: ['DESeq2', 'Scanpy', 'clusterProfiler'],
     status: 'active',
-    defaultResult: 'volcano-plot',
+    defaultResult: 'point-set-viewer',
   },
   {
     id: 'biomedical-knowledge-graph',
@@ -74,7 +74,7 @@ export const scenarios: ScenarioViewConfig[] = [
     color: '#FFD54F',
     tools: ['UniProt', 'ChEMBL', 'OpenTargets'],
     status: 'active',
-    defaultResult: 'network-graph',
+    defaultResult: 'graph-viewer',
   },
 ];
 
@@ -108,4 +108,3 @@ export const radarData = [
   { subject: '时间预算', ai: 45, bio: 55 },
   { subject: '验证可行', ai: 70, bio: 75 },
 ];
-

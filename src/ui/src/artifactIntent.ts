@@ -6,10 +6,10 @@ const ARTIFACT_COMPONENTS: Record<string, string> = {
   'paper-list': 'paper-card-list',
   'evidence-matrix': 'evidence-matrix',
   'notebook-timeline': 'notebook-timeline',
-  'structure-summary': 'molecule-viewer',
-  'omics-differential-expression': 'volcano-plot',
-  'knowledge-graph': 'network-graph',
-  'data-table': 'data-table',
+  'structure-summary': 'structure-viewer',
+  'omics-differential-expression': 'point-set-viewer',
+  'knowledge-graph': 'graph-viewer',
+  'data-table': 'record-table',
 };
 
 const ARTIFACT_ALIASES: Record<string, string[]> = {

@@ -2,6 +2,8 @@ import type { GatewayRequest, SciForgeSkillDomain, ToolPayload } from '../runtim
 import { expectedArtifactTypesForRequest } from './gateway-request.js';
 import { clipForAgentServerJson, isRecord, toRecordList } from '../gateway-utils.js';
 import { sha1 } from '../workspace-task-runner.js';
+import { isToolPayload } from './tool-payload-contract.js';
+import { normalizeRuntimeVerificationResultsOrUndefined } from './verification-results.js';
 
 type ArtifactReferenceContextCollector = (request: GatewayRequest) => Promise<{ combinedArtifacts: Array<Record<string, unknown>> } | undefined>;
 let artifactReferenceContextCollector: ArtifactReferenceContextCollector | undefined;
@@ -19,15 +21,6 @@ function artifactNeedsRepair(artifact: Record<string, unknown>) {
   const status = String(artifact.status || metadata.status || '').toLowerCase();
   const reason = String(artifact.failureReason || metadata.failureReason || '').toLowerCase();
   return status.includes('repair') || status.includes('fail') || /placeholder|missing|failed|repair/.test(reason);
-}
-
-function isToolPayload(value: unknown): value is ToolPayload {
-  if (!isRecord(value)) return false;
-  return typeof value.message === 'string'
-    && Array.isArray(value.claims)
-    && Array.isArray(value.uiManifest)
-    && Array.isArray(value.executionUnits)
-    && Array.isArray(value.artifacts);
 }
 
 export function toolPayloadFromPlainAgentOutput(text: string, request: GatewayRequest): ToolPayload {
@@ -206,14 +199,11 @@ export function coerceAgentServerToolPayload(value: unknown): ToolPayload | unde
 export function coerceWorkspaceTaskPayload(value: unknown): ToolPayload | undefined {
   if (isToolPayload(value)) return normalizeToolPayloadShape(value);
   if (!isRecord(value)) return undefined;
+  const strictNested = strictToolPayloadCandidate(value);
+  if (strictNested) return normalizeToolPayloadShape(strictNested);
   const artifactPayload = coerceStandaloneArtifactPayload(value);
   if (artifactPayload) return artifactPayload;
-  const looksLikePayload =
-    Array.isArray(value.artifacts)
-    || Array.isArray(value.executionUnits)
-    || Array.isArray(value.claims)
-    || value.uiManifest !== undefined;
-  return looksLikePayload ? coerceAgentServerToolPayload(value) : undefined;
+  return undefined;
 }
 
 function coerceStandaloneArtifactPayload(value: Record<string, unknown>): ToolPayload | undefined {
@@ -271,10 +261,11 @@ function componentForStandaloneArtifact(type: string) {
   const normalized = type.toLowerCase();
   if (normalized === 'research-report') return 'report-viewer';
   if (normalized === 'paper-list') return 'paper-card-list';
-  if (normalized === 'knowledge-graph') return 'network-graph';
-  if (normalized === 'structure-summary') return 'molecule-viewer';
+  if (normalized === 'knowledge-graph') return 'graph-viewer';
+  if (normalized === 'structure-summary') return 'structure-viewer';
   if (normalized === 'evidence-matrix') return 'evidence-matrix';
   if (normalized === 'notebook-timeline') return 'notebook-timeline';
+  if (normalized === 'data-table') return 'record-table';
   return 'unknown-artifact-inspector';
 }
 
@@ -326,7 +317,21 @@ function normalizeAgentServerToolPayloadCandidate(value: unknown, depth = 0): un
     artifacts,
     displayIntent,
     objectReferences,
+    verificationResults: normalizeRuntimeVerificationResultsOrUndefined(value.verificationResults ?? value.verificationResult),
+    verificationPolicy: isRecord(value.verificationPolicy) ? value.verificationPolicy as unknown as ToolPayload['verificationPolicy'] : undefined,
   };
+}
+
+function strictToolPayloadCandidate(value: unknown, depth = 0): ToolPayload | undefined {
+  if (depth > 4 || value === undefined || value === null) return undefined;
+  if (isToolPayload(value)) return value;
+  if (typeof value === 'string') return strictToolPayloadCandidate(extractJson(value), depth + 1);
+  if (!isRecord(value)) return undefined;
+  for (const key of ['payload', 'toolPayload', 'result', 'output', 'data']) {
+    const nested = strictToolPayloadCandidate(value[key], depth + 1);
+    if (nested) return nested;
+  }
+  return undefined;
 }
 
 function extractNestedAgentServerPayloadFromText(text: string): ToolPayload | undefined {

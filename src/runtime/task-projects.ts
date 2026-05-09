@@ -36,6 +36,7 @@ import type {
 } from './task-project-contracts.js';
 import { isRecord, errorMessage } from './gateway-utils.js';
 import { runWorkspaceTask } from './workspace-task-runner.js';
+import { isToolPayload } from './gateway/tool-payload-contract.js';
 import { evaluateToolPayloadEvidence } from './gateway/work-evidence-guard.js';
 import { collectWorkEvidence, parseWorkEvidence, type WorkEvidence } from './gateway/work-evidence-types.js';
 import { maybeWriteSkillPromotionProposal } from './skill-promotion.js';
@@ -767,19 +768,6 @@ async function parseStageOutput(workspaceRoot: string, outputRel: string) {
   }
   const issues = evidence.issues.map((issue) => issue.path ? `${issue.path}: ${issue.reason}` : issue.reason).join('; ');
   throw new Error(`output is neither ToolPayload nor WorkEvidence${issues ? ` (${issues})` : ''}.`);
-}
-
-function isToolPayload(value: unknown): value is ToolPayload {
-  if (!isRecord(value)) return false;
-  return typeof value.message === 'string'
-    && typeof value.confidence === 'number'
-    && typeof value.claimType === 'string'
-    && typeof value.evidenceLevel === 'string'
-    && typeof value.reasoningTrace === 'string'
-    && Array.isArray(value.claims)
-    && Array.isArray(value.uiManifest)
-    && Array.isArray(value.executionUnits)
-    && Array.isArray(value.artifacts);
 }
 
 function gatewayRequestForStage(

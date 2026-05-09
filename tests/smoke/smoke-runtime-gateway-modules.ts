@@ -8,13 +8,15 @@ import { runAgentServerGeneratedTask } from '../../src/runtime/gateway/generated
 import { agentServerAgentId, currentTurnReferences } from '../../src/runtime/gateway/agentserver-context-window.js';
 import { normalizeArtifactsForPayload, persistArtifactRefsForPayload } from '../../src/runtime/gateway/artifact-materializer.js';
 import { classifyAgentServerBackendFailure, sanitizeAgentServerError } from '../../src/runtime/gateway/backend-failure-diagnostics.js';
-import { coerceAgentServerToolPayload, parseGenerationResponse, validateAndNormalizePayload } from '../../src/runtime/gateway/payload-normalizer.js';
+import { coerceAgentServerToolPayload, coerceWorkspaceTaskPayload } from '../../src/runtime/gateway/direct-answer-payload.js';
+import { validateAndNormalizePayload } from '../../src/runtime/gateway/payload-validation.js';
+import { parseGenerationResponse } from '../../src/runtime/gateway/agentserver-run-output.js';
 import { repairNeededPayload } from '../../src/runtime/gateway/repair-policy.js';
 import { applyRuntimeVerificationPolicy, normalizeRuntimeVerificationPolicy } from '../../src/runtime/gateway/verification-policy.js';
 import { normalizeRuntimeVerificationResults } from '../../src/runtime/gateway/verification-results.js';
 import { normalizeAgentServerWorkspaceEvent, withRequestContextWindowLimit } from '../../src/runtime/gateway/workspace-event-normalizer.js';
 import { applyConversationPolicy } from '../../src/runtime/conversation-policy/apply.js';
-import { summarizeRuntimeCapabilitiesForAgentServer, summarizeSkillsForAgentServer } from '../../src/runtime/gateway/agentserver-prompts.js';
+import { buildAgentServerRepairPrompt, summarizeRuntimeCapabilitiesForAgentServer, summarizeSkillsForAgentServer } from '../../src/runtime/gateway/agentserver-prompts.js';
 import { readTaskAttempts } from '../../src/runtime/task-attempt-history.js';
 import type { SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types.js';
 
@@ -68,6 +70,36 @@ try {
   assert.deepEqual(selectedComponentIdsForRequest(request), ['report-viewer', 'paper-card-list']);
   assert.deepEqual(expectedArtifactSchema(request), { types: ['research-report', 'paper-list'] });
 
+  const repairPrompt = buildAgentServerRepairPrompt({
+    request,
+    skill: {
+      id: 'literature-agentserver-generation',
+      kind: 'workspace',
+      available: true,
+      reason: 'smoke',
+      checkedAt: '2026-05-09T00:00:00.000Z',
+      manifestPath: 'agentserver://literature',
+      manifest: { id: 'literature-agentserver-generation', description: 'smoke', entrypoint: { type: 'agentserver' } },
+    } as unknown as SkillAvailability,
+    run: {
+      workspace,
+      spec: { id: 'repair-smoke', language: 'python', entrypoint: '.sciforge/tasks/repair.py', taskRel: '.sciforge/tasks/repair.py' },
+      outputRef: '.sciforge/task-results/repair.json',
+      stdoutRef: '.sciforge/logs/repair.stdout.log',
+      stderrRef: '.sciforge/logs/repair.stderr.log',
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+      runtimeFingerprint: {},
+    } as any,
+    schemaErrors: ['uiManifest[0].componentId must be a non-empty string'],
+    failureReason: 'AgentServer repair rerun output failed schema validation: uiManifest[0].componentId must be a non-empty string',
+    priorAttempts: [],
+  });
+  assert.match(repairPrompt, /minimalValidToolPayload/);
+  assert.match(repairPrompt, /componentId/);
+  assert.match(repairPrompt, /artifactRef/);
+
   const tree = await workspaceTreeSummary(workspace);
   assert.ok(tree.some((entry) => entry.path === 'report.md'));
   assert.ok(tree.some((entry) => entry.path === '.bioagent-artifact-root-marker.txt'));
@@ -112,9 +144,18 @@ try {
   assert.equal(directPayload?.message, 'Direct answer');
   assert.equal(directPayload?.uiManifest[0].componentId, 'report-viewer');
 
+  const malformedPayload = coerceWorkspaceTaskPayload({
+    message: '搜索到 2 条结果。',
+    claims: [],
+    uiManifest: { type: 'list', items: [{ title: 'Result A', url: 'https://example.test/a' }, { title: 'Result B' }] },
+    executionUnits: [{ id: 'search', status: 'done' }],
+    artifacts: [],
+  });
+  assert.equal(malformedPayload, undefined);
+
   const generation = parseGenerationResponse({
     taskFiles: [{ path: '.sciforge/tasks/task.py', content: 'print(1)' }],
-    entrypoint: 'python .sciforge/tasks/task.py --flag',
+    entrypoint: { language: 'python', path: '.sciforge/tasks/task.py', command: 'python .sciforge/tasks/task.py --flag' },
     expectedArtifacts: [{ type: 'research-report' }],
   });
   assert.equal(generation?.entrypoint.path, '.sciforge/tasks/task.py');

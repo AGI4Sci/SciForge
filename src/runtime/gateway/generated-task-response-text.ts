@@ -1,14 +1,5 @@
 import type { AgentServerGenerationResponse } from '../runtime-types.js';
 import { safeWorkspaceRel } from '../gateway-utils.js';
-import { extractStandaloneJson } from './direct-answer-payload.js';
-import { parseGenerationResponse } from './agentserver-run-output.js';
-
-export function parseGenerationResponseFromStandaloneText(text: string) {
-  const parsed = extractStandaloneJson(text);
-  const response = parseGenerationResponse(parsed);
-  if (!response) return undefined;
-  return hydrateGeneratedTaskResponseFromText(response, text);
-}
 
 export function hydrateGeneratedTaskResponseFromText(response: AgentServerGenerationResponse, text: string): AgentServerGenerationResponse {
   return {

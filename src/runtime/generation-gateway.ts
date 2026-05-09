@@ -68,6 +68,7 @@ import {
 import { directContextFastPathPayload } from './gateway/direct-context-fast-path.js';
 import {
   agentServerLlmRuntime,
+  AGENT_BACKEND_ANSWER_PRINCIPLE,
   buildAgentServerCompactContext,
   buildAgentServerGenerationPrompt,
   buildAgentServerRepairPrompt,
@@ -134,17 +135,11 @@ import {
 } from './gateway/agentserver-stream.js';
 import {
   hydrateGeneratedTaskResponseFromText,
-  parseGenerationResponseFromStandaloneText,
 } from './gateway/generated-task-response-text.js';
 import { tryRunVisionSenseRuntime } from './vision-sense-runtime.js';
 import { applyConversationPolicy } from './conversation-policy/apply.js';
 import { toolPackageManifests } from '../../packages/skills/tool_skills';
 import { agentHandoffSourceMetadata } from '@sciforge-ui/runtime-contract/handoff';
-
-const AGENT_BACKEND_ANSWER_PRINCIPLE = [
-  'All normal user-visible answers must be reasoned by the agent backend.',
-  'SciForge must not use preset reply templates for user requests; local code may only provide protocol validation, execution recovery, safety-boundary diagnostics, and artifact display.',
-].join(' ');
 
 configureDirectAnswerArtifactContext(collectArtifactReferenceContext);
 configurePayloadValidationContext(attemptPlanRefs);
@@ -452,16 +447,16 @@ async function tryAgentServerRepairAndRerun(params: {
     const rawPayload = JSON.parse(await readFile(join(workspace, outputRel), 'utf8')) as ToolPayload;
     const payload = coerceWorkspaceTaskPayload(rawPayload) ?? rawPayload;
     const errors = schemaErrors(payload);
-    const normalized = await validateAndNormalizePayload(payload, params.request, params.skill, {
+    const normalized = errors.length ? undefined : await validateAndNormalizePayload(payload, params.request, params.skill, {
       taskRel: params.run.spec.taskRel,
       outputRel,
       stdoutRel,
       stderrRel,
       runtimeFingerprint: rerun.runtimeFingerprint,
     });
-    const evidenceFinding = evaluateToolPayloadEvidence(payload, params.request);
-    const guidanceFinding = evaluateGuidanceAdoption(payload, params.request);
-    const workEvidenceSummary = summarizeWorkEvidenceForHandoff(payload);
+    const evidenceFinding = normalized ? evaluateToolPayloadEvidence(normalized, params.request) : undefined;
+    const guidanceFinding = normalized ? evaluateGuidanceAdoption(normalized, params.request) : undefined;
+    const workEvidenceSummary = summarizeWorkEvidenceForHandoff(normalized ?? payload);
     const payloadFailureReason = firstPayloadFailureReason(payload, rerun);
     const payloadFailureStatus = payloadHasFailureStatus(payload);
     const evidenceFailureReason = !payloadFailureStatus ? guidanceFinding?.reason ?? evidenceFinding?.reason : undefined;
@@ -513,6 +508,9 @@ async function tryAgentServerRepairAndRerun(params: {
           callbacks: params.callbacks,
         });
       }
+      return undefined;
+    }
+    if (!normalized) {
       return undefined;
     }
     const proposal = await maybeWriteSkillPromotionProposal({
@@ -628,14 +626,17 @@ async function requestAgentServerGeneration(params: {
       callbacks: params.callbacks,
     });
     const workspaceTree = await workspaceTreeSummary(params.workspace);
-    const attachPriorAttempts = needsContinuity;
-    const priorAttempts = currentTurnReferences(request).length || !attachPriorAttempts
-      ? []
-      : summarizeTaskAttemptsForAgentServer(await readRecentTaskAttempts(params.workspace, request.skillDomain, 8, {
+    const recentAttempts = await readRecentTaskAttempts(params.workspace, request.skillDomain, 8, {
         scenarioPackageId: request.scenarioPackageRef?.id,
         skillPlanRef: request.skillPlanRef,
         prompt: request.prompt,
-      }));
+      });
+    const attachPriorAttempts = needsContinuity || recentAttempts.some((attempt) =>
+      typeof attempt.failureReason === 'string' && attempt.failureReason.trim().length > 0
+    );
+    const priorAttempts = currentTurnReferences(request).length || !attachPriorAttempts
+      ? []
+      : summarizeTaskAttemptsForAgentServer(recentAttempts);
     const agentServerSnapshot = preflight.state?.snapshot ?? await fetchAgentServerContextSnapshot(params.baseUrl, agentId);
     const contextMode = contextEnvelopeMode(request, {
       agentServerCoreAvailable: Boolean(agentServerSnapshot),
@@ -674,7 +675,13 @@ async function requestAgentServerGeneration(params: {
       availableTools: summarizeToolsForAgentServer(request),
       availableRuntimeCapabilities: summarizeRuntimeCapabilitiesForAgentServer(request, compactContext.availableSkills),
       artifactSchema: expectedArtifactSchema(request),
-      uiManifestContract: { expectedKeys: ['componentId', 'artifactRef', 'encoding', 'layout', 'compare'] },
+      uiManifestContract: {
+        type: 'array',
+        slotType: 'object',
+        requiredKeys: ['componentId'],
+        optionalKeys: ['artifactRef', 'encoding', 'layout', 'compare', 'title', 'priority'],
+        contentRule: 'Do not put result rows/items/content in uiManifest; put them in artifacts[].data or artifacts[].dataRef.',
+      },
       uiStateSummary: compactContext.uiStateSummary,
       artifacts: compactContext.artifacts,
       recentExecutionRefs: compactContext.recentExecutionRefs,
@@ -960,25 +967,10 @@ async function requestAgentServerGeneration(params: {
       });
     }
     const directText = extractAgentServerOutputText(run) || streamText || '';
-    const parsedRaw = parseGenerationResponse(run.output) ?? parseGenerationResponse(run) ?? parseGenerationResponse(streamText);
+    const parsedRaw = parseGenerationResponse(run.output) ?? parseGenerationResponse(run) ?? parseGenerationResponse(streamText) ?? parseGenerationResponse(directText);
     const parsed = parsedRaw && directText ? hydrateGeneratedTaskResponseFromText(parsedRaw, directText) : parsedRaw;
     if (!parsed) {
       if (directText) {
-        const parsedTextGeneration = parseGenerationResponseFromStandaloneText(directText);
-        if (parsedTextGeneration) {
-          return await finalizeAgentServerGenerationSuccess({
-            result: {
-            ok: true,
-            runId: typeof run.id === 'string' ? run.id : undefined,
-            response: parsedTextGeneration,
-            },
-            contextRecovery,
-            workspace: params.workspace,
-        request,
-        skill: params.skill,
-        callbacks: params.callbacks,
-      });
-        }
         return await finalizeAgentServerGenerationSuccess({
           result: {
           ok: true,

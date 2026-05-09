@@ -458,6 +458,11 @@ function backendInputTextAnchors(value: string, context: {
   if (contractExcerpt) {
     anchors.push('OUTPUT CONTRACT EXCERPT:', contractExcerpt);
   }
+  const recoveryExcerpt = excerptAroundPattern(value, /timed out or was cancelled|failureReason"\s*:|"failureReason":|schemaErrors/i, Math.min(4000, context.budget.maxInlineStringChars))
+    ?? excerptAroundPattern(value, /priorAttempts/i, Math.min(4000, context.budget.maxInlineStringChars));
+  if (recoveryExcerpt) {
+    anchors.push('RECOVERY CONTEXT EXCERPT:', recoveryExcerpt);
+  }
   return anchors;
 }
 

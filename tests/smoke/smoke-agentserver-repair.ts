@@ -113,7 +113,7 @@ try {
     agentServerBaseUrl: baseUrl,
   });
 
-  assert.equal(result.artifacts.length, 1);
+  assert.ok(result.artifacts.some((artifact) => artifact.id === 'omics-differential-expression'));
   assert.equal(result.executionUnits.length, 1);
   assert.equal(result.executionUnits[0].status, 'self-healed');
   assert.equal(result.executionUnits[0].attempt, 2);

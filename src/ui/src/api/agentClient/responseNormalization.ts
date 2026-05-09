@@ -523,12 +523,12 @@ function findArtifactForObjectRef(ref: string, artifacts: RuntimeArtifact[]) {
 
 function preferredViewForArtifactType(type?: string) {
   if (!type) return undefined;
-  if (/structure|pdb|protein|molecule|mmcif|cif|3d/i.test(type)) return 'molecule-viewer';
+  if (/structure|pdb|protein|molecule|mmcif|cif|3d/i.test(type)) return 'structure-viewer';
   if (/report|markdown|document|summary/i.test(type)) return 'report-viewer';
   if (/evidence/i.test(type)) return 'evidence-matrix-panel';
   if (/paper|literature/i.test(type)) return 'literature-paper-cards';
-  if (/network|graph|knowledge/i.test(type)) return 'network-graph';
-  if (/table|matrix|csv|tsv|dataframe/i.test(type)) return 'generic-data-table';
+  if (/network|graph|knowledge/i.test(type)) return 'graph-viewer';
+  if (/table|matrix|csv|tsv|dataframe/i.test(type)) return 'record-table';
   return 'generic-artifact-inspector';
 }
 

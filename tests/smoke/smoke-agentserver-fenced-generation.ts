@@ -10,6 +10,7 @@ const workspace = await mkdtemp(join(tmpdir(), 'sciforge-agentserver-fenced-gene
 await mkdir(join(workspace, '.sciforge', 'tasks'), { recursive: true });
 await writeFile(join(workspace, '.sciforge', 'tasks', 'fenced_generation.py'), [
   'import json, sys',
+  'json.load(open(sys.argv[1], encoding="utf-8"))',
   'json.dump({"message":"ok","confidence":0.8,"claimType":"evidence-summary","evidenceLevel":"mock","reasoningTrace":"generated task ran","claims":[],"uiManifest":[],"executionUnits":[{"id":"eu-fenced","tool":"generated.python","status":"done"}],"artifacts":[]}, open(sys.argv[2], "w"))',
 ].join('\n'));
 
@@ -45,8 +46,8 @@ const server = createServer(async (req, res) => {
           result: [
             '```json',
             JSON.stringify({
-              taskFiles: ['.sciforge/tasks/fenced_generation.py'],
-              entrypoint: '.sciforge/tasks/fenced_generation.py',
+              taskFiles: [{ path: '.sciforge/tasks/fenced_generation.py', language: 'python' }],
+              entrypoint: { language: 'python', path: '.sciforge/tasks/fenced_generation.py' },
               expectedArtifacts: [],
             }),
             '```',

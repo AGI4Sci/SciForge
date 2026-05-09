@@ -15,7 +15,7 @@ import { toolPackageManifests } from '../../../packages/skills/tool_skills';
 import { uiComponentManifests } from '../../../packages/presentation/components';
 import { defaultCapabilitySummaries } from '@sciforge-ui/runtime-contract/capabilities';
 
-const AGENT_BACKEND_ANSWER_PRINCIPLE = [
+export const AGENT_BACKEND_ANSWER_PRINCIPLE = [
   'All normal user-visible answers must be reasoned by the agent backend.',
   'SciForge must not use preset reply templates for user requests; local code may only provide protocol validation, execution recovery, safety-boundary diagnostics, and artifact display.',
 ].join(' ');
@@ -487,12 +487,14 @@ export function buildAgentServerRepairPrompt(params: {
     'Edit the referenced task file or adjacent helper files only as needed. SciForge will rerun the task after you finish.',
     'The repaired task must execute the user goal end-to-end, not merely generate code or report that code was generated.',
     ...externalIoReliabilityContractLines(),
+    ...toolPayloadProtocolContractLines(),
     'Preserve failureReason in the next ToolPayload only if the real blocker remains after repair.',
     'Do not fabricate success or replace the user goal with an unrelated demo task.',
     '',
     JSON.stringify({
       repairContext: params.repairContext,
       expectedPayloadKeys: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'displayIntent', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'],
+      minimalValidToolPayload: minimalValidToolPayloadExample(params.request),
     }, null, 2),
     '',
     'Return a concise summary of files changed, tests or commands run, and any remaining blocker.',
@@ -573,8 +575,8 @@ export function buildAgentServerGenerationPrompt(request: {
     outputContract: {
       finalOutput: 'exactly one compact JSON object',
       alternatives: ['AgentServerGenerationResponse', 'SciForge ToolPayload'],
-      taskFiles: 'array of { path, language, content } unless physically written in workspace',
-      taskEntrypoint: 'executable code path only; report/data files are artifacts, not entrypoints',
+      taskFiles: 'array of { path, language, content? }; omit content only when the file was physically written in workspace',
+      entrypoint: 'object { language, path, command?, args? } for executable code path only; report/data files are artifacts, not entrypoints',
       externalIo: 'bounded timeouts, backoff retries for 429/5xx/network timeout/empty-result, and valid failed-with-reason ToolPayload on exhausted retrieval',
       projectGuidanceAdoption: 'If TaskProject userGuidanceQueue is present, include executionUnits[].guidanceDecisions with every queued/deferred item marked adopted, deferred, or rejected with a reason.',
     },
@@ -611,8 +613,9 @@ export function buildAgentServerGenerationPrompt(request: {
     'Hard contract: taskFiles MUST be an array of objects with path, language, and non-empty content unless the file was physically written in the workspace before returning. Never return taskFiles as string paths only.',
     'Hard contract: entrypoint.path MUST reference one of the returned taskFiles or a file that was physically written in the workspace before returning.',
     'If you physically write task files into the workspace, prefer a compact path-only taskFiles object (path + language, content may be omitted/empty) and return JSON immediately. Do not cat/read full generated source back into the final response just to inline it.',
-    'Entrypoint contract: entrypoint.path must be executable task code (.py/.r/.sh/.js etc.). Do not set a markdown/text/json/pdf/report artifact as entrypoint. For report-only answers, return a direct ToolPayload; for generated tasks, make the executable write report/data artifacts.',
+    'Entrypoint contract: entrypoint.path must be executable task code supported by the runner (.py/.r/.sh, or language=cli with an explicit command). Do not set a markdown/text/json/pdf/report artifact as entrypoint. For report-only answers, return a direct ToolPayload; for generated tasks, make the executable write report/data artifacts.',
     'Generated task interface contract: executable task code must read the SciForge inputPath argument for prompt/current refs/artifacts and write a valid ToolPayload JSON to the outputPath argument. Do not generate static scripts that merely embed the current answer or a document-specific report in source code.',
+    ...toolPayloadProtocolContractLines(),
     'Final output must be only compact JSON: either AgentServerGenerationResponse or SciForge ToolPayload.',
     'When returning a SciForge ToolPayload, use displayIntent to describe the user-visible view need, and objectReferences to cite key artifacts/files/runs that the user can click on demand.',
     'objectReferences refs must use controlled prefixes: artifact:*, file:*, folder:*, run:*, execution-unit:*, scenario-package:*, or url:*.',
@@ -642,6 +645,10 @@ export function buildAgentServerGenerationPrompt(request: {
     'For continuation requests, continue the scenario goal using recentConversation, artifacts, recentExecutionRefs, and priorAttempts. Do not restart an unrelated analysis.',
     'For repair requests, inspect the failureReason plus stdoutRef/stderrRef/outputRef/codeRef and report whether logs are readable before editing or rerunning.',
     'If a required input, remote file, credential, or executable is missing, write a valid ToolPayload with executionUnits.status="failed-with-reason" and a precise failureReason instead of fabricating outputs.',
+    request.priorAttempts?.length ? [
+      'RECENT PRIOR ATTEMPTS (authoritative repair/continuation context; preserve failureReason):',
+      JSON.stringify(summarizeTaskAttemptsForAgentServer(request.priorAttempts).slice(0, 4), null, 2),
+    ].join('\n') : '',
     ...externalIoReliabilityContractLines(),
     '',
     JSON.stringify(clipForAgentServerJson({
@@ -662,6 +669,47 @@ function externalIoReliabilityContractLines() {
     'If all external retrieval attempts fail, the task must still write a valid ToolPayload with executionUnits.status="failed-with-reason", concise failureReason, stdoutRef/stderrRef/outputRef evidence refs when available, recoverActions, nextStep, and any partial artifacts that are honest and useful. Do not leave the user with only a traceback, an endless stream wait, or a missing output file.',
     'Prefer installed/workspace client libraries or capability tools for remote retrieval when they provide rate-limit handling, pagination, or caching; otherwise keep custom HTTP code small, auditable, and source-agnostic.',
   ];
+}
+
+function toolPayloadProtocolContractLines() {
+  return [
+    'ToolPayload schema is strict: uiManifest, claims, executionUnits, and artifacts must be arrays; every uiManifest slot must be an object with componentId and a string artifactRef when present; every artifact must have non-empty id and type. Do not put result rows inside uiManifest; put data in artifacts[].data or artifacts[].dataRef.',
+    'Use uiManifest only as view routing metadata. All user-visible result content, tables, lists, reports, raw provider traces, and files must be represented as artifacts with durable dataRef/path or inline data that SciForge can persist.',
+    'When repairing schema failures, preserve the task-specific componentId/artifactRef/artifact type from selectedComponentIds, expectedArtifactTypes, incoming uiManifest, or generated artifacts. If none is known, use a generic unknown-artifact-inspector slot bound to a runtime-result artifact; do not force literature/report-specific components into unrelated scenarios.',
+  ];
+}
+
+function minimalValidToolPayloadExample(request: Pick<GatewayRequest, 'skillDomain' | 'prompt' | 'uiState' | 'selectedComponentIds' | 'expectedArtifactTypes'>) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const selectedComponent = uniqueStrings([
+    ...toStringList(request.selectedComponentIds),
+    ...toStringList(uiState.selectedComponentIds),
+  ]).find(Boolean);
+  const expectedArtifact = uniqueStrings([
+    ...toStringList(request.expectedArtifactTypes),
+    ...toStringList(uiState.expectedArtifactTypes),
+  ]).find(Boolean);
+  const artifactType = expectedArtifact || `${request.skillDomain}-runtime-result`;
+  const artifactId = expectedArtifact || `${request.skillDomain}-runtime-result`;
+  return {
+    message: 'Concise user-visible result or honest failure summary.',
+    confidence: 0.5,
+    claimType: 'evidence-summary',
+    evidenceLevel: 'workspace-task',
+    reasoningTrace: 'Brief audit of sources/tools/retries used by the task.',
+    claims: [],
+    displayIntent: { primaryView: selectedComponent || 'generic-artifact-inspector' },
+    uiManifest: [
+      { componentId: selectedComponent || 'unknown-artifact-inspector', artifactRef: artifactId, priority: 1 },
+    ],
+    executionUnits: [
+      { id: `${request.skillDomain}-task`, tool: 'agentserver.generated.task', status: 'done' },
+    ],
+    artifacts: [
+      { id: artifactId, type: artifactType, data: { summary: 'Result content goes here.', rows: [] } },
+    ],
+    objectReferences: [],
+  };
 }
 
 function executionModeDecisionForPrompt(

@@ -3,6 +3,7 @@ import { cleanUrl, errorMessage, isRecord, uniqueStrings } from '../gateway-util
 import { sha1 } from '../workspace-task-runner.js';
 import { parseJsonErrorMessage, sanitizeAgentServerError } from './backend-failure-diagnostics.js';
 import { coerceAgentServerToolPayload, extractJson, extractStandaloneJson } from './direct-answer-payload.js';
+import { isToolPayload } from './tool-payload-contract.js';
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value : undefined;
@@ -24,8 +25,7 @@ export function parseGenerationResponse(value: unknown): AgentServerGenerationRe
       const taskFiles = Array.isArray(parsed.taskFiles)
         ? parsed.taskFiles
           .map((file) => {
-            if (typeof file === 'string' && file.trim()) return { path: file.trim() };
-            if (isRecord(file)) return file;
+            if (isRecord(file) && stringField(file.path)) return file;
             return undefined;
           })
           .filter(isRecord)
@@ -35,7 +35,7 @@ export function parseGenerationResponse(value: unknown): AgentServerGenerationRe
         return {
           taskFiles: taskFiles.map((file) => ({
             path: String(file.path || ''),
-            content: String(file.content || ''),
+            content: typeof file.content === 'string' ? file.content : undefined,
             language: String(file.language || 'python'),
           })),
           entrypoint: {
@@ -95,20 +95,10 @@ type NormalizedGenerationEntrypoint = {
 };
 
 function normalizeGenerationEntrypoint(value: unknown): NormalizedGenerationEntrypoint {
-  if (typeof value === 'string' && value.trim()) {
-    const command = value.trim();
-    const path = extractEntrypointPath(command) ?? command;
-    return {
-      language: inferLanguageFromEntrypoint(command),
-      path,
-      command,
-      args: extractEntrypointArgs(command, path),
-    };
-  }
   if (isRecord(value)) {
-    const path = typeof value.path === 'string' ? extractEntrypointPath(value.path) ?? value.path : undefined;
-    const command = typeof value.command === 'string' ? value.command : undefined;
-    const resolvedPath = path ?? extractEntrypointPath(command);
+    const path = stringField(value.path);
+    const command = stringField(value.command);
+    const resolvedPath = path;
     return {
       path: resolvedPath,
       command,
@@ -178,14 +168,6 @@ function splitCommandLine(command: string) {
   if (escaped) current += '\\';
   if (current) tokens.push(current);
   return tokens;
-}
-
-function extractEntrypointPath(value: unknown) {
-  const text = typeof value === 'string' ? value.trim() : '';
-  if (!text) return undefined;
-  const token = text.match(/(?:^|\s)(\.?\/?\.sciforge\/tasks\/[^\s"'<>]+\.(?:py|R|r|sh))(?:\s|$)/)?.[1]
-    ?? text.match(/(?:^|\s)([^\s"'<>]+\.(?:py|R|r|sh))(?:\s|$)/)?.[1];
-  return token ? token.replace(/^\.\//, '') : undefined;
 }
 
 function inferLanguageFromEntrypoint(value: unknown): WorkspaceTaskRunResult['spec']['language'] {
@@ -277,15 +259,6 @@ function isAbortError(error: unknown) {
   return error instanceof Error && error.name === 'AbortError';
 }
 
-function isToolPayload(value: unknown): value is ToolPayload {
-  if (!isRecord(value)) return false;
-  return typeof value.message === 'string'
-    && Array.isArray(value.claims)
-    && Array.isArray(value.uiManifest)
-    && Array.isArray(value.executionUnits)
-    && Array.isArray(value.artifacts);
-}
-
 export function extractAgentServerOutputText(run: Record<string, unknown>) {
   const output = isRecord(run.output) ? run.output : {};
   const stages = Array.isArray(run.stages) ? run.stages.filter(isRecord) : [];
@@ -302,4 +275,3 @@ export function extractAgentServerOutputText(run: Record<string, unknown>) {
     .map((candidate) => typeof candidate === 'string' ? candidate.trim() : '')
     .find((candidate) => candidate.length > 40);
 }
-

@@ -395,7 +395,7 @@ export interface AgentServerGenerationRequest {
 }
 
 export interface AgentServerGenerationResponse {
-  taskFiles: Array<{ path: string; content: string; language: string }>;
+  taskFiles: Array<{ path: string; content?: string; language: string }>;
   entrypoint: {
     language: WorkspaceTaskSpec['language'];
     path: string;

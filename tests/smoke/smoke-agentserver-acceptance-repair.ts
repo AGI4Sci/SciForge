@@ -11,7 +11,7 @@ const workspace = await mkdtemp(join(tmpdir(), 'sciforge-agentserver-acceptance-
 const generatedTask = [
   'import json, sys',
   'markdown = "# Literature report\\n\\nThis report summarizes the papers and methods, but omits the requested field labels."',
-  'payload = {"message":"report written","confidence":0.8,"claimType":"evidence-summary","evidenceLevel":"workspace-task","reasoningTrace":"generated literature report","claims":[{"text":"report generated"}],"uiManifest":{"components":["report-viewer"]},"executionUnits":[{"id":"literature-generated","tool":"agentserver.generated.python","status":"done"}],"artifacts":[{"id":"research-report","type":"research-report","producerScenario":"literature","schemaVersion":"1","data":{"markdown":markdown}}]}',
+  'payload = {"message":"report written","confidence":0.8,"claimType":"evidence-summary","evidenceLevel":"workspace-task","reasoningTrace":"generated literature report","claims":[{"text":"report generated"}],"uiManifest":[{"componentId":"report-viewer","artifactRef":"research-report"}],"executionUnits":[{"id":"literature-generated","tool":"agentserver.generated.python","status":"done"}],"artifacts":[{"id":"research-report","type":"research-report","producerScenario":"literature","schemaVersion":"1","data":{"markdown":markdown}}]}',
   'json.dump(payload, open(sys.argv[2], "w"))',
 ].join('\n');
 
@@ -38,7 +38,7 @@ const server = createServer(async (req, res) => {
   }
   const body = await readJson(req);
   const metadata = isRecord(body.input) && isRecord(body.input.metadata) ? body.input.metadata : {};
-  if (metadata.purpose === 'workspace-task-generation') {
+  if (String(metadata.purpose).startsWith('workspace-task-generation')) {
     sendRunResponse(res, req.url, {
       ok: true,
       data: {
