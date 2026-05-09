@@ -2,7 +2,7 @@ import { compileSlotsForScenario } from '../../scenarioCompiler/uiPlanCompiler';
 import { uiModuleRegistry, type PresentationDedupeScope, type RuntimeUIModule } from '../../uiModuleRegistry';
 import type { DisplayIntent, ObjectReference, ResolvedViewPlan, RuntimeArtifact, ScenarioInstanceId, SciForgeRun, SciForgeSession, UIManifestSlot, ViewPlanSection } from '../../domain';
 import type { ScenarioId } from '../../data';
-import { artifactForObjectReference, syntheticArtifactForObjectReference } from '../../../../../packages/object-references';
+import { artifactForObjectReference, syntheticArtifactForObjectReference } from '../../../../../packages/support/object-references';
 import type { ResultFocusMode } from './ResultShell';
 
 function isRecord(value: unknown): value is Record<string, unknown> {

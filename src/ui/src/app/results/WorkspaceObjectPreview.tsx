@@ -11,8 +11,8 @@ import {
   descriptorWithDiagnostic as packageDescriptorWithDiagnostic,
   mergePreviewDescriptors as packageMergePreviewDescriptors,
   shouldHydratePreviewDescriptor as packageShouldHydratePreviewDescriptor,
-} from '../../../../../packages/artifact-preview';
-import { artifactForObjectReference, sciForgeReferenceAttribute, pathForObjectReference, referenceForObjectReference, referenceForWorkspaceFileLike, withRegionLocator } from '../../../../../packages/object-references';
+} from '../../../../../packages/support/artifact-preview';
+import { artifactForObjectReference, sciForgeReferenceAttribute, pathForObjectReference, referenceForObjectReference, referenceForWorkspaceFileLike, withRegionLocator } from '../../../../../packages/support/object-references';
 
 const WORKSPACE_OBJECT_PREVIEW_TIMEOUT_MS = 8_000;
 

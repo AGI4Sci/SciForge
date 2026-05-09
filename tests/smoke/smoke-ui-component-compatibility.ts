@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
-import { uiComponentManifests, uiComponentCompatibilityAliases } from '../../packages/ui-components/index.js';
-import { uiComponentElements } from '../../packages/scenario-core/src/componentElements.js';
+import { uiComponentManifests, uiComponentCompatibilityAliases } from '../../packages/presentation/components/index.js';
+import { uiComponentElements } from '../../packages/scenarios/core/src/componentElements.js';
 import { composeRuntimeUiManifest } from '../../src/runtime/workspace-runtime-gateway.js';
 import { acceptedArtifactTypesForComponent, artifactTypesForComponents, uiModuleRegistry } from '../../src/ui/src/uiModuleRegistry.js';
 
@@ -33,7 +33,7 @@ const uiRegistryIds = new Set(uiModuleRegistry.map((module) => module.componentI
 const scenarioComponentIds = new Set(uiComponentElements.map((component) => component.componentId));
 
 for (const componentId of expectedSkeletonComponents) {
-  assert.ok(manifestIds.has(componentId), `${componentId} missing from packages/ui-components index`);
+  assert.ok(manifestIds.has(componentId), `${componentId} missing from packages/presentation/components index`);
   assert.ok(uiRegistryIds.has(componentId), `${componentId} missing from UI module registry`);
   assert.ok(scenarioComponentIds.has(componentId), `${componentId} missing from scenario component registry`);
 }
@@ -47,6 +47,7 @@ assert.deepEqual(
     ['umap-viewer', 'point-set-viewer', 'point-set-viewer'],
     ['heatmap-viewer', 'matrix-viewer', 'matrix-viewer'],
     ['molecule-viewer', 'structure-viewer', 'structure-viewer'],
+    ['molecule-viewer-3d', 'structure-viewer', 'structure-viewer'],
   ],
 );
 

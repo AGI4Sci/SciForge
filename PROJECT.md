@@ -25,26 +25,26 @@
 
 ### T101 清空 src/shared 并收敛 src 边界
 
-状态：已完成；`src/shared` 已物理删除，所有旧共享协议已迁入 package/runtime contract 或能力 package，执行编排进入 runtime，boundary smoke 已阻止 `src/shared` 复活。本任务目标是把 `src/shared` 彻底清空：共享协议进入 `packages/runtime-contract` 或后续 `packages/contracts/*`，执行逻辑进入 `src/runtime/*`，界面逻辑进入 `src/ui/*`。`shared` 这个名字只说明“被多个地方 import”，没有说明 owner、稳定性、依赖方向和安全边界，容易变成杂物间；后续新增代码禁止进入 `src/shared`。
+状态：已完成；`src/shared` 已物理删除，所有旧共享协议已迁入 package/runtime contract 或能力 package，执行编排进入 runtime，boundary smoke 已阻止 `src/shared` 复活。本任务目标是把 `src/shared` 彻底清空：共享协议进入 `packages/contracts/runtime` 或后续 `packages/contracts/*`，执行逻辑进入 `src/runtime/*`，界面逻辑进入 `src/ui/*`。`shared` 这个名字只说明“被多个地方 import”，没有说明 owner、稳定性、依赖方向和安全边界，容易变成杂物间；后续新增代码禁止进入 `src/shared`。
 
 正式原则：
 
 - `src/` 只保留产品实现边界：`src/ui` 是前端产品 app，`src/runtime` 是本地 runtime/gateway/server/adapters。
-- 跨 UI/runtime 的稳定协议不放在 `src/shared`，应进入 `packages/runtime-contract/*`，后续如 T100 落地物理目录，可迁入 `packages/contracts/*`。
+- 跨 UI/runtime 的稳定协议不放在 `src/shared`，应进入 `packages/contracts/runtime/*`，后续如 T100 落地物理目录，可迁入 `packages/contracts/*`。
 - 有执行行为、provider 选择、调用编排、文件/网络/AgentServer 交互的逻辑不放在 shared；它属于 `src/runtime/*`。
 - UI state、展示转换、交互模型、React 组件和用户可见 presentation helper 不放在 shared；它属于 `src/ui/*` 或 `packages/presentation/*`。
-- packages 不能反向 import `src/shared`。如果 package 需要类型或 fixture，应从 package 自身或 `packages/runtime-contract` 获取。
+- packages 不能反向 import `src/shared`。如果 package 需要类型或 fixture，应从 package 自身或 `packages/contracts/runtime` 获取。
 - `src/shared` 不保留兼容 re-export；module-boundary smoke 禁止新增 `src/shared/**`。
 
 当前 `src/shared` 文件归宿：
 
-- `src/shared/agentHandoff.ts` -> `packages/runtime-contract/handoff.ts`：AgentServer handoff source、默认 URL/timeout、shared handoff contract 和 source metadata。
-- `src/shared/agentHandoffPayload.ts` -> `packages/runtime-contract/handoff-payload.ts`：UI/CLI/runtime handoff payload contract、verification/human approval/failure recovery policy set。
-- `src/shared/capabilityRegistry.ts` -> `packages/runtime-contract/capabilities.ts`：capability summary/contract/registry metadata；后续结合 T100 的 lifecycle metadata 和 skill/observe/action/verifier/presentation taxonomy。
-- `src/shared/senseProvider.ts` -> `packages/runtime-contract/observe.ts`：rename sense -> observe，保留 provider capability brief、input modality、request/response、safety/privacy boundary 等纯 contract。
-- `src/shared/senseOrchestration.ts` -> 拆分：纯 invocation plan/record 类型进入 `packages/runtime-contract/observe.ts`；provider 选择和 `runSenseInvocationPlan` 执行逻辑进入 `src/runtime/observe/orchestration.ts`。
+- `src/shared/agentHandoff.ts` -> `packages/contracts/runtime/handoff.ts`：AgentServer handoff source、默认 URL/timeout、shared handoff contract 和 source metadata。
+- `src/shared/agentHandoffPayload.ts` -> `packages/contracts/runtime/handoff-payload.ts`：UI/CLI/runtime handoff payload contract、verification/human approval/failure recovery policy set。
+- `src/shared/capabilityRegistry.ts` -> `packages/contracts/runtime/capabilities.ts`：capability summary/contract/registry metadata；后续结合 T100 的 lifecycle metadata 和 skill/observe/action/verifier/presentation taxonomy。
+- `src/shared/senseProvider.ts` -> `packages/contracts/runtime/observe.ts`：rename sense -> observe，保留 provider capability brief、input modality、request/response、safety/privacy boundary 等纯 contract。
+- `src/shared/senseOrchestration.ts` -> 拆分：纯 invocation plan/record 类型进入 `packages/contracts/runtime/observe.ts`；provider 选择和 `runSenseInvocationPlan` 执行逻辑进入 `src/runtime/observe/orchestration.ts`。
 - `src/shared/verifiers/agentRubric.ts` -> `packages/verifiers/agent-rubric/index.ts` 或 `packages/verifiers/agent-rubric/contracts.ts`：agent rubric verifier request/result/provider contract 和 mock provider；`packages/verifiers/agent-rubric/fixture.ts` 不再反向 import `src/shared`。
-- 对应 tests 迁到目标文件旁边：contract tests 进入 `packages/runtime-contract/*`，runtime orchestration tests 进入 `src/runtime/observe/*`，verifier tests 进入 `packages/verifiers/agent-rubric/*`。
+- 对应 tests 迁到目标文件旁边：contract tests 进入 `packages/contracts/runtime/*`，runtime orchestration tests 进入 `src/runtime/observe/*`，verifier tests 进入 `packages/verifiers/agent-rubric/*`。
 
 最终 `src` 目录视图：
 
@@ -56,17 +56,17 @@ src/
 
 已完成迁移：
 
-- `agentHandoff` / `agentHandoffPayload` / `capabilityRegistry` 迁入 `packages/runtime-contract/{handoff,handoff-payload,capabilities}.ts`，UI/runtime imports 已改为 package subpath。
-- `senseProvider` contract 迁入 `packages/runtime-contract/observe.ts`，`senseOrchestration` 的执行编排迁入 `src/runtime/observe/orchestration.ts`。
+- `agentHandoff` / `agentHandoffPayload` / `capabilityRegistry` 迁入 `packages/contracts/runtime/{handoff,handoff-payload,capabilities}.ts`，UI/runtime imports 已改为 package subpath。
+- `senseProvider` contract 迁入 `packages/contracts/runtime/observe.ts`，`senseOrchestration` 的执行编排迁入 `src/runtime/observe/orchestration.ts`。
 - `agentRubric` 迁入 `packages/verifiers/agent-rubric/index.ts`，fixture 不再反向依赖 `src/shared`。
 - `src/shared` 目录和旧 tests 已删除。
 - docs 与 module-boundary smoke 已更新为“共享协议进 packages contract，执行逻辑进 runtime，界面逻辑进 ui”。
 
 Todo：
 
-- [x] 新增 `packages/runtime-contract/handoff.ts` 和 `handoff-payload.ts`，迁移 `agentHandoff` / `agentHandoffPayload` contract 与 tests；更新 UI/runtime imports。
-- [x] 新增 `packages/runtime-contract/capabilities.ts`，迁移 capability summary/contract/registry metadata 与 tests；和 T100 lifecycle metadata 对齐。
-- [x] 新增 `packages/runtime-contract/observe.ts`，迁移 sense provider contract 并 rename 为 observe terminology，保留旧 sense 字段兼容策略。
+- [x] 新增 `packages/contracts/runtime/handoff.ts` 和 `handoff-payload.ts`，迁移 `agentHandoff` / `agentHandoffPayload` contract 与 tests；更新 UI/runtime imports。
+- [x] 新增 `packages/contracts/runtime/capabilities.ts`，迁移 capability summary/contract/registry metadata 与 tests；和 T100 lifecycle metadata 对齐。
+- [x] 新增 `packages/contracts/runtime/observe.ts`，迁移 sense provider contract 并 rename 为 observe terminology，保留旧 sense 字段兼容策略。
 - [x] 新增 `src/runtime/observe/orchestration.ts`，承接 observe invocation provider 选择与运行逻辑；更新 runtime 调用方和 tests。
 - [x] 迁移 `src/shared/verifiers/agentRubric.ts` 到 `packages/verifiers/agent-rubric`，修复 `packages/verifiers/agent-rubric/fixture.ts` 的反向依赖。
 - [x] 不保留 `src/shared/*` 临时 re-export；所有生产 import 已转向新入口。
@@ -78,7 +78,7 @@ Todo：
 
 - [x] `find src/shared` 返回空或目录不存在；没有生产代码从 `src/shared` import。
 - [x] `packages/**` 不再 import `src/shared/**` 或任何 `src/**` 私有文件。
-- [x] UI/runtime 共享类型全部来自 `packages/runtime-contract/*` 或公开 package exports。
+- [x] UI/runtime 共享类型全部来自 `packages/contracts/runtime/*` 或公开 package exports。
 - [x] Observe 命名替代 sense 命名进入新 contract；旧 sense 命名只作为兼容字段或能力 id 兼容存在。
 - [x] `npm run smoke:module-boundaries` 能阻止新增 `src/shared` 文件和 package 反向依赖。
 - [x] `npm run typecheck`、相关 package/runtime tests、`npm run smoke:runtime-contracts`、`npm run smoke:module-boundaries` 通过。
@@ -119,24 +119,24 @@ packages/support/                preview/reference helpers and migration compati
 
 当前包到长期目录的目标映射：
 
-- `packages/runtime-contract` -> `packages/contracts/runtime` 或保持原名并作为 `contracts` 第一块真相源；迁移前也必须声明 `lifecycleLayer=contracts`。
-- `packages/scenario-core` -> `packages/scenarios/core`，负责 scenario/package 编译、质量门和运行时 smoke，不放 UI renderer 或 action provider。
-- `packages/conversation-policy-python` -> `packages/reasoning/conversation-policy`，继续作为多轮策略算法唯一真相源。
+- `packages/contracts/runtime`：contracts 第一块真相源；声明 `lifecycleLayer=contracts`。
+- `packages/scenarios/core`：负责 scenario/package 编译、质量门和运行时 smoke，不放 UI renderer 或 action provider。
+- `packages/reasoning/conversation-policy`：继续作为多轮策略算法唯一真相源，算法优先 Python 实现。
 - `packages/skills` -> 保留为 skill-facing 总入口，并拆出 `tool_skills`、`pipeline_skills`、`domain_skills`、`meta_skills`；现有 `installed/*` 可以先保留，后续按 skill 类型逐步归档。`SKILL.md` 是这里的核心入口形态。
 - `packages/senses/vision-sense` -> 已迁移为 `packages/observe/vision`，保留 observe-only 语义。
-- `packages/actions/*` 和 `packages/computer-use` -> `packages/actions/computer-use`；`packages/computer-use` 可以作为临时兼容包或 Python provider package，避免 action loop 在两个顶层位置长期并行。
+- `packages/actions/computer-use`：Computer Use Python action loop、manifest、safety 和 trace 已收敛到同一个 action provider 目录；不再保留顶层 `packages/computer-use`。
 - `packages/tools` -> 已迁移为 `packages/skills/tool_skills`；如果其中某个 tool 会改变环境，应拆成 `skills/tool_skills/*` 的 `SKILL.md` 入口加 `actions/*` 的执行 provider，而不是把副作用实现藏在 skill 目录。
 - `packages/verifiers` -> 先保留，长期可提供 `packages/evaluate` alias；不要把 verifier 混入 presentation 或 runtime gateway。
-- `packages/ui-components`、`packages/interactive-views`、`packages/design-system` -> `packages/presentation/{components,interactive-views,design-system}`，但先通过 package exports 和 alias 收敛，不直接破坏现有 componentId/registry。
-- `packages/artifact-preview`、`packages/object-references` -> `packages/support/{artifact-preview,object-references}` 或并入 `contracts` 周边 helper；如果只包含纯类型/规范化逻辑，优先靠近 `contracts`。
+- `packages/presentation/{components,interactive-views,design-system}`：artifact renderer、interactive view alias 和低层 design primitives。
+- `packages/support/{artifact-preview,object-references}`：preview/reference helper；如果发现纯类型/规范化契约，继续上移到 `contracts`。
 
 迁移策略：
 
 - 第一阶段已完成：文档、owner note、boundary smoke 和 lifecycle metadata 已落地。
 - 第二阶段已完成第一批物理迁移：`packages/senses/vision-sense` -> `packages/observe/vision`，`packages/tools` -> `packages/skills/tool_skills`。
 - 第三阶段已完成当前 repo imports 迁移：runtime、tests、docs、catalog generator 和 package-lock 不再依赖旧目录。
-- 第四阶段已完成 owner 收敛：Computer Use 的实现真相源是 `packages/computer-use`，`packages/actions/computer-use` 只保留 action manifest/discovery；renderer registry 真相源是 `packages/ui-components`，`packages/interactive-views` 作为语义别名；纯 contract 类型进入 `packages/runtime-contract`，artifact/object helper 留在 support packages。
-- 后续阶段可继续把 `runtime-contract` 物理迁入 `packages/contracts/runtime`、把 UI packages 物理收敛到 `packages/presentation/*`，但本轮先保留兼容 package names。
+- 第四阶段已完成 owner 收敛：Computer Use 的实现和 manifest 真相源是 `packages/actions/computer-use`；renderer registry 真相源是 `packages/presentation/components`，`packages/presentation/interactive-views` 作为语义别名；纯 contract 类型进入 `packages/contracts/runtime`，artifact/object helper 留在 support packages。
+- 第五阶段已完成长期目录物理迁移：contracts、reasoning、scenarios、presentation、support 都进入目标目录视图；保留 npm package name/componentId 兼容，不保留旧顶层目录。
 
 Todo：
 
@@ -144,13 +144,13 @@ Todo：
 - [x] 为新增/迁移目录补齐 owner note：`packages/observe/README.md`、`packages/skills/{tool_skills,pipeline_skills,domain_skills,meta_skills}/README.md`。
 - [x] 在 top-level package manifest 中增加轻量 metadata，例如 `sciforge.lifecycleLayer`、`sciforge.skillKind`、`sciforge.skillFacing`、`sciforge.sideEffects`、`sciforge.publicContract`、`sciforge.runtimeAdapter`，让 registry 和 smoke 可以自动检查边界。
 - [x] 扩展 `tools/check-module-boundaries.ts`：按 lifecycle metadata 校验 top-level package，并禁止 `src/shared` 和 package -> src 私有反向依赖。
-- [x] 收敛 `packages/computer-use` 与 `packages/actions/computer-use`：Python action loop、contract、safety 和 trace 以 `packages/computer-use` 为唯一实现真相源；`packages/actions/computer-use` 只保存 manifest/discovery/approval 信息；runtime adapter 不复制 provider loop。
-- [x] 收敛 `packages/ui-components` 与 `packages/interactive-views`：当前 registry 真相源保留 `packages/ui-components`；`packages/interactive-views` 是语义别名和未来迁移目标；`packages/design-system` 只做 primitives/tokens。
+- [x] 收敛 Computer Use：Python action loop、contract、safety、trace 与 action manifest 都以 `packages/actions/computer-use` 为唯一真相源；runtime adapter 不复制 provider loop。
+- [x] 收敛 presentation：当前 registry 真相源是 `packages/presentation/components`；`packages/presentation/interactive-views` 是语义别名；`packages/presentation/design-system` 只做 primitives/tokens。
 - [x] 给 `packages/skills/tool_skills`、`packages/skills/pipeline_skills`、`packages/skills/domain_skills`、`packages/skills/meta_skills` 建立目录规则：skill 描述策略和调用边界，action provider 承担副作用，observe provider 承担环境读取，verifier 承担评估。
 - [x] 迁移旧 `packages/tools` 到 `packages/skills/tool_skills`，并让 catalog generator/checker 的唯一真相源指向新目录。
 - [x] 迁移旧 `packages/senses/vision-sense` 到 `packages/observe/vision`，并更新 runtime adapter、README、package paths、smoke 和 Python tests 中的命名。
 - [x] 将 `artifact-preview`、`object-references` 与 `runtime-contract` 的关系写清楚：纯 contract 进入 `runtime-contract`，便捷 helper、normalizer 和转换函数保留 support package，避免 contract/helper 混杂。
-- [x] 新增 package scaffold 模板：`packages/templates/package-scaffold` 根据 lifecycle layer 和 skill kind 提供 README、manifest metadata、exports 和 smoke placeholder，减少开发者凭感觉放目录。
+- [x] 新增 package scaffold 模板：`packages/support/templates/package-scaffold` 根据 lifecycle layer 和 skill kind 提供 README、manifest metadata、exports 和 smoke placeholder，减少开发者凭感觉放目录。
 - [x] 更新 `docs/Extending.md`：把新增能力的决策树改为“先判断是否是 SKILL.md-facing 能力，再选 lifecycle layer，再选集成等级，再选 runtime adapter”，并补充 Observe/Skill/Action/Verifier/Presentation 的区别。
 
 验收标准：
@@ -164,7 +164,7 @@ Todo：
 
 ### T099 代码边界治理与模块化重组
 
-状态：进行中；本轮已完成 contract/package boundary、UI 大文件两轮拆分、runtime gateway/project/server 三轮拆分、文档漂移修正和 module boundary smoke。`packages/object-references` / `packages/artifact-preview` 已不再反向依赖 `src/ui/src/domain.ts`；`domain.ts` 已降到约 658 行，稳定 session/message/stream/view/execution/event contract 已下沉到 `packages/runtime-contract/*`；`ChatPanel.tsx`、`SciForgeApp.tsx`、`ResultsRenderer.tsx`、`Dashboard.tsx`、`ShellPanels.tsx`、`task-projects.ts`、`generation-gateway.ts` 已降到 1500 行以下；`workspace-server.ts` 已抽出 file preview 与 workspace open gateway 模块但仍略高于 1500 行。本任务基于 2026-05-09 对 `src` 和 `packages` 的结构巡检，目标是把“产品 app、runtime 执行壳、策略算法、能力 package、稳定 contract、交互 renderer”拆成更清晰的所有权边界，让多人并行开发时可以按目录负责、按 contract 集成、按 smoke 守门，而不是在 `SciForgeApp.tsx`、`ChatPanel.tsx`、`workspace-server.ts`、`generation-gateway.ts` 这类大入口文件里互相踩线。
+状态：进行中；本轮已完成 contract/package boundary、UI 大文件两轮拆分、runtime gateway/project/server 三轮拆分、文档漂移修正和 module boundary smoke。`packages/support/object-references` / `packages/support/artifact-preview` 已不再反向依赖 `src/ui/src/domain.ts`；`domain.ts` 已降到约 658 行，稳定 session/message/stream/view/execution/event contract 已下沉到 `packages/contracts/runtime/*`；`ChatPanel.tsx`、`SciForgeApp.tsx`、`ResultsRenderer.tsx`、`Dashboard.tsx`、`ShellPanels.tsx`、`task-projects.ts`、`generation-gateway.ts` 已降到 1500 行以下；`workspace-server.ts` 已抽出 file preview 与 workspace open gateway 模块但仍略高于 1500 行。本任务基于 2026-05-09 对 `src` 和 `packages` 的结构巡检，目标是把“产品 app、runtime 执行壳、策略算法、能力 package、稳定 contract、交互 renderer”拆成更清晰的所有权边界，让多人并行开发时可以按目录负责、按 contract 集成、按 smoke 守门，而不是在 `SciForgeApp.tsx`、`ChatPanel.tsx`、`workspace-server.ts`、`generation-gateway.ts` 这类大入口文件里互相踩线。
 
 当前观察：
 
@@ -172,7 +172,7 @@ Todo：
 - 当前长文件 watch list 已经暴露主要拆分点：`src/ui/src/app/ChatPanel.tsx`、`src/ui/src/app/SciForgeApp.tsx`、`src/ui/src/app/ResultsRenderer.tsx`、`src/ui/src/domain.ts`、`src/ui/src/app/appShell/ShellPanels.tsx`、`src/ui/src/app/Dashboard.tsx`，以及 runtime 侧的 `src/runtime/workspace-server.ts`、`src/runtime/generation-gateway.ts`、`src/runtime/task-projects.ts`、`src/runtime/workspace-task-input.ts`。
 - `packages` 的总体方向已经收敛：`conversation-policy-python` 负责策略算法，`scenario-core` 负责无 UI compiler，`ui-components` 负责 renderer registry，`interactive-views` 是语义别名，`design-system` 负责 primitives，`object-references` 负责长期引用 helper，`computer-use` / `observe` / `actions` / `verifiers` 负责能力闭环。package 反向依赖 app 私有类型已由 boundary smoke 守住。
 - UI 里存在多处深层相对路径直接 import `packages/*`，例如 `src/ui/src/componentWorkbenchDemo.ts`、`src/ui/src/scenarioCompiler/*`、`src/ui/src/app/*`。这能工作，但会让 package exports、边界 smoke 和 ownership 变弱；长期应通过 package entrypoint/subpath exports 或专门 app adapter 消费。
-- `src/runtime/vision-sense` 与 `packages/observe/vision`、`src/runtime/computer-use` 与 `packages/computer-use` 已形成“runtime bridge + provider package”的雏形，需要明确哪边拥有算法/contract，哪边只负责 SciForge Gateway 适配，避免未来继续复制 planner/grounding/action loop。
+- `src/runtime/vision-sense` 与 `packages/observe/vision`、`src/runtime/computer-use` 与 `packages/actions/computer-use` 已形成“runtime bridge + provider package”的雏形，需要明确哪边拥有算法/contract，哪边只负责 SciForge Gateway 适配，避免未来继续复制 planner/grounding/action loop。
 - `docs/Extending.md` 已更新为当前 verifier/runtime contract 真相源，旧 `src/shared` ABI 不再作为新增能力入口。
 
 目标边界：
@@ -180,34 +180,34 @@ Todo：
 - `packages/*` 只依赖稳定 package 或标准库，不反向 import `src/ui` / `src/runtime`。需要共享的 `RuntimeArtifact`、`ObjectReference`、`PreviewDescriptor`、session/message/stream 最小 contract，应进入新的稳定 contract package 或现有 contract package 的明确子域。
 - `src/runtime` 是执行壳和服务边界：HTTP route、GatewayRequest enrichment、AgentServer adapter、workspace task runner、WorkEvidence guard、file preview、config、feedback repair 等按模块拆开；入口文件只做 env 读取、route 注册和流程编排。
 - `src/ui/src` 是产品 app：app shell、chat、results、feedback、scenario builder、workspace settings、runtime health 等按 feature slice 组织；跨 feature 只通过 domain contract、store action 和 typed client 交流。
-- `packages/conversation-policy-python` 继续是策略算法唯一真相源；TypeScript 只做字段透传、执行、渲染和 fail-closed guard。
-- `packages/ui-components` / `packages/interactive-views` 只渲染 artifact 并发出声明事件，不直接写 workspace、不调用 AgentServer、不承担 verifier verdict。
+- `packages/reasoning/conversation-policy` 继续是策略算法唯一真相源；TypeScript 只做字段透传、执行、渲染和 fail-closed guard。
+- `packages/presentation/components` / `packages/presentation/interactive-views` 只渲染 artifact 并发出声明事件，不直接写 workspace、不调用 AgentServer、不承担 verifier verdict。
 
 Todo：
 
 - [x] 新增 package/module dependency boundary smoke：禁止 `packages/*` import `src/ui/*`、`src/runtime/*`，禁止 UI 绕过 package exports 深 import package internals；允许的兼容例外必须在 allowlist 中写明迁移任务和到期条件。已新增 `tools/check-module-boundaries.ts`、`npm run smoke:module-boundaries`，并接入 `verify:fast`；当前 UI 深 import 历史例外以 warning 输出。
-- [x] 抽出稳定 app/runtime contract：把 `RuntimeArtifact`、`ObjectReference`、`PreviewDescriptor`、必要 session/message/stream 类型从 `src/ui/src/domain.ts` 移到独立 contract 入口；更新 `packages/object-references`、`packages/artifact-preview` 和 UI/runtime 调用方，`src/ui/src/domain.ts` 只保留兼容 re-export 和 UI 局部 factories。已新增 `packages/runtime-contract/app.ts`、`artifacts.ts`、`preview.ts`、`references.ts` 并让 package 通过 `@sciforge-ui/runtime-contract/*` 消费稳定类型；session/message/stream 后续继续从 `domain.ts` 拆。
-- [x] 拆分 `src/ui/src/domain.ts`：按 `artifact-contracts`、`session-contracts`、`message-contracts`、`runtime-events`、`factories` 组织，确保 packages 消费纯类型 contract，UI feature 消费 app-level helpers。已新增 `packages/runtime-contract/messages.ts`、`session.ts`、`stream.ts`、`execution.ts`、`events.ts`、`view.ts`，`domain.ts` 保留兼容 re-export 和 UI helper。
-- [x] 收敛 `src/ui/src/scenarioCompiler/*` wrapper：优先从 `@sciforge/scenario-core` entrypoint 或明确 subpath exports 导入；如需要新增 subpath exports，在 `packages/scenario-core/package.json` 和 tests 中固化，避免 UI 维护第二套 compiler facade。已为 `@sciforge/scenario-core` 增加 compiler/registry/quality/runtime subpath exports，UI bridge 不再深 import `packages/scenario-core/src/*`。
+- [x] 抽出稳定 app/runtime contract：把 `RuntimeArtifact`、`ObjectReference`、`PreviewDescriptor`、必要 session/message/stream 类型从 `src/ui/src/domain.ts` 移到独立 contract 入口；更新 `packages/support/object-references`、`packages/support/artifact-preview` 和 UI/runtime 调用方，`src/ui/src/domain.ts` 只保留兼容 re-export 和 UI 局部 factories。已新增 `packages/contracts/runtime/app.ts`、`artifacts.ts`、`preview.ts`、`references.ts` 并让 package 通过 `@sciforge-ui/runtime-contract/*` 消费稳定类型；session/message/stream 后续继续从 `domain.ts` 拆。
+- [x] 拆分 `src/ui/src/domain.ts`：按 `artifact-contracts`、`session-contracts`、`message-contracts`、`runtime-events`、`factories` 组织，确保 packages 消费纯类型 contract，UI feature 消费 app-level helpers。已新增 `packages/contracts/runtime/messages.ts`、`session.ts`、`stream.ts`、`execution.ts`、`events.ts`、`view.ts`，`domain.ts` 保留兼容 re-export 和 UI helper。
+- [x] 收敛 `src/ui/src/scenarioCompiler/*` wrapper：优先从 `@sciforge/scenario-core` entrypoint 或明确 subpath exports 导入；如需要新增 subpath exports，在 `packages/scenarios/core/package.json` 和 tests 中固化，避免 UI 维护第二套 compiler facade。已为 `@sciforge/scenario-core` 增加 compiler/registry/quality/runtime subpath exports，UI bridge 不再深 import `packages/scenarios/core/src/*`。
 - [x] 拆分 `src/ui/src/app/SciForgeApp.tsx`：把 workspace/session state、scenario builder state、feedback inbox、settings/config、navigation/search、runtime health 分别沉到 `appShell` hooks/actions 或 feature containers；`SciForgeApp` 只做顶层 composition。第一轮已抽出 `src/ui/src/app/appShell/appHelpers.ts`，文件降到约 1431 行；更细的 feature container 继续后续拆。
 - [x] 拆分 `src/ui/src/app/ChatPanel.tsx`：将 composer、message list、running work process、reference chips、handoff/autocomplete、message actions 和 keyboard/focus handlers 拆成 `app/chat/*` 模块，并保留现有 tests 覆盖主流程。已抽出 `ContextWindowMeter.tsx`、`ReferenceChips.tsx`、`RunExecutionProcess.tsx`、`runPresentation.ts`，文件降到约 1249 行。
-- [x] 拆分 `src/ui/src/app/ResultsRenderer.tsx`：把 artifact normalization、view plan resolution、preview/open actions、workspace object preview、legacy visualization adapters 和 renderer shell 分开；新 renderer 只通过 `packages/ui-components` contract 接入。第一轮已抽出 `src/ui/src/app/results/resultArtifactHelpers.ts`，文件降到约 1361 行。
+- [x] 拆分 `src/ui/src/app/ResultsRenderer.tsx`：把 artifact normalization、view plan resolution、preview/open actions、workspace object preview、legacy visualization adapters 和 renderer shell 分开；新 renderer 只通过 `packages/presentation/components` contract 接入。第一轮已抽出 `src/ui/src/app/results/resultArtifactHelpers.ts`，文件降到约 1361 行。
 - [x] 拆分 `src/ui/src/app/appShell/ShellPanels.tsx` 与 `Dashboard.tsx`：把 settings dialog、sidebar/topbar、session list、health cards 和 dashboard data projection 分离，减少 app shell 与业务 feature 互相 import。已新增 `dashboardModels.ts`、`explorerModels.ts`、`settingsModels.ts` 和对应 tests，`Dashboard.tsx` 降到约 756 行，`ShellPanels.tsx` 降到约 998 行。
 - [ ] 拆分 `src/runtime/workspace-server.ts`：按 `routes/config`、`routes/workspace-state`、`routes/feedback-repair`、`routes/file-preview`、`routes/scenario-library`、`routes/workspace-open`、`server/http` 组织；入口只注册 routes 和启动 server。已抽出 `src/runtime/server/file-preview.ts` 与 `src/runtime/server/workspace-open.ts`，文件降到约 1560 行；后续继续拆 config/workspace-state/feedback/scenario routes。
 - [x] 拆分 `src/runtime/generation-gateway.ts`：把 conversation-policy preflight、AgentServer adapter orchestration、direct-context fast path、generated task path、verification/finalization、telemetry emission 明确成 state-machine steps，主文件只表达流程顺序。已抽出 `src/runtime/gateway/agent-backend-config.ts`、`runtime-routing.ts`、`agentserver-stream.ts`、`generated-task-response-text.ts`，文件降到约 1340 行；后续可继续把 verification/finalization 拆成更细 state-machine step，但已退出长文件风险区。
 - [x] 拆分 `src/runtime/task-projects.ts`：把 schema/types、project persistence、stage persistence、guidance adoption helpers、handoff summary、promotion proposal 适配拆成语义文件；保留兼容 exports，避免 T097/T096 调用方一次性大迁移。已抽出 `src/runtime/task-project-contracts.ts`、`task-project-store.ts`、`task-project-state.ts`、`task-project-handoff.ts` 并保留 `task-projects.ts` re-export，文件降到约 945 行；后续可继续拆 stage-level handoff builder。
-- [x] 明确 Computer Use / Vision Sense 双目录职责：`packages/computer-use` 与 `packages/observe/vision` 拥有算法、contract 和 pytest；`src/runtime/computer-use` 与 `src/runtime/vision-sense` 只拥有 Gateway adapter、workspace refs、runtime events 和安全 guard 接入。
+- [x] 明确 Computer Use / Vision Sense 双目录职责：`packages/actions/computer-use` 与 `packages/observe/vision` 拥有算法、contract 和 pytest；`src/runtime/computer-use` 与 `src/runtime/vision-sense` 只拥有 Gateway adapter、workspace refs、runtime events 和安全 guard 接入。
 - [x] 更新 `docs/Extending.md`：修正 verifier ABI 真相源，改为当前 `src/runtime/runtime-types.ts` / `src/runtime/gateway/verification-results.ts` / `packages/verifiers` contract，避免新能力接入沿用已删除文件。同步更新 `docs/README.md`。
 - [x] 为每个主要目录补轻量 owner note：`src/ui/src/app/README.md`、`src/runtime/README.md`、`packages/README.md` 或等效 architecture note，说明新增代码应该放在哪里、不能 import 什么、对应验证命令是什么。
 - [x] 在 `npm run packages:check` 或新增 `npm run smoke:module-boundaries` 中串起 package boundary、ui-components boundary、long-file-budget 和 stale-doc 检查；每次模块化迁移都必须跑 `npm run typecheck`、相关 unit tests 和对应 smoke。
 
 线程状态：
 
-- [x] Thread A - Contract/package boundary：已完成；新增 `packages/runtime-contract/app.ts`、`artifacts.ts`、`preview.ts`、`references.ts`，更新 `index.ts` 和 subpath exports；`packages/object-references`、`packages/artifact-preview` 改为依赖 `@sciforge-ui/runtime-contract/*`，`src/ui/src/domain.ts` 保持兼容 re-export。验证命令：`node --import tsx --test packages/object-references/index.test.ts packages/artifact-preview/index.test.ts`、`npm run smoke:object-references`、`npm run smoke:runtime-contracts`、`npm run typecheck`。
+- [x] Thread A - Contract/package boundary：已完成；新增 `packages/contracts/runtime/app.ts`、`artifacts.ts`、`preview.ts`、`references.ts`，更新 `index.ts` 和 subpath exports；`packages/support/object-references`、`packages/support/artifact-preview` 改为依赖 `@sciforge-ui/runtime-contract/*`，`src/ui/src/domain.ts` 保持兼容 re-export。验证命令：`node --import tsx --test packages/support/object-references/index.test.ts packages/support/artifact-preview/index.test.ts`、`npm run smoke:object-references`、`npm run smoke:runtime-contracts`、`npm run typecheck`。
 - [x] Thread B - UI feature split：已完成第一轮；`ChatPanel.tsx` 抽出 `ContextWindowMeter.tsx`、`ReferenceChips.tsx`、`RunExecutionProcess.tsx`、`runPresentation.ts`，`ResultsRenderer.tsx` 抽出 `results/resultArtifactHelpers.ts`，`SciForgeApp.tsx` 抽出 `appShell/appHelpers.ts`。验证命令：`node --import tsx --test src/ui/src/app/ChatPanel.test.ts src/ui/src/app/ResultsRenderer.test.ts src/ui/src/app/chat/*.test.ts src/ui/src/app/results/*.test.ts`、`npm run typecheck`、`npm run build`。
 - [x] Thread C - Runtime service split first pass：已完成第一轮；新增 `src/runtime/task-project-contracts.ts` 和 `src/runtime/gateway/agent-backend-config.ts`，`task-projects.ts` 继续兼容 re-export，`generation-gateway.ts` 保留现有行为。验证命令：`node --import tsx --test src/runtime/task-projects.test.ts`、`npx tsx tests/smoke/smoke-runtime-gateway-modules.ts`、`npm run typecheck`。
 - [x] Thread D/E - Documentation and boundary smoke：已完成；新增 `tools/check-module-boundaries.ts`、`npm run smoke:module-boundaries` 并接入 `verify:fast`，修正文档 verifier ABI，补 `src/runtime/README.md`、`src/ui/src/app/README.md` 和 `packages/README.md` owner note。验证命令：`npm run smoke:module-boundaries`、`npm run smoke:docs-scenario-package`、`npm run smoke:long-file-budget`。
-- [x] Thread A2 - Domain/session contract split：已完成；新增 `packages/runtime-contract/messages.ts`、`session.ts`、`stream.ts`、`execution.ts`、`events.ts`、`view.ts`，更新 package exports 和 README，`src/ui/src/domain.ts` 保持兼容 re-export。验证命令：`npm run typecheck`、`npm run smoke:runtime-contracts`、`npm run smoke:module-boundaries`。
+- [x] Thread A2 - Domain/session contract split：已完成；新增 `packages/contracts/runtime/messages.ts`、`session.ts`、`stream.ts`、`execution.ts`、`events.ts`、`view.ts`，更新 package exports 和 README，`src/ui/src/domain.ts` 保持兼容 re-export。验证命令：`npm run typecheck`、`npm run smoke:runtime-contracts`、`npm run smoke:module-boundaries`。
 - [x] Thread B2 - UI app shell split：已完成；新增 `src/ui/src/app/appShell/dashboardModels.ts`、`explorerModels.ts`、`settingsModels.ts` 及 tests，进一步拆分 `Dashboard.tsx` 和 `ShellPanels.tsx`。验证命令：`node --import tsx --test src/ui/src/app/appShell/*.test.ts src/ui/src/app/chat/*.test.ts src/ui/src/app/results/*.test.ts`、`npm run typecheck`、`npm run build`。
 - [x] Thread C2 - Runtime server split：已完成；新增 `src/runtime/server/file-preview.ts`，从 `workspace-server.ts` 抽出 preview descriptor、derivative、range streaming、mime/language/schema/hash helpers，HTTP API 行为保持兼容。验证命令：`npx tsx tests/smoke/smoke-workspace-file-api.ts`、`npx tsx tests/smoke/smoke-runtime-gateway-modules.ts`、`npm run typecheck`。
 - [x] Thread C3 - Runtime workspace open split：已完成；新增 `src/runtime/server/workspace-open.ts`，从 `workspace-server.ts` 抽出 Workspace Open Gateway 路径解析、临时预览白名单、高风险扩展名拦截和 dry-run/open 调用，HTTP 响应保持兼容。验证命令：`npm run typecheck`、`npx tsx tests/smoke/smoke-workspace-file-api.ts`、`npx tsx tests/smoke/smoke-workspace-open-gateway.ts`、`npm run smoke:long-file-budget`。
@@ -217,7 +217,7 @@ Todo：
 
 并行写域建议：
 
-- Thread A - Contract/package boundary：负责抽稳定 contract、修 `packages/object-references` / `packages/artifact-preview` 反向依赖、加 boundary smoke；不改 UI 视觉行为。
+- Thread A - Contract/package boundary：负责抽稳定 contract、修 `packages/support/object-references` / `packages/support/artifact-preview` 反向依赖、加 boundary smoke；不改 UI 视觉行为。
 - Thread B - UI feature split：负责 `SciForgeApp.tsx`、`ChatPanel.tsx`、`ResultsRenderer.tsx`、`ShellPanels.tsx` 的纯结构拆分和 tests 迁移；不改 runtime gateway。
 - Thread C - Runtime service split：负责 `workspace-server.ts`、`generation-gateway.ts`、`task-projects.ts` 拆分；不改 Python 策略算法。
 - Thread D - Capability package alignment：负责 Computer Use / Vision Sense / verifier docs 与 package/runtime adapter 边界；不改 app shell。
@@ -227,7 +227,7 @@ Todo：
 
 - [x] `packages/*` 不再依赖 `src/ui` / `src/runtime` 私有文件；共享类型来自稳定 contract package 或公开 package exports。
 - [ ] 主要 app/runtime 入口文件回到编排职责，超过 1500 行的非生成源码均有已执行的语义拆分或明确豁免。本轮已拆 `ChatPanel`、`SciForgeApp`、`ResultsRenderer`、`Dashboard`、`ShellPanels`、`task-projects`、`workspace-server`、`generation-gateway`；剩余超过 1500 行的是 `workspace-server.ts`（约 1560 行），已有 T099 跟踪并需继续拆 config/workspace-state/feedback/scenario routes。
-- [x] 新增能力、renderer、scenario、runtime route、chat UI feature 时能根据目录说明找到唯一落点，不需要修改无关大入口文件。`packages/README.md` 与 `packages/templates/package-scaffold` 已补单一真相源和 package scaffold。
+- [x] 新增能力、renderer、scenario、runtime route、chat UI feature 时能根据目录说明找到唯一落点，不需要修改无关大入口文件。`packages/README.md` 与 `packages/support/templates/package-scaffold` 已补单一真相源和 package scaffold。
 - [x] `npm run typecheck`、`npm run test`、`npm run packages:check`、`npm run smoke:long-file-budget` 和新增 module boundary smoke 通过。本轮额外验证 `npm run build`、`npm run smoke:runtime-contracts`、`npm run smoke:object-references`、`npm run smoke:docs-scenario-package`、`npx tsx tests/smoke/smoke-runtime-gateway-modules.ts` 通过。
 
 ### T098 Conversation Latency Policy 与多轮快速响应策略集中化
@@ -236,7 +236,7 @@ Todo：
 
 范围边界：
 
-- Python 是策略唯一真相源：首包 SLA、是否 direct-context、是否允许后台补全、是否阻塞 verification、是否阻塞 context compaction、是否复用缓存、是否降级为轻量回答等策略判断都应在 `packages/conversation-policy-python` 中产生。
+- Python 是策略唯一真相源：首包 SLA、是否 direct-context、是否允许后台补全、是否阻塞 verification、是否阻塞 context compaction、是否复用缓存、是否降级为轻量回答等策略判断都应在 `packages/reasoning/conversation-policy` 中产生。
 - TypeScript 是执行壳：`runOrchestrator`、`sciforgeToolsClient`、runtime gateway 和 UI 只消费 Python policy 输出，负责 abort/retry、stream、workspace refs、UI 状态和高风险 safety enforcement，不复制 prompt regex、复杂度评分或策略推断。
 - 高风险 action 仍必须 fail-closed：低等待优化不能绕过 human approval、危险动作 verification、artifact/schema guard、WorkEvidence guard 或用户显式要求的强验证。
 - 低风险/信息型/继续型任务应优先降低体感等待：允许先返回短可读 answer/status，再让后台 stage 补 artifact、验证、报告或更完整结果。
@@ -279,11 +279,11 @@ Todo：
 
 Todo：
 
-- [x] 在 `packages/conversation-policy-python` 新增 `latency_policy.py`：输入 goalSnapshot、contextPolicy、executionModePlan、capabilityBrief、selected actions/verifiers、recent failures、context budget、current refs 和 user guidance，输出通用 `latencyPolicy`，覆盖 first visible response SLA、silent stream warning/retry、是否允许后台补全、context compaction 是否阻塞、verification 是否阻塞。
+- [x] 在 `packages/reasoning/conversation-policy` 新增 `latency_policy.py`：输入 goalSnapshot、contextPolicy、executionModePlan、capabilityBrief、selected actions/verifiers、recent failures、context budget、current refs 和 user guidance，输出通用 `latencyPolicy`，覆盖 first visible response SLA、silent stream warning/retry、是否允许后台补全、context compaction 是否阻塞、verification 是否阻塞。
 - [x] 新增 `response_plan.py` 或扩展 `service.py` 的 `userVisiblePlan`：输出 `initialResponseMode`、`finalizationMode`、`progressPhases`、`fallbackMessagePolicy` 和后台补全说明；要求 direct-context 和 low-risk continuation 可快速回复，multi-stage/high-risk/action 任务按策略等待或给明确进展。
 - [x] 新增 `cache_policy.py`：集中判断 scenario plan、skill plan、UI plan、reference digest、artifact index、last successful stage 和 backend session 是否可复用；TypeScript 只执行缓存读取/写入，不自行判断复用资格。
 - [x] 将 Python response schema、TS bridge normalizer 和 GatewayRequest enrichment 接入 `latencyPolicy`、`responsePlan`、`backgroundPlan`、`cachePolicy`；缺失时只能回落为安全默认值，不能在 TS 中用 prompt regex 重建策略。
-- [x] 清理遗留 TS 策略源：`packages/runtime-contract/capabilities.ts` 只保留 capability metadata 与 contract registry，旧 `buildCapabilityBrief` / prompt scoring / verifier selection / risk inference 已删除；未被生产路径引用的 verification policy builder 已删除，`sciforgeToolsClient` 不再合成 verification/human approval 默认策略，runtime verification risk 只看显式 policy、结构化 action/evidence 和 executionUnits。
+- [x] 清理遗留 TS 策略源：`packages/contracts/runtime/capabilities.ts` 只保留 capability metadata 与 contract registry，旧 `buildCapabilityBrief` / prompt scoring / verifier selection / risk inference 已删除；未被生产路径引用的 verification policy builder 已删除，`sciforgeToolsClient` 不再合成 verification/human approval 默认策略，runtime verification risk 只看显式 policy、结构化 action/evidence 和 executionUnits。
 - [x] 改造 `runOrchestrator` preflight compaction：由 `latencyPolicy.blockOnContextCompaction` 决定是否阻塞发送；允许后台预压缩/非阻塞压缩，把结果写入 stream event 和下一轮 context，而不是让普通追问卡在发送前。
 - [x] 改造 `sciforgeToolsClient` 静默等待、45s 重连和 timeout 逻辑：阈值来自 `latencyPolicy`；UI 展示由 `responsePlan.userVisibleProgress` 和 T095 WorkEvent 消费，避免硬编码散在多个位置。
 - [x] 改造 verification 使用方式：低风险回答不因 `unverified` / lightweight verification 阻塞用户可读回复；高风险 action、显式 human approval、危险 side effect 继续由 runtime verification gate fail-closed；Verification 只以结构化 badge/artifact/ref 进入 UI 和下一轮上下文。
@@ -302,13 +302,13 @@ Todo：
 
 验收命令：
 
-- `python3 -m pytest packages/conversation-policy-python/tests`
+- `python3 -m pytest packages/reasoning/conversation-policy/tests`
 - `node --import tsx --test src/runtime/conversation-policy/*.test.ts`
 - `node --import tsx --test src/ui/src/app/chat/*.test.ts src/ui/src/api/agentClient/*.test.ts`
 - `npx tsx tests/smoke/smoke-t097-execution-mode-matrix.ts`
 - `npx tsx tests/smoke/smoke-t096-work-evidence-provider-fixtures.ts`
 - `npm run smoke:t098-latency`
-- `node --import tsx --test packages/runtime-contract/capabilities.test.ts src/ui/src/api/sciforgeToolsClient.policy.test.ts`
+- `node --import tsx --test packages/contracts/runtime/capabilities.test.ts src/ui/src/api/sciforgeToolsClient.policy.test.ts`
 - `npx tsx tests/smoke/smoke-runtime-gateway-modules.ts`
 - `npx tsx tests/smoke/smoke-browser-workflows.ts`
 - `npx tsc --noEmit`
@@ -316,7 +316,7 @@ Todo：
 
 并行协调：
 
-- Thread A/B 可以最先并行启动，二者只写 `packages/conversation-policy-python/src/sciforge_conversation/*` 和 `packages/conversation-policy-python/tests/*`；A 负责 latency 策略，B 负责 response/background/cache 策略，避免同时编辑同一个新文件。
+- Thread A/B 可以最先并行启动，二者只写 `packages/reasoning/conversation-policy/src/sciforge_conversation/*` 和 `packages/reasoning/conversation-policy/tests/*`；A 负责 latency 策略，B 负责 response/background/cache 策略，避免同时编辑同一个新文件。
 - Thread C 在 A/B 的 response shape 基本稳定后启动；如果 A/B 尚未完成，C 只能先加向后兼容的 optional schema 和 fixture，不得臆造策略算法。
 - Thread D 依赖 C 的 TS bridge 字段；在 C 合入前只允许准备 tests/harness，不要把策略判断写进 UI/runtime。
 - Thread E 可以与 C/D 并行做 session transform 和 runtime event contract，但不得改 Python 策略；如需要新增策略字段，先在本节记录并与 A/B 对齐。
@@ -326,20 +326,20 @@ Todo：
 
 线程状态：
 
-- [x] Thread A - Python latency policy：已完成；新增 `packages/conversation-policy-python/src/sciforge_conversation/latency_policy.py`，接入 `contracts.py` / `service.py` / `__init__.py`，新增 `packages/conversation-policy-python/tests/test_latency_policy.py`。覆盖 direct context、low-risk continuation、light lookup、multi-stage project、repair、high-risk action、context near limit；验证命令 `cd packages/conversation-policy-python && uv run --with pytest python -m pytest tests` 通过（67 passed）。剩余风险：本机 `python3` 是 3.9.6，低于包要求 `>=3.10`，直接运行 `python3 -m pytest packages/conversation-policy-python/tests` 会在既有 `@dataclass(slots=True)` collection 阶段失败；需 CI/开发环境使用 Python 3.10+ 或 uv 托管解释器。
-- [x] Thread B - Python response/background/cache plan：已完成；新增 `packages/conversation-policy-python/src/sciforge_conversation/response_plan.py` 和 `packages/conversation-policy-python/src/sciforge_conversation/cache_policy.py`，接入 `contracts.py` / `service.py` / `__init__.py`，新增 `packages/conversation-policy-python/tests/test_response_cache_policy.py` 并更新 `test_contracts.py`。覆盖全部 execution mode 与 low/medium/high 风险等级，验证 responsePlan/backgroundPlan/cachePolicy 输出及 ref/artifact/stage/backend session 缓存复用/失效。验证命令 `python3 -m pytest packages/conversation-policy-python/tests` 通过（67 passed）。剩余风险：TS bridge/runtime 尚未消费这些字段，后台补全 runId/stageId/ref 协议仍由后续线程完成。
+- [x] Thread A - Python latency policy：已完成；新增 `packages/reasoning/conversation-policy/src/sciforge_conversation/latency_policy.py`，接入 `contracts.py` / `service.py` / `__init__.py`，新增 `packages/reasoning/conversation-policy/tests/test_latency_policy.py`。覆盖 direct context、low-risk continuation、light lookup、multi-stage project、repair、high-risk action、context near limit；验证命令 `cd packages/reasoning/conversation-policy && uv run --with pytest python -m pytest tests` 通过（67 passed）。剩余风险：本机 `python3` 是 3.9.6，低于包要求 `>=3.10`，直接运行 `python3 -m pytest packages/reasoning/conversation-policy/tests` 会在既有 `@dataclass(slots=True)` collection 阶段失败；需 CI/开发环境使用 Python 3.10+ 或 uv 托管解释器。
+- [x] Thread B - Python response/background/cache plan：已完成；新增 `packages/reasoning/conversation-policy/src/sciforge_conversation/response_plan.py` 和 `packages/reasoning/conversation-policy/src/sciforge_conversation/cache_policy.py`，接入 `contracts.py` / `service.py` / `__init__.py`，新增 `packages/reasoning/conversation-policy/tests/test_response_cache_policy.py` 并更新 `test_contracts.py`。覆盖全部 execution mode 与 low/medium/high 风险等级，验证 responsePlan/backgroundPlan/cachePolicy 输出及 ref/artifact/stage/backend session 缓存复用/失效。验证命令 `python3 -m pytest packages/reasoning/conversation-policy/tests` 通过（67 passed）。剩余风险：TS bridge/runtime 尚未消费这些字段，后台补全 runId/stageId/ref 协议仍由后续线程完成。
 - [x] Thread C - TypeScript bridge and request enrichment：已完成；更新 `src/runtime/conversation-policy/contracts.ts` / `apply.ts` normalizer 与 enrichment，透传 `latencyPolicy`、`responsePlan`、`backgroundPlan`、`cachePolicy` 到 `uiState.conversationPolicy` 和 `uiState.*Policy` 顶层稳定位置；缺失字段回落为 fail-closed 安全默认（verification/context compaction 阻塞、background/cache 不声明完成或复用）。更新 `src/runtime/gateway/context-envelope.ts` 和 `src/runtime/gateway/agentserver-prompts.ts` 只展示裁剪后的 `conversationPolicySummary`，未新增 prompt regex。新增 `src/runtime/conversation-policy/policy.test.ts` 覆盖字段透传、缺失默认、prompt/envelope 无整份策略复制。验证命令 `node --import tsx --test src/runtime/conversation-policy/*.test.ts` 通过（3 passed），`npx tsc --noEmit` 通过。剩余风险：runtime/UI 尚未按这些策略执行，后台补全 runId/stageId/ref 协议仍由 Thread D/E 完成。
 - [x] Thread D - UI/runtime orchestration execution shell：已完成；新增 `src/ui/src/latencyPolicy.ts` 作为 TS 执行壳读取器，只消费 Python 输出的 `latencyPolicy` / `responsePlan` 字段，不做 prompt/scenario 策略推断。更新 `src/ui/src/app/chat/runOrchestrator.ts`，preflight context compaction 读取最近 policy 的 `blockOnContextCompaction`，为 `false` 时发送继续、压缩后台执行并通过 stream event 记录。更新 `src/ui/src/api/sciforgeToolsClient.ts`，silent wait warning、silent first-event retry 和可选 request timeout 从当前轮 `conversation-policy` stream event 的 `latencyPolicy` 更新，缺失时保留安全默认；`responsePlan.initialResponseMode` 生成通用 `process-progress` quick/direct/wait 状态。更新 `src/ui/src/processProgress.ts` 及 tests，覆盖 quick-status/direct-context 可见反馈；更新 `src/ui/src/app/chat/runOrchestrator.targetInstance.test.ts` 和新增 `src/ui/src/api/sciforgeToolsClient.policy.test.ts`，覆盖非阻塞 compaction、policy silent retry 阈值和 quick status。为保持验收类型检查，`src/runtime/generation-gateway.ts` 补 `await applyRuntimeVerificationPolicy(...)`，不改变 verification-policy / WorkEvidence / schema guard 语义。验证命令：`node --import tsx --test src/runtime/conversation-policy/policy.test.ts src/ui/src/processProgress.test.ts src/ui/src/app/chat/runOrchestrator.targetInstance.test.ts src/ui/src/api/sciforgeToolsClient.policy.test.ts`、`npx tsc --noEmit`、`npm run build` 均通过。剩余风险：当前轮 preflight 只能使用发送前已有的最近 policy；当前轮 Python policy 要等 workspace stream 返回后才能驱动 transport 阈值和 quick status，首包前策略预取/后台补全完整协议仍由后续线程继续收敛。
 - [x] Thread E - Background completion protocol and persistence：已完成；新增通用 `sciforge.background-completion.v1` runtime event / session transform contract，覆盖 initial response、background stage update、finalization，保持 runId/stageId/ref 一致；`applyBackgroundCompletionEventToSession` 支持同一 run 的 artifact / verification / WorkEvidence / final response 追加，失败与用户取消写入 `failureReason` / `recoverActions` / `nextStep`，下一轮 `requestPayloadForTurn` 可读取后台结果。更新 workspace timeline 对既有 run 状态变化的持久化事件，新增 runtime contract schema/smoke 与 long task smoke。验证命令：`node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts src/ui/src/app/appShell/workspaceState.test.ts`、`npx tsx tests/smoke/smoke-background-completion-protocol.ts`、`npx tsx tests/smoke/smoke-runtime-contract-schemas.ts`。
-- [x] Thread F - Telemetry and end-to-end latency smoke：已完成；新增 `src/runtime/gateway/latency-telemetry.ts` 并接入 `src/runtime/generation-gateway.ts`，在每轮 runtime 结束时输出一条低噪声 `latency-diagnostics` event，同时把摘要挂入 payload `logs` 和 `workEvidence`，覆盖 time-to-first-visible-response、time-to-first-backend-event、context compaction wait、verification wait、cache hit/miss 和 fallback reason。`src/ui/src/app/chat/sessionTransforms.ts` 的 background completion raw diagnostics 记录 `backgroundCompletionDurationMs`。新增 `tests/smoke/smoke-t098-latency-diagnostics-matrix.ts` 与 `npm run smoke:t098-latency`，本地 Python policy 生成 10 类通用 fixtures：普通追问、上一轮 artifact 追问、低风险 current-events、文献检索、长报告、失败修复、高风险 action、context near limit、backend silent stream、用户中途追加引导；断言 `latencyPolicy` / `responsePlan` / `backgroundPlan` / `cachePolicy` 来自 Python response，TS 只透传/执行。smoke 暴露并修复一个明确策略缺口：`packages/conversation-policy-python/src/sciforge_conversation/response_plan.py` 和 `cache_policy.py` 现在会把 `policyHints.selectedActions` 纳入 high-risk action 风险计算，`packages/conversation-policy-python/tests/test_response_cache_policy.py` 已覆盖 high-risk action 禁止 background/cache reuse。后续补齐剩余 T098 TODO：`packages/conversation-policy-python/src/sciforge_conversation/execution_classifier.py` 不再把 runtime planning skill `scenario.*.agentserver-generation` 误当 selected action，从而让已有 artifact/table 追问进入 Python `direct-context-answer`；新增 `src/runtime/gateway/direct-context-fast-path.ts`，在 Python 明确选择 direct-context 且没有 AgentServer base URL 时，从现有 artifacts/refs/execution refs 生成可审计 ToolPayload，不启动 workspace task；有 AgentServer 时仍保持 AgentServer owns orchestration 的 direct payload 路径。`src/runtime/gateway/verification-policy.ts` 将 `latencyPolicy.blockOnVerification=false` 写入 verification artifact/displayIntent 的 `nonBlocking` 标记，低风险 `unverified`/lightweight verification 只作为 badge/artifact/ref 进入 UI 和下一轮上下文，高风险 action 仍 fail-closed。验证命令：`python3 -m pytest packages/conversation-policy-python/tests/test_execution_classifier.py packages/conversation-policy-python/tests/test_response_cache_policy.py` 通过（24 passed），`npm run smoke:t098-latency && npm run smoke:background-completion` 通过，`npx tsc --noEmit` 通过，`npm run build` 通过。剩余风险：当前 telemetry 记录的是 runtime gateway 与 background session transform 的低噪声诊断摘要；真实 provider 的 429/timeout/用户取消路径还需要长跑 smoke 或 live backend 观测来校准 SLA 分布。
-- [x] Single truth source cleanup：已完成；`packages/runtime-contract/capabilities.ts` 只保留 capability metadata 与 lazy contract registry，删除旧 TS `buildCapabilityBrief`、prompt scoring、risk inference 和 verifier selection；删除未被生产路径引用的 verification policy builder，避免维护第二套 verification policy builder；`src/ui/src/api/sciforgeToolsClient.ts` 只透传显式 `scenarioOverride.verificationPolicy` / `humanApprovalPolicy` / `unverifiedReason`，不再合成默认策略；`src/runtime/gateway/verification-policy.ts` 不再从用户 prompt 关键词推断 high risk，只从显式 policy、结构化 selected actions/action side effects、uiState policy 和 executionUnits safety evidence 推断，同时保留 action provider self-report 的 fail-closed gate。验证命令：`node --import tsx --test packages/runtime-contract/capabilities.test.ts src/ui/src/api/sciforgeToolsClient.policy.test.ts`、`npx tsx tests/smoke/smoke-runtime-gateway-modules.ts`、`uv run --with pytest python -m pytest tests`（在 `packages/conversation-policy-python`）、`npm run smoke:t098-latency`、`npx tsc --noEmit`、`npm run build` 均通过。剩余风险：真实 provider 的慢/429/timeout/取消分布仍需 live backend 长跑校准；transport safe default 仍保留为执行壳兜底，不承担策略选择。
+- [x] Thread F - Telemetry and end-to-end latency smoke：已完成；新增 `src/runtime/gateway/latency-telemetry.ts` 并接入 `src/runtime/generation-gateway.ts`，在每轮 runtime 结束时输出一条低噪声 `latency-diagnostics` event，同时把摘要挂入 payload `logs` 和 `workEvidence`，覆盖 time-to-first-visible-response、time-to-first-backend-event、context compaction wait、verification wait、cache hit/miss 和 fallback reason。`src/ui/src/app/chat/sessionTransforms.ts` 的 background completion raw diagnostics 记录 `backgroundCompletionDurationMs`。新增 `tests/smoke/smoke-t098-latency-diagnostics-matrix.ts` 与 `npm run smoke:t098-latency`，本地 Python policy 生成 10 类通用 fixtures：普通追问、上一轮 artifact 追问、低风险 current-events、文献检索、长报告、失败修复、高风险 action、context near limit、backend silent stream、用户中途追加引导；断言 `latencyPolicy` / `responsePlan` / `backgroundPlan` / `cachePolicy` 来自 Python response，TS 只透传/执行。smoke 暴露并修复一个明确策略缺口：`packages/reasoning/conversation-policy/src/sciforge_conversation/response_plan.py` 和 `cache_policy.py` 现在会把 `policyHints.selectedActions` 纳入 high-risk action 风险计算，`packages/reasoning/conversation-policy/tests/test_response_cache_policy.py` 已覆盖 high-risk action 禁止 background/cache reuse。后续补齐剩余 T098 TODO：`packages/reasoning/conversation-policy/src/sciforge_conversation/execution_classifier.py` 不再把 runtime planning skill `scenario.*.agentserver-generation` 误当 selected action，从而让已有 artifact/table 追问进入 Python `direct-context-answer`；新增 `src/runtime/gateway/direct-context-fast-path.ts`，在 Python 明确选择 direct-context 且没有 AgentServer base URL 时，从现有 artifacts/refs/execution refs 生成可审计 ToolPayload，不启动 workspace task；有 AgentServer 时仍保持 AgentServer owns orchestration 的 direct payload 路径。`src/runtime/gateway/verification-policy.ts` 将 `latencyPolicy.blockOnVerification=false` 写入 verification artifact/displayIntent 的 `nonBlocking` 标记，低风险 `unverified`/lightweight verification 只作为 badge/artifact/ref 进入 UI 和下一轮上下文，高风险 action 仍 fail-closed。验证命令：`python3 -m pytest packages/reasoning/conversation-policy/tests/test_execution_classifier.py packages/reasoning/conversation-policy/tests/test_response_cache_policy.py` 通过（24 passed），`npm run smoke:t098-latency && npm run smoke:background-completion` 通过，`npx tsc --noEmit` 通过，`npm run build` 通过。剩余风险：当前 telemetry 记录的是 runtime gateway 与 background session transform 的低噪声诊断摘要；真实 provider 的 429/timeout/用户取消路径还需要长跑 smoke 或 live backend 观测来校准 SLA 分布。
+- [x] Single truth source cleanup：已完成；`packages/contracts/runtime/capabilities.ts` 只保留 capability metadata 与 lazy contract registry，删除旧 TS `buildCapabilityBrief`、prompt scoring、risk inference 和 verifier selection；删除未被生产路径引用的 verification policy builder，避免维护第二套 verification policy builder；`src/ui/src/api/sciforgeToolsClient.ts` 只透传显式 `scenarioOverride.verificationPolicy` / `humanApprovalPolicy` / `unverifiedReason`，不再合成默认策略；`src/runtime/gateway/verification-policy.ts` 不再从用户 prompt 关键词推断 high risk，只从显式 policy、结构化 selected actions/action side effects、uiState policy 和 executionUnits safety evidence 推断，同时保留 action provider self-report 的 fail-closed gate。验证命令：`node --import tsx --test packages/contracts/runtime/capabilities.test.ts src/ui/src/api/sciforgeToolsClient.policy.test.ts`、`npx tsx tests/smoke/smoke-runtime-gateway-modules.ts`、`uv run --with pytest python -m pytest tests`（在 `packages/reasoning/conversation-policy`）、`npm run smoke:t098-latency`、`npx tsc --noEmit`、`npm run build` 均通过。剩余风险：真实 provider 的慢/429/timeout/取消分布仍需 live backend 长跑校准；transport safe default 仍保留为执行壳兜底，不承担策略选择。
 
 并行实现 prompts：
 
 #### Thread A - Python latency policy
 
 ```text
-你负责实现 T098 的 Python latency policy。只修改 packages/conversation-policy-python 及其 tests，必要时更新 PROJECT.md 中 T098 状态。
+你负责实现 T098 的 Python latency policy。只修改 packages/reasoning/conversation-policy 及其 tests，必要时更新 PROJECT.md 中 T098 状态。
 
 目标：
 - 新增 sciforge_conversation/latency_policy.py，输出 latencyPolicy。
@@ -350,14 +350,14 @@ Todo：
 
 验收：
 - 新增 pytest fixtures 覆盖 direct context、low-risk continuation、light lookup、multi-stage project、repair、high-risk action、context near limit。
-- python3 -m pytest packages/conversation-policy-python/tests 通过。
+- python3 -m pytest packages/reasoning/conversation-policy/tests 通过。
 - 更新 PROJECT.md 的 T098 Thread A 进度和剩余风险。
 ```
 
 #### Thread B - Python response/background/cache plan
 
 ```text
-你负责实现 T098 的 responsePlan/backgroundPlan/cachePolicy。优先在 packages/conversation-policy-python 内实现，必要时只做最小 TS contract 类型补充，不改 UI 行为。
+你负责实现 T098 的 responsePlan/backgroundPlan/cachePolicy。优先在 packages/reasoning/conversation-policy 内实现，必要时只做最小 TS contract 类型补充，不改 UI 行为。
 
 目标：
 - 新增或扩展 response_plan.py、cache_policy.py。
@@ -448,13 +448,13 @@ Todo：
 
 状态：已完成本轮验收，继续观察真实 backend mode 遵循和产品运行中的证据质量。本轮已完成 Python classifier、TS 字段透传、Task Project runtime/runner、WorkEvidence guard 接入、AgentServer prompt 边界、运行中 UI 最小展示、repair/continue stage 锚点、guidance adoption contract、guidance adoption runtime guard 和 stage adapter promotion proposal 入口。T097 负责任务复杂度路由和多阶段 Task Project runtime：每个用户请求先经过 Python 策略层判断任务类型、复杂度、不确定性、可复现需求和交互风险，再选择合适执行模式：已有上下文直答、薄可复现 adapter、单阶段 workspace task、多阶段 Task Project、或 repair/continuation。复杂任务应拆成可执行 stage，agent 每次只写/修改当前阶段所需代码，SciForge 执行后把阶段证据、失败和用户追加引导反馈给 agent，再进入下一阶段。
 
-接口边界补充：`executionModePlan` 的策略字段由 `packages/conversation-policy-python/src/sciforge_conversation/execution_classifier.py` 产生；TS 只在 `src/runtime/conversation-policy/apply.ts`、`src/runtime/gateway/context-envelope.ts`、`src/runtime/gateway/agentserver-prompts.ts` 中做字段映射、裁剪和 prompt contract 展示。缺失时只能回退为 `unknown` / `backend-decides`，不能用 prompt regex 自行判断 mode。
+接口边界补充：`executionModePlan` 的策略字段由 `packages/reasoning/conversation-policy/src/sciforge_conversation/execution_classifier.py` 产生；TS 只在 `src/runtime/conversation-policy/apply.ts`、`src/runtime/gateway/context-envelope.ts`、`src/runtime/gateway/agentserver-prompts.ts` 中做字段映射、裁剪和 prompt contract 展示。缺失时只能回退为 `unknown` / `backend-decides`，不能用 prompt regex 自行判断 mode。
 
 与 T096 的关系：T097 决定“这轮应该怎么跑、拆几段、何时继续或修复”；T096 定义“每段运行必须留下什么证据、怎样判断失败、怎样把失败归一成可恢复上下文”。T097 的 Project/Stage runner 消费 T096 的 `WorkEvidence` schema 与 guard，不另建一套证据语义。
 
 核心原则：
 
-- 算法优先 Python：任务分类、复杂度评分、stage 规划、继续/修复策略应在 `packages/conversation-policy-python` 中实现，方便学生阅读、修改和写实验；TypeScript 只保留 request transport、workspace project/stage runner、artifact/ref 持久化和 UI 展示。
+- 算法优先 Python：任务分类、复杂度评分、stage 规划、继续/修复策略应在 `packages/reasoning/conversation-policy` 中实现，方便学生阅读、修改和写实验；TypeScript 只保留 request transport、workspace project/stage runner、artifact/ref 持久化和 UI 展示。
 - Runtime shell 优先 TypeScript：project/stage 目录创建、输入输出落盘、命令执行、stream 转发、证据归档、UI 状态和 AgentServer 往返属于 TypeScript 执行壳；TypeScript 不复制 Python 的分类、复杂度评分或 stage 规划算法。
 - 可复现性优先：依赖新检索、文件、命令、工具或产物的结果必须留下 project/stage code、input、output、stdout/stderr、WorkEvidence 和 artifact refs；只有纯解释已有上下文时才允许直接 ToolPayload。
 - 分阶段优先于一次性大脚本：对长任务、高不确定性任务、多 provider 检索、多 artifact 产出、外部 I/O、需要用户中途纠偏的任务，AgentServer 应先生成 stage spec / 当前阶段代码，运行后再基于阶段反馈继续。
@@ -484,7 +484,7 @@ user request
 
 Todo：
 
-- [x] 在 `packages/conversation-policy-python` 新增任务复杂度分类器：输入 prompt、refs、artifacts、expectedArtifactTypes、selected capabilities、recent failures，输出 `executionMode`、`complexityScore`、`uncertaintyScore`、`reproducibilityLevel`、`stagePlanHint` 和选择理由。
+- [x] 在 `packages/reasoning/conversation-policy` 新增任务复杂度分类器：输入 prompt、refs、artifacts、expectedArtifactTypes、selected capabilities、recent failures，输出 `executionMode`、`complexityScore`、`uncertaintyScore`、`reproducibilityLevel`、`stagePlanHint` 和选择理由。
 - [x] 为 Python 分类器建立可编辑规则与 fixture：覆盖简单问答、轻量搜索、新闻/current-events、文献调研、全文下载、代码修改、文件探索、长任务、repair、continuation、用户运行中追加引导；断言不依赖单一 provider/scenario/prompt。
 - [x] 定义 Task Project schema 与持久化 helpers：`.sciforge/projects/<project-id>/project.json`、`plan.json`、`stages/<n>-<kind>.json`、`src/`、`artifacts/`、`evidence/`、`logs/`，每个 stage 记录 codeRef/inputRef/outputRef/stdoutRef/stderrRef/evidenceRefs/failureReason/nextStep，并支持 project/stage 创建、读取、更新、evidence refs 记录、bounded handoff 摘要和 recent project 列表。
 - [x] 在 TypeScript runtime 增加 Project/Stage runner：创建 project、写入 stage code/input、执行当前 stage、调用 T096 guard 归档 WorkEvidence、验证 stage 输出、决定是否请求 AgentServer 生成下一 stage。
@@ -513,7 +513,7 @@ Todo：
 - `node --import tsx --test src/runtime/gateway/context-envelope.test.ts`
 - `npx tsx tests/smoke/smoke-t097-execution-mode-matrix.ts`
 - `npx tsx tests/smoke/smoke-agentserver-handoff-current-turn.ts`
-- `python3 -m pytest packages/conversation-policy-python/tests`
+- `python3 -m pytest packages/reasoning/conversation-policy/tests`
 
 ### T096 WorkEvidence 结构化证据与通用恢复守门
 
@@ -578,7 +578,7 @@ Todo：
 实现语言原则：
 
 - TypeScript 负责 UI 事件壳、stream presenter、React 展示策略和前端 fixture tests，因为这些逻辑紧贴浏览器主对话栏和 TS domain contract。
-- Python 继续作为算法/策略唯一真相源，后续若要让 backend 主动发出结构化 work event hints，应落在 `packages/conversation-policy-python` 或 runtime policy bridge 中；TypeScript 只消费 schema，不复制长期策略算法。
+- Python 继续作为算法/策略唯一真相源，后续若要让 backend 主动发出结构化 work event hints，应落在 `packages/reasoning/conversation-policy` 或 runtime policy bridge 中；TypeScript 只消费 schema，不复制长期策略算法。
 - 原子事件必须是通用 schema / classifier / summarizer / display policy，不得按固定 prompt、固定 scenario、固定工具名、固定 DOM 或固定论文任务做特例补丁。
 
 Todo：

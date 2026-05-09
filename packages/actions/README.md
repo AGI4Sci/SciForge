@@ -30,6 +30,9 @@ packages/actions/
   computer-use/
     README.md
     action-provider.manifest.json
+    pyproject.toml
+    sciforge_computer_use/
+    tests/
 ```
 
 Provider 实现可以是 Python、TypeScript、MCP server 或外部 adapter。manifest 只描述稳定边界；运行时 broker 可以先读取 manifest 生成紧凑 capability brief，只有真正选中 provider 后再加载更详细的实现文档。
@@ -41,4 +44,3 @@ Provider 实现可以是 Python、TypeScript、MCP server 或外部 adapter。ma
 - trace 不内联截图、base64、原始日志或大 payload；使用 artifact refs 和 compact summary。
 - provider 不得依赖 UI component 的内部 React 实现；如果需要操作 UI，只能通过目标环境 contract、可见 affordance、object refs、截图或 accessibility/DOM 等稳定观察输入。
 - 迁移旧 package 时优先保留兼容导出和测试入口，再逐步切换 registry 路径。
-

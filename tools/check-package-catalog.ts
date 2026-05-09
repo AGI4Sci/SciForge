@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { discoverMarkdownSkillPackages, discoverMarkdownToolPackages } from '../src/runtime/skill-markdown-catalog.js';
 import { skillPackageManifests } from '../packages/skills';
 import { toolPackageManifests } from '../packages/skills/tool_skills';
-import { uiComponentManifests } from '../packages/ui-components';
+import { uiComponentManifests } from '../packages/presentation/components';
 
 type PackageManifest = {
   id?: string;
@@ -59,11 +59,11 @@ for (const manifest of manifests) {
   }
 }
 
-const artifactPreviewPackageJson = JSON.parse(await readFile('packages/artifact-preview/package.json', 'utf8')) as { name?: string; private?: boolean };
+const artifactPreviewPackageJson = JSON.parse(await readFile('packages/support/artifact-preview/package.json', 'utf8')) as { name?: string; private?: boolean };
 assert.equal(artifactPreviewPackageJson.name, '@sciforge-ui/artifact-preview', 'artifact-preview package name must be stable');
 assert.notEqual(artifactPreviewPackageJson.private, true, '@sciforge-ui/artifact-preview must be publishable');
-assert.ok(existsSync('packages/artifact-preview/README.md'), '@sciforge-ui/artifact-preview must have README.md');
-assert.ok(existsSync('packages/artifact-preview/index.ts'), '@sciforge-ui/artifact-preview must export runtime preview utilities');
+assert.ok(existsSync('packages/support/artifact-preview/README.md'), '@sciforge-ui/artifact-preview must have README.md');
+assert.ok(existsSync('packages/support/artifact-preview/index.ts'), '@sciforge-ui/artifact-preview must export runtime preview utilities');
 
 for (const file of await packageFiles('packages')) {
   const text = await readFile(file, 'utf8');

@@ -26,7 +26,7 @@ const updated = (await applyConversationPolicy(request, {}, {
     command: 'python3',
     args: ['-m', 'sciforge_conversation.service'],
     timeoutMs: 5000,
-    pythonPath: join(process.cwd(), 'packages/conversation-policy-python/src'),
+    pythonPath: join(process.cwd(), 'packages/reasoning/conversation-policy/src'),
   },
 })).request;
 const refs = Array.isArray(updated.uiState?.currentReferences) ? updated.uiState.currentReferences : [];

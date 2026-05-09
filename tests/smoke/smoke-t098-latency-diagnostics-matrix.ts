@@ -262,7 +262,7 @@ console.log('[ok] T098 latency diagnostics matrix covers Python-owned policy fie
 
 function callPythonPolicy(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
   return new Promise((resolvePromise, reject) => {
-    const pythonPath = [resolve(process.cwd(), 'packages/conversation-policy-python/src'), process.env.PYTHONPATH].filter(Boolean).join(delimiter);
+    const pythonPath = [resolve(process.cwd(), 'packages/reasoning/conversation-policy/src'), process.env.PYTHONPATH].filter(Boolean).join(delimiter);
     const child = spawn(process.env.SCIFORGE_CONVERSATION_POLICY_PYTHON || 'python3', ['-m', 'sciforge_conversation.service'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, PYTHONPATH: pythonPath },

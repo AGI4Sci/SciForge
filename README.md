@@ -194,11 +194,14 @@ npm run smoke:stable-version-registry
 src/ui/                  React + Vite 科研工作台
 src/runtime/             Workspace server、gateway、task runner、computer use runtime
 src/runtime/gateway/     Agent/backend handoff、payload、context、diagnostics、repair
-src/shared/              handoff、verification、sense、capability 等共享 contract
-packages/senses/         多模态感官包
+packages/contracts/      跨 package/UI/runtime 稳定 contract
+packages/reasoning/      Python 优先的确定性策略算法与 planner
+packages/scenarios/      scenario 编译、校验和 runtime smoke fixtures
+packages/observe/        只读观察能力：environment/modality -> observation
 packages/actions/        会改变环境的 action provider
-packages/computer-use/   sense-agnostic GUI action loop
-packages/ui-components/  科学 artifact 交互视图注册表
+packages/actions/computer-use/   sense-agnostic GUI action loop
+packages/presentation/components/  科学 artifact 交互视图注册表
+packages/support/        preview/reference helpers 和迁移兼容支撑
 packages/skills/         可复用科研 skill 与 skill catalog
 packages/verifiers/      验证与 critique 能力
 docs/                    产品、架构、使用和 authoring 文档

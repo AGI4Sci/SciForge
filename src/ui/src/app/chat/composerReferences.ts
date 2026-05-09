@@ -3,7 +3,7 @@ import {
   appendReferenceMarkerToInput,
   removeReferenceMarkerFromInput,
   withComposerMarker,
-} from '../../../../../packages/object-references';
+} from '../../../../../packages/support/object-references';
 
 const MAX_COMPOSER_REFERENCES = 8;
 

@@ -38,21 +38,21 @@ const allowedLifecycleLayers = new Set([
 const knownPackagePrivateImportWarnings: WarningRule[] = [
   {
     id: 'legacy-object-reference-ui-domain-types',
-    description: 'packages/object-references still imports UI domain types; migrate those contracts into packages/runtime-contract or a package-owned contract file.',
-    match: (edge) => edge.importer.startsWith('packages/object-references/') && pointsAtUiDomain(edge),
+    description: 'packages/support/object-references still imports UI domain types; migrate those contracts into packages/contracts/runtime or a package-owned contract file.',
+    match: (edge) => edge.importer.startsWith('packages/support/object-references/') && pointsAtUiDomain(edge),
   },
   {
     id: 'legacy-artifact-preview-ui-domain-types',
-    description: 'packages/artifact-preview still imports UI domain types; migrate preview/artifact contracts into packages/runtime-contract or a package-owned contract file.',
-    match: (edge) => edge.importer.startsWith('packages/artifact-preview/') && pointsAtUiDomain(edge),
+    description: 'packages/support/artifact-preview still imports UI domain types; migrate preview/artifact contracts into packages/contracts/runtime or a package-owned contract file.',
+    match: (edge) => edge.importer.startsWith('packages/support/artifact-preview/') && pointsAtUiDomain(edge),
   },
 ];
 
 const knownUiPackageDeepImportWarnings: WarningRule[] = [
   {
     id: 'ui-scenario-core-bridge-src-reexports',
-    description: 'src/ui/src/scenarioCompiler is a compatibility bridge over packages/scenario-core/src; migrate callers to package public exports.',
-    match: (edge) => edge.importer.startsWith('src/ui/src/scenarioCompiler/') && edge.resolvedPath?.startsWith('packages/scenario-core/src/') === true,
+    description: 'src/ui/src/scenarioCompiler is a compatibility bridge over packages/scenarios/core/src; migrate callers to package public exports.',
+    match: (edge) => edge.importer.startsWith('src/ui/src/scenarioCompiler/') && edge.resolvedPath?.startsWith('packages/scenarios/core/src/') === true,
   },
   {
     id: 'ui-component-workbench-fixtures',
@@ -62,17 +62,17 @@ const knownUiPackageDeepImportWarnings: WarningRule[] = [
   {
     id: 'ui-component-workbench-types',
     description: 'componentWorkbenchDemo imports ui-components/types through a relative package path; prefer @sciforge-ui/components/types when aliases are available.',
-    match: (edge) => edge.importer === 'src/ui/src/componentWorkbenchDemo.ts' && edge.resolvedPath === 'packages/ui-components/types',
+    match: (edge) => edge.importer === 'src/ui/src/componentWorkbenchDemo.ts' && edge.resolvedPath === 'packages/presentation/components/types',
   },
   {
     id: 'ui-scenario-specs-src-import',
-    description: 'src/ui/src/scenarioSpecs imports packages/scenario-core/src/scenarioSpecs; migrate to package public exports with the rest of the scenario bridge.',
-    match: (edge) => edge.importer === 'src/ui/src/scenarioSpecs.ts' && edge.resolvedPath === 'packages/scenario-core/src/scenarioSpecs',
+    description: 'src/ui/src/scenarioSpecs imports packages/scenarios/core/src/scenarioSpecs; migrate to package public exports with the rest of the scenario bridge.',
+    match: (edge) => edge.importer === 'src/ui/src/scenarioSpecs.ts' && edge.resolvedPath === 'packages/scenarios/core/src/scenarioSpecs',
   },
   {
     id: 'ui-design-system-src-bridge',
-    description: 'src/ui/src/app/uiPrimitives imports packages/design-system/src; use @agi4sci/design-system or the package root export after aliases are settled.',
-    match: (edge) => edge.importer === 'src/ui/src/app/uiPrimitives.tsx' && edge.resolvedPath === 'packages/design-system/src',
+    description: 'src/ui/src/app/uiPrimitives imports packages/presentation/design-system/src; use @agi4sci/design-system or the package root export after aliases are settled.',
+    match: (edge) => edge.importer === 'src/ui/src/app/uiPrimitives.tsx' && edge.resolvedPath === 'packages/presentation/design-system/src',
   },
   {
     id: 'ui-workbench-renderer-entry',
@@ -104,7 +104,7 @@ async function main() {
       line: 1,
       resolvedPath: relative(root, sharedFile).replaceAll('\\', '/'),
       rule: 'legacy-src-shared-file',
-      message: 'src/shared is not a long-term boundary. Move shared contracts into packages/runtime-contract, runtime execution into src/runtime, and UI logic into src/ui.',
+      message: 'src/shared is not a long-term boundary. Move shared contracts into packages/contracts/runtime, runtime execution into src/runtime, and UI logic into src/ui.',
     });
   }
 
@@ -134,7 +134,7 @@ async function main() {
       console.error(`- ${finding.importer}:${finding.line} -> ${finding.specifier}`);
       console.error(`  ${finding.message}`);
     }
-    console.error('Move shared contracts into packages/runtime-contract, packages/scenario-core, or a package public export; move execution logic into src/runtime and UI logic into src/ui. Update the allowlist only for intentional temporary migrations.');
+    console.error('Move shared contracts into packages/contracts/runtime, packages/scenarios/core, or a package public export; move execution logic into src/runtime and UI logic into src/ui. Update the allowlist only for intentional temporary migrations.');
     process.exitCode = 1;
     return;
   }

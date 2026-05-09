@@ -223,7 +223,7 @@ try {
       command: 'python3',
       args: ['-m', 'sciforge_conversation.service'],
       timeoutMs: 5000,
-      pythonPath: join(process.cwd(), 'packages/conversation-policy-python/src'),
+      pythonPath: join(process.cwd(), 'packages/reasoning/conversation-policy/src'),
     },
   })).request;
   const digests = (digestRequest.uiState as Record<string, unknown>).currentReferenceDigests as Array<Record<string, unknown>>;

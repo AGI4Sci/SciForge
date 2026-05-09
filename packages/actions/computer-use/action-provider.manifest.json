@@ -14,8 +14,8 @@
     "package": "sciforge-computer-use",
     "module": "sciforge_computer_use",
     "symbol": "run_computer_use_task",
-    "path": "packages/computer-use",
-    "notes": "迁移期兼容入口。目标目录为 packages/actions/computer-use，但当前不移动旧测试入口。"
+    "path": "packages/actions/computer-use",
+    "notes": "Computer Use Python action loop、contract、safety 和 trace 的唯一物理真相源。"
   },
   "actionSchema": {
     "schemaRef": "sciforge.computer-use.request.v1",
@@ -135,4 +135,3 @@
     }
   ]
 }
-

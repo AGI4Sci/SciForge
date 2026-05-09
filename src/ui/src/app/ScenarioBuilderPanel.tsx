@@ -12,7 +12,7 @@ import {
   type ScenarioBuilderDraft,
   type ScenarioElementSelection,
   type ScenarioPackage,
-} from '../../../../packages/scenario-core';
+} from '../../../../packages/scenarios/core';
 import { saveWorkspaceScenario, publishWorkspaceScenario } from '../api/workspaceClient';
 import type { SciForgeConfig, ScenarioRuntimeOverride } from '../domain';
 import type { RuntimeHealthItem } from '../runtimeHealth';

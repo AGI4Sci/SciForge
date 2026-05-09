@@ -38,7 +38,7 @@ export function previewPackageAutoRunPrompt(reference: ObjectReference, path?: s
     }, null, 2)}`,
     ``,
     `实施要求：`,
-    `1. 先检查 packages/ui-components 下已有组件和 manifest，优先复用现有 package；不够再新增专门的 preview package。`,
+    `1. 先检查 packages/presentation/components 下已有组件和 manifest，优先复用现有 package；不够再新增专门的 preview package。`,
     `2. 新 package 要包含 manifest、必要的 renderer/README/test，并接入 UI registry 或现有 preview 分发链路。`,
     `3. 未能完整渲染时要给用户明确 unsupported 状态和 fallback 操作，不能让右侧面板空白或崩溃。`,
     `4. 完成后运行相关测试/类型检查，并再次尝试聚焦 ${target}，报告 preview 是否已可用。`,

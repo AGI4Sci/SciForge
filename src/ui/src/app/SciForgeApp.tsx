@@ -159,7 +159,7 @@ import { Dashboard } from './Dashboard';
 import { ResultsRenderer, previewPackageAutoRunPrompt } from './ResultsRenderer';
 import type { HandoffAutoRunRequest } from './results/viewPlanResolver';
 import { ScenarioBuilderPanel, defaultElementSelectionForScenario, scenarioPackageToOverride } from './ScenarioBuilderPanel';
-import { objectReferenceKindLabel } from '../../../../packages/object-references';
+import { objectReferenceKindLabel } from '../../../../packages/support/object-references';
 import { ChatPanel } from './ChatPanel';
 import { exportJsonFile, exportTextFile } from './exportUtils';
 import { RuntimeHealthPanel, useRuntimeHealth, type RuntimeHealthItem } from './runtimeHealthPanel';

@@ -8,7 +8,7 @@ Rules:
 
 - Output observations, traces, confidence, and failure diagnostics.
 - Keep raw modality payloads out of prompt context unless a contract explicitly allows bounded inline data.
-- Put shared observe contracts in `packages/runtime-contract/observe.ts`.
+- Put shared observe contracts in `packages/contracts/runtime/observe.ts`.
 - Put runtime provider selection and invocation orchestration in `src/runtime/observe`.
 - Put side-effecting execution in `packages/actions`, not here.
 

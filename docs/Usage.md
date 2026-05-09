@@ -64,7 +64,7 @@ UI 配置存于浏览器 `localStorage`，workspace writer 的本地配置可通
 
 ## 常用工作流
 
-场景工作台的内置 scenario 来自 [`../packages/scenario-core/src/scenarioSpecs.ts`](../packages/scenario-core/src/scenarioSpecs.ts)：
+场景工作台的内置 scenario 来自 [`../packages/scenarios/core/src/scenarioSpecs.ts`](../packages/scenarios/core/src/scenarioSpecs.ts)：
 
 - `literature-evidence-review`：文献证据评估。
 - `structure-exploration`：结构探索。
@@ -153,7 +153,7 @@ export SCIFORGE_VISION_DESKTOP_BRIDGE=1
 - `SCIFORGE_VISION_GROUNDER_LLM_API_KEY`
 - `SCIFORGE_VISION_GROUNDER_LLM_MODEL`
 
-详细能力边界和排障见 [`../packages/observe/vision/README.md`](../packages/observe/vision/README.md) 与 [`../packages/computer-use/README.md`](../packages/computer-use/README.md)。
+详细能力边界和排障见 [`../packages/observe/vision/README.md`](../packages/observe/vision/README.md) 与 [`../packages/actions/computer-use/README.md`](../packages/actions/computer-use/README.md)。
 
 ## Skill 晋升
 

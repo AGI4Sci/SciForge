@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildBuiltInScenarioPackage } from '../../packages/scenario-core/src/scenarioPackage.js';
+import { buildBuiltInScenarioPackage } from '../../packages/scenarios/core/src/scenarioPackage.js';
 
 const requiredDocs = [
   'docs/README.md',

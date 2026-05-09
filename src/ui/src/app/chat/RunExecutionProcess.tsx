@@ -5,7 +5,7 @@ import { ObjectReferenceChips } from './ReferenceChips';
 import {
   mergeObjectReferences,
   objectReferenceForArtifactSummary,
-} from '../../../../../packages/object-references';
+} from '../../../../../packages/support/object-references';
 
 type ExecutionProcessStep = {
   id: string;

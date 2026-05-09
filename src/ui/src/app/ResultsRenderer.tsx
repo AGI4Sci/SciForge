@@ -14,12 +14,12 @@ import {
   renderReportViewer,
   renderStructureViewer,
   type UIComponentRendererProps,
-} from '../../../../packages/ui-components';
+} from '../../../../packages/presentation/components';
 import {
   descriptorWithDiagnostic as packageDescriptorWithDiagnostic,
   mergePreviewDescriptors as packageMergePreviewDescriptors,
   shouldHydratePreviewDescriptor as packageShouldHydratePreviewDescriptor,
-} from '../../../../packages/artifact-preview';
+} from '../../../../packages/support/artifact-preview';
 import { exportJsonFile, exportTextFile } from './exportUtils';
 import { ActionButton, Badge, Card, ClaimTag, ConfidenceBar, EmptyArtifactState, EvidenceTag, SectionHeader, cx } from './uiPrimitives';
 import { ResultShell, type ResultFocusMode } from './results/ResultShell';
@@ -80,7 +80,7 @@ import {
   referenceForResultSlotLike,
   referenceForWorkspaceFileLike,
   withRegionLocator,
-} from '../../../../packages/object-references';
+} from '../../../../packages/support/object-references';
 
 function isBuiltInScenarioId(value: string): value is ScenarioId {
   return Object.prototype.hasOwnProperty.call(SCENARIO_SPECS, value);

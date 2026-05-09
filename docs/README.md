@@ -20,24 +20,24 @@
 - UI 到 runtime 的 handoff：[`../src/ui/src/api/sciforgeToolsClient.ts`](../src/ui/src/api/sciforgeToolsClient.ts)
 - Workspace writer API：[`../src/runtime/workspace-server.ts`](../src/runtime/workspace-server.ts)
 - Runtime gateway：[`../src/runtime/generation-gateway.ts`](../src/runtime/generation-gateway.ts)
-- Python conversation policy bridge：[`../src/runtime/conversation-policy/apply.ts`](../src/runtime/conversation-policy/apply.ts)、[`../packages/conversation-policy-python/src/sciforge_conversation`](../packages/conversation-policy-python/src/sciforge_conversation)
-- Scenario contracts：[`../packages/scenario-core/src`](../packages/scenario-core/src)
-- Capability registry：[`../packages/runtime-contract/capabilities.ts`](../packages/runtime-contract/capabilities.ts)
-- Observe ABI / verifier runtime ABI：[`../packages/runtime-contract/observe.ts`](../packages/runtime-contract/observe.ts)、[`../src/runtime/runtime-types.ts`](../src/runtime/runtime-types.ts)、[`../src/runtime/gateway/verification-policy.ts`](../src/runtime/gateway/verification-policy.ts)
-- Interactive view registry：[`../packages/ui-components/README.md`](../packages/ui-components/README.md)
+- Python conversation policy bridge：[`../src/runtime/conversation-policy/apply.ts`](../src/runtime/conversation-policy/apply.ts)、[`../packages/reasoning/conversation-policy/src/sciforge_conversation`](../packages/reasoning/conversation-policy/src/sciforge_conversation)
+- Scenario contracts：[`../packages/scenarios/core/src`](../packages/scenarios/core/src)
+- Capability registry：[`../packages/contracts/runtime/capabilities.ts`](../packages/contracts/runtime/capabilities.ts)
+- Observe ABI / verifier runtime ABI：[`../packages/contracts/runtime/observe.ts`](../packages/contracts/runtime/observe.ts)、[`../src/runtime/runtime-types.ts`](../src/runtime/runtime-types.ts)、[`../src/runtime/gateway/verification-policy.ts`](../src/runtime/gateway/verification-policy.ts)
+- Interactive view registry：[`../packages/presentation/components/README.md`](../packages/presentation/components/README.md)
 - Skill registry：[`../packages/skills/README.md`](../packages/skills/README.md)
 - Vision observe provider：[`../packages/observe/vision/README.md`](../packages/observe/vision/README.md)
-- Computer Use action loop：[`../packages/computer-use/README.md`](../packages/computer-use/README.md)
+- Computer Use action loop：[`../packages/actions/computer-use/README.md`](../packages/actions/computer-use/README.md)
 
 ## 当前状态
 
 SciForge 是活跃研发原型。当前实现重点是 workspace-backed 科研工作台、真实 AgentServer/backend 调用、结构化 artifact、可审计 ExecutionUnit、Python conversation-policy、多 backend 切换、vision-sense/Computer Use 通路、反馈收件箱和双实例互修。
 
-默认内置 4 个 scenario：文献证据评估、结构探索、组学差异分析、生物医学知识图谱。它们的真实 contract 来自 [`../packages/scenario-core/src/scenarioSpecs.ts`](../packages/scenario-core/src/scenarioSpecs.ts)，UI 中的页面配置来自 [`../src/ui/src/data.ts`](../src/ui/src/data.ts)。
+默认内置 4 个 scenario：文献证据评估、结构探索、组学差异分析、生物医学知识图谱。它们的真实 contract 来自 [`../packages/scenarios/core/src/scenarioSpecs.ts`](../packages/scenarios/core/src/scenarioSpecs.ts)，UI 中的页面配置来自 [`../src/ui/src/data.ts`](../src/ui/src/data.ts)。
 
 ## 维护规则
 
 - 不再新增项目级长文档。新内容优先合并到 `Usage.md`、`Architecture.md` 或 `Extending.md`；多轮对话算法细节继续沉淀到 `SciForgeConversationSessionRecovery.md`。
 - 文档描述字段、命令或协议时，必须指向代码真相源。
-- 模块专有细节留在模块目录，例如 `packages/ui-components/*/README.md` 或 observe provider 的 `vision_docs/`。
+- 模块专有细节留在模块目录，例如 `packages/presentation/components/*/README.md` 或 observe provider 的 `vision_docs/`。
 - 删除或重命名文档时，同步更新 README、代码里的 `detailRef` 和 smoke 测试。

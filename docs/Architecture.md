@@ -29,15 +29,15 @@ src/runtime/generation-gateway.ts
 src/runtime/gateway/*           AgentServer context、payload、repair、diagnostics 子模块
 src/runtime/conversation-policy/*
                                 TypeScript -> Python policy bridge
-packages/conversation-policy-python/
+packages/reasoning/conversation-policy/
                                 goal/context/memory/digest/capability/recovery 策略
-packages/scenario-core/         scenario package 与质量门禁
-packages/runtime-contract/      capability、observe、handoff、artifact、session 等共享 contract
+packages/scenarios/core/         scenario package 与质量门禁
+packages/contracts/runtime/      capability、observe、handoff、artifact、session 等共享 contract
 src/runtime/observe/            observe provider 选择与调用编排
-packages/ui-components/         interactive artifact view registry
+packages/presentation/components/         interactive artifact view registry
 packages/skills/                skill registry 与 package skills
 packages/observe/vision/   vision observe provider
-packages/computer-use/          sense-agnostic GUI action loop
+packages/actions/computer-use/          sense-agnostic GUI action loop
 ```
 
 ## Runtime 请求链路
@@ -73,7 +73,7 @@ flowchart LR
 
 职责边界：
 
-- Python 负责算法策略：任务分类、复杂度评分、不确定性判断、可复现等级、stage planning hints、repair/continuation 策略和可调 fixture 规则。实现入口是 `packages/conversation-policy-python/src/sciforge_conversation/execution_classifier.py`，测试入口是 `packages/conversation-policy-python/tests/test_execution_classifier.py`。
+- Python 负责算法策略：任务分类、复杂度评分、不确定性判断、可复现等级、stage planning hints、repair/continuation 策略和可调 fixture 规则。实现入口是 `packages/reasoning/conversation-policy/src/sciforge_conversation/execution_classifier.py`，测试入口是 `packages/reasoning/conversation-policy/tests/test_execution_classifier.py`。
 - TypeScript 负责 runtime execution shell：HTTP/stream transport、workspace project/stage 目录、生成代码落盘、命令执行、stdout/stderr/ref 持久化、backend tool stream 到 WorkEvidence 的通用字段适配、WorkEvidence/guidance guard 调用、UI 状态和 AgentServer 往返。TS 侧只读取 `executionModePlan` / `executionModeDecision` 的稳定字段，缺失时回退为 `unknown` / `backend-decides`，不得用 prompt regex 重新判定 execution mode。
 - AgentServer 负责理解任务、选择通用能力、生成当前 stage/task 代码或 patch/spec；多阶段模式下只生成下一阶段，不一次性展开整条 pipeline。
 - WorkEvidence 是执行事实的审计/恢复真相源；UI WorkEvent 可以从它投影摘要，但不替代它。
@@ -116,15 +116,15 @@ AgentServer 可以返回两类成功结果：
 - 算法参考：[`SciForgeConversationSessionRecovery.md`](SciForgeConversationSessionRecovery.md)
 - Bridge：[`../src/runtime/conversation-policy/python-bridge.ts`](../src/runtime/conversation-policy/python-bridge.ts)
 - TS request/response contract：[`../src/runtime/conversation-policy/contracts.ts`](../src/runtime/conversation-policy/contracts.ts)
-- Python contract：[`../packages/conversation-policy-python/src/sciforge_conversation/contracts.py`](../packages/conversation-policy-python/src/sciforge_conversation/contracts.py)
-- Python service：[`../packages/conversation-policy-python/src/sciforge_conversation/service.py`](../packages/conversation-policy-python/src/sciforge_conversation/service.py)
+- Python contract：[`../packages/reasoning/conversation-policy/src/sciforge_conversation/contracts.py`](../packages/reasoning/conversation-policy/src/sciforge_conversation/contracts.py)
+- Python service：[`../packages/reasoning/conversation-policy/src/sciforge_conversation/service.py`](../packages/reasoning/conversation-policy/src/sciforge_conversation/service.py)
 
 环境变量：
 
 - `SCIFORGE_CONVERSATION_POLICY_MODE=active|off`，默认 `active`。
 - `SCIFORGE_CONVERSATION_POLICY_PYTHON`，默认 `python3`。
 - `SCIFORGE_CONVERSATION_POLICY_MODULE`，默认 `sciforge_conversation.service`。
-- `SCIFORGE_CONVERSATION_POLICY_PYTHONPATH`，默认 `packages/conversation-policy-python/src`。
+- `SCIFORGE_CONVERSATION_POLICY_PYTHONPATH`，默认 `packages/reasoning/conversation-policy/src`。
 - `SCIFORGE_CONVERSATION_POLICY_TIMEOUT_MS`，默认 3500ms。
 
 Policy response 会写回 `GatewayRequest.uiState`：
@@ -217,7 +217,7 @@ npx tsx tests/smoke/smoke-agentserver-handoff-current-turn.ts
 npx tsx tests/smoke/smoke-t096-work-evidence-provider-fixtures.ts
 npx tsx tests/smoke/smoke-t097-execution-mode-matrix.ts
 npx tsx tests/smoke/smoke-task-attempt-api.ts
-python3 -m pytest packages/conversation-policy-python/tests
+python3 -m pytest packages/reasoning/conversation-policy/tests
 ```
 
 更宽的 runtime 回归建议：

@@ -16,7 +16,7 @@ import type {
   UserGoalSnapshot,
 } from '../../domain';
 import { makeId, nowIso } from '../../domain';
-import { mergeObjectReferences } from '../../../../../packages/object-references';
+import { mergeObjectReferences } from '../../../../../packages/support/object-references';
 
 const BACKGROUND_COMPLETION_CONTRACT = 'sciforge.background-completion.v1';
 

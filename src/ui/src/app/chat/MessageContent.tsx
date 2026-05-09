@@ -5,7 +5,7 @@ import {
   objectReferenceForArtifactSummary,
   referenceForObjectReference,
   sciForgeReferenceAttribute,
-} from '../../../../../packages/object-references';
+} from '../../../../../packages/support/object-references';
 
 export function MessageContent({
   content,

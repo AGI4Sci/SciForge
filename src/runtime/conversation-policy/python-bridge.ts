@@ -29,7 +29,7 @@ export function conversationPolicyBridgeConfig(env: NodeJS.ProcessEnv = process.
   const moduleName = env.SCIFORGE_CONVERSATION_POLICY_MODULE || DEFAULT_POLICY_MODULE;
   const timeout = Number(env.SCIFORGE_CONVERSATION_POLICY_TIMEOUT_MS || '');
   const pythonPath = env.SCIFORGE_CONVERSATION_POLICY_PYTHONPATH
-    || resolve(process.cwd(), 'packages/conversation-policy-python/src');
+    || resolve(process.cwd(), 'packages/reasoning/conversation-policy/src');
   return {
     mode,
     command,

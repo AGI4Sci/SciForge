@@ -12,7 +12,7 @@ import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { parseJsonErrorMessage, redactSecretText, sanitizeAgentServerError } from './backend-failure-diagnostics.js';
 import { toolPackageManifests } from '../../../packages/skills/tool_skills';
-import { uiComponentManifests } from '../../../packages/ui-components';
+import { uiComponentManifests } from '../../../packages/presentation/components';
 import { defaultCapabilitySummaries } from '@sciforge-ui/runtime-contract/capabilities';
 
 const AGENT_BACKEND_ANSWER_PRINCIPLE = [

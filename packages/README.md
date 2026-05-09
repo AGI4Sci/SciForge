@@ -23,36 +23,36 @@
 - `observe`：observe 层。输入是 `instruction + 其它模态`，输出是可审计 `text-response`，例如视觉摘要、OCR、区域描述、坐标、置信度和失败边界。Observe 不产生副作用。
 - `actions`：action 层。对环境产生影响的执行 provider，例如 Computer Use、浏览器沙箱、远程桌面、文件编辑、notebook/kernel 或未来实验设备动作。
 - `verifiers`：verify 层。输入是 result、trace、artifact、环境状态和验证 instruction，输出 verdict、reward、critique、evidence refs、repair hints 和 confidence；provider 可以是人类、其它 agent、规则测试、schema、环境观察或 simulator。
-- `ui-components`：interactive views/renderers。面向用户和 agent 呈现 artifact 数据，并暴露鼠标、键盘、对象引用、事件和代码交互边界；它们不是 action provider。
+- `presentation/components`：interactive views/renderers。面向用户和 agent 呈现 artifact 数据，并暴露鼠标、键盘、对象引用、事件和代码交互边界；它们不是 action provider。
 - `runtime-contract`：运行时共享契约。
-- `scenario-core`：scenario 编译与校验基础能力。
-- `design-system`：可复用 UI primitives 和 tokens。
+- `scenarios/core`：scenario 编译与校验基础能力。
+- `presentation/design-system`：可复用 UI primitives 和 tokens。
 - `artifact-preview`：artifact 预览辅助能力。
 - `object-references`：object reference 辅助能力。
 
 ## 单一真相源
 
-- Computer Use 的 Python action loop、contract、safety 和 trace 实现保留在 `packages/computer-use`；`packages/actions/computer-use` 只保存 action provider manifest 和 safety/approval 发现信息。runtime 只能把它作为 action provider 接入，不应复制 loop 或 safety policy。
+- Computer Use 的 Python action loop、contract、safety、trace 和 action provider manifest 都保留在 `packages/actions/computer-use`。runtime 只能把它作为 action provider 接入，不应复制 loop 或 safety policy。
 - Vision observe 的 provider 实现和 pytest 保留在 `packages/observe/vision`；`src/runtime/vision-sense` 只做 SciForge Gateway adapter、workspace refs、runtime event 和 guard 接入。能力 id 可继续兼容 `local.vision-sense`。
-- Interactive renderer registry 的当前真相源仍是 `packages/ui-components`；`packages/interactive-views` 是语义化别名和未来迁移目标。`packages/design-system` 只提供低层 primitives/tokens，不承载 artifact renderer registry。
-- Runtime/UI/Package 共享协议的真相源是 `packages/runtime-contract`。`packages/artifact-preview` 和 `packages/object-references` 只保留便捷 helper、normalizer 和转换函数；若发现纯 contract 类型，应上移到 `runtime-contract` 后再由 helper 消费。
+- Interactive renderer registry 的当前真相源仍是 `packages/presentation/components`；`packages/presentation/interactive-views` 是语义化别名和未来迁移目标。`packages/presentation/design-system` 只提供低层 primitives/tokens，不承载 artifact renderer registry。
+- Runtime/UI/Package 共享协议的真相源是 `packages/contracts/runtime`。`packages/support/artifact-preview` 和 `packages/support/object-references` 只保留便捷 helper、normalizer 和转换函数；若发现纯 contract 类型，应上移到 `runtime-contract` 后再由 helper 消费。
 - `SKILL.md` 面向 agent 的能力入口统一进入 `packages/skills/*_skills`；真实副作用执行器必须落在 `packages/actions` 或 runtime adapter 中，并通过 action contract 暴露 approval、trace、sandbox、rollback 和 safety guard。
 
 正式长期组织方式是 contract-reason-skill-observe-action-verify-present 闭环：
 
 ```text
-packages/runtime-contract/  stable shared contracts
+packages/contracts/runtime/  stable shared contracts
 packages/skills/            SKILL.md-facing abilities and catalogs
 packages/observe/           observe: instruction + modality -> text-response
 packages/actions/           environment-changing action providers
 packages/verifiers/         result/trace/artifact/state -> verdict/reward/critique
-packages/ui-components/ or packages/interactive-views/
+packages/presentation/components/ or packages/presentation/interactive-views/
                             artifact presentation and interactive data surfaces
 ```
 
 Verify 是闭环的必要阶段，但 verifier 的类型和强度可按风险选择。低风险草稿可以使用轻量规则或标记为 `unverified`；高风险动作、科研结论、外部副作用和发布类任务必须有明确 verifier 或 human approval。
 
-`packages/ui-components` 当前名称保留以兼容现有 registry。`packages/interactive-views` 已作为非破坏性别名和长期迁移目标加入；它重新导出同一批 manifests，不移动 renderer，也不改变 component registry 真相源。未来如真实迁移目录，必须继续保留 `packages/ui-components` 的 registry、componentId、alias 和 renderer 兼容导出。
+`packages/presentation/components` 保留 `@sciforge-ui/components` package name、componentId、alias 和 renderer 兼容导出。`packages/presentation/interactive-views` 是语义化别名；它重新导出同一批 manifests，不改变 component registry 真相源。
 
 ## 集成原则
 
@@ -68,9 +68,9 @@ agent 应先接收紧凑的 capability brief，然后只懒加载被选中 packa
 
 ## Owner Note
 
-`packages/*` 是跨 UI、runtime 和 workspace 复用的能力边界。新增 package 代码不能 import `src/ui/src/**` 或 `src/runtime/**` 私有文件；如果需要共享 domain、artifact、object reference、verification 或 UI manifest 类型，先把契约提升到 `packages/runtime-contract`、`packages/scenario-core` 或当前 package 的 public export。
+`packages/*` 是跨 UI、runtime 和 workspace 复用的能力边界。新增 package 代码不能 import `src/ui/src/**` 或 `src/runtime/**` 私有文件；如果需要共享 domain、artifact、object reference、verification 或 UI manifest 类型，先把契约提升到 `packages/contracts/runtime`、`packages/scenarios/core` 或当前 package 的 public export。
 
-`src/shared` 不是长期边界。共享协议进入 `packages/runtime-contract` 或后续 `packages/contracts`；执行逻辑进入 `src/runtime`；界面逻辑进入 `src/ui`。
+`src/shared` 不是长期边界。共享协议进入 `packages/contracts/runtime` 或后续 `packages/contracts`；执行逻辑进入 `src/runtime`；界面逻辑进入 `src/ui`。
 
 UI app 侧也应通过 package root 或 package.json 明确 export 的 subpath 使用能力，避免相对路径深 import package `src` internals。边界检查命令：
 
@@ -83,7 +83,7 @@ npm run smoke:module-boundaries
 新增 package 或 skill 前先复制并裁剪模板：
 
 ```text
-packages/templates/package-scaffold/
+packages/support/templates/package-scaffold/
 ```
 
 模板要求新增包显式声明 lifecycle layer、skill-facing 边界、副作用等级、public contract 和 runtime adapter 关系；这和 `npm run smoke:module-boundaries` 使用的是同一套组织原则。

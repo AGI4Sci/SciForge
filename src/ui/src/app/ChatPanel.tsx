@@ -46,9 +46,9 @@ import {
   uploadedInlinePolicyForFileLike as uploadedInlinePolicy,
   uploadedLocatorHintsForFileLike as uploadedLocatorHints,
   uploadedPreviewActionsForFileLike as uploadedPreviewActions,
-} from '../../../../packages/object-references';
+} from '../../../../packages/support/object-references';
 
-export { objectReferenceKindLabel } from '../../../../packages/object-references';
+export { objectReferenceKindLabel } from '../../../../packages/support/object-references';
 
 interface HandoffAutoRunRequest {
   id: string;

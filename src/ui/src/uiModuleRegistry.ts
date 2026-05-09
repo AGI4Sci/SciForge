@@ -5,7 +5,7 @@ import {
   uiComponentManifests,
   type PresentationDedupeScope,
   type UIComponentManifest,
-} from '../../../packages/ui-components';
+} from '../../../packages/presentation/components';
 
 export type { PresentationDedupeScope };
 export type RuntimeUIModule = UIComponentManifest;
@@ -29,7 +29,7 @@ function compatibilityAliasModule(alias: typeof uiComponentCompatibilityAliases[
       ...(alias.legacyComponentId === 'volcano-plot' ? ['generic-data-table'] : []),
     ])),
     docs: {
-      readmePath: target?.docs.readmePath ?? 'packages/ui-components/README.md',
+      readmePath: target?.docs.readmePath ?? 'packages/presentation/components/README.md',
       agentSummary: `${alias.legacyComponentId} is a compatibility alias for ${alias.routeComponentId}.`,
     },
   };

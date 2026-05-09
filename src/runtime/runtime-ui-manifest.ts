@@ -1,6 +1,6 @@
 import type { GatewayRequest } from './runtime-types.js';
 import { selectedComponentIdsForRequest } from './gateway/gateway-request.js';
-import { normalizeUIComponentId, uiComponentCompatibilityAliases, uiComponentManifests } from '../../packages/ui-components';
+import { normalizeUIComponentId, uiComponentCompatibilityAliases, uiComponentManifests } from '../../packages/presentation/components';
 
 const REGISTERED_COMPONENTS = new Set([
   ...uiComponentManifests.map((manifest) => manifest.componentId),

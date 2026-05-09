@@ -1,2 +1,0 @@
-import type { UIComponentRendererProps } from '@sciforge-ui/runtime-contract';
-export const selectionStructureViewerFixture: UIComponentRendererProps = { slot: { componentId: 'structure-viewer', props: { highlightSelection: ['A:22'] } }, artifact: { id: 'structure-selection', type: 'structure-3d', producerScenario: 'structure-preview', schemaVersion: '0.1.0', dataRef: 'packages/ui-components/structure-viewer/workbench-demo/1crn.cif', data: { pdbId: '1CRN', highlightResidues: ['A:22'] } } };

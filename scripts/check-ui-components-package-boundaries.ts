@@ -3,8 +3,8 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import { dirname, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { uiComponentManifests } from '../packages/ui-components';
-import type { UIComponentManifest } from '../packages/ui-components';
+import { uiComponentManifests } from '../packages/presentation/components';
+import type { UIComponentManifest } from '../packages/presentation/components';
 
 type PackageJson = {
   name?: string;
@@ -24,7 +24,7 @@ type Finding = {
 type Severity = 'error' | 'warn';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const uiRoot = join(repoRoot, 'packages/ui-components');
+const uiRoot = join(repoRoot, 'packages/presentation/components');
 const aggregatePackageJson = await readPackageJson('@sciforge-ui/components', uiRoot);
 const componentDirNames = await discoverComponentDirs();
 const exportedManifestIds = new Set(uiComponentManifests.map((manifest) => manifest.componentId));
@@ -46,7 +46,7 @@ for (const component of componentDirNames) {
 
   if (manifest) {
     if (!exportedManifestIds.has(component)) {
-      report(component, 'manifest.ts is not exported from packages/ui-components/index.ts', publicationSeverity(manifest));
+      report(component, 'manifest.ts is not exported from packages/presentation/components/index.ts', publicationSeverity(manifest));
     }
     if (packageJson?.name !== manifest.packageName) {
       report(component, `package.json name must match manifest packageName (${manifest.packageName})`, publicationSeverity(manifest));
@@ -60,8 +60,8 @@ for (const component of componentDirNames) {
     if (!declaresDependency(packageJson, '@sciforge-ui/runtime-contract')) {
       report(component, 'package.json must declare @sciforge-ui/runtime-contract as a dependency or peerDependency', publicationSeverity(manifest));
     }
-    if (manifest.docs?.readmePath !== `packages/ui-components/${component}/README.md`) {
-      report(component, `manifest docs.readmePath should be packages/ui-components/${component}/README.md`, publicationSeverity(manifest));
+    if (manifest.docs?.readmePath !== `packages/presentation/components/${component}/README.md`) {
+      report(component, `manifest docs.readmePath should be packages/presentation/components/${component}/README.md`, publicationSeverity(manifest));
     }
   }
 

@@ -9,7 +9,7 @@ import {
   referenceComposerMarker,
   referenceForObjectReference,
   sciForgeReferenceAttribute,
-} from '../../../../../packages/object-references';
+} from '../../../../../packages/support/object-references';
 
 export function ObjectReferenceChips({
   references,

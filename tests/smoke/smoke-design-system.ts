@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const packageJson = JSON.parse(readFileSync(new URL('../../packages/design-system/package.json', import.meta.url), 'utf8')) as {
+const packageJson = JSON.parse(readFileSync(new URL('../../packages/presentation/design-system/package.json', import.meta.url), 'utf8')) as {
   exports: Record<string, string>;
 };
-const themeCss = readFileSync(new URL('../../packages/design-system/theme.css', import.meta.url), 'utf8');
-const componentsCss = readFileSync(new URL('../../packages/design-system/components.css', import.meta.url), 'utf8');
+const themeCss = readFileSync(new URL('../../packages/presentation/design-system/theme.css', import.meta.url), 'utf8');
+const componentsCss = readFileSync(new URL('../../packages/presentation/design-system/components.css', import.meta.url), 'utf8');
 const baseCss = readFileSync(new URL('../../src/ui/src/styles/base.css', import.meta.url), 'utf8');
 const appCss = readFileSync(new URL('../../src/ui/src/styles/app.css', import.meta.url), 'utf8');
 
@@ -39,7 +39,7 @@ for (const selector of ['.card', '.panel', '.badge', '.icon-button', '.action-bu
   assert.match(componentsCss, new RegExp(selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 }
 
-assert.match(baseCss, /@import '..\/..\/..\/..\/packages\/design-system\/theme\.css';/);
-assert.match(appCss, /@import '..\/..\/..\/..\/packages\/design-system\/components\.css';/);
+assert.match(baseCss, /@import '..\/..\/..\/..\/packages\/presentation\/design-system\/theme\.css';/);
+assert.match(appCss, /@import '..\/..\/..\/..\/packages\/presentation\/design-system\/components\.css';/);
 
 console.log('design-system package smoke passed');

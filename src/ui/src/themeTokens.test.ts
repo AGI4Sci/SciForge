@@ -12,7 +12,7 @@ function readStyle(name: string) {
 }
 
 function readDesignSystemStyle(name: string) {
-  return readFileSync(new URL(`../../../packages/design-system/${name}`, import.meta.url), 'utf8');
+  return readFileSync(new URL(`../../../packages/presentation/design-system/${name}`, import.meta.url), 'utf8');
 }
 
 test('theme stylesheet exposes semantic dark and light tokens', () => {
@@ -37,7 +37,7 @@ test('theme stylesheet exposes semantic dark and light tokens', () => {
     assert.match(theme, new RegExp(`${token}:`), `${token} should be defined`);
   }
 
-  assert.match(base, /@import '..\/..\/..\/..\/packages\/design-system\/theme\.css';/);
+  assert.match(base, /@import '..\/..\/..\/..\/packages\/presentation\/design-system\/theme\.css';/);
   assert.match(theme, /:root,\s*\.theme-dark\s*{/);
   assert.match(theme, /:root:has\(\.theme-light\),\s*\.theme-light\s*{/);
   assert.match(theme, /--surface:\s*rgba\(255,\s*255,\s*255,\s*0\.88\)/);
@@ -48,7 +48,7 @@ test('light theme override layer is loaded and covers core app surfaces', () => 
   const app = readStyle('app.css');
   const theme = readStyle('theme-overrides.css');
 
-  assert.match(app, /@import '..\/..\/..\/..\/packages\/design-system\/components\.css';/);
+  assert.match(app, /@import '..\/..\/..\/..\/packages\/presentation\/design-system\/components\.css';/);
   assert.match(app, /@import '\.\/theme-overrides\.css';/);
   for (const selector of [
     '.theme-light .sidebar',

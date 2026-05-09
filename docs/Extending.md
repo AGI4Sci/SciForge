@@ -6,7 +6,7 @@
 
 ## Scenario Package
 
-Scenario package 的主类型在 [`../packages/scenario-core/src/scenarioPackage.ts`](../packages/scenario-core/src/scenarioPackage.ts)：
+Scenario package 的主类型在 [`../packages/scenarios/core/src/scenarioPackage.ts`](../packages/scenarios/core/src/scenarioPackage.ts)：
 
 ```ts
 interface ScenarioPackage {
@@ -49,11 +49,11 @@ writer 支持两种读取格式：
 
 相关实现：
 
-- 内置 specs：[`../packages/scenario-core/src/scenarioSpecs.ts`](../packages/scenario-core/src/scenarioSpecs.ts)
-- Skill plan compiler：[`../packages/scenario-core/src/skillPlanCompiler.ts`](../packages/scenario-core/src/skillPlanCompiler.ts)
-- UI plan compiler：[`../packages/scenario-core/src/uiPlanCompiler.ts`](../packages/scenario-core/src/uiPlanCompiler.ts)
-- Validation gate：[`../packages/scenario-core/src/validationGate.ts`](../packages/scenario-core/src/validationGate.ts)
-- Quality gate：[`../packages/scenario-core/src/scenarioQualityGate.ts`](../packages/scenario-core/src/scenarioQualityGate.ts)
+- 内置 specs：[`../packages/scenarios/core/src/scenarioSpecs.ts`](../packages/scenarios/core/src/scenarioSpecs.ts)
+- Skill plan compiler：[`../packages/scenarios/core/src/skillPlanCompiler.ts`](../packages/scenarios/core/src/skillPlanCompiler.ts)
+- UI plan compiler：[`../packages/scenarios/core/src/uiPlanCompiler.ts`](../packages/scenarios/core/src/uiPlanCompiler.ts)
+- Validation gate：[`../packages/scenarios/core/src/validationGate.ts`](../packages/scenarios/core/src/validationGate.ts)
+- Quality gate：[`../packages/scenarios/core/src/scenarioQualityGate.ts`](../packages/scenarios/core/src/scenarioQualityGate.ts)
 
 发布会被以下情况阻止：
 
@@ -63,7 +63,7 @@ writer 支持两种读取格式：
 
 ## Capability Brief
 
-能力分为 5 类，类型真相源在 `packages/runtime-contract/capabilities.ts`：
+能力分为 5 类，类型真相源在 `packages/contracts/runtime/capabilities.ts`：
 
 - `observe`：只读观察能力，例如 vision、OCR、网页/文件观察。
 - `reasoning`：确定性策略或 planner，例如 conversation policy。
@@ -81,7 +81,7 @@ writer 支持两种读取格式：
 
 ## Observe Contract
 
-Observe ABI 真相源是 `packages/runtime-contract/observe.ts`。稳定字段：
+Observe ABI 真相源是 `packages/contracts/runtime/observe.ts`。稳定字段：
 
 - observe provider capability brief
 - observe request
@@ -105,13 +105,13 @@ Action 是会改变外部环境的能力。当前主要落地：
 - workspace task runner：[`../src/runtime/workspace-task-runner.ts`](../src/runtime/workspace-task-runner.ts)
 - workspace writer file/open APIs：[`../src/runtime/workspace-server.ts`](../src/runtime/workspace-server.ts)
 - repair handoff runner：[`../src/runtime/repair-handoff-runner.ts`](../src/runtime/repair-handoff-runner.ts)
-- Computer Use action loop：[`../packages/computer-use/README.md`](../packages/computer-use/README.md)
+- Computer Use action loop：[`../packages/actions/computer-use/README.md`](../packages/actions/computer-use/README.md)
 
 Action 必须记录副作用边界、输入输出 refs、stdout/stderr、失败原因、可恢复动作和 verifier 需要的证据。
 
 ## Verifier Contract
 
-Verifier runtime ABI 真相源是 [`../src/runtime/runtime-types.ts`](../src/runtime/runtime-types.ts)，runtime gate 与 normalization 真相源分别是 [`../src/runtime/gateway/verification-policy.ts`](../src/runtime/gateway/verification-policy.ts) 和 [`../src/runtime/gateway/verification-results.ts`](../src/runtime/gateway/verification-results.ts)。handoff payload 里只保留轻量 policy snapshot，目标真相源是 `packages/runtime-contract/handoff-payload.ts`。
+Verifier runtime ABI 真相源是 [`../src/runtime/runtime-types.ts`](../src/runtime/runtime-types.ts)，runtime gate 与 normalization 真相源分别是 [`../src/runtime/gateway/verification-policy.ts`](../src/runtime/gateway/verification-policy.ts) 和 [`../src/runtime/gateway/verification-results.ts`](../src/runtime/gateway/verification-results.ts)。handoff payload 里只保留轻量 policy snapshot，目标真相源是 `packages/contracts/runtime/handoff-payload.ts`。
 
 - `VerificationPolicy`
 - `VerificationResult`
@@ -133,7 +133,7 @@ Provider kind 包括 `human`、`agent`、`rule`、`schema`、`test`、`environme
 
 新增代码默认落点：
 
-- `packages/*` 放可复用 capability、renderer、contract 和 skill。它们不能 import `src/ui/src/**`、`src/runtime/**` 或 `src/shared/**` 私有文件；共享类型先放到 `packages/runtime-contract`、`packages/scenario-core` 或包自己的 public export。
+- `packages/*` 放可复用 capability、renderer、contract 和 skill。它们不能 import `src/ui/src/**`、`src/runtime/**` 或 `src/shared/**` 私有文件；共享类型先放到 `packages/contracts/runtime`、`packages/scenarios/core` 或包自己的 public export。
 - `packages/skills/**` 放 `SKILL.md` 面向 agent 的能力入口。单步工具型 skill 放 `packages/skills/tool_skills`，多步流程放 `pipeline_skills`，领域方法放 `domain_skills`，skill 自进化/调试放 `meta_skills`。
 - `packages/observe/**` 放只读观察能力；旧 `packages/senses/**` 不再作为新增能力落点。
 - `packages/actions/**` 放有副作用的真实执行 provider，必须承载 approval、trace、sandbox、rollback 和 safety guard。
@@ -151,7 +151,7 @@ npm run smoke:module-boundaries
 
 ## UIManifest 与 View Composition
 
-UIManifest slot 类型在 [`../packages/scenario-core/src/contracts.ts`](../packages/scenario-core/src/contracts.ts)。核心字段：
+UIManifest slot 类型在 [`../packages/scenarios/core/src/contracts.ts`](../packages/scenarios/core/src/contracts.ts)。核心字段：
 
 ```ts
 interface UIManifestSlot {
@@ -178,7 +178,7 @@ runtime 会在 [`../src/runtime/runtime-ui-manifest.ts`](../src/runtime/runtime-
 - 都没有时使用 domain default components。
 - `execution-unit-table` 默认会加入，除非 prompt 明确否定。
 
-Renderer 真相源在 [`../packages/ui-components/README.md`](../packages/ui-components/README.md)。新增或修改 renderer 时：
+Renderer 真相源在 [`../packages/presentation/components/README.md`](../packages/presentation/components/README.md)。新增或修改 renderer 时：
 
 - 每个组件包至少有 `package.json`、`manifest.ts`、`README.md`。
 - 推荐有 `render.tsx`、`fixtures/`、`render.test.tsx`。
