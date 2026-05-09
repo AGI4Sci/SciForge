@@ -50,20 +50,26 @@ Todo：
 - [ ] `src -> packages` P0：迁移 `src/runtime/computer-use/**` 的 action provider 语义到 `packages/actions/computer-use`；`src` 只保留 gateway config、workspace refs、event emission 和 host bridge adapter。
 - [ ] `src -> packages` P0：迁移 `src/runtime/vision-sense/**` 中 planner、grounding、focus refinement、semantic verifier feedback、trace policy 到 `packages/observe/vision`；会修改 GUI 的执行部分通过 `packages/actions/computer-use` 暴露。
 - [x] `src -> packages` P0：删除或迁移 `src/runtime/capability-profiles.ts`，统一到 `packages/scenarios/core/src/runtimeCapabilityProfiles.ts` 或 `packages/contracts/runtime/capabilities.ts`，避免重复 capability profile 真相源。
-- [ ] `src -> packages` P1：迁移 `src/runtime/runtime-ui-manifest.ts` 中 renderer aliases、domain defaults、artifact-to-component routing、title/layout/encoding inference 到 `packages/presentation/interactive-views` 或 scenario UI policy；`src` 只保留 composition adapter。
+- [x] `src -> packages` P1：迁移 `src/runtime/runtime-ui-manifest.ts` 中 renderer aliases、domain defaults、artifact-to-component routing、title/layout/encoding inference 到 `packages/presentation/interactive-views`；`src` 只保留 composition adapter。
 - [ ] `src -> packages` P1：迁移 `src/ui/src/uiModuleRegistry.ts` 中 component manifest alias/index 构造到 `packages/presentation/components` 或 `packages/presentation/interactive-views` public export；UI 只消费 package registry。
 - [ ] `src -> packages` P1：迁移 `src/ui/src/artifactIntent.ts`、`src/ui/src/app/results/viewPlanResolver.ts` 中 artifact/component/domain ranking 和 prompt/domain regex 到 scenario/view capability policy。
   进展：`viewPlanResolver.ts` 已删除 artifact type regex ranking，required artifact type 改为 exact match，并优先 backend `displayIntent` / `UIManifest`。
-- [ ] `src -> packages` P1：迁移 `src/runtime/skill-markdown-catalog.ts` 和 `src/runtime/skill-registry/runtime-matching.ts` 中 SKILL.md catalog、domain/provider scoring、SCP/PubMed/BLAST/UniProt/ChemBL 等技能匹配语义到 `packages/skills` 或 capability broker package。
+- [ ] `src -> packages` P1：迁移 `src/runtime/skill-markdown-catalog.ts` 中 SKILL.md catalog、domain/provider scoring 和 output inference 到 `packages/skills` 或 capability broker package。
+- [x] `src -> packages` P1：迁移 `src/runtime/skill-registry/runtime-matching.ts` 中 SCP/PubMed/BLAST/UniProt/ChemBL 等技能匹配 scoring/gating 语义到 `packages/skills/matching-policy.ts`；`src` 只保留 runtime filtering/sorting adapter。
 - [ ] `src -> packages` P1：迁移 `src/runtime/gateway/work-evidence-types.ts`、`backend-tool-work-evidence-adapter.ts`、`work-evidence-guard.ts`、`verification-results.ts` 中可复用 WorkEvidence contract、provider event normalization 和 verifier rules 到 `packages/contracts/runtime`、`packages/support/work-evidence` 或 `packages/verifiers`；gateway 只保留调用和 fail-closed enforcement。
 - [ ] `src -> packages` P2：拆分 `src/runtime/gateway/verification-policy.ts`，policy/result contract 和 verifier semantics 进入 packages，workspace 写入和 runtime gating 留在 `src`。
 - [ ] `src -> packages` P2：评估 `src/runtime/conversation-policy/contracts.ts`，纯 TS/Python contract 可迁入 `packages/contracts/runtime` 或 owner package；`python-bridge.ts`、`apply.ts` 继续留在 `src`。
-- [ ] `packages -> src` P0：迁移 `packages/reasoning/conversation-policy/src/sciforge_conversation/service.py`、`execution_classifier.py`、`context_policy.py`、`memory.py`、`recovery.py`、`acceptance.py` 到 `src/runtime/conversation-policy` ownership；这是平台 turn lifecycle，不是可插拔能力。
+- [ ] `packages -> src` P0：继续收敛 `packages/reasoning/conversation-policy/src/sciforge_conversation/service.py` 剩余 turn composition ownership；当前已删除 direct reference digest import 和 workspace-ref audit 语义，`smoke:fixed-platform-boundary` 已清零。
+- [x] `packages -> src` P0：迁移 `acceptance.py` output acceptance gate 到 `src/runtime/gateway/conversation-acceptance-policy.ts`，Python 侧只保留兼容 bridge。
+- [x] `packages -> src` P0：迁移 `execution_classifier.py` execution mode / risk / stage hint lifecycle 到 `src/runtime/gateway/conversation-execution-classifier.ts`，Python 侧只保留兼容 bridge 和 dataclass API。
+- [x] `packages -> src` P0：迁移 `context_policy.py` context reuse / isolation / repair scope lifecycle 到 `src/runtime/gateway/conversation-context-policy.ts`，Python 侧只保留兼容 bridge。
+- [x] `packages -> src` P0：迁移 `memory.py` bounded current-context memory planning 到 `src/runtime/gateway/conversation-memory-policy.ts`，Python 侧只保留兼容 bridge。
+- [x] `packages -> src` P0：迁移 `recovery.py` failure recovery / retry budget / digest recovery lifecycle 到 `src/runtime/gateway/conversation-recovery-policy.ts`，Python 侧只保留兼容 bridge。
 - [x] `packages -> src` P0：迁移 `cache_policy.py` artifact reuse lifecycle 到 `src/runtime/gateway/conversation-cache-policy.ts`，Python 侧只保留兼容 bridge。
 - [x] `packages -> src` P0：迁移 `latency_policy.py` turn latency lifecycle 到 `src/runtime/gateway/conversation-latency-policy.ts`，Python 侧只保留兼容 bridge。
 - [x] `packages -> src` P0：迁移 `response_plan.py` response/background completion lifecycle 到 `src/runtime/gateway/conversation-response-plan.ts`，Python 侧只保留兼容 bridge。
 - [x] `packages -> src` P0：迁移 `packages/reasoning/conversation-policy/src/sciforge_conversation/capability_broker.py` 的 broker shell/main flow 到 `src/runtime/capability-broker`；Python 侧只保留兼容 brief envelope bridge，packages 只提供 manifests 和 schemas。
-- [ ] `packages -> src` P0：迁移 `handoff_planner.py` 到 `src/runtime/gateway`，因为它处理 handoff budget、safe file IO、workspace refs 和 artifact persistence lifecycle。
+- [x] `packages -> src` P0：迁移 `handoff_planner.py` 到 `src/runtime/gateway/conversation-handoff-planner.ts`，因为它处理 handoff budget、safe file IO、workspace refs 和 artifact persistence lifecycle；Python 侧只保留兼容 bridge。
 - [x] `packages -> src` P0：迁移 `reference_digest.py` 的 meaningful lifecycle 到 `src/runtime/gateway/conversation-reference-digest.ts`，Python 侧只保留兼容 bridge。
 - [x] `packages -> src` P0：迁移 `artifact_index.py` 的 clickable refs、workspace path metadata、hash/size、execution refs、digest refs、pathRefs 摘要和 dedupe 到 `src/runtime/gateway/conversation-artifact-index.ts`，Python 侧只保留兼容 bridge。
 - [x] `packages -> src` P1：迁移 `process_events.py` 的 stream/process event normalization 到 `src/runtime/gateway/workspace-event-normalizer.ts`，删除 Python 侧重复路径。
@@ -86,7 +92,7 @@ Todo：
 - [x] 更新 `docs/Extending.md` 和 `packages/README.md`：新增模块应先判断属于平台秩序还是能力语义，再选择 `src/` 或 `packages/`。
 - [ ] 删除与该边界冲突的旧 registry、旧 adapter 和旧 direct import。
 
-进度备注：`smoke:fixed-platform-boundary` 当前剩余 3 个 tracked warnings；`smoke:no-src-capability-semantics` 当前保持 1016 个 tracked findings，无新增；`smoke:no-legacy-paths` 当前保持 69 个 tracked findings，无新增。
+进度备注：`smoke:fixed-platform-boundary` 当前剩余 0 个 tracked warnings；`smoke:no-src-capability-semantics` 当前收敛到 853 个 tracked findings，无新增；`smoke:no-legacy-paths` 当前收敛到 47 个 tracked findings，无新增。
 
 验收标准：
 

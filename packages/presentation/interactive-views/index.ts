@@ -1,9 +1,14 @@
 export {
   interactiveViewCompatibilityAliases,
   interactiveViewManifests,
+  normalizeUIComponentId,
   uiComponentCompatibilityAliases,
   uiComponentManifests,
 } from '../components';
+export {
+  composeRuntimeUiManifestSlots,
+  type RuntimeUiManifestPolicyRequest,
+} from './runtime-ui-manifest-policy';
 export type {
   PresentationDedupeScope,
   UIComponentManifest as InteractiveViewManifest,

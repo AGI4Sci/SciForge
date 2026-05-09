@@ -20,6 +20,8 @@ await writeFile('packages/skills/catalog.ts', [
 
 await writeFile('packages/skills/index.ts', [
   "export { skillPackageManifests } from './catalog';",
+  "export { scoreSkillByPackagePolicy, skillAllowedByPackagePolicy } from './matching-policy';",
+  "export type { MatchableSkill, MatchableSkillManifest, SkillDomain } from './matching-policy';",
   "export type { SkillPackageManifest, SkillPackageSource } from './types';",
   '',
 ].join('\n'));

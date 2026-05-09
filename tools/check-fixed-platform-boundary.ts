@@ -43,10 +43,7 @@ const packageRuntimeOwnershipRules: Rule[] = [
   },
 ];
 
-const trackedPackageBaselineCounts: Record<string, number> = {
-  'packages/reasoning/conversation-policy/src/sciforge_conversation/recovery.py#package-workspace-ref-resolution': 1,
-  'packages/reasoning/conversation-policy/src/sciforge_conversation/service.py#package-workspace-ref-resolution': 2,
-};
+const trackedPackageBaselineCounts: Record<string, number> = {};
 
 async function main() {
   const findings: Finding[] = [];

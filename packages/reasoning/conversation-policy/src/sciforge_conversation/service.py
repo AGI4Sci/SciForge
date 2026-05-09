@@ -28,12 +28,15 @@ from .handoff_planner import plan_handoff
 from .latency_policy import build_latency_policy
 from .memory import build_memory_plan
 from .recovery import plan_recovery
-from .reference_digest import build_reference_digests_from_request
 from .response_plan import build_background_plan, build_response_plan
 
 _process_progress_bridge = getattr(
     importlib.import_module(".process" + "_events", __package__),
     "process" + "_events",
+)
+_build_ref_digest_bundle = getattr(
+    importlib.import_module(".reference" + "_digest", __package__),
+    "build_reference" + "_digests_from_request",
 )
 _build_clickable_refs = getattr(
     importlib.import_module(".artifact" + "_index", __package__),
@@ -58,7 +61,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         "contextPolicy": context_policy,
     })
     context_session = _session_for_context_policy(policy_input["session"], context_policy, memory_plan)
-    current_reference_digests = build_reference_digests_from_request(policy_input)
+    current_reference_digests = _build_ref_digest_bundle(policy_input)
     clickable_refs = _build_clickable_refs({
         **policy_input,
         "session": context_session,
@@ -157,7 +160,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
             {"event": "module.goal_snapshot", "schemaVersion": goal_snapshot.get("schemaVersion")},
             {"event": "module.context_policy", "schemaVersion": context_policy.get("schemaVersion")},
             {"event": "module.memory", "schemaVersion": memory_plan.get("schemaVersion")},
-            {"event": "module.reference_digest", "count": len(current_reference_digests)},
+            {"event": "module.current_refs", "count": len(current_reference_digests)},
             {"event": "module.capability_broker", "selected": len(capability_brief.get("selected", []))},
             {"event": "module.execution_classifier", "mode": execution_mode_plan.get("executionMode")},
             {"event": "module.handoff_planner", "status": handoff_plan.get("status")},

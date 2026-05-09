@@ -11,6 +11,7 @@
     "runtimeAdapter": false
   },
   "exports": {
-    ".": "./index.ts"
+    ".": "./index.ts",
+    "./runtime-ui-manifest-policy": "./runtime-ui-manifest-policy.ts"
   }
 }
