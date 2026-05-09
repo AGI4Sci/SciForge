@@ -1,5 +1,89 @@
 import type { ReactNode } from 'react';
 
+export type {
+  BuiltInScenarioId,
+  ScenarioInstanceId,
+  ScenarioPackageRef,
+} from './app';
+export type {
+  RuntimeArtifact,
+  RuntimeArtifactExportPolicy,
+  RuntimeArtifactVisibility,
+} from './artifacts';
+export type {
+  ArtifactPreviewAction,
+  PreviewDerivative,
+  PreviewDerivativeKind,
+  PreviewDescriptor,
+  PreviewDescriptorKind,
+  PreviewDescriptorSource,
+  PreviewInlinePolicy,
+} from './preview';
+export type {
+  ObjectAction,
+  ObjectReference,
+  ObjectReferenceKind,
+  ObjectReferenceStatus,
+  ObjectResolution,
+  SciForgeReference,
+  SciForgeReferenceKind,
+} from './references';
+export type {
+  ExecutionUnitStatus,
+  RuntimeExecutionUnit,
+} from './execution';
+export type {
+  BackgroundCompletionEventType,
+  BackgroundCompletionRef,
+  BackgroundCompletionRuntimeEvent,
+  BackgroundCompletionStatus,
+} from './events';
+export type {
+  GuidanceQueueRecord,
+  GuidanceQueueStatus,
+  MessageRole,
+  RunStatus,
+  RuntimeClaimType,
+  RuntimeEvidenceLevel,
+  SciForgeMessage,
+  SemanticTurnAcceptance,
+  TurnAcceptance,
+  TurnAcceptanceFailure,
+  TurnAcceptanceSeverity,
+  UserGoalSnapshot,
+  UserGoalType,
+} from './messages';
+export type {
+  EvidenceClaim,
+  NotebookRecord,
+  SciForgeRun,
+  SciForgeSession,
+  SessionVersionRecord,
+} from './session';
+export type {
+  AgentCompactCapability,
+  AgentContextCompaction,
+  AgentContextWindowSource,
+  AgentContextWindowState,
+  AgentStreamEvent,
+  AgentTokenUsage,
+} from './stream';
+export type {
+  DisplayIntent,
+  ResolvedViewPlan,
+  UIManifestSlot,
+  UIModuleLifecycle,
+  UIModuleManifest,
+  ViewCompare,
+  ViewEncoding,
+  ViewLayout,
+  ViewPlanSection,
+  ViewPreset,
+  ViewSelection,
+  ViewSync,
+  ViewTransform,
+} from './view';
+
 export type UIComponentLifecycle = 'draft' | 'validated' | 'published' | 'deprecated';
 export type UIComponentSection = 'primary' | 'supporting' | 'provenance' | 'raw';
 export type PresentationDedupeScope = 'entity' | 'document' | 'collection' | 'none';

@@ -45,3 +45,13 @@ Verify 是闭环的必要阶段，但 verifier 的类型和强度可按风险选
 - 关键 senses、安全敏感动作、长时间 workflow 或高成本能力使用 native runtime adapter。
 
 agent 应先接收紧凑的 capability brief，然后只懒加载被选中 package 的详细契约或 `SKILL.md`。
+
+## Owner Note
+
+`packages/*` 是跨 UI、runtime 和 workspace 复用的能力边界。新增 package 代码不能 import `src/ui/src/**` 或 `src/runtime/**` 私有文件；如果需要共享 domain、artifact、object reference、verification 或 UI manifest 类型，先把契约提升到 `packages/runtime-contract`、`packages/scenario-core` 或当前 package 的 public export。
+
+UI app 侧也应通过 package root 或 package.json 明确 export 的 subpath 使用能力，避免相对路径深 import package `src` internals。边界检查命令：
+
+```bash
+npm run smoke:module-boundaries
+```

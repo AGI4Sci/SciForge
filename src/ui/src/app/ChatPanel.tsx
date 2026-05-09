@@ -1,13 +1,12 @@
-import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Copy, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { scenarios, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
-import { buildContextWindowMeterModel, estimateContextWindowState, latestContextWindowState } from '../contextWindow';
+import { estimateContextWindowState, latestContextWindowState } from '../contextWindow';
 import { builtInScenarioPackageRef } from '../scenarioCompiler/scenarioPackage';
 import { resetSession } from '../sessionStore';
 import { SILENT_STREAM_WAIT_THRESHOLD_MS, buildSilentStreamProgressEvent, formatProgressHeadline, latestProgressModel } from '../processProgress';
-import { coalesceStreamEvents, latestRunningEvent, presentStreamEvent, streamEventCounts } from '../streamEventPresentation';
-import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type GuidanceQueueRecord, type NormalizedAgentResponse, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeRun, type SciForgeSession, type ObjectReference, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
+import { coalesceStreamEvents, latestRunningEvent, streamEventCounts } from '../streamEventPresentation';
+import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type GuidanceQueueRecord, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeRun, type SciForgeSession, type ObjectReference, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
 import { writeWorkspaceFile } from '../api/workspaceClient';
 import { exportJsonFile } from './exportUtils';
 import { Badge, ClaimTag, ConfidenceBar, EvidenceTag, cx, type BadgeVariant } from './uiPrimitives';
@@ -18,26 +17,25 @@ import { ChatPanelHeader } from './chat/ChatPanelHeader';
 import { ReferenceContextMenu } from './chat/ReferenceContextMenu';
 import { RunReadinessBar } from './chat/RunReadinessBar';
 import { MessageList } from './chat/MessageList';
-import { RunningWorkProcess, streamProcessTranscript } from './chat/RunningWorkProcess';
+import { RunningWorkProcess } from './chat/RunningWorkProcess';
+import { RunExecutionProcess, RunKeyInfo } from './chat/RunExecutionProcess';
 import { TargetInstanceSelector } from './chat/TargetInstanceSelector';
 import { FinalMessageContent } from './chat/FinalMessageContent';
+import { ContextWindowMeter } from './chat/ContextWindowMeter';
+import { ObjectReferenceChips, SciForgeReferenceChips } from './chat/ReferenceChips';
 import { CURRENT_TARGET_INSTANCE_VALUE, enabledPeerInstances, selectedPeerInstance } from './chat/targetInstance';
-import { MessageContent, inlineObjectReferencesForMessage, objectReferencesFromInlineTokens, unmentionedObjectReferencesForMessage } from './chat/MessageContent';
+import { MessageContent, inlineObjectReferencesForMessage, unmentionedObjectReferencesForMessage } from './chat/MessageContent';
 import { addComposerReferenceWithMarker, addPendingComposerReference, promptForComposerSend, removeComposerReference } from './chat/composerReferences';
 import { runPromptOrchestrator } from './chat/runOrchestrator';
-import { appendRunningGuidanceRecord, appendUploadMessageToSession, attachGuidanceQueueToResponse, attachGuidanceQueueToSessionRun, attachProcessRecoveryToFailedSession, createGuidanceQueueRecord, mergeAgentResponseIntoSession, rollbackSessionBeforeMessage, updateGuidanceQueueRecords } from './chat/sessionTransforms';
+import { appendRunningGuidanceRecord, appendUploadMessageToSession, attachGuidanceQueueToSessionRun, createGuidanceQueueRecord, mergeAgentResponseIntoSession, rollbackSessionBeforeMessage, updateGuidanceQueueRecords } from './chat/sessionTransforms';
+import { attachStreamProcessToFailedSession, attachStreamProcessToResponse, compactFailureNotice, guidanceBadgeVariant, guidanceStatusLabel, latestTokenUsage } from './chat/runPresentation';
 import {
   artifactTypeForUploadedFileLike as artifactTypeForUploadedFile,
   sciForgeReferenceAttribute,
-  mergeObjectReferences,
-  objectReferenceChipModel,
-  objectReferenceForArtifactSummary,
   objectReferenceForUploadedArtifact,
-  objectReferenceIcon,
   objectReferenceKindLabel,
   parseSciForgeReferenceAttribute,
   previewKindForUploadedFileLike as previewKindForUploadedFile,
-  referenceComposerMarker,
   referenceForMessage,
   referenceForObjectReference,
   referenceForRun,
@@ -952,47 +950,6 @@ function enrichRepairRaw(raw: unknown, repairHistory: unknown, sourceRunId: stri
     : { raw, ...repairMetadata };
 }
 
-function ContextWindowMeter({
-  state,
-  running,
-}: {
-  state: AgentContextWindowState;
-  running: boolean;
-}) {
-  const meter = buildContextWindowMeterModel(state, running);
-  const tooltipId = useId();
-  return (
-    <div
-      role="status"
-      aria-label={`上下文窗口 ${meter.ratioLabel}，${meter.statusLabel}`}
-      aria-describedby={tooltipId}
-      className={cx('context-window-meter', meter.level, meter.isEstimated && 'estimated', meter.isUnknown && 'unknown')}
-      title={meter.title}
-      tabIndex={0}
-      style={{ '--context-window-ratio': meter.ratioStyle } as CSSProperties}
-    >
-      <span className="context-window-ring" aria-hidden="true">
-        <span>{meter.ratioLabel === 'unknown' ? '?' : meter.ratioLabel}</span>
-      </span>
-      <div className="context-window-popover" id={tooltipId} role="tooltip">
-        <div className="context-window-popover-head">
-          <strong>Context window</strong>
-          <em>{meter.statusLabel}</em>
-        </div>
-        <dl>
-          {meter.detailRows.map((row) => (
-            <div key={row.label}>
-              <dt>{row.label}</dt>
-              <dd>{row.value}</dd>
-            </div>
-          ))}
-        </dl>
-        <small>只读状态 · 压缩由 backend 能力和阈值触发</small>
-      </div>
-    </div>
-  );
-}
-
 function runReadiness({
   input,
   isSending,
@@ -1074,445 +1031,6 @@ export function runIdForMessage(
 
 function normalizeRunPrompt(value: string) {
   return value.replace(/^运行中引导：/, '').trim();
-}
-
-function guidanceStatusLabel(status: GuidanceQueueRecord['status']) {
-  if (status === 'merged') return '引导已合并';
-  if (status === 'rejected') return '引导已拒绝';
-  if (status === 'deferred') return '引导待下一轮';
-  return '引导已排队';
-}
-
-function guidanceBadgeVariant(status: GuidanceQueueRecord['status']): BadgeVariant {
-  if (status === 'merged') return 'success';
-  if (status === 'rejected') return 'danger';
-  return 'warning';
-}
-
-function attachStreamProcessToResponse(response: NormalizedAgentResponse, events: AgentStreamEvent[], guidanceQueue: GuidanceQueueRecord[] = []): NormalizedAgentResponse {
-  const transcript = streamProcessTranscript(events);
-  const responseWithGuidance = attachGuidanceQueueToResponse(
-    response,
-    guidanceQueue,
-    'deferred',
-    '当前 run 已经在执行中，追加引导已接收并等待下一轮合并处理。',
-  );
-  if (!transcript) return responseWithGuidance;
-  const expandable = [response.message.expandable, transcript].filter(Boolean).join('\n\n');
-  return {
-    ...responseWithGuidance,
-    message: {
-      ...responseWithGuidance.message,
-      expandable,
-    },
-    run: {
-      ...responseWithGuidance.run,
-      raw: {
-        ...(typeof responseWithGuidance.run.raw === 'object' && responseWithGuidance.run.raw !== null ? responseWithGuidance.run.raw : {}),
-        streamProcess: {
-          eventCount: events.length,
-          events: events.slice(-80).map((event) => ({
-            type: event.type,
-            label: event.label,
-            detail: presentStreamEvent(event).detail || presentStreamEvent(event).usageDetail,
-            createdAt: event.createdAt,
-          })),
-        },
-      },
-    },
-  };
-}
-
-function attachStreamProcessToFailedSession(session: SciForgeSession, failedRunId: string, events: AgentStreamEvent[]): SciForgeSession {
-  const transcript = streamProcessTranscript(events);
-  return attachProcessRecoveryToFailedSession({
-    session,
-    failedRunId,
-    transcript,
-    events: events.slice(-80).map((event) => ({
-      type: event.type,
-      label: event.label,
-      detail: presentStreamEvent(event).detail || presentStreamEvent(event).usageDetail,
-      createdAt: event.createdAt,
-    })),
-  });
-}
-
-function compactFailureNotice(value: string) {
-  const primary = value
-    .replace(/\n\s*工作过程摘要[:：][\s\S]*$/i, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!primary) return '任务未完成，执行过程已保存到运行详情。';
-  if (primary.length <= 180) return primary;
-  return `${primary.slice(0, 160).replace(/\s+\S*$/, '')}...`;
-}
-
-function ObjectReferenceChips({
-  references,
-  activeRunId,
-  onFocus,
-}: {
-  references: ObjectReference[];
-  activeRunId?: string;
-  onFocus: (reference: ObjectReference) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const chipModel = objectReferenceChipModel(references, expanded);
-  return (
-    <div className="object-reference-strip" aria-label="回答中引用的对象">
-      {chipModel.visible.map((reference) => (
-        <button
-          type="button"
-          key={reference.id}
-          className={cx('object-reference-chip', activeRunId && reference.runId === activeRunId && 'active')}
-          onClick={() => onFocus(reference)}
-          title={reference.summary || reference.ref}
-          data-tooltip={`${objectReferenceKindLabel(reference.kind)} · ${reference.ref}`}
-          data-sciforge-reference={sciForgeReferenceAttribute(referenceForObjectReference(reference))}
-        >
-          <span>{objectReferenceIcon(reference.kind)}</span>
-          <strong>{reference.title}</strong>
-          {chipModel.pending.some((item) => item.id === reference.id) ? <Badge variant="warning">点击验证</Badge> : null}
-          {reference.status && reference.status !== 'available' ? <Badge variant={reference.status === 'blocked' ? 'danger' : 'warning'}>{reference.status}</Badge> : null}
-        </button>
-      ))}
-      {chipModel.hasOverflow ? (
-        <button
-          type="button"
-          className="object-reference-more"
-          onClick={() => setExpanded((value) => !value)}
-          aria-expanded={expanded}
-          title={expanded ? '收起对象列表' : `展开剩余 ${chipModel.hiddenCount} 个对象`}
-        >
-          {expanded ? '收起对象' : `+${chipModel.hiddenCount} objects`}
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-function RunExecutionProcess({
-  runId,
-  session,
-  trace,
-  onObjectFocus,
-}: {
-  runId: string;
-  session: SciForgeSession;
-  trace?: string;
-  onObjectFocus: (reference: ObjectReference) => void;
-}) {
-  const run = session.runs.find((item) => item.id === runId);
-  const units = executionUnitsForRun(run, session).slice(-8);
-  if (!run && !units.length && !trace) return null;
-  const auditObjectReferences = objectReferencesForAudit(run, session, runId);
-  const steps = executionProcessSteps(run, units, auditObjectReferences, trace);
-  if (!steps.length) return null;
-  return (
-    <div className="execution-process-thread" aria-label="按顺序记录的工作过程">
-      {steps.map((step) => {
-        const references = mergeObjectReferences(
-          objectReferencesFromInlineTokens(step.content, runId),
-          step.references ?? auditObjectReferences,
-          40,
-        );
-        return (
-          <details className="message-fold depth-2 execution-process-fold cursor-step-fold" key={step.id}>
-            <summary>
-              <span className="cursor-step-kind">{step.kind}</span>
-              <span className="cursor-step-title">{step.title}</span>
-              {step.meta ? <span className="cursor-step-meta">{step.meta}</span> : null}
-            </summary>
-            <div className="execution-process-body">
-              <MessageContent
-                content={step.content}
-                references={references}
-                onObjectFocus={onObjectFocus}
-              />
-            </div>
-          </details>
-        );
-      })}
-    </div>
-  );
-}
-
-type ExecutionProcessStep = {
-  id: string;
-  kind: string;
-  title: string;
-  meta?: string;
-  content: string;
-  references?: ObjectReference[];
-};
-
-function executionProcessSteps(
-  run: SciForgeRun | undefined,
-  units: RuntimeExecutionUnit[],
-  objectReferences: ObjectReference[],
-  trace?: string,
-): ExecutionProcessStep[] {
-  const steps: ExecutionProcessStep[] = [];
-  if (run?.prompt) {
-    steps.push({
-      id: 'prompt',
-      kind: 'Received',
-      title: compactAuditText(run.prompt, 96),
-      content: `接收任务：${run.prompt}`,
-    });
-  }
-  units.forEach((unit, index) => {
-    const verb = executionUnitVerb(unit);
-    const target = executionUnitTarget(unit);
-    const details = executionUnitDetails(unit);
-    steps.push({
-      id: `unit-${unit.id || index}`,
-      kind: cursorStepKindForUnit(unit, verb),
-      title: `${unit.tool}${target ? ` · ${target}` : ''}`,
-      meta: [unit.status, unit.time].filter(Boolean).join(' · '),
-      content: [
-        `${verb}：${unit.tool}${target ? `，${target}` : ''}。`,
-        `状态：${unit.status}${unit.time ? `，时间：${unit.time}` : ''}。`,
-        ...details.map((detail) => `- ${detail}`),
-      ].join('\n'),
-    });
-  });
-  producedObjectLines(objectReferences).forEach((line, index) => {
-    steps.push({
-      id: `object-${index}`,
-      kind: 'Created',
-      title: compactAuditText(line, 96),
-      content: line,
-      references: objectReferences,
-    });
-  });
-  if (trace) {
-    steps.push({
-      id: 'trace',
-      kind: 'Thought',
-      title: 'briefly',
-      content: `过程摘要与完整 trace：${compactAuditText(trace, 1200)}`,
-    });
-  }
-  return steps.slice(0, 24);
-}
-
-function executionUnitsForRun(run: SciForgeRun | undefined, session: SciForgeSession) {
-  if (!run) return [];
-  const artifactRefs = new Set((run.objectReferences ?? [])
-    .filter((reference) => reference.kind === 'artifact')
-    .map((reference) => reference.ref.replace(/^artifact:/i, '')));
-  const packageKey = run.scenarioPackageRef ? `${run.scenarioPackageRef.id}@${run.scenarioPackageRef.version}` : '';
-  const matched = session.executionUnits.filter((unit) => {
-    const unitPackageKey = unit.scenarioPackageRef ? `${unit.scenarioPackageRef.id}@${unit.scenarioPackageRef.version}` : '';
-    if (packageKey && unitPackageKey === packageKey) return true;
-    if (unit.outputArtifacts?.some((artifactId) => artifactRefs.has(artifactId))) return true;
-    if (unit.artifacts?.some((artifactId) => artifactRefs.has(artifactId))) return true;
-    return false;
-  });
-  return matched.length ? matched : session.executionUnits.filter((unit) => unit.status !== 'planned').slice(-6);
-}
-
-function objectReferencesForAudit(run: SciForgeRun | undefined, session: SciForgeSession, runId: string) {
-  if (!run) return [];
-  const runArtifactRefs = new Set((run.objectReferences ?? [])
-    .filter((reference) => reference.kind === 'artifact')
-    .map((reference) => reference.ref.replace(/^artifact:/i, '')));
-  const runArtifacts = session.artifacts
-    .filter((artifact) => runArtifactRefs.has(artifact.id) || artifact.metadata?.runId === runId)
-    .map((artifact) => objectReferenceForArtifactSummary(artifact, runId));
-  return mergeObjectReferences(run.objectReferences ?? [], runArtifacts, 40);
-}
-
-function cursorStepKindForUnit(unit: RuntimeExecutionUnit, verb: string) {
-  if (unit.status === 'failed') return 'Failed';
-  if (verb === '探索文件') return 'Explored';
-  if (verb === '编辑文件') return 'Edited';
-  if (verb === '运行程序') return 'Ran';
-  return 'Checked';
-}
-
-function producedObjectLines(references: ObjectReference[]) {
-  return references
-    .filter((reference) => reference.kind === 'artifact' || reference.kind === 'file' || reference.kind === 'folder')
-    .slice(0, 8)
-    .map((reference) => `产生/引用对象：${reference.title}（${reference.ref}）${reference.summary ? `，${compactAuditText(reference.summary, 120)}` : ''}`);
-}
-
-function executionUnitVerb(unit: RuntimeExecutionUnit) {
-  const text = `${unit.tool} ${unit.entrypoint || ''} ${unit.params || ''} ${unit.codeRef || ''} ${unit.diffRef || ''}`.toLowerCase();
-  if (/edit|write|patch|apply|diff|save|mutate|create|生成|编辑|写入|修改/.test(text)) return '编辑文件';
-  if (/read|cat|sed|rg|grep|ls|find|open|inspect|explore|读取|检索|查看|探索/.test(text)) return '探索文件';
-  if (/python|node|npm|pnpm|yarn|tsx|pytest|vitest|test|build|run|exec|运行|执行/.test(text)) return '运行程序';
-  return '执行步骤';
-}
-
-function executionUnitTarget(unit: RuntimeExecutionUnit) {
-  const refs = [
-    formatExecutionRef(unit.entrypoint),
-    formatExecutionRef(unit.codeRef),
-    formatExecutionRef(unit.diffRef),
-    formatExecutionRef(unit.outputRef),
-    formatExecutionRef(unit.stdoutRef),
-    formatExecutionRef(unit.stderrRef),
-    ...(unit.inputData ?? []).map(formatExecutionRef),
-    ...(unit.outputArtifacts ?? []).map((artifactId) => `artifact:${artifactId}`),
-  ].filter(Boolean).slice(0, 4);
-  return refs.length ? `涉及 ${refs.join('、')}` : '';
-}
-
-function executionUnitDetails(unit: RuntimeExecutionUnit) {
-  const details = [
-    unit.params ? `参数：${compactAuditText(unit.params, 180)}` : '',
-    unit.codeRef ? `代码位置：${formatExecutionRef(unit.codeRef)}` : '',
-    unit.code ? `执行代码：${compactAuditText(unit.code, 220)}` : '',
-    unit.diffRef ? `编辑 diff：${formatExecutionRef(unit.diffRef)}` : '',
-    unit.stdoutRef ? `标准输出：${formatExecutionRef(unit.stdoutRef)}` : '',
-    unit.stderrRef ? `错误输出：${formatExecutionRef(unit.stderrRef)}` : '',
-    unit.outputRef ? `输出：${formatExecutionRef(unit.outputRef)}` : '',
-    unit.patchSummary ? `修改摘要：${unit.patchSummary}` : '',
-    unit.failureReason ? `失败原因：${unit.failureReason}` : '',
-  ];
-  return details.filter(Boolean).slice(0, 5);
-}
-
-function formatExecutionRef(value?: string) {
-  if (!value) return '';
-  if (/^(artifact|file|folder|run|execution-unit|scenario-package)::?/i.test(value) || /^https?:\/\//i.test(value)) return value;
-  if (/^\.?\/?[\w.-/]+(?:\.[a-z0-9]+)(?:[#?].*)?$/i.test(value)) return `file::${value.replace(/^\.\//, '')}`;
-  return value;
-}
-
-function compactAuditText(value: string, limit: number) {
-  const text = value.replace(/\s+/g, ' ').trim();
-  return text.length > limit ? `${text.slice(0, limit - 1)}...` : text;
-}
-
-function RunKeyInfo({
-  runId,
-  session,
-  onObjectFocus,
-}: {
-  runId: string;
-  session: SciForgeSession;
-  onObjectFocus?: (reference: ObjectReference) => void;
-}) {
-  const run = session.runs.find((item) => item.id === runId);
-  if (run?.status === 'failed') return null;
-  const objectRefs = run?.objectReferences ?? [];
-  const artifactRefIds = new Set(objectRefs.filter((ref) => ref.kind === 'artifact').map((ref) => ref.ref.replace(/^artifact:/, '')));
-  const artifacts = session.artifacts
-    .filter((artifact) => artifactRefIds.has(artifact.id) || artifact.metadata?.runId === runId)
-    .slice(0, 4);
-  const artifactReferences = artifacts.map((artifact) => objectReferenceForArtifactSummary(artifact, runId));
-  const claims = claimsForRun(session, runId, artifacts.map((artifact) => artifact.id)).slice(0, 3);
-  if (!artifacts.length && !claims.length) return null;
-  const objectNames = artifacts.map(artifactTitle).join('、') || '暂无新对象';
-  return (
-    <div className="message-key-info" aria-label="本轮关键信息">
-      <div className="message-key-info-head">
-        <strong>本轮结果</strong>
-        <span>{artifacts.length} objects · {claims.length} claims</span>
-      </div>
-      <p className="message-key-prose">
-        {artifacts.length ? `关键对象：${objectNames}。` : '本轮没有生成新的可预览对象。'}
-        {claims.length ? ` 已提取 ${claims.length} 条判断。` : ''}
-        <span> 过程记录已折叠在下方。</span>
-      </p>
-      {artifactReferences.length ? (
-        <ObjectReferenceChips references={artifactReferences} onFocus={onObjectFocus ?? (() => undefined)} />
-      ) : null}
-      {claims.length ? (
-        <div className="message-key-list">
-          {claims.map((claim) => (
-            <p key={claim.id} className="message-key-row">
-              <span>判断：{claim.text}</span>
-              <small>{claim.evidenceLevel} · confidence {Math.round(claim.confidence * 100)}%</small>
-            </p>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function artifactTitle(artifact: RuntimeArtifact) {
-  return String(artifact.metadata?.title || artifact.metadata?.name || artifact.id);
-}
-
-function claimsForRun(session: SciForgeSession, runId: string, artifactIds: string[]) {
-  const run = session.runs.find((item) => item.id === runId);
-  const runRefTokens = new Set([
-    runId,
-    `run:${runId}`,
-    ...artifactIds,
-    ...artifactIds.map((id) => `artifact:${id}`),
-    ...(run?.objectReferences ?? []).map((reference) => reference.ref),
-  ].filter(Boolean));
-  const start = run?.createdAt ? Date.parse(run.createdAt) : Number.NaN;
-  const end = run?.completedAt ? Date.parse(run.completedAt) : Number.NaN;
-  return session.claims.filter((claim) => {
-    const refs = [...claim.supportingRefs, ...claim.opposingRefs, ...(claim.dependencyRefs ?? [])];
-    if (refs.some((ref) => runRefTokens.has(ref))) return true;
-    const updated = Date.parse(claim.updatedAt);
-    return Number.isFinite(start)
-      && Number.isFinite(updated)
-      && updated >= start
-      && (!Number.isFinite(end) || updated <= end + 5000);
-  });
-}
-
-function SciForgeReferenceChips({
-  references,
-  onRemove,
-  onFocus,
-}: {
-  references: SciForgeReference[];
-  onRemove?: (referenceId: string) => void;
-  onFocus?: (reference: SciForgeReference) => void;
-}) {
-  return (
-    <div className="sciforge-reference-strip" aria-label="用户引用的上下文">
-      {references.slice(0, 8).map((reference) => (
-        <span
-          role="button"
-          tabIndex={0}
-          key={reference.id}
-          className={cx('sciforge-reference-chip', `kind-${reference.kind}`)}
-          title={reference.summary || reference.ref}
-          onClick={() => onFocus?.(reference)}
-          onKeyDown={(event) => {
-            if (event.key !== 'Enter' && event.key !== ' ') return;
-            event.preventDefault();
-            onFocus?.(reference);
-          }}
-        >
-          <span>{referenceComposerMarker(reference)}</span>
-          <strong>{reference.title}</strong>
-          {onRemove ? (
-            <i
-              role="button"
-              tabIndex={0}
-              onClick={(event) => {
-                event.stopPropagation();
-                onRemove(reference.id);
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== 'Enter' && event.key !== ' ') return;
-                event.preventDefault();
-                event.stopPropagation();
-                onRemove(reference.id);
-              }}
-              aria-label={`移除引用 ${reference.title}`}
-            >
-              <X size={12} />
-            </i>
-          ) : null}
-        </span>
-      ))}
-    </div>
-  );
 }
 
 function highlightReferencedContent(reference: SciForgeReference) {
@@ -1664,10 +1182,6 @@ function verificationVerdictVariant(verdict: string): BadgeVariant {
   if (verdict === 'fail') return 'danger';
   if (verdict === 'needs-human' || verdict === 'uncertain') return 'warning';
   return 'muted';
-}
-
-function latestTokenUsage(events: AgentStreamEvent[]) {
-  return [...events].reverse().find((event) => event.usage)?.usage;
 }
 
 export function mergeRunTimelineEvents(events: TimelineEventRecord[], previousSession: SciForgeSession | undefined, nextSession: SciForgeSession) {

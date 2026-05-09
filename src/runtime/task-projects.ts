@@ -1,288 +1,109 @@
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { mkdir, readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { GatewayRequest, SkillAvailability, SkillPromotionProposal, ToolPayload, WorkspaceTaskRunResult, WorkspaceTaskSpec } from './runtime-types.js';
+import {
+  TASK_PROJECT_HANDOFF_SCHEMA_VERSION,
+  TASK_PROJECT_PLAN_SCHEMA_VERSION,
+  TASK_PROJECT_SCHEMA_VERSION,
+  TASK_PROJECT_STAGE_HANDOFF_SCHEMA_VERSION,
+  TASK_STAGE_SCHEMA_VERSION,
+} from './task-project-contracts.js';
+import type {
+  AppendTaskProjectGuidanceInit,
+  AppendTaskStageInit,
+  CreateTaskProjectInit,
+  ListRecentTaskProjectsFilters,
+  ResolveTaskProjectGuidancePatch,
+  StageEvidenceInput,
+  TaskProject,
+  TaskProjectContinuationSelection,
+  TaskProjectGuidance,
+  TaskProjectGuidanceStatus,
+  TaskProjectNextStageHandoffSummary,
+  TaskProjectPaths,
+  TaskProjectPlan,
+  TaskProjectPlanStage,
+  TaskProjectReadResult,
+  TaskProjectStagePromotionOptions,
+  TaskProjectStageRunOptions,
+  TaskProjectStageRunResult,
+  TaskProjectStatus,
+  TaskProjectSummaryForHandoff,
+  TaskStage,
+  TaskStageKind,
+  TaskStageStatus,
+  UpdateTaskStagePatch,
+} from './task-project-contracts.js';
 import { isRecord, errorMessage } from './gateway-utils.js';
 import { runWorkspaceTask } from './workspace-task-runner.js';
 import { evaluateToolPayloadEvidence } from './gateway/work-evidence-guard.js';
 import { collectWorkEvidence, parseWorkEvidence, type WorkEvidence } from './gateway/work-evidence-types.js';
 import { maybeWriteSkillPromotionProposal } from './skill-promotion.js';
+import { buildTaskProjectHandoffSummary } from './task-project-handoff.js';
+import {
+  assertWorkspaceRelative,
+  fileRef,
+  normalizeOptionalRef,
+  normalizeRef,
+  normalizeWorkspace,
+  readJson,
+  resolveWorkspacePath,
+  stageEvidenceRef,
+  stageRef,
+  stripFileRef,
+  taskProjectRelativePaths,
+  writeJson,
+} from './task-project-store.js';
+import {
+  clipText,
+  findPlanStage,
+  nextStageIndex,
+  normalizeGuidanceId,
+  normalizeProjectId,
+  normalizeStageKind,
+  safeToken,
+  stableAppend,
+  stableGuidanceQueue,
+  stableRefList,
+  stableStringList,
+  stableWorkEvidence,
+  syncProject,
+} from './task-project-state.js';
 
-export const TASK_PROJECT_SCHEMA_VERSION = 'sciforge.task-project.v1';
-export const TASK_PROJECT_PLAN_SCHEMA_VERSION = 'sciforge.task-project-plan.v1';
-export const TASK_STAGE_SCHEMA_VERSION = 'sciforge.task-stage.v1';
-export const TASK_PROJECT_HANDOFF_SCHEMA_VERSION = 'sciforge.task-project-handoff.v1';
-
-export type TaskProjectStatus = 'planned' | 'running' | 'done' | 'failed' | 'repair-needed' | 'blocked';
-export type TaskProjectGuidanceStatus = 'queued' | 'adopted' | 'deferred' | 'rejected';
-export type TaskStageKind =
-  | 'plan'
-  | 'research'
-  | 'design'
-  | 'implement'
-  | 'execute'
-  | 'verify'
-  | 'repair'
-  | 'summarize'
-  | (string & {});
-export type TaskStageStatus = 'planned' | 'running' | 'done' | 'failed' | 'repair-needed' | 'skipped' | 'blocked';
-
-export interface TaskProjectPaths {
-  root: string;
-  projectJson: string;
-  planJson: string;
-  stages: string;
-  src: string;
-  artifacts: string;
-  evidence: string;
-  logs: string;
-}
-
-export interface TaskProjectGuidance {
-  id: string;
-  message: string;
-  status: TaskProjectGuidanceStatus;
-  source?: string;
-  stageId?: string;
-  decision?: string;
-  reason?: string;
-  createdAt: string;
-  updatedAt: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface TaskProject {
-  schemaVersion: typeof TASK_PROJECT_SCHEMA_VERSION;
-  id: string;
-  title: string;
-  goal: string;
-  status: TaskProjectStatus;
-  createdAt: string;
-  updatedAt: string;
-  paths: TaskProjectPaths;
-  stageRefs: string[];
-  latestStageRef?: string;
-  guidanceQueue?: TaskProjectGuidance[];
-  metadata?: Record<string, unknown>;
-}
-
-export interface TaskStage {
-  schemaVersion: typeof TASK_STAGE_SCHEMA_VERSION;
-  id: string;
-  projectId: string;
-  index: number;
-  kind: TaskStageKind;
-  status: TaskStageStatus;
-  goal: string;
-  codeRef?: string;
-  inputRef?: string;
-  outputRef?: string;
-  stdoutRef?: string;
-  stderrRef?: string;
-  workEvidence?: WorkEvidence[];
-  evidenceRefs: string[];
-  artifactRefs: string[];
-  failureReason?: string;
-  diagnostics: string[];
-  recoverActions: string[];
-  nextStep?: string;
-  createdAt: string;
-  updatedAt: string;
-  startedAt?: string;
-  completedAt?: string;
-  failedAt?: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface TaskProjectPlanStage {
-  id: string;
-  index: number;
-  kind: TaskStageKind;
-  status: TaskStageStatus;
-  goal: string;
-  ref: string;
-}
-
-export interface TaskProjectPlan {
-  schemaVersion: typeof TASK_PROJECT_PLAN_SCHEMA_VERSION;
-  projectId: string;
-  stageRefs: string[];
-  stages: TaskProjectPlanStage[];
-  updatedAt: string;
-}
-
-export interface TaskProjectReadResult {
-  project: TaskProject;
-  plan: TaskProjectPlan;
-  stages: TaskStage[];
-}
-
-export interface TaskProjectSummaryForHandoff {
-  schemaVersion: typeof TASK_PROJECT_HANDOFF_SCHEMA_VERSION;
-  project: Pick<TaskProject, 'id' | 'title' | 'goal' | 'status' | 'createdAt' | 'updatedAt'>;
-  refs: {
-    projectRef: string;
-    planRef: string;
-    stageRefs: string[];
-    latestStageRef?: string;
-    dirs: {
-      src: string;
-      artifacts: string;
-      evidence: string;
-      logs: string;
-    };
-  };
-  stages: Array<Pick<TaskStage, 'id' | 'index' | 'kind' | 'status' | 'goal' | 'codeRef' | 'inputRef' | 'outputRef' | 'stdoutRef' | 'stderrRef' | 'failureReason' | 'nextStep'> & {
-    ref: string;
-    workEvidence: WorkEvidence[];
-    evidenceRefs: string[];
-    artifactRefs: string[];
-    diagnostics: string[];
-    recoverActions: string[];
-  }>;
-  omittedStageCount: number;
-  truncated: boolean;
-}
-
-export const TASK_PROJECT_STAGE_HANDOFF_SCHEMA_VERSION = 'sciforge.task-project-stage-handoff.v1';
-
-export interface TaskProjectStageRunOptions {
-  runner?: (workspace: string, spec: WorkspaceTaskSpec) => Promise<WorkspaceTaskRunResult>;
-  now?: () => string;
-  request?: Partial<GatewayRequest>;
-}
-
-export interface TaskProjectStageRunResult {
-  project: TaskProject;
-  plan: TaskProjectPlan;
-  stage: TaskStage;
-  run: WorkspaceTaskRunResult;
-  output?: ToolPayload | WorkEvidence;
-  outputKind?: 'tool-payload' | 'work-evidence';
-  failureReason?: string;
-}
-
-export interface TaskProjectNextStageHandoffSummary {
-  schemaVersion: typeof TASK_PROJECT_STAGE_HANDOFF_SCHEMA_VERSION;
-  project: Pick<TaskProject, 'id' | 'title' | 'goal' | 'status' | 'updatedAt'>;
-  stage: Pick<TaskStage, 'id' | 'index' | 'kind' | 'status' | 'goal' | 'outputRef' | 'stdoutRef' | 'stderrRef' | 'failureReason' | 'nextStep'>;
-  stageResult: {
-    status: TaskStageStatus;
-    outputKind?: 'tool-payload' | 'work-evidence';
-    outputSummary?: string;
-    exitCode?: number;
-  };
-  evidenceSummary: {
-    refs: string[];
-    summaries: string[];
-  };
-  workEvidenceSummary: Array<Pick<WorkEvidence, 'kind' | 'status' | 'provider' | 'resultCount' | 'outputSummary' | 'failureReason' | 'nextStep'> & {
-    evidenceRefs: string[];
-    recoverActions: string[];
-    diagnostics: string[];
-    rawRef?: string;
-  }>;
-  artifactRefs: string[];
-  diagnostics: string[];
-  recoverActions: string[];
-  failureReason?: string;
-  nextStep?: string;
-  userGuidanceDecisionContract: {
-    requiredStatuses: Array<Exclude<TaskProjectGuidanceStatus, 'queued'>>;
-    outputFieldHint: string;
-  };
-  userGuidanceQueue: Array<Record<string, unknown>>;
-  truncated: boolean;
-}
-
-export interface TaskProjectContinuationSelection {
-  project: TaskProject;
-  plan: TaskProjectPlan;
-  stages: TaskStage[];
-  stage: TaskStage;
-  stageRef: string;
-  reason:
-    | 'latest-failed-stage'
-    | 'latest-repair-needed-stage'
-    | 'latest-blocked-stage'
-    | 'latest-incomplete-stage'
-    | 'latest-completed-stage';
-  shouldRepair: boolean;
-  activeGuidance: TaskProjectGuidance[];
-}
-
-export interface TaskProjectStagePromotionOptions {
-  request?: Partial<GatewayRequest>;
-  skill?: SkillAvailability;
-  taskId?: string;
-  patchSummary?: string;
-  minSuccessfulRuns?: number;
-}
-
-export interface CreateTaskProjectInit {
-  id: string;
-  title?: string;
-  goal: string;
-  status?: TaskProjectStatus;
-  createdAt?: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface AppendTaskProjectGuidanceInit {
-  id?: string;
-  message: string;
-  source?: string;
-  stageId?: string;
-  createdAt?: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface ResolveTaskProjectGuidancePatch {
-  status: Exclude<TaskProjectGuidanceStatus, 'queued'>;
-  decision?: string;
-  reason?: string;
-  updatedAt?: string;
-  metadata?: Record<string, unknown>;
-}
-
-export type AppendTaskStageInit = {
-  kind: TaskStageKind;
-  goal: string;
-  status?: TaskStageStatus;
-  codeRef?: string;
-  inputRef?: string;
-  outputRef?: string;
-  stdoutRef?: string;
-  stderrRef?: string;
-  evidenceRefs?: string[];
-  artifactRefs?: string[];
-  workEvidence?: WorkEvidence[];
-  failureReason?: string;
-  diagnostics?: string[];
-  recoverActions?: string[];
-  nextStep?: string;
-  createdAt?: string;
-  metadata?: Record<string, unknown>;
-};
-
-export type UpdateTaskStagePatch = Partial<Omit<TaskStage, 'schemaVersion' | 'id' | 'projectId' | 'index' | 'kind' | 'createdAt'>> & {
-  updatedAt?: string;
-};
-
-export type StageEvidenceInput = string | {
-  id?: string;
-  ref?: string;
-  kind?: string;
-  title?: string;
-  summary?: string;
-  data?: unknown;
-  createdAt?: string;
-  metadata?: Record<string, unknown>;
-};
-
-export interface ListRecentTaskProjectsFilters {
-  status?: TaskProjectStatus | TaskProjectStatus[];
-  limit?: number;
-}
+export {
+  TASK_PROJECT_HANDOFF_SCHEMA_VERSION,
+  TASK_PROJECT_PLAN_SCHEMA_VERSION,
+  TASK_PROJECT_SCHEMA_VERSION,
+  TASK_PROJECT_STAGE_HANDOFF_SCHEMA_VERSION,
+  TASK_STAGE_SCHEMA_VERSION,
+} from './task-project-contracts.js';
+export { taskProjectPathExists } from './task-project-store.js';
+export type {
+  AppendTaskProjectGuidanceInit,
+  AppendTaskStageInit,
+  CreateTaskProjectInit,
+  ListRecentTaskProjectsFilters,
+  ResolveTaskProjectGuidancePatch,
+  StageEvidenceInput,
+  TaskProject,
+  TaskProjectContinuationSelection,
+  TaskProjectGuidance,
+  TaskProjectGuidanceStatus,
+  TaskProjectNextStageHandoffSummary,
+  TaskProjectPaths,
+  TaskProjectPlan,
+  TaskProjectPlanStage,
+  TaskProjectReadResult,
+  TaskProjectStagePromotionOptions,
+  TaskProjectStageRunOptions,
+  TaskProjectStageRunResult,
+  TaskProjectStatus,
+  TaskProjectSummaryForHandoff,
+  TaskStage,
+  TaskStageKind,
+  TaskStageStatus,
+  UpdateTaskStagePatch,
+} from './task-project-contracts.js';
 
 export async function createTaskProject(workspace: string, init: CreateTaskProjectInit): Promise<TaskProjectReadResult> {
   const workspaceRoot = normalizeWorkspace(workspace);
@@ -858,76 +679,7 @@ export async function summarizeTaskProjectForHandoff(workspace: string, projectI
   const maxTextChars = budget.maxTextChars ?? 600;
   const maxRefsPerStage = budget.maxRefsPerStage ?? 12;
   const { project, plan, stages } = await readTaskProject(workspaceRoot, id);
-  const selected = stages.slice(-maxStages);
-  let truncated = selected.length < stages.length;
-  const stageRefById = new Map(plan.stages.map((entry) => [entry.id, entry.ref]));
-  const paths = taskProjectRelativePaths(id);
-
-  const summaryStages: TaskProjectSummaryForHandoff['stages'] = selected.map((stage) => {
-    const goal = clipText(stage.goal, maxTextChars);
-    const failureReason = clipText(stage.failureReason, maxTextChars);
-    const nextStep = clipText(stage.nextStep, maxTextChars);
-    const evidenceRefs = stage.evidenceRefs.slice(0, maxRefsPerStage);
-    const artifactRefs = stage.artifactRefs.slice(0, maxRefsPerStage);
-    const recoverActions = stage.recoverActions.slice(0, 8).map((action) => clipText(action, maxTextChars).text ?? '');
-    const diagnostics = (stage.diagnostics ?? []).slice(0, 8).map((diagnostic) => clipText(diagnostic, maxTextChars).text ?? '');
-    const workEvidence = stage.workEvidence?.slice(0, 8) ?? [];
-    truncated ||= goal.truncated || failureReason.truncated || nextStep.truncated
-      || evidenceRefs.length < stage.evidenceRefs.length
-      || artifactRefs.length < stage.artifactRefs.length
-      || recoverActions.length < stage.recoverActions.length
-      || diagnostics.length < (stage.diagnostics ?? []).length
-      || workEvidence.length < (stage.workEvidence?.length ?? 0);
-    return {
-      id: stage.id,
-      index: stage.index,
-      kind: stage.kind,
-      status: stage.status,
-      goal: goal.text ?? '',
-      codeRef: stage.codeRef,
-      inputRef: stage.inputRef,
-      outputRef: stage.outputRef,
-      stdoutRef: stage.stdoutRef,
-      stderrRef: stage.stderrRef,
-      workEvidence,
-      evidenceRefs,
-      artifactRefs,
-      failureReason: failureReason.text,
-      diagnostics,
-      recoverActions,
-      nextStep: nextStep.text,
-      ref: stageRefById.get(stage.id) ?? stageRef(id, stage.id),
-    };
-  });
-  const projectGoal = clipText(project.goal, maxTextChars);
-  truncated ||= projectGoal.truncated;
-
-  return {
-    schemaVersion: TASK_PROJECT_HANDOFF_SCHEMA_VERSION,
-    project: {
-      id: project.id,
-      title: project.title,
-      goal: projectGoal.text ?? '',
-      status: project.status,
-      createdAt: project.createdAt,
-      updatedAt: project.updatedAt,
-    },
-    refs: {
-      projectRef: fileRef(paths.projectJson),
-      planRef: fileRef(paths.planJson),
-      stageRefs: plan.stageRefs,
-      latestStageRef: plan.stageRefs.at(-1),
-      dirs: {
-        src: fileRef(paths.src),
-        artifacts: fileRef(paths.artifacts),
-        evidence: fileRef(paths.evidence),
-        logs: fileRef(paths.logs),
-      },
-    },
-    stages: summaryStages,
-    omittedStageCount: stages.length - selected.length,
-    truncated,
-  };
+  return buildTaskProjectHandoffSummary({ project, plan, stages, maxStages, maxTextChars, maxRefsPerStage });
 }
 
 export async function listRecentTaskProjects(workspace: string, filters: ListRecentTaskProjectsFilters = {}): Promise<TaskProject[]> {
@@ -1190,184 +942,4 @@ function defaultTaskProjectStageAdapterSkill(skillDomain: GatewayRequest['skillD
 function requiredStageRef(value: string | undefined, name: string) {
   if (!value) throw new Error(`Task stage is missing ${name}.`);
   return value;
-}
-
-function taskProjectRelativePaths(projectId: string): TaskProjectPaths {
-  const root = join('.sciforge', 'projects', projectId);
-  return {
-    root,
-    projectJson: join(root, 'project.json'),
-    planJson: join(root, 'plan.json'),
-    stages: join(root, 'stages'),
-    src: join(root, 'src'),
-    artifacts: join(root, 'artifacts'),
-    evidence: join(root, 'evidence'),
-    logs: join(root, 'logs'),
-  };
-}
-
-function syncProject(project: TaskProject, plan: TaskProjectPlan, updatedAt: string) {
-  project.stageRefs = plan.stageRefs;
-  project.latestStageRef = plan.stageRefs.at(-1);
-  project.status = projectStatusForStages(plan.stages);
-  project.updatedAt = updatedAt;
-}
-
-function projectStatusForStages(stages: TaskProjectPlanStage[]): TaskProjectStatus {
-  if (stages.some((stage) => stage.status === 'failed')) return 'failed';
-  if (stages.some((stage) => stage.status === 'repair-needed')) return 'repair-needed';
-  if (stages.some((stage) => stage.status === 'blocked')) return 'blocked';
-  if (stages.length > 0 && stages.every((stage) => stage.status === 'done' || stage.status === 'skipped')) return 'done';
-  if (stages.some((stage) => stage.status === 'running' || stage.status === 'done')) return 'running';
-  return 'planned';
-}
-
-function findPlanStage(plan: TaskProjectPlan, stageId: string | number) {
-  const stage = typeof stageId === 'number'
-    ? plan.stages.find((entry) => entry.index === stageId)
-    : plan.stages.find((entry) => entry.id === stageId);
-  if (!stage) throw new Error(`Task stage not found: ${String(stageId)}`);
-  return stage;
-}
-
-function nextStageIndex(plan: TaskProjectPlan) {
-  return plan.stages.reduce((max, stage) => Math.max(max, stage.index), 0) + 1;
-}
-
-function stageRef(projectId: string, stageId: string) {
-  return fileRef(join('.sciforge', 'projects', projectId, 'stages', `${stageId}.json`));
-}
-
-function stageEvidenceRef(projectId: string, stageId: string, seed: string) {
-  return fileRef(join('.sciforge', 'projects', projectId, 'evidence', `${stageId}-${safeToken(seed)}.json`));
-}
-
-function fileRef(relPath: string) {
-  return `file:${relPath.split('\\').join('/')}`;
-}
-
-function stripFileRef(ref: string) {
-  return ref.startsWith('file:') ? ref.slice('file:'.length) : ref;
-}
-
-function normalizeOptionalRef(workspaceRoot: string, value: string | undefined) {
-  return value === undefined ? undefined : normalizeRef(workspaceRoot, value);
-}
-
-function normalizeRef(workspaceRoot: string, value: string) {
-  const ref = value.trim();
-  if (!ref) throw new Error('Task project ref cannot be empty');
-  if (/^[a-z][a-z0-9+.-]*:/i.test(ref) && !ref.startsWith('file:')) return ref;
-  const rel = stripFileRef(ref);
-  assertWorkspaceRelative(workspaceRoot, rel);
-  return fileRef(rel);
-}
-
-function stableRefList(workspaceRoot: string, values: string[] | undefined) {
-  return stableStringList(values?.map((value) => normalizeRef(workspaceRoot, value)));
-}
-
-function stableStringList(values: string[] | undefined) {
-  return Array.from(new Set((values ?? []).map((value) => value.trim()).filter(Boolean))).sort();
-}
-
-function stableGuidanceQueue(values: TaskProjectGuidance[] | undefined) {
-  return (values ?? []).filter((entry) => entry && typeof entry.message === 'string').map((entry) => ({
-    ...entry,
-    id: normalizeGuidanceId(entry.id),
-    message: entry.message.trim(),
-    source: entry.source?.trim() || undefined,
-    stageId: entry.stageId?.trim() || undefined,
-    decision: entry.decision?.trim() || undefined,
-    reason: entry.reason?.trim() || undefined,
-  }));
-}
-
-function stableWorkEvidence(values: WorkEvidence[] | undefined) {
-  return (values ?? []).map((evidence) => ({
-    ...evidence,
-    evidenceRefs: stableStringList(evidence.evidenceRefs),
-    recoverActions: stableStringList(evidence.recoverActions),
-    diagnostics: evidence.diagnostics ? stableStringList(evidence.diagnostics) : undefined,
-  }));
-}
-
-function stableAppend(values: string[], value: string) {
-  return values.includes(value) ? values : [...values, value];
-}
-
-function normalizeWorkspace(workspace: string) {
-  return resolve(workspace);
-}
-
-function resolveWorkspacePath(workspaceRoot: string, relPath: string) {
-  assertWorkspaceRelative(workspaceRoot, relPath);
-  return resolve(workspaceRoot, relPath);
-}
-
-function assertWorkspaceRelative(workspaceRoot: string, relPath: string) {
-  if (!relPath || /^[a-z][a-z0-9+.-]*:/i.test(relPath) || relPath.startsWith('/') || relPath.startsWith('\\')) {
-    throw new Error(`Path must be relative to workspace: ${relPath}`);
-  }
-  const resolved = resolve(workspaceRoot, relPath);
-  const rel = relative(workspaceRoot, resolved);
-  if (rel === '..' || rel.startsWith(`..${join('a', 'b').slice(1, 2)}`) || rel.startsWith('../') || rel.startsWith('..\\')) {
-    throw new Error(`Path escapes workspace: ${relPath}`);
-  }
-}
-
-function normalizeProjectId(value: string) {
-  const id = value.trim();
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id)) {
-    throw new Error(`Invalid task project id: ${value}`);
-  }
-  return id;
-}
-
-function normalizeStageKind(value: string) {
-  const kind = value.trim();
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(kind)) {
-    throw new Error(`Invalid task stage kind: ${value}`);
-  }
-  return kind;
-}
-
-function normalizeGuidanceId(value: string) {
-  const id = value.trim();
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id)) {
-    throw new Error(`Invalid task project guidance id: ${value}`);
-  }
-  return id;
-}
-
-function safeToken(value: string) {
-  return value.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'evidence';
-}
-
-function clipText(value: string | undefined, maxChars: number) {
-  if (value === undefined) return { text: undefined, truncated: false };
-  if (value.length <= maxChars) return { text: value, truncated: false };
-  const headLength = Math.max(0, maxChars - 32);
-  return {
-    text: `${value.slice(0, headLength)}\n...[truncated ${value.length - headLength} chars]`,
-    truncated: true,
-  };
-}
-
-async function writeJson(path: string, value: unknown) {
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-}
-
-async function readJson<T>(path: string): Promise<T> {
-  return JSON.parse(await readFile(path, 'utf8')) as T;
-}
-
-export async function taskProjectPathExists(workspace: string, relPath: string) {
-  try {
-    await stat(resolveWorkspacePath(normalizeWorkspace(workspace), relPath));
-    return true;
-  } catch {
-    return false;
-  }
 }

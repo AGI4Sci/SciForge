@@ -1,4 +1,5 @@
-import type { ArtifactPreviewAction, PreviewDescriptor, RuntimeArtifact } from '../../src/ui/src/domain';
+import type { RuntimeArtifact } from '@sciforge-ui/runtime-contract/artifacts';
+import type { ArtifactPreviewAction, PreviewDescriptor } from '@sciforge-ui/runtime-contract/preview';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

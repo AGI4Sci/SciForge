@@ -1,1 +1,1 @@
-export * from '../../../../packages/scenario-core/src/runtimeSmoke';
+export * from '@sciforge/scenario-core/runtime-smoke';

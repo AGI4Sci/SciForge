@@ -1,1 +1,1 @@
-export * from '../../../../packages/scenario-core/src/elementTypes';
+export * from '@sciforge/scenario-core/element-types';

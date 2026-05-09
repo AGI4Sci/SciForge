@@ -5,7 +5,19 @@
   "private": true,
   "exports": {
     ".": "./index.ts",
+    "./component-elements": "./src/componentElements.ts",
     "./contracts": "./src/contracts.ts",
+    "./element-registry": "./src/elementRegistry.ts",
+    "./element-types": "./src/elementTypes.ts",
+    "./runtime-smoke": "./src/runtimeSmoke.ts",
+    "./scenario-draft-compiler": "./src/scenarioDraftCompiler.ts",
+    "./scenario-element-compiler": "./src/scenarioElementCompiler.ts",
+    "./scenario-library": "./src/scenarioLibrary.ts",
+    "./scenario-package": "./src/scenarioPackage.ts",
+    "./scenario-quality-gate": "./src/scenarioQualityGate.ts",
+    "./skill-plan-compiler": "./src/skillPlanCompiler.ts",
+    "./ui-plan-compiler": "./src/uiPlanCompiler.ts",
+    "./validation-gate": "./src/validationGate.ts",
     "./scenario-specs": "./src/scenarioSpecs.ts"
   }
 }

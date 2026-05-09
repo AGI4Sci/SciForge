@@ -14,7 +14,7 @@ import type { SciForgeConfig } from '../domain';
 import { acceptedArtifactTypesForComponent, artifactTypesForComponents, uiModuleRegistry, type RuntimeUIModule } from '../uiModuleRegistry';
 import { renderRegisteredWorkbenchSlot } from './ResultsRenderer';
 import { ActionButton, Badge, SectionHeader, cx } from './uiPrimitives';
-import { renderScientificPlotViewer } from '../../../../packages/ui-components/scientific-plot-viewer/render';
+import { renderScientificPlotViewer } from '@sciforge-ui/components/scientific-plot-viewer/render';
 
 type LifecycleFilter = 'all' | RuntimeUIModule['lifecycle'];
 

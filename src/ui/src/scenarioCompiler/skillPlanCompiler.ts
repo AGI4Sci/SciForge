@@ -1,1 +1,1 @@
-export * from '../../../../packages/scenario-core/src/skillPlanCompiler';
+export * from '@sciforge/scenario-core/skill-plan-compiler';

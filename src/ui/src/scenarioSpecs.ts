@@ -1,1 +1,1 @@
-export * from '../../../packages/scenario-core/src/scenarioSpecs';
+export * from '@sciforge/scenario-core/scenario-specs';

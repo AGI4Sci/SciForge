@@ -1,1 +1,1 @@
-export * from '../../../../packages/scenario-core/src/validationGate';
+export * from '@sciforge/scenario-core/validation-gate';

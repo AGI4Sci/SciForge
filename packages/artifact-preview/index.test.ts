@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { RuntimeArtifact } from '../../src/ui/src/domain';
+import type { RuntimeArtifact } from '@sciforge-ui/runtime-contract/artifacts';
 import { descriptorWithDiagnostic, mergePreviewDescriptors, normalizeArtifactPreviewDescriptor, shouldHydratePreviewDescriptor } from './index';
 
 test('normalizes artifact preview descriptors from file metadata', () => {

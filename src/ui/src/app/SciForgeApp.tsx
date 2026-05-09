@@ -169,6 +169,16 @@ import { HeatmapViewer, MoleculeViewer, NetworkGraph, UmapViewer } from '../visu
 import { resolveSearchNavigation, workbenchNavigationForScenario } from './appShell/navigation';
 import { SettingsDialog, Sidebar, TopBar, type ConfigSaveState } from './appShell/ShellPanels';
 import {
+  APP_BUILD_ID,
+  feedbackStatusVariant,
+  formatSessionTime,
+  loadFeedbackAuthor,
+  mergeFileBackedConfig,
+  requestTitleFromFeedback,
+  saveFeedbackAuthor,
+  scenarioLabelForInstance,
+} from './appShell/appHelpers';
+import {
   appendTimelineEventToWorkspace,
   applySessionUpdateToWorkspace,
   createArtifactHandoffTransition,
@@ -217,74 +227,6 @@ function builtInScenarioIdForInstance(scenarioId: ScenarioInstanceId, scenarioOv
 function titleFromPrompt(prompt: string) {
   const title = prompt.trim().replace(/\s+/g, ' ').slice(0, 36);
   return title || '新聊天';
-}
-
-const FEEDBACK_AUTHOR_KEY = 'sciforge.feedback.author.v1';
-const APP_BUILD_ID = (import.meta.env.VITE_APP_VERSION as string | undefined) ?? 'local-dev';
-
-function loadFeedbackAuthor() {
-  if (typeof window === 'undefined') return { authorId: 'local-user', authorName: 'Local User' };
-  try {
-    const raw = window.localStorage.getItem(FEEDBACK_AUTHOR_KEY);
-    if (raw) {
-      const value = JSON.parse(raw) as { authorId?: unknown; authorName?: unknown };
-      if (typeof value.authorId === 'string' && typeof value.authorName === 'string') {
-        return { authorId: value.authorId, authorName: value.authorName };
-      }
-    }
-  } catch {
-    // Fall through to a stable browser-local author.
-  }
-  const author = { authorId: makeId('feedback-user'), authorName: 'Local User' };
-  saveFeedbackAuthor(author);
-  return author;
-}
-
-function saveFeedbackAuthor(author: { authorId: string; authorName: string }) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(FEEDBACK_AUTHOR_KEY, JSON.stringify(author));
-  } catch {
-    // Feedback capture still works without local author persistence.
-  }
-}
-
-
-function hasUsableModelConfig(config: SciForgeConfig) {
-  const provider = config.modelProvider.trim() || 'native';
-  if (provider === 'native') {
-    return Boolean(config.modelName.trim() || config.modelBaseUrl.trim() || config.apiKey.trim());
-  }
-  return Boolean(config.modelBaseUrl.trim() && config.apiKey.trim());
-}
-
-function mergeFileBackedConfig(current: SciForgeConfig, fileConfig: SciForgeConfig): SciForgeConfig {
-  const preserve: Partial<SciForgeConfig> = {};
-  const currentHasModel = hasUsableModelConfig(current);
-  const fileHasModel = hasUsableModelConfig(fileConfig);
-  if (currentHasModel && !fileHasModel) {
-    preserve.modelProvider = current.modelProvider;
-    preserve.modelBaseUrl = current.modelBaseUrl;
-    preserve.modelName = current.modelName;
-    preserve.apiKey = current.apiKey;
-  }
-  if (current.feedbackGithubToken?.trim() && !fileConfig.feedbackGithubToken?.trim()) {
-    preserve.feedbackGithubToken = current.feedbackGithubToken;
-  }
-  const fileRepoIsDefault = !fileConfig.feedbackGithubRepo?.trim()
-    || fileConfig.feedbackGithubRepo.trim() === defaultSciForgeConfig.feedbackGithubRepo;
-  if (current.feedbackGithubRepo?.trim()
-    && current.feedbackGithubRepo.trim() !== defaultSciForgeConfig.feedbackGithubRepo
-    && fileRepoIsDefault) {
-    preserve.feedbackGithubRepo = current.feedbackGithubRepo;
-  }
-  return Object.keys(preserve).length ? updateConfig(fileConfig, preserve) : fileConfig;
-}
-
-function formatSessionTime(value: string) {
-  const time = Date.parse(value);
-  if (!Number.isFinite(time)) return 'unknown time';
-  return new Date(time).toLocaleString('zh-CN', { hour12: false });
 }
 
 function Workbench({
@@ -978,23 +920,6 @@ function FeedbackInboxPage({
       </section>
     </main>
   );
-}
-
-function requestTitleFromFeedback(comments: FeedbackCommentRecord[]) {
-  const first = comments[0]?.comment.trim();
-  return first ? first.slice(0, 48) : 'SciForge feedback request';
-}
-
-function feedbackStatusVariant(status: FeedbackCommentStatus): 'info' | 'success' | 'warning' | 'danger' | 'muted' {
-  if (status === 'fixed') return 'success';
-  if (status === 'planned' || status === 'triaged') return 'info';
-  if (status === 'needs-discussion') return 'warning';
-  if (status === 'wont-fix') return 'danger';
-  return 'muted';
-}
-
-function scenarioLabelForInstance(scenarioId: ScenarioInstanceId) {
-  return scenarios.find((item) => item.id === scenarioId)?.name ?? String(scenarioId);
 }
 
 export function SciForgeApp() {

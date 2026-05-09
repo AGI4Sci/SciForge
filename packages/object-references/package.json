@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "private": false,
+  "dependencies": {
+    "@sciforge-ui/runtime-contract": "^1.0.0"
+  },
   "exports": {
     ".": "./index.ts"
   }

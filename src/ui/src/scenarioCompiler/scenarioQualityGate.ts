@@ -1,1 +1,1 @@
-export * from '../../../../packages/scenario-core/src/scenarioQualityGate';
+export * from '@sciforge/scenario-core/scenario-quality-gate';

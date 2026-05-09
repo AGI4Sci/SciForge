@@ -1,5 +1,5 @@
 import type { ClaimType, EvidenceLevel } from '../data';
-import { Badge, EmptyState } from '../../../../packages/design-system/src';
+import { Badge, EmptyState } from '@agi4sci/design-system';
 
 export {
   ActionButton,
@@ -18,8 +18,8 @@ export {
   cx,
   semanticTokens,
   themeClassNames,
-} from '../../../../packages/design-system/src';
-export type { BadgeVariant, ButtonVariant, SemanticToken, ThemeName } from '../../../../packages/design-system/src';
+} from '@agi4sci/design-system';
+export type { BadgeVariant, ButtonVariant, SemanticToken, ThemeName } from '@agi4sci/design-system';
 
 export function ChartLoadingFallback({ label }: { label: string }) {
   return (

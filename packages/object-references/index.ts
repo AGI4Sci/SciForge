@@ -1,15 +1,34 @@
 import type {
-  SciForgeMessage,
-  SciForgeReference,
-  SciForgeReferenceKind,
-  SciForgeRun,
-  SciForgeSession,
   ObjectAction,
   ObjectReference,
-  PreviewDescriptor,
-  RuntimeArtifact,
-  ScenarioInstanceId,
-} from '../../src/ui/src/domain';
+  SciForgeReference,
+  SciForgeReferenceKind,
+} from '@sciforge-ui/runtime-contract/references';
+import type { RuntimeArtifact } from '@sciforge-ui/runtime-contract/artifacts';
+import type { PreviewDescriptor } from '@sciforge-ui/runtime-contract/preview';
+import type { ScenarioInstanceId } from '@sciforge-ui/runtime-contract/app';
+
+export interface ObjectReferenceSessionLike {
+  artifacts: RuntimeArtifact[];
+}
+
+export interface ObjectReferenceMessageLike {
+  id: string;
+  role: 'user' | 'scenario' | 'system';
+  content: string;
+  createdAt: string;
+  references?: SciForgeReference[];
+  objectReferences?: ObjectReference[];
+}
+
+export interface ObjectReferenceRunLike {
+  id: string;
+  status: string;
+  prompt: string;
+  response: string;
+  references?: SciForgeReference[];
+  objectReferences?: ObjectReference[];
+}
 
 export interface WorkspaceFileReferenceLike {
   path: string;
@@ -67,7 +86,7 @@ export function normalizeArtifactRef(ref: string) {
   return ref.replace(/^artifact:\/\//i, '').replace(/^artifact:/i, '');
 }
 
-export function findArtifact(session: Pick<SciForgeSession, 'artifacts'>, ref?: string): RuntimeArtifact | undefined {
+export function findArtifact(session: Pick<ObjectReferenceSessionLike, 'artifacts'>, ref?: string): RuntimeArtifact | undefined {
   if (!ref) return undefined;
   const normalizedRef = normalizeArtifactRef(ref);
   return session.artifacts.find((artifact) => artifact.id === ref
@@ -79,14 +98,14 @@ export function findArtifact(session: Pick<SciForgeSession, 'artifacts'>, ref?: 
     || Object.values(artifact.metadata ?? {}).some((value) => value === ref));
 }
 
-export function artifactForObjectReference(reference: ObjectReference, session: Pick<SciForgeSession, 'artifacts'>): RuntimeArtifact | undefined {
+export function artifactForObjectReference(reference: ObjectReference, session: Pick<ObjectReferenceSessionLike, 'artifacts'>): RuntimeArtifact | undefined {
   if (reference.kind !== 'artifact') return undefined;
   return findArtifact(session, reference.ref)
     ?? findArtifact(session, reference.artifactType)
     ?? session.artifacts.find((artifact) => artifact.id === reference.id || artifact.type === reference.artifactType);
 }
 
-export function pathForObjectReference(reference: ObjectReference, session: Pick<SciForgeSession, 'artifacts'>): string | undefined {
+export function pathForObjectReference(reference: ObjectReference, session: Pick<ObjectReferenceSessionLike, 'artifacts'>): string | undefined {
   const artifact = artifactForObjectReference(reference, session);
   if (artifact) {
     return preferredArtifactPath(artifact)
@@ -138,7 +157,7 @@ export function artifactTypeForPath(path: string, kind: ObjectReference['kind'])
   return 'workspace-file';
 }
 
-export function referenceToPreviewTarget(reference: ObjectReference, session: Pick<SciForgeSession, 'artifacts'>) {
+export function referenceToPreviewTarget(reference: ObjectReference, session: Pick<ObjectReferenceSessionLike, 'artifacts'>) {
   const artifact = artifactForObjectReference(reference, session);
   const path = pathForObjectReference(reference, session);
   return {
@@ -265,7 +284,7 @@ export function referenceForArtifact(artifact: RuntimeArtifact, kind: SciForgeRe
   };
 }
 
-export function referenceForMessage(message: SciForgeMessage, runId?: string): SciForgeReference {
+export function referenceForMessage(message: ObjectReferenceMessageLike, runId?: string): SciForgeReference {
   return {
     id: `ref-message-${message.id}`,
     kind: 'message',
@@ -284,7 +303,7 @@ export function referenceForMessage(message: SciForgeMessage, runId?: string): S
   };
 }
 
-export function referenceForRun(run: SciForgeRun): SciForgeReference {
+export function referenceForRun(run: ObjectReferenceRunLike): SciForgeReference {
   return {
     id: `ref-run-${run.id}`,
     kind: 'task-result',
@@ -547,7 +566,7 @@ export function objectReferenceIcon(kind: ObjectReference['kind']) {
   return 'obj';
 }
 
-export function availableObjectActions(reference: ObjectReference, session: Pick<SciForgeSession, 'artifacts'>): ObjectAction[] {
+export function availableObjectActions(reference: ObjectReference, session: Pick<ObjectReferenceSessionLike, 'artifacts'>): ObjectAction[] {
   const declared: ObjectAction[] = reference.actions?.length ? reference.actions : ['focus-right-pane', 'pin'];
   const path = pathForObjectReference(reference, session);
   const hasWorkspacePath = Boolean(path && !/^https?:\/\//i.test(path) && !/^agentserver:\/\//i.test(path) && !/^data:/i.test(path));

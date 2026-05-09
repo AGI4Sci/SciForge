@@ -1,6 +1,6 @@
 # SciForge 文档
 
-最后更新：2026-05-08
+最后更新：2026-05-09
 
 `docs/` 只保留项目级真相源。模块内部的 API、renderer、skill 或 provider 细节继续放在对应 package 的 README 或源码旁边，避免同一个 contract 在多处漂移。
 
@@ -23,7 +23,7 @@
 - Python conversation policy bridge：[`../src/runtime/conversation-policy/apply.ts`](../src/runtime/conversation-policy/apply.ts)、[`../packages/conversation-policy-python/src/sciforge_conversation`](../packages/conversation-policy-python/src/sciforge_conversation)
 - Scenario contracts：[`../packages/scenario-core/src`](../packages/scenario-core/src)
 - Capability registry：[`../src/shared/capabilityRegistry.ts`](../src/shared/capabilityRegistry.ts)
-- Sense / verifier ABI：[`../src/shared/senseProvider.ts`](../src/shared/senseProvider.ts)、[`../src/shared/verification.ts`](../src/shared/verification.ts)
+- Sense ABI / verifier runtime ABI：[`../src/shared/senseProvider.ts`](../src/shared/senseProvider.ts)、[`../src/runtime/runtime-types.ts`](../src/runtime/runtime-types.ts)、[`../src/runtime/gateway/verification-policy.ts`](../src/runtime/gateway/verification-policy.ts)
 - Interactive view registry：[`../packages/ui-components/README.md`](../packages/ui-components/README.md)
 - Skill registry：[`../packages/skills/README.md`](../packages/skills/README.md)
 - Vision sense：[`../packages/senses/vision-sense/README.md`](../packages/senses/vision-sense/README.md)

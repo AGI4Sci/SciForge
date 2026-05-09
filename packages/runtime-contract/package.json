@@ -8,11 +8,31 @@
   "types": "./index.ts",
   "files": [
     "README.md",
+    "app.ts",
+    "artifacts.ts",
+    "events.ts",
+    "execution.ts",
     "index.ts",
+    "messages.ts",
+    "preview.ts",
+    "references.ts",
+    "session.ts",
+    "stream.ts",
+    "view.ts",
     "package.json"
   ],
   "exports": {
-    ".": "./index.ts"
+    ".": "./index.ts",
+    "./app": "./app.ts",
+    "./artifacts": "./artifacts.ts",
+    "./events": "./events.ts",
+    "./execution": "./execution.ts",
+    "./messages": "./messages.ts",
+    "./preview": "./preview.ts",
+    "./references": "./references.ts",
+    "./session": "./session.ts",
+    "./stream": "./stream.ts",
+    "./view": "./view.ts"
   },
   "peerDependencies": {
     "react": "^19.2.5"

@@ -15,7 +15,9 @@ import {
   syntheticArtifactForObjectReference,
   withComposerMarker,
 } from './index';
-import type { SciForgeSession, ObjectReference, RuntimeArtifact } from '../../src/ui/src/domain';
+import type { RuntimeArtifact } from '@sciforge-ui/runtime-contract/artifacts';
+import type { ObjectReference } from '@sciforge-ui/runtime-contract/references';
+import type { ObjectReferenceSessionLike } from './index';
 
 const artifact: RuntimeArtifact = {
   id: 'artifact-1',
@@ -28,7 +30,7 @@ const artifact: RuntimeArtifact = {
   data: { rows: [{ gene: 'TP53' }] },
 };
 
-const session = { artifacts: [artifact] } as SciForgeSession;
+const session: ObjectReferenceSessionLike = { artifacts: [artifact] };
 const artifactRef: ObjectReference = {
   id: 'obj-1',
   title: 'DE genes',
@@ -82,7 +84,7 @@ const reportArtifact: RuntimeArtifact = {
 const reportObject = objectReferenceForArtifactSummary(reportArtifact, 'run-2');
 assert.equal(reportObject.preferredView, 'report-viewer');
 assert.equal(reportObject.provenance?.path, '.sciforge/artifacts/run/research-report.md');
-assert.equal(pathForObjectReference(reportObject, { artifacts: [reportArtifact] } as SciForgeSession), '.sciforge/artifacts/run/research-report.md');
+assert.equal(pathForObjectReference(reportObject, { artifacts: [reportArtifact] }), '.sciforge/artifacts/run/research-report.md');
 assert.equal(referenceForArtifact(reportArtifact, 'file').ref, 'file:.sciforge/artifacts/run/research-report.md');
 assert.equal(artifactReferenceKind(reportArtifact, 'report-viewer'), 'file');
 

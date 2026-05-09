@@ -1,1 +1,1 @@
-export * from '../../../../packages/scenario-core/src/uiPlanCompiler';
+export * from '@sciforge/scenario-core/ui-plan-compiler';
