@@ -170,7 +170,7 @@ Package manifest、README 或 skill contract 不能声称拥有 runtime lifecycl
 npm run smoke:module-boundaries
 ```
 
-当前少量历史例外由 [`../tools/check-module-boundaries.ts`](../tools/check-module-boundaries.ts) 以 warning 打印，并在 T099 后续迁移中收敛；新增未登记的 package -> app/runtime 私有 import 或 UI -> package internal deep import 会失败。
+`smoke:module-boundaries` 只负责 import topology：package 不能反向 import app/runtime 私有文件，UI 不能相对路径深 import package internals，`src/shared` 不能继续扩散。当前少量历史例外由 [`../tools/check-module-boundaries.ts`](../tools/check-module-boundaries.ts) 以 warning 打印，并在 T099/T122 后续迁移中收敛；新增未登记的 package -> app/runtime 私有 import 或 UI -> package internal deep import 会失败。
 
 T122 相关 smoke 的目的：
 
@@ -179,6 +179,14 @@ T122 相关 smoke 的目的：
 - `smoke:capability-manifest-registry`：要求 package-owned capabilities 从 manifest/catalog 发现，而不是只在 `src` 硬编码。
 - `smoke:workspace-package-metadata`：检查嵌套 package 是否有 name/version、workspace 覆盖，且能声明或继承 SciForge metadata，避免 package 只靠目录约定被发现。
 - `smoke:package-runtime-boundary`：阻止 package manifest、README 和 SKILL contract 声称 persistence、global safety、stream lifecycle、workspace ref resolution 等 runtime ownership。
+
+Package 侧聚合检查：
+
+```bash
+npm run packages:check
+```
+
+`packages:check` 会先刷新 skill catalog，然后运行 `smoke:capability-manifest-registry`、`smoke:workspace-package-metadata`、`smoke:package-runtime-boundary` 和 UI component package publication checks。它不重复跑 `smoke:module-boundaries`、`smoke:fixed-platform-boundary` 或 `smoke:no-src-capability-semantics`；这些仍属于 repo/runtime 边界守门。
 
 维护 allowlist/baseline 时只登记历史迁移项或明确的短期 adapter。每条例外都应写清 owner、迁移任务、删除条件和具体符号/路径；不要用宽泛 glob 掩盖新增违规，迁移删除旧语义后同步降低基线。
 
@@ -276,4 +284,4 @@ Proposal 写入：
 - [ ] 如果是 sense/action/verifier，补 brief、request/response 或 result contract。
 - [ ] 不在 package contract 中声称 runtime lifecycle ownership。
 - [ ] 如果会被 agent 选择，只给主 agent brief，把大说明放在懒加载 README/contract。
-- [ ] 跑 `npm run typecheck`、`npm run test`、`npm run smoke:module-boundaries` 和相关 smoke。
+- [ ] 跑 `npm run typecheck`、`npm run test`、`npm run smoke:module-boundaries`；package/capability 改动再跑 `npm run packages:check`，涉及 `src`/`packages` ownership 再跑对应 T122 smoke。

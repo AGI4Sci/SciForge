@@ -17,8 +17,10 @@
     "README.md",
     "app.ts",
     "artifacts.ts",
+    "backend-tools.ts",
     "events.ts",
     "execution.ts",
+    "capability-evolution.ts",
     "capabilities.ts",
     "handoff.ts",
     "handoff-payload.ts",
@@ -29,6 +31,7 @@
     "references.ts",
     "session.ts",
     "stream.ts",
+    "validation-failure.ts",
     "view.ts",
     "package.json"
   ],
@@ -36,8 +39,10 @@
     ".": "./index.ts",
     "./app": "./app.ts",
     "./artifacts": "./artifacts.ts",
+    "./backend-tools": "./backend-tools.ts",
     "./events": "./events.ts",
     "./execution": "./execution.ts",
+    "./capability-evolution": "./capability-evolution.ts",
     "./capabilities": "./capabilities.ts",
     "./handoff": "./handoff.ts",
     "./handoff-payload": "./handoff-payload.ts",
@@ -47,6 +52,7 @@
     "./references": "./references.ts",
     "./session": "./session.ts",
     "./stream": "./stream.ts",
+    "./validation-failure": "./validation-failure.ts",
     "./view": "./view.ts"
   },
   "peerDependencies": {

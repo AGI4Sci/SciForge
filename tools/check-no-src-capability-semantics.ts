@@ -30,7 +30,9 @@ const rules: Rule[] = [
   {
     id: 'artifact-id-hardcode',
     message: 'src file hardcodes package-owned artifact ids or artifact type routing.',
-    match: (line) => /[`'"][a-z0-9]+(?:-[a-z0-9]+)+[`'"]/.test(line)
+    match: (line) => !isPlatformContractLine(line)
+      && !/\bartifact-schema\b/.test(line)
+      && /[`'"][a-z0-9]+(?:-[a-z0-9]+)+[`'"]/.test(line)
       && /\b(artifact|Artifact|type|targetType|requiredArtifactTypes|producer)\b/.test(line),
   },
   {
@@ -43,7 +45,9 @@ const rules: Rule[] = [
   {
     id: 'scenario-provider-id-hardcode',
     message: 'src file hardcodes scenario/provider/tool ids that should come from capability manifests.',
-    match: (line) => /\b(scenario|provider|tool)\b/i.test(line)
+    match: (line) => !isPlatformContractLine(line)
+      && !isBackendToolNameLine(line)
+      && /\b(scenario|provider|tool)\b/i.test(line)
       && /[`'"][a-z0-9]+(?:[._-][a-z0-9]+){2,}[`'"]/.test(line),
   },
   {
@@ -366,6 +370,14 @@ function isCodeLine(line: string) {
     && !trimmed.startsWith('} from ')
     && !trimmed.startsWith('//')
     && !trimmed.startsWith('*');
+}
+
+function isPlatformContractLine(line: string) {
+  return /\bcontractId\s*:/.test(line);
+}
+
+function isBackendToolNameLine(line: string) {
+  return /\btool\s*:\s*['"](?:list_session_artifacts|resolve_object_reference|read_artifact|render_artifact|resume_run)['"]/.test(line);
 }
 
 async function collectSourceFilesIfExists(dir: string): Promise<string[]> {

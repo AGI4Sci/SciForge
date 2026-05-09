@@ -1,8 +1,9 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve, sep } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type { TaskAttemptRecord } from './runtime-types.js';
 import { summarizeWorkEvidenceForHandoff } from './gateway/work-evidence-types.js';
 import { fileExists } from './workspace-task-runner.js';
+import { resolveWorkspaceFileRefPath } from './workspace-paths.js';
 
 export async function appendTaskAttempt(workspacePath: string, record: TaskAttemptRecord) {
   const workspace = resolve(workspacePath || process.cwd());
@@ -128,9 +129,11 @@ async function withWorkEvidenceSummary(workspace: string, record: TaskAttemptRec
 }
 
 function workspaceSafePath(workspace: string, ref: string) {
-  const root = resolve(workspace);
-  const path = resolve(root, ref);
-  return path === root || path.startsWith(`${root}${sep}`) ? path : undefined;
+  try {
+    return resolveWorkspaceFileRefPath(ref, workspace);
+  } catch {
+    return undefined;
+  }
 }
 
 function safeName(value: string) {

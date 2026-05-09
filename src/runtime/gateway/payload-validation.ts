@@ -1,4 +1,10 @@
 import { resolve } from 'node:path';
+import {
+  CONTRACT_VALIDATION_FAILURE_CONTRACT_ID,
+  type ContractValidationFailure,
+  type ContractValidationFailureKind,
+  type ContractValidationIssue,
+} from '@sciforge-ui/runtime-contract/validation-failure';
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-types.js';
 import { runWorkspaceTask } from '../workspace-task-runner.js';
 import { composeRuntimeUiManifest } from '../runtime-ui-manifest.js';
@@ -47,7 +53,20 @@ export async function validateAndNormalizePayload(
   const contractPayload = normalizeToolPayloadShape(payload);
   const errors = toolPayloadSchemaErrors(contractPayload);
   if (errors.length) {
-    return repairNeededPayload(request, skill, `Task output failed schema validation: ${errors.join('; ')}`, refs);
+    const validationFailure = contractValidationFailureFromErrors(errors, {
+      capabilityId: skill.id,
+      failureKind: 'payload-schema',
+      schemaPath: 'src/runtime/gateway/tool-payload-contract.ts',
+      contractId: 'sciforge.tool-payload.v1',
+      expected: 'ToolPayload with message, claims, uiManifest, executionUnits, and artifacts',
+      actual: summarizeActualContractShape(contractPayload),
+      relatedRefs: relatedRefsFromRepairRefs(refs),
+    });
+    return repairNeededPayload(request, skill, validationFailure.failureReason, {
+      ...refs,
+      recoverActions: validationFailure.recoverActions,
+      validationFailure,
+    });
   }
   const workspace = resolve(request.workspacePath || process.cwd());
   const normalizedArtifacts = await normalizeArtifactsForPayload(
@@ -62,6 +81,20 @@ export async function validateAndNormalizePayload(
     refs,
   );
   const referenceFailures = currentReferenceUsageFailures(contractPayload, persistedArtifacts, request);
+  const referenceValidationFailure = referenceFailures.length
+    ? contractValidationFailureFromErrors(referenceFailures, {
+      capabilityId: skill.id,
+      failureKind: 'reference',
+      schemaPath: 'src/runtime/gateway/payload-validation.ts#currentReferenceUsageFailures',
+      contractId: 'sciforge.current-reference-usage.v1',
+      expected: 'Payload message, claims, or artifacts reflect each required current-turn reference',
+      actual: 'One or more required current-turn references were absent from payload text/artifacts',
+      relatedRefs: [
+        ...relatedRefsFromRepairRefs(refs),
+        ...currentTurnReferenceRecords(request).map((reference) => stringField(reference.ref)).filter((ref): ref is string => Boolean(ref)),
+      ],
+    })
+    : undefined;
   const referenceFailureUnits = referenceFailures.map((failure, index) => ({
     id: `current-reference-usage-${index + 1}`,
     status: 'failed-with-reason',
@@ -71,6 +104,7 @@ export async function validateAndNormalizePayload(
       'Read the current-turn reference by ref/path/dataRef.',
       'Regenerate the final answer/artifacts from that reference, or report the ref as unreadable with nextStep.',
     ],
+    refs: referenceValidationFailure ? { validationFailure: referenceValidationFailure } : undefined,
   }));
   return {
     message: referenceFailures.length
@@ -111,6 +145,101 @@ export async function validateAndNormalizePayload(
     verificationPolicy: contractPayload.verificationPolicy,
     workEvidence: contractPayload.workEvidence,
   };
+}
+
+export interface ContractValidationFailureOptions {
+  capabilityId: string;
+  failureKind: ContractValidationFailureKind;
+  schemaPath: string;
+  contractId: string;
+  expected?: unknown;
+  actual?: unknown;
+  relatedRefs?: string[];
+  recoverActions?: string[];
+  nextStep?: string;
+}
+
+export function contractValidationFailureFromErrors(
+  errors: string[],
+  options: ContractValidationFailureOptions,
+): ContractValidationFailure {
+  const issues = errors.map(contractValidationIssueFromError);
+  const missingFields = uniqueStrings(issues.map((issue) => issue.missingField));
+  const invalidRefs = uniqueStrings(issues.map((issue) => issue.invalidRef));
+  const unresolvedUris = uniqueStrings(issues.map((issue) => issue.unresolvedUri));
+  const recoverActions = options.recoverActions ?? recoverActionsForValidationFailure(options.failureKind);
+  return {
+    contract: CONTRACT_VALIDATION_FAILURE_CONTRACT_ID,
+    schemaPath: options.schemaPath,
+    contractId: options.contractId,
+    capabilityId: options.capabilityId,
+    failureKind: options.failureKind,
+    expected: options.expected,
+    actual: options.actual,
+    missingFields,
+    invalidRefs,
+    unresolvedUris,
+    failureReason: `Contract validation failed (${options.contractId}): ${errors.join('; ')}`,
+    recoverActions,
+    nextStep: options.nextStep ?? nextStepForValidationFailure(options.failureKind),
+    relatedRefs: uniqueStrings(options.relatedRefs ?? []),
+    issues,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function contractValidationIssueFromError(error: string): ContractValidationIssue {
+  const missingMatch = error.match(/^missing\s+(.+)$/i);
+  const bracketPathMatch = error.match(/^([A-Za-z0-9_.[\]-]+)\s+/);
+  const invalidRefMatch = error.match(/(?:invalid|unresolved|missing|unreadable)[^:]*ref(?:erence)?[^:]*:\s*([^;]+)/i);
+  const currentRefMatch = error.match(/Current-turn reference was not reflected in answer\/artifacts:\s*([^;]+)/i);
+  const unresolvedUriMatch = error.match(/unresolved\s+(?:uri|url):\s*([^;]+)/i);
+  return {
+    path: missingMatch ? String(missingMatch[1]) : bracketPathMatch?.[1] ?? '$',
+    message: error,
+    expected: missingMatch ? 'present' : undefined,
+    actual: missingMatch ? 'missing' : undefined,
+    missingField: missingMatch ? String(missingMatch[1]) : undefined,
+    invalidRef: (invalidRefMatch?.[1] ?? currentRefMatch?.[1])?.trim(),
+    unresolvedUri: unresolvedUriMatch?.[1]?.trim(),
+  };
+}
+
+function recoverActionsForValidationFailure(kind: ContractValidationFailureKind) {
+  if (kind === 'reference') {
+    return [
+      'Resolve each invalid or missing reference from relatedRefs.',
+      'Regenerate the payload so message, claims, artifacts, and refs agree.',
+    ];
+  }
+  if (kind === 'artifact-schema') {
+    return [
+      'Regenerate artifacts with required id, type, schemaVersion, and data/dataRef fields.',
+      'Keep artifact refs stable and point them at materialized workspace outputs.',
+    ];
+  }
+  return [
+    'Regenerate the runtime payload with all required contract fields.',
+    'Return valid JSON that satisfies the contract before reporting success.',
+  ];
+}
+
+function nextStepForValidationFailure(kind: ContractValidationFailureKind) {
+  if (kind === 'reference') return 'Repair invalid refs or explicitly report the referenced input as unreadable, then rerun validation.';
+  return 'Repair the structured payload contract and rerun validation.';
+}
+
+function relatedRefsFromRepairRefs(refs: RepairPolicyRefs) {
+  return [refs.taskRel, refs.outputRel, refs.stdoutRel, refs.stderrRel].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+}
+
+function summarizeActualContractShape(value: unknown) {
+  if (!isRecord(value)) return typeof value;
+  return Object.fromEntries(Object.entries(value).map(([key, fieldValue]) => [key, Array.isArray(fieldValue) ? 'array' : typeof fieldValue]));
+}
+
+function uniqueStrings(values: Array<string | undefined>) {
+  return Array.from(new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)));
 }
 
 function currentReferenceUsageFailures(

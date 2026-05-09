@@ -6,6 +6,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { uiComponentManifests } from '../packages/presentation/components';
 import type { UIComponentManifest } from '../packages/presentation/components';
 
+// UI component publication checks live here. The generic package catalog smoke
+// only validates manifest discovery, while module-boundaries owns import graph
+// violations across src/ui and packages.
+
 type PackageJson = {
   name?: string;
   version?: string;

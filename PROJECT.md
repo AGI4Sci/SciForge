@@ -74,7 +74,8 @@ Todo：
 - [x] 增加 `smoke:capability-manifest-registry`，要求 package-owned capabilities 从 manifest/catalog 发现，而不是只在 `src` 中硬编码。
 - [x] 增加 `smoke:workspace-package-metadata`，扩展当前 package metadata 检查到嵌套 package，覆盖现有多个 `package.json`。
 - [x] 增加 `smoke:package-runtime-boundary`，禁止 package manifests 声称或实现 persistence、global safety、stream lifecycle、workspace ref resolution 等 runtime lifecycle ownership。
-- [ ] 更新 `tools/check-module-boundaries.ts`、`tools/check-package-catalog.ts`、`scripts/check-ui-components-package-boundaries.ts`、`package.json`、`docs/Extending.md`、`packages/README.md`，把上述 smoke 纳入验证。
+- [x] 更新 `tools/check-module-boundaries.ts`、`tools/check-package-catalog.ts`、`scripts/check-ui-components-package-boundaries.ts`、`package.json`、`docs/Extending.md`、`packages/README.md`，把上述 smoke 纳入验证。
+  说明：`smoke:module-boundaries` 只守 import topology；`packages:check` 聚合 package catalog/metadata/runtime ownership/UI component publication checks；`smoke:fixed-platform-boundary` 和 `smoke:no-src-capability-semantics` 继续独立守 T122 `src`/`packages` ownership 与 `src` 语义基线，避免与 package checks 重复。
 - [ ] 针对 boundary-heavy 长文件补拆分计划或降低阈值：`src/runtime/generation-gateway.ts`、`src/runtime/workspace-server.ts`、`src/ui/src/app/ResultsRenderer.tsx`、`src/ui/src/app/ChatPanel.tsx`、`src/runtime/workspace-task-input.ts`、`src/runtime/gateway/agentserver-prompts.ts`。
 - [x] 更新 `docs/Extending.md` 和 `packages/README.md`：新增模块应先判断属于平台秩序还是能力语义，再选择 `src/` 或 `packages/`。
 - [ ] 删除与该边界冲突的旧 registry、旧 adapter 和旧 direct import。
@@ -94,9 +95,9 @@ Todo：
 
 Todo：
 
-- [ ] 定义 `CapabilityEvolutionRecord` contract：goal summary、selected capabilities、providers、input/output schema refs、glue code ref、executionUnit refs、artifact refs、validation result、failureCode、recoverActions、repair attempts、final status、latency/cost summary、promotion candidate。
-- [ ] 定义 composed capability fallback policy contract：`atomicCapabilities`、`fallbackToAtomicWhen`、`doNotFallbackWhen`、`retryBudget`、`fallbackContext`。
-- [ ] 将 composed capability result 标准化为 `status`、`failureCode`、`fallbackable`、`confidence`、`coverage`、`recoverActions`、`atomicTrace`、related refs。
+- [x] 定义 `CapabilityEvolutionRecord` contract：goal summary、selected capabilities、providers、input/output schema refs、glue code ref、executionUnit refs、artifact refs、validation result、failureCode、recoverActions、repair attempts、final status、latency/cost summary、promotion candidate。
+- [x] 定义 composed capability fallback policy contract：`atomicCapabilities`、`fallbackToAtomicWhen`、`doNotFallbackWhen`、`retryBudget`、`fallbackContext`。
+- [x] 将 composed capability result 标准化为 `status`、`failureCode`、`fallbackable`、`confidence`、`coverage`、`recoverActions`、`atomicTrace`、related refs。
 - [ ] 在 backend 动态写胶水代码、composed capability 执行、fallback 到原子能力、repair loop 完成后写入 ledger record。
 - [ ] 建立 promotion proposal 规则：高频成功组合可提议晋升为 composed capability；高频失败模式可提议更新 validator、fallbackPolicy 或 repair hints。
 - [ ] broker 只消费 ledger 的 compact summary，不直接展开完整胶水代码和日志；需要复用/修复时再按 ref 展开。
@@ -160,6 +161,7 @@ Todo：
 
 - [ ] 定义并暴露 backend 工具 contract：`list_session_artifacts`、`resolve_object_reference`、`read_artifact`、`render_artifact`、`resume_run`。
 - [ ] 支持 workspace refs、artifact refs、executionUnit refs、run refs、file refs 和 `agentserver://` refs 的统一解析。
+- [x] 收敛 workspace file ref 解析到 `src/runtime/workspace-paths.ts` helper，并让 task attempts 复用该 helper 读取 outputRef 摘要；覆盖 `file:`、`.sciforge/*`、managed shorthand 和 workspace 越界拒绝。
 - [ ] run completed 前将 backend 输出 materialize 到 `.sciforge/task-results/*.json|md` 并返回稳定 object refs。
 - [ ] backend completed contract 禁止 “I will retrieve...” 这类计划句伪装完成；必须交付文本、artifact 或稳定 ref。
 - [ ] 建立三条最小多轮 fixtures：生成 report 后要 markdown、基于刚才 artifact 继续处理、按 failed run 原因修复。
@@ -178,7 +180,8 @@ Todo：
 
 Todo：
 
-- [ ] 定义 `ContractValidationFailure` contract：schema path、contract id、capability id、expected/actual、missing fields、invalid refs、unresolved URI、failureReason、recoverActions、nextStep、related refs。
+- [x] 定义 `ContractValidationFailure` contract：schema path、contract id、capability id、expected/actual、missing fields、invalid refs、unresolved URI、failureReason、recoverActions、nextStep、related refs。
+- [x] 收窄 handoff payload contract：为 `failureRecoveryPolicy`、`referencePolicy`、`artifactPolicy`、verification snapshots 和 attempt refs 定义窄类型/guards，同时保持 loose transport record 兼容。
 - [ ] 将现有 payload validation、artifact validation、UIManifest validation、WorkEvidence guard、verifier failure 映射到该 contract。
 - [ ] repair prompt/handoff 只消费结构化 failure，不读取散乱错误文本。
 - [ ] 删除旧的分散 repair-needed/failed-with-reason 组装逻辑，保留统一 validation-to-repair 管线。

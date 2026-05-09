@@ -11,6 +11,22 @@ export type {
   RuntimeArtifactVisibility,
 } from './artifacts';
 export type {
+  BackendArtifactToolName,
+  BackendObjectRefKind,
+  BackendToolContext,
+  ListSessionArtifactsInput,
+  ListSessionArtifactsResult,
+  ReadArtifactInput,
+  ReadArtifactResult,
+  RenderArtifactFormat,
+  RenderArtifactInput,
+  RenderArtifactResult,
+  ResolveObjectReferenceInput,
+  ResolveObjectReferenceResult,
+  ResumeRunInput,
+  ResumeRunResult,
+} from './backend-tools';
+export type {
   ArtifactPreviewAction,
   PreviewDerivative,
   PreviewDerivativeKind,
@@ -28,6 +44,33 @@ export type {
   SciForgeReference,
   SciForgeReferenceKind,
 } from './references';
+export {
+  CONTRACT_VALIDATION_FAILURE_CONTRACT_ID,
+  contractValidationFailureSchema,
+} from './validation-failure';
+export type {
+  ContractValidationFailure,
+  ContractValidationFailureKind,
+  ContractValidationIssue,
+} from './validation-failure';
+export type {
+  CapabilityEvolutionCompactRecord,
+  CapabilityEvolutionCompactSummary,
+  CapabilityEvolutionRecord,
+  CapabilityEvolutionRecordStatus,
+  CapabilityFallbackBlocker,
+  CapabilityFallbackTrigger,
+  CapabilityLatencyCostSummary,
+  CapabilityPromotionCandidate,
+  CapabilityProviderRef,
+  CapabilityRepairAttemptRef,
+  CapabilityValidationResultRef,
+  ComposedCapabilityAtomicTrace,
+  ComposedCapabilityFallbackPolicy,
+  ComposedCapabilityResult,
+  ComposedCapabilityResultStatus,
+  SelectedCapabilityRef,
+} from './capability-evolution';
 export type {
   ExecutionUnitStatus,
   RuntimeExecutionUnit,

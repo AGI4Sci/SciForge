@@ -1,4 +1,5 @@
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-types.js';
+import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract/validation-failure';
 import { sha1 } from '../workspace-task-runner.js';
 import { diagnosticForFailure } from './backend-failure-diagnostics.js';
 
@@ -10,6 +11,7 @@ export interface RepairPolicyRefs {
   blocker?: string;
   agentServerRefs?: Record<string, unknown>;
   recoverActions?: string[];
+  validationFailure?: ContractValidationFailure;
 }
 
 export function repairNeededPayload(
@@ -68,6 +70,7 @@ export function repairNeededPayload(
       blocker: refs.blocker,
       refs: {
         ...refs.agentServerRefs,
+        validationFailure: refs.validationFailure,
         diagnostic: {
           kind: diagnostic.kind,
           categories: diagnostic.categories,

@@ -23,7 +23,7 @@ const discoveredSkills = await discoverMarkdownSkillPackages();
 const discoveredTools = await discoverMarkdownToolPackages();
 
 const packageNames = new Set<string>();
-const rendererRequiredComponentIds = new Set(['report-viewer', 'data-table']);
+const packageIds = new Set<string>();
 const forbiddenPackageReferences = [
   'skills/seed',
   'workspace/skills',
@@ -37,26 +37,14 @@ for (const manifest of manifests) {
   assert.ok(manifest.version, `${manifest.packageName} must declare a version`);
   assert.ok(manifest.docs.readmePath, `${manifest.packageName} must point to README.md`);
   assert.ok(manifest.docs.agentSummary.trim(), `${manifest.packageName} must expose docs.agentSummary`);
+  assert.ok(existsSync(manifest.docs.readmePath), `${manifest.packageName} README must exist at ${manifest.docs.readmePath}`);
   assert.equal(packageNames.has(manifest.packageName), false, `duplicate packageName: ${manifest.packageName}`);
   packageNames.add(manifest.packageName);
 
-  const readme = await readFile(manifest.docs.readmePath, 'utf8');
-  assert.match(readme, /## Agent quick contract/, `${manifest.packageName} README must include Agent quick contract`);
-  assert.match(readme, /## Human notes/, `${manifest.packageName} README must include Human notes`);
-  assert.match(readme, new RegExp(escapeRegExp(manifest.componentId ?? manifest.id ?? manifest.packageName)), `${manifest.packageName} README must mention id/componentId`);
-
-  const packageJsonPath = join(manifest.docs.readmePath.replace(/README\.md$/, ''), 'package.json');
-  const packageDir = manifest.docs.readmePath.replace(/README\.md$/, '');
-  assert.ok(existsSync(packageJsonPath), `${manifest.packageName} must have package.json`);
-  const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8')) as { name?: string; private?: boolean; version?: string };
-  assert.equal(packageJson.name, manifest.packageName, `${manifest.packageName} package.json name must match manifest`);
-  assert.equal(packageJson.version, manifest.version, `${manifest.packageName} package.json version must match manifest`);
-  assert.notEqual(packageJson.private, true, `${manifest.packageName} must be publishable, not private`);
-  assert.ok(existsSync(join(packageDir, 'manifest.ts')), `${manifest.packageName} must have manifest.ts`);
-  if (rendererRequiredComponentIds.has(manifest.componentId ?? '')) {
-    assert.ok(existsSync(join(packageDir, 'render.tsx')), `${manifest.packageName} sample package must have render.tsx`);
-    assert.ok(existsSync(join(packageDir, 'fixtures')), `${manifest.packageName} sample package must have fixtures/`);
-  }
+  const id = manifest.componentId ?? manifest.id;
+  assert.ok(id, `${manifest.packageName} must expose id or componentId for catalog discovery`);
+  assert.equal(packageIds.has(id), false, `duplicate package catalog id: ${id}`);
+  packageIds.add(id);
 }
 
 const artifactPreviewPackageJson = JSON.parse(await readFile('packages/support/artifact-preview/package.json', 'utf8')) as { name?: string; private?: boolean };
@@ -114,10 +102,6 @@ console.log(JSON.stringify({
   skills: discoveredSkills.length,
   tools: discoveredTools.length,
 }, null, 2));
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 async function packageFiles(root: string): Promise<string[]> {
   const entries = await readdir(root, { withFileTypes: true });

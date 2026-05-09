@@ -23,17 +23,6 @@ type WarningRule = {
 const root = process.cwd();
 const sourceExtensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts']);
 const ignoredDirs = new Set(['.git', 'node_modules', 'dist', 'dist-ui', 'build', 'coverage']);
-const allowedLifecycleLayers = new Set([
-  'contracts',
-  'reasoning',
-  'skills',
-  'observe',
-  'actions',
-  'verifiers',
-  'presentation',
-  'scenarios',
-  'support',
-]);
 
 const knownPackagePrivateImportWarnings: WarningRule[] = [
   {
@@ -93,9 +82,6 @@ async function main() {
 
   const errors: Finding[] = [];
   const warnings: Finding[] = [];
-  const metadataFindings = await checkTopLevelPackageMetadata();
-  errors.push(...metadataFindings.errors);
-  warnings.push(...metadataFindings.warnings);
 
   for (const sharedFile of await collectSourceFilesIfExists(join(root, 'src/shared'))) {
     errors.push({
@@ -232,72 +218,6 @@ async function collectFiles(dir: string, includeFile: (name: string) => boolean)
     if (entry.isFile() && includeFile(entry.name)) out.push(full);
   }
   return out;
-}
-
-async function checkTopLevelPackageMetadata(): Promise<{ errors: Finding[]; warnings: Finding[] }> {
-  const errors: Finding[] = [];
-  const warnings: Finding[] = [];
-  const entries = await readdir(join(root, 'packages'), { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
-    const packageJson = join(root, 'packages', entry.name, 'package.json');
-    try {
-      await access(packageJson);
-    } catch {
-      continue;
-    }
-    const importer = `packages/${entry.name}/package.json`;
-    const json = JSON.parse(await readFile(packageJson, 'utf8')) as {
-      deprecated?: unknown;
-      sciforge?: {
-        lifecycleLayer?: unknown;
-        skillFacing?: unknown;
-        sideEffects?: unknown;
-        publicContract?: unknown;
-        runtimeAdapter?: unknown;
-      };
-    };
-    const layer = json.sciforge?.lifecycleLayer;
-    if (typeof layer !== 'string' || !allowedLifecycleLayers.has(layer)) {
-      errors.push({
-        importer,
-        specifier: 'sciforge.lifecycleLayer',
-        line: 1,
-        rule: 'missing-package-lifecycle-layer',
-        message: `Top-level package must declare sciforge.lifecycleLayer as one of: ${[...allowedLifecycleLayers].join(', ')}.`,
-      });
-    }
-    for (const field of ['skillFacing', 'publicContract', 'runtimeAdapter'] as const) {
-      if (typeof json.sciforge?.[field] !== 'boolean') {
-        errors.push({
-          importer,
-          specifier: `sciforge.${field}`,
-          line: 1,
-          rule: 'missing-package-lifecycle-metadata',
-          message: `Top-level package must declare boolean sciforge.${field}.`,
-        });
-      }
-    }
-    if (typeof json.sciforge?.sideEffects !== 'string') {
-      errors.push({
-        importer,
-        specifier: 'sciforge.sideEffects',
-        line: 1,
-        rule: 'missing-package-lifecycle-metadata',
-        message: 'Top-level package must declare sciforge.sideEffects.',
-      });
-    }
-    if (entry.name === 'tools' && typeof json.deprecated !== 'string') {
-      errors.push({
-        importer,
-        specifier: 'deprecated',
-        line: 1,
-        rule: 'legacy-tools-package-not-deprecated',
-        message: 'packages/tools is a migration-era package and must be explicitly marked deprecated in favor of packages/skills/tool_skills.',
-      });
-    }
-  }
-  return { errors, warnings };
 }
 
 async function readImportEdges(file: string): Promise<ImportEdge[]> {

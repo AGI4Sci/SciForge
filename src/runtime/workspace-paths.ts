@@ -27,8 +27,22 @@ export function resolveWorkspacePreviewRef(ref: string, workspacePath = '') {
   return resolveWorkspaceFilePreviewPath(ref.replace(/^(file|path|artifact):/i, ''), workspacePath);
 }
 
+export function resolveWorkspaceFileRefPath(ref: string, workspacePath: string) {
+  const workspaceRoot = normalizeWorkspaceRootPath(resolve(workspacePath || process.cwd()));
+  if (!workspaceRoot) throw new Error('workspace path is required');
+  const stripped = stripWorkspaceFileLikeRef(ref);
+  if (!stripped) throw new Error('path is required');
+  if (/^[a-z][a-z0-9+.-]*:/i.test(stripped)) {
+    throw new Error(`Unsupported workspace file ref: ${ref}`);
+  }
+  const targetPath = resolveInsideWorkspace(workspaceRoot, stripped);
+  const managedPath = managedWorkspacePathCandidate(workspaceRoot, stripped);
+  if (managedPath && !existsSync(targetPath) && existsSync(managedPath)) return managedPath;
+  return targetPath;
+}
+
 export function resolveWorkspaceFilePreviewPath(rawPath: string, workspacePath = '') {
-  const stripped = rawPath.trim().replace(/^(file|folder):/i, '');
+  const stripped = stripWorkspaceFileLikeRef(rawPath);
   if (!stripped) throw new Error('path is required');
   const workspaceRoot = workspacePath.trim() ? normalizeWorkspaceRootPath(resolve(workspacePath)) : '';
   if (!workspaceRoot || isAbsolute(stripped)) return resolve(stripped);
@@ -36,6 +50,10 @@ export function resolveWorkspaceFilePreviewPath(rawPath: string, workspacePath =
   const managedPath = managedWorkspacePathCandidate(workspaceRoot, stripped);
   if (managedPath && !existsSync(targetPath) && existsSync(managedPath)) return managedPath;
   return targetPath;
+}
+
+function stripWorkspaceFileLikeRef(ref: string) {
+  return ref.trim().replace(/^(file|folder):/i, '');
 }
 
 function managedWorkspacePathCandidate(workspaceRoot: string, stripped: string) {
