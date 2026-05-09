@@ -72,7 +72,6 @@ const trackedBaselineCounts: Record<string, number> = {
   'src/runtime/gateway/agentserver-prompts.ts#provider-scenario-prompt-special-case': 6,
   'src/runtime/gateway/backend-failure-diagnostics.ts#provider-scenario-prompt-special-case': 2,
   'src/runtime/gateway/context-envelope.ts#provider-scenario-prompt-special-case': 1,
-  'src/runtime/gateway/direct-answer-payload.ts#provider-scenario-prompt-special-case': 2,
   'src/runtime/gateway/gateway-request.ts#provider-scenario-prompt-special-case': 1,
   'src/runtime/gateway/capability-evolution-events.ts#provider-scenario-prompt-special-case': 1,
   'src/runtime/gateway/repair-policy.ts#provider-scenario-prompt-special-case': 2,

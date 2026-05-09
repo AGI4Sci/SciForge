@@ -47,10 +47,10 @@ Todo：
 
 - [x] 建立 `src/` 固定平台清单：app shell、workspace writer、runtime server、transport、stream lifecycle、registry loader、broker shell、validation loop、ref resolver、artifact persistence、permission/safety、ledger writer、boundary smoke。
 - [x] 建立 `packages/` 插拔能力清单：observe、skills、actions、verifiers、views、importers/exporters、scenario packages、provider adapters、composed capabilities、mock fixtures。
-- [ ] `src -> packages` P0：迁移 `src/runtime/computer-use/**` 的 action provider 语义到 `packages/actions/computer-use`；`src` 只保留 gateway config、workspace refs、event emission 和 host bridge adapter。
-  进展：`capture.ts` 的 scenario/provider id、provider fallback 和 diagnostic policy 已迁到 `packages/actions/computer-use/provider-policy.ts`，`capture.ts#scenario-provider-id-hardcode` 基线清零。
+- [x] `src -> packages` P0：迁移 `src/runtime/computer-use/**` 的 action provider 语义到 `packages/actions/computer-use`；`src` 只保留 gateway config、workspace refs、event emission 和 host bridge adapter。
+  进展：`capture.ts` provider/fallback/diagnostic policy 已迁到 `packages/actions/computer-use/provider-policy.ts`；executor/input-channel/window-target taxonomy、scheduler policy、adapter aliases 和 planner issue literals 已迁到 `packages/actions/computer-use/runtime-policy.ts`，`src/runtime/computer-use/**` no-src baseline 清零。
 - [ ] `src -> packages` P0：迁移 `src/runtime/vision-sense/**` 中 planner、grounding、focus refinement、semantic verifier feedback、trace policy 到 `packages/observe/vision`；会修改 GUI 的执行部分通过 `packages/actions/computer-use` 暴露。
-  进展：refs-only / planner-only evidence completion policy 已迁到 `packages/observe/vision` Python policy，并通过 `src/runtime/vision-sense/computer-use-policy-bridge.ts` 作为 runtime bridge 使用。
+  进展：refs-only / planner-only evidence completion、action-ledger completion、planner action rewrite 和 dense/no-effect tolerance policy 已迁到 `packages/observe/vision/sciforge_vision_sense/computer_use_policy.py`，并通过 `src/runtime/vision-sense/computer-use-policy-bridge.ts` 作为 runtime bridge 使用；`computer-use-plan.ts#domain-prompt-regex` baseline 已从 8 降到 3。
 - [x] `src -> packages` P0：删除或迁移 `src/runtime/capability-profiles.ts`，统一到 `packages/scenarios/core/src/runtimeCapabilityProfiles.ts` 或 `packages/contracts/runtime/capabilities.ts`，避免重复 capability profile 真相源。
 - [x] `src -> packages` P1：迁移 `src/runtime/runtime-ui-manifest.ts` 中 renderer aliases、domain defaults、artifact-to-component routing、title/layout/encoding inference 到 `packages/presentation/interactive-views`；`src` 只保留 composition adapter。
 - [x] `src -> packages` P1：迁移 `src/ui/src/uiModuleRegistry.ts` 中 component manifest alias/index 构造到 `packages/presentation/components` 或 `packages/presentation/interactive-views` public export；UI 只消费 package registry。
@@ -58,7 +58,12 @@ Todo：
   进展：`artifactIntent.ts` 已降为 `packages/presentation/interactive-views` policy wrapper；`viewPlanResolver.ts` 已删除 artifact type regex ranking、fallback ranking 和大部分 component/domain mapping，remaining baseline 收敛到 17 个 tracked findings。
 - [x] `src -> packages` P1：迁移 `src/runtime/skill-markdown-catalog.ts` 中 SKILL.md catalog、domain/provider scoring 和 output inference 到 `packages/skills` 或 capability broker package。
 - [x] `src -> packages` P1：迁移 `src/runtime/skill-registry/runtime-matching.ts` 中 SCP/PubMed/BLAST/UniProt/ChemBL 等技能匹配 scoring/gating 语义到 `packages/skills/matching-policy.ts`；`src` 只保留 runtime filtering/sorting adapter。
+- [x] `src -> packages` P1：迁移 `src/runtime/skill-registry/{availability-validation,fallback,runtime-matching}.ts` 中 entrypoint/output/fallback runtime skill semantics 到 `packages/skills/runtime-policy.ts` 和 `packages/skills/matching-policy.ts`；`src` 只保留 filesystem probe adapter 和排序/filter。
 - [ ] `src -> packages` P1：迁移 `src/runtime/gateway/work-evidence-types.ts`、`backend-tool-work-evidence-adapter.ts`、`work-evidence-guard.ts`、`verification-results.ts` 中可复用 WorkEvidence contract、provider event normalization 和 verifier rules 到 `packages/contracts/runtime`、`packages/support/work-evidence` 或 `packages/verifiers`；gateway 只保留调用和 fail-closed enforcement。
+  进展：`WorkEvidence` contract/parser/handoff summary 和 backend tool event adapter 已迁到 `packages/contracts/runtime/work-evidence*.ts`；`src/runtime/gateway/work-evidence-types.ts` 只保留 stable package re-export，旧 `backend-tool-work-evidence-adapter.ts` 已删除。
+- [x] `src -> packages` P1：迁移 `src/runtime/gateway/artifact-reference-context.ts` 中 skillDomain -> artifact type scope matching 到 `packages/contracts/runtime/artifact-reference-policy.ts`，gateway 只调用 package policy。
+- [x] `src -> packages` P1：迁移 `src/runtime/gateway/direct-answer-payload.ts` 中 report/summary intent、report artifact、standalone artifact component binding 和 UI manifest fallback 到 `packages/presentation/interactive-views/direct-answer-result-policy.ts`。
+- [x] `src -> packages` P1：迁移 `src/ui/src/api/{runtimeConfig,sciforgeToolsClient,scopeCheck}.ts` 中 scenario/domain/scope routing semantics 到 `packages/scenarios/core/src/scenarioRoutingPolicy.ts`；UI 只消费 package-owned routing policy。
 - [ ] `src -> packages` P2：拆分 `src/runtime/gateway/verification-policy.ts`，policy/result contract 和 verifier semantics 进入 packages，workspace 写入和 runtime gating 留在 `src`。
 - [ ] `src -> packages` P2：评估 `src/runtime/conversation-policy/contracts.ts`，纯 TS/Python contract 可迁入 `packages/contracts/runtime` 或 owner package；`python-bridge.ts`、`apply.ts` 继续留在 `src`。
 - [ ] `packages -> src` P0：继续收敛 `packages/reasoning/conversation-policy/src/sciforge_conversation/service.py` 剩余 turn composition ownership；当前已删除 direct reference digest import 和 workspace-ref audit 语义，`acceptancePlan` / `userVisiblePlan` / `processStage` / `auditTrace` / `metadata` 组合已迁到 `src/runtime/gateway/conversation-service-plan.ts`，`smoke:fixed-platform-boundary` 已清零。
@@ -94,7 +99,7 @@ Todo：
 - [x] 更新 `docs/Extending.md` 和 `packages/README.md`：新增模块应先判断属于平台秩序还是能力语义，再选择 `src/` 或 `packages/`。
 - [ ] 删除与该边界冲突的旧 registry、旧 adapter 和旧 direct import。
 
-进度备注：`smoke:fixed-platform-boundary` 当前剩余 0 个 tracked warnings；`smoke:no-src-capability-semantics` 当前收敛到 672 个 tracked findings，无新增；`smoke:no-legacy-paths` 当前收敛到 37 个 tracked findings，无新增。
+进度备注：`smoke:fixed-platform-boundary` 当前剩余 0 个 tracked warnings；`smoke:no-src-capability-semantics` 当前收敛到 590 个 tracked findings，无新增；`smoke:no-legacy-paths` 当前收敛到 35 个 tracked findings，无新增。
 
 验收标准：
 

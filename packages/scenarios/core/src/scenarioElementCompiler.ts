@@ -1,5 +1,6 @@
 import type { UIManifestSlot } from './contracts';
 import { SCENARIO_SPECS, type ScenarioArtifactSchema, type ScenarioInputField, type ScenarioScopeDeclaration, type SkillDomain } from './scenarioSpecs';
+import { scenarioIdForSkillDomain } from './scenarioRoutingPolicy';
 import { elementRegistry } from './elementRegistry';
 import type { ArtifactSchemaElement, ElementRegistry, FailurePolicyElement, SkillElement, UIComponentElement } from './elementTypes';
 import type { ScenarioIR, ScenarioPackage, ScenarioPublishStatus } from './scenarioPackage';
@@ -529,10 +530,7 @@ function isComplexCellReproductionTask(text: string) {
 }
 
 function baseSpecForDomain(skillDomain: SkillDomain) {
-  if (skillDomain === 'structure') return SCENARIO_SPECS['structure-exploration'];
-  if (skillDomain === 'omics') return SCENARIO_SPECS['omics-differential-exploration'];
-  if (skillDomain === 'knowledge') return SCENARIO_SPECS['biomedical-knowledge-graph'];
-  return SCENARIO_SPECS['literature-evidence-review'];
+  return SCENARIO_SPECS[scenarioIdForSkillDomain(skillDomain) ?? 'literature-evidence-review'];
 }
 
 function safeScenarioId(value: string) {

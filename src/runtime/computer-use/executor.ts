@@ -3,9 +3,15 @@ import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import {
+  computerUseExecutorBoundary,
+  computerUseRealInputBlockReason,
+  computerUseSystemEventsResultLine,
+  computerUseUsesSharedSystemInput,
+} from '../../../packages/actions/computer-use/runtime-policy.js';
 import type { ComputerUseConfig, GenericSwiftGuiAction, GenericVisionAction, ResolvedWindowTarget, WindowTargetResolution } from './types.js';
 import { acquireComputerUseSchedulerLease, computerUseSchedulerLockId, schedulerLeaseTrace } from './scheduler.js';
-import { appleScriptString, isDarwinPlatform, runCommand, sanitizeId, sleep } from './utils.js';
+import { appleScriptString, isDarwinPlatform, runCommand, sleep } from './utils.js';
 
 export async function executeGenericDesktopAction(action: GenericVisionAction, config: ComputerUseConfig, targetResolution: WindowTargetResolution) {
   if (!targetResolution.ok) {
@@ -67,47 +73,21 @@ export async function executeGenericDesktopAction(action: GenericVisionAction, c
 }
 
 function usesSharedSystemInput(config: ComputerUseConfig) {
-  return !config.dryRun
-    && isDarwinPlatform(config.desktopPlatform)
-    && !normalizeIndependentInputAdapter(config.inputAdapter)
-    && Boolean(config.allowSharedSystemInput);
+  return computerUseUsesSharedSystemInput(config);
 }
 
 export function executorBoundary(config: ComputerUseConfig) {
-  if (isDarwinPlatform(config.desktopPlatform)) return 'darwin-system-events-generic-gui-executor';
-  return `${sanitizeId(config.desktopPlatform).toLowerCase()}-generic-gui-executor`;
+  return computerUseExecutorBoundary(config.desktopPlatform);
 }
 
 function realInputBlockReason(action: GenericVisionAction, config: ComputerUseConfig) {
-  if (config.dryRun || !requiresPointerKeyboardInput(action)) return '';
-  const independentAdapter = normalizeIndependentInputAdapter(config.inputAdapter);
-  if (independentAdapter) {
-    return [
-      `Independent input adapter "${independentAdapter}" is configured, but no executable adapter provider is registered in this runtime.`,
-      'Failing closed before sending macOS CGEvent/System Events input so SciForge does not move the user pointer or type on the user keyboard while claiming independent input.',
-    ].join(' ');
-  }
-  if (!config.allowSharedSystemInput) {
-    return [
-      'Real Computer Use action blocked before execution because no independent input adapter is available and shared system mouse/keyboard input was not explicitly allowed.',
-      'Configure a real independent input adapter provider, or set SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT=1 only for an acknowledged focused-window smoke.',
-    ].join(' ');
-  }
-  return '';
-}
-
-function requiresPointerKeyboardInput(action: GenericVisionAction) {
-  return action.type !== 'wait' && action.type !== 'open_app';
-}
-
-function normalizeIndependentInputAdapter(value: string | undefined) {
-  const normalized = value?.trim().toLowerCase().replace(/[_\s]+/g, '-');
-  if (!normalized) return undefined;
-  if (normalized === 'virtual-hid' || normalized === 'virtual-hid-device') return 'virtual-hid';
-  if (normalized === 'remote-desktop' || normalized === 'remote-desktop-session') return 'remote-desktop';
-  if (normalized === 'browser-sandbox' || normalized === 'browser-sandbox-adapter') return 'browser-sandbox';
-  if (normalized === 'accessibility-per-window' || normalized === 'accessibility-per-window-adapter') return 'accessibility-per-window';
-  return undefined;
+  return computerUseRealInputBlockReason({
+    actionType: action.type,
+    desktopPlatform: config.desktopPlatform,
+    dryRun: config.dryRun,
+    inputAdapter: config.inputAdapter,
+    allowSharedSystemInput: config.allowSharedSystemInput,
+  });
 }
 
 async function executeGenericMacAction(action: GenericVisionAction, config: ComputerUseConfig, targetResolution: ResolvedWindowTarget) {
@@ -139,7 +119,7 @@ async function executeGenericMacAction(action: GenericVisionAction, config: Comp
         ...appleScriptResult,
         stdout: [
           appleScriptResult.stdout,
-          `system-events ${action.type} visualCursor=${config.showVisualCursor ? 'not-shown-system-events-primary' : 'off'}`,
+          computerUseSystemEventsResultLine(action.type, config.showVisualCursor),
         ].filter(Boolean).join('\n'),
       };
     }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { adaptBackendToolEventToWorkEvidence } from './backend-tool-work-evidence-adapter.js';
+import { adaptBackendToolEventToWorkEvidence } from '@sciforge-ui/runtime-contract/work-evidence-adapter';
 import { collectWorkEvidenceFromBackendEvent } from './work-evidence-types.js';
 import { normalizeAgentServerWorkspaceEvent } from './workspace-event-normalizer.js';
 

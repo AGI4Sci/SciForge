@@ -1,5 +1,4 @@
-import { dirname, resolve } from 'node:path';
-
+import { planSkillAvailabilityValidation, skillAvailabilityFailureReason } from '../../../packages/skills/runtime-policy';
 import type { SkillAvailability, SkillManifest } from '../runtime-types.js';
 import { fileExists } from '../workspace-task-runner.js';
 
@@ -8,25 +7,18 @@ export async function validateSkillAvailability(
   manifestPath: string,
 ): Promise<SkillAvailability> {
   const checkedAt = new Date().toISOString();
-  const missing = requiredManifestFields
-    .filter((key) => !(key in manifest) || manifest[key] === undefined || manifest[key] === '');
+  const plan = planSkillAvailabilityValidation(manifest, { manifestPath, cwd: process.cwd() });
+  const staticFailure = skillAvailabilityFailureReason(plan);
+  if (staticFailure) return unavailable(manifest, manifestPath, checkedAt, staticFailure);
 
-  if (missing.length) {
-    return unavailable(manifest, manifestPath, checkedAt, `Manifest missing ${missing.join(', ')}`);
-  }
-  if (!manifest.skillDomains.length) {
-    return unavailable(manifest, manifestPath, checkedAt, 'Manifest skillDomains is empty');
-  }
-  if (manifest.entrypoint.type === 'workspace-task' && manifest.entrypoint.path) {
-    const entrypointPath = resolve(dirname(manifestPath), manifest.entrypoint.path);
-    if (!await fileExists(entrypointPath)) {
-      return unavailable(manifest, manifestPath, checkedAt, `Entrypoint not found: ${entrypointPath}`);
-    }
-  }
-  if (manifest.entrypoint.type === 'markdown-skill' && manifest.entrypoint.path) {
-    const markdownPath = resolve(process.cwd(), manifest.entrypoint.path);
-    if (!await fileExists(markdownPath)) {
-      return unavailable(manifest, manifestPath, checkedAt, `Markdown skill not found: ${manifest.entrypoint.path}`);
+  for (const probe of plan.fileProbes) {
+    if (!await fileExists(probe.path)) {
+      return unavailable(
+        manifest,
+        manifestPath,
+        checkedAt,
+        skillAvailabilityFailureReason(plan, probe) ?? probe.unavailableReason,
+      );
     }
   }
 
@@ -40,18 +32,6 @@ export async function validateSkillAvailability(
     manifest,
   };
 }
-
-const requiredManifestFields: Array<keyof SkillManifest> = [
-  'id',
-  'description',
-  'inputContract',
-  'outputArtifactSchema',
-  'entrypoint',
-  'environment',
-  'validationSmoke',
-  'examplePrompts',
-  'promotionHistory',
-];
 
 function unavailable(
   manifest: SkillManifest,

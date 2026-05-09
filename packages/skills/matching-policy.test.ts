@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   scoreSkillByPackagePolicy,
+  selectSkillByPackagePolicy,
   skillAllowedByPackagePolicy,
   type MatchableSkill,
   type MatchableSkillManifest,
@@ -51,4 +52,21 @@ test('package matching policy gates provider-specific biomedical tools', () => {
 test('package matching policy keeps generic inspector away from biomedical execution prompts', () => {
   assert.equal(skillAllowedByPackagePolicy(skill('inspector.generic_file_table_log'), 'show this artifact json table'), true);
   assert.equal(skillAllowedByPackagePolicy(skill('inspector.generic_file_table_log'), 'show docking table for SMILES screening'), false);
+});
+
+test('package matching policy owns markdown skill executable preference', () => {
+  const markdownSkill = skill('scp.markdown-skill');
+  const executableSkill: MatchableSkill = {
+    id: 'workspace.generated',
+    manifest: manifest({ id: 'workspace.generated', kind: 'workspace', entrypoint: { type: 'workspace-task' } }),
+  };
+
+  assert.equal(selectSkillByPackagePolicy([
+    { skill: markdownSkill, score: 10 },
+    { skill: executableSkill, score: 7 },
+  ]), executableSkill);
+  assert.equal(selectSkillByPackagePolicy([
+    { skill: markdownSkill, score: 12 },
+    { skill: executableSkill, score: 7 },
+  ]), markdownSkill);
 });

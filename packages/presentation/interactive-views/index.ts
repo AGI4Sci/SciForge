@@ -29,6 +29,17 @@ export {
   type ArtifactIntentPolicyRequest,
   type RuntimeUiManifestPolicyRequest,
 } from './runtime-ui-manifest-policy';
+export {
+  directAnswerArtifactNeedsRepair,
+  directAnswerNeedsReportArtifact,
+  directAnswerPlainTextResultPolicy,
+  ensureDirectAnswerReportArtifactPolicy,
+  normalizeDirectAnswerArtifacts,
+  normalizeDirectAnswerUiManifest,
+  preferredInteractiveViewComponentForArtifactType,
+  type DirectAnswerPayloadLike,
+  type DirectAnswerResultPolicyRequest,
+} from './direct-answer-result-policy';
 export type {
   PresentationDedupeScope,
   UIComponentManifest as InteractiveViewManifest,

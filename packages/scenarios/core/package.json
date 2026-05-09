@@ -20,6 +20,7 @@
     "./scenario-draft-compiler": "./src/scenarioDraftCompiler.ts",
     "./scenario-element-compiler": "./src/scenarioElementCompiler.ts",
     "./scenario-library": "./src/scenarioLibrary.ts",
+    "./scenario-routing-policy": "./src/scenarioRoutingPolicy.ts",
     "./scenario-package": "./src/scenarioPackage.ts",
     "./scenario-quality-gate": "./src/scenarioQualityGate.ts",
     "./skill-plan-compiler": "./src/skillPlanCompiler.ts",

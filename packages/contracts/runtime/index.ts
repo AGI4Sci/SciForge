@@ -10,6 +10,13 @@ export type {
   RuntimeArtifactExportPolicy,
   RuntimeArtifactVisibility,
 } from './artifacts';
+export {
+  artifactMatchesReferenceScope,
+} from './artifact-reference-policy';
+export type {
+  ArtifactReferencePolicyRecord,
+  ArtifactReferenceScope,
+} from './artifact-reference-policy';
 export type {
   BackendArtifactToolName,
   BackendObjectRefKind,
@@ -53,6 +60,29 @@ export type {
   ContractValidationFailureKind,
   ContractValidationIssue,
 } from './validation-failure';
+export {
+  WORK_EVIDENCE_KINDS,
+  WORK_EVIDENCE_SCHEMA,
+  WORK_EVIDENCE_STATUSES,
+  collectWorkEvidence,
+  collectWorkEvidenceFromBackendEvent,
+  parseWorkEvidence,
+  summarizeWorkEvidenceForHandoff,
+} from './work-evidence';
+export type {
+  WorkEvidence,
+  WorkEvidenceHandoffSummary,
+  WorkEvidenceKind,
+  WorkEvidenceSchemaIssue,
+  WorkEvidenceSchemaResult,
+  WorkEvidenceStatus,
+} from './work-evidence';
+export {
+  adaptBackendToolEventToWorkEvidence,
+} from './work-evidence-adapter';
+export type {
+  BackendToolWorkEvidenceAdapterOptions,
+} from './work-evidence-adapter';
 export type {
   CapabilityManifest,
   CapabilityManifestBrief,

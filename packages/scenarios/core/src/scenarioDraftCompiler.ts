@@ -1,6 +1,7 @@
 import type { ScenarioId, ScenarioRuntimeOverride } from './contracts';
 import { SCENARIO_SPECS } from './scenarioSpecs';
 import { inferDomainFromText, recommendScenarioElements } from './scenarioElementCompiler';
+import { scenarioIdBySkillDomain } from './scenarioRoutingPolicy';
 
 export type ScenarioBuilderDraft = ScenarioRuntimeOverride & {
   baseScenarioId: ScenarioId;
@@ -12,12 +13,7 @@ export type ScenarioBuilderDraft = ScenarioRuntimeOverride & {
   recommendationReasons: string[];
 };
 
-export const scenarioIdBySkillDomain: Record<ScenarioRuntimeOverride['skillDomain'], ScenarioId> = {
-  literature: 'literature-evidence-review',
-  structure: 'structure-exploration',
-  omics: 'omics-differential-exploration',
-  knowledge: 'biomedical-knowledge-graph',
-};
+export { scenarioIdBySkillDomain } from './scenarioRoutingPolicy';
 
 export function compileScenarioDraft(description: string): ScenarioBuilderDraft {
   const text = description.trim();

@@ -4,6 +4,7 @@ import { makeId, nowIso } from '../domain';
 import { extractLatencyPolicy, extractResponsePlan, latencyThresholdsFromPolicy, type RuntimeLatencyThresholds } from '../latencyPolicy';
 import { buildInitialResponseProgressEvent } from '../processProgress';
 import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
+import { builtInScenarioIdForRuntimeInput, skillDomainForRuntimeInput } from '@sciforge/scenario-core/scenario-routing-policy';
 import { expectedArtifactsForCurrentTurn, selectedComponentsForCurrentTurn } from '../artifactIntent';
 import { normalizeAgentResponse } from './agentClient';
 import { DEFAULT_AGENT_REQUEST_TIMEOUT_MS, buildSharedAgentHandoffContract } from '@sciforge-ui/runtime-contract/handoff';
@@ -45,11 +46,11 @@ export async function sendSciForgeToolMessage(
   callbacks: { onEvent?: (event: AgentStreamEvent) => void } = {},
   signal?: AbortSignal,
 ): Promise<NormalizedAgentResponse> {
-  const builtInScenarioId = builtInScenarioIdForInput(input);
+  const builtInScenarioId = builtInScenarioIdForRuntimeInput(input);
   const referenceSummary = (input.references ?? []).map(compactSciForgeReference);
   const artifactSummary = (input.artifacts ?? []).slice(-TRANSPORT_ARTIFACT_LIMIT).map(sanitizeTransportArtifact);
   const recentExecutionRefs = compactTransportExecutionUnits(input.executionUnits ?? []);
-  const skillDomain = input.scenarioOverride?.skillDomain ?? SCENARIO_SPECS[builtInScenarioId].skillDomain;
+  const skillDomain = skillDomainForRuntimeInput(input);
   const configuredComponentIds = input.availableComponentIds?.length
     ? input.availableComponentIds
     : (input.scenarioOverride?.defaultComponents?.length
@@ -344,19 +345,6 @@ function buildRepairHandoffRunnerPayload(input: SendAgentMessageInput) {
       },
     },
   };
-}
-
-function builtInScenarioIdForInput(input: SendAgentMessageInput): ScenarioId {
-  const skillDomain = input.scenarioOverride?.skillDomain;
-  if (skillDomain === 'structure') return 'structure-exploration';
-  if (skillDomain === 'omics') return 'omics-differential-exploration';
-  if (skillDomain === 'knowledge') return 'biomedical-knowledge-graph';
-  if (skillDomain === 'literature') return 'literature-evidence-review';
-  if (input.scenarioId === 'structure-exploration'
-    || input.scenarioId === 'omics-differential-exploration'
-    || input.scenarioId === 'biomedical-knowledge-graph'
-    || input.scenarioId === 'literature-evidence-review') return input.scenarioId as ScenarioId;
-  return 'literature-evidence-review';
 }
 
 function stableSessionMessages(input: SendAgentMessageInput) {

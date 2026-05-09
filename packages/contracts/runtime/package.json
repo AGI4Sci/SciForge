@@ -16,6 +16,7 @@
   "files": [
     "README.md",
     "app.ts",
+    "artifact-reference-policy.ts",
     "artifacts.ts",
     "backend-tools.ts",
     "events.ts",
@@ -33,12 +34,15 @@
     "session.ts",
     "stream.ts",
     "validation-failure.ts",
+    "work-evidence.ts",
+    "work-evidence-adapter.ts",
     "view.ts",
     "package.json"
   ],
   "exports": {
     ".": "./index.ts",
     "./app": "./app.ts",
+    "./artifact-reference-policy": "./artifact-reference-policy.ts",
     "./artifacts": "./artifacts.ts",
     "./backend-tools": "./backend-tools.ts",
     "./events": "./events.ts",
@@ -55,6 +59,8 @@
     "./session": "./session.ts",
     "./stream": "./stream.ts",
     "./validation-failure": "./validation-failure.ts",
+    "./work-evidence": "./work-evidence.ts",
+    "./work-evidence-adapter": "./work-evidence-adapter.ts",
     "./view": "./view.ts"
   },
   "peerDependencies": {

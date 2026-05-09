@@ -1,5 +1,6 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { artifactMatchesReferenceScope } from '@sciforge-ui/runtime-contract/artifact-reference-policy';
 import type { GatewayRequest, TaskAttemptRecord } from '../runtime-types.js';
 import { readRecentTaskAttempts } from '../task-attempt-history.js';
 import { fileExists } from '../workspace-task-runner.js';
@@ -62,20 +63,7 @@ export async function collectArtifactReferenceContext(request: GatewayRequest) {
 }
 
 function artifactBelongsToRequest(artifact: Record<string, unknown>, request: GatewayRequest) {
-  const producer = [
-    stringField(artifact.producerScenario),
-    stringField(artifact.producerScenarioId),
-    stringField(isRecord(artifact.metadata) ? artifact.metadata.producerScenario : undefined),
-    stringField(isRecord(artifact.metadata) ? artifact.metadata.skillDomain : undefined),
-  ].filter(Boolean).join(' ').toLowerCase();
-  if (producer && producer.includes(request.skillDomain)) return true;
-  if (producer) return false;
-  const type = String(artifact.type || artifact.id || '').toLowerCase();
-  if (request.skillDomain === 'literature') return /paper|literature|evidence|research-report/.test(type);
-  if (request.skillDomain === 'structure') return /structure|molecule|pdb|protein|research-report/.test(type);
-  if (request.skillDomain === 'omics') return /omics|expression|volcano|heatmap|umap|research-report/.test(type);
-  if (request.skillDomain === 'knowledge') return /knowledge|graph|network|sequence|research-report/.test(type);
-  return true;
+  return artifactMatchesReferenceScope(artifact, { skillDomain: request.skillDomain });
 }
 
 function pickLatestReferenceAttempt(attempts: TaskAttemptRecord[]) {

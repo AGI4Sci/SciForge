@@ -1,4 +1,4 @@
-import { scoreSkillByPackagePolicy, skillAllowedByPackagePolicy } from '../../../packages/skills/matching-policy';
+import { scoreSkillByPackagePolicy, selectSkillByPackagePolicy, skillAllowedByPackagePolicy } from '../../../packages/skills/matching-policy';
 import type { GatewayRequest, SciForgeSkillDomain, SkillAvailability, SkillManifest } from '../runtime-types.js';
 
 export function matchSkill(request: GatewayRequest, skills: SkillAvailability[]): SkillAvailability | undefined {
@@ -13,17 +13,7 @@ export function matchSkill(request: GatewayRequest, skills: SkillAvailability[])
     .map((skill) => ({ skill, score: scoreSkill(skill.manifest, request.skillDomain, prompt) }))
     .filter((item) => item.score > 0)
     .sort((left, right) => right.score - left.score || priority(left.skill.kind) - priority(right.skill.kind));
-  const top = scored[0];
-  if (!top) return undefined;
-  const bestExecutable = scored.find((item) => item.skill.manifest.entrypoint.type !== 'markdown-skill');
-  if (
-    top.skill.manifest.entrypoint.type === 'markdown-skill'
-    && bestExecutable
-    && top.score < bestExecutable.score + 4
-  ) {
-    return bestExecutable.skill;
-  }
-  return top.skill;
+  return selectSkillByPackagePolicy(scored);
 }
 
 export function scoreSkill(manifest: SkillManifest, skillDomain: SciForgeSkillDomain, prompt: string) {

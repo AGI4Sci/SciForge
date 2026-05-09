@@ -14,6 +14,11 @@ export interface MatchableSkill {
   manifest: MatchableSkillManifest;
 }
 
+export interface ScoredSkillMatch<TSkill extends MatchableSkill> {
+  skill: TSkill;
+  score: number;
+}
+
 export function scoreSkillByPackagePolicy(manifest: MatchableSkillManifest, skillDomain: SkillDomain, prompt: string) {
   let score = manifest.skillDomains.includes(skillDomain) ? 10 : 0;
   if (manifest.id === 'literature.web_search' && directWebProviderRequested(prompt)) {
@@ -40,6 +45,22 @@ export function scoreSkillByPackagePolicy(manifest: MatchableSkillManifest, skil
     if (text.includes(token)) score += manifest.entrypoint.type === 'markdown-skill' ? 0.2 : 0.5;
   }
   return score;
+}
+
+export function selectSkillByPackagePolicy<TSkill extends MatchableSkill>(
+  scored: Array<ScoredSkillMatch<TSkill>>,
+): TSkill | undefined {
+  const top = scored[0];
+  if (!top) return undefined;
+  const bestExecutable = scored.find((item) => item.skill.manifest.entrypoint.type !== 'markdown-skill');
+  if (
+    top.skill.manifest.entrypoint.type === 'markdown-skill'
+    && bestExecutable
+    && top.score < bestExecutable.score + 4
+  ) {
+    return bestExecutable.skill;
+  }
+  return top.skill;
 }
 
 export function skillAllowedByPackagePolicy(skill: MatchableSkill, prompt: string) {

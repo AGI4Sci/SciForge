@@ -8,16 +8,10 @@ import type { ComputerUseConfig as VisionSenseConfig, GenericVisionAction, LoopS
 import { inputChannelDescription, resolveWindowTarget, schedulerStepMetadata, stepInputChannelMetadata, toTraceWindowTarget, windowTargetTraceConfig } from '../computer-use/window-target.js';
 import { VISION_TOOL_ID } from './computer-use-trace-output.js';
 import {
+  actionLedgerCompletion,
   appendPlannerStep,
   nextPlannerActions,
   rewriteGenericPlannerAction,
-  shouldCompleteFromActionLedger,
-  shouldCompleteFromCreationActionLedger,
-  shouldCompleteFromExpectedFailureActionLedger,
-  shouldCompleteFromFileManagerActionLedger,
-  shouldCompleteFromSettingsFormActionLedger,
-  shouldCompleteFromValidationRecoveryActionLedger,
-  shouldCompleteFromWindowRecoveryActionLedger,
   shouldTolerateDenseUiNoEffectAction,
   visibleArtifactCompletionGap,
 } from './computer-use-plan.js';
@@ -64,7 +58,7 @@ export async function runComputerUseActionLoop(params: {
     let consecutiveNoEffectNonWaitActions = 0;
     for (let index = 0; index < config.maxSteps && actionQueue.length; index += 1) {
       const originalAction = actionQueue.shift() as GenericVisionAction;
-      const action = rewriteGenericPlannerAction(normalizePlatformAction(originalAction, config), config, steps, request.prompt);
+      const action = await rewriteGenericPlannerAction(normalizePlatformAction(originalAction, config), config, steps, request.prompt);
       const stepNumber = String(index + 1).padStart(3, '0');
       targetResolution = await resolveWindowTarget(config);
       if (!targetResolution.ok) {
@@ -317,7 +311,7 @@ export async function runComputerUseActionLoop(params: {
       });
       if (!ok) break;
       if (executableAction.type !== 'wait') {
-        const tolerateNoEffect = noVisibleEffect && shouldTolerateDenseUiNoEffectAction(request.prompt, steps, executableAction);
+        const tolerateNoEffect = noVisibleEffect && await shouldTolerateDenseUiNoEffectAction(request.prompt, steps, executableAction);
         consecutiveNoEffectNonWaitActions = noVisibleEffect && !tolerateNoEffect ? consecutiveNoEffectNonWaitActions + 1 : 0;
         if (consecutiveNoEffectNonWaitActions >= 3) {
           executionStatus = 'failed-with-reason';
@@ -336,73 +330,14 @@ export async function runComputerUseActionLoop(params: {
         plannerReportedDone = true;
         break;
       }
-      if (shouldCompleteFromActionLedger(request.prompt, steps)) {
+      const ledgerCompletion = await actionLedgerCompletion(request.prompt, steps);
+      if (ledgerCompletion.complete) {
         plannerReportedDone = true;
         const lastStep = steps[steps.length - 1];
         lastStep.verifier = {
           ...(lastStep.verifier ?? {}),
           status: 'checked',
-          reason: 'action-ledger completion policy satisfied for multi-candidate evidence screening',
-        };
-        break;
-      }
-      if (shouldCompleteFromCreationActionLedger(request.prompt, steps)) {
-        plannerReportedDone = true;
-        const lastStep = steps[steps.length - 1];
-        lastStep.verifier = {
-          ...(lastStep.verifier ?? {}),
-          status: 'checked',
-          reason: 'action-ledger completion policy satisfied for a low-risk document/slide creation task',
-        };
-        break;
-      }
-      if (shouldCompleteFromFileManagerActionLedger(request.prompt, steps)) {
-        plannerReportedDone = true;
-        const lastStep = steps[steps.length - 1];
-        lastStep.verifier = {
-          ...(lastStep.verifier ?? {}),
-          status: 'checked',
-          reason: 'action-ledger completion policy satisfied for a low-risk file-manager workflow',
-        };
-        break;
-      }
-      if (shouldCompleteFromSettingsFormActionLedger(request.prompt, steps)) {
-        plannerReportedDone = true;
-        const lastStep = steps[steps.length - 1];
-        lastStep.verifier = {
-          ...(lastStep.verifier ?? {}),
-          status: 'checked',
-          reason: 'action-ledger completion policy satisfied for a low-risk settings/form control workflow',
-        };
-        break;
-      }
-      if (shouldCompleteFromValidationRecoveryActionLedger(request.prompt, steps)) {
-        plannerReportedDone = true;
-        const lastStep = steps[steps.length - 1];
-        lastStep.verifier = {
-          ...(lastStep.verifier ?? {}),
-          status: 'checked',
-          reason: 'action-ledger completion policy satisfied for a low-risk validation/no-result recovery workflow',
-        };
-        break;
-      }
-      if (shouldCompleteFromExpectedFailureActionLedger(request.prompt, steps)) {
-        plannerReportedDone = true;
-        const lastStep = steps[steps.length - 1];
-        lastStep.verifier = {
-          ...(lastStep.verifier ?? {}),
-          status: 'checked',
-          reason: 'action-ledger completion policy satisfied for a low-risk expected-failure chat/run workflow',
-        };
-        break;
-      }
-      if (shouldCompleteFromWindowRecoveryActionLedger(request.prompt, steps)) {
-        plannerReportedDone = true;
-        const lastStep = steps[steps.length - 1];
-        lastStep.verifier = {
-          ...(lastStep.verifier ?? {}),
-          status: 'checked',
-          reason: 'action-ledger completion policy satisfied for a window recovery or migration workflow',
+          reason: ledgerCompletion.reason || 'action-ledger completion policy satisfied',
         };
         break;
       }
@@ -459,7 +394,7 @@ export async function runComputerUseActionLoop(params: {
   }
 
   if (executionStatus !== 'failed-with-reason') {
-    const completionGap = visibleArtifactCompletionGap(request.prompt, steps);
+    const completionGap = await visibleArtifactCompletionGap(request.prompt, steps);
     if (completionGap) {
       executionStatus = 'failed-with-reason';
       failureReason = completionGap;

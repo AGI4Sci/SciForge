@@ -4,10 +4,15 @@ import { test } from 'node:test';
 import {
   componentMatchesInteractiveViewFocus,
   composeRuntimeUiManifestSlots,
+  directAnswerPlainTextResultPolicy,
+  ensureDirectAnswerReportArtifactPolicy,
   expectedArtifactTypesForIntent,
   interactiveViewComponentRank,
   interactiveViewCompatibilityAliases,
   interactiveViewManifests,
+  normalizeDirectAnswerArtifacts,
+  normalizeDirectAnswerUiManifest,
+  preferredInteractiveViewComponentForArtifactType,
   selectedViewComponentsForIntent,
   uiComponentCompatibilityAliases,
   uiComponentManifests,
@@ -73,4 +78,56 @@ test('interactive view policy owns result focus and component ranking', () => {
   assert.equal(componentMatchesInteractiveViewFocus('graph-viewer', 'results'), true);
   assert.equal(componentMatchesInteractiveViewFocus('evidence-matrix', 'results'), false);
   assert.equal(interactiveViewComponentRank('report-viewer') < interactiveViewComponentRank('record-table'), true);
+});
+
+test('direct answer result policy owns report artifact and view selection semantics', () => {
+  const plain = directAnswerPlainTextResultPolicy('Final markdown report', {
+    skillDomain: 'literature',
+    prompt: '请总结成报告',
+    expectedArtifactTypes: [],
+  });
+  assert.equal(plain.artifacts[0].type, 'research-report');
+  assert.equal(plain.uiManifest[0].componentId, 'report-viewer');
+
+  const runtimeOnly = directAnswerPlainTextResultPolicy('Done', {
+    skillDomain: 'knowledge',
+    prompt: 'quick answer',
+    expectedArtifactTypes: [],
+  });
+  assert.deepEqual(
+    runtimeOnly.uiManifest.map((slot) => slot.componentId),
+    ['execution-unit-table', 'execution-unit-table'],
+  );
+
+  const ensured = ensureDirectAnswerReportArtifactPolicy({
+    message: 'Updated answer',
+    artifacts: [{ id: 'old', type: 'research-report', status: 'repair-needed' }],
+    uiManifest: [{ componentId: 'execution-unit-table', artifactRef: 'run', priority: 1 }],
+  }, {
+    skillDomain: 'literature',
+    prompt: 'summary please',
+    expectedArtifactTypes: [],
+  }, 'agentserver-structured-answer');
+  assert.equal(ensured.artifacts.length, 1);
+  assert.equal(ensured.artifacts[0].type, 'research-report');
+  assert.equal(ensured.uiManifest[0].componentId, 'report-viewer');
+  assert.equal(ensured.uiManifest[1].priority, 2);
+});
+
+test('direct answer result policy owns loose artifact component binding and normalization', () => {
+  assert.equal(preferredInteractiveViewComponentForArtifactType('knowledge-graph'), 'graph-viewer');
+  assert.equal(preferredInteractiveViewComponentForArtifactType('unregistered-result'), 'unknown-artifact-inspector');
+
+  const artifacts = normalizeDirectAnswerArtifacts(undefined, 'Structured answer');
+  assert.equal(artifacts[0].type, 'research-report');
+  assert.equal((artifacts[0].data as Record<string, unknown>).markdown, 'Structured answer');
+
+  const manifest = normalizeDirectAnswerUiManifest(
+    { components: ['report-viewer', 'unknown-artifact-inspector'] },
+    [{ id: 'updated-research-report', type: 'research-report' }],
+  );
+  assert.deepEqual(
+    manifest.map((slot) => slot.artifactRef),
+    ['updated-research-report', 'updated-research-report'],
+  );
 });

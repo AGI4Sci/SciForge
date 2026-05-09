@@ -1,5 +1,4 @@
-import { isRecord, toStringList } from '../gateway-utils.js';
-import type { WorkEvidence } from './work-evidence-types.js';
+import type { WorkEvidence } from './work-evidence';
 
 const TOOL_OPERATION_KINDS = ['search', 'fetch', 'read', 'command', 'validate'] as const;
 type ToolOperationKind = typeof TOOL_OPERATION_KINDS[number];
@@ -401,4 +400,13 @@ function uniqueStrings(values: Array<string | undefined>) {
 function clipText(value: string | undefined, maxChars: number) {
   if (!value) return undefined;
   return value.length <= maxChars ? value : `${value.slice(0, Math.max(0, maxChars - 24))}\n...[truncated ${value.length - Math.max(0, maxChars - 24)} chars]`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function toStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0).map((entry) => entry.trim());
 }

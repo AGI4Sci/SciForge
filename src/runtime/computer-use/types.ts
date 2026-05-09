@@ -1,3 +1,5 @@
+import type { ComputerUsePlannerContractIssue } from '../../../packages/actions/computer-use/runtime-policy.js';
+
 export type GenericVisionAction =
   | ({ type: 'click'; x?: number; y?: number } & GenericActionMetadata)
   | ({ type: 'double_click'; x?: number; y?: number } & GenericActionMetadata)
@@ -136,7 +138,7 @@ export type GroundingResolution =
   | { ok: true; action: GenericVisionAction; grounding?: Record<string, unknown> }
   | { ok: false; action: GenericVisionAction; grounding?: Record<string, unknown>; reason: string };
 
-export type PlannerContractIssue = 'coordinate-output' | 'platform-incompatible-action' | 'unsupported-action' | 'empty-message-content';
+export type PlannerContractIssue = ComputerUsePlannerContractIssue;
 
 export interface ScreenshotRef {
   id: string;

@@ -4,10 +4,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
+import {
+  computerUseInputChannelContract,
+  computerUseInputChannelDescription,
+  computerUseInputPolicyIds,
+  computerUseSchedulerLockIdForTarget,
+  computerUseSchedulerRunMetadata,
+  computerUseSchedulerStepMetadata,
+  computerUseUsesSharedSystemInput,
+  isComputerUseWindowLocalCoordinateSpace,
+  normalizeComputerUseCoordinateSpace,
+  normalizeComputerUseInputIsolation,
+  normalizeComputerUseWindowTargetMode,
+} from '../../../packages/actions/computer-use/runtime-policy.js';
 import type { ComputerUseConfig, ResolvedWindowTarget, TraceWindowTarget, WindowBounds, WindowTarget, WindowTargetResolution } from './types.js';
-import { executorBoundary } from './executor.js';
 import { computerUseSchedulerLockId } from './scheduler.js';
-import { booleanConfig, envOrValue, isDarwinPlatform, numberConfig, parseJson, runCommand, sanitizeId, stringConfig, swiftOptionalString, swiftString } from './utils.js';
+import { booleanConfig, envOrValue, isDarwinPlatform, numberConfig, parseJson, runCommand, stringConfig, swiftOptionalString, swiftString } from './utils.js';
 
 export function parseWindowTarget(requestConfig: Record<string, unknown>, fileConfig: Record<string, unknown>): WindowTarget {
   const rawTarget = envOrValue(
@@ -28,7 +40,7 @@ export function parseWindowTarget(requestConfig: Record<string, unknown>, fileCo
   const contentRect = parseWindowBounds(envOrValue(process.env.SCIFORGE_VISION_WINDOW_CONTENT_RECT, targetConfig.contentRect, targetConfig.content_rect));
   const devicePixelRatio = numberConfig(process.env.SCIFORGE_VISION_WINDOW_DPR, targetConfig.devicePixelRatio, targetConfig.dpr, targetConfig.scaleFactor);
   const explicitMode = stringConfig(process.env.SCIFORGE_VISION_WINDOW_TARGET_MODE, targetConfig.mode, targetConfig.kind);
-  const mode = normalizeWindowTargetMode(explicitMode, { windowId, appName, title });
+  const mode = normalizeComputerUseWindowTargetMode(explicitMode, { windowId, appName, title });
   const enabled = booleanConfig(
     process.env.SCIFORGE_VISION_WINDOW_TARGET_ENABLED,
     targetConfig.enabled,
@@ -41,8 +53,8 @@ export function parseWindowTarget(requestConfig: Record<string, unknown>, fileCo
     targetConfig.requireWindowTarget,
     enabled && mode !== 'display',
   );
-  const coordinateSpace = normalizeCoordinateSpace(stringConfig(process.env.SCIFORGE_VISION_COORDINATE_SPACE, targetConfig.coordinateSpace, targetConfig.coordinate_space), mode);
-  const inputIsolation = normalizeInputIsolation(stringConfig(process.env.SCIFORGE_VISION_INPUT_ISOLATION, targetConfig.inputIsolation, targetConfig.input_isolation), required);
+  const coordinateSpace = normalizeComputerUseCoordinateSpace(stringConfig(process.env.SCIFORGE_VISION_COORDINATE_SPACE, targetConfig.coordinateSpace, targetConfig.coordinate_space), mode);
+  const inputIsolation = normalizeComputerUseInputIsolation(stringConfig(process.env.SCIFORGE_VISION_INPUT_ISOLATION, targetConfig.inputIsolation, targetConfig.input_isolation), required);
   return {
     enabled,
     required,
@@ -205,62 +217,46 @@ export function toTraceWindowTarget(targetResolution: ResolvedWindowTarget): Tra
 
 export function inputChannelDescription(config: ComputerUseConfig, targetResolution: WindowTargetResolution) {
   const contract = inputChannelContract(config, targetResolution);
-  const executor = contract.executorBoundary;
-  if (!targetResolution.ok) return `generic-mouse-keyboard:${executor}:blocked-unresolved-window-target`;
-  return [
-    contract.type,
-    executor,
-    targetResolution.captureKind === 'window' ? 'target-window' : 'display',
-    isWindowLocalCoordinateSpace(targetResolution.coordinateSpace) ? 'window-relative-grounding' : 'screen-relative-grounding',
-    targetResolution.inputIsolation,
-  ].join(':');
+  return computerUseInputChannelDescription({
+    contract,
+    targetResolved: targetResolution.ok,
+    captureKind: targetResolution.ok ? targetResolution.captureKind : undefined,
+    coordinateSpace: targetResolution.ok ? targetResolution.coordinateSpace : undefined,
+    inputIsolation: targetResolution.ok ? targetResolution.inputIsolation : config.windowTarget.inputIsolation,
+  });
 }
 
 export function schedulerStepMetadata(targetResolution: WindowTargetResolution, stepId: string, config?: ComputerUseConfig): Record<string, unknown> {
   if (!targetResolution.ok) {
-    return {
-      mode: 'blocked',
+    return computerUseSchedulerStepMetadata({
+      targetResolved: false,
       stepId,
-      lockId: 'unresolved-window-target',
-      lockScope: 'none',
-      actionConcurrency: 'blocked-unresolved-window-target',
-      analysisConcurrency: 'parallel-allowed',
-      focusPolicy: 'fail-closed-before-action',
-      interferenceRisk: 'blocked',
+      lockId: computerUseInputPolicyIds.unresolvedWindowLockId,
+      lockScope: 'display-fallback',
       reason: targetResolution.reason,
       diagnostics: targetResolution.diagnostics,
-    };
+    });
   }
   const targetBound = targetResolution.captureKind === 'window';
   const strictFocus = targetResolution.inputIsolation === 'require-focused-target';
   const sharedSystemInput = usesSharedSystemInput(config);
   const lockId = computerUseSchedulerLockId(targetResolution, { sharedSystemInput });
   return {
-    mode: 'serialized-window-actions',
-    stepId,
-    lockId,
-    lockScope: sharedSystemInput ? 'shared-system-input' : targetBound ? 'target-window' : 'display-fallback',
-    actionConcurrency: sharedSystemInput
-      ? 'one-real-gui-action-at-a-time-globally-for-shared-system-input'
-      : targetBound
-        ? 'one-real-gui-action-at-a-time-per-window'
-        : 'one-real-gui-action-at-a-time-per-display',
-    analysisConcurrency: 'planner-grounder-verifier-may-run-in-parallel-before-executor-lock',
-    captureKind: targetResolution.captureKind,
-    inputIsolation: targetResolution.inputIsolation,
-    focusPolicy: strictFocus ? 'require-focused-target-before-action' : 'best-effort-focus',
-    failClosedIsolation: strictFocus,
-    interferenceRisk: sharedSystemInput
-      ? 'serialized-global-shared-system-input-may-still-affect-user-devices'
-      : targetBound && strictFocus
-        ? 'low-when-focused-target-verified'
-        : 'elevated-display-or-best-effort-isolation',
-    windowLifecycle: {
+    ...computerUseSchedulerStepMetadata({
+      targetResolved: true,
+      stepId,
+      lockId,
+      lockScope: sharedSystemInput ? 'shared-system-input' : targetBound ? 'target-window' : 'display-fallback',
+      captureKind: targetResolution.captureKind,
+      inputIsolation: targetResolution.inputIsolation,
       focused: targetResolution.focused,
       minimized: targetResolution.minimized,
       occluded: targetResolution.occluded,
       captureTimestamp: targetResolution.captureTimestamp,
-    },
+      sharedSystemInput,
+      targetBound,
+      strictFocus,
+    }),
     targetWindow: toTraceWindowTarget(targetResolution),
   };
 }
@@ -268,16 +264,13 @@ export function schedulerStepMetadata(targetResolution: WindowTargetResolution, 
 export function schedulerRunMetadata(targetResolution: WindowTargetResolution, config?: ComputerUseConfig): Record<string, unknown> {
   if (!targetResolution.ok) {
     return {
-      mode: 'blocked',
-      lockId: 'unresolved-window-target',
-      lockScope: 'none',
-      policy: 'do not execute real GUI actions until WindowTarget resolves to an isolated target or explicit display fallback',
-      actionConcurrency: 'blocked-unresolved-window-target',
-      analysisConcurrency: 'parallel-allowed',
-      focusPolicy: 'fail-closed-before-action',
-      interferenceRisk: 'blocked',
+      ...computerUseSchedulerRunMetadata({
+        targetResolved: false,
+        lockId: computerUseInputPolicyIds.unresolvedWindowLockId,
+        lockScope: 'display-fallback',
+        diagnostics: targetResolution.diagnostics,
+      }),
       targetWindow: windowTargetTraceConfig(targetResolution.target),
-      diagnostics: targetResolution.diagnostics,
     };
   }
   const targetBound = targetResolution.captureKind === 'window';
@@ -285,25 +278,14 @@ export function schedulerRunMetadata(targetResolution: WindowTargetResolution, c
   const sharedSystemInput = usesSharedSystemInput(config);
   const lockId = computerUseSchedulerLockId(targetResolution, { sharedSystemInput });
   return {
-    mode: 'serialized-window-actions',
-    lockId,
-    lockScope: sharedSystemInput ? 'shared-system-input' : targetBound ? 'target-window' : 'display-fallback',
-    policy: sharedSystemInput
-      ? 'one real GUI action stream globally while using shared system mouse/keyboard; planner/grounder/verifier analysis may run in parallel before the executor lock'
-      : 'one real GUI action stream per target window; planner/grounder/verifier analysis may run in parallel before the executor lock',
-    actionConcurrency: sharedSystemInput
-      ? 'one-real-gui-action-at-a-time-globally-for-shared-system-input'
-      : targetBound
-        ? 'one-real-gui-action-at-a-time-per-window'
-        : 'one-real-gui-action-at-a-time-per-display',
-    analysisConcurrency: 'parallel-allowed',
-    focusPolicy: strictFocus ? 'require-focused-target-before-action' : 'best-effort-focus',
-    failClosedIsolation: strictFocus,
-    interferenceRisk: sharedSystemInput
-      ? 'serialized-global-shared-system-input-may-still-affect-user-devices'
-      : targetBound && strictFocus
-        ? 'low-when-focused-target-verified'
-        : 'elevated-display-or-best-effort-isolation',
+    ...computerUseSchedulerRunMetadata({
+      targetResolved: true,
+      lockId,
+      lockScope: sharedSystemInput ? 'shared-system-input' : targetBound ? 'target-window' : 'display-fallback',
+      sharedSystemInput,
+      targetBound,
+      strictFocus,
+    }),
     targetWindow: toTraceWindowTarget(targetResolution),
   };
 }
@@ -315,108 +297,27 @@ export function stepInputChannelMetadata(config: ComputerUseConfig, targetResolu
 export function inputChannelContract(config: ComputerUseConfig, targetResolution: WindowTargetResolution): Record<string, unknown> {
   const targetBound = targetResolution.ok && targetResolution.captureKind === 'window';
   const isolation = targetResolution.ok ? targetResolution.inputIsolation : config.windowTarget.inputIsolation;
-  const darwin = isDarwinPlatform(config.desktopPlatform);
-  const dryRun = config.dryRun;
-  const executor = dryRun ? 'dry-run-generic-gui-executor' : executorBoundary(config);
-  const configuredIndependentAdapter = normalizeIndependentInputAdapter(config.inputAdapter);
-  const independentAdapterReady = false;
-  const independentInput = !dryRun && Boolean(configuredIndependentAdapter) && independentAdapterReady;
-  const sharedSystemAllowed = Boolean(config.allowSharedSystemInput);
-  const sharedSystemInput = !dryRun && darwin && !configuredIndependentAdapter && sharedSystemAllowed;
-  const strictTarget = targetBound && isolation === 'require-focused-target';
-  const provider = dryRun
-    ? 'dry-run-input-channel'
-    : independentInput
-      ? `${configuredIndependentAdapter}-input-adapter`
-      : configuredIndependentAdapter
-        ? `${configuredIndependentAdapter}-input-adapter-unimplemented`
-        : darwin
-        ? 'macos-cgevent-system-events'
-        : `${config.desktopPlatform}-input-provider-unavailable`;
-  const userDeviceImpact = dryRun || independentInput
-    ? 'none'
-    : configuredIndependentAdapter
-      ? 'fail-closed-unimplemented-independent-adapter'
-    : strictTarget
-      ? 'may-use-system-input-after-focused-target-verification'
-      : 'may-affect-frontmost-window';
-  return {
-    type: 'generic-mouse-keyboard',
-    executor,
-    executorBoundary: dryRun ? 'dry-run' : executorBoundary(config),
-    provider,
-    isolation,
+  const sharedSystemInput = usesSharedSystemInput(config);
+  return computerUseInputChannelContract({
+    desktopPlatform: config.desktopPlatform,
+    dryRun: config.dryRun,
+    inputAdapter: config.inputAdapter,
+    allowSharedSystemInput: config.allowSharedSystemInput,
+    showVisualCursor: config.showVisualCursor,
+    targetResolved: targetResolution.ok,
     targetBound,
-    pointerKeyboardOwnership: dryRun ? 'virtual-dry-run-channel' : independentInput ? 'sciforge-independent-input-adapter' : sharedSystemInput ? 'shared-system-pointer-keyboard' : 'unavailable',
-    pointerMode: dryRun ? 'virtual-no-user-pointer-movement' : independentInput ? 'adapter-window-bound-pointer' : sharedSystemInput ? 'system-cursor-events' : 'none',
-    keyboardMode: dryRun ? 'virtual-no-user-keyboard-events' : independentInput ? 'adapter-window-bound-keyboard' : sharedSystemInput ? 'system-key-events' : 'none',
-    visualPointer: dryRun ? 'virtual-trace-only' : config.showVisualCursor ? 'sciforge-distinct-overlay-cursor' : 'off',
-    visualPointerShape: config.showVisualCursor ? 'cyan-diamond-magenta-outline-white-crosshair' : undefined,
-    executorLockScope: sharedSystemInput ? 'global-shared-system-input' : targetBound ? 'target-window' : 'display-fallback',
-    executorLockId: targetResolution.ok ? computerUseSchedulerLockId(targetResolution, { sharedSystemInput }) : 'unresolved-window-target',
-    userDeviceImpact,
-    independentAdapterRequiredForNoUserImpact: !dryRun && !independentInput,
-    availableIndependentAdapters: ['browser-sandbox-adapter', 'remote-desktop-session', 'virtual-hid-device', 'accessibility-per-window-adapter'],
-    currentIndependentAdapter: dryRun ? 'dry-run' : configuredIndependentAdapter ?? 'not-configured',
-    independentAdapterStatus: dryRun ? 'dry-run' : configuredIndependentAdapter ? 'configured-unimplemented' : 'not-configured',
-    sharedSystemInputExplicitlyAllowed: !dryRun && !independentInput ? sharedSystemAllowed : undefined,
-    failClosed: !targetResolution.ok || (isolation === 'require-focused-target' && !targetBound) || (!dryRun && Boolean(configuredIndependentAdapter) && !independentAdapterReady) || (!dryRun && !configuredIndependentAdapter && !sharedSystemAllowed),
-    highRiskConfirmationRequired: true,
-    policy: [
-      'Planner and Grounder may run in parallel from screenshots.',
-      'Real GUI input must acquire the scheduler lock first.',
-      'If an independent adapter is unavailable, strict target focus and explicit shared-system-input acknowledgement are required before shared system input.',
-      'High-risk send/delete/pay/authorize/publish/submit actions require upstream confirmation before executor.',
-    ],
-  };
+    isolation,
+    executorLockId: targetResolution.ok ? computerUseSchedulerLockId(targetResolution, { sharedSystemInput }) : computerUseInputPolicyIds.unresolvedWindowLockId,
+  });
 }
 
 function usesSharedSystemInput(config: ComputerUseConfig | undefined) {
   if (!config) return false;
-  return !config.dryRun
-    && isDarwinPlatform(config.desktopPlatform)
-    && !normalizeIndependentInputAdapter(config.inputAdapter)
-    && Boolean(config.allowSharedSystemInput);
+  return computerUseUsesSharedSystemInput(config);
 }
 
 export function isWindowLocalCoordinateSpace(value: string | undefined) {
-  return value === 'window' || value === 'window-local';
-}
-
-function normalizeIndependentInputAdapter(value: string | undefined) {
-  const normalized = value?.trim().toLowerCase().replace(/[_\s]+/g, '-');
-  if (!normalized) return undefined;
-  if (normalized === 'virtual-hid' || normalized === 'virtual-hid-device') return 'virtual-hid';
-  if (normalized === 'remote-desktop' || normalized === 'remote-desktop-session') return 'remote-desktop';
-  if (normalized === 'browser-sandbox' || normalized === 'browser-sandbox-adapter') return 'browser-sandbox';
-  if (normalized === 'accessibility-per-window' || normalized === 'accessibility-per-window-adapter') return 'accessibility-per-window';
-  return undefined;
-}
-
-function normalizeWindowTargetMode(value: string | undefined, target: { windowId?: number; appName?: string; title?: string }): WindowTarget['mode'] {
-  const normalized = value?.trim().toLowerCase().replace(/[-\s]+/g, '_');
-  if (normalized === 'display' || normalized === 'screen') return 'display';
-  if (normalized === 'active' || normalized === 'active_window' || normalized === 'frontmost') return 'active-window';
-  if (normalized === 'window' || normalized === 'window_id' || normalized === 'id') return 'window-id';
-  if (normalized === 'app' || normalized === 'app_window' || normalized === 'application') return 'app-window';
-  if (target.windowId !== undefined) return 'window-id';
-  if (target.appName || target.title) return 'app-window';
-  return 'display';
-}
-
-function normalizeCoordinateSpace(value: string | undefined, mode: WindowTarget['mode']): WindowTarget['coordinateSpace'] {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === 'screen' || normalized === 'global') return 'screen';
-  if (normalized === 'window-local' || normalized === 'window_local' || normalized === 'local') return 'window-local';
-  if (normalized === 'window' || normalized === 'target-window' || normalized === 'target') return 'window';
-  return mode === 'display' ? 'screen' : 'window';
-}
-
-function normalizeInputIsolation(value: string | undefined, required: boolean): WindowTarget['inputIsolation'] {
-  const normalized = value?.trim().toLowerCase().replace(/[-\s]+/g, '_');
-  if (normalized === 'require_focused_target' || normalized === 'strict' || normalized === 'required') return 'require-focused-target';
-  if (normalized === 'best_effort' || normalized === 'off' || normalized === 'none') return 'best-effort';
-  return required ? 'require-focused-target' : 'best-effort';
+  return isComputerUseWindowLocalCoordinateSpace(value);
 }
 
 async function detectMacWindowTarget(target: WindowTarget): Promise<WindowTargetResolution> {
@@ -659,13 +560,7 @@ exit(2)
 }
 
 function schedulerLockIdForTarget(target: WindowTarget, resolvedId: string | number) {
-  return sanitizeId([
-    'vision-window',
-    target.mode,
-    resolvedId,
-    target.appName,
-    target.title,
-  ].filter((part) => part !== undefined && part !== '').join('-')).toLowerCase();
+  return computerUseSchedulerLockIdForTarget(target, resolvedId);
 }
 
 function parseJsonEnv(value: string | undefined) {
