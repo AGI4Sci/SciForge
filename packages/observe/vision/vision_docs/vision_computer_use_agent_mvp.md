@@ -29,7 +29,7 @@ Visual Observer → Planner → Grounder → Executor → Verifier
 
 不做 milestone 拆分、不做多候选竞争、不做恢复。每一步就是：看目标窗口 → 粗定位关键区域 → 局部 focus crop → 精定位/执行 → 局部+整窗验证 → 把反馈写回记忆 → 继续或停止。
 
-算法边界：coarse-to-fine 的区域选择、focus region contract、verifier 反馈压缩、临时多模态记忆压缩、trace contract validation 和通用 Computer Use policy 属于 `packages/senses/vision-sense/sciforge_vision_sense`；SciForge runtime 只调用 vision-sense 接口，负责截图、裁剪、坐标映射、执行动作和写 trace。长测 runner 只负责 scenario/manifest/report 编排，不再自己维护视觉契约和通用策略。
+算法边界：coarse-to-fine 的区域选择、focus region contract、verifier 反馈压缩、临时多模态记忆压缩、trace contract validation 和通用 Computer Use policy 属于 `packages/observe/vision/sciforge_vision_sense`；SciForge runtime 只调用 vision-sense 接口，负责截图、裁剪、坐标映射、执行动作和写 trace。长测 runner 只负责 scenario/manifest/report 编排，不再自己维护视觉契约和通用策略。
 
 ---
 

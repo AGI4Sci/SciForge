@@ -211,6 +211,6 @@ result = client.predict(
 在仓库根目录运行：
 
 ```bash
-python -m unittest discover -s packages/senses/vision-sense/tests
-python -m pytest packages/senses/vision-sense/tests
+python -m unittest discover -s packages/observe/vision/tests
+python -m pytest packages/observe/vision/tests
 ```

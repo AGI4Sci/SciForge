@@ -121,7 +121,7 @@ export function defaultCapabilitySummaries(): CapabilitySummary[] {
       reliability: 'schema-checked',
       requiresNetwork: false,
       requiredConfig: [],
-      detailRef: 'packages/senses/vision-sense/README.md',
+      detailRef: 'packages/observe/vision/README.md',
     },
     {
       id: 'action.workspace-task',

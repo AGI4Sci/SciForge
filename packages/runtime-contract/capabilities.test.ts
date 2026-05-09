@@ -5,7 +5,7 @@ import {
   defaultCapabilityRegistry,
   defaultCapabilitySummaries,
   type CapabilityContract,
-} from './capabilityRegistry';
+} from './capabilities';
 
 test('default summaries 只提供 capability metadata，不再在 TS 里生成策略 brief', () => {
   const summaries = defaultCapabilitySummaries();

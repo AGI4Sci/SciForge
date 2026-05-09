@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { GatewayRequest, LlmEndpointConfig, SciForgeSkillDomain, SkillAvailability, TaskAttemptRecord, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult } from '../runtime-types.js';
-import { agentHandoffSourceMetadata } from '../../shared/agentHandoff.js';
+import { agentHandoffSourceMetadata } from '@sciforge-ui/runtime-contract/handoff';
 import { expectedArtifactTypesForRequest, normalizeLlmEndpoint, selectedComponentIdsForRequest } from './gateway-request.js';
 import { buildContextEnvelope, expectedArtifactSchema, summarizeArtifactRefs, summarizeConversationLedger, summarizeConversationPolicyForAgentServer, summarizeExecutionRefs, summarizeTaskAttemptsForAgentServer, workspaceTreeSummary, type AgentServerContextMode } from './context-envelope.js';
 import { agentServerAgentId, agentServerContextPolicy, contextWindowMetadata, fetchAgentServerContextSnapshot } from './agentserver-context-window.js';
@@ -11,9 +11,9 @@ import { readRecentTaskAttempts } from '../task-attempt-history.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { parseJsonErrorMessage, redactSecretText, sanitizeAgentServerError } from './backend-failure-diagnostics.js';
-import { toolPackageManifests } from '../../../packages/tools';
+import { toolPackageManifests } from '../../../packages/skills/tool_skills';
 import { uiComponentManifests } from '../../../packages/ui-components';
-import { defaultCapabilitySummaries } from '../../shared/capabilityRegistry.js';
+import { defaultCapabilitySummaries } from '@sciforge-ui/runtime-contract/capabilities';
 
 const AGENT_BACKEND_ANSWER_PRINCIPLE = [
   'All normal user-visible answers must be reasoned by the agent backend.',

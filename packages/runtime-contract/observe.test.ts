@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  buildSenseProviderCapabilityBrief,
-  buildSenseRequest,
-  normalizeSenseInputModality,
-  normalizeSenseResponse,
-} from './senseProvider';
 
-test('builds a reusable sense provider capability brief', () => {
-  const brief = buildSenseProviderCapabilityBrief({
-    id: 'local.example-sense',
+import {
+  buildObserveProviderCapabilityBrief,
+  buildObserveRequest,
+  normalizeObserveInputModality,
+  normalizeObserveResponse,
+} from './observe.js';
+
+test('builds a reusable observe provider capability brief', () => {
+  const brief = buildObserveProviderCapabilityBrief({
+    id: 'local.example-observe',
     oneLine: 'Turns referenced screenshots and documents into bounded text observations.',
     domains: ['gui', 'gui', 'literature'],
     triggers: ['screenshot', 'ocr'],
@@ -27,17 +28,18 @@ test('builds a reusable sense provider capability brief', () => {
   });
 
   assert.equal(brief.schemaVersion, 1);
-  assert.equal(brief.kind, 'sense');
+  assert.equal(brief.kind, 'observe');
   assert.deepEqual(brief.domains, ['gui', 'literature']);
   assert.equal(brief.output.kind, 'text-response');
   assert.equal(brief.repeatedInvocation.repeatedInvocationExpected, true);
+  assert.match(brief.repeatedInvocation.reason, /observe provider/);
   assert.equal(brief.safetyPrivacy.contextPolicy, 'refs-and-bounded-summaries');
   assert.equal(brief.safetyPrivacy.storesRawModalities, false);
   assert.ok(brief.failureModes.includes('timeout'));
 });
 
-test('normalizes sense modalities and drops invalid modal inputs', () => {
-  assert.deepEqual(normalizeSenseInputModality({
+test('normalizes observe modalities and drops invalid modal inputs', () => {
+  assert.deepEqual(normalizeObserveInputModality({
     kind: 'image',
     ref: ' artifact://image-1 ',
     mimeType: 'image/png',
@@ -52,13 +54,13 @@ test('normalizes sense modalities and drops invalid modal inputs', () => {
     metadata: undefined,
   });
 
-  assert.equal(normalizeSenseInputModality({ kind: 'unknown', ref: 'x' }), undefined);
-  assert.equal(normalizeSenseInputModality({ kind: 'image', ref: '' }), undefined);
+  assert.equal(normalizeObserveInputModality({ kind: 'unknown', ref: 'x' }), undefined);
+  assert.equal(normalizeObserveInputModality({ kind: 'image', ref: '' }), undefined);
 });
 
-test('builds instruction plus modalities to text-response requests', () => {
-  const request = buildSenseRequest({
-    providerId: 'local.example-sense',
+test('builds instruction plus modalities to text-response observe requests', () => {
+  const request = buildObserveRequest({
+    providerId: 'local.example-observe',
     instruction: '  Describe the visible table headers. ',
     preferredFormat: 'json',
     modalities: [
@@ -67,15 +69,15 @@ test('builds instruction plus modalities to text-response requests', () => {
     ],
   });
 
-  assert.equal(request.providerId, 'local.example-sense');
+  assert.equal(request.providerId, 'local.example-observe');
   assert.equal(request.instruction, 'Describe the visible table headers.');
   assert.equal(request.expectedResponse.kind, 'text-response');
   assert.equal(request.expectedResponse.preferredFormat, 'json');
   assert.deepEqual(request.modalities.map((item) => item.ref), ['artifact://screen-1']);
 });
 
-test('normalizes sense responses without inlining modality payloads', () => {
-  const response = normalizeSenseResponse({
+test('normalizes observe responses without inlining modality payloads', () => {
+  const response = normalizeObserveResponse({
     status: 'ok',
     textResponse: 'The panel contains three rows.',
     confidence: 2,

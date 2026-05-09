@@ -447,7 +447,7 @@ export async function refineActionGroundingWithFocusRegion(params: {
 
 async function visionSenseCoarseToFineRequest(request: Record<string, unknown>) {
   const python = process.env.SCIFORGE_VISION_SENSE_PYTHON || 'python3';
-  const modulePath = resolve('packages/senses/vision-sense/sciforge_vision_sense/coarse_to_fine.py');
+  const modulePath = resolve('packages/observe/vision/sciforge_vision_sense/coarse_to_fine.py');
   const code = [
     'import importlib.util, sys',
     `spec = importlib.util.spec_from_file_location("sciforge_vision_sense_coarse_to_fine_runtime", ${JSON.stringify(modulePath)})`,

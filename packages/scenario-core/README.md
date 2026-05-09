@@ -5,7 +5,7 @@
 ## 输入
 
 - `packages/skills` 中的 skill manifests
-- `packages/tools` 中的 tool manifests
+- `packages/skills/tool_skills` 中的 tool skill manifests
 - `packages/ui-components` 中的 UI component manifests
 - 内置 scenario specs
 - 用户 draft 或 element selection

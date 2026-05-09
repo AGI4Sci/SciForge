@@ -6,6 +6,13 @@
   "private": false,
   "main": "./index.ts",
   "types": "./index.ts",
+  "sciforge": {
+    "lifecycleLayer": "presentation",
+    "skillFacing": false,
+    "sideEffects": "none",
+    "publicContract": true,
+    "runtimeAdapter": false
+  },
   "scripts": {
     "packages:check": "tsx ../../scripts/check-ui-components-package-boundaries.ts"
   },

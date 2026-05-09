@@ -53,6 +53,7 @@ export type {
   UserGoalSnapshot,
   UserGoalType,
 } from './messages';
+export * from './observe';
 export type {
   EvidenceClaim,
   NotebookRecord,

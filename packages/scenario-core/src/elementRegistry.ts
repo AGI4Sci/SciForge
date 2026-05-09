@@ -1,5 +1,5 @@
 import { skillPackageManifests } from '../../skills';
-import { toolPackageManifests } from '../../tools';
+import { toolPackageManifests } from '../../skills/tool_skills';
 import type { ScenarioId } from './contracts';
 import type { SkillDomain } from './scenarioSpecs';
 import { SCENARIO_SPECS } from './scenarioSpecs';

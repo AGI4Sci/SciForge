@@ -138,8 +138,8 @@ import {
 } from './gateway/generated-task-response-text.js';
 import { tryRunVisionSenseRuntime } from './vision-sense-runtime.js';
 import { applyConversationPolicy } from './conversation-policy/apply.js';
-import { toolPackageManifests } from '../../packages/tools';
-import { agentHandoffSourceMetadata } from '../shared/agentHandoff.js';
+import { toolPackageManifests } from '../../packages/skills/tool_skills';
+import { agentHandoffSourceMetadata } from '@sciforge-ui/runtime-contract/handoff';
 
 const AGENT_BACKEND_ANSWER_PRINCIPLE = [
   'All normal user-visible answers must be reasoned by the agent backend.',

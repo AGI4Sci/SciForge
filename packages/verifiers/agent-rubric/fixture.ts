@@ -1,4 +1,4 @@
-import type { AgentVerifierRubric, AgentVerifierRequest } from '../../../src/shared/verifiers/agentRubric.js';
+import type { AgentVerifierRubric, AgentVerifierRequest } from './index.js';
 
 export const agentVerifierRubricFixture: AgentVerifierRubric = {
   id: 'fixture.agent-rubric.basic-artifact-trace',

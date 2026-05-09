@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { agentVerifierRequestFixture } from '../../../packages/verifiers/agent-rubric/fixture.js';
-import { createMockAgentVerifierProvider } from './agentRubric.js';
+import { agentVerifierRequestFixture } from './fixture.js';
+import { createMockAgentVerifierProvider } from './index.js';
 
 test('mock agent verifier applies rubric over goal, artifact refs and trace refs', async () => {
   const verifier = createMockAgentVerifierProvider();

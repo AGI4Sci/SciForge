@@ -7,7 +7,7 @@ import {
   buildSharedAgentHandoffContract,
   normalizeAgentHandoffSource,
   normalizeSharedSkillDomain,
-} from './agentHandoff';
+} from './handoff';
 
 test('normalizes shared skill domains for UI and CLI callers', () => {
   assert.equal(normalizeSharedSkillDomain('literature'), 'literature');

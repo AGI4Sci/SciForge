@@ -3,7 +3,7 @@ import {
   normalizeAgentHandoffSource,
   type SciForgeAgentHandoffSource,
   type SciForgeSharedSkillDomain,
-} from './agentHandoff';
+} from './handoff';
 
 export type VerificationMode = 'none' | 'lightweight' | 'automatic' | 'human' | 'hybrid' | 'unverified';
 

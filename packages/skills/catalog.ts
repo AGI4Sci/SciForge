@@ -6807,7 +6807,7 @@ export const skillPackageManifests = [
     "inputContract": {
       "prompt": "Free-text request matched against this SKILL.md.",
       "skillMarkdownRef": "packages/skills/installed/local/vision-gui-task/SKILL.md",
-      "visionTaskRequest": "packages/senses/vision-sense/sciforge_vision_sense/types.py:VisionTaskRequest"
+      "visionTaskRequest": "packages/observe/vision/sciforge_vision_sense/types.py:VisionTaskRequest"
     },
     "outputArtifactTypes": [
       "vision-trace"

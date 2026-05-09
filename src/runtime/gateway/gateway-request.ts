@@ -1,6 +1,6 @@
 import type { SciForgeSkillDomain, GatewayRequest, LlmEndpointConfig, VerificationMode, VerificationRiskLevel } from '../runtime-types.js';
 import { cleanUrl, isRecord, toStringList, uniqueStrings } from '../gateway-utils.js';
-import { buildSharedAgentHandoffContract, normalizeAgentHandoffSource, normalizeSharedSkillDomain, type SciForgeAgentHandoffSource } from '../../shared/agentHandoff.js';
+import { buildSharedAgentHandoffContract, normalizeAgentHandoffSource, normalizeSharedSkillDomain, type SciForgeAgentHandoffSource } from '@sciforge-ui/runtime-contract/handoff';
 
 export function normalizeGatewayRequest(body: Record<string, unknown>): GatewayRequest {
   const skillDomain = normalizeSharedSkillDomain(body.skillDomain) as SciForgeSkillDomain | undefined;

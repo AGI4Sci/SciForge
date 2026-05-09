@@ -515,7 +515,7 @@ export function findPayloadTraceRef(payload: { artifacts?: Array<Record<string, 
 
 export async function runVisionSensePythonJson(moduleName: string, request: Record<string, unknown>) {
   const python = process.env.SCIFORGE_VISION_SENSE_PYTHON || 'python3';
-  const packageRoot = resolve('packages/senses/vision-sense');
+  const packageRoot = resolve('packages/observe/vision');
   const requestJson = JSON.stringify(request);
   const requestFile = requestJson.length > 100_000
     ? join('/tmp', `sciforge-vision-sense-request-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`)

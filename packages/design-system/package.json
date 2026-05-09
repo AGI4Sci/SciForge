@@ -4,6 +4,13 @@
   "description": "SciForge design tokens and reusable UI primitives.",
   "private": true,
   "type": "module",
+  "sciforge": {
+    "lifecycleLayer": "presentation",
+    "skillFacing": false,
+    "sideEffects": "none",
+    "publicContract": true,
+    "runtimeAdapter": false
+  },
   "main": "./src/index.tsx",
   "types": "./src/index.tsx",
   "exports": {

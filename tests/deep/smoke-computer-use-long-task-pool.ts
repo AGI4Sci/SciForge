@@ -19,7 +19,7 @@ import {
   validateComputerUseLongTrace,
   validateComputerUseLongTaskPool,
 } from '../../tools/computer-use-long-task-pool';
-import { toolPackageManifests } from '../../packages/tools';
+import { toolPackageManifests } from '../../packages/skills/tool_skills';
 
 const pool = await loadComputerUseLongTaskPool();
 const visionSenseTool = toolPackageManifests.find((tool) => tool.id === 'local.vision-sense');

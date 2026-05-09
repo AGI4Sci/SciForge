@@ -1,19 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildContextEnvelope } from '../runtime/gateway/context-envelope';
-import { normalizeGatewayRequest } from '../runtime/gateway/gateway-request';
-import { buildAgentHandoffPayload } from './agentHandoffPayload';
+import { buildAgentHandoffPayload } from '@sciforge-ui/runtime-contract/handoff-payload';
+import { buildContextEnvelope } from './context-envelope';
+import { normalizeGatewayRequest } from './gateway-request';
 
 const common = {
   scenarioId: 'literature-evidence-review',
   skillDomain: 'literature' as const,
-  prompt: 'Summarize ref:A with vision sense and verify the report.',
+  prompt: 'Summarize ref:A with observe provider and verify the report.',
   workspacePath: '/tmp/sciforge-contract-workspace',
   artifacts: [{ id: 'ref-artifact', type: 'research-report', dataRef: '.sciforge/artifacts/ref-artifact.json' }],
   references: [{ id: 'ref-A', kind: 'artifact', ref: 'artifact:ref-artifact' }],
   availableSkills: ['agentserver.generate.literature'],
-  selectedToolIds: ['local.vision-sense'],
+  selectedToolIds: ['local.pubchem-lookup'],
   selectedSenseIds: ['local.vision-sense'],
   selectedActionIds: ['workspace.write-report'],
   selectedVerifierIds: ['schema.report', 'human.review'],
@@ -37,7 +37,7 @@ const common = {
   },
 };
 
-test('UI 和 CLI handoff builder 对同一 prompt/refs/capability 配置进入同一 runtime 语义', () => {
+test('UI and CLI handoff payloads normalize to the same runtime semantics', () => {
   const uiRequest = normalizeGatewayRequest(buildAgentHandoffPayload({ ...common, handoffSource: 'ui-chat' }));
   const cliRequest = normalizeGatewayRequest(buildAgentHandoffPayload(common));
 
@@ -60,7 +60,7 @@ test('UI 和 CLI handoff builder 对同一 prompt/refs/capability 配置进入�
   assert.deepEqual(uiEnvelope.scenarioFacts.verificationPolicy, cliEnvelope.scenarioFacts.verificationPolicy);
 });
 
-test('verificationPolicy 和 verificationResult 会进入下一轮上下文', () => {
+test('verification policy and result enter the next-turn context envelope', () => {
   const verificationResult = {
     id: 'verify-1',
     verdict: 'pass',
@@ -87,7 +87,7 @@ test('verificationPolicy 和 verificationResult 会进入下一轮上下文', ()
   assert.ok(envelope.longTermRefs.verificationResults?.some((entry) => (entry as Record<string, unknown>).id === 'verify-1'));
 });
 
-test('failureRecoveryPolicy 会把失败摘要和证据 refs 带入下一轮上下文', () => {
+test('failure recovery policy carries failure summary and evidence refs into next-turn context', () => {
   const failureRecoveryPolicy = {
     mode: 'preserve-context' as const,
     priorFailureReason: '工具执行失败：命令缺少依赖，acceptance 未通过。',

@@ -14,9 +14,7 @@
     "packages/scenario-core",
     "packages/interactive-views",
     "packages/skills",
-    "packages/skills/*",
-    "packages/tools",
-    "packages/tools/*"
+    "packages/skills/*"
   ],
   "scripts": {
     "dev": "tsx tools/dev.ts",
@@ -27,7 +25,7 @@
     "dev:ui": "vite --host 0.0.0.0",
     "build": "vite build",
     "skills:generate": "tsx tools/generate-skill-catalog.ts",
-    "test": "node --import tsx --test \"src/shared/**/*.test.ts\" \"src/ui/src/**/*.test.ts\" \"packages/**/*.test.ts\" \"packages/**/*.test.tsx\"",
+    "test": "node --import tsx --test \"src/ui/src/**/*.test.ts\" \"src/runtime/**/*.test.ts\" \"packages/**/*.test.ts\" \"packages/**/*.test.tsx\"",
     "verify": "npm run verify:fast",
     "verify:fast": "npm run typecheck && npm run test && npm run smoke:all && npm run build && npm run smoke:build-budget && npm run smoke:long-file-budget && npm run smoke:module-boundaries",
     "verify:full": "npm run verify:fast && npm run smoke:browser && npm run artifacts:index",

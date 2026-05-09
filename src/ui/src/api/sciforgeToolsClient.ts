@@ -6,8 +6,8 @@ import { buildInitialResponseProgressEvent } from '../processProgress';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
 import { expectedArtifactsForCurrentTurn, selectedComponentsForCurrentTurn } from '../artifactIntent';
 import { normalizeAgentResponse } from './agentClient';
-import { DEFAULT_AGENT_REQUEST_TIMEOUT_MS, buildSharedAgentHandoffContract } from '../../../shared/agentHandoff';
-import { buildAgentHandoffPayload } from '../../../shared/agentHandoffPayload';
+import { DEFAULT_AGENT_REQUEST_TIMEOUT_MS, buildSharedAgentHandoffContract } from '@sciforge-ui/runtime-contract/handoff';
+import { buildAgentHandoffPayload } from '@sciforge-ui/runtime-contract/handoff-payload';
 import {
   contextWindowTelemetryEvent,
   normalizeWorkspaceRuntimeEvent,
@@ -410,8 +410,8 @@ function selectedRuntimeToolContracts(selectedToolIds: string[]) {
       selected: true,
       kind: 'sense-plugin',
       modality: 'vision',
-      packageRoot: 'packages/senses/vision-sense',
-      readmePath: 'packages/tools/local/vision-sense/SKILL.md',
+      packageRoot: 'packages/observe/vision',
+      readmePath: 'packages/skills/tool_skills/local/vision-sense/SKILL.md',
       skillTemplate: 'packages/skills/installed/local/vision-gui-task/SKILL.md',
       inputContract: {
         textField: 'text',

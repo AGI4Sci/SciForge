@@ -16,6 +16,8 @@
 - artifact preview action、object action、scenario instance id 等跨 package 纯类型
 - session/message/run/execution unit/stream event/background completion event 等跨 runtime/UI 协议类型
 - view-plan slot、display intent、resolved view plan 等组件选择协议类型
+- AgentServer handoff、handoff payload 和 capability registry 契约
+- observe provider capability brief、request/response、modality 和 invocation plan 纯协议类型/构造器
 
 ## 不包含内容
 
@@ -41,6 +43,10 @@
 - `@sciforge-ui/runtime-contract/stream`
 - `@sciforge-ui/runtime-contract/execution`
 - `@sciforge-ui/runtime-contract/events`
+- `@sciforge-ui/runtime-contract/capabilities`
+- `@sciforge-ui/runtime-contract/handoff`
+- `@sciforge-ui/runtime-contract/handoff-payload`
+- `@sciforge-ui/runtime-contract/observe`
 - `@sciforge-ui/runtime-contract/view`
 - `@sciforge-ui/runtime-contract/preview`
 - `@sciforge-ui/runtime-contract/references`

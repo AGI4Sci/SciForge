@@ -66,12 +66,13 @@ export interface MarkdownToolPackage {
 }
 
 export async function discoverMarkdownSkillPackages(root = resolve(process.cwd(), 'packages', 'skills')): Promise<MarkdownSkillPackage[]> {
-  const paths = await markdownPackageFiles(root);
+  const paths = (await markdownPackageFiles(root))
+    .filter((path) => !isPathInside(path, resolve(process.cwd(), 'packages', 'skills', 'tool_skills')));
   const packages = await Promise.all(paths.map((path) => readMarkdownSkillPackage(root, path)));
   return packages.sort((left, right) => left.id.localeCompare(right.id));
 }
 
-export async function discoverMarkdownToolPackages(root = resolve(process.cwd(), 'packages', 'tools')): Promise<MarkdownToolPackage[]> {
+export async function discoverMarkdownToolPackages(root = resolve(process.cwd(), 'packages', 'skills', 'tool_skills')): Promise<MarkdownToolPackage[]> {
   const paths = await markdownPackageFiles(root);
   const packages = await Promise.all(paths.map((path) => readMarkdownToolPackage(root, path)));
   return packages.sort((left, right) => left.id.localeCompare(right.id));
@@ -281,6 +282,11 @@ function frontmatterList(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String).map((item) => item.trim()).filter(Boolean);
   if (typeof value !== 'string') return [];
   return value.split(/[,，]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function isPathInside(path: string, parent: string) {
+  const relativePath = relative(parent, path);
+  return relativePath !== '' && !relativePath.startsWith('..') && !relativePath.startsWith('/');
 }
 
 function inferProvider(root: string, path: string, frontmatter: Record<string, unknown>) {

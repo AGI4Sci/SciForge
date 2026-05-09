@@ -3,6 +3,19 @@
   "version": "1.0.0",
   "type": "module",
   "private": true,
+  "sciforge": {
+    "lifecycleLayer": "skills",
+    "skillFacing": true,
+    "skillKinds": [
+      "tool",
+      "pipeline",
+      "domain",
+      "meta"
+    ],
+    "sideEffects": "delegated-to-actions",
+    "publicContract": true,
+    "runtimeAdapter": false
+  },
   "exports": {
     ".": "./index.ts",
     "./catalog": "./catalog.ts",

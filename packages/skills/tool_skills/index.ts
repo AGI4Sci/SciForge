@@ -18,10 +18,10 @@ export const toolPackageManifests = [
     ],
     "requiredConfig": [],
     "docs": {
-      "readmePath": "packages/tools/clawhub/playwright-mcp/SKILL.md",
+      "readmePath": "packages/skills/tool_skills/clawhub/playwright-mcp/SKILL.md",
       "agentSummary": "Browser automation MCP server backed by Playwright for structured page inspection, navigation, form input, and self-healing browser workflows."
     },
-    "packageRoot": "packages/tools/clawhub/playwright-mcp",
+    "packageRoot": "packages/skills/tool_skills/clawhub/playwright-mcp",
     "tags": [
       "package",
       "clawhub",
@@ -59,10 +59,10 @@ export const toolPackageManifests = [
       "trace-output-dir"
     ],
     "docs": {
-      "readmePath": "packages/tools/local/vision-sense/SKILL.md",
+      "readmePath": "packages/skills/tool_skills/local/vision-sense/SKILL.md",
       "agentSummary": "Vision Sense 插件：把文本指令加截图/图像模态转成 text-only 视觉观察和可审计 vision trace。Computer Use execution is owned by a separate modular consumer/provider."
     },
-    "packageRoot": "packages/senses/vision-sense",
+    "packageRoot": "packages/observe/vision",
     "tags": [
       "package",
       "local",

@@ -153,7 +153,7 @@ export SCIFORGE_VISION_DESKTOP_BRIDGE=1
 - `SCIFORGE_VISION_GROUNDER_LLM_API_KEY`
 - `SCIFORGE_VISION_GROUNDER_LLM_MODEL`
 
-详细能力边界和排障见 [`../packages/senses/vision-sense/README.md`](../packages/senses/vision-sense/README.md) 与 [`../packages/computer-use/README.md`](../packages/computer-use/README.md)。
+详细能力边界和排障见 [`../packages/observe/vision/README.md`](../packages/observe/vision/README.md) 与 [`../packages/computer-use/README.md`](../packages/computer-use/README.md)。
 
 ## Skill 晋升
 

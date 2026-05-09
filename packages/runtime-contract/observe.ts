@@ -1,22 +1,24 @@
-export const SENSE_INPUT_MODALITIES = [
+export const OBSERVE_INPUT_MODALITIES = [
   'text',
   'image',
   'screenshot',
   'audio',
   'video',
   'document',
+  'file',
   'table',
   'telemetry',
   'gui-state',
   'artifact-ref',
 ] as const;
 
-export type SenseInputModalityKind = typeof SENSE_INPUT_MODALITIES[number];
+export type ObserveInputModalityKind = typeof OBSERVE_INPUT_MODALITIES[number];
+export type ObserveModalityKind = ObserveInputModalityKind | (string & {});
 
-export const SENSE_RESPONSE_STATUSES = ['ok', 'failed', 'partial', 'needs-approval', 'rejected'] as const;
-export type SenseResponseStatus = typeof SENSE_RESPONSE_STATUSES[number];
+export const OBSERVE_RESPONSE_STATUSES = ['ok', 'failed', 'partial', 'needs-approval', 'rejected'] as const;
+export type ObserveResponseStatus = typeof OBSERVE_RESPONSE_STATUSES[number];
 
-export const SENSE_FAILURE_MODES = [
+export const OBSERVE_FAILURE_MODES = [
   'missing-modality',
   'unsupported-modality',
   'invalid-instruction',
@@ -31,7 +33,7 @@ export const SENSE_FAILURE_MODES = [
   'internal-error',
 ] as const;
 
-export type SenseFailureMode = typeof SENSE_FAILURE_MODES[number];
+export type ObserveFailureMode = typeof OBSERVE_FAILURE_MODES[number];
 
 export const CAPABILITY_COST_CLASSES = ['free', 'low', 'medium', 'high', 'variable', 'unknown'] as const;
 export type CapabilityCostClass = typeof CAPABILITY_COST_CLASSES[number];
@@ -42,8 +44,8 @@ export type CapabilityLatencyClass = typeof CAPABILITY_LATENCY_CLASSES[number];
 export const CAPABILITY_RISK_LEVELS = ['low', 'medium', 'high'] as const;
 export type CapabilityRiskLevel = typeof CAPABILITY_RISK_LEVELS[number];
 
-export interface SenseModalityContract {
-  kind: SenseInputModalityKind;
+export interface ObserveModalityContract {
+  kind: ObserveInputModalityKind;
   required: boolean;
   maxItems?: number;
   acceptedMimeTypes: string[];
@@ -52,8 +54,8 @@ export interface SenseModalityContract {
   notes?: string;
 }
 
-export interface SenseInputModality {
-  kind: SenseInputModalityKind;
+export interface ObserveInputModality {
+  kind: ObserveInputModalityKind;
   ref: string;
   mimeType?: string;
   title?: string;
@@ -62,14 +64,14 @@ export interface SenseInputModality {
   metadata?: Record<string, unknown>;
 }
 
-export interface SenseInvocationPolicy {
+export interface ObserveInvocationPolicy {
   repeatedInvocationExpected: boolean;
   maxCallsPerTurn?: number;
   callSpacingMs?: number;
   reason: string;
 }
 
-export interface SenseSafetyPrivacyBoundary {
+export interface ObserveSafetyPrivacyBoundary {
   riskLevel: CapabilityRiskLevel;
   allowedDataClasses: string[];
   prohibitedDataClasses: string[];
@@ -79,7 +81,7 @@ export interface SenseSafetyPrivacyBoundary {
   notes: string;
 }
 
-export interface SenseCostLatencyExpectation {
+export interface ObserveCostLatencyExpectation {
   costClass: CapabilityCostClass;
   latencyClass: CapabilityLatencyClass;
   typicalLatencyMs?: number;
@@ -87,52 +89,52 @@ export interface SenseCostLatencyExpectation {
   notes?: string;
 }
 
-export interface SenseProviderCapabilityBrief {
+export interface ObserveProviderCapabilityBrief {
   schemaVersion: 1;
   id: string;
-  kind: 'sense';
+  kind: 'observe';
   version?: string;
   oneLine: string;
   domains: string[];
   triggers: string[];
   antiTriggers: string[];
-  inputModalities: SenseModalityContract[];
+  inputModalities: ObserveModalityContract[];
   output: {
     kind: 'text-response';
     formats: Array<'plain-text' | 'markdown' | 'json' | 'coordinates' | 'labels' | 'ocr' | 'diagnostic-text'>;
     description: string;
   };
-  failureModes: SenseFailureMode[];
-  cost: SenseCostLatencyExpectation;
-  latency: SenseCostLatencyExpectation;
-  repeatedInvocation: SenseInvocationPolicy;
-  safetyPrivacy: SenseSafetyPrivacyBoundary;
+  failureModes: ObserveFailureMode[];
+  cost: ObserveCostLatencyExpectation;
+  latency: ObserveCostLatencyExpectation;
+  repeatedInvocation: ObserveInvocationPolicy;
+  safetyPrivacy: ObserveSafetyPrivacyBoundary;
 }
 
-export interface SenseRequest {
+export interface ObserveRequest {
   schemaVersion: 1;
   providerId?: string;
   instruction: string;
-  modalities: SenseInputModality[];
+  modalities: ObserveInputModality[];
   expectedResponse: {
     kind: 'text-response';
     preferredFormat?: 'plain-text' | 'markdown' | 'json';
   };
   constraints?: Record<string, unknown>;
-  invocationPolicy?: SenseInvocationPolicy;
-  safetyPrivacy?: SenseSafetyPrivacyBoundary;
+  invocationPolicy?: ObserveInvocationPolicy;
+  safetyPrivacy?: ObserveSafetyPrivacyBoundary;
   trace?: {
     callId?: string;
     parentRunRef?: string;
   };
 }
 
-export interface SenseResponse {
+export interface ObserveResponse {
   schemaVersion: 1;
   providerId?: string;
-  status: SenseResponseStatus;
+  status: ObserveResponseStatus;
   textResponse: string;
-  failureMode?: SenseFailureMode;
+  failureMode?: ObserveFailureMode;
   confidence?: number;
   artifactRefs: string[];
   traceRef?: string;
@@ -148,15 +150,62 @@ export interface SenseResponse {
   };
 }
 
-export function isSenseInputModalityKind(value: unknown): value is SenseInputModalityKind {
-  return typeof value === 'string' && (SENSE_INPUT_MODALITIES as readonly string[]).includes(value);
+export interface ObserveModalityRef {
+  kind: ObserveModalityKind;
+  ref: string;
+  mimeType?: string;
+  summary?: string;
 }
 
-export function normalizeSenseInputModality(value: unknown): SenseInputModality | undefined {
+export interface ObserveProviderContract {
+  id: string;
+  displayName?: string;
+  acceptedModalities: ObserveModalityKind[];
+  outputKind: 'text';
+  expectedMultipleCalls?: boolean;
+  costClass?: 'low' | 'medium' | 'high';
+  latencyClass?: 'low' | 'medium' | 'high';
+}
+
+export interface ObserveIntent {
+  instruction: string;
+  modalities: ObserveModalityRef[];
+  providerId?: string;
+  reason?: string;
+}
+
+export interface ObserveInvocation {
+  callRef: string;
+  providerId: string;
+  instruction: string;
+  modalities: ObserveModalityRef[];
+  reason?: string;
+}
+
+export interface ObserveInvocationRecord extends ObserveInvocation {
+  status: 'ok' | 'failed';
+  text?: string;
+  artifactRefs: string[];
+  traceRef?: string;
+  compactSummary: string;
+  diagnostics?: Record<string, unknown>;
+}
+
+export interface ObserveInvocationPlan {
+  goal: string;
+  runRef: string;
+  invocations: ObserveInvocation[];
+}
+
+export function isObserveInputModalityKind(value: unknown): value is ObserveInputModalityKind {
+  return typeof value === 'string' && (OBSERVE_INPUT_MODALITIES as readonly string[]).includes(value);
+}
+
+export function normalizeObserveInputModality(value: unknown): ObserveInputModality | undefined {
   if (!isRecord(value)) return undefined;
   const kind = value.kind;
   const ref = value.ref;
-  if (!isSenseInputModalityKind(kind) || typeof ref !== 'string' || ref.trim().length === 0) return undefined;
+  if (!isObserveInputModalityKind(kind) || typeof ref !== 'string' || ref.trim().length === 0) return undefined;
   return {
     kind,
     ref: ref.trim(),
@@ -168,21 +217,21 @@ export function normalizeSenseInputModality(value: unknown): SenseInputModality 
   };
 }
 
-export function buildSenseRequest(input: {
+export function buildObserveRequest(input: {
   providerId?: string;
   instruction: string;
   modalities: unknown[];
-  preferredFormat?: SenseRequest['expectedResponse']['preferredFormat'];
+  preferredFormat?: ObserveRequest['expectedResponse']['preferredFormat'];
   constraints?: Record<string, unknown>;
-  invocationPolicy?: SenseInvocationPolicy;
-  safetyPrivacy?: SenseSafetyPrivacyBoundary;
-  trace?: SenseRequest['trace'];
-}): SenseRequest {
+  invocationPolicy?: ObserveInvocationPolicy;
+  safetyPrivacy?: ObserveSafetyPrivacyBoundary;
+  trace?: ObserveRequest['trace'];
+}): ObserveRequest {
   return {
     schemaVersion: 1,
     providerId: optionalString(input.providerId),
     instruction: input.instruction.trim(),
-    modalities: input.modalities.map(normalizeSenseInputModality).filter(isPresent),
+    modalities: input.modalities.map(normalizeObserveInputModality).filter(isPresent),
     expectedResponse: {
       kind: 'text-response',
       preferredFormat: input.preferredFormat,
@@ -194,29 +243,29 @@ export function buildSenseRequest(input: {
   };
 }
 
-export function buildSenseProviderCapabilityBrief(input: {
+export function buildObserveProviderCapabilityBrief(input: {
   id: string;
   oneLine: string;
   version?: string;
   domains?: string[];
   triggers?: string[];
   antiTriggers?: string[];
-  inputModalities: SenseModalityContract[];
-  outputFormats?: SenseProviderCapabilityBrief['output']['formats'];
+  inputModalities: ObserveModalityContract[];
+  outputFormats?: ObserveProviderCapabilityBrief['output']['formats'];
   outputDescription?: string;
-  failureModes?: SenseFailureMode[];
+  failureModes?: ObserveFailureMode[];
   costClass?: CapabilityCostClass;
   latencyClass?: CapabilityLatencyClass;
   repeatedInvocationExpected?: boolean;
   repeatedInvocationReason?: string;
-  safetyPrivacy?: Partial<SenseSafetyPrivacyBoundary>;
-}): SenseProviderCapabilityBrief {
+  safetyPrivacy?: Partial<ObserveSafetyPrivacyBoundary>;
+}): ObserveProviderCapabilityBrief {
   const costClass = input.costClass ?? 'unknown';
   const latencyClass = input.latencyClass ?? 'unknown';
   return {
     schemaVersion: 1,
     id: input.id,
-    kind: 'sense',
+    kind: 'observe',
     version: input.version,
     oneLine: input.oneLine,
     domains: uniqueStrings(input.domains),
@@ -233,7 +282,7 @@ export function buildSenseProviderCapabilityBrief(input: {
     latency: { costClass, latencyClass },
     repeatedInvocation: {
       repeatedInvocationExpected: input.repeatedInvocationExpected ?? true,
-      reason: input.repeatedInvocationReason ?? 'The main agent may call a sense multiple times with narrower instructions, regions, or follow-up uncertainty checks.',
+      reason: input.repeatedInvocationReason ?? 'The main agent may call an observe provider multiple times with narrower instructions, regions, or follow-up uncertainty checks.',
     },
     safetyPrivacy: {
       riskLevel: input.safetyPrivacy?.riskLevel ?? 'medium',
@@ -247,10 +296,10 @@ export function buildSenseProviderCapabilityBrief(input: {
   };
 }
 
-export function normalizeSenseResponse(value: unknown): SenseResponse {
+export function normalizeObserveResponse(value: unknown): ObserveResponse {
   const record = isRecord(value) ? value : {};
-  const status = typeof record.status === 'string' && (SENSE_RESPONSE_STATUSES as readonly string[]).includes(record.status)
-    ? record.status as SenseResponseStatus
+  const status = typeof record.status === 'string' && (OBSERVE_RESPONSE_STATUSES as readonly string[]).includes(record.status)
+    ? record.status as ObserveResponseStatus
     : 'failed';
   const textResponse = typeof record.textResponse === 'string'
     ? record.textResponse
@@ -262,7 +311,7 @@ export function normalizeSenseResponse(value: unknown): SenseResponse {
     providerId: optionalString(record.providerId),
     status,
     textResponse,
-    failureMode: normalizeSenseFailureMode(record.failureMode),
+    failureMode: normalizeObserveFailureMode(record.failureMode),
     confidence: normalizeUnitInterval(record.confidence),
     artifactRefs: normalizeStringArray(record.artifactRefs),
     traceRef: optionalString(record.traceRef),
@@ -271,13 +320,42 @@ export function normalizeSenseResponse(value: unknown): SenseResponse {
   };
 }
 
-function normalizeSenseFailureMode(value: unknown): SenseFailureMode | undefined {
-  return typeof value === 'string' && (SENSE_FAILURE_MODES as readonly string[]).includes(value)
-    ? value as SenseFailureMode
+export type SenseInputModalityKind = ObserveInputModalityKind;
+export type SenseModalityKind = ObserveModalityKind;
+export type SenseResponseStatus = ObserveResponseStatus;
+export type SenseFailureMode = ObserveFailureMode;
+export type SenseModalityContract = ObserveModalityContract;
+export type SenseInputModality = ObserveInputModality;
+export type SenseInvocationPolicy = ObserveInvocationPolicy;
+export type SenseSafetyPrivacyBoundary = ObserveSafetyPrivacyBoundary;
+export type SenseCostLatencyExpectation = ObserveCostLatencyExpectation;
+export type SenseProviderCapabilityBrief = ObserveProviderCapabilityBrief & { kind: 'observe' };
+export type SenseRequest = ObserveRequest;
+export type SenseResponse = ObserveResponse;
+export type SenseModalityRef = ObserveModalityRef;
+export type SenseProviderContract = ObserveProviderContract;
+export type SenseObservationIntent = ObserveIntent;
+export type SenseInvocation = ObserveInvocation;
+export type SenseInvocationRecord = ObserveInvocationRecord;
+export type SenseInvocationPlan = ObserveInvocationPlan;
+
+export const SENSE_INPUT_MODALITIES = OBSERVE_INPUT_MODALITIES;
+export const SENSE_RESPONSE_STATUSES = OBSERVE_RESPONSE_STATUSES;
+export const SENSE_FAILURE_MODES = OBSERVE_FAILURE_MODES;
+
+export const isSenseInputModalityKind = isObserveInputModalityKind;
+export const normalizeSenseInputModality = normalizeObserveInputModality;
+export const buildSenseRequest = buildObserveRequest;
+export const buildSenseProviderCapabilityBrief = buildObserveProviderCapabilityBrief;
+export const normalizeSenseResponse = normalizeObserveResponse;
+
+function normalizeObserveFailureMode(value: unknown): ObserveFailureMode | undefined {
+  return typeof value === 'string' && (OBSERVE_FAILURE_MODES as readonly string[]).includes(value)
+    ? value as ObserveFailureMode
     : undefined;
 }
 
-function normalizeSensitivity(value: unknown): SenseInputModality['sensitivity'] {
+function normalizeSensitivity(value: unknown): ObserveInputModality['sensitivity'] {
   return value === 'public' || value === 'internal' || value === 'private' || value === 'secret' ? value : undefined;
 }
 

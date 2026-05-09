@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { discoverMarkdownSkillPackages, discoverMarkdownToolPackages } from '../src/runtime/skill-markdown-catalog.js';
 import { skillPackageManifests } from '../packages/skills';
-import { toolPackageManifests } from '../packages/tools';
+import { toolPackageManifests } from '../packages/skills/tool_skills';
 import { uiComponentManifests } from '../packages/ui-components';
 
 type PackageManifest = {
@@ -90,11 +90,11 @@ for (const skill of discoveredSkills) {
   assert.notEqual(skill.tags.includes('scp-skill'), true, `${skill.id} must not use scp-skill as source/tag`);
 }
 
-assert.equal(toolPackageManifests.length, discoveredTools.length, 'generated packages/tools index must match discovered SKILL.md count');
+assert.equal(toolPackageManifests.length, discoveredTools.length, 'generated packages/skills/tool_skills index must match discovered SKILL.md count');
 assert.deepEqual(
   toolPackageManifests.map((tool) => tool.docs.readmePath).sort(),
   discoveredTools.map((tool) => tool.docs.readmePath).sort(),
-  'generated packages/tools index must be regenerated from current SKILL.md files',
+  'generated packages/skills/tool_skills index must be regenerated from current SKILL.md files',
 );
 const toolIds = new Set<string>();
 for (const tool of discoveredTools) {

@@ -1,5 +1,5 @@
 import { nowIso, type AgentStreamEvent, type SendAgentMessageInput } from '../../domain';
-import { DEFAULT_AGENT_SERVER_URL } from '../../../../shared/agentHandoff';
+import { DEFAULT_AGENT_SERVER_URL } from '@sciforge-ui/runtime-contract/handoff';
 import { SCENARIO_SPECS } from '../../scenarioSpecs';
 import { builtInScenarioIdForInput, normalizeAgentBackend } from './runtimeConfig';
 import { compactCapabilityForBackend, normalizeContextCompaction } from './contextTelemetry';

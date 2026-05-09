@@ -3,6 +3,13 @@
   "version": "1.0.0",
   "type": "module",
   "private": true,
+  "sciforge": {
+    "lifecycleLayer": "scenarios",
+    "skillFacing": false,
+    "sideEffects": "none",
+    "publicContract": true,
+    "runtimeAdapter": false
+  },
   "exports": {
     ".": "./index.ts",
     "./component-elements": "./src/componentElements.ts",

@@ -32,10 +32,11 @@ src/runtime/conversation-policy/*
 packages/conversation-policy-python/
                                 goal/context/memory/digest/capability/recovery 策略
 packages/scenario-core/         scenario package 与质量门禁
-src/shared/                     capability、sense、verification、handoff 共享 contract
+packages/runtime-contract/      capability、observe、handoff、artifact、session 等共享 contract
+src/runtime/observe/            observe provider 选择与调用编排
 packages/ui-components/         interactive artifact view registry
 packages/skills/                skill registry 与 package skills
-packages/senses/vision-sense/   vision sense provider
+packages/observe/vision/   vision observe provider
 packages/computer-use/          sense-agnostic GUI action loop
 ```
 

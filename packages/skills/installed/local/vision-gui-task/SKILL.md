@@ -3,7 +3,7 @@ name: vision-gui-task
 description: 模板 skill：把低风险 GUI 请求转换为 SciForge VisionTaskRequest，并调用 vision-sense tool。
 metadata:
   provider: local
-  visionTaskRequest: packages/senses/vision-sense/sciforge_vision_sense/types.py:VisionTaskRequest
+  visionTaskRequest: packages/observe/vision/sciforge_vision_sense/types.py:VisionTaskRequest
   outputArtifactTypes: vision-trace
   requiredCapabilities: vision-sense
   tags: vision, gui, computer-use, template

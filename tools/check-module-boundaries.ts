@@ -1,4 +1,4 @@
-import { readdir, readFile } from 'node:fs/promises';
+import { access, readdir, readFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import ts from 'typescript';
 
@@ -23,6 +23,17 @@ type WarningRule = {
 const root = process.cwd();
 const sourceExtensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts']);
 const ignoredDirs = new Set(['.git', 'node_modules', 'dist', 'dist-ui', 'build', 'coverage']);
+const allowedLifecycleLayers = new Set([
+  'contracts',
+  'reasoning',
+  'skills',
+  'observe',
+  'actions',
+  'verifiers',
+  'presentation',
+  'scenarios',
+  'support',
+]);
 
 const knownPackagePrivateImportWarnings: WarningRule[] = [
   {
@@ -75,12 +86,27 @@ async function main() {
   const packageNames = await collectPackageNames(packageRoots);
   const files = [
     ...await collectSourceFiles(join(root, 'packages')),
+    ...await collectSourceFilesIfExists(join(root, 'src/shared')),
     ...await collectSourceFiles(join(root, 'src/ui/src')),
   ];
   const edges = (await Promise.all(files.map(readImportEdges))).flat();
 
   const errors: Finding[] = [];
   const warnings: Finding[] = [];
+  const metadataFindings = await checkTopLevelPackageMetadata();
+  errors.push(...metadataFindings.errors);
+  warnings.push(...metadataFindings.warnings);
+
+  for (const sharedFile of await collectSourceFilesIfExists(join(root, 'src/shared'))) {
+    errors.push({
+      importer: relative(root, sharedFile).replaceAll('\\', '/'),
+      specifier: 'src/shared',
+      line: 1,
+      resolvedPath: relative(root, sharedFile).replaceAll('\\', '/'),
+      rule: 'legacy-src-shared-file',
+      message: 'src/shared is not a long-term boundary. Move shared contracts into packages/runtime-contract, runtime execution into src/runtime, and UI logic into src/ui.',
+    });
+  }
 
   for (const edge of edges) {
     if (edge.importer.startsWith('packages/')) {
@@ -108,7 +134,7 @@ async function main() {
       console.error(`- ${finding.importer}:${finding.line} -> ${finding.specifier}`);
       console.error(`  ${finding.message}`);
     }
-    console.error('Move shared contracts into packages/runtime-contract, packages/scenario-core, or a package public export; update the allowlist only for intentional temporary migrations.');
+    console.error('Move shared contracts into packages/runtime-contract, packages/scenario-core, or a package public export; move execution logic into src/runtime and UI logic into src/ui. Update the allowlist only for intentional temporary migrations.');
     process.exitCode = 1;
     return;
   }
@@ -184,6 +210,15 @@ async function collectSourceFiles(dir: string): Promise<string[]> {
   return collectFiles(dir, (name) => sourceExtensions.has(extension(name)));
 }
 
+async function collectSourceFilesIfExists(dir: string): Promise<string[]> {
+  try {
+    await access(dir);
+  } catch {
+    return [];
+  }
+  return collectSourceFiles(dir);
+}
+
 async function collectFiles(dir: string, includeFile: (name: string) => boolean): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const out: string[] = [];
@@ -197,6 +232,72 @@ async function collectFiles(dir: string, includeFile: (name: string) => boolean)
     if (entry.isFile() && includeFile(entry.name)) out.push(full);
   }
   return out;
+}
+
+async function checkTopLevelPackageMetadata(): Promise<{ errors: Finding[]; warnings: Finding[] }> {
+  const errors: Finding[] = [];
+  const warnings: Finding[] = [];
+  const entries = await readdir(join(root, 'packages'), { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+    const packageJson = join(root, 'packages', entry.name, 'package.json');
+    try {
+      await access(packageJson);
+    } catch {
+      continue;
+    }
+    const importer = `packages/${entry.name}/package.json`;
+    const json = JSON.parse(await readFile(packageJson, 'utf8')) as {
+      deprecated?: unknown;
+      sciforge?: {
+        lifecycleLayer?: unknown;
+        skillFacing?: unknown;
+        sideEffects?: unknown;
+        publicContract?: unknown;
+        runtimeAdapter?: unknown;
+      };
+    };
+    const layer = json.sciforge?.lifecycleLayer;
+    if (typeof layer !== 'string' || !allowedLifecycleLayers.has(layer)) {
+      errors.push({
+        importer,
+        specifier: 'sciforge.lifecycleLayer',
+        line: 1,
+        rule: 'missing-package-lifecycle-layer',
+        message: `Top-level package must declare sciforge.lifecycleLayer as one of: ${[...allowedLifecycleLayers].join(', ')}.`,
+      });
+    }
+    for (const field of ['skillFacing', 'publicContract', 'runtimeAdapter'] as const) {
+      if (typeof json.sciforge?.[field] !== 'boolean') {
+        errors.push({
+          importer,
+          specifier: `sciforge.${field}`,
+          line: 1,
+          rule: 'missing-package-lifecycle-metadata',
+          message: `Top-level package must declare boolean sciforge.${field}.`,
+        });
+      }
+    }
+    if (typeof json.sciforge?.sideEffects !== 'string') {
+      errors.push({
+        importer,
+        specifier: 'sciforge.sideEffects',
+        line: 1,
+        rule: 'missing-package-lifecycle-metadata',
+        message: 'Top-level package must declare sciforge.sideEffects.',
+      });
+    }
+    if (entry.name === 'tools' && typeof json.deprecated !== 'string') {
+      errors.push({
+        importer,
+        specifier: 'deprecated',
+        line: 1,
+        rule: 'legacy-tools-package-not-deprecated',
+        message: 'packages/tools is a migration-era package and must be explicitly marked deprecated in favor of packages/skills/tool_skills.',
+      });
+    }
+  }
+  return { errors, warnings };
 }
 
 async function readImportEdges(file: string): Promise<ImportEdge[]> {
@@ -240,8 +341,11 @@ function pointsAtPrivateAppOrRuntime(edge: ImportEdge) {
     || edge.resolvedPath === 'src/ui/src'
     || edge.resolvedPath?.startsWith('src/runtime/') === true
     || edge.resolvedPath === 'src/runtime'
+    || edge.resolvedPath?.startsWith('src/shared/') === true
+    || edge.resolvedPath === 'src/shared'
     || /(^|\/)src\/ui\/src(\/|$)/.test(edge.specifier)
-    || /(^|\/)src\/runtime(\/|$)/.test(edge.specifier);
+    || /(^|\/)src\/runtime(\/|$)/.test(edge.specifier)
+    || /(^|\/)src\/shared(\/|$)/.test(edge.specifier);
 }
 
 function pointsAtUiDomain(edge: ImportEdge) {

@@ -1,0 +1,24 @@
+{
+  "name": "@sciforge/<package-name>",
+  "version": "0.1.0",
+  "type": "module",
+  "private": false,
+  "description": "<one sentence package purpose>",
+  "sciforge": {
+    "lifecycleLayer": "contracts",
+    "skillFacing": false,
+    "sideEffects": "none",
+    "publicContract": true,
+    "runtimeAdapter": false
+  },
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "files": [
+    "README.md",
+    "index.ts",
+    "package.json"
+  ],
+  "exports": {
+    ".": "./index.ts"
+  }
+}

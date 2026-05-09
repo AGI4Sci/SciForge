@@ -3,6 +3,13 @@
   "version": "1.0.0",
   "type": "module",
   "private": false,
+  "sciforge": {
+    "lifecycleLayer": "support",
+    "skillFacing": false,
+    "sideEffects": "none",
+    "publicContract": true,
+    "runtimeAdapter": false
+  },
   "dependencies": {
     "@sciforge-ui/runtime-contract": "^1.0.0"
   },

@@ -3,7 +3,7 @@ name: vision-sense
 description: Vision Sense 插件：把文本指令加截图/图像模态转成 text-only 视觉观察和可审计 vision trace。Computer Use execution is owned by a separate modular consumer/provider.
 metadata:
   provider: local
-  packageRoot: packages/senses/vision-sense
+  packageRoot: packages/observe/vision
   toolType: sense-plugin
   modality: vision
   acceptedModalities: screenshot, image
@@ -19,7 +19,7 @@ metadata:
 
 - 类型：sense-plugin tool。输入是 `text + screenshot/image modalities`，输出只允许是文本和 refs。
 - 边界：skill 构造 `SensePluginRequest` 或 `VisionTaskRequest`；本包输出视觉观察、grounding 摘要、trace refs，以及可选的 action suggestion 文本。真实 Computer Use 规划与执行属于独立 consumer/provider，不在本包内。
-- Runtime：Python package 位于 `packages/senses/vision-sense`，import root 是 `sciforge_vision_sense`。
+- Runtime：Python package 位于 `packages/observe/vision`，import root 是 `sciforge_vision_sense`。
 - 适合：解释截图/图像、生成视觉目标描述、输出 KV-Ground 坐标证据、text-only observation 和 file-ref-only trace memory。
 - 避免：执行代码或桌面动作、持有鼠标/键盘状态、读取 DOM/accessibility tree、处理支付/删除/发送/授权等高风险操作，或在没有外部 Computer Use trace 的情况下声称 GUI action 已执行。
 

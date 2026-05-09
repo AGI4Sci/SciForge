@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { skillPackageManifests } from '../skills';
+import { skillPackageManifests } from '..';
 import { toolPackageManifests } from './index';
 
-test('vision sense package is discoverable as a visual runtime tool', () => {
+test('vision sense package is discoverable as a tool skill with observe-only boundary', () => {
   const visionTool = toolPackageManifests.find((tool) => tool.id === 'local.vision-sense');
 
   assert.ok(visionTool);
   assert.equal(visionTool.toolType, 'sense-plugin');
-  assert.equal(visionTool.packageRoot, 'packages/senses/vision-sense');
+  assert.equal(visionTool.docs.readmePath, 'packages/skills/tool_skills/local/vision-sense/SKILL.md');
+  assert.equal(visionTool.packageRoot, 'packages/observe/vision');
   const tags = [...visionTool.tags] as string[];
   const requiredConfig = [...(visionTool.requiredConfig ?? [])] as string[];
   const outputFormats = [...(visionTool.sensePlugin?.outputContract.formats ?? [])] as string[];
@@ -39,7 +40,7 @@ test('vision gui task skill points to the VisionTaskRequest template', () => {
   assert.ok(visionSkill);
   assert.equal(
     visionSkill.inputContract.visionTaskRequest,
-    'packages/senses/vision-sense/sciforge_vision_sense/types.py:VisionTaskRequest',
+    'packages/observe/vision/sciforge_vision_sense/types.py:VisionTaskRequest',
   );
   assert.ok(visionSkill.requiredCapabilities.some((item) => item.capability === 'vision-sense'));
 });
