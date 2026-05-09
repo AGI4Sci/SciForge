@@ -18,7 +18,9 @@ import {
   agentServerPayloadTaskDomain,
   agentServerRepairPromptPolicyLines,
   agentServerStablePayloadTaskId,
+  skillRuntimeRoutePolicy,
   skillPromotionDomain,
+  workspaceTaskPythonCommandCandidates,
 } from './runtime-policy';
 
 test('skills runtime policy owns AgentServer retrieval and task prompt snippets', () => {
@@ -92,4 +94,41 @@ test('skills runtime policy owns skill promotion domain normalization', () => {
   assert.equal(skillPromotionDomain('omics'), 'omics');
   assert.equal(skillPromotionDomain(undefined), 'literature');
   assert.equal(skillPromotionDomain('unknown'), 'literature');
+});
+
+test('skills runtime policy owns entrypoint route labels and profile ids', () => {
+  assert.deepEqual(skillRuntimeRoutePolicy({
+    entrypoint: { type: 'agentserver-generation' },
+    agentServerRuntimeProfileId: 'agentserver-openai',
+  }), {
+    runtimeProfileId: 'agentserver-openai',
+    selectedRuntime: 'agentserver-generation',
+  });
+  assert.deepEqual(skillRuntimeRoutePolicy({
+    entrypoint: { type: 'markdown-skill' },
+    agentServerRuntimeProfileId: 'agentserver-openai',
+  }), {
+    runtimeProfileId: 'agentserver-openai',
+    selectedRuntime: 'agentserver-markdown-skill',
+  });
+  assert.deepEqual(skillRuntimeRoutePolicy({ entrypoint: { type: 'workspace-task' } }), {
+    runtimeProfileId: 'workspace-python',
+    selectedRuntime: 'workspace-python',
+  });
+  assert.deepEqual(skillRuntimeRoutePolicy({
+    entrypoint: { type: 'inspector' },
+    scenarioPackageSource: 'built-in',
+  }), {
+    runtimeProfileId: 'package-skill',
+    selectedRuntime: 'inspector',
+  });
+});
+
+test('skills runtime policy owns workspace task Python runtime candidates', () => {
+  assert.deepEqual(workspaceTaskPythonCommandCandidates('/tmp/sciforge-workspace'), [
+    '/tmp/sciforge-workspace/.venv-sciforge/bin/python',
+    '/tmp/sciforge-workspace/.venv-sciforge-omics/bin/python',
+    '/tmp/sciforge-workspace/.venv/bin/python',
+    'python3',
+  ]);
 });

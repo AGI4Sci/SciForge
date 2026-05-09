@@ -4,6 +4,15 @@ import { stats, type PageId, type ScenarioId } from '../data';
 import { compileScenarioDraft, type ScenarioBuilderDraft } from '@sciforge/scenario-core/scenario-draft-compiler';
 import { buildBuiltInScenarioPackage, type ScenarioPackage } from '@sciforge/scenario-core/scenario-package';
 import type { ScenarioLibraryItem } from '@sciforge/scenario-core/scenario-library';
+import {
+  scenarioBuilderDefaultPrompt,
+  scenarioBuilderDraftPreviewModel,
+  scenarioBuilderPromptPlaceholder,
+  scenarioDashboardPrimaryImportAction,
+  scenarioPackageExportFileName,
+  scenarioPackagePreviewFields,
+  scenarioSkillDomainFilterOptions,
+} from '@sciforge/scenario-core/scenario-builder-display-policy';
 import type { SciForgeConfig, SciForgeWorkspaceState, ScenarioInstanceId, ScenarioRuntimeOverride } from '../domain';
 import {
   acceptSkillPromotionProposal,
@@ -38,6 +47,7 @@ import {
 } from './appShell/dashboardModels';
 
 const ActivityAreaChart = lazy(async () => ({ default: (await import('../charts')).ActivityAreaChart }));
+const domainFilterOptions = scenarioSkillDomainFilterOptions();
 
 function PackageExportPreviewDialog({
   pkg,
@@ -51,6 +61,13 @@ function PackageExportPreviewDialog({
   onConfirm: () => void;
 }) {
   const preview = packageManifestPreview(pkg, workspacePath);
+  const exportFileName = scenarioPackageExportFileName(pkg);
+  const previewFields = scenarioPackagePreviewFields({
+    title: pkg.scenario.title,
+    skillDomain: pkg.scenario.skillDomain,
+    qualityLabel: preview.qualityLabel,
+    exportFileName,
+  });
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') onClose();
@@ -78,10 +95,7 @@ function PackageExportPreviewDialog({
           <span>{preview.versionCount} versions</span>
         </div>
         <div className="handoff-field-grid">
-          <span><em>scenario</em><code>{pkg.scenario.title}</code></span>
-          <span><em>domain</em><code>{pkg.scenario.skillDomain}</code></span>
-          <span><em>quality</em><code>{preview.qualityLabel}</code></span>
-          <span><em>export file</em><code>{pkg.id}-{pkg.version}.scenario-package.json</code></span>
+          {previewFields.map((field) => <span key={field.label}><em>{field.label}</em><code>{field.value}</code></span>)}
         </div>
         {preview.sensitiveRefs.length ? (
           <div className="export-warning">
@@ -93,7 +107,7 @@ function PackageExportPreviewDialog({
           </div>
         ) : null}
         <pre className="inspector-json">{JSON.stringify(preview.manifest, null, 2)}</pre>
-        <div className="scenario-builder-actions">
+        <div className="builder-actions">
           <ActionButton icon={ChevronLeft} variant="secondary" onClick={onClose}>取消</ActionButton>
           <ActionButton icon={Download} onClick={onConfirm}>确认导出</ActionButton>
         </div>
@@ -117,10 +131,9 @@ export function Dashboard({
   onApplyScenarioDraft: (scenarioId: ScenarioInstanceId, draft: ScenarioRuntimeOverride) => void;
   onWorkbenchPrompt: (scenarioId: ScenarioInstanceId, prompt: string) => void;
 }) {
-  const [scenarioPrompt, setScenarioPrompt] = useState('我想比较KRAS G12D突变相关文献证据，并在需要时联动蛋白结构和知识图谱。');
-  const [scenarioDraft, setScenarioDraft] = useState<ScenarioBuilderDraft>(() => compileScenarioDraft('我想比较KRAS G12D突变相关文献证据，并在需要时联动蛋白结构和知识图谱。'));
-  const draftArtifactTypes = scenarioDraft.recommendedArtifactTypes ?? [];
-  const draftSkillIds = scenarioDraft.recommendedSkillIds ?? [];
+  const [scenarioPrompt, setScenarioPrompt] = useState(scenarioBuilderDefaultPrompt);
+  const [scenarioDraft, setScenarioDraft] = useState<ScenarioBuilderDraft>(() => compileScenarioDraft(scenarioBuilderDefaultPrompt));
+  const draftPreview = useMemo(() => scenarioBuilderDraftPreviewModel(scenarioDraft), [scenarioDraft]);
   const [libraryItems, setLibraryItems] = useState<ScenarioLibraryItem[]>([]);
   const [libraryStatus, setLibraryStatus] = useState('');
   const [libraryQuery, setLibraryQuery] = useState('');
@@ -392,7 +405,7 @@ export function Dashboard({
           <p>导入官方 package、导入本地 package，或描述需求编译新场景。导入后会直接进入对应工作台。</p>
         </div>
         <div className="get-started-actions">
-          <ActionButton icon={FilePlus} onClick={() => void importOfficialPackage('literature-evidence-review')}>导入文献场景</ActionButton>
+          <ActionButton icon={FilePlus} onClick={() => void importOfficialPackage(scenarioDashboardPrimaryImportAction.scenarioId)}>{scenarioDashboardPrimaryImportAction.label}</ActionButton>
           <ActionButton icon={FileUp} variant="secondary" onClick={() => packageImportInputRef.current?.click()}>导入 package JSON</ActionButton>
           <ActionButton icon={Sparkles} variant="secondary" onClick={() => setScenarioDraft(compileScenarioDraft(scenarioPrompt))}>编译新场景</ActionButton>
         </div>
@@ -404,7 +417,7 @@ export function Dashboard({
           workspacePath={config.workspacePath}
           onClose={() => setExportPreviewPackage(undefined)}
           onConfirm={() => {
-            exportJsonFile(`${exportPreviewPackage.id}-${exportPreviewPackage.version}.scenario-package.json`, exportPreviewPackage);
+            exportJsonFile(scenarioPackageExportFileName(exportPreviewPackage), exportPreviewPackage);
             setLibraryStatus(`已导出 ${exportPreviewPackage.scenario.title || exportPreviewPackage.id} package JSON。`);
             setExportPreviewPackage(undefined);
           }}
@@ -428,18 +441,18 @@ export function Dashboard({
       </div>
 
       <section className="scenario-builder">
-        <div className="scenario-builder-copy">
+        <div className="builder-copy">
           <Badge variant="info">AI Scenario Builder</Badge>
           <h2>描述你的研究场景，生成可编辑设置</h2>
           <p>从一句自然语言开始，系统会选择 skill domain、推荐组件集合，并生成 Scenario markdown 草案。</p>
         </div>
-        <div className="scenario-builder-box">
+        <div className="builder-box">
           <textarea
             value={scenarioPrompt}
             onChange={(event) => setScenarioPrompt(event.target.value)}
-            placeholder="例如：帮我构建一个场景，读取单细胞表达矩阵，比较处理组和对照组，并展示火山图、热图和UMAP。"
+            placeholder={scenarioBuilderPromptPlaceholder}
           />
-          <div className="scenario-builder-actions">
+          <div className="builder-actions">
             <ActionButton icon={Sparkles} onClick={() => setScenarioDraft(compileScenarioDraft(scenarioPrompt))}>生成场景设置</ActionButton>
             <ActionButton
               icon={Play}
@@ -450,22 +463,22 @@ export function Dashboard({
             </ActionButton>
           </div>
         </div>
-        <div className="scenario-draft-preview">
+        <div className="draft-preview">
           <div>
             <span>推荐场景</span>
-            <strong>{scenarioDraft.title}</strong>
-            <em>{scenarioDraft.summary} · confidence {Math.round(scenarioDraft.confidence * 100)}%</em>
+            <strong>{draftPreview.title}</strong>
+            <em>{draftPreview.summary}</em>
           </div>
           <div className="component-pills">
-            {scenarioDraft.defaultComponents.map((component) => <code key={component}>{component}</code>)}
+            {draftPreview.componentTokens.map((component) => <code key={component.id} title={component.id}>{component.label}</code>)}
           </div>
           <div className="component-pills">
-            {draftArtifactTypes.map((artifactType) => <code key={artifactType}>{artifactType}</code>)}
+            {draftPreview.artifactTokens.map((artifact) => <code key={artifact.id} title={artifact.id}>{artifact.label}</code>)}
           </div>
           <div className="component-pills">
-            {draftSkillIds.slice(0, 4).map((skillId) => <code key={skillId}>{skillId}</code>)}
+            {draftPreview.skillTokens.map((skill) => <code key={skill.id} title={skill.id}>{skill.label}</code>)}
           </div>
-          <pre>{scenarioDraft.scenarioMarkdown}</pre>
+          <pre>{draftPreview.scenarioMarkdown}</pre>
         </div>
       </section>
 
@@ -505,7 +518,7 @@ export function Dashboard({
           title="Scenario Library"
           subtitle="按综合等级优先展示常用、高质量、最近成功的场景；归档保留可恢复记录，删除会永久移除 workspace package"
           action={(
-            <div className="scenario-builder-actions">
+            <div className="builder-actions">
               <input
                 ref={packageImportInputRef}
                 type="file"
@@ -541,10 +554,7 @@ export function Dashboard({
           </select>
           <select value={libraryDomainFilter} onChange={(event) => setLibraryDomainFilter(event.target.value)} aria-label="按 skill domain 过滤">
             <option value="all">全部 domain</option>
-            <option value="literature">literature</option>
-            <option value="structure">structure</option>
-            <option value="omics">omics</option>
-            <option value="knowledge">knowledge</option>
+            {domainFilterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
           <select value={librarySort} onChange={(event) => setLibrarySort(event.target.value)} aria-label="排序 Scenario Library">
             <option value="usage">综合等级</option>
@@ -604,7 +614,7 @@ export function Dashboard({
                       <ActionButton icon={Settings} variant="secondary" onClick={() => void openLibraryItem(item)}>打开编辑配置</ActionButton>
                     </div>
                   ) : null}
-                  <div className="scenario-builder-actions">
+                  <div className="builder-actions">
                     {item.status === 'archived' && !isBuiltInAvailable ? (
                       <ActionButton icon={RefreshCw} onClick={() => void restoreWorkspaceScenarioFromLibrary(item.id)}>恢复</ActionButton>
                     ) : (
@@ -704,7 +714,7 @@ function SkillProposalPanel({
                 </div>
                 {proposal.securityGate?.findings.length ? <small>{proposal.securityGate.findings.join('; ')}</small> : null}
               </div>
-              <div className="scenario-builder-actions compact-actions">
+              <div className="builder-actions compact-actions">
                 <IconButton icon={Check} label="Accept proposal" onClick={acceptDisabled ? undefined : () => onAccept(proposal)} />
                 <IconButton icon={RefreshCw} label="Run validation smoke" onClick={proposal.status === 'accepted' ? () => onValidate(proposal) : undefined} />
                 <IconButton icon={AlertTriangle} label="Reject proposal" onClick={proposal.status === 'accepted' ? undefined : () => onReject(proposal)} />

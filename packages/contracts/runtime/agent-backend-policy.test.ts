@@ -14,9 +14,13 @@ import {
   runtimeAgentBackendConfigurationFailureIsBlocking,
   runtimeAgentBackendConfigurationRecoverActions,
   runtimeAgentBackendFailureCategories,
+  runtimeAgentBackendFailureIsContextWindowExceeded,
   runtimeAgentBackendProvider,
   runtimeAgentBackendProviderLabel,
+  runtimeAgentBackendProviderFailureMessage,
   runtimeAgentBackendRateLimitRecoverActions,
+  runtimeAgentBackendRecoverActions,
+  runtimeAgentBackendSanitizedFailureUserReason,
   runtimeAgentBackendSupported,
   sanitizeRuntimeAgentBackendFailureDetail,
   withRuntimeAgentBackendUserFacingDiagnostic,
@@ -93,6 +97,16 @@ test('runtime agent backend policy owns failure classification and recovery text
   assert.match(runtimeAgentBackendConfigurationNextStep('llmEndpoint missing') ?? '', /user-side model endpoint/);
   assert.deepEqual(runtimeAgentBackendFailureCategories('model provider returned empty completion response', undefined), ['model']);
   assert.deepEqual(runtimeAgentBackendFailureCategories('contextWindowExceeded after provider retryResult=failed', undefined), ['context-window']);
+  assert.deepEqual(runtimeAgentBackendFailureCategories('maximum context length reached because input is too long and tokens exceeded', undefined), ['context-window']);
+  assert.equal(runtimeAgentBackendFailureIsContextWindowExceeded('token limit exceeded while building the final request'), true);
+  assert.equal(runtimeAgentBackendFailureIsContextWindowExceeded('429 too many requests; not a context window failure'), false);
+  const contextDiagnostic = withRuntimeAgentBackendUserFacingDiagnostic({
+    kind: 'context-window',
+    categories: ['context-window'],
+    message: 'maximum context length reached',
+  });
+  assert.match(runtimeAgentBackendSanitizedFailureUserReason(contextDiagnostic), /context window\/token limit/);
+  assert.ok(runtimeAgentBackendRecoverActions(contextDiagnostic).some((action) => /currentReferenceDigests/.test(action)));
   assert.deepEqual(runtimeAgentBackendFailureCategories('429 retry-after: 2', 429), ['http-429', 'rate-limit']);
   assert.equal(runtimeCapabilityEvolutionFailureCode({
     failureReason: 'AgentServer request failed: ECONNREFUSED at configured Model Base URL',
@@ -113,6 +127,7 @@ test('runtime agent backend policy owns failure classification and recovery text
   });
   assert.match(diagnostic.userReason ?? '', /模型限流/);
   assert.ok(runtimeAgentBackendRateLimitRecoverActions(diagnostic).some((action) => /2s/.test(action)));
+  assert.match(runtimeAgentBackendProviderFailureMessage(diagnostic, true), /will not retry again automatically/);
   const compactDetail = sanitizeRuntimeAgentBackendFailureDetail(`${'x'.repeat(380)} | compact=failed:handoff-slimming:unsupported compact | retryResult=failed`);
   assert.match(compactDetail, /handoff-slimming/);
 });

@@ -37,6 +37,12 @@ export {
 export type {
   ConfiguredAgentServerLlmEndpoint,
 } from './agentserver-prompt-policy';
+export {
+  buildBackendInputTextAnchors,
+} from './handoff-input-policy';
+export type {
+  BackendInputTextAnchorOptions,
+} from './handoff-input-policy';
 export type {
   BuiltInScenarioId,
   ScenarioInstanceId,

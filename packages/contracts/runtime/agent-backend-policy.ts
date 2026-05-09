@@ -231,7 +231,7 @@ export function runtimeAgentBackendFailureCategories(text: string, httpStatus?: 
   if (/\b(fetch|network|econnrefused|econnreset|enotfound|etimedout|socket|dns|connection refused|connection reset|offline)\b/i.test(text)) categories.push('network');
   if (/\b(timeout|timed out|abort|cancelled|canceled)\b/i.test(text)) categories.push('timeout');
   if (/\b(unauthorized|forbidden|credential|api[-_ ]?key|token|permission denied|access denied|401|403)\b/i.test(text)) categories.push('auth');
-  if (/contextwindowexceeded|context window exceeded|context_length|maximum context|token limit|context.*overflow/i.test(text)) categories.push('context-window');
+  if (runtimeAgentBackendContextWindowFailureTextMatches(text)) categories.push('context-window');
   if (!categories.includes('context-window') && /\b(model|provider|llm|completion|response)\b/i.test(text) && /\b(failed|error|unavailable|invalid|refused|empty)\b/i.test(text)) categories.push('model');
   if (/\b(tool|command|process|exit code|stderr|stdout|executable|dependency|module not found|enoent)\b/i.test(text)) categories.push('tool');
   if (/\b(schema|payload|json|parse|validation|contract)\b/i.test(text)) categories.push('schema');
@@ -277,6 +277,51 @@ export function withRuntimeAgentBackendUserFacingDiagnostic(
   };
 }
 
+export function runtimeAgentBackendIsRateLimitKind(kind: RuntimeAgentBackendFailureKind) {
+  return kind === 'http-429'
+    || kind === 'rate-limit'
+    || kind === 'retry-budget'
+    || kind === 'too-many-failed-attempts';
+}
+
+export function runtimeAgentBackendDiagnosticIsRateLimited(
+  diagnostic: Pick<RuntimeAgentBackendFailureDiagnostic, 'categories'>,
+) {
+  return diagnostic.categories.some(runtimeAgentBackendIsRateLimitKind);
+}
+
+export function runtimeAgentBackendFailureIsContextWindowExceeded(text: string) {
+  const categories = runtimeAgentBackendFailureCategories(text);
+  return categories.includes('context-window') && !categories.some(runtimeAgentBackendIsRateLimitKind);
+}
+
+export function runtimeAgentBackendProviderFailureMessage(
+  diagnostic: RuntimeAgentBackendFailureDiagnostic,
+  finalFailure: boolean,
+) {
+  const labels = diagnostic.categories.join(', ');
+  const provider = [diagnostic.provider, diagnostic.model].filter(Boolean).join('/') || diagnostic.backend || 'unknown provider';
+  const retryAfter = diagnostic.retryAfterMs !== undefined ? ` retryAfterMs=${diagnostic.retryAfterMs}.` : '';
+  const resetAt = diagnostic.resetAt ? ` resetAt=${diagnostic.resetAt}.` : '';
+  const retry = finalFailure
+    ? ' SciForge already performed the single allowed compact/slim retry and will not retry again automatically.'
+    : ' SciForge will back off, compact/slim the handoff, and retry once.';
+  return `AgentServer/provider failure classified as ${labels} for ${provider}.${retryAfter}${resetAt}${retry} Detail: ${diagnostic.message}`;
+}
+
+export function runtimeAgentBackendSanitizedFailureUserReason(
+  diagnostic: RuntimeAgentBackendFailureDiagnostic,
+  finalFailure = false,
+) {
+  if (runtimeAgentBackendDiagnosticIsRateLimited(diagnostic)) {
+    return runtimeAgentBackendProviderFailureMessage(diagnostic, finalFailure);
+  }
+  if (diagnostic.categories.includes('context-window')) {
+    return '上游模型报告 context window/token limit 超限；需要压缩历史上下文、减少 artifacts/logs，或改用更大上下文模型。';
+  }
+  return diagnostic.userReason ?? `${TITLE_BY_FAILURE_KIND[diagnostic.categories[0] ?? diagnostic.kind]}：${diagnostic.message}`;
+}
+
 export function runtimeAgentBackendRecoverActions(
   diagnostic: Pick<RuntimeAgentBackendFailureDiagnostic, 'categories' | 'retryAfterMs' | 'resetAt'>,
 ) {
@@ -319,6 +364,10 @@ function runtimeCapabilityEvolutionProviderUnavailable(text: string, categories:
     || category === 'too-many-failed-attempts')
     || runtimeAgentBackendConfigurationFailureIsBlocking(text)
     || /provider|base url|AgentServer|ECONNREFUSED|429|rate/i.test(text);
+}
+
+function runtimeAgentBackendContextWindowFailureTextMatches(text: string) {
+  return /contextwindowexceeded|context window(?: exceeded)?|context_length|context length|maximum context|token limit|tokens? exceeded|context.*(?:overflow|exceed)|input.*too long/i.test(text);
 }
 
 export function sanitizeRuntimeAgentBackendFailureDetail(text: string, limit = 320) {

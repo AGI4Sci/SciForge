@@ -21,6 +21,7 @@
     "./scenario-library": "./src/scenarioLibrary.ts",
     "./scenario-routing-policy": "./src/scenarioRoutingPolicy.ts",
     "./scenario-builder-display-policy": "./src/scenarioBuilderDisplayPolicy.ts",
+    "./alignment-display-policy": "./src/alignmentDisplayPolicy.ts",
     "./scenario-package": "./src/scenarioPackage.ts",
     "./scenario-quality-gate": "./src/scenarioQualityGate.ts",
     "./validation-issue-policy": "./src/validationIssuePolicy.ts",

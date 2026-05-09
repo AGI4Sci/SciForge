@@ -16,7 +16,9 @@
 .theme-light .results-panel,
 .theme-light .card,
 .theme-light .scenario-builder-box,
+.theme-light .builder-box,
 .theme-light .scenario-draft-preview,
+.theme-light .draft-preview,
 .theme-light .scenario-settings,
 .theme-light .scenario-preview-panel,
 .theme-light .scenario-publish-row,
@@ -115,6 +117,7 @@
 .theme-light .workspace-path-editor,
 .theme-light .workspace-preview textarea,
 .theme-light .scenario-builder-box textarea,
+.theme-light .builder-box textarea,
 .theme-light .scenario-settings textarea,
 .theme-light .scenario-settings input,
 .theme-light .scenario-settings select,
@@ -205,6 +208,7 @@
 .theme-light .reasoning,
 .theme-light .scenario-contract pre,
 .theme-light .scenario-draft-preview pre,
+.theme-light .draft-preview pre,
 .theme-light .component-contract-panel pre {
   color: var(--text-secondary);
 }

@@ -1,4 +1,5 @@
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceTaskRunResult } from '../runtime-types.js';
+import { skillRuntimeRoutePolicy } from '../../../packages/skills/runtime-policy';
 import { isRecord } from '../gateway-utils.js';
 import { agentServerBackend } from './agent-backend-config.js';
 
@@ -22,18 +23,19 @@ export function attemptPlanRefs(request: GatewayRequest, skill?: SkillAvailabili
 }
 
 export function runtimeProfileIdForRequest(request: GatewayRequest, skill?: SkillAvailability) {
-  if (skill?.manifest.entrypoint.type === 'agentserver-generation') return `agentserver-${agentServerBackend(request, request.llmEndpoint)}`;
-  if (skill?.manifest.entrypoint.type === 'markdown-skill') return `agentserver-${agentServerBackend(request, request.llmEndpoint)}`;
-  if (skill?.manifest.entrypoint.type === 'workspace-task') return 'workspace-python';
-  return request.scenarioPackageRef?.source === 'built-in' ? 'package-skill' : undefined;
+  return routePolicyForRequest(request, skill).runtimeProfileId;
 }
 
 export function selectedRuntimeForSkill(skill?: SkillAvailability) {
-  if (!skill) return undefined;
-  if (skill.manifest.entrypoint.type === 'agentserver-generation') return 'agentserver-generation';
-  if (skill.manifest.entrypoint.type === 'markdown-skill') return 'agentserver-markdown-skill';
-  if (skill.manifest.entrypoint.type === 'workspace-task') return 'workspace-python';
-  return skill.manifest.entrypoint.type;
+  return routePolicyForRequest(undefined, skill).selectedRuntime;
+}
+
+function routePolicyForRequest(request?: GatewayRequest, skill?: SkillAvailability) {
+  return skillRuntimeRoutePolicy({
+    entrypoint: skill?.manifest.entrypoint,
+    scenarioPackageSource: request?.scenarioPackageRef?.source,
+    agentServerRuntimeProfileId: request ? `agentserver-${agentServerBackend(request, request.llmEndpoint)}` : undefined,
+  });
 }
 
 export function payloadHasFailureStatus(payload: ToolPayload) {

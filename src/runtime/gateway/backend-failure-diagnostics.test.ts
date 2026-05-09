@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { diagnosticForFailure } from './backend-failure-diagnostics';
+import {
+  diagnosticForFailure,
+  isContextWindowExceededError,
+  isRateLimitError,
+  sanitizeAgentServerError,
+} from './backend-failure-diagnostics';
 
 test('diagnostic schema maps network failures to user-visible recovery', () => {
   const diagnostic = diagnosticForFailure('fetch failed: ECONNREFUSED 127.0.0.1:8787', {
@@ -44,4 +49,15 @@ test('diagnostic schema maps acceptance failures to repair-first recovery', () =
   assert.ok(diagnostic.categories.includes('acceptance'));
   assert.ok(diagnostic.recoverActions?.some((action) => /acceptance|验收|repair/.test(action)));
   assert.deepEqual(diagnostic.evidenceRefs, ['execution-unit:acceptance-1']);
+});
+
+test('context-window diagnostics use contract-owned user-facing recovery copy', () => {
+  const diagnostic = diagnosticForFailure('maximum context length reached because input is too long and tokens exceeded');
+
+  assert.equal(diagnostic.kind, 'context-window');
+  assert.match(sanitizeAgentServerError('maximum context length reached because input is too long and tokens exceeded'), /context window\/token limit/);
+  assert.ok(diagnostic.recoverActions?.some((action) => /currentReferenceDigests/.test(action)));
+  assert.equal(isContextWindowExceededError('token limit exceeded during backend generation'), true);
+  assert.equal(isContextWindowExceededError('429 too many requests; not a context window overflow'), false);
+  assert.equal(isRateLimitError('responseTooManyFailedAttempts exceeded retry limit'), true);
 });

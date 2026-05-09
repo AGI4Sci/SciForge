@@ -1,4 +1,4 @@
-import { dirname, extname, resolve } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 
 export type SkillPackageDomain = 'literature' | 'structure' | 'omics' | 'knowledge';
 
@@ -43,6 +43,17 @@ export interface SkillAvailabilityValidationPlan {
   fileProbes: SkillAvailabilityFileProbe[];
 }
 
+export interface SkillRuntimeRoutePolicyInput {
+  entrypoint?: RuntimePolicySkillManifest['entrypoint'] | { type?: string };
+  scenarioPackageSource?: string;
+  agentServerRuntimeProfileId?: string;
+}
+
+export interface SkillRuntimeRoutePolicy {
+  runtimeProfileId?: string;
+  selectedRuntime?: string;
+}
+
 export interface AgentServerGeneratedTaskContractResponse {
   entrypoint: {
     path: string;
@@ -61,6 +72,7 @@ export const AGENTSERVER_SUPPLEMENTAL_GENERATION_EVENT_TYPE = 'workspace-task-st
 
 const skillPromotionDomainFallback: SkillPackageDomain = 'literature';
 const skillPackageDomainSet = new Set<SkillPackageDomain>(['literature', 'structure', 'omics', 'knowledge']);
+const workspaceTaskPythonRuntimeDirs = ['.venv-sciforge', '.venv-sciforge-omics', '.venv'];
 
 export function planSkillAvailabilityValidation(
   manifest: RuntimePolicySkillManifest,
@@ -110,8 +122,47 @@ export function agentServerGenerationSkillAvailability(
   };
 }
 
+export function skillRuntimeRoutePolicy(input: SkillRuntimeRoutePolicyInput): SkillRuntimeRoutePolicy {
+  const entrypointType = input.entrypoint?.type;
+  if (entrypointType === 'agentserver-generation') {
+    return {
+      runtimeProfileId: input.agentServerRuntimeProfileId,
+      selectedRuntime: 'agentserver-generation',
+    };
+  }
+  if (entrypointType === 'markdown-skill') {
+    return {
+      runtimeProfileId: input.agentServerRuntimeProfileId,
+      selectedRuntime: 'agentserver-markdown-skill',
+    };
+  }
+  if (entrypointType === 'workspace-task') {
+    return {
+      runtimeProfileId: 'workspace-python',
+      selectedRuntime: 'workspace-python',
+    };
+  }
+  if (entrypointType) {
+    return {
+      runtimeProfileId: input.scenarioPackageSource === 'built-in' ? 'package-skill' : undefined,
+      selectedRuntime: entrypointType,
+    };
+  }
+  return {
+    runtimeProfileId: input.scenarioPackageSource === 'built-in' ? 'package-skill' : undefined,
+  };
+}
+
 export function skillPromotionDomain(input: unknown): SkillPackageDomain {
   return isSkillPackageDomain(input) ? input : skillPromotionDomainFallback;
+}
+
+export function workspaceTaskPythonCommandCandidates(workspacePath: string) {
+  const workspace = resolve(workspacePath || '.');
+  return [
+    ...workspaceTaskPythonRuntimeDirs.map((dir) => join(workspace, dir, 'bin', 'python')),
+    'python3',
+  ];
 }
 
 function isSkillPackageDomain(value: unknown): value is SkillPackageDomain {

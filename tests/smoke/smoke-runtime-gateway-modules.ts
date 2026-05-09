@@ -6,11 +6,13 @@ import { buildContextEnvelope, expectedArtifactSchema, workspaceTreeSummary } fr
 import { normalizeGatewayRequest, selectedComponentIdsForRequest } from '../../src/runtime/gateway/gateway-request.js';
 import { runAgentServerGeneratedTask } from '../../src/runtime/gateway/generated-task-runner.js';
 import { agentServerAgentId, currentTurnReferences } from '../../src/runtime/gateway/agentserver-context-window.js';
+import { agentServerBackend } from '../../src/runtime/gateway/agent-backend-config.js';
 import { materializeBackendPayloadOutput, normalizeArtifactsForPayload, persistArtifactRefsForPayload } from '../../src/runtime/gateway/artifact-materializer.js';
 import { classifyAgentServerBackendFailure, sanitizeAgentServerError } from '../../src/runtime/gateway/backend-failure-diagnostics.js';
 import { coerceAgentServerToolPayload, coerceWorkspaceTaskPayload, ensureDirectAnswerReportArtifact } from '../../src/runtime/gateway/direct-answer-payload.js';
 import { repairNeededPayload, validateAndNormalizePayload } from '../../src/runtime/gateway/payload-validation.js';
 import { parseGenerationResponse } from '../../src/runtime/gateway/agentserver-run-output.js';
+import { attemptPlanRefs, runtimeProfileIdForRequest, selectedRuntimeForSkill } from '../../src/runtime/gateway/runtime-routing.js';
 import { schemaErrors as toolPayloadSchemaErrors } from '../../src/runtime/gateway/tool-payload-contract.js';
 import { applyRuntimeVerificationPolicy, normalizeRuntimeVerificationPolicy } from '../../src/runtime/gateway/verification-policy.js';
 import { normalizeRuntimeVerificationResults } from '../../src/runtime/gateway/verification-results.js';
@@ -268,6 +270,29 @@ try {
       promotionHistory: [],
     },
   };
+  const agentServerRuntimeProfileId = `agentserver-${agentServerBackend(request, request.llmEndpoint)}`;
+  assert.equal(runtimeProfileIdForRequest(request, skill), agentServerRuntimeProfileId);
+  assert.equal(selectedRuntimeForSkill(skill), 'agentserver-generation');
+  const routingRefs = attemptPlanRefs(request, skill, 'smoke fallback');
+  assert.deepEqual(routingRefs.routeDecision, {
+    selectedSkill: 'agentserver.generation.literature',
+    selectedRuntime: 'agentserver-generation',
+    fallbackReason: 'smoke fallback',
+    selectedAt: routingRefs.routeDecision.selectedAt,
+  });
+  assert.equal(typeof routingRefs.routeDecision.selectedAt, 'string');
+
+  const markdownSkill: SkillAvailability = {
+    ...skill,
+    id: 'scp.markdown-smoke',
+    manifest: {
+      ...skill.manifest,
+      id: 'scp.markdown-smoke',
+      entrypoint: { type: 'markdown-skill' },
+    },
+  };
+  assert.equal(runtimeProfileIdForRequest(request, markdownSkill), agentServerRuntimeProfileId);
+  assert.equal(selectedRuntimeForSkill(markdownSkill), 'agentserver-markdown-skill');
 
   const brokerEnvelope = buildContextEnvelope({
     ...request,

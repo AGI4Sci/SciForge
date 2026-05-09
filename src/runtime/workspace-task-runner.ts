@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import type { WorkspaceTaskRunResult, WorkspaceTaskSpec } from './runtime-types.js';
 import { pruneTaskInputRetention } from './workspace-retention.js';
 import { buildWorkspaceTaskInput } from './workspace-task-input.js';
+import { workspaceTaskPythonCommandCandidates } from '../../packages/skills/runtime-policy';
 
 const execFileAsync = promisify(execFile);
 
@@ -135,12 +136,7 @@ export function sha1(value: string | Buffer) {
 
 async function commandFor(workspace: string, language: WorkspaceTaskSpec['language'], entrypoint: string) {
   if (language === 'python') {
-    const candidates = [
-      join(workspace, '.venv-sciforge', 'bin', 'python'),
-      join(workspace, '.venv-sciforge-omics', 'bin', 'python'),
-      join(workspace, '.venv', 'bin', 'python'),
-      'python3',
-    ];
+    const candidates = workspaceTaskPythonCommandCandidates(workspace);
     const available: string[] = [];
     for (const candidate of candidates) {
       if (await commandExists(candidate)) available.push(candidate);

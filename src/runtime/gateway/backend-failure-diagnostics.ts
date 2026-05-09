@@ -1,7 +1,11 @@
 import {
   runtimeAgentBackendFailureCategories,
+  runtimeAgentBackendFailureIsContextWindowExceeded,
+  runtimeAgentBackendIsRateLimitKind,
+  runtimeAgentBackendProviderFailureMessage,
   runtimeAgentBackendRateLimitRecoverActions,
   runtimeAgentBackendRecoverActions,
+  runtimeAgentBackendSanitizedFailureUserReason,
   redactRuntimeAgentBackendSecretText,
   sanitizeRuntimeAgentBackendFailureDetail,
   withRuntimeAgentBackendUserFacingDiagnostic,
@@ -74,14 +78,7 @@ export function recoverActionsForDiagnostic(diagnostic: Pick<AgentServerBackendF
 }
 
 export function providerRateLimitDiagnosticMessage(diagnostic: AgentServerBackendFailureDiagnostic, finalFailure: boolean) {
-  const labels = diagnostic.categories.join(', ');
-  const provider = [diagnostic.provider, diagnostic.model].filter(Boolean).join('/') || diagnostic.backend || 'unknown provider';
-  const retryAfter = diagnostic.retryAfterMs !== undefined ? ` retryAfterMs=${diagnostic.retryAfterMs}.` : '';
-  const resetAt = diagnostic.resetAt ? ` resetAt=${diagnostic.resetAt}.` : '';
-  const retry = finalFailure
-    ? ' SciForge already performed the single allowed compact/slim retry and will not retry again automatically.'
-    : ' SciForge will back off, compact/slim the handoff, and retry once.';
-  return `AgentServer/provider failure classified as ${labels} for ${provider}.${retryAfter}${resetAt}${retry} Detail: ${diagnostic.message}`;
+  return runtimeAgentBackendProviderFailureMessage(diagnostic, finalFailure);
 }
 
 export function rateLimitRecoverActions(diagnostic: AgentServerBackendFailureDiagnostic) {
@@ -111,16 +108,7 @@ export function parseJsonErrorMessage(text: string) {
 export function sanitizeAgentServerError(text: string) {
   const firstLine = text.split('\n').map((line) => line.trim()).find(Boolean) || text;
   const providerDiagnostic = classifyAgentServerBackendFailure(firstLine);
-  if (providerDiagnostic?.categories.some((category) => category === 'http-429' || category === 'rate-limit' || category === 'retry-budget' || category === 'too-many-failed-attempts')) {
-    return providerRateLimitDiagnosticMessage(providerDiagnostic, false);
-  }
-  if (providerDiagnostic?.userReason) return providerDiagnostic.userReason;
-  if (/429|too many requests|responseTooManyFailedAttempts|exceeded retry limit/i.test(firstLine)) {
-    return '上游模型/AgentServer 返回 429 Too Many Requests 或 exceeded retry limit；这更像速率限制/重试预算耗尽，不是典型 context window 超限。请稍后重试，或降低并发与本轮上下文体积。';
-  }
-  if (/context window|maximum context|context length|token limit/i.test(firstLine)) {
-    return '上游模型报告 context window/token limit 超限；需要压缩历史上下文、减少 artifacts/logs，或改用更大上下文模型。';
-  }
+  if (providerDiagnostic) return runtimeAgentBackendSanitizedFailureUserReason(providerDiagnostic, false);
   return redactSecretText(firstLine
     .replace(/request id:\s*[^),\s]+/gi, 'request id: redacted')
     .replace(/url:\s*\S+/gi, 'url: redacted')
@@ -129,12 +117,11 @@ export function sanitizeAgentServerError(text: string) {
 }
 
 export function isContextWindowExceededError(text: string) {
-  return /contextWindowExceeded|context window|maximum context|context length|token limit|tokens? exceeded|context.*exceed|input.*too long/i.test(text)
-    && !isRateLimitError(text);
+  return runtimeAgentBackendFailureIsContextWindowExceeded(text);
 }
 
 export function isRateLimitError(text: string) {
-  return /429|too many requests|responseTooManyFailedAttempts|exceeded retry limit|rate.?limit/i.test(text);
+  return runtimeAgentBackendFailureCategories(text).some(runtimeAgentBackendIsRateLimitKind);
 }
 
 export function retryAfterMsFromText(text: string) {

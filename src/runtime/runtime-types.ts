@@ -1,7 +1,7 @@
-import type { SciForgeAgentHandoffSource, SharedAgentHandoffContract } from '@sciforge-ui/runtime-contract/handoff';
+import type { SciForgeAgentHandoffSource, SciForgeSharedSkillDomain, SharedAgentHandoffContract } from '@sciforge-ui/runtime-contract/handoff';
 import type { WorkEvidence } from './gateway/work-evidence-types.js';
 
-export type SciForgeSkillDomain = 'literature' | 'structure' | 'omics' | 'knowledge';
+export type SciForgeSkillDomain = SciForgeSharedSkillDomain;
 
 export type ExecutionUnitStatus =
   | 'planned'

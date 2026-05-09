@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { buildBackendInputTextAnchors } from '@sciforge-ui/runtime-contract/handoff-input-policy';
 
 export interface WorkspaceTaskInputRefs {
   workspacePath: string;
@@ -423,7 +424,7 @@ function compactBackendInputText(value: string, context: {
     `sha1: ${sha1Text(value)}`,
     `chars: ${value.length}`,
     '',
-    ...backendInputTextAnchors(value, context),
+    ...buildBackendInputTextAnchors(value, { maxInlineStringChars: context.budget.maxInlineStringChars }),
     '',
     'HEAD:',
     value.slice(0, context.budget.headChars),
@@ -431,189 +432,6 @@ function compactBackendInputText(value: string, context: {
     'TAIL:',
     value.slice(-context.budget.tailChars),
   ].join('\n');
-}
-
-function backendInputTextAnchors(value: string, context: {
-  budget: BackendHandoffBudget;
-  rawRef: string;
-  path: string[];
-  depth: number;
-  siblingRefs: Record<string, string | undefined>;
-  decisions: BackendHandoffBudgetDecision[];
-}) {
-  const anchors: string[] = [];
-  const snapshot = extractCurrentTurnSnapshot(value);
-  if (snapshot) {
-    anchors.push(
-      'CURRENT TURN SNAPSHOT:',
-      stringifyJson(compactAnchorValue(snapshot, 0)).slice(0, Math.max(1200, context.budget.maxInlineStringChars)),
-    );
-  } else {
-    const promptExcerpt = excerptAroundPattern(value, /"prompt"\s*:\s*"|currentUserRequest|rawUserPrompt|Current user request:/i, context.budget.maxInlineStringChars);
-    if (promptExcerpt) {
-      anchors.push('CURRENT TURN EXCERPT:', promptExcerpt);
-    }
-  }
-  const contractExcerpt = excerptAroundPattern(value, /Final output must be only compact JSON|taskContract|outputPayloadKeys|AgentServerGenerationResponse|SciForge ToolPayload/i, Math.min(4000, context.budget.maxInlineStringChars));
-  if (contractExcerpt) {
-    anchors.push('OUTPUT CONTRACT EXCERPT:', contractExcerpt);
-  }
-  const recoveryExcerpt = excerptAroundPattern(value, /timed out or was cancelled|failureReason"\s*:|"failureReason":|schemaErrors/i, Math.min(4000, context.budget.maxInlineStringChars))
-    ?? excerptAroundPattern(value, /priorAttempts/i, Math.min(4000, context.budget.maxInlineStringChars));
-  if (recoveryExcerpt) {
-    anchors.push('RECOVERY CONTEXT EXCERPT:', recoveryExcerpt);
-  }
-  return anchors;
-}
-
-function extractCurrentTurnSnapshot(value: string) {
-  const explicitMarker = 'CURRENT TURN SNAPSHOT';
-  const explicitIndex = value.indexOf(explicitMarker);
-  if (explicitIndex >= 0) {
-    const objectStart = value.indexOf('{', explicitIndex);
-    const parsed = parseJsonObjectAt(value, objectStart);
-    if (parsed) return parsed;
-  }
-  for (const marker of ['\n{\n  "prompt"', '\n{"prompt"', '"prompt":']) {
-    const index = value.lastIndexOf(marker);
-    if (index < 0) continue;
-    const objectStart = marker.startsWith('"') ? value.lastIndexOf('{', index) : value.indexOf('{', index);
-    const parsed = parseJsonObjectAt(value, objectStart);
-    if (!isRecord(parsed)) continue;
-    return {
-      kind: 'SciForgeCurrentTurnSnapshot',
-      prompt: parsed.prompt,
-      skillDomain: parsed.skillDomain,
-      expectedArtifactTypes: parsed.expectedArtifactTypes,
-      selectedComponentIds: parsed.selectedComponentIds,
-      strictTaskFilesReason: parsed.strictTaskFilesReason,
-      taskContract: parsed.taskContract,
-      contextEnvelope: currentTurnEnvelopeSummary(parsed.contextEnvelope),
-      uiStateSummary: currentTurnUiSummary(parsed.uiStateSummary),
-    };
-  }
-  return undefined;
-}
-
-function parseJsonObjectAt(value: string, start: number) {
-  if (start < 0 || value[start] !== '{') return undefined;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let index = start; index < value.length; index += 1) {
-    const char = value[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === '\\') {
-      escaped = true;
-      continue;
-    }
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (inString) continue;
-    if (char === '{') depth += 1;
-    if (char === '}') {
-      depth -= 1;
-      if (depth === 0) {
-        try {
-          return JSON.parse(value.slice(start, index + 1));
-        } catch {
-          return undefined;
-        }
-      }
-    }
-  }
-  return undefined;
-}
-
-function currentTurnEnvelopeSummary(value: unknown) {
-  if (!isRecord(value)) return undefined;
-  const sessionFacts = isRecord(value.sessionFacts) ? value.sessionFacts : {};
-  const scenarioFacts = isRecord(value.scenarioFacts) ? value.scenarioFacts : {};
-  const longTermRefs = isRecord(value.longTermRefs) ? value.longTermRefs : {};
-  return {
-    version: value.version,
-    mode: value.mode,
-    scenarioFacts: {
-      expectedArtifactTypes: scenarioFacts.expectedArtifactTypes,
-      selectedComponentIds: scenarioFacts.selectedComponentIds,
-      selectedToolIds: scenarioFacts.selectedToolIds,
-      selectedSenseIds: scenarioFacts.selectedSenseIds,
-    },
-    sessionFacts: {
-      currentUserRequest: sessionFacts.currentUserRequest,
-      currentPrompt: sessionFacts.currentPrompt,
-      currentReferences: sessionFacts.currentReferences,
-      currentReferenceDigests: sessionFacts.currentReferenceDigests,
-      recentConversation: sessionFacts.recentConversation,
-    },
-    longTermRefs: {
-      artifacts: summarizeAnchorArray(longTermRefs.artifacts, 6),
-      recentExecutionRefs: summarizeAnchorArray(longTermRefs.recentExecutionRefs, 6),
-      priorAttempts: summarizeAnchorArray(longTermRefs.priorAttempts, 3),
-    },
-  };
-}
-
-function currentTurnUiSummary(value: unknown) {
-  if (!isRecord(value)) return undefined;
-  return {
-    currentPrompt: value.currentPrompt,
-    rawUserPrompt: value.rawUserPrompt,
-    expectedArtifactTypes: value.expectedArtifactTypes,
-    selectedComponentIds: value.selectedComponentIds,
-    selectedToolIds: value.selectedToolIds,
-    selectedSenseIds: value.selectedSenseIds,
-    currentReferences: value.currentReferences,
-    currentReferenceDigests: value.currentReferenceDigests,
-    recentExecutionRefs: summarizeAnchorArray(value.recentExecutionRefs, 6),
-  };
-}
-
-function summarizeAnchorArray(value: unknown, maxItems: number) {
-  if (!Array.isArray(value)) return value;
-  return value.slice(-maxItems).map((item) => compactAnchorValue(item, 0));
-}
-
-function compactAnchorValue(value: unknown, depth: number): unknown {
-  if (value === null || value === undefined) return value;
-  if (typeof value === 'string') return value.length > 1200 ? `${value.slice(0, 900)}\n...[omitted ${value.length - 1200} chars]...\n${value.slice(-300)}` : value;
-  if (typeof value !== 'object') return value;
-  if (depth >= 4) return handoffAnchorSummary(value);
-  if (Array.isArray(value)) return value.slice(0, 8).map((item) => compactAnchorValue(item, depth + 1));
-  if (!isRecord(value)) return handoffAnchorSummary(value);
-  const out: Record<string, unknown> = {};
-  for (const [key, nested] of Object.entries(value).slice(0, 32)) {
-    out[key] = compactAnchorValue(nested, depth + 1);
-  }
-  if (Object.keys(value).length > 32) out._omittedFieldCount = Object.keys(value).length - 32;
-  return out;
-}
-
-function handoffAnchorSummary(value: unknown) {
-  return {
-    _sciforgeCompacted: true,
-    kind: Array.isArray(value) ? 'array' : typeof value,
-    schema: inferJsonSchema(value),
-    sha1: sha1Json(value),
-  };
-}
-
-function excerptAroundPattern(value: string, pattern: RegExp, maxChars: number) {
-  const match = pattern.exec(value);
-  if (!match) return undefined;
-  const radius = Math.max(600, Math.floor(maxChars / 2));
-  const start = Math.max(0, match.index - radius);
-  const end = Math.min(value.length, match.index + radius);
-  return [
-    start > 0 ? '[...]' : '',
-    value.slice(start, end),
-    end < value.length ? '[...]' : '',
-  ].join('');
 }
 
 function normalizePriorAttempts(value: unknown[], context: {
