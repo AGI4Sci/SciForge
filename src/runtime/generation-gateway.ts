@@ -81,7 +81,6 @@ import {
   redactSecrets,
   requestAgentServerRepair,
   requiresUserLlmEndpoint,
-  summarizeSkillsForAgentServer,
   summarizeRuntimeCapabilitiesForAgentServer,
   summarizeToolsForAgentServer,
   writeAgentServerDebugArtifact,
@@ -672,8 +671,6 @@ async function requestAgentServerGeneration(params: {
       contextEnvelope,
       workspaceTree,
       priorAttempts,
-      selectedSkill: params.skill,
-      skills: params.skills,
       mode: contextMode,
     });
     const generationRequest = {
@@ -681,9 +678,9 @@ async function requestAgentServerGeneration(params: {
       skillDomain: request.skillDomain,
       contextEnvelope,
       workspaceTreeSummary: compactContext.workspaceTreeSummary,
-      availableSkills: compactContext.availableSkills,
+      availableSkills: [],
       availableTools: summarizeToolsForAgentServer(request),
-      availableRuntimeCapabilities: summarizeRuntimeCapabilitiesForAgentServer(request, compactContext.availableSkills),
+      availableRuntimeCapabilities: summarizeRuntimeCapabilitiesForAgentServer(request),
       artifactSchema: expectedArtifactSchema(request),
       uiManifestContract: {
         type: 'array',

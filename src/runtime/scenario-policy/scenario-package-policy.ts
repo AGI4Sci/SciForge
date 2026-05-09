@@ -81,8 +81,10 @@ const disallowedScenarioPackagePolicyKeys = new Set([
   'backendbranches',
   'backendprovider',
   'backendrouting',
+  'answertemplate',
   'conversationrouter',
   'command',
+  'directanswer',
   'execute',
   'executor',
   'followupintent',
@@ -96,6 +98,7 @@ const disallowedScenarioPackagePolicyKeys = new Set([
   'multiturnsemanticjudge',
   'promptmatcher',
   'promptpattern',
+  'presetanswer',
   'promptcase',
   'promptcases',
   'promptregex',
@@ -107,6 +110,7 @@ const disallowedScenarioPackagePolicyKeys = new Set([
   'providerrouting',
   'regexp',
   'regex',
+  'responsetemplate',
   'runtimecode',
   'semanticclassifier',
   'semanticdecision',
@@ -118,6 +122,7 @@ const disallowedScenarioPackagePolicyKeys = new Set([
   'script',
   'shell',
   'sourcecode',
+  'systemprompt',
 ]);
 
 const allowedPolicyFields = new Set<string>(SCENARIO_PACKAGE_POLICY_FIELDS);

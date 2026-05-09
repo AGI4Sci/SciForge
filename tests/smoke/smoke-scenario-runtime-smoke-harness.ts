@@ -10,13 +10,7 @@ assert.equal(dryRun.ok, true);
 assert.equal(dryRun.mode, 'dry-run');
 assert.equal(dryRun.packageRef.id, 'literature-evidence-review');
 assert.equal(dryRun.execution?.status, 'skipped');
+assert.match(dryRun.execution?.reason ?? '', /without executing workspace code/);
 assert.ok(dryRun.expectedArtifactTypes.includes('paper-list'));
 
-const executed = await runScenarioRuntimeSmoke({ package: pkg, mode: 'execute-package-skill' }, async () => ({
-  ok: true,
-  execution: { status: 'done' },
-}));
-assert.equal(executed.ok, true);
-assert.equal(executed.execution?.status, 'done');
-
-console.log('[ok] scenario runtime smoke harness lives in tests/smoke and validates optional execution');
+console.log('[ok] scenario runtime smoke harness lives in tests/smoke and validates policy-only dry-runs');

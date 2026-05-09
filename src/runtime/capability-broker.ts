@@ -37,6 +37,11 @@ export interface CapabilityBrokerFailureHistoryEntry {
   failureCode?: string;
   recoverActions?: string[];
   refs?: string[];
+  codeRef?: string;
+  outputRef?: string;
+  stdoutRef?: string;
+  stderrRef?: string;
+  traceRef?: string;
 }
 
 export interface CapabilityBrokerScenarioPolicy {
@@ -144,6 +149,7 @@ export interface CapabilityExpansion {
   outputSchema?: CapabilityManifest['outputSchema'];
   examples?: CapabilityManifest['examples'];
   repairHints?: CapabilityRepairHint[];
+  failureRefs?: string[];
   validators?: CapabilityValidatorManifest[];
   providers?: CapabilityProviderManifest[];
 }
@@ -152,6 +158,8 @@ export interface CapabilityExpansionOptions {
   includeSchemas?: boolean;
   includeExamples?: boolean;
   includeRepairHints?: boolean;
+  includeFailureRefs?: boolean;
+  failureHistory?: CapabilityBrokerFailureHistoryEntry[];
   includeValidators?: boolean;
   includeProviders?: boolean;
 }
@@ -311,6 +319,20 @@ export function expandCapabilityManifest(manifest: CapabilityManifest, options: 
   }
   if (options.includeExamples) expansion.examples = manifest.examples.map((example) => ({ ...example }));
   if (options.includeRepairHints) expansion.repairHints = manifest.repairHints.map((hint) => ({ ...hint, recoverActions: [...hint.recoverActions] }));
+  if (options.includeFailureRefs) {
+    expansion.failureRefs = unique(
+      (options.failureHistory ?? [])
+        .filter((entry) => entry.capabilityId === manifest.id)
+        .flatMap((entry) => [
+          ...(entry.refs ?? []),
+          entry.codeRef ?? '',
+          entry.outputRef ?? '',
+          entry.stdoutRef ?? '',
+          entry.stderrRef ?? '',
+          entry.traceRef ?? '',
+        ].filter(Boolean)),
+    );
+  }
   if (options.includeValidators) expansion.validators = manifest.validators.map((validator) => ({ ...validator, expectedRefs: validator.expectedRefs ? [...validator.expectedRefs] : undefined }));
   if (options.includeProviders) expansion.providers = manifest.providers.map((provider) => ({ ...provider, requiredConfig: [...provider.requiredConfig] }));
   return expansion;

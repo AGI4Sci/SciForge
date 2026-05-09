@@ -208,16 +208,16 @@ Todo：
 
 ### T119 UI Thin Shell：UI 只做展示、引用和安全边界
 
-状态：规划中；目标是把 UI 从语义路由层降级为 thin shell。UI 只负责 session 可视化、object refs、artifact views、execution units、validation errors、recover actions 和用户交互安全边界。
+状态：已完成；UI 已从语义路由层降级为 thin shell。UI 只负责 session 可视化、object refs、artifact views、execution units、validation errors、recover actions 和用户交互安全边界。
 
 设计文档：[`docs/Architecture.md`](docs/Architecture.md#角色边界)。
 
 Todo：
 
-- [ ] 删除 UI 侧自然语言意图判断、报告/markdown/上一轮结果等语义 fallback。
-- [ ] UI 只从 backend response、workspace refs、UIManifest 和 capability result projection 渲染结果。
-- [ ] 将“backend 不可达/stream 断开/validation failed”统一显示为诊断和 recover actions，不合成最终答案。
-- [ ] 结果面板只依赖稳定 object refs；不直接依赖临时 `agentserver://` preview。
+- [x] 删除 UI 侧自然语言意图判断、报告/markdown/上一轮结果等语义 fallback。
+- [x] UI 只从 backend response、workspace refs、UIManifest 和 capability result projection 渲染结果。
+- [x] 将“backend 不可达/stream 断开/validation failed”统一显示为诊断和 recover actions，不合成最终答案。
+- [x] 结果面板只依赖稳定 object refs；不直接依赖临时 `agentserver://` preview。
 - [x] 增加 UI smoke，断言 report 追问、artifact 追问、失败修复都由 backend/capability path 产生结果。
 
 进展：`runOrchestrator.ts` 已删除系统中断后按自然语言/report artifact 合成 `sciforge.existing-artifact-followup` 成功响应的 UI fallback；`runOrchestrator.targetInstance.test.ts` 断言 report 追问、非 report artifact 追问和 failed-run 修复都发送同一 backend handoff payload，由 `agentDispatchPolicy=agentserver-decides` 和 capability execution unit 返回结果，backend 中断只记录失败诊断，不合成 Markdown 报告。`runtimeEvents.ts` 的 workspace result blocking status、context window/compaction status、stream event label 和 project-tool failure/abort 诊断语义已迁到 `packages/contracts/runtime/events.ts` contract policy，UI 只调用 projection helper；`smoke:no-src-capability-semantics` 对 `runtimeEvents.ts` 的 baseline 降为 0，对 `runOrchestrator.ts` 的 `project-tool-failed` 特例降为 0。
@@ -229,13 +229,13 @@ Todo：
 
 验收标准：
 
-- [ ] UI 不含 prompt regex、scenario id 分支或 artifact type 特例来决定用户语义。
+- [x] UI 不含 prompt regex、scenario id 分支或 artifact type 特例来决定用户语义。
 - [x] UI 能完整展示 `ContractValidationFailure`、recoverActions、related refs 和 backend repair state。
 - [x] 删除旧 UI fallback 后，多轮 report/artifact/repair fixtures 仍通过。
 
 ### T118 Backend-first Artifact and Run Tools
 
-状态：规划中；目标是让 backend 通用读取、解析、渲染和继续 workspace 事实，解决多轮对话依赖 SciForge 猜测的问题。
+状态：已完成；backend 可通用读取、解析、渲染和继续 workspace 事实，解决多轮对话依赖 SciForge 猜测的问题。
 
 设计文档：[`docs/Architecture.md`](docs/Architecture.md#backend-first-多轮-artifact-使用)。
 
@@ -284,7 +284,7 @@ Todo：
 
 ### T116 Capability Broker and Layered Meta Exposure
 
-状态：规划中；目标是让 backend 每轮只消费相关、紧凑的 capability brief；调用或修复时再按需展开 contract、examples、repair hints 和日志 refs。
+状态：已完成；backend 每轮只消费相关、紧凑的 capability brief；调用或修复时再按需展开 contract、examples、repair hints 和相关 failure/log refs。
 
 设计文档：[`docs/Architecture.md`](docs/Architecture.md#meta-暴露与热路径固化)。
 
@@ -294,28 +294,33 @@ Todo：
 - [x] broker 输出 compact capability brief 列表，默认不展开 full schema。
 - [x] 定义 expansion API：`brief -> contract summary -> full schema/examples/repair hints`。
 - [x] 将 backend request payload 改为消费 broker 输出，而不是散落的 skills/views/tools 列表。
-- [ ] 删除旧 capability 拼接逻辑和重复 prompt context builder。
+- [x] 删除旧 capability 拼接逻辑和重复 prompt context builder。
   进展：删除 `agentserver-prompts.ts` 中旧 `sciforge.runtime-capability-catalog.v1` 拼接器（skills/tools/senses/actions/verifiers/uiComponents）；兼容 `availableTools` 入口只返回空列表，`availableRuntimeCapabilities` 入口改为 broker compact brief，contract smoke 改为断言 context envelope 只暴露 `sciforge.agentserver.capability-broker-brief.v1` compact brief。
+  收口：生产路径不再构造 `availableSkills` compact capability list；`buildAgentServerCompactContext` 只保留 workspace/ui/artifact/ref/prior-attempt context，capability 入口唯一收敛到 `buildCapabilityBrokerBriefForAgentServer`。`smoke-agentserver-broker-payload` 增加 guard，断言 compact context 不含散落 `availableSkills`，即使 legacy full skill/tool/runtime catalog 被误传给 prompt builder 也不会进入默认 handoff。
 
 验收标准：
 
 - [x] backend 默认只看到相关能力 brief，而不是全量协议。
-- [ ] 选择能力后可按需展开 schema；失败修复时可展开 repair hints 和日志 refs。
-- [ ] 旧的多处 capability list 构造逻辑被删除或合并到 broker。
+- [x] 选择能力后可按需展开 schema；失败修复时可展开 repair hints 和相关 failure/log refs。
+- [x] 旧的多处 capability list 构造逻辑被删除或合并到 broker。
+  验证：`npx tsx tests/smoke/smoke-agentserver-broker-payload.ts` 断言默认 handoff 只包含 compact broker brief 且不泄露 legacy full skill/tool/runtime catalog；`npx tsx tests/smoke/smoke-capability-broker.ts` 断言 broker 可从 request-shaped failure history 按需展开 schema、examples、repair hints、provider refs 和被选 capability 的 stdout/stderr/trace failure refs，同时默认 broker brief 不展开 ledger logs。
+  本轮验证：`npx tsx tests/smoke/smoke-agentserver-broker-payload.ts`、`npx tsx tests/smoke/smoke-capability-broker.ts`、`npm run typecheck`、`npm run smoke:runtime-gateway-modules`、`npm run smoke:no-legacy-paths`、`npm run smoke:no-src-capability-semantics`、`npm run smoke:capability-manifest-registry`。
 
 ### T115 Unified CapabilityManifest Registry
 
-状态：规划中；目标是建立所有 packages/modules 的统一 capability manifest，使每个模块都可声明、校验、组合、替换和修复。
+状态：已完成；所有 packages/modules 已统一到 capability manifest/catalog 发现，使每个模块都可声明、校验、组合、替换和修复。
 
 设计文档：[`docs/Architecture.md`](docs/Architecture.md#一切模块都是-capability)。
 
 Todo：
 
 - [x] 定义 `CapabilityManifest` contract：name、version、owner package、brief、routing tags、inputSchema、outputSchema、sideEffects、safety、examples、validator、repairHints、providers、lifecycle metadata。
-- [ ] 梳理现有模块并分类：observe、skills、actions、verifiers、views、memory/context、importers/exporters、runtime adapters。
+- [x] 梳理现有模块并分类：observe、skills、actions、verifiers、views、memory/context、importers/exporters、runtime adapters。
+  证据：`CapabilityManifestKind` 覆盖 observe、skill、action、verifier、view、memory、importer、exporter、runtime-adapter、composed；核心 manifest 已覆盖 vision observe、AgentServer generation skill、workspace/action/runtime adapters、report/evidence views 和 schema verifier，`packages/README.md` 继续约束 skills、actions、verifiers、presentation views、support/context package 的归属边界。
 - [x] 为首批核心能力补 manifest：artifact resolver/read/render、workspace read/write、run command、Python task、vision observe、computer-use action、report viewer、evidence matrix、schema verifier。
 - [x] 建立 registry loader 和 package boundary smoke，禁止核心能力无 manifest 暴露。
-- [ ] 删除旧 registry、旧 skill list、旧 view registry 中与 manifest 重复的真相源。
+- [x] 删除旧 registry、旧 skill list、旧 view registry 中与 manifest 重复的真相源。
+  验证：`npm run packages:check` 聚合 skill catalog generation、capability manifest registry、workspace package metadata、package runtime boundary 和 UI component publication checks；`tools/check-package-catalog.ts` 断言 legacy `defaultCapabilitySummaries()` 的 id 和核心字段都从 `CORE_CAPABILITY_MANIFESTS` 投影派生，package catalog 不再引用 seed/workspace legacy skill source，generated skill/tool indexes 与 SKILL.md 发现结果一致，scenario skill/tool/view registry 分别从 package skill catalog、tool catalog 和 `uiComponentRuntimeRegistry` 派生，UI components 由 package manifests 唯一发布；`smoke-capability-manifest-contract.ts` 按 manifest id 验证稳定 provider/brief，不依赖 seed 顺序。
 
 验收标准：
 
@@ -325,36 +330,43 @@ Todo：
 
 ### T114 Scenario Packages as Policy Only
 
-状态：规划中；目标是把 scenario package 收敛为领域 policy 和能力选择约束，不再承载执行逻辑、多轮判断或 prompt 特例。
+状态：已完成；scenario package 已收敛为领域 policy 和能力选择约束，不再承载执行逻辑、多轮判断或 prompt 特例。
 
 设计文档：[`docs/Architecture.md`](docs/Architecture.md#角色边界)。
 
 Todo：
 
 - [x] 定义 scenario package 允许字段：artifact schemas、default views、allowed/required capabilities、domain vocabulary、verifier policy、privacy/safety boundaries。
-- [ ] 删除 scenario 中的执行逻辑、prompt 特例、多轮语义判断和 provider 分支。进展：runtime scenario policy validation 现在拒绝 `providerBranches`、`multiTurnSemanticJudge`、`promptSpecialCases` 等 runtime-like 字段；official package smoke 覆盖这些回归，并继续证明 built-in packages 只暴露 policy-only declarations；package builder smoke 已锁定 built-in package 只产出 contract shape，runtime policy 只由 `src/runtime/scenario-policy` 包装生成。
-- [ ] scenario 只影响 capability broker 的筛选和 policy，不直接决定 backend 回答。
+- [x] 删除 scenario 中的执行逻辑、prompt 特例、多轮语义判断和 provider 分支。进展：runtime scenario policy validation 现在拒绝 `providerBranches`、`multiTurnSemanticJudge`、`promptSpecialCases`、`answerTemplate`、`directAnswer`、`responseTemplate`、`systemPrompt` 等 runtime-like / preset-answer 字段；official package smoke 覆盖这些回归，并继续证明 built-in packages 只暴露 policy-only declarations；package builder smoke 已锁定 built-in package 只产出 contract shape，runtime policy 只由 `src/runtime/scenario-policy` 包装生成；scenario runtime smoke harness 已收窄为 policy-only dry-run，不再保留 package skill execution 模式。
+- [x] scenario 只影响 capability broker 的筛选和 policy，不直接决定 backend 回答。进展：scenario package policy 只输出 artifact/default view/capability/domain/verifier/privacy-safety declarations；official package smoke 断言 runtime dry-run smoke 跳过执行，backend 回答仍由通用 AgentServer/capability path 决定。
 - [x] 增加 scenario package smoke，禁止新增执行代码或 prompt regex。
 
 验收标准：
 
 - [x] 所有 scenario package 都能被解释为 capability policy。
-- [ ] backend 使用 scenario policy 选择能力，但任务理解和执行仍走通用 backend/capability path。
-- [ ] 旧 scenario-specific execution path 被删除。
+- [x] backend 使用 scenario policy 选择能力，但任务理解和执行仍走通用 backend/capability path。
+- [x] 旧 scenario-specific execution path 被删除。进展：`tests/smoke/scenario-runtime-smoke-harness.ts` 只允许 dry-run validation，official package smoke 明确断言 scenario package 不执行 workspace/package skill。
 
 ### T113 Immediate Stabilization Without New Architecture Debt
 
-状态：规划中；目标是在开始大重构前，用最少改动稳定服务，同时不新增长期债务。
+状态：已完成；T117-T120 稳定化已经收口为 backend-first / capability-first 的验证状态，新增 UI 语义 fallback、prompt regex、provider/scenario 特例由 `smoke:no-legacy-paths`、`smoke:no-src-capability-semantics` 和 `smoke:fixed-platform-boundary` 锁定为 0 tracked findings / warnings。
 
 Todo：
 
-- [ ] 暂停新增 UI 语义 fallback、prompt regex、provider/scenario 特例。
-- [ ] 所有新修复必须记录未来唯一真相源和删除旧路径的后续任务。
-- [ ] 对现有多轮 report/artifact/repair 问题，只允许通过 backend tools、stable refs、validation repair loop 或诊断提示推进。
-- [ ] 新增 smoke 优先覆盖最终形态关键路径，而不是给旧路径补测试。
+- [x] 暂停新增 UI 语义 fallback、prompt regex、provider/scenario 特例。
+  证据：`smoke:no-legacy-paths` 当前扫描 316 个 source files，0 tracked findings；`smoke:no-src-capability-semantics` 当前扫描 193 个 source files，0 tracked findings。
+- [x] 所有新修复必须记录未来唯一真相源和删除旧路径的后续任务。
+  证据：`docs/legacy-cutover-inventory.md` 已记录 closed legacy classes、新 truth source 和 reduction rules；当前 no-legacy baseline 全部为 0，无新增临时兼容层或待删除旧路径。
+- [x] 对现有多轮 report/artifact/repair 问题，只允许通过 backend tools、stable refs、validation repair loop 或诊断提示推进。
+  证据：T117 的 `ContractValidationFailure` repair loop 和 T118 的 backend artifact/run tools 已覆盖 schema/ref/artifact/UIManifest/WorkEvidence/verifier failure、materialized markdown、stable `file:` / `artifact:` refs、`resume_run` 和 failed-run repair continuation；UI fallback 被 T119 thin shell smoke 约束为只 handoff backend/capability path。
+- [x] 新增 smoke 优先覆盖最终形态关键路径，而不是给旧路径补测试。
+  证据：T117-T120 smoke 覆盖 validation-to-repair、backend artifact tools、多轮 fixtures、thin UI handoff、runtime contracts、package boundary 和 no-legacy/no-src guard；旧路径只以 guard 形式冻结，不再补业务通过路径。
 
 验收标准：
 
-- [ ] 稳定化补丁不会扩大旧架构面积。
-- [ ] 新增代码都能归入 T115-T120 的最终形态任务。
-- [ ] 没有新的临时兼容层缺少删除计划。
+- [x] 稳定化补丁不会扩大旧架构面积。
+  验证：`npm run smoke:no-src-capability-semantics`、`npm run smoke:no-legacy-paths`、`npm run smoke:fixed-platform-boundary`、`npm run typecheck` 均通过。
+- [x] 新增代码都能归入 T115-T120 的最终形态任务。
+  说明：T117 统一 validation repair，T118 backend artifact/run tools，T119 UI thin shell，T120 no-legacy final cutover，T122 boundary smoke 共同承接稳定化规则；未发现需要新增架构面的修复。
+- [x] 没有新的临时兼容层缺少删除计划。
+  说明：当前 legacy guard 与 no-src guard baseline 均为 0；若未来回归，只能按 legacy inventory 记录 owner、truth source、删除条件并在同一变更中更新 baseline。

@@ -113,12 +113,20 @@ const schemaExpansion = registry.expand('verifier.schema', {
   includeSchemas: true,
   includeExamples: true,
   includeRepairHints: true,
+  includeFailureRefs: true,
+  failureHistory: [{
+    capabilityId: 'verifier.schema',
+    failureCode: 'schema-invalid',
+    recoverActions: ['reload-schema'],
+    refs: ['log:schema', 'artifact:broken-report', 'log:schema'],
+  }],
   includeProviders: true,
 });
 assert.equal(schemaExpansion.inputSchema?.type, 'object');
 assert.equal(schemaExpansion.outputSchema?.type, 'object');
 assert.equal(schemaExpansion.examples?.[0]?.title, 'example report input');
 assert.equal(schemaExpansion.repairHints?.[0]?.failureCode, 'schema-invalid');
+assert.deepEqual(schemaExpansion.failureRefs, ['log:schema', 'artifact:broken-report']);
 assert.equal(schemaExpansion.providers?.[0]?.id, 'verifier.schema.provider');
 
 assert.throws(
@@ -135,11 +143,32 @@ const requestShapedInput = capabilityBrokerInputFromRequestShape({
   topK: 2,
   riskTolerance: 'medium',
   explicitCapabilityIds: ['view.report'],
+  failureHistory: [{
+    capabilityId: 'verifier.schema',
+    failureCode: 'schema-invalid',
+    recoverActions: ['reload-schema'],
+    refs: ['artifact:broken-report'],
+    stdoutRef: '.sciforge/logs/schema.stdout.log',
+    stderrRef: '.sciforge/logs/schema.stderr.log',
+    traceRef: '.sciforge/traces/schema.json',
+  }],
   availableProviders: ['runtime.artifact-read.provider', 'view.report.provider', 'verifier.schema.provider'],
 });
 assert.equal(requestShapedInput.objectRefs?.[0]?.ref, 'artifact:report-1');
 assert.equal(requestShapedInput.scenarioPolicy?.preferredCapabilityIds?.[0], 'view.report');
 assert.equal(requestShapedInput.artifactIndex?.[0]?.artifactType, 'markdown');
+assert.deepEqual(
+  registry.expand('verifier.schema', {
+    includeFailureRefs: true,
+    failureHistory: requestShapedInput.failureHistory,
+  }).failureRefs,
+  [
+    'artifact:broken-report',
+    '.sciforge/logs/schema.stdout.log',
+    '.sciforge/logs/schema.stderr.log',
+    '.sciforge/traces/schema.json',
+  ],
+);
 
 const requestShapedBrokered = brokerCapabilitiesForRequestShape({
   prompt: 'Read an artifact report and validate the schema.',

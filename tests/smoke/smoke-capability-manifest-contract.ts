@@ -24,7 +24,9 @@ assert.equal(registry.getManifestByProviderId('sciforge.core.runtime.artifact-re
 assert.ok(registry.listBriefs({ kind: 'action' }).length >= 4, 'registry should expose action capability briefs');
 assert.ok(registry.listBriefs({ routingTag: 'artifact' }).length >= 3, 'registry should filter briefs by routing tag');
 
-const brief = compactCapabilityManifestBrief(coreManifests[0]);
+const artifactResolveManifest = registry.getManifest('runtime.artifact-resolve');
+assert.ok(artifactResolveManifest, 'runtime.artifact-resolve manifest must exist');
+const brief = compactCapabilityManifestBrief(artifactResolveManifest);
 assert.equal(brief.contract, CAPABILITY_MANIFEST_CONTRACT_ID);
 assert.equal(brief.id, 'runtime.artifact-resolve');
 assert.deepEqual(brief.providerIds, ['sciforge.core.runtime.artifact-resolve']);
@@ -34,7 +36,7 @@ assert.equal('inputSchema' in brief, false, 'compact brief must not include full
 assert.equal('examples' in brief, false, 'compact brief must not include examples');
 
 const invalid = {
-  ...coreManifests[0],
+  ...artifactResolveManifest,
   id: '',
   providers: [],
   sideEffects: ['none', 'workspace-read'],

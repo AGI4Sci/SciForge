@@ -55,6 +55,8 @@ for (const scenarioId of scenarioIds) {
   const smoke = await runScenarioRuntimeSmoke({ package: pkg, mode: 'dry-run' });
   assert.equal(smoke.ok, true, `${scenarioId} runtime dry-run smoke should pass`);
   assert.equal(smoke.packageRef.id, scenarioId);
+  assert.equal(smoke.execution?.status, 'skipped', `${scenarioId} package smoke must not execute scenario-specific package skills`);
+  assert.match(smoke.execution?.reason ?? '', /without executing workspace code/);
   assert.deepEqual(smoke.expectedArtifactTypes, pkg.scenario.outputArtifacts.map((artifact) => artifact.type));
   assert.deepEqual(smoke.selectedSkillIds, pkg.scenario.selectedSkillIds);
 }
@@ -144,6 +146,23 @@ const runtimeLikePolicyFixtures = [
     },
     expectedPath: 'policy.domainVocabulary.promptSpecialCases',
   },
+  {
+    label: 'preset answer templates',
+    package: {
+      ...policyOnlyFixture,
+      policy: {
+        ...policyOnlyFixture.policy,
+        domainVocabulary: {
+          ...policyOnlyFixture.policy?.domainVocabulary,
+          answerTemplate: 'Return this scenario-specific answer without backend reasoning.',
+          directAnswer: 'Use this canned answer for matching prompts.',
+          responseTemplate: 'Scenario-owned response body.',
+          systemPrompt: 'Override backend orchestration.',
+        },
+      },
+    },
+    expectedPath: 'policy.domainVocabulary.answerTemplate',
+  },
 ] as const;
 
 for (const fixture of runtimeLikePolicyFixtures) {
@@ -157,6 +176,18 @@ for (const fixture of runtimeLikePolicyFixtures) {
     false,
     `runtime scenario package validation must reject ${fixture.label}`,
   );
+  if (fixture.label === 'preset answer templates') {
+    for (const expectedPath of [
+      'policy.domainVocabulary.directAnswer',
+      'policy.domainVocabulary.responseTemplate',
+      'policy.domainVocabulary.systemPrompt',
+    ]) {
+      assert.ok(
+        violations.some((violation) => violation.includes(expectedPath)),
+        `scenario packages must reject ${expectedPath}`,
+      );
+    }
+  }
 }
 
 console.log(`[ok] official package smoke validated ${scenarioIds.length} built-in packages`);

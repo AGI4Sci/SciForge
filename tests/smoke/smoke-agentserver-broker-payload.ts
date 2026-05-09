@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-import { buildAgentServerGenerationPrompt } from '../../src/runtime/gateway/agentserver-prompts.js';
+import { buildAgentServerCompactContext, buildAgentServerGenerationPrompt } from '../../src/runtime/gateway/agentserver-prompts.js';
 import { buildContextEnvelope } from '../../src/runtime/gateway/context-envelope.js';
 import type { GatewayRequest } from '../../src/runtime/runtime-types.js';
 
@@ -85,6 +85,18 @@ assert.equal(brokerText.includes('Regenerate payload according to this capabilit
 assert.equal(brokerText.includes('LEDGER_GLUE_CODE_SENTINEL'), false, 'broker brief must not expand ledger glue code refs');
 assert.equal(brokerText.includes('LEDGER_FULL_LOG_SENTINEL'), false, 'broker brief must not expand full ledger logs');
 assert.equal(brokerText.includes('cel-agentserver-broker-smoke.stdout.log'), false, 'broker brief must not include log refs from compact ledger input');
+
+const compactContext = buildAgentServerCompactContext(request, {
+  contextEnvelope,
+  workspaceTree: [],
+  priorAttempts: [],
+  mode: 'full',
+});
+assert.equal(
+  'availableSkills' in compactContext,
+  false,
+  'production compact context must not construct a scattered skill capability list',
+);
 
 const prompt = buildAgentServerGenerationPrompt({
   prompt: request.prompt,

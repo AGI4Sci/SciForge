@@ -690,41 +690,11 @@ function firstStagePlanHintField(values: unknown[]) {
   return undefined;
 }
 
-export function summarizeSkillsForAgentServer(
-  skills: SkillAvailability[],
-  selectedSkill: SkillAvailability,
-  skillDomain: SciForgeSkillDomain,
-) {
-  const selectedId = selectedSkill.id;
-  const domainToken = `.${skillDomain}`;
-  const selected = skills.filter((skill) => skill.id === selectedId);
-  const sameDomain = skills
-    .filter((skill) => skill.id !== selectedId)
-    .filter((skill) => skill.id.includes(domainToken) || skill.id.endsWith(`.${skillDomain}`))
-    .slice(0, 8);
-  const localAvailable = skills
-    .filter((skill) => skill.id !== selectedId && !sameDomain.includes(skill))
-    .filter((skill) => skill.available)
-    .slice(0, 8);
-  return [...selected, ...sameDomain, ...localAvailable].map((skill) => ({
-    id: skill.id,
-    kind: skill.kind,
-    available: skill.available,
-    reason: clipForAgentServerPrompt(skill.reason, 240) ?? '',
-    description: clipForAgentServerPrompt(skill.manifest.description, 480),
-    entrypointType: skill.manifest.entrypoint.type,
-    manifestPath: skill.manifestPath,
-  }));
-}
-
 export function summarizeToolsForAgentServer(_request: GatewayRequest) {
   return [];
 }
 
-export function summarizeRuntimeCapabilitiesForAgentServer(
-  request: GatewayRequest,
-  _availableSkills?: ReturnType<typeof summarizeSkillsForAgentServer>,
-) {
+export function summarizeRuntimeCapabilitiesForAgentServer(request: GatewayRequest) {
   return buildCapabilityBrokerBriefForAgentServer(request);
 }
 
@@ -734,19 +704,13 @@ export function buildAgentServerCompactContext(
     contextEnvelope: Record<string, unknown>;
     workspaceTree: Array<{ path: string; kind: 'file' | 'folder'; sizeBytes?: number }>;
     priorAttempts: unknown[];
-    selectedSkill: SkillAvailability;
-    skills: SkillAvailability[];
     mode: AgentServerContextMode;
   },
 ) {
   const mode = params.mode;
-  const selectedOnly = mode === 'delta';
   return {
     mode,
     workspaceTreeSummary: mode === 'full' ? params.workspaceTree : [],
-    availableSkills: selectedOnly
-      ? summarizeSkillsForAgentServer([params.selectedSkill], params.selectedSkill, request.skillDomain)
-      : summarizeSkillsForAgentServer(params.skills, params.selectedSkill, request.skillDomain),
     uiStateSummary: summarizeUiStateForAgentServer(request.uiState, mode),
     artifacts: summarizeArtifactRefs(request.artifacts),
     recentExecutionRefs: summarizeExecutionRefs(toRecordList(request.uiState?.recentExecutionRefs)),

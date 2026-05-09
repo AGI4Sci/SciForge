@@ -1,3 +1,10 @@
+import {
+  CORE_CAPABILITY_MANIFESTS,
+  type CapabilityManifest,
+  type CapabilityManifestKind,
+  type CapabilityManifestRisk,
+} from './capability-manifest';
+
 export type CapabilityCategory = 'observe' | 'reasoning' | 'action' | 'verify' | 'interactive-view';
 export type CapabilityKind = 'sense' | 'skill' | 'tool' | 'action' | 'verifier' | 'interactive-view';
 export type CapabilityRiskLevel = 'low' | 'medium' | 'high';
@@ -97,157 +104,7 @@ export function defaultCapabilityRegistry(): CapabilityRegistry {
 }
 
 export function defaultCapabilitySummaries(): CapabilitySummary[] {
-  return [
-    {
-      id: 'skill.agentserver-generation',
-      kind: 'skill',
-      category: 'reasoning',
-      oneLine: '让 AgentServer 基于当前 scenario、refs 和 artifact contract 生成或修复 workspace task。',
-      domains: ['literature', 'structure', 'omics', 'knowledge'],
-      triggers: ['analyze', 'generate', 'repair', 'report', '分析', '生成', '修复', '报告'],
-      antiTriggers: [],
-      modalities: ['text'],
-      producesArtifactTypes: ['tool-payload', 'execution-unit', 'artifact'],
-      riskClass: 'medium',
-      costClass: 'medium',
-      latencyClass: 'medium',
-      reliability: 'schema-checked',
-      requiresNetwork: false,
-      requiredConfig: [],
-      detailRef: 'src/runtime/generation-gateway.ts',
-    },
-    {
-      id: 'sense.vision',
-      kind: 'sense',
-      category: 'observe',
-      oneLine: '将截图、图像或 GUI 状态压缩成可推理的文字观察。',
-      domains: ['gui', 'knowledge', 'structure', 'omics', 'literature'],
-      triggers: ['screenshot', 'image', 'visual', 'GUI', '截图', '图像', '界面'],
-      antiTriggers: ['text only', '纯文本'],
-      modalities: ['image', 'vision'],
-      producesArtifactTypes: ['observation', 'trace'],
-      riskClass: 'low',
-      costClass: 'high',
-      latencyClass: 'high',
-      reliability: 'schema-checked',
-      requiresNetwork: false,
-      requiredConfig: [],
-      detailRef: 'packages/observe/vision/README.md',
-    },
-    {
-      id: 'action.workspace-task',
-      kind: 'action',
-      category: 'action',
-      oneLine: '在当前 workspace 中生成或执行任务代码，写入 artifact、日志和 trace refs。',
-      domains: ['literature', 'structure', 'omics', 'knowledge'],
-      triggers: ['run', 'execute', 'generate', 'analyze', '执行', '运行', '分析', '生成'],
-      antiTriggers: ['read only', '只读'],
-      modalities: ['text'],
-      producesArtifactTypes: ['tool-payload', 'execution-unit', 'trace'],
-      riskClass: 'medium',
-      costClass: 'medium',
-      latencyClass: 'medium',
-      reliability: 'schema-checked',
-      requiresNetwork: false,
-      requiredConfig: [],
-      sideEffects: ['workspace-write'],
-      detailRef: 'src/runtime/workspace-task-runner.ts',
-    },
-    {
-      id: 'verifier.schema-artifact',
-      kind: 'verifier',
-      category: 'verify',
-      oneLine: '用 schema、artifact contract、lint 或单测做轻量自动校验。',
-      domains: ['literature', 'structure', 'omics', 'knowledge', 'workspace'],
-      triggers: ['schema', 'json', 'test', 'validate', '校验', '测试', '验证'],
-      antiTriggers: [],
-      modalities: ['text', 'json'],
-      producesArtifactTypes: ['verification-result'],
-      riskClass: 'low',
-      costClass: 'low',
-      latencyClass: 'low',
-      reliability: 'validated',
-      requiresNetwork: false,
-      requiredConfig: [],
-      verifierTypes: ['schema'],
-      detailRef: 'docs/Extending.md#verifier-contract',
-    },
-    {
-      id: 'verifier.agent-rubric',
-      kind: 'verifier',
-      category: 'verify',
-      oneLine: '用 rubric 让独立 agent 审查结果、trace、证据和修复建议。',
-      domains: ['literature', 'structure', 'omics', 'knowledge', 'workspace'],
-      triggers: ['review', 'rubric', 'critique', 'scientific claim', '审查', '科研结论', '证据'],
-      antiTriggers: [],
-      modalities: ['text', 'json'],
-      producesArtifactTypes: ['verification-result', 'critique'],
-      riskClass: 'medium',
-      costClass: 'medium',
-      latencyClass: 'medium',
-      reliability: 'schema-checked',
-      requiresNetwork: false,
-      requiredConfig: [],
-      verifierTypes: ['agent'],
-      detailRef: 'docs/Extending.md#verifier-contract',
-    },
-    {
-      id: 'verifier.environment-diff',
-      kind: 'verifier',
-      category: 'verify',
-      oneLine: '根据文件系统、GUI 或外部状态 refs 验证 action 是否产生预期变化。',
-      domains: ['gui', 'workspace', 'literature', 'structure', 'omics', 'knowledge'],
-      triggers: ['file', 'diff', 'state', 'external', 'GUI', '文件', '状态', '副作用'],
-      antiTriggers: [],
-      modalities: ['text', 'json', 'state-ref'],
-      producesArtifactTypes: ['verification-result', 'trace'],
-      riskClass: 'medium',
-      costClass: 'medium',
-      latencyClass: 'medium',
-      reliability: 'schema-checked',
-      requiresNetwork: false,
-      requiredConfig: [],
-      verifierTypes: ['environment'],
-      detailRef: 'docs/Extending.md#安全与晋升',
-    },
-    {
-      id: 'verifier.human-approval',
-      kind: 'verifier',
-      category: 'verify',
-      oneLine: '把 accept、reject、revise、score 和 comment 转成标准 VerificationResult。',
-      domains: ['literature', 'structure', 'omics', 'knowledge', 'workspace', 'gui'],
-      triggers: ['approve', 'human', 'confirm', 'manual', '人工', '确认', '批准'],
-      antiTriggers: [],
-      modalities: ['human-feedback'],
-      producesArtifactTypes: ['verification-result'],
-      riskClass: 'high',
-      costClass: 'high',
-      latencyClass: 'high',
-      reliability: 'human',
-      requiresNetwork: false,
-      requiredConfig: [],
-      verifierTypes: ['human'],
-      detailRef: 'docs/Extending.md#verifier-contract',
-    },
-    {
-      id: 'view.artifact-inspector',
-      kind: 'interactive-view',
-      category: 'interactive-view',
-      oneLine: '为未知或通用 artifact 提供可检查的紧凑交互视图。',
-      domains: ['literature', 'structure', 'omics', 'knowledge', 'workspace'],
-      triggers: ['artifact', 'inspect', 'view', '预览', '查看', '产物'],
-      antiTriggers: [],
-      modalities: ['json', 'table'],
-      producesArtifactTypes: ['interactive-view'],
-      riskClass: 'low',
-      costClass: 'low',
-      latencyClass: 'low',
-      reliability: 'validated',
-      requiresNetwork: false,
-      requiredConfig: [],
-      detailRef: 'packages/presentation/components/unknown-artifact-inspector/README.md',
-    },
-  ];
+  return CORE_CAPABILITY_MANIFESTS.map(capabilityManifestToSummary);
 }
 
 function compactCapabilitySummary(summary: CapabilitySummary): CapabilitySummary {
@@ -275,4 +132,93 @@ function compactCapabilitySummary(summary: CapabilitySummary): CapabilitySummary
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function capabilityManifestToSummary(manifest: CapabilityManifest): CapabilitySummary {
+  const category = capabilityKindToCategory(manifest.kind);
+  const kind = capabilityKindToLegacyKind(manifest.kind);
+  return {
+    id: manifest.id,
+    kind,
+    category,
+    oneLine: manifest.brief,
+    domains: manifest.domains,
+    triggers: manifest.routingTags,
+    antiTriggers: [],
+    modalities: capabilityModalities(manifest),
+    producesArtifactTypes: capabilityProducedArtifactTypes(manifest),
+    riskClass: manifest.safety.risk,
+    costClass: riskToCostClass(manifest.safety.risk),
+    latencyClass: capabilityLatencyClass(manifest),
+    reliability: capabilityReliability(manifest),
+    requiresNetwork: manifest.sideEffects.includes('network') || manifest.sideEffects.includes('external-api'),
+    requiredConfig: uniqueStrings(manifest.providers.flatMap((provider) => provider.requiredConfig)),
+    sideEffects: manifest.sideEffects,
+    verifierTypes: manifest.kind === 'verifier' ? capabilityVerifierTypes(manifest) : undefined,
+    detailRef: manifest.lifecycle.sourceRef,
+  };
+}
+
+function capabilityKindToCategory(kind: CapabilityManifestKind): CapabilityCategory {
+  if (kind === 'observe') return 'observe';
+  if (kind === 'skill' || kind === 'composed') return 'reasoning';
+  if (kind === 'verifier') return 'verify';
+  if (kind === 'view') return 'interactive-view';
+  return 'action';
+}
+
+function capabilityKindToLegacyKind(kind: CapabilityManifestKind): CapabilityKind {
+  if (kind === 'observe') return 'sense';
+  if (kind === 'verifier') return 'verifier';
+  if (kind === 'view') return 'interactive-view';
+  if (kind === 'skill' || kind === 'composed') return 'skill';
+  if (kind === 'action') return 'action';
+  return 'tool';
+}
+
+function riskToCostClass(risk: CapabilityManifestRisk): CapabilityCostClass {
+  if (risk === 'high') return 'high';
+  if (risk === 'medium') return 'medium';
+  return 'low';
+}
+
+function capabilityLatencyClass(manifest: CapabilityManifest): CapabilityCostClass {
+  if (manifest.sideEffects.includes('network') || manifest.sideEffects.includes('external-api') || manifest.sideEffects.includes('desktop')) return 'high';
+  if (manifest.sideEffects.includes('workspace-write')) return 'medium';
+  return 'low';
+}
+
+function capabilityReliability(manifest: CapabilityManifest): CapabilityReliability {
+  if (manifest.validators.some((validator) => validator.kind === 'human')) return 'human';
+  if (manifest.lifecycle.status === 'validated' || manifest.lifecycle.status === 'published') return 'validated';
+  if (manifest.validators.length) return 'schema-checked';
+  return 'metadata-only';
+}
+
+function capabilityVerifierTypes(manifest: CapabilityManifest): CapabilitySummary['verifierTypes'] {
+  return uniqueStrings(manifest.validators.map((validator) => {
+    if (validator.kind === 'smoke') return 'environment';
+    if (validator.kind === 'external') return 'agent';
+    return validator.kind;
+  })).filter((value): value is NonNullable<CapabilitySummary['verifierTypes']>[number] =>
+    ['human', 'agent', 'schema', 'environment', 'simulator', 'reward-model'].includes(value),
+  );
+}
+
+function capabilityModalities(manifest: CapabilityManifest): string[] {
+  if (manifest.kind === 'observe') return ['image', 'vision'];
+  if (manifest.kind === 'view') return ['json', 'table'];
+  return ['text', 'json'];
+}
+
+function capabilityProducedArtifactTypes(manifest: CapabilityManifest): string[] {
+  if (Array.isArray(manifest.metadata?.producesArtifactTypes)) {
+    return manifest.metadata.producesArtifactTypes.map(String);
+  }
+  if (manifest.kind === 'view') return ['interactive-view'];
+  if (manifest.kind === 'verifier') return ['verification-result'];
+  if (manifest.kind === 'observe') return ['observation', 'trace'];
+  if (manifest.kind === 'skill' || manifest.kind === 'composed') return ['tool-payload', 'execution-unit', 'artifact'];
+  if (manifest.sideEffects.includes('workspace-write')) return ['tool-payload', 'execution-unit', 'trace'];
+  return ['runtime-artifact'];
 }
