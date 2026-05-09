@@ -9,6 +9,7 @@ from collections.abc import Iterable
 from typing import Any, TextIO
 
 from .artifact_index import build_artifact_index_from_request
+from .cache_policy import build_cache_policy
 from .capability_broker import build_capability_brief
 from .context_policy import build_context_policy
 from .contracts import (
@@ -24,10 +25,12 @@ from .contracts import (
 from .execution_classifier import classify_execution_mode
 from .goal_snapshot import build_goal_snapshot
 from .handoff_planner import plan_handoff
+from .latency_policy import build_latency_policy
 from .memory import build_memory_plan
 from .process_events import process_events
 from .recovery import plan_recovery
 from .reference_digest import build_reference_digests_from_request
+from .response_plan import build_background_plan, build_response_plan
 
 
 def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyResponse:
@@ -83,8 +86,37 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         "budget": _handoff_budget(policy_input),
     })
     recovery_plan = _recovery_plan(policy_input)
+    latency_policy = build_latency_policy({
+        "policyInput": policy_input,
+        "goalSnapshot": goal_snapshot,
+        "contextPolicy": context_policy,
+        "executionModePlan": execution_mode_plan,
+        "capabilityBrief": capability_brief,
+        "recoveryPlan": recovery_plan,
+    })
+    policy_outputs = {
+        "policyInput": policy_input,
+        "goalSnapshot": goal_snapshot,
+        "contextPolicy": context_policy,
+        "memoryPlan": memory_plan,
+        "currentReferences": _current_references(request, current_reference_digests),
+        "currentReferenceDigests": current_reference_digests,
+        "artifactIndex": artifact_index,
+        "capabilityBrief": capability_brief,
+        "executionModePlan": execution_mode_plan,
+        "handoffPlan": handoff_plan,
+        "recoveryPlan": recovery_plan,
+        "latencyPolicy": latency_policy,
+        "session": context_session,
+        "references": policy_input.get("references", []),
+        "refs": policy_input.get("refs", []),
+        "recentFailures": _recent_failures(policy_input),
+    }
+    response_plan = build_response_plan(policy_outputs)
+    background_plan = build_background_plan(policy_outputs)
+    cache_policy = build_cache_policy(policy_outputs)
     user_visible_plan = _user_visible_plan(policy_input, goal_snapshot, context_policy, handoff_plan)
-    current_references = _current_references(request, current_reference_digests)
+    current_references = policy_outputs["currentReferences"]
     response = ConversationPolicyResponse(
         requestId=request.requestId,
         goalSnapshot=goal_snapshot,
@@ -98,6 +130,10 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         handoffPlan=handoff_plan,
         acceptancePlan=_acceptance_plan(goal_snapshot, handoff_plan),
         recoveryPlan=recovery_plan,
+        latencyPolicy=latency_policy,
+        responsePlan=response_plan,
+        backgroundPlan=background_plan,
+        cachePolicy=cache_policy,
         userVisiblePlan=user_visible_plan,
         processStage=ProcessStage(
             phase="planning",
@@ -117,6 +153,10 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
             {"event": "module.capability_broker", "selected": len(capability_brief.get("selected", []))},
             {"event": "module.execution_classifier", "mode": execution_mode_plan.get("executionMode")},
             {"event": "module.handoff_planner", "status": handoff_plan.get("status")},
+            {"event": "module.latency_policy", "schemaVersion": latency_policy.get("schemaVersion")},
+            {"event": "module.response_plan", "schemaVersion": response_plan.get("schemaVersion")},
+            {"event": "module.background_plan", "schemaVersion": background_plan.get("schemaVersion")},
+            {"event": "module.cache_policy", "schemaVersion": cache_policy.get("schemaVersion")},
         ],
         metadata={"service": "sciforge_conversation.service"},
     )
@@ -442,6 +482,44 @@ def _error_response(exc: Exception) -> str:
         "handoffPlan": {"fallback": {"tsRuntimeFallback": True}},
         "acceptancePlan": {},
         "recoveryPlan": {},
+        "latencyPolicy": {
+            "schemaVersion": "sciforge.conversation.latency-policy.v1",
+            "firstVisibleResponseMs": 8000,
+            "firstEventWarningMs": 18000,
+            "silentRetryMs": 60000,
+            "allowBackgroundCompletion": False,
+            "blockOnContextCompaction": True,
+            "blockOnVerification": True,
+            "reason": "safe default after policy service failure",
+        },
+        "responsePlan": {
+            "schemaVersion": "sciforge.conversation.response-plan.v1",
+            "initialResponseMode": "wait-for-result",
+            "finalizationMode": "append-final",
+            "userVisibleProgress": ["failed"],
+            "fallbackMessagePolicy": "safety-first-status-with-required-confirmation",
+            "reason": "safe default after policy service failure",
+        },
+        "backgroundPlan": {
+            "schemaVersion": "sciforge.conversation.background-plan.v1",
+            "enabled": False,
+            "tasks": [],
+            "handoffRefsRequired": True,
+            "cancelOnNewUserTurn": True,
+            "reason": "safe default after policy service failure",
+        },
+        "cachePolicy": {
+            "schemaVersion": "sciforge.conversation.cache-policy.v1",
+            "reuseScenarioPlan": False,
+            "reuseSkillPlan": False,
+            "reuseUiPlan": False,
+            "reuseUIPlan": False,
+            "reuseReferenceDigests": False,
+            "reuseArtifactIndex": False,
+            "reuseLastSuccessfulStage": False,
+            "reuseBackendSession": False,
+            "reason": "safe default after policy service failure",
+        },
         "userVisiblePlan": [],
         "processStage": {
             "phase": "failed",

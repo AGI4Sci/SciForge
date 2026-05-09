@@ -91,6 +91,7 @@ import {
 import { evaluateToolPayloadEvidence } from './gateway/work-evidence-guard.js';
 import { evaluateGuidanceAdoption } from './gateway/guidance-adoption-guard.js';
 import { collectWorkEvidenceFromBackendEvent, summarizeWorkEvidenceForHandoff, type WorkEvidence } from './gateway/work-evidence-types.js';
+import { createLatencyTelemetry } from './gateway/latency-telemetry.js';
 import {
   agentServerFailurePayloadRefs,
   agentServerGenerationFailureReason,
@@ -176,21 +177,37 @@ type AgentServerGenerationResult =
 
 export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, callbacks: WorkspaceRuntimeCallbacks = {}): Promise<ToolPayload> {
   const normalizedRequest = normalizeGatewayRequestFromModule(body);
-  const policyApplication = await applyConversationPolicy(normalizedRequest, callbacks, { workspace: normalizedRequest.workspacePath });
-  const request = policyApplication.request;
-  const visionSensePayload = await tryRunVisionSenseRuntime(request, callbacks);
-  if (visionSensePayload) return applyRuntimeVerificationPolicy(visionSensePayload, request);
-  const skills = await loadSkillRegistry(request);
-  const skill = agentServerGenerationSkill(request.skillDomain);
-  emitWorkspaceRuntimeEvent(callbacks, {
-    type: 'workspace-skill-selected',
-    source: 'workspace-runtime',
-    message: `Selected skill ${skill.id} for ${request.skillDomain}`,
-    detail: skill.manifest.entrypoint.type,
-  });
-  const payload = await runAgentServerGeneratedTask(request, skill, skills, callbacks)
-    ?? repairNeededPayload(request, skill, 'AgentServer task generation did not produce a runnable task.');
-  return applyRuntimeVerificationPolicy(payload, request);
+  const telemetry = createLatencyTelemetry(normalizedRequest, callbacks);
+  try {
+    const policyApplication = await applyConversationPolicy(normalizedRequest, telemetry.callbacks, { workspace: normalizedRequest.workspacePath });
+    telemetry.markPolicyApplication(policyApplication);
+    const request = policyApplication.request;
+    const visionSensePayload = await tryRunVisionSenseRuntime(request, telemetry.callbacks);
+    if (visionSensePayload) {
+      telemetry.markVerificationStart();
+      const verified = await applyRuntimeVerificationPolicy(visionSensePayload, request);
+      telemetry.markVerificationEnd();
+      return telemetry.emitFinal(verified) ?? verified;
+    }
+    const skills = await loadSkillRegistry(request);
+    const skill = agentServerGenerationSkill(request.skillDomain);
+    emitWorkspaceRuntimeEvent(telemetry.callbacks, {
+      type: 'workspace-skill-selected',
+      source: 'workspace-runtime',
+      message: `Selected skill ${skill.id} for ${request.skillDomain}`,
+      detail: skill.manifest.entrypoint.type,
+    });
+    const payload = await runAgentServerGeneratedTask(request, skill, skills, telemetry.callbacks)
+      ?? repairNeededPayload(request, skill, 'AgentServer task generation did not produce a runnable task.');
+    telemetry.markVerificationStart();
+    const verified = await applyRuntimeVerificationPolicy(payload, request);
+    telemetry.markVerificationEnd();
+    return telemetry.emitFinal(verified) ?? verified;
+  } catch (error) {
+    telemetry.markFallback(errorMessage(error));
+    telemetry.emitFinal();
+    throw error;
+  }
 }
 
 async function runAgentServerGeneratedTask(

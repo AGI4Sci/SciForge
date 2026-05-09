@@ -23,6 +23,220 @@
 
 ## 任务板
 
+### T098 Conversation Latency Policy 与多轮快速响应策略集中化
+
+状态：进行中；Thread A-F 已完成，本轮已完成单一真相源清理：Python conversation-policy 继续作为 latency/response/background/cache 策略唯一真相源，TypeScript 已移除遗留 capability/verification 策略生成入口，UI handoff 只透传显式配置，runtime verification 不再用 prompt 关键词推断风险。剩余工作集中在多轮 direct-context 快速路径真实运行优化，以及真实 backend 慢/429/timeout/取消路径的长跑观察。目标是把“多轮对话什么时候直接回答、什么时候启动 workspace task、什么时候先给快速可读回复、什么时候后台补全、什么时候阻塞 verification/context compaction”集中到 Python conversation-policy 中，形成跨 scenario、跨 backend、跨任务类型的通用低等待策略。当前系统已经有 Python conversation-policy、execution classifier、context policy、memory/handoff/recovery、WorkEvidence 和主对话 WorkEvent，但多轮 direct-context 真实路径、真实 provider 慢/429/timeout/取消路径仍需要长跑校准。本任务要把这些策略收拢为可测试、可调参、可审计的 `latencyPolicy` / `responsePlan` / `backgroundPlan`，TypeScript 只负责执行策略结果、展示状态和保留 runtime safety guard。
+
+范围边界：
+
+- Python 是策略唯一真相源：首包 SLA、是否 direct-context、是否允许后台补全、是否阻塞 verification、是否阻塞 context compaction、是否复用缓存、是否降级为轻量回答等策略判断都应在 `packages/conversation-policy-python` 中产生。
+- TypeScript 是执行壳：`runOrchestrator`、`sciforgeToolsClient`、runtime gateway 和 UI 只消费 Python policy 输出，负责 abort/retry、stream、workspace refs、UI 状态和高风险 safety enforcement，不复制 prompt regex、复杂度评分或策略推断。
+- 高风险 action 仍必须 fail-closed：低等待优化不能绕过 human approval、危险动作 verification、artifact/schema guard、WorkEvidence guard 或用户显式要求的强验证。
+- 低风险/信息型/继续型任务应优先降低体感等待：允许先返回短可读 answer/status，再让后台 stage 补 artifact、验证、报告或更完整结果。
+- 所有策略必须面向通用任务形态，不能为某个 scenario、provider、prompt、论文站点、国家新闻、固定文案或截图案例写分支。
+- 任务完成后必须更新本节 `状态`、Todo checkbox、验收结果和剩余风险；任何线程完成子任务后都要在本节写入实际文件路径、测试命令和未完成项。
+
+建议新增/扩展的策略 contract：
+
+```json
+{
+  "latencyPolicy": {
+    "firstVisibleResponseMs": 8000,
+    "firstEventWarningMs": 12000,
+    "silentRetryMs": 45000,
+    "allowBackgroundCompletion": true,
+    "blockOnContextCompaction": false,
+    "blockOnVerification": false,
+    "reason": "low-risk continuation can answer from current context while background evidence completes"
+  },
+  "responsePlan": {
+    "initialResponseMode": "direct-context-answer | quick-status | streaming-draft | wait-for-result",
+    "finalizationMode": "append-final | replace-draft | update-artifacts-only",
+    "userVisibleProgress": ["planning", "search", "fetch", "validate", "emit"],
+    "fallbackMessagePolicy": "truthful-partial-with-next-step"
+  },
+  "backgroundPlan": {
+    "enabled": true,
+    "tasks": ["verification", "artifact-materialization", "report-expansion"],
+    "handoffRefsRequired": true,
+    "cancelOnNewUserTurn": false
+  },
+  "cachePolicy": {
+    "reuseScenarioPlan": true,
+    "reuseSkillPlan": true,
+    "reuseReferenceDigests": true,
+    "reuseLastSuccessfulStage": true
+  }
+}
+```
+
+Todo：
+
+- [x] 在 `packages/conversation-policy-python` 新增 `latency_policy.py`：输入 goalSnapshot、contextPolicy、executionModePlan、capabilityBrief、selected actions/verifiers、recent failures、context budget、current refs 和 user guidance，输出通用 `latencyPolicy`，覆盖 first visible response SLA、silent stream warning/retry、是否允许后台补全、context compaction 是否阻塞、verification 是否阻塞。
+- [x] 新增 `response_plan.py` 或扩展 `service.py` 的 `userVisiblePlan`：输出 `initialResponseMode`、`finalizationMode`、`progressPhases`、`fallbackMessagePolicy` 和后台补全说明；要求 direct-context 和 low-risk continuation 可快速回复，multi-stage/high-risk/action 任务按策略等待或给明确进展。
+- [x] 新增 `cache_policy.py`：集中判断 scenario plan、skill plan、UI plan、reference digest、artifact index、last successful stage 和 backend session 是否可复用；TypeScript 只执行缓存读取/写入，不自行判断复用资格。
+- [x] 将 Python response schema、TS bridge normalizer 和 GatewayRequest enrichment 接入 `latencyPolicy`、`responsePlan`、`backgroundPlan`、`cachePolicy`；缺失时只能回落为安全默认值，不能在 TS 中用 prompt regex 重建策略。
+- [x] 清理遗留 TS 策略源：删除 `src/shared/capabilityRegistry.ts` 中的 `buildCapabilityBrief` / prompt scoring / verifier selection / risk inference，删除未被生产路径引用的 `src/shared/verification.ts` policy builder，`sciforgeToolsClient` 不再合成 verification/human approval 默认策略，runtime verification risk 只看显式 policy、结构化 action/evidence 和 executionUnits。
+- [x] 改造 `runOrchestrator` preflight compaction：由 `latencyPolicy.blockOnContextCompaction` 决定是否阻塞发送；允许后台预压缩/非阻塞压缩，把结果写入 stream event 和下一轮 context，而不是让普通追问卡在发送前。
+- [x] 改造 `sciforgeToolsClient` 静默等待、45s 重连和 timeout 逻辑：阈值来自 `latencyPolicy`；UI 展示由 `responsePlan.userVisibleProgress` 和 T095 WorkEvent 消费，避免硬编码散在多个位置。
+- [x] 改造 verification 使用方式：低风险回答不因 `unverified` / lightweight verification 阻塞用户可读回复；高风险 action、显式 human approval、危险 side effect 继续由 runtime verification gate fail-closed；Verification 只以结构化 badge/artifact/ref 进入 UI 和下一轮上下文。
+- [x] 增加后台补全 runtime 协议：支持一个 run 先落地 initial assistant message，再通过 run update / artifact update / finalization event 追加最终结果；必须保留 runId、stage refs、WorkEvidence、verification refs 和 cancellation semantics。
+- [ ] 增加多轮 direct-context 快速路径：继续解释上一轮结果、询问文件位置、追问已有 artifact/claim/table 时，不启动完整 workspace task；若需要新外部 I/O 或新 artifact，再按 executionModePlan 走 thin adapter/single-stage/multi-stage。
+- [x] 增加通用 fixtures 和 smoke：覆盖简单追问、上一轮 artifact 追问、低风险 current-events、文献检索、长报告、失败修复、高风险 action、context 接近阈值、backend silent stream、用户中途追加引导；断言策略来自 Python、TS 只透传执行。
+- [x] 增加 telemetry/diagnostics：记录 time-to-first-visible-response、time-to-first-backend-event、context compaction wait、verification wait、background completion duration、cache hit/miss 和 fallback reason，输出为低噪声 WorkEvidence/Run diagnostics。
+
+验收标准：
+
+- [ ] 任意 scenario 的低风险多轮追问能在策略 SLA 内出现用户可读反馈，且不丢失后续 artifact、verification、WorkEvidence 和 final answer。
+- [x] Python conversation-policy 是 latency/response/cache/background 策略唯一真相源；TypeScript 中不新增 prompt/scenario/provider 专用策略分支。
+- [x] context compaction、verification 和 artifact materialization 可以按策略后台执行；只有高风险 action、安全边界、schema/WorkEvidence fail-closed 才阻塞最终成功。
+- [x] 后台补全不会制造幽灵状态：每次初始回复、后台 stage、最终更新都绑定 runId/stageId/ref，并能被下一轮上下文读取。
+- [ ] 真实 backend 慢、无首事件、429、timeout、空结果、用户取消和中途追加引导都有通用恢复路径和 UI 状态。
+
+验收命令：
+
+- `python3 -m pytest packages/conversation-policy-python/tests`
+- `node --import tsx --test src/runtime/conversation-policy/*.test.ts`
+- `node --import tsx --test src/ui/src/app/chat/*.test.ts src/ui/src/api/agentClient/*.test.ts`
+- `npx tsx tests/smoke/smoke-t097-execution-mode-matrix.ts`
+- `npx tsx tests/smoke/smoke-t096-work-evidence-provider-fixtures.ts`
+- `npm run smoke:t098-latency`
+- `node --import tsx --test src/shared/capabilityRegistry.test.ts src/ui/src/api/sciforgeToolsClient.policy.test.ts`
+- `npx tsx tests/smoke/smoke-runtime-gateway-modules.ts`
+- `npx tsx tests/smoke/smoke-browser-workflows.ts`
+- `npx tsc --noEmit`
+- `npm run build`
+
+并行协调：
+
+- Thread A/B 可以最先并行启动，二者只写 `packages/conversation-policy-python/src/sciforge_conversation/*` 和 `packages/conversation-policy-python/tests/*`；A 负责 latency 策略，B 负责 response/background/cache 策略，避免同时编辑同一个新文件。
+- Thread C 在 A/B 的 response shape 基本稳定后启动；如果 A/B 尚未完成，C 只能先加向后兼容的 optional schema 和 fixture，不得臆造策略算法。
+- Thread D 依赖 C 的 TS bridge 字段；在 C 合入前只允许准备 tests/harness，不要把策略判断写进 UI/runtime。
+- Thread E 可以与 C/D 并行做 session transform 和 runtime event contract，但不得改 Python 策略；如需要新增策略字段，先在本节记录并与 A/B 对齐。
+- Thread F 可以从第一天开始补 telemetry/smoke fixtures，但所有 assertions 必须验证“策略来自 Python response，TS 只执行/展示”，不能把测试写成固定 prompt 或固定场景快照。
+- 所有线程都要遵守 disjoint write set：如果必须修改同一文件，先在本节“线程状态”写明冲突文件和合并顺序，再继续。
+- 每个线程结束时必须更新本节：勾选完成项、补充实际修改文件、测试命令、失败/跳过原因、剩余风险；不能只在最终回复里说明。
+
+线程状态：
+
+- [x] Thread A - Python latency policy：已完成；新增 `packages/conversation-policy-python/src/sciforge_conversation/latency_policy.py`，接入 `contracts.py` / `service.py` / `__init__.py`，新增 `packages/conversation-policy-python/tests/test_latency_policy.py`。覆盖 direct context、low-risk continuation、light lookup、multi-stage project、repair、high-risk action、context near limit；验证命令 `cd packages/conversation-policy-python && uv run --with pytest python -m pytest tests` 通过（67 passed）。剩余风险：本机 `python3` 是 3.9.6，低于包要求 `>=3.10`，直接运行 `python3 -m pytest packages/conversation-policy-python/tests` 会在既有 `@dataclass(slots=True)` collection 阶段失败；需 CI/开发环境使用 Python 3.10+ 或 uv 托管解释器。
+- [x] Thread B - Python response/background/cache plan：已完成；新增 `packages/conversation-policy-python/src/sciforge_conversation/response_plan.py` 和 `packages/conversation-policy-python/src/sciforge_conversation/cache_policy.py`，接入 `contracts.py` / `service.py` / `__init__.py`，新增 `packages/conversation-policy-python/tests/test_response_cache_policy.py` 并更新 `test_contracts.py`。覆盖全部 execution mode 与 low/medium/high 风险等级，验证 responsePlan/backgroundPlan/cachePolicy 输出及 ref/artifact/stage/backend session 缓存复用/失效。验证命令 `python3 -m pytest packages/conversation-policy-python/tests` 通过（67 passed）。剩余风险：TS bridge/runtime 尚未消费这些字段，后台补全 runId/stageId/ref 协议仍由后续线程完成。
+- [x] Thread C - TypeScript bridge and request enrichment：已完成；更新 `src/runtime/conversation-policy/contracts.ts` / `apply.ts` normalizer 与 enrichment，透传 `latencyPolicy`、`responsePlan`、`backgroundPlan`、`cachePolicy` 到 `uiState.conversationPolicy` 和 `uiState.*Policy` 顶层稳定位置；缺失字段回落为 fail-closed 安全默认（verification/context compaction 阻塞、background/cache 不声明完成或复用）。更新 `src/runtime/gateway/context-envelope.ts` 和 `src/runtime/gateway/agentserver-prompts.ts` 只展示裁剪后的 `conversationPolicySummary`，未新增 prompt regex。新增 `src/runtime/conversation-policy/policy.test.ts` 覆盖字段透传、缺失默认、prompt/envelope 无整份策略复制。验证命令 `node --import tsx --test src/runtime/conversation-policy/*.test.ts` 通过（3 passed），`npx tsc --noEmit` 通过。剩余风险：runtime/UI 尚未按这些策略执行，后台补全 runId/stageId/ref 协议仍由 Thread D/E 完成。
+- [x] Thread D - UI/runtime orchestration execution shell：已完成；新增 `src/ui/src/latencyPolicy.ts` 作为 TS 执行壳读取器，只消费 Python 输出的 `latencyPolicy` / `responsePlan` 字段，不做 prompt/scenario 策略推断。更新 `src/ui/src/app/chat/runOrchestrator.ts`，preflight context compaction 读取最近 policy 的 `blockOnContextCompaction`，为 `false` 时发送继续、压缩后台执行并通过 stream event 记录。更新 `src/ui/src/api/sciforgeToolsClient.ts`，silent wait warning、silent first-event retry 和可选 request timeout 从当前轮 `conversation-policy` stream event 的 `latencyPolicy` 更新，缺失时保留安全默认；`responsePlan.initialResponseMode` 生成通用 `process-progress` quick/direct/wait 状态。更新 `src/ui/src/processProgress.ts` 及 tests，覆盖 quick-status/direct-context 可见反馈；更新 `src/ui/src/app/chat/runOrchestrator.targetInstance.test.ts` 和新增 `src/ui/src/api/sciforgeToolsClient.policy.test.ts`，覆盖非阻塞 compaction、policy silent retry 阈值和 quick status。为保持验收类型检查，`src/runtime/generation-gateway.ts` 补 `await applyRuntimeVerificationPolicy(...)`，不改变 verification-policy / WorkEvidence / schema guard 语义。验证命令：`node --import tsx --test src/runtime/conversation-policy/policy.test.ts src/ui/src/processProgress.test.ts src/ui/src/app/chat/runOrchestrator.targetInstance.test.ts src/ui/src/api/sciforgeToolsClient.policy.test.ts`、`npx tsc --noEmit`、`npm run build` 均通过。剩余风险：当前轮 preflight 只能使用发送前已有的最近 policy；当前轮 Python policy 要等 workspace stream 返回后才能驱动 transport 阈值和 quick status，首包前策略预取/后台补全完整协议仍由后续线程继续收敛。
+- [x] Thread E - Background completion protocol and persistence：已完成；新增通用 `sciforge.background-completion.v1` runtime event / session transform contract，覆盖 initial response、background stage update、finalization，保持 runId/stageId/ref 一致；`applyBackgroundCompletionEventToSession` 支持同一 run 的 artifact / verification / WorkEvidence / final response 追加，失败与用户取消写入 `failureReason` / `recoverActions` / `nextStep`，下一轮 `requestPayloadForTurn` 可读取后台结果。更新 workspace timeline 对既有 run 状态变化的持久化事件，新增 runtime contract schema/smoke 与 long task smoke。验证命令：`node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts src/ui/src/app/appShell/workspaceState.test.ts`、`npx tsx tests/smoke/smoke-background-completion-protocol.ts`、`npx tsx tests/smoke/smoke-runtime-contract-schemas.ts`。
+- [x] Thread F - Telemetry and end-to-end latency smoke：已完成；新增 `src/runtime/gateway/latency-telemetry.ts` 并接入 `src/runtime/generation-gateway.ts`，在每轮 runtime 结束时输出一条低噪声 `latency-diagnostics` event，同时把摘要挂入 payload `logs` 和 `workEvidence`，覆盖 time-to-first-visible-response、time-to-first-backend-event、context compaction wait、verification wait、cache hit/miss 和 fallback reason。`src/ui/src/app/chat/sessionTransforms.ts` 的 background completion raw diagnostics 记录 `backgroundCompletionDurationMs`。新增 `tests/smoke/smoke-t098-latency-diagnostics-matrix.ts` 与 `npm run smoke:t098-latency`，本地 Python policy 生成 10 类通用 fixtures：普通追问、上一轮 artifact 追问、低风险 current-events、文献检索、长报告、失败修复、高风险 action、context near limit、backend silent stream、用户中途追加引导；断言 `latencyPolicy` / `responsePlan` / `backgroundPlan` / `cachePolicy` 来自 Python response，TS 只透传/执行。smoke 暴露并修复一个明确策略缺口：`packages/conversation-policy-python/src/sciforge_conversation/response_plan.py` 和 `cache_policy.py` 现在会把 `policyHints.selectedActions` 纳入 high-risk action 风险计算，`packages/conversation-policy-python/tests/test_response_cache_policy.py` 已覆盖 high-risk action 禁止 background/cache reuse。验证命令：`python3 -m pytest packages/conversation-policy-python/tests/test_response_cache_policy.py` 通过（12 passed），`npm run smoke:t098-latency && npm run smoke:background-completion` 通过，`npx tsc --noEmit` 通过，`npm run build` 通过。剩余风险：当前 telemetry 记录的是 runtime gateway 与 background session transform 的低噪声诊断摘要；真实 provider 的 429/timeout/用户取消路径还需要长跑 smoke 或 live backend 观测来校准 SLA 分布。
+- [x] Single truth source cleanup：已完成；`src/shared/capabilityRegistry.ts` 只保留 capability metadata 与 lazy contract registry，删除旧 TS `buildCapabilityBrief`、prompt scoring、risk inference 和 verifier selection；删除未被生产路径引用的 `src/shared/verification.ts` / `src/shared/verification.test.ts`，避免维护第二套 verification policy builder；`src/ui/src/api/sciforgeToolsClient.ts` 只透传显式 `scenarioOverride.verificationPolicy` / `humanApprovalPolicy` / `unverifiedReason`，不再合成默认策略；`src/runtime/gateway/verification-policy.ts` 不再从用户 prompt 关键词推断 high risk，只从显式 policy、结构化 selected actions/action side effects、uiState policy 和 executionUnits safety evidence 推断，同时保留 action provider self-report 的 fail-closed gate。验证命令：`node --import tsx --test src/shared/capabilityRegistry.test.ts src/ui/src/api/sciforgeToolsClient.policy.test.ts`、`npx tsx tests/smoke/smoke-runtime-gateway-modules.ts`、`uv run --with pytest python -m pytest tests`（在 `packages/conversation-policy-python`）、`npm run smoke:t098-latency`、`npx tsc --noEmit`、`npm run build` 均通过。剩余风险：真实 provider 的慢/429/timeout/取消分布仍需 live backend 长跑校准；transport safe default 仍保留为执行壳兜底，不承担策略选择。
+
+并行实现 prompts：
+
+#### Thread A - Python latency policy
+
+```text
+你负责实现 T098 的 Python latency policy。只修改 packages/conversation-policy-python 及其 tests，必要时更新 PROJECT.md 中 T098 状态。
+
+目标：
+- 新增 sciforge_conversation/latency_policy.py，输出 latencyPolicy。
+- 输入应来自 service.py 已有 policy_input、goalSnapshot、contextPolicy、executionModePlan、capabilityBrief、recovery/failure/guidance/context budget 等通用字段。
+- 策略必须通用，不得按 scenario/provider/prompt 特例。
+- 覆盖 firstVisibleResponseMs、firstEventWarningMs、silentRetryMs、allowBackgroundCompletion、blockOnContextCompaction、blockOnVerification、reason。
+- 高风险 action / selected action / human approval required / failed verification 必须 block；direct-context、低风险 continuation、已有 artifact 追问可非阻塞。
+
+验收：
+- 新增 pytest fixtures 覆盖 direct context、low-risk continuation、light lookup、multi-stage project、repair、high-risk action、context near limit。
+- python3 -m pytest packages/conversation-policy-python/tests 通过。
+- 更新 PROJECT.md 的 T098 Thread A 进度和剩余风险。
+```
+
+#### Thread B - Python response/background/cache plan
+
+```text
+你负责实现 T098 的 responsePlan/backgroundPlan/cachePolicy。优先在 packages/conversation-policy-python 内实现，必要时只做最小 TS contract 类型补充，不改 UI 行为。
+
+目标：
+- 新增或扩展 response_plan.py、cache_policy.py。
+- service.py 输出 responsePlan、backgroundPlan、cachePolicy，并进入 ConversationPolicyResponse contract。
+- responsePlan 至少包含 initialResponseMode、finalizationMode、userVisibleProgress、fallbackMessagePolicy。
+- backgroundPlan 至少包含 enabled、tasks、handoffRefsRequired、cancelOnNewUserTurn。
+- cachePolicy 至少覆盖 scenario/skill/UI plan、reference digests、artifact index、last successful stage/backend session 是否可复用。
+- 所有决策基于通用 executionMode/contextPolicy/capability/risk/failure/ref 信号。
+
+验收：
+- pytest 覆盖所有 mode 和风险等级。
+- 不在 TS 中复制策略判断。
+- 更新 PROJECT.md 的 T098 Thread B 进度。
+```
+
+#### Thread C - TypeScript bridge and request enrichment
+
+```text
+你负责把 Python T098 策略字段接入 TypeScript bridge 和 GatewayRequest enrichment。不要实现策略算法，只做 schema、normalization、透传、安全默认值。
+
+目标：
+- 更新 src/runtime/conversation-policy/contracts.ts、apply.ts、python-bridge.ts 相关 normalizer。
+- requestWithPolicyResponse 将 latencyPolicy、responsePlan、backgroundPlan、cachePolicy 写入 uiState.conversationPolicy 以及稳定顶层位置（如 uiState.latencyPolicy 等），供 runtime/UI 消费。
+- buildContextEnvelope 和 agentserver-prompts 只展示裁剪后的策略摘要，不能新增 prompt regex。
+- 缺失字段使用安全默认：block verification/action safety、允许普通 UI 继续但不声明后台完成。
+
+验收：
+- 新增/更新 TS unit tests，断言字段透传、缺失默认、无策略复制。
+- node --import tsx --test src/runtime/conversation-policy/*.test.ts 通过。
+- npx tsc --noEmit 通过。
+- 更新 PROJECT.md 的 T098 Thread C 进度。
+```
+
+#### Thread D - UI/runtime orchestration execution shell
+
+```text
+你负责让 UI/runtime 按 T098 policy 执行，但不在 TS 中推断策略。重点改 runOrchestrator、sciforgeToolsClient、process progress 和 running message。
+
+目标：
+- runOrchestrator preflight compaction 读取 latencyPolicy.blockOnContextCompaction；false 时不阻塞发送，改为后台/stream event 记录。
+- sciforgeToolsClient silent wait/retry/timeout 阈值读取 latencyPolicy；缺失时保留现有安全默认。
+- 支持 responsePlan.initialResponseMode 的最小 UI 行为：quick-status/direct-context 不必等完整 workspace task 才显示可读反馈；复杂任务仍显示明确进展。
+- 不绕过 runtime verification-policy、WorkEvidence guard、schema validation。
+- 所有 UI 文案和状态通用，不写固定 scenario/prompt。
+
+验收：
+- 更新 chat/runOrchestrator、sciforgeToolsClient 相关 tests。
+- browser smoke 或 unit fixture 覆盖 context compaction 非阻塞、silent retry 阈值来自 policy、quick status 可见。
+- npm run build、npx tsc --noEmit 通过。
+- 更新 PROJECT.md 的 T098 Thread D 进度。
+```
+
+#### Thread E - Background completion protocol and persistence
+
+```text
+你负责设计并实现 T098 后台补全协议。重点是 runId/stageId/ref 的一致性，不做策略算法。
+
+目标：
+- 定义 initial response、background stage update、finalization event 的通用 runtime event / session transform contract。
+- 一个 run 可以先写入初始 assistant message，再追加 artifact/verification/WorkEvidence/final response 更新。
+- 后台补全必须可取消、可被新用户 turn 继承上下文、可在失败时写 failureReason/recoverActions/nextStep。
+- 更新 sessionTransforms、workspace state persistence、object references，确保下一轮能看到后台补全结果。
+- 不为某个场景写专用状态。
+
+验收：
+- 单测覆盖初始回复、后台成功、后台失败、用户取消、新用户 turn 期间后台完成、artifact update、verification update。
+- smoke 覆盖一个通用 long task 先回复后补全。
+- 更新 PROJECT.md 的 T098 Thread E 进度。
+```
+
+#### Thread F - Telemetry and end-to-end latency smoke
+
+```text
+你负责 T098 诊断与验收矩阵，不改核心策略除非测试暴露明确缺口。
+
+目标：
+- 增加 time-to-first-visible-response、time-to-first-backend-event、compaction wait、verification wait、background completion duration、cache hit/miss、fallback reason 的低噪声 telemetry。
+- 新增通用 smoke fixtures：普通追问、上一轮 artifact 追问、低风险 current-events、文献检索、长报告、失败修复、高风险 action、context near limit、backend silent stream、用户中途追加引导。
+- 验证策略字段来自 Python response，TS 只执行/展示。
+- 给 PROJECT.md T098 更新可量化验收结果和剩余风险。
+
+验收：
+- 新增 smoke 可稳定本地运行，不依赖真实外网或单一 provider。
+- npm run build、npx tsc --noEmit、相关 smoke 通过。
+```
+
 ### T097 任务复杂度路由与 Reproducible Task Project Runtime
 
 状态：已完成本轮验收，继续观察真实 backend mode 遵循和产品运行中的证据质量。本轮已完成 Python classifier、TS 字段透传、Task Project runtime/runner、WorkEvidence guard 接入、AgentServer prompt 边界、运行中 UI 最小展示、repair/continue stage 锚点、guidance adoption contract、guidance adoption runtime guard 和 stage adapter promotion proposal 入口。T097 负责任务复杂度路由和多阶段 Task Project runtime：每个用户请求先经过 Python 策略层判断任务类型、复杂度、不确定性、可复现需求和交互风险，再选择合适执行模式：已有上下文直答、薄可复现 adapter、单阶段 workspace task、多阶段 Task Project、或 repair/continuation。复杂任务应拆成可执行 stage，agent 每次只写/修改当前阶段所需代码，SciForge 执行后把阶段证据、失败和用户追加引导反馈给 agent，再进入下一阶段。
@@ -176,232 +390,3 @@ Todo：
 - [x] 主对话栏工作过程展示由原子事件模块驱动，不依赖单一任务或固定场景。
 - [x] 默认视图可感知 agent 工作过程，但不平铺 raw JSON、长 stdout 或上下文诊断。
 - [x] 相关 unit tests、typecheck 和生产 build 通过。
-
-### T094 Cursor Agent 对标体验一致性测试矩阵
-
-状态：进行中。本任务用于把 SciForge 的对话体验向 Cursor agent 的成熟交互模式靠齐。目标不是逐像素复刻 Cursor，也不要求底层行为、工具实现或文案完全一致；目标是同一批真实用户任务在 Cursor agent 和 SciForge 中都能形成一致的用户体验预期：用户能看懂 agent 正在做什么、关键过程默认不过载、可展开审计、有失败恢复线索、最终结果和执行过程边界清楚。
-
-核心原则：
-
-- 每个体验任务必须用同一套测试案例同时跑 Cursor agent 和 SciForge，记录两边的用户可见过程、折叠层级、最终回答、失败/等待状态和恢复入口。
-- 对标的是体验语义，不是实现细节：Cursor 中的搜索、读取、fetch、工具输出、消息折叠和最终回答结构，可以映射到 SciForge 的 stream events、ExecutionUnit、artifact、notebook、object reference 和 workspace refs。
-- 所有修改必须通用，不能为了某一个截图、某一个 scenario、某一个任务名或某一种 backend 做补丁；不得在代码里硬编码 `literature-evidence-review`、`arxiv_agent_harness`、固定文案片段、固定 DOM 路径或固定 tool 名称。
-- 体验规则要沉淀为可复用模型：过程事件归类、折叠策略、摘要生成、失败恢复、对象引用、长任务等待状态都应由通用 schema / presenter / policy / fixture 驱动。
-- 测试必须优先覆盖用户行为和可见状态：同一个任务在两边都应该能回答“当前在做什么、做过什么、哪里失败了、下一步怎么办、哪些输出可以点开验证”。
-
-Todo：
-
-- [x] 建立 Cursor/SciForge 对照测试清单：至少覆盖文献调研、代码修改、文件探索、长时间等待、工具失败恢复、多轮追问、运行中追加指令和最终结果审计；每个案例都记录 Cursor agent 的可见行为和 SciForge 的期望体验语义。
-- [ ] 为“文献调研长任务”建立通用 UX fixture：同一 prompt 分别在 Cursor agent 和 SciForge 中运行，检查过程摘要是否默认折叠、展开后是否能看到搜索/抓取/读取/工具输出、最终报告是否不被 raw log 淹没；不得针对 arXiv、agent harness 或某个场景写死规则。
-- [ ] 为“代码修改任务”建立通用 UX fixture：同一 repo 修改请求分别运行，检查是否展示读取文件、编辑文件、运行测试、失败重试和最终 diff/测试证据；SciForge 侧必须通过 ExecutionUnit / object reference / stream event 通用模型表达，不能按具体文件名或测试命令硬编码。
-- [ ] 为“长时间无新事件/后台等待”建立通用 UX fixture：模拟 backend 60s+ 没有新事件但 HTTP stream 未结束，检查 Cursor 和 SciForge 都能给用户稳定的等待状态、最近真实事件、可能原因和安全的中止/继续入口；等待文案必须来自通用 process progress policy。
-- [ ] 为“工具输出过长”建立通用 UX fixture：同一任务产生大段 stdout、JSON、网页正文或 raw tool output，检查两边都默认折叠低价值输出，只露出摘要和可展开入口；SciForge 侧不得把完整 raw payload 直接平铺到主消息。
-- [ ] 为“多轮追问上一轮结果”建立通用 UX fixture：先生成报告/文件/图表，再追问“继续、修复、文件在哪里、基于上一轮补充”，检查 Cursor 和 SciForge 都能引用上一轮工作且不污染新任务；SciForge 侧必须依赖 workspace refs、artifact refs 和 conversation policy，不靠 prompt 字符串特判。
-- [ ] 为“失败和恢复”建立通用 UX fixture：同一任务触发网络失败、模型失败、工具失败或验收失败，检查两边都能在主对话中给出可理解失败原因、已尝试动作、下一步恢复建议和可点击证据；SciForge 侧失败状态必须进入下一轮上下文。
-- [x] 为“运行中追加用户引导”建立通用 UX fixture：任务执行中用户追加约束或纠偏，检查两边都能明确显示该引导已排队/已合并/被拒绝的状态；SciForge 侧不能靠单个场景定制，必须复用 guidance queue 和 run orchestration contract。
-- [ ] 抽象“Cursor-like worklog presenter”验收标准：定义过程摘要、默认折叠、展开明细、raw output 二级折叠、最终回答优先级、失败状态 badge、复制/查看原始证据等通用规则，并为 React presenter 增加 fixture tests。
-- [ ] 增加 browser smoke：在同一套 fixture session 下打开 SciForge，断言 running message 默认只展示紧凑过程摘要，展开后可见操作明细，最终 scenario message 默认收起执行审计，结果区仍能展示 artifact 和失败恢复入口。
-- [ ] 增加人工对照记录模板：每个 Cursor/SciForge 对照案例记录“任务、输入、Cursor 观察、SciForge 观察、差异是否影响体验、是否需要通用修复、关联测试命令”，避免把一次性主观反馈变成代码特判。
-
-对照测试矩阵 v1：
-
-通用记录规则：每个案例用同一份用户输入分别在 Cursor agent 和 SciForge 中运行；记录时只比较用户可见体验语义，不比较底层工具名、DOM 结构、模型固定措辞、具体文件名、具体 backend 或特定 scenario 名称。自动化断言应基于稳定事件类型、可见状态、折叠层级、引用对象、错误状态和结果结构；人工观察项只判断可理解性、负载感、信任感和是否需要通用修复。
-
-1. 文献调研长任务
-   - 用户输入：要求 agent 围绕一个科研问题查找近期公开资料，筛选高质量证据，输出带来源、结论分级和不确定性的简短报告。
-   - Cursor 观察点：是否展示检索、打开来源、阅读/摘要、整理证据等阶段；过程是否默认紧凑；展开后能否看到关键来源和原始证据入口；最终报告是否优先于日志。
-   - SciForge 观察点：stream events 是否归并为研究阶段；ExecutionUnit 是否保存检索、读取、摘要和报告生成证据；artifact / object reference 是否可点开审计；raw 网页正文或工具输出是否二级折叠。
-   - 体验一致性标准：两边都让用户知道“正在找证据、读证据、综合证据、输出结论”，并且默认视图不被原始日志淹没。
-   - 可自动化断言：存在至少两个不同过程阶段；默认主消息中 raw payload 字符量低于预算；展开审计后存在来源引用或证据对象；最终回答和过程审计分区可区分。
-   - 人工观察项：报告可信度是否可判断；来源是否足够可追溯；用户是否能在不展开所有日志的情况下理解进展。
-
-2. 代码修改任务
-   - 用户输入：要求 agent 在当前仓库中修复一个可复现的小缺陷或增加一个窄范围能力，并在完成后运行相关验证。
-   - Cursor 观察点：是否展示文件探索、读取、编辑、测试、失败重试和最终 diff/验证结果；是否把命令输出和代码 diff 放在可审计但不过载的位置。
-   - SciForge 观察点：是否用通用 ExecutionUnit / workspace refs 表达读取、编辑、验证和结果；修改文件、测试证据、失败重试是否被记录为对象引用；最终回答是否明确边界。
-   - 体验一致性标准：两边都能回答“改了什么、为什么改、怎么验证、还有什么风险”，不要求展示完全相同命令或文案。
-   - 可自动化断言：运行记录中存在读取、写入或补丁、验证三类事件；最终结果包含变更摘要和验证状态；失败验证不会被当作成功隐藏；引用对象不依赖固定文件名匹配。
-   - 人工观察项：diff 是否容易定位；测试失败时是否能看懂下一步；是否避免把完整终端噪声铺在主对话里。
-
-3. 文件探索与定位任务
-   - 用户输入：要求 agent 找出某个功能、配置、契约或数据流大概在哪里实现，并说明关键入口、调用链和后续修改建议，但暂不改代码。
-   - Cursor 观察点：是否展示搜索、打开候选文件、排除错误路径和总结调用链；是否区分“已确认位置”和“推测位置”。
-   - SciForge 观察点：是否将搜索和读取归纳为探索阶段；workspace refs 是否指向被引用对象；结论是否和探索证据关联，而不是只给自然语言断言。
-   - 体验一致性标准：两边都能让用户理解 agent 如何缩小范围，并能从结论跳回证据。
-   - 可自动化断言：存在搜索/枚举类事件和读取类事件；最终回答包含多个可点击或可审计引用；主视图显示候选范围摘要，完整输出默认折叠。
-   - 人工观察项：排除路径是否有解释；结论是否过度自信；用户是否能据此继续交给 agent 修改。
-
-4. 长等待与静默后台任务
-   - 用户输入：要求 agent 执行一个可能耗时的操作，例如长时间构建、批处理、远程请求或大文件分析，并让它完成后汇报。
-   - Cursor 观察点：在 60s+ 无新可见事件但 run 未结束时，是否仍显示稳定运行状态、最近真实动作、可中止入口和合理等待说明。
-   - SciForge 观察点：process progress policy 是否在静默窗口生成等待状态；最近事件、持续时间、可能原因和中止/继续入口是否通用展示；不会伪造不存在的新动作。
-   - 体验一致性标准：两边都降低“卡死了吗”的不确定性，同时保留用户安全退出或继续等待的选择。
-   - 可自动化断言：静默超过阈值后出现等待状态；等待状态引用最近真实事件；存在取消或停止入口；没有把等待提示写成固定任务名或 backend 名。
-   - 人工观察项：等待文案是否诚实；用户能否判断是否要中止；等待状态是否过度频繁或打断最终结果。
-
-5. 工具失败与恢复任务
-   - 用户输入：要求 agent 完成一个需要外部工具、网络、测试命令或本地环境的任务，并通过断网、缺依赖、权限不足或命令失败制造一次失败。
-   - Cursor 观察点：是否显示失败发生在哪一步、尝试过什么、失败证据在哪里、是否自动换路或请求用户补充。
-   - SciForge 观察点：failureReason、attempt history、recoverActions、日志引用和 nextStep 是否进入运行状态和下一轮上下文；失败 badge 是否清楚但不过度占据主结果。
-   - 体验一致性标准：两边都把失败解释成可行动的信息，而不是只暴露异常堆栈或静默结束。
-   - 可自动化断言：失败事件包含原因类别、证据引用和恢复建议；最终状态不是 success；下一轮上下文能读取上一轮失败摘要；原始错误默认折叠。
-   - 人工观察项：失败说明是否足够具体；恢复建议是否安全；用户是否能自然地追问“继续修复”。
-
-6. 工具输出过长任务
-   - 用户输入：要求 agent 运行会产生大量 stdout、JSON、表格、网页正文或日志的操作，并基于结果给出摘要。
-   - Cursor 观察点：是否默认只显示摘要、关键片段和展开入口；是否允许查看完整输出；最终答案是否不被 raw output 推走。
-   - SciForge 观察点：raw output 是否进入二级折叠或 artifact；主消息是否展示 compact summary、计数、截断说明和原始证据引用；复制/查看原始内容入口是否存在。
-   - 体验一致性标准：两边都保留审计能力，同时默认保护主对话阅读体验。
-   - 可自动化断言：超过预算的 payload 不直接出现在主消息；可展开区域或 artifact 保存原始内容；摘要包含输出规模或截断提示；最终回答显示在 raw output 之前或独立结果区。
-   - 人工观察项：摘要是否覆盖用户关心的信息；展开层级是否自然；长输出是否影响滚动和定位。
-
-7. 多轮追问上一轮结果
-   - 用户输入：第一轮要求生成报告、文件、图表或代码修改；第二轮追问“继续完善上一轮结果”“文件在哪里”“基于刚才输出补一个限制条件”。
-   - Cursor 观察点：是否能引用上一轮工作产物；是否避免把旧任务重新做一遍；是否清楚说明复用了哪些上下文。
-   - SciForge 观察点：conversation policy 是否通过 workspace refs、artifact refs、session ledger 和 failure/acceptance state 恢复上下文；新一轮是否生成独立过程记录，不污染旧结果。
-   - 体验一致性标准：两边都能自然延续上一轮，同时让用户区分旧产物和新动作。
-   - 可自动化断言：第二轮 request context 包含上一轮对象引用摘要；最终回答引用旧产物但生成新轮状态；没有依赖固定追问文本做特判；旧 failure 状态在相关时可见。
-   - 人工观察项：用户是否需要重复交代背景；上下文恢复是否过度带入无关历史；“文件在哪里”是否能直接定位。
-
-8. 运行中追加用户引导
-   - 用户输入：启动一个长任务后，在运行中追加约束、纠偏或优先级变化，例如要求缩小范围、跳过某类步骤、改用更保守输出格式。
-   - Cursor 观察点：追加消息是否显示为已收到、排队、合并或无法应用；最终结果是否说明采用了哪些追加约束。
-   - SciForge 观察点：guidance queue 和 run orchestration contract 是否记录追加引导状态；stream 是否展示被接收、延后或拒绝的原因；下一轮是否能看到该引导历史。
-   - 体验一致性标准：两边都不让追加引导消失；若不能即时应用，也要给出可理解状态。
-   - 可自动化断言：追加消息有明确状态；运行记录包含 guidance 接收时间和处理结果；最终回答或审计记录能引用追加约束；拒绝或延后不依赖固定任务类型。
-   - 人工观察项：用户是否相信引导被听见；合并时机是否合理；冲突引导是否解释清楚。
-
-9. 最终结果审计任务
-   - 用户输入：要求 agent 完成一个多步任务后，明确给出最终结论、产物位置、关键证据、验证状态和未完成风险。
-   - Cursor 观察点：最终回答是否和过程日志分离；是否有可展开的工作记录、产物链接、验证证据和剩余风险；失败或部分完成状态是否醒目。
-   - SciForge 观察点：scenario message、artifact、ExecutionUnit、object reference 和 verifier 结果是否能组成可审计最终包；默认视图是否优先展示结果，审计内容可展开。
-   - 体验一致性标准：两边都让用户先看到“结果是什么”，再能按需追溯“怎么来的”。
-   - 可自动化断言：最终状态包含结果摘要、产物引用、证据引用和验证/风险字段；执行审计默认收起；失败或部分完成不会显示为完全成功；断言不匹配固定输出文本。
-   - 人工观察项：结果边界是否诚实；证据链是否足够短而可用；用户是否能把结果交给下一轮继续。
-
-验收标准：
-
-- [ ] 至少 8 个真实任务案例完成 Cursor agent 与 SciForge 双跑对照，且每个案例都有可复用 fixture 或人工记录。
-- [ ] SciForge 的对话体验在过程展示、折叠层级、失败恢复、最终结果优先级和多轮延续上与 Cursor agent 的用户预期一致，即使底层实现和文案不完全相同。
-- [ ] 新增或修改的测试不依赖单一 scenario、单一 backend、固定任务名、固定文件名或固定模型输出文本。
-- [ ] 任何 UX 修复都落在通用 presenter、policy、schema、runtime event normalizer 或 browser smoke 上，不在业务代码里硬编码特殊案例。
-- [ ] `npm run typecheck -- --pretty false`、相关 unit tests 和 browser smoke 均通过。
-
-### T093 Python Conversation Policy 与 Capability Broker 模块化改造
-
-状态：已完成。承接已合并到 `docs/Architecture.md` 的多轮对话恢复与 Capability Broker 设计。目标是把多轮对话策略、历史恢复、引用摘要、验收恢复和能力选择从 TypeScript runtime 里的散落规则，逐步迁移为可分工、可测试、可审计的 Python policy engine；TypeScript 保留 UI、stream、workspace writer 和 AgentServer 调用壳。
-
-核心原则：
-
-- Python 负责算法：goal snapshot、context policy、memory/retrieval、reference digest、artifact index、capability broker、handoff plan、acceptance、recovery、process events。
-- TypeScript 负责工程壳：React UI 状态、HTTP/stream/abort、workspace writer、AgentServer payload、结果渲染和 Python bridge。
-- 主 agent 不读取完整 capability registry，只读取 broker 生成的少量 capability brief。
-- 能力模块默认是 typed service/adapter；内部 LLM/小 agent 只用于 GUI/vision/computer-use、复杂文献检索、代码修复、多步实验设计等开放式复杂模块，并且必须藏在稳定 schema 后面。
-- UI components 不做推理，只声明可渲染 artifact/schema，由 runtime 根据 broker 和 artifact type 选择。
-- 所有 Python/TS 交互走版本化 JSON contract；runtime 主路径直接应用 Python policy response，旧 TS 策略启发式不再保留。
-
-Todo：
-
-- [x] 新建 `packages/conversation-policy-python/`：包含 `pyproject.toml`、`src/sciforge_conversation/`、`tests/fixtures/`，先实现 `contracts.py`、`service.py` 和 request/response schema version。
-- [x] 实现 `goal_snapshot.py`、`context_policy.py`、`memory.py`：覆盖新任务隔离、继续上一轮、修复上一轮、显式引用优先、历史污染防护。
-- [x] 实现 `reference_digest.py`、`artifact_index.py`：支持 Markdown/PDF/JSON/CSV/path refs 的 bounded digest，输出 clickable/ref-safe artifact index，不直接把长正文塞进 handoff。
-- [x] 实现 `capability_broker.py`：读取 capability manifest，按 prompt/goal/refs/场景/风险/成本/历史信号筛选 top-k，输出 compact brief、excluded reasons 和 audit trace。
-- [x] 实现 `handoff_planner.py`、`acceptance.py`、`recovery.py`：把 handoff budget、必需 artifact、markdown report/ref 验收、silent stream、missing output、repair/digest recovery 做成 Python 决策。
-- [x] 实现 `process_events.py`：把 raw backend/tool/workspace 事件归纳为用户可读阶段，保证多轮长任务能看到“正在读什么、写什么、等待什么、下一步是什么”。
-- [x] 增加 TS bridge active mode：TypeScript runtime 调用 Python policy engine，并把 Python response 写回 context/handoff/digest/capability/acceptance/recovery 运行态。
-- [x] 增加测试：Python fixture unit tests、golden tests、过去失败场景 regression、TS bridge smoke、长任务多轮对话 smoke。
-- [x] 更新文档：把真实 contract、manifest 字段、迁移开关、fallback 策略和调试方法同步到 `docs/Architecture.md` 与 `docs/Extending.md`。
-
-验收标准：
-
-- [x] Python package 可独立运行单测，不依赖真实 AgentServer 或前端页面。
-- [x] TS runtime 主路径调用 Python policy；浏览器端不再维护 goal/context/memory/reference digest/acceptance 的并行算法。
-- [x] capability brief 小而可解释；主 agent 不需要看到完整 registry 才能选择能力。
-- [x] 默认能力模块没有内部 agent；只有 manifest 明确声明 `internalAgent` 的复杂能力可以使用内部 planner/小 agent。
-- [x] 用户可见过程信息从 raw stream 变成稳定阶段模型，长任务不会只显示永久 running。
-- [x] 覆盖关键回归：上下文隔离、继续上一轮、显式 refs、digest recovery、缺 markdown report、silent stream、运行中追加引导。
-- [x] `npm run typecheck -- --pretty false`、相关 TS smoke、Python pytest/golden tests 均通过。
-
-### T092 双实例 Agent 互修与稳定同步
-
-状态：进行中。本任务取代此前内嵌 Repair Agent System 方案。SciForge 不再在单个运行中的应用里放置一个自修复 agent，也不再让反馈收件箱直接启动内嵌修复 runner。新方向是维护两个彼此独立、地位并列的 SciForge Agent/App 实例：一个稳定实例可以修复另一个实例的代码，被修复的一方可以变动，执行修复的一方必须保持稳定；当双方都通过核验后，用户或主 Agent 可以显式把较新的稳定版本同步给落后的一方。用户体验上采用“修改方主对话栏交互式修复，被修改方反馈收件箱结构化沉淀结论”的模式：A 的主聊天栏选择目标实例 B，用户用自然语言引导 A 修复 B 的 issue；B 的反馈收件箱只展示修复状态、diff/commit、测试证据、人工核验结论和 GitHub 同步结果。
-
-核心原则：
-
-- 双实例并列：例如 Main Agent 和 Repair Agent 都是完整 SciForge 应用/agent 实例，拥有独立进程、端口、workspace writer、状态目录、日志、配置和 git worktree；真实互修优先使用 `SciForge-A/` 与 `SciForge-B/` 两个 git worktree，而不是只在同一个 checkout 内创建两个 workspace 子目录。
-- 修复别人时自己稳定：A 修复 B 时，A 的运行代码、执行器、权限策略和配置不得被本次任务修改；B 修复 A 时同理。
-- 交替修复：允许 A 修 B，也允许 B 修 A，但每次只能由当前稳定的一方执行修复。
-- 显式同步：只有修复完成、测试证据充分、人工核验或自动核验通过后，才能把最新稳定版本复制/同步给另一方；同步不是运行中自动漂移。
-- 反馈收件箱降级为 handoff：反馈收件箱继续负责收集评论、页面定位、运行时上下文和 GitHub Issue 同步，但不再内嵌 Repair Agent 面板或直接执行修复。
-- 对话栏承担交互：复杂澄清、修复策略选择、重试和用户纠偏都发生在执行方 A 的主对话栏；被修改方 B 不弹出小型 agent 工作台。
-- 结构化 API 优先：A 不通过视觉/DOM 探索 B 的页面来找 issue，而是读取 B 暴露的 instance manifest、feedback issue、handoff bundle 和 repair result API。
-
-Todo：
-
-- [x] 删除单实例内嵌 Repair Agent 代码路径，包括 `repair-agent-system/`、反馈卡片修复按钮、Repair Agent 面板、Workspace Writer repair endpoint、runner contract 和相关样式。
-- [x] 定义双实例开发配置契约：`agentId`、`role`、`appPort`、`workspaceWriterPort`、`workspacePath`、`repoPath`、`stateDir`、`logDir`、`configLocalPath`、`counterpart`；由 Workspace Writer manifest 和 dev env/profile 暴露，后续 UI peer settings 可复用。
-- [x] 定义 peer instances 配置与设置页 UI：保存 Main/Repair/Peer 实例的 `name`、`appUrl`、`workspaceWriterUrl`、`workspacePath`、`role`、`trustLevel` 和 `enabled`。
-- [x] 支持开发环境同时启动两个独立 SciForge 实例，并确保端口、状态目录、workspace writer、runtime session 和日志互不共享；`npm run dev:dual` 默认从 `SciForge-A/` 与 `SciForge-B/` worktree 启动，A 使用 `5173/5174` + `.sciforge-a/`，B 使用 `5273/5274` + `.sciforge-b/`。
-- [x] 文档明确 worktree-first 推荐部署：`SciForge-A/` 与 `SciForge-B/` 各自运行一份应用，`workspacePath` 指向对应 worktree 根目录，AgentServer 默认共享 `18080`。
-- [x] 增加 worktree-first 开发脚本与 smoke：`npm run worktree:dual -- status|create|clean` 支持检测/创建/清理 `SciForge-A` 与 `SciForge-B`；`npm run smoke:dual-worktree-instance` 临时创建双 worktree、启动 A/B writer，并验证 manifest repo root、workspacePath、stateDir、configLocalPath 和跨实例写入隔离。
-- [x] 实现互修 handoff 协议与 runner contract：`executorInstance`、`targetInstance`、`targetWorkspacePath`、`targetWorkspaceWriterUrl`、`issueBundle`、`expectedTests`、`githubSyncRequired`；稳定实例 A 可通过 `/api/sciforge/repair-handoff/run` 接收 B 的 issue bundle，在 B repo 下创建 `.sciforge/repair-worktrees/<run>` 与 `codex/repair-handoff/...` 隔离分支/worktree，使用目标 worktree 作为 AgentServer `cwd/workingDirectory` 执行修复、测试、diff/patch 证据收集，并写回 B 的 `/repair-result`。
-- [x] Runner 明确 fail-closed：`targetWorkspacePath` 不能等于或包含/被包含于 executor repo/worktree，且不能与 executor `stateDir`、`configLocalPath`、`logDir` 相交；runner 自身测试日志和 patch artifact 不混入业务 changed files。
-- [x] Runner 输出结构化 result：`summary`、`changedFiles`、`diffRef`、`refs.patchRef`、`testResults`、`humanVerification`、`executorInstance`、`targetInstance`、隔离 branch/worktree metadata；目标实例 `/repair-result` 保存 `diffRef` 和 `commit` 字段。
-- [x] 给主对话栏增加 Target Instance 选择器：默认当前实例，可选择 Peer 实例；选中 Peer 后，聊天任务明确标记为“读取并修改目标实例 workspace”。
-- [x] 主对话栏支持从目标实例拉取 issue：用户可说“修复 B 的反馈 #id / GitHub #number”，A 通过 B 的结构化 API 获取 issue、页面定位、截图证据、GitHub 元数据和验收要求，并在 AgentServer payload 中携带可调用的 repair handoff runner endpoint/contract。
-- [x] 被修改方反馈收件箱增加 handoff / repair result 状态：展示 `assigned`、`analyzing`、`patching`、`testing`、`needs-human-verification`、`fixed`、`blocked`、`github-synced`。
-- [x] 实现目标实例 API：`GET /api/sciforge/instance/manifest`、`GET /api/sciforge/feedback/issues`、`GET /api/sciforge/feedback/issues/:id`、`POST /api/sciforge/feedback/issues/:id/repair-runs`、`POST /api/sciforge/feedback/issues/:id/repair-result`。
-- [x] 实现 GitHub 回写链路：被修改方收到 repair result 后，把摘要、changed files、测试结果、人工核验结论和 commit/PR/patch ref 追加到关联 GitHub Issue；不自动关闭 Issue；未配置 token 时 fail-safe 标记 `skipped` 并记录原因，不提交真实 token。
-- [x] 实现稳定版本注册表：记录每个实例的稳定 commit、版本、测试结果、promotedAt、来源实例和同步状态；`promote` 必须显式确认且有测试证据。
-- [x] 实现显式稳定同步计划动作：`sync-plan` 只生成 diff、测试要求、备份点和回滚说明，不写入目标实例，不自动漂移。
-- [x] 在 UI 中把“修复”改为“交给另一实例处理”或同类 handoff 入口，展示目标实例、当前状态、测试证据、GitHub 回写结果和下一步，而不是展示内嵌 Repair Agent 过程。
-- [x] 增加 focused smoke：`npm run smoke:repair-handoff-runner` 模拟 A 执行 B 的修复，确认写入发生在 B 的 isolated repair worktree，不发生在 A 或 B 当前 checkout，并验证 executor 路径 fail-closed；`npm run smoke:dual-worktree-instance` 覆盖双 worktree writer 隔离。
-- [x] 更新 README 的 worktree-first 运行说明、环境变量示例、smoke 命令和故障排查；后续真实互修、核验、同步和回滚说明随 handoff / stable registry 落地继续补充。
-
-验收标准：
-
-- [x] 单实例应用中不再出现内嵌 Repair Agent runner、repair endpoint 或自修复面板。
-- [x] 两个实例可以并行运行，且配置、端口、状态目录、日志互不污染。
-- [x] 当前稳定实例可以对另一个实例的代码做真实修改，并输出 diff、测试日志和结论；已通过 `npm run smoke:repair-handoff-runner` 验证 A 修 B 的真实 isolated worktree 路径。
-- [x] 默认 dev profile 和 smoke 覆盖 worktree 模式：验证 `workspacePath` 指向两个不同 git worktree 根目录时，A 写 B 的 repair result / patch artifact 不会污染 A，B 写 A 同理；已运行 `npm run typecheck`、`npm run smoke:dual-instance`、`npm run smoke:dual-worktree-instance`。
-- [x] 用户可以在 A 的主对话栏选择 B 作为 Target Instance，并通过一句自然语言触发对 B 的指定反馈/GitHub Issue 修复。
-- [x] B 的反馈收件箱能在无需用户复制粘贴的情况下看到 A 写回的结构化修复结论、测试证据和 GitHub 同步状态。
-- [x] 任一实例修复另一个实例时，自己的运行代码和稳定版本注册信息不会被本次修复任务改写；runner 对 executor repo/worktree、stateDir、configLocalPath、logDir 执行 fail-closed 边界检查。
-- [x] 同步较新稳定版本必须是显式动作，并且有测试证据、备份和回滚说明；当前实现提供显式 `promote` / `sync-plan`，不自动应用同步。
-
-### T088 长文件语义模块化治理
-
-状态：已完成。本任务承接 PROJECT.md 的代码膨胀治理原则：源码文件超过 1000 行进入 watch list；超过 1500 行必须有模块化拆分任务、语义 part 计划或生成文件豁免；超过 2000 行优先拆分；超过 3000 行视为维护风险。拆分必须按职责命名，不能机械拆成 `part1/part2`；如果短期无法完全解耦，也要先拆出有语义的文件并保持主入口只做流程编排。本轮已完成三个 blocker 文件的语义拆分，所有非生成源码主文件均低于 1500 行。
-
-#### 当前超阈值文件
-- `src/runtime/generation-gateway.ts`：已从约 4213 行降到约 1412 行；AgentServer context window、prompt/config、direct answer payload、payload validation、artifact reference context 和 run output parsing 已拆到 `src/runtime/gateway/*` 语义模块。
-- `src/ui/src/app/SciForgeApp.tsx`：已从约 2332 行降到约 1363 行；`Sidebar`、`TopBar`、`SettingsDialog` 已拆到 `src/ui/src/app/appShell/ShellPanels.tsx`。
-- `src/ui/src/app/ResultsRenderer.tsx`：已从约 2254 行降到约 1438 行；workspace object preview 已拆到 `src/ui/src/app/results/WorkspaceObjectPreview.tsx`，execution/evidence/notebook 面板已拆到 `src/ui/src/app/results/ExecutionNotebookPanels.tsx`。
-- `packages/skills/catalog.ts`：约 6855 行，属于生成 skill catalog，维持 `tools/check-long-file-budget.ts` 中的 generated-file exemption，不手工拆分。
-
-#### Watch list
-- `src/ui/src/styles/app-04.css`：约 2130 行，已采用 app style 分片，但仍需继续按页面/组件职责收缩。
-- `src/ui/src/styles/app-05.css`：约 1708 行，已采用 app style 分片，但仍需继续按页面/组件职责收缩。
-- `src/ui/src/app/ChatPanel.tsx`：约 1453 行，接近强制任务阈值，后续新增逻辑前应先抽出 composer、run status、handoff/trace 子模块。
-- `src/ui/src/styles/app-03.css`：约 1389 行，继续 watch。
-- `src/runtime/workspace-server.ts`：约 1372 行，继续 watch，后续 server route 增长应抽 route/diagnostics 模块。
-- `src/ui/src/api/sciforgeToolsClient.test.ts`：约 1320 行，继续 watch，后续按 runtime events、workspace files、task attempts、artifact IO 分测试文件。
-- `src/ui/src/styles/app-01.css`：约 1165 行，继续 watch。
-- `tools/longform-regression.ts`：约 1133 行，继续 watch，后续按 prepare/status/validation/reporting 拆工具模块。
-- `tests/smoke/smoke-vision-sense-runtime-bridge.ts`：约 1078 行，继续 watch，后续按 contract fixtures、runtime bridge、trace validation 拆测试 helper。
-- `tests/smoke/smoke-browser-workflows.ts`：约 1073 行，继续 watch，后续按 browser harness、reference workflows、assertions 拆 helper。
-- `src/ui/src/app/Dashboard.tsx`：约 1002 行，继续 watch，新增 dashboard 逻辑前先抽 panel/section 子组件。
-
-#### TODO
-- [x] 拆分 `src/runtime/generation-gateway.ts`：保留 gateway 主入口只做 request orchestration；抽出 AgentServer request/response adapter、context compaction/handoff builder、artifact normalization、backend failure recovery、acceptance repair rerun、stream event translation 和 diagnostics 子模块。当前已拆出 `agentserver-context-window.ts`、`agentserver-prompts.ts`、`direct-answer-payload.ts`、`payload-validation.ts`、`artifact-reference-context.ts` 和 `agentserver-run-output.ts`；`npm run smoke:runtime-gateway-modules` 通过。
-- [x] 拆分 `src/ui/src/app/SciForgeApp.tsx`：保留 App shell 只做顶层状态组装和路由；抽出 workspace/session state hooks、Scenario Builder wiring、runtime settings panel、context window meter、tool/skill selection、run lifecycle controls 和 layout/navigation 子组件。当前已抽出 app shell panels，主文件降到 1500 行以下；`npm run typecheck -- --pretty false` 通过。
-- [x] 拆分 `src/ui/src/app/ResultsRenderer.tsx`：保留 renderer 主入口只做 artifact/view dispatch；抽出 execution unit renderer、artifact card renderer、trace/vision preview、failure diagnostics、research artifact views、table/graph/chart previews 和 reusable result shell。当前已抽出 workspace object preview、uploaded data URL preview、evidence matrix、execution panel 和 notebook timeline，主文件降到 1500 行以下；`npm run typecheck -- --pretty false` 通过。
-- [x] 复查现有 CSS 分片：`src/ui/src/styles/app-01.css` 到 `app-06.css` 不能只是体积切片，后续应逐步迁移为按 app shell、chat panel、results renderer、scenario builder、dashboard、shared controls 命名的语义样式文件；当前记录为 watch list，后续触碰样式大块时按语义文件名迁移并配 browser smoke。
-- [x] 对 `src/ui/src/app/ChatPanel.tsx`、`src/runtime/workspace-server.ts`、`tools/longform-regression.ts` 和大型 smoke/test 文件建立后续拆分任务；当前均低于 1500 行并记录在 watch list，任何新增功能若让它们越过 1500 行，必须先补 PROJECT.md 任务或同步抽模块。
-- [x] 运行 `npm run smoke:long-file-budget` 并保持通过；后续每次新增超过阈值的源码文件，都必须在 PROJECT.md 记录语义拆分计划或在 `tools/check-long-file-budget.ts` 中给出明确生成文件豁免。
-
-#### 验收
-- [x] `npm run smoke:long-file-budget` 通过，并在输出中将 1500 行以上非生成源码标记为 tracked。
-- [x] 三个 blocker 文件均有落地拆分 PR/commit：`src/runtime/generation-gateway.ts`、`src/ui/src/app/SciForgeApp.tsx`、`src/ui/src/app/ResultsRenderer.tsx` 主文件分别降到 1500 行以下。
-- [x] 拆分后的模块命名全部按职责表达，不出现 `part1` / `part2` / `chunk` 这类无语义名称。
-- [x] 相关 focused tests、typecheck 和必要 smoke 通过；用户可见行为保持一致。已运行 `npm run typecheck -- --pretty false`、`npm run smoke:long-file-budget`、`npm run smoke:runtime-gateway-modules`。

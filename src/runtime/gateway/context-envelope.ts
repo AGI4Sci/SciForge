@@ -34,6 +34,7 @@ export function buildContextEnvelope(
   const expectedArtifactTypes = expectedArtifactTypesForRequest(request);
   const selectedComponentIds = selectedComponentIdsForRequest(request);
   const executionModeDecision = executionModeDecisionForEnvelope(uiState);
+  const conversationPolicySummary = summarizeConversationPolicyForAgentServer(uiState.conversationPolicy ?? uiState);
   const capabilityBrief = isRecord(uiState.capabilityBrief)
     ? uiState.capabilityBrief
     : {
@@ -117,6 +118,7 @@ export function buildContextEnvelope(
       humanApprovalPolicy: request.humanApprovalPolicy ?? (isRecord(uiState.humanApprovalPolicy) ? uiState.humanApprovalPolicy : undefined),
       unverifiedReason: request.unverifiedReason ?? (typeof uiState.unverifiedReason === 'string' ? uiState.unverifiedReason : undefined),
       verificationBrief: capabilityBrief.verificationBrief,
+      conversationPolicySummary,
       ...executionModeDecision,
       selectedSkill: params.selectedSkill ? {
         id: params.selectedSkill.id,
@@ -131,6 +133,7 @@ export function buildContextEnvelope(
       currentUserRequest: currentUserRequestText(request.prompt),
       currentReferences: currentReferences.length ? currentReferences.slice(0, 8).map((entry) => clipForAgentServerJson(entry, 2)) : undefined,
       currentReferenceDigests: currentReferenceDigests.length ? currentReferenceDigests.slice(0, 8).map((entry) => clipForAgentServerJson(entry, 4)) : undefined,
+      conversationPolicySummary,
       ...executionModeDecision,
       recentConversation: visibleRecentConversation,
       conversationLedger: summarizeConversationLedger(conversationLedger, mode),
@@ -298,6 +301,21 @@ function numberField(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+function booleanField(value: unknown) {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function pruneUndefined(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(pruneUndefined);
+  if (!isRecord(value)) return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry === undefined) continue;
+    out[key] = pruneUndefined(entry);
+  }
+  return out;
+}
+
 function stagePlanHintField(value: unknown) {
   if (typeof value === 'string' && value.trim()) return value.trim();
   if (Array.isArray(value)) {
@@ -374,6 +392,49 @@ export function summarizeExecutionRefs(refs: Array<Record<string, unknown>>) {
     failureReason: clipForAgentServerPrompt(entry.failureReason, 480),
     hash: hashJson(entry),
   }));
+}
+
+export function summarizeConversationPolicyForAgentServer(value: unknown) {
+  const source = isRecord(value) ? value : {};
+  const latency = isRecord(source.latencyPolicy) ? source.latencyPolicy : source;
+  const response = isRecord(source.responsePlan) ? source.responsePlan : source;
+  const background = isRecord(source.backgroundPlan) ? source.backgroundPlan : source;
+  const cache = isRecord(source.cachePolicy) ? source.cachePolicy : source;
+  return pruneUndefined({
+    latencyPolicy: {
+      firstVisibleResponseMs: numberField(latency.firstVisibleResponseMs),
+      firstEventWarningMs: numberField(latency.firstEventWarningMs),
+      silentRetryMs: numberField(latency.silentRetryMs),
+      allowBackgroundCompletion: booleanField(latency.allowBackgroundCompletion),
+      blockOnContextCompaction: booleanField(latency.blockOnContextCompaction),
+      blockOnVerification: booleanField(latency.blockOnVerification),
+      reason: clipForAgentServerPrompt(latency.reason, 320),
+    },
+    responsePlan: {
+      initialResponseMode: stringField(response.initialResponseMode),
+      finalizationMode: stringField(response.finalizationMode),
+      userVisibleProgress: toStringList(response.userVisibleProgress).slice(0, 8),
+      fallbackMessagePolicy: stringField(response.fallbackMessagePolicy),
+      reason: clipForAgentServerPrompt(response.reason, 320),
+    },
+    backgroundPlan: {
+      enabled: booleanField(background.enabled),
+      tasks: toStringList(background.tasks).slice(0, 8),
+      handoffRefsRequired: booleanField(background.handoffRefsRequired),
+      cancelOnNewUserTurn: booleanField(background.cancelOnNewUserTurn),
+      reason: clipForAgentServerPrompt(background.reason, 320),
+    },
+    cachePolicy: {
+      reuseScenarioPlan: booleanField(cache.reuseScenarioPlan),
+      reuseSkillPlan: booleanField(cache.reuseSkillPlan),
+      reuseUiPlan: booleanField(cache.reuseUiPlan ?? cache.reuseUIPlan),
+      reuseReferenceDigests: booleanField(cache.reuseReferenceDigests),
+      reuseArtifactIndex: booleanField(cache.reuseArtifactIndex),
+      reuseLastSuccessfulStage: booleanField(cache.reuseLastSuccessfulStage),
+      reuseBackendSession: booleanField(cache.reuseBackendSession),
+      reason: clipForAgentServerPrompt(cache.reason, 320),
+    },
+  });
 }
 
 function summarizeVerificationResults(request: GatewayRequest) {

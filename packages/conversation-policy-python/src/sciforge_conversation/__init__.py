@@ -33,7 +33,10 @@ from .execution_classifier import (
     classify_execution_mode,
 )
 from .handoff_planner import plan_handoff
+from .latency_policy import build_latency_policy
+from .cache_policy import build_cache_policy
 from .recovery import plan_recovery
+from .response_plan import build_background_plan, build_response_plan
 
 _SERVICE_EXPORTS = {"evaluate_request", "handle_payload", "handle_text", "run_stdio"}
 
@@ -66,6 +69,10 @@ __all__ = [
     "broker_capabilities",
     "build_capability_brief",
     "classify_execution_mode",
+    "build_latency_policy",
+    "build_background_plan",
+    "build_cache_policy",
+    "build_response_plan",
     "evaluate_request",
     "evaluate_acceptance",
     "handle_payload",

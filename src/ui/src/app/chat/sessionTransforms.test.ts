@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { NormalizedAgentResponse, RuntimeArtifact, RuntimeExecutionUnit, SciForgeMessage, SciForgeSession, UserGoalSnapshot } from '../../domain';
+import type { BackgroundCompletionRuntimeEvent, NormalizedAgentResponse, RuntimeArtifact, RuntimeExecutionUnit, SciForgeMessage, SciForgeSession, UserGoalSnapshot } from '../../domain';
 import {
+  applyBackgroundCompletionEventToSession,
   appendFailedRunToSession,
   appendRunningGuidance,
   appendRunningGuidanceRecord,
@@ -289,4 +290,163 @@ test('failed runs preserve silent waiting recovery clues for the next turn paylo
   assert.deepEqual((recovered.runs.at(-1)?.raw as { streamProcess?: { events?: unknown[] } }).streamProcess?.events?.length, 1);
   assert.match((nextPayload.runs.at(-1)?.raw as { streamProcess?: { summary?: string } }).streamProcess?.summary ?? '', /最近 读取/);
   assert.match((nextPayload.runs.at(-1)?.raw as { streamProcess?: { summary?: string } }).streamProcess?.summary ?? '', /继续补充指令/);
+});
+
+test('background completion initial response creates a running run and assistant message with stable refs', () => {
+  const event: BackgroundCompletionRuntimeEvent = {
+    contract: 'sciforge.background-completion.v1',
+    type: 'background-initial-response',
+    runId: 'run-bg-1',
+    stageId: 'stage-initial',
+    ref: 'run:run-bg-1#stage-initial',
+    status: 'running',
+    prompt: 'prepare long report',
+    message: '我先给出摘要，后台继续补全 artifact 和验证。',
+    createdAt: '2026-05-08T01:00:00.000Z',
+  };
+  const updated = applyBackgroundCompletionEventToSession(session(), event);
+
+  assert.equal(updated.runs[0].id, 'run-bg-1');
+  assert.equal(updated.runs[0].status, 'running');
+  assert.equal(updated.messages[0].id, 'msg-run-bg-1');
+  assert.equal(updated.messages[0].status, 'running');
+  assert.equal(updated.messages[0].objectReferences?.[0]?.ref, 'run:run-bg-1');
+  assert.equal((updated.runs[0].raw as { backgroundCompletion?: { contract?: string; messageId?: string } }).backgroundCompletion?.contract, 'sciforge.background-completion.v1');
+  assert.equal((updated.runs[0].raw as { backgroundCompletion?: { messageId?: string } }).backgroundCompletion?.messageId, 'msg-run-bg-1');
+});
+
+test('background completion success finalizes the same run and exposes results to the next turn', () => {
+  const initial = applyBackgroundCompletionEventToSession(session(), {
+    contract: 'sciforge.background-completion.v1',
+    type: 'background-initial-response',
+    runId: 'run-bg-2',
+    stageId: 'stage-initial',
+    status: 'running',
+    prompt: 'long report',
+    message: '后台补全中。',
+    createdAt: '2026-05-08T01:00:00.000Z',
+  });
+  const final = applyBackgroundCompletionEventToSession(initial, {
+    contract: 'sciforge.background-completion.v1',
+    type: 'background-finalization',
+    runId: 'run-bg-2',
+    stageId: 'stage-final',
+    status: 'completed',
+    finalResponse: '最终报告已完成。',
+    completedAt: '2026-05-08T01:03:00.000Z',
+    workEvidence: [{ id: 'we-1', kind: 'final-response', ref: 'run:run-bg-2#stage-final' }],
+  });
+  const user = message('msg-next-bg', 'user', '继续解释上一轮结果', '2026-05-08T01:04:00.000Z');
+  const payload = requestPayloadForTurn({ ...final, messages: [...final.messages, user] }, user, []);
+
+  assert.equal(final.runs.length, 1);
+  assert.equal(final.messages.length, 1);
+  assert.equal(final.runs[0].status, 'completed');
+  assert.equal(final.messages[0].content, '最终报告已完成。');
+  assert.match(JSON.stringify(payload.runs), /we-1/);
+});
+
+test('background completion failure writes recovery context without inventing scenario state', () => {
+  const updated = applyBackgroundCompletionEventToSession(session(), {
+    contract: 'sciforge.background-completion.v1',
+    type: 'background-stage-update',
+    runId: 'run-bg-fail',
+    stageId: 'stage-artifact',
+    status: 'failed',
+    prompt: 'materialize report',
+    message: 'artifact materialization failed',
+    failureReason: 'schema validation failed for research-report',
+    recoverActions: ['Regenerate the report artifact with schemaVersion=1.'],
+    nextStep: 'Retry artifact materialization before presenting success.',
+    updatedAt: '2026-05-08T01:10:00.000Z',
+  });
+
+  const run = updated.runs[0];
+  const unit = updated.executionUnits[0];
+  assert.equal(run.status, 'failed');
+  assert.match(run.response, /artifact materialization failed/);
+  assert.match(unit.failureReason ?? '', /schema validation/);
+  assert.deepEqual(unit.recoverActions, ['Regenerate the report artifact with schemaVersion=1.']);
+  assert.equal((run.raw as { backgroundCompletion?: { nextStep?: string } }).backgroundCompletion?.nextStep, 'Retry artifact materialization before presenting success.');
+});
+
+test('background completion user cancellation keeps runId and recoverable next step', () => {
+  const updated = applyBackgroundCompletionEventToSession(session(), {
+    contract: 'sciforge.background-completion.v1',
+    type: 'background-finalization',
+    runId: 'run-bg-cancel',
+    stageId: 'stage-final',
+    status: 'cancelled',
+    prompt: 'long report',
+    message: '用户已取消后台补全。',
+    cancellationReason: 'user requested cancel',
+    recoverActions: ['Start a new turn to inherit completed partial artifacts and rerun remaining stages.'],
+    nextStep: 'Keep partial context visible; do not mark the run completed.',
+    completedAt: '2026-05-08T01:12:00.000Z',
+  });
+
+  assert.equal(updated.runs[0].status, 'cancelled');
+  assert.equal(updated.messages[0].status, 'cancelled');
+  assert.match(updated.executionUnits[0].failureReason ?? '', /user requested cancel/);
+});
+
+test('background completion can finish while a newer user turn already exists', () => {
+  const withUser = session({
+    messages: [message('msg-user-1', 'user', 'start long task', '2026-05-08T01:00:00.000Z')],
+  });
+  const initial = applyBackgroundCompletionEventToSession(withUser, {
+    contract: 'sciforge.background-completion.v1',
+    type: 'background-initial-response',
+    runId: 'run-bg-overlap',
+    status: 'running',
+    prompt: 'start long task',
+    message: '后台继续跑。',
+    createdAt: '2026-05-08T01:01:00.000Z',
+  });
+  const nextUser = message('msg-user-2', 'user', '顺便解释第一段', '2026-05-08T01:02:00.000Z');
+  const withNextUser = { ...initial, messages: [...initial.messages, nextUser] };
+  const completed = applyBackgroundCompletionEventToSession(withNextUser, {
+    contract: 'sciforge.background-completion.v1',
+    type: 'background-finalization',
+    runId: 'run-bg-overlap',
+    status: 'completed',
+    finalResponse: '后台结果完成。',
+    completedAt: '2026-05-08T01:03:00.000Z',
+  });
+
+  assert.deepEqual(completed.messages.map((item) => item.id), ['msg-user-1', 'msg-run-bg-overlap', 'msg-user-2']);
+  assert.equal(completed.messages.find((item) => item.id === 'msg-run-bg-overlap')?.content, '后台结果完成。');
+});
+
+test('background artifact and verification updates merge by runId, stageId, and refs', () => {
+  const artifact: RuntimeArtifact = {
+    id: 'artifact-bg-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { markdown: '# Report' },
+  };
+  const updated = applyBackgroundCompletionEventToSession(session(), {
+    contract: 'sciforge.background-completion.v1',
+    type: 'background-stage-update',
+    runId: 'run-bg-artifact',
+    stageId: 'stage-report',
+    ref: 'run:run-bg-artifact#stage-report',
+    status: 'running',
+    prompt: 'build report',
+    message: '报告 artifact 已写入，验证继续后台执行。',
+    artifacts: [artifact],
+    verificationResults: [{
+      id: 'verify-report',
+      verdict: 'pass',
+      confidence: 0.9,
+      evidenceRefs: ['artifact:artifact-bg-report'],
+    }],
+    updatedAt: '2026-05-08T01:20:00.000Z',
+  });
+
+  assert.equal(updated.artifacts[0].metadata?.runId, 'run-bg-artifact');
+  assert.equal(updated.artifacts[0].metadata?.stageId, 'stage-report');
+  assert.match(JSON.stringify(updated.runs[0].raw), /verify-report/);
+  assert.match(JSON.stringify(updated.runs[0].raw), /artifact:artifact-bg-report/);
 });

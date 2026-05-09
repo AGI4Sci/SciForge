@@ -147,9 +147,6 @@ function attachVerificationRefs(
 ): ToolPayload {
   return {
     ...payload,
-    message: result.verdict === 'unverified' || result.verdict === 'needs-human' || result.verdict === 'fail'
-      ? `${payload.message}\n\nVerification: ${result.verdict}. ${result.critique ?? policy.reason}`
-      : payload.message,
     reasoningTrace: [
       payload.reasoningTrace,
       `Verification result: ${result.verdict}; ref=${verificationRel}; policy=${policy.mode}/${policy.riskLevel}.`,
@@ -249,16 +246,24 @@ function normalizeHumanApproval(value: unknown): { approved: boolean; ref?: stri
 
 function inferVerificationRiskLevel(request: GatewayRequest, payload?: ToolPayload): VerificationRiskLevel {
   const candidates = [
+    request.riskLevel,
+    request.verificationPolicy,
+    payload?.verificationPolicy,
     request.uiState?.riskLevel,
     request.uiState?.actionRiskLevel,
     request.uiState?.safetyPolicy,
     request.uiState?.capabilityBrief,
+    request.uiState?.conversationPolicy,
+    request.uiState?.latencyPolicy,
+    request.uiState?.executionModeDecision,
+    request.uiState?.executionModePlan,
     ...toRecordList(request.uiState?.selectedActions),
     ...toRecordList(payload?.executionUnits),
   ];
   if (candidates.some((candidate) => recordOrTextIncludesRisk(candidate, 'high'))) return 'high';
+  if (hasStructuredHighRiskActionSignal(request, payload)) return 'high';
   if (candidates.some((candidate) => recordOrTextIncludesRisk(candidate, 'medium'))) return 'medium';
-  return highRiskPromptSignal(request.prompt) ? 'high' : 'low';
+  return 'low';
 }
 
 function hasHighRiskActionSignal(request: GatewayRequest, payload: ToolPayload) {
@@ -275,8 +280,30 @@ function recordOrTextIncludesRisk(value: unknown, risk: VerificationRiskLevel) {
     || clipped.includes(`"risk":"${risk}"`);
 }
 
-function highRiskPromptSignal(prompt: string) {
-  return /\b(delete|remove|destroy|drop|publish|send|pay|purchase|authorize|credential|secret|external system|production)\b|删除|发布|发送|支付|授权|凭据|生产环境/.test(prompt.toLowerCase());
+function hasStructuredHighRiskActionSignal(request: GatewayRequest, payload?: ToolPayload) {
+  const text = structuredActionEvidenceText(request);
+  if (highRiskActionToken(text)) return true;
+  return (payload?.executionUnits ?? []).some((unit) => isRecord(unit) && executionUnitHasHighRiskActionSignal(unit));
+}
+
+function structuredActionEvidenceText(request: GatewayRequest) {
+  return [
+    request.actionSideEffects,
+    request.selectedActionIds,
+    request.humanApprovalPolicy,
+    request.uiState?.actionSideEffects,
+    request.uiState?.selectedActionIds,
+    request.uiState?.selectedActions,
+    request.uiState?.humanApprovalPolicy,
+  ].map(compactEvidenceText).join('\n').toLowerCase();
+}
+
+function executionUnitHasHighRiskActionSignal(unit: Record<string, unknown>) {
+  return looksLikeActionProvider(unit) && highRiskActionToken(actionProviderEvidenceText(unit));
+}
+
+function highRiskActionToken(text: string) {
+  return /\b(delete|remove|destroy|drop|publish|send|pay|purchase|authorize|credential|secret|external-write|production)\b|删除|发布|发送|支付|授权|凭据|生产环境/.test(text.toLowerCase());
 }
 
 function actionProviderSelfReportsSuccess(payload: ToolPayload) {
@@ -284,14 +311,25 @@ function actionProviderSelfReportsSuccess(payload: ToolPayload) {
 }
 
 function looksLikeActionProvider(unit: Record<string, unknown>) {
-  const text = [
+  return /action|computer-use|vision-sense|gui|browser|desktop|mouse|keyboard|executor|external|send|delete|publish|authorize|pay/.test(actionProviderEvidenceText(unit));
+}
+
+function actionProviderEvidenceText(unit: Record<string, unknown>) {
+  return [
     unit.tool,
     unit.provider,
     unit.routeDecision,
     unit.params,
     unit.environment,
-  ].map((value) => typeof value === 'string' ? value : JSON.stringify(clipForAgentServerJson(value, 2))).join('\n').toLowerCase();
-  return /action|computer-use|vision-sense|gui|browser|desktop|mouse|keyboard|executor|external|send|delete|publish|authorize|pay/.test(text);
+    unit.action,
+    unit.kind,
+  ].map(compactEvidenceText).join('\n').toLowerCase();
+}
+
+function compactEvidenceText(value: unknown) {
+  if (typeof value === 'string') return value;
+  if (value === undefined || value === null) return '';
+  return JSON.stringify(clipForAgentServerJson(value, 2)) ?? '';
 }
 
 function isSuccessfulStatus(value: unknown) {

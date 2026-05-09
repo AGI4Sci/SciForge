@@ -48,14 +48,19 @@ export function mergeRunTimelineEvents(
 ): TimelineEventRecord[] {
   const previousRunIds = new Set(previousSession?.runs.map((run) => run.id) ?? []);
   const existingEventIds = new Set(events.map((event) => event.id));
+  const previousRuns = new Map(previousSession?.runs.map((run) => [run.id, run]) ?? []);
   const newEvents = nextSession.runs
-    .filter((run) => !previousRunIds.has(run.id))
-    .map((run) => timelineEventFromStoredRun(nextSession, run))
+    .flatMap((run) => {
+      if (!previousRunIds.has(run.id)) return [timelineEventFromStoredRun(nextSession, run)];
+      const previousRun = previousRuns.get(run.id);
+      if (!previousRun || previousRun.status === run.status && previousRun.completedAt === run.completedAt && previousRun.response === run.response) return [];
+      return [timelineEventFromStoredRun(nextSession, run, `timeline-${run.id}-${run.status}`)];
+    })
     .filter((event) => !existingEventIds.has(event.id));
   return [...newEvents, ...events].slice(0, TIMELINE_EVENT_LIMIT);
 }
 
-function timelineEventFromStoredRun(session: SciForgeSession, run: SciForgeRun): TimelineEventRecord {
+function timelineEventFromStoredRun(session: SciForgeSession, run: SciForgeRun, eventId = `timeline-${run.id}`): TimelineEventRecord {
   const runArtifactRefs = session.artifacts
     .filter((artifact) => artifact.producerScenario === session.scenarioId)
     .slice(0, 8)
@@ -69,7 +74,7 @@ function timelineEventFromStoredRun(session: SciForgeSession, run: SciForgeRun):
   const promptSummary = run.prompt ? ` · ${run.prompt.slice(0, 100)}` : '';
   const failureSummary = run.status === 'failed' && run.response ? ` · ${run.response.slice(0, 120)}` : '';
   return {
-    id: `timeline-${run.id}`,
+    id: eventId,
     actor: 'SciForge Runtime',
     action: `run.${run.status}`,
     subject: `${session.scenarioId}:${run.id}${promptSummary}${failureSummary}`,

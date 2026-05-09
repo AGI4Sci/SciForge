@@ -68,6 +68,10 @@ RESPONSE_JSON_SCHEMA: JsonMap = {
         "handoffPlan": {"type": "object"},
         "acceptancePlan": {"type": "object"},
         "recoveryPlan": {"type": "object"},
+        "latencyPolicy": {"type": "object"},
+        "responsePlan": {"type": "object"},
+        "backgroundPlan": {"type": "object"},
+        "cachePolicy": {"type": "object"},
         "userVisiblePlan": {"type": "array"},
         "processStage": {"type": "object"},
         "auditTrace": {"type": "array"},
@@ -199,6 +203,10 @@ class ConversationPolicyResponse:
     handoffPlan: JsonMap = field(default_factory=dict)
     acceptancePlan: JsonMap = field(default_factory=dict)
     recoveryPlan: JsonMap = field(default_factory=dict)
+    latencyPolicy: JsonMap = field(default_factory=dict)
+    responsePlan: JsonMap = field(default_factory=dict)
+    backgroundPlan: JsonMap = field(default_factory=dict)
+    cachePolicy: JsonMap = field(default_factory=dict)
     userVisiblePlan: list[JsonMap] = field(default_factory=list)
     processStage: ProcessStage = field(default_factory=ProcessStage)
     auditTrace: list[JsonMap] = field(default_factory=list)
@@ -272,6 +280,10 @@ def response_from_json(payload: JsonMap) -> ConversationPolicyResponse:
         handoffPlan=_optional_mapping(payload.get("handoffPlan"), "handoffPlan"),
         acceptancePlan=_optional_mapping(payload.get("acceptancePlan"), "acceptancePlan"),
         recoveryPlan=_optional_mapping(payload.get("recoveryPlan"), "recoveryPlan"),
+        latencyPolicy=_optional_mapping(payload.get("latencyPolicy"), "latencyPolicy"),
+        responsePlan=_optional_mapping(payload.get("responsePlan"), "responsePlan"),
+        backgroundPlan=_optional_mapping(payload.get("backgroundPlan"), "backgroundPlan"),
+        cachePolicy=_optional_mapping(payload.get("cachePolicy"), "cachePolicy"),
         userVisiblePlan=[
             item for item in _optional_list(payload.get("userVisiblePlan"), "userVisiblePlan")
             if isinstance(item, dict)

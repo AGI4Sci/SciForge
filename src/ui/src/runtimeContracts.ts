@@ -90,6 +90,19 @@ export const turnAcceptanceSeverities = [
   'failed',
 ] as const satisfies readonly TurnAcceptanceSeverity[];
 
+export const backgroundCompletionEventTypes = [
+  'background-initial-response',
+  'background-stage-update',
+  'background-finalization',
+] as const;
+
+export const backgroundCompletionStatuses = [
+  'running',
+  'completed',
+  'failed',
+  'cancelled',
+] as const;
+
 export const runtimeContractSchemas = {
   uiModulePackage: {
     $id: 'sciforge.ui-module-package.schema.json',
@@ -231,6 +244,31 @@ export const runtimeContractSchemas = {
       },
     },
   },
+  backgroundCompletionEvent: {
+    $id: 'sciforge.background-completion-event.schema.json',
+    type: 'object',
+    required: ['contract', 'type', 'runId', 'status'],
+    properties: {
+      contract: { const: 'sciforge.background-completion.v1' },
+      type: { enum: backgroundCompletionEventTypes },
+      runId: { type: 'string' },
+      stageId: { type: 'string' },
+      ref: { type: 'string' },
+      status: { enum: backgroundCompletionStatuses },
+      prompt: { type: 'string' },
+      message: { type: 'string' },
+      finalResponse: { type: 'string' },
+      failureReason: { type: 'string' },
+      recoverActions: { type: 'array', items: { type: 'string' } },
+      nextStep: { type: 'string' },
+      refs: { type: 'array' },
+      artifacts: { type: 'array' },
+      executionUnits: { type: 'array' },
+      verificationResults: { type: 'array' },
+      workEvidence: { type: 'array' },
+      objectReferences: { type: 'array', items: { $ref: 'sciforge.object-reference.schema.json' } },
+    },
+  },
 } as const;
 
 export type RuntimeContractName = keyof typeof runtimeContractSchemas;
@@ -242,6 +280,7 @@ export function validateRuntimeContract(name: RuntimeContractName, value: unknow
   if (name === 'previewDescriptor') return validatePreviewDescriptor(value);
   if (name === 'userGoalSnapshot') return validateUserGoalSnapshot(value);
   if (name === 'turnAcceptance') return validateTurnAcceptance(value);
+  if (name === 'backgroundCompletionEvent') return validateBackgroundCompletionEvent(value);
   return validateUIModulePackage(value);
 }
 
@@ -357,6 +396,31 @@ function validateTurnAcceptance(value: unknown): string[] {
     });
   }
   if (record.semantic !== undefined) errors.push(...validateSemanticTurnAcceptance(record.semantic));
+  return errors;
+}
+
+function validateBackgroundCompletionEvent(value: unknown): string[] {
+  const errors = requireRecord(value, 'backgroundCompletionEvent');
+  if (errors.length) return errors;
+  const record = value as Record<string, unknown>;
+  if (record.contract !== 'sciforge.background-completion.v1') errors.push('backgroundCompletionEvent.contract must be sciforge.background-completion.v1');
+  if (!backgroundCompletionEventTypes.includes(record.type as typeof backgroundCompletionEventTypes[number])) errors.push('backgroundCompletionEvent.type is unsupported');
+  if (!nonEmptyString(record.runId)) errors.push('backgroundCompletionEvent.runId is required');
+  if (!backgroundCompletionStatuses.includes(record.status as typeof backgroundCompletionStatuses[number])) errors.push('backgroundCompletionEvent.status is unsupported');
+  if (record.stageId !== undefined && !nonEmptyString(record.stageId)) errors.push('backgroundCompletionEvent.stageId must be a non-empty string');
+  validateOptionalStringArray(record.recoverActions, 'backgroundCompletionEvent.recoverActions', errors);
+  for (const field of ['refs', 'artifacts', 'executionUnits', 'verificationResults', 'workEvidence']) {
+    if (record[field] !== undefined && !Array.isArray(record[field])) errors.push(`backgroundCompletionEvent.${field} must be an array`);
+  }
+  if (record.objectReferences !== undefined) {
+    if (!Array.isArray(record.objectReferences)) {
+      errors.push('backgroundCompletionEvent.objectReferences must be an array');
+    } else {
+      record.objectReferences.forEach((reference, index) => {
+        for (const error of validateObjectReference(reference)) errors.push(`backgroundCompletionEvent.objectReferences.${index}: ${error}`);
+      });
+    }
+  }
   return errors;
 }
 

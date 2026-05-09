@@ -76,6 +76,26 @@ assert.ok(validateRuntimeContract('turnAcceptance', {
   objectReferences: [],
 }).some((error) => error.includes('severity')));
 
+const backgroundCompletionEvent = {
+  contract: 'sciforge.background-completion.v1',
+  type: 'background-stage-update',
+  runId: 'run-1',
+  stageId: 'stage-artifact',
+  ref: 'run:run-1#stage-artifact',
+  status: 'running',
+  message: 'Artifact materialized; verification is still running.',
+  artifacts: [{ id: 'artifact-1', type: 'research-report' }],
+  verificationResults: [{ id: 'verify-1', verdict: 'pass' }],
+  workEvidence: [{ id: 'we-1', ref: 'artifact:artifact-1' }],
+  objectReferences: [objectReference],
+};
+
+assert.deepEqual(validateRuntimeContract('backgroundCompletionEvent', backgroundCompletionEvent), []);
+assert.ok(validateRuntimeContract('backgroundCompletionEvent', {
+  ...backgroundCompletionEvent,
+  type: 'scenario-special-state',
+}).some((error) => error.includes('type')));
+
 assert.deepEqual(validateRuntimeContract('resolvedViewPlan', {
   displayIntent,
   sections: {
@@ -104,4 +124,4 @@ assert.deepEqual(validateRuntimeContract('uiModulePackage', {
   preview: 'Protein structure viewer',
 }), []);
 
-console.log('[ok] runtime UI contracts validate DisplayIntent, PreviewDescriptor, ResolvedViewPlan, UI module package, ObjectReference, UserGoalSnapshot, and TurnAcceptance');
+console.log('[ok] runtime UI contracts validate DisplayIntent, PreviewDescriptor, ResolvedViewPlan, UI module package, ObjectReference, UserGoalSnapshot, TurnAcceptance, and BackgroundCompletionEvent');

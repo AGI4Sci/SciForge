@@ -1,7 +1,9 @@
 import type {
   AgentStreamEvent,
+  BackgroundCompletionRuntimeEvent,
   GuidanceQueueRecord,
   GuidanceQueueStatus,
+  ObjectReference,
   NormalizedAgentResponse,
   RuntimeArtifact,
   RuntimeExecutionUnit,
@@ -15,6 +17,8 @@ import type {
 } from '../../domain';
 import { makeId, nowIso } from '../../domain';
 import { mergeObjectReferences } from '../../../../../packages/object-references';
+
+const BACKGROUND_COMPLETION_CONTRACT = 'sciforge.background-completion.v1';
 
 export function titleFromPrompt(prompt: string) {
   const title = prompt.trim().replace(/\s+/g, ' ').slice(0, 36);
@@ -260,6 +264,253 @@ export function mergeAgentResponseIntoSession({
     notebook: [...response.notebook, ...baseSession.notebook].slice(0, 24),
     updatedAt: nowIso(),
   };
+}
+
+export function applyBackgroundCompletionEventToSession(
+  session: SciForgeSession,
+  event: BackgroundCompletionRuntimeEvent,
+): SciForgeSession {
+  const updatedAt = event.updatedAt ?? event.completedAt ?? event.createdAt ?? nowIso();
+  const run = backgroundRunForEvent(session, event, updatedAt);
+  const previousRun = session.runs.find((item) => item.id === event.runId);
+  const runObjectReference = objectReferenceForBackgroundRun(run, event);
+  const eventObjectReferences = mergeObjectReferences(event.objectReferences ?? [], [runObjectReference]);
+  const existingMessageId = backgroundMessageId(previousRun);
+  const messageId = existingMessageId ?? `msg-${event.runId}`;
+  const message = backgroundMessageForEvent(session, event, messageId, updatedAt, eventObjectReferences);
+  const messages = mergeBackgroundMessage(session.messages, message);
+  const runs = mergeBackgroundRun(session.runs, {
+    ...run,
+    objectReferences: mergeObjectReferences(eventObjectReferences, previousRun?.objectReferences ?? []),
+    raw: mergeBackgroundRaw(previousRun?.raw, event, message.id, updatedAt),
+  });
+  const executionUnits = mergeExecutionUnits(normalizeBackgroundExecutionUnits(event, updatedAt), session.executionUnits);
+  const artifacts = mergeRuntimeArtifacts(tagBackgroundArtifacts(event.artifacts ?? [], event), session.artifacts);
+  return {
+    ...session,
+    messages,
+    runs,
+    executionUnits,
+    artifacts,
+    updatedAt,
+  };
+}
+
+function backgroundRunForEvent(
+  session: SciForgeSession,
+  event: BackgroundCompletionRuntimeEvent,
+  updatedAt: string,
+): SciForgeRun {
+  const previous = session.runs.find((item) => item.id === event.runId);
+  const response = event.finalResponse ?? event.message ?? previous?.response ?? '';
+  const completedAt = event.status === 'running'
+    ? previous?.completedAt
+    : event.completedAt ?? updatedAt;
+  return {
+    ...(previous ?? {
+      id: event.runId,
+      scenarioId: session.scenarioId,
+      status: 'running',
+      prompt: event.prompt ?? '',
+      response,
+      createdAt: event.createdAt ?? updatedAt,
+    }),
+    status: event.status,
+    prompt: event.prompt ?? previous?.prompt ?? '',
+    response,
+    completedAt,
+  };
+}
+
+function backgroundMessageForEvent(
+  session: SciForgeSession,
+  event: BackgroundCompletionRuntimeEvent,
+  messageId: string,
+  updatedAt: string,
+  objectReferences: ObjectReference[],
+): SciForgeMessage {
+  const previous = session.messages.find((item) => item.id === messageId);
+  const content = event.finalResponse ?? event.message ?? previous?.content ?? '';
+  return {
+    ...(previous ?? {
+      id: messageId,
+      role: 'scenario',
+      createdAt: event.createdAt ?? updatedAt,
+    }),
+    content,
+    status: event.status,
+    updatedAt,
+    objectReferences: mergeObjectReferences(objectReferences, previous?.objectReferences ?? []),
+  };
+}
+
+function mergeBackgroundMessage(messages: SciForgeMessage[], message: SciForgeMessage) {
+  const found = messages.some((item) => item.id === message.id);
+  if (!found) return [...messages, message];
+  return messages.map((item) => item.id === message.id ? { ...item, ...message } : item);
+}
+
+function mergeBackgroundRun(runs: SciForgeRun[], run: SciForgeRun) {
+  const found = runs.some((item) => item.id === run.id);
+  if (!found) return [...runs, run];
+  return runs.map((item) => item.id === run.id ? { ...item, ...run } : item);
+}
+
+function normalizeBackgroundExecutionUnits(event: BackgroundCompletionRuntimeEvent, updatedAt: string): RuntimeExecutionUnit[] {
+  const declared = event.executionUnits ?? [];
+  const failureReason = event.failureReason ?? event.cancellationReason;
+  if (!failureReason && !event.workEvidence?.length) return declared;
+  const status = event.status === 'completed'
+    ? 'done'
+    : event.status === 'running'
+      ? 'running'
+      : 'failed-with-reason';
+  const evidenceUnit: RuntimeExecutionUnit = {
+    id: `EU-${event.runId}-${event.stageId ?? 'background'}`,
+    tool: 'sciforge.background-completion',
+    params: `runId=${event.runId};stageId=${event.stageId ?? 'run'}`,
+    status,
+    hash: `${event.runId}:${event.stageId ?? 'run'}`.slice(0, 48),
+    time: updatedAt,
+    failureReason,
+    recoverActions: event.recoverActions,
+    nextStep: event.nextStep,
+    artifacts: event.artifacts?.map((artifact) => artifact.id),
+    outputArtifacts: event.artifacts?.map((artifact) => artifact.id),
+    verificationRef: firstVerificationRef(event),
+  };
+  return mergeExecutionUnits([evidenceUnit], declared);
+}
+
+function tagBackgroundArtifacts(artifacts: RuntimeArtifact[], event: BackgroundCompletionRuntimeEvent) {
+  return artifacts.map((artifact) => ({
+    ...artifact,
+    metadata: {
+      ...(artifact.metadata ?? {}),
+      runId: String(artifact.metadata?.runId ?? event.runId),
+      stageId: String(artifact.metadata?.stageId ?? event.stageId ?? 'run'),
+      backgroundCompletionRef: event.ref ?? `run:${event.runId}`,
+    },
+  }));
+}
+
+function mergeBackgroundRaw(raw: unknown, event: BackgroundCompletionRuntimeEvent, messageId: string, updatedAt: string) {
+  const base = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+  const previousBackground = base.backgroundCompletion && typeof base.backgroundCompletion === 'object' && !Array.isArray(base.backgroundCompletion)
+    ? base.backgroundCompletion as Record<string, unknown>
+    : {};
+  const stages = mergeBackgroundStages(previousBackground.stages, event, updatedAt);
+  return {
+    ...base,
+    backgroundCompletion: {
+      ...previousBackground,
+      contract: BACKGROUND_COMPLETION_CONTRACT,
+      runId: event.runId,
+      messageId,
+      status: event.status,
+      updatedAt,
+      completedAt: event.status === 'running' ? previousBackground.completedAt : event.completedAt ?? updatedAt,
+      failureReason: event.failureReason ?? event.cancellationReason ?? previousBackground.failureReason,
+      recoverActions: event.recoverActions ?? previousBackground.recoverActions,
+      nextStep: event.nextStep ?? previousBackground.nextStep,
+      diagnostics: {
+        ...(recordField(previousBackground.diagnostics)),
+        ...(backgroundCompletionDurationMs(event, updatedAt) === undefined ? {} : {
+          backgroundCompletionDurationMs: backgroundCompletionDurationMs(event, updatedAt),
+        }),
+      },
+      refs: mergeBackgroundRefs(previousBackground.refs, event.refs),
+      verificationResults: mergeRecordArray(previousBackground.verificationResults, event.verificationResults),
+      workEvidence: mergeRecordArray(previousBackground.workEvidence, event.workEvidence),
+      stages,
+      finalResponse: event.finalResponse ?? previousBackground.finalResponse,
+      lastEvent: event,
+    },
+  };
+}
+
+function backgroundCompletionDurationMs(event: BackgroundCompletionRuntimeEvent, updatedAt: string) {
+  const startedAt = event.createdAt;
+  const finishedAt = event.completedAt ?? (event.status === 'running' ? undefined : updatedAt);
+  if (!startedAt || !finishedAt) return undefined;
+  const duration = Date.parse(finishedAt) - Date.parse(startedAt);
+  return Number.isFinite(duration) && duration >= 0 ? duration : undefined;
+}
+
+function recordField(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function mergeBackgroundStages(previous: unknown, event: BackgroundCompletionRuntimeEvent, updatedAt: string) {
+  const stages = Array.isArray(previous) ? previous.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : [];
+  const stageId = event.stageId ?? 'run';
+  const nextStage = {
+    ...(stages.find((stage) => stage.stageId === stageId) ?? {}),
+    stageId,
+    status: event.status,
+    ref: event.ref ?? `run:${event.runId}#${stageId}`,
+    updatedAt,
+    artifactRefs: event.artifacts?.map((artifact) => `artifact:${artifact.id}`),
+    executionUnitRefs: event.executionUnits?.map((unit) => `execution-unit:${unit.id}`),
+    verificationRefs: event.verificationResults?.map((result, index) => verificationRef(result, event, index)),
+    workEvidenceRefs: event.workEvidence?.map((evidence, index) => workEvidenceRef(evidence, event, index)),
+    failureReason: event.failureReason ?? event.cancellationReason,
+    recoverActions: event.recoverActions,
+    nextStep: event.nextStep,
+  };
+  return [...stages.filter((stage) => stage.stageId !== stageId), nextStage];
+}
+
+function mergeBackgroundRefs(previous: unknown, refs: BackgroundCompletionRuntimeEvent['refs']) {
+  const existing = Array.isArray(previous) ? previous.filter((item) => item && typeof item === 'object') : [];
+  const byRef = new Map<string, unknown>();
+  for (const item of [...existing, ...(refs ?? [])]) {
+    const key = typeof (item as { ref?: unknown }).ref === 'string' ? (item as { ref: string }).ref : JSON.stringify(item);
+    byRef.set(key, { ...(byRef.get(key) as Record<string, unknown> | undefined), ...(item as Record<string, unknown>) });
+  }
+  return Array.from(byRef.values());
+}
+
+function mergeRecordArray(previous: unknown, next: Array<Record<string, unknown>> | undefined) {
+  const existing = Array.isArray(previous) ? previous.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : [];
+  return [...existing, ...(next ?? [])];
+}
+
+function backgroundMessageId(run: SciForgeRun | undefined) {
+  const raw = run?.raw;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const background = (raw as Record<string, unknown>).backgroundCompletion;
+  if (!background || typeof background !== 'object' || Array.isArray(background)) return undefined;
+  const messageId = (background as Record<string, unknown>).messageId;
+  return typeof messageId === 'string' ? messageId : undefined;
+}
+
+function objectReferenceForBackgroundRun(run: SciForgeRun, event: BackgroundCompletionRuntimeEvent): ObjectReference {
+  return {
+    id: `obj-run-${run.id}`,
+    title: `run ${run.id}`,
+    kind: 'run',
+    ref: `run:${run.id}`,
+    runId: run.id,
+    status: 'available',
+    summary: event.stageId ? `background stage ${event.stageId} · ${event.status}` : `background completion · ${event.status}`,
+    provenance: {
+      producer: BACKGROUND_COMPLETION_CONTRACT,
+    },
+  };
+}
+
+function firstVerificationRef(event: BackgroundCompletionRuntimeEvent) {
+  const first = event.verificationResults?.[0];
+  return first ? verificationRef(first, event, 0) : undefined;
+}
+
+function verificationRef(result: Record<string, unknown>, event: BackgroundCompletionRuntimeEvent, index: number) {
+  return typeof result.id === 'string' ? `verification:${result.id}` : `verification:${event.runId}:${event.stageId ?? 'run'}:${index + 1}`;
+}
+
+function workEvidenceRef(evidence: Record<string, unknown>, event: BackgroundCompletionRuntimeEvent, index: number) {
+  return typeof evidence.id === 'string' ? `work-evidence:${evidence.id}` : `work-evidence:${event.runId}:${event.stageId ?? 'run'}:${index + 1}`;
 }
 
 export function appendFailedRunToSession({

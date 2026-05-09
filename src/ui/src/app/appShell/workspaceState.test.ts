@@ -72,6 +72,30 @@ test('applies session updates with versioning and run timeline merge', () => {
   assert.equal(next.timelineEvents?.[0].executionUnitRefs[0], 'unit-1');
 });
 
+test('persists background run updates as versioned state and timeline status transitions', () => {
+  const runningRun = {
+    id: 'run-bg',
+    scenarioId: 'scenario-any',
+    status: 'running' as const,
+    prompt: 'Long task',
+    response: 'initial response',
+    createdAt: '2026-05-07T01:00:00.000Z',
+  };
+  const completedRun = {
+    ...runningRun,
+    status: 'completed' as const,
+    response: 'final response',
+    completedAt: '2026-05-07T01:05:00.000Z',
+  };
+  const state = applySessionUpdateToWorkspace(workspace(), session([runningRun]), 'background initial');
+  const final = applySessionUpdateToWorkspace(state, session([completedRun]), 'background finalized');
+
+  assert.equal(final.sessionsByScenario['scenario-any'].runs[0].response, 'final response');
+  assert.equal(final.sessionsByScenario['scenario-any'].versions.at(-1)?.reason, 'background finalized');
+  assert.deepEqual(final.timelineEvents?.slice(0, 2).map((item) => item.id), ['timeline-run-bg-completed', 'timeline-run-bg']);
+  assert.equal(final.timelineEvents?.[0].action, 'run.completed');
+});
+
 test('appends timeline events newest-first and keeps existing events', () => {
   const event: TimelineEventRecord = {
     id: 'timeline-1',

@@ -1,7 +1,7 @@
 import type { GatewayRequest, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
 import { clipForAgentServerJson, isRecord, toRecordList } from '../gateway-utils.js';
-import { buildConversationPolicyRequest, type ConversationPolicyResponse } from './contracts.js';
+import { buildConversationPolicyRequest, SAFE_DEFAULT_BACKGROUND_PLAN, SAFE_DEFAULT_CACHE_POLICY, SAFE_DEFAULT_LATENCY_POLICY, SAFE_DEFAULT_RESPONSE_PLAN, type ConversationPolicyResponse } from './contracts.js';
 import { callPythonConversationPolicy, conversationPolicyBridgeConfig, type ConversationPolicyBridgeConfig } from './python-bridge.js';
 
 export interface ConversationPolicyApplication {
@@ -66,6 +66,10 @@ export function requestWithPolicyResponse(
   const acceptancePlan = isRecord(response.acceptancePlan) ? response.acceptancePlan : undefined;
   const recoveryPlan = isRecord(response.recoveryPlan) ? response.recoveryPlan : undefined;
   const capabilityBrief = isRecord(response.capabilityBrief) ? response.capabilityBrief : undefined;
+  const latencyPolicy = isRecord(response.latencyPolicy) ? response.latencyPolicy : { ...SAFE_DEFAULT_LATENCY_POLICY };
+  const responsePlan = isRecord(response.responsePlan) ? response.responsePlan : { ...SAFE_DEFAULT_RESPONSE_PLAN };
+  const backgroundPlan = isRecord(response.backgroundPlan) ? response.backgroundPlan : { ...SAFE_DEFAULT_BACKGROUND_PLAN };
+  const cachePolicy = isRecord(response.cachePolicy) ? response.cachePolicy : { ...SAFE_DEFAULT_CACHE_POLICY };
   const executionModeDecision = executionModeDecisionFromPolicy(response.executionModePlan);
   const artifactPolicy = isRecord(handoffPayload.policy) ? handoffPayload.policy : isRecord(handoffPlan) ? handoffPlan : undefined;
   const currentReferences = response.currentReferences?.length
@@ -85,7 +89,17 @@ export function requestWithPolicyResponse(
     failureRecoveryPolicy: recoveryPlan ?? request.failureRecoveryPolicy,
     uiState: {
       ...uiState,
-      conversationPolicy: response,
+      conversationPolicy: {
+        ...response,
+        latencyPolicy,
+        responsePlan,
+        backgroundPlan,
+        cachePolicy,
+      },
+      latencyPolicy,
+      responsePlan,
+      backgroundPlan,
+      cachePolicy,
       goalSnapshot: response.goalSnapshot,
       contextReusePolicy: contextPolicy,
       contextIsolation: contextPolicy,

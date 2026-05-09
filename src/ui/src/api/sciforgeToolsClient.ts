@@ -1,6 +1,8 @@
 import type { AgentStreamEvent, NormalizedAgentResponse, SendAgentMessageInput } from '../domain';
 import type { ScenarioId } from '../data';
 import { makeId, nowIso } from '../domain';
+import { extractLatencyPolicy, extractResponsePlan, latencyThresholdsFromPolicy, type RuntimeLatencyThresholds } from '../latencyPolicy';
+import { buildInitialResponseProgressEvent } from '../processProgress';
 import { SCENARIO_SPECS } from '../scenarioSpecs';
 import { expectedArtifactsForCurrentTurn, selectedComponentsForCurrentTurn } from '../artifactIntent';
 import { normalizeAgentResponse } from './agentClient';
@@ -21,10 +23,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
-}
-
-function asBoolean(value: unknown): boolean | undefined {
-  return typeof value === 'boolean' ? value : undefined;
 }
 
 function asStringArray(value: unknown): string[] | undefined {
@@ -67,19 +65,31 @@ export async function sendSciForgeToolMessage(
   let retryForSilentFirstEvent = false;
   let sawBackendEvent = false;
   let lastSilentNoticeAt = 0;
-  const timeout = globalThis.setTimeout(() => {
-    timedOut = true;
-    activeRequestController?.abort();
-  }, input.config.requestTimeoutMs || DEFAULT_AGENT_REQUEST_TIMEOUT_MS);
+  let latencyThresholds = latencyThresholdsFromPolicy(undefined, {
+    requestTimeoutMs: input.config.requestTimeoutMs || DEFAULT_AGENT_REQUEST_TIMEOUT_MS,
+  });
+  let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
+  const requestStartedAt = Date.now();
+  const scheduleTimeout = (thresholds: RuntimeLatencyThresholds) => {
+    if (timeout) globalThis.clearTimeout(timeout);
+    const elapsed = Date.now() - requestStartedAt;
+    const remaining = Math.max(0, thresholds.requestTimeoutMs - elapsed);
+    timeout = globalThis.setTimeout(() => {
+      timedOut = true;
+      activeRequestController?.abort();
+    }, remaining);
+  };
+  scheduleTimeout(latencyThresholds);
   const linkedAbort = () => activeRequestController?.abort();
   signal?.addEventListener('abort', linkedAbort, { once: true });
   let lastRealEventAt = Date.now();
+  let emittedInitialResponseStatus = false;
   const silenceWatchdog = globalThis.setInterval(() => {
     const seconds = Math.round((Date.now() - lastRealEventAt) / 1000);
-    if (seconds < 20 || Date.now() - lastSilentNoticeAt < 18_000) return;
+    if (seconds * 1000 < latencyThresholds.firstEventWarningMs || Date.now() - lastSilentNoticeAt < Math.min(18_000, latencyThresholds.firstEventWarningMs)) return;
     lastSilentNoticeAt = Date.now();
     callbacks.onEvent?.(toolEvent('backend-silent', `后端 ${seconds}s 没有输出新事件；HTTP stream 仍在等待 ${input.config.agentBackend || 'codex'} 返回。`));
-    if (!sawBackendEvent && seconds >= 45 && !timedOut && !signal?.aborted && activeRequestController) {
+    if (!sawBackendEvent && seconds * 1000 >= latencyThresholds.silentRetryMs && !timedOut && !signal?.aborted && activeRequestController) {
       retryForSilentFirstEvent = true;
       callbacks.onEvent?.(toolEvent('backend-stream-retry', `首个后端事件 ${seconds}s 未返回；自动中断当前 HTTP stream 并重连一次，避免旧连接/死流让多轮任务挂起。`));
       activeRequestController.abort();
@@ -92,8 +102,9 @@ export async function sendSciForgeToolMessage(
     const selectedSenseIds = selectedRuntimeSenseIds(input, selectedToolIds);
     const selectedActionIds = selectedRuntimeActionIds(input);
     const selectedVerifierIds = selectedRuntimeVerifierIds(input);
-    const verificationPolicy = buildVerificationPolicy(input);
-    const humanApprovalPolicy = buildHumanApprovalPolicy(input, selectedActionIds);
+    const verificationPolicy = configuredVerificationPolicy(input);
+    const humanApprovalPolicy = configuredHumanApprovalPolicy(input);
+    const unverifiedReason = asString(input.scenarioOverride?.unverifiedReason);
     const targetInstanceContext = compactTargetInstanceContext(input);
     const repairHandoffRunner = buildRepairHandoffRunnerPayload(input);
     const requestBody = buildAgentHandoffPayload({
@@ -128,7 +139,7 @@ export async function sendSciForgeToolMessage(
       failureRecoveryPolicy,
       verificationPolicy,
       humanApprovalPolicy,
-      unverifiedReason: verificationPolicy.mode === 'unverified' ? verificationPolicy.unverifiedReason : undefined,
+      unverifiedReason,
       verificationResult: input.verificationResult,
       recentVerificationResults: input.recentVerificationResults,
       uiState: {
@@ -190,10 +201,23 @@ export async function sendSciForgeToolMessage(
         const stream = await readWorkspaceToolStream(response, (event) => {
           sawBackendEvent = true;
           lastRealEventAt = Date.now();
-          callbacks.onEvent?.(withConfiguredContextWindowLimit(
+          const normalized = withConfiguredContextWindowLimit(
             normalizeWorkspaceRuntimeEvent(event),
             input.config.maxContextWindowTokens,
-          ));
+          );
+          const latencyPolicy = extractLatencyPolicy(normalized.raw);
+          if (latencyPolicy) {
+            latencyThresholds = latencyThresholdsFromPolicy(latencyPolicy, latencyThresholds);
+            scheduleTimeout(latencyThresholds);
+          }
+          if (!emittedInitialResponseStatus) {
+            const initialStatus = buildInitialResponseProgressEvent(extractResponsePlan(normalized.raw));
+            if (initialStatus) {
+              emittedInitialResponseStatus = true;
+              callbacks.onEvent?.(initialStatus);
+            }
+          }
+          callbacks.onEvent?.(normalized);
         });
         result = stream.result;
         error = stream.error;
@@ -235,7 +259,7 @@ export async function sendSciForgeToolMessage(
     }
     throw error;
   } finally {
-    globalThis.clearTimeout(timeout);
+    if (timeout) globalThis.clearTimeout(timeout);
     globalThis.clearInterval(silenceWatchdog);
     signal?.removeEventListener('abort', linkedAbort);
   }
@@ -424,39 +448,14 @@ function buildReferencePolicy(references: Array<Record<string, unknown>>) {
   };
 }
 
-function buildVerificationPolicy(input: SendAgentMessageInput) {
+function configuredVerificationPolicy(input: SendAgentMessageInput) {
   const configured = input.scenarioOverride?.verificationPolicy;
-  if (configured && isRecord(configured)) {
-    const mode = asString(configured.mode) || (input.scenarioOverride?.unverifiedReason ? 'unverified' : 'lightweight');
-    return {
-      required: asBoolean(configured.required) ?? true,
-      mode,
-      reason: asString(configured.reason) || 'Scenario provided verification policy.',
-      ...configured,
-    };
-  }
-  const unverifiedReason = input.scenarioOverride?.unverifiedReason;
-  return {
-    required: true,
-    mode: unverifiedReason ? 'unverified' : 'lightweight',
-    reason: unverifiedReason
-      ? '当前 scenario 明确允许本轮暂未验证，但必须把原因带入上下文。'
-      : '默认使用轻量验证；高风险 action 或用户显式要求时由 runtime/AgentServer 升级验证强度。',
-    riskLevel: 'low',
-    unverifiedReason,
-  };
+  return configured && isRecord(configured) ? configured : undefined;
 }
 
-function buildHumanApprovalPolicy(input: SendAgentMessageInput, selectedActionIds: string[]) {
+function configuredHumanApprovalPolicy(input: SendAgentMessageInput) {
   const configured = input.scenarioOverride?.humanApprovalPolicy;
-  if (configured && isRecord(configured)) return configured;
-  return {
-    required: selectedActionIds.length > 0,
-    mode: selectedActionIds.length > 0 ? 'required-before-action' : 'none',
-    reason: selectedActionIds.length > 0
-      ? '已选择可能产生副作用的 action，执行前需要上游确认策略。'
-      : '本轮没有显式 action 选择。',
-  };
+  return configured && isRecord(configured) ? configured : undefined;
 }
 
 function compactSciForgeReference(reference: NonNullable<SendAgentMessageInput['references']>[number]) {

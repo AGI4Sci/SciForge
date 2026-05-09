@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { AgentStreamEvent } from './domain';
-import { buildSilentStreamProgressEvent, formatProgressHeadline, progressModelFromEvent } from './processProgress';
+import { buildInitialResponseProgressEvent, buildSilentStreamProgressEvent, formatProgressHeadline, progressModelFromEvent } from './processProgress';
 
 function event(partial: Partial<AgentStreamEvent>): AgentStreamEvent {
   return {
@@ -84,4 +84,29 @@ test('does not show backend waiting before the silent threshold', () => {
   });
 
   assert.equal(silent, undefined);
+});
+
+test('builds visible quick status from responsePlan without waiting for workspace completion', () => {
+  const progress = buildInitialResponseProgressEvent({
+    initialResponseMode: 'quick-status',
+    userVisibleProgress: ['plan', 'execute', 'emit'],
+  });
+
+  const model = progress ? progressModelFromEvent(progress) : undefined;
+  assert.equal(model?.phase, 'plan');
+  assert.equal(model?.status, 'running');
+  assert.match(model?.detail ?? '', /已收到请求/);
+  assert.equal(model?.nextStep, 'plan');
+});
+
+test('builds direct-context visible status from responsePlan', () => {
+  const progress = buildInitialResponseProgressEvent({
+    initialResponseMode: 'direct-context-answer',
+    userVisibleProgress: ['answer'],
+  });
+
+  const model = progress ? progressModelFromEvent(progress) : undefined;
+  assert.equal(model?.phase, 'read');
+  assert.equal(model?.waitingFor, undefined);
+  assert.match(formatProgressHeadline(model) ?? '', /正在整理当前上下文/);
 });

@@ -742,6 +742,28 @@ try {
     verificationPolicy: { required: true, mode: 'hybrid', riskLevel: 'high', reason: 'external side effect' },
   });
   assert.equal(normalizeRuntimeVerificationPolicy(highRiskRequest).riskLevel, 'high');
+  const promptOnlyHighRiskWords = normalizeGatewayRequest({
+    skillDomain: 'knowledge',
+    prompt: 'Publish this external update',
+    workspacePath: workspace,
+  });
+  assert.equal(normalizeRuntimeVerificationPolicy(promptOnlyHighRiskWords).riskLevel, 'low');
+  assert.equal(normalizeRuntimeVerificationPolicy(promptOnlyHighRiskWords, {
+    message: 'Provider says action completed',
+    confidence: 0.9,
+    claimType: 'execution',
+    evidenceLevel: 'provider',
+    reasoningTrace: 'action provider self-report',
+    claims: [],
+    uiManifest: [],
+    executionUnits: [{
+      id: 'EU-high-structured',
+      status: 'done',
+      tool: 'external.action-provider',
+      params: JSON.stringify({ action: 'publish' }),
+    }],
+    artifacts: [],
+  }).riskLevel, 'high');
   const gated = await applyRuntimeVerificationPolicy({
     message: 'Provider says action completed',
     confidence: 0.9,
@@ -760,7 +782,9 @@ try {
   }, highRiskRequest);
   assert.equal(gated.verificationResults?.[0].verdict, 'needs-human');
   assert.equal(gated.executionUnits[0].status, 'needs-human');
-  assert.match(gated.message, /Verification: needs-human/);
+  assert.equal(gated.message, 'Provider says action completed');
+  const verificationDisplayIntent = gated.displayIntent?.verification as Record<string, unknown> | undefined;
+  assert.equal(verificationDisplayIntent?.verdict, 'needs-human');
 
   console.log('[ok] runtime gateway modules expose request/context/payload/artifact/repair boundaries');
 } finally {

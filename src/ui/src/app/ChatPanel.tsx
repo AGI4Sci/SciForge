@@ -738,6 +738,7 @@ export function ChatPanel({
                 {message.confidence ? <ConfidenceBar value={message.confidence} /> : null}
                 {message.evidence ? <EvidenceTag level={message.evidence} /> : null}
                 {message.claimType ? <ClaimTag type={message.claimType} /> : null}
+                {messageRunId ? <VerificationTag model={verificationTagForRun(session.runs, messageRunId)} /> : null}
                 {message.status === 'failed' ? <Badge variant="danger">failed</Badge> : null}
                 {message.guidanceQueue ? <Badge variant={guidanceBadgeVariant(message.guidanceQueue.status)}>{guidanceStatusLabel(message.guidanceQueue.status)}</Badge> : null}
                 {message.acceptance ? (
@@ -1607,6 +1608,62 @@ function referenceTargetFromEvent(event: MouseEvent): { element: HTMLElement; re
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+type VerificationTagModel = {
+  label: string;
+  title: string;
+  variant: BadgeVariant;
+};
+
+function VerificationTag({ model }: { model?: VerificationTagModel }) {
+  if (!model) return null;
+  return <span title={model.title}><Badge variant={model.variant}>{model.label}</Badge></span>;
+}
+
+function verificationTagForRun(runs: SciForgeRun[], runId: string): VerificationTagModel | undefined {
+  const run = runs.find((item) => item.id === runId);
+  const raw = isRecord(run?.raw) ? run.raw : undefined;
+  const result = firstVerificationResult(raw);
+  const displayIntent = isRecord(raw?.displayIntent) ? raw.displayIntent : undefined;
+  const displayVerification = isRecord(displayIntent?.verification) ? displayIntent.verification : undefined;
+  const verdict = stringField(result?.verdict) ?? stringField(displayVerification?.verdict);
+  if (!verdict) return undefined;
+  const critique = stringField(result?.critique) ?? stringField(result?.reason);
+  return {
+    label: `Verification: ${verificationVerdictLabel(verdict)}`,
+    title: critique || `Verification ${verdict}`,
+    variant: verificationVerdictVariant(verdict),
+  };
+}
+
+function firstVerificationResult(raw: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  const direct = raw?.verificationResult;
+  if (isRecord(direct)) return direct;
+  const list = Array.isArray(raw?.verificationResults) ? raw.verificationResults : [];
+  return list.find(isRecord);
+}
+
+function stringField(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function verificationVerdictLabel(verdict: string) {
+  const labels: Record<string, string> = {
+    pass: '已验证',
+    fail: '未通过',
+    uncertain: '不确定',
+    'needs-human': '需人工核验',
+    unverified: '未验证',
+  };
+  return labels[verdict] ?? verdict;
+}
+
+function verificationVerdictVariant(verdict: string): BadgeVariant {
+  if (verdict === 'pass') return 'success';
+  if (verdict === 'fail') return 'danger';
+  if (verdict === 'needs-human' || verdict === 'uncertain') return 'warning';
+  return 'muted';
 }
 
 function latestTokenUsage(events: AgentStreamEvent[]) {

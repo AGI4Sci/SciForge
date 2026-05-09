@@ -51,12 +51,18 @@ function extractJsonObject(text: string): Record<string, unknown> | undefined {
 
 function readableMessageFromStructured(structured: Record<string, unknown>, fallback: string) {
   const direct = asString(structured.message);
-  if (direct && !looksLikeRawJson(direct)) return direct;
+  if (direct && !looksLikeRawJson(direct)) return stripVerificationFooter(direct);
   const report = reportMarkdownFromArtifacts(structured.artifacts);
   if (report) return report;
   const markdown = reportMarkdownFromPayload(structured);
   if (markdown) return markdown;
-  return direct || fallback;
+  return stripVerificationFooter(direct || fallback);
+}
+
+function stripVerificationFooter(value: string) {
+  return value
+    .replace(/\n{1,3}Verification:\s*(?:pass|fail|uncertain|needs-human|unverified)\b[^\n]*(?:\n[^\n]*)?$/i, '')
+    .trim();
 }
 
 function reportMarkdownFromArtifacts(value: unknown) {
@@ -543,6 +549,11 @@ function uniqueStringList(values: string[]) {
 function withRuntimePresentationMetadata(raw: unknown, structured: Record<string, unknown>, objectReferences: ObjectReference[]) {
   const metadata = {
     displayIntent: isRecord(structured.displayIntent) ? structured.displayIntent : undefined,
+    verificationResults: Array.isArray(structured.verificationResults)
+      ? structured.verificationResults
+      : isRecord(structured.verificationResult)
+        ? [structured.verificationResult]
+        : undefined,
     objectReferences,
   };
   if (isRecord(raw)) return { ...raw, ...metadata };

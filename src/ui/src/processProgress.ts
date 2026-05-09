@@ -1,4 +1,6 @@
 import type { AgentStreamEvent } from './domain';
+import { makeId, nowIso } from './domain';
+import type { RuntimeResponsePlan } from './latencyPolicy';
 
 export type ProcessProgressPhase = 'read' | 'write' | 'execute' | 'wait' | 'plan' | 'complete' | 'error' | 'observe';
 
@@ -112,6 +114,78 @@ export function buildSilentStreamProgressEvent({
       streamOpen: true,
     },
   };
+}
+
+export function buildInitialResponseProgressEvent(responsePlan: RuntimeResponsePlan | undefined): AgentStreamEvent | undefined {
+  const mode = responsePlan?.initialResponseMode;
+  if (!mode) return undefined;
+  if (mode === 'wait-for-result') {
+    return progressEvent({
+      phase: 'plan',
+      title: '正在规划工作区任务',
+      detail: '已收到请求，正在规划需要执行和验证的工作。',
+      waitingFor: '工作区任务进展',
+      nextStep: firstProgressPhase(responsePlan) ?? '继续执行并流式显示进展。',
+      reason: 'initial-response-wait-for-result',
+    });
+  }
+  if (mode === 'quick-status' || mode === 'direct-context-answer' || mode === 'streaming-draft') {
+    const direct = mode === 'direct-context-answer';
+    return progressEvent({
+      phase: direct ? 'read' : 'plan',
+      title: direct ? '正在整理当前上下文' : '正在准备可读进展',
+      detail: direct
+        ? '已收到请求，正在基于当前上下文整理可读回复。'
+        : '已收到请求，正在准备可读状态并继续执行所需工作。',
+      waitingFor: direct ? undefined : '后续工作区事件',
+      nextStep: firstProgressPhase(responsePlan) ?? '继续流式显示进展。',
+      reason: `initial-response-${mode}`,
+    });
+  }
+  return undefined;
+}
+
+function progressEvent({
+  phase,
+  title,
+  detail,
+  waitingFor,
+  nextStep,
+  reason,
+}: {
+  phase: ProcessProgressPhase;
+  title: string;
+  detail: string;
+  waitingFor?: string;
+  nextStep?: string;
+  reason: string;
+}): AgentStreamEvent {
+  return {
+    id: makeId('evt'),
+    type: 'process-progress',
+    label: '进展',
+    detail,
+    createdAt: nowIso(),
+    raw: {
+      type: 'process-progress',
+      progress: {
+        phase,
+        title,
+        detail,
+        waitingFor,
+        nextStep,
+        reason,
+        canAbort: true,
+        canContinue: true,
+        status: 'running',
+      },
+      responsePlanInitialStatus: true,
+    },
+  };
+}
+
+function firstProgressPhase(responsePlan: RuntimeResponsePlan | undefined) {
+  return responsePlan?.userVisibleProgress?.[0] ?? responsePlan?.progressPhases?.[0];
 }
 
 function normalizeProgressModel(progress: Record<string, unknown>, event: AgentStreamEvent): ProcessProgressModel {

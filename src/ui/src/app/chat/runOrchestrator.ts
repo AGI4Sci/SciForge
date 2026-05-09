@@ -3,6 +3,8 @@ import { sendSciForgeToolMessage } from '../../api/sciforgeToolsClient';
 import { buildContextCompactionFailureResult, buildContextCompactionOutcome } from '../../contextCompaction';
 import { estimateContextWindowState, latestContextWindowState, shouldStartContextCompaction } from '../../contextWindow';
 import type { ScenarioId } from '../../data';
+import { latestLatencyPolicy, latestResponsePlan } from '../../latencyPolicy';
+import { buildInitialResponseProgressEvent } from '../../processProgress';
 import type {
   AgentStreamEvent,
   NormalizedAgentResponse,
@@ -118,6 +120,9 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
       uiPlanRef: input.uiPlanRef,
       targetInstanceContext,
     };
+
+    const initialProgress = buildInitialResponseProgressEvent(latestResponsePlan(input.streamEvents));
+    if (initialProgress) input.onStreamEvent(initialProgress);
 
     await runPreflightContextCompaction({
       baseSession: input.baseSession,
@@ -251,11 +256,15 @@ export async function runPreflightContextCompaction({
   })) return;
 
   const startedAt = nowIso();
+  const latencyPolicy = latestLatencyPolicy(streamEvents);
+  const blockOnContextCompaction = latencyPolicy?.blockOnContextCompaction !== false;
   onStreamEvent({
     id: makeId('evt'),
     type: 'contextCompaction',
     label: '上下文压缩',
-    detail: '发送前达到阈值，正在请求 AgentServer/backend 原生压缩。',
+    detail: blockOnContextCompaction
+      ? '发送前达到阈值，正在请求 AgentServer/backend 原生压缩。'
+      : '发送前达到阈值，已启动非阻塞上下文压缩；当前请求继续发送。',
     contextWindowState: {
       ...preflightState,
       pendingCompact: true,
@@ -269,45 +278,59 @@ export async function runPreflightContextCompaction({
       before: preflightState,
       startedAt,
       reason: 'auto-threshold-before-send',
-      message: '发送前达到阈值，正在请求 AgentServer/backend 原生压缩。',
+      message: blockOnContextCompaction
+        ? '发送前达到阈值，正在请求 AgentServer/backend 原生压缩。'
+        : '发送前达到阈值，已启动非阻塞上下文压缩；当前请求继续发送。',
     },
+    raw: { latencyPolicy: { blockOnContextCompaction } },
     createdAt: startedAt,
   });
-  try {
-    const compactResult = await compactAgentContext(request, 'auto-threshold-before-send', signal);
-    const completedAt = nowIso();
-    const outcome = buildContextCompactionOutcome({
-      eventId: makeId('evt'),
-      messageId: makeId('msg'),
-      result: compactResult,
-      beforeState: preflightState,
-      reason: 'auto-threshold-before-send',
-      startedAt,
-      completedAt,
-      fallbackBackend: config.agentBackend,
-    });
-    onStreamEvent(outcome.event);
-  } catch (compactError) {
-    if (compactError instanceof DOMException && compactError.name === 'AbortError') throw compactError;
-    const completedAt = nowIso();
-    const outcome = buildContextCompactionOutcome({
-      eventId: makeId('evt'),
-      messageId: makeId('msg'),
-      result: buildContextCompactionFailureResult({
-        error: compactError,
+  const compact = async () => {
+    try {
+      const compactResult = await compactAgentContext(request, 'auto-threshold-before-send', signal);
+      const completedAt = nowIso();
+      const outcome = buildContextCompactionOutcome({
+        eventId: makeId('evt'),
+        messageId: makeId('msg'),
+        result: compactResult,
+        beforeState: preflightState,
         reason: 'auto-threshold-before-send',
-        backend: config.agentBackend,
-        compactCapability: preflightState.compactCapability,
         startedAt,
-      }),
-      beforeState: preflightState,
-      reason: 'auto-threshold-before-send',
-      startedAt,
-      completedAt,
-      fallbackBackend: config.agentBackend,
-    });
-    onStreamEvent(outcome.event);
+        completedAt,
+        fallbackBackend: config.agentBackend,
+      });
+      onStreamEvent(outcome.event);
+    } catch (compactError) {
+      if (compactError instanceof DOMException && compactError.name === 'AbortError' && blockOnContextCompaction) throw compactError;
+      const completedAt = nowIso();
+      const outcome = buildContextCompactionOutcome({
+        eventId: makeId('evt'),
+        messageId: makeId('msg'),
+        result: buildContextCompactionFailureResult({
+          error: compactError,
+          reason: 'auto-threshold-before-send',
+          backend: config.agentBackend,
+          compactCapability: preflightState.compactCapability,
+          startedAt,
+        }),
+        beforeState: preflightState,
+        reason: 'auto-threshold-before-send',
+        startedAt,
+        completedAt,
+        fallbackBackend: config.agentBackend,
+      });
+      onStreamEvent(outcome.event);
+    }
+  };
+  if (!blockOnContextCompaction) {
+    void compact();
+    return;
   }
+  await compact();
+}
+
+export function shouldBlockOnPreflightContextCompaction(events: AgentStreamEvent[]) {
+  return latestLatencyPolicy(events)?.blockOnContextCompaction !== false;
 }
 
 export async function runWithBackendFallback(

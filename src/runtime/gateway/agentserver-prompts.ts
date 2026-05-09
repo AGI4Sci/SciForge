@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import type { GatewayRequest, LlmEndpointConfig, SciForgeSkillDomain, SkillAvailability, TaskAttemptRecord, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult } from '../runtime-types.js';
 import { agentHandoffSourceMetadata } from '../../shared/agentHandoff.js';
 import { expectedArtifactTypesForRequest, normalizeLlmEndpoint, selectedComponentIdsForRequest } from './gateway-request.js';
-import { buildContextEnvelope, expectedArtifactSchema, summarizeArtifactRefs, summarizeConversationLedger, summarizeExecutionRefs, summarizeTaskAttemptsForAgentServer, workspaceTreeSummary, type AgentServerContextMode } from './context-envelope.js';
+import { buildContextEnvelope, expectedArtifactSchema, summarizeArtifactRefs, summarizeConversationLedger, summarizeConversationPolicyForAgentServer, summarizeExecutionRefs, summarizeTaskAttemptsForAgentServer, workspaceTreeSummary, type AgentServerContextMode } from './context-envelope.js';
 import { agentServerAgentId, agentServerContextPolicy, contextWindowMetadata, fetchAgentServerContextSnapshot } from './agentserver-context-window.js';
 import { cleanUrl, clipForAgentServerJson, clipForAgentServerPrompt, errorMessage, excerptAroundFailureLine, extractLikelyErrorLine, hashJson, headForAgentServer, isRecord, readTextIfExists, tailForAgentServer, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
 import { normalizeBackendHandoff } from '../workspace-task-input.js';
@@ -545,6 +545,11 @@ export function buildAgentServerGenerationPrompt(request: {
   const scenarioFacts = isRecord(contextEnvelope.scenarioFacts) ? contextEnvelope.scenarioFacts : {};
   const currentUserRequest = stringField(sessionFacts.currentUserRequest) ?? currentUserRequestText(request.prompt);
   const executionMode = executionModeDecisionForPrompt(sessionFacts, scenarioFacts);
+  const conversationPolicySummary = isRecord(sessionFacts.conversationPolicySummary)
+    ? sessionFacts.conversationPolicySummary
+    : isRecord(scenarioFacts.conversationPolicySummary)
+      ? scenarioFacts.conversationPolicySummary
+      : summarizeConversationPolicyForAgentServer(request.uiStateSummary);
   const currentTurnSnapshot = {
     kind: 'SciForgeCurrentTurnSnapshot',
     prompt: request.prompt,
@@ -558,6 +563,7 @@ export function buildAgentServerGenerationPrompt(request: {
     reproducibilityLevel: executionMode.reproducibilityLevel,
     stagePlanHint: executionMode.stagePlanHint,
     executionModeReason: executionMode.executionModeReason,
+    conversationPolicySummary,
     executionScope: 'backend-decides',
     selectedToolIds: toStringList(scenarioFacts.selectedToolIds),
     selectedSenseIds: toStringList(scenarioFacts.selectedSenseIds),
@@ -947,6 +953,7 @@ export function summarizeUiStateForAgentServer(uiState: unknown, mode: AgentServ
     selectedVerifierIds: toStringList(uiState.selectedVerifierIds),
     verificationPolicy: isRecord(uiState.verificationPolicy) ? clipForAgentServerJson(uiState.verificationPolicy, 2) : undefined,
     verificationResult: isRecord(uiState.verificationResult) ? clipForAgentServerJson(uiState.verificationResult, 2) : undefined,
+    conversationPolicySummary: summarizeConversationPolicyForAgentServer(uiState.conversationPolicy ?? uiState),
     recentRuns: Array.isArray(uiState.recentRuns)
       ? uiState.recentRuns.slice(-4).map((entry) => clipForAgentServerJson(entry, 2))
       : undefined,

@@ -44,9 +44,57 @@ export interface ConversationPolicyResponse {
   handoffPlan?: Record<string, unknown>;
   acceptancePlan?: Record<string, unknown>;
   recoveryPlan?: Record<string, unknown>;
+  latencyPolicy?: Record<string, unknown>;
+  responsePlan?: Record<string, unknown>;
+  backgroundPlan?: Record<string, unknown>;
+  cachePolicy?: Record<string, unknown>;
   userVisiblePlan?: Array<Record<string, unknown>>;
   diagnostics?: Record<string, unknown>;
 }
+
+export const SAFE_DEFAULT_LATENCY_POLICY: Record<string, unknown> = {
+  schemaVersion: 'sciforge.conversation.latency-policy.v1',
+  firstVisibleResponseMs: 8000,
+  firstEventWarningMs: 12000,
+  silentRetryMs: 45000,
+  allowBackgroundCompletion: false,
+  blockOnContextCompaction: true,
+  blockOnVerification: true,
+  reason: 'Python conversation policy did not provide latencyPolicy; fail closed for verification and context compaction while allowing ordinary UI status.',
+};
+
+export const SAFE_DEFAULT_RESPONSE_PLAN: Record<string, unknown> = {
+  schemaVersion: 'sciforge.conversation.response-plan.v1',
+  initialResponseMode: 'wait-for-result',
+  finalizationMode: 'append-final',
+  userVisibleProgress: ['received', 'planning', 'running'],
+  progressPhases: ['received', 'planning', 'running'],
+  fallbackMessagePolicy: 'truthful-status-without-background-completion-claim',
+  backgroundCompletionSummary: 'No background completion may be declared without a Python backgroundPlan.',
+  reason: 'Python conversation policy did not provide responsePlan; use foreground-safe status defaults.',
+};
+
+export const SAFE_DEFAULT_BACKGROUND_PLAN: Record<string, unknown> = {
+  schemaVersion: 'sciforge.conversation.background-plan.v1',
+  enabled: false,
+  tasks: [],
+  handoffRefsRequired: true,
+  cancelOnNewUserTurn: true,
+  reason: 'Python conversation policy did not provide backgroundPlan; do not claim background completion.',
+};
+
+export const SAFE_DEFAULT_CACHE_POLICY: Record<string, unknown> = {
+  schemaVersion: 'sciforge.conversation.cache-policy.v1',
+  reuseScenarioPlan: false,
+  reuseSkillPlan: false,
+  reuseUiPlan: false,
+  reuseUIPlan: false,
+  reuseReferenceDigests: false,
+  reuseArtifactIndex: false,
+  reuseLastSuccessfulStage: false,
+  reuseBackendSession: false,
+  reason: 'Python conversation policy did not provide cachePolicy; do not reuse cached planning or execution state.',
+};
 
 export function buildConversationPolicyRequest(
   request: GatewayRequest,
@@ -112,6 +160,10 @@ export function normalizeConversationPolicyResponse(value: unknown): Conversatio
     handoffPlan: optionalRecord(record.handoffPlan),
     acceptancePlan: optionalRecord(record.acceptancePlan),
     recoveryPlan: optionalRecord(record.recoveryPlan),
+    latencyPolicy: policyRecord(record.latencyPolicy, SAFE_DEFAULT_LATENCY_POLICY),
+    responsePlan: policyRecord(record.responsePlan, SAFE_DEFAULT_RESPONSE_PLAN),
+    backgroundPlan: policyRecord(record.backgroundPlan, SAFE_DEFAULT_BACKGROUND_PLAN),
+    cachePolicy: policyRecord(record.cachePolicy, SAFE_DEFAULT_CACHE_POLICY),
     userVisiblePlan: optionalRecordList(record.userVisiblePlan),
     diagnostics: optionalRecord(record.diagnostics),
   };
@@ -119,6 +171,10 @@ export function normalizeConversationPolicyResponse(value: unknown): Conversatio
 
 function optionalRecord(value: unknown) {
   return isRecord(value) ? value : undefined;
+}
+
+function policyRecord(value: unknown, fallback: Record<string, unknown>) {
+  return isRecord(value) ? value : { ...fallback };
 }
 
 function optionalRecordList(value: unknown) {
