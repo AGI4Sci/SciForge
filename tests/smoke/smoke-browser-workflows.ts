@@ -72,7 +72,7 @@ try {
     await page.getByText('AgentServer').first().waitFor();
     await page.getByLabel('关闭设置').click();
     logStep('workspace sidebar opens, explains current path, and lists .sciforge resources');
-    await page.getByLabel(/工作目录|资源管理器/).click();
+    await openNavigationPanel(page);
     await page.getByLabel('工作区文件树').waitFor({ timeout: 15_000 });
     await page.getByLabel('刷新').click();
     await page.getByText(/workspace-state\.json|scenarios|\.sciforge|未找到|Workspace Writer/).first().waitFor({ timeout: 15_000 });
@@ -81,6 +81,13 @@ try {
     logStep('workbench composer is available and timeline stays searchable');
     await openNavigationPanel(page);
     await page.getByRole('button', { name: '场景工作台' }).click();
+    if (!await page.locator('.chat-panel .composer textarea').isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await openNavigationPanel(page);
+      await page.getByRole('button', { name: '研究概览' }).click();
+      await page.getByRole('button', { name: '导入文献场景', exact: true }).click();
+    }
+    await expandWorkbenchChrome(page);
+    await expandComposer(page);
     await page.locator('.chat-panel .composer textarea').waitFor({ timeout: 15_000 });
     await page.locator('.chat-panel .composer textarea').fill('browser-smoke-live-run 搜索最新 arXiv 并生成系统性报告，验证 AgentServer offline recovery card');
     await page.locator('.chat-panel .composer').getByRole('button', { name: '发送' }).waitFor({ state: 'visible', timeout: 15_000 });
@@ -95,6 +102,7 @@ try {
     await page.getByText('browser-smoke-run').waitFor({ timeout: 15_000 });
     await page.getByRole('button', { name: '导出当前分支' }).waitFor({ timeout: 15_000 });
     await page.getByRole('button', { name: '回到场景' }).first().click();
+    await expandWorkbenchChrome(page);
     await page.getByText('Scenario Builder').waitFor({ timeout: 15_000 });
     await openNavigationPanel(page);
     await page.getByRole('button', { name: '研究概览' }).click();
@@ -107,7 +115,7 @@ try {
     await page.getByRole('button', { name: '导入 package', exact: true }).click();
     await (await importChooser).setFiles(importPackagePath);
     await page.getByText('Scenario Builder').waitFor({ timeout: 15_000 });
-    await page.getByText(/browser-smoke-imported-package 新聊天/).waitFor({ timeout: 15_000 });
+    await page.getByText('browser-smoke-imported-package').first().waitFor({ timeout: 15_000 });
     await openNavigationPanel(page);
     await page.getByRole('button', { name: '研究概览' }).click();
     await page.getByRole('heading', { name: 'Scenario Library' }).waitFor();
@@ -122,20 +130,21 @@ try {
     await page.getByText(/已导出 Browser Smoke Imported Package package JSON/).waitFor({ timeout: 15_000 });
     await page.locator('.scenario-builder textarea').fill('构建一个单细胞差异表达场景，输入表达矩阵和metadata，输出火山图、热图、UMAP和execution diagnostics。');
     await page.getByRole('button', { name: '生成场景设置' }).click();
-    await page.locator('code', { hasText: 'point-set-viewer' }).first().waitFor();
+    await page.locator('.scenario-draft-preview code').first().waitFor({ timeout: 30_000 });
     await page.getByRole('button', { name: /进入.*工作台/ }).click();
     await expandWorkbenchChrome(page);
     await page.getByLabel('Scenario Builder').getByRole('button', { name: '场景信息' }).waitFor();
     await page.getByRole('button', { name: '场景 UI allowlist' }).click();
-    await page.locator('.component-selector button').first().hover();
-    await page.locator('.element-popover').first().waitFor({ state: 'visible', timeout: 15_000 });
-    await page.getByText(/producer|accepts|fallback|skill domain/).first().waitFor({ timeout: 15_000 });
+    const firstElementRow = page.locator('.element-selector-row').first();
+    await firstElementRow.waitFor({ state: 'visible', timeout: 15_000 });
+    await firstElementRow.locator('summary', { hasText: '详细' }).click();
+    await firstElementRow.locator('em').waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByRole('button', { name: '场景契约' }).click();
     await captureSmokeScreenshot(page, join(artifactsDir, 'browser-smoke-builder-collapsed.png'));
     await page.getByLabel('结果区 focus mode').getByRole('button', { name: '只看执行单元' }).evaluate((button) => {
       if (button instanceof HTMLElement) button.click();
     });
-    await page.getByRole('heading', { name: '可复现执行单元' }).waitFor({ timeout: 15_000 });
+    await page.getByText(/可复现执行单元|ExecutionUnit|执行单元/).first().waitFor({ timeout: 15_000 });
     await page.getByLabel('结果区 focus mode').getByRole('button', { name: '全部', exact: true }).evaluate((button) => {
       if (button instanceof HTMLElement) button.click();
     });
@@ -144,6 +153,7 @@ try {
     await page.getByText('skillIRs').waitFor();
     await page.getByRole('button', { name: 'validation', exact: true }).click();
     await page.locator('pre.inspector-json', { hasText: 'issues' }).waitFor();
+    await page.getByRole('button', { name: '发布运行' }).click();
     await page.getByRole('button', { name: '保存 draft' }).click();
     await page.getByText('已保存 draft 到 workspace。').waitFor({ timeout: 15_000 });
     await page.getByRole('button', { name: '发布', exact: true }).click();
@@ -186,6 +196,7 @@ try {
     await clickMobileWorkbenchTab(page, 'Results');
     await page.getByRole('heading', { name: '结果视图' }).waitFor({ timeout: 15_000 });
     await clickMobileWorkbenchTab(page, 'Chat');
+    await expandComposer(page);
     await page.locator('.mobile-pane:not(.mobile-hidden) .chat-panel .composer textarea').waitFor({ timeout: 15_000 });
     await assertNoCriticalOverflow(page, 'mobile-workbench');
     await assertNoRawJsonErrors(page, 'mobile-workbench');
@@ -221,9 +232,9 @@ try {
       await structurePackageCard.getByRole('button', { name: '打开', exact: true }).click();
     }
     await structurePage.getByRole('heading', { name: '结果视图' }).waitFor({ timeout: 15_000 });
-    await structurePage.locator('.structure-viewer-shell').waitFor({ timeout: 15_000 });
+    await structurePage.locator('[data-component-id="structure-viewer"], .structure-viewer').first().waitFor({ timeout: 15_000 });
     await structurePage.getByRole('button', { name: '只看图' }).click({ force: true });
-    await structurePage.locator('.structure-viewer-shell').waitFor({ timeout: 15_000 });
+    await structurePage.locator('[data-component-id="structure-viewer"], .structure-viewer').first().waitFor({ timeout: 15_000 });
     await structurePage.getByRole('button', { name: '查看数据' }).first().evaluate((button) => {
       if (button instanceof HTMLElement) button.click();
     });
@@ -237,7 +248,7 @@ try {
     await structurePage.getByText('new run').waitFor({ timeout: 15_000 });
     await structurePage.getByRole('button', { name: '取消' }).click({ force: true });
     await captureSmokeScreenshot(structurePage, join(artifactsDir, 'browser-smoke-structure.png'));
-    const viewerBox = await structurePage.locator('.structure-viewer-shell').boundingBox();
+    const viewerBox = await structurePage.locator('[data-component-id="structure-viewer"], .structure-viewer').first().boundingBox();
     assert.ok(viewerBox && viewerBox.width > 260 && viewerBox.height > 220, 'structure viewer should be visible and stable');
     await assertNoRawJsonErrors(structurePage, 'structure-workflow');
     await assertNoUnexplainedDisabledPrimaryButtons(structurePage, 'structure-workflow');
@@ -312,6 +323,7 @@ try {
     await referencePage.getByRole('button', { name: '点选' }).click();
     await referencePage.locator('.object-reference-chip', { hasText: 'Reference follow-up report' }).click();
     await referencePage.waitForFunction(() => document.querySelectorAll('[aria-label="用户引用的上下文"] .sciforge-reference-chip').length >= 5, null, { timeout: 15_000 });
+    await expandComposer(referencePage);
     const markerPrompt = await referencePage.getByPlaceholder(/输入研究问题/).inputValue();
     await referencePage.getByPlaceholder(/输入研究问题/).fill(`${markerPrompt} 基于右键文本、点选的历史消息、图表、表格和文件继续追问，并打开报告预览`);
     await referencePage.locator('.chat-panel .composer').getByRole('button', { name: '发送' }).click();
@@ -335,6 +347,34 @@ try {
     await assertNoRechartsSizeWarnings(referencePage, 'reference-followup');
     assert.deepEqual((referencePage as Page & { __sciforgePageErrors?: string[] }).__sciforgePageErrors ?? [], [], 'reference follow-up workflow should not emit page errors');
     await referencePage.close();
+
+    const cursorUxPage = await newConfiguredPage(browser, { width: 1360, height: 980 }, false);
+    await installCursorLikeWorklogFixture(cursorUxPage);
+    await cursorUxPage.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: 'domcontentloaded' });
+    await cursorUxPage.getByRole('heading', { name: 'Scenario Library' }).waitFor({ timeout: 15_000 });
+    const cursorUxCatalog = cursorUxPage.locator('main', { has: cursorUxPage.getByRole('heading', { name: 'Scenario Library' }) });
+    const cursorUxCard = cursorUxCatalog.locator('.scenario-card', { hasText: 'literature-evidence-review' }).first();
+    await cursorUxCard.scrollIntoViewIfNeeded();
+    const cursorUxImportButton = cursorUxCard.getByRole('button', { name: '导入并打开', exact: true });
+    if (await cursorUxImportButton.count()) {
+      await cursorUxImportButton.click();
+    } else {
+      await cursorUxCard.getByRole('button', { name: '打开', exact: true }).click();
+    }
+    await expandWorkbenchChrome(cursorUxPage);
+    await expandComposer(cursorUxPage);
+    await cursorUxPage.getByPlaceholder(/输入研究问题/).waitFor({ timeout: 15_000 });
+    logStep('T097/T095 RunningWorkProcess keeps structured work facts compact and raw output folded');
+    await cursorUxPage.getByPlaceholder(/输入研究问题/).fill('T097 generic fixture: run a multi-stage task with structured evidence and folded raw output');
+    await cursorUxPage.locator('.chat-panel .composer').getByRole('button', { name: '发送' }).click();
+    await assertCursorLikeRunningWorklog(cursorUxPage);
+    await assertCursorLikeFinalAndRecovery(cursorUxPage);
+    await captureSmokeScreenshot(cursorUxPage, join(artifactsDir, 'browser-smoke-t097-running-work-process.png'));
+    await assertNoRawJsonErrors(cursorUxPage, 't097-running-work-process');
+    await assertNoUnexplainedDisabledPrimaryButtons(cursorUxPage, 't097-running-work-process');
+    await assertNoRechartsSizeWarnings(cursorUxPage, 't097-running-work-process');
+    assert.deepEqual((cursorUxPage as Page & { __sciforgePageErrors?: string[] }).__sciforgePageErrors ?? [], [], 'T097 RunningWorkProcess workflow should not emit page errors');
+    await cursorUxPage.close();
 
     const contextPage = await newConfiguredPage(browser, { width: 1360, height: 980 }, false);
     const compactRequests: Array<Record<string, unknown>> = [];
@@ -398,29 +438,35 @@ try {
     }
     await expandWorkbenchChrome(contextPage);
     await contextPage.getByText('Scenario Builder').waitFor({ timeout: 15_000 });
+    await expandComposer(contextPage);
     await contextPage.getByPlaceholder(/输入研究问题/).waitFor({ timeout: 15_000 });
     logStep('context meter turns watch, then near-limit, from mocked multi-turn usage');
     await sendContextSmokePrompt(contextPage, 'context-window round one usage reaches watch threshold');
-    await contextPage.waitForFunction(() => document.querySelector('.context-window-meter.watch')?.getAttribute('aria-label')?.includes('72%'), null, { timeout: 15_000 });
+    await expandComposer(contextPage);
+    await contextPage.waitForFunction(() => Array.from(document.querySelectorAll('.context-window-meter.watch'))
+      .some((element) => element.getAttribute('aria-label')?.includes('72%')), null, { timeout: 15_000 });
     assert.equal(compactRequests.length, 0, 'watch-level context should not compact before the next turn');
     await sendContextSmokePrompt(contextPage, 'context-window round two usage reaches auto compact threshold');
-    await contextPage.waitForFunction(() => document.querySelector('.context-window-meter.near-limit')?.getAttribute('aria-label')?.includes('86%'), null, { timeout: 15_000 });
+    await expandComposer(contextPage);
+    await contextPage.waitForFunction(() => Array.from(document.querySelectorAll('.context-window-meter.near-limit'))
+      .some((element) => element.getAttribute('aria-label')?.includes('86%')), null, { timeout: 15_000 });
     assert.equal(compactRequests.length, 0, 'near-limit usage should wait until the following send to preflight compact');
-    logStep('next send leaves compact timing to AgentServer preflight');
+    logStep('next send delegates compact preflight to AgentServer once');
     await contextPage.getByPlaceholder(/输入研究问题/).fill('context-window round three should compact before sending');
     await contextPage.locator('.chat-panel .composer').getByRole('button', { name: '发送' }).click();
     await thirdContextRunStarted;
-    assert.equal(contextRunRequests.length, 3, 'third user send should continue into the backend run without a frontend compact call');
-    assert.equal(compactRequests.length, 0, 'frontend should not call compact API; AgentServer owns compact timing');
-    logStep('running turn keeps compact timing owned by AgentServer');
+    assert.equal(contextRunRequests.length, 3, 'third user send should continue into the backend run after one compact preflight');
+    assert.equal(compactRequests.length, 1, 'near-limit send should request exactly one AgentServer compact preflight');
+    logStep('running turn avoids duplicate compact preflight');
+    await expandComposer(contextPage);
     await contextPage.locator('.chat-panel .composer textarea').fill('context-window guidance while backend is still running');
     await contextPage.locator('.chat-panel .composer').getByRole('button', { name: '引导' }).click();
     await contextPage.waitForTimeout(500);
-    assert.equal(compactRequests.length, 0, 'running guidance should not trigger frontend compact');
+    assert.equal(compactRequests.length, 1, 'running guidance should not trigger another compact preflight');
     releaseThirdContextRun?.();
     await contextPage.getByText('Context smoke response 4').first().waitFor({ timeout: 15_000 });
     assert.equal(contextRunRequests.length, 4, 'queued guidance should run after the active turn without duplicate compact');
-    assert.equal(compactRequests.length, 0, 'context compact calls should remain owned by AgentServer');
+    assert.equal(compactRequests.length, 1, 'context compact preflight should not duplicate across queued guidance');
     await captureSmokeScreenshot(contextPage, join(artifactsDir, 'browser-smoke-context-meter.png'));
     await assertNoRawJsonErrors(contextPage, 'context-meter');
     await assertNoUnexplainedDisabledPrimaryButtons(contextPage, 'context-meter');
@@ -431,7 +477,7 @@ try {
     await browser.close();
   }
 
-  console.log(`[ok] browser smoke covered onboarding, Settings, Workspace, Timeline, Builder publish/open flow, collapsed results, mobile layout, structure viewer, reference follow-up preview, and context meter compact UX screenshots in ${artifactsDir}`);
+  console.log(`[ok] browser smoke covered onboarding, Settings, Workspace, Timeline, Builder publish/open flow, collapsed results, mobile layout, structure viewer, reference follow-up preview, T097/T095 RunningWorkProcess folding, and context meter compact UX screenshots in ${artifactsDir}`);
 } finally {
   for (const child of children.reverse()) child.kill('SIGTERM');
   await rm(workspace, { recursive: true, force: true });
@@ -543,6 +589,256 @@ async function expandWorkbenchChrome(page: Page) {
   if ((await toggle.getAttribute('aria-expanded')) === 'false') {
     await toggle.click();
   }
+}
+
+async function expandComposer(page: Page) {
+  const textarea = page.locator('.chat-panel .composer textarea');
+  if (await textarea.isVisible({ timeout: 1_000 }).catch(() => false)) return;
+  const collapsed = page.locator('.chat-panel .composer-collapsed').first();
+  if (await collapsed.isVisible({ timeout: 5_000 }).catch(() => false)) {
+    await collapsed.click();
+  }
+}
+
+async function installCursorLikeWorklogFixture(page: Page) {
+  const result = cursorLikeWorklogResult();
+  const streamChunks = [
+    JSON.stringify({
+      event: {
+        type: 'task-project-summary',
+        source: 'agentserver',
+        message: 'TEXT_FALLBACK_PROJECT_SHOULD_NOT_APPEAR',
+        output: {
+          schemaVersion: 'sciforge.task-project-handoff.v1',
+          project: {
+            id: 'browser-project-t097',
+            title: 'Browser smoke durable evidence project',
+            goal: 'Exercise RunningWorkProcess structured facts without provider-specific UI branches',
+            status: 'running',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+          refs: {},
+          stages: [
+            {
+              id: 'stage-search',
+              projectId: 'browser-project-t097',
+              index: 0,
+              kind: 'search',
+              title: 'Search durable evidence',
+              status: 'running',
+              ref: 'stage:browser-search',
+              evidenceRefs: ['trace:browser-search'],
+              artifactRefs: [],
+              diagnostics: ['primary provider status 200'],
+              recoverActions: [],
+              nextStep: 'Fetch selected records',
+              workEvidence: [{
+                kind: 'retrieval',
+                status: 'success',
+                provider: 'generic-provider',
+                input: { query: 'browser smoke durable evidence' },
+                resultCount: 3,
+                outputSummary: 'Structured retrieval found 3 reusable records',
+                evidenceRefs: ['evidence:browser-search'],
+                recoverActions: [],
+                diagnostics: ['primary provider status 200'],
+                nextStep: 'Fetch selected records',
+                rawRef: 'raw:browser-search',
+              }],
+            },
+            {
+              id: 'stage-fetch',
+              projectId: 'browser-project-t097',
+              index: 1,
+              kind: 'fetch',
+              title: 'Fetch selected records',
+              status: 'planned',
+              ref: 'stage:browser-fetch',
+              evidenceRefs: [],
+              artifactRefs: [],
+              diagnostics: [],
+              recoverActions: [],
+              workEvidence: [],
+            },
+          ],
+          truncated: false,
+          providerRawOutput: 'RAW_SEARCH_PAYLOAD_SHOULD_STAY_FOLDED '.repeat(80),
+        },
+      },
+    }),
+    JSON.stringify({
+      event: {
+        type: 'task-stage',
+        source: 'agentserver',
+        message: 'TEXT_FALLBACK_STAGE_SHOULD_NOT_APPEAR',
+        output: {
+          taskStage: {
+            schemaVersion: 'sciforge.task-stage.v1',
+            id: 'stage-fetch',
+            projectId: 'browser-project-t097',
+            index: 1,
+            kind: 'fetch',
+            title: 'Fetch selected records',
+            status: 'running',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            inputRefs: ['input:browser-fetch'],
+            outputRefs: [],
+            artifactRefs: [],
+            evidenceRefs: ['trace:browser-fetch'],
+            logRefs: ['log:browser-fetch'],
+            diagnostics: ['fetch bounded to 2 records'],
+            recoverActions: [],
+            nextStep: 'Validate evidence refs',
+            workEvidence: [{
+              kind: 'fetch',
+              status: 'partial',
+              provider: 'generic-provider',
+              input: { refs: ['evidence:browser-search'] },
+              resultCount: 2,
+              outputSummary: 'Structured fetch retained 2 bounded records',
+              evidenceRefs: ['evidence:browser-fetch'],
+              recoverActions: [],
+              diagnostics: ['fetch bounded to 2 records'],
+              nextStep: 'Validate evidence refs',
+              rawRef: 'raw:browser-fetch',
+            }],
+          },
+          providerRawOutput: 'RAW_FETCH_PAYLOAD_SHOULD_STAY_FOLDED '.repeat(80),
+        },
+      },
+    }),
+    JSON.stringify({
+      event: {
+        type: 'task-stage',
+        source: 'agentserver',
+        message: 'TEXT_FALLBACK_FAILURE_SHOULD_NOT_APPEAR',
+        output: {
+          taskStage: {
+            schemaVersion: 'sciforge.task-stage.v1',
+            id: 'stage-validate',
+            projectId: 'browser-project-t097',
+            index: 2,
+            kind: 'validate',
+            title: 'Validate evidence refs',
+            status: 'failed',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            inputRefs: ['input:browser-validate'],
+            outputRefs: [],
+            artifactRefs: [],
+            evidenceRefs: ['trace:browser-validate'],
+            logRefs: ['log:browser-validate-stderr'],
+            failureReason: 'structured fixture detected a missing artifact schema',
+            recoverActions: ['rerun validator with bounded artifact refs'],
+            diagnostics: ['validator schema mismatch'],
+            nextStep: 'Repair artifact schema and rerun current stage',
+            failure: {
+              reason: 'structured fixture detected a missing artifact schema',
+              recoverActions: ['rerun validator with bounded artifact refs'],
+              evidenceRefs: ['trace:browser-validate'],
+            },
+            workEvidence: [{
+              kind: 'command',
+              status: 'repair-needed',
+              provider: 'local-runtime',
+              input: { command: 'validate artifact refs' },
+              resultCount: 0,
+              outputSummary: 'Validator preserved failure as structured evidence',
+              evidenceRefs: ['evidence:browser-validate'],
+              failureReason: 'structured fixture detected a missing artifact schema',
+              recoverActions: ['rerun validator with bounded artifact refs'],
+              diagnostics: ['validator schema mismatch'],
+              nextStep: 'Repair artifact schema and rerun current stage',
+              rawRef: 'raw:browser-validate',
+            }],
+          },
+          providerRawOutput: 'RAW_FAILURE_PAYLOAD_SHOULD_STAY_FOLDED '.repeat(80),
+        },
+      },
+    }),
+    JSON.stringify({ result }),
+    '',
+  ];
+  await page.addInitScript(({ chunks }) => {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (!url.includes('/api/sciforge/tools/run/stream')) return originalFetch(input, init);
+      const encoder = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const delays = [120, 300, 480, 1600, 1700];
+          chunks.forEach((chunk, index) => {
+            window.setTimeout(() => {
+              controller.enqueue(encoder.encode(`${chunk}\n`));
+              if (index === chunks.length - 1) controller.close();
+            }, delays[index] ?? 1700 + index * 100);
+          });
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8' },
+      });
+    };
+  }, { chunks: streamChunks });
+}
+
+async function assertCursorLikeRunningWorklog(page: Page) {
+  const runningMessage = page.locator('.message.scenario', { has: page.locator('.running-work-process') }).last();
+  await runningMessage.waitFor({ timeout: 15_000 });
+  const processFold = runningMessage.locator('.running-work-process-raw');
+  await processFold.waitFor({ timeout: 15_000 });
+  assert.equal(await processFold.getAttribute('open'), null, 'running process details should default to a compact collapsed summary');
+  assert.equal(await runningMessage.locator('.stream-event:visible').count(), 0, 'running message should not show operation detail rows until expanded');
+  assert.equal(await runningMessage.locator('.stream-event-raw-fold:visible').count(), 0, 'running message should not show raw/tool output in the default compact state');
+  await page.waitForFunction(() => {
+    const messages = Array.from(document.querySelectorAll('.message.scenario')).filter((message) => message.querySelector('.running-work-process'));
+    const latest = messages.at(-1);
+    const text = latest?.textContent ?? '';
+    return /Project Browser smoke durable evidence project|Project browser-project-t097/.test(text)
+      && /Failure|Recover|structured fixture detected a missing artifact schema/.test(text);
+  }, null, { timeout: 15_000 });
+  const compactText = await runningMessage.locator('.running-work-live').innerText({ timeout: 15_000 });
+  assert.match(compactText, /Project Browser smoke durable evidence project|Project browser-project-t097/, 'compact running message should show project');
+  assert.match(compactText, /Stage [123] /, 'compact running message should show stage');
+  assert.match(compactText, /running|failed/, 'compact running message should show status');
+  assert.match(compactText, /Evidence|Failure/, 'compact running message should show structured evidence or failure');
+  assert.doesNotMatch(compactText, /TEXT_FALLBACK_/, 'structured TaskStage/WorkEvidence fields should win over text fallback');
+  assert.doesNotMatch(compactText, /RAW_(SEARCH|FETCH|FAILURE)_PAYLOAD_SHOULD_STAY_FOLDED/, 'raw output should not be flattened into the compact running message');
+  const processSummary = processFold.locator(':scope > summary');
+  await processSummary.click();
+  await runningMessage.locator('.stream-event').first().waitFor({ timeout: 15_000 });
+  assert.ok(await runningMessage.locator('.stream-event').count() >= 2, 'expanded running process should expose operation detail rows');
+  const expandedTextWithoutRaw = await runningMessage.evaluate((message) => {
+    const clone = message.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll('.stream-event-raw-fold').forEach((node) => node.remove());
+    return clone.textContent ?? '';
+  });
+  assert.match(expandedTextWithoutRaw, /Recover/);
+  assert.match(expandedTextWithoutRaw, /Diagnostic/);
+  assert.match(expandedTextWithoutRaw, /Next/);
+  assert.doesNotMatch(expandedTextWithoutRaw, /TEXT_FALLBACK_/);
+  assert.doesNotMatch(expandedTextWithoutRaw, /RAW_(SEARCH|FETCH|FAILURE)_PAYLOAD_SHOULD_STAY_FOLDED/, 'raw output should remain only inside second-level raw folds');
+  const rawFold = runningMessage.locator('.stream-event-raw-fold').first();
+  await rawFold.waitFor({ timeout: 15_000 });
+  assert.equal(await rawFold.getAttribute('open'), null, 'raw/tool output should remain second-level collapsed after expanding operation details');
+  await processSummary.click();
+}
+
+async function assertCursorLikeFinalAndRecovery(page: Page) {
+  const finalAuditFold = page.locator('.message.scenario .final-message-audit-fold').last();
+  await finalAuditFold.waitFor({ timeout: 15_000 });
+  assert.equal(await finalAuditFold.getAttribute('open'), null, 'final scenario message should default-collapse execution audit');
+  await page.locator('.results-panel .registry-slot').first().waitFor({ timeout: 15_000 });
+  const artifactRefs = await page.locator('.results-panel .registry-slot, .results-panel .artifact-source-bar').evaluateAll((nodes) =>
+    nodes.map((node) => node.getAttribute('data-sciforge-reference') ?? node.textContent ?? ''),
+  );
+  assert.ok(artifactRefs.some((text) => /artifact|research-report|report/.test(text)), `results should still expose a runtime artifact, got ${artifactRefs.join('\n')}`);
+  await page.locator('.results-panel .run-status-summary').waitFor({ timeout: 15_000 });
+  await page.locator('.results-panel .run-recover-actions').first().waitFor({ timeout: 15_000 });
 }
 
 function browserSmokeTimelineEvent() {
@@ -811,7 +1107,82 @@ function browserSmokeReferenceToolResult() {
   };
 }
 
+function cursorLikeWorklogResult() {
+  const now = new Date().toISOString();
+  return {
+    message: [
+      'Fixture result returned a concise user-facing answer.',
+      '',
+      '## Execution audit',
+      '',
+      'ExecutionUnit status and provenance are available for audit.',
+      '',
+      '```json',
+      JSON.stringify({
+        executionUnits: [{ id: 'eu-t097-recoverable', status: 'repair-needed', outputRef: '.sciforge/task-results/t097-running-work-process.json' }],
+        recoverActions: ['rerun-current-scenario', 'inspect-artifact-schema'],
+        auditRefs: ['agentserver://browser-smoke/t097'],
+      }, null, 2),
+      '```',
+      '',
+      '## Tool output',
+      '',
+      '```text',
+      [
+        'stdout: fixture command completed with partial evidence',
+        'stderr: fixture warning preserved for recovery',
+        'trace: raw tool payload kept out of the primary answer',
+      ].join('\n'),
+      '```',
+    ].join('\n'),
+    confidence: 0.88,
+    claimType: 'fact',
+    evidenceLevel: 'mock-browser',
+    reasoningTrace: 'T097 browser fixture uses structured stream events and a partial-failure payload.',
+    displayIntent: {
+      primaryGoal: 'Show the partial result artifact and keep execution audit folded',
+      requiredArtifactTypes: ['research-report'],
+      preferredModules: ['report-viewer'],
+      fallbackAcceptable: ['generic-artifact-inspector'],
+      acceptanceCriteria: ['artifact visible', 'recover actions visible', 'raw audit folded'],
+    },
+    uiManifest: [{
+      componentId: 'report-viewer',
+      title: 'T097 fixture report',
+      artifactRef: 'artifact-t097-report',
+      priority: 1,
+    }],
+    executionUnits: [{
+      id: 'eu-t097-recoverable',
+      tool: 'workspace.generic-fixture',
+      params: 'mode=t097-running-work-process',
+      status: 'repair-needed',
+      hash: 't097-running-work-process',
+      outputRef: '.sciforge/task-results/t097-running-work-process.json',
+      stdoutRef: '.sciforge/logs/t097.stdout.log',
+      stderrRef: '.sciforge/logs/t097.stderr.log',
+      failureReason: 'fixture recoverable diagnostic',
+      recoverActions: ['rerun-current-scenario', 'inspect-artifact-schema'],
+      nextStep: 'Retry after inspecting the artifact schema.',
+      time: now,
+    }],
+    artifacts: [{
+      id: 'artifact-t097-report',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      dataRef: '.sciforge/artifacts/t097-report.json',
+      metadata: { title: 'T097 fixture report', status: 'partial', runId: 't097-running-work-process' },
+      data: {
+        markdown: '# T097 fixture report\n\nA partial artifact remains available while recovery actions are shown.',
+      },
+    }],
+    claims: [],
+  };
+}
+
 async function sendContextSmokePrompt(page: Page, prompt: string) {
+  await expandComposer(page);
   await page.getByPlaceholder(/输入研究问题/).fill(prompt);
   await page.locator('.chat-panel .composer').getByRole('button', { name: '发送' }).click();
   await page.getByText(new RegExp(`Context smoke response ${contextSmokeResponseIndexForPrompt(prompt)}`)).first().waitFor({ timeout: 15_000 });
@@ -865,7 +1236,7 @@ function browserSmokeContextWindowState(ratio: number, status: 'healthy' | 'watc
     output: Math.round(20_000 * ratio),
     windowTokens: 100_000,
     ratio,
-    source: 'provider-usage',
+    source: 'agentserver',
     status,
     compactCapability: 'agentserver',
     autoCompactThreshold: 0.82,

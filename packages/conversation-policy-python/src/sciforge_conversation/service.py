@@ -21,6 +21,7 @@ from .contracts import (
     request_from_json,
     to_json_dict,
 )
+from .execution_classifier import classify_execution_mode
 from .goal_snapshot import build_goal_snapshot
 from .handoff_planner import plan_handoff
 from .memory import build_memory_plan
@@ -45,14 +46,31 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         "goalSnapshot": goal_snapshot,
         "contextPolicy": context_policy,
     })
+    context_session = _session_for_context_policy(policy_input["session"], context_policy, memory_plan)
     current_reference_digests = build_reference_digests_from_request(policy_input)
     artifact_index = build_artifact_index_from_request({
         **policy_input,
+        "session": context_session,
         "currentReferenceDigests": current_reference_digests,
     })
     capability_brief = build_capability_brief(
         _capability_request(policy_input, goal_snapshot),
         policy_input["capabilities"],
+    )
+    execution_mode_plan = classify_execution_mode(
+        {
+            "prompt": policy_input["prompt"],
+            "refs": policy_input["references"],
+            "artifacts": context_session.get("artifacts", []),
+            "expectedArtifactTypes": goal_snapshot.get("requiredArtifacts", []),
+            "selectedCapabilities": capability_brief.get("selected", []),
+            "selectedTools": _selected_policy_list(policy_input, "selectedTools", "tools"),
+            "selectedSenses": _selected_policy_list(policy_input, "selectedSenses", "senses"),
+            "selectedVerifiers": _selected_policy_list(policy_input, "selectedVerifiers", "verifiers"),
+            "recentFailures": _recent_failures(policy_input),
+            "priorAttempts": _prior_attempts(policy_input),
+            "userGuidanceQueue": _user_guidance_queue(policy_input),
+        }
     )
     handoff_plan = plan_handoff({
         "prompt": policy_input["prompt"],
@@ -60,7 +78,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         "policy": context_policy,
         "memory": memory_plan,
         "currentReferenceDigests": current_reference_digests,
-        "artifacts": policy_input["session"].get("artifacts", []),
+        "artifacts": context_session.get("artifacts", []),
         "requiredArtifacts": goal_snapshot.get("requiredArtifacts", []),
         "budget": _handoff_budget(policy_input),
     })
@@ -76,6 +94,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
         currentReferenceDigests=current_reference_digests,
         artifactIndex=artifact_index,
         capabilityBrief=capability_brief,
+        executionModePlan=execution_mode_plan,
         handoffPlan=handoff_plan,
         acceptancePlan=_acceptance_plan(goal_snapshot, handoff_plan),
         recoveryPlan=recovery_plan,
@@ -96,6 +115,7 @@ def evaluate_request(request: ConversationPolicyRequest) -> ConversationPolicyRe
             {"event": "module.memory", "schemaVersion": memory_plan.get("schemaVersion")},
             {"event": "module.reference_digest", "count": len(current_reference_digests)},
             {"event": "module.capability_broker", "selected": len(capability_brief.get("selected", []))},
+            {"event": "module.execution_classifier", "mode": execution_mode_plan.get("executionMode")},
             {"event": "module.handoff_planner", "status": handoff_plan.get("status")},
         ],
         metadata={"service": "sciforge_conversation.service"},
@@ -239,6 +259,20 @@ def _handoff_budget(policy_input: JsonMap) -> JsonMap:
     }
 
 
+def _session_for_context_policy(session: JsonMap, context_policy: JsonMap, memory_plan: JsonMap) -> JsonMap:
+    mode = str(context_policy.get("mode") or "")
+    history_reuse = context_policy.get("historyReuse") if isinstance(context_policy.get("historyReuse"), dict) else {}
+    allow_history = history_reuse.get("allowed") is True or mode in {"continue", "repair"}
+    explicit_refs = memory_plan.get("currentReferenceFocus") if isinstance(memory_plan.get("currentReferenceFocus"), list) else []
+    if allow_history or explicit_refs:
+        return session
+    scoped = dict(session)
+    scoped["artifacts"] = []
+    scoped["executionUnits"] = []
+    scoped["runs"] = []
+    return scoped
+
+
 def _current_references(
     request: ConversationPolicyRequest,
     current_reference_digests: list[JsonMap] | None = None,
@@ -292,6 +326,77 @@ def _recovery_plan(policy_input: JsonMap) -> JsonMap:
     }
 
 
+def _recent_failures(policy_input: JsonMap) -> list[Any]:
+    hints = policy_input.get("policyHints", {})
+    failures: list[Any] = []
+    for candidate in (
+        hints.get("recentFailures"),
+        hints.get("failures"),
+        [hints.get("failure")] if hints.get("failure") else None,
+        policy_input.get("metadata", {}).get("recentFailures"),
+    ):
+        if isinstance(candidate, list):
+            failures.extend(candidate)
+    session = policy_input.get("session", {})
+    runs = session.get("runs")
+    if isinstance(runs, list):
+        failures.extend(
+            run
+            for run in runs
+            if isinstance(run, dict) and str(run.get("status", "")).lower() in {"failed", "error"}
+        )
+    return failures
+
+
+def _prior_attempts(policy_input: JsonMap) -> list[Any]:
+    hints = policy_input.get("policyHints", {})
+    metadata = policy_input.get("metadata", {})
+    session = policy_input.get("session", {})
+    attempts: list[Any] = []
+    for candidate in (
+        hints.get("priorAttempts"),
+        hints.get("attempts"),
+        metadata.get("priorAttempts"),
+        metadata.get("attempts"),
+        session.get("attempts"),
+        session.get("runs"),
+        session.get("executionUnits"),
+    ):
+        if isinstance(candidate, list):
+            attempts.extend(candidate)
+    return attempts
+
+
+def _user_guidance_queue(policy_input: JsonMap) -> list[Any]:
+    hints = policy_input.get("policyHints", {})
+    metadata = policy_input.get("metadata", {})
+    session = policy_input.get("session", {})
+    for candidate in (
+        hints.get("userGuidanceQueue"),
+        hints.get("guidanceQueue"),
+        metadata.get("userGuidanceQueue"),
+        session.get("userGuidanceQueue"),
+        session.get("guidanceQueue"),
+    ):
+        if isinstance(candidate, list):
+            return candidate
+    return []
+
+
+def _selected_policy_list(policy_input: JsonMap, *keys: str) -> list[Any]:
+    hints = policy_input.get("policyHints", {})
+    metadata = policy_input.get("metadata", {})
+    ts_decisions = policy_input.get("tsDecisions", {})
+    for source in (hints, metadata, ts_decisions):
+        if not isinstance(source, dict):
+            continue
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, list):
+                return value
+    return []
+
+
 def _user_visible_plan(
     policy_input: JsonMap,
     goal_snapshot: JsonMap,
@@ -333,6 +438,7 @@ def _error_response(exc: Exception) -> str:
         "currentReferenceDigests": [],
         "artifactIndex": {},
         "capabilityBrief": {"selected": [], "excluded": [], "auditTrace": []},
+        "executionModePlan": {},
         "handoffPlan": {"fallback": {"tsRuntimeFallback": True}},
         "acceptancePlan": {},
         "recoveryPlan": {},

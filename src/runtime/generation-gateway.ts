@@ -88,6 +88,9 @@ import {
   parseGenerationResponse,
   parseToolPayloadResponse,
 } from './gateway/agentserver-run-output.js';
+import { evaluateToolPayloadEvidence } from './gateway/work-evidence-guard.js';
+import { evaluateGuidanceAdoption } from './gateway/guidance-adoption-guard.js';
+import { collectWorkEvidenceFromBackendEvent, summarizeWorkEvidenceForHandoff, type WorkEvidence } from './gateway/work-evidence-types.js';
 import {
   agentServerFailurePayloadRefs,
   agentServerGenerationFailureReason,
@@ -474,6 +477,8 @@ async function tryAgentServerRepairAndRerun(params: {
       agentServerRunId: repair.runId,
       artifacts: params.request.artifacts,
       uiStateSummary: params.request.uiState,
+      taskProjectHandoff: isRecord(params.request.uiState?.taskProjectHandoff) ? params.request.uiState.taskProjectHandoff : undefined,
+      userGuidanceQueue: activeGuidanceQueueForTaskInput(params.request),
       recentExecutionRefs: toRecordList(params.request.uiState?.recentExecutionRefs),
       priorAttempts,
     },
@@ -535,7 +540,22 @@ async function tryAgentServerRepairAndRerun(params: {
       stderrRel,
       runtimeFingerprint: rerun.runtimeFingerprint,
     });
-    const failureReason = firstPayloadFailureReason(payload, rerun);
+    const evidenceFinding = evaluateToolPayloadEvidence(payload, params.request);
+    const guidanceFinding = evaluateGuidanceAdoption(payload, params.request);
+    const workEvidenceSummary = summarizeWorkEvidenceForHandoff(payload);
+    const payloadFailureReason = firstPayloadFailureReason(payload, rerun);
+    const payloadFailureStatus = payloadHasFailureStatus(payload);
+    const evidenceFailureReason = !payloadFailureStatus ? guidanceFinding?.reason ?? evidenceFinding?.reason : undefined;
+    const failureReason = payloadFailureReason ?? evidenceFailureReason;
+    const shouldRepairExecutionFailure = errors.length === 0 && Boolean(failureReason)
+      && (rerun.exitCode !== 0 || Boolean(evidenceFailureReason));
+    const attemptStatus = errors.length
+      ? 'repair-needed'
+      : shouldRepairExecutionFailure
+        ? guidanceFinding?.severity ?? evidenceFinding?.severity ?? 'repair-needed'
+        : payloadFailureStatus || rerun.exitCode !== 0
+          ? 'failed-with-reason'
+          : 'done';
     await appendTaskAttempt(workspace, {
       id: params.taskId,
       prompt: params.request.prompt,
@@ -547,7 +567,7 @@ async function tryAgentServerRepairAndRerun(params: {
       selfHealReason: params.failureReason,
       patchSummary: diffSummary,
       diffRef: diffRel,
-      status: errors.length ? 'repair-needed' : payloadHasFailureStatus(payload) || rerun.exitCode !== 0 ? 'failed-with-reason' : 'done',
+      status: attemptStatus,
       codeRef: params.run.spec.taskRel,
       inputRef: `.sciforge/task-inputs/${params.taskId}-attempt-${attempt}.json`,
       outputRef: outputRel,
@@ -555,13 +575,16 @@ async function tryAgentServerRepairAndRerun(params: {
       stderrRef: stderrRel,
       exitCode: rerun.exitCode,
       schemaErrors: errors,
+      workEvidenceSummary,
       failureReason: errors.length ? `AgentServer repair rerun output failed schema validation: ${errors.join('; ')}` : failureReason,
       createdAt: new Date().toISOString(),
     });
-    if (errors.length || payloadHasFailureStatus(payload) || rerun.exitCode !== 0) {
+    if (errors.length || shouldRepairExecutionFailure || payloadFailureStatus || rerun.exitCode !== 0) {
       if (attempt < maxAttempts) {
         const nextFailureReason = errors.length
           ? `AgentServer repair rerun output failed schema validation: ${errors.join('; ')}`
+          : evidenceFailureReason
+            ? evidenceFailureReason
           : failureReason ?? `AgentServer repair rerun exited ${rerun.exitCode}.`;
         return tryAgentServerRepairAndRerun({
           ...params,
@@ -650,6 +673,20 @@ async function tryAgentServerRepairAndRerun(params: {
 function agentServerRepairMaxAttempts() {
   const value = Number(process.env.SCIFORGE_AGENTSERVER_REPAIR_MAX_ATTEMPTS || 12);
   return Number.isFinite(value) ? Math.max(2, Math.min(50, Math.floor(value))) : 12;
+}
+
+function activeGuidanceQueueForTaskInput(request: GatewayRequest) {
+  const handoff = isRecord(request.uiState?.taskProjectHandoff) ? request.uiState.taskProjectHandoff : undefined;
+  const queue = Array.isArray(handoff?.userGuidanceQueue)
+    ? handoff.userGuidanceQueue
+    : Array.isArray(request.uiState?.userGuidanceQueue)
+      ? request.uiState.userGuidanceQueue
+      : Array.isArray(request.uiState?.guidanceQueue)
+        ? request.uiState.guidanceQueue
+        : [];
+  return queue.filter((entry): entry is Record<string, unknown> => isRecord(entry)
+    && typeof entry.id === 'string'
+    && (entry.status === 'queued' || entry.status === 'deferred'));
 }
 
 async function requestAgentServerGeneration(params: {
@@ -898,7 +935,7 @@ async function requestAgentServerGeneration(params: {
       signal: controller.signal,
       body: JSON.stringify(runPayload),
     });
-    const { json, run, error, streamText } = await readAgentServerRunStream(response, (event) => {
+    const { json, run, error, streamText, workEvidence } = await readAgentServerRunStream(response, (event) => {
       emitWorkspaceRuntimeEvent(params.callbacks, withRequestContextWindowLimit(
         normalizeAgentServerWorkspaceEvent(event),
         request,
@@ -1003,11 +1040,12 @@ async function requestAgentServerGeneration(params: {
     }
     const directPayload = parseToolPayloadResponse(run);
     if (directPayload) {
+      const payload = mergeBackendStreamWorkEvidence(directPayload, workEvidence);
       return await finalizeAgentServerGenerationSuccess({
         result: {
         ok: true,
         runId: typeof run.id === 'string' ? run.id : undefined,
-        directPayload,
+        directPayload: payload,
         },
         contextRecovery,
         workspace: params.workspace,
@@ -1164,7 +1202,7 @@ async function readAgentServerRunStream(
     maxSilentMs?: number;
     onSilentTimeout?: (message: string) => void;
   } = {},
-): Promise<{ json: unknown; run: Record<string, unknown>; error?: string; streamText?: string }> {
+): Promise<{ json: unknown; run: Record<string, unknown>; error?: string; streamText?: string; workEvidence: WorkEvidence[] }> {
   if (!response.body) {
     const text = await response.text();
     let json: unknown = text;
@@ -1178,6 +1216,7 @@ async function readAgentServerRunStream(
       json,
       run: isRecord(data.run) ? data.run : {},
       error: isRecord(json) ? String(json.error || '') : String(text).slice(0, 500),
+      workEvidence: collectWorkEvidenceFromBackendEvent(json),
     };
   }
   const reader = response.body.getReader();
@@ -1188,6 +1227,7 @@ async function readAgentServerRunStream(
   let streamError = '';
   let lastEnvelopeAt = Date.now();
   const streamTextParts: string[] = [];
+  const workEvidence: WorkEvidence[] = [];
   function consumeLine(rawLine: string) {
     const line = rawLine.trim();
     if (!line) return;
@@ -1197,6 +1237,7 @@ async function readAgentServerRunStream(
     if (!isRecord(envelope)) return;
     if ('event' in envelope) {
       const event = envelope.event;
+      workEvidence.push(...collectWorkEvidenceFromBackendEvent(event));
       if (isRecord(event) && typeof event.text === 'string') streamTextParts.push(event.text);
       onEvent(event);
       const totalUsage = agentServerEventTotalUsage(event);
@@ -1240,7 +1281,36 @@ async function readAgentServerRunStream(
     run: isRecord(data.run) ? data.run : {},
     error: streamError || undefined,
     streamText: streamTextParts.join(''),
+    workEvidence: dedupeWorkEvidence(workEvidence),
   };
+}
+
+function mergeBackendStreamWorkEvidence(payload: ToolPayload, workEvidence: WorkEvidence[]) {
+  if (!workEvidence.length) return payload;
+  const existing = Array.isArray(payload.workEvidence) ? payload.workEvidence : [];
+  return {
+    ...payload,
+    workEvidence: dedupeWorkEvidence([...existing, ...workEvidence]),
+  };
+}
+
+function dedupeWorkEvidence(items: WorkEvidence[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = JSON.stringify({
+      kind: item.kind,
+      status: item.status,
+      provider: item.provider,
+      input: item.input,
+      resultCount: item.resultCount,
+      failureReason: item.failureReason,
+      rawRef: item.rawRef,
+      evidenceRefs: item.evidenceRefs,
+    });
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function currentReferenceDigestGuardLimit(request: GatewayRequest) {

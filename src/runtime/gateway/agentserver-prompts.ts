@@ -8,6 +8,7 @@ import { agentServerAgentId, agentServerContextPolicy, contextWindowMetadata, fe
 import { cleanUrl, clipForAgentServerJson, clipForAgentServerPrompt, errorMessage, excerptAroundFailureLine, extractLikelyErrorLine, hashJson, headForAgentServer, isRecord, readTextIfExists, tailForAgentServer, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
 import { normalizeBackendHandoff } from '../workspace-task-input.js';
 import { readRecentTaskAttempts } from '../task-attempt-history.js';
+import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { parseJsonErrorMessage, redactSecretText, sanitizeAgentServerError } from './backend-failure-diagnostics.js';
 import { toolPackageManifests } from '../../../packages/tools';
@@ -365,7 +366,10 @@ export async function buildCompactRepairContext(params: {
     readTextIfExists(join(params.workspace, params.run.outputRef)),
     readTextIfExists(join(params.workspace, inputRel)),
   ]);
-  const failureEvidence = `${params.failureReason}\n${stderr}\n${stdout}`;
+  const outputWorkEvidenceSummary = summarizeWorkEvidenceForHandoff(parseJsonIfPossible(output));
+  const failureEvidence = outputWorkEvidenceSummary
+    ? params.failureReason
+    : `${params.failureReason}\n${stderr}\n${stdout}`;
   return {
     version: 'sciforge.repair-context.v1',
     createdAt: new Date().toISOString(),
@@ -402,9 +406,12 @@ export async function buildCompactRepairContext(params: {
       failureReason: clipForAgentServerPrompt(params.failureReason, 4000),
       schemaErrors: params.schemaErrors.slice(0, 16).map((entry) => clipForAgentServerPrompt(entry, 600)).filter(Boolean),
       likelyErrorLine: extractLikelyErrorLine(failureEvidence),
-      stderrTail: tailForAgentServer(stderr, 8000),
-      stdoutTail: tailForAgentServer(stdout, 4000),
-      outputHead: headForAgentServer(output, 4000),
+      stderrTail: outputWorkEvidenceSummary ? undefined : tailForAgentServer(stderr, 8000),
+      stdoutTail: outputWorkEvidenceSummary ? undefined : tailForAgentServer(stdout, 4000),
+      outputHead: outputWorkEvidenceSummary
+        ? JSON.stringify({ workEvidenceSummary: outputWorkEvidenceSummary }, null, 2)
+        : headForAgentServer(output, 4000),
+      workEvidenceSummary: outputWorkEvidenceSummary,
     },
     code: {
       sha1: sha1(code),
@@ -423,6 +430,15 @@ export async function buildCompactRepairContext(params: {
     recentExecutionRefs: summarizeExecutionRefs(toRecordList(params.request.uiState?.recentExecutionRefs)),
     priorAttempts: summarizeTaskAttemptsForAgentServer(params.priorAttempts).slice(0, 4),
   };
+}
+
+function parseJsonIfPossible(value: string) {
+  if (!value.trim()) return undefined;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function readConfiguredLlmEndpoint(path: string, source: string): Promise<{
@@ -470,6 +486,7 @@ export function buildAgentServerRepairPrompt(params: {
     'Use the compact repair context below: it contains the current user goal, workspace refs, failure evidence, and relevant code/log excerpts.',
     'Edit the referenced task file or adjacent helper files only as needed. SciForge will rerun the task after you finish.',
     'The repaired task must execute the user goal end-to-end, not merely generate code or report that code was generated.',
+    ...externalIoReliabilityContractLines(),
     'Preserve failureReason in the next ToolPayload only if the real blocker remains after repair.',
     'Do not fabricate success or replace the user goal with an unrelated demo task.',
     '',
@@ -526,13 +543,22 @@ export function buildAgentServerGenerationPrompt(request: {
   const contextEnvelope = isRecord(request.contextEnvelope) ? request.contextEnvelope : {};
   const sessionFacts = isRecord(contextEnvelope.sessionFacts) ? contextEnvelope.sessionFacts : {};
   const scenarioFacts = isRecord(contextEnvelope.scenarioFacts) ? contextEnvelope.scenarioFacts : {};
+  const currentUserRequest = stringField(sessionFacts.currentUserRequest) ?? currentUserRequestText(request.prompt);
+  const executionMode = executionModeDecisionForPrompt(sessionFacts, scenarioFacts);
   const currentTurnSnapshot = {
     kind: 'SciForgeCurrentTurnSnapshot',
     prompt: request.prompt,
-    currentUserRequest: stringField(sessionFacts.currentUserRequest) ?? currentUserRequestText(request.prompt),
+    currentUserRequest,
     skillDomain: request.skillDomain,
     expectedArtifactTypes: request.expectedArtifactTypes ?? [],
     selectedComponentIds: request.selectedComponentIds ?? [],
+    executionModeRecommendation: executionMode.executionModeRecommendation,
+    complexityScore: executionMode.complexityScore,
+    uncertaintyScore: executionMode.uncertaintyScore,
+    reproducibilityLevel: executionMode.reproducibilityLevel,
+    stagePlanHint: executionMode.stagePlanHint,
+    executionModeReason: executionMode.executionModeReason,
+    executionScope: 'backend-decides',
     selectedToolIds: toStringList(scenarioFacts.selectedToolIds),
     selectedSenseIds: toStringList(scenarioFacts.selectedSenseIds),
     currentReferences: Array.isArray(sessionFacts.currentReferences) ? sessionFacts.currentReferences : undefined,
@@ -543,6 +569,8 @@ export function buildAgentServerGenerationPrompt(request: {
       alternatives: ['AgentServerGenerationResponse', 'SciForge ToolPayload'],
       taskFiles: 'array of { path, language, content } unless physically written in workspace',
       taskEntrypoint: 'executable code path only; report/data files are artifacts, not entrypoints',
+      externalIo: 'bounded timeouts, backoff retries for 429/5xx/network timeout/empty-result, and valid failed-with-reason ToolPayload on exhausted retrieval',
+      projectGuidanceAdoption: 'If TaskProject userGuidanceQueue is present, include executionUnits[].guidanceDecisions with every queued/deferred item marked adopted, deferred, or rejected with a reason.',
     },
   };
   return [
@@ -562,8 +590,18 @@ export function buildAgentServerGenerationPrompt(request: {
     'First infer the current-turn intent from the CURRENT TURN SNAPSHOT and recentConversation. Use priorAttempts, artifacts, recentExecutionRefs, and workspace refs only when the current turn explicitly asks to continue, repair, rerun, or inspect a previous task.',
     'Fresh current-turn requests must move directly to either a direct ToolPayload or generated task code. Do not spend generation-stage tool calls browsing historical .sciforge/task-attempts, logs, artifacts, or old generated tasks unless the current turn explicitly asks for that history.',
     'Return exactly one JSON object, with no markdown before or after it.',
-    'If the user only needs an answer from existing context, return a valid SciForge ToolPayload JSON directly, preserving useful existing artifacts/refs.',
-    'If the user asks to continue, repair, rerun, retrieve, analyze files, or produce artifacts, return JSON matching AgentServerGenerationResponse: taskFiles, entrypoint, environmentRequirements, validationCommand, expectedArtifacts, and patchSummary.',
+    'Do not ask SciForge to decide scientific, topical, retrieval, or domain intent. The executionModeRecommendation fields are advisory handoff metadata; AgentServer must make the actual domain/tool/stage decision.',
+    'executionModeRecommendation=direct-context-answer: only use this when the answer can be produced entirely from existing context, current refs/digests, artifacts, or prior execution refs already present in the handoff. Do not use direct-context-answer for fresh search/fetch/current-events, even if the user asks a simple question.',
+    'executionModeRecommendation=thin-reproducible-adapter: use this for simple search/fetch/current-events lookups with no explicit report/table/download/batch requirement. Keep it lightweight, but preserve code/input/output/log/evidence refs: return AgentServerGenerationResponse with a minimal bounded adapter task unless the backend already has durable tool/result refs it can expose in a ToolPayload.',
+    'executionModeRecommendation=single-stage-task: use this for one bounded local computation, file transform, narrow analysis, or simple artifact generation that can be run and validated in one workspace task. Return one AgentServerGenerationResponse, not a multi-stage project plan.',
+    'executionModeRecommendation=multi-stage-project: use this for complex research, durable artifacts, multi-file outputs, local-file processing, code/command execution, batch retrieval, full-document reading, reports/tables/notebooks, or multi-artifact validation. Do not generate a complete end-to-end pipeline in one response; return only the next stage spec/patch/task plus the expected refs/artifacts for that stage.',
+    'executionModeRecommendation=repair-or-continue-project: use this when the current turn refers to a previous failure, existing project/stage, user guidance queue, continuation, repair, or rerun. Inspect only the cited project/stage refs and return a minimal repair/continue stage instead of starting unrelated fresh work.',
+    'Multi-stage/project guidance: for multi-stage-project, plan the durable project internally but return only the immediately executable next stage; later stages must be represented as bounded stage hints, not as a one-shot generated pipeline.',
+    'Project guidance adoption contract: when a TaskProject handoff includes userGuidanceQueue, the next stage plan/result must declare every queued or deferred guidance item as adopted, deferred, or rejected, with a short reason in executionUnits[].guidanceDecisions. Do not silently ignore guidance.',
+    'Reproducibility principle: when the answer depends on fresh external retrieval, local files, commands, or generated artifacts, prefer AgentServerGenerationResponse so SciForge can archive runnable code/input/output/log refs.',
+    'For lightweight search/news/current-events lookups with no explicit report/table/download/batch requirement, still keep the work reproducible, but use a minimal bounded adapter task: one executable file, small provider list, capped results, short timeouts, no workspace exploration, no full-document download, and no bespoke long research pipeline.',
+    'Return a direct ToolPayload for lightweight retrieval only when the backend already has durable tool/result refs and can expose WorkEvidence-style provider/query/status/resultCount/evidenceRefs/failureReason/recoverActions/nextStep in the payload; otherwise generate the minimal adapter task.',
+    'For heavy or durable work, return AgentServerGenerationResponse with taskFiles, entrypoint, environmentRequirements, validationCommand, expectedArtifacts, and patchSummary. Heavy work includes local file processing, code/command execution, batch retrieval, full-document download/reading, explicit report/table/notebook deliverables, multi-file outputs, or repair/rerun of a prior task. For multi-stage-project, scope this to the next stage only.',
     'Hard contract: taskFiles MUST be an array of objects with path, language, and non-empty content unless the file was physically written in the workspace before returning. Never return taskFiles as string paths only.',
     'Hard contract: entrypoint.path MUST reference one of the returned taskFiles or a file that was physically written in the workspace before returning.',
     'If you physically write task files into the workspace, prefer a compact path-only taskFiles object (path + language, content may be omitted/empty) and return JSON immediately. Do not cat/read full generated source back into the final response just to inline it.',
@@ -598,6 +636,7 @@ export function buildAgentServerGenerationPrompt(request: {
     'For continuation requests, continue the scenario goal using recentConversation, artifacts, recentExecutionRefs, and priorAttempts. Do not restart an unrelated analysis.',
     'For repair requests, inspect the failureReason plus stdoutRef/stderrRef/outputRef/codeRef and report whether logs are readable before editing or rerunning.',
     'If a required input, remote file, credential, or executable is missing, write a valid ToolPayload with executionUnits.status="failed-with-reason" and a precise failureReason instead of fabricating outputs.',
+    ...externalIoReliabilityContractLines(),
     '',
     JSON.stringify(clipForAgentServerJson({
       ...request,
@@ -607,6 +646,56 @@ export function buildAgentServerGenerationPrompt(request: {
       },
     }), null, 2),
   ].join('\n');
+}
+
+function externalIoReliabilityContractLines() {
+  return [
+    'External I/O reliability contract: generated or repaired tasks that call remote APIs, web feeds, model endpoints, package registries, databases, or downloadable files must use bounded timeouts, descriptive User-Agent/contact metadata when applicable, limited retries with exponential backoff, and explicit handling for 429/5xx/network timeout/empty-result cases.',
+    'For provider-specific APIs, follow the provider query syntax and prefer standard URL encoders/client libraries over handwritten query strings; when a strict query is empty or invalid, record that fact and try a broader/provider-appropriate fallback before concluding no results.',
+    'An empty external search is not a successful literature result by itself: record the exact query strings, HTTP statuses/errors, totalResults when available, fallback attempts, and whether the empty result came from rate limiting, invalid query syntax, no matching records, or network failure.',
+    'If all external retrieval attempts fail, the task must still write a valid ToolPayload with executionUnits.status="failed-with-reason", concise failureReason, stdoutRef/stderrRef/outputRef evidence refs when available, recoverActions, nextStep, and any partial artifacts that are honest and useful. Do not leave the user with only a traceback, an endless stream wait, or a missing output file.',
+    'Prefer installed/workspace client libraries or capability tools for remote retrieval when they provide rate-limit handling, pagination, or caching; otherwise keep custom HTTP code small, auditable, and source-agnostic.',
+  ];
+}
+
+function executionModeDecisionForPrompt(
+  sessionFacts: Record<string, unknown>,
+  scenarioFacts: Record<string, unknown>,
+) {
+  return {
+    executionModeRecommendation: firstStringField([sessionFacts.executionModeRecommendation, scenarioFacts.executionModeRecommendation]) ?? 'unknown',
+    complexityScore: firstNumberOrStringField([sessionFacts.complexityScore, scenarioFacts.complexityScore]) ?? 'unknown',
+    uncertaintyScore: firstNumberOrStringField([sessionFacts.uncertaintyScore, scenarioFacts.uncertaintyScore]) ?? 'unknown',
+    reproducibilityLevel: firstStringField([sessionFacts.reproducibilityLevel, scenarioFacts.reproducibilityLevel]) ?? 'unknown',
+    stagePlanHint: firstStagePlanHintField([sessionFacts.stagePlanHint, scenarioFacts.stagePlanHint]) ?? 'backend-decides',
+    executionModeReason: firstStringField([sessionFacts.executionModeReason, scenarioFacts.executionModeReason]) ?? 'backend-decides',
+  };
+}
+
+function firstStringField(values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function firstNumberOrStringField(values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function firstStagePlanHintField(values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (Array.isArray(value)) {
+      const items = value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim());
+      if (items.length) return items;
+    }
+  }
+  return undefined;
 }
 
 export function summarizeSkillsForAgentServer(

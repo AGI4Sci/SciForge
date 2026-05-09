@@ -1,6 +1,6 @@
 import type { GatewayRequest, SciForgeSkillDomain, ToolPayload } from '../runtime-types.js';
 import { expectedArtifactTypesForRequest } from './gateway-request.js';
-import { clipForAgentServerJson, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
+import { clipForAgentServerJson, isRecord, toRecordList } from '../gateway-utils.js';
 import { sha1 } from '../workspace-task-runner.js';
 
 type ArtifactReferenceContextCollector = (request: GatewayRequest) => Promise<{ combinedArtifacts: Array<Record<string, unknown>> } | undefined>;
@@ -19,12 +19,6 @@ function artifactNeedsRepair(artifact: Record<string, unknown>) {
   const status = String(artifact.status || metadata.status || '').toLowerCase();
   const reason = String(artifact.failureReason || metadata.failureReason || '').toLowerCase();
   return status.includes('repair') || status.includes('fail') || /placeholder|missing|failed|repair/.test(reason);
-}
-
-function currentUserRequestText(prompt: string) {
-  const marker = 'Current user request:';
-  const index = prompt.lastIndexOf(marker);
-  return index >= 0 ? prompt.slice(index + marker.length).trim() : prompt.trim();
 }
 
 function isToolPayload(value: unknown): value is ToolPayload {
@@ -130,17 +124,28 @@ export async function mergeReusableContextArtifactsForDirectPayload(
 function directPayloadReferencesExistingContext(payload: ToolPayload, request: GatewayRequest) {
   const hasRecoverableContext = request.artifacts.length > 0
     || toRecordList(request.uiState?.recentExecutionRefs).length > 0
-    || toStringList(request.uiState?.recentConversation).length > 1;
+    || (Array.isArray(request.uiState?.recentConversation) && request.uiState.recentConversation.length > 1);
   if (!hasRecoverableContext) return false;
-  const text = [
-    currentUserRequestText(request.prompt),
-    payload.message,
-    payload.reasoningTrace,
-    payload.claimType,
-    payload.evidenceLevel,
-    ...payload.claims.map((claim) => typeof claim === 'string' ? claim : JSON.stringify(clipForAgentServerJson(claim, 2))),
-  ].join('\n').toLowerCase();
-  return /上一轮|上轮|上次|之前|此前|刚才|已有|现有|当前会话|不要重新|别重新|不重新|不要重跑|别重跑|不重跑|不要检索|不要搜索|只读取|只读|prior|previous|last\s+(round|run|turn)|existing|current\s+session|context|refs?|artifacts?|do not rerun|don't rerun|no rerun|without rerun|no new/.test(text);
+  const policy = isRecord(request.uiState?.contextReusePolicy)
+    ? request.uiState.contextReusePolicy
+    : isRecord(request.uiState?.contextIsolation)
+      ? request.uiState.contextIsolation
+      : undefined;
+  if (policy) {
+    const mode = typeof policy.mode === 'string' ? policy.mode : '';
+    const historyReuse = isRecord(policy.historyReuse) ? policy.historyReuse : {};
+    return historyReuse.allowed === true || mode === 'continue' || mode === 'repair';
+  }
+  return directPayloadCarriesStructuredContextRefs(payload);
+}
+
+function directPayloadCarriesStructuredContextRefs(payload: ToolPayload) {
+  if (toRecordList(payload.objectReferences).some((reference) => {
+    const ref = stringField(reference.ref);
+    return ref ? /^(artifact|file|folder|run|execution-unit):/i.test(ref) : false;
+  })) return true;
+  if (payload.artifacts.some((artifact) => artifact.dataRef || artifact.ref || artifact.path)) return true;
+  return payload.claims.some((claim) => toRecordList(claim.supportingRefs).length || toRecordList(claim.evidenceRefs).length);
 }
 
 export function ensureDirectAnswerReportArtifact(payload: ToolPayload, request: GatewayRequest, source: string): ToolPayload {

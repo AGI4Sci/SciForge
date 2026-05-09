@@ -5,12 +5,12 @@ import { SCENARIO_SPECS } from '../scenarioSpecs';
 import { buildContextWindowMeterModel, estimateContextWindowState, latestContextWindowState } from '../contextWindow';
 import { builtInScenarioPackageRef } from '../scenarioCompiler/scenarioPackage';
 import { resetSession } from '../sessionStore';
-import { formatProgressHeadline, latestProgressModel } from '../processProgress';
+import { SILENT_STREAM_WAIT_THRESHOLD_MS, buildSilentStreamProgressEvent, formatProgressHeadline, latestProgressModel } from '../processProgress';
 import { coalesceStreamEvents, latestRunningEvent, presentStreamEvent, streamEventCounts } from '../streamEventPresentation';
-import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type NormalizedAgentResponse, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeRun, type SciForgeSession, type ObjectReference, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
+import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type GuidanceQueueRecord, type NormalizedAgentResponse, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeRun, type SciForgeSession, type ObjectReference, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
 import { writeWorkspaceFile } from '../api/workspaceClient';
 import { exportJsonFile } from './exportUtils';
-import { Badge, ClaimTag, ConfidenceBar, EvidenceTag, cx } from './uiPrimitives';
+import { Badge, ClaimTag, ConfidenceBar, EvidenceTag, cx, type BadgeVariant } from './uiPrimitives';
 import { AcceptancePanel } from './chat/AcceptancePanel';
 import { ArchiveDrawer } from './chat/ArchiveDrawer';
 import { ChatComposer } from './chat/ChatComposer';
@@ -20,11 +20,12 @@ import { RunReadinessBar } from './chat/RunReadinessBar';
 import { MessageList } from './chat/MessageList';
 import { RunningWorkProcess, streamProcessTranscript } from './chat/RunningWorkProcess';
 import { TargetInstanceSelector } from './chat/TargetInstanceSelector';
+import { FinalMessageContent } from './chat/FinalMessageContent';
 import { CURRENT_TARGET_INSTANCE_VALUE, enabledPeerInstances, selectedPeerInstance } from './chat/targetInstance';
 import { MessageContent, inlineObjectReferencesForMessage, objectReferencesFromInlineTokens, unmentionedObjectReferencesForMessage } from './chat/MessageContent';
 import { addComposerReferenceWithMarker, addPendingComposerReference, promptForComposerSend, removeComposerReference } from './chat/composerReferences';
 import { runPromptOrchestrator } from './chat/runOrchestrator';
-import { appendRunningGuidance, appendUploadMessageToSession, mergeAgentResponseIntoSession, rollbackSessionBeforeMessage } from './chat/sessionTransforms';
+import { appendRunningGuidanceRecord, appendUploadMessageToSession, attachGuidanceQueueToResponse, attachGuidanceQueueToSessionRun, attachProcessRecoveryToFailedSession, createGuidanceQueueRecord, mergeAgentResponseIntoSession, rollbackSessionBeforeMessage, updateGuidanceQueueRecords } from './chat/sessionTransforms';
 import {
   artifactTypeForUploadedFileLike as artifactTypeForUploadedFile,
   sciForgeReferenceAttribute,
@@ -148,14 +149,15 @@ export function ChatPanel({
   const [composerHeight, setComposerHeight] = useState(58);
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [streamEvents, setStreamEvents] = useState<AgentStreamEvent[]>([]);
-  const [guidanceQueue, setGuidanceQueue] = useState<string[]>([]);
+  const [retainedContextWindowState, setRetainedContextWindowState] = useState<AgentContextWindowState | undefined>();
+  const [guidanceQueue, setGuidanceQueue] = useState<GuidanceQueueRecord[]>([]);
   const [referencePickMode, setReferencePickMode] = useState(false);
   const [targetInstanceName, setTargetInstanceName] = useState(CURRENT_TARGET_INSTANCE_VALUE);
   const [pendingReferences, setPendingReferences] = useState<SciForgeReference[]>([]);
   const [referenceContextMenu, setReferenceContextMenu] = useState<ReferenceContextMenuState | null>(null);
   const activeSessionRef = useRef(session);
   const inputRef = useRef(input);
-  const guidanceQueueRef = useRef<string[]>([]);
+  const guidanceQueueRef = useRef<GuidanceQueueRecord[]>([]);
   const streamEventsRef = useRef<AgentStreamEvent[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const userAbortRequestedRef = useRef(false);
@@ -177,7 +179,9 @@ export function ChatPanel({
   const liveTokenUsage = latestTokenUsage(streamEvents);
   const worklogCounts = streamEventCounts(streamEvents);
   const latestWorklogLine = formatProgressHeadline(latestProgressModel(streamEvents), latestRunningEvent(streamEvents));
+  const latestStreamEventAt = streamEvents.at(-1)?.createdAt;
   const contextWindowState = latestContextWindowState(streamEvents)
+    ?? retainedContextWindowState
     ?? estimateContextWindowState(session, config, streamEvents);
   const targetPeers = useMemo(() => enabledPeerInstances(config), [config.peerInstances]);
   const targetPeer = useMemo(() => selectedPeerInstance(config, targetInstanceName), [config.peerInstances, targetInstanceName]);
@@ -209,6 +213,7 @@ export function ChatPanel({
   useEffect(() => {
     setStreamEvents([]);
     streamEventsRef.current = [];
+    setRetainedContextWindowState(undefined);
     setGuidanceQueue([]);
     setErrorText('');
   }, [scenarioId, session.sessionId]);
@@ -227,6 +232,38 @@ export function ChatPanel({
       });
     }
   }, [messages.length, isSending, streamEvents.length]);
+
+  useEffect(() => {
+    if (!isSending) return undefined;
+    let interval: number | undefined;
+    const publishWaitingProgress = () => {
+      const waitingEvent = buildSilentStreamProgressEvent({
+        events: streamEventsRef.current,
+        nowMs: Date.now(),
+        backend: config.agentBackend,
+      });
+      if (!waitingEvent) return;
+      setStreamEvents((current) => {
+        const next = current.filter((event) => {
+          const raw = typeof event.raw === 'object' && event.raw !== null ? event.raw as Record<string, unknown> : {};
+          return raw.silentStreamWaiting !== true;
+        });
+        const updated = [...next.slice(-159), waitingEvent];
+        streamEventsRef.current = updated;
+        return updated;
+      });
+    };
+    const latestEventTime = Date.parse(streamEventsRef.current.at(-1)?.createdAt ?? '');
+    const elapsedMs = Number.isFinite(latestEventTime) ? Date.now() - latestEventTime : SILENT_STREAM_WAIT_THRESHOLD_MS;
+    const timeout = window.setTimeout(() => {
+      publishWaitingProgress();
+      interval = window.setInterval(publishWaitingProgress, 15_000);
+    }, Math.max(0, SILENT_STREAM_WAIT_THRESHOLD_MS - elapsedMs));
+    return () => {
+      window.clearTimeout(timeout);
+      if (interval !== undefined) window.clearInterval(interval);
+    };
+  }, [config.agentBackend, isSending, latestStreamEventAt]);
 
   useEffect(() => {
     if (!referencePickMode) return undefined;
@@ -395,6 +432,7 @@ export function ChatPanel({
   }
 
   async function runPrompt(prompt: string, baseSession: SciForgeSession, references: SciForgeReference[] = []) {
+    const preflightStreamEvents = streamEventsRef.current;
     onInputChange('');
     inputRef.current = '';
     setPendingReferences([]);
@@ -418,6 +456,8 @@ export function ChatPanel({
       const handleStreamEvent = (event: AgentStreamEvent) => {
         const next = coalesceStreamEvents(streamEventsRef.current, event).slice(-160);
         streamEventsRef.current = next;
+        const latestContext = latestContextWindowState(next);
+        if (latestContext) setRetainedContextWindowState(latestContext);
         setStreamEvents(next);
       };
       const result = await runPromptOrchestrator({
@@ -439,7 +479,7 @@ export function ChatPanel({
         scenarioPackageRef,
         skillPlanRef,
         uiPlanRef,
-        streamEvents,
+        streamEvents: preflightStreamEvents,
         signal: controller.signal,
         userAbortRequested: () => userAbortRequestedRef.current,
         activeSession: () => activeSessionRef.current,
@@ -450,13 +490,21 @@ export function ChatPanel({
         },
       });
       if (result.status === 'failed') {
-        setErrorText(result.message);
-        onSessionChange(result.failedSession);
-        activeSessionRef.current = result.failedSession;
+        const failedSessionWithProcess = attachGuidanceQueueToSessionRun(
+          attachStreamProcessToFailedSession(result.failedSession, result.failedRunId, streamEventsRef.current),
+          result.failedRunId,
+          guidanceQueueRef.current,
+          'deferred',
+          '当前 run 失败或中断前已接收追加引导，等待 run orchestration 下一轮处理。',
+        );
+        const failedMessage = failedSessionWithProcess.messages.at(-1)?.content ?? result.message;
+        setErrorText(compactFailureNotice(failedMessage));
+        onSessionChange(failedSessionWithProcess);
+        activeSessionRef.current = failedSessionWithProcess;
         onActiveRunChange(result.failedRunId);
         return;
       }
-      const finalResponseWithProcess = attachStreamProcessToResponse(result.finalResponse, streamEventsRef.current);
+      const finalResponseWithProcess = attachStreamProcessToResponse(result.finalResponse, streamEventsRef.current, guidanceQueueRef.current);
       const mergedSession = mergeAgentResponseIntoSession({
         baseSession: activeSessionRef.current,
         response: finalResponseWithProcess,
@@ -473,9 +521,16 @@ export function ChatPanel({
       userAbortRequestedRef.current = false;
       const [nextGuidance, ...rest] = guidanceQueueRef.current;
       if (nextGuidance) {
+        const mergedSession = updateGuidanceQueueRecords(activeSessionRef.current, [nextGuidance.id], {
+          status: 'merged',
+          reason: '当前 run 已结束，已按 run orchestration contract 合并为下一轮用户引导。',
+        });
+        activeSessionRef.current = mergedSession;
+        onSessionChange(mergedSession);
+        guidanceQueueRef.current = rest;
         setGuidanceQueue(rest);
         window.setTimeout(() => {
-          void runPrompt(nextGuidance, activeSessionRef.current);
+          void runPrompt(nextGuidance.prompt, activeSessionRef.current);
         }, 80);
       }
     }
@@ -483,25 +538,43 @@ export function ChatPanel({
 
   function handleRunningGuidance(prompt: string) {
     const now = nowIso();
-    const nextSession = appendRunningGuidance(activeSessionRef.current, prompt);
+    const guidance = createGuidanceQueueRecord(prompt, {
+      receivedAt: now,
+      activeRunId,
+      reason: '当前 backend run 正在执行，已排队等待 run orchestration 下一轮处理。',
+    });
+    const { session: nextSession } = appendRunningGuidanceRecord(activeSessionRef.current, guidance);
     activeSessionRef.current = nextSession;
     onSessionChange(nextSession);
     onInputChange('');
     inputRef.current = '';
     setComposerExpanded(false);
-    setGuidanceQueue((current) => [...current, prompt]);
+    setGuidanceQueue((current) => [...current, guidance]);
     setStreamEvents((current) => [...current.slice(-32), {
       id: makeId('evt'),
       type: 'guidance-queued',
       label: '引导已排队',
-      detail: prompt,
+      detail: `${prompt}\n状态：已排队，等待当前 run 结束后合并到下一轮。`,
       createdAt: now,
+      raw: {
+        guidanceQueue: guidance,
+        contract: 'guidance-queue/run-orchestration',
+      },
     }]);
   }
 
   function handleAbort() {
     if (!abortRef.current) return;
     const interruptedAt = nowIso();
+    const rejectedIds = guidanceQueueRef.current.map((item) => item.id);
+    if (rejectedIds.length) {
+      const rejectedSession = updateGuidanceQueueRecords(activeSessionRef.current, rejectedIds, {
+        status: 'rejected',
+        reason: '用户中断当前 backend run；尚未处理的排队引导已被清空。',
+      });
+      activeSessionRef.current = rejectedSession;
+      onSessionChange(rejectedSession);
+    }
     guidanceQueueRef.current = [];
     setGuidanceQueue([]);
     setStreamEvents((current) => [...current.slice(-31), {
@@ -644,6 +717,9 @@ export function ChatPanel({
         {visibleMessages.map((message, visibleIndex) => {
           const index = visibleMessageStart + visibleIndex;
           const messageRunId = runIdForMessage(message, index, messages, session.runs);
+          const messageObjectReferences = message.role === 'user'
+            ? []
+            : unmentionedObjectReferencesForMessage(message, session, messageRunId);
           return (
           <div
             key={message.id}
@@ -663,6 +739,7 @@ export function ChatPanel({
                 {message.evidence ? <EvidenceTag level={message.evidence} /> : null}
                 {message.claimType ? <ClaimTag type={message.claimType} /> : null}
                 {message.status === 'failed' ? <Badge variant="danger">failed</Badge> : null}
+                {message.guidanceQueue ? <Badge variant={guidanceBadgeVariant(message.guidanceQueue.status)}>{guidanceStatusLabel(message.guidanceQueue.status)}</Badge> : null}
                 {message.acceptance ? (
                   <Badge variant={message.acceptance.pass ? 'success' : message.acceptance.severity === 'repairable' ? 'warning' : 'danger'}>
                     gate {message.acceptance.severity}
@@ -689,11 +766,29 @@ export function ChatPanel({
                 </div>
               ) : (
                 <>
-                  <MessageContent
-                    content={message.content}
-                    references={inlineObjectReferencesForMessage(message, session, messageRunId)}
-                    onObjectFocus={onObjectFocus}
-                  />
+                  {message.role === 'user' ? (
+                    <MessageContent
+                      content={message.content}
+                      references={inlineObjectReferencesForMessage(message, session, messageRunId)}
+                      onObjectFocus={onObjectFocus}
+                    />
+                  ) : (
+                    <>
+                      {messageRunId ? (
+                        <RunExecutionProcess
+                          runId={messageRunId}
+                          session={session}
+                          trace={message.expandable}
+                          onObjectFocus={onObjectFocus}
+                        />
+                      ) : null}
+                      <FinalMessageContent
+                        content={message.content}
+                        references={inlineObjectReferencesForMessage(message, session, messageRunId)}
+                        onObjectFocus={onObjectFocus}
+                      />
+                    </>
+                  )}
                   {messageRunId && message.role !== 'user' ? (
                     <RunKeyInfo
                       runId={messageRunId}
@@ -701,12 +796,11 @@ export function ChatPanel({
                       onObjectFocus={onObjectFocus}
                     />
                   ) : null}
-                  {messageRunId && message.role !== 'user' ? (
-                    <RunExecutionProcess
-                      runId={messageRunId}
-                      session={session}
-                      trace={message.expandable}
-                      onObjectFocus={onObjectFocus}
+                  {messageObjectReferences.length ? (
+                    <ObjectReferenceChips
+                      references={messageObjectReferences}
+                      activeRunId={activeRunId}
+                      onFocus={onObjectFocus}
                     />
                   ) : null}
                 </>
@@ -950,7 +1044,24 @@ export function runIdForMessage(
   if (!runs.length || message.id.startsWith('seed')) return undefined;
   if (message.role === 'user') {
     const normalizedContent = normalizeRunPrompt(message.content);
-    return [...runs].reverse().find((run) => normalizeRunPrompt(run.prompt) === normalizedContent)?.id;
+    const matchingRuns = runs.filter((run) => normalizeRunPrompt(run.prompt) === normalizedContent);
+    const messageTime = Date.parse(message.createdAt);
+    const nextUserMessage = messages
+      .slice(index + 1)
+      .find((item) => !item.id.startsWith('seed') && item.role === 'user');
+    const nextUserTime = nextUserMessage ? Date.parse(nextUserMessage.createdAt) : Number.POSITIVE_INFINITY;
+    if (Number.isFinite(messageTime)) {
+      const runInTurnWindow = matchingRuns.find((run) => {
+        const runTime = Date.parse(run.createdAt);
+        return Number.isFinite(runTime) && runTime >= messageTime && runTime < nextUserTime;
+      });
+      if (runInTurnWindow) return runInTurnWindow.id;
+    }
+    const promptOccurrence = messages
+      .slice(0, index + 1)
+      .filter((item) => !item.id.startsWith('seed') && item.role === 'user' && normalizeRunPrompt(item.content) === normalizedContent)
+      .length - 1;
+    return matchingRuns[promptOccurrence]?.id ?? matchingRuns.at(-1)?.id;
   }
   if (message.role !== 'scenario') return undefined;
   const responseIndex = messages
@@ -964,20 +1075,39 @@ function normalizeRunPrompt(value: string) {
   return value.replace(/^运行中引导：/, '').trim();
 }
 
-function attachStreamProcessToResponse(response: NormalizedAgentResponse, events: AgentStreamEvent[]): NormalizedAgentResponse {
+function guidanceStatusLabel(status: GuidanceQueueRecord['status']) {
+  if (status === 'merged') return '引导已合并';
+  if (status === 'rejected') return '引导已拒绝';
+  if (status === 'deferred') return '引导待下一轮';
+  return '引导已排队';
+}
+
+function guidanceBadgeVariant(status: GuidanceQueueRecord['status']): BadgeVariant {
+  if (status === 'merged') return 'success';
+  if (status === 'rejected') return 'danger';
+  return 'warning';
+}
+
+function attachStreamProcessToResponse(response: NormalizedAgentResponse, events: AgentStreamEvent[], guidanceQueue: GuidanceQueueRecord[] = []): NormalizedAgentResponse {
   const transcript = streamProcessTranscript(events);
-  if (!transcript) return response;
+  const responseWithGuidance = attachGuidanceQueueToResponse(
+    response,
+    guidanceQueue,
+    'deferred',
+    '当前 run 已经在执行中，追加引导已接收并等待下一轮合并处理。',
+  );
+  if (!transcript) return responseWithGuidance;
   const expandable = [response.message.expandable, transcript].filter(Boolean).join('\n\n');
   return {
-    ...response,
+    ...responseWithGuidance,
     message: {
-      ...response.message,
+      ...responseWithGuidance.message,
       expandable,
     },
     run: {
-      ...response.run,
+      ...responseWithGuidance.run,
       raw: {
-        ...(typeof response.run.raw === 'object' && response.run.raw !== null ? response.run.raw : {}),
+        ...(typeof responseWithGuidance.run.raw === 'object' && responseWithGuidance.run.raw !== null ? responseWithGuidance.run.raw : {}),
         streamProcess: {
           eventCount: events.length,
           events: events.slice(-80).map((event) => ({
@@ -990,6 +1120,31 @@ function attachStreamProcessToResponse(response: NormalizedAgentResponse, events
       },
     },
   };
+}
+
+function attachStreamProcessToFailedSession(session: SciForgeSession, failedRunId: string, events: AgentStreamEvent[]): SciForgeSession {
+  const transcript = streamProcessTranscript(events);
+  return attachProcessRecoveryToFailedSession({
+    session,
+    failedRunId,
+    transcript,
+    events: events.slice(-80).map((event) => ({
+      type: event.type,
+      label: event.label,
+      detail: presentStreamEvent(event).detail || presentStreamEvent(event).usageDetail,
+      createdAt: event.createdAt,
+    })),
+  });
+}
+
+function compactFailureNotice(value: string) {
+  const primary = value
+    .replace(/\n\s*工作过程摘要[:：][\s\S]*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!primary) return '任务未完成，执行过程已保存到运行详情。';
+  if (primary.length <= 180) return primary;
+  return `${primary.slice(0, 160).replace(/\s+\S*$/, '')}...`;
 }
 
 function ObjectReferenceChips({
@@ -1051,27 +1206,95 @@ function RunExecutionProcess({
   const units = executionUnitsForRun(run, session).slice(-8);
   if (!run && !units.length && !trace) return null;
   const auditObjectReferences = objectReferencesForAudit(run, session, runId);
-  const lines = executionProcessLines(run, units, auditObjectReferences, trace);
-  if (!lines.length) return null;
-  const content = lines.join('\n');
-  const references = mergeObjectReferences(
-    objectReferencesFromInlineTokens(content, runId),
-    auditObjectReferences,
-    40,
-  );
-  const summary = executionProcessSummary(units);
+  const steps = executionProcessSteps(run, units, auditObjectReferences, trace);
+  if (!steps.length) return null;
   return (
-    <details className="message-fold depth-2 execution-process-fold" open>
-      <summary>执行审计 · {summary}</summary>
-      <div className="execution-process-body">
-        <MessageContent
-          content={content}
-          references={references}
-          onObjectFocus={onObjectFocus}
-        />
-      </div>
-    </details>
+    <div className="execution-process-thread" aria-label="按顺序记录的工作过程">
+      {steps.map((step) => {
+        const references = mergeObjectReferences(
+          objectReferencesFromInlineTokens(step.content, runId),
+          step.references ?? auditObjectReferences,
+          40,
+        );
+        return (
+          <details className="message-fold depth-2 execution-process-fold cursor-step-fold" key={step.id}>
+            <summary>
+              <span className="cursor-step-kind">{step.kind}</span>
+              <span className="cursor-step-title">{step.title}</span>
+              {step.meta ? <span className="cursor-step-meta">{step.meta}</span> : null}
+            </summary>
+            <div className="execution-process-body">
+              <MessageContent
+                content={step.content}
+                references={references}
+                onObjectFocus={onObjectFocus}
+              />
+            </div>
+          </details>
+        );
+      })}
+    </div>
   );
+}
+
+type ExecutionProcessStep = {
+  id: string;
+  kind: string;
+  title: string;
+  meta?: string;
+  content: string;
+  references?: ObjectReference[];
+};
+
+function executionProcessSteps(
+  run: SciForgeRun | undefined,
+  units: RuntimeExecutionUnit[],
+  objectReferences: ObjectReference[],
+  trace?: string,
+): ExecutionProcessStep[] {
+  const steps: ExecutionProcessStep[] = [];
+  if (run?.prompt) {
+    steps.push({
+      id: 'prompt',
+      kind: 'Received',
+      title: compactAuditText(run.prompt, 96),
+      content: `接收任务：${run.prompt}`,
+    });
+  }
+  units.forEach((unit, index) => {
+    const verb = executionUnitVerb(unit);
+    const target = executionUnitTarget(unit);
+    const details = executionUnitDetails(unit);
+    steps.push({
+      id: `unit-${unit.id || index}`,
+      kind: cursorStepKindForUnit(unit, verb),
+      title: `${unit.tool}${target ? ` · ${target}` : ''}`,
+      meta: [unit.status, unit.time].filter(Boolean).join(' · '),
+      content: [
+        `${verb}：${unit.tool}${target ? `，${target}` : ''}。`,
+        `状态：${unit.status}${unit.time ? `，时间：${unit.time}` : ''}。`,
+        ...details.map((detail) => `- ${detail}`),
+      ].join('\n'),
+    });
+  });
+  producedObjectLines(objectReferences).forEach((line, index) => {
+    steps.push({
+      id: `object-${index}`,
+      kind: 'Created',
+      title: compactAuditText(line, 96),
+      content: line,
+      references: objectReferences,
+    });
+  });
+  if (trace) {
+    steps.push({
+      id: 'trace',
+      kind: 'Thought',
+      title: 'briefly',
+      content: `过程摘要与完整 trace：${compactAuditText(trace, 1200)}`,
+    });
+  }
+  return steps.slice(0, 24);
 }
 
 function executionUnitsForRun(run: SciForgeRun | undefined, session: SciForgeSession) {
@@ -1101,25 +1324,12 @@ function objectReferencesForAudit(run: SciForgeRun | undefined, session: SciForg
   return mergeObjectReferences(run.objectReferences ?? [], runArtifacts, 40);
 }
 
-function executionProcessLines(
-  run: SciForgeRun | undefined,
-  units: RuntimeExecutionUnit[],
-  objectReferences: ObjectReference[],
-  trace?: string,
-) {
-  const lines: string[] = [];
-  if (run?.prompt) lines.push(`1. 接收任务：${compactAuditText(run.prompt, 160)}`);
-  units.forEach((unit) => {
-    const step = lines.length + 1;
-    const verb = executionUnitVerb(unit);
-    const target = executionUnitTarget(unit);
-    lines.push(`${step}. ${verb}：${unit.tool}${target ? `，${target}` : ''}。状态：${unit.status}${unit.time ? `，时间：${unit.time}` : ''}。`);
-    for (const detail of executionUnitDetails(unit)) lines.push(`   - ${detail}`);
-  });
-  for (const line of producedObjectLines(objectReferences)) lines.push(`${lines.length + 1}. ${line}`);
-  if (trace) lines.push(`${lines.length + 1}. Agent 思考与完整 trace：${compactAuditText(trace, 900)}`);
-  if (run?.response) lines.push(`${lines.length + 1}. 形成最终总结：${compactAuditText(run.response, 220)}`);
-  return lines.slice(0, 36);
+function cursorStepKindForUnit(unit: RuntimeExecutionUnit, verb: string) {
+  if (unit.status === 'failed') return 'Failed';
+  if (verb === '探索文件') return 'Explored';
+  if (verb === '编辑文件') return 'Edited';
+  if (verb === '运行程序') return 'Ran';
+  return 'Checked';
 }
 
 function producedObjectLines(references: ObjectReference[]) {
@@ -1127,24 +1337,6 @@ function producedObjectLines(references: ObjectReference[]) {
     .filter((reference) => reference.kind === 'artifact' || reference.kind === 'file' || reference.kind === 'folder')
     .slice(0, 8)
     .map((reference) => `产生/引用对象：${reference.title}（${reference.ref}）${reference.summary ? `，${compactAuditText(reference.summary, 120)}` : ''}`);
-}
-
-function executionProcessSummary(units: RuntimeExecutionUnit[]) {
-  const counts = units.reduce((memo, unit) => {
-    const verb = executionUnitVerb(unit);
-    if (verb === '运行程序') memo.program += 1;
-    else if (verb === '探索文件') memo.explore += 1;
-    else if (verb === '编辑文件') memo.edit += 1;
-    else memo.other += 1;
-    return memo;
-  }, { program: 0, explore: 0, edit: 0, other: 0 });
-  const parts = [
-    counts.program ? `运行 ${counts.program}` : '',
-    counts.explore ? `探索 ${counts.explore}` : '',
-    counts.edit ? `编辑 ${counts.edit}` : '',
-    counts.other ? `其他 ${counts.other}` : '',
-  ].filter(Boolean);
-  return parts.length ? parts.join(' · ') : '无执行单元';
 }
 
 function executionUnitVerb(unit: RuntimeExecutionUnit) {
@@ -1219,14 +1411,17 @@ function RunKeyInfo({
   return (
     <div className="message-key-info" aria-label="本轮关键信息">
       <div className="message-key-info-head">
-        <strong>关键信息</strong>
+        <strong>本轮结果</strong>
         <span>{artifacts.length} objects · {claims.length} claims</span>
       </div>
-      <MessageContent
-        content={`本轮回答保留了 ${artifacts.length} 个关键对象和 ${claims.length} 条关键判断。关键对象包括 ${objectNames}；对象名可直接点击，在右侧预览。执行代码、程序、探索文件、编辑文件、trace 和输出对象统一收进下方“执行审计”。`}
-        references={artifactReferences}
-        onObjectFocus={onObjectFocus ?? (() => undefined)}
-      />
+      <p className="message-key-prose">
+        {artifacts.length ? `关键对象：${objectNames}。` : '本轮没有生成新的可预览对象。'}
+        {claims.length ? ` 已提取 ${claims.length} 条判断。` : ''}
+        <span> 过程记录已折叠在下方。</span>
+      </p>
+      {artifactReferences.length ? (
+        <ObjectReferenceChips references={artifactReferences} onFocus={onObjectFocus ?? (() => undefined)} />
+      ) : null}
       {claims.length ? (
         <div className="message-key-list">
           {claims.map((claim) => (

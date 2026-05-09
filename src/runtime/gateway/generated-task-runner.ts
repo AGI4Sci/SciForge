@@ -10,6 +10,9 @@ import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from 
 import { summarizeTaskAttemptsForAgentServer } from './context-envelope.js';
 import { currentTurnReferences } from './agentserver-context-window.js';
 import { sanitizeAgentServerError } from './backend-failure-diagnostics.js';
+import { evaluateToolPayloadEvidence } from './work-evidence-guard.js';
+import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
+import { evaluateGuidanceAdoption } from './guidance-adoption-guard.js';
 
 type AgentServerGenerationResult =
   | { ok: true; runId?: string; response: AgentServerGenerationResponse }
@@ -155,6 +158,38 @@ export async function runAgentServerGeneratedTask(
       stderrRel: `agentserver://${directGeneration.runId || 'unknown'}/stderr`,
       runtimeFingerprint: { runtime: 'AgentServer direct ToolPayload', runId: directGeneration.runId },
     });
+    const evidenceFinding = evaluateToolPayloadEvidence(directPayload, request);
+    const guidanceFinding = evaluateGuidanceAdoption(directPayload, request);
+    const workEvidenceSummary = summarizeWorkEvidenceForHandoff(directPayload);
+    const payloadFailureReason = firstPayloadFailureReason(directPayload);
+    const payloadFailureStatus = payloadHasFailureStatus(directPayload);
+    const failureReason = payloadFailureReason ?? (!payloadFailureStatus ? guidanceFinding?.reason ?? evidenceFinding?.reason : undefined);
+    const attemptStatus = guidanceFinding
+      ? guidanceFinding.severity
+      : evidenceFinding
+        ? evidenceFinding.severity
+      : payloadFailureStatus
+        ? 'failed-with-reason'
+        : 'done';
+    await appendTaskAttempt(workspace, {
+      id: `agentserver-direct-${skill.id}-${sha1(`${request.prompt}:${directGeneration.runId || 'unknown'}`).slice(0, 12)}`,
+      prompt: request.prompt,
+      skillDomain: request.skillDomain,
+      ...attemptPlanRefs(request, skill),
+      skillId: skill.id,
+      attempt: 1,
+      status: attemptStatus,
+      codeRef: 'agentserver://direct-payload',
+      outputRef: `agentserver://${directGeneration.runId || 'unknown'}/output`,
+      stdoutRef: `agentserver://${directGeneration.runId || 'unknown'}/stdout`,
+      stderrRef: `agentserver://${directGeneration.runId || 'unknown'}/stderr`,
+      workEvidenceSummary,
+      failureReason,
+      createdAt: new Date().toISOString(),
+    });
+    if (guidanceFinding || evidenceFinding) {
+      return repairNeededPayload(request, skill, guidanceFinding?.reason ?? evidenceFinding?.reason ?? 'AgentServer payload failed runtime guard.');
+    }
     return {
       ...normalized,
       reasoningTrace: [
@@ -342,6 +377,8 @@ export async function runAgentServerGeneratedTask(
       agentServerGenerated: true,
       artifacts: request.artifacts,
       uiStateSummary: request.uiState,
+      taskProjectHandoff: isRecord(request.uiState?.taskProjectHandoff) ? request.uiState.taskProjectHandoff : undefined,
+      userGuidanceQueue: activeGuidanceQueueForTaskInput(request),
       recentExecutionRefs: toRecordList(request.uiState?.recentExecutionRefs),
       priorAttempts: currentTurnReferences(request).length
         ? []
@@ -403,8 +440,22 @@ export async function runAgentServerGeneratedTask(
       stderrRel,
       runtimeFingerprint: run.runtimeFingerprint,
     });
-    const failureReason = firstPayloadFailureReason(payload, run);
-    const shouldRepairExecutionFailure = errors.length === 0 && run.exitCode !== 0 && Boolean(failureReason);
+    const evidenceFinding = evaluateToolPayloadEvidence(payload, request);
+    const guidanceFinding = evaluateGuidanceAdoption(payload, request);
+    const workEvidenceSummary = summarizeWorkEvidenceForHandoff(payload);
+    const payloadFailureReason = firstPayloadFailureReason(payload, run);
+    const payloadFailureStatus = payloadHasFailureStatus(payload);
+    const evidenceFailureReason = !payloadFailureStatus ? guidanceFinding?.reason ?? evidenceFinding?.reason : undefined;
+    const failureReason = payloadFailureReason ?? evidenceFailureReason;
+    const shouldRepairExecutionFailure = errors.length === 0 && Boolean(failureReason)
+      && (run.exitCode !== 0 || Boolean(evidenceFailureReason));
+    const attemptStatus = errors.length
+      ? 'repair-needed'
+      : shouldRepairExecutionFailure
+        ? guidanceFinding?.severity ?? evidenceFinding?.severity ?? 'repair-needed'
+        : payloadFailureStatus
+          ? 'failed-with-reason'
+          : 'done';
     await appendTaskAttempt(workspace, {
       id: taskId,
       prompt: request.prompt,
@@ -412,7 +463,7 @@ export async function runAgentServerGeneratedTask(
       ...attemptPlanRefs(request, skill),
       skillId: skill.id,
       attempt: 1,
-      status: errors.length || shouldRepairExecutionFailure ? 'repair-needed' : payloadHasFailureStatus(payload) ? 'failed-with-reason' : 'done',
+      status: attemptStatus,
       codeRef: taskRel,
       inputRef: `.sciforge/task-inputs/${taskId}.json`,
       outputRef: outputRel,
@@ -420,13 +471,14 @@ export async function runAgentServerGeneratedTask(
       stderrRef: stderrRel,
       exitCode: run.exitCode,
       schemaErrors: errors,
+      workEvidenceSummary,
       failureReason: errors.length ? `AgentServer generated task output failed schema validation: ${errors.join('; ')}` : failureReason,
       createdAt: new Date().toISOString(),
     });
     if (errors.length || shouldRepairExecutionFailure) {
       const repairFailureReason = errors.length
         ? `AgentServer generated task output failed schema validation: ${errors.join('; ')}`
-        : `AgentServer generated task exited ${run.exitCode} with failed payload: ${failureReason}`;
+        : evidenceFailureReason ?? `AgentServer generated task exited ${run.exitCode} with failed payload: ${failureReason}`;
       const repaired = await tryAgentServerRepairAndRerun({
         request,
         skill,
@@ -793,6 +845,20 @@ function taskSourceWritesOutputArg(source: string, language: string, ext: string
   if (['shell', 'bash', 'zsh', 'sh'].includes(language) || ['.sh', '.bash', '.zsh'].includes(ext)) return /(^|[^\\])\$\{?2\}?|\boutput[_-]?path\b/i.test(source);
   if (language === 'r' || ['.r', '.R'].includes(ext)) return /commandArgs|output[_-]?path/i.test(source);
   return /argv|args|output[_-]?path/i.test(source);
+}
+
+function activeGuidanceQueueForTaskInput(request: GatewayRequest) {
+  const handoff = isRecord(request.uiState?.taskProjectHandoff) ? request.uiState.taskProjectHandoff : undefined;
+  const queue = Array.isArray(handoff?.userGuidanceQueue)
+    ? handoff.userGuidanceQueue
+    : Array.isArray(request.uiState?.userGuidanceQueue)
+      ? request.uiState.userGuidanceQueue
+      : Array.isArray(request.uiState?.guidanceQueue)
+        ? request.uiState.guidanceQueue
+        : [];
+  return queue.filter((entry): entry is Record<string, unknown> => isRecord(entry)
+    && typeof entry.id === 'string'
+    && (entry.status === 'queued' || entry.status === 'deferred'));
 }
 
 async function tryAgentServerSupplementMissingArtifacts(params: {

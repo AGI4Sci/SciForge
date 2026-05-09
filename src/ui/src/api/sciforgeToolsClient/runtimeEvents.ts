@@ -193,6 +193,7 @@ export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
     ?? normalizeTokenUsage(isRecord(record.result) && isRecord(record.result.output) ? record.result.output.usage : undefined);
   const contextWindowState = normalizeContextWindowState(contextWindowCandidate(record), type, record);
   const contextCompaction = normalizeContextCompaction(record.contextCompaction ?? record.compaction ?? record.context_compaction, type, record);
+  const workEvidence = normalizeWorkEvidenceRecords(record.workEvidence ?? record.work_evidence);
   const baseDetail = asString(record.detail)
     || asString(record.message)
     || asString(record.text)
@@ -210,9 +211,26 @@ export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
     usage,
     contextWindowState,
     contextCompaction,
+    workEvidence,
     createdAt: nowIso(),
     raw,
   };
+}
+
+function normalizeWorkEvidenceRecords(value: unknown): AgentStreamEvent['workEvidence'] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const records = value.filter(isWorkEvidenceRecord);
+  return records.length ? records : undefined;
+}
+
+function isWorkEvidenceRecord(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
+  const schema = asString(value.schemaVersion);
+  if (schema?.startsWith('sciforge.task-')) return false;
+  return Boolean(asString(value.kind))
+    && Boolean(asString(value.status))
+    && Array.isArray(value.evidenceRefs)
+    && Array.isArray(value.recoverActions);
 }
 
 function normalizeContextWindowState(value: unknown, type: string, fallback: Record<string, unknown>): AgentStreamEvent['contextWindowState'] | undefined {

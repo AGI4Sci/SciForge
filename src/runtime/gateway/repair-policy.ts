@@ -1,5 +1,6 @@
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-types.js';
 import { sha1 } from '../workspace-task-runner.js';
+import { diagnosticForFailure } from './backend-failure-diagnostics.js';
 
 export interface RepairPolicyRefs {
   taskRel?: string;
@@ -19,8 +20,16 @@ export function repairNeededPayload(
   planRefs: Record<string, unknown> = {},
 ): ToolPayload {
   const id = `EU-${request.skillDomain}-${sha1(`${request.prompt}:${reason}`).slice(0, 8)}`;
+  const evidenceRefs = evidenceRefsForRepair(refs);
+  const diagnostic = diagnosticForFailure(reason, {
+    backend: request.agentBackend,
+    provider: request.modelProvider,
+    model: request.modelName,
+    evidenceRefs,
+  });
+  const recoverActions = refs.recoverActions ?? diagnostic.recoverActions ?? recoverActionsForRepair(reason);
   return {
-    message: `SciForge runtime gateway needs repair or AgentServer task generation: ${reason}`,
+    message: `SciForge runtime gateway needs repair or AgentServer task generation: ${diagnostic.userReason ?? reason}`,
     confidence: 0.2,
     claimType: 'fact',
     evidenceLevel: 'runtime',
@@ -57,16 +66,57 @@ export function repairNeededPayload(
       stdoutRef: refs.stdoutRel,
       stderrRef: refs.stderrRel,
       blocker: refs.blocker,
-      refs: refs.agentServerRefs,
-      failureReason: reason,
+      refs: {
+        ...refs.agentServerRefs,
+        diagnostic: {
+          kind: diagnostic.kind,
+          categories: diagnostic.categories,
+          title: diagnostic.title,
+          evidenceRefs,
+        },
+      },
+      failureReason: diagnostic.userReason ?? reason,
       ...planRefs,
       requiredInputs: requiredInputsForRepair(request, reason),
-      recoverActions: refs.recoverActions ?? recoverActionsForRepair(reason),
-      nextStep: nextStepForRepair(reason),
+      recoverActions,
+      nextStep: diagnostic.nextStep ?? nextStepForRepair(reason),
       attempt: 1,
     }],
+    objectReferences: objectReferencesForEvidence(id, evidenceRefs),
     artifacts: [],
   };
+}
+
+function evidenceRefsForRepair(refs: RepairPolicyRefs) {
+  return Array.from(new Set([
+    refs.taskRel,
+    refs.outputRel,
+    refs.stdoutRel,
+    refs.stderrRel,
+  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)));
+}
+
+function objectReferencesForEvidence(executionUnitId: string, refs: string[]) {
+  return [
+    {
+      id: `or-${executionUnitId}`,
+      title: '失败的 execution unit',
+      kind: 'execution-unit',
+      ref: `execution-unit:${executionUnitId}`,
+      executionUnitId,
+      status: 'blocked',
+      actions: ['focus-right-pane', 'inspect', 'pin'],
+    },
+    ...refs.map((ref) => ({
+      id: `or-${sha1(ref).slice(0, 10)}`,
+      title: ref.split('/').pop() || ref,
+      kind: ref.startsWith('artifact:') ? 'artifact' : ref.startsWith('http') ? 'url' : 'file',
+      ref: ref.includes(':') ? ref : `file:${ref}`,
+      executionUnitId,
+      status: 'available',
+      actions: ['focus-right-pane', 'inspect', 'copy-path', 'pin'],
+    })),
+  ];
 }
 
 export function requiredInputsForRepair(request: GatewayRequest, reason: string) {

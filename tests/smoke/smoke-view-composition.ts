@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 import { normalizeAgentResponse } from '../../src/ui/src/api/agentClient.js';
-import { selectDefaultResultItems, shouldOpenRunAuditDetails } from '../../src/ui/src/app/ResultsRenderer.js';
+import { runRecoverActions, selectDefaultResultItems, shouldOpenRunAuditDetails } from '../../src/ui/src/app/ResultsRenderer.js';
 
 const response = normalizeAgentResponse('omics-differential-exploration', 'UMAP 按 cell cycle 着色并 side-by-side batch 对比', {
   run: {
@@ -89,6 +89,7 @@ const failedSession = {
   updatedAt: '2026-05-02T00:00:00.000Z',
 };
 assert.equal(shouldOpenRunAuditDetails(failedSession as never), true);
+assert.deepEqual(runRecoverActions(failedSession as never), ['choose-readable-matrix', 'rerun-with-file-ref']);
 
 function viewItem(id: string, componentId: string, section: string) {
   return {

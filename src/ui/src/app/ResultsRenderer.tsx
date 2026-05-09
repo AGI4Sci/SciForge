@@ -922,7 +922,7 @@ function runAuditBlockers(session: SciForgeSession, activeRun?: SciForgeRun) {
   return Array.from(new Set(lines));
 }
 
-function runRecoverActions(session: SciForgeSession, activeRun?: SciForgeRun) {
+export function runRecoverActions(session: SciForgeSession, activeRun?: SciForgeRun) {
   const run = activeRun ?? session.runs.at(-1);
   const raw = isRecord(run?.raw) ? run?.raw : undefined;
   return Array.from(new Set([

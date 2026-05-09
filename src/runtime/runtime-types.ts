@@ -1,4 +1,5 @@
 import type { SciForgeAgentHandoffSource, SharedAgentHandoffContract } from '../shared/agentHandoff.js';
+import type { WorkEvidence } from './gateway/work-evidence-types.js';
 
 export type SciForgeSkillDomain = 'literature' | 'structure' | 'omics' | 'knowledge';
 
@@ -90,6 +91,7 @@ export interface WorkspaceRuntimeEvent {
   contextWindowState?: WorkspaceRuntimeContextWindowState;
   contextCompaction?: WorkspaceRuntimeContextCompaction;
   rateLimit?: WorkspaceRuntimeRateLimit;
+  workEvidence?: WorkEvidence[];
   raw?: unknown;
 }
 
@@ -200,6 +202,7 @@ export interface ToolPayload {
   objectReferences?: Array<Record<string, unknown>>;
   verificationResults?: VerificationResult[];
   verificationPolicy?: VerificationPolicy;
+  workEvidence?: WorkEvidence[];
 }
 
 export interface WorkspaceTaskSpec {
@@ -455,6 +458,22 @@ export interface TaskAttemptRecord {
   stderrRef?: string;
   exitCode?: number;
   schemaErrors?: string[];
+  workEvidenceSummary?: {
+    count: number;
+    items: Array<{
+      kind: string;
+      status: string;
+      provider?: string;
+      resultCount?: number;
+      outputSummary?: string;
+      evidenceRefs: string[];
+      failureReason?: string;
+      recoverActions: string[];
+      nextStep?: string;
+      diagnostics: string[];
+      rawRef?: string;
+    }>;
+  };
   contextRecovery?: {
     kind: 'contextWindowExceeded';
     backend?: string;

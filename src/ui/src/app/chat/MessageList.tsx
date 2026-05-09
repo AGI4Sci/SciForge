@@ -29,7 +29,7 @@ export function MessageList({
           <div className="chat-empty">
             <MessageSquare size={18} />
             <strong>新聊天已就绪</strong>
-            <span>输入研究问题，或先点选文件、历史消息、任务结果、图表和表格作为上下文。</span>
+            <span>输入研究问题，或点选文件、历史消息和结果对象作为上下文。</span>
           </div>
         ) : null}
         {collapsedBeforeCount > 0 ? (

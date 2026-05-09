@@ -27,6 +27,16 @@ function asBoolean(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined;
 }
 
+function asStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out = value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
+  return out.length ? out : undefined;
+}
+
+function uniqueStringList(values: unknown[]) {
+  return Array.from(new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)));
+}
+
 export async function sendSciForgeToolMessage(
   input: SendAgentMessageInput,
   callbacks: { onEvent?: (event: AgentStreamEvent) => void } = {},
@@ -51,6 +61,7 @@ export async function sendSciForgeToolMessage(
     prompt: input.prompt,
     selectedComponentIds,
   });
+  const failureRecoveryPolicy = buildFailureRecoveryPolicy(input.executionUnits ?? [], input.runs ?? []);
   let activeRequestController: AbortController | undefined;
   let timedOut = false;
   let retryForSilentFirstEvent = false;
@@ -114,7 +125,7 @@ export async function sendSciForgeToolMessage(
       availableComponentIds: configuredComponentIds,
       artifactPolicy: undefined,
       referencePolicy: buildReferencePolicy(referenceSummary),
-      failureRecoveryPolicy: undefined,
+      failureRecoveryPolicy,
       verificationPolicy,
       humanApprovalPolicy,
       unverifiedReason: verificationPolicy.mode === 'unverified' ? verificationPolicy.unverifiedReason : undefined,
@@ -142,6 +153,7 @@ export async function sendSciForgeToolMessage(
         repairHandoffRunner,
         recentExecutionRefs,
         recentRuns: input.runs ?? [],
+        failureRecoveryPolicy,
         workspacePersistence: workspacePersistenceSummary(input),
         artifactExpectationMode: expectedArtifactTypes.length ? 'explicit-current-turn' : 'backend-decides',
         rawUserPrompt: input.prompt,
@@ -590,10 +602,75 @@ function buildTransportAgentContext(
       runCount: input.runs?.length ?? 0,
     },
     workspacePersistence: workspacePersistenceSummary(input),
+    failureRecoveryPolicy: buildFailureRecoveryPolicy(input.executionUnits ?? [], input.runs ?? []),
     notes: [
       'User prompt is carried separately as the authoritative request.',
       'The browser only transports UI/session facts; Python conversation-policy owns context selection, digests, capability brief, handoff, acceptance, and recovery.',
       'When local.vision-sense is selected, treat it as an optional vision sense plugin: build text + screenshot/image modality requests, emit text-form Computer Use commands, and keep trace refs compact across follow-up turns.',
     ],
   };
+}
+
+function buildFailureRecoveryPolicy(executionUnits: unknown[], runs: unknown[]) {
+  const failedUnits = executionUnits
+    .filter(isRecord)
+    .filter((unit) => {
+      const status = asString(unit.status);
+      return Boolean(asString(unit.failureReason))
+        || status === 'failed'
+        || status === 'failed-with-reason'
+        || status === 'repair-needed';
+    })
+    .slice(-6);
+  const failedRuns = runs
+    .filter(isRecord)
+    .filter((run) => asString(run.status) === 'failed')
+    .slice(-4);
+  if (!failedUnits.length && !failedRuns.length) return undefined;
+  const attemptHistory = failedUnits.map((unit) => ({
+    id: asString(unit.id),
+    status: asString(unit.status),
+    tool: asString(unit.tool),
+    failureReason: asString(unit.failureReason) || asString(unit.selfHealReason),
+    recoverActions: asStringArray(unit.recoverActions),
+    nextStep: asString(unit.nextStep),
+    codeRef: asString(unit.codeRef),
+    outputRef: asString(unit.outputRef),
+    stdoutRef: asString(unit.stdoutRef),
+    stderrRef: asString(unit.stderrRef),
+    evidenceRefs: uniqueStringList([
+      asString(unit.codeRef),
+      asString(unit.outputRef),
+      asString(unit.stdoutRef),
+      asString(unit.stderrRef),
+      ...(asStringArray(unit.artifacts) ?? []),
+      ...(asStringArray(unit.outputArtifacts) ?? []),
+    ]),
+  }));
+  const latestFailedRun = failedRuns.findLast((run) => asString(run.response) || streamProcessSummaryFromRun(run));
+  const priorFailureReason = attemptHistory.findLast((attempt) => attempt.failureReason)?.failureReason
+    || asString(latestFailedRun?.response)
+    || (latestFailedRun ? streamProcessSummaryFromRun(latestFailedRun) : undefined);
+  const recoverActions = uniqueStringList(attemptHistory.flatMap((attempt) => attempt.recoverActions ?? [])).slice(0, 6);
+  const attemptHistoryRefs = uniqueStringList(attemptHistory.flatMap((attempt) => attempt.evidenceRefs ?? [])).slice(0, 12);
+  return {
+    mode: 'preserve-context',
+    priorFailureReason: joinFailureAndProcessSummary(priorFailureReason, latestFailedRun ? streamProcessSummaryFromRun(latestFailedRun) : undefined),
+    recoverActions,
+    attemptHistoryRefs,
+    attemptHistory,
+    nextStep: attemptHistory.findLast((attempt) => attempt.nextStep)?.nextStep,
+  };
+}
+
+function streamProcessSummaryFromRun(run: Record<string, unknown>) {
+  const raw = isRecord(run.raw) ? run.raw : {};
+  const streamProcess = isRecord(raw.streamProcess) ? raw.streamProcess : {};
+  return asString(streamProcess.summary);
+}
+
+function joinFailureAndProcessSummary(reason: string | undefined, summary: string | undefined) {
+  if (!reason) return summary;
+  if (!summary || reason.includes(summary)) return reason;
+  return `${reason}\n\n${summary}`;
 }

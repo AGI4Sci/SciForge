@@ -86,3 +86,33 @@ test('verificationPolicy 和 verificationResult 会进入下一轮上下文', ()
   assert.deepEqual(envelope.sessionFacts.verificationResult, verificationResult);
   assert.ok(envelope.longTermRefs.verificationResults?.some((entry) => (entry as Record<string, unknown>).id === 'verify-1'));
 });
+
+test('failureRecoveryPolicy 会把失败摘要和证据 refs 带入下一轮上下文', () => {
+  const failureRecoveryPolicy = {
+    mode: 'preserve-context' as const,
+    priorFailureReason: '工具执行失败：命令缺少依赖，acceptance 未通过。',
+    recoverActions: ['打开 stderrRef 查看缺失依赖', '安装依赖后从失败 execution unit 继续'],
+    attemptHistoryRefs: ['file:.sciforge/logs/run.err'],
+    attemptHistory: [{
+      id: 'EU-failed-1',
+      status: 'repair-needed',
+      tool: 'generic.workspace-tool',
+      failureReason: 'command exited 127',
+      stderrRef: 'file:.sciforge/logs/run.err',
+      outputRef: 'file:.sciforge/task-results/run.json',
+      nextStep: '修复依赖后重跑该 execution unit',
+    }],
+  };
+  const request = normalizeGatewayRequest(buildAgentHandoffPayload({
+    ...common,
+    prompt: '继续修复上一轮失败',
+    failureRecoveryPolicy,
+  }));
+  const envelope = buildContextEnvelope(request, { workspace: common.workspacePath });
+
+  const failures = envelope.sessionFacts.recentFailures as Array<Record<string, unknown>> | undefined;
+  assert.ok(failures?.some((entry) => String(entry.failureReason).includes('工具执行失败')));
+  assert.ok(failures?.some((entry) => (entry.evidenceRefs as string[] | undefined)?.includes('file:.sciforge/logs/run.err')));
+  assert.ok(envelope.longTermRefs.failureEvidenceRefs?.includes('file:.sciforge/logs/run.err'));
+  assert.match(envelope.continuityRules.join('\n'), /recentFailures|failureEvidenceRefs/);
+});

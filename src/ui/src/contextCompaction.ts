@@ -25,8 +25,8 @@ export function buildContextCompactionOutcome({
 } {
   const succeeded = result.status === 'completed';
   const lastCompactedAt = result.lastCompactedAt ?? (succeeded ? completedAt : beforeState.lastCompactedAt);
-  const afterState = result.after ?? {
-    ...beforeState,
+  const afterState = {
+    ...(result.after ?? beforeState),
     pendingCompact: false,
     lastCompactedAt,
     compactCapability: result.compactCapability ?? beforeState.compactCapability,

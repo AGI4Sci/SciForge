@@ -11,6 +11,7 @@ import { acceptSkillPromotionProposal, archiveSkillPromotionProposal, listSkillP
 import { syncRepairResultToGithubIssue } from './github-repair-sync.js';
 import { runRepairHandoff } from './repair-handoff-runner.js';
 import { buildStableVersionSyncPlan, promoteStableVersion, readStableVersion, stableVersionRegistryPath } from './stable-version-registry.js';
+import { normalizeWorkspaceRootPath, resolveWorkspaceFilePreviewPath, resolveWorkspacePreviewRef } from './workspace-paths.js';
 
 const PORT = Number(process.env.SCIFORGE_WORKSPACE_PORT || 5174);
 const INSTANCE_ID = process.env.SCIFORGE_INSTANCE_ID || process.env.SCIFORGE_INSTANCE || 'default';
@@ -1213,10 +1214,6 @@ function previewRequestBaseUrl(req: IncomingMessage) {
   return `http://${req.headers.host || `127.0.0.1:${PORT}`}`;
 }
 
-function resolveWorkspacePreviewRef(ref: string, workspacePath = '') {
-  return resolveWorkspaceFilePreviewPath(ref.replace(/^(file|path|artifact):/i, ''), workspacePath);
-}
-
 async function previewDescriptorForRef(rawRef: string, workspacePath: string, baseUrl: string) {
   const filePath = resolveWorkspacePreviewRef(rawRef, workspacePath);
   const info = await stat(filePath);
@@ -1499,19 +1496,6 @@ function scenarioWorkspaceRoot(url: URL) {
   const workspacePath = url.searchParams.get('workspacePath')?.trim() || url.searchParams.get('path')?.trim() || '';
   if (!workspacePath) throw new Error('workspacePath is required');
   return resolve(workspacePath);
-}
-
-function resolveWorkspaceFilePreviewPath(rawPath: string, workspacePath = '') {
-  const stripped = rawPath.trim().replace(/^(file|folder):/i, '');
-  if (!stripped) throw new Error('path is required');
-  const workspaceRoot = workspacePath.trim() ? normalizeWorkspaceRootPath(resolve(workspacePath)) : '';
-  if (!workspaceRoot || isAbsolute(stripped)) return resolve(stripped);
-  const targetPath = resolve(workspaceRoot, stripped);
-  const rel = relative(workspaceRoot, targetPath);
-  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    throw new Error('Workspace File Gateway refused a path outside the active workspace.');
-  }
-  return targetPath;
 }
 
 function scenarioWorkspaceRootFromBody(body: Record<string, unknown>) {
@@ -1942,16 +1926,6 @@ function parseJsonEnv(value: string | undefined) {
   } catch {
     return value;
   }
-}
-
-function normalizeWorkspaceRootPath(value: string) {
-  const trimmed = value.trim().replace(/\/+$/, '');
-  if (!trimmed) return '';
-  const marker = '/.sciforge/';
-  const nestedIndex = trimmed.indexOf(marker);
-  if (nestedIndex >= 0) return trimmed.slice(0, nestedIndex);
-  if (trimmed.endsWith('/.sciforge')) return trimmed.slice(0, -'/.sciforge'.length);
-  return trimmed;
 }
 
 function normalizePeerInstances(value: unknown) {

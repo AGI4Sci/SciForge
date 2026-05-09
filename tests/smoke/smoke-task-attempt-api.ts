@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
+import { buildCompactRepairContext } from '../../src/runtime/gateway/agentserver-prompts';
+import { buildContextEnvelope } from '../../src/runtime/gateway/context-envelope';
 import { appendTaskAttempt, readRecentTaskAttempts } from '../../src/runtime/task-attempt-history';
-import type { TaskAttemptRecord } from '../../src/runtime/runtime-types';
+import type { GatewayRequest, SkillAvailability, TaskAttemptRecord, WorkspaceTaskRunResult } from '../../src/runtime/runtime-types';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-task-attempts-'));
 const port = 20080 + Math.floor(Math.random() * 1000);
@@ -19,6 +21,25 @@ const child = spawn(process.execPath, ['--import', 'tsx', 'src/runtime/workspace
 });
 
 try {
+  await writeFileSafe(join(workspace, '.sciforge/task-results/run-literature-1.json'), JSON.stringify({
+    workEvidence: [{
+      kind: 'retrieval',
+      status: 'success',
+      provider: 'generic-provider',
+      resultCount: 3,
+      outputSummary: 'Retrieved three bounded records.',
+      evidenceRefs: ['trace:provider'],
+      recoverActions: [],
+      diagnostics: ['provider status 200'],
+      rawRef: 'file:.sciforge/logs/run-literature-1.raw.json',
+    }],
+    rawBody: 'RAW_PROVIDER_LOG_SHOULD_NOT_APPEAR',
+  }));
+  await writeFileSafe(join(workspace, '.sciforge/tasks/run-literature-1.py'), 'print("run")\n');
+  await writeFileSafe(join(workspace, '.sciforge/task-inputs/run-literature-1.json'), '{"prompt":"CRISPR base editing review"}\n');
+  await writeFileSafe(join(workspace, '.sciforge/logs/run-literature-1.stdout.log'), 'RAW_STDOUT_LOG_SHOULD_NOT_APPEAR\n');
+  await writeFileSafe(join(workspace, '.sciforge/logs/run-literature-1.stderr.log'), '');
+
   const record: TaskAttemptRecord = {
     id: 'run-literature-1',
     prompt: 'CRISPR base editing review',
@@ -56,6 +77,7 @@ try {
   });
   assert.equal(scopedAttempts.length, 1);
   assert.equal(scopedAttempts[0].id, 'run-literature-1');
+  assert.equal(scopedAttempts[0].workEvidenceSummary?.items[0]?.resultCount, 3);
   const newPackageAttempts = await readRecentTaskAttempts(workspace, 'literature', 8, {
     scenarioPackageId: 'new-literature-package',
     prompt: 'CRISPR base editing review continuation',
@@ -71,21 +93,108 @@ try {
   assert.equal(listed.attempts[0].runtimeProfileId, 'workspace-python');
   assert.equal(listed.attempts[0].routeDecision?.selectedSkill, 'literature.pubmed_search');
   assert.equal(listed.attempts[0].scenarioPackageRef?.id, 'literature-evidence-review');
+  assert.equal(listed.attempts[0].workEvidenceSummary?.items[0]?.resultCount, 3);
+  assert.doesNotMatch(JSON.stringify(listed), /RAW_PROVIDER_LOG_SHOULD_NOT_APPEAR|RAW_STDOUT_LOG_SHOULD_NOT_APPEAR/);
 
   response = await fetch(`${baseUrl}/api/sciforge/task-attempts/get?workspacePath=${encodeURIComponent(workspace)}&id=run-literature-1`);
   await assertOk(response);
   const loaded = await response.json() as { attempts: TaskAttemptRecord[] };
   assert.equal(loaded.attempts.length, 1);
   assert.equal(loaded.attempts[0].stdoutRef, '.sciforge/logs/run-literature-1.stdout.log');
+  assert.equal(loaded.attempts[0].workEvidenceSummary?.items[0]?.diagnostics[0], 'provider status 200');
+  assert.doesNotMatch(JSON.stringify(loaded), /RAW_PROVIDER_LOG_SHOULD_NOT_APPEAR|RAW_STDOUT_LOG_SHOULD_NOT_APPEAR/);
+
+  const repairContext = await buildCompactRepairContext({
+    request: gatewayRequest(),
+    workspace,
+    skill: skill(),
+    run: taskRunResult(),
+    schemaErrors: [],
+    failureReason: 'Need repair with prior WorkEvidence.',
+    priorAttempts: scopedAttempts,
+  });
+  const repairSerialized = JSON.stringify(repairContext);
+  assert.match(repairSerialized, /workEvidenceSummary/);
+  assert.match(repairSerialized, /provider status 200/);
+  assert.doesNotMatch(repairSerialized, /RAW_PROVIDER_LOG_SHOULD_NOT_APPEAR|RAW_STDOUT_LOG_SHOULD_NOT_APPEAR/);
+
+  const envelope = buildContextEnvelope(gatewayRequest(), {
+    workspace,
+    priorAttempts: scopedAttempts,
+    mode: 'delta',
+  });
+  const envelopeSerialized = JSON.stringify(envelope);
+  assert.match(envelopeSerialized, /workEvidenceSummary/);
+  assert.match(envelopeSerialized, /provider status 200/);
+  assert.doesNotMatch(envelopeSerialized, /RAW_PROVIDER_LOG_SHOULD_NOT_APPEAR|RAW_STDOUT_LOG_SHOULD_NOT_APPEAR/);
 
   response = await fetch(`${baseUrl}/api/sciforge/task-attempts/list?workspacePath=${encodeURIComponent(workspace)}&scenarioPackageId=other`);
   await assertOk(response);
   const filtered = await response.json() as { attempts: TaskAttemptRecord[] };
   assert.equal(filtered.attempts.length, 0);
 
-  console.log('[ok] task-attempts APIs list, filter, and get runtime diagnostics');
+  console.log('[ok] task-attempts APIs, repair context, and context envelope expose WorkEvidence summaries without raw logs');
 } finally {
   child.kill('SIGTERM');
+}
+
+async function writeFileSafe(path: string, value: string) {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, value, 'utf8');
+}
+
+function gatewayRequest(): GatewayRequest {
+  return {
+    skillDomain: 'literature',
+    prompt: 'CRISPR base editing review continuation',
+    scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'workspace' },
+    skillPlanRef: 'skill-plan/literature-evidence-review@1.0.0',
+    uiPlanRef: 'ui-plan/literature-evidence-review@1.0.0',
+    artifacts: [],
+    uiState: {},
+  } as GatewayRequest;
+}
+
+function skill(): SkillAvailability {
+  return {
+    id: 'literature.pubmed_search',
+    kind: 'workspace',
+    available: true,
+    reason: 'smoke fixture',
+    checkedAt: '2026-04-25T00:00:00.000Z',
+    manifestPath: '.sciforge/skills/literature.pubmed_search/skill.json',
+    manifest: {
+      id: 'literature.pubmed_search',
+      name: 'PubMed Search',
+      domain: 'literature',
+      entrypoint: { type: 'python', command: 'main' },
+    },
+  } as unknown as SkillAvailability;
+}
+
+function taskRunResult(): WorkspaceTaskRunResult {
+  return {
+    spec: {
+      id: 'run-literature-1',
+      language: 'python',
+      entrypoint: 'main',
+      taskRel: '.sciforge/tasks/run-literature-1.py',
+      input: {},
+      outputRel: '.sciforge/task-results/run-literature-1.json',
+      stdoutRel: '.sciforge/logs/run-literature-1.stdout.log',
+      stderrRel: '.sciforge/logs/run-literature-1.stderr.log',
+    },
+    workspace,
+    command: 'python',
+    args: [],
+    exitCode: 0,
+    stdoutRef: '.sciforge/logs/run-literature-1.stdout.log',
+    stderrRef: '.sciforge/logs/run-literature-1.stderr.log',
+    outputRef: '.sciforge/task-results/run-literature-1.json',
+    stdout: '',
+    stderr: '',
+    runtimeFingerprint: {},
+  } as WorkspaceTaskRunResult;
 }
 
 async function waitForHealth(portNumber: number) {

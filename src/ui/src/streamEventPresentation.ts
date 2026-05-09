@@ -1,5 +1,16 @@
 import { buildContextWindowMeterModel } from './contextWindow';
 import type { AgentStreamEvent } from './domain';
+import {
+  classifyWorkEvent,
+  emptyWorkEventCounts,
+  formatRawWorkEventOutput,
+  structuredWorkEventSummary,
+  summarizeGeneratedTaskFiles,
+  summarizeWorkEvent,
+  summarizeWorklog,
+  type StructuredWorkEventSummary,
+  type WorkEventKind,
+} from './workEventAtoms';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -7,6 +18,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export type StreamEventImportance = 'key' | 'background' | 'debug';
 export type StreamEventTone = 'info' | 'warning' | 'danger' | 'success' | 'muted';
+export type StreamWorklogOperationKind = WorkEventKind;
 
 export interface StreamEventPresentation {
   typeLabel: string;
@@ -20,12 +32,30 @@ export interface StreamEventPresentation {
   visibleInRunningMessage: boolean;
 }
 
+export interface StreamWorklogEntry {
+  event: AgentStreamEvent;
+  presentation: StreamEventPresentation;
+  operationKind: StreamWorklogOperationKind;
+  operationLine: string;
+  rawOutput: string;
+  rawInitiallyCollapsed: boolean;
+  structured?: StructuredWorkEventSummary;
+}
+
+export interface StreamWorklogPresentation {
+  summary: string;
+  entries: StreamWorklogEntry[];
+  operationCounts: Record<StreamWorklogOperationKind, number> & { total: number };
+  counts: ReturnType<typeof streamEventCounts>;
+  initiallyCollapsed: boolean;
+}
+
 export function presentStreamEvent(event: AgentStreamEvent): StreamEventPresentation {
   const detail = readableStreamEventDetail(event);
   const usageDetail = formatAgentTokenUsage(event.usage);
   const importance = streamEventImportance(event, detail);
   const typeLabel = streamEventTypeLabel(event.type, event, detail);
-  const tone = streamEventTone(event.type, importance);
+  const tone = streamEventTone(event.type, importance, event);
   return {
     typeLabel,
     detail,
@@ -36,6 +66,60 @@ export function presentStreamEvent(event: AgentStreamEvent): StreamEventPresenta
     uiClass: streamEventUiClass(event.type, importance),
     initiallyCollapsed: importance !== 'key',
     visibleInRunningMessage: importance === 'key' && Boolean(detail || usageDetail),
+  };
+}
+
+export function presentStreamWorklog(
+  events: AgentStreamEvent[],
+  options: {
+    limit?: number;
+    guidanceCount?: number;
+    counts?: ReturnType<typeof streamEventCounts>;
+  } = {},
+): StreamWorklogPresentation {
+  const counts = options.counts ?? streamEventCounts(events);
+  const operationCounts = worklogOperationCounts(events);
+  const entries = latestWorklogEntries(events, options.limit ?? 48);
+  return {
+    summary: summarizeStructuredWorklog(entries) || summarizeWorklog(operationCounts, counts, options.guidanceCount ?? 0),
+    entries,
+    operationCounts,
+    counts,
+    initiallyCollapsed: true,
+  };
+}
+
+export function latestWorklogEntries(events: AgentStreamEvent[], limit: number): StreamWorklogEntry[] {
+  const seen = new Set<string>();
+  return events
+    .map(worklogEntryForEvent)
+    .filter((entry) => {
+      const progressKey = isRecord(entry.event.raw) && isRecord(entry.event.raw.progress)
+        ? [entry.event.raw.progress.phase, entry.event.raw.progress.title, entry.event.raw.progress.detail].join(':')
+        : '';
+      if (!entry.presentation.detail && !entry.presentation.usageDetail && !progressKey) return false;
+      if (entry.presentation.importance === 'debug') return false;
+      const key = `${entry.event.type}:${entry.operationKind}:${entry.presentation.shortDetail}:${progressKey}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(-limit);
+}
+
+export function worklogEntryForEvent(event: AgentStreamEvent): StreamWorklogEntry {
+  const presentation = presentStreamEvent(event);
+  const structured = structuredWorkEventSummary(event);
+  const operationKind = classifyWorkEvent(event, presentation.detail, presentation.shortDetail);
+  const detail = structured?.detail || presentation.shortDetail || presentation.detail || presentation.usageDetail;
+  return {
+    event,
+    presentation,
+    operationKind,
+    operationLine: summarizeWorkEvent(operationKind, detail),
+    rawOutput: formatRawWorkEventOutput(event),
+    rawInitiallyCollapsed: true,
+    structured,
   };
 }
 
@@ -56,6 +140,32 @@ export function streamEventCounts(events: AgentStreamEvent[]) {
     },
     { total: 0, key: 0, background: 0, debug: 0 },
   );
+}
+
+function worklogOperationCounts(events: AgentStreamEvent[]) {
+  return events.reduce(
+    (memo, event) => {
+      const presentation = presentStreamEvent(event);
+      const kind = classifyWorkEvent(event, presentation.detail, presentation.shortDetail);
+      memo.total += 1;
+      memo[kind] += 1;
+      return memo;
+    },
+    emptyWorkEventCounts(),
+  );
+}
+
+function summarizeStructuredWorklog(entries: StreamWorklogEntry[]) {
+  const latestProject = [...entries].reverse().find((entry) => entry.structured?.project)?.structured?.project;
+  const latestStage = [...entries].reverse().find((entry) => entry.structured?.stage)?.structured?.stage;
+  if (!latestProject && !latestStage) return '';
+  const project = latestProject
+    ? `Project ${latestProject.title || latestProject.id || 'project'}${latestProject.status ? ` · ${latestProject.status}` : ''}${latestProject.progress ? ` · ${latestProject.progress}` : ''}`
+    : '';
+  const stage = latestStage
+    ? `Stage ${latestStage.index !== undefined ? `${latestStage.index + 1} ` : ''}${latestStage.title || latestStage.kind || latestStage.id || 'stage'}${latestStage.status ? ` · ${latestStage.status}` : ''}`
+    : '';
+  return [project, stage].filter(Boolean).join(' · ');
 }
 
 export function formatAgentTokenUsage(usage: AgentStreamEvent['usage'] | undefined) {
@@ -110,6 +220,8 @@ export function readableStreamEventDetail(event: AgentStreamEvent) {
       .filter(Boolean)
       .join(' · ');
   }
+  const structuredDetail = structuredWorkEventSummary(event)?.detail;
+  if (structuredDetail) return structuredDetail;
   const rawDetail = detailFromRawToolEvent(event);
   if (rawDetail) return rawDetail;
   const progressDetail = detailFromRawProgressEvent(event);
@@ -124,6 +236,8 @@ export function readableStreamEventDetail(event: AgentStreamEvent) {
 
 function streamEventImportance(event: AgentStreamEvent, detail: string): StreamEventImportance {
   const type = event.type.toLowerCase();
+  const structured = structuredWorkEventSummary(event);
+  if (structured) return 'key';
   if (type.includes('error') || type.includes('failed') || type.includes('interrupt') || type.includes('permission')) {
     return 'key';
   }
@@ -151,6 +265,9 @@ function streamEventImportance(event: AgentStreamEvent, detail: string): StreamE
 }
 
 function streamEventTypeLabel(type: string, event?: AgentStreamEvent, detail = '') {
+  const structured = event ? structuredWorkEventSummary(event) : undefined;
+  if (structured?.stage) return 'Stage';
+  if (structured?.project) return 'Project';
   if (type === 'contextWindowState') return '上下文窗口';
   if (type === 'contextCompaction') return '上下文压缩';
   if (type === 'text-delta') return isScriptOrArtifactGenerationDetail(detail) ? '生成脚本/任务' : '生成内容';
@@ -163,7 +280,12 @@ function streamEventTypeLabel(type: string, event?: AgentStreamEvent, detail = '
   return type;
 }
 
-function streamEventTone(type: string, importance: StreamEventImportance): StreamEventTone {
+function streamEventTone(type: string, importance: StreamEventImportance, event?: AgentStreamEvent): StreamEventTone {
+  const structured = event ? structuredWorkEventSummary(event) : undefined;
+  const status = (structured?.stage?.status || structured?.project?.status || '').toLowerCase();
+  if (structured?.failure || status === 'failed' || status === 'blocked') return 'danger';
+  if (status === 'done' || status === 'success' || status === 'completed') return 'success';
+  if (structured?.recoverActions.length) return 'warning';
   if (type.includes('error') || type.includes('failed')) return 'danger';
   if (type === 'contextCompaction') return 'warning';
   if (type.includes('silent') || type.includes('guidance') || type.includes('permission')) return 'warning';
@@ -223,6 +345,8 @@ function detailFromRawToolEvent(event: AgentStreamEvent) {
   const toolName = typeof raw.toolName === 'string' ? raw.toolName : '';
   const detail = typeof raw.detail === 'string' ? raw.detail : event.detail || '';
   const output = typeof raw.output === 'string' ? raw.output : '';
+  const generatedTaskSummary = summarizeGeneratedTaskFiles(detail || output || event.detail || '');
+  if (generatedTaskSummary) return generatedTaskSummary;
   if (toolName === 'write_file' || /write_file/i.test(detail)) {
     const parsed = parseJsonObject(detail);
     const path = typeof parsed?.path === 'string' ? parsed.path : extractPathLike(detail);

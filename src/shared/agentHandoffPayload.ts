@@ -26,6 +26,9 @@ export interface FailureRecoveryPolicy {
   priorFailureReason?: string;
   recoverActions?: string[];
   attemptHistoryRefs?: string[];
+  attemptHistory?: Array<Record<string, unknown>>;
+  nextStep?: string;
+  evidenceRefs?: string[];
 }
 
 export interface AgentHandoffPolicySet {

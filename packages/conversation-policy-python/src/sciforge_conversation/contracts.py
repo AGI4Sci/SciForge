@@ -64,6 +64,7 @@ RESPONSE_JSON_SCHEMA: JsonMap = {
         "currentReferenceDigests": {"type": "array"},
         "artifactIndex": {"type": "object"},
         "capabilityBrief": {"type": "object"},
+        "executionModePlan": {"type": "object"},
         "handoffPlan": {"type": "object"},
         "acceptancePlan": {"type": "object"},
         "recoveryPlan": {"type": "object"},
@@ -194,6 +195,7 @@ class ConversationPolicyResponse:
     currentReferenceDigests: list[JsonMap] = field(default_factory=list)
     artifactIndex: JsonMap = field(default_factory=dict)
     capabilityBrief: JsonMap = field(default_factory=dict)
+    executionModePlan: JsonMap = field(default_factory=dict)
     handoffPlan: JsonMap = field(default_factory=dict)
     acceptancePlan: JsonMap = field(default_factory=dict)
     recoveryPlan: JsonMap = field(default_factory=dict)
@@ -266,6 +268,7 @@ def response_from_json(payload: JsonMap) -> ConversationPolicyResponse:
         ],
         artifactIndex=_optional_mapping(payload.get("artifactIndex"), "artifactIndex"),
         capabilityBrief=_optional_mapping(payload.get("capabilityBrief"), "capabilityBrief"),
+        executionModePlan=_optional_mapping(payload.get("executionModePlan"), "executionModePlan"),
         handoffPlan=_optional_mapping(payload.get("handoffPlan"), "handoffPlan"),
         acceptancePlan=_optional_mapping(payload.get("acceptancePlan"), "acceptancePlan"),
         recoveryPlan=_optional_mapping(payload.get("recoveryPlan"), "recoveryPlan"),

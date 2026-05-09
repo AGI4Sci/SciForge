@@ -331,7 +331,7 @@ try {
             '  "claims": [{"text": "runner executed", "confidence": 0.9}],',
             '  "uiManifest": [{"componentId": "report-viewer", "artifactRef": "runner-report"}],',
             '  "executionUnits": [{"id": "runner", "status": "done", "tool": "python"}],',
-            '  "artifacts": [{"id": "runner-report", "type": "research-report", "data": {"markdown": "## Runner smoke"}}]',
+            '  "artifacts": [{"id": "runner-report", "type": "research-report", "schema": {"type": "object"}, "data": {"markdown": "## Runner smoke"}}]',
             '}',
             'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
           ].join('\n'),
@@ -373,6 +373,213 @@ try {
   const runnerAttempts = await readTaskAttempts(workspace, runnerAttemptId);
   assert.equal(runnerAttempts[0]?.status, 'done');
 
+  let emptyRetrievalRepairCalled = false;
+  let emptyRetrievalTaskId = '';
+  const arxivEmptyRequest = {
+    ...request,
+    prompt: '帮我调研最近一周 arXiv 上 agent 相关论文和研究趋势',
+  };
+  const emptyRetrievalPayload = await runAgentServerGeneratedTask(arxivEmptyRequest, skill, [skill], {}, {
+    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
+    requestAgentServerGeneration: async () => ({
+      ok: true,
+      runId: 'runner-empty-arxiv-run',
+      response: {
+        taskFiles: [{
+          path: '.sciforge/tasks/runner-empty-arxiv.py',
+          language: 'python',
+          content: [
+            'import json, sys',
+            '_, input_path, output_path = sys.argv',
+            'payload = {',
+            '  "message": "共检索到 **0** 篇与 Agent 相关的论文。",',
+            '  "confidence": 0.9,',
+            '  "claimType": "literature_survey",',
+            '  "evidenceLevel": "high",',
+            '  "reasoningTrace": "Queried arXiv API. Retrieved 0 papers.",',
+            '  "claims": [{"text": "最近一周 arXiv 上有 0 篇 Agent 相关论文", "confidence": 0.9}],',
+            '  "uiManifest": [{"componentId": "report-viewer", "artifactRef": "empty-arxiv-report"}],',
+            '  "executionUnits": [{"id": "fetch-arxiv", "status": "done", "tool": "arxiv-api"}],',
+            '  "artifacts": [{"id": "empty-arxiv-report", "type": "research-report", "schema": {"type": "object"}, "data": {"markdown": "Retrieved 0 papers from arXiv."}}]',
+            '}',
+            'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
+          ].join('\n'),
+        }],
+        entrypoint: { language: 'python', path: '.sciforge/tasks/runner-empty-arxiv.py' },
+        environmentRequirements: {},
+        validationCommand: '',
+        expectedArtifacts: ['research-report'],
+        patchSummary: 'empty arxiv retrieval should require diagnosis',
+      },
+    }),
+    agentServerGenerationFailureReason: (error) => error,
+    attemptPlanRefs: () => ({ scenarioPackageRef: request.scenarioPackageRef }),
+    repairNeededPayload: (req, selectedSkill, reason) => repairNeededPayload(req, selectedSkill, reason),
+    agentServerFailurePayloadRefs: () => ({}),
+    ensureDirectAnswerReportArtifact: (payload) => payload,
+    mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
+    validateAndNormalizePayload: async (payload, _req, selectedSkill, refs): Promise<ToolPayload> => ({
+      ...payload,
+      reasoningTrace: `${payload.reasoningTrace}\nSkill: ${selectedSkill.id}\nRuntime gateway refs: taskCodeRef=${refs.taskRel}, outputRef=${refs.outputRel}`,
+      executionUnits: payload.executionUnits.map((unit) => ({ ...unit, skillId: selectedSkill.id, outputRef: refs.outputRel })),
+      logs: [{ kind: 'stdout', ref: refs.stdoutRel }, { kind: 'stderr', ref: refs.stderrRel }],
+    }),
+    tryAgentServerRepairAndRerun: async (_params) => {
+      emptyRetrievalRepairCalled = true;
+      emptyRetrievalTaskId = _params.taskId;
+      assert.match(_params.failureReason, /External retrieval returned zero results/);
+      return repairNeededPayload(arxivEmptyRequest, skill, _params.failureReason);
+    },
+    failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
+    coerceWorkspaceTaskPayload: (value) => coerceAgentServerToolPayload(value),
+    schemaErrors: (payload) => {
+      const record = payload as Record<string, unknown>;
+      return ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts'].filter((key) => !(key in record)).map((key) => `missing ${key}`);
+    },
+    firstPayloadFailureReason: () => undefined,
+    payloadHasFailureStatus: () => false,
+  });
+  assert.equal(emptyRetrievalRepairCalled, true);
+  assert.equal(emptyRetrievalPayload?.executionUnits[0]?.status, 'repair-needed');
+  assert.match(emptyRetrievalPayload?.message ?? '', /External retrieval returned zero results/);
+  const emptyRetrievalAttempt = await readTaskAttempts(workspace, emptyRetrievalTaskId);
+  assert.equal(emptyRetrievalAttempt[0]?.status, 'repair-needed');
+  assert.match(emptyRetrievalAttempt[0]?.failureReason ?? '', /External retrieval returned zero results/);
+  assert.match(emptyRetrievalAttempt[0]?.codeRef ?? '', /runner-empty-arxiv/);
+  assert.match(emptyRetrievalAttempt[0]?.outputRef ?? '', /^\.sciforge\/task-results\/generated-literature-/);
+  assert.match(emptyRetrievalAttempt[0]?.stdoutRef ?? '', /^\.sciforge\/logs\/generated-literature-/);
+  assert.match(emptyRetrievalAttempt[0]?.stderrRef ?? '', /^\.sciforge\/logs\/generated-literature-/);
+
+  let providerDiagnosticsRepairCalled = false;
+  const providerDiagnosticsPayload = await runAgentServerGeneratedTask(arxivEmptyRequest, skill, [skill], {}, {
+    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
+    requestAgentServerGeneration: async () => ({
+      ok: true,
+      runId: 'runner-empty-provider-diagnostics-run',
+      response: {
+        taskFiles: [{
+          path: '.sciforge/tasks/runner-empty-provider-diagnostics.py',
+          language: 'python',
+          content: [
+            'import json, sys',
+            '_, input_path, output_path = sys.argv',
+            'payload = {',
+            '  "message": "Retrieved 0 papers; provider status 200; fallback query attempted.",',
+            '  "confidence": 0.72,',
+            '  "claimType": "literature_survey",',
+            '  "evidenceLevel": "runtime",',
+            '  "reasoningTrace": "Queried arXiv API. Retrieved 0 papers. Provider status 200. Fallback query attempted.",',
+            '  "claims": [{"text": "No matching papers after documented provider and fallback checks", "confidence": 0.72}],',
+            '  "uiManifest": [{"componentId": "report-viewer", "artifactRef": "empty-diagnostics-report"}],',
+            '  "executionUnits": [{"id": "fetch-arxiv", "status": "done", "tool": "arxiv-api", "providerStatus": 200, "fallbackAttempted": True}],',
+            '  "artifacts": [{"id": "empty-diagnostics-report", "type": "research-report", "schema": {"type": "object"}, "data": {"markdown": "Retrieved 0 papers with provider status and fallback diagnostics."}}]',
+            '}',
+            'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
+          ].join('\n'),
+        }],
+        entrypoint: { language: 'python', path: '.sciforge/tasks/runner-empty-provider-diagnostics.py' },
+        environmentRequirements: {},
+        validationCommand: '',
+        expectedArtifacts: ['research-report'],
+        patchSummary: 'empty retrieval includes diagnostics',
+      },
+    }),
+    agentServerGenerationFailureReason: (error) => error,
+    attemptPlanRefs: () => ({ scenarioPackageRef: request.scenarioPackageRef }),
+    repairNeededPayload: (req, selectedSkill, reason) => repairNeededPayload(req, selectedSkill, reason),
+    agentServerFailurePayloadRefs: () => ({}),
+    ensureDirectAnswerReportArtifact: (payload) => payload,
+    mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
+    validateAndNormalizePayload: async (payload, _req, selectedSkill, refs): Promise<ToolPayload> => ({
+      ...payload,
+      reasoningTrace: `${payload.reasoningTrace}\nSkill: ${selectedSkill.id}\nRuntime gateway refs: taskCodeRef=${refs.taskRel}, outputRef=${refs.outputRel}`,
+      executionUnits: payload.executionUnits.map((unit) => ({ ...unit, skillId: selectedSkill.id, outputRef: refs.outputRel })),
+      logs: [{ kind: 'stdout', ref: refs.stdoutRel }, { kind: 'stderr', ref: refs.stderrRel }],
+    }),
+    tryAgentServerRepairAndRerun: async () => {
+      providerDiagnosticsRepairCalled = true;
+      return undefined;
+    },
+    failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
+    coerceWorkspaceTaskPayload: (value) => coerceAgentServerToolPayload(value),
+    schemaErrors: (payload) => {
+      const record = payload as Record<string, unknown>;
+      return ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts'].filter((key) => !(key in record)).map((key) => `missing ${key}`);
+    },
+    firstPayloadFailureReason: () => undefined,
+    payloadHasFailureStatus: () => false,
+  });
+  assert.equal(providerDiagnosticsRepairCalled, false);
+  assert.equal(providerDiagnosticsPayload?.executionUnits[0]?.status, 'done');
+
+  let commandFailedRepairCalled = false;
+  let commandFailedTaskId = '';
+  const commandFailedPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, {
+    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
+    requestAgentServerGeneration: async () => ({
+      ok: true,
+      runId: 'runner-command-failed-run',
+      response: {
+        taskFiles: [{
+          path: '.sciforge/tasks/runner-command-failed.py',
+          language: 'python',
+          content: [
+            'import json, sys',
+            '_, input_path, output_path = sys.argv',
+            'payload = {',
+            '  "message": "Command completed successfully.",',
+            '  "confidence": 0.91,',
+            '  "claimType": "fact",',
+            '  "evidenceLevel": "runtime",',
+            '  "reasoningTrace": "A subcommand exited 1 but the payload still claimed success.",',
+            '  "claims": [{"text": "subcommand passed", "confidence": 0.91}],',
+            '  "uiManifest": [{"componentId": "report-viewer", "artifactRef": "command-report"}],',
+            '  "executionUnits": [{"id": "subcommand", "status": "done", "tool": "shell", "exitCode": 1}],',
+            '  "artifacts": [{"id": "command-report", "type": "research-report", "schema": {"type": "object"}, "data": {"markdown": "Subcommand claimed as successful."}}]',
+            '}',
+            'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
+          ].join('\n'),
+        }],
+        entrypoint: { language: 'python', path: '.sciforge/tasks/runner-command-failed.py' },
+        environmentRequirements: {},
+        validationCommand: '',
+        expectedArtifacts: ['research-report'],
+        patchSummary: 'command failure evidence should require repair',
+      },
+    }),
+    agentServerGenerationFailureReason: (error) => error,
+    attemptPlanRefs: () => ({ scenarioPackageRef: request.scenarioPackageRef }),
+    repairNeededPayload: (req, selectedSkill, reason) => repairNeededPayload(req, selectedSkill, reason),
+    agentServerFailurePayloadRefs: () => ({}),
+    ensureDirectAnswerReportArtifact: (payload) => payload,
+    mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
+    validateAndNormalizePayload: async (payload, _req, selectedSkill, refs): Promise<ToolPayload> => ({
+      ...payload,
+      reasoningTrace: `${payload.reasoningTrace}\nSkill: ${selectedSkill.id}\nRuntime gateway refs: taskCodeRef=${refs.taskRel}, outputRef=${refs.outputRel}`,
+      executionUnits: payload.executionUnits.map((unit) => ({ ...unit, skillId: selectedSkill.id, outputRef: refs.outputRel })),
+      logs: [{ kind: 'stdout', ref: refs.stdoutRel }, { kind: 'stderr', ref: refs.stderrRel }],
+    }),
+    tryAgentServerRepairAndRerun: async (_params) => {
+      commandFailedRepairCalled = true;
+      commandFailedTaskId = _params.taskId;
+      assert.match(_params.failureReason, /non-zero exitCode/);
+      return repairNeededPayload(request, skill, _params.failureReason);
+    },
+    failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
+    coerceWorkspaceTaskPayload: (value) => coerceAgentServerToolPayload(value),
+    schemaErrors: (payload) => {
+      const record = payload as Record<string, unknown>;
+      return ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts'].filter((key) => !(key in record)).map((key) => `missing ${key}`);
+    },
+    firstPayloadFailureReason: () => undefined,
+    payloadHasFailureStatus: () => false,
+  });
+  assert.equal(commandFailedRepairCalled, true);
+  assert.equal(commandFailedPayload?.executionUnits[0]?.status, 'repair-needed');
+  const commandFailedAttempt = await readTaskAttempts(workspace, commandFailedTaskId);
+  assert.equal(commandFailedAttempt[0]?.status, 'repair-needed');
+  assert.match(commandFailedAttempt[0]?.failureReason ?? '', /non-zero exitCode/);
+
   const generatedReferencePayload = await runAgentServerGeneratedTask(currentReferenceRequest, skill, [skill], {}, {
     readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
     requestAgentServerGeneration: async () => ({
@@ -398,7 +605,7 @@ try {
             '  "claims": [{"text": f"Current reference {ref_title} was used", "confidence": 0.9}],',
             '  "uiManifest": [{"componentId": "report-viewer", "artifactRef": "runner-reference-report"}],',
             '  "executionUnits": [{"id": "runner-current-reference", "status": "done", "tool": "python"}],',
-            '  "artifacts": [{"id": "runner-reference-report", "type": "research-report", "data": {"markdown": f"## Report based on {ref_title}\\n\\nPrior attempts visible: {len(prior)}"}}]',
+            '  "artifacts": [{"id": "runner-reference-report", "type": "research-report", "schema": {"type": "object"}, "data": {"markdown": f"## Report based on {ref_title}\\n\\nPrior attempts visible: {len(prior)}"}}]',
             '}',
             'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
           ].join('\n'),
@@ -458,7 +665,7 @@ try {
                 '  "claims": [],',
                 '  "uiManifest": [{"componentId": "report-viewer", "artifactRef": "static-report"}],',
                 '  "executionUnits": [{"id": "static", "status": "done", "tool": "python"}],',
-                '  "artifacts": [{"id": "static-report", "type": "research-report", "data": {"markdown": "Hard-coded current-input.pdf report"}}]',
+                '  "artifacts": [{"id": "static-report", "type": "research-report", "schema": {"type": "object"}, "data": {"markdown": "Hard-coded current-input.pdf report"}}]',
                 '}',
                 'print(json.dumps(payload))',
               ].join('\n'),

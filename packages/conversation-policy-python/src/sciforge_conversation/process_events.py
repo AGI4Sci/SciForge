@@ -35,6 +35,11 @@ class ProgressStep:
     writing: list[str] = field(default_factory=list)
     waiting_for: str | None = None
     next_step: str | None = None
+    last_event: dict[str, str] | None = None
+    reason: str | None = None
+    recovery_hint: str | None = None
+    can_abort: bool = False
+    can_continue: bool = False
     source_event_type: str | None = None
     status: str = "running"
 
@@ -48,6 +53,11 @@ class ProgressStep:
             "writing": self.writing,
             "waitingFor": self.waiting_for,
             "nextStep": self.next_step,
+            "lastEvent": self.last_event,
+            "reason": self.reason,
+            "recoveryHint": self.recovery_hint,
+            "canAbort": self.can_abort,
+            "canContinue": self.can_continue,
             "status": self.status,
         }
         return {
@@ -56,7 +66,7 @@ class ProgressStep:
             "status": self.status,
             "message": self.title,
             "detail": self.detail,
-            "progress": {key: value for key, value in progress.items() if value not in (None, [], "")},
+            "progress": {key: value for key, value in progress.items() if value not in (None, [], "", False)},
             "raw": payload,
         }
 
@@ -100,6 +110,9 @@ def summarize_event(raw: Mapping[str, Any], index: int = 0) -> ProgressStep | No
     haystack = "\n".join(part for part in [event_type, status, tool_name, detail] if part)
     paths = _paths_from(raw, detail)
     lower = haystack.lower()
+
+    if _looks_backend_waiting(raw, lower):
+        return _backend_waiting_step(raw, index, event_type, status, detail)
 
     if _looks_failed(lower):
         return _step(index, "error", "遇到阻断", _trim(detail or "后端返回失败事件。"), source_event_type=event_type, status="failed")
@@ -207,6 +220,11 @@ def _step(
     writing: Iterable[str] = (),
     waiting_for: str | None = None,
     next_step: str | None = None,
+    last_event: Mapping[str, Any] | None = None,
+    reason: str | None = None,
+    recovery_hint: str | None = None,
+    can_abort: bool = False,
+    can_continue: bool = False,
     source_event_type: str | None = None,
     status: str = "running",
 ) -> ProgressStep:
@@ -219,8 +237,37 @@ def _step(
         writing=_unique(writing),
         waiting_for=waiting_for,
         next_step=next_step,
+        last_event=_last_event_summary(last_event),
+        reason=reason,
+        recovery_hint=recovery_hint,
+        can_abort=can_abort,
+        can_continue=can_continue,
         source_event_type=source_event_type,
         status=_status(status, phase),
+    )
+
+
+def _backend_waiting_step(raw: Mapping[str, Any], index: int, event_type: str, status: str, detail: str) -> ProgressStep:
+    elapsed_ms = _number(raw.get("elapsedMs")) or _number(raw.get("elapsed_ms"))
+    last_event = raw.get("lastEvent") if isinstance(raw.get("lastEvent"), Mapping) else raw.get("last_event")
+    elapsed_text = f"已 {int(elapsed_ms / 1000)}s 没有收到新事件" if elapsed_ms is not None else "长时间没有收到新事件"
+    last = _last_event_summary(last_event if isinstance(last_event, Mapping) else None)
+    last_text = f"最近事件：{last['label']} - {last['detail']}" if last else "还没有可展示的后端事件。"
+    waiting_for = _backend_waiting_target(detail, f"{event_type} {detail}".lower())
+    return _step(
+        index,
+        "wait",
+        f"正在等待 {waiting_for}",
+        _trim(detail or f"HTTP stream 仍在等待；{elapsed_text}。{last_text}"),
+        waiting_for=waiting_for,
+        next_step="收到新事件后继续执行；也可以安全中止当前 stream 或继续补充指令排队。",
+        last_event=last_event if isinstance(last_event, Mapping) else None,
+        reason="backend-waiting",
+        recovery_hint="保留最近真实事件和等待原因，下一轮可基于这些线索继续或恢复。",
+        can_abort=True,
+        can_continue=True,
+        source_event_type=event_type,
+        status=status,
     )
 
 
@@ -313,6 +360,29 @@ def _status(value: str, phase: ProgressPhase) -> str:
     return "running"
 
 
+def _number(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _last_event_summary(value: Mapping[str, Any] | None) -> dict[str, str] | None:
+    if not isinstance(value, Mapping):
+        return None
+    label = _text(value.get("label")) or _text(value.get("type")) or "事件"
+    detail = _first_text(value, "detail", "message", "text", "output") or ""
+    created_at = _text(value.get("createdAt")) or _text(value.get("created_at")) or ""
+    summary = {"label": _trim(label, 80), "detail": _trim(detail or label, 180)}
+    if created_at:
+        summary["createdAt"] = created_at
+    return summary
+
+
 def _label_for_phase(phase: ProgressPhase) -> str:
     return {
         "read": "读取",
@@ -342,6 +412,13 @@ def _looks_wait(lower: str) -> bool:
     return bool(re.search(r"silent|waiting|wait |rate.?limit|retry|poll|pending|等待|排队|配额", lower))
 
 
+def _looks_backend_waiting(raw: Mapping[str, Any], lower: str) -> bool:
+    event_type = (_text(raw.get("type")) or _text(raw.get("kind")) or "").lower()
+    if event_type in {"backend-waiting", "backend-silent", "silent-stream-wait", "process-waiting"}:
+        return True
+    return "http stream" in lower and bool(re.search(r"still waiting|仍在等待|没有.*新事件|no new events?", lower))
+
+
 def _looks_execute(lower: str, tool_name: str) -> bool:
     return "run_command" in tool_name.lower() or bool(re.search(r"run_command|execute|executing|python3?|pytest|npm |tsx|bash|workspace task|执行|运行", lower))
 
@@ -363,3 +440,13 @@ def _waiting_target(detail: str, lower: str) -> str:
         return "workspace task 返回"
     match = re.search(r"waiting(?: for)? ([^.;。]+)", detail, flags=re.IGNORECASE)
     return _trim(match.group(1), 80) if match else "后端返回新事件"
+
+
+def _backend_waiting_target(detail: str, lower: str) -> str:
+    if "rate" in lower or "配额" in lower:
+        return "provider 配额或 retry budget"
+    if "agentserver" in lower:
+        return "AgentServer 返回"
+    if "workspace" in lower:
+        return "workspace task 返回"
+    return "后端返回新事件"

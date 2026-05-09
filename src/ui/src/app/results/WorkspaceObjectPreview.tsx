@@ -14,6 +14,8 @@ import {
 } from '../../../../../packages/artifact-preview';
 import { artifactForObjectReference, sciForgeReferenceAttribute, pathForObjectReference, referenceForObjectReference, referenceForWorkspaceFileLike, withRegionLocator } from '../../../../../packages/object-references';
 
+const WORKSPACE_OBJECT_PREVIEW_TIMEOUT_MS = 8_000;
+
 export function WorkspaceObjectPreview({
   reference,
   session,
@@ -28,6 +30,7 @@ export function WorkspaceObjectPreview({
   const artifact = artifactForObjectReference(reference, session);
   const inlinePreview = useMemo(() => uploadedArtifactPreview(artifact), [artifact]);
   const path = pathForObjectReference(reference, session);
+  const previewConfig = useMemo(() => config, [config.workspacePath, config.workspaceWriterBaseUrl]);
   const [descriptor, setDescriptor] = useState<PreviewDescriptor | undefined>();
   const [file, setFile] = useState<WorkspaceFileContent | undefined>();
   const [loadingPath, setLoadingPath] = useState('');
@@ -50,7 +53,7 @@ export function WorkspaceObjectPreview({
         };
       }
     }
-    void readPreviewDescriptor(path, config)
+    void withWorkspacePreviewTimeout(readPreviewDescriptor(path, previewConfig), `preview descriptor ${path}`)
       .then((nextDescriptor) => {
         if (!cancelled) setDescriptor(staticDescriptor ? packageMergePreviewDescriptors(staticDescriptor, nextDescriptor) : nextDescriptor);
       })
@@ -60,7 +63,7 @@ export function WorkspaceObjectPreview({
           return;
         }
         try {
-          const nextFile = await readWorkspaceFile(path, config);
+          const nextFile = await withWorkspacePreviewTimeout(readWorkspaceFile(path, previewConfig), `workspace file ${path}`);
           if (!cancelled) setFile(nextFile);
         } catch (fileError) {
           if (!cancelled) {
@@ -76,7 +79,7 @@ export function WorkspaceObjectPreview({
     return () => {
       cancelled = true;
     };
-  }, [artifact, config, inlinePreview, path, reference.kind]);
+  }, [artifact, inlinePreview, path, previewConfig, reference.kind]);
 
   if (reference.kind === 'url') {
     const url = reference.ref.replace(/^url:/i, '');
@@ -184,6 +187,7 @@ export function WorkspaceObjectPreview({
 }
 
 function DescriptorPreview({ descriptor, config, reference }: { descriptor: PreviewDescriptor; config: SciForgeConfig; reference: SciForgeReference }) {
+  const previewConfig = useMemo(() => config, [config.workspacePath, config.workspaceWriterBaseUrl]);
   const [derivedFile, setDerivedFile] = useState<WorkspaceFileContent | undefined>();
   const [derivedLabel, setDerivedLabel] = useState('');
   const [derivedError, setDerivedError] = useState('');
@@ -200,7 +204,7 @@ function DescriptorPreview({ descriptor, config, reference }: { descriptor: Prev
     setDerivedFile(undefined);
     setDerivedError('');
     setDerivedLoading(true);
-    void loadDescriptorPreviewFile(descriptor, config)
+    void withWorkspacePreviewTimeout(loadDescriptorPreviewFile(descriptor, previewConfig), `derived preview ${descriptor.ref}`)
       .then(({ file, label }) => {
         if (cancelled) return;
         setDerivedFile(file);
@@ -215,7 +219,7 @@ function DescriptorPreview({ descriptor, config, reference }: { descriptor: Prev
     return () => {
       cancelled = true;
     };
-  }, [config, descriptor]);
+  }, [descriptor, previewConfig]);
 
   if ((descriptor.kind === 'pdf' || descriptor.kind === 'image') && descriptor.rawUrl) {
     return (
@@ -264,6 +268,20 @@ async function loadDescriptorPreviewFile(descriptor: PreviewDescriptor, config: 
   const derivativeKind = descriptorDerivativeKind(descriptor);
   const derivative = await readPreviewDerivative(descriptor.ref, derivativeKind, config);
   return { file: await readWorkspaceFile(derivative.ref, config), label: `${derivative.kind} derivative` };
+}
+
+async function withWorkspacePreviewTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`${label} 超过 ${Math.round(WORKSPACE_OBJECT_PREVIEW_TIMEOUT_MS / 1000)} 秒仍未返回。`));
+    }, WORKSPACE_OBJECT_PREVIEW_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 function UnsupportedPreviewPackageNotice({

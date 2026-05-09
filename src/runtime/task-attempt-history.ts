@@ -1,13 +1,15 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import type { TaskAttemptRecord } from './runtime-types.js';
+import { summarizeWorkEvidenceForHandoff } from './gateway/work-evidence-types.js';
 import { fileExists } from './workspace-task-runner.js';
 
 export async function appendTaskAttempt(workspacePath: string, record: TaskAttemptRecord) {
   const workspace = resolve(workspacePath || process.cwd());
-  const normalizedRecord = record.status === 'done'
-    ? { ...record, failureReason: undefined }
-    : record;
+  const recordWithEvidence = await withWorkEvidenceSummary(workspace, record);
+  const normalizedRecord = recordWithEvidence.status === 'done'
+    ? { ...recordWithEvidence, failureReason: undefined }
+    : recordWithEvidence;
   const path = join(workspace, '.sciforge', 'task-attempts', `${safeName(record.id)}.json`);
   await mkdir(dirname(path), { recursive: true });
   const previous = await readAttempts(path);
@@ -31,7 +33,7 @@ export async function appendTaskAttempt(workspacePath: string, record: TaskAttem
 
 export async function readTaskAttempts(workspacePath: string, id: string): Promise<TaskAttemptRecord[]> {
   const workspace = resolve(workspacePath || process.cwd());
-  return readAttempts(join(workspace, '.sciforge', 'task-attempts', `${safeName(id)}.json`));
+  return withWorkEvidenceSummaries(workspace, await readAttempts(join(workspace, '.sciforge', 'task-attempts', `${safeName(id)}.json`)));
 }
 
 export async function readRecentTaskAttempts(
@@ -52,12 +54,13 @@ export async function readRecentTaskAttempts(
   const groups = await Promise.all(files
     .filter((file) => file.endsWith('.json'))
     .map((file) => readAttempts(join(dir, file))));
-  return groups
+  const attempts = groups
     .flat()
     .filter((attempt) => !skillDomain || attempt.skillDomain === skillDomain)
     .filter((attempt) => matchesAttemptScope(attempt, scope))
     .sort((left, right) => Date.parse(right.createdAt || '') - Date.parse(left.createdAt || ''))
     .slice(0, limit);
+  return withWorkEvidenceSummaries(workspace, attempts);
 }
 
 function matchesAttemptScope(
@@ -105,6 +108,29 @@ async function readAttempts(path: string): Promise<TaskAttemptRecord[]> {
   } catch {
     return [];
   }
+}
+
+async function withWorkEvidenceSummaries(workspace: string, attempts: TaskAttemptRecord[]) {
+  return Promise.all(attempts.map((attempt) => withWorkEvidenceSummary(workspace, attempt)));
+}
+
+async function withWorkEvidenceSummary(workspace: string, record: TaskAttemptRecord): Promise<TaskAttemptRecord> {
+  if (record.workEvidenceSummary || !record.outputRef) return record;
+  const outputPath = workspaceSafePath(workspace, record.outputRef);
+  if (!outputPath || !await fileExists(outputPath)) return record;
+  try {
+    const parsed = JSON.parse(await readFile(outputPath, 'utf8'));
+    const workEvidenceSummary = summarizeWorkEvidenceForHandoff(parsed);
+    return workEvidenceSummary ? { ...record, workEvidenceSummary } : record;
+  } catch {
+    return record;
+  }
+}
+
+function workspaceSafePath(workspace: string, ref: string) {
+  const root = resolve(workspace);
+  const path = resolve(root, ref);
+  return path === root || path.startsWith(`${root}${sep}`) ? path : undefined;
 }
 
 function safeName(value: string) {

@@ -66,6 +66,7 @@ export function requestWithPolicyResponse(
   const acceptancePlan = isRecord(response.acceptancePlan) ? response.acceptancePlan : undefined;
   const recoveryPlan = isRecord(response.recoveryPlan) ? response.recoveryPlan : undefined;
   const capabilityBrief = isRecord(response.capabilityBrief) ? response.capabilityBrief : undefined;
+  const executionModeDecision = executionModeDecisionFromPolicy(response.executionModePlan);
   const artifactPolicy = isRecord(handoffPayload.policy) ? handoffPayload.policy : isRecord(handoffPlan) ? handoffPlan : undefined;
   const currentReferences = response.currentReferences?.length
     ? response.currentReferences
@@ -96,6 +97,7 @@ export function requestWithPolicyResponse(
       recentRuns: recentRuns.length ? recentRuns : uiState.recentRuns,
       artifactIndex: response.artifactIndex,
       capabilityBrief,
+      executionModeDecision,
       handoffPlan,
       acceptancePlan,
       recoveryPlan,
@@ -104,13 +106,45 @@ export function requestWithPolicyResponse(
   };
 }
 
+function executionModeDecisionFromPolicy(value: unknown): Record<string, unknown> {
+  const plan = isRecord(value) ? value : {};
+  return {
+    executionModeRecommendation: stringField(plan.executionMode) ?? 'unknown',
+    complexityScore: numberField(plan.complexityScore) ?? 'unknown',
+    uncertaintyScore: numberField(plan.uncertaintyScore) ?? 'unknown',
+    reproducibilityLevel: stringField(plan.reproducibilityLevel) ?? 'unknown',
+    stagePlanHint: stagePlanHintField(plan.stagePlanHint) ?? 'backend-decides',
+    executionModeReason: stringField(plan.reason) ?? stringField(plan.executionModeReason) ?? 'backend-decides',
+  };
+}
+
 function policySummary(response: ConversationPolicyResponse) {
   const contextMode = isRecord(response.contextPolicy) && typeof response.contextPolicy.mode === 'string'
     ? response.contextPolicy.mode
+    : 'unknown';
+  const executionMode = isRecord(response.executionModePlan) && typeof response.executionModePlan.executionMode === 'string'
+    ? response.executionModePlan.executionMode
     : 'unknown';
   const digestCount = response.currentReferenceDigests?.length ?? 0;
   const selectedCount = isRecord(response.capabilityBrief) && Array.isArray(response.capabilityBrief.selected)
     ? response.capabilityBrief.selected.length
     : 0;
-  return `context=${contextMode}; digests=${digestCount}; capabilities=${selectedCount}`;
+  return `context=${contextMode}; executionMode=${executionMode}; digests=${digestCount}; capabilities=${selectedCount}`;
+}
+
+function stringField(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function numberField(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function stagePlanHintField(value: unknown) {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (Array.isArray(value)) {
+    const items = value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim());
+    return items.length ? items : undefined;
+  }
+  return undefined;
 }

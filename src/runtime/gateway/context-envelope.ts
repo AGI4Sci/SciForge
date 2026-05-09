@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import type { SciForgeSkillDomain, GatewayRequest, SkillAvailability } from '../runtime-types.js';
 import { clipForAgentServerJson, clipForAgentServerPrompt, hashJson, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
 import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from './gateway-request.js';
+import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 
 export type AgentServerContextMode = 'full' | 'delta';
 
@@ -26,10 +27,13 @@ export function buildContextEnvelope(
   const currentReferences = toRecordList(uiState.currentReferences);
   const currentReferenceDigests = toRecordList(uiState.currentReferenceDigests);
   const contextReusePolicy = isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : undefined;
+  const failureRecoveryPolicy = request.failureRecoveryPolicy ?? (isRecord(uiState.failureRecoveryPolicy) ? uiState.failureRecoveryPolicy : undefined);
+  const recentFailures = summarizeFailureRecoveryPolicy(failureRecoveryPolicy);
   const mode = params.mode ?? contextEnvelopeMode(request);
   const workspaceTree = params.workspaceTreeSummary ?? [];
   const expectedArtifactTypes = expectedArtifactTypesForRequest(request);
   const selectedComponentIds = selectedComponentIdsForRequest(request);
+  const executionModeDecision = executionModeDecisionForEnvelope(uiState);
   const capabilityBrief = isRecord(uiState.capabilityBrief)
     ? uiState.capabilityBrief
     : {
@@ -107,12 +111,13 @@ export function buildContextEnvelope(
       selectedVerifierIds: request.selectedVerifierIds ?? toStringList(request.uiState?.selectedVerifierIds),
       artifactPolicy: request.artifactPolicy ?? (isRecord(uiState.artifactPolicy) ? uiState.artifactPolicy : undefined),
       referencePolicy: request.referencePolicy ?? (isRecord(uiState.referencePolicy) ? uiState.referencePolicy : undefined),
-      failureRecoveryPolicy: request.failureRecoveryPolicy ?? (isRecord(uiState.failureRecoveryPolicy) ? uiState.failureRecoveryPolicy : undefined),
+      failureRecoveryPolicy,
       capabilityBrief,
       verificationPolicy: request.verificationPolicy ?? capabilityBrief.verificationPolicy,
       humanApprovalPolicy: request.humanApprovalPolicy ?? (isRecord(uiState.humanApprovalPolicy) ? uiState.humanApprovalPolicy : undefined),
       unverifiedReason: request.unverifiedReason ?? (typeof uiState.unverifiedReason === 'string' ? uiState.unverifiedReason : undefined),
       verificationBrief: capabilityBrief.verificationBrief,
+      ...executionModeDecision,
       selectedSkill: params.selectedSkill ? {
         id: params.selectedSkill.id,
         kind: params.selectedSkill.kind,
@@ -126,12 +131,14 @@ export function buildContextEnvelope(
       currentUserRequest: currentUserRequestText(request.prompt),
       currentReferences: currentReferences.length ? currentReferences.slice(0, 8).map((entry) => clipForAgentServerJson(entry, 2)) : undefined,
       currentReferenceDigests: currentReferenceDigests.length ? currentReferenceDigests.slice(0, 8).map((entry) => clipForAgentServerJson(entry, 4)) : undefined,
+      ...executionModeDecision,
       recentConversation: visibleRecentConversation,
       conversationLedger: summarizeConversationLedger(conversationLedger, mode),
       contextReusePolicy: contextReusePolicy ? clipForAgentServerJson(contextReusePolicy, 3) : undefined,
       recentRuns: Array.isArray(uiState.recentRuns)
         ? (mode === 'full' ? uiState.recentRuns : uiState.recentRuns.slice(-4).map((entry) => clipForAgentServerJson(entry, 2)))
         : undefined,
+      recentFailures: recentFailures.length ? recentFailures : undefined,
       verificationResult: request.verificationResult ?? (isRecord(uiState.verificationResult) ? uiState.verificationResult : undefined),
       recentVerificationResults: request.recentVerificationResults ?? toRecordList(uiState.recentVerificationResults),
     },
@@ -139,6 +146,7 @@ export function buildContextEnvelope(
       artifacts: summarizeArtifactRefs(request.artifacts),
       recentExecutionRefs: summarizeExecutionRefs(recentExecutionRefs),
       verificationResults: summarizeVerificationResults(request),
+      failureEvidenceRefs: failureEvidenceRefs(failureRecoveryPolicy),
       priorAttempts: summarizeTaskAttemptsForAgentServer(params.priorAttempts ?? []).slice(0, mode === 'full' ? 4 : 2),
       repairRefs: params.repairRefs,
     },
@@ -148,14 +156,59 @@ export function buildContextEnvelope(
       'If sessionFacts.currentReferences is non-empty, the current answer/artifacts must use those refs as current-turn evidence or return failed-with-reason; objectReferences alone do not prove use.',
       'If sessionFacts.currentReferenceDigests is present, use those bounded digests before reading large files; only generate workspace task code for deeper extraction instead of dumping full documents into backend context.',
       'For continuation or repair requests, continue from priorAttempts/artifacts instead of restarting an unrelated task.',
+      'For failure follow-ups, use sessionFacts.recentFailures and longTermRefs.failureEvidenceRefs to explain the prior blocker and continue from the failed step.',
       'If a requested local ref does not exist, say so explicitly and point to the nearest available output/log/artifact ref.',
     ] : [
       'Workspace refs are source of truth.',
       'If sessionFacts.currentReferences is non-empty, the current answer/artifacts must use those refs as current-turn evidence or return failed-with-reason; objectReferences alone do not prove use.',
       'Use currentReferenceDigests before opening large current refs; if deeper reading is needed, write a workspace task that emits bounded artifacts.',
       'Continue from AgentServer session memory, conversationLedger, recentExecutionRefs, and artifacts; answer missing refs honestly.',
+      'For failure follow-ups, use sessionFacts.recentFailures and longTermRefs.failureEvidenceRefs before asking the user to repeat context.',
     ],
   };
+}
+
+function summarizeFailureRecoveryPolicy(value: unknown) {
+  const policy = isRecord(value) ? value : {};
+  const attempts = toRecordList(policy.attemptHistory);
+  const direct = {
+    mode: typeof policy.mode === 'string' ? policy.mode : undefined,
+    failureReason: typeof policy.priorFailureReason === 'string'
+      ? clipForAgentServerPrompt(policy.priorFailureReason, 700)
+      : undefined,
+    recoverActions: toStringList(policy.recoverActions).slice(0, 5),
+    nextStep: typeof policy.nextStep === 'string' ? clipForAgentServerPrompt(policy.nextStep, 300) : undefined,
+    evidenceRefs: failureEvidenceRefs(policy),
+  };
+  const summarizedAttempts = attempts.map((attempt) => ({
+    id: typeof attempt.id === 'string' ? attempt.id : undefined,
+    status: typeof attempt.status === 'string' ? attempt.status : undefined,
+    tool: typeof attempt.tool === 'string' ? attempt.tool : undefined,
+    failureReason: typeof attempt.failureReason === 'string' ? clipForAgentServerPrompt(attempt.failureReason, 500) : undefined,
+    recoverActions: toStringList(attempt.recoverActions).slice(0, 4),
+    nextStep: typeof attempt.nextStep === 'string' ? clipForAgentServerPrompt(attempt.nextStep, 250) : undefined,
+    evidenceRefs: failureEvidenceRefs(attempt),
+    workEvidenceSummary: summarizeWorkEvidenceForHandoff(attempt.workEvidenceSummary ?? attempt),
+  })).filter((attempt) => attempt.failureReason || attempt.evidenceRefs.length || attempt.recoverActions.length);
+  const out = [direct, ...summarizedAttempts]
+    .filter((entry) => entry.failureReason || entry.evidenceRefs.length || entry.recoverActions.length);
+  return out.slice(-4).map((entry) => clipForAgentServerJson(entry, 3));
+}
+
+function failureEvidenceRefs(value: unknown) {
+  const record = isRecord(value) ? value : {};
+  const refs = [
+    ...toStringList(record.evidenceRefs),
+    ...toStringList(record.attemptHistoryRefs),
+    ...['ref', 'codeRef', 'outputRef', 'stdoutRef', 'stderrRef', 'traceRef'].flatMap((key) => {
+      const item = record[key];
+      return typeof item === 'string' && item.trim() ? [item.trim()] : [];
+    }),
+  ];
+  for (const attempt of toRecordList(record.attemptHistory)) {
+    refs.push(...failureEvidenceRefs(attempt));
+  }
+  return Array.from(new Set(refs)).slice(0, 12);
 }
 
 export async function workspaceTreeSummary(workspace: string) {
@@ -219,6 +272,39 @@ function policyConversationEntries(value: unknown) {
         : '';
     return content.trim() ? [`${role}: ${content}`] : [];
   });
+}
+
+function executionModeDecisionForEnvelope(uiState: Record<string, unknown>) {
+  const direct = isRecord(uiState.executionModeDecision) ? uiState.executionModeDecision : undefined;
+  const policy = isRecord(uiState.conversationPolicy) && isRecord(uiState.conversationPolicy.executionModePlan)
+    ? uiState.conversationPolicy.executionModePlan
+    : undefined;
+  const source = direct ?? policy ?? {};
+  return {
+    executionModeRecommendation: stringField(source.executionModeRecommendation) ?? stringField(source.executionMode) ?? 'unknown',
+    complexityScore: numberField(source.complexityScore) ?? stringField(source.complexityScore) ?? 'unknown',
+    uncertaintyScore: numberField(source.uncertaintyScore) ?? stringField(source.uncertaintyScore) ?? 'unknown',
+    reproducibilityLevel: stringField(source.reproducibilityLevel) ?? 'unknown',
+    stagePlanHint: stagePlanHintField(source.stagePlanHint) ?? 'backend-decides',
+    executionModeReason: stringField(source.executionModeReason) ?? stringField(source.reason) ?? 'backend-decides',
+  };
+}
+
+function stringField(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function numberField(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function stagePlanHintField(value: unknown) {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (Array.isArray(value)) {
+    const items = value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim());
+    return items.length ? items : undefined;
+  }
+  return undefined;
 }
 
 export function expectedArtifactSchema(request: GatewayRequest | SciForgeSkillDomain): Record<string, unknown> {
@@ -339,6 +425,7 @@ export function summarizeTaskAttemptsForAgentServer(attempts: unknown[]) {
       schemaErrors: Array.isArray(attempt.schemaErrors)
         ? attempt.schemaErrors.map((entry) => clipForAgentServerPrompt(entry, 240)).filter(Boolean).slice(0, 8)
         : undefined,
+      workEvidenceSummary: summarizeWorkEvidenceForHandoff(attempt.workEvidenceSummary ?? attempt),
       patchSummary: clipForAgentServerPrompt(attempt.patchSummary, 800),
       diffRef: typeof attempt.diffRef === 'string' ? attempt.diffRef : undefined,
       scenarioPackageRef: isRecord(attempt.scenarioPackageRef) ? attempt.scenarioPackageRef : undefined,

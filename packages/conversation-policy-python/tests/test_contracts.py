@@ -86,6 +86,7 @@ class ConversationPolicyContractTest(unittest.TestCase):
         self.assertEqual(result["contextPolicy"]["mode"], "continue")
         self.assertEqual(result["memoryPlan"]["schemaVersion"], "sciforge.conversation.memory-plan.v1")
         self.assertEqual(result["handoffPlan"]["status"], "ready")
+        self.assertEqual(result["executionModePlan"]["executionMode"], "repair-or-continue-project")
         self.assertIn("capabilityBrief", result)
         self.assertNotIn("capabilityBriefs", result)
         self.assertTrue(result["userVisiblePlan"])

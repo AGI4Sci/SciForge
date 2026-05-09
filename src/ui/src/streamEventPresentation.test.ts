@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { AgentStreamEvent } from './domain';
-import { coalesceStreamEvents, latestRunningEvent, presentStreamEvent, streamEventCounts } from './streamEventPresentation';
+import { coalesceStreamEvents, latestRunningEvent, presentStreamEvent, presentStreamWorklog, streamEventCounts } from './streamEventPresentation';
+import { RunningWorkProcess, visibleRunningWorkEntries } from './app/chat/RunningWorkProcess';
+import { normalizeWorkspaceRuntimeEvent } from './api/sciforgeToolsClient/runtimeEvents';
 
 function event(partial: Partial<AgentStreamEvent>): AgentStreamEvent {
   return {
@@ -97,6 +101,30 @@ test('script generation and write-file events stay visible in the running chat m
   assert.match(latestRunningEvent([generationEvent, writeEvent]) || '', /正在写入脚本/);
 });
 
+test('AgentServer task file payloads show as concise write work instead of raw searched JSON', () => {
+  const generationResult = event({
+    id: 'agentserver-taskfiles',
+    type: 'tool-result',
+    label: 'AgentServer 状态',
+    detail: JSON.stringify({
+      kind: 'AgentServerGenerationResponse',
+      taskFiles: [{
+        path: 'tasks/literature/ai_virtual_cell_report.py',
+        language: 'python',
+        content: 'SEARCH_TERM = "AI virtual cell"',
+      }],
+      notes: '检索最近一周 AI + 虚拟细胞文章并生成报告。',
+    }),
+  });
+
+  const worklog = presentStreamWorklog([generationResult]);
+
+  assert.equal(worklog.operationCounts.write, 1);
+  assert.equal(worklog.operationCounts.search, 0);
+  assert.match(worklog.entries[0].operationLine, /^Wrote 生成任务文件：tasks\/literature\/ai_virtual_cell_report\.py/);
+  assert.doesNotMatch(worklog.entries[0].operationLine, /SEARCH_TERM/);
+});
+
 test('process-progress events expose read write wait and next step details', () => {
   const processEvent = event({
     type: 'process-progress',
@@ -121,4 +149,433 @@ test('process-progress events expose read write wait and next step details', () 
   assert.match(presentation.detail, /正在读：\/workspace\/input\/papers\.csv/);
   assert.match(presentation.detail, /正在写：\/workspace\/tasks\/review\.py/);
   assert.match(presentation.detail, /下一步：收到新事件后继续执行/);
+});
+
+test('cursor-like worklog fixture summarizes operations and keeps raw output second-level collapsed', () => {
+  const events = [
+    event({
+      id: 'context',
+      type: 'contextWindowState',
+      label: '上下文窗口',
+      contextWindowState: {
+        source: 'native',
+        status: 'healthy',
+        usedTokens: 6_700,
+        windowTokens: 200_000,
+        ratio: 0.03,
+        backend: 'codex',
+      },
+    }),
+    event({
+      id: 'plan',
+      type: 'run-plan',
+      label: '计划',
+      detail: 'Plan: implement via codex',
+    }),
+    event({
+      id: 'status',
+      type: 'status',
+      label: 'AgentServer 状态',
+      detail: 'Calling local model',
+    }),
+    event({
+      id: 'explore',
+      type: 'tool-call',
+      label: 'List candidates',
+      detail: 'ls workspace/tasks/generated-literature',
+      raw: { toolName: 'run_command', detail: 'ls workspace/tasks/generated-literature' },
+    }),
+    event({
+      id: 'search',
+      type: 'tool-call',
+      label: 'Search workspace',
+      detail: 'rg -n "RunningWorkProcess" src/ui/src',
+      raw: { toolName: 'run_command', detail: 'rg -n "RunningWorkProcess" src/ui/src' },
+    }),
+    event({
+      id: 'read',
+      type: 'tool-call',
+      label: 'Read file',
+      detail: 'sed -n 1,220p src/ui/src/app/chat/RunningWorkProcess.tsx',
+      raw: { toolName: 'run_command', detail: 'sed -n 1,220p src/ui/src/app/chat/RunningWorkProcess.tsx' },
+    }),
+    event({
+      id: 'write',
+      type: 'tool-call',
+      label: 'Edit file',
+      detail: 'apply patch to streamEventPresentation.ts',
+      raw: { toolName: 'apply_patch', detail: '*** Update File: streamEventPresentation.ts' },
+    }),
+    event({
+      id: 'command',
+      type: 'tool-call',
+      label: 'Run tests',
+      detail: 'npm run typecheck -- --pretty false',
+      raw: { toolName: 'run_command', detail: 'npm run typecheck -- --pretty false' },
+    }),
+    event({
+      id: 'wait',
+      type: 'process-progress',
+      label: 'Waiting',
+      detail: 'HTTP stream still waiting for backend events',
+      raw: {
+        progress: {
+          phase: 'wait',
+          title: '等待后端事件',
+          waitingFor: 'backend stream',
+          nextStep: '继续监听或安全中止',
+        },
+      },
+    }),
+  ];
+
+  const worklog = presentStreamWorklog(events, { guidanceCount: 1 });
+
+  assert.equal(worklog.initiallyCollapsed, true);
+  assert.match(worklog.summary, /1 探索/);
+  assert.match(worklog.summary, /1 搜索/);
+  assert.match(worklog.summary, /1 读取/);
+  assert.match(worklog.summary, /1 写入/);
+  assert.match(worklog.summary, /1 执行/);
+  assert.match(worklog.summary, /1 等待/);
+  assert.match(worklog.summary, /1 引导/);
+  assert.equal(worklog.operationCounts.explore, 1);
+  assert.equal(worklog.operationCounts.search, 1);
+  assert.equal(worklog.operationCounts.read, 1);
+  assert.equal(worklog.operationCounts.write, 1);
+  assert.equal(worklog.operationCounts.command, 1);
+  assert.equal(worklog.operationCounts.wait, 1);
+  assert.deepEqual(worklog.entries.map((entry) => entry.operationKind), ['diagnostic', 'plan', 'other', 'explore', 'search', 'read', 'write', 'command', 'wait']);
+  assert.match(worklog.entries[3].operationLine, /^Explored /);
+  assert.match(worklog.entries[4].operationLine, /^Searched /);
+  assert.match(worklog.entries[5].operationLine, /^Read /);
+  assert.match(worklog.entries[6].operationLine, /^Wrote /);
+  assert.match(worklog.entries[7].operationLine, /^Ran /);
+  assert.match(worklog.entries[8].operationLine, /^Waiting /);
+  assert.deepEqual(visibleRunningWorkEntries(worklog, 4).map((entry) => entry.operationLine.replace(/\s.+$/, '')), ['Read', 'Wrote', 'Ran', 'Waiting']);
+  assert.doesNotMatch(visibleRunningWorkEntries(worklog, 8).map((entry) => entry.operationLine).join('\n'), /Plan: implement/);
+  assert.doesNotMatch(visibleRunningWorkEntries(worklog, 8).map((entry) => entry.operationLine).join('\n'), /used\/window/);
+  assert.equal(worklog.entries.every((entry) => entry.rawInitiallyCollapsed), true);
+  assert.match(worklog.entries.find((entry) => entry.operationKind === 'search')?.rawOutput ?? '', /run_command/);
+});
+
+test('WorkEvidence retrieval uses structured fields and displays Search', () => {
+  const searchEvidence = event({
+    id: 'work-evidence-search',
+    type: 'tool-result',
+    label: 'evidence',
+    detail: 'provider payload mentions nothing useful',
+    raw: {
+      workEvidence: [{
+        kind: 'retrieval',
+        status: 'success',
+        provider: 'generic-search',
+        input: { query: 'BRCA1 review' },
+        outputSummary: '3 candidate records from provider',
+        evidenceRefs: ['trace:search-1'],
+        recoverActions: [],
+      }],
+    },
+  });
+
+  const worklog = presentStreamWorklog([searchEvidence]);
+
+  assert.equal(worklog.entries[0].operationKind, 'search');
+  assert.match(worklog.entries[0].operationLine, /^Searched /);
+  assert.match(worklog.entries[0].presentation.detail, /Evidence: 3 candidate records/);
+  assert.equal(visibleRunningWorkEntries(worklog, 1)[0].operationKind, 'search');
+});
+
+test('WorkEvidence read command and validate kinds drive WorkEvent atoms', () => {
+  const worklog = presentStreamWorklog([
+    event({
+      id: 'work-evidence-read',
+      type: 'tool-result',
+      label: 'evidence',
+      raw: {
+        workEvidence: [{
+          kind: 'read',
+          status: 'success',
+          input: { path: '/tmp/report.md' },
+          outputSummary: 'Read bounded file preview',
+          evidenceRefs: ['file:/tmp/report.md'],
+          recoverActions: [],
+        }],
+      },
+    }),
+    event({
+      id: 'work-evidence-command',
+      type: 'tool-result',
+      label: 'evidence',
+      raw: {
+        workEvidence: [{
+          kind: 'command',
+          status: 'success',
+          input: { command: 'npm test' },
+          outputSummary: 'Command completed',
+          evidenceRefs: ['log:test'],
+          recoverActions: [],
+        }],
+      },
+    }),
+    event({
+      id: 'work-evidence-validate',
+      type: 'tool-result',
+      label: 'evidence',
+      raw: {
+        workEvidence: [{
+          kind: 'validate',
+          status: 'success',
+          outputSummary: 'Schema accepted output',
+          evidenceRefs: ['trace:validator'],
+          recoverActions: [],
+        }],
+      },
+    }),
+  ]);
+
+  assert.deepEqual(worklog.entries.map((entry) => entry.operationKind), ['read', 'command', 'validate']);
+  assert.match(worklog.entries[0].operationLine, /^Read /);
+  assert.match(worklog.entries[1].operationLine, /^Ran /);
+  assert.match(worklog.entries[2].operationLine, /^Validated /);
+});
+
+test('workspace runtime top-level WorkEvidence drives UI before text fallback', () => {
+  const normalized = normalizeWorkspaceRuntimeEvent({
+    type: 'tool-result',
+    source: 'agentserver',
+    toolName: 'generic_lookup',
+    message: 'TEXT_FALLBACK_SHOULD_NOT_WIN',
+    workEvidence: [{
+      kind: 'retrieval',
+      status: 'success',
+      provider: 'generic-provider',
+      input: { query: 'runtime evidence' },
+      resultCount: 2,
+      outputSummary: 'Top-level runtime WorkEvidence summary',
+      evidenceRefs: ['stream:runtime-evidence'],
+      recoverActions: [],
+    }],
+    providerRawOutput: 'RAW_RUNTIME_OUTPUT_SHOULD_STAY_RAW',
+  });
+
+  const entry = presentStreamWorklog([normalized]).entries[0];
+
+  assert.equal(entry.operationKind, 'search');
+  assert.match(entry.presentation.detail, /Top-level runtime WorkEvidence summary/);
+  assert.doesNotMatch(entry.presentation.detail, /TEXT_FALLBACK_SHOULD_NOT_WIN/);
+  assert.match(entry.rawOutput, /RAW_RUNTIME_OUTPUT_SHOULD_STAY_RAW/);
+});
+
+test('raw provider scenario and prompt fields do not become structured WorkEvent facts', () => {
+  const genericStatus = event({
+    id: 'generic-status',
+    type: 'status',
+    label: 'backend status',
+    detail: 'ready',
+    raw: {
+      provider: 'some-provider',
+      scenario: 'literature-review',
+      prompt: 'search for BRCA1 papers',
+      kind: 'retrieval',
+      status: 'success',
+      outputSummary: 'This is raw metadata only.',
+    },
+  });
+
+  const entry = presentStreamWorklog([genericStatus]).entries[0];
+
+  assert.equal(entry.structured, undefined);
+  assert.equal(entry.operationKind, 'other');
+  assert.doesNotMatch(entry.presentation.detail, /Evidence: This is raw metadata only/);
+});
+
+test('TaskStage failed exposes recover and diagnostic fields', () => {
+  const failedStage = event({
+    id: 'stage-failed',
+    type: 'task-stage',
+    label: 'stage failed',
+    raw: {
+      taskStage: {
+        schemaVersion: 'sciforge.task-stage.v1',
+        id: 'stage-validate',
+        projectId: 'project-1',
+        index: 2,
+        kind: 'validate',
+        title: 'Validate outputs',
+        status: 'failed',
+        createdAt: '2026-05-02T00:00:00.000Z',
+        updatedAt: '2026-05-02T00:00:01.000Z',
+        inputRefs: [],
+        outputRefs: [],
+        artifactRefs: [],
+        evidenceRefs: ['trace:validator'],
+        logRefs: ['log:validator-stderr'],
+        failureReason: 'schema check rejected missing evidence refs',
+        recoverActions: ['rerun validator with bounded artifact refs'],
+        diagnostics: ['validator schema mismatch'],
+        failure: {
+          reason: 'schema check rejected missing evidence refs',
+          recoverActions: ['rerun validator with bounded artifact refs'],
+          evidenceRefs: ['trace:validator'],
+        },
+      },
+    },
+  });
+
+  const entry = presentStreamWorklog([failedStage]).entries[0];
+
+  assert.equal(entry.operationKind, 'recover');
+  assert.match(entry.presentation.detail, /Failure: schema check rejected/);
+  assert.match(entry.presentation.detail, /Recover: rerun validator/);
+  assert.match(entry.presentation.detail, /Diagnostic: validator schema mismatch/);
+  assert.match(entry.presentation.detail, /log:validator-stderr/);
+  assert.equal(entry.presentation.tone, 'danger');
+});
+
+test('TaskStage WorkEvidence prefers structured fields over fallback detail', () => {
+  const structuredStage = event({
+    id: 'stage-structured-priority',
+    type: 'task-stage',
+    label: 'stage update',
+    detail: 'TEXT_FALLBACK_SHOULD_NOT_APPEAR',
+    raw: {
+      taskStage: {
+        schemaVersion: 'sciforge.task-stage.v1',
+        id: 'stage-search',
+        projectId: 'project-structured',
+        index: 0,
+        kind: 'search',
+        title: 'Search durable refs',
+        status: 'running',
+        createdAt: '2026-05-02T00:00:00.000Z',
+        updatedAt: '2026-05-02T00:00:01.000Z',
+        inputRefs: [],
+        outputRefs: [],
+        artifactRefs: [],
+        evidenceRefs: ['stage:evidence-ref'],
+        logRefs: [],
+        recoverActions: ['retry with bounded provider'],
+        diagnostics: ['provider status 429'],
+        nextStep: 'Use fallback provider',
+        workEvidence: [{
+          kind: 'retrieval',
+          status: 'repair-needed',
+          provider: 'generic-provider',
+          input: { query: 'durable refs' },
+          resultCount: 0,
+          outputSummary: 'Structured evidence summary wins',
+          evidenceRefs: ['work:evidence-ref'],
+          failureReason: 'primary provider rate limited',
+          recoverActions: ['retry with bounded provider'],
+          diagnostics: ['provider status 429'],
+          nextStep: 'Use fallback provider',
+          rawRef: 'raw:provider-output',
+        }],
+      },
+      providerRawOutput: 'RAW_STAGE_OUTPUT_SHOULD_STAY_RAW',
+    },
+  });
+
+  const worklog = presentStreamWorklog([structuredStage]);
+  const entry = worklog.entries[0];
+
+  assert.equal(entry.operationKind, 'recover');
+  assert.match(entry.presentation.detail, /Project: project-structured/);
+  assert.match(entry.presentation.detail, /Stage: 1\. Search durable refs · running/);
+  assert.match(entry.presentation.detail, /Evidence: Structured evidence summary wins/);
+  assert.match(entry.presentation.detail, /Failure: primary provider rate limited/);
+  assert.match(entry.presentation.detail, /Recover: retry with bounded provider/);
+  assert.match(entry.presentation.detail, /Diagnostic: provider status 429/);
+  assert.match(entry.presentation.detail, /Next: Use fallback provider/);
+  assert.doesNotMatch(entry.presentation.detail, /TEXT_FALLBACK_SHOULD_NOT_APPEAR/);
+  assert.match(entry.rawOutput, /RAW_STAGE_OUTPUT_SHOULD_STAY_RAW/);
+});
+
+test('multi-stage project summary shows project and stage progress', () => {
+  const projectSummary = event({
+    id: 'project-summary',
+    type: 'task-project-summary',
+    label: 'project summary',
+    raw: {
+      schemaVersion: 'sciforge.task-project-handoff.v1',
+      project: {
+        id: 'project-1',
+        title: 'Evidence review',
+        goal: 'review literature',
+        status: 'running',
+        createdAt: '2026-05-02T00:00:00.000Z',
+        updatedAt: '2026-05-02T00:00:01.000Z',
+      },
+      refs: {},
+      stages: [
+        { id: 's1', projectId: 'project-1', index: 0, kind: 'search', title: 'Search literature', status: 'done', ref: 'stage:s1', evidenceRefs: ['trace:s1'], artifactRefs: [], diagnostics: [], recoverActions: [], workEvidence: [] },
+        {
+          id: 's2',
+          projectId: 'project-1',
+          index: 1,
+          kind: 'analyze',
+          title: 'Analyze claims',
+          status: 'running',
+          ref: 'stage:s2',
+          summary: 'Comparing candidate claims',
+          evidenceRefs: ['trace:s2'],
+          artifactRefs: [],
+          diagnostics: [],
+          recoverActions: [],
+          workEvidence: [{
+            kind: 'claim',
+            status: 'partial',
+            outputSummary: 'Claim comparison evidence summary',
+            evidenceRefs: ['trace:s2-work-evidence'],
+            recoverActions: [],
+          }],
+        },
+        { id: 's3', projectId: 'project-1', index: 2, kind: 'emit', title: 'Emit report', status: 'planned', ref: 'stage:s3', evidenceRefs: [], artifactRefs: [], diagnostics: [], recoverActions: [], workEvidence: [] },
+      ],
+      truncated: false,
+    },
+  });
+
+  const worklog = presentStreamWorklog([projectSummary]);
+  const entry = worklog.entries[0];
+
+  assert.match(worklog.summary, /Project Evidence review · running · 1\/3 stages/);
+  assert.match(worklog.summary, /Stage 2 Analyze claims · running/);
+  assert.equal(entry.operationKind, 'analyze');
+  assert.match(entry.presentation.detail, /Project: Evidence review · running · 1\/3 stages/);
+  assert.match(entry.presentation.detail, /Stage: 2\. Analyze claims · running/);
+  assert.match(entry.presentation.detail, /Summary: Comparing candidate claims/);
+  assert.match(entry.presentation.detail, /Evidence: Claim comparison evidence summary/);
+});
+
+test('running work process keeps raw output inside collapsed raw fold', () => {
+  const rawHeavyEvent = event({
+    id: 'raw-heavy',
+    type: 'tool-result',
+    label: 'evidence',
+    raw: {
+      workEvidence: [{
+        kind: 'retrieval',
+        status: 'success',
+        outputSummary: 'bounded summary only',
+        evidenceRefs: ['trace:bounded'],
+        recoverActions: [],
+      }],
+      providerRawOutput: 'RAW_PAYLOAD_SHOULD_STAY_IN_FOLD',
+    },
+  });
+  const counts = streamEventCounts([rawHeavyEvent]);
+  const markup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events: [rawHeavyEvent],
+    counts,
+    backend: 'test',
+    guidanceCount: 0,
+  }));
+
+  assert.match(markup, /raw output/);
+  assert.match(markup, /stream-event-raw-fold/);
+  assert.doesNotMatch(markup, /stream-event-raw-fold" open=/);
+  assert.match(markup, /RAW_PAYLOAD_SHOULD_STAY_IN_FOLD/);
+  assert.doesNotMatch(markup.replace(/<pre>[\s\S]*?<\/pre>/g, ''), /RAW_PAYLOAD_SHOULD_STAY_IN_FOLD/);
 });

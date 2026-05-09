@@ -40,6 +40,7 @@ export interface ConversationPolicyResponse {
   currentReferenceDigests?: Array<Record<string, unknown>>;
   artifactIndex?: Record<string, unknown>;
   capabilityBrief?: Record<string, unknown>;
+  executionModePlan?: Record<string, unknown>;
   handoffPlan?: Record<string, unknown>;
   acceptancePlan?: Record<string, unknown>;
   recoveryPlan?: Record<string, unknown>;
@@ -107,6 +108,7 @@ export function normalizeConversationPolicyResponse(value: unknown): Conversatio
     currentReferenceDigests: optionalRecordList(record.currentReferenceDigests),
     artifactIndex: optionalRecord(record.artifactIndex),
     capabilityBrief: optionalRecord(record.capabilityBrief),
+    executionModePlan: optionalRecord(record.executionModePlan),
     handoffPlan: optionalRecord(record.handoffPlan),
     acceptancePlan: optionalRecord(record.acceptancePlan),
     recoveryPlan: optionalRecord(record.recoveryPlan),

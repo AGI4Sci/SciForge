@@ -166,6 +166,20 @@ export interface SciForgeMessage {
   objectReferences?: ObjectReference[];
   goalSnapshot?: UserGoalSnapshot;
   acceptance?: TurnAcceptance;
+  guidanceQueue?: GuidanceQueueRecord;
+}
+
+export type GuidanceQueueStatus = 'queued' | 'merged' | 'rejected' | 'deferred';
+
+export interface GuidanceQueueRecord {
+  id: string;
+  prompt: string;
+  status: GuidanceQueueStatus;
+  receivedAt: string;
+  updatedAt?: string;
+  activeRunId?: string;
+  handlingRunId?: string;
+  reason?: string;
 }
 
 export interface SessionVersionRecord {
@@ -490,6 +504,7 @@ export interface SciForgeRun {
   objectReferences?: ObjectReference[];
   goalSnapshot?: UserGoalSnapshot;
   acceptance?: TurnAcceptance;
+  guidanceQueue?: GuidanceQueueRecord[];
 }
 
 export interface SciForgeSession {
@@ -961,6 +976,7 @@ export interface AgentStreamEvent {
   usage?: AgentTokenUsage;
   contextWindowState?: AgentContextWindowState;
   contextCompaction?: AgentContextCompaction;
+  workEvidence?: Array<Record<string, unknown>>;
   createdAt: string;
   raw?: unknown;
 }

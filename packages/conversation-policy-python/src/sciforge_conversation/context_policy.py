@@ -6,6 +6,10 @@ from typing import Any, Mapping
 
 REPAIR_HINTS = re.compile(r"\b(repair|fix|debug|failed|failure|error|log|rerun)\b|修复|失败|报错|日志|重跑|排查", re.I)
 CONTINUE_HINTS = re.compile(r"\b(continue|follow[- ]?up|previous|prior|last round)\b|接着|继续|上一轮|刚才|前面", re.I)
+LOCATION_HINTS = re.compile(
+    r"\b(where\s+(is|are)|location|path|file\s+refs?|artifact\s+refs?)\b|文件.*(在哪|哪里|在.*哪里|位置)|在哪.*(文件|报告|图表)|哪里.*(文件|报告|图表)|路径|位置",
+    re.I,
+)
 NEW_TASK_HINTS = re.compile(r"\b(new task|start over|ignore previous|unrelated)\b|另一个任务|新任务|重新开始|不要沿用|别用上一轮", re.I)
 
 
@@ -64,10 +68,12 @@ def should_isolate_history(request: Mapping[str, Any] | Any) -> bool:
 def _infer_mode(prompt: str, relation: str, has_explicit_refs: bool) -> str:
     if relation == "repair" or REPAIR_HINTS.search(prompt):
         return "repair"
-    if NEW_TASK_HINTS.search(prompt) or relation == "new-task":
+    if NEW_TASK_HINTS.search(prompt):
         return "isolate"
-    if relation == "continue" or CONTINUE_HINTS.search(prompt):
+    if relation == "continue" or CONTINUE_HINTS.search(prompt) or LOCATION_HINTS.search(prompt):
         return "continue"
+    if relation == "new-task":
+        return "isolate"
     if has_explicit_refs:
         return "isolate"
     return "isolate"

@@ -5,6 +5,7 @@ import type {
 } from '../runtime-types.js';
 import { isRecord, toStringList } from '../gateway-utils.js';
 import { redactSecretText, retryAfterMsFromText } from './backend-failure-diagnostics.js';
+import { collectWorkEvidenceFromBackendEvent } from './work-evidence-types.js';
 
 export function normalizeAgentServerWorkspaceEvent(raw: unknown): WorkspaceRuntimeEvent {
   const record = isRecord(raw) ? raw : {};
@@ -24,6 +25,7 @@ export function normalizeAgentServerWorkspaceEvent(raw: unknown): WorkspaceRunti
     record.rateLimit ?? record.rate_limit ?? record.rateLimitDiagnostics ?? record.rate_limit_diagnostics ?? hermesCompatRateLimitRecord(record),
     record,
   );
+  const workEvidence = collectWorkEvidenceFromBackendEvent(raw);
   const contextWindowState = normalizeWorkspaceContextWindowState(
     workspaceContextWindowCandidate(record),
     type,
@@ -58,6 +60,7 @@ export function normalizeAgentServerWorkspaceEvent(raw: unknown): WorkspaceRunti
     contextWindowState,
     contextCompaction,
     rateLimit,
+    workEvidence: workEvidence.length ? workEvidence : undefined,
     raw,
   };
 }

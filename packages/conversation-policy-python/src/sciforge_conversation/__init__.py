@@ -27,6 +27,11 @@ from .contracts import (
     response_from_json,
     to_json_dict,
 )
+from .execution_classifier import (
+    ExecutionClassifierInput,
+    ExecutionModeDecision,
+    classify_execution_mode,
+)
 from .handoff_planner import plan_handoff
 from .recovery import plan_recovery
 
@@ -56,8 +61,11 @@ __all__ = [
     "ProcessStage",
     "Reference",
     "CapabilityRequest",
+    "ExecutionClassifierInput",
+    "ExecutionModeDecision",
     "broker_capabilities",
     "build_capability_brief",
+    "classify_execution_mode",
     "evaluate_request",
     "evaluate_acceptance",
     "handle_payload",

@@ -153,7 +153,8 @@ export function shouldAutoCompact(state: AgentContextWindowState) {
     && state.ratio >= threshold
     && state.compactCapability !== 'none'
     && !state.pendingCompact
-    && state.status !== 'compacting';
+    && state.status !== 'compacting'
+    && !wasRecentlyCompacted(state.lastCompactedAt);
 }
 
 export function shouldStartContextCompaction({
@@ -209,6 +210,13 @@ function compactCapabilityForBackend(backend: string): AgentContextWindowState['
   if (backend === 'gemini') return 'session-rotate';
   if (backend === 'claude-code' || backend === 'openclaw') return 'handoff-slimming';
   return 'unknown';
+}
+
+function wasRecentlyCompacted(value?: string) {
+  if (!value) return false;
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return false;
+  return Date.now() - time < 60_000;
 }
 
 function contextWindowStatusLabel(state: AgentContextWindowState) {
