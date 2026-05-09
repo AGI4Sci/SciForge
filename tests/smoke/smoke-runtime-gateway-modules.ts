@@ -6,7 +6,7 @@ import { buildContextEnvelope, expectedArtifactSchema, workspaceTreeSummary } fr
 import { normalizeGatewayRequest, selectedComponentIdsForRequest } from '../../src/runtime/gateway/gateway-request.js';
 import { runAgentServerGeneratedTask } from '../../src/runtime/gateway/generated-task-runner.js';
 import { agentServerAgentId, currentTurnReferences } from '../../src/runtime/gateway/agentserver-context-window.js';
-import { normalizeArtifactsForPayload, persistArtifactRefsForPayload } from '../../src/runtime/gateway/artifact-materializer.js';
+import { materializeBackendPayloadOutput, normalizeArtifactsForPayload, persistArtifactRefsForPayload } from '../../src/runtime/gateway/artifact-materializer.js';
 import { classifyAgentServerBackendFailure, sanitizeAgentServerError } from '../../src/runtime/gateway/backend-failure-diagnostics.js';
 import { coerceAgentServerToolPayload, coerceWorkspaceTaskPayload } from '../../src/runtime/gateway/direct-answer-payload.js';
 import { validateAndNormalizePayload } from '../../src/runtime/gateway/payload-validation.js';
@@ -136,6 +136,35 @@ try {
   const artifactRef = String((persisted[0].metadata as Record<string, unknown>).artifactRef);
   assert.match(artifactRef, /^\.sciforge\/artifacts\/session-gateway-research-report-research-report-/);
   assert.match(await readFile(join(workspace, artifactRef), 'utf8'), /Gateway split smoke passed/);
+
+  const materializedBackend = await materializeBackendPayloadOutput(workspace, request, {
+    message: 'Backend output materialized.',
+    confidence: 0.9,
+    claimType: 'fact',
+    evidenceLevel: 'runtime',
+    reasoningTrace: 'materializer smoke',
+    claims: [],
+    uiManifest: [{ componentId: 'report-viewer', artifactRef: 'backend-report' }],
+    executionUnits: [{ id: 'backend-run', status: 'done', tool: 'agentserver.backend' }],
+    artifacts: [{
+      id: 'backend-report',
+      type: 'research-report',
+      data: { markdown: '## Backend Report\nStable markdown ref.' },
+    }],
+  }, {
+    taskRel: 'agentserver://direct-payload',
+    outputRel: '.sciforge/task-results/backend-materialized-smoke.json',
+    stdoutRel: '.sciforge/logs/backend-materialized-smoke.stdout.log',
+    stderrRel: '.sciforge/logs/backend-materialized-smoke.stderr.log',
+  });
+  const materializedArtifact = materializedBackend.artifacts[0];
+  const materializedMetadata = materializedArtifact.metadata as Record<string, unknown>;
+  assert.equal(materializedArtifact.dataRef, '.sciforge/task-results/backend-materialized-smoke-backend-report.md');
+  assert.equal(materializedMetadata.outputRef, '.sciforge/task-results/backend-materialized-smoke.json');
+  assert.equal(materializedMetadata.reportRef, '.sciforge/task-results/backend-materialized-smoke-backend-report.md');
+  assert.ok(materializedBackend.objectReferences?.some((reference) => reference.ref === 'file:.sciforge/task-results/backend-materialized-smoke.json'));
+  assert.match(await readFile(join(workspace, '.sciforge/task-results/backend-materialized-smoke.json'), 'utf8'), /materializedOutputRef/);
+  assert.match(await readFile(join(workspace, '.sciforge/task-results/backend-materialized-smoke-backend-report.md'), 'utf8'), /Stable markdown ref/);
 
   const directPayload = coerceAgentServerToolPayload({
     message: 'Direct answer',
@@ -436,6 +465,9 @@ try {
   assert.equal(generatedPayload?.executionUnits[0]?.agentServerGenerated, true);
   const runnerAttemptId = String(generatedPayload?.executionUnits[0]?.outputRef || '').match(/generated-literature-[^.]+/)?.[0];
   assert.ok(runnerAttemptId, 'generated runner should expose output ref containing task id');
+  assert.ok(generatedPayload?.objectReferences?.some((reference) => /^file:\.sciforge\/task-results\/generated-literature-/.test(String(reference.ref))));
+  assert.match(String((generatedPayload?.artifacts[0]?.metadata as Record<string, unknown> | undefined)?.reportRef), /^\.sciforge\/task-results\/generated-literature-.*runner-report\.md$/);
+  assert.match(await readFile(join(workspace, `.sciforge/task-results/${runnerAttemptId}.json`), 'utf8'), /runner-report\.md/);
   const runnerAttempts = await readTaskAttempts(workspace, runnerAttemptId);
   assert.equal(runnerAttempts[0]?.status, 'done');
 

@@ -31,6 +31,7 @@ const rules: Rule[] = [
     id: 'artifact-id-hardcode',
     message: 'src file hardcodes package-owned artifact ids or artifact type routing.',
     match: (line) => !isPlatformContractLine(line)
+      && !isCapabilityEvolutionFailureCodeLine(line)
       && !/\bartifact-schema\b/.test(line)
       && /[`'"][a-z0-9]+(?:-[a-z0-9]+)+[`'"]/.test(line)
       && /\b(artifact|Artifact|type|targetType|requiredArtifactTypes|producer)\b/.test(line),
@@ -373,6 +374,11 @@ function isCodeLine(line: string) {
 
 function isPlatformContractLine(line: string) {
   return /\bcontractId\s*:/.test(line);
+}
+
+function isCapabilityEvolutionFailureCodeLine(line: string) {
+  return /\bmissing-artifact\b/.test(line)
+    && (/\b(failureCode|CapabilityFallbackTrigger|return|allowed)\b/.test(line) || /^\s*['"]missing-artifact['"],?\s*$/.test(line));
 }
 
 function isBackendToolNameLine(line: string) {

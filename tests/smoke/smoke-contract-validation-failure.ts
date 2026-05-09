@@ -69,6 +69,43 @@ try {
   assert.ok(schemaFailure.relatedRefs.includes(refs.outputRel));
   assert.match(JSON.stringify(schemaFailure), /missing claims/);
 
+  const artifactFailurePayload = await validateAndNormalizePayload({
+    message: 'Artifact contract smoke',
+    confidence: 0.5,
+    claimType: 'fact',
+    evidenceLevel: 'runtime',
+    reasoningTrace: 'artifact missing type',
+    claims: [],
+    uiManifest: [],
+    executionUnits: [],
+    artifacts: [{ id: '', type: '', data: { markdown: '# Report' } }],
+  } as unknown as ToolPayload, request, skill, refs);
+  const artifactFailure = validationFailureFromUnit(artifactFailurePayload.executionUnits[0]);
+  assert.equal(artifactFailure.failureKind, 'artifact-schema');
+  assert.equal(artifactFailure.contractId, 'sciforge.artifact.v1');
+  assert.ok(artifactFailure.missingFields.includes('artifacts[0].type'));
+  assert.ok(artifactFailure.issues.some((issue) => issue.path === 'artifacts[0].type' && issue.expected === 'non-empty string'));
+  assert.ok(artifactFailure.recoverActions.some((action) => /artifacts/i.test(action)));
+  assert.ok(artifactFailure.relatedRefs.includes(refs.outputRel));
+
+  const uiManifestFailurePayload = await validateAndNormalizePayload({
+    message: 'UI manifest contract smoke',
+    confidence: 0.5,
+    claimType: 'fact',
+    evidenceLevel: 'runtime',
+    reasoningTrace: 'uiManifest missing componentId',
+    claims: [],
+    uiManifest: [{ componentId: 'report-viewer', artifactRef: 42 }],
+    executionUnits: [],
+    artifacts: [],
+  } as unknown as ToolPayload, request, skill, refs);
+  const uiManifestFailure = validationFailureFromUnit(uiManifestFailurePayload.executionUnits[0]);
+  assert.equal(uiManifestFailure.failureKind, 'ui-manifest');
+  assert.equal(uiManifestFailure.contractId, 'sciforge.ui-manifest.v1');
+  assert.ok(uiManifestFailure.missingFields.includes('uiManifest[0].artifactRef'));
+  assert.ok(uiManifestFailure.recoverActions.some((action) => /uiManifest/i.test(action)));
+  assert.ok(uiManifestFailure.relatedRefs.includes(refs.taskRel));
+
   const invalidRefRequest = normalizeGatewayRequest({
     ...request,
     uiState: {
@@ -113,4 +150,4 @@ function validationFailureFromUnit(unit: Record<string, unknown> | undefined) {
   return refs.validationFailure;
 }
 
-console.log('[ok] contract validation failures serialize schema missing fields and invalid current-turn refs');
+console.log('[ok] contract validation failures serialize payload, artifact, uiManifest, and current-turn ref failures');

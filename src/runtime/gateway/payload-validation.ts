@@ -53,12 +53,13 @@ export async function validateAndNormalizePayload(
   const contractPayload = normalizeToolPayloadShape(payload);
   const errors = toolPayloadSchemaErrors(contractPayload);
   if (errors.length) {
+    const validationScope = validationScopeForSchemaErrors(errors);
     const validationFailure = contractValidationFailureFromErrors(errors, {
       capabilityId: skill.id,
-      failureKind: 'payload-schema',
-      schemaPath: 'src/runtime/gateway/tool-payload-contract.ts',
-      contractId: 'sciforge.tool-payload.v1',
-      expected: 'ToolPayload with message, claims, uiManifest, executionUnits, and artifacts',
+      failureKind: validationScope.failureKind,
+      schemaPath: validationScope.schemaPath,
+      contractId: validationScope.contractId,
+      expected: validationScope.expected,
       actual: summarizeActualContractShape(contractPayload),
       relatedRefs: relatedRefsFromRepairRefs(refs),
     });
@@ -190,16 +191,18 @@ export function contractValidationFailureFromErrors(
 
 function contractValidationIssueFromError(error: string): ContractValidationIssue {
   const missingMatch = error.match(/^missing\s+(.+)$/i);
+  const nonEmptyStringMatch = error.match(/^([A-Za-z0-9_.[\]-]+) must be a non-empty string/i);
   const bracketPathMatch = error.match(/^([A-Za-z0-9_.[\]-]+)\s+/);
   const invalidRefMatch = error.match(/(?:invalid|unresolved|missing|unreadable)[^:]*ref(?:erence)?[^:]*:\s*([^;]+)/i);
   const currentRefMatch = error.match(/Current-turn reference was not reflected in answer\/artifacts:\s*([^;]+)/i);
   const unresolvedUriMatch = error.match(/unresolved\s+(?:uri|url):\s*([^;]+)/i);
+  const missingField = missingMatch ? String(missingMatch[1]) : nonEmptyStringMatch?.[1];
   return {
-    path: missingMatch ? String(missingMatch[1]) : bracketPathMatch?.[1] ?? '$',
+    path: missingField ?? bracketPathMatch?.[1] ?? '$',
     message: error,
-    expected: missingMatch ? 'present' : undefined,
-    actual: missingMatch ? 'missing' : undefined,
-    missingField: missingMatch ? String(missingMatch[1]) : undefined,
+    expected: missingMatch ? 'present' : nonEmptyStringMatch ? 'non-empty string' : undefined,
+    actual: missingMatch ? 'missing' : nonEmptyStringMatch ? 'missing or empty' : undefined,
+    missingField,
     invalidRef: (invalidRefMatch?.[1] ?? currentRefMatch?.[1])?.trim(),
     unresolvedUri: unresolvedUriMatch?.[1]?.trim(),
   };
@@ -218,6 +221,12 @@ function recoverActionsForValidationFailure(kind: ContractValidationFailureKind)
       'Keep artifact refs stable and point them at materialized workspace outputs.',
     ];
   }
+  if (kind === 'ui-manifest') {
+    return [
+      'Regenerate uiManifest as an array of component slots with non-empty componentId values.',
+      'Bind each artifactRef to an artifact id/type that exists in artifacts.',
+    ];
+  }
   return [
     'Regenerate the runtime payload with all required contract fields.',
     'Return valid JSON that satisfies the contract before reporting success.',
@@ -226,11 +235,38 @@ function recoverActionsForValidationFailure(kind: ContractValidationFailureKind)
 
 function nextStepForValidationFailure(kind: ContractValidationFailureKind) {
   if (kind === 'reference') return 'Repair invalid refs or explicitly report the referenced input as unreadable, then rerun validation.';
+  if (kind === 'artifact-schema') return 'Repair artifact ids/types/data refs and rerun validation.';
+  if (kind === 'ui-manifest') return 'Repair display manifest slots and bindings, then rerun validation.';
   return 'Repair the structured payload contract and rerun validation.';
 }
 
 function relatedRefsFromRepairRefs(refs: RepairPolicyRefs) {
   return [refs.taskRel, refs.outputRel, refs.stdoutRel, refs.stderrRel].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+}
+
+function validationScopeForSchemaErrors(errors: string[]): Required<Pick<ContractValidationFailureOptions, 'failureKind' | 'schemaPath' | 'contractId' | 'expected'>> {
+  if (errors.every((error) => error.startsWith('artifacts['))) {
+    return {
+      failureKind: 'artifact-schema',
+      schemaPath: 'src/runtime/gateway/tool-payload-contract.ts#artifacts',
+      contractId: 'sciforge.artifact.v1',
+      expected: 'Artifacts with non-empty id and type fields, plus stable schema/data refs when materialized',
+    };
+  }
+  if (errors.every((error) => error.startsWith('uiManifest['))) {
+    return {
+      failureKind: 'ui-manifest',
+      schemaPath: 'src/runtime/gateway/tool-payload-contract.ts#uiManifest',
+      contractId: 'sciforge.ui-manifest.v1',
+      expected: 'UIManifest array slots with non-empty componentId and string artifactRef values',
+    };
+  }
+  return {
+    failureKind: 'payload-schema',
+    schemaPath: 'src/runtime/gateway/tool-payload-contract.ts',
+    contractId: 'sciforge.tool-payload.v1',
+    expected: 'ToolPayload with message, claims, uiManifest, executionUnits, and artifacts',
+  };
 }
 
 function summarizeActualContractShape(value: unknown) {

@@ -133,6 +133,8 @@ Provider kind 包括 `human`、`agent`、`rule`、`schema`、`test`、`environme
 
 新增模块先判断它属于 `src` 固定平台秩序，还是 `packages` 插拔能力语义：
 
+当前 ownership inventory 见 [`boundary-inventory.md`](boundary-inventory.md)，机器可读来源是 [`../tools/check-boundary-inventory.ts`](../tools/check-boundary-inventory.ts)。新增或迁移模块时先对照 inventory 的 `fixedPlatform` / `pluggableCapabilities`，再选择落点；如果新增 ownership 类型，先补 inventory，再补 smoke baseline 或 package metadata。
+
 - 回答“系统怎么运行”的逻辑进 `src/`：app shell、workspace writer、runtime server、transport、stream lifecycle、registry loader、broker shell、provider dispatch、validation/repair loop、ref resolver、artifact persistence、permission/safety、ledger writer 和 boundary smoke。
 - 回答“系统能做什么”的逻辑进 `packages/`：observe、skills、actions、verifiers、views、import/export、scenario package、provider adapter、mock fixture 和 composed capability。
 - 高频稳定路径如果只是平台生命周期或安全秩序，留在 `src/`；如果表达领域语义、artifact/component/provider/scenario 选择或能力组合，必须做成 package capability。

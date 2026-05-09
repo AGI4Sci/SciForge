@@ -9,6 +9,10 @@ import {
   CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH,
   readCapabilityEvolutionRecords,
 } from '../../src/runtime/capability-evolution-ledger.js';
+import { recordCapabilityEvolutionRuntimeEvent } from '../../src/runtime/gateway/capability-evolution-events.js';
+import { runAgentServerGeneratedTask } from '../../src/runtime/gateway/generated-task-runner.js';
+import { repairNeededPayload } from '../../src/runtime/gateway/repair-policy.js';
+import type { GatewayRequest, SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types.js';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-capability-ledger-'));
 
@@ -127,8 +131,156 @@ try {
   ]);
   assert.equal(JSON.stringify(summary).includes('print('), false, 'compact summary must not expand glue code content');
   assert.equal(summary.recentRecords[0]?.recordRef, `${CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH}#L1`);
+
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Generate a compact literature report from current workspace refs.',
+    workspacePath: workspace,
+    expectedArtifactTypes: ['research-report'],
+    selectedComponentIds: ['report-viewer'],
+    artifacts: [],
+    uiState: { sessionId: 'session-ledger-smoke' },
+  };
+  const skill: SkillAvailability = {
+    id: 'agentserver.generation.literature',
+    kind: 'installed',
+    available: true,
+    reason: 'smoke',
+    checkedAt: '2026-05-09T00:00:00.000Z',
+    manifestPath: 'agentserver://literature',
+    manifest: {
+      id: 'agentserver.generation.literature',
+      kind: 'installed',
+      description: 'ledger smoke',
+      skillDomains: ['literature'],
+      inputContract: {},
+      outputArtifactSchema: {},
+      entrypoint: { type: 'agentserver-generation' },
+      environment: {},
+      validationSmoke: {},
+      examplePrompts: [],
+      promotionHistory: [],
+    },
+  };
+  const validationFailure = await recordCapabilityEvolutionRuntimeEvent({
+    workspacePath: workspace,
+    request,
+    skill,
+    taskId: 'generated-literature-validation-failure',
+    runId: 'agentserver-run-validation-failure',
+    taskRel: '.sciforge/tasks/generated-literature-validation-failure/task.py',
+    inputRel: '.sciforge/task-inputs/generated-literature-validation-failure.json',
+    outputRel: '.sciforge/task-results/generated-literature-validation-failure.json',
+    stdoutRel: '.sciforge/logs/generated-literature-validation-failure.stdout.log',
+    stderrRel: '.sciforge/logs/generated-literature-validation-failure.stderr.log',
+    run: { exitCode: 0, runtimeFingerprint: { runtime: 'python', secretToken: 'must-not-leak' } },
+    payload: {
+      confidence: 0.3,
+      executionUnits: [{ id: 'generated-validation-failure', status: 'repair-needed' }],
+      artifacts: [{ id: 'broken-report', type: 'research-report' }],
+    },
+    schemaErrors: ['uiManifest[0].componentId must be a non-empty string'],
+    failureReason: 'AgentServer generated task output failed schema validation: uiManifest[0].componentId must be a non-empty string',
+    now: () => new Date('2026-05-09T00:02:00.000Z'),
+  });
+  assert.equal(validationFailure.ledgerRef, CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH);
+  assert.equal(validationFailure.recordRef, `${CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH}#L2`);
+  assert.equal(validationFailure.record.finalStatus, 'repair-failed');
+  assert.equal(validationFailure.record.validationResult?.failureCode, 'schema-invalid');
+  assert.equal(validationFailure.compactSummary.totalRecords, 2);
+  assert.equal(validationFailure.compactSummary.recentRecords.at(-1)?.recordRef, validationFailure.recordRef);
+  assert.equal(JSON.stringify(validationFailure.compactSummary).includes('secretToken'), false);
+  assert.equal(JSON.stringify(validationFailure.compactSummary).includes('must-not-leak'), false);
+  assert.equal(validationFailure.record.glueCodeRef, '.sciforge/tasks/generated-literature-validation-failure/task.py');
+  assert.equal(JSON.stringify(validationFailure.compactSummary).includes('task.py'), false, 'broker summary should use record refs instead of task code refs');
+  assert.equal(JSON.stringify(validationFailure.compactSummary).includes('print('), false, 'summary must not expand generated code');
+
+  const repairCompletion = await recordCapabilityEvolutionRuntimeEvent({
+    workspacePath: workspace,
+    request,
+    skill,
+    taskId: 'generated-literature-validation-failure',
+    runId: 'agentserver-run-repair-completion',
+    taskRel: '.sciforge/tasks/generated-literature-validation-failure/repaired-task.py',
+    inputRel: '.sciforge/task-inputs/generated-literature-validation-failure-repair.json',
+    outputRel: '.sciforge/task-results/generated-literature-validation-failure-repair.json',
+    stdoutRel: '.sciforge/logs/generated-literature-validation-failure-repair.stdout.log',
+    stderrRel: '.sciforge/logs/generated-literature-validation-failure-repair.stderr.log',
+    run: { exitCode: 0, runtimeFingerprint: { runtime: 'python' } },
+    payload: {
+      confidence: 0.86,
+      executionUnits: [{ id: 'generated-validation-repair', status: 'done' }],
+      artifacts: [{ id: 'repaired-report', type: 'research-report' }],
+    },
+    failureReason: 'Repair rerun returned a valid ToolPayload.',
+    repairAttempt: {
+      id: 'repair-generated-literature-validation-failure',
+      status: 'succeeded',
+      validationResult: { verdict: 'pass', validatorId: 'sciforge.payload-schema' },
+    },
+    now: () => new Date('2026-05-09T00:03:00.000Z'),
+  });
+  assert.equal(repairCompletion.recordRef, `${CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH}#L3`);
+  assert.equal(repairCompletion.record.finalStatus, 'repair-succeeded');
+  assert.equal(repairCompletion.compactSummary.totalRecords, 3);
+  assert.equal(repairCompletion.compactSummary.repairRecordCount, 3);
+  assert.equal(repairCompletion.compactSummary.recentRecords.at(-1)?.finalStatus, 'repair-succeeded');
+
+  const runtimeRecords = await readCapabilityEvolutionRecords({ workspacePath: workspace });
+  assert.equal(runtimeRecords.length, 3);
+  assert.equal(runtimeRecords[1]?.metadata?.eventKind, 'validation-failure');
+  assert.equal(runtimeRecords[2]?.metadata?.eventKind, 'repair-completion');
+
+  const realPathPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, {
+    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
+    requestAgentServerGeneration: async () => ({
+      ok: true,
+      runId: 'agentserver-run-ledger-real-path',
+      response: {
+        taskFiles: [{
+          path: '.sciforge/tasks/ledger-real-path.py',
+          language: 'python',
+          content: [
+            'import json, sys',
+            '_, input_path, output_path = sys.argv',
+            'payload = {"message": "bad payload from ledger-real-path-code"}',
+            'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
+          ].join('\n'),
+        }],
+        entrypoint: { language: 'python', path: '.sciforge/tasks/ledger-real-path.py' },
+        environmentRequirements: {},
+        validationCommand: '',
+        expectedArtifacts: ['research-report'],
+        patchSummary: 'ledger real path validation failure smoke',
+      },
+    }),
+    agentServerGenerationFailureReason: (error) => error,
+    attemptPlanRefs: () => ({}),
+    repairNeededPayload: (req, selectedSkill, reason) => repairNeededPayload(req, selectedSkill, reason),
+    agentServerFailurePayloadRefs: () => ({}),
+    ensureDirectAnswerReportArtifact: (payload) => payload,
+    mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
+    validateAndNormalizePayload: async (payload): Promise<ToolPayload> => payload,
+    tryAgentServerRepairAndRerun: async () => undefined,
+    failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
+    coerceWorkspaceTaskPayload: () => undefined,
+    schemaErrors: (payload) => {
+      const record = payload as Record<string, unknown>;
+      return ['claims', 'uiManifest', 'executionUnits', 'artifacts'].filter((key) => !(key in record)).map((key) => `missing ${key}`);
+    },
+    firstPayloadFailureReason: () => undefined,
+    payloadHasFailureStatus: () => false,
+  }, { allowSupplement: false });
+  assert.equal(realPathPayload?.executionUnits[0]?.status, 'repair-needed');
+  const recordsAfterRealPath = await readCapabilityEvolutionRecords({ workspacePath: workspace });
+  assert.equal(recordsAfterRealPath.length, 4);
+  assert.equal(recordsAfterRealPath[3]?.metadata?.eventKind, 'validation-failure');
+  assert.match(recordsAfterRealPath[3]?.glueCodeRef ?? '', /ledger-real-path/);
+  const realPathSummary = await buildCapabilityEvolutionCompactSummary({ workspacePath: workspace });
+  assert.equal(realPathSummary.recentRecords.at(-1)?.recordRef, `${CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH}#L4`);
+  assert.equal(JSON.stringify(realPathSummary).includes('ledger-real-path-code'), false);
 } finally {
   await rm(workspace, { recursive: true, force: true });
 }
 
-console.log('[ok] capability evolution ledger writes JSONL fallback/repair records and builds compact ref-only summaries');
+console.log('[ok] capability evolution ledger writes JSONL fallback/repair records and runtime events build compact ref-only summaries');

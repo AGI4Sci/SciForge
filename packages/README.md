@@ -17,6 +17,8 @@
 
 新增模块先判断边界：
 
+当前 `src` 固定平台与 `packages` 插拔能力清单见 [`../docs/boundary-inventory.md`](../docs/boundary-inventory.md)，机器可读来源是 [`../tools/check-boundary-inventory.ts`](../tools/check-boundary-inventory.ts)。package 新增或迁移前先确认 inventory 中已有对应能力类别；如果没有，先补清单和对应 checks，再扩展实现。
+
 - 属于平台秩序的逻辑进入 `src/`：lifecycle、loading、routing shell、provider dispatch、validation/repair loop、workspace refs、artifact persistence、global safety 和 app/runtime orchestration。
 - 属于能力语义的逻辑进入 `packages/`：manifest、schema、validator、provider、examples、repair hints、scenario/view/skill policy 和 composed capability。
 - `src` 可以固定系统运行方式，但不能写死 package 的领域语义；`packages` 可以扩展能力，但不能绕过 runtime 的 refs、validation、persistence、permission 和 safety。

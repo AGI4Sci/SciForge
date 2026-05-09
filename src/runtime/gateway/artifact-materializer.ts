@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import type { GatewayRequest } from '../runtime-types.js';
+import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
 import { clipForAgentServerJson, isRecord } from '../gateway-utils.js';
 import { sha1 } from '../workspace-task-runner.js';
 
@@ -9,6 +9,58 @@ export interface RuntimeRefBundle {
   outputRel: string;
   stdoutRel: string;
   stderrRel: string;
+}
+
+export async function materializeBackendPayloadOutput(
+  workspace: string,
+  _request: GatewayRequest,
+  payload: ToolPayload,
+  refs: RuntimeRefBundle,
+): Promise<ToolPayload> {
+  const outputRel = stableTaskResultRef(refs.outputRel);
+  if (!outputRel) return payload;
+
+  const markdownRefs: string[] = [];
+  const artifacts = await Promise.all(payload.artifacts.map(async (artifact) => {
+    const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+    const markdown = markdownTextForArtifact(artifact);
+    const markdownRel = markdown
+      ? markdownTaskResultRel(outputRel, artifact)
+      : undefined;
+    if (markdown && markdownRel) {
+      await mkdir(dirname(join(workspace, markdownRel)), { recursive: true });
+      await writeFile(join(workspace, markdownRel), markdown);
+      markdownRefs.push(markdownRel);
+    }
+    const existingDataRef = stringField(artifact.dataRef);
+    return {
+      ...artifact,
+      dataRef: stableWorkspaceRef(existingDataRef) ?? markdownRel ?? outputRel,
+      metadata: {
+        ...metadata,
+        outputRef: stableWorkspaceRef(stringField(metadata.outputRef)) ?? outputRel,
+        taskCodeRef: stableWorkspaceRef(stringField(metadata.taskCodeRef)) ?? refs.taskRel,
+        stdoutRef: stableWorkspaceRef(stringField(metadata.stdoutRef)) ?? refs.stdoutRel,
+        stderrRef: stableWorkspaceRef(stringField(metadata.stderrRef)) ?? refs.stderrRel,
+        reportRef: stringField(metadata.reportRef) ?? markdownRel,
+        markdownRef: stringField(metadata.markdownRef) ?? markdownRel,
+        materializedOutputRef: outputRel,
+        materializedAt: new Date().toISOString(),
+      },
+    };
+  }));
+
+  const materialized: ToolPayload = {
+    ...payload,
+    artifacts,
+    objectReferences: mergeObjectReferences(
+      Array.isArray(payload.objectReferences) ? payload.objectReferences : [],
+      backendOutputObjectReferences(outputRel, markdownRefs, artifacts),
+    ),
+  };
+  await mkdir(dirname(join(workspace, outputRel)), { recursive: true });
+  await writeFile(join(workspace, outputRel), JSON.stringify(materialized, null, 2));
+  return materialized;
 }
 
 export async function persistArtifactRefsForPayload(
@@ -55,6 +107,102 @@ export async function persistArtifactRefsForPayload(
 
 export function safeArtifactId(value: string) {
   return value.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'artifact';
+}
+
+function stableTaskResultRef(value: string) {
+  const ref = stableWorkspaceRef(value);
+  return ref && /^\.sciforge\/task-results\/[^/].+/.test(ref) ? ref : undefined;
+}
+
+function stableWorkspaceRef(value: string | undefined) {
+  if (!value || /^[a-z]+:\/\//i.test(value)) return undefined;
+  const ref = value.replace(/^file:/, '').replace(/^path:/, '').replace(/\\/g, '/').replace(/^\/+/, '');
+  return ref.startsWith('.sciforge/') ? ref : undefined;
+}
+
+function markdownTaskResultRel(outputRel: string, artifact: Record<string, unknown>) {
+  const outputName = outputRel.split('/').pop() ?? 'result.json';
+  const outputStem = outputName.replace(/\.[^.]+$/, '') || 'result';
+  const id = safeArtifactId(String(artifact.id || artifact.type || 'artifact'));
+  return `.sciforge/task-results/${safeArtifactId(outputStem)}-${id}.md`;
+}
+
+function markdownTextForArtifact(artifact: Record<string, unknown>) {
+  const data = isRecord(artifact.data) ? artifact.data : {};
+  return stringField(data.markdown)
+    ?? stringField(data.report)
+    ?? stringField(data.content)
+    ?? stringField(artifact.markdown)
+    ?? stringField(artifact.report)
+    ?? stringField(artifact.content)
+    ?? (typeof artifact.data === 'string' ? artifact.data : undefined);
+}
+
+function backendOutputObjectReferences(
+  outputRel: string,
+  markdownRefs: string[],
+  artifacts: Array<Record<string, unknown>>,
+) {
+  const runId = outputRel.split('/').pop()?.replace(/\.[^.]+$/, '') || outputRel;
+  return [
+    {
+      id: `run:${runId}`,
+      title: runId,
+      kind: 'run',
+      ref: `run:${runId}`,
+      status: 'available',
+      actions: ['inspect', 'resume'],
+      provenance: { outputRef: outputRel },
+    },
+    fileObjectReference(outputRel),
+    ...markdownRefs.map((ref) => fileObjectReference(ref)),
+    ...artifacts.map((artifact) => {
+      const id = String(artifact.id || artifact.type || 'artifact');
+      const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+      return {
+        id: `artifact:${id}`,
+        title: stringField(metadata.title) ?? id,
+        kind: 'artifact',
+        ref: `artifact:${id}`,
+        artifactType: String(artifact.type || id),
+        runId,
+        status: 'available',
+        actions: ['inspect', 'copy-path', 'pin'],
+        provenance: {
+          dataRef: stringField(artifact.dataRef),
+          outputRef: outputRel,
+          artifactRef: stringField(metadata.artifactRef),
+        },
+      };
+    }),
+  ];
+}
+
+function fileObjectReference(ref: string) {
+  return {
+    id: `file:${ref}`,
+    title: ref.split('/').pop() || ref,
+    kind: 'file',
+    ref: `file:${ref}`,
+    status: 'available',
+    actions: ['inspect', 'reveal-in-folder', 'copy-path'],
+    provenance: { path: ref },
+  };
+}
+
+function mergeObjectReferences(
+  base: Array<Record<string, unknown>>,
+  additions: Array<Record<string, unknown>>,
+) {
+  const seen = new Set<string>();
+  const out: Array<Record<string, unknown>> = [];
+  for (const reference of [...base, ...additions]) {
+    const key = stringField(reference.ref) ?? stringField(reference.id);
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    out.push(reference);
+  }
+  return out;
 }
 
 export async function normalizeArtifactsForPayload(

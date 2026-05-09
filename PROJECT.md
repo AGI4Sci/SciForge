@@ -45,8 +45,8 @@ SciForge 的最终形态是 **Backend-first, Contract-enforced, Capability-drive
 
 Todo：
 
-- [ ] 建立 `src/` 固定平台清单：app shell、workspace writer、runtime server、transport、stream lifecycle、registry loader、broker shell、validation loop、ref resolver、artifact persistence、permission/safety、ledger writer、boundary smoke。
-- [ ] 建立 `packages/` 插拔能力清单：observe、skills、actions、verifiers、views、importers/exporters、scenario packages、provider adapters、composed capabilities、mock fixtures。
+- [x] 建立 `src/` 固定平台清单：app shell、workspace writer、runtime server、transport、stream lifecycle、registry loader、broker shell、validation loop、ref resolver、artifact persistence、permission/safety、ledger writer、boundary smoke。
+- [x] 建立 `packages/` 插拔能力清单：observe、skills、actions、verifiers、views、importers/exporters、scenario packages、provider adapters、composed capabilities、mock fixtures。
 - [ ] `src -> packages` P0：迁移 `src/runtime/computer-use/**` 的 action provider 语义到 `packages/actions/computer-use`；`src` 只保留 gateway config、workspace refs、event emission 和 host bridge adapter。
 - [ ] `src -> packages` P0：迁移 `src/runtime/vision-sense/**` 中 planner、grounding、focus refinement、semantic verifier feedback、trace policy 到 `packages/observe/vision`；会修改 GUI 的执行部分通过 `packages/actions/computer-use` 暴露。
 - [x] `src -> packages` P0：删除或迁移 `src/runtime/capability-profiles.ts`，统一到 `packages/scenarios/core/src/runtimeCapabilityProfiles.ts` 或 `packages/contracts/runtime/capabilities.ts`，避免重复 capability profile 真相源。
@@ -66,8 +66,8 @@ Todo：
 - [ ] `packages -> src/tests` P1：迁移 `packages/scenarios/core/src/runtimeSmoke.ts` 到 `tests/smoke` 或 runtime scenario harness；scenario package 只保留 policy/schema validation。
 - [ ] `packages -> src/delete` P1：拆分 `packages/scenarios/core/src/componentElements.ts`，runtime recover actions、fallback components、compat aliases 不应作为 scenario policy；短期可迁入 `src/runtime/runtime-ui-manifest.ts` / UI compiler，长期由 registry-driven UI manifest 取代并删除。
 - [ ] `packages -> src` P2：评估 `packages/scenarios/core/src/uiPlanCompiler.ts`、`validationGate.ts`、`scenarioPackage.ts` 中 platform-wide compile/validation 行为；scenario specs、contracts、elementTypes 留在 package，运行期编译/校验进入 `src/runtime/scenario-policy` 或 UI compiler。
-- [ ] 明确保留在 `src`：`src/runtime/workspace-server.ts`、`src/runtime/server/**`、`generation-gateway.ts`、`workspace-runtime-gateway.ts`、`workspace-task-runner.ts`、`task-projects.ts`、gateway adapter/orchestration 文件、`src/ui/src/app/**` React app shell。
-- [ ] 明确保留在 `packages`：`packages/presentation/components/**`、`packages/presentation/interactive-views/**`、`packages/presentation/design-system/**`、`packages/skills/**`、`packages/actions/computer-use/**`、`packages/observe/vision/**`、`packages/verifiers/**`、`packages/contracts/runtime/**`、`packages/scenarios/core/src/{scenarioSpecs,contracts,elementTypes}.ts`。
+- [x] 明确保留在 `src`：`src/runtime/workspace-server.ts`、`src/runtime/server/**`、`generation-gateway.ts`、`workspace-runtime-gateway.ts`、`workspace-task-runner.ts`、`task-projects.ts`、gateway adapter/orchestration 文件、`src/ui/src/app/**` React app shell。
+- [x] 明确保留在 `packages`：`packages/presentation/components/**`、`packages/presentation/interactive-views/**`、`packages/presentation/design-system/**`、`packages/skills/**`、`packages/actions/computer-use/**`、`packages/observe/vision/**`、`packages/verifiers/**`、`packages/contracts/runtime/**`、`packages/scenarios/core/src/{scenarioSpecs,contracts,elementTypes}.ts`。
 - [x] 增加 `smoke:fixed-platform-boundary`，实现为 `tools/check-fixed-platform-boundary.ts` 或扩展 `tools/check-module-boundaries.ts`，检查 `src` 固定平台与 `packages` 插拔能力边界。
 - [x] 增加 `smoke:no-src-capability-semantics`，扫描 `src/**` 是否硬编码 package-owned artifact ids、component ids、provider ids、scenario ids、domain regex；临时 allowlist 必须关联本任务迁移项。
 - [x] 将 `smoke:no-src-capability-semantics` 种子设为当前发现：`src/runtime/runtime-ui-manifest.ts` 的 prompt regex/domain defaults/component-to-artifact mapping；`src/runtime/gateway/artifact-reference-context.ts` 的 `paper-list`/`research-report`/skillDomain regex；`src/ui/src/app/chat/runOrchestrator.ts` 的 follow-up intent regex 和 `research-report -> report-viewer`；`src/ui/src/app/results/viewPlanResolver.ts` 的 artifact display intent、domain regex ranking 和 primary result ranking。
@@ -76,7 +76,7 @@ Todo：
 - [x] 增加 `smoke:package-runtime-boundary`，禁止 package manifests 声称或实现 persistence、global safety、stream lifecycle、workspace ref resolution 等 runtime lifecycle ownership。
 - [x] 更新 `tools/check-module-boundaries.ts`、`tools/check-package-catalog.ts`、`scripts/check-ui-components-package-boundaries.ts`、`package.json`、`docs/Extending.md`、`packages/README.md`，把上述 smoke 纳入验证。
   说明：`smoke:module-boundaries` 只守 import topology；`packages:check` 聚合 package catalog/metadata/runtime ownership/UI component publication checks；`smoke:fixed-platform-boundary` 和 `smoke:no-src-capability-semantics` 继续独立守 T122 `src`/`packages` ownership 与 `src` 语义基线，避免与 package checks 重复。
-- [ ] 针对 boundary-heavy 长文件补拆分计划或降低阈值：`src/runtime/generation-gateway.ts`、`src/runtime/workspace-server.ts`、`src/ui/src/app/ResultsRenderer.tsx`、`src/ui/src/app/ChatPanel.tsx`、`src/runtime/workspace-task-input.ts`、`src/runtime/gateway/agentserver-prompts.ts`。
+- [x] 针对 boundary-heavy 长文件补拆分计划或降低阈值：`src/runtime/generation-gateway.ts`、`src/runtime/workspace-server.ts`、`src/ui/src/app/ResultsRenderer.tsx`、`src/ui/src/app/ChatPanel.tsx`、`src/runtime/workspace-task-input.ts`、`src/runtime/gateway/agentserver-prompts.ts`。
 - [x] 更新 `docs/Extending.md` 和 `packages/README.md`：新增模块应先判断属于平台秩序还是能力语义，再选择 `src/` 或 `packages/`。
 - [ ] 删除与该边界冲突的旧 registry、旧 adapter 和旧 direct import。
 
@@ -98,10 +98,12 @@ Todo：
 - [x] 定义 `CapabilityEvolutionRecord` contract：goal summary、selected capabilities、providers、input/output schema refs、glue code ref、executionUnit refs、artifact refs、validation result、failureCode、recoverActions、repair attempts、final status、latency/cost summary、promotion candidate。
 - [x] 定义 composed capability fallback policy contract：`atomicCapabilities`、`fallbackToAtomicWhen`、`doNotFallbackWhen`、`retryBudget`、`fallbackContext`。
 - [x] 将 composed capability result 标准化为 `status`、`failureCode`、`fallbackable`、`confidence`、`coverage`、`recoverActions`、`atomicTrace`、related refs。
-- [ ] 在 backend 动态写胶水代码、composed capability 执行、fallback 到原子能力、repair loop 完成后写入 ledger record。
+- [x] generated task validation/repair 真实路径 best-effort 写入 Capability Evolution Ledger，并只返回 `ledgerRef`、`recordRef` 和 compact summary。
+- [ ] 在 backend 动态写胶水代码、composed capability 执行、fallback 到原子能力等更完整路径写入 ledger record。
 - [ ] 建立 promotion proposal 规则：高频成功组合可提议晋升为 composed capability；高频失败模式可提议更新 validator、fallbackPolicy 或 repair hints。
 - [ ] broker 只消费 ledger 的 compact summary，不直接展开完整胶水代码和日志；需要复用/修复时再按 ref 展开。
-- [ ] 增加 smoke：composed capability schema invalid 后 fallback 到 atomic capabilities；成功 repair 后 ledger 记录原失败、下钻路径和最终 artifact refs。
+- [x] 增加 smoke：generated task schema invalid / repair completion 后 ledger 记录原失败、下钻路径和最终 artifact refs，compact summary 不展开胶水代码。
+- [ ] 增加 smoke：composed capability schema invalid 后 fallback 到 atomic capabilities，并记录 fallback 决策与 atomic trace。
 - [ ] 删除任何散落的“成功胶水代码缓存”或“失败样例记录”临时实现，统一归入 ledger。
 
 验收标准：
@@ -122,7 +124,7 @@ Todo：
 - [ ] 列出所有旧链路：UI prompt regex、场景 id 分支、provider 特例、旧 payload normalizer、旧 fallback、旧 preview resolver、旧 task adapter、旧 compatibility re-export。
 - [ ] 为每条旧链路标注新的唯一真相源：capability manifest、broker、resolver、validator、runtime executor 或 backend tool。
 - [ ] 删除旧链路和对应测试夹具；只保留验证新路径的 tests/smoke。
-- [ ] 增加 `no-legacy-paths` smoke，禁止重新引入 UI 语义兜底、provider/scenario/prompt 特例和重复 source of truth。
+- [x] 增加 `no-legacy-paths` smoke，禁止重新引入 UI 语义兜底、provider/scenario/prompt 特例和重复 source of truth。
 - [ ] 更新 docs/Architecture、docs/Extending、packages/README，删除旧架构描述。
 
 验收标准：
@@ -159,10 +161,11 @@ Todo：
 
 Todo：
 
-- [ ] 定义并暴露 backend 工具 contract：`list_session_artifacts`、`resolve_object_reference`、`read_artifact`、`render_artifact`、`resume_run`。
+- [x] 定义并暴露 backend 工具 contract：`list_session_artifacts`、`resolve_object_reference`、`read_artifact`、`render_artifact`、`resume_run`。
 - [ ] 支持 workspace refs、artifact refs、executionUnit refs、run refs、file refs 和 `agentserver://` refs 的统一解析。
+  说明：当前已覆盖 artifact/file/run/executionUnit refs 与 `resume_run` contract；workspace refs 和 `agentserver://` refs 仍需补完整 smoke。
 - [x] 收敛 workspace file ref 解析到 `src/runtime/workspace-paths.ts` helper，并让 task attempts 复用该 helper 读取 outputRef 摘要；覆盖 `file:`、`.sciforge/*`、managed shorthand 和 workspace 越界拒绝。
-- [ ] run completed 前将 backend 输出 materialize 到 `.sciforge/task-results/*.json|md` 并返回稳定 object refs。
+- [x] run completed 前将 backend 输出 materialize 到 `.sciforge/task-results/*.json|md` 并返回稳定 object refs。
 - [ ] backend completed contract 禁止 “I will retrieve...” 这类计划句伪装完成；必须交付文本、artifact 或稳定 ref。
 - [ ] 建立三条最小多轮 fixtures：生成 report 后要 markdown、基于刚才 artifact 继续处理、按 failed run 原因修复。
 
@@ -182,7 +185,8 @@ Todo：
 
 - [x] 定义 `ContractValidationFailure` contract：schema path、contract id、capability id、expected/actual、missing fields、invalid refs、unresolved URI、failureReason、recoverActions、nextStep、related refs。
 - [x] 收窄 handoff payload contract：为 `failureRecoveryPolicy`、`referencePolicy`、`artifactPolicy`、verification snapshots 和 attempt refs 定义窄类型/guards，同时保持 loose transport record 兼容。
-- [ ] 将现有 payload validation、artifact validation、UIManifest validation、WorkEvidence guard、verifier failure 映射到该 contract。
+- [x] 将 payload schema、artifact schema、UIManifest schema 和 current-turn ref validation failure 映射到 `ContractValidationFailure`。
+- [ ] 将 WorkEvidence guard 和 verifier failure 映射到 `ContractValidationFailure`。
 - [ ] repair prompt/handoff 只消费结构化 failure，不读取散乱错误文本。
 - [ ] 删除旧的分散 repair-needed/failed-with-reason 组装逻辑，保留统一 validation-to-repair 管线。
 - [ ] 增加 fixtures：schema 缺字段、invalid ref、artifact 空结果、verifier fail、stdout/stderr 指向修复。

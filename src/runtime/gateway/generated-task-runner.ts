@@ -13,6 +13,8 @@ import { sanitizeAgentServerError } from './backend-failure-diagnostics.js';
 import { evaluateToolPayloadEvidence } from './work-evidence-guard.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import { evaluateGuidanceAdoption } from './guidance-adoption-guard.js';
+import { materializeBackendPayloadOutput, type RuntimeRefBundle } from './artifact-materializer.js';
+import { recordCapabilityEvolutionRuntimeEvent } from './capability-evolution-events.js';
 
 type AgentServerGenerationResult =
   | { ok: true; runId?: string; response: AgentServerGenerationResponse }
@@ -107,13 +109,16 @@ export async function runAgentServerGeneratedTask(
         message: 'AgentServer did not converge, so SciForge recovered from bounded current-reference digests.',
         detail: 'The recovery output keeps the same user-visible contract: report artifact, object references, and execution audit.',
       });
-      return await validateAndNormalizePayload(digestRecovery, request, skill, {
-        taskRel: 'agentserver://current-reference-digest-recovery',
-        outputRel: `agentserver://current-reference-digest-recovery/${sha1(request.prompt).slice(0, 8)}/output`,
-        stdoutRel: `agentserver://current-reference-digest-recovery/${sha1(request.prompt).slice(0, 8)}/stdout`,
-        stderrRel: `agentserver://current-reference-digest-recovery/${sha1(request.prompt).slice(0, 8)}/stderr`,
+      const recoveryRefs = backendPayloadRefs(
+        stableAgentServerPayloadTaskId('digest-recovery', request, skill, sha1(request.prompt).slice(0, 8)),
+        'agentserver://current-reference-digest-recovery',
+      );
+      await writeBackendPayloadLogs(workspace, recoveryRefs, 'SciForge recovered from bounded current-reference digests.\n');
+      const normalizedRecovery = await validateAndNormalizePayload(digestRecovery, request, skill, {
+        ...recoveryRefs,
         runtimeFingerprint: { runtime: 'SciForge current-reference digest recovery', error: generation.error },
       });
+      return await materializeBackendPayloadOutput(workspace, request, normalizedRecovery, recoveryRefs);
     }
     const failureReason = agentServerGenerationFailureReason(generation.error, generation.diagnostics);
     const failedRequestId = `agentserver-generation-${request.skillDomain}-${sha1(`${request.prompt}:${generation.error}`).slice(0, 12)}`;
@@ -143,6 +148,11 @@ export async function runAgentServerGeneratedTask(
   }
   if ('directPayload' in generation) {
     const directGeneration = generation;
+    const directRefs = backendPayloadRefs(
+      stableAgentServerPayloadTaskId('direct', request, skill, directGeneration.runId),
+      'agentserver://direct-payload',
+    );
+    await writeBackendPayloadLogs(workspace, directRefs, `AgentServer direct ToolPayload run: ${directGeneration.runId || 'unknown'}\n`);
     const directPayload = await mergeReusableContextArtifactsForDirectPayload(
       ensureDirectAnswerReportArtifact(
         directGeneration.directPayload,
@@ -151,13 +161,11 @@ export async function runAgentServerGeneratedTask(
       ),
       request,
     );
-    const normalized = await validateAndNormalizePayload(directPayload, request, skill, {
-      taskRel: 'agentserver://direct-payload',
-      outputRel: `agentserver://${directGeneration.runId || 'unknown'}/output`,
-      stdoutRel: `agentserver://${directGeneration.runId || 'unknown'}/stdout`,
-      stderrRel: `agentserver://${directGeneration.runId || 'unknown'}/stderr`,
+    let normalized = await validateAndNormalizePayload(directPayload, request, skill, {
+      ...directRefs,
       runtimeFingerprint: { runtime: 'AgentServer direct ToolPayload', runId: directGeneration.runId },
     });
+    normalized = await materializeBackendPayloadOutput(workspace, request, normalized, directRefs);
     const evidenceFinding = evaluateToolPayloadEvidence(normalized, request);
     const guidanceFinding = evaluateGuidanceAdoption(normalized, request);
     const workEvidenceSummary = summarizeWorkEvidenceForHandoff(normalized);
@@ -179,10 +187,10 @@ export async function runAgentServerGeneratedTask(
       skillId: skill.id,
       attempt: 1,
       status: attemptStatus,
-      codeRef: 'agentserver://direct-payload',
-      outputRef: `agentserver://${directGeneration.runId || 'unknown'}/output`,
-      stdoutRef: `agentserver://${directGeneration.runId || 'unknown'}/stdout`,
-      stderrRef: `agentserver://${directGeneration.runId || 'unknown'}/stderr`,
+      codeRef: directRefs.taskRel,
+      outputRef: directRefs.outputRel,
+      stdoutRef: directRefs.stdoutRel,
+      stderrRef: directRefs.stderrRel,
       workEvidenceSummary,
       failureReason,
       createdAt: new Date().toISOString(),
@@ -190,7 +198,7 @@ export async function runAgentServerGeneratedTask(
     if (guidanceFinding || evidenceFinding) {
       return repairNeededPayload(request, skill, guidanceFinding?.reason ?? evidenceFinding?.reason ?? 'AgentServer payload failed runtime guard.');
     }
-    return {
+    const completed = {
       ...normalized,
       reasoningTrace: [
         normalized.reasoningTrace,
@@ -204,6 +212,7 @@ export async function runAgentServerGeneratedTask(
         agentServerRunId: directGeneration.runId,
       } : unit),
     };
+    return await materializeBackendPayloadOutput(workspace, request, completed, directRefs);
   }
 
   const nonExecutableEntrypointReason = generatedEntrypointContractReason(generation.response);
@@ -226,17 +235,20 @@ export async function runAgentServerGeneratedTask(
     });
     if (!retriedGeneration.ok) return repairNeededPayload(request, skill, retriedGeneration.error);
     if ('directPayload' in retriedGeneration) {
+      const retryDirectRefs = backendPayloadRefs(
+        stableAgentServerPayloadTaskId('direct-retry-entrypoint', request, skill, retriedGeneration.runId),
+        'agentserver://direct-payload',
+      );
+      await writeBackendPayloadLogs(workspace, retryDirectRefs, `AgentServer strict retry direct ToolPayload run: ${retriedGeneration.runId || 'unknown'}\n`);
       const directPayload = await mergeReusableContextArtifactsForDirectPayload(
         ensureDirectAnswerReportArtifact(retriedGeneration.directPayload, request, 'agentserver-direct-payload'),
         request,
       );
-      return await validateAndNormalizePayload(directPayload, request, skill, {
-        taskRel: 'agentserver://direct-payload',
-        outputRel: `agentserver://${retriedGeneration.runId || 'unknown'}/output`,
-        stdoutRel: `agentserver://${retriedGeneration.runId || 'unknown'}/stdout`,
-        stderrRel: `agentserver://${retriedGeneration.runId || 'unknown'}/stderr`,
+      const normalizedDirect = await validateAndNormalizePayload(directPayload, request, skill, {
+        ...retryDirectRefs,
         runtimeFingerprint: { runtime: 'AgentServer direct ToolPayload', runId: retriedGeneration.runId },
       });
+      return await materializeBackendPayloadOutput(workspace, request, normalizedDirect, retryDirectRefs);
     }
     generation = retriedGeneration;
     const retryReason = generatedEntrypointContractReason(generation.response);
@@ -307,17 +319,20 @@ export async function runAgentServerGeneratedTask(
       return repairNeededPayload(request, skill, retriedGeneration.error);
     }
     if ('directPayload' in retriedGeneration) {
+      const retryDirectRefs = backendPayloadRefs(
+        stableAgentServerPayloadTaskId('direct-retry-interface', request, skill, retriedGeneration.runId),
+        'agentserver://direct-payload',
+      );
+      await writeBackendPayloadLogs(workspace, retryDirectRefs, `AgentServer interface retry direct ToolPayload run: ${retriedGeneration.runId || 'unknown'}\n`);
       const directPayload = await mergeReusableContextArtifactsForDirectPayload(
         ensureDirectAnswerReportArtifact(retriedGeneration.directPayload, request, 'agentserver-direct-payload'),
         request,
       );
-      return await validateAndNormalizePayload(directPayload, request, skill, {
-        taskRel: 'agentserver://direct-payload',
-        outputRel: `agentserver://${retriedGeneration.runId || 'unknown'}/output`,
-        stdoutRel: `agentserver://${retriedGeneration.runId || 'unknown'}/stdout`,
-        stderrRel: `agentserver://${retriedGeneration.runId || 'unknown'}/stderr`,
+      const normalizedDirect = await validateAndNormalizePayload(directPayload, request, skill, {
+        ...retryDirectRefs,
         runtimeFingerprint: { runtime: 'AgentServer direct ToolPayload', runId: retriedGeneration.runId },
       });
+      return await materializeBackendPayloadOutput(workspace, request, normalizedDirect, retryDirectRefs);
     }
     generation = retriedGeneration;
     const retryInterfaceReason = await generatedTaskInterfaceContractReason(workspace, generation.response);
@@ -415,6 +430,21 @@ export async function runAgentServerGeneratedTask(
       failureReason,
       createdAt: new Date().toISOString(),
     });
+    await writeCapabilityEvolutionEventBestEffort({
+      workspacePath: workspace,
+      request,
+      skill,
+      taskId,
+      runId: generation.runId,
+      run,
+      taskRel,
+      inputRel: `.sciforge/task-inputs/${taskId}.json`,
+      outputRel,
+      stdoutRel,
+      stderrRel,
+      failureReason,
+      recoverActions: ['inspect-stderr-ref', 'repair-generated-task', 'rerun-generated-task'],
+    });
     const repaired = await tryAgentServerRepairAndRerun({
       request,
       skill,
@@ -425,7 +455,31 @@ export async function runAgentServerGeneratedTask(
       failureReason,
       callbacks,
     });
-    if (repaired) return repaired;
+    if (repaired) {
+      await writeCapabilityEvolutionEventBestEffort({
+        workspacePath: workspace,
+        request,
+        skill,
+        taskId,
+        runId: generation.runId,
+        run,
+        payload: repaired,
+        taskRel,
+        inputRel: `.sciforge/task-inputs/${taskId}.json`,
+        outputRel,
+        stdoutRel,
+        stderrRel,
+        failureReason,
+        finalStatus: 'repair-succeeded',
+        repairAttempt: {
+          id: `${taskId}-repair`,
+          status: 'succeeded',
+          reason: failureReason,
+          validationResult: { verdict: 'pass', validatorId: 'sciforge.payload-schema' },
+        },
+      });
+      return repaired;
+    }
     return failedTaskPayload(request, skill, run, failureReason);
   }
 
@@ -433,13 +487,16 @@ export async function runAgentServerGeneratedTask(
     const rawPayload = JSON.parse(await readFile(join(workspace, outputRel), 'utf8')) as ToolPayload;
     const payload = coerceWorkspaceTaskPayload(rawPayload) ?? rawPayload;
     const errors = schemaErrors(payload);
-    const normalized = errors.length ? undefined : await validateAndNormalizePayload(payload, request, skill, {
+    let normalized = errors.length ? undefined : await validateAndNormalizePayload(payload, request, skill, {
       taskRel,
       outputRel,
       stdoutRel,
       stderrRel,
       runtimeFingerprint: run.runtimeFingerprint,
     });
+    if (normalized) {
+      normalized = await materializeBackendPayloadOutput(workspace, request, normalized, { taskRel, outputRel, stdoutRel, stderrRel });
+    }
     const evidenceFinding = normalized ? evaluateToolPayloadEvidence(normalized, request) : undefined;
     const guidanceFinding = normalized ? evaluateGuidanceAdoption(normalized, request) : undefined;
     const workEvidenceSummary = summarizeWorkEvidenceForHandoff(normalized ?? payload);
@@ -479,6 +536,25 @@ export async function runAgentServerGeneratedTask(
       const repairFailureReason = errors.length
         ? `AgentServer generated task output failed schema validation: ${errors.join('; ')}`
         : evidenceFailureReason ?? `AgentServer generated task exited ${run.exitCode} with failed payload: ${failureReason}`;
+      await writeCapabilityEvolutionEventBestEffort({
+        workspacePath: workspace,
+        request,
+        skill,
+        taskId,
+        runId: generation.runId,
+        run,
+        payload: normalized ?? payload,
+        taskRel,
+        inputRel: `.sciforge/task-inputs/${taskId}.json`,
+        outputRel,
+        stdoutRel,
+        stderrRel,
+        schemaErrors: errors,
+        failureReason: repairFailureReason,
+        recoverActions: errors.length
+          ? ['repair-output-schema', 'preserve-output-ref', 'rerun-generated-task']
+          : ['repair-runtime-evidence', 'preserve-output-ref', 'rerun-generated-task'],
+      });
       const repaired = await tryAgentServerRepairAndRerun({
         request,
         skill,
@@ -489,7 +565,32 @@ export async function runAgentServerGeneratedTask(
         failureReason: repairFailureReason,
         callbacks,
       });
-      if (repaired) return repaired;
+      if (repaired) {
+        await writeCapabilityEvolutionEventBestEffort({
+          workspacePath: workspace,
+          request,
+          skill,
+          taskId,
+          runId: generation.runId,
+          run,
+          payload: repaired,
+          taskRel,
+          inputRel: `.sciforge/task-inputs/${taskId}.json`,
+          outputRel,
+          stdoutRel,
+          stderrRel,
+          schemaErrors: errors,
+          failureReason: repairFailureReason,
+          finalStatus: 'repair-succeeded',
+          repairAttempt: {
+            id: `${taskId}-repair`,
+            status: 'succeeded',
+            reason: repairFailureReason,
+            validationResult: { verdict: 'pass', validatorId: 'sciforge.payload-schema' },
+          },
+        });
+        return repaired;
+      }
       return repairNeededPayload(request, skill, repairFailureReason);
     }
     if (!normalized) {
@@ -507,7 +608,7 @@ export async function runAgentServerGeneratedTask(
         callbacks,
         deps,
       });
-      if (supplemented) return supplemented;
+      if (supplemented) return await materializeBackendPayloadOutput(workspace, request, supplemented, { taskRel, outputRel, stdoutRel, stderrRel });
     }
     const proposal = await maybeWriteSkillPromotionProposal({
       workspacePath: workspace,
@@ -522,7 +623,7 @@ export async function runAgentServerGeneratedTask(
       payload: normalized,
       patchSummary: generation.response.patchSummary,
     });
-    return {
+    const completed = {
       ...normalized,
       reasoningTrace: [
         normalized.reasoningTrace,
@@ -538,6 +639,7 @@ export async function runAgentServerGeneratedTask(
         patchSummary: generation.response.patchSummary,
       } : unit),
     };
+    return await materializeBackendPayloadOutput(workspace, request, completed, { taskRel, outputRel, stdoutRel, stderrRel });
   } catch (error) {
     const failureReason = `AgentServer generated task output could not be parsed: ${errorMessage(error)}`;
     await appendTaskAttempt(workspace, {
@@ -557,6 +659,22 @@ export async function runAgentServerGeneratedTask(
       failureReason,
       createdAt: new Date().toISOString(),
     });
+    await writeCapabilityEvolutionEventBestEffort({
+      workspacePath: workspace,
+      request,
+      skill,
+      taskId,
+      runId: generation.runId,
+      run,
+      taskRel,
+      inputRel: `.sciforge/task-inputs/${taskId}.json`,
+      outputRel,
+      stdoutRel,
+      stderrRel,
+      schemaErrors: ['output could not be parsed'],
+      failureReason,
+      recoverActions: ['inspect-output-ref', 'repair-output-parser', 'rerun-generated-task'],
+    });
     const repaired = await tryAgentServerRepairAndRerun({
       request,
       skill,
@@ -567,8 +685,83 @@ export async function runAgentServerGeneratedTask(
       failureReason,
       callbacks,
     });
-    if (repaired) return repaired;
+    if (repaired) {
+      await writeCapabilityEvolutionEventBestEffort({
+        workspacePath: workspace,
+        request,
+        skill,
+        taskId,
+        runId: generation.runId,
+        run,
+        payload: repaired,
+        taskRel,
+        inputRel: `.sciforge/task-inputs/${taskId}.json`,
+        outputRel,
+        stdoutRel,
+        stderrRel,
+        schemaErrors: ['output could not be parsed'],
+        failureReason,
+        finalStatus: 'repair-succeeded',
+        repairAttempt: {
+          id: `${taskId}-repair`,
+          status: 'succeeded',
+          reason: failureReason,
+          validationResult: { verdict: 'pass', validatorId: 'sciforge.payload-schema' },
+        },
+      });
+      return repaired;
+    }
     return failedTaskPayload(request, skill, run, failureReason);
+  }
+}
+
+function backendPayloadRefs(taskId: string, taskRel: string): RuntimeRefBundle {
+  return {
+    taskRel,
+    outputRel: `.sciforge/task-results/${taskId}.json`,
+    stdoutRel: `.sciforge/logs/${taskId}.stdout.log`,
+    stderrRel: `.sciforge/logs/${taskId}.stderr.log`,
+  };
+}
+
+async function writeCapabilityEvolutionEventBestEffort(
+  input: Parameters<typeof recordCapabilityEvolutionRuntimeEvent>[0],
+) {
+  try {
+    await recordCapabilityEvolutionRuntimeEvent(input);
+  } catch {
+    // Ledger capture is audit evidence; it must not turn a repair/fallback path into a harder failure.
+  }
+}
+
+function stableAgentServerPayloadTaskId(
+  kind: string,
+  request: GatewayRequest,
+  skill: SkillAvailability,
+  runId: string | undefined,
+) {
+  const domain = request.skillDomain.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'runtime';
+  const hash = sha1(`${kind}:${skill.id}:${request.prompt}:${runId || 'unknown'}`).slice(0, 12);
+  return `agentserver-${kind}-${domain}-${hash}`;
+}
+
+async function writeBackendPayloadLogs(
+  workspace: string,
+  refs: RuntimeRefBundle,
+  stdout: string,
+  stderr = '',
+) {
+  try {
+    await Promise.all([
+      mkdir(dirname(join(workspace, refs.stdoutRel)), { recursive: true }),
+      mkdir(dirname(join(workspace, refs.stderrRel)), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(workspace, refs.stdoutRel), stdout),
+      writeFile(join(workspace, refs.stderrRel), stderr),
+    ]);
+  } catch {
+    // Stable output materialization is the contract; direct-payload logs are best effort.
   }
 }
 

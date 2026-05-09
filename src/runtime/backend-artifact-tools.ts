@@ -19,6 +19,7 @@ import type {
 import { isRecord, toRecordList, uniqueStrings } from './gateway-utils.js';
 import { normalizeArtifactsForPayload } from './gateway/artifact-materializer.js';
 import { readRecentTaskAttempts, readTaskAttempts } from './task-attempt-history.js';
+import type { TaskAttemptRecord } from './runtime-types.js';
 import { resolveWorkspacePreviewRef } from './workspace-paths.js';
 
 export async function listSessionArtifacts(input: ListSessionArtifactsInput): Promise<ListSessionArtifactsResult> {
@@ -67,6 +68,34 @@ export async function resolveObjectReference(input: ResolveObjectReferenceInput)
     };
   }
 
+  if (refKind === 'run') {
+    const run = await resolveRunReference(input, workspace);
+    if (!run) return missingResolution(ref, refKind, 'Run reference was not found in task attempts.');
+    const reference = runObjectReference(run);
+    return {
+      tool: 'resolve_object_reference',
+      refKind,
+      reference,
+      status: 'resolved',
+      path: run.outputPath,
+      actions: reference.actions ?? [],
+    };
+  }
+
+  if (refKind === 'execution-unit') {
+    const unit = await resolveExecutionUnitReference(input, workspace);
+    if (!unit) return missingResolution(ref, refKind, 'Execution unit reference was not found in task outputs.');
+    const reference = executionUnitObjectReference(unit);
+    return {
+      tool: 'resolve_object_reference',
+      refKind,
+      reference,
+      status: 'resolved',
+      path: unit.outputPath,
+      actions: reference.actions ?? [],
+    };
+  }
+
   const reference = genericObjectReference(ref, refKind);
   return {
     tool: 'resolve_object_reference',
@@ -79,6 +108,7 @@ export async function resolveObjectReference(input: ResolveObjectReferenceInput)
 }
 
 export async function readArtifact(input: ReadArtifactInput): Promise<ReadArtifactResult> {
+  const workspace = resolve(input.workspacePath || process.cwd());
   const resolution = await resolveObjectReference(input);
   if (resolution.status !== 'resolved') {
     return {
@@ -90,7 +120,7 @@ export async function readArtifact(input: ReadArtifactInput): Promise<ReadArtifa
   }
 
   if (resolution.artifact) {
-    const [artifactRecord] = await normalizeArtifactsForPayload([{ ...resolution.artifact }], resolve(input.workspacePath || process.cwd()));
+    const [artifactRecord] = await normalizeArtifactsForPayload([{ ...resolution.artifact }], workspace);
     const artifact = normalizeRuntimeArtifact(artifactRecord, input);
     return {
       tool: 'read_artifact',
@@ -101,6 +131,43 @@ export async function readArtifact(input: ReadArtifactInput): Promise<ReadArtifa
       mimeType: artifactMimeType(artifact),
       status: 'read',
     };
+  }
+
+  if (resolution.refKind === 'run') {
+    const run = await resolveRunReference(input, workspace);
+    if (run) {
+      const content = {
+        runRef: run.runRef,
+        attempt: run.attempt,
+        output: run.outputPayload,
+      };
+      return {
+        tool: 'read_artifact',
+        reference: runObjectReference(run),
+        content,
+        text: JSON.stringify(content, null, 2),
+        mimeType: 'application/json',
+        status: 'read',
+      };
+    }
+  }
+
+  if (resolution.refKind === 'execution-unit') {
+    const unit = await resolveExecutionUnitReference(input, workspace);
+    if (unit) {
+      const content = {
+        runRef: unit.run.runRef,
+        executionUnit: unit.unit,
+      };
+      return {
+        tool: 'read_artifact',
+        reference: executionUnitObjectReference(unit),
+        content,
+        text: JSON.stringify(content, null, 2),
+        mimeType: 'application/json',
+        status: 'read',
+      };
+    }
   }
 
   if (resolution.path && existsSync(resolution.path)) {
@@ -147,23 +214,89 @@ export async function renderArtifact(input: RenderArtifactInput): Promise<Render
 
 export async function resumeRun(input: ResumeRunInput): Promise<ResumeRunResult> {
   const workspace = resolve(input.workspacePath || process.cwd());
-  const runId = input.ref.replace(/^run:/i, '').split('#')[0];
-  const attempts = runId ? await readTaskAttempts(workspace, runId) : [];
-  const latest = attempts.at(-1);
-  const refs = latest ? [
-    latest.codeRef,
-    latest.inputRef,
-    latest.outputRef,
-    latest.stdoutRef,
-    latest.stderrRef,
-  ].filter((ref): ref is string => Boolean(ref)).map((ref) => fileObjectReference(ref, resolveFileLikeRef(ref, workspace) ?? ref)) : [];
+  const target = parseRunRef(input.ref);
+  const run = await resolveRunReference({ ...input, ref: target.runId ? `run:${target.runId}` : input.ref }, workspace);
+  const latest = run?.attempt;
+  const refs = latest ? fileReferencesForAttempt(latest, workspace) : [];
   return {
     tool: 'resume_run',
-    runRef: runId ? `run:${runId}` : input.ref,
+    runRef: run?.runRef ?? (target.runId ? `run:${target.runId}` : input.ref),
     status: latest ? 'resume-requested' : 'missing',
-    objectReferences: [genericObjectReference(runId ? `run:${runId}` : input.ref, 'run'), ...refs],
+    objectReferences: [run ? runObjectReference(run) : genericObjectReference(target.runId ? `run:${target.runId}` : input.ref, 'run'), ...refs],
     reason: latest ? input.reason : 'Run reference was not found in task attempts.',
   };
+}
+
+interface BackendRunResolution {
+  runId: string;
+  runRef: string;
+  attempt: TaskAttemptRecord;
+  outputPath?: string;
+  outputPayload?: Record<string, unknown>;
+}
+
+interface BackendExecutionUnitResolution {
+  unitId: string;
+  unit: Record<string, unknown>;
+  run: BackendRunResolution;
+  outputPath?: string;
+}
+
+async function resolveRunReference(input: Pick<ResolveObjectReferenceInput, 'ref' | 'skillDomain'>, workspace: string): Promise<BackendRunResolution | undefined> {
+  const target = parseRunRef(input.ref);
+  if (!target.runId) return undefined;
+  const attempts = await readTaskAttempts(workspace, target.runId);
+  const latest = attempts.at(-1);
+  if (!latest) return undefined;
+  return hydrateRunResolution(target.runId, latest, workspace);
+}
+
+async function resolveExecutionUnitReference(input: Pick<ResolveObjectReferenceInput, 'ref' | 'skillDomain'>, workspace: string): Promise<BackendExecutionUnitResolution | undefined> {
+  const target = parseExecutionUnitRef(input.ref);
+  if (!target.unitId) return undefined;
+  const run = target.runId ? await resolveRunReference({ ...input, ref: `run:${target.runId}` }, workspace) : undefined;
+  const candidateRuns = target.runId
+    ? (run ? [run] : [])
+    : await recentRunResolutions(input, workspace);
+  for (const run of candidateRuns) {
+    if (!run) continue;
+    const units = toRecordList(run.outputPayload?.executionUnits);
+    const unit = units.find((entry) => stringField(entry.id) === target.unitId)
+      ?? units.find((entry) => stringField(entry.ref) === input.ref);
+    if (unit) return { unitId: target.unitId, unit, run, outputPath: run.outputPath };
+  }
+  return undefined;
+}
+
+async function recentRunResolutions(input: Pick<ResolveObjectReferenceInput, 'skillDomain'>, workspace: string) {
+  const attempts = await readRecentTaskAttempts(workspace, input.skillDomain, 24);
+  const latestByRun = new Map<string, TaskAttemptRecord>();
+  for (const attempt of attempts) {
+    const previous = latestByRun.get(attempt.id);
+    if (!previous || previous.attempt < attempt.attempt) latestByRun.set(attempt.id, attempt);
+  }
+  return Promise.all([...latestByRun.entries()].map(([runId, attempt]) => hydrateRunResolution(runId, attempt, workspace)));
+}
+
+async function hydrateRunResolution(runId: string, attempt: TaskAttemptRecord, workspace: string): Promise<BackendRunResolution> {
+  const outputPath = attempt.outputRef ? resolveFileLikeRef(attempt.outputRef, workspace) : undefined;
+  const outputPayload = outputPath && existsSync(outputPath) ? await readJsonRecord(outputPath) : undefined;
+  return {
+    runId,
+    runRef: `run:${runId}`,
+    attempt,
+    outputPath,
+    outputPayload,
+  };
+}
+
+async function readJsonRecord(path: string) {
+  try {
+    const parsed = JSON.parse(await readFile(path, 'utf8'));
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function collectBackendArtifacts(input: ListSessionArtifactsInput, workspace: string): Promise<RuntimeArtifact[]> {
@@ -326,6 +459,59 @@ function fileObjectReference(ref: string, path: string): ObjectReference {
   };
 }
 
+function runObjectReference(run: BackendRunResolution): ObjectReference {
+  const attempt = run.attempt;
+  return {
+    id: run.runRef,
+    title: `Run ${run.runId}`,
+    kind: 'run',
+    ref: run.runRef,
+    runId: run.runId,
+    actions: ['inspect', 'copy-path', 'pin', 'compare'],
+    status: 'available',
+    summary: attempt.failureReason ?? attempt.patchSummary ?? `Attempt ${attempt.attempt}: ${attempt.status}`,
+    provenance: {
+      dataRef: attempt.outputRef,
+      path: run.outputPath,
+      producer: attempt.skillDomain,
+      version: String(attempt.attempt),
+    },
+  };
+}
+
+function executionUnitObjectReference(unit: BackendExecutionUnitResolution): ObjectReference {
+  const status = stringField(unit.unit.status);
+  const tool = stringField(unit.unit.tool);
+  return {
+    id: `${unit.run.runRef}#execution-unit:${unit.unitId}`,
+    title: stringField(unit.unit.title) ?? unit.unitId,
+    kind: 'execution-unit',
+    ref: `${unit.run.runRef}#execution-unit:${unit.unitId}`,
+    runId: unit.run.runId,
+    executionUnitId: unit.unitId,
+    actions: ['inspect', 'copy-path', 'pin', 'compare'],
+    status: 'available',
+    summary: [tool, status].filter(Boolean).join(' - ') || undefined,
+    provenance: {
+      dataRef: unit.run.attempt.outputRef,
+      path: unit.outputPath,
+      producer: unit.run.attempt.skillDomain,
+      version: String(unit.run.attempt.attempt),
+    },
+  };
+}
+
+function fileReferencesForAttempt(attempt: TaskAttemptRecord, workspace: string) {
+  return uniqueStrings([
+    attempt.codeRef,
+    attempt.inputRef,
+    attempt.outputRef,
+    attempt.stdoutRef,
+    attempt.stderrRef,
+  ].filter((ref): ref is string => Boolean(ref)))
+    .map((ref) => fileObjectReference(ref, resolveFileLikeRef(ref, workspace) ?? ref));
+}
+
 function genericObjectReference(ref: string, refKind: BackendObjectRefKind): ObjectReference {
   const kind = refKind === 'agentserver' ? 'url' : refKind === 'workspace' ? 'folder' : refKind;
   return {
@@ -353,10 +539,32 @@ function missingResolution(ref: string, refKind: BackendObjectRefKind, reason: s
 function classifyBackendRef(ref: string): BackendObjectRefKind {
   if (/^agentserver:\/\//i.test(ref)) return 'agentserver';
   if (/^artifact:/i.test(ref)) return 'artifact';
+  if (/^run:[^#]+#execution-?unit:/i.test(ref)) return 'execution-unit';
   if (/^execution-?unit:/i.test(ref)) return 'execution-unit';
   if (/^run:/i.test(ref)) return 'run';
   if (/^(file|path):/i.test(ref) || /\.[A-Za-z0-9]{1,8}($|[#?])/.test(ref)) return 'file';
   return 'workspace';
+}
+
+function parseRunRef(ref: string) {
+  const stripped = ref.trim().replace(/^run:/i, '');
+  const [runPart] = stripped.split('#');
+  return { runId: runPart.trim() };
+}
+
+function parseExecutionUnitRef(ref: string) {
+  const trimmed = ref.trim();
+  const runScoped = trimmed.match(/^run:([^#]+)#execution-?unit:(.+)$/i);
+  if (runScoped) {
+    return {
+      runId: runScoped[1].trim(),
+      unitId: runScoped[2].trim(),
+    };
+  }
+  return {
+    runId: undefined,
+    unitId: trimmed.replace(/^execution-?unit:/i, '').trim(),
+  };
 }
 
 function resolveFileLikeRef(ref: string, workspace: string) {
