@@ -88,7 +88,7 @@ export function contextEnvelopeGovernanceForRequest(request: GatewayRequest): Co
   }
   return {
     schemaVersion: 'sciforge.context-envelope.harness-governance.v1',
-    source: source?.source ?? 'contract-only:no-harness-context',
+    source: source?.source ?? 'contract-only:no-contract-context',
     contractRef: source ? stringField(source.contract.contractRef)
       ?? stringField(source.contract.harnessContractRef)
       ?? stringField(source.summary?.contractRef) : undefined,

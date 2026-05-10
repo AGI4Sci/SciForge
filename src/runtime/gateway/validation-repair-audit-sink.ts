@@ -197,6 +197,32 @@ export interface ValidationRepairAuditSinkArtifactSummary {
   }>;
 }
 
+export interface ValidationRepairAuditActionResultSummary {
+  kind: 'validation-repair-audit-action-result-summary';
+  sourceRef: string;
+  generatedAt: string;
+  totalActionResults: number;
+  auditIds: string[];
+  validationDecisionIds: string[];
+  repairDecisionIds: string[];
+  actionTraceRefs: string[];
+  contractIds: string[];
+  findingSourceCounts: Record<string, number>;
+  failureKindCounts: Record<string, number>;
+  outcomeCounts: Record<string, number>;
+  sourceSinkRefs: string[];
+  sinkRefs: string[];
+  telemetrySpanRefs: string[];
+  recentActionResults: Array<{
+    artifactId: string;
+    sourceSinkRef: string;
+    auditId: string;
+    actionTraceRef?: string;
+    outcome?: string;
+    recordedAt: string;
+  }>;
+}
+
 export function projectValidationRepairAuditSink(
   source: ValidationRepairAuditSinkSource | ValidationRepairAuditSinkSource[],
   options: ValidationRepairAuditSinkProjectionOptions = {},
@@ -280,6 +306,19 @@ export async function buildValidationRepairAuditSinkVerificationArtifactSummary(
     'verification-artifact',
     toWorkspaceRef(options.workspacePath, resolveValidationRepairAuditVerificationArtifactDir(options)),
     await readValidationRepairAuditSinkVerificationArtifacts(options),
+    options.now,
+  );
+}
+
+export async function buildValidationRepairAuditSinkActionResultSummary(
+  options: ValidationRepairAuditVerificationArtifactWriteOptions,
+): Promise<ValidationRepairAuditActionResultSummary> {
+  const artifactDir = resolveValidationRepairAuditVerificationArtifactDir(options);
+  const artifacts = (await readValidationRepairAuditSinkVerificationArtifacts(options))
+    .filter((artifact) => actionResultSubject(artifact));
+  return validationRepairAuditActionResultSummary(
+    toWorkspaceRef(options.workspacePath, artifactDir),
+    artifacts,
     options.now,
   );
 }
@@ -668,6 +707,42 @@ function validationRepairAuditSinkArtifactSummary(
       recordedAt: artifact.recordedAt,
     })),
   };
+}
+
+function validationRepairAuditActionResultSummary(
+  sourceRef: string,
+  artifacts: ValidationRepairAuditVerificationArtifact[],
+  now: (() => Date) | undefined,
+): ValidationRepairAuditActionResultSummary {
+  return {
+    kind: 'validation-repair-audit-action-result-summary',
+    sourceRef,
+    generatedAt: (now ?? (() => new Date()))().toISOString(),
+    totalActionResults: artifacts.length,
+    auditIds: uniqueStrings(artifacts.map((artifact) => artifact.auditId)),
+    validationDecisionIds: uniqueStrings(artifacts.map((artifact) => artifact.validationDecisionId)),
+    repairDecisionIds: uniqueStrings(artifacts.map((artifact) => artifact.repairDecisionId)),
+    actionTraceRefs: uniqueStrings(artifacts.map((artifact) => artifact.subject?.actionTraceRef ?? artifact.auditRecord.subject.actionTraceRef)),
+    contractIds: uniqueStrings(artifacts.map((artifact) => artifact.contractId)),
+    findingSourceCounts: countStrings(artifacts.flatMap((artifact) => artifact.validationDecision?.findings.map((finding) => finding.source) ?? [])),
+    failureKindCounts: countStrings(artifacts.map((artifact) => artifact.failureKind)),
+    outcomeCounts: countStrings(artifacts.map((artifact) => artifact.outcome)),
+    sourceSinkRefs: uniqueStrings(artifacts.map((artifact) => artifact.sourceSinkRef)),
+    sinkRefs: uniqueStrings(artifacts.flatMap((artifact) => artifact.sinkRefs)),
+    telemetrySpanRefs: uniqueStrings(artifacts.flatMap((artifact) => artifact.telemetrySpanRefs)),
+    recentActionResults: artifacts.slice(-25).map((artifact) => ({
+      artifactId: artifact.artifactId,
+      sourceSinkRef: artifact.sourceSinkRef,
+      auditId: artifact.auditId,
+      actionTraceRef: artifact.subject?.actionTraceRef ?? artifact.auditRecord.subject.actionTraceRef,
+      outcome: artifact.outcome,
+      recordedAt: artifact.recordedAt,
+    })),
+  };
+}
+
+function actionResultSubject(artifact: ValidationRepairAuditVerificationArtifact) {
+  return artifact.subject?.kind === 'action-result' || artifact.auditRecord.subject.kind === 'action-result';
 }
 
 function resolveValidationRepairAuditVerificationArtifactPath(

@@ -60,6 +60,12 @@ const localTool = packageToolManifest('tool.local-normalize', {
   risk: 'low',
   sideEffects: ['none'],
 });
+const unsafePackageTool = packageToolManifest('tool.workspace-write', {
+  providerId: 'pkg.workspace.write',
+  requiredConfig: [],
+  risk: 'high',
+  sideEffects: ['workspace-write'],
+});
 
 const toolProjection = projectHarnessDefaultCandidateCallbacks({
   callbacks: [
@@ -86,6 +92,79 @@ assert.equal(
 );
 assert.match(toolProjection.audit.find((entry) => entry.id === 'tool.metadata-enrich')?.blocked ?? '', /provider/);
 assert.ok(toolProjection.candidates.some((candidate) => candidate.id === 'tool.local-normalize'));
+
+const packageManifestAvailabilityGuardProjection = projectHarnessDefaultCandidateCallbacks({
+  callbacks: [
+    buildToolPackageManifestCandidateCallback({
+      manifests: [localTool],
+      explicitCapabilityIds: ['tool.local-normalize'],
+      providerAvailability: ['pkg.normalize.local'],
+    }),
+  ],
+  availableProviders: [{ id: 'pkg.normalize.local', available: false, reason: 'package disabled by audit guard' }],
+});
+const packageManifestAvailabilityGuard = packageManifestAvailabilityGuardProjection.audit.find((entry) => entry.id === 'tool.local-normalize');
+assert.equal(packageManifestAvailabilityGuardProjection.candidates.length, 0);
+assert.equal(
+  packageManifestAvailabilityGuard?.gate,
+  'blocked',
+  'callback-advertised package provider availability must not override a global unavailable gate',
+);
+assert.equal(packageManifestAvailabilityGuard?.blocked, 'provider unavailable: package disabled by audit guard');
+assert.equal(packageManifestAvailabilityGuard?.providerAvailability[0]?.available, false);
+
+const packageManifestBlockedGuardProjection = projectHarnessDefaultCandidateCallbacks({
+  callbacks: [
+    buildToolPackageManifestCandidateCallback({
+      manifests: [localTool],
+      explicitCapabilityIds: ['tool.local-normalize'],
+      providerAvailability: ['pkg.normalize.local'],
+    }),
+  ],
+  blockedCapabilityIds: ['tool.local-normalize'],
+});
+assert.equal(
+  packageManifestBlockedGuardProjection.audit.find((entry) => entry.id === 'tool.local-normalize')?.blocked,
+  'blocked by harness/caller',
+  'explicit package manifest selection must not bypass blocked capability gate',
+);
+
+const packageManifestSafetyGuardProjection = projectHarnessDefaultCandidateCallbacks({
+  callbacks: [
+    buildToolPackageManifestCandidateCallback({
+      manifests: [unsafePackageTool],
+      explicitCapabilityIds: ['tool.workspace-write'],
+      providerAvailability: ['pkg.workspace.write'],
+    }),
+  ],
+  riskTolerance: 'medium',
+});
+assert.equal(
+  packageManifestSafetyGuardProjection.audit.find((entry) => entry.id === 'tool.workspace-write')?.blocked,
+  'risk high exceeds medium tolerance',
+  'explicit package manifest selection must not bypass safety risk gate',
+);
+
+const packageManifestBudgetGuardProjection = projectHarnessDefaultCandidateCallbacks({
+  callbacks: [
+    buildToolPackageManifestCandidateCallback({
+      manifests: [localTool],
+      explicitCapabilityIds: ['tool.local-normalize'],
+      providerAvailability: ['pkg.normalize.local'],
+    }),
+  ],
+  budgetByKind: {
+    tool: {
+      maxProviders: 0,
+      exhaustedPolicy: 'fail-with-reason',
+    },
+  },
+});
+assert.equal(
+  packageManifestBudgetGuardProjection.audit.find((entry) => entry.id === 'tool.local-normalize')?.blocked,
+  'budget exhausted: maxProviders=0',
+  'explicit package manifest selection must not bypass provider budget gate',
+);
 
 const toolBudgetProjection = projectHarnessDefaultCandidateCallbacks({
   callbacks: [

@@ -10,7 +10,11 @@ import type { GatewayRequest, ToolPayload, VerificationPolicy, VerificationResul
 import { isRecord, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { resolveWorkspaceFileRefPath } from '../workspace-paths.js';
-import { createValidationRepairAuditChain, type ValidationRepairAuditChain } from './validation-repair-audit-bridge.js';
+import {
+  agentHarnessRepairPolicyBridgeFromRuntimeState,
+  createValidationRepairAuditChain,
+  type ValidationRepairAuditChain,
+} from './validation-repair-audit-bridge.js';
 import { contractValidationFailureFromVerificationResults, normalizeRuntimeVerificationResults } from './verification-results.js';
 
 const RUNTIME_VERIFICATION_GATE_CAPABILITY_ID = 'sciforge.runtime-verification-gate';
@@ -223,6 +227,7 @@ function validationRepairAuditForVerificationGate(
       `span:verification-gate:${chainId}`,
       `span:repair-decision:${chainId}`,
     ],
+    agentHarnessRepairPolicy: agentHarnessRepairPolicyBridgeFromRuntimeState(request.uiState),
   });
   return {
     validationFailure: contractValidationFailureFromVerificationResults(result, {

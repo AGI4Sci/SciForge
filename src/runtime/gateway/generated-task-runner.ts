@@ -1,28 +1,22 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult } from '../runtime-types.js';
-import { runWorkspaceTask, sha1 } from '../workspace-task-runner.js';
+import { sha1 } from '../workspace-task-runner.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
-import { errorMessage, generatedTaskArchiveRel, isTaskInputRel, safeWorkspaceRel } from '../gateway-utils.js';
-import { sanitizeAgentServerError } from './backend-failure-diagnostics.js';
+import { safeWorkspaceRel } from '../gateway-utils.js';
 import { materializeBackendPayloadOutput } from './artifact-materializer.js';
 import {
   appendGeneratedTaskGenerationFailureLifecycle,
-  buildGeneratedTaskRunInputLifecycle,
 } from './generated-task-runner-validation-lifecycle.js';
 import {
   backendPayloadRefs,
   completeAgentServerDirectPayloadLifecycle,
-  readGeneratedTaskFileIfPresent,
   resolveGeneratedTaskGenerationRetryLifecycle,
   stableAgentServerPayloadTaskId,
   writeBackendPayloadLogs,
   type AgentServerGenerationResult,
 } from './generated-task-runner-generation-lifecycle.js';
-import {
-  expectedArtifactTypesForGeneratedRun,
-  supplementScopeForGeneratedRun,
-} from './generated-task-runner-supplement-lifecycle.js';
+import { runGeneratedTaskExecutionLifecycle } from './generated-task-runner-execution-lifecycle.js';
 import { completeGeneratedTaskRunOutputLifecycle } from './generated-task-runner-output-lifecycle.js';
 import { reportRuntimeResultViewSlots } from '../../../packages/presentation/interactive-views';
 import {
@@ -38,9 +32,6 @@ import {
   currentReferenceDigestRecoveryCandidates,
   type CurrentReferenceDigestRecoverySource,
 } from '../../../packages/contracts/runtime/artifact-policy';
-import {
-  AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE,
-} from '../../../packages/skills/runtime-policy';
 
 export interface GeneratedTaskRunnerDeps {
   readConfiguredAgentServerBaseUrl(workspace: string): Promise<string | undefined>;
@@ -174,64 +165,16 @@ export async function runAgentServerGeneratedTask(
   if (generationLifecycle.kind === 'payload') return generationLifecycle.payload;
   generation = generationLifecycle.generation;
 
-  const taskId = `generated-${request.skillDomain}-${sha1(`${request.prompt}:${Date.now()}`).slice(0, 12)}`;
-  const generatedPathMap = new Map<string, string>();
-  const generatedInputRels: string[] = [];
-  try {
-    for (const file of generation.response.taskFiles) {
-      const declaredRel = safeWorkspaceRel(file.path);
-      const rel = generatedTaskArchiveRel(taskId, declaredRel);
-      generatedPathMap.set(declaredRel, rel);
-      if (isTaskInputRel(declaredRel)) generatedInputRels.push(declaredRel);
-      const content = file.content || await readGeneratedTaskFileIfPresent(workspace, file.path);
-      if (content === undefined) {
-        return repairNeededPayload(
-          request,
-          skill,
-          `AgentServer returned taskFiles path-only reference but SciForge could not read workspace file: ${declaredRel}`,
-        );
-      }
-      await mkdir(dirname(join(workspace, declaredRel)), { recursive: true });
-      await writeFile(join(workspace, declaredRel), content);
-      await mkdir(dirname(join(workspace, rel)), { recursive: true });
-      await writeFile(join(workspace, rel), content);
-      emitWorkspaceRuntimeEvent(callbacks, {
-        type: AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE,
-        source: 'workspace-runtime',
-        message: `Materialized AgentServer task file ${declaredRel}`,
-        detail: rel === declaredRel ? declaredRel : `${declaredRel} -> ${rel}`,
-      });
-    }
-  } catch (error) {
-    return repairNeededPayload(request, skill, `AgentServer generated task files could not be archived: ${sanitizeAgentServerError(errorMessage(error))}`);
-  }
-  const entrypointOriginalRel = safeWorkspaceRel(generation.response.entrypoint.path);
-  const taskRel = generatedPathMap.get(entrypointOriginalRel) ?? generatedTaskArchiveRel(taskId, generation.response.entrypoint.path);
-  const inputRel = `.sciforge/task-inputs/${taskId}.json`;
-  const outputRel = `.sciforge/task-results/${taskId}.json`;
-  const stdoutRel = `.sciforge/logs/${taskId}.stdout.log`;
-  const stderrRel = `.sciforge/logs/${taskId}.stderr.log`;
-  const generatedExpectedArtifacts = expectedArtifactTypesForGeneratedRun(request, generation.response.expectedArtifacts);
-  const generatedSupplementScope = supplementScopeForGeneratedRun(request, generation.response.expectedArtifacts);
-  const taskInputLifecycle = await buildGeneratedTaskRunInputLifecycle({
-    workspacePath: workspace,
+  const executionLifecycle = await runGeneratedTaskExecutionLifecycle({
+    workspace,
     request,
     skill,
-    generatedInputRels,
-    expectedArtifacts: generatedExpectedArtifacts,
+    generation,
+    callbacks,
+    deps,
   });
-  const run = await runWorkspaceTask(workspace, {
-    id: taskId,
-    language: generation.response.entrypoint.language,
-    entrypoint: generation.response.entrypoint.command || 'main',
-    entrypointArgs: generation.response.entrypoint.args,
-    taskRel,
-    input: taskInputLifecycle.taskInput,
-    retentionProtectedInputRels: taskInputLifecycle.retentionProtectedInputRels,
-    outputRel,
-    stdoutRel,
-    stderrRel,
-  });
+  if (executionLifecycle.kind === 'payload') return executionLifecycle.payload;
+  const { run, supplementArtifactTypes, taskId, taskRel, inputRel, outputRel, stdoutRel, stderrRel } = executionLifecycle.execution;
 
   return await completeGeneratedTaskRunOutputLifecycle({
     workspace,
@@ -249,7 +192,7 @@ export async function runAgentServerGeneratedTask(
     outputRel,
     stdoutRel,
     stderrRel,
-    supplementArtifactTypes: generatedSupplementScope,
+    supplementArtifactTypes,
     runGeneratedTask: runAgentServerGeneratedTask,
   });
 }

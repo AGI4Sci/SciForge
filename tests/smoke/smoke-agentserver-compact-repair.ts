@@ -93,16 +93,22 @@ const server = createServer(async (req, res) => {
     assert.equal(metadata.contextEnvelopeBytes, undefined);
     assert.equal(metadata.repairContextVersion, 'sciforge.repair-context.v1');
     const text = isRecord(parsed.input) ? String(parsed.input.text || '') : '';
-    repairPromptText = text;
-    assert.match(text, /repairContext/);
-    assert.match(text, /intentional compact repair failure/);
-    assert.doesNotMatch(text, /x{50000}/, 'repair prompt should not include the full huge user prompt');
-    assert.match(text, /ALLOWED_STDOUT_SUMMARY/, 'allowed stdout failure evidence should be visible');
-    assert.doesNotMatch(text, /BLOCKED_STDERR_SECRET/, 'blocked stderr failure evidence must not leak into repair prompt');
-    assert.doesNotMatch(text, /missing executionUnits/, 'validation findings are disabled by repairContextPolicy');
-    assert.match(text, /repairContextPolicyAudit/);
-    assert.match(text, /"includedFailureEvidenceRefs": \[\s*"stdout"\s*\]/);
-    assert.match(text, /"omittedFields"/);
+    const inspectText = await expandCompactedPromptText(text);
+    repairPromptText = inspectText;
+    assert.match(inspectText, /repairContext/);
+    assert.match(inspectText, /intentional compact repair failure/);
+    assert.doesNotMatch(inspectText, /x{50000}/, 'repair prompt should not include the full huge user prompt');
+    assert.match(inspectText, /ALLOWED_STDOUT_SUMMARY/, 'allowed stdout failure evidence should be visible');
+    assert.doesNotMatch(inspectText, /BLOCKED_STDERR_SECRET/, 'blocked stderr failure evidence must not leak into repair prompt');
+    assert.doesNotMatch(inspectText, /missing executionUnits/, 'validation findings are disabled by repairContextPolicy');
+    assert.match(inspectText, /repairContextPolicyAudit/);
+    assert.match(inspectText, /"includedFailureEvidenceRefs": \[\s*"stdout"\s*\]/);
+    assert.match(inspectText, /"omittedFields"/);
+    assert.match(inspectText, /"sourceKind": "contract-handoff"/);
+    assert.match(inspectText, /"deterministicDecisionRef"/);
+    assert.match(inspectText, /repairContextPolicyIgnoredLegacyAudit/);
+    assert.match(inspectText, /"source": "request\.uiState\.repairContextPolicy"/);
+    assert.match(inspectText, /"source": "request\.uiState\.capabilityPolicy\.repairContextPolicy"/);
     const codeRef = String(metadata.codeRef || '');
     assert.match(codeRef, /^\.sciforge\/tasks\/generated-literature-/);
     await writeFile(join(workspace, codeRef), fixedTask);
@@ -176,6 +182,8 @@ try {
       currentPrompt: hugePrompt,
       recentConversation: [hugePrompt],
       agentHarnessHandoff: {
+        harnessContractRef: 'runtime://agent-harness/contracts/debug-repair/compact-smoke',
+        harnessTraceRef: 'runtime://agent-harness/contracts/debug-repair/compact-smoke/trace',
         repairContextPolicy: {
           kind: 'repair-rerun',
           maxAttempts: 1,
@@ -185,6 +193,23 @@ try {
           includePriorAttemptRefs: false,
           allowedFailureEvidenceRefs: ['stdout'],
           blockedFailureEvidenceRefs: ['stderr', 'validation:findings'],
+        },
+      },
+      repairContextPolicy: {
+        kind: 'repair-rerun',
+        maxAttempts: 1,
+        includeStdoutSummary: false,
+        includeStderrSummary: true,
+        includeValidationFindings: true,
+        allowedFailureEvidenceRefs: ['stderr'],
+        blockedFailureEvidenceRefs: ['stdout'],
+      },
+      capabilityPolicy: {
+        repairContextPolicy: {
+          includeStdoutSummary: false,
+          includeStderrSummary: true,
+          allowedFailureEvidenceRefs: ['stderr'],
+          blockedFailureEvidenceRefs: ['stdout'],
         },
       },
     },
@@ -221,6 +246,18 @@ async function readJsonWithRaw(req: NodeJS.ReadableStream): Promise<{ parsed: Re
   return { parsed: isRecord(parsed) ? parsed : {}, raw };
 }
 
+async function expandCompactedPromptText(text: string) {
+  const rawRef = text.match(/rawRef: ([^\n]+)/)?.[1]?.trim();
+  if (!rawRef) return text;
+  const payload = JSON.parse(await readFile(join(workspace, rawRef), 'utf8'));
+  const rawPayload = record(record(payload).payload);
+  return String(record(rawPayload.input).text || text);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
 }

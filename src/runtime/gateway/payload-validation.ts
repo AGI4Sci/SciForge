@@ -20,7 +20,10 @@ import { contextCompactionMetadata } from './agentserver-context-window.js';
 import { normalizeArtifactsForPayload, persistArtifactRefsForPayload } from './artifact-materializer.js';
 import { schemaErrors as toolPayloadSchemaErrors } from './tool-payload-contract.js';
 import { normalizeToolPayloadShape } from './direct-answer-payload.js';
-import { createValidationRepairAuditChain } from './validation-repair-audit-bridge.js';
+import {
+  agentHarnessRepairPolicyBridgeFromRuntimeState,
+  createValidationRepairAuditChain,
+} from './validation-repair-audit-bridge.js';
 
 type AttemptPlanRefsBuilder = (request: GatewayRequest, skill?: SkillAvailability, fallbackReason?: string) => Record<string, unknown>;
 let attemptPlanRefsBuilder: AttemptPlanRefsBuilder = () => ({});
@@ -213,6 +216,7 @@ function repairRefsWithValidationRepairAudit(
       `span:repair-decision:${chainId}`,
     ],
     sinkRefs: [`appendTaskAttempt:${chainId}`],
+    agentHarnessRepairPolicy: agentHarnessRepairPolicyBridgeFromRuntimeState(request.uiState),
     createdAt: validationFailure.createdAt,
   });
   return {

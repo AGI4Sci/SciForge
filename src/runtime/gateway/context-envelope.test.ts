@@ -224,7 +224,7 @@ test('context envelope governance emits ignored legacy audit without legacy-driv
     ['ref:a', 'ref:b'],
   );
   const audit = record(envelope.contextGovernanceAudit);
-  assert.equal(audit.source, 'contract-only:no-harness-context');
+  assert.equal(audit.source, 'contract-only:no-contract-context');
   assert.deepEqual(record(audit.contextRefs), { allowed: [], blocked: [], required: [] });
   assert.deepEqual(records(audit.decisions), []);
   assert.deepEqual(records(audit.ignoredLegacySources).map((entry) => entry.source), ['request.uiState']);
@@ -263,7 +263,7 @@ test('context envelope governance ignores legacy repair context policy fields fo
     ['ref:keep', 'ref:legacy-repair-blocked'],
   );
   const audit = record(envelope.contextGovernanceAudit);
-  assert.equal(audit.source, 'contract-only:no-harness-context');
+  assert.equal(audit.source, 'contract-only:no-contract-context');
   assert.deepEqual(records(audit.decisions), []);
   const ignoredLegacySources = records(audit.ignoredLegacySources);
   assert.deepEqual(ignoredLegacySources.map((entry) => entry.source), [

@@ -577,13 +577,33 @@ function uniqueManifests(manifests: CapabilityManifest[]) {
 }
 
 function mergeProviderAvailability(input: HarnessDefaultProviderAvailability[]) {
-  const byId = new Map<string, HarnessDefaultProviderAvailability>();
+  const byId = new Map<string, { available: boolean; reason?: string; asString: boolean }>();
   for (const provider of input) {
     const id = typeof provider === 'string' ? provider : provider.id;
     if (!id) continue;
-    byId.set(id, provider);
+    const next = typeof provider === 'string'
+      ? { available: true, asString: true }
+      : { available: provider.available, reason: provider.reason, asString: false };
+    const existing = byId.get(id);
+    if (!existing) {
+      byId.set(id, next);
+      continue;
+    }
+    if (!existing.available || !next.available) {
+      byId.set(id, {
+        available: false,
+        reason: !next.available ? next.reason ?? existing.reason : existing.reason,
+        asString: false,
+      });
+      continue;
+    }
+    byId.set(id, { available: true, asString: existing.asString && next.asString });
   }
-  return [...byId.values()];
+  return [...byId.entries()].map(([id, provider]) => (
+    provider.available && provider.asString
+      ? id
+      : { id, available: provider.available, reason: provider.reason }
+  ));
 }
 
 function normalizeAvailableProviders(input: HarnessDefaultProviderAvailability[]) {

@@ -12,7 +12,7 @@ import { readRecentTaskAttempts } from '../task-attempt-history.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { parseJsonErrorMessage, redactSecretText, sanitizeAgentServerError } from './backend-failure-diagnostics.js';
-import { applyRepairContextPolicyForAgentServer, repairContextPolicySummaryForAgentServer } from './agentserver-repair-context-policy.js';
+import { applyRepairContextPolicyForAgentServer, ignoredLegacyRepairContextPolicyAuditForAgentServer, repairContextPolicySummaryForAgentServer } from './agentserver-repair-context-policy.js';
 import { agentServerArtifactSelectionPromptPolicyLines, agentServerBibliographicVerificationPromptPolicyLines, agentServerCurrentReferencePromptPolicyLines, agentServerToolPayloadProtocolContractLines } from '@sciforge-ui/runtime-contract/artifact-policy';
 import { agentServerBackendDecisionPromptPolicyLines, agentServerCapabilityRoutingPromptPolicyLines, agentServerContinuationPromptPolicyLines, agentServerCurrentTurnSnapshotPromptPolicyLines, agentServerExecutionModePromptPolicyLines, agentServerExternalIoReliabilityContractLines, agentServerFreshRetrievalPromptPolicyLines, agentServerGeneratedTaskPromptPolicyLines, agentServerGenerationOutputContract, agentServerGenerationOutputContractLines, agentServerLargeFilePromptContractLines, agentServerPriorAttemptsPromptPolicyLines, agentServerRepairPromptPolicyLines, agentServerViewSelectionPromptPolicyLines, agentServerWorkspaceTaskRepairPromptPolicyLines, agentServerWorkspaceTaskRoutingPromptPolicyLines } from '../../../packages/skills/runtime-policy';
 import { minimalValidInteractiveToolPayloadExample } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy';
@@ -427,7 +427,11 @@ export async function buildCompactRepairContext(params: {
     priorAttempts: summarizeTaskAttemptsForAgentServer(params.priorAttempts).slice(0, 4),
   };
   const repairContextPolicySummary = repairContextPolicySummaryForAgentServer(params.request, rawContext);
-  return applyRepairContextPolicyForAgentServer(rawContext, repairContextPolicySummary) ?? rawContext;
+  const compactRepairContext = applyRepairContextPolicyForAgentServer(rawContext, repairContextPolicySummary) ?? rawContext;
+  return withIgnoredLegacyRepairContextPolicyAudit(
+    compactRepairContext,
+    ignoredLegacyRepairContextPolicyAuditForAgentServer(params.request, rawContext),
+  ) ?? compactRepairContext;
 }
 
 function parseJsonIfPossible(value: string) {
@@ -463,7 +467,10 @@ export function buildAgentServerRepairPrompt(params: {
   repairContext?: Record<string, unknown>;
 }) {
   const repairContextPolicySummary = repairContextPolicySummaryForAgentServer(params.request, params.repairContext);
-  const repairContext = applyRepairContextPolicyForAgentServer(params.repairContext, repairContextPolicySummary);
+  const repairContext = withIgnoredLegacyRepairContextPolicyAudit(
+    applyRepairContextPolicyForAgentServer(params.repairContext, repairContextPolicySummary),
+    ignoredLegacyRepairContextPolicyAuditForAgentServer(params.request, params.repairContext),
+  );
   return [
     ...agentServerWorkspaceTaskRepairPromptPolicyLines('intro'),
     ...agentServerExternalIoReliabilityContractLines(),
@@ -479,6 +486,17 @@ export function buildAgentServerRepairPrompt(params: {
     '',
     'Return a concise summary of files changed, tests or commands run, and any remaining blocker.',
   ].join('\n');
+}
+
+function withIgnoredLegacyRepairContextPolicyAudit(
+  repairContext: Record<string, unknown> | undefined,
+  audit: Record<string, unknown> | undefined,
+) {
+  if (!repairContext || !audit) return repairContext;
+  return {
+    ...repairContext,
+    repairContextPolicyIgnoredLegacyAudit: audit,
+  };
 }
 
 export function buildAgentServerGenerationPrompt(request: {

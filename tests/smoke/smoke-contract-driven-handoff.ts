@@ -79,7 +79,7 @@ const server = createServer(async (req, res) => {
         output: {
           result: {
             message: 'Contract-driven handoff smoke completed.',
-            confidence: 0.87,
+            confidence: 0.79,
             claimType: 'runtime-smoke',
             evidenceLevel: 'mock-agentserver',
             reasoningTrace: 'Mock AgentServer captured handoff metadata.',

@@ -18,6 +18,11 @@ const defaultSequenceView = coreRegistry.getManifest('view.sequence-viewer');
 assert.ok(defaultSequenceView, 'default core registry should include the sequence-viewer package view manifest');
 assert.equal(defaultSequenceView.ownerPackage, '@sciforge-ui/sequence-viewer');
 assert.equal(coreRegistry.getManifestByProviderId('sciforge.presentation.sequence-viewer')?.id, 'view.sequence-viewer');
+const defaultStructureView = coreRegistry.getManifest('view.structure-viewer');
+assert.ok(defaultStructureView, 'default core registry should include the structure-viewer package view manifest');
+assert.equal(defaultStructureView.ownerPackage, '@sciforge-ui/structure-viewer');
+assert.deepEqual(defaultStructureView.sideEffects, ['workspace-read', 'network']);
+assert.equal(coreRegistry.getManifestByProviderId('sciforge.presentation.structure-viewer')?.id, 'view.structure-viewer');
 const defaultPresentationAudit = coreRegistry.compactAudit.entries.find((item) => item.id === 'view.paper-card-list');
 assert.ok(defaultPresentationAudit, 'paper-card-list package view should appear in compact registry audit');
 assert.equal(defaultPresentationAudit.source, 'core');
@@ -33,6 +38,16 @@ assert.equal(defaultSequenceAudit.source, 'core');
 assert.equal(defaultSequenceAudit.risk, 'medium');
 assert.deepEqual(defaultSequenceAudit.providerAvailability, [{
   providerId: 'sciforge.presentation.sequence-viewer',
+  providerKind: 'package',
+  available: true,
+  requiredConfig: [],
+}]);
+const defaultStructureAudit = coreRegistry.compactAudit.entries.find((item) => item.id === 'view.structure-viewer');
+assert.ok(defaultStructureAudit, 'structure-viewer package view should appear in compact registry audit');
+assert.equal(defaultStructureAudit.source, 'core');
+assert.equal(defaultStructureAudit.risk, 'medium');
+assert.deepEqual(defaultStructureAudit.providerAvailability, [{
+  providerId: 'sciforge.presentation.structure-viewer',
   providerKind: 'package',
   available: true,
   requiredConfig: [],

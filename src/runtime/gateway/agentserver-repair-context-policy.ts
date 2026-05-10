@@ -1,9 +1,14 @@
 import type { GatewayRequest } from '../runtime-types.js';
-import { extractLikelyErrorLine, isRecord, toStringList, uniqueStrings } from '../gateway-utils.js';
+import { extractLikelyErrorLine, hashJson, isRecord, toStringList, uniqueStrings } from '../gateway-utils.js';
 
 export interface AgentServerRepairContextPolicySummary {
   schemaVersion: 'sciforge.agentserver.repair-context-policy-summary.v1';
   source: string;
+  sourceKind: 'contract-handoff' | 'contract';
+  contractRef?: string;
+  traceRef?: string;
+  deterministicDecisionRef: string;
+  ignoredLegacySources?: AgentServerIgnoredLegacyRepairContextPolicySource[];
   kind?: string;
   maxAttempts?: number;
   includeStdoutSummary: boolean;
@@ -12,6 +17,14 @@ export interface AgentServerRepairContextPolicySummary {
   includePriorAttemptRefs: boolean;
   allowedFailureEvidenceRefs: string[];
   blockedFailureEvidenceRefs: string[];
+}
+
+export interface AgentServerIgnoredLegacyRepairContextPolicySource {
+  source: string;
+  reason: 'contract-only-repair-context-policy';
+  fields: string[];
+  allowedFailureEvidenceRefCount?: number;
+  blockedFailureEvidenceRefCount?: number;
 }
 
 interface RepairEvidenceDecision {
@@ -27,20 +40,30 @@ export function repairContextPolicySummaryForAgentServer(
   const requestMetadata = isRecord((request as { metadata?: unknown }).metadata)
     ? (request as { metadata?: Record<string, unknown> }).metadata
     : undefined;
-  const candidates: Array<{ source: string; value: unknown }> = [
-    { source: 'repairContext.agentHarnessHandoff', value: repairContext?.agentHarnessHandoff },
-    { source: 'repairContext.repairContextPolicy', value: repairContext?.repairContextPolicy },
-    { source: 'request.metadata.agentHarnessHandoff', value: requestMetadata?.agentHarnessHandoff },
-    { source: 'request.metadata.repairContextPolicy', value: requestMetadata?.repairContextPolicy },
-    { source: 'request.uiState.agentHarnessHandoff', value: isRecord(request.uiState) ? request.uiState.agentHarnessHandoff : undefined },
-    { source: 'request.uiState.agentHarness.contract', value: isRecord(request.uiState) && isRecord(request.uiState.agentHarness) ? request.uiState.agentHarness.contract : undefined },
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : {};
+  const ignoredLegacySources = ignoredLegacyRepairContextPolicySources(request, repairContext);
+  const candidates: Array<{
+    source: string;
+    sourceKind: AgentServerRepairContextPolicySummary['sourceKind'];
+    value: unknown;
+  }> = [
+    { source: 'repairContext.agentHarnessHandoff', sourceKind: 'contract-handoff', value: repairContext?.agentHarnessHandoff },
+    { source: 'request.metadata.agentHarnessHandoff', sourceKind: 'contract-handoff', value: requestMetadata?.agentHarnessHandoff },
+    { source: 'request.uiState.agentHarnessHandoff', sourceKind: 'contract-handoff', value: uiState.agentHarnessHandoff },
+    { source: 'request.uiState.agentHarness.contract', sourceKind: 'contract', value: agentHarness.contract },
   ];
   for (const candidate of candidates) {
     const policy = repairContextPolicyFromCandidate(candidate.value);
     if (!policy) continue;
-    return {
+    const sourceRefs = repairContextPolicySourceRefs(candidate.value);
+    const summary: AgentServerRepairContextPolicySummary = {
       schemaVersion: 'sciforge.agentserver.repair-context-policy-summary.v1',
       source: candidate.source,
+      sourceKind: candidate.sourceKind,
+      contractRef: sourceRefs.contractRef,
+      traceRef: sourceRefs.traceRef,
+      deterministicDecisionRef: '',
       kind: stringField(policy.kind),
       maxAttempts: numberField(policy.maxAttempts),
       includeStdoutSummary: policy.includeStdoutSummary === true,
@@ -50,8 +73,26 @@ export function repairContextPolicySummaryForAgentServer(
       allowedFailureEvidenceRefs: toStringList(policy.allowedFailureEvidenceRefs).slice(0, 12),
       blockedFailureEvidenceRefs: toStringList(policy.blockedFailureEvidenceRefs).slice(0, 12),
     };
+    summary.deterministicDecisionRef = repairContextPolicyDecisionRef(summary);
+    if (ignoredLegacySources.length) summary.ignoredLegacySources = ignoredLegacySources;
+    return summary;
   }
   return undefined;
+}
+
+export function ignoredLegacyRepairContextPolicyAuditForAgentServer(
+  request: GatewayRequest,
+  repairContext: Record<string, unknown> | undefined,
+) {
+  const ignoredLegacySources = ignoredLegacyRepairContextPolicySources(request, repairContext);
+  if (!ignoredLegacySources.length) return undefined;
+  return {
+    schemaVersion: 'sciforge.agentserver.repair-context-policy-ignored-legacy.v1',
+    deterministic: true,
+    reason: 'contract-only-repair-context-policy',
+    ignoredLegacySources,
+    deterministicDecisionRef: hashJson({ ignoredLegacySources }),
+  };
 }
 
 export function applyRepairContextPolicyForAgentServer(
@@ -70,6 +111,10 @@ export function applyRepairContextPolicyForAgentServer(
     ...repairContext,
     repairContextPolicy: {
       source: policy.source,
+      sourceKind: policy.sourceKind,
+      contractRef: policy.contractRef,
+      traceRef: policy.traceRef,
+      deterministicDecisionRef: policy.deterministicDecisionRef,
       kind: policy.kind,
       maxAttempts: policy.maxAttempts,
       includeStdoutSummary: policy.includeStdoutSummary,
@@ -199,6 +244,10 @@ function repairContextPolicyAudit(policy: AgentServerRepairContextPolicySummary)
   return {
     schemaVersion: 'sciforge.agentserver.repair-context-policy-audit.v1',
     source: policy.source,
+    sourceKind: policy.sourceKind,
+    contractRef: policy.contractRef,
+    traceRef: policy.traceRef,
+    deterministicDecisionRef: policy.deterministicDecisionRef,
     deterministic: true,
     allowedFailureEvidenceRefs: policy.allowedFailureEvidenceRefs,
     blockedFailureEvidenceRefs: policy.blockedFailureEvidenceRefs,
@@ -206,6 +255,7 @@ function repairContextPolicyAudit(policy: AgentServerRepairContextPolicySummary)
     includeStderrSummary: policy.includeStderrSummary,
     includeValidationFindings: policy.includeValidationFindings,
     includePriorAttemptRefs: policy.includePriorAttemptRefs,
+    ignoredLegacySources: policy.ignoredLegacySources,
     includedFailureEvidenceRefs: [],
     omittedFailureEvidenceRefs: [],
     omittedFields: [],
@@ -242,6 +292,80 @@ function repairContextPolicyFromCandidate(value: unknown): Record<string, unknow
   if (isRecord(value.repairContextPolicy)) return value.repairContextPolicy;
   if (stringField(value.kind) || value.maxAttempts !== undefined) return value;
   return undefined;
+}
+
+function repairContextPolicySourceRefs(value: unknown) {
+  const record = isRecord(value) ? value : {};
+  const summary = isRecord(record.summary) ? record.summary : {};
+  const promptRenderPlan = isRecord(record.promptRenderPlan) ? record.promptRenderPlan : {};
+  const sourceRefs = isRecord(promptRenderPlan.sourceRefs) ? promptRenderPlan.sourceRefs : {};
+  return {
+    contractRef: stringField(record.harnessContractRef) ?? stringField(record.contractRef) ?? stringField(summary.contractRef) ?? stringField(sourceRefs.contractRef),
+    traceRef: stringField(record.harnessTraceRef) ?? stringField(record.traceRef) ?? stringField(summary.traceRef) ?? stringField(sourceRefs.traceRef),
+  };
+}
+
+function repairContextPolicyDecisionRef(summary: AgentServerRepairContextPolicySummary) {
+  return hashJson({
+    source: summary.source,
+    sourceKind: summary.sourceKind,
+    contractRef: summary.contractRef,
+    traceRef: summary.traceRef,
+    kind: summary.kind,
+    maxAttempts: summary.maxAttempts,
+    includeStdoutSummary: summary.includeStdoutSummary,
+    includeStderrSummary: summary.includeStderrSummary,
+    includeValidationFindings: summary.includeValidationFindings,
+    includePriorAttemptRefs: summary.includePriorAttemptRefs,
+    allowedFailureEvidenceRefs: summary.allowedFailureEvidenceRefs,
+    blockedFailureEvidenceRefs: summary.blockedFailureEvidenceRefs,
+  });
+}
+
+function ignoredLegacyRepairContextPolicySources(
+  request: GatewayRequest,
+  repairContext: Record<string, unknown> | undefined,
+): AgentServerIgnoredLegacyRepairContextPolicySource[] {
+  const requestMetadata = isRecord((request as { metadata?: unknown }).metadata)
+    ? (request as { metadata?: Record<string, unknown> }).metadata
+    : undefined;
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  return [
+    legacyRepairContextPolicySource('repairContext.repairContextPolicy', repairContext?.repairContextPolicy),
+    legacyRepairContextPolicySource('request.metadata.repairContextPolicy', requestMetadata?.repairContextPolicy),
+    legacyRepairContextPolicySource('request.uiState.repairContextPolicy', uiState.repairContextPolicy),
+    legacyRepairContextPolicySource('request.uiState.contextPolicy.repairContextPolicy', isRecord(uiState.contextPolicy) ? uiState.contextPolicy.repairContextPolicy : undefined),
+    legacyRepairContextPolicySource('request.uiState.capabilityPolicy.repairContextPolicy', isRecord(uiState.capabilityPolicy) ? uiState.capabilityPolicy.repairContextPolicy : undefined),
+    legacyRepairContextPolicySource('request.uiState.capabilityBrokerPolicy.repairContextPolicy', isRecord(uiState.capabilityBrokerPolicy) ? uiState.capabilityBrokerPolicy.repairContextPolicy : undefined),
+  ].filter((entry): entry is AgentServerIgnoredLegacyRepairContextPolicySource => Boolean(entry));
+}
+
+function legacyRepairContextPolicySource(source: string, value: unknown): AgentServerIgnoredLegacyRepairContextPolicySource | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.sourceKind !== undefined || value.deterministicDecisionRef !== undefined) return undefined;
+  const fields = legacyRepairContextPolicyFieldNames().filter((key) => value[key] !== undefined);
+  if (!fields.length) return undefined;
+  const allowedFailureEvidenceRefs = toStringList(value.allowedFailureEvidenceRefs);
+  const blockedFailureEvidenceRefs = toStringList(value.blockedFailureEvidenceRefs);
+  return {
+    source,
+    reason: 'contract-only-repair-context-policy',
+    fields,
+    allowedFailureEvidenceRefCount: allowedFailureEvidenceRefs.length || undefined,
+    blockedFailureEvidenceRefCount: blockedFailureEvidenceRefs.length || undefined,
+  };
+}
+
+function legacyRepairContextPolicyFieldNames() {
+  return [
+    'allowedFailureEvidenceRefs',
+    'blockedFailureEvidenceRefs',
+    'maxAttempts',
+    'includeStdoutSummary',
+    'includeStderrSummary',
+    'includeValidationFindings',
+    'includePriorAttemptRefs',
+  ];
 }
 
 function stringField(value: unknown) {

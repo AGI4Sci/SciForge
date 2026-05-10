@@ -42,6 +42,7 @@ export interface ValidationRepairAuditBridgeInput {
   sinkRefs?: string[];
   telemetrySpanRefs?: string[];
   runtimeVerificationPolicyId?: string;
+  agentHarnessRepairPolicy?: AgentHarnessRepairPolicyBridgeInput;
   relatedRefs?: string[];
   createdAt?: string;
 }
@@ -51,6 +52,31 @@ export interface ValidationRepairAuditChain {
   repair: RepairDecision;
   audit: AuditRecord;
   runtimeVerificationResults: RuntimeVerificationResult[];
+}
+
+export interface AgentHarnessRepairPolicyBridgeInput {
+  enabled?: boolean;
+  contract?: unknown;
+  contractRef?: string;
+  traceRef?: string;
+  profileId?: string;
+  source?: string;
+}
+
+interface AgentHarnessRepairPolicyProjection {
+  source: string;
+  contractRef?: string;
+  traceRef?: string;
+  profileId?: string;
+  repairKind?: string;
+  maxAttempts?: number;
+  verificationIntensity?: string;
+  requireCitations?: boolean;
+  requireCurrentRefs?: boolean;
+  requireArtifactRefs?: boolean;
+  auditRefs: string[];
+  sinkRefs: string[];
+  forceFailClosed: boolean;
 }
 
 export interface ValidationRepairAuditPayloadRef {
@@ -88,6 +114,7 @@ export const DEFAULT_VALIDATION_REPAIR_AUDIT_BRIDGE_REPAIR_BUDGET: RepairBudgetS
 };
 
 export function createValidationRepairAuditChain(input: ValidationRepairAuditBridgeInput): ValidationRepairAuditChain {
+  const harnessProjection = projectAgentHarnessRepairPolicy(input.agentHarnessRepairPolicy);
   const runtimeVerificationResults = normalizeRuntimeVerificationResults(input.runtimeVerificationResults);
   const subject = normalizeValidationSubject(input, runtimeVerificationResults);
   const findings = [
@@ -105,6 +132,10 @@ export function createValidationRepairAuditChain(input: ValidationRepairAuditBri
     ...(input.findings ?? []),
   ];
   const workEvidence = input.workEvidence ?? bridgeWorkEvidence(input.chainId, findings);
+  const relatedRefs = uniqueStrings([
+    ...(input.relatedRefs ?? []),
+    ...(harnessProjection?.auditRefs ?? []),
+  ]);
   const validation = createValidationDecision({
     decisionId: `validation:${input.chainId}`,
     subject,
@@ -114,26 +145,60 @@ export function createValidationRepairAuditChain(input: ValidationRepairAuditBri
     runtimeVerificationGate: runtimeVerificationResults.length > 0
       ? { policyId: input.runtimeVerificationPolicyId, results: runtimeVerificationResults }
       : undefined,
-    relatedRefs: input.relatedRefs,
+    relatedRefs,
     createdAt: input.createdAt,
   });
-  const repair = decideRepairPolicy({
+  const repairBudget = repairBudgetWithAgentHarnessPolicy(normalizeRepairBudget(input.repairBudget), harnessProjection);
+  const baseRepair = decideRepairPolicy({
     decisionId: `repair:${input.chainId}`,
     validation,
-    budget: normalizeRepairBudget(input.repairBudget),
+    budget: repairBudget,
     allowSupplement: input.allowSupplement,
     allowHumanEscalation: input.allowHumanEscalation,
     createdAt: input.createdAt,
   });
+  const repair = repairDecisionWithAgentHarnessPolicy(baseRepair, validation, harnessProjection);
   const audit = createAuditRecord({
     auditId: `audit:${input.chainId}`,
     validation,
     repair,
-    sinkRefs: input.sinkRefs,
+    sinkRefs: uniqueStrings([
+      ...(input.sinkRefs ?? []),
+      ...(harnessProjection?.sinkRefs ?? []),
+    ]),
     telemetrySpanRefs: input.telemetrySpanRefs,
     createdAt: input.createdAt,
   });
   return { validation, repair, audit, runtimeVerificationResults };
+}
+
+export function agentHarnessRepairPolicyBridgeFromRuntimeState(value: unknown): AgentHarnessRepairPolicyBridgeInput | undefined {
+  if (!isRecord(value)) return undefined;
+  const agentHarness = isRecord(value.agentHarness)
+    ? value.agentHarness
+    : isRecord(value.harness)
+      ? value.harness
+      : {};
+  const enabled = [
+    value.agentHarnessRepairPolicyEnabled,
+    value.agentHarnessConsumeRepairPolicy,
+    value.agentHarnessValidationRepairPolicyEnabled,
+    agentHarness.repairPolicyEnabled,
+    agentHarness.consumeRepairPolicy,
+    agentHarness.validationRepairPolicyEnabled,
+  ].some(isEnabledFlag);
+  if (!enabled) return undefined;
+  const contract = isRecord(agentHarness.contract) ? agentHarness.contract : undefined;
+  if (!contract) return undefined;
+  const summary = isRecord(agentHarness.summary) ? agentHarness.summary : {};
+  return {
+    enabled: true,
+    contract,
+    contractRef: stringField(agentHarness.contractRef) ?? stringField(summary.contractRef),
+    traceRef: stringField(agentHarness.traceRef) ?? stringField(summary.traceRef),
+    profileId: stringField(agentHarness.profileId) ?? stringField(value.harnessProfileId),
+    source: 'request.uiState.agentHarness.contract',
+  };
 }
 
 export function validationRepairAuditPayloadRefFromChain(chain: ValidationRepairAuditChain): ValidationRepairAuditPayloadRef {
@@ -229,6 +294,92 @@ function normalizeRepairBudget(input: Partial<RepairBudgetSnapshot> | undefined)
   };
 }
 
+function projectAgentHarnessRepairPolicy(
+  input: AgentHarnessRepairPolicyBridgeInput | undefined,
+): AgentHarnessRepairPolicyProjection | undefined {
+  if (!input?.enabled || !isRecord(input.contract)) return undefined;
+  const repairPolicy = isRecord(input.contract.repairContextPolicy) ? input.contract.repairContextPolicy : {};
+  const verificationPolicy = isRecord(input.contract.verificationPolicy) ? input.contract.verificationPolicy : {};
+  const repairKind = stringField(repairPolicy.kind);
+  const maxAttempts = integerField(repairPolicy.maxAttempts);
+  const verificationIntensity = stringField(verificationPolicy.intensity);
+  const requireCitations = booleanField(verificationPolicy.requireCitations);
+  const requireCurrentRefs = booleanField(verificationPolicy.requireCurrentRefs);
+  const requireArtifactRefs = booleanField(verificationPolicy.requireArtifactRefs);
+  const auditRefs = uniqueStrings([
+    input.contractRef ? `agent-harness-contract:${input.contractRef}` : undefined,
+    input.traceRef ? `agent-harness-trace:${input.traceRef}` : undefined,
+    input.profileId ? `agent-harness-profile:${input.profileId}` : undefined,
+    repairKind ? `agent-policy-repair-kind:${repairKind}` : undefined,
+    typeof maxAttempts === 'number' ? `agent-policy-repair-max-attempts:${maxAttempts}` : undefined,
+    verificationIntensity ? `agent-policy-verification-intensity:${verificationIntensity}` : undefined,
+    requireCitations === true ? 'agent-policy-verification-require-citations:true' : undefined,
+    requireCurrentRefs === true ? 'agent-policy-verification-require-current-refs:true' : undefined,
+    requireArtifactRefs === true ? 'agent-policy-verification-require-artifact-refs:true' : undefined,
+  ]);
+  const sinkRefs = uniqueStrings([
+    input.contractRef ? `agent-policy-repair:${input.contractRef}` : undefined,
+    verificationIntensity ? `agent-policy-verification:${verificationIntensity}` : undefined,
+  ]);
+  if (!auditRefs.length && !sinkRefs.length) return undefined;
+  return {
+    source: input.source ?? 'agent-harness.contract',
+    contractRef: input.contractRef,
+    traceRef: input.traceRef,
+    profileId: input.profileId,
+    repairKind,
+    maxAttempts,
+    verificationIntensity,
+    requireCitations,
+    requireCurrentRefs,
+    requireArtifactRefs,
+    auditRefs,
+    sinkRefs,
+    forceFailClosed: repairKind === 'none' || repairKind === 'fail-closed',
+  };
+}
+
+function repairBudgetWithAgentHarnessPolicy(
+  budget: RepairBudgetSnapshot,
+  projection: AgentHarnessRepairPolicyProjection | undefined,
+): RepairBudgetSnapshot {
+  const maxAttempts = projection?.maxAttempts;
+  if (typeof maxAttempts !== 'number') return budget;
+  const tightenedMaxAttempts = Math.min(budget.maxAttempts, maxAttempts);
+  return {
+    ...budget,
+    maxAttempts: tightenedMaxAttempts,
+    remainingAttempts: Math.min(budget.remainingAttempts, tightenedMaxAttempts),
+  };
+}
+
+function repairDecisionWithAgentHarnessPolicy(
+  repair: RepairDecision,
+  validation: ValidationDecision,
+  projection: AgentHarnessRepairPolicyProjection | undefined,
+): RepairDecision {
+  if (!projection) return repair;
+  const relatedRefs = uniqueStrings([...repair.relatedRefs, ...projection.auditRefs]);
+  const recoverActions = uniqueStrings([
+    ...repair.recoverActions,
+    projection.source ? `respect ${projection.source} before retrying repair` : undefined,
+  ]);
+  if (!projection.forceFailClosed || validation.status === 'pass' || repair.action === 'none') {
+    return {
+      ...repair,
+      relatedRefs,
+      recoverActions,
+    };
+  }
+  return {
+    ...repair,
+    action: 'fail-closed',
+    reason: `${repair.reason} Source contract kind=${projection.repairKind} disallows automatic retry.`,
+    relatedRefs,
+    recoverActions,
+  };
+}
+
 function bridgeWorkEvidence(chainId: string, findings: ValidationFinding[]): WorkEvidence[] {
   if (!findings.length) return [];
   return [{
@@ -264,8 +415,24 @@ function validationFindingsFromActionBridgeInput(input: ValidationRepairAuditBri
   });
 }
 
-function uniqueStrings(values: string[]) {
-  return [...new Set(values.filter((value) => value.trim().length > 0))];
+function stringField(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function booleanField(value: unknown) {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function integerField(value: unknown) {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+function isEnabledFlag(value: unknown) {
+  return value === true || ['1', 'true', 'on', 'enabled'].includes(String(value).trim().toLowerCase());
+}
+
+function uniqueStrings(values: Array<string | undefined>) {
+  return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0))];
 }
 
 function validationRepairAuditChainsFromPayload(value: unknown) {

@@ -1,17 +1,24 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   createAuditRecord,
   createValidationDecision,
   decideRepairPolicy,
+  type ActionResultValidationProjection,
   type RepairBudgetSnapshot,
   type ValidationFinding,
   type ValidationRepairAuditSinkTarget,
 } from '@sciforge-ui/runtime-contract/validation-repair-audit';
 import {
+  buildValidationRepairAuditSinkActionResultSummary,
   projectValidationRepairAuditSink,
+  readValidationRepairAuditSinkVerificationArtifacts,
   validationRepairAuditAttemptMetadataFromPayload,
   validationRepairAuditSinkProjectionFromPayload,
+  writeValidationRepairAuditSinkVerificationArtifacts,
 } from '../../src/runtime/gateway/validation-repair-audit-sink';
 import { createValidationRepairAuditChain } from '../../src/runtime/gateway/validation-repair-audit-bridge';
 
@@ -148,7 +155,83 @@ assert.equal(directProjection.refs.length, expectedTargets.length);
 assert.equal(directProjection.records.find((record) => record.target === 'appendTaskAttempt')?.auditRecord.auditId, 'audit:direct-sink');
 assert.equal(directProjection.refs.find((ref) => ref.target === 'ledger')?.ref, 'ledger:audit:direct-sink');
 
-console.log('[ok] validation/repair/audit sink projects audit chains into appendTaskAttempt, ledger, verification artifact, and observe invocation refs/records');
+const actionResult: ActionResultValidationProjection = {
+  status: 'failed',
+  actionId: 'publish:dry-run',
+  providerId: 'external.action-provider',
+  message: 'Action provider failed before returning a durable completion receipt.',
+  failureMode: 'provider-unavailable',
+  traceRef: 'action:publish-call-1',
+  artifactRefs: ['artifact:publish-request'],
+  relatedRefs: ['run:action-sink/output.json'],
+  diagnostics: ['provider external.action-provider unavailable'],
+};
+const actionChain = createValidationRepairAuditChain({
+  chainId: 'action-sink',
+  subject: {
+    kind: 'action-result',
+    id: 'action-sink',
+    capabilityId: 'external.action-provider',
+    contractId: 'sciforge.action-response.v1',
+    actionTraceRef: actionResult.traceRef,
+    artifactRefs: actionResult.artifactRefs ?? [],
+    currentRefs: ['current:user-request'],
+  },
+  actionResult,
+  repairBudget,
+  sinkRefs: [
+    'appendTaskAttempt:action-sink',
+    'ledger:action-sink',
+    'verification-artifact:action-results/action-sink.json',
+  ],
+  telemetrySpanRefs: ['span:action:action-sink', 'span:repair:action-sink'],
+  createdAt,
+});
+const actionProjection = projectValidationRepairAuditSink(actionChain, { targets: ['verification-artifact'] });
+assert.equal(actionProjection.records.length, 1);
+assert.equal(actionProjection.records[0]?.ref, 'verification-artifact:action-results/action-sink.json');
+assert.equal(actionProjection.records[0]?.auditRecord.subject.kind, 'action-result');
+assert.equal(actionProjection.records[0]?.auditRecord.failureKind, 'action-trace');
+assert.equal(actionProjection.records[0]?.validationDecision?.findings[0]?.source, 'action-response');
+
+const actionWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-validation-repair-action-sink-'));
+try {
+  const writes = await writeValidationRepairAuditSinkVerificationArtifacts(actionChain, {
+    workspacePath: actionWorkspace,
+    now: () => new Date('2026-05-10T00:00:01.000Z'),
+  });
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0]?.artifact.auditId, actionChain.audit.auditId);
+  assert.equal(writes[0]?.artifact.subject?.kind, 'action-result');
+  assert.equal(writes[0]?.artifact.subject?.actionTraceRef, 'action:publish-call-1');
+  assert.equal(writes[0]?.artifact.failureKind, 'action-trace');
+  assert.ok(writes[0]?.artifact.relatedRefs.includes('action:publish-call-1'));
+
+  const artifacts = await readValidationRepairAuditSinkVerificationArtifacts({ workspacePath: actionWorkspace });
+  assert.equal(artifacts.length, 1);
+  assert.equal(artifacts[0]?.auditRecord.subject.kind, 'action-result');
+  assert.equal(artifacts[0]?.validationDecision?.findings[0]?.source, 'action-response');
+
+  const actionSummary = await buildValidationRepairAuditSinkActionResultSummary({
+    workspacePath: actionWorkspace,
+    now: () => new Date('2026-05-10T00:00:02.000Z'),
+  });
+  assert.equal(actionSummary.kind, 'validation-repair-audit-action-result-summary');
+  assert.equal(actionSummary.sourceRef, '.sciforge/validation-repair-audit/verification-artifacts');
+  assert.equal(actionSummary.generatedAt, '2026-05-10T00:00:02.000Z');
+  assert.equal(actionSummary.totalActionResults, 1);
+  assert.deepEqual(actionSummary.auditIds, [actionChain.audit.auditId]);
+  assert.deepEqual(actionSummary.actionTraceRefs, ['action:publish-call-1']);
+  assert.equal(actionSummary.findingSourceCounts['action-response'], 1);
+  assert.equal(actionSummary.failureKindCounts['action-trace'], 1);
+  assert.equal(actionSummary.outcomeCounts['repair-requested'], 1);
+  assert.ok(actionSummary.sourceSinkRefs.includes('verification-artifact:action-results/action-sink.json'));
+  assert.ok(actionSummary.telemetrySpanRefs.includes('span:action:action-sink'));
+} finally {
+  await rm(actionWorkspace, { recursive: true, force: true });
+}
+
+console.log('[ok] validation/repair/audit sink projects audit chains into appendTaskAttempt, ledger, verification artifact, observe invocation refs/records, and action-result readback summary');
 
 function blockingFinding(id: string): ValidationFinding {
   return {
