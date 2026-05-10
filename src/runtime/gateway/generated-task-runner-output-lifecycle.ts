@@ -23,6 +23,7 @@ import {
 import { tryAgentServerSupplementMissingArtifacts } from './generated-task-runner-supplement-lifecycle.js';
 import type { AgentServerTaskFilesGeneration } from './generated-task-runner-generation-lifecycle.js';
 import type { GeneratedTaskRunnerDeps } from './generated-task-runner.js';
+import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 
 type RunAgentServerGeneratedTask = (
   request: GatewayRequest,
@@ -202,6 +203,24 @@ export async function completeGeneratedTaskRunOutputLifecycle(
       runtimeLabel: 'AgentServer generated workspace task',
       ledgerRefs: capabilityEvolutionLedgerRefsFromResult(ledgerResult),
     });
+    const generatedDebit = completedWithDebit.budgetDebits?.find((debit) => debit.capabilityId === 'sciforge.generated-task-runner');
+    if (generatedDebit) {
+      await appendGeneratedTaskAttemptLifecycle({
+        workspacePath: workspace,
+        request,
+        skill,
+        taskId,
+        run,
+        attemptPlanRefs: deps.attemptPlanRefs,
+        status: lifecycle.attemptStatus,
+        ...refs,
+        schemaErrors: errors,
+        workEvidenceSummary: summarizeWorkEvidenceForHandoff(completedWithDebit),
+        failureReason: lifecycle.attemptFailureReason,
+        budgetDebitRefs: [generatedDebit.debitId],
+        budgetDebitAuditRefs: generatedDebit.sinkRefs.auditRefs,
+      });
+    }
     return await materializeBackendPayloadOutput(workspace, request, completedWithDebit, refs);
   } catch (error) {
     const repair = await runGeneratedTaskParseRepairLifecycle({
