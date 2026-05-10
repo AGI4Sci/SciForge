@@ -117,6 +117,21 @@ export interface FigureToClaimMap extends ScientificReproductionArtifactBase {
 
 export interface DatasetInventory extends ScientificReproductionArtifactBase {
   artifactType: 'dataset-inventory';
+  identifierVerifications?: Array<{
+    id: string;
+    kind: 'bibliographic' | 'accession' | string;
+    identifier?: string;
+    doi?: string;
+    pmid?: string;
+    accession?: string;
+    title?: string;
+    year?: string | number;
+    journal?: string;
+    verified: boolean;
+    status?: 'verified' | 'matched' | 'confirmed' | 'failed' | 'unknown' | string;
+    checkedAt?: string;
+    evidenceRefs: ScientificEvidenceRef[];
+  }>;
   datasets: Array<{
     id: string;
     title: string;

@@ -274,7 +274,7 @@ export function normalizeRuntimeLlmEndpoint(value: unknown): RuntimeLlmEndpointC
 export function runtimeAgentBackendFailureCategories(text: string, httpStatus?: number): RuntimeAgentBackendFailureKind[] {
   const lower = text.toLowerCase();
   const categories: RuntimeAgentBackendFailureKind[] = [];
-  if (/\b(fetch|network|econnrefused|econnreset|enotfound|etimedout|socket|dns|connection refused|connection reset|offline)\b/i.test(text)) categories.push('network');
+  if (/\b(fetch|network|econnrefused|econnreset|enotfound|etimedout|socket|dns|connection refused|connection reset|offline|base url)\b/i.test(text)) categories.push('network');
   if (/\b(timeout|timed out|abort|cancelled|canceled)\b/i.test(text)) categories.push('timeout');
   if (/\b(unauthorized|forbidden|credential|api[-_ ]?key|token|permission denied|access denied|401|403)\b/i.test(text)) categories.push('auth');
   if (runtimeAgentBackendContextWindowFailureTextMatches(text)) categories.push('context-window');

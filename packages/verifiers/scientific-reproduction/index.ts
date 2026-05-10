@@ -4,7 +4,9 @@ export type ScientificClaimVerdict =
   | 'reproduced'
   | 'partially-reproduced'
   | 'not-reproduced'
-  | 'contradicted';
+  | 'contradicted'
+  | 'insufficient-evidence'
+  | 'not-tested';
 
 export interface ScientificReproductionArtifact {
   id?: string;
@@ -68,6 +70,8 @@ const SCIENTIFIC_VERDICTS = new Set<ScientificClaimVerdict>([
   'partially-reproduced',
   'not-reproduced',
   'contradicted',
+  'insufficient-evidence',
+  'not-tested',
 ]);
 
 const REF_KEYS = [
@@ -83,9 +87,26 @@ const REF_KEYS = [
   'dataRefs',
   'codeRef',
   'codeRefs',
+  'inputRef',
+  'inputRefs',
+  'inputDataRef',
+  'inputDataRefs',
+  'outputFigureRef',
+  'outputFigureRefs',
   'stdoutRef',
+  'stdoutRefs',
   'stderrRef',
+  'stderrRefs',
+  'logRef',
+  'logRefs',
+  'statisticsRef',
+  'statisticsRefs',
+  'methodRef',
+  'methodRefs',
+  'notebookRef',
+  'notebookRefs',
   'outputRef',
+  'outputRefs',
   'sourceRef',
   'sourceRefs',
   'locatorRef',
@@ -295,7 +316,7 @@ function checkVerdictVocabulary(verdicts: string[]): ScientificReproductionCrite
         : `Invalid scientific verdicts found: ${uniqueStrings(invalid).join(', ')}.`,
     evidenceRefs: [],
     repairHints: invalid.length || verdicts.length === 0
-      ? ['Use exactly reproduced, partially-reproduced, not-reproduced, or contradicted for claim/figure/report scientific verdicts.']
+      ? ['Use exactly reproduced, partially-reproduced, not-reproduced, contradicted, insufficient-evidence, or not-tested for claim/figure/report scientific verdicts.']
       : [],
   };
 }
@@ -369,6 +390,7 @@ function extractClaims(context: ArtifactContext): NormalizedClaim[] {
     ...arrayRecords(context.root.claimVerdicts),
     ...arrayRecords(context.root.verdicts),
   ];
+  if (['claim-verdict', 'evidence-matrix'].includes(context.type) && candidates.length === 0) candidates.push(context.root);
   if (isRecord(context.root.claim)) candidates.push(context.root.claim);
   return candidates
     .filter((record) => stringValue(record.claimId) || stringValue(record.id) || stringValue(record.text) || stringValue(record.claim))
@@ -382,22 +404,23 @@ function extractClaims(context: ArtifactContext): NormalizedClaim[] {
 }
 
 function extractFigureReproductions(context: ArtifactContext): NormalizedFigureReproduction[] {
-  const candidates = [
-    ...arrayRecords(context.root.figures),
+  const candidatePools = [
     ...arrayRecords(context.root.figureReproductions),
     ...arrayRecords(context.root.reproductions),
     ...arrayRecords(context.root.reproductionReports),
   ];
-  if (context.type === 'figure-reproduction-report' && candidates.length === 0) candidates.push(context.root);
+  const candidates = context.type === 'figure-reproduction-report'
+    ? [...(isFigureReproductionRecord(context.root) ? [context.root] : []), ...arrayRecords(context.root.figures), ...candidatePools]
+    : candidatePools.filter(isFigureReproductionRecord);
   return candidates.map((record, index) => ({
     id: stringValue(record.figureId) || stringValue(record.id) || `${context.id}:figure-${index + 1}`,
     artifactId: context.id,
     evidenceRefs: collectRefs(record),
     hasCode: hasAnyKey(record, ['code', 'codeRef', 'codeRefs', 'script', 'scriptRef', 'notebookRef', 'analysisNotebookRef']),
-    hasInputData: hasAnyKey(record, ['inputData', 'inputDataRef', 'inputDataRefs', 'dataRef', 'dataRefs', 'datasetRef', 'datasetRefs']),
+    hasInputData: hasAnyKey(record, ['inputRefs', 'inputData', 'inputDataRef', 'inputDataRefs', 'dataRef', 'dataRefs', 'datasetRef', 'datasetRefs']),
     hasParameters: hasAnyKey(record, ['parameters', 'params', 'parameterRef', 'thresholds', 'settings']),
-    hasStdoutOrStderr: hasAnyKey(record, ['stdout', 'stderr', 'stdoutRef', 'stderrRef', 'logRef', 'logRefs', 'executionLogRef']),
-    hasStatistics: hasAnyKey(record, ['statistics', 'statisticalMethod', 'statisticalMethods', 'pValue', 'effectSize', 'testName', 'method']),
+    hasStdoutOrStderr: hasAnyKey(record, ['stdout', 'stderr', 'stdoutRef', 'stdoutRefs', 'stderrRef', 'stderrRefs', 'logRef', 'logRefs', 'executionLogRef']),
+    hasStatistics: hasAnyKey(record, ['statistics', 'statisticsRef', 'statisticsRefs', 'statisticalMethod', 'statisticalMethods', 'pValue', 'effectSize', 'testName', 'method']),
   }));
 }
 
@@ -409,7 +432,7 @@ function extractIdentifierVerifications(context: ArtifactContext): NormalizedIde
     ...arrayRecords(context.root.references),
     ...arrayRecords(context.root.citations),
     ...arrayRecords(context.root.accessions),
-    ...arrayRecords(context.root.datasets),
+    ...arrayRecords(context.root.datasets).filter(isDatasetIdentifierVerificationRecord),
   ];
   if (hasAnyKey(context.root, ['doi', 'pmid', 'title', 'year', 'journal', 'accession'])) candidates.push(context.root);
   return candidates
@@ -466,6 +489,31 @@ function identifierKind(record: Record<string, unknown>): NormalizedIdentifierVe
   if (kind.includes('accession') || hasAnyKey(record, ['accession', 'accessionId'])) return 'accession';
   if (kind.includes('citation') || kind.includes('bibliographic') || hasAnyKey(record, ['doi', 'pmid', 'title', 'year', 'journal'])) return 'bibliographic';
   return 'unknown';
+}
+
+function isFigureReproductionRecord(record: Record<string, unknown>) {
+  return hasAnyKey(record, [
+    'figureId',
+    'code',
+    'codeRef',
+    'codeRefs',
+    'inputRefs',
+    'inputDataRef',
+    'inputDataRefs',
+    'outputFigureRef',
+    'outputFigureRefs',
+    'stdoutRef',
+    'stdoutRefs',
+    'stderrRef',
+    'stderrRefs',
+    'statistics',
+    'statisticsRefs',
+    'statisticalMethod',
+  ]);
+}
+
+function isDatasetIdentifierVerificationRecord(record: Record<string, unknown>) {
+  return hasAnyKey(record, ['accession', 'accessionId', 'identifier', 'identifierVerifications', 'verified', 'isVerified', 'verificationStatus', 'checkStatus']);
 }
 
 function isVerified(record: Record<string, unknown>) {

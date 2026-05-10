@@ -35,7 +35,8 @@ assertRepairNeededAgentServer(cellResult, 'complex-cell-atlas');
 console.log('[ok] AgentServer unavailable diagnostics include route, package refs, required inputs, and recovery actions');
 
 function assertRepairNeededAgentServer(result: Awaited<ReturnType<typeof runWorkspaceRuntimeGateway>>, scenarioId: string) {
-  assert.equal(result.artifacts.length, 0);
+  assert.ok(result.artifacts.some((artifact) => artifact.type === 'runtime-diagnostic'));
+  assert.ok(result.artifacts.some((artifact) => artifact.type === 'verification-result'));
   assert.equal(result.executionUnits.length, 1);
 
   const unit = result.executionUnits[0] as Record<string, unknown>;
@@ -44,6 +45,6 @@ function assertRepairNeededAgentServer(result: Awaited<ReturnType<typeof runWork
   assert.equal((unit.scenarioPackageRef as Record<string, unknown> | undefined)?.id, scenarioId);
   assert.equal((unit.routeDecision as Record<string, unknown> | undefined)?.selectedRuntime, 'agentserver-generation');
   assert.ok((unit.requiredInputs as string[] | undefined)?.includes('agentServerBaseUrl'));
-  assert.ok((unit.recoverActions as string[] | undefined)?.some((action) => /Start or configure AgentServer/.test(action)));
-  assert.match(String(unit.nextStep), /Start AgentServer|local skill/);
+  assert.ok((unit.recoverActions as string[] | undefined)?.some((action) => /AgentServer|网络|network/i.test(action)));
+  assert.match(String(unit.nextStep), /AgentServer|network|服务恢复|local skill|重试/i);
 }

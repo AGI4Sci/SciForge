@@ -30,6 +30,74 @@
       "summary": "GitHub repository named in the 2025 paper code availability statement for uniform histone-mark ChIP-seq processing."
     }
   ],
+  "identifierVerifications": [
+    {
+      "id": "paper-2020-prdm9-identity",
+      "kind": "bibliographic",
+      "doi": "10.1038/s41422-020-0281-1",
+      "title": "Refined spatial temporal epigenomic profiling reveals intrinsic connection between PRDM9-mediated H3K4me3 and the fate of double-stranded breaks",
+      "year": 2020,
+      "journal": "Cell Research",
+      "verified": true,
+      "status": "verified",
+      "checkedAt": "2026-05-11",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#title-doi",
+          "role": "source",
+          "summary": "Paper title, journal year, and DOI locator extracted from the local PDF text."
+        }
+      ]
+    },
+    {
+      "id": "paper-2025-setd1b-identity",
+      "kind": "bibliographic",
+      "doi": "10.1038/s41422-025-01080-0",
+      "title": "SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development",
+      "year": 2025,
+      "journal": "Cell Research",
+      "verified": true,
+      "status": "verified",
+      "checkedAt": "2026-05-11",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#title-doi",
+          "role": "source",
+          "summary": "Paper title, journal year, and DOI locator extracted from the local PDF text."
+        }
+      ]
+    },
+    {
+      "id": "accession-gse132446",
+      "kind": "accession",
+      "accession": "GSE132446",
+      "verified": true,
+      "status": "verified",
+      "checkedAt": "2026-05-11",
+      "evidenceRefs": [
+        {
+          "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE132446",
+          "role": "data",
+          "summary": "Official GEO Series page verified as public data source for the 2020 paper."
+        }
+      ]
+    },
+    {
+      "id": "accession-gse242515",
+      "kind": "accession",
+      "accession": "GSE242515",
+      "verified": true,
+      "status": "verified",
+      "checkedAt": "2026-05-11",
+      "evidenceRefs": [
+        {
+          "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE242515",
+          "role": "data",
+          "summary": "Official GEO Series page verified as public data source for the 2025 paper."
+        }
+      ]
+    }
+  ],
   "datasets": [
     {
       "id": "dataset-2020-gse132446",

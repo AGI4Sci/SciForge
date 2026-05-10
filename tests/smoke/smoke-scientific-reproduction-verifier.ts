@@ -40,16 +40,16 @@ const passingResult = await provider.verify({
       type: 'figure-reproduction-report',
       data: {
         verdict: 'partially-reproduced',
-        figures: [{
-          figureId: 'figure-1',
-          codeRef: 'artifact:notebook-1',
-          inputDataRefs: ['artifact:dataset-table-1'],
-          parameters: { threshold: 0.05, normalization: 'median-ratio' },
-          stdoutRef: 'trace:run-001/stdout',
-          stderrRef: 'trace:run-001/stderr',
-          statisticalMethod: 'two-sided permutation test with FDR correction',
-          evidenceRefs: ['artifact:plot-1', 'artifact:stats-1'],
-        }],
+        figureId: 'figure-1',
+        claimIds: ['claim-a'],
+        codeRefs: ['artifact:notebook-1'],
+        inputRefs: ['artifact:dataset-table-1'],
+        outputFigureRefs: ['artifact:plot-1'],
+        parameters: { threshold: 0.05, normalization: 'median-ratio' },
+        stdoutRefs: ['trace:run-001/stdout'],
+        stderrRefs: ['trace:run-001/stderr'],
+        statisticsRefs: ['artifact:stats-1'],
+        evidenceRefs: ['artifact:plot-1', 'artifact:stats-1'],
       },
     },
     {
@@ -94,6 +94,81 @@ assert.equal(passingResult.diagnostics.identifierVerificationCount, 2);
 assert.ok(passingResult.evidenceRefs.includes('artifact:notebook-1'));
 assert.ok(passingResult.criterionResults.every((criterion) => criterion.passed));
 
+const mapOnlyFigureResult = verifyScientificReproduction({
+  artifacts: [
+    {
+      id: 'claim-graph-1',
+      type: 'paper-claim-graph',
+      data: {
+        claims: [
+          {
+            id: 'claim-a',
+            text: 'A mapped claim has source evidence.',
+            locatorRefs: ['artifact:paper#page-1'],
+            evidenceRefs: ['artifact:paper#page-1'],
+          },
+        ],
+      },
+    },
+    {
+      id: 'figure-map-1',
+      type: 'figure-to-claim-map',
+      data: {
+        figures: [
+          {
+            id: 'figure-1',
+            label: 'Figure 1',
+            locatorRefs: ['artifact:paper#figure-1'],
+            claimIds: ['claim-a'],
+          },
+        ],
+      },
+    },
+    {
+      id: 'claim-verdict-2',
+      type: 'claim-verdict',
+      data: {
+        claimId: 'claim-a',
+        verdict: 'insufficient-evidence',
+        rationale: 'The figure is mapped to a claim, but no reproduction report has been produced yet.',
+        supportingEvidenceRefs: ['artifact:paper#figure-1'],
+        missingEvidence: [{ reason: 'No executable reproduction artifact yet.' }],
+      },
+    },
+    {
+      id: 'identifier-verification-1',
+      type: 'dataset-inventory',
+      data: {
+        identifierVerifications: [
+          {
+            id: 'paper-id',
+            kind: 'bibliographic',
+            doi: '10.1000/example',
+            title: 'Reusable paper identity fixture',
+            year: 2024,
+            journal: 'Example Journal',
+            verified: true,
+            evidenceRefs: ['artifact:paper-metadata-1'],
+          },
+        ],
+      },
+    },
+  ],
+});
+assert.equal(mapOnlyFigureResult.verdict, 'pass');
+assert.equal(mapOnlyFigureResult.diagnostics.figureReproductionCount, 0);
+assert.ok(mapOnlyFigureResult.diagnostics.scientificVerdicts.includes('insufficient-evidence'));
+assert.ok(mapOnlyFigureResult.criterionResults.find((criterion) => criterion.id === 'figure-reproduction-evidence' && criterion.passed));
+assert.ok(mapOnlyFigureResult.criterionResults.find((criterion) => criterion.id === 'scientific-verdict-vocabulary' && criterion.passed));
+
+const requiredFigureResult = verifyScientificReproduction({
+  ...mapOnlyFigureResultRequest(),
+  providerHints: { requireFigureReproduction: true },
+});
+assert.equal(requiredFigureResult.verdict, 'fail');
+assert.equal(requiredFigureResult.diagnostics.figureReproductionCount, 0);
+assert.ok(requiredFigureResult.criterionResults.find((criterion) => criterion.id === 'figure-reproduction-evidence' && !criterion.passed && criterion.message === 'No figure reproduction records were found.'));
+
 const failingResult = verifyScientificReproduction({
   artifacts: [
     {
@@ -131,3 +206,67 @@ assert.ok(capabilityManifest.routingTags.includes('negative-result-report'));
 assert.ok(capabilityManifest.providers.some((manifestProvider) => manifestProvider.id === provider.id));
 
 console.log('[ok] scientific reproduction verifier checks generic evidence and negative-result contracts');
+
+function mapOnlyFigureResultRequest() {
+  return {
+    artifacts: [
+      {
+        id: 'claim-graph-1',
+        type: 'paper-claim-graph',
+        data: {
+          claims: [
+            {
+              id: 'claim-a',
+              text: 'A mapped claim has source evidence.',
+              locatorRefs: ['artifact:paper#page-1'],
+              evidenceRefs: ['artifact:paper#page-1'],
+            },
+          ],
+        },
+      },
+      {
+        id: 'figure-map-1',
+        type: 'figure-to-claim-map',
+        data: {
+          figures: [
+            {
+              id: 'figure-1',
+              label: 'Figure 1',
+              locatorRefs: ['artifact:paper#figure-1'],
+              claimIds: ['claim-a'],
+            },
+          ],
+        },
+      },
+      {
+        id: 'claim-verdict-2',
+        type: 'claim-verdict',
+        data: {
+          claimId: 'claim-a',
+          verdict: 'insufficient-evidence',
+          rationale: 'The figure is mapped to a claim, but no reproduction report has been produced yet.',
+          supportingEvidenceRefs: ['artifact:paper#figure-1'],
+          missingEvidence: [{ reason: 'No executable reproduction artifact yet.' }],
+        },
+      },
+      {
+        id: 'identifier-verification-1',
+        type: 'dataset-inventory',
+        data: {
+          identifierVerifications: [
+            {
+              id: 'paper-id',
+              kind: 'bibliographic',
+              doi: '10.1000/example',
+              title: 'Reusable paper identity fixture',
+              year: 2024,
+              journal: 'Example Journal',
+              verified: true,
+              evidenceRefs: ['artifact:paper-metadata-1'],
+            },
+          ],
+        },
+      },
+    ],
+  };
+}

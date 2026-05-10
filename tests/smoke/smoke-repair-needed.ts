@@ -12,16 +12,17 @@ const result = await runWorkspaceRuntimeGateway({
   workspacePath: workspace,
 });
 
-assert.equal(result.artifacts.length, 1);
-assert.equal(result.artifacts[0].type, 'verification-result');
-assert.equal((result.artifacts[0].metadata as Record<string, unknown>).verdict, 'unverified');
+assert.ok(result.artifacts.some((artifact) => artifact.type === 'runtime-diagnostic'));
+const verificationArtifact = result.artifacts.find((artifact) => artifact.type === 'verification-result');
+assert.ok(verificationArtifact);
+assert.equal((verificationArtifact.metadata as Record<string, unknown>).verdict, 'unverified');
 assert.equal(result.executionUnits.length, 1);
 assert.equal(result.executionUnits[0].status, 'repair-needed');
 assert.match(String(result.executionUnits[0].failureReason || result.message), /AgentServer|base URL|generation/i);
 assert.equal(result.executionUnits[0].codeRef, undefined);
 assert.equal(result.executionUnits[0].stderrRef, undefined);
-assert.deepEqual(result.executionUnits[0].outputArtifacts, []);
-assert.deepEqual(result.executionUnits[0].artifacts, []);
+assert.deepEqual(result.executionUnits[0].outputArtifacts, ['omics-runtime-result']);
+assert.deepEqual(result.executionUnits[0].artifacts, ['omics-runtime-result']);
 
 const attemptsDir = join(workspace, '.sciforge', 'task-attempts');
 let attemptFiles: string[] = [];

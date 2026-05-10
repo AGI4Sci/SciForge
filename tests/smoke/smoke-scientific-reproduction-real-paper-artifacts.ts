@@ -51,6 +51,21 @@ const datasetInventory = artifactNamed('dataset-inventory-draft.json');
 const datasets = arrayField(datasetInventory, 'datasets');
 assert.ok(datasets.some((dataset) => JSON.stringify(dataset).includes('GSE132446')), '2020 GEO source should be recorded');
 assert.ok(datasets.some((dataset) => JSON.stringify(dataset).includes('GSE242515')), '2025 GEO source should be recorded');
+const identifierVerifications = arrayField(datasetInventory, 'identifierVerifications');
+assert.ok(
+  identifierVerifications.some((record) => JSON.stringify(record).includes('10.1038/s41422-020-0281-1')),
+  '2020 DOI verification should be structured rather than only prose in sourceRefs',
+);
+assert.ok(
+  identifierVerifications.some((record) => JSON.stringify(record).includes('10.1038/s41422-025-01080-0')),
+  '2025 DOI verification should be structured rather than only prose in sourceRefs',
+);
+for (const accession of ['GSE132446', 'GSE242515']) {
+  assert.ok(
+    identifierVerifications.some((record) => isRecord(record) && record.kind === 'accession' && JSON.stringify(record).includes(accession) && record.verified === true),
+    `${accession} should have a machine-checkable verified accession record`,
+  );
+}
 
 const claimVerdict = artifactNamed('claim-verdict-draft.json');
 assert.equal(stringField(claimVerdict, 'verdict'), 'insufficient-evidence');
