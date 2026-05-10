@@ -134,6 +134,8 @@ Todo：
 
 草案：下一步把 verifier-only debit 从 `packages/verifiers/agent-rubric` 推进到 human approval provider adapter；保持 verifier result 持有 `budgetDebitRefs` / `auditRefs`，debit `subjectRefs` 指向 verifier result 与输入 evidence refs，`sinkRefs.auditRefs` 指向 verifier audit。
 
+草案（T129-D）：generated-task / AgentServer direct-payload 成功路径已开始写 `CapabilityBudgetDebit`，debit id 由 task/run/runtime refs 确定性生成，并在 final payload 回挂 executionUnit、workEvidence、attempt 与 capability-evolution ledger refs；后续继续把同一成功 debit 模式推广到 remaining runtime capabilities，并保持 materialize / repair rerun idempotent。
+
 Todo：
 
 - [ ] 将 `packages/skills`、`packages/actions`、`packages/observe`、`packages/verifiers`、`packages/presentation` 和 core runtime capabilities 投影成统一 `CapabilityManifest`。（packages/skills、tool_skills、actions/verifiers 与全部 26 个 presentation/view 真实 package manifest 已进入默认 registry；observe/core runtime breadth 仍继续推进。）
@@ -142,7 +144,7 @@ Todo：
 - [x] 将 `scoreSkillByPackagePolicy`、tool package manifests、observe provider selection、Computer Use action plan 统一包装为默认 candidate callbacks。（首片为 shadow projection，不改变真实 broker 路由。）
 - [x] 将 `summarizeToolsForAgentServer()` 改为按 harness/capability budget 输出 budgeted tool briefs，不再默认空数组。
 - [x] Broker 输入接收 `skillHints`、`blockedCapabilities`、`CapabilityBudget`、`verificationPolicy`、provider availability 和 ledger history。
-- [ ] 每次 capability invocation 写入 `budgetDebits` 到 executionUnit/workEvidence/audit；已完成 `literature.retrieval` offline runner、`action.sciforge.computer-use` / `local.vision-sense` Computer Use loop、包级 Python Computer Use loop、observe invocation success/provider-unavailable、`packages/verifiers/agent-rubric` package verifier、runtime verification gate、payload schema validation failure、completed-payload work-evidence failure 和 current-reference usage failure。
+- [ ] 每次 capability invocation 写入 `budgetDebits` 到 executionUnit/workEvidence/audit；已完成 `literature.retrieval` offline runner、`action.sciforge.computer-use` / `local.vision-sense` Computer Use loop、包级 Python Computer Use loop、observe invocation success/provider-unavailable、`packages/verifiers/agent-rubric` package verifier、generated-task / AgentServer direct-payload success、generated-task validation guard failure、runtime verification gate、payload schema validation failure、completed-payload work-evidence failure 和 current-reference usage failure。
 - [x] 增加 `smoke:unified-capability-graph`：同一 prompt 下 skill/tool/observe/action/verifier 都能作为候选进入 broker audit，且安全/配置/预算 gate 生效；真实 package action/verifier manifest 默认可见且保持 lazy audit。
 - [x] 增加 `smoke:capability-broker-harness-input`：harness hints/budget/provider/verification policy 进入 broker compact audit，blocked capability 不能绕过 gate。
 - [x] 增加 `smoke:capability-budget-debits`：单次 capability invocation 能生成带 executionUnit/workEvidence/audit sink refs 的 budget debit record。
@@ -242,6 +244,8 @@ Todo：
 - 2026-05-10：T127-L repair/audit chain 接入 opt-in harness repair policy。payload validation 与 runtime verification gate 生成 chain 时可在 feature flag 下从 HarnessContract 收紧 repair budget / fail-closed 决策，并把 harness policy 摘要写入 audit refs/sink refs。
 - 2026-05-10：T127-M 继续收敛 generation failure lifecycle。AgentServer generation failure、current reference digest self-heal recovery、generation failure attempt append 与 repair-needed payload 生成迁入 `generated-task-runner-generation-lifecycle.ts`，`generated-task-runner.ts` 降到 146 行，只保留 generation/direct/retry/execution/output lifecycle 编排。
 - 2026-05-10：T127-N 统一 AuditSink/TelemetrySink readback summary 字段。verification artifact、observe invocation、action-result 与 telemetry spans 现在共用 target/source/counts/status/outcome/failure/sink/telemetry refs 形状，smoke 覆盖 action-result、verification artifact、observe invocation 和 telemetry summary 回读。
+- 2026-05-10：T127-O generated-task guard failure 接入 validation/repair/audit chain。WorkEvidence guard 与 guidance adoption guard 现在能投影为统一 finding，repair-needed payload 会回挂 `refs.validationRepairAudit` / telemetry refs，并写 `sciforge.validation-guard` budget debit 到 executionUnit、workEvidence 与 audit log refs。
+- 2026-05-10：T129-D generated-task / AgentServer direct-payload success 接入 `CapabilityBudgetDebit`。成功 payload 现在写 `sciforge.generated-task-runner` 或 `sciforge.agentserver.direct-payload` debit，回挂 executionUnit、WorkEvidence、attempt refs、budget audit log 与 capability evolution ledger refs。
 
 Todo：
 

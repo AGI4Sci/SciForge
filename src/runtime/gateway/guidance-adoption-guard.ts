@@ -1,8 +1,11 @@
 import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
+import type { ValidationFindingProjectionInput } from '@sciforge-ui/runtime-contract/validation-repair-audit';
 
 const ACTIVE_GUIDANCE_STATUSES = new Set(['queued', 'deferred']);
 const DECISION_STATUSES = new Set(['adopted', 'deferred', 'rejected']);
+export const GUIDANCE_ADOPTION_GUARD_CONTRACT_ID = 'sciforge.guidance-adoption.v1';
+export const GUIDANCE_ADOPTION_GUARD_SCHEMA_PATH = 'src/runtime/gateway/guidance-adoption-guard.ts#evaluateGuidanceAdoption';
 
 export interface GuidanceAdoptionFinding {
   severity: 'repair-needed';
@@ -37,6 +40,39 @@ export function evaluateGuidanceAdoption(payload: ToolPayload, request: GatewayR
     reason: `TaskProject guidance adoption contract failed: ${parts.join('; ')}.`,
     missingIds,
     invalidIds,
+  };
+}
+
+export function validationFindingProjectionFromGuidanceAdoptionFinding(
+  finding: GuidanceAdoptionFinding,
+  options: {
+    id?: string;
+    capabilityId?: string;
+    relatedRefs?: string[];
+  } = {},
+): ValidationFindingProjectionInput {
+  return {
+    id: options.id,
+    source: 'harness',
+    kind: 'guidance-adoption',
+    status: finding.severity,
+    failureMode: 'guidance-adoption',
+    severity: 'blocking',
+    message: finding.reason,
+    contractId: GUIDANCE_ADOPTION_GUARD_CONTRACT_ID,
+    schemaPath: GUIDANCE_ADOPTION_GUARD_SCHEMA_PATH,
+    capabilityId: options.capabilityId ?? 'sciforge.validation-guard',
+    relatedRefs: options.relatedRefs,
+    recoverActions: [
+      'Regenerate the payload with guidanceDecisions for every queued or deferred guidance item.',
+      'Record each guidance decision as adopted, deferred, or rejected with a reason before marking the task complete.',
+    ],
+    diagnostics: {
+      guard: 'guidance-adoption',
+      missingIds: finding.missingIds,
+      invalidIds: finding.invalidIds,
+    },
+    isFailure: true,
   };
 }
 

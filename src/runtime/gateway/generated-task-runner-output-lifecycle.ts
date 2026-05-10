@@ -7,8 +7,13 @@ import { isRecord } from '../gateway-utils.js';
 import { maybeWriteSkillPromotionProposal } from '../skill-promotion.js';
 import { materializeBackendPayloadOutput } from './artifact-materializer.js';
 import {
+  attachGeneratedTaskSuccessBudgetDebit,
   appendGeneratedTaskAttemptLifecycle,
   assessGeneratedTaskValidationLifecycle,
+  annotateGeneratedTaskGuardValidationFailurePayload,
+  capabilityEvolutionLedgerRefsFromResult,
+  generatedTaskSuccessBudgetDebitAuditRefs,
+  generatedTaskSuccessBudgetDebitId,
   recordGeneratedTaskSuccessLedgerLifecycle,
   runGeneratedTaskParseRepairLifecycle,
   runGeneratedTaskPreOutputRepairLifecycle,
@@ -110,7 +115,16 @@ export async function completeGeneratedTaskRunOutputLifecycle(
       });
       if (repaired) return repaired;
       if (lifecycle.normalizedRepairNeeded && normalized) return normalized;
-      return deps.repairNeededPayload(request, skill, lifecycle.repair.failureReason);
+      return await annotateGeneratedTaskGuardValidationFailurePayload({
+        payload: deps.repairNeededPayload(request, skill, lifecycle.repair.failureReason),
+        sourcePayload: normalized ?? payload,
+        workspacePath: workspace,
+        request,
+        skill,
+        refs,
+        schemaErrors: errors,
+        guardFinding: lifecycle.guardFinding,
+      });
     }
 
     await appendGeneratedTaskAttemptLifecycle({
@@ -125,6 +139,22 @@ export async function completeGeneratedTaskRunOutputLifecycle(
       schemaErrors: errors,
       workEvidenceSummary: lifecycle.workEvidenceSummary,
       failureReason: lifecycle.attemptFailureReason,
+      budgetDebitRefs: [generatedTaskSuccessBudgetDebitId({
+        request,
+        skill,
+        taskId,
+        runId: generation.runId,
+        refs,
+        source: 'generated-task',
+      })],
+      budgetDebitAuditRefs: generatedTaskSuccessBudgetDebitAuditRefs({
+        request,
+        skill,
+        taskId,
+        runId: generation.runId,
+        refs,
+        source: 'generated-task',
+      }),
     });
     if (!normalized) {
       return deps.repairNeededPayload(request, skill, 'AgentServer generated task output could not be normalized after schema validation.');
@@ -151,7 +181,7 @@ export async function completeGeneratedTaskRunOutputLifecycle(
 
     if (lifecycle.normalizedFailureStatus) return normalized;
     const completed = await completeSuccessfulGeneratedTaskPayload(input, normalized);
-    await recordGeneratedTaskSuccessLedgerLifecycle({
+    const ledgerResult = await recordGeneratedTaskSuccessLedgerLifecycle({
       workspacePath: workspace,
       request,
       skill,
@@ -161,7 +191,18 @@ export async function completeGeneratedTaskRunOutputLifecycle(
       payload: completed,
       refs,
     });
-    return await materializeBackendPayloadOutput(workspace, request, completed, refs);
+    const completedWithDebit = attachGeneratedTaskSuccessBudgetDebit({
+      request,
+      skill,
+      taskId,
+      runId: generation.runId,
+      payload: completed,
+      refs,
+      source: 'generated-task',
+      runtimeLabel: 'AgentServer generated workspace task',
+      ledgerRefs: capabilityEvolutionLedgerRefsFromResult(ledgerResult),
+    });
+    return await materializeBackendPayloadOutput(workspace, request, completedWithDebit, refs);
   } catch (error) {
     const repair = await runGeneratedTaskParseRepairLifecycle({
       workspacePath: workspace,

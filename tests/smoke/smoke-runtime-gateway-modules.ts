@@ -300,6 +300,12 @@ try {
     selectedSenseIds: ['observe.vision'],
     selectedComponentIds: ['report-viewer'],
     selectedVerifierIds: ['verifier.schema'],
+    uiState: {
+      ...request.uiState,
+      capabilityBrokerPolicy: {
+        preferredCapabilityIds: ['verifier.schema'],
+      },
+    },
   }, {
     workspace,
     workspaceTreeSummary: [],
@@ -312,8 +318,8 @@ try {
   assert.equal(brokerBrief.schemaVersion, 'sciforge.agentserver.capability-broker-brief.v1');
   assert.equal(brokerBrief.contract, 'sciforge.capability-broker-output.v1');
   assert.match(brokerBriefText, /view\.report/);
-  assert.match(brokerBriefText, /verifier\.schema/);
   assert.match(brokerBriefText, /observe\.vision/);
+  assert.match(brokerBriefText, /verifier\.schema/);
   assert.equal(brokerBriefText.includes('sciforge.runtime-capability-catalog.v1'), false);
 
   const currentReferenceRequest = {
@@ -493,8 +499,17 @@ try {
   assert.ok(generatedPayload?.objectReferences?.some((reference) => /^file:\.sciforge\/task-results\/generated-literature-/.test(String(reference.ref))));
   assert.match(String((generatedPayload?.artifacts[0]?.metadata as Record<string, unknown> | undefined)?.reportRef), /^\.sciforge\/task-results\/generated-literature-.*runner-report\.md$/);
   assert.match(await readFile(join(workspace, `.sciforge/task-results/${runnerAttemptId}.json`), 'utf8'), /runner-report\.md/);
+  const generatedTaskDebit = generatedPayload?.budgetDebits?.find((debit) => debit.capabilityId === 'sciforge.generated-task-runner');
+  assert.ok(generatedTaskDebit, 'successful generated task should emit a capability budget debit');
+  assert.equal(generatedTaskDebit.sinkRefs.executionUnitRef, 'runner');
+  assert.ok(generatedTaskDebit.sinkRefs.workEvidenceRefs.some((ref) => ref.includes('generated-task:')));
+  assert.ok(generatedTaskDebit.sinkRefs.auditRefs.some((ref) => ref.startsWith('audit:capability-budget-debit:generated-task:')));
+  assert.ok(hasBudgetDebitRef(generatedPayload?.executionUnits[0], generatedTaskDebit.debitId));
+  assert.ok(generatedPayload?.workEvidence?.some((entry) => hasBudgetDebitRef(entry, generatedTaskDebit.debitId)));
+  assert.ok(generatedPayload?.logs?.some((entry) => hasBudgetDebitRef(entry, generatedTaskDebit.debitId)));
   const runnerAttempts = await readTaskAttempts(workspace, runnerAttemptId);
   assert.equal(runnerAttempts[0]?.status, 'done');
+  assert.ok(hasBudgetDebitRef(runnerAttempts[0], generatedTaskDebit.debitId));
 
   let emptyRetrievalRepairCalled = false;
   let emptyRetrievalTaskId = '';

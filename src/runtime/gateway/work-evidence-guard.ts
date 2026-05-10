@@ -1,8 +1,11 @@
 import {
   evaluateWorkEvidencePolicy,
+  WORK_EVIDENCE_POLICY_CONTRACT_ID,
+  WORK_EVIDENCE_POLICY_SCHEMA_PATH,
   type WorkEvidencePolicyFinding,
   type WorkEvidencePolicyPayload,
 } from '@sciforge-ui/runtime-contract/work-evidence-policy';
+import type { ValidationFindingProjectionInput } from '@sciforge-ui/runtime-contract/validation-repair-audit';
 import { contractValidationFailureFromRepairReason } from '@sciforge-ui/runtime-contract/validation-failure';
 import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
 import type { RepairPolicyRefs } from './repair-policy.js';
@@ -24,6 +27,39 @@ export function contractValidationFailureFromWorkEvidenceFinding(
 
 export function evaluateToolPayloadEvidence(payload: ToolPayload, request: GatewayRequest): WorkEvidenceGuardFinding | undefined {
   return evaluateWorkEvidencePolicy(payload as unknown as WorkEvidencePolicyPayload, { prompt: request.prompt });
+}
+
+export function validationFindingProjectionFromWorkEvidenceGuardFinding(
+  finding: WorkEvidenceGuardFinding,
+  options: {
+    id?: string;
+    capabilityId?: string;
+    relatedRefs?: string[];
+  } = {},
+): ValidationFindingProjectionInput {
+  return {
+    id: options.id,
+    source: 'work-evidence',
+    kind: 'work-evidence',
+    status: finding.severity,
+    failureMode: finding.kind,
+    severity: finding.severity === 'failed-with-reason' ? 'error' : 'blocking',
+    message: finding.reason,
+    contractId: WORK_EVIDENCE_POLICY_CONTRACT_ID,
+    schemaPath: WORK_EVIDENCE_POLICY_SCHEMA_PATH,
+    capabilityId: options.capabilityId ?? 'sciforge.validation-guard',
+    relatedRefs: options.relatedRefs,
+    recoverActions: [
+      'Regenerate the payload with durable WorkEvidence refs, provider diagnostics, or an explicit failed-with-reason status.',
+      'Preserve the guard finding and output refs in validation-repair-audit before retrying.',
+    ],
+    diagnostics: {
+      guard: 'work-evidence',
+      guardKind: finding.kind,
+      severity: finding.severity,
+    },
+    isFailure: true,
+  };
 }
 
 function relatedRefsFromRepairRefs(refs: RepairPolicyRefs) {

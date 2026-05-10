@@ -7,9 +7,15 @@ import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { materializeBackendPayloadOutput, type RuntimeRefBundle } from './artifact-materializer.js';
 import {
+  attachGeneratedTaskSuccessBudgetDebit,
   appendGeneratedTaskDirectPayloadAttemptLifecycle,
   appendGeneratedTaskGenerationFailureLifecycle,
   assessGeneratedTaskDirectPayloadLifecycle,
+  annotateGeneratedTaskGuardValidationFailurePayload,
+  capabilityEvolutionLedgerRefsFromResult,
+  generatedTaskSuccessBudgetDebitAuditRefs,
+  generatedTaskSuccessBudgetDebitId,
+  recordAgentServerDirectPayloadSuccessLedgerLifecycle,
 } from './generated-task-runner-validation-lifecycle.js';
 import { reportRuntimeResultViewSlots } from '../../../packages/presentation/interactive-views';
 import {
@@ -174,8 +180,9 @@ export async function completeAgentServerDirectPayloadLifecycle(input: {
   source: string;
   callbacks?: WorkspaceRuntimeCallbacks;
 }): Promise<ToolPayload> {
+  const taskId = stableAgentServerPayloadTaskId(input.stableTaskKind, input.request, input.skill, input.generation.runId);
   const refs = backendPayloadRefs(
-    stableAgentServerPayloadTaskId(input.stableTaskKind, input.request, input.skill, input.generation.runId),
+    taskId,
     AGENTSERVER_DIRECT_PAYLOAD_TASK_REF,
   );
   await writeBackendPayloadLogs(input.workspace, refs, input.logLine);
@@ -206,11 +213,36 @@ export async function completeAgentServerDirectPayloadLifecycle(input: {
     skill: input.skill,
     runId: input.generation.runId,
     refs,
+    payload: normalized,
     lifecycle,
     attemptPlanRefs: input.deps.attemptPlanRefs,
+    budgetDebitRefs: [generatedTaskSuccessBudgetDebitId({
+      request: input.request,
+      skill: input.skill,
+      taskId,
+      runId: input.generation.runId,
+      refs,
+      source: 'agentserver-direct-payload',
+    })],
+    budgetDebitAuditRefs: generatedTaskSuccessBudgetDebitAuditRefs({
+      request: input.request,
+      skill: input.skill,
+      taskId,
+      runId: input.generation.runId,
+      refs,
+      source: 'agentserver-direct-payload',
+    }),
   });
   if (lifecycle.guardFailureReason) {
-    return input.deps.repairNeededPayload(input.request, input.skill, lifecycle.guardFailureReason);
+    return await annotateGeneratedTaskGuardValidationFailurePayload({
+      payload: input.deps.repairNeededPayload(input.request, input.skill, lifecycle.guardFailureReason),
+      sourcePayload: normalized,
+      workspacePath: input.workspace,
+      request: input.request,
+      skill: input.skill,
+      refs,
+      guardFinding: lifecycle.guardFinding,
+    });
   }
   if (lifecycle.payloadFailureStatus) return normalized;
   const completed = {
@@ -227,7 +259,41 @@ export async function completeAgentServerDirectPayloadLifecycle(input: {
       agentServerRunId: input.generation.runId,
     } : unit),
   };
-  return await materializeBackendPayloadOutput(input.workspace, input.request, completed, refs);
+  const ledgerResult = await recordAgentServerDirectPayloadSuccessLedgerLifecycle({
+    workspacePath: input.workspace,
+    request: input.request,
+    skill: input.skill,
+    runId: input.generation.runId,
+    payload: completed,
+    refs,
+  });
+  const completedWithDebit = attachGeneratedTaskSuccessBudgetDebit({
+    request: input.request,
+    skill: input.skill,
+    taskId,
+    runId: input.generation.runId,
+    payload: completed,
+    refs,
+    source: 'agentserver-direct-payload',
+    runtimeLabel: 'AgentServer direct ToolPayload',
+    ledgerRefs: capabilityEvolutionLedgerRefsFromResult(ledgerResult),
+  });
+  const directDebit = completedWithDebit.budgetDebits?.find((debit) => debit.capabilityId === 'sciforge.agentserver.direct-payload');
+  if (directDebit) {
+    await appendGeneratedTaskDirectPayloadAttemptLifecycle({
+      workspacePath: input.workspace,
+      request: input.request,
+      skill: input.skill,
+      runId: input.generation.runId,
+      refs,
+      payload: completedWithDebit,
+      lifecycle,
+      attemptPlanRefs: input.deps.attemptPlanRefs,
+      budgetDebitRefs: [directDebit.debitId],
+      budgetDebitAuditRefs: directDebit.sinkRefs.auditRefs,
+    });
+  }
+  return await materializeBackendPayloadOutput(input.workspace, input.request, completedWithDebit, refs);
 }
 
 export function backendPayloadRefs(taskId: string, taskRel: string): RuntimeRefBundle {

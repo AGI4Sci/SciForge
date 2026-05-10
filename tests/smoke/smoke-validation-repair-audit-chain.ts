@@ -26,6 +26,7 @@ import {
   agentHarnessRepairPolicyBridgeFromRuntimeState,
   createValidationRepairAuditChain,
 } from '../../src/runtime/gateway/validation-repair-audit-bridge';
+import { annotateGeneratedTaskGuardValidationFailurePayload } from '../../src/runtime/gateway/generated-task-runner-validation-lifecycle';
 import { appendTaskAttempt, readTaskAttempts } from '../../src/runtime/task-attempt-history';
 import type { SkillAvailability, TaskAttemptRecord, ToolPayload } from '../../src/runtime/runtime-types';
 
@@ -411,11 +412,89 @@ try {
   };
   const payloadRefs = {
     taskRel: 'agentserver://direct-payload',
+    inputRel: '.sciforge/task-inputs/real-guard-failure.json',
     outputRel: '.sciforge/task-results/real-schema-failure.json',
     stdoutRel: '.sciforge/logs/real-schema-failure.stdout.log',
     stderrRel: '.sciforge/logs/real-schema-failure.stderr.log',
     runtimeFingerprint: { runtime: 'smoke' },
   };
+  const workEvidenceGuardPayload = await annotateGeneratedTaskGuardValidationFailurePayload({
+    payload: {
+      message: 'Claim verified.',
+      confidence: 0.91,
+      claimType: 'fact',
+      evidenceLevel: 'verified',
+      reasoningTrace: 'Marked verified without durable evidence refs.',
+      claims: [{ text: 'The generated result is verified.', status: 'verified', confidence: 0.91 }],
+      uiManifest: [],
+      executionUnits: [{ id: 'EU-work-evidence-guard', status: 'done', tool: 'agentserver.direct' }],
+      artifacts: [],
+    },
+    workspacePath: workspace,
+    request,
+    skill,
+    refs: payloadRefs,
+  }) as ToolPayload & {
+    refs?: {
+      validationRepairAudit?: {
+        validationDecision?: ValidationDecision;
+        repairDecision?: RepairDecision;
+        auditRecord?: AuditRecord;
+      };
+      validationRepairTelemetry?: Array<{ spanKinds?: string[] }>;
+    };
+  };
+  const workEvidenceGuardChain = workEvidenceGuardPayload.refs?.validationRepairAudit;
+  assert.equal(workEvidenceGuardChain?.validationDecision?.findings[0]?.kind, 'work-evidence');
+  assert.equal(workEvidenceGuardChain?.validationDecision?.findings[0]?.source, 'work-evidence');
+  assert.equal(workEvidenceGuardChain?.auditRecord?.contractId, 'sciforge.work-evidence.v1');
+  assert.equal(workEvidenceGuardChain?.auditRecord?.failureKind, 'work-evidence');
+  assert.equal(workEvidenceGuardChain?.repairDecision?.action, 'repair-rerun');
+  assert.ok(workEvidenceGuardChain?.auditRecord?.sinkRefs.some((ref) => ref.startsWith('appendTaskAttempt:validation-guard:')));
+  assert.ok(workEvidenceGuardChain?.auditRecord?.sinkRefs.some((ref) => ref.startsWith('ledger:validation-guard:')));
+  assert.equal(workEvidenceGuardPayload.budgetDebits?.[0]?.capabilityId, 'sciforge.validation-guard');
+  assert.ok(hasBudgetDebitRef(workEvidenceGuardPayload.executionUnits[0], workEvidenceGuardPayload.budgetDebits?.[0]?.debitId ?? ''));
+  assert.ok(workEvidenceGuardPayload.refs?.validationRepairTelemetry?.[0]?.spanKinds?.includes('work-evidence'));
+
+  const guidanceGuardPayload = await annotateGeneratedTaskGuardValidationFailurePayload({
+    payload: {
+      message: 'Guidance was handled.',
+      confidence: 0.88,
+      claimType: 'fact',
+      evidenceLevel: 'runtime',
+      reasoningTrace: 'No guidanceDecisions were emitted.',
+      claims: [],
+      uiManifest: [],
+      executionUnits: [{ id: 'EU-guidance-guard', status: 'done', tool: 'agentserver.direct' }],
+      artifacts: [],
+    },
+    workspacePath: workspace,
+    request: {
+      ...request,
+      uiState: {
+        userGuidanceQueue: [{ id: 'scope', status: 'queued', message: 'Use the narrower scope.' }],
+      },
+    },
+    skill,
+    refs: {
+      ...payloadRefs,
+      outputRel: '.sciforge/task-results/real-guidance-guard-failure.json',
+    },
+  }) as ToolPayload & {
+    refs?: {
+      validationRepairAudit?: {
+        validationDecision?: ValidationDecision;
+        repairDecision?: RepairDecision;
+        auditRecord?: AuditRecord;
+      };
+    };
+  };
+  const guidanceGuardChain = guidanceGuardPayload.refs?.validationRepairAudit;
+  assert.equal(guidanceGuardChain?.validationDecision?.findings[0]?.kind, 'guidance-adoption');
+  assert.equal(guidanceGuardChain?.auditRecord?.contractId, 'sciforge.guidance-adoption.v1');
+  assert.equal(guidanceGuardChain?.auditRecord?.failureKind, 'guidance-adoption');
+  assert.equal(guidanceGuardPayload.budgetDebits?.[0]?.capabilityId, 'sciforge.validation-guard');
+
   const repairPayload = await validateAndNormalizePayload({
     message: 'Schema failure path should produce audit chain refs.',
     confidence: 0.4,
@@ -637,4 +716,14 @@ function buildChain(input: {
 
 function chainShape(chain: { validation: ValidationDecision; repair: ReturnType<typeof decideRepairPolicy>; audit: AuditRecord }) {
   return `${chain.validation.subject.kind}:${chain.audit.failureKind}:${chain.repair.action}:${chain.audit.outcome}`;
+}
+
+function hasBudgetDebitRef(record: unknown, debitId: string) {
+  return Boolean(
+    debitId
+    && record
+    && typeof record === 'object'
+    && Array.isArray((record as { budgetDebitRefs?: unknown }).budgetDebitRefs)
+    && ((record as { budgetDebitRefs: unknown[] }).budgetDebitRefs).includes(debitId),
+  );
 }
