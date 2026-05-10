@@ -324,13 +324,15 @@ function agentHarnessVerificationPolicyProjection(
   },
 ): { policy: NonNullable<GatewayRequest['verificationPolicy']>; audit: Record<string, unknown> } | undefined {
   const agentHarness = isRecord(input.uiState.agentHarness) ? input.uiState.agentHarness : {};
-  const enabled = [
-    input.uiState.agentHarnessVerificationPolicyEnabled,
-    input.uiState.agentHarnessConsumeVerificationPolicy,
-    agentHarness.verificationPolicyEnabled,
-    agentHarness.consumeVerificationPolicy,
+  const disabled = [
+    input.uiState.agentHarnessVerificationPolicyDisabled,
+    input.uiState.agentHarnessSkipVerificationPolicy,
+    input.uiState.agentHarnessDisableVerificationPolicy,
+    agentHarness.verificationPolicyDisabled,
+    agentHarness.skipVerificationPolicy,
+    agentHarness.disableVerificationPolicy,
   ].some(isEnabledFlag);
-  if (!enabled) return undefined;
+  if (disabled) return undefined;
   const verificationPolicy = isRecord(contract.verificationPolicy) ? contract.verificationPolicy : undefined;
   if (!verificationPolicy) return undefined;
   const projected = runtimeVerificationPolicyFromHarness(verificationPolicy, input);

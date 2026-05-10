@@ -12,19 +12,33 @@ const baseRequest = normalizeGatewayRequest({
   artifacts: [],
 });
 
-const shadowOnly = await requestWithAgentHarnessShadow({
+const defaultConsumed = await requestWithAgentHarnessShadow({
   ...baseRequest,
   uiState: {
     harnessProfileId: 'research-grade',
   },
 }, {}, { status: 'applied' });
-assert.equal(shadowOnly.verificationPolicy, undefined, 'harness shadow mode must not change verification policy by default');
+assert.equal(defaultConsumed.verificationPolicy?.required, true, 'harness verification policy should tighten by default');
+assert.equal(defaultConsumed.verificationPolicy?.mode, 'hybrid');
+assert.equal(defaultConsumed.verificationPolicy?.riskLevel, 'high');
+assert.equal(
+  (defaultConsumed.uiState?.agentHarnessVerificationPolicy as Record<string, unknown> | undefined)?.harnessIntensity,
+  'strict',
+);
+
+const disabled = await requestWithAgentHarnessShadow({
+  ...baseRequest,
+  uiState: {
+    harnessProfileId: 'research-grade',
+    agentHarnessVerificationPolicyDisabled: true,
+  },
+}, {}, { status: 'applied' });
+assert.equal(disabled.verificationPolicy, undefined, 'explicit kill switch should preserve shadow-only verification behavior');
 
 const consumed = await requestWithAgentHarnessShadow({
   ...baseRequest,
   uiState: {
     harnessProfileId: 'research-grade',
-    agentHarnessVerificationPolicyEnabled: true,
   },
 }, {}, { status: 'applied' });
 
@@ -50,7 +64,6 @@ const tightened = await requestWithAgentHarnessShadow({
   },
   uiState: {
     harnessProfileId: 'research-grade',
-    agentHarnessVerificationPolicyEnabled: true,
   },
 }, {}, { status: 'applied' });
 
@@ -61,4 +74,4 @@ assert.deepEqual(tightened.verificationPolicy?.selectedVerifierIds, ['schema.ver
 assert.match(tightened.verificationPolicy?.reason ?? '', /caller supplied a lightweight policy/);
 assert.match(tightened.verificationPolicy?.reason ?? '', /Harness policy consumed/);
 
-console.log('[ok] agent harness verification policy can opt in to tighten runtime verification without changing shadow defaults');
+console.log('[ok] agent harness verification policy tightens runtime verification by default with an explicit kill switch');
