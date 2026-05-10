@@ -27,17 +27,23 @@ def stable_loop_id(request: ComputerUseRequest) -> str:
     return digest[:12]
 
 
-def create_loop_budget_debit(request: ComputerUseRequest, steps: Sequence[LoopStep], status: str) -> dict[str, Any]:
+def create_loop_budget_debit(
+    request: ComputerUseRequest,
+    steps: Sequence[LoopStep],
+    status: str,
+    metrics: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Create one CapabilityBudgetDebit record for a Computer Use loop result."""
 
     loop_id = stable_loop_id(request)
-    action_steps = sum(1 for step in steps if step.plan.kind is not None)
+    metric_values = metrics or _fallback_metrics(steps)
     observe_refs = _unique_strings(
         [step.before.ref for step in steps]
         + [step.after.ref for step in steps if step.after is not None]
     )
-    observe_calls = len(observe_refs)
-    cost_units = action_steps + observe_calls
+    action_steps = _numeric_metric(metric_values, "actionSteps")
+    observe_calls = _numeric_metric(metric_values, "observeCalls")
+    cost_units = _numeric_metric(metric_values, "costUnits")
     audit_ref = f"audit:computer-use-loop:{loop_id}"
     execution_unit_ref = f"executionUnit:computer-use-loop:{loop_id}"
     work_evidence_ref = f"workEvidence:computer-use-loop:{loop_id}"
@@ -115,3 +121,22 @@ def _unique_strings(values: Sequence[Any]) -> list[str]:
         seen.add(item)
         result.append(item)
     return result
+
+
+def _fallback_metrics(steps: Sequence[LoopStep]) -> dict[str, Any]:
+    action_steps = sum(1 for step in steps if step.plan.kind is not None)
+    observe_calls = sum(1 for step in steps if step.before) + sum(
+        1 for step in steps if step.after
+    )
+    return {
+        "actionSteps": action_steps,
+        "observeCalls": observe_calls,
+        "costUnits": action_steps + observe_calls,
+    }
+
+
+def _numeric_metric(metrics: Mapping[str, Any], key: str) -> int | float:
+    value = metrics.get(key)
+    if isinstance(value, (int, float)):
+        return value
+    return 0

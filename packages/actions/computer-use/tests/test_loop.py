@@ -87,6 +87,9 @@ def test_sense_agnostic_loop_completes_with_fake_provider():
     assert {line["dimension"] for line in debit["debitLines"]} >= {"actionSteps", "observeCalls", "costUnits"}
     assert next(line for line in debit["debitLines"] if line["dimension"] == "actionSteps")["amount"] == 1
     assert next(line for line in debit["debitLines"] if line["dimension"] == "observeCalls")["amount"] == 2
+    assert next(line for line in debit["debitLines"] if line["dimension"] == "costUnits")[
+        "amount"
+    ] == result.metrics["costUnits"]
 
 
 def test_high_risk_action_needs_confirmation_and_does_not_execute():
@@ -103,6 +106,22 @@ def test_high_risk_action_needs_confirmation_and_does_not_execute():
     assert result.steps[0].budget_debit_refs == result.budget_debit_refs
     assert executor.calls == []
     assert result.failure_diagnostics["riskLevel"] == "high"
+
+
+def test_failed_step_without_action_kind_keeps_budget_debit_ref():
+    sense = FakeSense()
+    planner = FakePlanner([
+        ActionPlan(reason="no safe action"),
+    ])
+
+    result = run_computer_use_task("missing plan", sense, planner, FakeExecutor(), FakeVerifier())
+    trace = result_to_trace(result)
+    handoff = compact_result_for_handoff(result)
+
+    assert result.status == "failed-with-reason"
+    assert result.steps[0].budget_debit_refs == result.budget_debit_refs
+    assert trace["steps"][0]["budgetDebitRefs"] == list(result.budget_debit_refs)
+    assert handoff["actions"][0]["budgetDebitRefs"] == list(result.budget_debit_refs)
 
 
 def test_grounding_failure_is_structured():

@@ -138,6 +138,8 @@ Todo：
 
 2026-05-10：T129-D generated-task / AgentServer direct-payload 成功路径已接入 `CapabilityBudgetDebit`。debit id 由 task/run/runtime refs 确定性生成，final payload、executionUnit、workEvidence、attempt 与 capability-evolution ledger refs 都回挂同一 sink-addressable debit；后续继续把同一成功 debit 模式推广到 remaining runtime capabilities，并保持 materialize / repair rerun idempotent。
 
+2026-05-10：包级 Python Computer Use loop 的 budget debit 继续收紧。`run_computer_use_task()` 现在用统一 metrics 生成 `action.sciforge.computer-use` debit，blocked/failed step 也回挂 `budgetDebitRefs`，trace 与 compact handoff 的 action refs 保持同源。
+
 Todo：
 
 - [ ] 将 `packages/skills`、`packages/actions`、`packages/observe`、`packages/verifiers`、`packages/presentation` 和 core runtime capabilities 投影成统一 `CapabilityManifest`。（packages/skills、tool_skills、actions/verifiers 与全部 26 个 presentation/view 真实 package manifest 已进入默认 registry；observe/core runtime breadth 仍继续推进。）

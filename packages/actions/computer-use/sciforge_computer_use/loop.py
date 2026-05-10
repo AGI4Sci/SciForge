@@ -205,11 +205,12 @@ def _result(
     final_observation: Observation | None,
     diagnostics: Mapping[str, Any] | None = None,
 ) -> ComputerUseResult:
-    budget_debit = create_loop_budget_debit(request, steps, status)
+    metrics = _result_metrics(steps)
+    budget_debit = create_loop_budget_debit(request, steps, status, metrics)
     budget_debit_refs = (budget_debit["debitId"],)
     steps_with_refs = tuple(
         replace(step, budget_debit_refs=budget_debit_refs)
-        if step.plan.kind is not None
+        if _step_spends_budget(step)
         else step
         for step in steps
     )
@@ -219,14 +220,30 @@ def _result(
         steps=steps_with_refs,
         final_observation=final_observation,
         failure_diagnostics=dict(diagnostics or {}),
-        metrics={
-            "stepCount": len(steps),
-            "actionCount": sum(1 for step in steps if step.plan.kind is not None),
-            "observationCount": len({step.before.ref for step in steps} | {step.after.ref for step in steps if step.after}),
-        },
+        metrics=metrics,
         budget_debits=(budget_debit,),
         budget_debit_refs=budget_debit_refs,
     )
+
+
+def _result_metrics(steps: Sequence[LoopStep]) -> dict[str, Any]:
+    action_steps = sum(1 for step in steps if step.plan.kind is not None)
+    observe_calls = sum(1 for step in steps if step.before) + sum(
+        1 for step in steps if step.after
+    )
+    cost_units = action_steps + observe_calls
+    return {
+        "stepCount": len(steps),
+        "actionCount": action_steps,
+        "observationCount": observe_calls,
+        "actionSteps": action_steps,
+        "observeCalls": observe_calls,
+        "costUnits": cost_units,
+    }
+
+
+def _step_spends_budget(step: LoopStep) -> bool:
+    return step.plan.kind is not None or step.status in {"blocked", "failed"}
 
 
 def _coerce_request(value: ComputerUseRequest | Mapping[str, Any] | str) -> ComputerUseRequest:
