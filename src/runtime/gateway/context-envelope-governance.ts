@@ -1,5 +1,5 @@
 import type { GatewayRequest } from '../runtime-types.js';
-import { clipForAgentServerJson, isRecord, toStringList } from '../gateway-utils.js';
+import { clipForAgentServerJson, hashJson, isRecord, toStringList } from '../gateway-utils.js';
 
 export type ContextEnvelopeGovernanceBudget = {
   maxPromptTokens?: number;
@@ -18,6 +18,32 @@ type ContextEnvelopeGovernanceDecision = {
   omittedRefs?: string[];
   preservedRequiredRefs?: string[];
   missingRequiredRefs?: string[];
+  trace?: ContextEnvelopeSlimmingTrace;
+};
+
+type ContextEnvelopeSlimmingTrace = {
+  schemaVersion: 'sciforge.context-envelope.slimming-trace.v1';
+  decisionRef: string;
+  target: string;
+  reason: string;
+  source: string;
+  sourceRefs: {
+    contractRef?: string;
+    traceRef?: string;
+    budgetField?: string;
+  };
+  deterministic: true;
+  beforeCount: number;
+  afterCount: number;
+  maxCount?: number;
+  exceededByCount?: number;
+  inputRefs: string[];
+  keptRefs: string[];
+  omittedRefs: string[];
+  requiredRefs: string[];
+  preservedRequiredRefs: string[];
+  missingRequiredRefs: string[];
+  decisionDigest: string;
 };
 
 export type ContextEnvelopeGovernance = {
@@ -71,9 +97,11 @@ export function applyContextEnvelopeRecordGovernance(
   budget?: { maxCount?: number; budgetField?: keyof ContextEnvelopeGovernanceBudget },
 ) {
   if (!governance) return records;
-  const beforeRefs = records.map((record, index) => governanceRecordAuditRef(record, index));
-  const filtered = records.filter((record) => governanceRecordAllowed(record, governance));
-  const filteredRefs = filtered.map((record, index) => governanceRecordAuditRef(record, index));
+  const inputRecords = annotateGovernanceRecords(records);
+  const beforeRefs = inputRecords.map((entry) => entry.auditRef);
+  const filteredRecords = inputRecords.filter((entry) => governanceRecordAllowed(entry.record, governance));
+  const filtered = filteredRecords.map((entry) => entry.record);
+  const filteredRefs = filteredRecords.map((entry) => entry.auditRef);
   if (filtered.length !== records.length) {
     governance.decisions.push({
       id: `${target}:contract-ref-filter`,
@@ -87,22 +115,44 @@ export function applyContextEnvelopeRecordGovernance(
   }
   const maxCount = budget?.maxCount;
   if (maxCount === undefined || filtered.length <= maxCount) return filtered;
-  const slimmed = selectGovernanceBudgetedRecords(filtered, maxCount, governance.contextRefs.required);
-  governance.decisions.push({
-    id: `${target}:context-budget-${budget?.budgetField ?? 'maxCount'}`,
+  const slimmedRecords = selectGovernanceBudgetedRecords(filteredRecords, maxCount, governance.contextRefs.required);
+  const slimmed = slimmedRecords.map((entry) => entry.record);
+  const keptRefs = slimmedRecords.map((entry) => entry.auditRef);
+  const omittedRefs = filteredRefs.filter((ref) => !keptRefs.includes(ref)).slice(0, 16);
+  const preservedRequiredRefs = slimmedRecords
+    .filter((entry) => recordMatchesAnyRef(entry.record, governance.contextRefs.required))
+    .map((entry) => entry.auditRef)
+    .slice(0, 16);
+  const missingRequiredRefs = governance.contextRefs.required
+    .filter((ref) => !slimmedRecords.some((entry) => governanceRecordRefs(entry.record).includes(ref)))
+    .slice(0, 16);
+  const budgetField = budget?.budgetField ?? 'maxCount';
+  const trace = contextEnvelopeSlimmingTrace({
+    governance,
     target,
-    reason: `contextBudget.${budget?.budgetField ?? 'maxCount'}`,
-    source: `${governance.source}.contextBudget.${budget?.budgetField ?? 'maxCount'}`,
+    reason: `contextBudget.${budgetField}`,
+    source: `${governance.source}.contextBudget.${budgetField}`,
+    budgetField,
     beforeCount: filtered.length,
     afterCount: slimmed.length,
-    omittedRefs: filtered
-      .map((record, index) => governanceRecordAuditRef(record, index))
-      .filter((ref) => !slimmed.map((record, index) => governanceRecordAuditRef(record, index)).includes(ref))
-      .slice(0, 16),
-    preservedRequiredRefs: slimmed
-      .filter((record) => recordMatchesAnyRef(record, governance.contextRefs.required))
-      .map((record, index) => governanceRecordAuditRef(record, index))
-      .slice(0, 16),
+    maxCount,
+    inputRefs: filteredRefs,
+    keptRefs,
+    omittedRefs,
+    preservedRequiredRefs,
+    missingRequiredRefs,
+  });
+  governance.decisions.push({
+    id: `${target}:context-budget-${budgetField}`,
+    target,
+    reason: `contextBudget.${budgetField}`,
+    source: `${governance.source}.contextBudget.${budgetField}`,
+    beforeCount: filtered.length,
+    afterCount: slimmed.length,
+    omittedRefs,
+    preservedRequiredRefs,
+    missingRequiredRefs,
+    trace,
   });
   return slimmed;
 }
@@ -117,6 +167,10 @@ export function contextEnvelopeGovernanceAudit(governance: ContextEnvelopeGovern
     contextBudget: governance.contextBudget,
     contextRefs: governance.contextRefs,
     decisions: governance.decisions.map((decision) => clipForAgentServerJson(decision, 2)),
+    slimmingTrace: governance.decisions
+      .map((decision) => decision.trace)
+      .filter((trace): trace is ContextEnvelopeSlimmingTrace => Boolean(trace))
+      .map((trace) => clipForAgentServerJson(trace, 1)),
   };
 }
 
@@ -192,15 +246,15 @@ function contextEnvelopeGovernanceRefsFromRecord(contract: Record<string, unknow
 }
 
 function selectGovernanceBudgetedRecords(
-  records: Array<Record<string, unknown>>,
+  records: AnnotatedGovernanceRecord[],
   maxCount: number,
   requiredRefs: string[],
 ) {
   if (maxCount < 1) {
-    return records.filter((record) => recordMatchesAnyRef(record, requiredRefs));
+    return records.filter((entry) => recordMatchesAnyRef(entry.record, requiredRefs));
   }
   const selected = records.slice(0, maxCount);
-  for (const required of records.filter((record) => recordMatchesAnyRef(record, requiredRefs))) {
+  for (const required of records.filter((entry) => recordMatchesAnyRef(entry.record, requiredRefs))) {
     if (selected.includes(required)) continue;
     const replaceIndex = findLastNonRequiredRecordIndex(selected, requiredRefs);
     if (replaceIndex >= 0) selected[replaceIndex] = required;
@@ -209,11 +263,78 @@ function selectGovernanceBudgetedRecords(
   return selected;
 }
 
-function findLastNonRequiredRecordIndex(records: Array<Record<string, unknown>>, requiredRefs: string[]) {
+function findLastNonRequiredRecordIndex(records: AnnotatedGovernanceRecord[], requiredRefs: string[]) {
   for (let index = records.length - 1; index >= 0; index -= 1) {
-    if (!recordMatchesAnyRef(records[index], requiredRefs)) return index;
+    if (!recordMatchesAnyRef(records[index].record, requiredRefs)) return index;
   }
   return -1;
+}
+
+type AnnotatedGovernanceRecord = {
+  record: Record<string, unknown>;
+  index: number;
+  auditRef: string;
+};
+
+function annotateGovernanceRecords(records: Array<Record<string, unknown>>): AnnotatedGovernanceRecord[] {
+  return records.map((record, index) => ({
+    record,
+    index,
+    auditRef: governanceRecordAuditRef(record, index),
+  }));
+}
+
+function contextEnvelopeSlimmingTrace(input: {
+  governance: ContextEnvelopeGovernance;
+  target: string;
+  reason: string;
+  source: string;
+  budgetField: string;
+  beforeCount: number;
+  afterCount: number;
+  maxCount: number;
+  inputRefs: string[];
+  keptRefs: string[];
+  omittedRefs: string[];
+  preservedRequiredRefs: string[];
+  missingRequiredRefs: string[];
+}): ContextEnvelopeSlimmingTrace {
+  const base = {
+    schemaVersion: 'sciforge.context-envelope.slimming-trace.v1' as const,
+    decisionRef: '',
+    target: input.target,
+    reason: input.reason,
+    source: input.source,
+    sourceRefs: {
+      contractRef: input.governance.contractRef,
+      traceRef: input.governance.traceRef,
+      budgetField: input.budgetField,
+    },
+    deterministic: true as const,
+    beforeCount: input.beforeCount,
+    afterCount: input.afterCount,
+    maxCount: input.maxCount,
+    exceededByCount: Math.max(0, input.beforeCount - input.maxCount),
+    inputRefs: input.inputRefs.slice(0, 32),
+    keptRefs: input.keptRefs.slice(0, 32),
+    omittedRefs: input.omittedRefs.slice(0, 32),
+    requiredRefs: input.governance.contextRefs.required.slice(0, 32),
+    preservedRequiredRefs: input.preservedRequiredRefs.slice(0, 32),
+    missingRequiredRefs: input.missingRequiredRefs.slice(0, 32),
+  };
+  const decisionDigest = `sha1:${hashJson(base)}`;
+  return {
+    ...base,
+    decisionRef: `context-envelope-slimming:${hashJson({
+      target: input.target,
+      source: input.source,
+      contractRef: input.governance.contractRef,
+      traceRef: input.governance.traceRef,
+      keptRefs: input.keptRefs,
+      omittedRefs: input.omittedRefs,
+    })}`,
+    decisionDigest,
+  };
 }
 
 function governanceRecordAllowed(record: Record<string, unknown>, governance: ContextEnvelopeGovernance) {

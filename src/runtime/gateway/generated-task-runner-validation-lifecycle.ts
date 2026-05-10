@@ -4,6 +4,7 @@ import { relative, resolve, sep } from 'node:path';
 import type { ValidationFindingProjectionInput } from '@sciforge-ui/runtime-contract/validation-repair-audit';
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
+import { appendTaskAttempt } from '../task-attempt-history.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { evaluateGuidanceAdoption } from './guidance-adoption-guard.js';
 import { recordCapabilityEvolutionRuntimeEvent } from './capability-evolution-events.js';
@@ -26,6 +27,17 @@ type RepairAttemptRunner = (params: {
   callbacks?: WorkspaceRuntimeCallbacks;
 }) => Promise<ToolPayload | undefined>;
 
+type GeneratedTaskAttemptStatus = 'done' | 'repair-needed' | 'failed-with-reason';
+type AttemptPlanRefs = (request: GatewayRequest, skill?: SkillAvailability, fallbackReason?: string) => Record<string, unknown>;
+
+interface GeneratedTaskRuntimeRefs {
+  taskRel: string;
+  inputRel: string;
+  outputRel: string;
+  stdoutRel: string;
+  stderrRel: string;
+}
+
 export interface GeneratedTaskValidationLifecycleInput {
   payload: ToolPayload;
   normalized?: ToolPayload;
@@ -42,11 +54,26 @@ export interface GeneratedTaskValidationLifecycle {
   normalizedRepairNeeded: boolean;
   payloadFailureStatus: boolean;
   failureReason?: string;
-  attemptStatus: 'done' | 'repair-needed' | 'failed-with-reason';
+  attemptStatus: GeneratedTaskAttemptStatus;
   repair?: {
     failureReason: string;
     recoverActions: string[];
   };
+}
+
+export interface GeneratedTaskDirectPayloadLifecycleInput {
+  payload: ToolPayload;
+  request: GatewayRequest;
+  firstPayloadFailureReason(payload: ToolPayload, run?: WorkspaceTaskRunResult): string | undefined;
+  payloadHasFailureStatus(payload: ToolPayload): boolean;
+}
+
+export interface GeneratedTaskDirectPayloadLifecycle {
+  workEvidenceSummary: ReturnType<typeof summarizeWorkEvidenceForHandoff>;
+  payloadFailureStatus: boolean;
+  failureReason?: string;
+  attemptStatus: GeneratedTaskAttemptStatus;
+  guardFailureReason?: string;
 }
 
 export interface GeneratedTaskRepairAuditLifecycleInput {
@@ -67,6 +94,65 @@ export interface GeneratedTaskRepairAuditLifecycleInput {
   recoverActions: string[];
   callbacks?: WorkspaceRuntimeCallbacks;
   tryAgentServerRepairAndRerun: RepairAttemptRunner;
+}
+
+export interface GeneratedTaskAttemptLifecycleInput extends GeneratedTaskRuntimeRefs {
+  workspacePath: string;
+  request: GatewayRequest;
+  skill: SkillAvailability;
+  taskId: string;
+  run: WorkspaceTaskRunResult;
+  attemptPlanRefs: AttemptPlanRefs;
+  status: GeneratedTaskAttemptStatus;
+  schemaErrors?: string[];
+  workEvidenceSummary?: ReturnType<typeof summarizeWorkEvidenceForHandoff>;
+  failureReason?: string;
+}
+
+export interface GeneratedTaskRepairAttemptLifecycleInput extends GeneratedTaskRepairAuditLifecycleInput {
+  attemptPlanRefs: AttemptPlanRefs;
+  attemptStatus: GeneratedTaskAttemptStatus;
+  attemptSchemaErrors?: string[];
+  workEvidenceSummary?: ReturnType<typeof summarizeWorkEvidenceForHandoff>;
+  attemptFailureReason?: string;
+}
+
+export interface GeneratedTaskSuccessLedgerInput extends GeneratedTaskRuntimeRefs {
+  workspacePath: string;
+  request: GatewayRequest;
+  skill: SkillAvailability;
+  taskId: string;
+  runId?: string;
+  run: WorkspaceTaskRunResult;
+  payload: ToolPayload;
+}
+
+export function assessGeneratedTaskDirectPayloadLifecycle(
+  input: GeneratedTaskDirectPayloadLifecycleInput,
+): GeneratedTaskDirectPayloadLifecycle {
+  const evidenceFinding = evaluateToolPayloadEvidence(input.payload, input.request);
+  const guidanceFinding = evaluateGuidanceAdoption(input.payload, input.request);
+  const workEvidenceSummary = summarizeWorkEvidenceForHandoff(input.payload);
+  const payloadFailureReason = input.firstPayloadFailureReason(input.payload)
+    ?? firstRepairOrFailurePayloadReason(input.payload);
+  const payloadFailureStatus = input.payloadHasFailureStatus(input.payload) || payloadHasRepairOrFailureStatus(input.payload);
+  const guardFailureReason = !payloadFailureStatus ? guidanceFinding?.reason ?? evidenceFinding?.reason : undefined;
+  const failureReason = payloadFailureReason ?? guardFailureReason;
+  const attemptStatus = guidanceFinding
+    ? guidanceFinding.severity
+    : evidenceFinding
+      ? evidenceFinding.severity
+      : payloadFailureStatus
+        ? payloadAttemptStatus(input.payload)
+        : 'done';
+
+  return {
+    workEvidenceSummary,
+    payloadFailureStatus,
+    failureReason,
+    attemptStatus,
+    guardFailureReason,
+  };
 }
 
 export function assessGeneratedTaskValidationLifecycle(
@@ -130,6 +216,53 @@ export function assessGeneratedTaskValidationLifecycle(
   };
 }
 
+export async function appendGeneratedTaskAttemptLifecycle(
+  input: GeneratedTaskAttemptLifecycleInput,
+) {
+  await appendTaskAttempt(input.workspacePath, {
+    id: input.taskId,
+    prompt: input.request.prompt,
+    skillDomain: input.request.skillDomain,
+    ...input.attemptPlanRefs(input.request, input.skill),
+    skillId: input.skill.id,
+    attempt: 1,
+    status: input.status,
+    codeRef: input.taskRel,
+    inputRef: input.inputRel,
+    outputRef: input.outputRel,
+    stdoutRef: input.stdoutRel,
+    stderrRef: input.stderrRel,
+    exitCode: input.run.exitCode,
+    schemaErrors: input.schemaErrors,
+    workEvidenceSummary: input.workEvidenceSummary,
+    failureReason: input.failureReason,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+export async function runGeneratedTaskRepairAttemptLifecycle(
+  input: GeneratedTaskRepairAttemptLifecycleInput,
+): Promise<ToolPayload | undefined> {
+  await appendGeneratedTaskAttemptLifecycle({
+    workspacePath: input.workspacePath,
+    request: input.request,
+    skill: input.skill,
+    taskId: input.taskId,
+    run: input.run,
+    attemptPlanRefs: input.attemptPlanRefs,
+    status: input.attemptStatus,
+    taskRel: input.taskRel,
+    inputRel: input.inputRel,
+    outputRel: input.outputRel,
+    stdoutRel: input.stdoutRel,
+    stderrRel: input.stderrRel,
+    schemaErrors: input.attemptSchemaErrors,
+    workEvidenceSummary: input.workEvidenceSummary,
+    failureReason: input.attemptFailureReason ?? input.failureReason,
+  });
+  return await runGeneratedTaskRepairAuditLifecycle(input);
+}
+
 export async function runGeneratedTaskRepairAuditLifecycle(
   input: GeneratedTaskRepairAuditLifecycleInput,
 ): Promise<ToolPayload | undefined> {
@@ -186,6 +319,29 @@ export async function runGeneratedTaskRepairAuditLifecycle(
     },
   });
   return repairedWithAudit;
+}
+
+export async function recordGeneratedTaskSuccessLedger(
+  input: GeneratedTaskSuccessLedgerInput,
+) {
+  await writeCapabilityEvolutionEventBestEffort({
+    workspacePath: input.workspacePath,
+    request: input.request,
+    skill: input.skill,
+    taskId: input.taskId,
+    runId: input.runId,
+    run: input.run,
+    payload: input.payload,
+    taskRel: input.taskRel,
+    inputRel: input.inputRel,
+    outputRel: input.outputRel,
+    stdoutRel: input.stdoutRel,
+    stderrRel: input.stderrRel,
+    finalStatus: 'succeeded',
+    recoverActions: ['record-successful-dynamic-glue', 'preserve-runtime-evidence-refs'],
+    eventKind: 'dynamic-glue-execution',
+    promotionReason: 'Successful dynamic glue execution is ledger evidence; repeated compatible records can become promotion candidates.',
+  });
 }
 
 export function payloadHasRepairOrFailureStatus(payload: ToolPayload) {

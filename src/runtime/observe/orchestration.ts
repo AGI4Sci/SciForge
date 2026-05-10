@@ -2,6 +2,11 @@ import {
   buildObserveProviderUnavailableRecord,
   normalizeObserveInvocationDiagnostics,
 } from '@sciforge-ui/runtime-contract/observe';
+import {
+  createCapabilityBudgetDebitRecord,
+  type CapabilityBudgetDebitLine,
+  type CapabilityInvocationBudgetDebitRecord,
+} from '@sciforge-ui/runtime-contract/capability-budget';
 import type {
   ObserveFailureMode,
   ObserveIntent,
@@ -12,11 +17,21 @@ import type {
   ObserveProviderContract,
   ObserveResponse,
 } from '@sciforge-ui/runtime-contract/observe';
+import type { WorkEvidence } from '../gateway/work-evidence-types.js';
 import { createValidationRepairAuditChain } from '../gateway/validation-repair-audit-bridge.js';
 import {
   writeValidationRepairAuditSinkObserveInvocationRecords,
   type ValidationRepairAuditObserveInvocationWriteResult,
 } from '../gateway/validation-repair-audit-sink.js';
+import {
+  buildValidationRepairTelemetrySummary,
+  writeValidationRepairTelemetrySpans,
+  type ValidationRepairTelemetryAttemptRef,
+  type ValidationRepairTelemetrySummary,
+  type ValidationRepairTelemetryWriteResult,
+} from '../gateway/validation-repair-telemetry-sink.js';
+
+const OBSERVE_PROVIDER_INVOCATION_BUDGET_AUDIT_PREFIX = 'audit:observe-provider-invocation';
 
 export type {
   ObserveIntent,
@@ -39,8 +54,44 @@ export interface ObserveInvocationAuditSinkOptions {
   now?: () => Date;
 }
 
+export interface ObserveInvocationTelemetrySinkOptions {
+  workspacePath: string;
+  telemetryPath?: string;
+  now?: () => Date;
+  readSummary?: boolean;
+}
+
+export interface ObserveInvocationRuntimeRecord extends ObserveInvocationRecord {
+  budgetDebitRefs: string[];
+  budgetDebits: CapabilityInvocationBudgetDebitRecord[];
+  executionUnit: Record<string, unknown> & {
+    id: string;
+    tool: string;
+    status: ObserveInvocationRecord['status'];
+    budgetDebitRefs: string[];
+  };
+  workEvidence: WorkEvidence & {
+    id: string;
+    budgetDebitRefs: string[];
+  };
+  audit: {
+    kind: 'capability-budget-debit-audit';
+    ref: string;
+    callRef: string;
+    providerId: string;
+    status: ObserveInvocationRecord['status'];
+    budgetDebitRefs: string[];
+    sinkRefs: CapabilityInvocationBudgetDebitRecord['sinkRefs'];
+  };
+  refs?: {
+    validationRepairTelemetry?: ValidationRepairTelemetryAttemptRef[];
+  };
+  validationRepairTelemetrySummary?: ValidationRepairTelemetrySummary;
+}
+
 export interface RunObserveInvocationPlanOptions {
   validationRepairAuditSink?: ObserveInvocationAuditSinkOptions;
+  validationRepairTelemetrySink?: ObserveInvocationTelemetrySinkOptions;
 }
 
 export function buildObserveInvocationPlan(params: {
@@ -66,19 +117,20 @@ export async function runObserveInvocationPlan(
   plan: ObserveInvocationPlan,
   providers: ObserveProviderRuntime[],
   options: RunObserveInvocationPlanOptions = {},
-): Promise<ObserveInvocationRecord[]> {
+): Promise<ObserveInvocationRuntimeRecord[]> {
   const registry = new Map(providers.map((provider) => [provider.contract.id, provider]));
-  const records: ObserveInvocationRecord[] = [];
+  const records: ObserveInvocationRuntimeRecord[] = [];
   for (const invocation of plan.invocations) {
     const provider = registry.get(invocation.providerId);
     if (!provider) {
-      const record = buildObserveProviderUnavailableRecord(invocation);
+      const record = withObserveInvocationBudgetDebit(buildObserveProviderUnavailableRecord(invocation), plan);
       records.push(record);
       await writeObserveInvocationAuditSinkRecord(record, plan, options.validationRepairAuditSink);
+      await writeObserveInvocationTelemetrySinkRecord(record, plan, options.validationRepairTelemetrySink);
       continue;
     }
     const result = await provider.invoke(invocation);
-    const record: ObserveInvocationRecord = {
+    const record = withObserveInvocationBudgetDebit({
       ...invocation,
       status: result.status ?? 'ok',
       text: result.text,
@@ -86,9 +138,10 @@ export async function runObserveInvocationPlan(
       traceRef: result.traceRef,
       compactSummary: result.compactSummary,
       diagnostics: normalizeObserveInvocationDiagnostics(result.diagnostics),
-    };
+    }, plan);
     records.push(record);
     await writeObserveInvocationAuditSinkRecord(record, plan, options.validationRepairAuditSink);
+    await writeObserveInvocationTelemetrySinkRecord(record, plan, options.validationRepairTelemetrySink);
   }
   return records;
 }
@@ -101,6 +154,7 @@ export function compactObserveTraceRefs(records: ObserveInvocationRecord[]) {
     traceRef: record.traceRef,
     artifactRefs: record.artifactRefs,
     compactSummary: record.compactSummary,
+    budgetDebitRefs: observeRecordBudgetDebitRefs(record),
   }));
 }
 
@@ -127,10 +181,66 @@ async function writeObserveInvocationAuditSinkRecord(
   options: ObserveInvocationAuditSinkOptions | undefined,
 ): Promise<ValidationRepairAuditObserveInvocationWriteResult[] | undefined> {
   if (!options || record.status !== 'failed') return undefined;
-  const createdAt = options.now?.().toISOString();
+  const chain = createObserveInvocationValidationRepairAuditChain(record, plan, options.now);
+  return writeValidationRepairAuditSinkObserveInvocationRecords(chain, {
+    workspacePath: options.workspacePath,
+    invocationDir: options.invocationDir,
+    now: options.now,
+    observeInvocationRecords: [record],
+  });
+}
+
+async function writeObserveInvocationTelemetrySinkRecord(
+  record: ObserveInvocationRuntimeRecord,
+  plan: ObserveInvocationPlan,
+  options: ObserveInvocationTelemetrySinkOptions | undefined,
+): Promise<ValidationRepairTelemetryWriteResult | undefined> {
+  if (!options) return undefined;
+  try {
+    const chain = createObserveInvocationValidationRepairAuditChain(record, plan, options.now);
+    const writeResult = await writeValidationRepairTelemetrySpans(chain, {
+      workspacePath: options.workspacePath,
+      telemetryPath: options.telemetryPath,
+      now: options.now,
+    }, {
+      spanKinds: ['observe-invocation'],
+    });
+    if (!writeResult.records.length) return writeResult;
+    record.refs = {
+      ...record.refs,
+      validationRepairTelemetry: [
+        ...(record.refs?.validationRepairTelemetry ?? []),
+        {
+          kind: 'validation-repair-telemetry',
+          ref: writeResult.ref,
+          spanRefs: writeResult.projection.spanRefs,
+          recordRefs: writeResult.records.map((telemetryRecord) => telemetryRecord.ref),
+          spanKinds: ['observe-invocation'],
+        },
+      ],
+    };
+    if (options.readSummary) {
+      record.validationRepairTelemetrySummary = await buildValidationRepairTelemetrySummary({
+        workspacePath: options.workspacePath,
+        telemetryPath: options.telemetryPath,
+        now: options.now,
+      });
+    }
+    return writeResult;
+  } catch {
+    return undefined;
+  }
+}
+
+function createObserveInvocationValidationRepairAuditChain(
+  record: ObserveInvocationRecord,
+  plan: ObserveInvocationPlan,
+  now: (() => Date) | undefined,
+) {
+  const createdAt = now?.().toISOString();
   const response = observeResponseFromInvocationRecord(record);
   const relatedRefs = observeInvocationRelatedRefs(record, plan);
-  const chain = createValidationRepairAuditChain({
+  return createValidationRepairAuditChain({
     chainId: `observe-invocation:${safeObserveInvocationChainId(record.callRef)}`,
     subject: {
       kind: 'observe-result',
@@ -147,17 +257,11 @@ async function writeObserveInvocationAuditSinkRecord(
     telemetrySpanRefs: [`observe-invocation:${record.callRef}:validation-repair-telemetry`],
     repairBudget: {
       maxAttempts: 1,
-      remainingAttempts: 1,
+      remainingAttempts: record.status === 'failed' ? 1 : 0,
       maxSupplementAttempts: 0,
       remainingSupplementAttempts: 0,
     },
     createdAt,
-  });
-  return writeValidationRepairAuditSinkObserveInvocationRecords(chain, {
-    workspacePath: options.workspacePath,
-    invocationDir: options.invocationDir,
-    now: options.now,
-    observeInvocationRecords: [record],
   });
 }
 
@@ -192,6 +296,138 @@ function observeInvocationRelatedRefs(record: ObserveInvocationRecord, plan: Obs
     ...record.artifactRefs,
     ...record.modalities.map((modality) => modality.ref),
   ]);
+}
+
+function withObserveInvocationBudgetDebit(
+  record: ObserveInvocationRecord,
+  plan: ObserveInvocationPlan,
+): ObserveInvocationRuntimeRecord {
+  const safeCallRef = safeObserveInvocationChainId(record.callRef);
+  const executionUnitRef = `executionUnit:observe:${safeCallRef}`;
+  const workEvidenceRef = `workEvidence:observe:${safeCallRef}`;
+  const auditRef = `${OBSERVE_PROVIDER_INVOCATION_BUDGET_AUDIT_PREFIX}:${safeCallRef}`;
+  const budgetDebitRecord = createObserveInvocationBudgetDebitRecord({
+    record,
+    plan,
+    executionUnitRef,
+    workEvidenceRef,
+    auditRef,
+  });
+  const budgetDebitRefs = [budgetDebitRecord.debitId];
+  const executionUnit = {
+    id: executionUnitRef,
+    tool: record.providerId,
+    status: record.status,
+    params: JSON.stringify({
+      callRef: record.callRef,
+      instruction: record.instruction,
+      modalityRefs: record.modalities.map((modality) => modality.ref),
+    }),
+    inputData: record.modalities.map((modality) => modality.ref),
+    outputArtifacts: record.artifactRefs,
+    artifacts: record.artifactRefs,
+    outputRef: record.traceRef,
+    failureReason: record.status === 'failed' ? record.compactSummary : undefined,
+    budgetDebitRefs,
+  };
+  const workEvidence = {
+    id: workEvidenceRef,
+    kind: 'observe',
+    status: record.status === 'ok' ? 'success' : 'failed-with-reason',
+    provider: record.providerId,
+    input: {
+      callRef: record.callRef,
+      instruction: record.instruction,
+      modalities: record.modalities,
+      reason: record.reason,
+    },
+    resultCount: record.artifactRefs.length,
+    outputSummary: record.compactSummary,
+    evidenceRefs: uniqueStrings([record.traceRef, ...record.artifactRefs, ...record.modalities.map((modality) => modality.ref)]),
+    failureReason: record.status === 'failed' ? record.compactSummary : undefined,
+    recoverActions: record.status === 'failed' ? ['rerun with an available observe provider or compatible modality'] : [],
+    nextStep: record.status === 'failed' ? 'Select an observe provider that supports the requested modality refs.' : undefined,
+    diagnostics: observeInvocationDiagnosticMessages(record),
+    rawRef: record.traceRef,
+    budgetDebitRefs,
+  };
+  const audit = {
+    kind: 'capability-budget-debit-audit' as const,
+    ref: auditRef,
+    callRef: record.callRef,
+    providerId: record.providerId,
+    status: record.status,
+    budgetDebitRefs,
+    sinkRefs: budgetDebitRecord.sinkRefs,
+  };
+  return {
+    ...record,
+    budgetDebitRefs,
+    budgetDebits: [budgetDebitRecord],
+    executionUnit,
+    workEvidence,
+    audit,
+  };
+}
+
+function createObserveInvocationBudgetDebitRecord(input: {
+  record: ObserveInvocationRecord;
+  plan: ObserveInvocationPlan;
+  executionUnitRef: string;
+  workEvidenceRef: string;
+  auditRef: string;
+}): CapabilityInvocationBudgetDebitRecord {
+  const safeCallRef = safeObserveInvocationChainId(input.record.callRef);
+  const debitLines: CapabilityBudgetDebitLine[] = [
+    {
+      dimension: 'observeCalls',
+      amount: 1,
+      reason: 'observe provider invocation consumed one observe call',
+      sourceRef: input.record.callRef,
+    },
+    {
+      dimension: 'resultItems',
+      amount: input.record.artifactRefs.length,
+      reason: 'observe provider emitted artifact refs',
+      sourceRef: input.record.traceRef ?? input.record.callRef,
+    },
+  ];
+
+  return createCapabilityBudgetDebitRecord({
+    debitId: `budgetDebit:observe:${safeCallRef}`,
+    invocationId: `capabilityInvocation:observe:${safeCallRef}`,
+    capabilityId: input.record.providerId,
+    candidateId: input.record.providerId,
+    manifestRef: `capability:${input.record.providerId}`,
+    subjectRefs: uniqueStrings([
+      input.plan.runRef,
+      input.record.callRef,
+      ...(input.record.traceRef ? [input.record.traceRef] : []),
+      ...input.record.modalities.map((modality) => modality.ref),
+      ...input.record.artifactRefs,
+    ]),
+    debitLines,
+    sinkRefs: {
+      executionUnitRef: input.executionUnitRef,
+      workEvidenceRefs: [input.workEvidenceRef],
+      auditRefs: [input.auditRef, `observe-invocation:${input.record.callRef}`],
+    },
+    metadata: {
+      goal: input.plan.goal,
+      providerId: input.record.providerId,
+      status: input.record.status,
+      failureMode: input.record.diagnostics?.failureMode,
+      modalityKinds: input.record.modalities.map((modality) => modality.kind),
+      outputArtifactCount: input.record.artifactRefs.length,
+    },
+  });
+}
+
+function observeRecordBudgetDebitRefs(record: ObserveInvocationRecord): string[] | undefined {
+  const budgetDebitRefs = (record as { budgetDebitRefs?: unknown }).budgetDebitRefs;
+  return Array.isArray(budgetDebitRefs)
+    ? budgetDebitRefs.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : undefined;
 }
 
 function safeObserveInvocationChainId(value: string) {

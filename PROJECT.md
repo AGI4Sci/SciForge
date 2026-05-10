@@ -77,6 +77,8 @@ Todo：
 
 2026-05-10：新增结构化 continuity decision 小切片。`agentHarnessContinuityDecision()` 现在统一输出 fresh/continuation/repair 的 `useContinuity`、reason、trace/audit metadata；`requestNeedsAgentServerContinuity()` 委托该 decision 保持布尔行为不变，并在 opt-in `agentHarnessContinuityAuditEnabled` / `agentHarnessTraceContinuityDecision` 下把 decision 写入 handoff/metadata。
 
+2026-05-10：新增 opt-in backend selection decision 小切片。`agentServerBackendSelectionDecision()` 现在统一记录 request/env/llmEndpoint/default 的 backend 选择、source、runtime signals 与 trace；`agentServerBackend()` 保持原字符串行为并委托该 decision，打开 `agentHarnessBackendSelectionAuditEnabled` / `agentHarnessTraceBackendSelectionDecision` 后会把 decision 写入 AgentServer payload metadata 与 `agentHarnessHandoff`。
+
 Todo：
 
 - [x] 建立 `packages/agent-harness`：导出 `HarnessRuntime`、`HarnessProfile`、`HarnessCallback`、`HarnessContext`、`HarnessDecision`、`HarnessContract`、`HarnessTrace`、`HarnessStage`。
@@ -131,6 +133,12 @@ Todo：
 
 2026-05-10：`recoverable-attempts.ts` 抽出 recoverable recent attempt prompt matcher，`generation-gateway.ts` 降到 991 行并退出 1000 行 watch list。`buildCompactRepairContext` / `buildAgentServerRepairPrompt` 新增 repairContextPolicy evidence filtering/audit，按 `allowedFailureEvidenceRefs`、`blockedFailureEvidenceRefs`、stdout/stderr summary、validation findings 和 prior attempts policy 裁剪 repair prompt 输入。
 
+2026-05-10：PromptSplit-A/T128 将 AgentServer repair context policy summary、evidence filtering 和 audit helper 抽出到 `agentserver-repair-context-policy.ts`，`agentserver-prompts.ts` 只保留 compact repair context/prompt 调用并降到 848 行，退出 1000 行 watch list；compact repair / repair smokes 和 prompt prose guard 保持通过。
+
+2026-05-10：backend selection 已接入 metadata-only harness handoff。AgentServer generation dispatch 使用同一份 backend selection decision 选择 backend，并在 opt-in audit 下暴露到 input/runtime/top-level metadata 与 `agentHarnessHandoff.backendSelectionDecision`；默认不暴露新 metadata，stream guard 继续复用现有 `SilentStreamDecisionRecord`。
+
+2026-05-10：T128-B 补齐 context budget deterministic slimming trace。`contextEnvelopeGovernanceAudit` 在 contract 驱动的 reference digest budget 裁剪时输出 `sciforge.context-envelope.slimming-trace.v1`，包含 contract/trace refs、budget field、input/kept/omitted/required refs、decisionRef 和 digest；`normalizeBackendHandoff` 同步写出 `.sciforge/handoffs/*-slimming-trace.json`，并在 handoff manifest/audit refs 中回挂 trace ref、source HarnessContract refs 和 deterministic decisions。
+
 Todo：
 
 - [ ] `buildContextEnvelope` 只消费 `allowedContextRefs`、`blockedContextRefs`、`requiredContextRefs`、`contextBudget`、`repairContextPolicy`。
@@ -147,7 +155,7 @@ Todo：
 
 - [x] Prompt builder 不再是策略真相源。（generation/repair hardcoded policy prose guard 均为 0；新增策略句只能来自 runtime-contract、packages/skills/runtime-policy 或 harness rendered entries。）
 - [ ] Handoff payload 可以从 `HarnessContract` 和 refs 重建。
-- [ ] Context budget 超限时有 deterministic slimming trace。
+- [x] Context budget 超限时有 deterministic slimming trace。
 
 ### T127 Result Validation / Repair / Audit Pipeline：失败路径统一成决策链
 
@@ -177,6 +185,7 @@ Todo：
 - 2026-05-10：Capability Evolution Ledger compact facts 读路径保留 JSONL 真实行号；真实 generated-task runner success event 与 supplemental fallback lifecycle 写入后，`readCapabilityEvolutionLedgerFacts()` 可读回 success / fallback+success compact facts，`limit` 场景下 `recordRef` 不漂移。
 - 2026-05-10：AuditSink observe-invocation 真实落盘 wiring 接入 observe orchestration provider-unavailable 路径，写入 `.sciforge/validation-repair-audit/observe-invocations/*.json` 并可由 read helper/facts 回流。
 - 2026-05-10：repair-rerun TelemetrySink 真实写入完成。repair rerun audit chain 生成后 best-effort 写 `.sciforge/validation-repair-telemetry/spans.jsonl`，accepted rerun 也投影 `repair-rerun` span，并把 telemetry refs 回挂 payload / `readTaskAttempts()` metadata。
+- 2026-05-10：TelemetrySink observe-invocation 真实 wiring 接入 observe orchestration success/provider-unavailable 路径，best-effort 写 `.sciforge/validation-repair-telemetry/spans.jsonl`，并把 telemetry refs/可选 summary 回挂 observe invocation record。
 - 2026-05-10：Capability Evolution Ledger validation-repair audit 转换 helper 抽入 `capability-evolution-ledger-validation-audit.ts`，原 public API re-export 兼容，`capability-evolution-ledger.ts` 降到 813 行并退出 1000 行 watch list。
 
 Todo：
@@ -185,7 +194,7 @@ Todo：
 - [x] 建立 `RepairPolicyHarness`：统一决定 `none` / `repair-rerun` / `supplement` / `fail-closed` / `needs-human`。
 - [x] 建立 `RepairExecutor`：只执行 patch/rerun/supplement/peer handoff，不做策略判断。
 - [x] 建立 `AuditSink`：统一写 `appendTaskAttempt`、Capability Evolution Ledger、verification artifacts、observe invocation records。（appendTaskAttempt/read path、Capability Evolution Ledger validation/repair audit、verification artifact 与 observe-invocation 真实写入已接入。）
-- [x] 建立 `TelemetrySink`：记录 `generation/request`、`materialize`、`payload-validation`、`work-evidence`、`verification-gate`、`repair-decision`、`repair-rerun`、`ledger-write`、`observe-invocation` spans。（projection、jsonl 落盘/read/summary、gateway verification 后真实写入与 repair-rerun 真实写入已完成；observe telemetry 真实 wiring 仍待后续接入。）
+- [x] 建立 `TelemetrySink`：记录 `generation/request`、`materialize`、`payload-validation`、`work-evidence`、`verification-gate`、`repair-decision`、`repair-rerun`、`ledger-write`、`observe-invocation` spans。（projection、jsonl 落盘/read/summary、gateway verification、repair-rerun 与 observe-invocation 真实写入已完成。）
 - [ ] 将 `generated-task-runner` 收敛为生命周期编排：generate/run/validate/repair/audit。（validation/repair/audit 与 supplement lifecycle helper 已拆出，主入口 822 行并退出 watch list；剩余策略判断和 ledger input 仍需继续收敛。）
 - [x] Verification gate 结果必须回流 repair/audit，而不是只在最终 payload 上 fail closed。
 - [x] 增加 `smoke:validation-repair-audit-chain`：direct payload、generated task、observe result、verification gate 失败都能追溯 contract id、failure kind、related refs、repair budget、最终 outcome。

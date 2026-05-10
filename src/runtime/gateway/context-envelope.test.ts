@@ -131,6 +131,23 @@ test('context envelope can audit harness contract refs and context budget slimmi
     && entry.source === 'request.uiState.agentHarness.contract.contextBudget.maxReferenceDigests'
     && Array.isArray(entry.preservedRequiredRefs)
     && entry.preservedRequiredRefs.includes('ref:b')));
+  const slimmingTrace = records(audit.slimmingTrace);
+  assert.equal(slimmingTrace.length, 1);
+  const trace = slimmingTrace[0] ?? {};
+  assert.equal(trace.schemaVersion, 'sciforge.context-envelope.slimming-trace.v1');
+  assert.equal(trace.target, 'sessionFacts.currentReferenceDigests');
+  assert.equal(trace.deterministic, true);
+  assert.deepEqual(records([trace.sourceRefs])[0], {
+    contractRef: 'harness-contract:test-budget',
+    traceRef: 'harness-trace:test-budget',
+    budgetField: 'maxReferenceDigests',
+  });
+  assert.deepEqual(trace.inputRefs, ['ref:a', 'ref:b']);
+  assert.deepEqual(trace.keptRefs, ['ref:b']);
+  assert.deepEqual(trace.omittedRefs, ['ref:a']);
+  assert.deepEqual(trace.requiredRefs, ['ref:b']);
+  assert.equal(typeof trace.decisionRef, 'string');
+  assert.equal(typeof trace.decisionDigest, 'string');
 });
 
 test('repair context extracts WorkEvidence summary from failed output ref', async () => {

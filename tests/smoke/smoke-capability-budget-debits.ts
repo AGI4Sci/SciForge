@@ -7,6 +7,12 @@ import {
 } from '@sciforge-ui/runtime-contract/capability-budget';
 
 import { runOfflineLiteratureRetrieval } from '../../src/runtime/literature-retrieval-runner.js';
+import {
+  buildObserveInvocationPlan,
+  compactObserveTraceRefs,
+  runObserveInvocationPlan,
+  type ObserveProviderRuntime,
+} from '../../src/runtime/observe/orchestration.js';
 import { genericLoopPayload } from '../../src/runtime/vision-sense/computer-use-trace-output.js';
 
 const debitLines: CapabilityBudgetDebitLine[] = [
@@ -155,4 +161,47 @@ assert.ok(computerUsePayload.logs?.some((entry) => entry.ref === 'audit:vision-s
 assert.ok(computerUseDebit.debitLines.some((line) => line.dimension === 'actionSteps' && line.amount === 1 && line.remaining === 2));
 assert.ok(computerUseDebit.debitLines.some((line) => line.dimension === 'observeCalls' && line.amount === 2));
 
-console.log('[ok] capability invocation budget debit record is contract-shaped, sink-addressable, and wired into literature.retrieval plus Computer Use runtime output');
+const observeProvider: ObserveProviderRuntime = {
+  contract: {
+    id: 'local.vision-observe',
+    acceptedModalities: ['screenshot'],
+    outputKind: 'text',
+    expectedMultipleCalls: true,
+  },
+  async invoke(input) {
+    return {
+      status: 'ok',
+      text: `observed ${input.modalities[0]?.ref}`,
+      artifactRefs: ['artifact:observe-crop'],
+      traceRef: `${input.callRef}:trace`,
+      compactSummary: 'Observed the screenshot and emitted a cropped evidence artifact.',
+    };
+  },
+};
+
+const observePlan = buildObserveInvocationPlan({
+  goal: 'Budget debit observe provider invocation smoke',
+  runRef: 'run:budget-debit-observe',
+  providers: [observeProvider.contract],
+  intents: [{
+    instruction: 'Read the visible dialog title',
+    modalities: [{ kind: 'screenshot', ref: 'artifact:screenshot-budget-debit', mimeType: 'image/png' }],
+  }],
+});
+const observeRecords = await runObserveInvocationPlan(observePlan, [observeProvider]);
+const observeRecord = observeRecords[0];
+const observeDebit = observeRecord?.budgetDebits[0];
+assert.ok(observeRecord, 'observe provider invocation should emit a runtime record');
+assert.ok(observeDebit, 'observe provider invocation should emit a budget debit record');
+assert.equal(observeDebit.contract, CAPABILITY_BUDGET_DEBIT_CONTRACT_ID);
+assert.equal(observeDebit.capabilityId, 'local.vision-observe');
+assert.deepEqual(observeRecord.executionUnit.budgetDebitRefs, [observeDebit.debitId]);
+assert.deepEqual(observeRecord.workEvidence.budgetDebitRefs, [observeDebit.debitId]);
+assert.deepEqual(observeRecord.audit.budgetDebitRefs, [observeDebit.debitId]);
+assert.equal(observeDebit.sinkRefs.executionUnitRef, observeRecord.executionUnit.id);
+assert.deepEqual(observeDebit.sinkRefs.workEvidenceRefs, [observeRecord.workEvidence.id]);
+assert.ok(observeDebit.sinkRefs.auditRefs.includes(observeRecord.audit.ref));
+assert.ok(observeDebit.debitLines.some((line) => line.dimension === 'observeCalls' && line.amount === 1));
+assert.deepEqual(compactObserveTraceRefs(observeRecords)[0]?.budgetDebitRefs, [observeDebit.debitId]);
+
+console.log('[ok] capability invocation budget debit record is contract-shaped, sink-addressable, and wired into literature.retrieval, Computer Use, and observe provider invocation runtime output');

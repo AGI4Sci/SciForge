@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
+import { readCapabilityEvolutionRecords } from '../../src/runtime/capability-evolution-ledger.js';
 import { readTaskAttempts } from '../../src/runtime/task-attempt-history.js';
 import {
   buildValidationRepairTelemetrySummary,
@@ -172,6 +173,11 @@ try {
   assert.equal(enrichedAttempts[1]?.refs?.validationRepairAudit?.[0]?.outcome, 'accepted');
   assert.equal(enrichedAttempts[1]?.refs?.validationRepairTelemetry?.[0]?.ref, '.sciforge/validation-repair-telemetry/spans.jsonl');
   assert.ok(enrichedAttempts[1]?.refs?.validationRepairTelemetry?.some((ref) => ref.spanKinds?.includes('repair-rerun')));
+
+  const capabilityRecords = await readCapabilityEvolutionRecords({ workspacePath: workspace });
+  assert.ok(capabilityRecords.some((record) => record.recoverActions.includes('repair-generated-task')));
+  assert.ok(capabilityRecords.some((record) => record.finalStatus === 'repair-succeeded'
+    && record.repairAttempts.some((attempt) => attempt.status === 'succeeded')));
 
   console.log('[ok] agentserver repair smoke patches task code, reruns self-healed attempt, and records repair-rerun telemetry');
 } finally {

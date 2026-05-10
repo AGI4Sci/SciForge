@@ -87,6 +87,7 @@ try {
   const progressOptIn = await runHarnessRequest('balanced-default', {
     agentHarnessProgressPlanEnabled: true,
     agentHarnessContinuityAuditEnabled: true,
+    agentHarnessBackendSelectionAuditEnabled: true,
   });
 
   assert.equal(first.result.message, 'Harness shadow smoke completed.');
@@ -103,6 +104,7 @@ try {
   assert.equal(dispatches[0]?.metadata.harnessTraceRef, first.summary.traceRef);
   assert.equal(dispatches[0]?.metadata.harnessDecisionOwner, 'AgentServer');
   assert.equal(dispatches[0]?.metadata.agentHarnessContinuityDecision, undefined, 'continuity decision audit should stay off by default');
+  assert.equal(dispatches[0]?.metadata.agentHarnessBackendSelectionDecision, undefined, 'backend selection decision audit should stay off by default');
   assert.ok(isRecord(dispatches[0]?.metadata.harnessBudgetSummary), 'harness budget summary should be attached to payload metadata');
   assert.ok(isRecord(dispatches[0]?.metadata.agentHarnessHandoff), 'structured harness handoff metadata should be attached');
   const handoff = dispatches[0]?.metadata.agentHarnessHandoff as Record<string, unknown>;
@@ -142,6 +144,21 @@ try {
   assert.equal(continuityDecision.useContinuity, false);
   const continuityHandoff = dispatches[4]?.metadata.agentHarnessHandoff as Record<string, unknown>;
   assert.deepEqual(continuityHandoff.continuityDecision, continuityDecision);
+  const backendSelectionDecision = dispatches[4]?.metadata.agentHarnessBackendSelectionDecision as Record<string, unknown>;
+  assert.equal(backendSelectionDecision.schemaVersion, 'sciforge.agentserver-backend-selection-decision.v1');
+  assert.equal(backendSelectionDecision.shadowMode, true);
+  assert.equal(backendSelectionDecision.decisionOwner, 'AgentServer');
+  assert.equal(backendSelectionDecision.harnessStage, 'beforeAgentDispatch');
+  assert.equal(backendSelectionDecision.decision, 'openteam_agent');
+  assert.equal(backendSelectionDecision.backend, 'openteam_agent');
+  assert.equal(backendSelectionDecision.source, 'llmEndpoint.baseUrl');
+  const backendSignals = isRecord(backendSelectionDecision.runtimeSignals) ? backendSelectionDecision.runtimeSignals : {};
+  assert.equal(backendSignals.llmEndpointConfigured, true);
+  const backendHarnessSignals = isRecord(backendSelectionDecision.harnessSignals) ? backendSelectionDecision.harnessSignals : {};
+  assert.equal(backendHarnessSignals.contractRef, progressOptIn.summary.contractRef);
+  assert.equal(backendHarnessSignals.traceRef, progressOptIn.summary.traceRef);
+  assert.equal(typeof backendHarnessSignals.sourceCallbackId, 'string');
+  assert.deepEqual(continuityHandoff.backendSelectionDecision, backendSelectionDecision);
   const uiProgress = progressModelFromEvent(projected as unknown as Parameters<typeof progressModelFromEvent>[0]);
   assert.ok(String(projectedRaw.phase || ''), 'projected progress event should expose a contract phase');
   assert.ok(String(uiProgress?.phase || ''), 'UI progress should preserve a visible phase');

@@ -407,7 +407,7 @@ function spansForChain(chain: NormalizedTelemetryChain): ValidationRepairTelemet
   }
   if (subject?.observeTraceRef || audit?.sinkRefs.some((ref) => ref === 'observe-invocation' || ref.startsWith('observe-invocation:'))) {
     spans.push(spanForChain(chain, 'observe-invocation', {
-      status: 'recorded',
+      status: audit?.outcome ?? validation?.status ?? 'recorded',
       sourceRefs: uniqueStrings([
         subject?.observeTraceRef,
         ...(audit?.sinkRefs.filter((ref) => ref === 'observe-invocation' || ref.startsWith('observe-invocation:')) ?? []),

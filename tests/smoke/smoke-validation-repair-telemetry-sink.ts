@@ -19,6 +19,11 @@ import {
 } from '../../src/runtime/gateway/validation-repair-telemetry-sink';
 import { createValidationRepairAuditChain } from '../../src/runtime/gateway/validation-repair-audit-bridge';
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway';
+import {
+  buildObserveInvocationPlan,
+  runObserveInvocationPlan,
+  type ObserveProviderRuntime,
+} from '../../src/runtime/observe/orchestration';
 
 const createdAt = '2026-05-10T00:00:00.000Z';
 const repairBudget: RepairBudgetSnapshot = {
@@ -336,6 +341,72 @@ try {
 } finally {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   await rm(gatewayWorkspace, { recursive: true, force: true });
+}
+
+const observeWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-telemetry-observe-runtime-'));
+try {
+  const observeNow = () => new Date('2026-05-10T00:00:03.000Z');
+  const observeProvider: ObserveProviderRuntime = {
+    contract: {
+      id: 'local.vision-sense',
+      acceptedModalities: ['screenshot'],
+      outputKind: 'text',
+    },
+    async invoke(input) {
+      return {
+        status: 'ok',
+        text: 'Window title is SciForge telemetry smoke.',
+        artifactRefs: input.modalities.map((modality) => modality.ref),
+        traceRef: `${input.callRef}:trace`,
+        compactSummary: 'Observed SciForge telemetry smoke window title.',
+      };
+    },
+  };
+  const observePlan = buildObserveInvocationPlan({
+    goal: 'Record observe telemetry for provider success and failure',
+    runRef: 'run:observe-telemetry-smoke',
+    providers: [
+      observeProvider.contract,
+      { id: 'local.missing-ocr', acceptedModalities: ['image'], outputKind: 'text' },
+    ],
+    intents: [
+      {
+        providerId: 'local.vision-sense',
+        instruction: 'Read the visible window title',
+        modalities: [{ kind: 'screenshot', ref: 'artifact:observe-success-screenshot', mimeType: 'image/png' }],
+      },
+      {
+        providerId: 'local.missing-ocr',
+        instruction: 'Read the embedded figure label',
+        modalities: [{ kind: 'image', ref: 'artifact:observe-missing-provider-image', mimeType: 'image/png' }],
+      },
+    ],
+  });
+  const observeRecords = await runObserveInvocationPlan(observePlan, [observeProvider], {
+    validationRepairTelemetrySink: {
+      workspacePath: observeWorkspace,
+      now: observeNow,
+      readSummary: true,
+    },
+  });
+  assert.deepEqual(observeRecords.map((record) => record.status), ['ok', 'failed']);
+  assert.ok(observeRecords.every((record) => record.refs?.validationRepairTelemetry?.[0]?.spanKinds.includes('observe-invocation')));
+  assert.equal(observeRecords[0]?.validationRepairTelemetrySummary?.spanKindCounts['observe-invocation'], 1);
+  assert.equal(observeRecords[1]?.validationRepairTelemetrySummary?.spanKindCounts['observe-invocation'], 2);
+
+  const observeTelemetryRecords = await readValidationRepairTelemetrySpanRecords({ workspacePath: observeWorkspace });
+  assert.equal(observeTelemetryRecords.length, 2);
+  assert.ok(observeTelemetryRecords.some((record) => record.spanKind === 'observe-invocation' && record.span.status === 'accepted'));
+  assert.ok(observeTelemetryRecords.some((record) => record.spanKind === 'observe-invocation' && record.span.status === 'repair-requested'));
+  assert.ok(observeTelemetryRecords.some((record) => record.sourceRefs.includes('run:observe-telemetry-smoke:observe:001:trace')));
+  assert.ok(observeTelemetryRecords.some((record) => record.sourceRefs.includes('observe-invocation:run:observe-telemetry-smoke:observe:002')));
+
+  const observeSummary = await buildValidationRepairTelemetrySummary({ workspacePath: observeWorkspace });
+  assert.equal(observeSummary.sourceRef, '.sciforge/validation-repair-telemetry/spans.jsonl');
+  assert.equal(observeSummary.spanKindCounts['observe-invocation'], 2);
+  assert.equal(observeSummary.totalSpans, 2);
+} finally {
+  await rm(observeWorkspace, { recursive: true, force: true });
 }
 
 console.log('[ok] validation/repair telemetry sink projects, persists, and runtime gateway writes verification-gate spans into stable jsonl');

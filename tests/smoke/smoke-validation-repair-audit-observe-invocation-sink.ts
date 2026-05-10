@@ -8,6 +8,7 @@ import {
   runObserveInvocationPlan,
 } from '../../src/runtime/observe/orchestration';
 import { readValidationRepairAuditSinkObserveInvocationRecords } from '../../src/runtime/gateway/validation-repair-audit-sink';
+import { readValidationRepairTelemetrySpanRecords } from '../../src/runtime/gateway/validation-repair-telemetry-sink';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-validation-repair-observe-invocation-sink-'));
 const now = () => new Date('2026-05-10T00:00:00.000Z');
@@ -27,11 +28,29 @@ const records = await runObserveInvocationPlan(plan, [], {
     workspacePath: workspace,
     now,
   },
+  validationRepairTelemetrySink: {
+    workspacePath: workspace,
+    now,
+    readSummary: true,
+  },
 });
 
 assert.equal(records.length, 1);
 assert.equal(records[0]?.status, 'failed');
 assert.equal(records[0]?.diagnostics?.failureMode, 'provider-unavailable');
+const budgetDebit = records[0]?.budgetDebits[0];
+assert.ok(budgetDebit, 'observe provider unavailable invocation should emit a budget debit record');
+assert.equal(budgetDebit.capabilityId, 'local.vision-sense');
+assert.equal(budgetDebit.sinkRefs.executionUnitRef, records[0]?.executionUnit.id);
+assert.deepEqual(budgetDebit.sinkRefs.workEvidenceRefs, [records[0]?.workEvidence.id]);
+assert.ok(budgetDebit.sinkRefs.auditRefs.includes(records[0]?.audit.ref));
+assert.deepEqual(records[0]?.executionUnit.budgetDebitRefs, [budgetDebit.debitId]);
+assert.deepEqual(records[0]?.workEvidence.budgetDebitRefs, [budgetDebit.debitId]);
+assert.deepEqual(records[0]?.audit.budgetDebitRefs, [budgetDebit.debitId]);
+assert.ok(budgetDebit.debitLines.some((line) => line.dimension === 'observeCalls' && line.amount === 1));
+assert.equal(records[0]?.refs?.validationRepairTelemetry?.[0]?.ref, '.sciforge/validation-repair-telemetry/spans.jsonl');
+assert.ok(records[0]?.refs?.validationRepairTelemetry?.[0]?.spanKinds.includes('observe-invocation'));
+assert.equal(records[0]?.validationRepairTelemetrySummary?.spanKindCounts['observe-invocation'], 1);
 
 const artifacts = await readValidationRepairAuditSinkObserveInvocationRecords({ workspacePath: workspace });
 assert.equal(artifacts.length, 1);
@@ -42,6 +61,7 @@ assert.equal(artifact?.sourceSinkRef, `observe-invocation:${records[0]?.callRef}
 assert.equal(artifact?.observeInvocation?.callRef, records[0]?.callRef);
 assert.equal(artifact?.observeInvocation?.providerId, 'local.vision-sense');
 assert.equal(artifact?.observeInvocation?.status, 'failed');
+assert.deepEqual((artifact?.observeInvocation as { budgetDebitRefs?: string[] } | undefined)?.budgetDebitRefs, [budgetDebit.debitId]);
 assert.equal(artifact?.auditRecord.subject.kind, 'observe-result');
 assert.equal(artifact?.auditRecord.failureKind, 'observe-trace');
 assert.equal(artifact?.validationDecision?.findings[0]?.source, 'observe-response');
@@ -50,4 +70,11 @@ assert.ok(artifact?.relatedRefs.includes('artifact:screenshot-1'));
 assert.ok(artifact?.sinkRefs.includes(`observe-invocation:${records[0]?.callRef}`));
 assert.equal(artifact?.recordedAt, '2026-05-10T00:00:00.000Z');
 
-console.log('[ok] validation/repair audit sink writes observe invocation records from the real observe runtime path and reads them back');
+const telemetryRecords = await readValidationRepairTelemetrySpanRecords({ workspacePath: workspace });
+assert.equal(telemetryRecords.length, 1);
+assert.equal(telemetryRecords[0]?.spanKind, 'observe-invocation');
+assert.equal(telemetryRecords[0]?.span.status, 'repair-requested');
+assert.ok(telemetryRecords[0]?.sourceRefs.includes(`observe-invocation:${records[0]?.callRef}`));
+assert.ok(telemetryRecords[0]?.auditRefs.includes(artifact?.auditId ?? ''));
+
+console.log('[ok] validation/repair audit and telemetry sinks write observe invocation records from the real observe runtime path and read them back');

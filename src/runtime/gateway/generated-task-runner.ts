@@ -11,22 +11,18 @@ import { summarizeTaskAttemptsForAgentServer } from './context-envelope.js';
 import { currentTurnReferences } from './agentserver-context-window.js';
 import { sanitizeAgentServerError } from './backend-failure-diagnostics.js';
 import { materializeBackendPayloadOutput, type RuntimeRefBundle } from './artifact-materializer.js';
-import { recordCapabilityEvolutionRuntimeEvent } from './capability-evolution-events.js';
 import {
+  appendGeneratedTaskAttemptLifecycle,
+  assessGeneratedTaskDirectPayloadLifecycle,
   assessGeneratedTaskValidationLifecycle,
-  firstRepairOrFailurePayloadReason,
-  payloadAttemptStatus,
-  payloadHasRepairOrFailureStatus,
-  runGeneratedTaskRepairAuditLifecycle,
+  recordGeneratedTaskSuccessLedger,
+  runGeneratedTaskRepairAttemptLifecycle,
 } from './generated-task-runner-validation-lifecycle.js';
 import {
   expectedArtifactTypesForGeneratedRun,
   supplementScopeForGeneratedRun,
   tryAgentServerSupplementMissingArtifacts,
 } from './generated-task-runner-supplement-lifecycle.js';
-import { evaluateGuidanceAdoption } from './guidance-adoption-guard.js';
-import { evaluateToolPayloadEvidence } from './work-evidence-guard.js';
-import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import { reportRuntimeResultViewSlots } from '../../../packages/presentation/interactive-views';
 import {
   CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_DETAIL,
@@ -205,19 +201,12 @@ export async function runAgentServerGeneratedTask(
       runtimeFingerprint: { runtime: 'AgentServer direct ToolPayload', runId: directGeneration.runId },
     });
     normalized = await materializeBackendPayloadOutput(workspace, request, normalized, directRefs);
-    const evidenceFinding = evaluateToolPayloadEvidence(normalized, request);
-    const guidanceFinding = evaluateGuidanceAdoption(normalized, request);
-    const workEvidenceSummary = summarizeWorkEvidenceForHandoff(normalized);
-    const payloadFailureReason = firstPayloadFailureReason(normalized) ?? firstRepairOrFailurePayloadReason(normalized);
-    const payloadFailureStatus = payloadHasFailureStatus(normalized) || payloadHasRepairOrFailureStatus(normalized);
-    const failureReason = payloadFailureReason ?? (!payloadFailureStatus ? guidanceFinding?.reason ?? evidenceFinding?.reason : undefined);
-    const attemptStatus = guidanceFinding
-      ? guidanceFinding.severity
-      : evidenceFinding
-        ? evidenceFinding.severity
-      : payloadFailureStatus
-        ? payloadAttemptStatus(normalized)
-        : 'done';
+    const lifecycle = assessGeneratedTaskDirectPayloadLifecycle({
+      payload: normalized,
+      request,
+      firstPayloadFailureReason,
+      payloadHasFailureStatus,
+    });
     await appendTaskAttempt(workspace, {
       id: `agentserver-direct-${skill.id}-${sha1(`${request.prompt}:${directGeneration.runId || 'unknown'}`).slice(0, 12)}`,
       prompt: request.prompt,
@@ -225,19 +214,19 @@ export async function runAgentServerGeneratedTask(
       ...attemptPlanRefs(request, skill),
       skillId: skill.id,
       attempt: 1,
-      status: attemptStatus,
+      status: lifecycle.attemptStatus,
       codeRef: directRefs.taskRel,
       outputRef: directRefs.outputRel,
       stdoutRef: directRefs.stdoutRel,
       stderrRef: directRefs.stderrRel,
-      workEvidenceSummary,
-      failureReason,
+      workEvidenceSummary: lifecycle.workEvidenceSummary,
+      failureReason: lifecycle.failureReason,
       createdAt: new Date().toISOString(),
     });
-    if (guidanceFinding || evidenceFinding) {
-      return repairNeededPayload(request, skill, guidanceFinding?.reason ?? evidenceFinding?.reason ?? 'AgentServer payload failed runtime guard.');
+    if (lifecycle.guardFailureReason) {
+      return repairNeededPayload(request, skill, lifecycle.guardFailureReason);
     }
-    if (payloadFailureStatus) return normalized;
+    if (lifecycle.payloadFailureStatus) return normalized;
     const completed = {
       ...normalized,
       reasoningTrace: [
@@ -451,24 +440,7 @@ export async function runAgentServerGeneratedTask(
 
   if (run.exitCode !== 0 && !await fileExists(join(workspace, outputRel))) {
     const failureReason = run.stderr || 'AgentServer generated task failed before writing output.';
-    await appendTaskAttempt(workspace, {
-      id: taskId,
-      prompt: request.prompt,
-      skillDomain: request.skillDomain,
-      ...attemptPlanRefs(request, skill),
-      skillId: skill.id,
-      attempt: 1,
-      status: 'repair-needed',
-      codeRef: taskRel,
-      inputRef: inputRel,
-      outputRef: outputRel,
-      stdoutRef: stdoutRel,
-      stderrRef: stderrRel,
-      exitCode: run.exitCode,
-      failureReason,
-      createdAt: new Date().toISOString(),
-    });
-    const repaired = await runGeneratedTaskRepairAuditLifecycle({
+    const repaired = await runGeneratedTaskRepairAttemptLifecycle({
       workspacePath: workspace,
       request,
       skill,
@@ -480,6 +452,8 @@ export async function runAgentServerGeneratedTask(
       outputRel,
       stdoutRel,
       stderrRel,
+      attemptPlanRefs,
+      attemptStatus: 'repair-needed',
       schemaErrors: [],
       failureReason,
       recoverActions: ['inspect-stderr-ref', 'repair-generated-task', 'rerun-generated-task'],
@@ -515,27 +489,8 @@ export async function runAgentServerGeneratedTask(
       firstPayloadFailureReason,
       payloadHasFailureStatus,
     });
-    await appendTaskAttempt(workspace, {
-      id: taskId,
-      prompt: request.prompt,
-      skillDomain: request.skillDomain,
-      ...attemptPlanRefs(request, skill),
-      skillId: skill.id,
-      attempt: 1,
-      status: lifecycle.attemptStatus,
-      codeRef: taskRel,
-      inputRef: inputRel,
-      outputRef: outputRel,
-      stdoutRef: stdoutRel,
-      stderrRef: stderrRel,
-      exitCode: run.exitCode,
-      schemaErrors: errors,
-      workEvidenceSummary: lifecycle.workEvidenceSummary,
-      failureReason: errors.length ? `AgentServer generated task output failed schema validation: ${errors.join('; ')}` : lifecycle.failureReason,
-      createdAt: new Date().toISOString(),
-    });
     if (lifecycle.repair) {
-      const repaired = await runGeneratedTaskRepairAuditLifecycle({
+      const repaired = await runGeneratedTaskRepairAttemptLifecycle({
         workspacePath: workspace,
         request,
         skill,
@@ -548,6 +503,11 @@ export async function runAgentServerGeneratedTask(
         outputRel,
         stdoutRel,
         stderrRel,
+        attemptPlanRefs,
+        attemptStatus: lifecycle.attemptStatus,
+        attemptSchemaErrors: errors,
+        workEvidenceSummary: lifecycle.workEvidenceSummary,
+        attemptFailureReason: errors.length ? `AgentServer generated task output failed schema validation: ${errors.join('; ')}` : lifecycle.failureReason,
         schemaErrors: errors,
         failureReason: lifecycle.repair.failureReason,
         recoverActions: lifecycle.repair.recoverActions,
@@ -560,6 +520,23 @@ export async function runAgentServerGeneratedTask(
       if (lifecycle.normalizedRepairNeeded && normalized) return normalized;
       return repairNeededPayload(request, skill, lifecycle.repair.failureReason);
     }
+    await appendGeneratedTaskAttemptLifecycle({
+      workspacePath: workspace,
+      request,
+      skill,
+      taskId,
+      run,
+      attemptPlanRefs,
+      status: lifecycle.attemptStatus,
+      taskRel,
+      inputRel,
+      outputRel,
+      stdoutRel,
+      stderrRel,
+      schemaErrors: errors,
+      workEvidenceSummary: lifecycle.workEvidenceSummary,
+      failureReason: errors.length ? `AgentServer generated task output failed schema validation: ${errors.join('; ')}` : lifecycle.failureReason,
+    });
     if (!normalized) {
       return repairNeededPayload(request, skill, 'AgentServer generated task output could not be normalized after schema validation.');
     }
@@ -611,7 +588,7 @@ export async function runAgentServerGeneratedTask(
         patchSummary: generation.response.patchSummary,
       } : unit),
     };
-    await writeCapabilityEvolutionEventBestEffort({
+    await recordGeneratedTaskSuccessLedger({
       workspacePath: workspace,
       request,
       skill,
@@ -624,32 +601,11 @@ export async function runAgentServerGeneratedTask(
       outputRel,
       stdoutRel,
       stderrRel,
-      finalStatus: 'succeeded',
-      recoverActions: ['record-successful-dynamic-glue', 'preserve-runtime-evidence-refs'],
-      eventKind: 'dynamic-glue-execution',
-      promotionReason: 'Successful dynamic glue execution is ledger evidence; repeated compatible records can become promotion candidates.',
     });
     return await materializeBackendPayloadOutput(workspace, request, completed, { taskRel, outputRel, stdoutRel, stderrRel });
   } catch (error) {
     const failureReason = `AgentServer generated task output could not be parsed: ${errorMessage(error)}`;
-    await appendTaskAttempt(workspace, {
-      id: taskId,
-      prompt: request.prompt,
-      skillDomain: request.skillDomain,
-      ...attemptPlanRefs(request, skill),
-      skillId: skill.id,
-      attempt: 1,
-      status: 'repair-needed',
-      codeRef: taskRel,
-      inputRef: inputRel,
-      outputRef: outputRel,
-      stdoutRef: stdoutRel,
-      stderrRef: stderrRel,
-      exitCode: run.exitCode,
-      failureReason,
-      createdAt: new Date().toISOString(),
-    });
-    const repaired = await runGeneratedTaskRepairAuditLifecycle({
+    const repaired = await runGeneratedTaskRepairAttemptLifecycle({
       workspacePath: workspace,
       request,
       skill,
@@ -661,6 +617,8 @@ export async function runAgentServerGeneratedTask(
       outputRel,
       stdoutRel,
       stderrRel,
+      attemptPlanRefs,
+      attemptStatus: 'repair-needed',
       schemaErrors: ['output could not be parsed'],
       failureReason,
       recoverActions: ['inspect-output-ref', 'repair-output-parser', 'rerun-generated-task'],
@@ -681,16 +639,6 @@ function backendPayloadRefs(taskId: string, taskRel: string): RuntimeRefBundle {
     stdoutRel: `.sciforge/logs/${taskId}.stdout.log`,
     stderrRel: `.sciforge/logs/${taskId}.stderr.log`,
   };
-}
-
-async function writeCapabilityEvolutionEventBestEffort(
-  input: Parameters<typeof recordCapabilityEvolutionRuntimeEvent>[0],
-) {
-  try {
-    await recordCapabilityEvolutionRuntimeEvent(input);
-  } catch {
-    // Ledger capture is audit evidence; it must not turn a repair/fallback path into a harder failure.
-  }
 }
 
 function stableAgentServerPayloadTaskId(

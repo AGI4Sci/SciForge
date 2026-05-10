@@ -31,7 +31,14 @@ const result = await normalizeBackendHandoff({
   agent: { id: 'sciforge-test', backend: 'test' },
   input: {
     text: `Generate a task from compact context\n${hugeText}`,
-    metadata: { purpose: 'contract-test' },
+    metadata: {
+      purpose: 'contract-test',
+      agentHarnessHandoff: {
+        schemaVersion: 'sciforge.agent-harness-handoff.v1',
+        harnessContractRef: 'harness-contract:budget-smoke',
+        harnessTraceRef: 'harness-trace:budget-smoke',
+      },
+    },
     stdout: hugeText,
     stderr: `${hugeText} stderr-root`,
   },
@@ -66,7 +73,16 @@ const payload = result.payload as Record<string, unknown>;
 const manifest = payload._sciforgeHandoffManifest as Record<string, unknown>;
 assert.equal(manifest.rawRef, result.rawRef);
 assert.equal(typeof manifest.rawSha1, 'string');
+assert.equal(manifest.slimmingTraceRef, result.slimmingTraceRef);
+assert.equal(manifest.slimmingDecisionCount, result.slimmingTrace.decisions.length);
+assert.equal(manifest.slimmingDecisionDigest, result.slimmingTrace.decisionDigest);
+assert.deepEqual(manifest.sourceRefs, {
+  harnessContractRef: 'harness-contract:budget-smoke',
+  harnessTraceRef: 'harness-trace:budget-smoke',
+  agentHarnessHandoffSchemaVersion: 'sciforge.agent-harness-handoff.v1',
+});
 assert.ok(result.auditRefs.includes(result.rawRef), 'handoff audit refs should include raw ref');
+assert.ok(result.auditRefs.includes(result.slimmingTraceRef), 'handoff audit refs should include slimming trace ref');
 assert.ok(result.contextEstimate.rawTokens > result.contextEstimate.normalizedTokens, 'handoff context estimate should reflect slimming');
 assert.equal(result.contextEstimate.normalizedTokens, Math.ceil(result.normalizedBytes / 4));
 assert.ok(result.contextEstimate.normalizedBudgetRatio <= 1, 'normalized handoff should fit payload budget');
@@ -82,6 +98,20 @@ assert.ok((await stat(rawPath)).size > result.normalizedBytes, 'raw handoff ref 
 const raw = await readFile(rawPath, 'utf8');
 assert.ok(raw.includes(hugeText.slice(0, 50_000)), 'raw handoff ref should contain full stdout');
 assert.ok(raw.includes(pngDataUrl.slice(0, 50_000)), 'raw handoff ref should contain full image data');
+
+const tracePath = join(workspace, result.slimmingTraceRef);
+const trace = JSON.parse(await readFile(tracePath, 'utf8')) as Record<string, unknown>;
+assert.equal(trace.schemaVersion, 'sciforge.backend-handoff-slimming-trace.v1');
+assert.equal(trace.rawRef, result.rawRef);
+assert.equal(trace.rawSha1, result.rawSha1);
+assert.equal(trace.normalizedBytes, result.normalizedBytes);
+assert.equal(trace.deterministic, true);
+assert.deepEqual(trace.sourceRefs, manifest.sourceRefs);
+assert.equal(trace.decisionDigest, result.slimmingTrace.decisionDigest);
+const traceDecisions = trace.decisions as Array<Record<string, unknown>>;
+assert.equal(traceDecisions.length, result.decisions.length);
+assert.ok(traceDecisions.every((decision, index) => decision.ordinal === index && typeof decision.decisionRef === 'string'));
+assert.ok(traceDecisions.some((decision) => decision.kind === 'backend-input-text' && decision.pointer === '/input/text'));
 
 const artifacts = payload.artifacts as Array<Record<string, unknown>>;
 assert.equal(artifacts[0].dataOmitted, true);

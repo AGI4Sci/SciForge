@@ -189,6 +189,7 @@ try {
     const payloadHandoff = handoff(dispatch);
     assert.deepEqual(dispatch.runtimeMetadata.agentHarnessHandoff, payloadHandoff);
     assert.deepEqual(dispatch.topLevelMetadata.agentHarnessHandoff, payloadHandoff);
+    assertBackendSelectionDecision(dispatch);
     assertPromptDirectivesAreSourced(payloadHandoff);
     assertPromptRenderPlanIsSourced(payloadHandoff);
     assert.equal(dispatch.text.includes(String(dispatch.metadata.harnessContractRef)), false);
@@ -213,6 +214,7 @@ async function runHandoffRequest(kind: 'fresh' | 'continuation' | 'repair', uiSt
     uiState: {
       ...uiState,
       agentHarnessContinuityAuditEnabled: true,
+      agentHarnessBackendSelectionAuditEnabled: true,
       expectedArtifactTypes: ['research-report'],
       selectedComponentIds: ['report-viewer'],
     },
@@ -277,6 +279,31 @@ function assertContinuityDecision(dispatch: Dispatch, expected: {
   const trace = record(metadataDecision.trace);
   assert.equal(typeof trace.recentExecutionRefs, 'number');
   assert.equal(typeof trace.artifacts, 'number');
+}
+
+function assertBackendSelectionDecision(dispatch: Dispatch) {
+  const metadataDecision = record(dispatch.metadata.agentHarnessBackendSelectionDecision);
+  const handoffDecision = record(handoff(dispatch).backendSelectionDecision);
+  assert.deepEqual(handoffDecision, metadataDecision);
+  assert.equal(metadataDecision.schemaVersion, 'sciforge.agentserver-backend-selection-decision.v1');
+  assert.equal(metadataDecision.shadowMode, true);
+  assert.equal(metadataDecision.decisionOwner, 'AgentServer');
+  assert.equal(metadataDecision.harnessStage, 'beforeAgentDispatch');
+  assert.equal(metadataDecision.backend, 'openteam_agent');
+  assert.equal(metadataDecision.decision, 'openteam_agent');
+  assert.equal(metadataDecision.source, 'llmEndpoint.baseUrl');
+  const runtimeSignals = record(metadataDecision.runtimeSignals);
+  assert.equal(runtimeSignals.llmEndpointConfigured, true);
+  assert.equal(runtimeSignals.requestBackendSupported, false);
+  assert.equal(runtimeSignals.envBackendSupported, false);
+  const harnessSignals = record(metadataDecision.harnessSignals);
+  assert.equal(harnessSignals.contractRef, dispatch.metadata.harnessContractRef);
+  assert.equal(harnessSignals.traceRef, dispatch.metadata.harnessTraceRef);
+  assert.equal(harnessSignals.harnessStage, 'beforeAgentDispatch');
+  assert.equal(typeof harnessSignals.sourceCallbackId, 'string');
+  const trace = record(metadataDecision.trace);
+  assert.deepEqual(list(trace.selectionOrder), ['request.agentBackend', 'env.SCIFORGE_AGENTSERVER_BACKEND', 'llmEndpoint.baseUrl', 'runtime.default']);
+  assert.deepEqual(list(trace.ignoredSources), ['request.agentBackend:missing', 'env.SCIFORGE_AGENTSERVER_BACKEND:missing']);
 }
 
 function assertNoStaleRefs(dispatch: Dispatch) {

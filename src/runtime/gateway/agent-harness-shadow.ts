@@ -1,8 +1,12 @@
-import type { GatewayRequest, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
+import type { GatewayRequest, LlmEndpointConfig, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
 import { clipForAgentServerJson, errorMessage, hashJson, isRecord, toRecordList } from '../gateway-utils.js';
 import { projectInteractionProgressEvent } from './interaction-progress-harness.js';
 import type { ProgressPlan } from '../../../packages/agent-harness/src/contracts.js';
+import {
+  agentServerBackendSelectionDecision,
+  type AgentServerBackendSelectionDecision,
+} from './agent-backend-config.js';
 
 const AGENT_HARNESS_CONTRACT_EVENT_TYPE = 'agent-harness-contract';
 const AGENT_HARNESS_SHADOW_SCHEMA_VERSION = 'sciforge.agent-harness-shadow.v1';
@@ -101,11 +105,17 @@ export async function requestWithAgentHarnessShadow(
   };
 }
 
-export function agentHarnessMetadata(request: GatewayRequest) {
-  return agentHarnessHandoffMetadata(request);
+export function agentHarnessMetadata(request: GatewayRequest, runtime: {
+  backendSelectionDecision?: AgentServerBackendSelectionDecision;
+  llmEndpoint?: LlmEndpointConfig;
+} = {}) {
+  return agentHarnessHandoffMetadata(request, runtime);
 }
 
-export function agentHarnessHandoffMetadata(request: GatewayRequest) {
+export function agentHarnessHandoffMetadata(request: GatewayRequest, runtime: {
+  backendSelectionDecision?: AgentServerBackendSelectionDecision;
+  llmEndpoint?: LlmEndpointConfig;
+} = {}) {
   const agentHarness = isRecord(request.uiState?.agentHarness) ? request.uiState.agentHarness : undefined;
   const summary = isRecord(agentHarness?.summary) ? agentHarness.summary : undefined;
   const profileId = stringField(agentHarness?.profileId) ?? stringField(request.uiState?.harnessProfileId);
@@ -120,6 +130,10 @@ export function agentHarnessHandoffMetadata(request: GatewayRequest) {
   const repairContextPolicy = isRecord(contract?.repairContextPolicy) ? contract.repairContextPolicy : undefined;
   const continuityDecision = agentHarnessContinuityDecision(request);
   const includeContinuityAudit = agentHarnessContinuityDecisionAuditEnabled(request);
+  const includeBackendSelectionAudit = agentHarnessBackendSelectionDecisionAuditEnabled(request);
+  const backendSelectionDecision = includeBackendSelectionAudit
+    ? agentHarnessBackendSelectionDecision(request, { ...runtime, agentHarness, summary, trace })
+    : undefined;
   const decisionOwner = 'AgentServer';
   const harnessSummary = agentHarnessMetadataSummary({
     summary,
@@ -138,6 +152,7 @@ export function agentHarnessHandoffMetadata(request: GatewayRequest) {
     harnessDecisionOwner: decisionOwner,
     harnessSummary,
     ...(includeContinuityAudit ? { agentHarnessContinuityDecision: continuityDecision } : {}),
+    ...(backendSelectionDecision ? { agentHarnessBackendSelectionDecision: backendSelectionDecision } : {}),
     agentHarnessHandoff: {
       schemaVersion: AGENT_HARNESS_HANDOFF_SCHEMA_VERSION,
       shadowMode: true,
@@ -155,6 +170,7 @@ export function agentHarnessHandoffMetadata(request: GatewayRequest) {
       budgetSummary,
       summary: harnessSummary,
       ...(includeContinuityAudit ? { continuityDecision } : {}),
+      ...(backendSelectionDecision ? { backendSelectionDecision } : {}),
     },
   };
 }
@@ -333,6 +349,19 @@ function agentHarnessContinuityDecisionAuditEnabled(request: GatewayRequest) {
   ].some(isEnabledFlag);
 }
 
+function agentHarnessBackendSelectionDecisionAuditEnabled(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const harness = isRecord(uiState.agentHarness) ? uiState.agentHarness : isRecord(uiState.harness) ? uiState.harness : {};
+  return [
+    uiState.agentHarnessBackendSelectionDecisionEnabled,
+    uiState.agentHarnessBackendSelectionAuditEnabled,
+    uiState.agentHarnessTraceBackendSelectionDecision,
+    harness.backendSelectionDecisionEnabled,
+    harness.backendSelectionAuditEnabled,
+    harness.traceBackendSelectionDecision,
+  ].some(isEnabledFlag);
+}
+
 function agentHarnessProfileId(request: GatewayRequest) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const harness = isRecord(uiState.agentHarness) ? uiState.agentHarness : isRecord(uiState.harness) ? uiState.harness : {};
@@ -342,6 +371,43 @@ function agentHarnessProfileId(request: GatewayRequest) {
     ?? stringField(harness.profileId)
     ?? stringField(profile.id)
     ?? DEFAULT_AGENT_HARNESS_PROFILE_ID;
+}
+
+function agentHarnessBackendSelectionDecision(
+  request: GatewayRequest,
+  input: {
+    backendSelectionDecision?: AgentServerBackendSelectionDecision;
+    llmEndpoint?: LlmEndpointConfig;
+    agentHarness?: Record<string, unknown>;
+    summary?: Record<string, unknown>;
+    trace?: Record<string, unknown>;
+  },
+) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const agentHarness = input.agentHarness ?? (isRecord(uiState.agentHarness) ? uiState.agentHarness : {});
+  const summary = input.summary ?? (isRecord(agentHarness.summary) ? agentHarness.summary : {});
+  const trace = input.trace ?? (isRecord(agentHarness.trace) ? agentHarness.trace : undefined);
+  const decision = input.backendSelectionDecision ?? agentServerBackendSelectionDecision(request, input.llmEndpoint);
+  const contractRef = stringField(agentHarness.contractRef) ?? stringField(summary.contractRef);
+  const traceRef = stringField(agentHarness.traceRef) ?? stringField(summary.traceRef);
+  return {
+    ...decision,
+    harnessSignals: {
+      profileId: stringField(agentHarness.profileId) ?? stringField(summary.profileId) ?? stringField(uiState.harnessProfileId),
+      contractRef,
+      traceRef,
+      harnessStage: decision.harnessStage,
+      sourceCallbackId: sourceCallbackIdForTraceStage(trace, decision.harnessStage) ?? 'harness.runtime.beforeAgentDispatch',
+    },
+    trace: {
+      ...decision.trace,
+      harness: {
+        stage: decision.harnessStage,
+        contractRef,
+        traceRef,
+      },
+    },
+  };
 }
 
 function agentHarnessVerificationPolicyProjection(
@@ -835,6 +901,16 @@ function sourceCallbackIdForTraceField(trace: Record<string, unknown> | undefine
     if ((field === 'contextRefs' || field === 'blockedContextRefs') && (Array.isArray(contextHints.blockedContextRefs) || Array.isArray(decision.blockedRefs))) {
       return callbackId;
     }
+  }
+  return undefined;
+}
+
+function sourceCallbackIdForTraceStage(trace: Record<string, unknown> | undefined, expectedStage: string) {
+  const stages = Array.isArray(trace?.stages) ? trace.stages.filter(isRecord) : [];
+  for (const stage of [...stages].reverse()) {
+    if (stringField(stage.stage) !== expectedStage) continue;
+    const callbackId = stringField(stage.callbackId);
+    if (callbackId) return callbackId;
   }
   return undefined;
 }

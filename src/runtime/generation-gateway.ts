@@ -48,7 +48,7 @@ import {
 } from './gateway/agentserver-context-window.js';
 import {
   agentBackendAdapter,
-  agentServerBackend,
+  agentServerBackendSelectionDecision,
   isBlockingAgentServerConfigurationFailure,
 } from './gateway/agent-backend-config.js';
 import {
@@ -574,7 +574,8 @@ async function requestAgentServerGeneration(params: {
     const request = params.request;
     const promptRequest = requestWithoutInlineAgentHarness(request);
     const { llmEndpointSource, ...llmRuntime } = await agentServerLlmRuntime(request, params.workspace);
-    const backend = agentServerBackend(request, llmRuntime.llmEndpoint);
+    const backendSelectionDecision = agentServerBackendSelectionDecision(request, llmRuntime.llmEndpoint);
+    const backend = backendSelectionDecision.backend;
     const needsContinuity = requestNeedsAgentServerContinuity(promptRequest);
     const generationPurpose = needsContinuity ? 'workspace-task-generation' : 'workspace-task-generation-inline';
     if (!llmRuntime.llmEndpoint && requiresUserLlmEndpoint(params.baseUrl)) {
@@ -655,7 +656,10 @@ async function requestAgentServerGeneration(params: {
     };
     const generationPrompt = buildAgentServerGenerationPrompt(generationRequest);
     const contextEnvelopeBytes = Buffer.byteLength(JSON.stringify(contextEnvelope), 'utf8');
-    const harnessMetadata = agentHarnessMetadata(request);
+    const harnessMetadata = agentHarnessMetadata(request, {
+      backendSelectionDecision,
+      llmEndpoint: llmRuntime.llmEndpoint,
+    });
     emitWorkspaceRuntimeEvent(params.callbacks, {
       type: 'contextWindowState',
       source: 'workspace-runtime',
