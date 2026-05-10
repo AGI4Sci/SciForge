@@ -2,7 +2,7 @@
 name: scientific-reproduction
 description: Generic bioinformatics reproduction playbook for data discovery, execution planning, degradation, and auditable negative or partial results without paper-specific shortcuts.
 skillDomains: [literature, omics, knowledge]
-outputArtifactTypes: [scientific-reproduction-profile, dataset-inventory, analysis-plan, figure-reproduction-report, evidence-matrix, claim-verdict, negative-result-report]
+outputArtifactTypes: [scientific-reproduction-profile, dataset-inventory, raw-data-readiness-dossier, analysis-plan, figure-reproduction-report, evidence-matrix, claim-verdict, negative-result-report]
 tags: [scientific-reproduction, bioinformatics, dataset-discovery, omics, benchmark, negative-results]
 requiredCapabilities: [skill.scientific-reproduction.profile]
 ---
@@ -25,6 +25,7 @@ Use this skill when a paper reproduction task needs a generic bioinformatics pla
 
 - `scientific-reproduction-profile`: selected budget, tool classes, fallback policy, and fixture/provider selection.
 - `dataset-inventory`: sources checked, accession candidates, assay/sample metadata, file classes, size estimates, license/access state, and availability.
+- `raw-data-readiness-dossier`: refs-first gate for raw-data reanalysis, including accession/license checks, download/storage/CPU/memory/time budgets, environment/genome/checksum refs, degradation strategy, and explicit approval state.
 - `analysis-plan`: analysis units, expected inputs, parameters, statistics, plots, and validation checks.
 - `figure-reproduction-report`: per-figure attempt status, inputs, code refs, stdout/stderr refs, metrics, and caveats.
 - `evidence-matrix`: claim-to-evidence links, supporting and contradicting evidence, missing evidence, and confidence.
@@ -51,7 +52,7 @@ Select tool classes by data type and budget, then delegate execution to action p
 - Default maximum download budget: 50 MB for smoke or benchmark runs; full reproduction requires explicit profile expansion.
 - Default compute budget: 2 CPU, 4 GB RAM, 20 minutes wall time for local benchmark plans.
 - Default retry budget: one retry per provider class; timeout retries must switch to a smaller query or a cached fixture.
-- Large raw sequencing files are never downloaded in benchmark mode. Use accession metadata, processed tables, tiny fixtures, or emit missing data.
+- Large raw sequencing files are never downloaded in benchmark mode. Use accession metadata, processed tables, tiny fixtures, or emit missing data. Full raw-data execution requires a `raw-data-readiness-dossier` with `rawExecutionGate.allowed=true`, verified license/access, explicit approval, sufficient resource budgets, environment/genome/checksum refs, and passing readiness checks.
 
 ## Degradation Policy
 

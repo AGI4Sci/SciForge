@@ -70,6 +70,30 @@ export interface DecisionRationale {
   evidenceRefs: WorkspaceRef[];
 }
 
+export type SelfPromptAutoSubmitGateStatus = 'allowed' | 'needs-human' | 'failed';
+
+export type SelfPromptAutoSubmitBlocker =
+  | 'missing-evidence'
+  | 'raw-download-required'
+  | 'license-restriction'
+  | 'compute-budget-exceeded'
+  | 'repeated-failure'
+  | 'unresolved-required-ref'
+  | 'schema-or-verifier-incomplete'
+  | 'budget-incomplete'
+  | 'stop-condition-incomplete'
+  | 'human-confirmation-required';
+
+export interface SelfPromptAutoSubmitGate {
+  status: SelfPromptAutoSubmitGateStatus;
+  reason: string;
+  blockers: SelfPromptAutoSubmitBlocker[];
+  schemaRef: WorkspaceRef;
+  verifierRef: WorkspaceRef;
+  blockerRefs?: WorkspaceRef[];
+  checkedAt?: string;
+}
+
 export interface SelfPromptRecommendation {
   nextPrompt: string;
   requiredRefs: WorkspaceRef[];
@@ -85,6 +109,7 @@ export interface SelfPromptRecommendation {
   };
   humanConfirmationPoint?: string;
   reviewChecklist?: string[];
+  autoSubmitGate?: SelfPromptAutoSubmitGate;
   mode: 'shadow-only' | 'human-review-required' | 'auto-submit-eligible';
 }
 
@@ -153,6 +178,13 @@ export function validateScientificReproductionTrajectory(
   for (const [index, step] of record.steps.entries()) {
     validateStep(step, `steps[${index}]`, errors);
   }
+  if (Array.isArray(record.selfPromptRecommendations)) {
+    for (const [index, recommendation] of record.selfPromptRecommendations.entries()) {
+      validateSelfPromptRecommendation(recommendation, `selfPromptRecommendations[${index}]`, errors);
+    }
+  } else {
+    errors.push('selfPromptRecommendations must be an array');
+  }
   const hasPrompt = record.steps.some((step) => step.prompt?.text);
   const hasScreenRef = record.steps.some((step) => (step.action?.screenBeforeRefs.length ?? 0) > 0);
   const hasArtifactRef = record.steps.some((step) => step.observation.artifactRefs.length > 0);
@@ -197,13 +229,143 @@ function validateStep(step: TrajectoryStep, path: string, errors: string[]): voi
     requireText(step.repair.repairAction, `${path}.repair.repairAction`, errors);
   }
   if (step.selfPromptRecommendation) {
-    requireText(step.selfPromptRecommendation.nextPrompt, `${path}.selfPromptRecommendation.nextPrompt`, errors);
-    requireText(step.selfPromptRecommendation.stopCondition, `${path}.selfPromptRecommendation.stopCondition`, errors);
-    requireText(step.selfPromptRecommendation.qualityGate, `${path}.selfPromptRecommendation.qualityGate`, errors);
-    if (!Array.isArray(step.selfPromptRecommendation.requiredRefs) || step.selfPromptRecommendation.requiredRefs.length === 0) {
-      errors.push(`${path}.selfPromptRecommendation.requiredRefs must contain at least one workspace ref`);
+    validateSelfPromptRecommendation(step.selfPromptRecommendation, `${path}.selfPromptRecommendation`, errors);
+  }
+}
+
+function validateSelfPromptRecommendation(
+  recommendation: SelfPromptRecommendation,
+  path: string,
+  errors: string[],
+): void {
+  requireText(recommendation.nextPrompt, `${path}.nextPrompt`, errors);
+  requireText(recommendation.stopCondition, `${path}.stopCondition`, errors);
+  requireText(recommendation.qualityGate, `${path}.qualityGate`, errors);
+  if (!['shadow-only', 'human-review-required', 'auto-submit-eligible'].includes(recommendation.mode)) {
+    errors.push(`${path}.mode must be shadow-only, human-review-required, or auto-submit-eligible`);
+  }
+  if (!Array.isArray(recommendation.requiredRefs) || recommendation.requiredRefs.length === 0) {
+    errors.push(`${path}.requiredRefs must contain at least one workspace/artifact/trace ref`);
+  } else {
+    for (const [index, ref] of recommendation.requiredRefs.entries()) {
+      validateWorkspaceRef(ref, `${path}.requiredRefs[${index}]`, errors);
     }
-    validateSelfPromptBudget(step.selfPromptRecommendation.budget, `${path}.selfPromptRecommendation.budget`, errors);
+  }
+  validateSelfPromptBudget(recommendation.budget, `${path}.budget`, errors);
+
+  if (recommendation.mode !== 'auto-submit-eligible') return;
+  validateAutoSubmitEligibleRecommendation(recommendation, path, errors);
+}
+
+function validateAutoSubmitEligibleRecommendation(
+  recommendation: SelfPromptRecommendation,
+  path: string,
+  errors: string[],
+): void {
+  if (!recommendation.budget) {
+    errors.push(`${path}.budget is required for auto-submit-eligible recommendations`);
+  } else {
+    if (recommendation.budget.maxAutoSubmitRounds < 1) {
+      errors.push(`${path}.budget.maxAutoSubmitRounds must allow at least one round for auto-submit-eligible recommendations`);
+    }
+    if (recommendation.budget.reviewRequiredBeforeSubmit) {
+      errors.push(`${path}.budget.reviewRequiredBeforeSubmit must be false for auto-submit-eligible recommendations`);
+    }
+  }
+  requireText(recommendation.humanConfirmationPoint, `${path}.humanConfirmationPoint`, errors);
+  if (!Array.isArray(recommendation.reviewChecklist) || recommendation.reviewChecklist.length === 0) {
+    errors.push(`${path}.reviewChecklist must contain schema/verifier/budget/stop-condition review items`);
+  }
+  validateAutoSubmitGate(recommendation.autoSubmitGate, `${path}.autoSubmitGate`, errors);
+}
+
+function validateAutoSubmitGate(
+  gate: SelfPromptAutoSubmitGate | undefined,
+  path: string,
+  errors: string[],
+): void {
+  if (!gate) {
+    errors.push(`${path} is required for auto-submit-eligible recommendations`);
+    return;
+  }
+  if (!['allowed', 'needs-human', 'failed'].includes(gate.status)) {
+    errors.push(`${path}.status must be allowed, needs-human, or failed`);
+  }
+  requireText(gate.reason, `${path}.reason`, errors);
+  validateWorkspaceRef(gate.schemaRef, `${path}.schemaRef`, errors);
+  validateWorkspaceRef(gate.verifierRef, `${path}.verifierRef`, errors);
+  if (!Array.isArray(gate.blockers)) {
+    errors.push(`${path}.blockers must be an array`);
+    return;
+  }
+  const blockerSet = new Set(gate.blockers);
+  const knownBlockers: SelfPromptAutoSubmitBlocker[] = [
+    'missing-evidence',
+    'raw-download-required',
+    'license-restriction',
+    'compute-budget-exceeded',
+    'repeated-failure',
+    'unresolved-required-ref',
+    'schema-or-verifier-incomplete',
+    'budget-incomplete',
+    'stop-condition-incomplete',
+    'human-confirmation-required',
+  ];
+  for (const blocker of gate.blockers) {
+    if (!knownBlockers.includes(blocker)) {
+      errors.push(`${path}.blockers contains unknown blocker ${String(blocker)}`);
+    }
+  }
+  if (gate.status === 'allowed' && gate.blockers.length > 0) {
+    errors.push(`${path}.blockers must be empty when status is allowed`);
+  }
+  if ((gate.status === 'needs-human' || gate.status === 'failed') && gate.blockers.length === 0) {
+    errors.push(`${path}.blockers must explain why auto-submit is blocked`);
+  }
+  if (blockerSet.has('missing-evidence') && gate.status === 'allowed') {
+    errors.push(`${path}.status must be needs-human or failed when missing evidence blocks auto-submit`);
+  }
+  if (blockerSet.has('raw-download-required') && gate.status === 'allowed') {
+    errors.push(`${path}.status must be needs-human or failed when raw download is required`);
+  }
+  if (blockerSet.has('license-restriction') && gate.status === 'allowed') {
+    errors.push(`${path}.status must be needs-human or failed when license restrictions apply`);
+  }
+  if (blockerSet.has('compute-budget-exceeded') && gate.status === 'allowed') {
+    errors.push(`${path}.status must be needs-human or failed when compute budget is exceeded`);
+  }
+  if (blockerSet.has('repeated-failure') && gate.status === 'allowed') {
+    errors.push(`${path}.status must be needs-human or failed when repeated failure is detected`);
+  }
+  if (gate.blockerRefs) {
+    for (const [index, ref] of gate.blockerRefs.entries()) {
+      validateWorkspaceRef(ref, `${path}.blockerRefs[${index}]`, errors);
+    }
+  }
+}
+
+function validateWorkspaceRef(ref: WorkspaceRef, path: string, errors: string[]): void {
+  requireText(ref?.ref, `${path}.ref`, errors);
+  if (!ref || typeof ref.kind !== 'string') {
+    errors.push(`${path}.kind must be workspace-file, artifact, trace, screen, execution-unit, audit, or ledger`);
+    return;
+  }
+  const prefixesByKind: Record<WorkspaceRef['kind'], string[]> = {
+    'workspace-file': ['workspace:', 'workspace-file:', '.sciforge/'],
+    artifact: ['artifact:'],
+    trace: ['trace:', '.sciforge/'],
+    screen: ['screen:'],
+    'execution-unit': ['execution-unit:', 'EU-'],
+    audit: ['audit:', '.sciforge/'],
+    ledger: ['ledger:'],
+  };
+  const prefixes = prefixesByKind[ref.kind as WorkspaceRef['kind']];
+  if (!prefixes) {
+    errors.push(`${path}.kind must be workspace-file, artifact, trace, screen, execution-unit, audit, or ledger`);
+    return;
+  }
+  if (!prefixes.some((prefix) => ref.ref.startsWith(prefix))) {
+    errors.push(`${path}.ref must use a ${prefixes.join(' or ')} ref prefix`);
   }
 }
 

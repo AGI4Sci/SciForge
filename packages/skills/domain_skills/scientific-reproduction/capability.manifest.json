@@ -12,6 +12,8 @@
       "bioinformatics",
       "omics",
       "dataset-inventory",
+      "raw-data-readiness-dossier",
+      "raw-data-readiness",
       "missing-data-report",
       "negative-results",
       "benchmark"
@@ -317,6 +319,7 @@
       "reusableOutputs": [
         "scientific-reproduction-profile",
         "dataset-inventory",
+        "raw-data-readiness-dossier",
         "analysis-plan",
         "figure-reproduction-report",
         "evidence-matrix",

@@ -21,6 +21,7 @@ const profileCoverageCases: Record<string, { fixtureId: string; input: HarnessIn
   'low-cost': { fixtureId: fileGroundedSummaryFixture.id, input: fileGroundedSummaryFixture.input },
   'privacy-strict': { fixtureId: freshResearchFixture.id, input: freshResearchFixture.input },
   'high-recall-literature': { fixtureId: freshResearchFixture.id, input: freshResearchFixture.input },
+  'scientific-reproduction-research': { fixtureId: freshResearchFixture.id, input: freshResearchFixture.input },
 };
 
 assert.deepEqual(
@@ -57,6 +58,30 @@ for (const [profileId, profile] of Object.entries(harnessProfiles)) {
   assert.ok(tracedCallbacks.size > 0, `${profileId} must emit trace stages in its fixture`);
   for (const callback of profile.callbacks) {
     assert.ok(tracedCallbacks.has(callback.id), `${profileId} fixture ${coverage.fixtureId} did not exercise ${callback.id}`);
+  }
+  if (profileId === 'scientific-reproduction-research') {
+    assert.ok(evaluation.contract.requiredContextRefs.includes('paper:crispr-screen-a'), `${profileId} must preserve required scientific refs`);
+    assert.ok(
+      evaluation.contract.capabilityPolicy.preferredCapabilityIds.includes('scientific-reproduction.verifier'),
+      `${profileId} must prefer the scientific reproduction verifier`,
+    );
+    assert.equal(evaluation.contract.verificationPolicy.intensity, 'strict', `${profileId} must require strict verification`);
+    assert.equal(evaluation.contract.verificationPolicy.requireCitations, true, `${profileId} must require citation verification`);
+    assert.equal(evaluation.contract.verificationPolicy.requireArtifactRefs, true, `${profileId} must require artifact refs`);
+    assert.equal(evaluation.contract.toolBudget.exhaustedPolicy, 'needs-human', `${profileId} exhausted budget must request human handoff`);
+    assert.equal(evaluation.contract.repairContextPolicy.kind, 'needs-human', `${profileId} repair policy must preserve needs-human handoff`);
+    assert.equal(evaluation.contract.capabilityPolicy.sideEffects.externalMutation, 'block', `${profileId} must block external mutation`);
+    assert.equal(evaluation.contract.capabilityPolicy.sideEffects.workspaceWrite, 'requires-approval', `${profileId} must gate workspace writes`);
+    assert.ok(evaluation.contract.progressPlan.phaseNames?.includes('reproduction'), `${profileId} must expose reproduction progress phase`);
+    assert.ok(evaluation.contract.progressPlan.phaseNames?.includes('handoff'), `${profileId} must expose handoff progress phase`);
+    assert.ok(
+      evaluation.trace.stages.some((stage) => stage.decision.capabilityHints?.preferredCapabilityIds?.includes('scientific-reproduction.verifier')),
+      `${profileId} trace must record verifier preference decision`,
+    );
+    assert.ok(
+      evaluation.trace.stages.some((stage) => stage.contractSnapshot.toolBudget.exhaustedPolicy === 'needs-human'),
+      `${profileId} trace snapshots must carry needs-human budget exhaustion policy`,
+    );
   }
   coverageSummary.push({
     profileId,

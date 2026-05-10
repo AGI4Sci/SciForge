@@ -33,6 +33,8 @@ export interface ScientificReproductionVerifierRequest {
     requireBibliographicVerification?: boolean;
     requireAccessionVerification?: boolean;
     requireFigureReproduction?: boolean;
+    requireRawDataReadiness?: boolean;
+    allowRawDataExecution?: boolean;
     minConfidenceForPass?: number;
   } & Record<string, unknown>;
 }
@@ -61,6 +63,7 @@ export interface ScientificReproductionVerifierResult {
     claimCount: number;
     figureReproductionCount: number;
     identifierVerificationCount: number;
+    rawDataReadinessCount: number;
     scientificVerdicts: string[];
   };
 }
@@ -112,6 +115,17 @@ const REF_KEYS = [
   'notebookRefs',
   'outputRef',
   'outputRefs',
+  'budgetRef',
+  'checksumRef',
+  'checksumRefs',
+  'environmentLockRef',
+  'environmentLockRefs',
+  'genomeCacheRef',
+  'genomeCacheRefs',
+  'annotationRef',
+  'annotationRefs',
+  'toolVersionRef',
+  'toolVersionRefs',
   'sourceRef',
   'sourceRefs',
   'locatorRef',
@@ -139,12 +153,14 @@ export function verifyScientificReproduction(
   const identifierVerifications = artifactContexts.flatMap(extractIdentifierVerifications);
   const scientificVerdicts = artifactContexts.flatMap(extractScientificVerdicts);
   const negativeResults = artifactContexts.flatMap(extractNegativeResults);
+  const rawDataReadiness = artifactContexts.flatMap(extractRawDataReadiness);
 
   const criterionResults = [
     checkContractCompliance(artifactContexts),
     checkClaimEvidenceCoverage(claims),
     checkFigureReproductionEvidence(figureReproductions, Boolean(request.providerHints?.requireFigureReproduction)),
     checkIdentifierVerification(identifierVerifications, request),
+    checkRawDataReadiness(rawDataReadiness, request),
     checkVerdictVocabulary(scientificVerdicts),
     checkRefsFirstEvidence(artifactContexts),
     checkNegativeResultSemantics(negativeResults, scientificVerdicts),
@@ -181,6 +197,7 @@ export function verifyScientificReproduction(
       claimCount: claims.length,
       figureReproductionCount: figureReproductions.length,
       identifierVerificationCount: identifierVerifications.length,
+      rawDataReadinessCount: rawDataReadiness.length,
       scientificVerdicts,
     },
   };
@@ -233,6 +250,21 @@ type NormalizedNegativeResult = {
   hasStatistics: boolean;
   hasConclusionImpact: boolean;
   looksLikeOperationalFailureOnly: boolean;
+};
+
+type NormalizedRawDataReadiness = {
+  id: string;
+  artifactId: string;
+  evidenceRefs: string[];
+  rawExecutionStatus: string;
+  approvalStatus: string;
+  gateAllowed: boolean;
+  allChecksPass: boolean;
+  hasDatasetAccessions: boolean;
+  hasLicenseVerification: boolean;
+  hasBudget: boolean;
+  hasEnvironment: boolean;
+  hasDegradationStrategy: boolean;
 };
 
 function checkContractCompliance(contexts: ArtifactContext[]): ScientificReproductionCriterionResult {
@@ -399,6 +431,37 @@ function checkNegativeResultSemantics(
   };
 }
 
+function checkRawDataReadiness(
+  dossiers: NormalizedRawDataReadiness[],
+  request: ScientificReproductionVerifierRequest,
+): ScientificReproductionCriterionResult {
+  const requireReadiness = Boolean(request.providerHints?.requireRawDataReadiness);
+  const allowRawExecution = Boolean(request.providerHints?.allowRawDataExecution);
+  const ready = dossiers.filter((dossier) => isRawDataDossierReady(dossier));
+  const unsafeAllowed = dossiers.filter((dossier) => dossier.gateAllowed && !isRawDataDossierReady(dossier));
+  const missingRequired = requireReadiness && dossiers.length === 0;
+  const rawExecutionWithoutReadyDossier = allowRawExecution && ready.length === 0;
+  const passed = !missingRequired && !rawExecutionWithoutReadyDossier && unsafeAllowed.length === 0;
+  return {
+    id: 'raw-data-readiness-gate',
+    passed,
+    severity: 'blocking',
+    message: missingRequired
+      ? 'Raw-data readiness was required, but no raw-data-readiness-dossier artifact was found.'
+      : rawExecutionWithoutReadyDossier
+        ? 'Raw-data execution was requested, but no ready dossier with approval, budget, environment, license, and checks passed.'
+        : unsafeAllowed.length
+          ? `${unsafeAllowed.length} raw-data readiness dossier(s) allow raw execution without satisfying approval, budget, environment, license, and readiness checks.`
+          : dossiers.length === 0
+            ? 'No raw-data readiness dossier was required for this bounded reproduction.'
+            : `Found ${dossiers.length} raw-data readiness dossier(s); ${ready.length} are ready and blocked/needs-human dossiers do not allow raw execution.`,
+    evidenceRefs: uniqueStrings(dossiers.flatMap((dossier) => dossier.evidenceRefs)),
+    repairHints: !passed
+      ? ['Before raw FASTQ/BAM or genome-cache execution, emit a raw-data-readiness-dossier with verified accessions, license/access approval, download/storage/CPU/memory/time budgets, tool/env/genome refs, checksums or checksum plan, degradation strategy, and rawExecutionGate.allowed=false until all gates pass.']
+      : [],
+  };
+}
+
 function artifactContext(artifact: ScientificReproductionArtifact, index: number): ArtifactContext {
   const data = isRecord(artifact.data) ? artifact.data : {};
   const root = { ...artifact, ...data };
@@ -464,7 +527,9 @@ function extractIdentifierVerifications(context: ArtifactContext): NormalizedIde
     ...arrayRecords(context.root.references),
     ...arrayRecords(context.root.citations),
     ...arrayRecords(context.root.accessions),
-    ...arrayRecords(context.root.datasets).filter(isDatasetIdentifierVerificationRecord),
+    ...(context.type === 'raw-data-readiness-dossier'
+      ? []
+      : arrayRecords(context.root.datasets).filter(isDatasetIdentifierVerificationRecord)),
   ];
   if (hasAnyKey(context.root, ['doi', 'pmid', 'title', 'year', 'journal', 'accession'])) candidates.push(context.root);
   return candidates
@@ -521,6 +586,58 @@ function extractNegativeResults(context: ArtifactContext): NormalizedNegativeRes
         !/claim|scientific|statistic|effect|evidence|conclusion/.test(text) && checkRefs.length === 0,
     };
   });
+}
+
+function extractRawDataReadiness(context: ArtifactContext): NormalizedRawDataReadiness[] {
+  const candidates = [
+    ...arrayRecords(context.root.rawDataReadinessDossiers),
+    ...arrayRecords(context.root.readinessDossiers),
+  ];
+  if (context.type === 'raw-data-readiness-dossier') candidates.push(context.root);
+  return candidates.map((record, index) => {
+    const datasets = arrayRecords(record.datasets);
+    const checks = arrayRecords(record.readinessChecks);
+    const budget = isRecord(record.computeBudget) ? record.computeBudget : {};
+    const environment = isRecord(record.environment) ? record.environment : {};
+    const gate = isRecord(record.rawExecutionGate) ? record.rawExecutionGate : {};
+    return {
+      id: stringValue(record.id) || `${context.id}:raw-readiness-${index + 1}`,
+      artifactId: context.id,
+      evidenceRefs: collectRefs(record),
+      rawExecutionStatus: stringValue(record.rawExecutionStatus).toLowerCase(),
+      approvalStatus: stringValue(record.approvalStatus).toLowerCase(),
+      gateAllowed: gate.allowed === true,
+      allChecksPass: checks.length > 0 && checks.every((check) => stringValue(check.status).toLowerCase() === 'pass'),
+      hasDatasetAccessions: datasets.length > 0 && datasets.every((dataset) =>
+        hasAnyKey(dataset, ['accession', 'accessionId', 'identifier']) &&
+        hasAnyKey(dataset, ['database', 'source', 'repository']) &&
+        collectRefs(dataset).length > 0 &&
+        (typeof dataset.estimatedDownloadBytes === 'number' && Number.isFinite(dataset.estimatedDownloadBytes))
+      ),
+      hasLicenseVerification: datasets.length > 0 && datasets.every((dataset) =>
+        ['verified', 'approved'].includes(stringValue(dataset.licenseStatus).toLowerCase())
+      ),
+      hasBudget: ['maxDownloadBytes', 'maxStorageBytes', 'maxCpuHours', 'maxMemoryGb', 'maxWallHours'].every((field) =>
+        typeof budget[field] === 'number' && Number.isFinite(budget[field]) && Number(budget[field]) > 0
+      ) && collectRefs(budget).length > 0,
+      hasEnvironment: ['toolVersionRefs', 'environmentLockRefs', 'genomeCacheRefs'].every((field) =>
+        Array.isArray(environment[field]) && (environment[field] as unknown[]).length > 0
+      ),
+      hasDegradationStrategy: stringValue(record.degradationStrategy).length > 0,
+    };
+  });
+}
+
+function isRawDataDossierReady(dossier: NormalizedRawDataReadiness) {
+  return dossier.gateAllowed &&
+    dossier.rawExecutionStatus === 'ready' &&
+    dossier.approvalStatus === 'approved' &&
+    dossier.allChecksPass &&
+    dossier.hasDatasetAccessions &&
+    dossier.hasLicenseVerification &&
+    dossier.hasBudget &&
+    dossier.hasEnvironment &&
+    dossier.hasDegradationStrategy;
 }
 
 function normalizeType(value: unknown) {

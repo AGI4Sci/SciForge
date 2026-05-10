@@ -16,14 +16,16 @@ export const capabilityManifest: CapabilityManifest = {
   version: '0.1.0',
   ownerPackage: 'packages/verifiers/scientific-reproduction',
   kind: 'verifier',
-  brief: 'Checks generic scientific reproduction artifacts for claim/evidence coverage, figure reproduction provenance, citation/accession verification, verdict vocabulary, refs-first evidence, and negative result semantics.',
+  brief: 'Checks generic scientific reproduction artifacts for claim/evidence coverage, figure reproduction provenance, citation/accession verification, raw-data readiness gates, verdict vocabulary, refs-first evidence, and negative result semantics.',
   routingTags: [
     'scientific-reproduction',
     'claim-verdict',
     'figure-reproduction-report',
     'negative-result-report',
+    'raw-data-readiness-dossier',
     'citation-verification',
     'accession-verification',
+    'raw-data-readiness',
   ],
   domains: ['research', 'literature', 'omics', 'scientific-reproduction'],
   inputSchema: {
@@ -81,6 +83,11 @@ export const capabilityManifest: CapabilityManifest = {
       failureCode: 'scientific-reproduction.negative-result-ambiguous',
       summary: 'Negative scientific conclusions must be separated from operational tool failures.',
       recoverActions: ['write-negative-result-report', 'classify-operational-failure', 'attach-statistical-evidence'],
+    },
+    {
+      failureCode: 'scientific-reproduction.raw-data-readiness-blocked',
+      summary: 'Raw-data execution must be blocked until approval, license, budget, environment, checksum, and readiness checks pass.',
+      recoverActions: ['write-raw-data-readiness-dossier', 'record-approval-state', 'attach-budget-and-environment-refs', 'keep-raw-execution-gate-blocked'],
     },
   ],
   providers: [{

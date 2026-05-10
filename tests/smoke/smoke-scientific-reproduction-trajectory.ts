@@ -45,6 +45,94 @@ assert.equal(sample.selfPromptRecommendations[0]?.budget?.maxAutoSubmitRounds, 0
 assert.equal(sample.selfPromptRecommendations[0]?.budget?.reviewRequiredBeforeSubmit, true);
 assert.ok(sample.selfPromptRecommendations[0]?.humanConfirmationPoint);
 
+const baseRecommendation = sample.selfPromptRecommendations[0];
+assert.ok(baseRecommendation, 'sample should include a first self-prompt recommendation');
+const autoSubmitCandidate = structuredClone(baseRecommendation);
+autoSubmitCandidate.mode = 'auto-submit-eligible';
+autoSubmitCandidate.requiredRefs = [
+  { ref: 'artifact:analysis-plan:sample', kind: 'artifact' },
+  { ref: 'trace:self-prompt-gate:sample', kind: 'trace' },
+  { ref: 'workspace:reproduction/session.json', kind: 'workspace-file' },
+];
+autoSubmitCandidate.budget = {
+  maxShadowRounds: 1,
+  maxAutoSubmitRounds: 1,
+  maxToolCalls: 4,
+  maxRuntimeMinutes: 10,
+  stopOnRepeatedFailure: true,
+  reviewRequiredBeforeSubmit: false,
+};
+autoSubmitCandidate.humanConfirmationPoint = 'Auto-submit may proceed only when schema, verifier, refs, budget, and stop condition pass.';
+autoSubmitCandidate.reviewChecklist = [
+  'schema ref resolves',
+  'verifier ref resolves',
+  'budget and stop condition are bounded',
+  'human confirmation point is recorded',
+];
+autoSubmitCandidate.autoSubmitGate = {
+  status: 'allowed',
+  reason: 'All required refs resolve and no missing evidence, raw download, license, compute, or repeated-failure blocker is present.',
+  blockers: [],
+  schemaRef: { ref: 'artifact:self-prompt-schema:v1', kind: 'artifact' },
+  verifierRef: { ref: 'artifact:self-prompt-verifier:auto-submit-v1', kind: 'artifact' },
+  checkedAt: '2026-05-11T00:04:00.000Z',
+};
+
+const autoSubmitEligible = structuredClone(sample);
+autoSubmitEligible.selfPromptRecommendations = [autoSubmitCandidate];
+let autoSubmitValidation = validateScientificReproductionTrajectory(autoSubmitEligible);
+assert.equal(autoSubmitValidation.ok, true, autoSubmitValidation.errors.join('\n'));
+
+const badRequiredRef = structuredClone(autoSubmitEligible);
+badRequiredRef.selfPromptRecommendations[0].requiredRefs = [
+  { ref: '/Applications/workspace/raw-downloads/private.fastq', kind: 'workspace-file' },
+];
+autoSubmitValidation = validateScientificReproductionTrajectory(badRequiredRef);
+assert.equal(autoSubmitValidation.ok, false);
+assert.ok(
+  autoSubmitValidation.errors.some((error) => error.includes('requiredRefs[0].ref must use')),
+  'auto-submit gate should reject local paths and non-workspace refs',
+);
+
+const incompleteAutoGate = structuredClone(autoSubmitEligible);
+(incompleteAutoGate.selfPromptRecommendations[0].autoSubmitGate as unknown as Record<string, unknown>).schemaRef = undefined;
+(incompleteAutoGate.selfPromptRecommendations[0].autoSubmitGate as unknown as Record<string, unknown>).verifierRef = undefined;
+incompleteAutoGate.selfPromptRecommendations[0].budget!.reviewRequiredBeforeSubmit = true;
+incompleteAutoGate.selfPromptRecommendations[0].stopCondition = '';
+incompleteAutoGate.selfPromptRecommendations[0].humanConfirmationPoint = '';
+autoSubmitValidation = validateScientificReproductionTrajectory(incompleteAutoGate);
+assert.equal(autoSubmitValidation.ok, false);
+for (const required of ['stopCondition', 'reviewRequiredBeforeSubmit', 'humanConfirmationPoint', 'schemaRef.ref', 'verifierRef.ref']) {
+  assert.ok(
+    autoSubmitValidation.errors.some((error) => error.includes(required)),
+    `auto-submit gate should report missing/incomplete ${required}`,
+  );
+}
+
+const blockedAutoGate = structuredClone(autoSubmitEligible);
+blockedAutoGate.selfPromptRecommendations[0].autoSubmitGate = {
+  status: 'needs-human',
+  reason: 'Auto-submit is blocked because raw inputs require manual download and the license must be reviewed.',
+  blockers: ['missing-evidence', 'raw-download-required', 'license-restriction', 'compute-budget-exceeded', 'repeated-failure'],
+  schemaRef: { ref: 'artifact:self-prompt-schema:v1', kind: 'artifact' },
+  verifierRef: { ref: 'artifact:self-prompt-verifier:auto-submit-v1', kind: 'artifact' },
+  blockerRefs: [
+    { ref: 'artifact:missing-data-report:sample', kind: 'artifact' },
+    { ref: 'trace:self-prompt-gate:blockers', kind: 'trace' },
+  ],
+};
+autoSubmitValidation = validateScientificReproductionTrajectory(blockedAutoGate);
+assert.equal(autoSubmitValidation.ok, true, autoSubmitValidation.errors.join('\n'));
+
+const unsafeAllowedAutoGate = structuredClone(blockedAutoGate);
+unsafeAllowedAutoGate.selfPromptRecommendations[0].autoSubmitGate!.status = 'allowed';
+autoSubmitValidation = validateScientificReproductionTrajectory(unsafeAllowedAutoGate);
+assert.equal(autoSubmitValidation.ok, false);
+assert.ok(
+  autoSubmitValidation.errors.some((error) => error.includes('missing evidence blocks auto-submit')),
+  'missing evidence/raw download/license/compute/repeated failure blockers must prevent allowed auto-submit',
+);
+
 const unsafe = structuredClone(sample);
 unsafe.steps[0].observation.summary =
   'Opened /Applications/workspace/ailab/research/app/SciForge with api_key=secret-token-value and token=abc.def.ghi';

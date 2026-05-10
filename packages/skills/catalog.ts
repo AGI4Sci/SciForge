@@ -76,6 +76,7 @@ export const skillPackageManifests = [
     "outputArtifactTypes": [
       "scientific-reproduction-profile",
       "dataset-inventory",
+      "raw-data-readiness-dossier",
       "analysis-plan",
       "figure-reproduction-report",
       "evidence-matrix",

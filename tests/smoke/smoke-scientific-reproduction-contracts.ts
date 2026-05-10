@@ -150,6 +150,50 @@ const fixtures: ScientificReproductionArtifactData[] = [
     repairHistoryRefs: [src('artifact:repair-ledger')],
     finalArtifactRefs: [src('artifact:claim-verdict')],
   }),
+  base('raw-data-readiness-dossier', {
+    claimIds: ['claim-1'],
+    rawExecutionStatus: 'blocked',
+    approvalStatus: 'needs-human',
+    datasets: [{
+      id: 'raw-dataset-1',
+      accession: 'GSE000000',
+      database: 'GEO',
+      sourceRefs: [src('artifact:accession-verification')],
+      dataLevel: 'raw',
+      availability: 'available',
+      licenseStatus: 'needs-human',
+      estimatedDownloadBytes: 12_000_000_000,
+      estimatedStorageBytes: 40_000_000_000,
+      checksumRefs: [src('artifact:checksum-manifest')],
+    }],
+    computeBudget: {
+      maxDownloadBytes: 0,
+      maxStorageBytes: 0,
+      maxCpuHours: 0,
+      maxMemoryGb: 0,
+      maxWallHours: 0,
+      budgetRef: src('artifact:raw-budget-policy'),
+    },
+    environment: {
+      toolVersionRefs: [src('artifact:bioinformatics-tool-lock')],
+      environmentLockRefs: [src('artifact:conda-lock')],
+      genomeCacheRefs: [src('artifact:mm10-genome-cache')],
+      annotationRefs: [src('artifact:gencode-annotation')],
+    },
+    readinessChecks: [{
+      id: 'license-approval',
+      status: 'needs-human',
+      reason: 'Dataset license and compute budget require explicit approval before raw execution.',
+      evidenceRefs: [src('artifact:accession-verification')],
+    }],
+    degradationStrategy: 'Use processed tables or emit insufficient-evidence until raw-data license, budget, environment, and checksum gates pass.',
+    rawExecutionGate: {
+      allowed: false,
+      reason: 'Raw execution is blocked until explicit approval and resource budget are recorded.',
+      requiredBeforeExecution: ['human approval', 'download budget', 'storage budget', 'checksum manifest'],
+      refs: [src('artifact:raw-budget-policy'), src('artifact:accession-verification')],
+    },
+  }),
 ];
 
 assert.deepEqual(
@@ -193,5 +237,12 @@ const missingEvidenceVerdict = {
 };
 assert.equal(validateScientificReproductionArtifact(missingEvidenceVerdict).ok, false);
 assert.ok(validateScientificReproductionArtifact(missingEvidenceVerdict).issues.some((issue) => issue.path === 'supportingEvidenceRefs'));
+
+const unsafeRawReadiness = {
+  ...fixtures[10],
+  rawExecutionGate: { allowed: true, reason: '', requiredBeforeExecution: [], refs: [] },
+};
+assert.equal(validateScientificReproductionArtifact(unsafeRawReadiness).ok, false);
+assert.ok(validateScientificReproductionArtifact(unsafeRawReadiness).issues.some((issue) => issue.path.startsWith('rawExecutionGate')));
 
 console.log('[ok] scientific reproduction contracts validate refs-first artifact shapes and reject missing locators/evidence or inline large content');

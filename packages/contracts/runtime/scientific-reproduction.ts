@@ -13,6 +13,7 @@ export const SCIENTIFIC_REPRODUCTION_ARTIFACT_TYPES = [
   'claim-verdict',
   'negative-result-report',
   'trajectory-training-record',
+  'raw-data-readiness-dossier',
 ] as const;
 
 export type ScientificReproductionArtifactType = typeof SCIENTIFIC_REPRODUCTION_ARTIFACT_TYPES[number];
@@ -273,6 +274,53 @@ export interface TrajectoryTrainingRecord extends ScientificReproductionArtifact
   finalArtifactRefs: ScientificEvidenceRef[];
 }
 
+export interface RawDataReadinessDossier extends ScientificReproductionArtifactBase {
+  artifactType: 'raw-data-readiness-dossier';
+  claimIds: string[];
+  rawExecutionStatus: 'not-requested' | 'blocked' | 'needs-human' | 'ready' | string;
+  approvalStatus: 'not-approved' | 'needs-human' | 'approved' | string;
+  datasets: Array<{
+    id: string;
+    accession: string;
+    database: string;
+    sourceRefs: ScientificEvidenceRef[];
+    dataLevel: 'raw' | 'processed' | 'derived' | string;
+    availability: ScientificReproductionDatasetAvailability | string;
+    licenseStatus: 'verified' | 'needs-human' | 'restricted' | 'unknown' | string;
+    estimatedDownloadBytes: number;
+    estimatedStorageBytes?: number;
+    checksumRefs?: ScientificEvidenceRef[];
+    notes?: string[];
+  }>;
+  computeBudget: {
+    maxDownloadBytes: number;
+    maxStorageBytes: number;
+    maxCpuHours: number;
+    maxMemoryGb: number;
+    maxWallHours: number;
+    budgetRef: ScientificEvidenceRef;
+  };
+  environment: {
+    toolVersionRefs: ScientificEvidenceRef[];
+    environmentLockRefs: ScientificEvidenceRef[];
+    genomeCacheRefs: ScientificEvidenceRef[];
+    annotationRefs?: ScientificEvidenceRef[];
+  };
+  readinessChecks: Array<{
+    id: string;
+    status: 'pass' | 'blocked' | 'needs-human' | 'unknown' | string;
+    reason: string;
+    evidenceRefs: ScientificEvidenceRef[];
+  }>;
+  degradationStrategy: string;
+  rawExecutionGate: {
+    allowed: boolean;
+    reason: string;
+    requiredBeforeExecution: string[];
+    refs: ScientificEvidenceRef[];
+  };
+}
+
 export type ScientificReproductionArtifactData =
   | PaperClaimGraph
   | FigureToClaimMap
@@ -283,7 +331,8 @@ export type ScientificReproductionArtifactData =
   | EvidenceMatrix
   | ClaimVerdict
   | NegativeResultReport
-  | TrajectoryTrainingRecord;
+  | TrajectoryTrainingRecord
+  | RawDataReadinessDossier;
 
 export interface ScientificReproductionValidationIssue {
   path: string;
@@ -338,6 +387,7 @@ const REQUIRED_ARRAYS: Partial<Record<ScientificReproductionArtifactType, string
   'evidence-matrix': ['rows'],
   'negative-result-report': ['claimIds', 'checks'],
   'trajectory-training-record': ['events', 'finalArtifactRefs'],
+  'raw-data-readiness-dossier': ['claimIds', 'datasets', 'readinessChecks'],
 };
 
 const REQUIRED_STRINGS: Partial<Record<ScientificReproductionArtifactType, string[]>> = {
@@ -345,6 +395,7 @@ const REQUIRED_STRINGS: Partial<Record<ScientificReproductionArtifactType, strin
   'figure-reproduction-report': ['figureId', 'verdict'],
   'claim-verdict': ['claimId', 'verdict', 'rationale'],
   'negative-result-report': ['motivation', 'conclusionImpact'],
+  'raw-data-readiness-dossier': ['rawExecutionStatus', 'approvalStatus', 'degradationStrategy'],
 };
 
 const REQUIRED_REF_ARRAYS: Partial<Record<ScientificReproductionArtifactType, string[]>> = {
@@ -358,6 +409,7 @@ const REQUIRED_REF_ARRAYS: Partial<Record<ScientificReproductionArtifactType, st
   'claim-verdict': ['sourceRefs', 'supportingEvidenceRefs'],
   'negative-result-report': ['sourceRefs'],
   'trajectory-training-record': ['sourceRefs', 'finalArtifactRefs'],
+  'raw-data-readiness-dossier': ['sourceRefs'],
 };
 
 const INLINE_LARGE_CONTENT_KEYS = [
@@ -604,6 +656,33 @@ function validateTypeSpecificBasics(
       validateRefArray(event.observationRefs, `events[${index}].observationRefs`, issues, { requireNonEmpty: true });
     });
   }
+  if (artifactType === 'raw-data-readiness-dossier') {
+    arrayRecords(data.datasets).forEach((dataset, index) => {
+      validateStringAt(dataset, 'id', `datasets[${index}].id`, issues);
+      validateStringAt(dataset, 'accession', `datasets[${index}].accession`, issues);
+      validateStringAt(dataset, 'database', `datasets[${index}].database`, issues);
+      validateStringAt(dataset, 'dataLevel', `datasets[${index}].dataLevel`, issues);
+      validateStringAt(dataset, 'availability', `datasets[${index}].availability`, issues);
+      validateStringAt(dataset, 'licenseStatus', `datasets[${index}].licenseStatus`, issues);
+      validateFiniteNonNegativeNumber(dataset.estimatedDownloadBytes, `datasets[${index}].estimatedDownloadBytes`, issues);
+      if (dataset.estimatedStorageBytes !== undefined) {
+        validateFiniteNonNegativeNumber(dataset.estimatedStorageBytes, `datasets[${index}].estimatedStorageBytes`, issues);
+      }
+      validateRefArray(dataset.sourceRefs, `datasets[${index}].sourceRefs`, issues, { requireNonEmpty: true });
+      if (dataset.checksumRefs !== undefined) {
+        validateRefArray(dataset.checksumRefs, `datasets[${index}].checksumRefs`, issues, { requireNonEmpty: true });
+      }
+    });
+    validateRawReadinessBudget(data.computeBudget, 'computeBudget', issues);
+    validateRawReadinessEnvironment(data.environment, 'environment', issues);
+    arrayRecords(data.readinessChecks).forEach((check, index) => {
+      validateStringAt(check, 'id', `readinessChecks[${index}].id`, issues);
+      validateStringAt(check, 'status', `readinessChecks[${index}].status`, issues);
+      validateStringAt(check, 'reason', `readinessChecks[${index}].reason`, issues);
+      validateRefArray(check.evidenceRefs, `readinessChecks[${index}].evidenceRefs`, issues, { requireNonEmpty: true });
+    });
+    validateRawExecutionGate(data.rawExecutionGate, 'rawExecutionGate', issues);
+  }
 }
 
 function validateIdentifierVerification(
@@ -671,6 +750,67 @@ function validateRefArray(
       issues.push({ path: `${path}[${index}]`, message: `${path}[${index}] must include a non-empty ref string.`, expected: '{ ref: string }', actual: typeOf(entry) });
     }
   });
+}
+
+function validateRawReadinessBudget(
+  value: unknown,
+  path: string,
+  issues: ScientificReproductionValidationIssue[],
+) {
+  if (!isRecord(value)) {
+    issues.push({ path, message: `${path} must be an object.`, expected: 'raw-data compute budget', actual: typeOf(value) });
+    return;
+  }
+  for (const field of ['maxDownloadBytes', 'maxStorageBytes', 'maxCpuHours', 'maxMemoryGb', 'maxWallHours']) {
+    validateFiniteNonNegativeNumber(value[field], `${path}.${field}`, issues);
+  }
+  if (!isRef(value.budgetRef)) {
+    issues.push({ path: `${path}.budgetRef`, message: `${path}.budgetRef must be a ref object with a non-empty ref.` });
+  }
+}
+
+function validateRawReadinessEnvironment(
+  value: unknown,
+  path: string,
+  issues: ScientificReproductionValidationIssue[],
+) {
+  if (!isRecord(value)) {
+    issues.push({ path, message: `${path} must be an object.`, expected: 'raw-data execution environment', actual: typeOf(value) });
+    return;
+  }
+  validateRefArray(value.toolVersionRefs, `${path}.toolVersionRefs`, issues, { requireNonEmpty: true });
+  validateRefArray(value.environmentLockRefs, `${path}.environmentLockRefs`, issues, { requireNonEmpty: true });
+  validateRefArray(value.genomeCacheRefs, `${path}.genomeCacheRefs`, issues, { requireNonEmpty: true });
+  if (value.annotationRefs !== undefined) {
+    validateRefArray(value.annotationRefs, `${path}.annotationRefs`, issues, { requireNonEmpty: true });
+  }
+}
+
+function validateRawExecutionGate(
+  value: unknown,
+  path: string,
+  issues: ScientificReproductionValidationIssue[],
+) {
+  if (!isRecord(value)) {
+    issues.push({ path, message: `${path} must be an object.`, expected: 'raw execution gate', actual: typeOf(value) });
+    return;
+  }
+  if (typeof value.allowed !== 'boolean') {
+    issues.push({ path: `${path}.allowed`, message: `${path}.allowed must be boolean.`, expected: 'boolean', actual: typeOf(value.allowed) });
+  }
+  validateStringAt(value, 'reason', `${path}.reason`, issues);
+  validateStringArray(value.requiredBeforeExecution, `${path}.requiredBeforeExecution`, issues, false);
+  validateRefArray(value.refs, `${path}.refs`, issues, { requireNonEmpty: true });
+}
+
+function validateFiniteNonNegativeNumber(
+  value: unknown,
+  path: string,
+  issues: ScientificReproductionValidationIssue[],
+) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    issues.push({ path, message: `${path} must be a finite non-negative number.`, expected: 'number >= 0', actual: typeOf(value) });
+  }
 }
 
 function findInlineLargeContent(value: unknown, path = '$', depth = 0): string[] {

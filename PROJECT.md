@@ -269,11 +269,11 @@ Todo：
 
 ## 后续候选里程碑
 
-这些不是当前阶段未完成项。只有满足前置条件后才进入执行，避免把通用能力验证误读成单论文 raw-data 重算工程。
+N1-N3 已在本轮完成为通用 gate/contract/smoke，不触发 raw-data 下载或计算。N4 仍必须等待用户明确批准下载/计算后才可进入，避免把通用能力验证误读成单论文 raw-data 重算工程。
 
-- [ ] N1：Harness-governed Scientific Reproduction。把科研复现每轮 context、capability、budget、verification、repair、progress 收敛进 `HarnessContract`/trace；验收以 harness trace、budget exhaustion、validation/repair/audit 和现有 2020/2025 bounded fixtures 通过为准。
-- [ ] N2：Self-prompt Auto-submit Gating。只在 required refs、schema、verifier、预算、停止条件和人工确认点满足时自动提交下一轮；遇到 missing evidence、raw download、许可/算力未定义或重复失败时停在 structured needs-human/failed-with-reason。
-- [ ] N3：Raw-data Reanalysis Readiness。先产出 refs-first readiness dossier，列明 accession、数据许可、下载字节数、存储/CPU/内存/时间预算、工具版本、环境锁、genome cache、checksum 和降级策略；verifier 必须阻止未满足许可/预算/环境的 raw execution。
+- [x] N1：Harness-governed Scientific Reproduction。把科研复现每轮 context、capability、budget、verification、repair、progress 收敛进 `HarnessContract`/trace；验收以 harness trace、budget exhaustion、validation/repair/audit 和现有 2020/2025 bounded fixtures 通过为准。
+- [x] N2：Self-prompt Auto-submit Gating。只在 required refs、schema、verifier、预算、停止条件和人工确认点满足时自动提交下一轮；遇到 missing evidence、raw download、许可/算力未定义或重复失败时停在 structured needs-human/failed-with-reason。
+- [x] N3：Raw-data Reanalysis Readiness。先产出 refs-first readiness dossier，列明 accession、数据许可、下载字节数、存储/CPU/内存/时间预算、工具版本、环境锁、genome cache、checksum 和降级策略；verifier 必须阻止未满足许可/预算/环境的 raw execution。
 - [ ] N4：One-claim Raw-data Pilot。只能在 N3 通过且用户批准下载/计算后，选择一个 claim、最小样本集和一条明确 pipeline 运行；输出仍使用通用 `analysis-notebook`、`figure-reproduction-report`、`evidence-matrix`、`claim-verdict`，不能因 pipeline 跑通就标成科学成功。
 
 ## 2026-05-11 阶段记录
@@ -301,4 +301,8 @@ Todo：
 - 并行收束审计补充：多个 sub agent 从任务板、验证脚本、网页端服务和下一阶段边界并行复核，确认 raw FASTQ/BAM 全量重算仍应另开 milestone；同时发现 R010 verifier 与正式 scientific-reproduction contract 有通用对齐缺口。本轮已补齐 verifier 对 `inputRefs`/`codeRefs`/`outputFigureRefs`/`statisticsRefs`/`stdoutRefs`/`stderrRefs`、`insufficient-evidence`/`not-tested` verdict、`figure-to-claim-map` 非复现记录边界、结构化 DOI/accession verification 的支持；并把 `smoke:scientific-reproduction` 纳入 `smoke:all`，使 `verify:fast` 默认覆盖科研复现 contracts、fixtures、verifier、UI failure 和 trajectory export。
 - 第五阶段并行审计与轻量网页端复测：sub agents 复核任务板、verifier/contract、网页端服务和下一阶段边界；确认当前任务板可作为 bounded scientific reproduction milestone 收束，但需要澄清 `missing-data-report` derived draft、negative-result 机制边界和 raw-data 后续门槛。Computer Use 轻量 retest `generated-literature-74eb7212f46b` 验证 post-`repairNeededPayload` terminal failure 会在网页端显示 `repair-needed`/failed 终态、`literature-runtime-result` runtime-diagnostic artifact、execution unit、stdout/stderr/output refs 和恢复动作；引用 `artifact:literature-runtime-result` 的 follow-up 能进入下一轮上下文并读取相关 refs，但简单诊断追问仍可能等待过长，已作为 N1/N2 的 harness/budget gating 后续课题。
 - 第五阶段通用修复：scientific reproduction contract 与 verifier 再次收紧。Contract 现在要求 figure reproduction 带参数或 parameter refs、statistics refs、stdout/stderr refs；negative-result checks 带 input/code/statistics/output refs；identifier verification 按 bibliographic/accession 强校验 DOI/PMID/title/year/journal 或 accession/database/status/checkedAt/evidence refs；refs-first 校验会拦截大段 `sourceText`/table/summary 等 inline payload。Verifier 现在先做 runtime contract compliance，支持 data-root `artifactType` fixtures，解析 `{ref}` object refs，聚合 nested `negative-result-report.checks[]`，并用真实 2020/2025 fixture 覆盖 figure reproduction 与 identifier verification。
+- 第六阶段并行推进完成 N1/N2/N3，但没有触发 raw FASTQ/BAM 下载或 genome-cache 复算。新增 `scientific-reproduction-research` harness profile，把 required refs、scientific reproduction capability/verifier preference、strict verification、needs-human budget exhaustion、安全 side effects 和 progress milestones 写入 `HarnessContract`/trace，并把 `smoke:agent-harness-profile-coverage` 纳入 `smoke:all`。
+- Self-prompt auto-submit gate 已进入 trajectory contract：`auto-submit-eligible` 必须具备 required refs、schema/verifier refs、预算、停止条件、人工确认点和 gate reason；missing evidence、raw download、license restriction、compute budget exceeded、repeated failure、unresolved refs、schema/verifier incomplete 等 blocker 会停在 needs-human/failed，不允许直接 allowed。
+- Raw-data readiness 已成为正式 `raw-data-readiness-dossier` artifact，并暴露到 scientific reproduction skill/verifier manifest。Verifier 新增 `raw-data-readiness-gate`：没有 ready dossier 时禁止 raw execution；`rawExecutionGate.allowed=true` 只有在 approval、license、budget、environment、checksum/readiness checks 都满足时才可通过；blocked/needs-human dossier 可作为安全停住的 N3 产物通过 bounded verification。
+- 本轮验证：`npm run typecheck`、`npm run smoke:agent-harness-profile-coverage`、`npm run smoke:scientific-reproduction`、`npx tsx tests/smoke/smoke-trajectory-training-record-export.ts`、`npx tsx tests/smoke/smoke-scientific-reproduction-trajectory.ts` 均通过。
 - 当前收束判断：本阶段“用真实例子拉通复杂科研问题解决能力”的目标已经完成；继续做 raw FASTQ/BAM 下载、全量 peak calling 或 genome-cache 复算会把项目从通用能力验证拖入单论文重算工程，暂不作为当前任务。后续如要继续，应另建 milestone，先定义下载预算、可复现实验环境、数据许可和计算资源。

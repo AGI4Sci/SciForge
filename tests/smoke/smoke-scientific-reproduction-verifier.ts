@@ -165,6 +165,149 @@ const negativeResult = verifyScientificReproduction({
 assert.equal(negativeResult.verdict, 'pass');
 assert.ok(negativeResult.criterionResults.find((criterion) => criterion.id === 'negative-result-semantics' && criterion.passed));
 
+const blockedReadinessResult = verifyScientificReproduction({
+  artifacts: [
+    artifact('claim-verdict-readiness', 'claim-verdict', {
+      claimId: 'claim-a',
+      verdict: 'insufficient-evidence',
+      rationale: 'Raw-data execution has not passed readiness gates.',
+      supportingEvidenceRefs: [ref('artifact:raw-readiness')],
+      missingEvidence: [{ summary: 'Raw FASTQ/BAM execution requires approval and budget.', refs: [ref('artifact:raw-readiness')] }],
+    }),
+    artifact('raw-readiness', 'raw-data-readiness-dossier', {
+      claimIds: ['claim-a'],
+      rawExecutionStatus: 'blocked',
+      approvalStatus: 'needs-human',
+      datasets: [{
+        id: 'raw-dataset-a',
+        accession: 'GSE000000',
+        database: 'GEO',
+        sourceRefs: [ref('artifact:accession-check-1')],
+        dataLevel: 'raw',
+        availability: 'available',
+        licenseStatus: 'needs-human',
+        estimatedDownloadBytes: 10_000_000_000,
+      }],
+      computeBudget: {
+        maxDownloadBytes: 0,
+        maxStorageBytes: 0,
+        maxCpuHours: 0,
+        maxMemoryGb: 0,
+        maxWallHours: 0,
+        budgetRef: ref('artifact:budget-policy'),
+      },
+      environment: {
+        toolVersionRefs: [ref('artifact:tool-lock')],
+        environmentLockRefs: [ref('artifact:environment-lock')],
+        genomeCacheRefs: [ref('artifact:genome-cache')],
+      },
+      readinessChecks: [{
+        id: 'approval',
+        status: 'needs-human',
+        reason: 'A human must approve raw-data download and compute.',
+        evidenceRefs: [ref('artifact:budget-policy')],
+      }],
+      degradationStrategy: 'Use processed tables or emit insufficient-evidence until the raw-data gates pass.',
+      rawExecutionGate: {
+        allowed: false,
+        reason: 'Approval and budget are missing.',
+        requiredBeforeExecution: ['approval', 'budget'],
+        refs: [ref('artifact:budget-policy')],
+      },
+    }),
+    artifact('dataset-inventory-readiness', 'dataset-inventory', {
+      identifierVerifications: [{
+        id: 'paper-id',
+        kind: 'bibliographic',
+        doi: '10.1000/example',
+        title: 'Reusable paper identity fixture',
+        year: 2024,
+        journal: 'Example Journal',
+        verified: true,
+        status: 'verified',
+        checkedAt: '2026-05-11',
+        evidenceRefs: [ref('artifact:paper-metadata-1')],
+      }],
+      datasets: [{ id: 'dataset-a', title: 'Dataset fixture', sourceRefs: [ref('artifact:dataset-a')], availability: 'available' }],
+    }),
+  ],
+  providerHints: { requireRawDataReadiness: true },
+});
+assert.equal(blockedReadinessResult.verdict, 'pass');
+assert.equal(blockedReadinessResult.diagnostics.rawDataReadinessCount, 1);
+assert.ok(blockedReadinessResult.criterionResults.find((criterion) => criterion.id === 'raw-data-readiness-gate' && criterion.passed));
+
+const unsafeRawExecutionResult = verifyScientificReproduction({
+  artifacts: [
+    artifact('claim-verdict-unsafe-readiness', 'claim-verdict', {
+      claimId: 'claim-a',
+      verdict: 'insufficient-evidence',
+      rationale: 'The raw-data gate incorrectly allowed execution before checks passed.',
+      supportingEvidenceRefs: [ref('artifact:unsafe-readiness')],
+    }),
+    artifact('unsafe-readiness', 'raw-data-readiness-dossier', {
+      claimIds: ['claim-a'],
+      rawExecutionStatus: 'blocked',
+      approvalStatus: 'needs-human',
+      datasets: [{
+        id: 'raw-dataset-a',
+        accession: 'GSE000000',
+        database: 'GEO',
+        sourceRefs: [ref('artifact:accession-check-1')],
+        dataLevel: 'raw',
+        availability: 'available',
+        licenseStatus: 'needs-human',
+        estimatedDownloadBytes: 10_000_000_000,
+      }],
+      computeBudget: {
+        maxDownloadBytes: 0,
+        maxStorageBytes: 0,
+        maxCpuHours: 0,
+        maxMemoryGb: 0,
+        maxWallHours: 0,
+        budgetRef: ref('artifact:budget-policy'),
+      },
+      environment: {
+        toolVersionRefs: [ref('artifact:tool-lock')],
+        environmentLockRefs: [ref('artifact:environment-lock')],
+        genomeCacheRefs: [ref('artifact:genome-cache')],
+      },
+      readinessChecks: [{
+        id: 'approval',
+        status: 'needs-human',
+        reason: 'A human must approve raw-data download and compute.',
+        evidenceRefs: [ref('artifact:budget-policy')],
+      }],
+      degradationStrategy: 'Stop before raw execution.',
+      rawExecutionGate: {
+        allowed: true,
+        reason: 'Unsafe test fixture.',
+        requiredBeforeExecution: ['approval', 'budget'],
+        refs: [ref('artifact:budget-policy')],
+      },
+    }),
+    artifact('dataset-inventory-unsafe-readiness', 'dataset-inventory', {
+      identifierVerifications: [{
+        id: 'paper-id',
+        kind: 'bibliographic',
+        doi: '10.1000/example',
+        title: 'Reusable paper identity fixture',
+        year: 2024,
+        journal: 'Example Journal',
+        verified: true,
+        status: 'verified',
+        checkedAt: '2026-05-11',
+        evidenceRefs: [ref('artifact:paper-metadata-1')],
+      }],
+      datasets: [{ id: 'dataset-a', title: 'Dataset fixture', sourceRefs: [ref('artifact:dataset-a')], availability: 'available' }],
+    }),
+  ],
+  providerHints: { allowRawDataExecution: true, requireRawDataReadiness: true },
+});
+assert.equal(unsafeRawExecutionResult.verdict, 'fail');
+assert.ok(unsafeRawExecutionResult.criterionResults.find((criterion) => criterion.id === 'raw-data-readiness-gate' && !criterion.passed));
+assert.ok(unsafeRawExecutionResult.repairHints.some((hint) => hint.includes('raw-data-readiness-dossier')));
+
 const realFixtureRoot = join(process.cwd(), 'tests/fixtures/scientific-reproduction/real-paper-reproduction');
 const realArtifacts = await Promise.all([
   '2020-prdm9-dsb-fate.claim-verdict.json',

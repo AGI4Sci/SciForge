@@ -90,6 +90,7 @@ export type {
   FigureToClaimMap,
   NegativeResultReport,
   PaperClaimGraph,
+  RawDataReadinessDossier,
   ScientificEvidenceRef,
   ScientificRef,
   ScientificReproductionArtifactData,

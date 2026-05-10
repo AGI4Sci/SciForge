@@ -483,12 +483,12 @@ function nonEmptyScreens(value: ScreenStateRef[] | undefined, fallback: ScreenSt
 
 function workspaceKindFor(ref: string): WorkspaceRef['kind'] {
   const normalized = normalizeReplayRef(ref);
+  if (/^(?:\.sciforge\/|file:)/.test(normalized)) return 'workspace-file';
   if (/audit/i.test(normalized)) return 'audit';
   if (/ledger/i.test(normalized)) return 'ledger';
   if (/trace|telemetry|span/i.test(normalized)) return 'trace';
   if (/execution-unit|^EU-|^run-/i.test(normalized)) return 'execution-unit';
   if (/screen/i.test(normalized)) return 'screen';
-  if (/^(?:\.sciforge\/|file:)/.test(normalized)) return 'workspace-file';
   return 'artifact';
 }
 
