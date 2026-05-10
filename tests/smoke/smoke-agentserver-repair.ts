@@ -6,6 +6,10 @@ import { tmpdir } from 'node:os';
 
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
 import { readTaskAttempts } from '../../src/runtime/task-attempt-history.js';
+import {
+  buildValidationRepairTelemetrySummary,
+  readValidationRepairTelemetrySpanRecords,
+} from '../../src/runtime/gateway/validation-repair-telemetry-sink.js';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-agentserver-repair-'));
 await writeFile(join(workspace, 'matrix.csv'), [
@@ -133,6 +137,22 @@ try {
   assert.equal(repairRerunAudit?.repairDecision?.action, 'none');
   assert.equal(repairRerunAudit?.auditRecord?.outcome, 'accepted');
   assert.equal(repairRerunAudit?.auditRecord?.contractId, 'sciforge.repair-rerun-result.v1');
+  const telemetryRefs = (result as typeof result & {
+    refs?: { validationRepairTelemetry?: Array<{ ref?: string; spanKinds?: string[]; recordRefs?: string[] }> };
+  }).refs?.validationRepairTelemetry ?? [];
+  assert.equal(telemetryRefs[0]?.ref, '.sciforge/validation-repair-telemetry/spans.jsonl');
+  assert.ok(telemetryRefs.some((ref) => ref.spanKinds?.includes('repair-rerun')));
+  assert.ok(telemetryRefs.some((ref) => ref.spanKinds?.includes('repair-decision')));
+  assert.ok(telemetryRefs.some((ref) => (ref.recordRefs?.length ?? 0) > 0));
+
+  const telemetryRecords = await readValidationRepairTelemetrySpanRecords({ workspacePath: workspace });
+  assert.ok(telemetryRecords.some((record) => record.spanKind === 'repair-rerun' && record.outcome === 'accepted'));
+  assert.ok(telemetryRecords.some((record) => record.spanKind === 'repair-decision' && record.action === 'none'));
+  assert.ok(telemetryRecords.some((record) => record.subject?.kind === 'repair-rerun-result'));
+  const telemetrySummary = await buildValidationRepairTelemetrySummary({ workspacePath: workspace });
+  assert.equal(telemetrySummary.sourceRef, '.sciforge/validation-repair-telemetry/spans.jsonl');
+  assert.ok((telemetrySummary.spanKindCounts['repair-rerun'] ?? 0) >= 1);
+  assert.ok(telemetrySummary.auditIds.some((auditId) => auditId.startsWith('audit:repair-rerun:')));
 
   const attemptFiles = await readdir(join(workspace, '.sciforge', 'task-attempts'));
   assert.equal(attemptFiles.length, 1);
@@ -145,12 +165,15 @@ try {
   const enrichedAttempts = await readTaskAttempts(workspace, attemptHistory.attempts[0].id) as Array<{
     refs?: {
       validationRepairAudit?: Array<{ subject?: { kind?: string }; outcome?: string }>;
+      validationRepairTelemetry?: Array<{ ref?: string; spanKinds?: string[]; recordRefs?: string[] }>;
     };
   }>;
   assert.equal(enrichedAttempts[1]?.refs?.validationRepairAudit?.[0]?.subject?.kind, 'repair-rerun-result');
   assert.equal(enrichedAttempts[1]?.refs?.validationRepairAudit?.[0]?.outcome, 'accepted');
+  assert.equal(enrichedAttempts[1]?.refs?.validationRepairTelemetry?.[0]?.ref, '.sciforge/validation-repair-telemetry/spans.jsonl');
+  assert.ok(enrichedAttempts[1]?.refs?.validationRepairTelemetry?.some((ref) => ref.spanKinds?.includes('repair-rerun')));
 
-  console.log('[ok] agentserver repair smoke patches task code and reruns self-healed attempt');
+  console.log('[ok] agentserver repair smoke patches task code, reruns self-healed attempt, and records repair-rerun telemetry');
 } finally {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }

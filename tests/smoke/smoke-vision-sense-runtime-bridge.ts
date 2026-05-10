@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { CAPABILITY_BUDGET_DEBIT_CONTRACT_ID } from '@sciforge-ui/runtime-contract/capability-budget';
 import { CaptureProviderError, captureDisplays } from '../../src/runtime/computer-use/capture.js';
 import { normalizePlatformAction, platformActionIssue } from '../../src/runtime/computer-use/actions.js';
 import { executeGenericDesktopAction } from '../../src/runtime/computer-use/executor.js';
@@ -142,9 +143,22 @@ try {
   assert.equal(completed.executionUnits.length, 1);
   assert.equal(completed.executionUnits[0].tool, 'local.vision-sense');
   assert.equal(completed.executionUnits[0].status, 'done');
+  const completedBudgetDebit = completed.budgetDebits?.[0];
+  assert.ok(completedBudgetDebit, 'Computer Use generic loop should emit a budget debit record');
+  assert.equal(completedBudgetDebit.contract, CAPABILITY_BUDGET_DEBIT_CONTRACT_ID);
+  assert.equal(completedBudgetDebit.capabilityId, 'action.sciforge.computer-use');
+  assert.deepEqual(completed.executionUnits[0].budgetDebitRefs, [completedBudgetDebit.debitId]);
+  assert.deepEqual(completed.workEvidence?.[0]?.budgetDebitRefs, [completedBudgetDebit.debitId]);
+  assert.equal(completedBudgetDebit.sinkRefs.executionUnitRef, completed.executionUnits[0].id);
+  assert.deepEqual(completedBudgetDebit.sinkRefs.workEvidenceRefs, [completed.workEvidence?.[0]?.id]);
+  assert.ok(completedBudgetDebit.sinkRefs.auditRefs.includes('audit:vision-sense-computer-use-loop'));
+  assert.ok(completed.logs?.some((entry) => entry.ref === 'audit:vision-sense-computer-use-loop' && Array.isArray(entry.budgetDebitRefs)));
+  assert.ok(completedBudgetDebit.debitLines.some((line) => line.dimension === 'actionSteps' && line.amount === 5));
+  assert.ok(completedBudgetDebit.debitLines.some((line) => line.dimension === 'observeCalls' && line.amount === 20));
   const traceArtifact = completed.artifacts.find((artifact) => artifact.id === 'vision-sense-trace');
   assert.ok(traceArtifact);
   assert.equal(traceArtifact.path, '.sciforge/vision-runs/generic-cu-actions-smoke/vision-trace.json');
+  assert.deepEqual((traceArtifact.metadata as { budgetDebitRefs?: string[] } | undefined)?.budgetDebitRefs, [completedBudgetDebit.debitId]);
   assert.equal(completed.artifacts.filter((artifact) => artifact.id === 'vision-sense-trace').length, 1);
   assert.ok(completed.artifacts.some((artifact) => artifact.type === 'verification-result'));
 

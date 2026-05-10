@@ -7,6 +7,7 @@ import {
 } from '@sciforge-ui/runtime-contract/capability-budget';
 
 import { runOfflineLiteratureRetrieval } from '../../src/runtime/literature-retrieval-runner.js';
+import { genericLoopPayload } from '../../src/runtime/vision-sense/computer-use-trace-output.js';
 
 const debitLines: CapabilityBudgetDebitLine[] = [
   {
@@ -104,4 +105,54 @@ assert.deepEqual(runtimeDebit.sinkRefs.workEvidenceRefs, [literatureRuntimeOutpu
 assert.ok(runtimeDebit.sinkRefs.auditRefs.includes('audit:literature-retrieval-runner'));
 assert.ok(runtimeDebit.debitLines.some((line) => line.dimension === 'networkCalls' && line.amount === 2));
 
-console.log('[ok] capability invocation budget debit record is contract-shaped, sink-addressable, and wired into literature.retrieval runtime output');
+const computerUsePayload = genericLoopPayload({
+  request: {
+    skillDomain: 'literature',
+    prompt: 'Use generic computer use to click the visible upload button.',
+    workspacePath: '/tmp/sciforge-budget-debit-smoke',
+    artifacts: [],
+    selectedToolIds: ['local.vision-sense'],
+  },
+  workspace: '/tmp/sciforge-budget-debit-smoke',
+  runId: 'budget-debit-computer-use-smoke',
+  tracePath: '/tmp/sciforge-budget-debit-smoke/.sciforge/vision-runs/budget-debit-computer-use-smoke/vision-trace.json',
+  screenshotRefs: [
+    {
+      id: 'step-001-before-display-1',
+      path: '.sciforge/vision-runs/budget-debit-computer-use-smoke/step-001-before-display-1.png',
+      absPath: '/tmp/sciforge-budget-debit-smoke/.sciforge/vision-runs/budget-debit-computer-use-smoke/step-001-before-display-1.png',
+      displayId: 1,
+      sha256: 'before-sha',
+      bytes: 128,
+    },
+    {
+      id: 'step-001-after-display-1',
+      path: '.sciforge/vision-runs/budget-debit-computer-use-smoke/step-001-after-display-1.png',
+      absPath: '/tmp/sciforge-budget-debit-smoke/.sciforge/vision-runs/budget-debit-computer-use-smoke/step-001-after-display-1.png',
+      displayId: 1,
+      sha256: 'after-sha',
+      bytes: 256,
+    },
+  ],
+  status: 'done',
+  failureReason: '',
+  actionCount: 1,
+  maxSteps: 3,
+  dryRun: true,
+  desktopPlatform: 'darwin',
+});
+
+const computerUseDebit = computerUsePayload.budgetDebits?.[0];
+assert.ok(computerUseDebit, 'Computer Use generic loop payload should emit a budget debit record');
+assert.equal(computerUseDebit.contract, CAPABILITY_BUDGET_DEBIT_CONTRACT_ID);
+assert.equal(computerUseDebit.capabilityId, 'action.sciforge.computer-use');
+assert.deepEqual(computerUsePayload.executionUnits[0]?.budgetDebitRefs, [computerUseDebit.debitId]);
+assert.deepEqual(computerUsePayload.workEvidence?.[0]?.budgetDebitRefs, [computerUseDebit.debitId]);
+assert.equal(computerUseDebit.sinkRefs.executionUnitRef, computerUsePayload.executionUnits[0]?.id);
+assert.deepEqual(computerUseDebit.sinkRefs.workEvidenceRefs, [computerUsePayload.workEvidence?.[0]?.id]);
+assert.ok(computerUseDebit.sinkRefs.auditRefs.includes('audit:vision-sense-computer-use-loop'));
+assert.ok(computerUsePayload.logs?.some((entry) => entry.ref === 'audit:vision-sense-computer-use-loop' && Array.isArray(entry.budgetDebitRefs)));
+assert.ok(computerUseDebit.debitLines.some((line) => line.dimension === 'actionSteps' && line.amount === 1 && line.remaining === 2));
+assert.ok(computerUseDebit.debitLines.some((line) => line.dimension === 'observeCalls' && line.amount === 2));
+
+console.log('[ok] capability invocation budget debit record is contract-shaped, sink-addressable, and wired into literature.retrieval plus Computer Use runtime output');

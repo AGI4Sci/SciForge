@@ -250,6 +250,7 @@ export async function runGenericVisionComputerUseLoop(
     status: executionStatus,
     failureReason,
     actionCount: steps.filter((step) => step.kind === 'gui-execution').length,
+    maxSteps: config.maxSteps,
     dryRun: config.dryRun,
     desktopPlatform: config.desktopPlatform,
     windowTarget: targetResolution.ok ? toTraceWindowTarget(targetResolution) : undefined,

@@ -10,6 +10,7 @@ const workspace = await mkdtemp(join(tmpdir(), 'sciforge-compact-repair-'));
 let generationRequests = 0;
 let repairRequests = 0;
 let repairBodyLength = 0;
+let repairPromptText = '';
 
 const badTask = String.raw`
 import json
@@ -22,6 +23,8 @@ payload = {
   "message": "This task has a generated syntax bug",
   "confidence": 0.0,
 }
+print("ALLOWED_STDOUT_SUMMARY")
+sys.stderr.write("".join(["BLOCKED", "_STDERR", "_SECRET"]))
 raise RuntimeError("intentional compact repair failure before writing output")
 with open(output_path, "w", encoding="utf-8") as handle:
   json.dump(payload, handle)
@@ -90,9 +93,16 @@ const server = createServer(async (req, res) => {
     assert.equal(metadata.contextEnvelopeBytes, undefined);
     assert.equal(metadata.repairContextVersion, 'sciforge.repair-context.v1');
     const text = isRecord(parsed.input) ? String(parsed.input.text || '') : '';
+    repairPromptText = text;
     assert.match(text, /repairContext/);
     assert.match(text, /intentional compact repair failure/);
     assert.doesNotMatch(text, /x{50000}/, 'repair prompt should not include the full huge user prompt');
+    assert.match(text, /ALLOWED_STDOUT_SUMMARY/, 'allowed stdout failure evidence should be visible');
+    assert.doesNotMatch(text, /BLOCKED_STDERR_SECRET/, 'blocked stderr failure evidence must not leak into repair prompt');
+    assert.doesNotMatch(text, /missing executionUnits/, 'validation findings are disabled by repairContextPolicy');
+    assert.match(text, /repairContextPolicyAudit/);
+    assert.match(text, /"includedFailureEvidenceRefs": \[\s*"stdout"\s*\]/);
+    assert.match(text, /"omittedFields"/);
     const codeRef = String(metadata.codeRef || '');
     assert.match(codeRef, /^\.sciforge\/tasks\/generated-literature-/);
     await writeFile(join(workspace, codeRef), fixedTask);
@@ -165,12 +175,26 @@ try {
       forceAgentServerGeneration: true,
       currentPrompt: hugePrompt,
       recentConversation: [hugePrompt],
+      agentHarnessHandoff: {
+        repairContextPolicy: {
+          kind: 'repair-rerun',
+          maxAttempts: 1,
+          includeStdoutSummary: true,
+          includeStderrSummary: true,
+          includeValidationFindings: false,
+          includePriorAttemptRefs: false,
+          allowedFailureEvidenceRefs: ['stdout'],
+          blockedFailureEvidenceRefs: ['stderr', 'validation:findings'],
+        },
+      },
     },
   });
 
   assert.equal(generationRequests, 1);
   assert.equal(repairRequests, 1);
   assert.ok(repairBodyLength > 0);
+  assert.match(repairPromptText, /"allowedFailureEvidenceRefs": \[\s*"stdout"\s*\]/);
+  assert.match(repairPromptText, /"blockedFailureEvidenceRefs": \[\s*"stderr",\s*"validation:findings"\s*\]/);
   assert.match(result.message, /Compact AgentServer repair executed/);
   assert.equal(result.executionUnits[0]?.status, 'self-healed');
   assert.ok(result.artifacts.some((artifact) => artifact.id === 'artifact.compact_repair'));

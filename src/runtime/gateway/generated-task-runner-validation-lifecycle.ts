@@ -13,6 +13,7 @@ import {
   attachValidationRepairAuditChainToPayload,
   createValidationRepairAuditChain,
 } from './validation-repair-audit-bridge.js';
+import { recordValidationRepairTelemetryForPayload } from './validation-repair-telemetry-runtime.js';
 
 type RepairAttemptRunner = (params: {
   request: GatewayRequest;
@@ -265,8 +266,12 @@ async function annotateRepairRerunResult(
     ],
   });
   const annotated = attachValidationRepairAuditChainToPayload(repaired, chain);
-  await persistAnnotatedRepairRerunPayloadBestEffort(input.workspacePath, completedPayloadRef, annotated);
-  return annotated;
+  const annotatedWithTelemetry = await recordValidationRepairTelemetryForPayload(annotated, {
+    ...input.request,
+    workspacePath: input.workspacePath,
+  });
+  await persistAnnotatedRepairRerunPayloadBestEffort(input.workspacePath, completedPayloadRef, annotatedWithTelemetry);
+  return annotatedWithTelemetry;
 }
 
 function repairRerunFindingProjections(

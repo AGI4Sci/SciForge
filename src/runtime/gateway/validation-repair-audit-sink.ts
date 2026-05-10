@@ -1,5 +1,6 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import type { ObserveInvocationRecord } from '@sciforge-ui/runtime-contract/observe';
 import {
   VALIDATION_REPAIR_AUDIT_SINK_TARGETS,
   type AuditRecord,
@@ -20,6 +21,8 @@ import type { ValidationRepairAuditChain } from './validation-repair-audit-bridg
 
 export const VALIDATION_REPAIR_AUDIT_VERIFICATION_ARTIFACTS_RELATIVE_DIR = '.sciforge/validation-repair-audit/verification-artifacts';
 export const VALIDATION_REPAIR_AUDIT_VERIFICATION_ARTIFACT_CONTRACT_ID = 'sciforge.validation-repair-audit-verification-artifact.v1';
+export const VALIDATION_REPAIR_AUDIT_OBSERVE_INVOCATIONS_RELATIVE_DIR = '.sciforge/validation-repair-audit/observe-invocations';
+export const VALIDATION_REPAIR_AUDIT_OBSERVE_INVOCATION_CONTRACT_ID = 'sciforge.validation-repair-audit-observe-invocation.v1';
 
 export interface ValidationRepairAuditSinkChain {
   validationDecision?: ValidationDecision;
@@ -117,6 +120,59 @@ export interface ValidationRepairAuditVerificationArtifactWriteResult {
   fact: ValidationRepairAuditVerificationArtifactFact;
 }
 
+export interface ValidationRepairAuditObserveInvocationWriteOptions {
+  workspacePath: string;
+  invocationDir?: string;
+  now?: () => Date;
+  observeInvocationRecords?: ObserveInvocationRecord[];
+}
+
+export interface ValidationRepairAuditObserveInvocationArtifact {
+  contract: typeof VALIDATION_REPAIR_AUDIT_OBSERVE_INVOCATION_CONTRACT_ID;
+  artifactId: string;
+  sourceSinkRef: string;
+  auditId: string;
+  validationDecisionId?: string;
+  repairDecisionId?: string;
+  contractId?: string;
+  failureKind?: string;
+  outcome?: string;
+  subject?: ValidationRepairAuditSinkRef['subject'];
+  observeInvocation?: ObserveInvocationRecord;
+  relatedRefs: string[];
+  sinkRefs: string[];
+  telemetrySpanRefs: string[];
+  auditRecord: AuditRecord;
+  validationDecision?: ValidationDecision;
+  repairDecision?: RepairDecision;
+  createdAt?: string;
+  recordedAt: string;
+}
+
+export interface ValidationRepairAuditObserveInvocationFact {
+  kind: 'validation-repair-audit-observe-invocation-fact';
+  artifactRef: string;
+  sourceSinkRef: string;
+  auditId: string;
+  validationDecisionId?: string;
+  repairDecisionId?: string;
+  contractId?: string;
+  failureKind?: string;
+  outcome?: string;
+  providerId?: string;
+  callRef?: string;
+  traceRef?: string;
+  status?: string;
+  sinkRefs: string[];
+}
+
+export interface ValidationRepairAuditObserveInvocationWriteResult {
+  path: string;
+  ref: string;
+  artifact: ValidationRepairAuditObserveInvocationArtifact;
+  fact: ValidationRepairAuditObserveInvocationFact;
+}
+
 export function projectValidationRepairAuditSink(
   source: ValidationRepairAuditSinkSource | ValidationRepairAuditSinkSource[],
   options: ValidationRepairAuditSinkProjectionOptions = {},
@@ -189,6 +245,60 @@ export async function readValidationRepairAuditSinkVerificationArtifacts(
   for (const entry of entries.filter((value) => value.endsWith('.json')).sort()) {
     const raw = await readFile(join(artifactDir, entry), 'utf8');
     artifacts.push(JSON.parse(raw) as ValidationRepairAuditVerificationArtifact);
+  }
+  return artifacts;
+}
+
+export async function writeValidationRepairAuditSinkObserveInvocationRecords(
+  source: ValidationRepairAuditSinkSource | ValidationRepairAuditSinkSource[],
+  options: ValidationRepairAuditObserveInvocationWriteOptions,
+): Promise<ValidationRepairAuditObserveInvocationWriteResult[]> {
+  const projection = projectValidationRepairAuditSink(source, { targets: ['observe-invocation'] });
+  const observeRecordsByRef = observeInvocationRecordsByRef(options.observeInvocationRecords ?? []);
+  const results: ValidationRepairAuditObserveInvocationWriteResult[] = [];
+  for (const record of uniqueSinkRecords(projection.records)) {
+    results.push(await writeValidationRepairAuditSinkObserveInvocationRecord(options, record, observeRecordsByRef));
+  }
+  return results;
+}
+
+export async function writeValidationRepairAuditSinkObserveInvocationRecord(
+  options: ValidationRepairAuditObserveInvocationWriteOptions,
+  sinkRecord: ValidationRepairAuditSinkRecord,
+  observeRecordsByRef: Map<string, ObserveInvocationRecord> = observeInvocationRecordsByRef(options.observeInvocationRecords ?? []),
+): Promise<ValidationRepairAuditObserveInvocationWriteResult> {
+  if (sinkRecord.target !== 'observe-invocation') {
+    throw new Error(`Expected observe-invocation sink record, received ${sinkRecord.target}`);
+  }
+  const artifactPath = resolveValidationRepairAuditObserveInvocationPath(options, sinkRecord);
+  const artifact = validationRepairAuditObserveInvocationArtifactFromSinkRecord(
+    sinkRecord,
+    options,
+    observeRecordsByRef.get(sinkRecord.ref),
+  );
+  await mkdir(dirname(artifactPath), { recursive: true });
+  await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
+  const artifactRef = toWorkspaceRef(options.workspacePath, artifactPath);
+  return {
+    path: artifactPath,
+    ref: artifactRef,
+    artifact,
+    fact: validationRepairAuditObserveInvocationFactFromArtifact(artifact, artifactRef),
+  };
+}
+
+export async function readValidationRepairAuditSinkObserveInvocationRecords(
+  options: ValidationRepairAuditObserveInvocationWriteOptions,
+): Promise<ValidationRepairAuditObserveInvocationArtifact[]> {
+  const invocationDir = resolveValidationRepairAuditObserveInvocationDir(options);
+  const entries = await readdir(invocationDir).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  const artifacts: ValidationRepairAuditObserveInvocationArtifact[] = [];
+  for (const entry of entries.filter((value) => value.endsWith('.json')).sort()) {
+    const raw = await readFile(join(invocationDir, entry), 'utf8');
+    artifacts.push(JSON.parse(raw) as ValidationRepairAuditObserveInvocationArtifact);
   }
   return artifacts;
 }
@@ -419,6 +529,70 @@ function validationRepairAuditVerificationArtifactFactFromArtifact(
   };
 }
 
+function validationRepairAuditObserveInvocationArtifactFromSinkRecord(
+  sinkRecord: ValidationRepairAuditSinkRecord,
+  options: ValidationRepairAuditObserveInvocationWriteOptions,
+  observeInvocation: ObserveInvocationRecord | undefined,
+): ValidationRepairAuditObserveInvocationArtifact {
+  const audit = sinkRecord.auditRecord;
+  const validation = sinkRecord.validationDecision;
+  const repair = sinkRecord.repairDecision;
+  return {
+    contract: VALIDATION_REPAIR_AUDIT_OBSERVE_INVOCATION_CONTRACT_ID,
+    artifactId: `validation-repair-audit-observe-invocation:${safeArtifactId(sinkRecord.ref)}`,
+    sourceSinkRef: sinkRecord.ref,
+    auditId: audit.auditId,
+    validationDecisionId: audit.validationDecisionId ?? validation?.decisionId,
+    repairDecisionId: audit.repairDecisionId ?? repair?.decisionId,
+    contractId: audit.contractId,
+    failureKind: audit.failureKind,
+    outcome: audit.outcome,
+    subject: validation?.subject ?? audit.subject,
+    observeInvocation,
+    relatedRefs: uniqueStrings([
+      ...sinkRecord.relatedRefs,
+      ...audit.relatedRefs,
+      ...(validation?.relatedRefs ?? []),
+      ...(repair?.relatedRefs ?? []),
+      observeInvocation?.callRef,
+      observeInvocation?.traceRef,
+      ...(observeInvocation?.artifactRefs ?? []),
+    ]),
+    sinkRefs: uniqueStrings([
+      sinkRecord.ref,
+      ...audit.sinkRefs,
+    ]),
+    telemetrySpanRefs: uniqueStrings(audit.telemetrySpanRefs),
+    auditRecord: audit,
+    validationDecision: validation,
+    repairDecision: repair,
+    createdAt: audit.createdAt || sinkRecord.createdAt,
+    recordedAt: (options.now ?? (() => new Date()))().toISOString(),
+  };
+}
+
+function validationRepairAuditObserveInvocationFactFromArtifact(
+  artifact: ValidationRepairAuditObserveInvocationArtifact,
+  artifactRef: string,
+): ValidationRepairAuditObserveInvocationFact {
+  return {
+    kind: 'validation-repair-audit-observe-invocation-fact',
+    artifactRef,
+    sourceSinkRef: artifact.sourceSinkRef,
+    auditId: artifact.auditId,
+    validationDecisionId: artifact.validationDecisionId,
+    repairDecisionId: artifact.repairDecisionId,
+    contractId: artifact.contractId,
+    failureKind: artifact.failureKind,
+    outcome: artifact.outcome,
+    providerId: artifact.observeInvocation?.providerId,
+    callRef: artifact.observeInvocation?.callRef,
+    traceRef: artifact.observeInvocation?.traceRef,
+    status: artifact.observeInvocation?.status,
+    sinkRefs: artifact.sinkRefs,
+  };
+}
+
 function resolveValidationRepairAuditVerificationArtifactPath(
   options: ValidationRepairAuditVerificationArtifactWriteOptions,
   sinkRecord: ValidationRepairAuditSinkRecord,
@@ -429,10 +603,29 @@ function resolveValidationRepairAuditVerificationArtifactPath(
   );
 }
 
+function resolveValidationRepairAuditObserveInvocationPath(
+  options: ValidationRepairAuditObserveInvocationWriteOptions,
+  sinkRecord: ValidationRepairAuditSinkRecord,
+) {
+  return join(
+    resolveValidationRepairAuditObserveInvocationDir(options),
+    `${safeArtifactId(sinkRecord.ref)}.json`,
+  );
+}
+
 function resolveValidationRepairAuditVerificationArtifactDir(options: ValidationRepairAuditVerificationArtifactWriteOptions) {
   const workspaceRoot = normalizeWorkspaceRootPath(resolve(options.workspacePath));
   if (!workspaceRoot) throw new Error('workspacePath is required');
   const rawDir = options.artifactDir?.trim() || VALIDATION_REPAIR_AUDIT_VERIFICATION_ARTIFACTS_RELATIVE_DIR;
+  const targetDir = isAbsolute(rawDir) ? resolve(rawDir) : resolve(workspaceRoot, rawDir);
+  assertInsideWorkspace(workspaceRoot, targetDir);
+  return targetDir;
+}
+
+function resolveValidationRepairAuditObserveInvocationDir(options: ValidationRepairAuditObserveInvocationWriteOptions) {
+  const workspaceRoot = normalizeWorkspaceRootPath(resolve(options.workspacePath));
+  if (!workspaceRoot) throw new Error('workspacePath is required');
+  const rawDir = options.invocationDir?.trim() || VALIDATION_REPAIR_AUDIT_OBSERVE_INVOCATIONS_RELATIVE_DIR;
   const targetDir = isAbsolute(rawDir) ? resolve(rawDir) : resolve(workspaceRoot, rawDir);
   assertInsideWorkspace(workspaceRoot, targetDir);
   return targetDir;
@@ -524,4 +717,19 @@ function uniqueAuditRecords(records: AuditRecord[]) {
     byId.set(record.auditId, record);
   }
   return [...byId.values()];
+}
+
+function observeInvocationRecordsByRef(records: ObserveInvocationRecord[]) {
+  const byRef = new Map<string, ObserveInvocationRecord>();
+  for (const record of records) {
+    for (const ref of uniqueStrings([
+      record.callRef,
+      `observe-invocation:${record.callRef}`,
+      record.traceRef,
+      record.traceRef ? `observe-invocation:${record.traceRef}` : undefined,
+    ])) {
+      if (!byRef.has(ref)) byRef.set(ref, record);
+    }
+  }
+  return byRef;
 }

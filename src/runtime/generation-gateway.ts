@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { agentServerGenerationSkill, loadSkillRegistry } from './skill-registry.js';
 import { appendTaskAttempt, readRecentTaskAttempts, readTaskAttempts } from './task-attempt-history.js';
-import type { GatewayRequest, SkillAvailability, TaskAttemptRecord, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceRuntimeEvent, WorkspaceTaskRunResult } from './runtime-types.js';
+import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceRuntimeEvent, WorkspaceTaskRunResult } from './runtime-types.js';
 import { fileExists, runWorkspaceTask } from './workspace-task-runner.js';
 import { maybeWriteSkillPromotionProposal } from './skill-promotion.js';
 import { emitWorkspaceRuntimeEvent, throwIfRuntimeAborted } from './workspace-runtime-events.js';
@@ -126,6 +126,7 @@ import {
 import {
   hydrateGeneratedTaskResponseFromText,
 } from './gateway/generated-task-response-text.js';
+import { hasRecoverableRecentAttempt } from './gateway/recoverable-attempts.js';
 import { tryRunVisionSenseRuntime } from './vision-sense-runtime.js';
 import { applyConversationPolicy } from './conversation-policy/apply.js';
 import { toolPackageManifests } from '../../packages/skills/tool_skills';
@@ -979,27 +980,6 @@ async function requestAgentServerGeneration(params: {
     clearTimeout(timeout);
     params.callbacks?.signal?.removeEventListener('abort', abortGeneration);
   }
-}
-
-function hasRecoverableRecentAttempt(attempts: TaskAttemptRecord[], currentPrompt: string) {
-  const normalizedPrompt = normalizeRecoverableAttemptPrompt(currentPrompt);
-  return attempts.some((attempt) => {
-    if (normalizeRecoverableAttemptPrompt(attempt.prompt) !== normalizedPrompt) return false;
-    const candidates = [
-      attempt.status,
-      attempt.failureReason,
-      attempt.routeDecision?.fallbackReason,
-    ];
-    return candidates.some((value) => /repair-needed|failed|needs-human|timed out|cancelled|timeout/i.test(String(value || '')));
-  });
-}
-
-function normalizeRecoverableAttemptPrompt(value: string | undefined) {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^\p{Letter}\p{Number}]+/gu, ' ')
-    .trim()
-    .replace(/\s+/g, ' ');
 }
 
 function normalizeAgentServerWorkspaceEvent(raw: unknown): WorkspaceRuntimeEvent {

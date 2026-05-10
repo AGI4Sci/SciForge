@@ -3,13 +3,20 @@ import {
   normalizeObserveInvocationDiagnostics,
 } from '@sciforge-ui/runtime-contract/observe';
 import type {
+  ObserveFailureMode,
   ObserveIntent,
   ObserveInvocation,
   ObserveInvocationPlan,
   ObserveInvocationRecord,
   ObserveModalityRef,
   ObserveProviderContract,
+  ObserveResponse,
 } from '@sciforge-ui/runtime-contract/observe';
+import { createValidationRepairAuditChain } from '../gateway/validation-repair-audit-bridge.js';
+import {
+  writeValidationRepairAuditSinkObserveInvocationRecords,
+  type ValidationRepairAuditObserveInvocationWriteResult,
+} from '../gateway/validation-repair-audit-sink.js';
 
 export type {
   ObserveIntent,
@@ -24,6 +31,16 @@ export type {
 export interface ObserveProviderRuntime {
   contract: ObserveProviderContract;
   invoke(input: ObserveInvocation): Promise<Omit<ObserveInvocationRecord, keyof ObserveInvocation | 'status'> & { status?: ObserveInvocationRecord['status'] }>;
+}
+
+export interface ObserveInvocationAuditSinkOptions {
+  workspacePath: string;
+  invocationDir?: string;
+  now?: () => Date;
+}
+
+export interface RunObserveInvocationPlanOptions {
+  validationRepairAuditSink?: ObserveInvocationAuditSinkOptions;
 }
 
 export function buildObserveInvocationPlan(params: {
@@ -48,17 +65,20 @@ export function buildObserveInvocationPlan(params: {
 export async function runObserveInvocationPlan(
   plan: ObserveInvocationPlan,
   providers: ObserveProviderRuntime[],
+  options: RunObserveInvocationPlanOptions = {},
 ): Promise<ObserveInvocationRecord[]> {
   const registry = new Map(providers.map((provider) => [provider.contract.id, provider]));
   const records: ObserveInvocationRecord[] = [];
   for (const invocation of plan.invocations) {
     const provider = registry.get(invocation.providerId);
     if (!provider) {
-      records.push(buildObserveProviderUnavailableRecord(invocation));
+      const record = buildObserveProviderUnavailableRecord(invocation);
+      records.push(record);
+      await writeObserveInvocationAuditSinkRecord(record, plan, options.validationRepairAuditSink);
       continue;
     }
     const result = await provider.invoke(invocation);
-    records.push({
+    const record: ObserveInvocationRecord = {
       ...invocation,
       status: result.status ?? 'ok',
       text: result.text,
@@ -66,7 +86,9 @@ export async function runObserveInvocationPlan(
       traceRef: result.traceRef,
       compactSummary: result.compactSummary,
       diagnostics: normalizeObserveInvocationDiagnostics(result.diagnostics),
-    });
+    };
+    records.push(record);
+    await writeObserveInvocationAuditSinkRecord(record, plan, options.validationRepairAuditSink);
   }
   return records;
 }
@@ -99,6 +121,87 @@ export const buildSenseInvocationPlan = buildObserveInvocationPlan;
 export const runSenseInvocationPlan = runObserveInvocationPlan;
 export const compactSenseTraceRefs = compactObserveTraceRefs;
 
+async function writeObserveInvocationAuditSinkRecord(
+  record: ObserveInvocationRecord,
+  plan: ObserveInvocationPlan,
+  options: ObserveInvocationAuditSinkOptions | undefined,
+): Promise<ValidationRepairAuditObserveInvocationWriteResult[] | undefined> {
+  if (!options || record.status !== 'failed') return undefined;
+  const createdAt = options.now?.().toISOString();
+  const response = observeResponseFromInvocationRecord(record);
+  const relatedRefs = observeInvocationRelatedRefs(record, plan);
+  const chain = createValidationRepairAuditChain({
+    chainId: `observe-invocation:${safeObserveInvocationChainId(record.callRef)}`,
+    subject: {
+      kind: 'observe-result',
+      id: record.callRef,
+      capabilityId: record.providerId,
+      contractId: 'sciforge.observe-response.v1',
+      observeTraceRef: record.traceRef,
+      artifactRefs: record.artifactRefs,
+      currentRefs: record.modalities.map((modality) => modality.ref),
+    },
+    observeResponse: response,
+    relatedRefs,
+    sinkRefs: [`observe-invocation:${record.callRef}`],
+    telemetrySpanRefs: [`observe-invocation:${record.callRef}:validation-repair-telemetry`],
+    repairBudget: {
+      maxAttempts: 1,
+      remainingAttempts: 1,
+      maxSupplementAttempts: 0,
+      remainingSupplementAttempts: 0,
+    },
+    createdAt,
+  });
+  return writeValidationRepairAuditSinkObserveInvocationRecords(chain, {
+    workspacePath: options.workspacePath,
+    invocationDir: options.invocationDir,
+    now: options.now,
+    observeInvocationRecords: [record],
+  });
+}
+
+function observeResponseFromInvocationRecord(record: ObserveInvocationRecord): ObserveResponse {
+  const failureMode = record.diagnostics?.failureMode as ObserveFailureMode | undefined;
+  return {
+    schemaVersion: 1,
+    providerId: record.providerId,
+    status: record.status,
+    textResponse: record.text ?? record.compactSummary ?? '',
+    failureMode,
+    artifactRefs: record.artifactRefs,
+    traceRef: record.traceRef,
+    diagnostics: observeInvocationDiagnosticMessages(record),
+  };
+}
+
+function observeInvocationDiagnosticMessages(record: ObserveInvocationRecord) {
+  return uniqueStrings([
+    record.diagnostics?.message,
+    record.diagnostics?.code,
+    record.diagnostics?.failureMode,
+    record.compactSummary,
+  ]);
+}
+
+function observeInvocationRelatedRefs(record: ObserveInvocationRecord, plan: ObserveInvocationPlan) {
+  return uniqueStrings([
+    plan.runRef,
+    record.callRef,
+    record.traceRef,
+    ...record.artifactRefs,
+    ...record.modalities.map((modality) => modality.ref),
+  ]);
+}
+
+function safeObserveInvocationChainId(value: string) {
+  return value.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'observe';
+}
+
 function supportsModalities(provider: ObserveProviderContract, modalities: ObserveModalityRef[]) {
   return modalities.every((modality) => provider.acceptedModalities.includes(modality.kind));
+}
+
+function uniqueStrings(values: Array<string | undefined>) {
+  return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0))];
 }

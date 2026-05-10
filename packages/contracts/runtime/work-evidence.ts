@@ -4,6 +4,7 @@ export const WORK_EVIDENCE_KINDS = ['retrieval', 'fetch', 'read', 'write', 'comm
 export const WORK_EVIDENCE_STATUSES = ['success', 'empty', 'failed', 'failed-with-reason', 'repair-needed', 'partial'] as const;
 export const WORK_EVIDENCE_SCHEMA = {
   kind: { required: true, type: 'string' },
+  id: { required: false, type: 'string' },
   status: { required: true, type: 'string', recommended: WORK_EVIDENCE_STATUSES },
   provider: { required: false, type: 'string' },
   input: { required: false, type: ['object', 'string'] },
@@ -15,6 +16,7 @@ export const WORK_EVIDENCE_SCHEMA = {
   nextStep: { required: false, type: 'string' },
   diagnostics: { required: false, type: 'string[]' },
   rawRef: { required: false, type: 'string' },
+  budgetDebitRefs: { required: false, type: 'string[]' },
 } as const;
 
 export type WorkEvidenceKind = typeof WORK_EVIDENCE_KINDS[number];
@@ -22,6 +24,7 @@ export type WorkEvidenceStatus = typeof WORK_EVIDENCE_STATUSES[number];
 
 export interface WorkEvidence {
   kind: WorkEvidenceKind | string;
+  id?: string;
   status: WorkEvidenceStatus | string;
   provider?: string;
   input?: Record<string, unknown> | string;
@@ -33,6 +36,7 @@ export interface WorkEvidence {
   nextStep?: string;
   diagnostics?: string[];
   rawRef?: string;
+  budgetDebitRefs?: string[];
 }
 
 export interface WorkEvidenceSchemaIssue {
@@ -96,6 +100,9 @@ export function parseWorkEvidence(value: unknown): WorkEvidenceSchemaResult {
   if (value.diagnostics !== undefined && !Array.isArray(value.diagnostics)) {
     issues.push({ path: 'diagnostics', reason: 'diagnostics must be a string array when present.' });
   }
+  if (value.budgetDebitRefs !== undefined && !Array.isArray(value.budgetDebitRefs)) {
+    issues.push({ path: 'budgetDebitRefs', reason: 'budgetDebitRefs must be a string array when present.' });
+  }
   if (!Array.isArray(value.evidenceRefs)) {
     issues.push({ path: 'evidenceRefs', reason: 'evidenceRefs must be a string array.' });
   }
@@ -109,6 +116,7 @@ export function parseWorkEvidence(value: unknown): WorkEvidenceSchemaResult {
     issues: [],
     value: {
       kind,
+      id: stringField(value.id),
       status,
       provider: stringField(value.provider),
       input,
@@ -120,6 +128,7 @@ export function parseWorkEvidence(value: unknown): WorkEvidenceSchemaResult {
       nextStep: stringField(value.nextStep),
       diagnostics: value.diagnostics === undefined ? undefined : stringList(value.diagnostics),
       rawRef: stringField(value.rawRef),
+      budgetDebitRefs: value.budgetDebitRefs === undefined ? undefined : stringList(value.budgetDebitRefs),
     },
   };
 }

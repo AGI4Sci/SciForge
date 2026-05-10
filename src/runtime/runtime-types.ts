@@ -1,6 +1,7 @@
 import type { SciForgeAgentHandoffSource, SciForgeSharedSkillDomain, SharedAgentHandoffContract } from '@sciforge-ui/runtime-contract/handoff';
 import type { AgentCompactCapability, AgentContextWindowSource, RuntimeVerificationVerdict } from '@sciforge-ui/runtime-contract';
 import type { RuntimeBackendContextWindowSource } from '@sciforge-ui/runtime-contract/agent-backend-policy';
+import type { CapabilityInvocationBudgetDebitRecord } from '@sciforge-ui/runtime-contract/capability-budget';
 import type { SkillEntrypointType } from '@sciforge-skill/packages/runtime-policy';
 import type { WorkEvidence } from './gateway/work-evidence-types.js';
 
@@ -206,6 +207,7 @@ export interface ToolPayload {
   verificationResults?: VerificationResult[];
   verificationPolicy?: VerificationPolicy;
   workEvidence?: WorkEvidence[];
+  budgetDebits?: CapabilityInvocationBudgetDebitRecord[];
 }
 
 export interface WorkspaceTaskSpec {

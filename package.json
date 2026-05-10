@@ -111,6 +111,7 @@
     "smoke:capability-default-callbacks": "tsx tests/smoke/smoke-capability-default-callbacks.ts",
     "smoke:capability-budget-debits": "tsx tests/smoke/smoke-capability-budget-debits.ts",
     "smoke:literature-retrieval-capability": "tsx tests/smoke/smoke-literature-retrieval-capability.ts",
+    "smoke:agentserver-broker-payload": "tsx tests/smoke/smoke-agentserver-broker-payload.ts",
     "smoke:agentserver-prompt-policy-prose": "tsx tools/check-agentserver-prompt-policy-prose.ts",
     "smoke:no-scattered-harness-policy": "tsx tools/check-no-scattered-harness-policy.ts",
     "smoke:self-evolving-skill": "tsx tests/smoke/smoke-self-evolving-skill-loop.ts",

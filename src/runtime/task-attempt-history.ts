@@ -11,6 +11,10 @@ import {
   validationRepairAuditAttemptMetadataFromPayload,
   type ValidationRepairAuditAttemptMetadata,
 } from './gateway/validation-repair-audit-sink.js';
+import {
+  validationRepairTelemetryAttemptMetadataFromPayload,
+  type ValidationRepairTelemetryAttemptMetadata,
+} from './gateway/validation-repair-telemetry-sink.js';
 
 export async function appendTaskAttempt(workspacePath: string, record: TaskAttemptRecord) {
   const workspace = resolve(workspacePath || process.cwd());
@@ -122,7 +126,8 @@ async function readAttempts(path: string): Promise<TaskAttemptRecord[]> {
 async function withAttemptDerivedMetadata(workspace: string, attempts: TaskAttemptRecord[]) {
   return Promise.all(attempts.map(async (attempt) => {
     const withEvidence = await withWorkEvidenceSummary(workspace, attempt);
-    return withValidationRepairAuditMetadata(workspace, withEvidence);
+    const withAudit = await withValidationRepairAuditMetadata(workspace, withEvidence);
+    return withValidationRepairTelemetryMetadata(workspace, withAudit);
   }));
 }
 
@@ -201,6 +206,57 @@ async function validationRepairAuditAttemptMetadataFromOutput(
   } catch {
     return undefined;
   }
+}
+
+async function withValidationRepairTelemetryMetadata(workspace: string, record: TaskAttemptRecord): Promise<TaskAttemptRecord> {
+  const fromAttempt = validationRepairTelemetryAttemptMetadataFromAttempt(record);
+  const fromOutput = record.outputRef
+    ? await validationRepairTelemetryAttemptMetadataFromOutput(workspace, record.outputRef)
+    : undefined;
+  const telemetryRefs = uniqueTelemetryRefs([
+    ...(fromAttempt?.telemetryRefs ?? []),
+    ...(fromOutput?.telemetryRefs ?? []),
+  ]);
+  if (!telemetryRefs.length) return record;
+  const current = record as TaskAttemptRecord & { refs?: Record<string, unknown> };
+  return {
+    ...record,
+    refs: {
+      ...(isRecord(current.refs) ? current.refs : {}),
+      validationRepairTelemetry: telemetryRefs,
+    },
+  } as TaskAttemptRecord;
+}
+
+function validationRepairTelemetryAttemptMetadataFromAttempt(record: TaskAttemptRecord): ValidationRepairTelemetryAttemptMetadata | undefined {
+  const current = record as TaskAttemptRecord & { refs?: Record<string, unknown> };
+  const telemetryRefs = isRecord(current.refs) && Array.isArray(current.refs.validationRepairTelemetry)
+    ? current.refs.validationRepairTelemetry
+    : [];
+  return validationRepairTelemetryAttemptMetadataFromPayload({ refs: { validationRepairTelemetry: telemetryRefs } });
+}
+
+async function validationRepairTelemetryAttemptMetadataFromOutput(
+  workspace: string,
+  outputRef: string,
+): Promise<ValidationRepairTelemetryAttemptMetadata | undefined> {
+  const outputPath = workspaceSafePath(workspace, outputRef);
+  if (!outputPath || !await fileExists(outputPath)) return undefined;
+  try {
+    return validationRepairTelemetryAttemptMetadataFromPayload(JSON.parse(await readFile(outputPath, 'utf8')));
+  } catch {
+    return undefined;
+  }
+}
+
+function uniqueTelemetryRefs(refs: ValidationRepairTelemetryAttemptMetadata['telemetryRefs']) {
+  const byKey = new Map<string, ValidationRepairTelemetryAttemptMetadata['telemetryRefs'][number]>();
+  for (const ref of refs) {
+    const key = `${ref.ref}:${ref.recordRefs.join('|')}:${ref.spanRefs.join('|')}`;
+    if (byKey.has(key)) continue;
+    byKey.set(key, ref);
+  }
+  return [...byKey.values()];
 }
 
 function workspaceSafePath(workspace: string, ref: string) {

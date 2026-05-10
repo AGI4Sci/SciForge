@@ -91,6 +91,18 @@ export interface ValidationRepairTelemetryWriteResult {
   projection: ValidationRepairTelemetryProjection;
 }
 
+export interface ValidationRepairTelemetryAttemptRef {
+  kind: 'validation-repair-telemetry';
+  ref: string;
+  spanRefs: string[];
+  recordRefs: string[];
+  spanKinds: ValidationRepairTelemetrySpanKind[];
+}
+
+export interface ValidationRepairTelemetryAttemptMetadata {
+  telemetryRefs: ValidationRepairTelemetryAttemptRef[];
+}
+
 export interface ValidationRepairTelemetrySummary {
   kind: 'validation-repair-telemetry-summary';
   sourceRef: string;
@@ -138,6 +150,13 @@ export function validationRepairTelemetrySpansFromPayload(
 ): ValidationRepairTelemetryProjection | undefined {
   const projection = telemetryProjectionFromChains(telemetryChainsFromPayload(value), options);
   return projection.spans.length ? projection : undefined;
+}
+
+export function validationRepairTelemetryAttemptMetadataFromPayload(
+  value: unknown,
+): ValidationRepairTelemetryAttemptMetadata | undefined {
+  const refs = uniqueTelemetryAttemptRefs(telemetryAttemptRefsFromPayload(value));
+  return refs.length ? { telemetryRefs: refs } : undefined;
 }
 
 export function resolveValidationRepairTelemetryPath(options: ValidationRepairTelemetryWriteOptions) {
@@ -355,11 +374,19 @@ function spansForChain(chain: NormalizedTelemetryChain): ValidationRepairTelemet
       relatedRefs,
     }));
   }
-  if (repair?.action === 'repair-rerun' || executor?.strategyAction === 'repair-rerun' || executor?.action === 'rerun') {
+  if (
+    repair?.action === 'repair-rerun'
+    || executor?.strategyAction === 'repair-rerun'
+    || executor?.action === 'rerun'
+    || subject?.kind === 'repair-rerun-result'
+    || hasTelemetrySpanRef(audit, 'repair-rerun')
+  ) {
     spans.push(spanForChain(chain, 'repair-rerun', {
-      status: executor?.status ?? repair?.action,
+      status: executor?.status ?? audit?.outcome ?? repair?.action,
       sourceRefs: uniqueStrings([
         repair?.decisionId,
+        audit?.auditId,
+        subject?.completedPayloadRef,
         executor?.executorRef.ref,
         executor?.plan.outputRef,
         ...(executor?.executedRefs ?? []),
@@ -471,6 +498,22 @@ function telemetryChainsFromPayload(value: unknown): NormalizedTelemetryChain[] 
   return chains;
 }
 
+function telemetryAttemptRefsFromPayload(value: unknown): ValidationRepairTelemetryAttemptRef[] {
+  const refs: ValidationRepairTelemetryAttemptRef[] = [];
+  const visit = (candidate: unknown) => {
+    if (!isRecord(candidate)) return;
+    const candidateRefs = isRecord(candidate.refs) ? candidate.refs : {};
+    if (!Array.isArray(candidateRefs.validationRepairTelemetry)) return;
+    refs.push(...candidateRefs.validationRepairTelemetry
+      .map(normalizeTelemetryAttemptRef)
+      .filter((ref): ref is ValidationRepairTelemetryAttemptRef => Boolean(ref)));
+  };
+  visit(value);
+  const executionUnits = isRecord(value) && Array.isArray(value.executionUnits) ? value.executionUnits : [];
+  for (const unit of executionUnits) visit(unit);
+  return refs;
+}
+
 function normalizeTelemetryChain(source: unknown): NormalizedTelemetryChain[] {
   if (!isRecord(source)) return [];
   if (isValidationDecision(source)) return [{ source: 'validation-decision', validation: source }];
@@ -531,6 +574,10 @@ function verificationGateStatus(validation: ValidationDecision | undefined) {
 
 function existingSpanRef(spanKind: ValidationRepairTelemetrySpanKind, refs: string[]) {
   return refs.find((ref) => ref === spanKind || ref.startsWith(`${spanKind}:`) || ref.startsWith(`span:${spanKind}:`));
+}
+
+function hasTelemetrySpanRef(audit: AuditRecord | undefined, spanKind: ValidationRepairTelemetrySpanKind) {
+  return Boolean(existingSpanRef(spanKind, audit?.telemetrySpanRefs ?? []));
 }
 
 function stableSpanId(spanKind: ValidationRepairTelemetrySpanKind, value: Record<string, unknown>) {
@@ -618,6 +665,33 @@ function uniqueSpanRecords(records: ValidationRepairTelemetrySpanRecord[]) {
     byKey.set(key, record);
   }
   return [...byKey.values()];
+}
+
+function normalizeTelemetryAttemptRef(value: unknown): ValidationRepairTelemetryAttemptRef | undefined {
+  if (!isRecord(value) || value.kind !== 'validation-repair-telemetry' || typeof value.ref !== 'string') return undefined;
+  return {
+    kind: 'validation-repair-telemetry',
+    ref: value.ref,
+    spanRefs: uniqueStrings(Array.isArray(value.spanRefs) ? value.spanRefs : []),
+    recordRefs: uniqueStrings(Array.isArray(value.recordRefs) ? value.recordRefs : []),
+    spanKinds: uniqueSpanKinds(Array.isArray(value.spanKinds) ? value.spanKinds : []),
+  };
+}
+
+function uniqueTelemetryAttemptRefs(refs: ValidationRepairTelemetryAttemptRef[]) {
+  const byKey = new Map<string, ValidationRepairTelemetryAttemptRef>();
+  for (const ref of refs) {
+    const key = `${ref.ref}:${ref.recordRefs.join('|')}:${ref.spanRefs.join('|')}`;
+    if (byKey.has(key)) continue;
+    byKey.set(key, ref);
+  }
+  return [...byKey.values()];
+}
+
+function uniqueSpanKinds(values: unknown[]) {
+  const allowed = new Set(VALIDATION_REPAIR_TELEMETRY_SPAN_KINDS);
+  return uniqueStrings(values.map((value) => typeof value === 'string' ? value : undefined))
+    .filter((value): value is ValidationRepairTelemetrySpanKind => allowed.has(value as ValidationRepairTelemetrySpanKind));
 }
 
 function uniqueStrings(values: Array<string | undefined>) {
