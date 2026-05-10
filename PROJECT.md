@@ -191,6 +191,8 @@ Todo：
 
 2026-05-10：T128-J 收紧 handoff reconstruction canonical refs 优先级。`reconstructAgentHarnessHandoffPayloadFromContract()` 现在先使用传入 `HarnessContract` / trace 的 canonical refs，再用 explicit input refs 与 payload/audit refs 补洞；stale payload metadata 不能反向覆盖 contract/trace，`smoke:contract-driven-handoff` 增加 conflicting refs negative/compat 覆盖。
 
+2026-05-10：T128-K broker contract-only ignored audit 收敛。legacy direct UI 的 selected/excluded capabilities、provider hints 与 preferred provider ids 现在只进入 `ignoredLegacySources` 计数，不参与 broker 选择；negative smoke 证明 canonical harness contract 仍决定 `view.report` 选择，legacy sentinel 不泄漏进 compact brief。
+
 Todo：
 
 - [ ] `buildContextEnvelope` 只消费 `allowedContextRefs`、`blockedContextRefs`、`requiredContextRefs`、`contextBudget`、`repairContextPolicy`。（context refs/budget 已在 opt-in contract-only governance 下忽略 legacy 决策源；AgentServer repair prompt context 已 contract-only 消费；context envelope 自身已对 contract repairContextPolicy 做 bounded audit，legacy repairContextPolicy 仍不参与决策。）

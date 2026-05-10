@@ -291,6 +291,12 @@ function ignoredLegacyBrokerInputSources(uiState: Record<string, unknown>) {
     ['request.uiState.providerAvailability', 'providerAvailability'],
     ['request.uiState.availableProviders', 'availableProviders'],
     ['request.uiState.preferredCapabilityIds', 'preferredCapabilityIds'],
+    ['request.uiState.selectedCapabilities', 'selectedCapabilities'],
+    ['request.uiState.selectedCapabilityIds', 'selectedCapabilityIds'],
+    ['request.uiState.excludedCapabilities', 'excludedCapabilities'],
+    ['request.uiState.excludedCapabilityIds', 'excludedCapabilityIds'],
+    ['request.uiState.providerHints', 'providerHints'],
+    ['request.uiState.preferredProviderIds', 'preferredProviderIds'],
     ['request.uiState.expectedArtifactTypes', 'expectedArtifactTypes'],
     ['request.uiState.selectedComponentIds', 'selectedComponentIds'],
     ['request.uiState.selectedToolIds', 'selectedToolIds'],
@@ -313,6 +319,12 @@ function ignoredLegacyPolicySource(source: string, policy: Record<string, unknow
     preferredCapabilityIds: toStringList(policy.preferredCapabilityIds).length,
     providerAvailability: providerAvailabilityFromValue(policy.providerAvailability).length
       + providerAvailabilityFromValue(policy.availableProviders).length,
+    selectedCapabilities: legacyCount(policy.selectedCapabilities) + legacyCount(policy.selectedCapabilityIds),
+    excludedCapabilities: legacyCount(policy.excludedCapabilities) + legacyCount(policy.excludedCapabilityIds),
+    providerHints: legacyCount(policy.providerHints)
+      + legacyCount(policy.selectedProviderIds)
+      + legacyCount(policy.excludedProviderIds)
+      + legacyCount(policy.preferredProviderIds),
     toolBudgetKeys: definedToolBudgetKeys(toolBudgetFromSources(policy.toolBudget, policy.capabilityBudget)),
     verificationPolicyKeys: definedVerificationPolicyKeys(verificationPolicyFromSources(policy.verificationPolicy)),
   };
@@ -331,10 +343,16 @@ function ignoredLegacyListSources(
   entries: Array<[source: string, key: string]>,
 ) {
   return entries.flatMap(([source, key]) => {
-    const value = uiState[key];
-    const count = Array.isArray(value) ? value.length : 0;
+    const count = legacyCount(uiState[key]);
     return count > 0 ? [{ source, count }] : [];
   });
+}
+
+function legacyCount(value: unknown) {
+  if (Array.isArray(value)) return value.length;
+  if (typeof value === 'string' && value.trim()) return 1;
+  if (isRecord(value)) return Object.keys(value).length;
+  return 0;
 }
 
 function candidateSkillHints(value: unknown, source: string): CapabilityBrokerSkillHint[] {
