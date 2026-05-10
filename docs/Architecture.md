@@ -46,13 +46,96 @@ User intent
 - `ContractValidationFailure`、WorkEvidence、backend artifact tools、stable refs、failed-run resume 和 validation-to-repair loop 是失败恢复主路径。
 - `docs/legacy-cutover-inventory.md` 记录的旧 UI semantic fallback、provider/scenario/prompt special case、legacy facade/re-export 和旧 repair fallback 均已关闭；`smoke:no-legacy-paths` 当前扫描结果为 0 tracked findings。
 
+## 终极形态：Harness-governed Scientific Agent OS
+
+Backend-first 解决“谁理解用户意图”，capability-driven 解决“系统能做什么”，但还需要一个更高层的可维护原则解决“agent 在每个阶段如何被约束”。SciForge 的终极形态不是把 agent harness 散落在 gateway、prompt builder、conversation policy、UI 和 repair loop 里，而是把 harness 作为独立、可版本化、可切换的 policy 层维护。
+
+核心原则：
+
+- **Harness 是项目级策略资产，不是散落 prompt 片段。** 探索预算、上下文选择、工具使用约束、技能偏好、验证强度、恢复策略和用户可见进度都应来自统一 harness policy。
+- **Runtime 负责阶段化 hook，harness 负责阶段决策。** 业务代码只定义稳定阶段和传入事实，不在各处拼接领域指令、探索规则或 prompt 特例。
+- **Harness 输出结构化 contract，再由 prompt/transport 层渲染。** hook 返回探索深度、允许读取的 refs、禁止读取的 refs、tool budget、skill hints、verification level、progress plan 和 prompt directives；prompt builder 只负责把结构化决策渲染给 backend。
+- **探索不是禁用，而是预算化、目的化和可审计。** fresh request 默认允许读取当前 scenario contract、capability brief、workspace root summary、配置摘要和必要 schema；只有 continuation、repair、audit、file-grounded 等模式才扩大到旧 attempts、task results、stdout/stderr 和历史 artifacts。
+- **Harness profile 可切换。** 同一 runtime 可按任务和产品目标选择 `fast-answer`、`research-grade`、`debug-repair`、`low-cost`、`high-recall-literature`、`privacy-strict` 等 profile，而不改核心 runtime。
+- **Skills 保持通用生态。** 文献检索、PDF 下载、全文抽取、批量总结、引用核验等应作为可组合 skills/capabilities 加入 registry；harness 可以偏好某类 skill，但不把单一案例固化成隐藏 workflow。
+
+推荐分层：
+
+```text
+User request / refs / scenario
+  -> request classifier
+  -> harness profile selector
+  -> staged harness hooks
+  -> structured HarnessContract
+  -> context envelope + capability broker + prompt renderer
+  -> agent backend / capability execution
+  -> validation, repair, ledger and UI progress
+```
+
+### Agent Harness Standard
+
+[`AgentHarnessStandard.md`](AgentHarnessStandard.md) 是 agent harness 的唯一编程标准。它采用 Lightning-style callback 分层，定义主运行循环、分级 hooks、`HarnessContract` schema、decision merge 规则、最小实验案例和 `packages/agent-harness` 建议布局。
+
+Architecture 只保留边界原则：
+
+- `HarnessRuntime` 负责生命周期调用、decision merge、trace 记录和 runtime enforcement。
+- `HarnessProfile` 组合 callbacks、默认预算和 merge policy。
+- `HarnessCallback` 只能读取稳定 `HarnessContext` 并返回结构化 `HarnessDecision`。
+- `HarnessContract` 是 context builder、capability broker、prompt renderer、validator、repair loop 和 UI 共同消费的唯一行为契约。
+- `HarnessTrace` 是后续 agent harness 研究、profile 比较、失败复盘和 capability promotion 的事实依据。
+
+后续新增 hook、profile、merge rule 或最小实验案例时，必须先更新 [`AgentHarnessStandard.md`](AgentHarnessStandard.md)，再落代码。
+
+### Agent Harness 与 Capability 的关系
+
+Harness 不替代 capability。Capability 声明“能做什么、输入输出是什么、如何校验”；harness 决定“这一轮应该以多大预算、哪些上下文、哪些能力倾向和哪些安全边界使用这些 capability”。
+
+```text
+Capability registry = ability truth source
+Harness policy      = behavior governance source
+Runtime gateway     = lifecycle and enforcement source
+Agent backend       = reasoning and composition source
+```
+
+因此 harness package 应避免写死某个站点、某个 prompt、某个 scenario 的结果。它可以声明通用策略，例如：
+
+- fresh request 只读 compact workspace/scenario/capability brief。
+- continuation request 可以读取当前 session selected refs 和最近成功 artifact digest。
+- repair request 可以读取相关 failed run 的 stdout/stderr/log refs。
+- audit request 可以扩大到 ledger、历史 attempts 和 verification records。
+- high-recall research profile 可以提高检索/下载/验证预算。
+- low-cost profile 可以限制全文下载、并行度和后台任务。
+
 ### 角色边界
 
 - Agent backend：负责用户意图理解、多轮指代、能力选择、任务规划、胶水代码生成、artifact 内容读取、失败诊断、继续执行和修复。
 - SciForge runtime：负责 capability registry、capability broker、workspace refs、权限边界、执行 sandbox、stream events、日志、artifact 持久化、contract validation、verifier 调用和错误回传。
+- Agent harness policy：负责按阶段约束 backend 行为，包括 intent mode、探索预算、上下文选择、skill hints、tool-use policy、验证强度、repair policy 和用户可见进度；它是独立策略层，不散落在 runtime 或 UI 分支中。
 - Scenario package：只声明领域定制内容，例如 artifact schemas、默认 views、可用 capabilities、领域词表、verifier policy、隐私/安全边界；不写多轮语义判断和 prompt 特例。
 - Packages：不只是代码复用单元，而是 capability contract 单元。每个 package 都应能声明自己暴露的能力、输入输出协议、side effects、validator、repair hints 和 provider variants。
 - UI：只负责把 session、artifact、object refs、views、execution units、validation errors 和 recover actions 可视化；不作为语义路由层或第二个 agent。
+
+### Agent Harness 与 Conversation Policy 的关系
+
+Conversation policy 是 harness 的输入之一，不是 harness 本身。它应定位为低层上下文与运行安全策略编译器：产出 current-turn facts、引用/历史隔离、bounded digest、handoff 压缩、acceptance/recovery/cache/latency 的保守默认值。Harness profile 可以采纳、覆盖或收紧这些建议，并形成最终 `HarnessContract`。
+
+保留在 conversation policy 的职责：
+
+- context isolation、explicit refs first、pollution guard、repair evidence inclusion。
+- bounded memory plan、current reference digest、artifact index 和 clickable refs。
+- handoff budget、large string/data URL 省略、refs-first compaction。
+- protocol-level acceptance/recovery signals，例如 missing output、missing artifact ref、silent stream、retryability。
+- latency/cache/response/background 的保守默认值。
+
+上移到 harness hook/profile 的职责：
+
+- `intentMode` / `executionMode` 的最终选择；conversation classifier 只提供 `TurnIntentSignals` 和 recommendation。
+- context、tool、capability、verification、repair、progress budget 的最终 merge 与 enforcement。
+- capability profile、skill hints、tool-use policy、side-effect allowance 和 provider constraints。
+- repair executor 选择：patch/rerun、supplement、peer handoff、ask user、needs-human、fail-closed。
+- UI interaction policy：progress、clarification、human approval、mid-run guidance、cancelled/failed 区分。
+
+因此，未来不应继续在 conversation-policy 模块里扩大 keyword intent、任务 workflow 或 UI 文案。若需要新增行为策略，应进入 harness callback/profile；若需要新增能力，应进入 capability manifest/package。
 
 ### src 与 packages 边界：固定平台 vs 插拔能力
 

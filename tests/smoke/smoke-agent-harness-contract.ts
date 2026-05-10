@@ -1,0 +1,143 @@
+import assert from 'node:assert/strict';
+import { createServer, type IncomingMessage } from 'node:http';
+import { mkdtemp } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+
+import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
+
+type CapturedDispatch = {
+  url: string;
+  metadata: Record<string, unknown>;
+};
+
+const workspace = await mkdtemp(join(tmpdir(), 'sciforge-agent-harness-contract-'));
+const dispatches: CapturedDispatch[] = [];
+
+const server = createServer(async (req, res) => {
+  if (req.method === 'GET' && String(req.url).includes('/api/agent-server/agents/') && String(req.url).endsWith('/context')) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      ok: true,
+      data: {
+        session: { id: 'agent-harness-smoke-context', status: 'active' },
+        operationalGuidance: { summary: ['context healthy'], items: [] },
+        workLayout: { strategy: 'live_only', safetyPointReached: true, segments: [] },
+        workBudget: { status: 'healthy', approxCurrentWorkTokens: 80 },
+        recentTurns: [],
+        currentWorkEntries: [],
+      },
+    }));
+    return;
+  }
+
+  if (req.method !== 'POST' || !['/api/agent-server/runs', '/api/agent-server/runs/stream'].includes(String(req.url))) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: false, error: 'not found' }));
+    return;
+  }
+
+  const body = await readJson(req);
+  const metadata = isRecord(body.input) && isRecord(body.input.metadata) ? body.input.metadata : {};
+  dispatches.push({ url: String(req.url), metadata });
+
+  const result = {
+    ok: true,
+    data: {
+      run: {
+        id: `agent-harness-smoke-run-${dispatches.length}`,
+        status: 'completed',
+        output: {
+          result: {
+            message: 'Harness shadow smoke completed.',
+            confidence: 0.9,
+            claimType: 'harness-shadow-smoke',
+            evidenceLevel: 'runtime-smoke',
+            reasoningTrace: 'AgentServer received a normal generation request with harness metadata attached.',
+            claims: [],
+            uiManifest: [{ componentId: 'report-viewer', artifactRef: 'research-report' }],
+            executionUnits: [{ id: 'agent-harness-shadow', status: 'done', tool: 'agentserver.direct-context' }],
+            artifacts: [{
+              id: 'research-report',
+              type: 'research-report',
+              data: { markdown: 'Harness shadow smoke completed.' },
+            }],
+          },
+        },
+      },
+    },
+  };
+  res.writeHead(200, { 'Content-Type': req.url === '/api/agent-server/runs/stream' ? 'application/x-ndjson' : 'application/json' });
+  res.end(req.url === '/api/agent-server/runs/stream' ? `${JSON.stringify({ result })}\n` : JSON.stringify(result));
+});
+
+await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+const address = server.address();
+assert.ok(address && typeof address === 'object');
+const baseUrl = `http://127.0.0.1:${address.port}`;
+
+try {
+  const first = await runHarnessRequest('balanced-default');
+  const second = await runHarnessRequest('balanced-default');
+  const fast = await runHarnessRequest('fast-answer');
+  const research = await runHarnessRequest('research-grade');
+
+  assert.equal(first.result.message, 'Harness shadow smoke completed.');
+  assert.equal(first.event.status, 'completed');
+  assert.equal(first.summary.profileId, 'balanced-default');
+  assert.equal(first.contract.schemaVersion, 'sciforge.agent-harness-contract.v1');
+  assert.equal(first.trace.schemaVersion, 'sciforge.agent-harness-trace.v1');
+  assert.ok(Array.isArray(first.trace.stages) && first.trace.stages.length > 0);
+  assert.deepEqual(first.contract, second.contract);
+  assert.deepEqual(first.trace, second.trace);
+  assert.equal(dispatches[0]?.metadata.harnessProfileId, 'balanced-default');
+  assert.equal(dispatches[0]?.metadata.harnessContractRef, first.summary.contractRef);
+  assert.equal(dispatches[0]?.metadata.harnessTraceRef, first.summary.traceRef);
+  assert.equal(dispatches[0]?.metadata.purpose, dispatches[2]?.metadata.purpose);
+  assert.equal(dispatches[0]?.url, dispatches[2]?.url);
+  assert.notDeepEqual(fast.contract, research.contract);
+  assert.equal(fast.contract.profileId, 'fast-answer');
+  assert.equal(research.contract.profileId, 'research-grade');
+  assert.equal(dispatches.length, 4);
+  console.log('[ok] agent harness shadow contract is stable, traced, profiled, and metadata-only');
+} finally {
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+}
+
+async function runHarnessRequest(profileId: string) {
+  const events: Array<Record<string, unknown>> = [];
+  const result = await runWorkspaceRuntimeGateway({
+    skillDomain: 'literature',
+    prompt: 'Summarize harness shadow contract behavior in a report.',
+    workspacePath: workspace,
+    agentServerBaseUrl: baseUrl,
+    expectedArtifactTypes: ['research-report'],
+    selectedComponentIds: ['report-viewer'],
+    uiState: {
+      forceAgentServerGeneration: true,
+      harnessProfileId: profileId,
+      expectedArtifactTypes: ['research-report'],
+      selectedComponentIds: ['report-viewer'],
+    },
+    artifacts: [],
+  }, {
+    onEvent: (event) => events.push(event as unknown as Record<string, unknown>),
+  });
+  const event = events.find((item) => item.type === 'agent-harness-contract');
+  assert.ok(event, `missing agent-harness-contract event for ${profileId}`);
+  const raw = isRecord(event.raw) ? event.raw : {};
+  const summary = isRecord(raw.summary) ? raw.summary : {};
+  const contract = isRecord(raw.contract) ? raw.contract : {};
+  const trace = isRecord(raw.trace) ? raw.trace : {};
+  return { result, event, raw, summary, contract, trace };
+}
+
+async function readJson(req: IncomingMessage) {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  return JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}

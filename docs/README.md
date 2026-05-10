@@ -8,6 +8,7 @@
 
 - [`Usage.md`](Usage.md)：启动、配置、常用工作流、双实例互修、Computer Use 和验证命令。
 - [`Architecture.md`](Architecture.md)：真实运行链路、会话策略、AgentServer/backend gateway、workspace writer、时间线和互修边界。
+- [`AgentHarnessStandard.md`](AgentHarnessStandard.md)：Lightning-style agent harness 编程标准、分级 hooks、contract schema、merge 规则和最小实验案例。
 - [`Extending.md`](Extending.md)：scenario package、capability brief、observe/action/verifier、UIManifest、interactive view 和 skill promotion 的扩展契约。
 - [`SciForgeConversationSessionRecovery.md`](SciForgeConversationSessionRecovery.md)：多轮对话、session 恢复、上下文选择和 Python 策略层的算法开发参考。
 
@@ -31,7 +32,9 @@
 
 ## 当前状态
 
-SciForge 是活跃研发原型，但架构主线已经完成 backend-first / contract-enforced / capability-driven cutover。当前实现重点是 workspace-backed 科研工作台、真实 AgentServer/backend 调用、compact capability broker、统一 `CapabilityManifest` registry、结构化 artifact、可审计 ExecutionUnit、`ContractValidationFailure` repair loop、Python conversation-policy、多 backend 切换、vision-sense/Computer Use 通路、反馈收件箱和双实例互修。
+SciForge 是活跃研发原型，但架构主线已经完成 backend-first / contract-enforced / capability-driven cutover。下一阶段的项目级原则是 **harness-governed agent behavior**：agent harness 不应散落在 UI、gateway、prompt builder、conversation policy 和 repair loop 里，而应作为独立策略层，通过稳定阶段 hook 注入 runtime。当前实现重点是 workspace-backed 科研工作台、真实 AgentServer/backend 调用、compact capability broker、统一 `CapabilityManifest` registry、结构化 artifact、可审计 ExecutionUnit、`ContractValidationFailure` repair loop、Python conversation-policy、多 backend 切换、vision-sense/Computer Use 通路、反馈收件箱和双实例互修。
+
+终极形态见 [`Architecture.md#终极形态harness-governed-scientific-agent-os`](Architecture.md#终极形态harness-governed-scientific-agent-os)。核心原则是：capability registry 是能力真相源，harness policy 是行为治理真相源，runtime gateway 是生命周期和 enforcement 真相源，agent backend 是推理和组合真相源。Harness 编程标准见 [`AgentHarnessStandard.md`](AgentHarnessStandard.md)：`HarnessRuntime` 负责生命周期，`HarnessProfile` 负责策略组合，`HarnessCallback` 只返回结构化 decision，`HarnessContract` 驱动 context/broker/prompt/validation/UI。
 
 当前守门状态：
 
@@ -44,7 +47,7 @@ SciForge 是活跃研发原型，但架构主线已经完成 backend-first / con
 
 ## 维护规则
 
-- 不再新增项目级长文档。新内容优先合并到 `Usage.md`、`Architecture.md` 或 `Extending.md`；多轮对话算法细节继续沉淀到 `SciForgeConversationSessionRecovery.md`。
+- 不再新增项目级长文档。新内容优先合并到 `Usage.md`、`Architecture.md`、`AgentHarnessStandard.md` 或 `Extending.md`；多轮对话算法细节继续沉淀到 `SciForgeConversationSessionRecovery.md`。
 - 文档描述字段、命令或协议时，必须指向代码真相源。
 - 模块专有细节留在模块目录，例如 `packages/presentation/components/*/README.md` 或 observe provider 的 `vision_docs/`。
 - 删除或重命名文档时，同步更新 README、代码里的 `detailRef` 和 smoke 测试。

@@ -47,7 +47,23 @@ SciForge 通过 AgentServer/backend gateway 连接不同推理后端。配置后
 
 当前默认 handoff 只把与本轮相关的 compact capability broker brief 交给 backend；schema、examples、repair hints 和失败日志 refs 只在选中能力或修复时按需展开。UI 和 scenario 不再通过 prompt/scenario/artifact type 特例决定答案。
 
-### 5. 为什么需要自建 Agent
+### 5. Harness-governed：可维护、可切换的 Agent 行为治理
+
+SciForge 不把 agent harness 写散在 UI、gateway、prompt builder、conversation policy 和 repair 分支里。探索预算、上下文选择、技能偏好、工具使用约束、验证强度和用户可见进度应由独立 harness policy 管理，再通过稳定阶段 hook 注入 runtime。
+
+这意味着：
+
+- harness 要像 PyTorch Lightning callback 一样标准化：`HarnessRuntime` 调生命周期，`HarnessProfile` 组合策略，`HarnessCallback` 返回结构化 decision，`HarnessContract` 成为本轮唯一行为契约，`HarnessTrace` 记录每个阶段的决策和预算消耗。
+- fresh request 仍会做必要探索，但默认只读取当前 scenario、workspace 摘要、capability brief 和必要 schema。
+- continuation / repair / audit 才扩大到旧 attempts、task results、stdout/stderr、ledger 和历史 artifacts。
+- 文献检索、PDF 下载、全文抽取、批量总结、引用核验等能力作为通用 skills/capabilities 加入生态，而不是把某个 prompt 写成隐藏 workflow。
+- 同一系统可以切换 `fast-answer`、`research-grade`、`debug-repair`、`low-cost`、`privacy-strict` 等 profile，而不改核心 runtime。
+
+SciForge 的长期形态是 **Backend-first, Contract-enforced, Capability-driven, Harness-governed**：backend 负责理解和组合，capabilities 负责可声明能力，harness 负责阶段行为治理，runtime 负责执行边界和校验。
+
+Harness 的编程标准见 [`docs/AgentHarnessStandard.md`](docs/AgentHarnessStandard.md)：它定义主运行循环、分级 hooks、contract schema、merge 规则和最小实验案例。
+
+### 6. 为什么需要自建 Agent
 
 自建不是为了重复造一个聊天机器人，而是为了科学场景里的三件事：
 
@@ -82,6 +98,7 @@ SciForge 通过 AgentServer/backend gateway 连接不同推理后端。配置后
 ```text
 Scientific question / paper / dataset / UI feedback
   -> Scenario + workspace refs
+  -> Harness profile + staged policy hooks
   -> Capability broker
   -> Agent backend reasoning
   -> workspace task code / tool calls / computer use
@@ -199,6 +216,7 @@ src/runtime/             Workspace server、gateway、task runner、computer use
 src/runtime/gateway/     Agent/backend handoff、payload、context、diagnostics、repair
 packages/contracts/      跨 package/UI/runtime 稳定 contract
 packages/reasoning/      Python 优先的确定性策略算法与 planner
+packages/agent-harness/  规划中的 agent 行为治理策略、阶段 hooks 和 profile
 packages/scenarios/      scenario 编译、校验和 runtime smoke fixtures
 packages/observe/        只读观察能力：environment/modality -> observation
 packages/actions/        会改变环境的 action provider

@@ -4,6 +4,7 @@
 
 ## 关键原则
 - 所有修改必须通用、可泛化到任何场景，不能在代码里面硬编码和为当前案例打补丁
+- Agent harness 是项目级策略资产，不允许散落在 UI、gateway、prompt builder、conversation policy 或 repair 分支里；探索预算、上下文选择、skill hints、tool-use policy、验证强度和用户可见进度必须通过可版本化 harness policy 与阶段 hook 注入。
 - 算法相关的代码优先用Python实现，方便人类用户优化、检查算法
 - 代码路径保持唯一真相源：发现冗余链路时删除、合并或降级旧链路，避免长期并行实现。
 - 代码膨胀必须自动触发治理：源码文件超过 1000 行进入 watch list；超过 1500 行必须在 PROJECT.md 有模块化拆分任务、语义 part 计划或生成文件豁免；超过 2000 行优先拆分；超过 3000 行视为维护风险。后续开发若让文件越过阈值，应优先抽模块、删除冗余逻辑或补拆分 TODO，而不是继续堆主文件。
@@ -13,7 +14,7 @@
 
 ## 根本方向
 
-SciForge 的最终形态是 **Backend-first, Contract-enforced, Capability-driven**。完整设计以 [`docs/Architecture.md`](docs/Architecture.md#最终形态backend-first-capability-architecture) 为准；本文件只保留围绕最终形态重构的任务板。
+SciForge 的最终形态是 **Backend-first, Contract-enforced, Capability-driven, Harness-governed**。完整设计以 [`docs/Architecture.md`](docs/Architecture.md#最终形态backend-first-capability-architecture) 和 [`docs/Architecture.md#终极形态harness-governed-scientific-agent-os`](docs/Architecture.md#终极形态harness-governed-scientific-agent-os) 为准；本文件只保留围绕最终形态重构的任务板。
 
 核心定位：
 
@@ -22,6 +23,7 @@ SciForge 的最终形态是 **Backend-first, Contract-enforced, Capability-drive
 - SciForge 负责协议、capability registry、capability broker、workspace refs、执行边界、contract validation、artifact 持久化、view 渲染和机器可读错误回传。
 - `src/` 是固定平台逻辑和运行时骨架；`packages/` 是即插即用能力生态。回答“系统怎么运行”的逻辑进 `src/`，回答“系统能做什么”的逻辑进 `packages/`。详见 [`docs/Architecture.md`](docs/Architecture.md#src-与-packages-边界固定平台-vs-插拔能力)。
 - Packages 不只是代码复用单元，而是 capability contract 单元；observe、skills、actions、verifiers、views、memory、import/export 都应暴露可声明、可校验、可组合、可替换、可修复的 capability。
+- Agent harness 是独立行为治理层；runtime 只提供稳定阶段 hook 和 enforcement，harness profile 负责决定 fresh/continuation/repair/audit 等模式下的探索范围、上下文预算、工具预算、skill 倾向、验证强度和用户可见进度。详见 [`docs/Architecture.md`](docs/Architecture.md#终极形态harness-governed-scientific-agent-os)。
 - 胶水代码、执行 trace、validation failure、repair attempts 和 composed capability 下钻记录本身是资产；必须沉淀到 Capability Evolution Ledger，用于晋升高频组合、改进 validator、完善 repair hints 和训练 broker。
 - 重构时必须删除历史遗留链路，只保留最新唯一逻辑和唯一真相源；不得为了兼容旧实现长期保留并行路径、prompt regex、场景特例、provider 特例或 UI 语义兜底。
 
@@ -30,6 +32,7 @@ SciForge 的最终形态是 **Backend-first, Contract-enforced, Capability-drive
 - 每个重构任务都必须先声明新的唯一真相源，再删除旧入口、旧 adapter、旧 fallback 和旧测试夹具。
 - 临时兼容层必须有删除任务、删除条件和 smoke guard；没有删除计划的兼容层不允许合入。
 - Backend-first 优先级高于 UI 侧聪明化：SciForge 不判断“用户是不是想看报告/上一轮/markdown”，只传 refs、capability brief 和 contract。
+- Harness-governed 优先级高于 prompt 局部补丁：不得在某个 request path、scenario、provider 或 UI 分支里临时追加探索指令、工具约束、上下文规则或技能偏好；必须进入 harness hook/profile 或 capability manifest。
 - `src/` 可以写死平台秩序，但不能写死 package 领域语义；`packages/` 可以扩展能力，但不能绕过 `src/` 的安全、refs、validation 和 persistence 边界。
 - 所有 capability 输出都必须可代码校验；校验失败生成 `ContractValidationFailure` 返回 backend 修复，不在 SciForge 侧改写成成功。
 - 高频稳定路径可以固化为 composed capability，但仍必须暴露 manifest、validator、repair hints 和 fallback，下钻后可由 backend 重新组合原子能力。
@@ -37,336 +40,208 @@ SciForge 的最终形态是 **Backend-first, Contract-enforced, Capability-drive
 
 ## 倒叙任务板
 
-### T122 src 固定平台 / packages 插拔能力边界收敛
+### T131 ResultsRenderer 长文件治理：拆分结果渲染主入口
 
-状态：已完成；目标是把最终架构落成清晰代码边界：`src/` 只保留固定平台逻辑和运行时骨架，`packages/` 承载所有可插拔能力、manifest、schema、validator、provider、examples 和 repair hints。这个任务决定“什么可以写死”：平台秩序可以写在 `src/`，能力语义和组合能力必须进入 `packages/`。
-
-设计文档：[`docs/Architecture.md`](docs/Architecture.md#src-与-packages-边界固定平台-vs-插拔能力)。
+状态：待办；`src/ui/src/app/ResultsRenderer.tsx` 已超过 1500 行，进入必须拆分跟踪范围。目标是把结果渲染主入口收敛为流程编排，把 artifact normalization、view-plan selection、execution notebook projection、fallback/empty-state presentation、object reference actions 等职责拆到语义模块，避免继续在单一 React 文件里堆叠。
 
 Todo：
 
-- [x] 建立 `src/` 固定平台清单：app shell、workspace writer、runtime server、transport、stream lifecycle、registry loader、broker shell、validation loop、ref resolver、artifact persistence、permission/safety、ledger writer、boundary smoke。
-- [x] 建立 `packages/` 插拔能力清单：observe、skills、actions、verifiers、views、importers/exporters、scenario packages、provider adapters、composed capabilities、mock fixtures。
-- [x] `src -> packages` P0：迁移 `src/runtime/computer-use/**` 的 action provider 语义到 `packages/actions/computer-use`；`src` 只保留 gateway config、workspace refs、event emission 和 host bridge adapter。
-  进展：`capture.ts` provider/fallback/diagnostic policy 已迁到 `packages/actions/computer-use/provider-policy.ts`；executor/input-channel/window-target taxonomy、scheduler policy、adapter aliases 和 planner issue literals 已迁到 `packages/actions/computer-use/runtime-policy.ts`，`src/runtime/computer-use/**` no-src baseline 清零。
-- [x] `src -> packages` P0：迁移 `src/runtime/vision-sense/**` 中 planner、grounding、focus refinement、semantic verifier feedback、trace policy 到 `packages/observe/vision`；会修改 GUI 的执行部分通过 `packages/actions/computer-use` 暴露。
-  进展：refs-only / planner-only evidence completion、action-ledger completion、planner action rewrite 和 dense/no-effect tolerance policy 已迁到 `packages/observe/vision/sciforge_vision_sense/computer_use_policy.py`，并通过 `src/runtime/vision-sense/computer-use-policy-bridge.ts` 作为 runtime bridge 使用；vision-sense runtime/tool/trace/grounding ids、runtime event ids、completion mode、planner domain/task prompt instructions、Computer Use intent prompt policy、high-risk planner request policy 和 app-alias prompt line extraction 已迁到 `packages/observe/vision/computer-use-runtime-policy.ts`，trace output view slots 已迁到 `packages/presentation/interactive-views/vision-sense-trace-output-policy.ts`；planner system/user/retry/no-effect/high-risk fallback policy、known GUI app guidance、cross-display drag grounding policy、trace contract/image memory/generic action schema/visual focus policy、trace output recover hints 和 safety verifier contract 已迁到 `packages/observe/vision/computer-use-runtime-policy.ts`；semantic verifier feedback、focus refinement 和 region semantic verifier 继续由 `packages/observe/vision/sciforge_vision_sense/coarse_to_fine.py` 提供；`computer-use-plan.ts#domain-prompt-regex` baseline 已从 8 降到 0，runtime/action-loop/grounding/trace-output/sense-provider src capability baseline 已清零。验证：`node --import tsx --test packages/observe/vision/computer-use-runtime-policy.test.ts`、`python3 -m unittest discover packages/observe/vision/tests`、`npm run smoke:vision-sense-runtime`、`npm run smoke:no-src-capability-semantics`、`npm run typecheck`。
-  进展：`src/runtime/observe/orchestration.ts` 的 provider-unavailable diagnostic code、failureMode、message 和 providerId 归一化已迁到 `packages/contracts/runtime/observe.ts`；runtime orchestration 只调用 `buildObserveProviderUnavailableRecord` / `normalizeObserveInvocationDiagnostics`，对应 `smoke:no-src-capability-semantics` baseline 从 1 降到 0。
-- [x] `src -> packages` P0：删除或迁移 `src/runtime/capability-profiles.ts`，统一到 `packages/scenarios/core/src/runtimeCapabilityProfiles.ts` 或 `packages/contracts/runtime/capabilities.ts`，避免重复 capability profile 真相源。
-- [x] `src -> packages` P1：迁移 `src/runtime/runtime-ui-manifest.ts` 中 renderer aliases、domain defaults、artifact-to-component routing、title/layout/encoding inference 到 `packages/presentation/interactive-views`；`src` 只保留 composition adapter。
-- [x] `src -> packages` P1：迁移 `src/ui/src/uiModuleRegistry.ts` 中 component manifest alias/index 构造到 `packages/presentation/components` 或 `packages/presentation/interactive-views` public export；UI 只消费 package registry。
-- [x] `src -> packages` P1：迁移 `src/ui/src/artifactIntent.ts`、`src/ui/src/app/results/viewPlanResolver.ts` 中 artifact/component/domain ranking 和 prompt/domain regex 到 scenario/view capability policy。
-  进展：`artifactIntent.ts` 已降为 `packages/presentation/interactive-views` policy wrapper；`viewPlanResolver.ts` 已删除 artifact type regex ranking、fallback ranking 和 component/domain mapping；binding/status/section/presentation dedupe、artifact/module selection、fallback display intent 和 blocked-design policy 已迁到 `packages/presentation/interactive-views/view-plan-result-policy.ts`，remaining baseline 收敛到 0 个 tracked findings。
-- [x] `src -> packages` P1：迁移 `src/runtime/skill-markdown-catalog.ts` 中 SKILL.md catalog、domain/provider scoring 和 output inference 到 `packages/skills` 或 capability broker package。
-- [x] `src -> packages` P1：迁移 `src/runtime/skill-registry/runtime-matching.ts` 中 SCP/PubMed/BLAST/UniProt/ChemBL 等技能匹配 scoring/gating 语义到 `packages/skills/matching-policy.ts`；`src` 只保留 runtime filtering/sorting adapter。
-- [x] `src -> packages` P1：迁移 `src/runtime/skill-registry/{availability-validation,fallback,runtime-matching}.ts` 中 entrypoint/output/fallback runtime skill semantics 到 `packages/skills/runtime-policy.ts` 和 `packages/skills/matching-policy.ts`；`src` 只保留 filesystem probe adapter 和排序/filter。
-  进展：`src/runtime/skill-promotion.ts` 的 ledger promotion skill domain 默认路由已迁到 `packages/skills/runtime-policy.ts` 的 `skillPromotionDomain`，runtime 只调用 package helper；对应 `skill-promotion.ts#domain-default-routing` no-src baseline 从 1 降到 0。
-- [x] `src -> packages` P1：迁移 `src/runtime/gateway/work-evidence-types.ts`、`backend-tool-work-evidence-adapter.ts`、`work-evidence-guard.ts`、`verification-results.ts` 中可复用 WorkEvidence contract、provider event normalization 和 verifier rules 到 `packages/contracts/runtime`、`packages/support/work-evidence` 或 `packages/verifiers`；gateway 只保留调用和 fail-closed enforcement。
-  进展：`WorkEvidence` contract/parser/handoff summary、backend tool event adapter、WorkEvidence guard policy 和 verification result contract 已迁到 `packages/contracts/runtime/work-evidence*.ts`、`work-evidence-policy.ts`、`verification-result.ts`；`src/runtime/gateway/work-evidence-types.ts` 只保留 stable package re-export，旧 `backend-tool-work-evidence-adapter.ts` 已删除，`work-evidence-guard.ts`/`verification-results.ts` 只保留 fail-closed adapter。
-- [x] `src -> packages` P1：迁移 `src/runtime/gateway/artifact-reference-context.ts` 中 skillDomain -> artifact type scope matching 到 `packages/contracts/runtime/artifact-reference-policy.ts`，gateway 只调用 package policy。
-- [x] `src -> packages` P1：迁移 `src/runtime/gateway/artifact-materializer.ts` 中 report/omics artifact data normalization、markdown/text path policy 和 materialized markdown selection 到 `packages/contracts/runtime/artifact-policy.ts`，gateway 只保留 workspace ref IO/materialization adapter。
-- [x] `src -> packages` P1：迁移 `src/runtime/gateway/direct-context-fast-path.ts` 中 direct-context report/tool ids、current-session evidence policy、artifact/reference/execution summary 和 markdown preview regex 到 `packages/contracts/runtime/artifact-policy.ts`，gateway 只保留 backend-first fast-path 编排。
-- [x] `src -> packages` P1：迁移 `src/runtime/gateway/direct-answer-payload.ts` 和 `src/ui/src/app/chat/runOrchestrator.ts` 中 report/summary intent、existing-artifact follow-up、report artifact、standalone artifact component binding 和 UI manifest fallback 到 `packages/presentation/interactive-views/direct-answer-result-policy.ts`。
-- [x] `src -> packages` P1：迁移 `src/ui/src/api/{runtimeConfig,sciforgeToolsClient,scopeCheck}.ts` 和 `src/ui/src/app/ChatPanel.tsx` 中 scenario/domain/scope routing semantics 到 `packages/scenarios/core/src/scenarioRoutingPolicy.ts`；UI 只消费 package-owned routing policy。
-- [x] `src -> packages` P2：拆分 `src/runtime/gateway/verification-policy.ts`，policy/result contract 和 verifier semantics 进入 `packages/contracts/runtime/verification-policy.ts`，workspace 写入和 runtime gating 留在 `src` adapter。
-- [x] `src -> packages` P2：评估 `src/runtime/conversation-policy/contracts.ts`，纯 TS/Python contract 已迁入 `packages/contracts/runtime/conversation-policy.ts`；`python-bridge.ts`、`apply.ts` 继续留在 `src`，旧 `contracts.ts` 已删除。
-- [x] `packages -> src` P0：继续收敛 `packages/reasoning/conversation-policy/src/sciforge_conversation/service.py` 剩余 turn composition ownership；当前已删除 direct reference digest import 和 workspace-ref audit 语义，`acceptancePlan` / `userVisiblePlan` / `processStage` / `auditTrace` / `metadata` 组合已迁到 `src/runtime/gateway/conversation-service-plan.ts`，context-scoped session / currentReferences、policyInput session defaults、execution classifier turn inputs、recovery/default failure plan、recentFailures/priorAttempts/userGuidanceQueue 和 stdio failure response 已迁入 service compat bridge exports，Python 侧只读取 bridge/contract 结果。验证：conversation Python tests 72 passed、conversation gateway tests 12 passed、`smoke:runtime-gateway-modules` passed、`smoke:fixed-platform-boundary` passed、`npm run typecheck` passed。
-- [x] `packages -> src` P0：迁移 `acceptance.py` output acceptance gate 到 `src/runtime/gateway/conversation-acceptance-policy.ts`，Python 侧只保留兼容 bridge。
-- [x] `packages -> src` P0：迁移 `execution_classifier.py` execution mode / risk / stage hint lifecycle 到 `src/runtime/gateway/conversation-execution-classifier.ts`，Python 侧只保留兼容 bridge 和 dataclass API。
-- [x] `packages -> src` P0：迁移 `context_policy.py` context reuse / isolation / repair scope lifecycle 到 `src/runtime/gateway/conversation-context-policy.ts`，Python 侧只保留兼容 bridge。
-- [x] `packages -> src` P0：迁移 `memory.py` bounded current-context memory planning 到 `src/runtime/gateway/conversation-memory-policy.ts`，Python 侧只保留兼容 bridge。
-- [x] `packages -> src` P0：迁移 `recovery.py` failure recovery / retry budget / digest recovery lifecycle 到 `src/runtime/gateway/conversation-recovery-policy.ts`，Python 侧只保留兼容 bridge。
-- [x] `packages -> src` P0：迁移 `cache_policy.py` artifact reuse lifecycle 到 `src/runtime/gateway/conversation-cache-policy.ts`，Python 侧只保留兼容 bridge。
-- [x] `packages -> src` P0：迁移 `latency_policy.py` turn latency lifecycle 到 `src/runtime/gateway/conversation-latency-policy.ts`，Python 侧只保留兼容 bridge。
-- [x] `packages -> src` P0：迁移 `response_plan.py` response/background completion lifecycle 到 `src/runtime/gateway/conversation-response-plan.ts`，Python 侧只保留兼容 bridge。
-- [x] `packages -> src` P0：迁移 `packages/reasoning/conversation-policy/src/sciforge_conversation/capability_broker.py` 的 broker shell/main flow 到 `src/runtime/capability-broker`；Python 侧只保留兼容 brief envelope bridge，packages 只提供 manifests 和 schemas。
-- [x] `packages -> src` P0：迁移 `handoff_planner.py` 到 `src/runtime/gateway/conversation-handoff-planner.ts`，因为它处理 handoff budget、safe file IO、workspace refs 和 artifact persistence lifecycle；Python 侧只保留兼容 bridge。
-- [x] `packages -> src` P0：迁移 `reference_digest.py` 的 meaningful lifecycle 到 `src/runtime/gateway/conversation-reference-digest.ts`，Python 侧只保留兼容 bridge。
-- [x] `packages -> src` P0：迁移 `artifact_index.py` 的 clickable refs、workspace path metadata、hash/size、execution refs、digest refs、pathRefs 摘要和 dedupe 到 `src/runtime/gateway/conversation-artifact-index.ts`，Python 侧只保留兼容 bridge。
-- [x] `packages -> src` P1：迁移 `process_events.py` 的 stream/process event normalization 到 `src/runtime/gateway/workspace-event-normalizer.ts`，删除 Python 侧重复路径。
-- [x] `packages -> src` P1：重新定界 `packages/support/object-references/index.ts` 为 package-owned reference policy：session lookup、action availability、composer marker allocation、synthetic artifact creation 和 chip ordering 保留在 package helper 中，UI 只调用 package API，避免把 artifact/path/domain mapping 搬回 thin shell。
-- [x] `packages -> src` P1：拆分 `packages/support/artifact-preview/index.ts`，preview hydration 留在 `src/runtime/server/file-preview.ts` 和 UI results；`PreviewDescriptor` contract 留在 `packages/contracts/runtime`。二次收敛：file-kind inference、inline policy、default preview actions、derivative policy 和 locator hints 已回到 `packages/support/artifact-preview`，server 只负责 workspace IO/cache/stream。
-- [x] `packages -> src/tests` P1：迁移 `packages/scenarios/core/src/runtimeSmoke.ts` 到 `tests/smoke/scenario-runtime-smoke-harness.ts`；scenario package 只保留 policy/schema validation。
-- [x] `packages -> src/delete` P1：拆分 `packages/scenarios/core/src/componentElements.ts`，runtime recover actions、fallback components、compat aliases 不应作为 scenario policy；短期可迁入 `src/runtime/runtime-ui-manifest.ts` / UI compiler，长期由 registry-driven UI manifest 取代并删除。
-  证据：`componentElements.ts` 只从 `packages/presentation/components` 的 `uiComponentRuntimeRegistry` 适配 contract-facing component element shape；已删除 scenario-owned fallbackModuleIds -> componentId 映射、`generic-data-table` / `generic-artifact-inspector` fallback adapter、component alias normalize/sort 逻辑和 `provide-compatible-artifact` / `select-supported-component` 等 runtime recover vocabulary。组件 alias 只来自 presentation component runtime registry。
-- [x] `packages -> src` P2：评估 `packages/scenarios/core/src/uiPlanCompiler.ts`、`validationGate.ts`、`scenarioPackage.ts` 中 platform-wide compile/validation 行为；scenario specs、contracts、elementTypes 留在 package，运行期编译/校验进入 `src/runtime/scenario-policy` 或 UI compiler。进展：UI slot / fallback component validation 已从 `validationGate.ts` 收敛到 `uiPlanCompiler.ts`；runtime-owned scenario package readiness validation 已迁到 `src/runtime/scenario-policy/scenario-package-validation.ts`，runtime smoke/official package smoke 改走该边界；scenario package policy compilation / policy-only violation scanning 已迁到 `src/runtime/scenario-policy/scenario-package-policy.ts`，package 仅保留 policy contract shape、allowed-field 常量和 compiler 兼容 gate；policy-only scanner/smoke 已扩展到 provider 分支、多轮语义判断和 prompt special-case 字段，scenario compiler 文案改为声明 capability/artifact policy，不再暗示 package 执行；`smoke:fixed-platform-boundary` 已新增 `scenarioPackage.ts` / `uiPlanCompiler.ts` / `validationGate.ts` 专项 guard，禁止 runtime policy helper、provider/prompt/semantic routing 和 executable 字段回流，official package smoke 同时断言 package builder 不编译 runtime policy。
-- [x] 明确保留在 `src`：`src/runtime/workspace-server.ts`、`src/runtime/server/**`、`generation-gateway.ts`、`workspace-runtime-gateway.ts`、`workspace-task-runner.ts`、`task-projects.ts`、gateway adapter/orchestration 文件、`src/ui/src/app/**` React app shell。
-- [x] 明确保留在 `packages`：`packages/presentation/components/**`、`packages/presentation/interactive-views/**`、`packages/presentation/design-system/**`、`packages/skills/**`、`packages/actions/computer-use/**`、`packages/observe/vision/**`、`packages/verifiers/**`、`packages/contracts/runtime/**`、`packages/scenarios/core/src/{scenarioSpecs,contracts,elementTypes}.ts`。
-- [x] 增加 `smoke:fixed-platform-boundary`，实现为 `tools/check-fixed-platform-boundary.ts` 或扩展 `tools/check-module-boundaries.ts`，检查 `src` 固定平台与 `packages` 插拔能力边界。
-- [x] 增加 `smoke:no-src-capability-semantics`，扫描 `src/**` 是否硬编码 package-owned artifact ids、component ids、provider ids、scenario ids、domain regex；临时 allowlist 必须关联本任务迁移项。
-- [x] 将 `smoke:no-src-capability-semantics` 种子设为当前发现：`src/runtime/runtime-ui-manifest.ts` 的 prompt regex/domain defaults/component-to-artifact mapping；`src/runtime/gateway/artifact-reference-context.ts` 的 `paper-list`/`research-report`/skillDomain regex；`src/ui/src/app/chat/runOrchestrator.ts` 的 follow-up intent regex 和 `research-report -> report-viewer`；`src/ui/src/app/results/viewPlanResolver.ts` 的 artifact display intent、domain regex ranking 和 primary result ranking。
-- [x] 增加 `smoke:capability-manifest-registry`，要求 package-owned capabilities 从 manifest/catalog 发现，而不是只在 `src` 中硬编码。
-- [x] 增加 `smoke:workspace-package-metadata`，扩展当前 package metadata 检查到嵌套 package，覆盖现有多个 `package.json`。
-- [x] 增加 `smoke:package-runtime-boundary`，禁止 package manifests 声称或实现 persistence、global safety、stream lifecycle、workspace ref resolution 等 runtime lifecycle ownership。
-- [x] 更新 `tools/check-module-boundaries.ts`、`tools/check-package-catalog.ts`、`scripts/check-ui-components-package-boundaries.ts`、`package.json`、`docs/Extending.md`、`packages/README.md`，把上述 smoke 纳入验证。
-  说明：`smoke:module-boundaries` 只守 import topology；`packages:check` 聚合 package catalog/metadata/runtime ownership/UI component publication checks；`smoke:fixed-platform-boundary` 和 `smoke:no-src-capability-semantics` 继续独立守 T122 `src`/`packages` ownership 与 `src` 语义基线，避免与 package checks 重复。
-- [x] 针对 boundary-heavy 长文件补拆分计划或降低阈值：`src/runtime/generation-gateway.ts`、`src/runtime/workspace-server.ts`、`src/ui/src/app/ResultsRenderer.tsx`、`src/ui/src/app/ChatPanel.tsx`、`src/runtime/workspace-task-input.ts`、`src/runtime/gateway/agentserver-prompts.ts`。
-  进展：`agentserver-prompts.ts` 中 ToolPayload protocol、current refs、bibliographic verification、artifact selection、capability routing、execution mode、generated task、fresh retrieval、repair 和 external I/O reliability prompt snippets 已迁到 `packages/contracts/runtime/artifact-policy.ts`、`packages/contracts/runtime/capabilities.ts`、`packages/presentation/interactive-views/runtime-ui-manifest-policy.ts` 和 `packages/skills/runtime-policy.ts`，gateway prompt builder 只负责拼装；no-src baseline 已清零。
-  进展：`generated-task-runner.ts` 的 current-reference digest recovery tool id、ref path、report artifact/payload/markdown split 和 digest recovery event type 已迁到 `packages/contracts/runtime/artifact-policy.ts`；generated task entrypoint/interface/path-only retry contract、direct payload ref、runner event type 和 stable AgentServer payload task id slug policy 已迁到 `packages/skills/runtime-policy.ts`，runner 只保留 digest 文件读取、事件/日志、validate 和 materialize 编排；该文件 no-src baseline 从 artifact 7 / domain regex 3 / provider id 1 清零到 0 / 0 / 0。
-  进展：`workspace-task-runner.ts` 的 workspace Python runtime candidate / venv path policy 已迁到 `packages/skills/runtime-policy.ts` 的 `workspaceTaskPythonCommandCandidates`，runner 只做文件探测、版本筛选和执行；该文件 no-src domain-default baseline 从 1 降到 0。
-  进展：`runtime-routing.ts` 的 `agentserver-generation` / `markdown-skill` / workspace/package runtime profile 与 selectedRuntime label policy 已迁到 `packages/skills/runtime-policy.ts` 的 `skillRuntimeRoutePolicy`；gateway routing 只计算 AgentServer backend profile 并调用 package helper；该文件 no-src baseline 从 artifact 6 清零到 0。
-  进展：workspace scenario package 默认 version 归一化已迁到 `@sciforge/scenario-core/scenario-package`，`src/runtime/server/scenario-library-routes.ts` 只负责读写 workspace package 文件，不再硬编码 scenario package version 默认值。
-  进展：Agent backend provider/capability、context-window source/model-window normalization、blocking model config failure detection 和 backend failure diagnostic/recover-action policy 已迁到 `packages/contracts/runtime/agent-backend-policy.ts`；`agent-backend-config.ts`、`agentserver-context-window.ts`、`backend-failure-diagnostics.ts` 只保留 gateway IO/adapter 包装，对应 `smoke:no-legacy-paths` provider/prompt special-case baseline 清零。
-  进展：`backend-failure-diagnostics.ts` 的 context-window/token-limit user-facing summary、recover copy、context-window vs rate-limit 判定和 provider failure summary 已迁到 `packages/contracts/runtime/agent-backend-policy.ts`；gateway 只解析 JSON/header/env 并调用 contract helper。对应 `smoke:no-src-capability-semantics` baseline 从 artifact 4 / domain regex 1 降到 0 / 0。验证：`node --import tsx --test packages/contracts/runtime/agent-backend-policy.test.ts src/runtime/gateway/backend-failure-diagnostics.test.ts`、`npm run smoke:no-src-capability-semantics`、`npm run typecheck`、`npm run smoke:agentserver-backend-failure`。
-  进展：`workspace-event-normalizer.ts` 的 workspace context-window source alias 和 compact capability fallback 语义已迁到 `packages/contracts/runtime/agent-backend-policy.ts`；normalizer 只抽取事件字段并调用 contract policy，`smoke:no-legacy-paths` 对该文件 provider/prompt special-case baseline 从 3 降到 0。
-  进展：`conversation-policy/apply.ts` 的 selected capability manifest projection、`latency-telemetry.ts` 的 latency diagnostic ids/cache-policy/user-visible/backend-event 判定、`agentserver-context-window.ts` 的 context-window state event/type copy、`workspace-event-normalizer.ts` 的 process/runtime event ids，以及 `runtime-types.ts` 的 skill entrypoint union 已迁到 `packages/contracts/runtime/{conversation-policy,events,agent-backend-policy}.ts` 和 `packages/skills/runtime-policy.ts`；runtime 文件只保留 gateway 编排和字段抽取。`smoke:no-src-capability-semantics` 的 runtime tracked findings 已收敛到 30（剩余集中在 `generation-gateway.ts`）。
-  进展：`Dashboard.tsx` 的默认 scenario builder prompt、导入文献场景 action、domain filter options、package export file/field labels 和 draft component/artifact/skill display tokens 已迁到 `packages/scenarios/core/src/scenarioBuilderDisplayPolicy.ts`；Dashboard 只消费 package policy helper，`smoke:no-src-capability-semantics` 对 Dashboard 的 domain-default/domain-prompt baseline 清零，scenario-provider baseline 从 10 降到 3。
-  进展：`src/ui/src/app/AlignmentPages.tsx` 的 alignment contract 默认值、scenario fallback、timeline action/source labels、survey/feasibility vocabulary 和 timeline class tokens 已迁到 `@sciforge/scenario-core/alignment-display-policy`；UI 只消费 package helper，该文件 no-src baseline 从 component 4 / domain-default 3 / domain-regex 3 / scenario-provider 1 清零。
-  进展：`SciForgeApp.tsx` 的 skill-domain scenario routing、默认 scenario/runtime override 和 prompt title normalization 已迁到 `packages/scenarios/core/src/scenarioRoutingPolicy.ts`；`sessionTransforms.ts` 复用同一 title helper，相关 no-src baseline 清零。
-  进展：`previewDescriptor.ts` 已缩成 `packages/support/artifact-preview` 的薄 re-export；markdown/structure/table/file extension/payload shape 检测、uploaded preview、preview notice 和 preview kind -> component view choice 分别由 `packages/support/artifact-preview` 与 `packages/presentation/interactive-views` 提供。
-  进展：`ComponentWorkbenchPage.tsx` 和 `componentWorkbenchDemo.ts` 的 workbench fixture/sample/default artifact/recommendation/special renderer policy 已迁到 `packages/presentation/components/{workbench-policy,workbench-renderers}.ts(x)`；demo 文件的 no-src artifact/component/domain baseline 清零。
-  进展：`runOrchestrator.ts` 与 `sciforgeToolsClient.ts` 的 project-tool、target issue 和 repair handoff event ids/copy/payload helper 已迁到 `packages/contracts/runtime/events.ts`；UI 只调用 contract projection helper 发事件。
-  进展：`ResultsRenderer.tsx` 的 package renderer id/alias mapping、unknown component fallback title/copy、artifact table/download/subtitle policy 已迁到 `packages/presentation/interactive-views/renderer-mapping.ts`；UI 只保留 shell/adapter 渲染。`smoke:no-src-capability-semantics` 当前收敛到 283 个 tracked findings，`smoke:no-legacy-paths` 和 `smoke:fixed-platform-boundary` 均为 0。
-  进展：`generation-gateway.ts` 的 gateway/repair/AgentServer dispatch/convergence/retry-recovery event ids、copy 和 payload builder 已迁到 `packages/contracts/runtime/events.ts`；gateway 只保留 fetch/abort/repair/rerun 编排，`smoke:no-src-capability-semantics` 不再报告该文件。
-  进展：`ChatPanel.tsx` 的 guidance queued / user interrupt stream event ids、copy 和 raw contract 已迁到 `packages/contracts/runtime/events.ts`；`processProgress.ts` 与 `streamEventPresentation.ts` 复用同一 contract 常量，ChatPanel 剩余命中主要为 CSS class token。
-  进展：`workspace-task-input.ts` 的 artifact data summary reason、binary string/schema detection 和 handoff JSON schema inference 已迁到 `packages/contracts/runtime/handoff-input-policy.ts`；`sessionTransforms.ts`、`uiPrimitives.tsx`、`workEventAtoms.ts` 和 `streamEventPresentation.ts` 的 background completion ids、repair rerun tool id、recover action labels、work event/stage/evidence classification、generated task summary、tool action/failure 判断已迁到 `packages/contracts/runtime/events.ts`。`smoke:no-src-capability-semantics` 从 69 收敛到 52 个 tracked findings，`npm test` 490/490 通过。
-  进展：`runtimeContracts.ts` 的 preview locator hint enum 已迁到 `packages/contracts/runtime/preview.ts`；`domain.ts` / `runtimeConfig.ts` 的 agent backend 与 skillDomain 类型改为复用 `packages/contracts/runtime/agent-backend-policy.ts` 和 `packages/scenarios/core`；`ShellPanels.tsx` / `explorerModels.ts` 的 workspace action ids、`WorkspaceObjectPreview.tsx` 的 workspace file/file-region reference-kind policy、`ComponentWorkbenchPage.tsx` 的 workbench safety labels、`visualizations.tsx` 的 runtime structure defaults 分别迁到 `packages/support/object-references`、`packages/presentation/components` 和 `packages/presentation/interactive-views`。`smoke:no-src-capability-semantics` 从 52 收敛到 41 个 tracked findings，`npm test` 493/493 通过。
-  进展：`TaskProjectStatus` / `TaskStageStatus` 已迁到 `packages/contracts/runtime/task-project.ts`；alignment contract artifact/version type、schema version 和 record contract 已迁到 `packages/contracts/runtime/alignment.ts`，`sessionStore.ts` / `workspace-server.ts` 只消费 package 常量；`processProgress.ts` / `runtimeHealth.ts` 的 phase/status/health literals 与 model types 已迁到 `packages/contracts/runtime/events.ts`；`uiPrimitives.tsx` 的 claim/evidence tag display policy 已迁到 `packages/scenarios/core/src/scenarioDemoData.ts`。`smoke:no-src-capability-semantics` 从 41 收敛到 30 个 tracked findings，`npm test` 498/498 通过。
-  进展：workspace manifest `artifact-preview` capability id、stream event type/action contract、research workspace/timeline/feedback unions 已分别迁到 `packages/contracts/runtime/{capabilities,events,research-workspace}.ts`；`workspace-server.ts`、`streamEventPresentation.ts`、`workEventAtoms.ts`、`domain.ts` 和 `timelineSchema.ts` 只消费 package contract。`smoke:no-src-capability-semantics` 所有历史 baseline 已压到 0，当前剩余 0 个 tracked findings。
-  进展：`ScenarioBuilderPanel.tsx` 的 builder chrome pane ids/nav labels/fallback/allowlist selector display policy 已迁到 `packages/scenarios/core/src/scenarioBuilderDisplayPolicy.ts`；该文件 no-src domain-prompt baseline 清零。
-  进展：`Dashboard.tsx` 的 package export preview、copy id、workspace copy 和 import rename policy 已迁到 `packages/scenarios/core/src/scenarioBuilderDisplayPolicy.ts`；剩余 Dashboard findings 确认为 CSS class token 误报候选。
-  进展：`autoRunPrompts.ts` 与 `ExecutionNotebookPanels.tsx` 的 scenario-specific handoff prompt、artifact focus extraction、preview-package prompt 和 structure-summary metrics/empty-state policy 已迁到 `packages/scenarios/core/src/scenarioAutoRunPromptPolicy.ts` 与 `packages/presentation/interactive-views/{auto-run-prompt-policy,structure-summary-presentation-policy}.ts`；两个 UI 文件 no-src baseline 清零。
-  进展：`reportContent.tsx` 与 `resultArtifactHelpers.ts` 的 report markdown/ref extraction、ToolPayload placeholder shell、related paper/table fallback、inline object ref 和 artifact provenance source policy 已迁到 `packages/support/artifact-preview/report-policy.ts`，`report-viewer` package 也复用同一 helper；UI 只保留 workspace file read 和 rendering glue。
-  进展：`runtime-types.ts` 的 verification/context-window source unions、`workspace-open.ts` 的 open action/block policy、`skill-promotion.ts` 的 entrypoint checks 和 `task-projects.ts` 的 TaskProject stage fallback manifest 已迁到 `packages/contracts/runtime` 与 `packages/skills/runtime-policy.ts`；runtime residual no-src baseline 清零到只剩 `task-project-contracts.ts`、`workspace-server.ts`、`workspace-task-input.ts` 这类平台/compaction 项。
-  进展：`src/ui/src/data.ts` / `demoData.ts` 的 built-in scenario display/demo fixtures、timeline/demo messages 和 overview counts 已迁到 `packages/scenarios/core/src/scenarioDemoData.ts`；UI 只做 icon hydration 或 re-export。
-  进展：`AcceptancePanel.tsx` 的 acceptance/rate-limit/object-reference recovery diagnostics、`processProgress.ts` 的 accepted prompt compaction copy、`explorerModels.ts` 的 workspace path/onboarding copy 已分别迁到 `packages/contracts/runtime/{agent-backend-policy,events}.ts` 和 `packages/support/object-references`。
-  进展：`tools/check-no-src-capability-semantics.ts` 收紧 detector，忽略 import-only 行、纯 `className` 样式 token 和 JSX closing-tag rendering 误报，保留 `type:`、`componentId`、`scenarioId`、prompt regex 等真实 capability semantic anchors；检测噪声不再掩盖真实剩余。
-  进展：`ResultsRenderer.tsx` 的 view-plan result summary status/copy、`ScenarioBuilderPanel.tsx` 的 package label/export/workspace save/default selection/runtime override/selector ordering、`ExecutionNotebookPanels.tsx` 的 scenario package ref display、report empty-state package ids 和 uploaded evidence artifact matching 已继续迁入 `packages/presentation/interactive-views` 与 `packages/scenarios/core`。
-- [x] 更新 `docs/Extending.md` 和 `packages/README.md`：新增模块应先判断属于平台秩序还是能力语义，再选择 `src/` 或 `packages/`。
-- [x] 删除与该边界冲突的旧 registry、旧 adapter 和旧 direct import。
-
-进度备注：`smoke:fixed-platform-boundary` 当前剩余 0 个 tracked warnings；`generated-task-runner.ts` 在 `smoke:no-src-capability-semantics` 中已清零到 artifact 0 / domain regex 0 / provider 0；`direct-answer-payload.ts` 的 standalone workspace artifact 包装、existing-context source 和 markdown fence 清理语义已迁到 `packages/presentation/interactive-views/direct-answer-result-policy.ts`，该文件 no-src baseline 从 artifact 5 / domain regex 1 清零到 0 / 0；`skill-promotion.ts` 的 ledger promotion domain default routing 与 entrypoint checks 已迁到 `packages/skills/runtime-policy.ts`，该文件 no-src baseline 清零；`task-projects.ts` 的 TaskProject stage adapter domain default 与 fallback manifest 已迁到 `packages/contracts/runtime/handoff.ts` 和 `packages/skills/runtime-policy.ts`，该文件 no-src baseline 清零；`workspace-task-runner.ts` 的 Python runtime candidate policy 已迁到 `packages/skills/runtime-policy.ts`，该文件 no-src domain-default baseline 从 1 降到 0；`context-envelope.ts` 的 current user request prompt label stripping 已迁到 `packages/contracts/runtime/conversation-policy.ts`，verification-result artifact filter 已迁到 `packages/contracts/runtime/verification-result.ts`，gateway 只调用 package helper；该文件 no-src baseline 从 artifact 1 / domain regex 1 清零到 0 / 0，no-legacy provider/prompt special-case baseline 从 1 清零到 0；`observe/orchestration.ts` 的 provider-unavailable diagnostic helper 已迁入 `packages/contracts/runtime/observe.ts`，该文件 no-src provider baseline 从 1 清零到 0；`payload-validation.ts` 的 preview/file-kind/extension acceptance 语义已迁到 `packages/support/artifact-preview`，gateway 只调用 package helper，该文件 no-src domain regex baseline 从 1 降到 0；`capability-evolution-events.ts` 的 backend/provider unavailable failure-code policy 已迁到 `packages/contracts/runtime/agent-backend-policy.ts`，该文件 no-legacy provider/prompt special-case baseline 从 1 清零到 0；`agentserver-prompts.ts` 的 current-request marker extraction 和 configured LLM endpoint normalization 已迁到 `packages/contracts/runtime/agentserver-prompt-policy.ts`，该文件 no-legacy provider/prompt special-case baseline 从 2 清零到 0；`runtime-routing.ts` 的 entrypoint route labels/profile policy 已迁到 `packages/skills/runtime-policy.ts`，该文件 no-src artifact baseline 从 6 清零到 0；`workspace-task-input.ts` 的 current turn / output contract / recovery context handoff anchor policy 和 artifact data/binary/schema compaction policy 已迁到 `packages/contracts/runtime/handoff-input-policy.ts`，runtime 只调用 package helper；`Dashboard.tsx` 的 scenario/domain/export/copy/import display policy 已迁到 `packages/scenarios/core`，Dashboard 真实 semantic baseline 清零；`AlignmentPages.tsx` 的 alignment display vocabulary/policy 已迁到 `@sciforge/scenario-core/alignment-display-policy`，该文件 no-src baseline 清零；本轮 runtime events、handoff、work event presentation、preview locator hints、workspace action/ref-kind policy、agent backend / skillDomain types、workbench safety、runtime structure defaults、TaskProject status、alignment contract/version、process progress/runtime health、claim/evidence tags、stream event types、research workspace unions 和 workspace capability ids 继续收敛；`smoke:no-src-capability-semantics` 当前收敛到 0 个 tracked findings，所有 tracked baseline 均为 0；`smoke:no-legacy-paths` 当前收敛到 0 个 tracked findings，无新增。
+- [ ] 拆出 `results-renderer-artifact-normalizer`：只处理 loose backend artifact / ToolPayload 到稳定渲染输入的归一化。
+- [ ] 拆出 `results-renderer-view-model`：只负责 view plan、primary/supporting/provenance section 和 empty-state 投影。
+- [ ] 拆出 `results-renderer-execution-model`：只负责 execution units、notebook panels、work evidence 和 audit display 的 UI 数据模型。
+- [ ] 保持 `ResultsRenderer.tsx` 只做 React composition 和事件接线，目标降到 1000 行以下。
+- [ ] 增加或迁移聚焦测试，覆盖 artifact fallback、report/preview rendering、execution notebook 和 object reference actions。
 
 验收标准：
 
-- [x] `src/` 中只剩平台骨架和通用运行时逻辑；没有 domain/package-specific capability semantics。
-- [x] `packages/` 中每个核心能力都有 manifest、schema、validator、provider 和 repair hints。
-- [x] 高频稳定路径若是平台秩序，固定在 `src/`；若是能力组合，注册为 `packages/` composed capability。
-- [x] boundary smoke 能阻止新增反向依赖、隐藏能力分支和绕过 runtime safety/validation 的 package 实现。
+- [ ] `npm run smoke:long-file-budget` 通过，且 `ResultsRenderer.tsx` 不再超过 1500 行。
+- [ ] 结果渲染行为不回退到 UI 语义路由；view/preview 决策仍消费 package-owned policy 和 runtime contract。
 
-### T121 Capability Evolution Ledger：把胶水代码成功/失败轨迹变成资产
+### T130 Agent Harness Runtime MVP：把标准变成可运行策略层
 
-状态：已完成；目标是记录 backend 动态组合能力时产生的胶水代码、执行 trace、validation result、失败原因和修复轨迹，让成功路径可晋升为 composed capability，让失败路径反哺 validator、fallback policy、repair hints 和 broker。Ledger 不作为每轮大上下文直接喂给 backend；只通过 refs、digests、briefs 和 broker 摘要分层暴露。
+状态：进行中；目标是按 [`docs/AgentHarnessStandard.md`](docs/AgentHarnessStandard.md) 建立最小可运行 harness runtime。第一阶段只生成 `HarnessContract` 和 `HarnessTrace`，不改变业务行为；第二阶段逐步让 context、broker、prompt、validation、repair 和 UI 消费 contract。
 
-设计文档：[`docs/Architecture.md`](docs/Architecture.md#composed-capability-fallback-and-evolution-ledger)。
+进展：shadow-mode MVP 已完成。`packages/agent-harness` 提供 contract/profile/callback/trace 基础运行时，gateway 在 conversation policy 之后、既有 dispatch/fast-path 之前评估 `HarnessRuntime.evaluate()`，并把 `HarnessContract` / `HarnessTrace` 写入 request/uiState/metadata 与 stream trace。当前阶段只建立可审计 contract/trace，不改变 context、broker、prompt、validation、repair 或 UI progress 的业务行为；第二阶段让这些模块实际消费 contract 仍待办。
 
 Todo：
 
-- [x] 定义 `CapabilityEvolutionRecord` contract：goal summary、selected capabilities、providers、input/output schema refs、glue code ref、executionUnit refs、artifact refs、validation result、failureCode、recoverActions、repair attempts、final status、latency/cost summary、promotion candidate。
-- [x] 定义 composed capability fallback policy contract：`atomicCapabilities`、`fallbackToAtomicWhen`、`doNotFallbackWhen`、`retryBudget`、`fallbackContext`。
-- [x] 将 composed capability result 标准化为 `status`、`failureCode`、`fallbackable`、`confidence`、`coverage`、`recoverActions`、`atomicTrace`、related refs。
-- [x] generated task validation/repair 真实路径 best-effort 写入 Capability Evolution Ledger，并只返回 `ledgerRef`、`recordRef` 和 compact summary。
-- [x] 在 backend 动态写胶水代码、composed capability 执行、fallback 到原子能力等更完整路径写入 ledger record。
-  进展：generated task 成功路径会写入 `dynamic-glue-execution` ledger record；缺失 expected artifact 时的 supplemental backend fallback 会写入 `composed-capability-fallback` ledger record，包含 fallback reason、原 validation failure、run/task refs、execution units、artifacts 和 atomic trace。
-- [x] 建立 promotion proposal 规则：高频成功组合可提议晋升为 composed capability；高频失败模式可提议更新 validator、fallbackPolicy 或 repair hints。
-- [x] broker 只消费 ledger 的 compact summary，不直接展开完整胶水代码和日志；需要复用/修复时再按 ref 展开。
-  进展：`CapabilityEvolutionBrokerDigest`、broker-safe compact summary sanitizer 和 TypeScript capability broker scoring 已接入；AgentServer handoff 只传 ledger record counts / matched signals / refs，不展开 glue code、stdout/stderr 或完整 JSONL。
-- [x] 增加 smoke：generated task schema invalid / repair completion 后 ledger 记录原失败、下钻路径和最终 artifact refs，compact summary 不展开胶水代码。
-- [x] 增加 smoke：composed capability schema invalid 后 fallback 到 atomic capabilities，并记录 fallback 决策与 atomic trace。
-- [x] 删除任何散落的“成功胶水代码缓存”或“失败样例记录”临时实现，统一归入 ledger。
-  进展：复扫 `src/runtime`、`packages/contracts/runtime`、`tests/smoke` 未发现独立 success glue cache、failure sample/cache、repair sample/cache 路径；`smoke-capability-evolution-ledger` 增加 rg guard，禁止这些临时缓存/样例路径重新进入 runtime/smoke，并验证 ledger-sourced promotion README 只指向 ledger refs，不展开 task code/stdout/stderr。
+- [x] 建立 `packages/agent-harness`：导出 `HarnessRuntime`、`HarnessProfile`、`HarnessCallback`、`HarnessContext`、`HarnessDecision`、`HarnessContract`、`HarnessTrace`、`HarnessStage`。
+- [x] 实现 profile registry：`balanced-default`、`fast-answer`、`research-grade`、`debug-repair`、`low-cost`、`privacy-strict`、`high-recall-literature`。
+- [x] 实现 deterministic merge engine：blocked refs/capabilities union、budget only tightens、risk/verification only escalates、side effects fail closed、conflicts written to trace。
+- [x] 在 `runWorkspaceRuntimeGateway` 中接入 `HarnessRuntime.evaluate()`，位置在 conversation policy 之后、direct fast-path / vision / AgentServer dispatch 之前。
+- [x] 第一阶段只把 `HarnessContract` 写入 request/uiState/metadata 和 stream trace，不改变已有 runtime 行为。
+- [ ] 第二阶段打开 feature flag，让 context envelope、broker、prompt renderer、verification policy、repair loop、UI progress 逐项消费 contract。
+- [x] 增加 `smoke:agent-harness-contract`：同一输入输出稳定 contract、trace 有阶段记录、profile 切换只改 contract 不 fork gateway path。
+- [x] 增加 `smoke:no-scattered-harness-policy`：禁止在 gateway、prompt builder、UI、scenario、provider 分支新增 harness 指令散文、探索规则、skill 偏好或工具预算。
 
 验收标准：
 
-- [x] 每次动态 glue code 或 composed capability fallback 都有 ledger record，可追溯到 run、execution units、artifacts 和 validation failures。
-- [x] fallback 是否发生由 validator/failureCode/fallbackPolicy/retryBudget 决定，不由 UI 或 LLM 自由猜测。
-- [x] ledger 能生成 promotion candidates 和 repair-hint improvement candidates。
-  进展：`CapabilityEvolutionCandidateSet` 会从 compact summary / supporting record refs 投影 composed-capability promotion candidates 和 repair-hint improvement candidates；ledger-sourced skill promotion proposal 只保存候选、record refs 和 review notes，不展开 glue code、stdout/stderr 或完整日志。
-- [x] broker 默认只读取 ledger brief/digest，不造成每轮 token 暴涨。
-  进展：T121 targeted 验证通过 `npx tsx tests/smoke/smoke-capability-evolution-ledger.ts`、`npx tsx tests/smoke/smoke-capability-broker.ts`、`npm run smoke:self-evolving-skill`；本轮集成验证通过 `npm run typecheck -- --pretty false`、`npm run smoke:runtime-gateway-modules` 和 `npm test -- --test-reporter=spec`。
+- [ ] Agent 行为治理只有一个入口：`packages/agent-harness` profile registry。
+- [x] Harness runtime 可以 shadow mode 运行并产出完整 trace。
+- [x] 关闭 harness feature flag 时现有 backend-first/capability-driven 行为保持不变。
+- [ ] 打开 harness feature flag 后，至少 context budget、progress plan 和 validation policy 三项由 contract 驱动。
 
-### T120 Final Cutover：删除遗留链路并锁定唯一真相源
+### T129 Unified Capability Graph：skills/tools/actions/observe/verifiers 进入同一能力图
 
-状态：已完成；最终 cutover 已收口到 capability-first / backend-first 的唯一逻辑，旧链路由 `smoke:no-legacy-paths` 和 `smoke:no-src-capability-semantics` 双 guard 锁定为 0 tracked findings。
-
-设计文档：[`docs/Architecture.md`](docs/Architecture.md#最终形态backend-first-capability-architecture)。
+状态：待办；目标是让所有可用能力都通过统一 `CapabilityManifest`、`HarnessCandidate`、`CapabilityBudget` 被 broker 和 harness 治理，避免 package skills、tool catalog、observe/action loop 与 AgentServer generation fallback 平行存在。
 
 Todo：
 
-- [x] 列出所有旧链路：UI prompt regex、场景 id 分支、provider 特例、旧 payload normalizer、旧 fallback、旧 preview resolver、旧 task adapter、旧 compatibility re-export。
-- [x] 为每条旧链路标注新的唯一真相源：capability manifest、broker、resolver、validator、runtime executor 或 backend tool。
-- [x] 删除旧链路和对应测试夹具；只保留验证新路径的 tests/smoke。
-  证据：`smoke:no-legacy-paths` 当前扫描 316 个 source files，0 tracked findings；`smoke:no-src-capability-semantics` 当前扫描 193 个 source files，0 tracked findings。只剩 package-owned manifest fallback、primitive compatibility alias、unknown artifact inspector safety fallback，以及断言 legacy full catalog 不再进入 backend handoff 的新路径 smoke fixtures。
-- [x] 删除 12 个 `src/ui/src/scenarioCompiler/*` package facade re-export 文件，并将 UI/smoke/test 调用方改为直接导入 `@sciforge/scenario-core/*` 稳定入口。
-- [x] 删除最终 `src/ui/src/scenarioSpecs.ts` package facade，并将调用方改为直接导入 `@sciforge/scenario-core/scenario-specs` 稳定入口。
-- [x] 增加 `no-legacy-paths` smoke，禁止重新引入 UI 语义兜底、provider/scenario/prompt 特例和重复 source of truth。
-  进展：`agent-backend-config.ts`、`agentserver-context-window.ts`、`backend-failure-diagnostics.ts` 中 provider/prompt special-case 已迁到 `@sciforge-ui/runtime-contract/agent-backend-policy`，T120 no-legacy baseline 从 27 降到 22。
-  进展：`workspace-event-normalizer.ts` 的 context-window source alias / provider-usage 判定和 compact capability fallback 语义已迁到 `@sciforge-ui/runtime-contract/agent-backend-policy`，T120 no-legacy baseline 从 22 降到 19。
-  进展：`repair-policy.ts` 的 user-side model config failure 检测、recover actions 和 nextStep 文案已迁到 `@sciforge-ui/runtime-contract/agent-backend-policy`；repair policy 只消费结构化 backend diagnostic helper，T120 no-legacy baseline 从 19 降到 17。
-  进展：`ComponentWorkbenchPage.tsx` 不再展示 UI 自有 fallback 路由文案，备用显示项改为解析 package/component manifest 的 title；`uiPrimitives.tsx` 删除 `fallback-component:` recover action 的 UI 本地翻译，T120 no-legacy baseline 从 17 降到 13。
-  进展：`capability-evolution-events.ts` 的 provider/base-url/AgentServer/ECONNREFUSED/429/rate failure classification 已迁到 `@sciforge-ui/runtime-contract/agent-backend-policy` 的 capability evolution helper；gateway event code 只传结构化 failure context 并消费 helper 返回的 failureCode，T120 no-legacy baseline 从 13 降到 10。
-  进展：`agentserver-prompts.ts` 的 current-request marker extraction 和 configured LLM endpoint normalization 已迁到 `@sciforge-ui/runtime-contract/agentserver-prompt-policy`，`gateway-request.ts` 的 LLM endpoint provider normalization 已迁到 `@sciforge-ui/runtime-contract/agent-backend-policy`；T120 no-legacy baseline 从 10 降到 0。
-  收口：T120 legacy inventory 已从 open cutover queue 改为 closed guard state；当前不再有可降低 baseline 的 legacy symbols、旧 adapter、旧 fallback 或旧特例分支。
-- [x] 更新 docs/Architecture、docs/Extending、packages/README，删除旧架构描述。
+- [ ] 将 `packages/skills`、`packages/actions`、`packages/observe`、`packages/verifiers`、`packages/presentation` 和 core runtime capabilities 投影成统一 `CapabilityManifest`。
+- [ ] 扩展 capability registry loader，支持 package manifest discovery、provider availability、required config、side effects、risk、validators、repair hints。
+- [ ] 定义 `HarnessCandidate`：`kind/id/manifestRef/score/reasons/providerAvailability/budget/fallbackCandidateIds`。
+- [ ] 将 `scoreSkillByPackagePolicy`、tool package manifests、observe provider selection、Computer Use action plan 统一包装为默认 candidate callbacks。
+- [ ] 将 `summarizeToolsForAgentServer()` 改为按 harness/capability budget 输出 budgeted tool briefs，不再默认空数组。
+- [ ] Broker 输入接收 `skillHints`、`blockedCapabilities`、`CapabilityBudget`、`verificationPolicy`、provider availability 和 ledger history。
+- [ ] 每次 capability invocation 写入 `budgetDebits` 到 executionUnit/workEvidence/audit。
+- [ ] 增加 `smoke:unified-capability-graph`：同一 prompt 下 skill/tool/observe/action/verifier 都能作为候选进入 broker audit，且安全/配置/预算 gate 生效。
 
 验收标准：
 
-- [x] 全项目只有一条 backend-first request path 和一套 capability registry/broker/validation loop。
-- [x] 搜索不到已列入删除清单的 legacy symbols、旧 adapter、旧 fallback 和旧特例分支。
-- [x] `npm run typecheck`、runtime contract smoke、package boundary smoke、frontend rendering tests 和多轮 fixtures 全部通过。
-  验证：`npm run smoke:no-legacy-paths`、`npm run smoke:no-src-capability-semantics`、`npm run smoke:runtime-contracts`、`npm run smoke:module-boundaries`、`npm run smoke:fixed-platform-boundary`、`npm run packages:check`、`node --import tsx --test src/ui/src/app/ResultsRenderer.test.ts src/ui/src/streamEventPresentation.test.ts src/ui/src/app/chat/runOrchestrator.targetInstance.test.ts`、`npx tsx tests/smoke/smoke-contract-validation-failure.ts`、`npx tsx tests/smoke/smoke-t118-multiturn-fixtures.ts`、`npx tsx tests/smoke/smoke-agentserver-fresh-task-ignores-prior-attempts.ts`。
+- [ ] 没有第二套 skill/tool selection 真相源。
+- [ ] 用户显式选择能力只提高候选优先级，不能绕过 safety/config/budget gate。
+- [ ] Broker 默认仍只暴露 compact brief；schema/examples/repair hints 继续 lazy expansion。
 
-### T119 UI Thin Shell：UI 只做展示、引用和安全边界
+### T128 Contract-driven Handoff：context、prompt、AgentServer payload 全部由 contract 渲染
 
-状态：已完成；UI 已从语义路由层降级为 thin shell。UI 只负责 session 可视化、object refs、artifact views、execution units、validation errors、recover actions 和用户交互安全边界。
-
-设计文档：[`docs/Architecture.md`](docs/Architecture.md#角色边界)。
+状态：待办；目标是把 fresh/continuation、workspace read policy、current refs、repair retry、tool-use policy 等散落 prompt/metadata 规则迁入 `HarnessContract`，prompt builder 只做 deterministic rendering。
 
 Todo：
 
-- [x] 删除 UI 侧自然语言意图判断、报告/markdown/上一轮结果等语义 fallback。
-- [x] UI 只从 backend response、workspace refs、UIManifest 和 capability result projection 渲染结果。
-- [x] 将“backend 不可达/stream 断开/validation failed”统一显示为诊断和 recover actions，不合成最终答案。
-- [x] 结果面板只依赖稳定 object refs；不直接依赖临时 `agentserver://` preview。
-- [x] 增加 UI smoke，断言 report 追问、artifact 追问、失败修复都由 backend/capability path 产生结果。
-
-进展：`runOrchestrator.ts` 已删除系统中断后按自然语言/report artifact 合成 `sciforge.existing-artifact-followup` 成功响应的 UI fallback；`runOrchestrator.targetInstance.test.ts` 断言 report 追问、非 report artifact 追问和 failed-run 修复都发送同一 backend handoff payload，由 `agentDispatchPolicy=agentserver-decides` 和 capability execution unit 返回结果，backend 中断只记录失败诊断，不合成 Markdown 报告。`runtimeEvents.ts` 的 workspace result blocking status、context window/compaction status、stream event label 和 project-tool failure/abort 诊断语义已迁到 `packages/contracts/runtime/events.ts` contract policy，UI 只调用 projection helper；`smoke:no-src-capability-semantics` 对 `runtimeEvents.ts` 的 baseline 降为 0，对 `runOrchestrator.ts` 的 `project-tool-failed` 特例降为 0。
-进展：`ComponentWorkbenchPage.tsx` 的组件工作台推荐和模块详情只展示 registry/manifest title 解析出的备用显示标签，不再用 UI 文案指示 generic inspector 或 backend-decides fallback；`uiPrimitives.tsx` 对 `fallback-component:` action 保留 package/runtime 提供的原始 label，不再按前缀组装“改用某组件”语义。
-进展：`MessageContent.tsx` 的 inline object reference token 解析、prefix/kind/action 归一化和正文 linkify policy 已迁到 `packages/support/object-references`；UI 只合并 backend/run/artifact refs 并调用 package API 渲染按钮。`packages/support/object-references/index.test.ts` 覆盖 artifact/file/url inline token、actions/provenance 与 linkify；`smoke:no-src-capability-semantics` 对 `MessageContent.tsx` 的 artifact/component/domain-prompt baseline 降为 0。
-进展：`responseNormalization.ts` 的 Agent response object-reference kind/ref/action/provenance 归一化已迁到 `packages/support/object-references` 的 `normalizeResponseObjectReferences`；UI client 只解析 backend payload 并调用 package policy，不再本地硬编码 artifact/file/execution-unit kind、artifact action 或 markdown path regex。`packages/support/object-references/index.test.ts` 增加 response refs/related refs 覆盖；`smoke:no-src-capability-semantics` 对 `responseNormalization.ts` 的 artifact/domain-prompt baseline 从 2 / 1 降到 0 / 0。
-进展：`ResultsRenderer.tsx` 的 `paper-card-list`/`paper-list` payload 字段解释、paper card 展示映射和空态修复文案已迁到 `packages/presentation/components/paper-card-list`，并通过 `packages/presentation/interactive-views` 导出为 component policy；UI 只把 resolved slot/artifact/session 交给 package renderer。`ResultsRenderer.test.ts` 和 `packages/presentation/interactive-views/index.test.ts` 覆盖 package-owned paper-list 渲染/映射；`smoke:no-src-capability-semantics` 对 `ResultsRenderer.tsx` 的 artifact/component/domain-prompt baseline 从 18 / 39 / 2 降到 16 / 38 / 0。
-进展：`Dashboard.tsx` 不再本地持有导入文献场景 id、domain options、scenario builder 默认 prompt/placeholder 或 draft token 展示标签；这些 display/routing policy 由 `packages/scenarios/core` 输出，UI 只渲染 helper 结果。`scenarioBuilderDisplayPolicy.test.ts` 和 `dashboardModels.test.ts` 覆盖 package-owned action/domain/display model。
+- [ ] `buildContextEnvelope` 只消费 `allowedContextRefs`、`blockedContextRefs`、`requiredContextRefs`、`contextBudget`、`repairContextPolicy`。
+- [ ] `buildCapabilityBrokerBriefForAgentServer` 只消费 `capabilityPolicy`、`skillHints`、`toolBudget` 和 scenario/capability manifest。
+- [ ] `buildAgentServerGenerationPrompt` 只渲染 `promptDirectives`、current-turn snapshot、selected contract refs，不再新增行为治理散文。
+- [ ] `buildAgentServerRepairPrompt` 只渲染 `repairContextPolicy` 允许的失败 evidence、validator findings 和 recover actions。
+- [ ] AgentServer payload metadata 带 `harnessProfileId`、`harnessContractRef`、`harnessTraceRef`、budget summary、decision owner。
+- [ ] 将 backend selection、fresh/continuity prompt rule、context/rate-limit recovery、stream guard 统一通过 harness hook 输出结构化决策。
+- [ ] 增加 `smoke:contract-driven-handoff`：fresh request 不携带旧 attempts/logs；continuation/repair request 只携带 contract 允许 refs；prompt 中所有策略句都有 `sourceCallbackId`。
 
 验收标准：
 
-- [x] UI 不含 prompt regex、scenario id 分支或 artifact type 特例来决定用户语义。
-- [x] UI 能完整展示 `ContractValidationFailure`、recoverActions、related refs 和 backend repair state。
-- [x] 删除旧 UI fallback 后，多轮 report/artifact/repair fixtures 仍通过。
+- [ ] Prompt builder 不再是策略真相源。
+- [ ] Handoff payload 可以从 `HarnessContract` 和 refs 重建。
+- [ ] Context budget 超限时有 deterministic slimming trace。
 
-### T118 Backend-first Artifact and Run Tools
+### T127 Result Validation / Repair / Audit Pipeline：失败路径统一成决策链
 
-状态：已完成；backend 可通用读取、解析、渲染和继续 workspace 事实，解决多轮对话依赖 SciForge 猜测的问题。
-
-设计文档：[`docs/Architecture.md`](docs/Architecture.md#backend-first-多轮-artifact-使用)。
+状态：待办；目标是所有输出路径进入同一 `ValidationDecision -> RepairDecision -> AuditRecord` 链路，generated-task runner、direct payload、observe/action、verification gate 和 repair rerun 不再各自判断成败。
 
 Todo：
 
-- [x] 定义并暴露 backend 工具 contract：`list_session_artifacts`、`resolve_object_reference`、`read_artifact`、`render_artifact`、`resume_run`。
-- [x] 支持 workspace refs、artifact refs、executionUnit refs、run refs、file refs 和 `agentserver://` refs 的统一解析。
-  说明：`agentserver://` 只在已 materialize 为稳定 artifact/file ref 时可读；未 materialize 的临时 URI 会返回 blocked，要求先转为稳定 refs。
-- [x] 收敛 workspace file ref 解析到 `src/runtime/workspace-paths.ts` helper，并让 task attempts 复用该 helper 读取 outputRef 摘要；覆盖 `file:`、`.sciforge/*`、managed shorthand 和 workspace 越界拒绝。
-- [x] run completed 前将 backend 输出 materialize 到 `.sciforge/task-results/*.json|md` 并返回稳定 object refs。
-- [x] backend completed contract 禁止 “I will retrieve...” 这类计划句伪装完成；必须交付文本、artifact 或稳定 ref。
-- [x] 建立三条最小多轮 fixtures：生成 report 后要 markdown、基于刚才 artifact 继续处理、按 failed run 原因修复。
+- [ ] 建立 `ResultValidationHarness`：统一 schema、artifact refs、completed payload、current refs、WorkEvidence、guidance adoption、provided verification results、runtime verification gate、observe/action trace contract。
+- [ ] 建立 `RepairPolicyHarness`：统一决定 `none` / `repair-rerun` / `supplement` / `fail-closed` / `needs-human`。
+- [ ] 建立 `RepairExecutor`：只执行 patch/rerun/supplement/peer handoff，不做策略判断。
+- [ ] 建立 `AuditSink`：统一写 `appendTaskAttempt`、Capability Evolution Ledger、verification artifacts、observe invocation records。
+- [ ] 建立 `TelemetrySink`：记录 `generation/request`、`materialize`、`payload-validation`、`work-evidence`、`verification-gate`、`repair-decision`、`repair-rerun`、`ledger-write`、`observe-invocation` spans。
+- [ ] 将 `generated-task-runner` 收敛为生命周期编排：generate/run/validate/repair/audit。
+- [ ] Verification gate 结果必须回流 repair/audit，而不是只在最终 payload 上 fail closed。
+- [ ] 增加 `smoke:validation-repair-audit-chain`：每个失败都能追溯 contract id、failure kind、related refs、repair budget、最终 outcome。
 
 验收标准：
 
-- [x] “给我 markdown 格式报告”由 backend 读取已有 artifact 后返回真实 Markdown 或稳定 report ref。
-- [x] “重新检索/再跑/最新”不会误用旧 artifact；backend 自主决定复用、扩展或重跑。
-- [x] `agentserver://` 输出不再成为 UI 预览稳定性的唯一依赖。
-  证据：`tests/smoke/smoke-t118-multiturn-fixtures.ts` 覆盖生成 report 后读取 materialized markdown、基于刚才 artifact 继续处理、按 failed run 原因修复、当前 session 不读取旧 artifact，以及 objectReferences 使用稳定 `file:`/`artifact:` refs；`tests/smoke/smoke-backend-artifact-tools.ts` 覆盖 `list_session_artifacts`、`resolve_object_reference`、`read_artifact`、`render_artifact`、`resume_run` 和未 materialize `agentserver://` blocked；`tests/smoke/smoke-agentserver-fresh-task-ignores-prior-attempts.ts` 覆盖 fresh/latest handoff 不携带旧失败 attempts。
+- [ ] direct payload、generated task、repair rerun、observe/action result 共用同一 validation finding model。
+- [ ] Runner 分支不再手写 repair policy 和 ledger input。
+- [ ] Capability Evolution Ledger 拥有完整成功/失败/repair/fallback 事实。
 
-### T117 ContractValidationFailure and Repair Loop
+### T126 Interaction and Progress Harness：用户可见进度、澄清、取消统一治理
 
-状态：已完成；目标是把所有 schema、ref、artifact、UIManifest、WorkEvidence 和 verifier 错误统一为机器可读 validation failure，交回 backend 修复。
-
-设计文档：[`docs/Architecture.md`](docs/Architecture.md#validation-and-repair-loop)。
+状态：待办；目标是让 UI 继续保持 thin shell，但具备清晰的长任务进度、沉默等待、澄清、人工确认、取消和后台完成体验。UI 只消费 structured stream events，不做语义路由。
 
 Todo：
 
-- [x] 定义 `ContractValidationFailure` contract：schema path、contract id、capability id、expected/actual、missing fields、invalid refs、unresolved URI、failureReason、recoverActions、nextStep、related refs。
-- [x] 收窄 handoff payload contract：为 `failureRecoveryPolicy`、`referencePolicy`、`artifactPolicy`、verification snapshots 和 attempt refs 定义窄类型/guards，同时保持 loose transport record 兼容。
-- [x] 将 payload schema、artifact schema、UIManifest schema 和 current-turn ref validation failure 映射到 `ContractValidationFailure`。
-- [x] 将 WorkEvidence guard 和 verifier failure 映射到 `ContractValidationFailure`。
-- [x] repair prompt/handoff 只消费结构化 failure，不读取散乱错误文本。
-- [x] 删除旧的分散 repair-needed/failed-with-reason 组装逻辑，保留统一 validation-to-repair 管线。
-  进展：`contractValidationFailureFromErrors`、`contractValidationFailureFromRepairReason`、schema scope、issue extraction、recoverActions 和 nextStep 统一迁入 `packages/contracts/runtime/validation-failure.ts`；`payload-validation.ts` 只执行 payload/ref/artifact 检测并调用 contract helper，再交给 `repair-policy` 生成结构化 repair payload。`verification-results.ts` 和 `work-evidence-guard.ts` 不再从 gateway payload validation 引用 failure 构造逻辑；`smoke:no-legacy-paths` 新增 `gateway-validation-failure-assembly` guard，禁止这些 helper 回流到 gateway。
-- [x] `repair-policy` handoff 统一携带 `validationFailure` 或结构化 `backendFailure`，不再把 loose `reason` 作为 repair 主入口。
-  进展：user-model configuration failure 的检测、recover actions 和 nextStep 已由 runtime contract policy 提供，`repair-policy.ts` 不再本地维护 provider/prompt regex 或配置修复文案分支。
-- [x] 增加 fixtures：schema 缺字段、invalid ref、artifact 空结果、verifier fail、stdout/stderr 指向修复。
+- [ ] 定义 `ProgressPlan`：initial status、phase names、silence policy、background policy、cancel policy、interaction policy。
+- [ ] 标准事件：`process-progress`、`interaction-request`、`clarification-needed`、`human-approval-required`、`guidance-queued`、`run-cancelled`。
+- [ ] 将 UI、transport、backend 三层 silent watchdog 统一为 `silencePolicy`，同一 run 只产生一条可审计 retry/abort/visible-status 决策。
+- [ ] 区分 `user-cancelled`、`system-aborted`、`timeout`、`backend-error`，历史 run 不全部折叠成普通 failed。
+- [ ] 让 `streamEventPresentation` 根据结构化 `importance/phase/status/reason/budget` 投影 worklog，减少自然语言启发式。
+- [ ] 短期兼容现有 guidance queue；长期将澄清和人工确认升级为一等 interaction contract。
+- [ ] 增加 `smoke:interaction-progress-harness`：长任务沉默、用户取消、系统 abort、timeout、human approval、mid-run guidance 都有稳定事件和最终 run state。
 
 验收标准：
 
-- [x] 任一 contract 错误都能被统一序列化并带回 backend。
-- [x] backend 修复后同一 run/attempt history 可继续，而不是开新失败链路。
-- [x] 没有旧 validation error 文案分支继续作为业务逻辑入口。
-  证据：`npx tsx tests/smoke/smoke-contract-validation-failure.ts` 覆盖 payload schema、artifact schema、UIManifest、current-turn ref、completed-plan、WorkEvidence、empty retrieval、stdout/stderr repair、structured repair 和 verifier failure；`npx tsx tests/smoke/smoke-t118-multiturn-fixtures.ts` 覆盖 `resumeRun` 以 failed run reason 和 stdout/stderr refs 延续同一 run/attempt repair context；`npm run smoke:no-legacy-paths` 对旧 gateway assembly helper 保持 0 tracked findings。
+- [ ] ChatPanel 不根据 prompt/scenario 判断任务语义。
+- [ ] 用户取消、系统中断和后端失败可在 session/history 中区分。
+- [ ] 长任务进度可以从 stream trace 恢复，而不是依赖完整 React event array。
 
-### T116 Capability Broker and Layered Meta Exposure
+### T125 Research Capability Pack：通用科研能力包与 literature.retrieval
 
-状态：已完成；backend 每轮只消费相关、紧凑的 capability brief；调用或修复时再按需展开 contract、examples、repair hints 和相关 failure/log refs。
-
-设计文档：[`docs/Architecture.md`](docs/Architecture.md#meta-暴露与热路径固化)。
+状态：待办；目标是把高频科研任务沉淀为通用 composed capabilities，而不是隐藏 workflow。第一批聚焦文献检索、PDF 下载、全文抽取、批量总结、引用核验和证据矩阵。
 
 Todo：
 
-- [x] 建立 capability broker 输入：prompt、object refs、artifact index、failure history、scenario policy、runtime policy、available providers。
-- [x] broker 输出 compact capability brief 列表，默认不展开 full schema。
-- [x] 定义 expansion API：`brief -> contract summary -> full schema/examples/repair hints`。
-- [x] 将 backend request payload 改为消费 broker 输出，而不是散落的 skills/views/tools 列表。
-- [x] 删除旧 capability 拼接逻辑和重复 prompt context builder。
-  进展：删除 `agentserver-prompts.ts` 中旧 `sciforge.runtime-capability-catalog.v1` 拼接器（skills/tools/senses/actions/verifiers/uiComponents）；兼容 `availableTools` 入口只返回空列表，`availableRuntimeCapabilities` 入口改为 broker compact brief，contract smoke 改为断言 context envelope 只暴露 `sciforge.agentserver.capability-broker-brief.v1` compact brief。
-  收口：生产路径不再构造 `availableSkills` compact capability list；`buildAgentServerCompactContext` 只保留 workspace/ui/artifact/ref/prior-attempt context，capability 入口唯一收敛到 `buildCapabilityBrokerBriefForAgentServer`。`smoke-agentserver-broker-payload` 增加 guard，断言 compact context 不含散落 `availableSkills`，即使 legacy full skill/tool/runtime catalog 被误传给 prompt builder 也不会进入默认 handoff。
+- [ ] 新增 `literature.retrieval` composed capability：providers 覆盖 PubMed、Crossref、Semantic Scholar、OpenAlex、arXiv、web search、SCP biomedical search。
+- [ ] 输入 contract：`query`、`databases`、`dateRange`、`species`、`maxResults`、`includeAbstracts`、`fullTextPolicy`、`dedupePolicy`。
+- [ ] 输出 contract：`paper-list`、`evidence-matrix`、`research-report`、`workEvidence`、`providerAttempts`、`citationVerificationResults`。
+- [ ] 默认 budget：`maxProviders=3`、`maxResults=30`、`perProviderTimeoutMs=10000`、`maxFullTextDownloads=3`、`maxDownloadBytes=25MB`。
+- [ ] 空结果、provider timeout、download failure、citation mismatch 必须输出 structured failure/partial payload，不能算成功。
+- [ ] 引用核验强制检查 DOI/PMID/arXiv id/title/year/journal 一致性，结果进入 verificationResults。
+- [ ] PDF/full text 抽取保持 refs-first：全文写 artifact/task-results，prompt 只收 bounded summary、hash、page/section locators。
+- [ ] 增加 `smoke:literature-retrieval-capability`：arXiv/PubMed/OpenAlex 至少一个 provider 可 mock 成功；空结果、超预算、引用不一致均 fail closed 或 partial。
 
 验收标准：
 
-- [x] backend 默认只看到相关能力 brief，而不是全量协议。
-- [x] 选择能力后可按需展开 schema；失败修复时可展开 repair hints 和相关 failure/log refs。
-- [x] 旧的多处 capability list 构造逻辑被删除或合并到 broker。
-  验证：`npx tsx tests/smoke/smoke-agentserver-broker-payload.ts` 断言默认 handoff 只包含 compact broker brief 且不泄露 legacy full skill/tool/runtime catalog；`npx tsx tests/smoke/smoke-capability-broker.ts` 断言 broker 可从 request-shaped failure history 按需展开 schema、examples、repair hints、provider refs 和被选 capability 的 stdout/stderr/trace failure refs，同时默认 broker brief 不展开 ledger logs。
-  本轮验证：`npx tsx tests/smoke/smoke-agentserver-broker-payload.ts`、`npx tsx tests/smoke/smoke-capability-broker.ts`、`npm run typecheck`、`npm run smoke:runtime-gateway-modules`、`npm run smoke:no-legacy-paths`、`npm run smoke:no-src-capability-semantics`、`npm run smoke:capability-manifest-registry`。
+- [ ] Harness 只选择 profile/budget/provider policy，不固化 arXiv 或任意站点 workflow。
+- [ ] 同一能力可被不同 scenario 复用。
+- [ ] 文献检索结果可审计、可验证、可修复。
 
-### T115 Unified CapabilityManifest Registry
+### T124 Harness Experiment Suite：把 agent harness 变成可研究、可比较的实验平台
 
-状态：已完成；所有 packages/modules 已统一到 capability manifest/catalog 发现，使每个模块都可声明、校验、组合、替换和修复。
-
-设计文档：[`docs/Architecture.md`](docs/Architecture.md#一切模块都是-capability)。
+状态：待办；目标是为 harness profile、hook、budget 和 repair strategy 建立可复现实验基准，让未来 agent harness 研究可以像训练框架一样比较策略效果。
 
 Todo：
 
-- [x] 定义 `CapabilityManifest` contract：name、version、owner package、brief、routing tags、inputSchema、outputSchema、sideEffects、safety、examples、validator、repairHints、providers、lifecycle metadata。
-- [x] 梳理现有模块并分类：observe、skills、actions、verifiers、views、memory/context、importers/exporters、runtime adapters。
-  证据：`CapabilityManifestKind` 覆盖 observe、skill、action、verifier、view、memory、importer、exporter、runtime-adapter、composed；核心 manifest 已覆盖 vision observe、AgentServer generation skill、workspace/action/runtime adapters、report/evidence views 和 schema verifier，`packages/README.md` 继续约束 skills、actions、verifiers、presentation views、support/context package 的归属边界。
-- [x] 为首批核心能力补 manifest：artifact resolver/read/render、workspace read/write、run command、Python task、vision observe、computer-use action、report viewer、evidence matrix、schema verifier。
-- [x] 建立 registry loader 和 package boundary smoke，禁止核心能力无 manifest 暴露。
-- [x] 删除旧 registry、旧 skill list、旧 view registry 中与 manifest 重复的真相源。
-  验证：`npm run packages:check` 聚合 skill catalog generation、capability manifest registry、workspace package metadata、package runtime boundary 和 UI component publication checks；`tools/check-package-catalog.ts` 断言 legacy `defaultCapabilitySummaries()` 的 id 和核心字段都从 `CORE_CAPABILITY_MANIFESTS` 投影派生，package catalog 不再引用 seed/workspace legacy skill source，generated skill/tool indexes 与 SKILL.md 发现结果一致，scenario skill/tool/view registry 分别从 package skill catalog、tool catalog 和 `uiComponentRuntimeRegistry` 派生，UI components 由 package manifests 唯一发布；`smoke-capability-manifest-contract.ts` 按 manifest id 验证稳定 provider/brief，不依赖 seed 顺序。
+- [ ] 建立 `tests/harness/fixtures`：fresh research、file-grounded summary、repair after validation failure、silent stream/cancel、capability budget exhaustion。
+- [ ] 建立 trace assertion helper：断言 hook order、decision merge、budget debit、blocked refs、selected candidates、validation/repair/audit chain。
+- [ ] 建立 profile diff runner：同一 prompt 在 `fast-answer`、`research-grade`、`low-cost`、`privacy-strict` 下产出不同 contract，但不 fork runtime path。
+- [ ] 建立 replay runner：从 saved `HarnessTrace` 和 refs 重放 contract decision，不依赖 live backend。
+- [ ] 建立 metrics：latency、context tokens、tool calls、network calls、download bytes、validation failures、repair attempts、final artifact quality。
+- [ ] 建立 golden traces：锁定最小实验案例的 expected contract/trace，不锁定 backend 具体自然语言答案。
+- [ ] 增加 `npm run smoke:agent-harness-experiments`。
 
 验收标准：
 
-- [x] 至少 8 个核心能力拥有 manifest，并能由 registry 统一加载。
-- [x] 同一 capability 可声明多个 provider，但 contract 保持唯一。
-- [x] package boundary smoke 能阻止无 contract 的核心能力扩散。
+- [ ] 新 profile 必须附带最小实验 fixture 和 trace assertion。
+- [ ] 新 hook 必须声明 owned stages、input facts、decision fields、merge behavior 和测试覆盖。
+- [ ] Harness 研究可以比较策略效果，而不是比较散落 prompt 文案。
 
-### T114 Scenario Packages as Policy Only
+### T123 Agent Harness Policy：集中治理探索、上下文、工具和进度策略
 
-状态：已完成；scenario package 已收敛为领域 policy 和能力选择约束，不再承载执行逻辑、多轮判断或 prompt 特例。
+状态：待办；目标是把 agent harness 从 gateway、prompt builder、conversation policy、UI 状态和 repair loop 中抽成独立、可版本化、可切换的行为治理层。Runtime 负责稳定阶段 hook 和 enforcement；harness 负责按 intent mode/profile 输出结构化 `HarnessContract`。这不是为某个文献检索案例打补丁，而是让任意任务都能在统一策略下选择探索预算、上下文范围、技能倾向、工具预算、验证强度和用户可见进度。
 
-设计文档：[`docs/Architecture.md`](docs/Architecture.md#角色边界)。
+设计文档：[`docs/Architecture.md`](docs/Architecture.md#终极形态harness-governed-scientific-agent-os)、[`docs/AgentHarnessStandard.md`](docs/AgentHarnessStandard.md)。
 
 Todo：
 
-- [x] 定义 scenario package 允许字段：artifact schemas、default views、allowed/required capabilities、domain vocabulary、verifier policy、privacy/safety boundaries。
-- [x] 删除 scenario 中的执行逻辑、prompt 特例、多轮语义判断和 provider 分支。进展：runtime scenario policy validation 现在拒绝 `providerBranches`、`multiTurnSemanticJudge`、`promptSpecialCases`、`answerTemplate`、`directAnswer`、`responseTemplate`、`systemPrompt` 等 runtime-like / preset-answer 字段；official package smoke 覆盖这些回归，并继续证明 built-in packages 只暴露 policy-only declarations；package builder smoke 已锁定 built-in package 只产出 contract shape，runtime policy 只由 `src/runtime/scenario-policy` 包装生成；scenario runtime smoke harness 已收窄为 policy-only dry-run，不再保留 package skill execution 模式。
-- [x] scenario 只影响 capability broker 的筛选和 policy，不直接决定 backend 回答。进展：scenario package policy 只输出 artifact/default view/capability/domain/verifier/privacy-safety declarations；official package smoke 断言 runtime dry-run smoke 跳过执行，backend 回答仍由通用 AgentServer/capability path 决定。
-- [x] 增加 scenario package smoke，禁止新增执行代码或 prompt regex。
+- [ ] 建立 `packages/agent-harness` 或等价 package，定义 `HarnessStage`、`HarnessProfile`、`HarnessContract`、`HarnessDecision`、`ExplorationMode`、`IntentMode` 和 profile registry。
+- [ ] 以 [`docs/AgentHarnessStandard.md`](docs/AgentHarnessStandard.md) 作为唯一 harness 编程标准；后续新增 hook、profile、merge rule、最小实验案例必须先更新该文档。
+- [ ] 将 harness 标准化为 Lightning-style callback 模型：`HarnessRuntime` 负责阶段调用和 decision merge，`HarnessProfile` 组合 callbacks/budgets，`HarnessCallback` 只返回结构化 `HarnessDecision`，`HarnessTrace` 记录每个阶段输入摘要、输出、预算消耗和 enforcement 结果。
+- [ ] 在 runtime gateway 增加稳定 hook 调用点：`onRequestReceived`、`classifyIntent`、`selectProfile`、`selectContext`、`setExplorationBudget`、`selectCapabilities`、`beforePromptRender`、`beforeAgentDispatch`、`onAgentStreamEvent`、`beforeToolCall`、`afterToolCall`、`beforeResultValidation`、`afterResultValidation`、`onRepairRequired`、`beforeRepairDispatch`、`afterRepairAttempt`、`beforeUserProgressEvent`、`onRunCompleted`、`onRunFailed`、`onRunCancelled`。
+- [ ] 定义默认 profile：`balanced-default`、`fast-answer`、`research-grade`、`debug-repair`、`low-cost`、`privacy-strict`；profile 只返回通用策略，不写单一 prompt、站点或 scenario 特例。
+- [ ] 定义 `HarnessDecision` merge 规则：callbacks 可 additive hint、收紧 budget、增加 blocked refs、提升 verification；不得放宽前序 callback 明确禁止的 side effect，除非 profile merge policy 显式允许并写入 trace。
+- [ ] 重新定界 conversation policy：Python/TS conversation-policy 只输出 current-turn facts、context isolation、bounded digest、handoff compaction、acceptance/recovery/cache/latency defaults；`intentMode`、execution mode、capability profile、repair executor 和 UI interaction 的最终决策上移到 harness。
+- [ ] 将 fresh / continuation / repair / audit / file-grounded / interactive 的探索范围规则迁入 harness：fresh 默认 minimal 探索，continuation/repair/audit 才允许读取相关历史 attempts、task results、stdout/stderr、ledger 和 verification refs。
+- [ ] 将 AgentServer generation prompt 中关于 fresh request、历史读取、workspace inspection、当前引用、repair retry 的散落指令迁入 harness contract，由 prompt renderer 统一渲染。
+- [ ] 将 UI 初始进度、静默等待提示、后台完成策略和 abort/cancelled 展示策略改为消费 harness `progressPlan`，避免 ChatPanel / stream presentation 各自维护行为文案。
+- [ ] 为 UI 增加结构化 interaction contract：`interaction-request`、`clarification-needed`、`human-approval-required`、`guidance-queued`，并用 `cancelPolicy` 区分 `user-cancelled`、`system-aborted`、`timeout`、`backend-error`。
+- [ ] 将 UI/transport/backend 三层 silent watchdog 统一到 harness `silencePolicy`：同一 run 只产生一条可审计 retry/abort/visible-status 决策，避免重复等待提示。
+- [ ] 将 capability broker 输入扩展为接收 harness `skillHints`、`blockedCapabilities`、`toolBudget` 和 `verificationPolicy`；broker 仍只根据 capability manifest 和 refs 做通用筛选。
+- [ ] 将 `packages/skills`、`packages/actions`、`packages/observe`、`packages/verifiers` 与 core runtime capabilities 投影成统一 `CapabilityManifest`，进入同一个 registry/broker 图，避免 package skills 与 AgentServer generation fallback 平行存在。
+- [ ] 定义统一 `HarnessCandidate` 和默认候选 callback 链：`ScenarioPolicyCallback`、`ProviderAvailabilityCallback`、`SafetyPolicyCallback`、`BudgetPolicyCallback`、`HistoryPolicyCallback`、`UserIntentOverrideCallback`；用户显式选择能力仍必须过安全/配置/预算 gate。
+- [ ] 定义 `CapabilityBudget` contract：`maxWallMs`、`maxContextTokens`、`maxToolCalls`、`maxObserveCalls`、`maxActionSteps`、`maxNetworkCalls`、`maxDownloadBytes`、`maxResultItems`、`maxProviders`、`maxRetries`、`perProviderTimeoutMs`、`costUnits`、`exhaustedPolicy`，并把每次 invocation 的 `budgetDebits` 写入 executionUnit/workEvidence/audit。
+- [ ] 将 validation/repair 收敛为唯一 `ValidationDecision -> RepairDecision -> AuditRecord` 链路：schema/artifact/current-ref/WorkEvidence/guidance/verification gate/observe trace 都进入 `ResultValidationHarness`，repair/supplement/fail-closed/needs-human 由 `RepairPolicyHarness` 决定，runner 只执行。
+- [ ] 将 `appendTaskAttempt`、Capability Evolution Ledger、verification artifacts、observe invocation records 和 telemetry span 统一接入 `AuditSink` / `TelemetrySink`，禁止 generated-task runner、repair loop、observe runtime 各自手写审计策略。
+- [ ] 将 `buildContextEnvelope`、`buildCapabilityBrokerBriefForAgentServer`、`buildAgentServerGenerationPrompt`、`buildAgentServerRepairPrompt` 改为只消费 `HarnessContract` 和 capability/scenario manifest，不继续本地新增行为治理散文。
+- [ ] 去除/合并重复 backend selection、fresh/continuity prompt rule、generated-task contract retry、context/rate-limit recovery、stream guard 和 capability routing 分支，统一通过 harness hook 输出结构化决策。
+- [ ] 新增通用 `literature.retrieval` composed capability：providers 覆盖 PubMed、Crossref、Semantic Scholar、OpenAlex、arXiv、web search、SCP biomedical search；input 包含 `query/databases/dateRange/maxResults/includeAbstracts/fullTextPolicy`；output 包含 `paper-list/evidence-matrix/research-report/workEvidence`；默认预算包含 `maxProviders=3`、`maxResults=30`、`perProviderTimeoutMs=10000`、`maxFullTextDownloads=3`、`maxDownloadBytes=25MB`。
+- [ ] 为文献检索、PDF 下载、全文抽取、批量总结、引用核验补齐通用 skills/capabilities；harness 只能偏好这些 skill class 和 capability budget，不固化某个 arXiv workflow。
+- [ ] 增加 smoke：fresh request 只读取 compact workspace/scenario/capability brief，不读取旧 attempts/outputPath/config；continuation request 可读取当前 session 相关 refs；repair request 可读取 failed run 相关 stdout/stderr/log refs。
+- [ ] 增加 smoke：不同 harness profile 对同一 prompt 输出不同预算和 progress plan，但 runtime request path、capability registry 和 validation loop 不分叉。
+- [ ] 增加 no-legacy guard：禁止在 gateway、UI、scenario 或 provider 分支里新增 harness 指令散文、prompt 特例、探索规则或 skill 偏好。
 
 验收标准：
 
-- [x] 所有 scenario package 都能被解释为 capability policy。
-- [x] backend 使用 scenario policy 选择能力，但任务理解和执行仍走通用 backend/capability path。
-- [x] 旧 scenario-specific execution path 被删除。进展：`tests/smoke/scenario-runtime-smoke-harness.ts` 只允许 dry-run validation，official package smoke 明确断言 scenario package 不执行 workspace/package skill。
-
-### T113 Immediate Stabilization Without New Architecture Debt
-
-状态：已完成；T117-T120 稳定化已经收口为 backend-first / capability-first 的验证状态，新增 UI 语义 fallback、prompt regex、provider/scenario 特例由 `smoke:no-legacy-paths`、`smoke:no-src-capability-semantics` 和 `smoke:fixed-platform-boundary` 锁定为 0 tracked findings / warnings。
-
-Todo：
-
-- [x] 暂停新增 UI 语义 fallback、prompt regex、provider/scenario 特例。
-  证据：`smoke:no-legacy-paths` 当前扫描 316 个 source files，0 tracked findings；`smoke:no-src-capability-semantics` 当前扫描 193 个 source files，0 tracked findings。
-- [x] 所有新修复必须记录未来唯一真相源和删除旧路径的后续任务。
-  证据：`docs/legacy-cutover-inventory.md` 已记录 closed legacy classes、新 truth source 和 reduction rules；当前 no-legacy baseline 全部为 0，无新增临时兼容层或待删除旧路径。
-- [x] 对现有多轮 report/artifact/repair 问题，只允许通过 backend tools、stable refs、validation repair loop 或诊断提示推进。
-  证据：T117 的 `ContractValidationFailure` repair loop 和 T118 的 backend artifact/run tools 已覆盖 schema/ref/artifact/UIManifest/WorkEvidence/verifier failure、materialized markdown、stable `file:` / `artifact:` refs、`resume_run` 和 failed-run repair continuation；UI fallback 被 T119 thin shell smoke 约束为只 handoff backend/capability path。
-- [x] 新增 smoke 优先覆盖最终形态关键路径，而不是给旧路径补测试。
-  证据：T117-T120 smoke 覆盖 validation-to-repair、backend artifact tools、多轮 fixtures、thin UI handoff、runtime contracts、package boundary 和 no-legacy/no-src guard；旧路径只以 guard 形式冻结，不再补业务通过路径。
-
-验收标准：
-
-- [x] 稳定化补丁不会扩大旧架构面积。
-  验证：`npm run smoke:no-src-capability-semantics`、`npm run smoke:no-legacy-paths`、`npm run smoke:fixed-platform-boundary`、`npm run typecheck` 均通过。
-- [x] 新增代码都能归入 T115-T120 的最终形态任务。
-  说明：T117 统一 validation repair，T118 backend artifact/run tools，T119 UI thin shell，T120 no-legacy final cutover，T122 boundary smoke 共同承接稳定化规则；未发现需要新增架构面的修复。
-- [x] 没有新的临时兼容层缺少删除计划。
-  说明：当前 legacy guard 与 no-src guard baseline 均为 0；若未来回归，只能按 legacy inventory 记录 owner、truth source、删除条件并在同一变更中更新 baseline。
+- [ ] Agent 行为治理只有一个真相源：harness package/profile registry；runtime、UI、prompt builder 只消费结构化 contract。
+- [ ] fresh/continuation/repair/audit 的探索差异由 harness 决定，并在 stream/ledger 中可审计。
+- [ ] 每个失败路径都有同一条 `ValidationDecision -> RepairDecision -> AuditRecord` 记录，可追溯到 contract id、failure kind、related refs、repair budget 和最终 outcome。
+- [ ] 新增任务类型或调优策略时只改 harness profile/hook policy 或 capability manifest，不改核心 gateway 主流程。
+- [ ] 现有 backend-first、capability-driven、contract-validation repair loop smoke 保持通过。

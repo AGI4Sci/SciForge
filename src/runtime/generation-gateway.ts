@@ -7,7 +7,7 @@ import { fileExists, runWorkspaceTask, sha1 } from './workspace-task-runner.js';
 import { maybeWriteSkillPromotionProposal } from './skill-promotion.js';
 import { emitWorkspaceRuntimeEvent, throwIfRuntimeAborted } from './workspace-runtime-events.js';
 import { composeRuntimeUiManifest } from './runtime-ui-manifest.js';
-import { cleanUrl, clipForAgentServerJson, clipForAgentServerPrompt, errorMessage, excerptAroundFailureLine, extractLikelyErrorLine, generatedTaskArchiveRel, hashJson, headForAgentServer, isRecord, isTaskInputRel, readTextIfExists, summarizeTextChange, tailForAgentServer, toRecordList, toStringList, uniqueStrings } from './gateway-utils.js';
+import { cleanUrl, clipForAgentServerPrompt, errorMessage, excerptAroundFailureLine, extractLikelyErrorLine, generatedTaskArchiveRel, headForAgentServer, isRecord, isTaskInputRel, readTextIfExists, summarizeTextChange, tailForAgentServer, toRecordList, toStringList, uniqueStrings } from './gateway-utils.js';
 import { normalizeBackendHandoff } from './workspace-task-input.js';
 import {
   expectedArtifactTypesForRequest,
@@ -15,6 +15,7 @@ import {
   normalizeLlmEndpoint,
   selectedComponentIdsForRequest,
 } from './gateway/gateway-request.js';
+import { agentHarnessMetadata, requestWithAgentHarnessShadow, requestWithoutInlineAgentHarness } from './gateway/agent-harness-shadow.js';
 import {
   buildContextEnvelope,
   expectedArtifactSchema,
@@ -214,7 +215,7 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
     emitWorkspaceRuntimeEvent(telemetry.callbacks, conversationPolicyStartedEvent());
     const policyApplication = await applyConversationPolicy(normalizedRequest, telemetry.callbacks, { workspace: normalizedRequest.workspacePath });
     telemetry.markPolicyApplication(policyApplication);
-    const request = policyApplication.request;
+    const request = await requestWithAgentHarnessShadow(policyApplication.request, telemetry.callbacks, policyApplication);
     const directContextPayload = directContextFastPathPayload(request);
     if (directContextPayload) {
       emitWorkspaceRuntimeEvent(telemetry.callbacks, directContextFastPathEvent({
@@ -619,15 +620,16 @@ async function requestAgentServerGeneration(params: {
   let contextRecovery: AgentServerGenerationFailureDiagnostics | undefined;
   try {
     const request = params.request;
+    const promptRequest = requestWithoutInlineAgentHarness(request);
     const { llmEndpointSource, ...llmRuntime } = await agentServerLlmRuntime(request, params.workspace);
     const backend = agentServerBackend(request, llmRuntime.llmEndpoint);
-    const needsContinuity = requestNeedsAgentServerContinuity(request);
+    const needsContinuity = requestNeedsAgentServerContinuity(promptRequest);
     const generationPurpose = needsContinuity ? 'workspace-task-generation' : 'workspace-task-generation-inline';
     if (!llmRuntime.llmEndpoint && requiresUserLlmEndpoint(params.baseUrl)) {
       return { ok: false, error: missingUserLlmEndpointMessage() };
     }
     const adapter = agentBackendAdapter(backend);
-    const agentId = agentServerAgentId(request, 'task-generation');
+    const agentId = agentServerAgentId(promptRequest, 'task-generation');
     for (let dispatchAttempt = 1; dispatchAttempt <= 2; dispatchAttempt += 1) {
     const preflight = await preflightAgentServerContextWindow({
       adapter,
@@ -637,21 +639,21 @@ async function requestAgentServerGeneration(params: {
       callbacks: params.callbacks,
     });
     const workspaceTree = await workspaceTreeSummary(params.workspace);
-    const recentAttempts = await readRecentTaskAttempts(params.workspace, request.skillDomain, 8, {
-        scenarioPackageId: request.scenarioPackageRef?.id,
-        skillPlanRef: request.skillPlanRef,
-        prompt: request.prompt,
+    const recentAttempts = await readRecentTaskAttempts(params.workspace, promptRequest.skillDomain, 8, {
+        scenarioPackageId: promptRequest.scenarioPackageRef?.id,
+        skillPlanRef: promptRequest.skillPlanRef,
+        prompt: promptRequest.prompt,
       });
     const attachPriorAttempts = needsContinuity;
-    const priorAttempts = currentTurnReferences(request).length || !attachPriorAttempts
+    const priorAttempts = currentTurnReferences(promptRequest).length || !attachPriorAttempts
       ? []
       : summarizeTaskAttemptsForAgentServer(recentAttempts);
     const agentServerSnapshot = preflight.state?.snapshot ?? await fetchAgentServerContextSnapshot(params.baseUrl, agentId);
-    const contextMode = contextEnvelopeMode(request, {
+    const contextMode = contextEnvelopeMode(promptRequest, {
       agentServerCoreAvailable: Boolean(agentServerSnapshot),
       forceSlimHandoff: preflight.forceSlimHandoff || Boolean(contextRecovery),
     });
-    const contextEnvelope: Record<string, unknown> = buildContextEnvelope(request, {
+    const contextEnvelope: Record<string, unknown> = buildContextEnvelope(promptRequest, {
       workspace: params.workspace,
       workspaceTreeSummary: workspaceTree,
       priorAttempts,
@@ -667,21 +669,21 @@ async function requestAgentServerGeneration(params: {
       contextEnvelope.backendRetryAudit = contextRecovery.retryAudit;
       contextEnvelope.retryReason = 'Previous AgentServer generation attempt hit provider/rate-limit or retry-budget pressure; this is the only compact retry.';
     }
-    const compactContext = buildAgentServerCompactContext(request, {
+    const compactContext = buildAgentServerCompactContext(promptRequest, {
       contextEnvelope,
       workspaceTree,
       priorAttempts,
       mode: contextMode,
     });
     const generationRequest = {
-      prompt: request.prompt,
-      skillDomain: request.skillDomain,
+      prompt: promptRequest.prompt,
+      skillDomain: promptRequest.skillDomain,
       contextEnvelope,
       workspaceTreeSummary: compactContext.workspaceTreeSummary,
       availableSkills: [],
-      availableTools: summarizeToolsForAgentServer(request),
-      availableRuntimeCapabilities: summarizeRuntimeCapabilitiesForAgentServer(request),
-      artifactSchema: expectedArtifactSchema(request),
+      availableTools: summarizeToolsForAgentServer(promptRequest),
+      availableRuntimeCapabilities: summarizeRuntimeCapabilitiesForAgentServer(promptRequest),
+      artifactSchema: expectedArtifactSchema(promptRequest),
       uiManifestContract: {
         type: 'array',
         slotType: 'object',
@@ -692,8 +694,8 @@ async function requestAgentServerGeneration(params: {
       uiStateSummary: compactContext.uiStateSummary,
       artifacts: compactContext.artifacts,
       recentExecutionRefs: compactContext.recentExecutionRefs,
-      expectedArtifactTypes: expectedArtifactTypesForRequest(request),
-      selectedComponentIds: request.selectedComponentIds ?? toStringList(request.uiState?.selectedComponentIds),
+      expectedArtifactTypes: expectedArtifactTypesForRequest(promptRequest),
+      selectedComponentIds: promptRequest.selectedComponentIds ?? toStringList(promptRequest.uiState?.selectedComponentIds),
       priorAttempts: compactContext.priorAttempts,
       strictTaskFilesReason: params.strictTaskFilesReason,
       retryAudit: contextRecovery?.retryAudit,
@@ -701,6 +703,7 @@ async function requestAgentServerGeneration(params: {
     };
     const generationPrompt = buildAgentServerGenerationPrompt(generationRequest);
     const contextEnvelopeBytes = Buffer.byteLength(JSON.stringify(contextEnvelope), 'utf8');
+    const harnessMetadata = agentHarnessMetadata(request);
     emitWorkspaceRuntimeEvent(params.callbacks, {
       type: 'contextWindowState',
       source: 'workspace-runtime',
@@ -755,6 +758,7 @@ async function requestAgentServerGeneration(params: {
           contextWindow: preflight.state ? contextWindowMetadata(preflight.state) : undefined,
           contextCompaction: preflight.compaction ? contextCompactionMetadata(preflight.compaction) : undefined,
           backendCapabilities: adapter.capabilities,
+          ...harnessMetadata,
         },
       },
       contextPolicy: agentServerContextPolicy(request),
@@ -775,6 +779,7 @@ async function requestAgentServerGeneration(params: {
           nativeToolFirst: needsContinuity,
           llmEndpointSource: llmRuntime.llmEndpoint ? llmEndpointSource : undefined,
           retryAudit: contextRecovery?.retryAudit,
+          ...harnessMetadata,
         },
       },
       metadata: {
@@ -795,6 +800,7 @@ async function requestAgentServerGeneration(params: {
           maxRetries: 1,
         },
         retryAudit: contextRecovery?.retryAudit,
+        ...harnessMetadata,
       },
     };
     const normalizedHandoff = await normalizeBackendHandoff(runPayload, {

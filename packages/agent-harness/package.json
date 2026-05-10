@@ -1,0 +1,25 @@
+{
+  "name": "@sciforge/agent-harness",
+  "version": "0.1.0",
+  "type": "module",
+  "private": false,
+  "description": "SciForge agent harness contracts, profiles, and shadow-mode policy evaluation.",
+  "sciforge": {
+    "lifecycleLayer": "reasoning",
+    "skillFacing": false,
+    "sideEffects": "none",
+    "publicContract": true,
+    "runtimeAdapter": false
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./contracts": "./src/contracts.ts",
+    "./profiles": "./src/profiles.ts",
+    "./runtime": "./src/runtime.ts"
+  },
+  "files": [
+    "src",
+    "package.json",
+    "README.md"
+  ]
+}
