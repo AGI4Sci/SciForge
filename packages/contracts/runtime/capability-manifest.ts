@@ -221,7 +221,6 @@ export const CORE_CAPABILITY_MANIFESTS: CapabilityManifest[] = [
   coreCapabilityManifest('observe.vision', 'Observe screenshots or images and return bounded visual evidence refs.', 'observe', 'packages/observe/vision', ['workspace-read']),
   coreCapabilityManifest('action.computer-use', 'Perform guarded desktop actions with trace evidence.', 'action', 'packages/actions/computer-use', ['desktop']),
   coreCapabilityManifest('view.report', 'Render report artifacts from manifest-bound refs.', 'view', 'packages/presentation/components', ['none']),
-  coreCapabilityManifest('view.evidence-matrix', 'Render evidence matrices from manifest-bound refs.', 'view', 'packages/presentation/components', ['none']),
   coreCapabilityManifest('verifier.schema', 'Validate payloads, artifacts, refs, and UI manifests before completion.', 'verifier', 'packages/verifiers/schema', ['none']),
 ];
 

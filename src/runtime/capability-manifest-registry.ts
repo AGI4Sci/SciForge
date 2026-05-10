@@ -19,11 +19,7 @@ import {
   type UnifiedCapabilityGraph,
   type UnifiedCapabilityGraphInput,
 } from './capability-harness-candidates.js';
-import { manifest as reportViewerManifest } from '../../packages/presentation/components/report-viewer/manifest';
-import { manifest as paperCardListManifest } from '../../packages/presentation/components/paper-card-list/manifest';
-import { manifest as sequenceViewerManifest } from '../../packages/presentation/components/sequence-viewer/manifest';
-import { manifest as structureViewerManifest } from '../../packages/presentation/components/structure-viewer/manifest';
-import { manifest as graphViewerManifest } from '../../packages/presentation/components/graph-viewer/manifest';
+import { uiComponentManifests } from '../../packages/presentation/components/manifest-registry';
 import type { UIComponentManifest } from '../../packages/contracts/runtime/index.js';
 import {
   discoverPackageCapabilityManifestsFromFiles,
@@ -374,26 +370,10 @@ function offlinePackageProviderCapabilityManifests(): CapabilityManifest[] {
       loadJsonFile<VerifierProviderManifestProjectionSource>('../../packages/verifiers/fixtures/human-approval.manifest.json'),
       'packages/verifiers/fixtures/human-approval.manifest.json',
     ),
-    projectUIComponentManifestToCapabilityManifest(
-      reportViewerManifest,
-      'packages/presentation/components/report-viewer/manifest.ts',
-    ),
-    projectUIComponentManifestToCapabilityManifest(
-      paperCardListManifest,
-      'packages/presentation/components/paper-card-list/manifest.ts',
-    ),
-    projectUIComponentManifestToCapabilityManifest(
-      sequenceViewerManifest,
-      'packages/presentation/components/sequence-viewer/manifest.ts',
-    ),
-    projectUIComponentManifestToCapabilityManifest(
-      structureViewerManifest,
-      'packages/presentation/components/structure-viewer/manifest.ts',
-    ),
-    projectUIComponentManifestToCapabilityManifest(
-      graphViewerManifest,
-      'packages/presentation/components/graph-viewer/manifest.ts',
-    ),
+    ...uiComponentManifests.map((manifest) => projectUIComponentManifestToCapabilityManifest(
+      manifest,
+      `packages/presentation/components/${manifest.componentId}/manifest.ts`,
+    )),
   ];
 }
 

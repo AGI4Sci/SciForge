@@ -8,65 +8,33 @@ import {
   CAPABILITY_MANIFEST_CONTRACT_ID,
   type CapabilityManifest,
 } from '../../packages/contracts/runtime/capability-manifest.js';
+import { uiComponentManifests } from '../../packages/presentation/components/manifest-registry.js';
 
 const coreRegistry = loadCoreCapabilityManifestRegistry();
-const defaultPresentationView = coreRegistry.getManifest('view.paper-card-list');
-assert.ok(defaultPresentationView, 'default core registry should include the paper-card-list package view manifest');
-assert.equal(defaultPresentationView.ownerPackage, '@sciforge-ui/paper-card-list');
-assert.equal(coreRegistry.getManifestByProviderId('sciforge.presentation.paper-card-list')?.id, 'view.paper-card-list');
-const defaultSequenceView = coreRegistry.getManifest('view.sequence-viewer');
-assert.ok(defaultSequenceView, 'default core registry should include the sequence-viewer package view manifest');
-assert.equal(defaultSequenceView.ownerPackage, '@sciforge-ui/sequence-viewer');
-assert.equal(coreRegistry.getManifestByProviderId('sciforge.presentation.sequence-viewer')?.id, 'view.sequence-viewer');
-const defaultStructureView = coreRegistry.getManifest('view.structure-viewer');
-assert.ok(defaultStructureView, 'default core registry should include the structure-viewer package view manifest');
-assert.equal(defaultStructureView.ownerPackage, '@sciforge-ui/structure-viewer');
-assert.deepEqual(defaultStructureView.sideEffects, ['workspace-read', 'network']);
-assert.equal(coreRegistry.getManifestByProviderId('sciforge.presentation.structure-viewer')?.id, 'view.structure-viewer');
-const defaultGraphView = coreRegistry.getManifest('view.graph-viewer');
-assert.ok(defaultGraphView, 'default core registry should include the graph-viewer package view manifest');
-assert.equal(defaultGraphView.ownerPackage, '@sciforge-ui/graph-viewer');
-assert.deepEqual(defaultGraphView.sideEffects, ['none']);
-assert.equal(coreRegistry.getManifestByProviderId('sciforge.presentation.graph-viewer')?.id, 'view.graph-viewer');
-const defaultPresentationAudit = coreRegistry.compactAudit.entries.find((item) => item.id === 'view.paper-card-list');
-assert.ok(defaultPresentationAudit, 'paper-card-list package view should appear in compact registry audit');
-assert.equal(defaultPresentationAudit.source, 'core');
-assert.deepEqual(defaultPresentationAudit.providerAvailability, [{
-  providerId: 'sciforge.presentation.paper-card-list',
-  providerKind: 'package',
-  available: true,
-  requiredConfig: [],
-}]);
+for (const component of uiComponentManifests) {
+  const capabilityId = `view.${component.componentId}`;
+  const providerId = `sciforge.presentation.${component.componentId}`;
+  const defaultView = coreRegistry.getManifest(capabilityId);
+  assert.ok(defaultView, `default core registry should include the ${component.componentId} package view manifest`);
+  assert.equal(defaultView.ownerPackage, component.packageName);
+  assert.equal(defaultView.kind, 'view');
+  assert.equal(coreRegistry.getManifestByProviderId(providerId)?.id, capabilityId);
+  const defaultAudit = coreRegistry.compactAudit.entries.find((item) => item.id === capabilityId);
+  assert.ok(defaultAudit, `${component.componentId} package view should appear in compact registry audit`);
+  assert.equal(defaultAudit.source, 'core');
+  assert.deepEqual(defaultAudit.providerAvailability, [{
+    providerId,
+    providerKind: 'package',
+    available: true,
+    requiredConfig: [],
+  }]);
+}
 const defaultSequenceAudit = coreRegistry.compactAudit.entries.find((item) => item.id === 'view.sequence-viewer');
-assert.ok(defaultSequenceAudit, 'sequence-viewer package view should appear in compact registry audit');
-assert.equal(defaultSequenceAudit.source, 'core');
-assert.equal(defaultSequenceAudit.risk, 'medium');
-assert.deepEqual(defaultSequenceAudit.providerAvailability, [{
-  providerId: 'sciforge.presentation.sequence-viewer',
-  providerKind: 'package',
-  available: true,
-  requiredConfig: [],
-}]);
-const defaultStructureAudit = coreRegistry.compactAudit.entries.find((item) => item.id === 'view.structure-viewer');
-assert.ok(defaultStructureAudit, 'structure-viewer package view should appear in compact registry audit');
-assert.equal(defaultStructureAudit.source, 'core');
-assert.equal(defaultStructureAudit.risk, 'medium');
-assert.deepEqual(defaultStructureAudit.providerAvailability, [{
-  providerId: 'sciforge.presentation.structure-viewer',
-  providerKind: 'package',
-  available: true,
-  requiredConfig: [],
-}]);
-const defaultGraphAudit = coreRegistry.compactAudit.entries.find((item) => item.id === 'view.graph-viewer');
-assert.ok(defaultGraphAudit, 'graph-viewer package view should appear in compact registry audit');
-assert.equal(defaultGraphAudit.source, 'core');
-assert.equal(defaultGraphAudit.risk, 'low');
-assert.deepEqual(defaultGraphAudit.providerAvailability, [{
-  providerId: 'sciforge.presentation.graph-viewer',
-  providerKind: 'package',
-  available: true,
-  requiredConfig: [],
-}]);
+assert.equal(defaultSequenceAudit?.risk, 'medium');
+const defaultStructureView = coreRegistry.getManifest('view.structure-viewer');
+assert.deepEqual(defaultStructureView?.sideEffects, ['workspace-read', 'network']);
+const defaultGraphView = coreRegistry.getManifest('view.graph-viewer');
+assert.deepEqual(defaultGraphView?.sideEffects, ['none']);
 
 const packageManifest = discoveredPackageManifest();
 const registry = loadCapabilityManifestRegistry({

@@ -93,12 +93,13 @@ assert.equal((reportToolBrief.budget as Record<string, unknown> | undefined)?.pr
 assert.equal(JSON.stringify(toolBriefs).includes('inputSchema'), false, 'tool summaries must keep schemas lazy');
 assert.equal(JSON.stringify(toolBriefs).includes('repairHints'), false, 'tool summaries must keep repair hints lazy');
 
-const verifierAudit = audit.find((entry) => entry.id === 'verifier.schema');
-assert.ok(JSON.stringify(verifierAudit).includes('verification policy hint'));
+const verifierBrief = briefs.find((brief) => brief.id === 'verifier.schema');
+assert.ok(verifierBrief, 'schema verifier should remain selected from explicit verification policy signals');
+assert.ok(JSON.stringify(verifierBrief).includes('verification policy hint'));
 
-const blockedAudit = audit.find((entry) => entry.id === 'runtime.workspace-write');
-assert.equal(blockedAudit?.excluded, 'blocked by harness capability policy');
-assert.ok(JSON.stringify(blockedAudit).includes('blocked by harness capability policy'));
+const blockedExclusion = brokerBrief.excluded.find((entry) => entry.id === 'runtime.workspace-write');
+assert.equal(blockedExclusion?.reason, 'blocked by harness capability policy');
+assert.ok(JSON.stringify(blockedExclusion).includes('blocked by harness capability policy'));
 
 assert.equal(brokerText.includes('inputSchema'), false, 'broker brief must keep schemas lazy');
 assert.equal(brokerText.includes('outputSchema'), false, 'broker brief must keep schemas lazy');
@@ -242,7 +243,7 @@ assert.equal(harnessOptInSummary.availableProviders, 2);
 assert.deepEqual(harnessOptInSummary.toolBudgetKeys, ['exhaustedPolicy', 'maxNetworkCalls', 'maxProviders', 'maxToolCalls']);
 assert.equal(harnessOptInSummary.verificationPolicyMode, 'hybrid');
 assert.equal(
-  harnessOptInBrokerAudit.find((entry) => entry.id === 'runtime.workspace-write')?.excluded,
+  harnessOptInBrief.excluded.find((entry) => entry.id === 'runtime.workspace-write')?.reason,
   'blocked by harness capability policy',
 );
 assert.ok(

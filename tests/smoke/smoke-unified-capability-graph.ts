@@ -10,6 +10,7 @@ import {
   CAPABILITY_MANIFEST_CONTRACT_ID,
   type CapabilityManifest,
 } from '../../packages/contracts/runtime/capability-manifest.js';
+import { uiComponentManifests } from '../../packages/presentation/components/manifest-registry.js';
 
 const graph = projectCapabilityManifestsToHarnessCandidates({
   manifests: [
@@ -67,82 +68,47 @@ assert.ok(registryGraph.candidates.some((candidate) => candidate.id === 'observe
 const registry = loadCoreCapabilityManifestRegistry();
 const packageAction = registry.getManifest('action.sciforge.computer-use');
 const packageVerifier = registry.getManifest('verifier.fixture.human-approval');
-const packageView = registry.getManifest('view.report-viewer');
-const packagePaperListView = registry.getManifest('view.paper-card-list');
-const packageSequenceView = registry.getManifest('view.sequence-viewer');
-const packageStructureView = registry.getManifest('view.structure-viewer');
-const packageGraphView = registry.getManifest('view.graph-viewer');
 assert.ok(packageAction, 'packages/actions computer-use provider manifest should project into the core capability registry');
 assert.ok(packageVerifier, 'packages/verifiers human approval provider manifest should project into the core capability registry');
-assert.ok(packageView, 'packages/presentation report-viewer manifest should project into the core capability registry');
-assert.ok(packagePaperListView, 'packages/presentation paper-card-list manifest should project into the core capability registry');
-assert.ok(packageSequenceView, 'packages/presentation sequence-viewer manifest should project into the core capability registry');
-assert.ok(packageStructureView, 'packages/presentation structure-viewer manifest should project into the core capability registry');
-assert.ok(packageGraphView, 'packages/presentation graph-viewer manifest should project into the core capability registry');
 assert.equal(packageAction.kind, 'action');
 assert.equal(packageVerifier.kind, 'verifier');
-assert.equal(packageView.kind, 'view');
-assert.equal(packagePaperListView.kind, 'view');
-assert.equal(packageSequenceView.kind, 'view');
-assert.equal(packageStructureView.kind, 'view');
-assert.equal(packageGraphView.kind, 'view');
 assert.equal(registry.getManifestByProviderId('sciforge.computer-use')?.id, 'action.sciforge.computer-use');
 assert.equal(registry.getManifestByProviderId('fixture.human-approval')?.id, 'verifier.fixture.human-approval');
-assert.equal(registry.getManifestByProviderId('sciforge.presentation.report-viewer')?.id, 'view.report-viewer');
-assert.equal(registry.getManifestByProviderId('sciforge.presentation.paper-card-list')?.id, 'view.paper-card-list');
-assert.equal(registry.getManifestByProviderId('sciforge.presentation.sequence-viewer')?.id, 'view.sequence-viewer');
-assert.equal(registry.getManifestByProviderId('sciforge.presentation.structure-viewer')?.id, 'view.structure-viewer');
-assert.equal(registry.getManifestByProviderId('sciforge.presentation.graph-viewer')?.id, 'view.graph-viewer');
-assert.equal(packageView.ownerPackage, '@sciforge-ui/report-viewer');
-assert.equal(packagePaperListView.ownerPackage, '@sciforge-ui/paper-card-list');
-assert.equal(packageSequenceView.ownerPackage, '@sciforge-ui/sequence-viewer');
-assert.equal(packageStructureView.ownerPackage, '@sciforge-ui/structure-viewer');
-assert.equal(packageGraphView.ownerPackage, '@sciforge-ui/graph-viewer');
-assert.equal(packageView.examples[0]?.prompt, undefined, 'presentation package view examples must stay prompt-free');
-assert.equal(packagePaperListView.examples[0]?.prompt, undefined, 'presentation package view examples must stay prompt-free');
-assert.equal(packageSequenceView.examples[0]?.prompt, undefined, 'presentation package view examples must stay prompt-free');
-assert.equal(packageStructureView.examples[0]?.prompt, undefined, 'presentation package view examples must stay prompt-free');
-assert.equal(packageGraphView.examples[0]?.prompt, undefined, 'presentation package view examples must stay prompt-free');
+
+const packageViewCapabilityIds = uiComponentManifests.map((component) => `view.${component.componentId}`);
+const packageViewProviderIds = uiComponentManifests.map((component) => `sciforge.presentation.${component.componentId}`);
+for (const component of uiComponentManifests) {
+  const capabilityId = `view.${component.componentId}`;
+  const providerId = `sciforge.presentation.${component.componentId}`;
+  const packageView = registry.getManifest(capabilityId);
+  assert.ok(packageView, `packages/presentation ${component.componentId} manifest should project into the core capability registry`);
+  assert.equal(packageView.kind, 'view');
+  assert.equal(packageView.ownerPackage, component.packageName);
+  assert.equal(registry.getManifestByProviderId(providerId)?.id, capabilityId);
+  assert.equal(packageView.examples[0]?.prompt, undefined, 'presentation package view examples must stay prompt-free');
+}
 
 const packageGraph = registry.projectHarnessCandidates({
-  preferredCapabilityIds: ['action.sciforge.computer-use', 'verifier.fixture.human-approval', 'view.report-viewer', 'view.paper-card-list', 'view.sequence-viewer', 'view.structure-viewer', 'view.graph-viewer'],
-  availableProviders: ['sciforge.computer-use', 'fixture.human-approval', 'sciforge.presentation.report-viewer', 'sciforge.presentation.paper-card-list', 'sciforge.presentation.sequence-viewer', 'sciforge.presentation.structure-viewer', 'sciforge.presentation.graph-viewer'],
+  preferredCapabilityIds: ['action.sciforge.computer-use', 'verifier.fixture.human-approval', ...packageViewCapabilityIds],
+  availableProviders: ['sciforge.computer-use', 'fixture.human-approval', ...packageViewProviderIds],
 });
 const packageActionCandidate = packageGraph.candidates.find((candidate) => candidate.id === 'action.sciforge.computer-use');
 const packageVerifierCandidate = packageGraph.candidates.find((candidate) => candidate.id === 'verifier.fixture.human-approval');
-const packageViewCandidate = packageGraph.candidates.find((candidate) => candidate.id === 'view.report-viewer');
-const packagePaperListViewCandidate = packageGraph.candidates.find((candidate) => candidate.id === 'view.paper-card-list');
-const packageSequenceViewCandidate = packageGraph.candidates.find((candidate) => candidate.id === 'view.sequence-viewer');
-const packageStructureViewCandidate = packageGraph.candidates.find((candidate) => candidate.id === 'view.structure-viewer');
-const packageGraphViewCandidate = packageGraph.candidates.find((candidate) => candidate.id === 'view.graph-viewer');
 assert.equal(packageActionCandidate?.kind, 'action');
 assert.equal(packageVerifierCandidate?.kind, 'verifier');
-assert.equal(packageViewCandidate?.kind, 'view');
-assert.equal(packagePaperListViewCandidate?.kind, 'view');
-assert.equal(packageSequenceViewCandidate?.kind, 'view');
-assert.equal(packageStructureViewCandidate?.kind, 'view');
-assert.equal(packageGraphViewCandidate?.kind, 'view');
 assert.ok(packageActionCandidate?.providerAvailability);
 assert.ok(packageVerifierCandidate?.providerAvailability);
-assert.ok(packageViewCandidate?.providerAvailability);
-assert.ok(packagePaperListViewCandidate?.providerAvailability);
-assert.ok(packageSequenceViewCandidate?.providerAvailability);
-assert.ok(packageStructureViewCandidate?.providerAvailability);
-assert.ok(packageGraphViewCandidate?.providerAvailability);
 assert.equal(packageActionCandidate?.providerAvailability?.[0]?.providerId, 'sciforge.computer-use');
 assert.equal(packageVerifierCandidate?.providerAvailability?.[0]?.providerId, 'fixture.human-approval');
-assert.equal(packageViewCandidate?.providerAvailability?.[0]?.providerId, 'sciforge.presentation.report-viewer');
-assert.equal(packagePaperListViewCandidate?.providerAvailability?.[0]?.providerId, 'sciforge.presentation.paper-card-list');
-assert.equal(packageSequenceViewCandidate?.providerAvailability?.[0]?.providerId, 'sciforge.presentation.sequence-viewer');
-assert.equal(packageStructureViewCandidate?.providerAvailability?.[0]?.providerId, 'sciforge.presentation.structure-viewer');
-assert.equal(packageGraphViewCandidate?.providerAvailability?.[0]?.providerId, 'sciforge.presentation.graph-viewer');
 assert.equal(packageActionCandidate?.budget?.maxActionSteps, 12);
 assert.equal(packageVerifierCandidate?.budget?.exhaustedPolicy, 'needs-human');
-assert.equal(packageViewCandidate?.budget?.maxResultItems, 1);
-assert.equal(packagePaperListViewCandidate?.budget?.maxResultItems, 1);
-assert.equal(packageSequenceViewCandidate?.budget?.maxResultItems, 1);
-assert.equal(packageStructureViewCandidate?.budget?.maxResultItems, 1);
-assert.equal(packageGraphViewCandidate?.budget?.maxResultItems, 1);
+for (const component of uiComponentManifests) {
+  const packageViewCandidate = packageGraph.candidates.find((candidate) => candidate.id === `view.${component.componentId}`);
+  assert.equal(packageViewCandidate?.kind, 'view');
+  assert.ok(packageViewCandidate?.providerAvailability);
+  assert.equal(packageViewCandidate?.providerAvailability?.[0]?.providerId, `sciforge.presentation.${component.componentId}`);
+  assert.equal(packageViewCandidate?.budget?.maxResultItems, 1);
+}
 
 const brokerOutput = brokerCapabilities({
   prompt: 'Use desktop GUI computer use, render a research-report in report-viewer, render a paper-list in paper-card-list, render a FASTA sequence in sequence-viewer, render a PDB structure in structure-viewer, render a knowledge graph in graph-viewer, then request human approval verification for the action trace.',
@@ -164,18 +130,14 @@ const brokerOutput = brokerCapabilities({
 }, new CapabilityManifestRegistry(registry.manifests));
 const brokerActionAudit = brokerOutput.audit.find((entry) => entry.id === 'action.sciforge.computer-use');
 const brokerVerifierAudit = brokerOutput.audit.find((entry) => entry.id === 'verifier.fixture.human-approval');
-const brokerViewAudit = brokerOutput.audit.find((entry) => entry.id === 'view.report-viewer');
-const brokerPaperListViewAudit = brokerOutput.audit.find((entry) => entry.id === 'view.paper-card-list');
-const brokerSequenceViewAudit = brokerOutput.audit.find((entry) => entry.id === 'view.sequence-viewer');
-const brokerStructureViewAudit = brokerOutput.audit.find((entry) => entry.id === 'view.structure-viewer');
-const brokerGraphViewAudit = brokerOutput.audit.find((entry) => entry.id === 'view.graph-viewer');
 assert.ok(brokerActionAudit, 'broker audit should see projected package action capability');
 assert.ok(brokerVerifierAudit, 'broker audit should see projected package verifier capability');
-assert.ok(brokerViewAudit, 'broker audit should see projected package presentation view capability');
-assert.ok(brokerPaperListViewAudit, 'broker audit should see projected package paper-list presentation view capability');
-assert.ok(brokerSequenceViewAudit, 'broker audit should see projected package sequence presentation view capability');
-assert.ok(brokerStructureViewAudit, 'broker audit should see projected package structure presentation view capability');
-assert.ok(brokerGraphViewAudit, 'broker audit should see projected package graph presentation view capability');
+for (const component of uiComponentManifests) {
+  assert.ok(
+    brokerOutput.audit.find((entry) => entry.id === `view.${component.componentId}`),
+    `broker audit should see projected package ${component.componentId} presentation view capability`,
+  );
+}
 const brokerBriefIds = new Set(brokerOutput.briefs.map((brief) => brief.id));
 assert.ok(brokerBriefIds.has('action.sciforge.computer-use'));
 assert.ok(brokerBriefIds.has('verifier.fixture.human-approval'));
