@@ -44,6 +44,7 @@ type AgentServerGenerationFailureDiagnostics = {
   agentId?: string;
   sessionRef?: string;
   originalErrorSummary: string;
+  harnessSignals?: Record<string, unknown>;
   compaction?: Parameters<typeof contextCompactionMetadata>[0];
   retryAttempted?: boolean;
   retrySucceeded?: boolean;
@@ -678,6 +679,7 @@ export function agentServerFailurePayloadRefs(diagnostics?: AgentServerGeneratio
       agentId: diagnostics.agentId,
       sessionRef: diagnostics.sessionRef,
       originalErrorSummary: diagnostics.originalErrorSummary,
+      harnessSignals: diagnostics.harnessSignals,
       contextCompaction: diagnostics.compaction ? contextCompactionMetadata(diagnostics.compaction) : undefined,
       compactResult: diagnostics.compaction,
       retryAttempted: diagnostics.retryAttempted,

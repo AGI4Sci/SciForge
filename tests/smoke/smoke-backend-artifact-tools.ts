@@ -98,6 +98,19 @@ const list = await listSessionArtifacts({
 
 assert.equal(list.tool, 'list_session_artifacts');
 assert.equal(list.artifacts.length, 2);
+const listDebit = list.budgetDebits?.[0];
+assert.ok(listDebit, 'list_session_artifacts should emit a runtime.artifact-list budget debit');
+assert.equal(listDebit.capabilityId, 'runtime.artifact-list');
+assert.deepEqual(list.budgetDebitRefs, [listDebit.debitId]);
+assert.equal(list.executionUnit?.tool, 'runtime.artifact-list');
+assert.deepEqual(list.executionUnit?.budgetDebitRefs, [listDebit.debitId]);
+assert.deepEqual(list.workEvidence?.budgetDebitRefs, [listDebit.debitId]);
+assert.deepEqual(list.audit?.budgetDebitRefs, [listDebit.debitId]);
+assert.equal(listDebit.sinkRefs.executionUnitRef, list.executionUnit?.id);
+assert.deepEqual(listDebit.sinkRefs.workEvidenceRefs, [list.workEvidence?.id]);
+assert.ok(listDebit.sinkRefs.auditRefs.includes(list.audit?.ref ?? ''));
+assert.ok(listDebit.debitLines.some((line) => line.dimension === 'toolCalls' && line.amount === 1));
+assert.ok(listDebit.debitLines.some((line) => line.dimension === 'resultItems' && line.amount === 2));
 const listedReport = list.artifacts.find((artifact) => artifact.id === 'research-report');
 assert.ok(listedReport);
 assert.ok(list.objectReferences.some((reference) => reference.ref === 'artifact:research-report'));
@@ -229,6 +242,16 @@ const resumed = await resumeRun({
 assert.equal(resumed.tool, 'resume_run');
 assert.equal(resumed.status, 'resume-requested');
 assert.equal(resumed.runRef, `run:${runId}`);
+const resumeDebit = resumed.budgetDebits?.[0];
+assert.ok(resumeDebit, 'resume_run should emit a runtime.run-resume budget debit');
+assert.equal(resumeDebit.capabilityId, 'runtime.run-resume');
+assert.deepEqual(resumed.budgetDebitRefs, [resumeDebit.debitId]);
+assert.equal(resumed.executionUnit?.tool, 'runtime.run-resume');
+assert.deepEqual(resumed.executionUnit?.budgetDebitRefs, [resumeDebit.debitId]);
+assert.deepEqual(resumed.workEvidence?.budgetDebitRefs, [resumeDebit.debitId]);
+assert.deepEqual(resumed.audit?.budgetDebitRefs, [resumeDebit.debitId]);
+assert.ok(resumeDebit.debitLines.some((line) => line.dimension === 'toolCalls' && line.amount === 1));
+assert.ok(resumeDebit.debitLines.some((line) => line.dimension === 'resultItems' && line.amount >= 1));
 assert.ok(resumed.objectReferences.some((reference) => reference.kind === 'run' && reference.runId === runId));
 assert.ok(resumed.objectReferences.some((reference) => reference.kind === 'file' && reference.ref === `file:${outputRef}`));
 

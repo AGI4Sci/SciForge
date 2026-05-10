@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import {
   buildObserveInvocationPlan,
   runObserveInvocationPlan,
+  type ObserveProviderRuntime,
 } from '../../src/runtime/observe/orchestration';
 import {
   buildValidationRepairAuditSinkObserveInvocationSummary,
@@ -92,4 +93,102 @@ assert.equal(telemetryRecords[0]?.span.status, 'repair-requested');
 assert.ok(telemetryRecords[0]?.sourceRefs.includes(`observe-invocation:${records[0]?.callRef}`));
 assert.ok(telemetryRecords[0]?.auditRefs.includes(artifact?.auditId ?? ''));
 
-console.log('[ok] validation/repair audit and telemetry sinks write observe invocation records from the real observe runtime path and read them back');
+const providerFailureWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-validation-repair-observe-provider-failure-sink-'));
+const failingProvider: ObserveProviderRuntime = {
+  contract: {
+    id: 'local.vision-sense',
+    acceptedModalities: ['screenshot'],
+    outputKind: 'text',
+  },
+  async invoke(input) {
+    if (input.callRef.endsWith(':001')) {
+      return {
+        status: 'failed',
+        artifactRefs: ['artifact:provider-failure-diagnostic'],
+        traceRef: `${input.callRef}:trace`,
+        compactSummary: 'Provider could not read the requested title with enough confidence.',
+        diagnostics: {
+          code: 'observe-low-confidence',
+          failureMode: 'low-confidence',
+          providerId: input.providerId,
+          message: 'OCR confidence below threshold.',
+        },
+      };
+    }
+    throw new Error('provider process exited before returning a result');
+  },
+};
+
+const providerFailurePlan = buildObserveInvocationPlan({
+  goal: 'Audit real observe provider failure and thrown provider error',
+  runRef: 'run:observe-provider-failure-smoke',
+  providers: [failingProvider.contract],
+  intents: [
+    {
+      instruction: 'Read the title with a provider-level failed result',
+      modalities: [{ kind: 'screenshot', ref: 'artifact:screenshot-2', mimeType: 'image/png' }],
+    },
+    {
+      instruction: 'Read the title when provider throws',
+      modalities: [{ kind: 'screenshot', ref: 'artifact:screenshot-3', mimeType: 'image/png' }],
+    },
+  ],
+});
+
+const providerFailureRecords = await runObserveInvocationPlan(providerFailurePlan, [failingProvider], {
+  validationRepairAuditSink: {
+    workspacePath: providerFailureWorkspace,
+    now,
+  },
+  validationRepairTelemetrySink: {
+    workspacePath: providerFailureWorkspace,
+    now,
+    readSummary: true,
+  },
+});
+
+assert.deepEqual(providerFailureRecords.map((record) => record.status), ['failed', 'failed']);
+assert.equal(providerFailureRecords[0]?.diagnostics?.failureMode, 'low-confidence');
+assert.equal(providerFailureRecords[1]?.diagnostics?.code, 'observe-provider-error');
+assert.equal(providerFailureRecords[1]?.diagnostics?.failureMode, 'internal-error');
+assert.equal(providerFailureRecords[1]?.traceRef, `${providerFailureRecords[1]?.callRef}:provider-error`);
+
+const providerFailureArtifacts = await readValidationRepairAuditSinkObserveInvocationRecords({
+  workspacePath: providerFailureWorkspace,
+});
+assert.equal(providerFailureArtifacts.length, 2);
+assert.deepEqual(
+  providerFailureArtifacts.map((entry) => entry.validationDecision?.findings[0]?.source),
+  ['observe-response', 'observe-response'],
+);
+assert.deepEqual(
+  providerFailureArtifacts.map((entry) => entry.repairDecision?.action),
+  ['repair-rerun', 'repair-rerun'],
+);
+assert.deepEqual(
+  providerFailureArtifacts.map((entry) => entry.auditRecord.outcome),
+  ['repair-requested', 'repair-requested'],
+);
+assert.equal(providerFailureArtifacts[0]?.observeInvocation?.diagnostics?.failureMode, 'low-confidence');
+assert.equal(providerFailureArtifacts[1]?.observeInvocation?.diagnostics?.failureMode, 'internal-error');
+assert.ok(providerFailureArtifacts[1]?.relatedRefs.includes('artifact:screenshot-3'));
+assert.ok(providerFailureArtifacts[1]?.relatedRefs.includes(`${providerFailureRecords[1]?.callRef}:provider-error`));
+
+const providerFailureSummary = await buildValidationRepairAuditSinkObserveInvocationSummary({
+  workspacePath: providerFailureWorkspace,
+  now,
+});
+assert.equal(providerFailureSummary.totalArtifacts, 2);
+assert.equal(providerFailureSummary.failureKindCounts['observe-trace'], 2);
+assert.equal(providerFailureSummary.statusCounts.failed, 2);
+
+const providerFailureTelemetryRecords = await readValidationRepairTelemetrySpanRecords({
+  workspacePath: providerFailureWorkspace,
+});
+assert.equal(providerFailureTelemetryRecords.length, 2);
+assert.deepEqual(
+  providerFailureTelemetryRecords.map((record) => record.span.status),
+  ['repair-requested', 'repair-requested'],
+);
+
+console.log('[ok] validation/repair audit and telemetry sinks write observe unavailable, failed, and provider-error records from the real observe runtime path and read them back');

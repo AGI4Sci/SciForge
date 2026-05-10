@@ -490,6 +490,7 @@ export interface TaskAttemptRecord {
     agentId?: string;
     sessionRef?: string;
     originalErrorSummary?: string;
+    harnessSignals?: Record<string, unknown>;
     compaction?: BackendContextCompactionResult;
     retryAttempted?: boolean;
     retrySucceeded?: boolean;

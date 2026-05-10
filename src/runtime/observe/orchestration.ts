@@ -129,16 +129,10 @@ export async function runObserveInvocationPlan(
       await writeObserveInvocationTelemetrySinkRecord(record, plan, options.validationRepairTelemetrySink);
       continue;
     }
-    const result = await provider.invoke(invocation);
-    const record = withObserveInvocationBudgetDebit({
-      ...invocation,
-      status: result.status ?? 'ok',
-      text: result.text,
-      artifactRefs: result.artifactRefs ?? [],
-      traceRef: result.traceRef,
-      compactSummary: result.compactSummary,
-      diagnostics: normalizeObserveInvocationDiagnostics(result.diagnostics),
-    }, plan);
+    const record = withObserveInvocationBudgetDebit(
+      await observeInvocationRecordFromProvider(invocation, provider),
+      plan,
+    );
     records.push(record);
     await writeObserveInvocationAuditSinkRecord(record, plan, options.validationRepairAuditSink);
     await writeObserveInvocationTelemetrySinkRecord(record, plan, options.validationRepairTelemetrySink);
@@ -284,6 +278,39 @@ function observeInvocationRelatedRefs(record: ObserveInvocationRecord, plan: Obs
   ]);
 }
 
+async function observeInvocationRecordFromProvider(
+  invocation: ObserveInvocation,
+  provider: ObserveProviderRuntime,
+): Promise<ObserveInvocationRecord> {
+  try {
+    const result = await provider.invoke(invocation);
+    return {
+      ...invocation,
+      status: result.status ?? 'ok',
+      text: result.text,
+      artifactRefs: result.artifactRefs ?? [],
+      traceRef: result.traceRef,
+      compactSummary: result.compactSummary,
+      diagnostics: normalizeObserveInvocationDiagnostics(result.diagnostics),
+    };
+  } catch (error) {
+    const message = observeProviderErrorMessage(error);
+    return {
+      ...invocation,
+      status: 'failed',
+      artifactRefs: [],
+      traceRef: `${invocation.callRef}:provider-error`,
+      compactSummary: `Observe provider ${provider.contract.id} failed: ${message}`,
+      diagnostics: normalizeObserveInvocationDiagnostics({
+        code: 'observe-provider-error',
+        failureMode: 'internal-error',
+        providerId: provider.contract.id,
+        message,
+      }),
+    };
+  }
+}
+
 function withObserveInvocationBudgetDebit(
   record: ObserveInvocationRecord,
   plan: ObserveInvocationPlan,
@@ -414,6 +441,12 @@ function observeRecordBudgetDebitRefs(record: ObserveInvocationRecord): string[]
   return Array.isArray(budgetDebitRefs)
     ? budgetDebitRefs.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
     : undefined;
+}
+
+function observeProviderErrorMessage(error: unknown) {
+  if (error instanceof Error && typeof error.message === 'string' && error.message.trim().length > 0) return error.message.trim();
+  if (typeof error === 'string' && error.trim().length > 0) return error.trim();
+  return 'unknown provider error';
 }
 
 function safeObserveInvocationChainId(value: string) {

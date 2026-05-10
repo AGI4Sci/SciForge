@@ -15,6 +15,10 @@ import {
   workspaceContextWindowStateFromBackend,
 } from './agentserver-context-window.js';
 import { providerForBackend } from './agent-backend-config.js';
+import {
+  agentHarnessStageHookTraceMetadata,
+  type AgentHarnessStageHookTraceMetadata,
+} from './agent-harness-backend-selection.js';
 import { agentServerSessionRef } from './agentserver-run-output.js';
 import {
   boundedRateLimitBackoffMs,
@@ -50,6 +54,7 @@ export interface AgentServerGenerationRetryAudit {
     maxRetryCount: 1;
   };
   compaction?: ReturnType<typeof contextCompactionMetadata>;
+  harnessSignals: AgentHarnessStageHookTraceMetadata;
   priorHandoff?: {
     rawRef: string;
     rawBytes: number;
@@ -69,6 +74,7 @@ export type AgentServerGenerationFailureDiagnostics = {
   agentId?: string;
   sessionRef?: string;
   originalErrorSummary: string;
+  harnessSignals?: AgentHarnessStageHookTraceMetadata;
   compaction?: BackendContextCompactionResult;
   priorHandoff?: AgentServerGenerationRetryAudit['priorHandoff'];
   retryAttempted?: boolean;
@@ -108,6 +114,7 @@ export async function recoverOrReturnAgentServerGenerationFailure(params: {
   const originalErrorSummary = sanitizeAgentServerError(params.error || params.sanitizedError);
   const contextSessionRef = agentServerSessionRef(params.baseUrl, params.agentId);
   const diagnosticProvider = params.provider ?? providerForBackend(params.adapter.backend);
+  const recoveryHarnessSignals = agentHarnessStageHookTraceMetadata(params.request, 'onPolicyDecision');
   if (isContextWindowExceededError(`${params.error}\n${params.sanitizedError}`)) {
     if (params.dispatchAttempt >= 2 || params.contextRecovery?.retryAttempted) {
       return {
@@ -124,6 +131,7 @@ export async function recoverOrReturnAgentServerGenerationFailure(params: {
             agentId: params.contextRecovery?.agentId ?? params.agentId,
             sessionRef: params.contextRecovery?.sessionRef ?? contextSessionRef,
             originalErrorSummary: params.contextRecovery?.originalErrorSummary ?? originalErrorSummary,
+            harnessSignals: params.contextRecovery?.harnessSignals ?? recoveryHarnessSignals,
             priorHandoff: params.contextRecovery?.priorHandoff ?? params.priorHandoff,
             retryAttempted: true,
             retrySucceeded: false,
@@ -140,6 +148,7 @@ export async function recoverOrReturnAgentServerGenerationFailure(params: {
         agentId: params.agentId,
         sessionRef: contextSessionRef,
         priorHandoff: params.priorHandoff,
+        harnessSignals: recoveryHarnessSignals,
       },
     }));
     const compaction = await params.adapter.compactContext?.(
@@ -178,6 +187,7 @@ export async function recoverOrReturnAgentServerGenerationFailure(params: {
       agentId: params.agentId,
       sessionRef: contextSessionRef,
       originalErrorSummary,
+      harnessSignals: recoveryHarnessSignals,
       compaction,
       priorHandoff: params.priorHandoff,
       retryAttempted: true,
@@ -224,6 +234,7 @@ export async function recoverOrReturnAgentServerGenerationFailure(params: {
           agentId: params.agentId,
           sessionRef: `${params.baseUrl}/api/agent-server/agents/${encodeURIComponent(params.agentId)}`,
           originalErrorSummary: providerRateLimitDiagnosticMessage(diagnostic, true),
+          harnessSignals: params.contextRecovery?.harnessSignals ?? recoveryHarnessSignals,
           retryAfterMs: diagnostic.retryAfterMs,
           resetAt: diagnostic.resetAt,
           priorHandoff: params.priorHandoff,
@@ -238,7 +249,7 @@ export async function recoverOrReturnAgentServerGenerationFailure(params: {
   emitWorkspaceRuntimeEvent(params.callbacks, agentServerGenerationRecoveryStartEvent({
     categories: diagnostic.categories,
     detail: providerRateLimitDiagnosticMessage(diagnostic, false),
-    raw: diagnostic,
+    raw: { ...diagnostic, harnessSignals: recoveryHarnessSignals },
   }));
   if (backoffMs > 0) {
     await sleep(backoffMs);
@@ -280,6 +291,7 @@ export async function recoverOrReturnAgentServerGenerationFailure(params: {
       maxRetryCount: 1,
     },
     compaction: compaction ? contextCompactionMetadata(compaction) : undefined,
+    harnessSignals: recoveryHarnessSignals,
     priorHandoff: params.priorHandoff,
   };
   return {
@@ -293,6 +305,7 @@ export async function recoverOrReturnAgentServerGenerationFailure(params: {
       agentId: params.agentId,
       sessionRef: `${params.baseUrl}/api/agent-server/agents/${encodeURIComponent(params.agentId)}`,
       originalErrorSummary: providerRateLimitDiagnosticMessage(diagnostic, false),
+      harnessSignals: recoveryHarnessSignals,
       retryAfterMs: diagnostic.retryAfterMs,
       resetAt: diagnostic.resetAt,
       compaction,
@@ -361,6 +374,7 @@ async function appendContextRecoveryAuditAttempt(params: {
       agentId: params.diagnostics.agentId,
       sessionRef: params.diagnostics.sessionRef,
       originalErrorSummary: params.diagnostics.originalErrorSummary,
+      harnessSignals: params.diagnostics.harnessSignals,
       compaction: params.diagnostics.compaction,
       retryAttempted: params.diagnostics.retryAttempted,
       retrySucceeded: params.diagnostics.retrySucceeded,

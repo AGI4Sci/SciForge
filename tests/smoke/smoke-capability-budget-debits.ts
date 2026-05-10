@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, readdir } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -19,6 +19,7 @@ import {
 } from '../../src/runtime/observe/orchestration.js';
 import { genericLoopPayload } from '../../src/runtime/vision-sense/computer-use-trace-output.js';
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
+import { runWorkspaceOpenAction } from '../../src/runtime/server/workspace-open.js';
 import { agentVerifierRequestFixture } from '../../packages/verifiers/agent-rubric/fixture.js';
 import { createMockAgentVerifierProvider } from '../../packages/verifiers/agent-rubric/index.js';
 import { createHumanApprovalFixtureProvider } from '../../packages/verifiers/fixtures/human-approval.js';
@@ -284,6 +285,38 @@ assert.deepEqual(humanApprovalDebit.sinkRefs.auditRefs, humanApprovalResult.audi
 assert.ok(humanApprovalDebit.debitLines.some((line) => line.dimension === 'providers' && line.amount === 1));
 assert.ok(humanApprovalDebit.debitLines.some((line) => line.dimension === 'costUnits' && line.amount === 1));
 
+const workspaceOpenRoot = await mkdtemp(join(tmpdir(), 'sciforge-capability-budget-workspace-open-'));
+await mkdir(join(workspaceOpenRoot, 'reports'), { recursive: true });
+const workspaceOpenTarget = join(workspaceOpenRoot, 'reports', 'summary.md');
+await writeFile(workspaceOpenTarget, '# Workspace open budget debit\n', 'utf8');
+const workspaceOpenResult = await runWorkspaceOpenAction({
+  workspacePath: workspaceOpenRoot,
+  path: 'reports/summary.md',
+  action: 'open-external',
+  dryRun: true,
+});
+const workspaceOpenRepeat = await runWorkspaceOpenAction({
+  workspacePath: workspaceOpenRoot,
+  path: workspaceOpenTarget,
+  action: 'open-external',
+  dryRun: true,
+});
+const workspaceOpenDebit = workspaceOpenResult.budgetDebits?.[0];
+assert.ok(workspaceOpenDebit, 'workspace open action should emit a budget debit record');
+assert.equal(workspaceOpenDebit.contract, CAPABILITY_BUDGET_DEBIT_CONTRACT_ID);
+assert.equal(workspaceOpenDebit.capabilityId, 'runtime.workspace-open');
+assert.deepEqual(workspaceOpenResult.budgetDebitRefs, [workspaceOpenDebit.debitId]);
+assert.deepEqual(workspaceOpenResult.executionUnit?.budgetDebitRefs, [workspaceOpenDebit.debitId]);
+assert.deepEqual(workspaceOpenResult.workEvidence?.budgetDebitRefs, [workspaceOpenDebit.debitId]);
+assert.deepEqual(workspaceOpenResult.audit?.budgetDebitRefs, [workspaceOpenDebit.debitId]);
+assert.equal(workspaceOpenDebit.sinkRefs.executionUnitRef, workspaceOpenResult.executionUnit?.id);
+assert.deepEqual(workspaceOpenDebit.sinkRefs.workEvidenceRefs, [workspaceOpenResult.workEvidence?.id]);
+assert.ok(workspaceOpenDebit.sinkRefs.auditRefs.includes(workspaceOpenResult.audit?.ref ?? ''));
+assert.ok(workspaceOpenDebit.debitLines.some((line) => line.dimension === 'actionSteps' && line.amount === 1));
+assert.ok(workspaceOpenDebit.debitLines.some((line) => line.dimension === 'costUnits' && line.amount === 1));
+assert.equal(workspaceOpenRepeat.budgetDebits?.[0]?.debitId, workspaceOpenDebit.debitId);
+assert.equal(workspaceOpenRepeat.executionUnit?.id, workspaceOpenResult.executionUnit?.id);
+
 const agentServerWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-capability-budget-agentserver-'));
 const generatedTaskCode = String.raw`
 import json
@@ -467,7 +500,7 @@ try {
   await new Promise<void>((resolve) => agentServer.close(() => resolve()));
 }
 
-console.log('[ok] capability invocation budget debit record is contract-shaped, sink-addressable, and wired into literature.retrieval, Computer Use, observe provider invocation, agent rubric verifier, human approval verifier, generated task, AgentServer direct payload, and AgentServer generation failure runtime output');
+console.log('[ok] capability invocation budget debit record is contract-shaped, sink-addressable, and wired into literature.retrieval, Computer Use, observe provider invocation, agent rubric verifier, human approval verifier, workspace open, generated task, AgentServer direct payload, and AgentServer generation failure runtime output');
 
 function hasBudgetDebitRef(record: unknown, debitId: string) {
   return typeof record === 'object'

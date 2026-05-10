@@ -161,6 +161,19 @@ try {
   assert.equal(defaultRepairPolicy.contractRef, first.summary.contractRef);
   assert.equal(defaultRepairPolicy.traceRef, first.summary.traceRef);
   assert.equal(defaultRepairPolicy.profileId, 'balanced-default');
+  const consumeRepairPolicy = agentHarnessRepairPolicyBridgeFromRuntimeState({
+    agentHarnessRepairPolicyConsumeEnabled: true,
+    agentHarnessHandoff: handoff,
+  });
+  assert.ok(consumeRepairPolicy, 'explicit consume flag should project handoff repair policy');
+  assert.equal(consumeRepairPolicy.consume, true);
+  const consumeKilledRepairPolicy = agentHarnessRepairPolicyBridgeFromRuntimeState({
+    agentHarnessRepairPolicyConsumeEnabled: true,
+    agentHarnessRepairPolicyConsumeDisabled: true,
+    agentHarnessHandoff: handoff,
+  });
+  assert.ok(consumeKilledRepairPolicy, 'consume kill switch should preserve audit projection');
+  assert.equal(consumeKilledRepairPolicy.consume, false);
   assert.equal(
     agentHarnessRepairPolicyBridgeFromRuntimeState({
       agentHarnessRepairPolicyAuditDisabled: true,

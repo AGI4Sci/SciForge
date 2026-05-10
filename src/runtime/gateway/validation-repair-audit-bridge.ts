@@ -210,14 +210,43 @@ export function agentHarnessRepairPolicyBridgeFromRuntimeState(value: unknown): 
     agentHarness.repairPolicyEnabled,
   ].some(isDisabledFlag);
   if (disabled) return undefined;
-  const consume = [
+  const consumeDisabled = [
+    value.agentHarnessRepairPolicyConsumeDisabled,
+    value.agentHarnessRepairPolicyConsumeSkip,
+    value.agentHarnessSkipRepairPolicyConsume,
+    value.agentHarnessRepairPolicyConsumeDisable,
+    value.agentHarnessDisableRepairPolicyConsume,
+    value.agentHarnessConsumeRepairPolicyDisabled,
+    agentHarness.repairPolicyConsumeDisabled,
+    agentHarness.repairPolicyConsumeSkip,
+    agentHarness.skipRepairPolicyConsume,
+    agentHarness.repairPolicyConsumeDisable,
+    agentHarness.disableRepairPolicyConsume,
+    agentHarness.consumeRepairPolicyDisabled,
+  ].some(isEnabledFlag) || [
+    value.agentHarnessRepairPolicyConsume,
+    value.agentHarnessRepairPolicyConsumeEnabled,
+    value.agentHarnessConsumeRepairPolicy,
+    value.agentHarnessValidationRepairPolicyConsumeEnabled,
+    agentHarness.repairPolicyConsume,
+    agentHarness.repairPolicyConsumeEnabled,
+    agentHarness.consumeRepairPolicy,
+    agentHarness.validationRepairPolicyConsumeEnabled,
+  ].some(isDisabledFlag);
+  const consume = !consumeDisabled && [
+    value.agentHarnessRepairPolicyConsume,
+    value.agentHarnessRepairPolicyConsumeEnabled,
     value.agentHarnessRepairPolicy,
     value.agentHarnessRepairPolicyEnabled,
     value.agentHarnessConsumeRepairPolicy,
+    value.agentHarnessValidationRepairPolicyConsumeEnabled,
     value.agentHarnessValidationRepairPolicyEnabled,
+    agentHarness.repairPolicyConsume,
+    agentHarness.repairPolicyConsumeEnabled,
     agentHarness.repairPolicy,
     agentHarness.repairPolicyEnabled,
     agentHarness.consumeRepairPolicy,
+    agentHarness.validationRepairPolicyConsumeEnabled,
     agentHarness.validationRepairPolicyEnabled,
   ].some(isEnabledFlag);
   const contract = canonicalAgentHarnessRepairPolicyContract(agentHarness, handoff);
@@ -380,7 +409,7 @@ function projectAgentHarnessRepairPolicy(
     requireCitations,
     requireCurrentRefs,
     requireArtifactRefs,
-    consume: input.consume ?? true,
+    consume: input.consume === true,
     auditRefs,
     sinkRefs,
     forceFailClosed: repairKind === 'none' || repairKind === 'fail-closed',

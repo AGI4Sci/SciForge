@@ -6,6 +6,8 @@ import {
   type AgentServerBackendSelectionDecision,
 } from './agent-backend-config.js';
 
+export type AgentHarnessStageHookTraceMetadata = ReturnType<typeof agentHarnessStageHookTraceMetadata>;
+
 export function agentHarnessBackendSelectionDecision(
   request: GatewayRequest,
   input: {
@@ -21,34 +23,49 @@ export function agentHarnessBackendSelectionDecision(
   const summary = input.summary ?? (isRecord(agentHarness.summary) ? agentHarness.summary : {});
   const trace = input.trace ?? (isRecord(agentHarness.trace) ? agentHarness.trace : undefined);
   const decision = input.backendSelectionDecision ?? agentServerBackendSelectionDecision(request, input.llmEndpoint);
-  const contractRef = stringField(agentHarness.contractRef) ?? stringField(summary.contractRef);
-  const traceRef = stringField(agentHarness.traceRef) ?? stringField(summary.traceRef);
-  const externalHook = externalHookTraceMetadata(decision.harnessStage);
+  const harnessSignals = agentHarnessStageHookTraceMetadata(request, decision.harnessStage, { agentHarness, summary, trace });
   return {
     ...decision,
-    harnessSignals: {
-      profileId: stringField(agentHarness.profileId) ?? stringField(summary.profileId) ?? stringField(uiState.harnessProfileId),
-      contractRef,
-      traceRef,
-      harnessStage: decision.harnessStage,
-      externalHook,
-      sourceCallbackId: sourceCallbackIdForTraceStage(trace, decision.harnessStage) ?? 'harness.runtime.beforeAgentDispatch',
-    },
+    harnessSignals,
     trace: {
       ...decision.trace,
       harness: {
         stage: decision.harnessStage,
-        contractRef,
-        traceRef,
-        externalHookStage: externalHook.stage,
-        externalHookDeclaredBy: externalHook.declaredBy,
-        externalHookDeclared: externalHook.declared,
+        contractRef: harnessSignals.contractRef,
+        traceRef: harnessSignals.traceRef,
+        externalHookStage: harnessSignals.externalHook.stage,
+        externalHookDeclaredBy: harnessSignals.externalHook.declaredBy,
+        externalHookDeclared: harnessSignals.externalHook.declared,
       },
     },
   };
 }
 
-function externalHookTraceMetadata(stage: string) {
+export function agentHarnessStageHookTraceMetadata(
+  request: GatewayRequest,
+  stage: string,
+  input: {
+    agentHarness?: Record<string, unknown>;
+    summary?: Record<string, unknown>;
+    trace?: Record<string, unknown>;
+  } = {},
+) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const agentHarness = input.agentHarness ?? (isRecord(uiState.agentHarness) ? uiState.agentHarness : {});
+  const summary = input.summary ?? (isRecord(agentHarness.summary) ? agentHarness.summary : {});
+  const trace = input.trace ?? (isRecord(agentHarness.trace) ? agentHarness.trace : undefined);
+  const externalHook = agentHarnessExternalHookTraceMetadata(stage);
+  return {
+    profileId: stringField(agentHarness.profileId) ?? stringField(summary.profileId) ?? stringField(uiState.harnessProfileId),
+    contractRef: stringField(agentHarness.contractRef) ?? stringField(summary.contractRef),
+    traceRef: stringField(agentHarness.traceRef) ?? stringField(summary.traceRef),
+    harnessStage: stage,
+    externalHook,
+    sourceCallbackId: sourceCallbackIdForTraceStage(trace, stage) ?? `harness.runtime.${stage}`,
+  };
+}
+
+export function agentHarnessExternalHookTraceMetadata(stage: string) {
   return {
     schemaVersion: 'sciforge.agent-harness-external-hook-trace.v1',
     stage,

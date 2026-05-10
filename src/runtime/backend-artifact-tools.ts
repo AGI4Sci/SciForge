@@ -1,8 +1,13 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { existsSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { basename, join, resolve } from 'node:path';
 import type {
   BackendObjectRefKind,
+  BackendArtifactToolName,
+  BackendArtifactToolAuditRecord,
+  BackendArtifactToolExecutionUnit,
+  BackendArtifactToolWorkEvidence,
   ListSessionArtifactsInput,
   ListSessionArtifactsResult,
   ObjectReference,
@@ -16,6 +21,11 @@ import type {
   ResumeRunResult,
   RuntimeArtifact,
 } from '@sciforge-ui/runtime-contract';
+import {
+  createCapabilityBudgetDebitRecord,
+  type CapabilityBudgetDebitLine,
+  type CapabilityInvocationBudgetDebitRecord,
+} from '@sciforge-ui/runtime-contract/capability-budget';
 import { isRecord, toRecordList, uniqueStrings } from './gateway-utils.js';
 import { normalizeArtifactsForPayload } from './gateway/artifact-materializer.js';
 import { readRecentTaskAttempts, readTaskAttempts } from './task-attempt-history.js';
@@ -25,10 +35,21 @@ import { resolveWorkspacePreviewRef } from './workspace-paths.js';
 export async function listSessionArtifacts(input: ListSessionArtifactsInput): Promise<ListSessionArtifactsResult> {
   const workspace = resolve(input.workspacePath || process.cwd());
   const artifacts = await collectBackendArtifacts(input, workspace);
+  const budgetDebit = createBackendArtifactToolBudgetDebit({
+    tool: 'list_session_artifacts',
+    capabilityId: 'runtime.artifact-list',
+    workspace,
+    input,
+    status: 'done',
+    resultCount: artifacts.length,
+    outputRefs: artifacts.map((artifact) => artifactObjectReference(artifact).ref),
+    summary: `Listed ${artifacts.length} session artifact(s).`,
+  });
   return {
     tool: 'list_session_artifacts',
     artifacts,
     objectReferences: artifacts.map((artifact) => artifactObjectReference(artifact)),
+    ...backendArtifactToolBudgetDebitResult(budgetDebit),
   };
 }
 
@@ -244,12 +265,28 @@ export async function resumeRun(input: ResumeRunInput): Promise<ResumeRunResult>
   const run = await resolveRunReference({ ...input, ref: target.runId ? `run:${target.runId}` : input.ref }, workspace);
   const latest = run?.attempt;
   const refs = latest ? fileReferencesForAttempt(latest, workspace) : [];
+  const runRef = run?.runRef ?? (target.runId ? `run:${target.runId}` : input.ref);
+  const status = latest ? 'resume-requested' : 'missing';
+  const reason = latest ? input.reason : 'Run reference was not found in task attempts.';
+  const resumeSummary = status === 'resume-requested' ? `Prepared resume request for ${runRef}.` : reason ?? 'Run reference was not found in task attempts.';
+  const budgetDebit = createBackendArtifactToolBudgetDebit({
+    tool: 'resume_run',
+    capabilityId: 'runtime.run-resume',
+    workspace,
+    input,
+    status: status === 'resume-requested' ? 'done' : status,
+    resultCount: refs.length + (run ? 1 : 0),
+    outputRefs: compactStrings([runRef, ...refs.map((ref) => ref.ref)]),
+    summary: resumeSummary,
+    failureReason: status === 'missing' ? reason : undefined,
+  });
   return {
     tool: 'resume_run',
-    runRef: run?.runRef ?? (target.runId ? `run:${target.runId}` : input.ref),
-    status: latest ? 'resume-requested' : 'missing',
+    runRef,
+    status,
     objectReferences: [run ? runObjectReference(run) : genericObjectReference(target.runId ? `run:${target.runId}` : input.ref, 'run'), ...refs],
-    reason: latest ? input.reason : 'Run reference was not found in task attempts.',
+    reason,
+    ...backendArtifactToolBudgetDebitResult(budgetDebit),
   };
 }
 
@@ -333,6 +370,166 @@ async function collectBackendArtifacts(input: ListSessionArtifactsInput, workspa
   return artifacts
     .map((artifact) => normalizeRuntimeArtifact(artifact, input))
     .slice(0, input.limit ?? 24);
+}
+
+function createBackendArtifactToolBudgetDebit(input: {
+  tool: BackendArtifactToolName;
+  capabilityId: 'runtime.artifact-list' | 'runtime.run-resume';
+  workspace: string;
+  input: ListSessionArtifactsInput | ResumeRunInput;
+  status: BackendArtifactToolExecutionUnit['status'];
+  resultCount: number;
+  outputRefs: string[];
+  summary: string;
+  failureReason?: string;
+}) {
+  const slug = backendArtifactToolBudgetDebitSlug(input);
+  const debitId = `budgetDebit:${input.capabilityId}:${slug}`;
+  const budgetDebitRefs = [debitId];
+  const executionUnitRef = `executionUnit:${input.capabilityId}:${slug}`;
+  const workEvidenceRef = `workEvidence:${input.capabilityId}:${slug}`;
+  const auditRef = `audit:capability-budget-debit:${input.capabilityId}:${slug}`;
+  const subjectRefs = compactStrings([
+    input.workspace,
+    input.input.sessionId ? `session:${input.input.sessionId}` : undefined,
+    input.input.skillDomain ? `skillDomain:${input.input.skillDomain}` : undefined,
+    'ref' in input.input ? input.input.ref : undefined,
+    ...input.outputRefs,
+    executionUnitRef,
+    workEvidenceRef,
+  ]);
+  const debit = createCapabilityBudgetDebitRecord({
+    debitId,
+    invocationId: `capabilityInvocation:${input.capabilityId}:${slug}`,
+    capabilityId: input.capabilityId,
+    candidateId: input.capabilityId,
+    manifestRef: `capability:${input.capabilityId}`,
+    subjectRefs,
+    debitLines: backendArtifactToolDebitLines(input),
+    sinkRefs: {
+      executionUnitRef,
+      workEvidenceRefs: [workEvidenceRef],
+      auditRefs: [auditRef],
+    },
+    metadata: {
+      source: 'backend-artifact-tools',
+      tool: input.tool,
+      status: input.status,
+      resultCount: input.resultCount,
+      sessionId: input.input.sessionId,
+      skillDomain: input.input.skillDomain,
+    },
+  });
+  const executionUnit: BackendArtifactToolExecutionUnit = {
+    id: executionUnitRef,
+    tool: input.capabilityId,
+    status: input.status,
+    params: JSON.stringify({
+      tool: input.tool,
+      sessionId: input.input.sessionId,
+      skillDomain: input.input.skillDomain,
+      ref: 'ref' in input.input ? input.input.ref : undefined,
+      limit: 'limit' in input.input ? input.input.limit : undefined,
+    }),
+    inputData: compactStrings([
+      input.input.sessionId ? `session:${input.input.sessionId}` : undefined,
+      input.input.skillDomain ? `skillDomain:${input.input.skillDomain}` : undefined,
+      'ref' in input.input ? input.input.ref : undefined,
+    ]),
+    outputArtifacts: input.outputRefs,
+    artifacts: input.outputRefs,
+    budgetDebitRefs,
+  };
+  const workEvidence: BackendArtifactToolWorkEvidence = {
+    id: workEvidenceRef,
+    kind: 'runtime',
+    status: input.status === 'done' ? 'success' : 'failed-with-reason',
+    provider: 'backend-artifact-tools',
+    input: {
+      tool: input.tool,
+      sessionId: input.input.sessionId,
+      skillDomain: input.input.skillDomain,
+      ref: 'ref' in input.input ? input.input.ref : undefined,
+    },
+    resultCount: input.resultCount,
+    outputSummary: input.summary,
+    evidenceRefs: uniqueStrings([...input.outputRefs, ...subjectRefs]),
+    failureReason: input.failureReason,
+    recoverActions: input.status === 'done' ? [] : ['provide a valid artifact, run, or workspace ref'],
+    rawRef: 'ref' in input.input ? input.input.ref : input.input.sessionId ?? input.capabilityId,
+    budgetDebitRefs,
+  };
+  const audit: BackendArtifactToolAuditRecord = {
+    kind: 'capability-budget-debit-audit',
+    ref: auditRef,
+    capabilityId: input.capabilityId,
+    tool: input.tool,
+    budgetDebitRefs,
+    sinkRefs: debit.sinkRefs,
+  };
+  return { debit, executionUnit, workEvidence, audit };
+}
+
+function backendArtifactToolBudgetDebitResult(input: {
+  debit: CapabilityInvocationBudgetDebitRecord;
+  executionUnit: BackendArtifactToolExecutionUnit;
+  workEvidence: BackendArtifactToolWorkEvidence;
+  audit: BackendArtifactToolAuditRecord;
+}) {
+  return {
+    budgetDebitRefs: [input.debit.debitId],
+    budgetDebits: [input.debit],
+    executionUnit: input.executionUnit,
+    workEvidence: input.workEvidence,
+    audit: input.audit,
+  };
+}
+
+function backendArtifactToolDebitLines(input: {
+  tool: BackendArtifactToolName;
+  resultCount: number;
+  status: BackendArtifactToolExecutionUnit['status'];
+}): CapabilityBudgetDebitLine[] {
+  return [
+    {
+      dimension: 'toolCalls',
+      amount: 1,
+      reason: `${input.tool} backend artifact tool invocation`,
+      sourceRef: input.tool,
+    },
+    {
+      dimension: 'resultItems',
+      amount: input.resultCount,
+      reason: `${input.tool} returned bounded object refs`,
+      sourceRef: input.tool,
+    },
+  ];
+}
+
+function backendArtifactToolBudgetDebitSlug(input: {
+  tool: BackendArtifactToolName;
+  capabilityId: string;
+  workspace: string;
+  input: ListSessionArtifactsInput | ResumeRunInput;
+  status: BackendArtifactToolExecutionUnit['status'];
+}) {
+  return createHash('sha1')
+    .update([
+      input.capabilityId,
+      input.tool,
+      input.workspace,
+      input.input.sessionId,
+      input.input.skillDomain,
+      'ref' in input.input ? input.input.ref : undefined,
+      'limit' in input.input ? input.input.limit : undefined,
+      input.status,
+    ].filter((value) => value !== undefined).join('\0'))
+    .digest('hex')
+    .slice(0, 12);
+}
+
+function compactStrings(values: Array<string | undefined>) {
+  return uniqueStrings(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0));
 }
 
 async function readPersistedArtifacts(input: ListSessionArtifactsInput, workspace: string) {

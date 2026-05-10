@@ -218,6 +218,10 @@ try {
     expectedArtifactTypes: ['knowledge-graph'],
     uiState: {
       sessionId: 'slim-retry-session',
+      harnessProfileId: 'balanced-default',
+      agentHarnessInput: {
+        intentMode: 'continuation',
+      },
       forceAgentServerGeneration: true,
       currentPrompt: '基于上一轮结果继续生成知识图谱',
       recentConversation: ['user: 请分析 '.repeat(5000), 'assistant: 已生成中间结果 '.repeat(5000)],
@@ -245,6 +249,18 @@ try {
   assert.equal(secondContextMode, 'delta', 'retry handoff should force delta/slim context mode');
   assert.match(secondBody, /sciforge\.agentserver-generation-retry\.v1/);
   assert.match(secondBody, /backendRetryAudit|retryAudit/);
+  const retryAudit = isRecord(slimBodies[1]) && isRecord(slimBodies[1].input) && isRecord(slimBodies[1].input.metadata)
+    ? slimBodies[1].input.metadata.retryAudit
+    : undefined;
+  assert.ok(isRecord(retryAudit), 'retry dispatch should carry structured retryAudit metadata');
+  const retryHarnessSignals = isRecord(retryAudit) && isRecord(retryAudit.harnessSignals) ? retryAudit.harnessSignals : {};
+  assert.equal(retryHarnessSignals.harnessStage, 'onPolicyDecision');
+  const retryExternalHook = isRecord(retryHarnessSignals.externalHook) ? retryHarnessSignals.externalHook : {};
+  assert.equal(retryExternalHook.schemaVersion, 'sciforge.agent-harness-external-hook-trace.v1');
+  assert.equal(retryExternalHook.stage, 'onPolicyDecision');
+  assert.equal(retryExternalHook.stageGroup, 'external-hook');
+  assert.equal(retryExternalHook.declaredBy, 'HARNESS_EXTERNAL_HOOK_STAGES');
+  assert.equal(retryExternalHook.declared, true);
 } finally {
   await new Promise<void>((resolve) => slimServer.close(() => resolve()));
 }

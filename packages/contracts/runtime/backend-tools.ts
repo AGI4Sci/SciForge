@@ -1,4 +1,5 @@
 import type { RuntimeArtifact } from './artifacts';
+import type { CapabilityInvocationBudgetDebitRecord } from './capability-budget';
 import type { ObjectReference, ObjectResolution } from './references';
 
 export type BackendArtifactToolName =
@@ -31,6 +32,11 @@ export interface ListSessionArtifactsResult {
   tool: 'list_session_artifacts';
   artifacts: RuntimeArtifact[];
   objectReferences: ObjectReference[];
+  budgetDebitRefs?: string[];
+  budgetDebits?: CapabilityInvocationBudgetDebitRecord[];
+  executionUnit?: BackendArtifactToolExecutionUnit;
+  workEvidence?: BackendArtifactToolWorkEvidence;
+  audit?: BackendArtifactToolAuditRecord;
 }
 
 export interface ResolveObjectReferenceInput extends BackendToolContext {
@@ -84,4 +90,44 @@ export interface ResumeRunResult {
   status: 'resume-requested' | 'missing' | 'blocked';
   objectReferences: ObjectReference[];
   reason?: string;
+  budgetDebitRefs?: string[];
+  budgetDebits?: CapabilityInvocationBudgetDebitRecord[];
+  executionUnit?: BackendArtifactToolExecutionUnit;
+  workEvidence?: BackendArtifactToolWorkEvidence;
+  audit?: BackendArtifactToolAuditRecord;
+}
+
+export interface BackendArtifactToolExecutionUnit {
+  id: string;
+  tool: string;
+  status: 'done' | 'missing' | 'blocked';
+  params: string;
+  inputData: string[];
+  outputArtifacts: string[];
+  artifacts: string[];
+  budgetDebitRefs: string[];
+}
+
+export interface BackendArtifactToolWorkEvidence {
+  id: string;
+  kind: 'runtime';
+  status: 'success' | 'failed-with-reason';
+  provider: 'backend-artifact-tools';
+  input: Record<string, unknown>;
+  resultCount: number;
+  outputSummary: string;
+  evidenceRefs: string[];
+  failureReason?: string;
+  recoverActions: string[];
+  rawRef: string;
+  budgetDebitRefs: string[];
+}
+
+export interface BackendArtifactToolAuditRecord {
+  kind: 'capability-budget-debit-audit';
+  ref: string;
+  capabilityId: string;
+  tool: BackendArtifactToolName;
+  budgetDebitRefs: string[];
+  sinkRefs: CapabilityInvocationBudgetDebitRecord['sinkRefs'];
 }

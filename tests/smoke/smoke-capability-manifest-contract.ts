@@ -23,10 +23,19 @@ assert.equal(registry.getManifest('runtime.artifact-resolve')?.brief, 'Resolve o
 assert.equal(registry.getManifestByProviderId('sciforge.core.runtime.artifact-resolve')?.id, 'runtime.artifact-resolve');
 assert.equal(registry.getManifest('runtime.artifact-list')?.lifecycle.sourceRef, 'src/runtime/backend-artifact-tools.ts');
 assert.equal(registry.getManifest('runtime.run-resume')?.lifecycle.sourceRef, 'src/runtime/backend-artifact-tools.ts');
+assert.equal(registry.getManifest('sciforge.payload-validation')?.lifecycle.sourceRef, 'src/runtime/gateway/payload-validation.ts');
+assert.equal(registry.getManifest('sciforge.runtime-verification-gate')?.lifecycle.sourceRef, 'src/runtime/gateway/verification-policy.ts');
 assert.equal(registry.getManifestByProviderId('sciforge.core.runtime.artifact-list')?.id, 'runtime.artifact-list');
 assert.equal(registry.getManifestByProviderId('sciforge.core.runtime.run-resume')?.id, 'runtime.run-resume');
+assert.equal(registry.getManifestByProviderId('sciforge.payload-validation')?.id, 'sciforge.payload-validation');
+assert.equal(registry.getManifestByProviderId('sciforge.runtime-verification-gate')?.id, 'sciforge.runtime-verification-gate');
 assert.ok(registry.listBriefs({ kind: 'action' }).length >= 4, 'registry should expose action capability briefs');
+assert.ok(registry.listBriefs({ kind: 'verifier' }).length >= 3, 'registry should expose runtime verifier capability briefs');
 assert.ok(registry.listBriefs({ routingTag: 'artifact' }).length >= 4, 'registry should filter briefs by routing tag');
+assert.ok(
+  registry.listBriefs({ routingTag: 'verification' }).some((item) => item.id === 'sciforge.runtime-verification-gate'),
+  'registry should filter runtime verification gate by routing tag',
+);
 
 const artifactResolveManifest = registry.getManifest('runtime.artifact-resolve');
 assert.ok(artifactResolveManifest, 'runtime.artifact-resolve manifest must exist');
@@ -49,4 +58,4 @@ assert.match(validateCapabilityManifestShape(invalid).join('\n'), /id must be no
 assert.match(validateCapabilityManifestShape(invalid).join('\n'), /providers must include at least one provider/);
 assert.match(validateCapabilityManifestShape(invalid).join('\n'), /sideEffects none cannot be combined/);
 
-console.log('[ok] CapabilityManifest registry loads core manifests with stable providers and compact broker briefs');
+console.log('[ok] CapabilityManifest registry loads core manifests, runtime verifier gates, stable providers, and compact broker briefs');

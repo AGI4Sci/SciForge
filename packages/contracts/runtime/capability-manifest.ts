@@ -220,6 +220,8 @@ export const CORE_CAPABILITY_MANIFESTS: CapabilityManifest[] = [
   coreCapabilityManifest('runtime.workspace-write', 'Write managed workspace outputs with stable refs.', 'action', 'src/runtime/workspace-task-runner.ts', ['workspace-write']),
   coreCapabilityManifest('runtime.command-run', 'Run bounded workspace commands and capture stdout, stderr, and output refs.', 'action', 'src/runtime/workspace-task-runner.ts', ['workspace-write']),
   coreCapabilityManifest('runtime.python-task', 'Execute generated Python tasks against inputPath and outputPath contracts.', 'action', 'src/runtime/workspace-task-runner.ts', ['workspace-write']),
+  payloadValidationCapabilityManifest(),
+  runtimeVerificationGateCapabilityManifest(),
   coreCapabilityManifest('observe.vision', 'Observe screenshots or images and return bounded visual evidence refs.', 'observe', 'packages/observe/vision', ['workspace-read']),
   coreCapabilityManifest('action.computer-use', 'Perform guarded desktop actions with trace evidence.', 'action', 'packages/actions/computer-use', ['desktop']),
   coreCapabilityManifest('view.report', 'Render report artifacts from manifest-bound refs.', 'view', 'packages/presentation/components', ['none']),
@@ -403,6 +405,202 @@ function coreCapabilityManifest(
     lifecycle: {
       status: 'draft',
       sourceRef,
+    },
+  };
+}
+
+function payloadValidationCapabilityManifest(): CapabilityManifest {
+  return {
+    contract: CAPABILITY_MANIFEST_CONTRACT_ID,
+    id: 'sciforge.payload-validation',
+    name: 'payload validation',
+    version: '0.1.0',
+    ownerPackage: 'src/runtime',
+    kind: 'verifier',
+    brief: 'Validate ToolPayload schema, completed deliverables, current refs, and attach repair/audit budget debit refs.',
+    routingTags: ['payload', 'validation', 'toolpayload', 'schema', 'repair', 'audit', 'current-reference', 'work-evidence'],
+    domains: ['workspace', 'runtime', 'validation'],
+    inputSchema: {
+      type: 'object',
+      required: ['payload', 'request', 'skill', 'refs'],
+      properties: {
+        payload: { type: 'object' },
+        request: { type: 'object' },
+        skill: { type: 'object' },
+        refs: { type: 'object' },
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      required: ['payload'],
+      properties: {
+        payload: { type: 'object' },
+        validationFailure: { type: 'object' },
+        validationRepairAudit: { type: 'object' },
+        budgetDebits: { type: 'array', items: { type: 'object' } },
+      },
+    },
+    sideEffects: ['workspace-write'],
+    safety: {
+      risk: 'medium',
+      dataScopes: ['workspace', 'current-refs', 'task-attempts'],
+    },
+    examples: [{
+      title: 'repair-needed schema failure',
+      inputRef: 'src/runtime/gateway/payload-validation.ts#validateAndNormalizePayload',
+      outputRef: 'audit:payload-validation:*',
+    }],
+    validators: [
+      {
+        id: 'sciforge.payload-validation.schema',
+        kind: 'schema',
+        contractRef: 'packages/contracts/runtime/validation-failure.ts#ContractValidationFailure',
+        expectedRefs: ['validationFailure', 'validationRepairAudit', 'budgetDebits'],
+      },
+      {
+        id: 'sciforge.payload-validation.smoke',
+        kind: 'smoke',
+        command: 'npm run smoke:validation-repair-audit-chain',
+        expectedRefs: ['appendTaskAttempt:payload-validation:*'],
+      },
+    ],
+    repairHints: [
+      {
+        failureCode: 'schema-error',
+        summary: 'Regenerate the ToolPayload according to the runtime payload contract and preserve failed refs in audit.',
+        recoverActions: ['validate-toolpayload-schema', 'preserve-output-refs', 'emit-repair-needed-payload'],
+      },
+      {
+        failureCode: 'incomplete-payload',
+        summary: 'Do not mark future promised work as complete without durable artifacts, final text, or explicit failure status.',
+        recoverActions: ['run-promised-work', 'attach-durable-artifact-ref', 'return-failed-with-reason-if-blocked'],
+      },
+      {
+        failureCode: 'current-reference-missing',
+        summary: 'Regenerate from the required current-turn refs or report them as unreadable with a repair-needed result.',
+        recoverActions: ['read-current-reference', 'include-current-ref-evidence', 'preserve-reference-validation-audit'],
+      },
+    ],
+    providers: [{
+      id: 'sciforge.payload-validation',
+      label: 'SciForge payload validation gate',
+      kind: 'built-in',
+      contractRef: 'src/runtime/gateway/payload-validation.ts',
+      requiredConfig: [],
+      priority: 1,
+    }],
+    lifecycle: {
+      status: 'validated',
+      sourceRef: 'src/runtime/gateway/payload-validation.ts',
+    },
+    metadata: {
+      budget: {
+        costUnits: 1,
+        maxResultItems: 50,
+        maxRetries: 1,
+        exhaustedPolicy: 'fail-with-reason',
+      },
+      producesAuditRefs: ['audit:payload-validation:*', 'appendTaskAttempt:payload-validation:*'],
+      producesBudgetDebitCapabilityId: 'sciforge.payload-validation',
+    },
+  };
+}
+
+function runtimeVerificationGateCapabilityManifest(): CapabilityManifest {
+  return {
+    contract: CAPABILITY_MANIFEST_CONTRACT_ID,
+    id: 'sciforge.runtime-verification-gate',
+    name: 'runtime verification gate',
+    version: '0.1.0',
+    ownerPackage: 'src/runtime',
+    kind: 'verifier',
+    brief: 'Apply runtime verification policy, persist verification artifacts, and fail closed with repair/audit refs when required.',
+    routingTags: ['runtime', 'verification', 'gate', 'verifier', 'human-approval', 'audit', 'repair'],
+    domains: ['workspace', 'runtime', 'verification'],
+    inputSchema: {
+      type: 'object',
+      required: ['payload', 'request'],
+      properties: {
+        payload: { type: 'object' },
+        request: { type: 'object' },
+        verificationPolicy: { type: 'object' },
+        verificationResults: { type: 'array', items: { type: 'object' } },
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      required: ['payload', 'verificationResults'],
+      properties: {
+        payload: { type: 'object' },
+        verificationPolicy: { type: 'object' },
+        verificationResults: { type: 'array', items: { type: 'object' } },
+        verificationArtifactRef: { type: 'string' },
+        budgetDebits: { type: 'array', items: { type: 'object' } },
+      },
+    },
+    sideEffects: ['workspace-write'],
+    safety: {
+      risk: 'medium',
+      dataScopes: ['workspace', 'verification-results', 'current-refs'],
+    },
+    examples: [{
+      title: 'failed runtime verification gate',
+      inputRef: 'src/runtime/gateway/verification-policy.ts#applyRuntimeVerificationPolicy',
+      outputRef: '.sciforge/verifications/*.json',
+    }],
+    validators: [
+      {
+        id: 'sciforge.runtime-verification-gate.schema',
+        kind: 'schema',
+        contractRef: 'packages/contracts/runtime/verification-result.ts#RuntimeVerificationResult',
+        expectedRefs: ['verification-result', 'validationRepairAudit', 'budgetDebits'],
+      },
+      {
+        id: 'sciforge.runtime-verification-gate.smoke',
+        kind: 'smoke',
+        command: 'npm run smoke:validation-repair-audit-verification-artifact-sink',
+        expectedRefs: ['verification-artifact:.sciforge/verifications/*'],
+      },
+    ],
+    repairHints: [
+      {
+        failureCode: 'missing-verifier-result',
+        summary: 'Require a passing verifier result or explicit non-blocking policy before treating the payload as complete.',
+        recoverActions: ['run-required-verifier', 'attach-verification-result', 'preserve-verification-artifact'],
+      },
+      {
+        failureCode: 'needs-human',
+        summary: 'Stop automatic completion until human approval is attached to the verification result.',
+        recoverActions: ['request-human-approval', 'attach-approval-ref', 'rerun-verification-gate'],
+      },
+      {
+        failureCode: 'failed-verdict',
+        summary: 'Fail closed with verification and repair refs instead of downgrading a failed verifier to success.',
+        recoverActions: ['preserve-failed-verdict', 'emit-repair-needed-payload', 'rerun-after-fix'],
+      },
+    ],
+    providers: [{
+      id: 'sciforge.runtime-verification-gate',
+      label: 'SciForge runtime verification gate',
+      kind: 'built-in',
+      contractRef: 'src/runtime/gateway/verification-policy.ts',
+      requiredConfig: [],
+      priority: 1,
+    }],
+    lifecycle: {
+      status: 'validated',
+      sourceRef: 'src/runtime/gateway/verification-policy.ts',
+    },
+    metadata: {
+      budget: {
+        costUnits: 1,
+        maxResultItems: 1,
+        maxRetries: 1,
+        exhaustedPolicy: 'needs-human',
+      },
+      producesArtifactTypes: ['verification-result'],
+      producesAuditRefs: ['audit:runtime-verification-gate:*', 'verification-artifact:.sciforge/verifications/*'],
+      producesBudgetDebitCapabilityId: 'sciforge.runtime-verification-gate',
     },
   };
 }

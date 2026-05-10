@@ -33,7 +33,9 @@ test('silent stream guard consumes harness progressPlan silencePolicy for timeou
               auditRequired: true,
             },
           },
+          traceRef: 'runtime://agent-harness/traces/test-silence-policy',
         },
+        traceRef: 'runtime://agent-harness/traces/test-silence-policy',
       },
     },
   } satisfies GatewayRequest;
@@ -46,6 +48,10 @@ test('silent stream guard consumes harness progressPlan silencePolicy for timeou
   assert.equal(policy.maxRetries, 2);
   assert.equal(policy.digestRefCount, 1);
   assert.equal(policy.contractRef, 'runtime://agent-harness/contracts/test-silence-policy');
+  assert.equal(policy.traceRef, 'runtime://agent-harness/traces/test-silence-policy');
+  assert.equal(policy.harnessSignals.harnessStage, 'onStreamGuardTrip');
+  assert.equal(policy.harnessSignals.externalHook.schemaVersion, 'sciforge.agent-harness-external-hook-trace.v1');
+  assert.equal(policy.harnessSignals.externalHook.declared, true);
 
   const transportDecision = buildSilentStreamDecisionRecord({
     runId: 'session-a:turn-silent',
@@ -84,6 +90,8 @@ test('silent stream guard consumes harness progressPlan silencePolicy for timeou
   assert.equal(capturedAudit.retryable, true);
   assert.equal(capturedAudit.recoveryAction, 'retry-compact-context');
   assert.equal(capturedAudit.auditRequired, true);
+  assert.equal(capturedAudit.harnessSignals.harnessStage, 'onStreamGuardTrip');
+  assert.equal(capturedAudit.harnessSignals.externalHook.stage, 'onStreamGuardTrip');
   assert.ok(capturedAudit.detail.includes('status=Retrying compact AgentServer stream'));
 });
 
@@ -98,6 +106,20 @@ test('conversation recovery uses silent stream policy retry budget and decision'
     auditRequired: true,
     digestRefCount: 0,
     fallbackTimeoutMs: 30_000,
+    harnessSignals: {
+      profileId: undefined,
+      contractRef: undefined,
+      traceRef: undefined,
+      harnessStage: 'onStreamGuardTrip',
+      externalHook: {
+        schemaVersion: 'sciforge.agent-harness-external-hook-trace.v1',
+        stage: 'onStreamGuardTrip',
+        stageGroup: 'external-hook',
+        declaredBy: 'HARNESS_EXTERNAL_HOOK_STAGES',
+        declared: true,
+      },
+      sourceCallbackId: 'harness.runtime.onStreamGuardTrip',
+    },
   }, { elapsedMs: 12, retryCount: 1, runId: 'session-a:turn-policy' });
 
   const exhausted = planConversationRecovery({

@@ -311,6 +311,37 @@ const harnessDefaultAuditPolicy = agentHarnessRepairPolicyBridgeFromRuntimeState
 });
 assert.ok(harnessDefaultAuditPolicy, 'canonical harness contract repair policy should project by default for audit');
 assert.equal(harnessDefaultAuditPolicy.consume, false);
+const harnessEnabledAuditOnlyChain = createValidationRepairAuditChain({
+  chainId: 'agent-harness-repair-enabled-audit-only',
+  subject: {
+    kind: 'verification-gate',
+    id: 'agent-harness-repair-enabled-audit-only',
+    capabilityId: 'sciforge.runtime-verification-gate',
+    artifactRefs: [],
+    currentRefs: ['current:user-request'],
+  },
+  runtimeVerificationResults: verificationGateResults,
+  repairBudget,
+  agentHarnessRepairPolicy: {
+    enabled: true,
+    contractRef: 'runtime://agent-harness/contracts/enabled-audit-only',
+    traceRef: 'runtime://agent-harness/traces/enabled-audit-only',
+    profileId: 'debug-repair',
+    source: 'request.uiState.agentHarness.contract',
+    contract: {
+      schemaVersion: 'sciforge.agent-harness-contract.v1',
+      repairContextPolicy: { kind: 'fail-closed', maxAttempts: 0 },
+      verificationPolicy: {
+        intensity: 'audit',
+        requireCurrentRefs: true,
+      },
+    },
+  },
+  createdAt,
+});
+assert.equal(harnessEnabledAuditOnlyChain.repair.action, 'repair-rerun', 'enabled bridge input without consume flag must stay audit-only');
+assert.equal(harnessEnabledAuditOnlyChain.audit.repairBudget.maxAttempts, 2, 'enabled bridge input without consume flag must not tighten max attempts');
+assert.ok(harnessEnabledAuditOnlyChain.audit.relatedRefs.includes('agent-policy-repair-kind:fail-closed'));
 const harnessDefaultAuditChain = createValidationRepairAuditChain({
   chainId: 'agent-harness-repair-default-audit',
   subject: {
@@ -431,6 +462,7 @@ const harnessOptInChain = createValidationRepairAuditChain({
   repairBudget,
   agentHarnessRepairPolicy: {
     enabled: true,
+    consume: true,
     contractRef: 'runtime://agent-harness/contracts/repair-opt-in',
     traceRef: 'runtime://agent-harness/traces/repair-opt-in',
     profileId: 'debug-repair',
@@ -460,6 +492,79 @@ assert.ok(harnessOptInChain.audit.relatedRefs.includes('agent-harness-trace:runt
 assert.ok(harnessOptInChain.audit.relatedRefs.includes('agent-harness-profile:debug-repair'));
 assert.ok(harnessOptInChain.audit.sinkRefs.includes('agent-policy-repair:runtime://agent-harness/contracts/repair-opt-in'));
 assert.ok(harnessOptInChain.audit.sinkRefs.includes('agent-policy-verification:audit'));
+
+const harnessRuntimeConsumePolicy = agentHarnessRepairPolicyBridgeFromRuntimeState({
+  agentHarnessRepairPolicyConsumeEnabled: true,
+  harnessProfileId: 'debug-repair',
+  agentHarness: {
+    contractRef: 'runtime://agent-harness/contracts/runtime-consume',
+    traceRef: 'runtime://agent-harness/traces/runtime-consume',
+    contract: {
+      schemaVersion: 'sciforge.agent-harness-contract.v1',
+      repairContextPolicy: { kind: 'fail-closed', maxAttempts: 0 },
+      verificationPolicy: {
+        intensity: 'audit',
+        requireCurrentRefs: true,
+      },
+    },
+  },
+});
+assert.ok(harnessRuntimeConsumePolicy, 'explicit consume flag should project canonical repair policy');
+assert.equal(harnessRuntimeConsumePolicy.consume, true);
+const harnessRuntimeConsumeChain = createValidationRepairAuditChain({
+  chainId: 'agent-harness-repair-runtime-consume',
+  subject: {
+    kind: 'verification-gate',
+    id: 'agent-harness-repair-runtime-consume',
+    capabilityId: 'sciforge.runtime-verification-gate',
+    artifactRefs: [],
+    currentRefs: ['current:user-request'],
+  },
+  runtimeVerificationResults: verificationGateResults,
+  repairBudget,
+  agentHarnessRepairPolicy: harnessRuntimeConsumePolicy,
+  createdAt,
+});
+assert.equal(harnessRuntimeConsumeChain.repair.action, 'fail-closed');
+assert.equal(harnessRuntimeConsumeChain.audit.outcome, 'failed-closed');
+assert.equal(harnessRuntimeConsumeChain.audit.repairBudget.maxAttempts, 0);
+
+const harnessRuntimeConsumeKilledPolicy = agentHarnessRepairPolicyBridgeFromRuntimeState({
+  agentHarnessRepairPolicyConsumeEnabled: true,
+  agentHarnessRepairPolicyConsumeDisabled: true,
+  harnessProfileId: 'debug-repair',
+  agentHarness: {
+    contractRef: 'runtime://agent-harness/contracts/runtime-consume-killed',
+    traceRef: 'runtime://agent-harness/traces/runtime-consume-killed',
+    contract: {
+      schemaVersion: 'sciforge.agent-harness-contract.v1',
+      repairContextPolicy: { kind: 'fail-closed', maxAttempts: 0 },
+      verificationPolicy: {
+        intensity: 'audit',
+        requireCurrentRefs: true,
+      },
+    },
+  },
+});
+assert.ok(harnessRuntimeConsumeKilledPolicy, 'consume kill switch should keep audit projection available');
+assert.equal(harnessRuntimeConsumeKilledPolicy.consume, false);
+const harnessRuntimeConsumeKilledChain = createValidationRepairAuditChain({
+  chainId: 'agent-harness-repair-runtime-consume-killed',
+  subject: {
+    kind: 'verification-gate',
+    id: 'agent-harness-repair-runtime-consume-killed',
+    capabilityId: 'sciforge.runtime-verification-gate',
+    artifactRefs: [],
+    currentRefs: ['current:user-request'],
+  },
+  runtimeVerificationResults: verificationGateResults,
+  repairBudget,
+  agentHarnessRepairPolicy: harnessRuntimeConsumeKilledPolicy,
+  createdAt,
+});
+assert.equal(harnessRuntimeConsumeKilledChain.repair.action, 'repair-rerun', 'consume kill switch must keep repair behavior audit-only');
+assert.equal(harnessRuntimeConsumeKilledChain.audit.repairBudget.maxAttempts, 2);
+assert.ok(harnessRuntimeConsumeKilledChain.audit.relatedRefs.includes('agent-policy-repair-kind:fail-closed'));
 
 const harnessLooseRuntimePolicy = agentHarnessRepairPolicyBridgeFromRuntimeState({
   agentHarnessRepairPolicyEnabled: true,

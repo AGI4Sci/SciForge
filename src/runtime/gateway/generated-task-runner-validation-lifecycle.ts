@@ -675,6 +675,7 @@ function contextRecoveryAttemptMetadata(diagnostics: any): TaskAttemptRecord['co
     agentId: diagnostics.agentId,
     sessionRef: diagnostics.sessionRef,
     originalErrorSummary: diagnostics.originalErrorSummary,
+    harnessSignals: diagnostics.harnessSignals,
     compaction: diagnostics.compaction,
     retryAttempted: diagnostics.retryAttempted,
     retrySucceeded: diagnostics.retrySucceeded,

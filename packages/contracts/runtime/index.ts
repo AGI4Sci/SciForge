@@ -134,7 +134,10 @@ export type {
   DirectContextFastPathItem,
 } from './artifact-policy';
 export type {
+  BackendArtifactToolAuditRecord,
+  BackendArtifactToolExecutionUnit,
   BackendArtifactToolName,
+  BackendArtifactToolWorkEvidence,
   BackendObjectRefKind,
   BackendToolContext,
   ListSessionArtifactsInput,

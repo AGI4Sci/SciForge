@@ -1,5 +1,9 @@
 import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
+import {
+  agentHarnessStageHookTraceMetadata,
+  type AgentHarnessStageHookTraceMetadata,
+} from './agent-harness-backend-selection.js';
 import { collectWorkEvidenceFromBackendEvent, type WorkEvidence } from './work-evidence-types.js';
 import {
   buildSilentStreamDecisionRecord,
@@ -144,6 +148,8 @@ export interface AgentServerStreamSilencePolicy {
   digestRefCount: number;
   fallbackTimeoutMs: number;
   contractRef?: string;
+  traceRef?: string;
+  harnessSignals: AgentHarnessStageHookTraceMetadata;
 }
 
 export interface AgentServerSilentStreamGuardAudit {
@@ -161,6 +167,8 @@ export interface AgentServerSilentStreamGuardAudit {
   digestRefCount: number;
   fallbackTimeoutMs: number;
   contractRef?: string;
+  traceRef?: string;
+  harnessSignals: AgentHarnessStageHookTraceMetadata;
   recoveryAction: string;
   message: string;
   detail: string;
@@ -254,6 +262,11 @@ export function currentReferenceDigestSilentGuardPolicy(request: GatewayRequest)
   const source = harnessSilencePolicySource(request.uiState);
   const silencePolicy = source?.silencePolicy;
   const progressPlan = source?.progressPlan;
+  const harnessSignals = agentHarnessStageHookTraceMetadata(request, 'onStreamGuardTrip', {
+    agentHarness: source?.agentHarness,
+    summary: source?.summary,
+    trace: source?.trace,
+  });
   return {
     schemaVersion: AGENTSERVER_SILENT_STREAM_POLICY_SCHEMA_VERSION,
     source: source?.source ?? 'runtime.default',
@@ -266,7 +279,9 @@ export function currentReferenceDigestSilentGuardPolicy(request: GatewayRequest)
     auditRequired: booleanField(silencePolicy?.auditRequired) ?? Boolean(source),
     digestRefCount: digests.length,
     fallbackTimeoutMs,
-    contractRef: stringField(source?.contractRef),
+    contractRef: stringField(source?.contractRef) ?? harnessSignals.contractRef,
+    traceRef: harnessSignals.traceRef,
+    harnessSignals,
   };
 }
 
@@ -282,6 +297,7 @@ export function agentServerSilentStreamGuardAudit(
     auditRequired: false,
     digestRefCount: 0,
     fallbackTimeoutMs: 30_000,
+    harnessSignals: agentHarnessStageHookTraceMetadata({ skillDomain: 'knowledge', prompt: '', artifacts: [] }, 'onStreamGuardTrip'),
   };
   const retryCount = input.retryCount ?? 0;
   const retryable = fallback.decision === 'retry'
@@ -318,6 +334,8 @@ export function agentServerSilentStreamGuardAudit(
     digestRefCount: fallback.digestRefCount,
     fallbackTimeoutMs: fallback.fallbackTimeoutMs,
     contractRef: fallback.contractRef,
+    traceRef: fallback.traceRef,
+    harnessSignals: fallback.harnessSignals,
     recoveryAction,
     message,
     detail: [
@@ -329,6 +347,7 @@ export function agentServerSilentStreamGuardAudit(
       `recoveryAction=${recoveryAction}`,
       fallback.status ? `status=${fallback.status}` : undefined,
       fallback.contractRef ? `contractRef=${fallback.contractRef}` : undefined,
+      fallback.traceRef ? `traceRef=${fallback.traceRef}` : undefined,
     ].filter(Boolean).join(' · '),
   };
 }
@@ -344,6 +363,7 @@ function silentPolicyFromTimeout(timeoutMs: number | undefined): AgentServerStre
     auditRequired: false,
     digestRefCount: 0,
     fallbackTimeoutMs: normalized,
+    harnessSignals: agentHarnessStageHookTraceMetadata({ skillDomain: 'knowledge', prompt: '', artifacts: [] }, 'onStreamGuardTrip'),
   };
 }
 
@@ -351,10 +371,15 @@ function harnessSilencePolicySource(uiState: Record<string, unknown> | undefined
   source: string;
   progressPlan: Record<string, unknown>;
   silencePolicy: Record<string, unknown>;
+  agentHarness?: Record<string, unknown>;
+  summary?: Record<string, unknown>;
+  trace?: Record<string, unknown>;
   contractRef?: unknown;
 } | undefined {
   if (!isRecord(uiState)) return undefined;
   const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : undefined;
+  const summary = isRecord(agentHarness?.summary) ? agentHarness.summary : undefined;
+  const trace = isRecord(agentHarness?.trace) ? agentHarness.trace : undefined;
   const contract = isRecord(agentHarness?.contract) ? agentHarness.contract : undefined;
   const contractProgressPlan = isRecord(contract?.progressPlan) ? contract.progressPlan : undefined;
   const contractSilencePolicy = isRecord(contractProgressPlan?.silencePolicy) ? contractProgressPlan.silencePolicy : undefined;
@@ -364,6 +389,9 @@ function harnessSilencePolicySource(uiState: Record<string, unknown> | undefined
       source: 'request.uiState.agentHarness.contract.progressPlan.silencePolicy',
       progressPlan: contractProgressPlan,
       silencePolicy: contractSilencePolicy,
+      agentHarness,
+      summary,
+      trace,
       contractRef,
     };
   }
@@ -375,6 +403,9 @@ function harnessSilencePolicySource(uiState: Record<string, unknown> | undefined
       source: 'request.uiState.agentHarnessHandoff.progressPlan.silencePolicy',
       progressPlan: handoffProgressPlan,
       silencePolicy: handoffSilencePolicy,
+      agentHarness,
+      summary,
+      trace,
       contractRef: handoff?.harnessContractRef,
     };
   }
