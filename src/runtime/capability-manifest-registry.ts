@@ -26,6 +26,7 @@ import {
   type CapabilityManifestFileDiscoveryAudit,
   type CapabilityManifestFileDiscoveryInput,
 } from './capability-manifest-file-discovery.js';
+import { skillAndToolPackageCapabilityManifests } from './capability-manifest-skill-package-projection.js';
 
 export type CapabilityManifestDiscoverySource = 'package-discovery' | 'file-discovery';
 
@@ -356,6 +357,7 @@ function cloneRepairHint(hint: CapabilityRepairHint): CapabilityRepairHint {
 function defaultCoreCapabilityManifests(): CapabilityManifest[] {
   return [
     ...CORE_CAPABILITY_MANIFESTS,
+    ...skillAndToolPackageCapabilityManifests(),
     ...offlinePackageProviderCapabilityManifests(),
   ];
 }

@@ -6,7 +6,7 @@ import type { GatewayRequest } from '../../src/runtime/runtime-types.js';
 
 const request: GatewayRequest = {
   skillDomain: 'literature',
-  prompt: 'Read the prior workspace artifact report, validate its schema, and render the report view.',
+  prompt: 'Read the prior workspace artifact report, validate its schema, render the report view, and keep pdf-extract plus playwright MCP available as compact package-backed capabilities.',
   artifacts: [{
     id: 'artifact.report-1',
     type: 'research-report',
@@ -27,6 +27,7 @@ const request: GatewayRequest = {
   uiState: {
     selectedComponentIds: ['report-viewer'],
     selectedVerifierIds: ['verifier.schema-artifact'],
+    preferredCapabilityIds: ['skill.pdf-extract', 'tool.clawhub.playwright-mcp', 'verifier.schema'],
     agentHarnessContextEnvelopeEnabled: true,
     allowedContextRefs: ['artifact:legacy-context-sentinel'],
     blockedContextRefs: ['artifact:artifact.report-1'],
@@ -115,11 +116,15 @@ assert.equal(brokerBrief.schemaVersion, 'sciforge.agentserver.capability-broker-
 assert.equal(brokerBrief.contract, 'sciforge.capability-broker-output.v1');
 assert.match(brokerText, /view\.report/);
 assert.match(brokerText, /verifier\.schema/);
+assert.match(brokerText, /skill\.pdf-extract/);
+assert.match(brokerText, /tool\.clawhub\.playwright-mcp/);
 assert.match(brokerText, /capabilityEvolutionRecords/);
-assert.match(brokerText, /capability evolution ledger success/);
+assert.equal((brokerBrief.inputSummary as Record<string, unknown>).capabilityEvolutionRecords, 1);
 assert.equal(brokerText.includes('inputSchema'), false, 'broker brief must not expand full input schema');
 assert.equal(brokerText.includes('outputSchema'), false, 'broker brief must not expand full output schema');
 assert.equal(brokerText.includes('contract:example-input'), false, 'broker brief must not expand examples');
+assert.equal(brokerText.includes('examplePrompts'), false, 'broker brief must not expand generated skill catalog prompts');
+assert.equal(brokerText.includes('mcpArgs'), false, 'broker brief must not expand generated tool catalog command details');
 assert.equal(brokerText.includes('Regenerate payload according to this capability manifest contract'), false, 'broker brief must not expand repair hints');
 assert.equal(brokerText.includes('LEDGER_GLUE_CODE_SENTINEL'), false, 'broker brief must not expand ledger glue code refs');
 assert.equal(brokerText.includes('LEDGER_FULL_LOG_SENTINEL'), false, 'broker brief must not expand full ledger logs');

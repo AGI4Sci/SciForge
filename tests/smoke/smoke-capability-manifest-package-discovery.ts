@@ -5,10 +5,13 @@ import {
   loadCoreCapabilityManifestRegistry,
 } from '../../src/runtime/capability-manifest-registry.js';
 import {
+  CORE_CAPABILITY_MANIFESTS,
   CAPABILITY_MANIFEST_CONTRACT_ID,
   type CapabilityManifest,
 } from '../../packages/contracts/runtime/capability-manifest.js';
 import { uiComponentManifests } from '../../packages/presentation/components/manifest-registry.js';
+import { skillPackageManifests } from '../../packages/skills/index.js';
+import { toolPackageManifests } from '../../packages/skills/tool_skills/index.js';
 
 const coreRegistry = loadCoreCapabilityManifestRegistry();
 for (const component of uiComponentManifests) {
@@ -35,6 +38,31 @@ const defaultStructureView = coreRegistry.getManifest('view.structure-viewer');
 assert.deepEqual(defaultStructureView?.sideEffects, ['workspace-read', 'network']);
 const defaultGraphView = coreRegistry.getManifest('view.graph-viewer');
 assert.deepEqual(defaultGraphView?.sideEffects, ['none']);
+
+const defaultPdfSkill = coreRegistry.getManifest('skill.pdf-extract');
+const defaultVisionSkill = coreRegistry.getManifest('skill.vision-gui-task');
+const defaultPlaywrightTool = coreRegistry.getManifest('tool.clawhub.playwright-mcp');
+const defaultVisionSenseTool = coreRegistry.getManifest('tool.local.vision-sense');
+assert.ok(defaultPdfSkill, 'default registry should include compact packages/skills metadata');
+assert.ok(defaultVisionSkill, 'default registry should include local compact packages/skills metadata');
+assert.ok(defaultPlaywrightTool, 'default registry should include compact packages/skills/tool_skills connector metadata');
+assert.ok(defaultVisionSenseTool, 'default registry should include compact packages/skills/tool_skills sense-plugin metadata');
+assert.equal(defaultPdfSkill.ownerPackage, '@sciforge-skill/pdf-extract');
+assert.equal(defaultPlaywrightTool.metadata?.harnessKind, 'tool');
+assert.equal(defaultVisionSenseTool.metadata?.harnessKind, 'tool');
+assert.equal(coreRegistry.getManifestByProviderId('sciforge.skill.pdf-extract')?.id, 'skill.pdf-extract');
+assert.equal(coreRegistry.getManifestByProviderId('sciforge.tool.clawhub.playwright-mcp')?.id, 'tool.clawhub.playwright-mcp');
+assert.equal(coreRegistry.getManifestByProviderId('sciforge.tool.local.vision-sense')?.id, 'tool.local.vision-sense');
+assert.ok(
+  coreRegistry.manifestIds.length >= CORE_CAPABILITY_MANIFESTS.length + skillPackageManifests.length + toolPackageManifests.length,
+  'default registry should project real skill and tool skill package catalogs',
+);
+for (const id of ['skill.pdf-extract', 'tool.clawhub.playwright-mcp', 'tool.local.vision-sense']) {
+  const defaultAudit = coreRegistry.compactAudit.entries.find((item) => item.id === id);
+  assert.ok(defaultAudit, `${id} should appear in compact registry audit`);
+  assert.equal(defaultAudit.source, 'core');
+  assert.equal(defaultAudit.providerAvailability.length, 1);
+}
 
 const packageManifest = discoveredPackageManifest();
 const registry = loadCapabilityManifestRegistry({
@@ -96,6 +124,8 @@ const auditText = JSON.stringify(audit);
 assert.equal(auditText.includes('inputSchema'), false, 'compact audit must keep schemas lazy');
 assert.equal(auditText.includes('outputSchema'), false, 'compact audit must keep schemas lazy');
 assert.equal(auditText.includes('"examples"'), false, 'compact audit must keep examples lazy');
+assert.equal(auditText.includes('examplePrompts'), false, 'compact audit must not expand package skill generated catalog prompts');
+assert.equal(auditText.includes('mcpArgs'), false, 'compact audit must not expand package tool generated catalog details');
 
 assert.throws(
   () =>
