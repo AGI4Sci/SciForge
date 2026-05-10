@@ -58,6 +58,7 @@ import {
   ensureDirectAnswerReportArtifact,
   extractJson,
   mergeReusableContextArtifactsForDirectPayload,
+  normalizeWorkspaceTaskPayloadBoundary,
   normalizeToolPayloadShape,
   toolPayloadFromPlainAgentOutput,
 } from './gateway/direct-answer-payload.js';
@@ -100,6 +101,7 @@ import {
   failedTaskPayload,
   repairNeededPayload,
   schemaErrors,
+  schemaValidationRepairPayload,
   validateAndNormalizePayload,
 } from './gateway/payload-validation.js';
 import { collectArtifactReferenceContext } from './gateway/artifact-reference-context.js';
@@ -334,6 +336,35 @@ async function tryAgentServerRepairAndRerun(params: {
     return undefined;
   }
 
+  if (repairShouldStopForNoCodeChange(beforeCode, afterCode, priorAttempts, params.failureReason)) {
+    const failureReason = [
+      'AgentServer repair produced no task code changes after a repeated failure; stopping repair reruns to avoid repeating the same failed workspace task.',
+      `Previous failure: ${params.failureReason}`,
+    ].join(' ');
+    await appendTaskAttempt(workspace, {
+      id: params.taskId,
+      prompt: params.request.prompt,
+      skillDomain: params.request.skillDomain,
+      skillId: params.skill.id,
+      ...attemptPlanRefs(params.request, params.skill, params.failureReason),
+      attempt,
+      parentAttempt,
+      selfHealReason: params.failureReason,
+      patchSummary: diffSummary,
+      diffRef: diffRel,
+      status: 'failed-with-reason',
+      codeRef: params.run.spec.taskRel,
+      inputRef: params.run.spec.id ? `.sciforge/task-inputs/${params.run.spec.id}.json` : undefined,
+      outputRef: params.run.outputRef,
+      stdoutRef: params.run.stdoutRef,
+      stderrRef: params.run.stderrRef,
+      exitCode: params.run.exitCode,
+      failureReason,
+      createdAt: new Date().toISOString(),
+    });
+    return undefined;
+  }
+
   const outputRel = `.sciforge/task-results/${params.taskId}-attempt-${attempt}.json`;
   const stdoutRel = `.sciforge/logs/${params.taskId}-attempt-${attempt}.stdout.log`;
   const stderrRel = `.sciforge/logs/${params.taskId}-attempt-${attempt}.stderr.log`;
@@ -406,8 +437,10 @@ async function tryAgentServerRepairAndRerun(params: {
 
   try {
     const rawPayload = JSON.parse(await readFile(join(workspace, outputRel), 'utf8')) as ToolPayload;
-    const payload = coerceWorkspaceTaskPayload(rawPayload) ?? rawPayload;
-    const errors = schemaErrors(payload);
+    const boundaryPayload = normalizeWorkspaceTaskPayloadBoundary(rawPayload) as ToolPayload;
+    const payload = coerceWorkspaceTaskPayload(boundaryPayload) ?? boundaryPayload;
+    const rawErrors = schemaErrors(rawPayload);
+    const errors = rawErrors.length ? rawErrors : schemaErrors(payload);
     const normalized = errors.length ? undefined : await validateAndNormalizePayload(payload, params.request, params.skill, {
       taskRel: params.run.spec.taskRel,
       outputRel,
@@ -467,6 +500,21 @@ async function tryAgentServerRepairAndRerun(params: {
           schemaErrors: errors,
           failureReason: nextFailureReason,
           callbacks: params.callbacks,
+        });
+      }
+      if (errors.length) {
+        return schemaValidationRepairPayload({
+          payload,
+          sourcePayload: rawPayload,
+          errors,
+          request: params.request,
+          skill: params.skill,
+          refs: {
+            taskRel: params.run.spec.taskRel,
+            outputRel,
+            stdoutRel,
+            stderrRel,
+          },
         });
       }
       return undefined;
@@ -548,9 +596,38 @@ async function tryAgentServerRepairAndRerun(params: {
   }
 }
 
-function agentServerRepairMaxAttempts() {
-  const value = Number(process.env.SCIFORGE_AGENTSERVER_REPAIR_MAX_ATTEMPTS || 12);
-  return Number.isFinite(value) ? Math.max(2, Math.min(50, Math.floor(value))) : 12;
+export function agentServerRepairMaxAttempts() {
+  const value = Number(process.env.SCIFORGE_AGENTSERVER_REPAIR_MAX_ATTEMPTS || 4);
+  return Number.isFinite(value) ? Math.max(2, Math.min(50, Math.floor(value))) : 4;
+}
+
+export function repairShouldStopForNoCodeChange(
+  beforeCode: string,
+  afterCode: string,
+  priorAttempts: unknown[],
+  failureReason: string,
+) {
+  if (beforeCode !== afterCode) return false;
+  const normalizedFailure = normalizeRepairFailureReason(failureReason);
+  if (!normalizedFailure) return false;
+  return priorAttempts.some((attempt) => {
+    if (!isRecord(attempt)) return false;
+    return [
+      attempt.failureReason,
+      attempt.selfHealReason,
+      attempt.patchSummary,
+    ].some((value) => normalizeRepairFailureReason(value) === normalizedFailure);
+  });
+}
+
+function normalizeRepairFailureReason(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return '';
+  return value
+    .replace(/-attempt-\d+/g, '-attempt-N')
+    .replace(/generated-[a-z]+-[a-f0-9]{12}/g, 'generated-domain-id')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 500);
 }
 
 async function requestAgentServerGeneration(params: {

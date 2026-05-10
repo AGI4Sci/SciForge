@@ -19,6 +19,7 @@ import {
   createValidationRepairAuditChain,
   type ValidationRepairAuditChain,
 } from './validation-repair-audit-bridge.js';
+import { runSelectedRuntimeVerifiers } from './runtime-verifier-registry.js';
 import { contractValidationFailureFromVerificationResults, normalizeRuntimeVerificationResults } from './verification-results.js';
 
 const RUNTIME_VERIFICATION_GATE_CAPABILITY_ID = 'sciforge.runtime-verification-gate';
@@ -29,10 +30,20 @@ export async function applyRuntimeVerificationPolicy(
 ): Promise<ToolPayload> {
   const policy = normalizeRuntimeVerificationPolicy(request, payload);
   const nonBlocking = verificationIsNonBlocking(request, policy);
-  const provided = normalizeRuntimeVerificationResults([
+  const initialProvided = normalizeRuntimeVerificationResults([
     ...(payload.verificationResults ?? []),
     (payload as unknown as Record<string, unknown>).verificationResult,
     ...toRecordList(request.uiState?.verificationResults),
+  ]);
+  const packageVerifierResults = await runSelectedRuntimeVerifiers({
+    payload,
+    request,
+    policy,
+    providedResults: initialProvided,
+  });
+  const provided = normalizeRuntimeVerificationResults([
+    ...initialProvided,
+    ...packageVerifierResults,
   ]);
   const gate = evaluateVerificationGate(payload, request, policy, provided);
   const result = gate.result;
@@ -48,7 +59,7 @@ export async function applyRuntimeVerificationPolicy(
     result: resultWithId,
   }, null, 2), 'utf8');
 
-  const gateAudit = gate.blocked
+  const gateAudit = gate.blocked || verifierResultNeedsAudit(result)
     ? validationRepairAuditForVerificationGate(payload, request, policy, resultWithId, verificationRel)
     : undefined;
   const gatedPayload = gate.blocked ? failClosedPayload(payload, gate.reason, resultWithId, verificationRel, gateAudit) : payload;
@@ -64,6 +75,10 @@ export async function applyRuntimeVerificationPolicy(
     await persistVerificationGatedPayloadIfPossible(workspace, verifiedPayload);
   }
   return verifiedPayload;
+}
+
+function verifierResultNeedsAudit(result: VerificationResult) {
+  return result.verdict === 'fail' || result.verdict === 'needs-human';
 }
 
 export function normalizeRuntimeVerificationPolicy(

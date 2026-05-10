@@ -23,7 +23,7 @@ import { repairNeededPayload as buildRepairNeededPayload, type RepairPolicyRefs 
 import { contextCompactionMetadata } from './agentserver-context-window.js';
 import { normalizeArtifactsForPayload, persistArtifactRefsForPayload } from './artifact-materializer.js';
 import { schemaErrors as toolPayloadSchemaErrors } from './tool-payload-contract.js';
-import { normalizeToolPayloadShape } from './direct-answer-payload.js';
+import { normalizeToolPayloadShape, normalizeWorkspaceTaskArtifacts } from './direct-answer-payload.js';
 import {
   agentHarnessRepairPolicyBridgeFromRuntimeState,
   createValidationRepairAuditChain,
@@ -68,23 +68,14 @@ export async function validateAndNormalizePayload(
   const contractPayload = normalizeToolPayloadShape(payload);
   const errors = toolPayloadSchemaErrors(contractPayload);
   if (errors.length) {
-    const validationScope = validationScopeForToolPayloadSchemaErrors(errors);
-    const validationFailure = contractValidationFailureFromErrors(errors, {
-      capabilityId: skill.id,
-      failureKind: validationScope.failureKind,
-      schemaPath: validationScope.schemaPath,
-      contractId: validationScope.contractId,
-      expected: validationScope.expected,
-      actual: summarizeActualContractShape(contractPayload),
-      relatedRefs: relatedRefsFromRepairRefs(refs),
-    });
-    const repairRefs = repairRefsWithValidationRepairAudit(request, skill, validationFailure, refs);
-    return attachPayloadValidationBudgetDebit(
-      repairNeededPayload(request, skill, validationFailure.failureReason, repairRefs),
+    return schemaValidationRepairPayload({
+      payload: contractPayload,
+      sourcePayload: payload,
+      errors,
+      request,
       skill,
-      validationFailure,
-      repairRefs,
-    );
+      refs,
+    });
   }
   const workspace = resolve(request.workspacePath || process.cwd());
   const normalizedArtifacts = await normalizeArtifactsForPayload(
@@ -193,8 +184,212 @@ export async function validateAndNormalizePayload(
     : normalizedPayload;
 }
 
+export function schemaValidationRepairPayload(input: {
+  payload: unknown;
+  sourcePayload?: unknown;
+  errors: string[];
+  request: GatewayRequest;
+  skill: SkillAvailability;
+  refs: RepairPolicyRefs;
+}): ToolPayload {
+  const validationScope = validationScopeForToolPayloadSchemaErrors(input.errors);
+  const validationFailure = contractValidationFailureFromErrors(input.errors, {
+    capabilityId: input.skill.id,
+    failureKind: validationScope.failureKind,
+    schemaPath: validationScope.schemaPath,
+    contractId: validationScope.contractId,
+    expected: validationScope.expected,
+    actual: summarizeActualContractShape(input.sourcePayload ?? input.payload),
+    relatedRefs: relatedRefsFromRepairRefs(input.refs),
+    recoverActions: [
+      ...recoverActionsForPayloadSchemaFailure(input.errors),
+      ...preservePartialArtifactRecoverActions(input.payload, input.sourcePayload),
+    ],
+    nextStep: 'Regenerate a valid ToolPayload envelope; keep any partial artifacts as repair inputs until validation passes.',
+  });
+  const repairRefs = repairRefsWithValidationRepairAudit(input.request, input.skill, validationFailure, input.refs);
+  const repairPayload = attachPreservedPartialArtifacts(
+    repairNeededPayload(input.request, input.skill, validationFailure.failureReason, repairRefs),
+    input.payload,
+    input.sourcePayload,
+  );
+  return attachPayloadValidationBudgetDebit(
+    repairPayload,
+    input.skill,
+    validationFailure,
+    repairRefs,
+  );
+}
+
 function relatedRefsFromRepairRefs(refs: RepairPolicyRefs) {
   return [refs.taskRel, refs.outputRel, refs.stdoutRel, refs.stderrRel].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+}
+
+function recoverActionsForPayloadSchemaFailure(errors: string[]) {
+  const actions = [
+    'Return a ToolPayload object with message, claims, uiManifest, executionUnits, and artifacts fields.',
+  ];
+  if (errors.some((error) => /artifacts must be an array/i.test(error))) {
+    actions.push('Normalize artifact maps or keyed artifact objects into an artifacts array before returning.');
+  }
+  if (errors.some((error) => /missing message|missing claims|missing uiManifest/i.test(error))) {
+    actions.push('Keep the failed payload in repair-needed status until the required envelope fields are present.');
+  }
+  return actions;
+}
+
+function preservePartialArtifactRecoverActions(payload: unknown, sourcePayload: unknown) {
+  const artifacts = preservedPartialArtifacts(payload, sourcePayload);
+  if (!artifacts.length) return [];
+  return [
+    `Preserve ${artifacts.length} partial artifact(s) as repair inputs; do not promote the malformed result to success.`,
+  ];
+}
+
+function attachPreservedPartialArtifacts(
+  payload: ToolPayload,
+  normalizedPayload: unknown,
+  sourcePayload: unknown,
+): ToolPayload {
+  const artifacts = preservedPartialArtifacts(normalizedPayload, sourcePayload);
+  if (!artifacts.length) return payload;
+  const artifactIds = artifacts.map((artifact) => stringField(artifact.id) ?? stringField(artifact.type) ?? 'artifact');
+  const evidenceRefs = uniqueStringsLocal([
+    ...artifactIds.map((id) => `artifact:${id}`),
+    ...artifacts.flatMap(partialArtifactRefs),
+  ]);
+  return {
+    ...payload,
+    reasoningTrace: [
+      payload.reasoningTrace,
+      `partialArtifactPreservation=preserved ${artifactIds.length} artifact(s) from malformed task result for repair diagnostics`,
+    ].filter(Boolean).join('\n'),
+    executionUnits: payload.executionUnits.map((unit, index) => isRecord(unit) && index === 0
+      ? {
+        ...unit,
+        outputArtifacts: uniqueStringsLocal([
+          ...toStringArray(unit.outputArtifacts),
+          ...artifactIds,
+        ]),
+        refs: {
+          ...(isRecord(unit.refs) ? unit.refs : {}),
+          partialArtifacts: artifactIds,
+          partialArtifactRefs: evidenceRefs,
+        },
+      }
+      : unit),
+    objectReferences: mergeObjectReferenceRecords(
+      payload.objectReferences ?? [],
+      evidenceRefs.map(objectReferenceForPartialRef),
+    ),
+    artifacts: mergeArtifactRecords(payload.artifacts, artifacts),
+    logs: [
+      ...(payload.logs ?? []),
+      {
+        kind: 'partial-artifact-preservation',
+        artifactIds,
+        refs: evidenceRefs,
+      },
+    ],
+  };
+}
+
+function preservedPartialArtifacts(normalizedPayload: unknown, sourcePayload: unknown) {
+  const normalized = isRecord(normalizedPayload)
+    ? normalizeWorkspaceTaskArtifacts(normalizedPayload.artifacts)
+    : [];
+  if (normalized.length) return normalized.map(markPartialArtifactPreserved);
+  const source = isRecord(sourcePayload)
+    ? normalizeWorkspaceTaskArtifacts(sourcePayload.artifacts)
+    : [];
+  return source.map(markPartialArtifactPreserved);
+}
+
+function markPartialArtifactPreserved(artifact: Record<string, unknown>): Record<string, unknown> {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  return {
+    ...artifact,
+    metadata: {
+      ...metadata,
+      preservedFromMalformedPayload: true,
+      validationStatus: 'repair-needed',
+    },
+  };
+}
+
+function partialArtifactRefs(artifact: Record<string, unknown>) {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  const refs = [
+    artifact.ref,
+    artifact.dataRef,
+    artifact.path,
+    artifact.rawRef,
+    artifact.outputRef,
+    metadata.artifactRef,
+    metadata.outputRef,
+    metadata.taskCodeRef,
+    metadata.stdoutRef,
+    metadata.stderrRef,
+    ...toStringArray(artifact.evidenceRefs),
+    ...toStringArray(artifact.traceRefs),
+    ...toStringArray(artifact.sourceRefs),
+    ...toStringArray(artifact.relatedRefs),
+  ];
+  return refs.filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0);
+}
+
+function objectReferenceForPartialRef(ref: string) {
+  const id = ref.replace(/[^A-Za-z0-9:._/-]+/g, '-');
+  const kind = ref.startsWith('artifact:')
+    ? 'artifact'
+    : ref.startsWith('run:')
+      ? 'run'
+      : ref.startsWith('file:')
+        ? 'file'
+        : 'reference';
+  return {
+    id,
+    title: ref,
+    kind,
+    ref,
+    status: 'available',
+    actions: ['inspect', 'pin'],
+    provenance: { preservedFromMalformedPayload: true },
+  };
+}
+
+function mergeArtifactRecords(base: Array<Record<string, unknown>>, additions: Array<Record<string, unknown>>) {
+  const out: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
+  for (const artifact of [...base, ...additions]) {
+    const key = stringField(artifact.id) ?? stringField(artifact.type) ?? JSON.stringify(artifact);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(artifact);
+  }
+  return out;
+}
+
+function mergeObjectReferenceRecords(base: Array<Record<string, unknown>>, additions: Array<Record<string, unknown>>) {
+  const out: Array<Record<string, unknown>> = [];
+  const seen = new Set<string>();
+  for (const reference of [...base, ...additions]) {
+    const key = stringField(reference.ref) ?? stringField(reference.id) ?? JSON.stringify(reference);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(reference);
+  }
+  return out;
+}
+
+function uniqueStringsLocal(values: string[]) {
+  return Array.from(new Set(values.filter((value) => value.trim().length > 0)));
+}
+
+function toStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    : [];
 }
 
 function repairRefsWithValidationRepairAudit(

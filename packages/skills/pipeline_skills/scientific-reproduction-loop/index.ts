@@ -15,3 +15,12 @@ export {
   type WorkspaceRef,
 } from './trajectory-contract';
 export { buildSampleScientificReproductionTrajectory } from './sample-trajectory';
+export {
+  auditTrajectoryTrainingRecord,
+  buildTrajectoryTrainingRecordFromStoredAttempt,
+  type BuildTrajectoryTrainingRecordInput,
+  type StoredAttemptLike,
+  type TrajectoryAuditIssue,
+  type TrajectoryAuditResult,
+  type TrajectorySourceSubject,
+} from './trajectory-export';

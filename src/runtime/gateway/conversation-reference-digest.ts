@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -10,6 +11,10 @@ const DISCOVERABLE_REF_EXTENSIONS = ['md', 'markdown', 'json', 'jsonl', 'csv', '
 const MAX_READ_BYTES = 1_000_000;
 const DEFAULT_DIGEST_CHAR_BUDGET = 1_800;
 const DEFAULT_EXCERPT_CHAR_BUDGET = 360;
+const PDF_EXTRACTOR = 'pdftotext';
+const PDF_EXTRACTOR_STAGE = 'reference-digest.pdf-text-extraction';
+const PDF_MAX_PAGES = 8;
+const PDF_EXTRACTION_TIMEOUT_MS = 8_000;
 
 type JsonMap = Record<string, unknown>;
 
@@ -131,16 +136,7 @@ export function digestConversationReference(
   };
 
   if (suffix === '.pdf') {
-    return {
-      ...common,
-      sourceType: 'pdf',
-      status: 'unsupported',
-      mediaType: 'application/pdf',
-      digestText: 'PDF reference recorded with hash and size; text extraction is not enabled yet.',
-      excerpts: [],
-      metrics: {},
-      omitted: { rawContent: 'pdf-extraction-unavailable', bytes: stat.size },
-    };
+    return digestPdfReference(path, rel, stat.size, common, options);
   }
 
   if (!TEXT_EXTENSIONS.has(suffix)) {
@@ -247,12 +243,21 @@ function uniqueRefs(refs: Iterable<string>): string[] {
 }
 
 function expandPromptRefs(refs: string[], root: string): string[] {
-  const normalized = refs.map(normalizeWorkspaceRef);
-  const siblingDirs = normalized
+  const candidateSets = refs.map((ref) => {
+    const raw = ref.trim().replace(/^file:/, '').replace(/^\.\//, '');
+    const normalized = normalizeWorkspaceRef(ref);
+    return raw === normalized ? [normalized] : [raw, normalized];
+  });
+  const candidates = uniqueRefs(candidateSets.flat());
+  const siblingDirs = candidates
     .filter((ref) => ref.includes('/') && dirname(ref) !== '.')
     .map((ref) => dirname(ref));
-  const expanded = normalized.map((ref) => {
-    if (ref.includes('/') || existsSync(resolve(root, ref))) return ref;
+  const expanded = candidateSets.map((candidateSet) => {
+    for (const candidate of candidateSet) {
+      if (existsSync(resolve(root, candidate))) return candidate;
+    }
+    const ref = candidateSet[0] ?? '';
+    if (ref.includes('/')) return ref;
     return resolveInSiblingDirs(ref, siblingDirs, root) ?? ref;
   });
   return uniqueRefs(expanded);
@@ -278,14 +283,19 @@ function sourceRefText(sourceRef: string | JsonMap): string {
 }
 
 function resolveWorkspacePath(ref: string, root: string): { path: string; rel: string } | undefined {
-  const clean = normalizeWorkspaceRef(ref).split('#', 1)[0];
-  if (clean.includes('://')) return undefined;
-  const candidate = clean.startsWith('~/') ? resolve(homedir(), clean.slice(2)) : resolve(root, clean);
-  if (!existsSync(candidate)) return undefined;
-  const path = realpathSync(candidate);
-  const rel = relative(root, path).replaceAll('\\', '/');
-  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return undefined;
-  return { path, rel };
+  const raw = ref.trim().replace(/^file:/, '').replace(/^\.\//, '').split('#', 1)[0];
+  const normalized = normalizeWorkspaceRef(ref).split('#', 1)[0];
+  const candidates = uniqueRefs([normalized, raw]);
+  for (const clean of candidates) {
+    if (clean.includes('://')) continue;
+    const candidate = clean.startsWith('~/') ? resolve(homedir(), clean.slice(2)) : resolve(root, clean);
+    if (!existsSync(candidate)) continue;
+    const path = realpathSync(candidate);
+    const rel = relative(root, path).replaceAll('\\', '/');
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) continue;
+    return { path, rel };
+  }
+  return undefined;
 }
 
 function findUniqueWorkspaceFile(basename: string, root: string): string | undefined {
@@ -325,6 +335,182 @@ function readBoundedText(path: string): { text: string; truncatedBytes: number }
   const data = readFileSync(path);
   const truncatedBytes = Math.max(0, data.length - MAX_READ_BYTES);
   return { text: data.subarray(0, MAX_READ_BYTES).toString('utf8').replaceAll('\u0000', ''), truncatedBytes };
+}
+
+function digestPdfReference(
+  path: string,
+  rel: string,
+  sizeBytes: number,
+  common: Omit<ConversationReferenceDigest, 'sourceType' | 'status' | 'mediaType' | 'digestText' | 'excerpts' | 'metrics' | 'omitted'>,
+  options: Required<ConversationReferenceDigestOptions>,
+): ConversationReferenceDigest {
+  const extraction = extractPdfTextBounded(path);
+  if (!extraction.ok) {
+    const diagnostic = pdfExtractionDiagnostic(rel, extraction);
+    return {
+      ...common,
+      sourceType: 'pdf',
+      status: 'failed',
+      mediaType: 'application/pdf',
+      digestText: [
+        `PDF digest: text extraction failed at ${PDF_EXTRACTOR_STAGE}.`,
+        `Extractor: ${PDF_EXTRACTOR}; fileRef: file:${rel}; errorType: ${diagnostic.errorType}.`,
+        `Next steps: ${(diagnostic.nextSteps as string[]).slice(0, 2).join(' ')}`,
+      ].join('\n'),
+      excerpts: [{ kind: 'extraction-diagnostic', stage: PDF_EXTRACTOR_STAGE, extractor: PDF_EXTRACTOR, text: diagnostic.summary }],
+      metrics: { extractedPageCount: 0, textChars: 0, fallbackAvailable: false },
+      omitted: { rawContent: 'pdf-extraction-failed', bytes: sizeBytes, diagnostic },
+      audit: {
+        ...common.audit,
+        reader: 'pdf-bounded-extractor',
+        extraction: diagnostic,
+      },
+    };
+  }
+
+  const summary = summarizePdfText(extraction.text);
+  const [digestText, truncatedChars] = clipRefSafe(String(summary.digestText ?? ''), options.digestCharBudget);
+  const omitted = { ...recordValue(summary.omitted) };
+  if (truncatedChars) omitted.digestCharsAfterLimit = truncatedChars;
+  if (extraction.truncatedChars) omitted.extractedCharsAfterLimit = extraction.truncatedChars;
+  if (extraction.pagesAfterLimit) omitted.pagesAfterLimit = extraction.pagesAfterLimit;
+  omitted.rawContent = 'pdf-text-extracted-bounded';
+  return {
+    ...common,
+    sourceType: 'pdf',
+    status: 'ok',
+    mediaType: 'application/pdf',
+    digestText,
+    excerpts: boundedExcerpts(Array.isArray(summary.excerpts) ? summary.excerpts.filter(recordValue) : [], options.excerptCharBudget),
+    metrics: {
+      ...recordValue(summary.metrics),
+      extractor: PDF_EXTRACTOR,
+      stage: PDF_EXTRACTOR_STAGE,
+      pageLimit: PDF_MAX_PAGES,
+      fallbackAvailable: true,
+    },
+    omitted,
+    audit: {
+      ...common.audit,
+      reader: 'pdf-bounded-extractor',
+      extraction: {
+        extractor: PDF_EXTRACTOR,
+        stage: PDF_EXTRACTOR_STAGE,
+        fileRef: `file:${rel}`,
+        status: 'ok',
+        pageLimit: PDF_MAX_PAGES,
+        timeoutMs: PDF_EXTRACTION_TIMEOUT_MS,
+      },
+    },
+  };
+}
+
+type PdfExtractionResult =
+  | { ok: true; text: string; truncatedChars: number; pagesAfterLimit: number }
+  | { ok: false; errorType: string; message: string; stderr?: string; exitCode?: number | string; signal?: string };
+
+function extractPdfTextBounded(path: string): PdfExtractionResult {
+  try {
+    const output = execFileSync(PDF_EXTRACTOR, ['-layout', '-enc', 'UTF-8', '-f', '1', '-l', String(PDF_MAX_PAGES), path, '-'], {
+      encoding: 'utf8',
+      maxBuffer: MAX_READ_BYTES,
+      timeout: PDF_EXTRACTION_TIMEOUT_MS,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const text = String(output || '').replaceAll('\u0000', '').trim();
+    if (!text) {
+      return {
+        ok: false,
+        errorType: 'empty-output',
+        message: `${PDF_EXTRACTOR} returned no text for the requested page range.`,
+      };
+    }
+    const [bounded, truncatedChars] = clipRefSafe(text, MAX_READ_BYTES);
+    const pages = text.split('\f').length;
+    return { ok: true, text: bounded, truncatedChars, pagesAfterLimit: Math.max(0, pages - PDF_MAX_PAGES) };
+  } catch (error) {
+    const record = recordValue(error) ?? {};
+    const stderr = bufferOrString(record.stderr);
+    const message = error instanceof Error && error.message ? error.message : stderr || `${PDF_EXTRACTOR} failed`;
+    return {
+      ok: false,
+      errorType: classifyPdfExtractionError(message, stderr, record),
+      message: scrubInline(message),
+      stderr: stderr ? scrubInline(stderr).slice(0, 800) : undefined,
+      exitCode: typeof record.status === 'number' || typeof record.status === 'string' ? record.status : undefined,
+      signal: typeof record.signal === 'string' ? record.signal : undefined,
+    };
+  }
+}
+
+function summarizePdfText(text: string): JsonMap {
+  const pages = text.split('\f').map((page) => page.trim()).filter(Boolean);
+  const lines = text.split(/\r?\n/);
+  const pageExcerpts = pages.slice(0, 4).map((page, index) => {
+    const firstUseful = page.split(/\r?\n/).find((line) => line.trim().length > 20) ?? page.slice(0, 240);
+    return { kind: 'pdf-page', page: index + 1, text: scrubInline(firstUseful) };
+  });
+  return {
+    digestText: `PDF digest: extracted bounded text from pages 1-${Math.min(PDF_MAX_PAGES, Math.max(1, pages.length))} with ${lines.length} lines and ${text.length} chars.`,
+    excerpts: pageExcerpts,
+    metrics: { extractedPageCount: pages.length, lineCount: lines.length, textChars: text.length },
+    omitted: { fullPdfText: 'refs-first-not-inlined' },
+  };
+}
+
+function pdfExtractionDiagnostic(rel: string, failure: Extract<PdfExtractionResult, { ok: false }>): JsonMap {
+  return {
+    extractor: PDF_EXTRACTOR,
+    stage: PDF_EXTRACTOR_STAGE,
+    fileRef: `file:${rel}`,
+    errorType: failure.errorType,
+    message: failure.message || 'PDF text extraction failed with a classified error.',
+    stderr: failure.stderr,
+    exitCode: failure.exitCode,
+    signal: failure.signal,
+    summary: `PDF extraction failed via ${PDF_EXTRACTOR} at ${PDF_EXTRACTOR_STAGE}; fileRef=file:${rel}; errorType=${failure.errorType}.`,
+    nextSteps: pdfExtractionNextSteps(failure.errorType),
+  };
+}
+
+function classifyPdfExtractionError(message: string, stderr: string | undefined, record: JsonMap): string {
+  const combined = `${message}\n${stderr ?? ''}`.toLowerCase();
+  if (record.code === 'ENOENT' || combined.includes('enoent')) return 'missing-extractor';
+  if (combined.includes('timed out') || record.signal === 'SIGTERM') return 'timeout';
+  if (combined.includes('permission denied')) return 'permission-denied';
+  if (combined.includes('incorrect password') || combined.includes('encrypted')) return 'encrypted-pdf';
+  if (combined.includes('may not be a pdf') || combined.includes('syntax error') || combined.includes('xref') || combined.includes('trailer')) return 'invalid-pdf';
+  if (combined.includes('no text') || combined.includes('empty')) return 'empty-output';
+  return 'extractor-failed';
+}
+
+function pdfExtractionNextSteps(errorType: string): string[] {
+  if (errorType === 'missing-extractor') return [
+    'Install poppler/pdftotext or select a runtime image that provides it.',
+    'Retry the same workspace ref so the digest records bounded page text.',
+  ];
+  if (errorType === 'encrypted-pdf') return [
+    'Provide an unlocked PDF or a permitted text/supplementary source ref.',
+    'Record this as missing evidence if the full text cannot be legally read.',
+  ];
+  if (errorType === 'invalid-pdf') return [
+    'Verify the uploaded file is a complete PDF and re-upload if it is truncated.',
+    'Use DOI/PMID/landing-page metadata as bounded refs while full text remains unavailable.',
+  ];
+  if (errorType === 'empty-output') return [
+    'Try OCR or publisher XML when the PDF is scanned or text is embedded as images.',
+    'Continue with metadata-only evidence and mark claim extraction as partial.',
+  ];
+  return [
+    'Inspect stderr and retry with a different bounded extractor or source format.',
+    'Preserve the failure artifact and continue with explicit missing evidence.',
+  ];
+}
+
+function bufferOrString(value: unknown): string | undefined {
+  if (typeof value === 'string') return value;
+  if (Buffer.isBuffer(value)) return value.toString('utf8');
+  return undefined;
 }
 
 function sourceTypeForPath(path: string): string {

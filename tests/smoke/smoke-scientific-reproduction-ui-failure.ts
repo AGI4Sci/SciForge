@@ -5,7 +5,11 @@ import {
   contractValidationFailureFromErrors,
   validationScopeForToolPayloadSchemaErrors,
 } from '@sciforge-ui/runtime-contract/validation-failure';
+import { normalizeWorkspaceTaskPayloadBoundary } from '../../src/runtime/gateway/direct-answer-payload.js';
+import { normalizeGatewayRequest } from '../../src/runtime/gateway/gateway-request.js';
+import { schemaValidationRepairPayload } from '../../src/runtime/gateway/payload-validation.js';
 import { schemaErrors as toolPayloadSchemaErrors } from '../../src/runtime/gateway/tool-payload-contract.js';
+import type { SkillAvailability } from '../../src/runtime/runtime-types.js';
 import { verifyScientificReproduction } from '../../packages/verifiers/scientific-reproduction/index.js';
 
 const fixtureUrl = new URL('../fixtures/scientific-reproduction/ui-attempt-failures/missing-envelope-nonarray-artifacts.json', import.meta.url);
@@ -54,8 +58,66 @@ assert.ok(validationFailure.relatedRefs.includes(stringField(failedAttempt, 'out
 
 assert.equal(Array.isArray(rawPayload.artifacts), false, 'malformed artifact map must not be accepted as a ToolPayload artifacts array');
 
-const salvagedArtifacts = Object.values(record(rawPayload.artifacts, 'failedAttempt.rawPayload.artifacts')).map((artifact) =>
-  record(artifact, 'failedAttempt.rawPayload.artifacts.*')
+const normalizedBoundary = record(normalizeWorkspaceTaskPayloadBoundary(rawPayload), 'normalizedBoundary');
+assert.equal(Array.isArray(normalizedBoundary.artifacts), true, 'parser boundary should normalize artifact maps into arrays for preservation');
+assert.deepEqual(toolPayloadSchemaErrors(normalizedBoundary).filter((error) => error === 'artifacts must be an array'), []);
+assert.ok(toolPayloadSchemaErrors(normalizedBoundary).includes('missing message'));
+assert.ok(toolPayloadSchemaErrors(normalizedBoundary).includes('missing claims'));
+assert.ok(toolPayloadSchemaErrors(normalizedBoundary).includes('missing uiManifest'));
+
+const request = normalizeGatewayRequest({
+  skillDomain: 'literature',
+  prompt: 'Use SciForge to reproduce scientific paper claims from workspace PDFs.',
+  workspacePath: '/tmp/sciforge-scientific-reproduction-ui-failure-smoke',
+});
+const skill: SkillAvailability = {
+  id: 'scientific-reproduction.ui-attempt.mock',
+  kind: 'installed',
+  available: true,
+  reason: 'smoke fixture',
+  checkedAt: '2026-05-11T00:00:00.000Z',
+  manifestPath: 'tests/fixtures/scientific-reproduction/ui-attempt-failures/missing-envelope-nonarray-artifacts.json',
+  manifest: {
+    id: 'scientific-reproduction.ui-attempt.mock',
+    kind: 'installed',
+    description: 'Mock scientific reproduction UI attempt',
+    skillDomains: ['literature'],
+    inputContract: {},
+    outputArtifactSchema: {},
+    entrypoint: { type: 'agentserver-generation' },
+    environment: {},
+    validationSmoke: {},
+    examplePrompts: [],
+    promotionHistory: [],
+  },
+};
+const refs = {
+  taskRel: 'file:.sciforge/tasks/scientific-reproduction-ui-attempt-001.py',
+  outputRel: stringField(failedAttempt, 'outputRef'),
+  stdoutRel: stringField(failedAttempt, 'stdoutRef'),
+  stderrRel: stringField(failedAttempt, 'stderrRef'),
+};
+const repairPayload = schemaValidationRepairPayload({
+  payload: normalizedBoundary,
+  sourcePayload: rawPayload,
+  errors: contractErrors,
+  request,
+  skill,
+  refs,
+});
+assert.match(repairPayload.message, /needs repair/i);
+assert.equal(repairPayload.executionUnits[0].status, 'repair-needed');
+assert.equal(repairPayload.executionUnits.some((unit) => unit.status === 'done'), false, 'malformed payload must not be marked successful');
+assert.deepEqual(repairPayload.artifacts.map((artifact) => stringField(artifact, 'id')), ['claim-verdict-partial', 'figure-report-partial']);
+assert.ok(repairPayload.artifacts.every((artifact) => record(artifact.metadata, 'artifact.metadata').preservedFromMalformedPayload === true));
+assert.ok(repairPayload.objectReferences?.some((reference) => reference.ref === 'artifact:claim-verdict-partial'));
+assert.ok(repairPayload.objectReferences?.some((reference) => reference.ref === 'file:.sciforge/artifacts/partial-reproduced-figure.png'));
+const runtimeValidationFailure = record(record(repairPayload.executionUnits[0], 'repairPayload.executionUnits[0]').refs, 'repairPayload.executionUnits[0].refs').validationFailure;
+assert.equal(record(runtimeValidationFailure, 'runtimeValidationFailure').contractId, 'sciforge.tool-payload.v1');
+assert.ok(stringArray(record(runtimeValidationFailure, 'runtimeValidationFailure').missingFields, 'runtimeValidationFailure.missingFields').includes('message'));
+
+const salvagedArtifacts = (normalizedBoundary.artifacts as unknown[]).map((artifact) =>
+  record(artifact, 'normalizedBoundary.artifacts.*')
 );
 const partialOutputs = record(fixture.partialScientificOutputs, 'partialScientificOutputs');
 const expectedArtifactIds = stringArray(partialOutputs.artifactIds, 'partialScientificOutputs.artifactIds');

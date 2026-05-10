@@ -158,12 +158,40 @@ export function coerceWorkspaceTaskPayload(value: unknown): ToolPayload | undefi
   return undefined;
 }
 
+export function normalizeWorkspaceTaskPayloadBoundary(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  return {
+    ...value,
+    artifacts: normalizeWorkspaceTaskArtifacts(value.artifacts),
+  };
+}
+
+export function normalizeWorkspaceTaskArtifacts(value: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(value)) return value.map((artifact) => isRecord(artifact) ? artifact : undefined).filter(isRecord);
+  if (!isRecord(value)) return [];
+  return Object.entries(value)
+    .flatMap(([key, artifact]) => {
+      if (!isRecord(artifact)) return [];
+      const id = stringField(artifact.id) ?? key;
+      return [{
+        ...artifact,
+        id,
+        type: stringField(artifact.type) ?? stringField(artifact.artifactType) ?? id,
+        metadata: {
+          ...(isRecord(artifact.metadata) ? artifact.metadata : {}),
+          originalArtifactKey: key,
+          normalizedFromArtifactMap: true,
+        },
+      }];
+    });
+}
+
 function coerceStandaloneArtifactPayload(value: Record<string, unknown>): ToolPayload | undefined {
   return standaloneWorkspaceArtifactPayloadPolicy(value) as ToolPayload | undefined;
 }
 
 export function normalizeToolPayloadShape(payload: ToolPayload): ToolPayload {
-  const artifacts = Array.isArray(payload.artifacts) ? payload.artifacts : [];
+  const artifacts = normalizeWorkspaceTaskArtifacts(payload.artifacts);
   const rawDisplayIntent: unknown = payload.displayIntent;
   return {
     ...payload,
@@ -200,7 +228,7 @@ function normalizeAgentServerToolPayloadCandidate(value: unknown, depth = 0): un
   }
 
   const message = firstStringField(value, ['message', 'answer', 'summary', 'markdown', 'report', 'text', 'finalText', 'handoffSummary', 'outputSummary']);
-  const artifacts = normalizeDirectAnswerArtifacts(value.artifacts, message);
+  const artifacts = normalizeDirectAnswerArtifacts(normalizeWorkspaceTaskArtifacts(value.artifacts), message);
   const claims = normalizeAgentServerClaims(value.claims, message);
   const uiManifest = normalizeDirectAnswerUiManifest(value.uiManifest, artifacts);
   const executionUnits = normalizeAgentServerExecutionUnits(value.executionUnits);

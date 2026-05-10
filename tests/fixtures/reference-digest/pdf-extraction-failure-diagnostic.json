@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "sciforge.reference-digest.pdf-extraction-diagnostic.fixture.v1",
+  "description": "Generic expectations for preserving PDF extraction failures as structured reference-digest diagnostics.",
+  "extractor": "pdftotext",
+  "stage": "reference-digest.pdf-text-extraction",
+  "requiredDiagnosticFields": ["extractor", "stage", "fileRef", "errorType", "nextSteps"],
+  "forbiddenDigestTextPatterns": ["unknown error"]
+}

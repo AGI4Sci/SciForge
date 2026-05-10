@@ -79,7 +79,7 @@ Todo：
 - [x] 设计一套网页端操作 runbook：打开应用、选择 workspace、上传/引用论文、输入 topic、追问、检查 artifact、继续分析、导出结果。
 - [x] 记录每轮网页交互的 screen state、mouse/keyboard action、prompt、response、artifact refs 和失败点。（2026-05-11 首轮真实 UI attempt 已记录为 failure fixture。）
 - [x] 区分“产品能力失败”和“研究结论失败”：前者进入通用修复，后者进入 negative result。
-- [ ] 建立最小复测流程：每次通用修复后都回到网页端用同类操作复测。
+- [x] 建立最小复测流程：每次通用修复后都回到网页端用同类操作复测。（见 `docs/runbooks/sciforge-web-reproduction.md` 的 Generic Web Retest Packet。）
 
 验收：
 - [x] 至少完成一次全程网页端 attempt，不依赖直接调用内部脚本来绕过 SciForge UI。
@@ -198,10 +198,10 @@ Todo：
 - [x] 检查每个 figure reproduction 是否有代码、输入数据、参数、stdout/stderr、统计方法。
 - [x] 检查 accession/DOI/PMID/title/year/journal 是否核验。
 - [x] 检查 verdict 是否区分 reproduced/partial/not-reproduced/contradicted。
-- [ ] Verifier 失败进入 validation/repair/audit pipeline。
+- [x] Verifier 失败进入 validation/repair/audit pipeline。（scientific-reproduction runtime verifier 已接入 runtime verification gate。）
 
 验收：
-- [ ] Verifier 能阻止“看起来像报告但没有证据链”的结果被标为成功。
+- [x] Verifier 能阻止“看起来像报告但没有证据链”的结果被标为成功。
 
 ### R011 轨迹训练数据导出
 
@@ -214,7 +214,7 @@ Todo：
 - [x] 脱敏本地绝对路径、API key、临时文件名，用 workspace refs 替代。
 
 验收：
-- [ ] 单个 attempt 可重放或审计，不依赖聊天上下文记忆。
+- [x] 单个 attempt 可重放或审计，不依赖聊天上下文记忆。
 
 ### R012 UI/交互能力缺口修复
 
@@ -222,12 +222,12 @@ Todo：
 
 Todo：
 - [x] 记录长任务进度是否清楚：当前阶段、下一步、卡点、可取消/继续操作。
-- [ ] 记录 artifact 是否容易打开、比较、引用、追问和导出。
+- [x] 记录 artifact 是否容易打开、比较、引用、追问和导出。（artifact card/inspector 已补通用引用、追问和 JSON 导出入口。）
 - [x] 记录 evidence matrix、claim verdict、negative result 是否有清晰视图。
 - [x] 发现 UI 问题后新增通用 issue，不做论文专属展示。
 
 验收：
-- [ ] 每个 UI 修复都能被非 cell/epigenomics 任务复用。
+- [x] 每个 UI 修复都能被非 cell/epigenomics 任务复用。
 
 ### R013 自我提示式复现 Agent
 
@@ -259,8 +259,8 @@ Todo：
 - [x] M1：用网页端 Computer Use 完成一次 2020 或 2025 论文的人工式多轮 attempt。
 - [ ] M2：产出第一版 `paper-claim-graph`、`dataset-inventory`、`evidence-matrix`、`claim-verdict`。
 - [x] M3：发现至少 3 个通用产品/能力缺口，并写成可实现任务。
-- [ ] M4：完成一个通用修复后回到网页端复测。
-- [ ] M5：导出一份可审计的 `trajectory-training-record`。
+- [x] M4：完成一个通用修复后回到网页端复测。
+- [x] M5：导出一份可审计的 `trajectory-training-record`。
 
 ## 2026-05-11 阶段记录
 
@@ -270,3 +270,9 @@ Todo：
 - 真实失败缺口 3：UI 能显示等待、repair 和 token 进展，但 repair-needed partial scientific outputs 没有被保留成用户可打开的 structured artifact。
 - 本阶段通用修复已完成：新增 scientific reproduction runtime contracts、refs-first validators、scientific reproduction verifier、bioinformatics reproduction profile/mock fixtures、Computer Use runbook、trajectory export contract、seed-paper generic fixtures、package-owned view manifest 接收规则、UI failure fixture 和 `npm run smoke:scientific-reproduction`。
 - 已验证：`npm run typecheck` 和 `npm run smoke:scientific-reproduction` 通过。
+- Worker P 补充了 M4 网页端复测准备：通用 retest checklist、baseline/follow-up prompt template、expected artifact gates，以及针对 2026-05-11 ToolPayload/PDF extraction/partial artifact 失败类的复测检查。M4 仍需实际回到网页端执行后再勾选。
+- 第二阶段并行修复完成：scientific-reproduction verifier 已接入 runtime verification/validation/repair/audit；malformed ToolPayload 会 fail closed 并保留 object-map partial artifacts；PDF refs 具备 bounded `pdftotext` fallback 和结构化 extraction diagnostics；trajectory-training-record 可从 stored attempt/result/validation refs 导出；artifact UI 增加通用引用/追问/JSON 导出。
+- M4 网页端复测 1：用 Computer Use 在文献证据评估场景新建聊天，提交 2020 PRDM9 PDF 的 refs-first 短复现任务。复测暴露新通用缺口：generated task 退出/repair 后没有 output JSON 时，repair rerun 可重复到 8+ 次，结果面板仍为空。
+- 针对 M4 复测 1 的通用修复：AgentServer repair 默认预算从 12 降到 4；当 repair 没有修改任务代码且失败原因重复时立即 fail closed，防止同一坏任务无限修复。新增 `smoke:agentserver-repair-budget` 并纳入 `smoke:scientific-reproduction`。
+- M4 网页端复测 2：再次通过 Computer Use 提交同类任务，最新 attempt `generated-literature-9ec76e6172e7` 在 2 次 attempt 后停止，状态为 `repair-needed` / `failed-with-reason`，验证 runaway repair loop 已被截断。剩余产品缺口：终态 product failure 仍没有在结果面板中形成可打开的失败 artifact，HTTP stream 仍可停留在等待状态，需要下一阶段修复“terminal backend failure -> visible result artifact/finalized stream”。
+- 本阶段最终验证：`npm run typecheck`、`npm run smoke:scientific-reproduction`、`npm run smoke:runtime-gateway-modules`、`npm run smoke:validation-repair-audit-chain`、`npm run smoke:runtime-ui-manifest`、`npm run packages:check`、`python3 -m unittest packages/reasoning/conversation-policy/tests/test_reference_digest.py` 均通过。

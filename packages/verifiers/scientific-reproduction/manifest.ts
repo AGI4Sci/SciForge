@@ -96,6 +96,6 @@ export const capabilityManifest: CapabilityManifest = {
   },
   metadata: {
     verifierType: 'schema-test',
-    integrationNeeds: 'Wire into Worker A runtime verifier registry when package-owned verifier discovery supports package providers.',
+    runtimeIntegration: 'Package-owned runtime adapter can be selected by capability id or provider id and feeds standard runtime verification results.',
   },
 };

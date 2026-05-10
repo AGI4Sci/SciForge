@@ -31,6 +31,7 @@ export type InteractiveViewPackageRendererEntry = {
 
 export type InteractiveArtifactDownloadItem = {
   key?: string;
+  kind?: 'declared' | 'artifact-json';
   name: string;
   path?: string;
   contentType: string;
@@ -103,12 +104,14 @@ export function interactiveResultSlotSubtitle(item: ResultSlotLike, artifact?: U
 }
 
 export function interactiveArtifactDownloadItems(artifact?: UIComponentRuntimeArtifact): InteractiveArtifactDownloadItem[] {
+  if (!artifact || artifactExportPolicy(artifact) === 'blocked') return [];
   const data = artifact?.data;
   const raw = isRecord(data) && Array.isArray(data.downloads) ? data.downloads : [];
-  return raw
+  const declared = raw
     .filter(isRecord)
     .map((item) => ({
       key: asString(item.key),
+      kind: 'declared' as const,
       name: asString(item.name) ?? asString(item.filename) ?? 'artifact-download.txt',
       path: asString(item.path),
       contentType: asString(item.contentType) ?? 'text/plain',
@@ -116,6 +119,29 @@ export function interactiveArtifactDownloadItems(artifact?: UIComponentRuntimeAr
       content: typeof item.content === 'string' ? item.content : '',
     }))
     .filter((item) => item.content.length > 0);
+  return [...declared, interactiveArtifactJsonDownloadItem(artifact)].filter((item): item is InteractiveArtifactDownloadItem => Boolean(item));
+}
+
+export function interactiveArtifactJsonDownloadItem(artifact?: UIComponentRuntimeArtifact): InteractiveArtifactDownloadItem | undefined {
+  if (!artifact || artifactExportPolicy(artifact) === 'blocked') return undefined;
+  const payload = {
+    id: artifact.id,
+    type: artifact.type,
+    producerScenario: artifact.producerScenario,
+    schemaVersion: artifact.schemaVersion,
+    metadata: artifact.metadata,
+    dataRef: artifact.dataRef,
+    path: artifact.path,
+    data: artifact.data,
+  };
+  return {
+    key: `${artifact.id}-artifact-json`,
+    kind: 'artifact-json',
+    name: `${safeFileStem(artifact.id || artifact.type || 'artifact')}.artifact.json`,
+    path: artifact.path ?? artifact.dataRef,
+    contentType: 'application/json',
+    content: JSON.stringify(payload, null, 2),
+  };
 }
 
 export function interactiveArtifactInspectorTablePolicy(
@@ -149,4 +175,13 @@ function asString(value: unknown): string | undefined {
 
 function asNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function artifactExportPolicy(artifact: UIComponentRuntimeArtifact) {
+  const record = artifact as unknown as Record<string, unknown>;
+  return asString(record.exportPolicy);
+}
+
+function safeFileStem(value: string) {
+  return value.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'artifact';
 }

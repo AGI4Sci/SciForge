@@ -24,6 +24,8 @@ import { tryAgentServerSupplementMissingArtifacts } from './generated-task-runne
 import type { AgentServerTaskFilesGeneration } from './generated-task-runner-generation-lifecycle.js';
 import type { GeneratedTaskRunnerDeps } from './generated-task-runner.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
+import { normalizeWorkspaceTaskPayloadBoundary } from './direct-answer-payload.js';
+import { schemaValidationRepairPayload } from './payload-validation.js';
 
 type RunAgentServerGeneratedTask = (
   request: GatewayRequest,
@@ -74,8 +76,10 @@ export async function completeGeneratedTaskRunOutputLifecycle(
 
   try {
     const rawPayload = JSON.parse(await readFile(join(workspace, input.outputRel), 'utf8')) as ToolPayload;
-    const payload = deps.coerceWorkspaceTaskPayload(rawPayload) ?? rawPayload;
-    const errors = deps.schemaErrors(payload);
+    const boundaryPayload = normalizeWorkspaceTaskPayloadBoundary(rawPayload) as ToolPayload;
+    const payload = deps.coerceWorkspaceTaskPayload(boundaryPayload) ?? boundaryPayload;
+    const rawErrors = deps.schemaErrors(rawPayload);
+    const errors = rawErrors.length ? rawErrors : deps.schemaErrors(payload);
     let normalized = errors.length ? undefined : await deps.validateAndNormalizePayload(payload, request, skill, {
       ...refs,
       runtimeFingerprint: run.runtimeFingerprint,
@@ -116,6 +120,16 @@ export async function completeGeneratedTaskRunOutputLifecycle(
       });
       if (repaired) return repaired;
       if (lifecycle.normalizedRepairNeeded && normalized) return normalized;
+      if (errors.length) {
+        return schemaValidationRepairPayload({
+          payload,
+          sourcePayload: rawPayload,
+          errors,
+          request,
+          skill,
+          refs,
+        });
+      }
       return await annotateGeneratedTaskGuardValidationFailurePayload({
         payload: deps.repairNeededPayload(request, skill, lifecycle.repair.failureReason),
         sourcePayload: normalized ?? payload,

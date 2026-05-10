@@ -39,7 +39,15 @@ class ReferenceDigestTest(unittest.TestCase):
         self.assertIn("Markdown digest", by_type["markdown"].digestText)
         self.assertEqual(by_type["json"].metrics["parseOk"], True)
         self.assertIn("Headers:", by_type["csv"].digestText)
-        self.assertEqual(by_type["pdf"].status, "unsupported")
+        self.assertIn(by_type["pdf"].status, {"ok", "failed"})
+        if by_type["pdf"].status == "failed":
+            diagnostic = by_type["pdf"].omitted.get("diagnostic", {})
+            self.assertEqual(diagnostic.get("extractor"), "pdftotext")
+            self.assertEqual(diagnostic.get("stage"), "reference-digest.pdf-text-extraction")
+            self.assertTrue(diagnostic.get("errorType"))
+            self.assertNotIn("unknown error", by_type["pdf"].digestText.lower())
+        else:
+            self.assertEqual(by_type["pdf"].omitted.get("rawContent"), "pdf-text-extracted-bounded")
         self.assertTrue(any(digest.path == "path-ref.md" for digest in digests))
         self.assertTrue(all(digest.refSafe for digest in digests))
         self.assertTrue(all(len(digest.digestText) <= 520 for digest in digests))
