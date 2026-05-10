@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { AlertTriangle, ChevronDown, ChevronUp, Clock, Copy, Download, FileCode, FileText, Lock, Save, Shield, Sparkles, Target, Terminal, X } from 'lucide-react';
 import { scenarios, type ScenarioId } from '../data';
-import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
 import { elementRegistry } from '@sciforge/scenario-core/element-registry';
 import { artifactPreviewActions, objectReferenceKinds, previewDescriptorKinds, runtimeContractSchemas, schemaPreview, validateRuntimeContract } from '../runtimeContracts';
 import { openWorkspaceObject, readPreviewDerivative, readPreviewDescriptor, readWorkspaceFile, writeWorkspaceFile, type WorkspaceFileContent } from '../api/workspaceClient';
@@ -42,8 +41,6 @@ export { selectDefaultResultItems, type HandoffAutoRunRequest } from './results/
 import { MarkdownBlock, hydrateInlineObjectReferenceButtons } from './results/reportContent';
 export { coerceReportPayload } from './results/reportContent';
 import {
-  asString,
-  asStringList,
   artifactSource,
   compactParams,
   executionUnitForArtifact,
@@ -63,7 +60,7 @@ import {
   uploadedArtifactPreview,
 } from './results/previewDescriptor';
 import { UploadedDataUrlPreview, WorkspaceObjectPreview } from './results/WorkspaceObjectPreview';
-import type { SciForgeConfig, SciForgeReference, SciForgeRun, SciForgeSession, EvidenceClaim, NotebookRecord, ObjectAction, ObjectReference, PreviewDescriptor, RuntimeArtifact, RuntimeExecutionUnit, ScenarioInstanceId, UIManifestSlot, ViewPlanSection } from '../domain';
+import type { SciForgeConfig, SciForgeRun, SciForgeSession, EvidenceClaim, NotebookRecord, ObjectAction, ObjectReference, PreviewDescriptor, RuntimeArtifact, RuntimeExecutionUnit, ScenarioInstanceId, UIManifestSlot, ViewPlanSection } from '../domain';
 import {
   backendRepairStates,
   contractValidationFailureKey,
@@ -84,25 +81,25 @@ export {
   shouldOpenRunAuditDetails,
 } from './results-renderer-execution-model';
 import {
+  artifactInspectorModel,
+  artifactReferenceKind,
+  handoffTargetsForArtifact,
+  referenceForResultSlot,
+} from './results-renderer-artifact-normalizer';
+import {
   artifactForObjectReference,
   availableObjectActions,
   findArtifact,
   pathForObjectReference,
 } from '../../../../packages/support/object-references';
 import {
-  artifactReferenceKind as packageArtifactReferenceKind,
   sciForgeReferenceAttribute,
   objectReferenceKindLabel,
   referenceForArtifact,
   referenceForObjectReference,
-  referenceForResultSlotLike,
   referenceForWorkspaceFileLike,
   withRegionLocator,
 } from '../../../../packages/support/object-references';
-
-function isBuiltInScenarioId(value: string): value is ScenarioId {
-  return Object.prototype.hasOwnProperty.call(SCENARIO_SPECS, value);
-}
 
 function ResultPaneWorkspaceFileEditor({
   state,
@@ -477,21 +474,6 @@ function ComponentEmptyState({
       recoverActions={Array.from(new Set(recoverActions))}
     />
   );
-}
-
-function referenceForResultSlot(item: ResolvedViewPlanItem): SciForgeReference {
-  return referenceForResultSlotLike(item);
-}
-
-function artifactReferenceKind(artifact: RuntimeArtifact, componentId = ''): SciForgeReference['kind'] {
-  return packageArtifactReferenceKind(artifact, componentId, rowCountForReference(artifact.data));
-}
-
-function rowCountForReference(data: unknown) {
-  if (Array.isArray(data)) return data.length;
-  if (!isRecord(data)) return undefined;
-  const rows = Array.isArray(data.rows) ? data.rows : Array.isArray(data.records) ? data.records : undefined;
-  return rows?.length;
 }
 
 function ArtifactSourceBar({ artifact, session }: { artifact?: RuntimeArtifact; session?: SciForgeSession }) {
@@ -1252,22 +1234,12 @@ function ArtifactInspectorDrawer({
   onClose: () => void;
   onArtifactHandoff: (targetScenario: ScenarioId, artifact: RuntimeArtifact) => void;
 }) {
-  const unit = executionUnitForArtifact(session, artifact);
-  const handoffTargets = handoffTargetsForArtifact(artifact, scenarioId);
-  const files = [
-    artifact.dataRef ? ['dataRef', artifact.dataRef] : undefined,
-    unit?.codeRef ? ['codeRef', unit.codeRef] : undefined,
-    unit?.stdoutRef ? ['stdoutRef', unit.stdoutRef] : undefined,
-    unit?.stderrRef ? ['stderrRef', unit.stderrRef] : undefined,
-    unit?.outputRef ? ['outputRef', unit.outputRef] : undefined,
-    ...interactiveArtifactDownloadItems(artifact).map((item) => [item.name, item.path || item.key || 'download payload'] as [string, string]),
-  ].filter((item): item is [string, string] => Boolean(item));
-  const lineage = [
-    ['producer scenario', artifact.producerScenario],
-    ['producer skill', asStringList(artifact.metadata?.producerSkillIds).join(', ') || asString(artifact.metadata?.producerSkillId) || 'unknown'],
-    ['execution unit', unit ? `${unit.id} · ${unit.tool} · ${unit.status}` : 'missing'],
-    ['created', asString(artifact.metadata?.createdAt) ?? 'unknown'],
-  ];
+  const { files, handoffTargets, lineage } = artifactInspectorModel({
+    artifact,
+    session,
+    currentScenarioId: scenarioId,
+    downloads: interactiveArtifactDownloadItems(artifact),
+  });
   return (
     <div className="artifact-inspector-layer">
       <button className="artifact-inspector-backdrop" type="button" aria-label="关闭 Artifact Inspector" onClick={onClose} />
@@ -1328,20 +1300,6 @@ function ArtifactInspectorDrawer({
       </aside>
     </div>
   );
-}
-
-function handoffTargetsForArtifact(artifact: RuntimeArtifact, currentScenarioId: ScenarioId): ScenarioId[] {
-  const declaredTargets = asStringList(isRecord(artifact.metadata) ? artifact.metadata.handoffTargets : undefined)
-    .filter(isBuiltInScenarioId);
-  const schemaTargets = isBuiltInScenarioId(artifact.producerScenario)
-    ? SCENARIO_SPECS[artifact.producerScenario].outputArtifacts
-      .find((schema) => schema.type === artifact.type)
-      ?.consumers ?? []
-    : scenarios.flatMap((scenario) => SCENARIO_SPECS[scenario.id].outputArtifacts
-      .filter((schema) => schema.type === artifact.type)
-      .flatMap((schema) => schema.consumers));
-  return Array.from(new Set([...declaredTargets, ...schemaTargets]))
-    .filter((target) => target !== currentScenarioId);
 }
 
 function ManifestDiagnostics({ items }: { items: ResolvedViewPlanItem[] }) {

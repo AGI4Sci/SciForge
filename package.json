@@ -99,6 +99,7 @@
     "smoke:validation-repair-audit-chain": "tsx tests/smoke/smoke-validation-repair-audit-chain.ts",
     "smoke:unified-capability-graph": "tsx tests/smoke/smoke-unified-capability-graph.ts",
     "smoke:capability-broker-harness-input": "tsx tests/smoke/smoke-capability-broker-harness-input.ts",
+    "smoke:capability-budget-debits": "tsx tests/smoke/smoke-capability-budget-debits.ts",
     "smoke:literature-retrieval-capability": "tsx tests/smoke/smoke-literature-retrieval-capability.ts",
     "smoke:no-scattered-harness-policy": "tsx tools/check-no-scattered-harness-policy.ts",
     "smoke:self-evolving-skill": "tsx tests/smoke/smoke-self-evolving-skill-loop.ts",

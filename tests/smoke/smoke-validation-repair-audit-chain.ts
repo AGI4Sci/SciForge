@@ -14,6 +14,8 @@ import {
   type ValidationDecision,
   type ValidationSubjectKind,
 } from '@sciforge-ui/runtime-contract/validation-repair-audit';
+import type { RuntimeVerificationResult } from '@sciforge-ui/runtime-contract/verification-result';
+import { createValidationRepairAuditChain } from '../../src/runtime/gateway/validation-repair-audit-bridge';
 
 const createdAt = '2026-05-10T00:00:00.000Z';
 const repairBudget: RepairBudgetSnapshot = {
@@ -51,6 +53,19 @@ const observeResponse: ObserveResponse = {
   diagnostics: ['provider local.vision-sense unavailable'],
 };
 
+const verificationGateResults: RuntimeVerificationResult[] = [{
+  id: 'gate:artifact-consistency',
+  verdict: 'fail',
+  confidence: 0.88,
+  critique: 'Verification gate rejected the completed payload because the cited artifact was not produced.',
+  evidenceRefs: ['verification:gate-1', 'artifact:missing-chart', 'run:verification-gate-1/output.json'],
+  repairHints: ['rerun with explicit artifact production evidence', 'preserve failed verification gate result in audit'],
+  diagnostics: {
+    policyId: 'runtime-verification:strict',
+    missingArtifactRefs: ['artifact:missing-chart'],
+  },
+}];
+
 const chains = [
   buildChain({
     kind: 'direct-payload',
@@ -83,6 +98,24 @@ const chains = [
       capabilityId: 'local.vision-sense',
     }),
   }),
+  createValidationRepairAuditChain({
+    chainId: 'verification-gate-1',
+    subject: {
+      kind: 'verification-gate',
+      id: 'verification-gate-1',
+      capabilityId: 'sciforge.runtime-verification-gate',
+      completedPayloadRef: 'run:verification-gate-1/output.json',
+      artifactRefs: ['artifact:missing-chart'],
+      currentRefs: ['current:user-request'],
+    },
+    runtimeVerificationResults: verificationGateResults,
+    repairBudget,
+    runtimeVerificationPolicyId: 'runtime-verification:strict',
+    relatedRefs: ['verification:policy:runtime-verification:strict'],
+    sinkRefs: ['appendTaskAttempt:verification-gate-1'],
+    telemetrySpanRefs: ['span:verification-gate:verification-gate-1', 'span:repair-decision:verification-gate-1'],
+    createdAt,
+  }),
 ];
 
 for (const chain of chains) {
@@ -106,12 +139,19 @@ assert.deepEqual(
     'direct-payload:payload-schema:repair-rerun:repair-requested',
     'generated-task-result:artifact-schema:repair-rerun:repair-requested',
     'observe-result:observe-trace:repair-rerun:repair-requested',
+    'verification-gate:runtime-verification:repair-rerun:repair-requested',
   ],
 );
 assert.ok(chains[1].audit.relatedRefs.includes('.sciforge/tasks/generated-task.py'));
 assert.ok(chains[2].audit.relatedRefs.includes('observe:call-1'));
+assert.equal(chains[3].validation.runtimeVerificationGate?.policyId, 'runtime-verification:strict');
+assert.ok(chains[3].audit.relatedRefs.includes('verification:gate-1'));
+assert.ok(chains[3].audit.relatedRefs.includes('verification:policy:runtime-verification:strict'));
+assert.ok(chains[3].audit.recoverActions.includes('preserve failed verification gate result in audit'));
+assert.deepEqual(chains[3].audit.sinkRefs, ['appendTaskAttempt:verification-gate-1']);
+assert.deepEqual(chains[3].audit.telemetrySpanRefs, ['span:verification-gate:verification-gate-1', 'span:repair-decision:verification-gate-1']);
 
-console.log(`[ok] validation/repair/audit chain shares shape across direct payload, generated task, and observe failures: ${chains.map((chain) => chainShape(chain)).join(', ')}`);
+console.log(`[ok] validation/repair/audit chain shares shape across direct payload, generated task, observe, and verification gate failures: ${chains.map((chain) => chainShape(chain)).join(', ')}`);
 
 function buildChain(input: {
   kind: ValidationSubjectKind;

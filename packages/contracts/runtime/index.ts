@@ -194,6 +194,19 @@ export type {
   ContractValidationIssue,
 } from './validation-failure';
 export {
+  CAPABILITY_BUDGET_DEBIT_CONTRACT_ID,
+  CAPABILITY_BUDGET_DEBIT_DIMENSIONS,
+  CAPABILITY_BUDGET_DEBIT_SCHEMA_VERSION,
+  createCapabilityBudgetDebitRecord,
+} from './capability-budget';
+export type {
+  CapabilityBudgetDebitDimension,
+  CapabilityBudgetDebitLine,
+  CapabilityBudgetDebitSinkRefs,
+  CapabilityInvocationBudgetDebitRecord,
+  CreateCapabilityBudgetDebitRecordInput,
+} from './capability-budget';
+export {
   AUDIT_RECORD_OUTCOMES,
   REPAIR_DECISION_ACTIONS,
   VALIDATION_DECISION_STATUSES,
