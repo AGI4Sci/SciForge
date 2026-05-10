@@ -290,13 +290,27 @@ function looksLikeCompactStreamEvent(value: Record<string, unknown>) {
 
 function progressModelFromCompactEvent(value: unknown): ProcessProgressModel | undefined {
   if (!isRecord(value)) return undefined;
-  const interactionProgress = runtimeInteractionProgressEventFromCompactRecord(value);
-  if (interactionProgress) return progressModelFromInteractionProgress(interactionProgress);
   const type = asString(value.type) ?? PROCESS_PROGRESS_EVENT_TYPE;
   const label = asString(value.label) ?? type;
-  const detail = asString(value.detail) ?? asString(value.message) ?? asString(value.text) ?? '';
+  const compactDetail = asString(value.detail) ?? asString(value.summary) ?? '';
+  const detail = isInteractionProgressCompactType(type)
+    ? compactDetail
+    : compactDetail || asString(value.message) || asString(value.text) || '';
   const createdAt = asString(value.createdAt) ?? asString(value.created_at) ?? nowIso();
+  if (isRecord(value.progress)) {
+    return progressModelFromEvent({
+      id: asString(value.id) ?? makeId('evt'),
+      type,
+      label,
+      detail,
+      createdAt,
+      raw: { type, progress: value.progress },
+    });
+  }
+  const interactionProgress = runtimeInteractionProgressEventFromCompactRecord(value);
+  if (interactionProgress) return progressModelFromInteractionProgress(interactionProgress);
   const raw = compactEventRaw(value, type, label, detail);
+  if (isInteractionProgressCompactType(type) && !isRecord(raw.progress)) return undefined;
   const model = progressModelFromEvent({
     id: asString(value.id) ?? makeId('evt'),
     type,
@@ -343,17 +357,46 @@ function compactEventRaw(value: Record<string, unknown>, type: string, label: st
 
 function progressModelFromCompactText(value: unknown): ProcessProgressModel | undefined {
   if (typeof value !== 'string') return undefined;
-  const wholeStructured = progressModelFromStructuredDetail(value);
-  if (wholeStructured) return wholeStructured;
   const lines = value
     .split(/\r?\n/)
     .map((line) => line.trim().replace(/^[-*]\s*/, ''))
     .filter(Boolean);
+  const latestStructuredBlock = latestStructuredDetailBlock(lines);
+  if (latestStructuredBlock) return progressModelFromStructuredDetail(latestStructuredBlock);
+  const wholeStructured = progressModelFromStructuredDetail(value);
+  if (wholeStructured) return wholeStructured;
   for (const line of [...lines].reverse()) {
     const model = progressModelFromTranscriptLine(line);
     if (model) return model;
   }
   return undefined;
+}
+
+function latestStructuredDetailBlock(lines: string[]) {
+  const blocks: string[][] = [];
+  let current: string[] = [];
+  for (const line of lines) {
+    const normalized = stripStructuredDetailPrefix(line);
+    if (/\bPhase:\s*/.test(normalized)) {
+      if (current.length) blocks.push(current);
+      current = [normalized];
+      continue;
+    }
+    if (current.length && /^(Status|Reason|Cancellation|Interaction):\s*/.test(normalized)) {
+      current.push(normalized);
+      continue;
+    }
+    if (current.length) {
+      blocks.push(current);
+      current = [];
+    }
+  }
+  if (current.length) blocks.push(current);
+  return blocks.at(-1)?.join('\n');
+}
+
+function stripStructuredDetailPrefix(line: string) {
+  return line.replace(/^[^:：]+[:：]\s*(?=Phase:\s*)/, '').trim();
 }
 
 function progressModelFromTranscriptLine(line: string): ProcessProgressModel | undefined {
@@ -575,6 +618,15 @@ function nextStepForInteraction(type: string, interactionKind: string | undefine
   if (interactionKind === 'human-approval') return '等待确认后继续执行需要人工批准的步骤。';
   if (interactionKind === 'clarification') return '等待补充澄清后继续执行。';
   return undefined;
+}
+
+function isInteractionProgressCompactType(type: string) {
+  return type === PROCESS_PROGRESS_EVENT_TYPE
+    || type === 'interaction-request'
+    || type === 'clarification-needed'
+    || type === 'human-approval-required'
+    || type === GUIDANCE_QUEUED_EVENT_TYPE
+    || type === 'run-cancelled';
 }
 
 function titleForPhase(phase: ProcessProgressPhase, fallback: string) {

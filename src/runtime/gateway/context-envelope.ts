@@ -16,7 +16,12 @@ import {
 import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from './gateway-request.js';
 import { applyContextEnvelopeRecordGovernance, contextEnvelopeGovernanceAudit, contextEnvelopeGovernanceForRequest } from './context-envelope-governance.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
-import { capabilityBrokerHarnessInputProjectionForRequest, mergeCapabilityBrokerToolBudgets } from './capability-broker-harness-input.js';
+import {
+  capabilityBrokerHarnessInputProjectionForRequest,
+  mergeCapabilityBrokerAvailableProviders,
+  mergeCapabilityBrokerToolBudgets,
+  mergeCapabilityBrokerVerificationPolicies,
+} from './capability-broker-harness-input.js';
 export { workspaceTreeSummary } from './context-envelope-workspace-tree.js';
 
 export type AgentServerContextMode = 'full' | 'delta';
@@ -217,8 +222,11 @@ function buildCapabilityBrokerBriefForAgentServerFromRegistry(
 ) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const capabilityPolicy = brokerCapabilityPolicyForRequest(request);
-  const verificationPolicy = brokerVerificationPolicyForRequest(request, capabilityPolicy);
   const harnessInput = capabilityBrokerHarnessInputProjectionForRequest(request);
+  const verificationPolicy = mergeCapabilityBrokerVerificationPolicies(
+    brokerVerificationPolicyForRequest(request, capabilityPolicy),
+    harnessInput.verificationPolicy,
+  );
   const skillHints = uniqueSkillHints([
     ...brokerSkillHintsForRequest(request, capabilityPolicy),
     ...harnessInput.skillHints,
@@ -273,7 +281,10 @@ function buildCapabilityBrokerBriefForAgentServerFromRegistry(
       },
       riskTolerance: request.riskLevel ?? verificationPolicy?.riskLevel ?? 'medium',
     },
-    availableProviders: brokerAvailableProvidersForRequest(uiState, capabilityPolicy),
+    availableProviders: mergeCapabilityBrokerAvailableProviders(
+      brokerAvailableProvidersForRequest(uiState, capabilityPolicy),
+      harnessInput.availableProviders,
+    ),
   }, registry);
   return compactBrokerOutputForAgentServer(
     brokered,

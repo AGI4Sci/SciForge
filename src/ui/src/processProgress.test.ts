@@ -300,6 +300,14 @@ test('restores compact interaction progress streamProcess events without prompt 
               'Reason: user interrupt',
               'Cancellation: user-aborted',
             ]),
+            {
+              type: HUMAN_APPROVAL_REQUIRED_EVENT_TYPE,
+              label: '需要确认',
+              prompt: 'Phase: verification\nStatus: blocked\nInteraction: human-approval required',
+              scenario: 'Phase: interaction\nStatus: blocked\nInteraction: clarification required',
+              message: 'Phase: verification\nStatus: blocked\nInteraction: human-approval required',
+              text: 'Phase: verification\nStatus: blocked\nInteraction: human-approval required',
+            },
           ],
         },
       },
@@ -317,6 +325,27 @@ test('restores compact interaction progress streamProcess events without prompt 
   assert.doesNotMatch(visible, /NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE/);
 });
 
+test('does not restore compact interaction progress from prompt scenario or message fields', () => {
+  const models = progressModelsFromCompactTrace({
+    runs: [{
+      raw: {
+        streamProcess: {
+          events: [{
+            type: HUMAN_APPROVAL_REQUIRED_EVENT_TYPE,
+            label: '需要确认',
+            prompt: 'Phase: verification\nStatus: blocked\nInteraction: human-approval required',
+            scenario: 'Phase: interaction\nStatus: blocked\nInteraction: clarification required',
+            message: 'Phase: verification\nStatus: blocked\nInteraction: human-approval required',
+            text: 'Phase: verification\nStatus: blocked\nInteraction: human-approval required',
+          }],
+        },
+      },
+    }],
+  });
+
+  assert.deepEqual(models, []);
+});
+
 test('recovers latest progress model from compact stream process events without the React event array', () => {
   const model = latestProgressModelFromCompactTrace({
     streamProcess: {
@@ -331,8 +360,25 @@ test('recovers latest progress model from compact stream process events without 
         {
           type: PROCESS_PROGRESS_EVENT_TYPE,
           label: '等待',
-          detail: '正在等待后端返回新事件 · 最近 读取: 正在读取 /workspace/input/papers.csv · 下一步 收到新事件后继续执行；也可以安全中止当前 stream 或继续补充指令排队。',
+          detail: 'Phase: wait\nStatus: running\nReason: backend-waiting',
           createdAt: '2026-05-08T00:01:05.000Z',
+          progress: {
+            phase: PROCESS_PROGRESS_PHASE.WAIT,
+            title: '正在等待后端返回新事件',
+            detail: 'Phase: wait\nStatus: running\nReason: backend-waiting',
+            waitingFor: '后端返回新事件',
+            lastEvent: {
+              label: '读取',
+              detail: '正在读取 /workspace/input/papers.csv',
+            },
+            nextStep: '收到新事件后继续执行；也可以安全中止当前 stream 或继续补充指令排队。',
+            reason: PROCESS_PROGRESS_REASON.BACKEND_WAITING,
+            canAbort: true,
+            canContinue: true,
+            status: PROCESS_PROGRESS_STATUS.RUNNING,
+          },
+          prompt: 'PROMPT_TEXT_SHOULD_NOT_DECIDE search write failed approval',
+          scenario: 'SCENARIO_TEXT_SHOULD_NOT_DECIDE retrieval repair blocked',
         },
       ],
     },
@@ -355,16 +401,25 @@ test('recovers latest progress model from compact session history summary after 
           eventCount: 40,
           summary: [
             '工作过程摘要:',
-            '- 读取: 正在读取 · 读 /workspace/input/papers.csv',
-            '- 等待: 正在等待后端返回新事件 · 等 后端返回新事件 · 最近 读取: 正在读取 /workspace/input/papers.csv · 下一步 收到新事件后继续执行；也可以安全中止当前 stream 或继续补充指令排队。',
+            '- 需要澄清: Phase: interaction',
+            'Status: blocked',
+            'Reason: missing-study-scope',
+            'Interaction: clarification required',
+            '- 运行取消: Phase: run',
+            'Status: cancelled',
+            'Reason: user interrupt',
+            'Cancellation: user-aborted',
           ].join('\n'),
         },
+        prompt: 'PROMPT_TEXT_SHOULD_NOT_DECIDE search write failed approval',
+        scenario: 'SCENARIO_TEXT_SHOULD_NOT_DECIDE retrieval repair blocked',
       },
     }],
   });
 
-  assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.WAIT);
-  assert.equal(model?.waitingFor, '后端返回新事件');
-  assert.equal(model?.lastEvent?.detail, '正在读取 /workspace/input/papers.csv');
-  assert.match(formatProgressHeadline(model) ?? '', /最近 读取/);
+  assert.equal(model?.title, '正在执行');
+  assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.EXECUTE);
+  assert.equal(model?.status, PROCESS_PROGRESS_STATUS.CANCELLED);
+  assert.doesNotMatch(formatProgressHeadline(model) ?? '', /PROMPT_TEXT_SHOULD_NOT_DECIDE/);
+  assert.doesNotMatch(formatProgressHeadline(model) ?? '', /SCENARIO_TEXT_SHOULD_NOT_DECIDE/);
 });

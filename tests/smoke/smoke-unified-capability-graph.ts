@@ -69,75 +69,90 @@ const packageAction = registry.getManifest('action.sciforge.computer-use');
 const packageVerifier = registry.getManifest('verifier.fixture.human-approval');
 const packageView = registry.getManifest('view.report-viewer');
 const packagePaperListView = registry.getManifest('view.paper-card-list');
+const packageSequenceView = registry.getManifest('view.sequence-viewer');
 assert.ok(packageAction, 'packages/actions computer-use provider manifest should project into the core capability registry');
 assert.ok(packageVerifier, 'packages/verifiers human approval provider manifest should project into the core capability registry');
 assert.ok(packageView, 'packages/presentation report-viewer manifest should project into the core capability registry');
 assert.ok(packagePaperListView, 'packages/presentation paper-card-list manifest should project into the core capability registry');
+assert.ok(packageSequenceView, 'packages/presentation sequence-viewer manifest should project into the core capability registry');
 assert.equal(packageAction.kind, 'action');
 assert.equal(packageVerifier.kind, 'verifier');
 assert.equal(packageView.kind, 'view');
 assert.equal(packagePaperListView.kind, 'view');
+assert.equal(packageSequenceView.kind, 'view');
 assert.equal(registry.getManifestByProviderId('sciforge.computer-use')?.id, 'action.sciforge.computer-use');
 assert.equal(registry.getManifestByProviderId('fixture.human-approval')?.id, 'verifier.fixture.human-approval');
 assert.equal(registry.getManifestByProviderId('sciforge.presentation.report-viewer')?.id, 'view.report-viewer');
 assert.equal(registry.getManifestByProviderId('sciforge.presentation.paper-card-list')?.id, 'view.paper-card-list');
+assert.equal(registry.getManifestByProviderId('sciforge.presentation.sequence-viewer')?.id, 'view.sequence-viewer');
 assert.equal(packageView.ownerPackage, '@sciforge-ui/report-viewer');
 assert.equal(packagePaperListView.ownerPackage, '@sciforge-ui/paper-card-list');
+assert.equal(packageSequenceView.ownerPackage, '@sciforge-ui/sequence-viewer');
 assert.equal(packageView.examples[0]?.prompt, undefined, 'presentation package view examples must stay prompt-free');
 assert.equal(packagePaperListView.examples[0]?.prompt, undefined, 'presentation package view examples must stay prompt-free');
+assert.equal(packageSequenceView.examples[0]?.prompt, undefined, 'presentation package view examples must stay prompt-free');
 
 const packageGraph = registry.projectHarnessCandidates({
-  preferredCapabilityIds: ['action.sciforge.computer-use', 'verifier.fixture.human-approval', 'view.report-viewer', 'view.paper-card-list'],
-  availableProviders: ['sciforge.computer-use', 'fixture.human-approval', 'sciforge.presentation.report-viewer', 'sciforge.presentation.paper-card-list'],
+  preferredCapabilityIds: ['action.sciforge.computer-use', 'verifier.fixture.human-approval', 'view.report-viewer', 'view.paper-card-list', 'view.sequence-viewer'],
+  availableProviders: ['sciforge.computer-use', 'fixture.human-approval', 'sciforge.presentation.report-viewer', 'sciforge.presentation.paper-card-list', 'sciforge.presentation.sequence-viewer'],
 });
 const packageActionCandidate = packageGraph.candidates.find((candidate) => candidate.id === 'action.sciforge.computer-use');
 const packageVerifierCandidate = packageGraph.candidates.find((candidate) => candidate.id === 'verifier.fixture.human-approval');
 const packageViewCandidate = packageGraph.candidates.find((candidate) => candidate.id === 'view.report-viewer');
 const packagePaperListViewCandidate = packageGraph.candidates.find((candidate) => candidate.id === 'view.paper-card-list');
+const packageSequenceViewCandidate = packageGraph.candidates.find((candidate) => candidate.id === 'view.sequence-viewer');
 assert.equal(packageActionCandidate?.kind, 'action');
 assert.equal(packageVerifierCandidate?.kind, 'verifier');
 assert.equal(packageViewCandidate?.kind, 'view');
 assert.equal(packagePaperListViewCandidate?.kind, 'view');
+assert.equal(packageSequenceViewCandidate?.kind, 'view');
 assert.ok(packageActionCandidate?.providerAvailability);
 assert.ok(packageVerifierCandidate?.providerAvailability);
 assert.ok(packageViewCandidate?.providerAvailability);
 assert.ok(packagePaperListViewCandidate?.providerAvailability);
+assert.ok(packageSequenceViewCandidate?.providerAvailability);
 assert.equal(packageActionCandidate?.providerAvailability?.[0]?.providerId, 'sciforge.computer-use');
 assert.equal(packageVerifierCandidate?.providerAvailability?.[0]?.providerId, 'fixture.human-approval');
 assert.equal(packageViewCandidate?.providerAvailability?.[0]?.providerId, 'sciforge.presentation.report-viewer');
 assert.equal(packagePaperListViewCandidate?.providerAvailability?.[0]?.providerId, 'sciforge.presentation.paper-card-list');
+assert.equal(packageSequenceViewCandidate?.providerAvailability?.[0]?.providerId, 'sciforge.presentation.sequence-viewer');
 assert.equal(packageActionCandidate?.budget?.maxActionSteps, 12);
 assert.equal(packageVerifierCandidate?.budget?.exhaustedPolicy, 'needs-human');
 assert.equal(packageViewCandidate?.budget?.maxResultItems, 1);
 assert.equal(packagePaperListViewCandidate?.budget?.maxResultItems, 1);
+assert.equal(packageSequenceViewCandidate?.budget?.maxResultItems, 1);
 
 const brokerOutput = brokerCapabilities({
-  prompt: 'Use desktop GUI computer use, render a research-report in report-viewer, render a paper-list in paper-card-list, then request human approval verification for the action trace.',
+  prompt: 'Use desktop GUI computer use, render a research-report in report-viewer, render a paper-list in paper-card-list, render a FASTA sequence in sequence-viewer, then request human approval verification for the action trace.',
   artifactIndex: [
     { artifactType: 'research-report', ref: 'artifact:research-report:demo' },
     { artifactType: 'paper-list', ref: 'artifact:paper-list:demo' },
+    { artifactType: 'sequence', ref: 'artifact:sequence:demo' },
   ],
   scenarioPolicy: {
-    preferredCapabilityIds: ['action.sciforge.computer-use', 'verifier.fixture.human-approval', 'view.report-viewer', 'view.paper-card-list'],
+    preferredCapabilityIds: ['action.sciforge.computer-use', 'verifier.fixture.human-approval', 'view.report-viewer', 'view.paper-card-list', 'view.sequence-viewer'],
   },
   runtimePolicy: {
     riskTolerance: 'high',
-    topK: 8,
+    topK: 10,
   },
-  availableProviders: ['sciforge.computer-use', 'fixture.human-approval', 'sciforge.presentation.report-viewer', 'sciforge.presentation.paper-card-list'],
+  availableProviders: ['sciforge.computer-use', 'fixture.human-approval', 'sciforge.presentation.report-viewer', 'sciforge.presentation.paper-card-list', 'sciforge.presentation.sequence-viewer'],
 }, new CapabilityManifestRegistry(registry.manifests));
 const brokerActionAudit = brokerOutput.audit.find((entry) => entry.id === 'action.sciforge.computer-use');
 const brokerVerifierAudit = brokerOutput.audit.find((entry) => entry.id === 'verifier.fixture.human-approval');
 const brokerViewAudit = brokerOutput.audit.find((entry) => entry.id === 'view.report-viewer');
 const brokerPaperListViewAudit = brokerOutput.audit.find((entry) => entry.id === 'view.paper-card-list');
+const brokerSequenceViewAudit = brokerOutput.audit.find((entry) => entry.id === 'view.sequence-viewer');
 assert.ok(brokerActionAudit, 'broker audit should see projected package action capability');
 assert.ok(brokerVerifierAudit, 'broker audit should see projected package verifier capability');
 assert.ok(brokerViewAudit, 'broker audit should see projected package presentation view capability');
 assert.ok(brokerPaperListViewAudit, 'broker audit should see projected package paper-list presentation view capability');
+assert.ok(brokerSequenceViewAudit, 'broker audit should see projected package sequence presentation view capability');
 assert.ok(brokerOutput.briefs.some((brief) => brief.id === 'action.sciforge.computer-use'));
 assert.ok(brokerOutput.briefs.some((brief) => brief.id === 'verifier.fixture.human-approval'));
 assert.ok(brokerOutput.briefs.some((brief) => brief.id === 'view.report-viewer'));
 assert.ok(brokerOutput.briefs.some((brief) => brief.id === 'view.paper-card-list'));
+assert.ok(brokerOutput.briefs.some((brief) => brief.id === 'view.sequence-viewer'));
 
 const lazyAuditText = JSON.stringify({
   registryAudit: registry.compactAudit,

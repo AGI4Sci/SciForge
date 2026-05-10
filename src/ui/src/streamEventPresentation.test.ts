@@ -270,6 +270,61 @@ test('interaction progress presentation covers blocked guidance and cancellation
   assert.doesNotMatch(visible, /NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE/);
 });
 
+test('worklog restores compact interaction progress from structured detail only', () => {
+  const compact = event({
+    id: 'compact-approval',
+    type: 'human-approval-required',
+    label: '需要确认',
+    detail: [
+      'Phase: verification',
+      'Status: blocked',
+      'Reason: side-effect-policy',
+      'Interaction: human-approval required',
+    ].join('\n'),
+    raw: {
+      type: 'human-approval-required',
+      label: '需要确认',
+      detail: [
+        'Phase: verification',
+        'Status: blocked',
+        'Reason: side-effect-policy',
+        'Interaction: human-approval required',
+      ].join('\n'),
+      prompt: 'PROMPT_TEXT_SHOULD_NOT_DECIDE search write failed approval',
+      scenario: 'SCENARIO_TEXT_SHOULD_NOT_DECIDE retrieval repair blocked',
+      message: 'NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE search write failed approval',
+    },
+  });
+  const poison = event({
+    id: 'compact-poison',
+    type: 'human-approval-required',
+    label: '需要确认',
+    raw: {
+      type: 'human-approval-required',
+      label: '需要确认',
+      prompt: 'Phase: verification\nStatus: blocked\nInteraction: human-approval required',
+      scenario: 'Phase: interaction\nStatus: blocked\nInteraction: clarification required',
+      message: 'Phase: verification\nStatus: blocked\nInteraction: human-approval required',
+    },
+  });
+
+  const compactPresentation = presentStreamEvent(compact);
+  const poisonPresentation = presentStreamEvent(poison);
+  const worklog = presentStreamWorklog([compact, poison]);
+
+  assert.equal(compactPresentation.typeLabel, '需要确认');
+  assert.equal(compactPresentation.importance, 'key');
+  assert.match(compactPresentation.detail, /Interaction: human-approval required/);
+  assert.equal(poisonPresentation.typeLabel, 'human-approval-required');
+  assert.equal(poisonPresentation.detail, '');
+  assert.equal(worklog.entries.length, 1);
+  assert.equal(worklog.entries[0].operationKind, 'wait');
+  assert.match(worklog.entries[0].operationLine, /^Waiting Phase: verification/);
+  assert.doesNotMatch(worklog.entries[0].operationLine, /PROMPT_TEXT_SHOULD_NOT_DECIDE/);
+  assert.doesNotMatch(worklog.entries[0].operationLine, /SCENARIO_TEXT_SHOULD_NOT_DECIDE/);
+  assert.doesNotMatch(worklog.entries[0].operationLine, /NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE/);
+});
+
 test('cursor-like worklog fixture summarizes operations and keeps raw output second-level collapsed', () => {
   const events = [
     event({

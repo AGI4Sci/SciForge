@@ -12,11 +12,14 @@ import {
 import { executeRepairActionPlan } from '../../src/runtime/gateway/repair-executor';
 import {
   buildValidationRepairTelemetrySummary,
+  mergeValidationRepairTelemetryAttemptMetadata,
   projectValidationRepairTelemetrySpans,
   readValidationRepairTelemetrySpanRecords,
+  validationRepairTelemetryAttemptRefFromWriteResult,
   validationRepairTelemetrySpansFromPayload,
   writeValidationRepairTelemetrySpans,
 } from '../../src/runtime/gateway/validation-repair-telemetry-sink';
+import { attachValidationRepairTelemetryWriteResult } from '../../src/runtime/gateway/validation-repair-telemetry-runtime';
 import { createValidationRepairAuditChain } from '../../src/runtime/gateway/validation-repair-audit-bridge';
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway';
 import {
@@ -229,6 +232,29 @@ try {
   assert.ok(summary.auditRefs.includes(chain.audit.auditId));
   assert.ok(summary.repairRefs.includes(chain.repair.decisionId));
   assert.equal(summary.recentSpans.length, expectedKinds.length);
+
+  const telemetryAttemptRef = validationRepairTelemetryAttemptRefFromWriteResult(writeResult);
+  assert.ok(telemetryAttemptRef);
+  const mergedMetadata = mergeValidationRepairTelemetryAttemptMetadata(
+    { telemetryRefs: [telemetryAttemptRef] },
+    { telemetryRefs: [telemetryAttemptRef] },
+  );
+  assert.equal(mergedMetadata?.telemetryRefs.length, 1);
+
+  const attached = await attachValidationRepairTelemetryWriteResult({
+    refs: { validationRepairTelemetry: [telemetryAttemptRef] },
+  }, writeResult, {
+    workspacePath,
+    now: () => new Date('2026-05-10T00:00:03.000Z'),
+    readSummary: true,
+  });
+  const attachedReadback = attached as {
+    refs: { validationRepairTelemetry: unknown[] };
+    validationRepairTelemetrySummary?: { generatedAt?: string; totalSpans?: number };
+  };
+  assert.equal(attachedReadback.refs.validationRepairTelemetry.length, 1);
+  assert.equal(attachedReadback.validationRepairTelemetrySummary?.generatedAt, '2026-05-10T00:00:03.000Z');
+  assert.equal(attachedReadback.validationRepairTelemetrySummary?.totalSpans, expectedKinds.length);
 } finally {
   await rm(workspacePath, { recursive: true, force: true });
 }

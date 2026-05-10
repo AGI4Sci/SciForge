@@ -230,6 +230,61 @@ test('context envelope governance emits ignored legacy audit without legacy-driv
   assert.deepEqual(records(audit.ignoredLegacySources).map((entry) => entry.source), ['request.uiState']);
 });
 
+test('context envelope governance ignores legacy repair context policy fields for context decisions', () => {
+  const envelope = buildContextEnvelope({
+    skillDomain: 'knowledge',
+    prompt: 'Legacy repair policy refs should not govern current refs.',
+    artifacts: [],
+    uiState: {
+      agentHarnessContextEnvelopeEnabled: true,
+      currentReferenceDigests: [
+        { ref: 'ref:keep', digestText: 'Keep digest' },
+        { ref: 'ref:legacy-repair-blocked', digestText: 'Legacy repair blocked digest' },
+      ],
+      repairContextPolicy: {
+        allowedFailureEvidenceRefs: ['ref:keep'],
+        blockedFailureEvidenceRefs: ['ref:legacy-repair-blocked'],
+        includeStdoutSummary: false,
+        includeStderrSummary: false,
+      },
+      capabilityPolicy: {
+        repairContextPolicy: {
+          allowedFailureEvidenceRefs: ['ref:keep'],
+          blockedFailureEvidenceRefs: ['ref:legacy-repair-blocked'],
+          includeValidationFindings: false,
+          includePriorAttemptRefs: false,
+        },
+      },
+    },
+  } as GatewayRequest, { workspace: '/tmp/sciforge-test' });
+
+  assert.deepEqual(
+    records(envelope.sessionFacts.currentReferenceDigests).map((entry) => entry.ref),
+    ['ref:keep', 'ref:legacy-repair-blocked'],
+  );
+  const audit = record(envelope.contextGovernanceAudit);
+  assert.equal(audit.source, 'contract-only:no-harness-context');
+  assert.deepEqual(records(audit.decisions), []);
+  const ignoredLegacySources = records(audit.ignoredLegacySources);
+  assert.deepEqual(ignoredLegacySources.map((entry) => entry.source), [
+    'request.uiState',
+    'request.uiState.capabilityPolicy',
+  ]);
+  assert.deepEqual(ignoredLegacySources.map((entry) => entry.keys), [
+    ['repairContextPolicy'],
+    ['repairContextPolicy'],
+  ]);
+  assert.deepEqual(ignoredLegacySources.map((entry) => entry.repairEvidenceRefCount), [2, 2]);
+  assert.deepEqual(ignoredLegacySources.map((entry) => entry.refCount), [undefined, undefined]);
+  assert.deepEqual(
+    ignoredLegacySources.map((entry) => entry.repairContextPolicyFields),
+    [
+      ['allowedFailureEvidenceRefs', 'blockedFailureEvidenceRefs', 'includeStdoutSummary', 'includeStderrSummary'],
+      ['allowedFailureEvidenceRefs', 'blockedFailureEvidenceRefs', 'includeValidationFindings', 'includePriorAttemptRefs'],
+    ],
+  );
+});
+
 test('repair context extracts WorkEvidence summary from failed output ref', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sciforge-repair-context-'));
   try {

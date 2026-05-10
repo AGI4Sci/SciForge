@@ -200,9 +200,9 @@ export function runtimeInteractionProgressEventFromCompactRecord(value: unknown)
   if (!record) return undefined;
   const type = asString(record.type);
   if (!isRuntimeInteractionProgressEventType(type)) return undefined;
-  const detail = asString(record.detail) ?? asString(record.summary) ?? asString(record.message) ?? asString(record.text);
+  const detail = asString(record.detail) ?? asString(record.summary);
   const structured = parseRuntimeInteractionProgressDetail(detail);
-  if (type === PROCESS_PROGRESS_EVENT_TYPE && !structured) return undefined;
+  if (!structured) return undefined;
   const cancellationReason = normalizeRunTerminationReasonValue(asString(record.cancellationReason) ?? structured?.cancellation);
   const interaction = normalizeRuntimeInteractionRequest(record.interaction)
     ?? normalizeRuntimeInteractionRequest(structured?.interaction ? { kind: structured.interaction.kind, required: structured.interaction.required } : undefined);

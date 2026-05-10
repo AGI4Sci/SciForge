@@ -20,6 +20,7 @@ import {
   runtimeInteractionProgressPresentation,
   summarizeRuntimeGeneratedTaskFiles,
 } from '@sciforge-ui/runtime-contract';
+import { runtimeInteractionProgressEventFromCompactRecord } from '@sciforge-ui/runtime-contract/events';
 import type { RuntimeInteractionProgressEvent } from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
 import {
@@ -459,7 +460,9 @@ function interactionProgressSummary(event: AgentStreamEvent): {
 
 function interactionProgressRecord(event: AgentStreamEvent): RuntimeInteractionProgressEvent | undefined {
   const raw = isRecord(event.raw) ? event.raw : undefined;
-  return runtimeInteractionProgressEventFromUnknown(raw);
+  return runtimeInteractionProgressEventFromUnknown(raw)
+    ?? runtimeInteractionProgressEventFromCompactRecord(raw)
+    ?? runtimeInteractionProgressEventFromCompactRecord(event);
 }
 
 function streamImportanceForInteractionProgress(importance: string | undefined, status: string | undefined): StreamEventImportance {

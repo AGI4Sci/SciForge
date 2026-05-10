@@ -24,13 +24,12 @@ import {
   type ValidationRepairAuditObserveInvocationWriteResult,
 } from '../gateway/validation-repair-audit-sink.js';
 import {
-  buildValidationRepairTelemetrySummary,
-  validationRepairTelemetryAttemptRefFromWriteResult,
   writeValidationRepairTelemetrySpans,
   type ValidationRepairTelemetryAttemptRef,
   type ValidationRepairTelemetrySummary,
   type ValidationRepairTelemetryWriteResult,
 } from '../gateway/validation-repair-telemetry-sink.js';
+import { attachValidationRepairTelemetryWriteResult } from '../gateway/validation-repair-telemetry-runtime.js';
 
 const OBSERVE_PROVIDER_INVOCATION_BUDGET_AUDIT_PREFIX = 'audit:observe-provider-invocation';
 
@@ -207,22 +206,12 @@ async function writeObserveInvocationTelemetrySinkRecord(
       spanKinds: ['observe-invocation'],
     });
     if (!writeResult.records.length) return writeResult;
-    const telemetryRef = validationRepairTelemetryAttemptRefFromWriteResult(writeResult);
-    if (!telemetryRef) return writeResult;
-    record.refs = {
-      ...record.refs,
-      validationRepairTelemetry: [
-        ...(record.refs?.validationRepairTelemetry ?? []),
-        telemetryRef,
-      ],
-    };
-    if (options.readSummary) {
-      record.validationRepairTelemetrySummary = await buildValidationRepairTelemetrySummary({
-        workspacePath: options.workspacePath,
-        telemetryPath: options.telemetryPath,
-        now: options.now,
-      });
-    }
+    Object.assign(record, await attachValidationRepairTelemetryWriteResult(record, writeResult, {
+      workspacePath: options.workspacePath,
+      telemetryPath: options.telemetryPath,
+      now: options.now,
+      readSummary: options.readSummary,
+    }));
     return writeResult;
   } catch {
     return undefined;

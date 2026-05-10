@@ -159,6 +159,17 @@ export function validationRepairTelemetryAttemptMetadataFromPayload(
   return refs.length ? { telemetryRefs: refs } : undefined;
 }
 
+export function mergeValidationRepairTelemetryAttemptMetadata(
+  current: Partial<ValidationRepairTelemetryAttemptMetadata> | undefined,
+  next: ValidationRepairTelemetryAttemptMetadata | undefined,
+): ValidationRepairTelemetryAttemptMetadata | undefined {
+  const telemetryRefs = uniqueTelemetryAttemptRefs([
+    ...(current?.telemetryRefs ?? []),
+    ...(next?.telemetryRefs ?? []),
+  ]);
+  return telemetryRefs.length ? { telemetryRefs } : undefined;
+}
+
 export function validationRepairTelemetryAttemptRefFromWriteResult(
   writeResult: ValidationRepairTelemetryWriteResult,
 ): ValidationRepairTelemetryAttemptRef | undefined {

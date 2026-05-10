@@ -50,7 +50,9 @@ type ContextEnvelopeIgnoredLegacySource = {
   source: string;
   reason: 'contract-only-context-governance';
   refCount?: number;
+  repairEvidenceRefCount?: number;
   budgetFields?: string[];
+  repairContextPolicyFields?: string[];
   keys?: string[];
 };
 
@@ -278,19 +280,25 @@ function legacyContextSourceFromRecord(source: string, record: Record<string, un
     ...legacyContextRefsFromValue(record.contextRefs),
   ]);
   const budgetFields = legacyContextBudgetFields(record.contextBudget);
+  const repairContextPolicyFields = legacyRepairContextPolicyFieldsFromRecord(record);
+  const repairEvidenceRefs = legacyRepairEvidenceRefsFromRecord(record);
   const keys = [
     record.allowedContextRefs !== undefined ? 'allowedContextRefs' : undefined,
     record.blockedContextRefs !== undefined ? 'blockedContextRefs' : undefined,
     record.requiredContextRefs !== undefined ? 'requiredContextRefs' : undefined,
     record.contextRefs !== undefined ? 'contextRefs' : undefined,
     record.contextBudget !== undefined ? 'contextBudget' : undefined,
+    record.repairContextPolicy !== undefined ? 'repairContextPolicy' : undefined,
+    ...legacyDirectRepairContextPolicyKeys(record),
   ].filter((key): key is string => Boolean(key));
   if (!keys.length) return [];
   return [{
     source,
     reason: 'contract-only-context-governance',
     refCount: refs.length || undefined,
+    repairEvidenceRefCount: repairEvidenceRefs.length || undefined,
     budgetFields: budgetFields.length ? budgetFields : undefined,
+    repairContextPolicyFields: repairContextPolicyFields.length ? repairContextPolicyFields : undefined,
     keys,
   }];
 }
@@ -308,6 +316,45 @@ function legacyContextBudgetFields(value: unknown) {
   if (!isRecord(value)) return [];
   return ['maxPromptTokens', 'maxHistoryTurns', 'maxReferenceDigests', 'maxFullTextRefs']
     .filter((key) => value[key] !== undefined);
+}
+
+function legacyRepairContextPolicyFieldsFromRecord(record: Record<string, unknown>) {
+  return uniqueStrings([
+    ...legacyRepairContextPolicyFields(record.repairContextPolicy),
+    ...legacyDirectRepairContextPolicyKeys(record),
+  ]);
+}
+
+function legacyRepairContextPolicyFields(value: unknown) {
+  if (!isRecord(value)) return [];
+  return legacyRepairContextPolicyFieldNames().filter((key) => value[key] !== undefined);
+}
+
+function legacyDirectRepairContextPolicyKeys(record: Record<string, unknown>) {
+  const directKeys = legacyRepairContextPolicyFieldNames().filter((key) => record[key] !== undefined);
+  return directKeys.some((key) => key !== 'maxAttempts') ? directKeys : [];
+}
+
+function legacyRepairContextPolicyFieldNames() {
+  return [
+    'allowedFailureEvidenceRefs',
+    'blockedFailureEvidenceRefs',
+    'maxAttempts',
+    'includeStdoutSummary',
+    'includeStderrSummary',
+    'includeValidationFindings',
+    'includePriorAttemptRefs',
+  ];
+}
+
+function legacyRepairEvidenceRefsFromRecord(record: Record<string, unknown>) {
+  const policy = isRecord(record.repairContextPolicy) ? record.repairContextPolicy : {};
+  return uniqueStrings([
+    ...toStringList(policy.allowedFailureEvidenceRefs),
+    ...toStringList(policy.blockedFailureEvidenceRefs),
+    ...toStringList(record.allowedFailureEvidenceRefs),
+    ...toStringList(record.blockedFailureEvidenceRefs),
+  ]);
 }
 
 function selectGovernanceBudgetedRecords(

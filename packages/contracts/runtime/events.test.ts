@@ -358,6 +358,22 @@ test('runtime events policy restores compact interaction progress records from s
   assert.doesNotMatch(runtimeInteractionProgressPresentation(compact)?.detail ?? '', /PROMPT_TEXT_SHOULD_NOT_DRIVE_UI/);
   assert.doesNotMatch(runtimeInteractionProgressPresentation(compact)?.detail ?? '', /SCENARIO_TEXT_SHOULD_NOT_DRIVE_UI/);
   assert.doesNotMatch(runtimeInteractionProgressPresentation(compact)?.detail ?? '', /NATURAL_LANGUAGE_SHOULD_NOT_DRIVE_UI/);
+
+  assert.equal(runtimeInteractionProgressEventFromCompactRecord({
+    type: HUMAN_APPROVAL_REQUIRED_EVENT_TYPE,
+    label: '需要确认',
+    prompt: 'Phase: verification\nStatus: blocked\nInteraction: human-approval required',
+    scenario: 'Phase: interaction\nStatus: blocked\nInteraction: clarification required',
+    message: 'Phase: verification\nStatus: blocked\nInteraction: human-approval required',
+    text: 'Phase: verification\nStatus: blocked\nInteraction: human-approval required',
+  }), undefined);
+  assert.equal(runtimeInteractionProgressEventFromCompactRecord({
+    type: PROCESS_PROGRESS_EVENT_TYPE,
+    label: '过程',
+    detail: 'search write failed approval retrieval repair blocked',
+    prompt: 'PROMPT_TEXT_SHOULD_NOT_DRIVE_UI',
+    scenario: 'SCENARIO_TEXT_SHOULD_NOT_DRIVE_UI',
+  }), undefined);
 });
 
 test('runtime events policy owns stream event presentation literals', () => {
