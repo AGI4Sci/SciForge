@@ -83,6 +83,7 @@ assert.deepEqual(summary.auditIds, [artifact?.auditId]);
 assert.equal(summary.failureKindCounts['observe-trace'], 1);
 assert.equal(summary.statusCounts.failed, 1);
 assert.ok(summary.sourceSinkRefs.includes(`observe-invocation:${records[0]?.callRef}`));
+assert.ok(summary.sinkRefs.includes(`observe-invocation:${records[0]?.callRef}`));
 
 const telemetryRecords = await readValidationRepairTelemetrySpanRecords({ workspacePath: workspace });
 assert.equal(telemetryRecords.length, 1);

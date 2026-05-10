@@ -1,5 +1,5 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import type { AgentServerGenerationResponse, GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
 import { isRecord, safeWorkspaceRel } from '../gateway-utils.js';
@@ -8,8 +8,23 @@ import { sha1 } from '../workspace-task-runner.js';
 import { materializeBackendPayloadOutput, type RuntimeRefBundle } from './artifact-materializer.js';
 import {
   appendGeneratedTaskDirectPayloadAttemptLifecycle,
+  appendGeneratedTaskGenerationFailureLifecycle,
   assessGeneratedTaskDirectPayloadLifecycle,
 } from './generated-task-runner-validation-lifecycle.js';
+import { reportRuntimeResultViewSlots } from '../../../packages/presentation/interactive-views';
+import {
+  CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_DETAIL,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_MESSAGE,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_TYPE,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_LOG_LINE,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_REF_PATH,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_REPORT_ARTIFACT_ID,
+  CURRENT_REFERENCE_DIGEST_RECOVERY_RUNTIME_LABEL,
+  buildCurrentReferenceDigestRecoveryPayload,
+  currentReferenceDigestFailureCanRecover,
+  currentReferenceDigestRecoveryCandidates,
+  type CurrentReferenceDigestRecoverySource,
+} from '../../../packages/contracts/runtime/artifact-policy';
 import {
   AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE,
   agentServerGeneratedEntrypointContractReason,
@@ -26,7 +41,13 @@ export const AGENTSERVER_DIRECT_PAYLOAD_TASK_REF = 'agentserver://direct-payload
 export type AgentServerGenerationResult =
   | AgentServerTaskFilesGeneration
   | AgentServerDirectPayloadGeneration
-  | { ok: false; error: string; diagnostics?: any };
+  | AgentServerGenerationFailure;
+
+export interface AgentServerGenerationFailure {
+  ok: false;
+  error: string;
+  diagnostics?: any;
+}
 
 export interface AgentServerTaskFilesGeneration {
   ok: true;
@@ -66,6 +87,19 @@ export interface GeneratedTaskGenerationLifecycleDeps {
   payloadHasFailureStatus(payload: ToolPayload): boolean;
 }
 
+export interface GeneratedTaskGenerationFailureLifecycleDeps {
+  attemptPlanRefs: AttemptPlanRefs;
+  agentServerFailurePayloadRefs(diagnostics?: any): Record<string, unknown>;
+  agentServerGenerationFailureReason(error: string, diagnostics?: any): string;
+  repairNeededPayload(request: GatewayRequest, skill: SkillAvailability, reason: string, refs?: Record<string, unknown>): ToolPayload;
+  validateAndNormalizePayload(
+    payload: ToolPayload,
+    request: GatewayRequest,
+    skill: SkillAvailability,
+    refs: { taskRel: string; outputRel: string; stdoutRel: string; stderrRel: string; runtimeFingerprint: Record<string, unknown> },
+  ): Promise<ToolPayload>;
+}
+
 export interface ResolveGeneratedTaskGenerationLifecycleInput {
   baseUrl: string;
   request: GatewayRequest;
@@ -80,6 +114,36 @@ export interface ResolveGeneratedTaskGenerationLifecycleInput {
 export type ResolveGeneratedTaskGenerationLifecycleResult =
   | { kind: 'task-files'; generation: AgentServerTaskFilesGeneration }
   | { kind: 'payload'; payload: ToolPayload };
+
+export async function completeAgentServerGenerationFailureLifecycle(input: {
+  workspace: string;
+  request: GatewayRequest;
+  skill: SkillAvailability;
+  generation: AgentServerGenerationFailure;
+  callbacks?: WorkspaceRuntimeCallbacks;
+  deps: GeneratedTaskGenerationFailureLifecycleDeps;
+}): Promise<ToolPayload> {
+  const digestRecovery = await currentReferenceDigestRecoveryPayload(input);
+  if (digestRecovery) return digestRecovery;
+
+  const failureReason = input.deps.agentServerGenerationFailureReason(input.generation.error, input.generation.diagnostics);
+  const failedRequestId = `agentserver-generation-${input.request.skillDomain}-${sha1(`${input.request.prompt}:${input.generation.error}`).slice(0, 12)}`;
+  await appendGeneratedTaskGenerationFailureLifecycle({
+    workspacePath: input.workspace,
+    request: input.request,
+    skill: input.skill,
+    failedRequestId,
+    failureReason,
+    diagnostics: input.generation.diagnostics,
+    attemptPlanRefs: input.deps.attemptPlanRefs,
+  });
+  return input.deps.repairNeededPayload(
+    input.request,
+    input.skill,
+    failureReason,
+    input.deps.agentServerFailurePayloadRefs(input.generation.diagnostics),
+  );
+}
 
 export async function resolveGeneratedTaskGenerationRetryLifecycle(
   input: ResolveGeneratedTaskGenerationLifecycleInput,
@@ -375,4 +439,71 @@ function repairNeeded(
     kind: 'payload',
     payload: input.deps.repairNeededPayload(input.request, input.skill, reason),
   };
+}
+
+async function currentReferenceDigestRecoveryPayload(input: {
+  workspace: string;
+  request: GatewayRequest;
+  skill: SkillAvailability;
+  generation: AgentServerGenerationFailure;
+  callbacks?: WorkspaceRuntimeCallbacks;
+  deps: Pick<GeneratedTaskGenerationFailureLifecycleDeps, 'validateAndNormalizePayload'>;
+}): Promise<ToolPayload | undefined> {
+  if (!currentReferenceDigestFailureCanRecover(input.generation.error)) return undefined;
+  const candidates = currentReferenceDigestRecoveryCandidates(input.request.uiState?.currentReferenceDigests);
+  if (!candidates.length) return undefined;
+  const sources: CurrentReferenceDigestRecoverySource[] = [];
+  for (const digest of candidates) {
+    if (digest.inlineText) {
+      sources.push({
+        sourceRef: digest.sourceRef,
+        digestRef: digest.digestRef,
+        text: digest.inlineText,
+      });
+      continue;
+    }
+    if (digest.digestRef) {
+      const abs = resolve(input.workspace, safeWorkspaceRel(digest.digestRef));
+      try {
+        const text = await readFile(abs, 'utf8');
+        sources.push({
+          sourceRef: digest.sourceRef,
+          digestRef: digest.digestRef,
+          text,
+        });
+      } catch {
+        // A missing digest should not block other current references.
+      }
+    }
+  }
+  if (!sources.length) return undefined;
+  emitWorkspaceRuntimeEvent(input.callbacks, {
+    type: CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_TYPE,
+    source: 'workspace-runtime',
+    status: 'self-healed',
+    message: CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_MESSAGE,
+    detail: CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_DETAIL,
+  });
+  const recoveryRefs = backendPayloadRefs(
+    stableAgentServerPayloadTaskId('digest-recovery', input.request, input.skill, sha1(input.request.prompt).slice(0, 8)),
+    `agentserver://${CURRENT_REFERENCE_DIGEST_RECOVERY_REF_PATH}`,
+  );
+  await writeBackendPayloadLogs(input.workspace, recoveryRefs, CURRENT_REFERENCE_DIGEST_RECOVERY_LOG_LINE);
+  const recoveryPayload = buildCurrentReferenceDigestRecoveryPayload({
+    prompt: input.request.prompt,
+    skillDomain: input.request.skillDomain,
+    skillId: input.skill.id,
+    failureReason: input.generation.error,
+    sources,
+    uiManifest: reportRuntimeResultViewSlots(
+      CURRENT_REFERENCE_DIGEST_RECOVERY_REPORT_ARTIFACT_ID,
+      `${input.request.skillDomain}-runtime-result`,
+    ),
+    shortHash: (value) => sha1(value).slice(0, 8),
+  }) as ToolPayload;
+  const normalizedRecovery = await input.deps.validateAndNormalizePayload(recoveryPayload, input.request, input.skill, {
+    ...recoveryRefs,
+    runtimeFingerprint: { runtime: CURRENT_REFERENCE_DIGEST_RECOVERY_RUNTIME_LABEL, error: input.generation.error },
+  });
+  return await materializeBackendPayloadOutput(input.workspace, input.request, normalizedRecovery, recoveryRefs);
 }

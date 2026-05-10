@@ -23,6 +23,11 @@ assert.ok(defaultStructureView, 'default core registry should include the struct
 assert.equal(defaultStructureView.ownerPackage, '@sciforge-ui/structure-viewer');
 assert.deepEqual(defaultStructureView.sideEffects, ['workspace-read', 'network']);
 assert.equal(coreRegistry.getManifestByProviderId('sciforge.presentation.structure-viewer')?.id, 'view.structure-viewer');
+const defaultGraphView = coreRegistry.getManifest('view.graph-viewer');
+assert.ok(defaultGraphView, 'default core registry should include the graph-viewer package view manifest');
+assert.equal(defaultGraphView.ownerPackage, '@sciforge-ui/graph-viewer');
+assert.deepEqual(defaultGraphView.sideEffects, ['none']);
+assert.equal(coreRegistry.getManifestByProviderId('sciforge.presentation.graph-viewer')?.id, 'view.graph-viewer');
 const defaultPresentationAudit = coreRegistry.compactAudit.entries.find((item) => item.id === 'view.paper-card-list');
 assert.ok(defaultPresentationAudit, 'paper-card-list package view should appear in compact registry audit');
 assert.equal(defaultPresentationAudit.source, 'core');
@@ -48,6 +53,16 @@ assert.equal(defaultStructureAudit.source, 'core');
 assert.equal(defaultStructureAudit.risk, 'medium');
 assert.deepEqual(defaultStructureAudit.providerAvailability, [{
   providerId: 'sciforge.presentation.structure-viewer',
+  providerKind: 'package',
+  available: true,
+  requiredConfig: [],
+}]);
+const defaultGraphAudit = coreRegistry.compactAudit.entries.find((item) => item.id === 'view.graph-viewer');
+assert.ok(defaultGraphAudit, 'graph-viewer package view should appear in compact registry audit');
+assert.equal(defaultGraphAudit.source, 'core');
+assert.equal(defaultGraphAudit.risk, 'low');
+assert.deepEqual(defaultGraphAudit.providerAvailability, [{
+  providerId: 'sciforge.presentation.graph-viewer',
   providerKind: 'package',
   available: true,
   requiredConfig: [],

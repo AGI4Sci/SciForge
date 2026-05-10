@@ -104,6 +104,8 @@ assert.equal(summary.totalArtifacts, 1);
 assert.deepEqual(summary.auditIds, [chain.audit.auditId]);
 assert.equal(summary.failureKindCounts['runtime-verification'], 1);
 assert.ok(summary.sourceSinkRefs.includes('verification-artifact:verifications/verification-artifact-sink/result.json'));
+assert.ok(summary.sinkRefs.includes('verification-artifact:verifications/verification-artifact-sink/result.json'));
+assert.ok(summary.telemetrySpanRefs.includes('span:verification-gate:verification-artifact-sink'));
 
 console.log('[ok] validation/repair/audit verification artifact sink writes stable readable artifact json and compact facts');
 

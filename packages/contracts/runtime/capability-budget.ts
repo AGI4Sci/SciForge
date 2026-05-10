@@ -83,7 +83,7 @@ export function createCapabilityBudgetDebitRecord(input: CreateCapabilityBudgetD
     exceeded: debitLines.some((line) => typeof line.remaining === 'number' && line.remaining < 0),
     exhaustedDimensions,
     sinkRefs: {
-      executionUnitRef: input.sinkRefs?.executionUnitRef,
+      executionUnitRef: cleanOptionalString(input.sinkRefs?.executionUnitRef),
       workEvidenceRefs: uniqueStrings(input.sinkRefs?.workEvidenceRefs ?? []),
       auditRefs: uniqueStrings(input.sinkRefs?.auditRefs ?? []),
     },

@@ -73,6 +73,33 @@ assert.deepEqual(record.sinkRefs.workEvidenceRefs, ['workEvidence:provider-attem
 assert.deepEqual(record.sinkRefs.auditRefs, ['audit:capability-broker-1']);
 assert.equal(record.metadata?.profileId, 'research-grade');
 
+const normalizedSinkRefRecord = createCapabilityBudgetDebitRecord({
+  debitId: 'budget-debit:stable-sink-refs',
+  invocationId: 'capability-invocation:stable-sink-refs',
+  capabilityId: 'tool.stable-sink-refs',
+  debitLines: [{
+    dimension: 'toolCalls',
+    amount: 1,
+    sourceRef: 'tool:stable-sink-refs',
+  }],
+  sinkRefs: {
+    executionUnitRef: '  executionUnit:stable-sink-refs  ',
+    workEvidenceRefs: [
+      ' workEvidence:stable-sink-refs ',
+      'workEvidence:stable-sink-refs',
+      '',
+    ],
+    auditRefs: [
+      'audit:stable-sink-refs',
+      ' audit:stable-sink-refs ',
+      '   ',
+    ],
+  },
+});
+assert.equal(normalizedSinkRefRecord.sinkRefs.executionUnitRef, 'executionUnit:stable-sink-refs');
+assert.deepEqual(normalizedSinkRefRecord.sinkRefs.workEvidenceRefs, ['workEvidence:stable-sink-refs']);
+assert.deepEqual(normalizedSinkRefRecord.sinkRefs.auditRefs, ['audit:stable-sink-refs']);
+
 const literatureRuntimeOutput = runOfflineLiteratureRetrieval({
   request: {
     query: 'budget debit runtime wiring',

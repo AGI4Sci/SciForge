@@ -1,37 +1,13 @@
-import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult } from '../runtime-types.js';
-import { sha1 } from '../workspace-task-runner.js';
-import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
-import { safeWorkspaceRel } from '../gateway-utils.js';
-import { materializeBackendPayloadOutput } from './artifact-materializer.js';
 import {
-  appendGeneratedTaskGenerationFailureLifecycle,
-} from './generated-task-runner-validation-lifecycle.js';
-import {
-  backendPayloadRefs,
+  completeAgentServerGenerationFailureLifecycle,
   completeAgentServerDirectPayloadLifecycle,
   resolveGeneratedTaskGenerationRetryLifecycle,
-  stableAgentServerPayloadTaskId,
-  writeBackendPayloadLogs,
   type AgentServerGenerationResult,
 } from './generated-task-runner-generation-lifecycle.js';
 import { runGeneratedTaskExecutionLifecycle } from './generated-task-runner-execution-lifecycle.js';
 import { completeGeneratedTaskRunOutputLifecycle } from './generated-task-runner-output-lifecycle.js';
-import { reportRuntimeResultViewSlots } from '../../../packages/presentation/interactive-views';
-import {
-  CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_DETAIL,
-  CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_MESSAGE,
-  CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_TYPE,
-  CURRENT_REFERENCE_DIGEST_RECOVERY_LOG_LINE,
-  CURRENT_REFERENCE_DIGEST_RECOVERY_REF_PATH,
-  CURRENT_REFERENCE_DIGEST_RECOVERY_REPORT_ARTIFACT_ID,
-  CURRENT_REFERENCE_DIGEST_RECOVERY_RUNTIME_LABEL,
-  buildCurrentReferenceDigestRecoveryPayload,
-  currentReferenceDigestFailureCanRecover,
-  currentReferenceDigestRecoveryCandidates,
-  type CurrentReferenceDigestRecoverySource,
-} from '../../../packages/contracts/runtime/artifact-policy';
 
 export interface GeneratedTaskRunnerDeps {
   readConfiguredAgentServerBaseUrl(workspace: string): Promise<string | undefined>;
@@ -82,13 +58,9 @@ export async function runAgentServerGeneratedTask(
   options: { allowSupplement?: boolean } = {},
 ): Promise<ToolPayload | undefined> {
   const {
-    agentServerFailurePayloadRefs,
-    agentServerGenerationFailureReason,
-    attemptPlanRefs,
     readConfiguredAgentServerBaseUrl,
     repairNeededPayload,
     requestAgentServerGeneration,
-    validateAndNormalizePayload,
   } = deps;
   const workspace = resolve(request.workspacePath || process.cwd());
   const baseUrl = request.agentServerBaseUrl || await readConfiguredAgentServerBaseUrl(workspace);
@@ -104,38 +76,14 @@ export async function runAgentServerGeneratedTask(
     callbacks,
   });
   if (!generation.ok) {
-    const digestRecovery = await currentReferenceDigestRecoveryPayload(request, skill, workspace, generation.error);
-    if (digestRecovery) {
-      emitWorkspaceRuntimeEvent(callbacks, {
-        type: CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_TYPE,
-        source: 'workspace-runtime',
-        status: 'self-healed',
-        message: CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_MESSAGE,
-        detail: CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_DETAIL,
-      });
-      const recoveryRefs = backendPayloadRefs(
-        stableAgentServerPayloadTaskId('digest-recovery', request, skill, sha1(request.prompt).slice(0, 8)),
-        `agentserver://${CURRENT_REFERENCE_DIGEST_RECOVERY_REF_PATH}`,
-      );
-      await writeBackendPayloadLogs(workspace, recoveryRefs, CURRENT_REFERENCE_DIGEST_RECOVERY_LOG_LINE);
-      const normalizedRecovery = await validateAndNormalizePayload(digestRecovery, request, skill, {
-        ...recoveryRefs,
-        runtimeFingerprint: { runtime: CURRENT_REFERENCE_DIGEST_RECOVERY_RUNTIME_LABEL, error: generation.error },
-      });
-      return await materializeBackendPayloadOutput(workspace, request, normalizedRecovery, recoveryRefs);
-    }
-    const failureReason = agentServerGenerationFailureReason(generation.error, generation.diagnostics);
-    const failedRequestId = `agentserver-generation-${request.skillDomain}-${sha1(`${request.prompt}:${generation.error}`).slice(0, 12)}`;
-    await appendGeneratedTaskGenerationFailureLifecycle({
-      workspacePath: workspace,
+    return await completeAgentServerGenerationFailureLifecycle({
+      workspace,
       request,
       skill,
-      failedRequestId,
-      failureReason,
-      diagnostics: generation.diagnostics,
-      attemptPlanRefs,
+      generation,
+      callbacks,
+      deps,
     });
-    return repairNeededPayload(request, skill, failureReason, agentServerFailurePayloadRefs(generation.diagnostics));
   }
   if ('directPayload' in generation) {
     return await completeAgentServerDirectPayloadLifecycle({
@@ -195,52 +143,4 @@ export async function runAgentServerGeneratedTask(
     supplementArtifactTypes,
     runGeneratedTask: runAgentServerGeneratedTask,
   });
-}
-
-async function currentReferenceDigestRecoveryPayload(
-  request: GatewayRequest,
-  skill: SkillAvailability,
-  workspace: string,
-  failureReason: string,
-): Promise<ToolPayload | undefined> {
-  if (!currentReferenceDigestFailureCanRecover(failureReason)) return undefined;
-  const candidates = currentReferenceDigestRecoveryCandidates(request.uiState?.currentReferenceDigests);
-  if (!candidates.length) return undefined;
-  const sources: CurrentReferenceDigestRecoverySource[] = [];
-  for (const digest of candidates) {
-    if (digest.inlineText) {
-      sources.push({
-        sourceRef: digest.sourceRef,
-        digestRef: digest.digestRef,
-        text: digest.inlineText,
-      });
-      continue;
-    }
-    if (digest.digestRef) {
-      const abs = resolve(workspace, safeWorkspaceRel(digest.digestRef));
-      try {
-        const text = await readFile(abs, 'utf8');
-        sources.push({
-          sourceRef: digest.sourceRef,
-          digestRef: digest.digestRef,
-          text,
-        });
-      } catch {
-        // A missing digest should not block other current references.
-      }
-    }
-  }
-  if (!sources.length) return undefined;
-  return buildCurrentReferenceDigestRecoveryPayload({
-    prompt: request.prompt,
-    skillDomain: request.skillDomain,
-    skillId: skill.id,
-    failureReason,
-    sources,
-    uiManifest: reportRuntimeResultViewSlots(
-      CURRENT_REFERENCE_DIGEST_RECOVERY_REPORT_ARTIFACT_ID,
-      `${request.skillDomain}-runtime-result`,
-    ),
-    shortHash: (value) => sha1(value).slice(0, 8),
-  }) as ToolPayload;
 }

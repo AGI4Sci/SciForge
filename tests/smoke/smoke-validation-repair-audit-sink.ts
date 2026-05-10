@@ -217,6 +217,7 @@ try {
     now: () => new Date('2026-05-10T00:00:02.000Z'),
   });
   assert.equal(actionSummary.kind, 'validation-repair-audit-action-result-summary');
+  assert.equal(actionSummary.target, 'action-result');
   assert.equal(actionSummary.sourceRef, '.sciforge/validation-repair-audit/verification-artifacts');
   assert.equal(actionSummary.generatedAt, '2026-05-10T00:00:02.000Z');
   assert.equal(actionSummary.totalActionResults, 1);
@@ -226,6 +227,7 @@ try {
   assert.equal(actionSummary.failureKindCounts['action-trace'], 1);
   assert.equal(actionSummary.outcomeCounts['repair-requested'], 1);
   assert.ok(actionSummary.sourceSinkRefs.includes('verification-artifact:action-results/action-sink.json'));
+  assert.ok(actionSummary.sinkRefs.includes('verification-artifact:action-results/action-sink.json'));
   assert.ok(actionSummary.telemetrySpanRefs.includes('span:action:action-sink'));
 } finally {
   await rm(actionWorkspace, { recursive: true, force: true });

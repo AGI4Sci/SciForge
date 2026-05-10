@@ -105,10 +105,14 @@ export interface ValidationRepairTelemetryAttemptMetadata {
 
 export interface ValidationRepairTelemetrySummary {
   kind: 'validation-repair-telemetry-summary';
+  target: 'telemetry-span';
   sourceRef: string;
   generatedAt: string;
   totalSpans: number;
   spanKindCounts: Partial<Record<ValidationRepairTelemetrySpanKind, number>>;
+  statusCounts: Record<string, number>;
+  failureKindCounts: Record<string, number>;
+  outcomeCounts: Record<string, number>;
   validationDecisionIds: string[];
   repairDecisionIds: string[];
   auditIds: string[];
@@ -116,6 +120,8 @@ export interface ValidationRepairTelemetrySummary {
   sourceRefs: string[];
   auditRefs: string[];
   repairRefs: string[];
+  sinkRefs: string[];
+  telemetrySpanRefs: string[];
   recentSpans: Array<{
     ref: string;
     spanId: string;
@@ -262,23 +268,15 @@ export async function buildValidationRepairTelemetrySummary(
 ): Promise<ValidationRepairTelemetrySummary> {
   const telemetryPath = resolveValidationRepairTelemetryPath(options);
   const records = await readValidationRepairTelemetrySpanRecords(options);
-  const spanKindCounts: Partial<Record<ValidationRepairTelemetrySpanKind, number>> = {};
-  for (const record of records) {
-    spanKindCounts[record.spanKind] = (spanKindCounts[record.spanKind] ?? 0) + 1;
-  }
+  const fields = validationRepairTelemetryReadbackSummaryFields(
+    toWorkspaceRef(options.workspacePath, telemetryPath),
+    records,
+    options.now,
+  );
   return {
     kind: 'validation-repair-telemetry-summary',
-    sourceRef: toWorkspaceRef(options.workspacePath, telemetryPath),
-    generatedAt: (options.now ?? (() => new Date()))().toISOString(),
+    ...fields,
     totalSpans: records.length,
-    spanKindCounts,
-    validationDecisionIds: uniqueStrings(records.map((record) => record.validationDecisionId)),
-    repairDecisionIds: uniqueStrings(records.map((record) => record.repairDecisionId)),
-    auditIds: uniqueStrings(records.map((record) => record.auditId)),
-    executorResultIds: uniqueStrings(records.map((record) => record.executorResultId)),
-    sourceRefs: uniqueStrings(records.flatMap((record) => record.sourceRefs)),
-    auditRefs: uniqueStrings(records.flatMap((record) => record.auditRefs)),
-    repairRefs: uniqueStrings(records.flatMap((record) => record.repairRefs)),
     recentSpans: records.slice(-25).map((record) => ({
       ref: record.ref,
       spanId: record.spanId,
@@ -290,6 +288,31 @@ export async function buildValidationRepairTelemetrySummary(
       executorResultId: record.executorResultId,
       createdAt: record.createdAt,
     })),
+  };
+}
+
+function validationRepairTelemetryReadbackSummaryFields(
+  sourceRef: string,
+  records: ValidationRepairTelemetrySpanRecord[],
+  now: (() => Date) | undefined,
+) {
+  return {
+    target: 'telemetry-span' as const,
+    sourceRef,
+    generatedAt: (now ?? (() => new Date()))().toISOString(),
+    spanKindCounts: countSpanKinds(records.map((record) => record.spanKind)),
+    statusCounts: countStrings(records.map((record) => record.span.status)),
+    failureKindCounts: countStrings(records.map((record) => record.failureKind)),
+    outcomeCounts: countStrings(records.map((record) => record.outcome)),
+    validationDecisionIds: uniqueStrings(records.map((record) => record.validationDecisionId)),
+    repairDecisionIds: uniqueStrings(records.map((record) => record.repairDecisionId)),
+    auditIds: uniqueStrings(records.map((record) => record.auditId)),
+    executorResultIds: uniqueStrings(records.map((record) => record.executorResultId)),
+    sourceRefs: uniqueStrings(records.flatMap((record) => record.sourceRefs)),
+    auditRefs: uniqueStrings(records.flatMap((record) => record.auditRefs)),
+    repairRefs: uniqueStrings(records.flatMap((record) => record.repairRefs)),
+    sinkRefs: uniqueStrings(records.flatMap((record) => record.sinkRefs)),
+    telemetrySpanRefs: uniqueStrings(records.flatMap((record) => record.telemetrySpanRefs)),
   };
 }
 
@@ -720,8 +743,24 @@ function uniqueSpanKinds(values: unknown[]) {
     .filter((value): value is ValidationRepairTelemetrySpanKind => allowed.has(value as ValidationRepairTelemetrySpanKind));
 }
 
+function countSpanKinds(values: ValidationRepairTelemetrySpanKind[]) {
+  const counts: Partial<Record<ValidationRepairTelemetrySpanKind, number>> = {};
+  for (const value of values) {
+    counts[value] = (counts[value] ?? 0) + 1;
+  }
+  return counts;
+}
+
 function uniqueStrings(values: Array<string | undefined>) {
   return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0))];
+}
+
+function countStrings(values: Array<string | undefined>) {
+  const counts: Record<string, number> = {};
+  for (const value of uniqueStrings(values)) {
+    counts[value] = values.filter((candidate) => candidate === value).length;
+  }
+  return counts;
 }
 
 function toWorkspaceRef(workspacePath: string, targetPath: string) {

@@ -188,6 +188,7 @@ export interface ValidationRepairAuditSinkArtifactSummary {
   statusCounts: Record<string, number>;
   sourceSinkRefs: string[];
   sinkRefs: string[];
+  telemetrySpanRefs: string[];
   recentArtifacts: Array<{
     artifactId: string;
     sourceSinkRef: string;
@@ -199,6 +200,7 @@ export interface ValidationRepairAuditSinkArtifactSummary {
 
 export interface ValidationRepairAuditActionResultSummary {
   kind: 'validation-repair-audit-action-result-summary';
+  target: 'action-result';
   sourceRef: string;
   generatedAt: string;
   totalActionResults: number;
@@ -684,21 +686,12 @@ function validationRepairAuditSinkArtifactSummary(
   artifacts: Array<ValidationRepairAuditVerificationArtifact | ValidationRepairAuditObserveInvocationArtifact>,
   now: (() => Date) | undefined,
 ): ValidationRepairAuditSinkArtifactSummary {
+  const fields = validationRepairAuditReadbackSummaryFields(target, sourceRef, artifacts, now);
   return {
     kind: 'validation-repair-audit-sink-artifact-summary',
-    target,
-    sourceRef,
-    generatedAt: (now ?? (() => new Date()))().toISOString(),
+    ...fields,
     totalArtifacts: artifacts.length,
-    auditIds: uniqueStrings(artifacts.map((artifact) => artifact.auditId)),
-    validationDecisionIds: uniqueStrings(artifacts.map((artifact) => artifact.validationDecisionId)),
-    repairDecisionIds: uniqueStrings(artifacts.map((artifact) => artifact.repairDecisionId)),
-    contractIds: uniqueStrings(artifacts.map((artifact) => artifact.contractId)),
-    failureKindCounts: countStrings(artifacts.map((artifact) => artifact.failureKind)),
-    outcomeCounts: countStrings(artifacts.map((artifact) => artifact.outcome)),
     statusCounts: countStrings(artifacts.map((artifact) => observeArtifactStatus(artifact))),
-    sourceSinkRefs: uniqueStrings(artifacts.map((artifact) => artifact.sourceSinkRef)),
-    sinkRefs: uniqueStrings(artifacts.flatMap((artifact) => artifact.sinkRefs)),
     recentArtifacts: artifacts.slice(-25).map((artifact) => ({
       artifactId: artifact.artifactId,
       sourceSinkRef: artifact.sourceSinkRef,
@@ -714,22 +707,13 @@ function validationRepairAuditActionResultSummary(
   artifacts: ValidationRepairAuditVerificationArtifact[],
   now: (() => Date) | undefined,
 ): ValidationRepairAuditActionResultSummary {
+  const fields = validationRepairAuditReadbackSummaryFields('action-result', sourceRef, artifacts, now);
   return {
     kind: 'validation-repair-audit-action-result-summary',
-    sourceRef,
-    generatedAt: (now ?? (() => new Date()))().toISOString(),
+    ...fields,
     totalActionResults: artifacts.length,
-    auditIds: uniqueStrings(artifacts.map((artifact) => artifact.auditId)),
-    validationDecisionIds: uniqueStrings(artifacts.map((artifact) => artifact.validationDecisionId)),
-    repairDecisionIds: uniqueStrings(artifacts.map((artifact) => artifact.repairDecisionId)),
     actionTraceRefs: uniqueStrings(artifacts.map((artifact) => artifact.subject?.actionTraceRef ?? artifact.auditRecord.subject.actionTraceRef)),
-    contractIds: uniqueStrings(artifacts.map((artifact) => artifact.contractId)),
     findingSourceCounts: countStrings(artifacts.flatMap((artifact) => artifact.validationDecision?.findings.map((finding) => finding.source) ?? [])),
-    failureKindCounts: countStrings(artifacts.map((artifact) => artifact.failureKind)),
-    outcomeCounts: countStrings(artifacts.map((artifact) => artifact.outcome)),
-    sourceSinkRefs: uniqueStrings(artifacts.map((artifact) => artifact.sourceSinkRef)),
-    sinkRefs: uniqueStrings(artifacts.flatMap((artifact) => artifact.sinkRefs)),
-    telemetrySpanRefs: uniqueStrings(artifacts.flatMap((artifact) => artifact.telemetrySpanRefs)),
     recentActionResults: artifacts.slice(-25).map((artifact) => ({
       artifactId: artifact.artifactId,
       sourceSinkRef: artifact.sourceSinkRef,
@@ -738,6 +722,28 @@ function validationRepairAuditActionResultSummary(
       outcome: artifact.outcome,
       recordedAt: artifact.recordedAt,
     })),
+  };
+}
+
+function validationRepairAuditReadbackSummaryFields<Target extends ValidationRepairAuditSinkArtifactSummary['target'] | ValidationRepairAuditActionResultSummary['target']>(
+  target: Target,
+  sourceRef: string,
+  artifacts: Array<ValidationRepairAuditVerificationArtifact | ValidationRepairAuditObserveInvocationArtifact>,
+  now: (() => Date) | undefined,
+) {
+  return {
+    target,
+    sourceRef,
+    generatedAt: (now ?? (() => new Date()))().toISOString(),
+    auditIds: uniqueStrings(artifacts.map((artifact) => artifact.auditId)),
+    validationDecisionIds: uniqueStrings(artifacts.map((artifact) => artifact.validationDecisionId)),
+    repairDecisionIds: uniqueStrings(artifacts.map((artifact) => artifact.repairDecisionId)),
+    contractIds: uniqueStrings(artifacts.map((artifact) => artifact.contractId)),
+    failureKindCounts: countStrings(artifacts.map((artifact) => artifact.failureKind)),
+    outcomeCounts: countStrings(artifacts.map((artifact) => artifact.outcome)),
+    sourceSinkRefs: uniqueStrings(artifacts.map((artifact) => artifact.sourceSinkRef)),
+    sinkRefs: uniqueStrings(artifacts.flatMap((artifact) => artifact.sinkRefs)),
+    telemetrySpanRefs: uniqueStrings(artifacts.flatMap((artifact) => artifact.telemetrySpanRefs)),
   };
 }
 

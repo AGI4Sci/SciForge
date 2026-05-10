@@ -56,6 +56,25 @@ type ContextEnvelopeIgnoredLegacySource = {
   keys?: string[];
 };
 
+type ContextEnvelopeRepairContextPolicySummary = {
+  schemaVersion: 'sciforge.context-envelope.repair-context-policy-summary.v1';
+  source: string;
+  sourceKind: 'contract-handoff' | 'contract';
+  contractRef?: string;
+  traceRef?: string;
+  deterministic: true;
+  deterministicDecisionRef: string;
+  fields: string[];
+  kind?: string;
+  maxAttempts?: number;
+  includeStdoutSummary?: boolean;
+  includeStderrSummary?: boolean;
+  includeValidationFindings?: boolean;
+  includePriorAttemptRefs?: boolean;
+  allowedFailureEvidenceRefs: string[];
+  blockedFailureEvidenceRefs: string[];
+};
+
 export type ContextEnvelopeGovernance = {
   schemaVersion: 'sciforge.context-envelope.harness-governance.v1';
   source: string;
@@ -68,6 +87,7 @@ export type ContextEnvelopeGovernance = {
     blocked: string[];
     required: string[];
   };
+  repairContextPolicy?: ContextEnvelopeRepairContextPolicySummary;
   decisions: ContextEnvelopeGovernanceDecision[];
   ignoredLegacySources?: ContextEnvelopeIgnoredLegacySource[];
 };
@@ -79,25 +99,27 @@ export function contextEnvelopeGovernanceForRequest(request: GatewayRequest): Co
   const ignoredLegacySources = contextEnvelopeIgnoredLegacySources(uiState);
   const contextBudget = source ? contextEnvelopeGovernanceBudgetFromRecord(source.contract) : {};
   const contextRefs = source ? contextEnvelopeGovernanceRefsFromRecord(source.contract) : emptyContextRefs();
+  const sourceRefs: { contractRef?: string; traceRef?: string } = source
+    ? contextEnvelopeGovernanceSourceRefs(source)
+    : {};
+  const repairContextPolicy = source ? contextEnvelopeRepairContextPolicySummary(source, sourceRefs) : undefined;
   if (!Object.values(contextBudget).some((value) => value !== undefined)
     && !contextRefs.allowed.length
     && !contextRefs.blocked.length
     && !contextRefs.required.length
+    && !repairContextPolicy
     && !ignoredLegacySources.length) {
     return undefined;
   }
   return {
     schemaVersion: 'sciforge.context-envelope.harness-governance.v1',
     source: source?.source ?? 'contract-only:no-contract-context',
-    contractRef: source ? stringField(source.contract.contractRef)
-      ?? stringField(source.contract.harnessContractRef)
-      ?? stringField(source.summary?.contractRef) : undefined,
-    traceRef: source ? stringField(source.contract.traceRef)
-      ?? stringField(source.contract.harnessTraceRef)
-      ?? stringField(source.summary?.traceRef) : undefined,
+    contractRef: sourceRefs.contractRef,
+    traceRef: sourceRefs.traceRef,
     shadowMode: source ? booleanField(source.contract.shadowMode) : undefined,
     contextBudget,
     contextRefs,
+    repairContextPolicy,
     decisions: [],
     ignoredLegacySources: ignoredLegacySources.length ? ignoredLegacySources : undefined,
   };
@@ -179,6 +201,9 @@ export function contextEnvelopeGovernanceAudit(governance: ContextEnvelopeGovern
     shadowMode: governance.shadowMode,
     contextBudget: governance.contextBudget,
     contextRefs: governance.contextRefs,
+    repairContextPolicy: governance.repairContextPolicy
+      ? clipForAgentServerJson(governance.repairContextPolicy, 1)
+      : undefined,
     decisions: governance.decisions.map((decision) => clipForAgentServerJson(decision, 2)),
     ignoredLegacySources: governance.ignoredLegacySources?.map((source) => clipForAgentServerJson(source, 1)),
     slimmingTrace: governance.decisions
@@ -224,6 +249,52 @@ function contextEnvelopeContractFromHandoff(handoff: Record<string, unknown>) {
     contextBudget: handoff.contextBudget ?? (isRecord(handoff.budgetSummary) && isRecord(handoff.budgetSummary.context)
       ? handoff.budgetSummary.context
       : undefined),
+    repairContextPolicy: handoff.repairContextPolicy,
+  };
+}
+
+function contextEnvelopeGovernanceSourceRefs(source: {
+  contract: Record<string, unknown>;
+  summary?: Record<string, unknown>;
+}) {
+  return {
+    contractRef: stringField(source.contract.contractRef)
+      ?? stringField(source.contract.harnessContractRef)
+      ?? stringField(source.summary?.contractRef),
+    traceRef: stringField(source.contract.traceRef)
+      ?? stringField(source.contract.harnessTraceRef)
+      ?? stringField(source.summary?.traceRef),
+  };
+}
+
+function contextEnvelopeRepairContextPolicySummary(
+  source: { source: string; contract: Record<string, unknown> },
+  refs: { contractRef?: string; traceRef?: string },
+): ContextEnvelopeRepairContextPolicySummary | undefined {
+  const policy = isRecord(source.contract.repairContextPolicy) ? source.contract.repairContextPolicy : undefined;
+  if (!policy) return undefined;
+  const fields = repairContextPolicyFieldNames().filter((field) => policy[field] !== undefined);
+  if (!fields.length) return undefined;
+  const base = {
+    schemaVersion: 'sciforge.context-envelope.repair-context-policy-summary.v1' as const,
+    source: `${source.source}.repairContextPolicy`,
+    sourceKind: source.source === 'request.uiState.agentHarnessHandoff' ? 'contract-handoff' as const : 'contract' as const,
+    contractRef: refs.contractRef,
+    traceRef: refs.traceRef,
+    deterministic: true as const,
+    fields,
+    kind: stringField(policy.kind),
+    maxAttempts: numberField(policy.maxAttempts),
+    includeStdoutSummary: booleanField(policy.includeStdoutSummary),
+    includeStderrSummary: booleanField(policy.includeStderrSummary),
+    includeValidationFindings: booleanField(policy.includeValidationFindings),
+    includePriorAttemptRefs: booleanField(policy.includePriorAttemptRefs),
+    allowedFailureEvidenceRefs: toStringList(policy.allowedFailureEvidenceRefs).slice(0, 12),
+    blockedFailureEvidenceRefs: toStringList(policy.blockedFailureEvidenceRefs).slice(0, 12),
+  };
+  return {
+    ...base,
+    deterministicDecisionRef: `context-envelope-repair-policy:${hashJson(base)}`,
   };
 }
 
@@ -345,6 +416,10 @@ function legacyRepairContextPolicyFieldNames() {
     'includeValidationFindings',
     'includePriorAttemptRefs',
   ];
+}
+
+function repairContextPolicyFieldNames() {
+  return ['kind', ...legacyRepairContextPolicyFieldNames()];
 }
 
 function legacyRepairEvidenceRefsFromRecord(record: Record<string, unknown>) {

@@ -23,6 +23,7 @@ import { manifest as reportViewerManifest } from '../../packages/presentation/co
 import { manifest as paperCardListManifest } from '../../packages/presentation/components/paper-card-list/manifest';
 import { manifest as sequenceViewerManifest } from '../../packages/presentation/components/sequence-viewer/manifest';
 import { manifest as structureViewerManifest } from '../../packages/presentation/components/structure-viewer/manifest';
+import { manifest as graphViewerManifest } from '../../packages/presentation/components/graph-viewer/manifest';
 import type { UIComponentManifest } from '../../packages/contracts/runtime/index.js';
 import {
   discoverPackageCapabilityManifestsFromFiles,
@@ -388,6 +389,10 @@ function offlinePackageProviderCapabilityManifests(): CapabilityManifest[] {
     projectUIComponentManifestToCapabilityManifest(
       structureViewerManifest,
       'packages/presentation/components/structure-viewer/manifest.ts',
+    ),
+    projectUIComponentManifestToCapabilityManifest(
+      graphViewerManifest,
+      'packages/presentation/components/graph-viewer/manifest.ts',
     ),
   ];
 }

@@ -219,11 +219,17 @@ try {
     now: () => new Date('2026-05-10T00:00:02.000Z'),
   });
   assert.equal(summary.kind, 'validation-repair-telemetry-summary');
+  assert.equal(summary.target, 'telemetry-span');
   assert.equal(summary.sourceRef, writeResult.ref);
   assert.equal(summary.generatedAt, '2026-05-10T00:00:02.000Z');
   assert.equal(summary.totalSpans, expectedKinds.length);
   assert.equal(summary.spanKindCounts['payload-validation'], 1);
   assert.equal(summary.spanKindCounts['repair-rerun'], 1);
+  assert.equal(summary.failureKindCounts['runtime-verification'], expectedKinds.length);
+  assert.equal(summary.outcomeCounts['repair-requested'], expectedKinds.length);
+  assert.ok((summary.statusCounts.failed ?? 0) >= 1);
+  assert.ok(summary.sinkRefs.includes('ledger:telemetry-sink'));
+  assert.ok(summary.telemetrySpanRefs.includes('span:payload-validation:telemetry-sink'));
   assert.deepEqual(summary.validationDecisionIds, [chain.validation.decisionId]);
   assert.deepEqual(summary.repairDecisionIds, [chain.repair.decisionId]);
   assert.deepEqual(summary.auditIds, [chain.audit.auditId]);

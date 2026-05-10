@@ -22,7 +22,10 @@ import type { RuntimeVerificationResult } from '@sciforge-ui/runtime-contract/ve
 import { normalizeGatewayRequest } from '../../src/runtime/gateway/gateway-request';
 import { validateAndNormalizePayload } from '../../src/runtime/gateway/payload-validation';
 import { applyRuntimeVerificationPolicy } from '../../src/runtime/gateway/verification-policy';
-import { createValidationRepairAuditChain } from '../../src/runtime/gateway/validation-repair-audit-bridge';
+import {
+  agentHarnessRepairPolicyBridgeFromRuntimeState,
+  createValidationRepairAuditChain,
+} from '../../src/runtime/gateway/validation-repair-audit-bridge';
 import { appendTaskAttempt, readTaskAttempts } from '../../src/runtime/task-attempt-history';
 import type { SkillAvailability, TaskAttemptRecord, ToolPayload } from '../../src/runtime/runtime-types';
 
@@ -32,6 +35,12 @@ const repairBudget: RepairBudgetSnapshot = {
   remainingAttempts: 1,
   maxSupplementAttempts: 1,
   remainingSupplementAttempts: 1,
+};
+const exhaustedRepairBudget: RepairBudgetSnapshot = {
+  maxAttempts: 1,
+  remainingAttempts: 0,
+  maxSupplementAttempts: 0,
+  remainingSupplementAttempts: 0,
 };
 
 const directFailure = contractValidationFailureFromErrors(['missing claims'], {
@@ -267,6 +276,21 @@ assert.equal(
   false,
   'shadow-only bridge input must not add audit metadata',
 );
+assert.equal(
+  agentHarnessRepairPolicyBridgeFromRuntimeState({
+    harnessProfileId: 'debug-repair',
+    agentHarness: {
+      contractRef: 'runtime://agent-harness/contracts/default-off',
+      traceRef: 'runtime://agent-harness/traces/default-off',
+      contract: {
+        repairContextPolicy: { kind: 'fail-closed', maxAttempts: 0 },
+        verificationPolicy: { intensity: 'audit', requireCurrentRefs: true },
+      },
+    },
+  }),
+  undefined,
+  'runtime uiState bridge must stay default-off even when a harness contract is present',
+);
 
 const harnessOptInChain = createValidationRepairAuditChain({
   chainId: 'agent-harness-repair-opt-in',
@@ -304,8 +328,58 @@ assert.equal(harnessOptInChain.audit.repairBudget.remainingAttempts, 0);
 assert.ok(harnessOptInChain.audit.relatedRefs.includes('agent-policy-repair-kind:fail-closed'));
 assert.ok(harnessOptInChain.audit.relatedRefs.includes('agent-policy-verification-intensity:audit'));
 assert.ok(harnessOptInChain.audit.relatedRefs.includes('agent-policy-verification-require-current-refs:true'));
+assert.ok(harnessOptInChain.audit.relatedRefs.includes('agent-harness-contract:runtime://agent-harness/contracts/repair-opt-in'));
+assert.ok(harnessOptInChain.audit.relatedRefs.includes('agent-harness-trace:runtime://agent-harness/traces/repair-opt-in'));
+assert.ok(harnessOptInChain.audit.relatedRefs.includes('agent-harness-profile:debug-repair'));
 assert.ok(harnessOptInChain.audit.sinkRefs.includes('agent-policy-repair:runtime://agent-harness/contracts/repair-opt-in'));
 assert.ok(harnessOptInChain.audit.sinkRefs.includes('agent-policy-verification:audit'));
+
+const harnessLooseRuntimePolicy = agentHarnessRepairPolicyBridgeFromRuntimeState({
+  agentHarnessRepairPolicyEnabled: true,
+  harnessProfileId: 'debug-repair',
+  agentHarness: {
+    summary: {
+      contractRef: 'runtime://agent-harness/contracts/loose-opt-in',
+      traceRef: 'runtime://agent-harness/traces/loose-opt-in',
+    },
+    contract: {
+      repairContextPolicy: { kind: 'repair-rerun', maxAttempts: 99 },
+      verificationPolicy: {
+        intensity: 'audit',
+        requireCitations: false,
+        requireCurrentRefs: true,
+      },
+    },
+  },
+});
+assert.ok(harnessLooseRuntimePolicy, 'runtime uiState bridge should project only under explicit opt-in');
+assert.equal(harnessLooseRuntimePolicy.contractRef, 'runtime://agent-harness/contracts/loose-opt-in');
+assert.equal(harnessLooseRuntimePolicy.traceRef, 'runtime://agent-harness/traces/loose-opt-in');
+assert.equal(harnessLooseRuntimePolicy.profileId, 'debug-repair');
+
+const harnessLooseOptInChain = createValidationRepairAuditChain({
+  chainId: 'agent-harness-repair-loose-opt-in',
+  subject: {
+    kind: 'verification-gate',
+    id: 'agent-harness-repair-loose-opt-in',
+    capabilityId: 'sciforge.runtime-verification-gate',
+    artifactRefs: [],
+    currentRefs: ['current:user-request'],
+  },
+  runtimeVerificationResults: verificationGateResults,
+  repairBudget: exhaustedRepairBudget,
+  allowSupplement: false,
+  agentHarnessRepairPolicy: harnessLooseRuntimePolicy,
+  createdAt,
+});
+assert.equal(harnessLooseOptInChain.repair.action, 'fail-closed', 'opt-in harness policy must not reopen exhausted repair budget');
+assert.equal(harnessLooseOptInChain.audit.outcome, 'failed-closed');
+assert.equal(harnessLooseOptInChain.audit.repairBudget.maxAttempts, 1, 'looser harness maxAttempts must not increase base maxAttempts');
+assert.equal(harnessLooseOptInChain.audit.repairBudget.remainingAttempts, 0, 'looser harness maxAttempts must not increase remaining attempts');
+assert.ok(harnessLooseOptInChain.audit.relatedRefs.includes('agent-policy-repair-max-attempts:99'));
+assert.ok(harnessLooseOptInChain.audit.relatedRefs.includes('agent-harness-contract:runtime://agent-harness/contracts/loose-opt-in'));
+assert.ok(harnessLooseOptInChain.audit.relatedRefs.includes('agent-harness-trace:runtime://agent-harness/traces/loose-opt-in'));
+assert.ok(harnessLooseOptInChain.audit.relatedRefs.includes('agent-harness-profile:debug-repair'));
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-validation-repair-audit-real-'));
 try {

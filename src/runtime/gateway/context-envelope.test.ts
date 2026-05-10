@@ -285,6 +285,75 @@ test('context envelope governance ignores legacy repair context policy fields fo
   );
 });
 
+test('context envelope governance audits contract repair context policy without using it for context refs', () => {
+  const envelope = buildContextEnvelope({
+    skillDomain: 'knowledge',
+    prompt: 'Contract repair policy should be audit-only for context envelope.',
+    artifacts: [],
+    uiState: {
+      agentHarnessContextEnvelopeEnabled: true,
+      currentReferenceDigests: [
+        { ref: 'ref:keep', digestText: 'Keep digest' },
+        { ref: 'ref:repair-blocked', digestText: 'Repair-blocked digest' },
+      ],
+      repairContextPolicy: {
+        blockedFailureEvidenceRefs: ['ref:keep'],
+        includeStdoutSummary: false,
+      },
+      agentHarness: {
+        contract: {
+          schemaVersion: 'sciforge.agent-harness-contract.v1',
+          contractRef: 'harness-contract:repair-policy',
+          traceRef: 'harness-trace:repair-policy',
+          repairContextPolicy: {
+            kind: 'failed-task-evidence',
+            maxAttempts: 2,
+            allowedFailureEvidenceRefs: ['stdout:summary'],
+            blockedFailureEvidenceRefs: ['ref:repair-blocked'],
+            includeStdoutSummary: true,
+            includeStderrSummary: false,
+            includeValidationFindings: true,
+            includePriorAttemptRefs: false,
+          },
+        },
+      },
+    },
+  } as GatewayRequest, { workspace: '/tmp/sciforge-test' });
+
+  assert.deepEqual(
+    records(envelope.sessionFacts.currentReferenceDigests).map((entry) => entry.ref),
+    ['ref:keep', 'ref:repair-blocked'],
+  );
+  const audit = record(envelope.contextGovernanceAudit);
+  assert.equal(audit.source, 'request.uiState.agentHarness.contract');
+  assert.deepEqual(records(audit.decisions), []);
+  const repairContextPolicy = record(audit.repairContextPolicy);
+  assert.equal(repairContextPolicy.schemaVersion, 'sciforge.context-envelope.repair-context-policy-summary.v1');
+  assert.equal(repairContextPolicy.source, 'request.uiState.agentHarness.contract.repairContextPolicy');
+  assert.equal(repairContextPolicy.sourceKind, 'contract');
+  assert.equal(repairContextPolicy.contractRef, 'harness-contract:repair-policy');
+  assert.equal(repairContextPolicy.traceRef, 'harness-trace:repair-policy');
+  assert.equal(repairContextPolicy.deterministic, true);
+  assert.equal(typeof repairContextPolicy.deterministicDecisionRef, 'string');
+  assert.deepEqual(repairContextPolicy.fields, [
+    'kind',
+    'allowedFailureEvidenceRefs',
+    'blockedFailureEvidenceRefs',
+    'maxAttempts',
+    'includeStdoutSummary',
+    'includeStderrSummary',
+    'includeValidationFindings',
+    'includePriorAttemptRefs',
+  ]);
+  assert.deepEqual(repairContextPolicy.allowedFailureEvidenceRefs, ['stdout:summary']);
+  assert.deepEqual(repairContextPolicy.blockedFailureEvidenceRefs, ['ref:repair-blocked']);
+  assert.equal(repairContextPolicy.includeStdoutSummary, true);
+  assert.equal(repairContextPolicy.includeStderrSummary, false);
+  assert.equal(repairContextPolicy.includeValidationFindings, true);
+  assert.equal(repairContextPolicy.includePriorAttemptRefs, false);
+  assert.deepEqual(records(audit.ignoredLegacySources).map((entry) => entry.source), ['request.uiState']);
+});
+
 test('repair context extracts WorkEvidence summary from failed output ref', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sciforge-repair-context-'));
   try {
