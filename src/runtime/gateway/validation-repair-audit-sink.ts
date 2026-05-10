@@ -7,6 +7,11 @@ import {
   type ValidationRepairAuditSinkRef,
   type ValidationRepairAuditSinkTarget,
 } from '@sciforge-ui/runtime-contract/validation-repair-audit';
+import {
+  appendValidationRepairAuditSinkRecordsToCapabilityEvolutionLedger,
+  type ValidationRepairAuditLedgerWriteOptions,
+  type ValidationRepairAuditLedgerWriteResult,
+} from '../capability-evolution-ledger.js';
 import { isRecord } from '../gateway-utils.js';
 import type { ValidationRepairAuditChain } from './validation-repair-audit-bridge.js';
 
@@ -77,6 +82,14 @@ export function validationRepairAuditSinkProjectionFromPayload(
 export function validationRepairAuditAttemptMetadataFromPayload(value: unknown): ValidationRepairAuditAttemptMetadata | undefined {
   const projection = validationRepairAuditSinkProjectionFromPayload(value);
   return projection?.attemptMetadata;
+}
+
+export async function writeValidationRepairAuditSinkLedgerRecords(
+  source: ValidationRepairAuditSinkSource | ValidationRepairAuditSinkSource[],
+  options: ValidationRepairAuditLedgerWriteOptions,
+): Promise<ValidationRepairAuditLedgerWriteResult[]> {
+  const projection = projectValidationRepairAuditSink(source, { targets: ['ledger'] });
+  return appendValidationRepairAuditSinkRecordsToCapabilityEvolutionLedger(options, projection.records);
 }
 
 export function mergeValidationRepairAuditAttemptMetadata(

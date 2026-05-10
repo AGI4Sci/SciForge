@@ -10,11 +10,18 @@ import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from 
 import { summarizeTaskAttemptsForAgentServer } from './context-envelope.js';
 import { currentTurnReferences } from './agentserver-context-window.js';
 import { sanitizeAgentServerError } from './backend-failure-diagnostics.js';
-import { evaluateToolPayloadEvidence } from './work-evidence-guard.js';
-import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
-import { evaluateGuidanceAdoption } from './guidance-adoption-guard.js';
 import { materializeBackendPayloadOutput, type RuntimeRefBundle } from './artifact-materializer.js';
 import { recordCapabilityEvolutionRuntimeEvent } from './capability-evolution-events.js';
+import {
+  assessGeneratedTaskValidationLifecycle,
+  firstRepairOrFailurePayloadReason,
+  payloadAttemptStatus,
+  payloadHasRepairOrFailureStatus,
+  runGeneratedTaskRepairAuditLifecycle,
+} from './generated-task-runner-validation-lifecycle.js';
+import { evaluateGuidanceAdoption } from './guidance-adoption-guard.js';
+import { evaluateToolPayloadEvidence } from './work-evidence-guard.js';
+import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import { reportRuntimeResultViewSlots } from '../../../packages/presentation/interactive-views';
 import {
   CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_DETAIL,
@@ -400,6 +407,7 @@ export async function runAgentServerGeneratedTask(
   }
   const entrypointOriginalRel = safeWorkspaceRel(generation.response.entrypoint.path);
   const taskRel = generatedPathMap.get(entrypointOriginalRel) ?? generatedTaskArchiveRel(taskId, generation.response.entrypoint.path);
+  const inputRel = `.sciforge/task-inputs/${taskId}.json`;
   const outputRel = `.sciforge/task-results/${taskId}.json`;
   const stdoutRel = `.sciforge/logs/${taskId}.stdout.log`;
   const stderrRel = `.sciforge/logs/${taskId}.stderr.log`;
@@ -448,7 +456,7 @@ export async function runAgentServerGeneratedTask(
       attempt: 1,
       status: 'repair-needed',
       codeRef: taskRel,
-      inputRef: `.sciforge/task-inputs/${taskId}.json`,
+      inputRef: inputRel,
       outputRef: outputRel,
       stdoutRef: stdoutRel,
       stderrRef: stderrRel,
@@ -456,7 +464,7 @@ export async function runAgentServerGeneratedTask(
       failureReason,
       createdAt: new Date().toISOString(),
     });
-    await writeCapabilityEvolutionEventBestEffort({
+    const repaired = await runGeneratedTaskRepairAuditLifecycle({
       workspacePath: workspace,
       request,
       skill,
@@ -464,46 +472,17 @@ export async function runAgentServerGeneratedTask(
       runId: generation.runId,
       run,
       taskRel,
-      inputRel: `.sciforge/task-inputs/${taskId}.json`,
+      inputRel,
       outputRel,
       stdoutRel,
       stderrRel,
-      failureReason,
-      recoverActions: ['inspect-stderr-ref', 'repair-generated-task', 'rerun-generated-task'],
-    });
-    const repaired = await tryAgentServerRepairAndRerun({
-      request,
-      skill,
-      taskId,
-      taskPrefix: 'generated',
-      run,
       schemaErrors: [],
       failureReason,
+      recoverActions: ['inspect-stderr-ref', 'repair-generated-task', 'rerun-generated-task'],
       callbacks,
+      tryAgentServerRepairAndRerun,
     });
     if (repaired) {
-      await writeCapabilityEvolutionEventBestEffort({
-        workspacePath: workspace,
-        request,
-        skill,
-        taskId,
-        runId: generation.runId,
-        run,
-        payload: repaired,
-        taskRel,
-        inputRel: `.sciforge/task-inputs/${taskId}.json`,
-        outputRel,
-        stdoutRel,
-        stderrRel,
-        failureReason,
-        finalStatus: 'repair-succeeded',
-        repairAttempt: {
-          id: `${taskId}-repair`,
-          status: 'succeeded',
-          reason: failureReason,
-          validationResult: { verdict: 'pass', validatorId: 'sciforge.payload-schema' },
-        },
-      });
       return repaired;
     }
     return failedTaskPayload(request, skill, run, failureReason);
@@ -523,25 +502,15 @@ export async function runAgentServerGeneratedTask(
     if (normalized) {
       normalized = await materializeBackendPayloadOutput(workspace, request, normalized, { taskRel, outputRel, stdoutRel, stderrRel });
     }
-    const evidenceFinding = normalized ? evaluateToolPayloadEvidence(normalized, request) : undefined;
-    const guidanceFinding = normalized ? evaluateGuidanceAdoption(normalized, request) : undefined;
-    const workEvidenceSummary = summarizeWorkEvidenceForHandoff(normalized ?? payload);
-    const normalizedFailureReason = normalized ? firstPayloadFailureReason(normalized, run) ?? firstRepairOrFailurePayloadReason(normalized) : undefined;
-    const normalizedFailureStatus = normalized ? payloadHasFailureStatus(normalized) || payloadHasRepairOrFailureStatus(normalized) : false;
-    const normalizedRepairNeeded = normalized ? payloadHasRepairNeededStatus(normalized) : false;
-    const payloadFailureReason = firstPayloadFailureReason(payload, run) ?? firstRepairOrFailurePayloadReason(payload) ?? normalizedFailureReason;
-    const payloadFailureStatus = payloadHasFailureStatus(payload) || payloadHasRepairOrFailureStatus(payload) || normalizedFailureStatus;
-    const evidenceFailureReason = !payloadFailureStatus ? guidanceFinding?.reason ?? evidenceFinding?.reason : undefined;
-    const failureReason = payloadFailureReason ?? evidenceFailureReason;
-    const shouldRepairExecutionFailure = errors.length === 0 && Boolean(failureReason)
-      && (run.exitCode !== 0 || Boolean(evidenceFailureReason) || normalizedRepairNeeded);
-    const attemptStatus = errors.length
-      ? 'repair-needed'
-      : shouldRepairExecutionFailure
-        ? normalizedRepairNeeded ? 'repair-needed' : guidanceFinding?.severity ?? evidenceFinding?.severity ?? 'repair-needed'
-        : payloadFailureStatus
-          ? normalized ? payloadAttemptStatus(normalized) : payloadAttemptStatus(payload)
-          : 'done';
+    const lifecycle = assessGeneratedTaskValidationLifecycle({
+      payload,
+      normalized,
+      schemaErrors: errors,
+      run,
+      request,
+      firstPayloadFailureReason,
+      payloadHasFailureStatus,
+    });
     await appendTaskAttempt(workspace, {
       id: taskId,
       prompt: request.prompt,
@@ -549,25 +518,20 @@ export async function runAgentServerGeneratedTask(
       ...attemptPlanRefs(request, skill),
       skillId: skill.id,
       attempt: 1,
-      status: attemptStatus,
+      status: lifecycle.attemptStatus,
       codeRef: taskRel,
-      inputRef: `.sciforge/task-inputs/${taskId}.json`,
+      inputRef: inputRel,
       outputRef: outputRel,
       stdoutRef: stdoutRel,
       stderrRef: stderrRel,
       exitCode: run.exitCode,
       schemaErrors: errors,
-      workEvidenceSummary,
-      failureReason: errors.length ? `AgentServer generated task output failed schema validation: ${errors.join('; ')}` : failureReason,
+      workEvidenceSummary: lifecycle.workEvidenceSummary,
+      failureReason: errors.length ? `AgentServer generated task output failed schema validation: ${errors.join('; ')}` : lifecycle.failureReason,
       createdAt: new Date().toISOString(),
     });
-    if (errors.length || shouldRepairExecutionFailure) {
-      const repairFailureReason = errors.length
-        ? `AgentServer generated task output failed schema validation: ${errors.join('; ')}`
-        : normalizedRepairNeeded
-          ? String(failureReason)
-          : evidenceFailureReason ?? `AgentServer generated task exited ${run.exitCode} with failed payload: ${failureReason}`;
-      await writeCapabilityEvolutionEventBestEffort({
+    if (lifecycle.repair) {
+      const repaired = await runGeneratedTaskRepairAuditLifecycle({
         workspacePath: workspace,
         request,
         skill,
@@ -576,59 +540,26 @@ export async function runAgentServerGeneratedTask(
         run,
         payload: normalized ?? payload,
         taskRel,
-        inputRel: `.sciforge/task-inputs/${taskId}.json`,
+        inputRel,
         outputRel,
         stdoutRel,
         stderrRel,
         schemaErrors: errors,
-        failureReason: repairFailureReason,
-        recoverActions: errors.length
-          ? ['repair-output-schema', 'preserve-output-ref', 'rerun-generated-task']
-          : ['repair-runtime-evidence', 'preserve-output-ref', 'rerun-generated-task'],
-      });
-      const repaired = await tryAgentServerRepairAndRerun({
-        request,
-        skill,
-        taskId,
-        taskPrefix: 'generated',
-        run,
-        schemaErrors: errors,
-        failureReason: repairFailureReason,
+        failureReason: lifecycle.repair.failureReason,
+        recoverActions: lifecycle.repair.recoverActions,
         callbacks,
+        tryAgentServerRepairAndRerun,
       });
       if (repaired) {
-        await writeCapabilityEvolutionEventBestEffort({
-          workspacePath: workspace,
-          request,
-          skill,
-          taskId,
-          runId: generation.runId,
-          run,
-          payload: repaired,
-          taskRel,
-          inputRel: `.sciforge/task-inputs/${taskId}.json`,
-          outputRel,
-          stdoutRel,
-          stderrRel,
-          schemaErrors: errors,
-          failureReason: repairFailureReason,
-          finalStatus: 'repair-succeeded',
-          repairAttempt: {
-            id: `${taskId}-repair`,
-            status: 'succeeded',
-            reason: repairFailureReason,
-            validationResult: { verdict: 'pass', validatorId: 'sciforge.payload-schema' },
-          },
-        });
         return repaired;
       }
-      if (normalizedRepairNeeded && normalized) return normalized;
-      return repairNeededPayload(request, skill, repairFailureReason);
+      if (lifecycle.normalizedRepairNeeded && normalized) return normalized;
+      return repairNeededPayload(request, skill, lifecycle.repair.failureReason);
     }
     if (!normalized) {
       return repairNeededPayload(request, skill, 'AgentServer generated task output could not be normalized after schema validation.');
     }
-    if (normalizedFailureStatus) return normalized;
+    if (lifecycle.normalizedFailureStatus) return normalized;
     if (options.allowSupplement !== false) {
       const supplemented = await tryAgentServerSupplementMissingArtifacts({
         request,
@@ -653,7 +584,7 @@ export async function runAgentServerGeneratedTask(
       skill,
       taskId,
       taskRel,
-      inputRef: `.sciforge/task-inputs/${taskId}.json`,
+      inputRef: inputRel,
       outputRef: outputRel,
       stdoutRef: stdoutRel,
       stderrRef: stderrRel,
@@ -685,7 +616,7 @@ export async function runAgentServerGeneratedTask(
       run,
       payload: completed,
       taskRel,
-      inputRel: `.sciforge/task-inputs/${taskId}.json`,
+      inputRel,
       outputRel,
       stdoutRel,
       stderrRel,
@@ -706,7 +637,7 @@ export async function runAgentServerGeneratedTask(
       attempt: 1,
       status: 'repair-needed',
       codeRef: taskRel,
-      inputRef: `.sciforge/task-inputs/${taskId}.json`,
+      inputRef: inputRel,
       outputRef: outputRel,
       stdoutRef: stdoutRel,
       stderrRef: stderrRel,
@@ -714,7 +645,7 @@ export async function runAgentServerGeneratedTask(
       failureReason,
       createdAt: new Date().toISOString(),
     });
-    await writeCapabilityEvolutionEventBestEffort({
+    const repaired = await runGeneratedTaskRepairAuditLifecycle({
       workspacePath: workspace,
       request,
       skill,
@@ -722,48 +653,17 @@ export async function runAgentServerGeneratedTask(
       runId: generation.runId,
       run,
       taskRel,
-      inputRel: `.sciforge/task-inputs/${taskId}.json`,
+      inputRel,
       outputRel,
       stdoutRel,
       stderrRel,
       schemaErrors: ['output could not be parsed'],
       failureReason,
       recoverActions: ['inspect-output-ref', 'repair-output-parser', 'rerun-generated-task'],
-    });
-    const repaired = await tryAgentServerRepairAndRerun({
-      request,
-      skill,
-      taskId,
-      taskPrefix: 'generated',
-      run,
-      schemaErrors: ['output could not be parsed'],
-      failureReason,
       callbacks,
+      tryAgentServerRepairAndRerun,
     });
     if (repaired) {
-      await writeCapabilityEvolutionEventBestEffort({
-        workspacePath: workspace,
-        request,
-        skill,
-        taskId,
-        runId: generation.runId,
-        run,
-        payload: repaired,
-        taskRel,
-        inputRel: `.sciforge/task-inputs/${taskId}.json`,
-        outputRel,
-        stdoutRel,
-        stderrRel,
-        schemaErrors: ['output could not be parsed'],
-        failureReason,
-        finalStatus: 'repair-succeeded',
-        repairAttempt: {
-          id: `${taskId}-repair`,
-          status: 'succeeded',
-          reason: failureReason,
-          validationResult: { verdict: 'pass', validatorId: 'sciforge.payload-schema' },
-        },
-      });
       return repaired;
     }
     return failedTaskPayload(request, skill, run, failureReason);
@@ -777,34 +677,6 @@ function backendPayloadRefs(taskId: string, taskRel: string): RuntimeRefBundle {
     stdoutRel: `.sciforge/logs/${taskId}.stdout.log`,
     stderrRel: `.sciforge/logs/${taskId}.stderr.log`,
   };
-}
-
-function payloadHasRepairOrFailureStatus(payload: ToolPayload) {
-  return payloadHasRepairNeededStatus(payload)
-    || (Array.isArray(payload.executionUnits) ? payload.executionUnits : [])
-      .some((unit) => isRecord(unit) && /failed|error|needs-human/i.test(String(unit.status || '')));
-}
-
-function payloadHasRepairNeededStatus(payload: ToolPayload) {
-  if (/repair-needed|needs-human/i.test(String(payload.claimType || ''))) return true;
-  return (Array.isArray(payload.executionUnits) ? payload.executionUnits : [])
-    .some((unit) => isRecord(unit) && /repair-needed|needs-human/i.test(String(unit.status || '')));
-}
-
-function firstRepairOrFailurePayloadReason(payload: ToolPayload) {
-  const units = Array.isArray(payload.executionUnits) ? payload.executionUnits : [];
-  const unit = units.find((entry) => isRecord(entry) && /repair-needed|failed|error|needs-human/i.test(String(entry.status || '')));
-  return isRecord(unit)
-    ? stringField(unit.failureReason) ?? stringField(unit.error) ?? stringField(unit.message)
-    : undefined;
-}
-
-function payloadAttemptStatus(payload: ToolPayload): 'repair-needed' | 'failed-with-reason' {
-  return payloadHasRepairNeededStatus(payload) ? 'repair-needed' : 'failed-with-reason';
-}
-
-function stringField(value: unknown) {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 async function writeCapabilityEvolutionEventBestEffort(
@@ -1053,9 +925,9 @@ async function recordSupplementalFallbackLedger(
     stdoutRel: params.primaryRefs.stdoutRel,
     stderrRel: params.primaryRefs.stderrRel,
     finalStatus: outcome.status,
-    failureReason: fallbackSucceeded
-      ? undefined
-      : `Supplemental fallback did not fill missing artifact types: ${outcome.missingTypes.join(', ')}`,
+    ...(fallbackSucceeded ? {} : {
+      failureReason: `Supplemental fallback did not fill missing artifact types: ${outcome.missingTypes.join(', ')}`,
+    }),
     fallbackReason: outcome.fallbackReason,
     eventKind: 'composed-capability-fallback',
     validationResult,

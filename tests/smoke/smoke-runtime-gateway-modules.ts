@@ -1023,6 +1023,25 @@ try {
     }],
     artifacts: [],
   }).riskLevel, 'high');
+  const gatedOutputRef = '.sciforge/task-results/runtime-verification-gated.json';
+  await mkdir(join(workspace, '.sciforge/task-results'), { recursive: true });
+  await writeFile(join(workspace, gatedOutputRef), JSON.stringify({
+    message: 'Provider says action completed',
+    confidence: 0.9,
+    claimType: 'execution',
+    evidenceLevel: 'provider',
+    reasoningTrace: 'action provider self-report',
+    claims: [],
+    uiManifest: [],
+    executionUnits: [{
+      id: 'EU-high',
+      status: 'done',
+      tool: 'external.action-provider',
+      outputRef: gatedOutputRef,
+      params: JSON.stringify({ action: 'publish' }),
+    }],
+    artifacts: [],
+  }), 'utf8');
   const gated = await applyRuntimeVerificationPolicy({
     message: 'Provider says action completed',
     confidence: 0.9,
@@ -1035,6 +1054,7 @@ try {
       id: 'EU-high',
       status: 'done',
       tool: 'external.action-provider',
+      outputRef: gatedOutputRef,
       params: JSON.stringify({ action: 'publish' }),
     }],
     artifacts: [],
@@ -1044,6 +1064,21 @@ try {
   assert.equal(gated.message, 'Provider says action completed');
   const verificationDisplayIntent = gated.displayIntent?.verification as Record<string, unknown> | undefined;
   assert.equal(verificationDisplayIntent?.verdict, 'needs-human');
+  const gatedRefs = (gated.executionUnits[0].refs ?? {}) as Record<string, unknown>;
+  const gatedAudit = gatedRefs.validationRepairAudit as {
+    validationDecision?: { subject?: { kind?: string; completedPayloadRef?: string } };
+    repairDecision?: { action?: string };
+    auditRecord?: { failureKind?: string; outcome?: string; relatedRefs?: string[] };
+  } | undefined;
+  assert.ok(gatedRefs.validationFailure);
+  assert.equal(gatedAudit?.validationDecision?.subject?.kind, 'verification-gate');
+  assert.equal(gatedAudit?.validationDecision?.subject?.completedPayloadRef, gatedOutputRef);
+  assert.equal(gatedAudit?.repairDecision?.action, 'needs-human');
+  assert.equal(gatedAudit?.auditRecord?.failureKind, 'runtime-verification');
+  assert.equal(gatedAudit?.auditRecord?.outcome, 'needs-human');
+  assert.ok(gatedAudit?.auditRecord?.relatedRefs?.some((ref) => ref.includes('.sciforge/verifications/')));
+  const persistedGatedPayload = JSON.parse(await readFile(join(workspace, gatedOutputRef), 'utf8')) as ToolPayload & { refs?: Record<string, unknown> };
+  assert.ok(persistedGatedPayload.refs?.validationRepairAudit);
 
   console.log('[ok] runtime gateway modules expose request/context/payload/artifact/repair boundaries');
 } finally {

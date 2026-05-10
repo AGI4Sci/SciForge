@@ -9,7 +9,11 @@ import {
 import type { GatewayRequest, ToolPayload, VerificationPolicy, VerificationResult, VerificationVerdict } from '../runtime-types.js';
 import { isRecord, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
 import { sha1 } from '../workspace-task-runner.js';
-import { normalizeRuntimeVerificationResults } from './verification-results.js';
+import { resolveWorkspaceFileRefPath } from '../workspace-paths.js';
+import { createValidationRepairAuditChain, type ValidationRepairAuditChain } from './validation-repair-audit-bridge.js';
+import { contractValidationFailureFromVerificationResults, normalizeRuntimeVerificationResults } from './verification-results.js';
+
+const RUNTIME_VERIFICATION_GATE_CAPABILITY_ID = 'sciforge.runtime-verification-gate';
 
 export async function applyRuntimeVerificationPolicy(
   payload: ToolPayload,
@@ -36,8 +40,15 @@ export async function applyRuntimeVerificationPolicy(
     result: resultWithId,
   }, null, 2), 'utf8');
 
-  const gatedPayload = gate.blocked ? failClosedPayload(payload, gate.reason, resultWithId, verificationRel) : payload;
-  return attachVerificationRefs(gatedPayload, policy, resultWithId, verificationRel, artifact, nonBlocking);
+  const gateAudit = gate.blocked
+    ? validationRepairAuditForVerificationGate(payload, request, policy, resultWithId, verificationRel)
+    : undefined;
+  const gatedPayload = gate.blocked ? failClosedPayload(payload, gate.reason, resultWithId, verificationRel, gateAudit) : payload;
+  const verifiedPayload = attachVerificationRefs(gatedPayload, policy, resultWithId, verificationRel, artifact, nonBlocking);
+  if (gate.blocked) {
+    await persistVerificationGatedPayloadIfPossible(workspace, verifiedPayload);
+  }
+  return verifiedPayload;
 }
 
 export function normalizeRuntimeVerificationPolicy(
@@ -93,10 +104,20 @@ function attachVerificationRefs(
   };
 }
 
-function failClosedPayload(payload: ToolPayload, reason: string | undefined, result: VerificationResult, verificationRel: string): ToolPayload {
+function failClosedPayload(
+  payload: ToolPayload,
+  reason: string | undefined,
+  result: VerificationResult,
+  verificationRel: string,
+  gateAudit?: VerificationGateAuditProjection,
+): ToolPayload {
   const blockedReason = reason ?? result.critique ?? 'Verification gate blocked completion.';
-  return {
+  const failedPayload = {
     ...payload,
+    refs: {
+      ...topLevelRefs(payload),
+      ...verificationGateAuditRefs(gateAudit),
+    },
     confidence: Math.min(payload.confidence, 0.35),
     claimType: String(payload.claimType || '').includes('error') ? payload.claimType : 'verification-gated',
     evidenceLevel: 'verification-required',
@@ -118,6 +139,10 @@ function failClosedPayload(payload: ToolPayload, reason: string | undefined, res
         status: result.verdict === 'needs-human' ? 'needs-human' : 'failed-with-reason',
         failureReason: blockedReason,
         verificationRef: verificationRel,
+        refs: {
+          ...(isRecord(unit.refs) ? unit.refs : {}),
+          ...verificationGateAuditRefs(gateAudit),
+        },
         requiredInputs: uniqueStrings([...toStringList(unit.requiredInputs), 'verifier result or human approval']),
         recoverActions: uniqueStrings([
           ...toStringList(unit.recoverActions),
@@ -126,7 +151,8 @@ function failClosedPayload(payload: ToolPayload, reason: string | undefined, res
         nextStep: 'Provide a passing verifier result or explicit human approval, then rerun or continue.',
       };
     }),
-  };
+  } as ToolPayload & { refs?: Record<string, unknown> };
+  return failedPayload;
 }
 
 function isSuccessfulStatus(value: unknown) {
@@ -144,4 +170,153 @@ function attachRefToRecord(record: Record<string, unknown>, verificationRel: str
       verificationResult: verificationRel,
     },
   };
+}
+
+interface VerificationGateAuditProjection {
+  validationFailure?: ReturnType<typeof contractValidationFailureFromVerificationResults>;
+  chain: ValidationRepairAuditChain;
+}
+
+function validationRepairAuditForVerificationGate(
+  payload: ToolPayload,
+  request: GatewayRequest,
+  policy: VerificationPolicy,
+  result: VerificationResult,
+  verificationRel: string,
+): VerificationGateAuditProjection {
+  const relatedRefs = verificationGateRelatedRefs(payload, request, verificationRel, result);
+  const outputRef = firstExecutionUnitString(payload, 'outputRef');
+  const chainId = `verification-gate:${sha1([
+    request.skillDomain,
+    request.prompt,
+    policy.mode,
+    policy.riskLevel,
+    result.id,
+    result.verdict,
+    outputRef,
+    verificationRel,
+  ].filter(Boolean).join(':')).slice(0, 12)}`;
+  const chain = createValidationRepairAuditChain({
+    chainId,
+    subject: {
+      kind: 'verification-gate',
+      id: result.id ?? chainId,
+      capabilityId: RUNTIME_VERIFICATION_GATE_CAPABILITY_ID,
+      contractId: 'sciforge.verification-result.v1',
+      schemaPath: 'packages/contracts/runtime/verification-result.ts#RuntimeVerificationResult',
+      completedPayloadRef: outputRef,
+      generatedTaskRef: firstExecutionUnitString(payload, 'codeRef'),
+      artifactRefs: uniqueStrings([
+        verificationRel,
+        ...payload.artifacts.flatMap((artifact) => artifactRefsFromRecord(artifact)),
+      ]),
+      currentRefs: currentReferenceRefs(request),
+    },
+    runtimeVerificationResults: [result],
+    runtimeVerificationPolicyId: `runtime-verification:${policy.mode}:${policy.riskLevel}`,
+    relatedRefs,
+    sinkRefs: [
+      `appendTaskAttempt:${chainId}`,
+      `verification-artifact:${verificationRel}`,
+    ],
+    telemetrySpanRefs: [
+      `span:verification-gate:${chainId}`,
+      `span:repair-decision:${chainId}`,
+    ],
+  });
+  return {
+    validationFailure: contractValidationFailureFromVerificationResults(result, {
+      capabilityId: RUNTIME_VERIFICATION_GATE_CAPABILITY_ID,
+      relatedRefs,
+    }),
+    chain,
+  };
+}
+
+function verificationGateAuditRefs(projection: VerificationGateAuditProjection | undefined) {
+  if (!projection) return {};
+  return {
+    ...(projection.validationFailure ? { validationFailure: projection.validationFailure } : {}),
+    validationRepairAudit: {
+      validationDecision: projection.chain.validation,
+      repairDecision: projection.chain.repair,
+      auditRecord: projection.chain.audit,
+    },
+  };
+}
+
+function topLevelRefs(payload: ToolPayload) {
+  const refs = (payload as ToolPayload & { refs?: unknown }).refs;
+  return isRecord(refs) ? refs : {};
+}
+
+function verificationGateRelatedRefs(
+  payload: ToolPayload,
+  request: GatewayRequest,
+  verificationRel: string,
+  result: VerificationResult,
+) {
+  return uniqueStrings([
+    verificationRel,
+    `file:${verificationRel}`,
+    ...result.evidenceRefs,
+    ...currentReferenceRefs(request),
+    ...payload.executionUnits.flatMap((unit) => isRecord(unit) ? [
+      stringField(unit.codeRef) ?? '',
+      stringField(unit.outputRef) ?? '',
+      stringField(unit.stdoutRef) ?? '',
+      stringField(unit.stderrRef) ?? '',
+      stringField(unit.verificationRef) ?? '',
+    ] : []),
+    ...payload.artifacts.flatMap((artifact) => artifactRefsFromRecord(artifact)),
+  ]);
+}
+
+function currentReferenceRefs(request: GatewayRequest) {
+  const refs = Array.isArray(request.uiState?.currentReferences)
+    ? request.uiState.currentReferences
+    : [];
+  return refs
+    .filter(isRecord)
+    .map((reference) => stringField(reference.ref))
+    .filter((ref): ref is string => Boolean(ref));
+}
+
+function artifactRefsFromRecord(record: Record<string, unknown>) {
+  const metadata = isRecord(record.metadata) ? record.metadata : {};
+  return [
+    stringField(record.dataRef),
+    stringField(record.ref),
+    stringField(record.path),
+    stringField(record.rawRef),
+    stringField(metadata.artifactRef),
+    stringField(metadata.outputRef),
+  ].filter((ref): ref is string => Boolean(ref));
+}
+
+function firstExecutionUnitString(payload: ToolPayload, key: string) {
+  for (const unit of payload.executionUnits) {
+    if (!isRecord(unit)) continue;
+    const value = stringField(unit[key]);
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function stringField(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+async function persistVerificationGatedPayloadIfPossible(workspace: string, payload: ToolPayload) {
+  const outputRef = firstExecutionUnitString(payload, 'outputRef');
+  if (!outputRef) return;
+  let outputPath: string | undefined;
+  try {
+    outputPath = resolveWorkspaceFileRefPath(outputRef, workspace);
+  } catch {
+    return;
+  }
+  if (!outputPath) return;
+  await mkdir(dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, JSON.stringify(payload, null, 2), 'utf8');
 }

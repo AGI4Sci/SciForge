@@ -21,6 +21,7 @@ import {
 import type { RuntimeVerificationResult } from '@sciforge-ui/runtime-contract/verification-result';
 import { normalizeGatewayRequest } from '../../src/runtime/gateway/gateway-request';
 import { validateAndNormalizePayload } from '../../src/runtime/gateway/payload-validation';
+import { applyRuntimeVerificationPolicy } from '../../src/runtime/gateway/verification-policy';
 import { createValidationRepairAuditChain } from '../../src/runtime/gateway/validation-repair-audit-bridge';
 import { appendTaskAttempt, readTaskAttempts } from '../../src/runtime/task-attempt-history';
 import type { SkillAvailability, TaskAttemptRecord, ToolPayload } from '../../src/runtime/runtime-types';
@@ -280,6 +281,79 @@ try {
     attempt.validationRepairAuditSinkRecords?.find((record) => record.target === 'ledger')?.auditRecord?.auditId,
     realChain.auditRecord?.auditId,
   );
+
+  const verificationOutputRel = '.sciforge/task-results/real-verification-gate-failure.json';
+  const verificationPayload: ToolPayload = {
+    message: 'Provider says a high-risk publish action completed.',
+    confidence: 0.91,
+    claimType: 'execution',
+    evidenceLevel: 'provider',
+    reasoningTrace: 'provider self-report before runtime verification gate',
+    claims: [],
+    uiManifest: [],
+    executionUnits: [{
+      id: 'EU-verification-gate',
+      status: 'done',
+      tool: 'external.action-provider',
+      outputRef: verificationOutputRel,
+      stdoutRef: '.sciforge/logs/real-verification-gate-failure.stdout.log',
+      stderrRef: '.sciforge/logs/real-verification-gate-failure.stderr.log',
+      params: JSON.stringify({ action: 'publish' }),
+    }],
+    artifacts: [],
+  };
+  const verificationRequest = normalizeGatewayRequest({
+    skillDomain: 'knowledge',
+    prompt: 'Publish this high-risk update after verification.',
+    workspacePath: workspace,
+    verificationPolicy: { required: true, mode: 'hybrid', riskLevel: 'high', reason: 'high-risk external side effect' },
+  });
+  await writeFile(join(workspace, verificationOutputRel), JSON.stringify(verificationPayload), 'utf8');
+  await appendTaskAttempt(workspace, {
+    id: 'real-verification-gate-failure',
+    prompt: verificationRequest.prompt,
+    skillDomain: verificationRequest.skillDomain,
+    skillId: skill.id,
+    attempt: 1,
+    status: 'done',
+    outputRef: verificationOutputRel,
+    createdAt,
+  });
+  const gatedPayload = await applyRuntimeVerificationPolicy(verificationPayload, verificationRequest) as ToolPayload & { refs?: Record<string, unknown> };
+  const gatedUnitRefs = gatedPayload.executionUnits[0].refs as {
+    validationFailure?: { contractId?: string; failureKind?: string };
+    validationRepairAudit?: {
+      validationDecision?: ValidationDecision;
+      repairDecision?: RepairDecision;
+      auditRecord?: AuditRecord;
+    };
+  } | undefined;
+  assert.equal(gatedPayload.verificationResults?.[0]?.verdict, 'needs-human');
+  assert.equal(gatedPayload.executionUnits[0].status, 'needs-human');
+  assert.equal(gatedUnitRefs?.validationFailure?.contractId, 'sciforge.verification-result.v1');
+  assert.equal(gatedUnitRefs?.validationFailure?.failureKind, 'verifier');
+  assert.equal(gatedUnitRefs?.validationRepairAudit?.validationDecision?.subject.kind, 'verification-gate');
+  assert.equal(gatedUnitRefs?.validationRepairAudit?.validationDecision?.subject.completedPayloadRef, verificationOutputRel);
+  assert.equal(gatedUnitRefs?.validationRepairAudit?.repairDecision?.action, 'needs-human');
+  assert.equal(gatedUnitRefs?.validationRepairAudit?.auditRecord?.failureKind, 'runtime-verification');
+  assert.equal(gatedUnitRefs?.validationRepairAudit?.auditRecord?.outcome, 'needs-human');
+  assert.ok(gatedPayload.refs?.validationRepairAudit);
+
+  const verificationAttempts = await readTaskAttempts(workspace, 'real-verification-gate-failure');
+  const verificationAttempt = verificationAttempts[0] as TaskAttemptRecord & {
+    refs?: {
+      validationRepairAudit?: Array<{ contractId?: string; failureKind?: string; outcome?: string; subject?: { kind?: string } }>;
+      validationRepairAuditSink?: Array<{ target?: string; failureKind?: string }>;
+    };
+    validationRepairAuditRecords?: AuditRecord[];
+  };
+  assert.equal(verificationAttempt.status, 'done');
+  assert.equal(verificationAttempt.refs?.validationRepairAudit?.[0]?.contractId, 'sciforge.verification-result.v1');
+  assert.equal(verificationAttempt.refs?.validationRepairAudit?.[0]?.failureKind, 'runtime-verification');
+  assert.equal(verificationAttempt.refs?.validationRepairAudit?.[0]?.outcome, 'needs-human');
+  assert.equal(verificationAttempt.refs?.validationRepairAudit?.[0]?.subject?.kind, 'verification-gate');
+  assert.ok(verificationAttempt.refs?.validationRepairAuditSink?.some((ref) => ref.target === 'verification-artifact'));
+  assert.equal(verificationAttempt.validationRepairAuditRecords?.[0]?.failureKind, 'runtime-verification');
 } finally {
   await rm(workspace, { recursive: true, force: true });
 }

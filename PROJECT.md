@@ -118,7 +118,7 @@ Todo：
 
 状态：进行中；目标是把 fresh/continuation、workspace read policy、current refs、repair retry、tool-use policy 等散落 prompt/metadata 规则迁入 `HarnessContract`，prompt builder 只做 deterministic rendering。
 
-进展：第一阶段 metadata-only handoff 已落地。AgentServer dispatch payload 不再把 harness contract/prompt directives 内联进自然语言 prompt，而是携带 `harnessProfileId`、`harnessContractRef`、`harnessTraceRef`、budget summary、decision owner 和结构化 `agentHarnessHandoff` 元数据，作为后续 deterministic renderer 的稳定交接面。第二阶段补充了 `uiState.agentHarnessInput` 到 shadow contract 的 refs/intent 桥接，并新增离线 `smoke:contract-driven-handoff` 覆盖 fresh/continuation/repair 三类 handoff refs。第三阶段新增 `promptRenderPlan` metadata scaffold：从 `HarnessContract` 的 intent/context/repair/promptDirectives 确定性渲染 strategy/directive refs，所有策略句和 selected refs 都带 `sourceCallbackId`。第四阶段补充 `sourceRefs`、结构化 `renderedEntries` 与 deterministic `renderDigest`，使策略句顺序可从 contract/trace refs 重建；第五阶段让 `buildAgentServerGenerationPrompt` 消费 `agentHarnessHandoff.promptRenderPlan` / `promptRenderPlan` 并生成结构化 `promptRenderPlanSummary`，放入 current-turn snapshot 和 compact request，避免把完整 rendered text 或 metadata 原样塞回 prompt。
+进展：第一阶段 metadata-only handoff 已落地。AgentServer dispatch payload 不再把 harness contract/prompt directives 内联进自然语言 prompt，而是携带 `harnessProfileId`、`harnessContractRef`、`harnessTraceRef`、budget summary、decision owner 和结构化 `agentHarnessHandoff` 元数据，作为后续 deterministic renderer 的稳定交接面。第二阶段补充了 `uiState.agentHarnessInput` 到 shadow contract 的 refs/intent 桥接，并新增离线 `smoke:contract-driven-handoff` 覆盖 fresh/continuation/repair 三类 handoff refs。第三阶段新增 `promptRenderPlan` metadata scaffold：从 `HarnessContract` 的 intent/context/repair/promptDirectives 确定性渲染 strategy/directive refs，所有策略句和 selected refs 都带 `sourceCallbackId`。第四阶段补充 `sourceRefs`、结构化 `renderedEntries` 与 deterministic `renderDigest`，使策略句顺序可从 contract/trace refs 重建；第五阶段让 `buildAgentServerGenerationPrompt` 消费 `agentHarnessHandoff.promptRenderPlan` / `promptRenderPlan` 并生成结构化 `promptRenderPlanSummary`，放入 current-turn snapshot 和 compact request，避免把完整 rendered text 或 metadata 原样塞回 prompt。第六阶段新增 `smoke:agentserver-prompt-policy-prose`，冻结 AgentServer generation/repair prompt 中现存 hardcoded 策略散文，并只允许 runtime-contract policy/contract providers、`packages/skills/runtime-policy` 与 harness `promptRenderPlanSummary.renderedEntries` 继续提供新增策略句。
 
 Todo：
 
@@ -130,6 +130,7 @@ Todo：
 - [x] 增加第一阶段 `smoke:contract-driven-handoff`：mock AgentServer 捕获真实 dispatch，验证 fresh 不泄漏旧 attempts/logs，continuation/repair 携带 contract refs/repair policy。
 - [ ] 将 backend selection、fresh/continuity prompt rule、context/rate-limit recovery、stream guard 统一通过 harness hook 输出结构化决策。
 - [x] 扩展 `smoke:contract-driven-handoff` 到 deterministic renderer：prompt 中所有策略句都有 `sourceCallbackId`。
+- [x] 增加 `smoke:agentserver-prompt-policy-prose`：禁止 prompt builder 新增未受信策略散文，并要求 generation prompt 继续消费 `promptRenderPlanSummary`。
 
 验收标准：
 
@@ -149,25 +150,27 @@ Todo：
 - 2026-05-10：T127 小切片新增 validationRepairAudit attempt metadata helper；`appendTaskAttempt` 可从 repair-needed payload/outputRef 提取并保留 `refs.validationRepairAudit` 与 `validationRepairAuditRecords`，用 smoke 证明 payload-validation schema failure 的 audit record 能随 attempt append/read 回流；完整 AuditSink/ledger wiring 仍未接入。
 - 2026-05-10：新增纯执行层 `repair-executor.ts`，可从既有 `RepairDecision`/validation-audit chain 机械映射并执行 patch/rerun/supplement/peer handoff/needs-human/fail-closed action plan，输出 `RepairExecutorResult` 与 executor refs；策略仍由 `RepairPolicyHarness` 决定，executor 不做策略判断。
 - 2026-05-10：新增 `validation-repair-audit-sink.ts` 纯 sink/helper 与 sink contract 类型，可把 `ValidationRepairAuditChain` 或 `{ validationDecision, repairDecision, auditRecord }` 投影为 `appendTaskAttempt`、`ledger`、`verification-artifact`、`observe-invocation` sink refs/records；先不重接 runner 主流程。
-- 2026-05-10：AuditSink 首片已从纯 projection 推进到 `appendTaskAttempt` / read path，attempt metadata 可保留并回读 `refs.validationRepairAuditSink` 与 `validationRepairAuditSinkRecords`，覆盖 `appendTaskAttempt`、`ledger`、`verification-artifact`、`observe-invocation` 四类 sink target；完整 ledger/verification/observe 真实写入仍待接入。
+- 2026-05-10：AuditSink 首片已从纯 projection 推进到 `appendTaskAttempt` / read path，attempt metadata 可保留并回读 `refs.validationRepairAuditSink` 与 `validationRepairAuditSinkRecords`，覆盖 `appendTaskAttempt`、`ledger`、`verification-artifact`、`observe-invocation` 四类 sink target；Capability Evolution Ledger 真实写入首片已接入 validation/repair audit sink，verification/observe 真实写入仍待接入。
 - 2026-05-10：新增 `validation-repair-telemetry-sink.ts` 纯 TelemetrySink/helper，可把 validation/repair/audit/executor/chain 投影成稳定 spans，覆盖 `generation/request`、`materialize`、`payload-validation`、`work-evidence`、`verification-gate`、`repair-decision`、`repair-rerun`、`ledger-write`、`observe-invocation`。
+- 2026-05-10：Verification gate 真实路径已接入 validation/repair/audit chain：`applyRuntimeVerificationPolicy` 在 failed/needs-human gate 上生成 `verification-gate` audit subject，把 `validationRepairAudit` refs 挂回 top-level 和 execution unit，并把 gated payload 写回原 `outputRef`，让 `readTaskAttempts` 可从输出回流 audit metadata。
+- 2026-05-10：`generated-task-runner` 生命周期瘦身首片完成，新增 `generated-task-runner-validation-lifecycle.ts` 承接 validation/repair/audit helper，主入口从 1211 行降到 1083 行；完整 generate/run/validate/repair/audit 编排继续收敛。
 
 Todo：
 
 - [x] 建立 `ResultValidationHarness`：统一 schema、artifact refs、completed payload、current refs、WorkEvidence、guidance adoption、provided verification results、runtime verification gate、observe/action trace contract。
 - [x] 建立 `RepairPolicyHarness`：统一决定 `none` / `repair-rerun` / `supplement` / `fail-closed` / `needs-human`。
 - [x] 建立 `RepairExecutor`：只执行 patch/rerun/supplement/peer handoff，不做策略判断。
-- [x] 建立 `AuditSink`：统一写 `appendTaskAttempt`、Capability Evolution Ledger、verification artifacts、observe invocation records。（appendTaskAttempt/read path 已接入 sink metadata；完整 ledger/verification/observe 真实写入 wiring 仍待后续接入。）
+- [x] 建立 `AuditSink`：统一写 `appendTaskAttempt`、Capability Evolution Ledger、verification artifacts、observe invocation records。（appendTaskAttempt/read path 与 Capability Evolution Ledger validation/repair audit 首片已接入；verification/observe 真实写入 wiring 仍待后续接入。）
 - [x] 建立 `TelemetrySink`：记录 `generation/request`、`materialize`、`payload-validation`、`work-evidence`、`verification-gate`、`repair-decision`、`repair-rerun`、`ledger-write`、`observe-invocation` spans。（首片为纯 span projection；真实 telemetry backend 写入仍待接入。）
-- [ ] 将 `generated-task-runner` 收敛为生命周期编排：generate/run/validate/repair/audit。
-- [ ] Verification gate 结果必须回流 repair/audit，而不是只在最终 payload 上 fail closed。（离线 bridge/smoke 已覆盖，真实 gate wiring 待接入。）
+- [ ] 将 `generated-task-runner` 收敛为生命周期编排：generate/run/validate/repair/audit。（validation/repair/audit lifecycle helper 首片已拆出，主入口仍在 watch 内。）
+- [x] Verification gate 结果必须回流 repair/audit，而不是只在最终 payload 上 fail closed。
 - [x] 增加 `smoke:validation-repair-audit-chain`：direct payload、generated task、observe result、verification gate 失败都能追溯 contract id、failure kind、related refs、repair budget、最终 outcome。
 
 验收标准：
 
-- [ ] direct payload、generated task、repair rerun、observe/action result 共用同一 validation finding model。（第一阶段已覆盖 direct payload、generated task、observe result 离线链路；真实 payload-validation schema failure 已接入；repair rerun/action result 待接入。）
+- [ ] direct payload、generated task、repair rerun、observe/action result 共用同一 validation finding model。（第一阶段已覆盖 direct payload、generated task、observe result 离线链路；真实 payload-validation schema failure 与 verification gate 已接入；repair rerun/action result 待接入。）
 - [ ] Runner 分支不再手写 repair policy 和 ledger input。
-- [ ] Capability Evolution Ledger 拥有完整成功/失败/repair/fallback 事实。
+- [ ] Capability Evolution Ledger 拥有完整成功/失败/repair/fallback 事实。（validation/repair audit sink 写入首片已落地，完整成功/fallback 事实仍待补齐。）
 
 ### T126 Interaction and Progress Harness：用户可见进度、澄清、取消统一治理
 
