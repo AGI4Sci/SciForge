@@ -71,6 +71,8 @@ Todo：
 
 2026-05-10：将 harness context governance 从 `context-envelope.ts` 抽到 `context-envelope-governance.ts`，保留同一 feature flag 与行为，`context-envelope.ts` 降到 873 行并退出 1000 行 watch list。
 
+2026-05-10：新增 opt-in verification policy consumption 小切片。默认 shadow 行为不变；打开 `agentHarnessVerificationPolicyEnabled` / `agentHarnessConsumeVerificationPolicy` 后，`requestWithAgentHarnessShadow` 会把 harness contract 的 `verificationPolicy.intensity` 投影成 runtime `VerificationPolicy`，只收紧 mode/risk/required，不放宽 caller 已有策略，并写入 `uiState.agentHarnessVerificationPolicy` audit。
+
 Todo：
 
 - [x] 建立 `packages/agent-harness`：导出 `HarnessRuntime`、`HarnessProfile`、`HarnessCallback`、`HarnessContext`、`HarnessDecision`、`HarnessContract`、`HarnessTrace`、`HarnessStage`。
@@ -78,7 +80,7 @@ Todo：
 - [x] 实现 deterministic merge engine：blocked refs/capabilities union、budget only tightens、risk/verification only escalates、side effects fail closed、conflicts written to trace。
 - [x] 在 `runWorkspaceRuntimeGateway` 中接入 `HarnessRuntime.evaluate()`，位置在 conversation policy 之后、direct fast-path / vision / AgentServer dispatch 之前。
 - [x] 第一阶段只把 `HarnessContract` 写入 request/uiState/metadata 和 stream trace，不改变已有 runtime 行为。
-- [ ] 第二阶段打开 feature flag，让 context envelope、broker、prompt renderer、verification policy、repair loop、UI progress 逐项消费 contract。（context envelope 已有 opt-in governance 首片；默认行为仍关闭。）
+- [ ] 第二阶段打开 feature flag，让 context envelope、broker、prompt renderer、verification policy、repair loop、UI progress 逐项消费 contract。（context envelope 与 verification policy 已有 opt-in governance 首片；默认行为仍关闭。）
 - [x] 增加 `smoke:agent-harness-contract`：同一输入输出稳定 contract、trace 有阶段记录、profile 切换只改 contract 不 fork gateway path。
 - [x] 增加 `smoke:no-scattered-harness-policy`：禁止在 gateway、prompt builder、UI、scenario、provider 分支新增 harness 指令散文、探索规则、skill 偏好或工具预算。
 
@@ -87,18 +89,18 @@ Todo：
 - [ ] Agent 行为治理只有一个入口：`packages/agent-harness` profile registry。
 - [x] Harness runtime 可以 shadow mode 运行并产出完整 trace。
 - [x] 关闭 harness feature flag 时现有 backend-first/capability-driven 行为保持不变。
-- [ ] 打开 harness feature flag 后，至少 context budget、progress plan 和 validation policy 三项由 contract 驱动。（context budget/progress plan/validation bridge 已有首片，仍需主流程全面启用。）
+- [ ] 打开 harness feature flag 后，至少 context budget、progress plan 和 validation policy 三项由 contract 驱动。（context budget/progress plan/verification policy/validation bridge 已有首片，仍需主流程全面启用。）
 
 ### T129 Unified Capability Graph：skills/tools/actions/observe/verifiers 进入同一能力图
 
 状态：进行中；目标是让所有可用能力都通过统一 `CapabilityManifest`、`HarnessCandidate`、`CapabilityBudget` 被 broker 和 harness 治理，避免 package skills、tool catalog、observe/action loop 与 AgentServer generation fallback 平行存在。
 
-进展：第一阶段统一候选图已落地为 shadow/helper 层。`projectCapabilityManifestsToHarnessCandidates()` 可以把 heterogeneous `CapabilityManifest` 投影为 `HarnessCandidate`，包含 `kind/id/manifestRef/score/reasons/providerAvailability/budget/fallbackCandidateIds`，并输出 provider/blocked/budget gate audit；当前不改变 broker 真实选择路径。第二阶段 broker input path 已接收 harness `skillHints`、`blockedCapabilities`、`toolBudget`、`verificationPolicy` 和 provider availability，并把对应信号写入 compact brief/audit，schema/examples/repair hints 仍保持 lazy expansion；最新小切片让 broker compact brief/audit 输出结构化 `budget` 字段，并按 `maxProviders` 裁剪 selected provider brief，同时 `summarizeToolsForAgentServer()` 已改为从 broker selected briefs 映射 budgeted compact tool summaries，不再默认空数组或恢复旧 catalog。第三阶段新增最小 `CapabilityBudgetDebit` contract/helper，能把单次 capability invocation 的 budget debit 记录为可写入 executionUnit/workEvidence/audit 的稳定 sink-addressable record；首个运行时小切片已接入 `literature.retrieval` offline runner，在 providerAttempts、workEvidence 和顶层 `budgetDebits` 审计输出里保留 sink refs。第四阶段新增纯 `loadCapabilityManifestRegistry()` package discovery 合并入口，能把 core manifests 与传入的 package discovery manifests 合成同一 registry，并输出包含 provider availability、required config、side effects、risk、validators、repair hints 的 compact audit，仍不扫描真实文件树、不展开 schema/examples。第五阶段新增默认候选 callback projection，把 skill package policy、tool package manifest、observe provider selection、Computer Use action plan 投影为统一 `HarnessCandidate`，证明用户显式选择只提高优先级，仍不能绕过 provider/config/safety/budget gate。
+进展：第一阶段统一候选图已落地为 shadow/helper 层。`projectCapabilityManifestsToHarnessCandidates()` 可以把 heterogeneous `CapabilityManifest` 投影为 `HarnessCandidate`，包含 `kind/id/manifestRef/score/reasons/providerAvailability/budget/fallbackCandidateIds`，并输出 provider/blocked/budget gate audit；当前不改变 broker 真实选择路径。第二阶段 broker input path 已接收 harness `skillHints`、`blockedCapabilities`、`toolBudget`、`verificationPolicy` 和 provider availability，并把对应信号写入 compact brief/audit，schema/examples/repair hints 仍保持 lazy expansion；最新小切片让 broker compact brief/audit 输出结构化 `budget` 字段，并按 `maxProviders` 裁剪 selected provider brief，同时 `summarizeToolsForAgentServer()` 已改为从 broker selected briefs 映射 budgeted compact tool summaries，不再默认空数组或恢复旧 catalog。第三阶段新增最小 `CapabilityBudgetDebit` contract/helper，能把单次 capability invocation 的 budget debit 记录为可写入 executionUnit/workEvidence/audit 的稳定 sink-addressable record；首个运行时小切片已接入 `literature.retrieval` offline runner，在 providerAttempts、workEvidence 和顶层 `budgetDebits` 审计输出里保留 sink refs。第四阶段新增纯 `loadCapabilityManifestRegistry()` package discovery 合并入口，能把 core manifests 与传入的 package discovery manifests 合成同一 registry，并输出包含 provider availability、required config、side effects、risk、validators、repair hints 的 compact audit，仍不展开 schema/examples。第五阶段新增默认候选 callback projection，把 skill package policy、tool package manifest、observe provider selection、Computer Use action plan 投影为统一 `HarnessCandidate`，证明用户显式选择只提高优先级，仍不能绕过 provider/config/safety/budget gate。第六阶段新增离线 file discovery helper，可从文件树发现 JSON manifest 和 TS 导出的 capability metadata，合并进同一 registry 并输出 file-discovery audit；真实 broker path 尚未默认启用。
 
 Todo：
 
 - [ ] 将 `packages/skills`、`packages/actions`、`packages/observe`、`packages/verifiers`、`packages/presentation` 和 core runtime capabilities 投影成统一 `CapabilityManifest`。
-- [x] 扩展 capability registry loader，支持 package manifest discovery、provider availability、required config、side effects、risk、validators、repair hints。（首片为传入 discovery result 的纯函数合并入口，真实文件树扫描仍待后续接入。）
+- [x] 扩展 capability registry loader，支持 package manifest discovery、provider availability、required config、side effects、risk、validators、repair hints。（纯函数合并入口与离线文件树 discovery 首片已完成，真实 broker path 默认扫描仍待接入。）
 - [x] 定义 `HarnessCandidate`：`kind/id/manifestRef/score/reasons/providerAvailability/budget/fallbackCandidateIds`。
 - [x] 将 `scoreSkillByPackagePolicy`、tool package manifests、observe provider selection、Computer Use action plan 统一包装为默认 candidate callbacks。（首片为 shadow projection，不改变真实 broker 路由。）
 - [x] 将 `summarizeToolsForAgentServer()` 改为按 harness/capability budget 输出 budgeted tool briefs，不再默认空数组。
@@ -107,6 +109,7 @@ Todo：
 - [x] 增加 `smoke:unified-capability-graph`：同一 prompt 下 skill/tool/observe/action/verifier 都能作为候选进入 broker audit，且安全/配置/预算 gate 生效。
 - [x] 增加 `smoke:capability-broker-harness-input`：harness hints/budget/provider/verification policy 进入 broker compact audit，blocked capability 不能绕过 gate。
 - [x] 增加 `smoke:capability-budget-debits`：单次 capability invocation 能生成带 executionUnit/workEvidence/audit sink refs 的 budget debit record。
+- [x] 增加 `smoke:capability-manifest-file-discovery`：临时 JSON/TS package manifests 可被文件树 discovery 合并进 registry 和 unified graph。
 
 验收标准：
 
@@ -118,13 +121,13 @@ Todo：
 
 状态：进行中；目标是把 fresh/continuation、workspace read policy、current refs、repair retry、tool-use policy 等散落 prompt/metadata 规则迁入 `HarnessContract`，prompt builder 只做 deterministic rendering。
 
-进展：第一阶段 metadata-only handoff 已落地。AgentServer dispatch payload 不再把 harness contract/prompt directives 内联进自然语言 prompt，而是携带 `harnessProfileId`、`harnessContractRef`、`harnessTraceRef`、budget summary、decision owner 和结构化 `agentHarnessHandoff` 元数据，作为后续 deterministic renderer 的稳定交接面。第二阶段补充了 `uiState.agentHarnessInput` 到 shadow contract 的 refs/intent 桥接，并新增离线 `smoke:contract-driven-handoff` 覆盖 fresh/continuation/repair 三类 handoff refs。第三阶段新增 `promptRenderPlan` metadata scaffold：从 `HarnessContract` 的 intent/context/repair/promptDirectives 确定性渲染 strategy/directive refs，所有策略句和 selected refs 都带 `sourceCallbackId`。第四阶段补充 `sourceRefs`、结构化 `renderedEntries` 与 deterministic `renderDigest`，使策略句顺序可从 contract/trace refs 重建；第五阶段让 `buildAgentServerGenerationPrompt` 消费 `agentHarnessHandoff.promptRenderPlan` / `promptRenderPlan` 并生成结构化 `promptRenderPlanSummary`，放入 current-turn snapshot 和 compact request，避免把完整 rendered text 或 metadata 原样塞回 prompt。第六阶段新增 `smoke:agentserver-prompt-policy-prose`，冻结 AgentServer generation/repair prompt 中现存 hardcoded 策略散文，并只允许 runtime-contract policy/contract providers、`packages/skills/runtime-policy` 与 harness `promptRenderPlanSummary.renderedEntries` 继续提供新增策略句。
+进展：第一阶段 metadata-only handoff 已落地。AgentServer dispatch payload 不再把 harness contract/prompt directives 内联进自然语言 prompt，而是携带 `harnessProfileId`、`harnessContractRef`、`harnessTraceRef`、budget summary、decision owner 和结构化 `agentHarnessHandoff` 元数据，作为后续 deterministic renderer 的稳定交接面。第二阶段补充了 `uiState.agentHarnessInput` 到 shadow contract 的 refs/intent 桥接，并新增离线 `smoke:contract-driven-handoff` 覆盖 fresh/continuation/repair 三类 handoff refs。第三阶段新增 `promptRenderPlan` metadata scaffold：从 `HarnessContract` 的 intent/context/repair/promptDirectives 确定性渲染 strategy/directive refs，所有策略句和 selected refs 都带 `sourceCallbackId`。第四阶段补充 `sourceRefs`、结构化 `renderedEntries` 与 deterministic `renderDigest`，使策略句顺序可从 contract/trace refs 重建；第五阶段让 `buildAgentServerGenerationPrompt` 消费 `agentHarnessHandoff.promptRenderPlan` / `promptRenderPlan` 并生成结构化 `promptRenderPlanSummary`，放入 current-turn snapshot 和 compact request，避免把完整 rendered text 或 metadata 原样塞回 prompt。第六阶段新增 `smoke:agentserver-prompt-policy-prose`，冻结 AgentServer generation/repair prompt 中现存 hardcoded 策略散文，并只允许 runtime-contract policy/contract providers、`packages/skills/runtime-policy` 与 harness `promptRenderPlanSummary.renderedEntries` 继续提供新增策略句。第七阶段把 generation prompt 中 taskFiles/entrypoint/physical-write 三句契约迁入 `packages/skills/runtime-policy` 的 trusted provider，prompt builder hardcoded 策略散文从 31 条降到 28 条。第八阶段修复同 prompt timeout/cancel 后恢复 handoff：recent repair-needed/failed/needs-human attempt 会触发 `priorAttempts` 附带，确保 compacted retry prompt 仍能恢复失败上下文。
 
 Todo：
 
 - [ ] `buildContextEnvelope` 只消费 `allowedContextRefs`、`blockedContextRefs`、`requiredContextRefs`、`contextBudget`、`repairContextPolicy`。
 - [ ] `buildCapabilityBrokerBriefForAgentServer` 只消费 `capabilityPolicy`、`skillHints`、`toolBudget` 和 scenario/capability manifest。
-- [ ] `buildAgentServerGenerationPrompt` 只渲染 `promptDirectives`、current-turn snapshot、selected contract refs，不再新增行为治理散文。（已消费 `promptRenderPlanSummary` 首片，完整策略散文迁移仍待继续。）
+- [ ] `buildAgentServerGenerationPrompt` 只渲染 `promptDirectives`、current-turn snapshot、selected contract refs，不再新增行为治理散文。（已消费 `promptRenderPlanSummary` 首片，并迁出 taskFiles/entrypoint/physical-write 三句契约；完整策略散文迁移仍待继续。）
 - [ ] `buildAgentServerRepairPrompt` 只渲染 `repairContextPolicy` 允许的失败 evidence、validator findings 和 recover actions。（已新增 `repairContextPolicySummary` 首片，完整证据筛选仍待继续。）
 - [x] AgentServer payload metadata 带 `harnessProfileId`、`harnessContractRef`、`harnessTraceRef`、budget summary、decision owner。
 - [x] 增加第一阶段 `smoke:contract-driven-handoff`：mock AgentServer 捕获真实 dispatch，验证 fresh 不泄漏旧 attempts/logs，continuation/repair 携带 contract refs/repair policy。
@@ -154,15 +157,18 @@ Todo：
 - 2026-05-10：新增 `validation-repair-telemetry-sink.ts` 纯 TelemetrySink/helper，可把 validation/repair/audit/executor/chain 投影成稳定 spans，覆盖 `generation/request`、`materialize`、`payload-validation`、`work-evidence`、`verification-gate`、`repair-decision`、`repair-rerun`、`ledger-write`、`observe-invocation`。
 - 2026-05-10：Verification gate 真实路径已接入 validation/repair/audit chain：`applyRuntimeVerificationPolicy` 在 failed/needs-human gate 上生成 `verification-gate` audit subject，把 `validationRepairAudit` refs 挂回 top-level 和 execution unit，并把 gated payload 写回原 `outputRef`，让 `readTaskAttempts` 可从输出回流 audit metadata。
 - 2026-05-10：`generated-task-runner` 生命周期瘦身首片完成，新增 `generated-task-runner-validation-lifecycle.ts` 承接 validation/repair/audit helper，主入口从 1211 行降到 1083 行；完整 generate/run/validate/repair/audit 编排继续收敛。
+- 2026-05-10：AuditSink `verification-artifact` 真实写入首片完成，可把 verification artifact sink record 写入 `.sciforge/validation-repair-audit/verification-artifacts/<auditId>.json`，并读回包含 `auditId`、`contractId`、`failureKind`、`sinkRefs` 的 artifact/fact。
+- 2026-05-10：TelemetrySink 从纯 projection 推进到真实落盘首片，可把 spans 写入 `.sciforge/validation-repair-telemetry/spans.jsonl`，并提供 read/summary helper 保留 validation/repair/audit/executor refs。
+- 2026-05-10：`generated-task-runner` 继续拆分 supplement lifecycle，新增 `generated-task-runner-supplement-lifecycle.ts` 承接 missing artifact 检测、supplement payload merge 与 fallback ledger 记录；主入口从 1083 行降到 822 行，退出 1000 行 watch list。
 
 Todo：
 
 - [x] 建立 `ResultValidationHarness`：统一 schema、artifact refs、completed payload、current refs、WorkEvidence、guidance adoption、provided verification results、runtime verification gate、observe/action trace contract。
 - [x] 建立 `RepairPolicyHarness`：统一决定 `none` / `repair-rerun` / `supplement` / `fail-closed` / `needs-human`。
 - [x] 建立 `RepairExecutor`：只执行 patch/rerun/supplement/peer handoff，不做策略判断。
-- [x] 建立 `AuditSink`：统一写 `appendTaskAttempt`、Capability Evolution Ledger、verification artifacts、observe invocation records。（appendTaskAttempt/read path 与 Capability Evolution Ledger validation/repair audit 首片已接入；verification/observe 真实写入 wiring 仍待后续接入。）
-- [x] 建立 `TelemetrySink`：记录 `generation/request`、`materialize`、`payload-validation`、`work-evidence`、`verification-gate`、`repair-decision`、`repair-rerun`、`ledger-write`、`observe-invocation` spans。（首片为纯 span projection；真实 telemetry backend 写入仍待接入。）
-- [ ] 将 `generated-task-runner` 收敛为生命周期编排：generate/run/validate/repair/audit。（validation/repair/audit lifecycle helper 首片已拆出，主入口仍在 watch 内。）
+- [x] 建立 `AuditSink`：统一写 `appendTaskAttempt`、Capability Evolution Ledger、verification artifacts、observe invocation records。（appendTaskAttempt/read path、Capability Evolution Ledger validation/repair audit、verification artifact 真实写入首片已接入；observe 真实写入 wiring 仍待后续接入。）
+- [x] 建立 `TelemetrySink`：记录 `generation/request`、`materialize`、`payload-validation`、`work-evidence`、`verification-gate`、`repair-decision`、`repair-rerun`、`ledger-write`、`observe-invocation` spans。（projection 与 jsonl 落盘/read/summary 首片已完成；真实 runtime telemetry backend 接线仍待接入。）
+- [ ] 将 `generated-task-runner` 收敛为生命周期编排：generate/run/validate/repair/audit。（validation/repair/audit 与 supplement lifecycle helper 已拆出，主入口 822 行并退出 watch list；剩余策略判断和 ledger input 仍需继续收敛。）
 - [x] Verification gate 结果必须回流 repair/audit，而不是只在最终 payload 上 fail closed。
 - [x] 增加 `smoke:validation-repair-audit-chain`：direct payload、generated task、observe result、verification gate 失败都能追溯 contract id、failure kind、related refs、repair budget、最终 outcome。
 
@@ -176,13 +182,13 @@ Todo：
 
 状态：进行中；目标是让 UI 继续保持 thin shell，但具备清晰的长任务进度、沉默等待、澄清、人工确认、取消和后台完成体验。UI 只消费 structured stream events，不做语义路由。
 
-进展：第一阶段 contract/projection MVP 已完成。`ProgressPlan` 已扩展 silence/background/cancel/interaction policy，新增标准 `HarnessInteractionProgressEvent` 契约与 gateway 投影 helper；当前只提供 runtime contract 与离线 smoke，不改 UI/transport/backend 真实事件路由。smoke 已补充 generic `WorkspaceRuntimeEvent` 投影守卫，证明结构化进度事件不会把 prompt/scenario 语义文本透传到通用 runtime event 字段。最新小切片新增 `RunTerminationRecord` 与 `normalizeRunTermination()`，让 `user-cancelled`、`system-aborted`、`timeout`、`backend-error` 进入结构化 termination 字段，并在 session/background history 中保留；UI silent stream waiting 也开始从 harness contract 的 `progressPlan.silencePolicy.timeoutMs` 恢复等待阈值，保留 5s fallback。Transport/backend stream guard 已开始消费 harness `silencePolicy`，silent timeout event/recovery audit 带 `timeoutMs`、`decision`、`maxRetries`、`retryable`、`contractRef`、`recoveryAction` 等结构化字段。
+进展：第一阶段 contract/projection MVP 已完成。`ProgressPlan` 已扩展 silence/background/cancel/interaction policy，新增标准 `HarnessInteractionProgressEvent` 契约与 gateway 投影 helper；当前只提供 runtime contract 与离线 smoke，不改 UI/transport/backend 真实事件路由。smoke 已补充 generic `WorkspaceRuntimeEvent` 投影守卫，证明结构化进度事件不会把 prompt/scenario 语义文本透传到通用 runtime event 字段。最新小切片新增 `RunTerminationRecord` 与 `normalizeRunTermination()`，让 `user-cancelled`、`system-aborted`、`timeout`、`backend-error` 进入结构化 termination 字段，并在 session/background history 中保留；UI silent stream waiting 也开始从 harness contract 的 `progressPlan.silencePolicy.timeoutMs` 恢复等待阈值，保留 5s fallback。Transport/backend stream guard 已开始消费 harness `silencePolicy`，silent timeout event/recovery audit 带 `timeoutMs`、`decision`、`maxRetries`、`retryable`、`contractRef`、`recoveryAction` 等结构化字段。最新首片新增 `SilentStreamDecisionRecord`，transport/backend/UI silent watchdog 可共享同一 run-level decision id，backend audit 合并 transport decision，UI progress 只补 `ui-progress` layer。
 
 Todo：
 
 - [x] 定义 `ProgressPlan`：initial status、phase names、silence policy、background policy、cancel policy、interaction policy。
 - [x] 标准事件：`process-progress`、`interaction-request`、`clarification-needed`、`human-approval-required`、`guidance-queued`、`run-cancelled`。
-- [ ] 将 UI、transport、backend 三层 silent watchdog 统一为 `silencePolicy`，同一 run 只产生一条可审计 retry/abort/visible-status 决策。（UI waiting threshold 与 transport/backend stream guard 已消费 harness `silencePolicy` 首片；去重为单一决策链仍待继续。）
+- [x] 将 UI、transport、backend 三层 silent watchdog 统一为 `silencePolicy`，同一 run 只产生一条可审计 retry/abort/visible-status 决策。（已新增 shared `SilentStreamDecisionRecord` 首片，三层复用同一 decision id/layers。）
 - [x] 区分 `user-cancelled`、`system-aborted`、`timeout`、`backend-error`，历史 run 不全部折叠成普通 failed。
 - [x] 让 `streamEventPresentation` 根据结构化 `importance/phase/status/reason/budget` 投影 worklog，减少自然语言启发式。
 - [ ] 短期兼容现有 guidance queue；长期将澄清和人工确认升级为一等 interaction contract。

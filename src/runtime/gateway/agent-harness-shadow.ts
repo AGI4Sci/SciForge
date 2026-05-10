@@ -74,12 +74,19 @@ export async function requestWithAgentHarnessShadow(
     contract: evaluation.evaluation.contract,
     trace: evaluation.evaluation.trace,
   });
+  const verificationProjection = agentHarnessVerificationPolicyProjection(
+    evaluation.evaluation.contract,
+    request.verificationPolicy,
+    { uiState, contractRef, profileId },
+  );
   return {
     ...request,
+    ...(verificationProjection ? { verificationPolicy: verificationProjection.policy } : {}),
     uiState: {
       ...uiState,
       harnessProfileId: profileId,
       agentHarness,
+      ...(verificationProjection ? { agentHarnessVerificationPolicy: verificationProjection.audit } : {}),
     },
   };
 }
@@ -251,6 +258,113 @@ function agentHarnessProfileId(request: GatewayRequest) {
     ?? stringField(harness.profileId)
     ?? stringField(profile.id)
     ?? DEFAULT_AGENT_HARNESS_PROFILE_ID;
+}
+
+function agentHarnessVerificationPolicyProjection(
+  contract: Record<string, unknown>,
+  current: GatewayRequest['verificationPolicy'],
+  input: {
+    uiState: Record<string, unknown>;
+    contractRef: string;
+    profileId: string;
+  },
+): { policy: NonNullable<GatewayRequest['verificationPolicy']>; audit: Record<string, unknown> } | undefined {
+  const agentHarness = isRecord(input.uiState.agentHarness) ? input.uiState.agentHarness : {};
+  const enabled = [
+    input.uiState.agentHarnessVerificationPolicyEnabled,
+    input.uiState.agentHarnessConsumeVerificationPolicy,
+    agentHarness.verificationPolicyEnabled,
+    agentHarness.consumeVerificationPolicy,
+  ].some(isEnabledFlag);
+  if (!enabled) return undefined;
+  const verificationPolicy = isRecord(contract.verificationPolicy) ? contract.verificationPolicy : undefined;
+  if (!verificationPolicy) return undefined;
+  const projected = runtimeVerificationPolicyFromHarness(verificationPolicy, input);
+  const merged = mergeRuntimeVerificationPolicy(current, projected);
+  return {
+    policy: merged,
+    audit: {
+      schemaVersion: 'sciforge.runtime-verification-policy-projection.v1',
+      source: 'request.uiState.agentHarness.contract.verificationPolicy',
+      contractRef: input.contractRef,
+      profileId: input.profileId,
+      harnessIntensity: stringField(verificationPolicy.intensity),
+      requireCitations: booleanField(verificationPolicy.requireCitations),
+      requireCurrentRefs: booleanField(verificationPolicy.requireCurrentRefs),
+      requireArtifactRefs: booleanField(verificationPolicy.requireArtifactRefs),
+      mode: merged.mode,
+      riskLevel: merged.riskLevel,
+      required: merged.required,
+    },
+  };
+}
+
+function runtimeVerificationPolicyFromHarness(
+  policy: Record<string, unknown>,
+  input: { contractRef: string; profileId: string },
+): NonNullable<GatewayRequest['verificationPolicy']> {
+  const intensity = stringField(policy.intensity);
+  const requireCurrentRefs = booleanField(policy.requireCurrentRefs) ?? false;
+  const requireArtifactRefs = booleanField(policy.requireArtifactRefs) ?? false;
+  const requireCitations = booleanField(policy.requireCitations) ?? false;
+  const strictEvidence = requireCurrentRefs || requireArtifactRefs || requireCitations;
+  const mapped = verificationModeForHarnessIntensity(intensity, strictEvidence);
+  return {
+    required: mapped.mode !== 'none',
+    mode: mapped.mode,
+    riskLevel: mapped.riskLevel,
+    reason: `contractRef=${input.contractRef}; profileId=${input.profileId}; intensity=${intensity ?? 'standard'}`,
+  };
+}
+
+function mergeRuntimeVerificationPolicy(
+  current: GatewayRequest['verificationPolicy'],
+  projected: NonNullable<GatewayRequest['verificationPolicy']>,
+): NonNullable<GatewayRequest['verificationPolicy']> {
+  if (!current) return projected;
+  const mode = stricterVerificationMode(current.mode, projected.mode);
+  const riskLevel = stricterRiskLevel(current.riskLevel, projected.riskLevel);
+  return {
+    ...current,
+    required: current.required || projected.required,
+    mode,
+    riskLevel,
+    reason: current.reason
+      ? `${current.reason} Harness policy consumed: ${projected.reason}`
+      : projected.reason,
+    selectedVerifierIds: sortedUnique([
+      ...(current.selectedVerifierIds ?? []),
+      ...(projected.selectedVerifierIds ?? []),
+    ]),
+    humanApprovalPolicy: current.humanApprovalPolicy ?? projected.humanApprovalPolicy,
+    unverifiedReason: current.unverifiedReason ?? projected.unverifiedReason,
+  };
+}
+
+function verificationModeForHarnessIntensity(
+  intensity: string | undefined,
+  strictEvidence: boolean,
+): Pick<NonNullable<GatewayRequest['verificationPolicy']>, 'mode' | 'riskLevel'> {
+  if (intensity === 'none') return { mode: 'none', riskLevel: 'low' };
+  if (intensity === 'light') return { mode: 'lightweight', riskLevel: strictEvidence ? 'medium' : 'low' };
+  if (intensity === 'strict' || intensity === 'audit') return { mode: 'hybrid', riskLevel: 'high' };
+  return { mode: 'automatic', riskLevel: strictEvidence ? 'high' : 'medium' };
+}
+
+function stricterVerificationMode(
+  left: NonNullable<GatewayRequest['verificationPolicy']>['mode'],
+  right: NonNullable<GatewayRequest['verificationPolicy']>['mode'],
+) {
+  const rank = { none: 0, unverified: 1, lightweight: 2, automatic: 3, human: 4, hybrid: 5 } as const;
+  return rank[right] > rank[left] ? right : left;
+}
+
+function stricterRiskLevel(
+  left: NonNullable<GatewayRequest['verificationPolicy']>['riskLevel'],
+  right: NonNullable<GatewayRequest['verificationPolicy']>['riskLevel'],
+) {
+  const rank = { low: 0, medium: 1, high: 2 } as const;
+  return rank[right] > rank[left] ? right : left;
 }
 
 function agentHarnessInputFromRequest(request: GatewayRequest): Record<string, unknown> {
@@ -620,6 +734,14 @@ function stringField(value: unknown) {
 
 function numberField(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function booleanField(value: unknown) {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function isEnabledFlag(value: unknown) {
+  return value === true || ['1', 'true', 'on', 'enabled'].includes(String(value).trim().toLowerCase());
 }
 
 function stringListField(value: unknown) {

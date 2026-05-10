@@ -39,6 +39,9 @@ test('skills runtime policy owns AgentServer retrieval and task prompt snippets'
   assert.match(executionMode, /For heavy or durable work/);
 
   const taskPolicy = agentServerGeneratedTaskPromptPolicyLines().join('\n');
+  assert.match(taskPolicy, /taskFiles MUST be an array/);
+  assert.match(taskPolicy, /entrypoint\.path MUST reference/);
+  assert.match(taskPolicy, /physically write task files/);
   assert.match(taskPolicy, /Entrypoint contract/);
   assert.match(taskPolicy, /inputPath argument/);
 

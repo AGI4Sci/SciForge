@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { scenarios, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
-import { guidanceQueuedEvent, userInterruptEvent } from '@sciforge-ui/runtime-contract';
+import { buildSilentStreamRunId, guidanceQueuedEvent, userInterruptEvent } from '@sciforge-ui/runtime-contract';
 import { estimateContextWindowState, latestContextWindowState } from '../contextWindow';
 import { builtInScenarioPackageRef } from '@sciforge/scenario-core/scenario-package';
 import { builtInScenarioIdForRuntimeInput } from '@sciforge/scenario-core/scenario-routing-policy';
@@ -234,6 +234,10 @@ export function ChatPanel({
         events: streamEventsRef.current,
         nowMs: Date.now(),
         backend: config.agentBackend,
+        runId: buildSilentStreamRunId({
+          sessionId: session.sessionId,
+          prompt: streamEventsRef.current.find((event) => event.type === 'queued')?.detail,
+        }),
       });
       if (!waitingEvent) return;
       setStreamEvents((current) => {

@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import {
   type RepairBudgetSnapshot,
@@ -7,8 +10,11 @@ import {
 } from '@sciforge-ui/runtime-contract/validation-repair-audit';
 import { executeRepairActionPlan } from '../../src/runtime/gateway/repair-executor';
 import {
+  buildValidationRepairTelemetrySummary,
   projectValidationRepairTelemetrySpans,
+  readValidationRepairTelemetrySpanRecords,
   validationRepairTelemetrySpansFromPayload,
+  writeValidationRepairTelemetrySpans,
 } from '../../src/runtime/gateway/validation-repair-telemetry-sink';
 import { createValidationRepairAuditChain } from '../../src/runtime/gateway/validation-repair-audit-bridge';
 
@@ -165,7 +171,62 @@ assert.equal(repairOnlyProjection.spans.length, 1);
 assert.equal(repairOnlyProjection.spans[0]?.spanKind, 'repair-rerun');
 assert.equal(repairOnlyProjection.spans[0]?.repairDecisionId, chain.repair.decisionId);
 
-console.log('[ok] validation/repair telemetry sink projects audit chains and repair executor results into stable spans');
+const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-telemetry-sink-'));
+try {
+  const writeResult = await writeValidationRepairTelemetrySpans({
+    validationDecision: chain.validation,
+    repairDecision: chain.repair,
+    auditRecord: chain.audit,
+    executorResult,
+  }, {
+    workspacePath,
+    now: () => new Date('2026-05-10T00:00:01.000Z'),
+  });
+  assert.equal(writeResult.records.length, expectedKinds.length);
+  assert.equal(writeResult.ref, '.sciforge/validation-repair-telemetry/spans.jsonl');
+  assert.ok(writeResult.path.endsWith('/.sciforge/validation-repair-telemetry/spans.jsonl'));
+  assert.ok(writeResult.records.every((record) => record.kind === 'validation-repair-telemetry-span-record'));
+  assert.ok(writeResult.records.every((record) => record.schemaVersion === 1));
+  assert.ok(writeResult.records.every((record) => record.ref.startsWith(`${writeResult.ref}#`)));
+  assert.ok(writeResult.records.every((record) => record.spanId === record.span.spanId));
+  assert.ok(writeResult.records.every((record) => record.validationDecisionId === chain.validation.decisionId));
+  assert.ok(writeResult.records.every((record) => record.repairDecisionId === chain.repair.decisionId));
+  assert.ok(writeResult.records.every((record) => record.auditId === chain.audit.auditId));
+  assert.ok(writeResult.records.every((record) => record.createdAt === createdAt));
+  assert.ok(writeResult.records.every((record) => record.recordedAt === '2026-05-10T00:00:01.000Z'));
+
+  const records = await readValidationRepairTelemetrySpanRecords({ workspacePath });
+  assert.equal(records.length, expectedKinds.length);
+  assert.deepEqual(records.map((record) => record.spanKind).sort(), [...expectedKinds].sort());
+  assert.ok(records.some((record) => record.spanKind === 'payload-validation' && record.auditRefs.includes(chain.audit.auditId)));
+  assert.ok(records.some((record) => record.spanKind === 'repair-rerun' && record.repairRefs.includes(executorResult.executorRef.ref)));
+
+  const limitedRecords = await readValidationRepairTelemetrySpanRecords({ workspacePath, limit: 2 });
+  assert.equal(limitedRecords.length, 2);
+
+  const summary = await buildValidationRepairTelemetrySummary({
+    workspacePath,
+    now: () => new Date('2026-05-10T00:00:02.000Z'),
+  });
+  assert.equal(summary.kind, 'validation-repair-telemetry-summary');
+  assert.equal(summary.sourceRef, writeResult.ref);
+  assert.equal(summary.generatedAt, '2026-05-10T00:00:02.000Z');
+  assert.equal(summary.totalSpans, expectedKinds.length);
+  assert.equal(summary.spanKindCounts['payload-validation'], 1);
+  assert.equal(summary.spanKindCounts['repair-rerun'], 1);
+  assert.deepEqual(summary.validationDecisionIds, [chain.validation.decisionId]);
+  assert.deepEqual(summary.repairDecisionIds, [chain.repair.decisionId]);
+  assert.deepEqual(summary.auditIds, [chain.audit.auditId]);
+  assert.deepEqual(summary.executorResultIds, [executorResult.executorResultId]);
+  assert.ok(summary.sourceRefs.includes('run:telemetry/output.json'));
+  assert.ok(summary.auditRefs.includes(chain.audit.auditId));
+  assert.ok(summary.repairRefs.includes(chain.repair.decisionId));
+  assert.equal(summary.recentSpans.length, expectedKinds.length);
+} finally {
+  await rm(workspacePath, { recursive: true, force: true });
+}
+
+console.log('[ok] validation/repair telemetry sink projects and persists audit chains into stable spans');
 
 function blockingFinding(id: string): ValidationFinding {
   return {

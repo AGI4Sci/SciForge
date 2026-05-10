@@ -1,6 +1,11 @@
 import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
 import { collectWorkEvidenceFromBackendEvent, type WorkEvidence } from './work-evidence-types.js';
+import {
+  buildSilentStreamDecisionRecord,
+  silentStreamDecisionRecordFromUnknown,
+  type SilentStreamDecisionRecord,
+} from '@sciforge-ui/runtime-contract/events';
 
 export async function readAgentServerRunStream(
   response: Response,
@@ -11,6 +16,8 @@ export async function readAgentServerRunStream(
     maxSilentMs?: number;
     silencePolicy?: AgentServerStreamSilencePolicy;
     silentRetryCount?: number;
+    silentRunId?: string;
+    silentStreamDecision?: SilentStreamDecisionRecord;
     onSilentTimeout?: (message: string, audit: AgentServerSilentStreamGuardAudit) => void;
   } = {},
 ): Promise<{ json: unknown; run: Record<string, unknown>; error?: string; streamText?: string; workEvidence: WorkEvidence[] }> {
@@ -78,6 +85,8 @@ export async function readAgentServerRunStream(
       const audit = agentServerSilentStreamGuardAudit(silencePolicy, {
         elapsedMs: silentMs,
         retryCount: options.silentRetryCount,
+        runId: options.silentRunId,
+        existingDecision: options.silentStreamDecision,
       });
       options.onSilentTimeout?.(audit.message, audit);
       throw new Error(audit.message);
@@ -139,6 +148,7 @@ export interface AgentServerStreamSilencePolicy {
 
 export interface AgentServerSilentStreamGuardAudit {
   schemaVersion: typeof AGENTSERVER_SILENT_STREAM_GUARD_AUDIT_SCHEMA_VERSION;
+  silentStreamDecision: SilentStreamDecisionRecord;
   source: string;
   timeoutMs: number;
   elapsedMs: number;
@@ -262,7 +272,7 @@ export function currentReferenceDigestSilentGuardPolicy(request: GatewayRequest)
 
 export function agentServerSilentStreamGuardAudit(
   policy: AgentServerStreamSilencePolicy | undefined,
-  input: { elapsedMs: number; retryCount?: number },
+  input: { elapsedMs: number; retryCount?: number; runId?: string; existingDecision?: unknown },
 ): AgentServerSilentStreamGuardAudit {
   const fallback = policy ?? silentPolicyFromTimeout(undefined) ?? {
     schemaVersion: AGENTSERVER_SILENT_STREAM_POLICY_SCHEMA_VERSION,
@@ -280,8 +290,22 @@ export function agentServerSilentStreamGuardAudit(
   const recoveryAction = recoveryActionForSilenceDecision(fallback.decision, retryable);
   const elapsedMs = Math.max(0, Math.trunc(input.elapsedMs));
   const message = `AgentServer generation stopped by silent stream guard after ${elapsedMs}ms without stream events; silencePolicy decision=${fallback.decision}, timeoutMs=${fallback.timeoutMs}, retry=${retryCount}/${fallback.maxRetries ?? 0}.`;
+  const silentStreamDecision = buildSilentStreamDecisionRecord({
+    existing: input.existingDecision,
+    runId: input.runId,
+    source: 'agentserver.stream.silentGuard',
+    layer: 'backend-stream',
+    decision: fallback.decision,
+    timeoutMs: fallback.timeoutMs,
+    elapsedMs,
+    status: fallback.status,
+    retryCount,
+    maxRetries: fallback.maxRetries,
+    detail: message,
+  });
   return {
     schemaVersion: AGENTSERVER_SILENT_STREAM_GUARD_AUDIT_SCHEMA_VERSION,
+    silentStreamDecision,
     source: fallback.source,
     timeoutMs: fallback.timeoutMs,
     elapsedMs,
@@ -355,6 +379,10 @@ function harnessSilencePolicySource(uiState: Record<string, unknown> | undefined
     };
   }
   return undefined;
+}
+
+export function silentStreamDecisionFromGatewayRequest(request: GatewayRequest) {
+  return silentStreamDecisionRecordFromUnknown(isRecord(request.uiState) ? request.uiState.silentStreamDecision : undefined);
 }
 
 function recoveryActionForSilenceDecision(decision: AgentServerStreamSilenceDecision, retryable: boolean) {

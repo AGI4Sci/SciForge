@@ -9,7 +9,13 @@ import { expectedArtifactsForCurrentTurn, selectedComponentsForCurrentTurn } fro
 import { normalizeAgentResponse } from './agentClient';
 import { DEFAULT_AGENT_REQUEST_TIMEOUT_MS, buildSharedAgentHandoffContract } from '@sciforge-ui/runtime-contract/handoff';
 import { buildAgentHandoffPayload } from '@sciforge-ui/runtime-contract/handoff-payload';
-import { projectToolDoneEvent, projectToolStartedEvent } from '@sciforge-ui/runtime-contract';
+import {
+  buildSilentStreamDecisionRecord,
+  buildSilentStreamRunId,
+  projectToolDoneEvent,
+  projectToolStartedEvent,
+  type SilentStreamDecisionRecord,
+} from '@sciforge-ui/runtime-contract';
 import {
   contextWindowTelemetryEvent,
   normalizeWorkspaceRuntimeEvent,
@@ -89,16 +95,59 @@ export async function sendSciForgeToolMessage(
   scheduleTimeout(latencyThresholds);
   const linkedAbort = () => activeRequestController?.abort();
   signal?.addEventListener('abort', linkedAbort, { once: true });
+  const silentStreamRunId = buildSilentStreamRunId({ sessionId: input.sessionId, prompt: input.prompt });
+  let silentStreamDecision: SilentStreamDecisionRecord | undefined;
+  const noteSilentDecision = (params: {
+    decision: string;
+    detail: string;
+    elapsedMs: number;
+    status?: string;
+  }) => {
+    silentStreamDecision = buildSilentStreamDecisionRecord({
+      existing: silentStreamDecision,
+      runId: silentStreamRunId,
+      source: 'ui.transport.silenceWatchdog',
+      layer: 'transport-watchdog',
+      decision: params.decision,
+      timeoutMs: latencyThresholds.silentRetryMs,
+      elapsedMs: params.elapsedMs,
+      status: params.status,
+      maxRetries: 1,
+      detail: params.detail,
+      createdAt: nowIso(),
+    });
+    return silentStreamDecision;
+  };
   let lastRealEventAt = Date.now();
   let emittedInitialResponseStatus = false;
   const silenceWatchdog = globalThis.setInterval(() => {
     const seconds = Math.round((Date.now() - lastRealEventAt) / 1000);
     if (seconds * 1000 < latencyThresholds.firstEventWarningMs || Date.now() - lastSilentNoticeAt < Math.min(18_000, latencyThresholds.firstEventWarningMs)) return;
     lastSilentNoticeAt = Date.now();
-    callbacks.onEvent?.(toolEvent('backend-silent', `后端 ${seconds}s 没有输出新事件；HTTP stream 仍在等待 ${input.config.agentBackend || 'codex'} 返回。`));
+    const waitingDetail = `后端 ${seconds}s 没有输出新事件；HTTP stream 仍在等待 ${input.config.agentBackend || 'codex'} 返回。`;
+    const waitingDecision = noteSilentDecision({
+      decision: 'visible-status',
+      detail: waitingDetail,
+      elapsedMs: seconds * 1000,
+      status: 'waiting-for-backend-event',
+    });
+    callbacks.onEvent?.(toolEvent('backend-silent', waitingDetail, {
+      silentStreamRunId,
+      silentStreamDecision: waitingDecision,
+    }));
     if (!sawBackendEvent && seconds * 1000 >= latencyThresholds.silentRetryMs && !timedOut && !signal?.aborted && activeRequestController) {
       retryForSilentFirstEvent = true;
-      callbacks.onEvent?.(toolEvent('backend-stream-retry', `首个后端事件 ${seconds}s 未返回；自动中断当前 HTTP stream 并重连一次，避免旧连接/死流让多轮任务挂起。`));
+      const retryDetail = `首个后端事件 ${seconds}s 未返回；自动中断当前 HTTP stream 并重连一次，避免旧连接/死流让多轮任务挂起。`;
+      const retryDecision = noteSilentDecision({
+        decision: 'retry',
+        detail: retryDetail,
+        elapsedMs: seconds * 1000,
+        status: 'retrying-first-backend-event',
+      });
+      callbacks.onEvent?.(toolEvent('backend-stream-retry', retryDetail, {
+        silentStreamRunId,
+        silentStreamDecision: retryDecision,
+      }));
       activeRequestController.abort();
     }
   }, 10_000);
@@ -151,6 +200,7 @@ export async function sendSciForgeToolMessage(
       recentVerificationResults: input.recentVerificationResults,
       uiState: {
         sessionId: input.sessionId,
+        silentStreamRunId,
         scopeCheck: {
           source: sharedAgentContract.source,
           decisionOwner: 'AgentServer',
@@ -232,7 +282,17 @@ export async function sendSciForgeToolMessage(
         break;
       } catch (streamError) {
         if (retryForSilentFirstEvent && attempt < 2) {
-          callbacks.onEvent?.(toolEvent('backend-stream-retry', '首个 stream 已中断；准备重新发送同一请求。'));
+          const retryDetail = '首个 stream 已中断；准备重新发送同一请求。';
+          const retryDecision = noteSilentDecision({
+            decision: 'retry',
+            detail: retryDetail,
+            elapsedMs: Date.now() - lastRealEventAt,
+            status: 'retrying-first-backend-event',
+          });
+          callbacks.onEvent?.(toolEvent('backend-stream-retry', retryDetail, {
+            silentStreamRunId,
+            silentStreamDecision: retryDecision,
+          }));
           continue;
         }
         throw streamError;

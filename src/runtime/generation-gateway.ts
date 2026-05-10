@@ -132,6 +132,7 @@ import {
   currentReferenceDigestSilentGuardPolicy,
   mergeBackendStreamWorkEvidence,
   readAgentServerRunStream,
+  silentStreamDecisionFromGatewayRequest,
 } from './gateway/agentserver-stream.js';
 import {
   hydrateGeneratedTaskResponseFromText,
@@ -644,7 +645,7 @@ async function requestAgentServerGeneration(params: {
         skillPlanRef: promptRequest.skillPlanRef,
         prompt: promptRequest.prompt,
       });
-    const attachPriorAttempts = needsContinuity;
+    const attachPriorAttempts = needsContinuity || hasRecoverableRecentAttempt(recentAttempts);
     const priorAttempts = currentTurnReferences(promptRequest).length || !attachPriorAttempts
       ? []
       : summarizeTaskAttemptsForAgentServer(recentAttempts);
@@ -862,6 +863,12 @@ async function requestAgentServerGeneration(params: {
       body: JSON.stringify(runPayload),
     });
     const silentGuardPolicy = currentReferenceDigestSilentGuardPolicy(request);
+    const silentRunId = typeof request.uiState?.silentStreamRunId === 'string'
+      ? request.uiState.silentStreamRunId
+      : typeof request.uiState?.sessionId === 'string'
+        ? request.uiState.sessionId
+        : undefined;
+    const silentStreamDecision = silentStreamDecisionFromGatewayRequest(request);
     const { json, run, error, streamText, workEvidence } = await readAgentServerRunStream(response, (event) => {
       emitWorkspaceRuntimeEvent(params.callbacks, withRequestContextWindowLimit(
         normalizeAgentServerWorkspaceEvent(event),
@@ -872,6 +879,8 @@ async function requestAgentServerGeneration(params: {
       maxSilentMs: silentGuardPolicy.timeoutMs,
       silencePolicy: silentGuardPolicy,
       silentRetryCount: Math.max(0, dispatchAttempt - 1),
+      silentRunId,
+      silentStreamDecision,
       onGuardTrip: (message) => {
         controller.abort();
         emitWorkspaceRuntimeEvent(params.callbacks, agentServerConvergenceGuardEvent(message));
@@ -1316,6 +1325,17 @@ async function finalizeAgentServerGenerationSuccess<T extends Extract<AgentServe
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function hasRecoverableRecentAttempt(attempts: TaskAttemptRecord[]) {
+  return attempts.some((attempt) => {
+    const candidates = [
+      attempt.status,
+      attempt.failureReason,
+      attempt.routeDecision?.fallbackReason,
+    ];
+    return candidates.some((value) => /repair-needed|failed|needs-human|timed out|cancelled|timeout/i.test(String(value || '')));
+  });
 }
 
 function normalizeAgentServerWorkspaceEvent(raw: unknown): WorkspaceRuntimeEvent {

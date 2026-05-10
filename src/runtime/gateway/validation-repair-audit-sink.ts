@@ -1,3 +1,5 @@
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   VALIDATION_REPAIR_AUDIT_SINK_TARGETS,
   type AuditRecord,
@@ -13,7 +15,11 @@ import {
   type ValidationRepairAuditLedgerWriteResult,
 } from '../capability-evolution-ledger.js';
 import { isRecord } from '../gateway-utils.js';
+import { normalizeWorkspaceRootPath } from '../workspace-paths.js';
 import type { ValidationRepairAuditChain } from './validation-repair-audit-bridge.js';
+
+export const VALIDATION_REPAIR_AUDIT_VERIFICATION_ARTIFACTS_RELATIVE_DIR = '.sciforge/validation-repair-audit/verification-artifacts';
+export const VALIDATION_REPAIR_AUDIT_VERIFICATION_ARTIFACT_CONTRACT_ID = 'sciforge.validation-repair-audit-verification-artifact.v1';
 
 export interface ValidationRepairAuditSinkChain {
   validationDecision?: ValidationDecision;
@@ -64,6 +70,53 @@ export interface ValidationRepairAuditSinkProjectionOptions {
   targets?: ValidationRepairAuditSinkTarget[];
 }
 
+export interface ValidationRepairAuditVerificationArtifactWriteOptions {
+  workspacePath: string;
+  artifactDir?: string;
+  now?: () => Date;
+}
+
+export interface ValidationRepairAuditVerificationArtifact {
+  contract: typeof VALIDATION_REPAIR_AUDIT_VERIFICATION_ARTIFACT_CONTRACT_ID;
+  artifactId: string;
+  sourceSinkRef: string;
+  auditId: string;
+  validationDecisionId?: string;
+  repairDecisionId?: string;
+  contractId?: string;
+  failureKind?: string;
+  outcome?: string;
+  subject?: ValidationRepairAuditSinkRef['subject'];
+  relatedRefs: string[];
+  sinkRefs: string[];
+  telemetrySpanRefs: string[];
+  auditRecord: AuditRecord;
+  validationDecision?: ValidationDecision;
+  repairDecision?: RepairDecision;
+  createdAt?: string;
+  recordedAt: string;
+}
+
+export interface ValidationRepairAuditVerificationArtifactFact {
+  kind: 'validation-repair-audit-verification-artifact-fact';
+  artifactRef: string;
+  sourceSinkRef: string;
+  auditId: string;
+  validationDecisionId?: string;
+  repairDecisionId?: string;
+  contractId?: string;
+  failureKind?: string;
+  outcome?: string;
+  sinkRefs: string[];
+}
+
+export interface ValidationRepairAuditVerificationArtifactWriteResult {
+  path: string;
+  ref: string;
+  artifact: ValidationRepairAuditVerificationArtifact;
+  fact: ValidationRepairAuditVerificationArtifactFact;
+}
+
 export function projectValidationRepairAuditSink(
   source: ValidationRepairAuditSinkSource | ValidationRepairAuditSinkSource[],
   options: ValidationRepairAuditSinkProjectionOptions = {},
@@ -90,6 +143,54 @@ export async function writeValidationRepairAuditSinkLedgerRecords(
 ): Promise<ValidationRepairAuditLedgerWriteResult[]> {
   const projection = projectValidationRepairAuditSink(source, { targets: ['ledger'] });
   return appendValidationRepairAuditSinkRecordsToCapabilityEvolutionLedger(options, projection.records);
+}
+
+export async function writeValidationRepairAuditSinkVerificationArtifacts(
+  source: ValidationRepairAuditSinkSource | ValidationRepairAuditSinkSource[],
+  options: ValidationRepairAuditVerificationArtifactWriteOptions,
+): Promise<ValidationRepairAuditVerificationArtifactWriteResult[]> {
+  const projection = projectValidationRepairAuditSink(source, { targets: ['verification-artifact'] });
+  const results: ValidationRepairAuditVerificationArtifactWriteResult[] = [];
+  for (const record of uniqueSinkRecords(projection.records)) {
+    results.push(await writeValidationRepairAuditSinkVerificationArtifactRecord(options, record));
+  }
+  return results;
+}
+
+export async function writeValidationRepairAuditSinkVerificationArtifactRecord(
+  options: ValidationRepairAuditVerificationArtifactWriteOptions,
+  sinkRecord: ValidationRepairAuditSinkRecord,
+): Promise<ValidationRepairAuditVerificationArtifactWriteResult> {
+  if (sinkRecord.target !== 'verification-artifact') {
+    throw new Error(`Expected verification-artifact sink record, received ${sinkRecord.target}`);
+  }
+  const artifactPath = resolveValidationRepairAuditVerificationArtifactPath(options, sinkRecord);
+  const artifact = validationRepairAuditVerificationArtifactFromSinkRecord(sinkRecord, options);
+  await mkdir(dirname(artifactPath), { recursive: true });
+  await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
+  const artifactRef = toWorkspaceRef(options.workspacePath, artifactPath);
+  return {
+    path: artifactPath,
+    ref: artifactRef,
+    artifact,
+    fact: validationRepairAuditVerificationArtifactFactFromArtifact(artifact, artifactRef),
+  };
+}
+
+export async function readValidationRepairAuditSinkVerificationArtifacts(
+  options: ValidationRepairAuditVerificationArtifactWriteOptions,
+): Promise<ValidationRepairAuditVerificationArtifact[]> {
+  const artifactDir = resolveValidationRepairAuditVerificationArtifactDir(options);
+  const entries = await readdir(artifactDir).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  const artifacts: ValidationRepairAuditVerificationArtifact[] = [];
+  for (const entry of entries.filter((value) => value.endsWith('.json')).sort()) {
+    const raw = await readFile(join(artifactDir, entry), 'utf8');
+    artifacts.push(JSON.parse(raw) as ValidationRepairAuditVerificationArtifact);
+  }
+  return artifacts;
 }
 
 export function mergeValidationRepairAuditAttemptMetadata(
@@ -261,6 +362,97 @@ function attemptRefFromSinkRef(ref: ValidationRepairAuditSinkRef): ValidationRep
     telemetrySpanRefs: ref.telemetrySpanRefs,
     createdAt: ref.createdAt,
   };
+}
+
+function validationRepairAuditVerificationArtifactFromSinkRecord(
+  sinkRecord: ValidationRepairAuditSinkRecord,
+  options: ValidationRepairAuditVerificationArtifactWriteOptions,
+): ValidationRepairAuditVerificationArtifact {
+  const audit = sinkRecord.auditRecord;
+  const validation = sinkRecord.validationDecision;
+  const repair = sinkRecord.repairDecision;
+  return {
+    contract: VALIDATION_REPAIR_AUDIT_VERIFICATION_ARTIFACT_CONTRACT_ID,
+    artifactId: `validation-repair-audit-verification-artifact:${safeArtifactId(audit.auditId)}`,
+    sourceSinkRef: sinkRecord.ref,
+    auditId: audit.auditId,
+    validationDecisionId: audit.validationDecisionId ?? validation?.decisionId,
+    repairDecisionId: audit.repairDecisionId ?? repair?.decisionId,
+    contractId: audit.contractId,
+    failureKind: audit.failureKind,
+    outcome: audit.outcome,
+    subject: validation?.subject ?? audit.subject,
+    relatedRefs: uniqueStrings([
+      ...sinkRecord.relatedRefs,
+      ...audit.relatedRefs,
+      ...(validation?.relatedRefs ?? []),
+      ...(repair?.relatedRefs ?? []),
+    ]),
+    sinkRefs: uniqueStrings([
+      sinkRecord.ref,
+      ...audit.sinkRefs,
+    ]),
+    telemetrySpanRefs: uniqueStrings(audit.telemetrySpanRefs),
+    auditRecord: audit,
+    validationDecision: validation,
+    repairDecision: repair,
+    createdAt: audit.createdAt || sinkRecord.createdAt,
+    recordedAt: (options.now ?? (() => new Date()))().toISOString(),
+  };
+}
+
+function validationRepairAuditVerificationArtifactFactFromArtifact(
+  artifact: ValidationRepairAuditVerificationArtifact,
+  artifactRef: string,
+): ValidationRepairAuditVerificationArtifactFact {
+  return {
+    kind: 'validation-repair-audit-verification-artifact-fact',
+    artifactRef,
+    sourceSinkRef: artifact.sourceSinkRef,
+    auditId: artifact.auditId,
+    validationDecisionId: artifact.validationDecisionId,
+    repairDecisionId: artifact.repairDecisionId,
+    contractId: artifact.contractId,
+    failureKind: artifact.failureKind,
+    outcome: artifact.outcome,
+    sinkRefs: artifact.sinkRefs,
+  };
+}
+
+function resolveValidationRepairAuditVerificationArtifactPath(
+  options: ValidationRepairAuditVerificationArtifactWriteOptions,
+  sinkRecord: ValidationRepairAuditSinkRecord,
+) {
+  return join(
+    resolveValidationRepairAuditVerificationArtifactDir(options),
+    `${safeArtifactId(sinkRecord.auditRecord.auditId)}.json`,
+  );
+}
+
+function resolveValidationRepairAuditVerificationArtifactDir(options: ValidationRepairAuditVerificationArtifactWriteOptions) {
+  const workspaceRoot = normalizeWorkspaceRootPath(resolve(options.workspacePath));
+  if (!workspaceRoot) throw new Error('workspacePath is required');
+  const rawDir = options.artifactDir?.trim() || VALIDATION_REPAIR_AUDIT_VERIFICATION_ARTIFACTS_RELATIVE_DIR;
+  const targetDir = isAbsolute(rawDir) ? resolve(rawDir) : resolve(workspaceRoot, rawDir);
+  assertInsideWorkspace(workspaceRoot, targetDir);
+  return targetDir;
+}
+
+function assertInsideWorkspace(workspacePath: string, targetPath: string) {
+  const rel = relative(workspacePath, targetPath);
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new Error('Validation repair audit sink refused to write outside the workspace.');
+  }
+}
+
+function toWorkspaceRef(workspacePath: string, targetPath: string) {
+  const workspaceRoot = normalizeWorkspaceRootPath(resolve(workspacePath));
+  const rel = relative(workspaceRoot, targetPath).split(sep).join('/');
+  return rel || '.';
+}
+
+function safeArtifactId(value: string) {
+  return value.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'audit';
 }
 
 function isAuditRecord(value: unknown): value is AuditRecord {

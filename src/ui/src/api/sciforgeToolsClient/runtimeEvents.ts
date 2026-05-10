@@ -368,13 +368,13 @@ function formatTokenUsage(usage: AgentStreamEvent['usage'] | undefined) {
   return `tokens ${parts.join(', ')}${suffix ? ` (${suffix})` : ''}`;
 }
 
-export function toolEvent(type: string, detail: string): AgentStreamEvent {
+export function toolEvent(type: string, detail: string, rawExtras: Record<string, unknown> = {}): AgentStreamEvent {
   return {
     id: makeId('evt'),
     type,
     label: '项目工具',
     detail,
     createdAt: nowIso(),
-    raw: { type, detail },
+    raw: { type, detail, ...rawExtras },
   };
 }

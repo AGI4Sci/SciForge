@@ -36,6 +36,7 @@ import {
   WORKSPACE_RUNTIME_EVENT_TYPE,
   RUNTIME_HEALTH_STATUS,
   RUNTIME_HEALTH_STATUSES,
+  SILENT_STREAM_DECISION_SCHEMA_VERSION,
   TEXT_DELTA_EVENT_TYPE,
   TOOL_CALL_EVENT_TYPE,
   TOOL_RESULT_EVENT_TYPE,
@@ -49,6 +50,9 @@ import {
   acceptanceRepairRerunToolId,
   backgroundCompletionContractId,
   backgroundCompletionToolId,
+  buildSilentStreamDecisionId,
+  buildSilentStreamDecisionRecord,
+  buildSilentStreamRunId,
   compactRuntimePromptSummary,
   conversationPolicyStartedEvent,
   directContextFastPathEvent,
@@ -75,6 +79,7 @@ import {
   runtimeTextLooksLikeGeneratedWorkDetail,
   runtimeToolEventActionKind,
   summarizeRuntimeGeneratedTaskFiles,
+  silentStreamDecisionRecordFromUnknown,
   targetIssueLookupFailedEvent,
   targetIssueReadEvent,
   targetRepairModifyingEvent,
@@ -124,6 +129,48 @@ test('run termination normalization distinguishes user system timeout and backen
     detail: 'cancelled by user',
   });
   assert.equal(normalizeRunTermination({ detail: 'AgentServer backend error' }).sessionStatus, 'failed');
+});
+
+test('silent stream decision records dedupe backend transport and UI layers per run', () => {
+  const runId = buildSilentStreamRunId({ sessionId: 'session-a', prompt: 'same user turn' });
+  const transport = buildSilentStreamDecisionRecord({
+    runId,
+    source: 'ui.transport.silenceWatchdog',
+    layer: 'transport-watchdog',
+    decision: 'retry',
+    timeoutMs: 12_000,
+    elapsedMs: 12_500,
+    detail: 'transport retry after silent stream',
+  });
+  const backend = buildSilentStreamDecisionRecord({
+    existing: transport,
+    runId,
+    source: 'agentserver.stream.silentGuard',
+    layer: 'backend-stream',
+    decision: 'retry',
+    timeoutMs: 12_000,
+    elapsedMs: 13_000,
+    detail: 'backend silent stream guard',
+  });
+  const ui = buildSilentStreamDecisionRecord({
+    existing: backend,
+    runId,
+    source: 'ui.progress.silentStreamWait',
+    layer: 'ui-progress',
+    decision: 'retry',
+    timeoutMs: 12_000,
+    elapsedMs: 14_000,
+    detail: 'UI waiting status',
+  });
+
+  assert.equal(transport.schemaVersion, SILENT_STREAM_DECISION_SCHEMA_VERSION);
+  assert.equal(transport.decisionId, buildSilentStreamDecisionId({ runId }));
+  assert.equal(backend.decisionId, transport.decisionId);
+  assert.equal(ui.decisionId, transport.decisionId);
+  assert.deepEqual(ui.layers, ['transport-watchdog', 'backend-stream', 'ui-progress']);
+  assert.equal(ui.termination.reason, 'timeout');
+  assert.equal(silentStreamDecisionRecordFromUnknown({ silentStreamDecision: ui }), undefined);
+  assert.equal(silentStreamDecisionRecordFromUnknown(ui)?.decisionId, transport.decisionId);
 });
 
 test('runtime event projection exports stable fallback types and diagnostics', () => {

@@ -5,7 +5,9 @@ import {
   PROCESS_PROGRESS_REASON,
   PROCESS_PROGRESS_STATUS,
   USER_INTERRUPT_EVENT_TYPE,
+  buildSilentStreamDecisionRecord,
   runtimeRequestAcceptedProgressCopy,
+  silentStreamDecisionRecordFromUnknown,
 } from '@sciforge-ui/runtime-contract';
 import type { ProcessProgressModel, ProcessProgressPhase } from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
@@ -68,11 +70,13 @@ export function buildSilentStreamProgressEvent({
   nowMs,
   backend,
   thresholdMs,
+  runId,
 }: {
   events: AgentStreamEvent[];
   nowMs: number;
   backend?: string;
   thresholdMs?: number;
+  runId?: string;
 }): AgentStreamEvent | undefined {
   const silencePolicy = silentStreamPolicyFromEvents(events);
   const effectiveThresholdMs = thresholdMs ?? silencePolicy?.timeoutMs ?? SILENT_STREAM_WAIT_THRESHOLD_MS;
@@ -85,6 +89,20 @@ export function buildSilentStreamProgressEvent({
   const detail = lastEventSummary
     ? `HTTP stream 仍在等待；已 ${elapsedSeconds}s 没有收到新事件。最近事件：${lastEventSummary.label} - ${lastEventSummary.detail}`
     : `HTTP stream 仍在等待；已 ${elapsedSeconds}s 没有收到新事件，尚无可展示的后端事件。`;
+  const existingDecision = latestSilentStreamDecision(events);
+  const silentStreamDecision = buildSilentStreamDecisionRecord({
+    existing: existingDecision,
+    runId: runId ?? existingDecision?.runId,
+    source: 'ui.progress.silentStreamWait',
+    layer: 'ui-progress',
+    decision: silencePolicy?.decision ?? existingDecision?.decision ?? 'visible-status',
+    timeoutMs: effectiveThresholdMs,
+    elapsedMs,
+    status: 'waiting-for-backend-event',
+    maxRetries: silencePolicy?.maxRetries,
+    detail,
+    createdAt: new Date(nowMs).toISOString(),
+  });
   return {
     id: 'evt-silent-stream-wait',
     type: PROCESS_PROGRESS_EVENT_TYPE,
@@ -111,6 +129,7 @@ export function buildSilentStreamProgressEvent({
       elapsedMs,
       thresholdMs: effectiveThresholdMs,
       silencePolicy,
+      silentStreamDecision,
       streamOpen: true,
     },
   };
@@ -254,6 +273,18 @@ function silentStreamPolicyFromEvents(events: AgentStreamEvent[]): SilentStreamP
       maxRetries: numberField(silencePolicy.maxRetries),
       retryAttempt: numberField(silencePolicy.retryAttempt),
     };
+  }
+  return undefined;
+}
+
+function latestSilentStreamDecision(events: AgentStreamEvent[]) {
+  for (const event of [...events].reverse()) {
+    const raw = isRecord(event.raw) ? event.raw : {};
+    const direct = silentStreamDecisionRecordFromUnknown(raw.silentStreamDecision);
+    if (direct) return direct;
+    const nestedRaw = isRecord(raw.raw) ? raw.raw : undefined;
+    const nested = silentStreamDecisionRecordFromUnknown(nestedRaw?.silentStreamDecision);
+    if (nested) return nested;
   }
   return undefined;
 }

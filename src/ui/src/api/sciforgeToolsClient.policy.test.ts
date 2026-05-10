@@ -124,6 +124,7 @@ test('UI handoff does not synthesize verification or human approval policy defau
   assert.equal(bodies[0]?.verificationPolicy, undefined);
   assert.equal(bodies[0]?.humanApprovalPolicy, undefined);
   assert.equal(bodies[0]?.unverifiedReason, undefined);
+  assert.match(String((bodies[0]?.uiState as { silentStreamRunId?: string } | undefined)?.silentStreamRunId), /^session-test:turn-/);
 
   await sendSciForgeToolMessage(messageInput({
     verificationPolicy: { required: false, mode: 'none', reason: 'explicit scenario policy' },

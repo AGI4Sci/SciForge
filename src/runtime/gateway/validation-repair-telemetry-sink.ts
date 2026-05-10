@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { appendFile, mkdir, readFile } from 'node:fs/promises';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 import {
   VALIDATION_REPAIR_TELEMETRY_SPAN_KINDS,
@@ -9,8 +11,11 @@ import {
   type ValidationRepairTelemetrySpanRef,
 } from '@sciforge-ui/runtime-contract/validation-repair-audit';
 import { isRecord } from '../gateway-utils.js';
+import { normalizeWorkspaceRootPath } from '../workspace-paths.js';
 import type { RepairExecutorResult } from './repair-executor.js';
 import type { ValidationRepairAuditChain } from './validation-repair-audit-bridge.js';
+
+export const VALIDATION_REPAIR_TELEMETRY_RELATIVE_PATH = '.sciforge/validation-repair-telemetry/spans.jsonl';
 
 export type ValidationRepairTelemetrySource =
   | ValidationDecision
@@ -39,6 +44,72 @@ export interface ValidationRepairTelemetryProjection {
   repairRefs: string[];
 }
 
+export interface ValidationRepairTelemetryWriteOptions {
+  workspacePath: string;
+  telemetryPath?: string;
+  now?: () => Date;
+}
+
+export interface ValidationRepairTelemetryReadOptions extends ValidationRepairTelemetryWriteOptions {
+  limit?: number;
+}
+
+export interface ValidationRepairTelemetrySummaryOptions extends ValidationRepairTelemetryReadOptions {}
+
+export interface ValidationRepairTelemetrySpanRecord {
+  kind: 'validation-repair-telemetry-span-record';
+  schemaVersion: 1;
+  ref: string;
+  span: ValidationRepairTelemetrySpanRef;
+  spanId: string;
+  spanKind: ValidationRepairTelemetrySpanKind;
+  validationDecisionId?: string;
+  repairDecisionId?: string;
+  auditId?: string;
+  executorResultId?: string;
+  sourceRefs: string[];
+  auditRefs: string[];
+  repairRefs: string[];
+  relatedRefs: string[];
+  sinkRefs: string[];
+  telemetrySpanRefs: string[];
+  createdAt: string;
+  recordedAt: string;
+}
+
+export interface ValidationRepairTelemetryWriteResult {
+  path: string;
+  ref: string;
+  records: ValidationRepairTelemetrySpanRecord[];
+  projection: ValidationRepairTelemetryProjection;
+}
+
+export interface ValidationRepairTelemetrySummary {
+  kind: 'validation-repair-telemetry-summary';
+  sourceRef: string;
+  generatedAt: string;
+  totalSpans: number;
+  spanKindCounts: Partial<Record<ValidationRepairTelemetrySpanKind, number>>;
+  validationDecisionIds: string[];
+  repairDecisionIds: string[];
+  auditIds: string[];
+  executorResultIds: string[];
+  sourceRefs: string[];
+  auditRefs: string[];
+  repairRefs: string[];
+  recentSpans: Array<{
+    ref: string;
+    spanId: string;
+    spanKind: ValidationRepairTelemetrySpanKind;
+    status?: string;
+    validationDecisionId?: string;
+    repairDecisionId?: string;
+    auditId?: string;
+    executorResultId?: string;
+    createdAt: string;
+  }>;
+}
+
 interface NormalizedTelemetryChain {
   source: ValidationRepairTelemetrySpanRef['source'];
   validation?: ValidationDecision;
@@ -60,6 +131,88 @@ export function validationRepairTelemetrySpansFromPayload(
 ): ValidationRepairTelemetryProjection | undefined {
   const projection = telemetryProjectionFromChains(telemetryChainsFromPayload(value), options);
   return projection.spans.length ? projection : undefined;
+}
+
+export function resolveValidationRepairTelemetryPath(options: ValidationRepairTelemetryWriteOptions) {
+  const workspaceRoot = normalizeWorkspaceRootPath(resolve(options.workspacePath));
+  if (!workspaceRoot) throw new Error('workspacePath is required');
+  const rawTelemetryPath = options.telemetryPath?.trim() || VALIDATION_REPAIR_TELEMETRY_RELATIVE_PATH;
+  const targetPath = isAbsolute(rawTelemetryPath) ? resolve(rawTelemetryPath) : resolve(workspaceRoot, rawTelemetryPath);
+  assertInsideWorkspace(workspaceRoot, targetPath);
+  return targetPath;
+}
+
+export async function writeValidationRepairTelemetrySpans(
+  source: ValidationRepairTelemetrySource | ValidationRepairTelemetrySource[],
+  options: ValidationRepairTelemetryWriteOptions,
+  projectionOptions: ValidationRepairTelemetryProjectionOptions = {},
+): Promise<ValidationRepairTelemetryWriteResult> {
+  const projection = projectValidationRepairTelemetrySpans(source, projectionOptions);
+  const telemetryPath = resolveValidationRepairTelemetryPath(options);
+  const fileRef = toWorkspaceRef(options.workspacePath, telemetryPath);
+  const records = uniqueSpanRecords(projection.spans.map((span) => telemetryRecordFromSpan(span, fileRef, options)));
+  if (records.length > 0) {
+    await mkdir(dirname(telemetryPath), { recursive: true });
+    await appendFile(telemetryPath, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`, 'utf8');
+  }
+  return {
+    path: telemetryPath,
+    ref: fileRef,
+    records,
+    projection,
+  };
+}
+
+export async function readValidationRepairTelemetrySpanRecords(
+  options: ValidationRepairTelemetryReadOptions,
+): Promise<ValidationRepairTelemetrySpanRecord[]> {
+  const telemetryPath = resolveValidationRepairTelemetryPath(options);
+  const raw = await readFile(telemetryPath, 'utf8').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return '';
+    throw error;
+  });
+  const records = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as ValidationRepairTelemetrySpanRecord);
+  return typeof options.limit === 'number' && options.limit >= 0 ? records.slice(-options.limit) : records;
+}
+
+export async function buildValidationRepairTelemetrySummary(
+  options: ValidationRepairTelemetrySummaryOptions,
+): Promise<ValidationRepairTelemetrySummary> {
+  const telemetryPath = resolveValidationRepairTelemetryPath(options);
+  const records = await readValidationRepairTelemetrySpanRecords(options);
+  const spanKindCounts: Partial<Record<ValidationRepairTelemetrySpanKind, number>> = {};
+  for (const record of records) {
+    spanKindCounts[record.spanKind] = (spanKindCounts[record.spanKind] ?? 0) + 1;
+  }
+  return {
+    kind: 'validation-repair-telemetry-summary',
+    sourceRef: toWorkspaceRef(options.workspacePath, telemetryPath),
+    generatedAt: (options.now ?? (() => new Date()))().toISOString(),
+    totalSpans: records.length,
+    spanKindCounts,
+    validationDecisionIds: uniqueStrings(records.map((record) => record.validationDecisionId)),
+    repairDecisionIds: uniqueStrings(records.map((record) => record.repairDecisionId)),
+    auditIds: uniqueStrings(records.map((record) => record.auditId)),
+    executorResultIds: uniqueStrings(records.map((record) => record.executorResultId)),
+    sourceRefs: uniqueStrings(records.flatMap((record) => record.sourceRefs)),
+    auditRefs: uniqueStrings(records.flatMap((record) => record.auditRefs)),
+    repairRefs: uniqueStrings(records.flatMap((record) => record.repairRefs)),
+    recentSpans: records.slice(-25).map((record) => ({
+      ref: record.ref,
+      spanId: record.spanId,
+      spanKind: record.spanKind,
+      status: record.span.status,
+      validationDecisionId: record.validationDecisionId,
+      repairDecisionId: record.repairDecisionId,
+      auditId: record.auditId,
+      executorResultId: record.executorResultId,
+      createdAt: record.createdAt,
+    })),
+  };
 }
 
 function telemetryProjectionFromChains(
@@ -352,6 +505,35 @@ function stableSpanId(spanKind: ValidationRepairTelemetrySpanKind, value: Record
   return `${spanKind.replace(/[^a-z0-9]+/g, '-')}:${digest}`;
 }
 
+function telemetryRecordFromSpan(
+  span: ValidationRepairTelemetrySpanRef,
+  fileRef: string,
+  options: ValidationRepairTelemetryWriteOptions,
+): ValidationRepairTelemetrySpanRecord {
+  const recordedAt = (options.now ?? (() => new Date()))().toISOString();
+  const createdAt = span.createdAt ?? recordedAt;
+  return {
+    kind: 'validation-repair-telemetry-span-record',
+    schemaVersion: 1,
+    ref: `${fileRef}#${span.spanId}`,
+    span,
+    spanId: span.spanId,
+    spanKind: span.spanKind,
+    validationDecisionId: span.validationDecisionId,
+    repairDecisionId: span.repairDecisionId,
+    auditId: span.auditId,
+    executorResultId: span.executorResultId,
+    sourceRefs: uniqueStrings(span.sourceRefs),
+    auditRefs: uniqueStrings(span.auditRefs),
+    repairRefs: uniqueStrings(span.repairRefs),
+    relatedRefs: uniqueStrings(span.relatedRefs),
+    sinkRefs: uniqueStrings(span.sinkRefs),
+    telemetrySpanRefs: uniqueStrings(span.telemetrySpanRefs),
+    createdAt,
+    recordedAt,
+  };
+}
+
 function isAuditRecord(value: unknown): value is AuditRecord {
   return isRecord(value) && typeof value.auditId === 'string' && typeof value.outcome === 'string';
 }
@@ -390,6 +572,30 @@ function uniqueSpans(spans: ValidationRepairTelemetrySpanRef[]) {
   return [...byKey.values()];
 }
 
+function uniqueSpanRecords(records: ValidationRepairTelemetrySpanRecord[]) {
+  const byKey = new Map<string, ValidationRepairTelemetrySpanRecord>();
+  for (const record of records) {
+    const key = `${record.spanKind}:${record.spanId}`;
+    if (byKey.has(key)) continue;
+    byKey.set(key, record);
+  }
+  return [...byKey.values()];
+}
+
 function uniqueStrings(values: Array<string | undefined>) {
   return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0))];
+}
+
+function toWorkspaceRef(workspacePath: string, targetPath: string) {
+  const workspaceRoot = normalizeWorkspaceRootPath(resolve(workspacePath));
+  const relativePath = relative(workspaceRoot, targetPath).split(sep).join('/');
+  return relativePath && !relativePath.startsWith('..') ? relativePath : targetPath;
+}
+
+function assertInsideWorkspace(workspaceRoot: string, targetPath: string) {
+  const relativePath = relative(workspaceRoot, targetPath);
+  if (relativePath === '') return;
+  if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
+    throw new Error(`Telemetry path must stay inside workspace: ${targetPath}`);
+  }
 }

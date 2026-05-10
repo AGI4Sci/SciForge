@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { PROCESS_PROGRESS_EVENT_TYPE, PROCESS_PROGRESS_PHASE, PROCESS_PROGRESS_REASON, PROCESS_PROGRESS_STATUS } from '@sciforge-ui/runtime-contract';
+import {
+  PROCESS_PROGRESS_EVENT_TYPE,
+  PROCESS_PROGRESS_PHASE,
+  PROCESS_PROGRESS_REASON,
+  PROCESS_PROGRESS_STATUS,
+  buildSilentStreamDecisionRecord,
+} from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
 import { buildInitialResponseProgressEvent, buildRequestAcceptedProgressEvent, buildSilentStreamProgressEvent, formatProgressHeadline, progressModelFromEvent, silentStreamWaitThresholdMs } from './processProgress';
 
@@ -124,6 +130,38 @@ test('uses harness silence policy before falling back to generic waiting thresho
   assert.equal(raw?.thresholdMs, 12_000);
   assert.equal(raw?.silencePolicy?.decision, 'visible-status');
   assert.equal(raw?.silencePolicy?.maxRetries, 1);
+});
+
+test('silent waiting progress reuses transport silent decision record for the same run', () => {
+  const transportDecision = buildSilentStreamDecisionRecord({
+    runId: 'session-a:turn-silent',
+    source: 'ui.transport.silenceWatchdog',
+    layer: 'transport-watchdog',
+    decision: 'retry',
+    timeoutMs: 8_000,
+    elapsedMs: 8_500,
+    detail: 'transport retry after silent stream',
+  });
+  const silent = buildSilentStreamProgressEvent({
+    events: [
+      event({ type: 'queued', label: '已提交', detail: 'run', createdAt: '2026-05-08T00:00:00.000Z' }),
+      event({
+        type: 'backend-silent',
+        label: '项目工具',
+        detail: '后端 8s 没有输出新事件',
+        createdAt: '2026-05-08T00:00:08.000Z',
+        raw: {
+          type: 'backend-silent',
+          silentStreamDecision: transportDecision,
+        },
+      }),
+    ],
+    nowMs: Date.parse('2026-05-08T00:00:17.000Z'),
+    runId: 'session-a:turn-silent',
+  });
+  const raw = silent?.raw as { silentStreamDecision?: { decisionId?: string; layers?: string[] } } | undefined;
+  assert.equal(raw?.silentStreamDecision?.decisionId, transportDecision.decisionId);
+  assert.deepEqual(raw?.silentStreamDecision?.layers, ['transport-watchdog', 'ui-progress']);
 });
 
 test('builds immediate request accepted progress before backend stream starts', () => {
