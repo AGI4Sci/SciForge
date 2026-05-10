@@ -92,6 +92,9 @@ try {
   const backendDecisionDisabled = await runHarnessRequest('balanced-default', {
     agentHarnessBackendSelectionDecisionDisabled: true,
   });
+  const continuityDecisionDisabled = await runHarnessRequest('balanced-default', {
+    agentHarnessContinuityDecisionDisabled: true,
+  });
 
   assert.equal(first.result.message, 'Harness shadow smoke completed.');
   assert.equal(first.event.status, 'completed');
@@ -108,7 +111,12 @@ try {
   assert.equal(dispatches[0]?.metadata.harnessContractRef, first.summary.contractRef);
   assert.equal(dispatches[0]?.metadata.harnessTraceRef, first.summary.traceRef);
   assert.equal(dispatches[0]?.metadata.harnessDecisionOwner, 'AgentServer');
-  assert.equal(dispatches[0]?.metadata.agentHarnessContinuityDecision, undefined, 'continuity decision audit should stay off by default');
+  const defaultContinuityDecision = dispatches[0]?.metadata.agentHarnessContinuityDecision as Record<string, unknown>;
+  assert.equal(defaultContinuityDecision.schemaVersion, 'sciforge.agent-harness-continuity-decision.v1');
+  assert.equal(defaultContinuityDecision.shadowMode, true);
+  assert.equal(defaultContinuityDecision.decisionOwner, 'AgentServer');
+  assert.equal(defaultContinuityDecision.decision, 'fresh');
+  assert.equal(defaultContinuityDecision.useContinuity, false);
   const defaultBackendSelectionDecision = dispatches[0]?.metadata.agentHarnessBackendSelectionDecision as Record<string, unknown>;
   assert.equal(defaultBackendSelectionDecision.schemaVersion, 'sciforge.agentserver-backend-selection-decision.v1');
   assert.equal(defaultBackendSelectionDecision.shadowMode, true);
@@ -123,6 +131,7 @@ try {
   assert.equal(handoff.harnessContractRef, first.summary.contractRef);
   assert.equal(handoff.harnessTraceRef, first.summary.traceRef);
   assert.equal(handoff.decisionOwner, 'AgentServer');
+  assert.deepEqual(handoff.continuityDecision, defaultContinuityDecision);
   assert.deepEqual(handoff.backendSelectionDecision, defaultBackendSelectionDecision);
   assert.equal(dispatches[0]?.metadata.purpose, dispatches[2]?.metadata.purpose);
   assert.equal(dispatches[0]?.url, dispatches[2]?.url);
@@ -177,7 +186,9 @@ try {
   assert.equal(uiProgress?.reason, 'progress-plan-projection');
   assert.equal(backendDecisionDisabled.event.status, 'completed');
   assert.equal(dispatches[5]?.metadata.agentHarnessBackendSelectionDecision, undefined, 'explicit kill switch should omit backend selection decision audit');
-  assert.equal(dispatches.length, 6);
+  assert.equal(continuityDecisionDisabled.event.status, 'completed');
+  assert.equal(dispatches[6]?.metadata.agentHarnessContinuityDecision, undefined, 'explicit kill switch should omit continuity decision audit');
+  assert.equal(dispatches.length, 7);
   console.log('[ok] agent harness shadow contract is stable, traced, profiled, and metadata-only');
 } finally {
   await new Promise<void>((resolve) => server.close(() => resolve()));

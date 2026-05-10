@@ -280,14 +280,17 @@ function agentHarnessDisabled(request: GatewayRequest) {
 function agentHarnessContinuityDecisionAuditEnabled(request: GatewayRequest) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const harness = isRecord(uiState.agentHarness) ? uiState.agentHarness : isRecord(uiState.harness) ? uiState.harness : {};
-  return [
-    uiState.agentHarnessContinuityDecisionEnabled,
-    uiState.agentHarnessContinuityAuditEnabled,
-    uiState.agentHarnessTraceContinuityDecision,
-    harness.continuityDecisionEnabled,
-    harness.continuityAuditEnabled,
-    harness.traceContinuityDecision,
+  const disabled = [
+    uiState.agentHarnessContinuityDecisionDisabled,
+    uiState.agentHarnessContinuityAuditDisabled,
+    uiState.agentHarnessSkipContinuityDecision,
+    uiState.agentHarnessDisableContinuityDecision,
+    harness.continuityDecisionDisabled,
+    harness.continuityAuditDisabled,
+    harness.skipContinuityDecision,
+    harness.disableContinuityDecision,
   ].some(isEnabledFlag);
+  return !disabled;
 }
 
 function agentHarnessBackendSelectionDecisionAuditEnabled(request: GatewayRequest) {

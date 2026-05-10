@@ -78,7 +78,7 @@ Todo：
 
 状态：进行中；目标是按 [`docs/AgentHarnessStandard.md`](docs/AgentHarnessStandard.md) 建立最小可运行 harness runtime。第一阶段只生成 `HarnessContract` 和 `HarnessTrace`，不改变业务行为；第二阶段逐步让 context、broker、prompt、validation、repair 和 UI 消费 contract。
 
-进展：shadow-mode MVP 已完成。`packages/agent-harness` 提供 contract/profile/callback/trace 基础运行时，gateway 在 conversation policy 之后、既有 dispatch/fast-path 之前评估 `HarnessRuntime.evaluate()`，并把 `HarnessContract` / `HarnessTrace` 写入 request/uiState/metadata 与 stream trace。progress plan 已默认投影为结构化 progress event，verification policy 已默认由 contract 收紧，backend selection decision 已默认写入 metadata/handoff；context envelope、broker 和 repair loop 仍保持 opt-in 消费，continuity decision 已有结构化 audit 首片。
+进展：shadow-mode MVP 已完成。`packages/agent-harness` 提供 contract/profile/callback/trace 基础运行时，gateway 在 conversation policy 之后、既有 dispatch/fast-path 之前评估 `HarnessRuntime.evaluate()`，并把 `HarnessContract` / `HarnessTrace` 写入 request/uiState/metadata 与 stream trace。progress plan 已默认投影为结构化 progress event，verification policy 已默认由 contract 收紧，backend selection decision 与 continuity decision 已默认写入 metadata/handoff；context envelope、broker 和 repair loop 仍保持 opt-in 消费，prompt renderer metadata 已有结构化首片。
 
 2026-05-10：新增 opt-in context envelope governance 小切片。默认仍关闭；打开 `agentHarnessContextEnvelopeEnabled` 后，`buildContextEnvelope` 可从 `uiState.agentHarness.contract` / `agentHarnessHandoff` 消费 allowed/blocked/required refs 与 `contextBudget.maxReferenceDigests`，对 current references/digests 做 deterministic filtering/slimming，并输出 `contextGovernanceAudit` 记录 contract/trace/source/decision。
 
@@ -108,6 +108,8 @@ Todo：
 
 2026-05-10：T128/T130 backend selection decision 默认 metadata 小切片完成。AgentServer handoff metadata 现在默认包含 `agentHarnessBackendSelectionDecision` 与 handoff 内的 `backendSelectionDecision`，记录 backend/source/runtime signals/harness refs；保留 `agentHarnessBackendSelectionDecisionDisabled` / `agentHarnessBackendSelectionAuditDisabled` / `agentHarnessSkipBackendSelectionDecision` 显式 kill switch。
 
+2026-05-10：T130 continuity decision 默认 metadata 小切片完成。AgentServer handoff metadata 现在默认包含 `agentHarnessContinuityDecision` 与 handoff 内的 `continuityDecision`，记录 fresh/continuation/repair 决策、intent/runtime signals 与 harness refs；保留 `agentHarnessContinuityDecisionDisabled` / `agentHarnessContinuityAuditDisabled` / `agentHarnessSkipContinuityDecision` 显式 kill switch。
+
 Todo：
 
 - [x] 建立 `packages/agent-harness`：导出 `HarnessRuntime`、`HarnessProfile`、`HarnessCallback`、`HarnessContext`、`HarnessDecision`、`HarnessContract`、`HarnessTrace`、`HarnessStage`。
@@ -115,7 +117,7 @@ Todo：
 - [x] 实现 deterministic merge engine：blocked refs/capabilities union、budget only tightens、risk/verification only escalates、side effects fail closed、conflicts written to trace。
 - [x] 在 `runWorkspaceRuntimeGateway` 中接入 `HarnessRuntime.evaluate()`，位置在 conversation policy 之后、direct fast-path / vision / AgentServer dispatch 之前。
 - [x] 第一阶段只把 `HarnessContract` 写入 request/uiState/metadata 和 stream trace，不改变已有 runtime 行为。
-- [ ] 第二阶段打开 feature flag，让 context envelope、broker、prompt renderer、verification policy、repair loop、UI progress 逐项消费 contract。（progress plan、verification policy 与 backend selection metadata 默认消费已完成；context envelope、broker、repair loop 仍保持 opt-in；continuity 与 prompt renderer metadata 已有结构化首片。）
+- [ ] 第二阶段打开 feature flag，让 context envelope、broker、prompt renderer、verification policy、repair loop、UI progress 逐项消费 contract。（progress plan、verification policy、backend selection metadata 与 continuity metadata 默认消费已完成；context envelope、broker、repair loop 仍保持 opt-in；prompt renderer metadata 已有结构化首片。）
 - [x] 增加 `smoke:agent-harness-contract`：同一输入输出稳定 contract、trace 有阶段记录、profile 切换只改 contract 不 fork gateway path。
 - [x] 增加 `smoke:no-scattered-harness-policy`：禁止在 gateway、prompt builder、UI、scenario、provider 分支新增 harness 指令散文、探索规则、skill 偏好或工具预算。
 
