@@ -3,6 +3,7 @@ import { sendSciForgeToolMessage } from '../../api/sciforgeToolsClient';
 import { buildContextCompactionFailureResult, buildContextCompactionOutcome } from '../../contextCompaction';
 import {
   projectToolFailedEvent,
+  normalizeRunTermination,
   runtimeDetailIndicatesAbort,
   targetInstanceContextEvent,
   targetIssueLookupFailedEvent,
@@ -166,6 +167,13 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
     const rawMessage = err instanceof Error ? err.message : String(err);
     const wasUserInterrupted = input.userAbortRequested();
     const wasSystemInterrupted = !wasUserInterrupted && (input.signal.aborted || runtimeDetailIndicatesAbort(rawMessage));
+    const termination = normalizeRunTermination({
+      detail: rawMessage,
+      userRequested: wasUserInterrupted,
+      aborted: wasSystemInterrupted,
+      timedOut: /timeout|timed out|deadline|超时/i.test(rawMessage),
+      backendError: !wasUserInterrupted && !wasSystemInterrupted,
+    });
     const message = wasUserInterrupted
       ? '用户已中断当前 backend 运行。'
       : wasSystemInterrupted
@@ -180,6 +188,7 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
       prompt: input.prompt,
       message,
       references: input.references,
+      termination,
     });
     return {
       status: 'failed',

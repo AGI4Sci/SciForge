@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { backendRepairStates, coerceReportPayload, contractValidationFailures, renderRegisteredWorkbenchSlot, ResultsRenderer, runAuditRefs, runRecoverActions, shouldOpenRunAuditDetails } from './ResultsRenderer';
+import { ArtifactInspectorDrawer } from './results-renderer-artifact-inspector';
 import { nextPinnedObjectReferences, resolveObjectReferenceActionPlan } from './results-renderer-object-actions';
 import { createResultsRendererViewModel } from './results-renderer-view-model';
 import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract';
@@ -308,6 +309,53 @@ test('object reference action helper resolves pin and workspace path plans witho
   if (copyPlan.kind !== 'copy-path') assert.fail(`Expected copy-path plan, got ${copyPlan.kind}`);
   assert.equal(copyPlan.path, '.sciforge/artifacts/report.md');
   assert.equal(copyPlan.notice, '已复制路径：.sciforge/artifacts/report.md');
+});
+
+test('artifact inspector drawer renders lineage, reproducible refs, preview, and handoff targets', () => {
+  const artifact: RuntimeArtifact = {
+    id: 'report-artifact',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    dataRef: '.sciforge/artifacts/report.json',
+    metadata: {
+      producerSkillId: 'report.writer',
+      createdAt: '2026-05-09T00:00:00.000Z',
+      handoffTargets: ['structure-exploration'],
+    },
+    data: { markdown: '# Inspector report' },
+  };
+  const session: SciForgeSession = {
+    ...emptySession(),
+    artifacts: [artifact],
+    executionUnits: [{
+      id: 'EU-inspector',
+      tool: 'report.generate',
+      params: '{}',
+      status: 'done',
+      hash: 'hash-inspector',
+      artifacts: ['report-artifact'],
+      codeRef: '.sciforge/runs/EU-inspector/code.ts',
+      stdoutRef: '.sciforge/runs/EU-inspector/stdout.txt',
+      outputRef: 'artifact:report-artifact',
+    }],
+  };
+  const html = renderToStaticMarkup(createElement(ArtifactInspectorDrawer, {
+    scenarioId: 'literature-evidence-review',
+    session,
+    artifact,
+    onClose: () => undefined,
+    onArtifactHandoff: () => undefined,
+  }));
+
+  assert.match(html, /Artifact Inspector/);
+  assert.match(html, /report-artifact/);
+  assert.match(html, /producer skill: report.writer/);
+  assert.match(html, /execution unit: EU-inspector · report.generate · done/);
+  assert.match(html, /dataRef: \.sciforge\/artifacts\/report\.json/);
+  assert.match(html, /stdoutRef: \.sciforge\/runs\/EU-inspector\/stdout\.txt/);
+  assert.match(html, /Inspector report/);
+  assert.match(html, /结构探索/);
 });
 
 function contractFailureSession(): SciForgeSession {

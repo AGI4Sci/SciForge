@@ -97,6 +97,7 @@
     "smoke:agent-harness-replay": "tsx tests/smoke/smoke-agent-harness-replay.ts",
     "smoke:interaction-progress-harness": "tsx tests/smoke/smoke-interaction-progress-harness.ts",
     "smoke:validation-repair-audit-chain": "tsx tests/smoke/smoke-validation-repair-audit-chain.ts",
+    "smoke:repair-executor": "tsx tests/smoke/smoke-repair-executor.ts",
     "smoke:unified-capability-graph": "tsx tests/smoke/smoke-unified-capability-graph.ts",
     "smoke:capability-broker-harness-input": "tsx tests/smoke/smoke-capability-broker-harness-input.ts",
     "smoke:capability-budget-debits": "tsx tests/smoke/smoke-capability-budget-debits.ts",

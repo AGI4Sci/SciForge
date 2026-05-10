@@ -57,6 +57,8 @@ import {
   latencyDiagnosticsCachePolicy,
   normalizeRuntimeContextCompactionStatus,
   normalizeRuntimeContextWindowStatus,
+  normalizeRunTermination,
+  normalizeRunTerminationReason,
   normalizeRuntimeWorkspaceEventType,
   projectToolDoneEvent,
   projectToolFailedEvent,
@@ -103,6 +105,25 @@ test('runtime context status normalization stays in runtime contract policy', ()
   assert.equal(normalizeRuntimeContextWindowStatus('window overflow', 0.4, 0.82), 'exceeded');
   assert.equal(normalizeRuntimeContextCompactionStatus('compressed'), 'completed');
   assert.equal(normalizeRuntimeContextCompactionStatus(undefined, { ok: false, message: 'backend error' }), 'failed');
+});
+
+test('run termination normalization distinguishes user system timeout and backend failures', () => {
+  assert.equal(normalizeRunTerminationReason({ userRequested: true, detail: 'cancelled by user' }), 'user-cancelled');
+  assert.equal(normalizeRunTerminationReason({ detail: 'request timed out after 900000ms' }), 'timeout');
+  assert.equal(normalizeRunTerminationReason({ aborted: true, detail: 'network abort' }), 'system-aborted');
+  assert.equal(normalizeRunTerminationReason({ backendError: true, detail: 'schema validation failed' }), 'backend-error');
+
+  assert.deepEqual(normalizeRunTermination({ userRequested: true, detail: 'cancelled by user' }), {
+    schemaVersion: 'sciforge.run-termination.v1',
+    reason: 'user-cancelled',
+    actor: 'user',
+    progressStatus: 'cancelled',
+    runState: 'cancelled',
+    sessionStatus: 'cancelled',
+    retryable: false,
+    detail: 'cancelled by user',
+  });
+  assert.equal(normalizeRunTermination({ detail: 'AgentServer backend error' }).sessionStatus, 'failed');
 });
 
 test('runtime event projection exports stable fallback types and diagnostics', () => {

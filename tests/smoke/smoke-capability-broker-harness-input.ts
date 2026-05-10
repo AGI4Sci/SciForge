@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 
+import { summarizeToolsForAgentServer } from '../../src/runtime/gateway/agentserver-prompts.js';
 import { buildCapabilityBrokerBriefForAgentServer } from '../../src/runtime/gateway/context-envelope.js';
 import type { GatewayRequest } from '../../src/runtime/runtime-types.js';
 
@@ -58,6 +59,7 @@ const request: GatewayRequest = {
 };
 
 const brokerBrief = buildCapabilityBrokerBriefForAgentServer(request);
+const toolBriefs = summarizeToolsForAgentServer(request);
 const brokerText = JSON.stringify(brokerBrief);
 const inputSummary = brokerBrief.inputSummary as Record<string, unknown>;
 const briefs = brokerBrief.briefs as Array<Record<string, unknown>>;
@@ -81,6 +83,15 @@ assert.ok(
 );
 assert.ok(reportBrief.budget, 'compact selected brief should carry structured budget status');
 assert.equal((reportBrief.budget as Record<string, unknown>).providerIdsAfterBudget, 1);
+
+const reportToolBrief = toolBriefs.find((brief) => brief.id === 'view.report');
+assert.ok(reportToolBrief, 'AgentServer tool summary should be sourced from selected broker briefs');
+assert.equal(reportToolBrief.toolType, 'view');
+assert.equal(reportToolBrief.selected, true);
+assert.deepEqual(reportToolBrief.providerIds, ['sciforge.core.view.report']);
+assert.equal((reportToolBrief.budget as Record<string, unknown> | undefined)?.providerIdsAfterBudget, 1);
+assert.equal(JSON.stringify(toolBriefs).includes('inputSchema'), false, 'tool summaries must keep schemas lazy');
+assert.equal(JSON.stringify(toolBriefs).includes('repairHints'), false, 'tool summaries must keep repair hints lazy');
 
 const verifierAudit = audit.find((entry) => entry.id === 'verifier.schema');
 assert.ok(JSON.stringify(verifierAudit).includes('verification policy hint'));

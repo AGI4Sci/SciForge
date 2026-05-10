@@ -82,13 +82,13 @@ assert.equal(guidanceQueued.interaction?.kind, 'guidance');
 assert.equal(guidanceQueued.interaction?.required, false);
 
 const cancellationCases = [
-  ['user-cancelled', 'cancelled'],
-  ['system-aborted', 'cancelled'],
-  ['timeout', 'cancelled'],
-  ['backend-error', 'failed'],
+  ['user-cancelled', 'cancelled', 'cancelled', 'user', false],
+  ['system-aborted', 'cancelled', 'cancelled', 'system', true],
+  ['timeout', 'cancelled', 'cancelled', 'system', true],
+  ['backend-error', 'failed', 'failed', 'backend', true],
 ] as const;
 
-for (const [cancellationReason, runState] of cancellationCases) {
+for (const [cancellationReason, runState, status, actor, retryable] of cancellationCases) {
   const event = projectInteractionProgressEvent({
     progressPlan: plan,
     type: 'run-cancelled',
@@ -97,8 +97,13 @@ for (const [cancellationReason, runState] of cancellationCases) {
   });
   assert.equal(event.type, 'run-cancelled');
   assert.equal(event.cancellationReason, cancellationReason);
-  assert.equal(event.status, 'cancelled');
+  assert.equal(event.status, status);
   assert.equal(event.runState, runState);
+  assert.equal(event.termination?.schemaVersion, 'sciforge.run-termination.v1');
+  assert.equal(event.termination?.reason, cancellationReason);
+  assert.equal(event.termination?.actor, actor);
+  assert.equal(event.termination?.progressStatus, status);
+  assert.equal(event.termination?.retryable, retryable);
   assert.equal(projectRunStateFromInteractionProgressEvent(event), runState);
 }
 

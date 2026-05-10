@@ -690,8 +690,32 @@ function firstStagePlanHintField(values: unknown[]) {
   return undefined;
 }
 
-export function summarizeToolsForAgentServer(_request: GatewayRequest) {
-  return [];
+export function summarizeToolsForAgentServer(request: GatewayRequest) {
+  const capabilityBrokerBrief = buildCapabilityBrokerBriefForAgentServer(request);
+  const briefs = Array.isArray(capabilityBrokerBrief.briefs)
+    ? capabilityBrokerBrief.briefs.filter(isRecord)
+    : [];
+  return briefs.map((brief) => {
+    const id = stringField(brief.id) ?? 'unknown-capability';
+    return {
+      id,
+      label: stringField(brief.name) ?? id,
+      toolType: stringField(brief.kind) ?? 'capability',
+      description: stringField(brief.brief) ?? '',
+      producesArtifactTypes: toStringList(brief.routingTags),
+      selected: true,
+      packageRoot: stringField(brief.ownerPackage),
+      requiredConfig: [],
+      tags: uniqueStrings([
+        ...toStringList(brief.domains),
+        ...toStringList(brief.routingTags),
+      ]),
+      providerIds: toStringList(brief.providerIds),
+      score: typeof brief.score === 'number' ? brief.score : undefined,
+      budget: isRecord(brief.budget) ? brief.budget : undefined,
+      harnessSignals: toStringList(brief.harnessSignals),
+    };
+  });
 }
 
 export function summarizeRuntimeCapabilitiesForAgentServer(request: GatewayRequest) {

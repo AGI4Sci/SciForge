@@ -42,7 +42,7 @@ SciForge 的最终形态是 **Backend-first, Contract-enforced, Capability-drive
 
 ### T131 ResultsRenderer 长文件治理：拆分结果渲染主入口
 
-状态：进行中；`src/ui/src/app/ResultsRenderer.tsx` 已从超过 1500 行降到 1234 行，仍处于继续拆分跟踪范围。目标是把结果渲染主入口收敛为流程编排，把 artifact normalization、view-plan selection、execution notebook projection、fallback/empty-state presentation、object reference actions 等职责拆到语义模块，避免继续在单一 React 文件里堆叠。已拆出 execution audit 数据模型、artifact inspector/reference normalization、view-model 投影和 object reference action 计划/执行 helper，保持 React 文件只消费投影结果。
+状态：进行中；`src/ui/src/app/ResultsRenderer.tsx` 已从超过 1500 行降到约 1153 行，仍处于继续拆分跟踪范围。目标是把结果渲染主入口收敛为流程编排，把 artifact normalization、view-plan selection、execution notebook projection、fallback/empty-state presentation、object reference actions 等职责拆到语义模块，避免继续在单一 React 文件里堆叠。已拆出 execution audit 数据模型、artifact inspector/reference normalization、view-model 投影、object reference action 计划/执行 helper 和 artifact inspector drawer presentation，保持 React 文件只消费投影结果。
 
 Todo：
 
@@ -50,8 +50,9 @@ Todo：
 - [x] 拆出 `results-renderer-view-model`：只负责 view plan、primary/supporting/provenance section 和 empty-state 投影。
 - [x] 拆出 `results-renderer-execution-model`：只负责 execution units、notebook panels、work evidence 和 audit display 的 UI 数据模型。
 - [x] 拆出 `results-renderer-object-actions`：只负责 object reference action plan、pin 队列、path/copy/open/inspect 决策和可注入执行。
+- [x] 拆出 `results-renderer-artifact-inspector`：只负责 artifact inspector drawer presentation、lineage、preview refs 和 handoff target 展示。
 - [ ] 保持 `ResultsRenderer.tsx` 只做 React composition 和事件接线，目标降到 1000 行以下。
-- [ ] 增加或迁移聚焦测试，覆盖 artifact fallback、report/preview rendering、execution notebook 和 object reference actions。（已新增 view-model、execution audit、object actions 聚焦测试；artifact fallback 仍待拆分覆盖。）
+- [ ] 增加或迁移聚焦测试，覆盖 artifact fallback、report/preview rendering、execution notebook 和 object reference actions。（已新增 view-model、execution audit、object actions、artifact inspector 聚焦测试；artifact fallback 仍待拆分覆盖。）
 
 验收标准：
 
@@ -65,6 +66,8 @@ Todo：
 进展：shadow-mode MVP 已完成。`packages/agent-harness` 提供 contract/profile/callback/trace 基础运行时，gateway 在 conversation policy 之后、既有 dispatch/fast-path 之前评估 `HarnessRuntime.evaluate()`，并把 `HarnessContract` / `HarnessTrace` 写入 request/uiState/metadata 与 stream trace。当前阶段只建立可审计 contract/trace，不改变 context、broker、prompt、validation、repair 或 UI progress 的业务行为；第二阶段让这些模块实际消费 contract 仍待办。
 
 2026-05-10：新增 opt-in context envelope governance 小切片。默认仍关闭；打开 `agentHarnessContextEnvelopeEnabled` 后，`buildContextEnvelope` 可从 `uiState.agentHarness.contract` / `agentHarnessHandoff` 消费 allowed/blocked/required refs 与 `contextBudget.maxReferenceDigests`，对 current references/digests 做 deterministic filtering/slimming，并输出 `contextGovernanceAudit` 记录 contract/trace/source/decision。
+
+2026-05-10：将 harness context governance 从 `context-envelope.ts` 抽到 `context-envelope-governance.ts`，保留同一 feature flag 与行为，`context-envelope.ts` 降到 873 行并退出 1000 行 watch list。
 
 Todo：
 
@@ -88,7 +91,7 @@ Todo：
 
 状态：进行中；目标是让所有可用能力都通过统一 `CapabilityManifest`、`HarnessCandidate`、`CapabilityBudget` 被 broker 和 harness 治理，避免 package skills、tool catalog、observe/action loop 与 AgentServer generation fallback 平行存在。
 
-进展：第一阶段统一候选图已落地为 shadow/helper 层。`projectCapabilityManifestsToHarnessCandidates()` 可以把 heterogeneous `CapabilityManifest` 投影为 `HarnessCandidate`，包含 `kind/id/manifestRef/score/reasons/providerAvailability/budget/fallbackCandidateIds`，并输出 provider/blocked/budget gate audit；当前不改变 broker 真实选择路径。第二阶段 broker input path 已接收 harness `skillHints`、`blockedCapabilities`、`toolBudget`、`verificationPolicy` 和 provider availability，并把对应信号写入 compact brief/audit，schema/examples/repair hints 仍保持 lazy expansion；最新小切片让 broker compact brief/audit 输出结构化 `budget` 字段，并按 `maxProviders` 裁剪 selected provider brief。第三阶段新增最小 `CapabilityBudgetDebit` contract/helper，能把单次 capability invocation 的 budget debit 记录为可写入 executionUnit/workEvidence/audit 的稳定 sink-addressable record；首个运行时小切片已接入 `literature.retrieval` offline runner，在 providerAttempts、workEvidence 和顶层 `budgetDebits` 审计输出里保留 sink refs。
+进展：第一阶段统一候选图已落地为 shadow/helper 层。`projectCapabilityManifestsToHarnessCandidates()` 可以把 heterogeneous `CapabilityManifest` 投影为 `HarnessCandidate`，包含 `kind/id/manifestRef/score/reasons/providerAvailability/budget/fallbackCandidateIds`，并输出 provider/blocked/budget gate audit；当前不改变 broker 真实选择路径。第二阶段 broker input path 已接收 harness `skillHints`、`blockedCapabilities`、`toolBudget`、`verificationPolicy` 和 provider availability，并把对应信号写入 compact brief/audit，schema/examples/repair hints 仍保持 lazy expansion；最新小切片让 broker compact brief/audit 输出结构化 `budget` 字段，并按 `maxProviders` 裁剪 selected provider brief，同时 `summarizeToolsForAgentServer()` 已改为从 broker selected briefs 映射 budgeted compact tool summaries，不再默认空数组或恢复旧 catalog。第三阶段新增最小 `CapabilityBudgetDebit` contract/helper，能把单次 capability invocation 的 budget debit 记录为可写入 executionUnit/workEvidence/audit 的稳定 sink-addressable record；首个运行时小切片已接入 `literature.retrieval` offline runner，在 providerAttempts、workEvidence 和顶层 `budgetDebits` 审计输出里保留 sink refs。
 
 Todo：
 
@@ -96,7 +99,7 @@ Todo：
 - [ ] 扩展 capability registry loader，支持 package manifest discovery、provider availability、required config、side effects、risk、validators、repair hints。
 - [x] 定义 `HarnessCandidate`：`kind/id/manifestRef/score/reasons/providerAvailability/budget/fallbackCandidateIds`。
 - [ ] 将 `scoreSkillByPackagePolicy`、tool package manifests、observe provider selection、Computer Use action plan 统一包装为默认 candidate callbacks。
-- [ ] 将 `summarizeToolsForAgentServer()` 改为按 harness/capability budget 输出 budgeted tool briefs，不再默认空数组。
+- [x] 将 `summarizeToolsForAgentServer()` 改为按 harness/capability budget 输出 budgeted tool briefs，不再默认空数组。
 - [x] Broker 输入接收 `skillHints`、`blockedCapabilities`、`CapabilityBudget`、`verificationPolicy`、provider availability 和 ledger history。
 - [ ] 每次 capability invocation 写入 `budgetDebits` 到 executionUnit/workEvidence/audit；已完成 `literature.retrieval` offline runner 首片。
 - [x] 增加 `smoke:unified-capability-graph`：同一 prompt 下 skill/tool/observe/action/verifier 都能作为候选进入 broker audit，且安全/配置/预算 gate 生效。
@@ -142,12 +145,13 @@ Todo：
 - 2026-05-10：新增 gateway 侧 `createValidationRepairAuditChain()` bridge，并让 `smoke:validation-repair-audit-chain` 增加 verification-gate 失败样本，验证 failed runtime verification result 会进入 `ValidationDecision -> RepairDecision -> AuditRecord`，并保留 policy/evidence/sink/telemetry refs 与 repair hints；主流程 wiring 仍未重接。
 - 2026-05-10：真实 `payload-validation` schema failure 与 completed payload contract failure 已通过 bridge 生成 validation/repair/audit chain，并挂回 repair-needed execution unit 的 `refs.validationRepairAudit`，保留原有 `validationFailure` 行为兼容；`generated-task-runner` 生命周期尚未整体收敛。
 - 2026-05-10：T127 小切片新增 validationRepairAudit attempt metadata helper；`appendTaskAttempt` 可从 repair-needed payload/outputRef 提取并保留 `refs.validationRepairAudit` 与 `validationRepairAuditRecords`，用 smoke 证明 payload-validation schema failure 的 audit record 能随 attempt append/read 回流；完整 AuditSink/ledger wiring 仍未接入。
+- 2026-05-10：新增纯执行层 `repair-executor.ts`，可从既有 `RepairDecision`/validation-audit chain 机械映射并执行 patch/rerun/supplement/peer handoff/needs-human/fail-closed action plan，输出 `RepairExecutorResult` 与 executor refs；策略仍由 `RepairPolicyHarness` 决定，executor 不做策略判断。
 
 Todo：
 
 - [x] 建立 `ResultValidationHarness`：统一 schema、artifact refs、completed payload、current refs、WorkEvidence、guidance adoption、provided verification results、runtime verification gate、observe/action trace contract。
 - [x] 建立 `RepairPolicyHarness`：统一决定 `none` / `repair-rerun` / `supplement` / `fail-closed` / `needs-human`。
-- [ ] 建立 `RepairExecutor`：只执行 patch/rerun/supplement/peer handoff，不做策略判断。
+- [x] 建立 `RepairExecutor`：只执行 patch/rerun/supplement/peer handoff，不做策略判断。
 - [ ] 建立 `AuditSink`：统一写 `appendTaskAttempt`、Capability Evolution Ledger、verification artifacts、observe invocation records。
 - [ ] 建立 `TelemetrySink`：记录 `generation/request`、`materialize`、`payload-validation`、`work-evidence`、`verification-gate`、`repair-decision`、`repair-rerun`、`ledger-write`、`observe-invocation` spans。
 - [ ] 将 `generated-task-runner` 收敛为生命周期编排：generate/run/validate/repair/audit。
@@ -164,14 +168,14 @@ Todo：
 
 状态：进行中；目标是让 UI 继续保持 thin shell，但具备清晰的长任务进度、沉默等待、澄清、人工确认、取消和后台完成体验。UI 只消费 structured stream events，不做语义路由。
 
-进展：第一阶段 contract/projection MVP 已完成。`ProgressPlan` 已扩展 silence/background/cancel/interaction policy，新增标准 `HarnessInteractionProgressEvent` 契约与 gateway 投影 helper；当前只提供 runtime contract 与离线 smoke，不改 UI/transport/backend 真实事件路由。smoke 已补充 generic `WorkspaceRuntimeEvent` 投影守卫，证明结构化进度事件不会把 prompt/scenario 语义文本透传到通用 runtime event 字段。
+进展：第一阶段 contract/projection MVP 已完成。`ProgressPlan` 已扩展 silence/background/cancel/interaction policy，新增标准 `HarnessInteractionProgressEvent` 契约与 gateway 投影 helper；当前只提供 runtime contract 与离线 smoke，不改 UI/transport/backend 真实事件路由。smoke 已补充 generic `WorkspaceRuntimeEvent` 投影守卫，证明结构化进度事件不会把 prompt/scenario 语义文本透传到通用 runtime event 字段。最新小切片新增 `RunTerminationRecord` 与 `normalizeRunTermination()`，让 `user-cancelled`、`system-aborted`、`timeout`、`backend-error` 进入结构化 termination 字段，并在 session/background history 中保留。
 
 Todo：
 
 - [x] 定义 `ProgressPlan`：initial status、phase names、silence policy、background policy、cancel policy、interaction policy。
 - [x] 标准事件：`process-progress`、`interaction-request`、`clarification-needed`、`human-approval-required`、`guidance-queued`、`run-cancelled`。
 - [ ] 将 UI、transport、backend 三层 silent watchdog 统一为 `silencePolicy`，同一 run 只产生一条可审计 retry/abort/visible-status 决策。
-- [ ] 区分 `user-cancelled`、`system-aborted`、`timeout`、`backend-error`，历史 run 不全部折叠成普通 failed。
+- [x] 区分 `user-cancelled`、`system-aborted`、`timeout`、`backend-error`，历史 run 不全部折叠成普通 failed。
 - [x] 让 `streamEventPresentation` 根据结构化 `importance/phase/status/reason/budget` 投影 worklog，减少自然语言启发式。
 - [ ] 短期兼容现有 guidance queue；长期将澄清和人工确认升级为一等 interaction contract。
 - [x] 增加 `smoke:interaction-progress-harness`：长任务沉默、用户取消、系统 abort、timeout、human approval、mid-run guidance 都有稳定事件和最终 run state。
@@ -179,7 +183,7 @@ Todo：
 验收标准：
 
 - [ ] ChatPanel 不根据 prompt/scenario 判断任务语义。
-- [ ] 用户取消、系统中断和后端失败可在 session/history 中区分。
+- [x] 用户取消、系统中断和后端失败可在 session/history 中区分。
 - [ ] 长任务进度可以从 stream trace 恢复，而不是依赖完整 React event array。
 
 ### T125 Research Capability Pack：通用科研能力包与 literature.retrieval

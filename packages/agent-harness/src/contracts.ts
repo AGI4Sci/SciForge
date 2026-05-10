@@ -319,6 +319,16 @@ export interface HarnessInteractionProgressEvent {
   reason?: string;
   budget?: ProgressEventBudget;
   cancellationReason?: HarnessRunCancellationReason;
+  termination?: {
+    schemaVersion: 'sciforge.run-termination.v1';
+    reason: HarnessRunCancellationReason;
+    actor: 'user' | 'system' | 'backend';
+    progressStatus: 'cancelled' | 'failed';
+    runState: 'cancelled' | 'failed';
+    sessionStatus: 'cancelled' | 'failed';
+    retryable: boolean;
+    detail?: string;
+  };
   interaction?: ProgressInteractionRequest;
 }
 

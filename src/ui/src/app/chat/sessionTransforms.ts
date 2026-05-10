@@ -22,6 +22,8 @@ import {
   ACCEPTANCE_REPAIR_RERUN_TOOL_ID,
   BACKGROUND_COMPLETION_CONTRACT_ID,
   BACKGROUND_COMPLETION_TOOL_ID,
+  normalizeRunTermination,
+  type RunTerminationRecord,
 } from '@sciforge-ui/runtime-contract/events';
 
 const REQUEST_PAYLOAD_MESSAGE_LIMIT = 12;
@@ -412,6 +414,7 @@ function mergeBackgroundRaw(raw: unknown, event: BackgroundCompletionRuntimeEven
     ? base.backgroundCompletion as Record<string, unknown>
     : {};
   const stages = mergeBackgroundStages(previousBackground.stages, event, updatedAt);
+  const termination = terminationForBackgroundEvent(event);
   return {
     ...base,
     backgroundCompletion: {
@@ -423,6 +426,7 @@ function mergeBackgroundRaw(raw: unknown, event: BackgroundCompletionRuntimeEven
       updatedAt,
       completedAt: event.status === 'running' ? previousBackground.completedAt : event.completedAt ?? updatedAt,
       failureReason: event.failureReason ?? event.cancellationReason ?? previousBackground.failureReason,
+      termination: termination ?? previousBackground.termination,
       recoverActions: event.recoverActions ?? previousBackground.recoverActions,
       nextStep: event.nextStep ?? previousBackground.nextStep,
       diagnostics: {
@@ -439,6 +443,14 @@ function mergeBackgroundRaw(raw: unknown, event: BackgroundCompletionRuntimeEven
       lastEvent: event,
     },
   };
+}
+
+function terminationForBackgroundEvent(event: BackgroundCompletionRuntimeEvent): RunTerminationRecord | undefined {
+  if (event.status !== 'cancelled' && !event.cancellationReason) return undefined;
+  return normalizeRunTermination({
+    cancellationReason: event.cancellationReason,
+    detail: event.failureReason ?? event.cancellationReason ?? event.message,
+  });
 }
 
 function backgroundCompletionDurationMs(event: BackgroundCompletionRuntimeEvent, updatedAt: string) {
@@ -535,6 +547,7 @@ export function appendFailedRunToSession({
   message,
   references,
   goalSnapshot,
+  termination,
 }: {
   optimisticSession: SciForgeSession;
   scenarioId: ScenarioInstanceId;
@@ -545,29 +558,32 @@ export function appendFailedRunToSession({
   message: string;
   references: SciForgeReference[];
   goalSnapshot?: UserGoalSnapshot;
+  termination?: RunTerminationRecord;
 }) {
   const failedRunId = makeId('run');
   const failedAt = nowIso();
+  const raw = termination ? { termination } : undefined;
   const failedRun: SciForgeRun = {
     id: failedRunId,
     scenarioId,
     scenarioPackageRef,
     skillPlanRef,
     uiPlanRef,
-    status: 'failed',
+    status: termination?.sessionStatus ?? 'failed',
     prompt,
     response: message,
     createdAt: failedAt,
     completedAt: failedAt,
     references,
     goalSnapshot,
+    raw,
   };
   const failedMessage: SciForgeMessage = {
     id: makeId('msg'),
     role: 'system',
     content: message,
     createdAt: nowIso(),
-    status: 'failed',
+    status: termination?.sessionStatus ?? 'failed',
     goalSnapshot,
   };
   return {

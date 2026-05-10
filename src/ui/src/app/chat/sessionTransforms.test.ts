@@ -438,6 +438,10 @@ test('background completion user cancellation keeps runId and recoverable next s
   assert.equal(updated.runs[0].status, 'cancelled');
   assert.equal(updated.messages[0].status, 'cancelled');
   assert.match(updated.executionUnits[0].failureReason ?? '', /user requested cancel/);
+  const termination = (updated.runs[0].raw as { backgroundCompletion?: { termination?: { reason?: string; sessionStatus?: string } } })
+    .backgroundCompletion?.termination;
+  assert.equal(termination?.reason, 'user-cancelled');
+  assert.equal(termination?.sessionStatus, 'cancelled');
 });
 
 test('background completion can finish while a newer user turn already exists', () => {

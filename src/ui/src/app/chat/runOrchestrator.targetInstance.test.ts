@@ -343,6 +343,8 @@ describe('runPromptOrchestrator target instance guard', () => {
     assert.equal(result.status, 'failed');
     assert.match(result.message, /当前 backend 运行被系统或网络中断/);
     assert.equal(result.failedSession.runs[0]?.status, 'failed');
+    assert.equal((result.failedSession.runs[0]?.raw as { termination?: { reason?: string; sessionStatus?: string } }).termination?.reason, 'system-aborted');
+    assert.equal((result.failedSession.runs[0]?.raw as { termination?: { reason?: string; sessionStatus?: string } }).termination?.sessionStatus, 'failed');
     assert.doesNotMatch(result.failedSession.runs[0]?.response ?? '', /^# AgentServer Report/);
     assert.equal(result.failedSession.executionUnits.some((unit) => unit.status === 'self-healed'), false);
   });

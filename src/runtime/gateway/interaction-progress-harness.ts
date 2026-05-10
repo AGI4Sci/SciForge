@@ -8,6 +8,7 @@ import type {
   ProgressInteractionRequest,
   ProgressPlan,
 } from '../../../packages/agent-harness/src/contracts.js';
+import { normalizeRunTermination } from '@sciforge-ui/runtime-contract';
 
 export const STANDARD_INTERACTION_PROGRESS_EVENT_TYPES: readonly HarnessInteractionProgressEventType[] = [
   'process-progress',
@@ -37,25 +38,30 @@ export function projectInteractionProgressEvent(input: InteractionProgressProjec
   assertStandardEventType(input.type);
   const phase = input.phase ?? firstProgressPhase(input.progressPlan);
   const cancellationReason = input.cancellationReason ?? cancellationReasonForEvent(input.progressPlan, input.type);
+  const termination = cancellationReason
+    ? normalizeRunTermination({ cancellationReason, detail: input.reason })
+    : undefined;
   const event: HarnessInteractionProgressEvent = {
     schemaVersion: 'sciforge.interaction-progress-event.v1',
     type: input.type,
-    runState: runStateForEventType(input.type, cancellationReason),
+    runState: termination?.runState ?? runStateForEventType(input.type, cancellationReason),
     requestId: input.requestId,
     runId: input.runId,
     traceRef: input.traceRef,
     phase,
-    status: input.status ?? statusForEventType(input.type),
+    status: input.status ?? termination?.progressStatus ?? statusForEventType(input.type),
     importance: input.importance ?? importanceForEventType(input.type),
     reason: input.reason,
     budget: input.budget,
     cancellationReason,
+    termination,
     interaction: input.interaction ?? interactionForEventType(input.type),
   };
   return stripUndefined(event);
 }
 
 export function projectRunStateFromInteractionProgressEvent(event: HarnessInteractionProgressEvent): HarnessRunState {
+  if (event.termination?.runState) return event.termination.runState;
   return runStateForEventType(event.type, event.cancellationReason);
 }
 
