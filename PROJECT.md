@@ -55,7 +55,7 @@ SciForge 的最终形态是 **Backend-first, Contract-enforced, Capability-drive
 
 ### T131 ResultsRenderer 长文件治理：拆分结果渲染主入口
 
-状态：进行中；`src/ui/src/app/ResultsRenderer.tsx` 已从超过 1500 行降到 853 行，退出 1000 行 watch list。目标是把结果渲染主入口收敛为流程编排，把 artifact normalization、view-plan selection、execution notebook projection、fallback/empty-state presentation、object reference actions 等职责拆到语义模块，避免继续在单一 React 文件里堆叠。已拆出 execution audit 数据模型、artifact inspector/reference normalization、view-model 投影、object reference action 计划/执行 helper、artifact inspector drawer presentation 和 registry slot / unknown component fallback presentation，保持 React 文件只消费投影结果。
+状态：完成；`src/ui/src/app/ResultsRenderer.tsx` 已从超过 1500 行降到 853 行，退出 1000 行 watch list。结果渲染主入口已收敛为 React composition 和事件接线，artifact normalization、view-plan selection、execution notebook projection、fallback/empty-state presentation、object reference actions 等职责已拆到语义模块，避免继续在单一 React 文件里堆叠。
 
 Todo：
 
