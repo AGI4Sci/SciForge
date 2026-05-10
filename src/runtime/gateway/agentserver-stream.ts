@@ -9,7 +9,9 @@ export async function readAgentServerRunStream(
     maxTotalUsage?: number;
     onGuardTrip?: (message: string) => void;
     maxSilentMs?: number;
-    onSilentTimeout?: (message: string) => void;
+    silencePolicy?: AgentServerStreamSilencePolicy;
+    silentRetryCount?: number;
+    onSilentTimeout?: (message: string, audit: AgentServerSilentStreamGuardAudit) => void;
   } = {},
 ): Promise<{ json: unknown; run: Record<string, unknown>; error?: string; streamText?: string; workEvidence: WorkEvidence[] }> {
   if (!response.body) {
@@ -37,6 +39,8 @@ export async function readAgentServerRunStream(
   let lastEnvelopeAt = Date.now();
   const streamTextParts: string[] = [];
   const workEvidence: WorkEvidence[] = [];
+  const silencePolicy = options.silencePolicy ?? silentPolicyFromTimeout(options.maxSilentMs);
+  const silentTimeoutMs = silencePolicy?.timeoutMs;
   function consumeLine(rawLine: string) {
     const line = rawLine.trim();
     if (!line) return;
@@ -66,19 +70,17 @@ export async function readAgentServerRunStream(
     if ('error' in envelope) streamError = String(envelope.error || '');
   }
   for (;;) {
-    const readResult = options.maxSilentMs
-      ? await Promise.race([
-        reader.read(),
-        new Promise<{ silentTimeout: true }>((resolve) => {
-          setTimeout(() => resolve({ silentTimeout: true }), options.maxSilentMs);
-        }),
-      ])
+    const readResult = silentTimeoutMs
+      ? await readStreamChunkWithSilentTimeout(reader, silentTimeoutMs)
       : await reader.read();
     if ('silentTimeout' in readResult) {
       const silentMs = Date.now() - lastEnvelopeAt;
-      const message = `AgentServer generation stopped by silent stream guard after ${silentMs}ms without stream events; bounded current-reference digests should be used instead of waiting indefinitely.`;
-      options.onSilentTimeout?.(message);
-      throw new Error(message);
+      const audit = agentServerSilentStreamGuardAudit(silencePolicy, {
+        elapsedMs: silentMs,
+        retryCount: options.silentRetryCount,
+      });
+      options.onSilentTimeout?.(audit.message, audit);
+      throw new Error(audit.message);
     }
     const { value, done } = readResult;
     buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
@@ -98,6 +100,60 @@ export async function readAgentServerRunStream(
     streamText: streamTextParts.join(''),
     workEvidence: dedupeWorkEvidence(workEvidence),
   };
+}
+
+async function readStreamChunkWithSilentTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutMs: number,
+) {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<{ silentTimeout: true }>((resolve) => {
+        timeout = setTimeout(() => resolve({ silentTimeout: true }), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+export const AGENTSERVER_SILENT_STREAM_POLICY_SCHEMA_VERSION = 'sciforge.agentserver-silent-stream-policy.v1' as const;
+export const AGENTSERVER_SILENT_STREAM_GUARD_AUDIT_SCHEMA_VERSION = 'sciforge.agentserver-silent-stream-guard-audit.v1' as const;
+
+export type AgentServerStreamSilenceDecision = 'visible-status' | 'retry' | 'abort' | 'background';
+
+export interface AgentServerStreamSilencePolicy {
+  schemaVersion: typeof AGENTSERVER_SILENT_STREAM_POLICY_SCHEMA_VERSION;
+  source: string;
+  timeoutMs: number;
+  decision: AgentServerStreamSilenceDecision;
+  status?: string;
+  maxRetries?: number;
+  auditRequired: boolean;
+  digestRefCount: number;
+  fallbackTimeoutMs: number;
+  contractRef?: string;
+}
+
+export interface AgentServerSilentStreamGuardAudit {
+  schemaVersion: typeof AGENTSERVER_SILENT_STREAM_GUARD_AUDIT_SCHEMA_VERSION;
+  source: string;
+  timeoutMs: number;
+  elapsedMs: number;
+  decision: AgentServerStreamSilenceDecision;
+  status?: string;
+  retryCount: number;
+  maxRetries?: number;
+  retryable: boolean;
+  auditRequired: boolean;
+  digestRefCount: number;
+  fallbackTimeoutMs: number;
+  contractRef?: string;
+  recoveryAction: string;
+  message: string;
+  detail: string;
 }
 
 function streamEventsFromEnvelope(envelope: Record<string, unknown>) {
@@ -177,10 +233,163 @@ export function currentReferenceDigestGuardLimit(request: GatewayRequest) {
 }
 
 export function currentReferenceDigestSilentGuardMs(request: GatewayRequest) {
+  return currentReferenceDigestSilentGuardPolicy(request).timeoutMs;
+}
+
+export function currentReferenceDigestSilentGuardPolicy(request: GatewayRequest): AgentServerStreamSilencePolicy {
   const digests = Array.isArray(request.uiState?.currentReferenceDigests)
     ? request.uiState.currentReferenceDigests
     : [];
-  return digests.length ? 45_000 : 30_000;
+  const fallbackTimeoutMs = digests.length ? 45_000 : 30_000;
+  const source = harnessSilencePolicySource(request.uiState);
+  const silencePolicy = source?.silencePolicy;
+  const progressPlan = source?.progressPlan;
+  return {
+    schemaVersion: AGENTSERVER_SILENT_STREAM_POLICY_SCHEMA_VERSION,
+    source: source?.source ?? 'runtime.default',
+    timeoutMs: positiveNumberField(silencePolicy?.timeoutMs)
+      ?? positiveNumberField(progressPlan?.silenceTimeoutMs)
+      ?? fallbackTimeoutMs,
+    decision: silenceDecisionField(silencePolicy?.decision) ?? 'visible-status',
+    status: stringField(silencePolicy?.status),
+    maxRetries: nonNegativeNumberField(silencePolicy?.maxRetries),
+    auditRequired: booleanField(silencePolicy?.auditRequired) ?? Boolean(source),
+    digestRefCount: digests.length,
+    fallbackTimeoutMs,
+    contractRef: stringField(source?.contractRef),
+  };
+}
+
+export function agentServerSilentStreamGuardAudit(
+  policy: AgentServerStreamSilencePolicy | undefined,
+  input: { elapsedMs: number; retryCount?: number },
+): AgentServerSilentStreamGuardAudit {
+  const fallback = policy ?? silentPolicyFromTimeout(undefined) ?? {
+    schemaVersion: AGENTSERVER_SILENT_STREAM_POLICY_SCHEMA_VERSION,
+    source: 'runtime.default',
+    timeoutMs: 30_000,
+    decision: 'visible-status' as const,
+    auditRequired: false,
+    digestRefCount: 0,
+    fallbackTimeoutMs: 30_000,
+  };
+  const retryCount = input.retryCount ?? 0;
+  const retryable = fallback.decision === 'retry'
+    ? retryCount < (fallback.maxRetries ?? 0)
+    : fallback.decision === 'background' || fallback.decision === 'visible-status';
+  const recoveryAction = recoveryActionForSilenceDecision(fallback.decision, retryable);
+  const elapsedMs = Math.max(0, Math.trunc(input.elapsedMs));
+  const message = `AgentServer generation stopped by silent stream guard after ${elapsedMs}ms without stream events; silencePolicy decision=${fallback.decision}, timeoutMs=${fallback.timeoutMs}, retry=${retryCount}/${fallback.maxRetries ?? 0}.`;
+  return {
+    schemaVersion: AGENTSERVER_SILENT_STREAM_GUARD_AUDIT_SCHEMA_VERSION,
+    source: fallback.source,
+    timeoutMs: fallback.timeoutMs,
+    elapsedMs,
+    decision: fallback.decision,
+    status: fallback.status,
+    retryCount,
+    maxRetries: fallback.maxRetries,
+    retryable,
+    auditRequired: fallback.auditRequired,
+    digestRefCount: fallback.digestRefCount,
+    fallbackTimeoutMs: fallback.fallbackTimeoutMs,
+    contractRef: fallback.contractRef,
+    recoveryAction,
+    message,
+    detail: [
+      `source=${fallback.source}`,
+      `decision=${fallback.decision}`,
+      `timeoutMs=${fallback.timeoutMs}`,
+      `elapsedMs=${elapsedMs}`,
+      `retry=${retryCount}/${fallback.maxRetries ?? 0}`,
+      `recoveryAction=${recoveryAction}`,
+      fallback.status ? `status=${fallback.status}` : undefined,
+      fallback.contractRef ? `contractRef=${fallback.contractRef}` : undefined,
+    ].filter(Boolean).join(' · '),
+  };
+}
+
+function silentPolicyFromTimeout(timeoutMs: number | undefined): AgentServerStreamSilencePolicy | undefined {
+  const normalized = positiveNumberField(timeoutMs);
+  if (!normalized) return undefined;
+  return {
+    schemaVersion: AGENTSERVER_SILENT_STREAM_POLICY_SCHEMA_VERSION,
+    source: 'runtime.option.maxSilentMs',
+    timeoutMs: normalized,
+    decision: 'visible-status',
+    auditRequired: false,
+    digestRefCount: 0,
+    fallbackTimeoutMs: normalized,
+  };
+}
+
+function harnessSilencePolicySource(uiState: Record<string, unknown> | undefined): {
+  source: string;
+  progressPlan: Record<string, unknown>;
+  silencePolicy: Record<string, unknown>;
+  contractRef?: unknown;
+} | undefined {
+  if (!isRecord(uiState)) return undefined;
+  const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : undefined;
+  const contract = isRecord(agentHarness?.contract) ? agentHarness.contract : undefined;
+  const contractProgressPlan = isRecord(contract?.progressPlan) ? contract.progressPlan : undefined;
+  const contractSilencePolicy = isRecord(contractProgressPlan?.silencePolicy) ? contractProgressPlan.silencePolicy : undefined;
+  if (contract && contractProgressPlan && contractSilencePolicy) {
+    const contractRef = contract.contractRef ?? agentHarness?.contractRef;
+    return {
+      source: 'request.uiState.agentHarness.contract.progressPlan.silencePolicy',
+      progressPlan: contractProgressPlan,
+      silencePolicy: contractSilencePolicy,
+      contractRef,
+    };
+  }
+  const handoff = isRecord(uiState.agentHarnessHandoff) ? uiState.agentHarnessHandoff : undefined;
+  const handoffProgressPlan = isRecord(handoff?.progressPlan) ? handoff.progressPlan : undefined;
+  const handoffSilencePolicy = isRecord(handoffProgressPlan?.silencePolicy) ? handoffProgressPlan.silencePolicy : undefined;
+  if (handoffProgressPlan && handoffSilencePolicy) {
+    return {
+      source: 'request.uiState.agentHarnessHandoff.progressPlan.silencePolicy',
+      progressPlan: handoffProgressPlan,
+      silencePolicy: handoffSilencePolicy,
+      contractRef: handoff?.harnessContractRef,
+    };
+  }
+  return undefined;
+}
+
+function recoveryActionForSilenceDecision(decision: AgentServerStreamSilenceDecision, retryable: boolean) {
+  if (decision === 'retry') return retryable ? 'retry-compact-context' : 'fail-with-silent-stream-audit';
+  if (decision === 'abort') return 'abort-run';
+  if (decision === 'background') return 'continue-in-background';
+  return 'emit-visible-status-and-recover-from-digests';
+}
+
+function silenceDecisionField(value: unknown): AgentServerStreamSilenceDecision | undefined {
+  if (value === 'visible-status' || value === 'retry' || value === 'abort' || value === 'background') return value;
+  return undefined;
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function booleanField(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function positiveNumberField(value: unknown): number | undefined {
+  const normalized = numberField(value);
+  return normalized && normalized > 0 ? normalized : undefined;
+}
+
+function nonNegativeNumberField(value: unknown): number | undefined {
+  const normalized = numberField(value);
+  return normalized !== undefined && normalized >= 0 ? normalized : undefined;
+}
+
+function numberField(value: unknown): number | undefined {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN;
+  return Number.isFinite(parsed) ? Math.trunc(parsed) : undefined;
 }
 
 function agentServerEventTotalUsage(event: unknown) {

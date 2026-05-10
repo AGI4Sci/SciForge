@@ -97,10 +97,23 @@ try {
     schemaErrors: ['uiManifest[0].componentId must be a non-empty string'],
     failureReason: 'AgentServer repair rerun output failed schema validation: uiManifest[0].componentId must be a non-empty string',
     priorAttempts: [],
+    repairContext: {
+      agentHarnessHandoff: {
+        repairContextPolicy: {
+          kind: 'repair-rerun',
+          maxAttempts: 1,
+          includeStdoutSummary: true,
+          includeValidationFindings: true,
+          allowedFailureEvidenceRefs: ['stderr:repair-smoke'],
+        },
+      },
+    },
   });
   assert.match(repairPrompt, /minimalValidToolPayload/);
   assert.match(repairPrompt, /componentId/);
   assert.match(repairPrompt, /artifactRef/);
+  assert.match(repairPrompt, /repairContextPolicySummary/);
+  assert.match(repairPrompt, /stderr:repair-smoke/);
 
   const tree = await workspaceTreeSummary(workspace);
   assert.ok(tree.some((entry) => entry.path === 'report.md'));

@@ -7,9 +7,10 @@ import { resolveWorkspaceFileRefPath } from './workspace-paths.js';
 import { isRecord } from './gateway-utils.js';
 import {
   mergeValidationRepairAuditAttemptMetadata,
+  projectValidationRepairAuditSink,
   validationRepairAuditAttemptMetadataFromPayload,
   type ValidationRepairAuditAttemptMetadata,
-} from './gateway/validation-repair-audit-bridge.js';
+} from './gateway/validation-repair-audit-sink.js';
 
 export async function appendTaskAttempt(workspacePath: string, record: TaskAttemptRecord) {
   const workspace = resolve(workspacePath || process.cwd());
@@ -41,7 +42,7 @@ export async function appendTaskAttempt(workspacePath: string, record: TaskAttem
 
 export async function readTaskAttempts(workspacePath: string, id: string): Promise<TaskAttemptRecord[]> {
   const workspace = resolve(workspacePath || process.cwd());
-  return withWorkEvidenceSummaries(workspace, await readAttempts(join(workspace, '.sciforge', 'task-attempts', `${safeName(id)}.json`)));
+  return withAttemptDerivedMetadata(workspace, await readAttempts(join(workspace, '.sciforge', 'task-attempts', `${safeName(id)}.json`)));
 }
 
 export async function readRecentTaskAttempts(
@@ -68,7 +69,7 @@ export async function readRecentTaskAttempts(
     .filter((attempt) => matchesAttemptScope(attempt, scope))
     .sort((left, right) => Date.parse(right.createdAt || '') - Date.parse(left.createdAt || ''))
     .slice(0, limit);
-  return withWorkEvidenceSummaries(workspace, attempts);
+  return withAttemptDerivedMetadata(workspace, attempts);
 }
 
 function matchesAttemptScope(
@@ -118,8 +119,11 @@ async function readAttempts(path: string): Promise<TaskAttemptRecord[]> {
   }
 }
 
-async function withWorkEvidenceSummaries(workspace: string, attempts: TaskAttemptRecord[]) {
-  return Promise.all(attempts.map((attempt) => withWorkEvidenceSummary(workspace, attempt)));
+async function withAttemptDerivedMetadata(workspace: string, attempts: TaskAttemptRecord[]) {
+  return Promise.all(attempts.map(async (attempt) => {
+    const withEvidence = await withWorkEvidenceSummary(workspace, attempt);
+    return withValidationRepairAuditMetadata(workspace, withEvidence);
+  }));
 }
 
 async function withWorkEvidenceSummary(workspace: string, record: TaskAttemptRecord): Promise<TaskAttemptRecord> {
@@ -148,8 +152,10 @@ async function withValidationRepairAuditMetadata(workspace: string, record: Task
     refs: {
       ...(isRecord(current.refs) ? current.refs : {}),
       validationRepairAudit: metadata.auditRefs,
+      validationRepairAuditSink: metadata.sinkRefs,
     },
     validationRepairAuditRecords: metadata.auditRecords,
+    validationRepairAuditSinkRecords: metadata.sinkRecords,
   } as TaskAttemptRecord;
 }
 
@@ -157,18 +163,30 @@ function validationRepairAuditAttemptMetadataFromAttempt(record: TaskAttemptReco
   const current = record as TaskAttemptRecord & {
     refs?: Record<string, unknown>;
     validationRepairAuditRecords?: unknown;
+    validationRepairAuditSinkRecords?: unknown;
   };
   const refs = isRecord(current.refs) && Array.isArray(current.refs.validationRepairAudit)
     ? current.refs.validationRepairAudit
     : [];
+  const sinkRefs = isRecord(current.refs) && Array.isArray(current.refs.validationRepairAuditSink)
+    ? current.refs.validationRepairAuditSink
+    : [];
   const records = Array.isArray(current.validationRepairAuditRecords)
     ? current.validationRepairAuditRecords
     : [];
-  return refs.length || records.length
-    ? {
+  const sinkRecords = Array.isArray(current.validationRepairAuditSinkRecords)
+    ? current.validationRepairAuditSinkRecords
+    : [];
+  const projectedFromAuditRecords = records.length
+    ? projectValidationRepairAuditSink(records.map((auditRecord) => ({ auditRecord }))).attemptMetadata
+    : undefined;
+  return refs.length || records.length || sinkRefs.length || sinkRecords.length || projectedFromAuditRecords
+    ? mergeValidationRepairAuditAttemptMetadata(projectedFromAuditRecords, {
       auditRefs: refs as ValidationRepairAuditAttemptMetadata['auditRefs'],
       auditRecords: records as ValidationRepairAuditAttemptMetadata['auditRecords'],
-    }
+      sinkRefs: sinkRefs as ValidationRepairAuditAttemptMetadata['sinkRefs'],
+      sinkRecords: sinkRecords as ValidationRepairAuditAttemptMetadata['sinkRecords'],
+    })
     : undefined;
 }
 

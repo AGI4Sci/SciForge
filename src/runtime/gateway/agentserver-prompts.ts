@@ -43,6 +43,10 @@ function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
+function numberField(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 function agentServerRunFailure(run: Record<string, unknown>) {
   const status = typeof run.status === 'string' ? run.status : '';
   const output = isRecord(run.output) ? run.output : {};
@@ -459,6 +463,7 @@ export function buildAgentServerRepairPrompt(params: {
   priorAttempts: unknown[];
   repairContext?: Record<string, unknown>;
 }) {
+  const repairContextPolicySummary = repairContextPolicySummaryForAgentServer(params.request, params.repairContext);
   return [
     'Repair this SciForge workspace task and leave the workspace ready for SciForge to rerun it.',
     'Use the compact repair context below: it contains the current user goal, workspace refs, failure evidence, and relevant code/log excerpts.',
@@ -471,12 +476,54 @@ export function buildAgentServerRepairPrompt(params: {
     '',
     JSON.stringify({
       repairContext: params.repairContext,
+      repairContextPolicySummary,
       expectedPayloadKeys: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'displayIntent', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'],
       minimalValidToolPayload: minimalValidInteractiveToolPayloadExample(params.request),
     }, null, 2),
     '',
     'Return a concise summary of files changed, tests or commands run, and any remaining blocker.',
   ].join('\n');
+}
+
+function repairContextPolicySummaryForAgentServer(
+  request: GatewayRequest,
+  repairContext: Record<string, unknown> | undefined,
+) {
+  const requestMetadata = isRecord((request as { metadata?: unknown }).metadata)
+    ? (request as { metadata?: Record<string, unknown> }).metadata
+    : undefined;
+  const candidates: Array<{ source: string; value: unknown }> = [
+    { source: 'repairContext.agentHarnessHandoff', value: repairContext?.agentHarnessHandoff },
+    { source: 'repairContext.repairContextPolicy', value: repairContext?.repairContextPolicy },
+    { source: 'request.metadata.agentHarnessHandoff', value: requestMetadata?.agentHarnessHandoff },
+    { source: 'request.metadata.repairContextPolicy', value: requestMetadata?.repairContextPolicy },
+    { source: 'request.uiState.agentHarnessHandoff', value: isRecord(request.uiState) ? request.uiState.agentHarnessHandoff : undefined },
+    { source: 'request.uiState.agentHarness.contract', value: isRecord(request.uiState) && isRecord(request.uiState.agentHarness) ? request.uiState.agentHarness.contract : undefined },
+  ];
+  for (const candidate of candidates) {
+    const policy = repairContextPolicyFromCandidate(candidate.value);
+    if (!policy) continue;
+    return {
+      schemaVersion: 'sciforge.agentserver.repair-context-policy-summary.v1',
+      source: candidate.source,
+      kind: stringField(policy.kind),
+      maxAttempts: numberField(policy.maxAttempts),
+      includeStdoutSummary: policy.includeStdoutSummary === true,
+      includeStderrSummary: policy.includeStderrSummary === true,
+      includeValidationFindings: policy.includeValidationFindings === true,
+      includePriorAttemptRefs: policy.includePriorAttemptRefs === true,
+      allowedFailureEvidenceRefs: toStringList(policy.allowedFailureEvidenceRefs).slice(0, 12),
+      blockedFailureEvidenceRefs: toStringList(policy.blockedFailureEvidenceRefs).slice(0, 12),
+    };
+  }
+  return undefined;
+}
+
+function repairContextPolicyFromCandidate(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  if (isRecord(value.repairContextPolicy)) return value.repairContextPolicy;
+  if (stringField(value.kind) || value.maxAttempts !== undefined) return value;
+  return undefined;
 }
 
 export function buildAgentServerGenerationPrompt(request: {

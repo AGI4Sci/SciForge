@@ -214,6 +214,7 @@ export {
   VALIDATION_REPAIR_AUDIT_CHAIN_CONTRACT_ID,
   VALIDATION_REPAIR_AUDIT_CHAIN_SCHEMA_VERSION,
   VALIDATION_REPAIR_AUDIT_SINK_TARGETS,
+  VALIDATION_REPAIR_TELEMETRY_SPAN_KINDS,
   VALIDATION_SUBJECT_KINDS,
   createAuditRecord,
   createValidationDecision,
@@ -241,6 +242,8 @@ export type {
   ValidationRepairAuditSinkRecord,
   ValidationRepairAuditSinkRef,
   ValidationRepairAuditSinkTarget,
+  ValidationRepairTelemetrySpanKind,
+  ValidationRepairTelemetrySpanRef,
   ValidationSubjectKind,
   ValidationSubjectRef,
 } from './validation-repair-audit';

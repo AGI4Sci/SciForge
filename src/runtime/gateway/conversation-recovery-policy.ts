@@ -40,11 +40,15 @@ export function planConversationRecovery(input: ConversationRecoveryInput = {}):
   const attempts = arrayValue(input.attempts).map(recordValue).filter((item): item is JsonMap => Boolean(item));
   const code = failureCode(failure);
   const message = firstString(failure.message, failure.detail, failure.failureReason, failure.reason) ?? code;
+  const silencePolicy = silentStreamPolicyForFailure(failure);
   const retryCount = attempts.filter((attempt) => {
     const action = firstString(attempt.recoveryAction, attempt.action);
     return action === 'repair' || action === ACTION_DIGEST_RECOVERY;
   }).length;
-  const maxRetries = numberValue(failure.maxRecoveryAttempts) ?? 2;
+  const maxRetries = numberValue(failure.maxRecoveryAttempts)
+    ?? numberValue(failure.maxRetries)
+    ?? numberValue(silencePolicy.maxRetries)
+    ?? 2;
   const usableDigests = digests.filter(hasDigestRef);
 
   if (retryCount >= maxRetries) {
@@ -61,13 +65,16 @@ export function planConversationRecovery(input: ConversationRecoveryInput = {}):
   }
 
   if (code === CODE_SILENT_STREAM) {
+    const silentNextActions = silentStreamNextActions(silencePolicy);
     if (usableDigests.length) {
       return plan(
         ACTION_DIGEST_RECOVERY,
         code,
-        'Backend stream went silent; current-reference digests are available for bounded result recovery.',
+        silencePolicy.decision
+          ? `Backend stream went silent; silencePolicy decision=${silencePolicy.decision}, retry=${retryCount}/${maxRetries}, and current-reference digests are available for bounded result recovery.`
+          : 'Backend stream went silent; current-reference digests are available for bounded result recovery.',
         {
-          nextActions: ['Generate a user-visible result from currentReferenceDigests.', 'Mark recovered output as digest recovery and preserve original silent-stream evidence.'],
+          nextActions: silentNextActions.digest,
           evidenceRefs: evidenceRefs(failure, usableDigests, attempts),
         },
       );
@@ -75,9 +82,11 @@ export function planConversationRecovery(input: ConversationRecoveryInput = {}):
     return plan(
       'repair',
       code,
-      'Backend stream went silent and no digest refs are available.',
+      silencePolicy.decision
+        ? `Backend stream went silent with silencePolicy decision=${silencePolicy.decision}, retry=${retryCount}/${maxRetries}, and no digest refs are available.`
+        : 'Backend stream went silent and no digest refs are available.',
       {
-        nextActions: ['Retry with compact context and explicit progress requirements.', 'If the retry is silent, return failed-with-reason.'],
+        nextActions: silentNextActions.repair,
         evidenceRefs: evidenceRefs(failure, usableDigests, attempts),
       },
     );
@@ -147,6 +156,61 @@ function failureCode(failure: JsonMap): string {
   if (text.includes('timeout')) return 'timeout';
   if (text.includes('acceptance')) return CODE_ACCEPTANCE_FAILED;
   return explicit ?? CODE_UNKNOWN_FAILURE;
+}
+
+function silentStreamPolicyForFailure(failure: JsonMap): JsonMap {
+  const direct = recordValue(failure.silencePolicy);
+  if (direct) return direct;
+  const guard = recordValue(failure.silentStreamGuard) ?? recordValue(failure.silentStreamGuardAudit) ?? recordValue(failure.audit);
+  const nested = recordValue(guard?.silencePolicy);
+  if (nested) return nested;
+  if (guard && firstString(guard.decision, guard.timeoutMs, guard.maxRetries, guard.status)) return guard;
+  return {};
+}
+
+function silentStreamNextActions(silencePolicy: JsonMap): { digest: string[]; repair: string[] } {
+  const decision = firstString(silencePolicy.decision);
+  const status = firstString(silencePolicy.status);
+  if (decision === 'retry') {
+    return {
+      digest: [
+        'Generate a user-visible result from currentReferenceDigests.',
+        'Preserve the silent-stream audit, including silencePolicy timeout/decision/retry fields.',
+      ],
+      repair: [
+        'Retry with compact context according to silencePolicy decision=retry.',
+        'Emit the silent-stream audit with timeoutMs, retryCount, maxRetries, and recovery action before retrying.',
+      ],
+    };
+  }
+  if (decision === 'abort') {
+    return {
+      digest: [
+        'Recover from currentReferenceDigests only if already available.',
+        'Mark the original backend stream as aborted by silencePolicy and keep the structured audit.',
+      ],
+      repair: ['Return failed-with-reason with the silent-stream audit; do not issue another backend retry automatically.'],
+    };
+  }
+  if (decision === 'background') {
+    return {
+      digest: [
+        'Generate a bounded visible result from currentReferenceDigests.',
+        'Keep background-continuation status from silencePolicy in the audit trail.',
+      ],
+      repair: ['Continue in background only if the caller supports it; otherwise return failed-with-reason with the silent-stream audit.'],
+    };
+  }
+  return {
+    digest: [
+      'Generate a user-visible result from currentReferenceDigests.',
+      status ? `Preserve visible status from silencePolicy: ${status}.` : 'Mark recovered output as digest recovery and preserve original silent-stream evidence.',
+    ],
+    repair: [
+      'Retry with compact context and explicit progress requirements.',
+      'If the retry is silent, return failed-with-reason with the structured silent-stream audit.',
+    ],
+  };
 }
 
 function hasDigestRef(digest: JsonMap): boolean {

@@ -44,6 +44,8 @@ export interface ValidationRepairAuditAttemptRef {
 export interface ValidationRepairAuditAttemptMetadata {
   auditRefs: ValidationRepairAuditAttemptRef[];
   auditRecords: AuditRecord[];
+  sinkRefs: ValidationRepairAuditSinkRef[];
+  sinkRecords: ValidationRepairAuditSinkRecord[];
 }
 
 export interface ValidationRepairAuditSinkProjection {
@@ -73,7 +75,7 @@ export function validationRepairAuditSinkProjectionFromPayload(
 }
 
 export function validationRepairAuditAttemptMetadataFromPayload(value: unknown): ValidationRepairAuditAttemptMetadata | undefined {
-  const projection = validationRepairAuditSinkProjectionFromPayload(value, { targets: ['appendTaskAttempt'] });
+  const projection = validationRepairAuditSinkProjectionFromPayload(value);
   return projection?.attemptMetadata;
 }
 
@@ -89,7 +91,17 @@ export function mergeValidationRepairAuditAttemptMetadata(
     ...(current?.auditRecords ?? []),
     ...(next?.auditRecords ?? []),
   ]);
-  return auditRefs.length || auditRecords.length ? { auditRefs, auditRecords } : undefined;
+  const sinkRefs = uniqueSinkRefs([
+    ...(current?.sinkRefs ?? []),
+    ...(next?.sinkRefs ?? []),
+  ]);
+  const sinkRecords = uniqueSinkRecords([
+    ...(current?.sinkRecords ?? []),
+    ...(next?.sinkRecords ?? []),
+  ]);
+  return auditRefs.length || auditRecords.length || sinkRefs.length || sinkRecords.length
+    ? { auditRefs, auditRecords, sinkRefs, sinkRecords }
+    : undefined;
 }
 
 function sinkProjectionFromChains(
@@ -116,7 +128,12 @@ function sinkProjectionFromChains(
     records: uniqueSinkRecords(records),
     auditRecords,
     attemptMetadata: appendTaskAttemptRefs.length || auditRecords.length
-      ? { auditRefs: uniqueAttemptRefs(appendTaskAttemptRefs), auditRecords }
+      ? {
+        auditRefs: uniqueAttemptRefs(appendTaskAttemptRefs),
+        auditRecords,
+        sinkRefs: uniqueSinkRefs(refs),
+        sinkRecords: uniqueSinkRecords(records),
+      }
       : undefined,
   };
 }

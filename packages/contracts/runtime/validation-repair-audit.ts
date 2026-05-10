@@ -25,6 +25,17 @@ export const VALIDATION_REPAIR_AUDIT_SINK_TARGETS = [
   'verification-artifact',
   'observe-invocation',
 ] as const;
+export const VALIDATION_REPAIR_TELEMETRY_SPAN_KINDS = [
+  'generation/request',
+  'materialize',
+  'payload-validation',
+  'work-evidence',
+  'verification-gate',
+  'repair-decision',
+  'repair-rerun',
+  'ledger-write',
+  'observe-invocation',
+] as const;
 
 export type ValidationSubjectKind = typeof VALIDATION_SUBJECT_KINDS[number];
 export type ValidationDecisionStatus = typeof VALIDATION_DECISION_STATUSES[number];
@@ -32,6 +43,7 @@ export type ValidationFindingSeverity = typeof VALIDATION_FINDING_SEVERITIES[num
 export type RepairDecisionAction = typeof REPAIR_DECISION_ACTIONS[number];
 export type AuditRecordOutcome = typeof AUDIT_RECORD_OUTCOMES[number];
 export type ValidationRepairAuditSinkTarget = typeof VALIDATION_REPAIR_AUDIT_SINK_TARGETS[number];
+export type ValidationRepairTelemetrySpanKind = typeof VALIDATION_REPAIR_TELEMETRY_SPAN_KINDS[number];
 
 export type ValidationFindingKind =
   | ContractValidationFailureKind
@@ -198,6 +210,31 @@ export interface ValidationRepairAuditSinkRecord {
   validationDecision?: ValidationDecision;
   repairDecision?: RepairDecision;
   relatedRefs: string[];
+  createdAt?: string;
+}
+
+export interface ValidationRepairTelemetrySpanRef {
+  kind: 'validation-repair-telemetry-span';
+  spanKind: ValidationRepairTelemetrySpanKind;
+  spanId: string;
+  ref: string;
+  source: 'validation-decision' | 'repair-decision' | 'audit-record' | 'repair-executor-result' | 'validation-repair-audit-chain';
+  status?: string;
+  validationDecisionId?: string;
+  repairDecisionId?: string;
+  auditId?: string;
+  executorResultId?: string;
+  subject?: ValidationSubjectRef;
+  contractId?: string;
+  failureKind?: ValidationFindingKind;
+  outcome?: AuditRecordOutcome;
+  action?: string;
+  sourceRefs: string[];
+  auditRefs: string[];
+  repairRefs: string[];
+  relatedRefs: string[];
+  sinkRefs: string[];
+  telemetrySpanRefs: string[];
   createdAt?: string;
 }
 

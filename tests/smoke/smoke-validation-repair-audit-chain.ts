@@ -250,6 +250,7 @@ try {
   const attempt = attempts[0] as TaskAttemptRecord & {
     refs?: { validationRepairAudit?: Array<{ ref?: string; auditId?: string; contractId?: string; failureKind?: string; sinkRefs?: string[] }> };
     validationRepairAuditRecords?: AuditRecord[];
+    validationRepairAuditSinkRecords?: Array<{ target?: string; ref?: string; auditRecord?: AuditRecord }>;
   };
   const attemptAuditRef = attempt.refs?.validationRepairAudit?.[0];
   const attemptAuditRecord = attempt.validationRepairAuditRecords?.[0];
@@ -258,6 +259,27 @@ try {
   assert.equal(attemptAuditRef?.failureKind, 'payload-schema');
   assert.equal(attemptAuditRecord?.auditId, realChain.auditRecord?.auditId);
   assert.ok(attemptAuditRecord?.sinkRefs.some((ref) => ref.startsWith('appendTaskAttempt:payload-validation:')));
+  const sinkRefs = (attempt.refs as {
+    validationRepairAuditSink?: Array<{ target?: string; ref?: string; auditId?: string; contractId?: string; failureKind?: string }>;
+  } | undefined)?.validationRepairAuditSink ?? [];
+  assert.deepEqual(
+    sinkRefs.map((ref) => ref.target).sort(),
+    ['appendTaskAttempt', 'ledger', 'observe-invocation', 'verification-artifact'].sort(),
+  );
+  assert.equal(sinkRefs.find((ref) => ref.target === 'appendTaskAttempt')?.auditId, realChain.auditRecord?.auditId);
+  assert.equal(sinkRefs.find((ref) => ref.target === 'appendTaskAttempt')?.contractId, 'sciforge.tool-payload.v1');
+  assert.equal(sinkRefs.find((ref) => ref.target === 'appendTaskAttempt')?.failureKind, 'payload-schema');
+  assert.ok(sinkRefs.find((ref) => ref.target === 'ledger')?.ref?.startsWith('ledger:'));
+  assert.ok(sinkRefs.find((ref) => ref.target === 'verification-artifact')?.ref?.startsWith('verification-artifact:'));
+  assert.ok(sinkRefs.find((ref) => ref.target === 'observe-invocation')?.ref?.startsWith('observe-invocation:'));
+  assert.deepEqual(
+    attempt.validationRepairAuditSinkRecords?.map((record) => record.target).sort(),
+    ['appendTaskAttempt', 'ledger', 'observe-invocation', 'verification-artifact'].sort(),
+  );
+  assert.equal(
+    attempt.validationRepairAuditSinkRecords?.find((record) => record.target === 'ledger')?.auditRecord?.auditId,
+    realChain.auditRecord?.auditId,
+  );
 } finally {
   await rm(workspace, { recursive: true, force: true });
 }

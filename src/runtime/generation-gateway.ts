@@ -129,7 +129,7 @@ import {
 } from './gateway/runtime-routing.js';
 import {
   currentReferenceDigestGuardLimit,
-  currentReferenceDigestSilentGuardMs,
+  currentReferenceDigestSilentGuardPolicy,
   mergeBackendStreamWorkEvidence,
   readAgentServerRunStream,
 } from './gateway/agentserver-stream.js';
@@ -861,6 +861,7 @@ async function requestAgentServerGeneration(params: {
       signal: controller.signal,
       body: JSON.stringify(runPayload),
     });
+    const silentGuardPolicy = currentReferenceDigestSilentGuardPolicy(request);
     const { json, run, error, streamText, workEvidence } = await readAgentServerRunStream(response, (event) => {
       emitWorkspaceRuntimeEvent(params.callbacks, withRequestContextWindowLimit(
         normalizeAgentServerWorkspaceEvent(event),
@@ -868,14 +869,20 @@ async function requestAgentServerGeneration(params: {
       ));
     }, {
       maxTotalUsage: currentReferenceDigestGuardLimit(request),
-      maxSilentMs: currentReferenceDigestSilentGuardMs(request),
+      maxSilentMs: silentGuardPolicy.timeoutMs,
+      silencePolicy: silentGuardPolicy,
+      silentRetryCount: Math.max(0, dispatchAttempt - 1),
       onGuardTrip: (message) => {
         controller.abort();
         emitWorkspaceRuntimeEvent(params.callbacks, agentServerConvergenceGuardEvent(message));
       },
-      onSilentTimeout: (message) => {
+      onSilentTimeout: (message, audit) => {
         controller.abort();
-        emitWorkspaceRuntimeEvent(params.callbacks, agentServerSilentStreamGuardEvent(message));
+        emitWorkspaceRuntimeEvent(params.callbacks, {
+          ...agentServerSilentStreamGuardEvent(message),
+          detail: audit.detail,
+          raw: audit,
+        });
       },
     });
     await writeAgentServerDebugArtifact(params.workspace, 'generation', runPayload, response.status, json);
