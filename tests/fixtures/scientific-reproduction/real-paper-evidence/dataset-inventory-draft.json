@@ -70,6 +70,7 @@
     {
       "id": "accession-gse132446",
       "kind": "accession",
+      "database": "GEO",
       "accession": "GSE132446",
       "verified": true,
       "status": "verified",
@@ -85,6 +86,7 @@
     {
       "id": "accession-gse242515",
       "kind": "accession",
+      "database": "GEO",
       "accession": "GSE242515",
       "verified": true,
       "status": "verified",

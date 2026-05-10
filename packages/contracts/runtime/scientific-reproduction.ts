@@ -121,6 +121,7 @@ export interface DatasetInventory extends ScientificReproductionArtifactBase {
     id: string;
     kind: 'bibliographic' | 'accession' | string;
     identifier?: string;
+    database?: string;
     doi?: string;
     pmid?: string;
     accession?: string;
@@ -199,6 +200,8 @@ export interface FigureReproductionReport extends ScientificReproductionArtifact
   claimIds: string[];
   inputRefs: ScientificEvidenceRef[];
   codeRefs: ScientificEvidenceRef[];
+  parameterRefs?: ScientificEvidenceRef[];
+  parameters?: Record<string, unknown>;
   outputFigureRefs: ScientificEvidenceRef[];
   statisticsRefs?: ScientificEvidenceRef[];
   stdoutRefs?: ScientificEvidenceRef[];
@@ -244,6 +247,7 @@ export interface NegativeResultReport extends ScientificReproductionArtifactBase
     question: string;
     inputRefs: ScientificEvidenceRef[];
     codeRefs?: ScientificEvidenceRef[];
+    statisticsRefs?: ScientificEvidenceRef[];
     outputRefs: ScientificEvidenceRef[];
     result: ScientificReproductionVerdict | string;
     interpretation: string;
@@ -368,6 +372,19 @@ const INLINE_LARGE_CONTENT_KEYS = [
   'stderr',
   'largeTable',
 ] as const;
+
+const BOUNDED_TEXT_CONTENT_KEYS = [
+  'sourceText',
+  'sourceExcerpt',
+  'text',
+  'table',
+  'tableText',
+  'summary',
+  'notes',
+  'diagnostics',
+] as const;
+
+const MAX_BOUNDED_INLINE_TEXT_CHARS = 2400;
 
 export function isScientificReproductionArtifactType(value: unknown): value is ScientificReproductionArtifactType {
   return typeof value === 'string' && SCIENTIFIC_REPRODUCTION_ARTIFACT_TYPES.includes(value as ScientificReproductionArtifactType);
@@ -505,12 +522,41 @@ function validateTypeSpecificBasics(
     });
   }
   if (artifactType === 'dataset-inventory') {
+    arrayRecords(data.identifierVerifications).forEach((verification, index) => {
+      validateIdentifierVerification(verification, `identifierVerifications[${index}]`, issues);
+    });
     arrayRecords(data.datasets).forEach((dataset, index) => {
       validateStringAt(dataset, 'id', `datasets[${index}].id`, issues);
       validateStringAt(dataset, 'title', `datasets[${index}].title`, issues);
       validateStringAt(dataset, 'availability', `datasets[${index}].availability`, issues);
       validateRefArray(dataset.sourceRefs, `datasets[${index}].sourceRefs`, issues, { requireNonEmpty: true });
     });
+  }
+  if (artifactType === 'figure-reproduction-report') {
+    const hasParameters = isRecord(data.parameters) && Object.keys(data.parameters).length > 0;
+    const hasParameterRefs = Array.isArray(data.parameterRefs) && data.parameterRefs.length > 0;
+    if (!hasParameters && !hasParameterRefs) {
+      issues.push({
+        path: 'parameters',
+        message: 'figure-reproduction-report must include bounded parameters or parameterRefs.',
+        expected: 'non-empty parameters or ScientificRef[]',
+        actual: `${typeOf(data.parameters)} / ${typeOf(data.parameterRefs)}`,
+      });
+    }
+    if (hasParameterRefs) validateRefArray(data.parameterRefs, 'parameterRefs', issues, { requireNonEmpty: true });
+    validateRefArray(data.statisticsRefs, 'statisticsRefs', issues, { requireNonEmpty: true });
+    const hasStdoutRefs = Array.isArray(data.stdoutRefs) && data.stdoutRefs.length > 0;
+    const hasStderrRefs = Array.isArray(data.stderrRefs) && data.stderrRefs.length > 0;
+    if (!hasStdoutRefs && !hasStderrRefs) {
+      issues.push({
+        path: 'stdoutRefs',
+        message: 'figure-reproduction-report must include stdoutRefs or stderrRefs.',
+        expected: 'stdoutRefs or stderrRefs',
+        actual: `${typeOf(data.stdoutRefs)} / ${typeOf(data.stderrRefs)}`,
+      });
+    }
+    if (hasStdoutRefs) validateRefArray(data.stdoutRefs, 'stdoutRefs', issues, { requireNonEmpty: true });
+    if (hasStderrRefs) validateRefArray(data.stderrRefs, 'stderrRefs', issues, { requireNonEmpty: true });
   }
   if (artifactType === 'analysis-plan') {
     arrayRecords(data.steps).forEach((step, index) => {
@@ -541,6 +587,8 @@ function validateTypeSpecificBasics(
       validateStringAt(check, 'result', `checks[${index}].result`, issues);
       validateStringAt(check, 'interpretation', `checks[${index}].interpretation`, issues);
       validateRefArray(check.inputRefs, `checks[${index}].inputRefs`, issues, { requireNonEmpty: true });
+      validateRefArray(check.codeRefs, `checks[${index}].codeRefs`, issues, { requireNonEmpty: true });
+      validateRefArray(check.statisticsRefs, `checks[${index}].statisticsRefs`, issues, { requireNonEmpty: true });
       validateRefArray(check.outputRefs, `checks[${index}].outputRefs`, issues, { requireNonEmpty: true });
     });
   }
@@ -555,6 +603,36 @@ function validateTypeSpecificBasics(
       validateStringAt(event, 'outcome', `events[${index}].outcome`, issues);
       validateRefArray(event.observationRefs, `events[${index}].observationRefs`, issues, { requireNonEmpty: true });
     });
+  }
+}
+
+function validateIdentifierVerification(
+  record: Record<string, unknown>,
+  path: string,
+  issues: ScientificReproductionValidationIssue[],
+) {
+  validateStringAt(record, 'id', `${path}.id`, issues);
+  validateStringAt(record, 'kind', `${path}.kind`, issues);
+  if (record.verified !== true) {
+    issues.push({ path: `${path}.verified`, message: `${path}.verified must be true after explicit identifier verification.`, expected: 'true', actual: typeOf(record.verified) });
+  }
+  validateStringAt(record, 'status', `${path}.status`, issues);
+  validateStringAt(record, 'checkedAt', `${path}.checkedAt`, issues);
+  validateRefArray(record.evidenceRefs, `${path}.evidenceRefs`, issues, { requireNonEmpty: true });
+  const kind = stringField(record.kind)?.toLowerCase() ?? '';
+  if (kind === 'bibliographic') {
+    if (!stringField(record.doi) && !stringField(record.pmid)) {
+      issues.push({ path: `${path}.doi`, message: 'bibliographic verification must include doi or pmid.', expected: 'doi or pmid' });
+    }
+    for (const field of ['title', 'year', 'journal']) {
+      if (!stringField(record[field]) && typeof record[field] !== 'number') {
+        issues.push({ path: `${path}.${field}`, message: `bibliographic verification must include ${field}.`, expected: 'non-empty value', actual: typeOf(record[field]) });
+      }
+    }
+  }
+  if (kind === 'accession') {
+    validateStringAt(record, 'accession', `${path}.accession`, issues);
+    validateStringAt(record, 'database', `${path}.database`, issues);
   }
 }
 
@@ -604,9 +682,17 @@ function findInlineLargeContent(value: unknown, path = '$', depth = 0): string[]
   return Object.entries(value).flatMap(([key, entry]) => {
     const currentPath = path === '$' ? key : `${path}.${key}`;
     const keyMatch = INLINE_LARGE_CONTENT_KEYS.some((largeKey) => key.toLowerCase() === largeKey.toLowerCase());
-    const current = keyMatch ? [currentPath] : [];
+    const boundedTextKeyMatch = BOUNDED_TEXT_CONTENT_KEYS.some((largeKey) => key.toLowerCase() === largeKey.toLowerCase());
+    const current = keyMatch || inlineTextTooLarge(entry, boundedTextKeyMatch) ? [currentPath] : [];
     return [...current, ...findInlineLargeContent(entry, currentPath, depth + 1)];
   });
+}
+
+function inlineTextTooLarge(value: unknown, keyMatch: boolean): boolean {
+  if (!keyMatch) return false;
+  if (typeof value === 'string') return value.length > MAX_BOUNDED_INLINE_TEXT_CHARS;
+  if (Array.isArray(value) || isRecord(value)) return JSON.stringify(value).length > MAX_BOUNDED_INLINE_TEXT_CHARS;
+  return false;
 }
 
 function withHints(result: Omit<ScientificReproductionValidationResult, 'repairHints'>): ScientificReproductionValidationResult {

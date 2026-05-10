@@ -106,7 +106,7 @@ Todo：
 - [x] 从论文正文、methods、data availability、supplementary information 中抽取 accession、链接、数据表和代码线索。（2020/2025 草案已进入 `tests/fixtures/scientific-reproduction/real-paper-evidence/`。）
 - [x] 用通用检索能力查询 GEO/SRA/ENA/ArrayExpress/figshare/GitHub/期刊 supplement。（已核到 GEO GSE132446/GSE84689/GSE35498/GSE61613、GSE242515 与 KAS-Analyzer 代码线索。）
 - [x] 输出 `dataset-inventory`：数据源、样本、assay、物种、基因组版本、下载大小、许可、可用性。（contract/mock fixture 已完成。）
-- [x] 输出 `missing-data-report`：缺失什么、为什么缺失、是否可用 proxy 或 public alternative。（contract/mock fixture 已完成。）
+- [x] 通过 `dataset-inventory.missingDatasets`、`claim-verdict.missingEvidence` 和 `negative-result-report` 表达缺失数据；`missing-data-report` 只作为 human-facing derived draft/export note，不进入正式 runtime artifact type set。
 
 验收：
 - [x] 找不到数据时必须 structured partial/failure，不能把论文文字当作真实数据。
@@ -171,7 +171,7 @@ Todo：
 
 Todo：
 - [x] 为每篇研究论文至少设计 3 个反证检查。
-- [x] 负结果输出 `negative-result-report`，包含检查动机、数据、代码、统计、结论影响。
+- [x] 负结果机制输出 `negative-result-report`，包含检查动机、数据、代码、统计、结论影响；本轮真实论文结论主要是 partial/insufficient-evidence，不强造 contradicted negative result。
 - [x] UI 中清楚显示 not-reproduced/contradicted，不把它包装成普通失败。（view manifest 已接收 negative-result-report。）
 - [x] 验证 repair pipeline 不会把科学负结果强行修成正结果。（verifier 区分 negative result 与 operational failure。）
 
@@ -267,6 +267,15 @@ Todo：
 - [x] M6：产出 2020/2025 第一版 bounded figure reproduction artifacts，并明确 partial/insufficient-evidence 边界。
 - [x] M7：产出 self-prompt shadow fixture，能提出下一轮高质量复现提示且要求人工确认。
 
+## 后续候选里程碑
+
+这些不是当前阶段未完成项。只有满足前置条件后才进入执行，避免把通用能力验证误读成单论文 raw-data 重算工程。
+
+- [ ] N1：Harness-governed Scientific Reproduction。把科研复现每轮 context、capability、budget、verification、repair、progress 收敛进 `HarnessContract`/trace；验收以 harness trace、budget exhaustion、validation/repair/audit 和现有 2020/2025 bounded fixtures 通过为准。
+- [ ] N2：Self-prompt Auto-submit Gating。只在 required refs、schema、verifier、预算、停止条件和人工确认点满足时自动提交下一轮；遇到 missing evidence、raw download、许可/算力未定义或重复失败时停在 structured needs-human/failed-with-reason。
+- [ ] N3：Raw-data Reanalysis Readiness。先产出 refs-first readiness dossier，列明 accession、数据许可、下载字节数、存储/CPU/内存/时间预算、工具版本、环境锁、genome cache、checksum 和降级策略；verifier 必须阻止未满足许可/预算/环境的 raw execution。
+- [ ] N4：One-claim Raw-data Pilot。只能在 N3 通过且用户批准下载/计算后，选择一个 claim、最小样本集和一条明确 pipeline 运行；输出仍使用通用 `analysis-notebook`、`figure-reproduction-report`、`evidence-matrix`、`claim-verdict`，不能因 pipeline 跑通就标成科学成功。
+
 ## 2026-05-11 阶段记录
 
 - 已完成一次真实网页端 Computer Use attempt：在 `http://localhost:5173/` 导入文献证据评估场景，新建聊天，输入三篇 `workspace/cell_papers` 论文复现任务并发送。运行生成了 `tasks/paper-reproduction-round1/run_all_stages.py`，但最终被用户中断，因为多轮 repair 仍未产出可展示结果。
@@ -275,7 +284,7 @@ Todo：
 - 真实失败缺口 3：UI 能显示等待、repair 和 token 进展，但 repair-needed partial scientific outputs 没有被保留成用户可打开的 structured artifact。
 - 本阶段通用修复已完成：新增 scientific reproduction runtime contracts、refs-first validators、scientific reproduction verifier、bioinformatics reproduction profile/mock fixtures、Computer Use runbook、trajectory export contract、seed-paper generic fixtures、package-owned view manifest 接收规则、UI failure fixture 和 `npm run smoke:scientific-reproduction`。
 - 已验证：`npm run typecheck` 和 `npm run smoke:scientific-reproduction` 通过。
-- Worker P 补充了 M4 网页端复测准备：通用 retest checklist、baseline/follow-up prompt template、expected artifact gates，以及针对 2026-05-11 ToolPayload/PDF extraction/partial artifact 失败类的复测检查。M4 仍需实际回到网页端执行后再勾选。
+- Worker P 补充了 M4 网页端复测准备：通用 retest checklist、baseline/follow-up prompt template、expected artifact gates，以及针对 2026-05-11 ToolPayload/PDF extraction/partial artifact 失败类的复测检查；后续复测 1/2/3 与第五阶段轻量 retest 已闭环。
 - 第二阶段并行修复完成：scientific-reproduction verifier 已接入 runtime verification/validation/repair/audit；malformed ToolPayload 会 fail closed 并保留 object-map partial artifacts；PDF refs 具备 bounded `pdftotext` fallback 和结构化 extraction diagnostics；trajectory-training-record 可从 stored attempt/result/validation refs 导出；artifact UI 增加通用引用/追问/JSON 导出。
 - M4 网页端复测 1：用 Computer Use 在文献证据评估场景新建聊天，提交 2020 PRDM9 PDF 的 refs-first 短复现任务。复测暴露新通用缺口：generated task 退出/repair 后没有 output JSON 时，repair rerun 可重复到 8+ 次，结果面板仍为空。
 - 针对 M4 复测 1 的通用修复：AgentServer repair 默认预算从 12 降到 4；当 repair 没有修改任务代码且失败原因重复时立即 fail closed，防止同一坏任务无限修复。新增 `smoke:agentserver-repair-budget` 并纳入 `smoke:scientific-reproduction`。
@@ -290,4 +299,6 @@ Todo：
 - 2020 bounded reproduction 结论：Supplementary Table S3 可支持 stage-specific de novo H3K4me3 与 DSB-hotspot 表格级 `partially-reproduced`；PRDM9 affinity overlap、NOMe/open chromatin、CO/NCO fate 与完整 peak-caller/replicate 敏感性仍是 structured missing evidence，不把缺数据写成科学反证。
 - 2025 bounded reproduction 结论：Supplementary Table S5/S8 支持 broad-domain 与 temporal-expression 表格级 `partially-reproduced`；整体 `claim-verdict` 保持 `insufficient-evidence`，因为独立 broad-vs-sharp calling、Setd1b/Rfx2 perturbation、Pol II/TAF3、gene length/baseline/stage confounding 仍缺 raw-data 级复算。
 - 并行收束审计补充：多个 sub agent 从任务板、验证脚本、网页端服务和下一阶段边界并行复核，确认 raw FASTQ/BAM 全量重算仍应另开 milestone；同时发现 R010 verifier 与正式 scientific-reproduction contract 有通用对齐缺口。本轮已补齐 verifier 对 `inputRefs`/`codeRefs`/`outputFigureRefs`/`statisticsRefs`/`stdoutRefs`/`stderrRefs`、`insufficient-evidence`/`not-tested` verdict、`figure-to-claim-map` 非复现记录边界、结构化 DOI/accession verification 的支持；并把 `smoke:scientific-reproduction` 纳入 `smoke:all`，使 `verify:fast` 默认覆盖科研复现 contracts、fixtures、verifier、UI failure 和 trajectory export。
+- 第五阶段并行审计与轻量网页端复测：sub agents 复核任务板、verifier/contract、网页端服务和下一阶段边界；确认当前任务板可作为 bounded scientific reproduction milestone 收束，但需要澄清 `missing-data-report` derived draft、negative-result 机制边界和 raw-data 后续门槛。Computer Use 轻量 retest `generated-literature-74eb7212f46b` 验证 post-`repairNeededPayload` terminal failure 会在网页端显示 `repair-needed`/failed 终态、`literature-runtime-result` runtime-diagnostic artifact、execution unit、stdout/stderr/output refs 和恢复动作；引用 `artifact:literature-runtime-result` 的 follow-up 能进入下一轮上下文并读取相关 refs，但简单诊断追问仍可能等待过长，已作为 N1/N2 的 harness/budget gating 后续课题。
+- 第五阶段通用修复：scientific reproduction contract 与 verifier 再次收紧。Contract 现在要求 figure reproduction 带参数或 parameter refs、statistics refs、stdout/stderr refs；negative-result checks 带 input/code/statistics/output refs；identifier verification 按 bibliographic/accession 强校验 DOI/PMID/title/year/journal 或 accession/database/status/checkedAt/evidence refs；refs-first 校验会拦截大段 `sourceText`/table/summary 等 inline payload。Verifier 现在先做 runtime contract compliance，支持 data-root `artifactType` fixtures，解析 `{ref}` object refs，聚合 nested `negative-result-report.checks[]`，并用真实 2020/2025 fixture 覆盖 figure reproduction 与 identifier verification。
 - 当前收束判断：本阶段“用真实例子拉通复杂科研问题解决能力”的目标已经完成；继续做 raw FASTQ/BAM 下载、全量 peak calling 或 genome-cache 复算会把项目从通用能力验证拖入单论文重算工程，暂不作为当前任务。后续如要继续，应另建 milestone，先定义下载预算、可复现实验环境、数据许可和计算资源。

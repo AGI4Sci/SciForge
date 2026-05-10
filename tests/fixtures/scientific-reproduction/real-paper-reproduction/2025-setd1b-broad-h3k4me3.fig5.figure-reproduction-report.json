@@ -36,6 +36,11 @@
       "summary": "Parsed S1 sample metadata and counted Setd1b-labeled local sample rows."
     }
   ],
+  "parameters": {
+    "inputScope": "published Supplementary Table S1 metadata only",
+    "countingRule": "case-insensitive Setd1b label scan in local workbook rows",
+    "rawDataExecution": "not-run"
+  },
   "outputFigureRefs": [
     {
       "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix#row-fig5-setd1b-perturbation-boundary",

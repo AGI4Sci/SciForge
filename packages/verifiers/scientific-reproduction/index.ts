@@ -1,3 +1,8 @@
+import {
+  isScientificReproductionArtifactType,
+  validateScientificReproductionArtifact,
+} from '../../contracts/runtime/scientific-reproduction.js';
+
 export type ScientificReproductionRuntimeVerdict = 'pass' | 'fail' | 'uncertain' | 'needs-human' | 'unverified';
 
 export type ScientificClaimVerdict =
@@ -136,6 +141,7 @@ export function verifyScientificReproduction(
   const negativeResults = artifactContexts.flatMap(extractNegativeResults);
 
   const criterionResults = [
+    checkContractCompliance(artifactContexts),
     checkClaimEvidenceCoverage(claims),
     checkFigureReproductionEvidence(figureReproductions, Boolean(request.providerHints?.requireFigureReproduction)),
     checkIdentifierVerification(identifierVerifications, request),
@@ -185,6 +191,7 @@ type ArtifactContext = {
   root: Record<string, unknown>;
   id: string;
   type: string;
+  contractIssues: string[];
 };
 
 type NormalizedClaim = {
@@ -211,6 +218,7 @@ type NormalizedIdentifierVerification = {
   artifactId: string;
   kind: 'bibliographic' | 'accession' | 'unknown';
   verified: boolean;
+  complete: boolean;
   evidenceRefs: string[];
 };
 
@@ -226,6 +234,25 @@ type NormalizedNegativeResult = {
   hasConclusionImpact: boolean;
   looksLikeOperationalFailureOnly: boolean;
 };
+
+function checkContractCompliance(contexts: ArtifactContext[]): ScientificReproductionCriterionResult {
+  const invalid = contexts.filter((context) => context.contractIssues.length > 0);
+  return {
+    id: 'scientific-reproduction-contract-compliance',
+    passed: invalid.length === 0,
+    severity: 'blocking',
+    message: invalid.length === 0
+      ? 'All known scientific reproduction artifacts conform to the runtime contract before verifier-specific checks.'
+      : `${invalid.length} known scientific reproduction artifact(s) fail the runtime contract before verifier-specific checks.`,
+    evidenceRefs: uniqueStrings(contexts.flatMap((context) => collectRefs(context.root))),
+    repairHints: invalid.length
+      ? [
+        'Emit contract-valid scientific reproduction artifacts with schemaVersion, artifactType, sourceRefs, and type-specific required refs before verifier review.',
+        ...uniqueStrings(invalid.flatMap((context) => context.contractIssues)).slice(0, 6),
+      ]
+      : [],
+  };
+}
 
 function checkClaimEvidenceCoverage(claims: NormalizedClaim[]): ScientificReproductionCriterionResult {
   const uncovered = claims.filter((claim) => !claim.evidenceRefs.length && !claim.hasInlineEvidence && !claim.hasMissingEvidenceReason);
@@ -282,7 +309,7 @@ function checkIdentifierVerification(
   const requireAccession = Boolean(request.providerHints?.requireAccessionVerification);
   const bibliographic = verifications.filter((verification) => verification.kind === 'bibliographic');
   const accessions = verifications.filter((verification) => verification.kind === 'accession');
-  const unverified = verifications.filter((verification) => !verification.verified);
+  const unverified = verifications.filter((verification) => !verification.verified || !verification.complete || verification.evidenceRefs.length === 0);
   const missingBibliographic = requireBibliographic && bibliographic.length === 0;
   const missingAccession = requireAccession && accessions.length === 0;
   return {
@@ -294,11 +321,11 @@ function checkIdentifierVerification(
       : missingAccession
         ? 'No verified dataset accession record was found.'
         : unverified.length
-          ? `${unverified.length} citation or accession records are present but not marked verified.`
+          ? `${unverified.length} citation or accession records are present but lack verified status, required identifier fields, or evidence refs.`
           : `Found ${verifications.length} verified citation/accession records.`,
     evidenceRefs: uniqueStrings(verifications.flatMap((verification) => verification.evidenceRefs)),
     repairHints: missingBibliographic || missingAccession || unverified.length
-      ? ['Add identifier verification records with kind, verified/status, checkedAt or source refs, and evidenceRefs for DOI/PMID/title/year/journal/accession checks.']
+      ? ['Add identifier verification records with kind, verified/status, checkedAt, evidenceRefs, DOI/PMID/title/year/journal for bibliographic records, and accession/database for dataset records.']
       : [],
   };
 }
@@ -375,11 +402,16 @@ function checkNegativeResultSemantics(
 function artifactContext(artifact: ScientificReproductionArtifact, index: number): ArtifactContext {
   const data = isRecord(artifact.data) ? artifact.data : {};
   const root = { ...artifact, ...data };
+  const type = normalizeType(artifact.type || root.artifactType);
+  const contractValidation = isScientificReproductionArtifactType(type)
+    ? validateScientificReproductionArtifact(root)
+    : { issues: [] };
   return {
     artifact,
     root,
     id: stringValue(artifact.id) || `artifact-${index + 1}`,
-    type: normalizeType(artifact.type),
+    type,
+    contractIssues: contractValidation.issues.map((issue) => `${issue.path}: ${issue.message}`),
   };
 }
 
@@ -418,7 +450,7 @@ function extractFigureReproductions(context: ArtifactContext): NormalizedFigureR
     evidenceRefs: collectRefs(record),
     hasCode: hasAnyKey(record, ['code', 'codeRef', 'codeRefs', 'script', 'scriptRef', 'notebookRef', 'analysisNotebookRef']),
     hasInputData: hasAnyKey(record, ['inputRefs', 'inputData', 'inputDataRef', 'inputDataRefs', 'dataRef', 'dataRefs', 'datasetRef', 'datasetRefs']),
-    hasParameters: hasAnyKey(record, ['parameters', 'params', 'parameterRef', 'thresholds', 'settings']),
+    hasParameters: hasAnyKey(record, ['parameters', 'params', 'parameterRef', 'parameterRefs', 'thresholds', 'settings']),
     hasStdoutOrStderr: hasAnyKey(record, ['stdout', 'stderr', 'stdoutRef', 'stdoutRefs', 'stderrRef', 'stderrRefs', 'logRef', 'logRefs', 'executionLogRef']),
     hasStatistics: hasAnyKey(record, ['statistics', 'statisticsRef', 'statisticsRefs', 'statisticalMethod', 'statisticalMethods', 'pValue', 'effectSize', 'testName', 'method']),
   }));
@@ -442,12 +474,16 @@ function extractIdentifierVerifications(context: ArtifactContext): NormalizedIde
       artifactId: context.id,
       kind: identifierKind(record),
       verified: isVerified(record),
+      complete: hasCompleteIdentifierVerification(record),
       evidenceRefs: collectRefs(record),
     }));
 }
 
 function extractScientificVerdicts(context: ArtifactContext): string[] {
-  const values = findValuesByKey(context.root, (key) => ['verdict', 'claimVerdict', 'figureVerdict', 'reproductionVerdict'].includes(key))
+  const verdictKeys = context.type === 'negative-result-report'
+    ? ['verdict', 'claimVerdict', 'figureVerdict', 'reproductionVerdict', 'result']
+    : ['verdict', 'claimVerdict', 'figureVerdict', 'reproductionVerdict'];
+  const values = findValuesByKey(context.root, (key) => verdictKeys.includes(key))
     .map((value) => stringValue(value).toLowerCase())
     .filter(Boolean);
   return values.filter((value) =>
@@ -464,18 +500,25 @@ function extractNegativeResults(context: ArtifactContext): NormalizedNegativeRes
   if (context.type === 'negative-result-report') candidates.push(context.root);
   return candidates.map((record, index) => {
     const text = JSON.stringify(record).toLowerCase();
+    const checks = arrayRecords(record.checks);
+    const checkVerdicts = checks.map((check) => stringValue(check.result).toLowerCase()).filter(Boolean);
+    const checkRefs = checks.flatMap((check) => collectRefs(check));
     return {
       id: stringValue(record.id) || `${context.id}:negative-${index + 1}`,
       artifactId: context.id,
       evidenceRefs: collectRefs(record),
-      hasScientificVerdict: ['not-reproduced', 'contradicted'].includes(stringValue(record.verdict).toLowerCase()),
+      hasScientificVerdict: ['not-reproduced', 'contradicted'].includes(stringValue(record.verdict).toLowerCase()) ||
+        checkVerdicts.some((verdict) => verdict === 'not-reproduced' || verdict === 'contradicted'),
       hasMotivation: hasAnyKey(record, ['motivation', 'checkMotivation', 'hypothesis', 'rationale']),
-      hasData: hasAnyKey(record, ['data', 'dataRef', 'dataRefs', 'inputDataRefs', 'datasetRefs']),
-      hasCode: hasAnyKey(record, ['code', 'codeRef', 'codeRefs', 'notebookRef', 'executionRef']),
-      hasStatistics: hasAnyKey(record, ['statistics', 'statisticalMethod', 'statisticalResults', 'pValue', 'effectSize']),
+      hasData: hasAnyKey(record, ['data', 'dataRef', 'dataRefs', 'inputRefs', 'inputDataRefs', 'datasetRefs']) ||
+        checks.some((check) => hasAnyKey(check, ['inputRefs', 'dataRefs', 'outputRefs'])),
+      hasCode: hasAnyKey(record, ['code', 'codeRef', 'codeRefs', 'notebookRef', 'executionRef']) ||
+        checks.some((check) => hasAnyKey(check, ['codeRef', 'codeRefs', 'notebookRef', 'executionRef'])),
+      hasStatistics: hasAnyKey(record, ['statistics', 'statisticsRef', 'statisticsRefs', 'statisticalMethod', 'statisticalResults', 'pValue', 'effectSize']) ||
+        checks.some((check) => hasAnyKey(check, ['statisticsRef', 'statisticsRefs', 'statisticalMethod', 'statisticalResults', 'pValue', 'effectSize'])),
       hasConclusionImpact: hasAnyKey(record, ['conclusionImpact', 'claimImpact', 'interpretation', 'impact']),
       looksLikeOperationalFailureOnly: /timeout|exception|stack trace|permission denied|tool failed/.test(text) &&
-        !/claim|scientific|statistic|effect|evidence|conclusion/.test(text),
+        !/claim|scientific|statistic|effect|evidence|conclusion/.test(text) && checkRefs.length === 0,
     };
   });
 }
@@ -523,6 +566,21 @@ function isVerified(record: Record<string, unknown>) {
   return ['verified', 'matched', 'confirmed', 'pass', 'ok'].includes(status);
 }
 
+function hasCompleteIdentifierVerification(record: Record<string, unknown>) {
+  const kind = identifierKind(record);
+  if (collectRefs(record).length === 0) return false;
+  if (kind === 'bibliographic') {
+    return (hasAnyKey(record, ['doi', 'pmid']))
+      && hasAnyKey(record, ['title'])
+      && hasAnyKey(record, ['year'])
+      && hasAnyKey(record, ['journal']);
+  }
+  if (kind === 'accession') {
+    return hasAnyKey(record, ['accession', 'accessionId', 'identifier']) && hasAnyKey(record, ['database', 'source', 'repository']);
+  }
+  return false;
+}
+
 function hasMissingEvidenceReason(record: Record<string, unknown>) {
   const missingEvidence = record.missingEvidence;
   if (typeof missingEvidence === 'string') return missingEvidence.trim().length > 0;
@@ -546,7 +604,14 @@ function collectRefs(value: unknown): string[] {
   walk(value, (node, key) => {
     if (!key || !REF_KEYS.includes(key as typeof REF_KEYS[number])) return;
     if (typeof node === 'string') refs.push(node);
-    if (Array.isArray(node)) refs.push(...node.filter((entry): entry is string => typeof entry === 'string'));
+    if (isRecord(node) && typeof node.ref === 'string') refs.push(node.ref);
+    if (Array.isArray(node)) {
+      refs.push(...node.flatMap((entry) => {
+        if (typeof entry === 'string') return [entry];
+        if (isRecord(entry) && typeof entry.ref === 'string') return [entry.ref];
+        return [];
+      }));
+    }
   });
   return uniqueStrings(refs);
 }
@@ -554,11 +619,14 @@ function collectRefs(value: unknown): string[] {
 function findInlineEvidenceWithoutRefs(value: unknown, artifactId: string): string[] {
   const findings: string[] = [];
   walk(value, (node, key, path) => {
-    if (!key || !/evidence|sourceText|fullText|table|figure/i.test(key)) return;
-    if (!isRecord(node)) return;
-    if (collectRefs(node).length > 0) return;
-    const textLength = JSON.stringify(node).length;
-    if (textLength > 800) findings.push(`${artifactId}:${path.join('.')}`);
+    if (!key || !/evidence|sourceText|fullText|table|figure|rawData|pdfText|sourceExcerpt/i.test(key)) return;
+    if (isRecord(node)) {
+      if (collectRefs(node).length > 0 && JSON.stringify(node).length <= 2400) return;
+      const textLength = JSON.stringify(node).length;
+      if (textLength > 800) findings.push(`${artifactId}:${path.join('.')}`);
+      return;
+    }
+    if (typeof node === 'string' && node.length > 800) findings.push(`${artifactId}:${path.join('.')}`);
   });
   return findings;
 }

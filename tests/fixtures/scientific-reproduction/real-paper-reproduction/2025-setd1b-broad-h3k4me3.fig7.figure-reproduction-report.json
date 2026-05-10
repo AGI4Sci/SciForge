@@ -43,6 +43,11 @@
       "summary": "Parsed S1 sample labels for perturbation evidence boundaries."
     }
   ],
+  "parameters": {
+    "inputScope": "published Supplementary Table S8 plus S1 metadata",
+    "peakStageRule": "stage column with maximum listed expression per gene",
+    "perturbationBoundary": "Setd1b/Rfx2 raw perturbation recomputation not-run"
+  },
   "outputFigureRefs": [
     {
       "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix#row-fig7-temporal-expression-s8",

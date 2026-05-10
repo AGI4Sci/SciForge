@@ -36,6 +36,12 @@
       "summary": "Parsed workbook SpreadsheetML locally and computed interval lengths, stage broad-status counts, and sorted interval overlaps."
     }
   ],
+  "parameters": {
+    "domainWidthThresholdBp": 5000,
+    "mergeDistanceBp": 500,
+    "overlapDefinition": "any-base interval overlap",
+    "inputScope": "published Supplementary Table S5 only"
+  },
   "outputFigureRefs": [
     {
       "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix#row-fig3-broad-domain-table-check",
