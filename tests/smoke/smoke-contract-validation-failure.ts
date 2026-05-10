@@ -161,6 +161,12 @@ try {
   assert.deepEqual(refFailure.invalidRefs, ['file:.sciforge/uploads/current-input.pdf']);
   assert.ok(refFailure.relatedRefs.includes('file:.sciforge/uploads/current-input.pdf'));
   assert.match(JSON.stringify(refFailure), /Current-turn reference was not reflected/);
+  const refDebit = invalidRefPayload.budgetDebits?.[0];
+  assert.ok(refDebit, 'current-reference validation failure should emit a capability budget debit');
+  assert.equal(refDebit.contract, CAPABILITY_BUDGET_DEBIT_CONTRACT_ID);
+  assert.equal(refDebit.capabilityId, 'sciforge.payload-validation');
+  assert.ok(hasBudgetDebitRef(refUnit, refDebit.debitId));
+  assert.ok(invalidRefPayload.logs?.some((entry) => entry.kind === 'capability-budget-debit-audit' && hasBudgetDebitRef(entry, refDebit.debitId)));
 
   const structureRefRequest = normalizeGatewayRequest({
     ...request,
@@ -206,6 +212,13 @@ try {
   assert.equal(planFailure.contractId, 'sciforge.completed-payload.v1');
   assert.match(planFailure.failureReason, /only plan\/promise text/);
   assert.ok(planFailure.recoverActions.some((action) => /failed-with-reason|repair-needed/.test(action)));
+  const planDebit = planOnlyPayload.budgetDebits?.[0];
+  assert.ok(planDebit, 'completed-payload work-evidence validation failure should emit a capability budget debit');
+  assert.equal(planDebit.contract, CAPABILITY_BUDGET_DEBIT_CONTRACT_ID);
+  assert.equal(planDebit.capabilityId, 'sciforge.payload-validation');
+  assert.equal(planDebit.sinkRefs.executionUnitRef, stringField(planUnit, 'id'));
+  assert.ok(planDebit.debitLines.some((line) => line.dimension === 'resultItems' && line.amount >= 1));
+  assert.ok(hasBudgetDebitRef(planUnit, planDebit.debitId));
 
   const planWithPreviewDeliverablePayload = await validateAndNormalizePayload({
     message: 'I will retrieve the latest papers and analyze the results.',

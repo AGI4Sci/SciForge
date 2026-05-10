@@ -114,9 +114,13 @@ export async function validateAndNormalizePayload(
       ],
       nextStep: 'Regenerate the backend payload as a real completed result, or report the blocker as repair-needed/failed-with-reason.',
     });
-    return repairNeededPayload(request, skill, validationFailure.failureReason, {
-      ...repairRefsWithValidationRepairAudit(request, skill, validationFailure, refs),
-    });
+    const repairRefs = repairRefsWithValidationRepairAudit(request, skill, validationFailure, refs);
+    return attachPayloadValidationBudgetDebit(
+      repairNeededPayload(request, skill, validationFailure.failureReason, repairRefs),
+      skill,
+      validationFailure,
+      repairRefs,
+    );
   }
   const referenceFailures = currentReferenceUsageFailures(contractPayload, persistedArtifacts, request);
   const referenceValidationFailure = referenceFailures.length
@@ -144,7 +148,7 @@ export async function validateAndNormalizePayload(
     ],
     refs: referenceValidationFailure ? { validationFailure: referenceValidationFailure } : undefined,
   }));
-  return {
+  const normalizedPayload: ToolPayload = {
     message: referenceFailures.length
       ? `Current-turn reference contract failed: ${referenceFailures.join('; ')}`
       : String(payload.message || `${skill.id} completed.`),
@@ -183,6 +187,9 @@ export async function validateAndNormalizePayload(
     verificationPolicy: contractPayload.verificationPolicy,
     workEvidence: contractPayload.workEvidence,
   };
+  return referenceValidationFailure
+    ? attachPayloadValidationBudgetDebit(normalizedPayload, skill, referenceValidationFailure, refs)
+    : normalizedPayload;
 }
 
 function relatedRefsFromRepairRefs(refs: RepairPolicyRefs) {
