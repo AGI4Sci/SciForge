@@ -8,6 +8,7 @@ import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-
 
 type CapturedDispatch = {
   url: string;
+  text: string;
   metadata: Record<string, unknown>;
 };
 
@@ -39,7 +40,8 @@ const server = createServer(async (req, res) => {
 
   const body = await readJson(req);
   const metadata = isRecord(body.input) && isRecord(body.input.metadata) ? body.input.metadata : {};
-  dispatches.push({ url: String(req.url), metadata });
+  const text = isRecord(body.input) && typeof body.input.text === 'string' ? body.input.text : '';
+  dispatches.push({ url: String(req.url), text, metadata });
 
   const result = {
     ok: true,
@@ -93,8 +95,22 @@ try {
   assert.equal(dispatches[0]?.metadata.harnessProfileId, 'balanced-default');
   assert.equal(dispatches[0]?.metadata.harnessContractRef, first.summary.contractRef);
   assert.equal(dispatches[0]?.metadata.harnessTraceRef, first.summary.traceRef);
+  assert.equal(dispatches[0]?.metadata.harnessDecisionOwner, 'AgentServer');
+  assert.ok(isRecord(dispatches[0]?.metadata.harnessBudgetSummary), 'harness budget summary should be attached to payload metadata');
+  assert.ok(isRecord(dispatches[0]?.metadata.agentHarnessHandoff), 'structured harness handoff metadata should be attached');
+  const handoff = dispatches[0]?.metadata.agentHarnessHandoff as Record<string, unknown>;
+  assert.equal(handoff.schemaVersion, 'sciforge.agent-harness-handoff.v1');
+  assert.equal(handoff.harnessProfileId, 'balanced-default');
+  assert.equal(handoff.harnessContractRef, first.summary.contractRef);
+  assert.equal(handoff.harnessTraceRef, first.summary.traceRef);
+  assert.equal(handoff.decisionOwner, 'AgentServer');
   assert.equal(dispatches[0]?.metadata.purpose, dispatches[2]?.metadata.purpose);
   assert.equal(dispatches[0]?.url, dispatches[2]?.url);
+  assert.equal(dispatches[0]?.text.includes(first.summary.contractRef as string), false, 'fresh prompt text must not inline harness contract ref');
+  assert.equal(dispatches[0]?.text.includes(first.summary.traceRef as string), false, 'fresh prompt text must not inline harness trace ref');
+  assert.equal(dispatches[0]?.text.includes('"agentHarness"'), false, 'fresh prompt text must not inline harness shadow payload');
+  assert.equal(dispatches[0]?.text.includes('"promptDirectives"'), false, 'fresh prompt text must not inline full harness contract');
+  assert.equal(dispatches[0]?.text.includes('"stages"'), false, 'fresh prompt text must not inline full harness trace');
   assert.notDeepEqual(fast.contract, research.contract);
   assert.equal(fast.contract.profileId, 'fast-answer');
   assert.equal(research.contract.profileId, 'research-grade');

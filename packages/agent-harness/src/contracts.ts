@@ -56,7 +56,7 @@ export interface HarnessInput {
   conversationSignals?: Record<string, unknown>;
   runtimeConfig?: Record<string, unknown>;
   humanApprovalSatisfied?: boolean;
-  budgetOverrides?: Partial<HarnessBudgets>;
+  budgetOverrides?: PartialHarnessBudgets;
 }
 
 export interface HarnessRuntime {
@@ -166,6 +166,7 @@ export interface HarnessCandidate {
   reasons: string[];
   providerAvailability?: ProviderAvailability[];
   budget?: Partial<CapabilityBudget>;
+  fallbackCandidateIds?: string[];
 }
 
 export interface ProviderAvailability {

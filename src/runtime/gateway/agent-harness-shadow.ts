@@ -4,6 +4,7 @@ import { clipForAgentServerJson, errorMessage, hashJson, isRecord } from '../gat
 
 const AGENT_HARNESS_CONTRACT_EVENT_TYPE = 'agent-harness-contract';
 const AGENT_HARNESS_SHADOW_SCHEMA_VERSION = 'sciforge.agent-harness-shadow.v1';
+const AGENT_HARNESS_HANDOFF_SCHEMA_VERSION = 'sciforge.agent-harness-handoff.v1';
 const DEFAULT_AGENT_HARNESS_PROFILE_ID = 'balanced-default';
 
 interface AgentHarnessEvaluation {
@@ -75,15 +76,44 @@ export async function requestWithAgentHarnessShadow(
 }
 
 export function agentHarnessMetadata(request: GatewayRequest) {
+  return agentHarnessHandoffMetadata(request);
+}
+
+export function agentHarnessHandoffMetadata(request: GatewayRequest) {
   const agentHarness = isRecord(request.uiState?.agentHarness) ? request.uiState.agentHarness : undefined;
   const summary = isRecord(agentHarness?.summary) ? agentHarness.summary : undefined;
   const profileId = stringField(agentHarness?.profileId) ?? stringField(request.uiState?.harnessProfileId);
   if (!profileId && !summary) return {};
+  const contract = isRecord(agentHarness?.contract) ? agentHarness.contract : undefined;
+  const contractRef = stringField(agentHarness?.contractRef) ?? stringField(summary?.contractRef);
+  const traceRef = stringField(agentHarness?.traceRef) ?? stringField(summary?.traceRef);
+  const budgetSummary = agentHarnessBudgetSummary(contract, summary);
+  const decisionOwner = 'AgentServer';
+  const harnessSummary = agentHarnessMetadataSummary({
+    summary,
+    profileId,
+    contractRef,
+    traceRef,
+    budgetSummary,
+    decisionOwner,
+  });
   return {
     harnessProfileId: profileId,
-    harnessContractRef: stringField(agentHarness?.contractRef) ?? stringField(summary?.contractRef),
-    harnessTraceRef: stringField(agentHarness?.traceRef) ?? stringField(summary?.traceRef),
-    harnessSummary: summary,
+    harnessContractRef: contractRef,
+    harnessTraceRef: traceRef,
+    harnessBudgetSummary: budgetSummary,
+    harnessDecisionOwner: decisionOwner,
+    harnessSummary,
+    agentHarnessHandoff: {
+      schemaVersion: AGENT_HARNESS_HANDOFF_SCHEMA_VERSION,
+      shadowMode: true,
+      decisionOwner,
+      harnessProfileId: profileId,
+      harnessContractRef: contractRef,
+      harnessTraceRef: traceRef,
+      budgetSummary,
+      summary: harnessSummary,
+    },
   };
 }
 
@@ -258,7 +288,64 @@ function agentHarnessSummary(
     blockedContextRefCount: Array.isArray(contract.blockedContextRefs) ? contract.blockedContextRefs.length : undefined,
     requiredContextRefCount: Array.isArray(contract.requiredContextRefs) ? contract.requiredContextRefs.length : undefined,
     promptDirectiveCount: Array.isArray(contract.promptDirectives) ? contract.promptDirectives.length : undefined,
+    budgetSummary: agentHarnessBudgetSummary(contract),
+    decisionOwner: 'AgentServer',
     traceStageCount: Array.isArray(trace.stages) ? trace.stages.length : Array.isArray(trace.events) ? trace.events.length : undefined,
+  };
+}
+
+function agentHarnessMetadataSummary(input: {
+  summary?: Record<string, unknown>;
+  profileId?: string;
+  contractRef?: string;
+  traceRef?: string;
+  budgetSummary: Record<string, unknown>;
+  decisionOwner: string;
+}) {
+  const summary = input.summary ?? {};
+  return {
+    schemaVersion: stringField(summary.schemaVersion) ?? 'sciforge.agent-harness-contract.v1',
+    profileId: stringField(summary.profileId) ?? input.profileId,
+    contractRef: input.contractRef ?? stringField(summary.contractRef),
+    traceRef: input.traceRef ?? stringField(summary.traceRef),
+    intentMode: stringField(summary.intentMode),
+    explorationMode: stringField(summary.explorationMode),
+    allowedContextRefCount: numberField(summary.allowedContextRefCount),
+    blockedContextRefCount: numberField(summary.blockedContextRefCount),
+    requiredContextRefCount: numberField(summary.requiredContextRefCount),
+    promptDirectiveCount: numberField(summary.promptDirectiveCount),
+    traceStageCount: numberField(summary.traceStageCount),
+    budgetSummary: input.budgetSummary,
+    decisionOwner: input.decisionOwner,
+  };
+}
+
+function agentHarnessBudgetSummary(contract?: Record<string, unknown>, summary?: Record<string, unknown>) {
+  const summaryBudget = isRecord(summary?.budgetSummary) ? summary.budgetSummary : undefined;
+  if (!contract) return summaryBudget ?? {};
+  const contextBudget = isRecord(contract.contextBudget) ? contract.contextBudget : {};
+  const toolBudget = isRecord(contract.toolBudget) ? contract.toolBudget : {};
+  return {
+    context: {
+      maxPromptTokens: numberField(contextBudget.maxPromptTokens),
+      maxHistoryTurns: numberField(contextBudget.maxHistoryTurns),
+      maxReferenceDigests: numberField(contextBudget.maxReferenceDigests),
+      maxFullTextRefs: numberField(contextBudget.maxFullTextRefs),
+    },
+    tool: {
+      maxWallMs: numberField(toolBudget.maxWallMs),
+      maxToolCalls: numberField(toolBudget.maxToolCalls),
+      maxObserveCalls: numberField(toolBudget.maxObserveCalls),
+      maxActionSteps: numberField(toolBudget.maxActionSteps),
+      maxNetworkCalls: numberField(toolBudget.maxNetworkCalls),
+      maxDownloadBytes: numberField(toolBudget.maxDownloadBytes),
+      maxResultItems: numberField(toolBudget.maxResultItems),
+      maxProviders: numberField(toolBudget.maxProviders),
+      maxRetries: numberField(toolBudget.maxRetries),
+      perProviderTimeoutMs: numberField(toolBudget.perProviderTimeoutMs),
+      costUnits: numberField(toolBudget.costUnits),
+      exhaustedPolicy: stringField(toolBudget.exhaustedPolicy),
+    },
   };
 }
 
@@ -301,4 +388,8 @@ function emitAgentHarnessContractEvent(
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function numberField(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }

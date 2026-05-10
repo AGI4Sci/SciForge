@@ -7,6 +7,11 @@ import {
   type CapabilityManifestKind,
   type CapabilityManifestRegistry,
 } from '../../packages/contracts/runtime/capability-manifest.js';
+import {
+  projectCapabilityManifestsToHarnessCandidates,
+  type UnifiedCapabilityGraph,
+  type UnifiedCapabilityGraphInput,
+} from './capability-harness-candidates.js';
 
 export interface LoadedCapabilityManifestRegistry extends CapabilityManifestRegistry {
   byId: Map<string, CapabilityManifest>;
@@ -14,6 +19,7 @@ export interface LoadedCapabilityManifestRegistry extends CapabilityManifestRegi
   getManifest(id: string): CapabilityManifest | undefined;
   getManifestByProviderId(providerId: string): CapabilityManifest | undefined;
   listBriefs(input?: { kind?: CapabilityManifestKind; domain?: string; routingTag?: string }): CapabilityManifestBrief[];
+  projectHarnessCandidates(input?: Omit<UnifiedCapabilityGraphInput, 'manifests'>): UnifiedCapabilityGraph;
 }
 
 export function loadCoreCapabilityManifestRegistry(
@@ -47,6 +53,11 @@ export function loadCoreCapabilityManifestRegistry(
         if (input.domain && !brief.domains.includes(input.domain)) return false;
         if (input.routingTag && !brief.routingTags.includes(input.routingTag)) return false;
         return true;
+      }),
+    projectHarnessCandidates: (input = {}) =>
+      projectCapabilityManifestsToHarnessCandidates({
+        ...input,
+        manifests: clonedManifests,
       }),
   };
 }
