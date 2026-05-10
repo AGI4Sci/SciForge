@@ -255,6 +255,7 @@ Todo：
 - 2026-05-10：T127-O generated-task guard failure 接入 validation/repair/audit chain。WorkEvidence guard 与 guidance adoption guard 现在能投影为统一 finding，repair-needed payload 会回挂 `refs.validationRepairAudit` / telemetry refs，并写 `sciforge.validation-guard` budget debit 到 executionUnit、workEvidence 与 audit log refs。
 - 2026-05-10：T129-D generated-task / AgentServer direct-payload success 接入 `CapabilityBudgetDebit`。成功 payload 现在写 `sciforge.generated-task-runner` 或 `sciforge.agentserver.direct-payload` debit，回挂 executionUnit、WorkEvidence、attempt refs、budget audit log 与 capability evolution ledger refs。
 - 2026-05-10：T127-P 继续收敛 generated-task validation lifecycle 长文件。generated-task / AgentServer direct-payload success budget debit 的类型、导出函数与拼装 helper 迁入 `generated-task-success-budget-debit.ts`，原 lifecycle 文件 re-export 保持 public import path 兼容，并从 1439 行降到 1176 行。
+- 2026-05-10：T127-Q 将 generated-task validation guard 语义模块抽出。WorkEvidence / guidance adoption guard finding、finding projection、guard chain refs、artifact/current refs 与 guard failure budget debit helper 迁入 `generated-task-validation-guard.ts`，原 lifecycle 文件降到 917 行并退出 1000 行 watch list。
 
 Todo：
 
