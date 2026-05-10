@@ -4,6 +4,7 @@ import { access, readFile } from 'node:fs/promises';
 import {
   buildSampleScientificReproductionTrajectory,
   sanitizeTrajectoryForExport,
+  type ScientificReproductionTrajectory,
   validateScientificReproductionTrajectory,
 } from '../../packages/skills/pipeline_skills/scientific-reproduction-loop/index';
 
@@ -40,6 +41,9 @@ assert.ok(
 );
 assert.ok(sample.repairHistory.length > 0, 'sample should include repair history');
 assert.ok(sample.selfPromptRecommendations.length > 0, 'sample should include self-prompt recommendations');
+assert.equal(sample.selfPromptRecommendations[0]?.budget?.maxAutoSubmitRounds, 0);
+assert.equal(sample.selfPromptRecommendations[0]?.budget?.reviewRequiredBeforeSubmit, true);
+assert.ok(sample.selfPromptRecommendations[0]?.humanConfirmationPoint);
 
 const unsafe = structuredClone(sample);
 unsafe.steps[0].observation.summary =
@@ -58,4 +62,33 @@ const invalidResult = validateScientificReproductionTrajectory(invalid);
 assert.equal(invalidResult.ok, false);
 assert.ok(invalidResult.errors.some((error) => error.includes('steps must contain at least one replayable step')));
 
-console.log('[ok] scientific reproduction trajectory runbook and export contract are replay/audit-shaped');
+const shadowFixture = JSON.parse(await readFile(
+  new URL('../fixtures/scientific-reproduction/self-prompt-shadow/refs-first-2025-setd1b-next-round.json', import.meta.url),
+  'utf8',
+)) as ScientificReproductionTrajectory;
+const shadowValidation = validateScientificReproductionTrajectory(shadowFixture);
+assert.equal(shadowValidation.ok, true, shadowValidation.errors.join('\n'));
+assert.equal(shadowFixture.subject.paperRefs.length > 0, true, 'shadow fixture should identify the new paper by ref');
+assert.ok(
+  shadowFixture.steps.some((step) => step.prompt?.role === 'self-prompt-shadow'),
+  'shadow fixture should preserve a self-prompt prompt record',
+);
+const shadowRecommendation = shadowFixture.selfPromptRecommendations[0];
+assert.ok(shadowRecommendation, 'shadow fixture should include a next-round recommendation');
+assert.match(shadowRecommendation.nextPrompt, /claim 2025-setd1b-c2|Figure 3/i, 'next-round question should be concrete');
+assert.ok(shadowRecommendation.requiredRefs.length >= 5, 'next-round recommendation should require refs');
+assert.ok(shadowRecommendation.requiredRefs.every((ref) => /^(artifact|workspace-file|trace|screen|execution-unit|audit|ledger):/.test(ref.ref)));
+assert.match(shadowRecommendation.stopCondition, /Stop|stop|budget|failure|unavailable/, 'stop condition should be explicit');
+assert.match(shadowRecommendation.qualityGate, /refs|artifact|evidence|failure|negative/i, 'quality gate should be evidence-aware');
+assert.equal(shadowRecommendation.budget?.maxShadowRounds, 1);
+assert.equal(shadowRecommendation.budget?.maxAutoSubmitRounds, 0, 'shadow record must not allow automatic chained submits');
+assert.equal(shadowRecommendation.budget?.stopOnRepeatedFailure, true);
+assert.equal(shadowRecommendation.budget?.reviewRequiredBeforeSubmit, true);
+assert.ok(shadowRecommendation.humanConfirmationPoint, 'shadow record should name the human confirmation point');
+assert.notEqual(shadowRecommendation.mode, 'auto-submit-eligible', 'shadow acceptance fixture must remain human-reviewed');
+
+const shadowSerialized = JSON.stringify(shadowFixture);
+assert.doesNotMatch(shadowSerialized, /\/Applications\/workspace/);
+assert.doesNotMatch(shadowSerialized, /api[_-]?key|secret-token-value|RAW_/i);
+
+console.log('[ok] scientific reproduction trajectory and self-prompt shadow fixtures are replay/audit-shaped');

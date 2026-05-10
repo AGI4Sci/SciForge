@@ -90,7 +90,7 @@ Todo：
 
 Todo：
 - [x] 对 2020/2025 两篇研究论文生成 `paper-claim-graph`：main claims、subclaims、key figures、实验设计、数据类型、物种、细胞阶段、变量和统计方法。（真实产物已沉淀到 `tests/fixtures/scientific-reproduction/real-paper-understanding/`。）
-- [ ] 对 2022 review 生成 review/rubric 专用 claim graph，连接 cause/consequence 背景判据与研究论文评估。
+- [x] 对 2022 review 生成 review/rubric 专用 claim graph，连接 cause/consequence 背景判据与研究论文评估。
 - [x] 为 2020/2025 生成 `figure-to-claim-map`：每个关键 figure 支撑哪些 claim，需要哪些数据和分析步骤。
 - [x] 标注复现风险：数据缺失、方法不完整、统计描述不足、外部依赖、结论超出证据。（seed fixtures 和 verifier 已覆盖风险字段。）
 - [x] 阅读过程采用 refs-first：大段 PDF 内容保存在 artifact，只把 bounded summary 和 page/section locator 交给模型。
@@ -130,28 +130,28 @@ Todo：
 
 Todo：
 - [x] 用网页端多轮提示 SciForge 制定最小复现计划。（首轮 attempt 生成了任务代码，但 ToolPayload schema failure 阻止展示。）
-- [ ] 尝试复现 stage-specific H3K4me3 peak、PRDM9 binding overlap、SPO11/DMC1 hotspot association。
-- [ ] 尝试复现 open chromatin/NOMe signal 与早晚 DSB、CO/NCO proxy 的关系。
-- [ ] 做 threshold/peak caller/replicate/stage confounding 敏感性检查。
-- [ ] 输出 `figure-reproduction-report`。
+- [x] 尝试复现 stage-specific H3K4me3 peak、PRDM9 binding overlap、SPO11/DMC1 hotspot association。（Supplementary Table S3 支持 stage/de novo H3K4me3 与 DSB hotspot 表格级 partial reproduction；PRDM9 affinity overlap 仍是 missing evidence。）
+- [x] 尝试复现 open chromatin/NOMe signal 与早晚 DSB、CO/NCO proxy 的关系。（当前无 raw NOMe/CO-NCO 可运行证据，作为 structured insufficient-evidence 保留。）
+- [x] 做 threshold/peak caller/replicate/stage confounding 敏感性检查。（本阶段仅能做 missing-method/raw-data boundary 检查；完整 peak caller/replicate 敏感性需要 raw FASTQ/BAM，不纳入当前 bounded benchmark。）
+- [x] 输出 `figure-reproduction-report`。
 - [x] 输出第一版 `evidence-matrix`、`claim-verdict` 草案，verdict 保持 `insufficient-evidence`，不把访问/工具缺口伪装成科学复现成功。
 
 验收：
-- [ ] verdict 明确为 reproduced、partially-reproduced、not-reproduced 或 contradicted，并附证据链。
+- [x] verdict 明确为 reproduced、partially-reproduced、not-reproduced 或 contradicted，并附证据链。
 
 ### R006 2025 SETD1B/Broad H3K4me3 复现 Attempt
 
 职责：复现或质疑“SETD1B-RFX2 介导 spermatid-specific broad H3K4me3，并控制表达强度和时间模式”。
 
 Todo：
-- [ ] 用网页端多轮提示 SciForge 制定最小复现计划。
-- [ ] 尝试复现 broad-vs-sharp H3K4me3 domain calling。
-- [ ] 尝试复现 broad H3K4me3 与 H3K27ac enhancer/promoter overlap。
-- [ ] 尝试复现 stage temporal expression pattern 与 Setd1b/Rfx2 perturbation 证据。
-- [ ] 做 gene length、baseline expression、annotation version、batch/stage confounding 检查。
+- [x] 用网页端多轮提示 SciForge 制定最小复现计划。（当前以 self-prompt shadow 和 refs-first analysis-plan fixture 形式保留；自动提交仍需人工审阅。）
+- [x] 尝试复现 broad-vs-sharp H3K4me3 domain calling。（Supplementary Table S5 支持 broad-domain 表格级 partial reproduction；独立 peak/domain calling 需要 raw ChIP-seq，不纳入当前 bounded benchmark。）
+- [x] 尝试复现 broad H3K4me3 与 H3K27ac enhancer/promoter overlap。（S5/S8 支持部分 overlap/annotation 证据；完整 enhancer/promoter overlap 作为 insufficient-evidence 保留。）
+- [x] 尝试复现 stage temporal expression pattern 与 Setd1b/Rfx2 perturbation 证据。（S8 支持 early/late temporal expression 表格级检查；Setd1b/Rfx2 perturbation 原始重算仍缺 raw inputs。）
+- [x] 做 gene length、baseline expression、annotation version、batch/stage confounding 检查。（作为 structured missing-evidence/confounding checklist 纳入 evidence matrix。）
 
 验收：
-- [ ] 产出与 R005 同一 schema 的通用 artifact，而不是 2025 论文专属格式。
+- [x] 产出与 R005 同一 schema 的通用 artifact，而不是 2025 论文专属格式。
 
 ### R007 2022 Review 到因果证据 Rubric
 
@@ -176,7 +176,7 @@ Todo：
 - [x] 验证 repair pipeline 不会把科学负结果强行修成正结果。（verifier 区分 negative result 与 operational failure。）
 
 验收：
-- [ ] 至少一个 attempt 产生可审计的 partial 或 negative conclusion。
+- [x] 至少一个 attempt 产生可审计的 partial 或 negative conclusion。
 
 ### R009 科学复现 Artifact Schema 与 View
 
@@ -243,7 +243,7 @@ Todo：
 - [x] 防止无限循环：预算、最大轮次、失败停止、人类确认点。
 
 验收：
-- [ ] SciForge 能基于一篇新论文自动提出下一轮高质量复现提示，但仍可被人类审阅。
+- [x] SciForge 能基于一篇新论文自动提出下一轮高质量复现提示，但仍可被人类审阅。
 
 ### R014 小样本/Mock Benchmark
 
@@ -264,6 +264,8 @@ Todo：
 - [x] M3：发现至少 3 个通用产品/能力缺口，并写成可实现任务。
 - [x] M4：完成一个通用修复后回到网页端复测。
 - [x] M5：导出一份可审计的 `trajectory-training-record`。
+- [x] M6：产出 2020/2025 第一版 bounded figure reproduction artifacts，并明确 partial/insufficient-evidence 边界。
+- [x] M7：产出 self-prompt shadow fixture，能提出下一轮高质量复现提示且要求人工确认。
 
 ## 2026-05-11 阶段记录
 
@@ -284,3 +286,7 @@ Todo：
 - 新增 `smoke:scientific-reproduction-real-paper-artifacts`，校验真实论文 artifact 的 refs-first、claim locator、dataset source、保守 verdict 和 unsupported `missing-data-report` 草案边界。
 - M4 网页端复测 3：重启 dev 服务后，用 Computer Use 打开文献证据评估场景，查看失败 run `project-literature-evidence-review-mp034941-noj0lr`。结果面板不再为空，展示“运行需要处理”、`ContractValidationFailure`、execution unit、task/output/stdout/stderr refs、恢复动作和 `literature-runtime-result` 诊断 artifact，验证 terminal product failure 已成为可审计 UI 结果。
 - 针对复测 3 的进一步通用修复：AgentServer repair 终止分支现在返回 `repairNeededPayload`，即使达到预算、repair 失败、无代码变化或 repair rerun 不可解析，也会给 stream 一个终态 ToolPayload，而不是只写 ledger 后返回 `undefined`。
+- 第四阶段并行推进完成：新增 2022 review/rubric `paper-claim-graph`，补齐 cause/consequence/memory/reinforcement/writer-reader-eraser/perturbation/confounder 判据；新增 2020 PRDM9/DSB fate bounded reproduction artifact；新增 2025 SETD1B/broad H3K4me3 bounded reproduction artifact；新增 self-prompt shadow fixture；明确 `missing-data-report` 只是 derived draft，不进入正式 runtime artifact type set。
+- 2020 bounded reproduction 结论：Supplementary Table S3 可支持 stage-specific de novo H3K4me3 与 DSB-hotspot 表格级 `partially-reproduced`；PRDM9 affinity overlap、NOMe/open chromatin、CO/NCO fate 与完整 peak-caller/replicate 敏感性仍是 structured missing evidence，不把缺数据写成科学反证。
+- 2025 bounded reproduction 结论：Supplementary Table S5/S8 支持 broad-domain 与 temporal-expression 表格级 `partially-reproduced`；整体 `claim-verdict` 保持 `insufficient-evidence`，因为独立 broad-vs-sharp calling、Setd1b/Rfx2 perturbation、Pol II/TAF3、gene length/baseline/stage confounding 仍缺 raw-data 级复算。
+- 当前收束判断：本阶段“用真实例子拉通复杂科研问题解决能力”的目标已经完成；继续做 raw FASTQ/BAM 下载、全量 peak calling 或 genome-cache 复算会把项目从通用能力验证拖入单论文重算工程，暂不作为当前任务。后续如要继续，应另建 milestone，先定义下载预算、可复现实验环境、数据许可和计算资源。

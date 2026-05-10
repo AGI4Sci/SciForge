@@ -1,0 +1,292 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "evidence-matrix",
+  "sourceRefs": [
+    {
+      "ref": "artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3",
+      "role": "source",
+      "summary": "Claim graph for the 2025 SETD1B paper."
+    },
+    {
+      "ref": "artifact:dataset-inventory-draft#dataset-2025-supplement-tables",
+      "role": "data",
+      "summary": "Local S1/S5/S8 supplement inventory."
+    },
+    {
+      "ref": "artifact:2025-setd1b-broad-h3k4me3.analysis-plan",
+      "role": "source",
+      "summary": "R006 first-pass reproduction plan."
+    }
+  ],
+  "rows": [
+    {
+      "id": "row-local-input-boundary",
+      "claimId": "2025-setd1b-c2",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s1.xlsx",
+          "role": "table",
+          "summary": "Sample metadata only."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s5.xlsx",
+          "role": "table",
+          "summary": "Broad H3K4me3/H3K27ac domain tables."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s8.xlsx",
+          "role": "table",
+          "summary": "Early and late expressed gene sets."
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "trace:worker-c-r006-2025-supplement-parser",
+          "role": "code",
+          "summary": "Bounded local supplement parse only; no sequencing data download."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2025-gse242515",
+          "role": "data",
+          "summary": "Public sequencing accession discovered but not materialized."
+        }
+      ],
+      "verdict": "insufficient-evidence",
+      "rationale": "The local evidence supports supplement-table checks only. It does not support independent ChIP-seq peak calling, raw RNA-seq differential expression, Pol II/TAF3 occupancy analysis, Rfx2 KO analysis, or phenotype reproduction."
+    },
+    {
+      "id": "row-fig3-broad-domain-table-check",
+      "claimId": "2025-setd1b-c2",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s5.xlsx#Broad H3K4me3 domains",
+          "role": "table",
+          "summary": "5136 H3K4me3 broad-domain rows; all parsed intervals are at least 5001 bp."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=449-455",
+          "role": "source",
+          "summary": "Paper reports up to 5136 broad H3K4me3 domains with promoter/distal distribution and H3K27ac overlap."
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=1469-1478",
+          "role": "method",
+          "summary": "Merged peaks longer than 5 kb are classified as broad H3K4me3/H3K27ac domains."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2025-supplement-tables",
+          "role": "table"
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "trace:worker-c-r006-2025-supplement-parser#table-s5",
+          "role": "code"
+        }
+      ],
+      "verdict": "partially-reproduced",
+      "rationale": "Supplementary Table S5 reproduces the published broad-domain inventory at table level: 5136 H3K4me3 domains, length range 5001-114117 bp, median 6884 bp, mean 7839 bp, with RS2/RS4/RS8 broad-status counts of 3391/4085/2147. However, the sharp/control H3K4me3 comparison cannot be reproduced from S5 alone, and the table is not an independent peak-calling run."
+    },
+    {
+      "id": "row-fig3-h3k27ac-overlap",
+      "claimId": "2025-setd1b-c2",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s5.xlsx#Broad H3K27ac domains",
+          "role": "table",
+          "summary": "4533 H3K27ac broad-domain rows; all parsed intervals are at least 5000 bp."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=449-455",
+          "role": "source",
+          "summary": "Paper reports broad H3K4me3/H3K27ac overlap."
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "trace:worker-c-r006-2025-supplement-parser#interval-overlap",
+          "role": "code",
+          "summary": "Any-base overlap over sorted S5 intervals; reported denominators are H3K27ac domains unless otherwise noted."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2025-supplement-tables",
+          "role": "table"
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "trace:worker-c-r006-2025-supplement-parser#interval-overlap",
+          "role": "code"
+        }
+      ],
+      "verdict": "partially-reproduced",
+      "rationale": "S5 interval overlap gives H3K27ac broad-domain overlap with H3K4me3 broad domains of 73.7% overall, 79.8% in RS2, 72.4% in RS4, and 68.6% in RS8. This supports substantial H3K27ac overlap but remains denominator- and stage-sensitive; exact paper panel reproduction requires the original overlap definition and processed peak files."
+    },
+    {
+      "id": "row-fig5-setd1b-perturbation-boundary",
+      "claimId": "2025-setd1b-c4",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s1.xlsx#ChIP-seq",
+          "role": "table",
+          "summary": "S1 metadata include 14 Setd1b-labeled ChIP-seq rows, including H3K4me3 Setd1bKO RS4/RS8, H3K27ac Setd1bKO RS4, Pol II, TAF3, and input samples."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s1.xlsx#RNA-seq",
+          "role": "table",
+          "summary": "S1 metadata include 8 Setd1bKO RNA-seq rows across bulk RS, RS4, RS8, and LS replicates."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=819-840",
+          "role": "source",
+          "summary": "Paper text reports loss of broad H3K4me3 and altered H3K27ac in Setd1b cKO."
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=1331-1355",
+          "role": "method",
+          "summary": "ChIP-seq processing and peak-calling methods."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2025-gse242515",
+          "role": "data"
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "artifact:missing-data-report-draft#missing-2025-nome-rnaseq-code",
+          "role": "code",
+          "summary": "Public code coverage is incomplete; no local execution artifact exists for cKO domain calling."
+        }
+      ],
+      "verdict": "insufficient-evidence",
+      "rationale": "The local supplement subset confirms that Setd1b perturbation samples exist, but it does not provide cKO domain calls, signal matrices, IF quantification, or execution outputs. The claim remains insufficient-evidence in this first pass rather than reproduced."
+    },
+    {
+      "id": "row-fig7-temporal-expression-s8",
+      "claimId": "2025-setd1b-c6",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s8.xlsx#Early expressed genes",
+          "role": "table",
+          "summary": "515 early expressed genes with stage expression and H3K4me3 columns."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s8.xlsx#Lately expressed genes",
+          "role": "table",
+          "summary": "506 late expressed genes with stage expression and H3K4me3 columns."
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "trace:worker-c-r006-2025-supplement-parser#table-s8",
+          "role": "code",
+          "summary": "Per-gene maximum-expression stage and median expression/H3K4me3 by stage."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2025-supplement-tables",
+          "role": "table"
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "trace:worker-c-r006-2025-supplement-parser#table-s8",
+          "role": "code"
+        }
+      ],
+      "verdict": "partially-reproduced",
+      "rationale": "S8 supports temporal gene-set behavior at table level. Early genes peak mainly at RS2 and RS4 (205 and 116 of 515 genes) with median expression RS2=30.29, RS4=24.457, RS8=8.348, RS10=1.84. Late genes peak mainly at RS10 (475 of 506 genes) with median expression RS2=3.294, RS4=9.276, RS8=55.951, RS10=129.043. This does not by itself reproduce Setd1b cKO temporal misexpression."
+    },
+    {
+      "id": "row-s12-rfx2-perturbation-boundary",
+      "claimId": "2025-setd1b-c8",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=1064-1081",
+          "role": "source",
+          "summary": "Paper text reports Rfx2 KO reduction of broad H3K4me3 domains and exogenous co-IP between RFX2 and SETD1B."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s1.xlsx",
+          "role": "table",
+          "summary": "Local S1/S5/S8 supplement subset contains no Rfx2 sample metadata or Rfx2 KO domain table."
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=1450-1478",
+          "role": "method",
+          "summary": "Motif, broad-domain, and enhancer assignment methods relevant to the RFX2 axis."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2025-gse242515",
+          "role": "data"
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#code-2025-kas-analyzer",
+          "role": "code"
+        }
+      ],
+      "verdict": "insufficient-evidence",
+      "rationale": "RFX2 remains a PDF-text claim in this local pass. No Rfx2 KO processed domains, motif output, endogenous recruitment evidence, or co-IP quantification were locally reproduced."
+    },
+    {
+      "id": "row-confounding-sensitivity-boundary",
+      "claimId": "2025-setd1b-c6",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s8.xlsx",
+          "role": "table",
+          "summary": "S8 contains expression baselines and H3K4me3 values but no gene length or matched-control annotation."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=1396-1478",
+          "role": "method",
+          "summary": "Methods reference mm10 RefSeq annotation, FPKM, DESeq2, and broad-domain assignment."
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "artifact:2025-setd1b-broad-h3k4me3.analysis-plan#r006-2025-step-06-confounding-sensitivity-plan",
+          "role": "verifier",
+          "summary": "Planned controls for gene length, baseline expression, annotation version, batch, and stage composition."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2025-gse242515",
+          "role": "data"
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "trace:worker-c-r006-2025-supplement-parser#table-s8",
+          "role": "code"
+        }
+      ],
+      "verdict": "insufficient-evidence",
+      "rationale": "Baseline temporal expression can be summarized from S8, but gene length is absent, annotation release details are not materialized as a gene model table, and stage-composition/batch effects cannot be tested without sample-level count/signal matrices. These confounders block a stronger causal verdict."
+    }
+  ],
+  "diagnostics": [
+    "Rows marked partially-reproduced are supplement-table reproductions, not raw-data reproductions.",
+    "Rows marked insufficient-evidence identify missing processed/raw data or missing confounder controls rather than scientific contradiction."
+  ]
+}

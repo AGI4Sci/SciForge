@@ -194,7 +194,6 @@
             "enum": [
               "scientific-reproduction-profile",
               "dataset-inventory",
-              "missing-data-report",
               "analysis-plan",
               "figure-reproduction-report",
               "evidence-matrix",
@@ -236,7 +235,7 @@
         "outputRef": "tests/fixtures/scientific-reproduction/mock-dataset-discovery-cases.json#dataset-discovery-available.expectedArtifacts"
       },
       {
-        "title": "Dataset discovery missing emits missing-data report",
+        "title": "Dataset discovery missing records inventory gaps",
         "inputRef": "tests/fixtures/scientific-reproduction/mock-dataset-discovery-cases.json#dataset-discovery-missing",
         "outputRef": "tests/fixtures/scientific-reproduction/mock-dataset-discovery-cases.json#dataset-discovery-missing.expectedArtifacts"
       }
@@ -263,7 +262,7 @@
     "repairHints": [
       {
         "failureCode": "dataset-discovery-missing",
-        "summary": "Emit a missing-data-report and keep downstream claims partial or unverified.",
+        "summary": "Record missing sources in dataset-inventory.missingDatasets and keep downstream claims partial or unverified.",
         "recoverActions": [
           "record-attempted-sources",
           "try-processed-or-supplementary-tables",
@@ -318,7 +317,6 @@
       "reusableOutputs": [
         "scientific-reproduction-profile",
         "dataset-inventory",
-        "missing-data-report",
         "analysis-plan",
         "figure-reproduction-report",
         "evidence-matrix",
@@ -352,8 +350,12 @@
         "processed-table-or-supplement",
         "tiny-schema-preserving-fixture",
         "metadata-only-inventory",
+        "metadata-only-inventory-with-missingDatasets"
+      ],
+      "derivedDraftOutputs": [
         "missing-data-report"
       ],
+      "derivedDraftPolicy": "missing-data-report is a human-facing draft/export note derived from dataset-inventory.missingDatasets and claim-verdict.missingEvidence; it is not a formal runtime artifact type.",
       "mockProviderCasesRef": "tests/fixtures/scientific-reproduction/mock-dataset-discovery-cases.json"
     }
   },

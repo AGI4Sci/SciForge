@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import { isScientificReproductionArtifactType } from '@sciforge-ui/runtime-contract';
 import {
   validateCapabilityManifestShape,
   type CapabilityManifest,
@@ -29,7 +30,6 @@ assert.equal(manifest.metadata?.profileContract, 'sciforge.scientific-reproducti
 const outputTypes = new Set(manifest.metadata?.reusableOutputs as string[]);
 for (const requiredType of [
   'dataset-inventory',
-  'missing-data-report',
   'analysis-plan',
   'figure-reproduction-report',
   'evidence-matrix',
@@ -38,6 +38,10 @@ for (const requiredType of [
 ]) {
   assert.equal(outputTypes.has(requiredType), true, `${requiredType} must be declared as reusable output`);
 }
+assert.equal(outputTypes.has('missing-data-report'), false, 'missing-data-report is a derived draft, not a reusable runtime output');
+assert.equal(isScientificReproductionArtifactType('missing-data-report'), false, 'missing-data-report must not be promoted into runtime artifact types');
+assert.deepEqual(manifest.metadata?.derivedDraftOutputs, ['missing-data-report']);
+assert.match(String(manifest.metadata?.derivedDraftPolicy), /not a formal runtime artifact type/);
 
 const toolClasses = new Set(manifest.metadata?.toolClasses as string[]);
 for (const requiredToolClass of [
@@ -61,7 +65,7 @@ assert.deepEqual(manifest.metadata?.degradationPolicy, [
   'processed-table-or-supplement',
   'tiny-schema-preserving-fixture',
   'metadata-only-inventory',
-  'missing-data-report',
+  'metadata-only-inventory-with-missingDatasets',
 ]);
 
 assert.match(skillText, /Never replace missing experimental data with paper prose/);
@@ -86,7 +90,7 @@ for (const entry of fixtures.cases) {
 
 const missing = caseById('dataset-discovery-missing');
 assert.equal(missing.mockResponse.status, 'missing');
-assert.ok(missing.expectedArtifacts.some((artifact) => artifact.type === 'missing-data-report' && artifact.status === 'missing-data'));
+assert.ok(missing.expectedArtifacts.some((artifact) => artifact.type === 'dataset-inventory' && artifact.status === 'missing-data'));
 assert.ok(missing.expectedArtifacts.some((artifact) => artifact.type === 'claim-verdict' && artifact.status === 'unverified'));
 
 const available = caseById('dataset-discovery-available');
@@ -99,7 +103,7 @@ const timeout = caseById('dataset-discovery-timeout');
 assert.equal(timeout.mockResponse.status, 'timeout');
 assert.equal(timeout.mockResponse.degradationAction, 'metadata-only-or-missing-data');
 assert.ok(timeout.mockResponse.timeoutMs && timeout.mockResponse.timeoutMs <= timeout.mockResponse.providerLatencyMs);
-assert.ok(timeout.expectedArtifacts.some((artifact) => artifact.type === 'missing-data-report' && artifact.status === 'timeout'));
+assert.ok(timeout.expectedArtifacts.some((artifact) => artifact.type === 'dataset-inventory' && artifact.status === 'timeout'));
 
 const discovery = await discoverPackageCapabilityManifestsFromFiles({
   rootDir: skillDir,

@@ -1,0 +1,101 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "analysis-notebook",
+  "sourceRefs": [
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2020/table-s3.xlsx",
+      "role": "table",
+      "summary": "Supplementary Table S3; stage-resolved de novo H3K4me3 peak tables with DSB hotspot Yes/No annotations."
+    },
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2020/table-s6.xlsx",
+      "role": "table",
+      "summary": "Supplementary Table S6; mid-zygotene de novo H3K4me3 peaks annotated for H3K36me3, H3K27ac, and H3K9me2 dip."
+    },
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=113-148",
+      "role": "source",
+      "summary": "Paper text reporting stage-specific PRDM9-mediated H3K4me3 peak counts and hotspot-associated counts."
+    },
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=517-547",
+      "role": "method",
+      "summary": "Paper methods for ChIP-seq peak calling, hotspot-associated H3K4me3 classification, and statistical tests."
+    }
+  ],
+  "notebookRefs": [
+    {
+      "ref": "artifact:2020-prdm9-dsb-fate.analysis-notebook#supplement-table-audit",
+      "role": "notebook",
+      "summary": "Bounded first-pass audit of local supplementary tables; no GEO raw or processed sequencing data were downloaded."
+    }
+  ],
+  "environmentRefs": [
+    {
+      "ref": "runtime:python3-stdlib-zipfile-elementtree",
+      "role": "code",
+      "summary": "Used Python standard-library zipfile and ElementTree to read xlsx workbook XML because openpyxl was not installed."
+    }
+  ],
+  "cells": [
+    {
+      "id": "cell-table-s3-stage-counts",
+      "purpose": "Parse each Supplementary Table S3 worksheet, locate the DSB hotspots column, count de novo H3K4me3 rows, DSB-hotspot Yes/No rows, and simple peak-width summaries.",
+      "codeRef": {
+        "ref": "analysis-session:2026-05-11-worker-b#xlsx-xml-stage-count-parser",
+        "role": "code",
+        "summary": "Standard-library xlsx XML parser used in this worker pass; logic finds the header row containing DSB hotspots and counts non-empty genomic rows."
+      },
+      "outputRefs": [
+        {
+          "ref": "artifact:2020-prdm9-dsb-fate.analysis-notebook#table-s3-stage-summary",
+          "role": "table",
+          "summary": "Leptotene 3358 peaks / 2773 DSB-hotspot Yes; early-zygotene 13490 / 9440; mid-zygotene 16540 / 10137; late-zygotene 8880 / 7681; early 1-pachytene 8187 / 7375."
+        }
+      ],
+      "status": "partial",
+      "diagnostics": [
+        "The row counts reproduce the stage-specific peak counts and hotspot-associated counts reported in the paper text for the five locally available Table S3 worksheets.",
+        "This cell does not recalculate peaks from ChIP-seq reads, does not test PRDM9 affinity-seq overlap, and does not infer CO/NCO fate."
+      ]
+    },
+    {
+      "id": "cell-table-s6-comark-counts",
+      "purpose": "Parse Supplementary Table S6 to count mid-zygotene de novo H3K4me3 peaks annotated with newly generated H3K36me3, newly generated H3K27ac, or H3K9me2 dip.",
+      "codeRef": {
+        "ref": "analysis-session:2026-05-11-worker-b#xlsx-xml-comark-count-parser",
+        "role": "code",
+        "summary": "Standard-library xlsx XML parser used in this worker pass; logic finds the histone-mark annotation columns and counts Yes values."
+      },
+      "outputRefs": [
+        {
+          "ref": "artifact:2020-prdm9-dsb-fate.analysis-notebook#table-s6-comark-summary",
+          "role": "table",
+          "summary": "Table S6 contains 16540 mid-zygotene de novo H3K4me3 rows; 1561 H3K36me3 Yes, 3403 H3K27ac Yes, and 1012 H3K9me2 dip Yes."
+        }
+      ],
+      "status": "partial",
+      "diagnostics": [
+        "This verifies the local table is aligned with the mid-zygotene de novo H3K4me3 universe but does not reproduce Fig. 4/5 signal profiles or accessibility statistics."
+      ]
+    },
+    {
+      "id": "cell-negative-boundary",
+      "purpose": "Assess whether the current local evidence establishes a scientific contradiction for PRDM9-mediated DSB fate.",
+      "outputRefs": [
+        {
+          "ref": "artifact:2020-prdm9-dsb-fate.claim-verdict#missing-evidence",
+          "role": "verifier",
+          "summary": "No contradiction is established; the core fate claim remains limited by missing PRDM9 affinity overlap, NOMe accessibility calculations, direct CO/NCO outcome data, and original source code."
+        }
+      ],
+      "status": "partial",
+      "diagnostics": [
+        "The correct current conclusion is partial table-level reproduction plus insufficient evidence for DSB fate causality, not not-reproduced or contradicted."
+      ]
+    }
+  ],
+  "notes": [
+    "This analysis-notebook fixture is intentionally refs-first and bounded; it records computed summaries from local supplements without embedding raw table rows."
+  ]
+}

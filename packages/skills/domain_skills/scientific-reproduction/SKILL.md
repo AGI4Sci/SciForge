@@ -2,7 +2,7 @@
 name: scientific-reproduction
 description: Generic bioinformatics reproduction playbook for data discovery, execution planning, degradation, and auditable negative or partial results without paper-specific shortcuts.
 skillDomains: [literature, omics, knowledge]
-outputArtifactTypes: [scientific-reproduction-profile, dataset-inventory, missing-data-report, analysis-plan, figure-reproduction-report, evidence-matrix, claim-verdict, negative-result-report]
+outputArtifactTypes: [scientific-reproduction-profile, dataset-inventory, analysis-plan, figure-reproduction-report, evidence-matrix, claim-verdict, negative-result-report]
 tags: [scientific-reproduction, bioinformatics, dataset-discovery, omics, benchmark, negative-results]
 requiredCapabilities: [skill.scientific-reproduction.profile]
 ---
@@ -25,12 +25,13 @@ Use this skill when a paper reproduction task needs a generic bioinformatics pla
 
 - `scientific-reproduction-profile`: selected budget, tool classes, fallback policy, and fixture/provider selection.
 - `dataset-inventory`: sources checked, accession candidates, assay/sample metadata, file classes, size estimates, license/access state, and availability.
-- `missing-data-report`: unavailable sources, reason, attempted probes, possible proxies, and whether the result remains scientifically interpretable.
 - `analysis-plan`: analysis units, expected inputs, parameters, statistics, plots, and validation checks.
 - `figure-reproduction-report`: per-figure attempt status, inputs, code refs, stdout/stderr refs, metrics, and caveats.
 - `evidence-matrix`: claim-to-evidence links, supporting and contradicting evidence, missing evidence, and confidence.
 - `claim-verdict`: one of `reproduced`, `partially-reproduced`, `not-reproduced`, `contradicted`, or `unverified`.
 - `negative-result-report`: structured explanation when a scientific claim is unsupported or contradicted.
+
+`missing-data-report` may appear as a derived draft or export note for humans, but it is not a formal runtime artifact type. Encode unavailable sources in `dataset-inventory.missingDatasets`, carry downstream uncertainty in `claim-verdict.missingEvidence`, and reserve `negative-result-report` for actual not-reproduced or contradicted scientific checks.
 
 ## Tool Classes
 
@@ -60,7 +61,7 @@ Follow this order and record the chosen branch in the profile:
 2. Use processed matrices, peak tables, or supplementary tables when raw data is unavailable or over budget.
 3. Use a tiny fixture that preserves schema and edge cases when environment or genome caches are incomplete.
 4. Use metadata-only inventory when files are available but too large for the active budget.
-5. Emit `missing-data-report` and mark downstream claims as `unverified` or partial when discovery fails, access is restricted, or providers time out.
+5. Record missing sources in `dataset-inventory.missingDatasets` and mark downstream claims as `unverified` or partial when discovery fails, access is restricted, or providers time out.
 
 Never replace missing experimental data with paper prose. A missing source is a valid result, not a reason to fabricate evidence.
 
@@ -68,9 +69,9 @@ Never replace missing experimental data with paper prose. A missing source is a 
 
 Benchmark and smoke runs use the fixture cases in `tests/fixtures/scientific-reproduction/mock-dataset-discovery-cases.json`.
 
-- `dataset-discovery-missing`: no accession or supplement resolves; expected output is a `missing-data-report`.
+- `dataset-discovery-missing`: no accession or supplement resolves; expected output is a `dataset-inventory` with `missingDatasets`.
 - `dataset-discovery-available`: accession metadata and tiny processed fixtures are available; expected output is a bounded `dataset-inventory` plus an `analysis-plan`.
-- `dataset-discovery-timeout`: provider exceeds the discovery timeout; expected output records timeout diagnostics and degrades to metadata-only or missing data.
+- `dataset-discovery-timeout`: provider exceeds the discovery timeout; expected output records timeout diagnostics in `dataset-inventory` and degrades to metadata-only or missing data.
 
 These cases must not make live network calls or download large data. They model provider behavior and expected contracts only.
 

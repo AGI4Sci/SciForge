@@ -398,6 +398,16 @@ function selfPromptRecommendationsFromAttempt(
     requiredRefs: refs,
     stopCondition: 'Stop if the required artifact, stdout/stderr, output, or validation refs cannot be resolved from workspace storage.',
     qualityGate: 'The next response must cite workspace refs and separate system failures from domain conclusions.',
+    budget: {
+      maxShadowRounds: 1,
+      maxAutoSubmitRounds: 0,
+      maxToolCalls: 6,
+      maxRuntimeMinutes: 20,
+      stopOnRepeatedFailure: true,
+      reviewRequiredBeforeSubmit: true,
+    },
+    humanConfirmationPoint: 'A human reviewer must inspect the required refs and approve the follow-up before SciForge submits another turn.',
+    reviewChecklist: ['required refs resolve', 'failure classification is explicit', 'next prompt advances one bounded objective'],
     mode: 'human-review-required',
   }];
 }

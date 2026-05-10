@@ -1,0 +1,264 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction-trajectory.v1",
+  "attemptRef": "attempt:scientific-reproduction:self-prompt-shadow:2025-setd1b:1",
+  "runbookRef": "docs/runbooks/sciforge-web-reproduction.md",
+  "workspaceRef": "workspace:.sciforge",
+  "subject": {
+    "title": "SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development",
+    "topic": "Shadow-generate the next human-reviewable reproduction prompt for a new paper from existing refs-first artifacts.",
+    "scenarioId": "scientific-reproduction-web",
+    "paperRefs": [
+      {
+        "ref": "artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3",
+        "kind": "artifact",
+        "description": "Refs-first claim graph for the new paper; PDF text remains outside the prompt."
+      }
+    ]
+  },
+  "actors": [
+    {
+      "id": "operator.codex-worker-d",
+      "role": "codex-worker"
+    },
+    {
+      "id": "sciforge.backend",
+      "role": "sciforge-backend"
+    },
+    {
+      "id": "sciforge.self-prompt-shadow",
+      "role": "sciforge-backend"
+    }
+  ],
+  "steps": [
+    {
+      "id": "step-001-observe-artifacts",
+      "kind": "inspect-artifact",
+      "timestamp": "2026-05-11T01:00:00.000Z",
+      "action": {
+        "modality": "workspace",
+        "command": "inspect existing refs-first artifacts before generating a follow-up prompt",
+        "target": "scientific reproduction artifact refs",
+        "screenBeforeRefs": [
+          {
+            "ref": "screen:self-prompt-shadow:artifact-list",
+            "captureKind": "window-metadata",
+            "summary": "The artifact list contains claim graph, figure map, dataset inventory, evidence matrix, and draft verdict refs."
+          }
+        ],
+        "screenAfterRefs": [
+          {
+            "ref": "screen:self-prompt-shadow:review-ready",
+            "captureKind": "vision-summary",
+            "summary": "The next prompt is visible as a reviewable shadow recommendation, not submitted automatically."
+          }
+        ],
+        "traceRefs": [
+          {
+            "ref": "trace:self-prompt-shadow:2025-setd1b:observe",
+            "kind": "trace",
+            "description": "Shadow recommendation observe step."
+          }
+        ]
+      },
+      "observation": {
+        "summary": "Existing artifacts identify testable 2025 SETD1B claims but the draft verdict says no broad-domain, overlap, or temporal-expression computation has run yet.",
+        "toolResultRefs": [
+          {
+            "ref": "execution-unit:self-prompt-shadow:2025-setd1b:observe",
+            "kind": "execution-unit",
+            "description": "Bounded workspace inspection; no new turn submitted."
+          }
+        ],
+        "artifactRefs": [
+          {
+            "ref": "artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3",
+            "kind": "artifact",
+            "description": "Claim ids, figure ids, and locator refs for the new paper."
+          },
+          {
+            "ref": "artifact:figure-to-claim-map-2025-setd1b-broad-h3k4me3",
+            "kind": "artifact",
+            "description": "Figure 3 and Figure 5 reproduction dependencies."
+          },
+          {
+            "ref": "artifact:dataset-inventory-draft#dataset-2025-gse242515",
+            "kind": "artifact",
+            "description": "GEO GSE242515 public data inventory."
+          },
+          {
+            "ref": "artifact:evidence-matrix-draft#row-2025-c1-broad-domains",
+            "kind": "artifact",
+            "description": "Evidence row stating broad-domain calling is located but not computed."
+          },
+          {
+            "ref": "artifact:claim-verdict-draft#C2025-1",
+            "kind": "artifact",
+            "description": "Draft not-tested verdict for broad H3K4me3 domain calling."
+          }
+        ]
+      },
+      "rationale": {
+        "question": "Which next reproduction move should a self-prompt agent propose?",
+        "reason": "The highest-value next step is narrow, computable, and refs-first: test the broad H3K4me3 domain definition and H3K27ac overlap for one claim before touching broader temporal-expression conclusions.",
+        "alternativesConsidered": [
+          "Ask for a full-paper rerun",
+          "Jump directly to a final verdict",
+          "Download all raw sequencing data before checking processed tables"
+        ],
+        "evidenceRefs": [
+          {
+            "ref": "artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3#2025-setd1b-c2",
+            "kind": "artifact",
+            "description": "Broad-domain claim and risk notes."
+          },
+          {
+            "ref": "artifact:claim-verdict-draft#C2025-1",
+            "kind": "artifact",
+            "description": "Not-tested broad-domain verdict."
+          }
+        ]
+      }
+    },
+    {
+      "id": "step-002-shadow-next-prompt",
+      "kind": "self-prompt-recommendation",
+      "timestamp": "2026-05-11T01:01:00.000Z",
+      "prompt": {
+        "role": "self-prompt-shadow",
+        "text": "Draft the next reproduction prompt only; do not submit it until a human reviewer confirms the refs and budget.",
+        "intent": "Generate a bounded next-round prompt from artifacts while preserving human review.",
+        "selectedRefs": [
+          {
+            "ref": "artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3",
+            "kind": "artifact",
+            "description": "New-paper claim graph."
+          },
+          {
+            "ref": "artifact:dataset-inventory-draft#dataset-2025-gse242515",
+            "kind": "artifact",
+            "description": "Required data inventory ref."
+          }
+        ]
+      },
+      "observation": {
+        "summary": "SciForge produced a shadow-only next prompt with explicit refs, stop condition, quality gate, budget, and human confirmation point.",
+        "toolResultRefs": [],
+        "artifactRefs": [
+          {
+            "ref": "artifact:self-prompt-shadow:2025-setd1b:next-round",
+            "kind": "artifact",
+            "description": "Reviewable shadow prompt record."
+          }
+        ]
+      },
+      "selfPromptRecommendation": {
+        "nextPrompt": "Using only these refs, run one bounded reproduction step for claim 2025-setd1b-c2: verify whether the available GSE242515 processed H3K4me3 and H3K27ac refs or supplement tables are sufficient to reproduce the >5 kb broad-domain call and broad H3K27ac overlap for spermatids. Required refs: artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3#2025-setd1b-c2, artifact:figure-to-claim-map-2025-setd1b-broad-h3k4me3#2025-setd1b-fig3, artifact:dataset-inventory-draft#dataset-2025-gse242515, artifact:evidence-matrix-draft#row-2025-c1-broad-domains, artifact:claim-verdict-draft#C2025-1. Produce an analysis-plan update plus either a figure-reproduction-report/evidence-matrix update with code/stdout/stderr refs, or a missing-data/blocked result if the processed files cannot be resolved. Do not infer success from paper text.",
+        "requiredRefs": [
+          {
+            "ref": "artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3#2025-setd1b-c2",
+            "kind": "artifact",
+            "description": "Next-round question: broad H3K4me3 domain claim."
+          },
+          {
+            "ref": "artifact:figure-to-claim-map-2025-setd1b-broad-h3k4me3#2025-setd1b-fig3",
+            "kind": "artifact",
+            "description": "Figure dependencies for broad-domain and H3K27ac overlap checks."
+          },
+          {
+            "ref": "artifact:dataset-inventory-draft#dataset-2025-gse242515",
+            "kind": "artifact",
+            "description": "Public processed/raw data source for the new paper."
+          },
+          {
+            "ref": "artifact:evidence-matrix-draft#row-2025-c1-broad-domains",
+            "kind": "artifact",
+            "description": "Current evidence row to update after computation or blockage."
+          },
+          {
+            "ref": "artifact:claim-verdict-draft#C2025-1",
+            "kind": "artifact",
+            "description": "Current verdict that must not be upgraded without computed evidence."
+          }
+        ],
+        "stopCondition": "Stop after one plan-and-check round if any required ref cannot be resolved, if processed H3K4me3/H3K27ac inputs are unavailable, if the same data-access or validation failure repeats once, or after the budget is exhausted. Return a structured blocked-missing-evidence or product-failure artifact instead of submitting another prompt.",
+        "qualityGate": "Before human approval, the prompt must name exactly one claim/figure objective, cite all required refs, state expected output artifact types, preserve product failure versus scientific negative result semantics, and refuse to convert paper text into reproduced evidence.",
+        "budget": {
+          "maxShadowRounds": 1,
+          "maxAutoSubmitRounds": 0,
+          "maxToolCalls": 6,
+          "maxRuntimeMinutes": 20,
+          "stopOnRepeatedFailure": true,
+          "reviewRequiredBeforeSubmit": true
+        },
+        "humanConfirmationPoint": "Human reviewer must confirm that each required ref resolves and approve the budget before this prompt can be submitted as the next SciForge turn.",
+        "reviewChecklist": [
+          "The next-round question targets claim 2025-setd1b-c2 / Figure 3 only.",
+          "All required refs are artifact or workspace refs, not full PDF text or local absolute paths.",
+          "The stop condition blocks repeated repair/data-access loops.",
+          "The quality gate requires code/stdout/stderr or structured missing evidence before any verdict change."
+        ],
+        "mode": "human-review-required"
+      }
+    }
+  ],
+  "repairHistory": [],
+  "selfPromptRecommendations": [
+    {
+      "nextPrompt": "Using only these refs, run one bounded reproduction step for claim 2025-setd1b-c2: verify whether the available GSE242515 processed H3K4me3 and H3K27ac refs or supplement tables are sufficient to reproduce the >5 kb broad-domain call and broad H3K27ac overlap for spermatids. Required refs: artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3#2025-setd1b-c2, artifact:figure-to-claim-map-2025-setd1b-broad-h3k4me3#2025-setd1b-fig3, artifact:dataset-inventory-draft#dataset-2025-gse242515, artifact:evidence-matrix-draft#row-2025-c1-broad-domains, artifact:claim-verdict-draft#C2025-1. Produce an analysis-plan update plus either a figure-reproduction-report/evidence-matrix update with code/stdout/stderr refs, or a missing-data/blocked result if the processed files cannot be resolved. Do not infer success from paper text.",
+      "requiredRefs": [
+        {
+          "ref": "artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3#2025-setd1b-c2",
+          "kind": "artifact",
+          "description": "Next-round question: broad H3K4me3 domain claim."
+        },
+        {
+          "ref": "artifact:figure-to-claim-map-2025-setd1b-broad-h3k4me3#2025-setd1b-fig3",
+          "kind": "artifact",
+          "description": "Figure dependencies for broad-domain and H3K27ac overlap checks."
+        },
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2025-gse242515",
+          "kind": "artifact",
+          "description": "Public processed/raw data source for the new paper."
+        },
+        {
+          "ref": "artifact:evidence-matrix-draft#row-2025-c1-broad-domains",
+          "kind": "artifact",
+          "description": "Current evidence row to update after computation or blockage."
+        },
+        {
+          "ref": "artifact:claim-verdict-draft#C2025-1",
+          "kind": "artifact",
+          "description": "Current verdict that must not be upgraded without computed evidence."
+        }
+      ],
+      "stopCondition": "Stop after one plan-and-check round if any required ref cannot be resolved, if processed H3K4me3/H3K27ac inputs are unavailable, if the same data-access or validation failure repeats once, or after the budget is exhausted. Return a structured blocked-missing-evidence or product-failure artifact instead of submitting another prompt.",
+      "qualityGate": "Before human approval, the prompt must name exactly one claim/figure objective, cite all required refs, state expected output artifact types, preserve product failure versus scientific negative result semantics, and refuse to convert paper text into reproduced evidence.",
+      "budget": {
+        "maxShadowRounds": 1,
+        "maxAutoSubmitRounds": 0,
+        "maxToolCalls": 6,
+        "maxRuntimeMinutes": 20,
+        "stopOnRepeatedFailure": true,
+        "reviewRequiredBeforeSubmit": true
+      },
+      "humanConfirmationPoint": "Human reviewer must confirm that each required ref resolves and approve the budget before this prompt can be submitted as the next SciForge turn.",
+      "reviewChecklist": [
+        "The next-round question targets claim 2025-setd1b-c2 / Figure 3 only.",
+        "All required refs are artifact or workspace refs, not full PDF text or local absolute paths.",
+        "The stop condition blocks repeated repair/data-access loops.",
+        "The quality gate requires code/stdout/stderr or structured missing evidence before any verdict change."
+      ],
+      "mode": "human-review-required"
+    }
+  ],
+  "finalVerdict": "in-progress",
+  "exportNotes": {
+    "redactionPolicy": "This shadow record stores bounded summaries and workspace/artifact refs only; local paths, secrets, raw PDF text, screenshots, and full logs are excluded.",
+    "replayInstructions": [
+      "Resolve every artifact:* ref from the scientific-reproduction fixtures or workspace artifact store.",
+      "Display the self-prompt recommendation to a human reviewer.",
+      "Do not submit the next prompt unless the human confirmation point and review checklist pass."
+    ]
+  }
+}

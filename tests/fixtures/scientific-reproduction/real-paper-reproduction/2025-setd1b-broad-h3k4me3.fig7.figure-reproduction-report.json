@@ -1,0 +1,95 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "figure-reproduction-report",
+  "sourceRefs": [
+    {
+      "ref": "artifact:figure-to-claim-map-2025-setd1b-broad-h3k4me3#2025-setd1b-fig7",
+      "role": "source",
+      "summary": "Fig. 7 maps to temporal expression, Setd1b cKO phenotype, and RFX2-axis claims."
+    },
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=1045-1081",
+      "role": "source",
+      "summary": "Fig. 7 legend plus RFX2/SETD1B result text."
+    }
+  ],
+  "figureId": "2025-setd1b-fig7",
+  "claimIds": [
+    "2025-setd1b-c6",
+    "2025-setd1b-c7",
+    "2025-setd1b-c8"
+  ],
+  "inputRefs": [
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s8.xlsx",
+      "role": "table",
+      "summary": "S8 early and late expressed gene sets with expression and H3K4me3 values across spermatogenic stages."
+    },
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s1.xlsx",
+      "role": "table",
+      "summary": "S1 confirms Setd1bKO RNA-seq sample labels, but contains no Rfx2 sample labels in the local workbook."
+    }
+  ],
+  "codeRefs": [
+    {
+      "ref": "trace:worker-c-r006-2025-supplement-parser#table-s8",
+      "role": "code",
+      "summary": "Parsed S8 and summarized per-gene peak-stage distributions and median expression/H3K4me3 values."
+    },
+    {
+      "ref": "trace:worker-c-r006-2025-supplement-parser#table-s1",
+      "role": "code",
+      "summary": "Parsed S1 sample labels for perturbation evidence boundaries."
+    }
+  ],
+  "outputFigureRefs": [
+    {
+      "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix#row-fig7-temporal-expression-s8",
+      "role": "figure",
+      "summary": "S8 supports temporal expression patterns for early and late gene sets at table level."
+    },
+    {
+      "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix#row-s12-rfx2-perturbation-boundary",
+      "role": "figure",
+      "summary": "RFX2 perturbation remains insufficient from local tables and PDF text alone."
+    }
+  ],
+  "statisticsRefs": [
+    {
+      "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix#row-fig7-temporal-expression-s8",
+      "role": "table",
+      "summary": "Early genes: 515 genes, peak stages RS2=205 and RS4=116; late genes: 506 genes, peak stage RS10=475."
+    },
+    {
+      "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix#row-confounding-sensitivity-boundary",
+      "role": "verifier",
+      "summary": "Gene length and stage-composition confounding remain unresolved."
+    }
+  ],
+  "stdoutRefs": [
+    {
+      "ref": "trace:worker-c-r006-2025-supplement-parser#stdout",
+      "role": "stdout",
+      "summary": "Local parse stdout includes S8 peak-stage and median summaries."
+    }
+  ],
+  "stderrRefs": [
+    {
+      "ref": "trace:worker-c-r006-2025-supplement-parser#stderr",
+      "role": "stderr",
+      "summary": "No stderr from bounded local supplement parse."
+    }
+  ],
+  "verdict": "partially-reproduced",
+  "limitations": [
+    "S8 supports temporal gene-set behavior but is itself a published supplement, not an independent RNA-seq reanalysis.",
+    "Setd1b perturbation timing cannot be reproduced without control/cKO count matrices or processed outputs for RS4, RS8, and LS.",
+    "Rfx2 KO broad-domain reduction and RFX2-SETD1B interaction are not reproduced from local tables; only PDF text reports them.",
+    "Phenotype panels are not reproduced because local quantitative phenotype tables/images were not in the selected supplement subset."
+  ],
+  "diagnostics": [
+    "Structured partial: temporal early/late gene-set patterns are checkable and directionally supported by S8.",
+    "Structured insufficient-evidence: Setd1b/Rfx2 perturbation causality and phenotype panels require additional processed/raw data."
+  ]
+}

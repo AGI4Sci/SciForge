@@ -11,8 +11,9 @@ import {
 const fixtureRoot = new URL('../fixtures/scientific-reproduction/', import.meta.url);
 const understandingDir = new URL('real-paper-understanding/', fixtureRoot);
 const evidenceDir = new URL('real-paper-evidence/', fixtureRoot);
+const reproductionDir = new URL('real-paper-reproduction/', fixtureRoot);
 
-const artifacts = await readJsonArtifacts([understandingDir, evidenceDir]);
+const artifacts = await readJsonArtifacts([understandingDir, evidenceDir, reproductionDir]);
 const scientificArtifacts = artifacts.filter((artifact) =>
   isScientificReproductionArtifactType(artifact.value.artifactType),
 );
@@ -27,16 +28,23 @@ for (const artifact of scientificArtifacts) {
 }
 
 const prdm9ClaimGraph = artifactNamed('paper-claim-graph-2020-prdm9-dsb-fate.json');
+const histoneRubricClaimGraph = artifactNamed('paper-claim-graph-2022-histone-ptm-causal-rubric.json');
 const setd1bClaimGraph = artifactNamed('paper-claim-graph-2025-setd1b-broad-h3k4me3.json');
 assert.equal(arrayField(prdm9ClaimGraph, 'claims').length >= 5, true, '2020 claim graph should contain at least 5 claims');
+assert.equal(arrayField(histoneRubricClaimGraph, 'claims').length >= 8, true, '2022 review rubric claim graph should contain reusable causal criteria');
 assert.equal(arrayField(setd1bClaimGraph, 'claims').length >= 5, true, '2025 claim graph should contain at least 5 claims');
 
-for (const graph of [prdm9ClaimGraph, setd1bClaimGraph]) {
+for (const graph of [prdm9ClaimGraph, histoneRubricClaimGraph, setd1bClaimGraph]) {
   for (const claim of arrayField(graph, 'claims')) {
     assert.ok(isRecord(claim), 'claims should be objects');
     assert.ok(arrayField(claim, 'locatorRefs').length > 0, 'each real-paper claim needs PDF/page/section locators');
     assert.ok(arrayField(claim, 'risks').length > 0, 'each real-paper claim should carry reproduction risk notes');
   }
+}
+
+const histoneRubricText = JSON.stringify(histoneRubricClaimGraph);
+for (const term of ['cause', 'consequence', 'memory', 'reinforcement', 'writer-reader-eraser', 'perturbation', 'confounders']) {
+  assert.ok(histoneRubricText.includes(term), `2022 review rubric claim graph should cover ${term}`);
 }
 
 const datasetInventory = artifactNamed('dataset-inventory-draft.json');
@@ -54,9 +62,24 @@ assert.ok(
 const missingDataDraft = artifactNamed('missing-data-report-draft.json');
 assert.equal(stringField(missingDataDraft, 'artifactType'), 'missing-data-report');
 assert.equal(
+  isScientificReproductionArtifactType('missing-data-report'),
+  false,
+  'missing-data-report should remain a derived draft rather than a formal runtime artifact type',
+);
+assert.equal(
   validateScientificReproductionArtifact(missingDataDraft).ok,
   false,
-  'missing-data-report is intentionally a draft until promoted into the runtime artifact type set',
+  'missing-data-report is intentionally a draft derived from dataset-inventory.missingDatasets and claim-verdict.missingEvidence',
+);
+assert.ok(arrayField(datasetInventory, 'missingDatasets').length > 0, 'missing data belongs in dataset-inventory.missingDatasets');
+assert.ok(arrayField(datasetInventory, 'notes').length > 0, 'dataset-inventory notes should carry missing-data handling guidance');
+assert.ok(arrayField(claimVerdict, 'missingEvidence').length > 0, 'claim verdicts should carry downstream missing evidence');
+
+const prdm9FigureReproduction = artifactNamed('2020-prdm9-dsb-fate.figure-reproduction-report.json');
+assert.equal(stringField(prdm9FigureReproduction, 'verdict'), 'partially-reproduced');
+assert.ok(
+  JSON.stringify(prdm9FigureReproduction).includes('unsupportedByThisRun'),
+  '2020 reproduction report should make unsupported PRDM9/NOMe/fate components explicit',
 );
 
 console.log('[ok] real paper scientific reproduction artifacts validate claim graphs, inventories, verdict conservatism, and refs-first discipline');

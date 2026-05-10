@@ -65,13 +65,12 @@
       },
       "expectedArtifacts": [
         {
-          "type": "missing-data-report",
+          "type": "dataset-inventory",
           "status": "missing-data",
           "requiredFields": [
-            "attemptedSources",
-            "reason",
-            "degradationAction",
-            "claimImpact"
+            "missingDatasets",
+            "diagnostics",
+            "notes"
           ]
         },
         {
@@ -240,13 +239,12 @@
       },
       "expectedArtifacts": [
         {
-          "type": "missing-data-report",
+          "type": "dataset-inventory",
           "status": "timeout",
           "requiredFields": [
-            "attemptedSources",
-            "timeoutMs",
-            "degradationAction",
-            "claimImpact"
+            "missingDatasets",
+            "diagnostics",
+            "notes"
           ]
         },
         {

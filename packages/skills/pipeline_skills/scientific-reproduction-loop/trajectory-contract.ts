@@ -75,6 +75,16 @@ export interface SelfPromptRecommendation {
   requiredRefs: WorkspaceRef[];
   stopCondition: string;
   qualityGate: string;
+  budget?: {
+    maxShadowRounds: number;
+    maxAutoSubmitRounds: number;
+    maxToolCalls?: number;
+    maxRuntimeMinutes?: number;
+    stopOnRepeatedFailure: boolean;
+    reviewRequiredBeforeSubmit: boolean;
+  };
+  humanConfirmationPoint?: string;
+  reviewChecklist?: string[];
   mode: 'shadow-only' | 'human-review-required' | 'auto-submit-eligible';
 }
 
@@ -190,6 +200,36 @@ function validateStep(step: TrajectoryStep, path: string, errors: string[]): voi
     requireText(step.selfPromptRecommendation.nextPrompt, `${path}.selfPromptRecommendation.nextPrompt`, errors);
     requireText(step.selfPromptRecommendation.stopCondition, `${path}.selfPromptRecommendation.stopCondition`, errors);
     requireText(step.selfPromptRecommendation.qualityGate, `${path}.selfPromptRecommendation.qualityGate`, errors);
+    if (!Array.isArray(step.selfPromptRecommendation.requiredRefs) || step.selfPromptRecommendation.requiredRefs.length === 0) {
+      errors.push(`${path}.selfPromptRecommendation.requiredRefs must contain at least one workspace ref`);
+    }
+    validateSelfPromptBudget(step.selfPromptRecommendation.budget, `${path}.selfPromptRecommendation.budget`, errors);
+  }
+}
+
+function validateSelfPromptBudget(
+  budget: SelfPromptRecommendation['budget'] | undefined,
+  path: string,
+  errors: string[],
+): void {
+  if (!budget) return;
+  if (!Number.isInteger(budget.maxShadowRounds) || budget.maxShadowRounds < 1) {
+    errors.push(`${path}.maxShadowRounds must be a positive integer`);
+  }
+  if (!Number.isInteger(budget.maxAutoSubmitRounds) || budget.maxAutoSubmitRounds < 0) {
+    errors.push(`${path}.maxAutoSubmitRounds must be a non-negative integer`);
+  }
+  if (budget.maxToolCalls !== undefined && (!Number.isInteger(budget.maxToolCalls) || budget.maxToolCalls < 0)) {
+    errors.push(`${path}.maxToolCalls must be a non-negative integer when present`);
+  }
+  if (budget.maxRuntimeMinutes !== undefined && (!Number.isInteger(budget.maxRuntimeMinutes) || budget.maxRuntimeMinutes < 0)) {
+    errors.push(`${path}.maxRuntimeMinutes must be a non-negative integer when present`);
+  }
+  if (typeof budget.stopOnRepeatedFailure !== 'boolean') {
+    errors.push(`${path}.stopOnRepeatedFailure must be boolean`);
+  }
+  if (typeof budget.reviewRequiredBeforeSubmit !== 'boolean') {
+    errors.push(`${path}.reviewRequiredBeforeSubmit must be boolean`);
   }
 }
 

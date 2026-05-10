@@ -1,0 +1,368 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "paper-claim-graph",
+  "sourceRefs": [
+    {
+      "ref": "file:workspace/cell_papers/2022_NRG_Histone post-translational__modifications \u2014 cause and__consequence of genome function.pdf",
+      "title": "2022 Nature Reviews Genetics histone PTM cause/consequence review PDF",
+      "kind": "pdf"
+    },
+    {
+      "ref": "file:workspace/.sciforge/artifacts/real-paper-understanding/pdf-text/2022-nrg-histone-post-translational-modifications-cause-and-consequence-of-genom.txt",
+      "title": "pdftotext -layout extraction",
+      "kind": "bounded-text"
+    }
+  ],
+  "paperRefs": [
+    {
+      "ref": "paper:2022-histone-ptm-causal-rubric",
+      "title": "Histone post-translational modifications - cause and consequence of genome function",
+      "kind": "review-paper",
+      "locator": "Nature Reviews Genetics 2022; doi:10.1038/s41576-022-00468-7"
+    }
+  ],
+  "rubricProfile": {
+    "id": "histone-ptm-causal-evidence-rubric-v1",
+    "purpose": "General refs-first rubric for grading whether a histone PTM is a cause, consequence, reinforcement mechanism, or memory/bookmark of a genomic process.",
+    "appliesTo": [
+      "histone PTM writer-reader-eraser studies",
+      "transcription, recombination, DNA repair, replication, and genome topology claims",
+      "research papers that infer causal function from PTM localization, perturbation, or chromatin-state dynamics"
+    ],
+    "classificationScale": [
+      "association-only",
+      "temporal-support",
+      "perturbation-supported",
+      "mechanistic-supported",
+      "direct-causal-strong",
+      "consequence-or-reinforcement-possible",
+      "memory-or-bookmark-supported"
+    ]
+  },
+  "claims": [
+    {
+      "id": "2022-histone-rubric-c1",
+      "text": "Histone PTMs should be classified by causal role: a mark can directly or indirectly instruct a DNA-templated process, be deposited as a consequence of that process, reinforce an active state, or bookmark a prior event for memory-like propagation.",
+      "kind": "main",
+      "figureIds": ["2022-histone-fig2"],
+      "variables": ["histone PTMs", "cause", "consequence", "reinforcement", "bookmarking", "DNA-templated process"],
+      "dataTypes": ["review synthesis", "mechanistic examples", "genome-wide PTM maps"],
+      "methods": ["causal role classification", "mechanism comparison", "temporal interpretation"],
+      "statistics": ["not applicable for review-level synthesis"],
+      "evidenceTypes": ["conceptual rubric", "direct mechanism", "indirect effector mechanism", "consequence model"],
+      "causalRubricDimensions": ["association", "temporal-ordering", "mechanism", "cause-consequence-direction", "memory"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2022_NRG_Histone post-translational__modifications \u2014 cause and__consequence of genome function.pdf",
+          "locator": "PDF page 1, Abstract; PDF page 2, introductory framework before Histone PTMs in transcription; Fig. 2",
+          "summary": "The review frames PTMs as direct or indirect causes, consequences of DNA-templated processes, reinforcement mechanisms, or bookmarks/records of genomic activity."
+        },
+        {
+          "ref": "file:workspace/.sciforge/artifacts/real-paper-understanding/pdf-text/2022-nrg-histone-post-translational-modifications-cause-and-consequence-of-genom.txt",
+          "locator": "Text lines near opening abstract and Fig. 2 legend",
+          "summary": "Bounded text extraction preserves the cause/consequence/reinforcement/bookmarking vocabulary and the direct-versus-indirect mechanism figure legend."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "claim-exceeds-evidence",
+          "summary": "The review provides a general framework, not a single executable statistical test; downstream artifacts must connect each research claim to concrete perturbation, timing, and locality evidence."
+        }
+      ]
+    },
+    {
+      "id": "2022-histone-rubric-c2",
+      "text": "A PTM mechanism should be separated into writer deposition, reader or effector recognition, eraser removal, and the dynamic balance between writer and eraser activities; perturbing any one component is not automatically equivalent to perturbing the mark itself.",
+      "kind": "method",
+      "figureIds": ["2022-histone-fig2"],
+      "variables": ["writers", "readers", "erasers", "effector proteins", "PTM turnover", "enzyme recruitment"],
+      "dataTypes": ["review synthesis", "mechanistic diagrams", "chromatin modifier examples"],
+      "methods": ["writer-reader-eraser decomposition", "perturbation target audit", "turnover assessment"],
+      "statistics": ["not applicable for review-level synthesis"],
+      "evidenceTypes": ["mechanistic decomposition", "perturbation interpretation"],
+      "causalRubricDimensions": ["writer-reader-eraser", "perturbation", "mechanism", "direct-locality"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2022_NRG_Histone post-translational__modifications \u2014 cause and__consequence of genome function.pdf",
+          "locator": "PDF page 1, introduction to writers/readers/erasers; PDF pages 2-3, Fig. 2 legend",
+          "summary": "The review defines writers, readers, and erasers, emphasizes writer-eraser equilibrium, and shows reader/effector-mediated PTM function."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "claim-exceeds-evidence",
+          "summary": "Writer or eraser perturbations can affect non-histone substrates, chromatin complexes, metabolism, and cell state, so mark-level causality needs local or orthogonal evidence."
+        }
+      ]
+    },
+    {
+      "id": "2022-histone-rubric-c3",
+      "text": "Active-promoter H3K4me3 illustrates the cause/consequence ambiguity: it correlates with transcription and can recruit transcription machinery, but many functional experiments do not support a universal requirement for H3K4me3 in transcription.",
+      "kind": "interpretation",
+      "figureIds": ["2022-histone-fig3"],
+      "variables": ["H3K4me3", "transcription", "TFIID", "TAF4", "RNA polymerase II", "gene expression noise", "epigenetic memory"],
+      "dataTypes": ["ChIP-seq", "local writing experiments", "loss-of-function studies", "developmental memory examples"],
+      "methods": ["correlation assessment", "local writing perturbation", "reader recruitment analysis", "memory-state comparison"],
+      "statistics": ["gene-expression variance", "peak strength and breadth correlation"],
+      "evidenceTypes": ["association", "reader recruitment", "context-dependent perturbation", "memory evidence"],
+      "causalRubricDimensions": ["association", "temporal-ordering", "perturbation", "memory", "confounders"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2022_NRG_Histone post-translational__modifications \u2014 cause and__consequence of genome function.pdf",
+          "locator": "PDF pages 3-4, Histone tail PTMs section; Fig. 3a-b",
+          "summary": "The review contrasts H3K4me3 enrichment and TFIID recruitment with evidence that H3K4me3 is not required for most transcription and may reinforce, protect, or remember chromatin states."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "claim-exceeds-evidence",
+          "summary": "Promoter colocalization or broad H3K4me3 association should not be scored as direct causality without timing, local perturbation, reader mechanism, rescue, or independent validation."
+        }
+      ]
+    },
+    {
+      "id": "2022-histone-rubric-c4",
+      "text": "Enhancer-associated H3K4me1 and H3K27ac show why writer perturbation, mark abundance, and enhancer function must be disentangled: loss of writers can have stronger effects than loss of the mark, and p300 recruitment can activate genes through mechanisms beyond H3K27ac itself.",
+      "kind": "subclaim",
+      "variables": ["H3K4me1", "H3K27ac", "KMT2C", "KMT2B", "p300", "enhancer activity", "germline competence"],
+      "dataTypes": ["enhancer PTM maps", "writer loss studies", "mark loss studies", "local recruitment studies"],
+      "methods": ["writer-versus-mark comparison", "enhancer activity assay", "local modifier recruitment audit"],
+      "statistics": ["gene activity change", "developmental effect comparison"],
+      "evidenceTypes": ["writer/mark distinction", "context-dependent perturbation", "technical caveat"],
+      "causalRubricDimensions": ["perturbation", "writer-reader-eraser", "direct-locality", "confounders"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2022_NRG_Histone post-translational__modifications \u2014 cause and__consequence of genome function.pdf",
+          "locator": "PDF page 4, enhancer H3K4me1/H3K27ac discussion; PDF page 13, Box 2 editing caveats",
+          "summary": "The review notes that enhancer writers can be more important than H3K4me1 itself and that dCas9-p300 activation does not prove H3K27ac is the sole causal feature."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "method-incomplete",
+          "summary": "A reproduction rubric should require assays that separate enzymatic writer roles, protein-complex scaffolding, non-histone substrates, and the mark's local chromatin effect."
+        }
+      ]
+    },
+    {
+      "id": "2022-histone-rubric-c5",
+      "text": "Repressive histone marks such as H3K27me3, H2Aub, and H3K9me3 can be instructive, permissive, inherited, or consequential depending on context; loss of a repressive mark can enable transcription factor action without being sufficient for gene activation.",
+      "kind": "interpretation",
+      "figureIds": ["2022-histone-fig3"],
+      "variables": ["H3K27me3", "H2Aub", "H3K9me3", "Polycomb", "HP1", "transcription factor repertoire", "lineage genes"],
+      "dataTypes": ["genetic perturbation", "chromatin inheritance studies", "cell-type comparisons", "developmental models"],
+      "methods": ["repressive-mark perturbation", "cell-type-specific derepression analysis", "inheritance assessment"],
+      "statistics": ["derepressed gene sets", "mark inheritance across cell divisions"],
+      "evidenceTypes": ["perturbation", "reader-mediated repression", "permissive chromatin model", "memory evidence"],
+      "causalRubricDimensions": ["perturbation", "mechanism", "memory", "confounders"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2022_NRG_Histone post-translational__modifications \u2014 cause and__consequence of genome function.pdf",
+          "locator": "PDF pages 5-6, Polycomb and H3K9me3 discussion; Fig. 3c",
+          "summary": "The review describes H3K27me3/H2Aub and H3K9me3 as context-dependent repressive systems, with examples where mark loss grants permissibility but transcription still requires lineage-specific factors."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "claim-exceeds-evidence",
+          "summary": "A claim that a repressive PTM directly causes silencing should address transcription-factor availability, cell identity, inheritance, and whether the mark follows rather than precedes repression."
+        }
+      ]
+    },
+    {
+      "id": "2022-histone-rubric-c6",
+      "text": "Histone core and lateral-surface PTMs are stronger candidates for direct causality when they perturb histone-DNA or histone-histone contacts, whereas many tail PTMs act indirectly through effector proteins.",
+      "kind": "mechanistic",
+      "variables": ["histone core PTMs", "histone tail PTMs", "H3K56ac", "H3K64ac", "H3T118ph", "H3K122ac", "H4K91glut", "H2AQ105me"],
+      "dataTypes": ["in vitro nucleosome assays", "structural mapping", "transcription assays", "reader interaction assays"],
+      "methods": ["nucleosome stability testing", "DNA accessibility assay", "reader-dependence audit", "direct versus indirect mechanism classification"],
+      "statistics": ["DNA unwrapping rate", "nucleosome mobility", "in vitro transcription change"],
+      "evidenceTypes": ["direct structural mechanism", "in vitro causality", "reader-independent mechanism"],
+      "causalRubricDimensions": ["mechanism", "direct-locality", "direct-causal-strong"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2022_NRG_Histone post-translational__modifications \u2014 cause and__consequence of genome function.pdf",
+          "locator": "PDF pages 6-8, Histone core modifications section; PDF pages 14-15, Conclusions",
+          "summary": "The review argues that core PTMs can directly change nucleosome dynamics, while most tail PTMs generally rely on recruited effectors."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "other",
+          "summary": "In vitro structural causality should still be connected to matched in vivo locus, cell state, and process-level outcomes before grading a biological claim as strong."
+        }
+      ]
+    },
+    {
+      "id": "2022-histone-rubric-c7",
+      "text": "Recombination and DNA repair examples require explicit distinction between PTMs that mark an accessible chromatin environment and PTMs that allosterically recruit or choose repair machinery.",
+      "kind": "main",
+      "figureIds": ["2022-histone-fig4"],
+      "variables": ["PRDM9", "H3K4me3", "H3K36me3", "RAG2", "H2AX phosphorylation", "H4K20me", "H2AK15ub", "53BP1", "BARD1-BRCA1", "CtIP-LEDGF"],
+      "dataTypes": ["meiotic recombination maps", "V(D)J recombination assays", "DNA damage response maps", "reader-binding studies"],
+      "methods": ["hotspot colocalization", "reader recruitment test", "repair pathway choice assay", "damage-induced PTM tracking"],
+      "statistics": ["hotspot overlap", "reader affinity", "repair pathway usage"],
+      "evidenceTypes": ["association", "reader-mediated mechanism", "pathway choice perturbation", "cause-versus-environment caveat"],
+      "causalRubricDimensions": ["association", "perturbation", "mechanism", "direct-locality", "confounders"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2022_NRG_Histone post-translational__modifications \u2014 cause and__consequence of genome function.pdf",
+          "locator": "PDF pages 8-10, Histone PTMs in recombination and DNA repair; Fig. 4a-d",
+          "summary": "The review contrasts PRDM9-associated hotspot marks and V(D)J H3K4me3-RAG2 function with DNA repair pathway-choice mechanisms involving H4K20me, H2AK15ub, and H3K36me3."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "claim-exceeds-evidence",
+          "summary": "Hotspot enrichment or damage-induced deposition can be association or consequence; a strong causal grade needs reader dependence, timing before the outcome, or perturbation of the local mark-reader axis."
+        }
+      ]
+    },
+    {
+      "id": "2022-histone-rubric-c8",
+      "text": "Replication and genome-topology claims need separate tests for establishment versus maintenance: PTMs such as H4K20 methylation, H3K9 methylation, and H3K27me3 can stabilize or organize already defined origins and compartments, but correlation with replication timing or compartments is not itself causal evidence.",
+      "kind": "interpretation",
+      "figureIds": ["2022-histone-fig4"],
+      "variables": ["H4K20me", "H2A.Z", "ORC1", "KMT5A", "KMT5B", "H3K9me3", "HP1", "H3K27me3", "PRC1", "compartments", "TADs", "PADs"],
+      "dataTypes": ["replication origin maps", "chromosome conformation capture", "dCas9 modifier recruitment", "acute depletion experiments"],
+      "methods": ["origin establishment versus activation test", "compartment perturbation", "local writer targeting", "replication timing comparison"],
+      "statistics": ["origin licensing", "compartment switching", "TAD/PAD interaction strength"],
+      "evidenceTypes": ["maintenance mechanism", "local perturbation", "topology association", "temporal caveat"],
+      "causalRubricDimensions": ["temporal-ordering", "perturbation", "direct-locality", "confounders"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2022_NRG_Histone post-translational__modifications \u2014 cause and__consequence of genome function.pdf",
+          "locator": "PDF pages 10-13, Histone PTMs in replication and genome topology; Fig. 4e; Box 2",
+          "summary": "The review describes PTMs in replication initiation, compartmentalization, lamina-associated domains, Polycomb domains, and local dCas9 H3K9me3 writer recruitment."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "claim-exceeds-evidence",
+          "summary": "Replication timing, cell cycle, and 3D architecture can reciprocally change the PTM landscape, so causal direction must be established with acute or local perturbation."
+        }
+      ]
+    },
+    {
+      "id": "2022-histone-rubric-c9",
+      "text": "Local and temporally controlled PTM editing is a high-value causal test, but variable effects of dCas9, TAL, or tethered modifier systems must be interpreted with controls for targeting efficiency, chromatin accessibility, endogenous PTM context, and non-histone substrates.",
+      "kind": "method",
+      "variables": ["dCas9", "TAL effector", "zinc finger", "local modifier recruitment", "H3K4 methylation", "H3K9 methylation", "H3K79 methylation", "H3K27 methylation", "H3K27ac"],
+      "dataTypes": ["local chromatin editing", "guide RNA targeting", "gene expression readout", "PTM mapping"],
+      "methods": ["locus-specific deposition", "locus-specific removal", "rescue or orthogonal validation", "targeting-control audit"],
+      "statistics": ["local PTM change", "target gene response", "off-target assessment"],
+      "evidenceTypes": ["local perturbation", "rescue", "orthogonal validation", "technical caveat"],
+      "causalRubricDimensions": ["perturbation", "direct-locality", "rescue-or-orthogonal-validation", "confounders"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2022_NRG_Histone post-translational__modifications \u2014 cause and__consequence of genome function.pdf",
+          "locator": "PDF page 13, Box 2: editing histone PTMs; PDF pages 14-15, Conclusions and future perspectives",
+          "summary": "The review treats targeted PTM deposition or removal as a route to causal characterization while listing limitations of CRISPR-Cas-based and modifier-recruitment systems."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "method-incomplete",
+          "summary": "Editing tools can fail in heterochromatin, recruit multi-substrate complexes, or require PTM flux; a rubric should require controls rather than treating any local modifier fusion as definitive."
+        }
+      ]
+    },
+    {
+      "id": "2022-histone-rubric-c10",
+      "text": "Common confounders for histone PTM causality include cell-state shifts, stage or cell-cycle timing, transcription-factor availability, antibody and peak-calling specificity, point-mutation artifacts, global writer or eraser pleiotropy, indirect transcriptional effects, and reciprocal feedback with DNA methylation, replication, repair, or genome topology.",
+      "kind": "method",
+      "variables": ["cell state", "developmental stage", "cell cycle", "transcription factors", "antibody specificity", "peak thresholds", "histone point mutations", "DNA methylation", "replication timing", "genome topology"],
+      "dataTypes": ["quality-control metadata", "orthogonal PTM assays", "matched cell-state profiles", "negative controls"],
+      "methods": ["confounder audit", "sensitivity analysis", "orthogonal validation", "matched-stage comparison"],
+      "statistics": ["replicate concordance", "threshold sensitivity", "cell-state composition metrics"],
+      "evidenceTypes": ["confounder control", "negative evidence", "quality gate"],
+      "causalRubricDimensions": ["confounders", "rescue-or-orthogonal-validation", "negative-result-check"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2022_NRG_Histone post-translational__modifications \u2014 cause and__consequence of genome function.pdf",
+          "locator": "PDF pages 3, 6, 10, 13-15; H3K4me3 functional caveats, histone mutation caution, replication/topology reciprocity, Box 2, and Conclusions",
+          "summary": "The review repeatedly warns that PTM correlations and perturbations are context dependent and can reflect reciprocal networks rather than one-way mark causality."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "other",
+          "summary": "This claim is a generic audit checklist; applying it to a research paper should record which confounders were actually tested and which remain missing evidence."
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "fromClaimId": "2022-histone-rubric-c2",
+      "toClaimId": "2022-histone-rubric-c1",
+      "relation": "supports"
+    },
+    {
+      "fromClaimId": "2022-histone-rubric-c3",
+      "toClaimId": "2022-histone-rubric-c1",
+      "relation": "qualifies"
+    },
+    {
+      "fromClaimId": "2022-histone-rubric-c4",
+      "toClaimId": "2022-histone-rubric-c2",
+      "relation": "qualifies"
+    },
+    {
+      "fromClaimId": "2022-histone-rubric-c5",
+      "toClaimId": "2022-histone-rubric-c1",
+      "relation": "extends"
+    },
+    {
+      "fromClaimId": "2022-histone-rubric-c6",
+      "toClaimId": "2022-histone-rubric-c1",
+      "relation": "supports"
+    },
+    {
+      "fromClaimId": "2022-histone-rubric-c7",
+      "toClaimId": "2022-histone-rubric-c1",
+      "relation": "extends"
+    },
+    {
+      "fromClaimId": "2022-histone-rubric-c8",
+      "toClaimId": "2022-histone-rubric-c1",
+      "relation": "extends"
+    },
+    {
+      "fromClaimId": "2022-histone-rubric-c9",
+      "toClaimId": "2022-histone-rubric-c1",
+      "relation": "supports"
+    },
+    {
+      "fromClaimId": "2022-histone-rubric-c10",
+      "toClaimId": "2022-histone-rubric-c3",
+      "relation": "qualifies"
+    },
+    {
+      "fromClaimId": "2022-histone-rubric-c10",
+      "toClaimId": "2022-histone-rubric-c7",
+      "relation": "qualifies"
+    },
+    {
+      "fromClaimId": "2022-histone-rubric-c10",
+      "toClaimId": "2022-histone-rubric-c8",
+      "relation": "qualifies"
+    },
+    {
+      "fromClaimId": "2022-histone-rubric-c9",
+      "toClaimId": "2022-histone-rubric-c10",
+      "relation": "depends-on"
+    }
+  ],
+  "diagnostics": [
+    "This is a review/rubric claim graph encoded in the existing paper-claim-graph schema so it can be reused by the same verifier and artifact view as research-paper claim graphs.",
+    "The graph is intentionally refs-first: the PDF and pdftotext extraction remain in workspace files, while each claim carries bounded summaries and page/section locators.",
+    "Claims are phrased as transferable causal-evidence criteria, not as hard-coded rules for the 2020 PRDM9 or 2025 SETD1B papers."
+  ],
+  "notes": [
+    "Use c1-c2 as the top-level cause/consequence and writer-reader-eraser rubric.",
+    "Use c3-c5 for transcription and memory/reinforcement grading.",
+    "Use c7 for recombination and DNA repair claims, including PRDM9/DSB-fate style papers.",
+    "Use c9-c10 as perturbation, rescue, and confounder gates before promoting a PTM claim to direct-causal-strong."
+  ]
+}
