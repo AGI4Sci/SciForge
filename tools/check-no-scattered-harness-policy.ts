@@ -42,9 +42,6 @@ const suspiciousPhraseRules: Array<{ reason: string; pattern: RegExp }> = [
 ];
 
 const findings: Finding[] = [];
-const trackedBaselineCounts: Record<string, number> = {
-  'src/runtime/gateway/agentserver-prompts.ts#exploration/context/tool budget rules must be structured harness contract fields': 3,
-};
 
 for (const surface of policySurfaces) {
   for (const file of await collectSourceFilesIfExists(join(root, surface))) {
@@ -62,29 +59,16 @@ for (const surface of policySurfaces) {
   }
 }
 
-const counts = new Map<string, number>();
-for (const finding of findings) {
-  const key = findingKey(finding);
-  counts.set(key, (counts.get(key) ?? 0) + 1);
-}
-const errors = findings.filter((finding) => (counts.get(findingKey(finding)) ?? 0) > (trackedBaselineCounts[findingKey(finding)] ?? 0));
-const shrinkable = Object.entries(trackedBaselineCounts).filter(([key, count]) => (counts.get(key) ?? 0) < count);
-
-if (shrinkable.length) {
-  console.warn('[no-scattered-harness-policy] tracked legacy baseline can be reduced after migration:');
-  for (const [key, count] of shrinkable) console.warn(`- ${key}: baseline ${count}, current ${counts.get(key) ?? 0}`);
-}
-
-if (errors.length) {
+if (findings.length) {
   console.error('[no-scattered-harness-policy] scattered harness policy prose found');
-  for (const finding of errors) {
+  for (const finding of findings) {
     console.error(`- ${finding.file}:${finding.line} ${finding.reason}`);
     console.error(`  ${finding.text}`);
   }
-  console.error('Move new harness behavior policy into packages/agent-harness profiles/callbacks or a capability manifest. Existing tracked prompt policy lines are frozen until T128 migrates them into HarnessContract rendering.');
+  console.error('Move new harness behavior policy into packages/agent-harness profiles/callbacks, capability manifests, trusted runtime-policy providers, or harness promptRenderPlanSummary.renderedEntries.');
   process.exitCode = 1;
 } else {
-  console.log(`[ok] no increased scattered harness policy prose found across ${policySurfaces.length} policy surfaces.`);
+  console.log(`[ok] no scattered harness policy prose found across ${policySurfaces.length} policy surfaces.`);
 }
 
 async function collectSourceFilesIfExists(dir: string): Promise<string[]> {
@@ -115,9 +99,6 @@ function isCodeOrStringLine(line: string) {
   return line.length > 0
     && !line.startsWith('//')
     && !line.startsWith('*')
-    && !line.startsWith('import ');
-}
-
-function findingKey(finding: Pick<Finding, 'file' | 'reason'>) {
-  return `${finding.file}#${finding.reason}`;
+    && !line.startsWith('import ')
+    && !/\bsciforge\.[\w.-]+\.v\d+\b/.test(line);
 }

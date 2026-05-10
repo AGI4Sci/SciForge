@@ -20,6 +20,7 @@ import {
   updateGuidanceQueueRecords,
 } from './sessionTransforms';
 import { streamProcessTranscript } from './RunningWorkProcess';
+import { latestProgressModelFromCompactTrace } from '../../processProgress';
 
 const goalSnapshot: UserGoalSnapshot = {
   turnId: 'turn-1',
@@ -146,6 +147,38 @@ test('compacts prior work payloads for multi-turn requests', () => {
   assert.ok((payload.executionUnits[0]?.params.length ?? 0) < 1_600);
   assert.doesNotMatch(JSON.stringify(payload.runs[0]?.raw), /event-39/);
   assert.match((payload.runs[0]?.raw as { streamProcess?: { summary?: string } }).streamProcess?.summary ?? '', /recent status/);
+});
+
+test('compact prior run payload can still recover recent process progress from stream summary', () => {
+  const userMessage = message('msg-user', 'user', 'continue', '2026-05-07T01:00:00.000Z');
+  const priorRun = {
+    id: 'run-progress',
+    scenarioId: 'literature-evidence-review' as const,
+    status: 'failed' as const,
+    prompt: 'run long task',
+    response: 'backend timeout',
+    createdAt: '2026-05-07T00:00:00.000Z',
+    raw: {
+      streamProcess: {
+        eventCount: 80,
+        summary: [
+          '工作过程摘要:',
+          '- 等待: 正在等待后端返回新事件 · 等 后端返回新事件 · 最近 读取: 正在读取 /workspace/input/papers.csv · 下一步 收到新事件后继续执行；也可以安全中止当前 stream 或继续补充指令排队。',
+        ].join('\n'),
+        events: Array.from({ length: 80 }, (_, index) => ({ label: `event-${index}` })),
+      },
+    },
+  };
+  const payload = requestPayloadForTurn(session({
+    messages: [message('msg-old', 'user', 'old', '2026-05-07T00:00:00.000Z'), userMessage],
+    runs: [priorRun],
+  }), userMessage, []);
+  const model = latestProgressModelFromCompactTrace(payload);
+
+  assert.doesNotMatch(JSON.stringify(payload.runs[0]?.raw), /event-79/);
+  assert.equal(model?.phase, 'wait');
+  assert.equal(model?.waitingFor, '后端返回新事件');
+  assert.equal(model?.lastEvent?.label, '读取');
 });
 
 test('rolls back an edited user message and prunes later run-owned state', () => {

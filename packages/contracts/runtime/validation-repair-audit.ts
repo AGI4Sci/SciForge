@@ -61,6 +61,22 @@ export type ValidationFindingSource =
   | 'work-evidence'
   | 'harness';
 
+export type ValidationResultProjectionStatus =
+  | 'ok'
+  | 'pass'
+  | 'passed'
+  | 'success'
+  | 'done'
+  | 'accepted'
+  | 'skipped'
+  | 'failed'
+  | 'partial'
+  | 'needs-approval'
+  | 'needs-human'
+  | 'rejected'
+  | 'error'
+  | (string & {});
+
 export interface ValidationSubjectRef {
   kind: ValidationSubjectKind;
   id: string;
@@ -88,6 +104,47 @@ export interface ValidationFinding {
   recoverActions: string[];
   issues: ContractValidationIssue[];
   diagnostics?: Record<string, unknown>;
+}
+
+export interface ValidationFindingProjectionInput {
+  id?: string;
+  source: ValidationFindingSource;
+  kind: ValidationFindingKind;
+  status?: ValidationResultProjectionStatus;
+  failureMode?: string;
+  severity?: ValidationFindingSeverity;
+  message?: string;
+  contractId?: string;
+  schemaPath?: string;
+  capabilityId?: string;
+  traceRef?: string;
+  artifactRefs?: string[];
+  relatedRefs?: string[];
+  recoverActions?: string[];
+  issues?: ContractValidationIssue[];
+  diagnostics?: Record<string, unknown> | string[];
+  confidence?: number;
+  isFailure?: boolean;
+}
+
+export interface ActionResultValidationProjection {
+  id?: string;
+  status: ValidationResultProjectionStatus;
+  actionId?: string;
+  providerId?: string;
+  message?: string;
+  failureMode?: string;
+  traceRef?: string;
+  artifactRefs?: string[];
+  relatedRefs?: string[];
+  recoverActions?: string[];
+  issues?: ContractValidationIssue[];
+  diagnostics?: Record<string, unknown> | string[];
+  confidence?: number;
+  contractId?: string;
+  schemaPath?: string;
+  severity?: ValidationFindingSeverity;
+  isFailure?: boolean;
 }
 
 export interface RuntimeVerificationGateSnapshot {
@@ -304,19 +361,22 @@ export function validationFindingsFromObserveResponse(
   response: ObserveResponse,
   options: { id: string; capabilityId?: string; relatedRefs?: string[] },
 ): ValidationFinding[] {
-  if (response.status === 'ok') return [];
-  return [{
+  return projectValidationFindingsFromResult({
     id: options.id,
     source: 'observe-response',
     kind: 'observe-trace',
+    status: response.status,
     severity: response.status === 'needs-approval' ? 'warning' : 'blocking',
     message: response.failureMode
       ? `Observe response failed (${response.failureMode}): ${response.textResponse || response.diagnostics.join('; ')}`
       : `Observe response failed: ${response.textResponse || response.diagnostics.join('; ')}`,
+    failureMode: response.failureMode,
     contractId: 'sciforge.observe-response.v1',
     schemaPath: 'packages/contracts/runtime/observe.ts#ObserveResponse',
     capabilityId: options.capabilityId ?? response.providerId,
-    relatedRefs: uniqueStrings([...(options.relatedRefs ?? []), ...response.artifactRefs, response.traceRef]),
+    artifactRefs: response.artifactRefs,
+    traceRef: response.traceRef,
+    relatedRefs: options.relatedRefs,
     recoverActions: observeRecoverActions(response),
     issues: response.diagnostics.map((diagnostic, index) => ({
       path: `diagnostics[${index}]`,
@@ -328,7 +388,73 @@ export function validationFindingsFromObserveResponse(
       failureMode: response.failureMode,
       confidence: response.confidence,
     },
-  }];
+  });
+}
+
+export function validationFindingsFromActionResult(input: ActionResultValidationProjection): ValidationFinding[] {
+  return projectValidationFindingsFromResult({
+    id: input.id ?? `action:${input.providerId ?? input.actionId ?? 'result'}:${input.failureMode ?? input.status}`,
+    source: 'action-response',
+    kind: 'action-trace',
+    status: input.status,
+    failureMode: input.failureMode,
+    severity: input.severity,
+    message: input.message,
+    contractId: input.contractId ?? 'sciforge.action-response.v1',
+    schemaPath: input.schemaPath ?? 'packages/contracts/runtime/validation-repair-audit.ts#ActionResultValidationProjection',
+    capabilityId: input.providerId ?? input.actionId,
+    traceRef: input.traceRef,
+    artifactRefs: input.artifactRefs,
+    relatedRefs: uniqueStrings([input.actionId, ...(input.relatedRefs ?? [])]),
+    recoverActions: input.recoverActions ?? actionRecoverActions(input),
+    issues: input.issues,
+    diagnostics: {
+      ...diagnosticsRecord(input.diagnostics),
+      actionId: input.actionId,
+      providerId: input.providerId,
+      status: input.status,
+      failureMode: input.failureMode,
+      confidence: input.confidence,
+    },
+    confidence: input.confidence,
+    isFailure: input.isFailure,
+  });
+}
+
+export function projectValidationFindingsFromResult(
+  input: ValidationFindingProjectionInput | ValidationFindingProjectionInput[],
+): ValidationFinding[] {
+  const inputs = Array.isArray(input) ? input : [input];
+  return inputs.flatMap((entry) => {
+    if (!isResultProjectionFailure(entry)) return [];
+    const status = entry.status ?? 'failed';
+    const failureMode = entry.failureMode ? ` (${entry.failureMode})` : '';
+    const message = entry.message ?? `Validation result ${entry.kind} failed${failureMode}: status=${status}`;
+    const diagnostics = diagnosticsRecord(entry.diagnostics);
+    return [{
+      id: entry.id ?? `${entry.source}:${entry.kind}:${entry.failureMode ?? status}`,
+      source: entry.source,
+      kind: entry.kind,
+      severity: entry.severity ?? severityForResultStatus(status),
+      message,
+      contractId: entry.contractId,
+      schemaPath: entry.schemaPath,
+      capabilityId: entry.capabilityId,
+      relatedRefs: uniqueStrings([
+        ...(entry.relatedRefs ?? []),
+        ...(entry.artifactRefs ?? []),
+        entry.traceRef,
+      ]),
+      recoverActions: uniqueStrings(entry.recoverActions ?? ['repair result contract or fail closed with diagnostics']),
+      issues: entry.issues ?? issuesFromDiagnostics(entry.diagnostics),
+      diagnostics: {
+        ...diagnostics,
+        status,
+        failureMode: entry.failureMode,
+        confidence: entry.confidence,
+      },
+    }];
+  });
 }
 
 export function validationFindingsFromRuntimeVerification(
@@ -441,6 +567,42 @@ function observeRecoverActions(response: ObserveResponse) {
   if (response.failureMode === 'provider-unavailable') return ['retry with fallback observe provider', 'record observe invocation failure'];
   if (response.failureMode === 'low-confidence') return ['rerun observe with narrower instruction or additional modality refs'];
   return ['repair observe request or fail closed with diagnostics'];
+}
+
+function actionRecoverActions(input: ActionResultValidationProjection) {
+  if (input.status === 'needs-approval' || input.status === 'needs-human') return ['request human approval before retrying action provider'];
+  if (input.failureMode === 'provider-unavailable') return ['retry with fallback action provider', 'record action invocation failure'];
+  if (input.failureMode === 'timeout' || input.status === 'partial') return ['rerun action with bounded idempotency guard and preserve action trace'];
+  return ['repair action request or fail closed with diagnostics'];
+}
+
+function isResultProjectionFailure(input: ValidationFindingProjectionInput) {
+  if (typeof input.isFailure === 'boolean') return input.isFailure;
+  return !isPassingResultStatus(input.status ?? 'failed');
+}
+
+function isPassingResultStatus(status: ValidationResultProjectionStatus) {
+  return ['ok', 'pass', 'passed', 'success', 'done', 'accepted', 'skipped'].includes(status.toLowerCase());
+}
+
+function severityForResultStatus(status: ValidationResultProjectionStatus): ValidationFindingSeverity {
+  const normalized = status.toLowerCase();
+  if (normalized === 'needs-approval' || normalized === 'needs-human') return 'warning';
+  if (normalized === 'partial' || normalized === 'error') return 'error';
+  return 'blocking';
+}
+
+function diagnosticsRecord(value: Record<string, unknown> | string[] | undefined): Record<string, unknown> {
+  if (Array.isArray(value)) return { diagnostics: value };
+  return value ?? {};
+}
+
+function issuesFromDiagnostics(value: Record<string, unknown> | string[] | undefined): ContractValidationIssue[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((diagnostic, index) => ({
+    path: `diagnostics[${index}]`,
+    message: diagnostic,
+  }));
 }
 
 function uniqueStrings(values: Array<string | undefined>) {

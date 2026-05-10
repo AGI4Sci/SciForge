@@ -1,5 +1,6 @@
 import {
   CORE_CAPABILITY_MANIFESTS,
+  CAPABILITY_MANIFEST_CONTRACT_ID,
   compactCapabilityManifestBrief,
   validateCapabilityManifestRegistry,
   type CapabilityManifest,
@@ -12,6 +13,7 @@ import {
   type CapabilityRepairHint,
   type CapabilityValidatorManifest,
 } from '../../packages/contracts/runtime/capability-manifest.js';
+import { readFileSync } from 'node:fs';
 import {
   projectCapabilityManifestsToHarnessCandidates,
   type UnifiedCapabilityGraph,
@@ -108,7 +110,7 @@ export interface LoadedCapabilityManifestRegistry extends CapabilityManifestRegi
 }
 
 export function loadCoreCapabilityManifestRegistry(
-  manifests: CapabilityManifest[] = CORE_CAPABILITY_MANIFESTS,
+  manifests: CapabilityManifest[] = defaultCoreCapabilityManifests(),
 ): LoadedCapabilityManifestRegistry {
   return loadCapabilityManifestRegistry({ coreManifests: manifests });
 }
@@ -130,7 +132,7 @@ export async function loadCapabilityManifestRegistryWithFileDiscovery(
 export function loadCapabilityManifestRegistry(
   input: CapabilityManifestRegistryLoadInput = {},
 ): LoadedCapabilityManifestRegistry {
-  const coreManifests = input.coreManifests ?? CORE_CAPABILITY_MANIFESTS;
+  const coreManifests = input.coreManifests ?? defaultCoreCapabilityManifests();
   const packageSources = packageManifestSources(input.packageDiscovery);
   const manifests = [
     ...coreManifests,
@@ -347,4 +349,344 @@ function cloneRepairHint(hint: CapabilityRepairHint): CapabilityRepairHint {
     ...hint,
     recoverActions: [...hint.recoverActions],
   };
+}
+
+function defaultCoreCapabilityManifests(): CapabilityManifest[] {
+  return [
+    ...CORE_CAPABILITY_MANIFESTS,
+    ...offlinePackageProviderCapabilityManifests(),
+  ];
+}
+
+function offlinePackageProviderCapabilityManifests(): CapabilityManifest[] {
+  return [
+    projectActionProviderManifestToCapabilityManifest(
+      loadJsonFile<ActionProviderManifestProjectionSource>('../../packages/actions/computer-use/action-provider.manifest.json'),
+      'packages/actions/computer-use/action-provider.manifest.json',
+    ),
+    projectVerifierProviderManifestToCapabilityManifest(
+      loadJsonFile<VerifierProviderManifestProjectionSource>('../../packages/verifiers/fixtures/human-approval.manifest.json'),
+      'packages/verifiers/fixtures/human-approval.manifest.json',
+    ),
+  ];
+}
+
+function loadJsonFile<T>(relativePath: string): T {
+  return JSON.parse(readFileSync(new URL(relativePath, import.meta.url), 'utf8')) as T;
+}
+
+interface ActionProviderManifestProjectionSource {
+  schemaVersion: 'sciforge.action-provider.manifest.v1';
+  id: string;
+  version: string;
+  kind: 'action';
+  displayName: string;
+  summary: string;
+  domains: string[];
+  triggers?: string[];
+  antiTriggers?: string[];
+  integrationLevel?: string;
+  entrypoint?: {
+    type: string;
+    package?: string;
+    module?: string;
+    symbol?: string;
+    path?: string;
+    notes?: string;
+  };
+  actionSchema: {
+    schemaRef: string;
+    inputShape: Record<string, unknown>;
+    outputShape: Record<string, unknown>;
+    examples?: Array<Record<string, unknown>>;
+  };
+  environmentTargets: Array<{
+    type: string;
+    sideEffects: string[];
+  }>;
+  safetyGates: {
+    riskClass: CapabilityManifestRisk;
+    defaultPolicy: string;
+    highRiskPolicy: string;
+    supportsDryRun?: boolean;
+    blockedActions?: string[];
+    requiresExplicitTarget?: boolean;
+  };
+  confirmationRules: {
+    requiredWhen: string[];
+    approvalEvidence: string[];
+    timeoutPolicy: string;
+  };
+  traceContract: {
+    schemaRef: string;
+    storagePolicy: string;
+    eventTypes: string[];
+    redaction?: string[];
+  };
+  verifierContract: {
+    required: boolean;
+    defaultVerifierTypes: string[];
+    requiredWhen?: string[];
+    requestShape: Record<string, unknown>;
+    resultShape: Record<string, unknown>;
+  };
+  failureModes: Array<{
+    code: string;
+    description: string;
+    repairHints?: string[];
+  }>;
+}
+
+interface VerifierProviderManifestProjectionSource {
+  schemaVersion: 'sciforge.verifier-provider.manifest.v1';
+  id: string;
+  version: string;
+  kind: 'verifier';
+  verifierType: string;
+  displayName: string;
+  summary: string;
+  domains: string[];
+  triggers?: string[];
+  antiTriggers?: string[];
+  integrationLevel?: string;
+  entrypoint?: {
+    type: string;
+    command?: string;
+    module?: string;
+    symbol?: string;
+    path?: string;
+    notes?: string;
+  };
+  requestContract: {
+    schemaRef: string;
+    requiredFields: string[];
+    shape: Record<string, unknown>;
+    acceptedArtifactTypes?: string[];
+  };
+  resultContract: {
+    schemaRef: string;
+    shape: Record<string, unknown>;
+    verdicts: string[];
+    rewardRange?: Record<string, unknown>;
+  };
+  riskPolicy: {
+    coversRiskLevels: CapabilityManifestRisk[];
+    defaultMode: string;
+    unverifiedAllowed: boolean;
+    requiresHumanFor?: string[];
+  };
+  evidencePolicy: {
+    storagePolicy: string;
+    evidenceRefsRequired: boolean;
+    redaction?: string[];
+    retention?: string;
+  };
+  failureModes: Array<{
+    code: string;
+    description: string;
+    repairHints?: string[];
+  }>;
+}
+
+function projectActionProviderManifestToCapabilityManifest(
+  provider: ActionProviderManifestProjectionSource,
+  manifestSourceRef: string,
+): CapabilityManifest {
+  const capabilityId = `action.${provider.id}`;
+  const sourceRef = provider.entrypoint?.path ?? packageRootFromManifestSourceRef(manifestSourceRef);
+  return {
+    contract: CAPABILITY_MANIFEST_CONTRACT_ID,
+    id: capabilityId,
+    name: provider.displayName,
+    version: provider.version,
+    ownerPackage: sourceRef.startsWith('packages/') ? sourceRef.split('/').slice(0, 3).join('/') : 'packages/actions',
+    kind: 'action',
+    brief: provider.summary,
+    routingTags: uniqueSortedStrings([
+      ...provider.id.split(/[.-]/),
+      ...(provider.triggers ?? []),
+      ...provider.domains,
+      ...provider.verifierContract.defaultVerifierTypes.map((type) => `${type}-verification`),
+    ]),
+    domains: uniqueSortedStrings(provider.domains),
+    inputSchema: provider.actionSchema.inputShape,
+    outputSchema: provider.actionSchema.outputShape,
+    sideEffects: actionSideEffects(provider),
+    safety: {
+      risk: provider.safetyGates.riskClass,
+      dataScopes: actionDataScopes(provider),
+      requiresHumanApproval: provider.confirmationRules.requiredWhen.length > 0,
+    },
+    examples: (provider.actionSchema.examples ?? []).slice(0, 1).map((_, index) => ({
+      title: `${provider.displayName} example ${index + 1}`,
+      inputRef: `capability:${capabilityId}/input.example.${index + 1}`,
+      outputRef: `capability:${capabilityId}/output.example.${index + 1}`,
+    })),
+    validators: [
+      {
+        id: `${capabilityId}.action-schema`,
+        kind: 'schema',
+        contractRef: provider.actionSchema.schemaRef,
+        expectedRefs: ['traceRef'],
+      },
+      {
+        id: `${capabilityId}.default-verifier`,
+        kind: 'verifier',
+        contractRef: provider.verifierContract.defaultVerifierTypes.join(','),
+        expectedRefs: ['verificationResult'],
+      },
+    ],
+    repairHints: provider.failureModes.map((failure) => ({
+      failureCode: failure.code,
+      summary: failure.description,
+      recoverActions: uniqueSortedStrings(failure.repairHints ?? ['retry-with-provider-diagnostics']),
+    })),
+    providers: [{
+      id: provider.id,
+      label: provider.displayName,
+      kind: 'package',
+      contractRef: sourceRef,
+      requiredConfig: [],
+      priority: 1,
+    }],
+    lifecycle: {
+      status: 'validated',
+      sourceRef: manifestSourceRef,
+    },
+    metadata: {
+      sourceSchemaVersion: provider.schemaVersion,
+      sourceProviderId: provider.id,
+      integrationLevel: provider.integrationLevel,
+      entrypoint: provider.entrypoint,
+      antiTriggers: provider.antiTriggers ?? [],
+      traceContractRef: provider.traceContract.schemaRef,
+      verifierTypes: provider.verifierContract.defaultVerifierTypes,
+      confirmationTimeoutPolicy: provider.confirmationRules.timeoutPolicy,
+      budget: {
+        maxActionSteps: actionMaxSteps(provider.actionSchema.inputShape) ?? 12,
+        maxRetries: 1,
+        exhaustedPolicy: 'fail-with-reason',
+      },
+    },
+  };
+}
+
+function projectVerifierProviderManifestToCapabilityManifest(
+  provider: VerifierProviderManifestProjectionSource,
+  manifestSourceRef: string,
+): CapabilityManifest {
+  const capabilityId = `verifier.${provider.id}`;
+  const sourceRef = provider.entrypoint?.path ?? packageRootFromManifestSourceRef(manifestSourceRef);
+  return {
+    contract: CAPABILITY_MANIFEST_CONTRACT_ID,
+    id: capabilityId,
+    name: provider.displayName,
+    version: provider.version,
+    ownerPackage: sourceRef.startsWith('packages/') ? sourceRef.split('/').slice(0, 3).join('/') : 'packages/verifiers',
+    kind: 'verifier',
+    brief: provider.summary,
+    routingTags: uniqueSortedStrings([
+      ...provider.id.split(/[.-]/),
+      provider.verifierType,
+      ...(provider.triggers ?? []),
+      ...provider.domains,
+      ...provider.requestContract.requiredFields,
+    ]),
+    domains: uniqueSortedStrings(provider.domains),
+    inputSchema: provider.requestContract.shape,
+    outputSchema: provider.resultContract.shape,
+    sideEffects: ['none'],
+    safety: {
+      risk: verifierManifestRisk(provider),
+      dataScopes: provider.evidencePolicy.evidenceRefsRequired ? ['workspace-refs'] : [],
+      requiresHumanApproval: provider.verifierType === 'human',
+    },
+    examples: [{
+      title: `${provider.displayName} fixture`,
+      inputRef: `capability:${capabilityId}/input.example`,
+      outputRef: `capability:${capabilityId}/output.example`,
+    }],
+    validators: [{
+      id: `${capabilityId}.result-schema`,
+      kind: 'schema',
+      contractRef: provider.resultContract.schemaRef,
+      expectedRefs: ['verificationResult'],
+    }],
+    repairHints: provider.failureModes.map((failure) => ({
+      failureCode: failure.code,
+      summary: failure.description,
+      recoverActions: uniqueSortedStrings(failure.repairHints ?? ['retry-verification']),
+    })),
+    providers: [{
+      id: provider.id,
+      label: provider.displayName,
+      kind: 'package',
+      contractRef: sourceRef,
+      requiredConfig: [],
+      priority: 1,
+    }],
+    lifecycle: {
+      status: 'validated',
+      sourceRef: manifestSourceRef,
+    },
+    metadata: {
+      sourceSchemaVersion: provider.schemaVersion,
+      sourceProviderId: provider.id,
+      verifierType: provider.verifierType,
+      integrationLevel: provider.integrationLevel,
+      entrypoint: provider.entrypoint,
+      antiTriggers: provider.antiTriggers ?? [],
+      requestContractRef: provider.requestContract.schemaRef,
+      resultContractRef: provider.resultContract.schemaRef,
+      acceptedArtifactTypes: provider.requestContract.acceptedArtifactTypes ?? [],
+      verdicts: provider.resultContract.verdicts,
+      evidencePolicy: {
+        storagePolicy: provider.evidencePolicy.storagePolicy,
+        evidenceRefsRequired: provider.evidencePolicy.evidenceRefsRequired,
+      },
+      budget: {
+        maxRetries: 0,
+        exhaustedPolicy: provider.riskPolicy.defaultMode === 'human' ? 'needs-human' : 'fail-with-reason',
+      },
+    },
+  };
+}
+
+function actionSideEffects(provider: ActionProviderManifestProjectionSource): CapabilityManifestSideEffect[] {
+  const targetTypes = new Set(provider.environmentTargets.map((target) => target.type));
+  const rawEffects = new Set(provider.environmentTargets.flatMap((target) => target.sideEffects));
+  const effects: CapabilityManifestSideEffect[] = [];
+  if ([...targetTypes].some((type) => type === 'window' || type === 'browser' || type === 'remote-desktop') || rawEffects.has('pointer') || rawEffects.has('keyboard')) {
+    effects.push('desktop');
+  }
+  if (targetTypes.has('filesystem') || targetTypes.has('kernel')) effects.push('workspace-write');
+  if (targetTypes.has('external-api') || rawEffects.has('external-send')) effects.push('external-api');
+  if (targetTypes.has('lab-instrument')) effects.push('external-api');
+  return effects.length ? uniqueSortedStrings(effects) as CapabilityManifestSideEffect[] : ['none'];
+}
+
+function actionDataScopes(provider: ActionProviderManifestProjectionSource): string[] {
+  const scopes = ['workspace'];
+  if (provider.traceContract.storagePolicy === 'ref-only') scopes.push('trace-refs');
+  if (provider.environmentTargets.some((target) => target.type === 'remote-desktop')) scopes.push('remote-session');
+  return uniqueSortedStrings(scopes);
+}
+
+function actionMaxSteps(inputShape: Record<string, unknown>): number | undefined {
+  const properties = isRecord(inputShape.properties) ? inputShape.properties : {};
+  const maxSteps = isRecord(properties.max_steps) ? properties.max_steps : undefined;
+  return typeof maxSteps?.default === 'number' && Number.isFinite(maxSteps.default) ? maxSteps.default : undefined;
+}
+
+function verifierManifestRisk(provider: VerifierProviderManifestProjectionSource): CapabilityManifestRisk {
+  if (provider.verifierType === 'human') return 'low';
+  return provider.riskPolicy.coversRiskLevels.includes('high') ? 'medium' : 'low';
+}
+
+function packageRootFromManifestSourceRef(sourceRef: string) {
+  return sourceRef.split('/').slice(0, -1).join('/');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

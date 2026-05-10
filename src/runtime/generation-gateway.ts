@@ -7,7 +7,7 @@ import { fileExists, runWorkspaceTask, sha1 } from './workspace-task-runner.js';
 import { maybeWriteSkillPromotionProposal } from './skill-promotion.js';
 import { emitWorkspaceRuntimeEvent, throwIfRuntimeAborted } from './workspace-runtime-events.js';
 import { composeRuntimeUiManifest } from './runtime-ui-manifest.js';
-import { cleanUrl, clipForAgentServerPrompt, errorMessage, excerptAroundFailureLine, extractLikelyErrorLine, generatedTaskArchiveRel, headForAgentServer, isRecord, isTaskInputRel, readTextIfExists, summarizeTextChange, tailForAgentServer, toRecordList, toStringList, uniqueStrings } from './gateway-utils.js';
+import { cleanUrl, clipForAgentServerPrompt, errorMessage, excerptAroundFailureLine, extractLikelyErrorLine, generatedTaskArchiveRel, headForAgentServer, isRecord, isTaskInputRel, readTextIfExists, summarizeTextChange, tailForAgentServer, toRecordList, toStringList } from './gateway-utils.js';
 import { normalizeBackendHandoff } from './workspace-task-input.js';
 import {
   expectedArtifactTypesForRequest,
@@ -98,10 +98,7 @@ import { evaluateToolPayloadEvidence } from './gateway/work-evidence-guard.js';
 import { evaluateGuidanceAdoption } from './gateway/guidance-adoption-guard.js';
 import { summarizeWorkEvidenceForHandoff } from './gateway/work-evidence-types.js';
 import { createLatencyTelemetry } from './gateway/latency-telemetry.js';
-import {
-  writeValidationRepairTelemetrySpansFromPayload,
-  type ValidationRepairTelemetryWriteResult,
-} from './gateway/validation-repair-telemetry-sink.js';
+import { recordValidationRepairTelemetryForPayload } from './gateway/validation-repair-telemetry-runtime.js';
 import {
   agentServerFailurePayloadRefs,
   agentServerGenerationFailureReason,
@@ -267,47 +264,6 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
     telemetry.emitFinal();
     throw error;
   }
-}
-
-async function recordValidationRepairTelemetryForPayload(
-  payload: ToolPayload,
-  request: GatewayRequest,
-): Promise<ToolPayload> {
-  try {
-    const writeResult = await writeValidationRepairTelemetrySpansFromPayload(payload, {
-      workspacePath: request.workspacePath || process.cwd(),
-    });
-    return writeResult.records.length ? attachValidationRepairTelemetryRefs(payload, writeResult) : payload;
-  } catch {
-    return payload;
-  }
-}
-
-function attachValidationRepairTelemetryRefs(
-  payload: ToolPayload,
-  writeResult: ValidationRepairTelemetryWriteResult,
-): ToolPayload {
-  const current = payload as ToolPayload & { refs?: unknown };
-  const refs = isRecord(current.refs) ? current.refs : {};
-  const existingTelemetry = Array.isArray(refs.validationRepairTelemetry)
-    ? refs.validationRepairTelemetry
-    : [];
-  return {
-    ...payload,
-    refs: {
-      ...refs,
-      validationRepairTelemetry: [
-        ...existingTelemetry,
-        {
-          kind: 'validation-repair-telemetry',
-          ref: writeResult.ref,
-          spanRefs: writeResult.projection.spanRefs,
-          recordRefs: writeResult.records.map((record) => record.ref),
-          spanKinds: uniqueStrings(writeResult.records.map((record) => record.spanKind)),
-        },
-      ],
-    },
-  } as ToolPayload;
 }
 
 async function runAgentServerGeneratedTask(

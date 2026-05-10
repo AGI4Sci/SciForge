@@ -1,11 +1,14 @@
 import type { GatewayRequest, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
 import { clipForAgentServerJson, errorMessage, hashJson, isRecord } from '../gateway-utils.js';
+import { projectInteractionProgressEvent } from './interaction-progress-harness.js';
+import type { ProgressPlan } from '../../../packages/agent-harness/src/contracts.js';
 
 const AGENT_HARNESS_CONTRACT_EVENT_TYPE = 'agent-harness-contract';
 const AGENT_HARNESS_SHADOW_SCHEMA_VERSION = 'sciforge.agent-harness-shadow.v1';
 const AGENT_HARNESS_HANDOFF_SCHEMA_VERSION = 'sciforge.agent-harness-handoff.v1';
 const AGENT_HARNESS_PROMPT_RENDER_SCHEMA_VERSION = 'sciforge.agent-harness-prompt-render.v1';
+const AGENT_HARNESS_PROGRESS_PLAN_PROJECTION_SCHEMA_VERSION = 'sciforge.agent-harness-progress-plan-projection.v1';
 const DEFAULT_AGENT_HARNESS_PROFILE_ID = 'balanced-default';
 
 interface AgentHarnessEvaluation {
@@ -79,6 +82,11 @@ export async function requestWithAgentHarnessShadow(
     request.verificationPolicy,
     { uiState, contractRef, profileId },
   );
+  const progressProjection = agentHarnessProgressPlanProjection(
+    evaluation.evaluation.contract,
+    { uiState, contractRef, traceRef, profileId },
+  );
+  if (progressProjection) emitWorkspaceRuntimeEvent(callbacks, progressProjection.event);
   return {
     ...request,
     ...(verificationProjection ? { verificationPolicy: verificationProjection.policy } : {}),
@@ -87,6 +95,7 @@ export async function requestWithAgentHarnessShadow(
       harnessProfileId: profileId,
       agentHarness,
       ...(verificationProjection ? { agentHarnessVerificationPolicy: verificationProjection.audit } : {}),
+      ...(progressProjection ? { agentHarnessProgressPlan: progressProjection.audit } : {}),
     },
   };
 }
@@ -296,6 +305,70 @@ function agentHarnessVerificationPolicyProjection(
       riskLevel: merged.riskLevel,
       required: merged.required,
     },
+  };
+}
+
+function agentHarnessProgressPlanProjection(
+  contract: Record<string, unknown>,
+  input: {
+    uiState: Record<string, unknown>;
+    contractRef: string;
+    traceRef: string;
+    profileId: string;
+  },
+) {
+  const agentHarness = isRecord(input.uiState.agentHarness) ? input.uiState.agentHarness : {};
+  const enabled = [
+    input.uiState.agentHarnessProgressPlanEnabled,
+    input.uiState.agentHarnessConsumeProgressPlan,
+    agentHarness.progressPlanEnabled,
+    agentHarness.consumeProgressPlan,
+  ].some(isEnabledFlag);
+  if (!enabled) return undefined;
+  const progressPlan = progressPlanFromContract(contract.progressPlan);
+  if (!progressPlan) return undefined;
+  const toolBudget = isRecord(contract.toolBudget) ? contract.toolBudget : {};
+  const event = projectInteractionProgressEvent({
+    progressPlan,
+    type: 'process-progress',
+    traceRef: input.traceRef,
+    reason: 'progress-plan-projection',
+    status: 'running',
+    budget: {
+      maxRetries: progressPlan.silencePolicy?.maxRetries,
+      maxWallMs: numberField(toolBudget.maxWallMs),
+    },
+  });
+  const audit = {
+    schemaVersion: AGENT_HARNESS_PROGRESS_PLAN_PROJECTION_SCHEMA_VERSION,
+    source: 'request.uiState.agentHarness.contract.progressPlan',
+    contractRef: input.contractRef,
+    traceRef: input.traceRef,
+    profileId: input.profileId,
+    eventType: event.type,
+    phase: event.phase,
+    status: event.status,
+    initialStatus: progressPlan.initialStatus,
+    visibleMilestones: progressPlan.visibleMilestones,
+    phaseNames: progressPlan.phaseNames,
+    silenceTimeoutMs: progressPlan.silenceTimeoutMs,
+    silenceDecision: progressPlan.silencePolicy?.decision,
+    backgroundContinuation: progressPlan.backgroundContinuation,
+  };
+  return {
+    event: {
+      type: event.type,
+      source: 'workspace-runtime',
+      status: event.status,
+      message: progressPlan.initialStatus,
+      detail: event.phase,
+      raw: {
+        ...event,
+        progressPlan,
+        agentHarnessProgressPlan: audit,
+      },
+    },
+    audit,
   };
 }
 
@@ -740,6 +813,26 @@ function booleanField(value: unknown) {
   return typeof value === 'boolean' ? value : undefined;
 }
 
+function progressPlanFromContract(value: unknown): ProgressPlan | undefined {
+  if (!isRecord(value)) return undefined;
+  const initialStatus = stringField(value.initialStatus);
+  const silenceTimeoutMs = numberField(value.silenceTimeoutMs);
+  const backgroundContinuation = booleanField(value.backgroundContinuation);
+  if (!initialStatus || silenceTimeoutMs === undefined || backgroundContinuation === undefined) return undefined;
+  const phaseNames = orderedStringListField(value.phaseNames);
+  return {
+    initialStatus,
+    visibleMilestones: orderedStringListField(value.visibleMilestones),
+    phaseNames: phaseNames.length ? phaseNames : undefined,
+    silenceTimeoutMs,
+    backgroundContinuation,
+    silencePolicy: isRecord(value.silencePolicy) ? value.silencePolicy as unknown as ProgressPlan['silencePolicy'] : undefined,
+    backgroundPolicy: isRecord(value.backgroundPolicy) ? value.backgroundPolicy as unknown as ProgressPlan['backgroundPolicy'] : undefined,
+    cancelPolicy: isRecord(value.cancelPolicy) ? value.cancelPolicy as unknown as ProgressPlan['cancelPolicy'] : undefined,
+    interactionPolicy: isRecord(value.interactionPolicy) ? value.interactionPolicy as unknown as ProgressPlan['interactionPolicy'] : undefined,
+  };
+}
+
 function isEnabledFlag(value: unknown) {
   return value === true || ['1', 'true', 'on', 'enabled'].includes(String(value).trim().toLowerCase());
 }
@@ -748,6 +841,20 @@ function stringListField(value: unknown) {
   return Array.isArray(value)
     ? sortedUnique(value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim()))
     : [];
+}
+
+function orderedStringListField(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const trimmed = item.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
 }
 
 function sortedUnique(values: string[]) {

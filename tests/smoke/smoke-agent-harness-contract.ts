@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
+import { progressModelFromEvent } from '../../src/ui/src/processProgress.js';
 
 type CapturedDispatch = {
   url: string;
@@ -83,6 +84,9 @@ try {
   const second = await runHarnessRequest('balanced-default');
   const fast = await runHarnessRequest('fast-answer');
   const research = await runHarnessRequest('research-grade');
+  const progressOptIn = await runHarnessRequest('balanced-default', {
+    agentHarnessProgressPlanEnabled: true,
+  });
 
   assert.equal(first.result.message, 'Harness shadow smoke completed.');
   assert.equal(first.event.status, 'completed');
@@ -92,6 +96,7 @@ try {
   assert.ok(Array.isArray(first.trace.stages) && first.trace.stages.length > 0);
   assert.deepEqual(first.contract, second.contract);
   assert.deepEqual(first.trace, second.trace);
+  assert.equal(first.progressEvents.length, 0, 'progressPlan projection should stay off by default');
   assert.equal(dispatches[0]?.metadata.harnessProfileId, 'balanced-default');
   assert.equal(dispatches[0]?.metadata.harnessContractRef, first.summary.contractRef);
   assert.equal(dispatches[0]?.metadata.harnessTraceRef, first.summary.traceRef);
@@ -114,13 +119,31 @@ try {
   assert.notDeepEqual(fast.contract, research.contract);
   assert.equal(fast.contract.profileId, 'fast-answer');
   assert.equal(research.contract.profileId, 'research-grade');
-  assert.equal(dispatches.length, 4);
+  assert.equal(progressOptIn.event.status, 'completed');
+  assert.equal(progressOptIn.progressEvents.length, 1);
+  const projected = progressOptIn.progressEvents[0];
+  const projectedRaw = isRecord(projected.raw) ? projected.raw : {};
+  const progressAudit = isRecord(projectedRaw.agentHarnessProgressPlan) ? projectedRaw.agentHarnessProgressPlan : {};
+  assert.equal(projected.type, 'process-progress');
+  assert.equal(projected.status, 'running');
+  assert.equal(projectedRaw.schemaVersion, 'sciforge.interaction-progress-event.v1');
+  assert.equal(projectedRaw.type, 'process-progress');
+  assert.equal(projectedRaw.traceRef, progressOptIn.summary.traceRef);
+  assert.equal(progressAudit.schemaVersion, 'sciforge.agent-harness-progress-plan-projection.v1');
+  assert.equal(progressAudit.contractRef, progressOptIn.summary.contractRef);
+  assert.equal(progressAudit.source, 'request.uiState.agentHarness.contract.progressPlan');
+  const uiProgress = progressModelFromEvent(projected as unknown as Parameters<typeof progressModelFromEvent>[0]);
+  assert.ok(String(projectedRaw.phase || ''), 'projected progress event should expose a contract phase');
+  assert.ok(String(uiProgress?.phase || ''), 'UI progress should preserve a visible phase');
+  assert.equal(uiProgress?.status, 'running');
+  assert.equal(uiProgress?.reason, 'progress-plan-projection');
+  assert.equal(dispatches.length, 5);
   console.log('[ok] agent harness shadow contract is stable, traced, profiled, and metadata-only');
 } finally {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-async function runHarnessRequest(profileId: string) {
+async function runHarnessRequest(profileId: string, uiStateOverrides: Record<string, unknown> = {}) {
   const events: Array<Record<string, unknown>> = [];
   const result = await runWorkspaceRuntimeGateway({
     skillDomain: 'literature',
@@ -134,6 +157,7 @@ async function runHarnessRequest(profileId: string) {
       harnessProfileId: profileId,
       expectedArtifactTypes: ['research-report'],
       selectedComponentIds: ['report-viewer'],
+      ...uiStateOverrides,
     },
     artifacts: [],
   }, {
@@ -145,7 +169,16 @@ async function runHarnessRequest(profileId: string) {
   const summary = isRecord(raw.summary) ? raw.summary : {};
   const contract = isRecord(raw.contract) ? raw.contract : {};
   const trace = isRecord(raw.trace) ? raw.trace : {};
-  return { result, event, raw, summary, contract, trace };
+  const progressEvents = events.filter((item) => item.type === 'process-progress' && isRecord(item.raw) && isRecord(item.raw.agentHarnessProgressPlan));
+  return {
+    result,
+    event,
+    raw,
+    summary,
+    contract,
+    trace,
+    progressEvents,
+  };
 }
 
 async function readJson(req: IncomingMessage) {

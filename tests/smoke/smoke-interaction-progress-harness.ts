@@ -2,11 +2,14 @@ import assert from 'node:assert/strict';
 
 import { createHarnessRuntime } from '../../packages/agent-harness/src/runtime';
 import type { WorkspaceRuntimeEvent } from '../../src/runtime/runtime-types';
+import { requestWithAgentHarnessShadow } from '../../src/runtime/gateway/agent-harness-shadow';
+import { normalizeGatewayRequest } from '../../src/runtime/gateway/gateway-request';
 import {
   STANDARD_INTERACTION_PROGRESS_EVENT_TYPES,
   projectInteractionProgressEvent,
   projectRunStateFromInteractionProgressEvent,
 } from '../../src/runtime/gateway/interaction-progress-harness';
+import { progressModelFromEvent } from '../../src/ui/src/processProgress';
 
 const privatePromptText = 'PRIVATE_PROMPT_TEXT_progress_harness_should_not_emit';
 const privateScenarioText = 'PRIVATE_SCENARIO_TEXT_progress_harness_should_not_emit';
@@ -114,6 +117,50 @@ const clarification = projectInteractionProgressEvent({
 assert.equal(clarification.runState, 'awaiting-interaction');
 assert.equal(clarification.interaction?.kind, 'clarification');
 
+const gatewayRequest = normalizeGatewayRequest({
+  skillDomain: 'literature',
+  prompt: `Project progressPlan through gateway shadow. ${privatePromptText}`,
+  workspacePath: process.cwd(),
+  expectedArtifactTypes: ['research-report'],
+  selectedComponentIds: ['report-viewer'],
+  artifacts: [],
+});
+
+const defaultGatewayEvents: WorkspaceRuntimeEvent[] = [];
+const defaultGatewayRequest = await requestWithAgentHarnessShadow({
+  ...gatewayRequest,
+  uiState: {
+    harnessProfileId: 'balanced-default',
+  },
+}, { onEvent: (event) => defaultGatewayEvents.push(event) }, { status: 'applied' });
+assert.equal(defaultGatewayRequest.uiState?.agentHarnessProgressPlan, undefined);
+assert.equal(defaultGatewayEvents.some(isProgressPlanRuntimeEvent), false);
+
+const optInGatewayEvents: WorkspaceRuntimeEvent[] = [];
+const optInGatewayRequest = await requestWithAgentHarnessShadow({
+  ...gatewayRequest,
+  uiState: {
+    harnessProfileId: 'balanced-default',
+    agentHarnessConsumeProgressPlan: true,
+  },
+}, { onEvent: (event) => optInGatewayEvents.push(event) }, { status: 'applied' });
+const runtimeProjection = optInGatewayEvents.find(isProgressPlanRuntimeEvent);
+const runtimeProjectionRaw = isRecord(runtimeProjection?.raw) ? runtimeProjection.raw : {};
+const runtimeProjectionAudit = isRecord(runtimeProjectionRaw.agentHarnessProgressPlan)
+  ? runtimeProjectionRaw.agentHarnessProgressPlan
+  : {};
+const uiStateAudit = optInGatewayRequest.uiState?.agentHarnessProgressPlan as Record<string, unknown> | undefined;
+assert.equal(runtimeProjection?.type, 'process-progress');
+assert.equal(runtimeProjectionRaw.schemaVersion, 'sciforge.interaction-progress-event.v1');
+assert.equal(runtimeProjectionRaw.reason, 'progress-plan-projection');
+assert.equal(runtimeProjectionAudit.schemaVersion, 'sciforge.agent-harness-progress-plan-projection.v1');
+assert.equal(uiStateAudit?.schemaVersion, 'sciforge.agent-harness-progress-plan-projection.v1');
+assert.equal(uiStateAudit?.contractRef, runtimeProjectionAudit.contractRef);
+assert.equal(JSON.stringify(runtimeProjection).includes(privatePromptText), false);
+const projectedModel = progressModelFromEvent(runtimeProjection as Parameters<typeof progressModelFromEvent>[0]);
+assert.equal(projectedModel?.status, 'running');
+assert.equal(projectedModel?.reason, 'progress-plan-projection');
+
 console.log('[ok] interaction/progress harness contract projects stable events and run states');
 
 function consumeGenericRuntimeEvent(event: WorkspaceRuntimeEvent) {
@@ -124,4 +171,14 @@ function consumeGenericRuntimeEvent(event: WorkspaceRuntimeEvent) {
       .filter((value): value is string => typeof value === 'string')
       .some((value) => value.includes(privatePromptText) || value.includes(privateScenarioText)),
   };
+}
+
+function isProgressPlanRuntimeEvent(event: WorkspaceRuntimeEvent | undefined): event is WorkspaceRuntimeEvent {
+  return event?.type === 'process-progress'
+    && isRecord(event.raw)
+    && isRecord(event.raw.agentHarnessProgressPlan);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

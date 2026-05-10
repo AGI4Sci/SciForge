@@ -59,6 +59,17 @@ export function latestProgressModel(events: AgentStreamEvent[]) {
   return undefined;
 }
 
+export function latestProgressModelFromCompactTrace(source: unknown): ProcessProgressModel | undefined {
+  const candidates = compactProgressCandidates(source);
+  for (const candidate of [...candidates].reverse()) {
+    const eventModel = progressModelFromCompactEvent(candidate);
+    if (eventModel) return eventModel;
+    const transcriptModel = progressModelFromCompactText(candidate);
+    if (transcriptModel) return transcriptModel;
+  }
+  return undefined;
+}
+
 export function formatProgressHeadline(model: ProcessProgressModel | undefined, fallback?: string) {
   if (!model) return fallback;
   const parts = [model.title];
@@ -246,6 +257,189 @@ function normalizeProgressModel(progress: Record<string, unknown>, event: AgentS
     canContinue: progress.canContinue === true || progress.can_continue === true,
     status: normalizeStatus(asString(progress.status), phase),
   };
+}
+
+function compactProgressCandidates(source: unknown, depth = 0): unknown[] {
+  if (depth > 5 || source === undefined || source === null) return [];
+  if (typeof source === 'string') return [source];
+  if (Array.isArray(source)) return source.flatMap((item) => compactProgressCandidates(item, depth + 1));
+  if (!isRecord(source)) return [];
+
+  const direct: unknown[] = [];
+  if (looksLikeCompactStreamEvent(source)) direct.push(source);
+  const streamProcess = isRecord(source.streamProcess) ? source.streamProcess : undefined;
+  if (streamProcess) {
+    direct.push(...compactProgressCandidates(streamProcess.events, depth + 1));
+    if (typeof streamProcess.summary === 'string') direct.push(streamProcess.summary);
+  }
+  if (Array.isArray(source.runs)) direct.push(...compactProgressCandidates(source.runs, depth + 1));
+  if (isRecord(source.raw)) direct.push(...compactProgressCandidates(source.raw, depth + 1));
+  if (Array.isArray(source.events)) direct.push(...compactProgressCandidates(source.events, depth + 1));
+  if (isRecord(source.session)) direct.push(...compactProgressCandidates(source.session, depth + 1));
+  if (typeof source.summary === 'string') direct.push(source.summary);
+  return direct;
+}
+
+function looksLikeCompactStreamEvent(value: Record<string, unknown>) {
+  return typeof value.type === 'string'
+    || typeof value.label === 'string'
+    || isRecord(value.progress)
+    || isRecord(value.raw)
+    || value.schemaVersion === 'sciforge.interaction-progress-event.v1';
+}
+
+function progressModelFromCompactEvent(value: unknown): ProcessProgressModel | undefined {
+  if (!isRecord(value)) return undefined;
+  const type = asString(value.type) ?? PROCESS_PROGRESS_EVENT_TYPE;
+  const label = asString(value.label) ?? type;
+  const detail = asString(value.detail) ?? asString(value.message) ?? asString(value.text) ?? '';
+  const createdAt = asString(value.createdAt) ?? asString(value.created_at) ?? nowIso();
+  const raw = compactEventRaw(value, type, label, detail);
+  const model = progressModelFromEvent({
+    id: asString(value.id) ?? makeId('evt'),
+    type,
+    label,
+    detail,
+    createdAt,
+    raw,
+  });
+  if (model && (model.phase !== PROCESS_PROGRESS_PHASE.OBSERVE || type !== PROCESS_PROGRESS_EVENT_TYPE || isRecord(raw.progress))) {
+    return model;
+  }
+  return progressModelFromCompactText(`${label}: ${detail}`);
+}
+
+function compactEventRaw(value: Record<string, unknown>, type: string, label: string, detail: string): Record<string, unknown> {
+  if (isRecord(value.raw)) return value.raw;
+  if (value.schemaVersion === 'sciforge.interaction-progress-event.v1') return value;
+  if (isRecord(value.progress)) return { type, progress: value.progress };
+  if (type === PROCESS_PROGRESS_EVENT_TYPE) {
+    const recovered = progressModelFromCompactText(`${label}: ${detail}`);
+    if (recovered) {
+      return {
+        type,
+        progress: {
+          phase: recovered.phase,
+          title: recovered.title,
+          detail: recovered.detail,
+          reading: recovered.reading,
+          writing: recovered.writing,
+          waitingFor: recovered.waitingFor,
+          nextStep: recovered.nextStep,
+          lastEvent: recovered.lastEvent,
+          reason: recovered.reason,
+          recoveryHint: recovered.recoveryHint,
+          canAbort: recovered.canAbort,
+          canContinue: recovered.canContinue,
+          status: recovered.status,
+        },
+      };
+    }
+  }
+  return { type };
+}
+
+function progressModelFromCompactText(value: unknown): ProcessProgressModel | undefined {
+  if (typeof value !== 'string') return undefined;
+  const wholeStructured = progressModelFromStructuredDetail(value);
+  if (wholeStructured) return wholeStructured;
+  const lines = value
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^[-*]\s*/, ''))
+    .filter(Boolean);
+  for (const line of [...lines].reverse()) {
+    const model = progressModelFromTranscriptLine(line);
+    if (model) return model;
+  }
+  return undefined;
+}
+
+function progressModelFromTranscriptLine(line: string): ProcessProgressModel | undefined {
+  const structured = progressModelFromStructuredDetail(line);
+  if (structured) return structured;
+  const separator = line.indexOf(':');
+  const label = separator > 0 ? line.slice(0, separator).trim() : '';
+  const headline = separator > 0 ? line.slice(separator + 1).trim() : line;
+  if (!headline || (!label && !/读 |写 |等 |最近 |下一步 |Phase:|Status:/i.test(headline))) return undefined;
+  const parts = headline.split(/\s+·\s+/).map((part) => part.trim()).filter(Boolean);
+  const title = parts[0] || label || headline;
+  const reading: string[] = [];
+  const writing: string[] = [];
+  let waitingFor: string | undefined;
+  let nextStep: string | undefined;
+  let lastEvent: ProcessProgressModel['lastEvent'];
+  for (const part of parts.slice(1)) {
+    const read = part.match(/^读\s+(.+)$/);
+    if (read?.[1]) reading.push(...splitCompactList(read[1]));
+    const write = part.match(/^写\s+(.+)$/);
+    if (write?.[1]) writing.push(...splitCompactList(write[1]));
+    const wait = part.match(/^等\s+(.+)$/);
+    if (wait?.[1]) waitingFor = wait[1].trim();
+    const recent = part.match(/^最近\s+([^:：]+)[:：]\s*(.+)$/);
+    if (recent?.[1] && recent?.[2]) lastEvent = { label: recent[1].trim(), detail: recent[2].trim() };
+    const next = part.match(/^下一步\s+(.+)$/);
+    if (next?.[1]) nextStep = next[1].trim();
+  }
+  const phase = normalizePhase([label, title, waitingFor, nextStep].filter(Boolean).join(' '));
+  const hasProgressFacts = Boolean(reading.length || writing.length || waitingFor || nextStep || lastEvent)
+    || /安全中止|中止|补充指令|continue|abort|backend|HTTP stream/i.test(headline);
+  if (!hasProgressFacts && phase === PROCESS_PROGRESS_PHASE.OBSERVE) return undefined;
+  return {
+    phase,
+    title,
+    detail: headline,
+    reading,
+    writing,
+    waitingFor,
+    nextStep,
+    lastEvent,
+    reason: /后端返回新事件|HTTP stream|backend/i.test(headline) ? PROCESS_PROGRESS_REASON.BACKEND_WAITING : undefined,
+    recoveryHint: undefined,
+    canAbort: /安全中止|中止|abort/i.test(headline),
+    canContinue: /补充指令|继续补充|continue/i.test(headline),
+    status: normalizeStatus(undefined, phase),
+  };
+}
+
+function progressModelFromStructuredDetail(line: string): ProcessProgressModel | undefined {
+  if (!/\bPhase:\s*/.test(line) && !/\bStatus:\s*/.test(line)) return undefined;
+  const phaseText = firstStructuredField(line, 'Phase');
+  const statusText = firstStructuredField(line, 'Status');
+  const reason = firstStructuredField(line, 'Reason');
+  const cancellation = firstStructuredField(line, 'Cancellation');
+  const interaction = firstStructuredField(line, 'Interaction');
+  const phase = normalizePhase(phaseText ?? line);
+  const detail = [
+    phaseText ? `Phase: ${phaseText}` : '',
+    statusText ? `Status: ${statusText}` : '',
+    reason ? `Reason: ${reason}` : '',
+    cancellation ? `Cancellation: ${cancellation}` : '',
+    interaction ? `Interaction: ${interaction}` : '',
+  ].filter(Boolean).join('\n') || line;
+  return {
+    phase,
+    title: titleForPhase(phase, phaseText ?? '进展'),
+    detail,
+    reading: [],
+    writing: [],
+    waitingFor: interaction?.includes('human-approval') ? '人工确认' : interaction?.includes('clarification') ? '澄清信息' : undefined,
+    nextStep: interaction?.includes('human-approval') ? '等待确认后继续执行需要人工批准的步骤。' : undefined,
+    lastEvent: undefined,
+    reason,
+    recoveryHint: cancellation,
+    canAbort: statusText === 'running' || statusText === 'blocked',
+    canContinue: statusText === 'blocked',
+    status: normalizeStatus(statusText, phase),
+  };
+}
+
+function firstStructuredField(line: string, name: string) {
+  const match = line.match(new RegExp(`${name}:\\s*([^\\n]+)`));
+  return match?.[1]?.trim();
+}
+
+function splitCompactList(value: string) {
+  return value.split(/[、,]/).map((item) => item.trim()).filter(Boolean);
 }
 
 function progressModelFromInteractionProgress(progress: RuntimeInteractionProgressEvent): ProcessProgressModel {

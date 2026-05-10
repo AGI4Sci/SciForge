@@ -13,7 +13,7 @@ import {
 } from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
 import { normalizeWorkspaceRuntimeEvent } from './api/sciforgeToolsClient/runtimeEvents';
-import { buildInitialResponseProgressEvent, buildRequestAcceptedProgressEvent, buildSilentStreamProgressEvent, formatProgressHeadline, progressModelFromEvent, silentStreamWaitThresholdMs } from './processProgress';
+import { buildInitialResponseProgressEvent, buildRequestAcceptedProgressEvent, buildSilentStreamProgressEvent, formatProgressHeadline, latestProgressModelFromCompactTrace, progressModelFromEvent, silentStreamWaitThresholdMs } from './processProgress';
 
 function event(partial: Partial<AgentStreamEvent>): AgentStreamEvent {
   return {
@@ -252,4 +252,56 @@ test('maps structured run cancellation into process progress cancellation status
   assert.equal(model?.status, PROCESS_PROGRESS_STATUS.CANCELLED);
   assert.equal(model?.nextStep, '运行已结束，保留结构化终止原因供下一轮恢复或审计。');
   assert.match(model?.detail ?? '', /Cancellation: system-aborted/);
+});
+
+test('recovers latest progress model from compact stream process events without the React event array', () => {
+  const model = latestProgressModelFromCompactTrace({
+    streamProcess: {
+      eventCount: 2,
+      events: [
+        {
+          type: 'tool-call',
+          label: '读取',
+          detail: '正在读取 /workspace/input/papers.csv',
+          createdAt: '2026-05-08T00:00:10.000Z',
+        },
+        {
+          type: PROCESS_PROGRESS_EVENT_TYPE,
+          label: '等待',
+          detail: '正在等待后端返回新事件 · 最近 读取: 正在读取 /workspace/input/papers.csv · 下一步 收到新事件后继续执行；也可以安全中止当前 stream 或继续补充指令排队。',
+          createdAt: '2026-05-08T00:01:05.000Z',
+        },
+      ],
+    },
+  });
+
+  assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.WAIT);
+  assert.equal(model?.reason, PROCESS_PROGRESS_REASON.BACKEND_WAITING);
+  assert.equal(model?.lastEvent?.label, '读取');
+  assert.match(model?.nextStep ?? '', /收到新事件后继续执行/);
+  assert.equal(model?.canAbort, true);
+  assert.equal(model?.canContinue, true);
+});
+
+test('recovers latest progress model from compact session history summary after events are omitted', () => {
+  const model = latestProgressModelFromCompactTrace({
+    runs: [{
+      id: 'run-failed',
+      raw: {
+        streamProcess: {
+          eventCount: 40,
+          summary: [
+            '工作过程摘要:',
+            '- 读取: 正在读取 · 读 /workspace/input/papers.csv',
+            '- 等待: 正在等待后端返回新事件 · 等 后端返回新事件 · 最近 读取: 正在读取 /workspace/input/papers.csv · 下一步 收到新事件后继续执行；也可以安全中止当前 stream 或继续补充指令排队。',
+          ].join('\n'),
+        },
+      },
+    }],
+  });
+
+  assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.WAIT);
+  assert.equal(model?.waitingFor, '后端返回新事件');
+  assert.equal(model?.lastEvent?.detail, '正在读取 /workspace/input/papers.csv');
+  assert.match(formatProgressHeadline(model) ?? '', /最近 读取/);
 });

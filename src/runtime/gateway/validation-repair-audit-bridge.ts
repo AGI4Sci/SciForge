@@ -1,4 +1,5 @@
 import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract/validation-failure';
+import type { ObserveResponse } from '@sciforge-ui/runtime-contract/observe';
 import {
   normalizeRuntimeVerificationResults,
   VERIFICATION_RESULT_CONTRACT_ID,
@@ -8,13 +9,18 @@ import {
   createAuditRecord,
   createValidationDecision,
   decideRepairPolicy,
+  projectValidationFindingsFromResult,
+  validationFindingsFromActionResult,
   validationFindingsFromContractFailure,
+  validationFindingsFromObserveResponse,
   validationFindingsFromRuntimeVerification,
+  type ActionResultValidationProjection,
   type AuditRecord,
   type RepairBudgetSnapshot,
   type RepairDecision,
   type ValidationDecision,
   type ValidationFinding,
+  type ValidationFindingProjectionInput,
   type ValidationSubjectRef,
 } from '@sciforge-ui/runtime-contract/validation-repair-audit';
 import type { WorkEvidence } from '@sciforge-ui/runtime-contract/work-evidence';
@@ -25,6 +31,9 @@ export interface ValidationRepairAuditBridgeInput {
   subject: Pick<ValidationSubjectRef, 'kind' | 'id'> & Partial<Omit<ValidationSubjectRef, 'kind' | 'id'>>;
   contractValidationFailures?: ContractValidationFailure[];
   runtimeVerificationResults?: unknown;
+  observeResponse?: ObserveResponse;
+  actionResult?: ActionResultValidationProjection;
+  findingProjections?: ValidationFindingProjectionInput[];
   findings?: ValidationFinding[];
   workEvidence?: WorkEvidence[];
   repairBudget?: Partial<RepairBudgetSnapshot>;
@@ -84,6 +93,9 @@ export function createValidationRepairAuditChain(input: ValidationRepairAuditBri
       capabilityId: subject.capabilityId,
       relatedRefs: input.relatedRefs,
     }),
+    ...validationFindingsFromObserveBridgeInput(input, subject),
+    ...validationFindingsFromActionBridgeInput(input),
+    ...projectValidationFindingsFromResult(input.findingProjections ?? []),
     ...(input.findings ?? []),
   ];
   const workEvidence = input.workEvidence ?? bridgeWorkEvidence(input.chainId, findings);
@@ -186,6 +198,27 @@ function bridgeWorkEvidence(chainId: string, findings: ValidationFinding[]): Wor
     recoverActions: uniqueStrings(findings.flatMap((finding) => finding.recoverActions)),
     rawRef: `validation-repair-audit:${chainId}`,
   }];
+}
+
+function validationFindingsFromObserveBridgeInput(
+  input: ValidationRepairAuditBridgeInput,
+  subject: ValidationSubjectRef,
+): ValidationFinding[] {
+  if (!input.observeResponse) return [];
+  return validationFindingsFromObserveResponse(input.observeResponse, {
+    id: `${input.chainId}:observe:${input.observeResponse.providerId ?? subject.capabilityId ?? 'provider'}:${input.observeResponse.failureMode ?? input.observeResponse.status}`,
+    capabilityId: subject.capabilityId ?? input.observeResponse.providerId,
+    relatedRefs: input.relatedRefs,
+  });
+}
+
+function validationFindingsFromActionBridgeInput(input: ValidationRepairAuditBridgeInput): ValidationFinding[] {
+  if (!input.actionResult) return [];
+  return validationFindingsFromActionResult({
+    ...input.actionResult,
+    id: input.actionResult.id ?? `${input.chainId}:action:${input.actionResult.providerId ?? input.actionResult.actionId ?? 'provider'}:${input.actionResult.failureMode ?? input.actionResult.status}`,
+    relatedRefs: uniqueStrings([...(input.relatedRefs ?? []), ...(input.actionResult.relatedRefs ?? [])]),
+  });
 }
 
 function uniqueStrings(values: string[]) {

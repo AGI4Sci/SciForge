@@ -11,7 +11,7 @@ import {
   createValidationDecision,
   decideRepairPolicy,
   validationFindingsFromContractFailure,
-  validationFindingsFromObserveResponse,
+  type ActionResultValidationProjection,
   type AuditRecord,
   type RepairBudgetSnapshot,
   type RepairDecision,
@@ -62,6 +62,18 @@ const observeResponse: ObserveResponse = {
   diagnostics: ['provider local.vision-sense unavailable'],
 };
 
+const actionResult: ActionResultValidationProjection = {
+  status: 'failed',
+  actionId: 'publish:dry-run',
+  providerId: 'external.action-provider',
+  message: 'Action provider failed before returning a durable completion receipt.',
+  failureMode: 'provider-unavailable',
+  traceRef: 'action:call-1',
+  artifactRefs: ['artifact:publish-request'],
+  relatedRefs: ['run:action-1/output.json'],
+  diagnostics: ['provider external.action-provider unavailable'],
+};
+
 const verificationGateResults: RuntimeVerificationResult[] = [{
   id: 'gate:artifact-consistency',
   verdict: 'fail',
@@ -95,17 +107,39 @@ const chains = [
     artifactRefs: ['artifact:broken-report'],
     findings: validationFindingsFromContractFailure(generatedTaskFailure, { idPrefix: 'generated' }),
   }),
-  buildChain({
-    kind: 'observe-result',
-    id: 'observe-1',
-    capabilityId: 'local.vision-sense',
-    contractId: 'sciforge.observe-response.v1',
-    observeTraceRef: observeResponse.traceRef,
-    artifactRefs: observeResponse.artifactRefs,
-    findings: validationFindingsFromObserveResponse(observeResponse, {
-      id: 'observe:local.vision-sense:provider-unavailable',
+  createValidationRepairAuditChain({
+    chainId: 'observe-1',
+    subject: {
+      kind: 'observe-result',
+      id: 'observe-1',
       capabilityId: 'local.vision-sense',
-    }),
+      contractId: 'sciforge.observe-response.v1',
+      observeTraceRef: observeResponse.traceRef,
+      artifactRefs: observeResponse.artifactRefs,
+      currentRefs: ['current:user-request'],
+    },
+    repairBudget,
+    observeResponse,
+    sinkRefs: ['appendTaskAttempt:observe-1'],
+    telemetrySpanRefs: ['span:observe:observe-1', 'span:repair-decision:observe-1'],
+    createdAt,
+  }),
+  createValidationRepairAuditChain({
+    chainId: 'action-1',
+    subject: {
+      kind: 'action-result',
+      id: 'action-1',
+      capabilityId: 'external.action-provider',
+      contractId: 'sciforge.action-response.v1',
+      actionTraceRef: actionResult.traceRef,
+      artifactRefs: actionResult.artifactRefs ?? [],
+      currentRefs: ['current:user-request'],
+    },
+    repairBudget,
+    actionResult,
+    sinkRefs: ['appendTaskAttempt:action-1'],
+    telemetrySpanRefs: ['span:action:action-1', 'span:repair-decision:action-1'],
+    createdAt,
   }),
   createValidationRepairAuditChain({
     chainId: 'verification-gate-1',
@@ -148,17 +182,22 @@ assert.deepEqual(
     'direct-payload:payload-schema:repair-rerun:repair-requested',
     'generated-task-result:artifact-schema:repair-rerun:repair-requested',
     'observe-result:observe-trace:repair-rerun:repair-requested',
+    'action-result:action-trace:repair-rerun:repair-requested',
     'verification-gate:runtime-verification:repair-rerun:repair-requested',
   ],
 );
 assert.ok(chains[1].audit.relatedRefs.includes('.sciforge/tasks/generated-task.py'));
 assert.ok(chains[2].audit.relatedRefs.includes('observe:call-1'));
-assert.equal(chains[3].validation.runtimeVerificationGate?.policyId, 'runtime-verification:strict');
-assert.ok(chains[3].audit.relatedRefs.includes('verification:gate-1'));
-assert.ok(chains[3].audit.relatedRefs.includes('verification:policy:runtime-verification:strict'));
-assert.ok(chains[3].audit.recoverActions.includes('preserve failed verification gate result in audit'));
-assert.deepEqual(chains[3].audit.sinkRefs, ['appendTaskAttempt:verification-gate-1']);
-assert.deepEqual(chains[3].audit.telemetrySpanRefs, ['span:verification-gate:verification-gate-1', 'span:repair-decision:verification-gate-1']);
+assert.equal(chains[2].validation.findings[0]?.source, 'observe-response');
+assert.ok(chains[3].audit.relatedRefs.includes('action:call-1'));
+assert.equal(chains[3].validation.findings[0]?.source, 'action-response');
+assert.ok(chains[3].audit.recoverActions.includes('retry with fallback action provider'));
+assert.equal(chains[4].validation.runtimeVerificationGate?.policyId, 'runtime-verification:strict');
+assert.ok(chains[4].audit.relatedRefs.includes('verification:gate-1'));
+assert.ok(chains[4].audit.relatedRefs.includes('verification:policy:runtime-verification:strict'));
+assert.ok(chains[4].audit.recoverActions.includes('preserve failed verification gate result in audit'));
+assert.deepEqual(chains[4].audit.sinkRefs, ['appendTaskAttempt:verification-gate-1']);
+assert.deepEqual(chains[4].audit.telemetrySpanRefs, ['span:verification-gate:verification-gate-1', 'span:repair-decision:verification-gate-1']);
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-validation-repair-audit-real-'));
 try {
@@ -358,7 +397,7 @@ try {
   await rm(workspace, { recursive: true, force: true });
 }
 
-console.log(`[ok] validation/repair/audit chain shares shape across direct payload, generated task, observe, and verification gate failures: ${chains.map((chain) => chainShape(chain)).join(', ')}`);
+console.log(`[ok] validation/repair/audit chain shares shape across direct payload, generated task, observe, action, and verification gate failures: ${chains.map((chain) => chainShape(chain)).join(', ')}`);
 
 function buildChain(input: {
   kind: ValidationSubjectKind;

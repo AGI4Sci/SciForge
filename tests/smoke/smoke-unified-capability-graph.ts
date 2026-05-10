@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 
+import {
+  brokerCapabilities,
+  CapabilityManifestRegistry,
+} from '../../src/runtime/capability-broker.js';
 import { loadCoreCapabilityManifestRegistry } from '../../src/runtime/capability-manifest-registry.js';
 import { projectCapabilityManifestsToHarnessCandidates } from '../../src/runtime/capability-harness-candidates.js';
 import {
@@ -60,7 +64,59 @@ const registryGraph = loadCoreCapabilityManifestRegistry().projectHarnessCandida
 });
 assert.ok(registryGraph.candidates.some((candidate) => candidate.id === 'observe.vision' && candidate.kind === 'observe'));
 
-console.log('[ok] unified capability graph projects skill/tool/observe/action/verifier/view manifests into harness candidates');
+const registry = loadCoreCapabilityManifestRegistry();
+const packageAction = registry.getManifest('action.sciforge.computer-use');
+const packageVerifier = registry.getManifest('verifier.fixture.human-approval');
+assert.ok(packageAction, 'packages/actions computer-use provider manifest should project into the core capability registry');
+assert.ok(packageVerifier, 'packages/verifiers human approval provider manifest should project into the core capability registry');
+assert.equal(packageAction.kind, 'action');
+assert.equal(packageVerifier.kind, 'verifier');
+assert.equal(registry.getManifestByProviderId('sciforge.computer-use')?.id, 'action.sciforge.computer-use');
+assert.equal(registry.getManifestByProviderId('fixture.human-approval')?.id, 'verifier.fixture.human-approval');
+
+const packageGraph = registry.projectHarnessCandidates({
+  preferredCapabilityIds: ['action.sciforge.computer-use', 'verifier.fixture.human-approval'],
+  availableProviders: ['sciforge.computer-use', 'fixture.human-approval'],
+});
+const packageActionCandidate = packageGraph.candidates.find((candidate) => candidate.id === 'action.sciforge.computer-use');
+const packageVerifierCandidate = packageGraph.candidates.find((candidate) => candidate.id === 'verifier.fixture.human-approval');
+assert.equal(packageActionCandidate?.kind, 'action');
+assert.equal(packageVerifierCandidate?.kind, 'verifier');
+assert.ok(packageActionCandidate?.providerAvailability);
+assert.ok(packageVerifierCandidate?.providerAvailability);
+assert.equal(packageActionCandidate?.providerAvailability?.[0]?.providerId, 'sciforge.computer-use');
+assert.equal(packageVerifierCandidate?.providerAvailability?.[0]?.providerId, 'fixture.human-approval');
+assert.equal(packageActionCandidate?.budget?.maxActionSteps, 12);
+assert.equal(packageVerifierCandidate?.budget?.exhaustedPolicy, 'needs-human');
+
+const brokerOutput = brokerCapabilities({
+  prompt: 'Use desktop GUI computer use, then request human approval verification for the action trace.',
+  scenarioPolicy: {
+    preferredCapabilityIds: ['action.sciforge.computer-use', 'verifier.fixture.human-approval'],
+  },
+  runtimePolicy: {
+    riskTolerance: 'high',
+    topK: 8,
+  },
+  availableProviders: ['sciforge.computer-use', 'fixture.human-approval'],
+}, new CapabilityManifestRegistry(registry.manifests));
+const brokerActionAudit = brokerOutput.audit.find((entry) => entry.id === 'action.sciforge.computer-use');
+const brokerVerifierAudit = brokerOutput.audit.find((entry) => entry.id === 'verifier.fixture.human-approval');
+assert.ok(brokerActionAudit, 'broker audit should see projected package action capability');
+assert.ok(brokerVerifierAudit, 'broker audit should see projected package verifier capability');
+assert.ok(brokerOutput.briefs.some((brief) => brief.id === 'action.sciforge.computer-use'));
+assert.ok(brokerOutput.briefs.some((brief) => brief.id === 'verifier.fixture.human-approval'));
+
+const lazyAuditText = JSON.stringify({
+  registryAudit: registry.compactAudit,
+  packageGraphAudit: packageGraph.audit,
+  brokerAudit: brokerOutput.audit,
+});
+assert.equal(lazyAuditText.includes('inputSchema'), false, 'registry/graph/broker audits must keep schemas lazy');
+assert.equal(lazyAuditText.includes('outputSchema'), false, 'registry/graph/broker audits must keep schemas lazy');
+assert.equal(lazyAuditText.includes('"examples"'), false, 'registry/graph/broker audits must keep examples lazy');
+
+console.log('[ok] unified capability graph projects skill/tool/observe/action/verifier/view plus package action/verifier manifests into broker and harness audits');
 
 function manifest(
   id: string,

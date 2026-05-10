@@ -27,6 +27,18 @@ const frozenHardcodedPolicyProse: Record<PromptBuilderName, {
 const trustedPolicySpreadPattern = /\.\.\.agentServer[A-Za-z]*(?:PromptPolicyLines|ContractLines)\(/g;
 const trustedPolicyImportPattern = /from ['"](?:@sciforge-ui\/runtime-contract\/[^'"]+|\.\.\/\.\.\/\.\.\/packages\/skills\/runtime-policy)['"]/;
 const promptRenderSummarySchema = 'sciforge.agentserver.prompt-render-plan-summary.v1';
+const promptProviderSpreadCallPattern = /\.\.\.([A-Za-z_$][\w$]*(?:PromptPolicyLines|ContractLines))\(/g;
+
+const allowedHarnessPromptRenderSources = [
+  'contextEnvelope.sessionFacts.agentHarnessHandoff',
+  'contextEnvelope.sessionFacts.promptRenderPlan',
+  'contextEnvelope.scenarioFacts.agentHarnessHandoff',
+  'contextEnvelope.scenarioFacts.promptRenderPlan',
+  'contextEnvelope.agentHarnessHandoff',
+  'contextEnvelope.promptRenderPlan',
+  'request.metadata.agentHarnessHandoff',
+  'request.metadata.promptRenderPlan',
+];
 
 const policyProsePattern = /\b(?:agent backend|artifact|capability|Computer Use|contract|continuation|current turn|do not|Do not|failed-with-reason|failureReason|fresh|generated task|Hard contract|JSON|must|MUST|Never|objectReferences|PDFs?|policy|prefer|preserve|prior|refs?|repair|rerun|should|taskFiles|ToolPayload|valid|workspace)\b/;
 
@@ -40,6 +52,7 @@ if (trustedImportCount < 2) {
     `found trusted provider imports: ${trustedImportCount}`,
   ]);
 }
+const trustedPolicyProviderNames = collectTrustedPolicyProviderNames(importLines);
 
 const errors: string[] = [];
 const summaries: string[] = [];
@@ -68,12 +81,20 @@ const generationBody = extractFunctionBody('buildAgentServerGenerationPrompt').t
 const repairBody = extractFunctionBody('buildAgentServerRepairPrompt').text;
 const trustedGenerationSpreads = generationBody.match(trustedPolicySpreadPattern) ?? [];
 const trustedRepairSpreads = repairBody.match(trustedPolicySpreadPattern) ?? [];
+const untrustedGenerationProviderSpreads = collectUntrustedPolicyProviderSpreads(generationBody, trustedPolicyProviderNames);
+const untrustedRepairProviderSpreads = collectUntrustedPolicyProviderSpreads(repairBody, trustedPolicyProviderNames);
 
 if (trustedGenerationSpreads.length < 8) {
   errors.push(`buildAgentServerGenerationPrompt should continue to source strategy policy from trusted provider spreads; found ${trustedGenerationSpreads.length}`);
 }
 if (trustedRepairSpreads.length < 2) {
   errors.push(`buildAgentServerRepairPrompt should continue to source repair policy from trusted provider spreads; found ${trustedRepairSpreads.length}`);
+}
+if (untrustedGenerationProviderSpreads.length) {
+  errors.push(`buildAgentServerGenerationPrompt has untrusted prompt policy/contract providers: ${untrustedGenerationProviderSpreads.join(', ')}`);
+}
+if (untrustedRepairProviderSpreads.length) {
+  errors.push(`buildAgentServerRepairPrompt has untrusted prompt policy/contract providers: ${untrustedRepairProviderSpreads.join(', ')}`);
 }
 
 if (!source.includes(promptRenderSummarySchema)) {
@@ -86,6 +107,34 @@ if (!/\.\.\.compactGenerationRequestForAgentServer\(request, capabilityBrokerBri
   errors.push('buildAgentServerGenerationPrompt must pass promptRenderPlanSummary into compactGenerationRequestForAgentServer.');
 }
 
+const promptRenderCandidateBody = extractFunctionBody('promptRenderPlanSummaryForAgentServer').text;
+const promptRenderSummaryBody = extractFunctionBody('promptRenderPlanSummaryFromPlan').text;
+const promptRenderEntryBody = extractFunctionBody('promptRenderPlanEntrySummary').text;
+const harnessPromptRenderSources = Array.from(promptRenderCandidateBody.matchAll(/source:\s*'([^']+)'/g)).map((match) => match[1] ?? '');
+const unexpectedHarnessPromptRenderSources = harnessPromptRenderSources.filter((sourceName) => !allowedHarnessPromptRenderSources.includes(sourceName));
+const missingHarnessPromptRenderSources = allowedHarnessPromptRenderSources.filter((sourceName) => !harnessPromptRenderSources.includes(sourceName));
+if (unexpectedHarnessPromptRenderSources.length || missingHarnessPromptRenderSources.length) {
+  errors.push([
+    'promptRenderPlanSummaryForAgentServer must only accept harness prompt render plans from allowed handoff providers.',
+    unexpectedHarnessPromptRenderSources.length ? `Unexpected sources: ${unexpectedHarnessPromptRenderSources.join(', ')}` : undefined,
+    missingHarnessPromptRenderSources.length ? `Missing sources: ${missingHarnessPromptRenderSources.join(', ')}` : undefined,
+  ].filter(Boolean).join('\n'));
+}
+const forbiddenHarnessRawFields = ['renderedText', 'promptDirectives', 'directiveRefs', 'strategyRefs', 'selectedContextRefs'];
+const leakedHarnessRawFields = forbiddenHarnessRawFields.filter((field) => new RegExp(`\\b${field}\\b`).test(promptRenderSummaryBody));
+if (leakedHarnessRawFields.length) {
+  errors.push(`promptRenderPlanSummaryFromPlan must not copy raw harness prompt fields into AgentServer prompts: ${leakedHarnessRawFields.join(', ')}`);
+}
+if (!/renderedEntries\s*=\s*Array\.isArray\(plan\.renderedEntries\)[\s\S]*?\.map\(promptRenderPlanEntrySummary\)/.test(promptRenderSummaryBody)) {
+  errors.push('promptRenderPlanSummaryFromPlan must project harness policy prose only through renderedEntries -> promptRenderPlanEntrySummary.');
+}
+if (!/if \(!id \|\| !sourceCallbackId\) return undefined;/.test(promptRenderEntryBody)) {
+  errors.push('promptRenderPlanEntrySummary must require id and sourceCallbackId for every rendered entry.');
+}
+if (!/out\.text = clipForAgentServerPrompt\(text, 800\);/.test(promptRenderEntryBody)) {
+  errors.push('promptRenderPlanEntrySummary must keep rendered entry text clipped before adding it to the prompt.');
+}
+
 if (errors.length) fail(errors);
 
 console.log([
@@ -93,10 +142,11 @@ console.log([
   ...summaries.map((summary) => `- ${summary}`),
   `- trustedGenerationPolicyProviderSpreads=${trustedGenerationSpreads.length}`,
   `- trustedRepairPolicyProviderSpreads=${trustedRepairSpreads.length}`,
+  `- harnessPromptRenderSources=${harnessPromptRenderSources.length}`,
   '- allowed new strategy prose sources: @sciforge-ui/runtime-contract policy lines, packages/skills/runtime-policy, harness promptRenderPlanSummary.renderedEntries',
 ].join('\n'));
 
-function extractFunctionBody(name: PromptBuilderName) {
+function extractFunctionBody(name: string) {
   const start = lines.findIndex((line) => line.includes(`function ${name}`));
   if (start < 0) throw new Error(`missing ${name}`);
   let depth = 0;
@@ -146,6 +196,33 @@ function extractInlineString(line: string) {
 function digestPolicyProse(findings: PolicyProseFinding[]) {
   const stable = findings.map((finding) => finding.text).join('\n');
   return createHash('sha1').update(stable).digest('hex').slice(0, 12);
+}
+
+function collectTrustedPolicyProviderNames(linesToScan: string[]) {
+  const providers = new Set<string>();
+  for (const line of linesToScan) {
+    if (!trustedPolicyImportPattern.test(line)) continue;
+    const namedImports = line.match(/import\s+\{([^}]+)\}\s+from/);
+    if (!namedImports?.[1]) continue;
+    for (const specifier of namedImports[1].split(',')) {
+      const parts = specifier.trim().split(/\s+as\s+/);
+      const localName = (parts[1] ?? parts[0])?.trim();
+      if (localName && /(?:PromptPolicyLines|ContractLines)$/.test(localName)) {
+        providers.add(localName);
+      }
+    }
+  }
+  return providers;
+}
+
+function collectUntrustedPolicyProviderSpreads(body: string, trustedProviders: Set<string>) {
+  const untrusted: string[] = [];
+  for (const match of body.matchAll(promptProviderSpreadCallPattern)) {
+    const providerName = match[1];
+    if (!providerName || trustedProviders.has(providerName)) continue;
+    untrusted.push(providerName);
+  }
+  return [...new Set(untrusted)].sort();
 }
 
 function fail(messages: string[]): never {
