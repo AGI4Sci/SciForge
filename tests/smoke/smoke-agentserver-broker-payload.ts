@@ -101,6 +101,27 @@ assert.equal(
 const prompt = buildAgentServerGenerationPrompt({
   prompt: request.prompt,
   skillDomain: request.skillDomain,
+  metadata: {
+    agentHarnessHandoff: {
+      promptRenderPlan: {
+        schemaVersion: 'sciforge.agent-harness-prompt-render.v1',
+        renderMode: 'metadata-scaffold',
+        deterministic: true,
+        sourceRefs: {
+          contractRef: 'harness-contract:broker-payload',
+          traceRef: 'harness-trace:broker-payload',
+        },
+        renderedEntries: [{
+          kind: 'strategy',
+          id: 'intent-mode',
+          sourceCallbackId: 'harness.defaults.intentMode',
+          text: 'intentMode=fresh',
+        }],
+        renderedText: 'PROMPT_RENDER_FULL_TEXT_SENTINEL',
+        renderDigest: 'sha1:broker-payload-render-digest',
+      },
+    },
+  },
   contextEnvelope,
   workspaceTreeSummary: [],
   availableSkills: [{
@@ -157,5 +178,12 @@ assert.equal(prompt.includes('OLD_FULL_VIEW_SENTINEL'), false);
 assert.equal(prompt.includes('"availableSkills"'), false, 'default handoff must omit scattered skill list');
 assert.equal(prompt.includes('"availableTools"'), false, 'default handoff must omit scattered tool list');
 assert.equal(prompt.includes('"uiComponents"'), false, 'default handoff must omit full UI component list');
+assert.match(prompt, /"promptRenderPlanSummary"/);
+assert.match(prompt, /"source": "request\.metadata\.agentHarnessHandoff"/);
+assert.match(prompt, /"renderDigest": "sha1:broker-payload-render-digest"/);
+assert.match(prompt, /"contractRef": "harness-contract:broker-payload"/);
+assert.match(prompt, /"renderedEntries"/);
+assert.match(prompt, /"sourceCallbackId": "harness\.defaults\.intentMode"/);
+assert.equal(prompt.includes('PROMPT_RENDER_FULL_TEXT_SENTINEL'), false, 'prompt render summary must not copy full renderedText');
 
 console.log('[ok] AgentServer handoff uses compact TypeScript broker briefs without legacy full capability dumps');

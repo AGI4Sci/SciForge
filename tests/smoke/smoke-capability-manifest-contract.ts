@@ -18,7 +18,7 @@ assert.ok(coreManifests.length >= 8, 'core seed set should cover at least eight 
 assert.deepEqual(coreManifests.flatMap(validateCapabilityManifestShape), []);
 assert.deepEqual(validateCapabilityManifestRegistry(coreManifests), []);
 assert.equal(registry.manifestIds.length, coreManifests.length);
-assert.equal(registry.providerIds.length, coreManifests.length);
+assert.equal(registry.providerIds.length, coreManifests.reduce((total, manifest) => total + manifest.providers.length, 0));
 assert.equal(registry.getManifest('runtime.artifact-resolve')?.brief, 'Resolve object references to workspace-backed facts.');
 assert.equal(registry.getManifestByProviderId('sciforge.core.runtime.artifact-resolve')?.id, 'runtime.artifact-resolve');
 assert.ok(registry.listBriefs({ kind: 'action' }).length >= 4, 'registry should expose action capability briefs');

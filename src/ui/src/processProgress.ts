@@ -16,6 +16,13 @@ export type { ProcessProgressModel, ProcessProgressPhase } from '@sciforge-ui/ru
 
 export const SILENT_STREAM_WAIT_THRESHOLD_MS = 5_000;
 
+interface SilentStreamPolicySummary {
+  timeoutMs: number;
+  decision?: string;
+  maxRetries?: number;
+  retryAttempt?: number;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -60,17 +67,19 @@ export function buildSilentStreamProgressEvent({
   events,
   nowMs,
   backend,
-  thresholdMs = SILENT_STREAM_WAIT_THRESHOLD_MS,
+  thresholdMs,
 }: {
   events: AgentStreamEvent[];
   nowMs: number;
   backend?: string;
   thresholdMs?: number;
 }): AgentStreamEvent | undefined {
+  const silencePolicy = silentStreamPolicyFromEvents(events);
+  const effectiveThresholdMs = thresholdMs ?? silencePolicy?.timeoutMs ?? SILENT_STREAM_WAIT_THRESHOLD_MS;
   const lastEvent = latestNonSyntheticEvent(events);
   const latestAtMs = lastEvent ? Date.parse(lastEvent.createdAt) : undefined;
-  const elapsedMs = Number.isFinite(latestAtMs) ? nowMs - (latestAtMs as number) : thresholdMs;
-  if (elapsedMs < thresholdMs) return undefined;
+  const elapsedMs = Number.isFinite(latestAtMs) ? nowMs - (latestAtMs as number) : effectiveThresholdMs;
+  if (elapsedMs < effectiveThresholdMs) return undefined;
   const lastEventSummary = lastEvent ? summarizeLastEvent(lastEvent) : undefined;
   const elapsedSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
   const detail = lastEventSummary
@@ -100,10 +109,15 @@ export function buildSilentStreamProgressEvent({
       silentStreamWaiting: true,
       backend,
       elapsedMs,
-      thresholdMs,
+      thresholdMs: effectiveThresholdMs,
+      silencePolicy,
       streamOpen: true,
     },
   };
+}
+
+export function silentStreamWaitThresholdMs(events: AgentStreamEvent[]) {
+  return silentStreamPolicyFromEvents(events)?.timeoutMs ?? SILENT_STREAM_WAIT_THRESHOLD_MS;
 }
 
 export function buildInitialResponseProgressEvent(responsePlan: RuntimeResponsePlan | undefined): AgentStreamEvent | undefined {
@@ -221,6 +235,29 @@ function latestNonSyntheticEvent(events: AgentStreamEvent[]) {
   return undefined;
 }
 
+function silentStreamPolicyFromEvents(events: AgentStreamEvent[]): SilentStreamPolicySummary | undefined {
+  for (const event of [...events].reverse()) {
+    const raw = isRecord(event.raw) ? event.raw : {};
+    const contract = isRecord(raw.contract) ? raw.contract : undefined;
+    const progressPlan = isRecord(contract?.progressPlan)
+      ? contract.progressPlan
+      : isRecord(raw.progressPlan)
+        ? raw.progressPlan
+        : undefined;
+    if (!progressPlan) continue;
+    const silencePolicy = isRecord(progressPlan.silencePolicy) ? progressPlan.silencePolicy : {};
+    const timeoutMs = numberField(silencePolicy.timeoutMs) ?? numberField(progressPlan.silenceTimeoutMs);
+    if (timeoutMs === undefined) continue;
+    return {
+      timeoutMs,
+      decision: asString(silencePolicy.decision),
+      maxRetries: numberField(silencePolicy.maxRetries),
+      retryAttempt: numberField(silencePolicy.retryAttempt),
+    };
+  }
+  return undefined;
+}
+
 function summarizeLastEvent(event: AgentStreamEvent) {
   return {
     label: event.label || event.type || '事件',
@@ -239,6 +276,10 @@ function normalizeLastEvent(value: unknown): ProcessProgressModel['lastEvent'] |
     detail,
     createdAt: asString(value.createdAt) ?? asString(value.created_at),
   };
+}
+
+function numberField(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
 }
 
 function normalizePhase(value: string): ProcessProgressPhase {

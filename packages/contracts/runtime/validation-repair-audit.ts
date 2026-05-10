@@ -19,12 +19,19 @@ export const VALIDATION_DECISION_STATUSES = ['pass', 'failed', 'needs-human', 's
 export const VALIDATION_FINDING_SEVERITIES = ['info', 'warning', 'error', 'blocking'] as const;
 export const REPAIR_DECISION_ACTIONS = ['none', 'repair-rerun', 'supplement', 'fail-closed', 'needs-human'] as const;
 export const AUDIT_RECORD_OUTCOMES = ['accepted', 'repair-requested', 'supplement-requested', 'failed-closed', 'needs-human'] as const;
+export const VALIDATION_REPAIR_AUDIT_SINK_TARGETS = [
+  'appendTaskAttempt',
+  'ledger',
+  'verification-artifact',
+  'observe-invocation',
+] as const;
 
 export type ValidationSubjectKind = typeof VALIDATION_SUBJECT_KINDS[number];
 export type ValidationDecisionStatus = typeof VALIDATION_DECISION_STATUSES[number];
 export type ValidationFindingSeverity = typeof VALIDATION_FINDING_SEVERITIES[number];
 export type RepairDecisionAction = typeof REPAIR_DECISION_ACTIONS[number];
 export type AuditRecordOutcome = typeof AUDIT_RECORD_OUTCOMES[number];
+export type ValidationRepairAuditSinkTarget = typeof VALIDATION_REPAIR_AUDIT_SINK_TARGETS[number];
 
 export type ValidationFindingKind =
   | ContractValidationFailureKind
@@ -164,6 +171,34 @@ export interface AuditRecord {
   sinkRefs: string[];
   telemetrySpanRefs: string[];
   createdAt: string;
+}
+
+export interface ValidationRepairAuditSinkRef {
+  kind: 'validation-repair-audit-sink';
+  target: ValidationRepairAuditSinkTarget;
+  ref: string;
+  auditId: string;
+  validationDecisionId?: string;
+  repairDecisionId?: string;
+  contractId?: string;
+  failureKind?: ValidationFindingKind;
+  outcome?: AuditRecordOutcome;
+  subject?: ValidationSubjectRef;
+  relatedRefs: string[];
+  sinkRefs: string[];
+  telemetrySpanRefs: string[];
+  createdAt?: string;
+}
+
+export interface ValidationRepairAuditSinkRecord {
+  kind: 'validation-repair-audit-sink-record';
+  target: ValidationRepairAuditSinkTarget;
+  ref: string;
+  auditRecord: AuditRecord;
+  validationDecision?: ValidationDecision;
+  repairDecision?: RepairDecision;
+  relatedRefs: string[];
+  createdAt?: string;
 }
 
 export function createValidationDecision(input: ResultValidationHarnessInput): ValidationDecision {

@@ -213,6 +213,7 @@ export {
   VALIDATION_FINDING_SEVERITIES,
   VALIDATION_REPAIR_AUDIT_CHAIN_CONTRACT_ID,
   VALIDATION_REPAIR_AUDIT_CHAIN_SCHEMA_VERSION,
+  VALIDATION_REPAIR_AUDIT_SINK_TARGETS,
   VALIDATION_SUBJECT_KINDS,
   createAuditRecord,
   createValidationDecision,
@@ -237,6 +238,9 @@ export type {
   ValidationFindingKind,
   ValidationFindingSeverity,
   ValidationFindingSource,
+  ValidationRepairAuditSinkRecord,
+  ValidationRepairAuditSinkRef,
+  ValidationRepairAuditSinkTarget,
   ValidationSubjectKind,
   ValidationSubjectRef,
 } from './validation-repair-audit';

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 
 import { appendTaskAttempt } from '../../src/runtime/task-attempt-history.js';
 import { buildAgentHarnessPromptRenderPlan } from '../../src/runtime/gateway/agent-harness-shadow.js';
+import { buildAgentServerGenerationPrompt } from '../../src/runtime/gateway/agentserver-prompts.js';
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
 
 type Dispatch = {
@@ -336,6 +337,52 @@ function assertSyntheticDirectiveRenderingIsSourced() {
     harnessTraceRef: 'harness-trace:synthetic',
     promptRenderPlan: renderPlan,
   });
+  assertPromptRenderPlanSummaryFromContextEnvelope(renderPlan);
+}
+
+function assertPromptRenderPlanSummaryFromContextEnvelope(renderPlan: Record<string, unknown>) {
+  const prompt = buildAgentServerGenerationPrompt({
+    prompt: 'fresh: Create a contract-driven handoff report.',
+    skillDomain: 'literature',
+    metadata: {
+      promptRenderPlan: {
+        renderDigest: 'sha1:metadata-render-digest',
+        sourceRefs: { contractRef: 'harness-contract:metadata', traceRef: 'harness-trace:metadata' },
+        renderedEntries: [{
+          kind: 'strategy',
+          id: 'metadata-entry',
+          sourceCallbackId: 'harness.metadata',
+          text: 'metadata should be lower priority than session facts',
+        }],
+      },
+    },
+    contextEnvelope: {
+      version: 'sciforge.context-envelope.v1',
+      sessionFacts: {
+        currentUserRequest: 'fresh: Create a contract-driven handoff report.',
+        agentHarnessHandoff: {
+          promptRenderPlan: renderPlan,
+        },
+      },
+      scenarioFacts: {},
+    },
+    workspaceTreeSummary: [],
+    availableSkills: [],
+    availableTools: [],
+    availableRuntimeCapabilities: {},
+    artifactSchema: {},
+    uiManifestContract: {},
+    uiStateSummary: {},
+    priorAttempts: [],
+    freshCurrentTurn: true,
+  });
+  assert.match(prompt, /"promptRenderPlanSummary"/);
+  assert.match(prompt, /"source": "contextEnvelope\.sessionFacts\.agentHarnessHandoff"/);
+  assert.match(prompt, /"renderDigest"/);
+  assert.match(prompt, /"sourceRefs"/);
+  assert.match(prompt, /"renderedEntries"/);
+  assert.match(prompt, /"sourceCallbackId": "debug-repair\.policy"/);
+  assert.equal(prompt.includes('sha1:metadata-render-digest'), false, 'sessionFacts prompt render plan should win over request metadata fallback');
 }
 
 function handoff(dispatch: Dispatch) {

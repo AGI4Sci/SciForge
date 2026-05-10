@@ -6,7 +6,7 @@ import { estimateContextWindowState, latestContextWindowState } from '../context
 import { builtInScenarioPackageRef } from '@sciforge/scenario-core/scenario-package';
 import { builtInScenarioIdForRuntimeInput } from '@sciforge/scenario-core/scenario-routing-policy';
 import { resetSession } from '../sessionStore';
-import { SILENT_STREAM_WAIT_THRESHOLD_MS, buildRequestAcceptedProgressEvent, buildSilentStreamProgressEvent, formatProgressHeadline, latestProgressModel } from '../processProgress';
+import { buildRequestAcceptedProgressEvent, buildSilentStreamProgressEvent, formatProgressHeadline, latestProgressModel, silentStreamWaitThresholdMs } from '../processProgress';
 import { assistantDraftFromStreamEvents, coalesceStreamEvents, latestRunningEvent, streamEventCounts } from '../streamEventPresentation';
 import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type GuidanceQueueRecord, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeRun, type SciForgeSession, type ObjectReference, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
 import { writeWorkspaceFile } from '../api/workspaceClient';
@@ -246,12 +246,13 @@ export function ChatPanel({
         return updated;
       });
     };
+    const waitThresholdMs = silentStreamWaitThresholdMs(streamEventsRef.current);
     const latestEventTime = Date.parse(streamEventsRef.current.at(-1)?.createdAt ?? '');
-    const elapsedMs = Number.isFinite(latestEventTime) ? Date.now() - latestEventTime : SILENT_STREAM_WAIT_THRESHOLD_MS;
+    const elapsedMs = Number.isFinite(latestEventTime) ? Date.now() - latestEventTime : waitThresholdMs;
     const timeout = window.setTimeout(() => {
       publishWaitingProgress();
       interval = window.setInterval(publishWaitingProgress, 15_000);
-    }, Math.max(0, SILENT_STREAM_WAIT_THRESHOLD_MS - elapsedMs));
+    }, Math.max(0, waitThresholdMs - elapsedMs));
     return () => {
       window.clearTimeout(timeout);
       if (interval !== undefined) window.clearInterval(interval);

@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { backendRepairStates, coerceReportPayload, contractValidationFailures, renderRegisteredWorkbenchSlot, ResultsRenderer, runAuditRefs, runRecoverActions, shouldOpenRunAuditDetails } from './ResultsRenderer';
 import { ArtifactInspectorDrawer } from './results-renderer-artifact-inspector';
 import { nextPinnedObjectReferences, resolveObjectReferenceActionPlan } from './results-renderer-object-actions';
+import { RegistrySlot } from './results-renderer-registry-slot';
 import { createResultsRendererViewModel } from './results-renderer-view-model';
 import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract';
 import type { ObjectReference, RuntimeArtifact, SciForgeConfig, SciForgeSession } from '../domain';
@@ -218,6 +219,33 @@ test('paper-card-list workbench slot is rendered by package policy', () => {
   assert.match(html, /Package-owned paper renderer/);
   assert.match(html, /SciForge Journal/);
   assert.doesNotMatch(html, /缺少 papers\/rows 数组/);
+});
+
+test('registry slot renders unknown component fallback with artifact diagnostics', () => {
+  const html = renderToStaticMarkup(createElement(RegistrySlot, {
+    scenarioId: 'literature-evidence-review',
+    config: testConfig(),
+    session: emptySession(),
+    item: {
+      id: 'slot-unknown',
+      slot: {
+        componentId: 'missing-widget',
+        artifactRef: 'ghost-artifact',
+        title: 'Custom fallback slot',
+      },
+      section: 'primary',
+      status: 'missing-artifact',
+      source: 'manifest',
+      module: {},
+    } as never,
+    onArtifactHandoff: () => undefined,
+    onInspectArtifact: () => undefined,
+  }));
+
+  assert.match(html, /Custom fallback slot/);
+  assert.match(html, /missing-widget/);
+  assert.match(html, /artifactRef 未找到：ghost-artifact/);
+  assert.match(html, /no runtime artifact/);
 });
 
 test('results renderer view model projects hidden result empty state and manifest diagnostics', () => {

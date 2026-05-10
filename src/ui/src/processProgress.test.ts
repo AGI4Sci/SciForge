@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { PROCESS_PROGRESS_EVENT_TYPE, PROCESS_PROGRESS_PHASE, PROCESS_PROGRESS_REASON, PROCESS_PROGRESS_STATUS } from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
-import { buildInitialResponseProgressEvent, buildRequestAcceptedProgressEvent, buildSilentStreamProgressEvent, formatProgressHeadline, progressModelFromEvent } from './processProgress';
+import { buildInitialResponseProgressEvent, buildRequestAcceptedProgressEvent, buildSilentStreamProgressEvent, formatProgressHeadline, progressModelFromEvent, silentStreamWaitThresholdMs } from './processProgress';
 
 function event(partial: Partial<AgentStreamEvent>): AgentStreamEvent {
   return {
@@ -85,6 +85,45 @@ test('does not show backend waiting before the silent threshold', () => {
   });
 
   assert.equal(silent, undefined);
+});
+
+test('uses harness silence policy before falling back to generic waiting threshold', () => {
+  const events = [
+    event({
+      type: 'agent-harness-contract',
+      label: 'Harness',
+      detail: 'contract evaluated',
+      createdAt: '2026-05-08T00:00:00.000Z',
+      raw: {
+        contract: {
+          progressPlan: {
+            silenceTimeoutMs: 5_000,
+            silencePolicy: {
+              timeoutMs: 12_000,
+              decision: 'visible-status',
+              maxRetries: 1,
+            },
+          },
+        },
+      },
+    }),
+    event({ type: 'tool-call', label: '读取', detail: '正在读取 file', createdAt: '2026-05-08T00:00:10.000Z' }),
+  ];
+
+  assert.equal(silentStreamWaitThresholdMs(events), 12_000);
+  assert.equal(buildSilentStreamProgressEvent({
+    events,
+    nowMs: Date.parse('2026-05-08T00:00:17.000Z'),
+  }), undefined);
+
+  const silent = buildSilentStreamProgressEvent({
+    events,
+    nowMs: Date.parse('2026-05-08T00:00:23.000Z'),
+  });
+  const raw = silent?.raw as { thresholdMs?: number; silencePolicy?: { decision?: string; maxRetries?: number } } | undefined;
+  assert.equal(raw?.thresholdMs, 12_000);
+  assert.equal(raw?.silencePolicy?.decision, 'visible-status');
+  assert.equal(raw?.silencePolicy?.maxRetries, 1);
 });
 
 test('builds immediate request accepted progress before backend stream starts', () => {

@@ -482,6 +482,7 @@ export function buildAgentServerRepairPrompt(params: {
 export function buildAgentServerGenerationPrompt(request: {
   prompt: string;
   skillDomain: SciForgeSkillDomain;
+  metadata?: Record<string, unknown>;
   contextEnvelope?: Record<string, unknown>;
   workspaceTreeSummary: Array<{ path: string; kind: 'file' | 'folder'; sizeBytes?: number }>;
   availableSkills: Array<{
@@ -535,6 +536,7 @@ export function buildAgentServerGenerationPrompt(request: {
     : isRecord(request.availableRuntimeCapabilities) && request.availableRuntimeCapabilities.schemaVersion === 'sciforge.agentserver.capability-broker-brief.v1'
       ? request.availableRuntimeCapabilities
       : undefined;
+  const promptRenderPlanSummary = promptRenderPlanSummaryForAgentServer(request, contextEnvelope, sessionFacts);
   const currentTurnSnapshot = {
     kind: 'SciForgeCurrentTurnSnapshot',
     prompt: request.prompt,
@@ -553,6 +555,7 @@ export function buildAgentServerGenerationPrompt(request: {
     selectedToolIds: toStringList(scenarioFacts.selectedToolIds),
     selectedSenseIds: toStringList(scenarioFacts.selectedSenseIds),
     capabilityBrokerBrief,
+    promptRenderPlanSummary,
     currentReferences: Array.isArray(sessionFacts.currentReferences) ? sessionFacts.currentReferences : undefined,
     currentReferenceDigests: Array.isArray(sessionFacts.currentReferenceDigests) ? sessionFacts.currentReferenceDigests : undefined,
     strictTaskFilesReason: request.strictTaskFilesReason,
@@ -619,7 +622,7 @@ export function buildAgentServerGenerationPrompt(request: {
     ...agentServerExternalIoReliabilityContractLines(),
     '',
     JSON.stringify(clipForAgentServerJson({
-      ...compactGenerationRequestForAgentServer(request, capabilityBrokerBrief),
+      ...compactGenerationRequestForAgentServer(request, capabilityBrokerBrief, promptRenderPlanSummary),
       taskContract: {
         argv: ['inputPath', 'outputPath'],
         outputPayloadKeys: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'displayIntent', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'],
@@ -631,16 +634,19 @@ export function buildAgentServerGenerationPrompt(request: {
 function compactGenerationRequestForAgentServer(
   request: Parameters<typeof buildAgentServerGenerationPrompt>[0],
   capabilityBrokerBrief: Record<string, unknown> | undefined,
+  promptRenderPlanSummary: Record<string, unknown> | undefined,
 ) {
   const {
     availableSkills: _availableSkills,
     availableTools: _availableTools,
     availableRuntimeCapabilities: _availableRuntimeCapabilities,
+    metadata: _metadata,
     ...rest
   } = request;
   return {
     ...rest,
     capabilityBrokerBrief,
+    promptRenderPlanSummary,
     omittedCapabilityCatalog: {
       omitted: true,
       source: 'typescript-capability-broker',
@@ -648,6 +654,74 @@ function compactGenerationRequestForAgentServer(
       reason: 'T116 default backend handoff consumes compact broker briefs and keeps full schemas/examples/docs lazy.',
     },
   };
+}
+
+function promptRenderPlanSummaryForAgentServer(
+  request: Parameters<typeof buildAgentServerGenerationPrompt>[0],
+  contextEnvelope: Record<string, unknown>,
+  sessionFacts: Record<string, unknown>,
+) {
+  const metadata = isRecord(request.metadata) ? request.metadata : {};
+  const scenarioFacts = isRecord(contextEnvelope.scenarioFacts) ? contextEnvelope.scenarioFacts : {};
+  const candidates: Array<{ source: string; value: unknown }> = [
+    { source: 'contextEnvelope.sessionFacts.agentHarnessHandoff', value: sessionFacts.agentHarnessHandoff },
+    { source: 'contextEnvelope.sessionFacts.promptRenderPlan', value: sessionFacts.promptRenderPlan },
+    { source: 'contextEnvelope.scenarioFacts.agentHarnessHandoff', value: scenarioFacts.agentHarnessHandoff },
+    { source: 'contextEnvelope.scenarioFacts.promptRenderPlan', value: scenarioFacts.promptRenderPlan },
+    { source: 'contextEnvelope.agentHarnessHandoff', value: contextEnvelope.agentHarnessHandoff },
+    { source: 'contextEnvelope.promptRenderPlan', value: contextEnvelope.promptRenderPlan },
+    { source: 'request.metadata.agentHarnessHandoff', value: metadata.agentHarnessHandoff },
+    { source: 'request.metadata.promptRenderPlan', value: metadata.promptRenderPlan },
+  ];
+  for (const candidate of candidates) {
+    const plan = promptRenderPlanFromCandidate(candidate.value);
+    const summary = plan ? promptRenderPlanSummaryFromPlan(plan, candidate.source) : undefined;
+    if (summary) return summary;
+  }
+  return undefined;
+}
+
+function promptRenderPlanFromCandidate(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  if (isRecord(value.promptRenderPlan)) return value.promptRenderPlan;
+  if (value.renderDigest !== undefined || value.renderedEntries !== undefined || value.sourceRefs !== undefined) {
+    return value;
+  }
+  return undefined;
+}
+
+function promptRenderPlanSummaryFromPlan(plan: Record<string, unknown>, source: string) {
+  const renderedEntries = Array.isArray(plan.renderedEntries)
+    ? plan.renderedEntries.filter(isRecord).slice(0, 32).map(promptRenderPlanEntrySummary).filter(isRecord)
+    : [];
+  const sourceRefs = isRecord(plan.sourceRefs) ? clipForAgentServerJson(plan.sourceRefs, 2) : undefined;
+  const renderDigest = stringField(plan.renderDigest);
+  if (!renderDigest && !sourceRefs && !renderedEntries.length) return undefined;
+  return {
+    schemaVersion: 'sciforge.agentserver.prompt-render-plan-summary.v1',
+    source,
+    renderPlanSchemaVersion: stringField(plan.schemaVersion),
+    renderMode: stringField(plan.renderMode),
+    deterministic: plan.deterministic === true,
+    renderDigest,
+    sourceRefs,
+    renderedEntries,
+  };
+}
+
+function promptRenderPlanEntrySummary(entry: Record<string, unknown>) {
+  const id = stringField(entry.id);
+  const sourceCallbackId = stringField(entry.sourceCallbackId);
+  if (!id || !sourceCallbackId) return undefined;
+  const out: Record<string, unknown> = {
+    kind: stringField(entry.kind) ?? 'strategy',
+    id,
+    sourceCallbackId,
+  };
+  const text = stringField(entry.text);
+  if (text) out.text = clipForAgentServerPrompt(text, 800);
+  if (typeof entry.priority === 'number' && Number.isFinite(entry.priority)) out.priority = entry.priority;
+  return out;
 }
 
 function executionModeDecisionForPrompt(
