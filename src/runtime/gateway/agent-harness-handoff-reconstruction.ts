@@ -50,8 +50,6 @@ export function reconstructAgentHarnessHandoffPayloadFromContract(input: {
 }) {
   const extracted = agentHarnessHandoffRefsFromPayload(input.payload, { auditRecords: input.auditRecords });
   const refs = mergeRefs([
-    ...extracted.sources,
-    { source: 'input.refs', ...input.refs },
     {
       source: 'contract',
       harnessContractRef: stringField(input.contract.contractRef),
@@ -61,6 +59,8 @@ export function reconstructAgentHarnessHandoffPayloadFromContract(input: {
       source: 'trace',
       harnessTraceRef: stringField(input.trace?.traceRef) ?? stringField(input.trace?.ref) ?? stringField(input.trace?.id),
     },
+    { source: 'input.refs', ...input.refs },
+    ...extracted.sources,
   ]);
   const profileId = stringField(input.contract.profileId);
   const budgetSummary = agentHarnessBudgetSummary(input.contract);

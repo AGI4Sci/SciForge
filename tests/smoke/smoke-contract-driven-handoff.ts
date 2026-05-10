@@ -558,6 +558,7 @@ async function assertNormalizedHandoffPayloadReconstruction() {
 function assertHandoffReconstructionNegativeCompatibility() {
   assertMissingContractRefReconstructionIsPartial();
   assertLegacyHandoffMetadataDoesNotImplyCompleteReconstruction();
+  assertCanonicalContractRefsWinOverPayloadMetadata();
 }
 
 function assertMissingContractRefReconstructionIsPartial() {
@@ -651,6 +652,52 @@ function assertLegacyHandoffMetadataDoesNotImplyCompleteReconstruction() {
   assert.equal(reconstructedHandoff.harnessContractRef, undefined);
   assert.equal(reconstructedHandoff.harnessTraceRef, canonicalTraceRef);
   assert.equal(JSON.stringify(reconstructed).includes(legacyContractRef), false);
+}
+
+function assertCanonicalContractRefsWinOverPayloadMetadata() {
+  const testCase = syntheticHarnessCase('generation', 'balanced-default', 'fresh', {
+    allowed: ['artifact:canonical-current'],
+    required: ['artifact:canonical-current'],
+    blocked: ['artifact:canonical-stale'],
+  });
+  const staleContractRef = 'runtime://agent-harness/contracts/stale/payload';
+  const staleTraceRef = `${staleContractRef}/trace`;
+  const reconstructed = reconstructAgentHarnessHandoffPayloadFromContract({
+    contract: testCase.contract,
+    trace: {
+      ...testCase.trace,
+      traceRef: testCase.traceRef,
+    },
+    payload: {
+      metadata: {
+        harnessContractRef: staleContractRef,
+        harnessTraceRef: staleTraceRef,
+        agentHarnessHandoff: {
+          schemaVersion: 'sciforge.agent-harness-handoff.v1',
+          harnessContractRef: staleContractRef,
+          harnessTraceRef: staleTraceRef,
+          promptRenderPlan: {
+            sourceRefs: {
+              contractRef: staleContractRef,
+              traceRef: staleTraceRef,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(reconstructed.refs.harnessContractRef, testCase.contractRef);
+  assert.equal(reconstructed.refs.harnessTraceRef, testCase.traceRef);
+  const reconstructedHandoff = record(reconstructed.handoff);
+  assert.equal(reconstructedHandoff.harnessContractRef, testCase.contractRef);
+  assert.equal(reconstructedHandoff.harnessTraceRef, testCase.traceRef);
+  const renderSourceRefs = record(record(reconstructedHandoff.promptRenderPlan).sourceRefs);
+  assert.equal(renderSourceRefs.contractRef, testCase.contractRef);
+  assert.equal(renderSourceRefs.traceRef, testCase.traceRef);
+  const summarySourceRefs = record(record(reconstructed.promptRenderPlanSummary).sourceRefs);
+  assert.equal(summarySourceRefs.contractRef, testCase.contractRef);
+  assert.equal(summarySourceRefs.traceRef, testCase.traceRef);
 }
 
 function syntheticHarnessCase(
