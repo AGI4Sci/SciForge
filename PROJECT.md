@@ -387,7 +387,7 @@ Todo：
 - [ ] 新增通用 `literature.retrieval` composed capability：providers 覆盖 PubMed、Crossref、Semantic Scholar、OpenAlex、arXiv、web search、SCP biomedical search；input 包含 `query/databases/dateRange/maxResults/includeAbstracts/fullTextPolicy`；output 包含 `paper-list/evidence-matrix/research-report/workEvidence`；默认预算包含 `maxProviders=3`、`maxResults=30`、`perProviderTimeoutMs=10000`、`maxFullTextDownloads=3`、`maxDownloadBytes=25MB`。
 - [ ] 增加 smoke：fresh request 只读取 compact workspace/scenario/capability brief，不读取旧 attempts/outputPath/config；continuation request 可读取当前 session 相关 refs；repair request 可读取 failed run 相关 stdout/stderr/log refs。
 - [ ] 增加 smoke：不同 harness profile 对同一 prompt 输出不同预算和 progress plan，但 runtime request path、capability registry 和 validation loop 不分叉。
-- [ ] 增加 no-legacy guard：禁止在 gateway、UI、scenario 或 provider 分支里新增 harness 指令散文、prompt 特例、探索规则或 skill 偏好。
+- [x] 增加 no-legacy guard：禁止在 gateway、UI、scenario 或 provider 分支里新增 harness 指令散文、prompt 特例、探索规则或 skill 偏好。（`smoke:no-scattered-harness-policy` 已扫描 gateway/UI/scenario 等策略表面并通过。）
 
 验收标准：
 
