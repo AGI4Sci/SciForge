@@ -109,6 +109,7 @@ class LoopStep:
     verification: Verification | None = None
     status: str = "planned"
     failure_reason: str | None = None
+    budget_debit_refs: Sequence[str] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -119,6 +120,8 @@ class ComputerUseResult:
     final_observation: Observation | None = None
     failure_diagnostics: Mapping[str, Any] = field(default_factory=dict)
     metrics: Mapping[str, Any] = field(default_factory=dict)
+    budget_debits: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
+    budget_debit_refs: Sequence[str] = field(default_factory=tuple)
 
 
 class SenseProvider(Protocol):
@@ -178,4 +181,3 @@ class Verifier(Protocol):
         history: Sequence[LoopStep],
     ) -> Verification | Mapping[str, Any]:
         """Verify whether the action worked and whether the task is complete."""
-

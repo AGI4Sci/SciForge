@@ -19,6 +19,8 @@ def result_to_trace(result: ComputerUseResult) -> dict[str, Any]:
         "failureDiagnostics": dict(result.failure_diagnostics),
         "finalObservationRef": result.final_observation.ref if result.final_observation else None,
         "steps": [_step_to_trace(step) for step in result.steps],
+        "budgetDebits": [dict(debit) for debit in result.budget_debits],
+        "budgetDebitRefs": list(result.budget_debit_refs),
     }
     _reject_inline_payloads(trace)
     return trace
@@ -45,10 +47,13 @@ def compact_result_for_handoff(result: ComputerUseResult) -> dict[str, Any]:
                 "target": step.get("action", {}).get("target"),
                 "status": step.get("status"),
                 "verification": step.get("verification"),
+                "budgetDebitRefs": list(step.get("budgetDebitRefs", [])),
             }
             for step in trace["steps"]
         ],
         "failureDiagnostics": trace["failureDiagnostics"],
+        "budgetDebits": trace["budgetDebits"],
+        "budgetDebitRefs": trace["budgetDebitRefs"],
     }
 
 
@@ -64,6 +69,7 @@ def _step_to_trace(step: Any) -> dict[str, Any]:
         "execution": _compact_dataclass(step.execution),
         "verification": _compact_dataclass(step.verification),
         "failureReason": step.failure_reason,
+        "budgetDebitRefs": list(step.budget_debit_refs),
     }
 
 
@@ -111,4 +117,3 @@ def _reject_inline_payloads(value: Any) -> None:
     text = str(value)
     if "data:image/" in text or ";base64," in text:
         raise ValueError("Computer Use trace must be file-ref-only and cannot contain inline image payloads.")
-

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import fields, is_dataclass
+from dataclasses import fields, is_dataclass, replace
 from typing import Any, Mapping, Sequence, TypeVar
 
 from .contracts import (
@@ -21,6 +21,7 @@ from .contracts import (
     Verification,
     Verifier,
 )
+from .budget import create_loop_budget_debit
 from .safety import assess_action_risk
 
 
@@ -57,6 +58,7 @@ def run_computer_use_task(
             return _result(
                 "completed",
                 plan.reason or "Planner reported task complete.",
+                req,
                 steps,
                 before,
             )
@@ -73,6 +75,7 @@ def run_computer_use_task(
             return _result(
                 "failed-with-reason",
                 "Planner returned no executable generic action.",
+                req,
                 steps,
                 before,
             )
@@ -96,6 +99,7 @@ def run_computer_use_task(
             return _result(
                 "needs-confirmation",
                 risk.reason,
+                req,
                 steps,
                 before,
                 {"blockedActionIndex": index, "riskLevel": risk.level},
@@ -117,6 +121,7 @@ def run_computer_use_task(
                 return _result(
                     "failed-with-reason",
                     grounding.reason or "Target grounding failed.",
+                    req,
                     steps,
                     before,
                     {"failedStage": "grounding", "actionIndex": index},
@@ -137,6 +142,7 @@ def run_computer_use_task(
             return _result(
                 "failed-with-reason",
                 execution.message or "Executor failed.",
+                req,
                 steps,
                 before,
                 {"failedStage": "execution", "actionIndex": index},
@@ -163,6 +169,7 @@ def run_computer_use_task(
             return _result(
                 "failed-with-reason",
                 verification.reason or "Verifier rejected the action result.",
+                req,
                 steps,
                 after,
                 {"failedStage": "verification", "actionIndex": index},
@@ -171,6 +178,7 @@ def run_computer_use_task(
             return _result(
                 "completed",
                 verification.reason or "Verifier reported task complete.",
+                req,
                 steps,
                 after,
             )
@@ -178,6 +186,7 @@ def run_computer_use_task(
     return _result(
         "max-steps",
         f"Computer Use loop reached max_steps={req.max_steps} without completion.",
+        req,
         steps,
         final_observation,
         {"failedStage": "planner", "maxSteps": req.max_steps},
@@ -191,14 +200,23 @@ def _requires_grounding(plan: ActionPlan) -> bool:
 def _result(
     status: ComputerUseStatus,
     reason: str,
+    request: ComputerUseRequest,
     steps: Sequence[LoopStep],
     final_observation: Observation | None,
     diagnostics: Mapping[str, Any] | None = None,
 ) -> ComputerUseResult:
+    budget_debit = create_loop_budget_debit(request, steps, status)
+    budget_debit_refs = (budget_debit["debitId"],)
+    steps_with_refs = tuple(
+        replace(step, budget_debit_refs=budget_debit_refs)
+        if step.plan.kind is not None
+        else step
+        for step in steps
+    )
     return ComputerUseResult(
         status=status,
         reason=reason,
-        steps=tuple(steps),
+        steps=steps_with_refs,
         final_observation=final_observation,
         failure_diagnostics=dict(diagnostics or {}),
         metrics={
@@ -206,6 +224,8 @@ def _result(
             "actionCount": sum(1 for step in steps if step.plan.kind is not None),
             "observationCount": len({step.before.ref for step in steps} | {step.after.ref for step in steps if step.after}),
         },
+        budget_debits=(budget_debit,),
+        budget_debit_refs=budget_debit_refs,
     )
 
 

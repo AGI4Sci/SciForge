@@ -65,7 +65,7 @@ def test_sense_agnostic_loop_completes_with_fake_provider():
     executor = FakeExecutor()
 
     result = run_computer_use_task(
-        ComputerUseRequest(task="click visible search field", max_steps=3),
+        ComputerUseRequest(task="click visible search field", max_steps=3, metadata={"runId": "loop-123"}),
         sense,
         planner,
         executor,
@@ -76,7 +76,17 @@ def test_sense_agnostic_loop_completes_with_fake_provider():
     assert result.metrics["stepCount"] == 1
     assert sense.locate_calls == [("before.png", "search field")]
     assert executor.calls == [("click", 10, 20)]
-    assert result_to_trace(result)["schemaVersion"] == "sciforge.computer-use.loop-trace.v1"
+    trace = result_to_trace(result)
+    assert trace["schemaVersion"] == "sciforge.computer-use.loop-trace.v1"
+    debit = trace["budgetDebits"][0]
+    assert debit["contract"] == "sciforge.capability-budget-debit.v1"
+    assert debit["capabilityId"] == "action.sciforge.computer-use"
+    assert trace["budgetDebitRefs"] == [debit["debitId"]]
+    assert trace["steps"][0]["budgetDebitRefs"] == [debit["debitId"]]
+    assert debit["sinkRefs"]["auditRefs"] == ["audit:computer-use-loop:loop-123"]
+    assert {line["dimension"] for line in debit["debitLines"]} >= {"actionSteps", "observeCalls", "costUnits"}
+    assert next(line for line in debit["debitLines"] if line["dimension"] == "actionSteps")["amount"] == 1
+    assert next(line for line in debit["debitLines"] if line["dimension"] == "observeCalls")["amount"] == 2
 
 
 def test_high_risk_action_needs_confirmation_and_does_not_execute():
@@ -90,6 +100,7 @@ def test_high_risk_action_needs_confirmation_and_does_not_execute():
 
     assert result.status == "needs-confirmation"
     assert result.steps[0].status == "blocked"
+    assert result.steps[0].budget_debit_refs == result.budget_debit_refs
     assert executor.calls == []
     assert result.failure_diagnostics["riskLevel"] == "high"
 
@@ -116,6 +127,9 @@ def test_compact_handoff_is_file_ref_only():
 
     handoff = compact_result_for_handoff(result)
     assert handoff["refs"] == ["workspace/.sciforge/before.png", "workspace/.sciforge/after.png"]
+    assert handoff["budgetDebitRefs"] == list(result.budget_debit_refs)
+    assert handoff["actions"][0]["budgetDebitRefs"] == list(result.budget_debit_refs)
+    assert handoff["budgetDebits"][0]["sinkRefs"]["auditRefs"][0].startswith("audit:computer-use-loop:")
     assert "base64" not in str(handoff)
     assert "data:image/" not in str(handoff)
 
