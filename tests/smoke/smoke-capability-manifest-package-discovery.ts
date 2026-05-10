@@ -10,6 +10,20 @@ import {
 } from '../../packages/contracts/runtime/capability-manifest.js';
 
 const coreRegistry = loadCoreCapabilityManifestRegistry();
+const defaultPresentationView = coreRegistry.getManifest('view.paper-card-list');
+assert.ok(defaultPresentationView, 'default core registry should include the paper-card-list package view manifest');
+assert.equal(defaultPresentationView.ownerPackage, '@sciforge-ui/paper-card-list');
+assert.equal(coreRegistry.getManifestByProviderId('sciforge.presentation.paper-card-list')?.id, 'view.paper-card-list');
+const defaultPresentationAudit = coreRegistry.compactAudit.entries.find((item) => item.id === 'view.paper-card-list');
+assert.ok(defaultPresentationAudit, 'paper-card-list package view should appear in compact registry audit');
+assert.equal(defaultPresentationAudit.source, 'core');
+assert.deepEqual(defaultPresentationAudit.providerAvailability, [{
+  providerId: 'sciforge.presentation.paper-card-list',
+  providerKind: 'package',
+  available: true,
+  requiredConfig: [],
+}]);
+
 const packageManifest = discoveredPackageManifest();
 const registry = loadCapabilityManifestRegistry({
   packageDiscovery: {

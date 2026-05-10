@@ -6,12 +6,11 @@ import { estimateContextWindowState, latestContextWindowState } from '../context
 import { builtInScenarioPackageRef } from '@sciforge/scenario-core/scenario-package';
 import { builtInScenarioIdForRuntimeInput } from '@sciforge/scenario-core/scenario-routing-policy';
 import { resetSession } from '../sessionStore';
-import { buildRequestAcceptedProgressEvent, buildSilentStreamProgressEvent, formatProgressHeadline, latestProgressModel, silentStreamWaitThresholdMs } from '../processProgress';
-import { assistantDraftFromStreamEvents, coalesceStreamEvents, latestRunningEvent, streamEventCounts } from '../streamEventPresentation';
-import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type GuidanceQueueRecord, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeRun, type SciForgeSession, type ObjectReference, type RuntimeArtifact, type RuntimeExecutionUnit, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
-import { writeWorkspaceFile } from '../api/workspaceClient';
+import { buildRequestAcceptedProgressEvent, buildSilentStreamProgressEvent, silentStreamWaitThresholdMs } from '../processProgress';
+import { assistantDraftFromStreamEvents, coalesceStreamEvents, streamEventCounts } from '../streamEventPresentation';
+import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type GuidanceQueueRecord, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeSession, type ObjectReference, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
 import { exportJsonFile } from './exportUtils';
-import { Badge, ClaimTag, ConfidenceBar, EvidenceTag, cx, type BadgeVariant } from './uiPrimitives';
+import { Badge, ClaimTag, ConfidenceBar, EvidenceTag, cx } from './uiPrimitives';
 import { AcceptancePanel } from './chat/AcceptancePanel';
 import { ArchiveDrawer } from './chat/ArchiveDrawer';
 import { ChatComposer } from './chat/ChatComposer';
@@ -31,26 +30,24 @@ import { addComposerReferenceWithMarker, addPendingComposerReference, promptForC
 import { runPromptOrchestrator } from './chat/runOrchestrator';
 import { appendRunningGuidanceRecord, appendUploadMessageToSession, attachGuidanceQueueToSessionRun, createGuidanceQueueRecord, mergeAgentResponseIntoSession, rollbackSessionBeforeMessage, updateGuidanceQueueRecords } from './chat/sessionTransforms';
 import { attachStreamProcessToFailedSession, attachStreamProcessToResponse, compactFailureNotice, guidanceBadgeVariant, guidanceStatusLabel, latestTokenUsage } from './chat/runPresentation';
+import { RunVerificationTag, runIdForMessage } from './chat/messageRunPresentation';
+import { runReadiness, runningMessageContentFromStream } from './chat/runStatusPresentation';
+import { fileToUploadedArtifact, objectReferenceForUploadedArtifact, referenceForUploadedArtifact } from './chat/uploadedArtifact';
 import {
-  artifactTypeForUploadedFileLike as artifactTypeForUploadedFile,
   sciForgeReferenceAttribute,
-  objectReferenceForUploadedArtifact,
   objectReferenceKindLabel,
   parseSciForgeReferenceAttribute,
-  previewKindForUploadedFileLike as previewKindForUploadedFile,
   referenceForMessage,
   referenceForObjectReference,
   referenceForRun,
   referenceForTextSelection,
   referenceForUiElement,
-  referenceForUploadedArtifact,
-  uploadedDerivativeHintsForFileLike as uploadedDerivativeHints,
-  uploadedInlinePolicyForFileLike as uploadedInlinePolicy,
-  uploadedLocatorHintsForFileLike as uploadedLocatorHints,
-  uploadedPreviewActionsForFileLike as uploadedPreviewActions,
 } from '../../../../packages/support/object-references';
 
 export { objectReferenceKindLabel } from '../../../../packages/support/object-references';
+export { runIdForMessage } from './chat/messageRunPresentation';
+export { runningMessageContentFromStream } from './chat/runStatusPresentation';
+export { mergeRunTimelineEvents } from './chat/runTimelinePresentation';
 
 interface HandoffAutoRunRequest {
   id: string;
@@ -725,7 +722,7 @@ export function ChatPanel({
                 {message.confidence ? <ConfidenceBar value={message.confidence} /> : null}
                 {message.evidence ? <EvidenceTag level={message.evidence} /> : null}
                 {message.claimType ? <ClaimTag type={message.claimType} /> : null}
-                {messageRunId ? <VerificationTag model={verificationTagForRun(session.runs, messageRunId)} /> : null}
+                <RunVerificationTag runs={session.runs} runId={messageRunId} />
                 {message.status === 'failed' ? <Badge variant="danger">failed</Badge> : null}
                 {message.guidanceQueue ? <Badge variant={guidanceBadgeVariant(message.guidanceQueue.status)}>{guidanceStatusLabel(message.guidanceQueue.status)}</Badge> : null}
                 {message.acceptance ? (
@@ -864,167 +861,11 @@ export function ChatPanel({
   );
 }
 
-async function fileToUploadedArtifact(file: File, scenarioId: ScenarioInstanceId, config: SciForgeConfig, sessionId: string): Promise<RuntimeArtifact> {
-  const id = makeId('upload');
-  const safeSessionId = safeWorkspaceSegment(sessionId || 'sessionless');
-  const safeFileName = safeWorkspaceSegment(file.name) || `${id}.bin`;
-  const relativePath = `.sciforge/uploads/${safeSessionId}/${id}-${safeFileName}`;
-  const workspaceRoot = config.workspacePath.replace(/\/+$/, '');
-  if (!workspaceRoot) throw new Error('上传文件需要先配置 workspacePath。');
-  const absolutePath = `${workspaceRoot}/${relativePath}`;
-  const bytes = await file.arrayBuffer();
-  await writeWorkspaceFile(absolutePath, arrayBufferToBase64(bytes), config, {
-    encoding: 'base64',
-    mimeType: file.type || 'application/octet-stream',
-  });
-  return {
-    id,
-    type: artifactTypeForUploadedFile(file),
-    producerScenario: scenarioId,
-    schemaVersion: '1',
-    metadata: {
-      title: file.name,
-      fileName: file.name,
-      mimeType: file.type || 'application/octet-stream',
-      size: file.size,
-      uploadedAt: nowIso(),
-      source: 'user-upload',
-      storage: 'workspace-file',
-      workspacePath: relativePath,
-    },
-    dataRef: relativePath,
-    path: relativePath,
-    previewDescriptor: {
-      kind: previewKindForUploadedFile(file),
-      source: 'path',
-      ref: relativePath,
-      mimeType: file.type || 'application/octet-stream',
-      sizeBytes: file.size,
-      title: file.name,
-      inlinePolicy: uploadedInlinePolicy(file),
-      derivatives: uploadedDerivativeHints(file, relativePath),
-      actions: uploadedPreviewActions(file),
-      locatorHints: uploadedLocatorHints(file),
-    },
-    data: {
-      title: file.name,
-      fileName: file.name,
-      mimeType: file.type || 'application/octet-stream',
-      size: file.size,
-      path: relativePath,
-      previewKind: previewKindForUploadedFile(file),
-      storage: 'workspace-file',
-    },
-  };
-}
-
-function arrayBufferToBase64(buffer: ArrayBuffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
-  }
-  return btoa(binary);
-}
-
-function safeWorkspaceSegment(value: string) {
-  return value.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 120);
-}
-
 function enrichRepairRaw(raw: unknown, repairHistory: unknown, sourceRunId: string, failureReason?: string) {
   const repairMetadata = { acceptanceRepair: { sourceRunId, repairHistory, failureReason } };
   return raw && typeof raw === 'object' && !Array.isArray(raw)
     ? { ...raw, ...repairMetadata }
     : { raw, ...repairMetadata };
-}
-
-function runReadiness({
-  input,
-  isSending,
-  config,
-  scenarioPackageRef,
-  skillPlanRef,
-  uiPlanRef,
-}: {
-  input: string;
-  isSending: boolean;
-  config: SciForgeConfig;
-  scenarioPackageRef: RuntimeExecutionUnit['scenarioPackageRef'];
-  skillPlanRef: string;
-  uiPlanRef: string;
-}) {
-  if (!input.trim() && !isSending) {
-    return {
-      ok: false,
-      severity: 'muted' as const,
-      message: '输入研究问题后即可运行；Shift+Enter 换行，Enter 发送。',
-    };
-  }
-  if (isSending) {
-    return {
-      ok: true,
-      severity: 'info' as const,
-      message: '当前 run 正在执行；继续输入会排队为下一条引导。',
-    };
-  }
-  if (!config.workspacePath.trim()) {
-    return {
-      ok: false,
-      severity: 'warning' as const,
-      message: '缺少 workspace path，请先在设置中选择工作目录。',
-    };
-  }
-  return {
-    ok: true,
-    severity: 'success' as const,
-    message: `将使用 ${scenarioPackageRef?.id ?? 'built-in'} · ${skillPlanRef} · ${uiPlanRef} 运行。`,
-  };
-}
-
-export function runningMessageContentFromStream(assistantDraft: string, streamEvents: AgentStreamEvent[]) {
-  const latestWorklogLine = formatProgressHeadline(latestProgressModel(streamEvents), latestRunningEvent(streamEvents));
-  return assistantDraft || latestWorklogLine || '正在规划、生成或执行 workspace task，过程日志默认折叠。';
-}
-
-export function runIdForMessage(
-  message: SciForgeMessage,
-  index: number,
-  messages: SciForgeMessage[],
-  runs: SciForgeRun[],
-) {
-  if (!runs.length || message.id.startsWith('seed')) return undefined;
-  if (message.role === 'user') {
-    const normalizedContent = normalizeRunPrompt(message.content);
-    const matchingRuns = runs.filter((run) => normalizeRunPrompt(run.prompt) === normalizedContent);
-    const messageTime = Date.parse(message.createdAt);
-    const nextUserMessage = messages
-      .slice(index + 1)
-      .find((item) => !item.id.startsWith('seed') && item.role === 'user');
-    const nextUserTime = nextUserMessage ? Date.parse(nextUserMessage.createdAt) : Number.POSITIVE_INFINITY;
-    if (Number.isFinite(messageTime)) {
-      const runInTurnWindow = matchingRuns.find((run) => {
-        const runTime = Date.parse(run.createdAt);
-        return Number.isFinite(runTime) && runTime >= messageTime && runTime < nextUserTime;
-      });
-      if (runInTurnWindow) return runInTurnWindow.id;
-    }
-    const promptOccurrence = messages
-      .slice(0, index + 1)
-      .filter((item) => !item.id.startsWith('seed') && item.role === 'user' && normalizeRunPrompt(item.content) === normalizedContent)
-      .length - 1;
-    return matchingRuns[promptOccurrence]?.id ?? matchingRuns.at(-1)?.id;
-  }
-  if (message.role !== 'scenario') return undefined;
-  const responseIndex = messages
-    .slice(0, index + 1)
-    .filter((item) => !item.id.startsWith('seed') && item.role === 'scenario')
-    .length - 1;
-  return runs[responseIndex]?.id;
-}
-
-function normalizeRunPrompt(value: string) {
-  return value.replace(/^运行中引导：/, '').trim();
 }
 
 function highlightReferencedContent(reference: SciForgeReference) {
@@ -1120,100 +961,6 @@ function referenceTargetFromEvent(event: MouseEvent): { element: HTMLElement; re
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-type VerificationTagModel = {
-  label: string;
-  title: string;
-  variant: BadgeVariant;
-};
-
-function VerificationTag({ model }: { model?: VerificationTagModel }) {
-  if (!model) return null;
-  return <span title={model.title}><Badge variant={model.variant}>{model.label}</Badge></span>;
-}
-
-function verificationTagForRun(runs: SciForgeRun[], runId: string): VerificationTagModel | undefined {
-  const run = runs.find((item) => item.id === runId);
-  const raw = isRecord(run?.raw) ? run.raw : undefined;
-  const result = firstVerificationResult(raw);
-  const displayIntent = isRecord(raw?.displayIntent) ? raw.displayIntent : undefined;
-  const displayVerification = isRecord(displayIntent?.verification) ? displayIntent.verification : undefined;
-  const verdict = stringField(result?.verdict) ?? stringField(displayVerification?.verdict);
-  if (!verdict) return undefined;
-  const critique = stringField(result?.critique) ?? stringField(result?.reason);
-  return {
-    label: `Verification: ${verificationVerdictLabel(verdict)}`,
-    title: critique || `Verification ${verdict}`,
-    variant: verificationVerdictVariant(verdict),
-  };
-}
-
-function firstVerificationResult(raw: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
-  const direct = raw?.verificationResult;
-  if (isRecord(direct)) return direct;
-  const list = Array.isArray(raw?.verificationResults) ? raw.verificationResults : [];
-  return list.find(isRecord);
-}
-
-function stringField(value: unknown) {
-  return typeof value === 'string' && value.trim() ? value : undefined;
-}
-
-function verificationVerdictLabel(verdict: string) {
-  const labels: Record<string, string> = {
-    pass: '已验证',
-    fail: '未通过',
-    uncertain: '不确定',
-    'needs-human': '需人工核验',
-    unverified: '未验证',
-  };
-  return labels[verdict] ?? verdict;
-}
-
-function verificationVerdictVariant(verdict: string): BadgeVariant {
-  if (verdict === 'pass') return 'success';
-  if (verdict === 'fail') return 'danger';
-  if (verdict === 'needs-human' || verdict === 'uncertain') return 'warning';
-  return 'muted';
-}
-
-export function mergeRunTimelineEvents(events: TimelineEventRecord[], previousSession: SciForgeSession | undefined, nextSession: SciForgeSession) {
-  const previousRunIds = new Set(previousSession?.runs.map((run) => run.id) ?? []);
-  const existingEventIds = new Set(events.map((event) => event.id));
-  const newEvents = nextSession.runs
-    .filter((run) => !previousRunIds.has(run.id))
-    .map((run) => timelineEventFromStoredRun(nextSession, run))
-    .filter((event) => !existingEventIds.has(event.id));
-  return [...newEvents, ...events].slice(0, 200);
-}
-
-function timelineEventFromStoredRun(session: SciForgeSession, run: SciForgeSession['runs'][number]): TimelineEventRecord {
-  const runArtifactRefs = session.artifacts
-    .filter((artifact) => artifact.producerScenario === session.scenarioId)
-    .slice(0, 8)
-    .map((artifact) => artifact.id);
-  const runUnitRefs = [
-    ...session.executionUnits.slice(0, 8).map((unit) => unit.id),
-    run.skillPlanRef,
-    run.uiPlanRef,
-    run.scenarioPackageRef ? `${run.scenarioPackageRef.id}@${run.scenarioPackageRef.version}` : undefined,
-  ].filter((value): value is string => Boolean(value));
-  const promptSummary = run.prompt ? ` · ${run.prompt.slice(0, 100)}` : '';
-  const failureSummary = run.status === 'failed' && run.response ? ` · ${run.response.slice(0, 120)}` : '';
-  return {
-    id: `timeline-${run.id}`,
-    actor: 'SciForge Runtime',
-    action: `run.${run.status}`,
-    subject: `${session.scenarioId}:${run.id}${promptSummary}${failureSummary}`,
-    artifactRefs: runArtifactRefs,
-    executionUnitRefs: Array.from(new Set(runUnitRefs)),
-    beliefRefs: session.claims.slice(0, 8).map((claim) => claim.id),
-    branchId: session.scenarioId,
-    visibility: 'project-record',
-    decisionStatus: 'not-a-decision',
-    createdAt: run.completedAt ?? run.createdAt ?? nowIso(),
-  };
 }
 
 async function copyTextToClipboard(text: string) {

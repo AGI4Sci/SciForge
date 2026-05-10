@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runWorkspaceTask } from '../../src/runtime/workspace-task-runner.js';
@@ -50,7 +50,8 @@ try {
 }
 
 const inputDir = join(workspace, '.sciforge', 'task-inputs');
-const files = await readdir(inputDir);
+const entries = await readdir(inputDir, { withFileTypes: true });
+const files = entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
 const sizes = await Promise.all(files.map(async (file) => (await stat(join(inputDir, file))).size));
 const totalBytes = sizes.reduce((sum, size) => sum + size, 0);
 

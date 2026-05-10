@@ -1,5 +1,8 @@
-import { normalizeRunTermination } from './events';
-import type { RunTerminationRecord } from './events';
+import {
+  isRunTerminationRecord,
+  normalizeRunTermination,
+} from './events-run-termination';
+import type { RunTerminationRecord } from './events-run-termination';
 
 export type SilentStreamDecisionLayer = 'backend-stream' | 'transport-watchdog' | 'ui-progress';
 
@@ -156,21 +159,4 @@ function isSilentDecisionLayer(value: unknown): value is SilentStreamDecisionLay
 
 function uniqueSilentDecisionLayers(values: SilentStreamDecisionLayer[]) {
   return Array.from(new Set(values));
-}
-
-function isRunTerminationRecord(value: unknown): value is RunTerminationRecord {
-  if (!isRecord(value)) return false;
-  return value.schemaVersion === 'sciforge.run-termination.v1'
-    && normalizedRunTerminationReason(asString(value.reason)) !== undefined
-    && (value.actor === 'user' || value.actor === 'system' || value.actor === 'backend');
-}
-
-function normalizedRunTerminationReason(value: string | undefined) {
-  if (value === 'user-cancelled' || value === 'system-aborted' || value === 'timeout' || value === 'backend-error') return value;
-  if (!value) return undefined;
-  if (/user|manual|requested cancel|已中断|用户|人工/i.test(value)) return 'user-cancelled';
-  if (/\b(timeout|timed out|deadline|time limit|超时)\b/i.test(value)) return 'timeout';
-  if (/\b(backend|agentserver|workspace runtime|http\s*5\d\d|schema|contract|error|failed|failure|后端|失败)\b/i.test(value)) return 'backend-error';
-  if (/abort|aborted|cancelled|canceled|disconnect|network|system|系统|网络|中断/i.test(value)) return 'system-aborted';
-  return undefined;
 }

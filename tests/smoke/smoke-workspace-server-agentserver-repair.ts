@@ -43,7 +43,7 @@ const agentServer = createServer(async (req, res) => {
   const agent = isRecord(body.agent) ? body.agent : {};
   const repairWorkspace = typeof agent.workingDirectory === 'string' ? agent.workingDirectory : workspace;
   const metadata = isRecord(body.input) && isRecord(body.input.metadata) ? body.input.metadata : {};
-  if (metadata.purpose === 'workspace-task-generation') {
+  if (metadata.purpose === 'workspace-task-generation' || metadata.purpose === 'workspace-task-generation-inline') {
     sendRunResponse(res, req.url, {
       ok: true,
       data: {
@@ -66,7 +66,7 @@ const agentServer = createServer(async (req, res) => {
     return;
   }
   const codeRef = typeof metadata.codeRef === 'string' ? metadata.codeRef : '';
-  assert.ok(codeRef.startsWith('.sciforge/tasks/'));
+  assert.ok(codeRef.startsWith('.sciforge/tasks/'), `expected repair codeRef under .sciforge/tasks/, got ${codeRef || '<missing>'}`);
   const taskPath = join(repairWorkspace, codeRef);
   const source = await readFile(taskPath, 'utf8');
   await writeFile(taskPath, source
@@ -120,7 +120,7 @@ try {
   assert.equal(units.length, 1);
   assert.equal(isRecord(units[0]) ? units[0].status : undefined, 'self-healed');
   assert.equal(isRecord(units[0]) ? units[0].attempt : undefined, 2);
-  assert.equal(Array.isArray(result.artifacts) ? result.artifacts.length : 0, 1);
+  assert.ok(hasArtifact(result, 'omics-differential-expression'));
 
   await assertSelfHealedAttemptHistory(workspace);
 
@@ -145,7 +145,7 @@ try {
   assert.equal(configuredUnits.length, 1);
   assert.equal(isRecord(configuredUnits[0]) ? configuredUnits[0].status : undefined, 'self-healed');
   assert.equal(isRecord(configuredUnits[0]) ? configuredUnits[0].attempt : undefined, 2);
-  assert.equal(Array.isArray(configuredResult.artifacts) ? configuredResult.artifacts.length : 0, 1);
+  assert.ok(hasArtifact(configuredResult, 'omics-differential-expression'));
   await assertSelfHealedAttemptHistory(configuredWorkspace);
 
   console.log('[ok] workspace server HTTP repair smoke patches task code via request body URL and workspace config fallback');
@@ -230,6 +230,11 @@ async function assertSelfHealedAttemptHistory(repairWorkspace: string) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasArtifact(result: Record<string, unknown>, artifactId: string) {
+  const artifacts = Array.isArray(result.artifacts) ? result.artifacts : [];
+  return artifacts.some((artifact) => isRecord(artifact) && artifact.id === artifactId);
 }
 
 function sendRunResponse(

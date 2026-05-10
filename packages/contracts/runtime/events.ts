@@ -1,8 +1,28 @@
 import type { RuntimeArtifact } from './artifacts';
 import type { AgentCompactCapability, AgentContextCompaction, AgentContextWindowSource, AgentContextWindowState, AgentStreamEvent } from './stream';
 import type { RuntimeExecutionUnit } from './execution';
-import type { GuidanceQueueRecord, RunStatus } from './messages';
+import type { GuidanceQueueRecord } from './messages';
 import type { ObjectReference } from './references';
+import type {
+  RunTerminationReason,
+  RunTerminationRecord,
+} from './events-run-termination';
+import {
+  isRunTerminationRecord,
+  normalizeRunTermination,
+  normalizeRunTerminationReasonValue,
+} from './events-run-termination';
+
+export type {
+  RunTerminationActor,
+  RunTerminationNormalizationInput,
+  RunTerminationReason,
+  RunTerminationRecord,
+} from './events-run-termination';
+export {
+  normalizeRunTermination,
+  normalizeRunTerminationReason,
+} from './events-run-termination';
 
 export type {
   SilentStreamDecisionLayer,
@@ -24,28 +44,6 @@ export type BackgroundCompletionEventType =
   | 'background-finalization';
 
 export type BackgroundCompletionStatus = 'running' | 'completed' | 'failed' | 'cancelled';
-export type RunTerminationReason = 'user-cancelled' | 'system-aborted' | 'timeout' | 'backend-error';
-export type RunTerminationActor = 'user' | 'system' | 'backend';
-
-export interface RunTerminationRecord {
-  schemaVersion: 'sciforge.run-termination.v1';
-  reason: RunTerminationReason;
-  actor: RunTerminationActor;
-  progressStatus: 'cancelled' | 'failed';
-  runState: 'cancelled' | 'failed';
-  sessionStatus: Extract<RunStatus, 'cancelled' | 'failed'>;
-  retryable: boolean;
-  detail?: string;
-}
-
-export interface RunTerminationNormalizationInput {
-  cancellationReason?: string;
-  detail?: string;
-  userRequested?: boolean;
-  aborted?: boolean;
-  timedOut?: boolean;
-  backendError?: boolean;
-}
 
 export const BACKGROUND_COMPLETION_CONTRACT_ID = 'sciforge.background-completion.v1' as const;
 export const BACKGROUND_COMPLETION_TOOL_ID = 'sciforge.background-completion' as const;
@@ -913,43 +911,6 @@ export function normalizeRuntimeContextCompactionStatus(
   return 'pending';
 }
 
-export function normalizeRunTermination(input: RunTerminationNormalizationInput = {}): RunTerminationRecord {
-  const detail = input.detail?.trim();
-  const reason = normalizeRunTerminationReason(input);
-  const failed = reason === 'backend-error';
-  return {
-    schemaVersion: 'sciforge.run-termination.v1',
-    reason,
-    actor: runTerminationActor(reason),
-    progressStatus: failed ? 'failed' : 'cancelled',
-    runState: failed ? 'failed' : 'cancelled',
-    sessionStatus: reason === 'user-cancelled' ? 'cancelled' : 'failed',
-    retryable: reason !== 'user-cancelled',
-    ...(detail ? { detail } : {}),
-  };
-}
-
-export function normalizeRunTerminationReason(input: RunTerminationNormalizationInput = {}): RunTerminationReason {
-  const explicit = normalizedRunTerminationReason(input.cancellationReason);
-  if (explicit) return explicit;
-  const detail = input.detail ?? input.cancellationReason ?? '';
-  if (input.userRequested) return 'user-cancelled';
-  if (input.timedOut || /\b(timeout|timed out|deadline|time limit|超时)\b/i.test(detail)) return 'timeout';
-  if (input.backendError || /\b(backend|agentserver|workspace runtime|http\s*5\d\d|schema|contract|error|failed|failure|后端|失败)\b/i.test(detail)) return 'backend-error';
-  if (input.aborted || /abort|aborted|cancelled|canceled|disconnect|network|system|系统|网络|中断/i.test(detail)) return 'system-aborted';
-  return 'backend-error';
-}
-
-function normalizedRunTerminationReason(value: string | undefined): RunTerminationReason | undefined {
-  if (value === 'user-cancelled' || value === 'system-aborted' || value === 'timeout' || value === 'backend-error') return value;
-  if (!value) return undefined;
-  if (/user|manual|requested cancel|已中断|用户|人工/i.test(value)) return 'user-cancelled';
-  if (/\b(timeout|timed out|deadline|time limit|超时)\b/i.test(value)) return 'timeout';
-  if (/\b(backend|agentserver|workspace runtime|http\s*5\d\d|schema|contract|error|failed|failure|后端|失败)\b/i.test(value)) return 'backend-error';
-  if (/abort|aborted|cancelled|canceled|disconnect|network|system|系统|网络|中断/i.test(value)) return 'system-aborted';
-  return undefined;
-}
-
 function finiteNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : undefined;
 }
@@ -958,25 +919,12 @@ function nonNegativeInteger(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : undefined;
 }
 
-function isRunTerminationRecord(value: unknown): value is RunTerminationRecord {
-  if (!isRecord(value)) return false;
-  return value.schemaVersion === 'sciforge.run-termination.v1'
-    && normalizedRunTerminationReason(asString(value.reason)) !== undefined
-    && (value.actor === 'user' || value.actor === 'system' || value.actor === 'backend');
-}
-
-function runTerminationActor(reason: RunTerminationReason): RunTerminationActor {
-  if (reason === 'user-cancelled') return 'user';
-  if (reason === 'backend-error') return 'backend';
-  return 'system';
-}
-
 export function runtimeInteractionProgressEventFromUnknown(value: unknown): RuntimeInteractionProgressEvent | undefined {
   const record = isRecord(value) ? value : undefined;
   if (!record || record.schemaVersion !== INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION) return undefined;
   const type = asString(record.type);
   if (!isRuntimeInteractionProgressEventType(type)) return undefined;
-  const cancellationReason = normalizedRunTerminationReason(asString(record.cancellationReason));
+  const cancellationReason = normalizeRunTerminationReasonValue(asString(record.cancellationReason));
   const termination = isRunTerminationRecord(record.termination)
     ? record.termination
     : cancellationReason

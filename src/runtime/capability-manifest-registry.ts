@@ -20,6 +20,7 @@ import {
   type UnifiedCapabilityGraphInput,
 } from './capability-harness-candidates.js';
 import { manifest as reportViewerManifest } from '../../packages/presentation/components/report-viewer/manifest';
+import { manifest as paperCardListManifest } from '../../packages/presentation/components/paper-card-list/manifest';
 import type { UIComponentManifest } from '../../packages/contracts/runtime/index.js';
 import {
   discoverPackageCapabilityManifestsFromFiles,
@@ -373,6 +374,10 @@ function offlinePackageProviderCapabilityManifests(): CapabilityManifest[] {
     projectUIComponentManifestToCapabilityManifest(
       reportViewerManifest,
       'packages/presentation/components/report-viewer/manifest.ts',
+    ),
+    projectUIComponentManifestToCapabilityManifest(
+      paperCardListManifest,
+      'packages/presentation/components/paper-card-list/manifest.ts',
     ),
   ];
 }

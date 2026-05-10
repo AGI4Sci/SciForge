@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { PROCESS_PROGRESS_EVENT_TYPE, PROCESS_PROGRESS_PHASE, PROCESS_PROGRESS_STATUS } from '@sciforge-ui/runtime-contract';
-import { runIdForMessage, runningMessageContentFromStream } from './ChatPanel';
+import { runIdForMessage } from './chat/messageRunPresentation';
+import { runningMessageContentFromStream } from './chat/runStatusPresentation';
 import type { AgentStreamEvent, SciForgeMessage, SciForgeRun } from '../domain';
 
 const messages: SciForgeMessage[] = [

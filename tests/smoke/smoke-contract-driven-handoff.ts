@@ -555,6 +555,104 @@ async function assertNormalizedHandoffPayloadReconstruction() {
   }
 }
 
+function assertHandoffReconstructionNegativeCompatibility() {
+  assertMissingContractRefReconstructionIsPartial();
+  assertLegacyHandoffMetadataDoesNotImplyCompleteReconstruction();
+}
+
+function assertMissingContractRefReconstructionIsPartial() {
+  const testCase = syntheticHarnessCase('generation', 'balanced-default', 'fresh', {
+    allowed: ['artifact:partial-current'],
+    required: ['artifact:partial-current'],
+    blocked: ['artifact:partial-stale'],
+  });
+  const contractWithoutRef = {
+    ...testCase.contract,
+    contractRef: undefined,
+    traceRef: undefined,
+  };
+  const traceWithoutRef = {
+    ...testCase.trace,
+    ref: undefined,
+    id: undefined,
+    traceRef: undefined,
+  };
+  const reconstructed = reconstructAgentHarnessHandoffPayloadFromContract({
+    contract: contractWithoutRef,
+    trace: traceWithoutRef,
+    payload: {
+      metadata: {
+        harnessTraceRef: testCase.traceRef,
+      },
+    },
+  });
+
+  assert.equal(reconstructed.refs.harnessContractRef, undefined);
+  assert.equal(reconstructed.refs.harnessTraceRef, testCase.traceRef);
+  const reconstructedHandoff = record(reconstructed.handoff);
+  assert.equal(reconstructedHandoff.harnessContractRef, undefined);
+  assert.equal(reconstructedHandoff.harnessTraceRef, testCase.traceRef);
+  assert.equal(record(reconstructedHandoff.summary).contractRef, undefined);
+  assert.equal(record(reconstructedHandoff.summary).traceRef, testCase.traceRef);
+  assert.equal(record(record(reconstructedHandoff.promptRenderPlan).sourceRefs).contractRef, undefined);
+  assert.equal(record(record(reconstructed.promptRenderPlanSummary).sourceRefs).contractRef, undefined);
+  assert.deepEqual(list(record(reconstructedHandoff.contextRefs).allowed), ['artifact:partial-current']);
+}
+
+function assertLegacyHandoffMetadataDoesNotImplyCompleteReconstruction() {
+  const legacyContractRef = 'legacy-contract-ref-should-not-count';
+  const legacyTraceRef = 'legacy-trace-ref-should-not-count';
+  const canonicalTraceRef = 'runtime://agent-harness/traces/legacy-compat';
+  const legacyPayload = {
+    metadata: {
+      harnessTraceRef: canonicalTraceRef,
+      agentHarnessHandoff: {
+        schemaVersion: 'sciforge.agent-harness-handoff.legacy',
+        profileId: 'legacy-profile',
+        contractRef: legacyContractRef,
+        traceRef: legacyTraceRef,
+        promptRenderPlan: {
+          sourceRefs: {
+            contractRef: legacyContractRef,
+            traceRef: legacyTraceRef,
+          },
+        },
+      },
+    },
+  };
+  const extracted = agentHarnessHandoffRefsFromPayload(legacyPayload);
+  assert.equal(extracted.refs.harnessContractRef, undefined);
+  assert.equal(extracted.refs.harnessTraceRef, canonicalTraceRef);
+  assert.ok(extracted.sources.length > 0);
+  assert.ok(extracted.sources.every((source) => source.harnessContractRef === undefined));
+
+  const testCase = syntheticHarnessCase('repair', 'debug-repair', 'repair', {
+    allowed: ['attempt:legacy-failed-current', 'log:legacy-current-stderr'],
+    required: ['attempt:legacy-failed-current'],
+    blocked: ['artifact:legacy-unrelated-prior'],
+  });
+  const reconstructed = reconstructAgentHarnessHandoffPayloadFromContract({
+    contract: {
+      ...testCase.contract,
+      contractRef: undefined,
+      traceRef: undefined,
+    },
+    trace: {
+      ...testCase.trace,
+      ref: undefined,
+      id: undefined,
+      traceRef: undefined,
+    },
+    payload: legacyPayload,
+  });
+  const reconstructedHandoff = record(reconstructed.handoff);
+  assert.equal(reconstructed.refs.harnessContractRef, undefined);
+  assert.equal(reconstructed.refs.harnessTraceRef, canonicalTraceRef);
+  assert.equal(reconstructedHandoff.harnessContractRef, undefined);
+  assert.equal(reconstructedHandoff.harnessTraceRef, canonicalTraceRef);
+  assert.equal(JSON.stringify(reconstructed).includes(legacyContractRef), false);
+}
+
 function syntheticHarnessCase(
   kind: 'generation' | 'repair',
   profileId: string,
@@ -700,5 +798,6 @@ function list(value: unknown) {
 }
 
 await assertNormalizedHandoffPayloadReconstruction();
+assertHandoffReconstructionNegativeCompatibility();
 
 console.log('[ok] contract-driven handoff carries harness refs and reconstructable metadata for fresh/continuation/repair without live backend');
