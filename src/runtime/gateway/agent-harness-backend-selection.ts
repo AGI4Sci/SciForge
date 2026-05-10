@@ -1,5 +1,6 @@
 import type { GatewayRequest, LlmEndpointConfig } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
+import { HARNESS_EXTERNAL_HOOK_STAGES } from '../../../packages/agent-harness/src/runtime.js';
 import {
   agentServerBackendSelectionDecision,
   type AgentServerBackendSelectionDecision,
@@ -22,6 +23,7 @@ export function agentHarnessBackendSelectionDecision(
   const decision = input.backendSelectionDecision ?? agentServerBackendSelectionDecision(request, input.llmEndpoint);
   const contractRef = stringField(agentHarness.contractRef) ?? stringField(summary.contractRef);
   const traceRef = stringField(agentHarness.traceRef) ?? stringField(summary.traceRef);
+  const externalHook = externalHookTraceMetadata(decision.harnessStage);
   return {
     ...decision,
     harnessSignals: {
@@ -29,6 +31,7 @@ export function agentHarnessBackendSelectionDecision(
       contractRef,
       traceRef,
       harnessStage: decision.harnessStage,
+      externalHook,
       sourceCallbackId: sourceCallbackIdForTraceStage(trace, decision.harnessStage) ?? 'harness.runtime.beforeAgentDispatch',
     },
     trace: {
@@ -37,8 +40,21 @@ export function agentHarnessBackendSelectionDecision(
         stage: decision.harnessStage,
         contractRef,
         traceRef,
+        externalHookStage: externalHook.stage,
+        externalHookDeclaredBy: externalHook.declaredBy,
+        externalHookDeclared: externalHook.declared,
       },
     },
+  };
+}
+
+function externalHookTraceMetadata(stage: string) {
+  return {
+    schemaVersion: 'sciforge.agent-harness-external-hook-trace.v1',
+    stage,
+    stageGroup: 'external-hook',
+    declaredBy: 'HARNESS_EXTERNAL_HOOK_STAGES',
+    declared: HARNESS_EXTERNAL_HOOK_STAGES.some((declaredStage) => declaredStage === stage),
   };
 }
 

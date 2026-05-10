@@ -11,7 +11,12 @@ import { visionSensePlannerOnlyEvidencePolicy, visionSenseTraceContractPolicy, v
 import { runComputerUseActionLoop } from './computer-use-action-loop.js';
 import { appendPlannerStep, nextPlannerActions } from './computer-use-plan.js';
 import { shouldCompleteFromFileRefsOnlyPolicy } from './computer-use-policy-bridge.js';
-import { genericBridgeBlockedPayload, genericLoopPayload, VISION_TOOL_ID } from './computer-use-trace-output.js';
+import {
+  genericBridgeBlockedPayload,
+  genericLoopPayload,
+  VISION_TOOL_ID,
+  writeGenericLoopPayloadValidationRepairAuditSink,
+} from './computer-use-trace-output.js';
 import { windowConsistencyMetadata, windowLifecycleTrace } from './computer-use-window-session.js';
 
 export async function runGenericVisionComputerUseLoop(
@@ -241,7 +246,7 @@ export async function runGenericVisionComputerUseLoop(
   const tracePath = join(runDir, 'vision-trace.json');
   await writeFile(tracePath, `${JSON.stringify(trace, null, 2)}\n`, 'utf8');
 
-  return genericLoopPayload({
+  const payload = genericLoopPayload({
     request,
     workspace,
     runId,
@@ -254,7 +259,12 @@ export async function runGenericVisionComputerUseLoop(
     dryRun: config.dryRun,
     desktopPlatform: config.desktopPlatform,
     windowTarget: targetResolution.ok ? toTraceWindowTarget(targetResolution) : undefined,
+    createdAt: completedAt,
   });
+  if (executionStatus === 'failed-with-reason') {
+    await writeGenericLoopPayloadValidationRepairAuditSink(payload, { workspacePath: workspace });
+  }
+  return payload;
 }
 
 

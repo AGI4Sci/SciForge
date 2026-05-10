@@ -316,7 +316,14 @@ const agentServer = createServer(async (req, res) => {
   }
   const body = await readJson(req);
   const promptText = isRecord(body.input) && typeof body.input.text === 'string' ? body.input.text : '';
+  const rawBodyText = JSON.stringify(body);
   agentServerRequestCount += 1;
+  if (agentServerRequestCount >= 3 || promptText.includes('failed budget debit') || rawBodyText.includes('failed budget debit')) {
+    res.writeHead(503, { 'Content-Type': req.url === '/api/agent-server/runs/stream' ? 'application/x-ndjson' : 'application/json' });
+    const error = { error: 'mock AgentServer provider dispatch failed with HTTP 503' };
+    res.end(req.url === '/api/agent-server/runs/stream' ? `${JSON.stringify(error)}\n` : JSON.stringify(error));
+    return;
+  }
   const result = promptText.includes('direct budget debit')
     ? {
         ok: true,
@@ -420,17 +427,47 @@ try {
   assert.ok(directDebit.sinkRefs.auditRefs.some((ref) => ref.startsWith('.sciforge/capability-evolution-ledger/records.jsonl#L')));
   assert.equal(directPayload.budgetDebits?.filter((debit) => debit.debitId === directDebit.debitId).length, 1);
 
+  const failurePayload = await runWorkspaceRuntimeGateway({
+    skillDomain: 'literature',
+    prompt: 'failed budget debit provider dispatch',
+    workspacePath: agentServerWorkspace,
+    agentServerBaseUrl,
+    expectedArtifactTypes: ['research-report'],
+    availableSkills: ['missing.skill'],
+    uiState: {
+      sessionId: 'budget-debit-session',
+      forceAgentServerGeneration: true,
+      freshTaskGeneration: true,
+    },
+    artifacts: [],
+  });
+  const failureDebit = failurePayload.budgetDebits?.find((debit) => debit.capabilityId === 'sciforge.agentserver.generation-failure');
+  assert.ok(failureDebit, `AgentServer generation HTTP failure should emit a generation-failure budget debit: ${JSON.stringify({
+    message: failurePayload.message,
+    budgetDebits: failurePayload.budgetDebits?.map((debit) => debit.capabilityId),
+  })}`);
+  assert.equal(failureDebit.contract, CAPABILITY_BUDGET_DEBIT_CONTRACT_ID);
+  assert.ok(hasBudgetDebitRef(failurePayload.executionUnits[0], failureDebit.debitId));
+  assert.ok(failurePayload.workEvidence?.some((entry) => hasBudgetDebitRef(entry, failureDebit.debitId)));
+  assert.ok(failurePayload.logs?.some((entry) => hasBudgetDebitRef(entry, failureDebit.debitId)));
+  assert.ok(failureDebit.sinkRefs.executionUnitRef);
+  assert.ok(failureDebit.sinkRefs.workEvidenceRefs.length >= 1);
+  assert.ok(failureDebit.sinkRefs.auditRefs.some((ref) => ref.startsWith('audit:capability-budget-debit:agentserver-generation-failure:')));
+  assert.ok(failureDebit.debitLines.some((line) => line.dimension === 'networkCalls' && line.amount === 1));
+  assert.equal(failurePayload.budgetDebits?.filter((debit) => debit.debitId === failureDebit.debitId).length, 1);
+
   const attemptFiles = await readdir(join(agentServerWorkspace, '.sciforge', 'task-attempts'));
   const attempts = (await Promise.all(attemptFiles.map(async (file) => JSON.parse(await readFile(join(agentServerWorkspace, '.sciforge', 'task-attempts', file), 'utf8')))))
     .flatMap((entry) => Array.isArray(entry.attempts) ? entry.attempts : []);
   assert.ok(attempts.some((attempt) => attemptHasBudgetDebitRef(attempt, generatedDebit.debitId)));
   assert.ok(attempts.some((attempt) => attemptHasBudgetDebitRef(attempt, directDebit.debitId)));
-  assert.ok(agentServerRequestCount >= 2);
+  assert.ok(attempts.some((attempt) => attemptHasBudgetDebitRef(attempt, failureDebit.debitId)));
+  assert.ok(agentServerRequestCount >= 3);
 } finally {
   await new Promise<void>((resolve) => agentServer.close(() => resolve()));
 }
 
-console.log('[ok] capability invocation budget debit record is contract-shaped, sink-addressable, and wired into literature.retrieval, Computer Use, observe provider invocation, agent rubric verifier, human approval verifier, generated task, and AgentServer direct payload runtime output');
+console.log('[ok] capability invocation budget debit record is contract-shaped, sink-addressable, and wired into literature.retrieval, Computer Use, observe provider invocation, agent rubric verifier, human approval verifier, generated task, AgentServer direct payload, and AgentServer generation failure runtime output');
 
 function hasBudgetDebitRef(record: unknown, debitId: string) {
   return typeof record === 'object'

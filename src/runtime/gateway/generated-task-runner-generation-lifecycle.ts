@@ -8,11 +8,14 @@ import { sha1 } from '../workspace-task-runner.js';
 import { materializeBackendPayloadOutput, type RuntimeRefBundle } from './artifact-materializer.js';
 import {
   attachGeneratedTaskSuccessBudgetDebit,
+  attachGeneratedTaskFailureBudgetDebit,
   appendGeneratedTaskDirectPayloadAttemptLifecycle,
   appendGeneratedTaskGenerationFailureLifecycle,
   assessGeneratedTaskDirectPayloadLifecycle,
   annotateGeneratedTaskGuardValidationFailurePayload,
   capabilityEvolutionLedgerRefsFromResult,
+  generatedTaskFailureBudgetDebitAuditRefs,
+  generatedTaskFailureBudgetDebitId,
   generatedTaskSuccessBudgetDebitAuditRefs,
   generatedTaskSuccessBudgetDebitId,
   recordAgentServerDirectPayloadSuccessLedgerLifecycle,
@@ -134,6 +137,13 @@ export async function completeAgentServerGenerationFailureLifecycle(input: {
 
   const failureReason = input.deps.agentServerGenerationFailureReason(input.generation.error, input.generation.diagnostics);
   const failedRequestId = `agentserver-generation-${input.request.skillDomain}-${sha1(`${input.request.prompt}:${input.generation.error}`).slice(0, 12)}`;
+  const budgetDebitInput = {
+    request: input.request,
+    skill: input.skill,
+    failedRequestId,
+    failureReason,
+    diagnostics: input.generation.diagnostics,
+  };
   await appendGeneratedTaskGenerationFailureLifecycle({
     workspacePath: input.workspace,
     request: input.request,
@@ -142,13 +152,19 @@ export async function completeAgentServerGenerationFailureLifecycle(input: {
     failureReason,
     diagnostics: input.generation.diagnostics,
     attemptPlanRefs: input.deps.attemptPlanRefs,
+    budgetDebitRefs: [generatedTaskFailureBudgetDebitId(budgetDebitInput)],
+    budgetDebitAuditRefs: generatedTaskFailureBudgetDebitAuditRefs(budgetDebitInput),
   });
-  return input.deps.repairNeededPayload(
+  const repairPayload = input.deps.repairNeededPayload(
     input.request,
     input.skill,
     failureReason,
     input.deps.agentServerFailurePayloadRefs(input.generation.diagnostics),
   );
+  return attachGeneratedTaskFailureBudgetDebit({
+    ...budgetDebitInput,
+    payload: repairPayload,
+  });
 }
 
 export async function resolveGeneratedTaskGenerationRetryLifecycle(

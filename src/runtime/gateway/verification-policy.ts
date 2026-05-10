@@ -435,6 +435,7 @@ function stringField(value: unknown) {
 async function persistVerificationGatedPayloadIfPossible(workspace: string, payload: ToolPayload) {
   const outputRef = firstExecutionUnitString(payload, 'outputRef');
   if (!outputRef) return;
+  if (shouldPreserveArtifactOutputRef(payload, outputRef)) return;
   let outputPath: string | undefined;
   try {
     outputPath = resolveWorkspaceFileRefPath(outputRef, workspace);
@@ -444,4 +445,12 @@ async function persistVerificationGatedPayloadIfPossible(workspace: string, payl
   if (!outputPath) return;
   await mkdir(dirname(outputPath), { recursive: true });
   await writeFile(outputPath, JSON.stringify(payload, null, 2), 'utf8');
+}
+
+function shouldPreserveArtifactOutputRef(payload: ToolPayload, outputRef: string) {
+  if (outputRef.includes('.sciforge/task-results/')) return false;
+  return payload.artifacts
+    .filter(isRecord)
+    .flatMap((artifact) => artifactRefsFromRecord(artifact))
+    .includes(outputRef);
 }

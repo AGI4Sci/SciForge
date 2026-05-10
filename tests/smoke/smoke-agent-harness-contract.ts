@@ -215,6 +215,17 @@ try {
   assert.equal(backendHarnessSignals.contractRef, progressOptIn.summary.contractRef);
   assert.equal(backendHarnessSignals.traceRef, progressOptIn.summary.traceRef);
   assert.equal(typeof backendHarnessSignals.sourceCallbackId, 'string');
+  const backendExternalHook = isRecord(backendHarnessSignals.externalHook) ? backendHarnessSignals.externalHook : {};
+  assert.equal(backendExternalHook.schemaVersion, 'sciforge.agent-harness-external-hook-trace.v1');
+  assert.equal(backendExternalHook.stage, 'beforeAgentDispatch');
+  assert.equal(backendExternalHook.stageGroup, 'external-hook');
+  assert.equal(backendExternalHook.declaredBy, 'HARNESS_EXTERNAL_HOOK_STAGES');
+  assert.equal(backendExternalHook.declared, true);
+  const backendTrace = isRecord(backendSelectionDecision.trace) ? backendSelectionDecision.trace : {};
+  const backendTraceHarness = isRecord(backendTrace.harness) ? backendTrace.harness : {};
+  assert.equal(backendTraceHarness.externalHookStage, 'beforeAgentDispatch');
+  assert.equal(backendTraceHarness.externalHookDeclaredBy, 'HARNESS_EXTERNAL_HOOK_STAGES');
+  assert.equal(backendTraceHarness.externalHookDeclared, true);
   assert.deepEqual(continuityHandoff.backendSelectionDecision, backendSelectionDecision);
   const uiProgress = progressModelFromEvent(projected as unknown as Parameters<typeof progressModelFromEvent>[0]);
   assert.ok(String(projectedRaw.phase || ''), 'projected progress event should expose a contract phase');

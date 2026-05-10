@@ -778,7 +778,12 @@ async function requestAgentServerGeneration(params: {
         tailChars: 4_000,
       },
     });
-    runPayload = normalizedHandoff.payload;
+    runPayload = withAgentServerDispatchMetadata(normalizedHandoff.payload, {
+      contextMode: compactContext.mode,
+      retryAudit: contextRecovery?.retryAudit,
+    }, {
+      backend,
+    });
     emitWorkspaceRuntimeEvent(params.callbacks, {
       type: 'contextWindowState',
       source: 'workspace-runtime',
@@ -984,6 +989,34 @@ async function requestAgentServerGeneration(params: {
     clearTimeout(timeout);
     params.callbacks?.signal?.removeEventListener('abort', abortGeneration);
   }
+}
+
+function withAgentServerDispatchMetadata<T>(
+  payload: T,
+  metadata: Record<string, unknown>,
+  required: { backend?: string } = {},
+): T {
+  if (!isRecord(payload)) return payload;
+  const next: Record<string, unknown> = { ...payload };
+  if (required.backend) {
+    const agent: Record<string, unknown> = isRecord(next.agent) ? { ...next.agent } : {};
+    agent.backend = required.backend;
+    next.agent = agent;
+    const runtime: Record<string, unknown> = isRecord(next.runtime) ? { ...next.runtime } : {};
+    runtime.backend = required.backend;
+    next.runtime = runtime;
+  }
+  const input: Record<string, unknown> = isRecord(next.input) ? { ...next.input } : {};
+  input.metadata = {
+    ...(isRecord(input.metadata) ? input.metadata : {}),
+    ...metadata,
+  };
+  next.input = input;
+  next.metadata = {
+    ...(isRecord(next.metadata) ? next.metadata : {}),
+    ...metadata,
+  };
+  return next as T;
 }
 
 function normalizeAgentServerWorkspaceEvent(raw: unknown): WorkspaceRuntimeEvent {

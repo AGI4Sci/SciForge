@@ -211,9 +211,11 @@ export function validateCapabilityManifestRegistry(manifests: CapabilityManifest
 export const CORE_CAPABILITY_MANIFESTS: CapabilityManifest[] = [
   literatureRetrievalCapabilityManifest(),
   coreCapabilityManifest('skill.agentserver-generation', 'Use AgentServer with scenario policy, refs, and artifact contracts to generate or repair workspace tasks.', 'skill', 'src/runtime/generation-gateway.ts', ['workspace-write']),
+  coreCapabilityManifest('runtime.artifact-list', 'List session artifacts and project them into stable object references.', 'runtime-adapter', 'src/runtime/backend-artifact-tools.ts', ['workspace-read']),
   coreCapabilityManifest('runtime.artifact-resolve', 'Resolve object references to workspace-backed facts.', 'runtime-adapter', 'src/runtime/backend-artifact-tools.ts', ['workspace-read']),
   coreCapabilityManifest('runtime.artifact-read', 'Read bounded artifact, file, run, and execution-unit refs.', 'runtime-adapter', 'src/runtime/backend-artifact-tools.ts', ['workspace-read']),
   coreCapabilityManifest('runtime.artifact-render', 'Render artifacts into markdown, text, JSON, or preview-safe refs.', 'runtime-adapter', 'src/runtime/backend-artifact-tools.ts', ['workspace-read']),
+  coreCapabilityManifest('runtime.run-resume', 'Resume prior workspace runs from task attempts while preserving object references.', 'runtime-adapter', 'src/runtime/backend-artifact-tools.ts', ['workspace-read']),
   coreCapabilityManifest('runtime.workspace-read', 'Read allowed workspace paths through the runtime path contract.', 'action', 'src/runtime/workspace-paths.ts', ['workspace-read']),
   coreCapabilityManifest('runtime.workspace-write', 'Write managed workspace outputs with stable refs.', 'action', 'src/runtime/workspace-task-runner.ts', ['workspace-write']),
   coreCapabilityManifest('runtime.command-run', 'Run bounded workspace commands and capture stdout, stderr, and output refs.', 'action', 'src/runtime/workspace-task-runner.ts', ['workspace-write']),

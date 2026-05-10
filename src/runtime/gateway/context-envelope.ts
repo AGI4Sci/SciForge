@@ -89,7 +89,7 @@ export function buildContextEnvelope(
     projectFacts: mode === 'full' ? {
       project: 'SciForge',
       runtimeRole: 'scenario-first AI4Science workspace runtime',
-      taskCodePolicy: 'Generate or repair task code in the active workspace, but compose installed/workspace tools when they are a better fit than hand-written code.',
+      taskCodePolicyRef: 'sciforge.generated-task.v1',
       toolPayloadContract: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'displayIntent', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'],
     } : {
       project: 'SciForge',
@@ -98,14 +98,18 @@ export function buildContextEnvelope(
     },
     orchestrationBoundary: {
       decisionOwner: 'AgentServer',
-      sciForgeRole: 'protocol validation, workspace execution, artifact/ref persistence, repair request dispatch, and UI display only',
+      sciForgeRoleRef: 'sciforge.orchestration-boundary.runtime-role.v1',
       currentUserRequestIsAuthoritative: true,
       agentId: params.agentId,
       agentServerCoreSnapshotAvailable: params.agentServerCoreSnapshotAvailable === true,
-      contextModeReason: mode === 'delta'
-        ? 'SciForge sent compact delta refs plus hashes for a multi-turn backend session.'
-        : 'SciForge sent a full handoff because AgentServer Core context was unavailable or the turn had no reusable session refs.',
+      contextModeReasonCode: mode === 'delta'
+        ? 'agentserver-core-compact-delta-refs'
+        : 'full-handoff-no-reusable-agentserver-session',
     },
+    continuityPolicySummary: continuityPolicySummaryForEnvelope(mode, {
+      hasRecentFailures: recentFailures.length > 0,
+      hasFailureEvidenceRefs: failureEvidenceRefs(failureRecoveryPolicy).length > 0,
+    }),
     contextGovernanceAudit: contextGovernance ? contextEnvelopeGovernanceAudit(contextGovernance) : undefined,
     workspaceFacts: mode === 'full' ? {
       workspacePath: params.workspace,
@@ -182,21 +186,46 @@ export function buildContextEnvelope(
       priorAttempts: summarizeTaskAttemptsForAgentServer(params.priorAttempts ?? []).slice(0, mode === 'full' ? 4 : 2),
       repairRefs: params.repairRefs,
     },
-    continuityRules: mode === 'full' ? [
-      'Use workspace refs as the source of truth for files, logs, generated code, and artifacts.',
-      'Use conversationLedger to recover long-running session continuity; use recentConversation only to infer current intent.',
-      'If sessionFacts.currentReferences is non-empty, the current answer/artifacts must use those refs as current-turn evidence or return failed-with-reason; objectReferences alone do not prove use.',
-      'If sessionFacts.currentReferenceDigests is present, use those bounded digests before reading large files; only generate workspace task code for deeper extraction instead of dumping full documents into backend context.',
-      'For continuation or repair requests, continue from priorAttempts/artifacts instead of restarting an unrelated task.',
-      'For failure follow-ups, use sessionFacts.recentFailures and longTermRefs.failureEvidenceRefs to explain the prior blocker and continue from the failed step.',
-      'If a requested local ref does not exist, say so explicitly and point to the nearest available output/log/artifact ref.',
-    ] : [
-      'Workspace refs are source of truth.',
-      'If sessionFacts.currentReferences is non-empty, the current answer/artifacts must use those refs as current-turn evidence or return failed-with-reason; objectReferences alone do not prove use.',
-      'Use currentReferenceDigests before opening large current refs; if deeper reading is needed, write a workspace task that emits bounded artifacts.',
-      'Continue from AgentServer session memory, conversationLedger, recentExecutionRefs, and artifacts; answer missing refs honestly.',
-      'For failure follow-ups, use sessionFacts.recentFailures and longTermRefs.failureEvidenceRefs before asking the user to repeat context.',
+  };
+}
+
+function continuityPolicySummaryForEnvelope(
+  mode: AgentServerContextMode,
+  facts: { hasRecentFailures: boolean; hasFailureEvidenceRefs: boolean },
+) {
+  return {
+    schemaVersion: 'sciforge.context-envelope.continuity-policy-summary.v1',
+    mode,
+    policyProviderRefs: [
+      '@sciforge/skills/runtime-policy#agentServerContinuationPromptPolicyLines',
+      '@sciforge/skills/runtime-policy#agentServerPriorAttemptsPromptPolicyLines',
+      '@sciforge/skills/runtime-policy#agentServerRepairPromptPolicyLines',
+      '@sciforge/skills/runtime-policy#agentServerLargeFilePromptContractLines',
+      '@sciforge-ui/runtime-contract/artifact-policy#agentServerCurrentReferencePromptPolicyLines',
     ],
+    contextFields: mode === 'full'
+      ? [
+        'workspaceFacts',
+        'sessionFacts.conversationLedger',
+        'sessionFacts.recentConversation',
+        'sessionFacts.currentReferences',
+        'sessionFacts.currentReferenceDigests',
+        'longTermRefs.priorAttempts',
+        'longTermRefs.artifacts',
+      ]
+      : [
+        'sessionFacts.currentReferences',
+        'sessionFacts.currentReferenceDigests',
+        'longTermRefs.priorAttempts',
+        'longTermRefs.artifacts',
+        'longTermRefs.recentExecutionRefs',
+      ],
+    failureEvidenceFields: facts.hasRecentFailures || facts.hasFailureEvidenceRefs
+      ? [
+        facts.hasRecentFailures ? 'sessionFacts.recentFailures' : undefined,
+        facts.hasFailureEvidenceRefs ? 'longTermRefs.failureEvidenceRefs' : undefined,
+      ].filter(Boolean)
+      : undefined,
   };
 }
 

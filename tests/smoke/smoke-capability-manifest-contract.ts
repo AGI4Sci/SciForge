@@ -21,8 +21,12 @@ assert.equal(registry.manifestIds.length, coreManifests.length);
 assert.equal(registry.providerIds.length, coreManifests.reduce((total, manifest) => total + manifest.providers.length, 0));
 assert.equal(registry.getManifest('runtime.artifact-resolve')?.brief, 'Resolve object references to workspace-backed facts.');
 assert.equal(registry.getManifestByProviderId('sciforge.core.runtime.artifact-resolve')?.id, 'runtime.artifact-resolve');
+assert.equal(registry.getManifest('runtime.artifact-list')?.lifecycle.sourceRef, 'src/runtime/backend-artifact-tools.ts');
+assert.equal(registry.getManifest('runtime.run-resume')?.lifecycle.sourceRef, 'src/runtime/backend-artifact-tools.ts');
+assert.equal(registry.getManifestByProviderId('sciforge.core.runtime.artifact-list')?.id, 'runtime.artifact-list');
+assert.equal(registry.getManifestByProviderId('sciforge.core.runtime.run-resume')?.id, 'runtime.run-resume');
 assert.ok(registry.listBriefs({ kind: 'action' }).length >= 4, 'registry should expose action capability briefs');
-assert.ok(registry.listBriefs({ routingTag: 'artifact' }).length >= 3, 'registry should filter briefs by routing tag');
+assert.ok(registry.listBriefs({ routingTag: 'artifact' }).length >= 4, 'registry should filter briefs by routing tag');
 
 const artifactResolveManifest = registry.getManifest('runtime.artifact-resolve');
 assert.ok(artifactResolveManifest, 'runtime.artifact-resolve manifest must exist');

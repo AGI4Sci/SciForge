@@ -12,6 +12,20 @@ import {
   type CapabilityBudgetDebitLine,
   type CapabilityInvocationBudgetDebitRecord,
 } from '@sciforge-ui/runtime-contract/capability-budget';
+import type {
+  ActionResultValidationProjection,
+  AuditRecord,
+  RepairDecision,
+  ValidationDecision,
+} from '@sciforge-ui/runtime-contract/validation-repair-audit';
+import {
+  attachValidationRepairAuditChainToPayload,
+  createValidationRepairAuditChain,
+} from '../gateway/validation-repair-audit-bridge.js';
+import {
+  writeValidationRepairAuditSinkVerificationArtifacts,
+  type ValidationRepairAuditVerificationArtifactWriteResult,
+} from '../gateway/validation-repair-audit-sink.js';
 
 export const VISION_TOOL_ID = visionSenseTraceIds.tool;
 const COMPUTER_USE_CAPABILITY_ID = 'action.sciforge.computer-use';
@@ -35,6 +49,7 @@ export function genericLoopPayload(params: {
   dryRun: boolean;
   desktopPlatform: string;
   windowTarget?: TraceWindowTarget;
+  createdAt?: string;
 }): ToolPayload {
   const traceRel = workspaceRel(params.workspace, params.tracePath);
   const allRefs = params.screenshotRefs;
@@ -85,7 +100,7 @@ export function genericLoopPayload(params: {
     rawRef: traceRel,
     budgetDebitRefs,
   };
-  return {
+  const payload: ToolPayload = {
     message: isDone
       ? `vision-sense generic Computer Use loop completed ${params.actionCount} action(s). Trace: ${traceRel}.`
       : `vision-sense generic Computer Use loop stopped with failed-with-reason: ${params.failureReason}`,
@@ -161,6 +176,150 @@ export function genericLoopPayload(params: {
     }],
     budgetDebits: [budgetDebitRecord],
   };
+  if (isDone) return payload;
+  const chain = createComputerUseActionValidationRepairAuditChain({
+    ...params,
+    traceRel,
+    screenshotRefs: allRefs,
+    executionUnitRef,
+    workEvidenceRef,
+    budgetDebitRecord,
+  });
+  return attachValidationRepairAuditChainToPayload(payload, chain);
+}
+
+export async function writeGenericLoopPayloadValidationRepairAuditSink(
+  payload: ToolPayload,
+  options: { workspacePath: string; now?: () => Date },
+): Promise<ValidationRepairAuditVerificationArtifactWriteResult[]> {
+  const chain = validationRepairAuditPayloadChain(payload);
+  if (!chain) return [];
+  const writes = await writeValidationRepairAuditSinkVerificationArtifacts({
+    validationDecision: chain.validationDecision,
+    repairDecision: chain.repairDecision,
+    auditRecord: chain.auditRecord,
+  }, options);
+  if (!writes.length) return writes;
+  const payloadWithRefs = payload as ToolPayload & { refs?: Record<string, unknown> };
+  payloadWithRefs.refs = {
+    ...(payloadWithRefs.refs ?? {}),
+    validationRepairAuditActionResultArtifacts: writes.map((write) => ({
+      kind: 'validation-repair-audit-action-result-artifact',
+      ref: write.ref,
+      auditId: write.fact.auditId,
+      sourceSinkRef: write.fact.sourceSinkRef,
+      contractId: write.fact.contractId,
+      failureKind: write.fact.failureKind,
+      outcome: write.fact.outcome,
+      sinkRefs: write.fact.sinkRefs,
+    })),
+  };
+  return writes;
+}
+
+function createComputerUseActionValidationRepairAuditChain(params: {
+  request: GatewayRequest;
+  runId: string;
+  traceRel: string;
+  screenshotRefs: ScreenshotRef[];
+  status: 'done' | 'failed-with-reason';
+  failureReason: string;
+  actionCount: number;
+  maxSteps: number;
+  dryRun: boolean;
+  desktopPlatform: string;
+  windowTarget?: TraceWindowTarget;
+  executionUnitRef: string;
+  workEvidenceRef: string;
+  budgetDebitRecord: CapabilityInvocationBudgetDebitRecord;
+  createdAt?: string;
+}) {
+  const safeRunId = sanitizeId(params.runId);
+  const artifactRefs = [params.traceRel, ...params.screenshotRefs.map((ref) => ref.path)];
+  const actionResult: ActionResultValidationProjection = {
+    id: `action-result:${safeRunId}`,
+    status: 'failed',
+    actionId: VISION_TOOL_ID,
+    providerId: COMPUTER_USE_CAPABILITY_ID,
+    message: params.failureReason,
+    failureMode: computerUseActionFailureMode(params.failureReason),
+    traceRef: params.traceRel,
+    artifactRefs,
+    relatedRefs: [
+      params.traceRel,
+      params.executionUnitRef,
+      params.workEvidenceRef,
+      params.budgetDebitRecord.debitId,
+    ],
+    diagnostics: [
+      `runtime=${visionSenseTraceIds.workspaceRuntime}`,
+      `tool=${VISION_TOOL_ID}`,
+      `desktopPlatform=${params.desktopPlatform}`,
+      `dryRun=${params.dryRun}`,
+      `actionCount=${params.actionCount}`,
+      `maxSteps=${params.maxSteps}`,
+      `budgetDebitRef=${params.budgetDebitRecord.debitId}`,
+      params.windowTarget ? `windowTarget=${params.windowTarget.captureKind}:${params.windowTarget.source}` : undefined,
+    ].filter((value): value is string => Boolean(value)),
+    confidence: 0.35,
+  };
+  return createValidationRepairAuditChain({
+    chainId: `computer-use-action:${safeRunId}`,
+    subject: {
+      kind: 'action-result',
+      id: params.runId,
+      capabilityId: COMPUTER_USE_CAPABILITY_ID,
+      contractId: 'sciforge.action-response.v1',
+      actionTraceRef: params.traceRel,
+      artifactRefs,
+      currentRefs: params.request.selectedToolIds ?? [VISION_TOOL_ID],
+    },
+    actionResult,
+    relatedRefs: [
+      params.traceRel,
+      params.executionUnitRef,
+      params.workEvidenceRef,
+      params.budgetDebitRecord.debitId,
+    ],
+    repairBudget: {
+      maxAttempts: 1,
+      remainingAttempts: 1,
+      maxSupplementAttempts: 0,
+      remainingSupplementAttempts: 0,
+    },
+    sinkRefs: [
+      `appendTaskAttempt:action-result:${safeRunId}`,
+      `ledger:action-result:${safeRunId}`,
+      `verification-artifact:action-results/${safeRunId}.json`,
+    ],
+    telemetrySpanRefs: [
+      `span:action-result:${safeRunId}`,
+      `span:repair-decision:action-result:${safeRunId}`,
+    ],
+    createdAt: params.createdAt,
+  });
+}
+
+function validationRepairAuditPayloadChain(payload: ToolPayload) {
+  const refs = (payload as ToolPayload & { refs?: { validationRepairAudit?: unknown } }).refs;
+  const chain = refs?.validationRepairAudit;
+  if (!chain || typeof chain !== 'object' || Array.isArray(chain)) return undefined;
+  const record = chain as Record<string, unknown>;
+  if (!record.auditRecord || typeof record.auditRecord !== 'object') return undefined;
+  return record as {
+    validationDecision?: ValidationDecision;
+    repairDecision?: RepairDecision;
+    auditRecord: AuditRecord;
+  };
+}
+
+function computerUseActionFailureMode(reason: string) {
+  if (/provider|unavailable|not configured|no real generic gui executor|no executable adapter/i.test(reason)) return 'provider-unavailable';
+  if (/high-risk|confirmation|safety/i.test(reason)) return 'safety-blocked';
+  if (/timeout|lock/i.test(reason)) return 'timeout';
+  if (/ground/i.test(reason)) return 'grounding-failed';
+  if (/window|target|focus|isolation/i.test(reason)) return 'target-unavailable';
+  return 'action-failed';
 }
 
 function createComputerUseBudgetDebitRecord(params: {

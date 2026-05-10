@@ -37,6 +37,11 @@ export {
   generatedTaskSuccessBudgetDebitAuditRefs,
   generatedTaskSuccessBudgetDebitId,
 } from './generated-task-success-budget-debit.js';
+export {
+  attachGeneratedTaskFailureBudgetDebit,
+  generatedTaskFailureBudgetDebitAuditRefs,
+  generatedTaskFailureBudgetDebitId,
+} from './generated-task-failure-budget-debit.js';
 export type {
   GeneratedTaskSuccessBudgetDebitInput,
 } from './generated-task-success-budget-debit.js';
@@ -159,6 +164,8 @@ export interface GeneratedTaskGenerationFailureLifecycleInput {
   failureReason: string;
   diagnostics?: any;
   attemptPlanRefs: AttemptPlanRefs;
+  budgetDebitRefs?: string[];
+  budgetDebitAuditRefs?: string[];
 }
 
 export interface GeneratedTaskDirectPayloadAttemptLifecycleInput {
@@ -500,7 +507,7 @@ export async function buildGeneratedTaskRunInputLifecycle(
 export async function appendGeneratedTaskGenerationFailureLifecycle(
   input: GeneratedTaskGenerationFailureLifecycleInput,
 ) {
-  await appendTaskAttempt(input.workspacePath, {
+  await appendTaskAttempt(input.workspacePath, taskAttemptWithBudgetDebitRefs({
     id: input.failedRequestId,
     prompt: input.request.prompt,
     skillDomain: input.request.skillDomain,
@@ -511,7 +518,7 @@ export async function appendGeneratedTaskGenerationFailureLifecycle(
     failureReason: input.failureReason,
     contextRecovery: contextRecoveryAttemptMetadata(input.diagnostics),
     createdAt: new Date().toISOString(),
-  });
+  }, input.budgetDebitRefs, input.budgetDebitAuditRefs));
 }
 
 export async function appendGeneratedTaskDirectPayloadAttemptLifecycle(

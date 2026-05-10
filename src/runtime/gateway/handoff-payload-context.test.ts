@@ -119,5 +119,6 @@ test('failure recovery policy carries failure summary and evidence refs into nex
   assert.ok(failures?.some((entry) => String(entry.failureReason).includes('工具执行失败')));
   assert.ok(failures?.some((entry) => (entry.evidenceRefs as string[] | undefined)?.includes('file:.sciforge/logs/run.err')));
   assert.ok(envelope.longTermRefs.failureEvidenceRefs?.includes('file:.sciforge/logs/run.err'));
-  assert.match(envelope.continuityRules.join('\n'), /recentFailures|failureEvidenceRefs/);
+  const continuityPolicySummary = envelope.continuityPolicySummary as Record<string, unknown>;
+  assert.deepEqual(continuityPolicySummary.failureEvidenceFields, ['sessionFacts.recentFailures', 'longTermRefs.failureEvidenceRefs']);
 });

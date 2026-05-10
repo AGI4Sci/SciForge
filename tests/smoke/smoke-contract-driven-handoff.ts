@@ -12,8 +12,10 @@ import {
   agentHarnessPromptRenderPlanSummaryFromPlan,
   reconstructAgentHarnessHandoffPayloadFromContract,
 } from '../../src/runtime/gateway/agent-harness-handoff-reconstruction.js';
+import { buildContextEnvelope } from '../../src/runtime/gateway/context-envelope.js';
 import { buildAgentServerGenerationPrompt } from '../../src/runtime/gateway/agentserver-prompts.js';
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
+import type { GatewayRequest } from '../../src/runtime/runtime-types.js';
 
 type Dispatch = {
   text: string;
@@ -208,6 +210,7 @@ try {
   }
 
   assertSyntheticDirectiveRenderingIsSourced();
+  assertContextEnvelopeLocalPolicyProseIsRefOnly();
 } finally {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
@@ -311,9 +314,19 @@ function assertBackendSelectionDecision(dispatch: Dispatch) {
   assert.equal(harnessSignals.traceRef, dispatch.metadata.harnessTraceRef);
   assert.equal(harnessSignals.harnessStage, 'beforeAgentDispatch');
   assert.equal(typeof harnessSignals.sourceCallbackId, 'string');
+  const externalHook = record(harnessSignals.externalHook);
+  assert.equal(externalHook.schemaVersion, 'sciforge.agent-harness-external-hook-trace.v1');
+  assert.equal(externalHook.stage, 'beforeAgentDispatch');
+  assert.equal(externalHook.stageGroup, 'external-hook');
+  assert.equal(externalHook.declaredBy, 'HARNESS_EXTERNAL_HOOK_STAGES');
+  assert.equal(externalHook.declared, true);
   const trace = record(metadataDecision.trace);
   assert.deepEqual(list(trace.selectionOrder), ['request.agentBackend', 'env.SCIFORGE_AGENTSERVER_BACKEND', 'llmEndpoint.baseUrl', 'runtime.default']);
   assert.deepEqual(list(trace.ignoredSources), ['request.agentBackend:missing', 'env.SCIFORGE_AGENTSERVER_BACKEND:missing']);
+  const traceHarness = record(trace.harness);
+  assert.equal(traceHarness.externalHookStage, 'beforeAgentDispatch');
+  assert.equal(traceHarness.externalHookDeclaredBy, 'HARNESS_EXTERNAL_HOOK_STAGES');
+  assert.equal(traceHarness.externalHookDeclared, true);
 }
 
 function assertNoStaleRefs(dispatch: Dispatch) {
@@ -489,6 +502,38 @@ function assertPromptRenderPlanSummaryFromContextEnvelope(renderPlan: Record<str
   assert.equal(prompt.includes('LOCAL_PROJECT_FACTS_POLICY_SENTINEL'), false, 'local projectFacts policy prose must not become AgentServer prompt policy prose');
   assert.equal(prompt.includes('LOCAL_ORCHESTRATION_ROLE_SENTINEL'), false, 'local orchestrationBoundary prose must not become AgentServer prompt policy prose');
   assert.equal(prompt.includes('LOCAL_CONTEXT_MODE_REASON_SENTINEL'), false, 'local context mode prose must not become AgentServer prompt policy prose');
+}
+
+function assertContextEnvelopeLocalPolicyProseIsRefOnly() {
+  const envelope = buildContextEnvelope({
+    skillDomain: 'literature',
+    prompt: 'fresh: Verify context envelope policy prose is ref-only.',
+    artifacts: [],
+    uiState: {},
+  } satisfies GatewayRequest, {
+    workspace,
+    mode: 'full',
+    agentId: 'agentserver-context-policy-smoke',
+    agentServerCoreSnapshotAvailable: false,
+  });
+  const serialized = JSON.stringify(envelope);
+  assert.equal('continuityRules' in envelope, false, 'context envelope must not expose local continuityRules prose');
+  assert.equal(serialized.includes('Generate or repair task code in the active workspace'), false, 'taskCodePolicy prose must be replaced by a policy ref');
+  assert.equal(serialized.includes('Use workspace refs as the source of truth'), false, 'continuity policy prose must be replaced by a policy summary/ref');
+  assert.equal(serialized.includes('protocol validation, workspace execution'), false, 'orchestration role prose must be replaced by a role ref');
+  assert.equal(serialized.includes('SciForge sent a full handoff'), false, 'context mode reason prose must be replaced by a reason code');
+
+  const projectFacts = record(envelope.projectFacts);
+  assert.equal(projectFacts.taskCodePolicy, undefined);
+  assert.equal(projectFacts.taskCodePolicyRef, 'sciforge.generated-task.v1');
+  const boundary = record(envelope.orchestrationBoundary);
+  assert.equal(boundary.sciForgeRole, undefined);
+  assert.equal(boundary.sciForgeRoleRef, 'sciforge.orchestration-boundary.runtime-role.v1');
+  assert.equal(boundary.contextModeReason, undefined);
+  assert.equal(boundary.contextModeReasonCode, 'full-handoff-no-reusable-agentserver-session');
+  const continuitySummary = record(envelope.continuityPolicySummary);
+  assert.equal(continuitySummary.schemaVersion, 'sciforge.context-envelope.continuity-policy-summary.v1');
+  assert.ok(list(continuitySummary.policyProviderRefs).includes('@sciforge/skills/runtime-policy#agentServerContinuationPromptPolicyLines'));
 }
 
 async function assertNormalizedHandoffPayloadReconstruction() {

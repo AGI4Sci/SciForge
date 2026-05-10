@@ -21,6 +21,10 @@ import {
   writeValidationRepairAuditSinkVerificationArtifacts,
 } from '../../src/runtime/gateway/validation-repair-audit-sink';
 import { createValidationRepairAuditChain } from '../../src/runtime/gateway/validation-repair-audit-bridge';
+import {
+  genericLoopPayload,
+  writeGenericLoopPayloadValidationRepairAuditSink,
+} from '../../src/runtime/vision-sense/computer-use-trace-output';
 
 const createdAt = '2026-05-10T00:00:00.000Z';
 const repairBudget: RepairBudgetSnapshot = {
@@ -231,6 +235,85 @@ try {
   assert.ok(actionSummary.telemetrySpanRefs.includes('span:action:action-sink'));
 } finally {
   await rm(actionWorkspace, { recursive: true, force: true });
+}
+
+const realActionWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-validation-repair-real-action-sink-'));
+try {
+  const realActionPayload = genericLoopPayload({
+    request: {
+      skillDomain: 'literature',
+      prompt: 'Use generic Computer Use to click the upload button.',
+      workspacePath: realActionWorkspace,
+      artifacts: [],
+      selectedToolIds: ['local.vision-sense'],
+    },
+    workspace: realActionWorkspace,
+    runId: 'real-action-provider-unavailable',
+    tracePath: join(realActionWorkspace, '.sciforge/vision-runs/real-action-provider-unavailable/vision-trace.json'),
+    screenshotRefs: [{
+      id: 'step-001-before-display-1',
+      path: '.sciforge/vision-runs/real-action-provider-unavailable/step-001-before-display-1.png',
+      absPath: join(realActionWorkspace, '.sciforge/vision-runs/real-action-provider-unavailable/step-001-before-display-1.png'),
+      displayId: 1,
+      sha256: 'before-sha',
+      bytes: 128,
+    }, {
+      id: 'step-001-after-display-1',
+      path: '.sciforge/vision-runs/real-action-provider-unavailable/step-001-after-display-1.png',
+      absPath: join(realActionWorkspace, '.sciforge/vision-runs/real-action-provider-unavailable/step-001-after-display-1.png'),
+      displayId: 1,
+      sha256: 'after-sha',
+      bytes: 256,
+    }],
+    status: 'failed-with-reason',
+    failureReason: 'No real generic GUI executor is configured for desktopPlatform="linux".',
+    actionCount: 1,
+    maxSteps: 2,
+    dryRun: false,
+    desktopPlatform: 'linux',
+    createdAt: '2026-05-10T00:00:03.000Z',
+  }) as ReturnType<typeof genericLoopPayload> & {
+    refs?: {
+      validationRepairAudit?: {
+        validationDecision?: { subject?: { kind?: string; actionTraceRef?: string }; findings?: Array<{ source?: string; diagnostics?: Record<string, unknown> }> };
+        repairDecision?: { action?: string };
+        auditRecord?: { auditId?: string; subject?: { kind?: string }; failureKind?: string; sinkRefs?: string[] };
+      };
+      validationRepairAuditActionResultArtifacts?: Array<{ ref?: string; auditId?: string; sourceSinkRef?: string; sinkRefs?: string[] }>;
+    };
+    executionUnits: Array<{ refs?: { validationRepairAudit?: unknown } }>;
+  };
+  const realChain = realActionPayload.refs?.validationRepairAudit;
+  assert.equal(realChain?.validationDecision?.subject?.kind, 'action-result');
+  assert.equal(realChain?.validationDecision?.subject?.actionTraceRef, '.sciforge/vision-runs/real-action-provider-unavailable/vision-trace.json');
+  assert.equal(realChain?.validationDecision?.findings?.[0]?.source, 'action-response');
+  assert.equal(realChain?.validationDecision?.findings?.[0]?.diagnostics?.failureMode, 'provider-unavailable');
+  assert.equal(realChain?.repairDecision?.action, 'repair-rerun');
+  assert.equal(realChain?.auditRecord?.failureKind, 'action-trace');
+  assert.ok(realChain?.auditRecord?.sinkRefs?.includes('verification-artifact:action-results/real-action-provider-unavailable.json'));
+  assert.ok(realActionPayload.executionUnits[0]?.refs?.validationRepairAudit, 'real action failure execution unit should carry audit refs');
+
+  const realWrites = await writeGenericLoopPayloadValidationRepairAuditSink(realActionPayload, {
+    workspacePath: realActionWorkspace,
+    now: () => new Date('2026-05-10T00:00:04.000Z'),
+  });
+  assert.equal(realWrites.length, 1);
+  assert.equal(realWrites[0]?.artifact.subject?.kind, 'action-result');
+  assert.equal(realWrites[0]?.artifact.failureKind, 'action-trace');
+  assert.equal(realWrites[0]?.artifact.auditRecord.auditId, realChain?.auditRecord?.auditId);
+  assert.equal(realActionPayload.refs?.validationRepairAuditActionResultArtifacts?.[0]?.auditId, realChain?.auditRecord?.auditId);
+
+  const realActionSummary = await buildValidationRepairAuditSinkActionResultSummary({
+    workspacePath: realActionWorkspace,
+    now: () => new Date('2026-05-10T00:00:05.000Z'),
+  });
+  assert.equal(realActionSummary.totalActionResults, 1);
+  assert.deepEqual(realActionSummary.actionTraceRefs, ['.sciforge/vision-runs/real-action-provider-unavailable/vision-trace.json']);
+  assert.equal(realActionSummary.findingSourceCounts['action-response'], 1);
+  assert.equal(realActionSummary.failureKindCounts['action-trace'], 1);
+  assert.ok(realActionSummary.sinkRefs.includes('verification-artifact:action-results/real-action-provider-unavailable.json'));
+} finally {
+  await rm(realActionWorkspace, { recursive: true, force: true });
 }
 
 console.log('[ok] validation/repair/audit sink projects audit chains into appendTaskAttempt, ledger, verification artifact, observe invocation refs/records, and action-result readback summary');
