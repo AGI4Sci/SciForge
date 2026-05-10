@@ -3,6 +3,10 @@ import {
   CURRENT_REFERENCE_GATE_TOOL_ID,
 } from '@sciforge-ui/runtime-contract';
 import {
+  createCapabilityBudgetDebitRecord,
+  type CapabilityBudgetDebitLine,
+} from '@sciforge-ui/runtime-contract/capability-budget';
+import {
   previewPathHasRecognizedFileExtension,
   previewPathHasStableDeliverableExtension,
 } from '@sciforge-ui/artifact-preview';
@@ -73,9 +77,13 @@ export async function validateAndNormalizePayload(
       actual: summarizeActualContractShape(contractPayload),
       relatedRefs: relatedRefsFromRepairRefs(refs),
     });
-    return repairNeededPayload(request, skill, validationFailure.failureReason, {
-      ...repairRefsWithValidationRepairAudit(request, skill, validationFailure, refs),
-    });
+    const repairRefs = repairRefsWithValidationRepairAudit(request, skill, validationFailure, refs);
+    return attachPayloadValidationBudgetDebit(
+      repairNeededPayload(request, skill, validationFailure.failureReason, repairRefs),
+      skill,
+      validationFailure,
+      repairRefs,
+    );
   }
   const workspace = resolve(request.workspacePath || process.cwd());
   const normalizedArtifacts = await normalizeArtifactsForPayload(
@@ -247,6 +255,124 @@ function payloadValidationChainId(
     refs.taskRel,
   ].filter(Boolean).join(':');
   return `payload-validation:${sha1(stableInput).slice(0, 12)}`;
+}
+
+function attachPayloadValidationBudgetDebit(
+  payload: ToolPayload,
+  skill: SkillAvailability,
+  validationFailure: NonNullable<RepairPolicyRefs['validationFailure']>,
+  refs: RepairPolicyRefs,
+): ToolPayload {
+  const chainId = payloadValidationChainId(skill, validationFailure, refs);
+  const executionUnitRef = firstPayloadExecutionUnitId(payload);
+  const logRef = `audit:payload-validation-budget-debit:${sha1(chainId).slice(0, 12)}`;
+  const debit = createCapabilityBudgetDebitRecord({
+    debitId: `budgetDebit:${chainId}`,
+    invocationId: `capabilityInvocation:${chainId}`,
+    capabilityId: 'sciforge.payload-validation',
+    candidateId: 'validator.sciforge.payload-validation',
+    manifestRef: 'capability:verifier.schema',
+    subjectRefs: uniquePayloadValidationSubjectRefs(validationFailure, refs),
+    debitLines: payloadValidationDebitLines(validationFailure),
+    sinkRefs: {
+      executionUnitRef,
+      auditRefs: [
+        `audit:${chainId}`,
+        `appendTaskAttempt:${chainId}`,
+        logRef,
+      ],
+    },
+    metadata: {
+      validatorCapabilityId: skill.id,
+      failureKind: validationFailure.failureKind,
+      contractId: validationFailure.contractId,
+      schemaPath: validationFailure.schemaPath,
+    },
+  });
+  const budgetDebitRefs = [debit.debitId];
+  return {
+    ...payload,
+    budgetDebits: [
+      ...(payload.budgetDebits ?? []),
+      debit,
+    ],
+    executionUnits: payload.executionUnits.map((unit) => isRecord(unit)
+      ? attachBudgetDebitRefs(unit, budgetDebitRefs)
+      : unit),
+    logs: [
+      ...(payload.logs ?? []),
+      {
+        kind: 'capability-budget-debit-audit',
+        ref: logRef,
+        capabilityId: 'sciforge.payload-validation',
+        validationFailureKind: validationFailure.failureKind,
+        budgetDebitRefs,
+      },
+    ],
+  };
+}
+
+function payloadValidationDebitLines(
+  validationFailure: NonNullable<RepairPolicyRefs['validationFailure']>,
+): CapabilityBudgetDebitLine[] {
+  return [
+    {
+      dimension: 'costUnits',
+      amount: 1,
+      reason: `payload validation ${validationFailure.failureKind}`,
+      sourceRef: validationFailure.contractId,
+    },
+    {
+      dimension: 'resultItems',
+      amount: Math.max(1, Array.isArray(validationFailure.issues) ? validationFailure.issues.length : 0),
+      reason: 'validation findings',
+      sourceRef: validationFailure.schemaPath,
+    },
+  ];
+}
+
+function uniquePayloadValidationSubjectRefs(
+  validationFailure: NonNullable<RepairPolicyRefs['validationFailure']>,
+  refs: RepairPolicyRefs,
+) {
+  return [...new Set([
+    ...relatedRefsFromRepairRefs(refs),
+    ...validationFailure.relatedRefs,
+    validationFailure.contractId,
+    validationFailure.schemaPath,
+  ].filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0))];
+}
+
+function firstPayloadExecutionUnitId(payload: ToolPayload) {
+  for (const unit of payload.executionUnits) {
+    if (!isRecord(unit)) continue;
+    const id = stringField(unit.id);
+    if (id) return id;
+  }
+  return undefined;
+}
+
+function attachBudgetDebitRefs(record: Record<string, unknown>, refs: string[]) {
+  return {
+    ...record,
+    budgetDebitRefs: [...new Set([
+      ...stringList(record.budgetDebitRefs),
+      ...refs,
+    ])],
+    refs: {
+      ...(isRecord(record.refs) ? record.refs : {}),
+      budgetDebits: [...new Set([
+        ...stringList(isRecord(record.refs) ? record.refs.budgetDebits : undefined),
+        ...refs,
+      ])],
+    },
+  };
+}
+
+function stringList(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
 }
 
 function validationSubjectKindForRepairRefs(refs: RepairPolicyRefs) {

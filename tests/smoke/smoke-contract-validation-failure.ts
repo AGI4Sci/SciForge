@@ -8,6 +8,7 @@ import {
   contractValidationFailureSchema,
   type ContractValidationFailure,
 } from '@sciforge-ui/runtime-contract/validation-failure';
+import { CAPABILITY_BUDGET_DEBIT_CONTRACT_ID } from '@sciforge-ui/runtime-contract/capability-budget';
 import { normalizeGatewayRequest } from '../../src/runtime/gateway/gateway-request.js';
 import { repairNeededPayload, validateAndNormalizePayload } from '../../src/runtime/gateway/payload-validation.js';
 import { repairNeededPayload as repairPolicyRepairNeededPayload } from '../../src/runtime/gateway/repair-policy.js';
@@ -75,6 +76,18 @@ try {
   assert.ok(schemaFailure.missingFields.includes('claims'));
   assert.ok(schemaFailure.relatedRefs.includes(refs.outputRel));
   assert.match(JSON.stringify(schemaFailure), /missing claims/);
+  const missingFieldsToolPayload = missingFieldsPayload as ToolPayload;
+  const schemaDebit = missingFieldsToolPayload.budgetDebits?.[0];
+  assert.ok(schemaDebit, 'payload schema validation failure should emit a capability budget debit');
+  assert.equal(schemaDebit.contract, CAPABILITY_BUDGET_DEBIT_CONTRACT_ID);
+  assert.equal(schemaDebit.capabilityId, 'sciforge.payload-validation');
+  assert.equal(schemaDebit.sinkRefs.executionUnitRef, stringField(missingFieldsToolPayload.executionUnits[0], 'id'));
+  assert.ok(schemaDebit.sinkRefs.auditRefs.some((ref: string) => ref.startsWith('audit:payload-validation:')));
+  assert.ok(schemaDebit.sinkRefs.auditRefs.some((ref: string) => ref.startsWith('appendTaskAttempt:payload-validation:')));
+  assert.ok(schemaDebit.debitLines.some((line) => line.dimension === 'costUnits' && line.amount === 1));
+  assert.ok(schemaDebit.debitLines.some((line) => line.dimension === 'resultItems' && line.amount >= 1));
+  assert.ok(hasBudgetDebitRef(missingFieldsToolPayload.executionUnits[0], schemaDebit.debitId));
+  assert.ok(missingFieldsToolPayload.logs?.some((entry) => entry.kind === 'capability-budget-debit-audit' && hasBudgetDebitRef(entry, schemaDebit.debitId)));
 
   const artifactFailurePayload = await validateAndNormalizePayload({
     message: 'Artifact contract smoke',
@@ -334,6 +347,25 @@ function validationFailureFromUnit(unit: Record<string, unknown> | undefined) {
   const refs = unit.refs as { validationFailure?: ContractValidationFailure } | undefined;
   assert.ok(refs?.validationFailure);
   return refs.validationFailure;
+}
+
+function hasBudgetDebitRef(record: unknown, debitId: string) {
+  return Boolean(
+    record
+    && typeof record === 'object'
+    && !Array.isArray(record)
+    && Array.isArray((record as { budgetDebitRefs?: unknown }).budgetDebitRefs)
+    && ((record as { budgetDebitRefs: unknown[] }).budgetDebitRefs).includes(debitId),
+  );
+}
+
+function stringField(record: unknown, field: string) {
+  return record
+    && typeof record === 'object'
+    && !Array.isArray(record)
+    && typeof (record as Record<string, unknown>)[field] === 'string'
+    ? (record as Record<string, string>)[field]
+    : undefined;
 }
 
 function assertSerializableContractFailure(failure: ContractValidationFailure) {
