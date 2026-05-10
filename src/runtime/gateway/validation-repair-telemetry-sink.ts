@@ -6,7 +6,9 @@ import {
   VALIDATION_REPAIR_TELEMETRY_SPAN_KINDS,
   type AuditRecord,
   type RepairDecision,
+  type ValidationFindingKind,
   type ValidationDecision,
+  type ValidationSubjectRef,
   type ValidationRepairTelemetrySpanKind,
   type ValidationRepairTelemetrySpanRef,
 } from '@sciforge-ui/runtime-contract/validation-repair-audit';
@@ -67,6 +69,11 @@ export interface ValidationRepairTelemetrySpanRecord {
   repairDecisionId?: string;
   auditId?: string;
   executorResultId?: string;
+  subject?: ValidationSubjectRef;
+  contractId?: string;
+  failureKind?: ValidationFindingKind;
+  outcome?: string;
+  action?: string;
   sourceRefs: string[];
   auditRefs: string[];
   repairRefs: string[];
@@ -148,6 +155,22 @@ export async function writeValidationRepairTelemetrySpans(
   projectionOptions: ValidationRepairTelemetryProjectionOptions = {},
 ): Promise<ValidationRepairTelemetryWriteResult> {
   const projection = projectValidationRepairTelemetrySpans(source, projectionOptions);
+  return writeValidationRepairTelemetryProjection(projection, options);
+}
+
+export async function writeValidationRepairTelemetrySpansFromPayload(
+  value: unknown,
+  options: ValidationRepairTelemetryWriteOptions,
+  projectionOptions: ValidationRepairTelemetryProjectionOptions = {},
+): Promise<ValidationRepairTelemetryWriteResult> {
+  const projection = validationRepairTelemetrySpansFromPayload(value, projectionOptions) ?? emptyValidationRepairTelemetryProjection();
+  return writeValidationRepairTelemetryProjection(projection, options);
+}
+
+async function writeValidationRepairTelemetryProjection(
+  projection: ValidationRepairTelemetryProjection,
+  options: ValidationRepairTelemetryWriteOptions,
+): Promise<ValidationRepairTelemetryWriteResult> {
   const telemetryPath = resolveValidationRepairTelemetryPath(options);
   const fileRef = toWorkspaceRef(options.workspacePath, telemetryPath);
   const records = uniqueSpanRecords(projection.spans.map((span) => telemetryRecordFromSpan(span, fileRef, options)));
@@ -160,6 +183,16 @@ export async function writeValidationRepairTelemetrySpans(
     ref: fileRef,
     records,
     projection,
+  };
+}
+
+function emptyValidationRepairTelemetryProjection(): ValidationRepairTelemetryProjection {
+  return {
+    spans: [],
+    spanRefs: [],
+    sourceRefs: [],
+    auditRefs: [],
+    repairRefs: [],
   };
 }
 
@@ -523,6 +556,11 @@ function telemetryRecordFromSpan(
     repairDecisionId: span.repairDecisionId,
     auditId: span.auditId,
     executorResultId: span.executorResultId,
+    subject: span.subject,
+    contractId: span.contractId,
+    failureKind: span.failureKind,
+    outcome: span.outcome,
+    action: span.action,
     sourceRefs: uniqueStrings(span.sourceRefs),
     auditRefs: uniqueStrings(span.auditRefs),
     repairRefs: uniqueStrings(span.repairRefs),

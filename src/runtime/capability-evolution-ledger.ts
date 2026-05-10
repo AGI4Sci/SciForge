@@ -43,6 +43,32 @@ export interface CapabilityEvolutionLedgerAppendResult {
   record: CapabilityEvolutionRecord;
 }
 
+export type CapabilityEvolutionLedgerFactKind =
+  | 'success'
+  | 'failure'
+  | 'fallback'
+  | 'repair'
+  | 'needs-human';
+
+export interface CapabilityEvolutionLedgerFact {
+  kind: 'capability-evolution-ledger-fact';
+  recordRef?: string;
+  recordId: string;
+  runId?: string;
+  sessionId?: string;
+  recordedAt: string;
+  factKinds: CapabilityEvolutionLedgerFactKind[];
+  finalStatus: CapabilityEvolutionRecordStatus;
+  selectedCapabilityIds: string[];
+  providerIds: string[];
+  failureCode?: string;
+  repairAttemptCount: number;
+  fallbackable?: boolean;
+  artifactRefs: string[];
+  executionUnitRefs: string[];
+  validationSummary?: string;
+}
+
 export interface ValidationRepairAuditLedgerRecordOptions {
   now?: () => Date;
   recordIdPrefix?: string;
@@ -279,6 +305,40 @@ export async function readCapabilityEvolutionRecords(
   return typeof options.limit === 'number' && options.limit >= 0 ? records.slice(-options.limit) : records;
 }
 
+export async function readCapabilityEvolutionLedgerFacts(
+  options: CapabilityEvolutionLedgerReadOptions,
+): Promise<CapabilityEvolutionLedgerFact[]> {
+  const ledgerPath = resolveCapabilityEvolutionLedgerPath(options);
+  const sourceRef = toWorkspaceRef(options.workspacePath, ledgerPath);
+  const records = await readCapabilityEvolutionRecords(options);
+  return records.map((record, index) => capabilityEvolutionLedgerFactFromRecord(record, `${sourceRef}#L${index + 1}`));
+}
+
+export function capabilityEvolutionLedgerFactFromRecord(
+  record: CapabilityEvolutionRecord,
+  recordRef?: string,
+): CapabilityEvolutionLedgerFact {
+  const compactRecord = compactCapabilityEvolutionRecord(record, recordRef);
+  return {
+    kind: 'capability-evolution-ledger-fact',
+    recordRef,
+    recordId: record.id,
+    runId: record.runId,
+    sessionId: record.sessionId,
+    recordedAt: record.recordedAt,
+    factKinds: ledgerFactKindsForRecord(record),
+    finalStatus: record.finalStatus,
+    selectedCapabilityIds: compactRecord.selectedCapabilityIds,
+    providerIds: compactRecord.providerIds,
+    failureCode: compactRecord.failureCode,
+    repairAttemptCount: compactRecord.repairAttemptCount,
+    fallbackable: compactRecord.fallbackable,
+    artifactRefs: compactRecord.artifactRefs,
+    executionUnitRefs: compactRecord.executionUnitRefs,
+    validationSummary: compactRecord.validationSummary,
+  };
+}
+
 export async function buildCapabilityEvolutionCompactSummary(
   options: CapabilityEvolutionSummaryOptions,
 ): Promise<CapabilityEvolutionCompactSummary> {
@@ -477,6 +537,16 @@ function safeRecordId(value: string) {
 
 function isFallbackRecord(record: CapabilityEvolutionRecord) {
   return record.finalStatus.startsWith('fallback-') || (record.composedResult?.atomicTrace.length ?? 0) > 0;
+}
+
+function ledgerFactKindsForRecord(record: CapabilityEvolutionRecord): CapabilityEvolutionLedgerFactKind[] {
+  const kinds = new Set<CapabilityEvolutionLedgerFactKind>();
+  if (isSuccessfulRecord(record)) kinds.add('success');
+  if (isFailureRecord(record)) kinds.add('failure');
+  if (isFallbackRecord(record)) kinds.add('fallback');
+  if (record.repairAttempts.length > 0 || record.finalStatus.startsWith('repair-')) kinds.add('repair');
+  if (record.finalStatus === 'needs-human') kinds.add('needs-human');
+  return [...kinds].sort();
 }
 
 function compactFallbackDecision(record: CapabilityEvolutionRecord): CapabilityFallbackDecisionSummary | undefined {

@@ -7,6 +7,7 @@ import {
   normalizeRuntimeContextCompactionStatus,
   normalizeRuntimeContextWindowSource,
   normalizeRuntimeContextWindowStatus,
+  runtimeInteractionProgressPresentation,
   runtimeStreamEventLabel,
   workspaceRuntimeResultCompletion,
 } from '@sciforge-ui/runtime-contract';
@@ -133,7 +134,8 @@ export async function readWorkspaceToolStream(
 
 export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
   const record = isRecord(raw) ? raw : {};
-  const type = asString(record.type) || asString(record.kind) || WORKSPACE_RUNTIME_EVENT_TYPE;
+  const interactionProgress = runtimeInteractionProgressPresentation(record);
+  const type = interactionProgress ? asString(record.type) ?? WORKSPACE_RUNTIME_EVENT_TYPE : asString(record.type) || asString(record.kind) || WORKSPACE_RUNTIME_EVENT_TYPE;
   const source = asString(record.source);
   const toolName = asString(record.toolName);
   const usage = normalizeTokenUsage(record.usage)
@@ -143,7 +145,8 @@ export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
   const contextWindowState = normalizeContextWindowState(contextWindowCandidate(record), type, record);
   const contextCompaction = normalizeContextCompaction(record.contextCompaction ?? record.compaction ?? record.context_compaction, type, record);
   const workEvidence = normalizeWorkEvidenceRecords(record.workEvidence ?? record.work_evidence);
-  const baseDetail = asString(record.detail)
+  const baseDetail = interactionProgress?.detail
+    || asString(record.detail)
     || asString(record.message)
     || asString(record.text)
     || asString(record.output)
@@ -155,7 +158,7 @@ export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
   return {
     id: makeId('evt'),
     type,
-    label: runtimeStreamEventLabel(type, source, toolName),
+    label: interactionProgress?.label ?? runtimeStreamEventLabel(type, source, toolName),
     detail,
     usage,
     contextWindowState,

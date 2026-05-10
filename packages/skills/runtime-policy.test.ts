@@ -6,11 +6,19 @@ import {
   AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE,
   AGENTSERVER_SUPPLEMENTAL_GENERATION_EVENT_TYPE,
   agentServerGeneratedEntrypointContractReason,
+  agentServerBackendDecisionPromptPolicyLines,
+  agentServerCapabilityRoutingPromptPolicyLines,
+  agentServerContinuationPromptPolicyLines,
+  agentServerCurrentTurnSnapshotPromptPolicyLines,
   agentServerGeneratedTaskInterfaceContractReason,
   agentServerExecutionModePromptPolicyLines,
   agentServerExternalIoReliabilityContractLines,
   agentServerFreshRetrievalPromptPolicyLines,
   agentServerGeneratedTaskPromptPolicyLines,
+  agentServerGenerationOutputContract,
+  agentServerGenerationOutputContractLines,
+  agentServerLargeFilePromptContractLines,
+  agentServerPriorAttemptsPromptPolicyLines,
   agentServerGeneratedTaskRetryDetail,
   agentServerPathOnlyStrictRetryDirectPayloadReason,
   agentServerPathOnlyStrictRetryStillMissingReason,
@@ -18,6 +26,9 @@ import {
   agentServerPayloadTaskDomain,
   agentServerRepairPromptPolicyLines,
   agentServerStablePayloadTaskId,
+  agentServerViewSelectionPromptPolicyLines,
+  agentServerWorkspaceTaskRepairPromptPolicyLines,
+  agentServerWorkspaceTaskRoutingPromptPolicyLines,
   EVOLVED_SKILLS_RELATIVE_DIR,
   SKILL_ENTRYPOINT_TYPE,
   skillManifestHasWorkspaceTaskEntrypoint,
@@ -44,6 +55,19 @@ test('skills runtime policy owns AgentServer retrieval and task prompt snippets'
   assert.match(taskPolicy, /physically write task files/);
   assert.match(taskPolicy, /Entrypoint contract/);
   assert.match(taskPolicy, /inputPath argument/);
+
+  assert.match(agentServerCurrentTurnSnapshotPromptPolicyLines().join('\n'), /CURRENT TURN SNAPSHOT/);
+  assert.match(agentServerBackendDecisionPromptPolicyLines({ freshCurrentTurn: true }).join('\n'), /FRESH GENERATION MODE/);
+  assert.match(agentServerBackendDecisionPromptPolicyLines({ freshCurrentTurn: false }).join('\n'), /CONTINUITY MODE/);
+  assert.equal(agentServerGenerationOutputContract().finalOutput, 'exactly one compact JSON object');
+  assert.match(agentServerGenerationOutputContractLines().join('\n'), /Final output must be only compact JSON/);
+  assert.match(agentServerWorkspaceTaskRoutingPromptPolicyLines().join('\n'), /generated task paths under \.sciforge\/tasks/);
+  assert.match(agentServerCapabilityRoutingPromptPolicyLines().join('\n'), /Runtime capability routing contract/);
+  assert.match(agentServerLargeFilePromptContractLines().join('\n'), /Large-file contract/);
+  assert.match(agentServerViewSelectionPromptPolicyLines().join('\n'), /selectedComponentIds/);
+  assert.match(agentServerContinuationPromptPolicyLines().join('\n'), /continuation requests/);
+  assert.match(agentServerPriorAttemptsPromptPolicyLines().join('\n'), /RECENT PRIOR ATTEMPTS/);
+  assert.match(agentServerWorkspaceTaskRepairPromptPolicyLines().join('\n'), /workspace ready for SciForge to rerun/);
 
   const freshRetrieval = agentServerFreshRetrievalPromptPolicyLines().join('\n');
   assert.match(freshRetrieval, /fresh retrieval\/analysis\/report requests/);

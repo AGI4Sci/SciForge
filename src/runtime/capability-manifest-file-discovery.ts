@@ -101,6 +101,7 @@ export async function discoverPackageCapabilityManifestsFromFiles(
       packageRoot,
       manifests: [],
       providerAvailability: [],
+      discoverySource: 'file-discovery',
     };
     existing.manifests.push(...loaded.manifests);
     existing.providerAvailability?.push(...(loaded.providerAvailability ?? []));

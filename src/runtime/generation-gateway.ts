@@ -99,6 +99,10 @@ import { evaluateGuidanceAdoption } from './gateway/guidance-adoption-guard.js';
 import { summarizeWorkEvidenceForHandoff } from './gateway/work-evidence-types.js';
 import { createLatencyTelemetry } from './gateway/latency-telemetry.js';
 import {
+  writeValidationRepairTelemetrySpansFromPayload,
+  type ValidationRepairTelemetryWriteResult,
+} from './gateway/validation-repair-telemetry-sink.js';
+import {
   agentServerFailurePayloadRefs,
   agentServerGenerationFailureReason,
   configurePayloadValidationContext,
@@ -225,14 +229,20 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
         latencyPolicy: request.uiState?.latencyPolicy,
       }));
       telemetry.markVerificationStart();
-      const verified = await applyRuntimeVerificationPolicy(directContextPayload, request);
+      const verified = await recordValidationRepairTelemetryForPayload(
+        await applyRuntimeVerificationPolicy(directContextPayload, request),
+        request,
+      );
       telemetry.markVerificationEnd();
       return telemetry.emitFinal(verified) ?? verified;
     }
     const visionSensePayload = await tryRunVisionSenseRuntime(request, telemetry.callbacks);
     if (visionSensePayload) {
       telemetry.markVerificationStart();
-      const verified = await applyRuntimeVerificationPolicy(visionSensePayload, request);
+      const verified = await recordValidationRepairTelemetryForPayload(
+        await applyRuntimeVerificationPolicy(visionSensePayload, request),
+        request,
+      );
       telemetry.markVerificationEnd();
       return telemetry.emitFinal(verified) ?? verified;
     }
@@ -246,7 +256,10 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
     const payload = await runAgentServerGeneratedTask(request, skill, skills, telemetry.callbacks)
       ?? repairNeededPayload(request, skill, 'AgentServer task generation did not produce a runnable task.');
     telemetry.markVerificationStart();
-    const verified = await applyRuntimeVerificationPolicy(payload, request);
+    const verified = await recordValidationRepairTelemetryForPayload(
+      await applyRuntimeVerificationPolicy(payload, request),
+      request,
+    );
     telemetry.markVerificationEnd();
     return telemetry.emitFinal(verified) ?? verified;
   } catch (error) {
@@ -254,6 +267,47 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
     telemetry.emitFinal();
     throw error;
   }
+}
+
+async function recordValidationRepairTelemetryForPayload(
+  payload: ToolPayload,
+  request: GatewayRequest,
+): Promise<ToolPayload> {
+  try {
+    const writeResult = await writeValidationRepairTelemetrySpansFromPayload(payload, {
+      workspacePath: request.workspacePath || process.cwd(),
+    });
+    return writeResult.records.length ? attachValidationRepairTelemetryRefs(payload, writeResult) : payload;
+  } catch {
+    return payload;
+  }
+}
+
+function attachValidationRepairTelemetryRefs(
+  payload: ToolPayload,
+  writeResult: ValidationRepairTelemetryWriteResult,
+): ToolPayload {
+  const current = payload as ToolPayload & { refs?: unknown };
+  const refs = isRecord(current.refs) ? current.refs : {};
+  const existingTelemetry = Array.isArray(refs.validationRepairTelemetry)
+    ? refs.validationRepairTelemetry
+    : [];
+  return {
+    ...payload,
+    refs: {
+      ...refs,
+      validationRepairTelemetry: [
+        ...existingTelemetry,
+        {
+          kind: 'validation-repair-telemetry',
+          ref: writeResult.ref,
+          spanRefs: writeResult.projection.spanRefs,
+          recordRefs: writeResult.records.map((record) => record.ref),
+          spanKinds: uniqueStrings(writeResult.records.map((record) => record.spanKind)),
+        },
+      ],
+    },
+  } as ToolPayload;
 }
 
 async function runAgentServerGeneratedTask(
@@ -645,7 +699,7 @@ async function requestAgentServerGeneration(params: {
         skillPlanRef: promptRequest.skillPlanRef,
         prompt: promptRequest.prompt,
       });
-    const attachPriorAttempts = needsContinuity || hasRecoverableRecentAttempt(recentAttempts);
+    const attachPriorAttempts = needsContinuity || hasRecoverableRecentAttempt(recentAttempts, promptRequest.prompt);
     const priorAttempts = currentTurnReferences(promptRequest).length || !attachPriorAttempts
       ? []
       : summarizeTaskAttemptsForAgentServer(recentAttempts);
@@ -1327,8 +1381,10 @@ function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-function hasRecoverableRecentAttempt(attempts: TaskAttemptRecord[]) {
+function hasRecoverableRecentAttempt(attempts: TaskAttemptRecord[], currentPrompt: string) {
+  const normalizedPrompt = normalizeRecoverableAttemptPrompt(currentPrompt);
   return attempts.some((attempt) => {
+    if (normalizeRecoverableAttemptPrompt(attempt.prompt) !== normalizedPrompt) return false;
     const candidates = [
       attempt.status,
       attempt.failureReason,
@@ -1336,6 +1392,14 @@ function hasRecoverableRecentAttempt(attempts: TaskAttemptRecord[]) {
     ];
     return candidates.some((value) => /repair-needed|failed|needs-human|timed out|cancelled|timeout/i.test(String(value || '')));
   });
+}
+
+function normalizeRecoverableAttemptPrompt(value: string | undefined) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^\p{Letter}\p{Number}]+/gu, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
 }
 
 function normalizeAgentServerWorkspaceEvent(raw: unknown): WorkspaceRuntimeEvent {

@@ -137,7 +137,12 @@ export const RATE_LIMIT_EVENT_TYPE = 'rateLimit' as const;
 export const BACKEND_EVENT_TYPE = 'backend-event' as const;
 export const AGENTSERVER_EVENT_TYPE_PREFIX = 'agentserver-' as const;
 export const PROCESS_PROGRESS_EVENT_TYPE = 'process-progress' as const;
+export const INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION = 'sciforge.interaction-progress-event.v1' as const;
+export const INTERACTION_REQUEST_EVENT_TYPE = 'interaction-request' as const;
+export const CLARIFICATION_NEEDED_EVENT_TYPE = 'clarification-needed' as const;
+export const HUMAN_APPROVAL_REQUIRED_EVENT_TYPE = 'human-approval-required' as const;
 export const GUIDANCE_QUEUED_EVENT_TYPE = 'guidance-queued' as const;
+export const RUN_CANCELLED_EVENT_TYPE = 'run-cancelled' as const;
 export const USER_INTERRUPT_EVENT_TYPE = 'user-interrupt' as const;
 export const GUIDANCE_QUEUE_RUN_ORCHESTRATION_CONTRACT = 'guidance-queue/run-orchestration' as const;
 export const PROCESS_EVENTS_SCHEMA_VERSION = 'sciforge.process-events.v1' as const;
@@ -179,6 +184,7 @@ export const PROCESS_PROGRESS_STATUS = {
   RUNNING: 'running',
   COMPLETED: 'completed',
   FAILED: 'failed',
+  CANCELLED: 'cancelled',
 } as const;
 
 export const PROCESS_PROGRESS_STATUSES = Object.values(PROCESS_PROGRESS_STATUS);
@@ -232,6 +238,16 @@ export type RuntimeStreamEventType = typeof STREAM_EVENT_TYPE[keyof typeof STREA
 export type ProcessProgressPhase = typeof PROCESS_PROGRESS_PHASE[keyof typeof PROCESS_PROGRESS_PHASE];
 export type ProcessProgressReason = typeof PROCESS_PROGRESS_REASON[keyof typeof PROCESS_PROGRESS_REASON];
 export type ProcessProgressStatus = typeof PROCESS_PROGRESS_STATUS[keyof typeof PROCESS_PROGRESS_STATUS];
+export type RuntimeInteractionProgressEventType =
+  | typeof PROCESS_PROGRESS_EVENT_TYPE
+  | typeof INTERACTION_REQUEST_EVENT_TYPE
+  | typeof CLARIFICATION_NEEDED_EVENT_TYPE
+  | typeof HUMAN_APPROVAL_REQUIRED_EVENT_TYPE
+  | typeof GUIDANCE_QUEUED_EVENT_TYPE
+  | typeof RUN_CANCELLED_EVENT_TYPE;
+export type RuntimeInteractionProgressStatus = 'pending' | 'running' | 'blocked' | 'completed' | 'failed' | 'cancelled';
+export type RuntimeInteractionProgressImportance = 'low' | 'normal' | 'high' | 'blocking';
+export type RuntimeInteractionKind = 'clarification' | 'human-approval' | 'guidance' | string;
 export type RuntimeHealthStatus = typeof RUNTIME_HEALTH_STATUS[keyof typeof RUNTIME_HEALTH_STATUS];
 export type RuntimeWorkEventKind =
   | 'plan'
@@ -308,6 +324,56 @@ export interface ProcessProgressModel {
   canContinue?: boolean;
   status: ProcessProgressStatus;
 }
+
+export interface RuntimeInteractionRequest {
+  id?: string;
+  kind: RuntimeInteractionKind;
+  required?: boolean;
+}
+
+export interface RuntimeInteractionProgressBudget {
+  elapsedMs?: number;
+  remainingMs?: number;
+  retryCount?: number;
+  maxRetries?: number;
+  maxWallMs?: number;
+}
+
+export interface RuntimeInteractionProgressEvent {
+  schemaVersion: typeof INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION;
+  type: RuntimeInteractionProgressEventType;
+  runState?: string;
+  requestId?: string;
+  runId?: string;
+  traceRef?: string;
+  phase?: string;
+  status?: RuntimeInteractionProgressStatus;
+  importance?: RuntimeInteractionProgressImportance;
+  reason?: string;
+  cancellationReason?: RunTerminationReason;
+  budget?: RuntimeInteractionProgressBudget;
+  interaction?: RuntimeInteractionRequest;
+  termination?: RunTerminationRecord;
+}
+
+export interface RuntimeInteractionProgressPresentation {
+  label: string;
+  detail: string;
+  phase?: string;
+  status?: RuntimeInteractionProgressStatus;
+  reason?: string;
+  interaction?: RuntimeInteractionRequest;
+  termination?: RunTerminationRecord;
+}
+
+export const STANDARD_INTERACTION_PROGRESS_EVENT_TYPES: readonly RuntimeInteractionProgressEventType[] = [
+  PROCESS_PROGRESS_EVENT_TYPE,
+  INTERACTION_REQUEST_EVENT_TYPE,
+  CLARIFICATION_NEEDED_EVENT_TYPE,
+  HUMAN_APPROVAL_REQUIRED_EVENT_TYPE,
+  GUIDANCE_QUEUED_EVENT_TYPE,
+  RUN_CANCELLED_EVENT_TYPE,
+];
 
 export interface RuntimeWorkEventClassificationInput {
   type?: string;
@@ -1031,12 +1097,120 @@ function isRunTerminationRecord(value: unknown): value is RunTerminationRecord {
     && (value.actor === 'user' || value.actor === 'system' || value.actor === 'backend');
 }
 
+export function runtimeInteractionProgressEventFromUnknown(value: unknown): RuntimeInteractionProgressEvent | undefined {
+  const record = isRecord(value) ? value : undefined;
+  if (!record || record.schemaVersion !== INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION) return undefined;
+  const type = asString(record.type);
+  if (!isRuntimeInteractionProgressEventType(type)) return undefined;
+  const cancellationReason = normalizedRunTerminationReason(asString(record.cancellationReason));
+  const termination = isRunTerminationRecord(record.termination)
+    ? record.termination
+    : cancellationReason
+      ? normalizeRunTermination({ cancellationReason, detail: asString(record.reason) })
+      : undefined;
+  return {
+    schemaVersion: INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION,
+    type,
+    runState: asString(record.runState),
+    requestId: asString(record.requestId),
+    runId: asString(record.runId),
+    traceRef: asString(record.traceRef),
+    phase: asString(record.phase),
+    status: normalizeRuntimeInteractionProgressStatus(asString(record.status)),
+    importance: normalizeRuntimeInteractionProgressImportance(asString(record.importance)),
+    reason: asString(record.reason),
+    cancellationReason,
+    budget: normalizeRuntimeInteractionProgressBudget(record.budget),
+    interaction: normalizeRuntimeInteractionRequest(record.interaction),
+    termination,
+  };
+}
+
+export function runtimeInteractionProgressPresentation(value: unknown): RuntimeInteractionProgressPresentation | undefined {
+  const event = runtimeInteractionProgressEventFromUnknown(value);
+  if (!event) return undefined;
+  const phase = event.phase ?? event.type;
+  const parts = [
+    `Phase: ${phase}`,
+    event.status ? `Status: ${event.status}` : '',
+    event.reason ? `Reason: ${event.reason}` : '',
+    event.cancellationReason ? `Cancellation: ${event.cancellationReason}` : '',
+    event.interaction ? `Interaction: ${event.interaction.kind}${event.interaction.required === undefined ? '' : event.interaction.required ? ' required' : ' optional'}` : '',
+    runtimeInteractionProgressBudgetSummary(event.budget),
+  ].filter(Boolean);
+  return {
+    label: runtimeStreamEventLabel(event.type),
+    detail: parts.join('\n'),
+    phase: event.phase,
+    status: event.status,
+    reason: event.reason,
+    interaction: event.interaction,
+    termination: event.termination,
+  };
+}
+
+export function runtimeInteractionProgressBudgetSummary(budget: RuntimeInteractionProgressBudget | undefined) {
+  if (!budget) return '';
+  const parts = [
+    budget.elapsedMs !== undefined ? `elapsed ${budget.elapsedMs}ms` : '',
+    budget.remainingMs !== undefined ? `remaining ${budget.remainingMs}ms` : '',
+    budget.retryCount !== undefined || budget.maxRetries !== undefined
+      ? `retries ${budget.retryCount ?? '?'}/${budget.maxRetries ?? '?'}`
+      : '',
+    budget.maxWallMs !== undefined ? `max wall ${budget.maxWallMs}ms` : '',
+  ].filter(Boolean);
+  return parts.length ? `Budget: ${parts.join(', ')}` : '';
+}
+
+function isRuntimeInteractionProgressEventType(value: string | undefined): value is RuntimeInteractionProgressEventType {
+  return Boolean(value && STANDARD_INTERACTION_PROGRESS_EVENT_TYPES.includes(value as RuntimeInteractionProgressEventType));
+}
+
+function normalizeRuntimeInteractionProgressStatus(value: string | undefined): RuntimeInteractionProgressStatus | undefined {
+  if (value === 'pending' || value === 'running' || value === 'blocked' || value === 'completed' || value === 'failed' || value === 'cancelled') return value;
+  return undefined;
+}
+
+function normalizeRuntimeInteractionProgressImportance(value: string | undefined): RuntimeInteractionProgressImportance | undefined {
+  if (value === 'low' || value === 'normal' || value === 'high' || value === 'blocking') return value;
+  return undefined;
+}
+
+function normalizeRuntimeInteractionRequest(value: unknown): RuntimeInteractionRequest | undefined {
+  const record = isRecord(value) ? value : undefined;
+  const kind = asString(record?.kind);
+  if (!record || !kind) return undefined;
+  return {
+    id: asString(record.id),
+    kind,
+    required: typeof record.required === 'boolean' ? record.required : undefined,
+  };
+}
+
+function normalizeRuntimeInteractionProgressBudget(value: unknown): RuntimeInteractionProgressBudget | undefined {
+  const record = isRecord(value) ? value : undefined;
+  if (!record) return undefined;
+  const budget = {
+    elapsedMs: finiteNumber(record.elapsedMs),
+    remainingMs: finiteNumber(record.remainingMs),
+    retryCount: nonNegativeInteger(record.retryCount),
+    maxRetries: nonNegativeInteger(record.maxRetries),
+    maxWallMs: finiteNumber(record.maxWallMs),
+  };
+  return Object.values(budget).some((entry) => entry !== undefined) ? budget : undefined;
+}
+
 export function runtimeStreamEventLabel(type: string, source?: string, toolName?: string) {
   if (type === CONTEXT_WINDOW_STATE_EVENT_TYPE) return '上下文窗口';
   if (type === CONTEXT_COMPACTION_EVENT_TYPE) return '上下文压缩';
   if (type === RUN_PLAN_EVENT_TYPE) return '计划';
   if (type === STAGE_START_EVENT_TYPE) return '阶段';
   if (type === PROCESS_PROGRESS_EVENT_TYPE) return '过程';
+  if (type === CLARIFICATION_NEEDED_EVENT_TYPE) return '需要澄清';
+  if (type === HUMAN_APPROVAL_REQUIRED_EVENT_TYPE) return '需要确认';
+  if (type === INTERACTION_REQUEST_EVENT_TYPE) return '需要交互';
+  if (type === GUIDANCE_QUEUED_EVENT_TYPE) return '引导已排队';
+  if (type === RUN_CANCELLED_EVENT_TYPE) return '运行取消';
   if (type === TEXT_DELTA_EVENT_TYPE) return '思考';
   if (type === TOOL_CALL_EVENT_TYPE) return toolName ? `调用 ${toolName}` : '工具调用';
   if (type === TOOL_RESULT_EVENT_TYPE) return toolName ? `结果 ${toolName}` : '工具结果';
@@ -1107,6 +1281,18 @@ export function guidanceQueuedEvent(identity: RuntimeEventIdentity, guidance: Gu
     detail: `${guidance.prompt}\n状态：已排队，等待当前 run 结束后合并到下一轮。`,
     createdAt: identity.createdAt,
     raw: {
+      schemaVersion: INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION,
+      type: GUIDANCE_QUEUED_EVENT_TYPE,
+      runState: 'guidance-queued',
+      phase: 'interaction',
+      status: 'running',
+      importance: 'normal',
+      reason: guidance.reason,
+      interaction: {
+        id: guidance.id,
+        kind: 'guidance',
+        required: false,
+      },
       guidanceQueue: guidance,
       contract: GUIDANCE_QUEUE_RUN_ORCHESTRATION_CONTRACT,
     },

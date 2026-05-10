@@ -6,10 +6,12 @@ import {
   PROCESS_PROGRESS_STATUS,
   USER_INTERRUPT_EVENT_TYPE,
   buildSilentStreamDecisionRecord,
+  runtimeInteractionProgressEventFromUnknown,
+  runtimeInteractionProgressPresentation,
   runtimeRequestAcceptedProgressCopy,
   silentStreamDecisionRecordFromUnknown,
 } from '@sciforge-ui/runtime-contract';
-import type { ProcessProgressModel, ProcessProgressPhase } from '@sciforge-ui/runtime-contract';
+import type { ProcessProgressModel, ProcessProgressPhase, RuntimeInteractionProgressEvent } from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
 import { makeId, nowIso } from './domain';
 import type { RuntimeResponsePlan } from './latencyPolicy';
@@ -40,6 +42,9 @@ function asStringArray(value: unknown): string[] {
 
 export function progressModelFromEvent(event: AgentStreamEvent): ProcessProgressModel | undefined {
   const raw = isRecord(event.raw) ? event.raw : {};
+  const interactionProgress = runtimeInteractionProgressEventFromUnknown(raw)
+    ?? (isRecord(raw.raw) ? runtimeInteractionProgressEventFromUnknown(raw.raw) : undefined);
+  if (interactionProgress) return progressModelFromInteractionProgress(interactionProgress);
   const progress = isRecord(raw.progress) ? raw.progress : isRecord(raw.raw) && isRecord(raw.raw.progress) ? raw.raw.progress : undefined;
   if (progress) return normalizeProgressModel(progress, event);
   if (event.type === PROCESS_PROGRESS_EVENT_TYPE) return normalizeProgressModel(raw, event);
@@ -243,6 +248,26 @@ function normalizeProgressModel(progress: Record<string, unknown>, event: AgentS
   };
 }
 
+function progressModelFromInteractionProgress(progress: RuntimeInteractionProgressEvent): ProcessProgressModel {
+  const presentation = runtimeInteractionProgressPresentation(progress);
+  const phase = normalizePhase(progress.phase ?? progress.type);
+  const interactionKind = progress.interaction?.kind;
+  return {
+    phase,
+    title: presentation?.label ?? titleForPhase(phase, progress.type),
+    detail: presentation?.detail || progress.reason || progress.type,
+    reading: [],
+    writing: [],
+    waitingFor: waitingForInteraction(progress.type, interactionKind, progress.interaction?.required),
+    nextStep: nextStepForInteraction(progress.type, interactionKind),
+    reason: progress.reason,
+    recoveryHint: progress.termination?.detail,
+    canAbort: progress.status === 'running' || progress.status === 'blocked',
+    canContinue: progress.type === GUIDANCE_QUEUED_EVENT_TYPE || progress.status === 'blocked',
+    status: normalizeInteractionStatus(progress),
+  };
+}
+
 function latestNonSyntheticEvent(events: AgentStreamEvent[]) {
   for (const event of [...events].reverse()) {
     const raw = isRecord(event.raw) ? event.raw : {};
@@ -326,9 +351,34 @@ function normalizePhase(value: string): ProcessProgressPhase {
 }
 
 function normalizeStatus(value: string | undefined, phase: ProcessProgressPhase): ProcessProgressModel['status'] {
+  if (/cancel/.test(value ?? '')) return PROCESS_PROGRESS_STATUS.CANCELLED;
   if (phase === PROCESS_PROGRESS_PHASE.ERROR || /fail|error|失败/.test(value ?? '')) return PROCESS_PROGRESS_STATUS.FAILED;
   if (phase === PROCESS_PROGRESS_PHASE.COMPLETE || /done|complete|success|完成/.test(value ?? '')) return PROCESS_PROGRESS_STATUS.COMPLETED;
   return PROCESS_PROGRESS_STATUS.RUNNING;
+}
+
+function normalizeInteractionStatus(progress: RuntimeInteractionProgressEvent): ProcessProgressModel['status'] {
+  if (progress.termination?.progressStatus === 'cancelled' || progress.status === 'cancelled') return PROCESS_PROGRESS_STATUS.CANCELLED;
+  if (progress.termination?.progressStatus === 'failed' || progress.status === 'failed') return PROCESS_PROGRESS_STATUS.FAILED;
+  if (progress.status === 'completed') return PROCESS_PROGRESS_STATUS.COMPLETED;
+  return PROCESS_PROGRESS_STATUS.RUNNING;
+}
+
+function waitingForInteraction(type: string, interactionKind: string | undefined, required: boolean | undefined) {
+  if (type === 'run-cancelled') return undefined;
+  if (interactionKind === 'human-approval') return '人工确认';
+  if (interactionKind === 'clarification') return '澄清信息';
+  if (interactionKind === 'guidance') return '当前 run 结束后合并引导';
+  if (required) return '用户交互';
+  return type === GUIDANCE_QUEUED_EVENT_TYPE ? '当前 run 结束后合并引导' : undefined;
+}
+
+function nextStepForInteraction(type: string, interactionKind: string | undefined) {
+  if (type === 'run-cancelled') return '运行已结束，保留结构化终止原因供下一轮恢复或审计。';
+  if (interactionKind === 'guidance') return '等待当前 run 结束后合并到下一轮。';
+  if (interactionKind === 'human-approval') return '等待确认后继续执行需要人工批准的步骤。';
+  if (interactionKind === 'clarification') return '等待补充澄清后继续执行。';
+  return undefined;
 }
 
 function titleForPhase(phase: ProcessProgressPhase, fallback: string) {

@@ -15,12 +15,12 @@ const frozenHardcodedPolicyProse: Record<PromptBuilderName, {
   digest: string;
 }> = {
   buildAgentServerGenerationPrompt: {
-    count: 28,
-    digest: 'f6fe208c3d3b',
+    count: 0,
+    digest: 'da39a3ee5e6b',
   },
   buildAgentServerRepairPrompt: {
-    count: 6,
-    digest: '9b8a6e822883',
+    count: 0,
+    digest: 'da39a3ee5e6b',
   },
 };
 

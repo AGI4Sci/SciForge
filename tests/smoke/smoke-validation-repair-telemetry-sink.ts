@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -17,6 +18,7 @@ import {
   writeValidationRepairTelemetrySpans,
 } from '../../src/runtime/gateway/validation-repair-telemetry-sink';
 import { createValidationRepairAuditChain } from '../../src/runtime/gateway/validation-repair-audit-bridge';
+import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway';
 
 const createdAt = '2026-05-10T00:00:00.000Z';
 const repairBudget: RepairBudgetSnapshot = {
@@ -226,7 +228,117 @@ try {
   await rm(workspacePath, { recursive: true, force: true });
 }
 
-console.log('[ok] validation/repair telemetry sink projects and persists audit chains into stable spans');
+const gatewayWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-telemetry-gateway-'));
+const server = createServer(async (req, res) => {
+  if (req.method === 'GET' && String(req.url).includes('/api/agent-server/agents/') && String(req.url).endsWith('/context')) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      ok: true,
+      data: {
+        session: { id: 'telemetry-gateway-context', status: 'active' },
+        operationalGuidance: { summary: ['context healthy'], items: [] },
+        workLayout: { strategy: 'live_only', safetyPointReached: true, segments: [] },
+        workBudget: { status: 'healthy', approxCurrentWorkTokens: 80 },
+        recentTurns: [],
+        currentWorkEntries: [],
+      },
+    }));
+    return;
+  }
+  if (!['/api/agent-server/runs', '/api/agent-server/runs/stream'].includes(String(req.url)) || req.method !== 'POST') {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: false, error: 'not found' }));
+    return;
+  }
+  const result = {
+    ok: true,
+    data: {
+      run: {
+        id: 'mock-agentserver-telemetry-gate-run',
+        status: 'completed',
+        output: {
+          success: true,
+          toolPayload: {
+            message: 'Provider says a high-risk external publish action completed.',
+            confidence: 0.92,
+            claimType: 'execution',
+            evidenceLevel: 'provider',
+            reasoningTrace: 'action provider self-reported success before runtime verification gate',
+            claims: [{
+              id: 'claim.telemetry.gateway',
+              text: 'The external publish action was reported complete by the provider.',
+              type: 'execution',
+              confidence: 0.92,
+              evidenceLevel: 'provider',
+              supportingRefs: [],
+              opposingRefs: [],
+            }],
+            uiManifest: [],
+            executionUnits: [{
+              id: 'EU-telemetry-gateway-publish',
+              status: 'done',
+              tool: 'external.action-provider',
+              params: JSON.stringify({ action: 'publish', target: 'telemetry-smoke' }),
+            }],
+            artifacts: [],
+          },
+        },
+      },
+    },
+  };
+  if (req.url === '/api/agent-server/runs/stream') {
+    res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+    res.end(`${JSON.stringify({ result })}\n`);
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(result));
+});
+
+await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+const address = server.address();
+assert.ok(address && typeof address === 'object');
+try {
+  const result = await runWorkspaceRuntimeGateway({
+    skillDomain: 'knowledge',
+    prompt: 'Publish this external update after runtime verification.',
+    workspacePath: gatewayWorkspace,
+    agentServerBaseUrl: `http://127.0.0.1:${address.port}`,
+    verificationPolicy: {
+      required: true,
+      mode: 'hybrid',
+      riskLevel: 'high',
+      reason: 'telemetry smoke high-risk external side effect',
+    },
+    uiState: {
+      freshTaskGeneration: true,
+      forceAgentServerGeneration: true,
+    },
+  });
+  assert.equal(result.verificationResults?.[0]?.verdict, 'needs-human');
+  assert.equal(result.executionUnits[0]?.status, 'needs-human');
+  const telemetryRefs = (result as typeof result & {
+    refs?: { validationRepairTelemetry?: Array<{ ref?: string; spanKinds?: string[]; recordRefs?: string[] }> };
+  }).refs?.validationRepairTelemetry ?? [];
+  assert.equal(telemetryRefs[0]?.ref, '.sciforge/validation-repair-telemetry/spans.jsonl');
+  assert.ok(telemetryRefs[0]?.spanKinds?.includes('verification-gate'));
+  assert.ok((telemetryRefs[0]?.recordRefs?.length ?? 0) > 0);
+
+  const gatewayRecords = await readValidationRepairTelemetrySpanRecords({ workspacePath: gatewayWorkspace });
+  assert.ok(gatewayRecords.some((record) => record.spanKind === 'verification-gate' && record.validationDecisionId));
+  assert.ok(gatewayRecords.some((record) => record.spanKind === 'repair-decision' && record.repairDecisionId));
+  assert.ok(gatewayRecords.some((record) => record.span.failureKind === 'runtime-verification'));
+  const gatewaySummary = await buildValidationRepairTelemetrySummary({ workspacePath: gatewayWorkspace });
+  assert.equal(gatewaySummary.sourceRef, '.sciforge/validation-repair-telemetry/spans.jsonl');
+  assert.equal(gatewaySummary.totalSpans, gatewayRecords.length);
+  assert.ok((gatewaySummary.spanKindCounts['verification-gate'] ?? 0) >= 1);
+  assert.ok(gatewaySummary.auditIds.length >= 1);
+} finally {
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await rm(gatewayWorkspace, { recursive: true, force: true });
+}
+
+console.log('[ok] validation/repair telemetry sink projects, persists, and runtime gateway writes verification-gate spans into stable jsonl');
 
 function blockingFinding(id: string): ValidationFinding {
   return {

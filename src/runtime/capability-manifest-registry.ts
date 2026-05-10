@@ -17,6 +17,13 @@ import {
   type UnifiedCapabilityGraph,
   type UnifiedCapabilityGraphInput,
 } from './capability-harness-candidates.js';
+import {
+  discoverPackageCapabilityManifestsFromFiles,
+  type CapabilityManifestFileDiscoveryAudit,
+  type CapabilityManifestFileDiscoveryInput,
+} from './capability-manifest-file-discovery.js';
+
+export type CapabilityManifestDiscoverySource = 'package-discovery' | 'file-discovery';
 
 export type CapabilityProviderAvailabilityInput =
   | string
@@ -31,6 +38,7 @@ export interface PackageCapabilityManifestDiscoveryEntry {
   packageRoot?: string;
   manifests: CapabilityManifest[];
   providerAvailability?: CapabilityProviderAvailabilityInput[];
+  discoverySource?: CapabilityManifestDiscoverySource;
 }
 
 export interface PackageCapabilityManifestDiscoveryResult {
@@ -41,6 +49,15 @@ export interface PackageCapabilityManifestDiscoveryResult {
 export interface CapabilityManifestRegistryLoadInput {
   coreManifests?: CapabilityManifest[];
   packageDiscovery?: PackageCapabilityManifestDiscoveryResult;
+  fileDiscoveryAudit?: CapabilityManifestFileDiscoveryAudit;
+}
+
+export type CapabilityManifestRegistryFileDiscoveryInput =
+  | ({ enabled: true } & CapabilityManifestFileDiscoveryInput)
+  | ({ enabled?: false } & Partial<CapabilityManifestFileDiscoveryInput>);
+
+export interface CapabilityManifestRegistryLoadWithFileDiscoveryInput extends CapabilityManifestRegistryLoadInput {
+  fileDiscovery?: CapabilityManifestRegistryFileDiscoveryInput;
 }
 
 export interface CompactCapabilityManifestRegistryAudit {
@@ -50,7 +67,9 @@ export interface CompactCapabilityManifestRegistryAudit {
   sourceCounts: {
     core: number;
     packageDiscovery: number;
+    fileDiscovery?: number;
   };
+  fileDiscovery?: CapabilityManifestFileDiscoveryAudit;
   entries: CompactCapabilityManifestRegistryAuditEntry[];
 }
 
@@ -58,7 +77,7 @@ export interface CompactCapabilityManifestRegistryAuditEntry {
   id: string;
   version: string;
   ownerPackage: string;
-  source: 'core' | 'package-discovery';
+  source: 'core' | CapabilityManifestDiscoverySource;
   packageName?: string;
   packageRoot?: string;
   sideEffects: CapabilityManifestSideEffect[];
@@ -94,6 +113,20 @@ export function loadCoreCapabilityManifestRegistry(
   return loadCapabilityManifestRegistry({ coreManifests: manifests });
 }
 
+export async function loadCapabilityManifestRegistryWithFileDiscovery(
+  input: CapabilityManifestRegistryLoadWithFileDiscoveryInput = {},
+): Promise<LoadedCapabilityManifestRegistry> {
+  if (input.fileDiscovery?.enabled !== true) {
+    return loadCapabilityManifestRegistry(input);
+  }
+  const fileDiscovery = await discoverPackageCapabilityManifestsFromFiles(input.fileDiscovery);
+  return loadCapabilityManifestRegistry({
+    ...input,
+    packageDiscovery: mergePackageCapabilityManifestDiscovery(input.packageDiscovery, fileDiscovery),
+    fileDiscoveryAudit: fileDiscovery.audit,
+  });
+}
+
 export function loadCapabilityManifestRegistry(
   input: CapabilityManifestRegistryLoadInput = {},
 ): LoadedCapabilityManifestRegistry {
@@ -113,7 +146,7 @@ export function loadCapabilityManifestRegistry(
   for (const manifest of coreManifests) sourceById.set(manifest.id, { source: 'core' });
   for (const source of packageSources) {
     sourceById.set(source.manifest.id, {
-      source: 'package-discovery',
+      source: source.discoverySource,
       packageName: source.packageName,
       packageRoot: source.packageRoot,
       providerAvailability: source.providerAvailability,
@@ -125,7 +158,12 @@ export function loadCapabilityManifestRegistry(
   for (const manifest of clonedManifests) {
     for (const provider of manifest.providers) byProviderId.set(provider.id, manifest);
   }
-  const compactAudit = compactCapabilityManifestRegistryAudit(clonedManifests, sourceById, input.packageDiscovery?.providerAvailability);
+  const compactAudit = compactCapabilityManifestRegistryAudit(
+    clonedManifests,
+    sourceById,
+    input.packageDiscovery?.providerAvailability,
+    input.fileDiscoveryAudit,
+  );
 
   return {
     manifests: clonedManifests,
@@ -164,6 +202,7 @@ interface PackageManifestSourceRecord {
   packageName: string;
   packageRoot?: string;
   providerAvailability?: CapabilityProviderAvailabilityInput[];
+  discoverySource: CapabilityManifestDiscoverySource;
 }
 
 function packageManifestSources(discovery?: PackageCapabilityManifestDiscoveryResult): PackageManifestSourceRecord[] {
@@ -175,19 +214,39 @@ function packageManifestSources(discovery?: PackageCapabilityManifestDiscoveryRe
         packageName: packageEntry.packageName,
         packageRoot: packageEntry.packageRoot,
         providerAvailability: packageEntry.providerAvailability,
+        discoverySource: packageEntry.discoverySource ?? 'package-discovery',
       });
     }
   }
   return sources;
 }
 
+function mergePackageCapabilityManifestDiscovery(
+  first: PackageCapabilityManifestDiscoveryResult | undefined,
+  second: PackageCapabilityManifestDiscoveryResult | undefined,
+): PackageCapabilityManifestDiscoveryResult | undefined {
+  if (!first) return second;
+  if (!second) return first;
+  return {
+    packages: [...first.packages, ...second.packages],
+    providerAvailability: [
+      ...(first.providerAvailability ?? []),
+      ...(second.providerAvailability ?? []),
+    ].length
+      ? [...(first.providerAvailability ?? []), ...(second.providerAvailability ?? [])]
+      : undefined,
+  };
+}
+
 function compactCapabilityManifestRegistryAudit(
   manifests: CapabilityManifest[],
   sourceById: Map<string, ManifestSourceRecord>,
   globalProviderAvailability: CapabilityProviderAvailabilityInput[] | undefined,
+  fileDiscoveryAudit: CapabilityManifestFileDiscoveryAudit | undefined,
 ): CompactCapabilityManifestRegistryAudit {
   const entries = manifests.map((manifest) => auditEntryForManifest(manifest, sourceById, globalProviderAvailability));
   const providerCount = entries.reduce((total, entry) => total + entry.providerAvailability.length, 0);
+  const fileDiscoveryCount = entries.filter((entry) => entry.source === 'file-discovery').length;
   return {
     contract: 'sciforge.capability-manifest-registry-audit.v1',
     manifestCount: entries.length,
@@ -195,7 +254,9 @@ function compactCapabilityManifestRegistryAudit(
     sourceCounts: {
       core: entries.filter((entry) => entry.source === 'core').length,
       packageDiscovery: entries.filter((entry) => entry.source === 'package-discovery').length,
+      ...(fileDiscoveryCount > 0 ? { fileDiscovery: fileDiscoveryCount } : {}),
     },
+    ...(fileDiscoveryAudit ? { fileDiscovery: fileDiscoveryAudit } : {}),
     entries,
   };
 }

@@ -13,7 +13,7 @@ import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { parseJsonErrorMessage, redactSecretText, sanitizeAgentServerError } from './backend-failure-diagnostics.js';
 import { agentServerArtifactSelectionPromptPolicyLines, agentServerBibliographicVerificationPromptPolicyLines, agentServerCurrentReferencePromptPolicyLines, agentServerToolPayloadProtocolContractLines } from '@sciforge-ui/runtime-contract/artifact-policy';
-import { agentServerExecutionModePromptPolicyLines, agentServerExternalIoReliabilityContractLines, agentServerFreshRetrievalPromptPolicyLines, agentServerGeneratedTaskPromptPolicyLines, agentServerRepairPromptPolicyLines } from '../../../packages/skills/runtime-policy';
+import { agentServerBackendDecisionPromptPolicyLines, agentServerCapabilityRoutingPromptPolicyLines, agentServerContinuationPromptPolicyLines, agentServerCurrentTurnSnapshotPromptPolicyLines, agentServerExecutionModePromptPolicyLines, agentServerExternalIoReliabilityContractLines, agentServerFreshRetrievalPromptPolicyLines, agentServerGeneratedTaskPromptPolicyLines, agentServerGenerationOutputContract, agentServerGenerationOutputContractLines, agentServerLargeFilePromptContractLines, agentServerPriorAttemptsPromptPolicyLines, agentServerRepairPromptPolicyLines, agentServerViewSelectionPromptPolicyLines, agentServerWorkspaceTaskRepairPromptPolicyLines, agentServerWorkspaceTaskRoutingPromptPolicyLines } from '../../../packages/skills/runtime-policy';
 import { minimalValidInteractiveToolPayloadExample } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy';
 
 export const AGENT_BACKEND_ANSWER_PRINCIPLE = [
@@ -465,14 +465,10 @@ export function buildAgentServerRepairPrompt(params: {
 }) {
   const repairContextPolicySummary = repairContextPolicySummaryForAgentServer(params.request, params.repairContext);
   return [
-    'Repair this SciForge workspace task and leave the workspace ready for SciForge to rerun it.',
-    'Use the compact repair context below: it contains the current user goal, workspace refs, failure evidence, and relevant code/log excerpts.',
-    'Edit the referenced task file or adjacent helper files only as needed. SciForge will rerun the task after you finish.',
-    'The repaired task must execute the user goal end-to-end, not merely generate code or report that code was generated.',
+    ...agentServerWorkspaceTaskRepairPromptPolicyLines('intro'),
     ...agentServerExternalIoReliabilityContractLines(),
     ...agentServerToolPayloadProtocolContractLines(),
-    'Preserve failureReason in the next ToolPayload only if the real blocker remains after repair.',
-    'Do not fabricate success or replace the user goal with an unrelated demo task.',
+    ...agentServerWorkspaceTaskRepairPromptPolicyLines('completion'),
     '',
     JSON.stringify({
       repairContext: params.repairContext,
@@ -606,17 +602,10 @@ export function buildAgentServerGenerationPrompt(request: {
     currentReferences: Array.isArray(sessionFacts.currentReferences) ? sessionFacts.currentReferences : undefined,
     currentReferenceDigests: Array.isArray(sessionFacts.currentReferenceDigests) ? sessionFacts.currentReferenceDigests : undefined,
     strictTaskFilesReason: request.strictTaskFilesReason,
-    outputContract: {
-      finalOutput: 'exactly one compact JSON object',
-      alternatives: ['AgentServerGenerationResponse', 'SciForge ToolPayload'],
-      taskFiles: 'array of { path, language, content? }; omit content only when the file was physically written in workspace',
-      entrypoint: 'object { language, path, command?, args? } for executable code path only; report/data files are artifacts, not entrypoints',
-      externalIo: 'bounded timeouts, backoff retries for 429/5xx/network timeout/empty-result, and valid failed-with-reason ToolPayload on exhausted retrieval',
-      projectGuidanceAdoption: 'If TaskProject userGuidanceQueue is present, include executionUnits[].guidanceDecisions with every queued/deferred item marked adopted, deferred, or rejected with a reason.',
-    },
+    outputContract: agentServerGenerationOutputContract(),
   };
   return [
-    'CURRENT TURN SNAPSHOT (authoritative; preserve this even when context is compacted):',
+    ...agentServerCurrentTurnSnapshotPromptPolicyLines(),
     JSON.stringify(clipForAgentServerJson(currentTurnSnapshot), null, 2),
     '',
     request.contextEnvelope ? JSON.stringify({
@@ -624,43 +613,29 @@ export function buildAgentServerGenerationPrompt(request: {
       workspaceFacts: Boolean(request.contextEnvelope.workspaceFacts),
       longTermRefs: Boolean(request.contextEnvelope.longTermRefs),
     }, null, 2) : '',
-    'Handle this SciForge request as the agent backend decision-maker.',
-    'AgentServer owns orchestration, domain reasoning, tool choice, continuation, and repair strategy. SciForge only validates protocol, runs returned workspace tasks, persists refs/artifacts, and reports contract failures.',
-    request.freshCurrentTurn
-      ? 'FRESH GENERATION MODE: do not call tools before returning. Do not inspect workspace directories, .sciforge, old task attempts, old artifacts, logs, installed packages, or previous generated code. Return final compact JSON immediately; generated task code can perform runtime inspection/retrieval later using inputPath/outputPath.'
-      : 'CONTINUITY MODE: inspect only the concrete prior refs needed for the current continuation/repair/rerun request.',
-    'First infer the current-turn intent from the CURRENT TURN SNAPSHOT and recentConversation. Use priorAttempts, artifacts, recentExecutionRefs, and workspace refs only when the current turn explicitly asks to continue, repair, rerun, or inspect a previous task.',
-    'Fresh current-turn requests must move directly to either a direct ToolPayload or generated task code. Do not spend generation-stage tool calls browsing historical .sciforge/task-attempts, logs, artifacts, or old generated tasks unless the current turn explicitly asks for that history.',
-    'Return exactly one JSON object, with no markdown before or after it.',
+    ...agentServerBackendDecisionPromptPolicyLines({ freshCurrentTurn: request.freshCurrentTurn }),
+    ...agentServerGenerationOutputContractLines('json-envelope'),
     ...agentServerExecutionModePromptPolicyLines(),
     ...agentServerGeneratedTaskPromptPolicyLines(),
     ...agentServerToolPayloadProtocolContractLines(),
-    'Final output must be only compact JSON: either AgentServerGenerationResponse or SciForge ToolPayload.',
-    'When returning a SciForge ToolPayload, use displayIntent to describe the user-visible view need, and objectReferences to cite key artifacts/files/runs that the user can click on demand.',
-    'objectReferences refs must use controlled prefixes: artifact:*, file:*, folder:*, run:*, execution-unit:*, scenario-package:*, or url:*.',
+    ...agentServerGenerationOutputContractLines('tool-payload'),
     ...agentServerCurrentReferencePromptPolicyLines(),
     request.strictTaskFilesReason
       ? `Strict retry reason: ${request.strictTaskFilesReason}`
       : '',
-    'If a prior task already exists and the user asks to continue, repair, or rerun it, prefer returning taskFiles that reference that existing workspace task path or a minimal patched task instead of starting an unrelated fresh analysis.',
+    ...agentServerWorkspaceTaskRoutingPromptPolicyLines('prior-task'),
     ...agentServerFreshRetrievalPromptPolicyLines(),
-    'Generate fresh task code only when the current turn truly asks for new work or no prior executable artifact can satisfy the request.',
-    'Put generated task paths under .sciforge/tasks when possible. SciForge will archive any returned taskFiles under .sciforge/tasks/<run-id>/ before execution.',
-    'Do not force self-contained task code when a better installed/workspace tool exists. Prefer the best available tool, record the tool id/version/command in ExecutionUnit, and write only the adapter/glue needed for reproducibility from inputPath and outputPath.',
-    'Runtime capability routing contract: use capabilityBrokerBrief as the compact broker-ranked capability list; the old scattered capability catalog is omitted by default, and full schemas, examples, implementation notes, and repair hints stay lazy until execution or repair needs them.',
-    'When capabilityBrokerBrief or selectedToolIds includes local.vision-sense/observe.vision, treat the current turn as having an optional pure-vision Computer Use sense plugin available: construct text + screenshot/image modality requests, keep the package executor-agnostic, emit text-form click/type_text/press_key/scroll/wait commands or vision-trace artifacts, and preserve only compact screenshot refs/grounding/execution/pixel-diff summaries across turns. Do not read DOM or accessibility tree for that vision path, and fail closed for send/delete/pay/authorize/publish actions unless upstream confirmation is explicit.',
-    'If the user explicitly asks to use Computer Use, GUI automation, desktop control, mouse, or keyboard, do not satisfy that request by substituting non-GUI generation code such as python-pptx, scripts, repository edits, or synthetic artifacts unless the user explicitly accepts a non-GUI fallback in the current turn. If the Computer Use path fails, return failed-with-reason with the exact failing provider, endpoint/path when available, trace ref, and recovery action instead of claiming the requested GUI task is complete.',
-    'If local.vision-sense is selected but no GUI executor/browser/desktop bridge or screenshot input is configured for the current run, do not scan the repository to compensate. Return a concise ToolPayload diagnosis or failed-with-reason ExecutionUnit that says the vision sense contract was detected but the runtime executor bridge is missing, and include the next expected vision-trace file-ref shape instead of fabricating GUI results.',
-    'Large-file contract: uploaded PDFs, images, spreadsheets, binary blobs, extracted full text, and large logs must stay as workspace refs. Do not inline base64, do not print full extracted text to stdout/stderr, and do not paste full document text into final JSON.',
-    'For uploaded PDFs or long documents, generated tasks should read the file by path/dataRef, write any full extraction to .sciforge/artifacts or .sciforge/task-results, and return only bounded excerpts, section summaries, page/figure locators, hashes, and clickable file/artifact refs.',
+    ...agentServerWorkspaceTaskRoutingPromptPolicyLines('new-task'),
+    ...agentServerCapabilityRoutingPromptPolicyLines(),
+    ...agentServerLargeFilePromptContractLines(),
     ...agentServerBibliographicVerificationPromptPolicyLines(),
     ...agentServerArtifactSelectionPromptPolicyLines(),
-    'Use selectedComponentIds only when the current user turn explicitly requested those views; do not preserve default UI slots as output requirements.',
-    'For continuation requests, continue the scenario goal using recentConversation, artifacts, recentExecutionRefs, and priorAttempts. Do not restart an unrelated analysis.',
+    ...agentServerViewSelectionPromptPolicyLines(),
+    ...agentServerContinuationPromptPolicyLines(),
     ...agentServerRepairPromptPolicyLines(),
-    'If a required input, remote file, credential, or executable is missing, write a valid ToolPayload with executionUnits.status="failed-with-reason" and a precise failureReason instead of fabricating outputs.',
+    ...agentServerGenerationOutputContractLines('missing-input'),
     request.priorAttempts?.length ? [
-      'RECENT PRIOR ATTEMPTS (authoritative repair/continuation context; preserve failureReason):',
+      ...agentServerPriorAttemptsPromptPolicyLines(),
       JSON.stringify(summarizeTaskAttemptsForAgentServer(request.priorAttempts).slice(0, 4), null, 2),
     ].join('\n') : '',
     ...agentServerExternalIoReliabilityContractLines(),

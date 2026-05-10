@@ -5,8 +5,13 @@ import path from 'node:path';
 
 import { discoverPackageCapabilityManifestsFromFiles } from '../../src/runtime/capability-manifest-file-discovery.js';
 import {
+  buildCapabilityBrokerBriefForAgentServer,
+  buildCapabilityBrokerBriefForAgentServerWithFileDiscovery,
+} from '../../src/runtime/gateway/context-envelope.js';
+import {
   loadCapabilityManifestRegistry,
   loadCoreCapabilityManifestRegistry,
+  loadCapabilityManifestRegistryWithFileDiscovery,
 } from '../../src/runtime/capability-manifest-registry.js';
 import {
   CAPABILITY_MANIFEST_CONTRACT_ID,
@@ -26,6 +31,13 @@ try {
   });
   const coreRegistry = loadCoreCapabilityManifestRegistry();
   const registry = loadCapabilityManifestRegistry({ packageDiscovery: discovery });
+  const optInRegistry = await loadCapabilityManifestRegistryWithFileDiscovery({
+    fileDiscovery: {
+      enabled: true,
+      rootDir: tmpRoot,
+      maxDepth: 5,
+    },
+  });
 
   assert.equal(discovery.audit.contract, 'sciforge.capability-manifest-file-discovery-audit.v1');
   assert.equal(discovery.audit.filesScanned, 3);
@@ -41,18 +53,26 @@ try {
   );
 
   assert.equal(registry.manifestIds.length, coreRegistry.manifestIds.length + 2);
+  assert.equal(coreRegistry.getManifest('fixture.ts-view'), undefined);
+  assert.equal(coreRegistry.compactAudit.fileDiscovery, undefined);
   assert.equal(registry.getManifest('fixture.json-tool')?.ownerPackage, '@sciforge-fixture/json-tool');
   assert.equal(registry.getManifest('fixture.ts-view')?.ownerPackage, '@sciforge-fixture/ts-view');
   assert.equal(registry.getManifestByProviderId('provider.fixture.ts-view')?.id, 'fixture.ts-view');
 
   const registryAudit = registry.compactAudit;
-  assert.equal(registryAudit.sourceCounts.packageDiscovery, 2);
+  assert.equal(registryAudit.sourceCounts.fileDiscovery, 2);
+  assert.equal(registryAudit.sourceCounts.packageDiscovery, 0);
   assert.equal(registryAudit.entries.find((entry) => entry.id === 'fixture.json-tool')?.packageName, '@sciforge-fixture/json-tool');
   assert.equal(registryAudit.entries.find((entry) => entry.id === 'fixture.ts-view')?.packageName, '@sciforge-fixture/ts-view');
+  assert.equal(registryAudit.entries.find((entry) => entry.id === 'fixture.ts-view')?.source, 'file-discovery');
   assert.equal(
     registryAudit.entries.find((entry) => entry.id === 'fixture.ts-view')?.providerAvailability[0]?.available,
     false,
   );
+
+  assert.equal(optInRegistry.manifestIds.length, coreRegistry.manifestIds.length + 2);
+  assert.equal(optInRegistry.compactAudit.sourceCounts.fileDiscovery, 2);
+  assert.equal(optInRegistry.compactAudit.fileDiscovery?.manifestCount, 2);
 
   const graph = registry.projectHarnessCandidates({
     preferredCapabilityIds: ['fixture.ts-view'],
@@ -61,7 +81,51 @@ try {
   assert.ok(graph.candidates.some((candidate) => candidate.id === 'fixture.json-tool'));
   assert.ok(graph.candidates.some((candidate) => candidate.id === 'fixture.ts-view' && candidate.kind === 'view'));
 
-  console.log('[ok] capability manifest file discovery merges JSON and TS package manifests into registry audit');
+  const brokerRequest = {
+    skillDomain: 'literature' as const,
+    prompt: 'Use the fixture ts view capability to render a fixture view.',
+    artifacts: [],
+    uiState: {
+      capabilityPolicy: {
+        providerAvailability: ['provider.fixture.ts-view'],
+      },
+    },
+  };
+  const defaultBrokerBrief = buildCapabilityBrokerBriefForAgentServer(brokerRequest);
+  assert.equal(JSON.stringify(defaultBrokerBrief).includes('fixture.ts-view'), false, 'default broker path must not scan file discovery manifests');
+  assert.equal(Object.hasOwn(defaultBrokerBrief, 'registryAudit'), false, 'default broker brief must not expose file discovery audit');
+
+  const optInBrokerBrief = await buildCapabilityBrokerBriefForAgentServerWithFileDiscovery(brokerRequest, {
+    fileDiscovery: {
+      enabled: true,
+      rootDir: tmpRoot,
+      maxDepth: 5,
+    },
+  });
+  const optInBrokerText = JSON.stringify(optInBrokerBrief);
+  const brokerRegistryAudit = optInBrokerBrief.registryAudit as Record<string, unknown>;
+  assert.match(optInBrokerText, /fixture\.ts-view/);
+  assert.equal((brokerRegistryAudit.sourceCounts as Record<string, unknown>).fileDiscovery, 2);
+  assert.equal((brokerRegistryAudit.fileDiscovery as Record<string, unknown>).manifestCount, 2);
+  assert.equal(optInBrokerText.includes('inputSchema'), false, 'opt-in broker audit must keep schemas lazy');
+  assert.equal(optInBrokerText.includes('"examples"'), false, 'opt-in broker audit must keep examples lazy');
+
+  const flagBrokerBrief = await buildCapabilityBrokerBriefForAgentServerWithFileDiscovery({
+    ...brokerRequest,
+    workspacePath: tmpRoot,
+    uiState: {
+      capabilityPolicy: {
+        providerAvailability: ['provider.fixture.ts-view'],
+        capabilityManifestFileDiscovery: {
+          enabled: true,
+          maxDepth: 5,
+        },
+      },
+    },
+  });
+  assert.match(JSON.stringify(flagBrokerBrief), /fixture\.ts-view/);
+
+  console.log('[ok] capability manifest file discovery is opt-in for registry loading and broker audit');
 } finally {
   await rm(tmpRoot, { recursive: true, force: true });
 }

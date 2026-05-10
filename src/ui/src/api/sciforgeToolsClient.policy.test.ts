@@ -6,6 +6,8 @@ import { progressModelFromEvent } from '../processProgress';
 import type { AgentStreamEvent, SciForgeConfig, SendAgentMessageInput } from '../domain';
 import { sendSciForgeToolMessage } from './sciforgeToolsClient';
 import {
+  HUMAN_APPROVAL_REQUIRED_EVENT_TYPE,
+  INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION,
   PROJECT_TOOL_DONE_EVENT_TYPE,
   PROJECT_TOOL_STARTED_EVENT_TYPE,
 } from '@sciforge-ui/runtime-contract';
@@ -103,6 +105,48 @@ test('project tool runtime events are projected from contract helpers', async ()
   assert.equal(done?.label, '项目工具');
   assert.match(done?.detail ?? '', /未完成：missing expected artifact/);
   assert.equal((done?.raw as { type?: string } | undefined)?.type, PROJECT_TOOL_DONE_EVENT_TYPE);
+});
+
+test('structured interaction progress events survive transport normalization into process progress', async () => {
+  globalThis.fetch = (async () => streamResponse([
+    {
+      event: {
+        schemaVersion: INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION,
+        type: HUMAN_APPROVAL_REQUIRED_EVENT_TYPE,
+        phase: 'verification',
+        status: 'blocked',
+        importance: 'blocking',
+        reason: 'side-effect-policy',
+        interaction: {
+          id: 'approval-1',
+          kind: 'human-approval',
+          required: true,
+        },
+        prompt: 'PROMPT_TEXT_SHOULD_NOT_DECIDE',
+        scenario: 'SCENARIO_TEXT_SHOULD_NOT_DECIDE',
+        message: 'NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE',
+      },
+    },
+    {
+      result: {
+        message: 'Workspace result ready.',
+        executionUnits: [{ id: 'unit-1', status: 'done' }],
+        artifacts: [],
+      },
+    },
+  ])) as typeof fetch;
+
+  const events: AgentStreamEvent[] = [];
+  await sendSciForgeToolMessage(messageInput(), {
+    onEvent: (event) => events.push(event),
+  });
+
+  const interaction = events.find((event) => event.type === HUMAN_APPROVAL_REQUIRED_EVENT_TYPE);
+  const model = interaction ? progressModelFromEvent(interaction) : undefined;
+  assert.equal(interaction?.label, '需要确认');
+  assert.doesNotMatch(interaction?.detail ?? '', /PROMPT_TEXT_SHOULD_NOT_DECIDE|SCENARIO_TEXT_SHOULD_NOT_DECIDE|NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE/);
+  assert.equal(model?.waitingFor, '人工确认');
+  assert.match(model?.detail ?? '', /Reason: side-effect-policy/);
 });
 
 test('UI handoff does not synthesize verification or human approval policy defaults', async () => {

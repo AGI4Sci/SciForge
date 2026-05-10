@@ -8,7 +8,7 @@ import { nextPinnedObjectReferences, resolveObjectReferenceActionPlan } from './
 import { RegistrySlot } from './results-renderer-registry-slot';
 import { createResultsRendererViewModel } from './results-renderer-view-model';
 import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract';
-import type { ObjectReference, RuntimeArtifact, SciForgeConfig, SciForgeSession } from '../domain';
+import type { ObjectReference, RuntimeArtifact, SciForgeConfig, SciForgeRun, SciForgeSession } from '../domain';
 
 test('coerceReportPayload extracts report refs from backend ToolPayload text instead of rendering raw JSON', () => {
   const payloadText = [
@@ -248,6 +248,119 @@ test('registry slot renders unknown component fallback with artifact diagnostics
   assert.match(html, /no runtime artifact/);
 });
 
+test('registry slot uses unknown component artifact fallback without dropping artifact payload context', () => {
+  const artifact: RuntimeArtifact = {
+    id: 'fallback-table',
+    type: 'runtime-artifact',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    dataRef: '.sciforge/artifacts/fallback-table.json',
+    data: {
+      rows: [
+        { gene: 'TP53', score: 0.91 },
+        { gene: 'BRCA1', score: 0.77 },
+      ],
+      downloads: [{
+        name: 'fallback-table.csv',
+        contentType: 'text/csv',
+        content: 'gene,score\nTP53,0.91',
+        rowCount: 2,
+      }],
+    },
+  };
+  const session = {
+    ...emptySession(),
+    artifacts: [artifact],
+  };
+  const html = renderToStaticMarkup(createElement(RegistrySlot, {
+    scenarioId: 'literature-evidence-review',
+    config: testConfig(),
+    session,
+    item: {
+      id: 'slot-unknown-existing-artifact',
+      slot: {
+        componentId: 'lab-specific-widget',
+        artifactRef: 'fallback-table',
+        title: 'Lab-specific table',
+      },
+      artifact,
+      section: 'primary',
+      status: 'fallback',
+      source: 'manifest',
+      module: {},
+    } as never,
+    onArtifactHandoff: () => undefined,
+    onInspectArtifact: () => undefined,
+  }));
+
+  assert.match(html, /Lab-specific table/);
+  assert.match(html, /lab-specific-widget/);
+  assert.match(html, /runtime-artifact/);
+  assert.match(html, /dataRef: \.sciforge\/artifacts\/fallback-table\.json/);
+  assert.match(html, /fallback-table\.csv · 2 rows/);
+  assert.match(html, /TP53/);
+  assert.doesNotMatch(html, /artifactRef 未找到/);
+  assert.doesNotMatch(html, /no runtime artifact/);
+});
+
+test('ResultsRenderer explains missing artifact fields through the package empty-state fallback', () => {
+  const artifact: RuntimeArtifact = {
+    id: 'broken-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { notes: 'contract drift: markdown was not produced' },
+  };
+  const session: SciForgeSession = {
+    ...emptySession(),
+    artifacts: [artifact],
+    runs: [completedRun('run-broken-report')],
+    uiManifest: [{ componentId: 'report-viewer', artifactRef: 'broken-report', title: 'Report' }],
+  };
+  const html = renderResultsRenderer(session, { activeRunId: 'run-broken-report' });
+
+  assert.match(html, /Markdown report document/);
+  assert.match(html, /research-report · broken-report/);
+  assert.match(html, /Awaiting research-report/);
+  assert.match(html, /当前 research-report 缺少 markdown\/report\/sections 字段/);
+  assert.match(html, /artifact 缺少模块必需字段/);
+  assert.doesNotMatch(html, /contract drift: markdown was not produced/);
+});
+
+test('ResultsRenderer falls back from mismatched manifest component to artifact-owned report renderer', () => {
+  const artifact: RuntimeArtifact = {
+    id: 'report-owned-artifact',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { markdown: '# Artifact-owned report\n\nThe report renderer should own this payload.' },
+  };
+  const session: SciForgeSession = {
+    ...emptySession(),
+    artifacts: [artifact],
+    runs: [completedRun('run-mismatch')],
+    uiManifest: [{
+      componentId: 'paper-card-list',
+      artifactRef: 'report-owned-artifact',
+      title: 'Backend requested paper cards',
+    }],
+  };
+  const html = renderResultsRenderer(session, { activeRunId: 'run-mismatch' });
+  const model = createResultsRendererViewModel({
+    scenarioId: 'literature-evidence-review',
+    session,
+    defaultSlots: [],
+    activeRun: session.runs[0],
+    focusMode: 'all',
+  });
+
+  assert.match(html, /Artifact-owned report/);
+  assert.match(html, /The report renderer should own this payload/);
+  assert.doesNotMatch(html, /当前 paper-list artifact 缺少 papers\/rows 数组/);
+  assert.ok(model.viewPlan.diagnostics.some((item) => item.includes('paper-card-list -> research-report 已改由 report-viewer 渲染')));
+  assert.ok(model.viewPlan.allItems.some((item) => item.slot.componentId === 'report-viewer' && item.artifact?.id === 'report-owned-artifact'));
+});
+
 test('results renderer view model projects hidden result empty state and manifest diagnostics', () => {
   const artifact: RuntimeArtifact = {
     id: 'papers',
@@ -477,6 +590,35 @@ function emptySession(): SciForgeSession {
     versions: [],
     updatedAt: '2026-05-09T00:00:00.000Z',
   };
+}
+
+function completedRun(id: string): SciForgeRun {
+  return {
+    id,
+    scenarioId: 'literature-evidence-review',
+    status: 'completed' as const,
+    prompt: 'render result',
+    response: 'completed',
+    createdAt: '2026-05-09T00:00:00.000Z',
+    completedAt: '2026-05-09T00:01:00.000Z',
+  };
+}
+
+function renderResultsRenderer(session: SciForgeSession, options: { activeRunId?: string } = {}) {
+  return renderToStaticMarkup(createElement(ResultsRenderer, {
+    scenarioId: 'literature-evidence-review',
+    config: testConfig(),
+    session,
+    defaultSlots: [],
+    onArtifactHandoff: () => undefined,
+    collapsed: false,
+    onToggleCollapse: () => undefined,
+    activeRunId: options.activeRunId,
+    onActiveRunChange: () => undefined,
+    onFocusedObjectChange: () => undefined,
+    workspaceFileEditor: null,
+    onWorkspaceFileEditorChange: () => undefined,
+  }));
 }
 
 function testConfig(): SciForgeConfig {

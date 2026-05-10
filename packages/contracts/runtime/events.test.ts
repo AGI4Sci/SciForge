@@ -7,8 +7,12 @@ import {
   BACKGROUND_COMPLETION_TOOL_ID,
   CONTEXT_COMPACTION_EVENT_TYPE,
   DIRECT_CONTEXT_FAST_PATH_EVENT_TYPE,
+  CLARIFICATION_NEEDED_EVENT_TYPE,
   GUIDANCE_QUEUED_EVENT_TYPE,
   GUIDANCE_QUEUE_RUN_ORCHESTRATION_CONTRACT,
+  HUMAN_APPROVAL_REQUIRED_EVENT_TYPE,
+  INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION,
+  INTERACTION_REQUEST_EVENT_TYPE,
   LATENCY_DIAGNOSTICS_EVENT_TYPE,
   LATENCY_DIAGNOSTICS_REF,
   OUTPUT_EVENT_TYPE,
@@ -23,7 +27,9 @@ import {
   PROJECT_TOOL_FAILED_EVENT_TYPE,
   PROJECT_TOOL_STARTED_EVENT_TYPE,
   RUN_PLAN_EVENT_TYPE,
+  RUN_CANCELLED_EVENT_TYPE,
   STAGE_START_EVENT_TYPE,
+  STANDARD_INTERACTION_PROGRESS_EVENT_TYPES,
   STREAM_EVENT_TYPE,
   STREAM_EVENT_TYPES,
   TARGET_ISSUE_LOOKUP_FAILED_EVENT_TYPE,
@@ -73,6 +79,8 @@ import {
   runtimeDetailIndicatesAbort,
   runtimeEventIsBackend,
   runtimeEventIsUserVisible,
+  runtimeInteractionProgressEventFromUnknown,
+  runtimeInteractionProgressPresentation,
   runtimeRecoverActionLabel,
   runtimeRequestAcceptedProgressCopy,
   runtimeStreamEventLabel,
@@ -267,6 +275,7 @@ test('runtime events policy owns process progress and health status literals', (
     PROCESS_PROGRESS_STATUS.RUNNING,
     PROCESS_PROGRESS_STATUS.COMPLETED,
     PROCESS_PROGRESS_STATUS.FAILED,
+    PROCESS_PROGRESS_STATUS.CANCELLED,
   ]);
   assert.equal(runtimeRequestAcceptedProgressCopy('x').reason, PROCESS_PROGRESS_REASON.REQUEST_ACCEPTED_BEFORE_BACKEND_STREAM);
   assert.equal(PROCESS_PROGRESS_REASON.BACKEND_WAITING, 'backend-waiting');
@@ -277,6 +286,50 @@ test('runtime events policy owns process progress and health status literals', (
     RUNTIME_HEALTH_STATUS.OPTIONAL,
     RUNTIME_HEALTH_STATUS.NOT_CONFIGURED,
   ]);
+});
+
+test('runtime events policy owns structured interaction progress contracts', () => {
+  assert.deepEqual(STANDARD_INTERACTION_PROGRESS_EVENT_TYPES, [
+    PROCESS_PROGRESS_EVENT_TYPE,
+    INTERACTION_REQUEST_EVENT_TYPE,
+    CLARIFICATION_NEEDED_EVENT_TYPE,
+    HUMAN_APPROVAL_REQUIRED_EVENT_TYPE,
+    GUIDANCE_QUEUED_EVENT_TYPE,
+    RUN_CANCELLED_EVENT_TYPE,
+  ]);
+
+  const approval = {
+    schemaVersion: INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION,
+    type: HUMAN_APPROVAL_REQUIRED_EVENT_TYPE,
+    phase: 'verification',
+    status: 'blocked',
+    importance: 'blocking',
+    reason: 'side-effect-policy',
+    interaction: { id: 'approve-1', kind: 'human-approval', required: true },
+    prompt: 'PROMPT_TEXT_SHOULD_NOT_DRIVE_UI',
+    scenario: 'SCENARIO_TEXT_SHOULD_NOT_DRIVE_UI',
+    message: 'NATURAL_LANGUAGE_SHOULD_NOT_DRIVE_UI',
+  };
+  const normalized = runtimeInteractionProgressEventFromUnknown(approval);
+  const presentation = runtimeInteractionProgressPresentation(approval);
+
+  assert.equal(normalized?.type, HUMAN_APPROVAL_REQUIRED_EVENT_TYPE);
+  assert.equal(normalized?.interaction?.kind, 'human-approval');
+  assert.equal(presentation?.label, '需要确认');
+  assert.match(presentation?.detail ?? '', /Phase: verification/);
+  assert.match(presentation?.detail ?? '', /Interaction: human-approval required/);
+  assert.doesNotMatch(presentation?.detail ?? '', /PROMPT_TEXT_SHOULD_NOT_DRIVE_UI/);
+  assert.doesNotMatch(presentation?.detail ?? '', /SCENARIO_TEXT_SHOULD_NOT_DRIVE_UI/);
+  assert.doesNotMatch(presentation?.detail ?? '', /NATURAL_LANGUAGE_SHOULD_NOT_DRIVE_UI/);
+
+  const cancelled = runtimeInteractionProgressEventFromUnknown({
+    schemaVersion: INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION,
+    type: RUN_CANCELLED_EVENT_TYPE,
+    cancellationReason: 'timeout',
+    reason: 'deadline reached',
+  });
+  assert.equal(cancelled?.termination?.reason, 'timeout');
+  assert.equal(cancelled?.termination?.runState, 'cancelled');
 });
 
 test('runtime events policy owns stream event presentation literals', () => {
@@ -334,6 +387,18 @@ test('chat shell event projection owns guidance and interrupt contracts', () => 
     detail: `${guidance.prompt}\n状态：已排队，等待当前 run 结束后合并到下一轮。`,
     createdAt: identity.createdAt,
     raw: {
+      schemaVersion: INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION,
+      type: GUIDANCE_QUEUED_EVENT_TYPE,
+      runState: 'guidance-queued',
+      phase: 'interaction',
+      status: 'running',
+      importance: 'normal',
+      reason: guidance.reason,
+      interaction: {
+        id: guidance.id,
+        kind: 'guidance',
+        required: false,
+      },
       guidanceQueue: guidance,
       contract: GUIDANCE_QUEUE_RUN_ORCHESTRATION_CONTRACT,
     },

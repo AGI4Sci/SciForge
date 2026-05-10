@@ -188,7 +188,7 @@ function ProcessProgressCard({ progress }: { progress: ProcessProgressModel }) {
   return (
     <div className={cx('process-progress-card', `phase-${progress.phase}`)}>
       <div className="process-progress-head">
-        <Badge variant={progress.status === 'failed' ? 'danger' : progress.phase === 'wait' ? 'warning' : progress.status === 'completed' ? 'success' : 'info'}>
+        <Badge variant={progress.status === 'failed' || progress.status === 'cancelled' ? 'danger' : progress.phase === 'wait' ? 'warning' : progress.status === 'completed' ? 'success' : 'info'}>
           {phaseLabel(progress.phase)}
         </Badge>
         <strong>{progress.title}</strong>

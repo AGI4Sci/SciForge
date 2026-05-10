@@ -6,9 +6,13 @@ import {
   PROCESS_PROGRESS_PHASE,
   PROCESS_PROGRESS_REASON,
   PROCESS_PROGRESS_STATUS,
+  HUMAN_APPROVAL_REQUIRED_EVENT_TYPE,
+  INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION,
+  RUN_CANCELLED_EVENT_TYPE,
   buildSilentStreamDecisionRecord,
 } from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
+import { normalizeWorkspaceRuntimeEvent } from './api/sciforgeToolsClient/runtimeEvents';
 import { buildInitialResponseProgressEvent, buildRequestAcceptedProgressEvent, buildSilentStreamProgressEvent, formatProgressHeadline, progressModelFromEvent, silentStreamWaitThresholdMs } from './processProgress';
 
 function event(partial: Partial<AgentStreamEvent>): AgentStreamEvent {
@@ -198,4 +202,54 @@ test('builds direct-context visible status from responsePlan', () => {
   assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.READ);
   assert.equal(model?.waitingFor, undefined);
   assert.match(formatProgressHeadline(model) ?? '', /正在整理当前上下文/);
+});
+
+test('maps structured interaction contract events into process progress without prompt or scenario semantics', () => {
+  const normalized = normalizeWorkspaceRuntimeEvent({
+    schemaVersion: INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION,
+    type: HUMAN_APPROVAL_REQUIRED_EVENT_TYPE,
+    phase: 'verification',
+    status: 'blocked',
+    importance: 'blocking',
+    reason: 'side-effect-policy',
+    interaction: {
+      id: 'approval-1',
+      kind: 'human-approval',
+      required: true,
+    },
+    prompt: 'PROMPT_TEXT_SHOULD_NOT_DECIDE search write failed approval',
+    scenario: 'SCENARIO_TEXT_SHOULD_NOT_DECIDE retrieval repair blocked',
+    message: 'NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE search write failed approval',
+  });
+
+  const model = progressModelFromEvent(normalized);
+  const headline = formatProgressHeadline(model);
+
+  assert.equal(normalized.type, HUMAN_APPROVAL_REQUIRED_EVENT_TYPE);
+  assert.equal(normalized.label, '需要确认');
+  assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.OBSERVE);
+  assert.equal(model?.status, PROCESS_PROGRESS_STATUS.RUNNING);
+  assert.equal(model?.waitingFor, '人工确认');
+  assert.match(model?.detail ?? '', /Interaction: human-approval required/);
+  assert.doesNotMatch(normalized.detail ?? '', /PROMPT_TEXT_SHOULD_NOT_DECIDE/);
+  assert.doesNotMatch(normalized.detail ?? '', /SCENARIO_TEXT_SHOULD_NOT_DECIDE/);
+  assert.doesNotMatch(normalized.detail ?? '', /NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE/);
+  assert.doesNotMatch(headline ?? '', /PROMPT_TEXT_SHOULD_NOT_DECIDE/);
+});
+
+test('maps structured run cancellation into process progress cancellation status', () => {
+  const normalized = normalizeWorkspaceRuntimeEvent({
+    schemaVersion: INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION,
+    type: RUN_CANCELLED_EVENT_TYPE,
+    phase: 'run',
+    status: 'cancelled',
+    cancellationReason: 'system-aborted',
+    reason: 'network abort',
+  });
+
+  const model = progressModelFromEvent(normalized);
+  assert.equal(model?.title, '运行取消');
+  assert.equal(model?.status, PROCESS_PROGRESS_STATUS.CANCELLED);
+  assert.equal(model?.nextStep, '运行已结束，保留结构化终止原因供下一轮恢复或审计。');
+  assert.match(model?.detail ?? '', /Cancellation: system-aborted/);
 });

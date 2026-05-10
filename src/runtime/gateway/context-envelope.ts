@@ -7,7 +7,13 @@ import type { SciForgeSkillDomain, GatewayRequest, SkillAvailability } from '../
 import { clipForAgentServerJson, clipForAgentServerPrompt, hashJson, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
 import { brokerCapabilities, CapabilityManifestRegistry as BrokerCapabilityManifestRegistry, type CapabilityBrokerArtifactIndexEntry, type CapabilityBrokerFailureHistoryEntry, type CapabilityBrokerObjectRef, type CapabilityBrokerOutput, type CapabilityBrokerProviderAvailability, type CapabilityBrokerSkillHint, type CapabilityBrokerToolBudget, type CapabilityBrokerVerificationPolicyHint } from '../capability-broker.js';
 import { sanitizeCapabilityEvolutionCompactSummaryForBroker } from '../capability-evolution-ledger.js';
-import { loadCoreCapabilityManifestRegistry } from '../capability-manifest-registry.js';
+import {
+  loadCapabilityManifestRegistryWithFileDiscovery,
+  loadCoreCapabilityManifestRegistry,
+  type CapabilityManifestRegistryFileDiscoveryInput,
+  type CompactCapabilityManifestRegistryAudit,
+  type LoadedCapabilityManifestRegistry,
+} from '../capability-manifest-registry.js';
 import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from './gateway-request.js';
 import { applyContextEnvelopeRecordGovernance, contextEnvelopeGovernanceAudit, contextEnvelopeGovernanceForRequest } from './context-envelope-governance.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
@@ -197,10 +203,29 @@ export function buildContextEnvelope(
 }
 
 export function buildCapabilityBrokerBriefForAgentServer(request: GatewayRequest) {
+  return buildCapabilityBrokerBriefForAgentServerFromRegistry(request, loadCoreCapabilityManifestRegistry());
+}
+
+export async function buildCapabilityBrokerBriefForAgentServerWithFileDiscovery(
+  request: GatewayRequest,
+  options: { fileDiscovery?: CapabilityManifestRegistryFileDiscoveryInput } = {},
+) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const capabilityPolicy = brokerCapabilityPolicyForRequest(request);
+  const fileDiscovery = options.fileDiscovery ?? brokerManifestFileDiscoveryForRequest(request, uiState, capabilityPolicy);
+  const registry = await loadCapabilityManifestRegistryWithFileDiscovery({ fileDiscovery });
+  return buildCapabilityBrokerBriefForAgentServerFromRegistry(request, registry, { includeRegistryAudit: fileDiscovery?.enabled === true });
+}
+
+function buildCapabilityBrokerBriefForAgentServerFromRegistry(
+  request: GatewayRequest,
+  loadedRegistry: LoadedCapabilityManifestRegistry,
+  options: { includeRegistryAudit?: boolean } = {},
+) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const capabilityPolicy = brokerCapabilityPolicyForRequest(request);
   const verificationPolicy = brokerVerificationPolicyForRequest(request, capabilityPolicy);
-  const registry = new BrokerCapabilityManifestRegistry(loadCoreCapabilityManifestRegistry().manifests);
+  const registry = new BrokerCapabilityManifestRegistry(loadedRegistry.manifests);
   const brokered = brokerCapabilities({
     prompt: request.prompt,
     objectRefs: brokerObjectRefsForRequest(request),
@@ -240,7 +265,10 @@ export function buildCapabilityBrokerBriefForAgentServer(request: GatewayRequest
     },
     availableProviders: brokerAvailableProvidersForRequest(uiState, capabilityPolicy),
   }, registry);
-  return compactBrokerOutputForAgentServer(brokered);
+  return compactBrokerOutputForAgentServer(
+    brokered,
+    options.includeRegistryAudit ? loadedRegistry.compactAudit : undefined,
+  );
 }
 
 function brokerCapabilityEvolutionSummaryForRequest(request: GatewayRequest) {
@@ -254,7 +282,10 @@ function brokerCapabilityEvolutionSummaryForRequest(request: GatewayRequest) {
     : undefined);
 }
 
-function compactBrokerOutputForAgentServer(brokered: CapabilityBrokerOutput) {
+function compactBrokerOutputForAgentServer(
+  brokered: CapabilityBrokerOutput,
+  registryAudit?: CompactCapabilityManifestRegistryAudit,
+) {
   return {
     schemaVersion: 'sciforge.agentserver.capability-broker-brief.v1',
     source: 'typescript-capability-broker',
@@ -270,7 +301,34 @@ function compactBrokerOutputForAgentServer(brokered: CapabilityBrokerOutput) {
       .filter((entry) => brokered.briefs.some((brief) => brief.id === entry.id) || entry.excluded)
       .slice(0, 16)
       .map((entry) => clipForAgentServerJson(entry, 2)),
+    ...(registryAudit ? { registryAudit: compactCapabilityRegistryAuditForBroker(registryAudit) } : {}),
     inputSummary: brokered.inputSummary,
+  };
+}
+
+function compactCapabilityRegistryAuditForBroker(audit: CompactCapabilityManifestRegistryAudit) {
+  return {
+    contract: audit.contract,
+    manifestCount: audit.manifestCount,
+    providerCount: audit.providerCount,
+    sourceCounts: audit.sourceCounts,
+    fileDiscovery: audit.fileDiscovery,
+    discoveredEntries: audit.entries
+      .filter((entry) => entry.source !== 'core')
+      .slice(0, 24)
+      .map((entry) => ({
+        id: entry.id,
+        source: entry.source,
+        packageName: entry.packageName,
+        packageRoot: entry.packageRoot,
+        providerAvailability: entry.providerAvailability.map((provider) => ({
+          providerId: provider.providerId,
+          available: provider.available,
+          reason: provider.reason,
+        })),
+        requiredConfig: entry.requiredConfig,
+        risk: entry.risk,
+      })),
   };
 }
 
@@ -335,6 +393,31 @@ function brokerCapabilityPolicyForRequest(request: GatewayRequest) {
     handoff.capabilityPolicy,
     harnessContract.capabilityPolicy,
   ) ?? {};
+}
+
+function brokerManifestFileDiscoveryForRequest(
+  request: GatewayRequest,
+  uiState: Record<string, unknown>,
+  capabilityPolicy: Record<string, unknown>,
+): CapabilityManifestRegistryFileDiscoveryInput | undefined {
+  const source = firstRecord(
+    capabilityPolicy.manifestFileDiscovery,
+    capabilityPolicy.capabilityManifestFileDiscovery,
+    uiState.manifestFileDiscovery,
+    uiState.capabilityManifestFileDiscovery,
+  );
+  if (!source || booleanField(source.enabled) !== true) return undefined;
+  const rootDir = stringField(source.rootDir) ?? stringField(source.root) ?? request.workspacePath;
+  if (!rootDir) return undefined;
+  const candidateFileNames = toStringList(source.candidateFileNames);
+  const ignoredDirNames = toStringList(source.ignoredDirNames);
+  return {
+    enabled: true,
+    rootDir: resolve(rootDir),
+    maxDepth: numberField(source.maxDepth),
+    candidateFileNames: candidateFileNames.length ? candidateFileNames : undefined,
+    ignoredDirNames: ignoredDirNames.length ? ignoredDirNames : undefined,
+  };
 }
 
 function brokerSkillHintsForRequest(

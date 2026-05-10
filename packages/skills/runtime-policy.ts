@@ -281,6 +281,123 @@ export function agentServerGeneratedTaskPromptPolicyLines() {
   ];
 }
 
+export function agentServerGenerationOutputContract() {
+  return {
+    finalOutput: 'exactly one compact JSON object',
+    alternatives: ['AgentServerGenerationResponse', 'SciForge ToolPayload'],
+    taskFiles: 'array of { path, language, content? }; omit content only when the file was physically written in workspace',
+    entrypoint: 'object { language, path, command?, args? } for executable code path only; report/data files are artifacts, not entrypoints',
+    externalIo: 'bounded timeouts, backoff retries for 429/5xx/network timeout/empty-result, and valid failed-with-reason ToolPayload on exhausted retrieval',
+    projectGuidanceAdoption: 'If TaskProject userGuidanceQueue is present, include executionUnits[].guidanceDecisions with every queued/deferred item marked adopted, deferred, or rejected with a reason.',
+  };
+}
+
+export function agentServerCurrentTurnSnapshotPromptPolicyLines() {
+  return [
+    'CURRENT TURN SNAPSHOT (authoritative; preserve this even when context is compacted):',
+  ];
+}
+
+export function agentServerBackendDecisionPromptPolicyLines(input: { freshCurrentTurn?: boolean } = {}) {
+  return [
+    'Handle this SciForge request as the agent backend decision-maker.',
+    'AgentServer owns orchestration, domain reasoning, tool choice, continuation, and repair strategy. SciForge only validates protocol, runs returned workspace tasks, persists refs/artifacts, and reports contract failures.',
+    input.freshCurrentTurn
+      ? 'FRESH GENERATION MODE: do not call tools before returning. Do not inspect workspace directories, .sciforge, old task attempts, old artifacts, logs, installed packages, or previous generated code. Return final compact JSON immediately; generated task code can perform runtime inspection/retrieval later using inputPath/outputPath.'
+      : 'CONTINUITY MODE: inspect only the concrete prior refs needed for the current continuation/repair/rerun request.',
+    'First infer the current-turn intent from the CURRENT TURN SNAPSHOT and recentConversation. Use priorAttempts, artifacts, recentExecutionRefs, and workspace refs only when the current turn explicitly asks to continue, repair, rerun, or inspect a previous task.',
+    'Fresh current-turn requests must move directly to either a direct ToolPayload or generated task code. Do not spend generation-stage tool calls browsing historical .sciforge/task-attempts, logs, artifacts, or old generated tasks unless the current turn explicitly asks for that history.',
+  ];
+}
+
+export function agentServerGenerationOutputContractLines(group: 'all' | 'json-envelope' | 'tool-payload' | 'missing-input' = 'all') {
+  const groups = {
+    'json-envelope': [
+      'Return exactly one JSON object, with no markdown before or after it.',
+    ],
+    'tool-payload': [
+      'Final output must be only compact JSON: either AgentServerGenerationResponse or SciForge ToolPayload.',
+      'When returning a SciForge ToolPayload, use displayIntent to describe the user-visible view need, and objectReferences to cite key artifacts/files/runs that the user can click on demand.',
+      'objectReferences refs must use controlled prefixes: artifact:*, file:*, folder:*, run:*, execution-unit:*, scenario-package:*, or url:*.',
+    ],
+    'missing-input': [
+      'If a required input, remote file, credential, or executable is missing, write a valid ToolPayload with executionUnits.status="failed-with-reason" and a precise failureReason instead of fabricating outputs.',
+    ],
+  };
+  if (group !== 'all') return groups[group];
+  return [
+    ...groups['json-envelope'],
+    ...groups['tool-payload'],
+    ...groups['missing-input'],
+  ];
+}
+
+export function agentServerWorkspaceTaskRoutingPromptPolicyLines(group: 'all' | 'prior-task' | 'new-task' = 'all') {
+  const groups = {
+    'prior-task': [
+      'If a prior task already exists and the user asks to continue, repair, or rerun it, prefer returning taskFiles that reference that existing workspace task path or a minimal patched task instead of starting an unrelated fresh analysis.',
+    ],
+    'new-task': [
+      'Generate fresh task code only when the current turn truly asks for new work or no prior executable artifact can satisfy the request.',
+      'Put generated task paths under .sciforge/tasks when possible. SciForge will archive any returned taskFiles under .sciforge/tasks/<run-id>/ before execution.',
+      'Do not force self-contained task code when a better installed/workspace tool exists. Prefer the best available tool, record the tool id/version/command in ExecutionUnit, and write only the adapter/glue needed for reproducibility from inputPath and outputPath.',
+    ],
+  };
+  if (group !== 'all') return groups[group];
+  return [...groups['prior-task'], ...groups['new-task']];
+}
+
+export function agentServerCapabilityRoutingPromptPolicyLines() {
+  return [
+    'Runtime capability routing contract: use capabilityBrokerBrief as the compact broker-ranked capability list; the old scattered capability catalog is omitted by default, and full schemas, examples, implementation notes, and repair hints stay lazy until execution or repair needs them.',
+    'When capabilityBrokerBrief or selectedToolIds includes local.vision-sense/observe.vision, treat the current turn as having an optional pure-vision Computer Use sense plugin available: construct text + screenshot/image modality requests, keep the package executor-agnostic, emit text-form click/type_text/press_key/scroll/wait commands or vision-trace artifacts, and preserve only compact screenshot refs/grounding/execution/pixel-diff summaries across turns. Do not read DOM or accessibility tree for that vision path, and fail closed for send/delete/pay/authorize/publish actions unless upstream confirmation is explicit.',
+    'If the user explicitly asks to use Computer Use, GUI automation, desktop control, mouse, or keyboard, do not satisfy that request by substituting non-GUI generation code such as python-pptx, scripts, repository edits, or synthetic artifacts unless the user explicitly accepts a non-GUI fallback in the current turn. If the Computer Use path fails, return failed-with-reason with the exact failing provider, endpoint/path when available, trace ref, and recovery action instead of claiming the requested GUI task is complete.',
+    'If local.vision-sense is selected but no GUI executor/browser/desktop bridge or screenshot input is configured for the current run, do not scan the repository to compensate. Return a concise ToolPayload diagnosis or failed-with-reason ExecutionUnit that says the vision sense contract was detected but the runtime executor bridge is missing, and include the next expected vision-trace file-ref shape instead of fabricating GUI results.',
+  ];
+}
+
+export function agentServerLargeFilePromptContractLines() {
+  return [
+    'Large-file contract: uploaded PDFs, images, spreadsheets, binary blobs, extracted full text, and large logs must stay as workspace refs. Do not inline base64, do not print full extracted text to stdout/stderr, and do not paste full document text into final JSON.',
+    'For uploaded PDFs or long documents, generated tasks should read the file by path/dataRef, write any full extraction to .sciforge/artifacts or .sciforge/task-results, and return only bounded excerpts, section summaries, page/figure locators, hashes, and clickable file/artifact refs.',
+  ];
+}
+
+export function agentServerViewSelectionPromptPolicyLines() {
+  return [
+    'Use selectedComponentIds only when the current user turn explicitly requested those views; do not preserve default UI slots as output requirements.',
+  ];
+}
+
+export function agentServerContinuationPromptPolicyLines() {
+  return [
+    'For continuation requests, continue the scenario goal using recentConversation, artifacts, recentExecutionRefs, and priorAttempts. Do not restart an unrelated analysis.',
+  ];
+}
+
+export function agentServerPriorAttemptsPromptPolicyLines() {
+  return [
+    'RECENT PRIOR ATTEMPTS (authoritative repair/continuation context; preserve failureReason):',
+  ];
+}
+
+export function agentServerWorkspaceTaskRepairPromptPolicyLines(group: 'all' | 'intro' | 'completion' = 'all') {
+  const groups = {
+    intro: [
+      'Repair this SciForge workspace task and leave the workspace ready for SciForge to rerun it.',
+      'Use the compact repair context below: it contains the current user goal, workspace refs, failure evidence, and relevant code/log excerpts.',
+      'Edit the referenced task file or adjacent helper files only as needed. SciForge will rerun the task after you finish.',
+      'The repaired task must execute the user goal end-to-end, not merely generate code or report that code was generated.',
+    ],
+    completion: [
+      'Preserve failureReason in the next ToolPayload only if the real blocker remains after repair.',
+      'Do not fabricate success or replace the user goal with an unrelated demo task.',
+    ],
+  };
+  if (group !== 'all') return groups[group];
+  return [...groups.intro, ...groups.completion];
+}
+
 export function agentServerGeneratedTaskRetryDetail(kind: 'entrypoint' | 'path-only-task-files' | 'task-interface') {
   if (kind === 'entrypoint') {
     return 'Retrying AgentServer generation once; entrypoint must be executable code, while reports/data must be emitted as artifacts or direct ToolPayload content.';
