@@ -6,6 +6,10 @@ import {
   normalizeRuntimeVerificationPolicy as normalizeRuntimeVerificationPolicyFromContract,
   verificationIsNonBlocking,
 } from '@sciforge-ui/runtime-contract/verification-policy';
+import {
+  createCapabilityBudgetDebitRecord,
+  type CapabilityBudgetDebitLine,
+} from '@sciforge-ui/runtime-contract/capability-budget';
 import type { GatewayRequest, ToolPayload, VerificationPolicy, VerificationResult, VerificationVerdict } from '../runtime-types.js';
 import { isRecord, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
 import { sha1 } from '../workspace-task-runner.js';
@@ -48,7 +52,14 @@ export async function applyRuntimeVerificationPolicy(
     ? validationRepairAuditForVerificationGate(payload, request, policy, resultWithId, verificationRel)
     : undefined;
   const gatedPayload = gate.blocked ? failClosedPayload(payload, gate.reason, resultWithId, verificationRel, gateAudit) : payload;
-  const verifiedPayload = attachVerificationRefs(gatedPayload, policy, resultWithId, verificationRel, artifact, nonBlocking);
+  const verifiedPayload = attachRuntimeVerificationBudgetDebitRefs(
+    attachVerificationRefs(gatedPayload, policy, resultWithId, verificationRel, artifact, nonBlocking),
+    request,
+    policy,
+    resultWithId,
+    verificationRel,
+    gateAudit,
+  );
   if (gate.blocked) {
     await persistVerificationGatedPayloadIfPossible(workspace, verifiedPayload);
   }
@@ -104,6 +115,115 @@ function attachVerificationRefs(
         visible: true,
         nonBlocking,
       },
+    },
+  };
+}
+
+function attachRuntimeVerificationBudgetDebitRefs(
+  payload: ToolPayload,
+  request: GatewayRequest,
+  policy: VerificationPolicy,
+  result: VerificationResult,
+  verificationRel: string,
+  gateAudit?: VerificationGateAuditProjection,
+): ToolPayload {
+  const seed = sha1([
+    request.skillDomain,
+    request.prompt,
+    policy.mode,
+    policy.riskLevel,
+    result.id,
+    result.verdict,
+    verificationRel,
+  ].filter(Boolean).join(':')).slice(0, 12);
+  const executionUnitRef = firstExecutionUnitString(payload, 'id');
+  const auditRef = gateAudit?.chain.audit.auditId ?? `verification-artifact:${verificationRel}`;
+  const logRef = `audit:runtime-verification-gate:${seed}`;
+  const debit = createCapabilityBudgetDebitRecord({
+    debitId: `budgetDebit:runtime-verification-gate:${seed}`,
+    invocationId: `capabilityInvocation:runtime-verification-gate:${seed}`,
+    capabilityId: RUNTIME_VERIFICATION_GATE_CAPABILITY_ID,
+    candidateId: 'verifier.runtime-verification-gate',
+    manifestRef: `capability:${RUNTIME_VERIFICATION_GATE_CAPABILITY_ID}`,
+    subjectRefs: uniqueStrings([
+      verificationRel,
+      result.id ?? '',
+      ...result.evidenceRefs,
+      ...currentReferenceRefs(request),
+      ...payload.executionUnits.flatMap((unit) => isRecord(unit) ? [
+        stringField(unit.id) ?? '',
+        stringField(unit.outputRef) ?? '',
+        stringField(unit.verificationRef) ?? '',
+      ] : []),
+    ]),
+    debitLines: runtimeVerificationGateDebitLines(policy, result),
+    sinkRefs: {
+      executionUnitRef,
+      auditRefs: uniqueStrings([
+        `verification-artifact:${verificationRel}`,
+        auditRef,
+        logRef,
+      ]),
+    },
+    metadata: {
+      policyMode: policy.mode,
+      riskLevel: policy.riskLevel,
+      verdict: result.verdict,
+      nonBlocking: verificationIsNonBlocking(request, policy),
+    },
+  });
+  const budgetDebitRefs = [debit.debitId];
+  return {
+    ...payload,
+    budgetDebits: [
+      ...(payload.budgetDebits ?? []),
+      debit,
+    ],
+    executionUnits: payload.executionUnits.map((unit) => isRecord(unit)
+      ? attachBudgetDebitRefs(unit, budgetDebitRefs)
+      : unit),
+    artifacts: payload.artifacts.map((artifact) => isRecord(artifact) && artifact.type === 'verification-result'
+      ? attachBudgetDebitRefs(artifact, budgetDebitRefs)
+      : artifact),
+    logs: [
+      ...(payload.logs ?? []),
+      {
+        type: 'capability-budget-debit',
+        ref: logRef,
+        capabilityId: RUNTIME_VERIFICATION_GATE_CAPABILITY_ID,
+        verificationRef: verificationRel,
+        verificationVerdict: result.verdict,
+        budgetDebitRefs,
+      },
+    ],
+  };
+}
+
+function runtimeVerificationGateDebitLines(
+  policy: VerificationPolicy,
+  result: VerificationResult,
+): CapabilityBudgetDebitLine[] {
+  return [{
+    dimension: 'costUnits',
+    amount: 1,
+    reason: `runtime verification gate ${result.verdict}`,
+    sourceRef: `runtime-verification:${policy.mode}:${policy.riskLevel}`,
+  }];
+}
+
+function attachBudgetDebitRefs(record: Record<string, unknown>, refs: string[]) {
+  return {
+    ...record,
+    budgetDebitRefs: uniqueStrings([
+      ...toStringList(record.budgetDebitRefs),
+      ...refs,
+    ]),
+    refs: {
+      ...(isRecord(record.refs) ? record.refs : {}),
+      budgetDebits: uniqueStrings([
+        ...toStringList(isRecord(record.refs) ? record.refs.budgetDebits : undefined),
+        ...refs,
+      ]),
     },
   };
 }

@@ -825,6 +825,14 @@ try {
   }, request);
   assert.equal(unverified.verificationResults?.[0].verdict, 'unverified');
   assert.ok(unverified.artifacts.some((artifact) => artifact.type === 'verification-result'));
+  const unverifiedDebit = unverified.budgetDebits?.[0];
+  assert.ok(unverifiedDebit, 'runtime verification gate should emit a budget debit for unverified outputs');
+  assert.equal(unverifiedDebit.capabilityId, 'sciforge.runtime-verification-gate');
+  assert.equal(unverifiedDebit.sinkRefs.executionUnitRef, 'EU-low');
+  assert.ok(unverifiedDebit.sinkRefs.auditRefs.some((ref) => ref.startsWith('verification-artifact:')));
+  assert.ok(hasBudgetDebitRef(unverified.executionUnits[0], unverifiedDebit.debitId));
+  assert.ok(unverified.artifacts.some((artifact) => artifact.type === 'verification-result' && hasBudgetDebitRef(artifact, unverifiedDebit.debitId)));
+  assert.ok(unverified.logs?.some((entry) => entry.ref === unverifiedDebit.sinkRefs.auditRefs.find((ref) => ref.startsWith('audit:runtime-verification-gate:')) && hasBudgetDebitRef(entry, unverifiedDebit.debitId)));
   const verificationRef = String(unverified.artifacts.find((artifact) => artifact.type === 'verification-result')?.dataRef);
   assert.match(await readFile(join(workspace, verificationRef), 'utf8'), /"verdict": "unverified"/);
 
@@ -896,6 +904,13 @@ try {
   assert.equal(gated.verificationResults?.[0].verdict, 'needs-human');
   assert.equal(gated.executionUnits[0].status, 'needs-human');
   assert.equal(gated.message, 'Provider says action completed');
+  const gatedDebit = gated.budgetDebits?.[0];
+  assert.ok(gatedDebit, 'runtime verification gate should emit a budget debit for blocked outputs');
+  assert.equal(gatedDebit.capabilityId, 'sciforge.runtime-verification-gate');
+  assert.equal(gatedDebit.sinkRefs.executionUnitRef, 'EU-high');
+  assert.ok(gatedDebit.sinkRefs.auditRefs.some((ref) => ref.startsWith('audit:verification-gate:')));
+  assert.ok(hasBudgetDebitRef(gated.executionUnits[0], gatedDebit.debitId));
+  assert.ok(gated.logs?.some((entry) => hasBudgetDebitRef(entry, gatedDebit.debitId)));
   const verificationDisplayIntent = gated.displayIntent?.verification as Record<string, unknown> | undefined;
   assert.equal(verificationDisplayIntent?.verdict, 'needs-human');
   const gatedRefs = (gated.executionUnits[0].refs ?? {}) as Record<string, unknown>;
@@ -913,8 +928,17 @@ try {
   assert.ok(gatedAudit?.auditRecord?.relatedRefs?.some((ref) => ref.includes('.sciforge/verifications/')));
   const persistedGatedPayload = JSON.parse(await readFile(join(workspace, gatedOutputRef), 'utf8')) as ToolPayload & { refs?: Record<string, unknown> };
   assert.ok(persistedGatedPayload.refs?.validationRepairAudit);
+  assert.equal(persistedGatedPayload.budgetDebits?.[0]?.debitId, gatedDebit.debitId);
+  assert.ok(hasBudgetDebitRef(persistedGatedPayload.executionUnits[0], gatedDebit.debitId));
 
   console.log('[ok] runtime gateway modules expose request/context/payload/artifact/repair boundaries');
 } finally {
   await rm(workspace, { recursive: true, force: true });
+}
+
+function hasBudgetDebitRef(record: unknown, debitId: string) {
+  return typeof record === 'object'
+    && record !== null
+    && Array.isArray((record as { budgetDebitRefs?: unknown }).budgetDebitRefs)
+    && ((record as { budgetDebitRefs: unknown[] }).budgetDebitRefs).includes(debitId);
 }
