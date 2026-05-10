@@ -11,6 +11,7 @@ import {
   buildCapabilityEvolutionCandidateSet,
   buildCapabilityEvolutionCompactSummary,
   CAPABILITY_EVOLUTION_LEDGER_RELATIVE_PATH,
+  readCapabilityEvolutionLedgerFacts,
   readCapabilityEvolutionRecords,
   sanitizeCapabilityEvolutionCompactSummaryForBroker,
 } from '../../src/runtime/capability-evolution-ledger.js';
@@ -459,6 +460,16 @@ try {
   const dynamicGlueSuccess = recordsAfterSupplementalFallback.find((entry) => entry.metadata?.eventKind === 'dynamic-glue-execution');
   assert.ok(dynamicGlueSuccess, 'successful supplemental backend glue should be recorded');
   assert.equal(dynamicGlueSuccess.finalStatus, 'succeeded');
+  const factsAfterSupplementalFallback = await readCapabilityEvolutionLedgerFacts({ workspacePath: workspace });
+  const dynamicGlueFact = factsAfterSupplementalFallback.find((entry) => entry.recordId === dynamicGlueSuccess.id);
+  assert.ok(dynamicGlueFact, 'successful generated-task ledger record should be visible through compact facts');
+  assert.deepEqual(dynamicGlueFact.factKinds, ['success']);
+  assert.equal(dynamicGlueFact.finalStatus, 'succeeded');
+  const supplementalFallbackFact = factsAfterSupplementalFallback.find((entry) => entry.recordId === supplementalFallbackRecord.id);
+  assert.ok(supplementalFallbackFact, 'supplemental fallback ledger record should be visible through compact facts');
+  assert.deepEqual(supplementalFallbackFact.factKinds, ['fallback', 'success']);
+  assert.equal(supplementalFallbackFact.failureCode, 'missing-artifact');
+  assert.ok(supplementalFallbackFact.artifactRefs.some((ref) => ref.includes('supplement-matrix')));
 
   const providerUnavailable = await recordCapabilityEvolutionRuntimeEvent({
     workspacePath: workspace,

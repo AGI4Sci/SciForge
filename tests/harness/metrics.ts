@@ -20,6 +20,9 @@ export interface HarnessExperimentMetrics {
   blockedRefCount: number;
   blockedCapabilityCount: number;
   candidateCount: number;
+  verificationIntensity: string;
+  progressInitialStatus: string;
+  progressPhaseCount: number;
   finalArtifactQualityScore: number;
 }
 
@@ -62,6 +65,9 @@ export function collectHarnessExperimentMetrics(
     blockedRefCount: contract.blockedContextRefs.length,
     blockedCapabilityCount: contract.capabilityPolicy.blockedCapabilities.length,
     candidateCount: contract.capabilityPolicy.candidates.length,
+    verificationIntensity: contract.verificationPolicy.intensity,
+    progressInitialStatus: contract.progressPlan.initialStatus,
+    progressPhaseCount: contract.progressPlan.phaseNames?.length ?? contract.progressPlan.visibleMilestones.length,
     finalArtifactQualityScore,
   };
 }

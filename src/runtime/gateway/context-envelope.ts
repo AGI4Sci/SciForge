@@ -63,16 +63,9 @@ export function buildContextEnvelope(
   const selectedComponentIds = selectedComponentIdsForRequest(request);
   const executionModeDecision = executionModeDecisionForEnvelope(uiState);
   const conversationPolicySummary = summarizeConversationPolicyForAgentServer(uiState.conversationPolicy ?? uiState);
-  const capabilityBrief = isRecord(uiState.capabilityBrief)
-    ? uiState.capabilityBrief
-    : {
-      schemaVersion: 'sciforge.capability-brief.transport-fallback.v1',
-      selected: [],
-      excluded: [],
-      needsMoreDiscovery: true,
-      reason: 'Python conversation policy did not provide a capability brief.',
-    };
   const capabilityBrokerBrief = buildCapabilityBrokerBriefForAgentServer(request);
+  const capabilityBrief = capabilityBriefProjectionFromBrokerBrief(capabilityBrokerBrief, uiState.capabilityBrief);
+  const verificationPolicy = request.verificationPolicy ?? brokerVerificationPolicyForRequest(request, brokerCapabilityPolicyForRequest(request));
   const visibleRecentConversation = recentConversation
     .slice(mode === 'full' ? -6 : -4)
     .map((entry) => clipForAgentServerPrompt(entry, mode === 'full' ? 900 : 700))
@@ -145,10 +138,9 @@ export function buildContextEnvelope(
       failureRecoveryPolicy,
       capabilityBrokerBrief,
       capabilityBrief,
-      verificationPolicy: request.verificationPolicy ?? capabilityBrief.verificationPolicy,
+      verificationPolicy,
       humanApprovalPolicy: request.humanApprovalPolicy ?? (isRecord(uiState.humanApprovalPolicy) ? uiState.humanApprovalPolicy : undefined),
       unverifiedReason: request.unverifiedReason ?? (typeof uiState.unverifiedReason === 'string' ? uiState.unverifiedReason : undefined),
-      verificationBrief: capabilityBrief.verificationBrief,
       conversationPolicySummary,
       ...executionModeDecision,
       selectedSkill: params.selectedSkill ? {
@@ -329,6 +321,54 @@ function compactCapabilityRegistryAuditForBroker(audit: CompactCapabilityManifes
         requiredConfig: entry.requiredConfig,
         risk: entry.risk,
       })),
+  };
+}
+
+function capabilityBriefProjectionFromBrokerBrief(capabilityBrokerBrief: Record<string, unknown>, legacyCapabilityBrief: unknown) {
+  const briefs = Array.isArray(capabilityBrokerBrief.briefs) ? capabilityBrokerBrief.briefs.filter(isRecord) : [];
+  const audit = Array.isArray(capabilityBrokerBrief.audit) ? capabilityBrokerBrief.audit.filter(isRecord) : [];
+  const selected = briefs.map((brief) => clipForAgentServerJson(pruneUndefined({
+    id: stringField(brief.id),
+    manifestRef: stringField(brief.id) ? `capability:${stringField(brief.id)}` : undefined,
+    kind: stringField(brief.kind),
+    providerIds: toStringList(brief.providerIds),
+    routingTags: toStringList(brief.routingTags),
+    domains: toStringList(brief.domains),
+    score: numberField(brief.score),
+    budget: isRecord(brief.budget) ? brief.budget : undefined,
+    source: 'capability-broker-brief',
+  }), 3));
+  const excluded = audit.filter((entry) => stringField(entry.excluded)).slice(0, 12).map((entry) => clipForAgentServerJson(pruneUndefined({
+    id: stringField(entry.id),
+    manifestRef: stringField(entry.id) ? `capability:${stringField(entry.id)}` : undefined,
+    reason: stringField(entry.excluded),
+    source: 'capability-broker-audit',
+  }), 2));
+  const legacyAudit = legacyCapabilityBriefAudit(legacyCapabilityBrief);
+  return {
+    schemaVersion: 'sciforge.capability-brief.registry-projection.v1',
+    source: 'unified-capability-registry',
+    brokerBriefRef: capabilityBrokerBrief.schemaVersion,
+    brokerContract: capabilityBrokerBrief.contract,
+    selected,
+    excluded,
+    needsMoreDiscovery: false,
+    auditTrace: [
+      { event: 'capabilityBrief.projected_from_broker', source: 'buildCapabilityBrokerBriefForAgentServer', selected: selected.length, excluded: excluded.length },
+      ...(legacyAudit ? [legacyAudit] : []),
+    ].filter(isRecord),
+  };
+}
+
+function legacyCapabilityBriefAudit(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  return {
+    event: 'legacy_capabilityBrief.ignored',
+    selectedCount: Array.isArray(value.selected) ? value.selected.length : 0,
+    excludedCount: Array.isArray(value.excluded) ? value.excluded.length : 0,
+    verificationPolicyPresent: isRecord(value.verificationPolicy),
+    verificationBriefPresent: isRecord(value.verificationBrief),
+    keys: Object.keys(value).sort().slice(0, 12),
   };
 }
 

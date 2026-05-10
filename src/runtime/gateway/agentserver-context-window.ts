@@ -20,6 +20,7 @@ import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { clipForAgentServerJson, clipForAgentServerPrompt, errorMessage, isRecord, toRecordList } from '../gateway-utils.js';
 import { retryAfterMsFromText } from './backend-failure-diagnostics.js';
+import { agentHarnessContinuityDecision } from './agent-harness-shadow.js';
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value : undefined;
@@ -580,19 +581,7 @@ export function agentServerContextPolicy(request: GatewayRequest) {
 }
 
 export function requestNeedsAgentServerContinuity(request: GatewayRequest) {
-  const policy = isRecord(request.uiState?.contextReusePolicy)
-    ? request.uiState.contextReusePolicy
-    : isRecord(request.uiState?.contextIsolation)
-      ? request.uiState.contextIsolation
-      : undefined;
-  if (policy) {
-    const mode = typeof policy.mode === 'string' ? policy.mode : '';
-    const historyReuse = isRecord(policy.historyReuse) ? policy.historyReuse : {};
-    return historyReuse.allowed === true || mode === 'continue' || mode === 'repair';
-  }
-  if (toRecordList(request.uiState?.recentExecutionRefs).length) return true;
-  if (request.artifacts.length) return true;
-  return false;
+  return agentHarnessContinuityDecision(request).useContinuity;
 }
 
 export function currentTurnReferences(request: GatewayRequest) {

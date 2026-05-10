@@ -619,6 +619,48 @@ test('multi-stage project summary shows project and stage progress', () => {
   assert.match(entry.presentation.detail, /Evidence: Claim comparison evidence summary/);
 });
 
+test('running work process renders structured progress without prompt or scenario semantic branching', () => {
+  const progressEvent = event({
+    id: 'structured-progress-shell',
+    type: 'process-progress',
+    label: '过程',
+    detail: 'PROMPT_TEXT_SHOULD_NOT_DECIDE search write failed approval',
+    raw: {
+      prompt: 'PROMPT_TEXT_SHOULD_NOT_DECIDE search write failed approval',
+      scenario: 'SCENARIO_TEXT_SHOULD_NOT_DECIDE retrieval repair blocked',
+      progress: {
+        phase: 'wait',
+        title: '结构化等待状态',
+        detail: 'structured detail wins',
+        reading: ['/structured/read.csv'],
+        waitingFor: 'structured backend event',
+        nextStep: 'structured next step',
+        status: 'running',
+      },
+    },
+  });
+  const counts = streamEventCounts([progressEvent]);
+  const markup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
+    events: [progressEvent],
+    counts,
+    backend: 'test',
+    guidanceCount: 0,
+  }));
+  const visibleMarkup = markup.replace(/<details class="message-fold depth-3 stream-event-raw-fold"[\s\S]*?<\/details>/g, '');
+
+  assert.match(visibleMarkup, /结构化等待状态/);
+  assert.match(visibleMarkup, /正在读/);
+  assert.match(visibleMarkup, /\/structured\/read\.csv/);
+  assert.match(visibleMarkup, /structured backend event/);
+  assert.match(visibleMarkup, /structured next step/);
+  assert.doesNotMatch(visibleMarkup, /PROMPT_TEXT_SHOULD_NOT_DECIDE/);
+  assert.doesNotMatch(visibleMarkup, /SCENARIO_TEXT_SHOULD_NOT_DECIDE/);
+  assert.doesNotMatch(visibleMarkup, /search write failed approval/);
+  assert.doesNotMatch(visibleMarkup, /retrieval repair blocked/);
+  assert.match(markup, /PROMPT_TEXT_SHOULD_NOT_DECIDE/);
+  assert.match(markup, /SCENARIO_TEXT_SHOULD_NOT_DECIDE/);
+});
+
 test('running work process keeps raw output inside collapsed raw fold', () => {
   const rawHeavyEvent = event({
     id: 'raw-heavy',

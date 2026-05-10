@@ -34,6 +34,22 @@ const request: GatewayRequest = {
       title: 'Prior report',
       summary: 'Current report ref.',
     }],
+    capabilityBrief: {
+      selected: [{
+        id: 'legacy.full.skill',
+        summary: 'OLD_CAPABILITY_BRIEF_SELECTED_SENTINEL',
+      }],
+      excluded: [{
+        id: 'legacy.full.tool',
+        reason: 'OLD_CAPABILITY_BRIEF_EXCLUDED_SENTINEL',
+      }],
+      verificationPolicy: {
+        mode: 'OLD_CAPABILITY_BRIEF_VERIFICATION_POLICY_SENTINEL',
+      },
+      verificationBrief: {
+        summary: 'OLD_CAPABILITY_BRIEF_VERIFICATION_BRIEF_SENTINEL',
+      },
+    },
     capabilityEvolutionCompactSummary: {
       schemaVersion: 'sciforge.capability-evolution-compact-summary.v1',
       generatedAt: '2026-05-09T00:12:00.000Z',
@@ -70,7 +86,9 @@ const contextEnvelope = buildContextEnvelope(request, {
 });
 const scenarioFacts = contextEnvelope.scenarioFacts as Record<string, unknown>;
 const brokerBrief = scenarioFacts.capabilityBrokerBrief as Record<string, unknown>;
+const capabilityBrief = scenarioFacts.capabilityBrief as Record<string, unknown>;
 const brokerText = JSON.stringify(brokerBrief);
+const contextEnvelopeText = JSON.stringify(contextEnvelope);
 
 assert.equal(brokerBrief.schemaVersion, 'sciforge.agentserver.capability-broker-brief.v1');
 assert.equal(brokerBrief.contract, 'sciforge.capability-broker-output.v1');
@@ -85,6 +103,15 @@ assert.equal(brokerText.includes('Regenerate payload according to this capabilit
 assert.equal(brokerText.includes('LEDGER_GLUE_CODE_SENTINEL'), false, 'broker brief must not expand ledger glue code refs');
 assert.equal(brokerText.includes('LEDGER_FULL_LOG_SENTINEL'), false, 'broker brief must not expand full ledger logs');
 assert.equal(brokerText.includes('cel-agentserver-broker-smoke.stdout.log'), false, 'broker brief must not include log refs from compact ledger input');
+assert.equal(capabilityBrief.schemaVersion, 'sciforge.capability-brief.registry-projection.v1');
+assert.equal(capabilityBrief.source, 'unified-capability-registry');
+assert.match(JSON.stringify(capabilityBrief), /capabilityBrief\.projected_from_broker/);
+assert.match(JSON.stringify(capabilityBrief), /legacy_capabilityBrief\.ignored/);
+assert.match(JSON.stringify(capabilityBrief), /view\.report/);
+assert.equal(contextEnvelopeText.includes('OLD_CAPABILITY_BRIEF_SELECTED_SENTINEL'), false);
+assert.equal(contextEnvelopeText.includes('OLD_CAPABILITY_BRIEF_EXCLUDED_SENTINEL'), false);
+assert.equal(contextEnvelopeText.includes('OLD_CAPABILITY_BRIEF_VERIFICATION_POLICY_SENTINEL'), false);
+assert.equal(contextEnvelopeText.includes('OLD_CAPABILITY_BRIEF_VERIFICATION_BRIEF_SENTINEL'), false);
 
 const compactContext = buildAgentServerCompactContext(request, {
   contextEnvelope,

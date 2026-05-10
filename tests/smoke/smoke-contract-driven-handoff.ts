@@ -158,6 +158,7 @@ try {
     blocked: [],
     required: [],
   });
+  assertContinuityDecision(fresh, { decision: 'fresh', useContinuity: false, intentMode: 'fresh' });
   assert.equal(fresh.metadata.priorAttemptCount, 0);
   assertNoStaleRefs(fresh);
 
@@ -168,6 +169,7 @@ try {
     blocked: ['artifact:unrelated-prior'],
     required: ['artifact:previous-report'],
   });
+  assertContinuityDecision(continuation, { decision: 'continuity', useContinuity: true, intentMode: 'continuation' });
   assertNoStaleRefs(continuation);
 
   assertHandoff(repair, {
@@ -177,6 +179,7 @@ try {
     blocked: ['artifact:unrelated-prior'],
     required: ['attempt:failed-current', 'log:current-stderr'],
   });
+  assertContinuityDecision(repair, { decision: 'continuity', useContinuity: true, intentMode: 'repair' });
   const repairHandoff = handoff(repair);
   assert.equal(record(repairHandoff.repairContextPolicy).kind, 'repair-rerun');
   assert.equal(record(repairHandoff.repairContextPolicy).includeStdoutSummary, true);
@@ -209,6 +212,7 @@ async function runHandoffRequest(kind: 'fresh' | 'continuation' | 'repair', uiSt
     selectedComponentIds: ['report-viewer'],
     uiState: {
       ...uiState,
+      agentHarnessContinuityAuditEnabled: true,
       expectedArtifactTypes: ['research-report'],
       selectedComponentIds: ['report-viewer'],
     },
@@ -249,6 +253,30 @@ function assertHandoff(dispatch: Dispatch, expected: {
   assert.deepEqual(list(contextRefs.allowed), expected.allowed);
   assert.deepEqual(list(contextRefs.blocked), expected.blocked);
   assert.deepEqual(list(contextRefs.required), expected.required);
+}
+
+function assertContinuityDecision(dispatch: Dispatch, expected: {
+  decision: string;
+  useContinuity: boolean;
+  intentMode: string;
+}) {
+  const metadataDecision = record(dispatch.metadata.agentHarnessContinuityDecision);
+  const handoffDecision = record(handoff(dispatch).continuityDecision);
+  assert.deepEqual(handoffDecision, metadataDecision);
+  assert.equal(metadataDecision.schemaVersion, 'sciforge.agent-harness-continuity-decision.v1');
+  assert.equal(metadataDecision.shadowMode, true);
+  assert.equal(metadataDecision.decisionOwner, 'AgentServer');
+  assert.equal(metadataDecision.decision, expected.decision);
+  assert.equal(metadataDecision.useContinuity, expected.useContinuity);
+  const runtimeSignals = record(metadataDecision.runtimeSignals);
+  assert.equal(typeof runtimeSignals.recentExecutionRefCount, 'number');
+  assert.equal(typeof runtimeSignals.artifactCount, 'number');
+  const harnessSignals = record(metadataDecision.harnessSignals);
+  assert.equal(harnessSignals.intentMode, expected.intentMode);
+  assert.equal(typeof harnessSignals.sourceCallbackId, 'string');
+  const trace = record(metadataDecision.trace);
+  assert.equal(typeof trace.recentExecutionRefs, 'number');
+  assert.equal(typeof trace.artifacts, 'number');
 }
 
 function assertNoStaleRefs(dispatch: Dispatch) {

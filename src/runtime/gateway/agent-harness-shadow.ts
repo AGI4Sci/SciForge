@@ -1,6 +1,6 @@
 import type { GatewayRequest, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
-import { clipForAgentServerJson, errorMessage, hashJson, isRecord } from '../gateway-utils.js';
+import { clipForAgentServerJson, errorMessage, hashJson, isRecord, toRecordList } from '../gateway-utils.js';
 import { projectInteractionProgressEvent } from './interaction-progress-harness.js';
 import type { ProgressPlan } from '../../../packages/agent-harness/src/contracts.js';
 
@@ -9,6 +9,7 @@ const AGENT_HARNESS_SHADOW_SCHEMA_VERSION = 'sciforge.agent-harness-shadow.v1';
 const AGENT_HARNESS_HANDOFF_SCHEMA_VERSION = 'sciforge.agent-harness-handoff.v1';
 const AGENT_HARNESS_PROMPT_RENDER_SCHEMA_VERSION = 'sciforge.agent-harness-prompt-render.v1';
 const AGENT_HARNESS_PROGRESS_PLAN_PROJECTION_SCHEMA_VERSION = 'sciforge.agent-harness-progress-plan-projection.v1';
+const AGENT_HARNESS_CONTINUITY_DECISION_SCHEMA_VERSION = 'sciforge.agent-harness-continuity-decision.v1';
 const DEFAULT_AGENT_HARNESS_PROFILE_ID = 'balanced-default';
 
 interface AgentHarnessEvaluation {
@@ -117,6 +118,8 @@ export function agentHarnessHandoffMetadata(request: GatewayRequest) {
   const contextBudget = isRecord(budgetSummary.context) ? budgetSummary.context : undefined;
   const contextRefs = agentHarnessContextRefs(contract);
   const repairContextPolicy = isRecord(contract?.repairContextPolicy) ? contract.repairContextPolicy : undefined;
+  const continuityDecision = agentHarnessContinuityDecision(request);
+  const includeContinuityAudit = agentHarnessContinuityDecisionAuditEnabled(request);
   const decisionOwner = 'AgentServer';
   const harnessSummary = agentHarnessMetadataSummary({
     summary,
@@ -134,6 +137,7 @@ export function agentHarnessHandoffMetadata(request: GatewayRequest) {
     harnessBudgetSummary: budgetSummary,
     harnessDecisionOwner: decisionOwner,
     harnessSummary,
+    ...(includeContinuityAudit ? { agentHarnessContinuityDecision: continuityDecision } : {}),
     agentHarnessHandoff: {
       schemaVersion: AGENT_HARNESS_HANDOFF_SCHEMA_VERSION,
       shadowMode: true,
@@ -150,6 +154,64 @@ export function agentHarnessHandoffMetadata(request: GatewayRequest) {
       promptRenderPlan,
       budgetSummary,
       summary: harnessSummary,
+      ...(includeContinuityAudit ? { continuityDecision } : {}),
+    },
+  };
+}
+
+export function agentHarnessContinuityDecision(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const policy = isRecord(uiState.contextReusePolicy)
+    ? uiState.contextReusePolicy
+    : isRecord(uiState.contextIsolation)
+      ? uiState.contextIsolation
+      : undefined;
+  const policyMode = typeof policy?.mode === 'string' ? policy.mode : '';
+  const historyReuse = isRecord(policy?.historyReuse) ? policy.historyReuse : {};
+  const policyAllowsReuse = historyReuse.allowed === true || policyMode === 'continue' || policyMode === 'repair';
+  const recentRefCount = toRecordList(uiState.recentExecutionRefs).length;
+  const artifactCount = Array.isArray(request.artifacts) ? request.artifacts.length : 0;
+  const useContinuity = policyAllowsReuse || recentRefCount > 0 || artifactCount > 0;
+  const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : {};
+  const contract = isRecord(agentHarness.contract) ? agentHarness.contract : undefined;
+  const summary = isRecord(agentHarness.summary) ? agentHarness.summary : undefined;
+  const trace = isRecord(agentHarness.trace) ? agentHarness.trace : undefined;
+  const intentMode = stringField(contract?.intentMode) ?? stringField(summary?.intentMode);
+  const intentUseContinuity = intentMode === 'continuation' || intentMode === 'repair' || intentMode === 'audit';
+  const reasons = [
+    policyAllowsReuse ? 'reuse-policy' : undefined,
+    recentRefCount > 0 ? 'recent-execution-ref' : undefined,
+    artifactCount > 0 ? 'artifact-input' : undefined,
+  ].filter((reason): reason is string => Boolean(reason));
+  return {
+    schemaVersion: AGENT_HARNESS_CONTINUITY_DECISION_SCHEMA_VERSION,
+    shadowMode: true,
+    decisionOwner: 'AgentServer',
+    decision: useContinuity ? 'continuity' : 'fresh',
+    useContinuity,
+    reasons,
+    runtimeSignals: {
+      policyMode: policyMode || undefined,
+      policyAllowsReuse,
+      recentExecutionRefCount: recentRefCount,
+      artifactCount,
+    },
+    harnessSignals: {
+      profileId: stringField(agentHarness.profileId) ?? stringField(summary?.profileId) ?? stringField(uiState.harnessProfileId),
+      contractRef: stringField(agentHarness.contractRef) ?? stringField(summary?.contractRef),
+      traceRef: stringField(agentHarness.traceRef) ?? stringField(summary?.traceRef),
+      intentMode,
+      intentUseContinuity: intentMode ? intentUseContinuity : undefined,
+      sourceCallbackId: sourceCallbackIdForTraceField(trace, 'intentMode') ?? (intentMode ? 'harness.defaults.intentMode' : undefined),
+    },
+    trace: {
+      policy: policy ? {
+        source: isRecord(uiState.contextReusePolicy) ? 'request.uiState.contextReusePolicy' : 'request.uiState.contextIsolation',
+        mode: policyMode || undefined,
+        historyReuseAllowed: historyReuse.allowed === true,
+      } : undefined,
+      recentExecutionRefs: recentRefCount,
+      artifacts: artifactCount,
     },
   };
 }
@@ -256,6 +318,19 @@ function agentHarnessDisabled(request: GatewayRequest) {
     harness.enabled,
   ].find((value) => value !== undefined);
   return configured === false || ['0', 'false', 'off', 'disabled'].includes(String(configured).trim().toLowerCase());
+}
+
+function agentHarnessContinuityDecisionAuditEnabled(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const harness = isRecord(uiState.agentHarness) ? uiState.agentHarness : isRecord(uiState.harness) ? uiState.harness : {};
+  return [
+    uiState.agentHarnessContinuityDecisionEnabled,
+    uiState.agentHarnessContinuityAuditEnabled,
+    uiState.agentHarnessTraceContinuityDecision,
+    harness.continuityDecisionEnabled,
+    harness.continuityAuditEnabled,
+    harness.traceContinuityDecision,
+  ].some(isEnabledFlag);
 }
 
 function agentHarnessProfileId(request: GatewayRequest) {

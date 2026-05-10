@@ -169,8 +169,7 @@ export function ChatPanel({
   const visibleMessages = messages.slice(visibleMessageStart);
   const liveTokenUsage = latestTokenUsage(streamEvents);
   const worklogCounts = streamEventCounts(streamEvents);
-  const latestWorklogLine = formatProgressHeadline(latestProgressModel(streamEvents), latestRunningEvent(streamEvents));
-  const runningMessageContent = assistantDraft || latestWorklogLine || '正在规划、生成或执行 workspace task，过程日志默认折叠。';
+  const runningMessageContent = runningMessageContentFromStream(assistantDraft, streamEvents);
   const latestStreamEventAt = streamEvents.at(-1)?.createdAt;
   const contextWindowState = latestContextWindowState(streamEvents)
     ?? retainedContextWindowState
@@ -981,6 +980,11 @@ function runReadiness({
     severity: 'success' as const,
     message: `将使用 ${scenarioPackageRef?.id ?? 'built-in'} · ${skillPlanRef} · ${uiPlanRef} 运行。`,
   };
+}
+
+export function runningMessageContentFromStream(assistantDraft: string, streamEvents: AgentStreamEvent[]) {
+  const latestWorklogLine = formatProgressHeadline(latestProgressModel(streamEvents), latestRunningEvent(streamEvents));
+  return assistantDraft || latestWorklogLine || '正在规划、生成或执行 workspace task，过程日志默认折叠。';
 }
 
 export function runIdForMessage(

@@ -139,6 +139,9 @@ assert.equal(repairMetrics.validationFailures, 1, 'repair fixture should expose 
 assert.equal(repairMetrics.repairAttempts, 2, 'repair fixture should expose repair attempts');
 assert.equal(budgetMetrics.toolCallBudget, 0, 'budget exhaustion fixture should keep tool calls at zero');
 assert.equal(budgetMetrics.downloadByteBudget, 0, 'budget exhaustion fixture should keep downloads at zero');
+assert.equal(researchMetrics.verificationIntensity, 'strict', 'research replay should preserve strict verification policy');
+assert.equal(fastMetrics.progressInitialStatus, 'Answering', 'fast replay should preserve profile progress status');
+assert.ok(researchMetrics.progressPhaseCount >= 3, 'replay metrics should preserve progress phases for comparison');
 
 console.log(`[ok] agent harness replay/metrics/golden traces covered offline: ${JSON.stringify(replaySummaries.map((summary) => ({
   id: summary.id,

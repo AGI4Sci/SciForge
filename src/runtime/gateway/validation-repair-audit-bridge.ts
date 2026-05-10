@@ -53,6 +53,12 @@ export interface ValidationRepairAuditChain {
   runtimeVerificationResults: RuntimeVerificationResult[];
 }
 
+export interface ValidationRepairAuditPayloadRef {
+  validationDecision: ValidationDecision;
+  repairDecision: RepairDecision;
+  auditRecord: AuditRecord;
+}
+
 export interface ValidationRepairAuditAttemptRef {
   kind: 'validation-repair-audit';
   ref: string;
@@ -130,6 +136,32 @@ export function createValidationRepairAuditChain(input: ValidationRepairAuditBri
   return { validation, repair, audit, runtimeVerificationResults };
 }
 
+export function validationRepairAuditPayloadRefFromChain(chain: ValidationRepairAuditChain): ValidationRepairAuditPayloadRef {
+  return {
+    validationDecision: chain.validation,
+    repairDecision: chain.repair,
+    auditRecord: chain.audit,
+  };
+}
+
+export function attachValidationRepairAuditChainToPayload<T>(payload: T, chain: ValidationRepairAuditChain): T {
+  if (!isRecord(payload)) return payload;
+  const chainRef = validationRepairAuditPayloadRefFromChain(chain);
+  const refs = isRecord(payload.refs) ? payload.refs : {};
+  return {
+    ...payload,
+    refs: attachValidationRepairAuditChainToRefs(refs, chainRef),
+    executionUnits: Array.isArray(payload.executionUnits)
+      ? payload.executionUnits.map((unit) => isRecord(unit)
+        ? {
+            ...unit,
+            refs: attachValidationRepairAuditChainToRefs(isRecord(unit.refs) ? unit.refs : {}, chainRef),
+          }
+        : unit)
+      : payload.executionUnits,
+  } as T;
+}
+
 export function validationRepairAuditAttemptMetadataFromPayload(value: unknown): ValidationRepairAuditAttemptMetadata | undefined {
   const chains = validationRepairAuditChainsFromPayload(value);
   if (!chains.length) return undefined;
@@ -153,6 +185,17 @@ export function mergeValidationRepairAuditAttemptMetadata(
     ...(next?.auditRecords ?? []),
   ]);
   return auditRefs.length || auditRecords.length ? { auditRefs, auditRecords } : undefined;
+}
+
+function attachValidationRepairAuditChainToRefs(
+  refs: Record<string, unknown>,
+  chainRef: ValidationRepairAuditPayloadRef,
+): Record<string, unknown> {
+  if (isRecord(refs.validationRepairAudit)) return refs;
+  return {
+    ...refs,
+    validationRepairAudit: chainRef,
+  };
 }
 
 function normalizeValidationSubject(
@@ -231,13 +274,18 @@ function validationRepairAuditChainsFromPayload(value: unknown) {
     repairDecision?: RepairDecision;
     auditRecord?: AuditRecord;
   }> = [];
+  const pushChain = (chain: unknown) => {
+    if (Array.isArray(chain)) {
+      for (const entry of chain) pushChain(entry);
+      return;
+    }
+    if (isRecord(chain)) chains.push(chain as typeof chains[number]);
+  };
   const visit = (candidate: unknown) => {
     if (!isRecord(candidate)) return;
     const refs = isRecord(candidate.refs) ? candidate.refs : {};
-    const directChain = isRecord(candidate.validationRepairAudit) ? candidate.validationRepairAudit : undefined;
-    const refsChain = isRecord(refs.validationRepairAudit) ? refs.validationRepairAudit : undefined;
-    if (directChain) chains.push(directChain as typeof chains[number]);
-    if (refsChain) chains.push(refsChain as typeof chains[number]);
+    pushChain(candidate.validationRepairAudit);
+    pushChain(refs.validationRepairAudit);
   };
   visit(value);
   const executionUnits = isRecord(value) && Array.isArray(value.executionUnits) ? value.executionUnits : [];

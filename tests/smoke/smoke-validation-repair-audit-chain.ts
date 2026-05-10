@@ -161,6 +161,38 @@ const chains = [
   }),
 ];
 
+const repairRerunAcceptedChain = createValidationRepairAuditChain({
+  chainId: 'repair-rerun-1',
+  subject: {
+    kind: 'repair-rerun-result',
+    id: 'repair-rerun-1',
+    capabilityId: 'agentserver.generated-task',
+    contractId: 'sciforge.repair-rerun-result.v1',
+    completedPayloadRef: 'run:generated-1-attempt-2/output.json',
+    generatedTaskRef: '.sciforge/tasks/generated-task.py',
+    artifactRefs: ['artifact:repaired-report'],
+    currentRefs: ['current:user-request'],
+  },
+  findingProjections: [{
+    source: 'work-evidence',
+    kind: 'work-evidence',
+    status: 'done',
+    contractId: 'sciforge.repair-rerun-result.v1',
+    capabilityId: 'agentserver.generated-task',
+    relatedRefs: ['run:generated-1-attempt-2/output.json'],
+  }],
+  relatedRefs: ['run:generated-1-attempt-2/output.json', '.sciforge/tasks/generated-task.py'],
+  repairBudget: {
+    maxAttempts: 1,
+    remainingAttempts: 0,
+    maxSupplementAttempts: 0,
+    remainingSupplementAttempts: 0,
+  },
+  sinkRefs: ['appendTaskAttempt:repair-rerun-1'],
+  telemetrySpanRefs: ['span:repair-rerun:repair-rerun-1', 'span:repair-decision:repair-rerun-1'],
+  createdAt,
+});
+
 for (const chain of chains) {
   assert.equal(chain.validation.contract, VALIDATION_REPAIR_AUDIT_CHAIN_CONTRACT_ID);
   assert.equal(chain.repair.contract, VALIDATION_REPAIR_AUDIT_CHAIN_CONTRACT_ID);
@@ -198,6 +230,12 @@ assert.ok(chains[4].audit.relatedRefs.includes('verification:policy:runtime-veri
 assert.ok(chains[4].audit.recoverActions.includes('preserve failed verification gate result in audit'));
 assert.deepEqual(chains[4].audit.sinkRefs, ['appendTaskAttempt:verification-gate-1']);
 assert.deepEqual(chains[4].audit.telemetrySpanRefs, ['span:verification-gate:verification-gate-1', 'span:repair-decision:verification-gate-1']);
+assert.equal(repairRerunAcceptedChain.validation.subject.kind, 'repair-rerun-result');
+assert.equal(repairRerunAcceptedChain.validation.status, 'pass');
+assert.equal(repairRerunAcceptedChain.repair.action, 'none');
+assert.equal(repairRerunAcceptedChain.audit.outcome, 'accepted');
+assert.equal(repairRerunAcceptedChain.audit.contractId, 'sciforge.repair-rerun-result.v1');
+assert.deepEqual(repairRerunAcceptedChain.audit.telemetrySpanRefs, ['span:repair-rerun:repair-rerun-1', 'span:repair-decision:repair-rerun-1']);
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-validation-repair-audit-real-'));
 try {

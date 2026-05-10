@@ -86,6 +86,7 @@ try {
   const research = await runHarnessRequest('research-grade');
   const progressOptIn = await runHarnessRequest('balanced-default', {
     agentHarnessProgressPlanEnabled: true,
+    agentHarnessContinuityAuditEnabled: true,
   });
 
   assert.equal(first.result.message, 'Harness shadow smoke completed.');
@@ -101,6 +102,7 @@ try {
   assert.equal(dispatches[0]?.metadata.harnessContractRef, first.summary.contractRef);
   assert.equal(dispatches[0]?.metadata.harnessTraceRef, first.summary.traceRef);
   assert.equal(dispatches[0]?.metadata.harnessDecisionOwner, 'AgentServer');
+  assert.equal(dispatches[0]?.metadata.agentHarnessContinuityDecision, undefined, 'continuity decision audit should stay off by default');
   assert.ok(isRecord(dispatches[0]?.metadata.harnessBudgetSummary), 'harness budget summary should be attached to payload metadata');
   assert.ok(isRecord(dispatches[0]?.metadata.agentHarnessHandoff), 'structured harness handoff metadata should be attached');
   const handoff = dispatches[0]?.metadata.agentHarnessHandoff as Record<string, unknown>;
@@ -132,6 +134,14 @@ try {
   assert.equal(progressAudit.schemaVersion, 'sciforge.agent-harness-progress-plan-projection.v1');
   assert.equal(progressAudit.contractRef, progressOptIn.summary.contractRef);
   assert.equal(progressAudit.source, 'request.uiState.agentHarness.contract.progressPlan');
+  const continuityDecision = dispatches[4]?.metadata.agentHarnessContinuityDecision as Record<string, unknown>;
+  assert.equal(continuityDecision.schemaVersion, 'sciforge.agent-harness-continuity-decision.v1');
+  assert.equal(continuityDecision.shadowMode, true);
+  assert.equal(continuityDecision.decisionOwner, 'AgentServer');
+  assert.equal(continuityDecision.decision, 'fresh');
+  assert.equal(continuityDecision.useContinuity, false);
+  const continuityHandoff = dispatches[4]?.metadata.agentHarnessHandoff as Record<string, unknown>;
+  assert.deepEqual(continuityHandoff.continuityDecision, continuityDecision);
   const uiProgress = progressModelFromEvent(projected as unknown as Parameters<typeof progressModelFromEvent>[0]);
   assert.ok(String(projectedRaw.phase || ''), 'projected progress event should expose a contract phase');
   assert.ok(String(uiProgress?.phase || ''), 'UI progress should preserve a visible phase');

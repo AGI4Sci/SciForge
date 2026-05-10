@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
+import { readTaskAttempts } from '../../src/runtime/task-attempt-history.js';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-agentserver-repair-'));
 await writeFile(join(workspace, 'matrix.csv'), [
@@ -55,7 +56,7 @@ const server = createServer(async (req, res) => {
   }
   const body = await readJson(req);
   const metadata = isRecord(body.input) && isRecord(body.input.metadata) ? body.input.metadata : {};
-  if (metadata.purpose === 'workspace-task-generation') {
+  if (metadata.purpose === 'workspace-task-generation' || metadata.purpose === 'workspace-task-generation-inline') {
     sendRunResponse(res, req.url, {
       ok: true,
       data: {
@@ -78,7 +79,7 @@ const server = createServer(async (req, res) => {
     return;
   }
   const codeRef = typeof metadata.codeRef === 'string' ? metadata.codeRef : '';
-  assert.ok(codeRef.startsWith('.sciforge/tasks/'));
+  assert.ok(codeRef.startsWith('.sciforge/tasks/'), `expected repair metadata.codeRef to point at generated task, got ${codeRef || '<missing>'}`);
   const taskPath = join(workspace, codeRef);
   const source = await readFile(taskPath, 'utf8');
   const patched = source
@@ -120,6 +121,18 @@ try {
   assert.equal(result.executionUnits[0].parentAttempt, 1);
   assert.match(String(result.executionUnits[0].diffRef || ''), /^\.sciforge\/task-diffs\/(?:generated-)?omics-/);
   assert.match(String(result.reasoningTrace), /AgentServer repair run/);
+  const repairRerunAudit = (result.executionUnits[0].refs as {
+    validationRepairAudit?: {
+      validationDecision?: { subject?: { kind?: string }; status?: string };
+      repairDecision?: { action?: string };
+      auditRecord?: { outcome?: string; contractId?: string };
+    };
+  } | undefined)?.validationRepairAudit;
+  assert.equal(repairRerunAudit?.validationDecision?.subject?.kind, 'repair-rerun-result');
+  assert.equal(repairRerunAudit?.validationDecision?.status, 'pass');
+  assert.equal(repairRerunAudit?.repairDecision?.action, 'none');
+  assert.equal(repairRerunAudit?.auditRecord?.outcome, 'accepted');
+  assert.equal(repairRerunAudit?.auditRecord?.contractId, 'sciforge.repair-rerun-result.v1');
 
   const attemptFiles = await readdir(join(workspace, '.sciforge', 'task-attempts'));
   assert.equal(attemptFiles.length, 1);
@@ -129,6 +142,13 @@ try {
   assert.equal(attemptHistory.attempts[1].status, 'done');
   assert.equal(attemptHistory.attempts[1].parentAttempt, 1);
   assert.ok(attemptHistory.attempts[1].diffRef);
+  const enrichedAttempts = await readTaskAttempts(workspace, attemptHistory.attempts[0].id) as Array<{
+    refs?: {
+      validationRepairAudit?: Array<{ subject?: { kind?: string }; outcome?: string }>;
+    };
+  }>;
+  assert.equal(enrichedAttempts[1]?.refs?.validationRepairAudit?.[0]?.subject?.kind, 'repair-rerun-result');
+  assert.equal(enrichedAttempts[1]?.refs?.validationRepairAudit?.[0]?.outcome, 'accepted');
 
   console.log('[ok] agentserver repair smoke patches task code and reruns self-healed attempt');
 } finally {

@@ -105,6 +105,11 @@ export interface CapabilityEvolutionSummaryOptions extends CapabilityEvolutionLe
   now?: () => Date;
 }
 
+interface CapabilityEvolutionLedgerEntry {
+  record: CapabilityEvolutionRecord;
+  lineNumber: number;
+}
+
 const PROMOTION_PROPOSAL_MIN_SUPPORT = 2;
 const CAPABILITY_EVOLUTION_RECORD_STATUSES: CapabilityEvolutionRecordStatus[] = [
   'succeeded',
@@ -292,17 +297,8 @@ export async function appendValidationRepairAuditSinkRecordsToCapabilityEvolutio
 export async function readCapabilityEvolutionRecords(
   options: CapabilityEvolutionLedgerReadOptions,
 ): Promise<CapabilityEvolutionRecord[]> {
-  const ledgerPath = resolveCapabilityEvolutionLedgerPath(options);
-  const raw = await readFile(ledgerPath, 'utf8').catch((error: NodeJS.ErrnoException) => {
-    if (error.code === 'ENOENT') return '';
-    throw error;
-  });
-  const records = raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as CapabilityEvolutionRecord);
-  return typeof options.limit === 'number' && options.limit >= 0 ? records.slice(-options.limit) : records;
+  const { entries } = await readCapabilityEvolutionLedgerEntries(options);
+  return entries.map((entry) => entry.record);
 }
 
 export async function readCapabilityEvolutionLedgerFacts(
@@ -310,8 +306,8 @@ export async function readCapabilityEvolutionLedgerFacts(
 ): Promise<CapabilityEvolutionLedgerFact[]> {
   const ledgerPath = resolveCapabilityEvolutionLedgerPath(options);
   const sourceRef = toWorkspaceRef(options.workspacePath, ledgerPath);
-  const records = await readCapabilityEvolutionRecords(options);
-  return records.map((record, index) => capabilityEvolutionLedgerFactFromRecord(record, `${sourceRef}#L${index + 1}`));
+  const { entries } = await readCapabilityEvolutionLedgerEntries(options);
+  return entries.map((entry) => capabilityEvolutionLedgerFactFromRecord(entry.record, `${sourceRef}#L${entry.lineNumber}`));
 }
 
 export function capabilityEvolutionLedgerFactFromRecord(
@@ -343,14 +339,18 @@ export async function buildCapabilityEvolutionCompactSummary(
   options: CapabilityEvolutionSummaryOptions,
 ): Promise<CapabilityEvolutionCompactSummary> {
   const ledgerPath = resolveCapabilityEvolutionLedgerPath(options);
-  const records = await readCapabilityEvolutionRecords(options);
   const sourceRef = toWorkspaceRef(options.workspacePath, ledgerPath);
-  const compactRecords = records.map((record, index) => compactCapabilityEvolutionRecord(record, `${sourceRef}#L${index + 1}`));
+  const { allEntries } = await readCapabilityEvolutionLedgerEntries(options);
+  const records = allEntries.map((entry) => entry.record);
+  const compactRecords = allEntries.map((entry) => compactCapabilityEvolutionRecord(entry.record, `${sourceRef}#L${entry.lineNumber}`));
   const statusCounts: Partial<Record<CapabilityEvolutionRecordStatus, number>> = {};
   for (const record of records) {
     statusCounts[record.finalStatus] = (statusCounts[record.finalStatus] ?? 0) + 1;
   }
   const compactRecordsWithProposals = applyCapabilityEvolutionPromotionProposals(records, compactRecords);
+  const recentRecords = typeof options.limit === 'number' && options.limit >= 0
+    ? compactRecordsWithProposals.slice(-options.limit)
+    : compactRecordsWithProposals;
   return {
     schemaVersion: CAPABILITY_EVOLUTION_COMPACT_SUMMARY_CONTRACT_ID,
     generatedAt: (options.now ?? (() => new Date()))().toISOString(),
@@ -360,8 +360,30 @@ export async function buildCapabilityEvolutionCompactSummary(
     fallbackRecordCount: records.filter(isFallbackRecord).length,
     repairRecordCount: records.filter((record) => record.repairAttempts.length > 0 || record.finalStatus.startsWith('repair-')).length,
     promotionCandidates: compactRecordsWithProposals.filter((record) => record.promotionCandidate?.eligible),
-    recentRecords: compactRecordsWithProposals,
+    recentRecords,
   };
+}
+
+async function readCapabilityEvolutionLedgerEntries(
+  options: CapabilityEvolutionLedgerReadOptions,
+): Promise<{ allEntries: CapabilityEvolutionLedgerEntry[]; entries: CapabilityEvolutionLedgerEntry[] }> {
+  const ledgerPath = resolveCapabilityEvolutionLedgerPath(options);
+  const raw = await readFile(ledgerPath, 'utf8').catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return '';
+    throw error;
+  });
+  const allEntries = raw
+    .split(/\r?\n/)
+    .map((line, index) => ({ line: line.trim(), lineNumber: index + 1 }))
+    .filter((entry) => Boolean(entry.line))
+    .map((entry) => ({
+      record: JSON.parse(entry.line) as CapabilityEvolutionRecord,
+      lineNumber: entry.lineNumber,
+    }));
+  const entries = typeof options.limit === 'number' && options.limit >= 0
+    ? allEntries.slice(-options.limit)
+    : allEntries;
+  return { allEntries, entries };
 }
 
 export function compactCapabilityEvolutionRecord(

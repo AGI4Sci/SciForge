@@ -63,6 +63,14 @@ export function assertReplayRecord(record: HarnessReplayRecord): HarnessContract
   assert.deepEqual(replayedContract, record.finalContract, `${record.id}: replayed contract differs from final contract`);
   assert.ok(record.trace.stages.length > 0, `${record.id}: replay requires at least one trace stage`);
   assert.ok(Object.keys(record.refs).length > 0, `${record.id}: replay record should pin fixture refs`);
+  assert.ok(record.finalContract.verificationPolicy.intensity, `${record.id}: replay must preserve verification policy`);
+  assert.ok(record.finalContract.progressPlan.initialStatus, `${record.id}: replay must preserve progress plan`);
+  assert.ok(
+    (record.finalContract.progressPlan.phaseNames?.length ?? record.finalContract.progressPlan.visibleMilestones.length) > 0,
+    `${record.id}: replay must preserve at least one progress phase or milestone`,
+  );
+  assert.equal(record.metrics?.verificationIntensity, record.finalContract.verificationPolicy.intensity);
+  assert.equal(record.metrics?.progressInitialStatus, record.finalContract.progressPlan.initialStatus);
   return replayedContract;
 }
 
