@@ -55,6 +55,56 @@ export const repairAfterValidationFailureFixture: HarnessExperimentFixture = {
   },
 };
 
+export const fileGroundedSummaryFixture: HarnessExperimentFixture = {
+  id: 'file-grounded-summary',
+  description: 'File-grounded summarization that must stay inside provided workspace refs.',
+  input: {
+    requestId: 't124-file-grounded-summary',
+    intentMode: 'file-grounded',
+    prompt: 'Summarize the uploaded methods notes and list any missing experimental metadata.',
+    contextRefs: ['file:methods-notes.md', 'artifact:sample-metadata-table'],
+    requiredContextRefs: ['file:methods-notes.md'],
+    candidateCapabilities: [
+      {
+        kind: 'skill',
+        id: 'workspace.summary',
+        manifestRef: 'capability:workspace.summary@fixture',
+        score: 0.82,
+        reasons: ['summary must be grounded in supplied workspace files'],
+      },
+      {
+        kind: 'verifier',
+        id: 'artifact.reference-check',
+        manifestRef: 'capability:artifact.reference-check@fixture',
+        score: 0.74,
+        reasons: ['summary should preserve file and artifact refs'],
+      },
+    ],
+  },
+};
+
+export const silentStreamCancelFixture: HarnessExperimentFixture = {
+  id: 'silent-stream-cancel',
+  description: 'Interactive run with stream silence and a user cancel signal.',
+  input: {
+    requestId: 't124-silent-stream-cancel',
+    intentMode: 'interactive',
+    prompt: 'Stop the stalled run and report the last durable state.',
+    contextRefs: ['run:stalled-agent-42', 'trace:stream-heartbeats'],
+    requiredContextRefs: ['run:stalled-agent-42'],
+    conversationSignals: {
+      streamSilence: {
+        lastEventAgeMs: 65000,
+        silenceTimeoutMs: 30000,
+      },
+      cancelRequested: {
+        requestedBy: 'user',
+        reason: 'stalled stream',
+      },
+    },
+  },
+};
+
 export const capabilityBudgetExhaustionFixture: HarnessExperimentFixture = {
   id: 'capability-budget-exhaustion',
   description: 'Request with exhausted capability budget and a blocked private ref.',
@@ -108,5 +158,7 @@ export const capabilityBudgetExhaustionFixture: HarnessExperimentFixture = {
 export const harnessExperimentFixtures = [
   freshResearchFixture,
   repairAfterValidationFailureFixture,
+  fileGroundedSummaryFixture,
+  silentStreamCancelFixture,
   capabilityBudgetExhaustionFixture,
 ] as const;

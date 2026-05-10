@@ -12,6 +12,7 @@ import type {
   HarnessRuntime,
   HarnessStage,
   HarnessTrace,
+  ProgressDecision,
   PromptDirective,
   RepairContextPolicy,
   SideEffectAllowance,
@@ -135,7 +136,7 @@ function contractFromDefaults(profile: HarnessProfile, input: HarnessInput): Har
     toolBudget: { ...defaults.toolBudget, ...tightenToolBudget(defaults.toolBudget, input.budgetOverrides?.toolBudget) },
     verificationPolicy: { ...defaults.verificationPolicy },
     repairContextPolicy: { ...defaults.repairContextPolicy },
-    progressPlan: { ...defaults.progressPlan, visibleMilestones: [...defaults.progressPlan.visibleMilestones] },
+    progressPlan: cloneProgressPlan(defaults.progressPlan),
     promptDirectives: sortPromptDirectives(defaults.promptDirectives),
   };
   return normalizeContract(base);
@@ -312,12 +313,66 @@ function mergeRepair(current: RepairContextPolicy, incoming: Partial<RepairConte
   };
 }
 
-function mergeProgress(current: HarnessContract['progressPlan'], incoming: Partial<HarnessContract['progressPlan']>) {
+function mergeProgress(current: HarnessContract['progressPlan'], incoming: ProgressDecision): HarnessContract['progressPlan'] {
+  const baseSilencePolicy = current.silencePolicy ?? {
+    timeoutMs: current.silenceTimeoutMs,
+    decision: 'visible-status' as const,
+    status: current.initialStatus,
+    maxRetries: 0,
+    auditRequired: true,
+  };
+  const baseBackgroundPolicy = current.backgroundPolicy ?? {
+    enabled: current.backgroundContinuation,
+    status: 'Continuing in background',
+    notifyOnCompletion: true,
+  };
+  const baseCancelPolicy = current.cancelPolicy ?? {
+    allowUserCancel: true,
+    userCancellation: 'user-cancelled' as const,
+    systemAbort: 'system-aborted' as const,
+    timeout: 'timeout' as const,
+    backendError: 'backend-error' as const,
+  };
+  const baseInteractionPolicy = current.interactionPolicy ?? {
+    clarification: 'allow' as const,
+    humanApproval: 'allow' as const,
+    guidanceQueue: 'allow' as const,
+  };
+  const incomingSilencePolicy = incoming.silencePolicy ?? {};
+  const incomingBackgroundPolicy = incoming.backgroundPolicy ?? {};
+  const incomingCancelPolicy = incoming.cancelPolicy ?? {};
+  const incomingInteractionPolicy = incoming.interactionPolicy ?? {};
+
   return {
     initialStatus: incoming.initialStatus ?? current.initialStatus,
     visibleMilestones: sortedUnique([...current.visibleMilestones, ...(incoming.visibleMilestones ?? [])]),
+    phaseNames: orderedUnique([...(current.phaseNames ?? current.visibleMilestones), ...(incoming.phaseNames ?? incoming.visibleMilestones ?? [])]),
     silenceTimeoutMs: minDefined(current.silenceTimeoutMs, incoming.silenceTimeoutMs),
     backgroundContinuation: current.backgroundContinuation || incoming.backgroundContinuation === true,
+    silencePolicy: {
+      timeoutMs: minDefined(baseSilencePolicy.timeoutMs, incoming.silencePolicy?.timeoutMs),
+      decision: incomingSilencePolicy.decision ?? baseSilencePolicy.decision,
+      status: incomingSilencePolicy.status ?? baseSilencePolicy.status,
+      maxRetries: incomingSilencePolicy.maxRetries ?? baseSilencePolicy.maxRetries,
+      auditRequired: incomingSilencePolicy.auditRequired ?? baseSilencePolicy.auditRequired,
+    },
+    backgroundPolicy: {
+      enabled: incomingBackgroundPolicy.enabled ?? baseBackgroundPolicy.enabled,
+      status: incomingBackgroundPolicy.status ?? baseBackgroundPolicy.status,
+      notifyOnCompletion: incomingBackgroundPolicy.notifyOnCompletion ?? baseBackgroundPolicy.notifyOnCompletion,
+    },
+    cancelPolicy: {
+      allowUserCancel: incomingCancelPolicy.allowUserCancel ?? baseCancelPolicy.allowUserCancel,
+      userCancellation: incomingCancelPolicy.userCancellation ?? baseCancelPolicy.userCancellation,
+      systemAbort: incomingCancelPolicy.systemAbort ?? baseCancelPolicy.systemAbort,
+      timeout: incomingCancelPolicy.timeout ?? baseCancelPolicy.timeout,
+      backendError: incomingCancelPolicy.backendError ?? baseCancelPolicy.backendError,
+    },
+    interactionPolicy: {
+      clarification: incomingInteractionPolicy.clarification ?? baseInteractionPolicy.clarification,
+      humanApproval: incomingInteractionPolicy.humanApproval ?? baseInteractionPolicy.humanApproval,
+      guidanceQueue: incomingInteractionPolicy.guidanceQueue ?? baseInteractionPolicy.guidanceQueue,
+    },
   };
 }
 
@@ -344,12 +399,25 @@ function normalizeContract(contract: HarnessContract): HarnessContract {
     progressPlan: {
       ...contract.progressPlan,
       visibleMilestones: sortedUnique(contract.progressPlan.visibleMilestones),
+      phaseNames: orderedUnique(contract.progressPlan.phaseNames ?? contract.progressPlan.visibleMilestones),
     },
   };
 }
 
 function cloneContract(contract: HarnessContract): HarnessContract {
   return JSON.parse(JSON.stringify(contract)) as HarnessContract;
+}
+
+function cloneProgressPlan(progressPlan: HarnessContract['progressPlan']): HarnessContract['progressPlan'] {
+  return {
+    ...progressPlan,
+    visibleMilestones: [...progressPlan.visibleMilestones],
+    phaseNames: progressPlan.phaseNames ? [...progressPlan.phaseNames] : undefined,
+    silencePolicy: progressPlan.silencePolicy ? { ...progressPlan.silencePolicy } : undefined,
+    backgroundPolicy: progressPlan.backgroundPolicy ? { ...progressPlan.backgroundPolicy } : undefined,
+    cancelPolicy: progressPlan.cancelPolicy ? { ...progressPlan.cancelPolicy } : undefined,
+    interactionPolicy: progressPlan.interactionPolicy ? { ...progressPlan.interactionPolicy } : undefined,
+  };
 }
 
 function sortCandidates<T extends { id: string; kind: string; score: number }>(candidates: T[]): T[] {
@@ -370,6 +438,10 @@ function sortPromptDirectives(directives: PromptDirective[]): PromptDirective[] 
 
 function sortedUnique(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b));
+}
+
+function orderedUnique(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
 }
 
 function minDefined(current: number, incoming?: number): number {

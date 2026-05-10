@@ -85,7 +85,7 @@ Todo：
 
 状态：进行中；目标是让所有可用能力都通过统一 `CapabilityManifest`、`HarnessCandidate`、`CapabilityBudget` 被 broker 和 harness 治理，避免 package skills、tool catalog、observe/action loop 与 AgentServer generation fallback 平行存在。
 
-进展：第一阶段统一候选图已落地为 shadow/helper 层。`projectCapabilityManifestsToHarnessCandidates()` 可以把 heterogeneous `CapabilityManifest` 投影为 `HarnessCandidate`，包含 `kind/id/manifestRef/score/reasons/providerAvailability/budget/fallbackCandidateIds`，并输出 provider/blocked/budget gate audit；当前不改变 broker 真实选择路径。
+进展：第一阶段统一候选图已落地为 shadow/helper 层。`projectCapabilityManifestsToHarnessCandidates()` 可以把 heterogeneous `CapabilityManifest` 投影为 `HarnessCandidate`，包含 `kind/id/manifestRef/score/reasons/providerAvailability/budget/fallbackCandidateIds`，并输出 provider/blocked/budget gate audit；当前不改变 broker 真实选择路径。第二阶段 broker input path 已接收 harness `skillHints`、`blockedCapabilities`、`toolBudget`、`verificationPolicy` 和 provider availability，并把对应信号写入 compact brief/audit，schema/examples/repair hints 仍保持 lazy expansion。
 
 Todo：
 
@@ -94,21 +94,22 @@ Todo：
 - [x] 定义 `HarnessCandidate`：`kind/id/manifestRef/score/reasons/providerAvailability/budget/fallbackCandidateIds`。
 - [ ] 将 `scoreSkillByPackagePolicy`、tool package manifests、observe provider selection、Computer Use action plan 统一包装为默认 candidate callbacks。
 - [ ] 将 `summarizeToolsForAgentServer()` 改为按 harness/capability budget 输出 budgeted tool briefs，不再默认空数组。
-- [ ] Broker 输入接收 `skillHints`、`blockedCapabilities`、`CapabilityBudget`、`verificationPolicy`、provider availability 和 ledger history。
+- [x] Broker 输入接收 `skillHints`、`blockedCapabilities`、`CapabilityBudget`、`verificationPolicy`、provider availability 和 ledger history。
 - [ ] 每次 capability invocation 写入 `budgetDebits` 到 executionUnit/workEvidence/audit。
 - [x] 增加 `smoke:unified-capability-graph`：同一 prompt 下 skill/tool/observe/action/verifier 都能作为候选进入 broker audit，且安全/配置/预算 gate 生效。
+- [x] 增加 `smoke:capability-broker-harness-input`：harness hints/budget/provider/verification policy 进入 broker compact audit，blocked capability 不能绕过 gate。
 
 验收标准：
 
 - [ ] 没有第二套 skill/tool selection 真相源。
 - [x] 用户显式选择能力只提高候选优先级，不能绕过 safety/config/budget gate。
-- [ ] Broker 默认仍只暴露 compact brief；schema/examples/repair hints 继续 lazy expansion。
+- [x] Broker 默认仍只暴露 compact brief；schema/examples/repair hints 继续 lazy expansion。
 
 ### T128 Contract-driven Handoff：context、prompt、AgentServer payload 全部由 contract 渲染
 
 状态：进行中；目标是把 fresh/continuation、workspace read policy、current refs、repair retry、tool-use policy 等散落 prompt/metadata 规则迁入 `HarnessContract`，prompt builder 只做 deterministic rendering。
 
-进展：第一阶段 metadata-only handoff 已落地。AgentServer dispatch payload 不再把 harness contract/prompt directives 内联进自然语言 prompt，而是携带 `harnessProfileId`、`harnessContractRef`、`harnessTraceRef`、budget summary、decision owner 和结构化 `agentHarnessHandoff` 元数据，作为后续 deterministic renderer 的稳定交接面。
+进展：第一阶段 metadata-only handoff 已落地。AgentServer dispatch payload 不再把 harness contract/prompt directives 内联进自然语言 prompt，而是携带 `harnessProfileId`、`harnessContractRef`、`harnessTraceRef`、budget summary、decision owner 和结构化 `agentHarnessHandoff` 元数据，作为后续 deterministic renderer 的稳定交接面。第二阶段补充了 `uiState.agentHarnessInput` 到 shadow contract 的 refs/intent 桥接，并新增离线 `smoke:contract-driven-handoff` 覆盖 fresh/continuation/repair 三类 handoff refs。
 
 Todo：
 
@@ -117,8 +118,9 @@ Todo：
 - [ ] `buildAgentServerGenerationPrompt` 只渲染 `promptDirectives`、current-turn snapshot、selected contract refs，不再新增行为治理散文。
 - [ ] `buildAgentServerRepairPrompt` 只渲染 `repairContextPolicy` 允许的失败 evidence、validator findings 和 recover actions。
 - [x] AgentServer payload metadata 带 `harnessProfileId`、`harnessContractRef`、`harnessTraceRef`、budget summary、decision owner。
+- [x] 增加第一阶段 `smoke:contract-driven-handoff`：mock AgentServer 捕获真实 dispatch，验证 fresh 不泄漏旧 attempts/logs，continuation/repair 携带 contract refs/repair policy。
 - [ ] 将 backend selection、fresh/continuity prompt rule、context/rate-limit recovery、stream guard 统一通过 harness hook 输出结构化决策。
-- [ ] 增加 `smoke:contract-driven-handoff`：fresh request 不携带旧 attempts/logs；continuation/repair request 只携带 contract 允许 refs；prompt 中所有策略句都有 `sourceCallbackId`。
+- [ ] 扩展 `smoke:contract-driven-handoff` 到 deterministic renderer：prompt 中所有策略句都有 `sourceCallbackId`。
 
 验收标准：
 
@@ -149,17 +151,19 @@ Todo：
 
 ### T126 Interaction and Progress Harness：用户可见进度、澄清、取消统一治理
 
-状态：待办；目标是让 UI 继续保持 thin shell，但具备清晰的长任务进度、沉默等待、澄清、人工确认、取消和后台完成体验。UI 只消费 structured stream events，不做语义路由。
+状态：进行中；目标是让 UI 继续保持 thin shell，但具备清晰的长任务进度、沉默等待、澄清、人工确认、取消和后台完成体验。UI 只消费 structured stream events，不做语义路由。
+
+进展：第一阶段 contract/projection MVP 已完成。`ProgressPlan` 已扩展 silence/background/cancel/interaction policy，新增标准 `HarnessInteractionProgressEvent` 契约与 gateway 投影 helper；当前只提供 runtime contract 与离线 smoke，不改 UI/transport/backend 真实事件路由。
 
 Todo：
 
-- [ ] 定义 `ProgressPlan`：initial status、phase names、silence policy、background policy、cancel policy、interaction policy。
-- [ ] 标准事件：`process-progress`、`interaction-request`、`clarification-needed`、`human-approval-required`、`guidance-queued`、`run-cancelled`。
+- [x] 定义 `ProgressPlan`：initial status、phase names、silence policy、background policy、cancel policy、interaction policy。
+- [x] 标准事件：`process-progress`、`interaction-request`、`clarification-needed`、`human-approval-required`、`guidance-queued`、`run-cancelled`。
 - [ ] 将 UI、transport、backend 三层 silent watchdog 统一为 `silencePolicy`，同一 run 只产生一条可审计 retry/abort/visible-status 决策。
 - [ ] 区分 `user-cancelled`、`system-aborted`、`timeout`、`backend-error`，历史 run 不全部折叠成普通 failed。
 - [ ] 让 `streamEventPresentation` 根据结构化 `importance/phase/status/reason/budget` 投影 worklog，减少自然语言启发式。
 - [ ] 短期兼容现有 guidance queue；长期将澄清和人工确认升级为一等 interaction contract。
-- [ ] 增加 `smoke:interaction-progress-harness`：长任务沉默、用户取消、系统 abort、timeout、human approval、mid-run guidance 都有稳定事件和最终 run state。
+- [x] 增加 `smoke:interaction-progress-harness`：长任务沉默、用户取消、系统 abort、timeout、human approval、mid-run guidance 都有稳定事件和最终 run state。
 
 验收标准：
 
@@ -169,40 +173,43 @@ Todo：
 
 ### T125 Research Capability Pack：通用科研能力包与 literature.retrieval
 
-状态：待办；目标是把高频科研任务沉淀为通用 composed capabilities，而不是隐藏 workflow。第一批聚焦文献检索、PDF 下载、全文抽取、批量总结、引用核验和证据矩阵。
+状态：进行中；目标是把高频科研任务沉淀为通用 composed capabilities，而不是隐藏 workflow。第一批聚焦文献检索、PDF 下载、全文抽取、批量总结、引用核验和证据矩阵。
+
+进展：第一阶段 `literature.retrieval` composed capability 已进入核心 capability manifest registry，声明 PubMed/Crossref/Semantic Scholar/OpenAlex/arXiv/web/SCP provider 面、输入输出 contract、默认预算、refs-first full text policy、引用核验字段和结构化失败/partial 语义；当前仍是 manifest/mock smoke 层，不执行 live provider。
 
 Todo：
 
-- [ ] 新增 `literature.retrieval` composed capability：providers 覆盖 PubMed、Crossref、Semantic Scholar、OpenAlex、arXiv、web search、SCP biomedical search。
-- [ ] 输入 contract：`query`、`databases`、`dateRange`、`species`、`maxResults`、`includeAbstracts`、`fullTextPolicy`、`dedupePolicy`。
-- [ ] 输出 contract：`paper-list`、`evidence-matrix`、`research-report`、`workEvidence`、`providerAttempts`、`citationVerificationResults`。
-- [ ] 默认 budget：`maxProviders=3`、`maxResults=30`、`perProviderTimeoutMs=10000`、`maxFullTextDownloads=3`、`maxDownloadBytes=25MB`。
-- [ ] 空结果、provider timeout、download failure、citation mismatch 必须输出 structured failure/partial payload，不能算成功。
-- [ ] 引用核验强制检查 DOI/PMID/arXiv id/title/year/journal 一致性，结果进入 verificationResults。
-- [ ] PDF/full text 抽取保持 refs-first：全文写 artifact/task-results，prompt 只收 bounded summary、hash、page/section locators。
-- [ ] 增加 `smoke:literature-retrieval-capability`：arXiv/PubMed/OpenAlex 至少一个 provider 可 mock 成功；空结果、超预算、引用不一致均 fail closed 或 partial。
+- [x] 新增 `literature.retrieval` composed capability：providers 覆盖 PubMed、Crossref、Semantic Scholar、OpenAlex、arXiv、web search、SCP biomedical search。
+- [x] 输入 contract：`query`、`databases`、`dateRange`、`species`、`maxResults`、`includeAbstracts`、`fullTextPolicy`、`dedupePolicy`。
+- [x] 输出 contract：`paper-list`、`evidence-matrix`、`research-report`、`workEvidence`、`providerAttempts`、`citationVerificationResults`。
+- [x] 默认 budget：`maxProviders=3`、`maxResults=30`、`perProviderTimeoutMs=10000`、`maxFullTextDownloads=3`、`maxDownloadBytes=25MB`。
+- [x] 空结果、provider timeout、download failure、citation mismatch 必须输出 structured failure/partial payload，不能算成功。
+- [x] 引用核验强制检查 DOI/PMID/arXiv id/title/year/journal 一致性，结果进入 verificationResults。
+- [x] PDF/full text 抽取保持 refs-first：全文写 artifact/task-results，prompt 只收 bounded summary、hash、page/section locators。
+- [x] 增加 `smoke:literature-retrieval-capability`：arXiv/PubMed/OpenAlex 至少一个 provider 可 mock 成功；空结果、超预算、引用不一致均 fail closed 或 partial。
 
 验收标准：
 
-- [ ] Harness 只选择 profile/budget/provider policy，不固化 arXiv 或任意站点 workflow。
-- [ ] 同一能力可被不同 scenario 复用。
-- [ ] 文献检索结果可审计、可验证、可修复。
+- [x] Harness 只选择 profile/budget/provider policy，不固化 arXiv 或任意站点 workflow。
+- [x] 同一能力可被不同 scenario 复用。
+- [x] 文献检索结果可审计、可验证、可修复。
 
 ### T124 Harness Experiment Suite：把 agent harness 变成可研究、可比较的实验平台
 
 状态：进行中；目标是为 harness profile、hook、budget 和 repair strategy 建立可复现实验基准，让未来 agent harness 研究可以像训练框架一样比较策略效果。
 
-进展：第一阶段离线实验基准已落地。新增 `tests/harness/fixtures`、trace assertion helpers 和 `smoke:agent-harness-experiments`，可以在不依赖 live backend 的情况下比较 `fast-answer`、`research-grade`、`privacy-strict` profile 的 contract/trace 差异，并覆盖 repair 与预算耗尽场景。
+进展：第一阶段离线实验基准已落地。新增 `tests/harness/fixtures`、trace assertion helpers 和 `smoke:agent-harness-experiments`，可以在不依赖 live backend 的情况下比较 `fast-answer`、`research-grade`、`low-cost`、`privacy-strict` profile 的 contract/trace 差异，并覆盖 repair 与预算耗尽场景。第二阶段 replay/metrics/golden scaffolding 已落地：`smoke:agent-harness-replay` 会从保存的 trace 快照和 fixture refs 重放 contract decision，汇总预算/验证/repair 指标，并锁定最小 golden trace 摘要。
 
 Todo：
 
-- [ ] 建立 `tests/harness/fixtures`：fresh research、file-grounded summary、repair after validation failure、silent stream/cancel、capability budget exhaustion。
+- [x] 建立 `tests/harness/fixtures`：fresh research、file-grounded summary、repair after validation failure、silent stream/cancel、capability budget exhaustion。
 - [x] 建立 trace assertion helper：断言 hook order、decision merge、budget debit、blocked refs、selected candidates、validation/repair/audit chain。
-- [ ] 建立 profile diff runner：同一 prompt 在 `fast-answer`、`research-grade`、`low-cost`、`privacy-strict` 下产出不同 contract，但不 fork runtime path。
-- [ ] 建立 replay runner：从 saved `HarnessTrace` 和 refs 重放 contract decision，不依赖 live backend。
-- [ ] 建立 metrics：latency、context tokens、tool calls、network calls、download bytes、validation failures、repair attempts、final artifact quality。
-- [ ] 建立 golden traces：锁定最小实验案例的 expected contract/trace，不锁定 backend 具体自然语言答案。
+- [x] 建立 profile diff runner：同一 prompt 在 `fast-answer`、`research-grade`、`low-cost`、`privacy-strict` 下产出不同 contract，但不 fork runtime path。
+- [x] 建立 replay runner：从 saved `HarnessTrace` 和 refs 重放 contract decision，不依赖 live backend。
+- [x] 建立 metrics：latency、context tokens、tool calls、network calls、download bytes、validation failures、repair attempts、final artifact quality。
+- [x] 建立 golden traces：锁定最小实验案例的 expected contract/trace，不锁定 backend 具体自然语言答案。
 - [x] 增加 `npm run smoke:agent-harness-experiments`。
+- [x] 增加 `npm run smoke:agent-harness-replay`。
 
 验收标准：
 

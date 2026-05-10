@@ -69,15 +69,53 @@ export interface CapabilityBrokerProviderAvailability {
   reason?: string;
 }
 
+export interface CapabilityBrokerSkillHint {
+  id?: string;
+  capabilityId?: string;
+  manifestRef?: string;
+  kind?: string;
+  reason?: string;
+  source?: string;
+  selected?: boolean;
+  tags?: string[];
+  providerIds?: string[];
+}
+
+export interface CapabilityBrokerToolBudget {
+  maxWallMs?: number;
+  maxToolCalls?: number;
+  maxObserveCalls?: number;
+  maxActionSteps?: number;
+  maxNetworkCalls?: number;
+  maxDownloadBytes?: number;
+  maxResultItems?: number;
+  maxProviders?: number;
+  maxRetries?: number;
+  perProviderTimeoutMs?: number;
+  costUnits?: number;
+  exhaustedPolicy?: string;
+}
+
+export interface CapabilityBrokerVerificationPolicyHint {
+  required?: boolean;
+  mode?: string;
+  riskLevel?: CapabilityManifest['safety']['risk'];
+  selectedVerifierIds?: string[];
+}
+
 export interface CapabilityBrokerInput {
   prompt: string;
   objectRefs?: CapabilityBrokerObjectRef[];
   artifactIndex?: CapabilityBrokerArtifactIndexEntry[];
   failureHistory?: CapabilityBrokerFailureHistoryEntry[];
   capabilityEvolutionSummary?: CapabilityEvolutionCompactSummary;
+  skillHints?: Array<string | CapabilityBrokerSkillHint>;
+  blockedCapabilities?: string[];
+  toolBudget?: CapabilityBrokerToolBudget;
+  verificationPolicy?: CapabilityBrokerVerificationPolicyHint;
   scenarioPolicy?: CapabilityBrokerScenarioPolicy;
   runtimePolicy?: CapabilityBrokerRuntimePolicy;
-  availableProviders?: CapabilityBrokerProviderAvailability[] | string[];
+  availableProviders?: Array<string | CapabilityBrokerProviderAvailability>;
 }
 
 export interface CapabilityBrokerRequestShape {
@@ -90,13 +128,18 @@ export interface CapabilityBrokerRequestShape {
   expectedArtifacts?: string[];
   explicitCapabilityIds?: string[];
   failureHistory?: CapabilityBrokerFailureHistoryEntry[];
-  availableProviders?: CapabilityBrokerProviderAvailability[] | string[];
+  skillHints?: Array<string | CapabilityBrokerSkillHint>;
+  blockedCapabilities?: string[];
+  toolBudget?: CapabilityBrokerToolBudget;
+  verificationPolicy?: CapabilityBrokerVerificationPolicyHint;
+  availableProviders?: Array<string | CapabilityBrokerProviderAvailability>;
 }
 
 export interface BrokeredCapabilityBrief extends CapabilityManifestBrief {
   score: number;
   matchedSignals: string[];
   providerIds: string[];
+  harnessSignals?: string[];
 }
 
 export interface CapabilityBrokerExclusion {
@@ -112,6 +155,7 @@ export interface CapabilityBrokerOutput {
     id: string;
     score: number;
     matchedSignals: string[];
+    harnessSignals?: string[];
     penalties: string[];
     excluded?: string;
   }>;
@@ -123,6 +167,10 @@ export interface CapabilityBrokerOutput {
     availableProviders: number;
     capabilityEvolutionRecords: number;
     capabilityEvolutionPromotionCandidates: number;
+    harnessSkillHints: number;
+    blockedCapabilities: number;
+    toolBudgetKeys: string[];
+    verificationPolicyMode?: string;
   };
 }
 
@@ -168,6 +216,7 @@ interface ScoredCapability {
   manifest: CapabilityManifest;
   score: number;
   matchedSignals: string[];
+  harnessSignals: string[];
   penalties: string[];
   excluded?: string;
 }
@@ -252,6 +301,7 @@ export function brokerCapabilities(input: CapabilityBrokerInput, registry: Capab
       id: item.manifest.id,
       score: item.score,
       matchedSignals: [...item.matchedSignals],
+      harnessSignals: item.harnessSignals.length ? [...item.harnessSignals] : undefined,
       penalties: [...item.penalties],
       excluded: item.excluded,
     })),
@@ -263,6 +313,10 @@ export function brokerCapabilities(input: CapabilityBrokerInput, registry: Capab
       availableProviders: availableProviders.size,
       capabilityEvolutionRecords: compactLedgerRecords(input.capabilityEvolutionSummary).length,
       capabilityEvolutionPromotionCandidates: input.capabilityEvolutionSummary?.promotionCandidates.length ?? 0,
+      harnessSkillHints: normalizeSkillHints(input.skillHints).length,
+      blockedCapabilities: unique(input.blockedCapabilities ?? []).length,
+      toolBudgetKeys: definedToolBudgetKeys(input.toolBudget),
+      verificationPolicyMode: input.verificationPolicy?.mode,
     },
   };
 }
@@ -284,11 +338,16 @@ export function capabilityBrokerInputFromRequestShape(request: CapabilityBrokerR
     scenarioPolicy: {
       id: request.scenario,
       preferredCapabilityIds: request.explicitCapabilityIds,
+      blockedCapabilityIds: request.blockedCapabilities,
     },
     runtimePolicy: {
       topK: request.topK,
-      riskTolerance: request.riskTolerance,
+      riskTolerance: request.riskTolerance ?? request.verificationPolicy?.riskLevel,
     },
+    skillHints: request.skillHints,
+    blockedCapabilities: request.blockedCapabilities,
+    toolBudget: request.toolBudget,
+    verificationPolicy: request.verificationPolicy,
     availableProviders: request.availableProviders,
   };
 }
@@ -344,6 +403,7 @@ function scoreCapability(
   availableProviders: Map<string, string | true>,
 ): ScoredCapability {
   const matchedSignals: string[] = [];
+  const harnessSignals = harnessSignalsForCapability(input, manifest, availableProviders);
   const penalties: string[] = [];
   let score = 0;
 
@@ -413,6 +473,7 @@ function scoreCapability(
     manifest,
     score,
     matchedSignals,
+    harnessSignals,
     penalties,
     excluded: exclusion,
   };
@@ -424,6 +485,7 @@ function hardExclusion(
   availableProviders: Map<string, string | true>,
 ): string | undefined {
   const scenario = input.scenarioPolicy;
+  if (matchesCapabilityId(input.blockedCapabilities, manifest)) return 'blocked by harness capability policy';
   if (scenario?.blockedCapabilityIds?.includes(manifest.id)) return 'blocked by scenario policy';
   if (scenario?.allowedCapabilityIds?.length && !scenario.allowedCapabilityIds.includes(manifest.id)) return 'not in scenario allowed capability ids';
   if (scenario?.blockedDomains?.some((domain) => manifest.domains.includes(domain))) return 'blocked by scenario domain policy';
@@ -450,7 +512,119 @@ function toBrokeredBrief(item: ScoredCapability): BrokeredCapabilityBrief {
     ...compactCapabilityManifestBrief(item.manifest),
     score: item.score,
     matchedSignals: [...item.matchedSignals],
+    harnessSignals: item.harnessSignals.length ? [...item.harnessSignals] : undefined,
   };
+}
+
+function harnessSignalsForCapability(
+  input: CapabilityBrokerInput,
+  manifest: CapabilityManifest,
+  availableProviders: Map<string, string | true>,
+) {
+  const signals: string[] = [];
+  const matchingHints = normalizeSkillHints(input.skillHints).filter((hint) => skillHintMatchesManifest(hint, manifest));
+  for (const hint of matchingHints.slice(0, 4)) {
+    const source = hint.source ? ` from ${hint.source}` : '';
+    const reason = hint.reason ? `: ${hint.reason}` : '';
+    signals.push(`skill hint${source}${reason}`.slice(0, 240));
+  }
+  if (matchesCapabilityId(input.blockedCapabilities, manifest)) signals.push('blocked by harness capability policy');
+
+  const providerSignals = providerAvailabilitySignals(manifest, availableProviders);
+  signals.push(...providerSignals);
+
+  const budgetSignal = budgetSignalForCapability(input.toolBudget, manifest);
+  if (budgetSignal) signals.push(budgetSignal);
+
+  const verificationSignal = verificationSignalForCapability(input.verificationPolicy, manifest);
+  if (verificationSignal) signals.push(verificationSignal);
+
+  return unique(signals);
+}
+
+function normalizeSkillHints(input: CapabilityBrokerInput['skillHints']): CapabilityBrokerSkillHint[] {
+  const out: CapabilityBrokerSkillHint[] = [];
+  for (const hint of input ?? []) {
+    if (typeof hint === 'string') {
+      out.push({ id: hint });
+      continue;
+    }
+    if (!hint || typeof hint !== 'object') continue;
+    out.push({
+      ...hint,
+      tags: hint.tags ? [...hint.tags] : undefined,
+      providerIds: hint.providerIds ? [...hint.providerIds] : undefined,
+    });
+  }
+  return out;
+}
+
+function skillHintMatchesManifest(hint: CapabilityBrokerSkillHint, manifest: CapabilityManifest) {
+  const ids = unique([
+    hint.id ?? '',
+    hint.capabilityId ?? '',
+    hint.manifestRef ?? '',
+  ].filter(Boolean));
+  if (matchesCapabilityId(ids, manifest)) return true;
+  if (hint.kind && hint.kind === manifest.kind) return true;
+  if (hint.providerIds?.some((providerId) => manifest.providers.some((provider) => provider.id === providerId))) return true;
+  return Boolean(hint.tags?.some((tag) => manifest.routingTags.includes(tag) || manifest.domains.includes(tag)));
+}
+
+function matchesCapabilityId(values: string[] | undefined, manifest: CapabilityManifest) {
+  const ids = new Set((values ?? []).map((value) => value.trim()).filter(Boolean));
+  if (!ids.size) return false;
+  if (ids.has(manifest.id) || ids.has(manifest.kind)) return true;
+  return manifest.providers.some((provider) => ids.has(provider.id));
+}
+
+function providerAvailabilitySignals(manifest: CapabilityManifest, availableProviders: Map<string, string | true>) {
+  if (availableProviders.size === 0) return [];
+  return manifest.providers.map((provider) => {
+    const availability = availableProviders.get(provider.id);
+    if (availability === true) return `provider available: ${provider.id}`;
+    if (typeof availability === 'string') return `provider unavailable: ${provider.id} (${availability})`;
+    return `provider not advertised: ${provider.id}`;
+  });
+}
+
+function budgetSignalForCapability(budget: CapabilityBrokerToolBudget | undefined, manifest: CapabilityManifest) {
+  if (!budget || definedToolBudgetKeys(budget).length === 0) return undefined;
+  const compact = [
+    numericBudgetPart('maxToolCalls', budget.maxToolCalls),
+    numericBudgetPart('maxObserveCalls', budget.maxObserveCalls),
+    numericBudgetPart('maxActionSteps', budget.maxActionSteps),
+    numericBudgetPart('maxNetworkCalls', budget.maxNetworkCalls),
+    numericBudgetPart('maxProviders', budget.maxProviders),
+    budget.exhaustedPolicy ? `exhaustedPolicy=${budget.exhaustedPolicy}` : undefined,
+  ].filter(Boolean).join(', ');
+  return compact ? `tool budget hint for ${manifest.kind}: ${compact}` : `tool budget hint for ${manifest.kind}`;
+}
+
+function definedToolBudgetKeys(budget: CapabilityBrokerToolBudget | undefined) {
+  return Object.entries(budget ?? {})
+    .filter(([, value]) => value !== undefined)
+    .map(([key]) => key)
+    .sort();
+}
+
+function numericBudgetPart(key: string, value: number | undefined) {
+  return typeof value === 'number' && Number.isFinite(value) ? `${key}=${value}` : undefined;
+}
+
+function verificationSignalForCapability(policy: CapabilityBrokerVerificationPolicyHint | undefined, manifest: CapabilityManifest) {
+  if (!policy) return undefined;
+  const selected = policy.selectedVerifierIds?.includes(manifest.id)
+    || manifest.providers.some((provider) => policy.selectedVerifierIds?.includes(provider.id));
+  if (manifest.kind === 'verifier' || selected) {
+    const parts = [
+      `mode=${policy.mode ?? 'unspecified'}`,
+      `required=${policy.required === true}`,
+      policy.riskLevel ? `risk=${policy.riskLevel}` : undefined,
+    ].filter(Boolean).join(', ');
+    return `verification policy hint: ${parts}`;
+  }
+  return undefined;
 }
 
 function scoreCapabilityEvolutionLedger(

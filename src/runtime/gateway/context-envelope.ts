@@ -5,7 +5,7 @@ import { defaultArtifactSchemaForSkillDomain } from '@sciforge-ui/runtime-contra
 import { runtimeVerificationResultArtifacts } from '@sciforge-ui/runtime-contract/verification-result';
 import type { SciForgeSkillDomain, GatewayRequest, SkillAvailability } from '../runtime-types.js';
 import { clipForAgentServerJson, clipForAgentServerPrompt, hashJson, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
-import { brokerCapabilities, CapabilityManifestRegistry as BrokerCapabilityManifestRegistry, type CapabilityBrokerArtifactIndexEntry, type CapabilityBrokerFailureHistoryEntry, type CapabilityBrokerObjectRef, type CapabilityBrokerOutput } from '../capability-broker.js';
+import { brokerCapabilities, CapabilityManifestRegistry as BrokerCapabilityManifestRegistry, type CapabilityBrokerArtifactIndexEntry, type CapabilityBrokerFailureHistoryEntry, type CapabilityBrokerObjectRef, type CapabilityBrokerOutput, type CapabilityBrokerProviderAvailability, type CapabilityBrokerSkillHint, type CapabilityBrokerToolBudget, type CapabilityBrokerVerificationPolicyHint } from '../capability-broker.js';
 import { sanitizeCapabilityEvolutionCompactSummaryForBroker } from '../capability-evolution-ledger.js';
 import { loadCoreCapabilityManifestRegistry } from '../capability-manifest-registry.js';
 import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from './gateway-request.js';
@@ -180,6 +180,9 @@ export function buildContextEnvelope(
 }
 
 export function buildCapabilityBrokerBriefForAgentServer(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const capabilityPolicy = brokerCapabilityPolicyForRequest(request);
+  const verificationPolicy = brokerVerificationPolicyForRequest(request, capabilityPolicy);
   const registry = new BrokerCapabilityManifestRegistry(loadCoreCapabilityManifestRegistry().manifests);
   const brokered = brokerCapabilities({
     prompt: request.prompt,
@@ -187,9 +190,14 @@ export function buildCapabilityBrokerBriefForAgentServer(request: GatewayRequest
     artifactIndex: brokerArtifactIndexForRequest(request),
     failureHistory: brokerFailureHistoryForRequest(request),
     capabilityEvolutionSummary: brokerCapabilityEvolutionSummaryForRequest(request),
+    skillHints: brokerSkillHintsForRequest(request, capabilityPolicy),
+    blockedCapabilities: brokerBlockedCapabilitiesForRequest(uiState, capabilityPolicy),
+    toolBudget: brokerToolBudgetForRequest(uiState, capabilityPolicy),
+    verificationPolicy,
     scenarioPolicy: {
       id: request.scenarioPackageRef?.id ?? request.skillDomain,
       preferredCapabilityIds: preferredCapabilityIdsForRequest(request),
+      blockedCapabilityIds: brokerBlockedCapabilitiesForRequest(uiState, capabilityPolicy),
       requiredTags: uniqueStrings([
         request.skillDomain,
         ...expectedArtifactTypesForRequest(request),
@@ -211,8 +219,9 @@ export function buildCapabilityBrokerBriefForAgentServer(request: GatewayRequest
         verifier: 2,
         view: 2,
       },
-      riskTolerance: request.riskLevel ?? 'medium',
+      riskTolerance: request.riskLevel ?? verificationPolicy?.riskLevel ?? 'medium',
     },
+    availableProviders: brokerAvailableProvidersForRequest(uiState, capabilityPolicy),
   }, registry);
   return compactBrokerOutputForAgentServer(brokered);
 }
@@ -297,6 +306,201 @@ function preferredCapabilityIdsForRequest(request: GatewayRequest) {
     ...toStringList(uiState.preferredCapabilityIds),
     ...toStringList(policy.preferredCapabilityIds),
   ]);
+}
+
+function brokerCapabilityPolicyForRequest(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const handoff = isRecord(uiState.agentHarnessHandoff) ? uiState.agentHarnessHandoff : {};
+  const harnessContract = isRecord(uiState.harnessContract) ? uiState.harnessContract : {};
+  return firstRecord(
+    uiState.capabilityPolicy,
+    uiState.capabilityBrokerPolicy,
+    handoff.capabilityPolicy,
+    harnessContract.capabilityPolicy,
+  ) ?? {};
+}
+
+function brokerSkillHintsForRequest(
+  request: GatewayRequest,
+  capabilityPolicy: Record<string, unknown>,
+): Array<string | CapabilityBrokerSkillHint> {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  return uniqueSkillHints([
+    ...skillHintsFromValue(capabilityPolicy.skillHints),
+    ...skillHintsFromValue(capabilityPolicy.hints),
+    ...skillHintsFromValue(uiState.skillHints),
+    ...skillHintsFromValue(uiState.harnessSkillHints),
+    ...skillHintsFromValue(uiState.selectedSkillHints),
+  ]).slice(0, 24);
+}
+
+function brokerBlockedCapabilitiesForRequest(
+  uiState: Record<string, unknown>,
+  capabilityPolicy: Record<string, unknown>,
+) {
+  return uniqueStrings([
+    ...toStringList(capabilityPolicy.blockedCapabilities),
+    ...toStringList(capabilityPolicy.blockedCapabilityIds),
+    ...toStringList(uiState.blockedCapabilities),
+    ...toStringList(uiState.blockedCapabilityIds),
+  ]);
+}
+
+function brokerToolBudgetForRequest(
+  uiState: Record<string, unknown>,
+  capabilityPolicy: Record<string, unknown>,
+): CapabilityBrokerToolBudget | undefined {
+  const capabilityBudget = isRecord(uiState.capabilityBudget) ? uiState.capabilityBudget : {};
+  const source = firstRecord(
+    capabilityPolicy.toolBudget,
+    capabilityPolicy.capabilityBudget,
+    uiState.toolBudget,
+    capabilityBudget.toolBudget,
+  );
+  if (!source) return undefined;
+  const out: CapabilityBrokerToolBudget = {
+    maxWallMs: numberField(source.maxWallMs),
+    maxToolCalls: numberField(source.maxToolCalls),
+    maxObserveCalls: numberField(source.maxObserveCalls),
+    maxActionSteps: numberField(source.maxActionSteps),
+    maxNetworkCalls: numberField(source.maxNetworkCalls),
+    maxDownloadBytes: numberField(source.maxDownloadBytes),
+    maxResultItems: numberField(source.maxResultItems),
+    maxProviders: numberField(source.maxProviders),
+    maxRetries: numberField(source.maxRetries),
+    perProviderTimeoutMs: numberField(source.perProviderTimeoutMs),
+    costUnits: numberField(source.costUnits),
+    exhaustedPolicy: stringField(source.exhaustedPolicy),
+  };
+  return Object.values(out).some((value) => value !== undefined) ? out : undefined;
+}
+
+function brokerVerificationPolicyForRequest(
+  request: GatewayRequest,
+  capabilityPolicy: Record<string, unknown>,
+): CapabilityBrokerVerificationPolicyHint | undefined {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const source = request.verificationPolicy ?? firstRecord(capabilityPolicy.verificationPolicy, uiState.verificationPolicy);
+  if (!source) return undefined;
+  const sourceRecord = source as Record<string, unknown>;
+  const riskLevel = source.riskLevel === 'low' || source.riskLevel === 'medium' || source.riskLevel === 'high'
+    ? source.riskLevel
+    : undefined;
+  const out: CapabilityBrokerVerificationPolicyHint = {
+    required: booleanField(source.required),
+    mode: stringField(source.mode),
+    riskLevel,
+    selectedVerifierIds: uniqueStrings([
+      ...toStringList(sourceRecord.selectedVerifierIds),
+      ...toStringList(sourceRecord.verifierIds),
+    ]),
+  };
+  return Object.values(out).some((value) => Array.isArray(value) ? value.length > 0 : value !== undefined) ? out : undefined;
+}
+
+function brokerAvailableProvidersForRequest(
+  uiState: Record<string, unknown>,
+  capabilityPolicy: Record<string, unknown>,
+): Array<string | CapabilityBrokerProviderAvailability> | undefined {
+  const providers = [
+    ...providerAvailabilityFromValue(capabilityPolicy.providerAvailability),
+    ...providerAvailabilityFromValue(capabilityPolicy.availableProviders),
+    ...providerAvailabilityFromValue(uiState.providerAvailability),
+    ...providerAvailabilityFromValue(uiState.availableProviders),
+  ];
+  const seen = new Set<string>();
+  const uniqueProviders: Array<string | CapabilityBrokerProviderAvailability> = [];
+  for (const provider of providers) {
+    const key = typeof provider === 'string' ? provider : provider.id;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    uniqueProviders.push(provider);
+  }
+  return uniqueProviders.length ? uniqueProviders : undefined;
+}
+
+function skillHintsFromValue(value: unknown): Array<string | CapabilityBrokerSkillHint> {
+  if (typeof value === 'string' && value.trim()) return [value.trim()];
+  if (!Array.isArray(value)) return [];
+  const out: Array<string | CapabilityBrokerSkillHint> = [];
+  for (const entry of value) {
+    if (typeof entry === 'string' && entry.trim()) {
+      out.push(entry.trim());
+      continue;
+    }
+    if (!isRecord(entry)) continue;
+    out.push({
+      id: stringField(entry.id),
+      capabilityId: stringField(entry.capabilityId),
+      manifestRef: stringField(entry.manifestRef) ?? stringField(entry.ref),
+      kind: stringField(entry.kind),
+      reason: stringField(entry.reason),
+      source: stringField(entry.source),
+      selected: booleanField(entry.selected),
+      tags: toStringList(entry.tags),
+      providerIds: toStringList(entry.providerIds),
+    });
+  }
+  return out;
+}
+
+function providerAvailabilityFromValue(value: unknown): Array<string | CapabilityBrokerProviderAvailability> {
+  if (Array.isArray(value)) {
+    const out: Array<string | CapabilityBrokerProviderAvailability> = [];
+    for (const entry of value) {
+      if (typeof entry === 'string' && entry.trim()) {
+        out.push(entry.trim());
+        continue;
+      }
+      if (!isRecord(entry)) continue;
+      const id = stringField(entry.id) ?? stringField(entry.providerId);
+      if (!id) continue;
+      out.push({
+        id,
+        available: booleanField(entry.available) ?? stringField(entry.status) !== 'unavailable',
+        reason: stringField(entry.reason),
+      });
+    }
+    return out;
+  }
+  if (!isRecord(value)) return [];
+  const out: Array<string | CapabilityBrokerProviderAvailability> = [];
+  for (const [id, status] of Object.entries(value)) {
+    if (!id.trim()) continue;
+    if (typeof status === 'boolean') {
+      out.push({ id, available: status });
+      continue;
+    }
+    if (typeof status === 'string') {
+      out.push({ id, available: status !== 'unavailable', reason: status === 'unavailable' ? status : undefined });
+      continue;
+    }
+    if (!isRecord(status)) continue;
+    out.push({
+      id,
+      available: booleanField(status.available) ?? stringField(status.status) !== 'unavailable',
+      reason: stringField(status.reason),
+    });
+  }
+  return out;
+}
+
+function uniqueSkillHints(values: Array<string | CapabilityBrokerSkillHint>) {
+  const seen = new Set<string>();
+  const out: Array<string | CapabilityBrokerSkillHint> = [];
+  for (const value of values) {
+    const key = typeof value === 'string'
+      ? value
+      : value.id ?? value.capabilityId ?? value.manifestRef ?? `${value.kind ?? ''}:${value.reason ?? ''}:${value.source ?? ''}`;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+  }
+  return out;
+}
+
+function firstRecord(...values: unknown[]): Record<string, unknown> | undefined {
+  return values.find(isRecord);
 }
 
 function mergeBrokerRefs(values: Array<Record<string, unknown>>): CapabilityBrokerObjectRef[] {

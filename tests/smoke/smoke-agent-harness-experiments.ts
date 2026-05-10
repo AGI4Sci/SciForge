@@ -16,7 +16,7 @@ import {
 } from '../harness/traceAssertions';
 
 const runtime = createHarnessRuntime();
-const profileIds: HarnessProfileId[] = ['fast-answer', 'research-grade', 'privacy-strict'];
+const profileIds: HarnessProfileId[] = ['fast-answer', 'research-grade', 'low-cost', 'privacy-strict'];
 
 const freshResearchResults = await Promise.all(profileIds.map(async (profileId) => ({
   profileId,
@@ -26,19 +26,24 @@ const freshResearchResults = await Promise.all(profileIds.map(async (profileId) 
 const contractsByProfile = new Map(freshResearchResults.map((result) => [result.profileId, result.evaluation.contract]));
 const fast = getContract(contractsByProfile, 'fast-answer');
 const research = getContract(contractsByProfile, 'research-grade');
+const lowCost = getContract(contractsByProfile, 'low-cost');
 const privacy = getContract(contractsByProfile, 'privacy-strict');
 
 assert.notDeepEqual(fast, research, 'fast-answer and research-grade should produce different contracts');
+assert.notDeepEqual(fast, lowCost, 'fast-answer and low-cost should produce different contracts');
 assert.notDeepEqual(research, privacy, 'research-grade and privacy-strict should produce different contracts');
 assert.equal(fast.profileId, 'fast-answer');
 assert.equal(research.profileId, 'research-grade');
+assert.equal(lowCost.profileId, 'low-cost');
 assert.equal(privacy.profileId, 'privacy-strict');
 assert.equal(fast.explorationMode, 'minimal');
+assert.equal(lowCost.explorationMode, 'minimal');
 assert.equal(research.explorationMode, 'deep');
 assert.equal(research.verificationPolicy.requireCitations, true);
 assert.equal(privacy.capabilityPolicy.sideEffects.network, 'block');
 assert.equal(privacy.toolBudget.maxNetworkCalls, 0);
 assert.ok(fast.toolBudget.maxWallMs < research.toolBudget.maxWallMs);
+assert.ok(lowCost.toolBudget.costUnits < fast.toolBudget.costUnits);
 
 for (const { profileId, evaluation } of freshResearchResults) {
   assert.equal(evaluation.trace.schemaVersion, 'sciforge.agent-harness-trace.v1');

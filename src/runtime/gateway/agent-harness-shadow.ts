@@ -88,6 +88,9 @@ export function agentHarnessHandoffMetadata(request: GatewayRequest) {
   const contractRef = stringField(agentHarness?.contractRef) ?? stringField(summary?.contractRef);
   const traceRef = stringField(agentHarness?.traceRef) ?? stringField(summary?.traceRef);
   const budgetSummary = agentHarnessBudgetSummary(contract, summary);
+  const contextRefs = agentHarnessContextRefs(contract);
+  const repairContextPolicy = isRecord(contract?.repairContextPolicy) ? contract.repairContextPolicy : undefined;
+  const promptDirectives = agentHarnessPromptDirectiveRefs(contract);
   const decisionOwner = 'AgentServer';
   const harnessSummary = agentHarnessMetadataSummary({
     summary,
@@ -111,6 +114,11 @@ export function agentHarnessHandoffMetadata(request: GatewayRequest) {
       harnessProfileId: profileId,
       harnessContractRef: contractRef,
       harnessTraceRef: traceRef,
+      intentMode: stringField(contract?.intentMode) ?? stringField(harnessSummary.intentMode),
+      explorationMode: stringField(contract?.explorationMode) ?? stringField(harnessSummary.explorationMode),
+      contextRefs,
+      repairContextPolicy,
+      promptDirectives,
       budgetSummary,
       summary: harnessSummary,
     },
@@ -151,6 +159,53 @@ function agentHarnessProfileId(request: GatewayRequest) {
     ?? DEFAULT_AGENT_HARNESS_PROFILE_ID;
 }
 
+function agentHarnessInputFromRequest(request: GatewayRequest): Record<string, unknown> {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const harness = isRecord(uiState.agentHarnessInput)
+    ? uiState.agentHarnessInput
+    : isRecord(uiState.harnessInput)
+      ? uiState.harnessInput
+      : isRecord(uiState.harness)
+        ? uiState.harness
+        : {};
+  const input: Record<string, unknown> = {};
+  const intentMode = stringField(harness.intentMode) ?? stringField(uiState.harnessIntentMode);
+  if (intentMode && ['fresh', 'continuation', 'repair', 'audit', 'file-grounded', 'interactive'].includes(intentMode)) {
+    input.intentMode = intentMode;
+  }
+  const contextRefs = stringListField(harness.contextRefs);
+  input.contextRefs = contextRefs.length ? contextRefs : requestContextRefs(request);
+  const requiredContextRefs = stringListField(harness.requiredContextRefs);
+  if (requiredContextRefs.length) input.requiredContextRefs = requiredContextRefs;
+  const blockedContextRefs = stringListField(harness.blockedContextRefs);
+  if (blockedContextRefs.length) input.blockedContextRefs = blockedContextRefs;
+  if (isRecord(harness.budgetOverrides)) input.budgetOverrides = harness.budgetOverrides;
+  if (isRecord(harness.conversationSignals)) input.conversationSignals = harness.conversationSignals;
+  return input;
+}
+
+function requestContextRefs(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  return sortedUnique([
+    ...refsFromRecords(Array.isArray(request.references) ? request.references : []),
+    ...refsFromRecords(Array.isArray(request.artifacts) ? request.artifacts : []),
+    ...refsFromRecords(Array.isArray(uiState.currentReferences) ? uiState.currentReferences : []),
+    ...refsFromRecords(Array.isArray(uiState.recentExecutionRefs) ? uiState.recentExecutionRefs : []),
+  ]);
+}
+
+function refsFromRecords(records: unknown[]) {
+  const refs: string[] = [];
+  for (const record of records) {
+    if (!isRecord(record)) continue;
+    for (const key of ['ref', 'artifactRef', 'dataRef', 'codeRef', 'outputRef', 'stdoutRef', 'stderrRef', 'id']) {
+      const value = stringField(record[key]);
+      if (value) refs.push(value);
+    }
+  }
+  return refs;
+}
+
 async function evaluateAgentHarnessShadow(
   request: GatewayRequest,
   profileId: string,
@@ -163,6 +218,7 @@ async function evaluateAgentHarnessShadow(
   if (!runtime) return { ok: false, reason: 'missing' };
   try {
     const result = await runtime.evaluate({
+      ...agentHarnessInputFromRequest(request),
       profileId,
       requestId: hashJson({ prompt: request.prompt, skillDomain: request.skillDomain }).slice(0, 12),
       prompt: request.prompt,
@@ -349,6 +405,26 @@ function agentHarnessBudgetSummary(contract?: Record<string, unknown>, summary?:
   };
 }
 
+function agentHarnessContextRefs(contract?: Record<string, unknown>) {
+  return {
+    allowed: stringListField(contract?.allowedContextRefs),
+    blocked: stringListField(contract?.blockedContextRefs),
+    required: stringListField(contract?.requiredContextRefs),
+  };
+}
+
+function agentHarnessPromptDirectiveRefs(contract?: Record<string, unknown>) {
+  if (!Array.isArray(contract?.promptDirectives)) return [];
+  return contract.promptDirectives
+    .filter(isRecord)
+    .map((directive) => ({
+      id: stringField(directive.id),
+      sourceCallbackId: stringField(directive.sourceCallbackId),
+      priority: numberField(directive.priority),
+    }))
+    .filter((directive) => directive.id && directive.sourceCallbackId);
+}
+
 function emitAgentHarnessContractEvent(
   callbacks: WorkspaceRuntimeCallbacks,
   input: {
@@ -392,4 +468,14 @@ function stringField(value: unknown) {
 
 function numberField(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function stringListField(value: unknown) {
+  return Array.isArray(value)
+    ? sortedUnique(value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim()))
+    : [];
+}
+
+function sortedUnique(values: string[]) {
+  return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b));
 }

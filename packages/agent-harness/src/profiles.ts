@@ -58,8 +58,33 @@ const baseRepair: RepairContextPolicy = {
 const baseProgress: ProgressPlan = {
   initialStatus: 'Planning request',
   visibleMilestones: ['context', 'capabilities', 'verification'],
+  phaseNames: ['context', 'capabilities', 'verification'],
   silenceTimeoutMs: 30000,
   backgroundContinuation: false,
+  silencePolicy: {
+    timeoutMs: 30000,
+    decision: 'visible-status',
+    status: 'Still working',
+    maxRetries: 0,
+    auditRequired: true,
+  },
+  backgroundPolicy: {
+    enabled: false,
+    status: 'Continuing in background',
+    notifyOnCompletion: true,
+  },
+  cancelPolicy: {
+    allowUserCancel: true,
+    userCancellation: 'user-cancelled',
+    systemAbort: 'system-aborted',
+    timeout: 'timeout',
+    backendError: 'backend-error',
+  },
+  interactionPolicy: {
+    clarification: 'allow',
+    humanApproval: 'allow',
+    guidanceQueue: 'allow',
+  },
 };
 
 function defaults(overrides: Partial<HarnessDefaults>): HarnessDefaults {

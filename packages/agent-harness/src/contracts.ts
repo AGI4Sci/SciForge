@@ -42,6 +42,24 @@ export type ExplorationMode = 'minimal' | 'normal' | 'deep';
 export type VerificationIntensity = 'none' | 'light' | 'standard' | 'strict' | 'audit';
 export type SideEffectAllowance = 'block' | 'requires-approval' | 'allow';
 export type BudgetExhaustedPolicy = 'partial-payload' | 'needs-human' | 'fail-with-reason';
+export type HarnessInteractionProgressEventType =
+  | 'process-progress'
+  | 'interaction-request'
+  | 'clarification-needed'
+  | 'human-approval-required'
+  | 'guidance-queued'
+  | 'run-cancelled';
+export type HarnessProgressEventImportance = 'low' | 'normal' | 'high' | 'blocking';
+export type HarnessProgressPhaseStatus = 'pending' | 'running' | 'blocked' | 'completed' | 'failed' | 'cancelled';
+export type HarnessRunCancellationReason = 'user-cancelled' | 'system-aborted' | 'timeout' | 'backend-error';
+export type HarnessRunState =
+  | 'running'
+  | 'awaiting-interaction'
+  | 'guidance-queued'
+  | 'backgrounded'
+  | 'cancelled'
+  | 'failed'
+  | 'completed';
 
 export interface HarnessInput {
   requestId?: string;
@@ -239,15 +257,84 @@ export interface RepairContextPolicy {
 export interface ProgressDecision {
   initialStatus?: string;
   visibleMilestones?: string[];
+  phaseNames?: string[];
   silenceTimeoutMs?: number;
   backgroundContinuation?: boolean;
+  silencePolicy?: Partial<SilencePolicy>;
+  backgroundPolicy?: Partial<BackgroundPolicy>;
+  cancelPolicy?: Partial<CancelPolicy>;
+  interactionPolicy?: Partial<InteractionPolicy>;
 }
 
 export interface ProgressPlan {
   initialStatus: string;
   visibleMilestones: string[];
+  phaseNames?: string[];
   silenceTimeoutMs: number;
   backgroundContinuation: boolean;
+  silencePolicy?: SilencePolicy;
+  backgroundPolicy?: BackgroundPolicy;
+  cancelPolicy?: CancelPolicy;
+  interactionPolicy?: InteractionPolicy;
+}
+
+export interface SilencePolicy {
+  timeoutMs: number;
+  decision: 'visible-status' | 'retry' | 'abort' | 'background';
+  status: string;
+  maxRetries: number;
+  auditRequired: boolean;
+}
+
+export interface BackgroundPolicy {
+  enabled: boolean;
+  status: string;
+  notifyOnCompletion: boolean;
+}
+
+export interface CancelPolicy {
+  allowUserCancel: boolean;
+  userCancellation: HarnessRunCancellationReason;
+  systemAbort: HarnessRunCancellationReason;
+  timeout: HarnessRunCancellationReason;
+  backendError: HarnessRunCancellationReason;
+}
+
+export interface InteractionPolicy {
+  clarification: 'allow' | 'require' | 'block';
+  humanApproval: 'allow' | 'require' | 'block';
+  guidanceQueue: 'allow' | 'block';
+}
+
+export interface HarnessInteractionProgressEvent {
+  schemaVersion: 'sciforge.interaction-progress-event.v1';
+  type: HarnessInteractionProgressEventType;
+  runState: HarnessRunState;
+  requestId?: string;
+  runId?: string;
+  traceRef?: string;
+  phase?: string;
+  status: HarnessProgressPhaseStatus;
+  importance: HarnessProgressEventImportance;
+  reason?: string;
+  budget?: ProgressEventBudget;
+  cancellationReason?: HarnessRunCancellationReason;
+  interaction?: ProgressInteractionRequest;
+}
+
+export interface ProgressEventBudget {
+  elapsedMs?: number;
+  remainingMs?: number;
+  retryCount?: number;
+  maxRetries?: number;
+  maxWallMs?: number;
+}
+
+export interface ProgressInteractionRequest {
+  id: string;
+  kind: 'clarification' | 'human-approval' | 'guidance';
+  required: boolean;
+  promptRef?: string;
 }
 
 export interface PromptDirective {

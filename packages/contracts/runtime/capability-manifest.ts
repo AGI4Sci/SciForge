@@ -209,6 +209,7 @@ export function validateCapabilityManifestRegistry(manifests: CapabilityManifest
 }
 
 export const CORE_CAPABILITY_MANIFESTS: CapabilityManifest[] = [
+  literatureRetrievalCapabilityManifest(),
   coreCapabilityManifest('skill.agentserver-generation', 'Use AgentServer with scenario policy, refs, and artifact contracts to generate or repair workspace tasks.', 'skill', 'src/runtime/generation-gateway.ts', ['workspace-write']),
   coreCapabilityManifest('runtime.artifact-resolve', 'Resolve object references to workspace-backed facts.', 'runtime-adapter', 'src/runtime/backend-artifact-tools.ts', ['workspace-read']),
   coreCapabilityManifest('runtime.artifact-read', 'Read bounded artifact, file, run, and execution-unit refs.', 'runtime-adapter', 'src/runtime/backend-artifact-tools.ts', ['workspace-read']),
@@ -223,6 +224,133 @@ export const CORE_CAPABILITY_MANIFESTS: CapabilityManifest[] = [
   coreCapabilityManifest('view.evidence-matrix', 'Render evidence matrices from manifest-bound refs.', 'view', 'packages/presentation/components', ['none']),
   coreCapabilityManifest('verifier.schema', 'Validate payloads, artifacts, refs, and UI manifests before completion.', 'verifier', 'packages/verifiers/schema', ['none']),
 ];
+
+function literatureRetrievalCapabilityManifest(): CapabilityManifest {
+  const providerIds = ['pubmed', 'crossref', 'semantic-scholar', 'openalex', 'arxiv', 'web-search', 'scp-biomedical-search'];
+  return {
+    contract: CAPABILITY_MANIFEST_CONTRACT_ID,
+    id: 'literature.retrieval',
+    name: 'literature retrieval',
+    version: '0.1.0',
+    ownerPackage: 'packages/skills/literature',
+    kind: 'composed',
+    brief: 'Retrieve and normalize scholarly literature into auditable paper-list, evidence-matrix, research-report, and citation verification refs.',
+    routingTags: ['literature', 'retrieval', 'paper-list', 'evidence', 'citation', 'full-text'],
+    domains: ['literature', 'research'],
+    inputSchema: {
+      type: 'object',
+      required: ['query'],
+      properties: {
+        query: { type: 'string', minLength: 1 },
+        databases: {
+          type: 'array',
+          items: { enum: ['pubmed', 'crossref', 'semantic-scholar', 'openalex', 'arxiv', 'web-search', 'scp-biomedical-search'] },
+        },
+        dateRange: {
+          type: 'object',
+          properties: {
+            from: { type: 'string' },
+            to: { type: 'string' },
+          },
+        },
+        species: { type: 'array', items: { type: 'string' } },
+        maxResults: { type: 'integer', minimum: 1, maximum: 200 },
+        includeAbstracts: { type: 'boolean' },
+        fullTextPolicy: { enum: ['metadata-only', 'abstracts', 'bounded-full-text'] },
+        dedupePolicy: { enum: ['doi-pmid-arxiv-title-year', 'provider-native', 'none'] },
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      required: ['status', 'paperList', 'workEvidence', 'providerAttempts', 'citationVerificationResults'],
+      properties: {
+        status: { enum: ['success', 'partial', 'failed'] },
+        paperList: { type: 'array', items: { type: 'object' } },
+        evidenceMatrix: { type: 'array', items: { type: 'object' } },
+        researchReport: { type: 'object' },
+        workEvidence: { type: 'array', items: { type: 'object' } },
+        providerAttempts: { type: 'array', items: { type: 'object' } },
+        citationVerificationResults: { type: 'array', items: { type: 'object' } },
+        diagnostics: { type: 'array', items: { type: 'object' } },
+      },
+    },
+    sideEffects: ['network', 'external-api'],
+    safety: {
+      risk: 'medium',
+      dataScopes: ['public-web', 'workspace-refs'],
+    },
+    examples: [{
+      title: 'recent CRISPR screen literature',
+      prompt: 'Find recent CRISPR screening papers and return a paper-list with verified citations.',
+      inputRef: 'capability:literature.retrieval/input.example',
+      outputRef: 'capability:literature.retrieval/output.example',
+    }],
+    validators: [
+      {
+        id: 'literature.retrieval.schema',
+        kind: 'schema',
+        contractRef: 'literature.retrieval#outputSchema',
+        expectedRefs: ['paper-list', 'workEvidence', 'providerAttempts', 'citationVerificationResults'],
+      },
+      {
+        id: 'literature.retrieval.citation-verification',
+        kind: 'verifier',
+        contractRef: 'verifier.citation-integrity.v1',
+        expectedRefs: ['citationVerificationResults'],
+      },
+    ],
+    repairHints: [
+      {
+        failureCode: 'empty-results',
+        summary: 'Return a structured empty-result failure with provider diagnostics and adjusted query hints.',
+        recoverActions: ['record-provider-attempts', 'relax-date-range', 'try-fallback-provider'],
+      },
+      {
+        failureCode: 'provider-timeout',
+        summary: 'Return partial payload with timed-out provider attempt diagnostics instead of marking the retrieval successful.',
+        recoverActions: ['emit-partial-payload', 'reduce-provider-budget', 'retry-available-provider'],
+      },
+      {
+        failureCode: 'download-failure',
+        summary: 'Preserve metadata refs and bounded extraction diagnostics when full text cannot be downloaded.',
+        recoverActions: ['keep-metadata-only-ref', 'record-download-diagnostic', 'skip-full-text'],
+      },
+      {
+        failureCode: 'citation-mismatch',
+        summary: 'Fail closed or return partial payload when DOI, PMID, arXiv id, title, year, or journal verification disagrees.',
+        recoverActions: ['mark-citation-unverified', 'dedupe-by-stable-identifiers', 'request-repair'],
+      },
+    ],
+    providers: providerIds.map((providerId, index) => ({
+      id: `literature.retrieval.${providerId}`,
+      label: providerId,
+      kind: providerId === 'web-search' ? 'external' : 'package',
+      contractRef: `packages/skills/literature/providers/${providerId}`,
+      requiredConfig: [],
+      priority: index + 1,
+    })),
+    lifecycle: {
+      status: 'draft',
+      sourceRef: 'packages/skills/literature',
+    },
+    metadata: {
+      producesArtifactTypes: ['paper-list', 'evidence-matrix', 'research-report', 'workEvidence', 'providerAttempts', 'citationVerificationResults'],
+      budget: {
+        maxProviders: 3,
+        maxResultItems: 30,
+        perProviderTimeoutMs: 10000,
+        maxDownloadBytes: 25000000,
+        maxRetries: 1,
+        exhaustedPolicy: 'partial-payload',
+      },
+      fullTextBudget: {
+        maxFullTextDownloads: 3,
+        promptPolicy: 'refs-first-bounded-summary-only',
+      },
+      citationFields: ['doi', 'pmid', 'arxivId', 'title', 'year', 'journal'],
+    },
+  };
+}
 
 function coreCapabilityManifest(
   id: string,
