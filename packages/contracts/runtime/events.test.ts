@@ -79,6 +79,7 @@ import {
   runtimeDetailIndicatesAbort,
   runtimeEventIsBackend,
   runtimeEventIsUserVisible,
+  runtimeInteractionProgressEventFromCompactRecord,
   runtimeInteractionProgressEventFromUnknown,
   runtimeInteractionProgressPresentation,
   runtimeRecoverActionLabel,
@@ -330,6 +331,33 @@ test('runtime events policy owns structured interaction progress contracts', () 
   });
   assert.equal(cancelled?.termination?.reason, 'timeout');
   assert.equal(cancelled?.termination?.runState, 'cancelled');
+});
+
+test('runtime events policy restores compact interaction progress records from structured detail only', () => {
+  const compact = runtimeInteractionProgressEventFromCompactRecord({
+    type: HUMAN_APPROVAL_REQUIRED_EVENT_TYPE,
+    label: '需要确认',
+    detail: [
+      'Phase: verification',
+      'Status: blocked',
+      'Reason: side-effect-policy',
+      'Interaction: human-approval required',
+    ].join('\n'),
+    prompt: 'PROMPT_TEXT_SHOULD_NOT_DRIVE_UI',
+    scenario: 'SCENARIO_TEXT_SHOULD_NOT_DRIVE_UI',
+    message: 'NATURAL_LANGUAGE_SHOULD_NOT_DRIVE_UI',
+  });
+
+  assert.equal(compact?.schemaVersion, INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION);
+  assert.equal(compact?.type, HUMAN_APPROVAL_REQUIRED_EVENT_TYPE);
+  assert.equal(compact?.phase, 'verification');
+  assert.equal(compact?.status, 'blocked');
+  assert.equal(compact?.reason, 'side-effect-policy');
+  assert.equal(compact?.interaction?.kind, 'human-approval');
+  assert.equal(compact?.interaction?.required, true);
+  assert.doesNotMatch(runtimeInteractionProgressPresentation(compact)?.detail ?? '', /PROMPT_TEXT_SHOULD_NOT_DRIVE_UI/);
+  assert.doesNotMatch(runtimeInteractionProgressPresentation(compact)?.detail ?? '', /SCENARIO_TEXT_SHOULD_NOT_DRIVE_UI/);
+  assert.doesNotMatch(runtimeInteractionProgressPresentation(compact)?.detail ?? '', /NATURAL_LANGUAGE_SHOULD_NOT_DRIVE_UI/);
 });
 
 test('runtime events policy owns stream event presentation literals', () => {

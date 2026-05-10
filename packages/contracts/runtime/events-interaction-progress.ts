@@ -193,6 +193,42 @@ export function runtimeInteractionProgressEventFromUnknown(value: unknown): Runt
   };
 }
 
+export function runtimeInteractionProgressEventFromCompactRecord(value: unknown): RuntimeInteractionProgressEvent | undefined {
+  const normalized = runtimeInteractionProgressEventFromUnknown(value);
+  if (normalized) return normalized;
+  const record = isRecord(value) ? value : undefined;
+  if (!record) return undefined;
+  const type = asString(record.type);
+  if (!isRuntimeInteractionProgressEventType(type)) return undefined;
+  const detail = asString(record.detail) ?? asString(record.summary) ?? asString(record.message) ?? asString(record.text);
+  const structured = parseRuntimeInteractionProgressDetail(detail);
+  if (type === PROCESS_PROGRESS_EVENT_TYPE && !structured) return undefined;
+  const cancellationReason = normalizeRunTerminationReasonValue(asString(record.cancellationReason) ?? structured?.cancellation);
+  const interaction = normalizeRuntimeInteractionRequest(record.interaction)
+    ?? normalizeRuntimeInteractionRequest(structured?.interaction ? { kind: structured.interaction.kind, required: structured.interaction.required } : undefined);
+  const termination = isRunTerminationRecord(record.termination)
+    ? record.termination
+    : cancellationReason
+      ? normalizeRunTermination({ cancellationReason, detail: asString(record.reason) ?? structured?.reason })
+      : undefined;
+  return {
+    schemaVersion: INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION,
+    type,
+    runState: asString(record.runState),
+    requestId: asString(record.requestId),
+    runId: asString(record.runId),
+    traceRef: asString(record.traceRef),
+    phase: asString(record.phase) ?? structured?.phase,
+    status: normalizeRuntimeInteractionProgressStatus(asString(record.status) ?? structured?.status),
+    importance: normalizeRuntimeInteractionProgressImportance(asString(record.importance)),
+    reason: asString(record.reason) ?? structured?.reason,
+    cancellationReason,
+    budget: normalizeRuntimeInteractionProgressBudget(record.budget),
+    interaction,
+    termination,
+  };
+}
+
 export function runtimeInteractionProgressPresentation(value: unknown): RuntimeInteractionProgressPresentation | undefined {
   const event = runtimeInteractionProgressEventFromUnknown(value);
   if (!event) return undefined;
@@ -262,6 +298,42 @@ function normalizeRuntimeInteractionRequest(value: unknown): RuntimeInteractionR
     kind,
     required: typeof record.required === 'boolean' ? record.required : undefined,
   };
+}
+
+function parseRuntimeInteractionProgressDetail(value: string | undefined): {
+  phase?: string;
+  status?: string;
+  reason?: string;
+  cancellation?: string;
+  interaction?: { kind: RuntimeInteractionKind; required?: boolean };
+} | undefined {
+  if (!value || (!/\bPhase:\s*/.test(value) && !/\bStatus:\s*/.test(value) && !/\bInteraction:\s*/.test(value) && !/\bCancellation:\s*/.test(value))) {
+    return undefined;
+  }
+  const interactionText = firstStructuredField(value, 'Interaction');
+  const interaction = interactionText ? parseInteractionField(interactionText) : undefined;
+  const parsed = {
+    phase: firstStructuredField(value, 'Phase'),
+    status: firstStructuredField(value, 'Status'),
+    reason: firstStructuredField(value, 'Reason'),
+    cancellation: firstStructuredField(value, 'Cancellation'),
+    interaction,
+  };
+  return Object.values(parsed).some((entry) => entry !== undefined) ? parsed : undefined;
+}
+
+function parseInteractionField(value: string): { kind: RuntimeInteractionKind; required?: boolean } | undefined {
+  const [kind, modifier] = value.trim().split(/\s+/, 2);
+  if (!kind) return undefined;
+  return {
+    kind,
+    required: modifier === 'required' ? true : modifier === 'optional' ? false : undefined,
+  };
+}
+
+function firstStructuredField(value: string, name: string) {
+  const match = value.match(new RegExp(`${name}:\\s*([^\\n]+)`));
+  return match?.[1]?.trim();
 }
 
 function normalizeRuntimeInteractionProgressBudget(value: unknown): RuntimeInteractionProgressBudget | undefined {

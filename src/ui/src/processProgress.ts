@@ -11,6 +11,7 @@ import {
   runtimeRequestAcceptedProgressCopy,
   silentStreamDecisionRecordFromUnknown,
 } from '@sciforge-ui/runtime-contract';
+import { runtimeInteractionProgressEventFromCompactRecord } from '@sciforge-ui/runtime-contract/events';
 import type { ProcessProgressModel, ProcessProgressPhase, RuntimeInteractionProgressEvent } from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
 import { makeId, nowIso } from './domain';
@@ -60,14 +61,13 @@ export function latestProgressModel(events: AgentStreamEvent[]) {
 }
 
 export function latestProgressModelFromCompactTrace(source: unknown): ProcessProgressModel | undefined {
-  const candidates = compactProgressCandidates(source);
-  for (const candidate of [...candidates].reverse()) {
-    const eventModel = progressModelFromCompactEvent(candidate);
-    if (eventModel) return eventModel;
-    const transcriptModel = progressModelFromCompactText(candidate);
-    if (transcriptModel) return transcriptModel;
-  }
-  return undefined;
+  return progressModelsFromCompactTrace(source).at(-1);
+}
+
+export function progressModelsFromCompactTrace(source: unknown): ProcessProgressModel[] {
+  return compactProgressCandidates(source)
+    .map((candidate) => progressModelFromCompactEvent(candidate) ?? progressModelFromCompactText(candidate))
+    .filter((model): model is ProcessProgressModel => Boolean(model));
 }
 
 export function formatProgressHeadline(model: ProcessProgressModel | undefined, fallback?: string) {
@@ -290,6 +290,8 @@ function looksLikeCompactStreamEvent(value: Record<string, unknown>) {
 
 function progressModelFromCompactEvent(value: unknown): ProcessProgressModel | undefined {
   if (!isRecord(value)) return undefined;
+  const interactionProgress = runtimeInteractionProgressEventFromCompactRecord(value);
+  if (interactionProgress) return progressModelFromInteractionProgress(interactionProgress);
   const type = asString(value.type) ?? PROCESS_PROGRESS_EVENT_TYPE;
   const label = asString(value.label) ?? type;
   const detail = asString(value.detail) ?? asString(value.message) ?? asString(value.text) ?? '';

@@ -27,6 +27,10 @@ const request: GatewayRequest = {
   uiState: {
     selectedComponentIds: ['report-viewer'],
     selectedVerifierIds: ['verifier.schema-artifact'],
+    agentHarnessContextEnvelopeEnabled: true,
+    allowedContextRefs: ['artifact:legacy-context-sentinel'],
+    blockedContextRefs: ['artifact:artifact.report-1'],
+    contextBudget: { maxReferenceDigests: 0 },
     currentReferences: [{
       ref: 'artifact:artifact.report-1',
       kind: 'artifact',
@@ -34,6 +38,21 @@ const request: GatewayRequest = {
       title: 'Prior report',
       summary: 'Current report ref.',
     }],
+    currentReferenceDigests: [
+      { ref: 'artifact:artifact.report-1', digestText: 'Current report digest.' },
+      { ref: 'artifact:stale-report', digestText: 'Stale digest.' },
+    ],
+    agentHarnessHandoff: {
+      schemaVersion: 'sciforge.agent-harness-handoff.v1',
+      harnessContractRef: 'harness-contract:broker-payload-context',
+      harnessTraceRef: 'harness-trace:broker-payload-context',
+      contextRefs: {
+        allowed: ['artifact:artifact.report-1', 'artifact:stale-report'],
+        blocked: ['artifact:stale-report'],
+        required: ['artifact:artifact.report-1'],
+      },
+      contextBudget: { maxReferenceDigests: 1 },
+    },
     capabilityBrief: {
       selected: [{
         id: 'legacy.full.skill',
@@ -85,8 +104,10 @@ const contextEnvelope = buildContextEnvelope(request, {
   mode: 'full',
 });
 const scenarioFacts = contextEnvelope.scenarioFacts as Record<string, unknown>;
+const sessionFacts = contextEnvelope.sessionFacts as Record<string, unknown>;
 const brokerBrief = scenarioFacts.capabilityBrokerBrief as Record<string, unknown>;
 const capabilityBrief = scenarioFacts.capabilityBrief as Record<string, unknown>;
+const governanceAudit = contextEnvelope.contextGovernanceAudit as Record<string, unknown>;
 const brokerText = JSON.stringify(brokerBrief);
 const contextEnvelopeText = JSON.stringify(contextEnvelope);
 
@@ -108,10 +129,16 @@ assert.equal(capabilityBrief.source, 'unified-capability-registry');
 assert.match(JSON.stringify(capabilityBrief), /capabilityBrief\.projected_from_broker/);
 assert.match(JSON.stringify(capabilityBrief), /legacy_capabilityBrief\.ignored/);
 assert.match(JSON.stringify(capabilityBrief), /view\.report/);
+assert.equal(governanceAudit.source, 'request.uiState.agentHarnessHandoff');
+assert.equal(governanceAudit.contractRef, 'harness-contract:broker-payload-context');
+assert.match(JSON.stringify(governanceAudit), /contract-only-context-governance/);
+assert.deepEqual((sessionFacts.currentReferences as Array<Record<string, unknown>>).map((entry) => entry.ref), ['artifact:artifact.report-1']);
+assert.deepEqual((sessionFacts.currentReferenceDigests as Array<Record<string, unknown>>).map((entry) => entry.ref), ['artifact:artifact.report-1']);
 assert.equal(contextEnvelopeText.includes('OLD_CAPABILITY_BRIEF_SELECTED_SENTINEL'), false);
 assert.equal(contextEnvelopeText.includes('OLD_CAPABILITY_BRIEF_EXCLUDED_SENTINEL'), false);
 assert.equal(contextEnvelopeText.includes('OLD_CAPABILITY_BRIEF_VERIFICATION_POLICY_SENTINEL'), false);
 assert.equal(contextEnvelopeText.includes('OLD_CAPABILITY_BRIEF_VERIFICATION_BRIEF_SENTINEL'), false);
+assert.equal(contextEnvelopeText.includes('artifact:legacy-context-sentinel'), false);
 
 const compactContext = buildAgentServerCompactContext(request, {
   contextEnvelope,

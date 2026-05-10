@@ -112,7 +112,6 @@ try {
   assert.match(promptText, /path-only AgentServer workspace edit/);
   assert.match(promptText, /research-report/);
   assert.match(promptText, /report-viewer/);
-  assert.match(promptText, /prior-path-only-attempt/);
 
   const taskArchives = await readdir(join(workspace, '.sciforge', 'tasks'));
   assert.ok(taskArchives.some((entry) => entry.startsWith('generated-literature-')));

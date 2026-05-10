@@ -1,17 +1,15 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, extname, join, resolve } from 'node:path';
-import type { AgentServerGenerationResponse, GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult } from '../runtime-types.js';
+import { dirname, join, resolve } from 'node:path';
+import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult } from '../runtime-types.js';
 import { fileExists, runWorkspaceTask, sha1 } from '../workspace-task-runner.js';
 import { maybeWriteSkillPromotionProposal } from '../skill-promotion.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
 import { errorMessage, generatedTaskArchiveRel, isRecord, isTaskInputRel, safeWorkspaceRel } from '../gateway-utils.js';
 import { sanitizeAgentServerError } from './backend-failure-diagnostics.js';
-import { materializeBackendPayloadOutput, type RuntimeRefBundle } from './artifact-materializer.js';
+import { materializeBackendPayloadOutput } from './artifact-materializer.js';
 import {
-  appendGeneratedTaskDirectPayloadAttemptLifecycle,
   appendGeneratedTaskGenerationFailureLifecycle,
   appendGeneratedTaskAttemptLifecycle,
-  assessGeneratedTaskDirectPayloadLifecycle,
   assessGeneratedTaskValidationLifecycle,
   buildGeneratedTaskRunInputLifecycle,
   recordGeneratedTaskSuccessLedgerLifecycle,
@@ -19,6 +17,15 @@ import {
   runGeneratedTaskPreOutputRepairLifecycle,
   runGeneratedTaskRepairAttemptLifecycle,
 } from './generated-task-runner-validation-lifecycle.js';
+import {
+  backendPayloadRefs,
+  completeAgentServerDirectPayloadLifecycle,
+  readGeneratedTaskFileIfPresent,
+  resolveGeneratedTaskGenerationRetryLifecycle,
+  stableAgentServerPayloadTaskId,
+  writeBackendPayloadLogs,
+  type AgentServerGenerationResult,
+} from './generated-task-runner-generation-lifecycle.js';
 import {
   expectedArtifactTypesForGeneratedRun,
   supplementScopeForGeneratedRun,
@@ -40,22 +47,7 @@ import {
 } from '../../../packages/contracts/runtime/artifact-policy';
 import {
   AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE,
-  AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE,
-  agentServerGeneratedEntrypointContractReason,
-  agentServerGeneratedTaskInterfaceContractReason,
-  agentServerGeneratedTaskRetryDetail,
-  agentServerPathOnlyStrictRetryDirectPayloadReason,
-  agentServerPathOnlyStrictRetryStillMissingReason,
-  agentServerPathOnlyTaskFilesReason,
-  agentServerStablePayloadTaskId,
 } from '../../../packages/skills/runtime-policy';
-
-const AGENTSERVER_DIRECT_PAYLOAD_TASK_REF = 'agentserver://direct-payload' as const;
-
-type AgentServerGenerationResult =
-  | { ok: true; runId?: string; response: AgentServerGenerationResponse }
-  | { ok: true; runId?: string; directPayload: ToolPayload }
-  | { ok: false; error: string; diagnostics?: any };
 
 export interface GeneratedTaskRunnerDeps {
   readConfiguredAgentServerBaseUrl(workspace: string): Promise<string | undefined>;
@@ -112,7 +104,6 @@ export async function runAgentServerGeneratedTask(
     coerceWorkspaceTaskPayload,
     failedTaskPayload,
     firstPayloadFailureReason,
-    mergeReusableContextArtifactsForDirectPayload,
     payloadHasFailureStatus,
     readConfiguredAgentServerBaseUrl,
     repairNeededPayload,
@@ -120,7 +111,6 @@ export async function runAgentServerGeneratedTask(
     schemaErrors,
     tryAgentServerRepairAndRerun,
     validateAndNormalizePayload,
-    ensureDirectAnswerReportArtifact,
   } = deps;
   const workspace = resolve(request.workspacePath || process.cwd());
   const baseUrl = request.agentServerBaseUrl || await readConfiguredAgentServerBaseUrl(workspace);
@@ -170,183 +160,32 @@ export async function runAgentServerGeneratedTask(
     return repairNeededPayload(request, skill, failureReason, agentServerFailurePayloadRefs(generation.diagnostics));
   }
   if ('directPayload' in generation) {
-    const directGeneration = generation;
-    const directRefs = backendPayloadRefs(
-      stableAgentServerPayloadTaskId('direct', request, skill, directGeneration.runId),
-      AGENTSERVER_DIRECT_PAYLOAD_TASK_REF,
-    );
-    await writeBackendPayloadLogs(workspace, directRefs, `AgentServer direct ToolPayload run: ${directGeneration.runId || 'unknown'}\n`);
-    const directPayload = await mergeReusableContextArtifactsForDirectPayload(
-      ensureDirectAnswerReportArtifact(
-        directGeneration.directPayload,
-        request,
-        'agentserver-direct-payload',
-      ),
-      request,
-    );
-    let normalized = await validateAndNormalizePayload(directPayload, request, skill, {
-      ...directRefs,
-      runtimeFingerprint: { runtime: 'AgentServer direct ToolPayload', runId: directGeneration.runId },
-    });
-    normalized = await materializeBackendPayloadOutput(workspace, request, normalized, directRefs);
-    const lifecycle = assessGeneratedTaskDirectPayloadLifecycle({
-      payload: normalized,
-      request,
-      firstPayloadFailureReason,
-      payloadHasFailureStatus,
-    });
-    await appendGeneratedTaskDirectPayloadAttemptLifecycle({
-      workspacePath: workspace,
+    return await completeAgentServerDirectPayloadLifecycle({
+      workspace,
       request,
       skill,
-      runId: directGeneration.runId,
-      refs: directRefs,
-      lifecycle,
-      attemptPlanRefs,
+      generation,
+      deps,
+      kind: 'initial',
+      stableTaskKind: 'direct',
+      logLine: `AgentServer direct ToolPayload run: ${generation.runId || 'unknown'}\n`,
+      source: 'agentserver-direct-payload',
+      callbacks,
     });
-    if (lifecycle.guardFailureReason) {
-      return repairNeededPayload(request, skill, lifecycle.guardFailureReason);
-    }
-    if (lifecycle.payloadFailureStatus) return normalized;
-    const completed = {
-      ...normalized,
-      reasoningTrace: [
-        normalized.reasoningTrace,
-        `AgentServer generation run: ${directGeneration.runId || 'unknown'}`,
-        'AgentServer returned a SciForge ToolPayload directly; no workspace task archive was required.',
-      ].filter(Boolean).join('\n'),
-      executionUnits: normalized.executionUnits.map((unit) => isRecord(unit) ? {
-        ...unit,
-        ...attemptPlanRefs(request, skill),
-        agentServerGenerated: true,
-        agentServerRunId: directGeneration.runId,
-      } : unit),
-    };
-    return await materializeBackendPayloadOutput(workspace, request, completed, directRefs);
   }
 
-  const nonExecutableEntrypointReason = agentServerGeneratedEntrypointContractReason(generation.response, { normalizePath: safeWorkspaceRel });
-  if (nonExecutableEntrypointReason) {
-    emitWorkspaceRuntimeEvent(callbacks, {
-      type: AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE,
-      source: 'workspace-runtime',
-      status: 'running',
-      message: nonExecutableEntrypointReason,
-      detail: agentServerGeneratedTaskRetryDetail('entrypoint'),
-    });
-    const retriedGeneration = await requestAgentServerGeneration({
-      baseUrl,
-      request,
-      skill,
-      skills,
-      workspace,
-      callbacks,
-      strictTaskFilesReason: nonExecutableEntrypointReason,
-    });
-    if (!retriedGeneration.ok) return repairNeededPayload(request, skill, retriedGeneration.error);
-    if ('directPayload' in retriedGeneration) {
-      const retryDirectRefs = backendPayloadRefs(
-        stableAgentServerPayloadTaskId('direct-retry-entrypoint', request, skill, retriedGeneration.runId),
-        AGENTSERVER_DIRECT_PAYLOAD_TASK_REF,
-      );
-      await writeBackendPayloadLogs(workspace, retryDirectRefs, `AgentServer strict retry direct ToolPayload run: ${retriedGeneration.runId || 'unknown'}\n`);
-      const directPayload = await mergeReusableContextArtifactsForDirectPayload(
-        ensureDirectAnswerReportArtifact(retriedGeneration.directPayload, request, 'agentserver-direct-payload'),
-        request,
-      );
-      const normalizedDirect = await validateAndNormalizePayload(directPayload, request, skill, {
-        ...retryDirectRefs,
-        runtimeFingerprint: { runtime: 'AgentServer direct ToolPayload', runId: retriedGeneration.runId },
-      });
-      return await materializeBackendPayloadOutput(workspace, request, normalizedDirect, retryDirectRefs);
-    }
-    generation = retriedGeneration;
-    const retryReason = agentServerGeneratedEntrypointContractReason(generation.response, { normalizePath: safeWorkspaceRel });
-    if (retryReason) {
-      return repairNeededPayload(request, skill, `AgentServer generation contract violation: ${nonExecutableEntrypointReason}. Strict retry still returned invalid entrypoint: ${retryReason}`);
-    }
-  }
-
-  const missingPathOnlyTaskFiles = await missingGeneratedTaskFileContents(workspace, generation.response.taskFiles);
-  if (missingPathOnlyTaskFiles.length) {
-    const reason = agentServerPathOnlyTaskFilesReason(missingPathOnlyTaskFiles);
-    emitWorkspaceRuntimeEvent(callbacks, {
-      type: AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE,
-      source: 'workspace-runtime',
-      status: 'running',
-      message: reason,
-      detail: agentServerGeneratedTaskRetryDetail('path-only-task-files'),
-    });
-    const retriedGeneration = await requestAgentServerGeneration({
-      baseUrl,
-      request,
-      skill,
-      skills,
-      workspace,
-      callbacks,
-      strictTaskFilesReason: reason,
-    });
-    if (!retriedGeneration.ok) {
-      return repairNeededPayload(request, skill, retriedGeneration.error);
-    }
-    if ('directPayload' in retriedGeneration) {
-      return repairNeededPayload(
-        request,
-        skill,
-        agentServerPathOnlyStrictRetryDirectPayloadReason(reason),
-      );
-    }
-    generation = retriedGeneration;
-    const stillMissingPathOnlyTaskFiles = await missingGeneratedTaskFileContents(workspace, generation.response.taskFiles);
-    if (stillMissingPathOnlyTaskFiles.length) {
-      const contractReason = agentServerPathOnlyStrictRetryStillMissingReason(reason, stillMissingPathOnlyTaskFiles);
-      return repairNeededPayload(request, skill, `AgentServer generation contract violation: ${contractReason}`);
-    }
-  }
-
-  const taskInterfaceReason = await generatedTaskInterfaceContractReason(workspace, generation.response);
-  if (taskInterfaceReason) {
-    emitWorkspaceRuntimeEvent(callbacks, {
-      type: AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE,
-      source: 'workspace-runtime',
-      status: 'running',
-      message: taskInterfaceReason,
-      detail: agentServerGeneratedTaskRetryDetail('task-interface'),
-    });
-    const retriedGeneration = await requestAgentServerGeneration({
-      baseUrl,
-      request,
-      skill,
-      skills,
-      workspace,
-      callbacks,
-      strictTaskFilesReason: taskInterfaceReason,
-    });
-    if (!retriedGeneration.ok) {
-      return repairNeededPayload(request, skill, retriedGeneration.error);
-    }
-    if ('directPayload' in retriedGeneration) {
-      const retryDirectRefs = backendPayloadRefs(
-        stableAgentServerPayloadTaskId('direct-retry-interface', request, skill, retriedGeneration.runId),
-        AGENTSERVER_DIRECT_PAYLOAD_TASK_REF,
-      );
-      await writeBackendPayloadLogs(workspace, retryDirectRefs, `AgentServer interface retry direct ToolPayload run: ${retriedGeneration.runId || 'unknown'}\n`);
-      const directPayload = await mergeReusableContextArtifactsForDirectPayload(
-        ensureDirectAnswerReportArtifact(retriedGeneration.directPayload, request, 'agentserver-direct-payload'),
-        request,
-      );
-      const normalizedDirect = await validateAndNormalizePayload(directPayload, request, skill, {
-        ...retryDirectRefs,
-        runtimeFingerprint: { runtime: 'AgentServer direct ToolPayload', runId: retriedGeneration.runId },
-      });
-      return await materializeBackendPayloadOutput(workspace, request, normalizedDirect, retryDirectRefs);
-    }
-    generation = retriedGeneration;
-    const retryInterfaceReason = await generatedTaskInterfaceContractReason(workspace, generation.response);
-    if (retryInterfaceReason) {
-      return repairNeededPayload(request, skill, `AgentServer generation contract violation: ${taskInterfaceReason}. Strict retry still returned a static/non-interface task: ${retryInterfaceReason}`);
-    }
-  }
+  const generationLifecycle = await resolveGeneratedTaskGenerationRetryLifecycle({
+    baseUrl,
+    request,
+    skill,
+    skills,
+    workspace,
+    callbacks,
+    generation,
+    deps,
+  });
+  if (generationLifecycle.kind === 'payload') return generationLifecycle.payload;
+  generation = generationLifecycle.generation;
 
   const taskId = `generated-${request.skillDomain}-${sha1(`${request.prompt}:${Date.now()}`).slice(0, 12)}`;
   const generatedPathMap = new Map<string, string>();
@@ -588,51 +427,6 @@ export async function runAgentServerGeneratedTask(
   }
 }
 
-function backendPayloadRefs(taskId: string, taskRel: string): RuntimeRefBundle {
-  return {
-    taskRel,
-    outputRel: `.sciforge/task-results/${taskId}.json`,
-    stdoutRel: `.sciforge/logs/${taskId}.stdout.log`,
-    stderrRel: `.sciforge/logs/${taskId}.stderr.log`,
-  };
-}
-
-function stableAgentServerPayloadTaskId(
-  kind: string,
-  request: GatewayRequest,
-  skill: SkillAvailability,
-  runId: string | undefined,
-) {
-  return agentServerStablePayloadTaskId({
-    kind,
-    skillDomain: request.skillDomain,
-    skillId: skill.id,
-    prompt: request.prompt,
-    runId,
-    shortHash: (value) => sha1(value).slice(0, 12),
-  });
-}
-
-async function writeBackendPayloadLogs(
-  workspace: string,
-  refs: RuntimeRefBundle,
-  stdout: string,
-  stderr = '',
-) {
-  try {
-    await Promise.all([
-      mkdir(dirname(join(workspace, refs.stdoutRel)), { recursive: true }),
-      mkdir(dirname(join(workspace, refs.stderrRel)), { recursive: true }),
-    ]);
-    await Promise.all([
-      writeFile(join(workspace, refs.stdoutRel), stdout),
-      writeFile(join(workspace, refs.stderrRel), stderr),
-    ]);
-  } catch {
-    // Stable output materialization is the contract; direct-payload logs are best effort.
-  }
-}
-
 async function currentReferenceDigestRecoveryPayload(
   request: GatewayRequest,
   skill: SkillAvailability,
@@ -679,34 +473,4 @@ async function currentReferenceDigestRecoveryPayload(
     ),
     shortHash: (value) => sha1(value).slice(0, 8),
   }) as ToolPayload;
-}
-
-async function generatedTaskInterfaceContractReason(workspace: string, response: AgentServerGenerationResponse) {
-  const entryRel = safeWorkspaceRel(response.entrypoint.path);
-  const content = response.taskFiles.find((file) => safeWorkspaceRel(file.path) === entryRel)?.content
-    ?? await readGeneratedTaskFileIfPresent(workspace, entryRel);
-  if (content === undefined) return undefined;
-  const language = String(response.entrypoint.language || '').toLowerCase();
-  return agentServerGeneratedTaskInterfaceContractReason({ entryRel, language, source: content });
-}
-
-async function readGeneratedTaskFileIfPresent(workspace: string, path: string) {
-  try {
-    return await readFile(join(workspace, safeWorkspaceRel(path)), 'utf8');
-  } catch {
-    return undefined;
-  }
-}
-
-export async function missingGeneratedTaskFileContents(
-  workspace: string,
-  taskFiles: AgentServerGenerationResponse['taskFiles'],
-) {
-  const missing: string[] = [];
-  for (const file of taskFiles) {
-    if (file.content) continue;
-    const existing = await readGeneratedTaskFileIfPresent(workspace, file.path);
-    if (existing === undefined) missing.push(safeWorkspaceRel(file.path));
-  }
-  return missing;
 }

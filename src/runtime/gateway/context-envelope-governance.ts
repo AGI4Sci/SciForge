@@ -46,6 +46,14 @@ type ContextEnvelopeSlimmingTrace = {
   decisionDigest: string;
 };
 
+type ContextEnvelopeIgnoredLegacySource = {
+  source: string;
+  reason: 'contract-only-context-governance';
+  refCount?: number;
+  budgetFields?: string[];
+  keys?: string[];
+};
+
 export type ContextEnvelopeGovernance = {
   schemaVersion: 'sciforge.context-envelope.harness-governance.v1';
   source: string;
@@ -59,34 +67,37 @@ export type ContextEnvelopeGovernance = {
     required: string[];
   };
   decisions: ContextEnvelopeGovernanceDecision[];
+  ignoredLegacySources?: ContextEnvelopeIgnoredLegacySource[];
 };
 
 export function contextEnvelopeGovernanceForRequest(request: GatewayRequest): ContextEnvelopeGovernance | undefined {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   if (!contextEnvelopeGovernanceEnabled(uiState)) return undefined;
   const source = contextEnvelopeGovernanceSource(uiState);
-  if (!source) return undefined;
-  const contextBudget = contextEnvelopeGovernanceBudgetFromRecord(source.contract);
-  const contextRefs = contextEnvelopeGovernanceRefsFromRecord(source.contract);
+  const ignoredLegacySources = contextEnvelopeIgnoredLegacySources(uiState);
+  const contextBudget = source ? contextEnvelopeGovernanceBudgetFromRecord(source.contract) : {};
+  const contextRefs = source ? contextEnvelopeGovernanceRefsFromRecord(source.contract) : emptyContextRefs();
   if (!Object.values(contextBudget).some((value) => value !== undefined)
     && !contextRefs.allowed.length
     && !contextRefs.blocked.length
-    && !contextRefs.required.length) {
+    && !contextRefs.required.length
+    && !ignoredLegacySources.length) {
     return undefined;
   }
   return {
     schemaVersion: 'sciforge.context-envelope.harness-governance.v1',
-    source: source.source,
-    contractRef: stringField(source.contract.contractRef)
+    source: source?.source ?? 'contract-only:no-harness-context',
+    contractRef: source ? stringField(source.contract.contractRef)
       ?? stringField(source.contract.harnessContractRef)
-      ?? stringField(source.summary?.contractRef),
-    traceRef: stringField(source.contract.traceRef)
+      ?? stringField(source.summary?.contractRef) : undefined,
+    traceRef: source ? stringField(source.contract.traceRef)
       ?? stringField(source.contract.harnessTraceRef)
-      ?? stringField(source.summary?.traceRef),
-    shadowMode: booleanField(source.contract.shadowMode),
+      ?? stringField(source.summary?.traceRef) : undefined,
+    shadowMode: source ? booleanField(source.contract.shadowMode) : undefined,
     contextBudget,
     contextRefs,
     decisions: [],
+    ignoredLegacySources: ignoredLegacySources.length ? ignoredLegacySources : undefined,
   };
 }
 
@@ -167,6 +178,7 @@ export function contextEnvelopeGovernanceAudit(governance: ContextEnvelopeGovern
     contextBudget: governance.contextBudget,
     contextRefs: governance.contextRefs,
     decisions: governance.decisions.map((decision) => clipForAgentServerJson(decision, 2)),
+    ignoredLegacySources: governance.ignoredLegacySources?.map((source) => clipForAgentServerJson(source, 1)),
     slimmingTrace: governance.decisions
       .map((decision) => decision.trace)
       .filter((trace): trace is ContextEnvelopeSlimmingTrace => Boolean(trace))
@@ -243,6 +255,59 @@ function contextEnvelopeGovernanceRefsFromRecord(contract: Record<string, unknow
     blocked: uniqueStrings(contract.blockedContextRefs),
     required: uniqueStrings(contract.requiredContextRefs),
   };
+}
+
+function emptyContextRefs() {
+  return { allowed: [], blocked: [], required: [] };
+}
+
+function contextEnvelopeIgnoredLegacySources(uiState: Record<string, unknown>): ContextEnvelopeIgnoredLegacySource[] {
+  return [
+    ...legacyContextSourceFromRecord('request.uiState', uiState),
+    ...legacyContextSourceFromRecord('request.uiState.contextPolicy', isRecord(uiState.contextPolicy) ? uiState.contextPolicy : {}),
+    ...legacyContextSourceFromRecord('request.uiState.capabilityPolicy', isRecord(uiState.capabilityPolicy) ? uiState.capabilityPolicy : {}),
+    ...legacyContextSourceFromRecord('request.uiState.capabilityBrokerPolicy', isRecord(uiState.capabilityBrokerPolicy) ? uiState.capabilityBrokerPolicy : {}),
+  ];
+}
+
+function legacyContextSourceFromRecord(source: string, record: Record<string, unknown>): ContextEnvelopeIgnoredLegacySource[] {
+  const refs = uniqueStrings([
+    ...toStringList(record.allowedContextRefs),
+    ...toStringList(record.blockedContextRefs),
+    ...toStringList(record.requiredContextRefs),
+    ...legacyContextRefsFromValue(record.contextRefs),
+  ]);
+  const budgetFields = legacyContextBudgetFields(record.contextBudget);
+  const keys = [
+    record.allowedContextRefs !== undefined ? 'allowedContextRefs' : undefined,
+    record.blockedContextRefs !== undefined ? 'blockedContextRefs' : undefined,
+    record.requiredContextRefs !== undefined ? 'requiredContextRefs' : undefined,
+    record.contextRefs !== undefined ? 'contextRefs' : undefined,
+    record.contextBudget !== undefined ? 'contextBudget' : undefined,
+  ].filter((key): key is string => Boolean(key));
+  if (!keys.length) return [];
+  return [{
+    source,
+    reason: 'contract-only-context-governance',
+    refCount: refs.length || undefined,
+    budgetFields: budgetFields.length ? budgetFields : undefined,
+    keys,
+  }];
+}
+
+function legacyContextRefsFromValue(value: unknown) {
+  if (!isRecord(value)) return toStringList(value);
+  return [
+    ...toStringList(value.allowed),
+    ...toStringList(value.blocked),
+    ...toStringList(value.required),
+  ];
+}
+
+function legacyContextBudgetFields(value: unknown) {
+  if (!isRecord(value)) return [];
+  return ['maxPromptTokens', 'maxHistoryTurns', 'maxReferenceDigests', 'maxFullTextRefs']
+    .filter((key) => value[key] !== undefined);
 }
 
 function selectGovernanceBudgetedRecords(

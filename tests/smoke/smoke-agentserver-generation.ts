@@ -9,7 +9,7 @@ import { appendTaskAttempt } from '../../src/runtime/task-attempt-history.js';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-agentserver-generation-'));
 let sawGenerationRequest = false;
-let sawPriorAttempt = false;
+let sawLeakedOlderAttempt = false;
 let sawScopeSummary = false;
 let sawContextEnvelope = false;
 let sawContinuationRefs = false;
@@ -116,7 +116,7 @@ const server = createServer(async (req, res) => {
   promptLengths.push(promptText.length);
   if (typeof metadata.contextEnvelopeBytes === 'number') contextBytes.push(metadata.contextEnvelopeBytes);
   requestCount += 1;
-  sawPriorAttempt = promptText.includes('prior-generation-failure');
+  sawLeakedOlderAttempt ||= promptText.includes('prior-generation-failure');
   sawScopeSummary ||= promptText.includes('scopeCheck') && promptText.includes('handoffTargets');
   sawContextEnvelope ||= promptText.includes('"version": "sciforge.context-envelope.v1"')
     && promptText.includes('"workspaceFacts"')
@@ -299,7 +299,7 @@ try {
   });
 
   assert.equal(sawGenerationRequest, true);
-  assert.equal(sawPriorAttempt, true);
+  assert.equal(sawLeakedOlderAttempt, false);
   assert.equal(sawContextEnvelope, true);
   const generatedPaperArtifact = result.artifacts.find((artifact) => artifact.type === 'paper-list');
   assert.ok(generatedPaperArtifact);

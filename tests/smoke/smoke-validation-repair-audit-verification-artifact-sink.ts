@@ -8,6 +8,7 @@ import {
   type ValidationFinding,
 } from '@sciforge-ui/runtime-contract/validation-repair-audit';
 import {
+  buildValidationRepairAuditSinkVerificationArtifactSummary,
   projectValidationRepairAuditSink,
   readValidationRepairAuditSinkVerificationArtifacts,
   VALIDATION_REPAIR_AUDIT_VERIFICATION_ARTIFACT_CONTRACT_ID,
@@ -90,6 +91,19 @@ assert.equal(artifacts[0]?.auditId, chain.audit.auditId);
 assert.equal(artifacts[0]?.contractId, 'sciforge.verification-result.v1');
 assert.equal(artifacts[0]?.failureKind, 'runtime-verification');
 assert.ok(artifacts[0]?.sinkRefs.includes('verification-artifact:verifications/verification-artifact-sink/result.json'));
+
+const summary = await buildValidationRepairAuditSinkVerificationArtifactSummary({
+  workspacePath: workspace,
+  now: () => new Date('2026-05-10T02:00:01.000Z'),
+});
+assert.equal(summary.kind, 'validation-repair-audit-sink-artifact-summary');
+assert.equal(summary.target, 'verification-artifact');
+assert.equal(summary.sourceRef, VALIDATION_REPAIR_AUDIT_VERIFICATION_ARTIFACTS_RELATIVE_DIR);
+assert.equal(summary.generatedAt, '2026-05-10T02:00:01.000Z');
+assert.equal(summary.totalArtifacts, 1);
+assert.deepEqual(summary.auditIds, [chain.audit.auditId]);
+assert.equal(summary.failureKindCounts['runtime-verification'], 1);
+assert.ok(summary.sourceSinkRefs.includes('verification-artifact:verifications/verification-artifact-sink/result.json'));
 
 console.log('[ok] validation/repair/audit verification artifact sink writes stable readable artifact json and compact facts');
 

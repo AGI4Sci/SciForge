@@ -81,6 +81,7 @@ test('context envelope can audit harness contract refs and context budget slimmi
         contractRef: 'harness-contract:test-budget',
         traceRef: 'harness-trace:test-budget',
         contract: {
+          schemaVersion: 'sciforge.agent-harness-contract.v1',
           contractRef: 'harness-contract:test-budget',
           traceRef: 'harness-trace:test-budget',
           allowedContextRefs: ['ref:a', 'ref:b', 'ref:c'],
@@ -148,6 +149,85 @@ test('context envelope can audit harness contract refs and context budget slimmi
   assert.deepEqual(trace.requiredRefs, ['ref:b']);
   assert.equal(typeof trace.decisionRef, 'string');
   assert.equal(typeof trace.decisionDigest, 'string');
+});
+
+test('context envelope governance ignores legacy context fields when contract handoff is present', () => {
+  const envelope = buildContextEnvelope({
+    skillDomain: 'knowledge',
+    prompt: 'Use the contract-only current refs.',
+    artifacts: [],
+    uiState: {
+      agentHarnessContextEnvelopeEnabled: true,
+      currentReferenceDigests: [
+        { ref: 'ref:keep', digestText: 'Keep digest' },
+        { ref: 'ref:drop', digestText: 'Drop digest' },
+        { ref: 'ref:legacy-only', digestText: 'Legacy-only digest' },
+      ],
+      allowedContextRefs: ['ref:legacy-only'],
+      blockedContextRefs: ['ref:keep'],
+      contextBudget: { maxReferenceDigests: 0 },
+      capabilityPolicy: {
+        contextRefs: { allowed: ['ref:legacy-only'], blocked: ['ref:keep'] },
+        contextBudget: { maxReferenceDigests: 0 },
+      },
+      agentHarnessHandoff: {
+        schemaVersion: 'sciforge.agent-harness-handoff.v1',
+        harnessContractRef: 'harness-contract:handoff-only',
+        harnessTraceRef: 'harness-trace:handoff-only',
+        contextRefs: {
+          allowed: ['ref:keep', 'ref:drop'],
+          blocked: ['ref:drop'],
+          required: ['ref:keep'],
+        },
+        contextBudget: {
+          maxReferenceDigests: 1,
+        },
+      },
+    },
+  } as GatewayRequest, { workspace: '/tmp/sciforge-test' });
+
+  assert.deepEqual(
+    records(envelope.sessionFacts.currentReferenceDigests).map((entry) => entry.ref),
+    ['ref:keep'],
+  );
+  const audit = record(envelope.contextGovernanceAudit);
+  assert.equal(audit.source, 'request.uiState.agentHarnessHandoff');
+  assert.equal(audit.contractRef, 'harness-contract:handoff-only');
+  assert.deepEqual(
+    records(audit.ignoredLegacySources).map((entry) => entry.source),
+    ['request.uiState', 'request.uiState.capabilityPolicy'],
+  );
+  assert.deepEqual(records(audit.ignoredLegacySources).map((entry) => entry.refCount), [2, 2]);
+  assert.equal(JSON.stringify(audit.decisions).includes('request.uiState.contextBudget'), false);
+  assert.deepEqual(records(envelope.sessionFacts.currentReferenceDigests).map((entry) => entry.ref).includes('ref:legacy-only'), false);
+});
+
+test('context envelope governance emits ignored legacy audit without legacy-driven filtering', () => {
+  const envelope = buildContextEnvelope({
+    skillDomain: 'knowledge',
+    prompt: 'Legacy context fields should not govern refs.',
+    artifacts: [],
+    uiState: {
+      agentHarnessContextEnvelopeEnabled: true,
+      currentReferenceDigests: [
+        { ref: 'ref:a', digestText: 'A digest' },
+        { ref: 'ref:b', digestText: 'B digest' },
+      ],
+      allowedContextRefs: ['ref:a'],
+      blockedContextRefs: ['ref:b'],
+      contextBudget: { maxReferenceDigests: 1 },
+    },
+  } as GatewayRequest, { workspace: '/tmp/sciforge-test' });
+
+  assert.deepEqual(
+    records(envelope.sessionFacts.currentReferenceDigests).map((entry) => entry.ref),
+    ['ref:a', 'ref:b'],
+  );
+  const audit = record(envelope.contextGovernanceAudit);
+  assert.equal(audit.source, 'contract-only:no-harness-context');
+  assert.deepEqual(record(audit.contextRefs), { allowed: [], blocked: [], required: [] });
+  assert.deepEqual(records(audit.decisions), []);
+  assert.deepEqual(records(audit.ignoredLegacySources).map((entry) => entry.source), ['request.uiState']);
 });
 
 test('repair context extracts WorkEvidence summary from failed output ref', async () => {

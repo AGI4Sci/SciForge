@@ -159,6 +159,21 @@ export function validationRepairTelemetryAttemptMetadataFromPayload(
   return refs.length ? { telemetryRefs: refs } : undefined;
 }
 
+export function validationRepairTelemetryAttemptRefFromWriteResult(
+  writeResult: ValidationRepairTelemetryWriteResult,
+): ValidationRepairTelemetryAttemptRef | undefined {
+  const recordRefs = uniqueStrings(writeResult.records.map((record) => record.ref));
+  const spanKinds = uniqueSpanKinds(writeResult.records.map((record) => record.spanKind));
+  if (!recordRefs.length && !writeResult.projection.spanRefs.length) return undefined;
+  return {
+    kind: 'validation-repair-telemetry',
+    ref: writeResult.ref,
+    spanRefs: uniqueStrings(writeResult.projection.spanRefs),
+    recordRefs,
+    spanKinds,
+  };
+}
+
 export function resolveValidationRepairTelemetryPath(options: ValidationRepairTelemetryWriteOptions) {
   const workspaceRoot = normalizeWorkspaceRootPath(resolve(options.workspacePath));
   if (!workspaceRoot) throw new Error('workspacePath is required');

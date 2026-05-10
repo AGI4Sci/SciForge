@@ -16,8 +16,11 @@ import {
   runtimeTextLooksLikeGeneratedWorkDetail,
   runtimeToolEventActionKind,
   runtimeToolOutputLooksLikeFailure,
+  runtimeInteractionProgressEventFromUnknown,
+  runtimeInteractionProgressPresentation,
   summarizeRuntimeGeneratedTaskFiles,
 } from '@sciforge-ui/runtime-contract';
+import type { RuntimeInteractionProgressEvent } from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
 import {
   classifyWorkEvent,
@@ -37,10 +40,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export type StreamEventImportance = 'key' | 'background' | 'debug';
 export type StreamEventTone = 'info' | 'warning' | 'danger' | 'success' | 'muted';
 export type StreamWorklogOperationKind = WorkEventKind;
-
-const INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION = 'sciforge.interaction-progress-event.v1';
-const INTERACTION_PROGRESS_IMPORTANCE = new Set(['low', 'normal', 'high', 'blocking']);
-const INTERACTION_PROGRESS_STATUSES = new Set(['pending', 'running', 'blocked', 'completed', 'failed', 'cancelled']);
 
 export interface StreamEventPresentation {
   typeLabel: string;
@@ -442,36 +441,25 @@ function interactionProgressSummary(event: AgentStreamEvent): {
 } | undefined {
   const progress = interactionProgressRecord(event);
   if (!progress) return undefined;
-  const type = stringField(progress.type) ?? event.type;
-  const phase = stringField(progress.phase);
-  const status = normalizedInteractionStatus(progress.status);
-  const importance = normalizedInteractionImportance(progress.importance);
-  const reason = stringField(progress.reason);
-  const cancellationReason = stringField(progress.cancellationReason);
-  const interaction = isRecord(progress.interaction) ? progress.interaction : undefined;
-  const interactionKind = stringField(interaction?.kind);
-  const interactionRequired = typeof interaction?.required === 'boolean' ? interaction.required : undefined;
-  const parts = [
-    `Phase: ${phase ?? type}`,
-    status ? `Status: ${status}` : '',
-    reason ? `Reason: ${reason}` : '',
-    cancellationReason ? `Cancellation: ${cancellationReason}` : '',
-    interactionKind ? `Interaction: ${interactionKind}${interactionRequired === undefined ? '' : interactionRequired ? ' required' : ' optional'}` : '',
-    budgetSummary(isRecord(progress.budget) ? progress.budget : undefined),
-  ].filter(Boolean);
+  const presentation = runtimeInteractionProgressPresentation(progress);
+  if (!presentation) return undefined;
+  const type = progress.type;
+  const phase = progress.phase;
+  const status = progress.status;
+  const importance = progress.importance;
+  const interactionKind = progress.interaction?.kind;
   return {
-    detail: parts.join('\n'),
+    detail: presentation.detail,
     importance: streamImportanceForInteractionProgress(importance, status),
     operationKind: operationKindForInteractionProgress(type, phase, status, interactionKind),
     tone: toneForInteractionProgress(status, importance),
-    typeLabel: labelForInteractionProgress(type),
+    typeLabel: presentation.label,
   };
 }
 
-function interactionProgressRecord(event: AgentStreamEvent): Record<string, unknown> | undefined {
+function interactionProgressRecord(event: AgentStreamEvent): RuntimeInteractionProgressEvent | undefined {
   const raw = isRecord(event.raw) ? event.raw : undefined;
-  if (raw && raw.schemaVersion === INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION && typeof raw.type === 'string') return raw;
-  return undefined;
+  return runtimeInteractionProgressEventFromUnknown(raw);
 }
 
 function streamImportanceForInteractionProgress(importance: string | undefined, status: string | undefined): StreamEventImportance {
@@ -505,42 +493,6 @@ function operationKindForInteractionProgress(
   if (/background|silence|wait|pending/.test(normalizedPhase)) return 'wait';
   if (/complete|result|output|emit/.test(normalizedPhase)) return 'emit';
   return normalizedType === PROCESS_PROGRESS_EVENT_TYPE ? 'other' : 'diagnostic';
-}
-
-function labelForInteractionProgress(type: string) {
-  if (type === 'clarification-needed') return '需要澄清';
-  if (type === 'human-approval-required') return '需要确认';
-  if (type === 'interaction-request') return '需要交互';
-  if (type === 'guidance-queued') return '引导已排队';
-  if (type === 'run-cancelled') return '运行取消';
-  if (type === PROCESS_PROGRESS_EVENT_TYPE) return '工作过程';
-  return type;
-}
-
-function budgetSummary(budget: Record<string, unknown> | undefined) {
-  if (!budget) return '';
-  const elapsedMs = numberField(budget.elapsedMs);
-  const remainingMs = numberField(budget.remainingMs);
-  const retryCount = numberField(budget.retryCount);
-  const maxRetries = numberField(budget.maxRetries);
-  const maxWallMs = numberField(budget.maxWallMs);
-  const parts = [
-    elapsedMs !== undefined ? `elapsed ${elapsedMs}ms` : '',
-    remainingMs !== undefined ? `remaining ${remainingMs}ms` : '',
-    retryCount !== undefined || maxRetries !== undefined ? `retries ${retryCount ?? '?'}/${maxRetries ?? '?'}` : '',
-    maxWallMs !== undefined ? `max wall ${maxWallMs}ms` : '',
-  ].filter(Boolean);
-  return parts.length ? `Budget: ${parts.join(', ')}` : '';
-}
-
-function normalizedInteractionImportance(value: unknown) {
-  const text = stringField(value)?.toLowerCase();
-  return text && INTERACTION_PROGRESS_IMPORTANCE.has(text) ? text : undefined;
-}
-
-function normalizedInteractionStatus(value: unknown) {
-  const text = stringField(value)?.toLowerCase();
-  return text && INTERACTION_PROGRESS_STATUSES.has(text) ? text : undefined;
 }
 
 function parseJsonObject(value: string): Record<string, unknown> | undefined {
@@ -601,8 +553,4 @@ function tidyReadableText(value: string) {
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function numberField(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }

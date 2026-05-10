@@ -1,6 +1,7 @@
 import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
-import { isRecord, uniqueStrings } from '../gateway-utils.js';
+import { isRecord } from '../gateway-utils.js';
 import {
+  validationRepairTelemetryAttemptRefFromWriteResult,
   writeValidationRepairTelemetrySpansFromPayload,
   type ValidationRepairTelemetryWriteResult,
 } from './validation-repair-telemetry-sink.js';
@@ -28,19 +29,15 @@ function attachValidationRepairTelemetryRefs(
   const existingTelemetry = Array.isArray(refs.validationRepairTelemetry)
     ? refs.validationRepairTelemetry
     : [];
+  const telemetryRef = validationRepairTelemetryAttemptRefFromWriteResult(writeResult);
+  if (!telemetryRef) return payload;
   return {
     ...payload,
     refs: {
       ...refs,
       validationRepairTelemetry: [
         ...existingTelemetry,
-        {
-          kind: 'validation-repair-telemetry',
-          ref: writeResult.ref,
-          spanRefs: writeResult.projection.spanRefs,
-          recordRefs: writeResult.records.map((record) => record.ref),
-          spanKinds: uniqueStrings(writeResult.records.map((record) => record.spanKind)),
-        },
+        telemetryRef,
       ],
     },
   } as ToolPayload;

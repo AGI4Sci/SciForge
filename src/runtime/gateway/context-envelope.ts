@@ -1,5 +1,4 @@
-import { readdir, stat } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { currentUserRequestFromPrompt } from '@sciforge-ui/runtime-contract/conversation-policy';
 import { defaultArtifactSchemaForSkillDomain } from '@sciforge-ui/runtime-contract/artifact-policy';
 import { runtimeVerificationResultArtifacts } from '@sciforge-ui/runtime-contract/verification-result';
@@ -17,6 +16,8 @@ import {
 import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from './gateway-request.js';
 import { applyContextEnvelopeRecordGovernance, contextEnvelopeGovernanceAudit, contextEnvelopeGovernanceForRequest } from './context-envelope-governance.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
+import { capabilityBrokerHarnessInputProjectionForRequest, mergeCapabilityBrokerToolBudgets } from './capability-broker-harness-input.js';
+export { workspaceTreeSummary } from './context-envelope-workspace-tree.js';
 
 export type AgentServerContextMode = 'full' | 'delta';
 
@@ -217,6 +218,23 @@ function buildCapabilityBrokerBriefForAgentServerFromRegistry(
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const capabilityPolicy = brokerCapabilityPolicyForRequest(request);
   const verificationPolicy = brokerVerificationPolicyForRequest(request, capabilityPolicy);
+  const harnessInput = capabilityBrokerHarnessInputProjectionForRequest(request);
+  const skillHints = uniqueSkillHints([
+    ...brokerSkillHintsForRequest(request, capabilityPolicy),
+    ...harnessInput.skillHints,
+  ]).slice(0, 24);
+  const blockedCapabilities = uniqueStrings([
+    ...brokerBlockedCapabilitiesForRequest(uiState, capabilityPolicy),
+    ...harnessInput.blockedCapabilities,
+  ]);
+  const toolBudget = mergeCapabilityBrokerToolBudgets(
+    brokerToolBudgetForRequest(uiState, capabilityPolicy),
+    harnessInput.toolBudget,
+  );
+  const preferredCapabilityIds = uniqueStrings([
+    ...preferredCapabilityIdsForRequest(request),
+    ...harnessInput.preferredCapabilityIds,
+  ]);
   const registry = new BrokerCapabilityManifestRegistry(loadedRegistry.manifests);
   const brokered = brokerCapabilities({
     prompt: request.prompt,
@@ -224,14 +242,14 @@ function buildCapabilityBrokerBriefForAgentServerFromRegistry(
     artifactIndex: brokerArtifactIndexForRequest(request),
     failureHistory: brokerFailureHistoryForRequest(request),
     capabilityEvolutionSummary: brokerCapabilityEvolutionSummaryForRequest(request),
-    skillHints: brokerSkillHintsForRequest(request, capabilityPolicy),
-    blockedCapabilities: brokerBlockedCapabilitiesForRequest(uiState, capabilityPolicy),
-    toolBudget: brokerToolBudgetForRequest(uiState, capabilityPolicy),
+    skillHints,
+    blockedCapabilities,
+    toolBudget,
     verificationPolicy,
     scenarioPolicy: {
       id: request.scenarioPackageRef?.id ?? request.skillDomain,
-      preferredCapabilityIds: preferredCapabilityIdsForRequest(request),
-      blockedCapabilityIds: brokerBlockedCapabilitiesForRequest(uiState, capabilityPolicy),
+      preferredCapabilityIds,
+      blockedCapabilityIds: blockedCapabilities,
       requiredTags: uniqueStrings([
         request.skillDomain,
         ...expectedArtifactTypesForRequest(request),
@@ -260,6 +278,7 @@ function buildCapabilityBrokerBriefForAgentServerFromRegistry(
   return compactBrokerOutputForAgentServer(
     brokered,
     options.includeRegistryAudit ? loadedRegistry.compactAudit : undefined,
+    harnessInput.audit,
   );
 }
 
@@ -277,6 +296,7 @@ function brokerCapabilityEvolutionSummaryForRequest(request: GatewayRequest) {
 function compactBrokerOutputForAgentServer(
   brokered: CapabilityBrokerOutput,
   registryAudit?: CompactCapabilityManifestRegistryAudit,
+  harnessInputAudit?: Record<string, unknown>,
 ) {
   return {
     schemaVersion: 'sciforge.agentserver.capability-broker-brief.v1',
@@ -293,6 +313,7 @@ function compactBrokerOutputForAgentServer(
       .filter((entry) => brokered.briefs.some((brief) => brief.id === entry.id) || entry.excluded)
       .slice(0, 16)
       .map((entry) => clipForAgentServerJson(entry, 2)),
+    ...(harnessInputAudit ? { harnessInputAudit: clipForAgentServerJson(harnessInputAudit, 1) } : {}),
     ...(registryAudit ? { registryAudit: compactCapabilityRegistryAuditForBroker(registryAudit) } : {}),
     inputSummary: brokered.inputSummary,
   };
@@ -721,54 +742,6 @@ function failureEvidenceRefs(value: unknown) {
     refs.push(...failureEvidenceRefs(attempt));
   }
   return Array.from(new Set(refs)).slice(0, 12);
-}
-
-export async function workspaceTreeSummary(workspace: string) {
-  const root = resolve(workspace);
-  const out: Array<{ path: string; kind: 'file' | 'folder'; sizeBytes?: number }> = [];
-  async function walk(dir: string, prefix = '') {
-    if (out.length >= 80) return;
-    let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (out.length >= 80) return;
-      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (shouldSkipWorkspaceTreeEntry(rel, entry.name)) continue;
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        out.push({ path: rel, kind: 'folder' });
-        if (shouldDescendWorkspaceTreeEntry(rel)) await walk(path, rel);
-      } else if (entry.isFile()) {
-        let sizeBytes = 0;
-        try {
-          sizeBytes = (await stat(path)).size;
-        } catch {
-          // Size is optional.
-        }
-        out.push({ path: rel, kind: 'file', sizeBytes });
-      }
-    }
-  }
-  await walk(root);
-  return out;
-}
-
-function shouldSkipWorkspaceTreeEntry(rel: string, name: string) {
-  if (name === 'node_modules' || name === '.git') return true;
-  if (rel === '.bioagent' || rel.startsWith('.bioagent/')) return true;
-  if (rel.startsWith('.sciforge/') && rel.split('/').length > 2) return true;
-  if (/^\.sciforge\/(?:artifacts|task-results|logs|sessions|versions)\//.test(rel)) return true;
-  return false;
-}
-
-function shouldDescendWorkspaceTreeEntry(rel: string) {
-  if (rel.startsWith('.sciforge/')) return false;
-  if (/^\.sciforge\/(?:artifacts|task-results|logs|sessions|versions)$/.test(rel)) return false;
-  return rel.split('/').length < 3;
 }
 
 function policyConversationEntries(value: unknown) {

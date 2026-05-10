@@ -591,6 +591,7 @@ function matchesCapabilityId(values: string[] | undefined, manifest: CapabilityM
   const ids = new Set((values ?? []).map((value) => value.trim()).filter(Boolean));
   if (!ids.size) return false;
   if (ids.has(manifest.id) || ids.has(manifest.kind)) return true;
+  if (manifest.sideEffects.some((effect) => ids.has(effect))) return true;
   return manifest.providers.some((provider) => ids.has(provider.id));
 }
 

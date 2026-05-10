@@ -173,6 +173,30 @@ export interface ValidationRepairAuditObserveInvocationWriteResult {
   fact: ValidationRepairAuditObserveInvocationFact;
 }
 
+export interface ValidationRepairAuditSinkArtifactSummary {
+  kind: 'validation-repair-audit-sink-artifact-summary';
+  target: 'verification-artifact' | 'observe-invocation';
+  sourceRef: string;
+  generatedAt: string;
+  totalArtifacts: number;
+  auditIds: string[];
+  validationDecisionIds: string[];
+  repairDecisionIds: string[];
+  contractIds: string[];
+  failureKindCounts: Record<string, number>;
+  outcomeCounts: Record<string, number>;
+  statusCounts: Record<string, number>;
+  sourceSinkRefs: string[];
+  sinkRefs: string[];
+  recentArtifacts: Array<{
+    artifactId: string;
+    sourceSinkRef: string;
+    auditId: string;
+    status?: string;
+    recordedAt: string;
+  }>;
+}
+
 export function projectValidationRepairAuditSink(
   source: ValidationRepairAuditSinkSource | ValidationRepairAuditSinkSource[],
   options: ValidationRepairAuditSinkProjectionOptions = {},
@@ -249,6 +273,17 @@ export async function readValidationRepairAuditSinkVerificationArtifacts(
   return artifacts;
 }
 
+export async function buildValidationRepairAuditSinkVerificationArtifactSummary(
+  options: ValidationRepairAuditVerificationArtifactWriteOptions,
+): Promise<ValidationRepairAuditSinkArtifactSummary> {
+  return validationRepairAuditSinkArtifactSummary(
+    'verification-artifact',
+    toWorkspaceRef(options.workspacePath, resolveValidationRepairAuditVerificationArtifactDir(options)),
+    await readValidationRepairAuditSinkVerificationArtifacts(options),
+    options.now,
+  );
+}
+
 export async function writeValidationRepairAuditSinkObserveInvocationRecords(
   source: ValidationRepairAuditSinkSource | ValidationRepairAuditSinkSource[],
   options: ValidationRepairAuditObserveInvocationWriteOptions,
@@ -301,6 +336,17 @@ export async function readValidationRepairAuditSinkObserveInvocationRecords(
     artifacts.push(JSON.parse(raw) as ValidationRepairAuditObserveInvocationArtifact);
   }
   return artifacts;
+}
+
+export async function buildValidationRepairAuditSinkObserveInvocationSummary(
+  options: ValidationRepairAuditObserveInvocationWriteOptions,
+): Promise<ValidationRepairAuditSinkArtifactSummary> {
+  return validationRepairAuditSinkArtifactSummary(
+    'observe-invocation',
+    toWorkspaceRef(options.workspacePath, resolveValidationRepairAuditObserveInvocationDir(options)),
+    await readValidationRepairAuditSinkObserveInvocationRecords(options),
+    options.now,
+  );
 }
 
 export function mergeValidationRepairAuditAttemptMetadata(
@@ -593,6 +639,37 @@ function validationRepairAuditObserveInvocationFactFromArtifact(
   };
 }
 
+function validationRepairAuditSinkArtifactSummary(
+  target: ValidationRepairAuditSinkArtifactSummary['target'],
+  sourceRef: string,
+  artifacts: Array<ValidationRepairAuditVerificationArtifact | ValidationRepairAuditObserveInvocationArtifact>,
+  now: (() => Date) | undefined,
+): ValidationRepairAuditSinkArtifactSummary {
+  return {
+    kind: 'validation-repair-audit-sink-artifact-summary',
+    target,
+    sourceRef,
+    generatedAt: (now ?? (() => new Date()))().toISOString(),
+    totalArtifacts: artifacts.length,
+    auditIds: uniqueStrings(artifacts.map((artifact) => artifact.auditId)),
+    validationDecisionIds: uniqueStrings(artifacts.map((artifact) => artifact.validationDecisionId)),
+    repairDecisionIds: uniqueStrings(artifacts.map((artifact) => artifact.repairDecisionId)),
+    contractIds: uniqueStrings(artifacts.map((artifact) => artifact.contractId)),
+    failureKindCounts: countStrings(artifacts.map((artifact) => artifact.failureKind)),
+    outcomeCounts: countStrings(artifacts.map((artifact) => artifact.outcome)),
+    statusCounts: countStrings(artifacts.map((artifact) => observeArtifactStatus(artifact))),
+    sourceSinkRefs: uniqueStrings(artifacts.map((artifact) => artifact.sourceSinkRef)),
+    sinkRefs: uniqueStrings(artifacts.flatMap((artifact) => artifact.sinkRefs)),
+    recentArtifacts: artifacts.slice(-25).map((artifact) => ({
+      artifactId: artifact.artifactId,
+      sourceSinkRef: artifact.sourceSinkRef,
+      auditId: artifact.auditId,
+      status: observeArtifactStatus(artifact),
+      recordedAt: artifact.recordedAt,
+    })),
+  };
+}
+
 function resolveValidationRepairAuditVerificationArtifactPath(
   options: ValidationRepairAuditVerificationArtifactWriteOptions,
   sinkRecord: ValidationRepairAuditSinkRecord,
@@ -673,6 +750,20 @@ function uniqueTargets(targets: ValidationRepairAuditSinkTarget[]) {
 
 function uniqueStrings(values: Array<string | undefined>) {
   return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0))];
+}
+
+function countStrings(values: Array<string | undefined>) {
+  const counts: Record<string, number> = {};
+  for (const value of uniqueStrings(values)) {
+    counts[value] = values.filter((candidate) => candidate === value).length;
+  }
+  return counts;
+}
+
+function observeArtifactStatus(
+  artifact: ValidationRepairAuditVerificationArtifact | ValidationRepairAuditObserveInvocationArtifact,
+) {
+  return 'observeInvocation' in artifact ? artifact.observeInvocation?.status : undefined;
 }
 
 function uniqueSinkChains(chains: ValidationRepairAuditSinkChain[]) {

@@ -6,6 +6,8 @@ import {
   PROCESS_PROGRESS_PHASE,
   PROCESS_PROGRESS_REASON,
   PROCESS_PROGRESS_STATUS,
+  CLARIFICATION_NEEDED_EVENT_TYPE,
+  GUIDANCE_QUEUED_EVENT_TYPE,
   HUMAN_APPROVAL_REQUIRED_EVENT_TYPE,
   INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION,
   RUN_CANCELLED_EVENT_TYPE,
@@ -13,7 +15,7 @@ import {
 } from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
 import { normalizeWorkspaceRuntimeEvent } from './api/sciforgeToolsClient/runtimeEvents';
-import { buildInitialResponseProgressEvent, buildRequestAcceptedProgressEvent, buildSilentStreamProgressEvent, formatProgressHeadline, latestProgressModelFromCompactTrace, progressModelFromEvent, silentStreamWaitThresholdMs } from './processProgress';
+import { buildInitialResponseProgressEvent, buildRequestAcceptedProgressEvent, buildSilentStreamProgressEvent, formatProgressHeadline, latestProgressModelFromCompactTrace, progressModelFromEvent, progressModelsFromCompactTrace, silentStreamWaitThresholdMs } from './processProgress';
 
 function event(partial: Partial<AgentStreamEvent>): AgentStreamEvent {
   return {
@@ -22,6 +24,18 @@ function event(partial: Partial<AgentStreamEvent>): AgentStreamEvent {
     label: partial.label ?? partial.type ?? 'event',
     createdAt: partial.createdAt ?? '2026-05-02T00:00:00.000Z',
     ...partial,
+  };
+}
+
+function compactInteractionEvent(type: string, label: string, detailLines: string[]) {
+  return {
+    type,
+    label,
+    detail: detailLines.join('\n'),
+    createdAt: '2026-05-08T00:01:00.000Z',
+    prompt: 'PROMPT_TEXT_SHOULD_NOT_DECIDE search write failed approval',
+    scenario: 'SCENARIO_TEXT_SHOULD_NOT_DECIDE retrieval repair blocked',
+    message: 'NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE search write failed approval',
   };
 }
 
@@ -252,6 +266,55 @@ test('maps structured run cancellation into process progress cancellation status
   assert.equal(model?.status, PROCESS_PROGRESS_STATUS.CANCELLED);
   assert.equal(model?.nextStep, '运行已结束，保留结构化终止原因供下一轮恢复或审计。');
   assert.match(model?.detail ?? '', /Cancellation: system-aborted/);
+});
+
+test('restores compact interaction progress streamProcess events without prompt or scenario semantics', () => {
+  const models = progressModelsFromCompactTrace({
+    runs: [{
+      id: 'run-interactions',
+      raw: {
+        streamProcess: {
+          eventCount: 4,
+          events: [
+            compactInteractionEvent(CLARIFICATION_NEEDED_EVENT_TYPE, '需要澄清', [
+              'Phase: interaction',
+              'Status: blocked',
+              'Reason: missing-study-scope',
+              'Interaction: clarification required',
+            ]),
+            compactInteractionEvent(HUMAN_APPROVAL_REQUIRED_EVENT_TYPE, '需要确认', [
+              'Phase: verification',
+              'Status: blocked',
+              'Reason: side-effect-policy',
+              'Interaction: human-approval required',
+            ]),
+            compactInteractionEvent(GUIDANCE_QUEUED_EVENT_TYPE, '引导已排队', [
+              'Phase: interaction',
+              'Status: running',
+              'Reason: backend run is active',
+              'Interaction: guidance optional',
+            ]),
+            compactInteractionEvent(RUN_CANCELLED_EVENT_TYPE, '运行取消', [
+              'Phase: run',
+              'Status: cancelled',
+              'Reason: user interrupt',
+              'Cancellation: user-aborted',
+            ]),
+          ],
+        },
+      },
+    }],
+  });
+
+  assert.deepEqual(models.map((model) => model.title), ['需要澄清', '需要确认', '引导已排队', '运行取消']);
+  assert.equal(models[0].waitingFor, '澄清信息');
+  assert.equal(models[1].waitingFor, '人工确认');
+  assert.equal(models[2].waitingFor, '当前 run 结束后合并引导');
+  assert.equal(models[3].status, PROCESS_PROGRESS_STATUS.CANCELLED);
+  const visible = models.map((model) => formatProgressHeadline(model) || model.detail).join('\n');
+  assert.doesNotMatch(visible, /PROMPT_TEXT_SHOULD_NOT_DECIDE/);
+  assert.doesNotMatch(visible, /SCENARIO_TEXT_SHOULD_NOT_DECIDE/);
+  assert.doesNotMatch(visible, /NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE/);
 });
 
 test('recovers latest progress model from compact stream process events without the React event array', () => {

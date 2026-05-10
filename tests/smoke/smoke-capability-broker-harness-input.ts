@@ -153,4 +153,93 @@ assert.equal(JSON.stringify(budgetedRetrievalBrief).includes('inputSchema'), fal
 assert.equal(JSON.stringify(budgetedRetrievalBrief).includes('"examples"'), false, 'budgeted broker brief must keep examples lazy');
 assert.equal(JSON.stringify(budgetedRetrievalBrief).includes('repairHints'), false, 'budgeted broker brief must keep repair hints lazy');
 
+const harnessContractRequest: GatewayRequest = {
+  skillDomain: 'literature',
+  prompt: 'Validate the current report schema and render a report view.',
+  artifacts: request.artifacts,
+  references: request.references,
+  selectedVerifierIds: ['verifier.schema'],
+  uiState: {
+    agentHarness: {
+      profileId: 'privacy-fast',
+      contractRef: 'harness-contract:broker-opt-in',
+      traceRef: 'harness-trace:broker-opt-in',
+      contract: {
+        schemaVersion: 'sciforge.agent-harness-contract.v1',
+        profileId: 'privacy-fast',
+        capabilityPolicy: {
+          preferredCapabilityIds: ['view.report'],
+          blockedCapabilities: ['runtime.workspace-write'],
+          candidates: [{
+            kind: 'view',
+            id: 'view.report',
+            manifestRef: 'capability:view.report',
+            score: 90,
+            reasons: ['contract selected compact report view candidate'],
+            providerAvailability: [{ providerId: 'sciforge.core.view.report', available: true }],
+          }, {
+            kind: 'verifier',
+            id: 'verifier.schema',
+            manifestRef: 'capability:verifier.schema',
+            score: 80,
+            reasons: ['contract selected schema verifier candidate'],
+            providerAvailability: [{ providerId: 'sciforge.core.verifier.schema', available: true }],
+          }],
+        },
+        toolBudget: {
+          maxToolCalls: 1,
+          maxNetworkCalls: 0,
+          maxProviders: 2,
+          exhaustedPolicy: 'fail-with-reason',
+        },
+      },
+    },
+  },
+};
+
+const harnessDefaultBrief = buildCapabilityBrokerBriefForAgentServer(harnessContractRequest);
+const harnessDefaultSummary = harnessDefaultBrief.inputSummary as Record<string, unknown>;
+assert.equal(Object.hasOwn(harnessDefaultBrief, 'harnessInputAudit'), false, 'harness broker input must stay opt-in');
+assert.equal(harnessDefaultSummary.harnessSkillHints, 0, 'agentHarness contract candidates should not be consumed by default');
+assert.equal(harnessDefaultSummary.blockedCapabilities, 0, 'agentHarness blocked capabilities should not be consumed by default');
+assert.deepEqual(harnessDefaultSummary.toolBudgetKeys, [], 'agentHarness toolBudget should not be consumed by default');
+
+const harnessOptInBrief = buildCapabilityBrokerBriefForAgentServer({
+  ...harnessContractRequest,
+  uiState: {
+    ...harnessContractRequest.uiState,
+    agentHarnessCapabilityBrokerEnabled: true,
+  },
+});
+const harnessOptInSummary = harnessOptInBrief.inputSummary as Record<string, unknown>;
+const harnessOptInAudit = harnessOptInBrief.harnessInputAudit as Record<string, unknown>;
+const harnessOptInAuditConsumed = harnessOptInAudit.consumed as Record<string, unknown>;
+const harnessOptInSources = harnessOptInAudit.sources as Array<Record<string, unknown>>;
+const harnessOptInBrokerAudit = harnessOptInBrief.audit as Array<Record<string, unknown>>;
+
+assert.equal(harnessOptInAudit.schemaVersion, 'sciforge.agentserver.capability-broker-harness-input-audit.v1');
+assert.equal(harnessOptInAudit.status, 'consumed');
+assert.equal(harnessOptInAudit.contractRef, 'harness-contract:broker-opt-in');
+assert.equal(harnessOptInAudit.traceRef, 'harness-trace:broker-opt-in');
+assert.equal(harnessOptInAudit.profileId, 'privacy-fast');
+assert.equal(harnessOptInAuditConsumed.skillHints, 2);
+assert.equal(harnessOptInAuditConsumed.blockedCapabilities, 1);
+assert.deepEqual(harnessOptInAuditConsumed.toolBudgetKeys, ['exhaustedPolicy', 'maxNetworkCalls', 'maxProviders', 'maxToolCalls']);
+assert.equal(harnessOptInSources[0]?.source, 'request.uiState.agentHarness.contract');
+assert.equal(harnessOptInSummary.harnessSkillHints, 2);
+assert.equal(harnessOptInSummary.blockedCapabilities, 1);
+assert.deepEqual(harnessOptInSummary.toolBudgetKeys, ['exhaustedPolicy', 'maxNetworkCalls', 'maxProviders', 'maxToolCalls']);
+assert.equal(
+  harnessOptInBrokerAudit.find((entry) => entry.id === 'runtime.workspace-write')?.excluded,
+  'blocked by harness capability policy',
+);
+assert.ok(
+  JSON.stringify(harnessOptInBrief.briefs).includes('skill hint from agent-harness-contract'),
+  'opt-in harness candidates should reach compact selected broker signals',
+);
+assert.ok(
+  JSON.stringify(harnessOptInBrief).includes('maxProviders=2'),
+  'opt-in harness toolBudget should reach compact broker budget signals',
+);
+
 console.log('[ok] capability broker carries harness input hints and budgeted compact candidate briefs');

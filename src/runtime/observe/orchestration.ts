@@ -25,6 +25,7 @@ import {
 } from '../gateway/validation-repair-audit-sink.js';
 import {
   buildValidationRepairTelemetrySummary,
+  validationRepairTelemetryAttemptRefFromWriteResult,
   writeValidationRepairTelemetrySpans,
   type ValidationRepairTelemetryAttemptRef,
   type ValidationRepairTelemetrySummary,
@@ -206,17 +207,13 @@ async function writeObserveInvocationTelemetrySinkRecord(
       spanKinds: ['observe-invocation'],
     });
     if (!writeResult.records.length) return writeResult;
+    const telemetryRef = validationRepairTelemetryAttemptRefFromWriteResult(writeResult);
+    if (!telemetryRef) return writeResult;
     record.refs = {
       ...record.refs,
       validationRepairTelemetry: [
         ...(record.refs?.validationRepairTelemetry ?? []),
-        {
-          kind: 'validation-repair-telemetry',
-          ref: writeResult.ref,
-          spanRefs: writeResult.projection.spanRefs,
-          recordRefs: writeResult.records.map((telemetryRecord) => telemetryRecord.ref),
-          spanKinds: ['observe-invocation'],
-        },
+        telemetryRef,
       ],
     };
     if (options.readSummary) {

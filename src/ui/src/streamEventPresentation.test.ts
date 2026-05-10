@@ -221,6 +221,55 @@ test('structured interaction progress fields drive presentation without prompt o
   assert.match(worklog.summary, /1 验证/);
 });
 
+test('interaction progress presentation covers blocked guidance and cancellation from structured contract fields', () => {
+  const events = [
+    normalizeWorkspaceRuntimeEvent({
+      schemaVersion: 'sciforge.interaction-progress-event.v1',
+      type: 'human-approval-required',
+      phase: 'verification',
+      status: 'blocked',
+      importance: 'blocking',
+      reason: 'side-effect-policy',
+      interaction: { kind: 'human-approval', required: true },
+      prompt: 'PROMPT_TEXT_SHOULD_NOT_DECIDE',
+      scenario: 'SCENARIO_TEXT_SHOULD_NOT_DECIDE',
+    }),
+    normalizeWorkspaceRuntimeEvent({
+      schemaVersion: 'sciforge.interaction-progress-event.v1',
+      type: 'guidance-queued',
+      phase: 'interaction',
+      status: 'running',
+      importance: 'normal',
+      reason: 'backend run is active',
+      interaction: { kind: 'guidance', required: false },
+      message: 'NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE',
+    }),
+    normalizeWorkspaceRuntimeEvent({
+      schemaVersion: 'sciforge.interaction-progress-event.v1',
+      type: 'run-cancelled',
+      phase: 'run',
+      status: 'cancelled',
+      cancellationReason: 'user-aborted',
+      reason: 'user interrupt',
+      prompt: 'PROMPT_TEXT_SHOULD_NOT_DECIDE',
+    }),
+  ];
+
+  const worklog = presentStreamWorklog(events);
+
+  assert.deepEqual(worklog.entries.map((entry) => entry.presentation.typeLabel), ['需要确认', '引导已排队', '运行取消']);
+  assert.deepEqual(worklog.entries.map((entry) => entry.operationKind), ['wait', 'wait', 'diagnostic']);
+  assert.equal(worklog.entries[0].presentation.tone, 'warning');
+  assert.equal(worklog.entries[2].presentation.tone, 'danger');
+  const visible = worklog.entries.map((entry) => entry.presentation.detail).join('\n');
+  assert.match(visible, /Interaction: human-approval required/);
+  assert.match(visible, /Interaction: guidance optional/);
+  assert.match(visible, /Cancellation: user-cancelled/);
+  assert.doesNotMatch(visible, /PROMPT_TEXT_SHOULD_NOT_DECIDE/);
+  assert.doesNotMatch(visible, /SCENARIO_TEXT_SHOULD_NOT_DECIDE/);
+  assert.doesNotMatch(visible, /NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE/);
+});
+
 test('cursor-like worklog fixture summarizes operations and keeps raw output second-level collapsed', () => {
   const events = [
     event({

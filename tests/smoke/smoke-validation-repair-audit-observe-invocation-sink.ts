@@ -7,7 +7,11 @@ import {
   buildObserveInvocationPlan,
   runObserveInvocationPlan,
 } from '../../src/runtime/observe/orchestration';
-import { readValidationRepairAuditSinkObserveInvocationRecords } from '../../src/runtime/gateway/validation-repair-audit-sink';
+import {
+  buildValidationRepairAuditSinkObserveInvocationSummary,
+  readValidationRepairAuditSinkObserveInvocationRecords,
+  VALIDATION_REPAIR_AUDIT_OBSERVE_INVOCATIONS_RELATIVE_DIR,
+} from '../../src/runtime/gateway/validation-repair-audit-sink';
 import { readValidationRepairTelemetrySpanRecords } from '../../src/runtime/gateway/validation-repair-telemetry-sink';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-validation-repair-observe-invocation-sink-'));
@@ -69,6 +73,16 @@ assert.equal(artifact?.repairDecision?.action, 'repair-rerun');
 assert.ok(artifact?.relatedRefs.includes('artifact:screenshot-1'));
 assert.ok(artifact?.sinkRefs.includes(`observe-invocation:${records[0]?.callRef}`));
 assert.equal(artifact?.recordedAt, '2026-05-10T00:00:00.000Z');
+
+const summary = await buildValidationRepairAuditSinkObserveInvocationSummary({ workspacePath: workspace, now });
+assert.equal(summary.kind, 'validation-repair-audit-sink-artifact-summary');
+assert.equal(summary.target, 'observe-invocation');
+assert.equal(summary.sourceRef, VALIDATION_REPAIR_AUDIT_OBSERVE_INVOCATIONS_RELATIVE_DIR);
+assert.equal(summary.totalArtifacts, 1);
+assert.deepEqual(summary.auditIds, [artifact?.auditId]);
+assert.equal(summary.failureKindCounts['observe-trace'], 1);
+assert.equal(summary.statusCounts.failed, 1);
+assert.ok(summary.sourceSinkRefs.includes(`observe-invocation:${records[0]?.callRef}`));
 
 const telemetryRecords = await readValidationRepairTelemetrySpanRecords({ workspacePath: workspace });
 assert.equal(telemetryRecords.length, 1);
