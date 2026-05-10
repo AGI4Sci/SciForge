@@ -293,14 +293,17 @@ function agentHarnessContinuityDecisionAuditEnabled(request: GatewayRequest) {
 function agentHarnessBackendSelectionDecisionAuditEnabled(request: GatewayRequest) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const harness = isRecord(uiState.agentHarness) ? uiState.agentHarness : isRecord(uiState.harness) ? uiState.harness : {};
-  return [
-    uiState.agentHarnessBackendSelectionDecisionEnabled,
-    uiState.agentHarnessBackendSelectionAuditEnabled,
-    uiState.agentHarnessTraceBackendSelectionDecision,
-    harness.backendSelectionDecisionEnabled,
-    harness.backendSelectionAuditEnabled,
-    harness.traceBackendSelectionDecision,
+  const disabled = [
+    uiState.agentHarnessBackendSelectionDecisionDisabled,
+    uiState.agentHarnessBackendSelectionAuditDisabled,
+    uiState.agentHarnessSkipBackendSelectionDecision,
+    uiState.agentHarnessDisableBackendSelectionDecision,
+    harness.backendSelectionDecisionDisabled,
+    harness.backendSelectionAuditDisabled,
+    harness.skipBackendSelectionDecision,
+    harness.disableBackendSelectionDecision,
   ].some(isEnabledFlag);
+  return !disabled;
 }
 
 function agentHarnessProfileId(request: GatewayRequest) {
