@@ -14,13 +14,15 @@ export function agentHarnessProgressPlanProjection(
   },
 ) {
   const agentHarness = isRecord(input.uiState.agentHarness) ? input.uiState.agentHarness : {};
-  const enabled = [
-    input.uiState.agentHarnessProgressPlanEnabled,
-    input.uiState.agentHarnessConsumeProgressPlan,
-    agentHarness.progressPlanEnabled,
-    agentHarness.consumeProgressPlan,
+  const disabled = [
+    input.uiState.agentHarnessProgressPlanDisabled,
+    input.uiState.agentHarnessSkipProgressPlan,
+    input.uiState.agentHarnessDisableProgressPlan,
+    agentHarness.progressPlanDisabled,
+    agentHarness.skipProgressPlan,
+    agentHarness.disableProgressPlan,
   ].some(isEnabledFlag);
-  if (!enabled) return undefined;
+  if (disabled) return undefined;
   const progressPlan = progressPlanFromContract(contract.progressPlan);
   if (!progressPlan) return undefined;
   const toolBudget = isRecord(contract.toolBudget) ? contract.toolBudget : {};

@@ -98,7 +98,9 @@ try {
   assert.ok(Array.isArray(first.trace.stages) && first.trace.stages.length > 0);
   assert.deepEqual(first.contract, second.contract);
   assert.deepEqual(first.trace, second.trace);
-  assert.equal(first.progressEvents.length, 0, 'progressPlan projection should stay off by default');
+  assert.equal(first.progressEvents.length, 1, 'progressPlan projection should emit a structured progress event by default');
+  assert.equal(first.progressEvents[0]?.type, 'process-progress');
+  assert.equal(isRecord(first.progressEvents[0]?.raw) ? first.progressEvents[0]?.raw.reason : undefined, 'progress-plan-projection');
   assert.equal(dispatches[0]?.metadata.harnessProfileId, 'balanced-default');
   assert.equal(dispatches[0]?.metadata.harnessContractRef, first.summary.contractRef);
   assert.equal(dispatches[0]?.metadata.harnessTraceRef, first.summary.traceRef);

@@ -78,7 +78,7 @@ Todo：
 
 状态：进行中；目标是按 [`docs/AgentHarnessStandard.md`](docs/AgentHarnessStandard.md) 建立最小可运行 harness runtime。第一阶段只生成 `HarnessContract` 和 `HarnessTrace`，不改变业务行为；第二阶段逐步让 context、broker、prompt、validation、repair 和 UI 消费 contract。
 
-进展：shadow-mode MVP 已完成。`packages/agent-harness` 提供 contract/profile/callback/trace 基础运行时，gateway 在 conversation policy 之后、既有 dispatch/fast-path 之前评估 `HarnessRuntime.evaluate()`，并把 `HarnessContract` / `HarnessTrace` 写入 request/uiState/metadata 与 stream trace。默认路径仍保持 shadow/兼容行为；context envelope、verification policy、progress plan、continuity decision 和 backend selection 已有 opt-in 消费或结构化 audit 首片，broker、repair loop 和全面默认启用仍待继续推进。
+进展：shadow-mode MVP 已完成。`packages/agent-harness` 提供 contract/profile/callback/trace 基础运行时，gateway 在 conversation policy 之后、既有 dispatch/fast-path 之前评估 `HarnessRuntime.evaluate()`，并把 `HarnessContract` / `HarnessTrace` 写入 request/uiState/metadata 与 stream trace。默认路径仍保持 shadow/兼容行为；progress plan 已默认投影为结构化 progress event，context envelope、verification policy、broker 和 repair loop 仍保持 opt-in 消费，continuity decision 和 backend selection 已有结构化 audit 首片。
 
 2026-05-10：新增 opt-in context envelope governance 小切片。默认仍关闭；打开 `agentHarnessContextEnvelopeEnabled` 后，`buildContextEnvelope` 可从 `uiState.agentHarness.contract` / `agentHarnessHandoff` 消费 allowed/blocked/required refs 与 `contextBudget.maxReferenceDigests`，对 current references/digests 做 deterministic filtering/slimming，并输出 `contextGovernanceAudit` 记录 contract/trace/source/decision。
 
@@ -100,6 +100,8 @@ Todo：
 
 2026-05-10：T130/T127 repair loop opt-in bridge 首片完成。`createValidationRepairAuditChain()` 在 opt-in `agentHarnessRepairPolicy` 下可从 `uiState.agentHarness.contract` 消费 repair/verification 摘要，只收紧 repair budget / fail-closed 决策，不放宽既有策略，并把 contract/trace/profile/verification 摘要写入 audit refs/sink refs；payload validation 与 runtime verification gate 真实路径已接入。
 
+2026-05-10：T130 progress plan 默认投影小切片完成。`requestWithAgentHarnessShadow()` 现在默认把 harness `progressPlan` 投影为结构化 `process-progress` workspace event，并写入 `uiState.agentHarnessProgressPlan` audit；保留 `agentHarnessProgressPlanDisabled` / `agentHarnessSkipProgressPlan` / `agentHarnessDisableProgressPlan` 显式 kill switch。该切片只改变进度事件/audit，不改变 context、broker、verification 或 repair 决策。
+
 Todo：
 
 - [x] 建立 `packages/agent-harness`：导出 `HarnessRuntime`、`HarnessProfile`、`HarnessCallback`、`HarnessContext`、`HarnessDecision`、`HarnessContract`、`HarnessTrace`、`HarnessStage`。
@@ -107,7 +109,7 @@ Todo：
 - [x] 实现 deterministic merge engine：blocked refs/capabilities union、budget only tightens、risk/verification only escalates、side effects fail closed、conflicts written to trace。
 - [x] 在 `runWorkspaceRuntimeGateway` 中接入 `HarnessRuntime.evaluate()`，位置在 conversation policy 之后、direct fast-path / vision / AgentServer dispatch 之前。
 - [x] 第一阶段只把 `HarnessContract` 写入 request/uiState/metadata 和 stream trace，不改变已有 runtime 行为。
-- [ ] 第二阶段打开 feature flag，让 context envelope、broker、prompt renderer、verification policy、repair loop、UI progress 逐项消费 contract。（context envelope、broker、verification policy、progress plan、continuity/backend selection 与 prompt renderer metadata 已有 opt-in/首片；repair loop 和默认启用仍待推进。）
+- [ ] 第二阶段打开 feature flag，让 context envelope、broker、prompt renderer、verification policy、repair loop、UI progress 逐项消费 contract。（progress plan 默认结构化投影已完成；context envelope、broker、verification policy、repair loop 仍保持 opt-in；continuity/backend selection 与 prompt renderer metadata 已有结构化首片。）
 - [x] 增加 `smoke:agent-harness-contract`：同一输入输出稳定 contract、trace 有阶段记录、profile 切换只改 contract 不 fork gateway path。
 - [x] 增加 `smoke:no-scattered-harness-policy`：禁止在 gateway、prompt builder、UI、scenario、provider 分支新增 harness 指令散文、探索规则、skill 偏好或工具预算。
 
@@ -116,7 +118,7 @@ Todo：
 - [ ] Agent 行为治理只有一个入口：`packages/agent-harness` profile registry。
 - [x] Harness runtime 可以 shadow mode 运行并产出完整 trace。
 - [x] 关闭 harness feature flag 时现有 backend-first/capability-driven 行为保持不变。
-- [x] 打开 harness feature flag 后，至少 context budget、progress plan 和 validation policy 三项由 contract 驱动。（context budget、progress plan、verification policy/validation bridge 已有 opt-in 首片；主流程全面启用仍待后续推进。）
+- [x] 打开 harness feature flag 后，至少 context budget、progress plan 和 validation policy 三项由 contract 驱动。（progress plan 已默认结构化投影；context budget、verification policy/validation bridge 仍为 opt-in 首片；主流程全面启用仍待后续推进。）
 
 ### T129 Unified Capability Graph：skills/tools/actions/observe/verifiers 进入同一能力图
 

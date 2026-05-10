@@ -133,8 +133,21 @@ const defaultGatewayRequest = await requestWithAgentHarnessShadow({
     harnessProfileId: 'balanced-default',
   },
 }, { onEvent: (event) => defaultGatewayEvents.push(event) }, { status: 'applied' });
-assert.equal(defaultGatewayRequest.uiState?.agentHarnessProgressPlan, undefined);
-assert.equal(defaultGatewayEvents.some(isProgressPlanRuntimeEvent), false);
+const defaultRuntimeProjection = defaultGatewayEvents.find(isProgressPlanRuntimeEvent);
+assert.equal(defaultRuntimeProjection?.type, 'process-progress');
+const defaultUiStateAudit = defaultGatewayRequest.uiState?.agentHarnessProgressPlan as Record<string, unknown> | undefined;
+assert.equal(defaultUiStateAudit?.schemaVersion, 'sciforge.agent-harness-progress-plan-projection.v1');
+
+const disabledGatewayEvents: WorkspaceRuntimeEvent[] = [];
+const disabledGatewayRequest = await requestWithAgentHarnessShadow({
+  ...gatewayRequest,
+  uiState: {
+    harnessProfileId: 'balanced-default',
+    agentHarnessProgressPlanDisabled: true,
+  },
+}, { onEvent: (event) => disabledGatewayEvents.push(event) }, { status: 'applied' });
+assert.equal(disabledGatewayRequest.uiState?.agentHarnessProgressPlan, undefined);
+assert.equal(disabledGatewayEvents.some(isProgressPlanRuntimeEvent), false);
 
 const optInGatewayEvents: WorkspaceRuntimeEvent[] = [];
 const optInGatewayRequest = await requestWithAgentHarnessShadow({
