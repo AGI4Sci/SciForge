@@ -1,12 +1,22 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { chromium, type Browser, type Locator, type Page } from 'playwright-core';
 import { buildBuiltInScenarioPackage } from '@sciforge/scenario-core/scenario-package';
+import {
+  browserSmokeContextWindowState,
+  browserExecutablePath,
+  browserSmokeReferenceToolResult,
+  browserSmokeScenarioPackage,
+  browserSmokeWorkspaceState,
+  contextWindowToolStreamBody,
+  cursorLikeWorklogResult,
+  referenceWorkspaceState,
+  structureWorkspaceState,
+} from './browser-workflows-fixtures';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-browser-smoke-'));
 const artifactsDir = resolve('docs', 'test-artifacts');
@@ -130,7 +140,7 @@ try {
     await page.getByText(/已导出 Browser Smoke Imported Package package JSON/).waitFor({ timeout: 15_000 });
     await page.locator('.scenario-builder textarea').fill('构建一个单细胞差异表达场景，输入表达矩阵和metadata，输出火山图、热图、UMAP和execution diagnostics。');
     await page.getByRole('button', { name: '生成场景设置' }).click();
-    await page.locator('.scenario-draft-preview code').first().waitFor({ timeout: 30_000 });
+    await page.locator('.draft-preview code').first().waitFor({ timeout: 30_000 });
     await page.getByRole('button', { name: /进入.*工作台/ }).click();
     await expandWorkbenchChrome(page);
     await page.getByLabel('Scenario Builder').getByRole('button', { name: '场景信息' }).waitFor();
@@ -256,14 +266,14 @@ try {
     assert.deepEqual((structurePage as Page & { __sciforgePageErrors?: string[] }).__sciforgePageErrors ?? [], [], 'structure workflow should not emit page errors');
     await structurePage.close();
 
-    await writeFile(join(workspace, '.sciforge', 'workspace-state.json'), JSON.stringify(referenceWorkspaceState(workspace), null, 2));
+    await writeFile(join(workspace, '.sciforge', 'workspace-state.json'), JSON.stringify(referenceWorkspaceState(workspace, referencePreviewPath), null, 2));
     await writeReferenceScenarioPackage();
     const referencePage = await newConfiguredPage(browser, { width: 1360, height: 980 }, 'references');
     const referenceRequests: Array<Record<string, unknown>> = [];
     await referencePage.route(`http://127.0.0.1:${workspacePort}/api/sciforge/tools/run/stream`, async (route, request) => {
       const body = request.postDataJSON() as Record<string, unknown>;
       referenceRequests.push(body);
-      const result = browserSmokeReferenceToolResult();
+      const result = browserSmokeReferenceToolResult(referencePreviewPath);
       await route.fulfill({
         status: 200,
         contentType: 'application/x-ndjson; charset=utf-8',
@@ -527,7 +537,7 @@ async function newConfiguredPage(
   }, {
     config,
     structureState: withStructureState ? structureWorkspaceState(configuredWorkspacePath) : undefined,
-    referenceState: withReferenceState ? referenceWorkspaceState(configuredWorkspacePath) : undefined,
+    referenceState: withReferenceState ? referenceWorkspaceState(configuredWorkspacePath, referencePreviewPath) : undefined,
     defaultWorkspaceState: browserSmokeWorkspaceState(configuredWorkspacePath),
   });
   (page as Page & { __sciforgePageErrors?: string[]; __sciforgeConsoleWarnings?: string[] }).__sciforgePageErrors = pageErrors;
@@ -841,346 +851,6 @@ async function assertCursorLikeFinalAndRecovery(page: Page) {
   await page.locator('.results-panel .run-recover-actions').first().waitFor({ timeout: 15_000 });
 }
 
-function browserSmokeTimelineEvent() {
-  const now = new Date().toISOString();
-  return {
-    id: 'timeline-browser-smoke-run',
-    actor: 'Browser Smoke',
-    action: 'run.failed',
-    subject: 'browser-smoke-run · AgentServer offline recovery card',
-    artifactRefs: [],
-    executionUnitRefs: ['skill-plan.browser-smoke'],
-    beliefRefs: [],
-    branchId: 'literature-evidence-review',
-    visibility: 'project-record',
-    decisionStatus: 'not-a-decision',
-    createdAt: now,
-  };
-}
-
-function structureWorkspaceState(workspacePath: string) {
-  const now = new Date().toISOString();
-  const structureSession = {
-    schemaVersion: 2,
-    sessionId: 'session-structure-browser-smoke',
-    scenarioId: 'structure-exploration',
-    title: 'Structure browser smoke',
-    createdAt: now,
-    messages: [],
-    runs: [],
-    uiManifest: [{ componentId: 'structure-viewer', title: 'Structure viewer', artifactRef: 'artifact-structure-browser-smoke', priority: 1 }],
-    claims: [],
-    executionUnits: [],
-    artifacts: [{
-      id: 'artifact-structure-browser-smoke',
-      type: 'structure-summary',
-      producerScenario: 'structure-exploration',
-      schemaVersion: '1',
-      metadata: { pdbId: 'browser-smoke', ligand: 'ATP', pocketLabel: 'Browser smoke pocket' },
-      dataRef: `data:text/plain,${encodeURIComponent(browserSmokePdb())}`,
-      data: {
-        pdbId: 'browser-smoke',
-        ligand: 'ATP',
-        pocketLabel: 'Browser smoke pocket',
-        atoms: [
-          { atomName: 'N', residueName: 'GLY', chain: 'A', residueNumber: '1', element: 'N', x: -1.2, y: 0.1, z: 0.2 },
-          { atomName: 'CA', residueName: 'GLY', chain: 'A', residueNumber: '1', element: 'C', x: 0.0, y: 0.3, z: 0.0 },
-          { atomName: 'C', residueName: 'GLY', chain: 'A', residueNumber: '1', element: 'C', x: 1.2, y: 0.0, z: -0.2 },
-          { atomName: 'O', residueName: 'GLY', chain: 'A', residueNumber: '1', element: 'O', x: 1.8, y: -0.8, z: 0.1 },
-          { atomName: 'P', residueName: 'ATP', chain: 'B', residueNumber: '2', element: 'P', x: 0.2, y: 1.4, z: 0.6, hetatm: true },
-        ],
-      },
-      visibility: 'public',
-    }],
-    notebook: [],
-    versions: [],
-    updatedAt: now,
-  };
-  return {
-    schemaVersion: 2,
-    workspacePath,
-    sessionsByScenario: {
-      'structure-exploration': structureSession,
-    },
-    archivedSessions: [],
-    alignmentContracts: [],
-    updatedAt: now,
-  };
-}
-
-function referenceWorkspaceState(workspacePath: string) {
-  const now = new Date().toISOString();
-  const session = {
-    schemaVersion: 2,
-    sessionId: 'session-reference-browser-smoke',
-    scenarioId: 'omics-differential-exploration',
-    title: 'Reference follow-up browser smoke',
-    createdAt: now,
-    messages: [
-      {
-        id: 'msg-reference-seed-user',
-        role: 'user',
-        content: 'Seed a browser smoke run with message, chart, table, and file references.',
-        createdAt: now,
-        status: 'completed',
-      },
-      {
-        id: 'msg-reference-seed-agent',
-        role: 'scenario',
-        content: 'Browser smoke reference seed message: inspect the UMAP, DE table, and markdown report before the follow-up.',
-        createdAt: now,
-        status: 'completed',
-        objectReferences: [{
-          id: 'object-reference-umap-seed',
-          title: 'Browser smoke UMAP',
-          kind: 'artifact',
-          ref: 'artifact:browser-smoke-umap',
-          artifactType: 'umap-plot',
-          runId: 'run-reference-seed',
-          preferredView: 'point-set-viewer',
-          actions: ['focus-right-pane', 'compare'],
-          status: 'available',
-          summary: 'Chart reference used by browser smoke follow-up.',
-        }, {
-          id: 'object-reference-table-seed',
-          title: 'Browser smoke DE table',
-          kind: 'artifact',
-          ref: 'artifact:browser-smoke-table',
-          artifactType: 'differential-expression-table',
-          runId: 'run-reference-seed',
-          preferredView: 'record-table',
-          actions: ['focus-right-pane', 'compare'],
-          status: 'available',
-          summary: 'Table reference used by browser smoke follow-up.',
-        }, {
-          id: 'object-reference-report-seed',
-          title: 'Reference follow-up report',
-          kind: 'file',
-          ref: `file:${referencePreviewPath}`,
-          artifactType: 'research-report',
-          runId: 'run-reference-seed',
-          preferredView: 'report-viewer',
-          actions: ['focus-right-pane', 'copy-path'],
-          status: 'available',
-          summary: 'Real workspace markdown file used by browser smoke preview.',
-          provenance: { path: referencePreviewPath },
-        }],
-      },
-    ],
-    runs: [{
-      id: 'run-reference-seed',
-      scenarioId: 'omics-differential-exploration',
-      status: 'completed',
-      prompt: 'Seed browser smoke reference run',
-      response: 'Browser smoke reference seed message.',
-      createdAt: now,
-      completedAt: now,
-      objectReferences: [{
-        id: 'object-reference-report-seed',
-        title: 'Reference follow-up report',
-        kind: 'file',
-        ref: `file:${referencePreviewPath}`,
-        artifactType: 'research-report',
-        runId: 'run-reference-seed',
-        preferredView: 'report-viewer',
-        actions: ['focus-right-pane', 'copy-path'],
-        status: 'available',
-        summary: 'Real workspace markdown file used by browser smoke preview.',
-        provenance: { path: referencePreviewPath },
-      }],
-    }],
-    uiManifest: [
-      { componentId: 'point-set-viewer', title: 'Browser smoke UMAP', artifactRef: 'browser-smoke-umap', priority: 1 },
-      { componentId: 'record-table', title: 'Browser smoke DE table', artifactRef: 'browser-smoke-table', priority: 2 },
-    ],
-    claims: [],
-    executionUnits: [{
-      id: 'eu-reference-browser-smoke',
-      tool: 'workspace.reference-smoke',
-      params: 'fixture=true',
-      status: 'done',
-      hash: 'reference-smoke',
-      outputRef: '.sciforge/artifacts/reference-followup-report.md',
-    }],
-    artifacts: [
-      {
-        id: 'browser-smoke-umap',
-        type: 'umap-plot',
-        producerScenario: 'omics-differential-exploration',
-        schemaVersion: '1',
-        metadata: { title: 'Browser smoke UMAP', path: '.sciforge/artifacts/reference-umap.json' },
-        data: {
-          points: [
-            { x: -1.2, y: 0.1, cluster: 'T cell', label: 'cell-a' },
-            { x: -0.4, y: 0.8, cluster: 'T cell', label: 'cell-b' },
-            { x: 0.7, y: -0.5, cluster: 'B cell', label: 'cell-c' },
-            { x: 1.1, y: 0.4, cluster: 'B cell', label: 'cell-d' },
-          ],
-        },
-        visibility: 'public',
-      },
-      {
-        id: 'browser-smoke-table',
-        type: 'differential-expression-table',
-        producerScenario: 'omics-differential-exploration',
-        schemaVersion: '1',
-        metadata: { title: 'Browser smoke DE table', path: '.sciforge/artifacts/reference-de-table.csv' },
-        data: {
-          rows: [
-            { gene: 'IL7R', logFC: 1.7, pValue: 0.001, cluster: 'T cell' },
-            { gene: 'MS4A1', logFC: 1.4, pValue: 0.003, cluster: 'B cell' },
-            { gene: 'LYZ', logFC: -1.2, pValue: 0.011, cluster: 'Myeloid' },
-          ],
-        },
-        visibility: 'public',
-      },
-    ],
-    notebook: [],
-    versions: [],
-    updatedAt: now,
-  };
-  return {
-    schemaVersion: 2,
-    workspacePath,
-    sessionsByScenario: {
-      'omics-differential-exploration': session,
-    },
-    archivedSessions: [],
-    alignmentContracts: [],
-    timelineEvents: [browserSmokeTimelineEvent()],
-    updatedAt: now,
-  };
-}
-
-function browserSmokeReferenceToolResult() {
-  const now = new Date().toISOString();
-  return {
-    message: 'Reference follow-up accepted: preserved the selected message, chart, table, and file references.',
-    confidence: 0.91,
-    claimType: 'fact',
-    evidenceLevel: 'database',
-    reasoningTrace: 'Browser smoke mocked workspace tool response for deterministic UI reference coverage.',
-    artifacts: [{
-      id: 'browser-smoke-reference-followup-report',
-      type: 'research-report',
-      producerScenario: 'omics-differential-exploration',
-      schemaVersion: '1',
-      metadata: {
-        title: 'Reference follow-up report',
-        path: referencePreviewPath,
-      },
-      path: referencePreviewPath,
-      dataRef: referencePreviewPath,
-      data: {
-        markdown: '# Browser smoke reference follow-up\n\nThis real workspace markdown file verifies inline preview after clicking the final object chip.',
-      },
-    }],
-    objectReferences: [{
-      id: 'object-reference-report-final',
-      title: 'Reference follow-up report',
-      kind: 'file',
-      ref: `file:${referencePreviewPath}`,
-      artifactType: 'research-report',
-      preferredView: 'report-viewer',
-      actions: ['focus-right-pane', 'copy-path'],
-      status: 'available',
-      summary: 'Clicking this final object chip should focus the right pane and preview the real workspace markdown file.',
-      provenance: { path: referencePreviewPath },
-    }],
-    executionUnits: [{
-      id: 'eu-reference-followup',
-      tool: 'workspace.reference-smoke.followup',
-      params: 'references=message,chart,table,file',
-      status: 'done',
-      hash: 'reference-followup',
-      outputRef: '.sciforge/artifacts/reference-followup-report.md',
-      time: now,
-    }],
-    claims: [{
-      id: 'claim-reference-followup',
-      text: 'The browser follow-up preserved selected message, chart, table, and file references.',
-      type: 'fact',
-      confidence: 0.91,
-      evidenceLevel: 'database',
-      supportingRefs: ['message:msg-reference-seed-agent', 'artifact:browser-smoke-umap', 'artifact:browser-smoke-table', 'file:.sciforge/artifacts/reference-followup-report.md'],
-    }],
-  };
-}
-
-function cursorLikeWorklogResult() {
-  const now = new Date().toISOString();
-  return {
-    message: [
-      'Fixture result returned a concise user-facing answer.',
-      '',
-      '## Execution audit',
-      '',
-      'ExecutionUnit status and provenance are available for audit.',
-      '',
-      '```json',
-      JSON.stringify({
-        executionUnits: [{ id: 'eu-t097-recoverable', status: 'repair-needed', outputRef: '.sciforge/task-results/t097-running-work-process.json' }],
-        recoverActions: ['rerun-current-scenario', 'inspect-artifact-schema'],
-        auditRefs: ['agentserver://browser-smoke/t097'],
-      }, null, 2),
-      '```',
-      '',
-      '## Tool output',
-      '',
-      '```text',
-      [
-        'stdout: fixture command completed with partial evidence',
-        'stderr: fixture warning preserved for recovery',
-        'trace: raw tool payload kept out of the primary answer',
-      ].join('\n'),
-      '```',
-    ].join('\n'),
-    confidence: 0.88,
-    claimType: 'fact',
-    evidenceLevel: 'mock-browser',
-    reasoningTrace: 'T097 browser fixture uses structured stream events and a partial-failure payload.',
-    displayIntent: {
-      primaryGoal: 'Show the partial result artifact and keep execution audit folded',
-      requiredArtifactTypes: ['research-report'],
-      preferredModules: ['report-viewer'],
-      fallbackAcceptable: ['generic-artifact-inspector'],
-      acceptanceCriteria: ['artifact visible', 'recover actions visible', 'raw audit folded'],
-    },
-    uiManifest: [{
-      componentId: 'report-viewer',
-      title: 'T097 fixture report',
-      artifactRef: 'artifact-t097-report',
-      priority: 1,
-    }],
-    executionUnits: [{
-      id: 'eu-t097-recoverable',
-      tool: 'workspace.generic-fixture',
-      params: 'mode=t097-running-work-process',
-      status: 'repair-needed',
-      hash: 't097-running-work-process',
-      outputRef: '.sciforge/task-results/t097-running-work-process.json',
-      stdoutRef: '.sciforge/logs/t097.stdout.log',
-      stderrRef: '.sciforge/logs/t097.stderr.log',
-      failureReason: 'fixture recoverable diagnostic',
-      recoverActions: ['rerun-current-scenario', 'inspect-artifact-schema'],
-      nextStep: 'Retry after inspecting the artifact schema.',
-      time: now,
-    }],
-    artifacts: [{
-      id: 'artifact-t097-report',
-      type: 'research-report',
-      producerScenario: 'literature-evidence-review',
-      schemaVersion: '1',
-      dataRef: '.sciforge/artifacts/t097-report.json',
-      metadata: { title: 'T097 fixture report', status: 'partial', runId: 't097-running-work-process' },
-      data: {
-        markdown: '# T097 fixture report\n\nA partial artifact remains available while recovery actions are shown.',
-      },
-    }],
-    claims: [],
-  };
-}
-
 async function sendContextSmokePrompt(page: Page, prompt: string) {
   await expandComposer(page);
   await page.getByPlaceholder(/输入研究问题/).fill(prompt);
@@ -1192,104 +862,6 @@ function contextSmokeResponseIndexForPrompt(prompt: string) {
   if (/round one/.test(prompt)) return 1;
   if (/round two/.test(prompt)) return 2;
   return 3;
-}
-
-function contextWindowToolStreamBody(round: number, ratio: number) {
-  return [
-    JSON.stringify({
-      event: {
-        type: 'contextWindowState',
-        message: `browser smoke context ratio ${Math.round(ratio * 100)}%`,
-        contextWindowState: browserSmokeContextWindowState(ratio, ratio >= 0.82 ? 'near-limit' : ratio >= 0.68 ? 'watch' : 'healthy'),
-      },
-    }),
-    JSON.stringify({
-      result: {
-        message: `Context smoke response ${round}: context meter state stayed consistent for ratio ${Math.round(ratio * 100)}%.`,
-        confidence: 0.9,
-        claimType: 'fact',
-        evidenceLevel: 'mock-browser',
-        reasoningTrace: 'Browser smoke mocked context-window usage and compaction UX.',
-        claims: [],
-        uiManifest: [],
-        executionUnits: [{
-          id: `eu-context-window-${round}`,
-          tool: 'workspace.context-window-smoke',
-          params: `round=${round}`,
-          status: 'done',
-          hash: `context-window-${round}`,
-        }],
-        artifacts: [],
-      },
-    }),
-    '',
-  ].join('\n');
-}
-
-function browserSmokeContextWindowState(ratio: number, status: 'healthy' | 'watch' | 'near-limit') {
-  return {
-    backend: 'codex',
-    provider: 'codex',
-    model: 'browser-smoke-context-model',
-    usedTokens: Math.round(100_000 * ratio),
-    input: Math.round(80_000 * ratio),
-    output: Math.round(20_000 * ratio),
-    windowTokens: 100_000,
-    ratio,
-    source: 'agentserver',
-    status,
-    compactCapability: 'agentserver',
-    autoCompactThreshold: 0.82,
-    watchThreshold: 0.68,
-    nearLimitThreshold: 0.86,
-    auditRefs: [`agentserver://browser-smoke/context/${status}`],
-  };
-}
-
-function browserSmokeWorkspaceState(workspacePath: string) {
-  return {
-    schemaVersion: 2,
-    workspacePath,
-    sessionsByScenario: {},
-    archivedSessions: [],
-    alignmentContracts: [],
-    timelineEvents: [browserSmokeTimelineEvent()],
-    updatedAt: new Date().toISOString(),
-  };
-}
-
-function browserSmokePdb() {
-  return [
-    'ATOM      1 N    GLY A   1      -1.200   0.100   0.200  1.00 20.00           N',
-    'ATOM      2 CA   GLY A   1       0.000   0.300   0.000  1.00 20.00           C',
-    'ATOM      3 C    GLY A   1       1.200   0.000  -0.200  1.00 20.00           C',
-    'ATOM      4 O    GLY A   1       1.800  -0.800   0.100  1.00 20.00           O',
-    'HETATM    5 P    ATP B   2       0.200   1.400   0.600  1.00 20.00           P',
-    'END',
-  ].join('\n');
-}
-
-function browserSmokeScenarioPackage() {
-  const pkg = buildBuiltInScenarioPackage('biomedical-knowledge-graph', '2026-04-25T00:00:00.000Z');
-  return {
-    ...pkg,
-    id: 'browser-smoke-imported-package',
-    version: '1.0.0',
-    status: 'draft',
-    scenario: {
-      ...pkg.scenario,
-      id: 'browser-smoke-imported-package',
-      title: 'Browser Smoke Imported Package',
-      source: 'workspace',
-    },
-    versions: [{
-      version: '1.0.0',
-      status: 'draft',
-      createdAt: '2026-04-25T00:00:00.000Z',
-      summary: 'Browser smoke imported package fixture.',
-      scenarioHash: 'browser-smoke',
-    }],
-  };
 }
 
 async function writeReferenceScenarioPackage() {
@@ -1418,27 +990,4 @@ async function waitForHttp(url: string) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`Timed out waiting for ${url}`);
-}
-
-async function waitForCondition(predicate: () => boolean, label: string, timeoutMs = 15_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error(`Timed out waiting for ${label}`);
-}
-
-function browserExecutablePath() {
-  const candidates = [
-    process.env.SCIFORGE_BROWSER_EXECUTABLE,
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-    '/Applications/Chromium.app/Contents/MacOS/Chromium',
-    '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-  ].filter((value): value is string => Boolean(value));
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
-  }
-  throw new Error('No Chromium-compatible browser found. Set SCIFORGE_BROWSER_EXECUTABLE to run browser smoke.');
 }

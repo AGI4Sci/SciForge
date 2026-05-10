@@ -1,13 +1,43 @@
 import type {
   ObjectAction,
   ObjectReference,
-  ObjectReferenceKind,
   SciForgeReference,
   SciForgeReferenceKind,
 } from '@sciforge-ui/runtime-contract/references';
 import type { RuntimeArtifact } from '@sciforge-ui/runtime-contract/artifacts';
-import type { PreviewDescriptor } from '@sciforge-ui/runtime-contract/preview';
 import type { ScenarioInstanceId } from '@sciforge-ui/runtime-contract/app';
+import {
+  asNumber,
+  asString,
+  fileKindForPath,
+  formatBytes,
+  idSegment,
+  isRecord,
+  preferredArtifactPath,
+  stableHash,
+  summarizeReferencePayload,
+  titleForArtifact,
+  visionTraceFinalScreenshotRef,
+} from './helpers';
+
+export { stableHash } from './helpers';
+export {
+  linkifyObjectReferences,
+  objectReferencesFromInlineTokens,
+} from './inline-references';
+export type { ObjectReferenceTextPiece } from './inline-references';
+export {
+  normalizeResponseObjectReferences,
+} from './response-normalization';
+export type { NormalizeResponseObjectReferencesInput } from './response-normalization';
+export {
+  artifactTypeForUploadedFileLike,
+  previewKindForUploadedFileLike,
+  uploadedDerivativeHintsForFileLike,
+  uploadedInlinePolicyForFileLike,
+  uploadedLocatorHintsForFileLike,
+  uploadedPreviewActionsForFileLike,
+} from './upload-preview';
 
 export interface ObjectReferenceSessionLike {
   artifacts: RuntimeArtifact[];
@@ -68,47 +98,6 @@ export interface ObjectReferenceChipModel {
   visible: ObjectReference[];
   hiddenCount: number;
   hasOverflow: boolean;
-}
-
-export interface ObjectReferenceTextPiece {
-  text: string;
-  reference?: ObjectReference;
-}
-
-export interface NormalizeResponseObjectReferencesInput {
-  objectReferences: unknown;
-  artifacts: RuntimeArtifact[];
-  runId: string;
-  relatedRefs?: string[];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-function titleForArtifact(artifact: RuntimeArtifact) {
-  if (artifact.type === 'vision-trace') return String(artifact.metadata?.title || (isRecord(artifact.data) ? artifact.data.task : undefined) || artifact.path || artifact.dataRef || artifact.id);
-  return String(artifact.metadata?.title || artifact.metadata?.name || preferredArtifactPath(artifact) || artifact.id);
-}
-
-function idSegment(value: string) {
-  return value.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 64);
-}
-
-export function stableHash(value: string) {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = Math.imul(31, hash) + value.charCodeAt(index) | 0;
-  }
-  return Math.abs(hash).toString(36);
 }
 
 export function normalizeArtifactRef(ref: string) {
@@ -276,206 +265,6 @@ export function mergeObjectReferences(primary: ObjectReference[], secondary: Obj
   return Array.from(byRef.values()).slice(0, limit);
 }
 
-export function normalizeResponseObjectReferences(input: NormalizeResponseObjectReferencesInput): ObjectReference[] {
-  const explicit = Array.isArray(input.objectReferences)
-    ? input.objectReferences.filter(isRecord).flatMap((record) => {
-      const normalized = normalizeResponseObjectReference(record, input.artifacts, input.runId);
-      return normalized ? [normalized] : [];
-    })
-    : [];
-  const autoIndexed = input.artifacts.map((artifact) => objectReferenceFromResponseArtifact(artifact, input.runId));
-  const related = (input.relatedRefs ?? []).flatMap((ref) => {
-    const normalized = objectReferenceFromRelatedRef(ref, input.artifacts, input.runId);
-    return normalized ? [normalized] : [];
-  });
-  const byRef = new Map<string, ObjectReference>();
-  for (const reference of [...explicit, ...autoIndexed, ...related]) {
-    const key = reference.ref || reference.id;
-    if (!byRef.has(key)) {
-      byRef.set(key, reference);
-      continue;
-    }
-    byRef.set(key, {
-      ...reference,
-      ...byRef.get(key),
-      actions: uniqueStringList([...(byRef.get(key)?.actions ?? []), ...(reference.actions ?? [])]) as ObjectAction[],
-    });
-  }
-  return Array.from(byRef.values()).slice(0, 16);
-}
-
-function objectReferenceFromRelatedRef(ref: string, artifacts: RuntimeArtifact[], runId: string): ObjectReference | undefined {
-  const kind = inferObjectKindFromRef(ref);
-  if (!kind) return undefined;
-  const matchedArtifact = kind === 'artifact' ? findArtifactForObjectRef(ref, artifacts) : undefined;
-  return {
-    id: objectReferenceIdFromRef(ref),
-    title: matchedArtifact?.id || ref.replace(/^[a-z-]+:{1,2}/i, ''),
-    kind,
-    ref,
-    artifactType: matchedArtifact?.type,
-    runId,
-    executionUnitId: kind === 'execution-unit' ? ref.replace(/^execution-unit:{1,2}/i, '') : undefined,
-    actions: normalizeResponseObjectActions(undefined, kind, matchedArtifact),
-    status: matchedArtifact || kind !== 'artifact' ? 'available' : 'missing',
-    summary: 'contract validation related ref',
-    provenance: normalizeResponseObjectProvenance(undefined, matchedArtifact),
-  };
-}
-
-function normalizeResponseObjectReference(record: Record<string, unknown>, artifacts: RuntimeArtifact[], runId: string): ObjectReference | undefined {
-  const ref = asString(record.ref) ?? objectRefFromRecord(record);
-  if (!ref) return undefined;
-  const kind = normalizeObjectKind(record.kind) ?? inferObjectKindFromRef(ref);
-  if (!kind) return undefined;
-  const matchedArtifact = kind === 'artifact' ? findArtifactForObjectRef(ref, artifacts) : undefined;
-  const title = asString(record.title)
-    ?? asString(matchedArtifact?.metadata?.title)
-    ?? matchedArtifact?.id
-    ?? ref.replace(/^[a-z-]+:/i, '');
-  return {
-    id: asString(record.id) ?? objectReferenceIdFromRef(ref),
-    title,
-    kind,
-    ref,
-    artifactType: asString(record.artifactType) ?? matchedArtifact?.type,
-    runId: asString(record.runId) ?? runId,
-    executionUnitId: asString(record.executionUnitId),
-    preferredView: asString(record.preferredView),
-    actions: normalizeResponseObjectActions(record.actions, kind, matchedArtifact),
-    status: normalizeObjectStatus(record.status) ?? 'available',
-    summary: asString(record.summary),
-    provenance: normalizeResponseObjectProvenance(record.provenance, matchedArtifact),
-  };
-}
-
-function objectReferenceFromResponseArtifact(artifact: RuntimeArtifact, runId: string): ObjectReference {
-  const path = preferredResponseObjectReferencePath(artifact);
-  return {
-    id: objectReferenceIdFromRef(`artifact:${artifact.id}`),
-    title: asString(artifact.metadata?.title) ?? artifact.id ?? artifact.type,
-    kind: 'artifact',
-    ref: `artifact:${artifact.id}`,
-    artifactType: artifact.type,
-    runId,
-    actions: responseObjectActionsForArtifact(artifact),
-    status: 'available',
-    summary: responseArtifactSummary(artifact),
-    provenance: {
-      dataRef: artifact.dataRef,
-      path,
-      producer: asString(artifact.metadata?.producer) ?? asString(artifact.metadata?.executionUnitId),
-      version: artifact.schemaVersion,
-      hash: asString(artifact.metadata?.hash),
-      size: asNumber(artifact.metadata?.size),
-    },
-  };
-}
-
-function objectRefFromRecord(record: Record<string, unknown>) {
-  const artifactId = asString(record.artifactId) ?? asString(record.artifactRef);
-  if (artifactId) return artifactId.startsWith('artifact:') ? artifactId : `artifact:${artifactId}`;
-  const path = asString(record.path) ?? asString(record.filePath);
-  if (path) return `${record.kind === 'folder' ? 'folder' : 'file'}:${path}`;
-  const url = asString(record.url);
-  if (url) return `url:${url}`;
-  return undefined;
-}
-
-function normalizeObjectKind(value: unknown): ObjectReferenceKind | undefined {
-  const kind = asString(value);
-  return isObjectReferenceKind(kind) ? kind : undefined;
-}
-
-function inferObjectKindFromRef(ref: string): ObjectReferenceKind | undefined {
-  const prefix = ref.split(':', 1)[0]?.toLowerCase();
-  if (isObjectReferenceKind(prefix)) return prefix;
-  if (/^https?:\/\//i.test(ref)) return 'url';
-  return undefined;
-}
-
-function isObjectReferenceKind(value: unknown): value is ObjectReferenceKind {
-  return value === 'artifact'
-    || value === 'file'
-    || value === 'folder'
-    || value === 'run'
-    || value === 'execution-unit'
-    || value === 'url'
-    || value === 'scenario-package';
-}
-
-function normalizeResponseObjectActions(value: unknown, kind: ObjectReferenceKind, artifact?: RuntimeArtifact): ObjectAction[] {
-  const allowed = ['focus-right-pane', 'inspect', 'open-external', 'reveal-in-folder', 'copy-path', 'pin', 'compare'];
-  const declared = Array.isArray(value) ? value.filter((item): item is ObjectAction => typeof item === 'string' && allowed.includes(item)) : [];
-  const defaults: ObjectAction[] = kind === 'artifact'
-    ? responseObjectActionsForArtifact(artifact)
-    : kind === 'file' || kind === 'folder'
-      ? ['focus-right-pane', 'open-external', 'reveal-in-folder', 'copy-path', 'pin']
-      : kind === 'url'
-        ? ['focus-right-pane', 'copy-path', 'pin']
-        : ['focus-right-pane', 'pin'];
-  return uniqueStringList([...declared, ...defaults]) as ObjectAction[];
-}
-
-function responseObjectActionsForArtifact(artifact?: RuntimeArtifact): ObjectAction[] {
-  const fileLike = Boolean(artifact?.path || artifact?.metadata?.path || artifact?.metadata?.filePath || artifact?.metadata?.localPath);
-  return fileLike
-    ? ['focus-right-pane', 'inspect', 'open-external', 'reveal-in-folder', 'copy-path', 'pin', 'compare']
-    : ['focus-right-pane', 'inspect', 'pin', 'compare'];
-}
-
-function normalizeObjectStatus(value: unknown): ObjectReference['status'] | undefined {
-  const status = asString(value);
-  if (status === 'available' || status === 'missing' || status === 'expired' || status === 'blocked' || status === 'external') return status;
-  return undefined;
-}
-
-function normalizeResponseObjectProvenance(value: unknown, artifact?: RuntimeArtifact): ObjectReference['provenance'] {
-  const record = isRecord(value) ? value : {};
-  const path = asString(record.path) ?? artifact?.path ?? asString(artifact?.metadata?.path) ?? asString(artifact?.metadata?.filePath);
-  return {
-    dataRef: asString(record.dataRef) ?? artifact?.dataRef,
-    path,
-    producer: asString(record.producer) ?? asString(artifact?.metadata?.producer) ?? asString(artifact?.metadata?.executionUnitId),
-    version: asString(record.version) ?? artifact?.schemaVersion,
-    hash: asString(record.hash) ?? asString(artifact?.metadata?.hash),
-    size: asNumber(record.size) ?? asNumber(artifact?.metadata?.size),
-  };
-}
-
-function findArtifactForObjectRef(ref: string, artifacts: RuntimeArtifact[]) {
-  const id = normalizeArtifactRef(ref);
-  return artifacts.find((artifact) => artifact.id === id || artifact.type === id || artifact.dataRef === id || artifact.path === id);
-}
-
-function preferredResponseObjectReferencePath(artifact: RuntimeArtifact) {
-  return firstMatchingPath([
-    artifact.metadata?.markdownRef,
-    artifact.metadata?.reportRef,
-    artifact.path,
-    artifact.metadata?.path,
-    artifact.metadata?.filePath,
-    artifact.dataRef,
-  ], /\.m(?:d|arkdown)(?:$|[?#])/i)
-    ?? artifact.path
-    ?? asString(artifact.metadata?.path)
-    ?? asString(artifact.metadata?.filePath);
-}
-
-function responseArtifactSummary(artifact: RuntimeArtifact) {
-  const rows = isRecord(artifact.data) ? asNumber(artifact.data.rows) : undefined;
-  const count = Array.isArray(artifact.data) ? artifact.data.length : rows;
-  return `${artifact.type}${count ? ` · ${count} records` : ''}`;
-}
-
-function objectReferenceIdFromRef(ref: string) {
-  return `obj-${idSegment(ref) || stableHash(ref)}`;
-}
-
-function uniqueStringList(values: string[]) {
-  return Array.from(new Set(values.filter(Boolean)));
-}
-
 export function isTrustedObjectReference(reference: ObjectReference) {
   if (reference.status && reference.status !== 'available') return false;
   if (reference.kind === 'artifact') return true;
@@ -497,138 +286,6 @@ export function objectReferenceChipModel(references: ObjectReference[], expanded
     hiddenCount: Math.max(0, ordered.length - visible.length),
     hasOverflow: ordered.length > limit,
   };
-}
-
-export function objectReferencesFromInlineTokens(content: string, runId?: string) {
-  const references: ObjectReference[] = [];
-  const seen = new Set<string>();
-  const tokenPattern = /\b(?:(?:artifact|file|folder|run|execution-unit|scenario-package)::?[^\s)\]）>，。；、,;]+|https?:\/\/[^\s)\]）>，。；、]+)[^\s)\]）>，。；、,;]*/gi;
-  for (const match of content.matchAll(tokenPattern)) {
-    const raw = match[0].replace(/[.,;，。；、]+$/, '');
-    const reference = objectReferenceFromInlineToken(raw, runId);
-    if (!reference || seen.has(reference.ref)) continue;
-    seen.add(reference.ref);
-    references.push(reference);
-  }
-  return references;
-}
-
-export function linkifyObjectReferences(content: string, references: ObjectReference[]): ObjectReferenceTextPiece[] {
-  if (!content || !references.length) return [{ text: content }];
-  const candidates = objectReferenceLinkCandidates(references);
-  if (!candidates.length) return [{ text: content }];
-  const pieces: ObjectReferenceTextPiece[] = [];
-  let cursor = 0;
-  while (cursor < content.length) {
-    const match = nextObjectReferenceMatch(content, cursor, candidates);
-    if (!match) {
-      pieces.push({ text: content.slice(cursor) });
-      break;
-    }
-    if (match.index > cursor) pieces.push({ text: content.slice(cursor, match.index) });
-    pieces.push({ text: content.slice(match.index, match.index + match.key.length), reference: match.reference });
-    cursor = match.index + match.key.length;
-  }
-  return pieces.filter((piece) => piece.text.length > 0);
-}
-
-function objectReferenceFromInlineToken(raw: string, runId?: string): ObjectReference | undefined {
-  if (/^https?:\/\//i.test(raw)) {
-    return {
-      id: inlineObjectReferenceId('url', raw),
-      title: inlineReferenceTitle(raw),
-      kind: 'url',
-      ref: `url:${raw}`,
-      runId,
-      actions: ['focus-right-pane', 'open-external', 'copy-path'],
-      status: 'external',
-      summary: raw,
-      provenance: { dataRef: raw },
-    };
-  }
-  const tokenMatch = raw.match(/^([a-z-]+)::?(.+)$/i);
-  if (!tokenMatch) return undefined;
-  const prefix = tokenMatch[1].toLowerCase() as ObjectReferenceKind;
-  if (!['artifact', 'file', 'folder', 'run', 'execution-unit', 'scenario-package'].includes(prefix)) return undefined;
-  const target = tokenMatch[2];
-  return {
-    id: inlineObjectReferenceId(prefix, raw),
-    title: inlineReferenceTitle(target),
-    kind: prefix,
-    ref: raw,
-    runId,
-    actions: inlineObjectReferenceActions(prefix),
-    status: 'available',
-    summary: target,
-    provenance: prefix === 'file' || prefix === 'folder' ? { path: target } : { dataRef: target },
-  };
-}
-
-function inlineObjectReferenceActions(kind: ObjectReferenceKind): ObjectAction[] {
-  if (kind === 'file' || kind === 'folder') return ['focus-right-pane', 'reveal-in-folder', 'copy-path', 'pin'];
-  if (kind === 'url') return ['focus-right-pane', 'open-external', 'copy-path'];
-  return ['focus-right-pane', 'inspect', 'copy-path', 'pin'];
-}
-
-function inlineObjectReferenceId(kind: ObjectReferenceKind, ref: string) {
-  return `inline-${kind}-${ref.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80)}`;
-}
-
-function inlineReferenceTitle(ref: string) {
-  try {
-    const value = decodeURIComponent(ref.replace(/^url:/i, ''));
-    const trimmed = value.replace(/[?#].*$/, '').replace(/\/$/, '');
-    return trimmed.split('/').pop() || value;
-  } catch {
-    return ref;
-  }
-}
-
-function nextObjectReferenceMatch(
-  content: string,
-  cursor: number,
-  candidates: Array<{ key: string; reference: ObjectReference }>,
-) {
-  let best: { index: number; key: string; reference: ObjectReference } | undefined;
-  for (const candidate of candidates) {
-    const index = content.indexOf(candidate.key, cursor);
-    if (index < 0) continue;
-    if (!best || index < best.index || (index === best.index && candidate.key.length > best.key.length)) {
-      best = { index, key: candidate.key, reference: candidate.reference };
-    }
-  }
-  return best;
-}
-
-function objectReferenceLinkCandidates(references: ObjectReference[]) {
-  const candidates: Array<{ key: string; reference: ObjectReference }> = [];
-  const seen = new Set<string>();
-  for (const reference of references) {
-    for (const key of objectReferenceLinkKeys(reference)) {
-      const trimmed = key.trim();
-      if (trimmed.length < 4 || seen.has(trimmed)) continue;
-      seen.add(trimmed);
-      candidates.push({ key: trimmed, reference });
-    }
-  }
-  return candidates.sort((left, right) => right.key.length - left.key.length);
-}
-
-function objectReferenceLinkKeys(reference: ObjectReference) {
-  const keys = [
-    reference.ref,
-    reference.ref.replace(/^file:/i, 'file::'),
-    reference.ref.replace(/^folder:/i, 'folder::'),
-    reference.ref.replace(/^artifact:/i, ''),
-    reference.title,
-    reference.provenance?.path,
-    reference.provenance?.dataRef,
-    reference.provenance?.path ? `file:${reference.provenance.path}` : undefined,
-    reference.provenance?.path ? `file::${reference.provenance.path}` : undefined,
-    reference.provenance?.dataRef ? `file:${reference.provenance.dataRef}` : undefined,
-    reference.provenance?.dataRef ? `file::${reference.provenance.dataRef}` : undefined,
-  ];
-  return keys.filter((key): key is string => Boolean(key && key.trim()));
 }
 
 export function referenceForUploadedArtifact(artifact: RuntimeArtifact): SciForgeReference {
@@ -1015,74 +672,6 @@ export function availableObjectActions(reference: ObjectReference, session: Pick
   });
 }
 
-export function previewKindForUploadedFileLike(file: { name: string; type?: string }): PreviewDescriptor['kind'] {
-  const name = file.name.toLowerCase();
-  const type = (file.type ?? '').toLowerCase();
-  if (type === 'application/pdf' || name.endsWith('.pdf')) return 'pdf';
-  if (type.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/i.test(name)) return 'image';
-  if (/\.(md|markdown)$/i.test(name)) return 'markdown';
-  if (/\.(txt|log)$/i.test(name) || type.startsWith('text/')) return 'text';
-  if (/\.(json|jsonl)$/i.test(name) || type.includes('json')) return 'json';
-  if (/\.(csv|tsv|xlsx?)$/i.test(name)) return 'table';
-  if (/\.(html?|xhtml)$/i.test(name)) return 'html';
-  if (/\.(pdb|cif|mmcif)$/i.test(name)) return 'structure';
-  if (/\.(docx?|pptx?)$/i.test(name)) return 'office';
-  return 'binary';
-}
-
-export function artifactTypeForUploadedFileLike(file: { name: string; type?: string }) {
-  const name = file.name.toLowerCase();
-  const type = (file.type ?? '').toLowerCase();
-  if (type === 'application/pdf' || name.endsWith('.pdf')) return 'uploaded-pdf';
-  if (type.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/i.test(name)) return 'uploaded-image';
-  if (/\.(csv|tsv|xlsx?|json)$/i.test(name)) return 'uploaded-data-file';
-  if (/\.(txt|md|rtf|docx?)$/i.test(name)) return 'uploaded-document';
-  return 'uploaded-file';
-}
-
-export function uploadedInlinePolicyForFileLike(file: { name: string; type?: string; size?: number }): PreviewDescriptor['inlinePolicy'] {
-  const kind = previewKindForUploadedFileLike(file);
-  if (kind === 'pdf' || kind === 'image') return 'stream';
-  if (kind === 'markdown' || kind === 'text' || kind === 'json' || kind === 'table' || kind === 'html') return (file.size ?? 0) <= 1024 * 1024 ? 'inline' : 'extract';
-  if (kind === 'office' || kind === 'structure') return 'external';
-  return kind === 'folder' ? 'extract' : 'unsupported';
-}
-
-export function uploadedDerivativeHintsForFileLike(file: { name: string; type?: string }, ref: string): PreviewDescriptor['derivatives'] {
-  const kind = previewKindForUploadedFileLike(file);
-  const lazy = (derivativeKind: NonNullable<PreviewDescriptor['derivatives']>[number]['kind'], mimeType: string) => ({
-    kind: derivativeKind,
-    ref: `${ref}#${derivativeKind}`,
-    mimeType,
-    status: 'lazy' as const,
-  });
-  if (kind === 'pdf') return [lazy('text', 'text/plain'), lazy('pages', 'application/json'), lazy('thumb', 'image/png')];
-  if (kind === 'image') return [lazy('thumb', file.type || 'image/*')];
-  if (kind === 'json' || kind === 'table') return [lazy('schema', 'application/json')];
-  if (kind === 'office' || kind === 'binary') return [lazy('metadata', 'application/json')];
-  return [];
-}
-
-export function uploadedPreviewActionsForFileLike(file: { name: string; type?: string }): PreviewDescriptor['actions'] {
-  const kind = previewKindForUploadedFileLike(file);
-  const common: PreviewDescriptor['actions'] = ['system-open', 'copy-ref', 'inspect-metadata'];
-  if (kind === 'pdf') return ['open-inline', 'extract-text', 'make-thumbnail', 'select-page', 'select-region', ...common];
-  if (kind === 'image') return ['open-inline', 'make-thumbnail', 'select-region', ...common];
-  if (kind === 'table') return ['open-inline', 'select-rows', ...common];
-  if (kind === 'markdown' || kind === 'text' || kind === 'json' || kind === 'html') return ['open-inline', 'extract-text', ...common];
-  return common;
-}
-
-export function uploadedLocatorHintsForFileLike(file: { name: string; type?: string }): PreviewDescriptor['locatorHints'] {
-  const kind = previewKindForUploadedFileLike(file);
-  if (kind === 'pdf') return ['page', 'region'];
-  if (kind === 'image') return ['region'];
-  if (kind === 'table') return ['row-range', 'column-range'];
-  if (kind === 'structure') return ['structure-selection'];
-  if (kind === 'markdown' || kind === 'text' || kind === 'json' || kind === 'html') return ['text-range'];
-  return [];
-}
-
 export function artifactReferenceKind(artifact: RuntimeArtifact, componentId = '', rowCount?: number): SciForgeReference['kind'] {
   const haystack = `${artifact.type} ${artifact.id} ${componentId}`;
   const preferredPath = preferredArtifactPath(artifact);
@@ -1092,71 +681,4 @@ export function artifactReferenceKind(artifact: RuntimeArtifact, componentId = '
   if (/chart|plot|graph|visual|pca|umap|volcano|heatmap|histogram|scatter|molecule|viewer/i.test(haystack)) return 'chart';
   if (/table|matrix|csv|tsv|dataframe|spreadsheet|gene-list|evidence/i.test(haystack) || Boolean(rowCount)) return 'table';
   return 'file-region';
-}
-
-function preferredArtifactPath(artifact: RuntimeArtifact | undefined) {
-  if (!artifact) return undefined;
-  const metadata = artifact.metadata ?? {};
-  const markdownRef = firstMatchingPath([
-    metadata.markdownRef,
-    metadata.reportRef,
-    metadata.path,
-    metadata.filePath,
-    artifact.path,
-    artifact.dataRef,
-  ], /\.m(?:d|arkdown)$/i);
-  if (markdownRef) return markdownRef;
-  const artifactDataRef = asString(artifact.dataRef);
-  return artifact.path
-    || asString(metadata.path)
-    || asString(metadata.filePath)
-    || asString(metadata.localPath)
-    || (artifactDataRef && !artifactDataRef.startsWith('upload:') ? artifactDataRef : undefined);
-}
-
-function firstMatchingPath(values: unknown[], pattern: RegExp) {
-  return values.map(asString).find((value) => Boolean(value && pattern.test(value)));
-}
-
-function summarizeReferencePayload(data: unknown) {
-  if (typeof data === 'string') return { valueType: 'string', preview: data.slice(0, 1000) };
-  if (Array.isArray(data)) return { valueType: 'array', count: data.length, preview: data.slice(0, 5) };
-  if (!isRecord(data)) return data === undefined ? undefined : { valueType: typeof data };
-  const rows = Array.isArray(data.rows) ? data.rows : Array.isArray(data.records) ? data.records : undefined;
-  return {
-    valueType: 'object',
-    keys: Object.keys(data).slice(0, 16),
-    rowCount: rows?.length,
-    previewRows: rows?.slice(0, 5),
-    markdownPreview: typeof data.markdown === 'string' ? data.markdown.slice(0, 1000) : undefined,
-  };
-}
-
-function visionTraceFinalScreenshotRef(artifact: RuntimeArtifact) {
-  if (artifact.type !== 'vision-trace') return undefined;
-  return asString(artifact.metadata?.finalScreenshotRef)
-    || asString(artifact.metadata?.latestScreenshotRef)
-    || (isRecord(artifact.data) ? asString(artifact.data.finalScreenshotRef) || asString(artifact.data.latestScreenshotRef) : undefined);
-}
-
-function fileKindForPath(path: string, language = '') {
-  const value = `${path} ${language}`.toLowerCase();
-  if (/markdown|\.md\b|\.markdown\b/.test(value)) return 'markdown';
-  if (/json|\.json\b/.test(value)) return 'json';
-  if (/\.csv\b/.test(value)) return 'csv';
-  if (/\.tsv\b/.test(value)) return 'tsv';
-  if (/\.pdf\b/.test(value)) return 'pdf';
-  if (/\.(png|jpe?g|gif|webp|svg)\b/.test(value)) return 'image';
-  if (/html|\.html?\b/.test(value)) return 'html';
-  if (/document|\.(docx?|rtf)\b/.test(value)) return 'document';
-  if (/spreadsheet|\.(xlsx?|ods)\b/.test(value)) return 'spreadsheet';
-  if (/presentation|\.(pptx?|odp)\b/.test(value)) return 'presentation';
-  return language || 'text';
-}
-
-function formatBytes(bytes: number) {
-  if (!Number.isFinite(bytes) || bytes < 0) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

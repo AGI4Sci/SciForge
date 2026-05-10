@@ -40,6 +40,19 @@ SciForge 的最终形态是 **Backend-first, Contract-enforced, Capability-drive
 
 ## 倒叙任务板
 
+### T132 Longfile Sweep：手写长文件退出 watch list
+
+状态：完成；目标是把当前 `smoke:long-file-budget` watch list 中的手写平台/测试入口全部压回 1000 行以下，只保留明确生成文件豁免，避免后续继续在大文件中堆职责。
+
+2026-05-10：完成 Longfile-H 并行拆分 sweep。`events.ts` 抽出 interaction/progress/health event family 到 `events-interaction-progress.ts` 后降到 971 行；`SciForgeApp.tsx` 抽出 `sciforgeApp/*` workbench/feedback/state helpers 后降到 574 行；`ShellPanels.tsx` 抽出 Settings dialog/model 后降到 749 行；`packages/support/object-references/index.ts` 抽出 helpers、inline refs、response normalization 与 upload preview 后降到 684 行；`smoke-vision-sense-runtime-bridge.ts`、`smoke-runtime-gateway-modules.ts`、`smoke-browser-workflows.ts` 和 `tools/longform-regression.ts` 分别抽出专属 fixtures/helpers 后降到 835/920/993/951 行。`npm run smoke:long-file-budget` 现在只报告 generated `packages/skills/catalog.ts`，手写文件全部退出 >=1000 watch list。
+
+验收标准：
+
+- [x] 所有手写 watch-list 文件低于 1000 行。
+- [x] 抽出的 helper 均按语义命名，不使用机械 `part1/part2`。
+- [x] public re-export / UI 行为 / smoke 语义保持兼容。
+- [x] `npm run smoke:long-file-budget` 通过，且只剩 generated-file exemption。
+
 ### T131 ResultsRenderer 长文件治理：拆分结果渲染主入口
 
 状态：进行中；`src/ui/src/app/ResultsRenderer.tsx` 已从超过 1500 行降到 853 行，退出 1000 行 watch list。目标是把结果渲染主入口收敛为流程编排，把 artifact normalization、view-plan selection、execution notebook projection、fallback/empty-state presentation、object reference actions 等职责拆到语义模块，避免继续在单一 React 文件里堆叠。已拆出 execution audit 数据模型、artifact inspector/reference normalization、view-model 投影、object reference action 计划/执行 helper、artifact inspector drawer presentation 和 registry slot / unknown component fallback presentation，保持 React 文件只消费投影结果。

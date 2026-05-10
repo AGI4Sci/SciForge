@@ -9,11 +9,10 @@ import { agentServerAgentId, currentTurnReferences } from '../../src/runtime/gat
 import { agentServerBackend } from '../../src/runtime/gateway/agent-backend-config.js';
 import { materializeBackendPayloadOutput, normalizeArtifactsForPayload, persistArtifactRefsForPayload } from '../../src/runtime/gateway/artifact-materializer.js';
 import { classifyAgentServerBackendFailure, sanitizeAgentServerError } from '../../src/runtime/gateway/backend-failure-diagnostics.js';
-import { coerceAgentServerToolPayload, coerceWorkspaceTaskPayload, ensureDirectAnswerReportArtifact } from '../../src/runtime/gateway/direct-answer-payload.js';
+import { coerceAgentServerToolPayload, coerceWorkspaceTaskPayload } from '../../src/runtime/gateway/direct-answer-payload.js';
 import { repairNeededPayload, validateAndNormalizePayload } from '../../src/runtime/gateway/payload-validation.js';
 import { parseGenerationResponse } from '../../src/runtime/gateway/agentserver-run-output.js';
 import { attemptPlanRefs, runtimeProfileIdForRequest, selectedRuntimeForSkill } from '../../src/runtime/gateway/runtime-routing.js';
-import { schemaErrors as toolPayloadSchemaErrors } from '../../src/runtime/gateway/tool-payload-contract.js';
 import { applyRuntimeVerificationPolicy, normalizeRuntimeVerificationPolicy } from '../../src/runtime/gateway/verification-policy.js';
 import { normalizeRuntimeVerificationResults } from '../../src/runtime/gateway/verification-results.js';
 import { normalizeAgentServerWorkspaceEvent, normalizeWorkspaceProcessEvents, withRequestContextWindowLimit } from '../../src/runtime/gateway/workspace-event-normalizer.js';
@@ -21,6 +20,7 @@ import { applyConversationPolicy } from '../../src/runtime/conversation-policy/a
 import { buildAgentServerRepairPrompt } from '../../src/runtime/gateway/agentserver-prompts.js';
 import { readTaskAttempts } from '../../src/runtime/task-attempt-history.js';
 import type { SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types.js';
+import { makeGeneratedTaskRunnerDeps, runtimeGatewaySkill } from './runtime-gateway-runner-fixtures.js';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-gateway-modules-'));
 try {
@@ -262,27 +262,7 @@ try {
   assert.deepEqual(processProgress.timeline[1].writing, ['/workspace/tasks/review.py']);
   assert.ok(processProgress.events.every((event) => event.type === 'process-progress'));
 
-  const skill: SkillAvailability = {
-    id: 'agentserver.generation.literature',
-    kind: 'installed',
-    available: true,
-    reason: 'smoke',
-    checkedAt: new Date().toISOString(),
-    manifestPath: 'agentserver',
-    manifest: {
-      id: 'agentserver.generation.literature',
-      kind: 'installed',
-      description: 'smoke',
-      skillDomains: ['literature'],
-      inputContract: {},
-      outputArtifactSchema: {},
-      entrypoint: { type: 'agentserver-generation' },
-      environment: {},
-      validationSmoke: {},
-      examplePrompts: [],
-      promotionHistory: [],
-    },
-  };
+  const skill = runtimeGatewaySkill();
   const agentServerRuntimeProfileId = `agentserver-${agentServerBackend(request, request.llmEndpoint)}`;
   assert.equal(runtimeProfileIdForRequest(request, skill), agentServerRuntimeProfileId);
   assert.equal(selectedRuntimeForSkill(skill), 'agentserver-generation');
@@ -471,8 +451,8 @@ try {
   assert.equal(repair.executionUnits[0].status, 'repair-needed');
   assert.ok(String(repair.executionUnits[0].params).includes('AgentServer base URL missing'));
 
-  const generatedPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, {
-    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
+  const generatedPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+    request,
     requestAgentServerGeneration: async () => ({
       ok: true,
       runId: 'runner-smoke-run',
@@ -504,28 +484,7 @@ try {
         patchSummary: 'runner smoke task',
       },
     }),
-    agentServerGenerationFailureReason: (error) => error,
-    attemptPlanRefs: () => ({ scenarioPackageRef: request.scenarioPackageRef }),
-    repairNeededPayload: (req, selectedSkill, reason) => repairNeededPayload(req, selectedSkill, reason),
-    agentServerFailurePayloadRefs: () => ({}),
-    ensureDirectAnswerReportArtifact: (payload) => payload,
-    mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
-    validateAndNormalizePayload: async (payload, _req, selectedSkill, refs): Promise<ToolPayload> => ({
-      ...payload,
-      reasoningTrace: `${payload.reasoningTrace}\nSkill: ${selectedSkill.id}\nRuntime gateway refs: taskCodeRef=${refs.taskRel}, outputRef=${refs.outputRel}`,
-      executionUnits: payload.executionUnits.map((unit) => ({ ...unit, skillId: selectedSkill.id, outputRef: refs.outputRel })),
-      logs: [{ kind: 'stdout', ref: refs.stdoutRel }, { kind: 'stderr', ref: refs.stderrRel }],
-    }),
-    tryAgentServerRepairAndRerun: async () => undefined,
-    failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
-    coerceWorkspaceTaskPayload: (value) => coerceAgentServerToolPayload(value),
-    schemaErrors: (payload) => {
-      const record = payload as Record<string, unknown>;
-      return ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts'].filter((key) => !(key in record)).map((key) => `missing ${key}`);
-    },
-    firstPayloadFailureReason: () => undefined,
-    payloadHasFailureStatus: () => false,
-  });
+  }));
   assert.equal(generatedPayload?.message, 'Generated runner smoke passed.');
   assert.match(generatedPayload?.reasoningTrace ?? '', /AgentServer generation run: runner-smoke-run/);
   assert.equal(generatedPayload?.executionUnits[0]?.agentServerGenerated, true);
@@ -543,8 +502,8 @@ try {
     ...request,
     prompt: '帮我调研最近一周 arXiv 上 agent 相关论文和研究趋势',
   };
-  const emptyRetrievalPayload = await runAgentServerGeneratedTask(arxivEmptyRequest, skill, [skill], {}, {
-    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
+  const emptyRetrievalPayload = await runAgentServerGeneratedTask(arxivEmptyRequest, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+    request: arxivEmptyRequest,
     requestAgentServerGeneration: async () => ({
       ok: true,
       runId: 'runner-empty-arxiv-run',
@@ -576,33 +535,13 @@ try {
         patchSummary: 'empty arxiv retrieval should require diagnosis',
       },
     }),
-    agentServerGenerationFailureReason: (error) => error,
-    attemptPlanRefs: () => ({ scenarioPackageRef: request.scenarioPackageRef }),
-    repairNeededPayload: (req, selectedSkill, reason) => repairNeededPayload(req, selectedSkill, reason),
-    agentServerFailurePayloadRefs: () => ({}),
-    ensureDirectAnswerReportArtifact: (payload) => payload,
-    mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
-    validateAndNormalizePayload: async (payload, _req, selectedSkill, refs): Promise<ToolPayload> => ({
-      ...payload,
-      reasoningTrace: `${payload.reasoningTrace}\nSkill: ${selectedSkill.id}\nRuntime gateway refs: taskCodeRef=${refs.taskRel}, outputRef=${refs.outputRel}`,
-      executionUnits: payload.executionUnits.map((unit) => ({ ...unit, skillId: selectedSkill.id, outputRef: refs.outputRel })),
-      logs: [{ kind: 'stdout', ref: refs.stdoutRel }, { kind: 'stderr', ref: refs.stderrRel }],
-    }),
     tryAgentServerRepairAndRerun: async (_params) => {
       emptyRetrievalRepairCalled = true;
       emptyRetrievalTaskId = _params.taskId;
       assert.match(_params.failureReason, /External retrieval returned zero results/);
       return repairNeededPayload(arxivEmptyRequest, skill, _params.failureReason);
     },
-    failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
-    coerceWorkspaceTaskPayload: (value) => coerceAgentServerToolPayload(value),
-    schemaErrors: (payload) => {
-      const record = payload as Record<string, unknown>;
-      return ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts'].filter((key) => !(key in record)).map((key) => `missing ${key}`);
-    },
-    firstPayloadFailureReason: () => undefined,
-    payloadHasFailureStatus: () => false,
-  });
+  }));
   assert.equal(emptyRetrievalRepairCalled, true);
   assert.equal(emptyRetrievalPayload?.executionUnits[0]?.status, 'repair-needed');
   assert.match(emptyRetrievalPayload?.message ?? '', /External retrieval returned zero results/);
@@ -616,8 +555,8 @@ try {
   assert.match(emptyRetrievalAttempt[0]?.stderrRef ?? '', /^\.sciforge\/logs\/generated-literature-/);
 
   let providerDiagnosticsRepairCalled = false;
-  const providerDiagnosticsPayload = await runAgentServerGeneratedTask(arxivEmptyRequest, skill, [skill], {}, {
-    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
+  const providerDiagnosticsPayload = await runAgentServerGeneratedTask(arxivEmptyRequest, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+    request: arxivEmptyRequest,
     requestAgentServerGeneration: async () => ({
       ok: true,
       runId: 'runner-empty-provider-diagnostics-run',
@@ -649,36 +588,17 @@ try {
         patchSummary: 'empty retrieval includes diagnostics',
       },
     }),
-    agentServerGenerationFailureReason: (error) => error,
-    attemptPlanRefs: () => ({ scenarioPackageRef: request.scenarioPackageRef }),
-    repairNeededPayload: (req, selectedSkill, reason) => repairNeededPayload(req, selectedSkill, reason),
-    agentServerFailurePayloadRefs: () => ({}),
-    ensureDirectAnswerReportArtifact: (payload) => payload,
-    mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
-    validateAndNormalizePayload: async (payload, _req, selectedSkill, refs): Promise<ToolPayload> => ({
-      ...payload,
-      reasoningTrace: `${payload.reasoningTrace}\nSkill: ${selectedSkill.id}\nRuntime gateway refs: taskCodeRef=${refs.taskRel}, outputRef=${refs.outputRel}`,
-      executionUnits: payload.executionUnits.map((unit) => ({ ...unit, skillId: selectedSkill.id, outputRef: refs.outputRel })),
-      logs: [{ kind: 'stdout', ref: refs.stdoutRel }, { kind: 'stderr', ref: refs.stderrRel }],
-    }),
     tryAgentServerRepairAndRerun: async () => {
       providerDiagnosticsRepairCalled = true;
       return undefined;
     },
-    failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
-    coerceWorkspaceTaskPayload: (value) => coerceAgentServerToolPayload(value),
-    schemaErrors: (payload) => {
-      const record = payload as Record<string, unknown>;
-      return ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts'].filter((key) => !(key in record)).map((key) => `missing ${key}`);
-    },
-    firstPayloadFailureReason: () => undefined,
-    payloadHasFailureStatus: () => false,
-  });
+  }));
   assert.equal(providerDiagnosticsRepairCalled, false);
   assert.equal(providerDiagnosticsPayload?.executionUnits[0]?.status, 'done');
 
-  const directPlanOnlyPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, {
-    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
+  const directPlanOnlyPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+    request,
+    useProductionPayloadValidation: true,
     requestAgentServerGeneration: async () => ({
       ok: true,
       runId: 'runner-direct-plan-only-run',
@@ -694,27 +614,15 @@ try {
         artifacts: [],
       },
     }),
-    agentServerGenerationFailureReason: (error) => error,
-    attemptPlanRefs: () => ({ scenarioPackageRef: request.scenarioPackageRef }),
-    repairNeededPayload: (req, selectedSkill, reason, refs) => repairNeededPayload(req, selectedSkill, reason, refs),
-    agentServerFailurePayloadRefs: () => ({}),
-    ensureDirectAnswerReportArtifact,
-    mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
-    validateAndNormalizePayload,
-    tryAgentServerRepairAndRerun: async () => undefined,
-    failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
-    coerceWorkspaceTaskPayload,
-    schemaErrors: toolPayloadSchemaErrors,
-    firstPayloadFailureReason: () => undefined,
-    payloadHasFailureStatus: () => false,
-  });
+  }));
   assert.equal(directPlanOnlyPayload?.executionUnits[0]?.status, 'repair-needed');
   assert.match(directPlanOnlyPayload?.message ?? '', /completed payload/i);
   assert.ok((directPlanOnlyPayload?.executionUnits[0]?.recoverActions as string[] | undefined)?.some((action) => /promised retrieval\/analysis/.test(action)));
 
   let generatedPlanRepairCalled = false;
-  const generatedPlanOnlyPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, {
-    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
+  const generatedPlanOnlyPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+    request,
+    useProductionPayloadValidation: true,
     requestAgentServerGeneration: async () => ({
       ok: true,
       runId: 'runner-generated-plan-only-run',
@@ -746,24 +654,12 @@ try {
         patchSummary: 'plan-only generated payload must not complete',
       },
     }),
-    agentServerGenerationFailureReason: (error) => error,
-    attemptPlanRefs: () => ({ scenarioPackageRef: request.scenarioPackageRef }),
-    repairNeededPayload: (req, selectedSkill, reason, refs) => repairNeededPayload(req, selectedSkill, reason, refs),
-    agentServerFailurePayloadRefs: () => ({}),
-    ensureDirectAnswerReportArtifact,
-    mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
-    validateAndNormalizePayload,
     tryAgentServerRepairAndRerun: async (_params) => {
       generatedPlanRepairCalled = true;
       assert.match(_params.failureReason, /only plan\/promise text/);
       return undefined;
     },
-    failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
-    coerceWorkspaceTaskPayload,
-    schemaErrors: toolPayloadSchemaErrors,
-    firstPayloadFailureReason: () => undefined,
-    payloadHasFailureStatus: () => false,
-  });
+  }));
   assert.equal(generatedPlanRepairCalled, true);
   assert.equal(generatedPlanOnlyPayload?.executionUnits[0]?.status, 'repair-needed');
   assert.match(generatedPlanOnlyPayload?.message ?? '', /completed payload/i);
@@ -771,8 +667,8 @@ try {
 
   let commandFailedRepairCalled = false;
   let commandFailedTaskId = '';
-  const commandFailedPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, {
-    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
+  const commandFailedPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+    request,
     requestAgentServerGeneration: async () => ({
       ok: true,
       runId: 'runner-command-failed-run',
@@ -804,33 +700,13 @@ try {
         patchSummary: 'command failure evidence should require repair',
       },
     }),
-    agentServerGenerationFailureReason: (error) => error,
-    attemptPlanRefs: () => ({ scenarioPackageRef: request.scenarioPackageRef }),
-    repairNeededPayload: (req, selectedSkill, reason) => repairNeededPayload(req, selectedSkill, reason),
-    agentServerFailurePayloadRefs: () => ({}),
-    ensureDirectAnswerReportArtifact: (payload) => payload,
-    mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
-    validateAndNormalizePayload: async (payload, _req, selectedSkill, refs): Promise<ToolPayload> => ({
-      ...payload,
-      reasoningTrace: `${payload.reasoningTrace}\nSkill: ${selectedSkill.id}\nRuntime gateway refs: taskCodeRef=${refs.taskRel}, outputRef=${refs.outputRel}`,
-      executionUnits: payload.executionUnits.map((unit) => ({ ...unit, skillId: selectedSkill.id, outputRef: refs.outputRel })),
-      logs: [{ kind: 'stdout', ref: refs.stdoutRel }, { kind: 'stderr', ref: refs.stderrRel }],
-    }),
     tryAgentServerRepairAndRerun: async (_params) => {
       commandFailedRepairCalled = true;
       commandFailedTaskId = _params.taskId;
       assert.match(_params.failureReason, /non-zero exitCode/);
       return repairNeededPayload(request, skill, _params.failureReason);
     },
-    failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
-    coerceWorkspaceTaskPayload: (value) => coerceAgentServerToolPayload(value),
-    schemaErrors: (payload) => {
-      const record = payload as Record<string, unknown>;
-      return ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts'].filter((key) => !(key in record)).map((key) => `missing ${key}`);
-    },
-    firstPayloadFailureReason: () => undefined,
-    payloadHasFailureStatus: () => false,
-  });
+  }));
   assert.equal(commandFailedRepairCalled, true);
   assert.equal(commandFailedPayload?.executionUnits[0]?.status, 'repair-needed');
   assert.equal((commandFailedPayload?.executionUnits[0]?.refs as { validationFailure?: { failureKind?: string; contractId?: string } } | undefined)?.validationFailure?.failureKind, 'work-evidence');
@@ -839,8 +715,8 @@ try {
   assert.equal(commandFailedAttempt[0]?.status, 'repair-needed');
   assert.match(commandFailedAttempt[0]?.failureReason ?? '', /non-zero exitCode/);
 
-  const generatedReferencePayload = await runAgentServerGeneratedTask(currentReferenceRequest, skill, [skill], {}, {
-    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
+  const generatedReferencePayload = await runAgentServerGeneratedTask(currentReferenceRequest, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+    request: currentReferenceRequest,
     requestAgentServerGeneration: async () => ({
       ok: true,
       runId: 'runner-current-ref-smoke-run',
@@ -876,33 +752,12 @@ try {
         patchSummary: 'current reference runner smoke task',
       },
     }),
-    agentServerGenerationFailureReason: (error) => error,
-    attemptPlanRefs: () => ({ scenarioPackageRef: request.scenarioPackageRef }),
-    repairNeededPayload: (req, selectedSkill, reason) => repairNeededPayload(req, selectedSkill, reason),
-    agentServerFailurePayloadRefs: () => ({}),
-    ensureDirectAnswerReportArtifact: (payload) => payload,
-    mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
-    validateAndNormalizePayload: async (payload, _req, selectedSkill, refs): Promise<ToolPayload> => ({
-      ...payload,
-      reasoningTrace: `${payload.reasoningTrace}\nSkill: ${selectedSkill.id}\nRuntime gateway refs: taskCodeRef=${refs.taskRel}, outputRef=${refs.outputRel}`,
-      executionUnits: payload.executionUnits.map((unit) => ({ ...unit, skillId: selectedSkill.id, outputRef: refs.outputRel })),
-      logs: [{ kind: 'stdout', ref: refs.stdoutRel }, { kind: 'stderr', ref: refs.stderrRel }],
-    }),
-    tryAgentServerRepairAndRerun: async () => undefined,
-    failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
-    coerceWorkspaceTaskPayload: (value) => coerceAgentServerToolPayload(value),
-    schemaErrors: (payload) => {
-      const record = payload as Record<string, unknown>;
-      return ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts'].filter((key) => !(key in record)).map((key) => `missing ${key}`);
-    },
-    firstPayloadFailureReason: () => undefined,
-    payloadHasFailureStatus: () => false,
-  });
+  }));
   assert.match(generatedReferencePayload?.message ?? '', /current-input\.pdf; priorAttempts=0/);
 
   let staticTaskRetryCount = 0;
-  const staticTaskRetriedPayload = await runAgentServerGeneratedTask(currentReferenceRequest, skill, [skill], {}, {
-    readConfiguredAgentServerBaseUrl: async () => 'http://agentserver.local',
+  const staticTaskRetriedPayload = await runAgentServerGeneratedTask(currentReferenceRequest, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+    request: currentReferenceRequest,
     requestAgentServerGeneration: async () => {
       staticTaskRetryCount += 1;
       if (staticTaskRetryCount === 1) {
@@ -953,28 +808,7 @@ try {
         },
       };
     },
-    agentServerGenerationFailureReason: (error) => error,
-    attemptPlanRefs: () => ({ scenarioPackageRef: request.scenarioPackageRef }),
-    repairNeededPayload: (req, selectedSkill, reason) => repairNeededPayload(req, selectedSkill, reason),
-    agentServerFailurePayloadRefs: () => ({}),
-    ensureDirectAnswerReportArtifact: (payload) => payload,
-    mergeReusableContextArtifactsForDirectPayload: async (payload) => payload,
-    validateAndNormalizePayload: async (payload, _req, selectedSkill, refs): Promise<ToolPayload> => ({
-      ...payload,
-      reasoningTrace: `${payload.reasoningTrace}\nSkill: ${selectedSkill.id}\nRuntime gateway refs: taskCodeRef=${refs.taskRel}, outputRef=${refs.outputRel}`,
-      executionUnits: payload.executionUnits.map((unit) => ({ ...unit, skillId: selectedSkill.id, outputRef: refs.outputRel })),
-      logs: [{ kind: 'stdout', ref: refs.stdoutRel }, { kind: 'stderr', ref: refs.stderrRel }],
-    }),
-    tryAgentServerRepairAndRerun: async () => undefined,
-    failedTaskPayload: (req, selectedSkill, _run, reason) => repairNeededPayload(req, selectedSkill, reason || 'failed'),
-    coerceWorkspaceTaskPayload: (value) => coerceAgentServerToolPayload(value),
-    schemaErrors: (payload) => {
-      const record = payload as Record<string, unknown>;
-      return ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts'].filter((key) => !(key in record)).map((key) => `missing ${key}`);
-    },
-    firstPayloadFailureReason: () => undefined,
-    payloadHasFailureStatus: () => false,
-  });
+  }));
   assert.equal(staticTaskRetryCount, 2);
   assert.match(staticTaskRetriedPayload?.message ?? '', /Direct report from current-input\.pdf/);
 
