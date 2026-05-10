@@ -57,6 +57,129 @@ export const skillPackageManifests = [
     ]
   },
   {
+    "id": "scientific-reproduction",
+    "packageName": "@sciforge-skill/scientific-reproduction",
+    "kind": "skill",
+    "version": "1.0.0",
+    "label": "scientific-reproduction",
+    "description": "Generic bioinformatics reproduction playbook for data discovery, execution planning, degradation, and auditable negative or partial results without paper-specific shortcuts.",
+    "source": "package",
+    "skillDomains": [
+      "literature",
+      "omics",
+      "knowledge"
+    ],
+    "inputContract": {
+      "prompt": "Free-text request matched against this SKILL.md.",
+      "skillMarkdownRef": "packages/skills/domain_skills/scientific-reproduction/SKILL.md"
+    },
+    "outputArtifactTypes": [
+      "scientific-reproduction-profile",
+      "dataset-inventory",
+      "missing-data-report",
+      "analysis-plan",
+      "figure-reproduction-report",
+      "evidence-matrix",
+      "claim-verdict",
+      "negative-result-report"
+    ],
+    "entrypointType": "markdown-skill",
+    "requiredCapabilities": [
+      {
+        "capability": "skill.scientific-reproduction.profile",
+        "level": "external-tool"
+      },
+      {
+        "capability": "agentserver-generation",
+        "level": "self-healing"
+      },
+      {
+        "capability": "artifact-emission",
+        "level": "schema-checked"
+      }
+    ],
+    "failureModes": [
+      "backend-unavailable",
+      "missing-input",
+      "schema-mismatch"
+    ],
+    "examplePrompts": [
+      "scientific reproduction",
+      "generic bioinformatics reproduction playbook discovery execution planning degradation",
+      "Use scientific reproduction and return structured SciForge artifacts"
+    ],
+    "docs": {
+      "readmePath": "packages/skills/domain_skills/scientific-reproduction/SKILL.md",
+      "agentSummary": "Generic bioinformatics reproduction playbook for data discovery, execution planning, degradation, and auditable negative or partial results without paper-specific shortcuts."
+    },
+    "packageRoot": "packages/skills/domain_skills/scientific-reproduction",
+    "tags": [
+      "package",
+      "",
+      "literature",
+      "omics",
+      "knowledge",
+      "scientific-reproduction",
+      "bioinformatics",
+      "dataset-discovery",
+      "benchmark",
+      "negative-results"
+    ]
+  },
+  {
+    "id": "scientific-reproduction-loop",
+    "packageName": "@sciforge-skill/scientific-reproduction-loop",
+    "kind": "skill",
+    "version": "1.0.0",
+    "label": "scientific-reproduction-loop",
+    "description": "Generic SciForge web/Computer-Use research reproduction workflow that exports replayable state/action/observation trajectories, repair history, artifact lineage, and self-prompt recommendations.",
+    "source": "package",
+    "skillDomains": [
+      "literature"
+    ],
+    "inputContract": {
+      "prompt": "Free-text request matched against this SKILL.md.",
+      "skillMarkdownRef": "packages/skills/pipeline_skills/scientific-reproduction-loop/SKILL.md"
+    },
+    "outputArtifactTypes": [
+      "paper-list",
+      "evidence-matrix",
+      "research-report",
+      "knowledge-graph"
+    ],
+    "entrypointType": "markdown-skill",
+    "requiredCapabilities": [
+      {
+        "capability": "agentserver-generation",
+        "level": "self-healing"
+      },
+      {
+        "capability": "artifact-emission",
+        "level": "schema-checked"
+      }
+    ],
+    "failureModes": [
+      "backend-unavailable",
+      "missing-input",
+      "schema-mismatch"
+    ],
+    "examplePrompts": [
+      "scientific reproduction loop",
+      "generic sciforge computer research reproduction workflow exports replayable",
+      "Use scientific reproduction loop and return structured SciForge artifacts"
+    ],
+    "docs": {
+      "readmePath": "packages/skills/pipeline_skills/scientific-reproduction-loop/SKILL.md",
+      "agentSummary": "Generic SciForge web/Computer-Use research reproduction workflow that exports replayable state/action/observation trajectories, repair history, artifact lineage, and self-prompt recommendations."
+    },
+    "packageRoot": "packages/skills/pipeline_skills/scientific-reproduction-loop",
+    "tags": [
+      "package",
+      "",
+      "literature"
+    ]
+  },
+  {
     "id": "scp.admet_druglikeness_report",
     "packageName": "@sciforge-skill/admet_druglikeness_report",
     "kind": "skill",

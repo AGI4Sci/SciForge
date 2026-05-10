@@ -1,0 +1,265 @@
+{
+  "contract": "sciforge.scientific-reproduction.mock-dataset-discovery-cases.v1",
+  "description": "Network-free mock cases for generic bioinformatics reproduction dataset discovery. Cases model provider behavior only and contain no large data.",
+  "cases": [
+    {
+      "id": "dataset-discovery-missing",
+      "provider": "mock-dataset-discovery",
+      "network": "disabled",
+      "input": {
+        "paperRef": "fixture:paper/no-accession",
+        "claimRefs": [
+          "fixture:claim/h3k4me3-overlap"
+        ],
+        "discoveryHints": {
+          "accessions": [],
+          "repositories": [
+            "GEO",
+            "SRA",
+            "journal-supplement"
+          ],
+          "assays": [
+            "ChIP-seq"
+          ],
+          "species": [
+            "Mus musculus"
+          ],
+          "genomeBuilds": [
+            "mm10"
+          ],
+          "fileClasses": [
+            "FASTQ",
+            "BAM",
+            "BED",
+            "bigWig"
+          ]
+        },
+        "budget": {
+          "maxDiscoveryProbes": 3,
+          "maxDownloadBytes": 0,
+          "maxCpu": 1,
+          "maxMemoryGb": 1,
+          "maxWallTimeMinutes": 1
+        }
+      },
+      "mockResponse": {
+        "status": "missing",
+        "providerLatencyMs": 12,
+        "attemptedSources": [
+          {
+            "source": "GEO",
+            "identifier": "none-extracted",
+            "availability": "missing",
+            "reason": "No accession was present in the input hints.",
+            "evidenceRef": "fixture:evidence/missing-accession"
+          },
+          {
+            "source": "journal-supplement",
+            "identifier": "supplementary-data",
+            "availability": "missing",
+            "reason": "Only figure images and method prose were described by the fixture.",
+            "evidenceRef": "fixture:evidence/no-supplement-table"
+          }
+        ],
+        "downloadedBytes": 0
+      },
+      "expectedArtifacts": [
+        {
+          "type": "missing-data-report",
+          "status": "missing-data",
+          "requiredFields": [
+            "attemptedSources",
+            "reason",
+            "degradationAction",
+            "claimImpact"
+          ]
+        },
+        {
+          "type": "claim-verdict",
+          "status": "unverified",
+          "requiredFields": [
+            "missingEvidenceRefs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dataset-discovery-available",
+      "provider": "mock-dataset-discovery",
+      "network": "disabled",
+      "input": {
+        "paperRef": "fixture:paper/processed-accession",
+        "claimRefs": [
+          "fixture:claim/broad-h3k4me3-expression"
+        ],
+        "discoveryHints": {
+          "accessions": [
+            "GSEMOCK12345"
+          ],
+          "repositories": [
+            "GEO",
+            "journal-supplement"
+          ],
+          "assays": [
+            "ChIP-seq",
+            "RNA-seq"
+          ],
+          "species": [
+            "Mus musculus"
+          ],
+          "genomeBuilds": [
+            "mm10"
+          ],
+          "fileClasses": [
+            "narrowPeak",
+            "broadPeak",
+            "TSV"
+          ]
+        },
+        "budget": {
+          "maxDiscoveryProbes": 4,
+          "maxDownloadBytes": 50000,
+          "maxCpu": 1,
+          "maxMemoryGb": 1,
+          "maxWallTimeMinutes": 2
+        }
+      },
+      "mockResponse": {
+        "status": "available",
+        "providerLatencyMs": 18,
+        "datasetInventory": [
+          {
+            "source": "GEO",
+            "identifier": "GSEMOCK12345",
+            "assay": "ChIP-seq",
+            "species": "Mus musculus",
+            "genomeBuild": "mm10",
+            "fileClass": "broadPeak",
+            "availability": "available",
+            "sizeBytes": 824,
+            "license": "fixture-public-metadata",
+            "dataRef": "fixture:tiny/broad-h3k4me3-domains.tsv",
+            "evidenceRef": "fixture:evidence/geo-processed-table"
+          },
+          {
+            "source": "journal-supplement",
+            "identifier": "supplementary-expression-table",
+            "assay": "RNA-seq",
+            "species": "Mus musculus",
+            "genomeBuild": "mm10",
+            "fileClass": "TSV",
+            "availability": "available",
+            "sizeBytes": 614,
+            "license": "fixture-public-metadata",
+            "dataRef": "fixture:tiny/stage-expression.tsv",
+            "evidenceRef": "fixture:evidence/supplement-expression-table"
+          }
+        ],
+        "downloadedBytes": 0
+      },
+      "expectedArtifacts": [
+        {
+          "type": "dataset-inventory",
+          "status": "ready",
+          "requiredFields": [
+            "source",
+            "identifier",
+            "assay",
+            "fileClass",
+            "availability",
+            "sizeBytes",
+            "evidenceRef"
+          ]
+        },
+        {
+          "type": "analysis-plan",
+          "status": "ready",
+          "requiredFields": [
+            "analysisUnits",
+            "toolClass",
+            "inputRefs",
+            "budget"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dataset-discovery-timeout",
+      "provider": "mock-dataset-discovery",
+      "network": "disabled",
+      "input": {
+        "paperRef": "fixture:paper/slow-provider",
+        "claimRefs": [
+          "fixture:claim/dsb-hotspot-fate"
+        ],
+        "discoveryHints": {
+          "accessions": [
+            "SRPMOCK99999"
+          ],
+          "repositories": [
+            "SRA",
+            "ENA"
+          ],
+          "assays": [
+            "DMC1 ssDNA-seq"
+          ],
+          "species": [
+            "Mus musculus"
+          ],
+          "genomeBuilds": [
+            "mm10"
+          ],
+          "fileClasses": [
+            "FASTQ",
+            "BAM"
+          ]
+        },
+        "budget": {
+          "maxDiscoveryProbes": 2,
+          "maxDownloadBytes": 0,
+          "maxCpu": 1,
+          "maxMemoryGb": 1,
+          "maxWallTimeMinutes": 0.1
+        }
+      },
+      "mockResponse": {
+        "status": "timeout",
+        "providerLatencyMs": 65000,
+        "timeoutMs": 5000,
+        "attemptedSources": [
+          {
+            "source": "SRA",
+            "identifier": "SRPMOCK99999",
+            "availability": "timeout",
+            "reason": "Mock provider exceeded the discovery timeout before metadata could be confirmed.",
+            "evidenceRef": "fixture:evidence/sra-timeout"
+          }
+        ],
+        "degradationAction": "metadata-only-or-missing-data",
+        "downloadedBytes": 0
+      },
+      "expectedArtifacts": [
+        {
+          "type": "missing-data-report",
+          "status": "timeout",
+          "requiredFields": [
+            "attemptedSources",
+            "timeoutMs",
+            "degradationAction",
+            "claimImpact"
+          ]
+        },
+        {
+          "type": "dataset-inventory",
+          "status": "partial",
+          "requiredFields": [
+            "source",
+            "identifier",
+            "availability",
+            "evidenceRef"
+          ]
+        }
+      ]
+    }
+  ]
+}

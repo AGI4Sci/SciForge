@@ -9,7 +9,7 @@ export const manifest: UIComponentManifest = {
   componentId: 'graph-viewer',
   lifecycle: 'validated',
   outputArtifactTypes: ['graph', 'knowledge-graph'],
-  acceptsArtifactTypes: ['graph', 'knowledge-graph', 'network-graph', 'pathway-graph', 'ppi-graph', 'workflow-dag'],
+  acceptsArtifactTypes: ['graph', 'knowledge-graph', 'network-graph', 'pathway-graph', 'ppi-graph', 'workflow-dag', 'paper-claim-graph', 'claim-graph', 'figure-to-claim-map'],
   requiredFields: ['nodes', 'edges'],
   viewParams: ['colorBy', 'filter', 'highlightSelection', 'preset'],
   interactionEvents: ['select-node', 'select-edge'],
@@ -21,7 +21,7 @@ export const manifest: UIComponentManifest = {
   presentation: { dedupeScope: 'entity', identityFields: ['graphId', 'graph_id', 'networkId', 'datasetId', 'dataRef'] },
   docs: {
     readmePath: 'packages/presentation/components/graph-viewer/README.md',
-    agentSummary: 'Use for graph artifacts with nodes and edges. Historical network-graph aliases route here.',
+    agentSummary: 'Use for graph artifacts with nodes and edges, including claim graphs and figure-to-claim maps. Historical network-graph aliases route here.',
   },
   workbenchDemo: {
     artifactType: 'graph',

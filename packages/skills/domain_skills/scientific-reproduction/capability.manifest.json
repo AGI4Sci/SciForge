@@ -1,0 +1,366 @@
+{
+  "manifest": {
+    "contract": "sciforge.capability-manifest.v1",
+    "id": "skill.scientific-reproduction.profile",
+    "name": "Scientific reproduction profile",
+    "version": "0.1.0",
+    "ownerPackage": "@sciforge-skill/scientific-reproduction",
+    "kind": "skill",
+    "brief": "Declare a reusable bioinformatics reproduction profile with dataset discovery, tool classes, bounded budgets, degradation policy, and mock provider cases.",
+    "routingTags": [
+      "scientific-reproduction",
+      "bioinformatics",
+      "omics",
+      "dataset-inventory",
+      "missing-data-report",
+      "negative-results",
+      "benchmark"
+    ],
+    "domains": [
+      "literature",
+      "omics",
+      "knowledge"
+    ],
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "paperRef",
+        "claimRefs",
+        "discoveryHints",
+        "budget"
+      ],
+      "properties": {
+        "paperRef": {
+          "type": "string",
+          "description": "Workspace ref or citation record for the paper."
+        },
+        "claimRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Claim graph, figure map, or bounded claim summary refs."
+        },
+        "discoveryHints": {
+          "type": "object",
+          "properties": {
+            "accessions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "repositories": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "GEO",
+                  "SRA",
+                  "ENA",
+                  "ArrayExpress",
+                  "figshare",
+                  "GitHub",
+                  "journal-supplement",
+                  "paper-link"
+                ]
+              }
+            },
+            "assays": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "species": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "genomeBuilds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "fileClasses": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "FASTQ",
+                  "BAM",
+                  "CRAM",
+                  "BED",
+                  "narrowPeak",
+                  "broadPeak",
+                  "bigWig",
+                  "GTF",
+                  "GFF",
+                  "CSV",
+                  "TSV",
+                  "parquet",
+                  "notebook",
+                  "script"
+                ]
+              }
+            }
+          }
+        },
+        "budget": {
+          "type": "object",
+          "required": [
+            "maxDiscoveryProbes",
+            "maxDownloadBytes",
+            "maxCpu",
+            "maxMemoryGb",
+            "maxWallTimeMinutes"
+          ],
+          "properties": {
+            "maxDiscoveryProbes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxDownloadBytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxCpu": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxMemoryGb": {
+              "type": "number",
+              "minimum": 0.1
+            },
+            "maxWallTimeMinutes": {
+              "type": "number",
+              "minimum": 0.1
+            }
+          }
+        },
+        "environmentProfile": {
+          "type": "object",
+          "properties": {
+            "network": {
+              "enum": [
+                "disabled",
+                "mock-only",
+                "metadata-only",
+                "full"
+              ]
+            },
+            "availableToolClasses": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "genomeCaches": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "annotationCaches": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "outputSchema": {
+      "type": "object",
+      "required": [
+        "profileRef",
+        "artifactRefs",
+        "status"
+      ],
+      "properties": {
+        "profileRef": {
+          "type": "string"
+        },
+        "artifactRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "artifactTypes": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "scientific-reproduction-profile",
+              "dataset-inventory",
+              "missing-data-report",
+              "analysis-plan",
+              "figure-reproduction-report",
+              "evidence-matrix",
+              "claim-verdict",
+              "negative-result-report"
+            ]
+          }
+        },
+        "status": {
+          "enum": [
+            "ready",
+            "partial",
+            "missing-data",
+            "timeout",
+            "over-budget",
+            "failed"
+          ]
+        },
+        "diagnosticsRef": {
+          "type": "string"
+        }
+      }
+    },
+    "sideEffects": [
+      "none"
+    ],
+    "safety": {
+      "risk": "low",
+      "dataScopes": [
+        "workspace-refs",
+        "public-accession-metadata",
+        "mock-fixtures"
+      ]
+    },
+    "examples": [
+      {
+        "title": "Dataset discovery available with tiny processed fixture",
+        "inputRef": "tests/fixtures/scientific-reproduction/mock-dataset-discovery-cases.json#dataset-discovery-available",
+        "outputRef": "tests/fixtures/scientific-reproduction/mock-dataset-discovery-cases.json#dataset-discovery-available.expectedArtifacts"
+      },
+      {
+        "title": "Dataset discovery missing emits missing-data report",
+        "inputRef": "tests/fixtures/scientific-reproduction/mock-dataset-discovery-cases.json#dataset-discovery-missing",
+        "outputRef": "tests/fixtures/scientific-reproduction/mock-dataset-discovery-cases.json#dataset-discovery-missing.expectedArtifacts"
+      }
+    ],
+    "validators": [
+      {
+        "id": "skill.scientific-reproduction.profile.schema",
+        "kind": "schema",
+        "contractRef": "packages/skills/domain_skills/scientific-reproduction/capability.manifest.json#manifest",
+        "expectedRefs": [
+          "profileRef",
+          "artifactRefs"
+        ]
+      },
+      {
+        "id": "skill.scientific-reproduction.profile.mock-smoke",
+        "kind": "smoke",
+        "command": "tsx tests/smoke/smoke-scientific-reproduction-benchmark.ts",
+        "expectedRefs": [
+          "tests/fixtures/scientific-reproduction/mock-dataset-discovery-cases.json"
+        ]
+      }
+    ],
+    "repairHints": [
+      {
+        "failureCode": "dataset-discovery-missing",
+        "summary": "Emit a missing-data-report and keep downstream claims partial or unverified.",
+        "recoverActions": [
+          "record-attempted-sources",
+          "try-processed-or-supplementary-tables",
+          "mark-claim-impact"
+        ],
+        "exampleRef": "tests/fixtures/scientific-reproduction/mock-dataset-discovery-cases.json#dataset-discovery-missing"
+      },
+      {
+        "failureCode": "dataset-discovery-timeout",
+        "summary": "Record timeout diagnostics, stop live discovery for the provider, and degrade to metadata-only or missing data.",
+        "recoverActions": [
+          "capture-provider-timeout",
+          "debit-discovery-budget",
+          "switch-to-mock-or-metadata-only-provider"
+        ],
+        "exampleRef": "tests/fixtures/scientific-reproduction/mock-dataset-discovery-cases.json#dataset-discovery-timeout"
+      },
+      {
+        "failureCode": "environment-cache-incomplete",
+        "summary": "Use tiny schema-preserving fixtures or processed tables when genome or annotation caches are incomplete.",
+        "recoverActions": [
+          "select-tiny-fixture",
+          "emit-cache-gap-diagnostic",
+          "avoid-full-raw-data-download"
+        ]
+      }
+    ],
+    "providers": [
+      {
+        "id": "provider.scientific-reproduction.mock-dataset-discovery",
+        "label": "Mock dataset discovery cases",
+        "kind": "package",
+        "contractRef": "tests/fixtures/scientific-reproduction/mock-dataset-discovery-cases.json",
+        "requiredConfig": [],
+        "priority": 1
+      }
+    ],
+    "lifecycle": {
+      "status": "validated",
+      "sourceRef": "packages/skills/domain_skills/scientific-reproduction/SKILL.md",
+      "createdAt": "2026-05-11"
+    },
+    "metadata": {
+      "profileContract": "sciforge.scientific-reproduction-profile.v1",
+      "reusableInputs": [
+        "paperRef",
+        "claimRefs",
+        "discoveryHints",
+        "budget",
+        "environmentProfile"
+      ],
+      "reusableOutputs": [
+        "scientific-reproduction-profile",
+        "dataset-inventory",
+        "missing-data-report",
+        "analysis-plan",
+        "figure-reproduction-report",
+        "evidence-matrix",
+        "claim-verdict",
+        "negative-result-report"
+      ],
+      "toolClasses": [
+        "fastq-qc",
+        "read-alignment",
+        "bam-cram-indexing",
+        "coverage-and-counts",
+        "peak-calling",
+        "bed-overlap",
+        "bigwig-signal-summary",
+        "signal-matrix",
+        "gene-annotation",
+        "table-statistics",
+        "plot-generation"
+      ],
+      "budgetPolicy": {
+        "maxDiscoveryProbes": 8,
+        "maxDownloadBytes": 50000000,
+        "maxCpu": 2,
+        "maxMemoryGb": 4,
+        "maxWallTimeMinutes": 20,
+        "maxRetriesPerProviderClass": 1,
+        "largeRawDataPolicy": "metadata-only-or-missing-data"
+      },
+      "degradationPolicy": [
+        "raw-data-within-budget",
+        "processed-table-or-supplement",
+        "tiny-schema-preserving-fixture",
+        "metadata-only-inventory",
+        "missing-data-report"
+      ],
+      "mockProviderCasesRef": "tests/fixtures/scientific-reproduction/mock-dataset-discovery-cases.json"
+    }
+  },
+  "providerAvailability": [
+    {
+      "id": "provider.scientific-reproduction.mock-dataset-discovery",
+      "available": true
+    }
+  ]
+}

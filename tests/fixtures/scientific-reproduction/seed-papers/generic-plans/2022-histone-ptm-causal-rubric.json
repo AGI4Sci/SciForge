@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.seed-plan.v1",
+  "fixtureKind": "scientific-reproduction-seed-plan",
+  "sourcePaper": {
+    "id": "seed-2022-histone-ptm-causal-rubric",
+    "year": 2022,
+    "title": "Histone post-translational modifications - cause and consequence of genome function",
+    "sourcePdf": "workspace/cell_papers/2022_NRG_Histone post-translational__modifications — cause and__consequence of genome function.pdf",
+    "extractionMethod": "pdftotext pages 1-2",
+    "topicTags": ["histone PTM", "causal inference", "genome function", "rubric", "mechanism"]
+  },
+  "boundedMetadata": {
+    "paperType": "review",
+    "studySystem": "general chromatin and DNA-templated processes",
+    "mainClaimHint": "Histone modifications can act as causes, consequences, reinforcing signals, or memory-like records depending on timing, perturbation, and mechanism evidence.",
+    "evidenceModeHints": ["conceptual framework", "causality criteria", "confounder catalog", "evidence grading"],
+    "copyrightBoundary": "Only title-level bibliographic metadata and short paraphrased rubric hints are stored; no abstract or body text is reproduced."
+  },
+  "reproductionAttempt": {
+    "attemptId": "attempt-2022-histone-ptm-rubric-generic",
+    "claimCategory": "causal-evidence-rubric",
+    "requiredArtifactTypes": ["causal-evidence-rubric", "evidence-matrix", "claim-verdict", "negative-result-report"],
+    "verdictEnum": ["reproduced", "partially-reproduced", "not-reproduced", "contradicted"],
+    "minimumInputs": [
+      "candidate histone mark and genomic process",
+      "time-resolved mark and process measurements",
+      "perturbation evidence for writer, reader, eraser, or local mark editing",
+      "rescue or orthogonal validation evidence when available",
+      "known technical and biological confounders"
+    ],
+    "planChecklist": [
+      "Classify each claim as cause, consequence, reinforcement, memory mark, or unresolved.",
+      "Score whether the mark precedes, follows, or co-occurs with the measured process.",
+      "Check whether perturbing the mark machinery changes the process in the predicted direction.",
+      "Distinguish local direct evidence from global indirect or viability effects.",
+      "List common confounders before assigning a strong causal verdict.",
+      "Emit a reusable rubric that contains no paper-specific special cases."
+    ],
+    "sensitivityChecks": [
+      "Re-score claims when perturbation evidence is removed.",
+      "Separate writer perturbation from direct mark editing evidence.",
+      "Flag claims that rely only on colocalization or expression correlation.",
+      "Track whether evidence comes from the same cell state and time window."
+    ],
+    "negativeResultChecks": [
+      "If perturbation changes many unrelated chromatin features, weaken direct causality.",
+      "If timing evidence shows the mark appears after the process, classify as consequence or reinforcement.",
+      "If rescue evidence is absent for a strong causal claim, require a partial verdict."
+    ],
+    "rubricPrompts": [
+      "Use the same rubric for PRDM9/DSB fate and SETD1B broad H3K4me3 attempts.",
+      "Separate association strength from causal direction.",
+      "Preserve negative or uncertain outcomes as valid scientific results."
+    ]
+  }
+}

@@ -9,7 +9,7 @@ export const manifest: UIComponentManifest = {
   componentId: 'evidence-matrix',
   lifecycle: 'published',
   outputArtifactTypes: ['evidence-matrix'],
-  acceptsArtifactTypes: ['evidence-matrix', 'paper-list', 'structure-summary', 'knowledge-graph', 'omics-differential-expression', 'research-report'],
+  acceptsArtifactTypes: ['evidence-matrix', 'claim-verdict', 'negative-result-report', 'figure-reproduction-report', 'paper-list', 'structure-summary', 'knowledge-graph', 'omics-differential-expression', 'research-report'],
   viewParams: ['filter', 'sort', 'limit'],
   interactionEvents: ['select-claim'],
   roleDefaults: ['experimental-biologist', 'pi', 'clinical'],
@@ -23,6 +23,6 @@ export const manifest: UIComponentManifest = {
   },
   docs: {
     readmePath: 'packages/presentation/components/evidence-matrix/README.md',
-    agentSummary: 'Use only when claims/evidence comparison is explicitly useful. Accepts evidence-matrix and related artifact types.',
+    agentSummary: 'Use only when claims/evidence comparison is explicitly useful. Accepts evidence-matrix, claim verdict, negative-result, reproduction-report, and related artifact types.',
   },
 };

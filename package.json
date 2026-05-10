@@ -160,6 +160,7 @@
     "smoke:package-runtime-boundary": "tsx tools/check-package-runtime-boundary.ts",
     "smoke:view": "tsx tests/smoke/smoke-view-composition.ts",
     "smoke:runtime-ui-manifest": "tsx tests/smoke/smoke-runtime-ui-manifest.ts",
+    "smoke:scientific-reproduction": "tsx tests/smoke/smoke-scientific-reproduction-contracts.ts && tsx tests/smoke/smoke-scientific-reproduction-benchmark.ts && tsx tests/smoke/smoke-scientific-reproduction-seed-plans.ts && tsx tests/smoke/smoke-scientific-reproduction-trajectory.ts && tsx tests/smoke/smoke-scientific-reproduction-verifier.ts && tsx tests/smoke/smoke-scientific-reproduction-view-manifests.ts && tsx tests/smoke/smoke-scientific-reproduction-ui-failure.ts",
     "smoke:blastp-runtime": "tsx tests/smoke/smoke-blastp-runtime.ts",
     "smoke:omics-runners": "tsx tests/smoke/smoke-omics-runners.ts",
     "artifacts:index": "tsx tools/generate-test-artifacts-index.ts",

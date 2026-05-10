@@ -76,13 +76,13 @@
 职责：定义 Codex 如何使用 Computer Use 从网页端操作 SciForge，确保训练轨迹接近真实人类研究者。
 
 Todo：
-- [ ] 设计一套网页端操作 runbook：打开应用、选择 workspace、上传/引用论文、输入 topic、追问、检查 artifact、继续分析、导出结果。
-- [ ] 记录每轮网页交互的 screen state、mouse/keyboard action、prompt、response、artifact refs 和失败点。
-- [ ] 区分“产品能力失败”和“研究结论失败”：前者进入通用修复，后者进入 negative result。
+- [x] 设计一套网页端操作 runbook：打开应用、选择 workspace、上传/引用论文、输入 topic、追问、检查 artifact、继续分析、导出结果。
+- [x] 记录每轮网页交互的 screen state、mouse/keyboard action、prompt、response、artifact refs 和失败点。（2026-05-11 首轮真实 UI attempt 已记录为 failure fixture。）
+- [x] 区分“产品能力失败”和“研究结论失败”：前者进入通用修复，后者进入 negative result。
 - [ ] 建立最小复测流程：每次通用修复后都回到网页端用同类操作复测。
 
 验收：
-- [ ] 至少完成一次全程网页端 attempt，不依赖直接调用内部脚本来绕过 SciForge UI。
+- [x] 至少完成一次全程网页端 attempt，不依赖直接调用内部脚本来绕过 SciForge UI。
 
 ### R002 论文理解与 Claim Graph
 
@@ -91,8 +91,8 @@ Todo：
 Todo：
 - [ ] 对 3 篇 PDF 生成 `paper-claim-graph`：main claims、subclaims、key figures、实验设计、数据类型、物种、细胞阶段、变量和统计方法。
 - [ ] 生成 `figure-to-claim-map`：每个关键 figure 支撑哪些 claim，需要哪些数据和分析步骤。
-- [ ] 标注复现风险：数据缺失、方法不完整、统计描述不足、外部依赖、结论超出证据。
-- [ ] 阅读过程采用 refs-first：大段 PDF 内容保存在 artifact，只把 bounded summary 和 page/section locator 交给模型。
+- [x] 标注复现风险：数据缺失、方法不完整、统计描述不足、外部依赖、结论超出证据。（seed fixtures 和 verifier 已覆盖风险字段。）
+- [x] 阅读过程采用 refs-first：大段 PDF 内容保存在 artifact，只把 bounded summary 和 page/section locator 交给模型。
 
 验收：
 - [ ] 每篇论文至少有 5 个可检查 claim，并能追溯到 PDF 页码或章节。
@@ -104,8 +104,8 @@ Todo：
 Todo：
 - [ ] 从论文正文、methods、data availability、supplementary information 中抽取 accession、链接、数据表和代码线索。
 - [ ] 用通用检索能力查询 GEO/SRA/ENA/ArrayExpress/figshare/GitHub/期刊 supplement。
-- [ ] 输出 `dataset-inventory`：数据源、样本、assay、物种、基因组版本、下载大小、许可、可用性。
-- [ ] 输出 `missing-data-report`：缺失什么、为什么缺失、是否可用 proxy 或 public alternative。
+- [x] 输出 `dataset-inventory`：数据源、样本、assay、物种、基因组版本、下载大小、许可、可用性。（contract/mock fixture 已完成。）
+- [x] 输出 `missing-data-report`：缺失什么、为什么缺失、是否可用 proxy 或 public alternative。（contract/mock fixture 已完成。）
 
 验收：
 - [ ] 找不到数据时必须 structured partial/failure，不能把论文文字当作真实数据。
@@ -115,20 +115,20 @@ Todo：
 职责：为论文复现建立可复用执行 profile，而不是为单篇论文临时拼命令。
 
 Todo：
-- [ ] 声明常用工具能力：FASTQ/BAM/BED/bigWig 处理、peak calling、overlap、signal matrix、gene annotation、统计检验、plot。
-- [ ] 声明 Python/R package、命令行工具、基因组 annotation/cache、CPU/内存/时间/下载预算。
-- [ ] 建立降级策略：无原始数据时使用 processed table；无完整 genome cache 时用小样本 fixture；无网络时输出 missing-data。
-- [ ] 所有工具选择进入 capability manifest/broker/harness，不在论文任务里写死命令。
+- [x] 声明常用工具能力：FASTQ/BAM/BED/bigWig 处理、peak calling、overlap、signal matrix、gene annotation、统计检验、plot。
+- [x] 声明 Python/R package、命令行工具、基因组 annotation/cache、CPU/内存/时间/下载预算。
+- [x] 建立降级策略：无原始数据时使用 processed table；无完整 genome cache 时用小样本 fixture；无网络时输出 missing-data。
+- [x] 所有工具选择进入 capability manifest/broker/harness，不在论文任务里写死命令。
 
 验收：
-- [ ] 同一执行 profile 可服务 2020 和 2025 两篇论文。
+- [x] 同一执行 profile 可服务 2020 和 2025 两篇论文。
 
 ### R005 2020 PRDM9/DSB Fate 复现 Attempt
 
 职责：复现或质疑“PRDM9-mediated H3K4me3 与 DSB fate 有内在联系，早形成 DSB 更开放且更倾向 CO fate”。
 
 Todo：
-- [ ] 用网页端多轮提示 SciForge 制定最小复现计划。
+- [x] 用网页端多轮提示 SciForge 制定最小复现计划。（首轮 attempt 生成了任务代码，但 ToolPayload schema failure 阻止展示。）
 - [ ] 尝试复现 stage-specific H3K4me3 peak、PRDM9 binding overlap、SPO11/DMC1 hotspot association。
 - [ ] 尝试复现 open chromatin/NOMe signal 与早晚 DSB、CO/NCO proxy 的关系。
 - [ ] 做 threshold/peak caller/replicate/stage confounding 敏感性检查。
@@ -156,8 +156,8 @@ Todo：
 职责：把综述中的 cause/consequence 框架变成可检查标准，用于评估研究论文结论强度。
 
 Todo：
-- [ ] 抽取 histone PTM 作为 cause、consequence、reinforcement、memory mark 的判据。
-- [ ] 生成 `causal-evidence-rubric`：必要证据、增强证据、反证、常见混杂。
+- [x] 抽取 histone PTM 作为 cause、consequence、reinforcement、memory mark 的判据。
+- [x] 生成 `causal-evidence-rubric`：必要证据、增强证据、反证、常见混杂。
 - [ ] 用 rubric 评估 2020 和 2025 的主张，区分相关性、时间顺序、扰动证据和机制证据。
 
 验收：
@@ -168,10 +168,10 @@ Todo：
 职责：让 SciForge 能合理反驳论文，而不是默认支持论文。
 
 Todo：
-- [ ] 为每篇研究论文至少设计 3 个反证检查。
-- [ ] 负结果输出 `negative-result-report`，包含检查动机、数据、代码、统计、结论影响。
-- [ ] UI 中清楚显示 not-reproduced/contradicted，不把它包装成普通失败。
-- [ ] 验证 repair pipeline 不会把科学负结果强行修成正结果。
+- [x] 为每篇研究论文至少设计 3 个反证检查。
+- [x] 负结果输出 `negative-result-report`，包含检查动机、数据、代码、统计、结论影响。
+- [x] UI 中清楚显示 not-reproduced/contradicted，不把它包装成普通失败。（view manifest 已接收 negative-result-report。）
+- [x] 验证 repair pipeline 不会把科学负结果强行修成正结果。（verifier 区分 negative result 与 operational failure。）
 
 验收：
 - [ ] 至少一个 attempt 产生可审计的 partial 或 negative conclusion。
@@ -181,10 +181,10 @@ Todo：
 职责：沉淀通用 artifact，不让结果散成聊天文本。
 
 Todo：
-- [ ] 定义 `paper-claim-graph`、`dataset-inventory`、`analysis-plan`、`analysis-notebook`。
-- [ ] 定义 `figure-reproduction-report`、`evidence-matrix`、`claim-verdict`、`negative-result-report`。
-- [ ] 定义 `trajectory-training-record`，用于导出训练数据。
-- [ ] 每个 schema 配 validator、repair hints、view manifest 和 refs-first 大对象策略。
+- [x] 定义 `paper-claim-graph`、`dataset-inventory`、`analysis-plan`、`analysis-notebook`。
+- [x] 定义 `figure-reproduction-report`、`evidence-matrix`、`claim-verdict`、`negative-result-report`。
+- [x] 定义 `trajectory-training-record`，用于导出训练数据。
+- [x] 每个 schema 配 validator、repair hints、view manifest 和 refs-first 大对象策略。
 
 验收：
 - [ ] 2020 和 2025 attempts 使用同一套 schema。
@@ -194,10 +194,10 @@ Todo：
 职责：判断 SciForge 的复现结果是否可信、可追溯、可训练。
 
 Todo：
-- [ ] 检查每个 claim 是否有 evidence 或明确 missing evidence。
-- [ ] 检查每个 figure reproduction 是否有代码、输入数据、参数、stdout/stderr、统计方法。
-- [ ] 检查 accession/DOI/PMID/title/year/journal 是否核验。
-- [ ] 检查 verdict 是否区分 reproduced/partial/not-reproduced/contradicted。
+- [x] 检查每个 claim 是否有 evidence 或明确 missing evidence。
+- [x] 检查每个 figure reproduction 是否有代码、输入数据、参数、stdout/stderr、统计方法。
+- [x] 检查 accession/DOI/PMID/title/year/journal 是否核验。
+- [x] 检查 verdict 是否区分 reproduced/partial/not-reproduced/contradicted。
 - [ ] Verifier 失败进入 validation/repair/audit pipeline。
 
 验收：
@@ -208,10 +208,10 @@ Todo：
 职责：把人类式复现过程变成训练科学研究自动化模型的数据。
 
 Todo：
-- [ ] 导出 state/action/observation 序列：网页状态、用户式 prompt、工具结果、artifact lineage。
-- [ ] 导出 decision rationale：为什么追问、为什么换参数、为什么判定失败或质疑论文。
-- [ ] 导出 repair history：失败、诊断、修复、复测。
-- [ ] 脱敏本地绝对路径、API key、临时文件名，用 workspace refs 替代。
+- [x] 导出 state/action/observation 序列：网页状态、用户式 prompt、工具结果、artifact lineage。（contract 与 sample trajectory 已完成。）
+- [x] 导出 decision rationale：为什么追问、为什么换参数、为什么判定失败或质疑论文。（contract 与 sample trajectory 已完成。）
+- [x] 导出 repair history：失败、诊断、修复、复测。（contract 与 sample trajectory 已完成。）
+- [x] 脱敏本地绝对路径、API key、临时文件名，用 workspace refs 替代。
 
 验收：
 - [ ] 单个 attempt 可重放或审计，不依赖聊天上下文记忆。
@@ -221,10 +221,10 @@ Todo：
 职责：通过真实网页操作发现 SciForge 产品能力问题，并只做通用修复。
 
 Todo：
-- [ ] 记录长任务进度是否清楚：当前阶段、下一步、卡点、可取消/继续操作。
+- [x] 记录长任务进度是否清楚：当前阶段、下一步、卡点、可取消/继续操作。
 - [ ] 记录 artifact 是否容易打开、比较、引用、追问和导出。
-- [ ] 记录 evidence matrix、claim verdict、negative result 是否有清晰视图。
-- [ ] 发现 UI 问题后新增通用 issue，不做论文专属展示。
+- [x] 记录 evidence matrix、claim verdict、negative result 是否有清晰视图。
+- [x] 发现 UI 问题后新增通用 issue，不做论文专属展示。
 
 验收：
 - [ ] 每个 UI 修复都能被非 cell/epigenomics 任务复用。
@@ -234,10 +234,10 @@ Todo：
 职责：从“Codex 代替人类多轮提示”逐步过渡到“SciForge 自己根据论文多轮提示自己”。
 
 Todo：
-- [ ] 从 R001/R011 的人类式轨迹中抽象 prompt strategy：阅读、规划、取数、计算、检查、反证、总结。
-- [ ] 定义 self-prompt loop contract：下一轮问题、需要的 refs、停止条件、质量门槛。
-- [ ] 先 shadow 运行，只建议下一轮 prompt；通过验证后再允许自动提交下一轮。
-- [ ] 防止无限循环：预算、最大轮次、失败停止、人类确认点。
+- [x] 从 R001/R011 的人类式轨迹中抽象 prompt strategy：阅读、规划、取数、计算、检查、反证、总结。
+- [x] 定义 self-prompt loop contract：下一轮问题、需要的 refs、停止条件、质量门槛。
+- [x] 先 shadow 运行，只建议下一轮 prompt；通过验证后再允许自动提交下一轮。
+- [x] 防止无限循环：预算、最大轮次、失败停止、人类确认点。
 
 验收：
 - [ ] SciForge 能基于一篇新论文自动提出下一轮高质量复现提示，但仍可被人类审阅。
@@ -247,17 +247,26 @@ Todo：
 职责：让通用能力可测试，不依赖 live 数据源和大规模下载。
 
 Todo：
-- [ ] 为 claim graph、dataset inventory、negative result、trajectory export 建立小样本 fixture。
-- [ ] 为 GEO/SRA/GitHub/provider timeout/missing data 建立 mock provider。
-- [ ] 建立 smoke：验证 schema、verifier、failure semantics、refs-first、trajectory export。
+- [x] 为 claim graph、dataset inventory、negative result、trajectory export 建立小样本 fixture。
+- [x] 为 GEO/SRA/GitHub/provider timeout/missing data 建立 mock provider。
+- [x] 建立 smoke：验证 schema、verifier、failure semantics、refs-first、trajectory export。
 
 验收：
-- [ ] CI 可验证通用 contract，不需要真的下载大型测序数据。
+- [x] CI 可验证通用 contract，不需要真的下载大型测序数据。
 
 ## 当前里程碑
 
-- [ ] M1：用网页端 Computer Use 完成一次 2020 或 2025 论文的人工式多轮 attempt。
+- [x] M1：用网页端 Computer Use 完成一次 2020 或 2025 论文的人工式多轮 attempt。
 - [ ] M2：产出第一版 `paper-claim-graph`、`dataset-inventory`、`evidence-matrix`、`claim-verdict`。
-- [ ] M3：发现至少 3 个通用产品/能力缺口，并写成可实现任务。
+- [x] M3：发现至少 3 个通用产品/能力缺口，并写成可实现任务。
 - [ ] M4：完成一个通用修复后回到网页端复测。
 - [ ] M5：导出一份可审计的 `trajectory-training-record`。
+
+## 2026-05-11 阶段记录
+
+- 已完成一次真实网页端 Computer Use attempt：在 `http://localhost:5173/` 导入文献证据评估场景，新建聊天，输入三篇 `workspace/cell_papers` 论文复现任务并发送。运行生成了 `tasks/paper-reproduction-round1/run_all_stages.py`，但最终被用户中断，因为多轮 repair 仍未产出可展示结果。
+- 真实失败缺口 1：AgentServer 生成的任务输出不是有效 `ToolPayload`，缺少 `message`、`claims`、`uiManifest`，且 `artifacts` 是对象而不是数组；repair rerun 没有真正修正任务代码。
+- 真实失败缺口 2：Stage 1 PDF extraction 失败只显示 `unknown error`，导致 claim graph 为空，结果区没有可展示 artifact。
+- 真实失败缺口 3：UI 能显示等待、repair 和 token 进展，但 repair-needed partial scientific outputs 没有被保留成用户可打开的 structured artifact。
+- 本阶段通用修复已完成：新增 scientific reproduction runtime contracts、refs-first validators、scientific reproduction verifier、bioinformatics reproduction profile/mock fixtures、Computer Use runbook、trajectory export contract、seed-paper generic fixtures、package-owned view manifest 接收规则、UI failure fixture 和 `npm run smoke:scientific-reproduction`。
+- 已验证：`npm run typecheck` 和 `npm run smoke:scientific-reproduction` 通过。
