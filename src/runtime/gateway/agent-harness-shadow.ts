@@ -257,8 +257,17 @@ export function buildAgentHarnessPromptRenderPlan(input: {
 export function requestWithoutInlineAgentHarness(request: GatewayRequest): GatewayRequest {
   if (!isRecord(request.uiState?.agentHarness) && !request.uiState?.harnessProfileId) return request;
   const uiState = isRecord(request.uiState) ? { ...request.uiState } : {};
+  const metadata: unknown = agentHarnessContextEnvelopeHandoffEnabled(uiState)
+    ? agentHarnessHandoffMetadata(request)
+    : undefined;
+  const handoff = isRecord(metadata) && isRecord(metadata.agentHarnessHandoff)
+    ? metadata.agentHarnessHandoff
+    : undefined;
   delete uiState.agentHarness;
   delete uiState.harnessProfileId;
+  if (isRecord(handoff) && !isRecord(uiState.agentHarnessHandoff)) {
+    uiState.agentHarnessHandoff = handoff;
+  }
   return {
     ...request,
     uiState,
@@ -307,6 +316,30 @@ function agentHarnessBackendSelectionDecisionAuditEnabled(request: GatewayReques
     harness.disableBackendSelectionDecision,
   ].some(isEnabledFlag);
   return !disabled;
+}
+
+function agentHarnessContextEnvelopeHandoffEnabled(uiState: Record<string, unknown>) {
+  const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : {};
+  const disabled = [
+    uiState.agentHarnessContextEnvelopeDisabled,
+    uiState.agentHarnessContextEnvelopeAuditDisabled,
+    uiState.agentHarnessSkipContextEnvelope,
+    uiState.agentHarnessContextEnvelopeSkip,
+    uiState.harnessContextEnvelopeDisabled,
+    agentHarness.contextEnvelopeDisabled,
+    agentHarness.contextEnvelopeAuditDisabled,
+    agentHarness.skipContextEnvelope,
+    agentHarness.contextEnvelopeSkip,
+  ].some(isEnabledFlag);
+  if (disabled) return false;
+  const configured = [
+    uiState.agentHarnessContextEnvelopeEnabled,
+    uiState.harnessContextEnvelopeEnabled,
+    agentHarness.contextEnvelopeEnabled,
+    agentHarness.consumeContextEnvelope,
+  ].find((value) => value !== undefined);
+  if (configured === undefined) return true;
+  return configured !== false && !['0', 'false', 'off', 'disabled'].includes(String(configured).trim().toLowerCase());
 }
 
 function agentHarnessProfileId(request: GatewayRequest) {

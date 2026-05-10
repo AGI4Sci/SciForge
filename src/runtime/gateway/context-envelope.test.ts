@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import { VERIFICATION_RESULT_ARTIFACT_TYPE } from '@sciforge-ui/runtime-contract/verification-result';
 import type { GatewayRequest, SkillAvailability, WorkspaceTaskRunResult } from '../runtime-types';
+import { requestWithoutInlineAgentHarness } from './agent-harness-shadow';
 import { buildCompactRepairContext } from './agentserver-prompts';
 import { buildContextEnvelope, summarizeTaskAttemptsForAgentServer } from './context-envelope';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types';
@@ -200,6 +201,62 @@ test('context envelope governance ignores legacy context fields when contract ha
   assert.deepEqual(records(audit.ignoredLegacySources).map((entry) => entry.refCount), [2, 2]);
   assert.equal(JSON.stringify(audit.decisions).includes('request.uiState.contextBudget'), false);
   assert.deepEqual(records(envelope.sessionFacts.currentReferenceDigests).map((entry) => entry.ref).includes('ref:legacy-only'), false);
+});
+
+test('inline harness stripping preserves compact context governance handoff by default', () => {
+  const request = {
+    skillDomain: 'knowledge',
+    prompt: 'Use the contract-selected digest only.',
+    artifacts: [],
+    uiState: {
+      harnessProfileId: 'balanced-default',
+      currentReferenceDigests: [
+        { ref: 'ref:keep', digestText: 'Keep digest' },
+        { ref: 'ref:drop', digestText: 'Drop digest' },
+      ],
+      agentHarness: {
+        profileId: 'balanced-default',
+        contractRef: 'harness-contract:inline-strip',
+        traceRef: 'harness-trace:inline-strip',
+        contract: {
+          schemaVersion: 'sciforge.agent-harness-contract.v1',
+          profileId: 'balanced-default',
+          contractRef: 'harness-contract:inline-strip',
+          traceRef: 'harness-trace:inline-strip',
+          allowedContextRefs: ['ref:keep'],
+          blockedContextRefs: ['ref:drop'],
+          contextBudget: {
+            maxReferenceDigests: 1,
+          },
+        },
+      },
+    },
+  } as GatewayRequest;
+
+  const stripped = requestWithoutInlineAgentHarness(request);
+  assert.equal(record(record(stripped.uiState).agentHarness).schemaVersion, undefined);
+  assert.equal(record(stripped.uiState).harnessProfileId, undefined);
+  assert.equal(record(record(stripped.uiState).agentHarnessHandoff).harnessContractRef, 'harness-contract:inline-strip');
+
+  const envelope = buildContextEnvelope(stripped, { workspace: '/tmp/sciforge-test' });
+  const audit = record(envelope.contextGovernanceAudit);
+  assert.equal(audit.source, 'request.uiState.agentHarnessHandoff');
+  assert.equal(audit.contractRef, 'harness-contract:inline-strip');
+  assert.deepEqual(
+    records(envelope.sessionFacts.currentReferenceDigests).map((entry) => entry.ref),
+    ['ref:keep'],
+  );
+
+  const disabled = requestWithoutInlineAgentHarness({
+    ...request,
+    uiState: {
+      ...record(request.uiState),
+      agentHarnessContextEnvelopeDisabled: true,
+    },
+  } as GatewayRequest);
+  assert.equal(record(record(disabled.uiState).agentHarnessHandoff).harnessContractRef, undefined);
+  const disabledEnvelope = buildContextEnvelope(disabled, { workspace: '/tmp/sciforge-test' });
+  assert.equal(record(disabledEnvelope.contextGovernanceAudit).schemaVersion, undefined);
 });
 
 test('context envelope governance emits ignored legacy audit without legacy-driven filtering', () => {

@@ -300,6 +300,21 @@ function contextEnvelopeRepairContextPolicySummary(
 
 function contextEnvelopeGovernanceEnabled(uiState: Record<string, unknown>) {
   const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : {};
+  const disabled = [
+    process.env.SCIFORGE_AGENT_HARNESS_CONTEXT_ENVELOPE_DISABLED,
+    process.env.SCIFORGE_AGENT_HARNESS_CONTEXT_ENVELOPE_AUDIT_DISABLED,
+    process.env.SCIFORGE_DISABLE_AGENT_HARNESS_CONTEXT_ENVELOPE,
+    uiState.agentHarnessContextEnvelopeDisabled,
+    uiState.agentHarnessContextEnvelopeAuditDisabled,
+    uiState.agentHarnessSkipContextEnvelope,
+    uiState.agentHarnessContextEnvelopeSkip,
+    uiState.harnessContextEnvelopeDisabled,
+    agentHarness.contextEnvelopeDisabled,
+    agentHarness.contextEnvelopeAuditDisabled,
+    agentHarness.skipContextEnvelope,
+    agentHarness.contextEnvelopeSkip,
+  ].some(isEnabledFlag);
+  if (disabled) return false;
   const configured = [
     process.env.SCIFORGE_AGENT_HARNESS_CONTEXT_ENVELOPE,
     process.env.SCIFORGE_AGENT_HARNESS_CONSUME_CONTEXT,
@@ -308,7 +323,8 @@ function contextEnvelopeGovernanceEnabled(uiState: Record<string, unknown>) {
     agentHarness.contextEnvelopeEnabled,
     agentHarness.consumeContextEnvelope,
   ].find((value) => value !== undefined);
-  if (configured === undefined) return false;
+  if (configured === undefined) return contextEnvelopeGovernanceSource(uiState) !== undefined;
+  if (configured === false || ['0', 'false', 'off', 'disabled'].includes(String(configured).trim().toLowerCase())) return false;
   return configured === true || ['1', 'true', 'on', 'enabled'].includes(String(configured).trim().toLowerCase());
 }
 
@@ -561,6 +577,10 @@ function uniqueStrings(values: unknown) {
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function isEnabledFlag(value: unknown) {
+  return value === true || ['1', 'true', 'on', 'enabled'].includes(String(value).trim().toLowerCase());
 }
 
 function numberField(value: unknown) {

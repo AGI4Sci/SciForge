@@ -110,6 +110,8 @@ Todo：
 
 2026-05-10：T130 continuity decision 默认 metadata 小切片完成。AgentServer handoff metadata 现在默认包含 `agentHarnessContinuityDecision` 与 handoff 内的 `continuityDecision`，记录 fresh/continuation/repair 决策、intent/runtime signals 与 harness refs；保留 `agentHarnessContinuityDecisionDisabled` / `agentHarnessContinuityAuditDisabled` / `agentHarnessSkipContinuityDecision` 显式 kill switch。
 
+2026-05-10：T130 context envelope governance 默认 metadata/消费小切片完成。存在 canonical `agentHarness.contract` 或 compact `agentHarnessHandoff` 时，context envelope governance 默认启用并保留 contract/trace/context budget refs；`requestWithoutInlineAgentHarness()` 在剥离 inline harness 前留下 compact handoff，保留 context envelope disabled/audit-disabled/skip kill switches。
+
 Todo：
 
 - [x] 建立 `packages/agent-harness`：导出 `HarnessRuntime`、`HarnessProfile`、`HarnessCallback`、`HarnessContext`、`HarnessDecision`、`HarnessContract`、`HarnessTrace`、`HarnessStage`。
