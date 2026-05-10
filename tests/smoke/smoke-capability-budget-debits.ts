@@ -14,6 +14,8 @@ import {
   type ObserveProviderRuntime,
 } from '../../src/runtime/observe/orchestration.js';
 import { genericLoopPayload } from '../../src/runtime/vision-sense/computer-use-trace-output.js';
+import { agentVerifierRequestFixture } from '../../packages/verifiers/agent-rubric/fixture.js';
+import { createMockAgentVerifierProvider } from '../../packages/verifiers/agent-rubric/index.js';
 
 const debitLines: CapabilityBudgetDebitLine[] = [
   {
@@ -231,4 +233,17 @@ assert.ok(observeDebit.sinkRefs.auditRefs.includes(observeRecord.audit.ref));
 assert.ok(observeDebit.debitLines.some((line) => line.dimension === 'observeCalls' && line.amount === 1));
 assert.deepEqual(compactObserveTraceRefs(observeRecords)[0]?.budgetDebitRefs, [observeDebit.debitId]);
 
-console.log('[ok] capability invocation budget debit record is contract-shaped, sink-addressable, and wired into literature.retrieval, Computer Use, and observe provider invocation runtime output');
+const agentRubricVerifier = createMockAgentVerifierProvider();
+const agentRubricResult = await agentRubricVerifier.verify(agentVerifierRequestFixture);
+const agentRubricDebit = agentRubricResult.budgetDebits[0];
+assert.ok(agentRubricDebit, 'agent rubric verifier should emit a budget debit record');
+assert.equal(agentRubricDebit.contract, CAPABILITY_BUDGET_DEBIT_CONTRACT_ID);
+assert.equal(agentRubricDebit.capabilityId, 'verifier.agent-rubric');
+assert.deepEqual(agentRubricResult.budgetDebitRefs, [agentRubricDebit.debitId]);
+assert.ok(agentRubricDebit.subjectRefs.includes(agentRubricResult.resultRef));
+assert.ok(agentRubricDebit.subjectRefs.includes('result:final-answer'));
+assert.deepEqual(agentRubricDebit.sinkRefs.auditRefs, agentRubricResult.auditRefs);
+assert.ok(agentRubricDebit.debitLines.some((line) => line.dimension === 'providers' && line.amount === 1));
+assert.ok(agentRubricDebit.debitLines.some((line) => line.dimension === 'costUnits' && line.amount === agentRubricResult.criterionScores.length));
+
+console.log('[ok] capability invocation budget debit record is contract-shaped, sink-addressable, and wired into literature.retrieval, Computer Use, observe provider invocation, and agent rubric verifier runtime output');
