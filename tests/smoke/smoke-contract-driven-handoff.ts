@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { appendTaskAttempt } from '../../src/runtime/task-attempt-history.js';
+import { buildAgentHarnessPromptRenderPlan } from '../../src/runtime/gateway/agent-harness-shadow.js';
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
 
 type Dispatch = {
@@ -185,9 +186,12 @@ try {
     assert.deepEqual(dispatch.runtimeMetadata.agentHarnessHandoff, payloadHandoff);
     assert.deepEqual(dispatch.topLevelMetadata.agentHarnessHandoff, payloadHandoff);
     assertPromptDirectivesAreSourced(payloadHandoff);
+    assertPromptRenderPlanIsSourced(payloadHandoff);
     assert.equal(dispatch.text.includes(String(dispatch.metadata.harnessContractRef)), false);
     assert.equal(dispatch.text.includes(String(dispatch.metadata.harnessTraceRef)), false);
   }
+
+  assertSyntheticDirectiveRenderingIsSourced();
 
   console.log('[ok] contract-driven handoff carries harness refs for fresh/continuation/repair without live backend');
 } finally {
@@ -257,6 +261,62 @@ function assertPromptDirectivesAreSourced(payloadHandoff: Record<string, unknown
     assert.equal(typeof directive.id, 'string');
     assert.equal(typeof directive.sourceCallbackId, 'string');
   }
+}
+
+function assertPromptRenderPlanIsSourced(payloadHandoff: Record<string, unknown>) {
+  const renderPlan = record(payloadHandoff.promptRenderPlan);
+  assert.equal(renderPlan.schemaVersion, 'sciforge.agent-harness-prompt-render.v1');
+  assert.equal(renderPlan.renderMode, 'metadata-scaffold');
+  const strategyRefs = array(renderPlan.strategyRefs).map(record);
+  assert.ok(strategyRefs.length >= 2, 'prompt render plan should expose deterministic strategy refs');
+  for (const strategy of strategyRefs) {
+    assert.equal(typeof strategy.id, 'string');
+    assert.equal(typeof strategy.text, 'string');
+    assert.equal(typeof strategy.sourceCallbackId, 'string');
+  }
+  for (const selectedRef of array(renderPlan.selectedContextRefs).map(record)) {
+    assert.equal(typeof selectedRef.ref, 'string');
+    assert.equal(typeof selectedRef.kind, 'string');
+    assert.equal(typeof selectedRef.sourceCallbackId, 'string');
+  }
+  const renderedText = String(renderPlan.renderedText ?? '');
+  for (const strategy of strategyRefs) {
+    assert.ok(renderedText.includes(`[${String(strategy.sourceCallbackId)}] ${String(strategy.id)}:`));
+  }
+}
+
+function assertSyntheticDirectiveRenderingIsSourced() {
+  const renderPlan = buildAgentHarnessPromptRenderPlan({
+    contract: {
+      intentMode: 'repair',
+      explorationMode: 'normal',
+      allowedContextRefs: ['artifact:directive-render'],
+      blockedContextRefs: [],
+      requiredContextRefs: ['artifact:directive-render'],
+      repairContextPolicy: { kind: 'repair-rerun', maxAttempts: 1 },
+      promptDirectives: [{
+        id: 'repair-output-boundary',
+        sourceCallbackId: 'debug-repair.policy',
+        priority: 80,
+        text: 'Render only the selected repair evidence refs.',
+      }],
+    },
+    trace: {
+      stages: [{
+        callbackId: 'debug-repair.policy',
+        decision: {
+          intentSignals: { intentMode: 'repair' },
+          repair: { kind: 'repair-rerun' },
+          contextHints: { requiredContextRefs: ['artifact:directive-render'] },
+        },
+      }],
+    },
+  });
+  const directives = array(renderPlan.directiveRefs).map(record);
+  assert.equal(directives.length, 1);
+  assert.equal(directives[0]?.sourceCallbackId, 'debug-repair.policy');
+  assert.equal(directives[0]?.text, 'Render only the selected repair evidence refs.');
+  assertPromptRenderPlanIsSourced({ promptRenderPlan: renderPlan });
 }
 
 function handoff(dispatch: Dispatch) {

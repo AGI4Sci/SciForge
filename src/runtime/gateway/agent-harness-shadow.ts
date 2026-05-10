@@ -5,11 +5,20 @@ import { clipForAgentServerJson, errorMessage, hashJson, isRecord } from '../gat
 const AGENT_HARNESS_CONTRACT_EVENT_TYPE = 'agent-harness-contract';
 const AGENT_HARNESS_SHADOW_SCHEMA_VERSION = 'sciforge.agent-harness-shadow.v1';
 const AGENT_HARNESS_HANDOFF_SCHEMA_VERSION = 'sciforge.agent-harness-handoff.v1';
+const AGENT_HARNESS_PROMPT_RENDER_SCHEMA_VERSION = 'sciforge.agent-harness-prompt-render.v1';
 const DEFAULT_AGENT_HARNESS_PROFILE_ID = 'balanced-default';
 
 interface AgentHarnessEvaluation {
   contract: Record<string, unknown>;
   trace: Record<string, unknown>;
+}
+
+interface AgentHarnessPromptRenderEntry {
+  kind: 'strategy' | 'directive';
+  id: string;
+  sourceCallbackId: string;
+  text: string;
+  priority?: number;
 }
 
 export async function requestWithAgentHarnessShadow(
@@ -85,12 +94,12 @@ export function agentHarnessHandoffMetadata(request: GatewayRequest) {
   const profileId = stringField(agentHarness?.profileId) ?? stringField(request.uiState?.harnessProfileId);
   if (!profileId && !summary) return {};
   const contract = isRecord(agentHarness?.contract) ? agentHarness.contract : undefined;
+  const trace = isRecord(agentHarness?.trace) ? agentHarness.trace : undefined;
   const contractRef = stringField(agentHarness?.contractRef) ?? stringField(summary?.contractRef);
   const traceRef = stringField(agentHarness?.traceRef) ?? stringField(summary?.traceRef);
   const budgetSummary = agentHarnessBudgetSummary(contract, summary);
   const contextRefs = agentHarnessContextRefs(contract);
   const repairContextPolicy = isRecord(contract?.repairContextPolicy) ? contract.repairContextPolicy : undefined;
-  const promptDirectives = agentHarnessPromptDirectiveRefs(contract);
   const decisionOwner = 'AgentServer';
   const harnessSummary = agentHarnessMetadataSummary({
     summary,
@@ -100,6 +109,7 @@ export function agentHarnessHandoffMetadata(request: GatewayRequest) {
     budgetSummary,
     decisionOwner,
   });
+  const promptRenderPlan = buildAgentHarnessPromptRenderPlan({ contract, trace, summary: harnessSummary });
   return {
     harnessProfileId: profileId,
     harnessContractRef: contractRef,
@@ -118,10 +128,77 @@ export function agentHarnessHandoffMetadata(request: GatewayRequest) {
       explorationMode: stringField(contract?.explorationMode) ?? stringField(harnessSummary.explorationMode),
       contextRefs,
       repairContextPolicy,
-      promptDirectives,
+      promptDirectives: promptRenderPlan.directiveRefs,
+      promptRenderPlan,
       budgetSummary,
       summary: harnessSummary,
     },
+  };
+}
+
+export function buildAgentHarnessPromptRenderPlan(input: {
+  contract?: Record<string, unknown>;
+  trace?: Record<string, unknown>;
+  summary?: Record<string, unknown>;
+}) {
+  const contract = input.contract;
+  const summary = input.summary ?? {};
+  const intentMode = stringField(contract?.intentMode) ?? stringField(summary.intentMode);
+  const explorationMode = stringField(contract?.explorationMode) ?? stringField(summary.explorationMode);
+  const contextRefs = agentHarnessContextRefs(contract);
+  const directiveRefs = agentHarnessPromptDirectiveRefs(contract);
+  const strategyRefs: AgentHarnessPromptRenderEntry[] = [];
+  if (intentMode) {
+    strategyRefs.push(agentHarnessPromptRenderEntry({
+      id: 'intent-mode',
+      sourceCallbackId: sourceCallbackIdForTraceField(input.trace, 'intentMode') ?? 'harness.defaults.intentMode',
+      text: `intentMode=${intentMode}`,
+    }));
+  }
+  if (explorationMode) {
+    strategyRefs.push(agentHarnessPromptRenderEntry({
+      id: 'exploration-mode',
+      sourceCallbackId: sourceCallbackIdForTraceField(input.trace, 'explorationMode') ?? 'harness.defaults.explorationMode',
+      text: `explorationMode=${explorationMode}`,
+    }));
+  }
+  if (contextRefs.allowed.length || contextRefs.blocked.length || contextRefs.required.length) {
+    strategyRefs.push(agentHarnessPromptRenderEntry({
+      id: 'selected-context-refs',
+      sourceCallbackId: sourceCallbackIdForTraceField(input.trace, 'contextRefs') ?? 'harness.input.contextRefs',
+      text: [
+        contextRefs.allowed.length ? `allowed=${contextRefs.allowed.join(',')}` : undefined,
+        contextRefs.required.length ? `required=${contextRefs.required.join(',')}` : undefined,
+        contextRefs.blocked.length ? `blocked=${contextRefs.blocked.join(',')}` : undefined,
+      ].filter(Boolean).join(' '),
+    }));
+  }
+  if (isRecord(contract?.repairContextPolicy)) {
+    strategyRefs.push(agentHarnessPromptRenderEntry({
+      id: 'repair-context-policy',
+      sourceCallbackId: sourceCallbackIdForTraceField(input.trace, 'repairContextPolicy') ?? 'harness.defaults.repairContextPolicy',
+      text: renderRepairContextPolicy(contract.repairContextPolicy),
+    }));
+  }
+  const selectedContextRefs = [
+    ...contextRefs.allowed.map((ref) => agentHarnessSelectedContextRef('allowed', ref, input.trace)),
+    ...contextRefs.required.map((ref) => agentHarnessSelectedContextRef('required', ref, input.trace)),
+    ...contextRefs.blocked.map((ref) => agentHarnessSelectedContextRef('blocked', ref, input.trace)),
+  ];
+  const renderedLines = [
+    ...strategyRefs,
+    ...directiveRefs.map((directive): AgentHarnessPromptRenderEntry => ({ ...directive, kind: 'directive' })),
+  ]
+    .map((entry) => `[${entry.sourceCallbackId}] ${entry.id}: ${entry.text ?? ''}`.trim())
+    .filter(Boolean);
+  return {
+    schemaVersion: AGENT_HARNESS_PROMPT_RENDER_SCHEMA_VERSION,
+    renderMode: 'metadata-scaffold',
+    deterministic: true,
+    strategyRefs,
+    directiveRefs,
+    selectedContextRefs,
+    renderedText: renderedLines.join('\n'),
   };
 }
 
@@ -417,12 +494,70 @@ function agentHarnessPromptDirectiveRefs(contract?: Record<string, unknown>) {
   if (!Array.isArray(contract?.promptDirectives)) return [];
   return contract.promptDirectives
     .filter(isRecord)
-    .map((directive) => ({
-      id: stringField(directive.id),
-      sourceCallbackId: stringField(directive.sourceCallbackId),
-      priority: numberField(directive.priority),
-    }))
-    .filter((directive) => directive.id && directive.sourceCallbackId);
+    .flatMap((directive) => {
+      const id = stringField(directive.id);
+      const sourceCallbackId = stringField(directive.sourceCallbackId);
+      const text = stringField(directive.text);
+      if (!id || !sourceCallbackId || !text) return [];
+      return [{
+        id,
+        sourceCallbackId,
+        priority: numberField(directive.priority),
+        text,
+      }];
+    });
+}
+
+function agentHarnessPromptRenderEntry(input: {
+  id: string;
+  sourceCallbackId: string;
+  text: string;
+}): AgentHarnessPromptRenderEntry {
+  return {
+    kind: 'strategy',
+    id: input.id,
+    sourceCallbackId: input.sourceCallbackId,
+    text: input.text,
+  };
+}
+
+function agentHarnessSelectedContextRef(kind: 'allowed' | 'blocked' | 'required', ref: string, trace?: Record<string, unknown>) {
+  const field = kind === 'blocked' ? 'blockedContextRefs' : kind === 'required' ? 'requiredContextRefs' : 'allowedContextRefs';
+  return {
+    kind,
+    ref,
+    sourceCallbackId: sourceCallbackIdForTraceField(trace, field) ?? `harness.input.${field}`,
+  };
+}
+
+function renderRepairContextPolicy(policy: Record<string, unknown>) {
+  return [
+    stringField(policy.kind) ? `kind=${stringField(policy.kind)}` : undefined,
+    typeof policy.maxAttempts === 'number' ? `maxAttempts=${policy.maxAttempts}` : undefined,
+    typeof policy.includeStdoutSummary === 'boolean' ? `includeStdoutSummary=${policy.includeStdoutSummary}` : undefined,
+    typeof policy.includeStderrSummary === 'boolean' ? `includeStderrSummary=${policy.includeStderrSummary}` : undefined,
+  ].filter(Boolean).join(' ');
+}
+
+function sourceCallbackIdForTraceField(trace: Record<string, unknown> | undefined, field: string) {
+  const stages = Array.isArray(trace?.stages) ? trace.stages.filter(isRecord) : [];
+  for (const stage of [...stages].reverse()) {
+    const callbackId = stringField(stage.callbackId);
+    if (!callbackId) continue;
+    const decision = isRecord(stage.decision) ? stage.decision : {};
+    const intentSignals = isRecord(decision.intentSignals) ? decision.intentSignals : {};
+    const contextHints = isRecord(decision.contextHints) ? decision.contextHints : {};
+    const repair = isRecord(decision.repair) ? decision.repair : {};
+    if (field === 'intentMode' && stringField(intentSignals.intentMode)) return callbackId;
+    if (field === 'explorationMode' && stringField(intentSignals.explorationMode)) return callbackId;
+    if (field === 'repairContextPolicy' && Object.keys(repair).length) return callbackId;
+    if ((field === 'contextRefs' || field === 'allowedContextRefs') && Array.isArray(contextHints.allowedContextRefs)) return callbackId;
+    if ((field === 'contextRefs' || field === 'requiredContextRefs') && Array.isArray(contextHints.requiredContextRefs)) return callbackId;
+    if ((field === 'contextRefs' || field === 'blockedContextRefs') && (Array.isArray(contextHints.blockedContextRefs) || Array.isArray(decision.blockedRefs))) {
+      return callbackId;
+    }
+  }
+  return undefined;
 }
 
 function emitAgentHarnessContractEvent(

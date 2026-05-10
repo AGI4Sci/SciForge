@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 
 import { loadCoreCapabilityManifestRegistry } from '../../src/runtime/capability-manifest-registry.js';
+import {
+  runOfflineLiteratureRetrieval,
+  validateOfflineLiteratureRetrievalOutput,
+  type OfflineLiteratureRetrievalOutput,
+} from '../../src/runtime/literature-retrieval-runner.js';
 
 const registry = loadCoreCapabilityManifestRegistry();
 const manifest = registry.getManifest('literature.retrieval');
@@ -50,157 +55,159 @@ assert.equal(candidate.budget?.maxResultItems, 30);
 assert.equal(candidate.budget?.perProviderTimeoutMs, 10000);
 assert.equal(candidate.budget?.maxDownloadBytes, 25000000);
 
-const success = evaluateMockRetrieval({
-  providerId: 'literature.retrieval.openalex',
-  papers: [{
-    title: 'Agentic literature retrieval for scientific workflows',
-    year: 2026,
-    journal: 'SciForge Mock Proceedings',
-    doi: '10.5555/sciforge.2026.1',
-  }],
-  citationMatches: true,
-});
+const success = checked(runOfflineLiteratureRetrieval({
+  request: {
+    query: 'agentic literature retrieval scientific workflows',
+    databases: ['openalex', 'pubmed', 'arxiv'],
+    maxResults: 30,
+    includeAbstracts: true,
+    fullTextPolicy: 'bounded-full-text',
+  },
+  providerFixtures: [
+    {
+      providerId: 'literature.retrieval.openalex',
+      records: [{
+        providerRecordId: 'openalex-w1',
+        title: 'Agentic literature retrieval for scientific workflows',
+        year: 2026,
+        journal: 'SciForge Mock Proceedings',
+        doi: '10.5555/sciforge.2026.1',
+        abstract: 'A mock abstract from OpenAlex.',
+        fullTextRef: 'artifact:paper-fulltext-openalex-w1',
+      }],
+    },
+    {
+      providerId: 'pubmed',
+      records: [{
+        providerRecordId: 'pmid-123456',
+        title: 'Agentic literature retrieval for scientific workflows',
+        year: 2026,
+        journal: 'SciForge Mock Proceedings',
+        doi: '10.5555/sciforge.2026.1',
+        pmid: '123456',
+        abstract: 'A duplicate mock abstract from PubMed.',
+      }],
+    },
+    {
+      providerId: 'arxiv',
+      records: [{
+        providerRecordId: '2605.00001',
+        title: 'Offline normalizers for research agents',
+        year: 2026,
+        arxivId: '2605.00001',
+      }],
+    },
+  ],
+}));
 assert.equal(success.status, 'success');
-assert.equal(success.paperList.length, 1);
-assert.equal(success.providerAttempts[0]?.status, 'success');
-assert.equal(success.citationVerificationResults[0]?.status, 'verified');
+assert.equal(success.paperList.length, 2, 'OpenAlex/PubMed duplicate should dedupe by DOI');
+assert.deepEqual(success.workEvidence[0]?.artifactRefs, ['artifact:paper-list', 'artifact:evidence-matrix', 'artifact:research-report']);
+assert.equal(success.evidenceMatrix.length, success.paperList.length);
+assert.equal(success.researchReport.ref, 'artifact:research-report');
+assert.equal(success.researchReport.fullTextPolicy, 'bounded-summary');
+assert.ok(success.providerAttempts.every((attempt) => attempt.status === 'success'));
+assert.ok(success.citationVerificationResults.some((result) => result.status === 'verified'));
 
-const empty = evaluateMockRetrieval({
-  providerId: 'literature.retrieval.pubmed',
-  papers: [],
-  citationMatches: true,
-});
+const empty = checked(runOfflineLiteratureRetrieval({
+  request: { query: 'no-result control', databases: ['pubmed'] },
+  providerFixtures: [{ providerId: 'pubmed', records: [] }],
+}));
 assert.equal(empty.status, 'failed');
 assert.equal(empty.diagnostics[0]?.code, 'empty-results');
+assert.equal(empty.providerAttempts[0]?.status, 'empty');
 
-const overBudget = evaluateMockRetrieval({
-  providerId: 'literature.retrieval.arxiv',
-  papers: Array.from({ length: 31 }, (_, index) => ({ title: `Paper ${index}`, year: 2026 })),
-  citationMatches: true,
-});
+const overBudget = checked(runOfflineLiteratureRetrieval({
+  request: { query: 'budgeted result list', databases: ['arxiv'], maxResults: 50 },
+  providerFixtures: [{
+    providerId: 'arxiv',
+    records: Array.from({ length: 31 }, (_, index) => ({
+      providerRecordId: `arxiv-${index}`,
+      title: `Budget Paper ${index}`,
+      year: 2026,
+      arxivId: `2605.${String(index).padStart(5, '0')}`,
+    })),
+  }],
+}));
 assert.equal(overBudget.status, 'partial');
 assert.equal(overBudget.paperList.length, 30);
-assert.equal(overBudget.diagnostics[0]?.code, 'budget-exceeded');
+assert.equal(overBudget.diagnostics[0]?.code, 'result-budget-exceeded');
 
-const timeout = evaluateMockRetrieval({
-  providerId: 'literature.retrieval.pubmed',
-  papers: [{ title: 'Timeout fallback paper', year: 2026, pmid: '123456' }],
-  citationMatches: true,
-  providerTimedOut: true,
-});
+const timeout = checked(runOfflineLiteratureRetrieval({
+  request: { query: 'timeout fallback paper', databases: ['pubmed', 'openalex'] },
+  providerFixtures: [
+    {
+      providerId: 'pubmed',
+      status: 'timeout',
+      elapsedMs: 11000,
+      records: [{ title: 'Ignored timeout paper', year: 2026, pmid: '123456' }],
+    },
+    {
+      providerId: 'openalex',
+      records: [{ title: 'Timeout fallback paper', year: 2026, doi: '10.5555/timeout.fallback' }],
+    },
+  ],
+}));
 assert.equal(timeout.status, 'partial');
 assert.equal(timeout.providerAttempts[0]?.status, 'timeout');
+assert.equal(timeout.providerAttempts[1]?.status, 'success');
 assert.equal(timeout.diagnostics[0]?.code, 'provider-timeout');
 
-const downloadFailure = evaluateMockRetrieval({
-  providerId: 'literature.retrieval.arxiv',
-  papers: [{ title: 'Full text unavailable paper', year: 2026, arxivId: '2605.00001' }],
-  citationMatches: true,
-  downloadFailed: true,
-});
+const downloadFailure = checked(runOfflineLiteratureRetrieval({
+  request: { query: 'full text failure paper', databases: ['arxiv'], fullTextPolicy: 'bounded-full-text' },
+  providerFixtures: [{
+    providerId: 'arxiv',
+    records: [{
+      title: 'Full text unavailable paper',
+      year: 2026,
+      arxivId: '2605.99999',
+      fullTextRef: 'artifact:fulltext-2605-99999',
+      downloadFailed: true,
+    }],
+  }],
+}));
 assert.equal(downloadFailure.status, 'partial');
 assert.equal(downloadFailure.diagnostics[0]?.code, 'download-failure');
 assert.equal(downloadFailure.researchReport.fullTextPolicy, 'metadata-only');
 
-const mismatch = evaluateMockRetrieval({
-  providerId: 'literature.retrieval.openalex',
-  papers: [{ title: 'Unverified citation', year: 2026, doi: '10.5555/mismatch' }],
-  citationMatches: false,
-});
+const mismatch = checked(runOfflineLiteratureRetrieval({
+  request: { query: 'unverified citation', databases: ['openalex'] },
+  providerFixtures: [{
+    providerId: 'openalex',
+    records: [{
+      title: 'Unverified citation',
+      year: 2026,
+      doi: '10.5555/mismatch',
+      citationMatches: false,
+    }],
+  }],
+}));
 assert.equal(mismatch.status, 'partial');
 assert.equal(mismatch.citationVerificationResults[0]?.status, 'mismatch');
 assert.equal(mismatch.diagnostics[0]?.code, 'citation-mismatch');
 
-console.log('[ok] literature.retrieval capability declares generic providers, budgets, refs-first outputs, and structured mock failure outcomes');
+const providerBudget = checked(runOfflineLiteratureRetrieval({
+  request: { query: 'provider budget cap', databases: ['pubmed', 'openalex', 'arxiv', 'crossref'] },
+  providerFixtures: [
+    { providerId: 'pubmed', records: [{ title: 'PubMed Paper', year: 2026, pmid: '1' }] },
+    { providerId: 'openalex', records: [{ title: 'OpenAlex Paper', year: 2026, doi: '10.5555/openalex' }] },
+    { providerId: 'arxiv', records: [{ title: 'Arxiv Paper', year: 2026, arxivId: '2605.00002' }] },
+    { providerId: 'crossref', records: [{ title: 'Crossref Paper', year: 2026, doi: '10.5555/crossref' }] },
+  ],
+}));
+assert.equal(providerBudget.status, 'partial');
+assert.equal(providerBudget.providerAttempts.length, 3);
+assert.ok(providerBudget.diagnostics.some((diagnostic) => diagnostic.code === 'provider-budget-exceeded'));
+assert.ok(!providerBudget.providerAttempts.some((attempt) => attempt.providerId === 'literature.retrieval.crossref'));
 
-interface MockPaper {
-  title: string;
-  year: number;
-  journal?: string;
-  doi?: string;
-  pmid?: string;
-  arxivId?: string;
-}
+console.log('[ok] literature.retrieval capability has offline provider runner/normalizer contract with auditable outputs and failure outcomes');
 
-interface MockRetrievalInput {
-  providerId: string;
-  papers: MockPaper[];
-  citationMatches: boolean;
-  providerTimedOut?: boolean;
-  downloadFailed?: boolean;
-}
-
-interface MockRetrievalOutput {
-  status: 'success' | 'partial' | 'failed';
-  paperList: MockPaper[];
-  evidenceMatrix: Array<Record<string, unknown>>;
-  researchReport: Record<string, unknown>;
-  workEvidence: Array<Record<string, unknown>>;
-  providerAttempts: Array<Record<string, unknown>>;
-  citationVerificationResults: Array<Record<string, unknown>>;
-  diagnostics: Array<{ code: string; message: string }>;
-}
-
-function evaluateMockRetrieval(input: MockRetrievalInput): MockRetrievalOutput {
-  const maxResults = 30;
-  const diagnostics: MockRetrievalOutput['diagnostics'] = [];
-  const providerAttempts = [{
-    providerId: input.providerId,
-    status: input.providerTimedOut ? 'timeout' : input.papers.length > 0 ? 'success' : 'empty',
-    resultCount: input.papers.length,
-  }];
-  if (input.providerTimedOut) {
-    diagnostics.push({ code: 'provider-timeout', message: 'Provider exceeded perProviderTimeoutMs=10000; return bounded partial payload.' });
-  }
-  if (input.papers.length === 0) {
-    diagnostics.push({ code: 'empty-results', message: 'Provider returned no records; return structured failure instead of success.' });
-    return output('failed', [], providerAttempts, [], diagnostics);
-  }
-
-  let papers = input.papers;
-  if (papers.length > maxResults) {
-    diagnostics.push({ code: 'budget-exceeded', message: 'Result count exceeded maxResults=30; return bounded partial payload.' });
-    papers = papers.slice(0, maxResults);
-  }
-
-  const citationVerificationResults = papers.map((paper) => ({
-    title: paper.title,
-    doi: paper.doi,
-    pmid: paper.pmid,
-    arxivId: paper.arxivId,
-    year: paper.year,
-    journal: paper.journal,
-    checkedFields: ['doi', 'pmid', 'arxivId', 'title', 'year', 'journal'],
-    status: input.citationMatches ? 'verified' : 'mismatch',
-  }));
-  if (!input.citationMatches) {
-    diagnostics.push({ code: 'citation-mismatch', message: 'Citation identifiers or bibliographic fields disagree; return partial payload for repair.' });
-  }
-  if (input.downloadFailed) {
-    diagnostics.push({ code: 'download-failure', message: 'Full text retrieval failed; keep metadata refs and downgrade full text policy.' });
-  }
-  return output(diagnostics.length ? 'partial' : 'success', papers, providerAttempts, citationVerificationResults, diagnostics);
-}
-
-function output(
-  status: MockRetrievalOutput['status'],
-  paperList: MockPaper[],
-  providerAttempts: Array<Record<string, unknown>>,
-  citationVerificationResults: Array<Record<string, unknown>>,
-  diagnostics: MockRetrievalOutput['diagnostics'],
-): MockRetrievalOutput {
-  return {
-    status,
-    paperList,
-    evidenceMatrix: paperList.map((paper) => ({ title: paper.title, evidenceRefs: [`paper:${paper.title}`] })),
-    researchReport: {
-      ref: 'artifact:research-report',
-      boundedSummary: paperList.map((paper) => paper.title).join('; '),
-      fullTextPolicy: diagnostics.some((diagnostic) => diagnostic.code === 'download-failure') ? 'metadata-only' : 'bounded-summary',
-    },
-    workEvidence: [{ kind: 'external-retrieval', providerAttempts: providerAttempts.length, artifactRefs: ['paper-list'] }],
-    providerAttempts,
-    citationVerificationResults,
-    diagnostics,
-  };
+function checked(output: OfflineLiteratureRetrievalOutput): OfflineLiteratureRetrievalOutput {
+  assert.deepEqual(validateOfflineLiteratureRetrievalOutput(output), []);
+  assert.ok(output.paperList, 'paper-list output should be emitted');
+  assert.ok(output.evidenceMatrix, 'evidence-matrix output should be emitted');
+  assert.ok(output.researchReport, 'research-report output should be emitted');
+  assert.ok(output.workEvidence, 'workEvidence output should be emitted');
+  assert.ok(output.providerAttempts, 'providerAttempts output should be emitted');
+  assert.ok(output.citationVerificationResults, 'citationVerificationResults output should be emitted');
+  return output;
 }

@@ -42,13 +42,13 @@ SciForge 的最终形态是 **Backend-first, Contract-enforced, Capability-drive
 
 ### T131 ResultsRenderer 长文件治理：拆分结果渲染主入口
 
-状态：待办；`src/ui/src/app/ResultsRenderer.tsx` 已超过 1500 行，进入必须拆分跟踪范围。目标是把结果渲染主入口收敛为流程编排，把 artifact normalization、view-plan selection、execution notebook projection、fallback/empty-state presentation、object reference actions 等职责拆到语义模块，避免继续在单一 React 文件里堆叠。
+状态：进行中；`src/ui/src/app/ResultsRenderer.tsx` 已超过 1500 行，进入必须拆分跟踪范围。目标是把结果渲染主入口收敛为流程编排，把 artifact normalization、view-plan selection、execution notebook projection、fallback/empty-state presentation、object reference actions 等职责拆到语义模块，避免继续在单一 React 文件里堆叠。第一刀已拆出 execution audit 数据模型，保持 React 文件只消费投影结果。
 
 Todo：
 
 - [ ] 拆出 `results-renderer-artifact-normalizer`：只处理 loose backend artifact / ToolPayload 到稳定渲染输入的归一化。
 - [ ] 拆出 `results-renderer-view-model`：只负责 view plan、primary/supporting/provenance section 和 empty-state 投影。
-- [ ] 拆出 `results-renderer-execution-model`：只负责 execution units、notebook panels、work evidence 和 audit display 的 UI 数据模型。
+- [x] 拆出 `results-renderer-execution-model`：只负责 execution units、notebook panels、work evidence 和 audit display 的 UI 数据模型。
 - [ ] 保持 `ResultsRenderer.tsx` 只做 React composition 和事件接线，目标降到 1000 行以下。
 - [ ] 增加或迁移聚焦测试，覆盖 artifact fallback、report/preview rendering、execution notebook 和 object reference actions。
 
@@ -109,7 +109,7 @@ Todo：
 
 状态：进行中；目标是把 fresh/continuation、workspace read policy、current refs、repair retry、tool-use policy 等散落 prompt/metadata 规则迁入 `HarnessContract`，prompt builder 只做 deterministic rendering。
 
-进展：第一阶段 metadata-only handoff 已落地。AgentServer dispatch payload 不再把 harness contract/prompt directives 内联进自然语言 prompt，而是携带 `harnessProfileId`、`harnessContractRef`、`harnessTraceRef`、budget summary、decision owner 和结构化 `agentHarnessHandoff` 元数据，作为后续 deterministic renderer 的稳定交接面。第二阶段补充了 `uiState.agentHarnessInput` 到 shadow contract 的 refs/intent 桥接，并新增离线 `smoke:contract-driven-handoff` 覆盖 fresh/continuation/repair 三类 handoff refs。
+进展：第一阶段 metadata-only handoff 已落地。AgentServer dispatch payload 不再把 harness contract/prompt directives 内联进自然语言 prompt，而是携带 `harnessProfileId`、`harnessContractRef`、`harnessTraceRef`、budget summary、decision owner 和结构化 `agentHarnessHandoff` 元数据，作为后续 deterministic renderer 的稳定交接面。第二阶段补充了 `uiState.agentHarnessInput` 到 shadow contract 的 refs/intent 桥接，并新增离线 `smoke:contract-driven-handoff` 覆盖 fresh/continuation/repair 三类 handoff refs。第三阶段新增 `promptRenderPlan` metadata scaffold：从 `HarnessContract` 的 intent/context/repair/promptDirectives 确定性渲染 strategy/directive refs，所有策略句和 selected refs 都带 `sourceCallbackId`，但暂不大改自然语言 prompt builder。
 
 Todo：
 
@@ -120,7 +120,7 @@ Todo：
 - [x] AgentServer payload metadata 带 `harnessProfileId`、`harnessContractRef`、`harnessTraceRef`、budget summary、decision owner。
 - [x] 增加第一阶段 `smoke:contract-driven-handoff`：mock AgentServer 捕获真实 dispatch，验证 fresh 不泄漏旧 attempts/logs，continuation/repair 携带 contract refs/repair policy。
 - [ ] 将 backend selection、fresh/continuity prompt rule、context/rate-limit recovery、stream guard 统一通过 harness hook 输出结构化决策。
-- [ ] 扩展 `smoke:contract-driven-handoff` 到 deterministic renderer：prompt 中所有策略句都有 `sourceCallbackId`。
+- [x] 扩展 `smoke:contract-driven-handoff` 到 deterministic renderer：prompt 中所有策略句都有 `sourceCallbackId`。
 
 验收标准：
 
@@ -130,22 +130,26 @@ Todo：
 
 ### T127 Result Validation / Repair / Audit Pipeline：失败路径统一成决策链
 
-状态：待办；目标是所有输出路径进入同一 `ValidationDecision -> RepairDecision -> AuditRecord` 链路，generated-task runner、direct payload、observe/action、verification gate 和 repair rerun 不再各自判断成败。
+状态：进行中；目标是所有输出路径进入同一 `ValidationDecision -> RepairDecision -> AuditRecord` 链路，generated-task runner、direct payload、observe/action、verification gate 和 repair rerun 不再各自判断成败。
+
+进展：
+
+- 2026-05-10：新增 `@sciforge-ui/runtime-contract/validation-repair-audit` 第一阶段纯契约，定义 `ValidationDecision`、`RepairDecision`、`AuditRecord`、通用 finding/subject/ref/budget shape，并用离线 smoke 证明 direct payload、generated-task result、observe result 失败可以落到同一决策链；尚未重接 runner 主流程。
 
 Todo：
 
-- [ ] 建立 `ResultValidationHarness`：统一 schema、artifact refs、completed payload、current refs、WorkEvidence、guidance adoption、provided verification results、runtime verification gate、observe/action trace contract。
-- [ ] 建立 `RepairPolicyHarness`：统一决定 `none` / `repair-rerun` / `supplement` / `fail-closed` / `needs-human`。
+- [x] 建立 `ResultValidationHarness`：统一 schema、artifact refs、completed payload、current refs、WorkEvidence、guidance adoption、provided verification results、runtime verification gate、observe/action trace contract。
+- [x] 建立 `RepairPolicyHarness`：统一决定 `none` / `repair-rerun` / `supplement` / `fail-closed` / `needs-human`。
 - [ ] 建立 `RepairExecutor`：只执行 patch/rerun/supplement/peer handoff，不做策略判断。
 - [ ] 建立 `AuditSink`：统一写 `appendTaskAttempt`、Capability Evolution Ledger、verification artifacts、observe invocation records。
 - [ ] 建立 `TelemetrySink`：记录 `generation/request`、`materialize`、`payload-validation`、`work-evidence`、`verification-gate`、`repair-decision`、`repair-rerun`、`ledger-write`、`observe-invocation` spans。
 - [ ] 将 `generated-task-runner` 收敛为生命周期编排：generate/run/validate/repair/audit。
 - [ ] Verification gate 结果必须回流 repair/audit，而不是只在最终 payload 上 fail closed。
-- [ ] 增加 `smoke:validation-repair-audit-chain`：每个失败都能追溯 contract id、failure kind、related refs、repair budget、最终 outcome。
+- [x] 增加 `smoke:validation-repair-audit-chain`：每个失败都能追溯 contract id、failure kind、related refs、repair budget、最终 outcome。
 
 验收标准：
 
-- [ ] direct payload、generated task、repair rerun、observe/action result 共用同一 validation finding model。
+- [ ] direct payload、generated task、repair rerun、observe/action result 共用同一 validation finding model。（第一阶段已覆盖 direct payload、generated task、observe result 离线链路；repair rerun/action result 待接入。）
 - [ ] Runner 分支不再手写 repair policy 和 ledger input。
 - [ ] Capability Evolution Ledger 拥有完整成功/失败/repair/fallback 事实。
 
@@ -175,7 +179,7 @@ Todo：
 
 状态：进行中；目标是把高频科研任务沉淀为通用 composed capabilities，而不是隐藏 workflow。第一批聚焦文献检索、PDF 下载、全文抽取、批量总结、引用核验和证据矩阵。
 
-进展：第一阶段 `literature.retrieval` composed capability 已进入核心 capability manifest registry，声明 PubMed/Crossref/Semantic Scholar/OpenAlex/arXiv/web/SCP provider 面、输入输出 contract、默认预算、refs-first full text policy、引用核验字段和结构化失败/partial 语义；当前仍是 manifest/mock smoke 层，不执行 live provider。
+进展：第一阶段 `literature.retrieval` composed capability 已进入核心 capability manifest registry，声明 PubMed/Crossref/Semantic Scholar/OpenAlex/arXiv/web/SCP provider 面、输入输出 contract、默认预算、refs-first full text policy、引用核验字段和结构化失败/partial 语义。第二阶段首片已从 manifest-only 推进到离线 provider mock runner/normalizer contract：可在无 live provider 的情况下归一化 `paper-list`、`evidence-matrix`、`research-report`、`workEvidence`、`providerAttempts`、`citationVerificationResults`，并验证空结果、provider timeout、超预算、download failure、citation mismatch 的失败/partial outcome。
 
 Todo：
 
@@ -186,6 +190,7 @@ Todo：
 - [x] 空结果、provider timeout、download failure、citation mismatch 必须输出 structured failure/partial payload，不能算成功。
 - [x] 引用核验强制检查 DOI/PMID/arXiv id/title/year/journal 一致性，结果进入 verificationResults。
 - [x] PDF/full text 抽取保持 refs-first：全文写 artifact/task-results，prompt 只收 bounded summary、hash、page/section locators。
+- [x] 新增离线 provider mock runner/normalizer contract：多 provider attempts、去重、预算截断、refs-first report 降级和 citation verification outcome 均可本地复现。
 - [x] 增加 `smoke:literature-retrieval-capability`：arXiv/PubMed/OpenAlex 至少一个 provider 可 mock 成功；空结果、超预算、引用不一致均 fail closed 或 partial。
 
 验收标准：
