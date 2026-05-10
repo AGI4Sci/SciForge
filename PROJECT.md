@@ -136,7 +136,7 @@ Todo：
 
 2026-05-10：第二十四阶段把 `verifier.fixture.human-approval` fixture provider adapter 接入 `CapabilityBudgetDebit`。human approval verifier result 现在携带 audit/debit refs，debit subject 指向 verifier result 与输入 evidence refs，sink refs 指向 `audit:human-approval-verifier:*`，manifest 只补 adapter 入口与紧凑结果字段。
 
-草案（T129-D）：generated-task / AgentServer direct-payload 成功路径已开始写 `CapabilityBudgetDebit`，debit id 由 task/run/runtime refs 确定性生成，并在 final payload 回挂 executionUnit、workEvidence、attempt 与 capability-evolution ledger refs；后续继续把同一成功 debit 模式推广到 remaining runtime capabilities，并保持 materialize / repair rerun idempotent。
+2026-05-10：T129-D generated-task / AgentServer direct-payload 成功路径已接入 `CapabilityBudgetDebit`。debit id 由 task/run/runtime refs 确定性生成，final payload、executionUnit、workEvidence、attempt 与 capability-evolution ledger refs 都回挂同一 sink-addressable debit；后续继续把同一成功 debit 模式推广到 remaining runtime capabilities，并保持 materialize / repair rerun idempotent。
 
 Todo：
 
