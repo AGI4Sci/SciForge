@@ -93,6 +93,7 @@
     "smoke:agent-harness-contract": "tsx tests/smoke/smoke-agent-harness-contract.ts",
     "smoke:contract-driven-handoff": "tsx tests/smoke/smoke-contract-driven-handoff.ts",
     "smoke:agent-harness-experiments": "tsx tests/smoke/smoke-agent-harness-experiments.ts",
+    "smoke:agent-harness-profile-coverage": "tsx tests/smoke/smoke-agent-harness-profile-coverage.ts",
     "smoke:agent-harness-replay": "tsx tests/smoke/smoke-agent-harness-replay.ts",
     "smoke:interaction-progress-harness": "tsx tests/smoke/smoke-interaction-progress-harness.ts",
     "smoke:unified-capability-graph": "tsx tests/smoke/smoke-unified-capability-graph.ts",

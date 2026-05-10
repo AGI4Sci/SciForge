@@ -209,12 +209,13 @@ Todo：
 - [x] 建立 metrics：latency、context tokens、tool calls、network calls、download bytes、validation failures、repair attempts、final artifact quality。
 - [x] 建立 golden traces：锁定最小实验案例的 expected contract/trace，不锁定 backend 具体自然语言答案。
 - [x] 增加 `npm run smoke:agent-harness-experiments`。
+- [x] 增加 `npm run smoke:agent-harness-profile-coverage`。
 - [x] 增加 `npm run smoke:agent-harness-replay`。
 
 验收标准：
 
-- [ ] 新 profile 必须附带最小实验 fixture 和 trace assertion。
-- [ ] 新 hook 必须声明 owned stages、input facts、decision fields、merge behavior 和测试覆盖。
+- [x] 新 profile 必须附带最小实验 fixture 和 trace assertion。
+- [x] 新 hook 必须声明 owned stages、input facts、decision fields、merge behavior 和测试覆盖。
 - [ ] Harness 研究可以比较策略效果，而不是比较散落 prompt 文案。
 
 ### T123 Agent Harness Policy：集中治理探索、上下文、工具和进度策略
