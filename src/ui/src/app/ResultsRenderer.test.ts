@@ -3,9 +3,10 @@ import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { backendRepairStates, coerceReportPayload, contractValidationFailures, renderRegisteredWorkbenchSlot, ResultsRenderer, runAuditRefs, runRecoverActions, shouldOpenRunAuditDetails } from './ResultsRenderer';
+import { nextPinnedObjectReferences, resolveObjectReferenceActionPlan } from './results-renderer-object-actions';
 import { createResultsRendererViewModel } from './results-renderer-view-model';
 import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract';
-import type { RuntimeArtifact, SciForgeConfig, SciForgeSession } from '../domain';
+import type { ObjectReference, RuntimeArtifact, SciForgeConfig, SciForgeSession } from '../domain';
 
 test('coerceReportPayload extracts report refs from backend ToolPayload text instead of rendering raw JSON', () => {
   const payloadText = [
@@ -256,6 +257,57 @@ test('results renderer view model projects hidden result empty state and manifes
   assert.equal(hidden.visibleItems.length, 0);
   assert.equal(hidden.emptyState?.dismissedAllInFilter, true);
   assert.equal(hidden.emptyState?.title, '当前筛选下的视图已全部从界面移除');
+});
+
+test('object reference action helper resolves pin and workspace path plans without UI state', () => {
+  const artifact: RuntimeArtifact = {
+    id: 'report-artifact',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    path: '.sciforge/artifacts/report.md',
+    data: { markdown: '# Report' },
+  };
+  const session: SciForgeSession = {
+    ...emptySession(),
+    artifacts: [artifact],
+  };
+  const reference: ObjectReference = {
+    id: 'ref-report',
+    title: 'Report artifact',
+    kind: 'artifact',
+    ref: 'artifact:report-artifact',
+    artifactType: 'research-report',
+    actions: ['pin', 'copy-path', 'open-external'],
+  };
+  const olderPins = ['a', 'b', 'c', 'd'].map((id): ObjectReference => ({
+    id,
+    title: id,
+    kind: 'file',
+    ref: `file:${id}.txt`,
+  }));
+
+  assert.deepEqual(nextPinnedObjectReferences(olderPins, reference).map((item) => item.id), ['b', 'c', 'd', 'ref-report']);
+  assert.deepEqual(nextPinnedObjectReferences([reference], reference), []);
+
+  const pinPlan = resolveObjectReferenceActionPlan({
+    action: 'pin',
+    pinnedObjectReferences: olderPins,
+    reference,
+    session,
+  });
+  if (pinPlan.kind !== 'pin') assert.fail(`Expected pin plan, got ${pinPlan.kind}`);
+  assert.equal(pinPlan.pinnedObjectReferences.at(-1)?.id, 'ref-report');
+
+  const copyPlan = resolveObjectReferenceActionPlan({
+    action: 'copy-path',
+    pinnedObjectReferences: [],
+    reference,
+    session,
+  });
+  if (copyPlan.kind !== 'copy-path') assert.fail(`Expected copy-path plan, got ${copyPlan.kind}`);
+  assert.equal(copyPlan.path, '.sciforge/artifacts/report.md');
+  assert.equal(copyPlan.notice, '已复制路径：.sciforge/artifacts/report.md');
 });
 
 function contractFailureSession(): SciForgeSession {

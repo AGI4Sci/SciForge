@@ -60,6 +60,79 @@ test('context envelope uses package policy for current request and verification 
   ]);
 });
 
+test('context envelope can audit harness contract refs and context budget slimming behind feature flag', () => {
+  const request = {
+    skillDomain: 'knowledge',
+    prompt: 'Use the selected refs only.',
+    artifacts: [],
+    uiState: {
+      currentReferences: [
+        { ref: 'ref:a', title: 'Allowed current ref' },
+        { ref: 'ref:c', title: 'Blocked current ref' },
+      ],
+      currentReferenceDigests: [
+        { ref: 'ref:a', digestText: 'A digest' },
+        { ref: 'ref:b', digestText: 'B digest' },
+        { ref: 'ref:c', digestText: 'C digest' },
+      ],
+      recentConversation: ['user: old turn', 'assistant: old answer', 'user: current turn'],
+      agentHarnessContextEnvelopeEnabled: true,
+      agentHarness: {
+        contractRef: 'harness-contract:test-budget',
+        traceRef: 'harness-trace:test-budget',
+        contract: {
+          contractRef: 'harness-contract:test-budget',
+          traceRef: 'harness-trace:test-budget',
+          allowedContextRefs: ['ref:a', 'ref:b', 'ref:c'],
+          blockedContextRefs: ['ref:c'],
+          requiredContextRefs: ['ref:b'],
+          contextBudget: {
+            maxReferenceDigests: 1,
+          },
+        },
+      },
+    },
+  } as GatewayRequest;
+
+  const defaultEnvelope = buildContextEnvelope({
+    ...request,
+    uiState: {
+      ...request.uiState,
+      agentHarnessContextEnvelopeEnabled: false,
+    },
+  }, { workspace: '/tmp/sciforge-test' });
+  assert.equal(record(defaultEnvelope.contextGovernanceAudit).schemaVersion, undefined);
+  assert.equal((defaultEnvelope.sessionFacts.currentReferenceDigests as unknown[] | undefined)?.length, 3);
+
+  const envelope = buildContextEnvelope(request, { workspace: '/tmp/sciforge-test' });
+  const audit = record(envelope.contextGovernanceAudit);
+  assert.equal(audit.source, 'request.uiState.agentHarness.contract');
+  assert.equal(audit.contractRef, 'harness-contract:test-budget');
+  assert.deepEqual(record(audit.contextRefs).blocked, ['ref:c']);
+  assert.equal(record(audit.contextBudget).maxReferenceDigests, 1);
+
+  assert.deepEqual(
+    records(envelope.sessionFacts.currentReferences).map((entry) => entry.ref),
+    ['ref:a'],
+  );
+  assert.deepEqual(
+    records(envelope.sessionFacts.currentReferenceDigests).map((entry) => entry.ref),
+    ['ref:b'],
+  );
+  const decisions = records(audit.decisions);
+  assert.ok(decisions.some((entry) => entry.id === 'sessionFacts.currentReferences:contract-ref-filter'
+    && entry.source === 'request.uiState.agentHarness.contract.contextRefs'
+    && Array.isArray(entry.omittedRefs)
+    && entry.omittedRefs.includes('ref:c')));
+  assert.ok(decisions.some((entry) => entry.id === 'sessionFacts.currentReferenceDigests:contract-ref-filter'
+    && Array.isArray(entry.omittedRefs)
+    && entry.omittedRefs.includes('ref:c')));
+  assert.ok(decisions.some((entry) => entry.id === 'sessionFacts.currentReferenceDigests:context-budget-maxReferenceDigests'
+    && entry.source === 'request.uiState.agentHarness.contract.contextBudget.maxReferenceDigests'
+    && Array.isArray(entry.preservedRequiredRefs)
+    && entry.preservedRequiredRefs.includes('ref:b')));
+});
+
 test('repair context extracts WorkEvidence summary from failed output ref', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sciforge-repair-context-'));
   try {
@@ -146,4 +219,12 @@ function skill(): SkillAvailability {
       promotionHistory: [],
     },
   };
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function records(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null && !Array.isArray(entry)) : [];
 }

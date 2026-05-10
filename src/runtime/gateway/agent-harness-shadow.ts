@@ -98,6 +98,7 @@ export function agentHarnessHandoffMetadata(request: GatewayRequest) {
   const contractRef = stringField(agentHarness?.contractRef) ?? stringField(summary?.contractRef);
   const traceRef = stringField(agentHarness?.traceRef) ?? stringField(summary?.traceRef);
   const budgetSummary = agentHarnessBudgetSummary(contract, summary);
+  const contextBudget = isRecord(budgetSummary.context) ? budgetSummary.context : undefined;
   const contextRefs = agentHarnessContextRefs(contract);
   const repairContextPolicy = isRecord(contract?.repairContextPolicy) ? contract.repairContextPolicy : undefined;
   const decisionOwner = 'AgentServer';
@@ -127,6 +128,7 @@ export function agentHarnessHandoffMetadata(request: GatewayRequest) {
       intentMode: stringField(contract?.intentMode) ?? stringField(harnessSummary.intentMode),
       explorationMode: stringField(contract?.explorationMode) ?? stringField(harnessSummary.explorationMode),
       contextRefs,
+      contextBudget,
       repairContextPolicy,
       promptDirectives: promptRenderPlan.directiveRefs,
       promptRenderPlan,

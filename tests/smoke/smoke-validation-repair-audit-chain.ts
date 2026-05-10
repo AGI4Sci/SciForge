@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -22,7 +22,8 @@ import type { RuntimeVerificationResult } from '@sciforge-ui/runtime-contract/ve
 import { normalizeGatewayRequest } from '../../src/runtime/gateway/gateway-request';
 import { validateAndNormalizePayload } from '../../src/runtime/gateway/payload-validation';
 import { createValidationRepairAuditChain } from '../../src/runtime/gateway/validation-repair-audit-bridge';
-import type { SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types';
+import { appendTaskAttempt, readTaskAttempts } from '../../src/runtime/task-attempt-history';
+import type { SkillAvailability, TaskAttemptRecord, ToolPayload } from '../../src/runtime/runtime-types';
 
 const createdAt = '2026-05-10T00:00:00.000Z';
 const repairBudget: RepairBudgetSnapshot = {
@@ -227,6 +228,36 @@ try {
   assert.equal(realChain.auditRecord?.repairDecisionId, realChain.repairDecision?.decisionId);
   assert.ok(realChain.auditRecord?.relatedRefs.includes(payloadRefs.outputRel));
   assert.ok(realChain.auditRecord?.recoverActions.some((action) => /payload|contract|structured/i.test(action)));
+  assert.ok(realChain.auditRecord?.sinkRefs.some((ref) => ref.startsWith('appendTaskAttempt:payload-validation:')));
+
+  await mkdir(join(workspace, '.sciforge/task-results'), { recursive: true });
+  await writeFile(join(workspace, payloadRefs.outputRel), JSON.stringify(repairPayload), 'utf8');
+  await appendTaskAttempt(workspace, {
+    id: 'real-schema-failure',
+    prompt: request.prompt,
+    skillDomain: request.skillDomain,
+    skillId: skill.id,
+    attempt: 1,
+    status: 'repair-needed',
+    outputRef: payloadRefs.outputRel,
+    stdoutRef: payloadRefs.stdoutRel,
+    stderrRef: payloadRefs.stderrRel,
+    failureReason: 'schema failure',
+    createdAt,
+  });
+  const attempts = await readTaskAttempts(workspace, 'real-schema-failure');
+  assert.equal(attempts.length, 1);
+  const attempt = attempts[0] as TaskAttemptRecord & {
+    refs?: { validationRepairAudit?: Array<{ ref?: string; auditId?: string; contractId?: string; failureKind?: string; sinkRefs?: string[] }> };
+    validationRepairAuditRecords?: AuditRecord[];
+  };
+  const attemptAuditRef = attempt.refs?.validationRepairAudit?.[0];
+  const attemptAuditRecord = attempt.validationRepairAuditRecords?.[0];
+  assert.equal(attemptAuditRef?.ref, realChain.auditRecord?.auditId);
+  assert.equal(attemptAuditRef?.contractId, 'sciforge.tool-payload.v1');
+  assert.equal(attemptAuditRef?.failureKind, 'payload-schema');
+  assert.equal(attemptAuditRecord?.auditId, realChain.auditRecord?.auditId);
+  assert.ok(attemptAuditRecord?.sinkRefs.some((ref) => ref.startsWith('appendTaskAttempt:payload-validation:')));
 } finally {
   await rm(workspace, { recursive: true, force: true });
 }

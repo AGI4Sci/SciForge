@@ -18,6 +18,7 @@ import {
   type ValidationSubjectRef,
 } from '@sciforge-ui/runtime-contract/validation-repair-audit';
 import type { WorkEvidence } from '@sciforge-ui/runtime-contract/work-evidence';
+import { isRecord } from '../gateway-utils.js';
 
 export interface ValidationRepairAuditBridgeInput {
   chainId: string;
@@ -41,6 +42,27 @@ export interface ValidationRepairAuditChain {
   repair: RepairDecision;
   audit: AuditRecord;
   runtimeVerificationResults: RuntimeVerificationResult[];
+}
+
+export interface ValidationRepairAuditAttemptRef {
+  kind: 'validation-repair-audit';
+  ref: string;
+  auditId: string;
+  validationDecisionId?: string;
+  repairDecisionId?: string;
+  contractId?: string;
+  failureKind?: string;
+  outcome?: string;
+  subject?: ValidationSubjectRef;
+  relatedRefs: string[];
+  sinkRefs: string[];
+  telemetrySpanRefs: string[];
+  createdAt?: string;
+}
+
+export interface ValidationRepairAuditAttemptMetadata {
+  auditRefs: ValidationRepairAuditAttemptRef[];
+  auditRecords: AuditRecord[];
 }
 
 export const DEFAULT_VALIDATION_REPAIR_AUDIT_BRIDGE_REPAIR_BUDGET: RepairBudgetSnapshot = {
@@ -96,6 +118,31 @@ export function createValidationRepairAuditChain(input: ValidationRepairAuditBri
   return { validation, repair, audit, runtimeVerificationResults };
 }
 
+export function validationRepairAuditAttemptMetadataFromPayload(value: unknown): ValidationRepairAuditAttemptMetadata | undefined {
+  const chains = validationRepairAuditChainsFromPayload(value);
+  if (!chains.length) return undefined;
+  const auditRecords = uniqueAuditRecords(chains.map((chain) => chain.auditRecord).filter(isAuditRecord));
+  const auditRefs = uniqueAuditRefs(chains
+    .map((chain) => auditRefFromChain(chain))
+    .filter((ref): ref is ValidationRepairAuditAttemptRef => Boolean(ref)));
+  return auditRefs.length || auditRecords.length ? { auditRefs, auditRecords } : undefined;
+}
+
+export function mergeValidationRepairAuditAttemptMetadata(
+  current: Partial<ValidationRepairAuditAttemptMetadata> | undefined,
+  next: ValidationRepairAuditAttemptMetadata | undefined,
+): ValidationRepairAuditAttemptMetadata | undefined {
+  const auditRefs = uniqueAuditRefs([
+    ...(current?.auditRefs ?? []),
+    ...(next?.auditRefs ?? []),
+  ]);
+  const auditRecords = uniqueAuditRecords([
+    ...(current?.auditRecords ?? []),
+    ...(next?.auditRecords ?? []),
+  ]);
+  return auditRefs.length || auditRecords.length ? { auditRefs, auditRecords } : undefined;
+}
+
 function normalizeValidationSubject(
   input: ValidationRepairAuditBridgeInput,
   runtimeVerificationResults: RuntimeVerificationResult[],
@@ -143,4 +190,71 @@ function bridgeWorkEvidence(chainId: string, findings: ValidationFinding[]): Wor
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values.filter((value) => value.trim().length > 0))];
+}
+
+function validationRepairAuditChainsFromPayload(value: unknown) {
+  const chains: Array<{
+    validationDecision?: ValidationDecision;
+    repairDecision?: RepairDecision;
+    auditRecord?: AuditRecord;
+  }> = [];
+  const visit = (candidate: unknown) => {
+    if (!isRecord(candidate)) return;
+    const refs = isRecord(candidate.refs) ? candidate.refs : {};
+    const directChain = isRecord(candidate.validationRepairAudit) ? candidate.validationRepairAudit : undefined;
+    const refsChain = isRecord(refs.validationRepairAudit) ? refs.validationRepairAudit : undefined;
+    if (directChain) chains.push(directChain as typeof chains[number]);
+    if (refsChain) chains.push(refsChain as typeof chains[number]);
+  };
+  visit(value);
+  const executionUnits = isRecord(value) && Array.isArray(value.executionUnits) ? value.executionUnits : [];
+  for (const unit of executionUnits) visit(unit);
+  return chains;
+}
+
+function auditRefFromChain(chain: {
+  validationDecision?: ValidationDecision;
+  repairDecision?: RepairDecision;
+  auditRecord?: AuditRecord;
+}): ValidationRepairAuditAttemptRef | undefined {
+  const audit = chain.auditRecord;
+  if (!isAuditRecord(audit)) return undefined;
+  return {
+    kind: 'validation-repair-audit',
+    ref: audit.auditId,
+    auditId: audit.auditId,
+    validationDecisionId: audit.validationDecisionId ?? chain.validationDecision?.decisionId,
+    repairDecisionId: audit.repairDecisionId ?? chain.repairDecision?.decisionId,
+    contractId: audit.contractId,
+    failureKind: audit.failureKind,
+    outcome: audit.outcome,
+    subject: chain.validationDecision?.subject,
+    relatedRefs: uniqueStrings(audit.relatedRefs ?? []),
+    sinkRefs: uniqueStrings(audit.sinkRefs ?? []),
+    telemetrySpanRefs: uniqueStrings(audit.telemetrySpanRefs ?? []),
+    createdAt: audit.createdAt,
+  };
+}
+
+function isAuditRecord(value: unknown): value is AuditRecord {
+  return isRecord(value) && typeof value.auditId === 'string' && value.auditId.trim().length > 0;
+}
+
+function uniqueAuditRefs(refs: ValidationRepairAuditAttemptRef[]) {
+  const byId = new Map<string, ValidationRepairAuditAttemptRef>();
+  for (const ref of refs) {
+    const id = ref.auditId || ref.ref;
+    if (!id || byId.has(id)) continue;
+    byId.set(id, ref);
+  }
+  return [...byId.values()];
+}
+
+function uniqueAuditRecords(records: AuditRecord[]) {
+  const byId = new Map<string, AuditRecord>();
+  for (const record of records) {
+    if (!record.auditId || byId.has(record.auditId)) continue;
+    byId.set(record.auditId, record);
+  }
+  return [...byId.values()];
 }

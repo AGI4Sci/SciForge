@@ -212,6 +212,7 @@ function repairRefsWithValidationRepairAudit(
       `span:payload-validation:${chainId}`,
       `span:repair-decision:${chainId}`,
     ],
+    sinkRefs: [`appendTaskAttempt:${chainId}`],
     createdAt: validationFailure.createdAt,
   });
   return {

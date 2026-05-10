@@ -140,6 +140,16 @@ export interface BrokeredCapabilityBrief extends CapabilityManifestBrief {
   matchedSignals: string[];
   providerIds: string[];
   harnessSignals?: string[];
+  budget?: CapabilityBrokerBudgetBrief;
+}
+
+export interface CapabilityBrokerBudgetBrief {
+  status: 'within-budget' | 'limited' | 'exhausted';
+  limits: CapabilityBrokerToolBudget;
+  providerIdsBeforeBudget: number;
+  providerIdsAfterBudget: number;
+  clippedProviderIds?: string[];
+  signals: string[];
 }
 
 export interface CapabilityBrokerExclusion {
@@ -156,6 +166,7 @@ export interface CapabilityBrokerOutput {
     score: number;
     matchedSignals: string[];
     harnessSignals?: string[];
+    budget?: CapabilityBrokerBudgetBrief;
     penalties: string[];
     excluded?: string;
   }>;
@@ -295,13 +306,14 @@ export function brokerCapabilities(input: CapabilityBrokerInput, registry: Capab
 
   return {
     contract: 'sciforge.capability-broker-output.v1',
-    briefs: selected.map(toBrokeredBrief),
+    briefs: selected.map((item) => toBrokeredBrief(item, input.toolBudget)),
     excluded: excluded.sort((left, right) => left.id.localeCompare(right.id)),
     audit: scored.map((item) => ({
       id: item.manifest.id,
       score: item.score,
       matchedSignals: [...item.matchedSignals],
       harnessSignals: item.harnessSignals.length ? [...item.harnessSignals] : undefined,
+      budget: budgetBriefForCapability(input.toolBudget, item.manifest),
       penalties: [...item.penalties],
       excluded: item.excluded,
     })),
@@ -507,12 +519,16 @@ function hardExclusion(
   return undefined;
 }
 
-function toBrokeredBrief(item: ScoredCapability): BrokeredCapabilityBrief {
+function toBrokeredBrief(item: ScoredCapability, toolBudget: CapabilityBrokerToolBudget | undefined): BrokeredCapabilityBrief {
+  const compact = compactCapabilityManifestBrief(item.manifest);
+  const budget = budgetBriefForCapability(toolBudget, item.manifest);
   return {
-    ...compactCapabilityManifestBrief(item.manifest),
+    ...compact,
+    providerIds: budget ? compact.providerIds.slice(0, budget.providerIdsAfterBudget) : compact.providerIds,
     score: item.score,
     matchedSignals: [...item.matchedSignals],
     harnessSignals: item.harnessSignals.length ? [...item.harnessSignals] : undefined,
+    budget,
   };
 }
 
@@ -589,16 +605,91 @@ function providerAvailabilitySignals(manifest: CapabilityManifest, availableProv
 }
 
 function budgetSignalForCapability(budget: CapabilityBrokerToolBudget | undefined, manifest: CapabilityManifest) {
-  if (!budget || definedToolBudgetKeys(budget).length === 0) return undefined;
-  const compact = [
-    numericBudgetPart('maxToolCalls', budget.maxToolCalls),
-    numericBudgetPart('maxObserveCalls', budget.maxObserveCalls),
-    numericBudgetPart('maxActionSteps', budget.maxActionSteps),
-    numericBudgetPart('maxNetworkCalls', budget.maxNetworkCalls),
-    numericBudgetPart('maxProviders', budget.maxProviders),
-    budget.exhaustedPolicy ? `exhaustedPolicy=${budget.exhaustedPolicy}` : undefined,
+  const budgetBrief = budgetBriefForCapability(budget, manifest);
+  if (!budgetBrief) return undefined;
+  const limits = budgetBrief.limits;
+  const compact = budgetBrief.signals.length ? budgetBrief.signals.slice(0, 4).join('; ') : [
+    numericBudgetPart('maxToolCalls', limits.maxToolCalls),
+    numericBudgetPart('maxObserveCalls', limits.maxObserveCalls),
+    numericBudgetPart('maxActionSteps', limits.maxActionSteps),
+    numericBudgetPart('maxNetworkCalls', limits.maxNetworkCalls),
+    numericBudgetPart('maxProviders', limits.maxProviders),
+    limits.exhaustedPolicy ? `exhaustedPolicy=${limits.exhaustedPolicy}` : undefined,
   ].filter(Boolean).join(', ');
   return compact ? `tool budget hint for ${manifest.kind}: ${compact}` : `tool budget hint for ${manifest.kind}`;
+}
+
+function budgetBriefForCapability(
+  budget: CapabilityBrokerToolBudget | undefined,
+  manifest: CapabilityManifest,
+): CapabilityBrokerBudgetBrief | undefined {
+  if (!budget || definedToolBudgetKeys(budget).length === 0) return undefined;
+  const providerIds = manifest.providers.map((provider) => provider.id);
+  const providerLimit = typeof budget.maxProviders === 'number' && Number.isFinite(budget.maxProviders)
+    ? Math.max(0, Math.floor(budget.maxProviders))
+    : undefined;
+  const providerIdsAfterBudget = providerLimit === undefined
+    ? providerIds.length
+    : Math.min(providerIds.length, providerLimit);
+  const clippedProviderIds = providerLimit === undefined
+    ? []
+    : providerIds.slice(providerIdsAfterBudget);
+  const signals: string[] = [];
+  let exhausted = false;
+
+  if (providerLimit !== undefined) {
+    if (clippedProviderIds.length > 0) {
+      signals.push(`maxProviders=${providerLimit} clipped provider briefs ${providerIds.length}->${providerIdsAfterBudget}`);
+    } else {
+      signals.push(`maxProviders=${providerLimit} within provider count ${providerIds.length}`);
+    }
+    if (providerLimit === 0 && providerIds.length > 0) exhausted = true;
+  }
+  if (budget.maxNetworkCalls === 0 && manifest.sideEffects.some((effect) => effect === 'network' || effect === 'external-api')) {
+    signals.push('maxNetworkCalls=0 marks network/external-api capability exhausted');
+    exhausted = true;
+  }
+  if (budget.maxDownloadBytes === 0 && manifest.sideEffects.some((effect) => effect === 'network' || effect === 'external-api')) {
+    signals.push('maxDownloadBytes=0 disables download-heavy provider paths');
+    exhausted = true;
+  }
+  if (budget.maxToolCalls === 0 && (manifest.kind === 'skill' || manifest.kind === 'composed' || manifest.kind === 'runtime-adapter')) {
+    signals.push(`maxToolCalls=0 marks ${manifest.kind} capability exhausted`);
+    exhausted = true;
+  }
+  if (budget.maxObserveCalls === 0 && manifest.kind === 'observe') {
+    signals.push('maxObserveCalls=0 marks observe capability exhausted');
+    exhausted = true;
+  }
+  if (budget.maxActionSteps === 0 && manifest.kind === 'action') {
+    signals.push('maxActionSteps=0 marks action capability exhausted');
+    exhausted = true;
+  }
+  if (typeof budget.maxResultItems === 'number' && Number.isFinite(budget.maxResultItems)) {
+    signals.push(`maxResultItems=${Math.max(0, Math.floor(budget.maxResultItems))}`);
+  }
+  if (typeof budget.maxWallMs === 'number' && Number.isFinite(budget.maxWallMs)) {
+    signals.push(`maxWallMs=${Math.max(0, Math.floor(budget.maxWallMs))}`);
+  }
+  if (typeof budget.perProviderTimeoutMs === 'number' && Number.isFinite(budget.perProviderTimeoutMs)) {
+    signals.push(`perProviderTimeoutMs=${Math.max(0, Math.floor(budget.perProviderTimeoutMs))}`);
+  }
+  if (budget.exhaustedPolicy) signals.push(`exhaustedPolicy=${budget.exhaustedPolicy}`);
+
+  return {
+    status: exhausted ? 'exhausted' : signals.length > 0 || clippedProviderIds.length > 0 ? 'limited' : 'within-budget',
+    limits: compactToolBudget(budget),
+    providerIdsBeforeBudget: providerIds.length,
+    providerIdsAfterBudget,
+    clippedProviderIds: clippedProviderIds.length ? clippedProviderIds : undefined,
+    signals,
+  };
+}
+
+function compactToolBudget(budget: CapabilityBrokerToolBudget): CapabilityBrokerToolBudget {
+  return Object.fromEntries(
+    Object.entries(budget).filter(([, value]) => value !== undefined),
+  ) as CapabilityBrokerToolBudget;
 }
 
 function definedToolBudgetKeys(budget: CapabilityBrokerToolBudget | undefined) {

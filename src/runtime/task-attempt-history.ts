@@ -4,13 +4,20 @@ import type { TaskAttemptRecord } from './runtime-types.js';
 import { summarizeWorkEvidenceForHandoff } from './gateway/work-evidence-types.js';
 import { fileExists } from './workspace-task-runner.js';
 import { resolveWorkspaceFileRefPath } from './workspace-paths.js';
+import { isRecord } from './gateway-utils.js';
+import {
+  mergeValidationRepairAuditAttemptMetadata,
+  validationRepairAuditAttemptMetadataFromPayload,
+  type ValidationRepairAuditAttemptMetadata,
+} from './gateway/validation-repair-audit-bridge.js';
 
 export async function appendTaskAttempt(workspacePath: string, record: TaskAttemptRecord) {
   const workspace = resolve(workspacePath || process.cwd());
   const recordWithEvidence = await withWorkEvidenceSummary(workspace, record);
-  const normalizedRecord = recordWithEvidence.status === 'done'
-    ? { ...recordWithEvidence, failureReason: undefined }
-    : recordWithEvidence;
+  const recordWithAudit = await withValidationRepairAuditMetadata(workspace, recordWithEvidence);
+  const normalizedRecord = recordWithAudit.status === 'done'
+    ? { ...recordWithAudit, failureReason: undefined }
+    : recordWithAudit;
   const path = join(workspace, '.sciforge', 'task-attempts', `${safeName(record.id)}.json`);
   await mkdir(dirname(path), { recursive: true });
   const previous = await readAttempts(path);
@@ -125,6 +132,56 @@ async function withWorkEvidenceSummary(workspace: string, record: TaskAttemptRec
     return workEvidenceSummary ? { ...record, workEvidenceSummary } : record;
   } catch {
     return record;
+  }
+}
+
+async function withValidationRepairAuditMetadata(workspace: string, record: TaskAttemptRecord): Promise<TaskAttemptRecord> {
+  const fromAttempt = validationRepairAuditAttemptMetadataFromAttempt(record);
+  const fromOutput = record.outputRef
+    ? await validationRepairAuditAttemptMetadataFromOutput(workspace, record.outputRef)
+    : undefined;
+  const metadata = mergeValidationRepairAuditAttemptMetadata(fromAttempt, fromOutput);
+  if (!metadata) return record;
+  const current = record as TaskAttemptRecord & { refs?: Record<string, unknown> };
+  return {
+    ...record,
+    refs: {
+      ...(isRecord(current.refs) ? current.refs : {}),
+      validationRepairAudit: metadata.auditRefs,
+    },
+    validationRepairAuditRecords: metadata.auditRecords,
+  } as TaskAttemptRecord;
+}
+
+function validationRepairAuditAttemptMetadataFromAttempt(record: TaskAttemptRecord): ValidationRepairAuditAttemptMetadata | undefined {
+  const current = record as TaskAttemptRecord & {
+    refs?: Record<string, unknown>;
+    validationRepairAuditRecords?: unknown;
+  };
+  const refs = isRecord(current.refs) && Array.isArray(current.refs.validationRepairAudit)
+    ? current.refs.validationRepairAudit
+    : [];
+  const records = Array.isArray(current.validationRepairAuditRecords)
+    ? current.validationRepairAuditRecords
+    : [];
+  return refs.length || records.length
+    ? {
+      auditRefs: refs as ValidationRepairAuditAttemptMetadata['auditRefs'],
+      auditRecords: records as ValidationRepairAuditAttemptMetadata['auditRecords'],
+    }
+    : undefined;
+}
+
+async function validationRepairAuditAttemptMetadataFromOutput(
+  workspace: string,
+  outputRef: string,
+): Promise<ValidationRepairAuditAttemptMetadata | undefined> {
+  const outputPath = workspaceSafePath(workspace, outputRef);
+  if (!outputPath || !await fileExists(outputPath)) return undefined;
+  try {
+    return validationRepairAuditAttemptMetadataFromPayload(JSON.parse(await readFile(outputPath, 'utf8')));
+  } catch {
+    return undefined;
   }
 }
 

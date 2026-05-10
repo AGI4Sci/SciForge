@@ -3,7 +3,7 @@ import { AlertTriangle, ChevronDown, ChevronUp, Clock, Copy, Download, FileCode,
 import { scenarios, type ScenarioId } from '../data';
 import { elementRegistry } from '@sciforge/scenario-core/element-registry';
 import { artifactPreviewActions, objectReferenceKinds, previewDescriptorKinds, runtimeContractSchemas, schemaPreview, validateRuntimeContract } from '../runtimeContracts';
-import { openWorkspaceObject, readPreviewDerivative, readPreviewDescriptor, readWorkspaceFile, writeWorkspaceFile, type WorkspaceFileContent } from '../api/workspaceClient';
+import { readPreviewDerivative, readPreviewDescriptor, readWorkspaceFile, writeWorkspaceFile, type WorkspaceFileContent } from '../api/workspaceClient';
 import { uiModuleRegistry } from '../uiModuleRegistry';
 import {
   interactiveArtifactDownloadItems,
@@ -84,10 +84,8 @@ import {
   referenceForResultSlot,
 } from './results-renderer-artifact-normalizer';
 import {
-  artifactForObjectReference,
   availableObjectActions,
   findArtifact,
-  pathForObjectReference,
 } from '../../../../packages/support/object-references';
 import {
   sciForgeReferenceAttribute,
@@ -97,6 +95,10 @@ import {
   referenceForWorkspaceFileLike,
   withRegionLocator,
 } from '../../../../packages/support/object-references';
+import {
+  objectActionLabel,
+  performObjectReferenceAction,
+} from './results-renderer-object-actions';
 
 function ResultPaneWorkspaceFileEditor({
   state,
@@ -241,58 +243,20 @@ export function ResultsRenderer({
   const handleObjectAction = async (reference: ObjectReference, action: ObjectAction) => {
     setObjectActionError('');
     setObjectActionNotice('');
-    if (action === 'focus-right-pane') {
-      onFocusedObjectChange(reference);
-      if (reference.runId) onActiveRunChange(reference.runId);
-      setResultTab('primary');
-      setObjectActionNotice('已聚焦到右侧结果。');
-      return;
-    }
-    if (action === 'inspect') {
-      const artifact = artifactForObjectReference(reference, session);
-      if (artifact) {
-        setInspectedArtifact(artifact);
-      } else {
-        setObjectActionError(`无法解析 artifact：${reference.ref}`);
-      }
-      return;
-    }
-    if (action === 'pin' || action === 'compare') {
-      setPinnedObjectReferences((current) => current.some((item) => item.id === reference.id)
-        ? current.filter((item) => item.id !== reference.id)
-        : [...current, reference].slice(-4));
-      onFocusedObjectChange(reference);
-      setResultTab('primary');
-      setObjectActionNotice(action === 'compare' ? '已加入对比/固定列表。' : '已固定到结果区。');
-      return;
-    }
-    if (action === 'copy-path') {
-      const path = pathForObjectReference(reference, session);
-      if (!path) {
-        setObjectActionError(`没有可复制路径：${reference.title}`);
-        return;
-      }
-      try {
-        await writeClipboardText(path);
-        setObjectActionNotice(`已复制路径：${path}`);
-      } catch (error) {
-        setObjectActionError(error instanceof Error ? error.message : String(error));
-      }
-      return;
-    }
-    if (action === 'open-external' || action === 'reveal-in-folder') {
-      const path = pathForObjectReference(reference, session);
-      if (!path) {
-        setObjectActionError(`没有可打开路径：${reference.title}`);
-        return;
-      }
-      try {
-        await openWorkspaceObject(config, action, path);
-        setObjectActionNotice(action === 'reveal-in-folder' ? '已请求在文件夹中显示。' : '已请求系统打开文件。');
-      } catch (error) {
-        setObjectActionError(error instanceof Error ? error.message : String(error));
-      }
-    }
+    const result = await performObjectReferenceAction({
+      action,
+      config,
+      pinnedObjectReferences,
+      reference,
+      session,
+    });
+    if (result.focusReference) onFocusedObjectChange(result.focusReference);
+    if (result.activeRunId) onActiveRunChange(result.activeRunId);
+    if (result.resultTab) setResultTab(result.resultTab);
+    if (result.inspectedArtifact) setInspectedArtifact(result.inspectedArtifact);
+    if (result.pinnedObjectReferences) setPinnedObjectReferences(result.pinnedObjectReferences);
+    if (result.notice) setObjectActionNotice(result.notice);
+    if (result.error) setObjectActionError(result.error);
   };
 
   return (
@@ -906,34 +870,6 @@ function ObjectFocusBanner({
       {error ? <p className="object-action-error">{error}</p> : null}
     </div>
   );
-}
-
-function objectActionLabel(action: ObjectAction) {
-  if (action === 'focus-right-pane') return '聚焦';
-  if (action === 'inspect') return '检查数据';
-  if (action === 'open-external') return '系统打开';
-  if (action === 'reveal-in-folder') return '打开文件夹';
-  if (action === 'copy-path') return '复制路径';
-  if (action === 'compare') return '对比';
-  return 'Pin';
-}
-
-async function writeClipboardText(text: string) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.style.position = 'fixed';
-  textarea.style.opacity = '0';
-  document.body.appendChild(textarea);
-  textarea.select();
-  try {
-    if (!document.execCommand('copy')) throw new Error('浏览器拒绝复制路径，请手动复制。');
-  } finally {
-    document.body.removeChild(textarea);
-  }
 }
 
 function UIDesignStudioPanel({ viewPlan }: { viewPlan: RuntimeResolvedViewPlan }) {

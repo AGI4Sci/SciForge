@@ -79,6 +79,8 @@ assert.ok(
   JSON.stringify(reportBrief).includes('tool budget hint'),
   'compact selected brief should carry budget hints without expanding schemas',
 );
+assert.ok(reportBrief.budget, 'compact selected brief should carry structured budget status');
+assert.equal((reportBrief.budget as Record<string, unknown>).providerIdsAfterBudget, 1);
 
 const verifierAudit = audit.find((entry) => entry.id === 'verifier.schema');
 assert.ok(JSON.stringify(verifierAudit).includes('verification policy hint'));
@@ -92,4 +94,52 @@ assert.equal(brokerText.includes('outputSchema'), false, 'broker brief must keep
 assert.equal(brokerText.includes('"examples"'), false, 'broker brief must keep examples lazy');
 assert.equal(brokerText.includes('repairHints'), false, 'broker brief must keep repair hints lazy');
 
-console.log('[ok] capability broker carries harness input hints into compact audit without broad selection changes');
+const budgetedRetrievalBrief = buildCapabilityBrokerBriefForAgentServer({
+  skillDomain: 'literature',
+  prompt: 'Find recent CRISPR literature and return provider attempts.',
+  artifacts: [],
+  uiState: {
+    capabilityPolicy: {
+      toolBudget: {
+        maxProviders: 2,
+        maxNetworkCalls: 1,
+        exhaustedPolicy: 'partial-payload',
+      },
+      providerAvailability: [
+        'literature.retrieval.pubmed',
+        'literature.retrieval.crossref',
+        'literature.retrieval.semantic-scholar',
+        'literature.retrieval.openalex',
+      ],
+    },
+  },
+});
+const retrievalBriefs = budgetedRetrievalBrief.briefs as Array<Record<string, unknown>>;
+const retrievalAudit = budgetedRetrievalBrief.audit as Array<Record<string, unknown>>;
+const literatureBrief = retrievalBriefs.find((brief) => brief.id === 'literature.retrieval');
+const literatureAudit = retrievalAudit.find((entry) => entry.id === 'literature.retrieval');
+const literatureBudget = literatureAudit?.budget as Record<string, unknown> | undefined;
+
+assert.ok(literatureBrief, 'literature.retrieval should be selected for literature retrieval prompt');
+assert.deepEqual(literatureBrief.providerIds, ['literature.retrieval.pubmed', 'literature.retrieval.crossref']);
+assert.equal((literatureBrief.budget as Record<string, unknown> | undefined)?.providerIdsBeforeBudget, 7);
+assert.equal((literatureBrief.budget as Record<string, unknown> | undefined)?.providerIdsAfterBudget, 2);
+assert.equal(literatureBudget?.status, 'limited');
+assert.equal(literatureBudget?.providerIdsBeforeBudget, 7);
+assert.equal(literatureBudget?.providerIdsAfterBudget, 2);
+assert.deepEqual(
+  literatureBudget?.clippedProviderIds,
+  [
+    'literature.retrieval.semantic-scholar',
+    'literature.retrieval.openalex',
+    'literature.retrieval.arxiv',
+    'literature.retrieval.web-search',
+    'literature.retrieval.scp-biomedical-search',
+  ],
+);
+assert.ok(JSON.stringify(literatureAudit).includes('maxProviders=2 clipped provider briefs 7->2'));
+assert.equal(JSON.stringify(budgetedRetrievalBrief).includes('inputSchema'), false, 'budgeted broker brief must keep schemas lazy');
+assert.equal(JSON.stringify(budgetedRetrievalBrief).includes('"examples"'), false, 'budgeted broker brief must keep examples lazy');
+assert.equal(JSON.stringify(budgetedRetrievalBrief).includes('repairHints'), false, 'budgeted broker brief must keep repair hints lazy');
+
+console.log('[ok] capability broker carries harness input hints and budgeted compact candidate briefs');
