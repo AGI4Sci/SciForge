@@ -60,7 +60,11 @@ try {
 
   assert.equal(request.agentServerBaseUrl, 'http://127.0.0.1:3000');
   assert.deepEqual(request.selectedVerifierIds, ['schema.verifier']);
-  assert.equal(request.verificationPolicy?.mode, 'lightweight');
+  assert.equal(request.verificationPolicy, undefined);
+  assert.deepEqual(
+    (request.uiState?.ignoredLegacyVerificationPolicySources as Array<Record<string, unknown>> | undefined)?.map((entry) => entry.source),
+    ['request.verificationPolicy'],
+  );
   const rateLimitDiagnostic = classifyAgentServerBackendFailure('429 retry-after: 2 api_key=sk-secret1234567890', {
     httpStatus: 429,
     provider: 'openai-compatible',
@@ -290,6 +294,13 @@ try {
   const brokerEnvelope = buildContextEnvelope({
     ...request,
     prompt: 'Read the report artifact, validate its schema, render markdown, and inspect the screenshot with vision if needed.',
+    verificationPolicy: {
+      required: true,
+      mode: 'hybrid',
+      riskLevel: 'high',
+      reason: 'harness-projected verifier requirement',
+      selectedVerifierIds: ['verifier.schema'],
+    },
     references: [{
       ref: 'artifact:prior-report',
       kind: 'artifact',
@@ -319,7 +330,7 @@ try {
   assert.equal(brokerBrief.contract, 'sciforge.capability-broker-output.v1');
   assert.match(brokerBriefText, /view\.report/);
   assert.match(brokerBriefText, /observe\.vision/);
-  assert.match(brokerBriefText, /verifier\.schema/);
+  assert.deepEqual((brokerEnvelope.scenarioFacts as Record<string, unknown>).selectedVerifierIds, ['verifier.schema']);
   assert.equal(brokerBriefText.includes('sciforge.runtime-capability-catalog.v1'), false);
 
   const currentReferenceRequest = {
@@ -851,12 +862,14 @@ try {
   const verificationRef = String(unverified.artifacts.find((artifact) => artifact.type === 'verification-result')?.dataRef);
   assert.match(await readFile(join(workspace, verificationRef), 'utf8'), /"verdict": "unverified"/);
 
-  const highRiskRequest = normalizeGatewayRequest({
-    skillDomain: 'knowledge',
-    prompt: 'Publish this external update',
-    workspacePath: workspace,
-    verificationPolicy: { required: true, mode: 'hybrid', riskLevel: 'high', reason: 'external side effect' },
-  });
+  const highRiskRequest = {
+    ...normalizeGatewayRequest({
+      skillDomain: 'knowledge',
+      prompt: 'Publish this external update',
+      workspacePath: workspace,
+    }),
+    verificationPolicy: { required: true, mode: 'hybrid', riskLevel: 'high', reason: 'external side effect' } as const,
+  };
   assert.equal(normalizeRuntimeVerificationPolicy(highRiskRequest).riskLevel, 'high');
   const promptOnlyHighRiskWords = normalizeGatewayRequest({
     skillDomain: 'knowledge',

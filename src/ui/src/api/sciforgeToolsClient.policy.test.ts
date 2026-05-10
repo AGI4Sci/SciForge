@@ -202,7 +202,7 @@ test('compact interaction progress events use runtime contract before process pr
   assert.equal(progressModelFromEvent(poison), undefined);
 });
 
-test('UI handoff does not synthesize verification or human approval policy defaults', async () => {
+test('UI handoff does not synthesize verification policy defaults or pass through legacy scenario policy', async () => {
   const bodies: Array<Record<string, unknown>> = [];
   globalThis.fetch = (async (_input, init) => {
     bodies.push(JSON.parse(String(init?.body)));
@@ -229,7 +229,15 @@ test('UI handoff does not synthesize verification or human approval policy defau
     unverifiedReason: 'explicitly allowed for draft handoff',
   }), {});
 
-  assert.deepEqual(bodies[1]?.verificationPolicy, { required: false, mode: 'none', reason: 'explicit scenario policy' });
+  const legacyUiState = bodies[1]?.uiState as {
+    scenarioOverride?: Record<string, unknown>;
+    ignoredLegacyVerificationPolicySources?: Array<Record<string, unknown>>;
+  } | undefined;
+  assert.equal(bodies[1]?.verificationPolicy, undefined);
+  assert.equal(legacyUiState?.scenarioOverride?.verificationPolicy, undefined);
+  assert.deepEqual(legacyUiState?.ignoredLegacyVerificationPolicySources?.map((source) => source.source), [
+    'request.uiState.scenarioOverride.verificationPolicy',
+  ]);
   assert.deepEqual(bodies[1]?.humanApprovalPolicy, { required: true, mode: 'required-before-action' });
   assert.equal(bodies[1]?.unverifiedReason, 'explicitly allowed for draft handoff');
 });

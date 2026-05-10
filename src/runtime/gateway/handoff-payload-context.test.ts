@@ -4,6 +4,7 @@ import test from 'node:test';
 import { buildAgentHandoffPayload } from '@sciforge-ui/runtime-contract/handoff-payload';
 import { buildContextEnvelope } from './context-envelope';
 import { normalizeGatewayRequest } from './gateway-request';
+import type { VerificationPolicy } from '../runtime-types';
 
 const common = {
   scenarioId: 'literature-evidence-review',
@@ -28,7 +29,7 @@ const common = {
     riskLevel: 'medium',
     reason: 'Report uses prior refs and writes an artifact.',
     selectedVerifierIds: ['schema.report', 'human.review'],
-  },
+  } satisfies VerificationPolicy,
   humanApprovalPolicy: { required: true, mode: 'required-before-final' },
   uiState: {
     sessionId: 'contract-session',
@@ -60,7 +61,8 @@ test('UI and CLI handoff payloads normalize to the same runtime semantics', () =
   assert.deepEqual(uiEnvelope.scenarioFacts.verificationPolicy, cliEnvelope.scenarioFacts.verificationPolicy);
 });
 
-test('verification policy and result enter the next-turn context envelope', () => {
+test('harness-projected verification policy and result enter the next-turn context envelope', () => {
+  const projectedVerificationPolicy: VerificationPolicy = common.verificationPolicy;
   const verificationResult = {
     id: 'verify-1',
     verdict: 'pass',
@@ -68,11 +70,14 @@ test('verification policy and result enter the next-turn context envelope', () =
     evidenceRefs: ['artifact:ref-artifact'],
     repairHints: [],
   };
-  const request = normalizeGatewayRequest(buildAgentHandoffPayload({
-    ...common,
-    verificationResult,
-    recentVerificationResults: [{ id: 'verify-0', verdict: 'uncertain', confidence: 0.4, evidenceRefs: [], repairHints: ['rerun schema check'] }],
-  }));
+  const request = {
+    ...normalizeGatewayRequest(buildAgentHandoffPayload({
+      ...common,
+      verificationResult,
+      recentVerificationResults: [{ id: 'verify-0', verdict: 'uncertain', confidence: 0.4, evidenceRefs: [], repairHints: ['rerun schema check'] }],
+    })),
+    verificationPolicy: projectedVerificationPolicy,
+  };
   const envelope = buildContextEnvelope(request, { workspace: common.workspacePath });
 
   const verificationPolicy = envelope.scenarioFacts.verificationPolicy as Record<string, unknown> | undefined;

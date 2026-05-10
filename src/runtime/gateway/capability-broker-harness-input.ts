@@ -40,12 +40,14 @@ const TOOL_BUDGET_NUMBER_FIELDS = [
 export function capabilityBrokerHarnessInputProjectionForRequest(request: GatewayRequest): CapabilityBrokerHarnessInputProjection {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const enablement = capabilityBrokerHarnessInputEnablement(uiState);
+  const ignoredLegacySources = ignoredLegacyBrokerInputSources(request, uiState);
   if (!enablement.enabled) {
     return {
       enabled: false,
       skillHints: [],
       blockedCapabilities: [],
       preferredCapabilityIds: [],
+      audit: legacyOnlyBrokerInputAudit(enablement.mode, ignoredLegacySources),
     };
   }
 
@@ -59,9 +61,8 @@ export function capabilityBrokerHarnessInputProjectionForRequest(request: Gatewa
   let contractRef: string | undefined;
   let traceRef: string | undefined;
   let profileId: string | undefined;
-  const ignoredLegacySources = ignoredLegacyBrokerInputSources(uiState);
 
-  for (const source of harnessInputSources(uiState, { canonicalOnly: enablement.canonicalOnly })) {
+  for (const source of harnessInputSources(uiState)) {
     const contract = harnessContractFromSource(source.value);
     const capabilityPolicy = isRecord(contract?.capabilityPolicy)
       ? contract.capabilityPolicy
@@ -309,20 +310,15 @@ function hasCanonicalHarnessBrokerInput(uiState: Record<string, unknown>) {
   return isCanonicalAgentHarnessContract(agentHarnessContract) || isCanonicalAgentHarnessHandoff(handoff);
 }
 
-function harnessInputSources(
-  uiState: Record<string, unknown>,
-  options: { canonicalOnly?: boolean } = {},
-): HarnessInputSource[] {
+function harnessInputSources(uiState: Record<string, unknown>): HarnessInputSource[] {
   const sources: HarnessInputSource[] = [];
   const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : undefined;
   const agentHarnessContract = isRecord(agentHarness?.contract) ? agentHarness.contract : undefined;
-  if (agentHarness && agentHarnessContract && (!options.canonicalOnly || isCanonicalAgentHarnessContract(agentHarnessContract))) {
+  if (agentHarness && agentHarnessContract && isCanonicalAgentHarnessContract(agentHarnessContract)) {
     sources.push({ source: 'request.uiState.agentHarness.contract', value: agentHarness });
   }
-  const harnessContract = isRecord(uiState.harnessContract) ? uiState.harnessContract : undefined;
-  if (harnessContract && !options.canonicalOnly) sources.push({ source: 'request.uiState.harnessContract', value: harnessContract });
   const handoff = isRecord(uiState.agentHarnessHandoff) ? uiState.agentHarnessHandoff : undefined;
-  if (handoff && (!options.canonicalOnly || isCanonicalAgentHarnessHandoff(handoff))) {
+  if (handoff && isCanonicalAgentHarnessHandoff(handoff)) {
     sources.push({ source: 'request.uiState.agentHarnessHandoff', value: handoff });
   }
   return sources;
@@ -340,19 +336,51 @@ function harnessContractFromSource(source: Record<string, unknown>) {
   return isRecord(source.contract) ? source.contract : source;
 }
 
-function ignoredLegacyBrokerInputSources(uiState: Record<string, unknown>) {
+function legacyOnlyBrokerInputAudit(enablement: string, ignoredLegacySources: Array<Record<string, unknown>>) {
+  if (enablement === 'explicit-disabled' || ignoredLegacySources.length === 0) return undefined;
+  return {
+    schemaVersion: 'sciforge.agentserver.capability-broker-harness-input-audit.v1',
+    status: 'ignored-legacy-input',
+    source: 'request.legacyBrokerInput',
+    enablement,
+    consumed: {
+      skillHints: 0,
+      blockedCapabilities: 0,
+      preferredCapabilityIds: 0,
+      providerAvailability: 0,
+      toolBudgetKeys: [],
+      verificationPolicyKeys: [],
+    },
+    ignoredLegacySources,
+    sources: [],
+  };
+}
+
+function ignoredLegacyBrokerInputSources(request: GatewayRequest, uiState: Record<string, unknown>) {
   const ignored: Array<Record<string, unknown>> = [];
+  const requestRecord = request as unknown as Record<string, unknown>;
   const capabilityPolicy = isRecord(uiState.capabilityPolicy) ? uiState.capabilityPolicy : undefined;
   if (capabilityPolicy) ignored.push(ignoredLegacyPolicySource('request.uiState.capabilityPolicy', capabilityPolicy));
   const capabilityBrokerPolicy = isRecord(uiState.capabilityBrokerPolicy) ? uiState.capabilityBrokerPolicy : undefined;
   if (capabilityBrokerPolicy) ignored.push(ignoredLegacyPolicySource('request.uiState.capabilityBrokerPolicy', capabilityBrokerPolicy));
+  if (isRecord(requestRecord.toolBudget)) ignored.push(ignoredLegacyToolBudgetSource('request.toolBudget', requestRecord.toolBudget));
   const capabilityBudget = isRecord(uiState.capabilityBudget) ? uiState.capabilityBudget : undefined;
   if (isRecord(capabilityBudget?.toolBudget)) ignored.push(ignoredLegacyToolBudgetSource('request.uiState.capabilityBudget.toolBudget', capabilityBudget.toolBudget));
   if (isRecord(uiState.toolBudget)) ignored.push(ignoredLegacyToolBudgetSource('request.uiState.toolBudget', uiState.toolBudget));
+  if (isRecord(requestRecord.verificationPolicy)) ignored.push({
+    source: 'request.verificationPolicy',
+    keys: Object.keys(requestRecord.verificationPolicy).sort().slice(0, 12),
+  });
   if (isRecord(uiState.verificationPolicy)) ignored.push({
     source: 'request.uiState.verificationPolicy',
     keys: Object.keys(uiState.verificationPolicy).sort().slice(0, 12),
   });
+  ignored.push(...ignoredLegacyListSources(requestRecord, [
+    ['request.skillHints', 'skillHints'],
+    ['request.providerAvailability', 'providerAvailability'],
+    ['request.availableProviders', 'availableProviders'],
+    ['request.preferredCapabilityIds', 'preferredCapabilityIds'],
+  ]));
   ignored.push(...ignoredLegacyListSources(uiState, [
     ['request.uiState.skillHints', 'skillHints'],
     ['request.uiState.harnessSkillHints', 'harnessSkillHints'],

@@ -274,7 +274,104 @@ function mergeSupplementalPayload(base: ToolPayload, supplement: ToolPayload, fi
     executionUnits: [...base.executionUnits, ...supplement.executionUnits],
     artifacts,
     logs: [...(base.logs ?? []), ...(supplement.logs ?? [])],
+    budgetDebits: mergeSupplementalBudgetDebits(base.budgetDebits, supplement.budgetDebits),
+    workEvidence: mergeSupplementalWorkEvidence(base.workEvidence, supplement.workEvidence),
   };
+}
+
+function mergeSupplementalBudgetDebits(
+  base: ToolPayload['budgetDebits'],
+  supplement: ToolPayload['budgetDebits'],
+): ToolPayload['budgetDebits'] {
+  const merged: NonNullable<ToolPayload['budgetDebits']> = [];
+  const indexes = new Map<string, number>();
+  for (const debit of [...(base ?? []), ...(supplement ?? [])]) {
+    const key = stringField(debit.debitId) ?? stableJson(debit);
+    const existingIndex = indexes.get(key);
+    if (existingIndex === undefined) {
+      indexes.set(key, merged.length);
+      merged.push(debit);
+      continue;
+    }
+    const existing = merged[existingIndex];
+    merged[existingIndex] = {
+      ...existing,
+      ...debit,
+      subjectRefs: uniqueStrings([...(existing.subjectRefs ?? []), ...(debit.subjectRefs ?? [])]),
+      debitLines: mergeRecordsByStableKey(existing.debitLines ?? [], debit.debitLines ?? []),
+      exhaustedDimensions: uniqueStrings([...(existing.exhaustedDimensions ?? []), ...(debit.exhaustedDimensions ?? [])]) as typeof existing.exhaustedDimensions,
+      sinkRefs: {
+        executionUnitRef: existing.sinkRefs.executionUnitRef ?? debit.sinkRefs.executionUnitRef,
+        workEvidenceRefs: uniqueStrings([
+          ...(existing.sinkRefs.workEvidenceRefs ?? []),
+          ...(debit.sinkRefs.workEvidenceRefs ?? []),
+        ]),
+        auditRefs: uniqueStrings([
+          ...(existing.sinkRefs.auditRefs ?? []),
+          ...(debit.sinkRefs.auditRefs ?? []),
+        ]),
+      },
+      metadata: {
+        ...(existing.metadata ?? {}),
+        ...(debit.metadata ?? {}),
+      },
+    };
+  }
+  return merged.length ? merged : undefined;
+}
+
+function mergeSupplementalWorkEvidence(
+  base: ToolPayload['workEvidence'],
+  supplement: ToolPayload['workEvidence'],
+): ToolPayload['workEvidence'] {
+  const merged: NonNullable<ToolPayload['workEvidence']> = [];
+  const indexes = new Map<string, number>();
+  for (const evidence of [...(base ?? []), ...(supplement ?? [])]) {
+    const key = stringField(evidence.id) ?? stableJson(evidence);
+    const existingIndex = indexes.get(key);
+    if (existingIndex === undefined) {
+      indexes.set(key, merged.length);
+      merged.push(evidence);
+      continue;
+    }
+    const existing = merged[existingIndex];
+    merged[existingIndex] = {
+      ...existing,
+      ...evidence,
+      evidenceRefs: uniqueStrings([...(existing.evidenceRefs ?? []), ...(evidence.evidenceRefs ?? [])]),
+      recoverActions: uniqueStrings([...(existing.recoverActions ?? []), ...(evidence.recoverActions ?? [])]),
+      diagnostics: uniqueOptionalStrings(existing.diagnostics, evidence.diagnostics),
+      budgetDebitRefs: uniqueOptionalStrings(existing.budgetDebitRefs, evidence.budgetDebitRefs),
+    };
+  }
+  return merged.length ? merged : undefined;
+}
+
+function mergeRecordsByStableKey<T>(base: T[], supplement: T[]) {
+  const seen = new Set<string>();
+  return [...base, ...supplement].filter((item) => {
+    const key = stableJson(item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function uniqueOptionalStrings(base: string[] | undefined, supplement: string[] | undefined) {
+  const merged = uniqueStrings([...(base ?? []), ...(supplement ?? [])]);
+  return merged.length ? merged : undefined;
+}
+
+function stringField(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(',')}]`;
+  if (isRecord(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function artifactNeedsRepair(artifact: Record<string, unknown>) {

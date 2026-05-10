@@ -62,44 +62,48 @@ const brokerBrief = buildCapabilityBrokerBriefForAgentServer(request);
 const toolBriefs = summarizeToolsForAgentServer(request);
 const brokerText = JSON.stringify(brokerBrief);
 const inputSummary = brokerBrief.inputSummary as Record<string, unknown>;
+const legacyOnlyAudit = brokerBrief.harnessInputAudit as Record<string, unknown>;
 const briefs = brokerBrief.briefs as Array<Record<string, unknown>>;
 const audit = brokerBrief.audit as Array<Record<string, unknown>>;
 
 assert.equal(brokerBrief.schemaVersion, 'sciforge.agentserver.capability-broker-brief.v1');
-assert.equal(inputSummary.harnessSkillHints, 2);
-assert.equal(inputSummary.blockedCapabilities, 1);
-assert.deepEqual(inputSummary.toolBudgetKeys, ['exhaustedPolicy', 'maxNetworkCalls', 'maxProviders', 'maxToolCalls']);
-assert.equal(inputSummary.verificationPolicyMode, 'automatic');
+assert.equal(inputSummary.harnessSkillHints, 0);
+assert.equal(inputSummary.blockedCapabilities, 0);
+assert.equal(inputSummary.availableProviders, 0);
+assert.deepEqual(inputSummary.toolBudgetKeys, []);
+assert.equal(inputSummary.verificationPolicyMode, undefined);
+assert.equal(legacyOnlyAudit.schemaVersion, 'sciforge.agentserver.capability-broker-harness-input-audit.v1');
+assert.equal(legacyOnlyAudit.status, 'ignored-legacy-input');
+assert.equal(legacyOnlyAudit.enablement, 'not-enabled');
+assert.deepEqual(
+  (legacyOnlyAudit.ignoredLegacySources as Array<Record<string, unknown>>).map((entry) => entry.source),
+  ['request.uiState.capabilityPolicy', 'request.verificationPolicy'],
+);
 
-const reportBrief = briefs.find((brief) => brief.id === 'view.report');
-assert.ok(reportBrief, 'view.report should remain selected from normal prompt/ref signals');
-assert.ok(
-  JSON.stringify(reportBrief).includes('skill hint from agent-harness-shadow'),
-  'compact selected brief should carry matching harness skill hint signals',
-);
-assert.ok(
-  JSON.stringify(reportBrief).includes('tool budget hint'),
-  'compact selected brief should carry budget hints without expanding schemas',
-);
-assert.ok(reportBrief.budget, 'compact selected brief should carry structured budget status');
-assert.equal((reportBrief.budget as Record<string, unknown>).providerIdsAfterBudget, 1);
+const reportBrief = briefs.find((brief) => brief.id === 'view.report-viewer');
+assert.ok(reportBrief, 'report viewer should remain selected from normal prompt/ref signals');
+assert.equal(JSON.stringify(reportBrief).includes('skill hint from agent-harness-shadow'), false);
+assert.equal(JSON.stringify(reportBrief).includes('tool budget hint'), false);
+assert.equal(reportBrief.budget, undefined);
 
 const reportToolBrief = toolBriefs.find((brief) => brief.id === 'view.report');
-assert.ok(reportToolBrief, 'AgentServer tool summary should be sourced from selected broker briefs');
-assert.equal(reportToolBrief.toolType, 'view');
-assert.equal(reportToolBrief.selected, true);
-assert.deepEqual(reportToolBrief.providerIds, ['sciforge.core.view.report']);
-assert.equal((reportToolBrief.budget as Record<string, unknown> | undefined)?.providerIdsAfterBudget, 1);
+assert.equal(reportToolBrief, undefined, 'legacy skill hint must not force view.report into tool summary');
+const registryReportToolBrief = toolBriefs.find((brief) => brief.id === 'view.report-viewer');
+assert.ok(registryReportToolBrief, 'AgentServer tool summary should be sourced from selected broker briefs');
+assert.equal(registryReportToolBrief.toolType, 'view');
+assert.equal(registryReportToolBrief.selected, true);
+assert.deepEqual(registryReportToolBrief.providerIds, ['sciforge.presentation.report-viewer']);
+assert.equal(registryReportToolBrief.budget, undefined);
 assert.equal(JSON.stringify(toolBriefs).includes('inputSchema'), false, 'tool summaries must keep schemas lazy');
 assert.equal(JSON.stringify(toolBriefs).includes('repairHints'), false, 'tool summaries must keep repair hints lazy');
 
 const verifierBrief = briefs.find((brief) => brief.id === 'verifier.schema');
-assert.ok(verifierBrief, 'schema verifier should remain selected from explicit verification policy signals');
-assert.ok(JSON.stringify(verifierBrief).includes('verification policy hint'));
+assert.equal(verifierBrief, undefined, 'legacy request verificationPolicy must not force schema verifier into selected broker briefs');
+assert.equal(brokerText.includes('verification policy hint'), false);
 
 const blockedExclusion = brokerBrief.excluded.find((entry) => entry.id === 'runtime.workspace-write');
-assert.equal(blockedExclusion?.reason, 'blocked by harness capability policy');
-assert.ok(JSON.stringify(blockedExclusion).includes('blocked by harness capability policy'));
+assert.notEqual(blockedExclusion?.reason, 'blocked by harness capability policy');
+assert.equal(String(JSON.stringify(blockedExclusion)).includes('blocked by harness capability policy'), false);
 
 assert.equal(brokerText.includes('inputSchema'), false, 'broker brief must keep schemas lazy');
 assert.equal(brokerText.includes('outputSchema'), false, 'broker brief must keep schemas lazy');
@@ -128,28 +132,32 @@ const budgetedRetrievalBrief = buildCapabilityBrokerBriefForAgentServer({
 });
 const retrievalBriefs = budgetedRetrievalBrief.briefs as Array<Record<string, unknown>>;
 const retrievalAudit = budgetedRetrievalBrief.audit as Array<Record<string, unknown>>;
+const retrievalSummary = budgetedRetrievalBrief.inputSummary as Record<string, unknown>;
+const retrievalHarnessAudit = budgetedRetrievalBrief.harnessInputAudit as Record<string, unknown>;
 const literatureBrief = retrievalBriefs.find((brief) => brief.id === 'literature.retrieval');
 const literatureAudit = retrievalAudit.find((entry) => entry.id === 'literature.retrieval');
 const literatureBudget = literatureAudit?.budget as Record<string, unknown> | undefined;
 
 assert.ok(literatureBrief, 'literature.retrieval should be selected for literature retrieval prompt');
-assert.deepEqual(literatureBrief.providerIds, ['literature.retrieval.pubmed', 'literature.retrieval.crossref']);
-assert.equal((literatureBrief.budget as Record<string, unknown> | undefined)?.providerIdsBeforeBudget, 7);
-assert.equal((literatureBrief.budget as Record<string, unknown> | undefined)?.providerIdsAfterBudget, 2);
-assert.equal(literatureBudget?.status, 'limited');
-assert.equal(literatureBudget?.providerIdsBeforeBudget, 7);
-assert.equal(literatureBudget?.providerIdsAfterBudget, 2);
+assert.deepEqual(literatureBrief.providerIds, [
+  'literature.retrieval.pubmed',
+  'literature.retrieval.crossref',
+  'literature.retrieval.semantic-scholar',
+  'literature.retrieval.openalex',
+  'literature.retrieval.arxiv',
+  'literature.retrieval.web-search',
+  'literature.retrieval.scp-biomedical-search',
+]);
+assert.deepEqual(retrievalSummary.toolBudgetKeys, []);
+assert.equal(retrievalSummary.availableProviders, 0);
+assert.equal((literatureBrief.budget as Record<string, unknown> | undefined), undefined);
+assert.equal(literatureBudget, undefined);
+assert.equal(JSON.stringify(literatureAudit).includes('maxProviders=2 clipped provider briefs 7->2'), false);
+assert.equal(retrievalHarnessAudit.status, 'ignored-legacy-input');
 assert.deepEqual(
-  literatureBudget?.clippedProviderIds,
-  [
-    'literature.retrieval.semantic-scholar',
-    'literature.retrieval.openalex',
-    'literature.retrieval.arxiv',
-    'literature.retrieval.web-search',
-    'literature.retrieval.scp-biomedical-search',
-  ],
+  (retrievalHarnessAudit.ignoredLegacySources as Array<Record<string, unknown>>).map((entry) => entry.source),
+  ['request.uiState.capabilityPolicy'],
 );
-assert.ok(JSON.stringify(literatureAudit).includes('maxProviders=2 clipped provider briefs 7->2'));
 assert.equal(JSON.stringify(budgetedRetrievalBrief).includes('inputSchema'), false, 'budgeted broker brief must keep schemas lazy');
 assert.equal(JSON.stringify(budgetedRetrievalBrief).includes('"examples"'), false, 'budgeted broker brief must keep examples lazy');
 assert.equal(JSON.stringify(budgetedRetrievalBrief).includes('repairHints'), false, 'budgeted broker brief must keep repair hints lazy');

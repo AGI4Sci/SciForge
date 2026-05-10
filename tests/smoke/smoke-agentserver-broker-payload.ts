@@ -123,6 +123,11 @@ assert.equal(harnessInputAudit.enablement, 'default-canonical');
 assert.equal(harnessInputAudit.source, 'request.uiState.agentHarness');
 assert.equal(harnessInputAudit.contractRef, 'harness-contract:broker-payload-context');
 assert.equal(harnessInputAudit.traceRef, 'harness-trace:broker-payload-context');
+assert.ok(
+  (harnessInputAudit.ignoredLegacySources as Array<Record<string, unknown>>)
+    .some((entry) => entry.source === 'request.uiState.preferredCapabilityIds' && entry.count === 3),
+  'legacy direct UI preferredCapabilityIds should be audited but not consumed ahead of canonical handoff',
+);
 assert.equal((brokerBrief.inputSummary as Record<string, unknown>).harnessSkillHints, 0);
 assert.match(brokerText, /view\.report/);
 assert.match(brokerText, /verifier\.schema/);

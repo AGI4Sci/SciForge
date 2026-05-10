@@ -177,7 +177,49 @@ export async function completeGeneratedTaskRunOutputLifecycle(
         deps,
         runGeneratedTask: input.runGeneratedTask,
       });
-      if (supplemented) return await materializeBackendPayloadOutput(workspace, request, supplemented, refs);
+      if (supplemented) {
+        const completed = await completeSuccessfulGeneratedTaskPayload(input, supplemented);
+        const ledgerResult = await recordGeneratedTaskSuccessLedgerLifecycle({
+          workspacePath: workspace,
+          request,
+          skill,
+          taskId,
+          runId: generation.runId,
+          run,
+          payload: completed,
+          refs,
+        });
+        const completedWithDebit = attachGeneratedTaskSuccessBudgetDebit({
+          request,
+          skill,
+          taskId,
+          runId: generation.runId,
+          payload: completed,
+          refs,
+          source: 'generated-task',
+          runtimeLabel: 'AgentServer generated workspace task with supplemental fallback',
+          ledgerRefs: capabilityEvolutionLedgerRefsFromResult(ledgerResult),
+        });
+        const generatedDebit = completedWithDebit.budgetDebits?.find((debit) => debit.capabilityId === 'sciforge.generated-task-runner');
+        if (generatedDebit) {
+          await appendGeneratedTaskAttemptLifecycle({
+            workspacePath: workspace,
+            request,
+            skill,
+            taskId,
+            run,
+            attemptPlanRefs: deps.attemptPlanRefs,
+            status: lifecycle.attemptStatus,
+            ...refs,
+            schemaErrors: errors,
+            workEvidenceSummary: summarizeWorkEvidenceForHandoff(completedWithDebit),
+            failureReason: lifecycle.attemptFailureReason,
+            budgetDebitRefs: [generatedDebit.debitId],
+            budgetDebitAuditRefs: generatedDebit.sinkRefs.auditRefs,
+          });
+        }
+        return await materializeBackendPayloadOutput(workspace, request, completedWithDebit, refs);
+      }
     }
 
     if (lifecycle.normalizedFailureStatus) return normalized;

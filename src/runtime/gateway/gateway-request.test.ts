@@ -38,3 +38,31 @@ test('gateway request carries normalized LLM endpoint on full requests', () => {
     apiKey: undefined,
   });
 });
+
+test('gateway request ignores legacy verificationPolicy request fields with audit', () => {
+  const request = normalizeGatewayRequest({
+    skillDomain: 'literature',
+    prompt: 'Summarize this report.',
+    verificationPolicy: { required: false, mode: 'none', reason: 'legacy relax' },
+    uiState: {
+      verificationPolicy: { required: false, mode: 'none', reason: 'legacy ui relax' },
+      scenarioOverride: {
+        title: 'Generated scenario',
+        verificationPolicy: { required: false, mode: 'none', reason: 'legacy scenario relax' },
+      },
+    },
+    artifacts: [],
+  });
+
+  assert.equal(request.verificationPolicy, undefined);
+  assert.equal(request.uiState?.verificationPolicy, undefined);
+  assert.deepEqual(request.uiState?.scenarioOverride, { title: 'Generated scenario' });
+  assert.deepEqual(
+    (request.uiState?.ignoredLegacyVerificationPolicySources as Array<Record<string, unknown>> | undefined)?.map((entry) => entry.source),
+    [
+      'request.verificationPolicy',
+      'request.uiState.verificationPolicy',
+      'request.uiState.scenarioOverride.verificationPolicy',
+    ],
+  );
+});

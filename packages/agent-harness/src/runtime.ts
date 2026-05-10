@@ -21,7 +21,7 @@ import type {
 } from './contracts';
 import { getHarnessProfile } from './profiles';
 
-const defaultStages: HarnessStage[] = [
+export const HARNESS_EVALUATION_STAGES: readonly HarnessStage[] = [
   'classifyIntent',
   'selectContext',
   'setExplorationBudget',
@@ -32,6 +32,41 @@ const defaultStages: HarnessStage[] = [
   'beforeResultValidation',
   'onRepairRequired',
   'beforeUserProgressEvent',
+];
+
+export const HARNESS_EXTERNAL_HOOK_STAGES: readonly HarnessStage[] = [
+  'onRequestReceived',
+  'onRequestNormalized',
+  'selectProfile',
+  'onRegistryBuild',
+  'onBeforeCapabilityBroker',
+  'onAfterCapabilityBroker',
+  'beforeAgentDispatch',
+  'onAgentDispatched',
+  'onAgentStreamEvent',
+  'onStreamGuardTrip',
+  'beforeToolCall',
+  'afterToolCall',
+  'onObserveStart',
+  'onActionStepEnd',
+  'afterResultValidation',
+  'beforeRepairDispatch',
+  'afterRepairAttempt',
+  'onInteractionRequested',
+  'onBackgroundContinuation',
+  'onCancelRequested',
+  'onPolicyDecision',
+  'onBudgetDebit',
+  'onVerifierVerdict',
+  'onAuditRecord',
+  'onRunCompleted',
+  'onRunFailed',
+  'onRunCancelled',
+];
+
+export const HARNESS_ALL_STAGES: readonly HarnessStage[] = [
+  ...HARNESS_EVALUATION_STAGES,
+  ...HARNESS_EXTERNAL_HOOK_STAGES,
 ];
 
 export interface CreateHarnessRuntimeOptions {
@@ -61,11 +96,11 @@ class DefaultHarnessRuntime implements HarnessRuntime {
       profileId: profile.id,
       stages: [],
       conflicts: [],
-      auditNotes: [],
+      auditNotes: [stageCoverageAuditNote()],
     };
     contract = { ...contract, traceRef: trace.traceId };
 
-    for (const stage of defaultStages) {
+    for (const stage of HARNESS_EVALUATION_STAGES) {
       const callbacks = profile.callbacks.filter((callback) => callback.stages.includes(stage));
       for (const callback of callbacks) {
         const context: HarnessContext = { input, profile, stage, contract, trace };
@@ -107,6 +142,17 @@ class DefaultHarnessRuntime implements HarnessRuntime {
     }
     return getHarnessProfile(profileId ?? this.options.defaultProfileId ?? 'balanced-default');
   }
+}
+
+function stageCoverageAuditNote() {
+  return {
+    sourceCallbackId: 'harness-runtime.stage-coverage',
+    severity: 'info' as const,
+    message: [
+      `evaluate=${HARNESS_EVALUATION_STAGES.join(',')}`,
+      `external-hooks=${HARNESS_EXTERNAL_HOOK_STAGES.join(',')}`,
+    ].join('; '),
+  };
 }
 
 type MergeContext = {

@@ -26,6 +26,33 @@ assert.equal(
   'strict',
 );
 
+const legacyRelaxed = await requestWithAgentHarnessShadow(normalizeGatewayRequest({
+  skillDomain: 'literature',
+  prompt: 'Audit current references before final answer.',
+  workspacePath: process.cwd(),
+  verificationPolicy: { required: false, mode: 'none', reason: 'legacy relaxed body policy' },
+  uiState: {
+    harnessProfileId: 'research-grade',
+    verificationPolicy: { required: false, mode: 'none', reason: 'legacy relaxed ui policy' },
+    scenarioOverride: {
+      verificationPolicy: { required: false, mode: 'none', reason: 'legacy relaxed scenario policy' },
+    },
+  },
+  artifacts: [],
+}), {}, { status: 'applied' });
+assert.equal(legacyRelaxed.verificationPolicy?.required, true, 'legacy relaxed policy should not bypass harness tightening');
+assert.equal(legacyRelaxed.verificationPolicy?.mode, 'hybrid');
+assert.equal(legacyRelaxed.verificationPolicy?.riskLevel, 'high');
+assert.deepEqual(
+  (legacyRelaxed.uiState?.ignoredLegacyVerificationPolicySources as Array<Record<string, unknown>> | undefined)?.map((entry) => entry.source),
+  [
+    'request.verificationPolicy',
+    'request.uiState.verificationPolicy',
+    'request.uiState.scenarioOverride.verificationPolicy',
+  ],
+);
+assert.equal((legacyRelaxed.uiState?.scenarioOverride as Record<string, unknown> | undefined)?.verificationPolicy, undefined);
+
 const disabled = await requestWithAgentHarnessShadow({
   ...baseRequest,
   uiState: {

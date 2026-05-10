@@ -116,6 +116,10 @@ Todo：
 
 2026-05-10：T130/T127 repair policy 默认 audit 小切片完成。canonical harness contract/handoff 带 `repairContextPolicy` 时，validation/repair/audit bridge 默认投影 contract/trace/profile 与 repair policy refs 到 audit/sink refs；默认 `consume=false`，不会收紧 repair budget 或强制 fail-closed，只有显式 consume/enable flag 才改变 repair 行为，并保留 audit disabled/skip/off kill switch。
 
+2026-05-10：T130 runtime hook coverage 显式分组小切片完成。`packages/agent-harness/src/runtime.ts` 导出 `HARNESS_EVALUATION_STAGES`、`HARNESS_EXTERNAL_HOOK_STAGES`、`HARNESS_ALL_STAGES`，并在 trace auditNotes 写入 `harness-runtime.stage-coverage`；`runtime.test.ts` 覆盖默认 evaluation stages 与 external hook stages disjoint/coverage。T123 原 runtime hook coverage 大项已拆成可审计 stage 分组，剩余 gateway/live external hook wiring 继续由 T130/T128 跟踪。
+
+2026-05-10：T130 legacy verification policy 直通收口完成。UI 不再把 `scenarioOverride.verificationPolicy` 放入 handoff 顶层或 transport `uiState.scenarioOverride`；gateway normalize 不再从 request body / `uiState.verificationPolicy` 生成 runtime `verificationPolicy`，而是把这些 legacy policy fields 记录到 `ignoredLegacyVerificationPolicySources`。harness `agentHarnessVerificationPolicy` 默认收紧路径保持唯一可消费来源。
+
 Todo：
 
 - [x] 建立 `packages/agent-harness`：导出 `HarnessRuntime`、`HarnessProfile`、`HarnessCallback`、`HarnessContext`、`HarnessDecision`、`HarnessContract`、`HarnessTrace`、`HarnessStage`。
@@ -123,13 +127,15 @@ Todo：
 - [x] 实现 deterministic merge engine：blocked refs/capabilities union、budget only tightens、risk/verification only escalates、side effects fail closed、conflicts written to trace。
 - [x] 在 `runWorkspaceRuntimeGateway` 中接入 `HarnessRuntime.evaluate()`，位置在 conversation policy 之后、direct fast-path / vision / AgentServer dispatch 之前。
 - [x] 第一阶段只把 `HarnessContract` 写入 request/uiState/metadata 和 stream trace，不改变已有 runtime 行为。
-- [ ] 第二阶段完成 contract consumption 收口：context envelope、broker、prompt renderer、verification policy、repair loop、UI progress 逐项消费 contract。（progress plan、verification policy、backend selection metadata、continuity metadata、context envelope 与 broker 默认消费已完成；repair policy 默认 audit-only，行为收紧仍显式 opt-in；prompt renderer 已只携带 compact contract/context 摘要。）
+- [x] T123 迁入 runtime hook coverage：显式分组 evaluation stages、external hook stages 与 all stages，并把 coverage 写入 trace auditNotes。
+- [ ] T123 迁入收尾：完成 contract consumption 最后一段，把 repair policy 从默认 audit-only 推进到可审计的 contract-owned 行为收紧，并证明 gateway、prompt、UI、repair loop 不再保留独立行为治理入口。（progress plan、verification policy、backend selection metadata、continuity metadata、context envelope 与 broker 默认消费已完成；repair policy 默认 audit-only，行为收紧仍显式 opt-in；prompt renderer 已只携带 compact contract/context 摘要。）
+- [ ] T123 迁入 live hook wiring 缺口：把已分组 external hook stages 逐步接到 gateway/live runtime 决策面；handoff、prompt、recovery、stream guard 相关 wiring 与 T128 的 structured decision 收敛保持同步。
 - [x] 增加 `smoke:agent-harness-contract`：同一输入输出稳定 contract、trace 有阶段记录、profile 切换只改 contract 不 fork gateway path。
 - [x] 增加 `smoke:no-scattered-harness-policy`：禁止在 gateway、prompt builder、UI、scenario、provider 分支新增 harness 指令散文、探索规则、skill 偏好或工具预算。
 
 验收标准：
 
-- [ ] Agent 行为治理只有一个入口：`packages/agent-harness` profile registry。
+- [ ] Agent 行为治理只有一个入口：`packages/agent-harness` profile registry。（T123 历史 umbrella 的唯一剩余治理口径在本任务收尾，不再从 T123 重开。）
 - [x] Harness runtime 可以 shadow mode 运行并产出完整 trace。
 - [x] 关闭 harness feature flag 时现有 backend-first/capability-driven 行为保持不变。
 - [x] 打开 harness feature flag 后，至少 context budget、progress plan 和 validation policy 三项由 contract 驱动。（progress plan、verification policy、context budget 与 broker input 已默认 canonical 消费；validation/repair bridge 默认 audit-only，行为收紧仍需显式 consume。）
@@ -146,6 +152,8 @@ Todo：
 
 2026-05-10：包级 Python Computer Use loop 的 budget debit 继续收紧。`run_computer_use_task()` 现在用统一 metrics 生成 `action.sciforge.computer-use` debit，blocked/failed step 也回挂 `budgetDebitRefs`，trace 与 compact handoff 的 action refs 保持同源。
 
+2026-05-10：T129 supplemental fallback budget debit 保真完成。AgentServer supplemental fallback merge 现在会合并 primary/supplement 顶层 `budgetDebits` 与 `workEvidence`，按稳定 key 去重并保留 `sinkRefs.auditRefs`、`workEvidenceRefs` 和 `budgetDebitRefs`；supplement 成功后的主路径也继续走 generated-task success ledger/debit 封装，避免 materialize 早退丢账。
+
 Todo：
 
 - [ ] 将 `packages/skills`、`packages/actions`、`packages/observe`、`packages/verifiers`、`packages/presentation` 和 core runtime capabilities 投影成统一 `CapabilityManifest`。（packages/skills、tool_skills、actions/verifiers 与全部 26 个 presentation/view 真实 package manifest 已进入默认 registry；observe/core runtime breadth 仍继续推进。）
@@ -154,7 +162,7 @@ Todo：
 - [x] 将 `scoreSkillByPackagePolicy`、tool package manifests、observe provider selection、Computer Use action plan 统一包装为默认 candidate callbacks。（首片为 shadow projection，不改变真实 broker 路由。）
 - [x] 将 `summarizeToolsForAgentServer()` 改为按 harness/capability budget 输出 budgeted tool briefs，不再默认空数组。
 - [x] Broker 输入接收 `skillHints`、`blockedCapabilities`、`CapabilityBudget`、`verificationPolicy`、provider availability 和 ledger history。
-- [ ] 每次 capability invocation 写入 `budgetDebits` 到 executionUnit/workEvidence/audit；已完成 `literature.retrieval` offline runner、`action.sciforge.computer-use` / `local.vision-sense` Computer Use loop、包级 Python Computer Use loop、observe invocation success/provider-unavailable、`packages/verifiers/agent-rubric` package verifier、`verifier.fixture.human-approval` fixture provider、generated-task / AgentServer direct-payload success、generated-task validation guard failure、runtime verification gate、payload schema validation failure、completed-payload work-evidence failure 和 current-reference usage failure。
+- [ ] T123 迁入预算治理缺口：每次 capability invocation 写入 `budgetDebits` 到 executionUnit/workEvidence/audit；已完成 `literature.retrieval` offline runner、`action.sciforge.computer-use` / `local.vision-sense` Computer Use loop、包级 Python Computer Use loop、observe invocation success/provider-unavailable、`packages/verifiers/agent-rubric` package verifier、`verifier.fixture.human-approval` fixture provider、generated-task / AgentServer direct-payload success、AgentServer supplemental fallback merge、generated-task validation guard failure、runtime verification gate、payload schema validation failure、completed-payload work-evidence failure 和 current-reference usage failure；remaining runtime capabilities 继续在本任务补齐，不回到 T123。
 - [x] 增加 `smoke:unified-capability-graph`：同一 prompt 下 skill/tool/observe/action/verifier 都能作为候选进入 broker audit，且安全/配置/预算 gate 生效；真实 package action/verifier manifest 默认可见且保持 lazy audit。
 - [x] 增加 `smoke:capability-broker-harness-input`：harness hints/budget/provider/verification policy 进入 broker compact audit，blocked capability 不能绕过 gate。
 - [x] 增加 `smoke:capability-budget-debits`：单次 capability invocation 能生成带 executionUnit/workEvidence/audit sink refs 的 budget debit record。
@@ -201,15 +209,17 @@ Todo：
 
 2026-05-10：T128-L AgentServer generation compact request 收紧。`buildAgentServerGenerationPrompt` 的 compact request 现在会瘦身 `contextEnvelope`，剔除 `continuityRules`、raw `agentHarnessHandoff`、raw `promptRenderPlan`、`renderedText`、`promptDirectives`、`strategyRefs`、`selectedContextRefs` 和本地 policy prose carriers，只保留结构化 project/session/scenario facts 与 compact broker audit；`smoke:contract-driven-handoff` 增加 negative guard，防止 raw prompt render plan 绕过 deterministic renderer。
 
+2026-05-10：T128-M broker legacy input contract-only 收口完成。`buildCapabilityBrokerBriefForAgentServer` 不再从 legacy direct UI/request 的 `skillHints`、`toolBudget`、preferred ids、provider availability 或 `verificationPolicy` 构造真实 broker input；这些字段在无 canonical harness 时也只生成 `harnessInputAudit.status=ignored-legacy-input`，canonical `agentHarness.contract` / `agentHarnessHandoff` 仍默认消费。
+
 Todo：
 
-- [ ] `buildContextEnvelope` 只消费 `allowedContextRefs`、`blockedContextRefs`、`requiredContextRefs`、`contextBudget`、`repairContextPolicy`。（context refs/budget 已在 opt-in contract-only governance 下忽略 legacy 决策源；AgentServer repair prompt context 已 contract-only 消费；context envelope 自身已对 contract repairContextPolicy 做 bounded audit，legacy repairContextPolicy 仍不参与决策。）
-- [ ] `buildCapabilityBrokerBriefForAgentServer` 只消费 `capabilityPolicy`、`skillHints`、`toolBudget` 和 scenario/capability manifest。
+- [ ] T123 迁入 context 缺口：`buildContextEnvelope` 只从 canonical `HarnessContract` / `agentHarnessHandoff` 读取 context refs、budget 与 `repairContextPolicy`；legacy UI/context policy fields 只进 ignored audit。（context refs/budget 已在 opt-in contract-only governance 下忽略 legacy 决策源；AgentServer repair prompt context 已 contract-only 消费；context envelope 自身已对 contract repairContextPolicy 做 bounded audit，legacy repairContextPolicy 仍不参与决策。）
+- [x] T123 迁入 broker 缺口：`buildCapabilityBrokerBriefForAgentServer` 只消费 harness/capability contract、scenario facts 和 capability manifest；legacy direct UI `capabilityPolicy`、skill hints、tool budget/provider hints 只进 ignored audit。
 - [x] `buildAgentServerGenerationPrompt` 只渲染 `promptDirectives`、current-turn snapshot、selected contract refs，不再新增行为治理散文。（剩余策略散文已迁入 trusted runtime-policy providers；prompt prose guard 计数为 0。）
 - [x] `buildAgentServerRepairPrompt` 只渲染 `repairContextPolicy` 允许的失败 evidence、validator findings 和 recover actions。（策略散文已迁入 trusted runtime-policy providers；stdout/stderr、validation findings、prior attempts 和 work-evidence 输入已有 deterministic filtering/audit。）
 - [x] AgentServer payload metadata 带 `harnessProfileId`、`harnessContractRef`、`harnessTraceRef`、budget summary、decision owner。
 - [x] 增加第一阶段 `smoke:contract-driven-handoff`：mock AgentServer 捕获真实 dispatch，验证 fresh 不泄漏旧 attempts/logs，continuation/repair 携带 contract refs/repair policy。
-- [ ] 将 backend selection、fresh/continuity prompt rule、context/rate-limit recovery、stream guard 统一通过 harness hook 输出结构化决策。（backend selection、continuity decision 与 silent stream decision 已有结构化首片；完整 hook 收敛仍待推进。）
+- [ ] T123 迁入决策收敛缺口：将 backend selection、fresh/continuity prompt rule、context/rate-limit recovery、stream guard 统一通过 harness hook 输出结构化决策。（backend selection、continuity decision 与 silent stream decision 已有结构化首片；完整 hook 收敛仍待推进。）
 - [x] 扩展 `smoke:contract-driven-handoff` 到 deterministic renderer：prompt 中所有策略句都有 `sourceCallbackId`。
 - [x] 增加 `smoke:agentserver-prompt-policy-prose`：禁止 prompt builder 新增未受信策略散文，并要求 generation prompt 继续消费 `promptRenderPlanSummary`。
 
@@ -273,7 +283,7 @@ Todo：
 - [x] 建立 `RepairExecutor`：只执行 patch/rerun/supplement/peer handoff，不做策略判断。
 - [x] 建立 `AuditSink`：统一写 `appendTaskAttempt`、Capability Evolution Ledger、verification artifacts、observe invocation records。（appendTaskAttempt/read path、Capability Evolution Ledger validation/repair audit、verification artifact 与 observe-invocation 真实写入已接入。）
 - [x] 建立 `TelemetrySink`：记录 `generation/request`、`materialize`、`payload-validation`、`work-evidence`、`verification-gate`、`repair-decision`、`repair-rerun`、`ledger-write`、`observe-invocation` spans。（projection、jsonl 落盘/read/summary、gateway verification、repair-rerun 与 observe-invocation 真实写入已完成。）
-- [ ] 将 `generated-task-runner` 收敛为生命周期编排：generate/run/validate/repair/audit。（generation、execution、output、validation/repair/audit、supplement lifecycle、generated task input、pre-output/parse repair policy、success ledger refs、生成重试/materialize/strict retry、generation failure/self-heal helper 已拆出，主入口 146 行并退出 watch list；后续只剩跨 helper 边界继续打磨。）
+- [ ] T123 迁入失败治理缺口：将 observe/action 真实 failure result 接入同一 `ValidationDecision -> RepairDecision -> AuditRecord` read/write path，并继续把 `generated-task-runner` 保持为 generate/run/validate/repair/audit 生命周期编排。（generation、execution、output、validation/repair/audit、supplement lifecycle、generated task input、pre-output/parse repair policy、success ledger refs、生成重试/materialize/strict retry、generation failure/self-heal helper 已拆出，主入口 146 行并退出 watch list；后续只剩跨 helper 边界继续打磨。）
 - [x] Verification gate 结果必须回流 repair/audit，而不是只在最终 payload 上 fail closed。
 - [x] 增加 `smoke:validation-repair-audit-chain`：direct payload、generated task、observe result、verification gate 失败都能追溯 contract id、failure kind、related refs、repair budget、最终 outcome。
 
@@ -365,41 +375,24 @@ Todo：
 
 ### T123 Agent Harness Policy：集中治理探索、上下文、工具和进度策略
 
-状态：待办；目标是把 agent harness 从 gateway、prompt builder、conversation policy、UI 状态和 repair loop 中抽成独立、可版本化、可切换的行为治理层。Runtime 负责稳定阶段 hook 和 enforcement；harness 负责按 intent mode/profile 输出结构化 `HarnessContract`。这不是为某个文献检索案例打补丁，而是让任意任务都能在统一策略下选择探索预算、上下文范围、技能倾向、工具预算、验证强度和用户可见进度。
+状态：历史 umbrella / 已拆分关闭。T123 不再作为活跃待办维护；原目标已切分到 T124-T130，真实剩余缺口已迁入对应活跃任务。后续 worker 不应从本节重开旧大清单；发现新 harness rationalization 缺口时，直接更新承接任务的 Todo/验收标准。
 
 设计文档：[`docs/Architecture.md`](docs/Architecture.md#终极形态harness-governed-scientific-agent-os)、[`docs/AgentHarnessStandard.md`](docs/AgentHarnessStandard.md)。
 
-Todo：
+承接关系：
 
-- [ ] 建立 `packages/agent-harness` 或等价 package，定义 `HarnessStage`、`HarnessProfile`、`HarnessContract`、`HarnessDecision`、`ExplorationMode`、`IntentMode` 和 profile registry。
-- [ ] 以 [`docs/AgentHarnessStandard.md`](docs/AgentHarnessStandard.md) 作为唯一 harness 编程标准；后续新增 hook、profile、merge rule、最小实验案例必须先更新该文档。
-- [ ] 将 harness 标准化为 Lightning-style callback 模型：`HarnessRuntime` 负责阶段调用和 decision merge，`HarnessProfile` 组合 callbacks/budgets，`HarnessCallback` 只返回结构化 `HarnessDecision`，`HarnessTrace` 记录每个阶段输入摘要、输出、预算消耗和 enforcement 结果。
-- [ ] 在 runtime gateway 增加稳定 hook 调用点：`onRequestReceived`、`classifyIntent`、`selectProfile`、`selectContext`、`setExplorationBudget`、`selectCapabilities`、`beforePromptRender`、`beforeAgentDispatch`、`onAgentStreamEvent`、`beforeToolCall`、`afterToolCall`、`beforeResultValidation`、`afterResultValidation`、`onRepairRequired`、`beforeRepairDispatch`、`afterRepairAttempt`、`beforeUserProgressEvent`、`onRunCompleted`、`onRunFailed`、`onRunCancelled`。
-- [ ] 定义默认 profile：`balanced-default`、`fast-answer`、`research-grade`、`debug-repair`、`low-cost`、`privacy-strict`；profile 只返回通用策略，不写单一 prompt、站点或 scenario 特例。
-- [ ] 定义 `HarnessDecision` merge 规则：callbacks 可 additive hint、收紧 budget、增加 blocked refs、提升 verification；不得放宽前序 callback 明确禁止的 side effect，除非 profile merge policy 显式允许并写入 trace。
-- [ ] 重新定界 conversation policy：Python/TS conversation-policy 只输出 current-turn facts、context isolation、bounded digest、handoff compaction、acceptance/recovery/cache/latency defaults；`intentMode`、execution mode、capability profile、repair executor 和 UI interaction 的最终决策上移到 harness。
-- [ ] 将 fresh / continuation / repair / audit / file-grounded / interactive 的探索范围规则迁入 harness：fresh 默认 minimal 探索，continuation/repair/audit 才允许读取相关历史 attempts、task results、stdout/stderr、ledger 和 verification refs。
-- [ ] 将 AgentServer generation prompt 中关于 fresh request、历史读取、workspace inspection、当前引用、repair retry 的散落指令迁入 harness contract，由 prompt renderer 统一渲染。
-- [ ] 将 UI 初始进度、静默等待提示、后台完成策略和 abort/cancelled 展示策略改为消费 harness `progressPlan`，避免 ChatPanel / stream presentation 各自维护行为文案。
-- [ ] 为 UI 增加结构化 interaction contract：`interaction-request`、`clarification-needed`、`human-approval-required`、`guidance-queued`，并用 `cancelPolicy` 区分 `user-cancelled`、`system-aborted`、`timeout`、`backend-error`。
-- [ ] 将 UI/transport/backend 三层 silent watchdog 统一到 harness `silencePolicy`：同一 run 只产生一条可审计 retry/abort/visible-status 决策，避免重复等待提示。
-- [ ] 将 capability broker 输入扩展为接收 harness `skillHints`、`blockedCapabilities`、`toolBudget` 和 `verificationPolicy`；broker 仍只根据 capability manifest 和 refs 做通用筛选。
-- [ ] 将 `packages/skills`、`packages/actions`、`packages/observe`、`packages/verifiers` 与 core runtime capabilities 投影成统一 `CapabilityManifest`，进入同一个 registry/broker 图，避免 package skills 与 AgentServer generation fallback 平行存在。
-- [ ] 定义统一 `HarnessCandidate` 和默认候选 callback 链：`ScenarioPolicyCallback`、`ProviderAvailabilityCallback`、`SafetyPolicyCallback`、`BudgetPolicyCallback`、`HistoryPolicyCallback`、`UserIntentOverrideCallback`；用户显式选择能力仍必须过安全/配置/预算 gate。
-- [ ] 定义 `CapabilityBudget` contract：`maxWallMs`、`maxContextTokens`、`maxToolCalls`、`maxObserveCalls`、`maxActionSteps`、`maxNetworkCalls`、`maxDownloadBytes`、`maxResultItems`、`maxProviders`、`maxRetries`、`perProviderTimeoutMs`、`costUnits`、`exhaustedPolicy`，并把每次 invocation 的 `budgetDebits` 写入 executionUnit/workEvidence/audit。
-- [ ] 将 validation/repair 收敛为唯一 `ValidationDecision -> RepairDecision -> AuditRecord` 链路：schema/artifact/current-ref/WorkEvidence/guidance/verification gate/observe trace 都进入 `ResultValidationHarness`，repair/supplement/fail-closed/needs-human 由 `RepairPolicyHarness` 决定，runner 只执行。
-- [ ] 将 `appendTaskAttempt`、Capability Evolution Ledger、verification artifacts、observe invocation records 和 telemetry span 统一接入 `AuditSink` / `TelemetrySink`，禁止 generated-task runner、repair loop、observe runtime 各自手写审计策略。
-- [ ] 将 `buildContextEnvelope`、`buildCapabilityBrokerBriefForAgentServer`、`buildAgentServerGenerationPrompt`、`buildAgentServerRepairPrompt` 改为只消费 `HarnessContract` 和 capability/scenario manifest，不继续本地新增行为治理散文。
-- [ ] 去除/合并重复 backend selection、fresh/continuity prompt rule、generated-task contract retry、context/rate-limit recovery、stream guard 和 capability routing 分支，统一通过 harness hook 输出结构化决策。
-- [ ] 新增通用 `literature.retrieval` composed capability：providers 覆盖 PubMed、Crossref、Semantic Scholar、OpenAlex、arXiv、web search、SCP biomedical search；input 包含 `query/databases/dateRange/maxResults/includeAbstracts/fullTextPolicy`；output 包含 `paper-list/evidence-matrix/research-report/workEvidence`；默认预算包含 `maxProviders=3`、`maxResults=30`、`perProviderTimeoutMs=10000`、`maxFullTextDownloads=3`、`maxDownloadBytes=25MB`。
-- [ ] 增加 smoke：fresh request 只读取 compact workspace/scenario/capability brief，不读取旧 attempts/outputPath/config；continuation request 可读取当前 session 相关 refs；repair request 可读取 failed run 相关 stdout/stderr/log refs。
-- [ ] 增加 smoke：不同 harness profile 对同一 prompt 输出不同预算和 progress plan，但 runtime request path、capability registry 和 validation loop 不分叉。
-- [x] 增加 no-legacy guard：禁止在 gateway、UI、scenario 或 provider 分支里新增 harness 指令散文、prompt 特例、探索规则或 skill 偏好。（`smoke:no-scattered-harness-policy` 已扫描 gateway/UI/scenario 等策略表面并通过。）
+- T130 承接 harness runtime、profile registry、callback/merge model、runtime hook coverage 分组、gateway evaluate、contract consumption、progress plan、verification policy、context/broker 默认消费与 repair policy 默认 audit；唯一真相源、repair 行为收紧和 live external hook wiring 收尾继续在 T130。
+- T129 承接 unified capability graph、`HarnessCandidate`、capability manifest registry、provider/safety/budget gate 与 `CapabilityBudgetDebit`；remaining runtime capability debit breadth 继续在 T129。
+- T128 承接 contract-driven handoff、prompt deterministic rendering、context envelope/broker contract-only 消费、legacy ignored audit、backend/continuity/recovery/stream guard structured decisions；剩余 gateway/live hook wiring 的 handoff/prompt/recovery/stream guard 面继续在 T128 与 T130 同步收敛。
+- T127 承接 `ValidationDecision -> RepairDecision -> AuditRecord`、`RepairExecutor`、`AuditSink`、`TelemetrySink`、runner lifecycle 与失败事实读回；observe/action 真实 failure 接入和 helper 边界打磨继续在 T127。
+- T126 承接 progress/interaction/silence/cancel/termination contract，ChatPanel thin shell 和 compact replay guard；T123 中 UI 进度、澄清、人工确认、取消治理项已由 T126 完成。
+- T125 承接 `literature.retrieval` composed capability；T123 中科研能力包首批文献检索项已由 T125 完成。
+- T124 承接 harness experiments、fixtures、profile diff、replay、metrics 和 golden traces；T123 中 profile/hook 策略可比较性和 smoke 覆盖已由 T124 完成。
 
-验收标准：
+关闭标准：
 
-- [ ] Agent 行为治理只有一个真相源：harness package/profile registry；runtime、UI、prompt builder 只消费结构化 contract。
-- [ ] fresh/continuation/repair/audit 的探索差异由 harness 决定，并在 stream/ledger 中可审计。
-- [ ] 每个失败路径都有同一条 `ValidationDecision -> RepairDecision -> AuditRecord` 记录，可追溯到 contract id、failure kind、related refs、repair budget 和最终 outcome。
-- [ ] 新增任务类型或调优策略时只改 harness profile/hook policy 或 capability manifest，不改核心 gateway 主流程。
-- [ ] 现有 backend-first、capability-driven、contract-validation repair loop smoke 保持通过。
+- [x] 原 T123 大清单已拆分到 T124-T130，不再作为活跃待办重复维护。
+- [x] 已完成项在承接任务中标注为 T130/T129/T128/T127/T126/T125/T124 进展或验收。
+- [x] runtime hook coverage 已从 T123 巨大待办拆成 T130 的 evaluation/external/all stage 显式分组；剩余 gateway/live hook wiring 已迁入 T130/T128。
+- [x] 仍真实的缺口已迁移到 T130、T129、T128、T127 的活跃 Todo/验收标准。
+- [x] `smoke:no-scattered-harness-policy` 已覆盖 no-legacy guard；长文件治理由 `npm run smoke:long-file-budget` 继续守门。

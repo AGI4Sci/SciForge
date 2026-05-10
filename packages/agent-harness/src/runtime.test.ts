@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { HarnessProfile } from './contracts';
-import { createHarnessRuntime, evaluateHarness } from './runtime';
+import type { HarnessProfile, HarnessStage } from './contracts';
+import {
+  createHarnessRuntime,
+  evaluateHarness,
+  HARNESS_ALL_STAGES,
+  HARNESS_EVALUATION_STAGES,
+  HARNESS_EXTERNAL_HOOK_STAGES,
+} from './runtime';
 
 test('evaluateHarness produces stable contract and trace for the same input', async () => {
   const input = {
@@ -19,6 +25,55 @@ test('evaluateHarness produces stable contract and trace for the same input', as
   assert.equal(first.contract.schemaVersion, 'sciforge.agent-harness-contract.v1');
   assert.equal(first.trace.schemaVersion, 'sciforge.agent-harness-trace.v1');
   assert.equal(first.contract.allowedContextRefs.join(','), 'ref:a,ref:b');
+  assert.ok(first.trace.auditNotes.some((note) => note.sourceCallbackId === 'harness-runtime.stage-coverage'));
+});
+
+test('runtime declares default evaluation stages and external hook stages without overlap', () => {
+  const expectedStages: HarnessStage[] = [
+    'onRequestReceived',
+    'onRequestNormalized',
+    'classifyIntent',
+    'selectProfile',
+    'selectContext',
+    'setExplorationBudget',
+    'onRegistryBuild',
+    'selectCapabilities',
+    'onBeforeCapabilityBroker',
+    'onAfterCapabilityBroker',
+    'onToolPolicy',
+    'onBudgetAllocate',
+    'beforePromptRender',
+    'beforeAgentDispatch',
+    'onAgentDispatched',
+    'onAgentStreamEvent',
+    'onStreamGuardTrip',
+    'beforeToolCall',
+    'afterToolCall',
+    'onObserveStart',
+    'onActionStepEnd',
+    'beforeResultValidation',
+    'afterResultValidation',
+    'onRepairRequired',
+    'beforeRepairDispatch',
+    'afterRepairAttempt',
+    'beforeUserProgressEvent',
+    'onInteractionRequested',
+    'onBackgroundContinuation',
+    'onCancelRequested',
+    'onPolicyDecision',
+    'onBudgetDebit',
+    'onVerifierVerdict',
+    'onAuditRecord',
+    'onRunCompleted',
+    'onRunFailed',
+    'onRunCancelled',
+  ];
+  assert.deepEqual([...new Set(HARNESS_ALL_STAGES)].sort(), expectedStages.sort());
+  assert.equal(new Set(HARNESS_EVALUATION_STAGES).size, HARNESS_EVALUATION_STAGES.length);
+  assert.equal(new Set(HARNESS_EXTERNAL_HOOK_STAGES).size, HARNESS_EXTERNAL_HOOK_STAGES.length);
+  for (const stage of HARNESS_EVALUATION_STAGES) {
+    assert.equal(HARNESS_EXTERNAL_HOOK_STAGES.includes(stage), false, `${stage} must not be in both stage groups`);
+  }
 });
 
 test('profile registry exposes distinct budget and verification behavior', async () => {

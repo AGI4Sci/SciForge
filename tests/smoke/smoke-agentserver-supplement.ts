@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
+import type { SkillAvailability, ToolPayload, WorkspaceTaskRunResult } from '../../src/runtime/runtime-types.js';
+import { tryAgentServerSupplementMissingArtifacts } from '../../src/runtime/gateway/generated-task-runner-supplement-lifecycle.js';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-agentserver-supplement-'));
 await writeFile(join(workspace, 'matrix.csv'), [
@@ -22,6 +24,99 @@ await writeFile(join(workspace, 'metadata.csv'), [
   't2,treated',
   '',
 ].join('\n'));
+const smokeSkill = {
+  id: 'mock.agentserver.supplement',
+  kind: 'package',
+  available: true,
+  reason: 'smoke',
+  checkedAt: '2026-01-01T00:00:00.000Z',
+  manifestPath: 'capability:mock.agentserver.supplement',
+  manifest: {
+    id: 'mock.agentserver.supplement',
+    kind: 'package',
+    description: 'Smoke supplement skill',
+    skillDomains: ['omics'],
+    inputContract: {},
+    outputArtifactSchema: {},
+    entrypoint: { type: 'workspace-task' },
+    environment: {},
+    validationSmoke: {},
+    examplePrompts: [],
+    promotionHistory: [],
+  },
+} as SkillAvailability;
+
+const lifecyclePrimaryPayload: ToolPayload = {
+  message: 'Primary generated omics artifact without report.',
+  confidence: 0.8,
+  claimType: 'evidence-summary',
+  evidenceLevel: 'agentserver-supplement-smoke',
+  reasoningTrace: 'Primary lifecycle payload intentionally misses research-report.',
+  claims: [],
+  uiManifest: [{ componentId: 'point-set-viewer', artifactRef: 'omics-differential-expression' }],
+  executionUnits: [{ id: 'primary-omics-task', status: 'done', tool: 'agentserver.generated.python' }],
+  artifacts: [{
+    id: 'omics-differential-expression',
+    type: 'omics-differential-expression',
+    data: { rows: [{ gene: 'EGFR', log2FoldChange: 2.1, padj: 0.01 }] },
+  }],
+  budgetDebits: [budgetDebit('budgetDebit:primary-supplement-smoke', 'sciforge.generated-task-runner.primary', ['audit:primary-budget'])],
+  workEvidence: [workEvidence('primary-omics-evidence', ['budgetDebit:primary-supplement-smoke'])],
+};
+const lifecycleSupplementPayload: ToolPayload = {
+  message: 'Supplement generated research report.',
+  confidence: 0.86,
+  claimType: 'evidence-summary',
+  evidenceLevel: 'agentserver-supplement-smoke',
+  reasoningTrace: 'Supplement lifecycle payload fills research-report.',
+  claims: [],
+  uiManifest: [{ componentId: 'report-viewer', artifactRef: 'research-report' }],
+  executionUnits: [{ id: 'supplement-report-task', status: 'done', tool: 'agentserver.generated.python' }],
+  artifacts: [{
+    id: 'research-report',
+    type: 'research-report',
+    data: { markdown: '# Supplemental report' },
+  }],
+  budgetDebits: [budgetDebit('budgetDebit:supplement-supplement-smoke', 'sciforge.generated-task-runner', [
+    'audit:supplement-budget',
+    '.sciforge/capability-evolution-ledger/records.jsonl#L999',
+  ])],
+  workEvidence: [workEvidence('supplement-report-evidence', ['budgetDebit:supplement-supplement-smoke'])],
+};
+const lifecycleMerged = await tryAgentServerSupplementMissingArtifacts({
+  request: {
+    skillDomain: 'omics',
+    prompt: 'lifecycle supplement merge smoke',
+    workspacePath: workspace,
+    expectedArtifactTypes: ['omics-differential-expression', 'research-report'],
+    artifacts: [],
+  },
+  skill: smokeSkill,
+  skills: [smokeSkill],
+  workspace,
+  payload: lifecyclePrimaryPayload,
+  primaryTaskId: 'primary-omics-task',
+  primaryRunId: 'primary-run',
+  primaryRun: smokeRun(workspace),
+  primaryRefs: {
+    taskRel: '.sciforge/tasks/primary-omics.py',
+    outputRel: '.sciforge/task-results/primary-omics.json',
+    stdoutRel: '.sciforge/task-results/primary-omics.stdout.txt',
+    stderrRel: '.sciforge/task-results/primary-omics.stderr.txt',
+  },
+  expectedArtifactTypes: ['omics-differential-expression', 'research-report'],
+  deps: {} as never,
+  runGeneratedTask: async () => lifecycleSupplementPayload,
+});
+assert.ok(lifecycleMerged, 'supplement lifecycle should merge successful supplement payload');
+assert.ok(lifecycleMerged.budgetDebits?.some((debit) => debit.debitId === 'budgetDebit:primary-supplement-smoke'));
+const lifecycleSupplementDebit = lifecycleMerged.budgetDebits?.find((debit) => debit.debitId === 'budgetDebit:supplement-supplement-smoke');
+assert.ok(lifecycleSupplementDebit, 'merged lifecycle payload should retain supplement budget debit');
+assert.ok(lifecycleSupplementDebit.sinkRefs.auditRefs.includes('audit:supplement-budget'));
+assert.ok(lifecycleSupplementDebit.sinkRefs.auditRefs.includes('.sciforge/capability-evolution-ledger/records.jsonl#L999'));
+assert.ok(lifecycleMerged.workEvidence?.some((entry) => entry.id === 'primary-omics-evidence'));
+assert.ok(lifecycleMerged.workEvidence?.some((entry) => entry.budgetDebitRefs?.includes('budgetDebit:supplement-supplement-smoke')));
+
 let sawSupplementPrompt = false;
 
 const generatedTask = String.raw`
@@ -83,6 +178,17 @@ payload = {
     "evidenceLevel": "agentserver-supplement-smoke",
     "reasoningTrace": "Initial generated task intentionally emitted only omics so supplement can fill report.",
     "claims": [],
+    "workEvidence": [
+        {
+            "kind": "command",
+            "id": "primary-omics-evidence",
+            "status": "success",
+            "provider": "mock-agentserver-primary",
+            "resultCount": 1,
+            "evidenceRefs": ["artifact:omics-differential-expression"],
+            "recoverActions": []
+        }
+    ],
     "uiManifest": [
         {"componentId": "point-set-viewer", "artifactRef": "omics-differential-expression", "priority": 1}
     ],
@@ -182,6 +288,7 @@ try {
   assert.notEqual(isRecord(report.metadata) ? report.metadata.status : undefined, 'repair-needed');
   assert.ok(result.uiManifest.some((slot) => slot.componentId === 'report-viewer' && slot.artifactRef === 'research-report'));
   assert.ok(result.uiManifest.some((slot) => slot.componentId === 'point-set-viewer'));
+  assert.ok(result.workEvidence?.some((entry) => entry.id === 'primary-omics-evidence'));
   assert.match(String(result.reasoningTrace), /Supplemental AgentServer\/backend generation/);
   console.log('[ok] agentserver supplement fills missing expected artifacts after local skill output');
 } finally {
@@ -197,4 +304,68 @@ async function readJson(req: NodeJS.ReadableStream): Promise<Record<string, unkn
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function budgetDebit(
+  debitId: string,
+  capabilityId: string,
+  auditRefs: string[],
+): NonNullable<ToolPayload['budgetDebits']>[number] {
+  return {
+    contract: 'sciforge.capability-budget-debit.v1',
+    schemaVersion: 1,
+    debitId,
+    invocationId: `${debitId}:invocation`,
+    capabilityId,
+    candidateId: 'mock.agentserver.supplement',
+    manifestRef: 'capability:mock.agentserver.supplement',
+    subjectRefs: ['primary-omics-task'],
+    debitLines: [{ dimension: 'toolCalls', amount: 1, reason: 'supplement smoke' }],
+    exceeded: false,
+    exhaustedDimensions: [],
+    sinkRefs: {
+      executionUnitRef: 'supplement-report-task',
+      workEvidenceRefs: ['supplement-report-evidence'],
+      auditRefs,
+    },
+    createdAt: '2026-01-01T00:00:00.000Z',
+  };
+}
+
+function workEvidence(id: string, budgetDebitRefs: string[]): NonNullable<ToolPayload['workEvidence']>[number] {
+  return {
+    kind: 'command',
+    id,
+    status: 'success',
+    provider: 'mock-agentserver-supplement',
+    resultCount: 1,
+    evidenceRefs: [`workEvidence:${id}`],
+    recoverActions: [],
+    budgetDebitRefs,
+  };
+}
+
+function smokeRun(workspacePath: string): WorkspaceTaskRunResult {
+  return {
+    spec: {
+      id: 'primary-omics-task',
+      language: 'python',
+      entrypoint: '.sciforge/tasks/primary-omics.py',
+      input: {},
+      outputRel: '.sciforge/task-results/primary-omics.json',
+      stdoutRel: '.sciforge/task-results/primary-omics.stdout.txt',
+      stderrRel: '.sciforge/task-results/primary-omics.stderr.txt',
+      taskRel: '.sciforge/tasks/primary-omics.py',
+    },
+    workspace: workspacePath,
+    command: 'python',
+    args: [],
+    exitCode: 0,
+    stdoutRef: '.sciforge/task-results/primary-omics.stdout.txt',
+    stderrRef: '.sciforge/task-results/primary-omics.stderr.txt',
+    outputRef: '.sciforge/task-results/primary-omics.json',
+    stdout: '',
+    stderr: '',
+    runtimeFingerprint: {},
+  };
 }

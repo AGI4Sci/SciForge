@@ -158,9 +158,10 @@ export async function sendSciForgeToolMessage(
     const selectedSenseIds = selectedRuntimeSenseIds(input, selectedToolIds);
     const selectedActionIds = selectedRuntimeActionIds(input);
     const selectedVerifierIds = selectedRuntimeVerifierIds(input);
-    const verificationPolicy = configuredVerificationPolicy(input);
     const humanApprovalPolicy = configuredHumanApprovalPolicy(input);
     const unverifiedReason = asString(input.scenarioOverride?.unverifiedReason);
+    const scenarioOverride = scenarioOverrideForTransport(input.scenarioOverride);
+    const ignoredLegacyVerificationPolicySources = ignoredLegacyScenarioVerificationPolicySources(input);
     const targetInstanceContext = compactTargetInstanceContext(input);
     const repairHandoffRunner = buildRepairHandoffRunnerPayload(input);
     const requestBody = buildAgentHandoffPayload({
@@ -193,7 +194,6 @@ export async function sendSciForgeToolMessage(
       artifactPolicy: undefined,
       referencePolicy: buildReferencePolicy(referenceSummary),
       failureRecoveryPolicy,
-      verificationPolicy,
       humanApprovalPolicy,
       unverifiedReason,
       verificationResult: input.verificationResult,
@@ -208,7 +208,8 @@ export async function sendSciForgeToolMessage(
           answerPolicy: sharedAgentContract.answerPolicy,
           note: 'SciForge does not route or reject current-turn intent by keyword; AgentServer decides from rawUserPrompt and context.',
         },
-        scenarioOverride: input.scenarioOverride,
+        scenarioOverride,
+        ignoredLegacyVerificationPolicySources,
         scenarioPackageRef: input.scenarioPackageRef,
         skillPlanRef: input.skillPlanRef,
         uiPlanRef: input.uiPlanRef,
@@ -577,14 +578,27 @@ function buildReferencePolicy(references: Array<Record<string, unknown>>) {
   };
 }
 
-function configuredVerificationPolicy(input: SendAgentMessageInput) {
-  const configured = input.scenarioOverride?.verificationPolicy;
-  return configured && isRecord(configured) ? configured : undefined;
-}
-
 function configuredHumanApprovalPolicy(input: SendAgentMessageInput) {
   const configured = input.scenarioOverride?.humanApprovalPolicy;
   return configured && isRecord(configured) ? configured : undefined;
+}
+
+function scenarioOverrideForTransport(input: SendAgentMessageInput['scenarioOverride']) {
+  if (!input || !isRecord(input.verificationPolicy)) return input;
+  const out = { ...input };
+  delete out.verificationPolicy;
+  return out;
+}
+
+function ignoredLegacyScenarioVerificationPolicySources(input: SendAgentMessageInput) {
+  const configured = input.scenarioOverride?.verificationPolicy;
+  if (!isRecord(configured)) return undefined;
+  return [{
+    source: 'request.uiState.scenarioOverride.verificationPolicy',
+    decision: 'ignored',
+    keys: Object.keys(configured).sort().slice(0, 12),
+    reason: 'Legacy scenarioOverride.verificationPolicy is ignored by UI transport; structured contract projection records runtime verification settings.',
+  }];
 }
 
 function compactSciForgeReference(reference: NonNullable<SendAgentMessageInput['references']>[number]) {
