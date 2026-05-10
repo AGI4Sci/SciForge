@@ -11,6 +11,7 @@ import {
   runtimeStreamEventLabel,
   workspaceRuntimeResultCompletion,
 } from '@sciforge-ui/runtime-contract';
+import { runtimeInteractionProgressEventFromCompactRecord } from '@sciforge-ui/runtime-contract/events';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -134,8 +135,9 @@ export async function readWorkspaceToolStream(
 
 export function normalizeWorkspaceRuntimeEvent(raw: unknown): AgentStreamEvent {
   const record = isRecord(raw) ? raw : {};
-  const interactionProgress = runtimeInteractionProgressPresentation(record);
-  const type = interactionProgress ? asString(record.type) ?? WORKSPACE_RUNTIME_EVENT_TYPE : asString(record.type) || asString(record.kind) || WORKSPACE_RUNTIME_EVENT_TYPE;
+  const interactionProgressRecord = runtimeInteractionProgressEventFromCompactRecord(record);
+  const interactionProgress = interactionProgressRecord ? runtimeInteractionProgressPresentation(interactionProgressRecord) : undefined;
+  const type = interactionProgressRecord?.type ?? (asString(record.type) || asString(record.kind) || WORKSPACE_RUNTIME_EVENT_TYPE);
   const source = asString(record.source);
   const toolName = asString(record.toolName);
   const usage = normalizeTokenUsage(record.usage)

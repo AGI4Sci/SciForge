@@ -44,6 +44,7 @@ function asStringArray(value: unknown): string[] {
 export function progressModelFromEvent(event: AgentStreamEvent): ProcessProgressModel | undefined {
   const raw = isRecord(event.raw) ? event.raw : {};
   const interactionProgress = runtimeInteractionProgressEventFromUnknown(raw)
+    ?? runtimeInteractionProgressEventFromCompactRecord(raw)
     ?? (isRecord(raw.raw) ? runtimeInteractionProgressEventFromUnknown(raw.raw) : undefined);
   if (interactionProgress) return progressModelFromInteractionProgress(interactionProgress);
   const progress = isRecord(raw.progress) ? raw.progress : isRecord(raw.raw) && isRecord(raw.raw.progress) ? raw.raw.progress : undefined;

@@ -149,6 +149,59 @@ test('structured interaction progress events survive transport normalization int
   assert.match(model?.detail ?? '', /Reason: side-effect-policy/);
 });
 
+test('compact interaction progress events use runtime contract before process progress', async () => {
+  globalThis.fetch = (async () => streamResponse([
+    {
+      event: {
+        type: HUMAN_APPROVAL_REQUIRED_EVENT_TYPE,
+        label: '需要确认',
+        detail: [
+          'Phase: verification',
+          'Status: blocked',
+          'Reason: side-effect-policy',
+          'Interaction: human-approval required',
+        ].join('\n'),
+        prompt: 'PROMPT_TEXT_SHOULD_NOT_DECIDE',
+        scenario: 'SCENARIO_TEXT_SHOULD_NOT_DECIDE',
+        message: 'NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE search write failed approval',
+      },
+    },
+    {
+      event: {
+        type: HUMAN_APPROVAL_REQUIRED_EVENT_TYPE,
+        label: 'needs approval',
+        prompt: 'Phase: verification\nStatus: blocked\nInteraction: human-approval required',
+        scenario: 'Phase: interaction\nStatus: blocked\nInteraction: clarification required',
+        message: 'Phase: verification\nStatus: blocked\nInteraction: human-approval required',
+      },
+    },
+    {
+      result: {
+        message: 'Workspace result ready.',
+        executionUnits: [{ id: 'unit-1', status: 'done' }],
+        artifacts: [],
+      },
+    },
+  ])) as typeof fetch;
+
+  const events: AgentStreamEvent[] = [];
+  await sendSciForgeToolMessage(messageInput(), {
+    onEvent: (event) => events.push(event),
+  });
+
+  const compact = events.find((event) => event.label === '需要确认');
+  const poison = events.find((event) => (event.raw as { message?: string } | undefined)?.message === 'Phase: verification\nStatus: blocked\nInteraction: human-approval required');
+  const model = compact ? progressModelFromEvent(compact) : undefined;
+
+  assert.equal(compact?.type, HUMAN_APPROVAL_REQUIRED_EVENT_TYPE);
+  assert.equal(compact?.label, '需要确认');
+  assert.doesNotMatch(compact?.detail ?? '', /PROMPT_TEXT_SHOULD_NOT_DECIDE|SCENARIO_TEXT_SHOULD_NOT_DECIDE|NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE/);
+  assert.equal(model?.waitingFor, '人工确认');
+  assert.match(model?.detail ?? '', /Interaction: human-approval required/);
+  assert.ok(poison, 'poison compact event should still be transported for raw inspection');
+  assert.equal(progressModelFromEvent(poison), undefined);
+});
+
 test('UI handoff does not synthesize verification or human approval policy defaults', async () => {
   const bodies: Array<Record<string, unknown>> = [];
   globalThis.fetch = (async (_input, init) => {

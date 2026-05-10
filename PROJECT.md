@@ -283,6 +283,8 @@ Todo：
 
 2026-05-10：T126 compact replay guard 收尾完成。compact interaction/progress restore 现在只接受 `detail` / `summary` 的结构化字段，不从 `message`、`text`、`prompt` 或 `scenario` 恢复；session history、streamProcess compact trace 与 worklog 三处都补了 poison guard，确保 UI 仍只消费 structured contract。
 
+2026-05-10：T126 transport compact interaction event 消费收紧。`normalizeWorkspaceRuntimeEvent()` 与 `processProgress` 现在优先使用 runtime contract 的 compact interaction restore helper，human approval / cancel / progress 语义只从结构化 compact event 恢复；prompt、scenario、message 中的诱饵文本仍只保留给 raw inspection。
+
 Todo：
 
 - [x] 定义 `ProgressPlan`：initial status、phase names、silence policy、background policy、cancel policy、interaction policy。
