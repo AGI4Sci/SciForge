@@ -250,6 +250,7 @@ Todo：
 - 2026-05-10：T127-N 统一 AuditSink/TelemetrySink readback summary 字段。verification artifact、observe invocation、action-result 与 telemetry spans 现在共用 target/source/counts/status/outcome/failure/sink/telemetry refs 形状，smoke 覆盖 action-result、verification artifact、observe invocation 和 telemetry summary 回读。
 - 2026-05-10：T127-O generated-task guard failure 接入 validation/repair/audit chain。WorkEvidence guard 与 guidance adoption guard 现在能投影为统一 finding，repair-needed payload 会回挂 `refs.validationRepairAudit` / telemetry refs，并写 `sciforge.validation-guard` budget debit 到 executionUnit、workEvidence 与 audit log refs。
 - 2026-05-10：T129-D generated-task / AgentServer direct-payload success 接入 `CapabilityBudgetDebit`。成功 payload 现在写 `sciforge.generated-task-runner` 或 `sciforge.agentserver.direct-payload` debit，回挂 executionUnit、WorkEvidence、attempt refs、budget audit log 与 capability evolution ledger refs。
+- 2026-05-10：T127-P 继续收敛 generated-task validation lifecycle 长文件。generated-task / AgentServer direct-payload success budget debit 的类型、导出函数与拼装 helper 迁入 `generated-task-success-budget-debit.ts`，原 lifecycle 文件 re-export 保持 public import path 兼容，并从 1439 行降到 1176 行。
 
 Todo：
 
