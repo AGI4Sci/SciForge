@@ -200,8 +200,11 @@ try {
     assertPromptDirectivesAreSourced(payloadHandoff);
     assertPromptRenderPlanIsSourced(payloadHandoff);
     assertGenerationPayloadRefsCanBeRead(dispatch);
-    assert.equal(dispatch.text.includes(String(dispatch.metadata.harnessContractRef)), false);
-    assert.equal(dispatch.text.includes(String(dispatch.metadata.harnessTraceRef)), false);
+    assert.equal(dispatch.text.includes('"promptRenderPlan"'), false, 'AgentServer prompt text must not inline the raw promptRenderPlan');
+    assert.equal(dispatch.text.includes('"renderedText"'), false, 'AgentServer prompt text must not inline full rendered prompt text');
+    assert.equal(dispatch.text.includes('"promptDirectives"'), false, 'AgentServer prompt text must not inline raw prompt directives');
+    assert.equal(dispatch.text.includes('"strategyRefs"'), false, 'AgentServer prompt text must not inline raw strategy refs');
+    assert.equal(dispatch.text.includes('"selectedContextRefs"'), false, 'AgentServer prompt text must not inline raw selected context refs');
   }
 
   assertSyntheticDirectiveRenderingIsSourced();
@@ -433,10 +436,34 @@ function assertPromptRenderPlanSummaryFromContextEnvelope(renderPlan: Record<str
       sessionFacts: {
         currentUserRequest: 'fresh: Create a contract-driven handoff report.',
         agentHarnessHandoff: {
-          promptRenderPlan: renderPlan,
+          promptRenderPlan: {
+            ...renderPlan,
+            renderedText: 'CONTEXT_ENVELOPE_RAW_RENDERED_TEXT_SENTINEL',
+          },
+        },
+        promptRenderPlan: {
+          ...renderPlan,
+          renderedText: 'SESSION_FACTS_RAW_RENDERED_TEXT_SENTINEL',
         },
       },
-      scenarioFacts: {},
+      scenarioFacts: {
+        agentHarnessHandoff: {
+          promptRenderPlan: {
+            ...renderPlan,
+            renderedText: 'SCENARIO_FACTS_RAW_RENDERED_TEXT_SENTINEL',
+          },
+        },
+      },
+      continuityRules: ['LOCAL_CONTEXT_ENVELOPE_RULE_SENTINEL must not become AgentServer prompt prose.'],
+      projectFacts: {
+        project: 'SciForge',
+        taskCodePolicy: 'LOCAL_PROJECT_FACTS_POLICY_SENTINEL must not become AgentServer prompt prose.',
+      },
+      orchestrationBoundary: {
+        decisionOwner: 'AgentServer',
+        sciForgeRole: 'LOCAL_ORCHESTRATION_ROLE_SENTINEL must not become AgentServer prompt prose.',
+        contextModeReason: 'LOCAL_CONTEXT_MODE_REASON_SENTINEL must not become AgentServer prompt prose.',
+      },
     },
     workspaceTreeSummary: [],
     availableSkills: [],
@@ -455,6 +482,13 @@ function assertPromptRenderPlanSummaryFromContextEnvelope(renderPlan: Record<str
   assert.match(prompt, /"renderedEntries"/);
   assert.match(prompt, /"sourceCallbackId": "debug-repair\.policy"/);
   assert.equal(prompt.includes('sha1:metadata-render-digest'), false, 'sessionFacts prompt render plan should win over request metadata fallback');
+  assert.equal(prompt.includes('CONTEXT_ENVELOPE_RAW_RENDERED_TEXT_SENTINEL'), false, 'raw contextEnvelope renderedText must not bypass promptRenderPlanSummary');
+  assert.equal(prompt.includes('SESSION_FACTS_RAW_RENDERED_TEXT_SENTINEL'), false, 'raw sessionFacts renderedText must not bypass promptRenderPlanSummary');
+  assert.equal(prompt.includes('SCENARIO_FACTS_RAW_RENDERED_TEXT_SENTINEL'), false, 'raw scenarioFacts renderedText must not bypass promptRenderPlanSummary');
+  assert.equal(prompt.includes('LOCAL_CONTEXT_ENVELOPE_RULE_SENTINEL'), false, 'local contextEnvelope rules must not become AgentServer prompt policy prose');
+  assert.equal(prompt.includes('LOCAL_PROJECT_FACTS_POLICY_SENTINEL'), false, 'local projectFacts policy prose must not become AgentServer prompt policy prose');
+  assert.equal(prompt.includes('LOCAL_ORCHESTRATION_ROLE_SENTINEL'), false, 'local orchestrationBoundary prose must not become AgentServer prompt policy prose');
+  assert.equal(prompt.includes('LOCAL_CONTEXT_MODE_REASON_SENTINEL'), false, 'local context mode prose must not become AgentServer prompt policy prose');
 }
 
 async function assertNormalizedHandoffPayloadReconstruction() {

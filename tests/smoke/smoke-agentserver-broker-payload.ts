@@ -53,6 +53,9 @@ const request: GatewayRequest = {
         required: ['artifact:artifact.report-1'],
       },
       contextBudget: { maxReferenceDigests: 1 },
+      capabilityPolicy: {
+        preferredCapabilityIds: ['skill.pdf-extract', 'tool.clawhub.playwright-mcp', 'verifier.schema'],
+      },
     },
     capabilityBrief: {
       selected: [{
@@ -111,9 +114,16 @@ const capabilityBrief = scenarioFacts.capabilityBrief as Record<string, unknown>
 const governanceAudit = contextEnvelope.contextGovernanceAudit as Record<string, unknown>;
 const brokerText = JSON.stringify(brokerBrief);
 const contextEnvelopeText = JSON.stringify(contextEnvelope);
+const harnessInputAudit = brokerBrief.harnessInputAudit as Record<string, unknown>;
 
 assert.equal(brokerBrief.schemaVersion, 'sciforge.agentserver.capability-broker-brief.v1');
 assert.equal(brokerBrief.contract, 'sciforge.capability-broker-output.v1');
+assert.equal(harnessInputAudit.schemaVersion, 'sciforge.agentserver.capability-broker-harness-input-audit.v1');
+assert.equal(harnessInputAudit.enablement, 'default-canonical');
+assert.equal(harnessInputAudit.source, 'request.uiState.agentHarness');
+assert.equal(harnessInputAudit.contractRef, 'harness-contract:broker-payload-context');
+assert.equal(harnessInputAudit.traceRef, 'harness-trace:broker-payload-context');
+assert.equal((brokerBrief.inputSummary as Record<string, unknown>).harnessSkillHints, 0);
 assert.match(brokerText, /view\.report/);
 assert.match(brokerText, /verifier\.schema/);
 assert.match(brokerText, /skill\.pdf-extract/);
@@ -144,6 +154,37 @@ assert.equal(contextEnvelopeText.includes('OLD_CAPABILITY_BRIEF_EXCLUDED_SENTINE
 assert.equal(contextEnvelopeText.includes('OLD_CAPABILITY_BRIEF_VERIFICATION_POLICY_SENTINEL'), false);
 assert.equal(contextEnvelopeText.includes('OLD_CAPABILITY_BRIEF_VERIFICATION_BRIEF_SENTINEL'), false);
 assert.equal(contextEnvelopeText.includes('artifact:legacy-context-sentinel'), false);
+
+const disabledHandoffEnvelope = buildContextEnvelope({
+  ...request,
+  uiState: {
+    ...(request.uiState as Record<string, unknown>),
+    agentHarnessCapabilityBrokerInputEnabled: 'disabled',
+    preferredCapabilityIds: [],
+    agentHarnessHandoff: {
+      ...((request.uiState as Record<string, unknown>).agentHarnessHandoff as Record<string, unknown>),
+      capabilityPolicy: {
+        preferredCapabilityIds: ['runtime.workspace-write'],
+        blockedCapabilities: ['view.report'],
+      },
+    },
+  },
+}, {
+  workspace: '/tmp/sciforge-broker-payload-smoke',
+  workspaceTreeSummary: [],
+  priorAttempts: [],
+  mode: 'full',
+});
+const disabledBrokerBrief = disabledHandoffEnvelope.scenarioFacts.capabilityBrokerBrief as Record<string, unknown>;
+const disabledBrokerSummary = disabledBrokerBrief.inputSummary as Record<string, unknown>;
+assert.equal(Object.hasOwn(disabledBrokerBrief, 'harnessInputAudit'), false, 'explicit disabled should remove default handoff harness input audit');
+assert.equal(disabledBrokerSummary.harnessSkillHints, 0, 'disabled handoff capability policy should not be consumed as harness input');
+assert.equal(disabledBrokerSummary.blockedCapabilities, 0, 'disabled handoff blocked capabilities should not reach broker input');
+assert.equal(
+  (disabledBrokerBrief.excluded as Array<Record<string, unknown>>).some((entry) => entry.id === 'view.report' && entry.reason === 'blocked by harness capability policy'),
+  false,
+  'disabled handoff blocked capabilities must not exclude broker-selected capabilities',
+);
 
 const compactContext = buildAgentServerCompactContext(request, {
   contextEnvelope,

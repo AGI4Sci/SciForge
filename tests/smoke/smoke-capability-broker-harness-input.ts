@@ -205,12 +205,38 @@ const harnessContractRequest: GatewayRequest = {
 
 const harnessDefaultBrief = buildCapabilityBrokerBriefForAgentServer(harnessContractRequest);
 const harnessDefaultSummary = harnessDefaultBrief.inputSummary as Record<string, unknown>;
-assert.equal(Object.hasOwn(harnessDefaultBrief, 'harnessInputAudit'), false, 'harness broker input must stay opt-in');
-assert.equal(harnessDefaultSummary.harnessSkillHints, 0, 'agentHarness contract candidates should not be consumed by default');
-assert.equal(harnessDefaultSummary.blockedCapabilities, 0, 'agentHarness blocked capabilities should not be consumed by default');
-assert.deepEqual(harnessDefaultSummary.toolBudgetKeys, [], 'agentHarness toolBudget should not be consumed by default');
-assert.equal(harnessDefaultSummary.availableProviders, 0, 'agentHarness provider availability should not be consumed by default');
-assert.equal(harnessDefaultSummary.verificationPolicyMode, undefined, 'agentHarness verification policy should not be consumed by default');
+const harnessDefaultAudit = harnessDefaultBrief.harnessInputAudit as Record<string, unknown>;
+assert.equal(harnessDefaultAudit.schemaVersion, 'sciforge.agentserver.capability-broker-harness-input-audit.v1');
+assert.equal(harnessDefaultAudit.enablement, 'default-canonical');
+assert.equal(harnessDefaultAudit.contractRef, 'harness-contract:broker-opt-in');
+assert.equal(harnessDefaultAudit.traceRef, 'harness-trace:broker-opt-in');
+assert.equal(harnessDefaultAudit.profileId, 'privacy-fast');
+assert.equal(harnessDefaultSummary.harnessSkillHints, 2, 'canonical agentHarness contract candidates should be consumed by default');
+assert.equal(harnessDefaultSummary.blockedCapabilities, 1, 'canonical agentHarness blocked capabilities should be consumed by default');
+assert.deepEqual(harnessDefaultSummary.toolBudgetKeys, ['exhaustedPolicy', 'maxNetworkCalls', 'maxProviders', 'maxToolCalls']);
+assert.equal(harnessDefaultSummary.availableProviders, 2, 'canonical agentHarness provider availability should be consumed by default');
+assert.equal(harnessDefaultSummary.verificationPolicyMode, 'hybrid', 'canonical agentHarness verification policy should be consumed by default');
+assert.ok(
+  JSON.stringify(harnessDefaultBrief.briefs).includes('skill hint from agent-harness-contract'),
+  'default canonical harness candidates should reach compact selected broker signals',
+);
+
+for (const killSwitch of ['disabled', 'audit-disabled', 'skip', 'off', false]) {
+  const disabledBrief = buildCapabilityBrokerBriefForAgentServer({
+    ...harnessContractRequest,
+    uiState: {
+      ...harnessContractRequest.uiState,
+      agentHarnessCapabilityBrokerInputEnabled: killSwitch,
+    },
+  });
+  const disabledSummary = disabledBrief.inputSummary as Record<string, unknown>;
+  assert.equal(Object.hasOwn(disabledBrief, 'harnessInputAudit'), false, `harness broker input audit should disappear for kill switch ${String(killSwitch)}`);
+  assert.equal(disabledSummary.harnessSkillHints, 0, `agentHarness candidates should not be consumed for kill switch ${String(killSwitch)}`);
+  assert.equal(disabledSummary.blockedCapabilities, 0, `agentHarness blocked capabilities should not be consumed for kill switch ${String(killSwitch)}`);
+  assert.deepEqual(disabledSummary.toolBudgetKeys, [], `agentHarness toolBudget should not be consumed for kill switch ${String(killSwitch)}`);
+  assert.equal(disabledSummary.availableProviders, 0, `agentHarness provider availability should not be consumed for kill switch ${String(killSwitch)}`);
+  assert.equal(disabledSummary.verificationPolicyMode, undefined, `agentHarness verification policy should not be consumed for kill switch ${String(killSwitch)}`);
+}
 
 const harnessOptInBrief = buildCapabilityBrokerBriefForAgentServer({
   ...harnessContractRequest,

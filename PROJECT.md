@@ -78,7 +78,7 @@ Todo：
 
 状态：进行中；目标是按 [`docs/AgentHarnessStandard.md`](docs/AgentHarnessStandard.md) 建立最小可运行 harness runtime。第一阶段只生成 `HarnessContract` 和 `HarnessTrace`，不改变业务行为；第二阶段逐步让 context、broker、prompt、validation、repair 和 UI 消费 contract。
 
-进展：shadow-mode MVP 已完成。`packages/agent-harness` 提供 contract/profile/callback/trace 基础运行时，gateway 在 conversation policy 之后、既有 dispatch/fast-path 之前评估 `HarnessRuntime.evaluate()`，并把 `HarnessContract` / `HarnessTrace` 写入 request/uiState/metadata 与 stream trace。progress plan 已默认投影为结构化 progress event，verification policy 已默认由 contract 收紧，backend selection decision 与 continuity decision 已默认写入 metadata/handoff；context envelope、broker 和 repair loop 仍保持 opt-in 消费，prompt renderer metadata 已有结构化首片。
+进展：shadow-mode MVP 已完成。`packages/agent-harness` 提供 contract/profile/callback/trace 基础运行时，gateway 在 conversation policy 之后、既有 dispatch/fast-path 之前评估 `HarnessRuntime.evaluate()`，并把 `HarnessContract` / `HarnessTrace` 写入 request/uiState/metadata 与 stream trace。progress plan 已默认投影为结构化 progress event，verification policy 已默认由 contract 收紧，backend selection decision 与 continuity decision 已默认写入 metadata/handoff；context envelope 与 broker 已在 canonical harness contract/handoff 存在时默认消费 contract，repair policy 默认进入 validation/repair audit 但行为收紧仍需显式 consume，prompt renderer 已只保留 compact context/refs 摘要。
 
 2026-05-10：新增 opt-in context envelope governance 小切片。默认仍关闭；打开 `agentHarnessContextEnvelopeEnabled` 后，`buildContextEnvelope` 可从 `uiState.agentHarness.contract` / `agentHarnessHandoff` 消费 allowed/blocked/required refs 与 `contextBudget.maxReferenceDigests`，对 current references/digests 做 deterministic filtering/slimming，并输出 `contextGovernanceAudit` 记录 contract/trace/source/decision。
 
@@ -112,6 +112,10 @@ Todo：
 
 2026-05-10：T130 context envelope governance 默认 metadata/消费小切片完成。存在 canonical `agentHarness.contract` 或 compact `agentHarnessHandoff` 时，context envelope governance 默认启用并保留 contract/trace/context budget refs；`requestWithoutInlineAgentHarness()` 在剥离 inline harness 前留下 compact handoff，保留 context envelope disabled/audit-disabled/skip kill switches。
 
+2026-05-10：T130 broker harness input 默认 canonical 消费小切片完成。存在 canonical `agentHarness.contract` 或 `agentHarnessHandoff` 时，capability broker 默认消费 harness candidates、preferred/blocked capabilities、tool budget、provider availability 与 verification policy，并输出 `harnessInputAudit.enablement=default-canonical`；显式 `disabled` / `audit-disabled` / `skip` / `off` / `false` kill switch 会移除默认消费与 audit。
+
+2026-05-10：T130/T127 repair policy 默认 audit 小切片完成。canonical harness contract/handoff 带 `repairContextPolicy` 时，validation/repair/audit bridge 默认投影 contract/trace/profile 与 repair policy refs 到 audit/sink refs；默认 `consume=false`，不会收紧 repair budget 或强制 fail-closed，只有显式 consume/enable flag 才改变 repair 行为，并保留 audit disabled/skip/off kill switch。
+
 Todo：
 
 - [x] 建立 `packages/agent-harness`：导出 `HarnessRuntime`、`HarnessProfile`、`HarnessCallback`、`HarnessContext`、`HarnessDecision`、`HarnessContract`、`HarnessTrace`、`HarnessStage`。
@@ -119,7 +123,7 @@ Todo：
 - [x] 实现 deterministic merge engine：blocked refs/capabilities union、budget only tightens、risk/verification only escalates、side effects fail closed、conflicts written to trace。
 - [x] 在 `runWorkspaceRuntimeGateway` 中接入 `HarnessRuntime.evaluate()`，位置在 conversation policy 之后、direct fast-path / vision / AgentServer dispatch 之前。
 - [x] 第一阶段只把 `HarnessContract` 写入 request/uiState/metadata 和 stream trace，不改变已有 runtime 行为。
-- [ ] 第二阶段打开 feature flag，让 context envelope、broker、prompt renderer、verification policy、repair loop、UI progress 逐项消费 contract。（progress plan、verification policy、backend selection metadata 与 continuity metadata 默认消费已完成；context envelope、broker、repair loop 仍保持 opt-in；prompt renderer metadata 已有结构化首片。）
+- [ ] 第二阶段完成 contract consumption 收口：context envelope、broker、prompt renderer、verification policy、repair loop、UI progress 逐项消费 contract。（progress plan、verification policy、backend selection metadata、continuity metadata、context envelope 与 broker 默认消费已完成；repair policy 默认 audit-only，行为收紧仍显式 opt-in；prompt renderer 已只携带 compact contract/context 摘要。）
 - [x] 增加 `smoke:agent-harness-contract`：同一输入输出稳定 contract、trace 有阶段记录、profile 切换只改 contract 不 fork gateway path。
 - [x] 增加 `smoke:no-scattered-harness-policy`：禁止在 gateway、prompt builder、UI、scenario、provider 分支新增 harness 指令散文、探索规则、skill 偏好或工具预算。
 
@@ -128,7 +132,7 @@ Todo：
 - [ ] Agent 行为治理只有一个入口：`packages/agent-harness` profile registry。
 - [x] Harness runtime 可以 shadow mode 运行并产出完整 trace。
 - [x] 关闭 harness feature flag 时现有 backend-first/capability-driven 行为保持不变。
-- [x] 打开 harness feature flag 后，至少 context budget、progress plan 和 validation policy 三项由 contract 驱动。（progress plan 与 verification policy 已默认消费；context budget 与 validation/repair bridge 仍为 opt-in 首片；主流程全面启用仍待后续推进。）
+- [x] 打开 harness feature flag 后，至少 context budget、progress plan 和 validation policy 三项由 contract 驱动。（progress plan、verification policy、context budget 与 broker input 已默认 canonical 消费；validation/repair bridge 默认 audit-only，行为收紧仍需显式 consume。）
 
 ### T129 Unified Capability Graph：skills/tools/actions/observe/verifiers 进入同一能力图
 
@@ -195,6 +199,8 @@ Todo：
 
 2026-05-10：T128-K broker contract-only ignored audit 收敛。legacy direct UI 的 selected/excluded capabilities、provider hints 与 preferred provider ids 现在只进入 `ignoredLegacySources` 计数，不参与 broker 选择；negative smoke 证明 canonical harness contract 仍决定 `view.report` 选择，legacy sentinel 不泄漏进 compact brief。
 
+2026-05-10：T128-L AgentServer generation compact request 收紧。`buildAgentServerGenerationPrompt` 的 compact request 现在会瘦身 `contextEnvelope`，剔除 `continuityRules`、raw `agentHarnessHandoff`、raw `promptRenderPlan`、`renderedText`、`promptDirectives`、`strategyRefs`、`selectedContextRefs` 和本地 policy prose carriers，只保留结构化 project/session/scenario facts 与 compact broker audit；`smoke:contract-driven-handoff` 增加 negative guard，防止 raw prompt render plan 绕过 deterministic renderer。
+
 Todo：
 
 - [ ] `buildContextEnvelope` 只消费 `allowedContextRefs`、`blockedContextRefs`、`requiredContextRefs`、`contextBudget`、`repairContextPolicy`。（context refs/budget 已在 opt-in contract-only governance 下忽略 legacy 决策源；AgentServer repair prompt context 已 contract-only 消费；context envelope 自身已对 contract repairContextPolicy 做 bounded audit，legacy repairContextPolicy 仍不参与决策。）
@@ -258,6 +264,7 @@ Todo：
 - 2026-05-10：T129-D generated-task / AgentServer direct-payload success 接入 `CapabilityBudgetDebit`。成功 payload 现在写 `sciforge.generated-task-runner` 或 `sciforge.agentserver.direct-payload` debit，回挂 executionUnit、WorkEvidence、attempt refs、budget audit log 与 capability evolution ledger refs。
 - 2026-05-10：T127-P 继续收敛 generated-task validation lifecycle 长文件。generated-task / AgentServer direct-payload success budget debit 的类型、导出函数与拼装 helper 迁入 `generated-task-success-budget-debit.ts`，原 lifecycle 文件 re-export 保持 public import path 兼容，并从 1439 行降到 1176 行。
 - 2026-05-10：T127-Q 将 generated-task validation guard 语义模块抽出。WorkEvidence / guidance adoption guard finding、finding projection、guard chain refs、artifact/current refs 与 guard failure budget debit helper 迁入 `generated-task-validation-guard.ts`，原 lifecycle 文件降到 917 行并退出 1000 行 watch list。
+- 2026-05-10：T127-R harness repair policy 默认 audit 收口。canonical `agentHarness.contract` / `agentHarnessHandoff` 带 `repairContextPolicy` 时，`agentHarnessRepairPolicyBridgeFromRuntimeState()` 默认输出 audit-only bridge，把 policy refs 写入 validation/repair/audit chain；repair budget tightening / fail-closed 仍只在显式 consume flag 下生效，kill switch 可关闭默认 audit projection。
 
 Todo：
 

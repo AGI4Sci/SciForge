@@ -17,6 +17,7 @@ import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from 
 import { applyContextEnvelopeRecordGovernance, contextEnvelopeGovernanceAudit, contextEnvelopeGovernanceForRequest } from './context-envelope-governance.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import {
+  capabilityBrokerHarnessInputExplicitlyDisabledForRequest,
   capabilityBrokerHarnessInputProjectionForRequest,
   mergeCapabilityBrokerAvailableProviders,
   mergeCapabilityBrokerToolBudgets,
@@ -467,11 +468,12 @@ function brokerCapabilityPolicyForRequest(request: GatewayRequest) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const handoff = isRecord(uiState.agentHarnessHandoff) ? uiState.agentHarnessHandoff : {};
   const harnessContract = isRecord(uiState.harnessContract) ? uiState.harnessContract : {};
+  const harnessBrokerInputDisabled = capabilityBrokerHarnessInputExplicitlyDisabledForRequest(request);
   return firstRecord(
     uiState.capabilityPolicy,
     uiState.capabilityBrokerPolicy,
-    handoff.capabilityPolicy,
-    harnessContract.capabilityPolicy,
+    harnessBrokerInputDisabled ? undefined : handoff.capabilityPolicy,
+    harnessBrokerInputDisabled ? undefined : harnessContract.capabilityPolicy,
   ) ?? {};
 }
 

@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
+import { buildContextEnvelope } from '../../src/runtime/gateway/context-envelope.js';
 import { progressModelFromEvent } from '../../src/ui/src/processProgress.js';
+import { agentHarnessRepairPolicyBridgeFromRuntimeState } from '../../src/runtime/gateway/validation-repair-audit-bridge.js';
 
 type CapturedDispatch = {
   url: string;
@@ -133,10 +135,45 @@ try {
   assert.equal(handoff.decisionOwner, 'AgentServer');
   assert.deepEqual(handoff.continuityDecision, defaultContinuityDecision);
   assert.deepEqual(handoff.backendSelectionDecision, defaultBackendSelectionDecision);
+  const generatedHandoffEnvelope = buildContextEnvelope({
+    skillDomain: 'literature',
+    prompt: 'Render the generated harness handoff through the compact broker payload.',
+    artifacts: [],
+    selectedComponentIds: ['report-viewer'],
+    uiState: {
+      agentHarnessHandoff: handoff,
+    },
+  }, {
+    workspace,
+    workspaceTreeSummary: [],
+    priorAttempts: [],
+    mode: 'full',
+  });
+  const generatedBrokerBrief = generatedHandoffEnvelope.scenarioFacts.capabilityBrokerBrief as Record<string, unknown>;
+  const generatedHarnessInputAudit = generatedBrokerBrief.harnessInputAudit as Record<string, unknown>;
+  assert.equal(generatedHarnessInputAudit.schemaVersion, 'sciforge.agentserver.capability-broker-harness-input-audit.v1');
+  assert.equal(generatedHarnessInputAudit.enablement, 'default-canonical');
+  assert.equal(generatedHarnessInputAudit.contractRef, first.summary.contractRef);
+  assert.equal(generatedHarnessInputAudit.traceRef, first.summary.traceRef);
+  const defaultRepairPolicy = agentHarnessRepairPolicyBridgeFromRuntimeState({ agentHarnessHandoff: handoff });
+  assert.ok(defaultRepairPolicy, 'canonical handoff repair policy should be projected into audit metadata by default');
+  assert.equal(defaultRepairPolicy.consume, false);
+  assert.equal(defaultRepairPolicy.contractRef, first.summary.contractRef);
+  assert.equal(defaultRepairPolicy.traceRef, first.summary.traceRef);
+  assert.equal(defaultRepairPolicy.profileId, 'balanced-default');
+  assert.equal(
+    agentHarnessRepairPolicyBridgeFromRuntimeState({
+      agentHarnessRepairPolicyAuditDisabled: true,
+      agentHarnessHandoff: handoff,
+    }),
+    undefined,
+    'repair policy audit kill switch should suppress default handoff projection',
+  );
   assert.equal(dispatches[0]?.metadata.purpose, dispatches[2]?.metadata.purpose);
   assert.equal(dispatches[0]?.url, dispatches[2]?.url);
-  assert.equal(dispatches[0]?.text.includes(first.summary.contractRef as string), false, 'fresh prompt text must not inline harness contract ref');
-  assert.equal(dispatches[0]?.text.includes(first.summary.traceRef as string), false, 'fresh prompt text must not inline harness trace ref');
+  assert.equal(dispatches[0]?.text.includes('"harnessInputAudit"'), true, 'fresh prompt should carry compact broker harness input audit');
+  assert.equal(dispatches[0]?.text.includes(first.summary.contractRef as string), true, 'compact broker harness audit should carry the contract ref');
+  assert.equal(dispatches[0]?.text.includes(first.summary.traceRef as string), true, 'compact broker harness audit should carry the trace ref');
   assert.equal(dispatches[0]?.text.includes('"agentHarness"'), false, 'fresh prompt text must not inline harness shadow payload');
   assert.equal(dispatches[0]?.text.includes('"promptDirectives"'), false, 'fresh prompt text must not inline full harness contract');
   assert.equal(dispatches[0]?.text.includes('"stages"'), false, 'fresh prompt text must not inline full harness trace');

@@ -636,11 +636,13 @@ function compactGenerationRequestForAgentServer(
     availableSkills: _availableSkills,
     availableTools: _availableTools,
     availableRuntimeCapabilities: _availableRuntimeCapabilities,
+    contextEnvelope,
     metadata: _metadata,
     ...rest
   } = request;
   return {
     ...rest,
+    contextEnvelope: compactContextEnvelopeForAgentServer(contextEnvelope),
     capabilityBrokerBrief,
     promptRenderPlanSummary,
     omittedCapabilityCatalog: {
@@ -650,6 +652,61 @@ function compactGenerationRequestForAgentServer(
       reason: 'T116 default backend handoff consumes compact broker briefs and keeps full schemas/examples/docs lazy.',
     },
   };
+}
+
+function compactContextEnvelopeForAgentServer(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === 'continuityRules' || key === 'agentHarnessHandoff' || key === 'promptRenderPlan') continue;
+    if (key === 'projectFacts') {
+      const projectFacts = compactProjectFactsForAgentServer(entry);
+      if (projectFacts) out.projectFacts = projectFacts;
+      continue;
+    }
+    if (key === 'orchestrationBoundary') {
+      const boundary = compactOrchestrationBoundaryForAgentServer(entry);
+      if (boundary) out.orchestrationBoundary = boundary;
+      continue;
+    }
+    if (key === 'sessionFacts' || key === 'scenarioFacts') {
+      const facts = omitRawPromptRenderPlanCarriers(entry);
+      if (facts) out[key] = facts;
+      continue;
+    }
+    out[key] = entry;
+  }
+  return out;
+}
+
+function compactProjectFactsForAgentServer(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  return {
+    project: stringField(value.project),
+    toolPayloadContract: Array.isArray(value.toolPayloadContract) ? value.toolPayloadContract : undefined,
+    taskCodePolicyRef: stringField(value.taskCodePolicyRef),
+    toolPayloadContractRef: stringField(value.toolPayloadContractRef),
+  };
+}
+
+function compactOrchestrationBoundaryForAgentServer(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  return {
+    decisionOwner: stringField(value.decisionOwner),
+    currentUserRequestIsAuthoritative: value.currentUserRequestIsAuthoritative === true ? true : undefined,
+    agentId: stringField(value.agentId),
+    agentServerCoreSnapshotAvailable: value.agentServerCoreSnapshotAvailable === true ? true : undefined,
+  };
+}
+
+function omitRawPromptRenderPlanCarriers(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === 'agentHarnessHandoff' || key === 'promptRenderPlan') continue;
+    out[key] = entry;
+  }
+  return out;
 }
 
 function promptRenderPlanSummaryForAgentServer(

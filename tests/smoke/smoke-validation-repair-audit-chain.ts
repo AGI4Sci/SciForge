@@ -284,14 +284,139 @@ assert.equal(
       contractRef: 'runtime://agent-harness/contracts/default-off',
       traceRef: 'runtime://agent-harness/traces/default-off',
       contract: {
+        schemaVersion: 'sciforge.agent-harness-contract.v1',
+        repairContextPolicy: { kind: 'fail-closed', maxAttempts: 0 },
+        verificationPolicy: { intensity: 'audit', requireCurrentRefs: true },
+      },
+    },
+  })?.consume,
+  false,
+  'runtime uiState bridge must keep repair behavior default-off even when audit metadata is projected',
+);
+
+const harnessDefaultAuditPolicy = agentHarnessRepairPolicyBridgeFromRuntimeState({
+  harnessProfileId: 'debug-repair',
+  agentHarness: {
+    contractRef: 'runtime://agent-harness/contracts/default-audit',
+    traceRef: 'runtime://agent-harness/traces/default-audit',
+    contract: {
+      schemaVersion: 'sciforge.agent-harness-contract.v1',
+      repairContextPolicy: { kind: 'fail-closed', maxAttempts: 0 },
+      verificationPolicy: {
+        intensity: 'audit',
+        requireCurrentRefs: true,
+      },
+    },
+  },
+});
+assert.ok(harnessDefaultAuditPolicy, 'canonical harness contract repair policy should project by default for audit');
+assert.equal(harnessDefaultAuditPolicy.consume, false);
+const harnessDefaultAuditChain = createValidationRepairAuditChain({
+  chainId: 'agent-harness-repair-default-audit',
+  subject: {
+    kind: 'verification-gate',
+    id: 'agent-harness-repair-default-audit',
+    capabilityId: 'sciforge.runtime-verification-gate',
+    artifactRefs: [],
+    currentRefs: ['current:user-request'],
+  },
+  runtimeVerificationResults: verificationGateResults,
+  repairBudget,
+  agentHarnessRepairPolicy: harnessDefaultAuditPolicy,
+  createdAt,
+});
+assert.equal(harnessDefaultAuditChain.repair.action, 'repair-rerun', 'default harness repair policy audit must not consume repair behavior');
+assert.equal(harnessDefaultAuditChain.audit.outcome, 'repair-requested');
+assert.equal(harnessDefaultAuditChain.audit.repairBudget.maxAttempts, 2, 'default audit-only policy must not tighten max attempts');
+assert.equal(harnessDefaultAuditChain.audit.repairBudget.remainingAttempts, 1, 'default audit-only policy must not tighten remaining attempts');
+assert.ok(harnessDefaultAuditChain.audit.relatedRefs.includes('agent-policy-repair-kind:fail-closed'));
+assert.ok(harnessDefaultAuditChain.audit.relatedRefs.includes('agent-policy-repair-max-attempts:0'));
+assert.ok(harnessDefaultAuditChain.audit.relatedRefs.includes('agent-harness-contract:runtime://agent-harness/contracts/default-audit'));
+assert.ok(harnessDefaultAuditChain.audit.relatedRefs.includes('agent-harness-trace:runtime://agent-harness/traces/default-audit'));
+assert.ok(harnessDefaultAuditChain.audit.sinkRefs.includes('agent-policy-repair:runtime://agent-harness/contracts/default-audit'));
+
+assert.equal(
+  agentHarnessRepairPolicyBridgeFromRuntimeState({
+    harnessProfileId: 'debug-repair',
+    agentHarnessRepairPolicyDisabled: true,
+    agentHarness: {
+      contractRef: 'runtime://agent-harness/contracts/disabled',
+      traceRef: 'runtime://agent-harness/traces/disabled',
+      contract: {
+        schemaVersion: 'sciforge.agent-harness-contract.v1',
         repairContextPolicy: { kind: 'fail-closed', maxAttempts: 0 },
         verificationPolicy: { intensity: 'audit', requireCurrentRefs: true },
       },
     },
   }),
   undefined,
-  'runtime uiState bridge must stay default-off even when a harness contract is present',
+  'repair policy disabled kill switch must suppress default audit projection',
 );
+assert.equal(
+  agentHarnessRepairPolicyBridgeFromRuntimeState({
+    harnessProfileId: 'debug-repair',
+    agentHarnessRepairPolicy: 'off',
+    agentHarness: {
+      contractRef: 'runtime://agent-harness/contracts/off',
+      traceRef: 'runtime://agent-harness/traces/off',
+      contract: {
+        schemaVersion: 'sciforge.agent-harness-contract.v1',
+        repairContextPolicy: { kind: 'fail-closed', maxAttempts: 0 },
+        verificationPolicy: { intensity: 'audit', requireCurrentRefs: true },
+      },
+    },
+  }),
+  undefined,
+  'repair policy off kill switch must suppress default audit projection',
+);
+assert.equal(
+  agentHarnessRepairPolicyBridgeFromRuntimeState({
+    harnessProfileId: 'debug-repair',
+    agentHarnessRepairPolicyAuditEnabled: false,
+    agentHarness: {
+      contractRef: 'runtime://agent-harness/contracts/audit-disabled',
+      traceRef: 'runtime://agent-harness/traces/audit-disabled',
+      contract: {
+        schemaVersion: 'sciforge.agent-harness-contract.v1',
+        repairContextPolicy: { kind: 'fail-closed', maxAttempts: 0 },
+        verificationPolicy: { intensity: 'audit', requireCurrentRefs: true },
+      },
+    },
+  }),
+  undefined,
+  'repair policy audit enabled=false kill switch must suppress default audit projection',
+);
+
+const harnessHandoffAuditPolicy = agentHarnessRepairPolicyBridgeFromRuntimeState({
+  agentHarnessHandoff: {
+    schemaVersion: 'sciforge.agent-harness-handoff.v1',
+    harnessProfileId: 'debug-repair',
+    harnessContractRef: 'runtime://agent-harness/contracts/handoff-default-audit',
+    harnessTraceRef: 'runtime://agent-harness/traces/handoff-default-audit',
+    repairContextPolicy: { kind: 'repair-rerun', maxAttempts: 1 },
+  },
+});
+assert.ok(harnessHandoffAuditPolicy, 'canonical handoff repair policy should project by default for audit');
+assert.equal(harnessHandoffAuditPolicy.consume, false);
+const harnessHandoffAuditChain = createValidationRepairAuditChain({
+  chainId: 'agent-harness-repair-handoff-default-audit',
+  subject: {
+    kind: 'verification-gate',
+    id: 'agent-harness-repair-handoff-default-audit',
+    capabilityId: 'sciforge.runtime-verification-gate',
+    artifactRefs: [],
+    currentRefs: ['current:user-request'],
+  },
+  runtimeVerificationResults: verificationGateResults,
+  repairBudget,
+  agentHarnessRepairPolicy: harnessHandoffAuditPolicy,
+  createdAt,
+});
+assert.equal(harnessHandoffAuditChain.repair.action, 'repair-rerun');
+assert.equal(harnessHandoffAuditChain.audit.repairBudget.maxAttempts, 2);
+assert.ok(harnessHandoffAuditChain.audit.relatedRefs.includes('agent-policy-repair-max-attempts:1'));
+assert.ok(harnessHandoffAuditChain.audit.relatedRefs.includes('agent-harness-contract:runtime://agent-harness/contracts/handoff-default-audit'));
+assert.ok(harnessHandoffAuditChain.audit.sinkRefs.includes('agent-policy-repair:runtime://agent-harness/contracts/handoff-default-audit'));
 
 const harnessOptInChain = createValidationRepairAuditChain({
   chainId: 'agent-harness-repair-opt-in',
@@ -311,6 +436,7 @@ const harnessOptInChain = createValidationRepairAuditChain({
     profileId: 'debug-repair',
     source: 'request.uiState.agentHarness.contract',
     contract: {
+      schemaVersion: 'sciforge.agent-harness-contract.v1',
       repairContextPolicy: { kind: 'fail-closed', maxAttempts: 0 },
       verificationPolicy: {
         intensity: 'audit',
@@ -344,6 +470,7 @@ const harnessLooseRuntimePolicy = agentHarnessRepairPolicyBridgeFromRuntimeState
       traceRef: 'runtime://agent-harness/traces/loose-opt-in',
     },
     contract: {
+      schemaVersion: 'sciforge.agent-harness-contract.v1',
       repairContextPolicy: { kind: 'repair-rerun', maxAttempts: 99 },
       verificationPolicy: {
         intensity: 'audit',

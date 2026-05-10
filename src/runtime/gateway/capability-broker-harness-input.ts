@@ -39,7 +39,8 @@ const TOOL_BUDGET_NUMBER_FIELDS = [
 
 export function capabilityBrokerHarnessInputProjectionForRequest(request: GatewayRequest): CapabilityBrokerHarnessInputProjection {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
-  if (!capabilityBrokerHarnessInputEnabled(uiState)) {
+  const enablement = capabilityBrokerHarnessInputEnablement(uiState);
+  if (!enablement.enabled) {
     return {
       enabled: false,
       skillHints: [],
@@ -60,7 +61,7 @@ export function capabilityBrokerHarnessInputProjectionForRequest(request: Gatewa
   let profileId: string | undefined;
   const ignoredLegacySources = ignoredLegacyBrokerInputSources(uiState);
 
-  for (const source of harnessInputSources(uiState)) {
+  for (const source of harnessInputSources(uiState, { canonicalOnly: enablement.canonicalOnly })) {
     const contract = harnessContractFromSource(source.value);
     const capabilityPolicy = isRecord(contract?.capabilityPolicy)
       ? contract.capabilityPolicy
@@ -159,6 +160,7 @@ export function capabilityBrokerHarnessInputProjectionForRequest(request: Gatewa
       schemaVersion: 'sciforge.agentserver.capability-broker-harness-input-audit.v1',
       status: consumedAny ? 'consumed' : 'enabled-no-input',
       source: 'request.uiState.agentHarness',
+      enablement: enablement.mode,
       contractRef,
       traceRef,
       profileId,
@@ -175,6 +177,11 @@ export function capabilityBrokerHarnessInputProjectionForRequest(request: Gatewa
       sources: sourceAudits,
     },
   };
+}
+
+export function capabilityBrokerHarnessInputExplicitlyDisabledForRequest(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  return capabilityBrokerHarnessInputExplicitlyDisabled(uiState);
 }
 
 export function mergeCapabilityBrokerToolBudgets(
@@ -223,7 +230,48 @@ export function mergeCapabilityBrokerAvailableProviders(
   return merged.length ? merged : undefined;
 }
 
-function capabilityBrokerHarnessInputEnabled(uiState: Record<string, unknown>) {
+function capabilityBrokerHarnessInputEnablement(uiState: Record<string, unknown>) {
+  const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : {};
+  const harness = isRecord(uiState.harness) ? uiState.harness : {};
+  const harnessInput = isRecord(uiState.harnessInput) ? uiState.harnessInput : {};
+  const agentHarnessInput = isRecord(uiState.agentHarnessInput) ? uiState.agentHarnessInput : {};
+  const flags = [
+    uiState.agentHarnessCapabilityBrokerEnabled,
+    uiState.agentHarnessCapabilityBrokerInputEnabled,
+    uiState.agentHarnessConsumeCapabilityBroker,
+    uiState.agentHarnessConsumeCapabilityBrokerInput,
+    harnessInput.enabled,
+    harnessInput.capabilityBrokerEnabled,
+    harnessInput.capabilityBrokerInputEnabled,
+    harnessInput.consumeCapabilityBroker,
+    harnessInput.consumeCapabilityBrokerInput,
+    agentHarnessInput.enabled,
+    agentHarnessInput.capabilityBrokerEnabled,
+    agentHarnessInput.capabilityBrokerInputEnabled,
+    agentHarnessInput.consumeCapabilityBroker,
+    agentHarnessInput.consumeCapabilityBrokerInput,
+    agentHarness.capabilityBrokerEnabled,
+    agentHarness.capabilityBrokerInputEnabled,
+    agentHarness.consumeCapabilityBroker,
+    agentHarness.consumeCapabilityBrokerInput,
+    harness.capabilityBrokerEnabled,
+    harness.capabilityBrokerInputEnabled,
+    harness.consumeCapabilityBroker,
+    harness.consumeCapabilityBrokerInput,
+  ];
+  if (flags.some(isDisabledFlag)) {
+    return { enabled: false, canonicalOnly: false, mode: 'explicit-disabled' };
+  }
+  if (flags.some(isEnabledFlag)) {
+    return { enabled: true, canonicalOnly: false, mode: 'explicit-enabled' };
+  }
+  if (hasCanonicalHarnessBrokerInput(uiState)) {
+    return { enabled: true, canonicalOnly: true, mode: 'default-canonical' };
+  }
+  return { enabled: false, canonicalOnly: false, mode: 'not-enabled' };
+}
+
+function capabilityBrokerHarnessInputExplicitlyDisabled(uiState: Record<string, unknown>) {
   const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : {};
   const harness = isRecord(uiState.harness) ? uiState.harness : {};
   const harnessInput = isRecord(uiState.harnessInput) ? uiState.harnessInput : {};
@@ -251,18 +299,41 @@ function capabilityBrokerHarnessInputEnabled(uiState: Record<string, unknown>) {
     harness.capabilityBrokerInputEnabled,
     harness.consumeCapabilityBroker,
     harness.consumeCapabilityBrokerInput,
-  ].some(isEnabledFlag);
+  ].some(isDisabledFlag);
 }
 
-function harnessInputSources(uiState: Record<string, unknown>): HarnessInputSource[] {
+function hasCanonicalHarnessBrokerInput(uiState: Record<string, unknown>) {
+  const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : {};
+  const agentHarnessContract = isRecord(agentHarness.contract) ? agentHarness.contract : undefined;
+  const handoff = isRecord(uiState.agentHarnessHandoff) ? uiState.agentHarnessHandoff : undefined;
+  return isCanonicalAgentHarnessContract(agentHarnessContract) || isCanonicalAgentHarnessHandoff(handoff);
+}
+
+function harnessInputSources(
+  uiState: Record<string, unknown>,
+  options: { canonicalOnly?: boolean } = {},
+): HarnessInputSource[] {
   const sources: HarnessInputSource[] = [];
   const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : undefined;
-  if (isRecord(agentHarness?.contract)) sources.push({ source: 'request.uiState.agentHarness.contract', value: agentHarness });
+  const agentHarnessContract = isRecord(agentHarness?.contract) ? agentHarness.contract : undefined;
+  if (agentHarness && agentHarnessContract && (!options.canonicalOnly || isCanonicalAgentHarnessContract(agentHarnessContract))) {
+    sources.push({ source: 'request.uiState.agentHarness.contract', value: agentHarness });
+  }
   const harnessContract = isRecord(uiState.harnessContract) ? uiState.harnessContract : undefined;
-  if (harnessContract) sources.push({ source: 'request.uiState.harnessContract', value: harnessContract });
+  if (harnessContract && !options.canonicalOnly) sources.push({ source: 'request.uiState.harnessContract', value: harnessContract });
   const handoff = isRecord(uiState.agentHarnessHandoff) ? uiState.agentHarnessHandoff : undefined;
-  if (handoff) sources.push({ source: 'request.uiState.agentHarnessHandoff', value: handoff });
+  if (handoff && (!options.canonicalOnly || isCanonicalAgentHarnessHandoff(handoff))) {
+    sources.push({ source: 'request.uiState.agentHarnessHandoff', value: handoff });
+  }
   return sources;
+}
+
+function isCanonicalAgentHarnessContract(value: Record<string, unknown> | undefined) {
+  return stringField(value?.schemaVersion) === 'sciforge.agent-harness-contract.v1';
+}
+
+function isCanonicalAgentHarnessHandoff(value: Record<string, unknown> | undefined) {
+  return stringField(value?.schemaVersion) === 'sciforge.agent-harness-handoff.v1';
 }
 
 function harnessContractFromSource(source: Record<string, unknown>) {
@@ -604,4 +675,8 @@ function booleanField(value: unknown) {
 
 function isEnabledFlag(value: unknown) {
   return value === true || ['1', 'true', 'on', 'enabled'].includes(String(value).trim().toLowerCase());
+}
+
+function isDisabledFlag(value: unknown) {
+  return value === false || ['0', 'false', 'no', 'off', 'disabled', 'audit-disabled', 'skip'].includes(String(value).trim().toLowerCase());
 }

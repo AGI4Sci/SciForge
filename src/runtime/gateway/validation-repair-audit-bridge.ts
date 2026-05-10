@@ -56,6 +56,7 @@ export interface ValidationRepairAuditChain {
 
 export interface AgentHarnessRepairPolicyBridgeInput {
   enabled?: boolean;
+  consume?: boolean;
   contract?: unknown;
   contractRef?: string;
   traceRef?: string;
@@ -74,6 +75,7 @@ interface AgentHarnessRepairPolicyProjection {
   requireCitations?: boolean;
   requireCurrentRefs?: boolean;
   requireArtifactRefs?: boolean;
+  consume: boolean;
   auditRefs: string[];
   sinkRefs: string[];
   forceFailClosed: boolean;
@@ -179,25 +181,70 @@ export function agentHarnessRepairPolicyBridgeFromRuntimeState(value: unknown): 
     : isRecord(value.harness)
       ? value.harness
       : {};
-  const enabled = [
+  const handoff = isRecord(value.agentHarnessHandoff)
+    ? value.agentHarnessHandoff
+    : isRecord(agentHarness.agentHarnessHandoff)
+      ? agentHarness.agentHarnessHandoff
+      : {};
+  const disabled = [
+    value.agentHarnessRepairPolicyDisabled,
+    value.agentHarnessRepairPolicyAuditDisabled,
+    value.agentHarnessRepairPolicySkip,
+    value.agentHarnessSkipRepairPolicy,
+    value.agentHarnessRepairPolicyDisable,
+    value.agentHarnessDisableRepairPolicy,
+    agentHarness.repairPolicyDisabled,
+    agentHarness.repairPolicyAuditDisabled,
+    agentHarness.repairPolicySkip,
+    agentHarness.skipRepairPolicy,
+    agentHarness.repairPolicyDisable,
+    agentHarness.disableRepairPolicy,
+  ].some(isEnabledFlag) || [
+    value.agentHarnessRepairPolicy,
+    value.agentHarnessRepairPolicyAudit,
+    value.agentHarnessRepairPolicyAuditEnabled,
+    value.agentHarnessRepairPolicyEnabled,
+    agentHarness.repairPolicy,
+    agentHarness.repairPolicyAudit,
+    agentHarness.repairPolicyAuditEnabled,
+    agentHarness.repairPolicyEnabled,
+  ].some(isDisabledFlag);
+  if (disabled) return undefined;
+  const consume = [
+    value.agentHarnessRepairPolicy,
     value.agentHarnessRepairPolicyEnabled,
     value.agentHarnessConsumeRepairPolicy,
     value.agentHarnessValidationRepairPolicyEnabled,
+    agentHarness.repairPolicy,
     agentHarness.repairPolicyEnabled,
     agentHarness.consumeRepairPolicy,
     agentHarness.validationRepairPolicyEnabled,
   ].some(isEnabledFlag);
-  if (!enabled) return undefined;
-  const contract = isRecord(agentHarness.contract) ? agentHarness.contract : undefined;
+  const contract = canonicalAgentHarnessRepairPolicyContract(agentHarness, handoff);
   if (!contract) return undefined;
   const summary = isRecord(agentHarness.summary) ? agentHarness.summary : {};
+  const handoffSummary = isRecord(handoff.summary) ? handoff.summary : {};
   return {
     enabled: true,
+    consume,
     contract,
-    contractRef: stringField(agentHarness.contractRef) ?? stringField(summary.contractRef),
-    traceRef: stringField(agentHarness.traceRef) ?? stringField(summary.traceRef),
-    profileId: stringField(agentHarness.profileId) ?? stringField(value.harnessProfileId),
-    source: 'request.uiState.agentHarness.contract',
+    contractRef: stringField(agentHarness.contractRef)
+      ?? stringField(summary.contractRef)
+      ?? stringField(handoff.harnessContractRef)
+      ?? stringField(handoff.contractRef)
+      ?? stringField(handoffSummary.contractRef),
+    traceRef: stringField(agentHarness.traceRef)
+      ?? stringField(summary.traceRef)
+      ?? stringField(handoff.harnessTraceRef)
+      ?? stringField(handoff.traceRef)
+      ?? stringField(handoffSummary.traceRef),
+    profileId: stringField(agentHarness.profileId)
+      ?? stringField(value.harnessProfileId)
+      ?? stringField(handoff.harnessProfileId)
+      ?? stringField(handoffSummary.profileId),
+    source: isCanonicalAgentHarnessContract(agentHarness.contract)
+      ? 'request.uiState.agentHarness.contract'
+      : 'request.uiState.agentHarnessHandoff',
   };
 }
 
@@ -333,6 +380,7 @@ function projectAgentHarnessRepairPolicy(
     requireCitations,
     requireCurrentRefs,
     requireArtifactRefs,
+    consume: input.consume ?? true,
     auditRefs,
     sinkRefs,
     forceFailClosed: repairKind === 'none' || repairKind === 'fail-closed',
@@ -343,6 +391,7 @@ function repairBudgetWithAgentHarnessPolicy(
   budget: RepairBudgetSnapshot,
   projection: AgentHarnessRepairPolicyProjection | undefined,
 ): RepairBudgetSnapshot {
+  if (!projection?.consume) return budget;
   const maxAttempts = projection?.maxAttempts;
   if (typeof maxAttempts !== 'number') return budget;
   const tightenedMaxAttempts = Math.min(budget.maxAttempts, maxAttempts);
@@ -360,16 +409,18 @@ function repairDecisionWithAgentHarnessPolicy(
 ): RepairDecision {
   if (!projection) return repair;
   const relatedRefs = uniqueStrings([...repair.relatedRefs, ...projection.auditRefs]);
+  if (!projection.consume) {
+    return {
+      ...repair,
+      relatedRefs,
+    };
+  }
   const recoverActions = uniqueStrings([
     ...repair.recoverActions,
     projection.source ? `respect ${projection.source} before retrying repair` : undefined,
   ]);
   if (!projection.forceFailClosed || validation.status === 'pass' || repair.action === 'none') {
-    return {
-      ...repair,
-      relatedRefs,
-      recoverActions,
-    };
+    return { ...repair, relatedRefs, recoverActions };
   }
   return {
     ...repair,
@@ -427,8 +478,41 @@ function integerField(value: unknown) {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
+function canonicalAgentHarnessRepairPolicyContract(
+  agentHarness: Record<string, unknown>,
+  handoff: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (isCanonicalAgentHarnessContract(agentHarness.contract)) return agentHarness.contract;
+  if (isCanonicalAgentHarnessHandoff(handoff) && isRecord(handoff.repairContextPolicy)) {
+    return {
+      schemaVersion: 'sciforge.agent-harness-contract.v1',
+      profileId: stringField(handoff.harnessProfileId),
+      contractRef: stringField(handoff.harnessContractRef) ?? stringField(handoff.contractRef),
+      traceRef: stringField(handoff.harnessTraceRef) ?? stringField(handoff.traceRef),
+      repairContextPolicy: handoff.repairContextPolicy,
+    };
+  }
+  return undefined;
+}
+
+function isCanonicalAgentHarnessContract(value: unknown): value is Record<string, unknown> {
+  return isRecord(value)
+    && value.schemaVersion === 'sciforge.agent-harness-contract.v1'
+    && isRecord(value.repairContextPolicy);
+}
+
+function isCanonicalAgentHarnessHandoff(value: unknown): value is Record<string, unknown> {
+  return isRecord(value)
+    && value.schemaVersion === 'sciforge.agent-harness-handoff.v1'
+    && isRecord(value.repairContextPolicy);
+}
+
 function isEnabledFlag(value: unknown) {
   return value === true || ['1', 'true', 'on', 'enabled'].includes(String(value).trim().toLowerCase());
+}
+
+function isDisabledFlag(value: unknown) {
+  return value === false || ['0', 'false', 'off', 'disabled'].includes(String(value).trim().toLowerCase());
 }
 
 function uniqueStrings(values: Array<string | undefined>) {
