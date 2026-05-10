@@ -216,14 +216,48 @@ const harnessOptInBrief = buildCapabilityBrokerBriefForAgentServer({
   ...harnessContractRequest,
   uiState: {
     ...harnessContractRequest.uiState,
-    agentHarnessCapabilityBrokerEnabled: true,
+    harnessInput: { enabled: true },
+    blockedCapabilities: ['view.report'],
+    providerAvailability: [{
+      id: 'sciforge.core.view.report',
+      available: false,
+      reason: 'LEGACY_DIRECT_UI_SENTINEL',
+    }],
+    toolBudget: {
+      maxProviders: 0,
+      exhaustedPolicy: 'LEGACY_DIRECT_UI_SENTINEL',
+    },
+    harnessSkillHints: [{
+      id: 'runtime.workspace-write',
+      source: 'legacy-direct-ui',
+      reason: 'LEGACY_HINT_SENTINEL',
+    }],
+    capabilityPolicy: {
+      blockedCapabilities: ['view.report'],
+      providerAvailability: [{
+        id: 'sciforge.core.view.report',
+        available: false,
+        reason: 'LEGACY_DIRECT_UI_SENTINEL',
+      }],
+      toolBudget: {
+        maxProviders: 0,
+        exhaustedPolicy: 'LEGACY_DIRECT_UI_SENTINEL',
+      },
+      skillHints: [{
+        id: 'runtime.workspace-write',
+        source: 'legacy-direct-ui',
+        reason: 'LEGACY_HINT_SENTINEL',
+      }],
+    },
   },
 });
 const harnessOptInSummary = harnessOptInBrief.inputSummary as Record<string, unknown>;
 const harnessOptInAudit = harnessOptInBrief.harnessInputAudit as Record<string, unknown>;
 const harnessOptInAuditConsumed = harnessOptInAudit.consumed as Record<string, unknown>;
 const harnessOptInSources = harnessOptInAudit.sources as Array<Record<string, unknown>>;
+const harnessOptInIgnoredLegacySources = harnessOptInAudit.ignoredLegacySources as Array<Record<string, unknown>>;
 const harnessOptInBrokerAudit = harnessOptInBrief.audit as Array<Record<string, unknown>>;
+const harnessOptInText = JSON.stringify(harnessOptInBrief);
 
 assert.equal(harnessOptInAudit.schemaVersion, 'sciforge.agentserver.capability-broker-harness-input-audit.v1');
 assert.equal(harnessOptInAudit.status, 'consumed');
@@ -237,6 +271,16 @@ assert.deepEqual(harnessOptInAuditConsumed.toolBudgetKeys, ['exhaustedPolicy', '
 assert.deepEqual(harnessOptInAuditConsumed.verificationPolicyKeys, ['mode', 'required', 'riskLevel', 'selectedVerifierIds']);
 assert.equal(harnessOptInAuditConsumed.verificationPolicyMode, 'hybrid');
 assert.equal(harnessOptInSources[0]?.source, 'request.uiState.agentHarness.contract');
+assert.deepEqual(
+  harnessOptInIgnoredLegacySources.map((entry) => entry.source),
+  [
+    'request.uiState.capabilityPolicy',
+    'request.uiState.toolBudget',
+    'request.uiState.harnessSkillHints',
+    'request.uiState.blockedCapabilities',
+    'request.uiState.providerAvailability',
+  ],
+);
 assert.equal(harnessOptInSummary.harnessSkillHints, 2);
 assert.equal(harnessOptInSummary.blockedCapabilities, 1);
 assert.equal(harnessOptInSummary.availableProviders, 2);
@@ -254,13 +298,33 @@ assert.ok(
   JSON.stringify(harnessOptInBrokerAudit.find((entry) => entry.id === 'view.report')).includes('provider available: sciforge.core.view.report'),
   'opt-in harness provider availability should reach compact broker audit',
 );
+assert.equal(
+  harnessOptInBrief.excluded.some((entry) => entry.id === 'view.report'),
+  false,
+  'legacy direct UI blockedCapabilities must not exclude contract-selected view.report',
+);
 assert.ok(
   JSON.stringify(harnessOptInBrief.briefs).includes('skill hint from agent-harness-contract'),
   'opt-in harness candidates should reach compact selected broker signals',
 );
 assert.ok(
-  JSON.stringify(harnessOptInBrief).includes('maxProviders=2'),
+  harnessOptInText.includes('maxProviders=2'),
   'opt-in harness toolBudget should reach compact broker budget signals',
+);
+assert.equal(
+  harnessOptInText.includes('maxProviders=0'),
+  false,
+  'legacy direct UI toolBudget must not reach broker budget signals',
+);
+assert.equal(
+  harnessOptInText.includes('LEGACY_DIRECT_UI_SENTINEL'),
+  false,
+  'legacy direct UI provider/budget sentinels must not reach broker output',
+);
+assert.equal(
+  harnessOptInText.includes('LEGACY_HINT_SENTINEL'),
+  false,
+  'legacy direct UI hint sentinel must not reach broker output',
 );
 
 console.log('[ok] capability broker carries harness input hints and budgeted compact candidate briefs');

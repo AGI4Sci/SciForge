@@ -98,6 +98,8 @@ Todo：
 
 2026-05-10：T130 broker harness input 第二小切片完成。opt-in projection 继续消费 harness provider availability 与 verification policy，并把 provider count、verification policy keys/mode 写入 audit；`context-envelope` 只做 broker input 接线，默认关闭路径和 lazy schema/examples 行为保持不变。
 
+2026-05-10：T128 broker harness input contract-only 隔离切片完成。`harnessInput.enabled` / 既有 capability-broker opt-in 打开后，broker policy/hint/block/budget/provider availability 只消费 harness contract/handoff projection；legacy direct UI broker 输入只进入 `harnessInputAudit.ignoredLegacySources`，不影响 capability 选择。
+
 2026-05-10：T130/T127 repair loop opt-in bridge 首片完成。`createValidationRepairAuditChain()` 在 opt-in `agentHarnessRepairPolicy` 下可从 `uiState.agentHarness.contract` 消费 repair/verification 摘要，只收紧 repair budget / fail-closed 决策，不放宽既有策略，并把 contract/trace/profile/verification 摘要写入 audit refs/sink refs；payload validation 与 runtime verification gate 真实路径已接入。
 
 2026-05-10：T130 progress plan 默认投影小切片完成。`requestWithAgentHarnessShadow()` 现在默认把 harness `progressPlan` 投影为结构化 `process-progress` workspace event，并写入 `uiState.agentHarnessProgressPlan` audit；保留 `agentHarnessProgressPlanDisabled` / `agentHarnessSkipProgressPlan` / `agentHarnessDisableProgressPlan` 显式 kill switch。该切片只改变进度事件/audit，不改变 context、broker、verification 或 repair 决策。

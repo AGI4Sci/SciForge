@@ -58,6 +58,7 @@ export function capabilityBrokerHarnessInputProjectionForRequest(request: Gatewa
   let contractRef: string | undefined;
   let traceRef: string | undefined;
   let profileId: string | undefined;
+  const ignoredLegacySources = ignoredLegacyBrokerInputSources(uiState);
 
   for (const source of harnessInputSources(uiState)) {
     const contract = harnessContractFromSource(source.value);
@@ -170,6 +171,7 @@ export function capabilityBrokerHarnessInputProjectionForRequest(request: Gatewa
         verificationPolicyKeys,
         verificationPolicyMode: verificationPolicy?.mode,
       },
+      ignoredLegacySources: ignoredLegacySources.length ? ignoredLegacySources : undefined,
       sources: sourceAudits,
     },
   };
@@ -224,11 +226,23 @@ export function mergeCapabilityBrokerAvailableProviders(
 function capabilityBrokerHarnessInputEnabled(uiState: Record<string, unknown>) {
   const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : {};
   const harness = isRecord(uiState.harness) ? uiState.harness : {};
+  const harnessInput = isRecord(uiState.harnessInput) ? uiState.harnessInput : {};
+  const agentHarnessInput = isRecord(uiState.agentHarnessInput) ? uiState.agentHarnessInput : {};
   return [
     uiState.agentHarnessCapabilityBrokerEnabled,
     uiState.agentHarnessCapabilityBrokerInputEnabled,
     uiState.agentHarnessConsumeCapabilityBroker,
     uiState.agentHarnessConsumeCapabilityBrokerInput,
+    harnessInput.enabled,
+    harnessInput.capabilityBrokerEnabled,
+    harnessInput.capabilityBrokerInputEnabled,
+    harnessInput.consumeCapabilityBroker,
+    harnessInput.consumeCapabilityBrokerInput,
+    agentHarnessInput.enabled,
+    agentHarnessInput.capabilityBrokerEnabled,
+    agentHarnessInput.capabilityBrokerInputEnabled,
+    agentHarnessInput.consumeCapabilityBroker,
+    agentHarnessInput.consumeCapabilityBrokerInput,
     agentHarness.capabilityBrokerEnabled,
     agentHarness.capabilityBrokerInputEnabled,
     agentHarness.consumeCapabilityBroker,
@@ -243,7 +257,7 @@ function capabilityBrokerHarnessInputEnabled(uiState: Record<string, unknown>) {
 function harnessInputSources(uiState: Record<string, unknown>): HarnessInputSource[] {
   const sources: HarnessInputSource[] = [];
   const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : undefined;
-  if (agentHarness) sources.push({ source: 'request.uiState.agentHarness.contract', value: agentHarness });
+  if (isRecord(agentHarness?.contract)) sources.push({ source: 'request.uiState.agentHarness.contract', value: agentHarness });
   const harnessContract = isRecord(uiState.harnessContract) ? uiState.harnessContract : undefined;
   if (harnessContract) sources.push({ source: 'request.uiState.harnessContract', value: harnessContract });
   const handoff = isRecord(uiState.agentHarnessHandoff) ? uiState.agentHarnessHandoff : undefined;
@@ -253,6 +267,74 @@ function harnessInputSources(uiState: Record<string, unknown>): HarnessInputSour
 
 function harnessContractFromSource(source: Record<string, unknown>) {
   return isRecord(source.contract) ? source.contract : source;
+}
+
+function ignoredLegacyBrokerInputSources(uiState: Record<string, unknown>) {
+  const ignored: Array<Record<string, unknown>> = [];
+  const capabilityPolicy = isRecord(uiState.capabilityPolicy) ? uiState.capabilityPolicy : undefined;
+  if (capabilityPolicy) ignored.push(ignoredLegacyPolicySource('request.uiState.capabilityPolicy', capabilityPolicy));
+  const capabilityBrokerPolicy = isRecord(uiState.capabilityBrokerPolicy) ? uiState.capabilityBrokerPolicy : undefined;
+  if (capabilityBrokerPolicy) ignored.push(ignoredLegacyPolicySource('request.uiState.capabilityBrokerPolicy', capabilityBrokerPolicy));
+  const capabilityBudget = isRecord(uiState.capabilityBudget) ? uiState.capabilityBudget : undefined;
+  if (isRecord(capabilityBudget?.toolBudget)) ignored.push(ignoredLegacyToolBudgetSource('request.uiState.capabilityBudget.toolBudget', capabilityBudget.toolBudget));
+  if (isRecord(uiState.toolBudget)) ignored.push(ignoredLegacyToolBudgetSource('request.uiState.toolBudget', uiState.toolBudget));
+  if (isRecord(uiState.verificationPolicy)) ignored.push({
+    source: 'request.uiState.verificationPolicy',
+    keys: Object.keys(uiState.verificationPolicy).sort().slice(0, 12),
+  });
+  ignored.push(...ignoredLegacyListSources(uiState, [
+    ['request.uiState.skillHints', 'skillHints'],
+    ['request.uiState.harnessSkillHints', 'harnessSkillHints'],
+    ['request.uiState.selectedSkillHints', 'selectedSkillHints'],
+    ['request.uiState.blockedCapabilities', 'blockedCapabilities'],
+    ['request.uiState.blockedCapabilityIds', 'blockedCapabilityIds'],
+    ['request.uiState.providerAvailability', 'providerAvailability'],
+    ['request.uiState.availableProviders', 'availableProviders'],
+    ['request.uiState.preferredCapabilityIds', 'preferredCapabilityIds'],
+    ['request.uiState.expectedArtifactTypes', 'expectedArtifactTypes'],
+    ['request.uiState.selectedComponentIds', 'selectedComponentIds'],
+    ['request.uiState.selectedToolIds', 'selectedToolIds'],
+    ['request.uiState.selectedSenseIds', 'selectedSenseIds'],
+    ['request.uiState.selectedActionIds', 'selectedActionIds'],
+    ['request.uiState.selectedVerifierIds', 'selectedVerifierIds'],
+  ]));
+  return ignored.filter((entry) => Object.keys(entry).length > 1);
+}
+
+function ignoredLegacyPolicySource(source: string, policy: Record<string, unknown>) {
+  return {
+    source,
+    keys: Object.keys(policy).sort().slice(0, 12),
+    skillHints: skillHintsFromValue(policy.skillHints, source).length + skillHintsFromValue(policy.hints, source).length,
+    blockedCapabilities: uniqueStrings([
+      ...toStringList(policy.blockedCapabilities),
+      ...toStringList(policy.blockedCapabilityIds),
+    ]).length,
+    preferredCapabilityIds: toStringList(policy.preferredCapabilityIds).length,
+    providerAvailability: providerAvailabilityFromValue(policy.providerAvailability).length
+      + providerAvailabilityFromValue(policy.availableProviders).length,
+    toolBudgetKeys: definedToolBudgetKeys(toolBudgetFromSources(policy.toolBudget, policy.capabilityBudget)),
+    verificationPolicyKeys: definedVerificationPolicyKeys(verificationPolicyFromSources(policy.verificationPolicy)),
+  };
+}
+
+function ignoredLegacyToolBudgetSource(source: string, budget: Record<string, unknown>) {
+  return {
+    source,
+    keys: Object.keys(budget).sort().slice(0, 12),
+    toolBudgetKeys: definedToolBudgetKeys(toolBudgetFromRecord(budget)),
+  };
+}
+
+function ignoredLegacyListSources(
+  uiState: Record<string, unknown>,
+  entries: Array<[source: string, key: string]>,
+) {
+  return entries.flatMap(([source, key]) => {
+    const value = uiState[key];
+    const count = Array.isArray(value) ? value.length : 0;
+    return count > 0 ? [{ source, count }] : [];
+  });
 }
 
 function candidateSkillHints(value: unknown, source: string): CapabilityBrokerSkillHint[] {

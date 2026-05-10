@@ -209,7 +209,8 @@ export async function buildCapabilityBrokerBriefForAgentServerWithFileDiscovery(
   options: { fileDiscovery?: CapabilityManifestRegistryFileDiscoveryInput } = {},
 ) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
-  const capabilityPolicy = brokerCapabilityPolicyForRequest(request);
+  const harnessInput = capabilityBrokerHarnessInputProjectionForRequest(request);
+  const capabilityPolicy = harnessInput.enabled ? {} : brokerCapabilityPolicyForRequest(request);
   const fileDiscovery = options.fileDiscovery ?? brokerManifestFileDiscoveryForRequest(request, uiState, capabilityPolicy);
   const registry = await loadCapabilityManifestRegistryWithFileDiscovery({ fileDiscovery });
   return buildCapabilityBrokerBriefForAgentServerFromRegistry(request, registry, { includeRegistryAudit: fileDiscovery?.enabled === true });
@@ -221,27 +222,44 @@ function buildCapabilityBrokerBriefForAgentServerFromRegistry(
   options: { includeRegistryAudit?: boolean } = {},
 ) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
-  const capabilityPolicy = brokerCapabilityPolicyForRequest(request);
   const harnessInput = capabilityBrokerHarnessInputProjectionForRequest(request);
+  const capabilityPolicy = harnessInput.enabled ? {} : brokerCapabilityPolicyForRequest(request);
   const verificationPolicy = mergeCapabilityBrokerVerificationPolicies(
-    brokerVerificationPolicyForRequest(request, capabilityPolicy),
+    harnessInput.enabled ? undefined : brokerVerificationPolicyForRequest(request, capabilityPolicy),
     harnessInput.verificationPolicy,
   );
   const skillHints = uniqueSkillHints([
-    ...brokerSkillHintsForRequest(request, capabilityPolicy),
+    ...(harnessInput.enabled ? [] : brokerSkillHintsForRequest(request, capabilityPolicy)),
     ...harnessInput.skillHints,
   ]).slice(0, 24);
   const blockedCapabilities = uniqueStrings([
-    ...brokerBlockedCapabilitiesForRequest(uiState, capabilityPolicy),
+    ...(harnessInput.enabled ? [] : brokerBlockedCapabilitiesForRequest(uiState, capabilityPolicy)),
     ...harnessInput.blockedCapabilities,
   ]);
   const toolBudget = mergeCapabilityBrokerToolBudgets(
-    brokerToolBudgetForRequest(uiState, capabilityPolicy),
+    harnessInput.enabled ? undefined : brokerToolBudgetForRequest(uiState, capabilityPolicy),
     harnessInput.toolBudget,
   );
   const preferredCapabilityIds = uniqueStrings([
-    ...preferredCapabilityIdsForRequest(request),
+    ...(harnessInput.enabled ? [] : preferredCapabilityIdsForRequest(request)),
     ...harnessInput.preferredCapabilityIds,
+  ]);
+  const brokerExpectedArtifactTypes = harnessInput.enabled
+    ? uniqueStrings(request.expectedArtifactTypes ?? [])
+    : expectedArtifactTypesForRequest(request);
+  const brokerSelectedComponentIds = harnessInput.enabled
+    ? uniqueStrings(request.selectedComponentIds ?? [])
+    : selectedComponentIdsForRequest(request);
+  const requiredTags = uniqueStrings([
+    request.skillDomain,
+    ...brokerExpectedArtifactTypes,
+    ...brokerSelectedComponentIds,
+    ...(request.selectedToolIds ?? []),
+    ...(harnessInput.enabled ? [] : toStringList(request.uiState?.selectedToolIds)),
+    ...(request.selectedSenseIds ?? []),
+    ...(harnessInput.enabled ? [] : toStringList(request.uiState?.selectedSenseIds)),
+    ...(request.selectedVerifierIds ?? []),
+    ...(harnessInput.enabled ? [] : toStringList(request.uiState?.selectedVerifierIds)),
   ]);
   const registry = new BrokerCapabilityManifestRegistry(loadedRegistry.manifests);
   const brokered = brokerCapabilities({
@@ -258,17 +276,7 @@ function buildCapabilityBrokerBriefForAgentServerFromRegistry(
       id: request.scenarioPackageRef?.id ?? request.skillDomain,
       preferredCapabilityIds,
       blockedCapabilityIds: blockedCapabilities,
-      requiredTags: uniqueStrings([
-        request.skillDomain,
-        ...expectedArtifactTypesForRequest(request),
-        ...selectedComponentIdsForRequest(request),
-        ...(request.selectedToolIds ?? []),
-        ...toStringList(request.uiState?.selectedToolIds),
-        ...(request.selectedSenseIds ?? []),
-        ...toStringList(request.uiState?.selectedSenseIds),
-        ...(request.selectedVerifierIds ?? []),
-        ...toStringList(request.uiState?.selectedVerifierIds),
-      ]),
+      requiredTags,
     },
     runtimePolicy: {
       topK: 8,
@@ -282,7 +290,7 @@ function buildCapabilityBrokerBriefForAgentServerFromRegistry(
       riskTolerance: request.riskLevel ?? verificationPolicy?.riskLevel ?? 'medium',
     },
     availableProviders: mergeCapabilityBrokerAvailableProviders(
-      brokerAvailableProvidersForRequest(uiState, capabilityPolicy),
+      harnessInput.enabled ? undefined : brokerAvailableProvidersForRequest(uiState, capabilityPolicy),
       harnessInput.availableProviders,
     ),
   }, registry);
