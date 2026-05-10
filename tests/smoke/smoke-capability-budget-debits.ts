@@ -21,6 +21,7 @@ import { genericLoopPayload } from '../../src/runtime/vision-sense/computer-use-
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
 import { agentVerifierRequestFixture } from '../../packages/verifiers/agent-rubric/fixture.js';
 import { createMockAgentVerifierProvider } from '../../packages/verifiers/agent-rubric/index.js';
+import { createHumanApprovalFixtureProvider } from '../../packages/verifiers/fixtures/human-approval.js';
 
 const debitLines: CapabilityBudgetDebitLine[] = [
   {
@@ -251,6 +252,38 @@ assert.deepEqual(agentRubricDebit.sinkRefs.auditRefs, agentRubricResult.auditRef
 assert.ok(agentRubricDebit.debitLines.some((line) => line.dimension === 'providers' && line.amount === 1));
 assert.ok(agentRubricDebit.debitLines.some((line) => line.dimension === 'costUnits' && line.amount === agentRubricResult.criterionScores.length));
 
+const humanApprovalVerifier = createHumanApprovalFixtureProvider();
+const humanApprovalResult = await humanApprovalVerifier.verify({
+  goal: 'Approve high-risk action output after reviewing refs.',
+  resultRefs: ['result:final-answer'],
+  artifactRefs: ['artifact:approval-summary'],
+  traceRefs: ['trace:run-001'],
+  verificationPolicy: {
+    required: true,
+    mode: 'human',
+    riskLevel: 'high',
+  },
+  decision: {
+    decision: 'accept',
+    decisionRef: 'human-approval:budget-debit-smoke',
+    approverRef: 'user:budget-debit-reviewer',
+    evidenceRefs: ['artifact:signed-approval'],
+  },
+});
+const humanApprovalDebit = humanApprovalResult.budgetDebits[0];
+assert.ok(humanApprovalDebit, 'human approval verifier should emit a budget debit record');
+assert.equal(humanApprovalDebit.contract, CAPABILITY_BUDGET_DEBIT_CONTRACT_ID);
+assert.equal(humanApprovalDebit.capabilityId, 'verifier.fixture.human-approval');
+assert.deepEqual(humanApprovalResult.budgetDebitRefs, [humanApprovalDebit.debitId]);
+assert.ok(humanApprovalDebit.subjectRefs.includes(humanApprovalResult.resultRef));
+assert.ok(humanApprovalDebit.subjectRefs.includes('result:final-answer'));
+assert.ok(humanApprovalDebit.subjectRefs.includes('artifact:approval-summary'));
+assert.ok(humanApprovalDebit.subjectRefs.includes('trace:run-001'));
+assert.ok(humanApprovalDebit.subjectRefs.includes('artifact:signed-approval'));
+assert.deepEqual(humanApprovalDebit.sinkRefs.auditRefs, humanApprovalResult.auditRefs);
+assert.ok(humanApprovalDebit.debitLines.some((line) => line.dimension === 'providers' && line.amount === 1));
+assert.ok(humanApprovalDebit.debitLines.some((line) => line.dimension === 'costUnits' && line.amount === 1));
+
 const agentServerWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-capability-budget-agentserver-'));
 const generatedTaskCode = String.raw`
 import json
@@ -397,7 +430,7 @@ try {
   await new Promise<void>((resolve) => agentServer.close(() => resolve()));
 }
 
-console.log('[ok] capability invocation budget debit record is contract-shaped, sink-addressable, and wired into literature.retrieval, Computer Use, observe provider invocation, agent rubric verifier, generated task, and AgentServer direct payload runtime output');
+console.log('[ok] capability invocation budget debit record is contract-shaped, sink-addressable, and wired into literature.retrieval, Computer Use, observe provider invocation, agent rubric verifier, human approval verifier, generated task, and AgentServer direct payload runtime output');
 
 function hasBudgetDebitRef(record: unknown, debitId: string) {
   return typeof record === 'object'

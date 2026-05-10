@@ -12,6 +12,9 @@
   "integrationLevel": "markdown-first",
   "entrypoint": {
     "type": "human-interaction",
+    "module": "./human-approval.js",
+    "symbol": "createHumanApprovalFixtureProvider",
+    "path": "packages/verifiers/fixtures/human-approval.ts",
     "notes": "由 UI/CLI 提供具体交互表面；provider contract 只规定事件到 VerificationResult 的映射。"
   },
   "requestContract": {
@@ -41,6 +44,9 @@
       "critique": "string?",
       "evidenceRefs": "string[]",
       "repairHints": "string[]",
+      "auditRefs": "string[]",
+      "budgetDebitRefs": "string[]",
+      "budgetDebits": "CapabilityBudgetDebit[]",
       "diagnostics": "object?"
     },
     "verdicts": ["pass", "fail", "uncertain", "needs-human"],
@@ -73,4 +79,3 @@
     }
   ]
 }
-
