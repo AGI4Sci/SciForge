@@ -108,8 +108,15 @@ const repairPayload = schemaValidationRepairPayload({
 assert.match(repairPayload.message, /needs repair/i);
 assert.equal(repairPayload.executionUnits[0].status, 'repair-needed');
 assert.equal(repairPayload.executionUnits.some((unit) => unit.status === 'done'), false, 'malformed payload must not be marked successful');
-assert.deepEqual(repairPayload.artifacts.map((artifact) => stringField(artifact, 'id')), ['claim-verdict-partial', 'figure-report-partial']);
-assert.ok(repairPayload.artifacts.every((artifact) => record(artifact.metadata, 'artifact.metadata').preservedFromMalformedPayload === true));
+const repairArtifactIds = repairPayload.artifacts.map((artifact) => stringField(artifact, 'id'));
+assert.deepEqual(repairArtifactIds, ['literature-runtime-result', 'claim-verdict-partial', 'figure-report-partial']);
+const runtimeDiagnosticArtifact = record(repairPayload.artifacts[0], 'repairPayload.artifacts[0]');
+assert.equal(stringField(runtimeDiagnosticArtifact, 'type'), 'runtime-diagnostic');
+assert.equal(record(runtimeDiagnosticArtifact.data, 'runtimeDiagnosticArtifact.data').status, 'repair-needed');
+assert.ok(
+  repairPayload.artifacts.slice(1).every((artifact) => record(artifact.metadata, 'artifact.metadata').preservedFromMalformedPayload === true),
+  'partial scientific artifacts should remain preserved for verifier refs',
+);
 assert.ok(repairPayload.objectReferences?.some((reference) => reference.ref === 'artifact:claim-verdict-partial'));
 assert.ok(repairPayload.objectReferences?.some((reference) => reference.ref === 'file:.sciforge/artifacts/partial-reproduced-figure.png'));
 const runtimeValidationFailure = record(record(repairPayload.executionUnits[0], 'repairPayload.executionUnits[0]').refs, 'repairPayload.executionUnits[0].refs').validationFailure;

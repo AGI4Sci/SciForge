@@ -1,0 +1,366 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "evidence-matrix",
+  "sourceRefs": [
+    {
+      "ref": "artifact:dataset-inventory-draft",
+      "role": "source",
+      "summary": "Worker C dataset inventory from PDFs, selected supplements, GEO, Nature, and GitHub."
+    },
+    {
+      "ref": "artifact:missing-data-report-draft",
+      "role": "source",
+      "summary": "Worker C missing data and unconfirmed item report."
+    }
+  ],
+  "rows": [
+    {
+      "id": "row-2020-c1-prdm9-h3k4me3",
+      "claimId": "C2020-1",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=102-133",
+          "role": "source",
+          "summary": "Paper reports de novo H3K4me3 peaks and DSB hotspot overlap/correlation."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2020/table-s3.xlsx",
+          "role": "table",
+          "summary": "Downloaded Supplementary Table S3 contains de novo H3K4me3 peak lists by stage."
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=509-547",
+          "role": "method",
+          "summary": "ChIP-seq processing, peak calling, de novo/common H3K4me3 classification, heatmaps, and statistics methods."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2020-gse132446",
+          "role": "data"
+        },
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2020-gse84689-spo11",
+          "role": "data"
+        },
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2020-gse61613-prdm9-affinity",
+          "role": "data"
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "artifact:missing-data-report-draft#missing-2020-source-code",
+          "role": "code",
+          "summary": "Original source code is request-only; reimplementation required."
+        }
+      ],
+      "verdict": "not-tested",
+      "rationale": "Primary and external datasets plus peak tables are located, but no data materialization or computational overlap/correlation check has been run in this pass."
+    },
+    {
+      "id": "row-2020-c2-stage-dynamics",
+      "claimId": "C2020-2",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=113-148",
+          "role": "source",
+          "summary": "Paper reports PRDM9-mediated H3K4me3 appears in leptotene, peaks in mid-zygotene, persists into pachytene, and nearly disappears later."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2020/table-s3.xlsx",
+          "role": "table",
+          "summary": "Stage-resolved de novo H3K4me3 peak tables can support a direct count check."
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=517-539",
+          "role": "method",
+          "summary": "Peak calling, bedGraph/bigWig normalization, and heatmap/profile procedures."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2020-gse132446",
+          "role": "data"
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "artifact:missing-data-report-draft#missing-2020-source-code",
+          "role": "code"
+        }
+      ],
+      "verdict": "not-tested",
+      "rationale": "The supplement provides countable peak tables, but this worker did not parse the tables into a reproduced stage-count figure."
+    },
+    {
+      "id": "row-2020-c3-dsb-fate",
+      "claimId": "C2020-3",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=20-31",
+          "role": "source",
+          "summary": "Abstract claims earlier formed DSBs occupy more open chromatin and are more competent to proceed to CO fate."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=253-281",
+          "role": "source",
+          "summary": "Results connect H3K4me3 width/density, PRDM9 binding, NDRs, and fate interpretation."
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=517-539",
+          "role": "method",
+          "summary": "Methods define H3K4me3 peak subtypes and profile calculations."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=491-502",
+          "role": "method",
+          "summary": "Methods define NDR detection from NOMe-seq GCH methylation."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2020-gse132446",
+          "role": "data"
+        },
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2020-gse84689-spo11",
+          "role": "data"
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "artifact:missing-data-report-draft#missing-2020-source-code",
+          "role": "code"
+        }
+      ],
+      "verdict": "insufficient-evidence",
+      "rationale": "The paper provides a mechanistic/fate interpretation, but this pass has not checked CO/NCO proxy data, genetic-map linkage, or NOMe accessibility statistics. This is a data/analysis gap, not a contradiction."
+    },
+    {
+      "id": "row-2020-c4-open-chromatin",
+      "claimId": "C2020-4",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=300-356",
+          "role": "source",
+          "summary": "Paper section states open chromatin states contribute to DSB fate decision, with NDR and GCH accessibility analyses."
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=447-502",
+          "role": "method",
+          "summary": "NOMe-seq library prep, Bismark processing, GCH/WCG methylation calls, and NDR definition."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2020-gse132446",
+          "role": "data"
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "artifact:missing-data-report-draft#missing-2020-source-code",
+          "role": "code"
+        }
+      ],
+      "verdict": "not-tested",
+      "rationale": "NOMe-seq data are discoverable, but the accessibility/NDR computations were not rerun and the original source code is not public."
+    },
+    {
+      "id": "row-2025-c1-broad-domains",
+      "claimId": "C2025-1",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=437-456",
+          "role": "source",
+          "summary": "Paper reports up to 5136 broad H3K4me3 domains in spermatids, with promoter and distal enhancer distribution."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s5.xlsx",
+          "role": "table",
+          "summary": "Downloaded Supplementary Table S5 contains broad H3K4me3 and broad H3K27ac domains."
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=1462-1478",
+          "role": "method",
+          "summary": "Broad H3K4me3/H3K27ac domains defined by bedtools merge -d -500 and length greater than 5 kb."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2025-gse242515",
+          "role": "data"
+        },
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2025-supplement-tables",
+          "role": "table"
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#code-2025-kas-analyzer",
+          "role": "code"
+        }
+      ],
+      "verdict": "not-tested",
+      "rationale": "Public data, supplement domain table, and a public ChIP-seq pipeline are located, but domain calling was not re-executed."
+    },
+    {
+      "id": "row-2025-c2-h3k27ac-overlap",
+      "claimId": "C2025-2",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=449-455",
+          "role": "source",
+          "summary": "Paper reports broad H3K4me3 domains coincide with more than 76 percent of broad H3K27ac peaks."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s5.xlsx",
+          "role": "table",
+          "summary": "Broad H3K4me3 and H3K27ac domain tables downloaded."
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=1462-1478",
+          "role": "method",
+          "summary": "Domain definition and promoter/distal classification method."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2025-gse242515",
+          "role": "data"
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#code-2025-kas-analyzer",
+          "role": "code"
+        }
+      ],
+      "verdict": "not-tested",
+      "rationale": "Overlap is directly testable from downloaded Supplementary Table S5 or processed BED files, but no overlap computation was run."
+    },
+    {
+      "id": "row-2025-c3-setd1b-depletion",
+      "claimId": "C2025-3",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=820-867",
+          "role": "source",
+          "summary": "Paper reports Setd1b cKO strongly depletes broad H3K4me3 and affects transcriptional output and Pol II occupancy."
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=1380-1492",
+          "role": "method",
+          "summary": "Methods cover RNA-seq, ChIP-seq, broad-domain definitions, and statistics."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2025-gse242515",
+          "role": "data"
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "artifact:missing-data-report-draft#missing-2025-nome-rnaseq-code",
+          "role": "code"
+        }
+      ],
+      "verdict": "insufficient-evidence",
+      "rationale": "Perturbation data are likely in GSE242515, but this pass did not separate control/cKO samples or rerun differential broad-domain and expression analyses. Public RNA/NOMe source code is incomplete."
+    },
+    {
+      "id": "row-2025-c4-temporal-expression",
+      "claimId": "C2025-4",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=874-886",
+          "role": "source",
+          "summary": "Paper discusses early and late spermiogenesis gene timing changes."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s8.xlsx",
+          "role": "table",
+          "summary": "Downloaded Supplementary Table S8 contains early and late expressed gene sets."
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=1380-1420",
+          "role": "method",
+          "summary": "RNA-seq processing and PCA methods."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2025-gse242515",
+          "role": "data"
+        },
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2025-supplement-tables",
+          "role": "table"
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "artifact:missing-data-report-draft#missing-2025-nome-rnaseq-code",
+          "role": "code"
+        }
+      ],
+      "verdict": "insufficient-evidence",
+      "rationale": "Temporal-expression claim requires reanalysis of RNA-seq or at least parsing Supplementary Table S8. This pass only located the data and table."
+    },
+    {
+      "id": "row-2025-c5-rfx2-axis",
+      "claimId": "C2025-5",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=1019-1083",
+          "role": "source",
+          "summary": "Paper reports RFX2 motif/KO evidence and RFX2-SETD1B interaction evidence."
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=1450-1472",
+          "role": "method",
+          "summary": "Motif/domain/enhancer assignment methods relevant to RFX2 axis checks."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2025-gse242515",
+          "role": "data"
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#code-2025-kas-analyzer",
+          "role": "code"
+        }
+      ],
+      "verdict": "insufficient-evidence",
+      "rationale": "A mechanistic axis needs motif enrichment, KO sample comparison, and interaction evidence; this pass located data/code clues but did not run those checks."
+    }
+  ],
+  "diagnostics": [
+    "All verdicts are deliberately not-tested or insufficient-evidence because this worker performed discovery and inventory only.",
+    "No row should be interpreted as reproduced, partially-reproduced, not-reproduced, or contradicted until a downstream execution artifact supplies computed outputs and statistics."
+  ]
+}

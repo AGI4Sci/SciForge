@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "sciforge.paper-understanding.source-extraction.v1",
+  "createdBy": "worker-b",
+  "createdAt": "2026-05-11",
+  "extractionMethod": "pdfinfo plus pdftotext -layout; page locators are PDF page numbers from extracted page order",
+  "refsFirstPolicy": {
+    "largeObjects": "Full PDF text is stored as workspace text refs; claim artifacts contain bounded paraphrases and locators only.",
+    "runtimeHardcoding": "No runtime source code was modified; artifacts are workspace data products."
+  },
+  "sources": [
+    {
+      "id": "paper-2020-prdm9-dsb-fate",
+      "year": 2020,
+      "title": "Refined spatial temporal epigenomic profiling reveals intrinsic connection between PRDM9-mediated H3K4me3 and the fate of double-stranded breaks",
+      "doi": "10.1038/s41422-020-0281-1",
+      "sourcePdfRef": "file:workspace/cell_papers/2020 Refined spatial temporal epigenomic profiling reveals intrinsic__connection between PRDM9-mediated H3K4me3 and__the fate of double-stranded breaks.pdf",
+      "extractedTextRef": "file:workspace/.sciforge/artifacts/real-paper-understanding/pdf-text/2020-refined-spatial-temporal-epigenomic-profiling-reveals-intrinsic-connection-.txt",
+      "pdfPages": 13,
+      "diagnostics": [
+        "pdftotext emitted Bad annotation destination warnings but extracted bounded text successfully."
+      ]
+    },
+    {
+      "id": "paper-2022-histone-ptm-review",
+      "year": 2022,
+      "title": "Histone post-translational modifications - cause and consequence of genome function",
+      "doi": "10.1038/s41576-022-00468-7",
+      "sourcePdfRef": "file:workspace/cell_papers/2022_NRG_Histone post-translational__modifications \u2014 cause and__consequence of genome function.pdf",
+      "extractedTextRef": "file:workspace/.sciforge/artifacts/real-paper-understanding/pdf-text/2022-nrg-histone-post-translational-modifications-cause-and-consequence-of-genom.txt",
+      "pdfPages": 18,
+      "rubricUse": "Conceptual source for distinguishing association, temporal order, perturbation, direct local editing, reader/writer/eraser mechanism, reinforcement, consequence, memory, and confounding."
+    },
+    {
+      "id": "paper-2025-setd1b-broad-h3k4me3",
+      "year": 2025,
+      "title": "SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development",
+      "doi": "10.1038/s41422-025-01080-0",
+      "sourcePdfRef": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+      "extractedTextRef": "file:workspace/.sciforge/artifacts/real-paper-understanding/pdf-text/2025-cell-research-setd1b-mediated-broad-h3k4me3-controls-proper-temporal-patter.txt",
+      "pdfPages": 17
+    }
+  ]
+}

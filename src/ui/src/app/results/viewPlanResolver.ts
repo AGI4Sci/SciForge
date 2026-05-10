@@ -261,8 +261,25 @@ function extractDisplayIntent(activeRun?: SciForgeRun): DisplayIntent | undefine
 }
 
 function artifactsForResultPresentation(session: SciForgeSession, activeRun?: SciForgeRun) {
-  if (activeRun?.status === 'failed') return [];
+  if (activeRun?.status === 'failed') return session.artifacts.filter(isFailedRunDiagnosticArtifact);
   return session.artifacts;
+}
+
+function isFailedRunDiagnosticArtifact(artifact: RuntimeArtifact) {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  const data = isRecord(artifact.data) ? artifact.data : {};
+  const status = [
+    artifact.type,
+    metadata.status,
+    metadata.validationStatus,
+    data.status,
+  ].map((value) => String(value || '').toLowerCase()).join(' ');
+  return artifact.type === 'runtime-diagnostic'
+    || artifact.type === 'repair-diagnostic'
+    || artifact.type === 'backend-failure'
+    || artifact.type === 'contract-validation-failure'
+    || /\b(?:repair-needed|failed-with-reason|failed)\b/.test(status)
+    || metadata.preservedFromMalformedPayload === true;
 }
 
 function parseMaybeJsonObject(value: unknown): Record<string, unknown> | undefined {

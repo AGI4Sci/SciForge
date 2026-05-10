@@ -11,6 +11,19 @@ import {
   type WorkspaceRef,
 } from './trajectory-contract';
 
+const SCIENTIFIC_REPRODUCTION_ARTIFACT_TYPES = new Set([
+  'paper-claim-graph',
+  'figure-to-claim-map',
+  'dataset-inventory',
+  'analysis-plan',
+  'analysis-notebook',
+  'figure-reproduction-report',
+  'evidence-matrix',
+  'claim-verdict',
+  'negative-result-report',
+  'trajectory-training-record',
+]);
+
 export interface StoredAttemptLike {
   id: string;
   prompt?: string;
@@ -117,7 +130,7 @@ export function buildTrajectoryTrainingRecordFromStoredAttempt(
   const resultRefs = taskResultWorkspaceRefs(input.taskResult);
   const validationRefs = validationWorkspaceRefs(attempt, input.taskResult, input.validationEvents);
   const artifactRefs = uniqueWorkspaceRefs([...taskRefs, ...resultRefs, ...validationRefs]);
-  const repairHistory = repairHistoryFromAttempt(attempt, validationRefs);
+  const repairHistory = repairHistoryFromAttempt(attempt, input.taskResult, validationRefs);
   const selfPromptRecommendations = selfPromptRecommendationsFromAttempt(attempt, artifactRefs);
 
   const steps: TrajectoryStep[] = [
@@ -226,7 +239,7 @@ export function buildTrajectoryTrainingRecordFromStoredAttempt(
     steps,
     repairHistory,
     selfPromptRecommendations,
-    finalVerdict: finalVerdictFromStatus(attempt.status),
+    finalVerdict: finalVerdictFromStatus(attempt.status, input.taskResult),
     exportNotes: {
       redactionPolicy: 'Store refs and bounded summaries only; redact local absolute paths, secrets, and raw tokens before export.',
       replayInstructions: [
@@ -295,20 +308,31 @@ function taskWorkspaceRefs(attempt: StoredAttemptLike): WorkspaceRef[] {
 function taskResultWorkspaceRefs(taskResult: unknown): WorkspaceRef[] {
   const refs: WorkspaceRef[] = [];
   for (const candidate of flattenRecords(taskResult)) {
-    for (const key of ['ref', 'rawRef', 'artifactRef', 'outputRef', 'traceRef', 'sourceRef']) {
-      const value = candidate[key];
-      if (typeof value === 'string' && looksLikeReplayRef(value)) {
-        refs.push(workspaceRef(value, workspaceKindFor(value), `Task result ${key}.`));
-      }
+    const artifactIdentityRef = artifactIdentityFromRecord(candidate);
+    if (artifactIdentityRef) refs.push(workspaceRef(artifactIdentityRef, 'artifact', 'Task result artifact identity.'));
+    collectTaskResultRefs(candidate, refs);
+  }
+  return uniqueWorkspaceRefs(refs);
+}
+
+function collectTaskResultRefs(candidate: Record<string, unknown>, refs: WorkspaceRef[]) {
+  for (const [key, value] of Object.entries(candidate)) {
+    if (typeof value === 'string' && isReplayRefKey(key) && looksLikeReplayRef(value)) {
+      refs.push(workspaceRef(value, workspaceKindFor(value), `Task result ${key}.`));
+      continue;
     }
-    const evidenceRefs = candidate.evidenceRefs;
-    if (Array.isArray(evidenceRefs)) {
-      for (const ref of evidenceRefs) {
-        if (typeof ref === 'string') refs.push(workspaceRef(ref, workspaceKindFor(ref), 'Task result evidence ref.'));
+    if (!Array.isArray(value) || !isReplayRefCollectionKey(key)) continue;
+    for (const item of value) {
+      if (typeof item === 'string' && looksLikeReplayRef(item)) {
+        refs.push(workspaceRef(item, workspaceKindFor(item), `Task result ${key}.`));
+      } else if (isRecord(item)) {
+        const ref = item.ref;
+        if (typeof ref === 'string' && looksLikeReplayRef(ref)) {
+          refs.push(workspaceRef(ref, workspaceKindFor(ref), `Task result ${key}.`));
+        }
       }
     }
   }
-  return uniqueWorkspaceRefs(refs);
 }
 
 function validationWorkspaceRefs(
@@ -345,11 +369,13 @@ function collectValidationRefs(value: unknown, refs: WorkspaceRef[]) {
   }
 }
 
-function repairHistoryFromAttempt(attempt: StoredAttemptLike, validationRefs: WorkspaceRef[]): RepairRecord[] {
+function repairHistoryFromAttempt(
+  attempt: StoredAttemptLike,
+  taskResult: unknown,
+  validationRefs: WorkspaceRef[],
+): RepairRecord[] {
   if (!isRepairStatus(attempt.status) && !attempt.failureReason && !attempt.selfHealReason && !attempt.schemaErrors?.length) return [];
-  const failureKind = /missing|unavailable|not found|no evidence/i.test(attempt.failureReason || '')
-    ? 'blocked-missing-evidence'
-    : 'product-capability-failure';
+  const failureKind = classifyRepairFailureKind(attempt, taskResult);
   return [{
     failureKind,
     symptom: attempt.failureReason || attempt.schemaErrors?.join('; ') || attempt.selfHealReason || `Attempt status was ${attempt.status || 'unknown'}.`,
@@ -403,7 +429,9 @@ function executionStepKind(status: string | undefined): 'inspect-artifact' | 're
   return 'inspect-artifact';
 }
 
-function finalVerdictFromStatus(status: string | undefined): ScientificReproductionTrajectory['finalVerdict'] {
+function finalVerdictFromStatus(status: string | undefined, taskResult: unknown): ScientificReproductionTrajectory['finalVerdict'] {
+  const scientificVerdict = scientificVerdictFromTaskResult(taskResult);
+  if (scientificVerdict && !isRepairStatus(status)) return scientificVerdict;
   if (status === 'done' || status === 'self-healed') return 'partially-reproduced';
   if (isRepairStatus(status)) return 'in-progress';
   return 'in-progress';
@@ -443,22 +471,19 @@ function nonEmptyScreens(value: ScreenStateRef[] | undefined, fallback: ScreenSt
   return value?.length ? value : [fallback];
 }
 
-function workspaceRef(ref: string, kind: WorkspaceRef['kind'], description?: string): WorkspaceRef {
-  return { ref, kind, description };
-}
-
 function workspaceKindFor(ref: string): WorkspaceRef['kind'] {
-  if (/audit/i.test(ref)) return 'audit';
-  if (/ledger/i.test(ref)) return 'ledger';
-  if (/trace|telemetry|span/i.test(ref)) return 'trace';
-  if (/execution-unit|^EU-|^run-/i.test(ref)) return 'execution-unit';
-  if (/screen/i.test(ref)) return 'screen';
-  if (/^\.sciforge\//.test(ref)) return 'workspace-file';
+  const normalized = normalizeReplayRef(ref);
+  if (/audit/i.test(normalized)) return 'audit';
+  if (/ledger/i.test(normalized)) return 'ledger';
+  if (/trace|telemetry|span/i.test(normalized)) return 'trace';
+  if (/execution-unit|^EU-|^run-/i.test(normalized)) return 'execution-unit';
+  if (/screen/i.test(normalized)) return 'screen';
+  if (/^(?:\.sciforge\/|file:)/.test(normalized)) return 'workspace-file';
   return 'artifact';
 }
 
 function looksLikeReplayRef(value: string) {
-  return /^(?:\.sciforge\/|artifact:|trace:|audit:|ledger:|screen:|execution-unit:|EU-|run-)/.test(value);
+  return /^(?:\.sciforge\/|file:(?:\.sciforge\/|[^/])|artifact:|trace:|audit:|ledger:|screen:|execution-unit:|EU-|run-|message:|workEvidence:)/.test(value);
 }
 
 function flattenRecords(value: unknown, depth = 0): Record<string, unknown>[] {
@@ -486,6 +511,74 @@ function uniqueStrings(values: string[]) {
 
 function isRepairStatus(status: string | undefined) {
   return /failed|repair-needed|needs-human|cancelled|timeout|blocked/i.test(status || '');
+}
+
+function hasOperationalFailure(attempt: StoredAttemptLike) {
+  const haystack = [
+    attempt.failureReason,
+    attempt.selfHealReason,
+    attempt.schemaErrors?.join(' '),
+    attempt.status,
+  ].filter(Boolean).join(' ');
+  return /ToolPayload|payload|schema|contract|validation|runtime|exception|stderr|exit code|nonzero/i.test(haystack);
+}
+
+function classifyRepairFailureKind(attempt: StoredAttemptLike, taskResult: unknown): RepairRecord['failureKind'] {
+  if (hasOperationalFailure(attempt)) return 'product-capability-failure';
+  if (scientificNegativeVerdictFromTaskResult(taskResult)) return 'scientific-negative-result';
+  if (/missing|unavailable|not found|no evidence/i.test(attempt.failureReason || '')) return 'blocked-missing-evidence';
+  return 'product-capability-failure';
+}
+
+function workspaceRef(ref: string, kind: WorkspaceRef['kind'], description?: string): WorkspaceRef {
+  const normalized = normalizeReplayRef(ref);
+  const inferredKind = workspaceKindFor(normalized);
+  return { ref: normalized, kind: inferredKind === kind ? kind : inferredKind, description };
+}
+
+function normalizeReplayRef(value: string) {
+  return value.replace(/^file:(\.sciforge\/.*)$/i, '$1');
+}
+
+function artifactIdentityFromRecord(candidate: Record<string, unknown>) {
+  const id = typeof candidate.id === 'string' ? candidate.id : undefined;
+  const type = typeof candidate.type === 'string' ? candidate.type : undefined;
+  const data = isRecord(candidate.data) ? candidate.data : undefined;
+  const artifactType = typeof candidate.artifactType === 'string'
+    ? candidate.artifactType
+    : typeof data?.artifactType === 'string'
+      ? data.artifactType
+      : undefined;
+  const typeIsScientific = Boolean(type && SCIENTIFIC_REPRODUCTION_ARTIFACT_TYPES.has(type));
+  const dataTypeIsScientific = Boolean(artifactType && SCIENTIFIC_REPRODUCTION_ARTIFACT_TYPES.has(artifactType));
+  if (!id || (!typeIsScientific && !dataTypeIsScientific && !('data' in candidate))) return undefined;
+  return id.startsWith('artifact:') ? id : `artifact:${id}`;
+}
+
+function isReplayRefKey(key: string) {
+  return /(?:^ref$|Ref$|Refs$|ref$|refs$|path$|Path$)/.test(key);
+}
+
+function isReplayRefCollectionKey(key: string) {
+  return /(?:Refs$|refs$|references$|References$|artifacts$|Artifacts$)/.test(key);
+}
+
+function scientificVerdictFromTaskResult(taskResult: unknown): ScientificReproductionTrajectory['finalVerdict'] | undefined {
+  const verdicts: string[] = [];
+  for (const candidate of flattenRecords(taskResult)) {
+    if (typeof candidate.verdict === 'string') verdicts.push(candidate.verdict);
+    if (typeof candidate.result === 'string') verdicts.push(candidate.result);
+  }
+  if (verdicts.some((verdict) => verdict === 'contradicted')) return 'contradicted';
+  if (verdicts.some((verdict) => verdict === 'not-reproduced')) return 'not-reproduced';
+  if (verdicts.some((verdict) => verdict === 'partially-reproduced')) return 'partially-reproduced';
+  if (verdicts.some((verdict) => verdict === 'reproduced')) return 'reproduced';
+  return undefined;
+}
+
+function scientificNegativeVerdictFromTaskResult(taskResult: unknown) {
+  return scientificVerdictFromTaskResult(taskResult) === 'not-reproduced'
+    || scientificVerdictFromTaskResult(taskResult) === 'contradicted';
 }
 
 function timestamp(value: string | undefined, now: (() => Date) | undefined) {

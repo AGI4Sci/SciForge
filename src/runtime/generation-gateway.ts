@@ -288,7 +288,9 @@ async function tryAgentServerRepairAndRerun(params: {
   const maxAttempts = agentServerRepairMaxAttempts();
   const attempt = Math.max(2, priorAttempts.length + 1);
   const parentAttempt = attempt - 1;
-  if (attempt > maxAttempts) return undefined;
+  if (attempt > maxAttempts) {
+    return terminalAgentServerRepairFailurePayload(params, `AgentServer repair reached the maximum attempt budget (${maxAttempts}) before producing a valid ToolPayload.`);
+  }
   emitWorkspaceRuntimeEvent(params.callbacks, repairAttemptStartEvent({
     attempt,
     maxAttempts,
@@ -333,7 +335,7 @@ async function tryAgentServerRepairAndRerun(params: {
       failureReason: repair.error,
       createdAt: new Date().toISOString(),
     });
-    return undefined;
+    return terminalAgentServerRepairFailurePayload(params, repair.error);
   }
 
   if (repairShouldStopForNoCodeChange(beforeCode, afterCode, priorAttempts, params.failureReason)) {
@@ -362,7 +364,7 @@ async function tryAgentServerRepairAndRerun(params: {
       failureReason,
       createdAt: new Date().toISOString(),
     });
-    return undefined;
+    return terminalAgentServerRepairFailurePayload(params, failureReason);
   }
 
   const outputRel = `.sciforge/task-results/${params.taskId}-attempt-${attempt}.json`;
@@ -432,7 +434,11 @@ async function tryAgentServerRepairAndRerun(params: {
         callbacks: params.callbacks,
       });
     }
-    return undefined;
+    return terminalAgentServerRepairFailurePayload(params, rerun.stderr || 'AgentServer repair rerun failed before writing output.', {
+      outputRel,
+      stdoutRel,
+      stderrRel,
+    });
   }
 
   try {
@@ -517,7 +523,11 @@ async function tryAgentServerRepairAndRerun(params: {
           },
         });
       }
-      return undefined;
+      return terminalAgentServerRepairFailurePayload(params, failureReason ?? `AgentServer repair rerun exited ${rerun.exitCode}.`, {
+        outputRel,
+        stdoutRel,
+        stderrRel,
+      });
     }
     if (!normalized) {
       return undefined;
@@ -592,8 +602,30 @@ async function tryAgentServerRepairAndRerun(params: {
         callbacks: params.callbacks,
       });
     }
-    return undefined;
+    return terminalAgentServerRepairFailurePayload(params, `AgentServer repair rerun output could not be parsed: ${errorMessage(error)}`, {
+      outputRel,
+      stdoutRel,
+      stderrRel,
+    });
   }
+}
+
+function terminalAgentServerRepairFailurePayload(
+  params: {
+    request: GatewayRequest;
+    skill: SkillAvailability;
+    run: WorkspaceTaskRunResult;
+  },
+  reason: string,
+  refs: Partial<RepairPolicyRefs> = {},
+) {
+  return repairNeededPayload(params.request, params.skill, reason, {
+    taskRel: params.run.spec.taskRel,
+    outputRel: params.run.outputRef,
+    stdoutRel: params.run.stdoutRef,
+    stderrRel: params.run.stderrRef,
+    ...refs,
+  });
 }
 
 export function agentServerRepairMaxAttempts() {

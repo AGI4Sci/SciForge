@@ -1,0 +1,135 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "figure-to-claim-map",
+  "sourceRefs": [
+    {
+      "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+      "kind": "pdf",
+      "title": "2025 Cell Research SETD1B broad H3K4me3 PDF"
+    },
+    {
+      "ref": "artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3",
+      "kind": "artifact",
+      "title": "Paper claim graph for 2025 SETD1B broad H3K4me3"
+    }
+  ],
+  "figures": [
+    {
+      "id": "2025-setd1b-fig1",
+      "label": "Fig. 1: Comprehensive chromatin epigenomic atlas during mouse spermatogenesis",
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+          "locator": "PDF pages 2-4, Fig. 1 legend and atlas Results"
+        }
+      ],
+      "claimIds": ["2025-setd1b-c1"],
+      "requiredDatasetIds": ["2025-setd1b-multiomics-atlas"],
+      "requiredAnalysisStepIds": ["purify-11-stages", "run-chipseq-nomeseq-rnaseq", "chromhmm-state-model", "qc-replicates"],
+      "reproductionRisk": [
+        {
+          "risk": "method-incomplete",
+          "summary": "Requires exact cell sorting, antibody, alignment, and ChromHMM settings."
+        }
+      ]
+    },
+    {
+      "id": "2025-setd1b-fig3",
+      "label": "Fig. 3: Dynamic broad H3K4me3 and H3K27ac domains during spermiogenesis",
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+          "locator": "PDF pages 4-5, Fig. 3 legend"
+        }
+      ],
+      "claimIds": ["2025-setd1b-c2"],
+      "requiredDatasetIds": ["2025-setd1b-chipseq", "human-spermatid-chipseq"],
+      "requiredAnalysisStepIds": ["merge-h3k4me3-peaks", "classify-broad-domains", "overlap-h3k27ac", "compare-human-rs"],
+      "reproductionRisk": [
+        {
+          "risk": "statistics-underspecified",
+          "summary": "Broad-domain counts may shift under different merge distances, genome builds, or peak callers."
+        }
+      ]
+    },
+    {
+      "id": "2025-setd1b-fig4",
+      "label": "Fig. 4: Broad H3K4me3 domains display super-enhancer features",
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+          "locator": "PDF pages 5-6, Fig. 4 legend and SE Results"
+        }
+      ],
+      "claimIds": ["2025-setd1b-c3"],
+      "requiredDatasetIds": ["2025-setd1b-chipseq", "2025-setd1b-rnaseq"],
+      "requiredAnalysisStepIds": ["assign-enhancers-to-genes", "compare-h3k4me3-se-vs-h3k27ac-se", "test-expression-association"],
+      "reproductionRisk": [
+        {
+          "risk": "claim-exceeds-evidence",
+          "summary": "SE-like annotation and expression association do not alone prove direct transcriptional instruction."
+        }
+      ]
+    },
+    {
+      "id": "2025-setd1b-fig5",
+      "label": "Fig. 5: SETD1B establishes broad H3K4me3 domains during spermiogenesis",
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+          "locator": "PDF pages 6-8, Fig. 5 legend and Setd1b cKO Results"
+        }
+      ],
+      "claimIds": ["2025-setd1b-c4"],
+      "requiredDatasetIds": ["2025-setd1b-setd1b-cko-chipseq"],
+      "requiredAnalysisStepIds": ["compare-control-cKO-chipseq", "count-broad-domains", "separate-promoter-distal-domains"],
+      "reproductionRisk": [
+        {
+          "risk": "claim-exceeds-evidence",
+          "summary": "Genetic loss is strong writer evidence, but direct local mark editing or rescue is not represented in this first-pass map."
+        }
+      ]
+    },
+    {
+      "id": "2025-setd1b-fig6",
+      "label": "Fig. 6: SETD1B deficiency leads to Pol II redistribution and transcriptional dysregulation",
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+          "locator": "PDF pages 8-9, Fig. 6 legend"
+        }
+      ],
+      "claimIds": ["2025-setd1b-c5", "2025-setd1b-c6"],
+      "requiredDatasetIds": ["2025-setd1b-setd1b-cko-chipseq", "2025-setd1b-rnaseq"],
+      "requiredAnalysisStepIds": ["quantify-taf3-polii-at-broad-targets", "quantify-polii-at-regular-targets", "link-occupancy-to-expression"],
+      "reproductionRisk": [
+        {
+          "risk": "method-incomplete",
+          "summary": "Reproduction needs exact occupancy windows, differential analysis settings, and stage-matched control/cKO samples."
+        }
+      ]
+    },
+    {
+      "id": "2025-setd1b-fig7",
+      "label": "Fig. 7: Broad H3K4me3 controls expression timing and spermatid development",
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+          "locator": "PDF pages 10-11, Fig. 7 legend and phenotype Results"
+        }
+      ],
+      "claimIds": ["2025-setd1b-c6", "2025-setd1b-c7", "2025-setd1b-c8"],
+      "requiredDatasetIds": ["2025-setd1b-setd1b-cko-rnaseq", "2025-setd1b-phenotyping", "2025-setd1b-rfx2-perturbation"],
+      "requiredAnalysisStepIds": ["classify-early-late-stage-genes", "compare-expression-timing", "quantify-sperm-phenotypes", "evaluate-rfx2-setd1b-axis"],
+      "reproductionRisk": [
+        {
+          "risk": "claim-exceeds-evidence",
+          "summary": "Phenotype and timing effects are downstream of Setd1b loss and require rescue/local-editing evidence for stronger direct causality."
+        }
+      ]
+    }
+  ],
+  "diagnostics": [
+    "Figure map is intended as an auditable planning artifact for later dataset inventory and reproduction steps."
+  ]
+}

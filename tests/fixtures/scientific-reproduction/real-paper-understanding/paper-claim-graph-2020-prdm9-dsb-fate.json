@@ -1,0 +1,195 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "paper-claim-graph",
+  "sourceRefs": [
+    {
+      "ref": "file:workspace/cell_papers/2020 Refined spatial temporal epigenomic profiling reveals intrinsic__connection between PRDM9-mediated H3K4me3 and__the fate of double-stranded breaks.pdf",
+      "title": "2020 Cell Research PRDM9/DSB fate PDF",
+      "kind": "pdf"
+    },
+    {
+      "ref": "file:workspace/.sciforge/artifacts/real-paper-understanding/pdf-text/2020-refined-spatial-temporal-epigenomic-profiling-reveals-intrinsic-connection-.txt",
+      "title": "pdftotext -layout extraction",
+      "kind": "bounded-text"
+    }
+  ],
+  "paperRefs": [
+    {
+      "ref": "paper:2020-prdm9-dsb-fate",
+      "title": "Refined spatial temporal epigenomic profiling reveals intrinsic connection between PRDM9-mediated H3K4me3 and the fate of double-stranded breaks",
+      "kind": "research-paper",
+      "locator": "Cell Research 2020; doi:10.1038/s41422-020-0281-1"
+    }
+  ],
+  "claims": [
+    {
+      "id": "2020-prdm9-c1",
+      "text": "Newly generated H3K4me3 peaks in leptotene and mid-zygotene spermatocytes are largely PRDM9-associated and preferentially overlap DSB hotspots rather than promoter-like common H3K4me3 peaks.",
+      "kind": "main",
+      "figureIds": ["2020-prdm9-fig1"],
+      "datasetIds": ["2020-prdm9-chipseq", "public-spo11-dmc1-prdm9"],
+      "variables": ["PRDM9", "H3K4me3", "DSB hotspots", "SPO11-oligo", "DMC1-ssDNA"],
+      "dataTypes": ["H3K4me3 ChIP-seq", "SPO11-oligo sequencing", "DMC1 ssDNA sequencing", "PRDM9 affinity-seq"],
+      "methods": ["peak calling", "overlap analysis", "motif enrichment", "tag-density heatmap"],
+      "statistics": ["overlap percentages", "replicate correlation", "enrichment tests"],
+      "evidenceTypes": ["association", "genome-wide colocalization", "external-dataset integration"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2020 Refined spatial temporal epigenomic profiling reveals intrinsic__connection between PRDM9-mediated H3K4me3 and__the fate of double-stranded breaks.pdf",
+          "locator": "PDF page 3, Results: Identification of PRDM9-mediated H3K4me3; Fig. 1 and Supplementary Figs. S2-S3",
+          "summary": "The paper reports high overlap between DSB hotspots and newly generated H3K4me3, PRDM9-binding overlap, and motif enrichment."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "statistics-underspecified",
+          "summary": "The first-pass artifact records published overlap and enrichment claims but does not independently rerun peak thresholds or motif statistics."
+        },
+        {
+          "risk": "external-dependency",
+          "summary": "Some DSB and PRDM9 binding evidence depends on public datasets integrated by the authors."
+        }
+      ]
+    },
+    {
+      "id": "2020-prdm9-c2",
+      "text": "The majority of newly generated H3K4me3 signals are PRDM9-dependent; loss of Prdm9 removes these marks, whereas Spo11 or Dmc1 loss does not similarly abolish them.",
+      "kind": "main",
+      "figureIds": ["2020-prdm9-fig1", "2020-prdm9-fig2"],
+      "datasetIds": ["2020-prdm9-mutant-chipseq"],
+      "variables": ["Prdm9 knockout", "Spo11 knockout", "Dmc1 knockout", "new H3K4me3"],
+      "dataTypes": ["mutant mouse ChIP-seq", "DMC1 ssDNA sequencing"],
+      "methods": ["genotype comparison", "peak overlap", "stage-matched signal comparison"],
+      "statistics": ["percentage overlap", "read-density comparison"],
+      "evidenceTypes": ["genetic perturbation", "causal writer evidence"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2020 Refined spatial temporal epigenomic profiling reveals intrinsic__connection between PRDM9-mediated H3K4me3 and__the fate of double-stranded breaks.pdf",
+          "locator": "PDF page 3, Results: direct test of Prdm9-/-, Spo11-/-, and Dmc1-/- spermatogenic cells",
+          "summary": "Prdm9 loss redirects DSB hotspots toward common H3K4me3 regions, while new H3K4me3 profiles remain similar in Spo11 and Dmc1 mutants."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "claim-exceeds-evidence",
+          "summary": "The writer-dependence claim is stronger than downstream DSB fate causality; genotype effects may include broader meiotic changes."
+        }
+      ]
+    },
+    {
+      "id": "2020-prdm9-c3",
+      "text": "PRDM9-mediated H3K4me3 is temporally dynamic: it begins in leptotene, peaks around mid-zygotene, then declines through pachytene, leading the authors to infer that many DSBs may form around mid-zygotene.",
+      "kind": "subclaim",
+      "figureIds": ["2020-prdm9-fig2"],
+      "datasetIds": ["2020-prdm9-timecourse-chipseq"],
+      "variables": ["leptotene", "zygotene", "pachytene", "H3K4me3 peak number", "hotspot-associated H3K4me3"],
+      "dataTypes": ["stage-sorted ChIP-seq", "immunostaining support"],
+      "methods": ["time-course profiling", "stage-specific peak classification"],
+      "statistics": ["peak counts by stage"],
+      "evidenceTypes": ["temporal ordering", "population epigenomic time series"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2020 Refined spatial temporal epigenomic profiling reveals intrinsic__connection between PRDM9-mediated H3K4me3 and__the fate of double-stranded breaks.pdf",
+          "locator": "PDF pages 3-4, Results: Dynamics and regulation of PRDM9-mediated H3K4me3 signals; Fig. 2",
+          "summary": "Stage-resolved counts show H3K4me3 mark appearance and decay across meiotic prophase substages."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "method-incomplete",
+          "summary": "ChIP-seq profiles are population averages; single-locus timing and direct DSB formation timing are inferred rather than tracked in the same molecule."
+        }
+      ]
+    },
+    {
+      "id": "2020-prdm9-c4",
+      "text": "Four temporal classes of hotspot-associated H3K4me3 marks correlate with DSB repair fate, with early or persistent marks more consistent with crossover-designated sites and fast-turnover marks more consistent with noncrossover repair.",
+      "kind": "interpretation",
+      "figureIds": ["2020-prdm9-fig3", "2020-prdm9-fig6"],
+      "datasetIds": ["2020-prdm9-timecourse-chipseq", "known-co-hotspots"],
+      "variables": ["early-forming H3K4me3", "fast-turnover H3K4me3", "slow-turnover H3K4me3", "persistent H3K4me3", "CO", "NCO"],
+      "dataTypes": ["H3K4me3 ChIP-seq", "known crossover hotspot annotations"],
+      "methods": ["half-life classification", "width and density analysis", "model synthesis"],
+      "statistics": ["class sizes", "peak width comparison"],
+      "evidenceTypes": ["association", "temporal inference", "model claim"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2020 Refined spatial temporal epigenomic profiling reveals intrinsic__connection between PRDM9-mediated H3K4me3 and__the fate of double-stranded breaks.pdf",
+          "locator": "PDF pages 5-6, Results: PRDM9-mediated H3K4me3 signals facilitate the fate of DSBs; Fig. 3",
+          "summary": "The authors define early, fast-turnover, slow-turnover, and persistent H3K4me3 classes and link turnover patterns to repair-route timing."
+        },
+        {
+          "ref": "file:workspace/cell_papers/2020 Refined spatial temporal epigenomic profiling reveals intrinsic__connection between PRDM9-mediated H3K4me3 and__the fate of double-stranded breaks.pdf",
+          "locator": "PDF page 9, Fig. 6 model",
+          "summary": "The model proposes stronger early marks predesignate crossover-fated DSB sites."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "claim-exceeds-evidence",
+          "summary": "The fate assignment is a model supported by timing and known hotspot overlap, not direct lineage tracing of individual DSB outcomes."
+        }
+      ]
+    },
+    {
+      "id": "2020-prdm9-c5",
+      "text": "H3K27ac and H3K36me3 are co-deposited with PRDM9-mediated H3K4me3 at a subset of DSB hotspots, while H3K9me2 is locally depleted, forming a PRDM9-coupled chromatin signature.",
+      "kind": "subclaim",
+      "figureIds": ["2020-prdm9-fig4"],
+      "datasetIds": ["2020-prdm9-chipseq", "2020-prdm9-mutant-chipseq"],
+      "variables": ["H3K27ac", "H3K36me3", "H3K9me2", "Prdm9 knockout", "DSB hotspots"],
+      "dataTypes": ["multi-mark ChIP-seq", "mutant ChIP-seq"],
+      "methods": ["co-mark overlap", "UCSC track inspection", "mutant dependency analysis"],
+      "statistics": ["overlap count", "signal density comparison"],
+      "evidenceTypes": ["multi-omics association", "genetic perturbation"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2020 Refined spatial temporal epigenomic profiling reveals intrinsic__connection between PRDM9-mediated H3K4me3 and__the fate of double-stranded breaks.pdf",
+          "locator": "PDF page 6, Results: specific epigenetic marks associated with recombination hotspot formation; Fig. 4",
+          "summary": "The paper reports thousands of DSB hotspots co-marked by H3K4me3, H3K36me3, and H3K27ac and Prdm9-dependent loss of the new marks."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "claim-exceeds-evidence",
+          "summary": "Co-deposition and Prdm9 coupling do not prove that each chromatin mark independently controls recombination fate."
+        }
+      ]
+    },
+    {
+      "id": "2020-prdm9-c6",
+      "text": "Open chromatin features, including NDR enrichment and stronger accessibility near early-forming H3K4me3 regions, are associated with DSB sites that are proposed to proceed toward crossover fate.",
+      "kind": "main",
+      "figureIds": ["2020-prdm9-fig5", "2020-prdm9-fig6"],
+      "datasetIds": ["2020-prdm9-nomeseq", "2020-prdm9-chipseq"],
+      "variables": ["NDRs", "chromatin accessibility", "early-forming H3K4me3", "CO hotspots"],
+      "dataTypes": ["NOMe-seq", "H3K4me3/H3K27ac/H3K36me3 ChIP-seq", "known crossover hotspot annotations"],
+      "methods": ["NDR calling", "accessibility ratio comparison", "cluster comparison"],
+      "statistics": ["boxplots", "two-tailed Student's t-test for accessibility differences"],
+      "evidenceTypes": ["association", "chromatin-state profiling", "temporal inference"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2020 Refined spatial temporal epigenomic profiling reveals intrinsic__connection between PRDM9-mediated H3K4me3 and__the fate of double-stranded breaks.pdf",
+          "locator": "PDF pages 6-8, Results: Open chromatin states contribute to the fate decision of DSBs; Fig. 5",
+          "summary": "The paper links early H3K4me3 clusters to stronger active marks, NDR enrichment, and higher accessibility."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "claim-exceeds-evidence",
+          "summary": "The authors also note accessibility can depend on Prdm9, Spo11, and Dmc1, so it may be a consequence of DSB progression rather than the upstream cause."
+        }
+      ]
+    }
+  ],
+  "edges": [
+    { "fromClaimId": "2020-prdm9-c2", "toClaimId": "2020-prdm9-c1", "relation": "supports" },
+    { "fromClaimId": "2020-prdm9-c3", "toClaimId": "2020-prdm9-c4", "relation": "supports" },
+    { "fromClaimId": "2020-prdm9-c5", "toClaimId": "2020-prdm9-c6", "relation": "supports" },
+    { "fromClaimId": "2020-prdm9-c6", "toClaimId": "2020-prdm9-c4", "relation": "supports" }
+  ],
+  "diagnostics": [
+    "First-pass claims were manually normalized from pdftotext extraction and PDF locators; raw sequencing data were not downloaded or reanalyzed.",
+    "The graph intentionally separates direct PRDM9 writer-dependence from the more inferential DSB fate model."
+  ]
+}

@@ -89,26 +89,27 @@ Todo：
 职责：让 SciForge 从 PDF 中抽取可复现的科学主张，而不是只做摘要。
 
 Todo：
-- [ ] 对 3 篇 PDF 生成 `paper-claim-graph`：main claims、subclaims、key figures、实验设计、数据类型、物种、细胞阶段、变量和统计方法。
-- [ ] 生成 `figure-to-claim-map`：每个关键 figure 支撑哪些 claim，需要哪些数据和分析步骤。
+- [x] 对 2020/2025 两篇研究论文生成 `paper-claim-graph`：main claims、subclaims、key figures、实验设计、数据类型、物种、细胞阶段、变量和统计方法。（真实产物已沉淀到 `tests/fixtures/scientific-reproduction/real-paper-understanding/`。）
+- [ ] 对 2022 review 生成 review/rubric 专用 claim graph，连接 cause/consequence 背景判据与研究论文评估。
+- [x] 为 2020/2025 生成 `figure-to-claim-map`：每个关键 figure 支撑哪些 claim，需要哪些数据和分析步骤。
 - [x] 标注复现风险：数据缺失、方法不完整、统计描述不足、外部依赖、结论超出证据。（seed fixtures 和 verifier 已覆盖风险字段。）
 - [x] 阅读过程采用 refs-first：大段 PDF 内容保存在 artifact，只把 bounded summary 和 page/section locator 交给模型。
 
 验收：
-- [ ] 每篇论文至少有 5 个可检查 claim，并能追溯到 PDF 页码或章节。
+- [x] 每篇研究论文至少有 5 个可检查 claim，并能追溯到 PDF 页码或章节。
 
 ### R003 数据与代码发现
 
 职责：定位真实复现所需数据、代码和 supplementary material。
 
 Todo：
-- [ ] 从论文正文、methods、data availability、supplementary information 中抽取 accession、链接、数据表和代码线索。
-- [ ] 用通用检索能力查询 GEO/SRA/ENA/ArrayExpress/figshare/GitHub/期刊 supplement。
+- [x] 从论文正文、methods、data availability、supplementary information 中抽取 accession、链接、数据表和代码线索。（2020/2025 草案已进入 `tests/fixtures/scientific-reproduction/real-paper-evidence/`。）
+- [x] 用通用检索能力查询 GEO/SRA/ENA/ArrayExpress/figshare/GitHub/期刊 supplement。（已核到 GEO GSE132446/GSE84689/GSE35498/GSE61613、GSE242515 与 KAS-Analyzer 代码线索。）
 - [x] 输出 `dataset-inventory`：数据源、样本、assay、物种、基因组版本、下载大小、许可、可用性。（contract/mock fixture 已完成。）
 - [x] 输出 `missing-data-report`：缺失什么、为什么缺失、是否可用 proxy 或 public alternative。（contract/mock fixture 已完成。）
 
 验收：
-- [ ] 找不到数据时必须 structured partial/failure，不能把论文文字当作真实数据。
+- [x] 找不到数据时必须 structured partial/failure，不能把论文文字当作真实数据。
 
 ### R004 通用 Bioinformatics 执行环境
 
@@ -132,7 +133,8 @@ Todo：
 - [ ] 尝试复现 stage-specific H3K4me3 peak、PRDM9 binding overlap、SPO11/DMC1 hotspot association。
 - [ ] 尝试复现 open chromatin/NOMe signal 与早晚 DSB、CO/NCO proxy 的关系。
 - [ ] 做 threshold/peak caller/replicate/stage confounding 敏感性检查。
-- [ ] 输出 `figure-reproduction-report`、`evidence-matrix`、`claim-verdict`。
+- [ ] 输出 `figure-reproduction-report`。
+- [x] 输出第一版 `evidence-matrix`、`claim-verdict` 草案，verdict 保持 `insufficient-evidence`，不把访问/工具缺口伪装成科学复现成功。
 
 验收：
 - [ ] verdict 明确为 reproduced、partially-reproduced、not-reproduced 或 contradicted，并附证据链。
@@ -158,10 +160,10 @@ Todo：
 Todo：
 - [x] 抽取 histone PTM 作为 cause、consequence、reinforcement、memory mark 的判据。
 - [x] 生成 `causal-evidence-rubric`：必要证据、增强证据、反证、常见混杂。
-- [ ] 用 rubric 评估 2020 和 2025 的主张，区分相关性、时间顺序、扰动证据和机制证据。
+- [x] 用 rubric 评估 2020 和 2025 的主张，区分相关性、时间顺序、扰动证据和机制证据。
 
 验收：
-- [ ] rubric 可用于其他 histone/PTM 论文，不包含这 3 篇论文的特例逻辑。
+- [x] rubric 可用于其他 histone/PTM 论文，不包含这 3 篇论文的特例逻辑。
 
 ### R008 负结果与强质疑机制
 
@@ -187,7 +189,7 @@ Todo：
 - [x] 每个 schema 配 validator、repair hints、view manifest 和 refs-first 大对象策略。
 
 验收：
-- [ ] 2020 和 2025 attempts 使用同一套 schema。
+- [x] 2020 和 2025 attempts 使用同一套 schema。
 
 ### R010 复现质量 Verifier
 
@@ -225,6 +227,7 @@ Todo：
 - [x] 记录 artifact 是否容易打开、比较、引用、追问和导出。（artifact card/inspector 已补通用引用、追问和 JSON 导出入口。）
 - [x] 记录 evidence matrix、claim verdict、negative result 是否有清晰视图。
 - [x] 发现 UI 问题后新增通用 issue，不做论文专属展示。
+- [x] 修复 terminal backend failure 后结果区空等的问题：runtime 现在产出 `runtime-diagnostic` artifact，failed run 结果面板允许展示结构化诊断。
 
 验收：
 - [x] 每个 UI 修复都能被非 cell/epigenomics 任务复用。
@@ -257,7 +260,7 @@ Todo：
 ## 当前里程碑
 
 - [x] M1：用网页端 Computer Use 完成一次 2020 或 2025 论文的人工式多轮 attempt。
-- [ ] M2：产出第一版 `paper-claim-graph`、`dataset-inventory`、`evidence-matrix`、`claim-verdict`。
+- [x] M2：产出第一版 `paper-claim-graph`、`dataset-inventory`、`evidence-matrix`、`claim-verdict`。
 - [x] M3：发现至少 3 个通用产品/能力缺口，并写成可实现任务。
 - [x] M4：完成一个通用修复后回到网页端复测。
 - [x] M5：导出一份可审计的 `trajectory-training-record`。
@@ -276,3 +279,8 @@ Todo：
 - 针对 M4 复测 1 的通用修复：AgentServer repair 默认预算从 12 降到 4；当 repair 没有修改任务代码且失败原因重复时立即 fail closed，防止同一坏任务无限修复。新增 `smoke:agentserver-repair-budget` 并纳入 `smoke:scientific-reproduction`。
 - M4 网页端复测 2：再次通过 Computer Use 提交同类任务，最新 attempt `generated-literature-9ec76e6172e7` 在 2 次 attempt 后停止，状态为 `repair-needed` / `failed-with-reason`，验证 runaway repair loop 已被截断。剩余产品缺口：终态 product failure 仍没有在结果面板中形成可打开的失败 artifact，HTTP stream 仍可停留在等待状态，需要下一阶段修复“terminal backend failure -> visible result artifact/finalized stream”。
 - 本阶段最终验证：`npm run typecheck`、`npm run smoke:scientific-reproduction`、`npm run smoke:runtime-gateway-modules`、`npm run smoke:validation-repair-audit-chain`、`npm run smoke:runtime-ui-manifest`、`npm run packages:check`、`python3 -m unittest packages/reasoning/conversation-policy/tests/test_reference_digest.py` 均通过。
+- 第三阶段并行推进完成：修复 terminal backend failure 的可见诊断 artifact；trajectory export 可收集真实 partial artifacts、failure refs 和科学 verdict；从真实 PDF 产出 2020/2025 claim graph、figure-to-claim map、dataset inventory、evidence matrix、claim verdict 草案；2022 review 的 cause/consequence 框架已用于评估 2020/2025 主张。
+- 真实论文 fixture 已同步到仓库路径：`tests/fixtures/scientific-reproduction/real-paper-understanding/` 与 `tests/fixtures/scientific-reproduction/real-paper-evidence/`。大体量 PDF 文本、supplement Excel 和 workspace 运行轨迹继续保留在 gitignored workspace，用 refs 记录，不提交原始大对象。
+- 新增 `smoke:scientific-reproduction-real-paper-artifacts`，校验真实论文 artifact 的 refs-first、claim locator、dataset source、保守 verdict 和 unsupported `missing-data-report` 草案边界。
+- M4 网页端复测 3：重启 dev 服务后，用 Computer Use 打开文献证据评估场景，查看失败 run `project-literature-evidence-review-mp034941-noj0lr`。结果面板不再为空，展示“运行需要处理”、`ContractValidationFailure`、execution unit、task/output/stdout/stderr refs、恢复动作和 `literature-runtime-result` 诊断 artifact，验证 terminal product failure 已成为可审计 UI 结果。
+- 针对复测 3 的进一步通用修复：AgentServer repair 终止分支现在返回 `repairNeededPayload`，即使达到预算、repair 失败、无代码变化或 repair rerun 不可解析，也会给 stream 一个终态 ToolPayload，而不是只写 ledger 后返回 `undefined`。
