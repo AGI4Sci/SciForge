@@ -2,79 +2,262 @@
 
 最后更新：2026-05-11
 
-## 关键原则
-- 所有修改必须通用、可泛化到任何场景，不能在代码里面硬编码和为当前案例打补丁
-- Agent harness 是项目级策略资产，不允许散落在 UI、gateway、prompt builder、conversation policy 或 repair 分支里；探索预算、上下文选择、skill hints、tool-use policy、验证强度和用户可见进度必须通过可版本化 harness policy 与阶段 hook 注入。
-- Agent 行为治理的唯一入口是 `packages/agent-harness` profile registry 与声明式 stage hook；新增治理入口必须先进入 harness contract/trace，再由 gateway、prompt、UI、repair loop 消费，不能以 TODO 名义保留第二套散落规则。
-- `CapabilityManifest` 与 `CapabilityBudgetDebit` 只覆盖可被 broker/harness 选择、组合、计预算、验证、修复、渲染或审计的能力面；普通 internal helper 不为清单完整性强行 manifest 化，也不为非 invocation 写预算账。
-- 算法相关的代码优先用Python实现，方便人类用户优化、检查算法
-- 代码路径保持唯一真相源：发现冗余链路时删除、合并或降级旧链路，避免长期并行实现。
-- 代码膨胀必须自动触发治理：源码文件超过 1000 行进入 watch list；超过 1500 行必须在 PROJECT.md 有模块化拆分任务、语义 part 计划或生成文件豁免；超过 2000 行优先拆分；超过 3000 行视为维护风险。后续开发若让文件越过阈值，应优先抽模块、删除冗余逻辑或补拆分 TODO，而不是继续堆主文件。
-- 长文件拆分必须按职责命名，不能机械切成 `part1/part2`；如果暂时不能完全解耦，也要拆成有语义的文件，例如 `*-event-normalizer`、`*-runner`、`*-diagnostics`、`*-state-machine`，并保持主入口只做流程编排。
-- `npm run smoke:long-file-budget` 是代码膨胀守门 smoke：超过阈值且未被 PROJECT.md 跟踪的长文件应让验证失败，从而自动触发模块化、去重或任务补录。
-- 推进项目的时候尽可能多开sub agents，并行加速推进
+## 当前目标
 
+用真实科学论文复现任务拉通 SciForge 的复杂问题解决能力。Codex 代替人类研究者，从网页端打开 `http://localhost:5173/`，通过 Computer Use 模仿人的鼠标、键盘、阅读、追问、纠错和继续分析行为，交互式多轮提示 SciForge 复现论文主要结论，或形成有证据的反驳。
 
-## 根本方向
+最终产物不是单篇论文的 demo，而是一套可泛化到任意科研场景的能力：论文理解、数据发现、计算分析、证据组织、负结果处理、复现质量验证、轨迹数据导出和自我提示式研究流程。
 
-SciForge 的最终形态是 **Backend-first, Contract-enforced, Capability-driven, Harness-governed**。完整设计以 [`docs/Architecture.md`](docs/Architecture.md#最终形态backend-first-capability-architecture) 和 [`docs/Architecture.md#终极形态harness-governed-scientific-agent-os`](docs/Architecture.md#终极形态harness-governed-scientific-agent-os) 为准；本文件只保留围绕最终形态重构的任务板。
+## 开工前必读
 
-核心定位：
+任何 agent 在执行本项目任务前，必须先读本文件和与任务相关的设计文档，避免凭局部代码印象破坏系统边界。
 
-- SciForge 是 downstream scenario adapter，不是第二套 agent。
-- Agent backend 负责用户意图理解、多轮指代、能力选择、任务规划、胶水代码生成、artifact 内容读取、失败诊断、继续执行和修复。
-- SciForge 负责协议、capability registry、capability broker、workspace refs、执行边界、contract validation、artifact 持久化、view 渲染和机器可读错误回传。
-- `src/` 是固定平台逻辑和运行时骨架；`packages/` 是即插即用能力生态。回答“系统怎么运行”的逻辑进 `src/`，回答“系统能做什么”的逻辑进 `packages/`。详见 [`docs/Architecture.md`](docs/Architecture.md#src-与-packages-边界固定平台-vs-插拔能力)。
-- Packages 不只是代码复用单元，而是 capability contract 单元；observe、skills、actions、verifiers、views、memory、import/export 都应暴露可声明、可校验、可组合、可替换、可修复的 capability。
-- Agent harness 是独立行为治理层；runtime 只提供稳定阶段 hook 和 enforcement，harness profile 负责决定 fresh/continuation/repair/audit 等模式下的探索范围、上下文预算、工具预算、skill 倾向、验证强度和用户可见进度。详见 [`docs/Architecture.md`](docs/Architecture.md#终极形态harness-governed-scientific-agent-os)。
-- 胶水代码、执行 trace、validation failure、repair attempts 和 composed capability 下钻记录本身是资产；必须沉淀到 Capability Evolution Ledger，用于晋升高频组合、改进 validator、完善 repair hints 和训练 broker。
-- 重构时必须删除历史遗留链路，只保留最新唯一逻辑和唯一真相源；不得为了兼容旧实现长期保留并行路径、prompt regex、场景特例、provider 特例或 UI 语义兜底。
+- [`docs/Architecture.md`](docs/Architecture.md)：SciForge 总体架构、Backend-first / Contract-enforced / Capability-driven / Harness-governed 方向、`src` 与 `packages` 边界。
+- [`docs/AgentHarnessStandard.md`](docs/AgentHarnessStandard.md)：harness runtime、profile、stage hook、contract、trace、merge 规则和行为治理入口。
+- [`docs/Usage.md`](docs/Usage.md)：网页端使用流程、多 backend、论文复现/自我进化/Computer Use 操作路径。
+- [`docs/Extending.md`](docs/Extending.md)：新增 capability、artifact、view、scenario、package 时的扩展方式。
+- [`README.md`](README.md)：产品定位、快速启动、核心概念和当前能力范围。
 
-## 重构守则
+执行规则：
 
-- 每个重构任务都必须先声明新的唯一真相源，再删除旧入口、旧 adapter、旧 fallback 和旧测试夹具。
-- 临时兼容层必须有删除任务、删除条件和 smoke guard；没有删除计划的兼容层不允许合入。
-- Backend-first 优先级高于 UI 侧聪明化：SciForge 不判断“用户是不是想看报告/上一轮/markdown”，只传 refs、capability brief 和 contract。
-- Harness-governed 优先级高于 prompt 局部补丁：不得在某个 request path、scenario、provider 或 UI 分支里临时追加探索指令、工具约束、上下文规则或技能偏好；必须进入 harness hook/profile 或 capability manifest。
-- `src/` 可以写死平台秩序，但不能写死 package 领域语义；`packages/` 可以扩展能力，但不能绕过 `src/` 的安全、refs、validation 和 persistence 边界。
-- 所有 capability 输出都必须可代码校验；校验失败生成 `ContractValidationFailure` 返回 backend 修复，不在 SciForge 侧改写成成功。
-- 高频稳定路径可以固化为 composed capability，但仍必须暴露 manifest、validator、repair hints 和 fallback，下钻后可由 backend 重新组合原子能力。
-- 活跃 TODO 必须是可实现、可验证、可删除的具体任务；架构方向、唯一真相源、no-legacy/no-scattered 这类长期约束应放入关键原则、重构守则或 smoke guard，不作为开放式 TODO 挂在任务板里。
-- 历史任务不再单独维护；如果仍有价值，必须并入下面的最终形态重构任务。
+- 做网页端复现任务前，至少阅读 `README.md`、`docs/Usage.md` 和本文件。
+- 做架构、runtime、harness、capability、schema、view 或 verifier 修改前，必须阅读 `docs/Architecture.md`、`docs/AgentHarnessStandard.md`、`docs/Extending.md` 和本文件。
+- 主 agent 负责阅读全局文档并给 sub agent 提供任务 briefing；sub agent 不需要反复通读全部设计文档，只读取 briefing、相关文件和与其职责直接相关的文档片段。
+- 如果 sub agent 的任务会改变架构边界、harness 策略、capability contract、schema/view/verifier 或 validation/repair/audit 行为，主 agent 必须在 briefing 中附上对应设计文档约束；必要时再要求 sub agent 阅读相关章节。
+- 如果文档与代码不一致，先记录差异并做通用修复或文档更新，不要绕过设计边界临时补丁。
 
-## 倒叙任务板
+## 不变原则
 
-### T133 Real Paper Reproduction Loop：用细胞/表观遗传论文拉通真实科研复现能力
+### 科研复现原则
 
-状态：规划中；目标是让 Codex 代替人类研究者，使用 SciForge 从真实科学数据、研究 topic 和已发表论文出发，使用computer use能力，从网页交互，通过多轮交互提示、工具调用、计算分析、证据组织和反证检查，复现或有理有据地质疑论文主要结论，并把全过程沉淀成可训练科学研究自动化模型的轨迹数据。本任务只允许沉淀通用能力、通用 contract、通用 harness/profile、通用 artifact schema 和通用 verifier；不得为下面 3 篇论文、特定文件名、特定 figure、特定 gene 或特定数据库写硬编码分支。
+- 所有修改必须通用、可泛化，不能为特定论文、文件名、figure、gene、accession、网页或数据库写硬编码分支。
+- 优先从 SciForge 网页端完成任务：Codex 使用 Computer Use 像人一样点击、输入、上传、查看结果、继续追问和记录失败。
+- 只有在 SciForge 当前能力阻塞时，才回到代码层做通用修复；修复必须进入 capability manifest、schema、verifier、harness、artifact view 或通用 UI 交互，而不是特例补丁。
+- 真实失败是资产。数据不可得、工具失败、统计不支持论文结论时，应输出 structured partial/failure/negative result，不能伪造成功。
+- 每轮交互都要沉淀训练数据：prompt、屏幕状态、选择的 refs、工具调用、生成代码、stdout/stderr、artifact、验证结果、repair attempt、最终判断。
+- 推进项目时尽可能并行：论文阅读、数据发现、UI 操作、schema/verifier 设计、负结果检查可以由不同 agent 或不同任务线并行推进。
 
-种子论文：
+### 架构护栏
 
-- `workspace/cell_papers/2020 Refined spatial temporal epigenomic profiling reveals intrinsic__connection between PRDM9-mediated H3K4me3 and__the fate of double-stranded breaks.pdf`：PRDM9-mediated H3K4me3、DSB hotspot fate、CO/NCO、meiotic prophase I、ChIP-seq/NOMe-seq/SPO11/DMC1。
-- `workspace/cell_papers/2022_NRG_Histone post-translational__modifications — cause and__consequence of genome function.pdf`：histone PTM 的因果/结果框架、transcription/recombination/replication/repair/genome architecture 的通用理论背景。
-- `workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf`：SETD1B-RFX2 axis、broad H3K4me3、H3K27ac enhancer/promoter overlap、temporal gene expression、spermatid development。
+- 以设计文档为准，不在 `PROJECT.md` 重复维护完整架构说明；本文件只保存当前目标、任务板和不能破坏的少量护栏。
+- 新增功能必须符合 **Backend-first, Contract-enforced, Capability-driven, Harness-governed**，不能新增第二套 agent、第二套路由或第二套策略系统。
+- UI 不根据 prompt、scenario、论文标题、artifact 名称或自然语言关键词做语义猜测；UI 只消费 runtime contract、artifact schema、view manifest 和结构化事件。
+- 探索预算、上下文选择、tool-use policy、skill hints、验证强度、repair policy、进度展示和后台/取消策略必须进入 harness profile、stage hook 或 capability manifest。
+- 可被选择、组合、计预算、验证、修复、渲染或审计的能力必须走 capability manifest；普通 internal helper 不强行 manifest 化。
+- 所有 capability 输出都必须可代码校验；失败进入 validation/repair/audit pipeline，不能静默改写成成功。
+- PDF 全文、测序数据、日志、notebook、表格和大型 artifact 坚持 refs-first：workspace 保存大对象，prompt 只携带 bounded summary 与 locator。
+- `src/` 与 `packages/` 边界以 `docs/Architecture.md` 为准；科研领域 schema、view、verifier、skills、actions 优先进入 packages。
+- Prompt builder 不是策略真相源；新增策略必须来自 runtime contract、harness rendered entries 或可信 policy provider，并能从 refs/trace 重建。
+- 胶水代码、执行 trace、validation failure、repair attempts、negative results 和 capability 下钻记录都是训练与审计资产，必须沉淀为可引用 artifact、ledger 或 trajectory record。
+- 代码路径保持唯一真相源；临时兼容层必须有删除条件和 smoke guard。
+- 代码膨胀必须治理；手写长文件按职责拆分，不能机械切 `part1/part2`。
+- 算法相关代码优先用 Python 实现，方便科研用户检查、复现和修改。
+
+## 种子论文
+
+- `workspace/cell_papers/2020 Refined spatial temporal epigenomic profiling reveals intrinsic__connection between PRDM9-mediated H3K4me3 and__the fate of double-stranded breaks.pdf`
+  关注：PRDM9-mediated H3K4me3、DSB hotspot fate、CO/NCO、meiotic prophase I、ChIP-seq、NOMe-seq、SPO11、DMC1。
+- `workspace/cell_papers/2022_NRG_Histone post-translational__modifications — cause and__consequence of genome function.pdf`
+  关注：histone PTM 的 cause/consequence 框架，作为因果证据评估 rubric 的背景来源。
+- `workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf`
+  关注：SETD1B-RFX2 axis、broad H3K4me3、H3K27ac enhancer/promoter overlap、temporal gene expression、spermatid development。
+
+## 操作方式
+
+1. Codex 先用 Computer Use 打开 SciForge 网页端，像研究者一样上传/选择论文、输入研究 topic、查看返回结果、继续追问。
+2. SciForge 必须通过自身 workspace runtime、AgentServer、capability broker、artifact renderer 和 verifier 产出结果。
+3. 如果网页端流程卡住，Codex 记录卡点，再做通用修复任务；修复后回到网页端复测。
+4. 每次 attempt 结束后更新本文件的任务状态和学到的通用缺口。
+
+## 任务板
+
+### R001 网页端人类式操作协议
+
+职责：定义 Codex 如何使用 Computer Use 从网页端操作 SciForge，确保训练轨迹接近真实人类研究者。
 
 Todo：
+- [ ] 设计一套网页端操作 runbook：打开应用、选择 workspace、上传/引用论文、输入 topic、追问、检查 artifact、继续分析、导出结果。
+- [ ] 记录每轮网页交互的 screen state、mouse/keyboard action、prompt、response、artifact refs 和失败点。
+- [ ] 区分“产品能力失败”和“研究结论失败”：前者进入通用修复，后者进入 negative result。
+- [ ] 建立最小复测流程：每次通用修复后都回到网页端用同类操作复测。
 
-- [ ] T133-A 论文理解与 claim graph 任务：让 SciForge 读取 3 篇 PDF，抽取每篇论文的 main claims、key figures、实验设计、数据类型、物种/细胞阶段、关键变量、统计检验、外部数据依赖和可复现性风险，输出通用 `paper-claim-graph`、`figure-to-claim-map`、`reproduction-plan` artifact；阅读过程必须 refs-first，prompt 只携带 bounded summary、page/section locators 和 citation verification result。
-- [ ] T133-B 数据与代码发现任务：基于论文中的 accession、supplementary tables、方法学和引用信息，使用通用文献/网页/数据库检索能力定位 GEO/SRA/ENA/ArrayExpress/figshare/GitHub/supplementary data 等可用数据源，输出 `dataset-inventory`、`data-access-plan`、`missing-data-report` 和下载预算审计；找不到数据时必须 structured partial/failure，不能伪造成功。
-- [ ] T133-C 2020 PRDM9/DSB fate 复现任务：围绕“早形成 DSB 更开放、更倾向 CO fate，且 PRDM9-mediated H3K4me3 与 DSB fate 有内在联系”构造最小可执行复现链路，优先复现 peak overlap、stage-specific H3K4me3、open chromatin/NOMe signal、SPO11/DMC1/hotspot association、CO/NCO proxy enrichment；输出 `analysis-notebook`、`evidence-matrix`、`figure-reproduction-report` 和 `claim-verdict`。
-- [ ] T133-D 2025 SETD1B/broad H3K4me3 复现任务：围绕“SETD1B-RFX2 介导 spermatid-specific broad H3K4me3，并控制基因表达强度与时间模式”构造最小可执行复现链路，优先复现 broad-vs-sharp H3K4me3 domain calling、H3K27ac/promoter/enhancer overlap、stage temporal expression pattern、Setd1b/Rfx2 perturbation 或相关公开数据对照；输出同一套通用 artifact，而不是为该论文定制 schema。
-- [ ] T133-E 综述到机制假设任务：用 2022 NRG review 作为背景知识压力测试，让 SciForge 把“histone PTM 是 cause 还是 consequence”的概念框架转成可检验假设、反证标准和复现实验 checklist，并用于评估 2020/2025 两篇研究论文中的因果推断强度；输出 `mechanism-hypothesis-matrix` 和 `causal-evidence-rubric`。
-- [ ] T133-F 多轮人类式提示轨迹任务：Codex 以研究者身份在 SciForge UI 中多轮推进同一复现任务，故意包含澄清、追问、失败修复、数据缺失、参数调整、结果解释、质疑论文结论和继续分析；每轮必须保存 prompt、selected refs、tool calls、generated code、stdout/stderr、artifact refs、verification results、repair attempts 和 human-readable rationale。
-- [ ] T133-G 反证与负结果任务：为每篇论文至少设计一个可能推翻或削弱主结论的检查，例如 batch/stage confounding、peak caller/threshold sensitivity、gene length/expression confounding、replicate consistency、public dataset mismatch、annotation version drift；负结果必须能形成强质疑 artifact，而不是被 validation/repair 流程强行修成支持论文。
-- [ ] T133-H 通用分析环境任务：建立可复用的 bioinformatics execution profile，声明常用工具需求、Python/R package、genome annotation/cache、下载预算、CPU/内存/时间预算和可降级策略；所有工具选择必须经 capability manifest/broker/harness，而不是在某个论文任务里写死命令。
-- [ ] T133-I 科学复现 artifact schema 任务：沉淀通用 schema：`paper-claim-graph`、`dataset-inventory`、`analysis-plan`、`analysis-notebook`、`figure-reproduction-report`、`evidence-matrix`、`claim-verdict`、`negative-result-report`、`trajectory-training-record`；每个 schema 必须有 validator、repair hints、view manifest 和 refs-first 大对象策略。
-- [ ] T133-J 复现质量 verifier 任务：建立通用 verifier，检查 claims 是否有对应 evidence、figure 是否有可执行代码或明确不可复现原因、数据 accession 是否核验、统计方法是否记录、参数是否可追溯、结论是否区分 reproduced/partially-reproduced/not-reproduced/contradicted；verifier 失败进入现有 validation/repair/audit pipeline。
-- [ ] T133-K 训练数据导出任务：把一次完整复现过程导出为模型训练可用的 trajectory bundle，包含 state/action/observation、decision rationale、artifact lineage、失败与修复、人工式提示策略、最终 claim verdict；导出格式必须去除本地绝对敏感路径或以 workspace refs 替代。
-- [ ] T133-L UI/交互压力测试任务：用上述复现任务测试 SciForge 是否能在长任务中清晰显示阶段进度、artifact 关系、失败原因、可继续操作点、证据矩阵、figure reproduction 状态和 claim verdict；发现问题只补通用 UI/contract/view 能力，不做论文专属展示。
+验收：
+- [ ] 至少完成一次全程网页端 attempt，不依赖直接调用内部脚本来绕过 SciForge UI。
 
-验收标准：
+### R002 论文理解与 Claim Graph
 
-- [ ] 至少完成 2020 和 2025 两篇研究论文各一个端到端复现 attempt，允许结论为 partial/not-reproduced/contradicted，但必须证据链完整。
-- [ ] 2022 综述至少被用于生成可复用的因果证据 rubric，并实际评估 2020/2025 的主结论。
-- [ ] 所有新增能力都通过 manifest/schema/verifier/harness/capability broker 暴露，不出现论文标题、文件名、gene 名或 figure id 驱动的硬编码逻辑。
-- [ ] 每个 attempt 都能从 `trajectory-training-record` 重建：人类式多轮提示、工具调用、代码、输出、artifact、验证、失败、修复和最终 verdict。
-- [ ] 数据不可得、工具失败、统计不支持论文结论时，SciForge 输出 structured negative result，而不是编造数据或把失败包装成成功。
-- [ ] 相关 smoke/golden fixture 使用可脱敏的小样本或 mock provider，验证通用 contract 和 failure semantics，不依赖 live 数据源稳定性。
+职责：让 SciForge 从 PDF 中抽取可复现的科学主张，而不是只做摘要。
 
+Todo：
+- [ ] 对 3 篇 PDF 生成 `paper-claim-graph`：main claims、subclaims、key figures、实验设计、数据类型、物种、细胞阶段、变量和统计方法。
+- [ ] 生成 `figure-to-claim-map`：每个关键 figure 支撑哪些 claim，需要哪些数据和分析步骤。
+- [ ] 标注复现风险：数据缺失、方法不完整、统计描述不足、外部依赖、结论超出证据。
+- [ ] 阅读过程采用 refs-first：大段 PDF 内容保存在 artifact，只把 bounded summary 和 page/section locator 交给模型。
+
+验收：
+- [ ] 每篇论文至少有 5 个可检查 claim，并能追溯到 PDF 页码或章节。
+
+### R003 数据与代码发现
+
+职责：定位真实复现所需数据、代码和 supplementary material。
+
+Todo：
+- [ ] 从论文正文、methods、data availability、supplementary information 中抽取 accession、链接、数据表和代码线索。
+- [ ] 用通用检索能力查询 GEO/SRA/ENA/ArrayExpress/figshare/GitHub/期刊 supplement。
+- [ ] 输出 `dataset-inventory`：数据源、样本、assay、物种、基因组版本、下载大小、许可、可用性。
+- [ ] 输出 `missing-data-report`：缺失什么、为什么缺失、是否可用 proxy 或 public alternative。
+
+验收：
+- [ ] 找不到数据时必须 structured partial/failure，不能把论文文字当作真实数据。
+
+### R004 通用 Bioinformatics 执行环境
+
+职责：为论文复现建立可复用执行 profile，而不是为单篇论文临时拼命令。
+
+Todo：
+- [ ] 声明常用工具能力：FASTQ/BAM/BED/bigWig 处理、peak calling、overlap、signal matrix、gene annotation、统计检验、plot。
+- [ ] 声明 Python/R package、命令行工具、基因组 annotation/cache、CPU/内存/时间/下载预算。
+- [ ] 建立降级策略：无原始数据时使用 processed table；无完整 genome cache 时用小样本 fixture；无网络时输出 missing-data。
+- [ ] 所有工具选择进入 capability manifest/broker/harness，不在论文任务里写死命令。
+
+验收：
+- [ ] 同一执行 profile 可服务 2020 和 2025 两篇论文。
+
+### R005 2020 PRDM9/DSB Fate 复现 Attempt
+
+职责：复现或质疑“PRDM9-mediated H3K4me3 与 DSB fate 有内在联系，早形成 DSB 更开放且更倾向 CO fate”。
+
+Todo：
+- [ ] 用网页端多轮提示 SciForge 制定最小复现计划。
+- [ ] 尝试复现 stage-specific H3K4me3 peak、PRDM9 binding overlap、SPO11/DMC1 hotspot association。
+- [ ] 尝试复现 open chromatin/NOMe signal 与早晚 DSB、CO/NCO proxy 的关系。
+- [ ] 做 threshold/peak caller/replicate/stage confounding 敏感性检查。
+- [ ] 输出 `figure-reproduction-report`、`evidence-matrix`、`claim-verdict`。
+
+验收：
+- [ ] verdict 明确为 reproduced、partially-reproduced、not-reproduced 或 contradicted，并附证据链。
+
+### R006 2025 SETD1B/Broad H3K4me3 复现 Attempt
+
+职责：复现或质疑“SETD1B-RFX2 介导 spermatid-specific broad H3K4me3，并控制表达强度和时间模式”。
+
+Todo：
+- [ ] 用网页端多轮提示 SciForge 制定最小复现计划。
+- [ ] 尝试复现 broad-vs-sharp H3K4me3 domain calling。
+- [ ] 尝试复现 broad H3K4me3 与 H3K27ac enhancer/promoter overlap。
+- [ ] 尝试复现 stage temporal expression pattern 与 Setd1b/Rfx2 perturbation 证据。
+- [ ] 做 gene length、baseline expression、annotation version、batch/stage confounding 检查。
+
+验收：
+- [ ] 产出与 R005 同一 schema 的通用 artifact，而不是 2025 论文专属格式。
+
+### R007 2022 Review 到因果证据 Rubric
+
+职责：把综述中的 cause/consequence 框架变成可检查标准，用于评估研究论文结论强度。
+
+Todo：
+- [ ] 抽取 histone PTM 作为 cause、consequence、reinforcement、memory mark 的判据。
+- [ ] 生成 `causal-evidence-rubric`：必要证据、增强证据、反证、常见混杂。
+- [ ] 用 rubric 评估 2020 和 2025 的主张，区分相关性、时间顺序、扰动证据和机制证据。
+
+验收：
+- [ ] rubric 可用于其他 histone/PTM 论文，不包含这 3 篇论文的特例逻辑。
+
+### R008 负结果与强质疑机制
+
+职责：让 SciForge 能合理反驳论文，而不是默认支持论文。
+
+Todo：
+- [ ] 为每篇研究论文至少设计 3 个反证检查。
+- [ ] 负结果输出 `negative-result-report`，包含检查动机、数据、代码、统计、结论影响。
+- [ ] UI 中清楚显示 not-reproduced/contradicted，不把它包装成普通失败。
+- [ ] 验证 repair pipeline 不会把科学负结果强行修成正结果。
+
+验收：
+- [ ] 至少一个 attempt 产生可审计的 partial 或 negative conclusion。
+
+### R009 科学复现 Artifact Schema 与 View
+
+职责：沉淀通用 artifact，不让结果散成聊天文本。
+
+Todo：
+- [ ] 定义 `paper-claim-graph`、`dataset-inventory`、`analysis-plan`、`analysis-notebook`。
+- [ ] 定义 `figure-reproduction-report`、`evidence-matrix`、`claim-verdict`、`negative-result-report`。
+- [ ] 定义 `trajectory-training-record`，用于导出训练数据。
+- [ ] 每个 schema 配 validator、repair hints、view manifest 和 refs-first 大对象策略。
+
+验收：
+- [ ] 2020 和 2025 attempts 使用同一套 schema。
+
+### R010 复现质量 Verifier
+
+职责：判断 SciForge 的复现结果是否可信、可追溯、可训练。
+
+Todo：
+- [ ] 检查每个 claim 是否有 evidence 或明确 missing evidence。
+- [ ] 检查每个 figure reproduction 是否有代码、输入数据、参数、stdout/stderr、统计方法。
+- [ ] 检查 accession/DOI/PMID/title/year/journal 是否核验。
+- [ ] 检查 verdict 是否区分 reproduced/partial/not-reproduced/contradicted。
+- [ ] Verifier 失败进入 validation/repair/audit pipeline。
+
+验收：
+- [ ] Verifier 能阻止“看起来像报告但没有证据链”的结果被标为成功。
+
+### R011 轨迹训练数据导出
+
+职责：把人类式复现过程变成训练科学研究自动化模型的数据。
+
+Todo：
+- [ ] 导出 state/action/observation 序列：网页状态、用户式 prompt、工具结果、artifact lineage。
+- [ ] 导出 decision rationale：为什么追问、为什么换参数、为什么判定失败或质疑论文。
+- [ ] 导出 repair history：失败、诊断、修复、复测。
+- [ ] 脱敏本地绝对路径、API key、临时文件名，用 workspace refs 替代。
+
+验收：
+- [ ] 单个 attempt 可重放或审计，不依赖聊天上下文记忆。
+
+### R012 UI/交互能力缺口修复
+
+职责：通过真实网页操作发现 SciForge 产品能力问题，并只做通用修复。
+
+Todo：
+- [ ] 记录长任务进度是否清楚：当前阶段、下一步、卡点、可取消/继续操作。
+- [ ] 记录 artifact 是否容易打开、比较、引用、追问和导出。
+- [ ] 记录 evidence matrix、claim verdict、negative result 是否有清晰视图。
+- [ ] 发现 UI 问题后新增通用 issue，不做论文专属展示。
+
+验收：
+- [ ] 每个 UI 修复都能被非 cell/epigenomics 任务复用。
+
+### R013 自我提示式复现 Agent
+
+职责：从“Codex 代替人类多轮提示”逐步过渡到“SciForge 自己根据论文多轮提示自己”。
+
+Todo：
+- [ ] 从 R001/R011 的人类式轨迹中抽象 prompt strategy：阅读、规划、取数、计算、检查、反证、总结。
+- [ ] 定义 self-prompt loop contract：下一轮问题、需要的 refs、停止条件、质量门槛。
+- [ ] 先 shadow 运行，只建议下一轮 prompt；通过验证后再允许自动提交下一轮。
+- [ ] 防止无限循环：预算、最大轮次、失败停止、人类确认点。
+
+验收：
+- [ ] SciForge 能基于一篇新论文自动提出下一轮高质量复现提示，但仍可被人类审阅。
+
+### R014 小样本/Mock Benchmark
+
+职责：让通用能力可测试，不依赖 live 数据源和大规模下载。
+
+Todo：
+- [ ] 为 claim graph、dataset inventory、negative result、trajectory export 建立小样本 fixture。
+- [ ] 为 GEO/SRA/GitHub/provider timeout/missing data 建立 mock provider。
+- [ ] 建立 smoke：验证 schema、verifier、failure semantics、refs-first、trajectory export。
+
+验收：
+- [ ] CI 可验证通用 contract，不需要真的下载大型测序数据。
+
+## 当前里程碑
+
+- [ ] M1：用网页端 Computer Use 完成一次 2020 或 2025 论文的人工式多轮 attempt。
+- [ ] M2：产出第一版 `paper-claim-graph`、`dataset-inventory`、`evidence-matrix`、`claim-verdict`。
+- [ ] M3：发现至少 3 个通用产品/能力缺口，并写成可实现任务。
+- [ ] M4：完成一个通用修复后回到网页端复测。
+- [ ] M5：导出一份可审计的 `trajectory-training-record`。
