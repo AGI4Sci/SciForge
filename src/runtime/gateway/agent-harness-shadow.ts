@@ -1,19 +1,17 @@
 import type { GatewayRequest, LlmEndpointConfig, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
-import { clipForAgentServerJson, errorMessage, hashJson, isRecord, toRecordList } from '../gateway-utils.js';
-import { projectInteractionProgressEvent } from './interaction-progress-harness.js';
-import type { ProgressPlan } from '../../../packages/agent-harness/src/contracts.js';
-import {
-  agentServerBackendSelectionDecision,
-  type AgentServerBackendSelectionDecision,
-} from './agent-backend-config.js';
+import { clipForAgentServerJson, errorMessage, hashJson, isRecord } from '../gateway-utils.js';
+import type { AgentServerBackendSelectionDecision } from './agent-backend-config.js';
+import { agentHarnessBackendSelectionDecision } from './agent-harness-backend-selection.js';
+import { agentHarnessContinuityDecision } from './agent-harness-continuity-decision.js';
+import { agentHarnessProgressPlanProjection } from './agent-harness-progress-plan-projection.js';
+
+export { agentHarnessContinuityDecision };
 
 const AGENT_HARNESS_CONTRACT_EVENT_TYPE = 'agent-harness-contract';
 const AGENT_HARNESS_SHADOW_SCHEMA_VERSION = 'sciforge.agent-harness-shadow.v1';
 const AGENT_HARNESS_HANDOFF_SCHEMA_VERSION = 'sciforge.agent-harness-handoff.v1';
 const AGENT_HARNESS_PROMPT_RENDER_SCHEMA_VERSION = 'sciforge.agent-harness-prompt-render.v1';
-const AGENT_HARNESS_PROGRESS_PLAN_PROJECTION_SCHEMA_VERSION = 'sciforge.agent-harness-progress-plan-projection.v1';
-const AGENT_HARNESS_CONTINUITY_DECISION_SCHEMA_VERSION = 'sciforge.agent-harness-continuity-decision.v1';
 const DEFAULT_AGENT_HARNESS_PROFILE_ID = 'balanced-default';
 
 interface AgentHarnessEvaluation {
@@ -175,63 +173,6 @@ export function agentHarnessHandoffMetadata(request: GatewayRequest, runtime: {
   };
 }
 
-export function agentHarnessContinuityDecision(request: GatewayRequest) {
-  const uiState = isRecord(request.uiState) ? request.uiState : {};
-  const policy = isRecord(uiState.contextReusePolicy)
-    ? uiState.contextReusePolicy
-    : isRecord(uiState.contextIsolation)
-      ? uiState.contextIsolation
-      : undefined;
-  const policyMode = typeof policy?.mode === 'string' ? policy.mode : '';
-  const historyReuse = isRecord(policy?.historyReuse) ? policy.historyReuse : {};
-  const policyAllowsReuse = historyReuse.allowed === true || policyMode === 'continue' || policyMode === 'repair';
-  const recentRefCount = toRecordList(uiState.recentExecutionRefs).length;
-  const artifactCount = Array.isArray(request.artifacts) ? request.artifacts.length : 0;
-  const useContinuity = policyAllowsReuse || recentRefCount > 0 || artifactCount > 0;
-  const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : {};
-  const contract = isRecord(agentHarness.contract) ? agentHarness.contract : undefined;
-  const summary = isRecord(agentHarness.summary) ? agentHarness.summary : undefined;
-  const trace = isRecord(agentHarness.trace) ? agentHarness.trace : undefined;
-  const intentMode = stringField(contract?.intentMode) ?? stringField(summary?.intentMode);
-  const intentUseContinuity = intentMode === 'continuation' || intentMode === 'repair' || intentMode === 'audit';
-  const reasons = [
-    policyAllowsReuse ? 'reuse-policy' : undefined,
-    recentRefCount > 0 ? 'recent-execution-ref' : undefined,
-    artifactCount > 0 ? 'artifact-input' : undefined,
-  ].filter((reason): reason is string => Boolean(reason));
-  return {
-    schemaVersion: AGENT_HARNESS_CONTINUITY_DECISION_SCHEMA_VERSION,
-    shadowMode: true,
-    decisionOwner: 'AgentServer',
-    decision: useContinuity ? 'continuity' : 'fresh',
-    useContinuity,
-    reasons,
-    runtimeSignals: {
-      policyMode: policyMode || undefined,
-      policyAllowsReuse,
-      recentExecutionRefCount: recentRefCount,
-      artifactCount,
-    },
-    harnessSignals: {
-      profileId: stringField(agentHarness.profileId) ?? stringField(summary?.profileId) ?? stringField(uiState.harnessProfileId),
-      contractRef: stringField(agentHarness.contractRef) ?? stringField(summary?.contractRef),
-      traceRef: stringField(agentHarness.traceRef) ?? stringField(summary?.traceRef),
-      intentMode,
-      intentUseContinuity: intentMode ? intentUseContinuity : undefined,
-      sourceCallbackId: sourceCallbackIdForTraceField(trace, 'intentMode') ?? (intentMode ? 'harness.defaults.intentMode' : undefined),
-    },
-    trace: {
-      policy: policy ? {
-        source: isRecord(uiState.contextReusePolicy) ? 'request.uiState.contextReusePolicy' : 'request.uiState.contextIsolation',
-        mode: policyMode || undefined,
-        historyReuseAllowed: historyReuse.allowed === true,
-      } : undefined,
-      recentExecutionRefs: recentRefCount,
-      artifacts: artifactCount,
-    },
-  };
-}
-
 export function buildAgentHarnessPromptRenderPlan(input: {
   contract?: Record<string, unknown>;
   trace?: Record<string, unknown>;
@@ -373,43 +314,6 @@ function agentHarnessProfileId(request: GatewayRequest) {
     ?? DEFAULT_AGENT_HARNESS_PROFILE_ID;
 }
 
-function agentHarnessBackendSelectionDecision(
-  request: GatewayRequest,
-  input: {
-    backendSelectionDecision?: AgentServerBackendSelectionDecision;
-    llmEndpoint?: LlmEndpointConfig;
-    agentHarness?: Record<string, unknown>;
-    summary?: Record<string, unknown>;
-    trace?: Record<string, unknown>;
-  },
-) {
-  const uiState = isRecord(request.uiState) ? request.uiState : {};
-  const agentHarness = input.agentHarness ?? (isRecord(uiState.agentHarness) ? uiState.agentHarness : {});
-  const summary = input.summary ?? (isRecord(agentHarness.summary) ? agentHarness.summary : {});
-  const trace = input.trace ?? (isRecord(agentHarness.trace) ? agentHarness.trace : undefined);
-  const decision = input.backendSelectionDecision ?? agentServerBackendSelectionDecision(request, input.llmEndpoint);
-  const contractRef = stringField(agentHarness.contractRef) ?? stringField(summary.contractRef);
-  const traceRef = stringField(agentHarness.traceRef) ?? stringField(summary.traceRef);
-  return {
-    ...decision,
-    harnessSignals: {
-      profileId: stringField(agentHarness.profileId) ?? stringField(summary.profileId) ?? stringField(uiState.harnessProfileId),
-      contractRef,
-      traceRef,
-      harnessStage: decision.harnessStage,
-      sourceCallbackId: sourceCallbackIdForTraceStage(trace, decision.harnessStage) ?? 'harness.runtime.beforeAgentDispatch',
-    },
-    trace: {
-      ...decision.trace,
-      harness: {
-        stage: decision.harnessStage,
-        contractRef,
-        traceRef,
-      },
-    },
-  };
-}
-
 function agentHarnessVerificationPolicyProjection(
   contract: Record<string, unknown>,
   current: GatewayRequest['verificationPolicy'],
@@ -446,70 +350,6 @@ function agentHarnessVerificationPolicyProjection(
       riskLevel: merged.riskLevel,
       required: merged.required,
     },
-  };
-}
-
-function agentHarnessProgressPlanProjection(
-  contract: Record<string, unknown>,
-  input: {
-    uiState: Record<string, unknown>;
-    contractRef: string;
-    traceRef: string;
-    profileId: string;
-  },
-) {
-  const agentHarness = isRecord(input.uiState.agentHarness) ? input.uiState.agentHarness : {};
-  const enabled = [
-    input.uiState.agentHarnessProgressPlanEnabled,
-    input.uiState.agentHarnessConsumeProgressPlan,
-    agentHarness.progressPlanEnabled,
-    agentHarness.consumeProgressPlan,
-  ].some(isEnabledFlag);
-  if (!enabled) return undefined;
-  const progressPlan = progressPlanFromContract(contract.progressPlan);
-  if (!progressPlan) return undefined;
-  const toolBudget = isRecord(contract.toolBudget) ? contract.toolBudget : {};
-  const event = projectInteractionProgressEvent({
-    progressPlan,
-    type: 'process-progress',
-    traceRef: input.traceRef,
-    reason: 'progress-plan-projection',
-    status: 'running',
-    budget: {
-      maxRetries: progressPlan.silencePolicy?.maxRetries,
-      maxWallMs: numberField(toolBudget.maxWallMs),
-    },
-  });
-  const audit = {
-    schemaVersion: AGENT_HARNESS_PROGRESS_PLAN_PROJECTION_SCHEMA_VERSION,
-    source: 'request.uiState.agentHarness.contract.progressPlan',
-    contractRef: input.contractRef,
-    traceRef: input.traceRef,
-    profileId: input.profileId,
-    eventType: event.type,
-    phase: event.phase,
-    status: event.status,
-    initialStatus: progressPlan.initialStatus,
-    visibleMilestones: progressPlan.visibleMilestones,
-    phaseNames: progressPlan.phaseNames,
-    silenceTimeoutMs: progressPlan.silenceTimeoutMs,
-    silenceDecision: progressPlan.silencePolicy?.decision,
-    backgroundContinuation: progressPlan.backgroundContinuation,
-  };
-  return {
-    event: {
-      type: event.type,
-      source: 'workspace-runtime',
-      status: event.status,
-      message: progressPlan.initialStatus,
-      detail: event.phase,
-      raw: {
-        ...event,
-        progressPlan,
-        agentHarnessProgressPlan: audit,
-      },
-    },
-    audit,
   };
 }
 
@@ -905,16 +745,6 @@ function sourceCallbackIdForTraceField(trace: Record<string, unknown> | undefine
   return undefined;
 }
 
-function sourceCallbackIdForTraceStage(trace: Record<string, unknown> | undefined, expectedStage: string) {
-  const stages = Array.isArray(trace?.stages) ? trace.stages.filter(isRecord) : [];
-  for (const stage of [...stages].reverse()) {
-    if (stringField(stage.stage) !== expectedStage) continue;
-    const callbackId = stringField(stage.callbackId);
-    if (callbackId) return callbackId;
-  }
-  return undefined;
-}
-
 function emitAgentHarnessContractEvent(
   callbacks: WorkspaceRuntimeCallbacks,
   input: {
@@ -964,26 +794,6 @@ function booleanField(value: unknown) {
   return typeof value === 'boolean' ? value : undefined;
 }
 
-function progressPlanFromContract(value: unknown): ProgressPlan | undefined {
-  if (!isRecord(value)) return undefined;
-  const initialStatus = stringField(value.initialStatus);
-  const silenceTimeoutMs = numberField(value.silenceTimeoutMs);
-  const backgroundContinuation = booleanField(value.backgroundContinuation);
-  if (!initialStatus || silenceTimeoutMs === undefined || backgroundContinuation === undefined) return undefined;
-  const phaseNames = orderedStringListField(value.phaseNames);
-  return {
-    initialStatus,
-    visibleMilestones: orderedStringListField(value.visibleMilestones),
-    phaseNames: phaseNames.length ? phaseNames : undefined,
-    silenceTimeoutMs,
-    backgroundContinuation,
-    silencePolicy: isRecord(value.silencePolicy) ? value.silencePolicy as unknown as ProgressPlan['silencePolicy'] : undefined,
-    backgroundPolicy: isRecord(value.backgroundPolicy) ? value.backgroundPolicy as unknown as ProgressPlan['backgroundPolicy'] : undefined,
-    cancelPolicy: isRecord(value.cancelPolicy) ? value.cancelPolicy as unknown as ProgressPlan['cancelPolicy'] : undefined,
-    interactionPolicy: isRecord(value.interactionPolicy) ? value.interactionPolicy as unknown as ProgressPlan['interactionPolicy'] : undefined,
-  };
-}
-
 function isEnabledFlag(value: unknown) {
   return value === true || ['1', 'true', 'on', 'enabled'].includes(String(value).trim().toLowerCase());
 }
@@ -992,20 +802,6 @@ function stringListField(value: unknown) {
   return Array.isArray(value)
     ? sortedUnique(value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim()))
     : [];
-}
-
-function orderedStringListField(value: unknown) {
-  if (!Array.isArray(value)) return [];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const item of value) {
-    if (typeof item !== 'string') continue;
-    const trimmed = item.trim();
-    if (!trimmed || seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    out.push(trimmed);
-  }
-  return out;
 }
 
 function sortedUnique(values: string[]) {

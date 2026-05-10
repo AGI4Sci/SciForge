@@ -2,11 +2,15 @@ import { writeFile } from 'node:fs/promises';
 import { relative, resolve, sep } from 'node:path';
 
 import type { ValidationFindingProjectionInput } from '@sciforge-ui/runtime-contract/validation-repair-audit';
-import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult } from '../runtime-types.js';
-import { isRecord } from '../gateway-utils.js';
-import { appendTaskAttempt } from '../task-attempt-history.js';
+import type { GatewayRequest, SkillAvailability, TaskAttemptRecord, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult, WorkspaceTaskSpec } from '../runtime-types.js';
+import { errorMessage, isRecord, toRecordList } from '../gateway-utils.js';
+import { appendTaskAttempt, readRecentTaskAttempts } from '../task-attempt-history.js';
 import { sha1 } from '../workspace-task-runner.js';
+import type { RuntimeRefBundle } from './artifact-materializer.js';
+import { currentTurnReferences } from './agentserver-context-window.js';
+import { summarizeTaskAttemptsForAgentServer } from './context-envelope.js';
 import { evaluateGuidanceAdoption } from './guidance-adoption-guard.js';
+import { selectedComponentIdsForRequest } from './gateway-request.js';
 import { recordCapabilityEvolutionRuntimeEvent } from './capability-evolution-events.js';
 import { evaluateToolPayloadEvidence } from './work-evidence-guard.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
@@ -30,7 +34,7 @@ type RepairAttemptRunner = (params: {
 type GeneratedTaskAttemptStatus = 'done' | 'repair-needed' | 'failed-with-reason';
 type AttemptPlanRefs = (request: GatewayRequest, skill?: SkillAvailability, fallbackReason?: string) => Record<string, unknown>;
 
-interface GeneratedTaskRuntimeRefs {
+export interface GeneratedTaskRuntimeRefs {
   taskRel: string;
   inputRel: string;
   outputRel: string;
@@ -54,6 +58,7 @@ export interface GeneratedTaskValidationLifecycle {
   normalizedRepairNeeded: boolean;
   payloadFailureStatus: boolean;
   failureReason?: string;
+  attemptFailureReason?: string;
   attemptStatus: GeneratedTaskAttemptStatus;
   repair?: {
     failureReason: string;
@@ -109,6 +114,39 @@ export interface GeneratedTaskAttemptLifecycleInput extends GeneratedTaskRuntime
   failureReason?: string;
 }
 
+export interface GeneratedTaskRunInputLifecycleInput {
+  workspacePath: string;
+  request: GatewayRequest;
+  skill: SkillAvailability;
+  generatedInputRels: string[];
+  expectedArtifacts: string[];
+}
+
+export interface GeneratedTaskRunInputLifecycle {
+  taskInput: WorkspaceTaskSpec['input'];
+  retentionProtectedInputRels: string[];
+}
+
+export interface GeneratedTaskGenerationFailureLifecycleInput {
+  workspacePath: string;
+  request: GatewayRequest;
+  skill: SkillAvailability;
+  failedRequestId: string;
+  failureReason: string;
+  diagnostics?: any;
+  attemptPlanRefs: AttemptPlanRefs;
+}
+
+export interface GeneratedTaskDirectPayloadAttemptLifecycleInput {
+  workspacePath: string;
+  request: GatewayRequest;
+  skill: SkillAvailability;
+  runId?: string;
+  refs: RuntimeRefBundle;
+  lifecycle: GeneratedTaskDirectPayloadLifecycle;
+  attemptPlanRefs: AttemptPlanRefs;
+}
+
 export interface GeneratedTaskRepairAttemptLifecycleInput extends GeneratedTaskRepairAuditLifecycleInput {
   attemptPlanRefs: AttemptPlanRefs;
   attemptStatus: GeneratedTaskAttemptStatus;
@@ -125,6 +163,10 @@ export interface GeneratedTaskSuccessLedgerInput extends GeneratedTaskRuntimeRef
   runId?: string;
   run: WorkspaceTaskRunResult;
   payload: ToolPayload;
+}
+
+export interface GeneratedTaskSuccessLedgerLifecycleInput extends Omit<GeneratedTaskSuccessLedgerInput, keyof GeneratedTaskRuntimeRefs> {
+  refs: GeneratedTaskRuntimeRefs;
 }
 
 export function assessGeneratedTaskDirectPayloadLifecycle(
@@ -192,8 +234,10 @@ export function assessGeneratedTaskValidationLifecycle(
       : payloadFailureStatus
         ? normalized ? payloadAttemptStatus(normalized) : payloadAttemptStatus(payload)
         : 'done';
+  const schemaFailureReason = schemaErrors.length ? generatedTaskSchemaFailureReason(schemaErrors) : undefined;
+  const attemptFailureReason = schemaFailureReason ?? failureReason;
   const repairFailureReason = schemaErrors.length
-    ? `AgentServer generated task output failed schema validation: ${schemaErrors.join('; ')}`
+    ? schemaFailureReason
     : shouldRepairExecutionFailure
       ? normalizedRepairNeeded
         ? String(failureReason)
@@ -206,12 +250,13 @@ export function assessGeneratedTaskValidationLifecycle(
     normalizedRepairNeeded,
     payloadFailureStatus,
     failureReason,
+    attemptFailureReason,
     attemptStatus,
     repair: repairFailureReason ? {
       failureReason: repairFailureReason,
       recoverActions: schemaErrors.length
-        ? ['repair-output-schema', 'preserve-output-ref', 'rerun-generated-task']
-        : ['repair-runtime-evidence', 'preserve-output-ref', 'rerun-generated-task'],
+        ? generatedTaskRepairRecoverActions('schema-validation')
+        : generatedTaskRepairRecoverActions('runtime-evidence'),
     } : undefined,
   };
 }
@@ -344,10 +389,154 @@ export async function recordGeneratedTaskSuccessLedger(
   });
 }
 
+export async function recordGeneratedTaskSuccessLedgerLifecycle(
+  input: GeneratedTaskSuccessLedgerLifecycleInput,
+) {
+  await recordGeneratedTaskSuccessLedger({
+    ...input,
+    ...input.refs,
+  });
+}
+
+export async function buildGeneratedTaskRunInputLifecycle(
+  input: GeneratedTaskRunInputLifecycleInput,
+): Promise<GeneratedTaskRunInputLifecycle> {
+  const currentRefs = currentTurnReferences(input.request);
+  const priorAttempts = currentRefs.length
+    ? []
+    : summarizeTaskAttemptsForAgentServer(await readRecentTaskAttempts(input.workspacePath, input.request.skillDomain, 8, {
+      scenarioPackageId: input.request.scenarioPackageRef?.id,
+      skillPlanRef: input.request.skillPlanRef,
+      prompt: input.request.prompt,
+    }));
+  return {
+    taskInput: {
+      prompt: input.request.prompt,
+      attempt: 1,
+      skillId: input.skill.id,
+      agentServerGenerated: true,
+      artifacts: input.request.artifacts,
+      uiStateSummary: input.request.uiState,
+      taskProjectHandoff: isRecord(input.request.uiState?.taskProjectHandoff) ? input.request.uiState.taskProjectHandoff : undefined,
+      userGuidanceQueue: activeGuidanceQueueForGeneratedTaskInput(input.request),
+      recentExecutionRefs: toRecordList(input.request.uiState?.recentExecutionRefs),
+      priorAttempts,
+      expectedArtifacts: input.expectedArtifacts,
+      selectedComponentIds: selectedComponentIdsForRequest(input.request),
+    },
+    retentionProtectedInputRels: input.generatedInputRels,
+  };
+}
+
+export async function appendGeneratedTaskGenerationFailureLifecycle(
+  input: GeneratedTaskGenerationFailureLifecycleInput,
+) {
+  await appendTaskAttempt(input.workspacePath, {
+    id: input.failedRequestId,
+    prompt: input.request.prompt,
+    skillDomain: input.request.skillDomain,
+    ...input.attemptPlanRefs(input.request, input.skill, input.failureReason),
+    skillId: input.skill.id,
+    attempt: 1,
+    status: 'repair-needed',
+    failureReason: input.failureReason,
+    contextRecovery: contextRecoveryAttemptMetadata(input.diagnostics),
+    createdAt: new Date().toISOString(),
+  });
+}
+
+export async function appendGeneratedTaskDirectPayloadAttemptLifecycle(
+  input: GeneratedTaskDirectPayloadAttemptLifecycleInput,
+) {
+  await appendTaskAttempt(input.workspacePath, {
+    id: `agentserver-direct-${input.skill.id}-${sha1(`${input.request.prompt}:${input.runId || 'unknown'}`).slice(0, 12)}`,
+    prompt: input.request.prompt,
+    skillDomain: input.request.skillDomain,
+    ...input.attemptPlanRefs(input.request, input.skill),
+    skillId: input.skill.id,
+    attempt: 1,
+    status: input.lifecycle.attemptStatus,
+    codeRef: input.refs.taskRel,
+    outputRef: input.refs.outputRel,
+    stdoutRef: input.refs.stdoutRel,
+    stderrRef: input.refs.stderrRel,
+    workEvidenceSummary: input.lifecycle.workEvidenceSummary,
+    failureReason: input.lifecycle.failureReason,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+export async function runGeneratedTaskPreOutputRepairLifecycle(
+  input: Omit<GeneratedTaskRepairAttemptLifecycleInput, 'attemptStatus' | 'schemaErrors' | 'failureReason' | 'recoverActions'>,
+): Promise<{ repaired?: ToolPayload; failureReason: string }> {
+  const failureReason = input.run.stderr || 'AgentServer generated task failed before writing output.';
+  const repaired = await runGeneratedTaskRepairAttemptLifecycle({
+    ...input,
+    attemptStatus: 'repair-needed',
+    schemaErrors: [],
+    failureReason,
+    recoverActions: generatedTaskRepairRecoverActions('pre-output-failure'),
+  });
+  return { repaired, failureReason };
+}
+
+export async function runGeneratedTaskParseRepairLifecycle(
+  input: Omit<GeneratedTaskRepairAttemptLifecycleInput, 'attemptStatus' | 'schemaErrors' | 'failureReason' | 'recoverActions'> & { error: unknown },
+): Promise<{ repaired?: ToolPayload; failureReason: string }> {
+  const failureReason = `AgentServer generated task output could not be parsed: ${errorMessage(input.error)}`;
+  const repaired = await runGeneratedTaskRepairAttemptLifecycle({
+    ...input,
+    attemptStatus: 'repair-needed',
+    schemaErrors: ['output could not be parsed'],
+    failureReason,
+    recoverActions: generatedTaskRepairRecoverActions('parse-output-failure'),
+  });
+  return { repaired, failureReason };
+}
+
 export function payloadHasRepairOrFailureStatus(payload: ToolPayload) {
   return payloadHasRepairNeededStatus(payload)
     || (Array.isArray(payload.executionUnits) ? payload.executionUnits : [])
       .some((unit) => isRecord(unit) && /failed|error|needs-human/i.test(String(unit.status || '')));
+}
+
+function generatedTaskSchemaFailureReason(schemaErrors: string[]) {
+  return `AgentServer generated task output failed schema validation: ${schemaErrors.join('; ')}`;
+}
+
+function generatedTaskRepairRecoverActions(kind: 'schema-validation' | 'runtime-evidence' | 'pre-output-failure' | 'parse-output-failure') {
+  if (kind === 'schema-validation') return ['repair-output-schema', 'preserve-output-ref', 'rerun-generated-task'];
+  if (kind === 'runtime-evidence') return ['repair-runtime-evidence', 'preserve-output-ref', 'rerun-generated-task'];
+  if (kind === 'pre-output-failure') return ['inspect-stderr-ref', 'repair-generated-task', 'rerun-generated-task'];
+  return ['inspect-output-ref', 'repair-output-parser', 'rerun-generated-task'];
+}
+
+function activeGuidanceQueueForGeneratedTaskInput(request: GatewayRequest) {
+  const handoff = isRecord(request.uiState?.taskProjectHandoff) ? request.uiState.taskProjectHandoff : undefined;
+  const queue = Array.isArray(handoff?.userGuidanceQueue)
+    ? handoff.userGuidanceQueue
+    : Array.isArray(request.uiState?.userGuidanceQueue)
+      ? request.uiState.userGuidanceQueue
+      : Array.isArray(request.uiState?.guidanceQueue)
+        ? request.uiState.guidanceQueue
+        : [];
+  return queue.filter((entry): entry is Record<string, unknown> => isRecord(entry)
+    && typeof entry.id === 'string'
+    && (entry.status === 'queued' || entry.status === 'deferred'));
+}
+
+function contextRecoveryAttemptMetadata(diagnostics: any): TaskAttemptRecord['contextRecovery'] {
+  return diagnostics?.kind === 'contextWindowExceeded' ? {
+    kind: 'contextWindowExceeded',
+    backend: diagnostics.backend,
+    provider: diagnostics.provider,
+    agentId: diagnostics.agentId,
+    sessionRef: diagnostics.sessionRef,
+    originalErrorSummary: diagnostics.originalErrorSummary,
+    compaction: diagnostics.compaction,
+    retryAttempted: diagnostics.retryAttempted,
+    retrySucceeded: diagnostics.retrySucceeded,
+  } : undefined;
 }
 
 function payloadHasRepairNeededStatus(payload: ToolPayload) {

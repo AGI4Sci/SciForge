@@ -19,6 +19,8 @@ import {
   type UnifiedCapabilityGraph,
   type UnifiedCapabilityGraphInput,
 } from './capability-harness-candidates.js';
+import { manifest as reportViewerManifest } from '../../packages/presentation/components/report-viewer/manifest';
+import type { UIComponentManifest } from '../../packages/contracts/runtime/index.js';
 import {
   discoverPackageCapabilityManifestsFromFiles,
   type CapabilityManifestFileDiscoveryAudit,
@@ -368,6 +370,10 @@ function offlinePackageProviderCapabilityManifests(): CapabilityManifest[] {
       loadJsonFile<VerifierProviderManifestProjectionSource>('../../packages/verifiers/fixtures/human-approval.manifest.json'),
       'packages/verifiers/fixtures/human-approval.manifest.json',
     ),
+    projectUIComponentManifestToCapabilityManifest(
+      reportViewerManifest,
+      'packages/presentation/components/report-viewer/manifest.ts',
+    ),
   ];
 }
 
@@ -652,6 +658,122 @@ function projectVerifierProviderManifestToCapabilityManifest(
   };
 }
 
+function projectUIComponentManifestToCapabilityManifest(
+  component: UIComponentManifest,
+  manifestSourceRef: string,
+): CapabilityManifest {
+  const capabilityId = `view.${component.componentId}`;
+  const providerId = `sciforge.presentation.${component.componentId}`;
+  return {
+    contract: CAPABILITY_MANIFEST_CONTRACT_ID,
+    id: capabilityId,
+    name: component.title,
+    version: component.version,
+    ownerPackage: component.packageName,
+    kind: 'view',
+    brief: component.docs.agentSummary || component.description,
+    routingTags: uniqueSortedStrings([
+      component.componentId,
+      component.moduleId,
+      ...component.componentId.split(/[.-]/),
+      ...component.moduleId.split(/[.-]/),
+      ...(component.acceptsArtifactTypes ?? []),
+      ...(component.outputArtifactTypes ?? []),
+      ...(component.viewParams ?? []),
+      ...(component.interactionEvents ?? []),
+      ...(component.roleDefaults ?? []),
+    ]),
+    domains: uniqueSortedStrings([
+      'presentation',
+      'view',
+      ...component.acceptsArtifactTypes,
+      ...(component.outputArtifactTypes ?? []),
+    ]),
+    inputSchema: {
+      type: 'object',
+      required: ['artifactRef'],
+      properties: {
+        artifactRef: { type: 'string' },
+        artifactType: { enum: component.acceptsArtifactTypes },
+        viewParamsRef: { type: 'string' },
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      required: ['componentId', 'renderedArtifactRef'],
+      properties: {
+        componentId: { const: component.componentId },
+        renderedArtifactRef: { type: 'string' },
+        interactionEventRefs: { type: 'array', items: { type: 'string' } },
+      },
+    },
+    sideEffects: uiComponentSideEffects(component),
+    safety: {
+      risk: uiComponentRisk(component),
+      dataScopes: uiComponentDataScopes(component),
+    },
+    examples: [{
+      title: `${component.componentId} package view`,
+      inputRef: `capability:${capabilityId}/input.example`,
+      outputRef: `capability:${capabilityId}/output.example`,
+    }],
+    validators: [{
+      id: `${capabilityId}.ui-component-manifest`,
+      kind: 'schema',
+      contractRef: `${manifestSourceRef}#UIComponentManifest`,
+      expectedRefs: ['renderedArtifactRef'],
+    }],
+    repairHints: [
+      {
+        failureCode: 'missing-artifact-ref',
+        summary: 'Provide a stable artifact ref instead of inlining large artifact payloads into the view request.',
+        recoverActions: ['preserve-artifact-ref', 'reload-view-manifest', 'fallback-to-generic-inspector'],
+      },
+      {
+        failureCode: 'missing-required-fields',
+        summary: 'Route to a fallback view or repair the artifact fields required by the component manifest.',
+        recoverActions: ['validate-artifact-shape', 'select-fallback-view', 'request-artifact-repair'],
+      },
+    ],
+    providers: [{
+      id: providerId,
+      label: component.title,
+      kind: 'package',
+      contractRef: manifestSourceRef,
+      requiredConfig: [],
+      priority: component.priority,
+    }],
+    lifecycle: {
+      status: component.lifecycle,
+      sourceRef: manifestSourceRef,
+    },
+    metadata: {
+      sourceSchemaVersion: 'sciforge.ui-component-manifest.v1',
+      sourceComponentId: component.componentId,
+      sourceModuleId: component.moduleId,
+      sourcePackageName: component.packageName,
+      readmePath: component.docs.readmePath,
+      acceptedArtifactTypes: [...component.acceptsArtifactTypes],
+      outputArtifactTypes: [...(component.outputArtifactTypes ?? [])],
+      requiredFields: [...(component.requiredFields ?? [])],
+      requiredAnyFields: component.requiredAnyFields?.map((fields) => [...fields]) ?? [],
+      viewParams: [...(component.viewParams ?? [])],
+      interactionEvents: [...(component.interactionEvents ?? [])],
+      defaultSection: component.defaultSection,
+      presentation: component.presentation ? {
+        dedupeScope: component.presentation.dedupeScope,
+        identityFields: [...(component.presentation.identityFields ?? [])],
+      } : undefined,
+      fallbackCandidateIds: (component.fallbackModuleIds ?? []).map((componentId) => `view.${componentId}`),
+      budget: {
+        maxResultItems: 1,
+        maxRetries: 0,
+        exhaustedPolicy: 'partial-payload',
+      },
+    },
+  };
+}
+
 function actionSideEffects(provider: ActionProviderManifestProjectionSource): CapabilityManifestSideEffect[] {
   const targetTypes = new Set(provider.environmentTargets.map((target) => target.type));
   const rawEffects = new Set(provider.environmentTargets.flatMap((target) => target.sideEffects));
@@ -681,6 +803,23 @@ function actionMaxSteps(inputShape: Record<string, unknown>): number | undefined
 function verifierManifestRisk(provider: VerifierProviderManifestProjectionSource): CapabilityManifestRisk {
   if (provider.verifierType === 'human') return 'low';
   return provider.riskPolicy.coversRiskLevels.includes('high') ? 'medium' : 'low';
+}
+
+function uiComponentSideEffects(component: UIComponentManifest): CapabilityManifestSideEffect[] {
+  if (component.safety?.externalResources && component.safety.externalResources !== 'none') return ['workspace-read', 'network'];
+  return ['none'];
+}
+
+function uiComponentRisk(component: UIComponentManifest): CapabilityManifestRisk {
+  if (component.safety?.executesCode) return 'high';
+  if (component.safety?.externalResources && component.safety.externalResources !== 'none') return 'medium';
+  return 'low';
+}
+
+function uiComponentDataScopes(component: UIComponentManifest): string[] {
+  const scopes = ['workspace-refs'];
+  if (component.safety?.externalResources && component.safety.externalResources !== 'none') scopes.push('declared-external-resources');
+  return uniqueSortedStrings(scopes);
 }
 
 function packageRootFromManifestSourceRef(sourceRef: string) {

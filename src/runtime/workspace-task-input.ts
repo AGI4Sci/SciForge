@@ -1,6 +1,3 @@
-import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
 import {
   buildBackendInputTextAnchors,
   handoffArtifactDataSummaryReason,
@@ -8,6 +5,38 @@ import {
   inferHandoffJsonSchema,
   isBinaryLikeHandoffString,
 } from '@sciforge-ui/runtime-contract/handoff-input-policy';
+import {
+  DEFAULT_BACKEND_HANDOFF_BUDGET,
+  attachHandoffManifest,
+  attachHandoffSlimmingTraceManifest,
+  backendHandoffAuditRefs,
+  backendHandoffRef,
+  backendHandoffSlimmingSourceRefs,
+  buildBackendHandoffSlimmingTrace,
+  estimateBytes,
+  estimateHandoffContext,
+  normalizeSlimmingSourceRefs,
+  sha1Json,
+  sha1Text,
+  stringifyJson,
+  writeBackendHandoffRawRef,
+  writeWorkspaceRef,
+  type BackendHandoffBudget,
+  type BackendHandoffBudgetDecision,
+  type BackendHandoffNormalizationResult,
+  type BackendHandoffSlimmingSourceRefs,
+} from './backend-handoff-trace.js';
+
+export { DEFAULT_BACKEND_HANDOFF_BUDGET } from './backend-handoff-trace.js';
+export type {
+  BackendHandoffBudget,
+  BackendHandoffBudgetDecision,
+  BackendHandoffContextEstimate,
+  BackendHandoffNormalizationResult,
+  BackendHandoffSlimmingSourceRefs,
+  BackendHandoffSlimmingTrace,
+  BackendHandoffSlimmingTraceDecision,
+} from './backend-handoff-trace.js';
 
 export interface WorkspaceTaskInputRefs {
   workspacePath: string;
@@ -24,94 +53,6 @@ const MAX_INLINE_VALUE_BYTES = 64 * 1024;
 const MAX_ARRAY_ITEMS = 24;
 const MAX_OBJECT_KEYS = 80;
 const MAX_DEPTH = 7;
-
-export interface BackendHandoffBudget {
-  schemaVersion: 'sciforge.backend-handoff-budget.v1';
-  maxPayloadBytes: number;
-  maxInlineStringChars: number;
-  maxInlineJsonBytes: number;
-  maxArrayItems: number;
-  maxObjectKeys: number;
-  maxDepth: number;
-  headChars: number;
-  tailChars: number;
-  maxPriorAttempts: number;
-}
-
-export interface BackendHandoffNormalizationResult<T = unknown> {
-  payload: T;
-  rawRef: string;
-  rawSha1: string;
-  rawBytes: number;
-  normalizedBytes: number;
-  budget: BackendHandoffBudget;
-  decisions: BackendHandoffBudgetDecision[];
-  auditRefs: string[];
-  contextEstimate: BackendHandoffContextEstimate;
-  slimmingTrace: BackendHandoffSlimmingTrace;
-  slimmingTraceRef: string;
-  slimmingTraceSha1: string;
-}
-
-export interface BackendHandoffBudgetDecision {
-  kind: string;
-  reason?: string;
-  pointer?: string;
-  rawRef: string;
-  estimatedBytes?: number;
-  originalCount?: number;
-  keptCount?: number;
-  omittedCount?: number;
-}
-
-export interface BackendHandoffContextEstimate {
-  source: 'estimate';
-  rawTokens: number;
-  normalizedTokens: number;
-  savedTokens: number;
-  rawBytes: number;
-  normalizedBytes: number;
-  budgetMaxPayloadBytes: number;
-  normalizedBudgetRatio: number;
-}
-
-export interface BackendHandoffSlimmingTrace {
-  schemaVersion: 'sciforge.backend-handoff-slimming-trace.v1';
-  rawRef: string;
-  rawSha1: string;
-  rawBytes: number;
-  normalizedBytes: number;
-  sourceRefs: BackendHandoffSlimmingSourceRefs;
-  budget: BackendHandoffBudget;
-  contextEstimate: BackendHandoffContextEstimate;
-  deterministic: true;
-  decisions: BackendHandoffSlimmingTraceDecision[];
-  decisionDigest: string;
-}
-
-export interface BackendHandoffSlimmingSourceRefs {
-  harnessContractRef?: string;
-  harnessTraceRef?: string;
-  agentHarnessHandoffSchemaVersion?: string;
-}
-
-export interface BackendHandoffSlimmingTraceDecision extends BackendHandoffBudgetDecision {
-  decisionRef: string;
-  ordinal: number;
-}
-
-export const DEFAULT_BACKEND_HANDOFF_BUDGET: BackendHandoffBudget = {
-  schemaVersion: 'sciforge.backend-handoff-budget.v1',
-  maxPayloadBytes: 220_000,
-  maxInlineStringChars: 12_000,
-  maxInlineJsonBytes: 48_000,
-  maxArrayItems: 24,
-  maxObjectKeys: 80,
-  maxDepth: 7,
-  headChars: 2000,
-  tailChars: 2000,
-  maxPriorAttempts: 4,
-};
 
 export function buildWorkspaceTaskInput(input: Record<string, unknown>, refs: WorkspaceTaskInputRefs) {
   const compacted = compactObject(input, [], 0);
@@ -145,19 +86,16 @@ export async function normalizeBackendHandoff<T = unknown>(
   const sourceRefs = normalizeSlimmingSourceRefs(options.sourceRefs ?? backendHandoffSlimmingSourceRefs(input));
   const rawJson = stringifyJson(input);
   const rawSha1 = sha1Text(rawJson);
-  const rawRef = join(
-    '.sciforge',
-    'handoffs',
-    `${new Date().toISOString().replace(/[:.]/g, '-')}-${safeToken(options.purpose)}-${rawSha1.slice(0, 10)}.json`,
-  );
-  await writeWorkspaceRef(options.workspacePath, rawRef, JSON.stringify({
-    schemaVersion: 'sciforge.backend-handoff-raw.v1',
-    createdAt: new Date().toISOString(),
+  const rawBytes = Buffer.byteLength(rawJson, 'utf8');
+  const rawRef = backendHandoffRef(options.purpose, rawSha1);
+  await writeBackendHandoffRawRef({
+    workspacePath: options.workspacePath,
+    rawRef,
     purpose: options.purpose,
     rawSha1,
-    rawBytes: Buffer.byteLength(rawJson, 'utf8'),
+    rawBytes,
     payload: input,
-  }, null, 2));
+  });
 
   let payload = normalizeHandoffValue(input, {
     budget,
@@ -171,7 +109,7 @@ export async function normalizeBackendHandoff<T = unknown>(
     budget,
     rawRef,
     rawSha1,
-    rawBytes: Buffer.byteLength(rawJson, 'utf8'),
+    rawBytes,
     sourceRefs,
   }) as T;
 
@@ -198,7 +136,7 @@ export async function normalizeBackendHandoff<T = unknown>(
       budget,
       rawRef,
       rawSha1,
-      rawBytes: Buffer.byteLength(rawJson, 'utf8'),
+      rawBytes,
       forced: true,
       sourceRefs,
     }) as T;
@@ -209,7 +147,7 @@ export async function normalizeBackendHandoff<T = unknown>(
       kind: 'backend-handoff',
       reason: 'payload-budget',
       rawRef,
-      estimatedBytes: Buffer.byteLength(rawJson, 'utf8'),
+      estimatedBytes: rawBytes,
     });
     payload = attachHandoffManifest({
       _sciforgeCompacted: true,
@@ -217,7 +155,7 @@ export async function normalizeBackendHandoff<T = unknown>(
       reason: 'payload-budget',
       rawRef,
       rawSha1,
-      rawBytes: Buffer.byteLength(rawJson, 'utf8'),
+      rawBytes,
       schema: inferHandoffJsonSchema(input),
       head: rawJson.slice(0, Math.min(1000, budget.headChars)),
       tail: rawJson.slice(-Math.min(1000, budget.tailChars)),
@@ -225,26 +163,22 @@ export async function normalizeBackendHandoff<T = unknown>(
       budget,
       rawRef,
       rawSha1,
-      rawBytes: Buffer.byteLength(rawJson, 'utf8'),
+      rawBytes,
       forced: true,
       sourceRefs,
     }) as T;
     normalizedBytes = estimateBytes(payload);
   }
-  const slimmingTraceRef = join(
-    '.sciforge',
-    'handoffs',
-    `${new Date().toISOString().replace(/[:.]/g, '-')}-${safeToken(options.purpose)}-${rawSha1.slice(0, 10)}-slimming-trace.json`,
-  );
+  const slimmingTraceRef = backendHandoffRef(options.purpose, rawSha1, '-slimming-trace');
   let contextEstimate = estimateHandoffContext({
-    rawBytes: Buffer.byteLength(rawJson, 'utf8'),
+    rawBytes,
     normalizedBytes,
     maxPayloadBytes: budget.maxPayloadBytes,
   });
   let slimmingTrace = buildBackendHandoffSlimmingTrace({
     rawRef,
     rawSha1,
-    rawBytes: Buffer.byteLength(rawJson, 'utf8'),
+    rawBytes,
     normalizedBytes,
     budget,
     sourceRefs,
@@ -259,14 +193,14 @@ export async function normalizeBackendHandoff<T = unknown>(
   }) as T;
   normalizedBytes = estimateBytes(payload);
   contextEstimate = estimateHandoffContext({
-    rawBytes: Buffer.byteLength(rawJson, 'utf8'),
+    rawBytes,
     normalizedBytes,
     maxPayloadBytes: budget.maxPayloadBytes,
   });
   slimmingTrace = buildBackendHandoffSlimmingTrace({
     rawRef,
     rawSha1,
-    rawBytes: Buffer.byteLength(rawJson, 'utf8'),
+    rawBytes,
     normalizedBytes,
     budget,
     sourceRefs,
@@ -281,14 +215,14 @@ export async function normalizeBackendHandoff<T = unknown>(
   }) as T;
   normalizedBytes = estimateBytes(payload);
   contextEstimate = estimateHandoffContext({
-    rawBytes: Buffer.byteLength(rawJson, 'utf8'),
+    rawBytes,
     normalizedBytes,
     maxPayloadBytes: budget.maxPayloadBytes,
   });
   slimmingTrace = buildBackendHandoffSlimmingTrace({
     rawRef,
     rawSha1,
-    rawBytes: Buffer.byteLength(rawJson, 'utf8'),
+    rawBytes,
     normalizedBytes,
     budget,
     sourceRefs,
@@ -303,14 +237,14 @@ export async function normalizeBackendHandoff<T = unknown>(
   }) as T;
   normalizedBytes = estimateBytes(payload);
   contextEstimate = estimateHandoffContext({
-    rawBytes: Buffer.byteLength(rawJson, 'utf8'),
+    rawBytes,
     normalizedBytes,
     maxPayloadBytes: budget.maxPayloadBytes,
   });
   slimmingTrace = buildBackendHandoffSlimmingTrace({
     rawRef,
     rawSha1,
-    rawBytes: Buffer.byteLength(rawJson, 'utf8'),
+    rawBytes,
     normalizedBytes,
     budget,
     sourceRefs,
@@ -325,15 +259,16 @@ export async function normalizeBackendHandoff<T = unknown>(
     payload,
     rawRef,
     rawSha1,
-    rawBytes: Buffer.byteLength(rawJson, 'utf8'),
+    rawBytes,
     normalizedBytes,
     budget,
     decisions,
-    auditRefs: [
-      `backend-handoff:${safeToken(options.purpose)}:${rawSha1.slice(0, 12)}`,
+    auditRefs: backendHandoffAuditRefs({
+      purpose: options.purpose,
+      rawSha1,
       rawRef,
       slimmingTraceRef,
-    ],
+    }),
     contextEstimate,
     slimmingTrace,
     slimmingTraceRef,
@@ -644,154 +579,6 @@ function handoffSummary(value: unknown, context: {
   };
 }
 
-function estimateHandoffContext(params: {
-  rawBytes: number;
-  normalizedBytes: number;
-  maxPayloadBytes: number;
-}): BackendHandoffContextEstimate {
-  const rawTokens = Math.ceil(params.rawBytes / 4);
-  const normalizedTokens = Math.ceil(params.normalizedBytes / 4);
-  return {
-    source: 'estimate',
-    rawTokens,
-    normalizedTokens,
-    savedTokens: Math.max(0, rawTokens - normalizedTokens),
-    rawBytes: params.rawBytes,
-    normalizedBytes: params.normalizedBytes,
-    budgetMaxPayloadBytes: params.maxPayloadBytes,
-    normalizedBudgetRatio: params.maxPayloadBytes ? params.normalizedBytes / params.maxPayloadBytes : 0,
-  };
-}
-
-function attachHandoffManifest(value: unknown, manifest: {
-  budget: BackendHandoffBudget;
-  rawRef: string;
-  rawSha1: string;
-  rawBytes: number;
-  forced?: boolean;
-  sourceRefs?: BackendHandoffSlimmingSourceRefs;
-}) {
-  const handoffManifest = {
-    schemaVersion: 'sciforge.backend-handoff-normalized.v1',
-    rawRef: manifest.rawRef,
-    rawSha1: manifest.rawSha1,
-    rawBytes: manifest.rawBytes,
-    budget: manifest.budget,
-    forcedSecondPass: manifest.forced === true,
-    sourceRefs: manifest.sourceRefs,
-  };
-  if (isRecord(value)) return { ...value, _sciforgeHandoffManifest: handoffManifest };
-  return { value, _sciforgeHandoffManifest: handoffManifest };
-}
-
-function attachHandoffSlimmingTraceManifest(value: unknown, manifest: {
-  slimmingTraceRef: string;
-  decisionCount: number;
-  decisionDigest: string;
-  sourceRefs: BackendHandoffSlimmingSourceRefs;
-}) {
-  const record = isRecord(value) ? value : { value };
-  const current = isRecord(record._sciforgeHandoffManifest) ? record._sciforgeHandoffManifest : {};
-  return {
-    ...record,
-    _sciforgeHandoffManifest: {
-      ...current,
-      slimmingTraceRef: manifest.slimmingTraceRef,
-      slimmingDecisionCount: manifest.decisionCount,
-      slimmingDecisionDigest: manifest.decisionDigest,
-      sourceRefs: manifest.sourceRefs,
-    },
-  };
-}
-
-function buildBackendHandoffSlimmingTrace(input: {
-  rawRef: string;
-  rawSha1: string;
-  rawBytes: number;
-  normalizedBytes: number;
-  budget: BackendHandoffBudget;
-  sourceRefs: BackendHandoffSlimmingSourceRefs;
-  contextEstimate: BackendHandoffContextEstimate;
-  decisions: BackendHandoffBudgetDecision[];
-}): BackendHandoffSlimmingTrace {
-  const decisions = input.decisions.map((decision, index) => ({
-    ...decision,
-    ordinal: index,
-    decisionRef: `backend-handoff-slimming:${input.rawSha1.slice(0, 12)}:${index}:${sha1Json({
-      kind: decision.kind,
-      reason: decision.reason,
-      pointer: decision.pointer,
-      rawRef: decision.rawRef,
-      estimatedBytes: decision.estimatedBytes,
-      originalCount: decision.originalCount,
-      keptCount: decision.keptCount,
-      omittedCount: decision.omittedCount,
-      sourceRefs: input.sourceRefs,
-    }).slice(0, 12)}`,
-  }));
-  const digestInput = {
-    rawSha1: input.rawSha1,
-    normalizedBytes: input.normalizedBytes,
-    sourceRefs: input.sourceRefs,
-    decisions,
-  };
-  return {
-    schemaVersion: 'sciforge.backend-handoff-slimming-trace.v1',
-    rawRef: input.rawRef,
-    rawSha1: input.rawSha1,
-    rawBytes: input.rawBytes,
-    normalizedBytes: input.normalizedBytes,
-    sourceRefs: input.sourceRefs,
-    budget: input.budget,
-    contextEstimate: input.contextEstimate,
-    deterministic: true,
-    decisions,
-    decisionDigest: `sha1:${sha1Json(digestInput).slice(0, 16)}`,
-  };
-}
-
-function backendHandoffSlimmingSourceRefs(value: unknown): BackendHandoffSlimmingSourceRefs {
-  const candidates = [
-    value,
-    recordPath(value, ['metadata']),
-    recordPath(value, ['input', 'metadata']),
-    recordPath(value, ['runtime', 'metadata']),
-    recordPath(value, ['metadata', 'agentHarnessHandoff']),
-    recordPath(value, ['input', 'metadata', 'agentHarnessHandoff']),
-    recordPath(value, ['runtime', 'metadata', 'agentHarnessHandoff']),
-  ].filter(isRecord);
-  for (const candidate of candidates) {
-    const handoff = isRecord(candidate.agentHarnessHandoff) ? candidate.agentHarnessHandoff : candidate;
-    const harnessContractRef = stringField(handoff.harnessContractRef) ?? stringField(candidate.harnessContractRef);
-    const harnessTraceRef = stringField(handoff.harnessTraceRef) ?? stringField(candidate.harnessTraceRef);
-    if (harnessContractRef || harnessTraceRef) {
-      return normalizeSlimmingSourceRefs({
-        harnessContractRef,
-        harnessTraceRef,
-        agentHarnessHandoffSchemaVersion: stringField(handoff.schemaVersion),
-      });
-    }
-  }
-  return {};
-}
-
-function normalizeSlimmingSourceRefs(sourceRefs: BackendHandoffSlimmingSourceRefs): BackendHandoffSlimmingSourceRefs {
-  return {
-    harnessContractRef: stringField(sourceRefs.harnessContractRef),
-    harnessTraceRef: stringField(sourceRefs.harnessTraceRef),
-    agentHarnessHandoffSchemaVersion: stringField(sourceRefs.agentHarnessHandoffSchemaVersion),
-  };
-}
-
-function recordPath(value: unknown, path: string[]) {
-  let current = value;
-  for (const part of path) {
-    if (!isRecord(current)) return undefined;
-    current = current[part];
-  }
-  return current;
-}
-
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
@@ -990,40 +777,6 @@ function looksLikeArtifact(value: Record<string, unknown>) {
     && ('data' in value || 'dataRef' in value || 'path' in value || 'metadata' in value);
 }
 
-function estimateBytes(value: unknown) {
-  try {
-    return Buffer.byteLength(JSON.stringify(value));
-  } catch {
-    return 0;
-  }
-}
-
-function sha1Json(value: unknown) {
-  try {
-    return sha1Text(JSON.stringify(value));
-  } catch {
-    return sha1Text(String(value));
-  }
-}
-
-function sha1Text(value: string) {
-  return createHash('sha1').update(value).digest('hex');
-}
-
-function stringifyJson(value: unknown) {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return JSON.stringify({ unserializable: String(value) });
-  }
-}
-
-async function writeWorkspaceRef(workspace: string, rel: string, content: string) {
-  const path = join(workspace, rel);
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, content);
-}
-
 function referenceFields(value: Record<string, unknown>) {
   return {
     codeRef: stringField(value.codeRef),
@@ -1057,11 +810,6 @@ function shouldPreserveHandoffContainer(path: string[]) {
 function jsonPointer(path: string[]) {
   return `/${path.map((part) => part.replaceAll('~', '~0').replaceAll('/', '~1')).join('/')}`;
 }
-
-function safeToken(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'handoff';
-}
-
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

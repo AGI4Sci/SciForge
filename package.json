@@ -101,6 +101,7 @@
     "smoke:validation-repair-audit-sink": "tsx tests/smoke/smoke-validation-repair-audit-sink.ts",
     "smoke:validation-repair-audit-ledger-sink": "tsx tests/smoke/smoke-validation-repair-audit-ledger-sink.ts",
     "smoke:validation-repair-audit-verification-artifact-sink": "tsx tests/smoke/smoke-validation-repair-audit-verification-artifact-sink.ts",
+    "smoke:validation-repair-audit-observe-invocation-sink": "tsx tests/smoke/smoke-validation-repair-audit-observe-invocation-sink.ts",
     "smoke:validation-repair-telemetry-sink": "tsx tests/smoke/smoke-validation-repair-telemetry-sink.ts",
     "smoke:capability-evolution-ledger-facts": "tsx tests/smoke/smoke-capability-evolution-ledger-facts.ts",
     "smoke:repair-executor": "tsx tests/smoke/smoke-repair-executor.ts",

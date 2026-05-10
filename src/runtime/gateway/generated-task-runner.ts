@@ -1,21 +1,22 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
-import { appendTaskAttempt, readRecentTaskAttempts } from '../task-attempt-history.js';
 import type { AgentServerGenerationResponse, GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult } from '../runtime-types.js';
 import { fileExists, runWorkspaceTask, sha1 } from '../workspace-task-runner.js';
 import { maybeWriteSkillPromotionProposal } from '../skill-promotion.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
-import { errorMessage, generatedTaskArchiveRel, isRecord, isTaskInputRel, safeWorkspaceRel, toRecordList } from '../gateway-utils.js';
-import { selectedComponentIdsForRequest } from './gateway-request.js';
-import { summarizeTaskAttemptsForAgentServer } from './context-envelope.js';
-import { currentTurnReferences } from './agentserver-context-window.js';
+import { errorMessage, generatedTaskArchiveRel, isRecord, isTaskInputRel, safeWorkspaceRel } from '../gateway-utils.js';
 import { sanitizeAgentServerError } from './backend-failure-diagnostics.js';
 import { materializeBackendPayloadOutput, type RuntimeRefBundle } from './artifact-materializer.js';
 import {
+  appendGeneratedTaskDirectPayloadAttemptLifecycle,
+  appendGeneratedTaskGenerationFailureLifecycle,
   appendGeneratedTaskAttemptLifecycle,
   assessGeneratedTaskDirectPayloadLifecycle,
   assessGeneratedTaskValidationLifecycle,
-  recordGeneratedTaskSuccessLedger,
+  buildGeneratedTaskRunInputLifecycle,
+  recordGeneratedTaskSuccessLedgerLifecycle,
+  runGeneratedTaskParseRepairLifecycle,
+  runGeneratedTaskPreOutputRepairLifecycle,
   runGeneratedTaskRepairAttemptLifecycle,
 } from './generated-task-runner-validation-lifecycle.js';
 import {
@@ -157,27 +158,14 @@ export async function runAgentServerGeneratedTask(
     }
     const failureReason = agentServerGenerationFailureReason(generation.error, generation.diagnostics);
     const failedRequestId = `agentserver-generation-${request.skillDomain}-${sha1(`${request.prompt}:${generation.error}`).slice(0, 12)}`;
-    await appendTaskAttempt(workspace, {
-      id: failedRequestId,
-      prompt: request.prompt,
-      skillDomain: request.skillDomain,
-      ...attemptPlanRefs(request, skill, failureReason),
-      skillId: skill.id,
-      attempt: 1,
-      status: 'repair-needed',
+    await appendGeneratedTaskGenerationFailureLifecycle({
+      workspacePath: workspace,
+      request,
+      skill,
+      failedRequestId,
       failureReason,
-      contextRecovery: generation.diagnostics?.kind === 'contextWindowExceeded' ? {
-        kind: 'contextWindowExceeded',
-        backend: generation.diagnostics.backend,
-        provider: generation.diagnostics.provider,
-        agentId: generation.diagnostics.agentId,
-        sessionRef: generation.diagnostics.sessionRef,
-        originalErrorSummary: generation.diagnostics.originalErrorSummary,
-        compaction: generation.diagnostics.compaction,
-        retryAttempted: generation.diagnostics.retryAttempted,
-        retrySucceeded: generation.diagnostics.retrySucceeded,
-      } : undefined,
-      createdAt: new Date().toISOString(),
+      diagnostics: generation.diagnostics,
+      attemptPlanRefs,
     });
     return repairNeededPayload(request, skill, failureReason, agentServerFailurePayloadRefs(generation.diagnostics));
   }
@@ -207,21 +195,14 @@ export async function runAgentServerGeneratedTask(
       firstPayloadFailureReason,
       payloadHasFailureStatus,
     });
-    await appendTaskAttempt(workspace, {
-      id: `agentserver-direct-${skill.id}-${sha1(`${request.prompt}:${directGeneration.runId || 'unknown'}`).slice(0, 12)}`,
-      prompt: request.prompt,
-      skillDomain: request.skillDomain,
-      ...attemptPlanRefs(request, skill),
-      skillId: skill.id,
-      attempt: 1,
-      status: lifecycle.attemptStatus,
-      codeRef: directRefs.taskRel,
-      outputRef: directRefs.outputRel,
-      stdoutRef: directRefs.stdoutRel,
-      stderrRef: directRefs.stderrRel,
-      workEvidenceSummary: lifecycle.workEvidenceSummary,
-      failureReason: lifecycle.failureReason,
-      createdAt: new Date().toISOString(),
+    await appendGeneratedTaskDirectPayloadAttemptLifecycle({
+      workspacePath: workspace,
+      request,
+      skill,
+      runId: directGeneration.runId,
+      refs: directRefs,
+      lifecycle,
+      attemptPlanRefs,
     });
     if (lifecycle.guardFailureReason) {
       return repairNeededPayload(request, skill, lifecycle.guardFailureReason);
@@ -406,41 +387,28 @@ export async function runAgentServerGeneratedTask(
   const stderrRel = `.sciforge/logs/${taskId}.stderr.log`;
   const generatedExpectedArtifacts = expectedArtifactTypesForGeneratedRun(request, generation.response.expectedArtifacts);
   const generatedSupplementScope = supplementScopeForGeneratedRun(request, generation.response.expectedArtifacts);
+  const taskInputLifecycle = await buildGeneratedTaskRunInputLifecycle({
+    workspacePath: workspace,
+    request,
+    skill,
+    generatedInputRels,
+    expectedArtifacts: generatedExpectedArtifacts,
+  });
   const run = await runWorkspaceTask(workspace, {
     id: taskId,
     language: generation.response.entrypoint.language,
     entrypoint: generation.response.entrypoint.command || 'main',
     entrypointArgs: generation.response.entrypoint.args,
     taskRel,
-    input: {
-      prompt: request.prompt,
-      attempt: 1,
-      skillId: skill.id,
-      agentServerGenerated: true,
-      artifacts: request.artifacts,
-      uiStateSummary: request.uiState,
-      taskProjectHandoff: isRecord(request.uiState?.taskProjectHandoff) ? request.uiState.taskProjectHandoff : undefined,
-      userGuidanceQueue: activeGuidanceQueueForTaskInput(request),
-      recentExecutionRefs: toRecordList(request.uiState?.recentExecutionRefs),
-      priorAttempts: currentTurnReferences(request).length
-        ? []
-        : summarizeTaskAttemptsForAgentServer(await readRecentTaskAttempts(workspace, request.skillDomain, 8, {
-          scenarioPackageId: request.scenarioPackageRef?.id,
-          skillPlanRef: request.skillPlanRef,
-          prompt: request.prompt,
-        })),
-      expectedArtifacts: generatedExpectedArtifacts,
-      selectedComponentIds: selectedComponentIdsForRequest(request),
-    },
-    retentionProtectedInputRels: generatedInputRels,
+    input: taskInputLifecycle.taskInput,
+    retentionProtectedInputRels: taskInputLifecycle.retentionProtectedInputRels,
     outputRel,
     stdoutRel,
     stderrRel,
   });
 
   if (run.exitCode !== 0 && !await fileExists(join(workspace, outputRel))) {
-    const failureReason = run.stderr || 'AgentServer generated task failed before writing output.';
-    const repaired = await runGeneratedTaskRepairAttemptLifecycle({
+    const repair = await runGeneratedTaskPreOutputRepairLifecycle({
       workspacePath: workspace,
       request,
       skill,
@@ -453,17 +421,13 @@ export async function runAgentServerGeneratedTask(
       stdoutRel,
       stderrRel,
       attemptPlanRefs,
-      attemptStatus: 'repair-needed',
-      schemaErrors: [],
-      failureReason,
-      recoverActions: ['inspect-stderr-ref', 'repair-generated-task', 'rerun-generated-task'],
       callbacks,
       tryAgentServerRepairAndRerun,
     });
-    if (repaired) {
-      return repaired;
+    if (repair.repaired) {
+      return repair.repaired;
     }
-    return failedTaskPayload(request, skill, run, failureReason);
+    return failedTaskPayload(request, skill, run, repair.failureReason);
   }
 
   try {
@@ -507,7 +471,7 @@ export async function runAgentServerGeneratedTask(
         attemptStatus: lifecycle.attemptStatus,
         attemptSchemaErrors: errors,
         workEvidenceSummary: lifecycle.workEvidenceSummary,
-        attemptFailureReason: errors.length ? `AgentServer generated task output failed schema validation: ${errors.join('; ')}` : lifecycle.failureReason,
+        attemptFailureReason: lifecycle.attemptFailureReason,
         schemaErrors: errors,
         failureReason: lifecycle.repair.failureReason,
         recoverActions: lifecycle.repair.recoverActions,
@@ -535,7 +499,7 @@ export async function runAgentServerGeneratedTask(
       stderrRel,
       schemaErrors: errors,
       workEvidenceSummary: lifecycle.workEvidenceSummary,
-      failureReason: errors.length ? `AgentServer generated task output failed schema validation: ${errors.join('; ')}` : lifecycle.failureReason,
+      failureReason: lifecycle.attemptFailureReason,
     });
     if (!normalized) {
       return repairNeededPayload(request, skill, 'AgentServer generated task output could not be normalized after schema validation.');
@@ -588,7 +552,7 @@ export async function runAgentServerGeneratedTask(
         patchSummary: generation.response.patchSummary,
       } : unit),
     };
-    await recordGeneratedTaskSuccessLedger({
+    await recordGeneratedTaskSuccessLedgerLifecycle({
       workspacePath: workspace,
       request,
       skill,
@@ -596,16 +560,11 @@ export async function runAgentServerGeneratedTask(
       runId: generation.runId,
       run,
       payload: completed,
-      taskRel,
-      inputRel,
-      outputRel,
-      stdoutRel,
-      stderrRel,
+      refs: { taskRel, inputRel, outputRel, stdoutRel, stderrRel },
     });
     return await materializeBackendPayloadOutput(workspace, request, completed, { taskRel, outputRel, stdoutRel, stderrRel });
   } catch (error) {
-    const failureReason = `AgentServer generated task output could not be parsed: ${errorMessage(error)}`;
-    const repaired = await runGeneratedTaskRepairAttemptLifecycle({
+    const repair = await runGeneratedTaskParseRepairLifecycle({
       workspacePath: workspace,
       request,
       skill,
@@ -618,17 +577,14 @@ export async function runAgentServerGeneratedTask(
       stdoutRel,
       stderrRel,
       attemptPlanRefs,
-      attemptStatus: 'repair-needed',
-      schemaErrors: ['output could not be parsed'],
-      failureReason,
-      recoverActions: ['inspect-output-ref', 'repair-output-parser', 'rerun-generated-task'],
+      error,
       callbacks,
       tryAgentServerRepairAndRerun,
     });
-    if (repaired) {
-      return repaired;
+    if (repair.repaired) {
+      return repair.repaired;
     }
-    return failedTaskPayload(request, skill, run, failureReason);
+    return failedTaskPayload(request, skill, run, repair.failureReason);
   }
 }
 
@@ -732,20 +688,6 @@ async function generatedTaskInterfaceContractReason(workspace: string, response:
   if (content === undefined) return undefined;
   const language = String(response.entrypoint.language || '').toLowerCase();
   return agentServerGeneratedTaskInterfaceContractReason({ entryRel, language, source: content });
-}
-
-function activeGuidanceQueueForTaskInput(request: GatewayRequest) {
-  const handoff = isRecord(request.uiState?.taskProjectHandoff) ? request.uiState.taskProjectHandoff : undefined;
-  const queue = Array.isArray(handoff?.userGuidanceQueue)
-    ? handoff.userGuidanceQueue
-    : Array.isArray(request.uiState?.userGuidanceQueue)
-      ? request.uiState.userGuidanceQueue
-      : Array.isArray(request.uiState?.guidanceQueue)
-        ? request.uiState.guidanceQueue
-        : [];
-  return queue.filter((entry): entry is Record<string, unknown> => isRecord(entry)
-    && typeof entry.id === 'string'
-    && (entry.status === 'queued' || entry.status === 'deferred'));
 }
 
 async function readGeneratedTaskFileIfPresent(workspace: string, path: string) {
