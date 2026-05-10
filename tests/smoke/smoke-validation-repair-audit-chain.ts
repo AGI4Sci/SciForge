@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { contractValidationFailureFromErrors } from '@sciforge-ui/runtime-contract/validation-failure';
 import type { ObserveResponse } from '@sciforge-ui/runtime-contract/observe';
@@ -11,11 +14,15 @@ import {
   validationFindingsFromObserveResponse,
   type AuditRecord,
   type RepairBudgetSnapshot,
+  type RepairDecision,
   type ValidationDecision,
   type ValidationSubjectKind,
 } from '@sciforge-ui/runtime-contract/validation-repair-audit';
 import type { RuntimeVerificationResult } from '@sciforge-ui/runtime-contract/verification-result';
+import { normalizeGatewayRequest } from '../../src/runtime/gateway/gateway-request';
+import { validateAndNormalizePayload } from '../../src/runtime/gateway/payload-validation';
 import { createValidationRepairAuditChain } from '../../src/runtime/gateway/validation-repair-audit-bridge';
+import type { SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types';
 
 const createdAt = '2026-05-10T00:00:00.000Z';
 const repairBudget: RepairBudgetSnapshot = {
@@ -150,6 +157,79 @@ assert.ok(chains[3].audit.relatedRefs.includes('verification:policy:runtime-veri
 assert.ok(chains[3].audit.recoverActions.includes('preserve failed verification gate result in audit'));
 assert.deepEqual(chains[3].audit.sinkRefs, ['appendTaskAttempt:verification-gate-1']);
 assert.deepEqual(chains[3].audit.telemetrySpanRefs, ['span:verification-gate:verification-gate-1', 'span:repair-decision:verification-gate-1']);
+
+const workspace = await mkdtemp(join(tmpdir(), 'sciforge-validation-repair-audit-real-'));
+try {
+  const request = normalizeGatewayRequest({
+    skillDomain: 'literature',
+    prompt: 'Exercise real payload validation schema failure.',
+    workspacePath: workspace,
+  });
+  const skill: SkillAvailability = {
+    id: 'agentserver.generation.literature',
+    kind: 'installed',
+    available: true,
+    reason: 'smoke',
+    checkedAt: createdAt,
+    manifestPath: 'agentserver',
+    manifest: {
+      id: 'agentserver.generation.literature',
+      kind: 'installed',
+      description: 'smoke',
+      skillDomains: ['literature'],
+      inputContract: {},
+      outputArtifactSchema: {},
+      entrypoint: { type: 'agentserver-generation' },
+      environment: {},
+      validationSmoke: {},
+      examplePrompts: [],
+      promotionHistory: [],
+    },
+  };
+  const payloadRefs = {
+    taskRel: 'agentserver://direct-payload',
+    outputRel: '.sciforge/task-results/real-schema-failure.json',
+    stdoutRel: '.sciforge/logs/real-schema-failure.stdout.log',
+    stderrRel: '.sciforge/logs/real-schema-failure.stderr.log',
+    runtimeFingerprint: { runtime: 'smoke' },
+  };
+  const repairPayload = await validateAndNormalizePayload({
+    message: 'Schema failure path should produce audit chain refs.',
+    confidence: 0.4,
+    claimType: 'fact',
+    evidenceLevel: 'runtime',
+    reasoningTrace: 'missing claims array',
+    uiManifest: [],
+    executionUnits: [],
+    artifacts: [],
+  } as unknown as ToolPayload, request, skill, payloadRefs);
+  const unit = repairPayload.executionUnits[0] as Record<string, unknown>;
+  assert.equal(unit.status, 'repair-needed');
+  const unitRefs = unit.refs as {
+    validationFailure?: { contractId?: string; failureKind?: string };
+    validationRepairAudit?: {
+      validationDecision?: ValidationDecision;
+      repairDecision?: RepairDecision;
+      auditRecord?: AuditRecord;
+    };
+  } | undefined;
+  assert.ok(unitRefs?.validationRepairAudit);
+  const realChain = unitRefs.validationRepairAudit;
+  assert.equal(unitRefs.validationFailure?.contractId, 'sciforge.tool-payload.v1');
+  assert.equal(unitRefs.validationFailure?.failureKind, 'payload-schema');
+  assert.equal(realChain.validationDecision?.subject.kind, 'direct-payload');
+  assert.equal(realChain.validationDecision?.subject.contractId, 'sciforge.tool-payload.v1');
+  assert.equal(realChain.auditRecord?.contractId, 'sciforge.tool-payload.v1');
+  assert.equal(realChain.auditRecord?.failureKind, 'payload-schema');
+  assert.equal(realChain.repairDecision?.action, 'repair-rerun');
+  assert.equal(realChain.auditRecord?.outcome, 'repair-requested');
+  assert.equal(realChain.auditRecord?.validationDecisionId, realChain.validationDecision?.decisionId);
+  assert.equal(realChain.auditRecord?.repairDecisionId, realChain.repairDecision?.decisionId);
+  assert.ok(realChain.auditRecord?.relatedRefs.includes(payloadRefs.outputRel));
+  assert.ok(realChain.auditRecord?.recoverActions.some((action) => /payload|contract|structured/i.test(action)));
+} finally {
+  await rm(workspace, { recursive: true, force: true });
+}
 
 console.log(`[ok] validation/repair/audit chain shares shape across direct payload, generated task, observe, and verification gate failures: ${chains.map((chain) => chainShape(chain)).join(', ')}`);
 

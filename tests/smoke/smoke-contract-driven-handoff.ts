@@ -267,6 +267,9 @@ function assertPromptRenderPlanIsSourced(payloadHandoff: Record<string, unknown>
   const renderPlan = record(payloadHandoff.promptRenderPlan);
   assert.equal(renderPlan.schemaVersion, 'sciforge.agent-harness-prompt-render.v1');
   assert.equal(renderPlan.renderMode, 'metadata-scaffold');
+  const sourceRefs = record(renderPlan.sourceRefs);
+  assert.equal(sourceRefs.contractRef, payloadHandoff.harnessContractRef);
+  assert.equal(sourceRefs.traceRef, payloadHandoff.harnessTraceRef);
   const strategyRefs = array(renderPlan.strategyRefs).map(record);
   assert.ok(strategyRefs.length >= 2, 'prompt render plan should expose deterministic strategy refs');
   for (const strategy of strategyRefs) {
@@ -280,9 +283,17 @@ function assertPromptRenderPlanIsSourced(payloadHandoff: Record<string, unknown>
     assert.equal(typeof selectedRef.sourceCallbackId, 'string');
   }
   const renderedText = String(renderPlan.renderedText ?? '');
-  for (const strategy of strategyRefs) {
-    assert.ok(renderedText.includes(`[${String(strategy.sourceCallbackId)}] ${String(strategy.id)}:`));
+  const renderedEntries = array(renderPlan.renderedEntries).map(record);
+  assert.deepEqual(
+    renderedText.split('\n').filter(Boolean),
+    renderedEntries.map((entry) => `[${String(entry.sourceCallbackId)}] ${String(entry.id)}: ${String(entry.text ?? '')}`.trim()),
+  );
+  for (const entry of renderedEntries) {
+    assert.equal(typeof entry.kind, 'string');
+    assert.equal(typeof entry.id, 'string');
+    assert.equal(typeof entry.sourceCallbackId, 'string');
   }
+  assert.equal(typeof renderPlan.renderDigest, 'string');
 }
 
 function assertSyntheticDirectiveRenderingIsSourced() {
@@ -311,12 +322,20 @@ function assertSyntheticDirectiveRenderingIsSourced() {
         },
       }],
     },
+    summary: {
+      contractRef: 'harness-contract:synthetic',
+      traceRef: 'harness-trace:synthetic',
+    },
   });
   const directives = array(renderPlan.directiveRefs).map(record);
   assert.equal(directives.length, 1);
   assert.equal(directives[0]?.sourceCallbackId, 'debug-repair.policy');
   assert.equal(directives[0]?.text, 'Render only the selected repair evidence refs.');
-  assertPromptRenderPlanIsSourced({ promptRenderPlan: renderPlan });
+  assertPromptRenderPlanIsSourced({
+    harnessContractRef: 'harness-contract:synthetic',
+    harnessTraceRef: 'harness-trace:synthetic',
+    promptRenderPlan: renderPlan,
+  });
 }
 
 function handoff(dispatch: Dispatch) {

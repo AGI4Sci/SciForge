@@ -185,20 +185,35 @@ export function buildAgentHarnessPromptRenderPlan(input: {
     ...contextRefs.required.map((ref) => agentHarnessSelectedContextRef('required', ref, input.trace)),
     ...contextRefs.blocked.map((ref) => agentHarnessSelectedContextRef('blocked', ref, input.trace)),
   ];
-  const renderedLines = [
+  const renderedEntries = [
     ...strategyRefs,
     ...directiveRefs.map((directive): AgentHarnessPromptRenderEntry => ({ ...directive, kind: 'directive' })),
-  ]
+  ];
+  const renderedLines = renderedEntries
     .map((entry) => `[${entry.sourceCallbackId}] ${entry.id}: ${entry.text ?? ''}`.trim())
     .filter(Boolean);
+  const sourceRefs = {
+    contractRef: stringField(summary.contractRef),
+    traceRef: stringField(summary.traceRef),
+  };
   return {
     schemaVersion: AGENT_HARNESS_PROMPT_RENDER_SCHEMA_VERSION,
     renderMode: 'metadata-scaffold',
     deterministic: true,
+    sourceRefs,
     strategyRefs,
     directiveRefs,
+    renderedEntries,
     selectedContextRefs,
     renderedText: renderedLines.join('\n'),
+    renderDigest: hashJson({
+      sourceRefs,
+      strategyRefs,
+      directiveRefs,
+      renderedEntries,
+      selectedContextRefs,
+      renderedLines,
+    }),
   };
 }
 

@@ -1,3 +1,9 @@
+import {
+  createCapabilityBudgetDebitRecord,
+  type CapabilityBudgetDebitLine,
+  type CapabilityInvocationBudgetDebitRecord,
+} from '@sciforge-ui/runtime-contract/capability-budget';
+
 export type LiteratureRetrievalStatus = 'success' | 'partial' | 'failed';
 export type LiteratureProviderAttemptStatus = 'success' | 'empty' | 'timeout' | 'error' | 'skipped';
 export type CitationVerificationStatus = 'verified' | 'mismatch' | 'missing-identifiers';
@@ -82,6 +88,7 @@ export interface LiteratureResearchReportArtifact {
 }
 
 export interface LiteratureWorkEvidence {
+  id?: string;
   kind: 'literature-retrieval';
   capabilityId: 'literature.retrieval';
   query: string;
@@ -89,6 +96,7 @@ export interface LiteratureWorkEvidence {
   providerAttemptRefs: string[];
   budget: LiteratureRetrievalBudget;
   diagnosticCodes: string[];
+  budgetDebitRefs?: string[];
 }
 
 export interface LiteratureProviderAttempt {
@@ -102,6 +110,7 @@ export interface LiteratureProviderAttempt {
   errorCode?: string;
   errorMessage?: string;
   diagnosticCodes: string[];
+  budgetDebitRefs?: string[];
 }
 
 export interface CitationVerificationResult {
@@ -136,6 +145,7 @@ export interface OfflineLiteratureRetrievalOutput {
   providerAttempts: LiteratureProviderAttempt[];
   citationVerificationResults: CitationVerificationResult[];
   diagnostics: LiteratureRetrievalDiagnostic[];
+  budgetDebits?: CapabilityInvocationBudgetDebitRecord[];
 }
 
 export interface OfflineLiteratureRetrievalRunnerInput {
@@ -264,6 +274,7 @@ export function runOfflineLiteratureRetrieval(input: OfflineLiteratureRetrievalR
   });
 
   let paperList = [...normalizedPapers.values()];
+  const normalizedResultItemCount = paperList.length;
   if (paperList.length > maxResults) {
     diagnostics.push({
       code: 'result-budget-exceeded',
@@ -299,6 +310,28 @@ export function runOfflineLiteratureRetrieval(input: OfflineLiteratureRetrievalR
     citationStatus: citationVerificationResults.find((result) => result.paperId === paper.id)?.status ?? 'missing-identifiers',
   }));
   const status = finalStatus(paperList, diagnostics);
+  const artifactRefs: LiteratureWorkEvidence['artifactRefs'] = ['artifact:paper-list', 'artifact:evidence-matrix', 'artifact:research-report'];
+  const providerAttemptRefs = providerAttempts.map((attempt) => `providerAttempt:${attempt.id}`);
+  const workEvidenceRef = `workEvidence:literature-retrieval:${slug(input.request.query)}`;
+  const budgetDebitRecord = createLiteratureRetrievalBudgetDebitRecord({
+    budget,
+    diagnostics,
+    input,
+    maxResults,
+    normalizedResultItemCount,
+    paperList,
+    providerAttemptRefs,
+    providerAttempts,
+    selectedProviderIds,
+    status,
+    workEvidenceRef,
+    artifactRefs,
+  });
+  const budgetDebitRefs = [budgetDebitRecord.debitId];
+  for (const attempt of providerAttempts) {
+    attempt.budgetDebitRefs = budgetDebitRefs;
+  }
+
   return {
     status,
     paperList,
@@ -315,17 +348,20 @@ export function runOfflineLiteratureRetrieval(input: OfflineLiteratureRetrievalR
       diagnostics,
     },
     workEvidence: [{
+      id: workEvidenceRef,
       kind: 'literature-retrieval',
       capabilityId: 'literature.retrieval',
       query: input.request.query,
-      artifactRefs: ['artifact:paper-list', 'artifact:evidence-matrix', 'artifact:research-report'],
-      providerAttemptRefs: providerAttempts.map((attempt) => `providerAttempt:${attempt.id}`),
+      artifactRefs,
+      providerAttemptRefs,
       budget,
       diagnosticCodes: unique(diagnostics.map((diagnostic) => diagnostic.code)),
+      budgetDebitRefs,
     }],
     providerAttempts,
     citationVerificationResults,
     diagnostics,
+    budgetDebits: [budgetDebitRecord],
   };
 }
 
@@ -337,6 +373,7 @@ export function validateOfflineLiteratureRetrievalOutput(output: OfflineLiteratu
   if (!output.workEvidence.length) failures.push('workEvidence must include at least one audit row');
   if (!output.providerAttempts.length) failures.push('providerAttempts must include selected provider outcomes');
   if (!Array.isArray(output.citationVerificationResults)) failures.push('citationVerificationResults must be an array');
+  if (output.budgetDebits !== undefined && !Array.isArray(output.budgetDebits)) failures.push('budgetDebits must be an array when emitted');
   if (output.status === 'success' && output.paperList.length === 0) failures.push('success requires at least one normalized paper');
   if (output.status === 'success' && output.diagnostics.length > 0) failures.push('success cannot carry failure diagnostics');
   if (output.providerAttempts.some((attempt) => attempt.status === 'timeout') && output.status === 'success') {
@@ -352,6 +389,83 @@ export function validateOfflineLiteratureRetrievalOutput(output: OfflineLiteratu
     failures.push('download failure must downgrade researchReport.fullTextPolicy to metadata-only');
   }
   return failures;
+}
+
+function createLiteratureRetrievalBudgetDebitRecord(input: {
+  budget: LiteratureRetrievalBudget;
+  diagnostics: LiteratureRetrievalDiagnostic[];
+  input: OfflineLiteratureRetrievalRunnerInput;
+  maxResults: number;
+  normalizedResultItemCount: number;
+  paperList: NormalizedLiteraturePaper[];
+  providerAttemptRefs: string[];
+  providerAttempts: LiteratureProviderAttempt[];
+  selectedProviderIds: string[];
+  status: LiteratureRetrievalStatus;
+  workEvidenceRef: string;
+  artifactRefs: LiteratureWorkEvidence['artifactRefs'];
+}): CapabilityInvocationBudgetDebitRecord {
+  const invocationSlug = slug(input.input.request.query);
+  const providerAttemptWallLines: CapabilityBudgetDebitLine[] = input.providerAttempts.map((attempt) => ({
+    dimension: 'wallMs',
+    amount: attempt.elapsedMs,
+    limit: input.budget.perProviderTimeoutMs,
+    remaining: input.budget.perProviderTimeoutMs - attempt.elapsedMs,
+    reason: 'offline literature provider attempt wall time',
+    sourceRef: `providerAttempt:${attempt.id}`,
+  }));
+  const debitLines: CapabilityBudgetDebitLine[] = [
+    {
+      dimension: 'providers',
+      amount: input.selectedProviderIds.length,
+      limit: input.budget.maxProviders,
+      remaining: input.budget.maxProviders - input.selectedProviderIds.length,
+      reason: 'selected literature retrieval providers',
+      sourceRef: 'capability:literature.retrieval',
+    },
+    {
+      dimension: 'networkCalls',
+      amount: input.providerAttempts.filter((attempt) => attempt.status !== 'skipped').length,
+      reason: 'offline provider request attempts',
+      sourceRef: 'capability:literature.retrieval',
+    },
+    {
+      dimension: 'resultItems',
+      amount: input.normalizedResultItemCount,
+      limit: input.maxResults,
+      remaining: input.maxResults - input.normalizedResultItemCount,
+      reason: 'normalized literature result items before emission truncation',
+      sourceRef: 'artifact:paper-list',
+    },
+    ...providerAttemptWallLines,
+  ];
+
+  return createCapabilityBudgetDebitRecord({
+    debitId: `budgetDebit:literature-retrieval:${invocationSlug}`,
+    invocationId: `capabilityInvocation:literature-retrieval:${invocationSlug}`,
+    capabilityId: 'literature.retrieval',
+    candidateId: 'literature.retrieval',
+    manifestRef: 'capability:literature.retrieval',
+    subjectRefs: [
+      ...input.artifactRefs,
+      ...input.providerAttemptRefs,
+      ...input.paperList.map((paper) => paper.id),
+    ],
+    debitLines,
+    sinkRefs: {
+      executionUnitRef: 'executionUnit:literature-retrieval-offline',
+      workEvidenceRefs: [input.workEvidenceRef],
+      auditRefs: ['audit:literature-retrieval-runner', ...input.providerAttemptRefs],
+    },
+    metadata: {
+      diagnosticCodes: unique(input.diagnostics.map((diagnostic) => diagnostic.code)),
+      emittedResultItems: input.paperList.length,
+      normalizedResultItems: input.normalizedResultItemCount,
+      requestedProviderCount: normalizeRequestedProviders(input.input.request.databases).length,
+      selectedProviderIds: input.selectedProviderIds.map((providerId) => `literature.retrieval.${providerId}`),
+      status: input.status,
+    },
+  });
 }
 
 function normalizeRequestedProviders(databases: string[] | undefined): string[] {

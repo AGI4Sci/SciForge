@@ -6,6 +6,8 @@ import {
   type CapabilityBudgetDebitLine,
 } from '@sciforge-ui/runtime-contract/capability-budget';
 
+import { runOfflineLiteratureRetrieval } from '../../src/runtime/literature-retrieval-runner.js';
+
 const debitLines: CapabilityBudgetDebitLine[] = [
   {
     dimension: 'toolCalls',
@@ -64,4 +66,42 @@ assert.deepEqual(record.sinkRefs.workEvidenceRefs, ['workEvidence:provider-attem
 assert.deepEqual(record.sinkRefs.auditRefs, ['audit:capability-broker-1']);
 assert.equal(record.metadata?.profileId, 'research-grade');
 
-console.log('[ok] capability invocation budget debit record is contract-shaped and sink-addressable');
+const literatureRuntimeOutput = runOfflineLiteratureRetrieval({
+  request: {
+    query: 'budget debit runtime wiring',
+    databases: ['pubmed', 'openalex'],
+    includeAbstracts: true,
+  },
+  providerFixtures: [
+    {
+      providerId: 'pubmed',
+      records: [{
+        providerRecordId: 'pmid-budget-debit',
+        title: 'Budget debit runtime wiring',
+        year: 2026,
+        pmid: '999001',
+      }],
+    },
+    {
+      providerId: 'openalex',
+      records: [{
+        providerRecordId: 'openalex-budget-debit',
+        title: 'Budget debit runtime wiring',
+        year: 2026,
+        doi: '10.5555/budget.debit.runtime',
+      }],
+    },
+  ],
+});
+
+const runtimeDebit = literatureRuntimeOutput.budgetDebits?.[0];
+assert.ok(runtimeDebit, 'literature retrieval runner should emit a budget debit record');
+assert.equal(runtimeDebit.contract, CAPABILITY_BUDGET_DEBIT_CONTRACT_ID);
+assert.equal(runtimeDebit.capabilityId, 'literature.retrieval');
+assert.deepEqual(literatureRuntimeOutput.workEvidence[0]?.budgetDebitRefs, [runtimeDebit.debitId]);
+assert.ok(literatureRuntimeOutput.providerAttempts.every((attempt) => attempt.budgetDebitRefs?.includes(runtimeDebit.debitId)));
+assert.deepEqual(runtimeDebit.sinkRefs.workEvidenceRefs, [literatureRuntimeOutput.workEvidence[0]?.id]);
+assert.ok(runtimeDebit.sinkRefs.auditRefs.includes('audit:literature-retrieval-runner'));
+assert.ok(runtimeDebit.debitLines.some((line) => line.dimension === 'networkCalls' && line.amount === 2));
+
+console.log('[ok] capability invocation budget debit record is contract-shaped, sink-addressable, and wired into literature.retrieval runtime output');

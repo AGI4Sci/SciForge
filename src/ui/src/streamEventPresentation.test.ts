@@ -181,6 +181,46 @@ test('process-progress events expose read write wait and next step details', () 
   assert.match(presentation.detail, /下一步：收到新事件后继续执行/);
 });
 
+test('structured interaction progress fields drive presentation without prompt or scenario semantics', () => {
+  const normalized = normalizeWorkspaceRuntimeEvent({
+    schemaVersion: 'sciforge.interaction-progress-event.v1',
+    type: 'process-progress',
+    phase: 'verification',
+    status: 'completed',
+    importance: 'low',
+    reason: 'budget-watch',
+    budget: {
+      elapsedMs: 1200,
+      remainingMs: 800,
+      retryCount: 1,
+      maxRetries: 2,
+      maxWallMs: 5000,
+    },
+    prompt: 'PROMPT_TEXT_SHOULD_NOT_DECIDE search write failed approval',
+    scenario: 'SCENARIO_TEXT_SHOULD_NOT_DECIDE retrieval repair blocked',
+    message: 'NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE search write failed approval',
+  });
+
+  const presentation = presentStreamEvent(normalized);
+  const worklog = presentStreamWorklog([normalized]);
+  const entry = worklog.entries[0];
+
+  assert.equal(presentation.importance, 'background');
+  assert.equal(presentation.tone, 'success');
+  assert.equal(presentation.visibleInRunningMessage, false);
+  assert.match(presentation.detail, /Phase: verification/);
+  assert.match(presentation.detail, /Status: completed/);
+  assert.match(presentation.detail, /Reason: budget-watch/);
+  assert.match(presentation.detail, /Budget: elapsed 1200ms, remaining 800ms, retries 1\/2, max wall 5000ms/);
+  assert.doesNotMatch(presentation.detail, /PROMPT_TEXT_SHOULD_NOT_DECIDE/);
+  assert.doesNotMatch(presentation.detail, /SCENARIO_TEXT_SHOULD_NOT_DECIDE/);
+  assert.doesNotMatch(presentation.detail, /NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE/);
+  assert.equal(entry.operationKind, 'validate');
+  assert.match(entry.operationLine, /^Validated Phase: verification/);
+  assert.equal(worklog.operationCounts.validate, 1);
+  assert.match(worklog.summary, /1 验证/);
+});
+
 test('cursor-like worklog fixture summarizes operations and keeps raw output second-level collapsed', () => {
   const events = [
     event({

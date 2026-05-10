@@ -12,7 +12,7 @@ import {
   validationScopeForToolPayloadSchemaErrors,
 } from '@sciforge-ui/runtime-contract/validation-failure';
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-types.js';
-import { runWorkspaceTask } from '../workspace-task-runner.js';
+import { runWorkspaceTask, sha1 } from '../workspace-task-runner.js';
 import { composeRuntimeUiManifest } from '../runtime-ui-manifest.js';
 import { isRecord } from '../gateway-utils.js';
 import { repairNeededPayload as buildRepairNeededPayload, type RepairPolicyRefs } from './repair-policy.js';
@@ -20,6 +20,7 @@ import { contextCompactionMetadata } from './agentserver-context-window.js';
 import { normalizeArtifactsForPayload, persistArtifactRefsForPayload } from './artifact-materializer.js';
 import { schemaErrors as toolPayloadSchemaErrors } from './tool-payload-contract.js';
 import { normalizeToolPayloadShape } from './direct-answer-payload.js';
+import { createValidationRepairAuditChain } from './validation-repair-audit-bridge.js';
 
 type AttemptPlanRefsBuilder = (request: GatewayRequest, skill?: SkillAvailability, fallbackReason?: string) => Record<string, unknown>;
 let attemptPlanRefsBuilder: AttemptPlanRefsBuilder = () => ({});
@@ -70,9 +71,7 @@ export async function validateAndNormalizePayload(
       relatedRefs: relatedRefsFromRepairRefs(refs),
     });
     return repairNeededPayload(request, skill, validationFailure.failureReason, {
-      ...refs,
-      recoverActions: validationFailure.recoverActions,
-      validationFailure,
+      ...repairRefsWithValidationRepairAudit(request, skill, validationFailure, refs),
     });
   }
   const workspace = resolve(request.workspacePath || process.cwd());
@@ -105,9 +104,7 @@ export async function validateAndNormalizePayload(
       nextStep: 'Regenerate the backend payload as a real completed result, or report the blocker as repair-needed/failed-with-reason.',
     });
     return repairNeededPayload(request, skill, validationFailure.failureReason, {
-      ...refs,
-      recoverActions: validationFailure.recoverActions,
-      validationFailure,
+      ...repairRefsWithValidationRepairAudit(request, skill, validationFailure, refs),
     });
   }
   const referenceFailures = currentReferenceUsageFailures(contractPayload, persistedArtifacts, request);
@@ -179,6 +176,90 @@ export async function validateAndNormalizePayload(
 
 function relatedRefsFromRepairRefs(refs: RepairPolicyRefs) {
   return [refs.taskRel, refs.outputRel, refs.stdoutRel, refs.stderrRel].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+}
+
+function repairRefsWithValidationRepairAudit(
+  request: GatewayRequest,
+  skill: SkillAvailability,
+  validationFailure: NonNullable<RepairPolicyRefs['validationFailure']>,
+  refs: RepairPolicyRefs,
+): RepairPolicyRefs {
+  const chainId = payloadValidationChainId(skill, validationFailure, refs);
+  const currentRefs = currentTurnReferenceRecords(request)
+    .map((reference) => stringField(reference.ref))
+    .filter((ref): ref is string => Boolean(ref));
+  const relatedRefs = [
+    ...relatedRefsFromRepairRefs(refs),
+    ...validationFailure.relatedRefs,
+    ...currentRefs,
+  ];
+  const chain = createValidationRepairAuditChain({
+    chainId,
+    subject: {
+      kind: validationSubjectKindForRepairRefs(refs),
+      id: validationSubjectIdForRepairRefs(skill, refs),
+      capabilityId: skill.id,
+      contractId: validationFailure.contractId,
+      schemaPath: validationFailure.schemaPath,
+      completedPayloadRef: refs.outputRel,
+      generatedTaskRef: generatedTaskRefForRepairRefs(refs),
+      artifactRefs: [],
+      currentRefs,
+    },
+    contractValidationFailures: [validationFailure],
+    relatedRefs,
+    telemetrySpanRefs: [
+      `span:payload-validation:${chainId}`,
+      `span:repair-decision:${chainId}`,
+    ],
+    createdAt: validationFailure.createdAt,
+  });
+  return {
+    ...refs,
+    recoverActions: refs.recoverActions ?? validationFailure.recoverActions,
+    validationFailure,
+    agentServerRefs: {
+      ...refs.agentServerRefs,
+      validationRepairAudit: {
+        validationDecision: chain.validation,
+        repairDecision: chain.repair,
+        auditRecord: chain.audit,
+      },
+    },
+  };
+}
+
+function payloadValidationChainId(
+  skill: SkillAvailability,
+  failure: NonNullable<RepairPolicyRefs['validationFailure']>,
+  refs: RepairPolicyRefs,
+) {
+  const stableInput = [
+    skill.id,
+    failure.contractId,
+    failure.failureKind,
+    refs.outputRel,
+    refs.taskRel,
+  ].filter(Boolean).join(':');
+  return `payload-validation:${sha1(stableInput).slice(0, 12)}`;
+}
+
+function validationSubjectKindForRepairRefs(refs: RepairPolicyRefs) {
+  return typeof refs.taskRel === 'string' && refs.taskRel.startsWith('agentserver://')
+    ? 'direct-payload'
+    : 'generated-task-result';
+}
+
+function validationSubjectIdForRepairRefs(skill: SkillAvailability, refs: RepairPolicyRefs) {
+  return refs.outputRel
+    ? `payload:${refs.outputRel}`
+    : `payload:${skill.id}`;
+}
+
+function generatedTaskRefForRepairRefs(refs: RepairPolicyRefs) {
+  return typeof refs.taskRel === 'string' && !refs.taskRel.startsWith('agentserver://')
+    ? refs.taskRel
+    : undefined;
 }
 
 function summarizeActualContractShape(value: unknown) {

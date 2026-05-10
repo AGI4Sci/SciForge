@@ -29,14 +29,12 @@ import { ArtifactCardControls } from './results/ArtifactCardControls';
 import { EvidenceMatrix, ExecutionPanel, NotebookTimeline } from './results/ExecutionNotebookPanels';
 export { handoffAutoRunPrompt, previewPackageAutoRunPrompt } from './results/autoRunPrompts';
 import {
-  filterHiddenResultSlots,
-  itemsForFocusMode,
-  resolveViewPlan,
-  selectDefaultResultItems,
-  viewPlanSectionLabel,
+  createResultsRendererViewModel,
   type ResolvedViewPlanItem,
+  type ResultsRendererManifestDiagnostic,
+  type ResultsRendererViewModel,
   type RuntimeResolvedViewPlan,
-} from './results/viewPlanResolver';
+} from './results-renderer-view-model';
 export { selectDefaultResultItems, type HandoffAutoRunRequest } from './results/viewPlanResolver';
 import { MarkdownBlock, hydrateInlineObjectReferenceButtons } from './results/reportContent';
 export { coerceReportPayload } from './results/reportContent';
@@ -60,7 +58,7 @@ import {
   uploadedArtifactPreview,
 } from './results/previewDescriptor';
 import { UploadedDataUrlPreview, WorkspaceObjectPreview } from './results/WorkspaceObjectPreview';
-import type { SciForgeConfig, SciForgeRun, SciForgeSession, EvidenceClaim, NotebookRecord, ObjectAction, ObjectReference, PreviewDescriptor, RuntimeArtifact, RuntimeExecutionUnit, ScenarioInstanceId, UIManifestSlot, ViewPlanSection } from '../domain';
+import type { SciForgeConfig, SciForgeRun, SciForgeSession, ObjectAction, ObjectReference, PreviewDescriptor, RuntimeArtifact, UIManifestSlot } from '../domain';
 import {
   backendRepairStates,
   contractValidationFailureKey,
@@ -70,7 +68,6 @@ import {
   runAuditBlockers,
   runAuditRefs,
   runRecoverActions,
-  shouldOpenRunAuditDetails,
   type BackendRepairState,
 } from './results-renderer-execution-model';
 export {
@@ -226,14 +223,15 @@ export function ResultsRenderer({
     const cleanup = hydrateInlineObjectReferenceButtons();
     return cleanup;
   }, [resultTab, session.artifacts, session.runs, focusedObjectReference]);
-  const viewPlan = useMemo(() => resolveViewPlan({
+  const rendererModel = useMemo(() => createResultsRendererViewModel({
     scenarioId,
     session,
     defaultSlots,
     activeRun,
     focusedObjectReference,
     pinnedObjectReferences,
-  }), [scenarioId, session, defaultSlots, activeRun, focusedObjectReference, pinnedObjectReferences]);
+    focusMode,
+  }), [scenarioId, session, defaultSlots, activeRun, focusedObjectReference, pinnedObjectReferences, focusMode]);
   function handleFocusModeChange(mode: ResultFocusMode) {
     setFocusMode(mode);
     if (mode === 'evidence') setResultTab('evidence');
@@ -353,8 +351,7 @@ export function ResultsRenderer({
                 config={config}
                 session={session}
                 activeRun={activeRun}
-                viewPlan={viewPlan}
-                focusMode={focusMode}
+                model={rendererModel}
                 onArtifactHandoff={onArtifactHandoff}
                 onInspectArtifact={setInspectedArtifact}
                 onObjectReferenceFocus={onFocusedObjectChange}
@@ -571,8 +568,7 @@ function PrimaryResult({
   config,
   session,
   activeRun,
-  viewPlan,
-  focusMode,
+  model,
   onArtifactHandoff,
   onInspectArtifact,
   onObjectReferenceFocus,
@@ -582,38 +578,27 @@ function PrimaryResult({
   config: SciForgeConfig;
   session: SciForgeSession;
   activeRun?: SciForgeRun;
-  viewPlan: RuntimeResolvedViewPlan;
-  focusMode: ResultFocusMode;
+  model: ResultsRendererViewModel;
   onArtifactHandoff: (targetScenario: ScenarioId, artifact: RuntimeArtifact) => void;
   onInspectArtifact: (artifact: RuntimeArtifact) => void;
   onObjectReferenceFocus?: (reference: ObjectReference) => void;
   onDismissResultSlotPresentation?: (resolvedSlotPresentationId: string) => void;
 }) {
-  const slotLimit = focusMode === 'visual' || focusMode === 'all' ? 8 : 4;
-  const focusModeItems = itemsForFocusMode(viewPlan, focusMode);
-  const visibleAfterDismiss = filterHiddenResultSlots(focusModeItems, session);
-  const planItems = visibleAfterDismiss.slice(0, slotLimit);
-  const dismissedAllInFilter = focusModeItems.length > 0 && visibleAfterDismiss.length === 0;
-  const { visibleItems, deferredItems } = selectDefaultResultItems(planItems, focusMode);
-  const auditOpen = shouldOpenRunAuditDetails(session, activeRun);
+  const { viewPlan } = model;
   return (
     <div className="stack">
       <SectionHeader icon={FileText} title="结果视图" subtitle="优先展示用户本轮要看的结果；更多内容默认收起" />
       {viewPlan.blockedDesign ? <UIDesignBlockerCard blocker={viewPlan.blockedDesign} /> : null}
       <RunStatusSummary session={session} activeRun={activeRun} />
-      {!planItems.length ? (
+      {model.emptyState ? (
         <EmptyArtifactState
-          title={dismissedAllInFilter ? '当前筛选下的视图已全部从界面移除' : focusMode === 'all' ? '还没有可展示的关键结果' : '当前筛选没有匹配内容'}
-          detail={dismissedAllInFilter
-            ? '这是仅影响呈现的隐藏列表，artifact 与工作区文件未被删除。新开聊天会清空该列表。'
-            : focusMode === 'all'
-              ? '发送请求后，这里只展示真实产物、当前 run 结果和被点选/引用的对象；空的系统模块会默认隐藏。'
-              : '切回“全部”，或运行一个会生成对应 artifact 的任务。'}
+          title={model.emptyState.title}
+          detail={model.emptyState.detail}
         />
       ) : null}
       <ResultItemsSection
-        title={focusMode === 'execution' ? '执行记录' : focusMode === 'evidence' ? '证据重点' : '核心结果'}
-        items={visibleItems}
+        title={model.primaryTitle}
+        items={model.visibleItems}
         scenarioId={scenarioId}
         config={config}
         session={session}
@@ -622,33 +607,29 @@ function PrimaryResult({
         onObjectReferenceFocus={onObjectReferenceFocus}
         onDismissResultSlotPresentation={onDismissResultSlotPresentation}
       />
-      {deferredItems.length ? (
+      {model.deferredSections.length ? (
         <details className="result-details-panel">
           <summary>
             <span>更多结果</span>
-            <Badge variant="muted">{deferredItems.length} hidden</Badge>
+            <Badge variant="muted">{model.deferredItems.length} hidden</Badge>
           </summary>
-          {(['supporting', 'provenance', 'raw', 'primary'] as ViewPlanSection[]).map((section) => {
-            const sectionItems = deferredItems.filter((item) => item.section === section);
-            if (!sectionItems.length) return null;
-            return (
-              <ResultItemsSection
-                key={section}
-                title={viewPlanSectionLabel(section)}
-                items={sectionItems}
-                scenarioId={scenarioId}
-                config={config}
-                session={session}
-                onArtifactHandoff={onArtifactHandoff}
-                onInspectArtifact={onInspectArtifact}
-                onObjectReferenceFocus={onObjectReferenceFocus}
-                onDismissResultSlotPresentation={onDismissResultSlotPresentation}
-              />
-            );
-          })}
+          {model.deferredSections.map((section) => (
+            <ResultItemsSection
+              key={section.section}
+              title={section.title}
+              items={section.items}
+              scenarioId={scenarioId}
+              config={config}
+              session={session}
+              onArtifactHandoff={onArtifactHandoff}
+              onInspectArtifact={onInspectArtifact}
+              onObjectReferenceFocus={onObjectReferenceFocus}
+              onDismissResultSlotPresentation={onDismissResultSlotPresentation}
+            />
+          ))}
         </details>
       ) : null}
-      {auditOpen ? (
+      {model.auditOpen ? (
         <RunAuditDetails
           scenarioId={scenarioId}
           session={session}
@@ -664,6 +645,7 @@ function PrimaryResult({
             <Badge variant="muted">{viewPlan.allItems.length} modules</Badge>
           </summary>
           <ViewPlanSummary viewPlan={viewPlan} session={session} activeRun={activeRun} />
+          <ManifestDiagnostics items={model.manifestDiagnostics} />
         </details>
       ) : null}
     </div>
@@ -1302,12 +1284,12 @@ function ArtifactInspectorDrawer({
   );
 }
 
-function ManifestDiagnostics({ items }: { items: ResolvedViewPlanItem[] }) {
+function ManifestDiagnostics({ items }: { items: ResultsRendererManifestDiagnostic[] }) {
   return (
     <div className="manifest-diagnostics">
       {items.map((item) => (
-        <code key={item.id} title={item.reason ?? item.module.description}>
-          {item.module.moduleId}{item.artifact ? ` -> ${item.artifact.type}` : ''}
+        <code key={item.id} title={item.reason}>
+          {item.moduleId}{item.artifactType ? ` -> ${item.artifactType}` : ''}
         </code>
       ))}
     </div>

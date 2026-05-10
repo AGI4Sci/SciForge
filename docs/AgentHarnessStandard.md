@@ -353,6 +353,7 @@ Decision merge 必须 deterministic。
 - risk/verification 只能升级，不能降级，除非 human approval 已满足。
 - side-effect allowance 默认 fail closed。
 - prompt directives 必须带 `sourceCallbackId`，并由 renderer 去重、排序、裁剪。
+- prompt render plan 必须保留 `sourceRefs.contractRef` / `sourceRefs.traceRef`、结构化 `renderedEntries` 和 deterministic `renderDigest`，使 prompt 策略句可以从 `HarnessContract` / `HarnessTrace` refs 重建，而不是只能从自然语言 prompt 反推。
 - 冲突时保留更保守 decision，并写入 trace。
 
 示例：

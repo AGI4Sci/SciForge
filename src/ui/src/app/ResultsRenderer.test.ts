@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { backendRepairStates, coerceReportPayload, contractValidationFailures, renderRegisteredWorkbenchSlot, ResultsRenderer, runAuditRefs, runRecoverActions, shouldOpenRunAuditDetails } from './ResultsRenderer';
+import { createResultsRendererViewModel } from './results-renderer-view-model';
 import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract';
 import type { RuntimeArtifact, SciForgeConfig, SciForgeSession } from '../domain';
 
@@ -215,6 +216,46 @@ test('paper-card-list workbench slot is rendered by package policy', () => {
   assert.match(html, /Package-owned paper renderer/);
   assert.match(html, /SciForge Journal/);
   assert.doesNotMatch(html, /缺少 papers\/rows 数组/);
+});
+
+test('results renderer view model projects hidden result empty state and manifest diagnostics', () => {
+  const artifact: RuntimeArtifact = {
+    id: 'papers',
+    type: 'paper-list',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: {
+      papers: [{ title: 'View model paper', year: 2026 }],
+    },
+  };
+  const session: SciForgeSession = {
+    ...emptySession(),
+    artifacts: [artifact],
+  };
+  const initial = createResultsRendererViewModel({
+    scenarioId: 'literature-evidence-review',
+    session,
+    defaultSlots: [],
+    focusMode: 'all',
+  });
+  assert.ok(initial.visibleItems.length > 0);
+  assert.equal(initial.emptyState, undefined);
+  assert.ok(initial.manifestDiagnostics.some((item) => item.artifactType === 'paper-list'));
+
+  const hiddenSession: SciForgeSession = {
+    ...session,
+    hiddenResultSlotIds: initial.viewPlan.allItems.map((item) => item.id),
+  };
+  const hidden = createResultsRendererViewModel({
+    scenarioId: 'literature-evidence-review',
+    session: hiddenSession,
+    defaultSlots: [],
+    focusMode: 'all',
+  });
+
+  assert.equal(hidden.visibleItems.length, 0);
+  assert.equal(hidden.emptyState?.dismissedAllInFilter, true);
+  assert.equal(hidden.emptyState?.title, '当前筛选下的视图已全部从界面移除');
 });
 
 function contractFailureSession(): SciForgeSession {

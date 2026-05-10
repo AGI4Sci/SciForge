@@ -107,6 +107,17 @@ assert.equal(success.researchReport.ref, 'artifact:research-report');
 assert.equal(success.researchReport.fullTextPolicy, 'bounded-summary');
 assert.ok(success.providerAttempts.every((attempt) => attempt.status === 'success'));
 assert.ok(success.citationVerificationResults.some((result) => result.status === 'verified'));
+assert.equal(success.budgetDebits?.length, 1);
+const successDebit = success.budgetDebits?.[0];
+assert.ok(successDebit, 'normal success should emit a budget debit record');
+assert.equal(successDebit.capabilityId, 'literature.retrieval');
+assert.deepEqual(success.workEvidence[0]?.budgetDebitRefs, [successDebit.debitId]);
+assert.ok(success.providerAttempts.every((attempt) => attempt.budgetDebitRefs?.includes(successDebit.debitId)));
+assert.deepEqual(successDebit.sinkRefs.workEvidenceRefs, [success.workEvidence[0]?.id]);
+assert.ok(successDebit.sinkRefs.auditRefs.includes('audit:literature-retrieval-runner'));
+assert.ok(successDebit.subjectRefs.includes('artifact:paper-list'));
+assert.ok(successDebit.debitLines.some((line) => line.dimension === 'providers' && line.amount === 3));
+assert.ok(successDebit.debitLines.some((line) => line.dimension === 'resultItems' && line.amount === 2));
 
 const empty = checked(runOfflineLiteratureRetrieval({
   request: { query: 'no-result control', databases: ['pubmed'] },
@@ -151,6 +162,18 @@ assert.equal(timeout.status, 'partial');
 assert.equal(timeout.providerAttempts[0]?.status, 'timeout');
 assert.equal(timeout.providerAttempts[1]?.status, 'success');
 assert.equal(timeout.diagnostics[0]?.code, 'provider-timeout');
+const timeoutDebit = timeout.budgetDebits?.[0];
+assert.ok(timeoutDebit, 'provider timeout should emit a budget debit record');
+assert.equal(timeout.providerAttempts[0]?.budgetDebitRefs?.[0], timeoutDebit.debitId);
+assert.equal(timeout.workEvidence[0]?.budgetDebitRefs?.[0], timeoutDebit.debitId);
+assert.equal(timeoutDebit.exceeded, true);
+assert.ok(timeoutDebit.exhaustedDimensions.includes('wallMs'));
+assert.ok(timeoutDebit.debitLines.some((line) => (
+  line.dimension === 'wallMs'
+  && line.sourceRef === `providerAttempt:${timeout.providerAttempts[0]?.id}`
+  && typeof line.remaining === 'number'
+  && line.remaining < 0
+)));
 
 const downloadFailure = checked(runOfflineLiteratureRetrieval({
   request: { query: 'full text failure paper', databases: ['arxiv'], fullTextPolicy: 'bounded-full-text' },
@@ -209,5 +232,6 @@ function checked(output: OfflineLiteratureRetrievalOutput): OfflineLiteratureRet
   assert.ok(output.workEvidence, 'workEvidence output should be emitted');
   assert.ok(output.providerAttempts, 'providerAttempts output should be emitted');
   assert.ok(output.citationVerificationResults, 'citationVerificationResults output should be emitted');
+  assert.ok(output.budgetDebits, 'budgetDebits audit output should be emitted');
   return output;
 }

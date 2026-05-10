@@ -38,6 +38,10 @@ export type StreamEventImportance = 'key' | 'background' | 'debug';
 export type StreamEventTone = 'info' | 'warning' | 'danger' | 'success' | 'muted';
 export type StreamWorklogOperationKind = WorkEventKind;
 
+const INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION = 'sciforge.interaction-progress-event.v1';
+const INTERACTION_PROGRESS_IMPORTANCE = new Set(['low', 'normal', 'high', 'blocking']);
+const INTERACTION_PROGRESS_STATUSES = new Set(['pending', 'running', 'blocked', 'completed', 'failed', 'cancelled']);
+
 export interface StreamEventPresentation {
   typeLabel: string;
   detail: string;
@@ -128,8 +132,9 @@ export function latestWorklogEntries(events: AgentStreamEvent[], limit: number):
 export function worklogEntryForEvent(event: AgentStreamEvent): StreamWorklogEntry {
   const presentation = presentStreamEvent(event);
   const structured = structuredWorkEventSummary(event);
-  const operationKind = classifyWorkEvent(event, presentation.detail, presentation.shortDetail);
-  const detail = structured?.detail || presentation.shortDetail || presentation.detail || presentation.usageDetail;
+  const interactionProgress = interactionProgressSummary(event);
+  const operationKind = interactionProgress?.operationKind ?? classifyWorkEvent(event, presentation.detail, presentation.shortDetail);
+  const detail = interactionProgress?.detail || structured?.detail || presentation.shortDetail || presentation.detail || presentation.usageDetail;
   return {
     event,
     presentation,
@@ -164,7 +169,7 @@ function worklogOperationCounts(events: AgentStreamEvent[]) {
   return events.reduce(
     (memo, event) => {
       const presentation = presentStreamEvent(event);
-      const kind = classifyWorkEvent(event, presentation.detail, presentation.shortDetail);
+      const kind = interactionProgressSummary(event)?.operationKind ?? classifyWorkEvent(event, presentation.detail, presentation.shortDetail);
       memo.total += 1;
       memo[kind] += 1;
       return memo;
@@ -257,6 +262,8 @@ export function readableStreamEventDetail(event: AgentStreamEvent) {
       .filter(Boolean)
       .join(' · ');
   }
+  const interactionProgressDetail = interactionProgressSummary(event)?.detail;
+  if (interactionProgressDetail) return interactionProgressDetail;
   const structuredDetail = structuredWorkEventSummary(event)?.detail;
   if (structuredDetail) return structuredDetail;
   const rawDetail = detailFromRawToolEvent(event);
@@ -273,6 +280,8 @@ export function readableStreamEventDetail(event: AgentStreamEvent) {
 
 function streamEventImportance(event: AgentStreamEvent, detail: string): StreamEventImportance {
   const type = event.type.toLowerCase();
+  const interactionProgress = interactionProgressSummary(event);
+  if (interactionProgress) return interactionProgress.importance;
   const structured = structuredWorkEventSummary(event);
   if (structured) return 'key';
   if (type.includes('error') || type.includes('failed') || type.includes('interrupt') || type.includes('permission')) {
@@ -300,6 +309,8 @@ function streamEventImportance(event: AgentStreamEvent, detail: string): StreamE
 }
 
 function streamEventTypeLabel(type: string, event?: AgentStreamEvent, detail = '') {
+  const interactionProgress = event ? interactionProgressSummary(event) : undefined;
+  if (interactionProgress) return interactionProgress.typeLabel;
   const structured = event ? structuredWorkEventSummary(event) : undefined;
   if (structured?.stage) return 'Stage';
   if (structured?.project) return 'Project';
@@ -316,6 +327,8 @@ function streamEventTypeLabel(type: string, event?: AgentStreamEvent, detail = '
 }
 
 function streamEventTone(type: string, importance: StreamEventImportance, event?: AgentStreamEvent): StreamEventTone {
+  const interactionProgress = event ? interactionProgressSummary(event) : undefined;
+  if (interactionProgress) return interactionProgress.tone;
   const structured = event ? structuredWorkEventSummary(event) : undefined;
   const status = (structured?.stage?.status || structured?.project?.status || '').toLowerCase();
   if (structured?.failure || status === 'failed' || status === 'blocked') return 'danger';
@@ -420,6 +433,116 @@ function detailFromRawProgressEvent(event: AgentStreamEvent) {
   return tidyReadableText(parts.filter(Boolean).join('\n'));
 }
 
+function interactionProgressSummary(event: AgentStreamEvent): {
+  detail: string;
+  importance: StreamEventImportance;
+  operationKind: WorkEventKind;
+  tone: StreamEventTone;
+  typeLabel: string;
+} | undefined {
+  const progress = interactionProgressRecord(event);
+  if (!progress) return undefined;
+  const type = stringField(progress.type) ?? event.type;
+  const phase = stringField(progress.phase);
+  const status = normalizedInteractionStatus(progress.status);
+  const importance = normalizedInteractionImportance(progress.importance);
+  const reason = stringField(progress.reason);
+  const cancellationReason = stringField(progress.cancellationReason);
+  const interaction = isRecord(progress.interaction) ? progress.interaction : undefined;
+  const interactionKind = stringField(interaction?.kind);
+  const interactionRequired = typeof interaction?.required === 'boolean' ? interaction.required : undefined;
+  const parts = [
+    `Phase: ${phase ?? type}`,
+    status ? `Status: ${status}` : '',
+    reason ? `Reason: ${reason}` : '',
+    cancellationReason ? `Cancellation: ${cancellationReason}` : '',
+    interactionKind ? `Interaction: ${interactionKind}${interactionRequired === undefined ? '' : interactionRequired ? ' required' : ' optional'}` : '',
+    budgetSummary(isRecord(progress.budget) ? progress.budget : undefined),
+  ].filter(Boolean);
+  return {
+    detail: parts.join('\n'),
+    importance: streamImportanceForInteractionProgress(importance, status),
+    operationKind: operationKindForInteractionProgress(type, phase, status, interactionKind),
+    tone: toneForInteractionProgress(status, importance),
+    typeLabel: labelForInteractionProgress(type),
+  };
+}
+
+function interactionProgressRecord(event: AgentStreamEvent): Record<string, unknown> | undefined {
+  const raw = isRecord(event.raw) ? event.raw : undefined;
+  if (raw && raw.schemaVersion === INTERACTION_PROGRESS_EVENT_SCHEMA_VERSION && typeof raw.type === 'string') return raw;
+  return undefined;
+}
+
+function streamImportanceForInteractionProgress(importance: string | undefined, status: string | undefined): StreamEventImportance {
+  if (status === 'blocked' || status === 'failed' || status === 'cancelled') return 'key';
+  if (importance === 'low') return 'background';
+  return 'key';
+}
+
+function toneForInteractionProgress(status: string | undefined, importance: string | undefined): StreamEventTone {
+  if (status === 'failed' || status === 'cancelled') return 'danger';
+  if (status === 'completed') return 'success';
+  if (status === 'blocked' || importance === 'blocking') return 'warning';
+  return importance === 'low' ? 'muted' : 'info';
+}
+
+function operationKindForInteractionProgress(
+  type: string,
+  phase: string | undefined,
+  status: string | undefined,
+  interactionKind: string | undefined,
+): WorkEventKind {
+  const normalizedType = type.toLowerCase();
+  const normalizedPhase = (phase ?? '').toLowerCase();
+  if (normalizedType === 'run-cancelled' || status === 'failed' || status === 'cancelled') return 'diagnostic';
+  if (interactionKind || status === 'blocked' || normalizedType === 'guidance-queued') return 'wait';
+  if (/repair|recover|retry/.test(normalizedPhase)) return 'recover';
+  if (/verification|validate|verifier|acceptance/.test(normalizedPhase)) return 'validate';
+  if (/context|read|reference/.test(normalizedPhase)) return 'read';
+  if (/capabil|tool|dispatch|execute|action/.test(normalizedPhase)) return 'command';
+  if (/plan|classify|select|profile|intent/.test(normalizedPhase)) return 'plan';
+  if (/background|silence|wait|pending/.test(normalizedPhase)) return 'wait';
+  if (/complete|result|output|emit/.test(normalizedPhase)) return 'emit';
+  return normalizedType === PROCESS_PROGRESS_EVENT_TYPE ? 'other' : 'diagnostic';
+}
+
+function labelForInteractionProgress(type: string) {
+  if (type === 'clarification-needed') return '需要澄清';
+  if (type === 'human-approval-required') return '需要确认';
+  if (type === 'interaction-request') return '需要交互';
+  if (type === 'guidance-queued') return '引导已排队';
+  if (type === 'run-cancelled') return '运行取消';
+  if (type === PROCESS_PROGRESS_EVENT_TYPE) return '工作过程';
+  return type;
+}
+
+function budgetSummary(budget: Record<string, unknown> | undefined) {
+  if (!budget) return '';
+  const elapsedMs = numberField(budget.elapsedMs);
+  const remainingMs = numberField(budget.remainingMs);
+  const retryCount = numberField(budget.retryCount);
+  const maxRetries = numberField(budget.maxRetries);
+  const maxWallMs = numberField(budget.maxWallMs);
+  const parts = [
+    elapsedMs !== undefined ? `elapsed ${elapsedMs}ms` : '',
+    remainingMs !== undefined ? `remaining ${remainingMs}ms` : '',
+    retryCount !== undefined || maxRetries !== undefined ? `retries ${retryCount ?? '?'}/${maxRetries ?? '?'}` : '',
+    maxWallMs !== undefined ? `max wall ${maxWallMs}ms` : '',
+  ].filter(Boolean);
+  return parts.length ? `Budget: ${parts.join(', ')}` : '';
+}
+
+function normalizedInteractionImportance(value: unknown) {
+  const text = stringField(value)?.toLowerCase();
+  return text && INTERACTION_PROGRESS_IMPORTANCE.has(text) ? text : undefined;
+}
+
+function normalizedInteractionStatus(value: unknown) {
+  const text = stringField(value)?.toLowerCase();
+  return text && INTERACTION_PROGRESS_STATUSES.has(text) ? text : undefined;
+}
+
 function parseJsonObject(value: string): Record<string, unknown> | undefined {
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -474,4 +597,12 @@ function tidyReadableText(value: string) {
     .replace(/([A-Za-z0-9\u4e00-\u9fff])\n(?=[A-Za-z0-9\u4e00-\u9fff])/g, '$1 ')
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
+}
+
+function stringField(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function numberField(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }

@@ -42,15 +42,15 @@ SciForge 的最终形态是 **Backend-first, Contract-enforced, Capability-drive
 
 ### T131 ResultsRenderer 长文件治理：拆分结果渲染主入口
 
-状态：进行中；`src/ui/src/app/ResultsRenderer.tsx` 已从超过 1500 行降到 1316 行，仍处于继续拆分跟踪范围。目标是把结果渲染主入口收敛为流程编排，把 artifact normalization、view-plan selection、execution notebook projection、fallback/empty-state presentation、object reference actions 等职责拆到语义模块，避免继续在单一 React 文件里堆叠。已拆出 execution audit 数据模型和 artifact inspector/reference normalization，保持 React 文件只消费投影结果。
+状态：进行中；`src/ui/src/app/ResultsRenderer.tsx` 已从超过 1500 行降到 1298 行，仍处于继续拆分跟踪范围。目标是把结果渲染主入口收敛为流程编排，把 artifact normalization、view-plan selection、execution notebook projection、fallback/empty-state presentation、object reference actions 等职责拆到语义模块，避免继续在单一 React 文件里堆叠。已拆出 execution audit 数据模型、artifact inspector/reference normalization 和 view-model 投影，保持 React 文件只消费投影结果。
 
 Todo：
 
 - [x] 拆出 `results-renderer-artifact-normalizer`：只处理 loose backend artifact / ToolPayload 到稳定渲染输入的归一化。
-- [ ] 拆出 `results-renderer-view-model`：只负责 view plan、primary/supporting/provenance section 和 empty-state 投影。
+- [x] 拆出 `results-renderer-view-model`：只负责 view plan、primary/supporting/provenance section 和 empty-state 投影。
 - [x] 拆出 `results-renderer-execution-model`：只负责 execution units、notebook panels、work evidence 和 audit display 的 UI 数据模型。
 - [ ] 保持 `ResultsRenderer.tsx` 只做 React composition 和事件接线，目标降到 1000 行以下。
-- [ ] 增加或迁移聚焦测试，覆盖 artifact fallback、report/preview rendering、execution notebook 和 object reference actions。
+- [ ] 增加或迁移聚焦测试，覆盖 artifact fallback、report/preview rendering、execution notebook 和 object reference actions。（已新增 view-model、execution audit 聚焦测试；artifact fallback/object actions 仍待拆分覆盖。）
 
 验收标准：
 
@@ -85,7 +85,7 @@ Todo：
 
 状态：进行中；目标是让所有可用能力都通过统一 `CapabilityManifest`、`HarnessCandidate`、`CapabilityBudget` 被 broker 和 harness 治理，避免 package skills、tool catalog、observe/action loop 与 AgentServer generation fallback 平行存在。
 
-进展：第一阶段统一候选图已落地为 shadow/helper 层。`projectCapabilityManifestsToHarnessCandidates()` 可以把 heterogeneous `CapabilityManifest` 投影为 `HarnessCandidate`，包含 `kind/id/manifestRef/score/reasons/providerAvailability/budget/fallbackCandidateIds`，并输出 provider/blocked/budget gate audit；当前不改变 broker 真实选择路径。第二阶段 broker input path 已接收 harness `skillHints`、`blockedCapabilities`、`toolBudget`、`verificationPolicy` 和 provider availability，并把对应信号写入 compact brief/audit，schema/examples/repair hints 仍保持 lazy expansion。第三阶段新增最小 `CapabilityBudgetDebit` contract/helper，能把单次 capability invocation 的 budget debit 记录为可写入 executionUnit/workEvidence/audit 的稳定 sink-addressable record；暂未重接运行时 invocation 扣账路径。
+进展：第一阶段统一候选图已落地为 shadow/helper 层。`projectCapabilityManifestsToHarnessCandidates()` 可以把 heterogeneous `CapabilityManifest` 投影为 `HarnessCandidate`，包含 `kind/id/manifestRef/score/reasons/providerAvailability/budget/fallbackCandidateIds`，并输出 provider/blocked/budget gate audit；当前不改变 broker 真实选择路径。第二阶段 broker input path 已接收 harness `skillHints`、`blockedCapabilities`、`toolBudget`、`verificationPolicy` 和 provider availability，并把对应信号写入 compact brief/audit，schema/examples/repair hints 仍保持 lazy expansion。第三阶段新增最小 `CapabilityBudgetDebit` contract/helper，能把单次 capability invocation 的 budget debit 记录为可写入 executionUnit/workEvidence/audit 的稳定 sink-addressable record；首个运行时小切片已接入 `literature.retrieval` offline runner，在 providerAttempts、workEvidence 和顶层 `budgetDebits` 审计输出里保留 sink refs。
 
 Todo：
 
@@ -95,7 +95,7 @@ Todo：
 - [ ] 将 `scoreSkillByPackagePolicy`、tool package manifests、observe provider selection、Computer Use action plan 统一包装为默认 candidate callbacks。
 - [ ] 将 `summarizeToolsForAgentServer()` 改为按 harness/capability budget 输出 budgeted tool briefs，不再默认空数组。
 - [x] Broker 输入接收 `skillHints`、`blockedCapabilities`、`CapabilityBudget`、`verificationPolicy`、provider availability 和 ledger history。
-- [ ] 每次 capability invocation 写入 `budgetDebits` 到 executionUnit/workEvidence/audit。
+- [ ] 每次 capability invocation 写入 `budgetDebits` 到 executionUnit/workEvidence/audit；已完成 `literature.retrieval` offline runner 首片。
 - [x] 增加 `smoke:unified-capability-graph`：同一 prompt 下 skill/tool/observe/action/verifier 都能作为候选进入 broker audit，且安全/配置/预算 gate 生效。
 - [x] 增加 `smoke:capability-broker-harness-input`：harness hints/budget/provider/verification policy 进入 broker compact audit，blocked capability 不能绕过 gate。
 - [x] 增加 `smoke:capability-budget-debits`：单次 capability invocation 能生成带 executionUnit/workEvidence/audit sink refs 的 budget debit record。
@@ -110,7 +110,7 @@ Todo：
 
 状态：进行中；目标是把 fresh/continuation、workspace read policy、current refs、repair retry、tool-use policy 等散落 prompt/metadata 规则迁入 `HarnessContract`，prompt builder 只做 deterministic rendering。
 
-进展：第一阶段 metadata-only handoff 已落地。AgentServer dispatch payload 不再把 harness contract/prompt directives 内联进自然语言 prompt，而是携带 `harnessProfileId`、`harnessContractRef`、`harnessTraceRef`、budget summary、decision owner 和结构化 `agentHarnessHandoff` 元数据，作为后续 deterministic renderer 的稳定交接面。第二阶段补充了 `uiState.agentHarnessInput` 到 shadow contract 的 refs/intent 桥接，并新增离线 `smoke:contract-driven-handoff` 覆盖 fresh/continuation/repair 三类 handoff refs。第三阶段新增 `promptRenderPlan` metadata scaffold：从 `HarnessContract` 的 intent/context/repair/promptDirectives 确定性渲染 strategy/directive refs，所有策略句和 selected refs 都带 `sourceCallbackId`，但暂不大改自然语言 prompt builder。
+进展：第一阶段 metadata-only handoff 已落地。AgentServer dispatch payload 不再把 harness contract/prompt directives 内联进自然语言 prompt，而是携带 `harnessProfileId`、`harnessContractRef`、`harnessTraceRef`、budget summary、decision owner 和结构化 `agentHarnessHandoff` 元数据，作为后续 deterministic renderer 的稳定交接面。第二阶段补充了 `uiState.agentHarnessInput` 到 shadow contract 的 refs/intent 桥接，并新增离线 `smoke:contract-driven-handoff` 覆盖 fresh/continuation/repair 三类 handoff refs。第三阶段新增 `promptRenderPlan` metadata scaffold：从 `HarnessContract` 的 intent/context/repair/promptDirectives 确定性渲染 strategy/directive refs，所有策略句和 selected refs 都带 `sourceCallbackId`。第四阶段补充 `sourceRefs`、结构化 `renderedEntries` 与 deterministic `renderDigest`，使策略句顺序可从 contract/trace refs 重建；暂不大改自然语言 prompt builder。
 
 Todo：
 
@@ -137,6 +137,7 @@ Todo：
 
 - 2026-05-10：新增 `@sciforge-ui/runtime-contract/validation-repair-audit` 第一阶段纯契约，定义 `ValidationDecision`、`RepairDecision`、`AuditRecord`、通用 finding/subject/ref/budget shape，并用离线 smoke 证明 direct payload、generated-task result、observe result 失败可以落到同一决策链；尚未重接 runner 主流程。
 - 2026-05-10：新增 gateway 侧 `createValidationRepairAuditChain()` bridge，并让 `smoke:validation-repair-audit-chain` 增加 verification-gate 失败样本，验证 failed runtime verification result 会进入 `ValidationDecision -> RepairDecision -> AuditRecord`，并保留 policy/evidence/sink/telemetry refs 与 repair hints；主流程 wiring 仍未重接。
+- 2026-05-10：真实 `payload-validation` schema failure 与 completed payload contract failure 已通过 bridge 生成 validation/repair/audit chain，并挂回 repair-needed execution unit 的 `refs.validationRepairAudit`，保留原有 `validationFailure` 行为兼容；`generated-task-runner` 生命周期尚未整体收敛。
 
 Todo：
 
@@ -146,12 +147,12 @@ Todo：
 - [ ] 建立 `AuditSink`：统一写 `appendTaskAttempt`、Capability Evolution Ledger、verification artifacts、observe invocation records。
 - [ ] 建立 `TelemetrySink`：记录 `generation/request`、`materialize`、`payload-validation`、`work-evidence`、`verification-gate`、`repair-decision`、`repair-rerun`、`ledger-write`、`observe-invocation` spans。
 - [ ] 将 `generated-task-runner` 收敛为生命周期编排：generate/run/validate/repair/audit。
-- [ ] Verification gate 结果必须回流 repair/audit，而不是只在最终 payload 上 fail closed。
+- [ ] Verification gate 结果必须回流 repair/audit，而不是只在最终 payload 上 fail closed。（离线 bridge/smoke 已覆盖，真实 gate wiring 待接入。）
 - [x] 增加 `smoke:validation-repair-audit-chain`：direct payload、generated task、observe result、verification gate 失败都能追溯 contract id、failure kind、related refs、repair budget、最终 outcome。
 
 验收标准：
 
-- [ ] direct payload、generated task、repair rerun、observe/action result 共用同一 validation finding model。（第一阶段已覆盖 direct payload、generated task、observe result 离线链路；repair rerun/action result 待接入。）
+- [ ] direct payload、generated task、repair rerun、observe/action result 共用同一 validation finding model。（第一阶段已覆盖 direct payload、generated task、observe result 离线链路；真实 payload-validation schema failure 已接入；repair rerun/action result 待接入。）
 - [ ] Runner 分支不再手写 repair policy 和 ledger input。
 - [ ] Capability Evolution Ledger 拥有完整成功/失败/repair/fallback 事实。
 
@@ -167,7 +168,7 @@ Todo：
 - [x] 标准事件：`process-progress`、`interaction-request`、`clarification-needed`、`human-approval-required`、`guidance-queued`、`run-cancelled`。
 - [ ] 将 UI、transport、backend 三层 silent watchdog 统一为 `silencePolicy`，同一 run 只产生一条可审计 retry/abort/visible-status 决策。
 - [ ] 区分 `user-cancelled`、`system-aborted`、`timeout`、`backend-error`，历史 run 不全部折叠成普通 failed。
-- [ ] 让 `streamEventPresentation` 根据结构化 `importance/phase/status/reason/budget` 投影 worklog，减少自然语言启发式。
+- [x] 让 `streamEventPresentation` 根据结构化 `importance/phase/status/reason/budget` 投影 worklog，减少自然语言启发式。
 - [ ] 短期兼容现有 guidance queue；长期将澄清和人工确认升级为一等 interaction contract。
 - [x] 增加 `smoke:interaction-progress-harness`：长任务沉默、用户取消、系统 abort、timeout、human approval、mid-run guidance 都有稳定事件和最终 run state。
 
