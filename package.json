@@ -39,6 +39,7 @@
     "smoke:agentserver-generation": "tsx tests/smoke/smoke-agentserver-generation.ts",
     "smoke:agentserver-context-window": "tsx tests/smoke/smoke-agentserver-context-window-contract.ts",
     "smoke:complex-multiturn-chat": "tsx tests/smoke/smoke-complex-multiturn-chat-regression.ts",
+    "smoke:complex-multiturn-fixtures": "tsx tests/smoke/smoke-complex-multiturn-fixtures.ts",
     "smoke:backend-handoff-budget": "tsx tests/smoke/smoke-backend-handoff-budget.ts",
     "smoke:agentserver-artifact-followup": "tsx tests/smoke/smoke-artifact-reference-followup.ts",
     "smoke:agentserver-compact-repair": "tsx tests/smoke/smoke-agentserver-compact-repair.ts",
@@ -181,6 +182,7 @@
     "workspace:server": "tsx src/runtime/workspace-server.ts",
     "workspace:prune": "tsx tools/prune-workspace.ts",
     "bench:models": "tsx tools/benchmark-model-speed.ts",
+    "bench:complex-dialogue": "tsx tools/generate-complex-dialogue-benchmark-report.ts",
     "preview": "vite preview --host 0.0.0.0",
     "typecheck": "tsc --noEmit"
   },
