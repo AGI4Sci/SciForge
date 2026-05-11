@@ -213,6 +213,43 @@ test('display intent and UI manifest selection outrank artifact type wording dur
   assert.equal(plan.allItems.some((item) => item.artifact?.id === 'semantic-looking-html'), false);
 });
 
+test('result presentation artifact actions can drive Results view selection', () => {
+  const report: RuntimeArtifact = {
+    id: 'analysis-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { markdown: '# Analysis report' },
+  };
+  const activeRun: SciForgeRun = {
+    id: 'run-result-presentation',
+    scenarioId: 'literature-evidence-review',
+    status: 'completed',
+    prompt: 'Analyze data',
+    response: 'Raw backend text should not decide the result pane.',
+    createdAt: '2026-05-07T00:00:01.000Z',
+    raw: {
+      displayIntent: {
+        resultPresentation: {
+          answerBlocks: [{ id: 'answer-1', text: 'The report is ready.' }],
+          artifactActions: [{ id: 'artifact-1', label: 'Open analysis report', artifactType: 'research-report', ref: 'artifact:analysis-report' }],
+        },
+      },
+    },
+  };
+  const session = baseSession({
+    runs: [activeRun],
+    artifacts: [report],
+  });
+
+  const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun, defaultSlots: [] });
+  const displayIntentItems = plan.allItems.filter((item) => item.source === 'display-intent');
+
+  assert.equal(plan.displayIntent.primaryGoal, 'Open analysis report');
+  assert.deepEqual(plan.displayIntent.requiredArtifactTypes, ['research-report']);
+  assert.equal(displayIntentItems.some((item) => item.artifact?.id === 'analysis-report'), true);
+});
+
 test('required artifact type matching is exact and does not invent structure-family aliases', () => {
   const pdbArtifact: RuntimeArtifact = {
     id: 'pdb-result',

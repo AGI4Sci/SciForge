@@ -43,6 +43,10 @@ function asStringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : [];
 }
 
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
+}
+
 type ViewPlanSource = InteractiveViewPlanSource;
 type ViewPlanBindingStatus = InteractiveViewBindingStatus;
 
@@ -246,6 +250,8 @@ function extractDisplayIntent(activeRun?: SciForgeRun): DisplayIntent | undefine
   ];
   for (const candidate of candidates) {
     if (!isRecord(candidate)) continue;
+    const resultPresentationIntent = displayIntentFromResultPresentation(candidate.resultPresentation);
+    if (resultPresentationIntent) return resultPresentationIntent;
     const primaryGoal = asString(candidate.primaryGoal) || asString(candidate.goal) || asString(candidate.title);
     if (!primaryGoal) continue;
     return {
@@ -258,6 +264,26 @@ function extractDisplayIntent(activeRun?: SciForgeRun): DisplayIntent | undefine
     };
   }
   return undefined;
+}
+
+function displayIntentFromResultPresentation(value: unknown): DisplayIntent | undefined {
+  if (!isRecord(value)) return undefined;
+  const artifactActions = Array.isArray(value.artifactActions) ? value.artifactActions.filter(isRecord) : [];
+  const requiredArtifactTypes = uniqueStrings(artifactActions
+    .map((action) => asString(action.artifactType))
+    .filter((type): type is string => Boolean(type)));
+  if (!requiredArtifactTypes.length) return undefined;
+  const firstAction = artifactActions.find((action) => asString(action.label));
+  const answerBlocks = Array.isArray(value.answerBlocks) ? value.answerBlocks.filter(isRecord) : [];
+  const firstAnswer = answerBlocks.find((block) => asString(block.text));
+  return {
+    primaryGoal: asString(firstAction?.label) ?? asString(firstAnswer?.text) ?? '展示 result presentation 产物',
+    requiredArtifactTypes,
+    preferredModules: [],
+    fallbackAcceptable: [],
+    acceptanceCriteria: ['render-from-result-presentation-contract'],
+    source: 'agentserver',
+  };
 }
 
 function artifactsForResultPresentation(session: SciForgeSession, activeRun?: SciForgeRun) {

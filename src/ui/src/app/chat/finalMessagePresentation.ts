@@ -11,13 +11,26 @@ export type FinalMessagePresentation = {
   summary: string;
 };
 
+type ResultPresentationContractLike = {
+  answerBlocks?: unknown[];
+  keyFindings?: unknown[];
+  inlineCitations?: unknown[];
+  artifactActions?: unknown[];
+  confidenceExplanation?: unknown;
+  nextActions?: unknown[];
+  processSummary?: unknown;
+  diagnosticsRefs?: unknown[];
+};
+
 type ContentBlock = {
   text: string;
   kind: 'heading' | 'code' | 'paragraph' | 'list' | 'table';
   language?: string;
 };
 
-export function splitFinalMessagePresentation(content: string): FinalMessagePresentation {
+export function splitFinalMessagePresentation(content: string, resultPresentation?: unknown): FinalMessagePresentation {
+  const structured = structuredResultPresentation(resultPresentation);
+  if (structured) return presentationFromResultContract(structured, content);
   const blocks = parseContentBlocks(content);
   const primary: string[] = [];
   const auditSections: FinalMessageAuditSection[] = [];
@@ -57,6 +70,187 @@ export function splitFinalMessagePresentation(content: string): FinalMessagePres
     auditSections,
     summary: auditSectionsSummary(auditSections),
   };
+}
+
+function structuredResultPresentation(value: unknown): ResultPresentationContractLike | undefined {
+  if (!isRecord(value)) return undefined;
+  if (!Array.isArray(value.answerBlocks) && !Array.isArray(value.keyFindings)) return undefined;
+  return value as ResultPresentationContractLike;
+}
+
+function presentationFromResultContract(contract: ResultPresentationContractLike, fallbackContent: string): FinalMessagePresentation {
+  const citations = citationMap(contract.inlineCitations);
+  const primary: string[] = [];
+  const answerText = answerBlocksMarkdown(contract.answerBlocks, citations);
+  if (answerText) primary.push(answerText);
+  const findings = keyFindingsMarkdown(contract.keyFindings, citations);
+  if (findings) primary.push(['## Key findings', findings].join('\n\n'));
+  const artifactActions = artifactActionsMarkdown(contract.artifactActions);
+  if (artifactActions) primary.push(['## Artifacts', artifactActions].join('\n\n'));
+  const nextActions = nextActionsMarkdown(contract.nextActions);
+  if (nextActions) primary.push(['## Next actions', nextActions].join('\n\n'));
+  const confidence = confidenceMarkdown(contract.confidenceExplanation, citations);
+  if (confidence) primary.push(['## Confidence', confidence].join('\n\n'));
+
+  const auditSections = structuredAuditSections(contract, fallbackContent);
+  if (!primary.join('\n').trim() && fallbackContent.trim()) {
+    const fallback = splitFinalMessagePresentation(fallbackContent);
+    return {
+      primaryContent: fallback.primaryContent,
+      auditSections: [...fallback.auditSections, ...auditSections],
+      summary: auditSectionsSummary([...fallback.auditSections, ...auditSections]),
+    };
+  }
+  return {
+    primaryContent: primary.join('\n\n').trim(),
+    auditSections,
+    summary: auditSectionsSummary(auditSections),
+  };
+}
+
+function answerBlocksMarkdown(blocks: unknown[] | undefined, citations: Map<string, CitationLike>) {
+  return recordList(blocks).map((block, index) => {
+    const text = stringField(block.text) ?? stringList(block.items).join('\n');
+    if (!text) return '';
+    const title = stringField(block.title);
+    const suffix = citationSuffix([...stringList(block.citationIds), ...stringList(block.citations)], citations);
+    const body = `${text}${suffix}`;
+    return title ? `### ${title}\n${body}` : index === 0 ? body : `### Answer ${index + 1}\n${body}`;
+  }).filter(Boolean).join('\n\n');
+}
+
+function keyFindingsMarkdown(findings: unknown[] | undefined, citations: Map<string, CitationLike>) {
+  return recordList(findings).map((finding) => {
+    const statement = stringField(finding.statement) ?? stringField(finding.text);
+    if (!statement) return '';
+    const suffix = citationSuffix([...stringList(finding.citationIds), ...stringList(finding.citations)], citations);
+    const uncertainty = isRecord(finding.uncertainty) ? stringField(finding.uncertainty.reason) : undefined;
+    const state = stringField(finding.verificationState) ?? stringField(finding.status) ?? (uncertainty ? 'unverified' : undefined);
+    return `- ${statement}${suffix}${state ? ` (${state})` : ''}${uncertainty ? `: ${uncertainty}` : ''}`;
+  }).filter(Boolean).join('\n');
+}
+
+function artifactActionsMarkdown(actions: unknown[] | undefined) {
+  return recordList(actions).map((action) => {
+    const label = stringField(action.label) ?? stringField(action.id);
+    const ref = stringField(action.ref);
+    if (!label && !ref) return '';
+    return `- ${label ?? ref}${ref ? `: ${displayObjectRef(ref, stringField(action.artifactType))}` : ''}`;
+  }).filter(Boolean).join('\n');
+}
+
+function nextActionsMarkdown(actions: unknown[] | undefined) {
+  return recordList(actions).map((action) => {
+    const label = stringField(action.label) ?? stringField(action.text);
+    return label ? `- ${label}` : '';
+  }).filter(Boolean).join('\n');
+}
+
+function confidenceMarkdown(value: unknown, citations: Map<string, CitationLike>) {
+  if (typeof value === 'string') return value;
+  if (!isRecord(value)) return undefined;
+  const summary = stringField(value.summary) ?? stringField(value.explanation);
+  if (!summary) return undefined;
+  const level = stringField(value.level);
+  return `${level ? `${level}: ` : ''}${summary}${citationSuffix(stringList(value.citationIds), citations)}`;
+}
+
+function structuredAuditSections(contract: ResultPresentationContractLike, fallbackContent: string): FinalMessageAuditSection[] {
+  const sections: FinalMessageAuditSection[] = [];
+  if (isRecord(contract.processSummary)) {
+    const processText = [
+      stringField(contract.processSummary.summary),
+      ...recordList(contract.processSummary.items).map((item) => [
+        stringField(item.label) ?? stringField(item.id),
+        stringField(item.status),
+        stringList(item.refs).join(', '),
+      ].filter(Boolean).join(' · ')),
+    ].filter(Boolean).join('\n');
+    if (processText) {
+      sections.push({
+        label: 'Process summary',
+        text: processText,
+        evidenceType: 'execution-audit',
+        importance: 'diagnostic',
+      });
+    }
+  }
+  for (const diagnostic of recordList(contract.diagnosticsRefs)) {
+    const text = [
+      stringField(diagnostic.summary),
+      stringField(diagnostic.ref),
+    ].filter(Boolean).join('\n');
+    if (!text) continue;
+    sections.push({
+      label: stringField(diagnostic.label) ?? stringField(diagnostic.kind) ?? 'Diagnostic',
+      text,
+      evidenceType: diagnosticEvidenceType(stringField(diagnostic.kind)),
+      importance: 'diagnostic',
+    });
+  }
+  if (fallbackContent.trim() && looksLikeRuntimeMetadataBlock(fallbackContent)) {
+    sections.push({
+      label: 'Original response',
+      text: fallbackContent,
+      evidenceType: 'tool-output',
+      importance: 'supporting',
+    });
+  }
+  return sections;
+}
+
+type CitationLike = {
+  id: string;
+  label: string;
+  ref?: string;
+  kind?: string;
+  status?: string;
+};
+
+function citationMap(citations: unknown[] | undefined) {
+  const map = new Map<string, CitationLike>();
+  for (const citation of recordList(citations)) {
+    const id = stringField(citation.id);
+    if (!id) continue;
+    map.set(id, {
+      id,
+      label: stringField(citation.label) ?? id,
+      ref: stringField(citation.ref),
+      kind: stringField(citation.kind),
+      status: stringField(citation.status) ?? stringField(citation.verificationState),
+    });
+  }
+  return map;
+}
+
+function citationSuffix(ids: string[], citations: Map<string, CitationLike>) {
+  const labels = ids
+    .map((id) => citations.get(id))
+    .filter((citation): citation is CitationLike => Boolean(citation))
+    .slice(0, 4)
+    .map((citation) => {
+      const ref = citation.ref ? displayObjectRef(citation.ref, citation.kind) : undefined;
+      const status = citation.status ? `, ${citation.status}` : '';
+      return ref ? `${citation.label}: ${ref}${status}` : `${citation.label}${status}`;
+    });
+  return labels.length ? ` [${labels.join('; ')}]` : '';
+}
+
+function displayObjectRef(ref: string, kind?: string) {
+  if (/^artifact:/i.test(ref)) return ref.replace(/^artifact:/i, 'artifact::');
+  if (/^file:/i.test(ref)) return ref.replace(/^file:/i, 'file::');
+  if (/^folder:/i.test(ref)) return ref.replace(/^folder:/i, 'folder::');
+  if (/^https?:\/\//i.test(ref)) return ref;
+  if (kind === 'artifact') return `artifact::${ref}`;
+  if (kind === 'file' || /^\.[\w./-]+/.test(ref)) return `file::${ref}`;
+  return ref;
+}
+
+function diagnosticEvidenceType(kind: string | undefined): FinalMessageAuditSection['evidenceType'] {
+  if (kind === 'raw-payload') return 'raw-json';
+  if (kind === 'stdout' || kind === 'stderr' || kind === 'log') return 'log-output';
+  if (kind === 'reasoning-trace' || kind === 'trace') return 'raw-trace';
+  return 'execution-audit';
 }
 
 function parseContentBlocks(content: string): ContentBlock[] {
@@ -309,4 +503,20 @@ function isHumanPayloadText(value: string) {
   if (/^[{[]/.test(compact)) return false;
   if (/^(?:received|toolpayload|raw payload|stdout|stderr)\b/i.test(compact)) return false;
   return /[A-Za-z\u4e00-\u9fff]/.test(compact);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function recordList(value: unknown) {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function stringField(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function stringList(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
 }

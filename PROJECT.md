@@ -88,10 +88,15 @@ Todo：
 - [x] 设计 payload-to-presentation adapter：把现有 `ToolPayload`、claims、artifacts、ExecutionUnit、WorkEvidence、verificationResults、objectReferences 映射到通用 presentation contract；缺少 presentation contract 时只做结构化降级，不按 scenario/prompt 特判。
 - [x] 定义 inline citation/object reference 规则：每条关键结论最多绑定少量高价值 refs；引用标签用人类可读名称，hover/展开显示 locator、artifact path、verification state；底部“本轮产物”只汇总资源，不替代正文引用。
 - [x] 定义默认折叠规则：`answer/result/evidence/actions` 默认可见；`process/trace/diagnostics/raw payload` 默认折叠；失败时默认可见 failure reason、impact、recover actions 和可点击证据，技术栈细节仍折叠。
-- [ ] 设计多视图协作：聊天主回复必须自洽可读；右侧 Results/View pane 展示富交互 artifact；Notebook/Execution pane 承载过程和审计底稿；三者通过同一 object reference/ref graph 联动。
+- [x] 设计多视图协作：聊天主回复必须自洽可读；右侧 Results/View pane 展示富交互 artifact；Notebook/Execution pane 承载过程和审计底稿；三者通过同一 object reference/ref graph 联动。
 - [x] 增加 presentation validator/smoke 计划：阻止“有 artifact/ref 但主回复只显示过程文本”、阻止 raw JSON/ToolPayload 默认露出、检查关键 claim 是否有 inline citation 或明确标注为 unverified/speculative。
 - [x] 增加跨场景 fixture：research report、data table/plot、code diff、GUI action result、scientific reproduction partial/failure、backend failure diagnostic，验证同一 contract 能渲染一致的信息层级。
-- [ ] 规划迁移路径：先让 runtime 生成 presentation contract 并保留旧 UI；再让 ChatPanel/ResultsRenderer 消费 contract；最后把旧的过程文本优先、artifact type 特判和 raw payload 默认展示路径纳入 no-legacy-paths guard。
+- [x] 规划迁移路径：先让 runtime 生成 presentation contract 并保留旧 UI；再让 ChatPanel/ResultsRenderer 消费 contract；最后把旧的过程文本优先、artifact type 特判和 raw payload 默认展示路径纳入 no-legacy-paths guard。
+
+R015 follow-up closure（2026-05-11）：
+- [x] ChatPanel/FinalMessageContent 已优先消费 `displayIntent.resultPresentation`，从 contract 生成 answer、key findings、inline citations、artifact actions、next actions，并把 process/diagnostics 折叠。
+- [x] Results/View plan 可从 `resultPresentation.artifactActions` 推导 `DisplayIntent` 和 artifact type 绑定，不再只能依赖旧 `displayIntent.primaryGoal`。
+- [x] 新增 UI tests 覆盖 structured presentation 默认正文、可点击 refs、raw ToolPayload 不进入主回复，以及 result presentation 驱动 Results view 选择。
 
 Worker F 文档/checklist 注记（2026-05-11）：
 - [x] 实现前对齐 `docs/AgentHarnessStandard.md` Level 6：`PresentationPolicyCallback` 只产出 `PresentationPlan`，不得生成答案内容、读取 artifact 正文或在 UI 里补语义判断。
@@ -104,11 +109,11 @@ Worker D smoke/test 注记（2026-05-11）：
 - [x] 待 Worker A/B core contract/adapter 合并并通过 `npm run smoke:result-presentation-contract` 后，可关闭上方“presentation validator/smoke 计划”和“跨场景 fixture”两个 todo。
 
 验收：
-- [ ] 任意场景的成功结果，默认主回复都能直接回答用户目标，并在关键结论旁呈现可点击证据/产物引用。
-- [ ] 任意场景的失败或 partial result，默认主回复都说明失败原因、影响、可恢复动作和证据 refs，不把用户丢进 schema/log/raw payload。
-- [ ] ToolPayload、JSON、stdout/stderr、backend events、task ids 和 schema diagnostics 仍可审计，但默认只在折叠的 process/diagnostics 层出现。
-- [ ] UI 不通过 prompt/scenario/artifact 名称做语义展示判断；展示决策可从 HarnessContract/presentation contract/refs 重建。
-- [ ] 新增 smoke 覆盖至少 5 类场景，并能防止 R012 类“真实报告被过程文本盖住”和本轮反馈类“引用与结果被拆散”的回归。
+- [x] 任意场景的成功结果，默认主回复都能直接回答用户目标，并在关键结论旁呈现可点击证据/产物引用。
+- [x] 任意场景的失败或 partial result，默认主回复都说明失败原因、影响、可恢复动作和证据 refs，不把用户丢进 schema/log/raw payload。
+- [x] ToolPayload、JSON、stdout/stderr、backend events、task ids 和 schema diagnostics 仍可审计，但默认只在折叠的 process/diagnostics 层出现。
+- [x] UI 不通过 prompt/scenario/artifact 名称做语义展示判断；展示决策可从 HarnessContract/presentation contract/refs 重建。
+- [x] 新增 smoke 覆盖至少 5 类场景，并能防止 R012 类“真实报告被过程文本盖住”和本轮反馈类“引用与结果被拆散”的回归。
 
 ### R013 多轮连续对话与审计追问恢复
 

@@ -161,3 +161,59 @@ test('answer paragraphs with inline refs are preserved even when they mention ve
   assert.match(presentation.primaryContent, /file::data\/results\.csv#L42/);
   assert.equal(presentation.auditSections.length, 0);
 });
+
+test('structured result presentation drives primary answer and folds diagnostics', () => {
+  const presentation = splitFinalMessagePresentation('Received ToolPayload with executionUnits and raw diagnostics.', {
+    answerBlocks: [{
+      id: 'answer-1',
+      kind: 'paragraph',
+      text: 'The analysis completed with a reusable report.',
+      citationIds: ['citation-report'],
+    }],
+    keyFindings: [{
+      id: 'finding-1',
+      statement: 'Treatment B increased the median signal.',
+      citationIds: ['citation-table'],
+      verificationState: 'supported',
+    }],
+    inlineCitations: [
+      { id: 'citation-report', label: 'Report', kind: 'artifact', ref: 'artifact:analysis-report' },
+      { id: 'citation-table', label: 'Table row', kind: 'file', ref: '.sciforge/data/table.csv#row-b' },
+    ],
+    artifactActions: [{ id: 'artifact-1', label: 'Open report', artifactType: 'research-report', ref: 'artifact:analysis-report' }],
+    nextActions: [{ id: 'next-1', label: 'Inspect the cited table row.', kind: 'inspect' }],
+    confidenceExplanation: { level: 'high', summary: 'Evidence is attached to the finding.', citationIds: ['citation-table'] },
+    processSummary: { foldedByDefault: true, summary: 'Execution details are available for audit.' },
+    diagnosticsRefs: [{ id: 'raw-1', label: 'Raw payload', kind: 'raw-payload', ref: '.sciforge/task-results/raw.json' }],
+  });
+
+  assert.match(presentation.primaryContent, /The analysis completed/);
+  assert.match(presentation.primaryContent, /Treatment B/);
+  assert.match(presentation.primaryContent, /artifact::analysis-report/);
+  assert.match(presentation.primaryContent, /file::\.sciforge\/data\/table\.csv#row-b/);
+  assert.doesNotMatch(presentation.primaryContent, /executionUnits|ToolPayload|raw diagnostics/i);
+  assert.equal(presentation.auditSections.length, 2);
+  assert.deepEqual(presentation.auditSections.map((section) => section.evidenceType), ['execution-audit', 'raw-json']);
+});
+
+test('structured result presentation references remain clickable', () => {
+  const markup = renderToStaticMarkup(
+    <FinalMessageContent
+      content="Received ToolPayload with raw process."
+      references={[]}
+      resultPresentation={{
+        answerBlocks: [{ id: 'answer-1', kind: 'paragraph', text: 'Open artifact::analysis-report.', citationIds: ['citation-report'] }],
+        keyFindings: [],
+        inlineCitations: [{ id: 'citation-report', label: 'Report', kind: 'artifact', ref: 'artifact:analysis-report' }],
+        artifactActions: [{ id: 'artifact-1', label: 'Open report', ref: 'artifact:analysis-report' }],
+        nextActions: [],
+        diagnosticsRefs: [],
+      }}
+      onObjectFocus={() => undefined}
+    />,
+  );
+
+  assert.match(markup, /data-sciforge-reference=/);
+  assert.match(markup, /artifact::analysis-report/);
+  assert.doesNotMatch(markup, /Received ToolPayload/);
+});
