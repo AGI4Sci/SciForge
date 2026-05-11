@@ -269,7 +269,7 @@ Todo：
 
 ## 后续候选里程碑
 
-N1-N6 已在本轮完成为通用 gate/contract/smoke。N4 在用户明确批准下载/计算后只执行 one-claim、bounded、refs-first raw BED domain pilot，避免把通用能力验证误读成单论文全量 raw-data 重算工程。N5 收束此前暴露的 src capability-semantics guard 漏洞，使 0 baseline 恢复为可执行验收。N6 将 FASTQ/BAM/CRAM/SRA 级 raw reanalysis 升级为 metadata-only preflight，不默认触发下载或计算。
+N1-N7 已在本轮完成为通用 gate/contract/smoke。N4 在用户明确批准下载/计算后只执行 one-claim、bounded、refs-first raw BED domain pilot，避免把通用能力验证误读成单论文全量 raw-data 重算工程。N5 收束此前暴露的 src capability-semantics guard 漏洞，使 0 baseline 恢复为可执行验收。N6 将 FASTQ/BAM/CRAM/SRA 级 raw reanalysis 升级为 metadata-only preflight，不默认触发下载或计算。N7 约束 execute-approved raw reanalysis：ready dossier 不能当万能通行证，执行任务必须绑定 approved scope，成功 verdict 必须有 completed execution attestation。
 
 - [x] N1：Harness-governed Scientific Reproduction。把科研复现每轮 context、capability、budget、verification、repair、progress 收敛进 `HarnessContract`/trace；验收以 harness trace、budget exhaustion、validation/repair/audit 和现有 2020/2025 bounded fixtures 通过为准。
 - [x] N2：Self-prompt Auto-submit Gating。只在 required refs、schema、verifier、预算、停止条件和人工确认点满足时自动提交下一轮；遇到 missing evidence、raw download、许可/算力未定义或重复失败时停在 structured needs-human/failed-with-reason。
@@ -277,6 +277,7 @@ N1-N6 已在本轮完成为通用 gate/contract/smoke。N4 在用户明确批准
 - [x] N4：One-claim Raw-data Pilot。只能在 N3 通过且用户批准下载/计算后，选择一个 claim、最小样本集和一条明确 pipeline 运行；输出仍使用通用 `analysis-notebook`、`figure-reproduction-report`、`evidence-matrix`、`claim-verdict`，不能因 pipeline 跑通就标成科学成功。
 - [x] N5：Capability Semantics Boundary Hygiene。把真实 package-owned capability 语义迁出 `src/**`，把误判的平台 contract vocabulary 与 package-owned ids 分开检查；验收以 `smoke:no-src-capability-semantics` 0 tracked findings、typecheck、package checks 和相关 capability smokes 通过为准。
 - [x] N6：Raw FASTQ/BAM Reanalysis Preflight。把全量 raw reanalysis 推进到通用 preflight：记录 requested file classes、reanalysis intent、最小 runnable plan refs、downsample/region fixture refs、环境/预算/checksum/许可 gate；默认 `rawExecutionGate.allowed=false`，没有执行证据不得声称 `reproduced`。
+- [x] N7：Raw Execution Attestation & Scope Binding。允许 raw execution 之前，generated task 的 raw targets 必须落在 ready dossier 的 approved scope 内；如果 raw reanalysis 输出声称 `reproduced`/`partially-reproduced`，必须有 completed `executionAttestations`，绑定 plan、execution unit、code、stdout/stderr、output、checksum、environment、budget debit refs，并证明 observed download/storage 没超批准预算。
 
 ## 2026-05-11 阶段记录
 
@@ -324,4 +325,8 @@ N1-N6 已在本轮完成为通用 gate/contract/smoke。N4 在用户明确批准
 - N6 package/fixture 更新：scientific reproduction skill 和 manifest 记录 N6 metadata-only preflight policy、允许的 preflight verdict、成功所需执行证据 refs；mock dataset discovery fixtures 新增 `raw-reanalysis-escalation-preflight`，网络 disabled、downloadedBytes=0、rawExecutionGate 默认 false。
 - N6 guard/verifier 更新：raw-data pre-execution guard 覆盖更宽的 SRA/FASTQ/BAM/CRAM intent；新增 `smoke:scientific-reproduction-n6-raw-reanalysis-preflight`，证明 preflight artifacts 可通过 refs-first/readiness 验证，但没有 code/stdout/stderr/statistics/output figure 等执行证据时，提前声称 `reproduced` 会失败。
 - N6 验证：`npm run typecheck`、`npm run smoke:scientific-reproduction`、`npm run packages:check`、`npm run smoke:no-src-capability-semantics`、`npx tsx tests/smoke/smoke-scientific-reproduction-n6-raw-reanalysis-preflight.ts`、`npx tsx tests/smoke/smoke-raw-data-preexecution-guard.ts` 均通过。
-- 当前收束判断：本阶段“用真实例子拉通复杂科研问题解决能力”的目标已完成到 N6，且 src/package capability boundary guard 已恢复 0 baseline。继续做真实 FASTQ/BAM 下载、全量 peak calling 或 genome-cache 复算仍属于重型单论文重算工程；下一步若继续，应在 N6 preflight 的 ready dossier 基础上另建 execute-approved milestone，先定义下载/存储/CPU/内存预算、环境锁、比对/peak-calling pipeline 和逐样本许可/checksum 策略。
+- 第十一阶段完成 N7 raw execution attestation 与 scope binding：`raw-data-readiness-dossier` 新增可选 `executionAttestations`，执行成功 evidence 必须绑定 plan/execution/code/stdout/stderr/output/checksum/environment/budget refs；verifier 新增 `raw-execution-attestation` blocking criterion，只有 `allowRawDataExecution=true` 且出现 raw success verdict 时才强制执行，不影响 blocked/preflight 或非 raw 场景。
+- N7 guard 更新：pre-execution guard 不再因为存在任意 ready dossier 就放行 raw task；它会从 dossier datasets/accession/source/checksum/file-class 与 task files/side effects 提取通用 scope signals，目标不在 approved scope 内则返回 repair-needed，阻止 side effect。
+- N7 fixture 更新：既有 bounded raw BED pilot 增加 completed execution attestation，继续证明 N4 的真实下载/计算也满足 N7；scientific reproduction skill、skill manifest、verifier manifest 记录 N7 policy 与 repair hints。
+- N7 验证：`npm run typecheck`、`npm run smoke:scientific-reproduction`、`npm run packages:check`、`npm run smoke:no-src-capability-semantics`、`npx tsx tests/smoke/smoke-scientific-reproduction-verifier.ts`、`npx tsx tests/smoke/smoke-raw-data-preexecution-guard.ts`、`npx tsx tests/smoke/smoke-raw-bed-domain-pilot.ts` 均通过。
+- 当前收束判断：本阶段“用真实例子拉通复杂科研问题解决能力”的目标已完成到 N7，且 src/package capability boundary guard 已恢复 0 baseline。继续做真实 FASTQ/BAM 下载、全量 peak calling 或 genome-cache 复算仍属于重型单论文重算工程；下一步若继续，应在 N7 attestation/scope gate 基础上另建 offline dry-run 或 execute-approved FASTQ/BAM milestone，先定义下载/存储/CPU/内存预算、环境锁、比对/peak-calling pipeline 和逐样本许可/checksum 策略。

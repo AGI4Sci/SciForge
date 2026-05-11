@@ -60,13 +60,21 @@ for (const requiredToolClass of [
 const budgetPolicy = manifest.metadata?.budgetPolicy as Record<string, unknown>;
 assert.equal(budgetPolicy.maxDownloadBytes, 50000000);
 assert.equal(budgetPolicy.largeRawDataPolicy, 'metadata-only-or-missing-data');
-assert.deepEqual(manifest.metadata?.milestones, ['N1', 'N2', 'N3', 'N4', 'N5', 'N6']);
+assert.deepEqual(manifest.metadata?.milestones, ['N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7']);
 const n6EscalationPolicy = manifest.metadata?.n6EscalationPolicy as Record<string, unknown>;
 assert.equal(n6EscalationPolicy.defaultMode, 'metadata-only-preflight');
 assert.equal(n6EscalationPolicy.artifactType, 'raw-data-readiness-dossier');
 assert.equal(n6EscalationPolicy.metadataField, 'n6Escalation');
 assert.equal(n6EscalationPolicy.rawExecutionGateDefaultAllowed, false);
 assert.deepEqual(n6EscalationPolicy.allowedPreflightVerdicts, ['insufficient-evidence', 'not-tested']);
+const n7ExecutionAttestationPolicy = manifest.metadata?.n7ExecutionAttestationPolicy as Record<string, unknown>;
+assert.equal(n7ExecutionAttestationPolicy.defaultMode, 'execute-approved-attestation');
+assert.equal(n7ExecutionAttestationPolicy.artifactType, 'raw-data-readiness-dossier');
+assert.equal(n7ExecutionAttestationPolicy.metadataField, 'executionAttestations');
+assert.equal(n7ExecutionAttestationPolicy.requiresReadyDossier, true);
+assert.equal(n7ExecutionAttestationPolicy.requiresApprovedScopeBinding, true);
+assert.equal(n7ExecutionAttestationPolicy.observedBudgetsMustNotExceedApprovedBudgets, true);
+assert.deepEqual(n7ExecutionAttestationPolicy.successVerdictsRequiringAttestation, ['reproduced', 'partially-reproduced']);
 assert.deepEqual(manifest.metadata?.degradationPolicy, [
   'raw-data-within-budget',
   'processed-table-or-supplement',

@@ -16,6 +16,8 @@
       "raw-data-readiness",
       "raw-reanalysis-preflight",
       "fastq-bam-escalation",
+      "raw-execution-attestation",
+      "approved-scope-binding",
       "missing-data-report",
       "negative-results",
       "benchmark"
@@ -318,7 +320,8 @@
         "N3",
         "N4",
         "N5",
-        "N6"
+        "N6",
+        "N7"
       ],
       "reusableInputs": [
         "paperRef",
@@ -388,6 +391,29 @@
           "outputFigureRefs"
         ],
         "rawExecutionGateDefaultAllowed": false
+      },
+      "n7ExecutionAttestationPolicy": {
+        "defaultMode": "execute-approved-attestation",
+        "artifactType": "raw-data-readiness-dossier",
+        "metadataField": "executionAttestations",
+        "requiresReadyDossier": true,
+        "requiresApprovedScopeBinding": true,
+        "successVerdictsRequiringAttestation": [
+          "reproduced",
+          "partially-reproduced"
+        ],
+        "successRequiresExecutionEvidenceRefs": [
+          "planRefs",
+          "executionUnitRefs",
+          "codeRefs",
+          "stdoutRefs",
+          "stderrRefs",
+          "outputRefs",
+          "checksumVerificationRefs",
+          "environmentVerificationRefs",
+          "budgetDebitRefs"
+        ],
+        "observedBudgetsMustNotExceedApprovedBudgets": true
       },
       "derivedDraftOutputs": [
         "missing-data-report"

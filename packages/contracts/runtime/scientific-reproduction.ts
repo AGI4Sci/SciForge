@@ -326,6 +326,23 @@ export interface RawDataReadinessDossier extends ScientificReproductionArtifactB
     downsampleOrRegionFixtureRefs?: ScientificEvidenceRef[];
     stopBeforeExecutionUnlessReady: boolean;
   };
+  executionAttestations?: Array<{
+    id: string;
+    status: 'not-run' | 'completed' | 'failed' | 'partial' | string;
+    planRefs: ScientificEvidenceRef[];
+    executionUnitRefs: ScientificEvidenceRef[];
+    codeRefs: ScientificEvidenceRef[];
+    stdoutRefs: ScientificEvidenceRef[];
+    stderrRefs: ScientificEvidenceRef[];
+    outputRefs: ScientificEvidenceRef[];
+    observedDownloadBytes: number;
+    observedStorageBytes: number;
+    checksumVerificationRefs: ScientificEvidenceRef[];
+    environmentVerificationRefs: ScientificEvidenceRef[];
+    budgetDebitRefs: ScientificEvidenceRef[];
+    startedAt?: string;
+    completedAt?: string;
+  }>;
 }
 
 export type ScientificReproductionArtifactData =
@@ -692,7 +709,32 @@ function validateTypeSpecificBasics(
     if (data.n6Escalation !== undefined) {
       validateRawReanalysisEscalation(data.n6Escalation, 'n6Escalation', issues);
     }
+    if (data.executionAttestations !== undefined) {
+      if (!Array.isArray(data.executionAttestations)) {
+        issues.push({ path: 'executionAttestations', message: 'executionAttestations must be an array.', expected: 'raw execution attestation[]', actual: typeOf(data.executionAttestations) });
+      } else {
+        arrayRecords(data.executionAttestations).forEach((attestation, index) => {
+          validateRawExecutionAttestation(attestation, `executionAttestations[${index}]`, issues);
+        });
+      }
+    }
   }
+}
+
+function validateRawExecutionAttestation(
+  record: Record<string, unknown>,
+  path: string,
+  issues: ScientificReproductionValidationIssue[],
+) {
+  validateStringAt(record, 'id', `${path}.id`, issues);
+  validateStringAt(record, 'status', `${path}.status`, issues);
+  for (const field of ['planRefs', 'executionUnitRefs', 'codeRefs', 'stdoutRefs', 'stderrRefs', 'outputRefs', 'checksumVerificationRefs', 'environmentVerificationRefs', 'budgetDebitRefs']) {
+    validateRefArray(record[field], `${path}.${field}`, issues, { requireNonEmpty: true });
+  }
+  validateFiniteNonNegativeNumber(record.observedDownloadBytes, `${path}.observedDownloadBytes`, issues);
+  validateFiniteNonNegativeNumber(record.observedStorageBytes, `${path}.observedStorageBytes`, issues);
+  if (record.startedAt !== undefined) validateStringAt(record, 'startedAt', `${path}.startedAt`, issues);
+  if (record.completedAt !== undefined) validateStringAt(record, 'completedAt', `${path}.completedAt`, issues);
 }
 
 function validateRawReanalysisEscalation(

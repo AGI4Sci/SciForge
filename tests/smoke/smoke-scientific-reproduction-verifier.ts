@@ -311,6 +311,52 @@ assert.ok(unsafeRawExecutionResult.repairHints.some((hint) => hint.includes('raw
 const readyRawExecutionResult = verifyScientificReproduction(rawDataReadinessRequest());
 assert.equal(readyRawExecutionResult.verdict, 'pass');
 assert.ok(readyRawExecutionResult.criterionResults.find((criterion) => criterion.id === 'raw-data-readiness-gate' && criterion.passed));
+assert.ok(readyRawExecutionResult.criterionResults.find((criterion) => criterion.id === 'raw-execution-attestation' && criterion.passed));
+
+const rawSuccessWithoutAttestationResult = verifyScientificReproduction(rawDataReadinessRequest({
+  claimVerdict: 'partially-reproduced',
+  supportingEvidenceRefs: [ref('artifact:raw-success-output')],
+}));
+assert.equal(rawSuccessWithoutAttestationResult.verdict, 'fail');
+assert.ok(rawSuccessWithoutAttestationResult.criterionResults.find((criterion) => criterion.id === 'raw-execution-attestation' && !criterion.passed));
+
+const executionAttestation = {
+  id: 'raw-success-attestation',
+  status: 'completed',
+  planRefs: [ref('artifact:raw-analysis-plan')],
+  executionUnitRefs: [ref('trace:raw-run-001')],
+  codeRefs: [ref('file:raw-runner.ts', 'code')],
+  stdoutRefs: [ref('trace:raw-run-001/stdout', 'stdout')],
+  stderrRefs: [ref('trace:raw-run-001/stderr', 'stderr')],
+  outputRefs: [ref('artifact:raw-success-output')],
+  observedDownloadBytes: 1_000_000,
+  observedStorageBytes: 2_000_000,
+  checksumVerificationRefs: [ref('artifact:raw-checksum-verification', 'checksum')],
+  environmentVerificationRefs: [ref('artifact:raw-environment-verification', 'environment')],
+  budgetDebitRefs: [ref('artifact:raw-budget-debit', 'approval')],
+};
+
+const rawSuccessWithAttestationResult = verifyScientificReproduction(rawDataReadinessRequest({
+  claimVerdict: 'partially-reproduced',
+  supportingEvidenceRefs: [ref('artifact:raw-success-output')],
+  dossier: { executionAttestations: [executionAttestation] },
+}));
+assert.equal(rawSuccessWithAttestationResult.verdict, 'pass');
+assert.ok(rawSuccessWithAttestationResult.criterionResults.find((criterion) => criterion.id === 'raw-execution-attestation' && criterion.passed));
+
+const overObservedBudgetAttestationResult = verifyScientificReproduction(rawDataReadinessRequest({
+  claimVerdict: 'partially-reproduced',
+  supportingEvidenceRefs: [ref('artifact:raw-success-output')],
+  dossier: {
+    executionAttestations: [{
+      ...executionAttestation,
+      id: 'raw-over-budget-attestation',
+      observedDownloadBytes: 10_000_000,
+    }],
+  },
+}));
+assert.equal(overObservedBudgetAttestationResult.verdict, 'fail');
+assert.ok(overObservedBudgetAttestationResult.criterionResults.find((criterion) => criterion.id === 'raw-execution-attestation' && !criterion.passed));
 
 const overBudgetRawExecutionResult = verifyScientificReproduction(rawDataReadinessRequest({
   dataset: { estimatedDownloadBytes: 2_000_000 },
@@ -477,6 +523,9 @@ function mapOnlyFigureResultRequest() {
 function rawDataReadinessRequest(overrides: {
   dataset?: Record<string, unknown>;
   computeBudget?: Record<string, unknown>;
+  dossier?: Record<string, unknown>;
+  claimVerdict?: string;
+  supportingEvidenceRefs?: ScientificEvidenceRef[];
 } = {}) {
   const dataset = {
     id: 'raw-dataset-a',
@@ -504,9 +553,9 @@ function rawDataReadinessRequest(overrides: {
     artifacts: [
       artifact('claim-verdict-ready-readiness', 'claim-verdict', {
         claimId: 'claim-a',
-        verdict: 'insufficient-evidence',
+        verdict: overrides.claimVerdict ?? 'insufficient-evidence',
         rationale: 'Raw-data execution is gated by an explicit readiness dossier.',
-        supportingEvidenceRefs: [ref('artifact:ready-readiness')],
+        supportingEvidenceRefs: overrides.supportingEvidenceRefs ?? [ref('artifact:ready-readiness')],
       }),
       artifact('ready-readiness', 'raw-data-readiness-dossier', {
         claimIds: ['claim-a'],
@@ -532,6 +581,7 @@ function rawDataReadinessRequest(overrides: {
           requiredBeforeExecution: ['approval', 'budget', 'checksums', 'environment'],
           refs: [ref('artifact:budget-policy')],
         },
+        ...overrides.dossier,
       }),
       artifact('dataset-inventory-ready-readiness', 'dataset-inventory', {
         identifierVerifications: [{

@@ -98,7 +98,26 @@ for (const taskFile of [
 const ready = evaluateRawDataPreExecutionGuard({ taskFiles: [rawTaskFile], artifacts: [readyDossier] });
 assert.equal(ready.blocked, false);
 assert.equal(ready.rawIntentDetected, true);
+assert.equal(ready.scopeBound, true);
+assert.ok(ready.taskScopeSignals.includes('gse242515'));
+assert.ok(ready.approvedScopeSignals.includes('gse242515'));
 assert.ok(ready.readinessRefs.includes('artifact:n4-budget-approval'));
+
+const mismatchedScope = evaluateRawDataPreExecutionGuard({
+  taskFiles: [{
+    path: '.sciforge/tasks/mismatched-sra.sh',
+    language: 'bash',
+    content: 'prefetch SRR000001 && fasterq-dump SRR000001 --outdir raw_fastq',
+  }],
+  artifacts: [readyDossier],
+});
+assert.equal(mismatchedScope.blocked, true);
+assert.equal(mismatchedScope.rawIntentDetected, true);
+assert.equal(mismatchedScope.scopeBound, false);
+assert.match(mismatchedScope.reason ?? '', /not bound to the approved/);
+assert.ok(mismatchedScope.readyDossierRefs.includes('artifact:n4-budget-approval'));
+assert.ok(mismatchedScope.taskScopeSignals.includes('srr000001'));
+assert.ok(!mismatchedScope.approvedScopeSignals.includes('srr000001'));
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-raw-preexec-'));
 const request = normalizeGatewayRequest({

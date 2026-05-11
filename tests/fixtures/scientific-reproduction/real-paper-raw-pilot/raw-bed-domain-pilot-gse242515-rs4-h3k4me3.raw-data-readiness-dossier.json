@@ -190,5 +190,88 @@
         "summary": "SHA-256 checksums for inputs and generated domain BED outputs."
       }
     ]
-  }
+  },
+  "executionAttestations": [
+    {
+      "id": "raw-bed-domain-pilot-gse242515-rs4-h3k4me3-execution",
+      "status": "completed",
+      "planRefs": [
+        {
+          "ref": "tests/fixtures/scientific-reproduction/raw-data-pilot-configs/gse242515-rs4-h3k4me3.json",
+          "role": "method",
+          "summary": "Config-driven bounded raw BED domain pilot plan."
+        }
+      ],
+      "executionUnitRefs": [
+        {
+          "ref": "task:raw-bed-domain-pilot-gse242515-rs4-h3k4me3",
+          "role": "trace",
+          "summary": "Execution unit for the bounded raw BED domain pilot."
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/tools/run-raw-bed-domain-pilot.py",
+          "role": "code",
+          "summary": "Config-driven Python stdlib runner for BED gzip download, interval merge, domain-width filtering, checksums, and refs-first artifact emission."
+        }
+      ],
+      "stdoutRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/logs/raw-bed-domain-pilot.stdout.log",
+          "role": "stdout",
+          "summary": "Pilot runner stdout records final JSON status."
+        }
+      ],
+      "stderrRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/logs/raw-bed-domain-pilot.stderr.log",
+          "role": "stderr",
+          "summary": "Pilot runner stderr for the executed run."
+        }
+      ],
+      "outputRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/results/gse242515-rs4-h3k4me3-domain-stats.json",
+          "role": "table",
+          "summary": "Computed input interval, merged domain, and selected-domain counts."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/results/RS4_WT.merged-d500.domain-gt5000.bed",
+          "role": "table",
+          "summary": "RS4_WT selected merged-domain BED."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/results/RS4_Setd1bKO.merged-d500.domain-gt5000.bed",
+          "role": "table",
+          "summary": "RS4_Setd1bKO selected merged-domain BED."
+        }
+      ],
+      "observedDownloadBytes": 519285,
+      "observedStorageBytes": 661066,
+      "checksumVerificationRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/results/gse242515-rs4-h3k4me3-domain-stats.json#downloads",
+          "role": "checksum",
+          "summary": "SHA-256 checksums for downloaded inputs and generated outputs."
+        }
+      ],
+      "environmentVerificationRefs": [
+        {
+          "ref": "runtime:python3-local-codex-workspace",
+          "role": "environment",
+          "summary": "Local Codex workspace Python 3 runtime."
+        }
+      ],
+      "budgetDebitRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/results/gse242515-rs4-h3k4me3-domain-stats.json#budget",
+          "role": "approval",
+          "summary": "Observed download and storage bytes are within the declared bounded pilot budget."
+        }
+      ],
+      "startedAt": "2026-05-11T00:00:00Z",
+      "completedAt": "2026-05-11T00:00:00Z"
+    }
+  ]
 }

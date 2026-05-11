@@ -161,6 +161,7 @@ export function verifyScientificReproduction(
     checkFigureReproductionEvidence(figureReproductions, Boolean(request.providerHints?.requireFigureReproduction)),
     checkIdentifierVerification(identifierVerifications, request),
     checkRawDataReadiness(rawDataReadiness, request),
+    checkRawExecutionAttestation(rawDataReadiness, claims, figureReproductions, scientificVerdicts, request),
     checkVerdictVocabulary(scientificVerdicts),
     checkRefsFirstEvidence(artifactContexts),
     checkNegativeResultSemantics(negativeResults, scientificVerdicts),
@@ -268,6 +269,15 @@ type NormalizedRawDataReadiness = {
   hasComputeBudgetResources: boolean;
   hasEnvironment: boolean;
   hasDegradationStrategy: boolean;
+  executionAttestations: NormalizedRawExecutionAttestation[];
+};
+
+type NormalizedRawExecutionAttestation = {
+  id: string;
+  status: string;
+  evidenceRefs: string[];
+  complete: boolean;
+  withinObservedBudgets: boolean;
 };
 
 function checkContractCompliance(contexts: ArtifactContext[]): ScientificReproductionCriterionResult {
@@ -465,6 +475,44 @@ function checkRawDataReadiness(
   };
 }
 
+function checkRawExecutionAttestation(
+  dossiers: NormalizedRawDataReadiness[],
+  claims: NormalizedClaim[],
+  figures: NormalizedFigureReproduction[],
+  scientificVerdicts: string[],
+  request: ScientificReproductionVerifierRequest,
+): ScientificReproductionCriterionResult {
+  const allowRawExecution = Boolean(request.providerHints?.allowRawDataExecution);
+  const hasRawSuccessVerdict = scientificVerdicts.some((verdict) => verdict === 'reproduced' || verdict === 'partially-reproduced');
+  const attestations = dossiers.flatMap((dossier) => dossier.executionAttestations);
+  const completed = attestations.filter((attestation) => attestation.status === 'completed' && attestation.complete && attestation.withinObservedBudgets);
+  const successEvidenceRefs = uniqueStrings([
+    ...claims.flatMap((claim) => claim.evidenceRefs),
+    ...figures.flatMap((figure) => figure.evidenceRefs),
+  ]);
+  const linkedCompleted = completed.filter((attestation) =>
+    successEvidenceRefs.length === 0 || attestation.evidenceRefs.some((ref) => successEvidenceRefs.includes(ref))
+  );
+  const requiresAttestation = allowRawExecution && hasRawSuccessVerdict;
+  const passed = !requiresAttestation || linkedCompleted.length > 0;
+  return {
+    id: 'raw-execution-attestation',
+    passed,
+    severity: 'blocking',
+    message: !requiresAttestation
+      ? 'No approved raw-data scientific success claim requires execution attestation.'
+      : linkedCompleted.length > 0
+        ? 'Approved raw-data scientific success is linked to completed execution attestation refs within observed budgets.'
+        : attestations.length === 0
+          ? 'Approved raw-data scientific success was claimed, but no raw execution attestation was found.'
+          : 'Approved raw-data scientific success lacks a completed, budget-conformant execution attestation linked to the success evidence refs.',
+    evidenceRefs: uniqueStrings(attestations.flatMap((attestation) => attestation.evidenceRefs)),
+    repairHints: passed
+      ? []
+      : ['For execute-approved raw reanalysis success, add raw-data-readiness-dossier.executionAttestations with status=completed, planRefs, executionUnitRefs, codeRefs, stdoutRefs, stderrRefs, outputRefs, checksumVerificationRefs, environmentVerificationRefs, budgetDebitRefs, observed download/storage bytes within budget, and refs overlapping the figure/report evidence.'],
+  };
+}
+
 function artifactContext(artifact: ScientificReproductionArtifact, index: number): ArtifactContext {
   const data = isRecord(artifact.data) ? artifact.data : {};
   const root = { ...artifact, ...data };
@@ -644,8 +692,45 @@ function extractRawDataReadiness(context: ArtifactContext): NormalizedRawDataRea
         refFieldValues(environment[field]).length > 0
       ),
       hasDegradationStrategy: stringValue(record.degradationStrategy).length > 0,
+      executionAttestations: arrayRecords(record.executionAttestations).map((attestation, attestationIndex) =>
+        normalizeRawExecutionAttestation(attestation, `${context.id}:raw-attestation-${attestationIndex + 1}`, budget)
+      ),
     };
   });
+}
+
+function normalizeRawExecutionAttestation(
+  record: Record<string, unknown>,
+  fallbackId: string,
+  budget: Record<string, unknown>,
+): NormalizedRawExecutionAttestation {
+  const requiredRefFields = [
+    'planRefs',
+    'executionUnitRefs',
+    'codeRefs',
+    'stdoutRefs',
+    'stderrRefs',
+    'outputRefs',
+    'checksumVerificationRefs',
+    'environmentVerificationRefs',
+    'budgetDebitRefs',
+  ];
+  const observedDownloadBytes = finiteNumber(record.observedDownloadBytes);
+  const observedStorageBytes = finiteNumber(record.observedStorageBytes);
+  const maxDownloadBytes = finiteNumber(budget.maxDownloadBytes);
+  const maxStorageBytes = finiteNumber(budget.maxStorageBytes);
+  return {
+    id: stringValue(record.id) || fallbackId,
+    status: stringValue(record.status).toLowerCase(),
+    evidenceRefs: collectRefs(record),
+    complete: requiredRefFields.every((field) => refFieldValues(record[field]).length > 0),
+    withinObservedBudgets: observedDownloadBytes !== undefined &&
+      observedStorageBytes !== undefined &&
+      maxDownloadBytes !== undefined &&
+      maxStorageBytes !== undefined &&
+      observedDownloadBytes <= maxDownloadBytes &&
+      observedStorageBytes <= maxStorageBytes,
+  };
 }
 
 function isRawDataDossierReady(dossier: NormalizedRawDataReadiness) {

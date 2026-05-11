@@ -65,6 +65,12 @@ N6 escalation is metadata-only by default. When a task asks for FASTQ/BAM/CRAM/S
 
 Do not claim `reproduced` from N6 preflight artifacts alone. Until code, stdout/stderr, statistics, and output figure/table refs exist, downstream verdicts must remain `insufficient-evidence` or `not-tested`. Full raw execution still requires the existing ready dossier gate plus explicit user approval and sufficient resource budgets.
 
+## Approved Raw Execution Attestation
+
+N7 execution is not a blanket pass once any ready dossier exists. Generated raw-data tasks must be statically bound to the approved dossier scope: dataset ids, accessions, source/checksum refs, and requested file classes. If a task targets an accession, URL, or raw file outside that scope, stop before execution and ask for an updated dossier.
+
+When `rawExecutionGate.allowed=true` and the output claims `reproduced` or `partially-reproduced` from raw reanalysis, the same `raw-data-readiness-dossier` must include `executionAttestations`. Each completed attestation records plan refs, execution unit refs, code refs, stdout/stderr refs, output refs, checksum verification refs, environment verification refs, budget debit refs, and observed download/storage bytes. Observed resource use must stay within the approved budgets, and attestation refs must overlap the scientific success evidence. Attestation proves plan conformance and provenance only; it does not by itself prove the scientific claim.
+
 ## Degradation Policy
 
 Follow this order and record the chosen branch in the profile:

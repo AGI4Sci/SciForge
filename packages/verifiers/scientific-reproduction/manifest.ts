@@ -16,7 +16,7 @@ export const capabilityManifest: CapabilityManifest = {
   version: '0.1.0',
   ownerPackage: 'packages/verifiers/scientific-reproduction',
   kind: 'verifier',
-  brief: 'Checks generic scientific reproduction artifacts for claim/evidence coverage, figure reproduction provenance, citation/accession verification, raw-data readiness gates, verdict vocabulary, refs-first evidence, and negative result semantics.',
+  brief: 'Checks generic scientific reproduction artifacts for claim/evidence coverage, figure reproduction provenance, citation/accession verification, raw-data readiness and execution attestation gates, verdict vocabulary, refs-first evidence, and negative result semantics.',
   routingTags: [
     'scientific-reproduction',
     'claim-verdict',
@@ -26,6 +26,8 @@ export const capabilityManifest: CapabilityManifest = {
     'citation-verification',
     'accession-verification',
     'raw-data-readiness',
+    'raw-execution-attestation',
+    'approved-scope-binding',
   ],
   domains: ['research', 'literature', 'omics', 'scientific-reproduction'],
   inputSchema: {
@@ -88,6 +90,11 @@ export const capabilityManifest: CapabilityManifest = {
       failureCode: 'scientific-reproduction.raw-data-readiness-blocked',
       summary: 'Raw-data execution must be blocked until approval, license, budget, environment, checksum, and readiness checks pass.',
       recoverActions: ['write-raw-data-readiness-dossier', 'record-approval-state', 'attach-budget-and-environment-refs', 'keep-raw-execution-gate-blocked'],
+    },
+    {
+      failureCode: 'scientific-reproduction.raw-execution-attestation-missing',
+      summary: 'Execute-approved raw-data success claims require completed execution attestations bound to plan, logs, outputs, checksums, environment, and budget refs.',
+      recoverActions: ['add-execution-attestation', 'attach-run-logs', 'attach-output-refs', 'record-budget-debits', 'bind-success-evidence-to-attestation'],
     },
   ],
   providers: [{

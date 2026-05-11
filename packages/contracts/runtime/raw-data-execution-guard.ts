@@ -18,6 +18,10 @@ export interface RawDataExecutionGuardResult {
   reason?: string;
   signals: string[];
   readinessRefs: string[];
+  readyDossierRefs: string[];
+  approvedScopeSignals: string[];
+  taskScopeSignals: string[];
+  scopeBound: boolean;
 }
 
 const RAW_DATA_ARTIFACT_TYPE = 'raw-data-readiness-dossier';
@@ -25,6 +29,8 @@ const READY_STATUS = 'ready';
 const APPROVED_STATUS = 'approved';
 const PASS_STATUS = 'pass';
 const RAW_DATA_GUARD_REASON = 'Raw-data execution was detected before a ready raw-data-readiness-dossier was attached.';
+const RAW_DATA_SCOPE_GUARD_REASON = 'Raw-data execution targets are not bound to the approved raw-data-readiness-dossier scope.';
+const ACCESSION_PATTERN = /\b(?:GSE|GSM|SRR|SRX|SRA|ERR|ERX|ERP|DRR|DRX|PRJNA|SAMN)\d+\b/gi;
 
 const RAW_TRANSFER_PATTERNS = [
   /\bfasterq-dump\b/i,
@@ -52,17 +58,41 @@ const RAW_DATA_PATTERNS = [
 
 export function evaluateRawDataPreExecutionGuard(input: RawDataExecutionGuardInput): RawDataExecutionGuardResult {
   const signals = rawDataIntentSignals(input);
-  const readiness = readyRawDataDossierRefs(input);
+  const readyDossiers = readyRawDataDossiers(input);
+  const readiness = unique(readyDossiers.flatMap((record) => collectRecordRefs(record)));
+  const approvedScopeSignals = unique(readyDossiers.flatMap((record) => approvedScopeFromReadyDossier(record)));
+  const taskScopeSignals = rawDataTaskScopeSignals(input);
   const rawIntentDetected = signals.length > 0;
-  if (!rawIntentDetected || readiness.length > 0) {
-    return { blocked: false, rawIntentDetected, signals, readinessRefs: readiness };
-  }
-  return {
-    blocked: true,
+  const scopeBound = !rawIntentDetected || readyDossiers.some((record) => taskScopeIsBoundToApprovedScope(taskScopeSignals, approvedScopeFromReadyDossier(record)));
+  const baseResult = {
     rawIntentDetected,
-    reason: RAW_DATA_GUARD_REASON,
     signals,
     readinessRefs: readiness,
+    readyDossierRefs: readiness,
+    approvedScopeSignals,
+    taskScopeSignals,
+    scopeBound,
+  };
+  if (!rawIntentDetected) {
+    return { blocked: false, ...baseResult };
+  }
+  if (readiness.length === 0) {
+    return {
+      blocked: true,
+      reason: RAW_DATA_GUARD_REASON,
+      ...baseResult,
+    };
+  }
+  if (!scopeBound) {
+    return {
+      blocked: true,
+      reason: RAW_DATA_SCOPE_GUARD_REASON,
+      ...baseResult,
+    };
+  }
+  return {
+    blocked: false,
+    ...baseResult,
   };
 }
 
@@ -84,17 +114,43 @@ function rawDataIntentSignals(input: RawDataExecutionGuardInput) {
   return unique(signals);
 }
 
-function readyRawDataDossierRefs(input: RawDataExecutionGuardInput) {
+function rawDataTaskScopeSignals(input: RawDataExecutionGuardInput) {
+  return unique([
+    ...(input.actionSideEffects ?? []).flatMap(extractScopeSignals),
+    ...(input.taskFiles ?? []).flatMap((file) => extractScopeSignals(file.content ?? '')),
+  ]);
+}
+
+function readyRawDataDossiers(input: RawDataExecutionGuardInput) {
   const records = [
     ...(input.artifacts ?? []),
     ...(input.references ?? []),
     input.uiState,
   ].flatMap((value) => collectRecords(value));
-  return unique(records
+  return records
     .map((record) => rawDossierFromRecord(record))
     .filter((record): record is Record<string, unknown> => Boolean(record))
-    .filter(isReadyRawDataDossier)
-    .flatMap((record) => collectRecordRefs(record)));
+    .filter(isReadyRawDataDossier);
+}
+
+function approvedScopeFromReadyDossier(record: Record<string, unknown>) {
+  const datasets = arrayRecords(record.datasets);
+  const escalation = recordValue(record.n6Escalation);
+  return unique([
+    ...datasets.flatMap((dataset) => [
+      stringValue(dataset.id),
+      stringValue(dataset.accession),
+      ...collectRecordRefs({ sourceRefs: dataset.sourceRefs, checksumRefs: dataset.checksumRefs }),
+    ]),
+    ...stringArray(escalation?.requestedFileClasses),
+  ].flatMap(extractScopeSignals));
+}
+
+function taskScopeIsBoundToApprovedScope(taskScopeSignals: string[], approvedScopeSignals: string[]) {
+  const taskTargets = taskScopeSignals.filter((signal) => !isRawFileClassSignal(signal));
+  if (taskTargets.length === 0) return false;
+  const approved = new Set(approvedScopeSignals);
+  return taskTargets.every((signal) => approved.has(signal));
 }
 
 function rawDossierFromRecord(record: Record<string, unknown>) {
@@ -159,6 +215,22 @@ function collectRecordRefs(record: Record<string, unknown>) {
   return unique(refs);
 }
 
+function extractScopeSignals(value: unknown) {
+  if (typeof value !== 'string') return [];
+  const normalized = value.toLowerCase();
+  const signals = [
+    ...Array.from(value.matchAll(ACCESSION_PATTERN)).map((match) => match[0]),
+  ];
+  for (const fileClass of ['fastq', 'bam', 'cram', 'sra', 'bigwig', 'bed']) {
+    if (new RegExp(`\\b${fileClass}(?:\\.gz)?\\b`, 'i').test(normalized)) signals.push(fileClass);
+  }
+  return unique(signals.map((signal) => signal.toLowerCase()));
+}
+
+function isRawFileClassSignal(value: string) {
+  return ['fastq', 'bam', 'cram', 'sra', 'bigwig', 'bed'].includes(value);
+}
+
 function refArray(value: unknown) {
   return Array.isArray(value)
     ? value.filter((entry) => isRecord(entry) && typeof entry.ref === 'string' && entry.ref.trim())
@@ -167,6 +239,10 @@ function refArray(value: unknown) {
 
 function arrayRecords(value: unknown) {
   return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function stringArray(value: unknown) {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : [];
 }
 
 function recordValue(value: unknown) {

@@ -43,6 +43,7 @@ const verifierResult = verifyScientificReproduction({
 
 assert.equal(verifierResult.verdict, 'pass');
 assert.ok(verifierResult.criterionResults.find((criterion) => criterion.id === 'raw-data-readiness-gate' && criterion.passed));
+assert.ok(verifierResult.criterionResults.find((criterion) => criterion.id === 'raw-execution-attestation' && criterion.passed));
 assert.ok(verifierResult.criterionResults.find((criterion) => criterion.id === 'figure-reproduction-evidence' && criterion.passed));
 
 const combined = JSON.stringify(artifacts.map((artifact) => artifact.data));
