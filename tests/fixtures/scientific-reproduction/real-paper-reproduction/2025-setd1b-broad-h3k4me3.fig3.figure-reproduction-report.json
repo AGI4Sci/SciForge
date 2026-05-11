@@ -1,0 +1,88 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "figure-reproduction-report",
+  "sourceRefs": [
+    {
+      "ref": "artifact:figure-to-claim-map-2025-setd1b-broad-h3k4me3#2025-setd1b-fig3",
+      "role": "source",
+      "summary": "Fig. 3 maps to broad H3K4me3/H3K27ac domain discovery and overlap claims."
+    },
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=421-455",
+      "role": "source",
+      "summary": "Fig. 3 legend and result text for broad H3K4me3/H3K27ac domains."
+    }
+  ],
+  "figureId": "2025-setd1b-fig3",
+  "claimIds": [
+    "2025-setd1b-c2"
+  ],
+  "inputRefs": [
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s5.xlsx",
+      "role": "table",
+      "summary": "Broad H3K4me3 domains: 5136 data rows; Broad H3K27ac domains: 4533 data rows."
+    },
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=1469-1478",
+      "role": "method",
+      "summary": "Broad-domain definition: merge peaks within 500 bp and retain intervals longer than 5 kb."
+    }
+  ],
+  "codeRefs": [
+    {
+      "ref": "trace:worker-c-r006-2025-supplement-parser#table-s5",
+      "role": "code",
+      "summary": "Parsed workbook SpreadsheetML locally and computed interval lengths, stage broad-status counts, and sorted interval overlaps."
+    }
+  ],
+  "parameters": {
+    "domainWidthThresholdBp": 5000,
+    "mergeDistanceBp": 500,
+    "overlapDefinition": "any-base interval overlap",
+    "inputScope": "published Supplementary Table S5 only"
+  },
+  "outputFigureRefs": [
+    {
+      "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix#row-fig3-broad-domain-table-check",
+      "role": "figure",
+      "summary": "Table-level reproduction: all H3K4me3 domains are >=5001 bp; median length 6884 bp; RS4 broad count 4085 and RS8 broad count 2147."
+    },
+    {
+      "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix#row-fig3-h3k27ac-overlap",
+      "role": "figure",
+      "summary": "Table-level overlap: any listed H3K27ac broad domains overlap listed H3K4me3 broad domains at 73.7% overall, 79.8% in RS2, 72.4% in RS4, and 68.6% in RS8 under any-base overlap."
+    }
+  ],
+  "statisticsRefs": [
+    {
+      "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix#row-fig3-broad-domain-table-check",
+      "role": "table",
+      "summary": "H3K4me3 domain features from S5: Promoter 3261, Distal 1875; H3K27ac features: Promoter 2988, Distal 1545."
+    }
+  ],
+  "stdoutRefs": [
+    {
+      "ref": "trace:worker-c-r006-2025-supplement-parser#stdout",
+      "role": "stdout",
+      "summary": "Local parse stdout recorded row counts, length summaries, stage counts, and overlap percentages."
+    }
+  ],
+  "stderrRefs": [
+    {
+      "ref": "trace:worker-c-r006-2025-supplement-parser#stderr",
+      "role": "stderr",
+      "summary": "No stderr from bounded local supplement parse."
+    }
+  ],
+  "verdict": "partially-reproduced",
+  "limitations": [
+    "This is a table-level reproduction from published Supplementary Table S5, not an independent ChIP-seq peak-calling run from raw FASTQ or processed BED/bigWig.",
+    "Broad-vs-sharp H3K4me3 cannot be fully reproduced from S5 alone because sharp/control H3K4me3 peak lists and peak-height ranking inputs are not included in the local supplement subset.",
+    "The H3K27ac overlap fraction is sensitive to denominator, stage subset, and overlap definition; under any-base overlap it is near but not identical to the paper text for every stage."
+  ],
+  "diagnostics": [
+    "Structured partial: broad-domain count and width threshold are supported by local Table S5.",
+    "Structured insufficient-evidence: independent broad-domain calling and sharp-peak controls require processed peaks/signals that were not downloaded."
+  ]
+}

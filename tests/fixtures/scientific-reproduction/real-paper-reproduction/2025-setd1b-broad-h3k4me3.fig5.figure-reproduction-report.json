@@ -1,0 +1,82 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "figure-reproduction-report",
+  "sourceRefs": [
+    {
+      "ref": "artifact:figure-to-claim-map-2025-setd1b-broad-h3k4me3#2025-setd1b-fig5",
+      "role": "source",
+      "summary": "Fig. 5 maps to SETD1B requirement for broad H3K4me3 establishment."
+    },
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=801-840",
+      "role": "source",
+      "summary": "Fig. 5 legend and result text report Setd1b cKO loss of broad H3K4me3 and differential H3K27ac effects."
+    }
+  ],
+  "figureId": "2025-setd1b-fig5",
+  "claimIds": [
+    "2025-setd1b-c4"
+  ],
+  "inputRefs": [
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s1.xlsx",
+      "role": "table",
+      "summary": "S1 ChIP-seq metadata include Setd1bKO H3K4me3 RS4/RS8, H3K27ac RS4, Pol II, TAF3, and input sample labels."
+    },
+    {
+      "ref": "artifact:dataset-inventory-draft#dataset-2025-gse242515",
+      "role": "data",
+      "summary": "GSE242515 is public and should contain generated ChIP-seq/RNA-seq data, but no GEO files were materialized in this pass."
+    }
+  ],
+  "codeRefs": [
+    {
+      "ref": "trace:worker-c-r006-2025-supplement-parser#table-s1",
+      "role": "code",
+      "summary": "Parsed S1 sample metadata and counted Setd1b-labeled local sample rows."
+    }
+  ],
+  "parameters": {
+    "inputScope": "published Supplementary Table S1 metadata only",
+    "countingRule": "case-insensitive Setd1b label scan in local workbook rows",
+    "rawDataExecution": "not-run"
+  },
+  "outputFigureRefs": [
+    {
+      "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix#row-fig5-setd1b-perturbation-boundary",
+      "role": "figure",
+      "summary": "S1 confirms discoverable perturbation samples but does not provide cKO domain calls or signal matrices needed to reproduce Fig. 5 panels."
+    }
+  ],
+  "statisticsRefs": [
+    {
+      "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix#row-fig5-setd1b-perturbation-boundary",
+      "role": "table",
+      "summary": "Local S1 parse found 14 Setd1b-labeled ChIP-seq rows and 8 Setd1b-labeled RNA-seq rows."
+    }
+  ],
+  "stdoutRefs": [
+    {
+      "ref": "trace:worker-c-r006-2025-supplement-parser#stdout",
+      "role": "stdout",
+      "summary": "Local parse stdout includes Setd1b sample counts from S1."
+    }
+  ],
+  "stderrRefs": [
+    {
+      "ref": "trace:worker-c-r006-2025-supplement-parser#stderr",
+      "role": "stderr",
+      "summary": "No stderr from bounded local supplement parse."
+    }
+  ],
+  "verdict": "insufficient-evidence",
+  "limitations": [
+    "S1 is metadata only; it does not contain Setd1b cKO broad-domain calls, H3K4me3/H3K27ac signal matrices, or the IF quantification required for Fig. 5 reproduction.",
+    "No processed GSE242515 BED/bigWig files were downloaded, and no raw ChIP-seq pipeline was run.",
+    "Stage purity and developmental delay cannot be separated from direct SETD1B effects with local supplement metadata alone."
+  ],
+  "diagnostics": [
+    "Do not treat the PDF's Setd1b cKO statements as reproduced evidence.",
+    "The correct current state is data-discovered but computation-insufficient."
+  ]
+}

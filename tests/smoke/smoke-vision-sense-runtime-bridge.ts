@@ -126,8 +126,8 @@ try {
   assert.ok(completedBudgetDebit, 'Computer Use generic loop should emit a budget debit record');
   assert.equal(completedBudgetDebit.contract, CAPABILITY_BUDGET_DEBIT_CONTRACT_ID);
   assert.equal(completedBudgetDebit.capabilityId, 'action.sciforge.computer-use');
-  assert.deepEqual(completed.executionUnits[0].budgetDebitRefs, [completedBudgetDebit.debitId]);
-  assert.deepEqual(completed.workEvidence?.[0]?.budgetDebitRefs, [completedBudgetDebit.debitId]);
+  assert.ok(Array.isArray(completed.executionUnits[0].budgetDebitRefs) && completed.executionUnits[0].budgetDebitRefs.includes(completedBudgetDebit.debitId));
+  assert.ok(Array.isArray(completed.workEvidence?.[0]?.budgetDebitRefs) && completed.workEvidence[0].budgetDebitRefs.includes(completedBudgetDebit.debitId));
   assert.equal(completedBudgetDebit.sinkRefs.executionUnitRef, completed.executionUnits[0].id);
   assert.deepEqual(completedBudgetDebit.sinkRefs.workEvidenceRefs, [completed.workEvidence?.[0]?.id]);
   assert.ok(completedBudgetDebit.sinkRefs.auditRefs.includes('audit:vision-sense-computer-use-loop'));

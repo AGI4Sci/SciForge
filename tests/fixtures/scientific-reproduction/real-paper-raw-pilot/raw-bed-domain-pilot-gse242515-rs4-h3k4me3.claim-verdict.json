@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "claim-verdict",
+  "sourceRefs": [
+    {
+      "ref": "artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3#2025-setd1b-c2",
+      "role": "source",
+      "summary": "SETD1B broad H3K4me3 claim graph locator."
+    },
+    {
+      "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE242515",
+      "role": "data",
+      "summary": "Official GEO Series page for GSE242515."
+    },
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/results/gse242515-rs4-h3k4me3-domain-stats.json",
+      "role": "table",
+      "summary": "Raw BED domain pilot stats, checksums, parameters, and comparison output."
+    }
+  ],
+  "claimId": "2025-setd1b-c2",
+  "verdict": "partially-reproduced",
+  "rationale": "The approved raw BED domain pilot downloaded configured public interval files (RS4_WT, RS4_Setd1bKO) and independently applied the configured merge and width rule. RS4 Setd1bKO has far fewer selected >5 kb H3K4me3 merged domains than RS4 WT under the configured merge/width rule. This supports the bounded claim slice without upgrading the whole paper claim to reproduced.",
+  "supportingEvidenceRefs": [
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/results/gse242515-rs4-h3k4me3-domain-stats.json",
+      "role": "table",
+      "summary": "Computed input interval, merged domain, and selected-domain counts."
+    },
+    {
+      "ref": "artifact:raw-bed-domain-pilot-gse242515-rs4-h3k4me3.figure-reproduction-report",
+      "role": "figure",
+      "summary": "Raw BED domain pilot figure reproduction report."
+    },
+    {
+      "ref": "artifact:raw-bed-domain-pilot-gse242515-rs4-h3k4me3.raw-data-readiness-dossier",
+      "role": "verifier",
+      "summary": "Readiness dossier with approval, budget, checksum, and environment checks."
+    }
+  ],
+  "missingEvidence": [
+    {
+      "summary": "Full reproduction still requires FASTQ/BAM-level alignment, peak calling, replicate handling, and broad-domain calling across all relevant stages and controls.",
+      "refs": [
+        {
+          "ref": "artifact:2025-setd1b-broad-h3k4me3.claim-verdict#full-raw-pipeline",
+          "role": "verifier",
+          "summary": "Remaining full-pipeline evidence boundary."
+        }
+      ]
+    }
+  ]
+}

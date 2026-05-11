@@ -50,9 +50,19 @@ export async function createVisionWorkspace(slug: string) {
 }
 
 export async function runVisionSenseGateway(input: Omit<GatewayInput, 'selectedToolIds' | 'uiState'> & { uiState?: GatewayInput['uiState'] }) {
-  const uiState = typeof input.uiState === 'object' && input.uiState !== null
-    ? { ...input.uiState, selectedToolIds: visionSenseToolIds }
-    : { selectedToolIds: visionSenseToolIds };
+  const dryRunApproval = process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN === '1'
+    ? {
+        approved: true,
+        ref: 'approval:vision-sense-dry-run-smoke',
+        by: 'smoke-test',
+      }
+    : undefined;
+  const inputUiState = typeof input.uiState === 'object' && input.uiState !== null
+    ? input.uiState as Record<string, unknown>
+    : undefined;
+  const uiState = inputUiState
+    ? { ...inputUiState, humanApproval: inputUiState.humanApproval ?? dryRunApproval, selectedToolIds: visionSenseToolIds }
+    : { humanApproval: dryRunApproval, selectedToolIds: visionSenseToolIds };
   return runWorkspaceRuntimeGateway({
     ...input,
     selectedToolIds: visionSenseToolIds,

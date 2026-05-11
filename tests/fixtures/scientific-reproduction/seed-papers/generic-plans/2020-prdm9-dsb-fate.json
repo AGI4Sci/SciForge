@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.seed-plan.v1",
+  "fixtureKind": "scientific-reproduction-seed-plan",
+  "sourcePaper": {
+    "id": "seed-2020-prdm9-dsb-fate",
+    "year": 2020,
+    "title": "Refined spatial temporal epigenomic profiling reveals intrinsic connection between PRDM9-mediated H3K4me3 and the fate of double-stranded breaks",
+    "sourcePdf": "workspace/cell_papers/2020 Refined spatial temporal epigenomic profiling reveals intrinsic__connection between PRDM9-mediated H3K4me3 and__the fate of double-stranded breaks.pdf",
+    "extractionMethod": "pdftotext pages 1-2",
+    "topicTags": ["meiotic recombination", "PRDM9", "H3K4me3", "DSB fate", "chromatin accessibility"]
+  },
+  "boundedMetadata": {
+    "paperType": "research-article",
+    "studySystem": "mouse spermatogenic cells during meiotic prophase",
+    "mainClaimHint": "PRDM9-associated H3K4me3 at recombination hotspots is linked to double-strand break timing, chromatin openness, and crossover-biased repair outcomes.",
+    "evidenceModeHints": ["stage-resolved ChIP-seq", "NOMe-seq", "mutant comparisons", "hotspot overlap analysis"],
+    "copyrightBoundary": "Only title-level bibliographic metadata and short paraphrased claim hints are stored; no abstract or body text is reproduced."
+  },
+  "reproductionAttempt": {
+    "attemptId": "attempt-2020-prdm9-dsb-fate-generic",
+    "claimCategory": "chromatin-mark-to-recombination-fate",
+    "requiredArtifactTypes": ["figure-reproduction-report", "evidence-matrix", "claim-verdict", "negative-result-report"],
+    "verdictEnum": ["reproduced", "partially-reproduced", "not-reproduced", "contradicted"],
+    "minimumInputs": [
+      "stage-resolved H3K4me3 peak calls or signal tracks",
+      "PRDM9 binding or PRDM9-dependent hotspot annotations",
+      "SPO11 or DMC1 hotspot evidence",
+      "chromatin accessibility or NOMe-style signal",
+      "crossover and noncrossover proxy annotations when available"
+    ],
+    "planChecklist": [
+      "Record available raw and processed data accessions before analysis.",
+      "Normalize stage-specific H3K4me3 signal and call comparable hotspot/domain sets.",
+      "Measure overlap among PRDM9-associated regions, H3K4me3 peaks, and DSB proxy hotspots.",
+      "Compare chromatin accessibility between early and late DSB proxy groups.",
+      "Estimate association between DSB timing proxies and crossover-biased outcome proxies.",
+      "Emit structured partial or failed status when a required data class is missing."
+    ],
+    "sensitivityChecks": [
+      "Vary peak caller and signal thresholds for H3K4me3 hotspot calls.",
+      "Repeat overlap analysis by replicate and by meiotic stage.",
+      "Control for stage composition and hotspot strength as confounders.",
+      "Test whether accessibility association persists after excluding extreme signal regions."
+    ],
+    "negativeResultChecks": [
+      "If H3K4me3 hotspot strength does not predict DSB proxies after stage controls, downgrade mechanistic support.",
+      "If accessibility signal is explained by stage or assay batch, report a confounded association.",
+      "If crossover proxy enrichment disappears under threshold changes, mark the claim as unstable."
+    ],
+    "rubricPrompts": [
+      "Separate correlation, temporal ordering, perturbation, and direct mechanism evidence.",
+      "Require explicit missing-data notes for unavailable CO/NCO proxy inputs.",
+      "Allow a negative scientific conclusion without treating it as execution failure."
+    ]
+  }
+}

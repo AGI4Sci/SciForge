@@ -85,6 +85,55 @@ test('latest failed run suppresses core artifacts after active run focus is rest
   assert.equal([...visibleItems, ...deferredItems].some((item) => item.artifact?.id === 'research-report'), false);
 });
 
+test('failed active run still exposes structured runtime diagnostic artifacts', () => {
+  const staleReport: RuntimeArtifact = {
+    id: 'research-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { markdown: '# Stale report' },
+  };
+  const diagnostic: RuntimeArtifact = {
+    id: 'literature-runtime-result',
+    type: 'runtime-diagnostic',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: 'sciforge.runtime-diagnostic.v1',
+    metadata: { status: 'repair-needed' },
+    data: {
+      status: 'repair-needed',
+      message: 'AgentServer generated task failed before writing output JSON.',
+      executionUnits: [{ id: 'unit-failed', status: 'repair-needed' }],
+      recoverActions: ['inspect stderr'],
+    },
+  };
+  const activeRun: SciForgeRun = {
+    id: 'run-failed-diagnostic',
+    scenarioId: 'literature-evidence-review',
+    status: 'failed',
+    prompt: 'Run task',
+    response: 'failed-with-reason: task failed before output JSON',
+    createdAt: '2026-05-07T00:00:01.000Z',
+  };
+  const session = baseSession({
+    runs: [activeRun],
+    executionUnits: [{
+      id: 'unit-failed',
+      tool: 'workspace-runtime-gateway.repair',
+      params: '{}',
+      status: 'repair-needed',
+      hash: 'unit-failed',
+    }],
+    artifacts: [staleReport, diagnostic],
+    uiManifest: [{ componentId: 'execution-unit-table', artifactRef: 'literature-runtime-result', title: 'Execution units' }],
+  });
+
+  const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun, defaultSlots: [] });
+  const allItems = itemsForFocusMode(plan, 'all');
+
+  assert.equal(allItems.some((item) => item.artifact?.id === 'research-report'), false);
+  assert.equal(allItems.some((item) => item.artifact?.id === 'literature-runtime-result'), true);
+});
+
 test('fallback display intent keeps artifact order instead of reading prompt semantics', () => {
   const matrix: RuntimeArtifact = {
     id: 'matrix-result',

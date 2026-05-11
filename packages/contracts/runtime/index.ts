@@ -70,6 +70,46 @@ export type {
   RuntimeArtifactVisibility,
 } from './artifacts';
 export {
+  SCIENTIFIC_REPRODUCTION_ARTIFACT_TYPES,
+  SCIENTIFIC_REPRODUCTION_CONTRACT_IDS,
+  SCIENTIFIC_REPRODUCTION_REPAIR_HINTS,
+  SCIENTIFIC_REPRODUCTION_SCHEMA_VERSION,
+  isScientificReproductionArtifact,
+  isScientificReproductionArtifactType,
+  scientificReproductionArtifactSchemas,
+  validateScientificReproductionArtifact,
+  validateScientificReproductionRefsFirst,
+} from './scientific-reproduction';
+export {
+  evaluateRawDataPreExecutionGuard,
+  type RawDataExecutionGuardFile,
+  type RawDataExecutionGuardInput,
+  type RawDataExecutionGuardResult,
+} from './raw-data-execution-guard';
+export type {
+  AnalysisNotebook,
+  AnalysisPlan,
+  ClaimVerdict,
+  DatasetInventory,
+  EvidenceMatrix,
+  FigureReproductionReport,
+  FigureToClaimMap,
+  NegativeResultReport,
+  PaperClaimGraph,
+  RawDataReadinessDossier,
+  ScientificEvidenceRef,
+  ScientificRef,
+  ScientificReproductionArtifactData,
+  ScientificReproductionArtifactType,
+  ScientificReproductionDatasetAvailability,
+  ScientificReproductionRisk,
+  ScientificReproductionValidationIssue,
+  ScientificReproductionValidationResult,
+  ScientificReproductionVerdict,
+  ScientificRiskNote,
+  TrajectoryTrainingRecord,
+} from './scientific-reproduction';
+export {
   ALIGNMENT_CONTRACT_ARTIFACT_TYPE,
   ALIGNMENT_CONTRACT_SCHEMA_VERSION,
   ALIGNMENT_CONTRACT_VERSION_ARTIFACT_TYPE,

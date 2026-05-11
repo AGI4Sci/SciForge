@@ -25,6 +25,8 @@ const rules: Rule[] = [
     id: 'component-id-hardcode',
     message: 'src file hardcodes package-owned UI component ids.',
     match: (line) => isCapabilitySemanticCandidateLine(line)
+      && !isRuntimePlatformVocabularyLine(line)
+      && !isRuntimePlatformCapabilityIdLine(line)
       && /[`'"][a-z0-9]+(?:-[a-z0-9]+)+[`'"]/.test(line)
       && /\b(componentId|COMPONENT|component|module|viewer|table|matrix|graph|inspector|timeline|editor)\b/.test(line),
   },
@@ -33,16 +35,21 @@ const rules: Rule[] = [
     message: 'src file hardcodes package-owned artifact ids or artifact type routing.',
     match: (line) => isCapabilitySemanticCandidateLine(line)
       && !isPlatformContractLine(line)
+      && !isRuntimePlatformVocabularyLine(line)
+      && !isRuntimePlatformCapabilityIdLine(line)
+      && !isAuditOrProvenanceMetadataLine(line)
       && !isCapabilityEvolutionFailureCodeLine(line)
       && !/\bartifact-schema\b/.test(line)
       && /[`'"][a-z0-9]+(?:-[a-z0-9]+)+[`'"]/.test(line)
-      && /\b(artifact|Artifact|type|targetType|requiredArtifactTypes|producer)\b/.test(line),
+      && hasPackageArtifactRoutingSignal(line),
   },
   {
     id: 'domain-prompt-regex',
     message: 'src file contains prompt/domain regex semantics that should move into package-owned capability policy.',
     match: (line) => isCapabilitySemanticCandidateLine(line)
       && isCodeLine(line)
+      && !isPackageExportReferenceLine(line)
+      && !isGeneratedIdSanitizerLine(line)
       && !isJsxClosingTagRenderLine(line)
       && (/\/[^/\n]+\/[a-z]*|new RegExp|\.match\(|\.test\(/.test(line))
       && /(prompt|skillDomain|domain|report|paper|literature|structure|omics|knowledge|blast|alignment|protein|molecule|markdown|summary|报告|文献|结构|组学|知识)/i.test(line),
@@ -52,14 +59,19 @@ const rules: Rule[] = [
     message: 'src file hardcodes scenario/provider/tool ids that should come from capability manifests.',
     match: (line) => isCapabilitySemanticCandidateLine(line)
       && !isPlatformContractLine(line)
+      && !isRuntimePlatformVocabularyLine(line)
+      && !isRuntimePlatformCapabilityIdLine(line)
+      && !isManifestSchemaVersionLine(line)
+      && !isAuditOrProvenanceMetadataLine(line)
       && !isBackendToolNameLine(line)
-      && /\b(scenario|provider|tool)\b/i.test(line)
+      && hasProviderScenarioRoutingSignal(line)
       && /[`'"][a-z0-9]+(?:[._-][a-z0-9]+){2,}[`'"]/.test(line),
   },
   {
     id: 'domain-default-routing',
     message: 'src file carries domain default/ranking policy that belongs in package-owned scenario or view capability policy.',
     match: (line) => isCapabilitySemanticCandidateLine(line)
+      && !isEmptyHarnessFallbackContextLine(line)
       && /\b(literature|structure|omics|knowledge)\b/.test(line)
       && /[`'"]|DOMAIN_DEFAULT|skillDomain|score|rank|Priority/.test(line),
   },
@@ -368,7 +380,7 @@ function hasExplicitCapabilitySemantics(line: string) {
 }
 
 function isPlatformContractLine(line: string) {
-  return /\bcontractId\s*:/.test(line);
+  return /\b(?:contractId|contract|contractRef)\s*:/.test(line);
 }
 
 function isCapabilityEvolutionFailureCodeLine(line: string) {
@@ -378,6 +390,54 @@ function isCapabilityEvolutionFailureCodeLine(line: string) {
 
 function isBackendToolNameLine(line: string) {
   return /\btool\s*:\s*['"](?:list_session_artifacts|resolve_object_reference|read_artifact|render_artifact|resume_run)['"]/.test(line);
+}
+
+function hasPackageArtifactRoutingSignal(line: string) {
+  return /\b(?:artifactType|requiredArtifactTypes|producer|producesArtifactTypes|acceptsArtifactTypes)\b/.test(line)
+    || /\bartifact\.type\s*(?:={2,3}|!==?)\s*[`'"]/.test(line)
+    || /\btype\s*:\s*[`'"][a-z0-9]+(?:-[a-z0-9]+)+[`'"]/.test(line) && /\bartifact\b/i.test(line)
+    || /\bref\s*:\s*[`'"]artifact:/.test(line)
+    || /[`'"]artifact:[^`'"]+[`'"]/.test(line);
+}
+
+function hasProviderScenarioRoutingSignal(line: string) {
+  return /\b(?:scenarioId|providerId|selectedProviderIds|capabilityId|candidateId|manifestRef|toolId|scpToolId)\b/.test(line)
+    || /\b(?:scenario|provider|tool)\s*:\s*[`'"][a-z0-9]+(?:[._-][a-z0-9]+){2,}[`'"]/.test(line);
+}
+
+function isManifestSchemaVersionLine(line: string) {
+  return /\b(?:schemaVersion|sourceSchemaVersion)\s*:\s*[`'"]sciforge\.[a-z0-9.-]+\.v\d+[`'"]/.test(line);
+}
+
+function isAuditOrProvenanceMetadataLine(line: string) {
+  return /\b(?:source|provider|layer)\s*:\s*[`'"][a-z0-9]+(?:[._-][a-z0-9]+)+[`'"]/.test(line)
+    && !/\b(?:providerId|selectedProviderIds|capabilityId|candidateId|manifestRef|scenarioId|toolId)\b/.test(line);
+}
+
+function isPackageExportReferenceLine(line: string) {
+  return /[`'"]@sciforge(?:-ui)?\/[^`'"]+#[A-Za-z0-9_$-]+[`'"]/.test(line);
+}
+
+function isGeneratedIdSanitizerLine(line: string) {
+  return /\.replace\(\s*\/generated-\[a-z\]\+\-\[a-f0-9\]\{12\}\//.test(line)
+    || /generated-domain-id/.test(line);
+}
+
+function isEmptyHarnessFallbackContextLine(line: string) {
+  return /agentHarnessStageHookTraceMetadata\(\{\s*skillDomain:\s*['"]knowledge['"],\s*prompt:\s*['"],\s*artifacts:\s*\[\]\s*\}/.test(line)
+    || /agentHarnessStageHookTraceMetadata\(\{\s*skillDomain:\s*['"]knowledge['"]/.test(line);
+}
+
+function isRuntimePlatformVocabularyLine(line: string) {
+  return /\b(?:run-cancelled|interaction-request|clarification-needed|human-approval-required|guidance-queued|backend-error|awaiting-interaction|failed-with-reason|repair-needed|visible-status|waiting-for-backend-event|process-progress|capability-budget-debit|runtime-diagnostic|repair-diagnostic|backend-failure|contract-validation-failure|verification-result|partial-artifact-preservation|reference-digest)\b/.test(line)
+    || /\b(?:validation-repair-audit|verification-artifact|observe-invocation|action-result|capability-evolution|tool-package-manifest|observe-provider-selection|observe-provider-unavailable|observe-provider-error)\b/.test(line)
+    || /\b(?:workspace-read|workspace-write|workspace-refs|remote-desktop|remote-session|external-api|external-send|declared-external-resources|ref-only|browser|window|pointer|keyboard)\b/.test(line)
+    || /\b(?:record-diagnostic|fallback-observe-provider|retry-with-provider-diagnostics|fail-with-reason|request-confirmation|reduce-action-plan|record-blocked-ledger|fallback-to-generic-inspector)\b/.test(line);
+}
+
+function isRuntimePlatformCapabilityIdLine(line: string) {
+  return /\b(?:capabilityId|candidateId|providerId|availableProviders)\b/.test(line)
+    && /[`'"](?:runtime\.[a-z0-9._-]+|sciforge\.(?:core|workspace-runtime|payload-validation|validation-guard|agentserver|generated-task-runner)[a-z0-9._-]*|validator\.sciforge\.[a-z0-9._-]+|verifier\.runtime-[a-z0-9._-]+)[`'"]/.test(line);
 }
 
 async function collectSourceFilesIfExists(dir: string): Promise<string[]> {

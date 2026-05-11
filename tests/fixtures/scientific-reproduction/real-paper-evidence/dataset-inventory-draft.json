@@ -1,0 +1,597 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "dataset-inventory",
+  "sourceRefs": [
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/cell_papers/2020 Refined spatial temporal epigenomic profiling reveals intrinsic__connection between PRDM9-mediated H3K4me3 and__the fate of double-stranded breaks.pdf",
+      "role": "source",
+      "locator": "Data availability; Methods; Supplementary information",
+      "summary": "2020 Cell Research PRDM9/H3K4me3/DSB fate paper."
+    },
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+      "role": "source",
+      "locator": "Data availability; Code availability; Methods; Supplementary information",
+      "summary": "2025 Cell Research SETD1B broad H3K4me3 paper."
+    },
+    {
+      "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE132446",
+      "role": "data",
+      "summary": "NCBI GEO Series GSE132446, verified public page; 186 samples; SRA SRP214004; processed RAW tar listed by GEO."
+    },
+    {
+      "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE242515",
+      "role": "data",
+      "summary": "NCBI GEO Series GSE242515, verified public page; 111 samples; SRA SRP459720; processed bigWig/BED and RAW tar listed by GEO."
+    },
+    {
+      "ref": "https://github.com/Ruitulyu/KAS-Analyzer",
+      "role": "code",
+      "summary": "GitHub repository named in the 2025 paper code availability statement for uniform histone-mark ChIP-seq processing."
+    }
+  ],
+  "identifierVerifications": [
+    {
+      "id": "paper-2020-prdm9-identity",
+      "kind": "bibliographic",
+      "doi": "10.1038/s41422-020-0281-1",
+      "title": "Refined spatial temporal epigenomic profiling reveals intrinsic connection between PRDM9-mediated H3K4me3 and the fate of double-stranded breaks",
+      "year": 2020,
+      "journal": "Cell Research",
+      "verified": true,
+      "status": "verified",
+      "checkedAt": "2026-05-11",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#title-doi",
+          "role": "source",
+          "summary": "Paper title, journal year, and DOI locator extracted from the local PDF text."
+        }
+      ]
+    },
+    {
+      "id": "paper-2025-setd1b-identity",
+      "kind": "bibliographic",
+      "doi": "10.1038/s41422-025-01080-0",
+      "title": "SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development",
+      "year": 2025,
+      "journal": "Cell Research",
+      "verified": true,
+      "status": "verified",
+      "checkedAt": "2026-05-11",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#title-doi",
+          "role": "source",
+          "summary": "Paper title, journal year, and DOI locator extracted from the local PDF text."
+        }
+      ]
+    },
+    {
+      "id": "accession-gse132446",
+      "kind": "accession",
+      "database": "GEO",
+      "accession": "GSE132446",
+      "verified": true,
+      "status": "verified",
+      "checkedAt": "2026-05-11",
+      "evidenceRefs": [
+        {
+          "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE132446",
+          "role": "data",
+          "summary": "Official GEO Series page verified as public data source for the 2020 paper."
+        }
+      ]
+    },
+    {
+      "id": "accession-gse242515",
+      "kind": "accession",
+      "database": "GEO",
+      "accession": "GSE242515",
+      "verified": true,
+      "status": "verified",
+      "checkedAt": "2026-05-11",
+      "evidenceRefs": [
+        {
+          "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE242515",
+          "role": "data",
+          "summary": "Official GEO Series page verified as public data source for the 2025 paper."
+        }
+      ]
+    }
+  ],
+  "datasets": [
+    {
+      "id": "dataset-2020-gse132446",
+      "title": "2020 PRDM9/H3K4me3 mouse spermatogenic-cell epigenome atlas",
+      "sourceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=551-553",
+          "role": "source",
+          "locator": "Data availability",
+          "summary": "The paper states raw and processed data are deposited in GEO under GSE132446."
+        },
+        {
+          "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE132446",
+          "role": "data",
+          "summary": "Official GEO record verified; public, 186 samples, SRA SRP214004, processed data tar listed."
+        }
+      ],
+      "availability": "available",
+      "dataTypes": [
+        "ChIP-seq",
+        "NOMe-seq",
+        "processed BED",
+        "processed bigWig",
+        "raw SRA"
+      ],
+      "samples": [
+        {
+          "id": "2020-germ-cell-stages",
+          "label": "Mouse spermatogenic stages from undifferentiated spermatogonia through diplotene, plus WT and mutant meiotic samples",
+          "attributes": {
+            "organism": "Mus musculus",
+            "genome": "mm10 / GRCm38",
+            "geoSampleCount": 186,
+            "paperReplicates": "Two biological replicates for ChIP-seq and NOMe-seq where applicable",
+            "paperStages": "Undiff, A1, B, preleptotene, leptotene, early/mid/late zygotene, early/mid pachytene, diplotene"
+          },
+          "refs": [
+            {
+              "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2020/table-s1.xlsx",
+              "role": "table",
+              "summary": "Downloaded Supplementary Table S1; workbook sheets ChIP-seq and NOMe-seq."
+            }
+          ]
+        }
+      ],
+      "license": "GEO public record; article is CC BY 4.0. Reuse terms for deposited sequencing files should be checked before redistribution.",
+      "sizeEstimate": "GEO page lists processed data tar about 62.5 GB; raw sequencing access through SRA SRP214004.",
+      "accessInstructions": "Use GEO GSE132446 and SRA SRP214004. Start with processed BED/bigWig artifacts for first-pass figure reproduction; download raw FASTQ only if peak-calling reproducibility is required."
+    },
+    {
+      "id": "dataset-2020-gse84689-spo11",
+      "title": "Published mouse WT SPO11-oligo DSB hotspot maps reused by 2020 paper",
+      "sourceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=563-567",
+          "role": "source",
+          "locator": "Methods, Definition of DSB hotspots",
+          "summary": "The 2020 paper says WT C57BL/6J SPO11-oligo maps were collected from GEO accession GSE84689."
+        },
+        {
+          "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE84689",
+          "role": "data",
+          "summary": "Official GEO accession URL for verification and download."
+        }
+      ],
+      "availability": "available",
+      "dataTypes": [
+        "SPO11-oligo sequencing",
+        "DSB hotspot clusters"
+      ],
+      "samples": [
+        {
+          "id": "spo11-wt-c57bl6j",
+          "label": "WT C57BL/6J mouse SPO11-oligo hotspot data",
+          "attributes": {
+            "organism": "Mus musculus",
+            "paperUse": "Defines autosomal DSB hotspots for overlap and sorting analyses"
+          }
+        }
+      ],
+      "license": "Public GEO record; original publication reuse terms need checking.",
+      "sizeEstimate": "Not materialized in this worker pass.",
+      "accessInstructions": "Query GEO GSE84689 and use the SPO11-oligo cluster definitions or source reads following the original publication cutoffs."
+    },
+    {
+      "id": "dataset-2020-gse35498-dmc1",
+      "title": "Published Prdm9 knockout DMC1 ssDNA / DSB hotspot source reused by 2020 paper",
+      "sourceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=567-571",
+          "role": "source",
+          "locator": "Methods, Definition of DSB hotspots",
+          "summary": "The 2020 paper says Prdm9 knockout DSB hotspots were defined from anti-DMC1 ssDNA sequencing data from GEO accession GSE35498."
+        },
+        {
+          "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE35498",
+          "role": "data",
+          "summary": "Official GEO accession URL for verification and download."
+        }
+      ],
+      "availability": "available",
+      "dataTypes": [
+        "DMC1 ssDNA sequencing",
+        "DSB hotspot proxy"
+      ],
+      "samples": [
+        {
+          "id": "dmc1-prdm9-ko",
+          "label": "Prdm9 knockout DMC1 ssDNA data used as DSB hotspot proxy",
+          "attributes": {
+            "organism": "Mus musculus",
+            "paperUse": "Compares WT and Prdm9 knockout DSB localization"
+          }
+        }
+      ],
+      "license": "Public GEO record; original publication reuse terms need checking.",
+      "sizeEstimate": "Not materialized in this worker pass.",
+      "accessInstructions": "Query GEO GSE35498; inspect sample metadata before mixing with GSE132446 because strain, stage, and processing differ."
+    },
+    {
+      "id": "dataset-2020-gse61613-prdm9-affinity",
+      "title": "PRDM9 affinity-seq binding sites reused by 2020 paper",
+      "sourceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=504-507",
+          "role": "source",
+          "locator": "Methods, Collection of PRDM9-affinity-seq data",
+          "summary": "The paper says PRDM9-affinity-seq data in mouse spermatocytes were collected from GEO accession GSE61613."
+        },
+        {
+          "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE61613",
+          "role": "data",
+          "summary": "Official GEO accession URL for verification and download."
+        }
+      ],
+      "availability": "available",
+      "dataTypes": [
+        "PRDM9 affinity-seq",
+        "binding-site peaks"
+      ],
+      "samples": [
+        {
+          "id": "prdm9-binding-sites",
+          "label": "PRDM9 binding site calls used for overlap with de novo H3K4me3",
+          "attributes": {
+            "organism": "Mus musculus",
+            "paperUse": "Figure 1c/1d PRDM9 binding overlap and signal ranking"
+          }
+        }
+      ],
+      "license": "Public GEO record; original publication reuse terms need checking.",
+      "sizeEstimate": "Not materialized in this worker pass.",
+      "accessInstructions": "Query GEO GSE61613; prefer processed binding site tables if present to avoid reimplementing affinity-seq peak calling in first pass."
+    },
+    {
+      "id": "dataset-2020-supplement-tables",
+      "title": "2020 supplementary tables downloaded from Nature/Springer static content",
+      "sourceRefs": [
+        {
+          "ref": "https://static-content.springer.com/esm/art%3A10.1038%2Fs41422-020-0281-1/MediaObjects/41422_2020_281_MOESM16_ESM.xlsx",
+          "role": "table",
+          "summary": "Supplementary Table S1 downloaded locally; sample/library metadata sheets ChIP-seq and NOMe-seq."
+        },
+        {
+          "ref": "https://static-content.springer.com/esm/art%3A10.1038%2Fs41422-020-0281-1/MediaObjects/41422_2020_281_MOESM18_ESM.xlsx",
+          "role": "table",
+          "summary": "Supplementary Table S3 downloaded locally; de novo H3K4me3 peak lists by meiotic stage."
+        },
+        {
+          "ref": "https://static-content.springer.com/esm/art%3A10.1038%2Fs41422-020-0281-1/MediaObjects/41422_2020_281_MOESM21_ESM.xlsx",
+          "role": "table",
+          "summary": "Supplementary Table S6 downloaded locally; new generated H3K4me3 6-Z peak table."
+        }
+      ],
+      "availability": "available",
+      "dataTypes": [
+        "supplementary workbook",
+        "sample metadata",
+        "peak lists"
+      ],
+      "samples": [
+        {
+          "id": "2020-table-s1",
+          "label": "Supplementary Table S1",
+          "attributes": {
+            "localPath": "/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2020/table-s1.xlsx",
+            "sheets": "ChIP-seq A1:N163; NOMe-seq A1:P37"
+          }
+        },
+        {
+          "id": "2020-table-s3",
+          "label": "Supplementary Table S3",
+          "attributes": {
+            "localPath": "/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2020/table-s3.xlsx",
+            "sheets": "Leptotene A1:F3362; Early-zygotene A1:F13492; Mid-zygotene A1:F16542; Late-zygotene A1:F8882; Early 1-pachytene A1:F8189"
+          }
+        },
+        {
+          "id": "2020-table-s6",
+          "label": "Supplementary Table S6",
+          "attributes": {
+            "localPath": "/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2020/table-s6.xlsx",
+            "sheets": "New_generated_H3K4me3_6-Z_peaks A1:G16544"
+          }
+        }
+      ],
+      "license": "Article supplement distributed by publisher; article is CC BY 4.0, but verify supplement-specific terms before redistribution.",
+      "sizeEstimate": "Local files: about 21 KB, 2.2 MB, and 741 KB.",
+      "accessInstructions": "Use local workbook refs for first-pass peak inventory and figure-to-claim mapping; parse with a spreadsheet library in the execution environment."
+    },
+    {
+      "id": "dataset-2025-gse242515",
+      "title": "2025 SETD1B broad H3K4me3 mouse/human spermatogenesis sequencing data",
+      "sourceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=1473-1478",
+          "role": "source",
+          "locator": "Data availability",
+          "summary": "The paper states generated ChIP-seq, NOMe-seq, and RNA-seq data are in GEO under GSE242515."
+        },
+        {
+          "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE242515",
+          "role": "data",
+          "summary": "Official GEO record verified; public, 111 samples, SRA SRP459720, processed bigWig/BED and RAW tar listed."
+        }
+      ],
+      "availability": "available",
+      "dataTypes": [
+        "ChIP-seq",
+        "NOMe-seq",
+        "RNA-seq",
+        "processed bigWig",
+        "processed BED",
+        "raw SRA"
+      ],
+      "samples": [
+        {
+          "id": "2025-stage-atlas-and-perturbations",
+          "label": "Mouse spermatogenic stages plus Setd1b cKO and Rfx2 KO related datasets; human round spermatid comparison appears in the paper",
+          "attributes": {
+            "organism": "Mus musculus and Homo sapiens",
+            "genome": "mm10 / GRCm38 for mouse methods; human assembly should be verified from GEO metadata",
+            "geoSampleCount": 111,
+            "paperStages": "11 consecutive developmental stages including mitotic, meiotic, and post-meiotic spermatid stages"
+          },
+          "refs": [
+            {
+              "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s1.xlsx",
+              "role": "table",
+              "summary": "Downloaded Supplementary Table S1; workbook sheets ChIP-seq, NOMe-seq, RNA-seq."
+            }
+          ]
+        }
+      ],
+      "license": "GEO public record; article is CC BY 4.0. Reuse terms for deposited sequencing files should be checked before redistribution.",
+      "sizeEstimate": "GEO page lists processed RAW tar about 63.4 MB plus separate processed bigWig and BED files; raw sequencing access through SRA SRP459720.",
+      "accessInstructions": "Use GEO GSE242515. For broad-domain reproduction, processed H3K4me3/H3K27ac BED/bigWig files should be enough for an initial run; raw FASTQ is needed for full pipeline reproduction."
+    },
+    {
+      "id": "dataset-2025-gse132446-reuse",
+      "title": "2020 homogeneous spermatogenic-cell ChIP/NOMe data reused by 2025 paper",
+      "sourceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=1473-1477",
+          "role": "source",
+          "locator": "Data availability",
+          "summary": "The 2025 paper reuses histone mark ChIP-seq and NOMe-seq data from Undiff to D homogeneous populations under GSE132446."
+        },
+        {
+          "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE132446",
+          "role": "data",
+          "summary": "Official GEO record verified."
+        }
+      ],
+      "availability": "available",
+      "dataTypes": [
+        "ChIP-seq",
+        "NOMe-seq"
+      ],
+      "samples": [
+        {
+          "id": "2025-reused-undiff-to-d",
+          "label": "Undiff to D homogeneous mouse spermatogenic populations reused from 2020 dataset",
+          "attributes": {
+            "organism": "Mus musculus",
+            "paperUse": "Completes the 11-stage chromatin atlas context"
+          }
+        }
+      ],
+      "license": "GEO public record; article is CC BY 4.0.",
+      "sizeEstimate": "Same as dataset-2020-gse132446.",
+      "accessInstructions": "Use shared local/cache materialization for both 2020 and 2025 workflows to avoid duplicate downloads."
+    },
+    {
+      "id": "dataset-2025-comparator-h3k4me3",
+      "title": "Published comparator H3K4me3 datasets named by 2025 paper",
+      "sourceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=1476-1478",
+          "role": "source",
+          "locator": "Data availability",
+          "summary": "The paper cites H3K4me3 ChIP-seq data in mouse early embryo and human naive CD4+ T cells under GSE73952, GSM772836, and GSM772948."
+        },
+        {
+          "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE73952",
+          "role": "data",
+          "summary": "Official GEO URL to verify mouse early embryo comparator data."
+        },
+        {
+          "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSM772836",
+          "role": "data",
+          "summary": "Official GEO URL to verify human naive CD4+ T cell comparator sample."
+        },
+        {
+          "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSM772948",
+          "role": "data",
+          "summary": "Official GEO URL to verify human naive CD4+ T cell comparator sample."
+        }
+      ],
+      "availability": "unknown",
+      "dataTypes": [
+        "H3K4me3 ChIP-seq comparator"
+      ],
+      "samples": [
+        {
+          "id": "comparators-gse73952-gsm772836-gsm772948",
+          "label": "Comparator datasets for broad H3K4me3 domain comparison",
+          "attributes": {
+            "paperUse": "Figure 3d broad-domain comparison across published systems",
+            "verificationStatus": "Accessions found in paper; detailed sample metadata not materialized in this worker pass"
+          }
+        }
+      ],
+      "license": "Unknown until GEO sample metadata is materialized.",
+      "sizeEstimate": "Not materialized in this worker pass.",
+      "accessInstructions": "Verify organism/build and processed files before comparing domain widths, because cross-study genome builds and peak-calling thresholds can dominate this analysis."
+    },
+    {
+      "id": "dataset-2025-supplement-tables",
+      "title": "2025 supplementary tables downloaded from Nature/Springer static content",
+      "sourceRefs": [
+        {
+          "ref": "https://static-content.springer.com/esm/art%3A10.1038%2Fs41422-025-01080-0/MediaObjects/41422_2025_1080_MOESM1_ESM.xlsx",
+          "role": "table",
+          "summary": "Supplementary Table S1 downloaded locally; sample/library metadata sheets ChIP-seq, NOMe-seq, RNA-seq."
+        },
+        {
+          "ref": "https://static-content.springer.com/esm/art%3A10.1038%2Fs41422-025-01080-0/MediaObjects/41422_2025_1080_MOESM5_ESM.xlsx",
+          "role": "table",
+          "summary": "Supplementary Table S5 downloaded locally; broad H3K4me3 and H3K27ac domains."
+        },
+        {
+          "ref": "https://static-content.springer.com/esm/art%3A10.1038%2Fs41422-025-01080-0/MediaObjects/41422_2025_1080_MOESM8_ESM.xlsx",
+          "role": "table",
+          "summary": "Supplementary Table S8 downloaded locally; early and late expressed gene sets."
+        }
+      ],
+      "availability": "available",
+      "dataTypes": [
+        "supplementary workbook",
+        "sample metadata",
+        "broad-domain table",
+        "temporal-expression gene table"
+      ],
+      "samples": [
+        {
+          "id": "2025-table-s1",
+          "label": "Supplementary Table S1",
+          "attributes": {
+            "localPath": "/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s1.xlsx",
+            "sheets": "ChIP-seq A1:F181; NOMe-seq A1:P29; RNA-seq A1:D40"
+          }
+        },
+        {
+          "id": "2025-table-s5",
+          "label": "Supplementary Table S5",
+          "attributes": {
+            "localPath": "/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s5.xlsx",
+            "sheets": "Broad H3K4me3 domains A1:H5138; Broad H3K27ac domains A1:H4535"
+          }
+        },
+        {
+          "id": "2025-table-s8",
+          "label": "Supplementary Table S8",
+          "attributes": {
+            "localPath": "/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2025/table-s8.xlsx",
+            "sheets": "Early expressed genes A1:Z517; Lately expressed genes A1:Z508"
+          }
+        }
+      ],
+      "license": "Article supplement distributed by publisher; article is CC BY 4.0, but verify supplement-specific terms before redistribution.",
+      "sizeEstimate": "Local files: about 19 KB, 475 KB, and 285 KB.",
+      "accessInstructions": "Use local workbook refs for first-pass broad-domain and temporal-expression checks."
+    },
+    {
+      "id": "code-2025-kas-analyzer",
+      "title": "KAS-Analyzer uniform histone-mark ChIP-seq processing pipeline",
+      "sourceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=1490-1492",
+          "role": "source",
+          "locator": "Code availability",
+          "summary": "The 2025 paper points to https://github.com/Ruitulyu/KAS-Analyzer for uniform histone mark ChIP-seq pipelines."
+        },
+        {
+          "ref": "https://github.com/Ruitulyu/KAS-Analyzer",
+          "role": "code",
+          "summary": "Public GitHub repository verified."
+        }
+      ],
+      "availability": "available",
+      "dataTypes": [
+        "code",
+        "ChIP-seq processing pipeline"
+      ],
+      "samples": [],
+      "license": "Repository license not evaluated in this worker pass.",
+      "sizeEstimate": "Not cloned in this worker pass.",
+      "accessInstructions": "Clone and inspect the repository before executing; verify whether it exactly matches the pipeline used for GSE242515 or is a general reusable pipeline."
+    }
+  ],
+  "missingDatasets": [
+    {
+      "id": "missing-2020-source-code",
+      "title": "2020 analysis source code",
+      "reason": "The 2020 paper code availability statement says source codes are available upon request; no public repository was found in the PDF text.",
+      "sourceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=555-557",
+          "role": "source",
+          "locator": "Code availability"
+        }
+      ],
+      "possibleAlternatives": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=509-547",
+          "role": "method",
+          "summary": "Methods specify trim_galore, Bowtie2, SAMtools, MACS14/MACS2, bedtools, deepTools, Bismark, and R statistics sufficiently for partial reimplementation."
+        }
+      ]
+    },
+    {
+      "id": "missing-2025-nome-rnaseq-source-code",
+      "title": "2025 NOMe-seq and RNA-seq processing source code",
+      "reason": "The 2025 paper states that other source codes for NOMe-seq and RNA-seq are available upon request; only the histone-mark ChIP-seq pipeline URL is public in the paper.",
+      "sourceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=1490-1492",
+          "role": "source",
+          "locator": "Code availability"
+        }
+      ],
+      "possibleAlternatives": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2025-setd1b.txt#lines=1380-1472",
+          "role": "method",
+          "summary": "Methods specify RNA-seq, NOMe-seq, PCA, ChromHMM, broad-domain calling, enhancer assignment, GO/GREAT, and statistical tests for partial reimplementation."
+        }
+      ]
+    },
+    {
+      "id": "missing-full-supplement-coverage",
+      "title": "All supplementary tables and figures",
+      "reason": "This worker downloaded high-priority tables S1/S3/S6 for 2020 and S1/S5/S8 for 2025, but did not exhaustively download or parse every supplement used by every figure.",
+      "sourceRefs": [
+        {
+          "ref": "https://www.nature.com/articles/s41422-020-0281-1",
+          "role": "source",
+          "summary": "2020 article and supplement landing page."
+        },
+        {
+          "ref": "https://www.nature.com/articles/s41422-025-01080-0",
+          "role": "source",
+          "summary": "2025 article and supplement landing page."
+        }
+      ],
+      "possibleAlternatives": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements",
+          "role": "table",
+          "summary": "Local subset of downloaded supplements used for first-pass inventory."
+        }
+      ]
+    }
+  ],
+  "diagnostics": [
+    "No raw sequencing or processed GEO files were downloaded in this worker pass.",
+    "No computational reproduction was executed; availability means located and apparently public, not successfully materialized.",
+    "Supplement workbooks were downloaded for selected high-priority tables only and sheet dimensions were inspected via xlsx XML metadata."
+  ],
+  "notes": [
+    "Treat data access as a separate execution step with download budget checks.",
+    "Use processed tables and bigWig/BED files before raw FASTQ to avoid masking product/tool failures as scientific negative results."
+  ]
+}

@@ -4,6 +4,13 @@ import {
   type CapabilityManifestRisk,
   type CapabilityManifestSideEffect,
 } from '../../packages/contracts/runtime/capability-manifest.js';
+import {
+  compactSkillCapabilityRoutingTags,
+  skillPackageRequiredConfig,
+  skillPackageRepairActions,
+  toolPackageOutputArtifactTypes,
+  toolPackageUnavailableRepairHints,
+} from '../../packages/skills/capability-projection-policy.js';
 import { skillPackageManifests, type SkillPackageManifest } from '../../packages/skills';
 import { toolPackageManifests, type ToolPackageManifest } from '../../packages/skills/tool_skills';
 
@@ -32,7 +39,7 @@ function projectSkillPackageManifestToCapabilityManifest(skill: SkillPackageMani
       skill.entrypointType,
       ...skill.id.split(/[._-]/),
       ...skill.skillDomains,
-      ...compactPackageRoutingTags(skill.tags),
+      ...compactSkillCapabilityRoutingTags(skill.tags),
     ]),
     domains: uniqueSortedStrings([...skill.skillDomains]),
     inputSchema: {
@@ -70,14 +77,14 @@ function projectSkillPackageManifestToCapabilityManifest(skill: SkillPackageMani
     repairHints: skill.failureModes.map((failureCode) => ({
       failureCode,
       summary: `Recover from ${failureCode} without expanding the package SKILL.md body.`,
-      recoverActions: skillRepairActions(failureCode),
+      recoverActions: skillPackageRepairActions(failureCode),
     })),
     providers: [{
       id: providerId,
       label: skill.label,
       kind: skill.source === 'workspace' ? 'workspace' : 'package',
       contractRef: docsRef,
-      requiredConfig: skillRequiredConfig(skill),
+      requiredConfig: skillPackageRequiredConfig(skill),
       priority: skill.source === 'package' ? 1 : 2,
     }],
     lifecycle: {
@@ -123,7 +130,7 @@ function projectToolPackageManifestToCapabilityManifest(tool: ToolPackageManifes
       tool.sensePlugin?.modality ?? '',
       ...tool.id.split(/[._-]/),
       ...tool.skillDomains,
-      ...compactPackageRoutingTags(tool.tags),
+      ...compactSkillCapabilityRoutingTags(tool.tags),
       ...(tool.sensePlugin?.inputContract.acceptedModalities ?? []),
     ]),
     domains: uniqueSortedStrings([...tool.skillDomains, tool.toolType]),
@@ -140,7 +147,7 @@ function projectToolPackageManifestToCapabilityManifest(tool: ToolPackageManifes
       required: ['outputRef'],
       properties: {
         outputRef: { type: 'string' },
-        artifactTypes: { type: 'array', items: { enum: tool.producesArtifactTypes ?? ['supporting-runtime-data'] } },
+        artifactTypes: { type: 'array', items: { enum: toolPackageOutputArtifactTypes(tool) } },
       },
     },
     sideEffects: toolSideEffects(tool),
@@ -159,11 +166,7 @@ function projectToolPackageManifestToCapabilityManifest(tool: ToolPackageManifes
       contractRef: `${tool.packageRoot}#ToolPackageManifest`,
       expectedRefs: ['outputRef'],
     }],
-    repairHints: [{
-      failureCode: 'tool-provider-unavailable',
-      summary: 'Select a fallback tool provider or report the missing package configuration.',
-      recoverActions: ['fallback-tool-provider', 'request-tool-configuration'],
-    }],
+    repairHints: toolPackageUnavailableRepairHints(),
     providers: [{
       id: providerId,
       label: tool.label,
@@ -198,37 +201,6 @@ function projectToolPackageManifestToCapabilityManifest(tool: ToolPackageManifes
       },
     },
   };
-}
-
-function skillRequiredConfig(skill: SkillPackageManifest): string[] {
-  return skill.scpToolId ? ['scp-hub-api-key'] : [];
-}
-
-function compactPackageRoutingTags(tags: readonly string[]): string[] {
-  const genericTags = new Set([
-    '',
-    'package',
-    'agentserver-generation',
-    'artifact-emission',
-    'schema-checked',
-    'self-healing',
-    'research-report',
-    'structure-summary',
-    'sequence-alignment',
-    'knowledge-graph',
-    'vision-trace',
-    'supporting-runtime-data',
-  ]);
-  return tags.filter((tag) => !genericTags.has(tag.trim()));
-}
-
-function skillRepairActions(failureCode: string): string[] {
-  if (failureCode.includes('backend') || failureCode.includes('unavailable')) {
-    return ['fallback-skill', 'request-provider-configuration'];
-  }
-  if (failureCode.includes('schema')) return ['validate-artifact-contract', 'repair-output-schema'];
-  if (failureCode.includes('input')) return ['request-missing-input', 'reuse-available-refs'];
-  return ['fallback-skill', 'retry-with-compact-context'];
 }
 
 function toolSideEffects(tool: ToolPackageManifest): CapabilityManifestSideEffect[] {

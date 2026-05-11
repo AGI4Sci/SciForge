@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.seed-plan.v1",
+  "fixtureKind": "scientific-reproduction-seed-plan",
+  "sourcePaper": {
+    "id": "seed-2025-setd1b-broad-h3k4me3",
+    "year": 2025,
+    "title": "SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development",
+    "sourcePdf": "workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+    "extractionMethod": "pdftotext pages 1-2",
+    "topicTags": ["SETD1B", "RFX2", "broad H3K4me3", "spermatid development", "temporal expression"]
+  },
+  "boundedMetadata": {
+    "paperType": "research-article",
+    "studySystem": "developing mouse male germ cells",
+    "mainClaimHint": "A SETD1B-RFX2 axis is proposed to form spermatid-specific broad H3K4me3 domains that support expression dosage and timing during spermiogenesis.",
+    "evidenceModeHints": ["domain calling", "enhancer/promoter overlap", "stage-resolved expression", "Setd1b or Rfx2 perturbation"],
+    "copyrightBoundary": "Only title-level bibliographic metadata and short paraphrased claim hints are stored; no abstract or body text is reproduced."
+  },
+  "reproductionAttempt": {
+    "attemptId": "attempt-2025-setd1b-broad-h3k4me3-generic",
+    "claimCategory": "chromatin-domain-to-temporal-expression",
+    "requiredArtifactTypes": ["figure-reproduction-report", "evidence-matrix", "claim-verdict", "negative-result-report"],
+    "verdictEnum": ["reproduced", "partially-reproduced", "not-reproduced", "contradicted"],
+    "minimumInputs": [
+      "stage-resolved H3K4me3 signal tracks",
+      "broad and sharp H3K4me3 domain calls or inputs to derive them",
+      "H3K27ac enhancer and promoter annotations",
+      "stage-resolved transcript abundance",
+      "Setd1b or Rfx2 perturbation measurements when available"
+    ],
+    "planChecklist": [
+      "Record available raw and processed data accessions before analysis.",
+      "Call broad and sharp H3K4me3 domains with a documented generic domain rule.",
+      "Measure overlap between broad domains and H3K27ac-marked enhancer or promoter regions.",
+      "Compare expression level and timing for genes linked to broad versus sharp domains.",
+      "Evaluate Setd1b and Rfx2 perturbation effects against matched stage controls.",
+      "Emit structured partial or failed status when perturbation or stage data are missing."
+    ],
+    "sensitivityChecks": [
+      "Vary broad-domain width and signal thresholds.",
+      "Control for gene length, baseline expression, and annotation version.",
+      "Repeat expression timing analysis by batch or developmental stage subset.",
+      "Compare promoter-linked and enhancer-linked broad domains separately."
+    ],
+    "negativeResultChecks": [
+      "If broad-domain enrichment disappears after controlling for gene length or expression, downgrade support.",
+      "If Setd1b or Rfx2 perturbation effects do not align with broad-domain genes, report mechanistic uncertainty.",
+      "If temporal expression shifts are batch- or stage-composition artifacts, mark the claim as contradicted or not reproduced."
+    ],
+    "rubricPrompts": [
+      "Use the same artifact schema and verdict enum as the PRDM9/DSB fate attempt.",
+      "Separate broad-domain association from direct SETD1B-RFX2 causality.",
+      "Allow negative scientific conclusions without repair into a positive verdict."
+    ]
+  }
+}

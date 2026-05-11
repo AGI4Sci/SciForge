@@ -255,8 +255,15 @@ assert.ok(directEvents.some((event) => event.type === 'direct-context-fast-path'
 assert.match(direct.message, /不启动新的 workspace task/);
 assert.equal(direct.executionUnits.some((unit) => unit.tool === 'sciforge.direct-context-fast-path'), true);
 assert.equal(direct.verificationResults?.[0]?.verdict, 'unverified');
-assert.equal((direct.displayIntent?.verification as { nonBlocking?: boolean } | undefined)?.nonBlocking, true);
-assert.equal(direct.artifacts.some((artifact) => artifact.type === 'verification-result' && (artifact.metadata as { nonBlocking?: boolean } | undefined)?.nonBlocking === true), true);
+assert.equal((direct.displayIntent?.verification as { nonBlocking?: boolean } | undefined)?.nonBlocking, false);
+assert.equal(
+  direct.artifacts.some((artifact) =>
+    artifact.type === 'verification-result'
+    && (artifact.metadata as { nonBlocking?: boolean; unverifiedIsNotPass?: boolean } | undefined)?.nonBlocking === false
+    && (artifact.metadata as { nonBlocking?: boolean; unverifiedIsNotPass?: boolean } | undefined)?.unverifiedIsNotPass === true
+  ),
+  true,
+);
 
 console.log('[ok] T098 latency diagnostics matrix covers Python-owned policy fields, TS pass-through, cache hit/miss telemetry, waits, silent-stream timing, and background duration without external providers');
 

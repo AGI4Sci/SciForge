@@ -9,7 +9,7 @@ export const manifest: UIComponentManifest = {
   componentId: 'report-viewer',
   lifecycle: 'published',
   outputArtifactTypes: ['research-report'],
-  acceptsArtifactTypes: ['research-report', 'markdown-report'],
+  acceptsArtifactTypes: ['research-report', 'markdown-report', 'analysis-plan', 'figure-reproduction-report', 'claim-verdict', 'negative-result-report', 'trajectory-training-record'],
   requiredAnyFields: [['markdown', 'sections', 'report', 'summary', 'content', 'dataRef']],
   viewParams: ['layoutMode', 'sectionFilter'],
   interactionEvents: ['select-section', 'open-ref'],
@@ -24,7 +24,7 @@ export const manifest: UIComponentManifest = {
   },
   docs: {
     readmePath: 'packages/presentation/components/report-viewer/README.md',
-    agentSummary: 'Use for research-report/markdown-report artifacts with markdown, sections, report, summary, content, or dataRef. Emits select-section/open-ref.',
+    agentSummary: 'Use for report-like artifacts with markdown, sections, report, summary, content, or dataRef, including reproduction reports, claim verdicts, negative result reports, trajectory records, and analysis plans. Emits select-section/open-ref.',
   },
   workbenchDemo: {
     artifactType: 'research-report',

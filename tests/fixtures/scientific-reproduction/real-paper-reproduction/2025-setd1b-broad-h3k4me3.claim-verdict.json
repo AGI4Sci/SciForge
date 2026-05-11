@@ -1,0 +1,124 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "claim-verdict",
+  "sourceRefs": [
+    {
+      "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix",
+      "role": "source",
+      "summary": "R006 evidence matrix for the 2025 SETD1B first-pass reproduction."
+    },
+    {
+      "ref": "artifact:2025-setd1b-broad-h3k4me3.analysis-plan",
+      "role": "source",
+      "summary": "R006 analysis plan and fallback policy."
+    },
+    {
+      "ref": "artifact:dataset-inventory-draft#dataset-2025-gse242515",
+      "role": "data",
+      "summary": "Public sequencing accession discovered but not downloaded in this pass."
+    }
+  ],
+  "claimId": "2025-setd1b-broad-h3k4me3-r006-package",
+  "verdict": "insufficient-evidence",
+  "rationale": "The first-pass local supplement reproduction partially supports the existence and timing of broad H3K4me3/H3K27ac domains and early/late temporal gene sets, but it does not independently reproduce broad-vs-sharp peak calling, Setd1b cKO loss of broad domains, Pol II/TAF3 redistribution, Rfx2 KO recruitment, or gene-length/stage confounding controls. Therefore the correct package-level verdict remains insufficient-evidence, with explicit partially-reproduced subclaims.",
+  "supportingEvidenceRefs": [
+    {
+      "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix#row-fig3-broad-domain-table-check",
+      "role": "table",
+      "summary": "Table-level broad H3K4me3 domain inventory and width threshold check from S5."
+    },
+    {
+      "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix#row-fig3-h3k27ac-overlap",
+      "role": "table",
+      "summary": "Table-level H3K27ac/H3K4me3 broad-domain overlap check from S5."
+    },
+    {
+      "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix#row-fig7-temporal-expression-s8",
+      "role": "table",
+      "summary": "Table-level early and late gene expression timing check from S8."
+    }
+  ],
+  "contradictingEvidenceRefs": [],
+  "missingEvidence": [
+    {
+      "summary": "Independent broad-vs-sharp H3K4me3 reproduction requires merged non-broad peak lists, peak-height ranking, and processed ChIP-seq signal files or raw FASTQ execution.",
+      "refs": [
+        {
+          "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix#row-fig3-broad-domain-table-check",
+          "role": "verifier"
+        }
+      ]
+    },
+    {
+      "summary": "Setd1b perturbation reproduction requires control/cKO H3K4me3/H3K27ac domain calls, Pol II/TAF3 occupancy outputs, RNA-seq count matrices, and stage-matched differential analyses.",
+      "refs": [
+        {
+          "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix#row-fig5-setd1b-perturbation-boundary",
+          "role": "verifier"
+        }
+      ]
+    },
+    {
+      "summary": "Rfx2 perturbation and SETD1B recruitment remain unsupported by local tables; Rfx2 KO processed domains, motif output, and interaction quantification are needed.",
+      "refs": [
+        {
+          "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix#row-s12-rfx2-perturbation-boundary",
+          "role": "verifier"
+        }
+      ]
+    },
+    {
+      "summary": "Gene length, baseline expression, annotation version, batch, and stage-composition confounding checks are not resolved by S5/S8.",
+      "refs": [
+        {
+          "ref": "artifact:2025-setd1b-broad-h3k4me3.evidence-matrix#row-confounding-sensitivity-boundary",
+          "role": "verifier"
+        }
+      ]
+    }
+  ],
+  "perClaimVerdicts": [
+    {
+      "claimId": "2025-setd1b-c2",
+      "verdict": "partially-reproduced",
+      "rationale": "S5 supports broad-domain counts, length threshold, stage counts, and substantial H3K27ac overlap, but not independent peak calling or sharp/control peak comparison."
+    },
+    {
+      "claimId": "2025-setd1b-c3",
+      "verdict": "insufficient-evidence",
+      "rationale": "S5/S8 do not reproduce super-enhancer calling, enhancer assignment, eRNA quantification, GREAT/GO enrichment, or expression tests against matched controls."
+    },
+    {
+      "claimId": "2025-setd1b-c4",
+      "verdict": "insufficient-evidence",
+      "rationale": "S1 confirms Setd1b perturbation samples exist, but cKO ChIP-seq domain loss and signal profiles were not reproduced."
+    },
+    {
+      "claimId": "2025-setd1b-c5",
+      "verdict": "insufficient-evidence",
+      "rationale": "Pol II and TAF3 redistribution require processed occupancy data and differential analyses not present in S1/S5/S8."
+    },
+    {
+      "claimId": "2025-setd1b-c6",
+      "verdict": "partially-reproduced",
+      "rationale": "S8 supports early and late temporal gene-set patterns, but Setd1b-dependent mistiming remains untested without cKO expression matrices."
+    },
+    {
+      "claimId": "2025-setd1b-c8",
+      "verdict": "insufficient-evidence",
+      "rationale": "Rfx2 KO and RFX2-SETD1B recruitment evidence is PDF-text only in the local subset."
+    }
+  ],
+  "operationalVsScientific": {
+    "operationalFailures": [
+      "No raw or processed GEO GSE242515 sequencing files were downloaded by design.",
+      "The local supplement subset lacks sharp/control peak lists, cKO domain outputs, Rfx2 KO domain outputs, count matrices, and gene-length annotations."
+    ],
+    "scientificNegativeResults": [],
+    "policy": "Keep table-supported checks as partially-reproduced and unresolved perturbation/causal checks as insufficient-evidence. Do not mark not-reproduced or contradicted without a computed disagreement under documented methods."
+  },
+  "diagnostics": [
+    "This verdict is intentionally conservative because the central SETD1B-RFX2 causal claim has not been independently computed.",
+    "The artifact can be upgraded by adding processed GEO BED/bigWig/count matrix refs and rerunning the planned sensitivity checks."
+  ]
+}

@@ -1,0 +1,133 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "claim-verdict",
+  "sourceRefs": [
+    {
+      "ref": "artifact:evidence-matrix-draft",
+      "role": "source",
+      "summary": "Worker C evidence matrix draft."
+    },
+    {
+      "ref": "artifact:dataset-inventory-draft",
+      "role": "source",
+      "summary": "Worker C dataset inventory draft."
+    },
+    {
+      "ref": "artifact:missing-data-report-draft",
+      "role": "source",
+      "summary": "Worker C missing data report draft."
+    }
+  ],
+  "claimId": "worker-c-real-paper-discovery-package",
+  "verdict": "insufficient-evidence",
+  "rationale": "The two research papers have real public data accessions, selected local supplement tables, and one public 2025 ChIP-seq pipeline clue, but no computational reproduction has been run and important code paths remain request-only. Therefore the correct package-level verdict is insufficient-evidence, not reproduced.",
+  "supportingEvidenceRefs": [
+    {
+      "ref": "artifact:evidence-matrix-draft#row-2020-c1-prdm9-h3k4me3",
+      "role": "source",
+      "summary": "2020 H3K4me3/DSB hotspot row; data located but not computed."
+    },
+    {
+      "ref": "artifact:evidence-matrix-draft#row-2025-c1-broad-domains",
+      "role": "source",
+      "summary": "2025 broad H3K4me3 row; data and supplement located but not computed."
+    }
+  ],
+  "contradictingEvidenceRefs": [],
+  "missingEvidence": [
+    {
+      "summary": "Raw and processed GEO data were not downloaded or parsed into an executable analysis workspace.",
+      "refs": [
+        {
+          "ref": "artifact:missing-data-report-draft#unmaterialized-geo-raw-data",
+          "role": "data"
+        }
+      ]
+    },
+    {
+      "summary": "2020 source code and 2025 NOMe/RNA-seq source code are request-only according to paper statements.",
+      "refs": [
+        {
+          "ref": "artifact:missing-data-report-draft#missing-2020-source-code",
+          "role": "code"
+        },
+        {
+          "ref": "artifact:missing-data-report-draft#missing-2025-nome-rnaseq-code",
+          "role": "code"
+        }
+      ]
+    },
+    {
+      "summary": "No statistical reanalysis, peak overlap, broad-domain calling, or temporal expression test has been executed.",
+      "refs": [
+        {
+          "ref": "artifact:evidence-matrix-draft",
+          "role": "source"
+        }
+      ]
+    }
+  ],
+  "perClaimVerdicts": [
+    {
+      "claimId": "C2020-1",
+      "paper": "2020 PRDM9/H3K4me3/DSB fate",
+      "verdict": "not-tested",
+      "rationale": "GSE132446, GSE84689, GSE61613, and Supplementary Table S3 are located, but the overlap/correlation analysis has not been run."
+    },
+    {
+      "claimId": "C2020-2",
+      "paper": "2020 PRDM9/H3K4me3/DSB fate",
+      "verdict": "not-tested",
+      "rationale": "Stage peak tables are downloaded but not parsed into reproduced counts or plots."
+    },
+    {
+      "claimId": "C2020-3",
+      "paper": "2020 PRDM9/H3K4me3/DSB fate",
+      "verdict": "insufficient-evidence",
+      "rationale": "The DSB fate interpretation requires CO/NCO proxy and accessibility checks not performed in this pass."
+    },
+    {
+      "claimId": "C2020-4",
+      "paper": "2020 PRDM9/H3K4me3/DSB fate",
+      "verdict": "not-tested",
+      "rationale": "NOMe-seq data are public, but NDR/accessibility computations have not been reproduced."
+    },
+    {
+      "claimId": "C2025-1",
+      "paper": "2025 SETD1B broad H3K4me3",
+      "verdict": "not-tested",
+      "rationale": "GSE242515, Supplementary Table S5, and KAS-Analyzer are located, but broad-domain calling has not been rerun."
+    },
+    {
+      "claimId": "C2025-2",
+      "paper": "2025 SETD1B broad H3K4me3",
+      "verdict": "not-tested",
+      "rationale": "H3K4me3/H3K27ac domain overlap is directly testable from tables or BED files, but no overlap computation was run."
+    },
+    {
+      "claimId": "C2025-3",
+      "paper": "2025 SETD1B broad H3K4me3",
+      "verdict": "insufficient-evidence",
+      "rationale": "Perturbation evidence requires separating Setd1b control/cKO samples and rerunning domain/expression analysis."
+    },
+    {
+      "claimId": "C2025-4",
+      "paper": "2025 SETD1B broad H3K4me3",
+      "verdict": "insufficient-evidence",
+      "rationale": "Temporal expression claims require RNA-seq reanalysis or structured parsing of Supplementary Table S8."
+    },
+    {
+      "claimId": "C2025-5",
+      "paper": "2025 SETD1B broad H3K4me3",
+      "verdict": "insufficient-evidence",
+      "rationale": "RFX2 axis claims require motif, KO, and interaction evidence checks beyond data discovery."
+    }
+  ],
+  "operationalVsScientific": {
+    "operationalFailures": [
+      "Original source code gaps and unmaterialized large GEO data block execution."
+    ],
+    "scientificNegativeResults": [],
+    "policy": "Do not label any claim as not-reproduced or contradicted until a computed analysis disagrees with the paper under documented data/code/statistics."
+  }
+}

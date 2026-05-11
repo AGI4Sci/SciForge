@@ -5,6 +5,7 @@ import type { ScenarioId } from '../data';
 import { readWorkspaceFile } from '../api/workspaceClient';
 import {
   interactiveArtifactDownloadItems,
+  interactiveArtifactJsonDownloadItem,
   interactiveArtifactInspectorTablePolicy,
   interactiveResultSlotSubtitle,
   interactiveUnknownComponentFallbackPolicy,
@@ -38,6 +39,7 @@ import {
 } from './results-renderer-artifact-normalizer';
 import {
   findArtifact,
+  objectReferenceForArtifactSummary,
   sciForgeReferenceAttribute,
   referenceForArtifact,
 } from '../../../../packages/support/object-references';
@@ -278,7 +280,11 @@ export function RegistrySlot({
         <p className="empty-state">{fallback.detail}</p>
         {fallback.missingArtifactDetail ? <p className="empty-state">{fallback.missingArtifactDetail}</p> : null}
         <ArtifactCardControls
+          artifact={artifact}
           presentationId={item.id}
+          onExportArtifact={artifactCanExportJson(artifact) ? exportArtifactJson : undefined}
+          onFocusArtifact={onObjectReferenceFocus ? (target) => onObjectReferenceFocus(objectReferenceForArtifactSummary(target)) : undefined}
+          onInspectArtifact={onInspectArtifact}
           onDismissResultSlotPresentation={onDismissResultSlotPresentation}
         />
         <UnknownArtifactInspector scenarioId={scenarioId} config={config} session={session} slot={slot} artifact={artifact} />
@@ -294,6 +300,8 @@ export function RegistrySlot({
       <ArtifactCardControls
         artifact={artifact}
         presentationId={item.id}
+        onExportArtifact={artifactCanExportJson(artifact) ? exportArtifactJson : undefined}
+        onFocusArtifact={onObjectReferenceFocus ? (target) => onObjectReferenceFocus(objectReferenceForArtifactSummary(target)) : undefined}
         onInspectArtifact={onInspectArtifact}
         onDismissResultSlotPresentation={onDismissResultSlotPresentation}
       />
@@ -312,4 +320,13 @@ export function RegistrySlot({
       {entry.render({ scenarioId, config, session, slot, artifact, onObjectReferenceFocus })}
     </Card>
   );
+}
+
+function exportArtifactJson(artifact: RuntimeArtifact) {
+  const item = interactiveArtifactJsonDownloadItem(artifact);
+  if (item) exportTextFile(item.name, item.content, item.contentType);
+}
+
+function artifactCanExportJson(artifact?: RuntimeArtifact) {
+  return Boolean(interactiveArtifactJsonDownloadItem(artifact));
 }

@@ -1,0 +1,89 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "dataset-inventory",
+  "sourceRefs": [
+    {
+      "ref": "artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3#2025-setd1b-c2",
+      "role": "source",
+      "summary": "SETD1B broad H3K4me3 claim graph locator."
+    },
+    {
+      "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE242515",
+      "role": "data",
+      "summary": "Official GEO Series page for GSE242515."
+    },
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/results/gse242515-rs4-h3k4me3-domain-stats.json",
+      "role": "table",
+      "summary": "Raw BED domain pilot stats, checksums, parameters, and comparison output."
+    }
+  ],
+  "identifierVerifications": [
+    {
+      "id": "paper-2025-setd1b-identity",
+      "kind": "bibliographic",
+      "doi": "10.1038/s41422-025-01080-0",
+      "pmid": "40033033",
+      "title": "SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development",
+      "year": 2025,
+      "journal": "Cell Research",
+      "verified": true,
+      "status": "verified",
+      "checkedAt": "2026-05-11",
+      "evidenceRefs": [
+        {
+          "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE242515",
+          "role": "data",
+          "summary": "GEO page links the study title and PubMed id."
+        }
+      ]
+    },
+    {
+      "id": "accession-gse242515",
+      "kind": "accession",
+      "database": "GEO",
+      "accession": "GSE242515",
+      "verified": true,
+      "status": "verified",
+      "checkedAt": "2026-05-11",
+      "evidenceRefs": [
+        {
+          "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE242515",
+          "role": "data",
+          "summary": "Official GEO Series page for GSE242515."
+        }
+      ]
+    }
+  ],
+  "datasets": [
+    {
+      "id": "dataset-raw-bed-domain-pilot-gse242515-rs4-h3k4me3",
+      "title": "GSE242515 RS4 WT and Setd1bKO H3K4me3 GEO peak BED files",
+      "sourceRefs": [
+        {
+          "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE242515",
+          "role": "data",
+          "summary": "Official GEO Series page for GSE242515."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/inputs/GSE242515_H3K4me3_RS4_WT_peaks.bed.gz",
+          "role": "data",
+          "summary": "RS4_WT input BED gzip; sha256=1bf74396000eae3bc4593b70882edc2b7d46a9bfeecf485524e69cc01d8f8e5f; bytes=313162."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/inputs/GSE242515_H3K4me3_RS4_Setd1bKO_peaks.bed.gz",
+          "role": "data",
+          "summary": "RS4_Setd1bKO input BED gzip; sha256=9e4bc9618a7a395565a70d2f8dcdc71bc661130b18b2db28532cdc82a222a143; bytes=206123."
+        }
+      ],
+      "availability": "available",
+      "dataTypes": [
+        "GEO supplementary peak BED gzip",
+        "H3K4me3 ChIP-seq derived peaks"
+      ],
+      "license": "Public GEO access; downloaded objects remain in workspace refs and are not vendored into git.",
+      "sizeEstimate": "519285 downloaded input bytes for this pilot.",
+      "accessInstructions": "Use official NCBI GEO FTP supplementary peak BED gzip files for GSE242515; verify checksums before running the merge/count step."
+    }
+  ]
+}

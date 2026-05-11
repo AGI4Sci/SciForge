@@ -1,0 +1,474 @@
+{
+  "contract": "sciforge.scientific-reproduction.mock-dataset-discovery-cases.v1",
+  "description": "Network-free mock cases for generic bioinformatics reproduction dataset discovery. Cases model provider behavior only and contain no large data.",
+  "cases": [
+    {
+      "id": "dataset-discovery-missing",
+      "provider": "mock-dataset-discovery",
+      "network": "disabled",
+      "input": {
+        "paperRef": "fixture:paper/no-accession",
+        "claimRefs": [
+          "fixture:claim/h3k4me3-overlap"
+        ],
+        "discoveryHints": {
+          "accessions": [],
+          "repositories": [
+            "GEO",
+            "SRA",
+            "journal-supplement"
+          ],
+          "assays": [
+            "ChIP-seq"
+          ],
+          "species": [
+            "Mus musculus"
+          ],
+          "genomeBuilds": [
+            "mm10"
+          ],
+          "fileClasses": [
+            "FASTQ",
+            "BAM",
+            "BED",
+            "bigWig"
+          ]
+        },
+        "budget": {
+          "maxDiscoveryProbes": 3,
+          "maxDownloadBytes": 0,
+          "maxCpu": 1,
+          "maxMemoryGb": 1,
+          "maxWallTimeMinutes": 1
+        }
+      },
+      "mockResponse": {
+        "status": "missing",
+        "providerLatencyMs": 12,
+        "attemptedSources": [
+          {
+            "source": "GEO",
+            "identifier": "none-extracted",
+            "availability": "missing",
+            "reason": "No accession was present in the input hints.",
+            "evidenceRef": "fixture:evidence/missing-accession"
+          },
+          {
+            "source": "journal-supplement",
+            "identifier": "supplementary-data",
+            "availability": "missing",
+            "reason": "Only figure images and method prose were described by the fixture.",
+            "evidenceRef": "fixture:evidence/no-supplement-table"
+          }
+        ],
+        "downloadedBytes": 0
+      },
+      "expectedArtifacts": [
+        {
+          "type": "dataset-inventory",
+          "status": "missing-data",
+          "requiredFields": [
+            "missingDatasets",
+            "diagnostics",
+            "notes"
+          ]
+        },
+        {
+          "type": "claim-verdict",
+          "status": "insufficient-evidence",
+          "requiredFields": [
+            "missingEvidenceRefs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dataset-discovery-available",
+      "provider": "mock-dataset-discovery",
+      "network": "disabled",
+      "input": {
+        "paperRef": "fixture:paper/processed-accession",
+        "claimRefs": [
+          "fixture:claim/broad-h3k4me3-expression"
+        ],
+        "discoveryHints": {
+          "accessions": [
+            "GSEMOCK12345"
+          ],
+          "repositories": [
+            "GEO",
+            "journal-supplement"
+          ],
+          "assays": [
+            "ChIP-seq",
+            "RNA-seq"
+          ],
+          "species": [
+            "Mus musculus"
+          ],
+          "genomeBuilds": [
+            "mm10"
+          ],
+          "fileClasses": [
+            "narrowPeak",
+            "broadPeak",
+            "TSV"
+          ]
+        },
+        "budget": {
+          "maxDiscoveryProbes": 4,
+          "maxDownloadBytes": 50000,
+          "maxCpu": 1,
+          "maxMemoryGb": 1,
+          "maxWallTimeMinutes": 2
+        }
+      },
+      "mockResponse": {
+        "status": "available",
+        "providerLatencyMs": 18,
+        "datasetInventory": [
+          {
+            "source": "GEO",
+            "identifier": "GSEMOCK12345",
+            "assay": "ChIP-seq",
+            "species": "Mus musculus",
+            "genomeBuild": "mm10",
+            "fileClass": "broadPeak",
+            "availability": "available",
+            "sizeBytes": 824,
+            "license": "fixture-public-metadata",
+            "dataRef": "fixture:tiny/broad-h3k4me3-domains.tsv",
+            "evidenceRef": "fixture:evidence/geo-processed-table"
+          },
+          {
+            "source": "journal-supplement",
+            "identifier": "supplementary-expression-table",
+            "assay": "RNA-seq",
+            "species": "Mus musculus",
+            "genomeBuild": "mm10",
+            "fileClass": "TSV",
+            "availability": "available",
+            "sizeBytes": 614,
+            "license": "fixture-public-metadata",
+            "dataRef": "fixture:tiny/stage-expression.tsv",
+            "evidenceRef": "fixture:evidence/supplement-expression-table"
+          }
+        ],
+        "downloadedBytes": 0
+      },
+      "expectedArtifacts": [
+        {
+          "type": "dataset-inventory",
+          "status": "ready",
+          "requiredFields": [
+            "source",
+            "identifier",
+            "assay",
+            "fileClass",
+            "availability",
+            "sizeBytes",
+            "evidenceRef"
+          ]
+        },
+        {
+          "type": "analysis-plan",
+          "status": "ready",
+          "requiredFields": [
+            "analysisUnits",
+            "toolClass",
+            "inputRefs",
+            "budget"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dataset-discovery-timeout",
+      "provider": "mock-dataset-discovery",
+      "network": "disabled",
+      "input": {
+        "paperRef": "fixture:paper/slow-provider",
+        "claimRefs": [
+          "fixture:claim/dsb-hotspot-fate"
+        ],
+        "discoveryHints": {
+          "accessions": [
+            "SRPMOCK99999"
+          ],
+          "repositories": [
+            "SRA",
+            "ENA"
+          ],
+          "assays": [
+            "DMC1 ssDNA-seq"
+          ],
+          "species": [
+            "Mus musculus"
+          ],
+          "genomeBuilds": [
+            "mm10"
+          ],
+          "fileClasses": [
+            "FASTQ",
+            "BAM"
+          ]
+        },
+        "budget": {
+          "maxDiscoveryProbes": 2,
+          "maxDownloadBytes": 0,
+          "maxCpu": 1,
+          "maxMemoryGb": 1,
+          "maxWallTimeMinutes": 0.1
+        }
+      },
+      "mockResponse": {
+        "status": "timeout",
+        "providerLatencyMs": 65000,
+        "timeoutMs": 5000,
+        "attemptedSources": [
+          {
+            "source": "SRA",
+            "identifier": "SRPMOCK99999",
+            "availability": "timeout",
+            "reason": "Mock provider exceeded the discovery timeout before metadata could be confirmed.",
+            "evidenceRef": "fixture:evidence/sra-timeout"
+          }
+        ],
+        "degradationAction": "metadata-only-or-missing-data",
+        "downloadedBytes": 0
+      },
+      "expectedArtifacts": [
+        {
+          "type": "dataset-inventory",
+          "status": "timeout",
+          "requiredFields": [
+            "missingDatasets",
+            "diagnostics",
+            "notes"
+          ]
+        },
+        {
+          "type": "dataset-inventory",
+          "status": "partial",
+          "requiredFields": [
+            "source",
+            "identifier",
+            "availability",
+            "evidenceRef"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "raw-reanalysis-escalation-preflight",
+      "provider": "mock-dataset-discovery",
+      "network": "disabled",
+      "input": {
+        "paperRef": "fixture:paper/raw-reanalysis-escalation",
+        "claimRefs": [
+          "fixture:claim/raw-reanalysis-claim"
+        ],
+        "discoveryHints": {
+          "accessions": [
+            "GSEMOCKRAW000"
+          ],
+          "repositories": [
+            "GEO",
+            "SRA",
+            "ENA"
+          ],
+          "assays": [
+            "ChIP-seq",
+            "RNA-seq"
+          ],
+          "species": [
+            "generic species"
+          ],
+          "genomeBuilds": [
+            "fixture-genome-build"
+          ],
+          "fileClasses": [
+            "FASTQ",
+            "BAM",
+            "CRAM"
+          ]
+        },
+        "budget": {
+          "maxDiscoveryProbes": 4,
+          "maxDownloadBytes": 0,
+          "maxCpu": 1,
+          "maxMemoryGb": 1,
+          "maxWallTimeMinutes": 1
+        },
+        "environmentProfile": {
+          "network": "disabled",
+          "availableToolClasses": [
+            "fastq-qc",
+            "read-alignment",
+            "coverage-and-counts"
+          ],
+          "genomeCaches": [
+            "fixture:genome-cache-plan"
+          ],
+          "annotationCaches": [
+            "fixture:annotation-cache-plan"
+          ]
+        }
+      },
+      "mockResponse": {
+        "status": "preflight-blocked",
+        "providerLatencyMs": 9,
+        "downloadedBytes": 0,
+        "preflight": {
+          "rawExecutionGateAllowed": false,
+          "approvalStatus": "needs-human",
+          "rawExecutionStatus": "blocked",
+          "requestedFileClasses": [
+            "FASTQ",
+            "BAM",
+            "CRAM"
+          ],
+          "reanalysisIntent": "figure-reproduction",
+          "stopBeforeExecutionUnlessReady": true,
+          "reason": "Raw FASTQ/BAM/CRAM reanalysis is only planned; no approval, positive budget, or materialized execution evidence is attached."
+        }
+      },
+      "expectedArtifacts": [
+        {
+          "type": "dataset-inventory",
+          "status": "preflight",
+          "requiredFields": [
+            "identifierVerifications",
+            "datasets",
+            "sourceRefs"
+          ]
+        },
+        {
+          "type": "raw-data-readiness-dossier",
+          "status": "blocked",
+          "requiredFields": [
+            "rawExecutionGate",
+            "n6Escalation",
+            "readinessChecks"
+          ]
+        },
+        {
+          "type": "analysis-plan",
+          "status": "preflight",
+          "requiredFields": [
+            "steps",
+            "fallbackPolicy",
+            "expectedArtifacts"
+          ]
+        },
+        {
+          "type": "claim-verdict",
+          "status": "insufficient-evidence",
+          "requiredFields": [
+            "missingEvidence",
+            "supportingEvidenceRefs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "raw-reanalysis-execution-readiness-dry-run",
+      "provider": "mock-dataset-discovery",
+      "network": "disabled",
+      "input": {
+        "paperRef": "fixture:paper/n8-execution-readiness",
+        "claimRefs": [
+          "fixture:claim/raw-reanalysis-claim"
+        ],
+        "discoveryHints": {
+          "accessions": [
+            "GSEMOCKRAW000"
+          ],
+          "repositories": [
+            "GEO",
+            "SRA",
+            "ENA"
+          ],
+          "assays": [
+            "ChIP-seq"
+          ],
+          "species": [
+            "generic species"
+          ],
+          "genomeBuilds": [
+            "fixture-genome-build"
+          ],
+          "fileClasses": [
+            "FASTQ",
+            "BAM",
+            "CRAM"
+          ]
+        },
+        "budget": {
+          "maxDiscoveryProbes": 4,
+          "maxDownloadBytes": 0,
+          "maxCpu": 1,
+          "maxMemoryGb": 1,
+          "maxWallTimeMinutes": 1
+        },
+        "environmentProfile": {
+          "network": "disabled",
+          "availableToolClasses": [
+            "fastq-qc",
+            "read-alignment",
+            "coverage-and-counts"
+          ],
+          "genomeCaches": [
+            "fixture:genome-cache-plan"
+          ],
+          "annotationCaches": [
+            "fixture:annotation-cache-plan"
+          ]
+        }
+      },
+      "mockResponse": {
+        "status": "execution-readiness-dry-run",
+        "providerLatencyMs": 11,
+        "downloadedBytes": 0,
+        "preflight": {
+          "rawExecutionGateAllowed": false,
+          "fixtureExecutionGateAllowed": true,
+          "approvalStatus": "needs-human",
+          "rawExecutionStatus": "blocked",
+          "readinessMode": "offline-fixture-dry-run",
+          "stopBeforeLiveDownload": true,
+          "reason": "Command wiring and output contracts are exercised against tiny offline fixtures only."
+        }
+      },
+      "expectedArtifacts": [
+        {
+          "type": "raw-data-readiness-dossier",
+          "status": "blocked",
+          "requiredFields": [
+            "rawExecutionGate",
+            "n6Escalation",
+            "n8ExecutionReadiness",
+            "readinessChecks"
+          ]
+        },
+        {
+          "type": "analysis-notebook",
+          "status": "success",
+          "requiredFields": [
+            "notebookRefs",
+            "environmentRefs",
+            "cells"
+          ]
+        },
+        {
+          "type": "claim-verdict",
+          "status": "insufficient-evidence",
+          "requiredFields": [
+            "missingEvidence",
+            "supportingEvidenceRefs"
+          ]
+        }
+      ]
+    }
+  ]
+}

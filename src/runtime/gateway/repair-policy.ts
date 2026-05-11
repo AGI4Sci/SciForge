@@ -73,6 +73,40 @@ export function repairNeededPayload(
   const displayReason = isContractValidationFailure(repairFailure)
     ? validationFailurePrompt(repairFailure)
     : backendFailurePrompt(repairFailure);
+  const artifactId = `${request.skillDomain}-runtime-result`;
+  const executionUnit = {
+    id,
+    tool: WORKSPACE_RUNTIME_GATEWAY_REPAIR_TOOL_ID,
+    params: JSON.stringify(repairParams(request, skill, repairFailure)),
+    status: 'repair-needed',
+    hash: sha1(`${id}:${repairReason}`).slice(0, 12),
+    time: new Date().toISOString(),
+    environment: 'SciForge workspace runtime gateway',
+    inputData: [request.prompt],
+    outputArtifacts: [artifactId],
+    artifacts: [artifactId],
+    codeRef: refs.taskRel,
+    outputRef: refs.outputRel,
+    stdoutRef: refs.stdoutRel,
+    stderrRef: refs.stderrRel,
+    blocker: refs.blocker,
+    refs: {
+      ...refs.agentServerRefs,
+      ...(validationFailure ? { validationFailure } : { backendFailure }),
+      diagnostic: {
+        kind: diagnostic.kind,
+        categories: diagnostic.categories,
+        title: diagnostic.title,
+        evidenceRefs,
+      },
+    },
+    failureReason: displayReason,
+    ...planRefs,
+    requiredInputs: requiredInputsForRepair(request, repairFailure),
+    recoverActions,
+    nextStep,
+    attempt: 1,
+  };
   return {
     message: `SciForge runtime gateway needs repair or AgentServer task generation: ${displayReason}`,
     confidence: 0.2,
@@ -93,41 +127,64 @@ export function repairNeededPayload(
       opposingRefs: [],
     }],
     uiManifest: [defaultRepairDiagnosticSlot(request)],
-    executionUnits: [{
-      id,
-      tool: WORKSPACE_RUNTIME_GATEWAY_REPAIR_TOOL_ID,
-      params: JSON.stringify(repairParams(request, skill, repairFailure)),
-      status: 'repair-needed',
-      hash: sha1(`${id}:${repairReason}`).slice(0, 12),
-      time: new Date().toISOString(),
-      environment: 'SciForge workspace runtime gateway',
-      inputData: [request.prompt],
-      outputArtifacts: [],
-      artifacts: [],
-      codeRef: refs.taskRel,
-      outputRef: refs.outputRel,
-      stdoutRef: refs.stdoutRel,
-      stderrRef: refs.stderrRel,
-      blocker: refs.blocker,
-      refs: {
-        ...refs.agentServerRefs,
-        ...(validationFailure ? { validationFailure } : { backendFailure }),
-        diagnostic: {
-          kind: diagnostic.kind,
-          categories: diagnostic.categories,
-          title: diagnostic.title,
-          evidenceRefs,
-        },
-      },
-      failureReason: displayReason,
-      ...planRefs,
-      requiredInputs: requiredInputsForRepair(request, repairFailure),
+    executionUnits: [executionUnit],
+    objectReferences: objectReferencesForEvidence(id, evidenceRefs),
+    artifacts: [repairDiagnosticArtifact({
+      artifactId,
+      request,
+      skill,
+      repairFailure,
+      diagnostic,
+      displayReason,
+      executionUnit,
+      evidenceRefs,
       recoverActions,
       nextStep,
-      attempt: 1,
-    }],
-    objectReferences: objectReferencesForEvidence(id, evidenceRefs),
-    artifacts: [],
+    })],
+  };
+}
+
+function repairDiagnosticArtifact(input: {
+  artifactId: string;
+  request: GatewayRequest;
+  skill: SkillAvailability;
+  repairFailure: StructuredRepairFailure;
+  diagnostic: AgentServerBackendFailureDiagnostic;
+  displayReason: string;
+  executionUnit: Record<string, unknown>;
+  evidenceRefs: string[];
+  recoverActions: string[];
+  nextStep: string;
+}): Record<string, unknown> {
+  return {
+    id: input.artifactId,
+    type: 'runtime-diagnostic',
+    schemaVersion: 'sciforge.runtime-diagnostic.v1',
+    data: {
+      status: 'repair-needed',
+      skillDomain: input.request.skillDomain,
+      skillId: input.skill.id,
+      message: input.displayReason,
+      failure: input.repairFailure,
+      diagnostic: {
+        kind: input.diagnostic.kind,
+        categories: input.diagnostic.categories,
+        title: input.diagnostic.title,
+        message: input.diagnostic.message,
+      },
+      executionUnits: [input.executionUnit],
+      evidenceRefs: input.evidenceRefs,
+      recoverActions: input.recoverActions,
+      nextStep: input.nextStep,
+    },
+    metadata: {
+      status: 'repair-needed',
+      failureKind: input.repairFailure.failureKind,
+      diagnosticKind: input.diagnostic.kind,
+      source: 'workspace-runtime-repair-policy',
+      producerSkillId: input.skill.id,
+      createdAt: new Date().toISOString(),
+    },
   };
 }
 

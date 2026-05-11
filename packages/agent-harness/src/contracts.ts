@@ -231,6 +231,7 @@ export interface VerificationDecision {
   requireCitations?: boolean;
   requireCurrentRefs?: boolean;
   requireArtifactRefs?: boolean;
+  selectedVerifierIds?: string[];
 }
 
 export interface VerificationPolicy {
@@ -238,6 +239,7 @@ export interface VerificationPolicy {
   requireCitations: boolean;
   requireCurrentRefs: boolean;
   requireArtifactRefs: boolean;
+  selectedVerifierIds?: string[];
 }
 
 export interface RepairDecision {

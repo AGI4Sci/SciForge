@@ -9,14 +9,14 @@ export const manifest: UIComponentManifest = {
   componentId: 'record-table',
   lifecycle: 'validated',
   outputArtifactTypes: ['record-set', 'data-table'],
-  acceptsArtifactTypes: ['record-set', 'data-table', 'table', 'dataframe', 'annotation-table', 'runtime-artifact', 'knowledge-graph', 'sequence-alignment'],
+  acceptsArtifactTypes: ['record-set', 'data-table', 'table', 'dataframe', 'annotation-table', 'dataset-inventory', 'runtime-artifact', 'knowledge-graph', 'sequence-alignment'],
   requiredAnyFields: [['rows', 'records', 'items', 'papers', 'nodes', 'sequences']],
   viewParams: ['filter', 'sort', 'limit', 'group', 'columnOrder'],
   interactionEvents: ['select-row'],
   roleDefaults: ['bioinformatician', 'pi'],
   fallbackModuleIds: ['generic-artifact-inspector'],
   defaultSection: 'raw',
-  priority: 90,
+  priority: 35,
   safety: { sandbox: false, externalResources: 'none', executesCode: false },
   presentation: {
     dedupeScope: 'collection',
@@ -24,7 +24,7 @@ export const manifest: UIComponentManifest = {
   },
   docs: {
     readmePath: 'packages/presentation/components/record-table/README.md',
-    agentSummary: 'Use for safe tabular rendering of record-set/table/dataframe payloads. Historical data-table aliases should route here.',
+    agentSummary: 'Use for safe tabular rendering of record-set/table/dataframe payloads, including dataset inventories. Historical data-table aliases should route here.',
   },
   workbenchDemo: {
     artifactType: 'record-set',

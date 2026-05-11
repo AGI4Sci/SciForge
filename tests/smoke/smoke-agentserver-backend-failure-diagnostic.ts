@@ -76,6 +76,11 @@ try {
   assert.doesNotMatch(result.message, /taskFiles and entrypoint/i);
   assert.doesNotMatch(result.message, /secret-123|localhost:8767/i);
   assert.ok(result.executionUnits.some((unit) => isRecord(unit) && unit.status === 'repair-needed'));
+  const diagnosticArtifact = result.artifacts.find((artifact) => isRecord(artifact) && artifact.id === 'literature-runtime-result');
+  assert.ok(isRecord(diagnosticArtifact), 'backend failure must expose a structured runtime diagnostic artifact for the result panel');
+  assert.equal(diagnosticArtifact.type, 'runtime-diagnostic');
+  assert.ok(result.uiManifest.some((slot) => isRecord(slot) && slot.artifactRef === 'literature-runtime-result'));
+  assert.match(JSON.stringify(diagnosticArtifact.data), /401 Unauthorized|Invalid token/i);
 console.log('[ok] AgentServer backend failures surface as actionable diagnostics, not protocol-shape errors');
 } finally {
   await new Promise<void>((resolve) => server.close(() => resolve()));

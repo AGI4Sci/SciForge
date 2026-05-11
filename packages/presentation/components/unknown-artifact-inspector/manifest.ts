@@ -9,8 +9,8 @@ export const manifest: UIComponentManifest = {
   componentId: 'unknown-artifact-inspector',
   lifecycle: 'published',
   acceptsArtifactTypes: ['*'],
-  viewParams: ['filter', 'sort', 'limit'],
-  interactionEvents: ['open-ref'],
+  viewParams: ['filter', 'sort', 'limit', 'export', 'compare'],
+  interactionEvents: ['open-ref', 'copy-ref', 'inspect-metadata', 'export-json', 'pin', 'compare', 'follow-up'],
   roleDefaults: ['bioinformatician', 'pi'],
   fallbackModuleIds: [],
   defaultSection: 'raw',
@@ -19,7 +19,7 @@ export const manifest: UIComponentManifest = {
   presentation: { dedupeScope: 'none' },
   docs: {
     readmePath: 'packages/presentation/components/unknown-artifact-inspector/README.md',
-    agentSummary: 'Use as the safe fallback for unsupported artifact, file, log, JSON, or ref objects. Does not execute code.',
+    agentSummary: 'Use as the safe fallback for unsupported artifact, partial result, validation failure, file, log, JSON, or ref objects. Exposes stable ref, compare, follow-up, metadata inspection, and JSON export actions without executing code.',
   },
   workbenchDemo: {
     artifactType: 'runtime-artifact',

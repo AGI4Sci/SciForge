@@ -1,0 +1,78 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "claim-verdict",
+  "sourceRefs": [
+    {
+      "ref": "artifact:2020-prdm9-dsb-fate.figure-reproduction-report",
+      "role": "source",
+      "summary": "First-pass bounded reproduction of stage-specific Table S3 counts."
+    },
+    {
+      "ref": "artifact:2020-prdm9-dsb-fate.evidence-matrix",
+      "role": "source",
+      "summary": "Evidence matrix separating table-level reproduction from missing PRDM9, NOMe, and fate evidence."
+    },
+    {
+      "ref": "artifact:missing-data-report-draft#negativeResultBoundary",
+      "role": "source",
+      "summary": "Worker C boundary: operational/data gaps are not scientific contradictions."
+    }
+  ],
+  "claimId": "2020-prdm9-c3+c4+c6",
+  "verdict": "partially-reproduced",
+  "rationale": "Using only existing local evidence, the stage-specific de novo H3K4me3 peak counts and DSB-hotspot-associated counts from Supplementary Table S3 are reproduced at table level. The broader PRDM9 binding, NOMe/open-chromatin, and CO/NCO fate interpretation remains insufficiently evidenced in this pass because the required interval files, signal matrices, direct fate outcomes, and original source code were not materialized.",
+  "supportingEvidenceRefs": [
+    {
+      "ref": "artifact:2020-prdm9-dsb-fate.figure-reproduction-report#stage-count-table",
+      "role": "figure",
+      "summary": "Counts match the paper-reported Table S3/Fig. 2 stage numbers for five locally available stages."
+    },
+    {
+      "ref": "artifact:2020-prdm9-dsb-fate.evidence-matrix#row-2020-c3-stage-h3k4me3-counts",
+      "role": "verifier",
+      "summary": "Evidence matrix row marking the stage-specific H3K4me3 count check as partially reproduced."
+    }
+  ],
+  "contradictingEvidenceRefs": [],
+  "missingEvidence": [
+    {
+      "summary": "PRDM9 affinity-seq binding intervals or motif-analysis outputs were not locally materialized, so the reported 11716/16540 PRDM9-binding overlap was not reproduced.",
+      "refs": [
+        {
+          "ref": "artifact:2020-prdm9-dsb-fate.evidence-matrix#row-2020-c1-prdm9-binding-overlap",
+          "role": "verifier"
+        }
+      ]
+    },
+    {
+      "summary": "Four-class H3K4me3 half-life reconstruction and known CO hotspot overlap were not reproduced, so the CO/NCO fate model is not directly supported by this run.",
+      "refs": [
+        {
+          "ref": "artifact:2020-prdm9-dsb-fate.evidence-matrix#row-2020-c4-dsb-fate-model",
+          "role": "verifier"
+        }
+      ]
+    },
+    {
+      "summary": "NOMe-seq GCH methylation matrices, NDR calls, and accessibility-ratio statistics were not available in the local subset.",
+      "refs": [
+        {
+          "ref": "artifact:2020-prdm9-dsb-fate.evidence-matrix#row-2020-c6-open-chromatin-fate",
+          "role": "verifier"
+        }
+      ]
+    },
+    {
+      "summary": "Original 2020 source code is request-only, limiting exact reproduction of filtering, overlap, and plotting decisions.",
+      "refs": [
+        {
+          "ref": "artifact:missing-data-report-draft#missing-2020-source-code",
+          "role": "code"
+        }
+      ]
+    }
+  ],
+  "notes": [
+    "Conservative conclusion: partial supplement-table reproduction, insufficient evidence for the full DSB fate mechanism, and no scientific negative result yet."
+  ]
+}

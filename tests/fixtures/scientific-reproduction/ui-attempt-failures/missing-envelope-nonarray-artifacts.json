@@ -1,0 +1,107 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.ui-attempt-failure.v1",
+  "fixtureKind": "scientific-reproduction-ui-attempt-failure",
+  "id": "missing-envelope-nonarray-artifacts",
+  "description": "A generated scientific reproduction UI attempt produced useful partial science outputs but missed the ToolPayload envelope and emitted artifacts as an object map.",
+  "failedAttempt": {
+    "runRef": "run:scientific-reproduction-ui-attempt-001",
+    "outputRef": "file:.sciforge/task-results/scientific-reproduction-ui-attempt-001.json",
+    "stdoutRef": "file:.sciforge/logs/scientific-reproduction-ui-attempt-001.stdout.log",
+    "stderrRef": "file:.sciforge/logs/scientific-reproduction-ui-attempt-001.stderr.log",
+    "rawPayload": {
+      "confidence": 0.63,
+      "claimType": "scientific-reproduction",
+      "evidenceLevel": "partial-runtime",
+      "reasoningTrace": "Parsed source figure and ran a bounded mock reproduction, but returned a task-result object instead of the SciForge ToolPayload envelope.",
+      "executionUnits": [
+        {
+          "id": "extract-claims",
+          "status": "done",
+          "tool": "scientific-reproduction.mock.extract",
+          "outputArtifacts": [
+            "claim-verdict-partial"
+          ]
+        },
+        {
+          "id": "render-ui-attempt",
+          "status": "done",
+          "tool": "scientific-reproduction.mock.ui"
+        }
+      ],
+      "artifacts": {
+        "claim-verdict-partial": {
+          "id": "claim-verdict-partial",
+          "type": "claim-verdict",
+          "data": {
+            "verdict": "partially-reproduced",
+            "claims": [
+              {
+                "id": "claim-ptm-shift",
+                "text": "The perturbation shifts a measured chromatin signal in the reported direction.",
+                "evidenceRefs": [
+                  "artifact:evidence-matrix-partial#claim-ptm-shift",
+                  "file:.sciforge/artifacts/partial-figure-stats.json"
+                ]
+              }
+            ]
+          },
+          "evidenceRefs": [
+            "file:.sciforge/artifacts/partial-figure-stats.json"
+          ],
+          "traceRefs": [
+            "run:scientific-reproduction-ui-attempt-001#extract-claims"
+          ]
+        },
+        "figure-report-partial": {
+          "id": "figure-report-partial",
+          "type": "figure-reproduction-report",
+          "data": {
+            "verdict": "partially-reproduced",
+            "figures": [
+              {
+                "figureId": "figure-2a",
+                "codeRef": "file:.sciforge/tasks/mock-reproduce-figure.py",
+                "inputDataRefs": [
+                  "artifact:dataset-inventory-partial#normalized-table"
+                ],
+                "stdoutRef": "file:.sciforge/logs/scientific-reproduction-ui-attempt-001.stdout.log",
+                "stderrRef": "file:.sciforge/logs/scientific-reproduction-ui-attempt-001.stderr.log",
+                "evidenceRefs": [
+                  "file:.sciforge/artifacts/partial-reproduced-figure.png"
+                ]
+              }
+            ]
+          },
+          "evidenceRefs": [
+            "file:.sciforge/artifacts/partial-reproduced-figure.png"
+          ],
+          "traceRefs": [
+            "run:scientific-reproduction-ui-attempt-001#figure-report"
+          ]
+        }
+      }
+    }
+  },
+  "expectedContractFailures": [
+    "missing message",
+    "missing claims",
+    "missing uiManifest",
+    "artifacts must be an array"
+  ],
+  "partialScientificOutputs": {
+    "artifactIds": [
+      "claim-verdict-partial",
+      "figure-report-partial"
+    ],
+    "diagnosticRefs": [
+      "file:.sciforge/task-results/scientific-reproduction-ui-attempt-001.json",
+      "file:.sciforge/logs/scientific-reproduction-ui-attempt-001.stdout.log",
+      "file:.sciforge/logs/scientific-reproduction-ui-attempt-001.stderr.log"
+    ],
+    "traceRefs": [
+      "run:scientific-reproduction-ui-attempt-001#extract-claims",
+      "run:scientific-reproduction-ui-attempt-001#figure-report"
+    ],
+    "preservationPolicy": "Do not promote this malformed payload to completed UI results. Keep partial scientific outputs as artifact/trace refs for verifier diagnostics and repair handoff."
+  }
+}

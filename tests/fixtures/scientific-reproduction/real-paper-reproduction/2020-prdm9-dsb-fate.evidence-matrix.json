@@ -1,0 +1,163 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "evidence-matrix",
+  "sourceRefs": [
+    {
+      "ref": "artifact:2020-prdm9-dsb-fate.figure-reproduction-report",
+      "role": "source",
+      "summary": "First-pass bounded figure reproduction from local Supplementary Table S3."
+    },
+    {
+      "ref": "artifact:dataset-inventory-draft#dataset-2020-supplement-tables",
+      "role": "source",
+      "summary": "Worker C inventory for local 2020 supplementary tables."
+    },
+    {
+      "ref": "artifact:missing-data-report-draft#missing-2020-source-code",
+      "role": "source",
+      "summary": "Worker C missing-data report noting that the original 2020 source code is available upon request."
+    }
+  ],
+  "rows": [
+    {
+      "id": "row-2020-c3-stage-h3k4me3-counts",
+      "claimId": "2020-prdm9-c3",
+      "evidenceRefs": [
+        {
+          "ref": "artifact:2020-prdm9-dsb-fate.figure-reproduction-report#stage-count-table",
+          "role": "figure",
+          "summary": "Local Table S3 count audit reproduces the stage-specific de novo H3K4me3 peak counts and hotspot-associated counts for five stages."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=115-148",
+          "role": "source",
+          "summary": "Paper text reporting the same stage counts and hotspot-associated H3K4me3 counts."
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=517-547",
+          "role": "method",
+          "summary": "Paper methods for H3K4me3 peak calling and classification."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2020/table-s3.xlsx",
+          "role": "data",
+          "summary": "Supplementary Table S3 input used for the count check."
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "analysis-session:2026-05-11-worker-b#xlsx-xml-stage-count-parser",
+          "role": "code",
+          "summary": "Standard-library xlsx XML parser used for the bounded table count check."
+        }
+      ],
+      "verdict": "partially-reproduced",
+      "rationale": "The locally available supplement table exactly supports the reported stage-specific de novo H3K4me3 peak counts and hotspot-associated H3K4me3 counts, but this is table-level verification rather than a raw ChIP-seq peak-calling rerun."
+    },
+    {
+      "id": "row-2020-c1-prdm9-binding-overlap",
+      "claimId": "2020-prdm9-c1",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=139-145",
+          "role": "source",
+          "summary": "Paper reports PRDM9 motif enrichment and 11716 of 16540 newly generated H3K4me3 marks overlapping PRDM9-binding sites."
+        },
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2020-gse61613-prdm9-affinity",
+          "role": "data",
+          "summary": "PRDM9 affinity-seq accession was inventoried but not materialized."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2020-gse61613-prdm9-affinity",
+          "role": "data"
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "artifact:missing-data-report-draft#missing-2020-source-code",
+          "role": "code",
+          "summary": "Original source code is request-only; overlap reimplementation was not run."
+        }
+      ],
+      "verdict": "insufficient-evidence",
+      "rationale": "The claim is textually supported and data accessions are known, but the local supplement subset does not include PRDM9 affinity-seq binding intervals or motif-analysis outputs, so the PRDM9-overlap component is not reproduced."
+    },
+    {
+      "id": "row-2020-c4-dsb-fate-model",
+      "claimId": "2020-prdm9-c4",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=248-290",
+          "role": "source",
+          "summary": "Paper connects four hotspot-associated H3K4me3 temporal classes to a CO/NCO fate model."
+        },
+        {
+          "ref": "artifact:2020-prdm9-dsb-fate.figure-reproduction-report#stage-count-table",
+          "role": "table",
+          "summary": "Stage-count check supports the time-course universe but not the four-class half-life or CO/NCO outcome analysis."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2020/table-s3.xlsx",
+          "role": "data"
+        },
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2020-gse84689-spo11",
+          "role": "data",
+          "summary": "SPO11 hotspot data were inventoried but not materialized as intervals."
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "artifact:missing-data-report-draft#missing-2020-source-code",
+          "role": "code"
+        }
+      ],
+      "verdict": "insufficient-evidence",
+      "rationale": "The supplement-table count check is consistent with the temporal setup, but fate assignment requires four-class half-life reconstruction, known CO hotspot overlap, and preferably direct CO/NCO outcome evidence. Those analyses were not possible from the local subset alone."
+    },
+    {
+      "id": "row-2020-c6-open-chromatin-fate",
+      "claimId": "2020-prdm9-c6",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=300-360",
+          "role": "source",
+          "summary": "Paper reports NDR/accessibility differences and links early-forming H3K4me3 regions to a more open chromatin state."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=490-503",
+          "role": "method",
+          "summary": "Paper defines NDR detection from NOMe-seq GCH methylation."
+        }
+      ],
+      "dataRefs": [
+        {
+          "ref": "artifact:dataset-inventory-draft#dataset-2020-gse132446",
+          "role": "data",
+          "summary": "GSE132446 contains NOMe-seq data, but the relevant processed matrices were not downloaded."
+        }
+      ],
+      "codeRefs": [
+        {
+          "ref": "artifact:missing-data-report-draft#missing-2020-source-code",
+          "role": "code"
+        }
+      ],
+      "verdict": "insufficient-evidence",
+      "rationale": "The local supplements checked here do not contain GCH methylation matrices, NDR calls, or accessibility-ratio outputs, so the open-chromatin/fate component remains untested."
+    }
+  ],
+  "diagnostics": [
+    "The strongest local result is partial reproduction of Table S3 stage and DSB-hotspot counts.",
+    "No row is marked not-reproduced or contradicted because no computed disagreement with the paper has been established."
+  ]
+}

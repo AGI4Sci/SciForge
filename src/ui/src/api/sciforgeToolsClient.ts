@@ -16,6 +16,7 @@ import {
   projectToolStartedEvent,
   type SilentStreamDecisionRecord,
 } from '@sciforge-ui/runtime-contract';
+import { selectedToolContractForRuntime } from '@sciforge-skill/packages/tool-skills-runtime';
 import {
   contextWindowTelemetryEvent,
   normalizeWorkspaceRuntimeEvent,
@@ -533,41 +534,7 @@ function selectedRuntimeVerifierIds(input: SendAgentMessageInput) {
 }
 
 function selectedRuntimeToolContracts(selectedToolIds: string[]) {
-  return selectedToolIds.flatMap((toolId) => {
-    if (toolId !== 'local.vision-sense') return [{ id: toolId, selected: true }];
-    return [{
-      id: 'local.vision-sense',
-      selected: true,
-      kind: 'sense-plugin',
-      modality: 'vision',
-      packageRoot: 'packages/observe/vision',
-      readmePath: 'packages/skills/tool_skills/local/vision-sense/SKILL.md',
-      skillTemplate: 'packages/skills/installed/local/vision-gui-task/SKILL.md',
-      inputContract: {
-        textField: 'text',
-        modalitiesField: 'modalities',
-        acceptedModalities: ['screenshot', 'image'],
-      },
-      outputContract: {
-        kind: 'text',
-        formats: ['text/plain', 'application/json', 'application/x-ndjson'],
-        actions: ['click', 'type_text', 'press_key', 'scroll', 'wait'],
-      },
-      executionBoundary: 'text-signal-only',
-      missingRuntimeBridgePolicy: {
-        behavior: 'diagnose-or-fail-closed',
-        reason: 'local.vision-sense only emits auditable text signals and trace refs; a browser/desktop executor bridge plus screenshot source must execute real GUI actions.',
-        noFallbackRepoScan: true,
-        expectedFailureUnit: 'Return failed-with-reason when no GUI executor/screenshot bridge is configured for this run.',
-      },
-      computerUsePolicy: {
-        executorOwnedBy: 'upstream Computer Use provider or browser/desktop adapter',
-        noDomOrAccessibilityReads: true,
-        highRiskPolicy: 'reject unless explicitly confirmed upstream',
-        tracePolicy: 'preserve screenshot refs, planned action, grounding summary, execution status, pixel diff, and failureReason; never inline screenshot base64 into chat context',
-      },
-    }];
-  });
+  return selectedToolIds.map(selectedToolContractForRuntime);
 }
 
 function buildReferencePolicy(references: Array<Record<string, unknown>>) {

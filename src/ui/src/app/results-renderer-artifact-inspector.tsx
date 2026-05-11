@@ -4,6 +4,7 @@ import { interactiveArtifactDownloadItems } from '../../../../packages/presentat
 import { Badge } from './uiPrimitives';
 import { artifactSource } from './results/resultArtifactHelpers';
 import { artifactInspectorModel } from './results-renderer-artifact-normalizer';
+import { exportTextFile } from './exportUtils';
 
 export function ArtifactInspectorDrawer({
   scenarioId,
@@ -18,11 +19,12 @@ export function ArtifactInspectorDrawer({
   onClose: () => void;
   onArtifactHandoff: (targetScenario: ScenarioId, artifact: RuntimeArtifact) => void;
 }) {
+  const downloads = interactiveArtifactDownloadItems(artifact);
   const { files, handoffTargets, lineage } = artifactInspectorModel({
     artifact,
     session,
     currentScenarioId: scenarioId,
-    downloads: interactiveArtifactDownloadItems(artifact),
+    downloads,
   });
   return (
     <div className="artifact-inspector-layer">
@@ -60,6 +62,22 @@ export function ArtifactInspectorDrawer({
             <p className="empty-state">没有可复现文件引用；请检查 ExecutionUnit 是否写入 code/stdout/stderr/output refs。</p>
           )}
         </section>
+        {downloads.length ? (
+          <section>
+            <h3>Export</h3>
+            <div className="artifact-card-actions">
+              {downloads.map((item) => (
+                <button
+                  key={`${item.name}-${item.path ?? item.key ?? ''}`}
+                  type="button"
+                  onClick={() => exportTextFile(item.name, item.content, item.contentType)}
+                >
+                  {item.name}{typeof item.rowCount === 'number' ? ` · ${item.rowCount} rows` : ''}
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
         <section>
           <h3>Preview</h3>
           <pre className="inspector-json">{JSON.stringify(artifact.data ?? artifact, null, 2)}</pre>

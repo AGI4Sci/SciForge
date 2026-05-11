@@ -467,6 +467,9 @@ try {
   const repair = repairNeededPayload(request, skill, 'AgentServer base URL missing', {});
   assert.equal(repair.executionUnits[0].status, 'repair-needed');
   assert.ok(String(repair.executionUnits[0].params).includes('AgentServer base URL missing'));
+  assert.equal(repair.artifacts[0]?.id, 'literature-runtime-result');
+  assert.equal(repair.artifacts[0]?.type, 'runtime-diagnostic');
+  assert.equal(repair.uiManifest[0]?.artifactRef, 'literature-runtime-result');
 
   const generatedPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
     request,

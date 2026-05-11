@@ -1,0 +1,168 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "figure-reproduction-report",
+  "sourceRefs": [
+    {
+      "ref": "artifact:paper-claim-graph-2020-prdm9-dsb-fate#2020-prdm9-c3",
+      "role": "source",
+      "summary": "Claim graph entry for temporal dynamics of PRDM9-mediated H3K4me3."
+    },
+    {
+      "ref": "artifact:figure-to-claim-map-2020-prdm9-dsb-fate#2020-prdm9-fig2",
+      "role": "source",
+      "summary": "Figure map entry for Fig. 2 stage-specific PRDM9-mediated H3K4me3 dynamics."
+    },
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/text/2020-prdm9.txt#lines=113-148",
+      "role": "source",
+      "summary": "Paper text reporting stage-specific peak counts and DSB-hotspot-associated H3K4me3 counts."
+    }
+  ],
+  "figureId": "2020-prdm9-fig2",
+  "claimIds": [
+    "2020-prdm9-c3",
+    "2020-prdm9-c4"
+  ],
+  "inputRefs": [
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2020/table-s3.xlsx",
+      "role": "table",
+      "summary": "Supplementary Table S3 stage-specific de novo H3K4me3 peak lists and DSB-hotspot Yes/No annotations."
+    }
+  ],
+  "inputDataRefs": [
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/reproduction-worker-c/supplements/2020/table-s3.xlsx",
+      "role": "data",
+      "summary": "Local supplementary-table input used for the bounded stage-count reproduction."
+    }
+  ],
+  "codeRefs": [
+    {
+      "ref": "analysis-session:2026-05-11-worker-b#xlsx-xml-stage-count-parser",
+      "role": "code",
+      "summary": "Python standard-library xlsx XML parser that counted table rows and DSB hotspots by worksheet."
+    },
+    {
+      "ref": "artifact:2020-prdm9-dsb-fate.analysis-notebook#cell-table-s3-stage-counts",
+      "role": "notebook",
+      "summary": "Notebook cell describing the local supplement count check."
+    }
+  ],
+  "outputFigureRefs": [
+    {
+      "ref": "artifact:2020-prdm9-dsb-fate.figure-reproduction-report#stage-count-table",
+      "role": "figure",
+      "summary": "Tabular reproduction proxy for Fig. 2a/Supplementary Fig. S8a stage counts; no rendered plot was generated in this first pass."
+    }
+  ],
+  "statisticsRefs": [
+    {
+      "ref": "artifact:2020-prdm9-dsb-fate.figure-reproduction-report#stage-count-statistics",
+      "role": "table",
+      "summary": "Computed row counts, DSB-hotspot Yes/No counts, DSB-hotspot fractions, median peak widths, and median MACS score-like Pvalue fields from Table S3."
+    }
+  ],
+  "stdoutRefs": [
+    {
+      "ref": "analysis-session:2026-05-11-worker-b#table-s3-json-output",
+      "role": "stdout",
+      "summary": "Stage summary JSON emitted by the local xlsx XML parser."
+    }
+  ],
+  "stderrRefs": [
+    {
+      "ref": "analysis-session:2026-05-11-worker-b#table-s3-stderr-empty",
+      "role": "stderr",
+      "summary": "No parser stderr was observed for the local Table S3 count check."
+    }
+  ],
+  "logRefs": [
+    {
+      "ref": "analysis-session:2026-05-11-worker-b#table-s3-json-output",
+      "role": "stdout",
+      "summary": "Parser log for the bounded local supplement check."
+    }
+  ],
+  "parameters": {
+    "inputWorkbook": "workspace/reproduction-worker-c/supplements/2020/table-s3.xlsx",
+    "sheetSelection": [
+      "Leptotene",
+      "Early-zygotene",
+      "Mid-zygotene",
+      "Late-zygotene",
+      "Early 1-pachytene"
+    ],
+    "rowInclusionRule": "Rows after the worksheet header containing Chr, Start, End, Macs, Pvalue, DSB hotspots with a non-empty chromosome field.",
+    "hotspotRule": "Count DSB hotspots values case-insensitively equal to Yes.",
+    "largeDataPolicy": "No GEO raw FASTQ, BAM, bigWig, or processed tar downloads in this first-pass reproduction."
+  },
+  "method": "Supplement-table count audit, not ChIP-seq reprocessing.",
+  "statistics": {
+    "stagePeakSummary": [
+      {
+        "stage": "Leptotene",
+        "peaks": 3358,
+        "dsbHotspotYes": 2773,
+        "dsbHotspotNo": 585,
+        "dsbHotspotYesFraction": 0.8258,
+        "medianWidthBp": 1048,
+        "medianPvalueScore": 108.4
+      },
+      {
+        "stage": "Early-zygotene",
+        "peaks": 13490,
+        "dsbHotspotYes": 9440,
+        "dsbHotspotNo": 4050,
+        "dsbHotspotYesFraction": 0.6998,
+        "medianWidthBp": 1946,
+        "medianPvalueScore": 316.72
+      },
+      {
+        "stage": "Mid-zygotene",
+        "peaks": 16540,
+        "dsbHotspotYes": 10137,
+        "dsbHotspotNo": 6403,
+        "dsbHotspotYesFraction": 0.6129,
+        "medianWidthBp": 1070,
+        "medianPvalueScore": 224.865
+      },
+      {
+        "stage": "Late-zygotene",
+        "peaks": 8880,
+        "dsbHotspotYes": 7681,
+        "dsbHotspotNo": 1199,
+        "dsbHotspotYesFraction": 0.865,
+        "medianWidthBp": 2199,
+        "medianPvalueScore": 174.01
+      },
+      {
+        "stage": "Early 1-pachytene",
+        "peaks": 8187,
+        "dsbHotspotYes": 7375,
+        "dsbHotspotNo": 812,
+        "dsbHotspotYesFraction": 0.9008,
+        "medianWidthBp": 1521,
+        "medianPvalueScore": 150.86
+      }
+    ],
+    "paperCountMatch": "The Table S3 row counts match the paper-reported stage-specific peak counts for these five stages, and the DSB-hotspot Yes counts match the reported hotspot-associated H3K4me3 counts.",
+    "unsupportedByThisRun": [
+      "PRDM9 affinity-seq overlap percentage",
+      "NOMe-seq accessibility/NDR comparisons",
+      "direct CO/NCO fate assignment",
+      "raw-read peak calling reproducibility"
+    ]
+  },
+  "verdict": "partially-reproduced",
+  "limitations": [
+    "This first-pass report reproduces only local supplementary-table counts for stage-specific de novo H3K4me3 and DSB-hotspot annotation.",
+    "The report does not reproduce PRDM9 binding overlap because the PRDM9 affinity-seq data were only inventoried, not materialized.",
+    "The report does not reproduce open chromatin or CO/NCO fate evidence because NOMe-seq signal matrices, NDR calls, known CO hotspot tables, and direct outcome assays were not locally available in this pass.",
+    "No negative scientific result is established; missing data and missing code are treated as insufficiency, not contradiction."
+  ],
+  "diagnostics": [
+    "Bounded reproduction used existing local supplementary workbooks only.",
+    "Original 2020 source code remains request-only according to the paper, so exact author plotting and filtering scripts were not rerun."
+  ]
+}

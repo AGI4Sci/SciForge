@@ -1,0 +1,311 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "evidence-matrix",
+  "sourceRefs": [
+    {
+      "ref": "file:workspace/cell_papers/2022_NRG_Histone post-translational__modifications \u2014 cause and__consequence of genome function.pdf",
+      "kind": "pdf",
+      "locator": "PDF pages 1-2, 5, and 14",
+      "summary": "Review source for separating causative/instructive PTM evidence from consequence, reinforcement, memory, and correlation."
+    },
+    {
+      "ref": "artifact:paper-claim-graph-2020-prdm9-dsb-fate",
+      "kind": "artifact"
+    },
+    {
+      "ref": "artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3",
+      "kind": "artifact"
+    },
+    {
+      "ref": "artifact:figure-to-claim-map-2020-prdm9-dsb-fate",
+      "kind": "artifact"
+    },
+    {
+      "ref": "artifact:figure-to-claim-map-2025-setd1b-broad-h3k4me3",
+      "kind": "artifact"
+    }
+  ],
+  "rubric": {
+    "id": "histone-ptm-causal-evidence-rubric-v1",
+    "basis": "2022 histone PTM review: histone marks can be causes, consequences, reinforcement mechanisms, or memory-like records depending on timing, perturbation, and mechanism.",
+    "dimensions": [
+      {
+        "id": "association",
+        "question": "Does the PTM or writer co-localize with the genomic process in matched cell state and locus?"
+      },
+      {
+        "id": "temporal-ordering",
+        "question": "Does the PTM appear before the process or before the claimed downstream response?"
+      },
+      {
+        "id": "perturbation",
+        "question": "Does perturbing writer, eraser, reader, or local mark alter the process in the predicted direction?"
+      },
+      {
+        "id": "mechanism",
+        "question": "Is there a plausible reader, effector, structural, or enzymatic mechanism that links the mark to the outcome?"
+      },
+      {
+        "id": "direct-locality",
+        "question": "Is evidence local to the relevant locus rather than only global genotype or cell-state change?"
+      },
+      {
+        "id": "rescue-or-orthogonal-validation",
+        "question": "Is rescue, local editing, orthogonal assay, or independent dataset support present?"
+      },
+      {
+        "id": "confounders",
+        "question": "Are cell-stage shifts, viability, indirect transcriptional effects, antibody specificity, peak thresholds, and dataset integration risks addressed?"
+      }
+    ],
+    "interpretationScale": [
+      "association-only",
+      "temporal-support",
+      "perturbation-supported",
+      "mechanistic-supported",
+      "direct-causal-strong",
+      "consequence-or-reinforcement-possible"
+    ]
+  },
+  "rows": [
+    {
+      "id": "rubric-2020-prdm9-c2",
+      "claimId": "2020-prdm9-c2",
+      "evidenceRefs": [
+        {
+          "ref": "artifact:paper-claim-graph-2020-prdm9-dsb-fate#2020-prdm9-c2",
+          "role": "source"
+        },
+        {
+          "ref": "file:workspace/cell_papers/2020 Refined spatial temporal epigenomic profiling reveals intrinsic__connection between PRDM9-mediated H3K4me3 and__the fate of double-stranded breaks.pdf",
+          "locator": "PDF page 3; Prdm9-/-, Spo11-/-, Dmc1-/- comparison",
+          "role": "figure"
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "artifact:figure-to-claim-map-2020-prdm9-dsb-fate#2020-prdm9-fig1",
+          "role": "figure"
+        }
+      ],
+      "verdict": "not-tested",
+      "rationale": "Within-paper evidence is perturbation-supported for PRDM9 as an upstream writer of newly generated H3K4me3. Independent reproduction was not run, so the reproduction verdict remains not-tested.",
+      "causalAssessment": {
+        "classification": "perturbation-supported",
+        "association": "strong",
+        "temporalOrdering": "moderate",
+        "perturbation": "strong genetic perturbation",
+        "mechanism": "writer enzyme directly deposits H3K4me3",
+        "directLocality": "genome-wide local peak comparisons",
+        "rescueOrOrthogonalValidation": "limited in this first pass",
+        "risk": "genotype-level perturbation can include wider meiotic effects"
+      }
+    },
+    {
+      "id": "rubric-2020-prdm9-c4",
+      "claimId": "2020-prdm9-c4",
+      "evidenceRefs": [
+        {
+          "ref": "artifact:paper-claim-graph-2020-prdm9-dsb-fate#2020-prdm9-c4",
+          "role": "source"
+        },
+        {
+          "ref": "file:workspace/cell_papers/2020 Refined spatial temporal epigenomic profiling reveals intrinsic__connection between PRDM9-mediated H3K4me3 and__the fate of double-stranded breaks.pdf",
+          "locator": "PDF pages 5-6; Fig. 3 and DSB fate section",
+          "role": "figure"
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "artifact:figure-to-claim-map-2020-prdm9-dsb-fate#2020-prdm9-fig3",
+          "role": "figure"
+        },
+        {
+          "ref": "artifact:figure-to-claim-map-2020-prdm9-dsb-fate#2020-prdm9-fig6",
+          "role": "figure"
+        }
+      ],
+      "verdict": "insufficient-evidence",
+      "rationale": "The PDF supports a model linking H3K4me3 temporal classes to CO/NCO fate, but causal direction is not established by local mark editing or direct tracking of individual DSB outcomes.",
+      "causalAssessment": {
+        "classification": "temporal-support",
+        "association": "moderate-to-strong",
+        "temporalOrdering": "moderate",
+        "perturbation": "not direct for H3K4me3 class to fate",
+        "mechanism": "proposed chromatin niche and pro-crossover factor recruitment",
+        "directLocality": "locus-class level",
+        "rescueOrOrthogonalValidation": "missing",
+        "risk": "claim may represent consequence or reinforcement as well as cause"
+      }
+    },
+    {
+      "id": "rubric-2020-prdm9-c6",
+      "claimId": "2020-prdm9-c6",
+      "evidenceRefs": [
+        {
+          "ref": "artifact:paper-claim-graph-2020-prdm9-dsb-fate#2020-prdm9-c6",
+          "role": "source"
+        },
+        {
+          "ref": "file:workspace/cell_papers/2020 Refined spatial temporal epigenomic profiling reveals intrinsic__connection between PRDM9-mediated H3K4me3 and__the fate of double-stranded breaks.pdf",
+          "locator": "PDF pages 6-8; Open chromatin states section and Fig. 5",
+          "role": "figure"
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "artifact:figure-to-claim-map-2020-prdm9-dsb-fate#2020-prdm9-fig5",
+          "role": "figure"
+        }
+      ],
+      "verdict": "insufficient-evidence",
+      "rationale": "Accessibility and NDR evidence strengthens the fate model but the paper itself flags that accessibility can depend on DSB machinery, leaving cause-versus-consequence unresolved.",
+      "causalAssessment": {
+        "classification": "consequence-or-reinforcement-possible",
+        "association": "strong",
+        "temporalOrdering": "uncertain",
+        "perturbation": "indirect through Prdm9/Spo11/Dmc1 context",
+        "mechanism": "permissive chromatin environment",
+        "directLocality": "local accessibility around hotspot classes",
+        "rescueOrOrthogonalValidation": "missing",
+        "risk": "accessibility may follow DSB formation or repair progression"
+      }
+    },
+    {
+      "id": "rubric-2025-setd1b-c4",
+      "claimId": "2025-setd1b-c4",
+      "evidenceRefs": [
+        {
+          "ref": "artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3#2025-setd1b-c4",
+          "role": "source"
+        },
+        {
+          "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+          "locator": "PDF pages 6-8; Fig. 5 and Setd1b cKO section",
+          "role": "figure"
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "artifact:figure-to-claim-map-2025-setd1b-broad-h3k4me3#2025-setd1b-fig5",
+          "role": "figure"
+        }
+      ],
+      "verdict": "not-tested",
+      "rationale": "Within-paper evidence is strong for SETD1B requirement in broad H3K4me3 establishment, but no independent reproduction was run here.",
+      "causalAssessment": {
+        "classification": "perturbation-supported",
+        "association": "strong",
+        "temporalOrdering": "moderate",
+        "perturbation": "strong Setd1b conditional knockout",
+        "mechanism": "SETD1B methyltransferase writer activity",
+        "directLocality": "broad-domain and promoter/distal domain level",
+        "rescueOrOrthogonalValidation": "limited in this first pass",
+        "risk": "conditional knockout may include developmental progression effects"
+      }
+    },
+    {
+      "id": "rubric-2025-setd1b-c5",
+      "claimId": "2025-setd1b-c5",
+      "evidenceRefs": [
+        {
+          "ref": "artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3#2025-setd1b-c5",
+          "role": "source"
+        },
+        {
+          "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+          "locator": "PDF pages 8-9; Fig. 6",
+          "role": "figure"
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "artifact:figure-to-claim-map-2025-setd1b-broad-h3k4me3#2025-setd1b-fig6",
+          "role": "figure"
+        }
+      ],
+      "verdict": "insufficient-evidence",
+      "rationale": "The perturbation plus Pol II/TAF3 occupancy pattern supports a mechanistic link, but direct local editing or rescue is needed to separate broad H3K4me3 causality from broader SETD1B loss.",
+      "causalAssessment": {
+        "classification": "mechanistic-supported",
+        "association": "strong",
+        "temporalOrdering": "moderate",
+        "perturbation": "strong but genotype-level",
+        "mechanism": "TFIID/TAF3 and Pol II occupancy at broad domains",
+        "directLocality": "local occupancy profiles around broad-domain genes",
+        "rescueOrOrthogonalValidation": "missing",
+        "risk": "global writer loss can redistribute transcriptional machinery indirectly"
+      }
+    },
+    {
+      "id": "rubric-2025-setd1b-c6",
+      "claimId": "2025-setd1b-c6",
+      "evidenceRefs": [
+        {
+          "ref": "artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3#2025-setd1b-c6",
+          "role": "source"
+        },
+        {
+          "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+          "locator": "PDF pages 8-10; Fig. 7 expression timing",
+          "role": "figure"
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "artifact:figure-to-claim-map-2025-setd1b-broad-h3k4me3#2025-setd1b-fig7",
+          "role": "figure"
+        }
+      ],
+      "verdict": "insufficient-evidence",
+      "rationale": "Temporal expression mis-patterning after Setd1b loss supports an instructive or reinforcing role, but cell-stage composition and absence of rescue keep the causal grade moderate.",
+      "causalAssessment": {
+        "classification": "perturbation-supported",
+        "association": "strong",
+        "temporalOrdering": "strong for expression time course",
+        "perturbation": "Setd1b conditional knockout",
+        "mechanism": "Pol II allocation and broad-domain transcriptional machinery competition",
+        "directLocality": "gene-class level",
+        "rescueOrOrthogonalValidation": "missing",
+        "risk": "bulk-stage sampling can confound timing with developmental arrest"
+      }
+    },
+    {
+      "id": "rubric-2025-setd1b-c8",
+      "claimId": "2025-setd1b-c8",
+      "evidenceRefs": [
+        {
+          "ref": "artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3#2025-setd1b-c8",
+          "role": "source"
+        },
+        {
+          "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+          "locator": "PDF pages 10-11; RFX2/SETD1B paragraph and supplementary references",
+          "role": "figure"
+        }
+      ],
+      "methodRefs": [
+        {
+          "ref": "artifact:figure-to-claim-map-2025-setd1b-broad-h3k4me3#2025-setd1b-fig7",
+          "role": "figure"
+        }
+      ],
+      "verdict": "insufficient-evidence",
+      "rationale": "Rfx2 perturbation and co-IP support a recruitment model, but RFX2 has broad functions and the first-pass locator relies partly on supplementary evidence.",
+      "causalAssessment": {
+        "classification": "mechanistic-supported",
+        "association": "moderate",
+        "temporalOrdering": "limited",
+        "perturbation": "Rfx2 knockout reduces many broad domains",
+        "mechanism": "RFX2-SETD1B interaction and recruitment model",
+        "directLocality": "domain-level, partly supplementary",
+        "rescueOrOrthogonalValidation": "limited",
+        "risk": "RFX2 may regulate additional methyltransferases and transcriptional programs"
+      }
+    }
+  ],
+  "diagnostics": [
+    "This is a causal-rubric application artifact encoded as the existing evidence-matrix schema, with rubric dimensions stored as additional structured metadata.",
+    "Verdicts use reproduction semantics: not-tested means no independent computational reproduction was run; insufficient-evidence means within-paper evidence is not enough for a strong direct-causal claim under the rubric."
+  ]
+}

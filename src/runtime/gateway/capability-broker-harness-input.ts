@@ -457,7 +457,7 @@ function legacyCount(value: unknown) {
 function candidateSkillHints(value: unknown, source: string): CapabilityBrokerSkillHint[] {
   return toRecordList(value).map((candidate) => {
     const providerIds = toRecordList(candidate.providerAvailability)
-      .map((provider) => stringField(provider.providerId) ?? stringField(provider.id))
+      .map((availability) => stringField(availability.providerId) ?? stringField(availability.id))
       .filter((providerId): providerId is string => Boolean(providerId));
     return {
       id: stringField(candidate.id),

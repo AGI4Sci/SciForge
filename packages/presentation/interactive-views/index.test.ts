@@ -102,14 +102,31 @@ test('interactive view renderer mapping owns artifact table, download, and subti
         { filename: 'empty.txt', content: '' },
       ],
     },
-  }), [{
-    key: undefined,
+  }).map((item) => ({
+    kind: item.kind,
+    name: item.name,
+    contentType: item.contentType,
+    rowCount: item.rowCount,
+  })), [{
+    kind: 'declared',
     name: 'rows.csv',
-    path: undefined,
     contentType: 'text/csv',
     rowCount: 2,
-    content: 'sample,score\nA,1',
+  }, {
+    kind: 'artifact-json',
+    name: 'artifact.artifact.json',
+    contentType: 'application/json',
+    rowCount: undefined,
   }]);
+  const blockedArtifact = {
+    id: 'blocked',
+    type: 'validation-failure',
+    producerScenario: 'demo',
+    schemaVersion: '1',
+    exportPolicy: 'blocked',
+    data: { message: 'contains restricted evidence' },
+  } as Parameters<typeof interactiveArtifactDownloadItems>[0];
+  assert.deepEqual(interactiveArtifactDownloadItems(blockedArtifact), []);
 
   assert.equal(interactiveResultSlotSubtitle({
     status: 'missing-artifact',
@@ -471,6 +488,13 @@ test('direct answer result policy owns loose artifact component binding and norm
   const artifacts = normalizeDirectAnswerArtifacts(undefined, 'Structured answer');
   assert.equal(artifacts[0].type, 'research-report');
   assert.equal((artifacts[0].data as Record<string, unknown>).markdown, 'Structured answer');
+
+  const mappedArtifacts = normalizeDirectAnswerArtifacts({
+    claimGraph: { type: 'paper-claim-graph', dataRef: 'file:.sciforge/artifacts/claim-graph.json' },
+    evidence: { id: 'evidence-matrix', type: 'evidence-matrix', data: { rows: [] } },
+  });
+  assert.deepEqual(mappedArtifacts.map((artifact) => artifact.id), ['claimGraph', 'evidence-matrix']);
+  assert.equal(mappedArtifacts[0].dataRef, 'file:.sciforge/artifacts/claim-graph.json');
 
   const manifest = normalizeDirectAnswerUiManifest(
     { components: ['report-viewer', 'unknown-artifact-inspector'] },

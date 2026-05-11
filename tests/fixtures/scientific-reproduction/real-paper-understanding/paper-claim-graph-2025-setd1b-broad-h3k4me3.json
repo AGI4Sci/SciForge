@@ -1,0 +1,238 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "paper-claim-graph",
+  "sourceRefs": [
+    {
+      "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+      "title": "2025 Cell Research SETD1B broad H3K4me3 PDF",
+      "kind": "pdf"
+    },
+    {
+      "ref": "file:workspace/.sciforge/artifacts/real-paper-understanding/pdf-text/2025-cell-research-setd1b-mediated-broad-h3k4me3-controls-proper-temporal-patter.txt",
+      "title": "pdftotext -layout extraction",
+      "kind": "bounded-text"
+    }
+  ],
+  "paperRefs": [
+    {
+      "ref": "paper:2025-setd1b-broad-h3k4me3",
+      "title": "SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development",
+      "kind": "research-paper",
+      "locator": "Cell Research 2025; doi:10.1038/s41422-025-01080-0"
+    }
+  ],
+  "claims": [
+    {
+      "id": "2025-setd1b-c1",
+      "text": "A staged mouse spermatogenesis atlas links coordinated histone modifications, DNA methylation, chromatin accessibility, and RNA expression to known developmental transitions.",
+      "kind": "method",
+      "figureIds": ["2025-setd1b-fig1"],
+      "datasetIds": ["2025-setd1b-multiomics-atlas"],
+      "variables": ["11 spermatogenic stages", "histone marks", "DNA methylation", "NDRs", "RNA expression"],
+      "dataTypes": ["ChIP-seq", "NOMe-seq", "RNA-seq", "immunostaining"],
+      "methods": ["stage purification", "ChromHMM state modeling", "correlation analysis", "PCA", "read-density profiling"],
+      "statistics": ["replicate Pearson correlation", "Euclidean distance", "PCA"],
+      "evidenceTypes": ["resource atlas", "multi-omics concordance"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+          "locator": "PDF pages 2-4, Results: Systematic profiling of chromatin epigenomic landscapes; Fig. 1",
+          "summary": "The paper profiles seven histone marks, NOMe-seq, DNA methylation, and RNA-seq across purified stages."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "method-incomplete",
+          "summary": "Atlas interpretation depends on stage purity, sorting protocol, and consistent processing across assays."
+        }
+      ]
+    },
+    {
+      "id": "2025-setd1b-c2",
+      "text": "Spermatids contain a conserved class of broad, strong H3K4me3 domains exceeding 5 kb at promoters and distal enhancer regions, with extensive overlap with broad H3K27ac.",
+      "kind": "main",
+      "figureIds": ["2025-setd1b-fig3"],
+      "datasetIds": ["2025-setd1b-chipseq"],
+      "variables": ["broad H3K4me3", "broad H3K27ac", "round spermatids", "human spermatids", "promoters", "distal enhancers"],
+      "dataTypes": ["H3K4me3 ChIP-seq", "H3K27ac ChIP-seq", "human spermatid ChIP-seq"],
+      "methods": ["broad-domain definition", "peak merging", "stage comparison", "cross-species comparison"],
+      "statistics": ["peak counts", "domain width threshold >5 kb", "overlap percentages"],
+      "evidenceTypes": ["genome-wide domain discovery", "cross-species conservation"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+          "locator": "PDF pages 4-5, Results: Establishment of conserved broad and robust H3K4me3 and H3K27ac domains in spermatids; Fig. 3",
+          "summary": "The authors define spermatid broad H3K4me3 domains and report their number, width, genomic distribution, H3K27ac overlap, and human conservation."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "statistics-underspecified",
+          "summary": "The first-pass artifact records the published >5 kb definition; exact sensitivity to merge distance and peak-calling parameters is not tested."
+        }
+      ]
+    },
+    {
+      "id": "2025-setd1b-c3",
+      "text": "Broad H3K4me3 domains in spermatids show super-enhancer-like properties and are associated with high transcriptional activity at spermatid genes.",
+      "kind": "subclaim",
+      "figureIds": ["2025-setd1b-fig4"],
+      "datasetIds": ["2025-setd1b-chipseq", "2025-setd1b-rnaseq"],
+      "variables": ["broad H3K4me3", "super-enhancers", "RNA expression", "PIC binding potential"],
+      "dataTypes": ["ChIP-seq", "RNA-seq", "enhancer annotation"],
+      "methods": ["ROSE-like enhancer comparison", "expression stratification", "GREAT or nearest-gene assignment"],
+      "statistics": ["gene set enrichment", "expression distribution comparison"],
+      "evidenceTypes": ["association", "functional annotation"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+          "locator": "PDF pages 5-6, Results: Spermatid broad H3K4me3 domains display SE features; Fig. 4",
+          "summary": "The paper compares broad H3K4me3 domains with H3K27ac-based super-enhancer features and gene expression."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "claim-exceeds-evidence",
+          "summary": "Association with high expression does not alone establish that broad H3K4me3 instructs transcription."
+        }
+      ]
+    },
+    {
+      "id": "2025-setd1b-c4",
+      "text": "SETD1B is required for establishment of spermatid broad H3K4me3 domains; Setd1b conditional knockout largely removes broad domains while leaving regular H3K4me3 signals comparatively intact.",
+      "kind": "main",
+      "figureIds": ["2025-setd1b-fig5"],
+      "datasetIds": ["2025-setd1b-setd1b-cko-chipseq"],
+      "variables": ["SETD1B", "Setd1b cKO", "broad H3K4me3", "regular H3K4me3", "broad H3K27ac"],
+      "dataTypes": ["conditional knockout ChIP-seq", "immunofluorescence"],
+      "methods": ["genetic perturbation", "domain counting", "signal-density comparison"],
+      "statistics": ["broad-domain counts", "read-density heatmaps", "metagene profiles"],
+      "evidenceTypes": ["genetic perturbation", "writer-dependence"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+          "locator": "PDF pages 6-8, Results: SETD1B methyltransferase is required for the formation of spermatid broad H3K4me3 domains; Fig. 5",
+          "summary": "Setd1b cKO data show loss of broad H3K4me3, especially distal enhancer signal, with regular promoter H3K4me3 remaining."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "claim-exceeds-evidence",
+          "summary": "Genetic depletion supports SETD1B requirement but may include indirect developmental or cell-composition effects."
+        }
+      ]
+    },
+    {
+      "id": "2025-setd1b-c5",
+      "text": "Loss of SETD1B-mediated broad H3K4me3 redistributes TAF3 and RNA Pol II away from broad-domain targets toward regular H3K4me3 regions, disturbing transcriptional output.",
+      "kind": "mechanistic",
+      "figureIds": ["2025-setd1b-fig6"],
+      "datasetIds": ["2025-setd1b-setd1b-cko-chipseq", "2025-setd1b-rnaseq"],
+      "variables": ["TAF3", "RNA Pol II", "broad H3K4me3 targets", "regular H3K4me3 targets", "Setd1b cKO"],
+      "dataTypes": ["TAF3 ChIP-seq", "RNA Pol II ChIP-seq", "H3K4me3 ChIP-seq", "RNA-seq"],
+      "methods": ["promoter enrichment comparison", "MA plots", "metagene profiles", "differential expression"],
+      "statistics": ["occupancy fold change", "differential enrichment", "gene-expression comparison"],
+      "evidenceTypes": ["perturbation", "mechanistic reader/effector evidence", "transcriptional association"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+          "locator": "PDF pages 8-9, Results: SETD1B-mediated broad H3K4me3 controls stage-specific temporal patterns; Fig. 6",
+          "summary": "The paper reports reduced TAF3 and Pol II at broad-domain loci and Pol II redistribution after Setd1b depletion."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "claim-exceeds-evidence",
+          "summary": "Broad H3K4me3 and SETD1B loss are not separated by local mark editing or rescue, so Pol II redistribution could partly reflect indirect SETD1B effects."
+        }
+      ]
+    },
+    {
+      "id": "2025-setd1b-c6",
+      "text": "SETD1B-mediated broad H3K4me3 helps enforce proper temporal expression patterns of stage-specific spermatid genes; Setd1b loss causes early and late genes to be expressed at inappropriate times.",
+      "kind": "main",
+      "figureIds": ["2025-setd1b-fig7"],
+      "datasetIds": ["2025-setd1b-setd1b-cko-rnaseq", "2025-setd1b-setd1b-cko-polii"],
+      "variables": ["early-stage genes", "late-stage genes", "RS4", "RS8", "LS", "Setd1b cKO"],
+      "dataTypes": ["RNA-seq", "RNA Pol II ChIP-seq", "H3K4me3 ChIP-seq"],
+      "methods": ["time-course expression profiling", "stage-specific gene filtering", "genotype comparison"],
+      "statistics": ["differential expression", "temporal-cluster comparison"],
+      "evidenceTypes": ["temporal ordering", "genetic perturbation", "transcriptional outcome"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+          "locator": "PDF pages 8-10, Results and Fig. 7",
+          "summary": "The paper reports altered expression timing for early and late spermatid genes in Setd1b cKO samples."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "method-incomplete",
+          "summary": "Bulk staged samples can mix gene-expression timing effects with shifts in cell composition or developmental progression."
+        }
+      ]
+    },
+    {
+      "id": "2025-setd1b-c7",
+      "text": "Germ-cell Setd1b loss leads to male infertility and abnormal spermiogenesis, including smaller testes, fewer epididymal sperm, reduced sperm motility, and abnormal sperm heads.",
+      "kind": "result",
+      "figureIds": ["2025-setd1b-fig7"],
+      "datasetIds": ["2025-setd1b-phenotyping"],
+      "variables": ["male fertility", "testis size", "epididymal sperm", "sperm motility", "sperm morphology"],
+      "dataTypes": ["histology", "CASA sperm analysis", "morphology staining", "conditional knockout phenotype"],
+      "methods": ["H&E staining", "computer-assisted sperm analysis", "PNA/MitoTracker/DAPI staining"],
+      "statistics": ["phenotype quantification", "group comparison"],
+      "evidenceTypes": ["organismal phenotype", "genetic perturbation"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+          "locator": "PDF page 10, Results: Disruption of SETD1B and broad H3K4me3 results in male infertility and aberrant spermiogenesis; Fig. 7h-j",
+          "summary": "The paper connects Setd1b cKO to spermatid and sperm phenotypes."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "claim-exceeds-evidence",
+          "summary": "Phenotype supports SETD1B importance but does not by itself prove the phenotype is mediated only through broad H3K4me3."
+        }
+      ]
+    },
+    {
+      "id": "2025-setd1b-c8",
+      "text": "RFX2 contributes to the specificity of broad H3K4me3 formation, with Rfx2 loss reducing many broad domains and co-IP evidence supporting RFX2 interaction with SETD1B.",
+      "kind": "mechanistic",
+      "figureIds": ["2025-setd1b-fig7"],
+      "datasetIds": ["2025-setd1b-rfx2-perturbation"],
+      "variables": ["RFX2", "SETD1B", "Rfx2 knockout", "broad H3K4me3", "co-IP"],
+      "dataTypes": ["Rfx2 KO ChIP-seq", "co-immunoprecipitation", "motif analysis"],
+      "methods": ["transcription-factor perturbation", "domain conversion analysis", "protein interaction assay"],
+      "statistics": ["percentage reduced broad domains", "domain conversion counts"],
+      "evidenceTypes": ["perturbation", "mechanistic recruitment evidence"],
+      "locatorRefs": [
+        {
+          "ref": "file:workspace/cell_papers/2025_Cell Research_SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development.pdf",
+          "locator": "PDF pages 10-11, RFX2/SETD1B paragraph before and within Discussion; supplementary Fig. S12 references",
+          "summary": "The paper reports Rfx2 KO reduction of broad H3K4me3 domains and exogenous co-IP between RFX2 and SETD1B."
+        }
+      ],
+      "risks": [
+        {
+          "risk": "claim-exceeds-evidence",
+          "summary": "RFX2 has broader transcriptional roles, and the interaction evidence is exogenous; direct endogenous recruitment remains a limitation."
+        }
+      ]
+    }
+  ],
+  "edges": [
+    { "fromClaimId": "2025-setd1b-c1", "toClaimId": "2025-setd1b-c2", "relation": "supports" },
+    { "fromClaimId": "2025-setd1b-c2", "toClaimId": "2025-setd1b-c3", "relation": "supports" },
+    { "fromClaimId": "2025-setd1b-c4", "toClaimId": "2025-setd1b-c5", "relation": "supports" },
+    { "fromClaimId": "2025-setd1b-c5", "toClaimId": "2025-setd1b-c6", "relation": "supports" },
+    { "fromClaimId": "2025-setd1b-c6", "toClaimId": "2025-setd1b-c7", "relation": "supports" },
+    { "fromClaimId": "2025-setd1b-c8", "toClaimId": "2025-setd1b-c4", "relation": "supports" }
+  ],
+  "diagnostics": [
+    "First-pass claims are extracted from PDF text and figure legends; no GEO data were downloaded or reprocessed.",
+    "The graph distinguishes SETD1B requirement for broad H3K4me3 from the stronger claim that broad H3K4me3 directly instructs all downstream transcription and fertility phenotypes."
+  ]
+}

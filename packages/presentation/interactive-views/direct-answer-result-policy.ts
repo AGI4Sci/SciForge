@@ -188,7 +188,7 @@ export function normalizeDirectAnswerUiManifest(value: unknown, artifacts: Array
 }
 
 export function normalizeDirectAnswerArtifacts(value: unknown, message?: string): Array<Record<string, unknown>> {
-  const artifacts = Array.isArray(value) ? value.map((artifact) => isRecord(artifact) ? artifact : undefined).filter(isRecord) : [];
+  const artifacts = artifactRecordsFromUnknown(value);
   if (!artifacts.length && message) {
     return [{
       id: REPORT_ARTIFACT_TYPE,
@@ -226,6 +226,19 @@ export function normalizeDirectAnswerArtifacts(value: unknown, message?: string)
       },
     };
   });
+}
+
+function artifactRecordsFromUnknown(value: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(value)) return value.map((artifact) => isRecord(artifact) ? artifact : undefined).filter(isRecord);
+  if (!isRecord(value)) return [];
+  if (stringField(value.type) || stringField(value.artifactType)) return [value];
+  const records = Object.entries(value)
+    .flatMap(([key, artifact]) => {
+      if (!isRecord(artifact)) return [];
+      const id = stringField(artifact.id) ?? key;
+      return [{ ...artifact, id }];
+    });
+  return records.length ? records : [];
 }
 
 export function directAnswerArtifactNeedsRepair(artifact: Record<string, unknown>) {
