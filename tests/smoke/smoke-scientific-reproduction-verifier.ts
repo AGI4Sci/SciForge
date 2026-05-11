@@ -308,6 +308,23 @@ assert.equal(unsafeRawExecutionResult.verdict, 'fail');
 assert.ok(unsafeRawExecutionResult.criterionResults.find((criterion) => criterion.id === 'raw-data-readiness-gate' && !criterion.passed));
 assert.ok(unsafeRawExecutionResult.repairHints.some((hint) => hint.includes('raw-data-readiness-dossier')));
 
+const readyRawExecutionResult = verifyScientificReproduction(rawDataReadinessRequest());
+assert.equal(readyRawExecutionResult.verdict, 'pass');
+assert.ok(readyRawExecutionResult.criterionResults.find((criterion) => criterion.id === 'raw-data-readiness-gate' && criterion.passed));
+
+const overBudgetRawExecutionResult = verifyScientificReproduction(rawDataReadinessRequest({
+  dataset: { estimatedDownloadBytes: 2_000_000 },
+  computeBudget: { maxDownloadBytes: 1_000_000 },
+}));
+assert.equal(overBudgetRawExecutionResult.verdict, 'fail');
+assert.ok(overBudgetRawExecutionResult.criterionResults.find((criterion) => criterion.id === 'raw-data-readiness-gate' && !criterion.passed));
+
+const missingChecksumRawExecutionResult = verifyScientificReproduction(rawDataReadinessRequest({
+  dataset: { checksumRefs: [] },
+}));
+assert.equal(missingChecksumRawExecutionResult.verdict, 'fail');
+assert.ok(missingChecksumRawExecutionResult.criterionResults.find((criterion) => criterion.id === 'raw-data-readiness-gate' && !criterion.passed));
+
 const realFixtureRoot = join(process.cwd(), 'tests/fixtures/scientific-reproduction/real-paper-reproduction');
 const realArtifacts = await Promise.all([
   '2020-prdm9-dsb-fate.claim-verdict.json',
@@ -454,5 +471,84 @@ function mapOnlyFigureResultRequest() {
         datasets: [{ id: 'dataset-a', title: 'Dataset fixture', sourceRefs: [ref('artifact:dataset-a')], availability: 'available' }],
       }),
     ],
+  };
+}
+
+function rawDataReadinessRequest(overrides: {
+  dataset?: Record<string, unknown>;
+  computeBudget?: Record<string, unknown>;
+} = {}) {
+  const dataset = {
+    id: 'raw-dataset-a',
+    accession: 'GSE000000',
+    database: 'GEO',
+    sourceRefs: [ref('artifact:accession-check-1')],
+    dataLevel: 'raw',
+    availability: 'available',
+    licenseStatus: 'verified',
+    estimatedDownloadBytes: 1_000_000,
+    estimatedStorageBytes: 2_000_000,
+    checksumRefs: [ref('artifact:raw-dataset-a-checksums')],
+    ...overrides.dataset,
+  };
+  const computeBudget = {
+    maxDownloadBytes: 5_000_000,
+    maxStorageBytes: 10_000_000,
+    maxCpuHours: 4,
+    maxMemoryGb: 16,
+    maxWallHours: 2,
+    budgetRef: ref('artifact:budget-policy'),
+    ...overrides.computeBudget,
+  };
+  return {
+    artifacts: [
+      artifact('claim-verdict-ready-readiness', 'claim-verdict', {
+        claimId: 'claim-a',
+        verdict: 'insufficient-evidence',
+        rationale: 'Raw-data execution is gated by an explicit readiness dossier.',
+        supportingEvidenceRefs: [ref('artifact:ready-readiness')],
+      }),
+      artifact('ready-readiness', 'raw-data-readiness-dossier', {
+        claimIds: ['claim-a'],
+        rawExecutionStatus: 'ready',
+        approvalStatus: 'approved',
+        datasets: [dataset],
+        computeBudget,
+        environment: {
+          toolVersionRefs: [ref('artifact:tool-lock')],
+          environmentLockRefs: [ref('artifact:environment-lock')],
+          genomeCacheRefs: [ref('artifact:genome-cache')],
+        },
+        readinessChecks: [{
+          id: 'approval',
+          status: 'pass',
+          reason: 'Approval, budget, checksums, and execution environment are ready.',
+          evidenceRefs: [ref('artifact:budget-policy')],
+        }],
+        degradationStrategy: 'Use processed tables if raw execution becomes unavailable.',
+        rawExecutionGate: {
+          allowed: true,
+          reason: 'All raw-data readiness checks passed.',
+          requiredBeforeExecution: ['approval', 'budget', 'checksums', 'environment'],
+          refs: [ref('artifact:budget-policy')],
+        },
+      }),
+      artifact('dataset-inventory-ready-readiness', 'dataset-inventory', {
+        identifierVerifications: [{
+          id: 'paper-id',
+          kind: 'bibliographic',
+          doi: '10.1000/example',
+          title: 'Reusable paper identity fixture',
+          year: 2024,
+          journal: 'Example Journal',
+          verified: true,
+          status: 'verified',
+          checkedAt: '2026-05-11',
+          evidenceRefs: [ref('artifact:paper-metadata-1')],
+        }],
+        datasets: [{ id: 'dataset-a', title: 'Dataset fixture', sourceRefs: [ref('artifact:dataset-a')], availability: 'available' }],
+      }),
+    ],
+    providerHints: { allowRawDataExecution: true, requireRawDataReadiness: true },
   };
 }

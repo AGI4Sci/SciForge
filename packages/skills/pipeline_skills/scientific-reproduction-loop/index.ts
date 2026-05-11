@@ -1,5 +1,6 @@
 export {
   SCIENTIFIC_REPRODUCTION_TRAJECTORY_SCHEMA_VERSION,
+  evaluateSelfPromptAutoSubmitGate,
   sanitizeTrajectoryForExport,
   validateScientificReproductionTrajectory,
   type DecisionRationale,
@@ -8,6 +9,8 @@ export {
   type RepairRecord,
   type ScientificReproductionTrajectory,
   type ScreenStateRef,
+  type SelfPromptAutoSubmitGate,
+  type SelfPromptAutoSubmitGateOptions,
   type SelfPromptRecommendation,
   type TrajectoryStep,
   type UiActionRecord,

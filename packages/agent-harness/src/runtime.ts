@@ -277,9 +277,22 @@ function normalizeDecision(decision: HarnessDecision, callbackId: string): Harne
 }
 
 function mergeRawDecision(left: HarnessDecision, right: HarnessDecision): HarnessDecision {
+  const selectedVerifierIds = sortedUnique([
+    ...(left.verification?.selectedVerifierIds ?? []),
+    ...(right.verification?.selectedVerifierIds ?? []),
+  ]);
+  const verification = left.verification || right.verification
+    ? {
+      ...left.verification,
+      ...right.verification,
+      ...(selectedVerifierIds.length > 0 ? { selectedVerifierIds } : {}),
+    }
+    : undefined;
+
   return {
     ...left,
     ...right,
+    ...(verification ? { verification } : {}),
     blockedRefs: sortedUnique([...(left.blockedRefs ?? []), ...(right.blockedRefs ?? [])]),
     blockedCapabilities: sortedUnique([...(left.blockedCapabilities ?? []), ...(right.blockedCapabilities ?? [])]),
     promptDirectives: sortPromptDirectives([...(left.promptDirectives ?? []), ...(right.promptDirectives ?? [])]),
@@ -342,11 +355,16 @@ function mergeVerification(
   if (incoming.intensity && intensity !== incoming.intensity) {
     conflicts.push(conflict('verificationPolicy.intensity', current.intensity, incoming.intensity, intensity, 'verification only escalates without human approval', context));
   }
+  const selectedVerifierIds = sortedUnique([
+    ...(current.selectedVerifierIds ?? []),
+    ...(incoming.selectedVerifierIds ?? []),
+  ]);
   return {
     intensity,
     requireCitations: current.requireCitations || incoming.requireCitations === true,
     requireCurrentRefs: current.requireCurrentRefs || incoming.requireCurrentRefs === true,
     requireArtifactRefs: current.requireArtifactRefs || incoming.requireArtifactRefs === true,
+    ...(selectedVerifierIds.length > 0 ? { selectedVerifierIds } : {}),
   };
 }
 
@@ -440,6 +458,12 @@ function normalizeContract(contract: HarnessContract): HarnessContract {
       candidates: sortCandidates(contract.capabilityPolicy.candidates),
       preferredCapabilityIds: sortedUnique(contract.capabilityPolicy.preferredCapabilityIds),
       blockedCapabilities: sortedUnique(contract.capabilityPolicy.blockedCapabilities),
+    },
+    verificationPolicy: {
+      ...contract.verificationPolicy,
+      ...(contract.verificationPolicy.selectedVerifierIds
+        ? { selectedVerifierIds: sortedUnique(contract.verificationPolicy.selectedVerifierIds) }
+        : {}),
     },
     promptDirectives: sortPromptDirectives(contract.promptDirectives),
     progressPlan: {

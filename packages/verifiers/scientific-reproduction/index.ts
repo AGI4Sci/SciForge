@@ -260,9 +260,12 @@ type NormalizedRawDataReadiness = {
   approvalStatus: string;
   gateAllowed: boolean;
   allChecksPass: boolean;
-  hasDatasetAccessions: boolean;
+  hasDatasetAccessionsAndSourceRefs: boolean;
+  hasDatasetChecksumRefs: boolean;
   hasLicenseVerification: boolean;
-  hasBudget: boolean;
+  withinDownloadBudget: boolean;
+  withinStorageBudget: boolean;
+  hasComputeBudgetResources: boolean;
   hasEnvironment: boolean;
   hasDegradationStrategy: boolean;
 };
@@ -608,20 +611,37 @@ function extractRawDataReadiness(context: ArtifactContext): NormalizedRawDataRea
       approvalStatus: stringValue(record.approvalStatus).toLowerCase(),
       gateAllowed: gate.allowed === true,
       allChecksPass: checks.length > 0 && checks.every((check) => stringValue(check.status).toLowerCase() === 'pass'),
-      hasDatasetAccessions: datasets.length > 0 && datasets.every((dataset) =>
+      hasDatasetAccessionsAndSourceRefs: datasets.length > 0 && datasets.every((dataset) =>
         hasAnyKey(dataset, ['accession', 'accessionId', 'identifier']) &&
         hasAnyKey(dataset, ['database', 'source', 'repository']) &&
-        collectRefs(dataset).length > 0 &&
-        (typeof dataset.estimatedDownloadBytes === 'number' && Number.isFinite(dataset.estimatedDownloadBytes))
+        refFieldValues(dataset.sourceRefs).length > 0 &&
+        (typeof dataset.estimatedDownloadBytes === 'number' && Number.isFinite(dataset.estimatedDownloadBytes) && dataset.estimatedDownloadBytes >= 0)
+      ),
+      hasDatasetChecksumRefs: datasets.length > 0 && datasets.every((dataset) =>
+        refFieldValues(dataset.checksumRefs).length > 0
       ),
       hasLicenseVerification: datasets.length > 0 && datasets.every((dataset) =>
         ['verified', 'approved'].includes(stringValue(dataset.licenseStatus).toLowerCase())
       ),
-      hasBudget: ['maxDownloadBytes', 'maxStorageBytes', 'maxCpuHours', 'maxMemoryGb', 'maxWallHours'].every((field) =>
+      withinDownloadBudget: datasets.length > 0 &&
+        finiteNumber(budget.maxDownloadBytes) !== undefined &&
+        datasets.every((dataset) =>
+          finiteNumber(dataset.estimatedDownloadBytes) !== undefined &&
+          Number(dataset.estimatedDownloadBytes) >= 0 &&
+          Number(dataset.estimatedDownloadBytes) <= Number(budget.maxDownloadBytes)
+        ),
+      withinStorageBudget: datasets.length > 0 &&
+        datasets.every((dataset) => dataset.estimatedStorageBytes === undefined || (
+          finiteNumber(dataset.estimatedStorageBytes) !== undefined &&
+          finiteNumber(budget.maxStorageBytes) !== undefined &&
+          Number(dataset.estimatedStorageBytes) >= 0 &&
+          Number(dataset.estimatedStorageBytes) <= Number(budget.maxStorageBytes)
+        )),
+      hasComputeBudgetResources: ['maxCpuHours', 'maxMemoryGb', 'maxWallHours'].every((field) =>
         typeof budget[field] === 'number' && Number.isFinite(budget[field]) && Number(budget[field]) > 0
       ) && collectRefs(budget).length > 0,
       hasEnvironment: ['toolVersionRefs', 'environmentLockRefs', 'genomeCacheRefs'].every((field) =>
-        Array.isArray(environment[field]) && (environment[field] as unknown[]).length > 0
+        refFieldValues(environment[field]).length > 0
       ),
       hasDegradationStrategy: stringValue(record.degradationStrategy).length > 0,
     };
@@ -633,9 +653,12 @@ function isRawDataDossierReady(dossier: NormalizedRawDataReadiness) {
     dossier.rawExecutionStatus === 'ready' &&
     dossier.approvalStatus === 'approved' &&
     dossier.allChecksPass &&
-    dossier.hasDatasetAccessions &&
+    dossier.hasDatasetAccessionsAndSourceRefs &&
+    dossier.hasDatasetChecksumRefs &&
     dossier.hasLicenseVerification &&
-    dossier.hasBudget &&
+    dossier.withinDownloadBudget &&
+    dossier.withinStorageBudget &&
+    dossier.hasComputeBudgetResources &&
     dossier.hasEnvironment &&
     dossier.hasDegradationStrategy;
 }
@@ -731,6 +754,17 @@ function collectRefs(value: unknown): string[] {
     }
   });
   return uniqueStrings(refs);
+}
+
+function refFieldValues(value: unknown): string[] {
+  if (typeof value === 'string') return uniqueStrings([value]);
+  if (isRecord(value) && typeof value.ref === 'string') return uniqueStrings([value.ref]);
+  if (!Array.isArray(value)) return [];
+  return uniqueStrings(value.flatMap((entry) => {
+    if (typeof entry === 'string') return [entry];
+    if (isRecord(entry) && typeof entry.ref === 'string') return [entry.ref];
+    return [];
+  }));
 }
 
 function findInlineEvidenceWithoutRefs(value: unknown, artifactId: string): string[] {

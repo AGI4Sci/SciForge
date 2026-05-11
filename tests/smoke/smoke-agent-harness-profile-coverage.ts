@@ -68,6 +68,10 @@ for (const [profileId, profile] of Object.entries(harnessProfiles)) {
     assert.equal(evaluation.contract.verificationPolicy.intensity, 'strict', `${profileId} must require strict verification`);
     assert.equal(evaluation.contract.verificationPolicy.requireCitations, true, `${profileId} must require citation verification`);
     assert.equal(evaluation.contract.verificationPolicy.requireArtifactRefs, true, `${profileId} must require artifact refs`);
+    assert.ok(
+      evaluation.contract.verificationPolicy.selectedVerifierIds?.includes('verifier.scientific-reproduction'),
+      `${profileId} must select the scientific reproduction verifier`,
+    );
     assert.equal(evaluation.contract.toolBudget.exhaustedPolicy, 'needs-human', `${profileId} exhausted budget must request human handoff`);
     assert.equal(evaluation.contract.repairContextPolicy.kind, 'needs-human', `${profileId} repair policy must preserve needs-human handoff`);
     assert.equal(evaluation.contract.capabilityPolicy.sideEffects.externalMutation, 'block', `${profileId} must block external mutation`);
@@ -77,6 +81,14 @@ for (const [profileId, profile] of Object.entries(harnessProfiles)) {
     assert.ok(
       evaluation.trace.stages.some((stage) => stage.decision.capabilityHints?.preferredCapabilityIds?.includes('scientific-reproduction.verifier')),
       `${profileId} trace must record verifier preference decision`,
+    );
+    assert.ok(
+      evaluation.trace.stages.some((stage) => stage.decision.verification?.selectedVerifierIds?.includes('verifier.scientific-reproduction')),
+      `${profileId} trace must record selected verifier decision`,
+    );
+    assert.ok(
+      evaluation.trace.stages.some((stage) => stage.contractSnapshot.verificationPolicy.selectedVerifierIds?.includes('verifier.scientific-reproduction')),
+      `${profileId} trace snapshots must carry selected verifier policy`,
     );
     assert.ok(
       evaluation.trace.stages.some((stage) => stage.contractSnapshot.toolBudget.exhaustedPolicy === 'needs-human'),

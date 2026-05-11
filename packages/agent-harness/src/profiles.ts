@@ -308,7 +308,13 @@ const profileCallbacks: Record<string, HarnessCallback[]> = {
           exhaustedPolicy: 'needs-human',
         },
       },
-      verification: { intensity: 'strict', requireCitations: true, requireCurrentRefs: true, requireArtifactRefs: true },
+      verification: {
+        intensity: 'strict',
+        requireCitations: true,
+        requireCurrentRefs: true,
+        requireArtifactRefs: true,
+        selectedVerifierIds: ['verifier.scientific-reproduction'],
+      },
       repair: { kind: 'needs-human', maxAttempts: 1, includeStdoutSummary: true, includeStderrSummary: true },
       progress: {
         initialStatus: 'Preparing reproduction',
@@ -435,7 +441,14 @@ export const harnessProfiles: Record<string, HarnessProfile> = {
         costUnits: 35,
         exhaustedPolicy: 'needs-human',
       },
-      verificationPolicy: { ...baseVerification, intensity: 'strict', requireCitations: true, requireCurrentRefs: true, requireArtifactRefs: true },
+      verificationPolicy: {
+        ...baseVerification,
+        intensity: 'strict',
+        requireCitations: true,
+        requireCurrentRefs: true,
+        requireArtifactRefs: true,
+        selectedVerifierIds: ['verifier.scientific-reproduction'],
+      },
       repairContextPolicy: { ...baseRepair, kind: 'needs-human', includeStdoutSummary: true },
       progressPlan: {
         ...baseProgress,

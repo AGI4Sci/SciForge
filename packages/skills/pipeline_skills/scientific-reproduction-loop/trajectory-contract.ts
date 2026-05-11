@@ -70,7 +70,12 @@ export interface DecisionRationale {
   evidenceRefs: WorkspaceRef[];
 }
 
-export type SelfPromptAutoSubmitGateStatus = 'allowed' | 'needs-human' | 'failed';
+export type SelfPromptAutoSubmitGateStatus =
+  | 'auto-submit'
+  | 'needs-human'
+  | 'failed-with-reason'
+  | 'allowed'
+  | 'failed';
 
 export type SelfPromptAutoSubmitBlocker =
   | 'missing-evidence'
@@ -86,6 +91,7 @@ export type SelfPromptAutoSubmitBlocker =
 
 export interface SelfPromptAutoSubmitGate {
   status: SelfPromptAutoSubmitGateStatus;
+  decision?: 'auto-submit' | 'needs-human' | 'failed-with-reason';
   reason: string;
   blockers: SelfPromptAutoSubmitBlocker[];
   schemaRef: WorkspaceRef;
@@ -111,6 +117,21 @@ export interface SelfPromptRecommendation {
   reviewChecklist?: string[];
   autoSubmitGate?: SelfPromptAutoSubmitGate;
   mode: 'shadow-only' | 'human-review-required' | 'auto-submit-eligible';
+}
+
+export interface SelfPromptAutoSubmitGateOptions {
+  approvedByHuman?: boolean;
+  resolvedRefs?: ReadonlyArray<string | WorkspaceRef> | ReadonlySet<string>;
+  schemaRef?: WorkspaceRef;
+  verifierRef?: WorkspaceRef;
+  verifierPassed?: boolean;
+  checkedAt?: string;
+  blockerRefs?: WorkspaceRef[];
+  missingEvidence?: boolean;
+  rawDownloadRequired?: boolean;
+  licenseRestriction?: boolean;
+  computeBudgetExceeded?: boolean;
+  repeatedFailure?: boolean;
 }
 
 export interface TrajectoryStep {
@@ -206,6 +227,114 @@ export function sanitizeTrajectoryForExport(
   ) as ScientificReproductionTrajectory;
 }
 
+export function evaluateSelfPromptAutoSubmitGate(
+  recommendation: SelfPromptRecommendation,
+  options: SelfPromptAutoSubmitGateOptions = {},
+): SelfPromptAutoSubmitGate {
+  const blockers: SelfPromptAutoSubmitBlocker[] = [];
+  const addBlocker = (blocker: SelfPromptAutoSubmitBlocker): void => {
+    if (!blockers.includes(blocker)) blockers.push(blocker);
+  };
+
+  const schemaRef = options.schemaRef ?? recommendation.autoSubmitGate?.schemaRef ?? unresolvedGateRef('schema');
+  const verifierRef = options.verifierRef ?? recommendation.autoSubmitGate?.verifierRef ?? unresolvedGateRef('verifier');
+
+  if (recommendation.mode !== 'auto-submit-eligible') {
+    addBlocker('human-confirmation-required');
+  }
+  if (!hasRefText(options.schemaRef ?? recommendation.autoSubmitGate?.schemaRef) || options.verifierPassed !== true) {
+    addBlocker('schema-or-verifier-incomplete');
+  }
+  if (!hasRefText(options.verifierRef ?? recommendation.autoSubmitGate?.verifierRef)) {
+    addBlocker('schema-or-verifier-incomplete');
+  }
+  if (!isAutoSubmitBudgetComplete(recommendation.budget)) {
+    addBlocker('budget-incomplete');
+  }
+  if (!recommendation.stopCondition?.trim()) {
+    addBlocker('stop-condition-incomplete');
+  }
+  if (!recommendation.humanConfirmationPoint?.trim() || options.approvedByHuman !== true) {
+    addBlocker('human-confirmation-required');
+  }
+  if (!Array.isArray(recommendation.requiredRefs) || recommendation.requiredRefs.length === 0) {
+    addBlocker('unresolved-required-ref');
+  } else {
+    const resolvedRefs = normalizeResolvedRefs(options.resolvedRefs);
+    if (!resolvedRefs) {
+      addBlocker('unresolved-required-ref');
+    } else {
+      for (const ref of recommendation.requiredRefs) {
+        if (!resolvedRefs.has(ref.ref)) addBlocker('unresolved-required-ref');
+      }
+    }
+  }
+  if (options.missingEvidence) addBlocker('missing-evidence');
+  if (options.rawDownloadRequired) addBlocker('raw-download-required');
+  if (options.licenseRestriction) addBlocker('license-restriction');
+  if (options.computeBudgetExceeded) addBlocker('compute-budget-exceeded');
+  if (options.repeatedFailure) addBlocker('repeated-failure');
+
+  const decision: NonNullable<SelfPromptAutoSubmitGate['decision']> = blockers.includes('repeated-failure')
+    ? 'failed-with-reason'
+    : blockers.length === 0
+      ? 'auto-submit'
+      : 'needs-human';
+
+  return {
+    status: decision,
+    decision,
+    reason: buildSelfPromptAutoSubmitReason(decision, blockers),
+    blockers,
+    schemaRef,
+    verifierRef,
+    blockerRefs: options.blockerRefs,
+    checkedAt: options.checkedAt,
+  };
+}
+
+function normalizeResolvedRefs(
+  refs: SelfPromptAutoSubmitGateOptions['resolvedRefs'],
+): ReadonlySet<string> | undefined {
+  if (!refs) return undefined;
+  if (refs instanceof Set) return refs;
+  return new Set(Array.from(refs).map((ref) => (typeof ref === 'string' ? ref : ref.ref)));
+}
+
+function buildSelfPromptAutoSubmitReason(
+  decision: NonNullable<SelfPromptAutoSubmitGate['decision']>,
+  blockers: SelfPromptAutoSubmitBlocker[],
+): string {
+  if (decision === 'auto-submit') {
+    return 'Auto-submit allowed: human approval, required refs, schema, verifier, budget, and stop condition are complete.';
+  }
+  if (decision === 'failed-with-reason') {
+    return `Auto-submit failed closed: ${blockers.join(', ')}.`;
+  }
+  return `Auto-submit needs human review: ${blockers.join(', ')}.`;
+}
+
+function isAutoSubmitBudgetComplete(budget: SelfPromptRecommendation['budget'] | undefined): boolean {
+  return Boolean(
+    budget
+      && Number.isInteger(budget.maxShadowRounds)
+      && budget.maxShadowRounds >= 1
+      && Number.isInteger(budget.maxAutoSubmitRounds)
+      && budget.maxAutoSubmitRounds >= 1
+      && typeof budget.stopOnRepeatedFailure === 'boolean'
+      && budget.stopOnRepeatedFailure
+      && budget.reviewRequiredBeforeSubmit === false,
+  );
+}
+
+function hasRefText(ref: WorkspaceRef | undefined): boolean {
+  return typeof ref?.ref === 'string' && ref.ref.trim().length > 0;
+}
+
+function unresolvedGateRef(kind: 'schema' | 'verifier'): WorkspaceRef {
+  return { ref: `artifact:self-prompt-${kind}:unresolved`, kind: 'artifact' };
+}
+
 function validateStep(step: TrajectoryStep, path: string, errors: string[]): void {
   requireText(step.id, `${path}.id`, errors);
   requireText(step.kind, `${path}.kind`, errors);
@@ -288,8 +417,8 @@ function validateAutoSubmitGate(
     errors.push(`${path} is required for auto-submit-eligible recommendations`);
     return;
   }
-  if (!['allowed', 'needs-human', 'failed'].includes(gate.status)) {
-    errors.push(`${path}.status must be allowed, needs-human, or failed`);
+  if (!['auto-submit', 'needs-human', 'failed-with-reason', 'allowed', 'failed'].includes(gate.status)) {
+    errors.push(`${path}.status must be auto-submit, needs-human, failed-with-reason, allowed, or failed`);
   }
   requireText(gate.reason, `${path}.reason`, errors);
   validateWorkspaceRef(gate.schemaRef, `${path}.schemaRef`, errors);
@@ -316,25 +445,28 @@ function validateAutoSubmitGate(
       errors.push(`${path}.blockers contains unknown blocker ${String(blocker)}`);
     }
   }
-  if (gate.status === 'allowed' && gate.blockers.length > 0) {
-    errors.push(`${path}.blockers must be empty when status is allowed`);
+  if ((gate.status === 'allowed' || gate.status === 'auto-submit') && gate.blockers.length > 0) {
+    errors.push(`${path}.blockers must be empty when status is auto-submit/allowed`);
   }
-  if ((gate.status === 'needs-human' || gate.status === 'failed') && gate.blockers.length === 0) {
+  if (
+    (gate.status === 'needs-human' || gate.status === 'failed' || gate.status === 'failed-with-reason')
+    && gate.blockers.length === 0
+  ) {
     errors.push(`${path}.blockers must explain why auto-submit is blocked`);
   }
-  if (blockerSet.has('missing-evidence') && gate.status === 'allowed') {
+  if (blockerSet.has('missing-evidence') && isAutoSubmitStatus(gate.status)) {
     errors.push(`${path}.status must be needs-human or failed when missing evidence blocks auto-submit`);
   }
-  if (blockerSet.has('raw-download-required') && gate.status === 'allowed') {
+  if (blockerSet.has('raw-download-required') && isAutoSubmitStatus(gate.status)) {
     errors.push(`${path}.status must be needs-human or failed when raw download is required`);
   }
-  if (blockerSet.has('license-restriction') && gate.status === 'allowed') {
+  if (blockerSet.has('license-restriction') && isAutoSubmitStatus(gate.status)) {
     errors.push(`${path}.status must be needs-human or failed when license restrictions apply`);
   }
-  if (blockerSet.has('compute-budget-exceeded') && gate.status === 'allowed') {
+  if (blockerSet.has('compute-budget-exceeded') && isAutoSubmitStatus(gate.status)) {
     errors.push(`${path}.status must be needs-human or failed when compute budget is exceeded`);
   }
-  if (blockerSet.has('repeated-failure') && gate.status === 'allowed') {
+  if (blockerSet.has('repeated-failure') && isAutoSubmitStatus(gate.status)) {
     errors.push(`${path}.status must be needs-human or failed when repeated failure is detected`);
   }
   if (gate.blockerRefs) {
@@ -342,6 +474,10 @@ function validateAutoSubmitGate(
       validateWorkspaceRef(ref, `${path}.blockerRefs[${index}]`, errors);
     }
   }
+}
+
+function isAutoSubmitStatus(status: SelfPromptAutoSubmitGateStatus): boolean {
+  return status === 'auto-submit' || status === 'allowed';
 }
 
 function validateWorkspaceRef(ref: WorkspaceRef, path: string, errors: string[]): void {

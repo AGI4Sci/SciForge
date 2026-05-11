@@ -3,6 +3,7 @@ import { access, readFile } from 'node:fs/promises';
 
 import {
   buildSampleScientificReproductionTrajectory,
+  evaluateSelfPromptAutoSubmitGate,
   sanitizeTrajectoryForExport,
   type ScientificReproductionTrajectory,
   validateScientificReproductionTrajectory,
@@ -47,6 +48,16 @@ assert.ok(sample.selfPromptRecommendations[0]?.humanConfirmationPoint);
 
 const baseRecommendation = sample.selfPromptRecommendations[0];
 assert.ok(baseRecommendation, 'sample should include a first self-prompt recommendation');
+const shadowGate = evaluateSelfPromptAutoSubmitGate(baseRecommendation, {
+  schemaRef: { ref: 'artifact:self-prompt-schema:v1', kind: 'artifact' },
+  verifierRef: { ref: 'artifact:self-prompt-verifier:auto-submit-v1', kind: 'artifact' },
+  verifierPassed: true,
+  resolvedRefs: baseRecommendation.requiredRefs,
+  approvedByHuman: false,
+});
+assert.equal(shadowGate.status, 'needs-human');
+assert.ok(shadowGate.blockers.includes('human-confirmation-required'), 'shadow mode should require human review');
+
 const autoSubmitCandidate = structuredClone(baseRecommendation);
 autoSubmitCandidate.mode = 'auto-submit-eligible';
 autoSubmitCandidate.requiredRefs = [
@@ -69,19 +80,42 @@ autoSubmitCandidate.reviewChecklist = [
   'budget and stop condition are bounded',
   'human confirmation point is recorded',
 ];
-autoSubmitCandidate.autoSubmitGate = {
-  status: 'allowed',
-  reason: 'All required refs resolve and no missing evidence, raw download, license, compute, or repeated-failure blocker is present.',
-  blockers: [],
+autoSubmitCandidate.autoSubmitGate = evaluateSelfPromptAutoSubmitGate(autoSubmitCandidate, {
   schemaRef: { ref: 'artifact:self-prompt-schema:v1', kind: 'artifact' },
   verifierRef: { ref: 'artifact:self-prompt-verifier:auto-submit-v1', kind: 'artifact' },
+  verifierPassed: true,
+  resolvedRefs: autoSubmitCandidate.requiredRefs,
+  approvedByHuman: true,
   checkedAt: '2026-05-11T00:04:00.000Z',
-};
+});
+assert.equal(autoSubmitCandidate.autoSubmitGate.status, 'auto-submit');
+assert.equal(autoSubmitCandidate.autoSubmitGate.blockers.length, 0);
 
 const autoSubmitEligible = structuredClone(sample);
 autoSubmitEligible.selfPromptRecommendations = [autoSubmitCandidate];
 let autoSubmitValidation = validateScientificReproductionTrajectory(autoSubmitEligible);
 assert.equal(autoSubmitValidation.ok, true, autoSubmitValidation.errors.join('\n'));
+
+const missingRefGate = evaluateSelfPromptAutoSubmitGate(autoSubmitCandidate, {
+  schemaRef: { ref: 'artifact:self-prompt-schema:v1', kind: 'artifact' },
+  verifierRef: { ref: 'artifact:self-prompt-verifier:auto-submit-v1', kind: 'artifact' },
+  verifierPassed: true,
+  resolvedRefs: autoSubmitCandidate.requiredRefs.slice(1),
+  approvedByHuman: true,
+});
+assert.equal(missingRefGate.status, 'needs-human');
+assert.ok(missingRefGate.blockers.includes('unresolved-required-ref'), 'missing required ref should block auto-submit');
+
+const repeatedFailureGate = evaluateSelfPromptAutoSubmitGate(autoSubmitCandidate, {
+  schemaRef: { ref: 'artifact:self-prompt-schema:v1', kind: 'artifact' },
+  verifierRef: { ref: 'artifact:self-prompt-verifier:auto-submit-v1', kind: 'artifact' },
+  verifierPassed: true,
+  resolvedRefs: autoSubmitCandidate.requiredRefs,
+  approvedByHuman: true,
+  repeatedFailure: true,
+});
+assert.equal(repeatedFailureGate.status, 'failed-with-reason');
+assert.ok(repeatedFailureGate.blockers.includes('repeated-failure'), 'repeated failure should fail closed');
 
 const badRequiredRef = structuredClone(autoSubmitEligible);
 badRequiredRef.selfPromptRecommendations[0].requiredRefs = [
