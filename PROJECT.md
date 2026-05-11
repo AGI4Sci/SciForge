@@ -63,15 +63,15 @@
 
 Todo：
 
-- [ ] 在 `HarnessContract` / `HarnessDecision` / trace 中加入 `latencyTier`。
-- [ ] 增加 latency tier classifier，优先基于用户显式要求、风险、side effect、上下文可用性和预计成本判断。
-- [ ] 为每个 tier 定义默认 context budget、tool budget、verification、repair、progress、presentation policy。
-- [ ] 增加 smoke：同一请求在不同 tier 下产生不同预算和 stage plan。
+- [x] 在 `HarnessContract` / `HarnessDecision` / trace 中加入 `latencyTier`。
+- [x] 增加 latency tier classifier，优先基于用户显式要求、风险、side effect、上下文可用性和预计成本判断。
+- [x] 为每个 tier 定义默认 context budget、tool budget、verification、repair、progress、presentation policy。
+- [x] 增加 smoke：同一请求在不同 tier 下产生不同预算和 stage plan。
 
 验收：
 
-- [ ] 简单问题不会默认进入深度 project/runtime/generation。
-- [ ] 深度请求仍可显式升级，不破坏科研复现和严格验证能力。
+- [x] 简单问题不会默认进入深度 project/runtime/generation。
+- [x] 深度请求仍可显式升级，不破坏科研复现和严格验证能力。
 
 ### H002 Critical Path / Audit Path 分层执行
 
@@ -84,15 +84,15 @@ Todo：
 
 Todo：
 
-- [ ] 给每个 `HarnessStage` 标注 `critical`、`audit` 或 `external`。
-- [ ] 支持 `criticalPathOnly` evaluation mode，quick/instant 只执行必要 hook。
-- [ ] audit path 改成异步或 post-result materialization，不阻塞 first answer。
-- [ ] trace 中记录哪些 audit hook 是 deferred、skipped 或 completed。
+- [x] 给每个 `HarnessStage` 标注 `critical`、`audit` 或 `external`。
+- [x] 支持 `criticalPathOnly` evaluation mode，quick/instant 只执行必要 hook。
+- [x] audit path 改成异步或 post-result materialization，不阻塞 first answer。
+- [x] trace 中记录哪些 audit hook 是 deferred、skipped 或 completed。
 
 验收：
 
-- [ ] quick 任务能跳过非必要 audit hook，但仍保留可解释的 minimal trace。
-- [ ] deep/background 任务仍可生成完整 audit record。
+- [x] quick 任务能跳过非必要 audit hook，但仍保留可解释的 minimal trace。
+- [x] deep/background 任务仍可生成完整 audit record。
 
 ### H003 Cheap-First Capability Escalation
 
@@ -110,15 +110,15 @@ Todo：
 
 Todo：
 
-- [ ] 在 `CapabilityDecision` 中加入 `escalationPlan` 或 `candidateTiers`。
-- [ ] 为 capability manifest 增加 cost class、latency class、side effect class。
-- [ ] 让 broker 先尝试低成本候选，失败或 evidence insufficient 时再升级。
-- [ ] 每次升级必须写明收益、成本和停止条件。
+- [x] 在 `CapabilityDecision` 中加入 `escalationPlan` 或 `candidateTiers`。
+- [x] 为 capability manifest 增加 cost class、latency class、side effect class。
+- [x] 让 broker 先尝试低成本候选，失败或 evidence insufficient 时再升级。
+- [x] 每次升级必须写明收益、成本和停止条件。
 
 验收：
 
-- [ ] 普通任务不会直接进入最重能力。
-- [ ] 升级路径可从 trace 重建。
+- [x] 普通任务不会直接进入最重能力。
+- [x] 升级路径可从 trace 重建。
 
 ### H004 分层 Verification Policy
 
@@ -134,16 +134,16 @@ Todo：
 
 Todo：
 
-- [ ] 将 `VerificationPolicy.intensity` 扩展为 `verificationLayers`。
-- [ ] quick 默认只跑 `shape` + `reference`。
-- [ ] bounded 默认跑 `shape` + `reference` + `claim`。
-- [ ] deep/reproduction 才启用 `recompute` / `audit`。
-- [ ] validator 输出 presentation-friendly partial，而不是把用户丢进 raw schema failure。
+- [x] 将 `VerificationPolicy.intensity` 扩展为 `verificationLayers`。
+- [x] quick 默认只跑 `shape` + `reference`。
+- [x] bounded 默认跑 `shape` + `reference` + `claim`。
+- [x] deep/reproduction 才启用 `recompute` / `audit`。
+- [x] validator 输出 presentation-friendly partial，而不是把用户丢进 raw schema failure。
 
 验收：
 
-- [ ] 成功/partial/failure 都能快速形成用户可读结果。
-- [ ] 严格验证能力保留，但只在需要时触发。
+- [x] 成功/partial/failure 都能快速形成用户可读结果。
+- [x] 严格验证能力保留，但只在需要时触发。
 
 ### H005 Repair Budget 与 Partial-First 策略
 
@@ -151,16 +151,16 @@ Todo：
 
 Todo：
 
-- [ ] 在 `RepairContextPolicy` 中加入 per-tier repair budget。
-- [ ] quick/bounded 只允许 cheap repair，失败立即 materialize partial/failure。
-- [ ] deep/background 可多轮 repair，但每轮必须产生 checkpoint artifact。
-- [ ] 重复失败、无代码变化、无新 evidence 时停止 repair。
-- [ ] repair 结果必须进入 `ResultPresentationContract` 的 failure reason、impact、recover actions。
+- [x] 在 `RepairContextPolicy` 中加入 per-tier repair budget。
+- [x] quick/bounded 只允许 cheap repair，失败立即 materialize partial/failure。
+- [x] deep/background 可多轮 repair，但每轮必须产生 checkpoint artifact。
+- [x] 重复失败、无代码变化、无新 evidence 时停止 repair。
+- [x] repair 结果必须进入 `ResultPresentationContract` 的 failure reason、impact、recover actions。
 
 验收：
 
-- [ ] 不再出现长时间 repair 后只剩 runtime trace 的用户体验。
-- [ ] 每个 repair attempt 都可审计，但不阻塞主回复。
+- [x] 不再出现长时间 repair 后只剩 runtime trace 的用户体验。
+- [x] 每个 repair attempt 都可审计，但不阻塞主回复。
 
 ### H006 Progress Deadline 与 First Result SLA
 
@@ -176,15 +176,15 @@ Todo：
 
 Todo：
 
-- [ ] 在 `ProgressPlan` 中加入 `firstResultDeadlineMs`、`phaseDeadlines`、`backgroundAfterMs`。
-- [ ] silence policy 到期时优先 materialize partial，而不是只显示 still working。
-- [ ] 超过 first result deadline 必须生成 `result-presentation` 或 `partial-result` event。
-- [ ] UI 展示“已完成部分”和“仍在后台继续的部分”。
+- [x] 在 `ProgressPlan` 中加入 `firstResultDeadlineMs`、`phaseDeadlines`、`backgroundAfterMs`。
+- [x] silence policy 到期时优先 materialize partial，而不是只显示 still working。
+- [x] 超过 first result deadline 必须生成 `result-presentation` 或 `partial-result` event。
+- [x] UI 展示“已完成部分”和“仍在后台继续的部分”。
 
 验收：
 
-- [ ] 任意任务在 first result deadline 前有可读状态或 partial。
-- [ ] 长任务自动后台化，不把用户锁在等待态。
+- [x] 任意任务在 first result deadline 前有可读状态或 partial。
+- [x] 长任务自动后台化，不把用户锁在等待态。
 
 ### H007 Presentation-First Runtime Contract
 
@@ -192,15 +192,15 @@ Todo：
 
 Todo：
 
-- [ ] 让 runtime 在 quick/bounded/deep/failure 都强制 materialize `ResultPresentationContract`。
-- [ ] presentation contract 标注 `complete`、`partial`、`needs-human`、`background-running`。
-- [ ] 主回复只消费 presentation contract；process/raw/diagnostics 默认折叠。
-- [ ] 对 no-result、raw-only、trace-only 输出增加 no-legacy guard。
+- [x] 让 runtime 在 quick/bounded/deep/failure 都强制 materialize `ResultPresentationContract`。
+- [x] presentation contract 标注 `complete`、`partial`、`needs-human`、`background-running`。
+- [x] 主回复只消费 presentation contract；process/raw/diagnostics 默认折叠。
+- [x] 对 no-result、raw-only、trace-only 输出增加 no-legacy guard。
 
 验收：
 
-- [ ] 用户永远先看到答案、partial 或失败原因，而不是 raw ToolPayload/trace。
-- [ ] 审计信息仍可展开和导出。
+- [x] 用户永远先看到答案、partial 或失败原因，而不是 raw ToolPayload/trace。
+- [x] 审计信息仍可展开和导出。
 
 ### H008 分层 Harness 模块化研究框架
 
@@ -221,16 +221,16 @@ Todo：
 
 Todo：
 
-- [ ] 定义 `HarnessModule` 接口，模块声明 owned stages、inputs、outputs、cost、default tier applicability。
-- [ ] profile 只组合模块和参数，不直接承载大量策略逻辑。
-- [ ] 增加 module registry 和 module-level smoke coverage。
-- [ ] 支持实验配置：同一 fixture 用不同 module stack replay，比较 latency、cost、quality、failure rate。
-- [ ] 输出 harness research report：每个模块对耗时、成功率、用户等待的影响。
+- [x] 定义 `HarnessModule` 接口，模块声明 owned stages、inputs、outputs、cost、default tier applicability。
+- [x] profile 只组合模块和参数，不直接承载大量策略逻辑。
+- [x] 增加 module registry 和 module-level smoke coverage。
+- [x] 支持实验配置：同一 fixture 用不同 module stack replay，比较 latency、cost、quality、failure rate。
+- [x] 输出 harness research report：每个模块对耗时、成功率、用户等待的影响。
 
 验收：
 
-- [ ] 新增或替换策略不需要改核心 runtime。
-- [ ] 可以系统性研究“更快、更准、更省”的 harness 组合。
+- [x] 新增或替换策略不需要改核心 runtime。
+- [x] 可以系统性研究“更快、更准、更省”的 harness 组合。
 
 ### H009 Profile 简化与默认策略重设
 
@@ -238,16 +238,16 @@ Todo：
 
 Todo：
 
-- [ ] 重新定义 `balanced-default`：默认 quick/bounded，不默认 deep。
-- [ ] `fast-answer` 收敛为 instant/quick。
-- [ ] `research-grade` 和领域 profile 只在用户要求深度、严格验证或复现时启用。
-- [ ] 增加 profile selection trace：为什么选择当前 profile，为什么没有选择更深 profile。
-- [ ] 对历史 profile 加 migration note，避免旧行为被误判为 regression。
+- [x] 重新定义 `balanced-default`：默认 quick/bounded，不默认 deep。
+- [x] `fast-answer` 收敛为 instant/quick。
+- [x] `research-grade` 和领域 profile 只在用户要求深度、严格验证或复现时启用。
+- [x] 增加 profile selection trace：为什么选择当前 profile，为什么没有选择更深 profile。
+- [x] 对历史 profile 加 migration note，避免旧行为被误判为 regression。
 
 验收：
 
-- [ ] 默认用户请求更迅速、直接。
-- [ ] 高风险/高深度任务仍可通过显式 profile 或 classifier 升级。
+- [x] 默认用户请求更迅速、直接。
+- [x] 高风险/高深度任务仍可通过显式 profile 或 classifier 升级。
 
 ### H010 Harness Latency Benchmark
 
@@ -267,25 +267,25 @@ Fixture 维度：
 
 Todo：
 
-- [ ] 为每类 fixture 定义 expected latency tier、max first result time、max tool calls、expected presentation sections。
-- [ ] 增加 `smoke:harness-latency-tiers`。
-- [ ] 增加 replay benchmark，输出 cost/latency/quality summary。
-- [ ] 把 benchmark 纳入 `verify:fast` 或单独的 non-live smoke。
+- [x] 为每类 fixture 定义 expected latency tier、max first result time、max tool calls、expected presentation sections。
+- [x] 增加 `smoke:harness-latency-tiers`。
+- [x] 增加 replay benchmark，输出 cost/latency/quality summary。
+- [x] 把 benchmark 纳入 `verify:fast` 或单独的 non-live smoke。
 
 验收：
 
-- [ ] harness 改动可以量化“更快、更直接”，而不是只凭主观感觉。
-- [ ] deep 能力没有被提速改动破坏。
+- [x] harness 改动可以量化“更快、更直接”，而不是只凭主观感觉。
+- [x] deep 能力没有被提速改动破坏。
 
 ## 当前里程碑
 
-- [ ] M1：完成 `latencyTier` contract 与默认 tier budgets。
-- [ ] M2：实现 critical path / audit path 分层。
-- [ ] M3：实现 cheap-first capability escalation。
-- [ ] M4：实现 verification layers 与 per-tier repair budget。
-- [ ] M5：实现 first result deadline 和 partial-first progress。
-- [ ] M6：把 profile 改造成 module stack 配置。
-- [ ] M7：建立 harness latency benchmark，并用 smoke 固化。
+- [x] M1：完成 `latencyTier` contract 与默认 tier budgets。
+- [x] M2：实现 critical path / audit path 分层。
+- [x] M3：实现 cheap-first capability escalation。
+- [x] M4：实现 verification layers 与 per-tier repair budget。
+- [x] M5：实现 first result deadline 和 partial-first progress。
+- [x] M6：把 profile 改造成 module stack 配置。
+- [x] M7：建立 harness latency benchmark，并用 smoke 固化。
 
 ## 已清理内容
 

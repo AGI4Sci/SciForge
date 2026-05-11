@@ -272,6 +272,7 @@ export interface ResultPresentationDiagnosticsRef {
 
 export interface ResultPresentationContract {
   schemaVersion: 'sciforge.result-presentation.v1';
+  status?: 'complete' | 'partial' | 'needs-human' | 'background-running' | 'failed';
   answerBlocks: ResultPresentationAnswerBlock[];
   keyFindings: ResultPresentationKeyFinding[];
   inlineCitations: ResultPresentationCitation[];

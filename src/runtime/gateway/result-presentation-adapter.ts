@@ -37,6 +37,7 @@ export function adaptToolPayloadToResultPresentation(
 
   return {
     schemaVersion: 'sciforge.result-presentation.v1',
+    status: resultStatusFromPayload(payload),
     answerBlocks: answerText ? [{
       id: 'answer-1',
       type: 'paragraph',
@@ -299,6 +300,15 @@ function defaultExpandedSections(input: {
     input.hasArtifacts ? 'artifacts' : undefined,
     input.hasNextActions ? 'next-actions' : undefined,
   ].filter((section): section is ResultPresentationContract['defaultExpandedSections'][number] => Boolean(section));
+}
+
+function resultStatusFromPayload(payload: ToolPayload): NonNullable<ResultPresentationContract['status']> {
+  const text = `${payload.claimType} ${payload.evidenceLevel} ${payload.message}`.toLowerCase();
+  if (/background|running|continuing/.test(text)) return 'background-running';
+  if (/failed-with-reason|failed|failure|repair-needed|失败/.test(text)) return 'failed';
+  if (/needs-human|human/.test(text)) return 'needs-human';
+  if (/partial|insufficient|unverified|unavailable|missing/.test(text)) return 'partial';
+  return 'complete';
 }
 
 function primaryAnswerCitationIds(

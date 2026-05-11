@@ -45,6 +45,9 @@ assert.equal(brief.id, 'runtime.artifact-resolve');
 assert.deepEqual(brief.providerIds, ['sciforge.core.runtime.artifact-resolve']);
 assert.deepEqual(brief.validatorIds, ['sciforge.core.runtime.artifact-resolve.schema']);
 assert.deepEqual(brief.repairFailureCodes, ['contract-invalid']);
+assert.equal(brief.costClass, 'low');
+assert.equal(brief.latencyClass, 'low');
+assert.equal(brief.sideEffectClass, 'read');
 assert.equal('inputSchema' in brief, false, 'compact brief must not include full input schema');
 assert.equal('examples' in brief, false, 'compact brief must not include examples');
 

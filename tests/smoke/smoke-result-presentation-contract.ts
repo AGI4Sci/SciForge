@@ -469,6 +469,9 @@ function assertContractShape(contract: unknown, fixture: PresentationFixture) {
   for (const section of ['answer', 'evidence', 'artifacts', 'next-actions']) {
     assert.ok(defaultExpandedSections.includes(section), `${fixture.id}: ${section} should be expanded by default`);
   }
+  for (const legacySection of ['process', 'diagnostics', 'raw-payload']) {
+    assert.ok(!defaultExpandedSections.includes(legacySection), `${fixture.id}: ${legacySection} must not be default-visible`);
+  }
   for (const section of ['process', 'trace', 'diagnostics', 'raw-payload', 'raw']) {
     assert.ok(!defaultExpandedSections.includes(section), `${fixture.id}: ${section} should be collapsed by default`);
   }

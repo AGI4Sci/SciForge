@@ -1,6 +1,8 @@
 import type {
   BudgetExhaustedPolicy,
   CapabilityBudget,
+  CapabilityEscalationStep,
+  CapabilityEscalationTier,
   HarnessCallback,
   HarnessContract,
   HarnessContext,
@@ -11,16 +13,37 @@ import type {
   HarnessProfile,
   HarnessRuntime,
   HarnessStage,
+  HarnessStagePathKind,
   HarnessTrace,
+  LatencyTier,
   PresentationPlan,
   ProgressDecision,
   PromptDirective,
   RepairContextPolicy,
+  RepairStopCondition,
   SideEffectAllowance,
   VerificationIntensity,
+  VerificationLayer,
   VerificationPolicy,
 } from './contracts';
-import { getHarnessProfile } from './profiles';
+import { getHarnessProfile, getLatencyTierPolicy } from './profiles';
+
+export const HARNESS_CRITICAL_PATH_STAGES: readonly HarnessStage[] = [
+  'classifyIntent',
+  'selectContext',
+  'setExplorationBudget',
+  'selectCapabilities',
+  'onToolPolicy',
+  'onBudgetAllocate',
+  'beforePromptRender',
+  'beforeResultPresentation',
+  'beforeUserProgressEvent',
+];
+
+export const HARNESS_AUDIT_PATH_STAGES: readonly HarnessStage[] = [
+  'beforeResultValidation',
+  'onRepairRequired',
+];
 
 export const HARNESS_EVALUATION_STAGES: readonly HarnessStage[] = [
   'classifyIntent',
@@ -71,6 +94,18 @@ export const HARNESS_ALL_STAGES: readonly HarnessStage[] = [
   ...HARNESS_EXTERNAL_HOOK_STAGES,
 ];
 
+export const HARNESS_STAGE_PATH_KIND: Readonly<Record<HarnessStage, HarnessStagePathKind>> = Object.freeze(
+  Object.fromEntries([
+    ...HARNESS_CRITICAL_PATH_STAGES.map((stage) => [stage, 'critical'] as const),
+    ...HARNESS_AUDIT_PATH_STAGES.map((stage) => [stage, 'audit'] as const),
+    ...HARNESS_EXTERNAL_HOOK_STAGES.map((stage) => [stage, 'external'] as const),
+  ]),
+) as Readonly<Record<HarnessStage, HarnessStagePathKind>>;
+
+export function getHarnessStagePathKind(stage: HarnessStage): HarnessStagePathKind {
+  return HARNESS_STAGE_PATH_KIND[stage];
+}
+
 export interface CreateHarnessRuntimeOptions {
   profiles?: Record<string, HarnessProfile>;
   defaultProfileId?: string;
@@ -96,14 +131,44 @@ class DefaultHarnessRuntime implements HarnessRuntime {
       traceId: this.options.traceIdFactory?.(input) ?? stableTraceId(input, profile.id),
       requestId: input.requestId,
       profileId: profile.id,
+      latencyTier: contract.latencyTier,
       stages: [],
+      auditHooks: [],
       conflicts: [],
-      auditNotes: [stageCoverageAuditNote()],
+      auditNotes: [stageCoverageAuditNote(), profileSelectionAuditNote(profile, contract)],
     };
     contract = { ...contract, traceRef: trace.traceId };
+    const evaluationMode = resolveEvaluationMode(input);
 
     for (const stage of HARNESS_EVALUATION_STAGES) {
+      const pathKind = getHarnessStagePathKind(stage);
       const callbacks = profile.callbacks.filter((callback) => callback.stages.includes(stage));
+      if (evaluationMode === 'criticalPathOnly' && pathKind === 'audit') {
+        if (callbacks.length === 0) {
+          trace.auditHooks.push({
+            stage,
+            status: 'skipped',
+            reason: 'criticalPathOnly mode omits audit stage with no registered callbacks',
+          });
+        } else {
+          for (const callback of callbacks) {
+            trace.auditHooks.push({
+              stage,
+              callbackId: callback.id,
+              status: 'deferred',
+              reason: 'criticalPathOnly mode defers audit hook until post-result materialization',
+            });
+          }
+        }
+        continue;
+      }
+      if (pathKind === 'audit' && callbacks.length === 0) {
+        trace.auditHooks.push({
+          stage,
+          status: 'skipped',
+          reason: 'full evaluation had no registered audit callbacks for this stage',
+        });
+      }
       for (const callback of callbacks) {
         const context: HarnessContext = { input, profile, stage, contract, trace };
         const decision = normalizeDecision(await callback.decide(context), callback.id);
@@ -114,14 +179,25 @@ class DefaultHarnessRuntime implements HarnessRuntime {
           humanApprovalSatisfied: input.humanApprovalSatisfied === true,
         });
         contract = result.contract;
+        trace.latencyTier = contract.latencyTier;
         trace.conflicts.push(...result.conflicts);
         trace.auditNotes.push(...decision.auditNotes ?? []);
         trace.stages.push({
           stage,
+          pathKind,
           callbackId: callback.id,
+          ...(pathKind === 'audit' ? { auditStatus: 'completed' as const } : {}),
           decision,
           contractSnapshot: cloneContract(contract),
         });
+        if (pathKind === 'audit') {
+          trace.auditHooks.push({
+            stage,
+            callbackId: callback.id,
+            status: 'completed',
+            reason: 'audit hook completed during full evaluation',
+          });
+        }
       }
     }
 
@@ -152,9 +228,31 @@ function stageCoverageAuditNote() {
     severity: 'info' as const,
     message: [
       `evaluate=${HARNESS_EVALUATION_STAGES.join(',')}`,
+      `critical=${HARNESS_CRITICAL_PATH_STAGES.join(',')}`,
+      `audit=${HARNESS_AUDIT_PATH_STAGES.join(',')}`,
       `external-hooks=${HARNESS_EXTERNAL_HOOK_STAGES.join(',')}`,
     ].join('; '),
   };
+}
+
+function profileSelectionAuditNote(profile: HarnessProfile, contract: HarnessContract) {
+  const deeperProfileReason = contract.latencyTier === 'deep' || contract.latencyTier === 'background'
+    ? 'deep-capable profile/tier is active because the request or profile explicitly requires depth'
+    : 'deeper profiles were not selected by default; the current tier favors fast-first response with explicit upgrade paths';
+  return {
+    sourceCallbackId: 'harness-runtime.profile-selection',
+    severity: 'info' as const,
+    message: `profile=${profile.id}; latencyTier=${contract.latencyTier}; moduleStack=${profile.moduleStack?.join(',') ?? 'callbacks-only'}; ${deeperProfileReason}`,
+  };
+}
+
+function resolveEvaluationMode(input: HarnessInput): NonNullable<HarnessInput['evaluationMode']> {
+  if (input.evaluationMode) return input.evaluationMode;
+  const runtimeEvaluationMode = input.runtimeConfig?.evaluationMode;
+  if (runtimeEvaluationMode === 'full' || runtimeEvaluationMode === 'criticalPathOnly') return runtimeEvaluationMode;
+  const latencyTier = input.latencyTier ?? input.runtimeConfig?.latencyTier;
+  if (latencyTier === 'instant' || latencyTier === 'quick') return 'criticalPathOnly';
+  return 'full';
 }
 
 type MergeContext = {
@@ -169,6 +267,7 @@ function contractFromDefaults(profile: HarnessProfile, input: HarnessInput): Har
   const base: HarnessContract = {
     schemaVersion: 'sciforge.agent-harness-contract.v1',
     profileId: profile.id,
+    latencyTier: input.latencyTier ?? defaults.latencyTier ?? 'quick',
     intentMode: input.intentMode ?? defaults.intentMode,
     explorationMode: defaults.explorationMode,
     allowedContextRefs: sortedUnique([...(input.contextRefs ?? []), ...defaults.allowedContextRefs]),
@@ -180,6 +279,8 @@ function contractFromDefaults(profile: HarnessProfile, input: HarnessInput): Har
       preferredCapabilityIds: sortedUnique(defaults.capabilityPolicy.preferredCapabilityIds),
       blockedCapabilities: sortedUnique(defaults.capabilityPolicy.blockedCapabilities),
       sideEffects: { ...defaults.capabilityPolicy.sideEffects },
+      escalationPlan: sortEscalationPlan(defaults.capabilityPolicy.escalationPlan),
+      candidateTiers: normalizeCandidateTiers(defaults.capabilityPolicy.candidateTiers),
     },
     toolBudget: { ...defaults.toolBudget, ...tightenToolBudget(defaults.toolBudget, input.budgetOverrides?.toolBudget) },
     verificationPolicy: { ...defaults.verificationPolicy },
@@ -188,7 +289,7 @@ function contractFromDefaults(profile: HarnessProfile, input: HarnessInput): Har
     presentationPlan: clonePresentationPlan(defaults.presentationPlan ?? basePresentationPlan()),
     promptDirectives: sortPromptDirectives(defaults.promptDirectives),
   };
-  return normalizeContract(base);
+  return normalizeContract(input.latencyTier ? applyLatencyTierPolicy(base, input.latencyTier) : base);
 }
 
 function mergeDecision(contract: HarnessContract, decision: HarnessDecision, context: MergeContext): {
@@ -199,6 +300,9 @@ function mergeDecision(contract: HarnessContract, decision: HarnessDecision, con
   const conflicts: HarnessMergeConflict[] = [];
 
   if (decision.intentSignals?.intentMode) next.intentMode = decision.intentSignals.intentMode;
+  if (decision.latencyTier || decision.intentSignals?.latencyTier) {
+    next = applyLatencyTierPolicy(next, decision.latencyTier ?? decision.intentSignals?.latencyTier ?? next.latencyTier);
+  }
   if (decision.intentSignals?.explorationMode) {
     const chosen = escalateExploration(next.explorationMode, decision.intentSignals.explorationMode);
     if (chosen !== decision.intentSignals.explorationMode) {
@@ -238,6 +342,18 @@ function mergeDecision(contract: HarnessContract, decision: HarnessDecision, con
     ...next.capabilityPolicy.candidates,
     ...(decision.capabilityHints?.candidates ?? []),
   ]);
+  if (decision.capabilityHints?.escalationPlan) {
+    next.capabilityPolicy.escalationPlan = sortEscalationPlan([
+      ...(next.capabilityPolicy.escalationPlan ?? []),
+      ...decision.capabilityHints.escalationPlan,
+    ]);
+  }
+  if (decision.capabilityHints?.candidateTiers) {
+    next.capabilityPolicy.candidateTiers = mergeCandidateTiers(
+      next.capabilityPolicy.candidateTiers,
+      decision.capabilityHints.candidateTiers,
+    );
+  }
 
   if (decision.capabilityHints?.sideEffects) {
     for (const key of Object.keys(decision.capabilityHints.sideEffects) as Array<keyof typeof decision.capabilityHints.sideEffects>) {
@@ -289,6 +405,10 @@ function mergeRawDecision(left: HarnessDecision, right: HarnessDecision): Harnes
     ? {
       ...left.verification,
       ...right.verification,
+      verificationLayers: orderedVerificationLayers([
+        ...(left.verification?.verificationLayers ?? []),
+        ...(right.verification?.verificationLayers ?? []),
+      ]),
       ...(selectedVerifierIds.length > 0 ? { selectedVerifierIds } : {}),
     }
     : undefined;
@@ -329,7 +449,7 @@ function mergeContextBudget(current: HarnessContract['contextBudget'], incoming:
 function tightenToolBudget(current: CapabilityBudget, incoming?: Partial<CapabilityBudget>) {
   if (!incoming) return { ...current };
   return {
-    maxWallMs: minDefined(current.maxWallMs, incoming.maxWallMs),
+    maxWallMs: minDefined(current.maxWallMs ?? Number.MAX_SAFE_INTEGER, incoming.maxWallMs),
     maxContextTokens: minDefined(current.maxContextTokens, incoming.maxContextTokens),
     maxToolCalls: minDefined(current.maxToolCalls, incoming.maxToolCalls),
     maxObserveCalls: minDefined(current.maxObserveCalls, incoming.maxObserveCalls),
@@ -366,8 +486,20 @@ function mergeVerification(
     ...(current.selectedVerifierIds ?? []),
     ...(incoming.selectedVerifierIds ?? []),
   ]);
+  const incomingLayers = incoming.verificationLayers ?? (incoming.intensity ? verificationLayersForIntensity(incoming.intensity) : undefined);
+  const currentLayers = current.verificationLayers ?? verificationLayersForIntensity(current.intensity);
+  const verificationLayers = incomingLayers
+    ? (allowDowngrade ? orderedVerificationLayers(incomingLayers) : orderedVerificationLayers([...currentLayers, ...incomingLayers]))
+    : orderedVerificationLayers(currentLayers);
+  if (incomingLayers && !allowDowngrade) {
+    const missing = currentLayers.filter((layer) => !verificationLayers.includes(layer));
+    if (missing.length > 0) {
+      conflicts.push(conflict('verificationPolicy.verificationLayers', currentLayers, incomingLayers, verificationLayers, 'verification layers only escalate without human approval', context));
+    }
+  }
   return {
     intensity,
+    verificationLayers,
     requireCitations: current.requireCitations || incoming.requireCitations === true,
     requireCurrentRefs: current.requireCurrentRefs || incoming.requireCurrentRefs === true,
     requireArtifactRefs: current.requireArtifactRefs || incoming.requireArtifactRefs === true,
@@ -381,6 +513,14 @@ function mergeRepair(current: RepairContextPolicy, incoming: Partial<RepairConte
     maxAttempts: Math.max(current.maxAttempts, incoming.maxAttempts ?? current.maxAttempts),
     includeStdoutSummary: current.includeStdoutSummary || incoming.includeStdoutSummary === true,
     includeStderrSummary: current.includeStderrSummary || incoming.includeStderrSummary === true,
+    maxWallMs: minDefined(current.maxWallMs ?? Number.MAX_SAFE_INTEGER, incoming.maxWallMs),
+    cheapOnly: current.cheapOnly && incoming.cheapOnly !== false,
+    partialFirst: current.partialFirst || incoming.partialFirst === true,
+    materializePartialOnFailure: current.materializePartialOnFailure || incoming.materializePartialOnFailure === true,
+    checkpointArtifacts: current.checkpointArtifacts || incoming.checkpointArtifacts === true,
+    stopOnRepeatedFailure: current.stopOnRepeatedFailure || incoming.stopOnRepeatedFailure === true,
+    tierBudgets: mergeRepairTierBudgets(current.tierBudgets ?? {}, incoming.tierBudgets ?? {}),
+    stopConditions: orderedRepairStopConditions([...(current.stopConditions ?? []), ...(incoming.stopConditions ?? [])]),
   };
 }
 
@@ -418,6 +558,9 @@ function mergeProgress(current: HarnessContract['progressPlan'], incoming: Progr
     initialStatus: incoming.initialStatus ?? current.initialStatus,
     visibleMilestones: sortedUnique([...current.visibleMilestones, ...(incoming.visibleMilestones ?? [])]),
     phaseNames: orderedUnique([...(current.phaseNames ?? current.visibleMilestones), ...(incoming.phaseNames ?? incoming.visibleMilestones ?? [])]),
+    firstResultDeadlineMs: minDefined(current.firstResultDeadlineMs ?? current.silenceTimeoutMs, incoming.firstResultDeadlineMs),
+    phaseDeadlines: mergePhaseDeadlines(current.phaseDeadlines, incoming.phaseDeadlines),
+    backgroundAfterMs: minDefined(current.backgroundAfterMs ?? current.silenceTimeoutMs, incoming.backgroundAfterMs),
     silenceTimeoutMs: minDefined(current.silenceTimeoutMs, incoming.silenceTimeoutMs),
     backgroundContinuation: current.backgroundContinuation || incoming.backgroundContinuation === true,
     silencePolicy: {
@@ -454,6 +597,7 @@ function mergePresentation(current: HarnessContract['presentationPlan'], incomin
   ]).filter((section) => !['process', 'diagnostics', 'raw-payload'].includes(section));
   return {
     primaryMode: incoming.primaryMode ?? current.primaryMode,
+    status: incoming.status ?? current.status ?? 'complete',
     defaultExpandedSections: expanded as HarnessContract['presentationPlan']['defaultExpandedSections'],
     defaultCollapsedSections: orderedUnique([
       ...current.defaultCollapsedSections,
@@ -487,6 +631,10 @@ function mergePresentation(current: HarnessContract['presentationPlan'], incomin
 function mergeSideEffect(current: SideEffectAllowance, incoming: SideEffectAllowance, context: MergeContext): SideEffectAllowance {
   const allowWidening = context.profile.mergePolicy.allowSideEffectWideningWithHumanApproval && context.humanApprovalSatisfied;
   if (allowWidening) return incoming;
+  return strictestSideEffect(current, incoming);
+}
+
+function strictestSideEffect(current: SideEffectAllowance, incoming: SideEffectAllowance): SideEffectAllowance {
   const order: SideEffectAllowance[] = ['block', 'requires-approval', 'allow'];
   return order[Math.min(order.indexOf(current), order.indexOf(incoming))];
 }
@@ -502,9 +650,14 @@ function normalizeContract(contract: HarnessContract): HarnessContract {
       candidates: sortCandidates(contract.capabilityPolicy.candidates),
       preferredCapabilityIds: sortedUnique(contract.capabilityPolicy.preferredCapabilityIds),
       blockedCapabilities: sortedUnique(contract.capabilityPolicy.blockedCapabilities),
+      escalationPlan: sortEscalationPlan(contract.capabilityPolicy.escalationPlan ?? []),
+      candidateTiers: normalizeCandidateTiers(contract.capabilityPolicy.candidateTiers ?? {}),
     },
     verificationPolicy: {
       ...contract.verificationPolicy,
+      verificationLayers: orderedVerificationLayers(
+        contract.verificationPolicy.verificationLayers ?? verificationLayersForIntensity(contract.verificationPolicy.intensity),
+      ),
       ...(contract.verificationPolicy.selectedVerifierIds
         ? { selectedVerifierIds: sortedUnique(contract.verificationPolicy.selectedVerifierIds) }
         : {}),
@@ -514,8 +667,48 @@ function normalizeContract(contract: HarnessContract): HarnessContract {
       ...contract.progressPlan,
       visibleMilestones: sortedUnique(contract.progressPlan.visibleMilestones),
       phaseNames: orderedUnique(contract.progressPlan.phaseNames ?? contract.progressPlan.visibleMilestones),
+      firstResultDeadlineMs: contract.progressPlan.firstResultDeadlineMs ?? contract.progressPlan.silenceTimeoutMs,
+      phaseDeadlines: normalizePhaseDeadlines(contract.progressPlan.phaseDeadlines, contract.progressPlan.phaseNames ?? contract.progressPlan.visibleMilestones),
+      backgroundAfterMs: contract.progressPlan.backgroundAfterMs ?? contract.toolBudget.maxWallMs,
     },
     presentationPlan: mergePresentation(basePresentationPlan(), contract.presentationPlan ?? basePresentationPlan()),
+  };
+}
+
+function applyLatencyTierPolicy(contract: HarnessContract, latencyTier: LatencyTier): HarnessContract {
+  const policy = getLatencyTierPolicy(latencyTier);
+  return {
+    ...contract,
+    latencyTier,
+    explorationMode: policy.explorationMode,
+    contextBudget: { ...policy.contextBudget },
+    capabilityPolicy: {
+      candidates: sortCandidates([...contract.capabilityPolicy.candidates, ...policy.capabilityPolicy.candidates]),
+      preferredCapabilityIds: sortedUnique([
+        ...contract.capabilityPolicy.preferredCapabilityIds,
+        ...policy.capabilityPolicy.preferredCapabilityIds,
+      ]),
+      blockedCapabilities: sortedUnique([
+        ...contract.capabilityPolicy.blockedCapabilities,
+        ...policy.capabilityPolicy.blockedCapabilities,
+      ]),
+      sideEffects: {
+        network: strictestSideEffect(contract.capabilityPolicy.sideEffects.network, policy.capabilityPolicy.sideEffects.network),
+        workspaceWrite: strictestSideEffect(contract.capabilityPolicy.sideEffects.workspaceWrite, policy.capabilityPolicy.sideEffects.workspaceWrite),
+        externalMutation: strictestSideEffect(contract.capabilityPolicy.sideEffects.externalMutation, policy.capabilityPolicy.sideEffects.externalMutation),
+        codeExecution: strictestSideEffect(contract.capabilityPolicy.sideEffects.codeExecution, policy.capabilityPolicy.sideEffects.codeExecution),
+      },
+      escalationPlan: sortEscalationPlan([
+        ...(contract.capabilityPolicy.escalationPlan ?? []),
+        ...(policy.capabilityPolicy.escalationPlan ?? []),
+      ]),
+      candidateTiers: mergeCandidateTiers(contract.capabilityPolicy.candidateTiers ?? {}, policy.capabilityPolicy.candidateTiers ?? {}),
+    },
+    toolBudget: { ...policy.toolBudget },
+    verificationPolicy: { ...policy.verificationPolicy },
+    repairContextPolicy: { ...policy.repairContextPolicy },
+    progressPlan: cloneProgressPlan(policy.progressPlan),
+    presentationPlan: clonePresentationPlan(policy.presentationPlan),
   };
 }
 
@@ -528,6 +721,7 @@ function cloneProgressPlan(progressPlan: HarnessContract['progressPlan']): Harne
     ...progressPlan,
     visibleMilestones: [...progressPlan.visibleMilestones],
     phaseNames: progressPlan.phaseNames ? [...progressPlan.phaseNames] : undefined,
+    phaseDeadlines: progressPlan.phaseDeadlines ? { ...progressPlan.phaseDeadlines } : undefined,
     silencePolicy: progressPlan.silencePolicy ? { ...progressPlan.silencePolicy } : undefined,
     backgroundPolicy: progressPlan.backgroundPolicy ? { ...progressPlan.backgroundPolicy } : undefined,
     cancelPolicy: progressPlan.cancelPolicy ? { ...progressPlan.cancelPolicy } : undefined,
@@ -552,6 +746,7 @@ function clonePresentationPlan(presentationPlan: HarnessContract['presentationPl
 function basePresentationPlan(): PresentationPlan {
   return {
     primaryMode: 'answer-first',
+    status: 'complete',
     defaultExpandedSections: ['answer', 'key-findings', 'evidence', 'artifacts', 'next-actions'],
     defaultCollapsedSections: ['process', 'diagnostics', 'raw-payload'],
     citationPolicy: {
@@ -586,6 +781,84 @@ function sortPromptDirectives(directives: PromptDirective[]): PromptDirective[] 
   return Array.from(byKey.values()).sort((a, b) => b.priority - a.priority || a.sourceCallbackId.localeCompare(b.sourceCallbackId) || a.id.localeCompare(b.id));
 }
 
+function sortEscalationPlan(plan: HarnessContract['capabilityPolicy']['escalationPlan'] = []): NonNullable<HarnessContract['capabilityPolicy']['escalationPlan']> {
+  const order: CapabilityEscalationTier[] = ['direct-context', 'metadata-summary', 'single-tool', 'tool-composition', 'workspace-task', 'deep-agent-project', 'repair-or-background'];
+  const byTier = new Map<CapabilityEscalationTier, CapabilityEscalationStep>();
+  for (const step of plan) {
+    const existing = byTier.get(step.tier);
+    byTier.set(step.tier, {
+      ...existing,
+      ...step,
+      candidateIds: sortedUnique([...(existing?.candidateIds ?? []), ...step.candidateIds]),
+      expectedBenefit: step.expectedBenefit ?? step.benefit ?? existing?.expectedBenefit,
+      benefit: step.benefit ?? step.expectedBenefit ?? existing?.benefit ?? '',
+      cost: step.cost ?? existing?.cost ?? step.costClass ?? 'unspecified',
+      stopCondition: step.stopCondition ?? existing?.stopCondition ?? 'evidence sufficient or budget exhausted',
+    });
+  }
+  return Array.from(byTier.values()).sort((left, right) => order.indexOf(left.tier) - order.indexOf(right.tier));
+}
+
+function mergeCandidateTiers(
+  current: HarnessContract['capabilityPolicy']['candidateTiers'] = {},
+  incoming: HarnessContract['capabilityPolicy']['candidateTiers'] = {},
+): NonNullable<HarnessContract['capabilityPolicy']['candidateTiers']> {
+  const next = normalizeCandidateTiers(current);
+  for (const [tier, candidateIds] of Object.entries(incoming) as Array<[CapabilityEscalationTier, string[] | undefined]>) {
+    next[tier] = sortedUnique([...(next[tier] ?? []), ...(candidateIds ?? [])]);
+  }
+  return normalizeCandidateTiers(next);
+}
+
+function normalizeCandidateTiers(
+  candidateTiers: HarnessContract['capabilityPolicy']['candidateTiers'] = {},
+): NonNullable<HarnessContract['capabilityPolicy']['candidateTiers']> {
+  return Object.fromEntries(
+    Object.entries(candidateTiers)
+      .map(([tier, candidateIds]) => [tier, sortedUnique(candidateIds ?? [])])
+      .filter(([, candidateIds]) => (candidateIds as string[]).length > 0),
+  ) as NonNullable<HarnessContract['capabilityPolicy']['candidateTiers']>;
+}
+
+function verificationLayersForIntensity(intensity: VerificationIntensity): VerificationLayer[] {
+  if (intensity === 'none') return [];
+  if (intensity === 'light') return ['shape', 'reference'];
+  if (intensity === 'standard') return ['shape', 'reference', 'claim'];
+  if (intensity === 'strict') return ['shape', 'reference', 'claim', 'recompute'];
+  return ['shape', 'reference', 'claim', 'recompute', 'audit'];
+}
+
+function orderedVerificationLayers(layers: VerificationLayer[]): VerificationLayer[] {
+  const order: VerificationLayer[] = ['shape', 'reference', 'claim', 'recompute', 'audit'];
+  const selected = new Set(layers);
+  return order.filter((layer) => selected.has(layer));
+}
+
+function mergeRepairTierBudgets(
+  current: RepairContextPolicy['tierBudgets'],
+  incoming?: RepairContextPolicy['tierBudgets'],
+): RepairContextPolicy['tierBudgets'] {
+  const next: Record<string, { maxAttempts: number; maxWallMs: number; maxContextTokens?: number; maxToolCalls?: number }> = { ...(current ?? {}) };
+  for (const [tier, budget] of Object.entries(incoming ?? {})) {
+    const previous = next[tier];
+    next[tier] = previous
+      ? {
+        maxAttempts: minDefined(previous.maxAttempts, budget.maxAttempts),
+        maxWallMs: minDefined(previous.maxWallMs, budget.maxWallMs),
+        maxContextTokens: minOptionalDefined(previous.maxContextTokens, budget.maxContextTokens),
+        maxToolCalls: minOptionalDefined(previous.maxToolCalls, budget.maxToolCalls),
+      }
+      : { ...budget };
+  }
+  return next as RepairContextPolicy['tierBudgets'];
+}
+
+function orderedRepairStopConditions(values: NonNullable<RepairContextPolicy['stopConditions']>): RepairContextPolicy['stopConditions'] {
+  const order: RepairContextPolicy['stopConditions'] = ['repeated-failure', 'no-code-change', 'no-new-evidence', 'budget-exhausted', 'human-required'];
+  const selected = new Set(values);
+  return order.filter((item) => selected.has(item));
+}
+
 function sortedUnique(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b));
 }
@@ -596,6 +869,39 @@ function orderedUnique(values: string[]): string[] {
 
 function minDefined(current: number, incoming?: number): number {
   return typeof incoming === 'number' ? Math.min(current, incoming) : current;
+}
+
+function minOptionalDefined(current: number | undefined, incoming?: number): number | undefined {
+  if (typeof current === 'number' && typeof incoming === 'number') return Math.min(current, incoming);
+  return current ?? incoming;
+}
+
+function mergePhaseDeadlines(
+  current?: Record<string, number>,
+  incoming?: Partial<Record<string, number>>,
+): Record<string, number> {
+  const merged: Record<string, number> = { ...(current ?? {}) };
+  for (const [phase, deadline] of Object.entries(incoming ?? {})) {
+    if (typeof deadline !== 'number') continue;
+    merged[phase] = typeof merged[phase] === 'number' ? Math.min(merged[phase], deadline) : deadline;
+  }
+  return merged;
+}
+
+function normalizePhaseDeadlines(
+  phaseDeadlines: Record<string, number> | undefined,
+  phaseNames: readonly string[],
+): Record<string, number> {
+  const normalized: Record<string, number> = {};
+  let fallbackDeadlineMs = 3000;
+  for (const phase of phaseNames) {
+    normalized[phase] = phaseDeadlines?.[phase] ?? fallbackDeadlineMs;
+    fallbackDeadlineMs = Math.min(30000, fallbackDeadlineMs + 5000);
+  }
+  for (const [phase, deadline] of Object.entries(phaseDeadlines ?? {})) {
+    if (!(phase in normalized) && typeof deadline === 'number') normalized[phase] = deadline;
+  }
+  return normalized;
 }
 
 function escalateExploration(current: HarnessContract['explorationMode'], incoming: HarnessContract['explorationMode']) {
@@ -638,6 +944,7 @@ function stableTraceId(input: HarnessInput, profileId: string): string {
     requestId: input.requestId,
     prompt: input.prompt,
     profileId,
+    latencyTier: input.latencyTier,
     intentMode: input.intentMode,
     refs: input.contextRefs,
   });

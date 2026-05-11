@@ -85,6 +85,7 @@ export interface HarnessEvaluation {
 
 ```ts
 export interface HarnessDecision {
+  latencyTier?: 'instant' | 'quick' | 'bounded' | 'deep' | 'background';
   intentSignals?: TurnIntentSignals;
   contextHints?: ContextDecision;
   capabilityHints?: CapabilityDecision;
@@ -100,6 +101,16 @@ export interface HarnessDecision {
 ```
 
 `HarnessContract` 是本轮唯一行为契约。Context builder、broker、prompt renderer、validator、repair loop 和 UI 都消费这个 contract，而不是各自推断行为。
+
+Latency tier 是本轮第一策略决策，优先于 context、capability、budget、verification、repair、progress 和 presentation 的默认值：
+
+- `instant`：不调用外部工具，直接基于当前上下文回答。
+- `quick`：允许少量工具调用，默认走 critical path，并尽快形成可读答案。
+- `bounded`：允许明确工具链，但限制 Top-K、下载、验证和 repair 成本。
+- `deep`：用户明确要求深入研究、复现、长报告或严格验证时启用。
+- `background`：超过交互预算的工作转后台，前台先返回 partial/presentation。
+
+Profile migration note：`balanced-default` now means fast-first `quick`/`bounded` behavior, while `research-grade` and domain deep profiles are explicit upgrades. Runtime trace must record the selected profile, module stack, latency tier, and why a deeper profile was or was not selected so historical balanced-heavy behavior is not treated as a regression.
 
 AgentServer handoff 使用 metadata-only 交接面：
 
@@ -261,6 +272,9 @@ export interface ProgressPlan {
   initialStatus: string;
   visibleMilestones: string[];
   phaseNames?: string[];
+  firstResultDeadlineMs: number;
+  phaseDeadlines: Record<string, number>;
+  backgroundAfterMs: number;
   silenceTimeoutMs: number;
   backgroundContinuation: boolean;
   silencePolicy?: SilencePolicy;
@@ -275,6 +289,7 @@ export interface ProgressPlan {
 ```ts
 export interface PresentationPlan {
   primaryMode: 'answer-first' | 'artifact-first' | 'failure-first' | 'diagnostic-first';
+  status: 'complete' | 'partial' | 'needs-human' | 'background-running' | 'failed';
   defaultExpandedSections: PresentationSectionId[];
   defaultCollapsedSections: PresentationSectionId[];
   citationPolicy: CitationPolicy;
@@ -296,6 +311,7 @@ export type PresentationSectionId =
 
 export interface ResultPresentationContract {
   schemaVersion: 'sciforge.result-presentation.v1';
+  status: 'complete' | 'partial' | 'needs-human' | 'background-running' | 'failed';
   answerBlocks: PresentationBlock[];
   keyFindings: PresentedFinding[];
   inlineCitations: InlineObjectReference[];
@@ -371,6 +387,7 @@ export interface ResultPresentationContract {
 export interface HarnessContract {
   schemaVersion: 'sciforge.agent-harness-contract.v1';
   profileId: string;
+  latencyTier: 'instant' | 'quick' | 'bounded' | 'deep' | 'background';
   intentMode: 'fresh' | 'continuation' | 'repair' | 'audit' | 'file-grounded' | 'interactive';
   explorationMode: 'minimal' | 'normal' | 'deep';
   allowedContextRefs: string[];

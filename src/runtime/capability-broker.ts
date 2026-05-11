@@ -303,11 +303,16 @@ export function brokerCapabilities(input: CapabilityBrokerInput, registry: Capab
     selected.push(item);
     kindCounts.set(item.manifest.kind, kindCount + 1);
   }
+  for (const blockedCapability of unique(input.blockedCapabilities ?? [])) {
+    if (!excluded.some((item) => item.id === blockedCapability)) {
+      excluded.push({ id: blockedCapability, reason: 'blocked by harness capability policy' });
+    }
+  }
 
   return {
     contract: 'sciforge.capability-broker-output.v1',
     briefs: selected.map((item) => toBrokeredBrief(item, input.toolBudget)),
-    excluded: excluded.sort((left, right) => left.id.localeCompare(right.id)),
+    excluded: excluded.sort(compareExcludedCapability),
     audit: scored.map((item) => ({
       id: item.manifest.id,
       score: item.score,
@@ -331,6 +336,12 @@ export function brokerCapabilities(input: CapabilityBrokerInput, registry: Capab
       verificationPolicyMode: input.verificationPolicy?.mode,
     },
   };
+}
+
+function compareExcludedCapability(left: CapabilityBrokerExclusion, right: CapabilityBrokerExclusion) {
+  const leftBlocked = left.reason === 'blocked by harness capability policy' ? 0 : 1;
+  const rightBlocked = right.reason === 'blocked by harness capability policy' ? 0 : 1;
+  return leftBlocked - rightBlocked || left.id.localeCompare(right.id);
 }
 
 export function brokerCapabilitiesForRequestShape(
@@ -480,6 +491,11 @@ function scoreCapability(
     }
   }
 
+  const cheapFirst = cheapFirstScoreAdjustment(manifest);
+  score += cheapFirst.scoreDelta;
+  if (cheapFirst.signal) matchedSignals.push(cheapFirst.signal);
+  if (cheapFirst.penalty) penalties.push(cheapFirst.penalty);
+
   if (matchedSignals.length === 0) matchedSignals.push('no strong broker signal');
   return {
     manifest,
@@ -488,6 +504,25 @@ function scoreCapability(
     harnessSignals,
     penalties,
     excluded: exclusion,
+  };
+}
+
+function cheapFirstScoreAdjustment(manifest: CapabilityManifest) {
+  const brief = compactCapabilityManifestBrief(manifest);
+  let scoreDelta = 0;
+  if (brief.costClass === 'low') scoreDelta += 4;
+  if (brief.costClass === 'medium') scoreDelta -= 2;
+  if (brief.costClass === 'high') scoreDelta -= 6;
+  if (brief.latencyClass === 'low') scoreDelta += 3;
+  if (brief.latencyClass === 'medium') scoreDelta -= 1;
+  if (brief.latencyClass === 'high') scoreDelta -= 4;
+  if (brief.sideEffectClass === 'none' || brief.sideEffectClass === 'read') scoreDelta += 2;
+  if (brief.sideEffectClass === 'write' || brief.sideEffectClass === 'network') scoreDelta -= 2;
+  if (brief.sideEffectClass === 'desktop' || brief.sideEffectClass === 'external') scoreDelta -= 4;
+  return {
+    scoreDelta,
+    signal: scoreDelta > 0 ? `cheap-first preferred: cost=${brief.costClass}, latency=${brief.latencyClass}, sideEffect=${brief.sideEffectClass}` : undefined,
+    penalty: scoreDelta < 0 ? `cheap-first escalation cost: cost=${brief.costClass}, latency=${brief.latencyClass}, sideEffect=${brief.sideEffectClass}` : undefined,
   };
 }
 

@@ -12,6 +12,9 @@ const manifest = registry.getManifest('literature.retrieval');
 assert.ok(manifest, 'literature.retrieval manifest must be registered');
 assert.equal(manifest.kind, 'composed');
 assert.deepEqual(manifest.domains, ['literature', 'research']);
+assert.equal(manifest.costClass ?? 'medium', 'medium');
+assert.equal(manifest.latencyClass ?? 'high', 'high');
+assert.equal(manifest.sideEffectClass ?? 'external', 'external');
 assert.deepEqual(manifest.metadata?.producesArtifactTypes, [
   'paper-list',
   'evidence-matrix',
@@ -50,6 +53,9 @@ const graph = registry.projectHarnessCandidates({
 const candidate = graph.candidates.find((item) => item.id === 'literature.retrieval');
 assert.ok(candidate, 'literature.retrieval should enter the unified capability graph');
 assert.equal(candidate.kind, 'composed');
+assert.equal(candidate.costClass, 'medium');
+assert.equal(candidate.latencyClass, 'long');
+assert.equal(candidate.sideEffectClass, 'external');
 assert.equal(candidate.budget?.maxProviders, 3);
 assert.equal(candidate.budget?.maxResultItems, 30);
 assert.equal(candidate.budget?.perProviderTimeoutMs, 10000);

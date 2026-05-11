@@ -186,6 +186,42 @@ assert.deepEqual(
   ['view.report', 'runtime.artifact-read'],
 );
 
+const cheapFirstBrokered = brokerCapabilities({
+  prompt: 'Summarize cheap first from the workspace report.',
+  runtimePolicy: {
+    topK: 2,
+    riskTolerance: 'high',
+  },
+  availableProviders: ['runtime.cheap-summary.provider', 'runtime.expensive-project.provider'],
+}, new CapabilityManifestRegistry([
+  manifest({
+    id: 'runtime.cheap-summary',
+    kind: 'runtime-adapter',
+    brief: 'Summarize report from workspace metadata.',
+    routingTags: ['summarize', 'report', 'workspace'],
+    domains: ['workspace'],
+    sideEffects: ['workspace-read'],
+    costClass: 'low',
+    latencyClass: 'low',
+    sideEffectClass: 'read',
+  }),
+  manifest({
+    id: 'runtime.expensive-project',
+    kind: 'composed',
+    brief: 'Summarize report through a deep project rerun.',
+    routingTags: ['summarize', 'report', 'workspace'],
+    domains: ['workspace'],
+    sideEffects: ['workspace-write', 'network'],
+    risk: 'high',
+    costClass: 'high',
+    latencyClass: 'high',
+    sideEffectClass: 'network',
+  }),
+]));
+assert.deepEqual(cheapFirstBrokered.briefs.map((brief) => brief.id), ['runtime.cheap-summary', 'runtime.expensive-project']);
+assert.ok(cheapFirstBrokered.briefs[0]?.matchedSignals.some((signal) => signal.includes('cheap-first preferred')));
+assert.ok(cheapFirstBrokered.audit.find((entry) => entry.id === 'runtime.expensive-project')?.penalties.some((penalty) => penalty.includes('cheap-first escalation cost')));
+
 const ledgerSummaryWithPrivateFields = {
   schemaVersion: 'sciforge.capability-evolution-compact-summary.v1',
   generatedAt: '2026-05-09T00:10:00.000Z',
@@ -264,6 +300,9 @@ function manifest(options: {
   risk?: CapabilityManifest['safety']['risk'];
   requiresHumanApproval?: boolean;
   repairFailureCode?: string;
+  costClass?: CapabilityManifest['costClass'];
+  latencyClass?: CapabilityManifest['latencyClass'];
+  sideEffectClass?: CapabilityManifest['sideEffectClass'];
 }): CapabilityManifest {
   return {
     contract: CAPABILITY_MANIFEST_CONTRACT_ID,
@@ -288,6 +327,9 @@ function manifest(options: {
       },
     },
     sideEffects: options.sideEffects,
+    costClass: options.costClass,
+    latencyClass: options.latencyClass,
+    sideEffectClass: options.sideEffectClass,
     safety: {
       risk: options.risk ?? 'low',
       dataScopes: options.sideEffects.includes('none') ? [] : ['workspace'],

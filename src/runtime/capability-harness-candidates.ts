@@ -19,6 +19,9 @@ export interface UnifiedCapabilityGraph {
     score: number;
     reasons: string[];
     blocked?: string;
+    costClass: NonNullable<HarnessCandidate['costClass']>;
+    latencyClass: NonNullable<HarnessCandidate['latencyClass']>;
+    sideEffectClass: NonNullable<HarnessCandidate['sideEffectClass']>;
     providerAvailability: NonNullable<HarnessCandidate['providerAvailability']>;
     budget?: Partial<CapabilityBudget>;
     fallbackCandidateIds: string[];
@@ -59,6 +62,9 @@ export function projectCapabilityManifestsToHarnessCandidates(input: UnifiedCapa
         manifestRef: entry.manifestRef,
         score: entry.score,
         reasons: entry.reasons,
+        costClass: entry.costClass,
+        latencyClass: entry.latencyClass,
+        sideEffectClass: entry.sideEffectClass,
         providerAvailability: entry.providerAvailability,
         budget: entry.budget,
         fallbackCandidateIds: entry.fallbackCandidateIds,
@@ -109,6 +115,9 @@ function auditRecordForManifest(
     score: blocked ? 0 : score,
     reasons: blocked ? [...reasons, blocked] : reasons,
     blocked,
+    costClass: harnessCostClass(manifest),
+    latencyClass: harnessLatencyClass(manifest),
+    sideEffectClass: harnessSideEffectClass(manifest),
     providerAvailability,
     budget,
     fallbackCandidateIds,
@@ -175,6 +184,34 @@ function budgetFromManifestMetadata(manifest: CapabilityManifest): Partial<Capab
     out.exhaustedPolicy = raw.exhaustedPolicy;
   }
   return out;
+}
+
+function harnessCostClass(manifest: CapabilityManifest): NonNullable<HarnessCandidate['costClass']> {
+  if (manifest.costClass) return manifest.costClass;
+  return manifest.safety.risk === 'high' ? 'high' : manifest.safety.risk === 'medium' ? 'medium' : 'low';
+}
+
+function harnessLatencyClass(manifest: CapabilityManifest): NonNullable<HarnessCandidate['latencyClass']> {
+  const latencyClass = manifest.latencyClass;
+  if (latencyClass === 'low') return 'short';
+  if (latencyClass === 'medium') return 'bounded';
+  if (latencyClass === 'high') return 'long';
+  if (manifest.sideEffects.includes('network') || manifest.sideEffects.includes('external-api') || manifest.sideEffects.includes('desktop')) return 'long';
+  if (manifest.sideEffects.includes('workspace-write')) return 'bounded';
+  return 'short';
+}
+
+function harnessSideEffectClass(manifest: CapabilityManifest): NonNullable<HarnessCandidate['sideEffectClass']> {
+  const sideEffectClass = manifest.sideEffectClass;
+  if (sideEffectClass === 'external' || sideEffectClass === 'desktop' || sideEffectClass === 'network' || sideEffectClass === 'write' || sideEffectClass === 'read' || sideEffectClass === 'none') {
+    return sideEffectClass;
+  }
+  if (manifest.sideEffects.includes('external-api')) return 'external';
+  if (manifest.sideEffects.includes('desktop')) return 'desktop';
+  if (manifest.sideEffects.includes('network')) return 'network';
+  if (manifest.sideEffects.includes('workspace-write')) return 'write';
+  if (manifest.sideEffects.includes('workspace-read')) return 'read';
+  return 'none';
 }
 
 function stringList(value: unknown) {

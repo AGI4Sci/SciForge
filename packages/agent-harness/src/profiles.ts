@@ -5,6 +5,8 @@ import type {
   HarnessDefaults,
   HarnessProfile,
   HarnessProfileId,
+  LatencyTier,
+  LatencyTierPolicy,
   PresentationPlan,
   ProgressPlan,
   RepairContextPolicy,
@@ -44,6 +46,7 @@ const baseSideEffects: SideEffectPolicy = {
 
 const baseVerification: VerificationPolicy = {
   intensity: 'standard',
+  verificationLayers: ['shape', 'reference', 'claim'],
   requireCitations: false,
   requireCurrentRefs: true,
   requireArtifactRefs: true,
@@ -54,12 +57,33 @@ const baseRepair: RepairContextPolicy = {
   maxAttempts: 1,
   includeStdoutSummary: false,
   includeStderrSummary: true,
+  maxWallMs: 15000,
+  cheapOnly: true,
+  partialFirst: true,
+  materializePartialOnFailure: true,
+  checkpointArtifacts: false,
+  stopOnRepeatedFailure: true,
+  tierBudgets: {
+    instant: { maxAttempts: 0, maxWallMs: 0 },
+    quick: { maxAttempts: 0, maxWallMs: 5000, maxContextTokens: 1000, maxToolCalls: 0 },
+    bounded: { maxAttempts: 1, maxWallMs: 15000, maxContextTokens: 3000, maxToolCalls: 1 },
+    deep: { maxAttempts: 2, maxWallMs: 60000, maxContextTokens: 6000, maxToolCalls: 2 },
+    background: { maxAttempts: 3, maxWallMs: 180000, maxContextTokens: 10000, maxToolCalls: 4 },
+  },
+  stopConditions: ['repeated-failure', 'no-code-change', 'no-new-evidence', 'budget-exhausted'],
 };
 
 const baseProgress: ProgressPlan = {
   initialStatus: 'Planning request',
   visibleMilestones: ['context', 'capabilities', 'verification'],
   phaseNames: ['context', 'capabilities', 'verification'],
+  firstResultDeadlineMs: 30000,
+  phaseDeadlines: {
+    context: 3000,
+    capabilities: 5000,
+    verification: 30000,
+  },
+  backgroundAfterMs: 180000,
   silenceTimeoutMs: 30000,
   backgroundContinuation: false,
   silencePolicy: {
@@ -90,6 +114,7 @@ const baseProgress: ProgressPlan = {
 
 const basePresentation: PresentationPlan = {
   primaryMode: 'answer-first',
+  status: 'complete',
   defaultExpandedSections: ['answer', 'key-findings', 'evidence', 'artifacts', 'next-actions'],
   defaultCollapsedSections: ['process', 'diagnostics', 'raw-payload'],
   citationPolicy: {
@@ -107,30 +132,363 @@ const basePresentation: PresentationPlan = {
   roleMode: 'standard',
 };
 
+function cheapFirstCapabilityPolicy(overrides: Partial<LatencyTierPolicy['capabilityPolicy']> = {}): LatencyTierPolicy['capabilityPolicy'] {
+  const preferredCapabilityIds = overrides.preferredCapabilityIds ?? [];
+  return {
+    candidates: overrides.candidates ?? [],
+    preferredCapabilityIds,
+    blockedCapabilities: overrides.blockedCapabilities ?? [],
+    sideEffects: overrides.sideEffects ?? { ...baseSideEffects },
+    escalationPlan: overrides.escalationPlan ?? [
+      {
+        tier: 'direct-context',
+        candidateIds: preferredCapabilityIds.includes('runtime.direct-context-answer') ? ['runtime.direct-context-answer'] : [],
+        benefit: 'answer from current context without external work',
+        cost: 'free/instant/no side effects',
+        expectedBenefit: 'fastest acceptable answer when existing context is sufficient',
+        costClass: 'free',
+        latencyClass: 'instant',
+        sideEffectClass: 'none',
+        stopCondition: 'stop when answerable from current context with shape/reference checks',
+      },
+      {
+        tier: 'metadata-summary',
+        candidateIds: ['runtime.artifact-list', 'runtime.artifact-resolve'],
+        benefit: 'read bounded metadata, summaries, and refs before heavier execution',
+        cost: 'low/short/workspace read',
+        expectedBenefit: 'ground answer in cheap refs before tool execution',
+        costClass: 'low',
+        latencyClass: 'short',
+        sideEffectClass: 'read',
+        stopCondition: 'stop when metadata or summary evidence is sufficient',
+      },
+      {
+        tier: 'single-tool',
+        candidateIds: [],
+        benefit: 'run one precise capability only when direct evidence is insufficient',
+        cost: 'low-to-medium/bounded',
+        expectedBenefit: 'resolve a narrow missing fact or artifact',
+        costClass: 'low',
+        latencyClass: 'bounded',
+        sideEffectClass: 'read',
+        stopCondition: 'stop after one successful precise result or materialize partial',
+      },
+      {
+        tier: 'tool-composition',
+        candidateIds: [],
+        benefit: 'combine a small number of tools when one tool cannot satisfy the request',
+        cost: 'medium/bounded',
+        expectedBenefit: 'cover multi-step but still interactive tasks',
+        costClass: 'medium',
+        latencyClass: 'bounded',
+        sideEffectClass: 'read',
+        stopCondition: 'stop when marginal evidence gain is unclear or budget is near exhaustion',
+      },
+      {
+        tier: 'workspace-task',
+        candidateIds: ['skill.agentserver-generation'],
+        benefit: 'use generated workspace task only after cheap candidates fail',
+        cost: 'medium-to-high/long/workspace write',
+        expectedBenefit: 'produce or repair durable artifacts',
+        costClass: 'medium',
+        latencyClass: 'long',
+        sideEffectClass: 'write',
+        stopCondition: 'checkpoint artifact after every attempt and return partial on failure',
+      },
+      {
+        tier: 'deep-agent-project',
+        candidateIds: [],
+        benefit: 'reserve deep project execution for explicit deep/background needs',
+        cost: 'high/background',
+        expectedBenefit: 'maximize recall, verification, or reproduction depth',
+        costClass: 'high',
+        latencyClass: 'background',
+        sideEffectClass: 'write',
+        stopCondition: 'background or request human guidance when interactive budget is exhausted',
+      },
+      {
+        tier: 'repair-or-background',
+        candidateIds: [],
+        benefit: 'continue only if repair has new evidence or a bounded checkpoint',
+        cost: 'tier-budgeted/background-capable',
+        expectedBenefit: 'recover failures without blocking first result',
+        costClass: 'medium',
+        latencyClass: 'background',
+        sideEffectClass: 'write',
+        stopCondition: 'stop on repeated failure, no code change, no new evidence, or repair budget exhaustion',
+      },
+    ],
+    candidateTiers: overrides.candidateTiers ?? {
+      'direct-context': preferredCapabilityIds.includes('runtime.direct-context-answer') ? ['runtime.direct-context-answer'] : [],
+      'metadata-summary': ['runtime.artifact-list', 'runtime.artifact-resolve'],
+      'workspace-task': ['skill.agentserver-generation'],
+    },
+  };
+}
+
+const latencyTierPolicies: Record<LatencyTier, LatencyTierPolicy> = {
+  instant: {
+    latencyTier: 'instant',
+    explorationMode: 'minimal',
+    contextBudget: { maxPromptTokens: 2000, maxHistoryTurns: 1, maxReferenceDigests: 2, maxFullTextRefs: 0 },
+    capabilityPolicy: cheapFirstCapabilityPolicy({
+      preferredCapabilityIds: ['runtime.direct-context-answer'],
+      blockedCapabilities: ['network', 'workspace-write', 'code-execution', 'external-mutation'],
+      sideEffects: { network: 'block', workspaceWrite: 'block', externalMutation: 'block', codeExecution: 'block' },
+    }),
+    toolBudget: {
+      maxWallMs: 5000,
+      maxContextTokens: 2000,
+      maxToolCalls: 0,
+      maxObserveCalls: 0,
+      maxActionSteps: 0,
+      maxNetworkCalls: 0,
+      maxDownloadBytes: 0,
+      maxResultItems: 4,
+      maxProviders: 0,
+      maxRetries: 0,
+      perProviderTimeoutMs: 2000,
+      costUnits: 0,
+      exhaustedPolicy: 'partial-payload',
+    },
+    verificationPolicy: { intensity: 'light', verificationLayers: ['shape', 'reference'], requireCitations: false, requireCurrentRefs: true, requireArtifactRefs: false },
+    repairContextPolicy: { ...baseRepair, kind: 'none', maxAttempts: 0, includeStdoutSummary: false, includeStderrSummary: false, maxWallMs: 0, cheapOnly: true, checkpointArtifacts: false },
+    progressPlan: {
+      ...baseProgress,
+      initialStatus: 'Answering from available context',
+      visibleMilestones: ['answer'],
+      phaseNames: ['answer'],
+      firstResultDeadlineMs: 5000,
+      phaseDeadlines: { answer: 3000 },
+      backgroundAfterMs: 15000,
+      silenceTimeoutMs: 5000,
+      silencePolicy: { ...baseProgress.silencePolicy!, timeoutMs: 5000, status: 'Preparing answer', auditRequired: false },
+    },
+    presentationPlan: {
+      ...clonePresentationPlan(basePresentation),
+      defaultExpandedSections: ['answer', 'key-findings', 'next-actions'],
+      citationPolicy: { requireCitationOrUncertainty: false, maxInlineCitationsPerFinding: 1, showVerificationState: false },
+    },
+  },
+  quick: {
+    latencyTier: 'quick',
+    explorationMode: 'minimal',
+    contextBudget: { maxPromptTokens: 3000, maxHistoryTurns: 1, maxReferenceDigests: 4, maxFullTextRefs: 0 },
+    capabilityPolicy: cheapFirstCapabilityPolicy(),
+    toolBudget: {
+      maxWallMs: 30000,
+      maxContextTokens: 3000,
+      maxToolCalls: 2,
+      maxObserveCalls: 0,
+      maxActionSteps: 0,
+      maxNetworkCalls: 1,
+      maxDownloadBytes: 2_000_000,
+      maxResultItems: 6,
+      maxProviders: 1,
+      maxRetries: 0,
+      perProviderTimeoutMs: 10000,
+      costUnits: 2,
+      exhaustedPolicy: 'partial-payload',
+    },
+    verificationPolicy: { intensity: 'light', verificationLayers: ['shape', 'reference'], requireCitations: false, requireCurrentRefs: true, requireArtifactRefs: true },
+    repairContextPolicy: { ...baseRepair, kind: 'supplement', maxAttempts: 0, maxWallMs: 5000, cheapOnly: true, checkpointArtifacts: false },
+    progressPlan: {
+      ...baseProgress,
+      initialStatus: 'Answering',
+      visibleMilestones: ['context', 'answer'],
+      phaseNames: ['context', 'answer'],
+      firstResultDeadlineMs: 15000,
+      phaseDeadlines: { context: 3000, answer: 15000 },
+      backgroundAfterMs: 30000,
+      silenceTimeoutMs: 10000,
+      silencePolicy: { ...baseProgress.silencePolicy!, timeoutMs: 10000, status: 'Preparing a concise answer', maxRetries: 0 },
+    },
+    presentationPlan: {
+      ...clonePresentationPlan(basePresentation),
+      defaultExpandedSections: ['answer', 'key-findings', 'evidence', 'next-actions'],
+      citationPolicy: { requireCitationOrUncertainty: true, maxInlineCitationsPerFinding: 2, showVerificationState: true },
+    },
+  },
+  bounded: {
+    latencyTier: 'bounded',
+    explorationMode: 'normal',
+    contextBudget: { maxPromptTokens: 6000, maxHistoryTurns: 2, maxReferenceDigests: 8, maxFullTextRefs: 1 },
+    capabilityPolicy: cheapFirstCapabilityPolicy(),
+    toolBudget: { ...baseToolBudget, maxWallMs: 90000, maxToolCalls: 6, maxNetworkCalls: 3, maxResultItems: 16, maxRetries: 1 },
+    verificationPolicy: { ...baseVerification, intensity: 'standard', verificationLayers: ['shape', 'reference', 'claim'], requireCurrentRefs: true, requireArtifactRefs: true },
+    repairContextPolicy: { ...baseRepair, kind: 'supplement', maxAttempts: 1, maxWallMs: 15000, cheapOnly: true, checkpointArtifacts: true },
+    progressPlan: {
+      ...baseProgress,
+      initialStatus: 'Working within a bounded plan',
+      visibleMilestones: ['context', 'capabilities', 'answer', 'verification'],
+      phaseNames: ['context', 'capabilities', 'answer', 'verification'],
+      firstResultDeadlineMs: 30000,
+      phaseDeadlines: { context: 3000, capabilities: 5000, answer: 30000, verification: 90000 },
+      backgroundAfterMs: 180000,
+      silenceTimeoutMs: 20000,
+      silencePolicy: { ...baseProgress.silencePolicy!, timeoutMs: 20000, status: 'Still within the bounded plan' },
+    },
+    presentationPlan: clonePresentationPlan(basePresentation),
+  },
+  deep: {
+    latencyTier: 'deep',
+    explorationMode: 'deep',
+    contextBudget: { maxPromptTokens: 10000, maxHistoryTurns: 3, maxReferenceDigests: 16, maxFullTextRefs: 3 },
+    capabilityPolicy: cheapFirstCapabilityPolicy(),
+    toolBudget: {
+      ...baseToolBudget,
+      maxWallMs: 240000,
+      maxContextTokens: 14000,
+      maxToolCalls: 12,
+      maxObserveCalls: 3,
+      maxNetworkCalls: 8,
+      maxDownloadBytes: 60_000_000,
+      maxResultItems: 50,
+      maxProviders: 4,
+      maxRetries: 2,
+      perProviderTimeoutMs: 45000,
+      costUnits: 20,
+    },
+    verificationPolicy: { ...baseVerification, intensity: 'strict', verificationLayers: ['shape', 'reference', 'claim', 'recompute'], requireCitations: true, requireCurrentRefs: true, requireArtifactRefs: true },
+    repairContextPolicy: { ...baseRepair, kind: 'repair-rerun', maxAttempts: 2, maxWallMs: 60000, cheapOnly: false, includeStdoutSummary: true, includeStderrSummary: true, checkpointArtifacts: true },
+    progressPlan: {
+      ...baseProgress,
+      initialStatus: 'Researching deeply',
+      visibleMilestones: ['context', 'capabilities', 'evidence', 'synthesis', 'verification'],
+      phaseNames: ['context', 'capabilities', 'evidence', 'synthesis', 'verification'],
+      firstResultDeadlineMs: 30000,
+      phaseDeadlines: { context: 3000, capabilities: 5000, evidence: 60000, synthesis: 120000, verification: 180000 },
+      backgroundAfterMs: 180000,
+      silenceTimeoutMs: 45000,
+      silencePolicy: { ...baseProgress.silencePolicy!, timeoutMs: 45000, status: 'Researching and verifying' },
+    },
+    presentationPlan: clonePresentationPlan(basePresentation),
+  },
+  background: {
+    latencyTier: 'background',
+    explorationMode: 'deep',
+    contextBudget: { maxPromptTokens: 12000, maxHistoryTurns: 3, maxReferenceDigests: 20, maxFullTextRefs: 4 },
+    capabilityPolicy: cheapFirstCapabilityPolicy(),
+    toolBudget: {
+      ...baseToolBudget,
+      maxWallMs: 600000,
+      maxContextTokens: 18000,
+      maxToolCalls: 20,
+      maxObserveCalls: 4,
+      maxActionSteps: 8,
+      maxNetworkCalls: 12,
+      maxDownloadBytes: 120_000_000,
+      maxResultItems: 100,
+      maxProviders: 5,
+      maxRetries: 2,
+      perProviderTimeoutMs: 60000,
+      costUnits: 35,
+      exhaustedPolicy: 'needs-human',
+    },
+    verificationPolicy: { ...baseVerification, intensity: 'audit', verificationLayers: ['shape', 'reference', 'claim', 'recompute', 'audit'], requireCitations: true, requireCurrentRefs: true, requireArtifactRefs: true },
+    repairContextPolicy: { ...baseRepair, kind: 'repair-rerun', maxAttempts: 3, maxWallMs: 180000, cheapOnly: false, includeStdoutSummary: true, includeStderrSummary: true, checkpointArtifacts: true },
+    progressPlan: {
+      ...baseProgress,
+      initialStatus: 'Starting background-capable work',
+      visibleMilestones: ['partial', 'background', 'verification', 'completion'],
+      phaseNames: ['partial', 'background', 'verification', 'completion'],
+      firstResultDeadlineMs: 30000,
+      phaseDeadlines: { partial: 30000, background: 60000, verification: 240000, completion: 600000 },
+      backgroundAfterMs: 30000,
+      silenceTimeoutMs: 30000,
+      backgroundContinuation: true,
+      silencePolicy: { ...baseProgress.silencePolicy!, timeoutMs: 30000, decision: 'background', status: 'Continuing in background' },
+      backgroundPolicy: { enabled: true, status: 'Continuing in background', notifyOnCompletion: true },
+    },
+    presentationPlan: {
+      ...clonePresentationPlan(basePresentation),
+      primaryMode: 'answer-first',
+      status: 'background-running',
+      defaultExpandedSections: ['answer', 'key-findings', 'next-actions'],
+      defaultCollapsedSections: ['process', 'diagnostics', 'raw-payload', 'evidence', 'artifacts'],
+    },
+  },
+};
+
 const CONTEXT_AUDIT_HINT = /(?:什么|哪些|哪个|怎么|怎样|为什么|为何|原因|工具|日志|记录|引用|证据|验证|中断|失败|抽取|提取|how|why|what|which|tool|log|ref|reference|evidence|verify|extract|failed|stopped|interrupted)/i;
 const FRESH_WORK_HINT = /(?:重新|重跑|再跑|再检索|检索一下|搜索|查找|下载并|阅读全文|最新|今天|过去一周|生成新的|继续执行|修复|rerun|run again|search|retrieve|fetch|download|latest|today|generate new|repair)/i;
+const BACKGROUND_TIER_HINT = /(?:后台|不用等|稍后通知|继续跑|background|later|notify me|keep working)/i;
+const DEEP_TIER_HINT = /(?:深入|全面|严格|审计|复现|长报告|系统性|deep|thorough|comprehensive|strict|audit|reproduce|reproduction|long report|research grade)/i;
+const BOUNDED_TIER_HINT = /(?:运行|执行|生成|修复|下载|检索|搜索|读取文件|workspace|run|execute|generate|repair|download|retrieve|search|file|code)/i;
 
 function defaults(overrides: Partial<HarnessDefaults>): HarnessDefaults {
+  const latencyTier = overrides.latencyTier ?? 'quick';
+  const tierPolicy = getLatencyTierPolicy(latencyTier);
   return {
+    latencyTier,
     intentMode: 'fresh',
-    explorationMode: 'normal',
+    explorationMode: tierPolicy.explorationMode,
     allowedContextRefs: [],
     blockedContextRefs: [],
     requiredContextRefs: [],
-    contextBudget: { ...baseContextBudget },
-    capabilityPolicy: {
-      candidates: [],
-      preferredCapabilityIds: [],
-      blockedCapabilities: [],
-      sideEffects: { ...baseSideEffects },
+    contextBudget: { ...tierPolicy.contextBudget },
+    capabilityPolicy: cloneCapabilityPolicy(tierPolicy.capabilityPolicy),
+    toolBudget: { ...tierPolicy.toolBudget },
+    verificationPolicy: {
+      ...tierPolicy.verificationPolicy,
+      verificationLayers: [...(tierPolicy.verificationPolicy.verificationLayers ?? [])],
+      selectedVerifierIds: tierPolicy.verificationPolicy.selectedVerifierIds ? [...tierPolicy.verificationPolicy.selectedVerifierIds] : undefined,
     },
-    toolBudget: { ...baseToolBudget },
-    verificationPolicy: { ...baseVerification },
-    repairContextPolicy: { ...baseRepair },
-    progressPlan: { ...baseProgress },
-    presentationPlan: clonePresentationPlan(basePresentation),
+    repairContextPolicy: cloneRepairPolicy(tierPolicy.repairContextPolicy),
+    progressPlan: cloneProgressPlan(tierPolicy.progressPlan),
+    presentationPlan: clonePresentationPlan(tierPolicy.presentationPlan),
     promptDirectives: [],
     ...overrides,
+  };
+}
+
+export function getLatencyTierPolicy(latencyTier: LatencyTier): LatencyTierPolicy {
+  const policy = latencyTierPolicies[latencyTier] ?? latencyTierPolicies.quick;
+  return {
+    ...policy,
+    contextBudget: { ...policy.contextBudget },
+    capabilityPolicy: cloneCapabilityPolicy(policy.capabilityPolicy),
+    toolBudget: { ...policy.toolBudget },
+    verificationPolicy: {
+      ...policy.verificationPolicy,
+      verificationLayers: [...(policy.verificationPolicy.verificationLayers ?? [])],
+      selectedVerifierIds: policy.verificationPolicy.selectedVerifierIds ? [...policy.verificationPolicy.selectedVerifierIds] : undefined,
+    },
+    repairContextPolicy: cloneRepairPolicy(policy.repairContextPolicy),
+    progressPlan: cloneProgressPlan(policy.progressPlan),
+    presentationPlan: clonePresentationPlan(policy.presentationPlan),
+  };
+}
+
+function cloneCapabilityPolicy(policy: LatencyTierPolicy['capabilityPolicy']) {
+  return {
+    candidates: [...policy.candidates],
+    preferredCapabilityIds: [...policy.preferredCapabilityIds],
+    blockedCapabilities: [...policy.blockedCapabilities],
+    sideEffects: { ...policy.sideEffects },
+    escalationPlan: (policy.escalationPlan ?? []).map((step) => ({ ...step, candidateIds: [...step.candidateIds] })),
+    candidateTiers: Object.fromEntries(Object.entries(policy.candidateTiers ?? {}).map(([tier, candidateIds]) => [tier, [...candidateIds ?? []]])),
+  };
+}
+
+function cloneRepairPolicy(policy: RepairContextPolicy): RepairContextPolicy {
+  return {
+    ...policy,
+    tierBudgets: Object.fromEntries(Object.entries(policy.tierBudgets ?? {}).map(([tier, budget]) => [tier, budget ? { ...budget } : budget])),
+    stopConditions: [...(policy.stopConditions ?? [])],
+  };
+}
+
+function cloneProgressPlan(plan: ProgressPlan): ProgressPlan {
+  return {
+    ...plan,
+    visibleMilestones: [...plan.visibleMilestones],
+    phaseNames: plan.phaseNames ? [...plan.phaseNames] : undefined,
+    phaseDeadlines: plan.phaseDeadlines ? { ...plan.phaseDeadlines } : undefined,
+    silencePolicy: plan.silencePolicy ? { ...plan.silencePolicy } : undefined,
+    backgroundPolicy: plan.backgroundPolicy ? { ...plan.backgroundPolicy } : undefined,
+    cancelPolicy: plan.cancelPolicy ? { ...plan.cancelPolicy } : undefined,
+    interactionPolicy: plan.interactionPolicy ? { ...plan.interactionPolicy } : undefined,
   };
 }
 
@@ -154,6 +512,18 @@ function callback(id: string, decide: HarnessCallback['decide'], stages: Harness
 
 const profileCallbacks: Record<string, HarnessCallback[]> = {
   balancedDefault: [
+    callback('balanced-default.latency-tier-classifier', (context) => {
+      if (context.input.latencyTier) return {};
+      const latencyTier = classifyLatencyTier(context.input);
+      return {
+        latencyTier,
+        auditNotes: [{
+          sourceCallbackId: 'balanced-default.latency-tier-classifier',
+          severity: 'info',
+          message: `Selected ${latencyTier} latency tier from request-level cost and depth signals.`,
+        }],
+      };
+    }, ['classifyIntent']),
     callback('balanced-default.context-audit-intent', (context) => {
       if (!isContextAuditFollowup(context.input)) return {};
       return {
@@ -442,6 +812,15 @@ function isContextAuditFollowup(input: { prompt?: string; request?: unknown }) {
   return hasPriorContext(input.request);
 }
 
+function classifyLatencyTier(input: { prompt?: string; request?: unknown; candidateCapabilities?: unknown[] }) {
+  const prompt = input.prompt?.trim() ?? '';
+  if (BACKGROUND_TIER_HINT.test(prompt)) return 'background' satisfies LatencyTier;
+  if (DEEP_TIER_HINT.test(prompt)) return 'deep' satisfies LatencyTier;
+  if (BOUNDED_TIER_HINT.test(prompt) || nonEmptyArray(input.candidateCapabilities)) return 'bounded' satisfies LatencyTier;
+  if (prompt.length > 0 && prompt.length <= 180 && !hasPriorContext(input.request)) return 'instant' satisfies LatencyTier;
+  return 'quick' satisfies LatencyTier;
+}
+
 function hasPriorContext(request: unknown) {
   if (!request || typeof request !== 'object' || Array.isArray(request)) return false;
   const record = request as Record<string, unknown>;
@@ -464,6 +843,7 @@ export const harnessProfiles: Record<string, HarnessProfile> = {
   'balanced-default': {
     id: 'balanced-default',
     version: '0.1.0',
+    moduleStack: ['intent', 'latency', 'context', 'capability', 'budget', 'verification', 'repair', 'progress', 'presentation', 'audit'],
     callbacks: profileCallbacks.balancedDefault,
     defaults: defaults({}),
     mergePolicy: {},
@@ -471,27 +851,31 @@ export const harnessProfiles: Record<string, HarnessProfile> = {
   'fast-answer': {
     id: 'fast-answer',
     version: '0.1.0',
+    moduleStack: ['intent', 'latency', 'context', 'capability', 'budget', 'progress', 'presentation'],
     callbacks: profileCallbacks.fastAnswer,
-    defaults: defaults({ explorationMode: 'minimal', progressPlan: { ...baseProgress, initialStatus: 'Answering', silenceTimeoutMs: 10000 } }),
+    defaults: defaults({ latencyTier: 'quick', explorationMode: 'minimal', progressPlan: { ...baseProgress, initialStatus: 'Answering', silenceTimeoutMs: 10000 } }),
     mergePolicy: {},
   },
   'research-grade': {
     id: 'research-grade',
     version: '0.1.0',
+    moduleStack: ['intent', 'latency', 'context', 'capability', 'budget', 'verification', 'repair', 'progress', 'presentation', 'audit'],
     callbacks: profileCallbacks.researchGrade,
-    defaults: defaults({ explorationMode: 'deep', verificationPolicy: { ...baseVerification, intensity: 'strict', requireCitations: true } }),
+    defaults: defaults({ latencyTier: 'deep', explorationMode: 'deep', verificationPolicy: { ...baseVerification, intensity: 'strict', verificationLayers: ['shape', 'reference', 'claim', 'recompute'], requireCitations: true } }),
     mergePolicy: { allowBudgetWidening: true },
   },
   'debug-repair': {
     id: 'debug-repair',
     version: '0.1.0',
+    moduleStack: ['intent', 'latency', 'context', 'capability', 'budget', 'verification', 'repair', 'progress', 'presentation', 'audit'],
     callbacks: profileCallbacks.debugRepair,
-    defaults: defaults({ intentMode: 'repair', repairContextPolicy: { ...baseRepair, kind: 'repair-rerun', maxAttempts: 2, includeStdoutSummary: true } }),
+    defaults: defaults({ latencyTier: 'bounded', intentMode: 'repair', repairContextPolicy: { ...baseRepair, kind: 'repair-rerun', maxAttempts: 2, includeStdoutSummary: true } }),
     mergePolicy: {},
   },
   'low-cost': {
     id: 'low-cost',
     version: '0.1.0',
+    moduleStack: ['intent', 'latency', 'context', 'capability', 'budget', 'progress', 'presentation'],
     callbacks: profileCallbacks.lowCost,
     defaults: defaults({ explorationMode: 'minimal' }),
     mergePolicy: {},
@@ -499,43 +883,49 @@ export const harnessProfiles: Record<string, HarnessProfile> = {
   'privacy-strict': {
     id: 'privacy-strict',
     version: '0.1.0',
+    moduleStack: ['intent', 'latency', 'context', 'capability', 'budget', 'verification', 'progress', 'presentation', 'audit'],
     callbacks: profileCallbacks.privacyStrict,
     defaults: defaults({
-      capabilityPolicy: {
-        candidates: [],
-        preferredCapabilityIds: [],
+      latencyTier: 'quick',
+      capabilityPolicy: cheapFirstCapabilityPolicy({
         blockedCapabilities: ['network', 'external-upload', 'workspace-write'],
         sideEffects: { network: 'block', workspaceWrite: 'block', externalMutation: 'block', codeExecution: 'block' },
-      },
+      }),
       toolBudget: { ...baseToolBudget, maxNetworkCalls: 0, maxDownloadBytes: 0, maxProviders: 0 },
-      verificationPolicy: { ...baseVerification, intensity: 'strict' },
+      verificationPolicy: { ...baseVerification, intensity: 'strict', verificationLayers: ['shape', 'reference', 'claim', 'recompute'] },
     }),
     mergePolicy: {},
   },
   'high-recall-literature': {
     id: 'high-recall-literature',
     version: '0.1.0',
+    moduleStack: ['intent', 'latency', 'context', 'capability', 'budget', 'verification', 'repair', 'progress', 'presentation', 'audit'],
     callbacks: profileCallbacks.highRecallLiterature,
     defaults: defaults({
+      latencyTier: 'deep',
       explorationMode: 'deep',
-      capabilityPolicy: {
-        candidates: [],
+      capabilityPolicy: cheapFirstCapabilityPolicy({
         preferredCapabilityIds: ['literature.retrieval', 'pdf.extraction', 'citation.verification'],
-        blockedCapabilities: [],
         sideEffects: { ...baseSideEffects, network: 'allow' },
-      },
-      verificationPolicy: { ...baseVerification, intensity: 'strict', requireCitations: true },
+        candidateTiers: {
+          'metadata-summary': ['runtime.artifact-list', 'runtime.artifact-resolve'],
+          'tool-composition': ['literature.retrieval', 'pdf.extraction'],
+          'deep-agent-project': ['citation.verification'],
+        },
+      }),
+      verificationPolicy: { ...baseVerification, intensity: 'strict', verificationLayers: ['shape', 'reference', 'claim', 'recompute'], requireCitations: true },
     }),
     mergePolicy: { allowBudgetWidening: true },
   },
   'scientific-reproduction-research': {
     id: 'scientific-reproduction-research',
     version: '0.1.0',
+    moduleStack: ['intent', 'latency', 'context', 'capability', 'budget', 'verification', 'repair', 'progress', 'presentation', 'audit'],
     callbacks: profileCallbacks.scientificReproductionResearch,
     defaults: defaults({
+      latencyTier: 'deep',
       explorationMode: 'deep',
-      capabilityPolicy: {
-        candidates: [],
+      capabilityPolicy: cheapFirstCapabilityPolicy({
         preferredCapabilityIds: ['scientific-reproduction.research', 'scientific-reproduction.verifier'],
         blockedCapabilities: ['external-mutation'],
         sideEffects: {
@@ -544,7 +934,12 @@ export const harnessProfiles: Record<string, HarnessProfile> = {
           externalMutation: 'block',
           codeExecution: 'requires-approval',
         },
-      },
+        candidateTiers: {
+          'metadata-summary': ['runtime.artifact-list', 'runtime.artifact-resolve', 'runtime.artifact-read'],
+          'workspace-task': ['scientific-reproduction.research'],
+          'deep-agent-project': ['scientific-reproduction.verifier'],
+        },
+      }),
       toolBudget: {
         ...baseToolBudget,
         maxWallMs: 360000,
@@ -564,12 +959,13 @@ export const harnessProfiles: Record<string, HarnessProfile> = {
       verificationPolicy: {
         ...baseVerification,
         intensity: 'strict',
+        verificationLayers: ['shape', 'reference', 'claim', 'recompute'],
         requireCitations: true,
         requireCurrentRefs: true,
         requireArtifactRefs: true,
         selectedVerifierIds: ['verifier.scientific-reproduction'],
       },
-      repairContextPolicy: { ...baseRepair, kind: 'needs-human', includeStdoutSummary: true },
+      repairContextPolicy: { ...baseRepair, kind: 'needs-human', includeStdoutSummary: true, cheapOnly: false, checkpointArtifacts: true },
       progressPlan: {
         ...baseProgress,
         initialStatus: 'Preparing reproduction',

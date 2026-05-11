@@ -43,6 +43,7 @@ export type ResultPresentationNextActionKind = 'continue' | 'retry' | 'recover' 
 export type ResultPresentationDiagnosticKind = typeof RESULT_PRESENTATION_RAW_DIAGNOSTIC_KINDS[number] | 'log' | 'reasoning-trace' | 'work-evidence' | 'verification';
 export type ResultPresentationFindingKind = 'finding' | 'partial-result' | 'failure' | 'summary';
 export type ResultPresentationUncertaintyState = 'unverified' | 'partial' | 'speculative' | 'failed';
+export type ResultPresentationStatus = 'complete' | 'partial' | 'needs-human' | 'background-running' | 'failed';
 
 export interface ResultPresentationFieldOrigins {
   answerBlocks?: ResultPresentationFieldSource;
@@ -156,6 +157,7 @@ export interface ResultPresentationContract {
   schemaVersion: typeof RESULT_PRESENTATION_SCHEMA_VERSION;
   contractId: typeof RESULT_PRESENTATION_CONTRACT_ID;
   id: string;
+  status: ResultPresentationStatus;
   answerBlocks: ResultPresentationAnswerBlock[];
   keyFindings: ResultPresentationKeyFinding[];
   inlineCitations: ResultPresentationInlineCitation[];
@@ -193,6 +195,7 @@ export function createResultPresentationContract(input: Partial<ResultPresentati
     schemaVersion: RESULT_PRESENTATION_SCHEMA_VERSION,
     contractId: RESULT_PRESENTATION_CONTRACT_ID,
     id: stringField(input.id) ?? `result-presentation-${hashText(JSON.stringify(input)).slice(0, 10)}`,
+    status: input.status ?? resultStatusFromProcess(input.processSummary?.status),
     answerBlocks: input.answerBlocks ?? [],
     keyFindings: input.keyFindings ?? [],
     inlineCitations: input.inlineCitations ?? [],
@@ -299,7 +302,9 @@ export function resultPresentationFromPayload(input: {
     : [findingFromMessage(stringField(payload.message) ?? input.fallbackTitle ?? 'Result completed.', citations)];
   const diagnosticsRefs = diagnosticsRefsFromPayload(payload);
   const recoverActions = recoverActionsFromPayload(payload);
+  const status = resultStatusFromPayload(payload);
   return createResultPresentationContract({
+    status,
     answerBlocks: [{
       id: 'answer-summary',
       kind: 'paragraph',
@@ -462,6 +467,23 @@ function processStatusFromPayload(payload: Record<string, unknown>): ResultPrese
   if (/needs-human|human/.test(text)) return 'needs-human';
   if (/partial|insufficient|unverified|unavailable|missing/.test(text)) return 'partial';
   return 'completed';
+}
+
+function resultStatusFromPayload(payload: Record<string, unknown>): ResultPresentationStatus {
+  const text = `${payload.status ?? ''} ${payload.claimType ?? ''} ${payload.evidenceLevel ?? ''} ${payload.message ?? ''}`.toLowerCase();
+  if (/background|running|continuing/.test(text)) return 'background-running';
+  if (/failed-with-reason|failed|failure|repair-needed|失败/.test(text)) return 'failed';
+  if (/needs-human|human/.test(text)) return 'needs-human';
+  if (/partial|insufficient|unverified|unavailable|missing/.test(text)) return 'partial';
+  return 'complete';
+}
+
+function resultStatusFromProcess(status?: ResultPresentationProcessSummary['status']): ResultPresentationStatus {
+  if (status === 'failed') return 'failed';
+  if (status === 'needs-human') return 'needs-human';
+  if (status === 'partial') return 'partial';
+  if (status === 'running') return 'background-running';
+  return 'complete';
 }
 
 function recoverActionsFromPayload(payload: Record<string, unknown>) {

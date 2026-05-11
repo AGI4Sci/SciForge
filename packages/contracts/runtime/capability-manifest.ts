@@ -15,6 +15,9 @@ export type CapabilityManifestKind =
 export type CapabilityManifestLifecycle = 'draft' | 'validated' | 'published' | 'deprecated';
 export type CapabilityManifestRisk = 'low' | 'medium' | 'high';
 export type CapabilityManifestSideEffect = 'none' | 'workspace-read' | 'workspace-write' | 'network' | 'desktop' | 'external-api';
+export type CapabilityManifestCostClass = 'low' | 'medium' | 'high';
+export type CapabilityManifestLatencyClass = 'low' | 'medium' | 'high';
+export type CapabilityManifestSideEffectClass = 'none' | 'read' | 'write' | 'network' | 'desktop' | 'external';
 
 export interface CapabilityProviderManifest {
   id: string;
@@ -53,6 +56,9 @@ export interface CapabilityManifest {
   inputSchema: Record<string, unknown>;
   outputSchema: Record<string, unknown>;
   sideEffects: CapabilityManifestSideEffect[];
+  costClass?: CapabilityManifestCostClass;
+  latencyClass?: CapabilityManifestLatencyClass;
+  sideEffectClass?: CapabilityManifestSideEffectClass;
   safety: {
     risk: CapabilityManifestRisk;
     dataScopes: string[];
@@ -84,6 +90,9 @@ export type CapabilityManifestBrief = Pick<
   providerIds: string[];
   validatorIds: string[];
   repairFailureCodes: string[];
+  costClass: CapabilityManifestCostClass;
+  latencyClass: CapabilityManifestLatencyClass;
+  sideEffectClass: CapabilityManifestSideEffectClass;
 };
 
 export interface CapabilityManifestRegistry {
@@ -129,6 +138,9 @@ export const capabilityManifestSchema = {
     inputSchema: { type: 'object' },
     outputSchema: { type: 'object' },
     sideEffects: { type: 'array', items: { enum: ['none', 'workspace-read', 'workspace-write', 'network', 'desktop', 'external-api'] } },
+    costClass: { enum: ['low', 'medium', 'high'] },
+    latencyClass: { enum: ['low', 'medium', 'high'] },
+    sideEffectClass: { enum: ['none', 'read', 'write', 'network', 'desktop', 'external'] },
     safety: {
       type: 'object',
       required: ['risk', 'dataScopes'],
@@ -169,12 +181,54 @@ export function compactCapabilityManifestBrief(manifest: CapabilityManifest): Ca
     routingTags: [...manifest.routingTags],
     domains: [...manifest.domains],
     sideEffects: [...manifest.sideEffects],
+    costClass: manifest.costClass ?? capabilityManifestCostClass(manifest),
+    latencyClass: manifest.latencyClass ?? capabilityManifestLatencyClass(manifest),
+    sideEffectClass: manifest.sideEffectClass ?? capabilityManifestSideEffectClass(manifest),
     safety: { ...manifest.safety, dataScopes: [...manifest.safety.dataScopes] },
     lifecycle: { ...manifest.lifecycle, replaces: manifest.lifecycle.replaces ? [...manifest.lifecycle.replaces] : undefined },
     providerIds: manifest.providers.map((provider) => provider.id),
     validatorIds: manifest.validators.map((validator) => validator.id),
     repairFailureCodes: manifest.repairHints.map((hint) => hint.failureCode),
   };
+}
+
+function capabilityManifestCostClass(manifest: CapabilityManifest): CapabilityManifestCostClass {
+  const costUnits = isRecord(manifest.metadata?.budget) && typeof manifest.metadata.budget.costUnits === 'number'
+    ? manifest.metadata.budget.costUnits
+    : undefined;
+  if (costUnits !== undefined) {
+    if (costUnits >= 20) return 'high';
+    if (costUnits >= 5) return 'medium';
+  }
+  if (manifest.safety.risk === 'high') return 'high';
+  if (manifest.safety.risk === 'medium') return 'medium';
+  return 'low';
+}
+
+function capabilityManifestLatencyClass(manifest: CapabilityManifest): CapabilityManifestLatencyClass {
+  const maxWallMs = isRecord(manifest.metadata?.budget) && typeof manifest.metadata.budget.maxWallMs === 'number'
+    ? manifest.metadata.budget.maxWallMs
+    : undefined;
+  if (maxWallMs !== undefined) {
+    if (maxWallMs >= 120000) return 'high';
+    if (maxWallMs >= 30000) return 'medium';
+  }
+  if (manifest.sideEffects.includes('network') || manifest.sideEffects.includes('external-api') || manifest.sideEffects.includes('desktop')) return 'high';
+  if (manifest.sideEffects.includes('workspace-write')) return 'medium';
+  return 'low';
+}
+
+function capabilityManifestSideEffectClass(manifest: CapabilityManifest): CapabilityManifestSideEffectClass {
+  if (manifest.sideEffects.includes('external-api')) return 'external';
+  if (manifest.sideEffects.includes('desktop')) return 'desktop';
+  if (manifest.sideEffects.includes('network')) return 'network';
+  if (manifest.sideEffects.includes('workspace-write')) return 'write';
+  if (manifest.sideEffects.includes('workspace-read')) return 'read';
+  return 'none';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export function validateCapabilityManifestShape(manifest: CapabilityManifest): string[] {

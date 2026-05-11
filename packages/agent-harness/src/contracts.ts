@@ -40,11 +40,36 @@ export type HarnessStage =
 
 export type IntentMode = 'fresh' | 'continuation' | 'repair' | 'audit' | 'file-grounded' | 'interactive';
 export type ExplorationMode = 'minimal' | 'normal' | 'deep';
+export type LatencyTier = 'instant' | 'quick' | 'bounded' | 'deep' | 'background';
 export type VerificationIntensity = 'none' | 'light' | 'standard' | 'strict' | 'audit';
 export type SideEffectAllowance = 'block' | 'requires-approval' | 'allow';
 export type BudgetExhaustedPolicy = 'partial-payload' | 'needs-human' | 'fail-with-reason';
+export type HarnessEvaluationMode = 'full' | 'criticalPathOnly';
+export type HarnessStagePathKind = 'critical' | 'audit' | 'external';
+export type HarnessAuditHookStatus = 'deferred' | 'skipped' | 'completed';
+export type VerificationLayer = 'shape' | 'reference' | 'claim' | 'recompute' | 'audit';
+export type CapabilityEscalationTier =
+  | 'direct-context'
+  | 'metadata-summary'
+  | 'single-tool'
+  | 'tool-composition'
+  | 'workspace-task'
+  | 'deep-agent-project'
+  | 'repair-or-background';
+export type CapabilityCostClass = 'free' | 'low' | 'medium' | 'high';
+export type CapabilityLatencyClass = 'instant' | 'short' | 'bounded' | 'long' | 'background';
+export type CapabilitySideEffectClass = 'none' | 'read' | 'write' | 'network' | 'desktop' | 'external';
+export type RepairBudgetTier = LatencyTier;
+export type RepairStopCondition =
+  | 'repeated-failure'
+  | 'no-code-change'
+  | 'no-new-evidence'
+  | 'budget-exhausted'
+  | 'human-required';
+export type ResultPresentationStatus = 'complete' | 'partial' | 'needs-human' | 'background-running' | 'failed';
 export type HarnessInteractionProgressEventType =
   | 'process-progress'
+  | 'partial-result'
   | 'interaction-request'
   | 'clarification-needed'
   | 'human-approval-required'
@@ -68,6 +93,7 @@ export interface HarnessInput {
   prompt?: string;
   request?: unknown;
   profileId?: HarnessProfileId;
+  latencyTier?: LatencyTier;
   stage?: HarnessStage;
   intentMode?: IntentMode;
   contextRefs?: string[];
@@ -76,6 +102,7 @@ export interface HarnessInput {
   candidateCapabilities?: HarnessCandidate[];
   conversationSignals?: Record<string, unknown>;
   runtimeConfig?: Record<string, unknown>;
+  evaluationMode?: HarnessEvaluationMode;
   humanApprovalSatisfied?: boolean;
   budgetOverrides?: PartialHarnessBudgets;
 }
@@ -88,6 +115,7 @@ export interface HarnessRuntime {
 export interface HarnessProfile {
   id: HarnessProfileId;
   version: string;
+  moduleStack?: string[];
   callbacks: HarnessCallback[];
   defaults: HarnessDefaults;
   mergePolicy: HarnessMergePolicy;
@@ -124,6 +152,7 @@ export interface HarnessEvaluation {
 }
 
 export interface HarnessDecision {
+  latencyTier?: LatencyTier;
   intentSignals?: TurnIntentSignals;
   contextHints?: ContextDecision;
   capabilityHints?: CapabilityDecision;
@@ -139,6 +168,7 @@ export interface HarnessDecision {
 }
 
 export interface HarnessDefaults {
+  latencyTier?: LatencyTier;
   intentMode: IntentMode;
   explorationMode: ExplorationMode;
   allowedContextRefs: string[];
@@ -163,6 +193,7 @@ export interface HarnessMergePolicy {
 export interface TurnIntentSignals {
   intentMode?: IntentMode;
   explorationMode?: ExplorationMode;
+  latencyTier?: LatencyTier;
   confidence?: number;
   reasons?: string[];
 }
@@ -179,6 +210,20 @@ export interface CapabilityDecision {
   preferredCapabilityIds?: string[];
   blockedCapabilities?: string[];
   sideEffects?: Partial<SideEffectPolicy>;
+  escalationPlan?: CapabilityEscalationStep[];
+  candidateTiers?: Partial<Record<CapabilityEscalationTier, string[]>>;
+}
+
+export interface CapabilityEscalationStep {
+  tier: CapabilityEscalationTier;
+  candidateIds: string[];
+  benefit: string;
+  cost: string;
+  expectedBenefit?: string;
+  costClass?: CapabilityCostClass;
+  latencyClass?: CapabilityLatencyClass;
+  sideEffectClass?: CapabilitySideEffectClass;
+  stopCondition: string;
 }
 
 export interface HarnessCandidate {
@@ -187,6 +232,9 @@ export interface HarnessCandidate {
   manifestRef: string;
   score: number;
   reasons: string[];
+  costClass?: CapabilityCostClass;
+  latencyClass?: CapabilityLatencyClass;
+  sideEffectClass?: CapabilitySideEffectClass;
   providerAvailability?: ProviderAvailability[];
   budget?: Partial<CapabilityBudget>;
   fallbackCandidateIds?: string[];
@@ -201,6 +249,18 @@ export interface ProviderAvailability {
 export interface HarnessBudgets {
   contextBudget: ContextBudget;
   toolBudget: CapabilityBudget;
+}
+
+export interface LatencyTierPolicy {
+  latencyTier: LatencyTier;
+  explorationMode: ExplorationMode;
+  contextBudget: ContextBudget;
+  capabilityPolicy: CapabilityPolicy;
+  toolBudget: CapabilityBudget;
+  verificationPolicy: VerificationPolicy;
+  repairContextPolicy: RepairContextPolicy;
+  progressPlan: ProgressPlan;
+  presentationPlan: PresentationPlan;
 }
 
 export interface PartialHarnessBudgets {
@@ -233,6 +293,7 @@ export interface CapabilityBudget {
 
 export interface VerificationDecision {
   intensity?: VerificationIntensity;
+  verificationLayers?: VerificationLayer[];
   requireCitations?: boolean;
   requireCurrentRefs?: boolean;
   requireArtifactRefs?: boolean;
@@ -241,6 +302,7 @@ export interface VerificationDecision {
 
 export interface VerificationPolicy {
   intensity: VerificationIntensity;
+  verificationLayers: VerificationLayer[];
   requireCitations: boolean;
   requireCurrentRefs: boolean;
   requireArtifactRefs: boolean;
@@ -252,6 +314,14 @@ export interface RepairDecision {
   maxAttempts?: number;
   includeStdoutSummary?: boolean;
   includeStderrSummary?: boolean;
+  maxWallMs?: number;
+  cheapOnly?: boolean;
+  partialFirst?: boolean;
+  materializePartialOnFailure?: boolean;
+  checkpointArtifacts?: boolean;
+  stopOnRepeatedFailure?: boolean;
+  tierBudgets?: Partial<Record<RepairBudgetTier, RepairTierBudget>>;
+  stopConditions?: RepairStopCondition[];
 }
 
 export interface RepairContextPolicy {
@@ -259,6 +329,21 @@ export interface RepairContextPolicy {
   maxAttempts: number;
   includeStdoutSummary: boolean;
   includeStderrSummary: boolean;
+  maxWallMs: number;
+  cheapOnly: boolean;
+  partialFirst: boolean;
+  materializePartialOnFailure: boolean;
+  checkpointArtifacts: boolean;
+  stopOnRepeatedFailure: boolean;
+  tierBudgets: Partial<Record<RepairBudgetTier, RepairTierBudget>>;
+  stopConditions: RepairStopCondition[];
+}
+
+export interface RepairTierBudget {
+  maxAttempts: number;
+  maxWallMs: number;
+  maxContextTokens?: number;
+  maxToolCalls?: number;
 }
 
 export interface ProgressDecision {
@@ -267,6 +352,9 @@ export interface ProgressDecision {
   phaseNames?: string[];
   silenceTimeoutMs?: number;
   backgroundContinuation?: boolean;
+  firstResultDeadlineMs?: number;
+  phaseDeadlines?: Partial<Record<string, number>>;
+  backgroundAfterMs?: number;
   silencePolicy?: Partial<SilencePolicy>;
   backgroundPolicy?: Partial<BackgroundPolicy>;
   cancelPolicy?: Partial<CancelPolicy>;
@@ -279,6 +367,9 @@ export interface ProgressPlan {
   phaseNames?: string[];
   silenceTimeoutMs: number;
   backgroundContinuation: boolean;
+  firstResultDeadlineMs?: number;
+  phaseDeadlines?: Record<string, number>;
+  backgroundAfterMs?: number;
   silencePolicy?: SilencePolicy;
   backgroundPolicy?: BackgroundPolicy;
   cancelPolicy?: CancelPolicy;
@@ -312,6 +403,7 @@ export interface ArtifactActionPolicy {
 
 export interface PresentationPlan {
   primaryMode: PresentationPrimaryMode;
+  status?: ResultPresentationStatus;
   defaultExpandedSections: PresentationSectionId[];
   defaultCollapsedSections: PresentationSectionId[];
   citationPolicy: CitationPolicy;
@@ -408,6 +500,8 @@ export interface CapabilityPolicy {
   preferredCapabilityIds: string[];
   blockedCapabilities: string[];
   sideEffects: SideEffectPolicy;
+  escalationPlan: CapabilityEscalationStep[];
+  candidateTiers: Partial<Record<CapabilityEscalationTier, string[]>>;
 }
 
 export interface SideEffectPolicy {
@@ -420,6 +514,7 @@ export interface SideEffectPolicy {
 export interface HarnessContract {
   schemaVersion: 'sciforge.agent-harness-contract.v1';
   profileId: string;
+  latencyTier: LatencyTier;
   intentMode: IntentMode;
   explorationMode: ExplorationMode;
   allowedContextRefs: string[];
@@ -441,16 +536,27 @@ export interface HarnessTrace {
   traceId: string;
   requestId?: string;
   profileId: string;
+  latencyTier: LatencyTier;
   stages: HarnessTraceStage[];
+  auditHooks: HarnessAuditHookTrace[];
   conflicts: HarnessMergeConflict[];
   auditNotes: HarnessAuditNote[];
 }
 
 export interface HarnessTraceStage {
   stage: HarnessStage;
+  pathKind: HarnessStagePathKind;
   callbackId: string;
+  auditStatus?: HarnessAuditHookStatus;
   decision: HarnessDecision;
   contractSnapshot: HarnessContract;
+}
+
+export interface HarnessAuditHookTrace {
+  stage: HarnessStage;
+  callbackId?: string;
+  status: HarnessAuditHookStatus;
+  reason: string;
 }
 
 export interface HarnessMergeConflict {
@@ -461,4 +567,14 @@ export interface HarnessMergeConflict {
   reason: string;
   sourceCallbackId: string;
   stage: HarnessStage;
+}
+
+export interface HarnessModule {
+  id: string;
+  version: string;
+  ownedStages: HarnessStage[];
+  inputs: string[];
+  outputs: string[];
+  cost: 'free' | 'cheap' | 'bounded' | 'expensive';
+  defaultTierApplicability: LatencyTier[];
 }
