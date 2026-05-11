@@ -283,6 +283,11 @@ Todo：
   - [x] Event recorder：新增 runtime event recorder helper，将 callback 事件规范化为 session-scoped NDJSON，并补稳定 event id、timestamp、session/run metadata，供 replay CLI 读取。
   - [x] Smoke 审计：新增 `npm run smoke:complex-multiturn-runtime-replay` 并纳入 `smoke:complex-multiturn`，覆盖 artifact/run/execution-unit refs、resume preflight、history branch record、recovery plan 和 side-effect guard。
   - [x] 边界声明：M16 只验证非视觉 runtime/session event replay，不恢复 Computer Use / 视觉 GUI grounding 压测。
+- [x] M17：把 M16 runtime event recorder 接入 gateway 的显式 opt-in 入口。
+  - [x] Gateway opt-in：新增 runtime replay recorder gateway helper；仅在 `uiState.runtimeReplayRecorder.enabled === true` 且 `workspacePath` 可用时包装 runtime callbacks。
+  - [x] 默认安全边界：默认请求不启用写盘、不创建 session NDJSON、不改变 callback 语义，并继续不恢复 Computer Use / 视觉 GUI grounding 压测。
+  - [x] Replay metadata：opt-in 录制沿用 session bundle 路径，补稳定 event id、timestamp、session/run metadata，产出的 `runtimeEventsRef` 可交给 M16 replay CLI。
+  - [x] Smoke/单测：覆盖 disabled 默认、missing workspace、enabled opt-in、event forwarding、session bundle 路径和 recorded NDJSON 可被 runtime replay report 消费。
 
 ## 已清理内容
 

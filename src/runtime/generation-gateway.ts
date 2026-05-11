@@ -93,6 +93,7 @@ import { evaluateToolPayloadEvidence } from './gateway/work-evidence-guard.js';
 import { evaluateGuidanceAdoption } from './gateway/guidance-adoption-guard.js';
 import { summarizeWorkEvidenceForHandoff } from './gateway/work-evidence-types.js';
 import { createLatencyTelemetry } from './gateway/latency-telemetry.js';
+import { applyRuntimeReplayRecorder } from './gateway/runtime-replay-recorder.js';
 import { recordValidationRepairTelemetryForPayload } from './gateway/validation-repair-telemetry-runtime.js';
 import {
   agentServerFailurePayloadRefs,
@@ -154,7 +155,8 @@ function requestHandoffSource(request: GatewayRequest) {
 
 export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, callbacks: WorkspaceRuntimeCallbacks = {}): Promise<ToolPayload> {
   const normalizedRequest = normalizeGatewayRequestFromModule(body);
-  const telemetry = createLatencyTelemetry(normalizedRequest, callbacks);
+  const runtimeReplayRecorder = applyRuntimeReplayRecorder(callbacks, normalizedRequest);
+  const telemetry = createLatencyTelemetry(normalizedRequest, runtimeReplayRecorder.callbacks);
   try {
     emitWorkspaceRuntimeEvent(telemetry.callbacks, gatewayRequestReceivedEvent(normalizedRequest.skillDomain));
     emitWorkspaceRuntimeEvent(telemetry.callbacks, conversationPolicyStartedEvent());
@@ -206,6 +208,8 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
     telemetry.markFallback(errorMessage(error));
     telemetry.emitFinal();
     throw error;
+  } finally {
+    await runtimeReplayRecorder.flush?.();
   }
 }
 
