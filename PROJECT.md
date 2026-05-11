@@ -269,12 +269,13 @@ Todo：
 
 ## 后续候选里程碑
 
-N1-N4 已在本轮完成为通用 gate/contract/smoke。N4 在用户明确批准下载/计算后只执行 one-claim、bounded、refs-first raw BED domain pilot，避免把通用能力验证误读成单论文全量 raw-data 重算工程。
+N1-N5 已在本轮完成为通用 gate/contract/smoke。N4 在用户明确批准下载/计算后只执行 one-claim、bounded、refs-first raw BED domain pilot，避免把通用能力验证误读成单论文全量 raw-data 重算工程。N5 收束此前暴露的 src capability-semantics guard 漏洞，使 0 baseline 恢复为可执行验收。
 
 - [x] N1：Harness-governed Scientific Reproduction。把科研复现每轮 context、capability、budget、verification、repair、progress 收敛进 `HarnessContract`/trace；验收以 harness trace、budget exhaustion、validation/repair/audit 和现有 2020/2025 bounded fixtures 通过为准。
 - [x] N2：Self-prompt Auto-submit Gating。只在 required refs、schema、verifier、预算、停止条件和人工确认点满足时自动提交下一轮；遇到 missing evidence、raw download、许可/算力未定义或重复失败时停在 structured needs-human/failed-with-reason。
 - [x] N3：Raw-data Reanalysis Readiness。先产出 refs-first readiness dossier，列明 accession、数据许可、下载字节数、存储/CPU/内存/时间预算、工具版本、环境锁、genome cache、checksum 和降级策略；verifier 必须阻止未满足许可/预算/环境的 raw execution。
 - [x] N4：One-claim Raw-data Pilot。只能在 N3 通过且用户批准下载/计算后，选择一个 claim、最小样本集和一条明确 pipeline 运行；输出仍使用通用 `analysis-notebook`、`figure-reproduction-report`、`evidence-matrix`、`claim-verdict`，不能因 pipeline 跑通就标成科学成功。
+- [x] N5：Capability Semantics Boundary Hygiene。把真实 package-owned capability 语义迁出 `src/**`，把误判的平台 contract vocabulary 与 package-owned ids 分开检查；验收以 `smoke:no-src-capability-semantics` 0 tracked findings、typecheck、package checks 和相关 capability smokes 通过为准。
 
 ## 2026-05-11 阶段记录
 
@@ -314,5 +315,8 @@ N1-N4 已在本轮完成为通用 gate/contract/smoke。N4 在用户明确批准
 - N4 真实下载/计算结果：从官方 NCBI GEO FTP 下载 `GSE242515_H3K4me3_RS4_WT_peaks.bed.gz`（313,162 bytes, sha256 `1bf74396000eae3bc4593b70882edc2b7d46a9bfeecf485524e69cc01d8f8e5f`）和 `GSE242515_H3K4me3_RS4_Setd1bKO_peaks.bed.gz`（206,123 bytes, sha256 `9e4bc9618a7a395565a70d2f8dcdc71bc661130b18b2db28532cdc82a222a143`），大对象保存在 gitignored `workspace/raw-data-pilot/gse242515-bed-domain/`，仓库只提交 refs-first artifact 和 config。
 - N4 pilot 结论：使用配置参数 `mergeDistanceBp=500`、`domainWidthThresholdBp=5000`，RS4 WT 为 21,080 input intervals、20,613 merged domains、2,876 selected domains；RS4 Setd1bKO 为 13,810 input intervals、13,737 merged domains、83 selected domains，contrast/baseline ratio 0.02886。该结果作为 `partially-reproduced` 支持“Setd1bKO 下 broad H3K4me3 domain 大幅减少”的 bounded claim slice，但不升级为完整 FASTQ/BAM alignment、peak calling、replicate/stage 全量复现成功。
 - N4 新增 artifact/smoke：`tests/fixtures/scientific-reproduction/raw-data-pilot-configs/` 保存通用 runner 配置；`tests/fixtures/scientific-reproduction/real-paper-raw-pilot/` 保存 `raw-data-readiness-dossier`、`analysis-notebook`、`figure-reproduction-report`、`evidence-matrix`、`claim-verdict`、`dataset-inventory`；`smoke:raw-bed-domain-pilot` 校验这些 artifact 通过 scientific reproduction contract、refs-first discipline、verifier raw readiness gate 和 bounded verdict semantics。
-- 本轮验证：`npm run typecheck`、`npm run smoke:scientific-reproduction`、`npm run packages:check`、`npx tsx tests/smoke/smoke-raw-data-preexecution-guard.ts`、`npx tsx tests/smoke/smoke-raw-bed-domain-pilot.ts` 均通过。`npm run smoke:no-src-capability-semantics` 仍因既有 src capability-semantics baseline 大面积为 0 而失败，本轮新增 raw guard 未增加该 guard 输出；该问题应另开架构清理任务，不阻塞 N4 scientific reproduction pilot 的通用 contract 验证。
-- 当前收束判断：本阶段“用真实例子拉通复杂科研问题解决能力”的目标已完成到 N4。继续做 raw FASTQ/BAM 下载、全量 peak calling 或 genome-cache 复算会从通用能力验证转为重型单论文重算工程；如继续推进，应另建 milestone，先定义更高下载/存储/CPU/内存预算、环境锁、比对/peak-calling pipeline 和逐样本许可/checksum 策略。
+- 第九阶段完成 N5 capability semantics boundary hygiene：并行 sub agents 将 `smoke:no-src-capability-semantics` 输出拆成真实 package 语义泄漏与平台 contract vocabulary 误报；真实泄漏已迁移，误报已收敛成通用检查器分类。
+- N5 真实迁移：`literature.retrieval` offline runner 从 `src/runtime` 移到 package-owned `packages/skills/literature/index.ts`，测试改从 package 入口读取；skill/tool projection fallback policy 移到 `packages/skills/capability-projection-policy.ts`；UI 的 selected tool contract 改从 `packages/skills/tool-skills-runtime.ts` 投影，不再在 UI 写死 `local.vision-sense` contract。
+- N5 guard 修复：`tools/check-no-src-capability-semantics.ts` 继续阻止 package-owned artifact/component/provider/domain ids，但明确允许 runtime 自有 contract vocabulary、audit/provenance source、manifest schema version、runtime capability ids、interaction/progress/audit lifecycle terms 和 package export refs；不通过 baseline 掩盖真实 capability 语义。
+- N5 验证：`npm run typecheck`、`npm run smoke:no-src-capability-semantics`、`npm run packages:check`、`npm run smoke:no-legacy-paths`、`npm run smoke:module-boundaries`、`npm run smoke:capability-default-callbacks`、`npx tsx tests/smoke/smoke-literature-retrieval-capability.ts`、`npx tsx tests/smoke/smoke-capability-budget-debits.ts` 均通过。
+- 当前收束判断：本阶段“用真实例子拉通复杂科研问题解决能力”的目标已完成到 N5，且 src/package capability boundary guard 已恢复 0 baseline。继续做 raw FASTQ/BAM 下载、全量 peak calling 或 genome-cache 复算会从通用能力验证转为重型单论文重算工程；如继续推进，应另建 milestone，先定义更高下载/存储/CPU/内存预算、环境锁、比对/peak-calling pipeline 和逐样本许可/checksum 策略。

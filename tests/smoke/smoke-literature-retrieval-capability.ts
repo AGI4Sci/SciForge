@@ -5,7 +5,7 @@ import {
   runOfflineLiteratureRetrieval,
   validateOfflineLiteratureRetrievalOutput,
   type OfflineLiteratureRetrievalOutput,
-} from '../../src/runtime/literature-retrieval-runner.js';
+} from '../../packages/skills/literature/index.js';
 
 const registry = loadCoreCapabilityManifestRegistry();
 const manifest = registry.getManifest('literature.retrieval');

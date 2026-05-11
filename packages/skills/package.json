@@ -18,10 +18,14 @@
   },
   "exports": {
     ".": "./index.ts",
+    "./capability-projection-policy": "./capability-projection-policy.ts",
     "./catalog": "./catalog.ts",
+    "./literature": "./literature/index.ts",
     "./markdown-catalog": "./markdown-catalog.ts",
     "./matching-policy": "./matching-policy.ts",
     "./runtime-policy": "./runtime-policy.ts",
+    "./tool-skills-runtime": "./tool-skills-runtime.ts",
+    "./tool-skills": "./tool_skills/index.ts",
     "./types": "./types.ts"
   }
 }

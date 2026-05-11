@@ -10,7 +10,7 @@ import {
   type CapabilityBudgetDebitLine,
 } from '@sciforge-ui/runtime-contract/capability-budget';
 
-import { runOfflineLiteratureRetrieval } from '../../src/runtime/literature-retrieval-runner.js';
+import { runOfflineLiteratureRetrieval } from '../../packages/skills/literature/index.js';
 import {
   buildObserveInvocationPlan,
   compactObserveTraceRefs,
