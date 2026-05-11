@@ -47,8 +47,9 @@ export function ReportViewerRenderer(props: UIComponentRendererProps) {
       cancelled = true;
     };
   }, [helpers, loadedReport?.ref, report.reportRef]);
-  const markdown = loadedReport && loadedReport.ref === report.reportRef ? loadedReport.markdown : report.markdown;
-  const sections = report.sections;
+  const loadedMarkdown = loadedReport && loadedReport.ref === report.reportRef ? loadedReport.markdown : undefined;
+  const markdown = loadedMarkdown ?? report.markdown;
+  const sections = loadedMarkdown || (report.reportRef && !loadError) ? [] : report.sections;
   const ComponentEmptyState = helpers?.ComponentEmptyState;
   const MarkdownBlock = helpers?.MarkdownBlock;
   if (!artifact || (!markdown && !sections.length)) {

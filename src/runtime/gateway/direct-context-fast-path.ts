@@ -10,7 +10,6 @@ import {
 } from '@sciforge-ui/runtime-contract/artifact-policy';
 
 export function directContextFastPathPayload(request: GatewayRequest): ToolPayload | undefined {
-  if (request.agentServerBaseUrl) return undefined;
   if (!policyRequestsDirectContext(request)) return undefined;
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const context = buildDirectContextFastPathItems({
@@ -81,6 +80,13 @@ export function directContextFastPathPayload(request: GatewayRequest): ToolPaylo
 
 function policyRequestsDirectContext(request: GatewayRequest) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : {};
+  const contract = isRecord(agentHarness.contract) ? agentHarness.contract : {};
+  const capabilityPolicy = isRecord(contract.capabilityPolicy) ? contract.capabilityPolicy : {};
+  if (
+    stringField(contract.intentMode) === 'audit'
+    && toStringList(capabilityPolicy.preferredCapabilityIds).includes('runtime.direct-context-answer')
+  ) return true;
   const conversationPolicy = isRecord(uiState.conversationPolicy) ? uiState.conversationPolicy : {};
   const execution = isRecord(uiState.executionModePlan)
     ? uiState.executionModePlan
@@ -100,4 +106,10 @@ function policyRequestsDirectContext(request: GatewayRequest) {
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function toStringList(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
 }

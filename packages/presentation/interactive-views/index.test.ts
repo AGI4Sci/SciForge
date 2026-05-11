@@ -479,6 +479,23 @@ test('direct answer result policy owns report artifact and view selection semant
   assert.equal(ensured.artifacts[0].type, 'research-report');
   assert.equal(ensured.uiManifest[0].componentId, 'report-viewer');
   assert.equal(ensured.uiManifest[1].priority, 2);
+
+  const refBacked = directAnswerPlainTextResultPolicy([
+    'Let me inspect the existing workspace artifacts.',
+    'The completed report is `arxiv_agent_papers_report_2026-05-11.md`.',
+    '```json',
+    '{"message":"done"}',
+    '```',
+  ].join('\n'), {
+    skillDomain: 'literature',
+    prompt: '写一份 markdown 报告',
+    expectedArtifactTypes: [],
+  });
+  const refBackedArtifact = refBacked.artifacts[0];
+  const refBackedMetadata = refBackedArtifact.metadata as Record<string, unknown>;
+  assert.equal(refBackedMetadata.markdownRef, 'arxiv_agent_papers_report_2026-05-11.md');
+  assert.equal((refBackedArtifact.data as Record<string, unknown>).markdown, undefined);
+  assert.match(String((refBackedArtifact.data as Record<string, unknown>).summary), /arxiv_agent_papers_report/);
 });
 
 test('direct answer result policy owns loose artifact component binding and normalization', () => {

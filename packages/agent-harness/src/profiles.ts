@@ -87,6 +87,9 @@ const baseProgress: ProgressPlan = {
   },
 };
 
+const CONTEXT_AUDIT_HINT = /(?:什么|哪些|哪个|怎么|怎样|为什么|为何|原因|工具|日志|记录|引用|证据|验证|中断|失败|抽取|提取|how|why|what|which|tool|log|ref|reference|evidence|verify|extract|failed|stopped|interrupted)/i;
+const FRESH_WORK_HINT = /(?:重新|重跑|再跑|再检索|检索一下|搜索|查找|下载并|阅读全文|最新|今天|过去一周|生成新的|继续执行|修复|rerun|run again|search|retrieve|fetch|download|latest|today|generate new|repair)/i;
+
 function defaults(overrides: Partial<HarnessDefaults>): HarnessDefaults {
   return {
     intentMode: 'fresh',
@@ -116,6 +119,64 @@ function callback(id: string, decide: HarnessCallback['decide'], stages: Harness
 
 const profileCallbacks: Record<string, HarnessCallback[]> = {
   balancedDefault: [
+    callback('balanced-default.context-audit-intent', (context) => {
+      if (!isContextAuditFollowup(context.input)) return {};
+      return {
+        intentSignals: {
+          intentMode: 'audit',
+          explorationMode: 'minimal',
+          confidence: 0.82,
+          reasons: ['current turn asks for audit/context facts from existing session state'],
+        },
+        capabilityHints: {
+          candidates: [{
+            kind: 'runtime-adapter',
+            id: 'runtime.direct-context-answer',
+            manifestRef: 'runtime://direct-context-answer',
+            score: 0.9,
+            reasons: ['answer can be produced from existing artifacts, runs, and execution refs'],
+          }],
+          preferredCapabilityIds: ['runtime.direct-context-answer'],
+          sideEffects: {
+            network: 'block',
+            workspaceWrite: 'block',
+            externalMutation: 'block',
+            codeExecution: 'block',
+          },
+        },
+        budgets: {
+          contextBudget: { maxPromptTokens: 3000, maxHistoryTurns: 2, maxReferenceDigests: 8, maxFullTextRefs: 0 },
+          toolBudget: {
+            maxWallMs: 10000,
+            maxContextTokens: 3000,
+            maxToolCalls: 0,
+            maxObserveCalls: 0,
+            maxActionSteps: 0,
+            maxNetworkCalls: 0,
+            maxDownloadBytes: 0,
+            maxResultItems: 12,
+            maxProviders: 0,
+            maxRetries: 0,
+            perProviderTimeoutMs: 5000,
+            costUnits: 0,
+            exhaustedPolicy: 'partial-payload',
+          },
+        },
+        verification: { intensity: 'light', requireCurrentRefs: true, requireArtifactRefs: true },
+        progress: { initialStatus: 'Answering from current context', visibleMilestones: ['context', 'answer'], silenceTimeoutMs: 10000 },
+        promptDirectives: [{
+          id: 'direct-context-audit-answer',
+          priority: 90,
+          text: 'Answer this audit follow-up from existing session context only. Do not start new retrieval, downloads, reruns, repairs, or workspace side effects.',
+          sourceCallbackId: 'balanced-default.context-audit-intent',
+        }],
+        auditNotes: [{
+          sourceCallbackId: 'balanced-default.context-audit-intent',
+          severity: 'info',
+          message: 'Selected audit intent and direct-context runtime adapter for a low-risk context follow-up.',
+        }],
+      };
+    }, ['classifyIntent', 'selectCapabilities', 'onToolPolicy', 'onBudgetAllocate', 'beforePromptRender', 'beforeUserProgressEvent']),
     callback('balanced-default.context', (context) => ({
       auditNotes: [{
         sourceCallbackId: 'balanced-default.context',
@@ -339,6 +400,30 @@ const profileCallbacks: Record<string, HarnessCallback[]> = {
     }), ['selectContext', 'selectCapabilities', 'onToolPolicy', 'onBudgetAllocate', 'beforePromptRender', 'beforeResultValidation', 'beforeUserProgressEvent']),
   ],
 };
+
+function isContextAuditFollowup(input: { prompt?: string; request?: unknown }) {
+  const prompt = input.prompt?.trim() ?? '';
+  if (!prompt || FRESH_WORK_HINT.test(prompt) || !CONTEXT_AUDIT_HINT.test(prompt)) return false;
+  return hasPriorContext(input.request);
+}
+
+function hasPriorContext(request: unknown) {
+  if (!request || typeof request !== 'object' || Array.isArray(request)) return false;
+  const record = request as Record<string, unknown>;
+  const uiState = record.uiState && typeof record.uiState === 'object' && !Array.isArray(record.uiState)
+    ? record.uiState as Record<string, unknown>
+    : {};
+  return nonEmptyArray(record.artifacts)
+    || nonEmptyArray(record.references)
+    || nonEmptyArray(uiState.currentReferences)
+    || nonEmptyArray(uiState.recentExecutionRefs)
+    || nonEmptyArray(uiState.recentRuns)
+    || nonEmptyArray(uiState.artifacts);
+}
+
+function nonEmptyArray(value: unknown) {
+  return Array.isArray(value) && value.length > 0;
+}
 
 export const harnessProfiles: Record<string, HarnessProfile> = {
   'balanced-default': {

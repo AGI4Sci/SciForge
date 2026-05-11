@@ -71,6 +71,35 @@
 
 ## 任务板
 
+### R013 多轮连续对话与审计追问恢复
+
+职责：修复已有结果后的低风险追问在 backend/stream 中断时被整轮标失败的问题。唯一真相源是 `packages/agent-harness` 的 harness contract：`balanced-default.context-audit-intent` 将“怎么来的、用了哪些工具/refs、为什么失败/中断”等低风险审计追问归类为 `intentMode=audit`，并偏好 `runtime.direct-context-answer`；真正需要新检索、下载、重跑或修复的请求仍必须走 backend。
+
+Todo：
+- [x] 复盘网页端失败：已有 Markdown 报告后追问工具/全文抽取方式，backend project tool 中断导致 UI 标为 failed。
+- [x] 定义通用边界：只恢复低风险上下文/审计追问；包含重新检索、下载、重跑、修复、最新等新工作意图时不得恢复。
+- [x] 在 `packages/agent-harness` 实现 context audit intent callback，runtime direct-context path 只消费 harness contract，不保留 UI transport 第二套判定/恢复逻辑。
+- [x] 增加测试覆盖：低风险审计追问中断可恢复，新工作追问中断仍失败。
+
+验收：
+- [x] 浏览器端端到端复测已有结果后的审计追问，不再显示整轮失败。
+- [x] 修复不依赖具体论文、arXiv、PDF 文件名、日期或单句 prompt。
+
+### R012 通用结果呈现与 Markdown 报告优先级修复
+
+职责：修复 AgentServer/direct-payload 结果中真实 Markdown 报告被过程文本、fallback section 或错误 view 盖住的问题，确保类似“报告/总结/论文调研”结果优先展示稳定 artifact/ref，而不是聊天过程。
+
+Todo：
+- [x] 复盘网页端失败：结果视图显示 `AgentServer Report` 过程文本，但 workspace 已有真实 `arxiv_agent_papers_report_2026-05-11.md`。
+- [x] 定位通用缺陷：report viewer 在存在 `reportRef` 时仍优先渲染 inline `sections`；direct answer policy 会把后端过程文本作为 research-report markdown 物化。
+- [x] 修复报告 artifact/ref 选择策略：有稳定 Markdown ref 时优先读取 ref 正文，过程文本仅保留为审计/diagnostic。
+- [x] 增加通用测试覆盖 backend payload text + markdown ref、direct answer markdown ref、结果 viewer 优先级。
+- [x] 运行相关测试并回到网页端复测当前结果卡片。
+
+验收：
+- [x] 当前同类“下载并阅读全文，写 Markdown 报告”任务在结果视图中展示真实 Markdown 报告正文。
+- [x] 修复不依赖具体论文、arXiv 文件名、日期、prompt 文案或 scenario 特例。
+
 ### R001 网页端人类式操作协议
 
 职责：定义 Codex 如何使用 Computer Use 从网页端操作 SciForge，确保训练轨迹接近真实人类研究者。

@@ -88,6 +88,39 @@ test('profile registry exposes distinct budget and verification behavior', async
   assert.ok(fast.contract.toolBudget.maxWallMs < research.contract.toolBudget.maxWallMs);
 });
 
+test('balanced profile owns context audit follow-up intent', async () => {
+  const result = await evaluateHarness({
+    requestId: 'req-context-audit',
+    prompt: 'What tools and refs were used for the previous result?',
+    request: {
+      artifacts: [{ id: 'research-report', type: 'research-report' }],
+      uiState: {
+        recentExecutionRefs: [{ id: 'unit-report', outputRef: '.sciforge/task-results/report.json' }],
+      },
+    },
+  });
+
+  assert.equal(result.contract.intentMode, 'audit');
+  assert.equal(result.contract.explorationMode, 'normal');
+  assert.ok(result.contract.capabilityPolicy.preferredCapabilityIds.includes('runtime.direct-context-answer'));
+  assert.equal(result.contract.capabilityPolicy.sideEffects.network, 'block');
+  assert.equal(result.contract.toolBudget.maxNetworkCalls, 0);
+  assert.ok(result.trace.stages.some((stage) => stage.callbackId === 'balanced-default.context-audit-intent'));
+});
+
+test('context audit callback does not capture fresh work', async () => {
+  const result = await evaluateHarness({
+    requestId: 'req-fresh-work',
+    prompt: 'Please rerun the search and download the latest papers',
+    request: {
+      artifacts: [{ id: 'research-report', type: 'research-report' }],
+    },
+  });
+
+  assert.equal(result.contract.intentMode, 'fresh');
+  assert.equal(result.contract.capabilityPolicy.preferredCapabilityIds.includes('runtime.direct-context-answer'), false);
+});
+
 test('merge rules union blocks, tighten budgets, escalate verification, and fail closed side effects', async () => {
   const profile: HarnessProfile = {
     id: 'test-merge',

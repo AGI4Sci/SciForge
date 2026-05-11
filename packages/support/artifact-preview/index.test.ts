@@ -183,6 +183,45 @@ test('owns report markdown ref and backend placeholder shell policy', () => {
   assert.doesNotMatch(report.markdown ?? '', /uiManifest/);
 });
 
+test('prefers stable markdown refs over backend process sections', () => {
+  const backendText = [
+    'Let me inspect the existing workspace artifacts before returning the result.',
+    '',
+    'The final report already exists at `arxiv_agent_papers_report_2026-05-11.md`.',
+    '',
+    '```json',
+    '{"message":"done","artifacts":[{"id":"research-report","type":"research-report"}]}',
+    '```',
+  ].join('\n');
+  const report = coerceArtifactReportPayload({
+    markdown: backendText,
+    sections: [{ title: 'AgentServer Report', content: backendText }],
+  }, {
+    id: 'research-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { markdown: backendText, sections: [{ title: 'AgentServer Report', content: backendText }] },
+  });
+
+  assert.equal(report.reportRef, 'arxiv_agent_papers_report_2026-05-11.md');
+  assert.match(report.markdown ?? '', /Markdown report/);
+  assert.doesNotMatch(report.markdown ?? '', /Let me inspect/);
+});
+
+test('keeps normal inline report sections when text is not backend process output', () => {
+  const report = coerceArtifactReportPayload({
+    sections: [{ title: 'Findings', content: 'Final evidence-backed summary.' }],
+  }, {
+    id: 'research-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+  });
+
+  assert.match(report.markdown ?? '', /Final evidence-backed summary/);
+});
+
 test('owns report related artifact fallback for paper and table artifacts', () => {
   const primary = {
     id: 'research-report',

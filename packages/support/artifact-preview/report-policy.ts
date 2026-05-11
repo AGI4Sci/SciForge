@@ -43,19 +43,24 @@ export function coerceArtifactReportPayload(
   const source = nested ?? payload;
   const sections = reportPolicyRecordList(source.sections);
   const direct = firstString(source.markdown, source.report, source.summary, source.content);
+  const directIsBackendPayloadText = looksLikeBackendPayloadText(direct);
   const extracted = extractUserFacingReport(direct);
   const relatedMarkdown = reportFromRelatedArtifacts(relatedArtifacts, artifact);
-  const extractedMarkdown = extracted.markdown && !isGeneratedReportShell(extracted.markdown) ? extracted.markdown : undefined;
+  const extractedMarkdown = extracted.markdown
+    && !isGeneratedReportShell(extracted.markdown)
+    && (!directIsBackendPayloadText || looksLikeSubstantialReportMarkdown(extracted.markdown))
+    ? extracted.markdown
+    : undefined;
   const reportRef = extracted.reportRef
     || reportRefFromPayload(source)
     || reportRefFromText(direct)
     || reportRefFromArtifact(artifact);
   const markdown = extractedMarkdown
-    || (!looksLikeBackendPayloadText(direct) ? direct : undefined)
-    || (sections.length ? reportSectionsToMarkdown(sections) : undefined)
+    || (!directIsBackendPayloadText ? direct : undefined)
+    || (sections.length && !directIsBackendPayloadText ? reportSectionsToMarkdown(sections) : undefined)
     || reportFromKnownFields(source)
     || relatedMarkdown
-    || extracted.markdown
+    || (!directIsBackendPayloadText ? extracted.markdown : undefined)
     || markdownShellForReportRef(reportRef);
   return { markdown, sections, reportRef };
 }
@@ -126,6 +131,11 @@ export function reportRefFromText(text?: string) {
 export function looksLikeBackendPayloadText(text?: string) {
   if (!text) return false;
   return /```json|ToolPayload|Returning the existing result|Let me inspect|prior attempt|\"artifacts\"\s*:|\"uiManifest\"\s*:|\"executionUnits\"\s*:|\"message\"\s*:/i.test(text);
+}
+
+function looksLikeSubstantialReportMarkdown(text: string) {
+  const trimmed = text.trim();
+  return trimmed.length >= 120 || /^#{1,3}\s+\S/m.test(trimmed) || /\n[-*]\s+\S/.test(trimmed) || /\n\|.+\|/.test(trimmed);
 }
 
 export function inlineObjectReferenceFromMarkdownRef(rawRef: string): ObjectReference | undefined {

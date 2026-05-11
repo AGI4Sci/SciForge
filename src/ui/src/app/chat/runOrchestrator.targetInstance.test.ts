@@ -348,6 +348,23 @@ describe('runPromptOrchestrator target instance guard', () => {
     assert.doesNotMatch(result.failedSession.runs[0]?.response ?? '', /^# AgentServer Report/);
     assert.equal(result.failedSession.executionUnits.some((unit) => unit.status === 'self-healed'), false);
   });
+
+  it('does not synthesize interrupted follow-ups in the UI transport layer', async () => {
+    const session = sessionWithReportArtifact();
+    globalThis.fetch = (async () => {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }) as typeof fetch;
+
+    const result = await runPromptOrchestrator(orchestratorInput({
+      prompt: 'Please rerun the search and download the latest papers',
+      baseSession: session,
+      activeSession: () => session,
+    }));
+
+    assert.equal(result.status, 'failed');
+    assert.match(result.message, /当前 backend 运行被系统或网络中断/);
+    assert.equal(result.failedSession.executionUnits.some((unit) => unit.status === 'self-healed'), false);
+  });
 });
 
 function emptySession(): SciForgeSession {
@@ -393,7 +410,7 @@ function sessionWithGenericArtifact(): SciForgeSession {
   };
 }
 
-function sessionWithReportArtifact(): SciForgeSession {
+function sessionWithReportArtifact(overrides: Partial<SciForgeSession> = {}): SciForgeSession {
   return {
     ...emptySession(),
     artifacts: [{
@@ -411,6 +428,7 @@ function sessionWithReportArtifact(): SciForgeSession {
       artifactRef: 'research-report',
       priority: 1,
     }],
+    ...overrides,
   };
 }
 

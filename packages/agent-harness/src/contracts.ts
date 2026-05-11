@@ -64,6 +64,7 @@ export type HarnessRunState =
 export interface HarnessInput {
   requestId?: string;
   prompt?: string;
+  request?: unknown;
   profileId?: HarnessProfileId;
   stage?: HarnessStage;
   intentMode?: IntentMode;

@@ -100,8 +100,9 @@ export function ReportViewerSlot({ slot, artifact, config, session, onObjectRefe
       cancelled = true;
     };
   }, [config, loadedReport?.ref, report.reportRef]);
-  const markdown = loadedReport && loadedReport.ref === report.reportRef ? loadedReport.markdown : report.markdown;
-  const sections = report.sections;
+  const loadedMarkdown = loadedReport && loadedReport.ref === report.reportRef ? loadedReport.markdown : undefined;
+  const markdown = loadedMarkdown ?? report.markdown;
+  const sections = loadedMarkdown || (report.reportRef && !loadError) ? [] : report.sections;
   if (!artifact || (!markdown && !sections.length)) {
     return <ComponentEmptyState {...scenarioReportViewerEmptyStatePolicy({ hasArtifact: Boolean(artifact) })} />;
   }

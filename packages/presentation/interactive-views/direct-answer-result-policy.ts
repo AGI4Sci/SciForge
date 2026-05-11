@@ -34,6 +34,7 @@ const REPORT_VIEW_COMPONENT = 'report-viewer';
 const EXECUTION_VIEW_COMPONENT = 'execution-unit-table';
 const GENERIC_ARTIFACT_COMPONENT = 'artifact-viewer';
 const UNKNOWN_ARTIFACT_COMPONENT = 'unknown-artifact-inspector';
+const BACKEND_PROCESS_TEXT_PATTERN = /```json|ToolPayload|Let me (?:inspect|check|read|start|verify)|prior attempts?|existing workspace|workspace artifacts|I'll produce the ToolPayload|construct the ToolPayload/i;
 
 export const directAnswerResultPolicyIds = {
   structuredAnswerSource: 'agentserver-structured-answer',
@@ -295,28 +296,57 @@ function existingArtifactFollowupComponentForArtifact(artifact: ExistingArtifact
 }
 
 function directAnswerReportArtifact(message: string, skillDomain: string, source: string, mode: 'plain-text' | 'structured-answer'): Record<string, unknown> {
+  const markdownRef = markdownRefFromDirectAnswerText(message);
+  const backendProcessText = looksLikeBackendProcessText(message);
+  const title = mode === 'plain-text' ? 'AgentServer Report' : 'AgentServer Answer';
+  const metadata = {
+    source,
+    note: mode === 'plain-text'
+      ? 'AgentServer returned a natural-language answer instead of taskFiles; SciForge preserved it as a report artifact.'
+      : 'AgentServer returned a direct answer with user-visible content; SciForge preserved the answer as a report artifact instead of adding a repair placeholder.',
+    ...(markdownRef ? { reportRef: markdownRef, markdownRef } : {}),
+  };
   return {
     id: REPORT_ARTIFACT_TYPE,
     type: REPORT_ARTIFACT_TYPE,
     producerScenario: skillDomain,
     schemaVersion: '1',
-    metadata: {
-      source,
-      note: mode === 'plain-text'
-        ? 'AgentServer returned a natural-language answer instead of taskFiles; SciForge preserved it as a report artifact.'
-        : 'AgentServer returned a direct answer with user-visible content; SciForge preserved the answer as a report artifact instead of adding a repair placeholder.',
-    },
-    data: mode === 'plain-text'
+    metadata,
+    data: markdownRef && backendProcessText
+      ? {
+        summary: firstReadableLine(message) ?? `Markdown report available at ${markdownRef}`,
+      }
+      : mode === 'plain-text'
       ? {
         markdown: message,
-        sections: [{ title: 'AgentServer Report', content: message }],
+        sections: [{ title, content: message }],
       }
       : {
         markdown: message,
         report: message,
-        sections: [{ title: 'AgentServer Answer', content: message }],
+        sections: [{ title, content: message }],
       },
   };
+}
+
+function markdownRefFromDirectAnswerText(text: string) {
+  const candidates = [
+    ...Array.from(text.matchAll(/(?:markdownRef|reportRef|path|dataRef)"?\s*[:=]\s*"?([^"'\s`]+\.m(?:d|arkdown)(?:[?#][^"'\s`]*)?)/gi), (match) => match[1]),
+    ...Array.from(text.matchAll(/(?:^|["'`\s(:：])((?:\.sciforge|workspace\/\.sciforge|\/[^"'`\s]+|[A-Za-z0-9_.-]+)[^"'`\s]*\.m(?:d|arkdown)(?:[?#][^"'`\s]*)?)(?:$|["'`\s),，。])/gi), (match) => match[1]),
+  ];
+  return candidates.map((candidate) => candidate.trim()).find((candidate) => !/^-+$/.test(candidate));
+}
+
+function looksLikeBackendProcessText(text: string) {
+  return BACKEND_PROCESS_TEXT_PATTERN.test(text);
+}
+
+function firstReadableLine(text: string) {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line && !BACKEND_PROCESS_TEXT_PATTERN.test(line))
+    ?.slice(0, 240);
 }
 
 function normalizeUiManifestSlot(slot: unknown, artifacts: Array<Record<string, unknown>>, index: number): Array<Record<string, unknown>> {
