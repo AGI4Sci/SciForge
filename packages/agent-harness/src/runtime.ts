@@ -12,6 +12,7 @@ import type {
   HarnessRuntime,
   HarnessStage,
   HarnessTrace,
+  PresentationPlan,
   ProgressDecision,
   PromptDirective,
   RepairContextPolicy,
@@ -30,6 +31,7 @@ export const HARNESS_EVALUATION_STAGES: readonly HarnessStage[] = [
   'onBudgetAllocate',
   'beforePromptRender',
   'beforeResultValidation',
+  'beforeResultPresentation',
   'onRepairRequired',
   'beforeUserProgressEvent',
 ];
@@ -183,6 +185,7 @@ function contractFromDefaults(profile: HarnessProfile, input: HarnessInput): Har
     verificationPolicy: { ...defaults.verificationPolicy },
     repairContextPolicy: { ...defaults.repairContextPolicy },
     progressPlan: cloneProgressPlan(defaults.progressPlan),
+    presentationPlan: clonePresentationPlan(defaults.presentationPlan ?? basePresentationPlan()),
     promptDirectives: sortPromptDirectives(defaults.promptDirectives),
   };
   return normalizeContract(base);
@@ -254,6 +257,7 @@ function mergeDecision(contract: HarnessContract, decision: HarnessDecision, con
   }
   if (decision.repair) next.repairContextPolicy = mergeRepair(next.repairContextPolicy, decision.repair);
   if (decision.progress) next.progressPlan = mergeProgress(next.progressPlan, decision.progress);
+  if (decision.presentation) next.presentationPlan = mergePresentation(next.presentationPlan, decision.presentation);
   if (decision.promptDirectives) {
     next.promptDirectives = sortPromptDirectives([...next.promptDirectives, ...decision.promptDirectives]);
   }
@@ -293,6 +297,9 @@ function mergeRawDecision(left: HarnessDecision, right: HarnessDecision): Harnes
     ...left,
     ...right,
     ...(verification ? { verification } : {}),
+    presentation: left.presentation || right.presentation
+      ? mergePresentation(basePresentationPlan(), { ...left.presentation, ...right.presentation })
+      : undefined,
     blockedRefs: sortedUnique([...(left.blockedRefs ?? []), ...(right.blockedRefs ?? [])]),
     blockedCapabilities: sortedUnique([...(left.blockedCapabilities ?? []), ...(right.blockedCapabilities ?? [])]),
     promptDirectives: sortPromptDirectives([...(left.promptDirectives ?? []), ...(right.promptDirectives ?? [])]),
@@ -440,6 +447,43 @@ function mergeProgress(current: HarnessContract['progressPlan'], incoming: Progr
   };
 }
 
+function mergePresentation(current: HarnessContract['presentationPlan'], incoming: Partial<PresentationPlan>): HarnessContract['presentationPlan'] {
+  const expanded = orderedUnique([
+    ...current.defaultExpandedSections,
+    ...(incoming.defaultExpandedSections ?? []),
+  ]).filter((section) => !['process', 'diagnostics', 'raw-payload'].includes(section));
+  return {
+    primaryMode: incoming.primaryMode ?? current.primaryMode,
+    defaultExpandedSections: expanded as HarnessContract['presentationPlan']['defaultExpandedSections'],
+    defaultCollapsedSections: orderedUnique([
+      ...current.defaultCollapsedSections,
+      ...(incoming.defaultCollapsedSections ?? []),
+      'process',
+      'diagnostics',
+      'raw-payload',
+    ]) as HarnessContract['presentationPlan']['defaultCollapsedSections'],
+    citationPolicy: {
+      ...current.citationPolicy,
+      ...incoming.citationPolicy,
+    },
+    artifactActionPolicy: {
+      ...current.artifactActionPolicy,
+      ...incoming.artifactActionPolicy,
+      primaryActions: orderedUnique([
+        ...current.artifactActionPolicy.primaryActions,
+        ...(incoming.artifactActionPolicy?.primaryActions ?? []),
+      ]),
+      secondaryActions: orderedUnique([
+        ...current.artifactActionPolicy.secondaryActions,
+        ...(incoming.artifactActionPolicy?.secondaryActions ?? []),
+      ]),
+    },
+    diagnosticsVisibility: incoming.diagnosticsVisibility === 'expanded' ? current.diagnosticsVisibility : incoming.diagnosticsVisibility ?? current.diagnosticsVisibility,
+    processVisibility: incoming.processVisibility === 'expanded' ? current.processVisibility : incoming.processVisibility ?? current.processVisibility,
+    roleMode: incoming.roleMode ?? current.roleMode,
+  };
+}
+
 function mergeSideEffect(current: SideEffectAllowance, incoming: SideEffectAllowance, context: MergeContext): SideEffectAllowance {
   const allowWidening = context.profile.mergePolicy.allowSideEffectWideningWithHumanApproval && context.humanApprovalSatisfied;
   if (allowWidening) return incoming;
@@ -471,6 +515,7 @@ function normalizeContract(contract: HarnessContract): HarnessContract {
       visibleMilestones: sortedUnique(contract.progressPlan.visibleMilestones),
       phaseNames: orderedUnique(contract.progressPlan.phaseNames ?? contract.progressPlan.visibleMilestones),
     },
+    presentationPlan: mergePresentation(basePresentationPlan(), contract.presentationPlan ?? basePresentationPlan()),
   };
 }
 
@@ -487,6 +532,41 @@ function cloneProgressPlan(progressPlan: HarnessContract['progressPlan']): Harne
     backgroundPolicy: progressPlan.backgroundPolicy ? { ...progressPlan.backgroundPolicy } : undefined,
     cancelPolicy: progressPlan.cancelPolicy ? { ...progressPlan.cancelPolicy } : undefined,
     interactionPolicy: progressPlan.interactionPolicy ? { ...progressPlan.interactionPolicy } : undefined,
+  };
+}
+
+function clonePresentationPlan(presentationPlan: HarnessContract['presentationPlan']): HarnessContract['presentationPlan'] {
+  return {
+    ...presentationPlan,
+    defaultExpandedSections: [...presentationPlan.defaultExpandedSections],
+    defaultCollapsedSections: [...presentationPlan.defaultCollapsedSections],
+    citationPolicy: { ...presentationPlan.citationPolicy },
+    artifactActionPolicy: {
+      ...presentationPlan.artifactActionPolicy,
+      primaryActions: [...presentationPlan.artifactActionPolicy.primaryActions],
+      secondaryActions: [...presentationPlan.artifactActionPolicy.secondaryActions],
+    },
+  };
+}
+
+function basePresentationPlan(): PresentationPlan {
+  return {
+    primaryMode: 'answer-first',
+    defaultExpandedSections: ['answer', 'key-findings', 'evidence', 'artifacts', 'next-actions'],
+    defaultCollapsedSections: ['process', 'diagnostics', 'raw-payload'],
+    citationPolicy: {
+      requireCitationOrUncertainty: true,
+      maxInlineCitationsPerFinding: 4,
+      showVerificationState: true,
+    },
+    artifactActionPolicy: {
+      primaryActions: ['inspect', 'focus-right-pane'],
+      secondaryActions: ['export', 'copy-ref'],
+      preferRightPane: true,
+    },
+    diagnosticsVisibility: 'collapsed',
+    processVisibility: 'collapsed',
+    roleMode: 'standard',
   };
 }
 

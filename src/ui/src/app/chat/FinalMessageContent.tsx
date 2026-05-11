@@ -17,7 +17,7 @@ export function FinalMessageContent({
       <MessageContent content={presentation.primaryContent || content} references={references} onObjectFocus={onObjectFocus} />
       {presentation.auditSections.length ? (
         <details className="message-fold depth-2 final-message-audit-fold" key={finalAuditFoldKey(content, presentation.summary)}>
-          <summary>执行明细与原始证据 · {presentation.summary}</summary>
+          <summary>过程与诊断 · {presentation.summary}</summary>
           <div className="execution-process-body">
             {presentation.auditSections.map((section, index) => (
               <div className="final-message-audit-section" key={`${section.evidenceType}-${index}`}>

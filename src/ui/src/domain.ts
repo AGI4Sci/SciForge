@@ -541,6 +541,8 @@ export interface TargetInstanceContext {
 
 export interface SendAgentMessageInput {
   sessionId?: string;
+  sessionCreatedAt?: string;
+  sessionUpdatedAt?: string;
   scenarioId: ScenarioInstanceId;
   agentName: string;
   agentDomain: string;

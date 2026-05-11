@@ -201,6 +201,8 @@ export async function sendSciForgeToolMessage(
       recentVerificationResults: input.recentVerificationResults,
       uiState: {
         sessionId: input.sessionId,
+        sessionCreatedAt: input.sessionCreatedAt,
+        sessionUpdatedAt: input.sessionUpdatedAt,
         silentStreamRunId,
         scopeCheck: {
           source: sharedAgentContract.source,
@@ -659,11 +661,13 @@ function workspacePersistenceSummary(input: SendAgentMessageInput) {
     sciforgeDir: workspacePath ? `${workspacePath}/.sciforge` : '.sciforge',
     workspaceStateRef: '.sciforge/workspace-state.json',
     sessionRef: sessionId ? `.sciforge/sessions/${safeWorkspaceName(sessionId)}.json` : undefined,
-    artifactDir: '.sciforge/artifacts/',
-    taskDir: '.sciforge/tasks/',
-    taskResultDir: '.sciforge/task-results/',
-    logDir: '.sciforge/logs/',
-    note: 'Generated task code, task inputs/results/logs, and UI artifacts are persisted under the workspace .sciforge directory when Workspace Writer is online.',
+    sessionBundlePattern: sessionId ? `.sciforge/sessions/YYYY-MM-DD_*_${safeWorkspaceName(sessionId)}/` : '.sciforge/sessions/YYYY-MM-DD_*_session/',
+    artifactDir: '.sciforge/sessions/<date>_<scenario>_<session>/artifacts/',
+    taskDir: '.sciforge/sessions/<date>_<scenario>_<session>/tasks/',
+    taskResultDir: '.sciforge/sessions/<date>_<scenario>_<session>/task-results/',
+    logDir: '.sciforge/sessions/<date>_<scenario>_<session>/logs/',
+    legacyArtifactDir: '.sciforge/artifacts/',
+    note: 'Each multi-turn conversation is persisted as a date-prefixed portable bundle under .sciforge/sessions/, with records, task code, inputs/results, logs, artifacts, versions, data, and exports grouped together.',
   };
 }
 

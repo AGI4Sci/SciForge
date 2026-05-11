@@ -15,7 +15,7 @@ export async function runWorkspaceTask(workspacePath: string, spec: WorkspaceTas
   const taskRel = spec.taskRel ?? `.sciforge/tasks/${safeId(spec.id)}.task`;
   const concreteSpec = { ...spec, taskRel };
   const taskPath = join(workspace, taskRel);
-  const inputRel = `.sciforge/task-inputs/${safeId(spec.id)}.json`;
+  const inputRel = spec.inputRel ?? `.sciforge/task-inputs/${safeId(spec.id)}.json`;
   const inputPath = join(workspace, inputRel);
   const outputPath = join(workspace, spec.outputRel);
   const stdoutPath = join(workspace, spec.stdoutRel);

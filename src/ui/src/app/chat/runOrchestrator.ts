@@ -113,6 +113,8 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
     }
     const request: AgentRequest = {
       sessionId: optimisticSession.sessionId,
+      sessionCreatedAt: optimisticSession.createdAt,
+      sessionUpdatedAt: optimisticSession.updatedAt,
       scenarioId: input.scenarioId,
       agentName: input.scenarioName,
       agentDomain: input.scenarioDomain,

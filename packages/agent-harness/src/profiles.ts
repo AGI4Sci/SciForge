@@ -5,6 +5,7 @@ import type {
   HarnessDefaults,
   HarnessProfile,
   HarnessProfileId,
+  PresentationPlan,
   ProgressPlan,
   RepairContextPolicy,
   SideEffectPolicy,
@@ -87,6 +88,25 @@ const baseProgress: ProgressPlan = {
   },
 };
 
+const basePresentation: PresentationPlan = {
+  primaryMode: 'answer-first',
+  defaultExpandedSections: ['answer', 'key-findings', 'evidence', 'artifacts', 'next-actions'],
+  defaultCollapsedSections: ['process', 'diagnostics', 'raw-payload'],
+  citationPolicy: {
+    requireCitationOrUncertainty: true,
+    maxInlineCitationsPerFinding: 4,
+    showVerificationState: true,
+  },
+  artifactActionPolicy: {
+    primaryActions: ['inspect', 'focus-right-pane'],
+    secondaryActions: ['export', 'copy-ref'],
+    preferRightPane: true,
+  },
+  diagnosticsVisibility: 'collapsed',
+  processVisibility: 'collapsed',
+  roleMode: 'standard',
+};
+
 const CONTEXT_AUDIT_HINT = /(?:什么|哪些|哪个|怎么|怎样|为什么|为何|原因|工具|日志|记录|引用|证据|验证|中断|失败|抽取|提取|how|why|what|which|tool|log|ref|reference|evidence|verify|extract|failed|stopped|interrupted)/i;
 const FRESH_WORK_HINT = /(?:重新|重跑|再跑|再检索|检索一下|搜索|查找|下载并|阅读全文|最新|今天|过去一周|生成新的|继续执行|修复|rerun|run again|search|retrieve|fetch|download|latest|today|generate new|repair)/i;
 
@@ -108,8 +128,23 @@ function defaults(overrides: Partial<HarnessDefaults>): HarnessDefaults {
     verificationPolicy: { ...baseVerification },
     repairContextPolicy: { ...baseRepair },
     progressPlan: { ...baseProgress },
+    presentationPlan: clonePresentationPlan(basePresentation),
     promptDirectives: [],
     ...overrides,
+  };
+}
+
+function clonePresentationPlan(plan: PresentationPlan): PresentationPlan {
+  return {
+    ...plan,
+    defaultExpandedSections: [...plan.defaultExpandedSections],
+    defaultCollapsedSections: [...plan.defaultCollapsedSections],
+    citationPolicy: { ...plan.citationPolicy },
+    artifactActionPolicy: {
+      ...plan.artifactActionPolicy,
+      primaryActions: [...plan.artifactActionPolicy.primaryActions],
+      secondaryActions: [...plan.artifactActionPolicy.secondaryActions],
+    },
   };
 }
 

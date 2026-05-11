@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { evaluateRawDataPreExecutionGuard } from '@sciforge-ui/runtime-contract/raw-data-execution-guard';
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult } from '../runtime-types.js';
 import { errorMessage, generatedTaskArchiveRel, isTaskInputRel, safeWorkspaceRel } from '../gateway-utils.js';
+import { ensureSessionBundle, sessionBundleRelForRequest, sessionBundleResourceRel } from '../session-bundle.js';
 import { runWorkspaceTask, sha1 } from '../workspace-task-runner.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
 import { sanitizeAgentServerError } from './backend-failure-diagnostics.js';
@@ -24,6 +25,7 @@ export interface GeneratedTaskExecutionLifecycleInput {
 
 export interface GeneratedTaskExecutionLifecycleRun extends GeneratedTaskRuntimeRefs {
   taskId: string;
+  sessionBundleRel?: string;
   run: WorkspaceTaskRunResult;
   supplementArtifactTypes: string[];
 }
@@ -36,18 +38,26 @@ export async function runGeneratedTaskExecutionLifecycle(
   input: GeneratedTaskExecutionLifecycleInput,
 ): Promise<GeneratedTaskExecutionLifecycleResult> {
   const taskId = `generated-${input.request.skillDomain}-${sha1(`${input.request.prompt}:${Date.now()}`).slice(0, 12)}`;
+  const sessionBundleRel = sessionBundleRelForRequest(input.request);
+  await ensureSessionBundle(input.workspace, sessionBundleRel, {
+    sessionId: typeof input.request.uiState?.sessionId === 'string' ? input.request.uiState.sessionId : 'sessionless',
+    scenarioId: input.request.scenarioPackageRef?.id || input.request.skillDomain,
+    createdAt: typeof input.request.uiState?.sessionCreatedAt === 'string' ? input.request.uiState.sessionCreatedAt : undefined,
+    updatedAt: typeof input.request.uiState?.sessionUpdatedAt === 'string' ? input.request.uiState.sessionUpdatedAt : undefined,
+  });
   const materialized = await materializeGeneratedTaskFiles({
     workspace: input.workspace,
     request: input.request,
     skill: input.skill,
     taskId,
+    sessionBundleRel,
     generation: input.generation,
     callbacks: input.callbacks,
     deps: input.deps,
   });
   if (materialized.kind === 'payload') return materialized;
 
-  const refs = generatedTaskRuntimeRefs(input.generation, taskId, materialized.generatedPathMap);
+  const refs = generatedTaskRuntimeRefs(input.generation, taskId, materialized.generatedPathMap, sessionBundleRel);
   const rawDataGuard = evaluateRawDataPreExecutionGuard({
     taskFiles: input.generation.response.taskFiles,
     artifacts: input.request.artifacts,
@@ -83,12 +93,15 @@ export async function runGeneratedTaskExecutionLifecycle(
     outputRel: refs.outputRel,
     stdoutRel: refs.stdoutRel,
     stderrRel: refs.stderrRel,
+    inputRel: refs.inputRel,
+    sessionBundleRel,
   });
 
   return {
     kind: 'run',
     execution: {
       taskId,
+      sessionBundleRel,
       run,
       ...refs,
       supplementArtifactTypes: supplementScopeForGeneratedRun(input.request, input.generation.response.expectedArtifacts),
@@ -96,7 +109,7 @@ export async function runGeneratedTaskExecutionLifecycle(
   };
 }
 
-async function materializeGeneratedTaskFiles(input: GeneratedTaskExecutionLifecycleInput & { taskId: string }): Promise<
+async function materializeGeneratedTaskFiles(input: GeneratedTaskExecutionLifecycleInput & { taskId: string; sessionBundleRel: string }): Promise<
   | { kind: 'materialized'; generatedPathMap: Map<string, string>; generatedInputRels: string[] }
   | { kind: 'payload'; payload: ToolPayload }
 > {
@@ -105,7 +118,7 @@ async function materializeGeneratedTaskFiles(input: GeneratedTaskExecutionLifecy
   try {
     for (const file of input.generation.response.taskFiles) {
       const declaredRel = safeWorkspaceRel(file.path);
-      const rel = generatedTaskArchiveRel(input.taskId, declaredRel);
+      const rel = generatedTaskArchiveRel(input.taskId, declaredRel, input.sessionBundleRel);
       generatedPathMap.set(declaredRel, rel);
       if (isTaskInputRel(declaredRel)) generatedInputRels.push(declaredRel);
       const content = file.content || await readGeneratedTaskFileIfPresent(input.workspace, file.path);
@@ -147,13 +160,14 @@ function generatedTaskRuntimeRefs(
   generation: AgentServerTaskFilesGeneration,
   taskId: string,
   generatedPathMap: Map<string, string>,
+  sessionBundleRel?: string,
 ): GeneratedTaskRuntimeRefs {
   const entrypointOriginalRel = safeWorkspaceRel(generation.response.entrypoint.path);
   return {
-    taskRel: generatedPathMap.get(entrypointOriginalRel) ?? generatedTaskArchiveRel(taskId, generation.response.entrypoint.path),
-    inputRel: `.sciforge/task-inputs/${taskId}.json`,
-    outputRel: `.sciforge/task-results/${taskId}.json`,
-    stdoutRel: `.sciforge/logs/${taskId}.stdout.log`,
-    stderrRel: `.sciforge/logs/${taskId}.stderr.log`,
+    taskRel: generatedPathMap.get(entrypointOriginalRel) ?? generatedTaskArchiveRel(taskId, generation.response.entrypoint.path, sessionBundleRel),
+    inputRel: sessionBundleResourceRel(sessionBundleRel, 'task-inputs', `${taskId}.json`),
+    outputRel: sessionBundleResourceRel(sessionBundleRel, 'task-results', `${taskId}.json`),
+    stdoutRel: sessionBundleResourceRel(sessionBundleRel, 'logs', `${taskId}.stdout.log`),
+    stderrRel: sessionBundleResourceRel(sessionBundleRel, 'logs', `${taskId}.stderr.log`),
   };
 }

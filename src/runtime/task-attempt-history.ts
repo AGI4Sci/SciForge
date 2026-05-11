@@ -41,6 +41,23 @@ export async function appendTaskAttempt(workspacePath: string, record: TaskAttem
     updatedAt: new Date().toISOString(),
     attempts,
   }, null, 2));
+  if (normalizedRecord.sessionBundleRef) {
+    const sessionAttemptPath = join(workspace, normalizedRecord.sessionBundleRef, 'records', 'task-attempts', `${safeName(record.id)}.json`);
+    await mkdir(dirname(sessionAttemptPath), { recursive: true });
+    await writeFile(sessionAttemptPath, JSON.stringify({
+      id: normalizedRecord.id,
+      prompt: normalizedRecord.prompt,
+      skillDomain: normalizedRecord.skillDomain,
+      scenarioPackageRef: normalizedRecord.scenarioPackageRef,
+      skillPlanRef: normalizedRecord.skillPlanRef,
+      uiPlanRef: normalizedRecord.uiPlanRef,
+      routeDecision: normalizedRecord.routeDecision,
+      sessionId: normalizedRecord.sessionId,
+      sessionBundleRef: normalizedRecord.sessionBundleRef,
+      updatedAt: new Date().toISOString(),
+      attempts,
+    }, null, 2));
+  }
   return path;
 }
 

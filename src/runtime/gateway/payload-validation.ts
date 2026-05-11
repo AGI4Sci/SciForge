@@ -28,6 +28,7 @@ import {
   agentHarnessRepairPolicyBridgeFromRuntimeState,
   createValidationRepairAuditChain,
 } from './validation-repair-audit-bridge.js';
+import { attachResultPresentationContract } from './result-presentation-contract.js';
 
 type AttemptPlanRefsBuilder = (request: GatewayRequest, skill?: SkillAvailability, fallbackReason?: string) => Record<string, unknown>;
 let attemptPlanRefsBuilder: AttemptPlanRefsBuilder = () => ({});
@@ -179,9 +180,10 @@ export async function validateAndNormalizePayload(
     verificationPolicy: contractPayload.verificationPolicy,
     workEvidence: contractPayload.workEvidence,
   };
+  const presentationPayload = attachResultPresentationContract(normalizedPayload);
   return referenceValidationFailure
-    ? attachPayloadValidationBudgetDebit(normalizedPayload, skill, referenceValidationFailure, refs)
-    : normalizedPayload;
+    ? attachPayloadValidationBudgetDebit(presentationPayload, skill, referenceValidationFailure, refs)
+    : presentationPayload;
 }
 
 export function schemaValidationRepairPayload(input: {

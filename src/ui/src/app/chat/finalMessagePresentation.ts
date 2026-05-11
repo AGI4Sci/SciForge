@@ -21,10 +21,20 @@ export function splitFinalMessagePresentation(content: string): FinalMessagePres
   const blocks = parseContentBlocks(content);
   const primary: string[] = [];
   const auditSections: FinalMessageAuditSection[] = [];
-  let pendingAuditHeading = '';
+  let activeAuditHeading = '';
 
   for (const block of blocks) {
-    const decision = classifyFinalMessageBlock(block, pendingAuditHeading);
+    const decision = classifyFinalMessageBlock(block, activeAuditHeading);
+    if (block.kind === 'heading') {
+      if (decision.auditHeading) activeAuditHeading = headingText(block.text);
+      else activeAuditHeading = '';
+      if (!decision.auditHeading) primary.push(block.text);
+      continue;
+    }
+    if (decision.auditHeading) {
+      activeAuditHeading = headingText(block.text).replace(/[:：]\s*$/, '');
+      continue;
+    }
     if (decision.fold) {
       auditSections.push({
         label: decision.label,
@@ -32,14 +42,8 @@ export function splitFinalMessagePresentation(content: string): FinalMessagePres
         evidenceType: decision.evidenceType,
         importance: decision.importance,
       });
-      if (block.kind !== 'heading') pendingAuditHeading = '';
       continue;
     }
-    if (decision.auditHeading) {
-      pendingAuditHeading = headingText(block.text);
-      continue;
-    }
-    pendingAuditHeading = '';
     primary.push(block.text);
   }
 
@@ -108,16 +112,28 @@ function classifyFinalMessageBlock(block: ContentBlock, pendingAuditHeading: str
 } {
   const text = stripCodeFence(block.text);
   const haystack = `${pendingAuditHeading}\n${block.language ?? ''}\n${text}`.toLowerCase();
-  const headingAudit = (block.kind === 'heading' || /^工作过程摘要[:：]\s*$/i.test(text.trim())) && Boolean(auditEvidenceType(haystack));
+  const explicitAuditHeading = block.kind === 'heading' && Boolean(auditEvidenceType(text.toLowerCase()) ?? auditHeadingEvidenceType(text));
+  const headingAudit = explicitAuditHeading || /^工作过程摘要[:：]\s*$/i.test(text.trim());
   const rawJson = looksLikeRawJson(text);
   const logOutput = looksLikeLogOutput(block.language, text);
   const failureDiagnostic = looksLikeFailureDiagnostic(text);
+  const systemEnvelope = looksLikeSystemEnvelope(text);
+  const runtimeMetadata = looksLikeRuntimeMetadataBlock(text);
+  const processTranscript = looksLikeProcessTranscript(text);
   const structuralEvidenceType = rawJson ? 'raw-json' : logOutput ? 'log-output' : undefined;
   const evidenceType = block.kind === 'code'
     ? structuralEvidenceType ?? auditEvidenceType(haystack) ?? codeEvidenceType(block.language, text)
-    : (failureDiagnostic ? 'execution-audit' : undefined) ?? auditEvidenceType(haystack) ?? structuralEvidenceType ?? codeEvidenceType(block.language, text);
+    : (failureDiagnostic || runtimeMetadata || processTranscript ? 'execution-audit' : undefined)
+      ?? (systemEnvelope ? 'tool-output' : undefined)
+      ?? auditEvidenceType(haystack)
+      ?? auditHeadingEvidenceType(text)
+      ?? structuralEvidenceType
+      ?? codeEvidenceType(block.language, text);
   const fold = Boolean(
     pendingAuditHeading
+    || systemEnvelope
+    || runtimeMetadata
+    || processTranscript
     || (block.kind === 'code' && (evidenceType || rawJson || logOutput))
     || (block.kind !== 'heading' && failureDiagnostic)
     || (block.kind !== 'heading' && evidenceType && text.length > 240)
@@ -133,8 +149,17 @@ function classifyFinalMessageBlock(block: ContentBlock, pendingAuditHeading: str
 
 function auditEvidenceType(text: string): FinalMessageAuditSection['evidenceType'] | undefined {
   if (/\b(raw trace|trace id|完整 trace|agent trace|reasoning trace)\b/.test(text)) return 'raw-trace';
-  if (/\b(execution audit|executionunit|执行审计|执行单元|运行审计|provenance)\b|工作过程摘要|过程记录/.test(text)) return 'execution-audit';
-  if (/\b(tool output|tool result|stdout|stderr|terminal output|command output|工具输出|标准输出|错误输出)\b/.test(text)) return 'tool-output';
+  if (/\b(execution audit|execution details|execution process|executionunit|execution units?|audit trail|provenance|diagnostics?|debug(?:ging)? details|runtime metadata|backend events|route decision|schema validation|执行审计|执行单元|执行明细|执行过程|运行审计|诊断|调试信息|过程记录|中间文件)\b|工作过程摘要/.test(text)) return 'execution-audit';
+  if (/\b(tool output|tool result|tool payload|toolpayload|raw payload|raw response|stdout|stderr|terminal output|command output|工具输出|工具结果|原始响应|原始输出|标准输出|错误输出)\b/.test(text)) return 'tool-output';
+  return undefined;
+}
+
+function auditHeadingEvidenceType(text: string): FinalMessageAuditSection['evidenceType'] | undefined {
+  const normalized = headingText(text).replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (/^(?:received|tool\s*payload|toolpayload|raw\s+(?:json|payload|response|output)|stdout|stderr|logs?|terminal output|command output|工具(?:输出|结果)|原始(?:json|payload|响应|输出)|标准输出|错误输出)$/i.test(normalized)) return 'tool-output';
+  if (/^(?:execution(?: audit| details| process| trace| units?)?|audit trail|diagnostics?|debug(?:ging)?(?: info| details)?|runtime metadata|backend events|schema validation|route decision|work(?:ing)? process|thoughts?|thinking|reasoning|执行(?:审计|明细|过程|单元)|运行(?:审计|日志)|诊断|调试信息|工作过程摘要|过程记录|中间文件)$/i.test(normalized)) return 'execution-audit';
+  if (/^(?:raw trace|agent trace|reasoning trace|完整 trace)$/i.test(normalized)) return 'raw-trace';
   return undefined;
 }
 
@@ -147,7 +172,7 @@ function codeEvidenceType(language: string | undefined, text: string): FinalMess
 function looksLikeRawJson(text: string) {
   const trimmed = text.trim();
   if (!/^[{[]/.test(trimmed)) return false;
-  return /"(raw|trace|tool|toolOutput|executionUnits|uiManifest|artifacts|stdout|stderr|auditRefs|recoverActions|failureReason)"\s*:/.test(trimmed);
+  return /"(raw|trace|tool|toolOutput|executionUnits|uiManifest|artifacts|stdout|stderr|auditRefs|recoverActions|failureReason|claimType|claims|objects|verificationResults|diagnosticsRefs|processSummary|defaultExpandedSections)"\s*:/.test(trimmed);
 }
 
 function looksLikeLogOutput(language: string | undefined, text: string) {
@@ -168,6 +193,32 @@ function looksLikeFailureDiagnostic(text: string) {
     return true;
   }
   return false;
+}
+
+function looksLikeSystemEnvelope(text: string) {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (!compact) return false;
+  return /^(?:received|tool\s*payload|toolpayload|raw\s+(?:payload|response|output)|backend event|runtime event)\b\s*[:：-]?/i.test(compact)
+    || /\b(?:received|toolpayload|tool payload)\b.*\b(?:claimType|executionUnits|toolOutput|verificationResults|recoverActions)\b/i.test(compact);
+}
+
+function looksLikeRuntimeMetadataBlock(text: string) {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (!compact || hasInlineObjectReference(compact)) return false;
+  const metadataMatches = compact.match(/\b(?:confidence|claimType|executionUnit|executionUnits|verification|runId|taskId|backend|model|routeDecision|toolPayload|stdoutRef|stderrRef|traceRef|schema|validation|budget|retry|repair|provenance|defaultExpandedSections|diagnosticsRefs)\b\s*[:=]/gi) ?? [];
+  if (metadataMatches.length >= 2) return true;
+  return /\b(?:verification|校验|验证)\s*[:：]/i.test(compact) && /\b(?:received|toolpayload|tool payload|confidence|claimType)\b/i.test(compact);
+}
+
+function looksLikeProcessTranscript(text: string) {
+  const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 3 || hasInlineObjectReference(text)) return false;
+  const processLines = lines.filter((line) => /^(?:[-*]\s*)?(?:let me|i need to|i(?:'ll| will) |now i |next i |checking |checked |edited |created |received |调用|检查|读取|创建|编辑|执行|计划[:：])/i.test(line));
+  return processLines.length >= Math.max(3, Math.ceil(lines.length * 0.6));
+}
+
+function hasInlineObjectReference(text: string) {
+  return /\b(?:artifact|file|verification|claim|view|dataset|table|figure|image|notebook|diff|run|execution-unit)::[^\s),.;]+/i.test(text);
 }
 
 function stripCodeFence(text: string) {
@@ -202,8 +253,60 @@ function auditSectionsSummary(sections: FinalMessageAuditSection[]) {
 
 function compactAuditFallback(text: string, evidenceType: FinalMessageAuditSection['evidenceType']) {
   const compact = stripCodeFence(text).replace(/\s+/g, ' ').trim();
+  const humanText = extractHumanTextFromRawPayload(text);
+  if (humanText) return humanText;
   if (looksLikeFailureDiagnostic(compact)) {
     return '任务未完成，执行诊断、恢复线索和原始输出已折叠在下方，可展开查看后继续追问或重试。';
   }
   return `任务已返回 ${labelForEvidence(evidenceType)}。${compact.slice(0, 220)}${compact.length > 220 ? '...' : ''}`;
+}
+
+function extractHumanTextFromRawPayload(text: string) {
+  const json = stripCodeFence(text).trim();
+  if (!/^[{[]/.test(json)) return '';
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    const candidate = findHumanPayloadText(parsed, 0);
+    if (!candidate) return '';
+    const compact = candidate.trim();
+    if (!compact || looksLikeFailureDiagnostic(compact) || looksLikeSystemEnvelope(compact)) return '';
+    return compact;
+  } catch {
+    return '';
+  }
+}
+
+function findHumanPayloadText(value: unknown, depth: number): string {
+  if (!value || depth > 3) return '';
+  if (typeof value === 'string') return '';
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const candidate = findHumanPayloadText(item, depth + 1);
+      if (candidate) return candidate;
+    }
+    return '';
+  }
+  if (typeof value !== 'object') return '';
+  const record = value as Record<string, unknown>;
+  for (const key of ['message', 'answer', 'finalAnswer', 'summary', 'result', 'output', 'content', 'text']) {
+    const candidate = record[key];
+    if (typeof candidate === 'string' && isHumanPayloadText(candidate)) return candidate;
+    if (candidate && typeof candidate === 'object') {
+      const nested = findHumanPayloadText(candidate, depth + 1);
+      if (nested) return nested;
+    }
+  }
+  for (const key of Object.keys(record)) {
+    const nested = findHumanPayloadText(record[key], depth + 1);
+    if (nested) return nested;
+  }
+  return '';
+}
+
+function isHumanPayloadText(value: string) {
+  const compact = value.trim();
+  if (compact.length < 12) return false;
+  if (/^[{[]/.test(compact)) return false;
+  if (/^(?:received|toolpayload|raw payload|stdout|stderr)\b/i.test(compact)) return false;
+  return /[A-Za-z\u4e00-\u9fff]/.test(compact);
 }

@@ -4,6 +4,7 @@ import { relative, resolve, sep } from 'node:path';
 import type { ValidationFindingProjectionInput } from '@sciforge-ui/runtime-contract/validation-repair-audit';
 import type { GatewayRequest, SkillAvailability, TaskAttemptRecord, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult, WorkspaceTaskSpec } from '../runtime-types.js';
 import { errorMessage, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
+import { sessionBundleRelForRequest } from '../session-bundle.js';
 import { appendTaskAttempt, readRecentTaskAttempts } from '../task-attempt-history.js';
 import { sha1 } from '../workspace-task-runner.js';
 import type { RuntimeRefBundle } from './artifact-materializer.js';
@@ -318,6 +319,8 @@ export async function appendGeneratedTaskAttemptLifecycle(
     outputRef: input.outputRel,
     stdoutRef: input.stdoutRel,
     stderrRef: input.stderrRel,
+    sessionId: sessionIdForRequest(input.request),
+    sessionBundleRef: sessionBundleRelForRequest(input.request),
     exitCode: input.run.exitCode,
     schemaErrors: input.schemaErrors,
     workEvidenceSummary: input.workEvidenceSummary,
@@ -516,6 +519,8 @@ export async function appendGeneratedTaskGenerationFailureLifecycle(
     attempt: 1,
     status: 'repair-needed',
     failureReason: input.failureReason,
+    sessionId: sessionIdForRequest(input.request),
+    sessionBundleRef: sessionBundleRelForRequest(input.request),
     contextRecovery: contextRecoveryAttemptMetadata(input.diagnostics),
     createdAt: new Date().toISOString(),
   }, input.budgetDebitRefs, input.budgetDebitAuditRefs));
@@ -544,6 +549,8 @@ export async function appendGeneratedTaskDirectPayloadAttemptLifecycle(
     outputRef: input.refs.outputRel,
     stdoutRef: input.refs.stdoutRel,
     stderrRef: input.refs.stderrRel,
+    sessionId: sessionIdForRequest(input.request),
+    sessionBundleRef: sessionBundleRelForRequest(input.request),
     workEvidenceSummary: input.lifecycle.workEvidenceSummary,
     failureReason: input.lifecycle.failureReason,
     createdAt: new Date().toISOString(),
@@ -922,4 +929,10 @@ async function persistAnnotatedRepairRerunPayloadBestEffort(
 
 function uniqueStrings(values: Array<string | undefined>) {
   return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0))];
+}
+
+function sessionIdForRequest(request: GatewayRequest) {
+  return typeof request.uiState?.sessionId === 'string' && request.uiState.sessionId.trim()
+    ? request.uiState.sessionId.trim()
+    : undefined;
 }

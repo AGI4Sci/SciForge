@@ -6,6 +6,7 @@ import {
   ALIGNMENT_CONTRACT_VERSION_ARTIFACT_TYPE,
 } from '@sciforge-ui/runtime-contract';
 import { normalizeWorkspaceRootPath, resolveWorkspaceFilePreviewPath } from '../workspace-paths.js';
+import { ensureSessionBundle, sessionBundleRel } from '../session-bundle.js';
 import { isBinaryPreviewFile, languageForPath, mimeTypeForPath } from './file-preview.js';
 import { isRecord, readJson, safeName, writeJson } from './http.js';
 import { runWorkspaceOpenAction } from './workspace-open.js';
@@ -188,17 +189,23 @@ export async function handleWorkspaceFileApiRoutes(
       const sessions = isRecord(state.sessionsByScenario)
         ? Object.values(state.sessionsByScenario)
         : [];
-      for (const session of sessions as Array<Record<string, unknown>>) {
+      const archivedSessions = Array.isArray(state.archivedSessions)
+        ? state.archivedSessions.filter(isRecord)
+        : [];
+      for (const session of [...sessions, ...archivedSessions] as Array<Record<string, unknown>>) {
         const sessionId = safeName(String(session.sessionId || 'session'));
+        const bundleRel = await writeSessionBundleSnapshot(root, session);
         await writeFile(join(sciforgeDir, 'sessions', `${sessionId}.json`), JSON.stringify(session, null, 2));
         const artifacts = Array.isArray(session.artifacts) ? session.artifacts : [];
         for (const artifact of artifacts as Array<Record<string, unknown>>) {
           const artifactId = safeName(String(artifact.id || artifact.type || 'artifact'));
+          await writeFile(join(root, bundleRel, 'artifacts', `${artifactId}.json`), JSON.stringify(artifact, null, 2));
           await writeFile(join(sciforgeDir, 'artifacts', `${sessionId}-${artifactId}.json`), JSON.stringify(artifact, null, 2));
         }
         const versions = Array.isArray(session.versions) ? session.versions : [];
         for (const version of versions as Array<Record<string, unknown>>) {
           const versionId = safeName(String(version.id || 'version'));
+          await writeFile(join(root, bundleRel, 'versions', `${versionId}.json`), JSON.stringify(version, null, 2));
           await writeFile(join(sciforgeDir, 'versions', `${sessionId}-${versionId}.json`), JSON.stringify(version, null, 2));
         }
       }
@@ -308,6 +315,55 @@ function workspaceActivityScore(state: Record<string, unknown>): number {
     const notebook = Array.isArray(session.notebook) ? session.notebook.length : 0;
     return total + realMessages + artifacts + units + notebook;
   }, archived + contracts);
+}
+
+async function writeSessionBundleSnapshot(root: string, session: Record<string, unknown>) {
+  const sessionId = String(session.sessionId || 'session');
+  const scenarioId = typeof session.scenarioId === 'string' ? session.scenarioId : undefined;
+  const bundleRel = sessionBundleRel({
+    sessionId,
+    scenarioId,
+    title: typeof session.title === 'string' ? session.title : undefined,
+    createdAt: typeof session.createdAt === 'string' ? session.createdAt : undefined,
+    updatedAt: typeof session.updatedAt === 'string' ? session.updatedAt : undefined,
+  });
+  await ensureSessionBundle(root, bundleRel, {
+    sessionId,
+    scenarioId,
+    title: typeof session.title === 'string' ? session.title : undefined,
+    createdAt: typeof session.createdAt === 'string' ? session.createdAt : undefined,
+    updatedAt: typeof session.updatedAt === 'string' ? session.updatedAt : undefined,
+  });
+  await writeFile(join(root, bundleRel, 'records', 'session.json'), JSON.stringify(session, null, 2));
+  await writeFile(join(root, bundleRel, 'records', 'messages.json'), JSON.stringify(Array.isArray(session.messages) ? session.messages : [], null, 2));
+  await writeFile(join(root, bundleRel, 'records', 'runs.json'), JSON.stringify(Array.isArray(session.runs) ? session.runs : [], null, 2));
+  await writeFile(join(root, bundleRel, 'records', 'execution-units.json'), JSON.stringify(Array.isArray(session.executionUnits) ? session.executionUnits : [], null, 2));
+  await writeFile(join(root, bundleRel, 'records', 'ui-manifest.json'), JSON.stringify(Array.isArray(session.uiManifest) ? session.uiManifest : [], null, 2));
+  await writeFile(join(root, bundleRel, 'README.md'), sessionBundleReadme(session, bundleRel));
+  return bundleRel;
+}
+
+function sessionBundleReadme(session: Record<string, unknown>, bundleRel: string) {
+  const title = typeof session.title === 'string' && session.title.trim() ? session.title.trim() : 'SciForge session';
+  const sessionId = typeof session.sessionId === 'string' ? session.sessionId : 'session';
+  const scenario = typeof session.scenarioId === 'string' ? session.scenarioId : 'unknown-scenario';
+  return [
+    `# ${title}`,
+    '',
+    `- Session: ${sessionId}`,
+    `- Scenario: ${scenario}`,
+    `- Bundle: ${bundleRel}`,
+    `- Created: ${typeof session.createdAt === 'string' ? session.createdAt : 'unknown'}`,
+    `- Updated: ${typeof session.updatedAt === 'string' ? session.updatedAt : 'unknown'}`,
+    '',
+    'This directory is a portable SciForge conversation bundle. It keeps chat records, generated task code, inputs, results, logs, artifacts, versions, data, and exports together under one date-prefixed folder.',
+    '',
+    'Restore entry points:',
+    '',
+    '- `manifest.json` describes the bundle layout.',
+    '- `records/session.json` contains the full session object.',
+    '- `records/messages.json`, `records/runs.json`, and `records/execution-units.json` provide split records for quick inspection.',
+  ].join('\n');
 }
 
 function lastWorkspaceFile(stateDir: string) {

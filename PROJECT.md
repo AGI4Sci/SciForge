@@ -71,6 +71,45 @@
 
 ## 任务板
 
+### R015 通用人类结果呈现契约与 UX Harness
+
+职责：把 Agent 结果呈现从“运行日志/ToolPayload 优先”升级为通用的人类交付物视图。该任务不为文献、代码、GUI、数据分析或论文复现写展示特例，而是在 Harness Level 6 `UX and Interaction`、runtime contract、artifact/view manifest 和 UI shell 之间建立统一呈现契约：默认展示任务结果、关键证据、可操作产物和下一步；默认折叠过程、诊断、raw payload、backend/runtime metadata。UI 只消费结构化 presentation contract，不通过 prompt、scenario、artifact 名称或自然语言关键词猜测该怎么展示。
+
+设计约束：
+- 以 `docs/Architecture.md` 的 Backend-first / Contract-enforced / Capability-driven / Harness-governed 边界为准：backend 负责回答内容和能力组合，runtime 负责 contract/refs/validation，harness 负责呈现策略，UI 负责渲染。
+- 以 `docs/AgentHarnessStandard.md` Level 6 为实现入口：新增策略应进入 `ProgressDecision` / `InteractionPolicy` / 可审计 `HarnessContract`，而不是散落在 ChatPanel、ResultsRenderer 或 prompt builder 文案里。
+- 呈现契约必须跨场景通用：调研、数据分析、代码修复、实验复现、GUI 操作、失败诊断和审计追问都使用同一套信息层级，只是 artifact/view 类型不同。
+- 证据必须贴近结论：关键 claim、文件、数据行、截图、日志片段、artifact ref、verification ref 应能作为 inline citation/object reference 出现在人类可读结果旁边；底层 refs 仍保持 refs-first。
+- 调试信息必须可追溯但不抢默认视图：ToolPayload、JSON、stdout/stderr、task id、route decision、backend/model、schema errors、budget、repair trace 默认折叠到 process/diagnostics 层。
+
+Todo：
+- [x] 定义通用 `ResultPresentationContract` 草案：包含 `answerBlocks`、`keyFindings`、`inlineCitations`、`artifactActions`、`confidenceExplanation`、`nextActions`、`processSummary`、`diagnosticsRefs`、`defaultExpandedSections`，并明确哪些字段由 backend/payload 提供、哪些由 runtime materializer/validator 补齐、哪些由 harness presentation policy 决定。
+- [x] 在 harness 设计中补充 `PresentationPolicyCallback` / Level 6 hook：根据 intent mode、artifact types、validation outcome、failure category、user role/debug mode 生成展示层级、折叠策略和可见进度，不生成最终答案内容。
+- [x] 设计 payload-to-presentation adapter：把现有 `ToolPayload`、claims、artifacts、ExecutionUnit、WorkEvidence、verificationResults、objectReferences 映射到通用 presentation contract；缺少 presentation contract 时只做结构化降级，不按 scenario/prompt 特判。
+- [x] 定义 inline citation/object reference 规则：每条关键结论最多绑定少量高价值 refs；引用标签用人类可读名称，hover/展开显示 locator、artifact path、verification state；底部“本轮产物”只汇总资源，不替代正文引用。
+- [x] 定义默认折叠规则：`answer/result/evidence/actions` 默认可见；`process/trace/diagnostics/raw payload` 默认折叠；失败时默认可见 failure reason、impact、recover actions 和可点击证据，技术栈细节仍折叠。
+- [ ] 设计多视图协作：聊天主回复必须自洽可读；右侧 Results/View pane 展示富交互 artifact；Notebook/Execution pane 承载过程和审计底稿；三者通过同一 object reference/ref graph 联动。
+- [x] 增加 presentation validator/smoke 计划：阻止“有 artifact/ref 但主回复只显示过程文本”、阻止 raw JSON/ToolPayload 默认露出、检查关键 claim 是否有 inline citation 或明确标注为 unverified/speculative。
+- [x] 增加跨场景 fixture：research report、data table/plot、code diff、GUI action result、scientific reproduction partial/failure、backend failure diagnostic，验证同一 contract 能渲染一致的信息层级。
+- [ ] 规划迁移路径：先让 runtime 生成 presentation contract 并保留旧 UI；再让 ChatPanel/ResultsRenderer 消费 contract；最后把旧的过程文本优先、artifact type 特判和 raw payload 默认展示路径纳入 no-legacy-paths guard。
+
+Worker F 文档/checklist 注记（2026-05-11）：
+- [x] 实现前对齐 `docs/AgentHarnessStandard.md` Level 6：`PresentationPolicyCallback` 只产出 `PresentationPlan`，不得生成答案内容、读取 artifact 正文或在 UI 里补语义判断。
+- [x] TypeScript contract 应镜像文档中的 `ResultPresentationContract` / `PresentationPlan` 字段，并在 `HarnessContract` 中保留 `presentationPlan`，保证展示决策可从 contract/trace/refs 重建。
+- [x] 完成 R015 后再关闭上方前两个设计 todo；关闭条件是文档、TS contract、adapter fixture 和 presentation smoke 共同通过，而不是只完成文档草案。
+
+Worker D smoke/test 注记（2026-05-11）：
+- [x] 已新增 `smoke:result-presentation-contract` 草案，覆盖 research report、data table/plot、code diff、GUI action result、scientific reproduction partial/failure、backend failure diagnostic 六类通用场景。
+- [x] smoke 会优先导入预期 core 模块 `src/runtime/gateway/result-presentation-contract.ts` 的 `materializeResultPresentationContract` / `validateResultPresentationContract`，当前也兼容并行实现中的 `src/runtime/gateway/result-presentation-adapter.ts` / `adaptToolPayloadToResultPresentation`，验证统一信息层级、inline citations、artifact actions、failure recovery summary 和默认折叠 raw/process/diagnostics。
+- [x] 待 Worker A/B core contract/adapter 合并并通过 `npm run smoke:result-presentation-contract` 后，可关闭上方“presentation validator/smoke 计划”和“跨场景 fixture”两个 todo。
+
+验收：
+- [ ] 任意场景的成功结果，默认主回复都能直接回答用户目标，并在关键结论旁呈现可点击证据/产物引用。
+- [ ] 任意场景的失败或 partial result，默认主回复都说明失败原因、影响、可恢复动作和证据 refs，不把用户丢进 schema/log/raw payload。
+- [ ] ToolPayload、JSON、stdout/stderr、backend events、task ids 和 schema diagnostics 仍可审计，但默认只在折叠的 process/diagnostics 层出现。
+- [ ] UI 不通过 prompt/scenario/artifact 名称做语义展示判断；展示决策可从 HarnessContract/presentation contract/refs 重建。
+- [ ] 新增 smoke 覆盖至少 5 类场景，并能防止 R012 类“真实报告被过程文本盖住”和本轮反馈类“引用与结果被拆散”的回归。
+
 ### R013 多轮连续对话与审计追问恢复
 
 职责：修复已有结果后的低风险追问在 backend/stream 中断时被整轮标失败的问题。唯一真相源是 `packages/agent-harness` 的 harness contract：`balanced-default.context-audit-intent` 将“怎么来的、用了哪些工具/refs、为什么失败/中断”等低风险审计追问归类为 `intentMode=audit`，并偏好 `runtime.direct-context-answer`；真正需要新检索、下载、重跑或修复的请求仍必须走 backend。

@@ -239,13 +239,15 @@ Runner 只执行，不重新判断策略。
 | Hook | 作用 | 典型输出 |
 | --- | --- | --- |
 | `beforeUserProgressEvent` | 生成标准 process-progress event | progress model |
+| `beforeResultPresentation` | 生成结果呈现策略，不生成答案内容 | presentation plan |
 | `onInteractionRequested` | 澄清、人工确认、运行中 guidance | interaction event |
 | `onBackgroundContinuation` | 后台完成和可恢复状态 | background policy |
 | `onCancelRequested` | 用户取消语义 | cancel decision |
 
-UI 只能消费 stream event，不直接推断任务语义。标准事件优先使用：
+UI 只能消费 stream event、`HarnessContract.presentationPlan`、runtime materialized `ResultPresentationContract` 和 refs，不直接推断任务语义。标准事件优先使用：
 
 - `process-progress`
+- `result-presentation`
 - `interaction-request`
 - `clarification-needed`
 - `human-approval-required`
@@ -267,6 +269,65 @@ export interface ProgressPlan {
   interactionPolicy?: InteractionPolicy;
 }
 ```
+
+`PresentationPolicyCallback` 属于 Level 6。它可以根据 `intentMode`、artifact/view 类型、validation outcome、failure category、user role/debug mode、当前 refs 摘要和 profile 生成展示层级、默认折叠策略、inline citation 密度和诊断可见性；它不能编写最终答案、读取 artifact 正文、拼 raw JSON，也不能在 UI 里补第二套语义判断。
+
+```ts
+export interface PresentationPlan {
+  primaryMode: 'answer-first' | 'artifact-first' | 'failure-first' | 'diagnostic-first';
+  defaultExpandedSections: PresentationSectionId[];
+  defaultCollapsedSections: PresentationSectionId[];
+  citationPolicy: CitationPolicy;
+  artifactActionPolicy: ArtifactActionPolicy;
+  diagnosticsVisibility: 'hidden' | 'collapsed' | 'expanded';
+  processVisibility: 'hidden' | 'collapsed' | 'expanded';
+  roleMode?: 'standard' | 'power-user' | 'debug';
+}
+
+export type PresentationSectionId =
+  | 'answer'
+  | 'key-findings'
+  | 'evidence'
+  | 'artifacts'
+  | 'next-actions'
+  | 'process'
+  | 'diagnostics'
+  | 'raw-payload';
+
+export interface ResultPresentationContract {
+  schemaVersion: 'sciforge.result-presentation.v1';
+  answerBlocks: PresentationBlock[];
+  keyFindings: PresentedFinding[];
+  inlineCitations: InlineObjectReference[];
+  artifactActions: ArtifactAction[];
+  confidenceExplanation?: string;
+  nextActions: PresentationAction[];
+  processSummary?: PresentationBlock[];
+  diagnosticsRefs: string[];
+  defaultExpandedSections: PresentationSectionId[];
+  sourceRefs: {
+    harnessContractRef: string;
+    validationRef?: string;
+    payloadRef?: string;
+    artifactRefs: string[];
+    verificationRefs: string[];
+  };
+}
+```
+
+字段 ownership 规则：
+
+- backend/payload 提供可读答案、claim、artifact refs、failure reason 和 recover action 的内容。
+- runtime materializer/validator 补齐稳定 refs、locator、artifact action、verification state、缺证标记和 diagnostics refs。
+- harness `PresentationPolicyCallback` 只决定哪些层级默认可见、哪些默认折叠、引用如何贴近结论、失败时哪些恢复动作优先展示。
+- UI 只渲染 `ResultPresentationContract`，并通过 refs 联动 Chat、Results/View pane、Notebook/Execution pane；不能根据 prompt、scenario id、artifact 文件名或自然语言关键词重判展示语义。
+
+默认呈现约束：
+
+- `answer`、`key-findings`、`evidence`、`artifacts`、`next-actions` 默认可见。
+- `process`、`diagnostics`、`raw-payload` 默认折叠；标准用户模式下 raw payload 不应默认展开。
+- 关键结论若没有 inline citation，必须明确标注为 unverified/speculative，或由 validator 产生 presentation warning。
+- 失败或 partial result 默认可见 failure reason、impact、recover actions 和证据 refs；backend/model、task id、stdout/stderr、schema diagnostics 仍进入折叠诊断层。
 
 `cancelPolicy` 必须区分：
 
@@ -321,6 +382,7 @@ export interface HarnessContract {
   verificationPolicy: VerificationPolicy;
   repairContextPolicy: RepairContextPolicy;
   progressPlan: ProgressPlan;
+  presentationPlan: PresentationPlan;
   promptDirectives: PromptDirective[];
   traceRef?: string;
 }

@@ -9,6 +9,7 @@ import {
 } from '@sciforge-ui/runtime-contract/artifact-policy';
 import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
 import { clipForAgentServerJson, isRecord } from '../gateway-utils.js';
+import { ensureSessionBundle, sessionBundleRelForRequest, sessionBundleResourceRel } from '../session-bundle.js';
 import { sha1 } from '../workspace-task-runner.js';
 
 export interface RuntimeRefBundle {
@@ -78,12 +79,20 @@ export async function persistArtifactRefsForPayload(
   const sessionId = isRecord(request.uiState) && typeof request.uiState.sessionId === 'string'
     ? request.uiState.sessionId
     : 'sessionless';
+  const sessionBundleRel = sessionBundleRelForRequest(request);
+  await ensureSessionBundle(workspace, sessionBundleRel, {
+    sessionId,
+    scenarioId: request.scenarioPackageRef?.id || request.skillDomain,
+    createdAt: typeof request.uiState?.sessionCreatedAt === 'string' ? request.uiState.sessionCreatedAt : undefined,
+    updatedAt: typeof request.uiState?.sessionUpdatedAt === 'string' ? request.uiState.sessionUpdatedAt : undefined,
+  });
   const out: Array<Record<string, unknown>> = [];
   for (const artifact of artifacts) {
     const id = safeArtifactId(String(artifact.id || artifact.type || 'artifact'));
     const type = safeArtifactId(String(artifact.type || artifact.id || 'artifact'));
     const artifactHash = sha1(JSON.stringify(clipForAgentServerJson(artifact, 4))).slice(0, 12);
-    const rel = `.sciforge/artifacts/${safeArtifactId(sessionId)}-${type}-${id}-${artifactHash}.json`;
+    const rel = sessionBundleResourceRel(sessionBundleRel, 'artifacts', `${type}-${id}-${artifactHash}.json`);
+    const legacyRel = `.sciforge/artifacts/${safeArtifactId(sessionId)}-${type}-${id}-${artifactHash}.json`;
     const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
     const record = {
       ...artifact,
@@ -93,6 +102,7 @@ export async function persistArtifactRefsForPayload(
       metadata: {
         ...metadata,
         artifactRef: rel,
+        legacyArtifactRef: legacyRel,
         outputRef: metadata.outputRef ?? refs.outputRel,
         taskCodeRef: metadata.taskCodeRef ?? refs.taskRel,
         stdoutRef: metadata.stdoutRef ?? refs.stdoutRel,
@@ -103,6 +113,8 @@ export async function persistArtifactRefsForPayload(
     try {
       await mkdir(dirname(join(workspace, rel)), { recursive: true });
       await writeFile(join(workspace, rel), JSON.stringify(record, null, 2));
+      await mkdir(dirname(join(workspace, legacyRel)), { recursive: true });
+      await writeFile(join(workspace, legacyRel), JSON.stringify(record, null, 2));
     } catch {
       // Artifact refs improve multi-turn recovery, but a write failure should not hide the task result.
     }

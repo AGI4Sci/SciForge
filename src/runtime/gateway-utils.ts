@@ -72,7 +72,7 @@ export function safeWorkspaceRel(path: string) {
   return normalized;
 }
 
-export function generatedTaskArchiveRel(taskId: string, path: string) {
+export function generatedTaskArchiveRel(taskId: string, path: string, sessionBundleRel?: string) {
   const rel = safeWorkspaceRel(path);
   const archivePrefix = '.sciforge/tasks/';
   const withoutArchivePrefix = rel.startsWith(archivePrefix) ? rel.slice(archivePrefix.length) : rel;
@@ -80,6 +80,7 @@ export function generatedTaskArchiveRel(taskId: string, path: string) {
     ? withoutArchivePrefix.slice(taskId.length + 1)
     : withoutArchivePrefix;
   const archived = withoutTaskPrefix || 'task.py';
+  if (sessionBundleRel) return `${sessionBundleRel.replace(/\/+$/, '')}/tasks/${taskId}/${archived}`;
   return `${archivePrefix}${taskId}/${archived}`;
 }
 

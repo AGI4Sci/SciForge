@@ -210,6 +210,82 @@ export interface ToolPayload {
   budgetDebits?: CapabilityInvocationBudgetDebitRecord[];
 }
 
+export type ResultPresentationSectionId =
+  | 'answer'
+  | 'evidence'
+  | 'artifacts'
+  | 'next-actions'
+  | 'process'
+  | 'diagnostics';
+
+export type ResultPresentationBlockType = 'paragraph' | 'list' | 'status';
+
+export interface ResultPresentationCitation {
+  id: string;
+  label: string;
+  ref?: string;
+  kind: 'artifact' | 'file' | 'url' | 'execution-unit' | 'work-evidence' | 'verification' | 'object-reference' | 'unknown';
+  source: 'claim' | 'artifact' | 'execution-unit' | 'work-evidence' | 'verification-result' | 'object-reference';
+  summary?: string;
+  status?: string;
+  locator?: Record<string, unknown>;
+}
+
+export interface ResultPresentationAnswerBlock {
+  id: string;
+  type: ResultPresentationBlockType;
+  text: string;
+  citations: string[];
+}
+
+export interface ResultPresentationKeyFinding {
+  id: string;
+  text: string;
+  citations: string[];
+  confidence?: number;
+  verificationStatus?: string;
+}
+
+export interface ResultPresentationArtifactAction {
+  id: string;
+  label: string;
+  artifactType?: string;
+  ref?: string;
+  actions: string[];
+  citationId?: string;
+}
+
+export interface ResultPresentationProcessItem {
+  id: string;
+  label: string;
+  status?: string;
+  refs: string[];
+}
+
+export interface ResultPresentationDiagnosticsRef {
+  id: string;
+  label: string;
+  ref?: string;
+  kind: 'raw-payload' | 'reasoning-trace' | 'log' | 'stderr' | 'stdout' | 'schema' | 'budget' | 'verification' | 'work-evidence' | 'execution-unit' | 'unknown';
+  summary?: string;
+}
+
+export interface ResultPresentationContract {
+  schemaVersion: 'sciforge.result-presentation.v1';
+  answerBlocks: ResultPresentationAnswerBlock[];
+  keyFindings: ResultPresentationKeyFinding[];
+  inlineCitations: ResultPresentationCitation[];
+  artifactActions: ResultPresentationArtifactAction[];
+  confidenceExplanation?: string;
+  nextActions: string[];
+  processSummary: {
+    foldedByDefault: true;
+    items: ResultPresentationProcessItem[];
+  };
+  diagnosticsRefs: ResultPresentationDiagnosticsRef[];
+  defaultExpandedSections: ResultPresentationSectionId[];
+}
+
 export interface WorkspaceTaskSpec {
   id: string;
   language: 'python' | 'r' | 'shell' | 'cli';
@@ -220,10 +296,12 @@ export interface WorkspaceTaskSpec {
   outputRel: string;
   stdoutRel: string;
   stderrRel: string;
+  inputRel?: string;
   taskRel?: string;
   timeoutMs?: number;
   inputArgMode?: 'json-file' | 'empty-data-path';
   retentionProtectedInputRels?: string[];
+  sessionBundleRel?: string;
 }
 
 export interface WorkspaceTaskRunResult {
@@ -465,6 +543,8 @@ export interface TaskAttemptRecord {
   outputRef?: string;
   stdoutRef?: string;
   stderrRef?: string;
+  sessionId?: string;
+  sessionBundleRef?: string;
   exitCode?: number;
   schemaErrors?: string[];
   workEvidenceSummary?: {

@@ -97,3 +97,67 @@ test('timeout work-process transcripts stay collapsed behind a concise failure s
   assert.deepEqual(presentation.auditSections.map((section) => section.evidenceType), ['execution-audit', 'execution-audit']);
   assert.match(presentation.auditSections.map((section) => section.text).join('\n'), /Workspace Runtime/);
 });
+
+test('raw payload-only messages promote embedded human answer and fold payload metadata', () => {
+  const content = [
+    '```json',
+    JSON.stringify({
+      message: 'Analysis finished. The reusable output is artifact::analysis-report and the source table is file::data/results.csv.',
+      confidence: 0.91,
+      claimType: 'analysis-result',
+      objects: [{ ref: 'artifact::analysis-report' }],
+      executionUnits: [{ id: 'unit-1', backend: 'worker' }],
+    }, null, 2),
+    '```',
+  ].join('\n');
+
+  const presentation = splitFinalMessagePresentation(content);
+
+  assert.match(presentation.primaryContent, /Analysis finished/);
+  assert.match(presentation.primaryContent, /artifact::analysis-report/);
+  assert.match(presentation.primaryContent, /file::data\/results\.csv/);
+  assert.doesNotMatch(presentation.primaryContent, /executionUnits/);
+  assert.equal(presentation.auditSections.length, 1);
+  assert.equal(presentation.auditSections[0].evidenceType, 'raw-json');
+});
+
+test('generic ToolPayload and Received sections fold without hiding later result headings', () => {
+  const content = [
+    '# Result',
+    'The requested change is complete in diff::main-change.',
+    '',
+    '## ToolPayload',
+    'Received backend response with claimType=code-change confidence=0.86 routeDecision=backend.',
+    '```json',
+    '{"toolOutput":"verbose execution log","executionUnits":[{"id":"unit-1"}],"stdout":"line 1"}',
+    '```',
+    '',
+    '## Next step',
+    'Review artifact::verification-summary when you want the details.',
+  ].join('\n');
+
+  const presentation = splitFinalMessagePresentation(content);
+
+  assert.match(presentation.primaryContent, /# Result/);
+  assert.match(presentation.primaryContent, /diff::main-change/);
+  assert.match(presentation.primaryContent, /## Next step/);
+  assert.match(presentation.primaryContent, /artifact::verification-summary/);
+  assert.doesNotMatch(presentation.primaryContent, /claimType=code-change/);
+  assert.doesNotMatch(presentation.primaryContent, /executionUnits/);
+  assert.equal(presentation.auditSections.length, 2);
+});
+
+test('answer paragraphs with inline refs are preserved even when they mention verification', () => {
+  const content = [
+    'Result: the table is ready at artifact::data-table and verification::table-check explains the row-count check.',
+    '',
+    '- Key finding: the outlier row is file::data/results.csv#L42 and remains unverified until the source system is re-run.',
+  ].join('\n');
+
+  const presentation = splitFinalMessagePresentation(content);
+
+  assert.match(presentation.primaryContent, /artifact::data-table/);
+  assert.match(presentation.primaryContent, /verification::table-check/);
+  assert.match(presentation.primaryContent, /file::data\/results\.csv#L42/);
+  assert.equal(presentation.auditSections.length, 0);
+});

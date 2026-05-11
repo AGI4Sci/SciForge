@@ -22,6 +22,7 @@ export type HarnessStage =
   | 'onActionStepEnd'
   | 'beforeResultValidation'
   | 'afterResultValidation'
+  | 'beforeResultPresentation'
   | 'onRepairRequired'
   | 'beforeRepairDispatch'
   | 'afterRepairAttempt'
@@ -48,6 +49,7 @@ export type HarnessInteractionProgressEventType =
   | 'clarification-needed'
   | 'human-approval-required'
   | 'guidance-queued'
+  | 'result-presentation'
   | 'run-cancelled';
 export type HarnessProgressEventImportance = 'low' | 'normal' | 'high' | 'blocking';
 export type HarnessProgressPhaseStatus = 'pending' | 'running' | 'blocked' | 'completed' | 'failed' | 'cancelled';
@@ -129,6 +131,7 @@ export interface HarnessDecision {
   verification?: Partial<VerificationDecision>;
   repair?: Partial<RepairDecision>;
   progress?: Partial<ProgressDecision>;
+  presentation?: Partial<PresentationPlan>;
   promptDirectives?: PromptDirective[];
   blockedRefs?: string[];
   blockedCapabilities?: string[];
@@ -147,6 +150,7 @@ export interface HarnessDefaults {
   verificationPolicy: VerificationPolicy;
   repairContextPolicy: RepairContextPolicy;
   progressPlan: ProgressPlan;
+  presentationPlan: PresentationPlan;
   promptDirectives: PromptDirective[];
 }
 
@@ -281,6 +285,42 @@ export interface ProgressPlan {
   interactionPolicy?: InteractionPolicy;
 }
 
+export type PresentationPrimaryMode = 'answer-first' | 'artifact-first' | 'failure-first' | 'diagnostic-first';
+export type PresentationSectionId =
+  | 'answer'
+  | 'key-findings'
+  | 'evidence'
+  | 'artifacts'
+  | 'next-actions'
+  | 'process'
+  | 'diagnostics'
+  | 'raw-payload';
+export type PresentationVisibility = 'hidden' | 'collapsed' | 'expanded';
+export type PresentationRoleMode = 'standard' | 'power-user' | 'debug';
+
+export interface CitationPolicy {
+  requireCitationOrUncertainty: boolean;
+  maxInlineCitationsPerFinding: number;
+  showVerificationState: boolean;
+}
+
+export interface ArtifactActionPolicy {
+  primaryActions: string[];
+  secondaryActions: string[];
+  preferRightPane: boolean;
+}
+
+export interface PresentationPlan {
+  primaryMode: PresentationPrimaryMode;
+  defaultExpandedSections: PresentationSectionId[];
+  defaultCollapsedSections: PresentationSectionId[];
+  citationPolicy: CitationPolicy;
+  artifactActionPolicy: ArtifactActionPolicy;
+  diagnosticsVisibility: PresentationVisibility;
+  processVisibility: PresentationVisibility;
+  roleMode?: PresentationRoleMode;
+}
+
 export interface SilencePolicy {
   timeoutMs: number;
   decision: 'visible-status' | 'retry' | 'abort' | 'background';
@@ -391,6 +431,7 @@ export interface HarnessContract {
   verificationPolicy: VerificationPolicy;
   repairContextPolicy: RepairContextPolicy;
   progressPlan: ProgressPlan;
+  presentationPlan: PresentationPlan;
   promptDirectives: PromptDirective[];
   traceRef?: string;
 }
