@@ -29,10 +29,19 @@ export function materializeResultPresentationContract(input: ToolPayload | Resul
 }
 
 export function attachResultPresentationContract(payload: ToolPayload): ToolPayload {
+  const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
+  const existing = displayIntent.resultPresentation;
+  if (validateResultPresentationContract(existing).ok) {
+    return {
+      ...payload,
+      displayIntent,
+    };
+  }
+
   return {
     ...payload,
     displayIntent: {
-      ...(isRecord(payload.displayIntent) ? payload.displayIntent : {}),
+      ...displayIntent,
       resultPresentation: materializeResultPresentationContract({ payload }),
     },
   };

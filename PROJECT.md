@@ -63,7 +63,10 @@ Token 高效：每轮只携带当前任务真正需要的 state digest、refs、
 
 - [ ] Computer Use / 视觉 GUI grounding 相关压测暂缓，等 grounding 模型部署后再恢复。
 - [ ] 当前阶段不要求测试视觉定位、桌面点击、跨页面视觉操作、屏幕元素 grounding 或纯视觉 GUI 自动化。
-- [ ] 浏览器刷新、关闭标签、恢复历史会话等生命周期任务继续保留，因为它们测试持久化状态和会话恢复，不依赖视觉 grounding。
+
+范围保留：
+
+- [x] 浏览器刷新、关闭标签、恢复历史会话等非视觉生命周期任务继续保留，因为它们测试持久化状态和会话恢复，不依赖视觉 grounding。
 
 分级压测任务：
 
@@ -261,13 +264,19 @@ Todo：
 ## 当前里程碑
 
 - [x] M13：建立复杂多轮对话压测任务板、fixture contract 和 benchmark 指标。
-- [x] M14：把 M13 contract 接入 harness runtime trace、UI presentation 和真实 replay runner。
+- [x] M14：把 M13 contract 接入 harness runtime trace、UI presentation 和 contract replay runner。
   - [x] Trace 接入：将 `tests/fixtures/complex-multiturn` 的 required events/metrics 映射到 agent harness runtime trace，并保留 contract/trace refs、state digest、first readable result、resume preflight 和 recovery 边界。
   - [x] Presentation 接入：把 fixture 的 `presentationSnapshots` 转成用户可见结果约束，默认展开 answer/evidence/artifacts，折叠 raw trace/diagnostics，并覆盖 partial、failure、background revision、history mutation 状态。
-  - [x] Replay runner 接入：提供真实 replay runner 聚合入口，能按 fixture tier/domain/lifecycle 场景重放 harness trace、验证 artifact/run/ref 命中和 side effect 去重。
+  - [x] Replay runner 接入：提供 contract replay runner 聚合入口，能按 fixture tier/domain/lifecycle 场景重放 harness trace、验证 artifact/run/ref 命中和 side effect 去重。
   - [x] 指标聚合：将 replay/runtime/presentation 输出汇总到 `ComplexDialogueBenchmarkReport`，覆盖 first readable latency、turn completion、redundant work、recovery、artifact reference accuracy、resume/history/side-effect 指标。
-  - [x] Smoke 审计：维护 M14 integration smoke，动态探测 Worker E/F/G 模块；模块未落地时记录 pending，落地后校验其可 import 且暴露可调用聚合入口或 contract 常量。
+  - [x] Smoke 审计：维护 M14 integration smoke，校验 harness projection、presentation、replay runner 模块可 import 且暴露可调用聚合入口或 contract 常量。
   - [x] 验收证据：主线程验收前运行独立 M14 smoke、typecheck，以及 E/F/G 各自 smoke；确认 checklist 后再标完成。
+- [x] M15：把复杂多轮 fixture replay 输出为可审计 benchmark/debug artifact。
+  - [x] Export contract：新增 `ComplexMultiturnBenchmarkExport`，聚合 67 个 fixture 的 replay summary、contract summary、fixture summaries 和 `ComplexDialogueBenchmarkReport`。
+  - [x] CLI 接入：新增 `npm run bench:complex-multiturn`，默认写入 `.sciforge/reports/complex-multiturn-benchmark-export.json`，并支持 tier 过滤和稳定时间戳。
+  - [x] Smoke 审计：新增 `npm run smoke:complex-multiturn-benchmark-export`，校验 67 fixtures、620 turns、recovery/lifecycle/side-effect 指标和 aggregate gates。
+  - [x] UI 接入防护：gateway 在 payload 已携带合法 `resultPresentation` 时保留原 contract，避免 complex multiturn presentation 被通用 fallback 覆盖。
+  - [x] Verify 边界：M15 benchmark export 保持为显式脚本，不加入默认 `verify:fast`，避免日常开发被完整复杂多轮 benchmark 拖慢。
 
 ## 已清理内容
 
