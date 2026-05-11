@@ -1,10 +1,11 @@
 import type { GatewayRequest, LlmEndpointConfig, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
-import { clipForAgentServerJson, errorMessage, hashJson, isRecord } from '../gateway-utils.js';
+import { clipForAgentServerJson, errorMessage, hashJson, isRecord, toRecordList } from '../gateway-utils.js';
 import type { AgentServerBackendSelectionDecision } from './agent-backend-config.js';
 import { agentHarnessBackendSelectionDecision } from './agent-harness-backend-selection.js';
 import { agentHarnessContinuityDecision } from './agent-harness-continuity-decision.js';
 import { agentHarnessProgressPlanProjection } from './agent-harness-progress-plan-projection.js';
+import { buildStartupContextEnvelopeForRequest } from './context-envelope.js';
 
 export { agentHarnessContinuityDecision };
 
@@ -42,7 +43,17 @@ export async function requestWithAgentHarnessShadow(
     return request;
   }
 
-  const evaluation = await evaluateAgentHarnessShadow(request, profileId, policyApplication);
+  const startupContextEnvelope = buildStartupContextEnvelopeForRequest(request, {
+    workspace: request.workspacePath ?? '',
+    artifactRefs: refsFromRecords(request.artifacts),
+    recentExecutionRefs: refsFromRecords(toRecordList(request.uiState?.recentExecutionRefs)),
+  });
+  const evaluation = await evaluateAgentHarnessShadow(
+    request,
+    profileId,
+    policyApplication,
+    startupContextEnvelope as unknown as Record<string, unknown>,
+  );
   if (!evaluation.ok) {
     emitAgentHarnessContractEvent(callbacks, {
       status: evaluation.reason === 'missing' ? 'skipped' : 'failed',
@@ -96,6 +107,7 @@ export async function requestWithAgentHarnessShadow(
     uiState: {
       ...uiState,
       harnessProfileId: profileId,
+      startupContextEnvelope,
       agentHarness,
       ...(verificationProjection ? { agentHarnessVerificationPolicy: verificationProjection.audit } : {}),
       ...(progressProjection ? { agentHarnessProgressPlan: progressProjection.audit } : {}),
@@ -106,6 +118,7 @@ export async function requestWithAgentHarnessShadow(
 export function agentHarnessMetadata(request: GatewayRequest, runtime: {
   backendSelectionDecision?: AgentServerBackendSelectionDecision;
   llmEndpoint?: LlmEndpointConfig;
+  startupContextEnvelope?: Record<string, unknown>;
 } = {}) {
   return agentHarnessHandoffMetadata(request, runtime);
 }
@@ -113,6 +126,7 @@ export function agentHarnessMetadata(request: GatewayRequest, runtime: {
 export function agentHarnessHandoffMetadata(request: GatewayRequest, runtime: {
   backendSelectionDecision?: AgentServerBackendSelectionDecision;
   llmEndpoint?: LlmEndpointConfig;
+  startupContextEnvelope?: Record<string, unknown>;
 } = {}) {
   const agentHarness = isRecord(request.uiState?.agentHarness) ? request.uiState.agentHarness : undefined;
   const summary = isRecord(agentHarness?.summary) ? agentHarness.summary : undefined;
@@ -132,6 +146,12 @@ export function agentHarnessHandoffMetadata(request: GatewayRequest, runtime: {
   const backendSelectionDecision = includeBackendSelectionAudit
     ? agentHarnessBackendSelectionDecision(request, { ...runtime, agentHarness, summary, trace })
     : undefined;
+  const startupContextEnvelope = isRecord(runtime.startupContextEnvelope)
+    ? runtime.startupContextEnvelope
+    : isRecord(request.uiState?.startupContextEnvelope)
+      ? request.uiState.startupContextEnvelope
+      : undefined;
+  const startupContextSummary = startupContextMetadataSummary(startupContextEnvelope);
   const decisionOwner = 'AgentServer';
   const harnessSummary = agentHarnessMetadataSummary({
     summary,
@@ -148,6 +168,7 @@ export function agentHarnessHandoffMetadata(request: GatewayRequest, runtime: {
     harnessTraceRef: traceRef,
     harnessBudgetSummary: budgetSummary,
     harnessDecisionOwner: decisionOwner,
+    ...(startupContextSummary ? { startupContextRef: startupContextSummary.envelopeId, startupContextSummary } : {}),
     harnessSummary,
     ...(includeContinuityAudit ? { agentHarnessContinuityDecision: continuityDecision } : {}),
     ...(backendSelectionDecision ? { agentHarnessBackendSelectionDecision: backendSelectionDecision } : {}),
@@ -165,6 +186,8 @@ export function agentHarnessHandoffMetadata(request: GatewayRequest, runtime: {
       repairContextPolicy,
       promptDirectives: promptRenderPlan.directiveRefs,
       promptRenderPlan,
+      startupContextRef: startupContextSummary?.envelopeId,
+      startupContextSummary,
       budgetSummary,
       summary: harnessSummary,
       ...(includeContinuityAudit ? { continuityDecision } : {}),
@@ -222,9 +245,15 @@ export function buildAgentHarnessPromptRenderPlan(input: {
     ...contextRefs.required.map((ref) => agentHarnessSelectedContextRef('required', ref, input.trace)),
     ...contextRefs.blocked.map((ref) => agentHarnessSelectedContextRef('blocked', ref, input.trace)),
   ];
+  const moduleDirectivePreviews = agentHarnessModuleDirectivePreviews({
+    contract,
+    trace: input.trace,
+    summary,
+  });
   const renderedEntries = [
     ...strategyRefs,
     ...directiveRefs.map((directive): AgentHarnessPromptRenderEntry => ({ ...directive, kind: 'directive' })),
+    ...moduleDirectivePreviews,
   ];
   const renderedLines = renderedEntries
     .map((entry) => `[${entry.sourceCallbackId}] ${entry.id}: ${entry.text ?? ''}`.trim())
@@ -239,6 +268,7 @@ export function buildAgentHarnessPromptRenderPlan(input: {
     deterministic: true,
     sourceRefs,
     strategyRefs,
+    moduleDirectivePreviews,
     directiveRefs,
     renderedEntries,
     selectedContextRefs,
@@ -513,6 +543,7 @@ async function evaluateAgentHarnessShadow(
   request: GatewayRequest,
   profileId: string,
   policyApplication: { status: string; response?: unknown; error?: string },
+  startupContextEnvelope?: Record<string, unknown>,
 ): Promise<
   | { ok: true; evaluation: AgentHarnessEvaluation }
   | { ok: false; reason: 'missing' | 'invalid' | 'error'; error?: string }
@@ -526,6 +557,7 @@ async function evaluateAgentHarnessShadow(
       requestId: hashJson({ prompt: request.prompt, skillDomain: request.skillDomain }).slice(0, 12),
       prompt: request.prompt,
       request,
+      startupContextEnvelope,
       workspace: request.workspacePath,
       stage: 'gateway-shadow',
       shadowMode: true,
@@ -641,6 +673,7 @@ function agentHarnessSummary(
     profileId: stringField(contract.profileId) ?? refs.profileId,
     contractRef: refs.contractRef,
     traceRef: refs.traceRef,
+    moduleStack: agentHarnessModuleStack({ contract, trace }),
     intentMode: stringField(contract.intentMode),
     explorationMode: stringField(contract.explorationMode),
     allowedContextRefCount: Array.isArray(contract.allowedContextRefs) ? contract.allowedContextRefs.length : undefined,
@@ -667,6 +700,7 @@ function agentHarnessMetadataSummary(input: {
     profileId: stringField(summary.profileId) ?? input.profileId,
     contractRef: input.contractRef ?? stringField(summary.contractRef),
     traceRef: input.traceRef ?? stringField(summary.traceRef),
+    moduleStack: stringListField(summary.moduleStack),
     intentMode: stringField(summary.intentMode),
     explorationMode: stringField(summary.explorationMode),
     allowedContextRefCount: numberField(summary.allowedContextRefCount),
@@ -676,6 +710,34 @@ function agentHarnessMetadataSummary(input: {
     traceStageCount: numberField(summary.traceStageCount),
     budgetSummary: input.budgetSummary,
     decisionOwner: input.decisionOwner,
+  };
+}
+
+function startupContextMetadataSummary(envelope: Record<string, unknown> | undefined) {
+  if (!envelope) return undefined;
+  const workspace = isRecord(envelope.workspace) ? envelope.workspace : {};
+  const session = isRecord(envelope.session) ? envelope.session : {};
+  const cache = isRecord(envelope.cache) ? envelope.cache : {};
+  const capabilityBriefIndex = isRecord(envelope.capabilityBriefIndex) ? envelope.capabilityBriefIndex : {};
+  const briefs = Array.isArray(capabilityBriefIndex.briefs) ? capabilityBriefIndex.briefs : [];
+  const guard = isRecord(envelope.noDuplicateExplorationGuard) ? envelope.noDuplicateExplorationGuard : {};
+  const expansion = isRecord(envelope.onDemandExpansion) ? envelope.onDemandExpansion : {};
+  const expansionEntries = Array.isArray(expansion.entries) ? expansion.entries : [];
+  return {
+    schemaVersion: stringField(envelope.schemaVersion) ?? 'sciforge.startup-context-envelope.v1',
+    envelopeId: stringField(envelope.envelopeId),
+    hash: stringField(envelope.hash),
+    generatedAt: stringField(envelope.generatedAt),
+    validUntil: stringField(cache.validUntil),
+    workspaceRoot: stringField(workspace.root),
+    sessionId: stringField(session.sessionId),
+    runId: stringField(session.runId),
+    capabilityBriefCount: briefs.length,
+    expansionRefCount: expansionEntries.length,
+    noDuplicateExplorationGuard: {
+      enabled: guard.skipExpensiveExplorationBeforeExpansion === true,
+      coveredRefCount: Array.isArray(guard.coveredRefs) ? guard.coveredRefs.length : 0,
+    },
   };
 }
 
@@ -714,6 +776,45 @@ function agentHarnessContextRefs(contract?: Record<string, unknown>) {
     blocked: stringListField(contract?.blockedContextRefs),
     required: stringListField(contract?.requiredContextRefs),
   };
+}
+
+function agentHarnessModuleStack(input: {
+  contract?: Record<string, unknown>;
+  trace?: Record<string, unknown>;
+  summary?: Record<string, unknown>;
+}) {
+  const directCandidates = [
+    input.contract?.moduleStack,
+    input.summary?.moduleStack,
+    input.trace?.moduleStack,
+  ];
+  for (const candidate of directCandidates) {
+    const values = stringListOrCsvField(candidate);
+    if (values.length) return values;
+  }
+  const auditNotes = Array.isArray(input.trace?.auditNotes) ? input.trace.auditNotes.filter(isRecord) : [];
+  for (const note of auditNotes) {
+    const message = stringField(note.message);
+    const match = message?.match(/\bmoduleStack=([^;]+)/);
+    if (!match?.[1]) continue;
+    const values = stringListOrCsvField(match[1]);
+    if (values.length && values[0] !== 'callbacks-only') return values;
+  }
+  return [];
+}
+
+function agentHarnessModuleDirectivePreviews(input: {
+  contract?: Record<string, unknown>;
+  trace?: Record<string, unknown>;
+  summary?: Record<string, unknown>;
+}): AgentHarnessPromptRenderEntry[] {
+  return agentHarnessModuleStack(input).map((moduleId, index) => ({
+    kind: 'strategy',
+    id: `module-preview.${moduleId}`,
+    sourceCallbackId: `harness-module.${moduleId}`,
+    priority: 0,
+    text: `module=${moduleId}; order=${index + 1}; preview=bounded; strategy text must originate from HarnessContract.promptDirectives or module-owned callbacks`,
+  }));
 }
 
 function agentHarnessPromptDirectiveRefs(contract?: Record<string, unknown>) {
@@ -845,6 +946,18 @@ function stringListField(value: unknown) {
     : [];
 }
 
+function stringListOrCsvField(value: unknown) {
+  if (Array.isArray(value)) {
+    return orderedUnique(value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim()));
+  }
+  if (typeof value !== 'string') return [];
+  return orderedUnique(value.split(',').map((item) => item.trim()).filter(Boolean));
+}
+
 function sortedUnique(values: string[]) {
   return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b));
+}
+
+function orderedUnique(values: string[]) {
+  return Array.from(new Set(values.filter(Boolean)));
 }

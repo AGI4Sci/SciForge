@@ -304,7 +304,11 @@ try {
   const generatedPaperArtifact = result.artifacts.find((artifact) => artifact.type === 'paper-list');
   assert.ok(generatedPaperArtifact);
   const generatedArtifactMetadata = isRecord(generatedPaperArtifact.metadata) ? generatedPaperArtifact.metadata : {};
-  assert.match(String(generatedArtifactMetadata.artifactRef), /^\.sciforge\/artifacts\/session-smoke-context-paper-list-/);
+  const generatedArtifactRef = String(generatedArtifactMetadata.artifactRef);
+  assert.match(
+    generatedArtifactRef,
+    /^\.sciforge\/sessions\/\d{4}-\d{2}-\d{2}_literature_session-smoke-context\/artifacts\/paper-list-artifact\.generated\.paper-list-/,
+  );
   assert.equal(typeof generatedArtifactMetadata.outputRef, 'string');
   assert.equal(result.executionUnits.length, 1);
   assert.equal(result.executionUnits[0].status, 'done');
@@ -314,15 +318,17 @@ try {
   assert.match(String(result.reasoningTrace), /Generated a literature fallback task/);
 
   const attemptFiles = await readdir(join(workspace, '.sciforge', 'task-attempts'));
-  const artifactFiles = await readdir(join(workspace, '.sciforge', 'artifacts'));
-  assert.ok(artifactFiles.some((file) => file.includes('session-smoke-context-paper-list')));
+  assert.match(await readFile(join(workspace, generatedArtifactRef), 'utf8'), /paper-list/);
   assert.equal(attemptFiles.length, 2);
   const generatedAttemptFile = attemptFiles.find((file) => file.startsWith('generated-literature-'));
   assert.ok(generatedAttemptFile);
   const attemptHistory = JSON.parse(await readFile(join(workspace, '.sciforge', 'task-attempts', generatedAttemptFile), 'utf8'));
   assert.equal(attemptHistory.attempts.length, 1);
   assert.equal(attemptHistory.attempts[0].status, 'done');
-  assert.match(attemptHistory.attempts[0].codeRef, /^\.sciforge\/tasks\/generated-literature-[a-f0-9]+\/generated-literature\.py$/);
+  assert.match(
+    attemptHistory.attempts[0].codeRef,
+    /^\.sciforge\/sessions\/\d{4}-\d{2}-\d{2}_literature_session-smoke-context\/tasks\/generated-literature-[a-f0-9]+\/generated-literature\.py$/,
+  );
   assert.equal(await readFile(join(workspace, '.sciforge', 'tasks', 'generated-literature.py'), 'utf8'), generatedTask);
   assert.equal(await readFile(join(workspace, attemptHistory.attempts[0].codeRef), 'utf8'), generatedTask);
 

@@ -9,6 +9,7 @@
 - [`Usage.md`](Usage.md)：启动、配置、常用工作流、双实例互修、Computer Use 和验证命令。
 - [`Architecture.md`](Architecture.md)：真实运行链路、会话策略、AgentServer/backend gateway、workspace writer、时间线和互修边界。
 - [`AgentHarnessStandard.md`](AgentHarnessStandard.md)：Lightning-style agent harness 编程标准、分级 hooks、contract schema、merge 规则和最小实验案例。
+- [`HarnessResearchGuide.md`](HarnessResearchGuide.md)：harness prompt/policy 研究入口、module directive preview 和 AgentServer prompt 边界。
 - [`Extending.md`](Extending.md)：scenario package、capability brief、observe/action/verifier、UIManifest、interactive view 和 skill promotion 的扩展契约。
 - [`SciForgeConversationSessionRecovery.md`](SciForgeConversationSessionRecovery.md)：多轮对话、session 恢复、上下文选择和 Python 策略层的算法开发参考。
 

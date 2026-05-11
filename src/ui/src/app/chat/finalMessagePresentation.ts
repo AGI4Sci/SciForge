@@ -1,3 +1,5 @@
+import { resultPresentationTextLooksLikeRawJson } from '@sciforge-ui/runtime-contract';
+
 export type FinalMessageAuditSection = {
   label: string;
   text: string;
@@ -364,9 +366,7 @@ function codeEvidenceType(language: string | undefined, text: string): FinalMess
 }
 
 function looksLikeRawJson(text: string) {
-  const trimmed = text.trim();
-  if (!/^[{[]/.test(trimmed)) return false;
-  return /"(raw|trace|tool|toolOutput|executionUnits|uiManifest|artifacts|stdout|stderr|auditRefs|recoverActions|failureReason|claimType|claims|objects|verificationResults|diagnosticsRefs|processSummary|defaultExpandedSections)"\s*:/.test(trimmed);
+  return resultPresentationTextLooksLikeRawJson(text);
 }
 
 function looksLikeLogOutput(language: string | undefined, text: string) {

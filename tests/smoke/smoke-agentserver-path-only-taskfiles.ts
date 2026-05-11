@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
@@ -113,8 +113,8 @@ try {
   assert.match(promptText, /research-report/);
   assert.match(promptText, /report-viewer/);
 
-  const taskArchives = await readdir(join(workspace, '.sciforge', 'tasks'));
-  assert.ok(taskArchives.some((entry) => entry.startsWith('generated-literature-')));
+  const taskArchives = await collectTaskArchives(join(workspace, '.sciforge'));
+  assert.ok(taskArchives.some((entry) => entry.includes('/tasks/generated-literature-') || entry.startsWith('tasks/generated-literature-')));
   const debugFiles = await readdir(join(workspace, '.sciforge', 'debug', 'agentserver'));
   assert.equal(debugFiles.length, 1);
   const debug = await readFile(join(workspace, '.sciforge', 'debug', 'agentserver', debugFiles[0]), 'utf8');
@@ -123,6 +123,23 @@ try {
   console.log('[ok] path-only AgentServer taskFiles reuse workspace edits and write redacted debug artifact');
 } finally {
   await new Promise<void>((resolve) => server.close(() => resolve()));
+}
+
+async function collectTaskArchives(root: string): Promise<string[]> {
+  const out: string[] = [];
+  async function visit(dir: string) {
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await visit(full);
+        continue;
+      }
+      out.push(relative(root, full).replaceAll('\\', '/'));
+    }
+  }
+  await visit(root);
+  return out;
 }
 
 function readBody(req: AsyncIterable<Buffer | string>) {

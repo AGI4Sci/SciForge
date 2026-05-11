@@ -113,7 +113,7 @@ try {
   assert.equal(proposals.length, 1);
   assert.equal(proposals[0].status, 'needs-user-confirmation');
   assert.equal(proposals[0].reviewChecklist.userConfirmedPromotion, false);
-  assert.match(proposals[0].source.taskCodeRef, /^\.sciforge\/tasks\/generated-literature-[a-f0-9]+\/self-evolving-task\.py$/);
+  assert.match(proposals[0].source.taskCodeRef, /^\.sciforge\/sessions\/.+\/tasks\/generated-literature-[a-f0-9]+\/self-evolving-task\.py$/);
 
   const stableWorkspaceSkills = await readdir(join(workspace, '.sciforge', 'skills')).catch(() => []);
   assert.equal(stableWorkspaceSkills.some((entry) => entry.includes(proposals[0].proposedManifest.id)), false);

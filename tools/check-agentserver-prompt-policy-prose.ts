@@ -40,7 +40,7 @@ const allowedHarnessPromptRenderSources = [
   'request.metadata.promptRenderPlan',
 ];
 
-const policyProsePattern = /\b(?:agent backend|artifact|capability|Computer Use|contract|continuation|current turn|do not|Do not|failed-with-reason|failureReason|fresh|generated task|Hard contract|JSON|must|MUST|Never|objectReferences|PDFs?|policy|prefer|preserve|prior|refs?|repair|rerun|should|taskFiles|ToolPayload|valid|workspace)\b/;
+const policyProsePattern = /\b(?:agent backend|artifact|background|budget|capability|Computer Use|contract|continuation|continuity|current turn|do not|Do not|failed-with-reason|failureReason|first result|fresh|generated task|Hard contract|JSON|latency|latencyTier|must|MUST|Never|objectReferences|PDFs?|policy|prefer|preserve|prior|refs?|repair|rerun|should|taskFiles|tool-use|tool use|ToolPayload|valid|workspace)\b/;
 
 const source = await readFile(sourcePath, 'utf8');
 const lines = source.split(/\r?\n/);
@@ -72,6 +72,7 @@ for (const builderName of Object.keys(frozenHardcodedPolicyProse) as PromptBuild
       `${builderName} hardcoded policy prose changed.`,
       `Expected count=${frozen.count}, digest=${frozen.digest}; got count=${prose.length}, digest=${digest}.`,
       'Move new governance prose into @sciforge-ui/runtime-contract policy lines, packages/skills/runtime-policy, or harness promptRenderPlanSummary renderedEntries.',
+      'Fresh/continuity/tool-use/repair/latency strategy must stay in HarnessContract/Profile/Module policy and only reach this prompt through bounded render plan summaries.',
       ...prose.map((finding) => `  ${finding.line}: ${finding.text}`),
     ].join('\n'));
   }
@@ -144,6 +145,7 @@ console.log([
   `- trustedRepairPolicyProviderSpreads=${trustedRepairSpreads.length}`,
   `- harnessPromptRenderSources=${harnessPromptRenderSources.length}`,
   '- allowed new strategy prose sources: @sciforge-ui/runtime-contract policy lines, packages/skills/runtime-policy, harness promptRenderPlanSummary.renderedEntries',
+  '- forbidden local strategy prose: fresh/continuity/tool-use/repair/latency policy in AgentServer prompt strings',
 ].join('\n'));
 
 function extractFunctionBody(name: string) {

@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
 
+process.env.SCIFORGE_CONVERSATION_POLICY_MODE = 'off';
+
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-omics-runner-smoke-'));
 await mkdir(join(workspace, 'data'), { recursive: true });
 await writeFile(join(workspace, 'data', 'matrix.csv'), [
@@ -112,18 +114,29 @@ const result = await runWorkspaceRuntimeGateway({
   workspacePath: workspace,
   agentServerBaseUrl: baseUrl,
   prompt: [
+    'Generate and execute an omics differential expression workspace task.',
     'matrixRef=data/matrix.csv',
     'metadataRef=data/metadata.csv',
     'groupColumn=condition',
     'caseGroup=treated',
     'controlGroup=control',
     'runner=scanpy',
+    'Return an omics-differential-expression artifact with requested runner metadata.',
   ].join(' '),
-  uiState: { forceAgentServerGeneration: true },
+  expectedArtifactTypes: ['omics-differential-expression'],
+  selectedComponentIds: ['point-set-viewer', 'execution-unit-table'],
+  uiState: {
+    forceAgentServerGeneration: true,
+    executionModePlan: { executionMode: 'multi-stage-project' },
+    responsePlan: { initialResponseMode: 'generated-artifact' },
+    expectedArtifactTypes: ['omics-differential-expression'],
+    selectedComponentIds: ['point-set-viewer', 'execution-unit-table'],
+  },
 });
 
-assert.equal(result.artifacts[0]?.type, 'omics-differential-expression');
-const metadata = (result.artifacts[0].metadata ?? {}) as Record<string, unknown>;
+const omicsArtifact = result.artifacts.find((artifact) => artifact.type === 'omics-differential-expression');
+assert.ok(omicsArtifact);
+const metadata = (omicsArtifact.metadata ?? {}) as Record<string, unknown>;
 assert.equal(metadata.requestedRunner, 'scanpy.rank_genes_groups');
 assert.ok(metadata.effectiveRunner === 'scanpy.rank_genes_groups' || metadata.effectiveRunner === 'omics.python-csv-differential');
 assert.ok(metadata.runtimeAvailability);

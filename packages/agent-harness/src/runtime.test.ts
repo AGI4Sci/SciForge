@@ -13,6 +13,7 @@ import {
   HARNESS_EXTERNAL_HOOK_STAGES,
 } from './runtime';
 import { getHarnessModule, harnessModules, moduleStackForTier } from './modules';
+import { createParallelWorkPlan, materializeParallelWorkResult } from './parallel-work';
 
 test('evaluateHarness produces stable contract and trace for the same input', async () => {
   const input = {
@@ -94,7 +95,24 @@ test('runtime declares critical, audit, and external hook stages without overlap
 });
 
 test('harness module registry covers the latency-first module stack', () => {
-  const expectedModules = ['intent', 'latency', 'context', 'capability', 'budget', 'verification', 'repair', 'progress', 'presentation', 'audit'];
+  const expectedModules = [
+    'intent',
+    'latency',
+    'context',
+    'capability',
+    'budget',
+    'verification',
+    'repair',
+    'progress',
+    'presentation',
+    'audit',
+    'startup-context',
+    'workspace-memory',
+    'parallel',
+    'continuation',
+    'exploration',
+    'research',
+  ];
   assert.deepEqual(Object.keys(harnessModules).sort(), expectedModules.sort());
   for (const moduleId of expectedModules) {
     const module = getHarnessModule(moduleId);
@@ -106,7 +124,22 @@ test('harness module registry covers the latency-first module stack', () => {
 
   assert.deepEqual(
     moduleStackForTier('quick').map((module) => module.id),
-    ['intent', 'latency', 'context', 'capability', 'budget', 'verification', 'progress', 'presentation'],
+    [
+      'intent',
+      'latency',
+      'context',
+      'startup-context',
+      'workspace-memory',
+      'capability',
+      'parallel',
+      'exploration',
+      'budget',
+      'verification',
+      'progress',
+      'continuation',
+      'presentation',
+      'research',
+    ],
   );
   assert.ok(moduleStackForTier('background').some((module) => module.id === 'audit'));
 });
@@ -487,4 +520,112 @@ test('full evaluation completes audit callbacks, while quick latency implies cri
   assert.equal(full.trace.stages.find((stage) => stage.callbackId === 'test.audit')?.auditStatus, 'completed');
   assert.equal(quick.contract.repairContextPolicy.kind, 'none');
   assert.equal(quick.trace.auditHooks.find((hook) => hook.callbackId === 'test.audit')?.status, 'deferred');
+});
+
+test('bounded parallel work planner builds guarded DAG and early-stop result trace', () => {
+  const plan = createParallelWorkPlan({
+    requestId: 'req-parallel',
+    latencyTier: 'bounded',
+    maxConcurrency: 3,
+    firstResultDeadlineMs: 30000,
+    tasks: [
+      {
+        id: 'intent',
+        title: 'Classify user goal',
+        readSet: ['prompt'],
+        writeSet: [],
+        sideEffectClass: 'none',
+        costClass: 'free',
+        deadlineMs: 3000,
+        owner: { id: 'main', kind: 'main-agent', owns: [] },
+        expectedOutput: 'intent signals',
+        criticalPath: true,
+      },
+      {
+        id: 'smoke-a',
+        dependsOn: ['intent'],
+        readSet: ['packages/agent-harness/src/runtime.ts'],
+        writeSet: [],
+        sideEffectClass: 'none',
+        costClass: 'low',
+        deadlineMs: 15000,
+        owner: { id: 'script-smoke-a', kind: 'script', owns: [], readOnly: true },
+        expectedOutput: 'smoke result',
+        executionKind: 'parallel-script',
+        valueScore: 0.8,
+      },
+      {
+        id: 'write-contract',
+        dependsOn: ['intent'],
+        readSet: ['packages/agent-harness/src/contracts.ts'],
+        writeSet: ['packages/agent-harness/src/contracts.ts'],
+        sideEffectClass: 'write',
+        costClass: 'low',
+        deadlineMs: 20000,
+        owner: { id: 'subagent-contract', kind: 'subagent', owns: ['packages/agent-harness/src'] },
+        expectedOutput: 'contract patch',
+        valueScore: 0.9,
+      },
+      {
+        id: 'write-contract-2',
+        dependsOn: ['intent'],
+        readSet: ['packages/agent-harness/src/contracts.ts'],
+        writeSet: ['packages/agent-harness/src/contracts.ts'],
+        sideEffectClass: 'write',
+        costClass: 'low',
+        deadlineMs: 22000,
+        owner: { id: 'subagent-contract-2', kind: 'subagent', owns: ['packages/agent-harness/src'] },
+        expectedOutput: 'second contract patch',
+        valueScore: 0.7,
+      },
+      {
+        id: 'slow-audit',
+        dependsOn: ['smoke-a'],
+        readSet: ['trace'],
+        writeSet: [],
+        sideEffectClass: 'none',
+        costClass: 'medium',
+        deadlineMs: 90000,
+        owner: { id: 'verifier-audit', kind: 'verifier', owns: [], readOnly: true },
+        expectedOutput: 'audit summary',
+        executionKind: 'verifier',
+        valueScore: 0.2,
+      },
+      {
+        id: 'bad-write',
+        dependsOn: ['intent'],
+        readSet: ['PROJECT.md'],
+        writeSet: ['PROJECT.md'],
+        sideEffectClass: 'write',
+        costClass: 'low',
+        deadlineMs: 10000,
+        owner: { id: 'readonly-worker', kind: 'subagent', owns: ['docs'], readOnly: true },
+        expectedOutput: 'invalid patch',
+        valueScore: 0.4,
+      },
+    ],
+  });
+
+  assert.equal(plan.schemaVersion, 'sciforge.parallel-work-plan.v1');
+  assert.equal(plan.maxConcurrency, 3);
+  assert.ok(plan.batches.length >= 3);
+  assert.deepEqual(plan.batches[0].taskIds, ['intent']);
+  assert.ok(plan.conflicts.some((conflict) => conflict.kind === 'shared-write' && conflict.resolution === 'serialize'));
+  assert.ok(plan.conflicts.some((conflict) => conflict.kind === 'owner-scope-missing' && conflict.taskIds.includes('bad-write')));
+  const writeBatch = plan.batches.find((batch) => batch.taskIds.includes('write-contract'))?.index ?? -1;
+  const serializedWriteBatch = plan.batches.find((batch) => batch.taskIds.includes('write-contract-2'))?.index ?? -1;
+  assert.ok(serializedWriteBatch > writeBatch);
+
+  const result = materializeParallelWorkResult({
+    plan,
+    completedTaskIds: ['intent', 'smoke-a', 'write-contract'],
+    outputRefs: { 'write-contract': 'patch:contracts' },
+  });
+
+  assert.equal(result.schemaVersion, 'sciforge.parallel-work-result.v1');
+  assert.equal(result.status, 'partial');
+  assert.ok(result.skippedTaskIds.includes('bad-write'));
+  assert.ok(result.cancelledTaskIds.includes('slow-audit'));
+  assert.equal(result.taskResults.find((trace) => trace.taskId === 'write-contract')?.mergeDecision, 'merge');
+  assert.equal(result.taskResults.find((trace) => trace.taskId === 'slow-audit')?.status, 'cancelled');
 });

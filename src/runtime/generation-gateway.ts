@@ -768,6 +768,7 @@ async function requestAgentServerGeneration(params: {
     const harnessMetadata = agentHarnessMetadata(request, {
       backendSelectionDecision,
       llmEndpoint: llmRuntime.llmEndpoint,
+      startupContextEnvelope: contextEnvelope.startupContextEnvelope as Record<string, unknown> | undefined,
     });
     emitWorkspaceRuntimeEvent(params.callbacks, {
       type: 'contextWindowState',

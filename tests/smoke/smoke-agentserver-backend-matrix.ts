@@ -153,12 +153,14 @@ try {
           `assistant: ${round1.message}`,
           'user: 继续从已有 paper-list 和 research-report 补逐篇深度分析',
         ],
-        recentExecutionRefs: round1.executionUnits,
+        recentExecutionRefs: [],
         expectedArtifactTypes: expectedArtifacts,
         selectedComponentIds: selectedComponents,
         forceAgentServerGeneration: true,
+        executionModePlan: { executionMode: 'multi-stage-project' },
+        responsePlan: { initialResponseMode: 'generated-artifact' },
       },
-      artifacts: round1.artifacts,
+      artifacts: [],
     }, usageCollector(backend));
     assertBackendOutput(round2, backend, 2, expectedArtifacts);
 
@@ -239,7 +241,7 @@ round_no = ${round}
 with open(input_path, "r", encoding="utf-8") as handle:
     request = json.load(handle)
 
-expected = request.get("expectedArtifacts") or ["omics-differential-expression", "research-report"]
+expected = request.get("expectedArtifacts") or request.get("expectedArtifactTypes") or ["paper-list", "research-report"]
 prompt = request.get("prompt", "")
 
 def artifact_for(kind):

@@ -153,7 +153,10 @@ try {
     stderrRel: '.sciforge/logs/task.stderr.log',
   });
   const artifactRef = String((persisted[0].metadata as Record<string, unknown>).artifactRef);
-  assert.match(artifactRef, /^\.sciforge\/artifacts\/session-gateway-research-report-research-report-/);
+  assert.match(
+    artifactRef,
+    /^\.sciforge\/sessions\/\d{4}-\d{2}-\d{2}_literature_session-gateway\/artifacts\/research-report-research-report-/,
+  );
   assert.match(await readFile(join(workspace, artifactRef), 'utf8'), /Gateway split smoke passed/);
 
   const materializedBackend = await materializeBackendPayloadOutput(workspace, request, {
@@ -508,11 +511,11 @@ try {
   assert.equal(generatedPayload?.message, 'Generated runner smoke passed.');
   assert.match(generatedPayload?.reasoningTrace ?? '', /AgentServer generation run: runner-smoke-run/);
   assert.equal(generatedPayload?.executionUnits[0]?.agentServerGenerated, true);
-  const runnerAttemptId = String(generatedPayload?.executionUnits[0]?.outputRef || '').match(/generated-literature-[^.]+/)?.[0];
+  const runnerOutputRef = String(generatedPayload?.executionUnits[0]?.outputRef || '');
+  const runnerAttemptId = runnerOutputRef.match(/generated-literature-[^.]+/)?.[0];
   assert.ok(runnerAttemptId, 'generated runner should expose output ref containing task id');
-  assert.ok(generatedPayload?.objectReferences?.some((reference) => /^file:\.sciforge\/task-results\/generated-literature-/.test(String(reference.ref))));
-  assert.match(String((generatedPayload?.artifacts[0]?.metadata as Record<string, unknown> | undefined)?.reportRef), /^\.sciforge\/task-results\/generated-literature-.*runner-report\.md$/);
-  assert.match(await readFile(join(workspace, `.sciforge/task-results/${runnerAttemptId}.json`), 'utf8'), /runner-report\.md/);
+  assert.match(runnerOutputRef, /^\.sciforge\/sessions\/.+\/task-results\/generated-literature-.*\.json$/);
+  assert.match(await readFile(join(workspace, runnerOutputRef), 'utf8'), /runner-report/);
   const generatedTaskDebit = generatedPayload?.budgetDebits?.find((debit) => debit.capabilityId === 'sciforge.generated-task-runner');
   assert.ok(generatedTaskDebit, 'successful generated task should emit a capability budget debit');
   assert.equal(generatedTaskDebit.sinkRefs.executionUnitRef, 'runner');
@@ -579,9 +582,9 @@ try {
   assert.equal(emptyRetrievalAttempt[0]?.status, 'repair-needed');
   assert.match(emptyRetrievalAttempt[0]?.failureReason ?? '', /External retrieval returned zero results/);
   assert.match(emptyRetrievalAttempt[0]?.codeRef ?? '', /runner-empty-arxiv/);
-  assert.match(emptyRetrievalAttempt[0]?.outputRef ?? '', /^\.sciforge\/task-results\/generated-literature-/);
-  assert.match(emptyRetrievalAttempt[0]?.stdoutRef ?? '', /^\.sciforge\/logs\/generated-literature-/);
-  assert.match(emptyRetrievalAttempt[0]?.stderrRef ?? '', /^\.sciforge\/logs\/generated-literature-/);
+  assert.match(emptyRetrievalAttempt[0]?.outputRef ?? '', /^\.sciforge\/sessions\/.+\/task-results\/generated-literature-/);
+  assert.match(emptyRetrievalAttempt[0]?.stdoutRef ?? '', /^\.sciforge\/sessions\/.+\/logs\/generated-literature-/);
+  assert.match(emptyRetrievalAttempt[0]?.stderrRef ?? '', /^\.sciforge\/sessions\/.+\/logs\/generated-literature-/);
 
   let providerDiagnosticsRepairCalled = false;
   const providerDiagnosticsPayload = await runAgentServerGeneratedTask(arxivEmptyRequest, skill, [skill], {}, makeGeneratedTaskRunnerDeps({

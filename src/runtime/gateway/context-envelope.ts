@@ -2,6 +2,8 @@ import { resolve } from 'node:path';
 import { currentUserRequestFromPrompt } from '@sciforge-ui/runtime-contract/conversation-policy';
 import { defaultArtifactSchemaForSkillDomain } from '@sciforge-ui/runtime-contract/artifact-policy';
 import { runtimeVerificationResultArtifacts } from '@sciforge-ui/runtime-contract/verification-result';
+import { buildStartupContextEnvelope, type StartupCapabilityBriefInput } from '../../../packages/agent-harness/src/startup-context.js';
+import type { CapabilityCostClass, CapabilityLatencyClass, CapabilitySideEffectClass, LatencyTier, StartupContextEnvelope } from '../../../packages/agent-harness/src/contracts.js';
 import type { SciForgeSkillDomain, GatewayRequest, SkillAvailability } from '../runtime-types.js';
 import { clipForAgentServerJson, clipForAgentServerPrompt, hashJson, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
 import { brokerCapabilities, CapabilityManifestRegistry as BrokerCapabilityManifestRegistry, type CapabilityBrokerArtifactIndexEntry, type CapabilityBrokerFailureHistoryEntry, type CapabilityBrokerObjectRef, type CapabilityBrokerOutput, type CapabilityBrokerProviderAvailability, type CapabilityBrokerSkillHint, type CapabilityBrokerToolBudget, type CapabilityBrokerVerificationPolicyHint } from '../capability-broker.js';
@@ -72,6 +74,13 @@ export function buildContextEnvelope(
   const capabilityBrokerBrief = buildCapabilityBrokerBriefForAgentServer(request);
   const capabilityBrief = capabilityBriefProjectionFromBrokerBrief(capabilityBrokerBrief, uiState.capabilityBrief);
   const verificationPolicy = request.verificationPolicy ?? brokerVerificationPolicyForRequest(request, brokerCapabilityPolicyForRequest(request));
+  const startupContextEnvelope = buildStartupContextEnvelopeForRequest(request, {
+    workspace: params.workspace,
+    capabilityBrokerBrief,
+    artifactRefs: summarizeArtifactRefs(request.artifacts).flatMap(startupRefsFromRecord),
+    recentExecutionRefs: summarizeExecutionRefs(recentExecutionRefs).flatMap(startupRefsFromRecord),
+    previousEnvelope: startupContextEnvelopeFromUiState(uiState),
+  });
   const visibleRecentConversation = recentConversation
     .slice(mode === 'full' ? -6 : -4)
     .map((entry) => clipForAgentServerPrompt(entry, mode === 'full' ? 900 : 700))
@@ -85,7 +94,9 @@ export function buildContextEnvelope(
       artifacts: hashJson(request.artifacts),
       recentExecutionRefs: hashJson(recentExecutionRefs),
       priorAttempts: hashJson(params.priorAttempts ?? []),
+      startupContextEnvelope: startupContextEnvelope.hash,
     },
+    startupContextEnvelope,
     projectFacts: mode === 'full' ? {
       project: 'SciForge',
       runtimeRole: 'scenario-first AI4Science workspace runtime',
@@ -429,6 +440,118 @@ function capabilityBriefProjectionFromBrokerBrief(capabilityBrokerBrief: Record<
   };
 }
 
+export function buildStartupContextEnvelopeForRequest(
+  request: GatewayRequest,
+  params: {
+    workspace: string;
+    capabilityBrokerBrief?: Record<string, unknown>;
+    artifactRefs?: string[];
+    recentExecutionRefs?: string[];
+    previousEnvelope?: StartupContextEnvelope;
+  },
+) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : {};
+  const contract = isRecord(agentHarness.contract) ? agentHarness.contract : {};
+  const toolBudget = isRecord(contract.toolBudget) ? contract.toolBudget : {};
+  const contextBudget = isRecord(contract.contextBudget) ? contract.contextBudget : {};
+  const sideEffects = isRecord(contract.capabilityPolicy) && isRecord(contract.capabilityPolicy.sideEffects)
+    ? contract.capabilityPolicy.sideEffects
+    : {};
+  const currentRefs = [
+    ...startupRefsFromRecords(toRecordList(uiState.currentReferences)),
+    ...startupRefsFromRecords(toRecordList(uiState.currentReferenceDigests)),
+  ];
+  const recentRuns = toRecordList(uiState.recentRuns).slice(-8).map((run) => ({
+    id: stringField(run.id),
+    ref: stringField(run.ref) ?? stringField(run.outputRef) ?? stringField(run.artifactRef),
+    status: stringField(run.status),
+    hash: hashJson(run),
+  }));
+  return buildStartupContextEnvelope({
+    workspaceRoot: params.workspace,
+    previousEnvelope: params.previousEnvelope,
+    session: {
+      sessionId: stringField(uiState.sessionId),
+      runId: stringField(uiState.runId) ?? stringField(uiState.currentRunId),
+      backend: stringField(request.agentBackend) ?? stringField(uiState.agentBackend),
+      currentPrompt: request.prompt,
+    },
+    scenario: {
+      skillDomain: request.skillDomain,
+      scenarioPackageRef: request.scenarioPackageRef?.id,
+      expectedArtifactTypes: expectedArtifactTypesForRequest(request),
+      selectedComponentIds: selectedComponentIdsForRequest(request),
+    },
+    budget: {
+      latencyTier: latencyTierField(contract.latencyTier),
+      maxPromptTokens: numberField(contextBudget.maxPromptTokens),
+      maxToolCalls: numberField(toolBudget.maxToolCalls),
+      maxWallMs: numberField(toolBudget.maxWallMs),
+    },
+    permissions: {
+      network: sideEffectAllowanceField(sideEffects.network),
+      workspaceWrite: sideEffectAllowanceField(sideEffects.workspaceWrite),
+      externalMutation: sideEffectAllowanceField(sideEffects.externalMutation),
+      codeExecution: sideEffectAllowanceField(sideEffects.codeExecution),
+    },
+    currentRefs,
+    artifactRefs: params.artifactRefs,
+    recentExecutionRefs: params.recentExecutionRefs,
+    recentRuns,
+    capabilityBriefs: startupCapabilityBriefsFromBrokerBrief(params.capabilityBrokerBrief),
+    sourceRefs: [
+      'sciforge.context-envelope.v1',
+      'sciforge.agentserver.capability-broker-brief.v1',
+      ...(stringField(agentHarness.contractRef) ? [stringField(agentHarness.contractRef) as string] : []),
+      ...(stringField(agentHarness.traceRef) ? [stringField(agentHarness.traceRef) as string] : []),
+    ],
+    policyReminders: [
+      'Startup context is the first source for workspace/session/capability facts.',
+      'Use onDemandExpansion refs before reading full manifests, docs, logs, or artifact bodies.',
+    ],
+  });
+}
+
+function startupCapabilityBriefsFromBrokerBrief(value: unknown): StartupCapabilityBriefInput[] {
+  const broker = isRecord(value) ? value : {};
+  return toRecordList(broker.briefs).slice(0, 24).map((brief) => {
+    const id = stringField(brief.id) ?? 'unknown-capability';
+    const routingTags = toStringList(brief.routingTags);
+    return {
+      id,
+      name: stringField(brief.name) ?? id,
+      purpose: stringField(brief.brief),
+      manifestRef: `capability:${id}`,
+      inputRefs: toStringList(brief.domains).map((domain) => `domain:${domain}`),
+      outputRefs: routingTags.map((tag) => `routing:${tag}`),
+      costClass: capabilityCostClassField(brief.costClass),
+      latencyClass: capabilityLatencyClassField(brief.latencyClass),
+      sideEffectClass: capabilitySideEffectClassField(brief.sideEffectClass),
+      artifactTypes: routingTags.filter((tag) => tag.includes('artifact') || tag.includes('report') || tag.includes('matrix')),
+      sourceRef: 'sciforge.agentserver.capability-broker-brief.v1',
+      hash: hashJson(brief),
+    };
+  });
+}
+
+function startupContextEnvelopeFromUiState(uiState: Record<string, unknown>): StartupContextEnvelope | undefined {
+  const candidate = uiState.startupContextEnvelope ?? (isRecord(uiState.agentHarness) ? uiState.agentHarness.startupContextEnvelope : undefined);
+  if (!isRecord(candidate) || candidate.schemaVersion !== 'sciforge.startup-context-envelope.v1') return undefined;
+  return candidate as unknown as StartupContextEnvelope;
+}
+
+function startupRefsFromRecords(records: Array<Record<string, unknown>>) {
+  return records.flatMap(startupRefsFromRecord);
+}
+
+function startupRefsFromRecord(record: Record<string, unknown>) {
+  const refs = ['ref', 'artifactRef', 'dataRef', 'outputRef', 'stdoutRef', 'stderrRef', 'path', 'id']
+    .map((key) => stringField(record[key]))
+    .filter((entry): entry is string => Boolean(entry));
+  return uniqueStrings(refs);
+}
+
 function legacyCapabilityBriefAudit(value: unknown) {
   if (!isRecord(value)) return undefined;
   return {
@@ -711,6 +834,38 @@ function numberField(value: unknown) {
 
 function booleanField(value: unknown) {
   return typeof value === 'boolean' ? value : undefined;
+}
+
+function sideEffectAllowanceField(value: unknown) {
+  return value === 'block' || value === 'requires-approval' || value === 'allow' ? value : undefined;
+}
+
+function latencyTierField(value: unknown): LatencyTier | undefined {
+  return value === 'instant' || value === 'quick' || value === 'bounded' || value === 'deep' || value === 'background'
+    ? value
+    : undefined;
+}
+
+function capabilityCostClassField(value: unknown): CapabilityCostClass | undefined {
+  return value === 'free' || value === 'low' || value === 'medium' || value === 'high'
+    ? value
+    : value === 'none'
+      ? 'free'
+      : undefined;
+}
+
+function capabilityLatencyClassField(value: unknown): CapabilityLatencyClass | undefined {
+  if (value === 'instant' || value === 'short' || value === 'bounded' || value === 'long' || value === 'background') return value;
+  if (value === 'low') return 'short';
+  if (value === 'medium') return 'bounded';
+  if (value === 'high') return 'long';
+  return undefined;
+}
+
+function capabilitySideEffectClassField(value: unknown): CapabilitySideEffectClass | undefined {
+  return value === 'none' || value === 'read' || value === 'write' || value === 'network' || value === 'desktop' || value === 'external'
+    ? value
+    : undefined;
 }
 
 function pruneUndefined(value: unknown): unknown {

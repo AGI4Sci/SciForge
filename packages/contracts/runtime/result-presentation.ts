@@ -271,6 +271,12 @@ export function diagnosticIsRawPayload(diagnostic: ResultPresentationDiagnostics
     || /raw|payload|toolpayload|stdout|stderr|trace|schema|backend|budget|repair/i.test(`${diagnostic.kind} ${diagnostic.label}`);
 }
 
+export function resultPresentationTextLooksLikeRawJson(text: string): boolean {
+  const trimmed = text.trim();
+  if (!/^[{[]/.test(trimmed)) return false;
+  return /"(raw|trace|tool|toolOutput|executionUnits|uiManifest|artifacts|stdout|stderr|auditRefs|recoverActions|failureReason|claimType|claims|objects|verificationResults|diagnosticsRefs|processSummary|defaultExpandedSections)"\s*:/.test(trimmed);
+}
+
 export function resultPresentationPrimaryDiagnostics(contract: Pick<ResultPresentationContract, 'diagnosticsRefs'>) {
   return (contract.diagnosticsRefs ?? []).filter((diagnostic) => diagnostic.primary);
 }

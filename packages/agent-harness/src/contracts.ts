@@ -87,6 +87,88 @@ export type HarnessRunState =
   | 'cancelled'
   | 'failed'
   | 'completed';
+export type WorkspaceMemoryEntryKind =
+  | 'artifact-ref'
+  | 'recent-run'
+  | 'known-failure'
+  | 'downloaded-ref'
+  | 'verified-claim'
+  | 'opened-file'
+  | 'capability-outcome';
+export type WorkspaceMemoryValidity = 'valid' | 'stale' | 'expired' | 'invalid' | 'unknown';
+export type WorkspaceMemoryReuseAction = 'reuse' | 'skip-duplicate' | 'refresh' | 'rerun' | 'ignore';
+export type WorkspaceMemoryStaleReason =
+  | 'file-changed'
+  | 'capability-version-changed'
+  | 'user-requested-rerun'
+  | 'expired'
+  | 'invalidated'
+  | 'source-run-failed'
+  | 'missing-provenance'
+  | 'low-confidence';
+export type ParallelWorkOwnerKind = 'main-agent' | 'subagent' | 'script' | 'verifier' | 'runtime';
+export type ParallelWorkExecutionKind = 'critical-path' | 'sidecar' | 'parallel-script' | 'verifier' | 'subagent';
+export type ParallelWorkStatus =
+  | 'planned'
+  | 'ready'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'skipped'
+  | 'cancelled'
+  | 'deferred'
+  | 'merged';
+export type ParallelWorkConflictKind =
+  | 'shared-write'
+  | 'external-mutation'
+  | 'expensive-download'
+  | 'dependency-cycle'
+  | 'budget-exhausted'
+  | 'owner-scope-missing';
+export type ParallelWorkEarlyStopReason =
+  | 'first-result-ready'
+  | 'deadline-exceeded'
+  | 'low-value-sidecar'
+  | 'dependency-failed'
+  | 'budget-exhausted'
+  | 'cancel-requested'
+  | 'conflict-guard';
+export type FirstResultKind = 'answer' | 'candidate-list' | 'partial-artifact' | 'failure-reason' | 'needs-human';
+export type FirstResultStatus = 'ready' | 'partial' | 'failed' | 'needs-human';
+export type BackgroundContinuationTrigger =
+  | 'foreground-budget-exhausted'
+  | 'first-result-deadline'
+  | 'user-requested-background'
+  | 'deep-verification'
+  | 'repair-continuation';
+export type BackgroundContinuationStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type ContinuationRevisionKind = 'evidence-added' | 'artifact-added' | 'verification-added' | 'repair-added' | 'finalization';
+export type ExplorationActivityKind = 'retrieval' | 'download' | 'artifact-scan' | 'verifier' | 'repair';
+export type ExplorationEarlyStopReason =
+  | 'answer-sufficient'
+  | 'evidence-sufficient'
+  | 'diminishing-returns'
+  | 'budget-near-exhaustion'
+  | 'user-goal-satisfied'
+  | 'duplicate-exploration'
+  | 'first-result-ready'
+  | 'human-required';
+export type ExplorationDedupKeyKind = 'ref' | 'query-provider' | 'artifact-hash' | 'verifier-result' | 'download-url' | 'repair-signature';
+export type StartupContextSectionKind =
+  | 'always-on'
+  | 'capability-brief-index'
+  | 'workspace-memory'
+  | 'artifact-index'
+  | 'recent-runs'
+  | 'policy-reminders';
+export type StartupContextInvalidationReason =
+  | 'workspace-changed'
+  | 'capability-registry-changed'
+  | 'session-changed'
+  | 'run-changed'
+  | 'ttl-expired'
+  | 'source-ref-changed';
+export type StartupContextExpansionKind = 'capability-manifest' | 'view-manifest' | 'verifier-manifest' | 'policy-doc' | 'artifact-index' | 'run-record';
 
 export interface HarnessInput {
   requestId?: string;
@@ -105,6 +187,9 @@ export interface HarnessInput {
   evaluationMode?: HarnessEvaluationMode;
   humanApprovalSatisfied?: boolean;
   budgetOverrides?: PartialHarnessBudgets;
+  startupContextEnvelope?: StartupContextEnvelope;
+  workspaceMemoryIndex?: WorkspaceMemoryIndex;
+  parallelWorkPlan?: ParallelWorkPlan;
 }
 
 export interface HarnessRuntime {
@@ -467,6 +552,271 @@ export interface HarnessInteractionProgressEvent {
   interaction?: ProgressInteractionRequest;
 }
 
+export interface WorkspaceMemoryProvenance {
+  source: 'runtime' | 'harness' | 'capability' | 'user' | 'imported';
+  sourceRef: string;
+  sourceRunId?: string;
+  producedAt: string;
+  observedAt?: string;
+  capabilityId?: string;
+  capabilityVersion?: string;
+  artifactRef?: string;
+  fileRef?: string;
+  contentHash?: string;
+}
+
+export interface WorkspaceMemoryEntry {
+  id: string;
+  kind: WorkspaceMemoryEntryKind;
+  ref: string;
+  title?: string;
+  summary?: string;
+  tags?: string[];
+  sourceRunId?: string;
+  provenance: WorkspaceMemoryProvenance;
+  validity: WorkspaceMemoryValidity;
+  confidence: number;
+  expiresAt?: string;
+  lastValidatedAt?: string;
+  invalidatedAt?: string;
+  invalidationReason?: WorkspaceMemoryStaleReason;
+  evidenceRefs?: string[];
+  duplicateOf?: string;
+  invalidationKeys?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface WorkspaceMemoryIndex {
+  schemaVersion: 'sciforge.workspace-memory-index.v1';
+  indexId?: string;
+  workspaceId: string;
+  generatedAt: string;
+  sourceRefs?: string[];
+  entries: WorkspaceMemoryEntry[];
+  artifactRefs: string[];
+  recentRuns: string[];
+  knownFailures: string[];
+  downloadedRefs: string[];
+  verifiedClaims: string[];
+  openedFiles: string[];
+  capabilityOutcomes: string[];
+}
+
+export interface WorkspaceMemoryStaleSignal {
+  ref?: string;
+  fileRef?: string;
+  contentHash?: string;
+  capabilityId?: string;
+  capabilityVersion?: string;
+  userRequestedRerun?: boolean;
+  invalidatedRefs?: string[];
+  sourceRunStatus?: 'completed' | 'failed' | 'cancelled' | 'unknown';
+}
+
+export interface WorkspaceMemoryStaleAssessment {
+  entryId: string;
+  validity: WorkspaceMemoryValidity;
+  staleReasons: WorkspaceMemoryStaleReason[];
+  refreshRequired: boolean;
+}
+
+export interface WorkspaceMemoryReuseDecision {
+  schemaVersion: 'sciforge.workspace-memory-reuse-decision.v1';
+  decisionId: string;
+  requestId?: string;
+  reusedEntries: WorkspaceMemoryEntry[];
+  skippedDuplicateSteps: WorkspaceMemoryReuseStep[];
+  staleEntries: WorkspaceMemoryStaleAssessment[];
+  actions: WorkspaceMemoryReuseActionRecord[];
+  auditNote: HarnessAuditNote;
+}
+
+export interface WorkspaceMemoryReuseStep {
+  stepId: string;
+  reason: string;
+  reusedEntryId: string;
+  ref: string;
+}
+
+export interface WorkspaceMemoryReuseActionRecord {
+  entryId: string;
+  action: WorkspaceMemoryReuseAction;
+  reason: string;
+  staleReasons?: WorkspaceMemoryStaleReason[];
+}
+
+export interface ParallelWorkOwner {
+  id: string;
+  kind: ParallelWorkOwnerKind;
+  owns: string[];
+  readOnly?: boolean;
+}
+
+export interface ParallelWorkTask {
+  id: string;
+  title?: string;
+  dependsOn?: string[];
+  readSet: string[];
+  writeSet: string[];
+  externalResourceKeys?: string[];
+  sideEffectClass: CapabilitySideEffectClass;
+  costClass: CapabilityCostClass;
+  deadlineMs: number;
+  owner: ParallelWorkOwner;
+  expectedOutput: string;
+  executionKind?: ParallelWorkExecutionKind;
+  criticalPath?: boolean;
+  valueScore?: number;
+}
+
+export interface ParallelWorkConflict {
+  kind: ParallelWorkConflictKind;
+  taskIds: string[];
+  resource: string;
+  resolution: 'serialize' | 'skip' | 'cancel' | 'defer';
+  reason: string;
+}
+
+export interface ParallelWorkPlan {
+  schemaVersion: 'sciforge.parallel-work-plan.v1';
+  planId: string;
+  latencyTier: LatencyTier;
+  maxConcurrency: number;
+  firstResultDeadlineMs: number;
+  backgroundAfterMs?: number;
+  tasks: ParallelWorkTask[];
+  batches: ParallelWorkBatch[];
+  conflicts: ParallelWorkConflict[];
+  earlyStopPolicy: ParallelWorkEarlyStopPolicy;
+}
+
+export interface ParallelWorkBatch {
+  index: number;
+  taskIds: string[];
+  blocksFirstResult: boolean;
+  deadlineMs: number;
+}
+
+export interface ParallelWorkEarlyStopPolicy {
+  sidecarValueThreshold: number;
+  cancelSidecarsAfterFirstResult: boolean;
+  stopReasons: ParallelWorkEarlyStopReason[];
+}
+
+export interface ParallelWorkTaskTrace {
+  taskId: string;
+  ownerId: string;
+  status: ParallelWorkStatus;
+  batchIndex?: number;
+  startedAtMs?: number;
+  finishedAtMs?: number;
+  reason?: string;
+  outputRef?: string;
+  mergeDecision?: 'merge' | 'ignore' | 'defer' | 'needs-human';
+}
+
+export interface ParallelWorkResult {
+  schemaVersion: 'sciforge.parallel-work-result.v1';
+  planId: string;
+  status: 'complete' | 'partial' | 'cancelled' | 'failed';
+  taskResults: ParallelWorkTaskTrace[];
+  firstResultReadyAfterBatch?: number;
+  cancelledTaskIds: string[];
+  skippedTaskIds: string[];
+  mergeDecisions: ParallelWorkTaskTrace[];
+}
+
+export interface StartupContextEnvelope {
+  schemaVersion: 'sciforge.startup-context-envelope.v1';
+  envelopeId: string;
+  generatedAt: string;
+  ttlMs: number;
+  hash: string;
+  sourceRefs: string[];
+  workspace: {
+    root: string;
+    branch?: string;
+    dirty?: boolean;
+  };
+  session: {
+    sessionId?: string;
+    runId?: string;
+    backend?: string;
+  };
+  budget: {
+    latencyTier: LatencyTier;
+    maxPromptTokens: number;
+    maxToolCalls: number;
+  };
+  alwaysOnFacts: Record<string, unknown>;
+  capabilityBriefIndex: CapabilityBriefIndex;
+  workspaceMemoryRef?: string;
+  sections: StartupContextSection[];
+  policyReminders: string[];
+  invalidationKeys: string[];
+  cache?: StartupContextCache;
+  onDemandExpansion?: StartupOnDemandExpansion;
+  noDuplicateExplorationGuard?: StartupNoDuplicateExplorationGuard;
+}
+
+export interface StartupContextSection {
+  id: string;
+  kind: StartupContextSectionKind;
+  ref: string;
+  tokenEstimate: number;
+  expandOnDemand: boolean;
+}
+
+export interface StartupContextCache {
+  cacheKey: string;
+  validUntil: string;
+  sourceHashes: Record<string, string>;
+  invalidatesOn: StartupContextInvalidationReason[];
+}
+
+export interface StartupOnDemandExpansion {
+  schemaVersion: 'sciforge.startup-context.on-demand-expansion.v1';
+  defaultPolicy: 'expand-selected-ref-only';
+  entries: StartupExpansionRef[];
+}
+
+export interface StartupExpansionRef {
+  ref: string;
+  kind: StartupContextExpansionKind;
+  targetId: string;
+  sourceRef?: string;
+  hash?: string;
+  summary?: string;
+}
+
+export interface StartupNoDuplicateExplorationGuard {
+  schemaVersion: 'sciforge.startup-context.no-duplicate-exploration-guard.v1';
+  coveredFacts: string[];
+  coveredRefs: string[];
+  skipExpensiveExplorationBeforeExpansion: boolean;
+  duplicateExplorationStopReasons: string[];
+}
+
+export interface CapabilityBriefIndex {
+  schemaVersion: 'sciforge.capability-brief-index.v1';
+  generatedAt: string;
+  sourceRefs: string[];
+  briefs: CapabilityBrief[];
+}
+
+export interface CapabilityBrief {
+  id: string;
+  name: string;
+  purpose: string;
+  inputRefs: string[];
+  outputRefs: string[];
+  costClass: CapabilityCostClass;
+  latencyClass: CapabilityLatencyClass;
+  sideEffectClass: CapabilitySideEffectClass;
+  manifestRef: string;
+  expansionRef: string;
+}
+
 export interface ProgressEventBudget {
   elapsedMs?: number;
   remainingMs?: number;
@@ -480,6 +830,102 @@ export interface ProgressInteractionRequest {
   kind: 'clarification' | 'human-approval' | 'guidance';
   required: boolean;
   promptRef?: string;
+}
+
+export interface FirstResultRecord {
+  schemaVersion: 'sciforge.first-result-record.v1';
+  id: string;
+  requestId?: string;
+  runId?: string;
+  traceRef?: string;
+  latencyTier: LatencyTier;
+  kind: FirstResultKind;
+  status: FirstResultStatus;
+  createdAtMs: number;
+  deadlineMs: number;
+  elapsedMs?: number;
+  presentationRef?: string;
+  artifactRefs: string[];
+  evidenceRefs: string[];
+  failureReason?: string;
+  needsHumanReason?: string;
+  backgroundContinuationId?: string;
+}
+
+export interface BackgroundContinuationRevision {
+  id: string;
+  revision: number;
+  kind: ContinuationRevisionKind;
+  createdAtMs: number;
+  summary: string;
+  supersedesRevisionId?: string;
+  presentationRef?: string;
+  artifactRefs: string[];
+  evidenceRefs: string[];
+  verificationRefs: string[];
+  provenanceRefs: string[];
+}
+
+export interface BackgroundContinuationRecord {
+  schemaVersion: 'sciforge.background-continuation-record.v1';
+  id: string;
+  requestId?: string;
+  runId?: string;
+  traceRef?: string;
+  latencyTier: LatencyTier;
+  trigger: BackgroundContinuationTrigger;
+  status: BackgroundContinuationStatus;
+  createdAtMs: number;
+  foregroundResultId: string;
+  reason: string;
+  provenanceRefs: string[];
+  revisions: BackgroundContinuationRevision[];
+}
+
+export interface ContinuationPolicy {
+  latencyTier: LatencyTier;
+  firstResultDeadlineMs: number;
+  backgroundAfterMs: number;
+  firstResultKinds: FirstResultKind[];
+  backgroundEnabled: boolean;
+  revisionRequired: boolean;
+  provenanceRequired: boolean;
+  foregroundStatus: ResultPresentationStatus;
+  backgroundStatus: ResultPresentationStatus;
+  allowedTriggers: BackgroundContinuationTrigger[];
+}
+
+export interface ExplorationTopKPolicy {
+  retrieval: number;
+  download: number;
+  artifactScan: number;
+  verifier: number;
+  repair: number;
+}
+
+export interface ExplorationEarlyStopPolicy {
+  reasons: ExplorationEarlyStopReason[];
+  budgetRemainingRatioThreshold: number;
+  diminishingReturnMinNewEvidence: number;
+  stopAfterFirstResultForSidecars: boolean;
+  remainingUpgradePaths: CapabilityEscalationTier[];
+  requireStopReason: boolean;
+}
+
+export interface ExplorationDedupPolicy {
+  enabled: boolean;
+  keyKinds: ExplorationDedupKeyKind[];
+  scope: 'request' | 'run' | 'workspace';
+  ttlMs?: number;
+  skipDuplicateByDefault: boolean;
+}
+
+export interface ExplorationPolicy {
+  latencyTier: LatencyTier;
+  topK: ExplorationTopKPolicy;
+  earlyStop: ExplorationEarlyStopPolicy;
+  dedup: ExplorationDedupPolicy;
+  auditReasonRequired: boolean;
 }
 
 export interface PromptDirective {

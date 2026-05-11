@@ -108,7 +108,7 @@ const server = createServer(async (req, res) => {
     assert.match(inspectText, /"source": "request\.uiState\.repairContextPolicy"/);
     assert.match(inspectText, /"source": "request\.uiState\.capabilityPolicy\.repairContextPolicy"/);
     const codeRef = String(metadata.codeRef || '');
-    assert.match(codeRef, /^\.sciforge\/tasks\/generated-literature-/);
+    assert.match(codeRef, /^\.sciforge\/sessions\/.+\/tasks\/generated-literature-/);
     await writeFile(join(workspace, codeRef), fixedTask);
     const result = {
       ok: true,

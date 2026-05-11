@@ -15,7 +15,8 @@
     ".": "./src/index.ts",
     "./contracts": "./src/contracts.ts",
     "./profiles": "./src/profiles.ts",
-    "./runtime": "./src/runtime.ts"
+    "./runtime": "./src/runtime.ts",
+    "./startup-context": "./src/startup-context.ts"
   },
   "files": [
     "src",

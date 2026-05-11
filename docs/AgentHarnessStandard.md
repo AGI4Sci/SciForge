@@ -181,6 +181,30 @@ export interface HarnessCandidate {
 
 用户显式选择能力可以提高优先级，但仍必须通过安全、配置和预算 gate。
 
+### Bounded Parallel Orchestration
+
+Parallel planning belongs to the latency/capability policy layer. It describes safe work splitting and merge semantics; it does not directly spawn agents, mutate files, call tools, or hide side effects from the main runtime.
+
+`ParallelWorkPlan` is the stable contract:
+
+```ts
+export interface ParallelWorkPlan {
+  schemaVersion: 'sciforge.parallel-work-plan.v1';
+  planId: string;
+  latencyTier: LatencyTier;
+  maxConcurrency: number;
+  firstResultDeadlineMs: number;
+  tasks: ParallelWorkTask[];
+  batches: ParallelWorkBatch[];
+  conflicts: ParallelWorkConflict[];
+  earlyStopPolicy: ParallelWorkEarlyStopPolicy;
+}
+```
+
+Every task must declare `dependsOn`, `readSet`, `writeSet`, `sideEffectClass`, `costClass`, `deadlineMs`, `owner`, and `expectedOutput`. Owners include main agent, subagent, script, verifier, and runtime. Subagents must declare their owned files/modules/artifacts up front, and a task that writes outside that scope is skipped by the conflict guard rather than entrusted to best effort instructions.
+
+The default DAG planner may parallelize independent reads, smoke tests, provider preflights, verifiers, and artifact scans. It must serialize shared write sets, shared external mutation keys, and duplicate expensive downloads. Critical-path batches block first result; low-value sidecars can be cancelled or deferred after the first readable result. The result projection records each task as succeeded, failed, skipped, cancelled, deferred, or merged, plus the merge decision for user-visible or audit output.
+
 ### Level 3: Dispatch
 
 | Hook | 作用 | 典型输出 |
@@ -433,6 +457,7 @@ Decision merge 必须 deterministic。
 - side-effect allowance 默认 fail closed。
 - prompt directives 必须带 `sourceCallbackId`，并由 renderer 去重、排序、裁剪。
 - prompt render plan 必须保留 `sourceRefs.contractRef` / `sourceRefs.traceRef`、结构化 `renderedEntries` 和 deterministic `renderDigest`，使 prompt 策略句可以从 `HarnessContract` / `HarnessTrace` refs 重建，而不是只能从自然语言 prompt 反推。
+- prompt render plan 必须为当前 profile `moduleStack` 输出 bounded module directive preview；preview 用于研究比较，不能替代 module/callback 的结构化决策。
 - 冲突时保留更保守 decision，并写入 trace。
 
 示例：
@@ -586,3 +611,4 @@ Runtime adapters stay in `src/runtime/**`; reusable policy and contracts live in
 - 新增 repair 路径先写 `ValidationDecision` 和 `RepairDecision`，不能在 runner 分支里写 if。
 - 每个 profile 必须有最小实验 fixture 和 trace assertion。
 - 每个 callback 必须声明 owned stages、input facts、decision fields、merge behavior 和测试覆盖。
+- 研究 prompt/policy 时先读 [`HarnessResearchGuide.md`](HarnessResearchGuide.md)；fresh/continuity/tool-use/repair/latency 策略不能重新写进 AgentServer prompt builder。

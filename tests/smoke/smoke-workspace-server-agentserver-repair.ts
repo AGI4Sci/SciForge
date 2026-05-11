@@ -66,7 +66,7 @@ const agentServer = createServer(async (req, res) => {
     return;
   }
   const codeRef = typeof metadata.codeRef === 'string' ? metadata.codeRef : '';
-  assert.ok(codeRef.startsWith('.sciforge/tasks/'), `expected repair codeRef under .sciforge/tasks/, got ${codeRef || '<missing>'}`);
+  assert.match(codeRef, /^\.sciforge\/(?:sessions\/.+\/)?tasks\//, `expected repair codeRef under .sciforge tasks, got ${codeRef || '<missing>'}`);
   const taskPath = join(repairWorkspace, codeRef);
   const source = await readFile(taskPath, 'utf8');
   await writeFile(taskPath, source

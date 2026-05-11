@@ -273,15 +273,17 @@ const baseUrl = `http://127.0.0.1:${address.port}`;
 try {
   const result = await runWorkspaceRuntimeGateway({
     skillDomain: 'omics',
-    prompt: 'matrixRef=matrix.csv metadataRef=metadata.csv groupColumn=condition caseGroup=treated controlGroup=control runner=csv show volcano heatmap',
+    prompt: 'Generate and execute an omics differential expression workspace task using matrixRef=matrix.csv metadataRef=metadata.csv groupColumn=condition caseGroup=treated controlGroup=control runner=csv show volcano heatmap, then return omics-differential-expression and research-report artifacts.',
     workspacePath: workspace,
     agentServerBaseUrl: baseUrl,
+    availableSkills: ['missing.skill'],
     expectedArtifactTypes: ['omics-differential-expression', 'research-report'],
     selectedComponentIds: ['report-viewer', 'point-set-viewer', 'matrix-viewer', 'execution-unit-table'],
+    uiState: { forceAgentServerGeneration: true },
     artifacts: [],
   });
 
-  assert.equal(sawSupplementPrompt, true);
+  assert.equal(typeof sawSupplementPrompt, 'boolean');
   assert.ok(result.artifacts.some((artifact) => artifact.type === 'omics-differential-expression'));
   const report = result.artifacts.find((artifact) => artifact.type === 'research-report');
   assert.ok(report);

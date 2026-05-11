@@ -277,6 +277,135 @@ Todo：
 - [x] harness 改动可以量化“更快、更直接”，而不是只凭主观感觉。
 - [x] deep 能力没有被提速改动破坏。
 
+### H011 Persistent Startup Context Envelope
+
+职责：把每次 agent 都会重复探索的固定知识沉淀为版本化启动上下文，降低开局成本，同时避免把大量文档硬塞进 prompt。
+
+分层设计：
+
+- Always-on tiny context：workspace root、当前 session/run、关键 refs、当前 backend、权限、预算、不可破坏原则。
+- Capability brief index：能力名称、用途、输入输出、成本、side effects、artifact/view/verifier 类型摘要。
+- On-demand expansion：只有选中某能力或策略时，才展开 manifest、docs 或详细 contract。
+- Versioned cache：每份 envelope 带 `generatedAt`、`sourceRefs`、`hash`、`ttl`，避免过期知识误导 agent。
+
+Todo：
+
+- [x] 定义 `StartupContextEnvelope` contract，覆盖 workspace、session、scenario、recent runs、artifact index、capability brief、policy reminders。
+- [x] 在 runtime gateway 启动/每轮请求前生成 tiny context，注入到 harness input 和 AgentServer handoff，而不是散落在 prompt builder。
+- [x] 建立 capability brief index，来源必须是 capability manifest / package registry / view manifest，不从自然语言 prompt 猜。
+- [x] 增加 envelope cache 和 invalidation：workspace 变化、capability registry 变化、session/run 变化时刷新。
+- [x] 支持 on-demand expansion：agent 需要某能力时，通过 ref 展开对应 manifest/docs 摘要。
+- [x] 增加 no-duplicate-exploration guard：如果 envelope 已包含 workspace root、artifact index、recent refs，agent 不应再次做昂贵扫描。
+
+验收：
+
+- [x] 新 run 的开局 prompt 不再反复询问/探索 workspace 在哪、可用能力有哪些、最近 artifact 在哪。
+- [x] envelope 小而稳定，不显著增加 prompt token。
+- [x] 固定知识可从 refs/manifest/cache 重建，过期时自动刷新。
+
+### H012 Bounded Parallel Orchestration
+
+职责：让 agent 自动识别可并行工作，并在依赖、写范围、side effect、预算和用户等待时间约束下并行执行。
+
+通用原则：
+
+- 并行是默认优化，但必须 bounded。
+- critical path 留在主流程优先推进。
+- sidecar tasks 可交给 subagent、并行脚本或独立 verifier。
+- 有共享写范围、强依赖或高 side effect 的任务不盲目并行。
+
+Todo：
+
+- [x] 定义 `ParallelWorkPlan` contract：task id、dependency、read set、write set、side effect class、cost、deadline、owner、expected output。
+- [x] 在 harness capability/latency 阶段增加 parallelism planner，自动把任务拆成 DAG。
+- [x] 支持 subagent ownership：每个 subagent 必须声明负责文件/模块/artifact，不回滚他人修改。
+- [x] 支持并行脚本执行：独立 smoke、provider preflight、verifier、artifact scan 可并行运行。
+- [x] 增加 conflict guard：同一文件写入、同一外部资源 mutation、同一昂贵下载默认串行。
+- [x] 增加 cancellation/early stop：sidecar 超时或收益不足时不阻塞 first result。
+- [x] trace 中记录并行任务的开始、结束、结果、跳过、取消和合并决策。
+
+验收：
+
+- [x] 可并行的读、检索、验证、preflight 会自动并行。
+- [x] 有依赖或共享写范围的任务不会乱并行。
+- [x] first result 不等待低价值 sidecar 完成。
+
+### H013 Workspace Memory and Reuse Index
+
+职责：把 session 内已完成的探索、下载、读取、验证和失败原因转成可复用索引，避免 agent 每轮重新做同样工作。
+
+Todo：
+
+- [x] 维护 `WorkspaceMemoryIndex`：artifact refs、recent runs、known failures、downloaded refs、verified claims、opened files、capability outcomes。
+- [x] 每个条目带 provenance、source run、validity、confidence、expiry。
+- [x] harness context selection 优先使用 memory index，而不是重新扫描 workspace。
+- [x] 对重复请求返回“已复用哪些 refs / 跳过哪些重复步骤”的折叠审计说明。
+- [x] 增加 stale detection：文件变化、capability version 变化、用户要求重跑时使缓存失效。
+
+验收：
+
+- [x] 多轮追问不会重复下载/读取/验证同一 artifact，除非用户明确要求重跑。
+- [x] 复用决策可审计，且不会隐藏过期风险。
+
+### H014 First Result + Background Continuation
+
+职责：让用户更快看到结果，同时允许深任务继续补证据、补 artifact、补验证。
+
+Todo：
+
+- [x] 每个 latency tier 定义 first result SLA 和 background threshold。
+- [x] first result 可以是 answer、candidate list、partial artifact、failure reason 或 needs-human。
+- [x] 超出前台预算时自动产生 background continuation record。
+- [x] 后台完成后生成 revision，而不是覆盖原始答案。
+- [x] UI 区分“当前可用结论”和“后台仍在补充”。
+
+验收：
+
+- [x] 用户在短时间内总能看到当前可用结果。
+- [x] 后台结果有 revision/provenance，不破坏审计链。
+
+### H015 Top-K, Early Stop, and Exploration Dedup Policy
+
+职责：把“少做无收益探索”变成 harness 策略，而不是依赖 agent 自觉。
+
+Todo：
+
+- [x] 为 retrieval、download、artifact scan、verifier、repair 设置 per-tier Top-K 默认值。
+- [x] 定义 early stop 条件：答案足够、证据足够、收益递减、预算接近耗尽、用户目标已满足。
+- [x] 定义 duplicate exploration detector：同 ref、同 query、同 provider、同 artifact hash、同 verifier result 不重复执行。
+- [x] 每次 early stop 都要写明停止原因和剩余可选升级路径。
+- [x] deep/background tier 可放宽 Top-K，但必须显式记录原因。
+
+验收：
+
+- [x] agent 不为了“完整流程”继续探索。
+- [x] 用户能看到为什么停止，以及如何要求更深一层。
+
+### H016 Harness Prompt/Policy Research Entry Points
+
+职责：为研究 harness 设计提供统一入口，避免研究者直接改 AgentServer 大 prompt 字符串导致策略重新散落。
+
+统一入口：
+
+- Contract：`packages/agent-harness/src/contracts.ts`
+- Profile / policy callback：`packages/agent-harness/src/profiles.ts`
+- Runtime merge / stage execution：`packages/agent-harness/src/runtime.ts`
+- Runtime gateway handoff：`src/runtime/gateway/agent-harness-shadow.ts`
+- Prompt render projection：`buildAgentHarnessPromptRenderPlan`
+- AgentServer final prompt renderer：`src/runtime/gateway/agentserver-prompts.ts`
+
+Todo：
+
+- [x] 在 docs 中写 `Harness Research Guide`，说明改策略、改提示、改 profile、改 module 的正确位置。
+- [x] 禁止把 fresh/continuity/tool-use/repair/latency 策略直接写进 AgentServer prompt 字符串；prompt 只能渲染 contract/directives。
+- [x] 增加 smoke：prompt 中不内联完整 contract/trace，只包含 bounded render plan。
+- [x] 为每个 harness module 输出 prompt directive preview，便于研究者比较不同策略。
+
+验收：
+
+- [x] 研究者知道在哪里统一修改 harness 逻辑和提示投影。
+- [x] prompt builder 保持 renderer 身份，不重新成为策略真相源。
+
 ## 当前里程碑
 
 - [x] M1：完成 `latencyTier` contract 与默认 tier budgets。
@@ -286,6 +415,11 @@ Todo：
 - [x] M5：实现 first result deadline 和 partial-first progress。
 - [x] M6：把 profile 改造成 module stack 配置。
 - [x] M7：建立 harness latency benchmark，并用 smoke 固化。
+- [x] M8：完成 Startup Context Envelope 与 Workspace Memory Index。
+- [x] M9：完成 Bounded Parallel Orchestration。
+- [x] M10：完成 First Result + Background Continuation。
+- [x] M11：完成 Top-K / Early Stop / Dedup 策略。
+- [x] M12：完成 Harness Research Guide 和 prompt/policy 统一入口。
 
 ## 已清理内容
 

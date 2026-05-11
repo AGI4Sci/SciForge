@@ -418,6 +418,7 @@ export {
   findingHasCitationOrUncertainty,
   projectResultPresentationVisibility,
   resultPresentationPrimaryDiagnostics,
+  resultPresentationTextLooksLikeRawJson,
   validateResultPresentationContract,
 } from './result-presentation';
 export type {
