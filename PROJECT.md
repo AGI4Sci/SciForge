@@ -1,12 +1,23 @@
 # SciForge - PROJECT.md
 
-最后更新：2026-05-11
+最后更新：2026-05-12
 
 ## 当前目标
 
-把 SciForge 的 harness 从“完整复杂任务治理系统”升级为 **Latency-first、分层、模块化、可研究的实时调度框架**。
+优化 SciForge 的多轮聊天用户体验，让复杂长对话在真实使用场景中保持 **稳定、流畅、正确、token 高效、响应更快**。
 
-核心目标不是为某个文献、代码、GUI 或数据任务做特例提速，而是让任何场景都先走最小可行路径，尽早回答用户问题；只有在证据收益明确、用户要求明确、预算允许时，才逐层升级到更深的工具调用、验证、修复、后台执行和审计。
+稳定：重启、刷新、恢复历史、中断继续、编辑历史消息、后台任务回访等情况下，系统都能恢复清晰的任务状态，不丢失关键上下文，不重复执行危险 side effect。
+
+流畅：用户不需要长时间等待黑盒执行；系统必须尽早产出可读 partial、明确当前进度、说明仍在后台继续的部分，并支持随时继续、暂停、恢复或改变目标。
+
+正确：多轮追问必须引用正确的 artifact、run、execution unit 和历史分支；失败、过期、不确定、证据不足时要明确说明，而不是假装完成或只展示 raw trace。
+
+Token 高效：每轮只携带当前任务真正需要的 state digest、refs、摘要和约束，避免重复塞入完整历史、完整 trace、完整文件或已稳定 artifact 内容；需要展开时按需读取。
+
+响应更快：默认先走最小可行路径，优先产出 first readable result；长任务、深验证、补证据、审计和报告扩展可以后台继续，不阻塞用户看到当前可用结果。
+
+本阶段重点不是扩展新能力，也不是为某个固定案例打补丁，而是建立通用的多轮对话状态、恢复、历史编辑、分支、token budget、回答速度、benchmark 和指标体系，让任意场景下的 agent 行为都更可预测、更可审计、更贴近用户期望。
+
 
 ## 开工前必读
 
@@ -18,26 +29,6 @@
 - [`docs/Extending.md`](docs/Extending.md)：新增 capability、artifact、view、scenario、package 时的扩展方式。
 - [`README.md`](README.md)：产品定位、快速启动、核心概念和当前能力范围。
 
-## 设计判断
-
-当前 harness 已经抽离出了不少正确边界：
-
-- `HarnessContract` 已集中承载 intent、context、capability、budget、verification、repair、progress、presentation。
-- `HarnessProfile` 和 callback/stage 机制已经使策略不再散落在 UI 或 prompt builder。
-- merge 规则、trace、audit note、progress/presentation plan 已经形成可重建的治理层。
-- profile 如 `fast-answer`、`balanced-default`、`research-grade`、`debug-repair`、`privacy-strict` 已经具备可配置雏形。
-
-但它还没有完全成为理想的“分层模块化 harness 框架”：
-
-- profile 偏静态，缺少请求级 `latencyTier` 作为第一决策。
-- stage 是完整枚举，但执行时缺少 `criticalPath` / `auditPath` 分层。
-- merge 规则安全性强，但 latency 维度不够灵活，容易只升级、不降级。
-- 验证和 repair 已抽离，但粒度仍偏粗，普通任务可能承担研究级成本。
-- progress/silence policy 有结构，但缺少硬性的 `partialResultDeadline`。
-- capability 选择缺少通用 cheap-first 升级序列，容易过早进入 project/runtime/generation 深流程。
-
-因此下一阶段的重点是：**保留 harness-governed 的可审计性，同时把默认执行路径变轻、变快、变可中断。**
-
 ## 不变原则
 
 - 不为具体场景、prompt、论文、artifact 名称或任务类型写特例；所有修改必须通用、适应任何场景
@@ -46,380 +37,230 @@
 - Safety policy 继续 fail closed；latency、验证、上下文和 repair 深度必须可按层级收缩。
 - 复杂任务要可审计，但审计路径不能阻塞用户看到第一份可读结果。
 - 任何长任务都必须产出 structured partial/failure，而不是等总超时后只显示 runtime trace。
+- 不用“无限追加上下文”换取正确性；多轮稳定性必须依赖 state digest、refs、cache、checkpoint 和按需展开。
 
 ## 任务板
 
-### H001 Latency Tier 作为第一决策
 
-职责：在 harness contract 中引入通用 `latencyTier`，让所有场景先判断回答深度，再选择 context、capability、budget、verification、repair 和 presentation。
+### H017 Complex Multi-turn Conversation Stress Suite
 
-建议层级：
+职责：建立一套复杂多轮对话压测任务，用来暴露 agent 在长任务、追问、失败恢复、上下文复用、后台继续和速度控制上的通用问题。压测不能围绕某个固定案例打补丁，fixture 可以来自文献调研、代码修复、runtime 诊断、artifact 分析、数据分析等场景，但评价目标必须是跨场景的行为质量。
 
-- `instant`：不调用外部工具，直接回答或基于当前上下文回答。
-- `quick`：少量工具调用，几十秒内必须产出答案。
-- `bounded`：有明确工具链，但 Top-K、下载、验证、repair 都受限。
-- `deep`：用户明确要求深入研究、复现、长报告或严格验证。
-- `background`：超出交互预算后后台继续，前台先返回 partial。
+任务类型：
 
-Todo：
+- 深度调研链路：多轮提出主题、限定时间范围、要求检索/下载/阅读全文/总结/补引用/生成报告。
+- 失败恢复链路：第一次 run 超时或失败后，用户要求诊断、恢复、复用已有证据、继续未完成部分。
+- 长报告迭代链路：先产出 partial，再根据用户反馈扩展结构、增加证据、重排章节、修正引用。
+- 多 artifact 链路：同一会话中生成、打开、修改、比较多个 artifact，后续追问必须引用正确对象。
+- 跨能力链路：检索、文件读写、代码执行、runtime state、artifact refs、verifier、后台 continuation 混合出现。
+- 约束变化链路：用户中途改变范围、格式、深度、预算、截止时间或隐私要求。
+- 多失败模式链路：网络失败、下载失败、schema failure、empty result、timeout、backend unavailable、verification failure 连续出现。
+- 速度敏感链路：用户明确要求“先给结论/不要等完整结果/继续后台跑”，系统必须快速给可读 partial。
+- 会话生命周期链路：重启、恢复历史、中断继续、编辑历史消息、分支对话、跨设备/跨 session 继续。
+- 历史一致性链路：同一历史节点支持 revert 和 continue 两种模式，必须明确状态来源、废弃范围和 artifact lineage。
 
-- [x] 在 `HarnessContract` / `HarnessDecision` / trace 中加入 `latencyTier`。
-- [x] 增加 latency tier classifier，优先基于用户显式要求、风险、side effect、上下文可用性和预计成本判断。
-- [x] 为每个 tier 定义默认 context budget、tool budget、verification、repair、progress、presentation policy。
-- [x] 增加 smoke：同一请求在不同 tier 下产生不同预算和 stage plan。
+暂缓范围：
 
-验收：
+- [ ] Computer Use / 视觉 GUI grounding 相关压测暂缓，等 grounding 模型部署后再恢复。
+- [ ] 当前阶段不要求测试视觉定位、桌面点击、跨页面视觉操作、屏幕元素 grounding 或纯视觉 GUI 自动化。
+- [ ] 浏览器刷新、关闭标签、恢复历史会话等生命周期任务继续保留，因为它们测试持久化状态和会话恢复，不依赖视觉 grounding。
 
-- [x] 简单问题不会默认进入深度 project/runtime/generation。
-- [x] 深度请求仍可显式升级，不破坏科研复现和严格验证能力。
+分级压测任务：
 
-### H002 Critical Path / Audit Path 分层执行
+5 轮任务：验证 agent 是否能在短多轮里保持目标、复用上下文、快速给结果。
 
-职责：把 harness stage 分成用户等待路径和审计补录路径，保证主答案不被完整 trace、ledger、replay metadata 阻塞。
+- [ ] T5-01 快速调研到报告：用户给主题，agent 给候选资料；用户要求筛选 Top-K；用户要求补证据；用户要求 markdown 报告；用户要求列未完成风险。
+- [ ] T5-02 失败后继续：第 1 轮启动长任务，第 2 轮注入 timeout，第 3 轮要求诊断，第 4 轮要求复用已完成部分继续，第 5 轮要求输出 final + recovery notes。
+- [ ] T5-03 约束逐步收紧：先宽泛回答，再要求只看最近时间窗口，再要求只保留高可信来源，再要求压缩成表格，再要求生成可审计引用列表。
+- [ ] T5-04 多 artifact 追问：生成 artifact A，再生成 artifact B，再比较 A/B，再修改 B，再追问 A 中原始结论，测试引用不漂移。
+- [ ] T5-05 代码任务追问：定位问题，给 patch 计划，执行修改，运行测试失败，恢复并解释下一步。
+- [ ] T5-06 数据分析追问：读取表格摘要，生成统计结果，用户要求换分组，用户要求解释异常值，用户要求导出结论。
+- [ ] T5-07 Runtime 诊断追问：读取 run 状态，定位失败阶段，用户要求查看 execution summary，用户要求导出诊断，用户要求提出通用修复任务。
+- [ ] T5-08 速度优先：用户要求先给答案，agent 给 partial；用户要求继续后台；后台结果回访；用户要求合并；用户要求列证据缺口。
+- [ ] T5-09 隐私约束切换：普通任务开始，中途用户要求不上传敏感内容，agent 重新规划上下文和工具，最后解释哪些步骤被跳过。
+- [ ] T5-10 空结果恢复：检索返回 empty，agent 给替代 query，用户缩小范围，agent 复用新 refs，最后输出 uncertainty-aware 结果。
 
-建议分层：
+10 轮任务：验证 agent 是否能承受中等长度任务状态、范围变化、重复失败和多 artifact 演化。
 
-- Critical path：intent、latency tier、minimal context、capability、budget、run、result presentation。
-- Audit path：full trace、budget ledger、repair telemetry、provenance expansion、replay metadata。
+- [ ] T10-01 深度文献调研：主题定义、检索、去重、下载、阅读全文摘要、证据矩阵、冲突结论、引用修正、报告重写、最终审计摘要。
+- [ ] T10-02 从失败 run 到可交付：启动、timeout、诊断、恢复计划、继续、schema failure、repair、partial 报告、补验证、最终报告。
+- [ ] T10-03 代码修复迭代：读需求、定位模块、实现、测试失败、缩小范围、二次修复、补测试、解释 diff、处理用户变更、最终总结。
+- [ ] T10-04 多数据源分析：导入 A、导入 B、合并、发现字段冲突、用户给映射、重算、可视化、异常解释、导出 markdown、列复现步骤。
+- [ ] T10-05 Runtime + artifact 混合：读取 task state、查看 execution unit、导出 bundle、解析失败、提出通用代码任务、用户改优先级、生成 TODO、复查 artifact refs、最终验收。
+- [ ] T10-06 长报告编辑：生成提纲、写初稿、用户改受众、补技术细节、补风险、压缩篇幅、加表格、改标题、生成 changelog、最终版本。
+- [ ] T10-07 多 backend 对比：同任务在 backend A 失败，切 backend B，复用 state，比较输出，修正引用，保留 provenance，最终推荐策略。
+- [ ] T10-08 预算耗尽降级：深任务开始，工具预算接近耗尽，agent 产出 partial，用户允许继续但不下载全文，agent 改用 metadata，最后列升级路径。
+- [ ] T10-09 用户多次改范围：宽主题、缩小领域、排除来源、增加时间范围、改输出格式、要求中英文、要求更短、要求补证据、要求删除低可信、最终审计。
+- [ ] T10-10 复杂 recovery：网络失败、下载失败、验证失败、artifact 缺失连续出现，agent 每次都要保存 checkpoint 并避免重跑已完成步骤。
+- [ ] T10-11 记忆复用：第一轮建立索引，后续多轮反复追问同一对象的不同角度，要求 agent 明确复用哪些 refs。
+- [ ] T10-12 互斥约束：用户同时要求快、全、严格验证、低成本，agent 必须解释 tradeoff 并按优先级执行。
 
-Todo：
+20 轮任务：验证 agent 在高强度长会话中是否能保持任务图、避免上下文腐烂、持续产出 partial、稳定恢复失败。
 
-- [x] 给每个 `HarnessStage` 标注 `critical`、`audit` 或 `external`。
-- [x] 支持 `criticalPathOnly` evaluation mode，quick/instant 只执行必要 hook。
-- [x] audit path 改成异步或 post-result materialization，不阻塞 first answer。
-- [x] trace 中记录哪些 audit hook 是 deferred、skipped 或 completed。
+- [ ] T20-01 端到端研究项目：选题、检索、筛选、下载、阅读、证据抽取、冲突处理、方法比较、图表生成、报告初稿、多轮修订、最终审计包。
+- [ ] T20-02 连续失败韧性：在 20 轮中依次注入 timeout、empty result、tool stderr、backend delay、schema failure、artifact missing、verification failure，要求每次都有可执行 recovery。
+- [ ] T20-03 大型代码改造对话：需求澄清、架构读取、拆任务、并行计划、实现、测试、失败、回滚计划、二次实现、文档更新、性能检查、最终总结。
+- [ ] T20-04 多 artifact 生命周期：创建 5 个 artifact，跨 20 轮修改、比较、引用、废弃、恢复、合并，测试 artifact identity 和 provenance 稳定性。
+- [ ] T20-05 长数据分析项目：多文件载入、清洗、特征定义、统计、可视化、异常分析、用户多次改口径、导出报告、复现实验记录。
+- [ ] T20-06 Runtime 长流程：跨多个 run/artifact 检查状态、导出诊断、失败分析、重试规划、后台任务检查、结果回访，要求 presentation state 和 runtime state 对齐。
+- [ ] T20-07 背景任务回访：前 5 轮启动多个 background continuation，中间 10 轮处理其他任务，最后 5 轮回收后台结果并合并 revision。
+- [ ] T20-08 多目标冲突：用户交替提出调研、代码、数据、runtime/artifact 四类目标，agent 必须维护任务队列，不能把不同目标互相污染。
+- [ ] T20-09 超长报告协作：从 outline 到 3 次大改、5 次局部修订、引用修复、证据缺口处理、最终生成 markdown 和变更摘要。
+- [ ] T20-10 上下文压缩抗性：中途模拟 compaction，只保留 state digest 和 refs，后续仍要恢复任务图、artifact refs、未完成队列。
+- [ ] T20-11 高并发 sidecar：主任务推进时并行检索、验证、预检、artifact scan，测试 cancellation、merge、early stop 和 first result SLA。
+- [ ] T20-12 用户反馈驱动修复：用户多次指出结果不对、引用错、格式错、速度慢，agent 必须把反馈转成通用 task/todo，而不是临时道歉重跑。
+- [ ] T20-13 跨 session 继续：保存 checkpoint，模拟新会话恢复，继续未完成任务并解释复用状态。
+- [ ] T20-14 质量与速度拉扯：每隔几轮用户切换“快一点”和“更严谨”，agent 动态调整 verification layers、tool budget 和 presentation。
+- [ ] T20-15 审计包生成：20 轮结束后自动生成 task graph、decision trace、artifact refs、失败恢复记录、重复工作统计、最终报告。
 
-验收：
+真实会话生命周期任务：覆盖用户在真实产品里会发生的重启、恢复、中断、编辑、分支、回滚和继续。
 
-- [x] quick 任务能跳过非必要 audit hook，但仍保留可解释的 minimal trace。
-- [x] deep/background 任务仍可生成完整 audit record。
-
-### H003 Cheap-First Capability Escalation
-
-职责：把 capability 选择从“直接选择完整能力”改成通用 cheap-first 升级序列。
-
-通用顺序：
-
-1. 当前上下文直接回答。
-2. 轻量读取 metadata / summary / refs。
-3. 单工具精确执行。
-4. 少量工具组合。
-5. workspace task / generated code。
-6. deep agent project。
-7. repair rerun / background continuation。
-
-Todo：
-
-- [x] 在 `CapabilityDecision` 中加入 `escalationPlan` 或 `candidateTiers`。
-- [x] 为 capability manifest 增加 cost class、latency class、side effect class。
-- [x] 让 broker 先尝试低成本候选，失败或 evidence insufficient 时再升级。
-- [x] 每次升级必须写明收益、成本和停止条件。
-
-验收：
-
-- [x] 普通任务不会直接进入最重能力。
-- [x] 升级路径可从 trace 重建。
-
-### H004 分层 Verification Policy
-
-职责：把 verification 从单一强度改成可组合层级，避免普通任务承担研究级验证成本。
-
-建议层级：
-
-- `shape`：输出结构合法。
-- `reference`：引用、artifact、file ref 可解析。
-- `claim`：关键结论有证据或明确 uncertainty。
-- `recompute`：需要重算、重跑或复现。
-- `audit`：严格审计级验证。
-
-Todo：
-
-- [x] 将 `VerificationPolicy.intensity` 扩展为 `verificationLayers`。
-- [x] quick 默认只跑 `shape` + `reference`。
-- [x] bounded 默认跑 `shape` + `reference` + `claim`。
-- [x] deep/reproduction 才启用 `recompute` / `audit`。
-- [x] validator 输出 presentation-friendly partial，而不是把用户丢进 raw schema failure。
-
-验收：
-
-- [x] 成功/partial/failure 都能快速形成用户可读结果。
-- [x] 严格验证能力保留，但只在需要时触发。
-
-### H005 Repair Budget 与 Partial-First 策略
-
-职责：repair 不再默认吞掉用户等待时间。失败时先给 partial，再决定是否继续 repair 或后台处理。
-
-Todo：
-
-- [x] 在 `RepairContextPolicy` 中加入 per-tier repair budget。
-- [x] quick/bounded 只允许 cheap repair，失败立即 materialize partial/failure。
-- [x] deep/background 可多轮 repair，但每轮必须产生 checkpoint artifact。
-- [x] 重复失败、无代码变化、无新 evidence 时停止 repair。
-- [x] repair 结果必须进入 `ResultPresentationContract` 的 failure reason、impact、recover actions。
-
-验收：
-
-- [x] 不再出现长时间 repair 后只剩 runtime trace 的用户体验。
-- [x] 每个 repair attempt 都可审计，但不阻塞主回复。
-
-### H006 Progress Deadline 与 First Result SLA
-
-职责：把 progress 从“有事件就展示”升级为 deadline-driven 调度。
-
-建议默认 deadline：
-
-- intent/context：1-3 秒。
-- capability selection：1-5 秒。
-- first partial/result：15-30 秒。
-- bounded artifact：1-3 分钟。
-- deep task：转后台或请求确认。
+- [ ] TS-01 服务重启后继续当前对话：任务进行到 partial 后关闭并重启 UI/runtime，恢复同一会话，agent 必须识别 last stable checkpoint、pending work 和可继续动作。
+- [ ] TS-02 服务重启后后台任务回访：重启前启动 background continuation，重启后用户询问进度，系统必须恢复 background job 状态或给出可审计的丢失/重建说明。
+- [ ] TS-03 浏览器刷新后继续：前端刷新导致内存状态丢失，但 workspace/session store 仍在，agent 必须从持久化 state 恢复，而不是重新开始。
+- [ ] TS-04 关闭浏览器标签后继续：用户重新打开同一 workspace，选择历史会话，继续上次未完成任务，必须恢复 artifact refs 和 execution unit refs。
+- [ ] TS-05 恢复历史会话继续：用户打开昨天/上周的历史任务，要求“接着做”，agent 必须先判断状态是否过期、依赖是否变化、哪些证据可复用。
+- [ ] TS-06 恢复历史失败任务：历史任务以 failed 结束，用户要求继续，agent 必须生成 recovery plan，区分可复用 output、需要重跑步骤和已失效步骤。
+- [ ] TS-07 恢复历史成功任务追加追问：历史任务已 complete，用户追加新问题，agent 必须基于旧 artifact 回答，同时不把新问题错误归入旧 completion。
+- [ ] TS-08 恢复被取消任务：用户手动 cancel 后回来继续，agent 必须确认 cancel boundary，不能悄悄恢复已取消的 side effect。
+- [ ] TS-09 中断生成后继续：assistant 正在流式输出时被 stop，用户点继续，agent 必须从已生成内容和 run state 续写，避免重复前文或丢失引用。
+- [ ] TS-10 中断工具调用后继续：工具仍在运行或状态未知时用户中断，继续时必须检查实际工具结果、避免重复 side effect。
+- [ ] TS-11 中断 repair 后继续：repair 执行到一半被暂停，继续时必须识别 last repair attempt、patch state、test state 和是否允许重试。
+- [ ] TS-12 编辑最近用户消息并 revert：用户编辑最后一条需求并选择 revert 模式，系统必须废弃编辑点之后的 assistant/run/artifact 分支，基于编辑后的历史重新执行。
+- [ ] TS-13 编辑最近用户消息并 continue：用户编辑最后一条需求并选择 continue 模式，系统必须保留已有结果作为上下文，同时明确哪些结论受新需求影响。
+- [ ] TS-14 编辑较早用户消息并 revert：用户修改第 N 轮原始目标，系统必须回滚该节点之后的派生 task state、artifact refs 和 background jobs。
+- [ ] TS-15 编辑较早用户消息并 continue：用户修改第 N 轮原始目标但要求继续当前分支，系统必须创建 branch state，保留旧结果并标注与新目标的冲突。
+- [ ] TS-16 编辑 assistant 历史回答后继续：用户修正 assistant 输出中的事实/格式/引用，agent 必须把它当作用户反馈约束，而不是伪造历史 run 真的如此发生。
+- [ ] TS-17 同一历史点多分支继续：从同一 turn fork 出 A/B 两个方案，后续必须隔离 task state、artifact refs、后台任务和 verification 结果。
+- [ ] TS-18 合并两个历史分支：用户要求合并 A/B 分支结论，agent 必须检测冲突、重复证据和 artifact lineage，生成 merge summary。
+- [ ] TS-19 跨设备继续：模拟另一个客户端打开同一会话继续，agent 必须处理本地 UI state 缺失，只依赖持久化 workspace state。
+- [ ] TS-20 多标签并发继续：两个标签同时对同一会话发消息，系统必须有 conflict detection 或 serial ordering，不能交叉污染。
+- [ ] TS-21 版本升级后继续：代码或 capability registry 更新后恢复旧会话，agent 必须检测 capability version drift，并决定复用、迁移或重跑。
+- [ ] TS-22 配置变化后继续：用户更换 backend/model/API key/workspace path 后恢复会话，agent 必须解释哪些状态仍可用，哪些需要重新验证。
+- [ ] TS-23 权限变化后继续：恢复历史任务时权限更严格，agent 必须降级能力、保护敏感 refs，并说明被跳过的步骤。
+- [ ] TS-24 文件系统变化后继续：历史 artifact 或输入文件被移动/删除/修改，agent 必须 stale-check，避免引用不存在或过期文件。
+- [ ] TS-25 历史压缩后继续：只保留 summary/state digest/refs，不保留完整消息，agent 必须从摘要恢复任务图并列出不确定项。
+- [ ] TS-26 长时间离线后继续：历史会话过期很久，外部资料可能变化，agent 必须标注 stale risk，并询问或自动执行最小刷新。
+- [ ] TS-27 恢复后用户改目标：继续历史任务后用户立即改变目标，agent 必须把“恢复”和“范围变更”同时纳入规划。
+- [ ] TS-28 恢复后要求不要继续：用户打开历史失败任务但只想看诊断，不想重跑，agent 必须只 materialize explanation，不触发 side effect。
+- [ ] TS-29 恢复后要求导出审计：用户不继续执行，只要求导出历史 task graph、artifact refs、失败原因和可复现命令。
+- [ ] TS-30 恢复未知状态任务：session/run/artifact 三者状态不一致，agent 必须进入 needs-human 或 safe recovery，不得猜测成功。
 
 Todo：
 
-- [x] 在 `ProgressPlan` 中加入 `firstResultDeadlineMs`、`phaseDeadlines`、`backgroundAfterMs`。
-- [x] silence policy 到期时优先 materialize partial，而不是只显示 still working。
-- [x] 超过 first result deadline 必须生成 `result-presentation` 或 `partial-result` event。
-- [x] UI 展示“已完成部分”和“仍在后台继续的部分”。
+- [ ] 定义 `ComplexMultiTurnFixture` contract：turns、expected state、allowed tools、latency budget、memory expectations、artifact expectations、failure injections、success criteria。
+- [ ] 建立不少于 67 个跨场景 fixture：10 个 5 轮、12 个 10 轮、15 个 20 轮、30 个真实会话生命周期任务，并覆盖 success、partial、failure、recovery、background revision、revert、continue、branch、merge。
+- [ ] 为每轮标注 expected `latencyTier`、expected escalation、max first result time、max repeated exploration、required presentation status。
+- [ ] 增加 failure injection 机制：timeout、empty search result、download unavailable、schema validation failure、backend delay、tool stderr。
+- [ ] 为多轮上下文复用增加断言：不得重复下载/读取/验证已稳定 refs，除非用户要求刷新或输入已失效。
+- [ ] 为引用和 artifact 绑定增加断言：后续追问必须解析到正确 artifact/run/execution unit，不能漂移到最近但无关对象。
+- [ ] 每个 10 轮任务至少包含 2 次用户范围变化、1 次失败注入、1 次 artifact 引用追问、1 次 recovery 或 background continuation。
+- [ ] 每个 20 轮任务至少包含 4 次范围变化、3 次失败注入、2 次后台继续、2 次 artifact 身份校验、1 次 context compaction/resume。
+- [ ] 每个真实会话生命周期任务必须标注 resume source、state authority、side effect policy、history mutation mode、artifact lineage expectation。
+- [ ] 为编辑历史消息定义两类 fixture：`revert` 废弃编辑点之后派生状态，`continue` 保留派生状态但标注冲突和不确定性。
+- [ ] 输出每个 fixture 的 replay trace、presentation snapshots、latency summary 和 behavior notes，便于做横向比较。
+- [ ] 把 suite 做成可单独运行的 smoke/benchmark，不进入默认 fast verify，避免日常开发被长任务拖慢。
 
 验收：
 
-- [x] 任意任务在 first result deadline 前有可读状态或 partial。
-- [x] 长任务自动后台化，不把用户锁在等待态。
+- [ ] 压测能稳定复现“长任务失败后只显示 trace/没有可读恢复路径”等通用问题。
+- [ ] 每个问题都能映射到 harness、memory、presentation、progress、verification 或 repair 的通用改造点。
+- [ ] fixture 文案可替换成任意领域，不依赖 arXiv、论文、具体 backend 或固定 artifact 名称。
+- [ ] 5 轮任务用于日常 smoke，10 轮任务用于 PR 前 benchmark，20 轮任务用于高强度 nightly/stress benchmark。
+- [ ] 20 轮任务结束时必须能生成完整 task state summary，包含已完成、未完成、失败、复用、后台、artifact refs 和推荐下一步。
+- [ ] 重启、刷新、恢复历史、中断继续、编辑历史消息、分支和合并都能保持可解释状态边界，不产生静默重复 side effect。
+- [ ] revert 和 continue 两种历史编辑模式行为可预测、可审计，并且 UI 能明确展示当前所处历史分支。
 
-### H007 Presentation-First Runtime Contract
+### H018 Multi-turn State, Recovery, and Continuation Policy
 
-职责：确保所有路径都先产出用户可读 result presentation，再补审计细节。
+职责：把复杂多轮任务中的状态推进、失败恢复和继续执行变成通用策略，避免 agent 每轮重新猜“已经完成什么、还能继续什么、用户现在要什么”。
 
 Todo：
 
-- [x] 让 runtime 在 quick/bounded/deep/failure 都强制 materialize `ResultPresentationContract`。
-- [x] presentation contract 标注 `complete`、`partial`、`needs-human`、`background-running`。
-- [x] 主回复只消费 presentation contract；process/raw/diagnostics 默认折叠。
-- [x] 对 no-result、raw-only、trace-only 输出增加 no-legacy guard。
+- [ ] 定义 `ConversationTaskState`：user goal、current subgoals、completed evidence、pending work、blocked work、last failure、recoverable actions、background jobs。
+- [ ] 定义 `ConversationResumeState`：session id、thread id、last durable turn、last stable checkpoint、pending runs、background jobs、artifact lineage、client state freshness。
+- [ ] 定义 `HistoryMutationPolicy`：支持 `revert`、`continue`、`branch`、`merge` 四类历史变更模式，并声明各自的状态继承和废弃规则。
+- [ ] 每轮开始前由 harness 生成 state digest，区分“用户新需求”“对上轮结果追问”“失败恢复”“后台结果回访”“范围变更”。
+- [ ] 每次恢复历史前运行 resume preflight：检查 workspace path、session store、artifact refs、execution units、capability versions、file hashes、permissions。
+- [ ] 给失败结果生成通用 `RecoveryPlan`：可复用证据、需要重跑的步骤、可跳过步骤、用户可选操作、推荐下一步。
+- [ ] 对超时任务保存 checkpoint：已完成 artifact、已下载 refs、已读取文档、已验证 claim、未完成队列、失败原因。
+- [ ] 支持 continuation prompt 只携带 state digest 和 refs，不重新塞入完整历史、完整 trace 或完整文件内容。
+- [ ] 增加 stale/invalidated state 检测：用户改范围、文件变化、artifact 删除、capability 版本变化时重新规划。
+- [ ] 编辑历史消息时必须生成 history branch record：编辑前后消息、受影响 turns、废弃 runs、保留 refs、冲突 refs、推荐继续策略。
+- [ ] 中断后继续时必须区分 interrupted output、interrupted tool、interrupted repair、interrupted background job，分别采用不同恢复策略。
+- [ ] 多客户端/多标签继续时必须有 ordering/conflict guard：同一会话并发写入要串行化、分支化或进入 needs-human。
+- [ ] UI presentation 中优先展示“已完成/可继续/需要用户选择”，raw diagnostics 默认折叠。
+- [ ] 增加多轮 recovery smoke：失败后第二轮必须能继续未完成部分，而不是新开一个无关 run。
+- [ ] 增加 lifecycle smoke：重启继续、历史恢复、中断继续、编辑历史 revert、编辑历史 continue、分支合并分别有独立 fixture。
 
 验收：
 
-- [x] 用户永远先看到答案、partial 或失败原因，而不是 raw ToolPayload/trace。
-- [x] 审计信息仍可展开和导出。
+- [ ] 失败、超时、取消、后台化之后，用户能看到可执行的下一步，而不是只有“任务未完成”。
+- [ ] 多轮任务不会把同一目标重复拆解、重复探索、重复下载或重复验证。
+- [ ] continuation 可以跨 backend 和 profile 保持稳定的任务状态语义。
+- [ ] 重启/刷新/跨 session 恢复后，agent 能说明状态来源和不确定项，而不是假装内存上下文仍完整。
+- [ ] 编辑历史消息不会静默污染已有 artifact；revert 会废弃派生状态，continue 会保留但标注冲突。
 
-### H008 分层 Harness 模块化研究框架
+### H019 General Agent Behavior Optimization
 
-职责：把 harness 从“若干 profile + callbacks”整理成更适合实验和研究的模块组合框架。
-
-建议模块：
-
-- Intent module：识别任务目标、风险和是否可直接回答。
-- Latency module：选择 `latencyTier` 和 first-result SLA。
-- Context module：选择最小上下文和 refs。
-- Capability module：cheap-first 能力选择和升级。
-- Budget module：按 tier 分配时间、工具、下载、token、provider。
-- Verification module：选择 verification layers。
-- Repair module：选择 repair 策略和停止条件。
-- Progress module：deadline、background、cancel、interaction。
-- Presentation module：结果层级、引用密度、诊断折叠。
-- Audit module：异步 trace、ledger、replay 和训练数据。
+职责：针对复杂多轮压测暴露的问题做通用 agent 行为优化，重点提升“先给可读结果、少做重复工作、按收益升级、失败可恢复、后台不中断”的默认行为。
 
 Todo：
 
-- [x] 定义 `HarnessModule` 接口，模块声明 owned stages、inputs、outputs、cost、default tier applicability。
-- [x] profile 只组合模块和参数，不直接承载大量策略逻辑。
-- [x] 增加 module registry 和 module-level smoke coverage。
-- [x] 支持实验配置：同一 fixture 用不同 module stack replay，比较 latency、cost、quality、failure rate。
-- [x] 输出 harness research report：每个模块对耗时、成功率、用户等待的影响。
+- [ ] 增强 intent classifier：识别长任务、报告任务、调研任务、恢复任务、追问任务、范围变更任务、速度优先任务。
+- [ ] 增强 escalation stop rule：当已有 partial 足够回答当前轮时停止扩展，把剩余工作转为可选继续项。
+- [ ] 增强 evidence sufficiency rule：按用户要求的结论粒度判断证据是否足够，而不是默认追求完整搜集。
+- [ ] 增强 repeated-work guard：同 query、同 URL/ref、同 artifact hash、同 failure signature、同 verifier result 在同会话中默认复用。
+- [ ] 增强 tool batching/parallelism：独立检索、下载 metadata、artifact scan、引用检查可并行，关键路径优先返回。
+- [ ] 增强 progress wording：长任务在 deadline 前必须说明当前阶段、已完成内容、下一步和是否会后台继续。
+- [ ] 增强 partial report format：复杂任务先输出结构化摘要、证据表、缺口和后续计划，再逐步补全全文报告。
+- [ ] 增强 budget downgrade：预算接近耗尽时自动降级验证/下载/重试深度，并保留用户可手动升级路径。
+- [ ] 增强 backend handoff directive：prompt 只渲染通用策略和当前 state，不写具体案例硬编码规则。
 
 验收：
 
-- [x] 新增或替换策略不需要改核心 runtime。
-- [x] 可以系统性研究“更快、更准、更省”的 harness 组合。
+- [ ] 同一套优化能改善文献调研、代码任务、runtime 诊断任务、artifact 任务和数据任务的多轮表现。
+- [ ] 首个可读结果延迟下降，重复工具调用下降，失败后可继续率上升。
+- [ ] 行为改变可以从 harness trace 和 benchmark summary 中解释。
 
-### H009 Profile 简化与默认策略重设
+### H020 Complex Dialogue Speed and Quality Metrics
 
-职责：把默认 profile 从 balanced-heavy 调整为 fast-first，并让 deep 能力显式升级。
+职责：为复杂多轮任务建立可量化指标，防止优化只停留在主观体验；速度优化不能牺牲必要证据、引用正确性和恢复能力。
+
+指标：
+
+- First readable result latency：第一份 answer/partial/failure presentation 的时间。
+- Turn completion latency：每轮达到可用状态的时间。
+- Redundant work rate：重复检索、重复下载、重复读取、重复验证比例。
+- Recovery success rate：失败后一轮能否继续并复用已有状态。
+- Artifact reference accuracy：后续追问是否命中正确 artifact/run/ref。
+- Evidence sufficiency：关键结论是否有足够证据或明确 uncertainty。
+- Background revision quality：后台补全是否生成 revision/provenance，而不是覆盖旧结果。
+- User-visible dead-end rate：用户是否看到只有 raw trace、empty result 或不可执行失败。
+- Resume correctness：重启、刷新、恢复历史后是否命中正确 checkpoint、pending work 和 artifact refs。
+- History mutation correctness：编辑历史消息后 revert/continue/branch/merge 的状态边界是否正确。
+- Side effect duplication rate：恢复或中断继续后是否重复执行下载、写文件、提交、外部调用等 side effect。
+- State authority clarity：用户是否能看懂当前状态来自内存、持久化 checkpoint、历史摘要、artifact refs 还是重新探测。
 
 Todo：
 
-- [x] 重新定义 `balanced-default`：默认 quick/bounded，不默认 deep。
-- [x] `fast-answer` 收敛为 instant/quick。
-- [x] `research-grade` 和领域 profile 只在用户要求深度、严格验证或复现时启用。
-- [x] 增加 profile selection trace：为什么选择当前 profile，为什么没有选择更深 profile。
-- [x] 对历史 profile 加 migration note，避免旧行为被误判为 regression。
+- [ ] 定义 `ComplexDialogueBenchmarkReport` schema，输出 latency、cost、tool count、reuse count、failure mode、quality score。
+- [ ] 增加每轮 event timeline 聚合，把 first result、partial、background start、revision、failure、recovery 串成可读报告。
+- [ ] 对每个 fixture 建立 baseline 和 optimized 对比，记录改善比例和退化项。
+- [ ] 设置性能门槛：first readable result、重复工作率、dead-end rate、recovery success rate 至少满足最低线。
+- [ ] 增加 lifecycle metrics：resume hit rate、stale detection rate、history branch correctness、duplicate side effect prevention、state explanation completeness。
+- [ ] 将 benchmark 结果写入 artifacts/debug report，便于 UI 展示和人工审查。
+- [ ] 增加 regression guard：通用策略改动不得让简单任务变慢，不得让 deep 任务丢失审计证据。
 
 验收：
 
-- [x] 默认用户请求更迅速、直接。
-- [x] 高风险/高深度任务仍可通过显式 profile 或 classifier 升级。
-
-### H010 Harness Latency Benchmark
-
-职责：建立不依赖具体业务场景的 benchmark，评估 harness 提速是否真实有效。
-
-Fixture 维度：
-
-- simple Q&A。
-- current-context follow-up。
-- small retrieval。
-- artifact summarization。
-- code fix。
-- GUI action。
-- data table analysis。
-- partial/failure recovery。
-- deep research request。
-
-Todo：
-
-- [x] 为每类 fixture 定义 expected latency tier、max first result time、max tool calls、expected presentation sections。
-- [x] 增加 `smoke:harness-latency-tiers`。
-- [x] 增加 replay benchmark，输出 cost/latency/quality summary。
-- [x] 把 benchmark 纳入 `verify:fast` 或单独的 non-live smoke。
-
-验收：
-
-- [x] harness 改动可以量化“更快、更直接”，而不是只凭主观感觉。
-- [x] deep 能力没有被提速改动破坏。
-
-### H011 Persistent Startup Context Envelope
-
-职责：把每次 agent 都会重复探索的固定知识沉淀为版本化启动上下文，降低开局成本，同时避免把大量文档硬塞进 prompt。
-
-分层设计：
-
-- Always-on tiny context：workspace root、当前 session/run、关键 refs、当前 backend、权限、预算、不可破坏原则。
-- Capability brief index：能力名称、用途、输入输出、成本、side effects、artifact/view/verifier 类型摘要。
-- On-demand expansion：只有选中某能力或策略时，才展开 manifest、docs 或详细 contract。
-- Versioned cache：每份 envelope 带 `generatedAt`、`sourceRefs`、`hash`、`ttl`，避免过期知识误导 agent。
-
-Todo：
-
-- [x] 定义 `StartupContextEnvelope` contract，覆盖 workspace、session、scenario、recent runs、artifact index、capability brief、policy reminders。
-- [x] 在 runtime gateway 启动/每轮请求前生成 tiny context，注入到 harness input 和 AgentServer handoff，而不是散落在 prompt builder。
-- [x] 建立 capability brief index，来源必须是 capability manifest / package registry / view manifest，不从自然语言 prompt 猜。
-- [x] 增加 envelope cache 和 invalidation：workspace 变化、capability registry 变化、session/run 变化时刷新。
-- [x] 支持 on-demand expansion：agent 需要某能力时，通过 ref 展开对应 manifest/docs 摘要。
-- [x] 增加 no-duplicate-exploration guard：如果 envelope 已包含 workspace root、artifact index、recent refs，agent 不应再次做昂贵扫描。
-
-验收：
-
-- [x] 新 run 的开局 prompt 不再反复询问/探索 workspace 在哪、可用能力有哪些、最近 artifact 在哪。
-- [x] envelope 小而稳定，不显著增加 prompt token。
-- [x] 固定知识可从 refs/manifest/cache 重建，过期时自动刷新。
-
-### H012 Bounded Parallel Orchestration
-
-职责：让 agent 自动识别可并行工作，并在依赖、写范围、side effect、预算和用户等待时间约束下并行执行。
-
-通用原则：
-
-- 并行是默认优化，但必须 bounded。
-- critical path 留在主流程优先推进。
-- sidecar tasks 可交给 subagent、并行脚本或独立 verifier。
-- 有共享写范围、强依赖或高 side effect 的任务不盲目并行。
-
-Todo：
-
-- [x] 定义 `ParallelWorkPlan` contract：task id、dependency、read set、write set、side effect class、cost、deadline、owner、expected output。
-- [x] 在 harness capability/latency 阶段增加 parallelism planner，自动把任务拆成 DAG。
-- [x] 支持 subagent ownership：每个 subagent 必须声明负责文件/模块/artifact，不回滚他人修改。
-- [x] 支持并行脚本执行：独立 smoke、provider preflight、verifier、artifact scan 可并行运行。
-- [x] 增加 conflict guard：同一文件写入、同一外部资源 mutation、同一昂贵下载默认串行。
-- [x] 增加 cancellation/early stop：sidecar 超时或收益不足时不阻塞 first result。
-- [x] trace 中记录并行任务的开始、结束、结果、跳过、取消和合并决策。
-
-验收：
-
-- [x] 可并行的读、检索、验证、preflight 会自动并行。
-- [x] 有依赖或共享写范围的任务不会乱并行。
-- [x] first result 不等待低价值 sidecar 完成。
-
-### H013 Workspace Memory and Reuse Index
-
-职责：把 session 内已完成的探索、下载、读取、验证和失败原因转成可复用索引，避免 agent 每轮重新做同样工作。
-
-Todo：
-
-- [x] 维护 `WorkspaceMemoryIndex`：artifact refs、recent runs、known failures、downloaded refs、verified claims、opened files、capability outcomes。
-- [x] 每个条目带 provenance、source run、validity、confidence、expiry。
-- [x] harness context selection 优先使用 memory index，而不是重新扫描 workspace。
-- [x] 对重复请求返回“已复用哪些 refs / 跳过哪些重复步骤”的折叠审计说明。
-- [x] 增加 stale detection：文件变化、capability version 变化、用户要求重跑时使缓存失效。
-
-验收：
-
-- [x] 多轮追问不会重复下载/读取/验证同一 artifact，除非用户明确要求重跑。
-- [x] 复用决策可审计，且不会隐藏过期风险。
-
-### H014 First Result + Background Continuation
-
-职责：让用户更快看到结果，同时允许深任务继续补证据、补 artifact、补验证。
-
-Todo：
-
-- [x] 每个 latency tier 定义 first result SLA 和 background threshold。
-- [x] first result 可以是 answer、candidate list、partial artifact、failure reason 或 needs-human。
-- [x] 超出前台预算时自动产生 background continuation record。
-- [x] 后台完成后生成 revision，而不是覆盖原始答案。
-- [x] UI 区分“当前可用结论”和“后台仍在补充”。
-
-验收：
-
-- [x] 用户在短时间内总能看到当前可用结果。
-- [x] 后台结果有 revision/provenance，不破坏审计链。
-
-### H015 Top-K, Early Stop, and Exploration Dedup Policy
-
-职责：把“少做无收益探索”变成 harness 策略，而不是依赖 agent 自觉。
-
-Todo：
-
-- [x] 为 retrieval、download、artifact scan、verifier、repair 设置 per-tier Top-K 默认值。
-- [x] 定义 early stop 条件：答案足够、证据足够、收益递减、预算接近耗尽、用户目标已满足。
-- [x] 定义 duplicate exploration detector：同 ref、同 query、同 provider、同 artifact hash、同 verifier result 不重复执行。
-- [x] 每次 early stop 都要写明停止原因和剩余可选升级路径。
-- [x] deep/background tier 可放宽 Top-K，但必须显式记录原因。
-
-验收：
-
-- [x] agent 不为了“完整流程”继续探索。
-- [x] 用户能看到为什么停止，以及如何要求更深一层。
-
-### H016 Harness Prompt/Policy Research Entry Points
-
-职责：为研究 harness 设计提供统一入口，避免研究者直接改 AgentServer 大 prompt 字符串导致策略重新散落。
-
-统一入口：
-
-- Contract：`packages/agent-harness/src/contracts.ts`
-- Profile / policy callback：`packages/agent-harness/src/profiles.ts`
-- Runtime merge / stage execution：`packages/agent-harness/src/runtime.ts`
-- Runtime gateway handoff：`src/runtime/gateway/agent-harness-shadow.ts`
-- Prompt render projection：`buildAgentHarnessPromptRenderPlan`
-- AgentServer final prompt renderer：`src/runtime/gateway/agentserver-prompts.ts`
-
-Todo：
-
-- [x] 在 docs 中写 `Harness Research Guide`，说明改策略、改提示、改 profile、改 module 的正确位置。
-- [x] 禁止把 fresh/continuity/tool-use/repair/latency 策略直接写进 AgentServer prompt 字符串；prompt 只能渲染 contract/directives。
-- [x] 增加 smoke：prompt 中不内联完整 contract/trace，只包含 bounded render plan。
-- [x] 为每个 harness module 输出 prompt directive preview，便于研究者比较不同策略。
-
-验收：
-
-- [x] 研究者知道在哪里统一修改 harness 逻辑和提示投影。
-- [x] prompt builder 保持 renderer 身份，不重新成为策略真相源。
+- [ ] 每次复杂多轮优化都能用数据说明速度、质量和恢复能力变化。
+- [ ] benchmark 能指出退化来自 context、capability、tool、presentation、repair 还是 backend handoff。
+- [ ] 指标适用于任意 scenario，不绑定具体 prompt 或固定任务文案。
 
 ## 当前里程碑
 
-- [x] M1：完成 `latencyTier` contract 与默认 tier budgets。
-- [x] M2：实现 critical path / audit path 分层。
-- [x] M3：实现 cheap-first capability escalation。
-- [x] M4：实现 verification layers 与 per-tier repair budget。
-- [x] M5：实现 first result deadline 和 partial-first progress。
-- [x] M6：把 profile 改造成 module stack 配置。
-- [x] M7：建立 harness latency benchmark，并用 smoke 固化。
-- [x] M8：完成 Startup Context Envelope 与 Workspace Memory Index。
-- [x] M9：完成 Bounded Parallel Orchestration。
-- [x] M10：完成 First Result + Background Continuation。
-- [x] M11：完成 Top-K / Early Stop / Dedup 策略。
-- [x] M12：完成 Harness Research Guide 和 prompt/policy 统一入口。
+- [ ] M13：建立复杂多轮对话压测任务板、fixture contract 和 benchmark 指标。
 
 ## 已清理内容
 
