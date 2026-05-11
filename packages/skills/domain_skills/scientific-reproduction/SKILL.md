@@ -71,6 +71,10 @@ N7 execution is not a blanket pass once any ready dossier exists. Generated raw-
 
 When `rawExecutionGate.allowed=true` and the output claims `reproduced` or `partially-reproduced` from raw reanalysis, the same `raw-data-readiness-dossier` must include `executionAttestations`. Each completed attestation records plan refs, execution unit refs, code refs, stdout/stderr refs, output refs, checksum verification refs, environment verification refs, budget debit refs, and observed download/storage bytes. Observed resource use must stay within the approved budgets, and attestation refs must overlap the scientific success evidence. Attestation proves plan conformance and provenance only; it does not by itself prove the scientific claim.
 
+## Offline Fixture Dry-Run Readiness
+
+N8 dry-runs prove command wiring, tiny fixture compatibility, environment probes, and expected output contracts without live raw-data download. Encode this as `n8ExecutionReadiness` on a blocked `raw-data-readiness-dossier`: `rawExecutionGate.allowed=false`, fixture execution may be allowed, `networkPolicy=disabled`, `downloadedBytes=0`, and `stopBeforeLiveDownload=true`. Dry-run evidence may include command plan refs, fixture input refs, code refs, stdout/stderr refs, output refs, and expected output contracts, but it must not promote scientific verdicts beyond `insufficient-evidence` or `not-tested`.
+
 ## Degradation Policy
 
 Follow this order and record the chosen branch in the profile:
@@ -91,6 +95,7 @@ Benchmark and smoke runs use the fixture cases in `tests/fixtures/scientific-rep
 - `dataset-discovery-available`: accession metadata and tiny processed fixtures are available; expected output is a bounded `dataset-inventory` plus an `analysis-plan`.
 - `dataset-discovery-timeout`: provider exceeds the discovery timeout; expected output records timeout diagnostics in `dataset-inventory` and degrades to metadata-only or missing data.
 - `raw-reanalysis-escalation-preflight`: FASTQ/BAM/CRAM intent is detected, but network/download/compute remain disabled; expected output is a blocked `raw-data-readiness-dossier` with N6 escalation metadata plus `insufficient-evidence` verdict semantics.
+- `raw-reanalysis-execution-readiness-dry-run`: command wiring is tested against tiny offline fixtures only; expected output is a blocked `raw-data-readiness-dossier` with N8 dry-run metadata, an `analysis-notebook`, and `insufficient-evidence` verdict semantics.
 
 These cases must not make live network calls or download large data. They model provider behavior and expected contracts only.
 

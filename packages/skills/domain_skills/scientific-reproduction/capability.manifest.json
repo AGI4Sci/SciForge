@@ -18,6 +18,8 @@
       "fastq-bam-escalation",
       "raw-execution-attestation",
       "approved-scope-binding",
+      "offline-fixture-dry-run",
+      "execution-readiness",
       "missing-data-report",
       "negative-results",
       "benchmark"
@@ -321,7 +323,8 @@
         "N4",
         "N5",
         "N6",
-        "N7"
+        "N7",
+        "N8"
       ],
       "reusableInputs": [
         "paperRef",
@@ -414,6 +417,33 @@
           "budgetDebitRefs"
         ],
         "observedBudgetsMustNotExceedApprovedBudgets": true
+      },
+      "n8ExecutionReadinessPolicy": {
+        "defaultMode": "offline-fixture-dry-run",
+        "artifactType": "raw-data-readiness-dossier",
+        "metadataField": "n8ExecutionReadiness",
+        "requiresN6Escalation": true,
+        "networkPolicy": "disabled",
+        "downloadedBytes": 0,
+        "rawExecutionGateDefaultAllowed": false,
+        "fixtureExecutionGateDefaultAllowed": true,
+        "allowedVerdicts": [
+          "insufficient-evidence",
+          "not-tested"
+        ],
+        "forbiddenSuccessVerdicts": [
+          "reproduced",
+          "partially-reproduced"
+        ],
+        "successRequiresDryRunEvidenceRefs": [
+          "commandPlanRefs",
+          "fixtureInputRefs",
+          "environmentProbeRefs",
+          "stdoutRefs",
+          "stderrRefs",
+          "outputRefs",
+          "expectedOutputContracts"
+        ]
       },
       "derivedDraftOutputs": [
         "missing-data-report"

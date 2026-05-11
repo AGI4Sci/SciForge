@@ -370,6 +370,105 @@
           ]
         }
       ]
+    },
+    {
+      "id": "raw-reanalysis-execution-readiness-dry-run",
+      "provider": "mock-dataset-discovery",
+      "network": "disabled",
+      "input": {
+        "paperRef": "fixture:paper/n8-execution-readiness",
+        "claimRefs": [
+          "fixture:claim/raw-reanalysis-claim"
+        ],
+        "discoveryHints": {
+          "accessions": [
+            "GSEMOCKRAW000"
+          ],
+          "repositories": [
+            "GEO",
+            "SRA",
+            "ENA"
+          ],
+          "assays": [
+            "ChIP-seq"
+          ],
+          "species": [
+            "generic species"
+          ],
+          "genomeBuilds": [
+            "fixture-genome-build"
+          ],
+          "fileClasses": [
+            "FASTQ",
+            "BAM",
+            "CRAM"
+          ]
+        },
+        "budget": {
+          "maxDiscoveryProbes": 4,
+          "maxDownloadBytes": 0,
+          "maxCpu": 1,
+          "maxMemoryGb": 1,
+          "maxWallTimeMinutes": 1
+        },
+        "environmentProfile": {
+          "network": "disabled",
+          "availableToolClasses": [
+            "fastq-qc",
+            "read-alignment",
+            "coverage-and-counts"
+          ],
+          "genomeCaches": [
+            "fixture:genome-cache-plan"
+          ],
+          "annotationCaches": [
+            "fixture:annotation-cache-plan"
+          ]
+        }
+      },
+      "mockResponse": {
+        "status": "execution-readiness-dry-run",
+        "providerLatencyMs": 11,
+        "downloadedBytes": 0,
+        "preflight": {
+          "rawExecutionGateAllowed": false,
+          "fixtureExecutionGateAllowed": true,
+          "approvalStatus": "needs-human",
+          "rawExecutionStatus": "blocked",
+          "readinessMode": "offline-fixture-dry-run",
+          "stopBeforeLiveDownload": true,
+          "reason": "Command wiring and output contracts are exercised against tiny offline fixtures only."
+        }
+      },
+      "expectedArtifacts": [
+        {
+          "type": "raw-data-readiness-dossier",
+          "status": "blocked",
+          "requiredFields": [
+            "rawExecutionGate",
+            "n6Escalation",
+            "n8ExecutionReadiness",
+            "readinessChecks"
+          ]
+        },
+        {
+          "type": "analysis-notebook",
+          "status": "success",
+          "requiredFields": [
+            "notebookRefs",
+            "environmentRefs",
+            "cells"
+          ]
+        },
+        {
+          "type": "claim-verdict",
+          "status": "insufficient-evidence",
+          "requiredFields": [
+            "missingEvidence",
+            "supportingEvidenceRefs"
+          ]
+        }
+      ]
     }
   ]
 }

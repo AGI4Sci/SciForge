@@ -60,7 +60,7 @@ for (const requiredToolClass of [
 const budgetPolicy = manifest.metadata?.budgetPolicy as Record<string, unknown>;
 assert.equal(budgetPolicy.maxDownloadBytes, 50000000);
 assert.equal(budgetPolicy.largeRawDataPolicy, 'metadata-only-or-missing-data');
-assert.deepEqual(manifest.metadata?.milestones, ['N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7']);
+assert.deepEqual(manifest.metadata?.milestones, ['N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8']);
 const n6EscalationPolicy = manifest.metadata?.n6EscalationPolicy as Record<string, unknown>;
 assert.equal(n6EscalationPolicy.defaultMode, 'metadata-only-preflight');
 assert.equal(n6EscalationPolicy.artifactType, 'raw-data-readiness-dossier');
@@ -75,6 +75,16 @@ assert.equal(n7ExecutionAttestationPolicy.requiresReadyDossier, true);
 assert.equal(n7ExecutionAttestationPolicy.requiresApprovedScopeBinding, true);
 assert.equal(n7ExecutionAttestationPolicy.observedBudgetsMustNotExceedApprovedBudgets, true);
 assert.deepEqual(n7ExecutionAttestationPolicy.successVerdictsRequiringAttestation, ['reproduced', 'partially-reproduced']);
+const n8ExecutionReadinessPolicy = manifest.metadata?.n8ExecutionReadinessPolicy as Record<string, unknown>;
+assert.equal(n8ExecutionReadinessPolicy.defaultMode, 'offline-fixture-dry-run');
+assert.equal(n8ExecutionReadinessPolicy.artifactType, 'raw-data-readiness-dossier');
+assert.equal(n8ExecutionReadinessPolicy.metadataField, 'n8ExecutionReadiness');
+assert.equal(n8ExecutionReadinessPolicy.requiresN6Escalation, true);
+assert.equal(n8ExecutionReadinessPolicy.networkPolicy, 'disabled');
+assert.equal(n8ExecutionReadinessPolicy.downloadedBytes, 0);
+assert.equal(n8ExecutionReadinessPolicy.rawExecutionGateDefaultAllowed, false);
+assert.equal(n8ExecutionReadinessPolicy.fixtureExecutionGateDefaultAllowed, true);
+assert.deepEqual(n8ExecutionReadinessPolicy.allowedVerdicts, ['insufficient-evidence', 'not-tested']);
 assert.deepEqual(manifest.metadata?.degradationPolicy, [
   'raw-data-within-budget',
   'processed-table-or-supplement',
@@ -94,6 +104,7 @@ assert.deepEqual(fixtures.cases.map((entry) => entry.id).sort(), [
   'dataset-discovery-missing',
   'dataset-discovery-timeout',
   'raw-reanalysis-escalation-preflight',
+  'raw-reanalysis-execution-readiness-dry-run',
 ]);
 
 for (const entry of fixtures.cases) {
@@ -132,6 +143,17 @@ assert.ok(rawEscalationFileClasses.includes('FASTQ'));
 assert.ok(rawEscalationFileClasses.includes('BAM'));
 assert.ok(rawEscalation.expectedArtifacts.some((artifact) => artifact.type === 'raw-data-readiness-dossier' && artifact.status === 'blocked' && artifact.requiredFields.includes('n6Escalation')));
 assert.ok(rawEscalation.expectedArtifacts.some((artifact) => artifact.type === 'claim-verdict' && artifact.status === 'insufficient-evidence'));
+
+const rawDryRun = caseById('raw-reanalysis-execution-readiness-dry-run');
+assert.equal(rawDryRun.mockResponse.status, 'execution-readiness-dry-run');
+assert.equal(rawDryRun.input.environmentProfile?.network, 'disabled');
+assert.equal(rawDryRun.mockResponse.preflight?.rawExecutionGateAllowed, false);
+assert.equal(rawDryRun.mockResponse.preflight?.fixtureExecutionGateAllowed, true);
+assert.equal(rawDryRun.mockResponse.preflight?.stopBeforeLiveDownload, true);
+assert.equal(rawDryRun.mockResponse.downloadedBytes, 0);
+assert.ok(rawDryRun.expectedArtifacts.some((artifact) => artifact.type === 'raw-data-readiness-dossier' && artifact.status === 'blocked' && artifact.requiredFields.includes('n8ExecutionReadiness')));
+assert.ok(rawDryRun.expectedArtifacts.some((artifact) => artifact.type === 'analysis-notebook' && artifact.status === 'success'));
+assert.ok(rawDryRun.expectedArtifacts.some((artifact) => artifact.type === 'claim-verdict' && artifact.status === 'insufficient-evidence'));
 
 const discovery = await discoverPackageCapabilityManifestsFromFiles({
   rootDir: skillDir,
@@ -175,7 +197,7 @@ interface MockDatasetDiscoveryCase {
     };
   };
   mockResponse: {
-    status: 'missing' | 'available' | 'timeout' | 'preflight-blocked';
+    status: 'missing' | 'available' | 'timeout' | 'preflight-blocked' | 'execution-readiness-dry-run';
     providerLatencyMs: number;
     timeoutMs?: number;
     attemptedSources?: Array<Record<string, unknown>>;
@@ -184,11 +206,14 @@ interface MockDatasetDiscoveryCase {
     downloadedBytes: number;
     preflight?: {
       rawExecutionGateAllowed: boolean;
+      fixtureExecutionGateAllowed?: boolean;
       approvalStatus: string;
       rawExecutionStatus: string;
-      requestedFileClasses: string[];
-      reanalysisIntent: string;
-      stopBeforeExecutionUnlessReady: boolean;
+      requestedFileClasses?: string[];
+      reanalysisIntent?: string;
+      readinessMode?: string;
+      stopBeforeExecutionUnlessReady?: boolean;
+      stopBeforeLiveDownload?: boolean;
       reason: string;
     };
   };

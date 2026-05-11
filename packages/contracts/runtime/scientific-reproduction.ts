@@ -343,6 +343,35 @@ export interface RawDataReadinessDossier extends ScientificReproductionArtifactB
     startedAt?: string;
     completedAt?: string;
   }>;
+  n8ExecutionReadiness?: {
+    readinessMode: 'offline-fixture-dry-run' | string;
+    scope: string[];
+    networkPolicy: 'disabled' | 'mock-only' | string;
+    downloadedBytes: number;
+    fixtureExecutionGate: {
+      allowed: boolean;
+      reason: string;
+      requiredBeforeExecution: string[];
+      refs: ScientificEvidenceRef[];
+    };
+    fixtureInputRefs: ScientificEvidenceRef[];
+    commandPlanRefs: ScientificEvidenceRef[];
+    environmentProbeRefs: ScientificEvidenceRef[];
+    expectedOutputContracts: Array<{
+      artifactType: ScientificReproductionArtifactType | string;
+      requiredRefFields: string[];
+      requiredScalarFields?: string[];
+    }>;
+    dryRunEvidenceRefs: {
+      codeRefs: ScientificEvidenceRef[];
+      stdoutRefs: ScientificEvidenceRef[];
+      stderrRefs: ScientificEvidenceRef[];
+      outputRefs: ScientificEvidenceRef[];
+      statisticsRefs?: ScientificEvidenceRef[];
+    };
+    promotionBlockedUntil: string[];
+    stopBeforeLiveDownload: true;
+  };
 }
 
 export type ScientificReproductionArtifactData =
@@ -718,6 +747,52 @@ function validateTypeSpecificBasics(
         });
       }
     }
+    if (data.n8ExecutionReadiness !== undefined) {
+      validateOfflineExecutionReadiness(data.n8ExecutionReadiness, 'n8ExecutionReadiness', issues);
+    }
+  }
+}
+
+function validateOfflineExecutionReadiness(
+  value: unknown,
+  path: string,
+  issues: ScientificReproductionValidationIssue[],
+) {
+  if (!isRecord(value)) {
+    issues.push({ path, message: `${path} must be an object.`, expected: 'offline fixture dry-run readiness metadata', actual: typeOf(value) });
+    return;
+  }
+  validateStringAt(value, 'readinessMode', `${path}.readinessMode`, issues);
+  validateStringArray(value.scope, `${path}.scope`, issues, true);
+  validateStringAt(value, 'networkPolicy', `${path}.networkPolicy`, issues);
+  validateFiniteNonNegativeNumber(value.downloadedBytes, `${path}.downloadedBytes`, issues);
+  if (value.downloadedBytes !== 0) {
+    issues.push({ path: `${path}.downloadedBytes`, message: `${path}.downloadedBytes must be 0 for offline dry-runs.`, expected: '0', actual: typeOf(value.downloadedBytes) });
+  }
+  validateRawExecutionGate(value.fixtureExecutionGate, `${path}.fixtureExecutionGate`, issues);
+  validateRefArray(value.fixtureInputRefs, `${path}.fixtureInputRefs`, issues, { requireNonEmpty: true });
+  validateRefArray(value.commandPlanRefs, `${path}.commandPlanRefs`, issues, { requireNonEmpty: true });
+  validateRefArray(value.environmentProbeRefs, `${path}.environmentProbeRefs`, issues, { requireNonEmpty: true });
+  arrayRecords(value.expectedOutputContracts).forEach((contract, index) => {
+    validateStringAt(contract, 'artifactType', `${path}.expectedOutputContracts[${index}].artifactType`, issues);
+    validateStringArray(contract.requiredRefFields, `${path}.expectedOutputContracts[${index}].requiredRefFields`, issues, true);
+    if (contract.requiredScalarFields !== undefined) {
+      validateStringArray(contract.requiredScalarFields, `${path}.expectedOutputContracts[${index}].requiredScalarFields`, issues, true);
+    }
+  });
+  if (!Array.isArray(value.expectedOutputContracts) || value.expectedOutputContracts.length === 0) {
+    issues.push({ path: `${path}.expectedOutputContracts`, message: `${path}.expectedOutputContracts must include at least one output contract.` });
+  }
+  const evidenceRefs = isRecord(value.dryRunEvidenceRefs) ? value.dryRunEvidenceRefs : {};
+  for (const field of ['codeRefs', 'stdoutRefs', 'stderrRefs', 'outputRefs']) {
+    validateRefArray(evidenceRefs[field], `${path}.dryRunEvidenceRefs.${field}`, issues, { requireNonEmpty: true });
+  }
+  if (evidenceRefs.statisticsRefs !== undefined) {
+    validateRefArray(evidenceRefs.statisticsRefs, `${path}.dryRunEvidenceRefs.statisticsRefs`, issues, { requireNonEmpty: true });
+  }
+  validateStringArray(value.promotionBlockedUntil, `${path}.promotionBlockedUntil`, issues, true);
+  if (value.stopBeforeLiveDownload !== true) {
+    issues.push({ path: `${path}.stopBeforeLiveDownload`, message: `${path}.stopBeforeLiveDownload must be true.`, expected: 'true', actual: typeOf(value.stopBeforeLiveDownload) });
   }
 }
 

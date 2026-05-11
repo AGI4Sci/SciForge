@@ -162,6 +162,7 @@ export function verifyScientificReproduction(
     checkIdentifierVerification(identifierVerifications, request),
     checkRawDataReadiness(rawDataReadiness, request),
     checkRawExecutionAttestation(rawDataReadiness, claims, figureReproductions, scientificVerdicts, request),
+    checkOfflineDryRunBoundary(rawDataReadiness, scientificVerdicts),
     checkVerdictVocabulary(scientificVerdicts),
     checkRefsFirstEvidence(artifactContexts),
     checkNegativeResultSemantics(negativeResults, scientificVerdicts),
@@ -270,6 +271,7 @@ type NormalizedRawDataReadiness = {
   hasEnvironment: boolean;
   hasDegradationStrategy: boolean;
   executionAttestations: NormalizedRawExecutionAttestation[];
+  offlineDryRunRefs: string[];
 };
 
 type NormalizedRawExecutionAttestation = {
@@ -513,6 +515,30 @@ function checkRawExecutionAttestation(
   };
 }
 
+function checkOfflineDryRunBoundary(
+  dossiers: NormalizedRawDataReadiness[],
+  scientificVerdicts: string[],
+): ScientificReproductionCriterionResult {
+  const offlineDryRunRefs = uniqueStrings(dossiers.flatMap((dossier) => dossier.offlineDryRunRefs));
+  const hasOfflineDryRun = offlineDryRunRefs.length > 0;
+  const successVerdicts = scientificVerdicts.filter((verdict) => verdict === 'reproduced' || verdict === 'partially-reproduced');
+  const passed = !hasOfflineDryRun || successVerdicts.length === 0;
+  return {
+    id: 'offline-dry-run-boundary',
+    passed,
+    severity: 'blocking',
+    message: !hasOfflineDryRun
+      ? 'No offline raw reanalysis dry-run readiness metadata requires dry-run verdict boundaries.'
+      : passed
+        ? 'Offline raw reanalysis dry-run readiness keeps scientific verdicts at insufficient-evidence or not-tested.'
+        : 'Offline raw reanalysis dry-run readiness cannot support reproduced or partially-reproduced scientific verdicts.',
+    evidenceRefs: offlineDryRunRefs,
+    repairHints: passed
+      ? []
+      : ['Offline fixture dry-runs may prove command wiring, schema compatibility, environment probes, and output contracts only; keep claim verdicts insufficient-evidence or not-tested until live raw execution has approved scope and completed attestation evidence.'],
+  };
+}
+
 function artifactContext(artifact: ScientificReproductionArtifact, index: number): ArtifactContext {
   const data = isRecord(artifact.data) ? artifact.data : {};
   const root = { ...artifact, ...data };
@@ -695,6 +721,7 @@ function extractRawDataReadiness(context: ArtifactContext): NormalizedRawDataRea
       executionAttestations: arrayRecords(record.executionAttestations).map((attestation, attestationIndex) =>
         normalizeRawExecutionAttestation(attestation, `${context.id}:raw-attestation-${attestationIndex + 1}`, budget)
       ),
+      offlineDryRunRefs: isRecord(record.n8ExecutionReadiness) ? collectRefs(record.n8ExecutionReadiness) : [],
     };
   });
 }
