@@ -277,6 +277,12 @@ Todo：
   - [x] Smoke 审计：新增 `npm run smoke:complex-multiturn-benchmark-export`，校验 67 fixtures、620 turns、recovery/lifecycle/side-effect 指标和 aggregate gates。
   - [x] UI 接入防护：gateway 在 payload 已携带合法 `resultPresentation` 时保留原 contract，避免 complex multiturn presentation 被通用 fallback 覆盖。
   - [x] Verify 边界：M15 benchmark export 保持为显式脚本，不加入默认 `verify:fast`，避免日常开发被完整复杂多轮 benchmark 拖慢。
+- [x] M16：把真实形态 runtime/session events 接入复杂多轮 replay 审计。
+  - [x] Runtime replay contract：新增 `ComplexMultiturnRuntimeReplayReport`，从 `WorkspaceRuntimeEvent[]` 生成 `ComplexDialogueBenchmarkReport`、coverage 和 recovery/resume/history/side-effect 指标。
+  - [x] CLI 接入：新增 `npm run bench:complex-multiturn-runtime-replay`，读取 runtime event JSON 或 `{ session: { runtimeEvents } }`，输出 `.sciforge/reports/complex-multiturn-runtime-replay.json`。
+  - [x] Event recorder：新增 runtime event recorder helper，将 callback 事件规范化为 session-scoped NDJSON，并补稳定 event id、timestamp、session/run metadata，供 replay CLI 读取。
+  - [x] Smoke 审计：新增 `npm run smoke:complex-multiturn-runtime-replay` 并纳入 `smoke:complex-multiturn`，覆盖 artifact/run/execution-unit refs、resume preflight、history branch record、recovery plan 和 side-effect guard。
+  - [x] 边界声明：M16 只验证非视觉 runtime/session event replay，不恢复 Computer Use / 视觉 GUI grounding 压测。
 
 ## 已清理内容
 
