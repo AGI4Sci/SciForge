@@ -80,6 +80,12 @@ export {
   validateScientificReproductionArtifact,
   validateScientificReproductionRefsFirst,
 } from './scientific-reproduction';
+export {
+  evaluateRawDataPreExecutionGuard,
+  type RawDataExecutionGuardFile,
+  type RawDataExecutionGuardInput,
+  type RawDataExecutionGuardResult,
+} from './raw-data-execution-guard';
 export type {
   AnalysisNotebook,
   AnalysisPlan,

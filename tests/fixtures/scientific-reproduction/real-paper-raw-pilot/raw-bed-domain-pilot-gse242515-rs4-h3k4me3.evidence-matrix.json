@@ -1,0 +1,60 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "evidence-matrix",
+  "sourceRefs": [
+    {
+      "ref": "artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3#2025-setd1b-c2",
+      "role": "source",
+      "summary": "SETD1B broad H3K4me3 claim graph locator."
+    },
+    {
+      "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE242515",
+      "role": "data",
+      "summary": "Official GEO Series page for GSE242515."
+    },
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/results/gse242515-rs4-h3k4me3-domain-stats.json",
+      "role": "table",
+      "summary": "Raw BED domain pilot stats, checksums, parameters, and comparison output."
+    }
+  ],
+  "rows": [
+    {
+      "id": "row-raw-bed-domain-pilot-gse242515-rs4-h3k4me3",
+      "claimId": "2025-setd1b-c2",
+      "evidenceType": "raw-bed-domain-pilot",
+      "status": "partial",
+      "verdict": "partially-reproduced",
+      "evidenceRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/results/gse242515-rs4-h3k4me3-domain-stats.json",
+          "role": "table",
+          "summary": "Computed input interval, merged domain, and selected-domain counts."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/inputs/GSE242515_H3K4me3_RS4_WT_peaks.bed.gz",
+          "role": "data",
+          "summary": "RS4_WT input BED gzip; sha256=1bf74396000eae3bc4593b70882edc2b7d46a9bfeecf485524e69cc01d8f8e5f; bytes=313162."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/inputs/GSE242515_H3K4me3_RS4_Setd1bKO_peaks.bed.gz",
+          "role": "data",
+          "summary": "RS4_Setd1bKO input BED gzip; sha256=9e4bc9618a7a395565a70d2f8dcdc71bc661130b18b2db28532cdc82a222a143; bytes=206123."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/tools/run-raw-bed-domain-pilot.py",
+          "role": "code",
+          "summary": "Config-driven Python stdlib runner for BED gzip download, interval merge, domain-width filtering, checksums, and refs-first artifact emission."
+        }
+      ],
+      "missingEvidenceRefs": [
+        {
+          "ref": "artifact:2025-setd1b-broad-h3k4me3.claim-verdict#fastq-bam-peak-calling",
+          "role": "verifier",
+          "summary": "Full FASTQ/BAM alignment and peak-calling reproduction remains outside this one-claim pilot."
+        }
+      ],
+      "rationale": "RS4 Setd1bKO has far fewer selected >5 kb H3K4me3 merged domains than RS4 WT under the configured merge/width rule."
+    }
+  ]
+}

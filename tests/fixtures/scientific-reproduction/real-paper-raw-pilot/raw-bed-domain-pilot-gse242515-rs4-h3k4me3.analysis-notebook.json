@@ -1,0 +1,76 @@
+{
+  "schemaVersion": "sciforge.scientific-reproduction.v1",
+  "artifactType": "analysis-notebook",
+  "sourceRefs": [
+    {
+      "ref": "artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3#2025-setd1b-c2",
+      "role": "source",
+      "summary": "SETD1B broad H3K4me3 claim graph locator."
+    },
+    {
+      "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE242515",
+      "role": "data",
+      "summary": "Official GEO Series page for GSE242515."
+    },
+    {
+      "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/results/gse242515-rs4-h3k4me3-domain-stats.json",
+      "role": "table",
+      "summary": "Raw BED domain pilot stats, checksums, parameters, and comparison output."
+    }
+  ],
+  "notebookRefs": [
+    {
+      "ref": "artifact:raw-bed-domain-pilot-gse242515-rs4-h3k4me3.analysis-notebook#bed-domain-merge",
+      "role": "notebook",
+      "summary": "Raw BED domain pilot merge/count cell."
+    }
+  ],
+  "environmentRefs": [
+    {
+      "ref": "runtime:python3-stdlib-gzip-hashlib-json-statistics",
+      "role": "code",
+      "summary": "Pilot uses Python standard library only."
+    },
+    {
+      "ref": "runtime:python3-local-codex-workspace",
+      "role": "environment",
+      "summary": "Local Codex workspace Python 3 runtime."
+    }
+  ],
+  "cells": [
+    {
+      "id": "cell-raw-bed-domain-pilot",
+      "purpose": "Download configured public BED gzip interval files, merge intervals within 500 bp, and count merged domains longer than 5 kb.",
+      "codeRef": {
+        "ref": "file:/Applications/workspace/ailab/research/app/SciForge/tools/run-raw-bed-domain-pilot.py",
+        "role": "code",
+        "summary": "Config-driven Python stdlib runner for BED gzip download, interval merge, domain-width filtering, checksums, and refs-first artifact emission."
+      },
+      "outputRefs": [
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/results/gse242515-rs4-h3k4me3-domain-stats.json",
+          "role": "table",
+          "summary": "Computed input interval, merged domain, and selected-domain counts."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/results/RS4_WT.merged-d500.domain-gt5000.bed",
+          "role": "table",
+          "summary": "RS4_WT selected merged-domain BED; sha256=7eeef4cccb0442be9a46f5ef6f545e5b8af5bcde2a647f4edda040aa64ed196b; bytes=137816."
+        },
+        {
+          "ref": "file:/Applications/workspace/ailab/research/app/SciForge/workspace/raw-data-pilot/gse242515-bed-domain/results/RS4_Setd1bKO.merged-d500.domain-gt5000.bed",
+          "role": "table",
+          "summary": "RS4_Setd1bKO selected merged-domain BED; sha256=0c65bbfb8e08079ebd9d159839650fab561271715e7455577f55b09c59455ba6; bytes=3965."
+        }
+      ],
+      "status": "done",
+      "diagnostics": [
+        "RS4_WT: 21080 input intervals, 20613 merged domains, 2876 selected domains.",
+        "RS4_Setd1bKO: 13810 input intervals, 13737 merged domains, 83 selected domains."
+      ]
+    }
+  ],
+  "notes": [
+    "This pilot starts from deposited GEO peak BED files, not FASTQ/BAM alignment, so it tests the configured interval-domain rule and perturbation direction but not peak-caller reproducibility."
+  ]
+}

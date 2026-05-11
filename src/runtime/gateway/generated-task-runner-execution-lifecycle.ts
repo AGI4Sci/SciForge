@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
+import { evaluateRawDataPreExecutionGuard } from '@sciforge-ui/runtime-contract/raw-data-execution-guard';
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult } from '../runtime-types.js';
 import { errorMessage, generatedTaskArchiveRel, isTaskInputRel, safeWorkspaceRel } from '../gateway-utils.js';
 import { runWorkspaceTask, sha1 } from '../workspace-task-runner.js';
@@ -47,6 +48,22 @@ export async function runGeneratedTaskExecutionLifecycle(
   if (materialized.kind === 'payload') return materialized;
 
   const refs = generatedTaskRuntimeRefs(input.generation, taskId, materialized.generatedPathMap);
+  const rawDataGuard = evaluateRawDataPreExecutionGuard({
+    taskFiles: input.generation.response.taskFiles,
+    artifacts: input.request.artifacts,
+    references: input.request.references,
+    uiState: input.request.uiState,
+    actionSideEffects: input.request.actionSideEffects,
+  });
+  if (rawDataGuard.blocked) {
+    return {
+      kind: 'payload',
+      payload: input.deps.repairNeededPayload(input.request, input.skill, rawDataGuard.reason ?? 'Raw-data pre-execution guard blocked generated task execution.', {
+        rawDataPreExecutionGuard: rawDataGuard,
+        taskRel: refs.taskRel,
+      }),
+    };
+  }
   const expectedArtifacts = expectedArtifactTypesForGeneratedRun(input.request, input.generation.response.expectedArtifacts);
   const taskInputLifecycle = await buildGeneratedTaskRunInputLifecycle({
     workspacePath: input.workspace,

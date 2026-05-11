@@ -1,0 +1,140 @@
+{
+  "pilotId": "raw-bed-domain-pilot-gse242515-rs4-h3k4me3",
+  "claimId": "2025-setd1b-c2",
+  "figureId": "2025-setd1b-fig3-raw-pilot",
+  "objective": "Download configured public BED gzip interval files, merge intervals within 500 bp, and count merged domains longer than 5 kb.",
+  "workspaceDir": "workspace/raw-data-pilot/gse242515-bed-domain",
+  "fixtureDir": "tests/fixtures/scientific-reproduction/real-paper-raw-pilot",
+  "statsFilename": "gse242515-rs4-h3k4me3-domain-stats.json",
+  "approvalRef": "artifact:raw-bed-domain-pilot-gse242515.budget-approval",
+  "approvalSummary": "User approved raw-data download and compute in this Codex thread on 2026-05-11; pilot is capped below 2 MB download and 10 MB storage.",
+  "boundedScopeNote": "This pilot starts from deposited GEO peak BED files, not FASTQ/BAM alignment, so it tests the configured interval-domain rule and perturbation direction but not peak-caller reproducibility.",
+  "degradationStrategy": "If configured public files become unavailable, keep the prior bounded reproduction artifacts and mark this raw pilot as needs-human rather than inferring success.",
+  "genomeRef": "not-required:mm10-coordinate-preserving-bed-merge",
+  "verdict": "partially-reproduced",
+  "verdictRationale": "The approved raw BED domain pilot downloaded configured public interval files ({labels}) and independently applied the configured merge and width rule. {interpretation} This supports the bounded claim slice without upgrading the whole paper claim to reproduced.",
+  "parameters": {
+    "mergeDistanceBp": 500,
+    "domainWidthThresholdBp": 5000,
+    "input": "Configured public BED gzip interval files"
+  },
+  "comparison": {
+    "baselineLabel": "RS4_WT",
+    "contrastLabel": "RS4_Setd1bKO",
+    "interpretation": "RS4 Setd1bKO has far fewer selected >5 kb H3K4me3 merged domains than RS4 WT under the configured merge/width rule."
+  },
+  "sourceRefs": [
+    {
+      "ref": "artifact:paper-claim-graph-2025-setd1b-broad-h3k4me3#2025-setd1b-c2",
+      "role": "source",
+      "summary": "SETD1B broad H3K4me3 claim graph locator."
+    },
+    {
+      "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE242515",
+      "role": "data",
+      "summary": "Official GEO Series page for GSE242515."
+    }
+  ],
+  "inputFiles": [
+    {
+      "label": "RS4_WT",
+      "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE242nnn/GSE242515/suppl/GSE242515_H3K4me3_RS4_WT_peaks.bed.gz",
+      "filename": "GSE242515_H3K4me3_RS4_WT_peaks.bed.gz"
+    },
+    {
+      "label": "RS4_Setd1bKO",
+      "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE242nnn/GSE242515/suppl/GSE242515_H3K4me3_RS4_Setd1bKO_peaks.bed.gz",
+      "filename": "GSE242515_H3K4me3_RS4_Setd1bKO_peaks.bed.gz"
+    }
+  ],
+  "dataset": {
+    "id": "dataset-raw-bed-domain-pilot-gse242515-rs4-h3k4me3",
+    "title": "GSE242515 RS4 WT and Setd1bKO H3K4me3 GEO peak BED files",
+    "accession": "GSE242515",
+    "database": "GEO",
+    "dataLevel": "raw",
+    "licenseStatus": "verified",
+    "licenseSummary": "GEO accession is public and files are accessed from official NCBI FTP; redistribution remains refs-first.",
+    "license": "Public GEO access; downloaded objects remain in workspace refs and are not vendored into git.",
+    "sourceRef": {
+      "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE242515",
+      "role": "data",
+      "summary": "Official GEO Series page for GSE242515."
+    },
+    "dataTypes": [
+      "GEO supplementary peak BED gzip",
+      "H3K4me3 ChIP-seq derived peaks"
+    ],
+    "accessInstructions": "Use official NCBI GEO FTP supplementary peak BED gzip files for GSE242515; verify checksums before running the merge/count step.",
+    "notes": [
+      "Pilot uses GEO supplementary peak BED gzip files instead of full FASTQ/BAM alignment to keep N4 bounded and auditable."
+    ]
+  },
+  "computeBudget": {
+    "maxDownloadBytes": 2000000,
+    "maxStorageBytes": 10000000,
+    "maxCpuHours": 1,
+    "maxMemoryGb": 2,
+    "maxWallHours": 1
+  },
+  "identifierVerifications": [
+    {
+      "id": "paper-2025-setd1b-identity",
+      "kind": "bibliographic",
+      "doi": "10.1038/s41422-025-01080-0",
+      "pmid": "40033033",
+      "title": "SETD1B-mediated broad H3K4me3 controls proper temporal patterns of gene expression critical for spermatid development",
+      "year": 2025,
+      "journal": "Cell Research",
+      "verified": true,
+      "status": "verified",
+      "checkedAt": "2026-05-11",
+      "evidenceRefs": [
+        {
+          "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE242515",
+          "role": "data",
+          "summary": "GEO page links the study title and PubMed id."
+        }
+      ]
+    },
+    {
+      "id": "accession-gse242515",
+      "kind": "accession",
+      "database": "GEO",
+      "accession": "GSE242515",
+      "verified": true,
+      "status": "verified",
+      "checkedAt": "2026-05-11",
+      "evidenceRefs": [
+        {
+          "ref": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE242515",
+          "role": "data",
+          "summary": "Official GEO Series page for GSE242515."
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "The pilot uses deposited interval BED files, not full raw FASTQ/BAM alignment and peak calling.",
+    "It checks one configured stage/mark contrast; it does not prove all temporal expression or Pol II mechanism claims."
+  ],
+  "missingEvidenceRefs": [
+    {
+      "ref": "artifact:2025-setd1b-broad-h3k4me3.claim-verdict#fastq-bam-peak-calling",
+      "role": "verifier",
+      "summary": "Full FASTQ/BAM alignment and peak-calling reproduction remains outside this one-claim pilot."
+    }
+  ],
+  "missingEvidence": [
+    {
+      "summary": "Full reproduction still requires FASTQ/BAM-level alignment, peak calling, replicate handling, and broad-domain calling across all relevant stages and controls.",
+      "refs": [
+        {
+          "ref": "artifact:2025-setd1b-broad-h3k4me3.claim-verdict#full-raw-pipeline",
+          "role": "verifier",
+          "summary": "Remaining full-pipeline evidence boundary."
+        }
+      ]
+    }
+  ]
+}
