@@ -110,14 +110,14 @@ Agent backend       = reasoning and composition source
 
 - Agent backend：负责用户意图理解、多轮指代、能力选择、任务规划、胶水代码生成、artifact 内容读取、失败诊断、继续执行和修复。
 - SciForge runtime：负责 capability registry、capability broker、workspace refs、权限边界、执行 sandbox、stream events、日志、artifact 持久化、contract validation、verifier 调用和错误回传。
-- Agent harness policy：负责按阶段约束 backend 行为，包括 intent mode、探索预算、上下文选择、skill hints、tool-use policy、验证强度、repair policy 和用户可见进度；它是独立策略层，不散落在 runtime 或 UI 分支中。
+- Agent harness policy：负责按阶段约束 backend 行为，包括 intent mode、探索预算、上下文选择、skill hints、tool-use policy、验证强度、repair policy、conversation plan 和用户可见进度；它是独立策略层，不散落在 runtime 或 UI 分支中。
 - Scenario package：只声明领域定制内容，例如 artifact schemas、默认 views、可用 capabilities、领域词表、verifier policy、隐私/安全边界；不写多轮语义判断和 prompt 特例。
 - Packages：不只是代码复用单元，而是 capability contract 单元。每个 package 都应能声明自己暴露的能力、输入输出协议、side effects、validator、repair hints 和 provider variants。
 - UI：只负责把 session、artifact、object refs、views、execution units、validation errors 和 recover actions 可视化；不作为语义路由层或第二个 agent。
 
 ### Agent Harness 与 Conversation Policy 的关系
 
-Conversation policy 是 harness 的输入之一，不是 harness 本身。它应定位为低层上下文与运行安全策略编译器：产出 current-turn facts、引用/历史隔离、bounded digest、handoff 压缩、acceptance/recovery/cache/latency 的保守默认值。Harness profile 可以采纳、覆盖或收紧这些建议，并形成最终 `HarnessContract`。
+Conversation policy 是 harness 的输入之一，不是 harness 本身。它应定位为低层上下文与运行安全策略编译器：产出 current-turn facts、引用/历史隔离、bounded digest、handoff 压缩、acceptance/recovery/cache/latency 的保守默认值。Harness profile 可以采纳、覆盖或收紧这些建议，并形成最终 `HarnessContract`，包括 `conversationPlan` 对 answer-first、refs-first、审计补水和内联证据预算的结构化决策。
 
 保留在 conversation policy 的职责：
 
@@ -131,6 +131,7 @@ Conversation policy 是 harness 的输入之一，不是 harness 本身。它应
 
 - `intentMode` / `executionMode` 的最终选择；conversation classifier 只提供 `TurnIntentSignals` 和 recommendation。
 - context、tool、capability、verification、repair、progress budget 的最终 merge 与 enforcement。
+- answer-first / refs-first / audit hydration / inline evidence budget 的最终 `conversationPlan`。
 - capability profile、skill hints、tool-use policy、side-effect allowance 和 provider constraints。
 - repair executor 选择：patch/rerun、supplement、peer handoff、ask user、needs-human、fail-closed。
 - UI interaction policy：progress、clarification、human approval、mid-run guidance、cancelled/failed 区分。
