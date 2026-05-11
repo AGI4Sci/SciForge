@@ -14,6 +14,8 @@
       "dataset-inventory",
       "raw-data-readiness-dossier",
       "raw-data-readiness",
+      "raw-reanalysis-preflight",
+      "fastq-bam-escalation",
       "missing-data-report",
       "negative-results",
       "benchmark"
@@ -265,7 +267,7 @@
     "repairHints": [
       {
         "failureCode": "dataset-discovery-missing",
-        "summary": "Record missing sources in dataset-inventory.missingDatasets and keep downstream claims partial or unverified.",
+        "summary": "Record missing sources in dataset-inventory.missingDatasets and keep downstream claims partial, insufficient-evidence, or not-tested.",
         "recoverActions": [
           "record-attempted-sources",
           "try-processed-or-supplementary-tables",
@@ -310,6 +312,14 @@
     },
     "metadata": {
       "profileContract": "sciforge.scientific-reproduction-profile.v1",
+      "milestones": [
+        "N1",
+        "N2",
+        "N3",
+        "N4",
+        "N5",
+        "N6"
+      ],
       "reusableInputs": [
         "paperRef",
         "claimRefs",
@@ -356,6 +366,29 @@
         "metadata-only-inventory",
         "metadata-only-inventory-with-missingDatasets"
       ],
+      "n6EscalationPolicy": {
+        "defaultMode": "metadata-only-preflight",
+        "artifactType": "raw-data-readiness-dossier",
+        "metadataField": "n6Escalation",
+        "requestedFileClasses": [
+          "FASTQ",
+          "BAM",
+          "CRAM",
+          "SRA"
+        ],
+        "allowedPreflightVerdicts": [
+          "insufficient-evidence",
+          "not-tested"
+        ],
+        "successRequiresExecutionEvidenceRefs": [
+          "codeRefs",
+          "stdoutRefs",
+          "stderrRefs",
+          "statisticsRefs",
+          "outputFigureRefs"
+        ],
+        "rawExecutionGateDefaultAllowed": false
+      },
       "derivedDraftOutputs": [
         "missing-data-report"
       ],

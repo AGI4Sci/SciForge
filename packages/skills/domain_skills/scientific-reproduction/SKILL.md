@@ -29,7 +29,7 @@ Use this skill when a paper reproduction task needs a generic bioinformatics pla
 - `analysis-plan`: analysis units, expected inputs, parameters, statistics, plots, and validation checks.
 - `figure-reproduction-report`: per-figure attempt status, inputs, code refs, stdout/stderr refs, metrics, and caveats.
 - `evidence-matrix`: claim-to-evidence links, supporting and contradicting evidence, missing evidence, and confidence.
-- `claim-verdict`: one of `reproduced`, `partially-reproduced`, `not-reproduced`, `contradicted`, or `unverified`.
+- `claim-verdict`: one of `reproduced`, `partially-reproduced`, `not-reproduced`, `contradicted`, `insufficient-evidence`, or `not-tested`.
 - `negative-result-report`: structured explanation when a scientific claim is unsupported or contradicted.
 
 `missing-data-report` may appear as a derived draft or export note for humans, but it is not a formal runtime artifact type. Encode unavailable sources in `dataset-inventory.missingDatasets`, carry downstream uncertainty in `claim-verdict.missingEvidence`, and reserve `negative-result-report` for actual not-reproduced or contradicted scientific checks.
@@ -54,6 +54,17 @@ Select tool classes by data type and budget, then delegate execution to action p
 - Default retry budget: one retry per provider class; timeout retries must switch to a smaller query or a cached fixture.
 - Large raw sequencing files are never downloaded in benchmark mode. Use accession metadata, processed tables, tiny fixtures, or emit missing data. Full raw-data execution requires a `raw-data-readiness-dossier` with `rawExecutionGate.allowed=true`, verified license/access, explicit approval, sufficient resource budgets, environment/genome/checksum refs, and passing readiness checks.
 
+## Raw FASTQ/BAM Reanalysis Escalation
+
+N6 escalation is metadata-only by default. When a task asks for FASTQ/BAM/CRAM/SRA-level reanalysis, first emit a `raw-data-readiness-dossier` with `rawExecutionGate.allowed=false` and an `n6Escalation` block that records:
+
+- requested raw file classes and the reanalysis intent, such as QC, alignment, coverage, counts, peak calling, or figure reproduction.
+- minimal runnable plan refs, including analysis-plan, environment lock, tool versions, genome/annotation/cache refs, checksum plan, and budget/approval refs.
+- downsampled, region-sliced, or tiny fixture refs that can validate schema and command wiring without claiming scientific success.
+- `stopBeforeExecutionUnlessReady: true`.
+
+Do not claim `reproduced` from N6 preflight artifacts alone. Until code, stdout/stderr, statistics, and output figure/table refs exist, downstream verdicts must remain `insufficient-evidence` or `not-tested`. Full raw execution still requires the existing ready dossier gate plus explicit user approval and sufficient resource budgets.
+
 ## Degradation Policy
 
 Follow this order and record the chosen branch in the profile:
@@ -62,7 +73,7 @@ Follow this order and record the chosen branch in the profile:
 2. Use processed matrices, peak tables, or supplementary tables when raw data is unavailable or over budget.
 3. Use a tiny fixture that preserves schema and edge cases when environment or genome caches are incomplete.
 4. Use metadata-only inventory when files are available but too large for the active budget.
-5. Record missing sources in `dataset-inventory.missingDatasets` and mark downstream claims as `unverified` or partial when discovery fails, access is restricted, or providers time out.
+5. Record missing sources in `dataset-inventory.missingDatasets` and mark downstream claims as `insufficient-evidence`, `not-tested`, or partial when discovery fails, access is restricted, or providers time out.
 
 Never replace missing experimental data with paper prose. A missing source is a valid result, not a reason to fabricate evidence.
 
@@ -73,6 +84,7 @@ Benchmark and smoke runs use the fixture cases in `tests/fixtures/scientific-rep
 - `dataset-discovery-missing`: no accession or supplement resolves; expected output is a `dataset-inventory` with `missingDatasets`.
 - `dataset-discovery-available`: accession metadata and tiny processed fixtures are available; expected output is a bounded `dataset-inventory` plus an `analysis-plan`.
 - `dataset-discovery-timeout`: provider exceeds the discovery timeout; expected output records timeout diagnostics in `dataset-inventory` and degrades to metadata-only or missing data.
+- `raw-reanalysis-escalation-preflight`: FASTQ/BAM/CRAM intent is detected, but network/download/compute remain disabled; expected output is a blocked `raw-data-readiness-dossier` with N6 escalation metadata plus `insufficient-evidence` verdict semantics.
 
 These cases must not make live network calls or download large data. They model provider behavior and expected contracts only.
 

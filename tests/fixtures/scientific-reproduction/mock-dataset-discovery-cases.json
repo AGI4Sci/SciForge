@@ -75,7 +75,7 @@
         },
         {
           "type": "claim-verdict",
-          "status": "unverified",
+          "status": "insufficient-evidence",
           "requiredFields": [
             "missingEvidenceRefs"
           ]
@@ -255,6 +255,118 @@
             "identifier",
             "availability",
             "evidenceRef"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "raw-reanalysis-escalation-preflight",
+      "provider": "mock-dataset-discovery",
+      "network": "disabled",
+      "input": {
+        "paperRef": "fixture:paper/raw-reanalysis-escalation",
+        "claimRefs": [
+          "fixture:claim/raw-reanalysis-claim"
+        ],
+        "discoveryHints": {
+          "accessions": [
+            "GSEMOCKRAW000"
+          ],
+          "repositories": [
+            "GEO",
+            "SRA",
+            "ENA"
+          ],
+          "assays": [
+            "ChIP-seq",
+            "RNA-seq"
+          ],
+          "species": [
+            "generic species"
+          ],
+          "genomeBuilds": [
+            "fixture-genome-build"
+          ],
+          "fileClasses": [
+            "FASTQ",
+            "BAM",
+            "CRAM"
+          ]
+        },
+        "budget": {
+          "maxDiscoveryProbes": 4,
+          "maxDownloadBytes": 0,
+          "maxCpu": 1,
+          "maxMemoryGb": 1,
+          "maxWallTimeMinutes": 1
+        },
+        "environmentProfile": {
+          "network": "disabled",
+          "availableToolClasses": [
+            "fastq-qc",
+            "read-alignment",
+            "coverage-and-counts"
+          ],
+          "genomeCaches": [
+            "fixture:genome-cache-plan"
+          ],
+          "annotationCaches": [
+            "fixture:annotation-cache-plan"
+          ]
+        }
+      },
+      "mockResponse": {
+        "status": "preflight-blocked",
+        "providerLatencyMs": 9,
+        "downloadedBytes": 0,
+        "preflight": {
+          "rawExecutionGateAllowed": false,
+          "approvalStatus": "needs-human",
+          "rawExecutionStatus": "blocked",
+          "requestedFileClasses": [
+            "FASTQ",
+            "BAM",
+            "CRAM"
+          ],
+          "reanalysisIntent": "figure-reproduction",
+          "stopBeforeExecutionUnlessReady": true,
+          "reason": "Raw FASTQ/BAM/CRAM reanalysis is only planned; no approval, positive budget, or materialized execution evidence is attached."
+        }
+      },
+      "expectedArtifacts": [
+        {
+          "type": "dataset-inventory",
+          "status": "preflight",
+          "requiredFields": [
+            "identifierVerifications",
+            "datasets",
+            "sourceRefs"
+          ]
+        },
+        {
+          "type": "raw-data-readiness-dossier",
+          "status": "blocked",
+          "requiredFields": [
+            "rawExecutionGate",
+            "n6Escalation",
+            "readinessChecks"
+          ]
+        },
+        {
+          "type": "analysis-plan",
+          "status": "preflight",
+          "requiredFields": [
+            "steps",
+            "fallbackPolicy",
+            "expectedArtifacts"
+          ]
+        },
+        {
+          "type": "claim-verdict",
+          "status": "insufficient-evidence",
+          "requiredFields": [
+            "missingEvidence",
+            "supportingEvidenceRefs"
           ]
         }
       ]

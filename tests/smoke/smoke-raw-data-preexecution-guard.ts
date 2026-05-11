@@ -73,6 +73,28 @@ const blocked = evaluateRawDataPreExecutionGuard({ taskFiles: [rawTaskFile] });
 assert.equal(blocked.blocked, true);
 assert.equal(blocked.rawIntentDetected, true);
 
+for (const taskFile of [
+  {
+    path: '.sciforge/tasks/prefetch-sra.sh',
+    language: 'bash',
+    content: 'prefetch SRR000001 && fasterq-dump SRR000001 --outdir raw_fastq',
+  },
+  {
+    path: '.sciforge/tasks/download-bam.sh',
+    language: 'bash',
+    content: 'wget https://example.invalid/sample.bam -O sample.bam',
+  },
+  {
+    path: '.sciforge/tasks/download-fastq.py',
+    language: 'python',
+    content: 'import requests\nrequests.get("https://example.invalid/sample.fastq.gz")',
+  },
+]) {
+  const result = evaluateRawDataPreExecutionGuard({ taskFiles: [taskFile] });
+  assert.equal(result.blocked, true, `${taskFile.path} should be blocked before readiness`);
+  assert.equal(result.rawIntentDetected, true, `${taskFile.path} should be detected as raw reanalysis intent`);
+}
+
 const ready = evaluateRawDataPreExecutionGuard({ taskFiles: [rawTaskFile], artifacts: [readyDossier] });
 assert.equal(ready.blocked, false);
 assert.equal(ready.rawIntentDetected, true);

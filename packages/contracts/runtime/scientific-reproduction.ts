@@ -319,6 +319,13 @@ export interface RawDataReadinessDossier extends ScientificReproductionArtifactB
     requiredBeforeExecution: string[];
     refs: ScientificEvidenceRef[];
   };
+  n6Escalation?: {
+    requestedFileClasses: string[];
+    reanalysisIntent: 'qc-only' | 'alignment' | 'coverage' | 'counts' | 'peak-calling' | 'figure-reproduction' | string;
+    minimalRunnablePlanRefs: ScientificEvidenceRef[];
+    downsampleOrRegionFixtureRefs?: ScientificEvidenceRef[];
+    stopBeforeExecutionUnlessReady: boolean;
+  };
 }
 
 export type ScientificReproductionArtifactData =
@@ -682,6 +689,29 @@ function validateTypeSpecificBasics(
       validateRefArray(check.evidenceRefs, `readinessChecks[${index}].evidenceRefs`, issues, { requireNonEmpty: true });
     });
     validateRawExecutionGate(data.rawExecutionGate, 'rawExecutionGate', issues);
+    if (data.n6Escalation !== undefined) {
+      validateRawReanalysisEscalation(data.n6Escalation, 'n6Escalation', issues);
+    }
+  }
+}
+
+function validateRawReanalysisEscalation(
+  value: unknown,
+  path: string,
+  issues: ScientificReproductionValidationIssue[],
+) {
+  if (!isRecord(value)) {
+    issues.push({ path, message: `${path} must be an object.`, expected: 'raw reanalysis escalation metadata', actual: typeOf(value) });
+    return;
+  }
+  validateStringArray(value.requestedFileClasses, `${path}.requestedFileClasses`, issues, true);
+  validateStringAt(value, 'reanalysisIntent', `${path}.reanalysisIntent`, issues);
+  validateRefArray(value.minimalRunnablePlanRefs, `${path}.minimalRunnablePlanRefs`, issues, { requireNonEmpty: true });
+  if (value.downsampleOrRegionFixtureRefs !== undefined) {
+    validateRefArray(value.downsampleOrRegionFixtureRefs, `${path}.downsampleOrRegionFixtureRefs`, issues, { requireNonEmpty: true });
+  }
+  if (value.stopBeforeExecutionUnlessReady !== true) {
+    issues.push({ path: `${path}.stopBeforeExecutionUnlessReady`, message: `${path}.stopBeforeExecutionUnlessReady must be true.`, expected: 'true', actual: typeOf(value.stopBeforeExecutionUnlessReady) });
   }
 }
 

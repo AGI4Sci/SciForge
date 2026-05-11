@@ -60,6 +60,13 @@ for (const requiredToolClass of [
 const budgetPolicy = manifest.metadata?.budgetPolicy as Record<string, unknown>;
 assert.equal(budgetPolicy.maxDownloadBytes, 50000000);
 assert.equal(budgetPolicy.largeRawDataPolicy, 'metadata-only-or-missing-data');
+assert.deepEqual(manifest.metadata?.milestones, ['N1', 'N2', 'N3', 'N4', 'N5', 'N6']);
+const n6EscalationPolicy = manifest.metadata?.n6EscalationPolicy as Record<string, unknown>;
+assert.equal(n6EscalationPolicy.defaultMode, 'metadata-only-preflight');
+assert.equal(n6EscalationPolicy.artifactType, 'raw-data-readiness-dossier');
+assert.equal(n6EscalationPolicy.metadataField, 'n6Escalation');
+assert.equal(n6EscalationPolicy.rawExecutionGateDefaultAllowed, false);
+assert.deepEqual(n6EscalationPolicy.allowedPreflightVerdicts, ['insufficient-evidence', 'not-tested']);
 assert.deepEqual(manifest.metadata?.degradationPolicy, [
   'raw-data-within-budget',
   'processed-table-or-supplement',
@@ -78,6 +85,7 @@ assert.deepEqual(fixtures.cases.map((entry) => entry.id).sort(), [
   'dataset-discovery-available',
   'dataset-discovery-missing',
   'dataset-discovery-timeout',
+  'raw-reanalysis-escalation-preflight',
 ]);
 
 for (const entry of fixtures.cases) {
@@ -91,7 +99,7 @@ for (const entry of fixtures.cases) {
 const missing = caseById('dataset-discovery-missing');
 assert.equal(missing.mockResponse.status, 'missing');
 assert.ok(missing.expectedArtifacts.some((artifact) => artifact.type === 'dataset-inventory' && artifact.status === 'missing-data'));
-assert.ok(missing.expectedArtifacts.some((artifact) => artifact.type === 'claim-verdict' && artifact.status === 'unverified'));
+assert.ok(missing.expectedArtifacts.some((artifact) => artifact.type === 'claim-verdict' && artifact.status === 'insufficient-evidence'));
 
 const available = caseById('dataset-discovery-available');
 assert.equal(available.mockResponse.status, 'available');
@@ -104,6 +112,18 @@ assert.equal(timeout.mockResponse.status, 'timeout');
 assert.equal(timeout.mockResponse.degradationAction, 'metadata-only-or-missing-data');
 assert.ok(timeout.mockResponse.timeoutMs && timeout.mockResponse.timeoutMs <= timeout.mockResponse.providerLatencyMs);
 assert.ok(timeout.expectedArtifacts.some((artifact) => artifact.type === 'dataset-inventory' && artifact.status === 'timeout'));
+
+const rawEscalation = caseById('raw-reanalysis-escalation-preflight');
+assert.equal(rawEscalation.mockResponse.status, 'preflight-blocked');
+assert.equal(rawEscalation.input.environmentProfile?.network, 'disabled');
+assert.equal(rawEscalation.mockResponse.preflight?.rawExecutionGateAllowed, false);
+assert.equal(rawEscalation.mockResponse.preflight?.stopBeforeExecutionUnlessReady, true);
+const rawEscalationFileClasses = rawEscalation.input.discoveryHints.fileClasses;
+assert.ok(Array.isArray(rawEscalationFileClasses));
+assert.ok(rawEscalationFileClasses.includes('FASTQ'));
+assert.ok(rawEscalationFileClasses.includes('BAM'));
+assert.ok(rawEscalation.expectedArtifacts.some((artifact) => artifact.type === 'raw-data-readiness-dossier' && artifact.status === 'blocked' && artifact.requiredFields.includes('n6Escalation')));
+assert.ok(rawEscalation.expectedArtifacts.some((artifact) => artifact.type === 'claim-verdict' && artifact.status === 'insufficient-evidence'));
 
 const discovery = await discoverPackageCapabilityManifestsFromFiles({
   rootDir: skillDir,
@@ -139,15 +159,30 @@ interface MockDatasetDiscoveryCase {
     claimRefs: string[];
     discoveryHints: Record<string, unknown>;
     budget: Record<string, unknown>;
+    environmentProfile?: {
+      network: 'disabled' | 'mock-only' | 'metadata-only' | 'full';
+      availableToolClasses?: string[];
+      genomeCaches?: string[];
+      annotationCaches?: string[];
+    };
   };
   mockResponse: {
-    status: 'missing' | 'available' | 'timeout';
+    status: 'missing' | 'available' | 'timeout' | 'preflight-blocked';
     providerLatencyMs: number;
     timeoutMs?: number;
     attemptedSources?: Array<Record<string, unknown>>;
     datasetInventory?: Array<{ sizeBytes: number } & Record<string, unknown>>;
     degradationAction?: string;
     downloadedBytes: number;
+    preflight?: {
+      rawExecutionGateAllowed: boolean;
+      approvalStatus: string;
+      rawExecutionStatus: string;
+      requestedFileClasses: string[];
+      reanalysisIntent: string;
+      stopBeforeExecutionUnlessReady: boolean;
+      reason: string;
+    };
   };
   expectedArtifacts: Array<{
     type: string;

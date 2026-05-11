@@ -42,6 +42,7 @@ const RAW_DATA_PATTERNS = [
   /\bfastq(?:\.gz)?\b/i,
   /\bbam\b/i,
   /\bcram\b/i,
+  /\bsra\b/i,
   /\bbigwig\b/i,
   /\bbed(?:\.gz)?\b/i,
   /\b(?:sra|ena|geo|gse|gsm|srr|srx)\d+\b/i,

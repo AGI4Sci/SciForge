@@ -269,13 +269,14 @@ Todo：
 
 ## 后续候选里程碑
 
-N1-N5 已在本轮完成为通用 gate/contract/smoke。N4 在用户明确批准下载/计算后只执行 one-claim、bounded、refs-first raw BED domain pilot，避免把通用能力验证误读成单论文全量 raw-data 重算工程。N5 收束此前暴露的 src capability-semantics guard 漏洞，使 0 baseline 恢复为可执行验收。
+N1-N6 已在本轮完成为通用 gate/contract/smoke。N4 在用户明确批准下载/计算后只执行 one-claim、bounded、refs-first raw BED domain pilot，避免把通用能力验证误读成单论文全量 raw-data 重算工程。N5 收束此前暴露的 src capability-semantics guard 漏洞，使 0 baseline 恢复为可执行验收。N6 将 FASTQ/BAM/CRAM/SRA 级 raw reanalysis 升级为 metadata-only preflight，不默认触发下载或计算。
 
 - [x] N1：Harness-governed Scientific Reproduction。把科研复现每轮 context、capability、budget、verification、repair、progress 收敛进 `HarnessContract`/trace；验收以 harness trace、budget exhaustion、validation/repair/audit 和现有 2020/2025 bounded fixtures 通过为准。
 - [x] N2：Self-prompt Auto-submit Gating。只在 required refs、schema、verifier、预算、停止条件和人工确认点满足时自动提交下一轮；遇到 missing evidence、raw download、许可/算力未定义或重复失败时停在 structured needs-human/failed-with-reason。
 - [x] N3：Raw-data Reanalysis Readiness。先产出 refs-first readiness dossier，列明 accession、数据许可、下载字节数、存储/CPU/内存/时间预算、工具版本、环境锁、genome cache、checksum 和降级策略；verifier 必须阻止未满足许可/预算/环境的 raw execution。
 - [x] N4：One-claim Raw-data Pilot。只能在 N3 通过且用户批准下载/计算后，选择一个 claim、最小样本集和一条明确 pipeline 运行；输出仍使用通用 `analysis-notebook`、`figure-reproduction-report`、`evidence-matrix`、`claim-verdict`，不能因 pipeline 跑通就标成科学成功。
 - [x] N5：Capability Semantics Boundary Hygiene。把真实 package-owned capability 语义迁出 `src/**`，把误判的平台 contract vocabulary 与 package-owned ids 分开检查；验收以 `smoke:no-src-capability-semantics` 0 tracked findings、typecheck、package checks 和相关 capability smokes 通过为准。
+- [x] N6：Raw FASTQ/BAM Reanalysis Preflight。把全量 raw reanalysis 推进到通用 preflight：记录 requested file classes、reanalysis intent、最小 runnable plan refs、downsample/region fixture refs、环境/预算/checksum/许可 gate；默认 `rawExecutionGate.allowed=false`，没有执行证据不得声称 `reproduced`。
 
 ## 2026-05-11 阶段记录
 
@@ -319,4 +320,8 @@ N1-N5 已在本轮完成为通用 gate/contract/smoke。N4 在用户明确批准
 - N5 真实迁移：`literature.retrieval` offline runner 从 `src/runtime` 移到 package-owned `packages/skills/literature/index.ts`，测试改从 package 入口读取；skill/tool projection fallback policy 移到 `packages/skills/capability-projection-policy.ts`；UI 的 selected tool contract 改从 `packages/skills/tool-skills-runtime.ts` 投影，不再在 UI 写死 `local.vision-sense` contract。
 - N5 guard 修复：`tools/check-no-src-capability-semantics.ts` 继续阻止 package-owned artifact/component/provider/domain ids，但明确允许 runtime 自有 contract vocabulary、audit/provenance source、manifest schema version、runtime capability ids、interaction/progress/audit lifecycle terms 和 package export refs；不通过 baseline 掩盖真实 capability 语义。
 - N5 验证：`npm run typecheck`、`npm run smoke:no-src-capability-semantics`、`npm run packages:check`、`npm run smoke:no-legacy-paths`、`npm run smoke:module-boundaries`、`npm run smoke:capability-default-callbacks`、`npx tsx tests/smoke/smoke-literature-retrieval-capability.ts`、`npx tsx tests/smoke/smoke-capability-budget-debits.ts` 均通过。
-- 当前收束判断：本阶段“用真实例子拉通复杂科研问题解决能力”的目标已完成到 N5，且 src/package capability boundary guard 已恢复 0 baseline。继续做 raw FASTQ/BAM 下载、全量 peak calling 或 genome-cache 复算会从通用能力验证转为重型单论文重算工程；如继续推进，应另建 milestone，先定义更高下载/存储/CPU/内存预算、环境锁、比对/peak-calling pipeline 和逐样本许可/checksum 策略。
+- 第十阶段完成 N6 raw reanalysis preflight：没有新增正式 artifact type，而是在 `raw-data-readiness-dossier` 上加入可选 `n6Escalation` metadata，记录 requested FASTQ/BAM/CRAM/SRA file classes、reanalysis intent、minimal runnable plan refs、downsample/region fixture refs 和 `stopBeforeExecutionUnlessReady=true`。该设计适配任何 raw sequencing/processed alignment 场景，不绑定论文、accession、provider 或工具。
+- N6 package/fixture 更新：scientific reproduction skill 和 manifest 记录 N6 metadata-only preflight policy、允许的 preflight verdict、成功所需执行证据 refs；mock dataset discovery fixtures 新增 `raw-reanalysis-escalation-preflight`，网络 disabled、downloadedBytes=0、rawExecutionGate 默认 false。
+- N6 guard/verifier 更新：raw-data pre-execution guard 覆盖更宽的 SRA/FASTQ/BAM/CRAM intent；新增 `smoke:scientific-reproduction-n6-raw-reanalysis-preflight`，证明 preflight artifacts 可通过 refs-first/readiness 验证，但没有 code/stdout/stderr/statistics/output figure 等执行证据时，提前声称 `reproduced` 会失败。
+- N6 验证：`npm run typecheck`、`npm run smoke:scientific-reproduction`、`npm run packages:check`、`npm run smoke:no-src-capability-semantics`、`npx tsx tests/smoke/smoke-scientific-reproduction-n6-raw-reanalysis-preflight.ts`、`npx tsx tests/smoke/smoke-raw-data-preexecution-guard.ts` 均通过。
+- 当前收束判断：本阶段“用真实例子拉通复杂科研问题解决能力”的目标已完成到 N6，且 src/package capability boundary guard 已恢复 0 baseline。继续做真实 FASTQ/BAM 下载、全量 peak calling 或 genome-cache 复算仍属于重型单论文重算工程；下一步若继续，应在 N6 preflight 的 ready dossier 基础上另建 execute-approved milestone，先定义下载/存储/CPU/内存预算、环境锁、比对/peak-calling pipeline 和逐样本许可/checksum 策略。
