@@ -1,9 +1,11 @@
-import type { GatewayRequest, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
+import type { GatewayRequest, ToolPayload, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
 import { createRuntimeEventRecorder } from '../runtime-event-recorder.js';
 import { sessionBundleRelForRequest } from '../session-bundle.js';
 import { isRecord } from '../gateway-utils.js';
 
 export const RUNTIME_REPLAY_RECORDER_OPTION_SCHEMA_VERSION = 'sciforge.runtime-replay-recorder-option.v1' as const;
+export const RUNTIME_REPLAY_RECORDER_LOG_KIND = 'runtime-replay-recorder' as const;
+export const RUNTIME_REPLAY_RECORDER_PROVIDER = 'sciforge-runtime' as const;
 
 export interface RuntimeReplayRecorderOptions {
   enabled?: boolean;
@@ -25,6 +27,45 @@ export interface RuntimeReplayRecorderApplication extends RuntimeReplayRecorderP
   callbacks: WorkspaceRuntimeCallbacks;
   plan: RuntimeReplayRecorderPlan;
   flush?: () => Promise<void>;
+}
+
+export function attachRuntimeReplayRecorderRefs(
+  payload: ToolPayload,
+  recorder: RuntimeReplayRecorderApplication,
+): ToolPayload {
+  if (!recorder.enabled || !recorder.runtimeEventsRef || !recorder.sessionBundleRef) return payload;
+  const data = {
+    schemaVersion: RUNTIME_REPLAY_RECORDER_OPTION_SCHEMA_VERSION,
+    enabled: true,
+    runtimeEventsRef: recorder.runtimeEventsRef,
+    sessionBundleRef: recorder.sessionBundleRef,
+  };
+  return {
+    ...payload,
+    logs: [
+      ...(payload.logs ?? []),
+      {
+        kind: RUNTIME_REPLAY_RECORDER_LOG_KIND,
+        ref: recorder.runtimeEventsRef,
+        data,
+      },
+    ],
+    workEvidence: [
+      ...(payload.workEvidence ?? []),
+      {
+        kind: 'other',
+        status: 'success',
+        provider: RUNTIME_REPLAY_RECORDER_PROVIDER,
+        input: { enabled: true },
+        resultCount: 1,
+        outputSummary: 'Runtime replay recorder captured gateway events for explicit opt-in audit replay.',
+        evidenceRefs: [recorder.runtimeEventsRef, recorder.sessionBundleRef],
+        recoverActions: [],
+        diagnostics: [`runtimeEventsRef=${recorder.runtimeEventsRef}`, `sessionBundleRef=${recorder.sessionBundleRef}`],
+        rawRef: recorder.runtimeEventsRef,
+      },
+    ],
+  };
 }
 
 export function runtimeReplayRecorderOptionsFromRequest(request: GatewayRequest): RuntimeReplayRecorderOptions {

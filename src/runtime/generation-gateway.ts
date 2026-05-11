@@ -93,7 +93,7 @@ import { evaluateToolPayloadEvidence } from './gateway/work-evidence-guard.js';
 import { evaluateGuidanceAdoption } from './gateway/guidance-adoption-guard.js';
 import { summarizeWorkEvidenceForHandoff } from './gateway/work-evidence-types.js';
 import { createLatencyTelemetry } from './gateway/latency-telemetry.js';
-import { applyRuntimeReplayRecorder } from './gateway/runtime-replay-recorder.js';
+import { applyRuntimeReplayRecorder, attachRuntimeReplayRecorderRefs } from './gateway/runtime-replay-recorder.js';
 import { recordValidationRepairTelemetryForPayload } from './gateway/validation-repair-telemetry-runtime.js';
 import {
   agentServerFailurePayloadRefs,
@@ -176,7 +176,7 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
         request,
       );
       telemetry.markVerificationEnd();
-      return telemetry.emitFinal(verified) ?? verified;
+      return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, runtimeReplayRecorder);
     }
     const visionSensePayload = await tryRunVisionSenseRuntime(request, telemetry.callbacks);
     if (visionSensePayload) {
@@ -186,7 +186,7 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
         request,
       );
       telemetry.markVerificationEnd();
-      return telemetry.emitFinal(verified) ?? verified;
+      return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, runtimeReplayRecorder);
     }
     const skills = await loadSkillRegistry(request);
     const skill = agentServerGenerationSkill(request.skillDomain);
@@ -203,7 +203,7 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
       request,
     );
     telemetry.markVerificationEnd();
-    return telemetry.emitFinal(verified) ?? verified;
+    return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, runtimeReplayRecorder);
   } catch (error) {
     telemetry.markFallback(errorMessage(error));
     telemetry.emitFinal();
@@ -211,6 +211,13 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
   } finally {
     await runtimeReplayRecorder.flush?.();
   }
+}
+
+function finalizeGatewayPayload(
+  payload: ToolPayload,
+  runtimeReplayRecorder: ReturnType<typeof applyRuntimeReplayRecorder>,
+): ToolPayload {
+  return attachRuntimeReplayRecorderRefs(payload, runtimeReplayRecorder);
 }
 
 async function runAgentServerGeneratedTask(

@@ -288,6 +288,12 @@ Todo：
   - [x] 默认安全边界：默认请求不启用写盘、不创建 session NDJSON、不改变 callback 语义，并继续不恢复 Computer Use / 视觉 GUI grounding 压测。
   - [x] Replay metadata：opt-in 录制沿用 session bundle 路径，补稳定 event id、timestamp、session/run metadata，产出的 `runtimeEventsRef` 可交给 M16 replay CLI。
   - [x] Smoke/单测：覆盖 disabled 默认、missing workspace、enabled opt-in、event forwarding、session bundle 路径和 recorded NDJSON 可被 runtime replay report 消费。
+- [x] M18：为 gateway opt-in runtime replay recorder 建立端到端回归守卫和可发现性。
+  - [x] E2E regression guard：覆盖 gateway opt-in 入口到 recorder 写入、`runtimeEventsRef` 暴露、M16 runtime replay CLI 消费的完整非视觉链路，防止 gateway callback 包装、session bundle 路径或 replay metadata 退化。
+  - [x] 默认不写盘：明确默认请求、缺少 workspace、未显式启用 recorder 时不得创建 NDJSON、不得 materialize session bundle、不得改变 runtime callback 语义。
+  - [x] Opt-in 可发现性：在项目任务板中记录 recorder 的启用条件、产物位置、可交给 replay CLI 的引用形态，以及 smoke/benchmark 入口，便于后续 agent 找到端到端验收路径。
+  - [x] 回归边界：守卫只覆盖 runtime/session event replay recorder 的 opt-in 非视觉路径，不恢复 Computer Use / 视觉 GUI grounding，不测试视觉定位、桌面点击、屏幕元素 grounding 或纯视觉 GUI 自动化。
+  - [x] 验收信号：完成项必须能证明 disabled default、enabled opt-in、event forwarding、recorded NDJSON replay、runtimeEventsRef 可追踪和 no-write default 均被守住。
 
 ## 已清理内容
 
