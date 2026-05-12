@@ -28,3 +28,33 @@ test('detects generation-looking text that should not be treated as direct answe
   assert.equal(looksLikeUnparsedGenerationResponseText('```json\n{"taskFiles":[{"path":"tasks/run.py"'), true);
   assert.equal(looksLikeUnparsedGenerationResponseText('Here is a normal report about papers.'), false);
 });
+
+test('parses generation output from authoritative result and finalText fields only', () => {
+  const response = {
+    taskFiles: [{ path: 'tasks/from-result.py', language: 'python', content: 'print("ok")' }],
+    entrypoint: { path: 'tasks/from-result.py', language: 'python' },
+    expectedArtifacts: ['research-report'],
+  };
+
+  const fromResultObject = parseGenerationResponse({ result: response });
+  assert.equal(fromResultObject?.entrypoint.path, 'tasks/from-result.py');
+
+  const fromFencedFinalText = parseGenerationResponse({
+    stages: [{
+      result: {
+        finalText: `\`\`\`json\n${JSON.stringify(response)}\n\`\`\``,
+      },
+    }],
+  });
+  assert.equal(fromFencedFinalText?.entrypoint.path, 'tasks/from-result.py');
+
+  const fromSummary = parseGenerationResponse({
+    stages: [{
+      result: {
+        handoffSummary: `Prior attempt returned this old taskFiles JSON and should not be executed again: ${JSON.stringify(response)}`,
+        outputSummary: `Prior taskFiles summary: ${JSON.stringify(response)}`,
+      },
+    }],
+  });
+  assert.equal(fromSummary, undefined);
+});

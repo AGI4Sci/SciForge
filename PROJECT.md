@@ -495,6 +495,36 @@ Failure/Improvement Notes：
 - [x] `git diff --check`
 
 
+### 2026-05-13 Milestone：Backend Handoff Drift 分类与恢复收敛
+
+本轮继续并行调研 AgentServer 四类输出漂移：`taskFiles`、direct `ToolPayload`、plain text 和 malformed generation response。落地重点是把原本散在 parser、gateway 分流和 direct-text guard 里的隐式判断提成可审计 contract，避免后端 handoff 漂移被误包装成最终答案或重复执行旧摘要中的任务：
+
+- [x] 新增 `sciforge.backend-handoff-drift.v1` contract，统一分类 `task-files`、`direct-tool-payload`、`plain-text-answer`、`guarded-plain-text`、`malformed-generation-response`、`empty-output` 和 `unknown-output`，并给出 strict retry / diagnostic materialization / blocked 的恢复策略。
+- [x] AgentServer generation gateway 在四个出口统一发出 `agentserver-handoff-drift` runtime event：runnable taskFiles、direct ToolPayload、plain text bridge、malformed generation strict retry 都可在运行事件中审计。
+- [x] `parseGenerationResponse` 只从 authoritative `result/text/finalText` 路径解析新 runnable task，不再从 `handoffSummary` / `outputSummary` 中抽旧 taskFiles JSON 当作新任务执行。
+- [x] direct-text guard 保持 fail closed：raw taskFiles/log/trace/code 进入 runtime diagnostic；自然语言里提到 taskFiles 作为历史引用仍可作为普通答案恢复。
+- [x] 新增 `smoke:backend-handoff-drift`，串测四类真实 gateway 输出：taskFiles 执行、direct ToolPayload materialize、plain text report bridge、malformed generation-looking text strict retry 后执行。
+
+Failure/Improvement Notes：
+
+- handoff summary 是摘要证据，不是执行授权；如果里面包含旧 `taskFiles` JSON，只能作为引用/诊断，不应被 parser 当成新 generation response。
+- plain text fallback 必须先分类再恢复；否则代码、日志、trace 或 taskFiles 片段会被错误放进最终报告。
+- 后续如继续扩展 backend 输出形态，应先扩 `backend-handoff-drift` contract 与 smoke，再接 gateway/UI 展示。
+
+本轮验证：
+
+- [x] `node --import tsx --test packages/contracts/runtime/backend-handoff-drift.test.ts src/runtime/gateway/agentserver-run-output.test.ts src/runtime/gateway/direct-answer-payload.test.ts`
+- [x] `npm run smoke:backend-handoff-drift`
+- [x] `npx tsx tests/smoke/smoke-agentserver-text-generation-fallback.ts`
+- [x] `npm run smoke:agentserver-direct-text`
+- [x] `npm run smoke:agentserver-generation`
+- [x] `npm run typecheck`
+- [x] `npm run smoke:runtime-contracts`
+- [x] `npm run smoke:no-src-capability-semantics`
+- [x] `npm run smoke:no-legacy-paths`
+- [x] `npm run smoke:runtime-gateway-modules`
+
+
 
 ### H022 Real-world Complex Task Backlog for SciForge Hardening
 
@@ -531,7 +561,7 @@ Failure/Improvement Notes：
 - [ ] R-CODE-05 测试失败恢复：第一次 patch 后 typecheck/test 失败，用户要求解释失败并做最小通用修复，不能回滚无关改动。
 - [ ] R-CODE-06 Dirty worktree 协作：预先放入用户未提交改动，再让 agent 修复另一区域，验证不会 reset/revert 用户改动。
 - [x] R-CODE-07 Release verify 请求：用户要求“等完整验证再推 GitHub”，系统必须阻塞到指定测试完成，失败时不推送。已新增 `sciforge.release-gate.v1`，把 release/push intent 映射到 `npm run verify:full`，并在缺少 full verify、服务重启、变更摘要、git target 或 audit refs 时保持 pending/needs-human，不允许把 GitHub push 视作完成。
-- [ ] R-CODE-08 Backend handoff 漂移：AgentServer 返回 taskFiles、direct ToolPayload、plain text、malformed generation response 四类输出，要求统一分类和可恢复。
+- [x] R-CODE-08 Backend handoff 漂移：AgentServer 返回 taskFiles、direct ToolPayload、plain text、malformed generation response 四类输出，要求统一分类和可恢复。已新增 `sciforge.backend-handoff-drift.v1` 分类 contract 与 `agentserver-handoff-drift` runtime event，覆盖 taskFiles 执行、direct ToolPayload materialize、plain text bridge、guarded raw text diagnostic、malformed generation-looking text strict retry，以及 handoffSummary 不再触发旧任务重跑。
 - [ ] R-CODE-09 多 backend 对比修复：同一任务用 Codex/OpenTeam 两个 backend 跑，比较失败模式，提炼 backend-neutral 修复。
 - [x] R-CODE-10 项目服务生命周期：修改代码后自动重启 dev server，确认端口占用、旧进程退出、新服务 ready、浏览器页面可刷新。已覆盖 Workspace Writer health identity、动态端口 restart smoke 和 Vite capability gate；真实 UI dev server 热更新仍由 `npm run smoke:browser` 持续覆盖。
 

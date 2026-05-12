@@ -15,8 +15,6 @@ export function parseGenerationResponse(value: unknown): AgentServerGenerationRe
     isRecord(value) ? value.result : undefined,
     isRecord(value) ? value.text : undefined,
     isRecord(value) ? value.finalText : undefined,
-    isRecord(value) ? value.handoffSummary : undefined,
-    isRecord(value) ? value.outputSummary : undefined,
     ...structuredTextCandidates(value),
   ];
   for (const candidate of candidates) {
@@ -75,7 +73,7 @@ function structuredTextCandidates(value: unknown): string[] {
       for (const child of item) visit(child, depth + 1);
       return;
     }
-    for (const key of ['finalText', 'handoffSummary', 'outputSummary', 'result', 'text', 'output', 'data', 'run', 'stages']) {
+    for (const key of ['finalText', 'result', 'text', 'output', 'data', 'run', 'stages']) {
       visit(item[key], depth + 1);
     }
   };

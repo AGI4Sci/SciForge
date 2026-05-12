@@ -48,6 +48,19 @@ export type {
   ConfiguredAgentServerLlmEndpoint,
 } from './agentserver-prompt-policy';
 export {
+  BACKEND_HANDOFF_DRIFT_EVENT_TYPE,
+  BACKEND_HANDOFF_DRIFT_SCHEMA_VERSION,
+  backendHandoffDriftEvent,
+  backendHandoffDriftSignals,
+  classifyBackendHandoffDrift,
+} from './backend-handoff-drift';
+export type {
+  BackendHandoffDriftClassification,
+  BackendHandoffDriftInput,
+  BackendHandoffDriftKind,
+  BackendHandoffDriftStatus,
+} from './backend-handoff-drift';
+export {
   buildBackendInputTextAnchors,
   handoffArtifactDataSummaryReason,
   handoffStringCompactionSchema,

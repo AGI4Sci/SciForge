@@ -61,6 +61,7 @@ import {
 import {
   coerceAgentServerToolPayload,
   coerceWorkspaceTaskPayload,
+  classifyPlainAgentText,
   configureDirectAnswerArtifactContext,
   ensureDirectAnswerReportArtifact,
   extractJson,
@@ -155,6 +156,10 @@ import {
   repairAttemptStartEvent,
   workspaceSkillSelectedEvent,
 } from '@sciforge-ui/runtime-contract/events';
+import {
+  backendHandoffDriftEvent,
+  classifyBackendHandoffDrift,
+} from '@sciforge-ui/runtime-contract/backend-handoff-drift';
 
 configureDirectAnswerArtifactContext(collectArtifactReferenceContext);
 configurePayloadValidationContext(attemptPlanRefs);
@@ -1149,6 +1154,12 @@ async function requestAgentServerGeneration(params: {
     }
     const directPayload = parseToolPayloadResponse(run);
     if (directPayload) {
+      emitBackendHandoffDrift(params.callbacks, {
+        raw: run.output ?? run,
+        parsedToolPayload: true,
+        source: 'agentserver-run-output',
+        runId: typeof run.id === 'string' ? run.id : undefined,
+      });
       const payload = mergeBackendStreamWorkEvidence(directPayload, workEvidence);
       return await finalizeAgentServerGenerationSuccess({
         result: {
@@ -1169,6 +1180,12 @@ async function requestAgentServerGeneration(params: {
     if (!parsed) {
       if (directText && looksLikeUnparsedGenerationResponseText(directText)) {
         const malformedGenerationReason = 'AgentServer returned a malformed or incomplete AgentServerGenerationResponse-looking JSON payload; retry with compact executable taskFiles JSON and no markdown fences.';
+        emitBackendHandoffDrift(params.callbacks, {
+          raw: run.output ?? run,
+          text: directText,
+          source: 'agentserver-run-output',
+          runId: typeof run.id === 'string' ? run.id : undefined,
+        });
         if (!strictTaskFilesReason && dispatchAttempt < 2) {
           strictTaskFilesReason = malformedGenerationReason;
           emitWorkspaceRuntimeEvent(params.callbacks, {
@@ -1183,6 +1200,14 @@ async function requestAgentServerGeneration(params: {
         return { ok: false, error: malformedGenerationReason };
       }
       if (directText) {
+        const directTextClassification = classifyPlainAgentText(directText);
+        emitBackendHandoffDrift(params.callbacks, {
+          raw: run.output ?? run,
+          text: directText,
+          plainTextClassificationKind: directTextClassification.kind,
+          source: 'agentserver-run-output',
+          runId: typeof run.id === 'string' ? run.id : undefined,
+        });
         return await finalizeAgentServerGenerationSuccess({
           result: {
           ok: true,
@@ -1198,6 +1223,13 @@ async function requestAgentServerGeneration(params: {
       }
       return { ok: false, error: 'AgentServer generation response did not include taskFiles and entrypoint or a SciForge ToolPayload.' };
     }
+    emitBackendHandoffDrift(params.callbacks, {
+      raw: run.output ?? run,
+      text: directText,
+      parsedGeneration: true,
+      source: 'agentserver-run-output',
+      runId: typeof run.id === 'string' ? run.id : undefined,
+    });
     return await finalizeAgentServerGenerationSuccess({
       result: {
       ok: true,
@@ -1251,6 +1283,13 @@ function withAgentServerDispatchMetadata<T>(
     ...metadata,
   };
   return next as T;
+}
+
+function emitBackendHandoffDrift(
+  callbacks: WorkspaceRuntimeCallbacks | undefined,
+  input: Parameters<typeof classifyBackendHandoffDrift>[0],
+) {
+  emitWorkspaceRuntimeEvent(callbacks, backendHandoffDriftEvent(classifyBackendHandoffDrift(input)));
 }
 
 function normalizeAgentServerWorkspaceEvent(raw: unknown): WorkspaceRuntimeEvent {

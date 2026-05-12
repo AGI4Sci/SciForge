@@ -98,3 +98,18 @@ test('plain AgentServer text guard still allows human-facing prose answers', () 
   assert.equal(payload.executionUnits[0]?.status, 'done');
   assert.match(payload.reasoningTrace, /plain text/i);
 });
+
+test('plain AgentServer text guard allows prose that references taskFiles without raw metadata', () => {
+  const text = 'The generated files are available in the audit refs. I mention taskFiles only to explain where the code was archived.';
+  const classification = classifyPlainAgentText(text);
+  assert.equal(classification.kind, 'human-answer');
+
+  const payload = toolPayloadFromPlainAgentOutput(text, {
+    skillDomain: 'knowledge',
+    prompt: 'Where did the generated files go?',
+    artifacts: [],
+  });
+
+  assert.notEqual(payload.claimType, 'runtime-diagnostic');
+  assert.equal(payload.executionUnits[0]?.status, 'done');
+});
