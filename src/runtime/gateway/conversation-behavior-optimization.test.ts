@@ -108,14 +108,44 @@ test('downgrades budget and emits structured backend handoff directive codes', (
   assert.equal(decision.budgetDowngrade.active, true);
   assert.equal(decision.budgetDowngrade.level, 'strong');
   assert.ok(decision.budgetDowngrade.disabledWork.includes('deep-verification'));
+  assert.ok(decision.budgetDowngrade.disabledWork.includes('full-text-download'));
+  assert.equal(decision.evidenceMode.fullTextPolicy.mode, 'metadata-only');
+  assert.equal(decision.evidenceMode.fullTextPolicy.maxDownloads, 0);
   assert.ok(decision.backendHandoffDirective.directiveCodes.includes('handoff:structured-contract'));
   assert.ok(decision.backendHandoffDirective.directiveCodes.includes('handoff:budget-downgraded'));
+  assert.ok(decision.backendHandoffDirective.directiveCodes.includes('handoff:metadata-first'));
   assert.equal(decision.backendHandoffDirective.structuredOnly, true);
   assert.deepEqual(decision.backendHandoffDirective.stateRefs.sort(), [
     'artifact:report-draft',
     'file:input-digest.json',
     'trace:e1',
   ]);
+});
+
+test('applies structured metadata-only and strict evidence policies without prompt hardcoding', () => {
+  const decision = optimizeConversationBehavior({
+    executionModePlan: {
+      policyOverrides: {
+        fullTextPolicy: { mode: 'metadata-only', maxDownloads: 0 },
+      },
+    },
+    evidencePolicy: {
+      mode: 'strict',
+      evidenceGaps: ['evidence:missing-independent-citation'],
+    },
+    evidence: [{ status: 'success', evidenceRefs: ['trace:metadata-seed'] }],
+  });
+
+  assert.equal(decision.evidenceMode.strict, true);
+  assert.equal(decision.evidenceMode.fullTextPolicy.mode, 'metadata-only');
+  assert.equal(decision.evidenceMode.fullTextPolicy.maxDownloads, 0);
+  assert.equal(decision.evidenceMode.confidencePolicy.requireGapDisclosure, true);
+  assert.ok(decision.evidenceMode.confidencePolicy.maxConfidence <= 0.55);
+  assert.ok(decision.evidenceMode.evidenceGaps.some((gap) => gap.code === 'evidence:missing-independent-citation'));
+  assert.ok(decision.backendHandoffDirective.directiveCodes.includes('handoff:strict-evidence'));
+  assert.ok(decision.backendHandoffDirective.directiveCodes.includes('handoff:evidence-gaps-required'));
+  assert.ok(decision.backendHandoffDirective.forbiddenInlineCategories.includes('full-text'));
+  assert.ok(decision.backendHandoffDirective.forbiddenInlineCategories.includes('claim-beyond-evidence'));
 });
 
 test('detects recovery followup and scope-change from state facts', () => {

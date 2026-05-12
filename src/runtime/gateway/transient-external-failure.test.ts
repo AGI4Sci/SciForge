@@ -49,6 +49,11 @@ test('downgrades transient external unit failures when readable artifacts exist'
   assert.equal(next.executionUnits[0]?.externalDependencyStatus, 'transient-unavailable');
   assert.equal(payloadHasOnlyTransientExternalDependencyFailures(next), true);
   assert.match(String(next.executionUnits[0]?.recoverActions), /Retry after provider backoff/);
+  assert.equal(next.workEvidence?.[0]?.status, 'failed-with-reason');
+  assert.equal(next.workEvidence?.[0]?.failureReason, 'HTTP Error 429: Unknown Error');
+  assert.deepEqual(next.workEvidence?.[0]?.recoverActions.includes('Retry after provider backoff or rate-limit reset.'), true);
+  const artifactData = next.artifacts[0]?.data as Record<string, unknown>;
+  assert.equal((artifactData.transientPolicy as Record<string, unknown>).status, 'transient-unavailable');
   assert.match(next.reasoningTrace, /Transient external dependency failure/);
 });
 
@@ -115,6 +120,16 @@ test('builds a diagnostic payload for pre-output transient external failures', (
   assert.equal(diagnostic.claimType, 'runtime-diagnostic');
   assert.equal(diagnostic.executionUnits[0]?.status, 'needs-human');
   assert.equal(diagnostic.executionUnits[0]?.externalDependencyStatus, 'transient-unavailable');
+  assert.equal(diagnostic.workEvidence?.[0]?.kind, 'retrieval');
+  assert.equal(diagnostic.workEvidence?.[0]?.status, 'failed-with-reason');
+  assert.deepEqual(diagnostic.workEvidence?.[0]?.evidenceRefs, [
+    '.sciforge/debug/task-1/stdout.log',
+    '.sciforge/debug/task-1/stderr.log',
+  ]);
+  const artifactData = diagnostic.artifacts[0]?.data as Record<string, unknown>;
+  assert.equal((artifactData.transientPolicy as Record<string, unknown>).status, 'transient-unavailable');
+  assert.ok(Array.isArray(artifactData.providerAttemptRefs));
+  assert.ok(Array.isArray(artifactData.preservedRefs));
   assert.match(String(diagnostic.artifacts[0]?.content), /标准输出/);
   assert.equal(payloadHasOnlyTransientExternalDependencyFailures(diagnostic), true);
 });

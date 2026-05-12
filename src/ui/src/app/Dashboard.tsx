@@ -183,10 +183,12 @@ export function Dashboard({
   async function refreshScenarioLibrary() {
     const library = await loadScenarioLibrary(config);
     setLibraryItems(library?.items ?? []);
+    setLibraryStatus('');
   }
 
   async function refreshSkillProposals() {
     setSkillProposals(await listSkillPromotionProposals(config));
+    setSkillProposalStatus('');
   }
 
   async function acceptSkillProposalFromDashboard(id: string, skillId: string) {

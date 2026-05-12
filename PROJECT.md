@@ -336,7 +336,7 @@ Failure/Improvement Notes：
 - R-RUN-09 fingerprint 不能使用时间戳、workspace 绝对路径、模型配置或 backend URL；本轮只哈希稳定 runtime contract/schema/enum/capability 信号，且 fingerprint 更新不进入 session content revision，避免制造多标签写冲突。
 - R-CODE-10 不应 `pkill node` 或按固定端口清理残留进程；本轮 smoke 只停止自己用 lifecycle token 启动的进程。
 - `src/ui/src/sessionStore.ts` 已进入 1063 行 watch 区；下一轮继续扩展 session migration/write-guard/drift 时，应优先拆出 runtime compatibility 与 write guard helper 模块。
-- 适合下一轮 fixture/smoke 化的 backlog：R-LIT-05、R-LIT-10、R-DATA-01/02/04/07、R-WF-08/09；R-WF-01/02/06、R-DATA-06 和真实 R-LIT-06/07 质量评估继续保留为真实场景压测。
+- 适合下一轮 fixture/smoke 化的 backlog：R-LIT-05、R-LIT-10、R-DATA-01/02/04；R-WF-01/02/06、R-DATA-06 和真实 R-LIT-06/07 质量评估继续保留为真实场景压测。
 
 本轮验证：
 
@@ -348,6 +348,32 @@ Failure/Improvement Notes：
 - [x] `npm run build`
 - [x] `npm run test`（722 tests pass）
 - [x] `npm run smoke:browser`
+- [x] `git diff --check`
+
+
+### 2026-05-13 Milestone：证据模式、外部瞬时失败与网页状态漂移收敛
+
+本轮继续开启 5 个 sub agents 并行复核 literature correction、workflow policy、CSV/mapping、chart lineage 与网页 smoke；主线程使用 Computer Use 在 `http://127.0.0.1:5173/` 复现并修复 Runtime Health 已恢复但 Scenario Library / Skill Proposals 仍显示旧 Workspace Writer 端口错误的问题。落地以下通用修复：
+
+- [x] R-WF-08 低预算 / metadata-first：`ConversationBehaviorOptimization` 增加结构化 `evidenceMode.fullTextPolicy`，从 `budget`、`executionModePlan.policyOverrides`、`contextPolicy` 和显式 `fullTextPolicy` 归一化；低预算降级会禁用 `full-text-download`，保留 `metadata-search`、`citation-metadata`、`durable-refs` 和用户可见 partial，并给出 `allow-bounded-full-text` escalation path。
+- [x] R-WF-09 严格证据模式：新增 `evidenceMode.evidenceGaps` 与 `confidencePolicy`，严格证据或 evidence gap 存在时要求 gap disclosure，并把 claim confidence ceiling 降到结构化上限；backend handoff directive 追加 `handoff:strict-evidence` / `handoff:evidence-gaps-required`，禁止 inline claim-beyond-evidence。
+- [x] R-DATA-07 外部数据源限流：`transientExternalDependencyPayload` 与 partial artifact 降级路径都写出 provider-neutral `workEvidence`、`transientPolicy`、`providerAttemptRefs`、`preservedRefs` 和 retry actions；pre-output 与 partial-output 两类 transient failure 都保持 `needs-human` + `externalDependencyStatus='transient-unavailable'`。
+- [x] 网页配置漂移状态清理：Scenario Library 和 Skill Proposals 在成功刷新后清空旧错误状态，避免 Workspace Writer 从旧端口恢复到新端口后继续显示 stale diagnostic。
+
+Failure/Improvement Notes：
+
+- R-WF-08/09 不能只靠中文 prompt 特判；本轮以结构化 policy 为主，prompt token 只作为兜底输入，handoff 仍输出 backend-neutral policy/directive code。
+- R-DATA-07 不能把所有 429/timeout 都包装为成功；只有 pre-output diagnostic payload 或已有 readable artifact 的 partial run 会被降级为 transient-unavailable，schema/code 错误仍保持 blocking。
+- 网页 runtime health 成功不代表所有派生面板状态已收敛；面板级 `status` 必须在成功刷新时主动清空。
+- `src/runtime/gateway/conversation-behavior-optimization.ts` 本轮进入 1084 行 watch 区；下一轮继续扩展 workflow/evidence policy 时应优先抽出 evidence mode / handoff directive helper，不能继续堆主文件。
+
+本轮验证：
+
+- [x] Computer Use：Safari 打开并刷新 `http://127.0.0.1:5173/`，确认 Runtime Health online，Scenario Library / Skill Proposals 不再显示旧 `127.0.0.1:21431` Workspace Writer 错误。
+- [x] `node --import tsx --test src/runtime/gateway/conversation-behavior-optimization.test.ts src/runtime/gateway/transient-external-failure.test.ts`
+- [x] `npm run typecheck`
+- [x] `npm run smoke:browser`
+- [x] `npm run test`（723 tests pass）
 - [x] `git diff --check`
 
 
@@ -399,7 +425,7 @@ Failure/Improvement Notes：
 - [ ] R-DATA-04 图表迭代：先生成图表 artifact，再要求换坐标、换颜色、筛选子集、导出最终报告，测试 artifact identity。
 - [x] R-DATA-05 缺失文件恢复：历史 artifact 指向的文件被删除/移动，用户要求继续，系统必须 stale-check 并进入安全恢复。
 - [ ] R-DATA-06 Notebook 风格任务：连续执行多个分析步骤，每步都有中间文件；用户要求回到第 2 步换参数后继续生成分支结果。
-- [ ] R-DATA-07 外部数据源限流：调用外部 API 拉数据遇到 429/timeout，系统必须输出 transient-unavailable 诊断和重试建议。
+- [x] R-DATA-07 外部数据源限流：调用外部 API 拉数据遇到 429/timeout，系统必须输出 transient-unavailable 诊断和重试建议。已覆盖 pre-output diagnostic payload、partial artifact 降级、provider-neutral workEvidence、transientPolicy 和 retry refs。
 - [x] R-DATA-08 审计导出：分析完成后用户只要求导出 task graph、数据 lineage、执行命令和 artifact refs，不重新计算。
 
 Runtime、恢复与会话生命周期任务：
@@ -435,8 +461,8 @@ UI 与 presentation 真实任务：
 - [ ] R-WF-05 多同学协作分工：基于当前 PROJECT 和代码结构，给 3-5 个同学拆分任务；后续要求按风险/收益重排。
 - [ ] R-WF-06 调研到代码任务：先调研某技术方案，再要求在 SciForge 中实现最小通用修复，再生成测试计划。
 - [ ] R-WF-07 用户反馈收敛：用户连续指出“慢、崩、看不懂、引用错、重复跑”，系统把反馈归类到通用 TODO，而不是逐条道歉。
-- [ ] R-WF-08 低预算模式：用户要求“不要下载全文，先用 metadata 快速判断”，后续再允许补全文，测试 budget escalation。
-- [ ] R-WF-09 严格证据模式：用户要求“不要猜，不确定就标注”，系统必须降低 claim confidence 并输出 evidence gaps。
+- [x] R-WF-08 低预算模式：用户要求“不要下载全文，先用 metadata 快速判断”，后续再允许补全文，测试 budget escalation。已覆盖结构化 fullTextPolicy、低预算 disabled/retained work 与 handoff metadata-first directive。
+- [x] R-WF-09 严格证据模式：用户要求“不要猜，不确定就标注”，系统必须降低 claim confidence 并输出 evidence gaps。已覆盖 evidenceMode.evidenceGaps、confidencePolicy ceiling 与 strict-evidence handoff。
 - [ ] R-WF-10 发布前检查：用户要求把本地改动推 GitHub 前做 release verify、写变更摘要、重启服务，并保留审计记录。
 
 通用修复 TODO 池：

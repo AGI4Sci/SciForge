@@ -4,6 +4,8 @@ import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceTaskRunRe
 
 const TRANSIENT_EXTERNAL_FAILURE_PATTERN = /\b(?:http(?:\s+error)?\s*(?:403|408|413|425|429|500|502|503|504)|forbidden|too many requests|rate.?limit(?:ed)?|quota|throttl|temporar(?:y|ily)|timeout|timed out|econnreset|etimedout|eai_again|enotfound|network is unreachable|service unavailable|too large|content-length|exceeds?(?:ed)?\s+(?:max|limit|budget)|max(?:imum)?\s+(?:download|file)?\s*bytes|payload too large|request entity too large)\b/i;
 
+type PayloadWorkEvidence = NonNullable<ToolPayload['workEvidence']>[number];
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -64,6 +66,61 @@ function stableId(value: string) {
   return createHash('sha1').update(value).digest('hex').slice(0, 12);
 }
 
+function uniqueStrings(values: Array<string | undefined>) {
+  return Array.from(new Set(values.filter((value): value is string => Boolean(value))));
+}
+
+function retryAfterMsFromText(text: string) {
+  const match = text.match(/\bretry[-\s]?after\b[^\d]{0,12}(\d+)\s*(ms|millisecond|milliseconds|s|sec|second|seconds|m|min|minute|minutes)?/i);
+  if (!match) return undefined;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount) || amount < 0) return undefined;
+  const unit = (match[2] || 's').toLowerCase();
+  if (unit.startsWith('m') && unit !== 'ms' && !unit.startsWith('milli')) return amount * 60_000;
+  if (unit === 'ms' || unit.startsWith('milli')) return amount;
+  return amount * 1000;
+}
+
+function transientWorkEvidence(input: {
+  id: string;
+  kind?: string;
+  provider?: string;
+  skillDomain?: string;
+  reason: string;
+  stdoutRef?: string;
+  stderrRef?: string;
+  outputRef?: string;
+  codeRef?: string;
+  recoverActions: string[];
+}): PayloadWorkEvidence {
+  const evidenceRefs = uniqueStrings([input.stdoutRef, input.stderrRef]);
+  return {
+    id: `transient-external-${input.id}`,
+    kind: input.kind ?? (input.skillDomain === 'literature' ? 'retrieval' : 'fetch'),
+    status: 'failed-with-reason',
+    provider: input.provider,
+    input: uniqueObject({
+      skillDomain: input.skillDomain,
+      codeRef: input.codeRef,
+      outputRef: input.outputRef,
+    }),
+    outputSummary: 'External dependency was transiently unavailable; runtime logs and partial artifacts were preserved for retry.',
+    evidenceRefs,
+    failureReason: input.reason,
+    recoverActions: input.recoverActions,
+    diagnostics: uniqueStrings([
+      input.stdoutRef ? `stdoutRef=${input.stdoutRef}` : undefined,
+      input.stderrRef ? `stderrRef=${input.stderrRef}` : undefined,
+      input.outputRef ? `outputRef=${input.outputRef}` : undefined,
+    ]),
+    rawRef: input.outputRef,
+  };
+}
+
+function uniqueObject(value: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined && entry !== ''));
+}
+
 export function transientExternalFailureReasonFromRun(run: Pick<WorkspaceTaskRunResult, 'stderr' | 'stdout'>) {
   const combined = [run.stderr, run.stdout].filter(Boolean).join('\n');
   if (!isTransientExternalFailure(combined)) return undefined;
@@ -97,6 +154,10 @@ export function transientExternalDependencyPayload(input: {
 }): ToolPayload {
   const id = stableId(`${input.skill.id}:${input.request.skillDomain}:${input.run.outputRef}:${input.reason}`);
   const message = '外部数据源暂时不可用，运行证据已保留；请稍后重试或提供缓存证据后继续。';
+  const recoverActions = externalFailureRecoverActions(input.reason);
+  const retryAfterMs = retryAfterMsFromText([input.reason, input.run.stdout, input.run.stderr].filter(Boolean).join('\n'));
+  const providerAttemptRefs = uniqueStrings([input.run.stdoutRef, input.run.stderrRef]);
+  const preservedRefs = uniqueStrings([input.run.stdoutRef, input.run.stderrRef, input.run.outputRef]);
   const diagnostic = [
     '# 外部依赖暂时不可用',
     '',
@@ -160,7 +221,7 @@ export function transientExternalDependencyPayload(input: {
       exitCode: input.run.exitCode,
       externalDependencyStatus: 'transient-unavailable',
       failureReason: input.reason,
-      recoverActions: externalFailureRecoverActions(input.reason),
+      recoverActions,
       nextStep: 'Retry after provider backoff/rate-limit reset, or attach cached evidence and rerun.',
     }],
     artifacts: [{
@@ -176,8 +237,28 @@ export function transientExternalDependencyPayload(input: {
         stderrRef: input.run.stderrRef,
         outputRef: input.run.outputRef,
         externalDependencyStatus: 'transient-unavailable',
+        transientPolicy: {
+          status: 'transient-unavailable',
+          retryAfterMs,
+          recoverActions,
+          reasonCodes: ['transient:external-dependency', 'transient:pre-output'],
+        },
+        retryAfterMs,
+        providerAttemptRefs,
+        preservedRefs,
       },
     }],
+    workEvidence: [transientWorkEvidence({
+      id,
+      skillDomain: input.request.skillDomain,
+      provider: input.skill.id,
+      reason: input.reason,
+      stdoutRef: input.run.stdoutRef,
+      stderrRef: input.run.stderrRef,
+      outputRef: input.run.outputRef,
+      codeRef: input.run.spec.taskRel,
+      recoverActions,
+    })],
     logs: [
       { kind: 'stdout', ref: input.run.stdoutRef },
       { kind: 'stderr', ref: input.run.stderrRef },
@@ -192,6 +273,9 @@ export function transientExternalDependencyPayload(input: {
 export function downgradeTransientExternalFailures(payload: ToolPayload): ToolPayload {
   if (!payloadHasReadableArtifact(payload)) return payload;
   let changed = false;
+  const addedWorkEvidence: PayloadWorkEvidence[] = [];
+  const allRecoverActions: string[] = [];
+  const providerAttemptRefs: string[] = [];
   const executionUnits = payload.executionUnits.map((unit) => {
     if (!isRecord(unit) || !isFailureStatus(unit.status)) return unit;
     const reason = failureReason(unit);
@@ -202,6 +286,25 @@ export function downgradeTransientExternalFailures(payload: ToolPayload): ToolPa
       ...stringList(unit.recoverActions),
       ...externalFailureRecoverActions(transientReason),
     ]));
+    allRecoverActions.push(...recoverActions);
+    const refs = uniqueStrings([
+      stringField(unit.stdoutRef),
+      stringField(unit.stderrRef),
+      stringField(unit.outputRef),
+      stringField(unit.rawRef),
+    ]);
+    providerAttemptRefs.push(...refs);
+    addedWorkEvidence.push(transientWorkEvidence({
+      id: stableId(`${stringField(unit.id) ?? 'unit'}:${transientReason}`),
+      kind: stringField(unit.kind) ?? stringField(unit.workKind),
+      provider: stringField(unit.provider) ?? stringField(unit.tool),
+      reason: transientReason,
+      stdoutRef: stringField(unit.stdoutRef),
+      stderrRef: stringField(unit.stderrRef),
+      outputRef: stringField(unit.outputRef) ?? stringField(unit.rawRef),
+      codeRef: stringField(unit.codeRef),
+      recoverActions,
+    }));
     return {
       ...unit,
       status: 'needs-human',
@@ -212,12 +315,51 @@ export function downgradeTransientExternalFailures(payload: ToolPayload): ToolPa
     };
   });
   if (!changed) return payload;
+  const preservedRefs = uniqueStrings([
+    ...providerAttemptRefs,
+    ...(payload.logs?.map((log) => isRecord(log) ? stringField(log.ref) : undefined) ?? []),
+  ]);
+  const recoverActions = uniqueStrings(allRecoverActions);
   return {
     ...payload,
     executionUnits,
+    artifacts: payload.artifacts.map((artifact) => annotateTransientArtifact(artifact, recoverActions, providerAttemptRefs, preservedRefs)),
+    workEvidence: [...(payload.workEvidence ?? []), ...addedWorkEvidence],
     reasoningTrace: [
       payload.reasoningTrace,
       'Transient external dependency failure was preserved as needs-human instead of marking the whole run failed; generated artifacts remain inspectable with explicit recovery actions.',
     ].filter(Boolean).join('\n'),
+  };
+}
+
+function annotateTransientArtifact(
+  artifact: Record<string, unknown>,
+  recoverActions: string[],
+  providerAttemptRefs: string[],
+  preservedRefs: string[],
+) {
+  if (!isRecord(artifact)) return artifact;
+  const transientPolicy = {
+    status: 'transient-unavailable',
+    recoverActions,
+    reasonCodes: ['transient:external-dependency', 'transient:partial-artifact-preserved'],
+  };
+  const annotations = {
+    transientPolicy,
+    providerAttemptRefs: uniqueStrings(providerAttemptRefs),
+    preservedRefs: uniqueStrings(preservedRefs),
+  };
+  if (artifact.data === undefined || isRecord(artifact.data)) {
+    return {
+      ...artifact,
+      data: {
+        ...(isRecord(artifact.data) ? artifact.data : {}),
+        ...annotations,
+      },
+    };
+  }
+  return {
+    ...artifact,
+    ...annotations,
   };
 }
