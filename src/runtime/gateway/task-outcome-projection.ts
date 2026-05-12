@@ -89,7 +89,7 @@ export function materializeTaskOutcomeProjection(input: GatewayTaskOutcomeProjec
   const taskOutcome = taskOutcomeFromProjection(protocolStatus, input.payload, userSatisfactionProxy);
   const taskRunCard = createTaskRunCard({
     taskId: input.skill?.id,
-    title: input.skill?.manifest.description ?? input.request?.skillDomain,
+    title: input.skill?.manifest?.description ?? input.request?.skillDomain,
     goal: input.request?.prompt ?? input.payload.message,
     protocolStatus,
     taskOutcome,

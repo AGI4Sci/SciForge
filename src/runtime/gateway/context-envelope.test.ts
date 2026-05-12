@@ -61,6 +61,33 @@ test('context envelope uses package policy for current request and verification 
   ]);
 });
 
+test('context envelope keeps ref-backed artifact bodies and log refs bounded for continuation', () => {
+  const envelope = buildContextEnvelope({
+    skillDomain: 'knowledge',
+    prompt: '继续导出审计摘要，列出 stdout/stderr refs，不要重跑。',
+    artifacts: [{
+      id: 'report-1',
+      type: 'research-report',
+      dataRef: '.sciforge/artifacts/report.json',
+      data: { markdown: `# Report\n\n${'large evidence body '.repeat(2000)}` },
+    }],
+    uiState: {
+      failureRecoveryPolicy: {
+        evidenceExpansionPolicy: {
+          logRefs: 'cite stdoutRef/stderrRef for audit; expand only for explicit log inspection',
+        },
+      },
+    },
+  } as GatewayRequest, { workspace: '/tmp/sciforge-test' });
+
+  const artifactSummary = envelope.longTermRefs.artifacts?.[0] as { dataSummary?: Record<string, unknown> } | undefined;
+  assert.equal(artifactSummary?.dataSummary?.omitted, 'ref-backed-artifact-data');
+  assert.deepEqual(artifactSummary?.dataSummary?.refs, ['.sciforge/artifacts/report.json']);
+  assert.doesNotMatch(JSON.stringify(artifactSummary), /large evidence body large evidence body/);
+  assert.equal(envelope.scenarioFacts.evidenceExpansionPolicy?.stdoutStderrRefs, 'cite-only-by-default');
+  assert.match(String(envelope.scenarioFacts.evidenceExpansionPolicy?.continuationGuard), /without reading raw logs/);
+});
+
 test('context envelope can audit harness contract refs and context budget slimming behind feature flag', () => {
   const request = {
     skillDomain: 'knowledge',

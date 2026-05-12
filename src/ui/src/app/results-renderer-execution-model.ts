@@ -17,16 +17,18 @@ export type BackendRepairState = {
 };
 
 export function shouldOpenRunAuditDetails(session: SciForgeSession, activeRun?: SciForgeRun) {
+  const run = activeRun ?? session.runs.at(-1);
   return Boolean(
-    (activeRun ?? session.runs.at(-1))?.status === 'failed'
-    || failedExecutionUnits(session, activeRun).length
-    || contractValidationFailures(session, activeRun).length
-    || backendRepairStates(session, activeRun).some((state) => state.failureReason || state.status === 'failed' || state.status === 'failed-with-reason'),
+    run?.status === 'failed'
+    || failedExecutionUnits(session, run).length
+    || contractValidationFailures(session, run).length
+    || backendRepairStates(session, run).some((state) => state.failureReason || state.status === 'failed' || state.status === 'failed-with-reason'),
   );
 }
 
 export function failedExecutionUnits(session: SciForgeSession, activeRun?: SciForgeRun) {
-  return executionUnitsForRun(session, activeRun).filter((unit) => isBlockingExecutionUnitStatus(unit.status));
+  const run = activeRun ?? session.runs.at(-1);
+  return executionUnitsForRun(session, run).filter((unit) => isBlockingExecutionUnitStatus(unit.status));
 }
 
 function isBlockingExecutionUnitStatus(status: unknown) {
@@ -43,9 +45,9 @@ export function runAuditBlockers(session: SciForgeSession, activeRun?: SciForgeR
     run?.status === 'failed' ? `blocker: run ${run.id} failed` : undefined,
     asString(raw?.blocker) ? `blocker: ${asString(raw?.blocker)}` : undefined,
     asString(raw?.failureReason) ? `failureReason: ${asString(raw?.failureReason)}` : undefined,
-    ...failedExecutionUnits(session, activeRun).map((unit) => `failureReason: ${unit.failureReason || unit.id}`),
-    ...contractValidationFailures(session, activeRun).map((failure) => `ContractValidationFailure(${failure.failureKind}): ${failure.failureReason}`),
-    ...backendRepairStates(session, activeRun).flatMap((state) => state.failureReason ? [`backend repair ${state.label}: ${state.failureReason}`] : []),
+    ...failedExecutionUnits(session, run).map((unit) => `failureReason: ${unit.failureReason || unit.id}`),
+    ...contractValidationFailures(session, run).map((failure) => `ContractValidationFailure(${failure.failureKind}): ${failure.failureReason}`),
+    ...backendRepairStates(session, run).flatMap((state) => state.failureReason ? [`backend repair ${state.label}: ${state.failureReason}`] : []),
   ].filter((line): line is string => Boolean(line));
   return Array.from(new Set(lines));
 }
@@ -55,10 +57,10 @@ export function runRecoverActions(session: SciForgeSession, activeRun?: SciForge
   const raw = isRecord(run?.raw) ? run?.raw : undefined;
   return Array.from(new Set([
     ...asStringList(raw?.recoverActions),
-    ...contractValidationFailures(session, activeRun).flatMap((failure) => failure.recoverActions),
-    ...backendRepairStates(session, activeRun).flatMap((state) => state.recoverActions),
-    ...failedExecutionUnits(session, activeRun).flatMap((unit) => unit.recoverActions ?? []),
-    ...executionUnitsForRun(session, activeRun).flatMap((unit) => unit.status === 'repair-needed' ? unit.recoverActions ?? [] : []),
+    ...contractValidationFailures(session, run).flatMap((failure) => failure.recoverActions),
+    ...backendRepairStates(session, run).flatMap((state) => state.recoverActions),
+    ...failedExecutionUnits(session, run).flatMap((unit) => unit.recoverActions ?? []),
+    ...executionUnitsForRun(session, run).flatMap((unit) => unit.status === 'repair-needed' ? unit.recoverActions ?? [] : []),
   ]));
 }
 
@@ -68,14 +70,14 @@ export function runAuditRefs(session: SciForgeSession, activeRun?: SciForgeRun) 
   return Array.from(new Set([
     ...asStringList(raw?.refs),
     ...asStringList(raw?.auditRefs),
-    ...contractValidationFailures(session, activeRun).flatMap((failure) => [
+    ...contractValidationFailures(session, run).flatMap((failure) => [
       ...failure.relatedRefs,
       ...failure.invalidRefs,
       ...failure.unresolvedUris,
     ]),
-    ...backendRepairStates(session, activeRun).flatMap((state) => state.refs),
+    ...backendRepairStates(session, run).flatMap((state) => state.refs),
     ...(run?.references ?? []).map((ref) => ref.ref),
-    ...executionUnitsForRun(session, activeRun).flatMap((unit) => [unit.codeRef, unit.stdoutRef, unit.stderrRef, unit.outputRef, unit.diffRef]).filter((ref): ref is string => Boolean(ref)),
+    ...executionUnitsForRun(session, run).flatMap((unit) => [unit.codeRef, unit.stdoutRef, unit.stderrRef, unit.outputRef, unit.diffRef]).filter((ref): ref is string => Boolean(ref)),
   ]));
 }
 

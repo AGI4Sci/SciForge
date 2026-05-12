@@ -1,4 +1,5 @@
 import { nowIso, type SciForgeRun, type SciForgeSession, type TimelineEventRecord } from '../../domain';
+import { artifactsForRun, executionUnitsForRun } from '../results/executionUnitsForRun';
 
 export function mergeRunTimelineEvents(events: TimelineEventRecord[], previousSession: SciForgeSession | undefined, nextSession: SciForgeSession) {
   const previousRunIds = new Set(previousSession?.runs.map((run) => run.id) ?? []);
@@ -11,13 +12,11 @@ export function mergeRunTimelineEvents(events: TimelineEventRecord[], previousSe
 }
 
 function timelineEventFromStoredRun(session: SciForgeSession, run: SciForgeRun): TimelineEventRecord {
-  const runArtifactRefs = session.artifacts
-    .filter((artifact) => artifact.producerScenario === session.scenarioId)
+  const runArtifactRefs = artifactsForRun(session, run)
     .slice(0, 8)
     .map((artifact) => artifact.id);
   const runUnitRefs = [
-    ...session.executionUnits
-      .filter((unit) => executionUnitBelongsToRun(unit, run))
+    ...executionUnitsForRun(session, run)
       .slice(0, 8)
       .map((unit) => unit.id),
   ].filter((value): value is string => Boolean(value));
@@ -36,12 +35,4 @@ function timelineEventFromStoredRun(session: SciForgeSession, run: SciForgeRun):
     decisionStatus: 'not-a-decision',
     createdAt: run.completedAt ?? run.createdAt ?? nowIso(),
   };
-}
-
-function executionUnitBelongsToRun(unit: SciForgeSession['executionUnits'][number], run: SciForgeRun) {
-  if (unit.outputRef?.includes(run.id) || unit.stdoutRef?.includes(run.id) || unit.stderrRef?.includes(run.id) || unit.codeRef?.includes(run.id)) return true;
-  const runPackageKey = run.scenarioPackageRef ? `${run.scenarioPackageRef.id}@${run.scenarioPackageRef.version}` : '';
-  const unitPackageKey = unit.scenarioPackageRef ? `${unit.scenarioPackageRef.id}@${unit.scenarioPackageRef.version}` : '';
-  if (runPackageKey && unitPackageKey === runPackageKey) return true;
-  return !runPackageKey;
 }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { Sparkles } from 'lucide-react';
-import type { SciForgeConfig, SciForgeReference, SciForgeSession, ObjectReference, PreviewDescriptor } from '../../domain';
-import { readPreviewDerivative, readPreviewDescriptor, readWorkspaceFile, type WorkspaceFileContent } from '../../api/workspaceClient';
+import type { SciForgeConfig, SciForgeReference, SciForgeSession, ObjectReference, PreviewDescriptor, RuntimeArtifact } from '../../domain';
+import { cachedWorkspaceFileReadError, readPreviewDerivative, readPreviewDescriptor, readWorkspaceFile, type WorkspaceFileContent } from '../../api/workspaceClient';
 import { Badge, cx } from '../uiPrimitives';
 import { MarkdownBlock } from './reportContent';
 import { PreviewDescriptorActions } from './PreviewActions';
@@ -56,7 +56,6 @@ export function WorkspaceObjectPreview({
     if (inlinePreview) return undefined;
     if (!path || (reference.kind !== 'file' && reference.kind !== 'artifact') || /^https?:\/\//i.test(path)) return undefined;
     let cancelled = false;
-    setLoadingPath(path);
     const staticDescriptor = normalizeArtifactPreviewDescriptor(artifact, path);
     if (staticDescriptor) {
       setDescriptor(staticDescriptor);
@@ -67,6 +66,13 @@ export function WorkspaceObjectPreview({
         };
       }
     }
+    const cachedFileError = staticDescriptor ? undefined : cachedWorkspaceFileReadError(path, previewConfig);
+    if (cachedFileError) {
+      setError(workspacePreviewReadErrorMessage(undefined, cachedFileError, true));
+      setLoadingPath('');
+      return undefined;
+    }
+    setLoadingPath(path);
     void withWorkspacePreviewTimeout(readPreviewDescriptor(path, previewConfig), `preview descriptor ${path}`)
       .then((nextDescriptor) => {
         if (!cancelled) setDescriptor(staticDescriptor ? mergePreviewDescriptors(staticDescriptor, nextDescriptor) : nextDescriptor);
@@ -81,9 +87,7 @@ export function WorkspaceObjectPreview({
           if (!cancelled) setFile(nextFile);
         } catch (fileError) {
           if (!cancelled) {
-            const descriptorMessage = descriptorError instanceof Error ? descriptorError.message : String(descriptorError);
-            const fileMessage = fileError instanceof Error ? fileError.message : String(fileError);
-            setError(`已切换到备用预览，但仍无法读取：${fileMessage}；descriptor diagnostic: ${descriptorMessage}`);
+            setError(workspacePreviewReadErrorMessage(descriptorError, fileError));
           }
         }
       })
@@ -138,7 +142,15 @@ export function WorkspaceObjectPreview({
       </div>
     );
   }
-  if (!path) return null;
+  if (!path) {
+    return (
+      <ArtifactFallbackPreview
+        reference={reference}
+        artifact={artifact}
+        reason="missing-path"
+      />
+    );
+  }
   if (loadingPath) {
     return (
       <div className="workspace-object-preview">
@@ -152,18 +164,14 @@ export function WorkspaceObjectPreview({
   }
   if (error) {
     return (
-      <div className="workspace-object-preview">
-        <div className="workspace-object-preview-head">
-          <Badge variant="warning">preview</Badge>
-          <strong>{path}</strong>
-        </div>
-        <UnsupportedPreviewPackageNotice
-          reference={reference}
-          path={path}
-          diagnostic={error}
-          onRequest={onPreviewPackageRequest}
-        />
-      </div>
+      <ArtifactFallbackPreview
+        reference={reference}
+        artifact={artifact}
+        path={path}
+        diagnostic={error}
+        reason="read-failed"
+        onRequest={onPreviewPackageRequest}
+      />
     );
   }
   if (descriptor) {
@@ -198,6 +206,56 @@ export function WorkspaceObjectPreview({
         <span>{formatBytes(file.size)}</span>
       </div>
       <WorkspaceFileInlineViewer file={file} />
+    </div>
+  );
+}
+
+function ArtifactFallbackPreview({
+  reference,
+  artifact,
+  path,
+  diagnostic,
+  reason,
+  onRequest,
+}: {
+  reference: ObjectReference;
+  artifact?: RuntimeArtifact;
+  path?: string;
+  diagnostic?: string;
+  reason: 'missing-path' | 'read-failed';
+  onRequest?: (reference: ObjectReference, path?: string, descriptor?: PreviewDescriptor) => void;
+}) {
+  const fallbackReference = referenceForObjectReference(reference);
+  const title = artifactFallbackTitle(reference, artifact, path);
+  const dataPreview = artifactFallbackDataPreview(artifact);
+  return (
+    <div className="workspace-object-preview" data-sciforge-reference={sciForgeReferenceAttribute(fallbackReference)}>
+      <div className="workspace-object-preview-head">
+        <Badge variant="warning">fallback</Badge>
+        <strong>{title}</strong>
+      </div>
+      <p>{reason === 'missing-path'
+        ? '这个 artifact 缺少可读取的 workspace path/dataRef，已改用 artifact 记录本身作为备用预览。'
+        : 'workspace 文件暂时不可读，已改用 artifact 记录本身作为备用预览。'}</p>
+      <div className="source-list">
+        <code>{reference.ref}</code>
+        {artifact?.id ? <code>artifact:{artifact.id}</code> : null}
+        {artifact?.type ? <code>{artifact.type}</code> : null}
+        {path ? <code>{path}</code> : null}
+      </div>
+      {dataPreview ? (
+        <pre className="workspace-object-code">{dataPreview}</pre>
+      ) : (
+        <p>当前记录没有可内联展示的 artifact data；仍可把这个对象引用传给 Agent 做后续排查或重新生成。</p>
+      )}
+      {diagnostic ? <pre className="workspace-object-code">{diagnostic}</pre> : null}
+      {path ? (
+        <UnsupportedPreviewPackageNotice
+          reference={reference}
+          path={path}
+          onRequest={onRequest}
+        />
+      ) : null}
     </div>
   );
 }
@@ -581,6 +639,32 @@ function formatJsonLike(content: string) {
   } catch {
     return content.slice(0, 12000);
   }
+}
+
+function artifactFallbackTitle(reference: ObjectReference, artifact?: RuntimeArtifact, path?: string) {
+  const metadataTitle = typeof artifact?.metadata?.title === 'string' ? artifact.metadata.title : undefined;
+  const metadataName = typeof artifact?.metadata?.name === 'string' ? artifact.metadata.name : undefined;
+  return metadataTitle || metadataName || reference.title || path || artifact?.id || reference.ref;
+}
+
+function artifactFallbackDataPreview(artifact?: RuntimeArtifact) {
+  if (!artifact) return '';
+  const payload = artifact.data !== undefined ? artifact.data : artifact.metadata;
+  if (payload === undefined) return '';
+  if (typeof payload === 'string') return payload.slice(0, 12000);
+  try {
+    return JSON.stringify(payload, null, 2).slice(0, 12000);
+  } catch {
+    return String(payload).slice(0, 12000);
+  }
+}
+
+function workspacePreviewReadErrorMessage(descriptorError: unknown, fileError: unknown, cached = false) {
+  const fileMessage = fileError instanceof Error ? fileError.message : String(fileError);
+  const cachedNote = cached ? '（已缓存 stale 结果，避免重复请求）' : '';
+  if (!descriptorError) return `已切换到备用预览，但仍无法读取：${fileMessage}${cachedNote}`;
+  const descriptorMessage = descriptorError instanceof Error ? descriptorError.message : String(descriptorError);
+  return `已切换到备用预览，但仍无法读取：${fileMessage}${cachedNote}；descriptor diagnostic: ${descriptorMessage}`;
 }
 
 function formatBytes(value: number) {

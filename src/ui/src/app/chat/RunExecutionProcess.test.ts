@@ -95,6 +95,42 @@ test('execution process does not fall back to same-package units from another ru
   assert.doesNotMatch(html, /new\.tool/);
 });
 
+test('execution process renders failed execution units preserved in run raw payload', () => {
+  const html = renderToStaticMarkup(createElement(RunExecutionProcess, {
+    runId: 'run-failed-payload',
+    session: {
+      ...session([]),
+      runs: [{
+        id: 'run-failed-payload',
+        scenarioId: 'literature-evidence-review',
+        status: 'failed',
+        prompt: 'probe page',
+        response: 'failed-with-reason',
+        createdAt: '2026-05-12T00:00:00.000Z',
+        raw: {
+          payload: {
+            executionUnits: [{
+              id: 'EU-failed-payload',
+              tool: 'web.probe',
+              params: '{}',
+              status: 'failed-with-reason',
+              hash: 'failed-payload',
+              outputRef: 'run:run-failed-payload#EU-failed-payload',
+              failureReason: 'probe failed before rendering',
+            }],
+          },
+        },
+      }],
+      executionUnits: [],
+    },
+    onObjectFocus: () => undefined,
+  }));
+
+  assert.match(html, /EU-failed-payload/);
+  assert.match(html, /web\.probe/);
+  assert.match(html, /probe failed before rendering/);
+});
+
 function renderProcess(executionUnits: RuntimeExecutionUnit[]) {
   return renderToStaticMarkup(createElement(RunExecutionProcess, {
     runId: 'run-1',

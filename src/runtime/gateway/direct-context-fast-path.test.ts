@@ -57,3 +57,40 @@ test('context follow-up protocol does not direct-answer fresh work requests', ()
 
   assert.equal(directContextFastPathPayload(request), undefined);
 });
+
+test('context follow-up protocol returns needs-work when expected artifacts are missing', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: '基于上一轮结果继续重排并导出审计',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    expectedArtifactTypes: ['paper-list', 'research-report'],
+    artifacts: [{
+      id: 'runtime-diagnostic',
+      type: 'runtime-diagnostic',
+      data: { markdown: 'Prior run failed before writing paper-list/report.' },
+    }],
+    uiState: {
+      agentHarness: {
+        contract: {
+          schemaVersion: 'sciforge.agent-harness-contract.v1',
+          intentMode: 'audit',
+          capabilityPolicy: { preferredCapabilityIds: ['runtime.direct-context-answer'] },
+        },
+      },
+      recentExecutionRefs: [{
+        id: 'unit-failed',
+        status: 'repair-needed',
+        outputRef: '.sciforge/task-results/failed.json',
+        stderrRef: '.sciforge/logs/failed.stderr.log',
+      }],
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.equal(payload.executionUnits[0]?.status, 'repair-needed');
+  assert.equal(payload.artifacts[0]?.type, 'runtime-diagnostic');
+  assert.match(payload.message, /缺失产物：paper-list, research-report/);
+  assert.match(String(payload.executionUnits[0]?.failureReason ?? ''), /cannot satisfy follow-up/);
+});

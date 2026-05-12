@@ -312,6 +312,53 @@ test('UI handoff compacts large multi-turn session context before transport', as
   assert.ok((JSON.stringify(bodies[0]).length), 'body should be serializable after compaction');
 });
 
+test('UI handoff keeps ref-backed artifact bodies and log refs bounded on continuation', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)));
+    return streamResponse([
+      {
+        result: {
+          message: 'Workspace result ready.',
+          executionUnits: [{ id: 'unit-1', status: 'done' }],
+          artifacts: [],
+        },
+      },
+    ]);
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    prompt: '继续导出审计摘要，只列出 stdout/stderr refs 和 artifact refs，不重跑。',
+    artifacts: [{
+      id: 'report-md',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      dataRef: '.sciforge/sessions/run/artifacts/report.json',
+      data: { markdown: `# Report\n\n${'inline evidence should not travel again '.repeat(1200)}` },
+    }],
+    executionUnits: [{
+      id: 'EU-report',
+      tool: 'report.audit',
+      status: 'done',
+      hash: 'hash-report',
+      stdoutRef: '.sciforge/sessions/run/logs/report.stdout.log',
+      stderrRef: '.sciforge/sessions/run/logs/report.stderr.log',
+      outputRef: '.sciforge/sessions/run/task-results/report.json',
+      params: 'prior report',
+    }],
+  }), {});
+
+  const artifact = (bodies[0]?.artifacts as Array<Record<string, unknown>> | undefined)?.[0];
+  assert.equal(artifact?.data, undefined);
+  assert.equal((artifact?.dataSummary as Record<string, unknown> | undefined)?.omitted, 'ref-backed-artifact-data');
+  assert.doesNotMatch(JSON.stringify(bodies[0]), /inline evidence should not travel again inline evidence should not travel again/);
+  const uiState = bodies[0]?.uiState as { recentExecutionRefs?: Array<Record<string, unknown>> } | undefined;
+  assert.equal(uiState?.recentExecutionRefs?.[0]?.stdoutRef, '.sciforge/sessions/run/logs/report.stdout.log');
+  const referencePolicy = bodies[0]?.referencePolicy as { defaultAction?: string } | undefined;
+  assert.match(referencePolicy?.defaultAction ?? '', /stdoutRef\/stderrRef as audit refs/);
+});
+
 test('pre-aborted signal cancels the workspace stream request controller', async () => {
   let requestSignal: AbortSignal | undefined;
   globalThis.fetch = (async (_input, init) => {

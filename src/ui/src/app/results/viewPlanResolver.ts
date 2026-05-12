@@ -3,6 +3,7 @@ import { uiModuleRegistry, type RuntimeUIModule } from '../../uiModuleRegistry';
 import type { DisplayIntent, ObjectReference, ResolvedViewPlan, RuntimeArtifact, ScenarioInstanceId, SciForgeRun, SciForgeSession, UIManifestSlot, ViewPlanSection } from '../../domain';
 import type { ScenarioId } from '../../data';
 import { artifactForObjectReference, syntheticArtifactForObjectReference } from '../../../../../packages/support/object-references';
+import { artifactsForRun, executionUnitsForRun } from './executionUnitsForRun';
 import type { ResultFocusMode } from './ResultShell';
 import {
   blockedInteractiveViewDesignForIntent,
@@ -101,6 +102,7 @@ export function resolveViewPlan({
 }): RuntimeResolvedViewPlan {
   const effectiveRun = activeRun ?? session.runs.at(-1);
   const resultArtifacts = artifactsForResultPresentation(session, effectiveRun);
+  const resultExecutionUnits = executionUnitsForRun(session, effectiveRun);
   const displayIntent = effectiveRun?.status === 'failed'
     ? inferDisplayIntentFromInteractiveArtifacts(resultArtifacts, uiModuleRegistry)
     : extractDisplayIntent(effectiveRun) ?? inferDisplayIntentFromInteractiveArtifacts(resultArtifacts, uiModuleRegistry);
@@ -208,14 +210,14 @@ export function resolveViewPlan({
   if (session.claims.length || resultArtifacts.some((artifact) => isEvidenceInteractiveArtifactType(artifact.type))) {
     addItem(findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.evidenceMatrix) ?? uiModuleRegistry[3], undefined, interactiveViewPlanSourceIds.fallback);
   }
-  if (session.executionUnits.length) {
+  if (resultExecutionUnits.length) {
     addItem(findInteractiveViewModuleById(uiModuleRegistry, interactiveViewFallbackModuleIds.executionProvenance) ?? uiModuleRegistry[4], undefined, interactiveViewPlanSourceIds.fallback);
   }
 
   const ordered = compactInteractiveViewPlanItems(items, {
-    artifacts: session.artifacts,
+    artifacts: resultArtifacts,
     claimCount: session.claims.length,
-    executionUnitCount: session.executionUnits.length,
+    executionUnitCount: resultExecutionUnits.length,
     notebookEntryCount: session.notebook.length,
   }).sort(compareInteractiveViewPlanOrder);
   const sections: RuntimeResolvedViewPlan['sections'] = {
@@ -287,8 +289,9 @@ function displayIntentFromResultPresentation(value: unknown): DisplayIntent | un
 }
 
 function artifactsForResultPresentation(session: SciForgeSession, activeRun?: SciForgeRun) {
-  if (activeRun?.status === 'failed') return session.artifacts.filter(isFailedRunDiagnosticArtifact);
-  return session.artifacts;
+  const runArtifacts = artifactsForRun(session, activeRun);
+  if (activeRun?.status === 'failed') return runArtifacts.filter(isFailedRunDiagnosticArtifact);
+  return runArtifacts;
 }
 
 function isFailedRunDiagnosticArtifact(artifact: RuntimeArtifact) {

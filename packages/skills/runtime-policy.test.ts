@@ -61,7 +61,7 @@ test('skills runtime policy owns AgentServer retrieval and task prompt snippets'
   assert.match(agentServerBackendDecisionPromptPolicyLines({ freshCurrentTurn: false }).join('\n'), /CONTINUITY MODE/);
   assert.equal(agentServerGenerationOutputContract().finalOutput, 'exactly one compact JSON object');
   assert.match(agentServerGenerationOutputContractLines().join('\n'), /Final output must be only compact JSON/);
-  assert.match(agentServerWorkspaceTaskRoutingPromptPolicyLines().join('\n'), /generated task paths under \.sciforge\/tasks/);
+  assert.match(agentServerWorkspaceTaskRoutingPromptPolicyLines().join('\n'), /generated task paths under the current session bundle tasks directory/);
   assert.match(agentServerCapabilityRoutingPromptPolicyLines().join('\n'), /Runtime capability routing contract/);
   assert.match(agentServerLargeFilePromptContractLines().join('\n'), /Large-file contract/);
   assert.match(agentServerViewSelectionPromptPolicyLines().join('\n'), /selectedComponentIds/);

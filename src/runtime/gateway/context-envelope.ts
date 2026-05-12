@@ -169,6 +169,7 @@ export function buildContextEnvelope(
       capabilityBrokerBrief,
       capabilityBrief,
       verificationPolicy,
+      evidenceExpansionPolicy: evidenceExpansionPolicySummaryForEnvelope(request),
       humanApprovalPolicy: request.humanApprovalPolicy ?? (isRecord(uiState.humanApprovalPolicy) ? uiState.humanApprovalPolicy : undefined),
       unverifiedReason: request.unverifiedReason ?? (typeof uiState.unverifiedReason === 'string' ? uiState.unverifiedReason : undefined),
       conversationPolicySummary,
@@ -206,6 +207,23 @@ export function buildContextEnvelope(
       priorAttempts: summarizeTaskAttemptsForAgentServer(params.priorAttempts ?? []).slice(0, mode === 'full' ? 4 : 2),
       repairRefs: params.repairRefs,
     },
+  };
+}
+
+function evidenceExpansionPolicySummaryForEnvelope(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const requestedRawLogInspection = /\b(raw\s+logs?|log\s+(?:text|contents?)|(?:stdout|stderr)\s+(?:text|contents?|logs?)|failure diagnosis|debug logs?|原始日志|日志内容|标准输出内容|错误输出内容|失败诊断|调试日志)\b/i.test(request.prompt);
+  return {
+    schemaVersion: 'sciforge.evidence-expansion-policy.v1',
+    defaultAction: 'refs-and-digests-first',
+    stdoutStderrRefs: requestedRawLogInspection ? 'may-expand-for-current-user-request' : 'cite-only-by-default',
+    artifactBodies: 'prefer dataRef/path/markdownRef/currentReferenceDigests; expand bounded excerpts only when needed',
+    continuationGuard: 'For continuation/export/audit-summary turns, list log refs and structured artifact refs without reading raw logs unless explicitly requested.',
+    requestedRawLogInspection,
+    source: 'context-envelope',
+    uiTransportPolicy: isRecord(uiState.failureRecoveryPolicy) && isRecord(uiState.failureRecoveryPolicy.evidenceExpansionPolicy)
+      ? clipForAgentServerJson(uiState.failureRecoveryPolicy.evidenceExpansionPolicy, 2)
+      : undefined,
   };
 }
 
@@ -935,11 +953,40 @@ export function summarizeArtifactRefs(artifacts: Array<Record<string, unknown>>)
       dataRef: typeof artifact.dataRef === 'string' ? artifact.dataRef : undefined,
       outputRef: typeof artifact.outputRef === 'string' ? artifact.outputRef : undefined,
       metadata: isRecord(artifact.metadata) ? clipForAgentServerJson(artifact.metadata, 2) : undefined,
-      dataSummary: isRecord(artifact.data) ? clipForAgentServerJson(artifact.data, 2) : undefined,
+      dataSummary: artifactDataSummaryForAgentServer(artifact),
       keys: Object.keys(artifact).slice(0, 12),
       hash: hashJson(artifact),
     };
   });
+}
+
+function artifactDataSummaryForAgentServer(artifact: Record<string, unknown>) {
+  const data = artifact.data;
+  if (data === undefined) return undefined;
+  if (typeof artifact.dataRef === 'string' || typeof artifact.path === 'string' || typeof artifact.ref === 'string') {
+    return {
+      omitted: 'ref-backed-artifact-data',
+      refs: [artifact.ref, artifact.dataRef, artifact.path, artifact.outputRef]
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0),
+      shape: artifactDataShape(data),
+    };
+  }
+  if (typeof data === 'string') return clipForAgentServerPrompt(data, 900);
+  return clipForAgentServerJson(data, 1);
+}
+
+function artifactDataShape(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') return { kind: 'string', chars: value.length };
+  if (Array.isArray(value)) return { kind: 'array', count: value.length };
+  if (isRecord(value)) {
+    const markdown = typeof value.markdown === 'string' ? value.markdown : undefined;
+    return {
+      kind: 'object',
+      keys: Object.keys(value).slice(0, 16),
+      markdownChars: markdown?.length,
+    };
+  }
+  return { kind: typeof value };
 }
 
 export function summarizeExecutionRefs(refs: Array<Record<string, unknown>>) {

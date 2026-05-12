@@ -142,7 +142,7 @@
     "smoke:stable-version-registry": "tsx tests/smoke/smoke-stable-version-registry.ts",
     "smoke:workspace-open": "tsx tests/smoke/smoke-workspace-open-gateway.ts",
     "smoke:bundle-import": "tsx tests/smoke/smoke-bundle-import-workspace.ts",
-    "smoke:task-attempt-api": "tsx tests/smoke/smoke-task-attempt-api.ts",
+    "smoke:task-attempt-api": "tsx tests/smoke/smoke-task-attempt-api.ts && tsx tests/smoke/smoke-real-task-attempt-failure-boundaries.ts",
     "smoke:workspace-retention": "tsx tests/smoke/smoke-workspace-task-input-retention.ts && tsx tests/smoke/smoke-workspace-task-input-compaction.ts && tsx tests/smoke/smoke-workspace-task-input-bounded-growth.ts && tsx tests/smoke/smoke-workspace-prune.ts",
     "smoke:browser": "tsx tests/smoke/smoke-browser-workflows.ts",
     "smoke:versioned-runs": "tsx tests/smoke/smoke-versioned-runs.ts",

@@ -297,6 +297,44 @@ test('ResultsRenderer execution focus scopes execution units to the active run',
   assert.doesNotMatch(html, /new\.tool/);
 });
 
+test('ResultsRenderer failed run audit renders execution units from failed payload', () => {
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [{
+      id: 'run-failed-payload',
+      scenarioId: 'literature-evidence-review',
+      status: 'failed',
+      prompt: 'probe page',
+      response: 'failed-with-reason',
+      createdAt: '2026-05-12T00:00:00.000Z',
+      completedAt: '2026-05-12T00:01:00.000Z',
+      raw: {
+        payload: {
+          executionUnits: [{
+            id: 'EU-failed-payload',
+            tool: 'web.probe',
+            params: '{}',
+            status: 'failed-with-reason',
+            hash: 'failed-payload',
+            outputRef: 'run:run-failed-payload#EU-failed-payload',
+            failureReason: 'probe failed before rendering',
+          }],
+        },
+      },
+    }],
+    executionUnits: [],
+  };
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-failed-payload' });
+
+  assert.match(html, /1 failure/);
+  assert.match(html, /EU-failed-payload/);
+  assert.match(html, /web\.probe/);
+  assert.match(html, /probe failed before rendering/);
+  assert.doesNotMatch(html, /等待真实 ExecutionUnit/);
+  assert.doesNotMatch(html, /0 EU/);
+});
+
 test('paper-card-list workbench slot is rendered by package policy', () => {
   const artifact: RuntimeArtifact = {
     id: 'papers',

@@ -30,6 +30,9 @@ const TRANSPORT_SESSION_MESSAGE_LIMIT = 12;
 const TRANSPORT_RUN_LIMIT = 8;
 const TRANSPORT_EXECUTION_UNIT_LIMIT = 16;
 const TRANSPORT_ARTIFACT_LIMIT = 16;
+const TRANSPORT_ARTIFACT_INLINE_DATA_BYTES = 12_000;
+const TRANSPORT_TEXT_PREVIEW_CHARS = 500;
+const TRANSPORT_REF_KEYS = ['ref', 'dataRef', 'path', 'filePath', 'markdownRef', 'contentRef', 'stdoutRef', 'stderrRef', 'outputRef'] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -556,7 +559,7 @@ function selectedRuntimeToolContracts(selectedToolIds: string[]) {
 function buildReferencePolicy(references: Array<Record<string, unknown>>) {
   return {
     mode: 'explicit-refs-first',
-    defaultAction: 'Use current references as explicit user-provided evidence; resolve large payloads by ref and bounded summary.',
+    defaultAction: 'Use current references as explicit user-provided evidence; resolve large payloads by ref and bounded summary. Treat stdoutRef/stderrRef as audit refs unless the user explicitly asks for raw log contents or failure diagnosis.',
     currentReferenceCount: references.length,
   };
 }
@@ -621,13 +624,35 @@ function compactRecord(value: unknown) {
   if (!isRecord(value)) return undefined;
   const out: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value).slice(0, 24)) {
-    if (typeof entry === 'string' && isDataUrl(entry)) out[key] = '[image dataUrl omitted; use file/image refs instead]';
-    else if (typeof entry === 'string') out[key] = entry.length > 500 ? `${entry.slice(0, 500)}...` : entry;
-    else if (typeof entry === 'number' || typeof entry === 'boolean' || entry == null) out[key] = entry;
-    else if (Array.isArray(entry)) out[key] = entry.slice(0, 12);
-    else if (isRecord(entry)) out[key] = Object.fromEntries(Object.entries(entry).slice(0, 8));
+    out[key] = compactTransportRecordValue(entry, 1);
   }
   return Object.keys(out).length ? out : undefined;
+}
+
+function compactTransportRecordValue(value: unknown, depth = 0): unknown {
+  if (typeof value === 'string') return compactTransportString(value, TRANSPORT_TEXT_PREVIEW_CHARS);
+  if (typeof value === 'number' || typeof value === 'boolean' || value == null) return value;
+  if (Array.isArray(value)) {
+    if (depth >= 4) return { omitted: 'array-depth-limit', count: value.length };
+    return value.slice(0, 12).map((entry) => compactTransportRecordValue(entry, depth + 1));
+  }
+  if (!isRecord(value)) return undefined;
+  if (depth >= 4) return { omitted: 'object-depth-limit', keys: Object.keys(value).slice(0, 12) };
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value).slice(0, depth <= 1 ? 16 : 8)) {
+    out[key] = compactTransportRecordValue(entry, depth + 1);
+  }
+  if (Object.keys(value).length > Object.keys(out).length) {
+    out.omittedKeyCount = Object.keys(value).length - Object.keys(out).length;
+  }
+  return out;
+}
+
+function compactTransportString(value: string, maxChars: number) {
+  if (isDataUrl(value)) return '[image dataUrl omitted; use file/image refs instead]';
+  return value.length > maxChars
+    ? `${value.slice(0, maxChars)}... [${value.length - maxChars} chars omitted]`
+    : value;
 }
 
 function sanitizeTransportValue(value: unknown, depth = 0): unknown {
@@ -641,15 +666,59 @@ function sanitizeTransportValue(value: unknown, depth = 0): unknown {
 
 function sanitizeTransportArtifact(value: unknown): Record<string, unknown> {
   const artifact = sanitizeTransportValue(value) as Record<string, unknown>;
-  if (isRecord(value) && containsDataUrl(value.data)) {
+  if (!isRecord(value)) return artifact;
+  const dataBytes = estimateTransportBytes(value.data);
+  const refBacked = hasStableTransportRef(value) || (isRecord(value.metadata) && hasStableTransportRef(value.metadata));
+  if (value.data !== undefined && (containsDataUrl(value.data) || refBacked || dataBytes > TRANSPORT_ARTIFACT_INLINE_DATA_BYTES)) {
     delete artifact.data;
     artifact.dataSummary = {
-      omitted: 'binary-data-url',
-      dataRef: typeof value.dataRef === 'string' ? value.dataRef : undefined,
-      path: typeof value.path === 'string' ? value.path : undefined,
+      omitted: containsDataUrl(value.data)
+        ? 'binary-data-url'
+        : refBacked
+          ? 'ref-backed-artifact-data'
+          : 'artifact-data-budget',
+      estimatedBytes: dataBytes,
+      ...transportRefsFromRecord(value),
+      shape: transportDataShape(value.data),
     };
   }
   return artifact;
+}
+
+function estimateTransportBytes(value: unknown) {
+  if (value === undefined) return 0;
+  try {
+    return new TextEncoder().encode(JSON.stringify(value)).length;
+  } catch {
+    return String(value).length;
+  }
+}
+
+function hasStableTransportRef(value: Record<string, unknown>) {
+  return TRANSPORT_REF_KEYS.some((key) => typeof value[key] === 'string' && value[key].trim().length > 0);
+}
+
+function transportRefsFromRecord(value: Record<string, unknown>) {
+  const refs: Record<string, unknown> = {};
+  for (const key of TRANSPORT_REF_KEYS) {
+    const ref = typeof value[key] === 'string' && value[key].trim() ? value[key] : undefined;
+    if (ref) refs[key] = ref;
+  }
+  return refs;
+}
+
+function transportDataShape(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') return { kind: 'string', chars: value.length };
+  if (Array.isArray(value)) return { kind: 'array', count: value.length, firstItem: transportDataShape(value[0]) };
+  if (isRecord(value)) {
+    const markdown = typeof value.markdown === 'string' ? value.markdown : undefined;
+    return {
+      kind: 'object',
+      keys: Object.keys(value).slice(0, 16),
+      markdownChars: markdown?.length,
+    };
+  }
+  return { kind: typeof value };
 }
 
 function containsDataUrl(value: unknown): boolean {
@@ -734,6 +803,7 @@ function buildTransportAgentContext(
     notes: [
       'User prompt is carried separately as the authoritative request.',
       'The browser only transports UI/session facts; Python conversation-policy owns context selection, digests, capability brief, handoff, acceptance, and recovery.',
+      'stdoutRef/stderrRef are audit and provenance refs by default; do not expand raw log contents on continuation/export turns unless the user explicitly asks for logs or failure diagnosis.',
       'When local.vision-sense is selected, treat it as an optional vision sense plugin: build text + screenshot/image modality requests, emit text-form Computer Use commands, and keep trace refs compact across follow-up turns.',
     ],
   };
@@ -783,6 +853,11 @@ function buildFailureRecoveryPolicy(executionUnits: unknown[], runs: unknown[]) 
   const attemptHistoryRefs = uniqueStringList(attemptHistory.flatMap((attempt) => attempt.evidenceRefs ?? [])).slice(0, 12);
   return {
     mode: 'preserve-context',
+    evidenceExpansionPolicy: {
+      defaultAction: 'refs-and-digests-only',
+      logRefs: 'cite stdoutRef/stderrRef for audit; expand only for explicit log inspection or failure diagnosis',
+      artifactRefs: 'prefer dataRef/path/markdownRef/currentReferenceDigests before reading full artifact bodies',
+    },
     priorFailureReason: joinFailureAndProcessSummary(priorFailureReason, latestFailedRun ? streamProcessSummaryFromRun(latestFailedRun) : undefined),
     recoverActions,
     attemptHistoryRefs,

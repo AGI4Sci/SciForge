@@ -169,6 +169,51 @@ test('fallback display intent keeps artifact order instead of reading prompt sem
   assert.equal(plan.displayIntent.source, 'fallback-inference');
 });
 
+test('active run presentation scopes artifacts to that run', () => {
+  const oldReport: RuntimeArtifact = {
+    id: 'old-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { markdown: '# Old report' },
+  };
+  const newReport: RuntimeArtifact = {
+    id: 'new-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { markdown: '# New report' },
+  };
+  const oldRun: SciForgeRun = {
+    id: 'run-old',
+    scenarioId: 'literature-evidence-review',
+    status: 'completed',
+    prompt: 'old report',
+    response: 'done',
+    createdAt: '2026-05-07T00:00:01.000Z',
+    objectReferences: [{ kind: 'artifact', ref: 'artifact:old-report', title: 'old report' }],
+  } as never;
+  const newRun: SciForgeRun = {
+    id: 'run-new',
+    scenarioId: 'literature-evidence-review',
+    status: 'completed',
+    prompt: 'new report',
+    response: 'done',
+    createdAt: '2026-05-07T00:00:02.000Z',
+    objectReferences: [{ kind: 'artifact', ref: 'artifact:new-report', title: 'new report' }],
+  } as never;
+  const session = baseSession({
+    runs: [oldRun, newRun],
+    artifacts: [oldReport, newReport],
+    uiManifest: [{ componentId: 'report-viewer', artifactRef: 'new-report', title: 'Latest report' }],
+  });
+
+  const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun: oldRun, defaultSlots: [] });
+
+  assert.equal(plan.allItems.some((item) => item.artifact?.id === 'old-report'), true);
+  assert.equal(plan.allItems.some((item) => item.artifact?.id === 'new-report'), false);
+});
+
 test('display intent and UI manifest selection outrank artifact type wording during presentation dedupe', () => {
   const pdbArtifact: RuntimeArtifact = {
     id: 'backend-selected-pdb',

@@ -77,6 +77,19 @@ export interface WorkspaceTaskAttemptRecord {
   createdAt: string;
 }
 
+type WorkspacePreviewCacheEntry<T> = {
+  promise?: Promise<T>;
+  staleError?: Error;
+  staleAt?: number;
+};
+
+const WORKSPACE_PREVIEW_STALE_STATUS_CODES = new Set([400, 404]);
+const WORKSPACE_PREVIEW_STALE_CACHE_TTL_MS = 5 * 60 * 1000;
+const workspaceFileReadCache = new Map<string, WorkspacePreviewCacheEntry<WorkspaceFileContent>>();
+const previewDescriptorReadCache = new Map<string, WorkspacePreviewCacheEntry<PreviewDescriptor>>();
+const previewDerivativeReadCache = new Map<string, WorkspacePreviewCacheEntry<PreviewDerivative>>();
+let workspacePreviewCacheGeneration = 0;
+
 export interface SkillPromotionProposalRecord {
   id: string;
   status: 'draft' | 'needs-user-confirmation' | 'accepted' | 'rejected' | 'archived';
@@ -245,39 +258,57 @@ export async function listWorkspace(path: string, config: SciForgeConfig): Promi
 
 export async function readWorkspaceFile(path: string, config: SciForgeConfig): Promise<WorkspaceFileContent> {
   if (!path.trim()) throw new Error('path is required');
-  const url = new URL(`${config.workspaceWriterBaseUrl}/api/sciforge/workspace/file`);
-  url.searchParams.set('path', path);
-  if (config.workspacePath.trim()) url.searchParams.set('workspacePath', config.workspacePath.trim());
-  const response = await fetchWorkspace(config, `read workspace file ${path}`, url);
-  if (!response.ok) throw new Error(await workspaceResponseError(response, `Read file failed: HTTP ${response.status}`));
-  const json = await response.json() as { file?: WorkspaceFileContent };
-  if (!json.file) throw new Error(`Read file ${path} returned no file payload.`);
-  return json.file;
+  return cachedWorkspacePreviewRequest(
+    workspaceFileReadCache,
+    workspacePreviewCacheKey(config, 'workspace-file', path),
+    async () => {
+      const url = new URL(`${config.workspaceWriterBaseUrl}/api/sciforge/workspace/file`);
+      url.searchParams.set('path', path);
+      if (config.workspacePath.trim()) url.searchParams.set('workspacePath', config.workspacePath.trim());
+      const response = await fetchWorkspace(config, `read workspace file ${path}`, url);
+      if (!response.ok) throw await workspaceRequestError(response, `Read file failed: HTTP ${response.status}`);
+      const json = await response.json() as { file?: WorkspaceFileContent };
+      if (!json.file) throw new Error(`Read file ${path} returned no file payload.`);
+      return json.file;
+    },
+  );
 }
 
 export async function readPreviewDescriptor(ref: string, config: SciForgeConfig): Promise<PreviewDescriptor> {
   if (!ref.trim()) throw new Error('ref is required');
-  const url = new URL(`${config.workspaceWriterBaseUrl}/api/sciforge/preview/descriptor`);
-  url.searchParams.set('ref', ref);
-  if (config.workspacePath.trim()) url.searchParams.set('workspacePath', config.workspacePath.trim());
-  const response = await fetchWorkspace(config, `read preview descriptor ${ref}`, url);
-  if (!response.ok) throw new Error(await workspaceResponseError(response, `Read preview descriptor failed: HTTP ${response.status}`));
-  const json = await response.json() as { descriptor?: PreviewDescriptor };
-  if (!json.descriptor) throw new Error(`Preview descriptor ${ref} returned no descriptor payload.`);
-  return json.descriptor;
+  return cachedWorkspacePreviewRequest(
+    previewDescriptorReadCache,
+    workspacePreviewCacheKey(config, 'preview-descriptor', ref),
+    async () => {
+      const url = new URL(`${config.workspaceWriterBaseUrl}/api/sciforge/preview/descriptor`);
+      url.searchParams.set('ref', ref);
+      if (config.workspacePath.trim()) url.searchParams.set('workspacePath', config.workspacePath.trim());
+      const response = await fetchWorkspace(config, `read preview descriptor ${ref}`, url);
+      if (!response.ok) throw await workspaceRequestError(response, `Read preview descriptor failed: HTTP ${response.status}`);
+      const json = await response.json() as { descriptor?: PreviewDescriptor };
+      if (!json.descriptor) throw new Error(`Preview descriptor ${ref} returned no descriptor payload.`);
+      return json.descriptor;
+    },
+  );
 }
 
 export async function readPreviewDerivative(ref: string, kind: PreviewDerivative['kind'], config: SciForgeConfig): Promise<PreviewDerivative> {
   if (!ref.trim()) throw new Error('ref is required');
-  const url = new URL(`${config.workspaceWriterBaseUrl}/api/sciforge/preview/derivative`);
-  url.searchParams.set('ref', ref);
-  url.searchParams.set('kind', kind);
-  if (config.workspacePath.trim()) url.searchParams.set('workspacePath', config.workspacePath.trim());
-  const response = await fetchWorkspace(config, `read preview derivative ${kind} ${ref}`, url);
-  if (!response.ok) throw new Error(await workspaceResponseError(response, `Read preview derivative failed: HTTP ${response.status}`));
-  const json = await response.json() as { derivative?: PreviewDerivative };
-  if (!json.derivative) throw new Error(`Preview derivative ${ref} returned no derivative payload.`);
-  return json.derivative;
+  return cachedWorkspacePreviewRequest(
+    previewDerivativeReadCache,
+    workspacePreviewCacheKey(config, 'preview-derivative', `${kind}:${ref}`),
+    async () => {
+      const url = new URL(`${config.workspaceWriterBaseUrl}/api/sciforge/preview/derivative`);
+      url.searchParams.set('ref', ref);
+      url.searchParams.set('kind', kind);
+      if (config.workspacePath.trim()) url.searchParams.set('workspacePath', config.workspacePath.trim());
+      const response = await fetchWorkspace(config, `read preview derivative ${kind} ${ref}`, url);
+      if (!response.ok) throw await workspaceRequestError(response, `Read preview derivative failed: HTTP ${response.status}`);
+      const json = await response.json() as { derivative?: PreviewDerivative };
+      if (!json.derivative) throw new Error(`Preview derivative ${ref} returned no derivative payload.`);
+      return json.derivative;
+    },
+  );
 }
 
 export async function writeWorkspaceFile(
@@ -295,6 +326,7 @@ export async function writeWorkspaceFile(
   if (!response.ok) throw new Error(await workspaceResponseError(response, `Write file failed: HTTP ${response.status}`));
   const json = await response.json() as { file?: WorkspaceFileContent };
   if (!json.file) throw new Error(`Write file ${path} returned no file payload.`);
+  clearWorkspacePreviewReadCache();
   return json.file;
 }
 
@@ -310,6 +342,15 @@ export async function mutateWorkspaceFile(
     body: JSON.stringify({ action, ...payload }),
   });
   if (!response.ok) throw new Error(await workspaceResponseError(response, `File action failed: HTTP ${response.status}`));
+  clearWorkspacePreviewReadCache();
+}
+
+export function cachedWorkspaceFileReadError(path: string, config: SciForgeConfig): Error | undefined {
+  return cachedStaleWorkspacePreviewError(workspaceFileReadCache, workspacePreviewCacheKey(config, 'workspace-file', path));
+}
+
+export function clearWorkspacePreviewReadCacheForTests() {
+  clearWorkspacePreviewReadCache();
 }
 
 export async function openWorkspaceObject(
@@ -553,6 +594,83 @@ async function workspaceResponseError(response: Response, fallback: string) {
     recoverActions: recoverActionsForService('workspace'),
     diagnosticRef: `workspace-http-${response.status}`,
   }).message;
+}
+
+class WorkspaceHttpError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'WorkspaceHttpError';
+    this.status = status;
+  }
+}
+
+async function workspaceRequestError(response: Response, fallback: string) {
+  return new WorkspaceHttpError(response.status, await workspaceResponseError(response, fallback));
+}
+
+function cachedWorkspacePreviewRequest<T>(
+  cache: Map<string, WorkspacePreviewCacheEntry<T>>,
+  key: string,
+  load: () => Promise<T>,
+): Promise<T> {
+  const staleError = cachedStaleWorkspacePreviewError(cache, key);
+  if (staleError) return Promise.reject(staleError);
+  const cached = cache.get(key);
+  if (cached?.promise) return cached.promise;
+  const generation = workspacePreviewCacheGeneration;
+  let promise: Promise<T>;
+  promise = Promise.resolve().then(load).then(
+    (value) => {
+      if (workspacePreviewCacheGeneration === generation && cache.get(key)?.promise === promise) {
+        cache.delete(key);
+      }
+      return value;
+    },
+    (error) => {
+      if (workspacePreviewCacheGeneration === generation && cache.get(key)?.promise === promise) {
+        if (isStaleWorkspacePreviewError(error)) {
+          cache.set(key, { staleError: error instanceof Error ? error : new Error(String(error)), staleAt: Date.now() });
+        } else {
+          cache.delete(key);
+        }
+      }
+      throw error;
+    },
+  );
+  cache.set(key, { promise });
+  return promise;
+}
+
+function cachedStaleWorkspacePreviewError<T>(cache: Map<string, WorkspacePreviewCacheEntry<T>>, key: string): Error | undefined {
+  const cached = cache.get(key);
+  if (!cached?.staleError || !cached.staleAt) return undefined;
+  if (Date.now() - cached.staleAt > WORKSPACE_PREVIEW_STALE_CACHE_TTL_MS) {
+    cache.delete(key);
+    return undefined;
+  }
+  return cached.staleError;
+}
+
+function isStaleWorkspacePreviewError(error: unknown) {
+  return error instanceof WorkspaceHttpError && WORKSPACE_PREVIEW_STALE_STATUS_CODES.has(error.status);
+}
+
+function workspacePreviewCacheKey(config: SciForgeConfig, route: string, ref: string) {
+  return JSON.stringify([
+    config.workspaceWriterBaseUrl.replace(/\/+$/, ''),
+    normalizeWorkspaceRootPath(config.workspacePath),
+    route,
+    ref.trim(),
+  ]);
+}
+
+function clearWorkspacePreviewReadCache() {
+  workspacePreviewCacheGeneration += 1;
+  workspaceFileReadCache.clear();
+  previewDescriptorReadCache.clear();
+  previewDerivativeReadCache.clear();
 }
 
 async function fetchWorkspace(
