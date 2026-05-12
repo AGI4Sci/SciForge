@@ -354,10 +354,41 @@ function interactiveViewPresentationDedupeEnabled(module: UIComponentManifest) {
 }
 
 function interactiveViewPresentationIdentityKey(item: InteractiveViewPlanItem) {
-  if (!item.artifact || item.status === 'missing-artifact' || !interactiveViewPresentationDedupeEnabled(item.module)) return undefined;
+  if (item.status === 'missing-artifact' || !interactiveViewPresentationDedupeEnabled(item.module)) return undefined;
   const scope = item.module.presentation?.dedupeScope ?? 'entity';
+  const slotIdentity = interactiveViewSlotPresentationIdentity(item.slot);
+  if (slotIdentity) return `${item.module.componentId}:${scope}:slot:${slotIdentity}`;
+  if (!item.artifact) return undefined;
   const identity = interactiveViewArtifactPresentationIdentity(item.artifact, item.module, scope);
   return identity ? `${item.module.componentId}:${scope}:${identity}` : undefined;
+}
+
+function interactiveViewSlotPresentationIdentity(slot: UIManifestSlot) {
+  const props = isRecord(slot.props) ? slot.props : {};
+  const identity = isRecord(props.artifactIdentity) ? props.artifactIdentity : undefined;
+  if (!identity) return undefined;
+  const segments = [
+    identitySegment(identity, 'presentationKey'),
+    identitySegment(identity, 'actionId'),
+    identitySegment(identity, 'artifactRef'),
+    identitySegment(identity, 'parentArtifactRef'),
+    identitySegment(identity, 'revisionRef'),
+    identitySegment(identity, 'revision'),
+    transformParamsIdentity(identity.transformParams),
+  ].filter((segment): segment is string => Boolean(segment));
+  return segments.length ? segments.join('|') : undefined;
+}
+
+function identitySegment(record: Record<string, unknown>, key: string) {
+  const value = typeof record[key] === 'number' ? String(record[key]) : asString(record[key]);
+  const normalized = normalizeInteractiveViewPresentationIdentity(value);
+  return normalized ? `${key}:${normalized}` : undefined;
+}
+
+function transformParamsIdentity(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  const normalized = normalizeInteractiveViewPresentationIdentity(JSON.stringify(value));
+  return normalized ? `transform:${normalized}` : undefined;
 }
 
 function interactiveViewArtifactPresentationIdentity(

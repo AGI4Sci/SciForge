@@ -58,6 +58,17 @@ type ResultPresentationArtifactAction = {
   artifactType?: string;
   componentId?: string;
   moduleId?: string;
+  presentationKey?: string;
+  parentArtifactRef?: string;
+  revision?: string | number;
+  revisionRef?: string;
+  encoding?: UIManifestSlot['encoding'];
+  layout?: UIManifestSlot['layout'];
+  selection?: UIManifestSlot['selection'];
+  sync?: UIManifestSlot['sync'];
+  transform?: UIManifestSlot['transform'];
+  compare?: UIManifestSlot['compare'];
+  exportProfile?: Record<string, unknown>;
 };
 
 export type ResolvedViewPlanItem = {
@@ -133,6 +144,7 @@ export function resolveViewPlan({
     source: ViewPlanSource,
     overrides: Partial<UIManifestSlot> = {},
     reason?: string,
+    itemIdentity?: string,
   ) => {
     const slot: UIManifestSlot = {
       componentId: overrides.componentId ?? module.componentId,
@@ -149,7 +161,7 @@ export function resolveViewPlan({
     };
     const validation = validateInteractiveViewModuleBinding(module, artifact);
     const section = resolveInteractiveViewPlanSection({ module, displayIntent, artifact, source });
-    const id = `${section}-${module.moduleId}-${artifact?.id ?? slot.artifactRef ?? slot.componentId}`;
+    const id = `${section}-${module.moduleId}-${itemIdentity ?? artifact?.id ?? slot.artifactRef ?? slot.componentId}`;
     if (seen.has(id)) return;
     seen.add(id);
     items.push({
@@ -198,7 +210,14 @@ export function resolveViewPlan({
       title: action.label ?? artifact?.id ?? action.artifactType ?? module.title,
       artifactRef: artifact?.id ?? action.ref ?? action.artifactType,
       priority: index,
-    }, artifact ? undefined : `等待 resultPresentation artifact ${action.ref ?? action.artifactType ?? action.id ?? index}`);
+      props: actionSlotProps(action, artifact),
+      encoding: action.encoding,
+      layout: action.layout,
+      selection: action.selection,
+      sync: action.sync,
+      transform: action.transform,
+      compare: action.compare,
+    }, artifact ? undefined : `等待 resultPresentation artifact ${action.ref ?? action.artifactType ?? action.id ?? index}`, presentationActionItemIdentity(action, artifact, index));
   });
 
   for (const artifactType of displayIntent.requiredArtifactTypes ?? []) {
@@ -327,13 +346,139 @@ function resultPresentationArtifactActions(activeRun?: SciForgeRun): ResultPrese
   const resultPresentation = candidates.filter(isRecord).find((candidate) => Array.isArray(candidate.artifactActions));
   const artifactActions = Array.isArray(resultPresentation?.artifactActions) ? resultPresentation.artifactActions.filter(isRecord) : [];
   return artifactActions.map((action) => ({
+    ...viewCompositionFromPresentationAction(action),
     id: asString(action.id),
     label: asString(action.label),
     ref: asString(action.ref),
     artifactType: asString(action.artifactType),
     componentId: asString(action.componentId),
     moduleId: asString(action.moduleId),
+    presentationKey: actionStringField(action, 'presentationKey'),
+    parentArtifactRef: actionStringField(action, 'parentArtifactRef'),
+    revision: actionStringOrNumberField(action, 'revision'),
+    revisionRef: actionStringField(action, 'revisionRef'),
   })).filter((action) => action.ref || action.artifactType);
+}
+
+function viewCompositionFromPresentationAction(action: Record<string, unknown>): Partial<ResultPresentationArtifactAction> {
+  const metadata = isRecord(action.metadata) ? action.metadata : {};
+  const transformParams = isRecord(action.transformParams)
+    ? action.transformParams
+    : isRecord(metadata.transformParams)
+      ? metadata.transformParams
+      : {};
+  return {
+    encoding: actionRecordField(action, transformParams, 'encoding') as UIManifestSlot['encoding'],
+    layout: actionRecordField(action, transformParams, 'layout') as UIManifestSlot['layout'],
+    selection: actionRecordField(action, transformParams, 'selection') as UIManifestSlot['selection'],
+    sync: actionRecordField(action, transformParams, 'sync') as UIManifestSlot['sync'],
+    transform: actionTransformField(action, transformParams),
+    compare: actionRecordField(action, transformParams, 'compare') as UIManifestSlot['compare'],
+    exportProfile: actionRecordField(action, transformParams, 'exportProfile'),
+    presentationKey: actionStringField(action, 'presentationKey') ?? actionStringField(metadata, 'presentationKey'),
+    parentArtifactRef: actionStringField(action, 'parentArtifactRef') ?? actionStringField(metadata, 'parentArtifactRef'),
+    revision: actionStringOrNumberField(action, 'revision') ?? actionStringOrNumberField(metadata, 'revision'),
+    revisionRef: actionStringField(action, 'revisionRef') ?? actionStringField(metadata, 'revisionRef'),
+  };
+}
+
+function actionSlotProps(action: ResultPresentationArtifactAction, artifact?: RuntimeArtifact): Record<string, unknown> | undefined {
+  const artifactIdentity = compactRecord({
+    actionId: action.id,
+    presentationKey: action.presentationKey,
+    artifactRef: artifact?.id ?? action.ref,
+    artifactType: artifact?.type ?? action.artifactType,
+    parentArtifactRef: action.parentArtifactRef,
+    revision: action.revision,
+    revisionRef: action.revisionRef,
+    transformParams: compactRecord({
+      encoding: action.encoding,
+      layout: action.layout,
+      selection: action.selection,
+      sync: action.sync,
+      transform: action.transform,
+      compare: action.compare,
+      exportProfile: action.exportProfile,
+    }),
+  });
+  if (!artifactIdentity) return undefined;
+  return {
+    artifactIdentity,
+  };
+}
+
+function presentationActionItemIdentity(action: ResultPresentationArtifactAction, artifact: RuntimeArtifact | undefined, index: number) {
+  const viewKey = compactRecord({
+    encoding: action.encoding,
+    layout: action.layout,
+    selection: action.selection,
+    sync: action.sync,
+    transform: action.transform,
+    compare: action.compare,
+    exportProfile: action.exportProfile,
+  });
+  const segments = uniqueStrings([
+    artifact?.id ?? action.ref ?? action.artifactType ?? '',
+    action.id ? `action:${action.id}` : '',
+    action.presentationKey ? `presentation:${action.presentationKey}` : '',
+    action.revisionRef ? `revision-ref:${action.revisionRef}` : '',
+    action.revision !== undefined ? `revision:${String(action.revision)}` : '',
+    viewKey ? `view:${textDigest(JSON.stringify(viewKey))}` : '',
+    `index:${index}`,
+  ]);
+  return segments.join(':');
+}
+
+function actionStringField(action: Record<string, unknown>, key: string) {
+  const value = asString(action[key]);
+  if (value) return value;
+  const metadata = isRecord(action.metadata) ? action.metadata : {};
+  return asString(metadata[key]);
+}
+
+function actionStringOrNumberField(action: Record<string, unknown>, key: string): string | number | undefined {
+  const value = action[key];
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  return actionStringField(action, key);
+}
+
+function actionRecordField(
+  action: Record<string, unknown>,
+  transformParams: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | undefined {
+  return recordField(action[key]) ?? recordField(transformParams[key]);
+}
+
+function actionTransformField(
+  action: Record<string, unknown>,
+  transformParams: Record<string, unknown>,
+): UIManifestSlot['transform'] | undefined {
+  const value = Array.isArray(action.transform) ? action.transform : transformParams.transform;
+  return Array.isArray(value) ? value.filter(isViewTransform) : undefined;
+}
+
+function recordField(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
+}
+
+function isViewTransform(value: unknown): value is NonNullable<UIManifestSlot['transform']>[number] {
+  if (!isRecord(value)) return false;
+  return ['filter', 'sort', 'limit', 'group', 'derive'].includes(asString(value.type) ?? '');
+}
+
+function compactRecord(value: Record<string, unknown>): Record<string, unknown> | undefined {
+  const entries = Object.entries(value)
+    .filter(([, entry]) => entry !== undefined && (!isRecord(entry) || Object.keys(entry).length > 0));
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+function textDigest(value: string): string {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash << 5) - hash + value.charCodeAt(index)) | 0;
+  }
+  return Math.abs(hash).toString(36);
 }
 
 function artifactForPresentationAction(artifacts: RuntimeArtifact[], action: ResultPresentationArtifactAction) {

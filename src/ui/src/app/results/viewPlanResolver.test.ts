@@ -295,6 +295,84 @@ test('result presentation artifact actions can drive Results view selection', ()
   assert.equal(displayIntentItems.some((item) => item.artifact?.id === 'analysis-report'), true);
 });
 
+test('result presentation artifact actions preserve chart revision identity and view transforms', () => {
+  const plot: RuntimeArtifact = {
+    id: 'base-plot',
+    type: 'plot-spec',
+    producerScenario: 'data-analysis',
+    schemaVersion: '1',
+    data: {
+      plotId: 'ifnb-response',
+      data: [{ type: 'scatter', x: [0, 1], y: [1.2, 2.4] }],
+      layout: { title: { text: 'IFNB response' } },
+    },
+  };
+  const activeRun: SciForgeRun = {
+    id: 'run-chart-revisions',
+    scenarioId: 'omics-differential-exploration',
+    status: 'completed',
+    prompt: 'Revise chart axes and export',
+    response: 'Chart revisions ready.',
+    createdAt: '2026-05-07T00:00:01.000Z',
+    raw: {
+      displayIntent: {
+        resultPresentation: {
+          answerBlocks: [{ id: 'answer-1', text: 'Two chart revisions are ready.' }],
+          artifactActions: [
+            {
+              id: 'axis-revision',
+              label: 'Open axis revision',
+              ref: 'artifact:base-plot',
+              artifactType: 'plot-spec',
+              componentId: 'scientific-plot-viewer',
+              parentArtifactRef: 'artifact:base-plot',
+              revision: 'r2',
+              revisionRef: 'artifact:base-plot#r2',
+              encoding: { x: 'time_hours', y: 'signal' },
+              transform: [{ type: 'filter', field: 'condition', op: '=', value: 'treated' }],
+              exportProfile: { format: 'png', renderer: 'plotly' },
+            },
+            {
+              id: 'color-revision',
+              label: 'Open color revision',
+              ref: 'artifact:base-plot',
+              artifactType: 'plot-spec',
+              componentId: 'scientific-plot-viewer',
+              parentArtifactRef: 'artifact:base-plot',
+              revision: 'r3',
+              revisionRef: 'artifact:base-plot#r3',
+              encoding: { x: 'time_hours', y: 'signal', colorBy: 'replicate' },
+              transform: [{ type: 'filter', field: 'condition', op: '=', value: 'control' }],
+              exportProfile: { format: 'svg', renderer: 'plotly' },
+            },
+          ],
+        },
+      },
+    },
+  } as never;
+  const session = baseSession({
+    scenarioId: 'omics-differential-exploration',
+    runs: [activeRun],
+    artifacts: [plot],
+  });
+
+  const plan = resolveViewPlan({ scenarioId: 'omics-differential-exploration', session, activeRun, defaultSlots: [] });
+  const chartItems = plan.allItems.filter((item) => item.source === 'display-intent' && item.artifact?.id === 'base-plot');
+
+  assert.equal(chartItems.length, 2);
+  const axisRevision = chartItems.find((item) => item.slot.title === 'Open axis revision');
+  const colorRevision = chartItems.find((item) => item.slot.title === 'Open color revision');
+  assert.ok(axisRevision);
+  assert.ok(colorRevision);
+  assert.deepEqual(axisRevision.slot.encoding, { x: 'time_hours', y: 'signal' });
+  assert.deepEqual(colorRevision.slot.encoding, { x: 'time_hours', y: 'signal', colorBy: 'replicate' });
+  assert.deepEqual(axisRevision.slot.transform, [{ type: 'filter', field: 'condition', op: '=', value: 'treated' }]);
+  assert.equal((axisRevision.slot.props?.artifactIdentity as Record<string, unknown>).parentArtifactRef, 'artifact:base-plot');
+  assert.equal((axisRevision.slot.props?.artifactIdentity as Record<string, unknown>).revisionRef, 'artifact:base-plot#r2');
+  const transformParams = (axisRevision.slot.props?.artifactIdentity as Record<string, unknown>).transformParams as Record<string, unknown>;
+  assert.deepEqual(transformParams.exportProfile, { format: 'png', renderer: 'plotly' });
+});
+
 test('result presentation artifact actions keep active run scope across mixed artifacts', () => {
   const oldReport: RuntimeArtifact = {
     id: 'old-report',

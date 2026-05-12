@@ -1,3 +1,5 @@
+import type { ViewCompare, ViewEncoding, ViewLayout, ViewSelection, ViewSync, ViewTransform } from './view';
+
 export const RESULT_PRESENTATION_SCHEMA_VERSION = 'sciforge.result-presentation-contract.v1' as const;
 export const RESULT_PRESENTATION_CONTRACT_ID = 'sciforge.result-presentation.v1' as const;
 
@@ -110,6 +112,17 @@ export interface ResultPresentationArtifactAction {
   artifactType?: string;
   citationId?: string;
   primary?: boolean;
+  presentationKey?: string;
+  parentArtifactRef?: string;
+  revision?: string | number;
+  revisionRef?: string;
+  encoding?: ViewEncoding;
+  layout?: ViewLayout;
+  selection?: ViewSelection;
+  sync?: ViewSync;
+  transform?: ViewTransform[];
+  compare?: ViewCompare;
+  exportProfile?: Record<string, unknown>;
 }
 
 export interface ResultPresentationConfidenceExplanation {

@@ -377,6 +377,30 @@ Failure/Improvement Notes：
 - [x] `git diff --check`
 
 
+### 2026-05-13 Milestone：图表派生视图 identity 与 action lineage 收敛
+
+本轮在上一阶段推送后重启 worker/explorer，优先落地 R-DATA-04 的最小通用 contract。主线程吸收 chart lineage 复核结论后，把图表迭代从“同一 artifact 只保留一个视图”改为“同一 artifact 可以有多个结构化 action identity / view composition”：
+
+- [x] R-DATA-04 图表迭代：`ResultPresentationArtifactAction` 增加 `presentationKey`、`parentArtifactRef`、`revision`、`revisionRef`、`encoding`、`layout`、`selection`、`sync`、`transform`、`compare`、`exportProfile`，用于表达换坐标、换颜色、筛选子集、导出 profile 等派生视图。
+- [x] `viewPlanResolver` 从 resultPresentation action 中保留上述 view params，写入 slot 与 `slot.props.artifactIdentity`，并把 action/revision/transform digest 纳入 item identity，避免同一 `artifact:base-plot` 的多个 revision 被去重吞掉。
+- [x] interactive view presentation dedupe 优先读取 `slot.props.artifactIdentity`，让 action-level identity 可以覆盖 artifact-level semantic identity，同时保持普通 artifact dedupe 逻辑不变。
+
+Failure/Improvement Notes：
+
+- R-DATA-04 不应写成 chart 专用字段或依赖颜色/坐标文案；本轮使用通用 resultPresentation action + UIManifestSlot view params，结构上适用于 plot、figure、table-like view 和 export bundle。
+- 同一 artifact 的多个派生 action 必须以 action/revision/transform identity 区分；只按 artifact id 去重会丢失用户“换坐标/筛选/导出”的历史意图。
+- `src/ui/src/app/results/viewPlanResolver.ts` 本轮 636 行，仍低于 PROJECT watch 阈值；后续继续扩展 result presentation action 时再考虑抽 action normalization helper。
+
+本轮验证：
+
+- [x] `node --import tsx --test src/ui/src/app/results/viewPlanResolver.test.ts packages/presentation/interactive-views/index.test.ts packages/contracts/runtime/result-presentation.test.ts`
+- [x] `npm run typecheck`
+- [x] `npm run smoke:view`
+- [x] `npm run test`（724 tests pass）
+- [x] `npm run smoke:browser`
+- [x] `git diff --check`
+
+
 
 ### H022 Real-world Complex Task Backlog for SciForge Hardening
 
@@ -422,7 +446,7 @@ Failure/Improvement Notes：
 - [ ] R-DATA-01 CSV 多轮分析：上传/引用 CSV，先做摘要统计，再改分组口径，再要求异常值解释，再导出 markdown 报告和复现代码。
 - [ ] R-DATA-02 两表合并冲突：A/B 两个表字段不一致，用户给映射规则，系统重算并保留 mapping artifact。
 - [x] R-DATA-03 大文件摘要：读取大文本/日志文件，只允许摘要和 refs，不允许把全文塞入 prompt；后续追问必须按需读取片段。
-- [ ] R-DATA-04 图表迭代：先生成图表 artifact，再要求换坐标、换颜色、筛选子集、导出最终报告，测试 artifact identity。
+- [x] R-DATA-04 图表迭代：先生成图表 artifact，再要求换坐标、换颜色、筛选子集、导出最终报告，测试 artifact identity。已覆盖 resultPresentation action-level lineage、revisionRef、view transform/exportProfile 和同一 artifact 多派生视图保留。
 - [x] R-DATA-05 缺失文件恢复：历史 artifact 指向的文件被删除/移动，用户要求继续，系统必须 stale-check 并进入安全恢复。
 - [ ] R-DATA-06 Notebook 风格任务：连续执行多个分析步骤，每步都有中间文件；用户要求回到第 2 步换参数后继续生成分支结果。
 - [x] R-DATA-07 外部数据源限流：调用外部 API 拉数据遇到 429/timeout，系统必须输出 transient-unavailable 诊断和重试建议。已覆盖 pre-output diagnostic payload、partial artifact 降级、provider-neutral workEvidence、transientPolicy 和 retry refs。
