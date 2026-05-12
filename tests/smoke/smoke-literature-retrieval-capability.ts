@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 
 import { loadCoreCapabilityManifestRegistry } from '../../src/runtime/capability-manifest-registry.js';
 import {
+  deriveLiteratureBilingualReport,
   deriveLiteratureCitationCorrection,
   runOfflineLiteratureRetrieval,
   validateOfflineLiteratureRetrievalOutput,
@@ -20,6 +21,7 @@ assert.deepEqual(manifest.metadata?.producesArtifactTypes, [
   'paper-list',
   'evidence-matrix',
   'research-report',
+  'sourceProvenance',
   'workEvidence',
   'providerAttempts',
   'citationVerificationResults',
@@ -367,6 +369,59 @@ assert.deepEqual(
   ['provider:pubmed:pmid-777', 'provider:web-search:blog-777'],
   'citation correction must be derived without mutating the original retrieval output',
 );
+
+const originalSuccessReportSummary = success.researchReport.boundedSummary;
+const bilingualReport = deriveLiteratureBilingualReport({
+  output: success,
+  sourceLanguage: 'zh',
+  targetLanguage: 'en',
+  executiveSummary: {
+    text: 'English executive summary: retrieval agents can normalize provider records while keeping evidence refs auditable.',
+    sourceRefs: ['artifact:research-report', 'provider:openalex:openalex-w1'],
+  },
+  glossaryTerms: [
+    {
+      sourceTerm: '证据矩阵',
+      targetTerm: 'evidence matrix',
+      sourceRefs: ['artifact:evidence-matrix', 'provider:openalex:openalex-w1'],
+      paperIds: ['paper:doi:10.5555/sciforge.2026.1'],
+      note: 'Term is derived from the retrieval artifact contract.',
+    },
+    {
+      sourceTerm: '全文预算',
+      targetTerm: 'full-text budget',
+      sourceRefs: ['artifact:research-report'],
+      confidence: 'derived',
+    },
+  ],
+});
+assert.equal(bilingualReport.artifactType, 'bilingual-literature-report');
+assert.equal(bilingualReport.parentArtifactRef, 'artifact:research-report');
+assert.equal(bilingualReport.metadata.derivation.schemaVersion, 'sciforge.artifact-derivation.v1');
+assert.equal(bilingualReport.metadata.derivation.kind, 'rewrite');
+assert.ok(bilingualReport.metadata.derivation.sourceRefs.includes('artifact:research-report'));
+assert.deepEqual(bilingualReport.derivedArtifactRefs, ['artifact:bilingual-executive-summary', 'artifact:bilingual-glossary']);
+assert.deepEqual(bilingualReport.sourceArtifactRefs, ['artifact:research-report', 'artifact:paper-list', 'artifact:evidence-matrix']);
+assert.equal(bilingualReport.sourceLanguage, 'zh');
+assert.equal(bilingualReport.targetLanguage, 'en');
+assert.equal(bilingualReport.status, 'ready');
+assert.equal(bilingualReport.sourceReport.boundedSummary, originalSuccessReportSummary);
+assert.match(bilingualReport.englishExecutiveSummary.text, /English executive summary/);
+assert.equal(bilingualReport.englishExecutiveSummary.metadata.derivation.kind, 'summary');
+assert.equal(bilingualReport.englishExecutiveSummary.metadata.derivation.targetLanguage, 'en');
+assert.ok(bilingualReport.englishExecutiveSummary.sourceRefs.includes('artifact:research-report'));
+assert.ok(bilingualReport.englishExecutiveSummary.sourceRefs.includes('provider:openalex:openalex-w1'));
+assert.equal(bilingualReport.glossary.entries.length, 2);
+assert.equal(bilingualReport.glossary.metadata.derivation.kind, 'glossary');
+assert.ok(bilingualReport.glossary.entries.some((entry) => (
+  entry.sourceTerm === '证据矩阵'
+  && entry.targetTerm === 'evidence matrix'
+  && entry.paperIds.includes('paper:doi:10.5555/sciforge.2026.1')
+  && entry.sourceRefs.includes('artifact:evidence-matrix')
+)));
+assert.ok(bilingualReport.lineage.includes('artifact:research-report -> artifact:bilingual-executive-summary'));
+assert.ok(bilingualReport.lineage.includes('artifact:research-report -> artifact:bilingual-glossary'));
+assert.equal(success.researchReport.boundedSummary, originalSuccessReportSummary, 'bilingual report must be derived without mutating the original report');
 
 console.log('[ok] literature.retrieval capability has offline provider runner/normalizer contract with auditable outputs and failure outcomes');
 

@@ -86,12 +86,18 @@ function artifactLineageRows(
   artifact: RuntimeArtifact,
   executionUnit: RuntimeExecutionUnit | undefined,
 ): Array<[string, string]> {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  const derivation: Record<string, unknown> = isRecord(metadata.derivation) ? metadata.derivation : {};
+  const sourceRefs = asStringList(derivation.sourceRefs);
   return [
     ['producer scenario', artifact.producerScenario],
     ['producer skill', asStringList(artifact.metadata?.producerSkillIds).join(', ') || asString(artifact.metadata?.producerSkillId) || 'unknown'],
     ['execution unit', executionUnit ? `${executionUnit.id} · ${executionUnit.tool} · ${executionUnit.status}` : 'missing'],
     ['created', asString(artifact.metadata?.createdAt) ?? 'unknown'],
-  ];
+    asString(derivation.kind) ? ['derivation kind', asString(derivation.kind)!] : undefined,
+    asString(derivation.parentArtifactRef) ? ['derivation parent', asString(derivation.parentArtifactRef)!] : undefined,
+    sourceRefs.length ? ['derivation sources', sourceRefs.join(', ')] : undefined,
+  ].filter((row): row is [string, string] => Boolean(row));
 }
 
 function rowCountForReference(data: unknown) {

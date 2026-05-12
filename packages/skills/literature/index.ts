@@ -3,6 +3,7 @@ import {
   type CapabilityBudgetDebitLine,
   type CapabilityInvocationBudgetDebitRecord,
 } from '@sciforge-ui/runtime-contract/capability-budget';
+import type { RuntimeArtifactDerivation } from '@sciforge-ui/runtime-contract';
 
 export type LiteratureRetrievalStatus = 'success' | 'partial' | 'failed';
 export type LiteratureProviderAttemptStatus = 'success' | 'empty' | 'timeout' | 'error' | 'skipped';
@@ -214,6 +215,82 @@ export interface LiteratureCitationCorrectionArtifact {
   correctionReport: string;
   affectedEvidenceRows: LiteratureEvidenceMatrixRow[];
   untouchedPaperIds: string[];
+  diagnostics: LiteratureRetrievalDiagnostic[];
+}
+
+export type LiteratureBilingualReportStatus = 'ready' | 'needs-review';
+export type LiteratureGlossaryEntryConfidence = 'provided' | 'derived' | 'needs-review';
+
+export interface LiteratureBilingualGlossaryTermInput {
+  sourceTerm: string;
+  targetTerm: string;
+  sourceRefs?: string[];
+  paperIds?: string[];
+  note?: string;
+  confidence?: LiteratureGlossaryEntryConfidence;
+}
+
+export interface LiteratureBilingualReportInput {
+  output: OfflineLiteratureRetrievalOutput;
+  sourceLanguage?: string;
+  targetLanguage?: string;
+  executiveSummary?: string | {
+    text: string;
+    sourceRefs?: string[];
+  };
+  glossaryTerms?: LiteratureBilingualGlossaryTermInput[];
+}
+
+export interface LiteratureBilingualGlossaryEntry {
+  sourceTerm: string;
+  targetTerm: string;
+  sourceRefs: string[];
+  paperIds: string[];
+  confidence: LiteratureGlossaryEntryConfidence;
+  note?: string;
+}
+
+export interface LiteratureDerivedArtifactMetadata {
+  language?: string;
+  role?: string;
+  derivation: RuntimeArtifactDerivation;
+}
+
+export interface LiteratureBilingualReportArtifact {
+  artifactType: 'bilingual-literature-report';
+  ref: 'artifact:bilingual-literature-report';
+  parentArtifactRef: 'artifact:research-report';
+  metadata: LiteratureDerivedArtifactMetadata;
+  derivedArtifactRefs: Array<'artifact:bilingual-executive-summary' | 'artifact:bilingual-glossary'>;
+  sourceArtifactRefs: Array<'artifact:research-report' | 'artifact:paper-list' | 'artifact:evidence-matrix'>;
+  sourceLanguage: string;
+  targetLanguage: string;
+  status: LiteratureBilingualReportStatus;
+  sourceReport: {
+    ref: 'artifact:research-report';
+    title: string;
+    boundedSummary: string;
+    sourceRefs: string[];
+  };
+  englishExecutiveSummary: {
+    artifactType: 'bilingual-executive-summary';
+    ref: 'artifact:bilingual-executive-summary';
+    parentArtifactRef: 'artifact:research-report';
+    metadata: LiteratureDerivedArtifactMetadata;
+    text: string;
+    sourceRefs: string[];
+  };
+  glossary: {
+    artifactType: 'bilingual-glossary';
+    ref: 'artifact:bilingual-glossary';
+    parentArtifactRef: 'artifact:research-report';
+    metadata: LiteratureDerivedArtifactMetadata;
+    entries: LiteratureBilingualGlossaryEntry[];
+    sourceRefs: string[];
+  };
+  paperIds: string[];
+  sourceRefs: string[];
+  lineage: string[];
   diagnostics: LiteratureRetrievalDiagnostic[];
 }
 
@@ -500,6 +577,151 @@ export function validateOfflineLiteratureRetrievalOutput(output: OfflineLiteratu
     failures.push('download failure must downgrade researchReport.fullTextPolicy to metadata-only');
   }
   return failures;
+}
+
+export function deriveLiteratureBilingualReport(input: LiteratureBilingualReportInput): LiteratureBilingualReportArtifact {
+  const output = input.output;
+  const paperIds = output.paperList.map((paper) => paper.id);
+  const sourceRefs = unique([
+    output.researchReport.ref,
+    ...output.researchReport.sourceRefs,
+    ...output.paperList.flatMap((paper) => paper.providerRecordRefs),
+  ]);
+  const executiveSummary = normalizeExecutiveSummary(input.executiveSummary, output);
+  const executiveSummaryRefs = unique([
+    ...sourceRefs,
+    ...arrayStrings(typeof input.executiveSummary === 'object' ? input.executiveSummary.sourceRefs : undefined),
+  ]);
+  const glossaryEntries = normalizeBilingualGlossaryTerms(input.glossaryTerms ?? [], sourceRefs, paperIds);
+  const glossaryRefs = unique(glossaryEntries.flatMap((entry) => entry.sourceRefs));
+  const rootDerivation = artifactDerivationMetadata({
+    kind: 'rewrite',
+    role: 'bilingual-report',
+    language: `${input.sourceLanguage ?? 'source'}-${input.targetLanguage ?? 'en'}`,
+    sourceRefs,
+    sourceLanguage: input.sourceLanguage,
+    targetLanguage: input.targetLanguage ?? 'en',
+    verificationStatus: glossaryEntries.length ? 'unverified' : 'needs-review',
+  });
+  const summaryDerivation = artifactDerivationMetadata({
+    kind: 'summary',
+    role: 'executive-summary',
+    language: input.targetLanguage ?? 'en',
+    sourceRefs: executiveSummaryRefs,
+    sourceLanguage: input.sourceLanguage,
+    targetLanguage: input.targetLanguage ?? 'en',
+    verificationStatus: 'unverified',
+  });
+  const glossaryDerivation = artifactDerivationMetadata({
+    kind: 'glossary',
+    role: 'glossary',
+    language: `${input.sourceLanguage ?? 'source'}-${input.targetLanguage ?? 'en'}`,
+    sourceRefs: glossaryRefs.length ? glossaryRefs : sourceRefs,
+    sourceLanguage: input.sourceLanguage,
+    targetLanguage: input.targetLanguage ?? 'en',
+    verificationStatus: glossaryEntries.length ? 'unverified' : 'needs-review',
+  });
+  return {
+    artifactType: 'bilingual-literature-report',
+    ref: 'artifact:bilingual-literature-report',
+    parentArtifactRef: 'artifact:research-report',
+    metadata: rootDerivation,
+    derivedArtifactRefs: ['artifact:bilingual-executive-summary', 'artifact:bilingual-glossary'],
+    sourceArtifactRefs: ['artifact:research-report', 'artifact:paper-list', 'artifact:evidence-matrix'],
+    sourceLanguage: input.sourceLanguage ?? 'source',
+    targetLanguage: input.targetLanguage ?? 'en',
+    status: glossaryEntries.length ? 'ready' : 'needs-review',
+    sourceReport: {
+      ref: output.researchReport.ref,
+      title: output.researchReport.title,
+      boundedSummary: output.researchReport.boundedSummary,
+      sourceRefs: output.researchReport.sourceRefs,
+    },
+    englishExecutiveSummary: {
+      artifactType: 'bilingual-executive-summary',
+      ref: 'artifact:bilingual-executive-summary',
+      parentArtifactRef: 'artifact:research-report',
+      metadata: summaryDerivation,
+      text: executiveSummary,
+      sourceRefs: executiveSummaryRefs,
+    },
+    glossary: {
+      artifactType: 'bilingual-glossary',
+      ref: 'artifact:bilingual-glossary',
+      parentArtifactRef: 'artifact:research-report',
+      metadata: glossaryDerivation,
+      entries: glossaryEntries,
+      sourceRefs: glossaryRefs.length ? glossaryRefs : sourceRefs,
+    },
+    paperIds,
+    sourceRefs,
+    lineage: [
+      'artifact:research-report -> artifact:bilingual-executive-summary',
+      'artifact:research-report -> artifact:bilingual-glossary',
+      'artifact:bilingual-executive-summary + artifact:bilingual-glossary -> artifact:bilingual-literature-report',
+    ],
+    diagnostics: output.diagnostics,
+  };
+}
+
+function artifactDerivationMetadata(input: {
+  kind: RuntimeArtifactDerivation['kind'];
+  role: string;
+  language: string;
+  sourceRefs: string[];
+  sourceLanguage?: string;
+  targetLanguage?: string;
+  verificationStatus: NonNullable<RuntimeArtifactDerivation['verificationStatus']>;
+}): LiteratureDerivedArtifactMetadata {
+  return {
+    language: input.language,
+    role: input.role,
+    derivation: {
+      schemaVersion: 'sciforge.artifact-derivation.v1',
+      kind: input.kind,
+      parentArtifactRef: 'artifact:research-report',
+      sourceRefs: input.sourceRefs,
+      sourceLanguage: input.sourceLanguage,
+      targetLanguage: input.targetLanguage,
+      verificationStatus: input.verificationStatus,
+    },
+  };
+}
+
+function normalizeExecutiveSummary(
+  executiveSummary: LiteratureBilingualReportInput['executiveSummary'],
+  output: OfflineLiteratureRetrievalOutput,
+): string {
+  const supplied = typeof executiveSummary === 'string'
+    ? executiveSummary.trim()
+    : executiveSummary?.text.trim();
+  if (supplied) return supplied;
+  return output.paperList.length
+    ? `English executive summary derived from ${output.researchReport.ref}: ${output.researchReport.boundedSummary}`
+    : `English executive summary derived from ${output.researchReport.ref}: no normalized papers were available.`;
+}
+
+function normalizeBilingualGlossaryTerms(
+  terms: LiteratureBilingualGlossaryTermInput[],
+  defaultSourceRefs: string[],
+  defaultPaperIds: string[],
+): LiteratureBilingualGlossaryEntry[] {
+  const entries: LiteratureBilingualGlossaryEntry[] = [];
+  for (const term of terms) {
+    const sourceTerm = term.sourceTerm.trim();
+    const targetTerm = term.targetTerm.trim();
+    if (!sourceTerm || !targetTerm) continue;
+    const entry: LiteratureBilingualGlossaryEntry = {
+      sourceTerm,
+      targetTerm,
+      sourceRefs: unique([...arrayStrings(term.sourceRefs), ...defaultSourceRefs]),
+      paperIds: arrayStrings(term.paperIds).length ? arrayStrings(term.paperIds) : defaultPaperIds,
+      confidence: term.confidence ?? 'provided',
+    };
+    if (term.note) entry.note = term.note;
+    entries.push(entry);
+  }
+  return entries;
 }
 
 export function deriveLiteratureCitationCorrection(input: LiteratureCitationCorrectionInput): LiteratureCitationCorrectionArtifact {
@@ -800,6 +1022,10 @@ function resolveReportFullTextPolicy(
 
 function unique<T>(items: T[]): T[] {
   return [...new Set(items)];
+}
+
+function arrayStrings(items: string[] | undefined): string[] {
+  return Array.isArray(items) ? items.map((item) => item.trim()).filter(Boolean) : [];
 }
 
 function normalizeDifferenceValue(value: string): string {

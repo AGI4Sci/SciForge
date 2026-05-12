@@ -468,6 +468,33 @@ Failure/Improvement Notes：
 - [x] `git diff --check`
 
 
+### 2026-05-13 Milestone：通用 artifact derivation 与双语报告 lineage 收敛
+
+本轮落地 R-LIT-10 的最小通用 contract，同时补齐通用 artifact derivation 元数据与结果展示传播：双语报告不是重写原检索输出，也不是靠最近报告文本生成孤立摘要，而是从 `artifact:research-report` 派生英文 executive summary 与中英术语表，并保留 paper/provider/evidence refs：
+
+- [x] 新增 `deriveLiteratureBilingualReport()`，输入 `OfflineLiteratureRetrievalOutput`、目标语言、executive summary 和 glossary terms，输出 `artifact:bilingual-literature-report`。
+- [x] `RuntimeArtifact.metadata.derivation` 增加 `sciforge.artifact-derivation.v1` 通用元数据，覆盖 `summary`、`translation`、`glossary`、`correction`、`rewrite` 等派生关系；ResultPresentation action 和 legacy gateway adapter 会传播 `parentArtifactRef`、`sourceRefs`、`derivationKind`。
+- [x] Artifact Inspector lineage 展示 derivation kind、parent 和 sources，避免派生摘要/术语表只显示 producer skill 而丢掉来源 artifact。
+- [x] 派生 artifact 显式包含 `parentArtifactRef='artifact:research-report'`、`derivedArtifactRefs`、`sourceArtifactRefs`、source report snapshot、paperIds、sourceRefs、metadata.derivation 和 lineage，确保中文报告、英文摘要、术语表之间可审计。
+- [x] literature capability manifest 补齐 runner 已实际产出的 `sourceProvenance` output schema / expectedRefs / metadata producesArtifactTypes。
+- [x] smoke fixture 验证英文 executive summary 和 bilingual glossary 都携带 `artifact:research-report` / provider refs / evidence-matrix refs，且不突变原 `researchReport.boundedSummary`。
+
+Failure/Improvement Notes：
+
+- R-LIT-10 不应把翻译结果覆盖回原 `researchReport`，否则后续引用修正、审计导出和中文报告恢复都会丢失原始 artifact 身份；本轮采用纯派生 artifact。
+- glossary 不能只是一段 markdown 文本；每个 term 必须有 sourceRefs、paperIds 与 confidence，方便后续用户要求“只改术语表”或“按某篇论文改术语”时命中正确来源。
+
+本轮验证：
+
+- [x] `npm run smoke:literature-retrieval-capability`
+- [x] `node --import tsx --test packages/contracts/runtime/capability-evolution.test.ts`
+- [x] `node --import tsx --test packages/contracts/runtime/result-presentation.test.ts src/runtime/gateway/result-presentation-adapter.test.ts src/ui/src/app/ResultsRenderer.test.ts`
+- [x] `npm run typecheck`
+- [x] `npm run smoke:runtime-contracts`
+- [x] `npm run test`（727 tests pass）
+- [x] `git diff --check`
+
+
 
 ### H022 Real-world Complex Task Backlog for SciForge Hardening
 
@@ -493,7 +520,7 @@ Failure/Improvement Notes：
 - [ ] R-LIT-07 论文复现可行性筛选：检索论文后按代码可用性、数据集可用性、计算成本、复现风险排序，并导出复现计划。
 - [x] R-LIT-08 反事实追问：报告完成后用户问“如果只看非 LLM agent 呢”，系统必须复用已有检索 refs 并说明哪些需要刷新。已覆盖“缺少可用 paper-list/report 时必须先 repair/resume”的失败边界。
 - [x] R-LIT-09 历史文献任务恢复：打开昨天失败的 literature session，要求只看诊断不重跑；系统必须展示失败边界、可复用 refs 和下一步选项。
-- [ ] R-LIT-10 双语报告：同一调研先生成中文报告，再要求英文 executive summary，再要求中英术语表，验证 artifact 派生关系。
+- [x] R-LIT-10 双语报告：同一调研先生成中文报告，再要求英文 executive summary，再要求中英术语表，验证 artifact 派生关系。已覆盖通用 `metadata.derivation`、`artifact:research-report` 到 bilingual executive summary / glossary / report 的派生 lineage、source refs、paperIds 和原报告不突变。
 
 代码修复与工程任务：
 

@@ -78,7 +78,10 @@ export type {
 } from './app';
 export type {
   RuntimeArtifact,
+  RuntimeArtifactDerivation,
+  RuntimeArtifactDerivationVerificationStatus,
   RuntimeArtifactExportPolicy,
+  RuntimeArtifactMetadata,
   RuntimeArtifactVisibility,
 } from './artifacts';
 export {

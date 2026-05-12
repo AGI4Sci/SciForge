@@ -1,5 +1,5 @@
 import type { SciForgeAgentHandoffSource, SciForgeSharedSkillDomain, SharedAgentHandoffContract } from '@sciforge-ui/runtime-contract/handoff';
-import type { AgentCompactCapability, AgentContextWindowSource, RuntimeVerificationVerdict } from '@sciforge-ui/runtime-contract';
+import type { AgentCompactCapability, AgentContextWindowSource, RuntimeArtifactDerivation, RuntimeVerificationVerdict } from '@sciforge-ui/runtime-contract';
 import type { TaskRunCard } from '@sciforge-ui/runtime-contract/task-run-card';
 import type { RuntimeBackendContextWindowSource } from '@sciforge-ui/runtime-contract/agent-backend-policy';
 import type { CapabilityInvocationBudgetDebitRecord } from '@sciforge-ui/runtime-contract/capability-budget';
@@ -255,6 +255,10 @@ export interface ResultPresentationArtifactAction {
   ref?: string;
   actions: string[];
   citationId?: string;
+  parentArtifactRef?: string;
+  sourceRefs?: string[];
+  derivationKind?: string;
+  derivation?: RuntimeArtifactDerivation;
 }
 
 export interface ResultPresentationProcessItem {

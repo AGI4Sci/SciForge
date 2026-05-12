@@ -1,4 +1,7 @@
 import type {
+  RuntimeArtifactDerivation,
+} from '@sciforge-ui/runtime-contract';
+import type {
   ResultPresentationArtifactAction,
   ResultPresentationCitation,
   ResultPresentationContract,
@@ -91,6 +94,13 @@ function artifactActionsFromPayload(payload: ToolPayload, citations: CitationInd
   return toRecordList(payload.artifacts).map((artifact, index) => {
     const id = stringField(artifact.id) || `artifact-${index + 1}`;
     const artifactType = stringField(artifact.type);
+    const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+    const derivation = artifactDerivation(artifact);
+    const sourceRefs = uniqueStrings([
+      ...toStringList(artifact.sourceRefs),
+      ...toStringList(metadata.sourceRefs),
+      ...(derivation?.sourceRefs ?? []),
+    ]);
     const label = stringField(artifact.title)
       || stringField(artifact.name)
       || artifactType
@@ -108,6 +118,12 @@ function artifactActionsFromPayload(payload: ToolPayload, citations: CitationInd
       ref,
       actions: artifactActions(artifact),
       citationId,
+      parentArtifactRef: derivation?.parentArtifactRef
+        || stringField(artifact.parentArtifactRef)
+        || stringField(metadata.parentArtifactRef),
+      sourceRefs: sourceRefs.length ? sourceRefs : undefined,
+      derivationKind: derivation?.kind,
+      derivation,
     };
   });
 }
@@ -352,6 +368,22 @@ function artifactRef(artifact: Record<string, unknown>) {
     || stringField(metadata.artifactRef)
     || stringField(metadata.outputRef)
     || stringField(metadata.path);
+}
+
+function artifactDerivation(artifact: Record<string, unknown>): RuntimeArtifactDerivation | undefined {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  const derivation = isRecord(metadata.derivation) ? metadata.derivation : undefined;
+  const kind = derivation ? stringField(derivation.kind) : undefined;
+  if (!derivation || !kind) return undefined;
+  return {
+    schemaVersion: 'sciforge.artifact-derivation.v1',
+    kind,
+    parentArtifactRef: stringField(derivation.parentArtifactRef),
+    sourceRefs: toStringList(derivation.sourceRefs),
+    sourceLanguage: stringField(derivation.sourceLanguage),
+    targetLanguage: stringField(derivation.targetLanguage),
+    verificationStatus: stringField(derivation.verificationStatus) as RuntimeArtifactDerivation['verificationStatus'],
+  };
 }
 
 function artifactActions(artifact: Record<string, unknown>) {

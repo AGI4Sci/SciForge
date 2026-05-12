@@ -11,6 +11,7 @@ import {
   findingHasCitationOrUncertainty,
   projectResultPresentationVisibility,
   resultPresentationPrimaryDiagnostics,
+  resultPresentationFromPayload,
   validateResultPresentationContract,
 } from './result-presentation';
 import type { ResultPresentationSection } from './result-presentation';
@@ -170,4 +171,36 @@ test('projection rules are scenario-agnostic and protect the human result layer'
   const projection = projectResultPresentationVisibility(contract);
   assert.deepEqual(projection.expandedSections, ['answer', 'evidence', 'artifacts', 'actions']);
   assert.deepEqual(projection.secondarySections, ['diagnostics']);
+});
+
+test('artifact actions preserve generic derivation lineage from artifact metadata', () => {
+  const presentation = resultPresentationFromPayload({
+    payload: {
+      message: 'Derived summary is ready.',
+      artifacts: [{
+        id: 'english-summary',
+        type: 'research-report',
+        title: 'English executive summary',
+        dataRef: 'artifact:bilingual-executive-summary',
+        metadata: {
+          derivation: {
+            schemaVersion: 'sciforge.artifact-derivation.v1',
+            kind: 'summary',
+            parentArtifactRef: 'artifact:research-report',
+            sourceRefs: ['artifact:research-report', 'provider:openalex:openalex-w1'],
+            sourceLanguage: 'zh',
+            targetLanguage: 'en',
+            verificationStatus: 'unverified',
+          },
+        },
+      }],
+    },
+  });
+
+  const action = presentation.artifactActions[0];
+  assert.ok(action, 'derived artifact action should be projected');
+  assert.equal(action.parentArtifactRef, 'artifact:research-report');
+  assert.equal(action.derivationKind, 'summary');
+  assert.equal(action.derivation?.targetLanguage, 'en');
+  assert.deepEqual(action.sourceRefs, ['artifact:research-report', 'provider:openalex:openalex-w1']);
 });

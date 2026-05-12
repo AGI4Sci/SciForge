@@ -1,6 +1,8 @@
 import type { ViewCompare, ViewEncoding, ViewLayout, ViewSelection, ViewSync, ViewTransform } from './view';
 
 export const RESULT_PRESENTATION_SCHEMA_VERSION = 'sciforge.result-presentation-contract.v1' as const;
+import type { RuntimeArtifactDerivation } from './artifacts';
+
 export const RESULT_PRESENTATION_CONTRACT_ID = 'sciforge.result-presentation.v1' as const;
 
 export type ResultPresentationSection =
@@ -114,6 +116,9 @@ export interface ResultPresentationArtifactAction {
   primary?: boolean;
   presentationKey?: string;
   parentArtifactRef?: string;
+  sourceRefs?: string[];
+  derivationKind?: string;
+  derivation?: RuntimeArtifactDerivation;
   revision?: string | number;
   revisionRef?: string;
   encoding?: ViewEncoding;
@@ -430,6 +435,12 @@ function artifactActionsFromPayload(payload: Record<string, unknown>, citations:
     const id = stringField(artifact.id) ?? `artifact-${index + 1}`;
     const ref = artifactRef(artifact) ?? `artifact:${id}`;
     const citation = citations.find((item) => item.ref === ref);
+    const derivation = artifactDerivation(artifact);
+    const sourceRefs = uniqueStrings([
+      ...stringList(artifact.sourceRefs),
+      ...stringList(isRecord(artifact.metadata) ? artifact.metadata.sourceRefs : undefined),
+      ...(derivation?.sourceRefs ?? []),
+    ]);
     return {
       id,
       label: stringField(artifact.title) ?? stringField(artifact.type) ?? id,
@@ -440,6 +451,12 @@ function artifactActionsFromPayload(payload: Record<string, unknown>, citations:
       artifactType: stringField(artifact.type),
       citationId: citation?.id,
       primary: index === 0,
+      parentArtifactRef: derivation?.parentArtifactRef
+        ?? stringField(artifact.parentArtifactRef)
+        ?? stringField(isRecord(artifact.metadata) ? artifact.metadata.parentArtifactRef : undefined),
+      sourceRefs: sourceRefs.length ? sourceRefs : undefined,
+      derivationKind: derivation?.kind,
+      derivation,
     };
   });
 }
@@ -536,6 +553,23 @@ function artifactRef(artifact: Record<string, unknown>) {
     || stringField(artifact.imageRef)
     || stringField(metadata.artifactRef)
     || stringField(metadata.outputRef);
+}
+
+function artifactDerivation(artifact: Record<string, unknown>): RuntimeArtifactDerivation | undefined {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  const derivation = isRecord(metadata.derivation) ? metadata.derivation : undefined;
+  if (!derivation) return undefined;
+  const kind = stringField(derivation.kind);
+  if (!kind) return undefined;
+  return {
+    schemaVersion: 'sciforge.artifact-derivation.v1',
+    kind,
+    parentArtifactRef: stringField(derivation.parentArtifactRef),
+    sourceRefs: stringList(derivation.sourceRefs),
+    sourceLanguage: stringField(derivation.sourceLanguage),
+    targetLanguage: stringField(derivation.targetLanguage),
+    verificationStatus: stringField(derivation.verificationStatus) as RuntimeArtifactDerivation['verificationStatus'],
+  };
 }
 
 function citationKind(kind: string | undefined, ref: string): ResultPresentationCitationKind {

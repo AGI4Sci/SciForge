@@ -52,6 +52,35 @@ test('builds a human result contract with answer, findings, inline citations, an
   assert.ok(presentation.defaultExpandedSections.includes('artifacts'));
 });
 
+test('preserves generic derivation lineage on artifact actions', () => {
+  const presentation = adaptToolPayloadToResultPresentation(payload({
+    artifacts: [{
+      id: 'english-summary',
+      type: 'research-report',
+      title: 'English executive summary',
+      dataRef: 'artifact:bilingual-executive-summary',
+      metadata: {
+        derivation: {
+          schemaVersion: 'sciforge.artifact-derivation.v1',
+          kind: 'summary',
+          parentArtifactRef: 'artifact:research-report',
+          sourceRefs: ['artifact:research-report', 'provider:openalex:openalex-w1'],
+          sourceLanguage: 'zh',
+          targetLanguage: 'en',
+          verificationStatus: 'unverified',
+        },
+      },
+    }],
+  }));
+
+  const action = presentation.artifactActions[0];
+  assert.ok(action, 'derived artifact action should be available');
+  assert.equal(action.parentArtifactRef, 'artifact:research-report');
+  assert.equal(action.derivationKind, 'summary');
+  assert.equal(action.derivation?.sourceLanguage, 'zh');
+  assert.deepEqual(action.sourceRefs, ['artifact:research-report', 'provider:openalex:openalex-w1']);
+});
+
 test('folds process and raw diagnostics away from primary answer sections', () => {
   const presentation = adaptToolPayloadToResultPresentation(payload({
     logs: [{ id: 'log-1', level: 'debug', ref: 'file:.sciforge/logs/debug.log', message: 'debug details' }],

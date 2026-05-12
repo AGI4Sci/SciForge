@@ -319,12 +319,13 @@ function literatureRetrievalCapabilityManifest(): CapabilityManifest {
     },
     outputSchema: {
       type: 'object',
-      required: ['status', 'paperList', 'workEvidence', 'providerAttempts', 'citationVerificationResults'],
+      required: ['status', 'paperList', 'sourceProvenance', 'workEvidence', 'providerAttempts', 'citationVerificationResults'],
       properties: {
         status: { enum: ['success', 'partial', 'failed'] },
         paperList: { type: 'array', items: { type: 'object' } },
         evidenceMatrix: { type: 'array', items: { type: 'object' } },
         researchReport: { type: 'object' },
+        sourceProvenance: { type: 'array', items: { type: 'object' } },
         workEvidence: { type: 'array', items: { type: 'object' } },
         providerAttempts: { type: 'array', items: { type: 'object' } },
         citationVerificationResults: { type: 'array', items: { type: 'object' } },
@@ -347,7 +348,7 @@ function literatureRetrievalCapabilityManifest(): CapabilityManifest {
         id: 'literature.retrieval.schema',
         kind: 'schema',
         contractRef: 'literature.retrieval#outputSchema',
-        expectedRefs: ['paper-list', 'workEvidence', 'providerAttempts', 'citationVerificationResults'],
+        expectedRefs: ['paper-list', 'sourceProvenance', 'workEvidence', 'providerAttempts', 'citationVerificationResults'],
       },
       {
         id: 'literature.retrieval.citation-verification',
@@ -391,7 +392,7 @@ function literatureRetrievalCapabilityManifest(): CapabilityManifest {
       sourceRef: 'packages/skills/literature',
     },
     metadata: {
-      producesArtifactTypes: ['paper-list', 'evidence-matrix', 'research-report', 'workEvidence', 'providerAttempts', 'citationVerificationResults'],
+      producesArtifactTypes: ['paper-list', 'evidence-matrix', 'research-report', 'sourceProvenance', 'workEvidence', 'providerAttempts', 'citationVerificationResults'],
       budget: {
         maxProviders: 3,
         maxResultItems: 30,

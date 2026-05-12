@@ -735,6 +735,15 @@ test('artifact inspector drawer renders lineage, reproducible refs, preview, and
       producerSkillId: 'report.writer',
       createdAt: '2026-05-09T00:00:00.000Z',
       handoffTargets: ['structure-exploration'],
+      derivation: {
+        schemaVersion: 'sciforge.artifact-derivation.v1',
+        kind: 'summary',
+        parentArtifactRef: 'artifact:source-report',
+        sourceRefs: ['artifact:source-report', 'provider:openalex:openalex-w1'],
+        sourceLanguage: 'zh',
+        targetLanguage: 'en',
+        verificationStatus: 'unverified',
+      },
     },
     data: { markdown: '# Inspector report' },
   };
@@ -765,6 +774,9 @@ test('artifact inspector drawer renders lineage, reproducible refs, preview, and
   assert.match(html, /report-artifact/);
   assert.match(html, /producer skill: report.writer/);
   assert.match(html, /execution unit: EU-inspector · report.generate · done/);
+  assert.match(html, /derivation kind: summary/);
+  assert.match(html, /derivation parent: artifact:source-report/);
+  assert.match(html, /derivation sources: artifact:source-report, provider:openalex:openalex-w1/);
   assert.match(html, /dataRef: \.sciforge\/artifacts\/report\.json/);
   assert.match(html, /stdoutRef: \.sciforge\/runs\/EU-inspector\/stdout\.txt/);
   assert.match(html, /Inspector report/);
