@@ -155,12 +155,14 @@ export async function handleScenarioLibraryRoutes(req: IncomingMessage, res: Ser
       const scenarioPackageId = url.searchParams.get('scenarioPackageId')?.trim() || undefined;
       const limit = Number(url.searchParams.get('limit') || 20);
       const attempts = await readRecentTaskAttempts(root, skillDomain, Number.isFinite(limit) ? limit : 20);
+      const scopedAttempts = scenarioPackageId
+        ? attempts.filter((attempt) => isRecord(attempt.scenarioPackageRef) && attempt.scenarioPackageRef.id === scenarioPackageId)
+        : attempts;
       writeJson(res, 200, {
         ok: true,
         workspacePath: root,
-        attempts: scenarioPackageId
-          ? attempts.filter((attempt) => isRecord(attempt.scenarioPackageRef) && attempt.scenarioPackageRef.id === scenarioPackageId)
-          : attempts,
+        attempts: scopedAttempts,
+        taskRunCards: scopedAttempts.map((attempt) => attempt.taskRunCard).filter(Boolean),
       });
     } catch (err) {
       writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -173,11 +175,13 @@ export async function handleScenarioLibraryRoutes(req: IncomingMessage, res: Ser
       const root = scenarioWorkspaceRoot(url);
       const id = url.searchParams.get('id')?.trim() || '';
       if (!id) throw new Error('id is required');
+      const attempts = await readTaskAttempts(root, id);
       writeJson(res, 200, {
         ok: true,
         workspacePath: root,
         id,
-        attempts: await readTaskAttempts(root, id),
+        attempts,
+        taskRunCards: attempts.map((attempt) => attempt.taskRunCard).filter(Boolean),
       });
     } catch (err) {
       writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });

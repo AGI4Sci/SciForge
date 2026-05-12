@@ -74,8 +74,15 @@ try {
   assert.equal(schemaFailure.failureKind, 'payload-schema');
   assert.equal(schemaFailure.contractId, 'sciforge.tool-payload.v1');
   assert.ok(schemaFailure.missingFields.includes('claims'));
+  assert.ok(schemaFailure.auditNotes?.some((note) => note.status === 'blocked' && note.boundary === 'semantic-or-safety'));
+  assert.match(schemaFailure.nextStep, /Fail closed/i);
   assert.ok(schemaFailure.relatedRefs.includes(refs.outputRel));
   assert.match(JSON.stringify(schemaFailure), /missing claims/);
+  const missingFieldsAudit = (missingFieldsPayload.executionUnits[0]?.refs as {
+    validationRepairAudit?: { repairDecision?: { action?: string }; auditRecord?: { outcome?: string } };
+  } | undefined)?.validationRepairAudit;
+  assert.equal(missingFieldsAudit?.repairDecision?.action, 'fail-closed');
+  assert.equal(missingFieldsAudit?.auditRecord?.outcome, 'failed-closed');
   const missingFieldsToolPayload = missingFieldsPayload as ToolPayload;
   const schemaDebit = missingFieldsToolPayload.budgetDebits?.[0];
   assert.ok(schemaDebit, 'payload schema validation failure should emit a capability budget debit');
@@ -88,6 +95,33 @@ try {
   assert.ok(schemaDebit.debitLines.some((line) => line.dimension === 'resultItems' && line.amount >= 1));
   assert.ok(hasBudgetDebitRef(missingFieldsToolPayload.executionUnits[0], schemaDebit.debitId));
   assert.ok(missingFieldsToolPayload.logs?.some((entry) => entry.kind === 'capability-budget-debit-audit' && hasBudgetDebitRef(entry, schemaDebit.debitId)));
+
+  const structuralDriftPayload = await validateAndNormalizePayload({
+    message: 'Whitelisted schema drift smoke',
+    confidence: 0.7,
+    claimType: 'fact',
+    evidenceLevel: 'runtime',
+    reasoningTrace: ['searched', 'wrote report'],
+    claims: [],
+    uiManifest: [],
+    executionUnits: [{ id: 'schema-drift', status: 'done', tool: 'smoke' }],
+    artifacts: {
+      report: { type: 'research-report', data: { markdown: '# Report\n\nWhitelisted structural drift.' } },
+    },
+  } as unknown as ToolPayload, request, skill, refs);
+  assert.equal(structuralDriftPayload.executionUnits[0]?.status, 'done');
+  const normalizationLog = structuralDriftPayload.logs?.find((entry) => entry.kind === 'payload-normalization-audit') as Record<string, unknown> | undefined;
+  assert.equal(normalizationLog?.status, 'allowed-structural-drift');
+  assert.equal(normalizationLog?.policyId, 'sciforge.schema-normalization-whitelist.v1');
+  assert.ok(Array.isArray(normalizationLog?.auditNotes));
+  assert.match(JSON.stringify(normalizationLog), /reasoningTrace array|artifacts object map/);
+  assert.ok(missingFieldsToolPayload.logs?.some((entry) => {
+    return isRecord(entry)
+      && entry.kind === 'payload-normalization-audit'
+      && entry.status === 'refused'
+      && Array.isArray(entry.refusedErrors)
+      && entry.refusedErrors.includes('missing claims');
+  }));
 
   const artifactFailurePayload = await validateAndNormalizePayload({
     message: 'Artifact contract smoke',
@@ -236,6 +270,28 @@ try {
     }],
   }, request, skill, refs);
   assert.equal(planWithPreviewDeliverablePayload.executionUnits[0]?.status, 'done');
+
+  const whitelistedNormalizationPayload = await validateAndNormalizePayload({
+    message: 'Artifact map normalization smoke produced a report.',
+    confidence: 0.82,
+    claimType: 'fact',
+    evidenceLevel: 'runtime',
+    reasoningTrace: ['backend returned a loose artifact map', 'runtime normalized structure only'],
+    claims: [],
+    uiManifest: [],
+    executionUnits: [{ id: 'loose-artifact-map', status: 'done', tool: 'agentserver.direct' }],
+    artifacts: {
+      report: { type: 'research-report', data: { markdown: 'This report body is long enough to count as delivered text for the runtime contract.' } },
+    },
+  } as unknown as ToolPayload, request, skill, refs);
+  assert.equal(whitelistedNormalizationPayload.executionUnits[0]?.status, 'done');
+  assert.ok(Array.isArray(whitelistedNormalizationPayload.artifacts));
+  assert.equal(whitelistedNormalizationPayload.artifacts[0]?.id, 'report');
+  const normalizationAudit = whitelistedNormalizationPayload.logs?.find((entry) => isRecord(entry) && entry.kind === 'payload-normalization-audit') as Record<string, unknown> | undefined;
+  assert.equal(normalizationAudit?.status, 'allowed-structural-drift');
+  assert.deepEqual(normalizationAudit?.refusedErrors, []);
+  assert.ok(JSON.stringify(normalizationAudit?.allowedRepairs).includes('artifacts object map'));
+  assert.ok(JSON.stringify(normalizationAudit?.allowedRepairs).includes('reasoningTrace array'));
 
   const workEvidenceRepair = repairNeededPayload(
     request,
@@ -415,6 +471,10 @@ function assertRepairEvidenceRefs(payload: ToolPayload, stdoutRel: string, stder
 
 function isRecordWithRef(value: unknown, ref: string) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value) && (value as Record<string, unknown>).ref === `file:${ref}`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
 function recoverActionsFromUnit(unit: unknown) {

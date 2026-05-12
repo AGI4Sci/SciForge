@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { appendTaskAttempt, readRecentTaskAttempts, readTaskAttempts } from './task-attempt-history.js';
+import { readFailureSignatureRegistry } from './failure-signature-registry.js';
 import type { TaskAttemptRecord } from './runtime-types.js';
 
 test('task attempts with a session bundle stay inside that bundle', async () => {
@@ -79,6 +80,84 @@ test('task run cards separate protocol success from task outcome and keep failur
     assert.ok(card?.failureSignatures.some((signature) => signature.kind === 'external-transient'));
     assert.ok(card?.failureSignatures.some((signature) => signature.kind === 'schema-drift'));
     assert.match(card?.nextStep ?? '', /provider backoff|cached evidence/i);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('task attempt history records a run-level failure signature registry across runs', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-failure-signature-registry-'));
+  try {
+    const base = {
+      prompt: 'run a reusable task and preserve diagnostics',
+      skillDomain: 'knowledge',
+      skillId: 'generic-task-runner',
+      status: 'repair-needed',
+      outputRef: '.sciforge/task-results/task.json',
+      stderrRef: '.sciforge/debug/task/stderr.log',
+    } satisfies Partial<TaskAttemptRecord>;
+
+    await appendTaskAttempt(workspace, {
+      ...base,
+      id: 'schema-run-a',
+      attempt: 1,
+      schemaErrors: ['missing required field artifacts[0].id'],
+      createdAt: '2026-05-12T00:00:00.000Z',
+    } as TaskAttemptRecord);
+    await appendTaskAttempt(workspace, {
+      ...base,
+      id: 'schema-run-b',
+      attempt: 1,
+      schemaErrors: ['missing required field artifacts[9].id'],
+      createdAt: '2026-05-12T00:01:00.000Z',
+    } as TaskAttemptRecord);
+    await appendTaskAttempt(workspace, {
+      ...base,
+      id: 'timeout-run',
+      attempt: 1,
+      failureReason: 'AgentServer generation request timed out after 30000ms.',
+      createdAt: '2026-05-12T00:02:00.000Z',
+    } as TaskAttemptRecord);
+    await appendTaskAttempt(workspace, {
+      ...base,
+      id: 'repair-noop-run',
+      attempt: 1,
+      failureReason: 'Repair no-op: repeated same failure with no change.',
+      createdAt: '2026-05-12T00:03:00.000Z',
+    } as TaskAttemptRecord);
+    await appendTaskAttempt(workspace, {
+      ...base,
+      id: 'external-transient-run',
+      attempt: 1,
+      failureReason: 'HTTP Error 429: rate limited for request 12345.',
+      createdAt: '2026-05-12T00:04:00.000Z',
+    } as TaskAttemptRecord);
+    await appendTaskAttempt(workspace, {
+      ...base,
+      id: 'external-transient-run',
+      attempt: 1,
+      failureReason: 'HTTP Error 429: rate limited for request 12345.',
+      createdAt: '2026-05-12T00:04:00.000Z',
+    } as TaskAttemptRecord);
+
+    const registry = await readFailureSignatureRegistry(workspace);
+    const schema = registry.entries.find((entry) => entry.kind === 'schema-drift');
+    const external = registry.entries.find((entry) => entry.kind === 'external-transient');
+
+    assert.equal(registry.schemaVersion, 'sciforge.failure-signature-registry.v1');
+    assert.deepEqual(registry.entries.map((entry) => entry.kind).sort(), [
+      'external-transient',
+      'repair-no-op',
+      'schema-drift',
+      'timeout',
+    ]);
+    assert.equal(schema?.occurrenceCount, 2);
+    assert.deepEqual(schema?.runRefs.map((ref) => ref.runId).sort(), [
+      'task-attempt:schema-run-a:1',
+      'task-attempt:schema-run-b:1',
+    ]);
+    assert.equal(external?.occurrenceCount, 1);
+    assert.equal(external?.runRefs[0]?.runId, 'task-attempt:external-transient-run:1');
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

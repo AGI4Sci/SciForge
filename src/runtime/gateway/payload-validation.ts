@@ -14,6 +14,7 @@ import {
   contractValidationFailureFromErrors,
   contractValidationFailureFromRepairReason,
   validationScopeForToolPayloadSchemaErrors,
+  type ContractValidationAuditNote,
 } from '@sciforge-ui/runtime-contract/validation-failure';
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-types.js';
 import { runWorkspaceTask, sha1 } from '../workspace-task-runner.js';
@@ -51,6 +52,20 @@ type AgentServerGenerationFailureDiagnostics = {
   retrySucceeded?: boolean;
 };
 
+const PAYLOAD_NORMALIZATION_AUDIT_SCHEMA_VERSION = 'sciforge.payload-normalization-audit.v1' as const;
+const SCHEMA_NORMALIZATION_WHITELIST_POLICY_ID = 'sciforge.schema-normalization-whitelist.v1' as const;
+
+interface PayloadNormalizationAudit {
+  schemaVersion: typeof PAYLOAD_NORMALIZATION_AUDIT_SCHEMA_VERSION;
+  status: 'no-op' | 'allowed-structural-drift' | 'refused';
+  policy: 'explicit-whitelist';
+  policyId: typeof SCHEMA_NORMALIZATION_WHITELIST_POLICY_ID;
+  allowedRepairs: string[];
+  refusedErrors: string[];
+  notes: string[];
+  auditNotes: ContractValidationAuditNote[];
+}
+
 function normalizeExecutionUnitStatus(value: unknown) {
   const text = typeof value === 'string' ? value : '';
   return ['planned', 'running', 'done', 'failed', 'record-only', 'repair-needed', 'self-healed', 'failed-with-reason', 'needs-human'].includes(text) ? text : 'done';
@@ -66,7 +81,21 @@ export async function validateAndNormalizePayload(
   skill: SkillAvailability,
   refs: { taskRel: string; outputRel: string; stdoutRel: string; stderrRel: string; runtimeFingerprint: Record<string, unknown> },
 ) {
+  const preNormalizationErrors = toolPayloadSchemaErrors(payload);
   const contractPayload = normalizeToolPayloadShape(payload);
+  const normalizationAudit = payloadNormalizationAudit(payload, contractPayload, preNormalizationErrors);
+  if (normalizationAudit.status === 'refused') {
+    return schemaValidationRepairPayload({
+      payload,
+      sourcePayload: payload,
+      errors: normalizationAudit.refusedErrors,
+      request,
+      skill,
+      refs,
+      normalizationAudit,
+      forceFailClosed: true,
+    });
+  }
   const errors = toolPayloadSchemaErrors(contractPayload);
   if (errors.length) {
     return schemaValidationRepairPayload({
@@ -76,6 +105,7 @@ export async function validateAndNormalizePayload(
       request,
       skill,
       refs,
+      normalizationAudit,
     });
   }
   const workspace = resolve(request.workspacePath || process.cwd());
@@ -141,7 +171,7 @@ export async function validateAndNormalizePayload(
     ],
     refs: referenceValidationFailure ? { validationFailure: referenceValidationFailure } : undefined,
   }));
-  const normalizedPayload: ToolPayload = {
+  const normalizedPayload: ToolPayload = withPayloadNormalizationAudit({
     message: referenceFailures.length
       ? `Current-turn reference contract failed: ${referenceFailures.join('; ')}`
       : String(payload.message || `${skill.id} completed.`),
@@ -179,7 +209,7 @@ export async function validateAndNormalizePayload(
     verificationResults: contractPayload.verificationResults,
     verificationPolicy: contractPayload.verificationPolicy,
     workEvidence: contractPayload.workEvidence,
-  };
+  }, normalizationAudit);
   const presentationPayload = attachResultPresentationContract(normalizedPayload, { request, skill, refs });
   return referenceValidationFailure
     ? attachPayloadValidationBudgetDebit(presentationPayload, skill, referenceValidationFailure, refs)
@@ -193,6 +223,8 @@ export function schemaValidationRepairPayload(input: {
   request: GatewayRequest;
   skill: SkillAvailability;
   refs: RepairPolicyRefs;
+  normalizationAudit?: PayloadNormalizationAudit;
+  forceFailClosed?: boolean;
 }): ToolPayload {
   const validationScope = validationScopeForToolPayloadSchemaErrors(input.errors);
   const validationFailure = contractValidationFailureFromErrors(input.errors, {
@@ -201,26 +233,190 @@ export function schemaValidationRepairPayload(input: {
     schemaPath: validationScope.schemaPath,
     contractId: validationScope.contractId,
     expected: validationScope.expected,
-    actual: summarizeActualContractShape(input.sourcePayload ?? input.payload),
+    actual: {
+      shape: summarizeActualContractShape(input.sourcePayload ?? input.payload),
+      normalizationPolicyId: input.normalizationAudit?.policyId,
+    },
     relatedRefs: relatedRefsFromRepairRefs(input.refs),
     recoverActions: [
       ...recoverActionsForPayloadSchemaFailure(input.errors),
       ...preservePartialArtifactRecoverActions(input.payload, input.sourcePayload),
+      ...recoverActionsForRefusedNormalization(input.normalizationAudit),
     ],
-    nextStep: 'Regenerate a valid ToolPayload envelope; keep any partial artifacts as repair inputs until validation passes.',
+    nextStep: input.normalizationAudit?.status === 'refused'
+      ? 'Fail closed and regenerate the payload without relying on unapproved semantic or safety-impacting normalization.'
+      : 'Regenerate a valid ToolPayload envelope; keep any partial artifacts as repair inputs until validation passes.',
+    auditNotes: input.normalizationAudit?.auditNotes,
   });
-  const repairRefs = repairRefsWithValidationRepairAudit(input.request, input.skill, validationFailure, input.refs);
+  const repairRefs = repairRefsWithValidationRepairAudit(input.request, input.skill, validationFailure, input.refs, {
+    forceFailClosed: input.forceFailClosed ?? input.normalizationAudit?.status === 'refused',
+  });
   const repairPayload = attachPreservedPartialArtifacts(
     repairNeededPayload(input.request, input.skill, validationFailure.failureReason, repairRefs),
     input.payload,
     input.sourcePayload,
   );
   return attachPayloadValidationBudgetDebit(
-    attachResultPresentationContract(repairPayload, { request: input.request, skill: input.skill, refs: repairRefs }),
+    attachResultPresentationContract(withPayloadNormalizationAudit(repairPayload, input.normalizationAudit), { request: input.request, skill: input.skill, refs: repairRefs }),
     input.skill,
     validationFailure,
     repairRefs,
   );
+}
+
+function payloadNormalizationAudit(
+  sourcePayload: unknown,
+  normalizedPayload: unknown,
+  preNormalizationErrors: string[],
+): PayloadNormalizationAudit {
+  const decisions = preNormalizationErrors.map((error) => payloadNormalizationDecision(error, sourcePayload, normalizedPayload));
+  const allowedRepairs = decisions
+    .filter((decision) => decision.allowed)
+    .map((decision) => decision.repair);
+  const refusedErrors = decisions
+    .filter((decision) => !decision.allowed)
+    .map((decision) => decision.error);
+  const auditNotes = decisions.map((decision) => decision.auditNote);
+  if (refusedErrors.length) {
+    return {
+      schemaVersion: PAYLOAD_NORMALIZATION_AUDIT_SCHEMA_VERSION,
+      status: 'refused',
+      policy: 'explicit-whitelist',
+      policyId: SCHEMA_NORMALIZATION_WHITELIST_POLICY_ID,
+      allowedRepairs,
+      refusedErrors,
+      notes: [
+        'Payload normalization refused to repair fields outside the explicit structural drift whitelist.',
+        'Semantic content, safety boundaries, invalid UI refs, and required envelope omissions must fail closed.',
+      ],
+      auditNotes,
+    };
+  }
+  return {
+    schemaVersion: PAYLOAD_NORMALIZATION_AUDIT_SCHEMA_VERSION,
+    status: allowedRepairs.length ? 'allowed-structural-drift' : 'no-op',
+    policy: 'explicit-whitelist',
+    policyId: SCHEMA_NORMALIZATION_WHITELIST_POLICY_ID,
+    allowedRepairs,
+    refusedErrors: [],
+    notes: allowedRepairs.length
+      ? ['Only whitelisted structural drift was normalized; semantic and safety-impacting errors remain fail-closed.']
+      : [],
+    auditNotes,
+  };
+}
+
+function payloadNormalizationDecision(error: string, sourcePayload: unknown, normalizedPayload: unknown): {
+  error: string;
+  allowed: boolean;
+  repair: string;
+  auditNote: ContractValidationAuditNote;
+} {
+  const repair = allowedPayloadNormalizationRepair(error, sourcePayload, normalizedPayload);
+  const path = schemaErrorPath(error);
+  return {
+    error,
+    allowed: Boolean(repair),
+    repair: repair ?? `blocked ${path}`,
+    auditNote: {
+      kind: 'schema-normalization',
+      status: repair ? 'applied' : 'blocked',
+      boundary: repair ? 'structural-drift' : 'semantic-or-safety',
+      policyId: SCHEMA_NORMALIZATION_WHITELIST_POLICY_ID,
+      message: repair
+        ? `Applied whitelisted schema normalization: ${repair}.`
+        : `Refused schema normalization outside the structural drift whitelist: ${error}.`,
+      paths: [path],
+    },
+  };
+}
+
+function allowedPayloadNormalizationRepair(error: string, sourcePayload: unknown, normalizedPayload: unknown) {
+  if (!isRecord(sourcePayload) || !isRecord(normalizedPayload)) return undefined;
+  if (/^artifacts must be an array$/i.test(error) && isRecord(sourcePayload.artifacts) && Array.isArray(normalizedPayload.artifacts)) {
+    return 'artifacts object map -> artifacts array';
+  }
+  if (/^reasoningTrace must be a string$/i.test(error) && Array.isArray(sourcePayload.reasoningTrace) && typeof normalizedPayload.reasoningTrace === 'string') {
+    return 'reasoningTrace array -> newline-delimited string';
+  }
+  if (/^uiManifest must be an array$/i.test(error) && isRecord(sourcePayload.uiManifest) && Array.isArray(normalizedPayload.uiManifest)) {
+    return 'uiManifest object descriptor -> uiManifest array';
+  }
+  const componentIdMatch = error.match(/^uiManifest\[(\d+)]\.componentId must be a non-empty string/i);
+  if (componentIdMatch && aliasedUiManifestSlot(sourcePayload, Number(componentIdMatch[1]))) {
+    return 'uiManifest component/id alias -> componentId';
+  }
+  const artifactRefMatch = error.match(/^uiManifest\[(\d+)]\.artifactRef must be a non-empty string when present/i);
+  if (artifactRefMatch && emptyUiManifestArtifactRef(sourcePayload, Number(artifactRefMatch[1]))) {
+    return 'empty uiManifest artifactRef removed';
+  }
+  const artifactTypeMatch = error.match(/^artifacts\[(\d+)]\.type must be a non-empty string/i);
+  if (artifactTypeMatch && aliasedArtifactType(sourcePayload, Number(artifactTypeMatch[1]))) {
+    return 'artifact artifactType alias -> type';
+  }
+  return undefined;
+}
+
+function schemaErrorPath(error: string) {
+  const missingMatch = error.match(/^missing\s+(.+)$/i);
+  if (missingMatch) return String(missingMatch[1]);
+  const explicitPath = error.match(/^([A-Za-z0-9_.[\]-]+)\s+/);
+  return explicitPath?.[1] ?? '$';
+}
+
+function aliasedUiManifestSlot(sourcePayload: unknown, index: number) {
+  if (!isRecord(sourcePayload) || !Array.isArray(sourcePayload.uiManifest)) return false;
+  const slot = sourcePayload.uiManifest[index];
+  return isRecord(slot) && (stringField(slot.component) || stringField(slot.id));
+}
+
+function emptyUiManifestArtifactRef(sourcePayload: unknown, index: number) {
+  if (!isRecord(sourcePayload) || !Array.isArray(sourcePayload.uiManifest)) return false;
+  const slot = sourcePayload.uiManifest[index];
+  return isRecord(slot)
+    && 'artifactRef' in slot
+    && (slot.artifactRef === '' || slot.artifactRef === null || slot.artifactRef === undefined);
+}
+
+function aliasedArtifactType(sourcePayload: unknown, index: number) {
+  if (!isRecord(sourcePayload) || !Array.isArray(sourcePayload.artifacts)) return false;
+  const artifact = sourcePayload.artifacts[index];
+  return isRecord(artifact) && Boolean(stringField(artifact.artifactType));
+}
+
+function recoverActionsForRefusedNormalization(audit: PayloadNormalizationAudit | undefined) {
+  if (audit?.status !== 'refused') return [];
+  return [
+    'Only apply payload normalization for explicitly whitelisted structural drift such as artifact maps or reasoningTrace arrays.',
+    'Do not infer missing required envelope fields, invalid UI references, semantic content, or safety-sensitive values during normalization.',
+  ];
+}
+
+function withPayloadNormalizationAudit(payload: ToolPayload, audit: PayloadNormalizationAudit | undefined): ToolPayload {
+  if (!audit || audit.status === 'no-op') return payload;
+  return {
+    ...payload,
+    reasoningTrace: [
+      payload.reasoningTrace,
+      `payloadNormalizationAudit=${audit.status}; policy=${audit.policy}; allowed=${audit.allowedRepairs.join('|') || 'none'}; refused=${audit.refusedErrors.join('|') || 'none'}`,
+    ].filter(Boolean).join('\n'),
+    logs: [
+      ...(payload.logs ?? []),
+      {
+        kind: 'payload-normalization-audit',
+        ...audit,
+      },
+    ],
+    executionUnits: payload.executionUnits.map((unit, index) => isRecord(unit) && index === 0
+      ? {
+        ...unit,
+        refs: {
+          ...(isRecord(unit.refs) ? unit.refs : {}),
+          payloadNormalizationAudit: audit,
+        },
+      }
+      : unit),
+  };
 }
 
 function relatedRefsFromRepairRefs(refs: RepairPolicyRefs) {
@@ -399,6 +595,7 @@ function repairRefsWithValidationRepairAudit(
   skill: SkillAvailability,
   validationFailure: NonNullable<RepairPolicyRefs['validationFailure']>,
   refs: RepairPolicyRefs,
+  options: { forceFailClosed?: boolean } = {},
 ): RepairPolicyRefs {
   const chainId = payloadValidationChainId(skill, validationFailure, refs);
   const currentRefs = currentTurnReferenceRecords(request)
@@ -424,6 +621,14 @@ function repairRefsWithValidationRepairAudit(
     },
     contractValidationFailures: [validationFailure],
     relatedRefs,
+    repairBudget: options.forceFailClosed
+      ? {
+        maxAttempts: 0,
+        remainingAttempts: 0,
+        maxSupplementAttempts: 0,
+        remainingSupplementAttempts: 0,
+      }
+      : undefined,
     telemetrySpanRefs: [
       `span:payload-validation:${chainId}`,
       `span:repair-decision:${chainId}`,

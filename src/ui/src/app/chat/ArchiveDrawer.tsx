@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Clock } from 'lucide-react';
+import { validateTaskRunCard, type TaskRunCard, type TaskRunCardRef } from '@sciforge-ui/runtime-contract/task-run-card';
 import { ActionButton, Badge } from '../uiPrimitives';
-import type { SciForgeSession } from '../../domain';
+import type { SciForgeRun, SciForgeSession } from '../../domain';
 import { runAuditBlockers, runAuditRefs, runRecoverActions } from '../results-renderer-execution-model';
 
 export function ArchiveDrawer({
@@ -106,6 +107,8 @@ export function ArchiveDrawer({
 
 function sessionHistoryRunSummary(session: SciForgeSession) {
   const lastRun = session.runs.at(-1);
+  const taskRunCard = taskRunCardForRun(lastRun);
+  if (taskRunCard) return sessionHistoryTaskRunCardSummary(taskRunCard, lastRun);
   if (!lastRun) {
     const userMessages = session.messages.filter((message) => message.role === 'user' && !message.id.startsWith('seed')).length;
     return {
@@ -133,6 +136,56 @@ function sessionHistoryRunSummary(session: SciForgeSession) {
     refs,
     recoverActions,
   };
+}
+
+function sessionHistoryTaskRunCardSummary(card: TaskRunCard, lastRun: SciForgeRun | undefined) {
+  const failureBoundary = card.failureSignatures[0]?.message;
+  const completedRefs = card.refs.filter((ref) => ref.kind === 'artifact').slice(0, 3).map(compactTaskRunCardRef);
+  const summary = failureBoundary
+    ? `失败边界：${compactHistoryText(failureBoundary)}。`
+    : card.taskOutcome === 'satisfied'
+      ? `${taskRunCardStatusLabel(card.status)}：${completedRefs.length ? `产物 ${completedRefs.join(', ')}` : compactHistoryText(card.goal)}。`
+      : `${taskRunCardStatusLabel(card.status)}：${compactHistoryText(card.nextStep || card.rounds.at(-1)?.observed || card.goal)}。`;
+  const refs = card.refs
+    .filter((ref) => ['artifact', 'execution-unit', 'verification', 'log', 'bundle'].includes(ref.kind))
+    .slice(0, 4)
+    .map(compactTaskRunCardRef);
+  return {
+    runId: shortRunId(card.taskId ?? lastRun?.id ?? card.id),
+    main: summary,
+    refs,
+    recoverActions: card.nextStep ? [compactHistoryText(card.nextStep)] : [],
+  };
+}
+
+function taskRunCardForRun(run: SciForgeRun | undefined): TaskRunCard | undefined {
+  const raw = isRecord(run?.raw) ? run.raw : undefined;
+  const displayIntent = isRecord(raw?.displayIntent) ? raw.displayIntent : undefined;
+  const projection = isRecord(displayIntent?.taskOutcomeProjection) ? displayIntent.taskOutcomeProjection : undefined;
+  return validTaskRunCard(displayIntent?.taskRunCard) ?? validTaskRunCard(projection?.taskRunCard);
+}
+
+function validTaskRunCard(value: unknown): TaskRunCard | undefined {
+  return validateTaskRunCard(value).length === 0 ? value as TaskRunCard : undefined;
+}
+
+function compactTaskRunCardRef(ref: TaskRunCardRef) {
+  const value = compactHistoryText(ref.ref);
+  return value.startsWith(`${ref.kind}:`) ? value : `${ref.kind}:${value}`;
+}
+
+function taskRunCardStatusLabel(status: TaskRunCard['status']) {
+  const labels: Record<TaskRunCard['status'], string> = {
+    running: '运行中',
+    complete: '完成',
+    partial: '部分完成',
+    'needs-work': '需继续',
+    'needs-human': '需人工处理',
+    failed: '失败',
+    cancelled: '已取消',
+    'not-run': '未执行',
+  };
+  return labels[status];
 }
 
 function rawRunFailureReason(value: unknown) {
@@ -183,4 +236,8 @@ function formatSessionTime(value: string) {
   const time = Date.parse(value);
   if (!Number.isFinite(time)) return 'unknown time';
   return new Date(time).toLocaleString('zh-CN', { hour12: false });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }

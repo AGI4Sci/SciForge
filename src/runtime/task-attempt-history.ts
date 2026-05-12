@@ -15,6 +15,7 @@ import { summarizeWorkEvidenceForHandoff } from './gateway/work-evidence-types.j
 import { fileExists } from './workspace-task-runner.js';
 import { resolveWorkspaceFileRefPath } from './workspace-paths.js';
 import { isRecord } from './gateway-utils.js';
+import { recordTaskAttemptFailureSignatures } from './failure-signature-registry.js';
 import {
   mergeValidationRepairAuditAttemptMetadata,
   projectValidationRepairAuditSink,
@@ -56,6 +57,7 @@ export async function appendTaskAttempt(workspacePath: string, record: TaskAttem
     updatedAt: new Date().toISOString(),
     attempts,
   }, null, 2));
+  await recordTaskAttemptFailureSignatures(workspace, normalizedRecordWithCard);
   return path;
 }
 

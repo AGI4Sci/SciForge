@@ -9,6 +9,7 @@ import type {
   PreviewDescriptor,
   PreviewDerivative,
   RuntimeExecutionUnit,
+  TaskRunCard,
 } from '../domain';
 import type { ScenarioLibraryState } from '@sciforge/scenario-core/scenario-library';
 import type { ScenarioPackage } from '@sciforge/scenario-core/scenario-package';
@@ -72,6 +73,7 @@ export interface WorkspaceTaskAttemptRecord {
   stderrRef?: string;
   failureReason?: string;
   schemaErrors?: string[];
+  taskRunCard?: TaskRunCard;
   createdAt: string;
 }
 

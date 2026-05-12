@@ -2,6 +2,7 @@ import type { RuntimeExecutionUnit } from './execution';
 
 export const TASK_RUN_CARD_SCHEMA_VERSION = 'sciforge.task-run-card.v1' as const;
 export const FAILURE_SIGNATURE_SCHEMA_VERSION = 'sciforge.failure-signature.v1' as const;
+export const FAILURE_SIGNATURE_REGISTRY_SCHEMA_VERSION = 'sciforge.failure-signature-registry.v1' as const;
 export const NO_HARDCODE_REVIEW_SCHEMA_VERSION = 'sciforge.no-hardcode-review.v1' as const;
 
 export type TaskProtocolStatus = 'not-run' | 'running' | 'protocol-success' | 'protocol-failed' | 'cancelled';
@@ -31,6 +32,14 @@ export type FailureSignatureKind =
   | 'user-cancelled'
   | 'backend-handoff'
   | 'unknown';
+export type FailureSignatureRegistryKind = Extract<FailureSignatureKind, 'schema-drift' | 'timeout' | 'repair-no-op' | 'external-transient'>;
+
+export const FAILURE_SIGNATURE_REGISTRY_TRACKED_KINDS: FailureSignatureRegistryKind[] = [
+  'schema-drift',
+  'timeout',
+  'repair-no-op',
+  'external-transient',
+];
 
 export interface TaskRunCardRef {
   kind: TaskRunCardRefKind;
@@ -76,6 +85,57 @@ export interface FailureSignature {
   httpStatus?: number;
   schemaPath?: string;
   refs: string[];
+}
+
+export interface FailureSignatureRunRef {
+  runId: string;
+  taskId?: string;
+  attempt?: number;
+  status?: string;
+  createdAt?: string;
+  sessionId?: string;
+  sessionBundleRef?: string;
+  refs: string[];
+}
+
+export interface FailureSignatureRegistryEntry {
+  id: string;
+  kind: FailureSignatureRegistryKind;
+  dedupeKey: string;
+  signatureIds: string[];
+  signatureDedupeKeys: string[];
+  layer: TaskAttributionLayer;
+  retryable: boolean;
+  message: string;
+  normalizedMessage: string;
+  providerIds: string[];
+  operations: string[];
+  codes: string[];
+  httpStatuses: number[];
+  schemaPaths: string[];
+  refs: string[];
+  runRefs: FailureSignatureRunRef[];
+  occurrenceCount: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
+export interface FailureSignatureRegistry {
+  schemaVersion: typeof FAILURE_SIGNATURE_REGISTRY_SCHEMA_VERSION;
+  updatedAt: string;
+  entries: FailureSignatureRegistryEntry[];
+}
+
+export interface FailureSignatureRegistryRunInput {
+  runId: string;
+  taskId?: string;
+  attempt?: number;
+  status?: string;
+  createdAt?: string;
+  sessionId?: string;
+  sessionBundleRef?: string;
+  refs?: string[];
+  failureSignatures: Array<FailureSignature | FailureSignatureInput>;
 }
 
 export interface NoHardcodeReview {
@@ -127,6 +187,7 @@ export interface TaskRunCard {
 }
 
 const TRANSIENT_EXTERNAL_PATTERN = /\b(?:http(?:\s+error)?\s*(?:408|425|429|500|502|503|504)|too many requests|rate.?limit(?:ed)?|quota|throttl|temporar(?:y|ily)|timeout|timed out|econnreset|etimedout|eai_again|enotfound|network is unreachable|service unavailable)\b/i;
+const EXTERNAL_TRANSIENT_CONTEXT_PATTERN = /\b(?:http|provider|external|network|dns|quota|rate.?limit(?:ed)?|too many requests|throttl|econnreset|etimedout|eai_again|enotfound|service unavailable)\b/i;
 
 export function createFailureSignature(input: FailureSignatureInput): FailureSignature {
   const message = stringField(input.message) ?? stringField(input.code) ?? 'Unclassified failure.';
@@ -203,6 +264,59 @@ export function createTaskRunCard(input: TaskRunCardInput): TaskRunCard {
   };
 }
 
+export function createFailureSignatureRegistry(input: Partial<FailureSignatureRegistry> = {}): FailureSignatureRegistry {
+  return {
+    schemaVersion: FAILURE_SIGNATURE_REGISTRY_SCHEMA_VERSION,
+    updatedAt: stringField(input.updatedAt) ?? new Date(0).toISOString(),
+    entries: dedupeRegistryEntries(input.entries ?? []),
+  };
+}
+
+export function mergeFailureSignaturesIntoRegistry(
+  registry: FailureSignatureRegistry | undefined,
+  input: FailureSignatureRegistryRunInput,
+): FailureSignatureRegistry {
+  const base = createFailureSignatureRegistry(registry);
+  const runRef = normalizeFailureSignatureRunRef(input);
+  const byKey = new Map(base.entries.map((entry) => [entry.dedupeKey, entry]));
+  for (const signatureInput of input.failureSignatures) {
+    const signature = isFailureSignature(signatureInput) ? signatureInput : createFailureSignature(signatureInput);
+    if (!isTrackedFailureSignature(signature)) continue;
+    const dedupeKey = failureSignatureRegistryDedupeKey(signature);
+    const current = byKey.get(dedupeKey);
+    byKey.set(dedupeKey, current
+      ? mergeRegistryEntry(current, signature, runRef)
+      : createRegistryEntry(signature, dedupeKey, runRef));
+  }
+  const entries = [...byKey.values()].sort((left, right) => left.dedupeKey.localeCompare(right.dedupeKey));
+  return {
+    schemaVersion: FAILURE_SIGNATURE_REGISTRY_SCHEMA_VERSION,
+    updatedAt: maxIsoString([base.updatedAt, input.createdAt, ...entries.map((entry) => entry.lastSeenAt)]) ?? new Date(0).toISOString(),
+    entries,
+  };
+}
+
+export function validateFailureSignatureRegistry(value: unknown): string[] {
+  const issues: string[] = [];
+  if (!isRecord(value)) return ['FailureSignatureRegistry must be an object.'];
+  if (value.schemaVersion !== FAILURE_SIGNATURE_REGISTRY_SCHEMA_VERSION) {
+    issues.push(`schemaVersion must be ${FAILURE_SIGNATURE_REGISTRY_SCHEMA_VERSION}.`);
+  }
+  if (!Array.isArray(value.entries)) issues.push('entries must be an array.');
+  for (const [index, entry] of Array.isArray(value.entries) ? value.entries.entries() : []) {
+    if (!isRecord(entry)) {
+      issues.push(`entries[${index}] must be an object.`);
+      continue;
+    }
+    if (!stringField(entry.id)) issues.push(`entries[${index}].id is required.`);
+    if (!isFailureSignatureRegistryKind(entry.kind)) issues.push(`entries[${index}].kind is not tracked by the run-level registry.`);
+    if (!stringField(entry.dedupeKey)) issues.push(`entries[${index}].dedupeKey is required.`);
+    if (!Array.isArray(entry.runRefs)) issues.push(`entries[${index}].runRefs must be an array.`);
+    if (typeof entry.occurrenceCount !== 'number') issues.push(`entries[${index}].occurrenceCount must be a number.`);
+  }
+  return issues;
+}
+
 export function taskRunCardStatus(protocolStatus: TaskProtocolStatus, taskOutcome: TaskOutcomeStatus): TaskRunCardStatus {
   if (protocolStatus === 'running') return 'running';
   if (protocolStatus === 'not-run') return 'not-run';
@@ -273,7 +387,8 @@ function inferTaskOutcome(protocolStatus: TaskProtocolStatus, input: TaskRunCard
 
 function inferFailureSignatureKind(input: FailureSignatureInput, normalizedMessage: string): FailureSignatureKind {
   const joined = [input.code, normalizedMessage, input.schemaPath].filter(Boolean).join(' ');
-  if (TRANSIENT_EXTERNAL_PATTERN.test(joined) || (input.httpStatus !== undefined && [408, 425, 429, 500, 502, 503, 504].includes(input.httpStatus))) return 'external-transient';
+  if ((TRANSIENT_EXTERNAL_PATTERN.test(joined) && EXTERNAL_TRANSIENT_CONTEXT_PATTERN.test(joined))
+    || (input.httpStatus !== undefined && [408, 425, 429, 500, 502, 503, 504].includes(input.httpStatus))) return 'external-transient';
   if (/\btimeout|timed out|deadline\b/i.test(joined)) return 'timeout';
   if (/\brepair\b.*\b(no.?op|no change|same failure|repeated)\b/i.test(joined)) return 'repair-no-op';
   if (/\bschema|payload|missing field|invalid json|fenced json|contract\b/i.test(joined)) return 'schema-drift';
@@ -331,6 +446,155 @@ function dedupeFailureSignatures(signatures: FailureSignature[]) {
   return [...byKey.values()].sort((left, right) => left.dedupeKey.localeCompare(right.dedupeKey));
 }
 
+function failureSignatureRegistryDedupeKey(signature: FailureSignature) {
+  const parts = [
+    signature.kind,
+    registryCategoryForFailureSignature(signature),
+    signature.schemaPath ?? '',
+    signature.code ?? '',
+  ];
+  return stableKey(parts);
+}
+
+function registryCategoryForFailureSignature(signature: FailureSignature) {
+  const text = `${signature.code ?? ''} ${signature.normalizedMessage}`.toLowerCase();
+  if (signature.kind === 'external-transient') {
+    if (signature.httpStatus !== undefined) return `http-${signature.httpStatus}`;
+    if (/\b(?:429|too many requests|rate.?limit(?:ed)?|throttl)\b/i.test(text)) return 'rate-limit';
+    if (/\b(?:quota)\b/i.test(text)) return 'quota';
+    if (/\b(?:eai_again|enotfound|dns|network is unreachable|econnreset)\b/i.test(text)) return 'network';
+    if (/\b(?:408|timeout|timed out|etimedout)\b/i.test(text)) return 'external-timeout';
+    if (/\b(?:500|502|503|504|service unavailable)\b/i.test(text)) return 'service-unavailable';
+    return signature.normalizedMessage;
+  }
+  if (signature.kind === 'schema-drift') return signature.normalizedMessage;
+  if (signature.kind === 'timeout') return signature.normalizedMessage;
+  if (signature.kind === 'repair-no-op') return signature.normalizedMessage;
+  return signature.dedupeKey;
+}
+
+function createRegistryEntry(
+  signature: FailureSignature & { kind: FailureSignatureRegistryKind },
+  dedupeKey: string,
+  runRef: FailureSignatureRunRef,
+): FailureSignatureRegistryEntry {
+  return {
+    id: `failure-registry:${dedupeKey}`,
+    kind: signature.kind,
+    dedupeKey,
+    signatureIds: uniqueStrings([signature.id]),
+    signatureDedupeKeys: uniqueStrings([signature.dedupeKey]),
+    layer: signature.layer,
+    retryable: signature.retryable,
+    message: signature.message,
+    normalizedMessage: signature.normalizedMessage,
+    providerIds: uniqueStrings([signature.providerId].filter(isString)),
+    operations: uniqueStrings([signature.operation].filter(isString)),
+    codes: uniqueStrings([signature.code].filter(isString)),
+    httpStatuses: uniqueNumbers([signature.httpStatus].filter(numberFieldIsPresent)),
+    schemaPaths: uniqueStrings([signature.schemaPath].filter(isString)),
+    refs: uniqueStrings(signature.refs),
+    runRefs: [runRef],
+    occurrenceCount: 1,
+    firstSeenAt: runRef.createdAt ?? new Date(0).toISOString(),
+    lastSeenAt: runRef.createdAt ?? new Date(0).toISOString(),
+  };
+}
+
+function mergeRegistryEntry(
+  entry: FailureSignatureRegistryEntry,
+  signature: FailureSignature & { kind: FailureSignatureRegistryKind },
+  runRef: FailureSignatureRunRef,
+): FailureSignatureRegistryEntry {
+  const runRefs = uniqueRunRefs([...entry.runRefs, runRef]);
+  const seenDates = runRefs.map((ref) => ref.createdAt).filter(isString);
+  return {
+    ...entry,
+    signatureIds: uniqueStrings([...entry.signatureIds, signature.id]),
+    signatureDedupeKeys: uniqueStrings([...entry.signatureDedupeKeys, signature.dedupeKey]),
+    retryable: entry.retryable || signature.retryable,
+    providerIds: uniqueStrings([...entry.providerIds, signature.providerId].filter(isString)),
+    operations: uniqueStrings([...entry.operations, signature.operation].filter(isString)),
+    codes: uniqueStrings([...entry.codes, signature.code].filter(isString)),
+    httpStatuses: uniqueNumbers([...entry.httpStatuses, signature.httpStatus].filter(numberFieldIsPresent)),
+    schemaPaths: uniqueStrings([...entry.schemaPaths, signature.schemaPath].filter(isString)),
+    refs: uniqueStrings([...entry.refs, ...signature.refs]),
+    runRefs,
+    occurrenceCount: runRefs.length,
+    firstSeenAt: minIsoString(seenDates) ?? entry.firstSeenAt,
+    lastSeenAt: maxIsoString(seenDates) ?? entry.lastSeenAt,
+  };
+}
+
+function normalizeFailureSignatureRunRef(input: FailureSignatureRegistryRunInput): FailureSignatureRunRef {
+  return {
+    runId: input.runId.trim(),
+    taskId: stringField(input.taskId),
+    attempt: typeof input.attempt === 'number' && Number.isFinite(input.attempt) ? input.attempt : undefined,
+    status: stringField(input.status),
+    createdAt: stringField(input.createdAt),
+    sessionId: stringField(input.sessionId),
+    sessionBundleRef: stringField(input.sessionBundleRef),
+    refs: uniqueStrings(input.refs ?? []),
+  };
+}
+
+function dedupeRegistryEntries(entries: FailureSignatureRegistryEntry[]) {
+  const byKey = new Map<string, FailureSignatureRegistryEntry>();
+  for (const entry of entries) {
+    if (!isRecord(entry) || !stringField(entry.dedupeKey) || !isFailureSignatureRegistryKind(entry.kind)) continue;
+    const runRefs = uniqueRunRefs(Array.isArray(entry.runRefs) ? entry.runRefs.filter(isFailureSignatureRunRef) : []);
+    byKey.set(entry.dedupeKey, {
+      ...entry,
+      signatureIds: uniqueStrings(entry.signatureIds ?? []),
+      signatureDedupeKeys: uniqueStrings(entry.signatureDedupeKeys ?? []),
+      providerIds: uniqueStrings(entry.providerIds ?? []),
+      operations: uniqueStrings(entry.operations ?? []),
+      codes: uniqueStrings(entry.codes ?? []),
+      httpStatuses: uniqueNumbers(entry.httpStatuses ?? []),
+      schemaPaths: uniqueStrings(entry.schemaPaths ?? []),
+      refs: uniqueStrings(entry.refs ?? []),
+      runRefs,
+      occurrenceCount: runRefs.length,
+    });
+  }
+  return [...byKey.values()].sort((left, right) => left.dedupeKey.localeCompare(right.dedupeKey));
+}
+
+function uniqueRunRefs(refs: FailureSignatureRunRef[]) {
+  const byId = new Map<string, FailureSignatureRunRef>();
+  for (const ref of refs) {
+    if (!ref.runId.trim()) continue;
+    const current = byId.get(ref.runId);
+    byId.set(ref.runId, {
+      ...current,
+      ...ref,
+      refs: uniqueStrings([...(current?.refs ?? []), ...ref.refs]),
+    });
+  }
+  return [...byId.values()].sort((left, right) => left.runId.localeCompare(right.runId));
+}
+
+function isFailureSignatureRegistryKind(value: unknown): value is FailureSignatureRegistryKind {
+  return FAILURE_SIGNATURE_REGISTRY_TRACKED_KINDS.includes(value as FailureSignatureRegistryKind);
+}
+
+function isTrackedFailureSignature(signature: FailureSignature): signature is FailureSignature & { kind: FailureSignatureRegistryKind } {
+  return isFailureSignatureRegistryKind(signature.kind);
+}
+
+function isFailureSignatureRunRef(value: unknown): value is FailureSignatureRunRef {
+  return isRecord(value) && typeof value.runId === 'string' && Array.isArray(value.refs);
+}
+
+function minIsoString(values: string[]) {
+  return values.filter(isString).sort()[0];
+}
+
+function maxIsoString(values: Array<string | undefined>) {
+  return values.filter(isString).sort().at(-1);
+}
+
 function refsOfKind(refs: TaskRunCardRef[], kind: TaskRunCardRefKind) {
   return refs.filter((ref) => ref.kind === kind).map((ref) => ref.ref);
 }
@@ -349,7 +613,7 @@ function normalizeFailureMessage(value: string) {
     .toLowerCase()
     .replace(/\b[0-9a-f]{8,}\b/g, '<hash>')
     .replace(/\b\d{4}-\d{2}-\d{2}t\S+\b/g, '<timestamp>')
-    .replace(/\b\d+(?:\.\d+)?\b/g, '<num>')
+    .replace(/\d+(?:\.\d+)?/g, '<num>')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 240);
@@ -379,6 +643,14 @@ function numberField(value: unknown) {
 
 function isString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
+}
+
+function numberFieldIsPresent(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function uniqueNumbers(values: number[]) {
+  return [...new Set(values.filter(numberFieldIsPresent))].sort((left, right) => left - right);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

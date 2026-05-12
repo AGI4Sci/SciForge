@@ -88,20 +88,24 @@ try {
 
   let response = await fetch(`${baseUrl}/api/sciforge/task-attempts/list?workspacePath=${encodeURIComponent(workspace)}&skillDomain=literature&scenarioPackageId=literature-evidence-review`);
   await assertOk(response);
-  const listed = await response.json() as { attempts: TaskAttemptRecord[] };
+  const listed = await response.json() as { attempts: TaskAttemptRecord[]; taskRunCards?: Array<NonNullable<TaskAttemptRecord['taskRunCard']>> };
   assert.equal(listed.attempts.length, 1);
   assert.equal(listed.attempts[0].runtimeProfileId, 'workspace-python');
   assert.equal(listed.attempts[0].routeDecision?.selectedSkill, 'literature.pubmed_search');
   assert.equal(listed.attempts[0].scenarioPackageRef?.id, 'literature-evidence-review');
   assert.equal(listed.attempts[0].workEvidenceSummary?.items[0]?.resultCount, 3);
+  assert.equal(listed.attempts[0].taskRunCard?.schemaVersion, 'sciforge.task-run-card.v1');
+  assert.equal(listed.taskRunCards?.[0]?.id, listed.attempts[0].taskRunCard?.id);
   assert.doesNotMatch(JSON.stringify(listed), /RAW_PROVIDER_LOG_SHOULD_NOT_APPEAR|RAW_STDOUT_LOG_SHOULD_NOT_APPEAR/);
 
   response = await fetch(`${baseUrl}/api/sciforge/task-attempts/get?workspacePath=${encodeURIComponent(workspace)}&id=run-literature-1`);
   await assertOk(response);
-  const loaded = await response.json() as { attempts: TaskAttemptRecord[] };
+  const loaded = await response.json() as { attempts: TaskAttemptRecord[]; taskRunCards?: Array<NonNullable<TaskAttemptRecord['taskRunCard']>> };
   assert.equal(loaded.attempts.length, 1);
   assert.equal(loaded.attempts[0].stdoutRef, '.sciforge/logs/run-literature-1.stdout.log');
   assert.equal(loaded.attempts[0].workEvidenceSummary?.items[0]?.diagnostics[0], 'provider status 200');
+  assert.equal(loaded.attempts[0].taskRunCard?.goal, 'CRISPR base editing review');
+  assert.equal(loaded.taskRunCards?.[0]?.taskId, 'run-literature-1');
   assert.doesNotMatch(JSON.stringify(loaded), /RAW_PROVIDER_LOG_SHOULD_NOT_APPEAR|RAW_STDOUT_LOG_SHOULD_NOT_APPEAR/);
 
   const repairContext = await buildCompactRepairContext({

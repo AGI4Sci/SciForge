@@ -353,6 +353,7 @@ export function validationFindingsFromContractFailure(
       expected: failure.expected,
       actual: failure.actual,
       nextStep: failure.nextStep,
+      auditNotes: failure.auditNotes,
     },
   }];
 }

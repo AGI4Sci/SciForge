@@ -755,8 +755,9 @@ try {
   assert.equal(realChain.validationDecision?.subject.contractId, 'sciforge.tool-payload.v1');
   assert.equal(realChain.auditRecord?.contractId, 'sciforge.tool-payload.v1');
   assert.equal(realChain.auditRecord?.failureKind, 'payload-schema');
-  assert.equal(realChain.repairDecision?.action, 'repair-rerun');
-  assert.equal(realChain.auditRecord?.outcome, 'repair-requested');
+  assert.equal(realChain.repairDecision?.action, 'fail-closed');
+  assert.equal(realChain.auditRecord?.outcome, 'failed-closed');
+  assert.ok(realChain.validationDecision?.findings[0]?.diagnostics?.auditNotes);
   assert.equal(realChain.auditRecord?.validationDecisionId, realChain.validationDecision?.decisionId);
   assert.equal(realChain.auditRecord?.repairDecisionId, realChain.repairDecision?.decisionId);
   assert.ok(realChain.auditRecord?.relatedRefs.includes(payloadRefs.outputRel));

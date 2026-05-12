@@ -3,8 +3,11 @@ import test from 'node:test';
 
 import {
   createFailureSignature,
+  createFailureSignatureRegistry,
   createTaskRunCard,
+  mergeFailureSignaturesIntoRegistry,
   taskRunCardStatus,
+  validateFailureSignatureRegistry,
   validateTaskRunCard,
 } from './task-run-card';
 
@@ -38,6 +41,75 @@ test('classifies rate limited wording as provider-neutral transient failure', ()
   assert.equal(signature.kind, 'external-transient');
   assert.equal(signature.layer, 'external-provider');
   assert.equal(signature.retryable, true);
+});
+
+test('classifies runtime timeout separately from provider transient timeout', () => {
+  const runtime = createFailureSignature({
+    message: 'AgentServer generation request timed out after 30000ms.',
+  });
+  const provider = createFailureSignature({
+    message: 'External provider timed out after 30000ms.',
+  });
+
+  assert.equal(runtime.kind, 'timeout');
+  assert.equal(runtime.layer, 'runtime-server');
+  assert.equal(provider.kind, 'external-transient');
+  assert.equal(provider.layer, 'external-provider');
+});
+
+test('merges tracked failure signatures into a run-level registry', () => {
+  const first = mergeFailureSignaturesIntoRegistry(createFailureSignatureRegistry(), {
+    runId: 'run:1',
+    taskId: 'task-a',
+    attempt: 1,
+    status: 'repair-needed',
+    createdAt: '2026-05-12T00:00:00.000Z',
+    refs: ['stderr:1'],
+    failureSignatures: [
+      { kind: 'schema-drift', message: 'Missing required field artifacts[123].id', schemaPath: 'displayIntent.artifacts' },
+      { message: 'AgentServer generation request timed out after 30000ms.' },
+      { message: 'Repair no-op: repeated same failure with no change.' },
+      { message: 'HTTP Error 429: rate limited for request 12345' },
+      { message: 'A semantic verifier is uncertain.' },
+    ],
+  });
+  const second = mergeFailureSignaturesIntoRegistry(first, {
+    runId: 'run:2',
+    taskId: 'task-b',
+    attempt: 1,
+    status: 'repair-needed',
+    createdAt: '2026-05-12T00:01:00.000Z',
+    refs: ['stderr:2'],
+    failureSignatures: [
+      { kind: 'schema-drift', message: 'Missing required field artifacts[987].id', schemaPath: 'displayIntent.artifacts' },
+      { message: 'AgentServer generation request timed out after 45000ms.' },
+      { message: 'Repair no-op: repeated same failure with no change.' },
+      { message: 'HTTP Error 429: rate limited for request 67890' },
+      { message: 'A semantic verifier is uncertain.' },
+    ],
+  });
+  const idempotent = mergeFailureSignaturesIntoRegistry(second, {
+    runId: 'run:2',
+    taskId: 'task-b',
+    attempt: 1,
+    status: 'repair-needed',
+    createdAt: '2026-05-12T00:01:00.000Z',
+    refs: ['stderr:2'],
+    failureSignatures: second.entries.flatMap((entry) => entry.kind === 'external-transient'
+      ? [{ message: 'HTTP Error 429: rate limited for request 67890' }]
+      : []),
+  });
+
+  assert.deepEqual(validateFailureSignatureRegistry(second), []);
+  assert.equal(second.entries.length, 4);
+  assert.ok(second.entries.every((entry) => entry.occurrenceCount === 2));
+  assert.deepEqual(second.entries.map((entry) => entry.kind).sort(), [
+    'external-transient',
+    'repair-no-op',
+    'schema-drift',
+    'timeout',
+  ]);
+  assert.equal(idempotent.entries.find((entry) => entry.kind === 'external-transient')?.occurrenceCount, 2);
 });
 
 test('marks protocol success with unmet user goal as needs-work', () => {

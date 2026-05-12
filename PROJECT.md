@@ -108,9 +108,33 @@ Token 高效：每轮只携带当前任务真正需要的 state digest、refs、
 
 后续保留：
 
-- [ ] 建立 FailureSignature run-level registry，跨 run 去重 schema drift、timeout、repair no-op 和 external transient。
-- [ ] 将 TaskRunCard 暴露到 task-attempt API / 历史摘要 UI，替换当前部分自建 compact summary。
-- [ ] 给 schema normalization 增加显式白名单与 audit note，区分结构漂移修复和语义/安全错误 fail-closed。
+- [x] 建立 FailureSignature run-level registry，跨 run 去重 schema drift、timeout、repair no-op 和 external transient。
+- [x] 将 TaskRunCard 暴露到 task-attempt API / 历史摘要 UI，替换当前部分自建 compact summary。
+- [x] 给 schema normalization 增加显式白名单与 audit note，区分结构漂移修复和语义/安全错误 fail-closed。
+
+### 2026-05-12 Milestone：Failure Registry、TaskRunCard API 与 Schema Normalization Fail-closed
+
+本轮继续开启多个 sub agents 并行推进三条后续保留工程线，并使用网页端 E2E 检查 `http://127.0.0.1:5173/`。首页无白屏，Runtime Health 可见 Web UI、Workspace Writer、AgentServer、Model Backend 和 Scenario Library 状态；执行单元过滤模式保持纯净，partial/background continuation demo 可见。根据并行报告完成以下通用修复：
+
+- [x] 新增 workspace 级 `FailureSignatureRegistry`：只追踪 `schema-drift`、`timeout`、`repair-no-op`、`external-transient` 四类通用失败，按 run-level dedupe key 跨 run 合并，同一 run 重写保持幂等。
+- [x] `appendTaskAttempt` 在生成 `TaskRunCard` 后同步记录 failure registry，registry 持久化到 `.sciforge/failure-signatures/registry.json`。
+- [x] task-attempt API 的 `list` / `get` 显式返回 `taskRunCards`，历史摘要 UI 优先消费 `TaskRunCard` / `taskOutcomeProjection.taskRunCard`，旧 raw compact summary 仅作为 fallback。
+- [x] payload validation 在宽松 normalization 前执行 schema error 识别，只允许显式白名单结构漂移修复；缺 required envelope、invalid UI ref、语义/安全敏感字段进入 `ContractValidationFailure` fail-closed。
+- [x] `ContractValidationFailure` 增加 `auditNotes`，schema normalization 的 applied/blocked 决策投影到 validation-repair audit diagnostics；成功白名单 normalization 写入 `payload-normalization-audit` log。
+
+本轮验证：
+
+- [x] 网页 E2E：确认首页、Runtime Health、历史/结果区、只看执行单元、partial/background continuation demo；页面无 console error/pageerror/failed request。
+- [x] `node --import tsx --test packages/contracts/runtime/task-run-card.test.ts src/runtime/task-attempt-history.test.ts src/runtime/gateway/transient-external-failure.test.ts src/runtime/gateway/result-presentation-contract.test.ts`
+- [x] `node --import tsx --test src/ui/src/app/chat/ArchiveDrawer.test.tsx`
+- [x] `node --import tsx --test src/runtime/gateway/direct-answer-payload.test.ts src/runtime/gateway/result-presentation-contract.test.ts`
+- [x] `node --import tsx tests/smoke/smoke-contract-validation-failure.ts`
+- [x] `node --import tsx tests/smoke/smoke-validation-repair-audit-chain.ts`
+- [x] `npm run typecheck`
+- [x] `npm run smoke:runtime-contracts`
+- [x] `npm run smoke:result-presentation-contract`
+- [x] `npm run smoke:task-attempt-api`
+- [x] `npm run smoke:browser`
 
 
 

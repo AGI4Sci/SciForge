@@ -243,6 +243,7 @@ export {
   validationScopeForToolPayloadSchemaErrors,
 } from './validation-failure';
 export type {
+  ContractValidationAuditNote,
   ContractValidationFailure,
   ContractValidationFailureKind,
   ContractValidationFailureOptions,
@@ -434,12 +435,17 @@ export {
   validateResultPresentationContract,
 } from './result-presentation';
 export {
+  FAILURE_SIGNATURE_REGISTRY_SCHEMA_VERSION,
+  FAILURE_SIGNATURE_REGISTRY_TRACKED_KINDS,
   FAILURE_SIGNATURE_SCHEMA_VERSION,
   NO_HARDCODE_REVIEW_SCHEMA_VERSION,
   TASK_RUN_CARD_SCHEMA_VERSION,
   createFailureSignature,
+  createFailureSignatureRegistry,
   createTaskRunCard,
+  mergeFailureSignaturesIntoRegistry,
   taskRunCardStatus,
+  validateFailureSignatureRegistry,
   validateTaskRunCard,
 } from './task-run-card';
 export type {
@@ -473,6 +479,11 @@ export type {
   FailureSignature,
   FailureSignatureInput,
   FailureSignatureKind,
+  FailureSignatureRegistry,
+  FailureSignatureRegistryEntry,
+  FailureSignatureRegistryKind,
+  FailureSignatureRegistryRunInput,
+  FailureSignatureRunRef,
   NoHardcodeReview,
   TaskAttributionLayer,
   TaskOutcomeStatus,

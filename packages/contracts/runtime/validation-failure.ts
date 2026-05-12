@@ -28,6 +28,15 @@ export interface ContractValidationIssue {
   unresolvedUri?: string;
 }
 
+export interface ContractValidationAuditNote {
+  kind: 'schema-normalization';
+  status: 'applied' | 'blocked';
+  boundary: 'structural-drift' | 'semantic-or-safety';
+  policyId: string;
+  message: string;
+  paths: string[];
+}
+
 export interface ContractValidationFailure {
   contract: typeof CONTRACT_VALIDATION_FAILURE_CONTRACT_ID;
   schemaPath: string;
@@ -44,6 +53,7 @@ export interface ContractValidationFailure {
   nextStep: string;
   relatedRefs: string[];
   issues: ContractValidationIssue[];
+  auditNotes?: ContractValidationAuditNote[];
   createdAt?: string;
 }
 
@@ -98,6 +108,21 @@ export const contractValidationFailureSchema = {
         },
       },
     },
+    auditNotes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['kind', 'status', 'boundary', 'policyId', 'message', 'paths'],
+        properties: {
+          kind: { const: 'schema-normalization' },
+          status: { enum: ['applied', 'blocked'] },
+          boundary: { enum: ['structural-drift', 'semantic-or-safety'] },
+          policyId: { type: 'string' },
+          message: { type: 'string' },
+          paths: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
     createdAt: { type: 'string' },
   },
 } as const;
@@ -112,6 +137,7 @@ export interface ContractValidationFailureOptions {
   relatedRefs?: string[];
   recoverActions?: string[];
   nextStep?: string;
+  auditNotes?: ContractValidationAuditNote[];
 }
 
 export function contractValidationFailureFromErrors(
@@ -139,6 +165,7 @@ export function contractValidationFailureFromErrors(
     nextStep: options.nextStep ?? nextStepForValidationFailure(options.failureKind),
     relatedRefs: uniqueStrings(options.relatedRefs ?? []),
     issues,
+    auditNotes: options.auditNotes,
     createdAt: new Date().toISOString(),
   };
 }
