@@ -105,6 +105,25 @@ export type {
   BackendHandoffDriftStatus,
 } from './backend-handoff-drift';
 export {
+  BACKEND_COMPARISON_CONTRACT_ID,
+  BACKEND_COMPARISON_SCHEMA_VERSION,
+  backendComparisonHasBackendNeutralFix,
+  buildBackendComparisonReport,
+  validateBackendComparisonReport,
+} from './backend-comparison';
+export type {
+  BackendComparisonInput,
+  BackendComparisonInvariant,
+  BackendComparisonInvariantStatus,
+  BackendComparisonReport,
+  BackendComparisonRun,
+  BackendComparisonRunInput,
+  BackendComparisonRunStatus,
+  BackendComparisonStatus,
+  BackendNeutralFixCandidate,
+  BackendNeutralFixKind,
+} from './backend-comparison';
+export {
   buildBackendInputTextAnchors,
   handoffArtifactDataSummaryReason,
   handoffStringCompactionSchema,

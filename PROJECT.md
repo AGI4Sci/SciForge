@@ -521,6 +521,7 @@ Failure/Improvement Notes：
 - [x] `npm run typecheck`
 - [x] `npm run smoke:runtime-contracts`
 - [x] `npm run smoke:no-src-capability-semantics`
+- [x] `npm run verify:full`（759 tests pass；backend comparison smoke、browser smoke、production build 与 artifacts index 通过）
 - [x] `npm run verify:full`（754 tests pass；repair handoff runner、browser smoke、production build 与 artifacts index 通过）
 - [x] `npm run verify:full`（750 tests pass；browser smoke、production build 与 artifacts index 通过）
 - [x] `npm run smoke:no-legacy-paths`
@@ -604,6 +605,30 @@ Failure/Improvement Notes：
 - [x] `npm run smoke:no-src-capability-semantics`
 
 
+### 2026-05-13 Milestone：Backend-neutral 对比与修复归因
+
+本轮完成 R-CODE-09：把“同一任务在多个 backend 上跑，比较失败模式并提炼 backend-neutral 修复”收敛为轻量 runtime contract，不再把 Codex/OpenTeam 或某个 backend pair 写成特例：
+
+- [x] 新增 `sciforge.backend-comparison.v1` contract，输入多个 backend run，统一归一化 `supported`、provider、capabilities、compact fallback、handoff drift、failure categories 和 evidence refs。
+- [x] contract 复用 `SUPPORTED_RUNTIME_AGENT_BACKENDS`、`runtimeAgentBackendCapabilities`、`compactCapabilityForAgentBackend`、`runtimeAgentBackendFailureCategories`、`runtimeAgentBackendIsRateLimitKind` 与 `classifyBackendHandoffDrift`，不维护第二套 backend 列表或失败正则。
+- [x] 输出 `BackendComparisonReport`、invariants、`BackendNeutralFixCandidate` 与 `NoHardcodeReview`；metadata backend 不一致或 unsupported backend 会先 `blocked`，不会直接推导修复。
+- [x] 新增 `smoke:backend-comparison`，覆盖全 supported backend 一致 direct ToolPayload、任意两 backend 的共享 schema failure、divergent handoff drift、unsupported backend guard，且不真实调用 provider、不写大报告 artifact。
+
+Failure/Improvement Notes：
+
+- 现有 `smoke:agentserver-backend-matrix` 已覆盖 6 backend x 3 turns，并会写 `docs/test-artifacts/AgentBackendMultiturnTestReport.md`；R-CODE-09 的最小新增应是 contract-level invariant smoke，而不是再复制一个长矩阵。
+- Backend 差异不等于 backend-specific 修复；只有在 metadata、capability 和 handoff contract 都归一化后，才能判断是 shared schema/context/rate-limit/network 修复，还是真实 backend drift。
+- 测试 fixture 必须从 `SUPPORTED_RUNTIME_AGENT_BACKENDS` 派生 backend pair；禁止把 `codex/openteam_agent` pair 当成唯一真实路径。
+
+本轮验证：
+
+- [x] `node --import tsx --test packages/contracts/runtime/backend-comparison.test.ts`
+- [x] `npm run smoke:backend-comparison`
+- [x] `npm run typecheck`
+- [x] `npm run smoke:runtime-contracts`
+- [x] `npm run smoke:no-src-capability-semantics`
+
+
 
 ### H022 Real-world Complex Task Backlog for SciForge Hardening
 
@@ -641,7 +666,7 @@ Failure/Improvement Notes：
 - [x] R-CODE-06 Dirty worktree 协作：预先放入用户未提交改动，再让 agent 修复另一区域，验证不会 reset/revert 用户改动。已完成 `sciforge.dirty-worktree-collaboration.v1`、porcelain status parser、user-owned protected paths、destructive git command blocker、repair handoff runner enforcement、disjoint/overlap path smoke 覆盖。
 - [x] R-CODE-07 Release verify 请求：用户要求“等完整验证再推 GitHub”，系统必须阻塞到指定测试完成，失败时不推送。已新增 `sciforge.release-gate.v1`，把 release/push intent 映射到 `npm run verify:full`，并在缺少 full verify、服务重启、变更摘要、git target 或 audit refs 时保持 pending/needs-human，不允许把 GitHub push 视作完成。
 - [x] R-CODE-08 Backend handoff 漂移：AgentServer 返回 taskFiles、direct ToolPayload、plain text、malformed generation response 四类输出，要求统一分类和可恢复。已新增 `sciforge.backend-handoff-drift.v1` 分类 contract 与 `agentserver-handoff-drift` runtime event，覆盖 taskFiles 执行、direct ToolPayload materialize、plain text bridge、guarded raw text diagnostic、malformed generation-looking text strict retry，以及 handoffSummary 不再触发旧任务重跑。
-- [ ] R-CODE-09 多 backend 对比修复：同一任务用 Codex/OpenTeam 两个 backend 跑，比较失败模式，提炼 backend-neutral 修复。
+- [x] R-CODE-09 多 backend 对比修复：同一任务用 Codex/OpenTeam 两个 backend 跑，比较失败模式，提炼 backend-neutral 修复。已完成 `sciforge.backend-comparison.v1`、supported backend invariant、handoff drift/failure category 归一化、backend-neutral fix candidate、unsupported backend guard 和 smoke 覆盖。
 - [x] R-CODE-10 项目服务生命周期：修改代码后自动重启 dev server，确认端口占用、旧进程退出、新服务 ready、浏览器页面可刷新。已覆盖 Workspace Writer health identity、动态端口 restart smoke 和 Vite capability gate；真实 UI dev server 热更新仍由 `npm run smoke:browser` 持续覆盖。
 
 数据分析与文件 artifact 任务：
