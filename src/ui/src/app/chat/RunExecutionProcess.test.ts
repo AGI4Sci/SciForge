@@ -35,6 +35,66 @@ test('execution process renders blocking execution units without Checked success
   assert.doesNotMatch(html, /标准输出：/);
 });
 
+test('execution process scopes execution units to the selected run artifact refs', () => {
+  const html = renderToStaticMarkup(createElement(RunExecutionProcess, {
+    runId: 'run-old',
+    session: {
+      ...session([]),
+      runs: [
+        {
+          id: 'run-old',
+          scenarioId: 'literature-evidence-review',
+          status: 'completed',
+          prompt: 'old report',
+          response: 'done',
+          createdAt: '2026-05-12T00:00:00.000Z',
+          objectReferences: [{ kind: 'artifact', ref: 'artifact:old-report', title: 'old report' }],
+        },
+        {
+          id: 'run-new',
+          scenarioId: 'literature-evidence-review',
+          status: 'completed',
+          prompt: 'new report',
+          response: 'done',
+          createdAt: '2026-05-12T00:05:00.000Z',
+          objectReferences: [{ kind: 'artifact', ref: 'artifact:new-report', title: 'new report' }],
+        },
+      ] as never,
+      executionUnits: [
+        executionUnit({ id: 'EU-old', tool: 'old.tool', outputRef: 'artifact:old-report' }),
+        executionUnit({ id: 'EU-new', tool: 'new.tool', outputRef: 'artifact:new-report' }),
+      ],
+    },
+    onObjectFocus: () => undefined,
+  }));
+
+  assert.match(html, /old\.tool/);
+  assert.doesNotMatch(html, /new\.tool/);
+});
+
+test('execution process does not fall back to same-package units from another run', () => {
+  const html = renderToStaticMarkup(createElement(RunExecutionProcess, {
+    runId: 'run-old',
+    session: {
+      ...session([]),
+      runs: [
+        { id: 'run-old', scenarioId: 'literature-evidence-review', status: 'completed', prompt: 'old', response: 'done', createdAt: '2026-05-12T00:00:00.000Z' },
+        { id: 'run-new', scenarioId: 'literature-evidence-review', status: 'completed', prompt: 'new', response: 'done', createdAt: '2026-05-12T00:05:00.000Z' },
+      ],
+      executionUnits: [executionUnit({
+        id: 'EU-new-only',
+        tool: 'new.tool',
+        outputRef: 'run:run-new#output',
+        scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'built-in' },
+      })],
+    },
+    onObjectFocus: () => undefined,
+  }));
+
+  assert.match(html, /接收任务：old/);
+  assert.doesNotMatch(html, /new\.tool/);
+});
+
 function renderProcess(executionUnits: RuntimeExecutionUnit[]) {
   return renderToStaticMarkup(createElement(RunExecutionProcess, {
     runId: 'run-1',

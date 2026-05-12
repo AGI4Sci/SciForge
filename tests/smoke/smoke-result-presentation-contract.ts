@@ -12,6 +12,7 @@ type PresentationFixture = {
 
 const materializer = await loadPresentationMaterializer();
 const contractValidator = await loadPresentationValidator();
+const outcomeMaterializer = await loadOutcomeProjectionMaterializer();
 
 const fixtures: PresentationFixture[] = [
   {
@@ -376,9 +377,34 @@ for (const fixture of fixtures) {
   if (contractValidator) {
     assertValidatorOk(await contractValidator(contract), fixture.id);
   }
+  assertOutcomeProjectionShape(await outcomeMaterializer({
+    payload: fixture.input.payload,
+    request: fixture.input.request,
+  }), fixture);
 }
 
-console.log(`[ok] result presentation contract smoke covered ${fixtures.length} generic scenes`);
+assertProtocolSuccessCanStillNeedWork(await outcomeMaterializer({
+  request: {
+    skillDomain: 'literature',
+    prompt: 'Search recent papers and produce a research-report artifact.',
+    expectedArtifactTypes: ['research-report'],
+    selectedComponentIds: ['report-viewer'],
+    artifacts: [],
+  },
+  payload: {
+    message: 'The backend protocol completed and a compact table was produced.',
+    confidence: 0.72,
+    claimType: 'research-summary',
+    evidenceLevel: 'table-only',
+    reasoningTrace: 'RAW_TOOL_PAYLOAD_SHOULD_NOT_RENDER',
+    claims: [{ id: 'table-only', text: 'A compact table exists.', evidenceRefs: ['artifact::paper-table'] }],
+    artifacts: [{ id: 'paper-table', type: 'data-table', title: 'Paper table', data: { rows: [] } }],
+    uiManifest: [{ componentId: 'table-viewer', artifactRef: 'paper-table' }],
+    executionUnits: [{ id: 'search', status: 'done', nextStep: 'Generate the requested report from preserved table refs.' }],
+  },
+}));
+
+console.log(`[ok] result presentation contract smoke covered ${fixtures.length} generic scenes plus task outcome projection`);
 
 async function loadPresentationMaterializer() {
   const candidates = [
@@ -436,6 +462,27 @@ async function loadPresentationValidator() {
     }
   }
   return undefined;
+}
+
+async function loadOutcomeProjectionMaterializer() {
+  const candidates = [
+    { path: '../../src/runtime/gateway/task-outcome-projection.js', exportName: 'materializeTaskOutcomeProjection' },
+  ];
+  const failures: string[] = [];
+  for (const candidate of candidates) {
+    try {
+      const module = await import(candidate.path) as PresentationModule;
+      const value = module[candidate.exportName];
+      if (typeof value === 'function') return value as (input: unknown) => unknown | Promise<unknown>;
+      failures.push(`${candidate.path} did not export ${candidate.exportName}`);
+    } catch (error) {
+      failures.push(`${candidate.path}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  assert.fail([
+    'Expected a gateway task outcome projection materializer.',
+    ...failures,
+  ].join('\n'));
 }
 
 function assertContractShape(contract: unknown, fixture: PresentationFixture) {
@@ -534,6 +581,53 @@ function assertValidatorOk(result: unknown, fixtureId: string) {
     return;
   }
   assert.fail(`${fixtureId}: unsupported validator result shape`);
+}
+
+function assertOutcomeProjectionShape(projection: unknown, fixture: PresentationFixture) {
+  assert.ok(isRecord(projection), `${fixture.id}: outcome projection must be an object`);
+  assert.equal(projection.schemaVersion, 'sciforge.gateway-task-outcome-projection.v1', `${fixture.id}: outcome projection schema`);
+  assert.equal(typeof projection.protocolSuccess, 'boolean', `${fixture.id}: protocolSuccess boolean`);
+  assert.equal(typeof projection.taskSuccess, 'boolean', `${fixture.id}: taskSuccess boolean`);
+  assert.ok(Array.isArray(projection.projectionRules), `${fixture.id}: projectionRules array`);
+  const card = projection.taskRunCard;
+  assert.ok(isRecord(card), `${fixture.id}: taskRunCard object`);
+  assert.equal(card.schemaVersion, 'sciforge.task-run-card.v1', `${fixture.id}: taskRunCard schema`);
+  assert.ok(['protocol-success', 'protocol-failed', 'running', 'not-run', 'cancelled'].includes(String(card.protocolStatus)), `${fixture.id}: protocol status`);
+  assert.ok(['satisfied', 'needs-work', 'needs-human', 'blocked', 'unknown'].includes(String(card.taskOutcome)), `${fixture.id}: task outcome`);
+  assert.equal(typeof card.nextStep, 'string', `${fixture.id}: taskRunCard nextStep`);
+  assert.ok(isRecord(card.noHardcodeReview), `${fixture.id}: noHardcodeReview object`);
+  assert.equal(card.noHardcodeReview.appliesGenerally, true, `${fixture.id}: noHardcodeReview applies generally`);
+  const proxy = projection.userSatisfactionProxy;
+  assert.ok(isRecord(proxy), `${fixture.id}: user satisfaction proxy object`);
+  assert.equal(proxy.schemaVersion, 'sciforge.user-satisfaction-proxy.v1', `${fixture.id}: satisfaction schema`);
+  assert.equal(typeof proxy.answeredLatestRequest, 'boolean', `${fixture.id}: answeredLatestRequest boolean`);
+  assert.equal(typeof proxy.usableResultVisible, 'boolean', `${fixture.id}: usableResultVisible boolean`);
+  assert.equal(typeof proxy.structuredNextStep, 'boolean', `${fixture.id}: structuredNextStep boolean`);
+  assert.ok(Array.isArray(proxy.reasons) && proxy.reasons.length > 0, `${fixture.id}: satisfaction reasons`);
+  const attribution = projection.nextStepAttribution;
+  assert.ok(isRecord(attribution), `${fixture.id}: nextStepAttribution object`);
+  assert.equal(attribution.schemaVersion, 'sciforge.next-step-attribution.v1', `${fixture.id}: next step attribution schema`);
+  assert.equal(typeof attribution.nextStep, 'string', `${fixture.id}: attributed next step`);
+  assert.equal(typeof attribution.ownerLayer, 'string', `${fixture.id}: owner layer`);
+  if (fixture.expectFailureSummary) {
+    assert.equal(projection.taskSuccess, false, `${fixture.id}: failure/partial should not project task success`);
+    assert.ok(['needs-work', 'needs-human', 'blocked'].includes(String(card.taskOutcome)), `${fixture.id}: failure/partial task outcome`);
+  }
+}
+
+function assertProtocolSuccessCanStillNeedWork(projection: unknown) {
+  assert.ok(isRecord(projection), 'protocol-only fixture projection');
+  const card = projection.taskRunCard;
+  const proxy = projection.userSatisfactionProxy;
+  assert.ok(isRecord(card), 'protocol-only fixture card');
+  assert.ok(isRecord(proxy), 'protocol-only fixture proxy');
+  assert.equal(projection.protocolSuccess, true, 'protocol-only fixture protocol success');
+  assert.equal(projection.taskSuccess, false, 'protocol-only fixture task success');
+  assert.equal(card.protocolStatus, 'protocol-success');
+  assert.equal(card.taskOutcome, 'needs-work');
+  assert.equal(card.status, 'needs-work');
+  assert.equal(proxy.status, 'needs-work');
+  assert.match(String(card.nextStep), /requested report|preserved table refs/i);
 }
 
 function requiredArray(record: Record<string, unknown>, key: string, fixtureId: string) {

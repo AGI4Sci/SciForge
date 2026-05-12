@@ -28,6 +28,18 @@ test('dedupes failure signatures across noisy transient provider messages', () =
   assert.equal(first.dedupeKey, second.dedupeKey);
 });
 
+test('classifies rate limited wording as provider-neutral transient failure', () => {
+  const signature = createFailureSignature({
+    message: 'HTTP Error 429: rate limited while fetching external issue metadata',
+    providerId: 'issue-api',
+    operation: 'metadata-fetch',
+  });
+
+  assert.equal(signature.kind, 'external-transient');
+  assert.equal(signature.layer, 'external-provider');
+  assert.equal(signature.retryable, true);
+});
+
 test('marks protocol success with unmet user goal as needs-work', () => {
   const card = createTaskRunCard({
     taskId: 'R-LIT-01',

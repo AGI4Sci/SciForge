@@ -534,6 +534,12 @@ test('background artifact and verification updates merge by runId, stageId, and 
 
   assert.equal(updated.artifacts[0].metadata?.runId, 'run-bg-artifact');
   assert.equal(updated.artifacts[0].metadata?.stageId, 'stage-report');
+  assert.equal(updated.executionUnits[0].id, 'EU-run-bg-artifact-stage-report');
+  assert.equal(updated.executionUnits[0].status, 'running');
+  assert.equal(updated.executionUnits[0].outputRef, 'run:run-bg-artifact#stage-report');
+  assert.deepEqual(updated.executionUnits[0].outputArtifacts, ['artifact-bg-report']);
+  assert.equal(updated.executionUnits[0].verificationRef, 'verification:verify-report');
+  assert.equal(updated.executionUnits[0].verificationVerdict, 'pass');
   assert.match(JSON.stringify(updated.runs[0].raw), /verify-report/);
   assert.match(JSON.stringify(updated.runs[0].raw), /artifact:artifact-bg-report/);
 });

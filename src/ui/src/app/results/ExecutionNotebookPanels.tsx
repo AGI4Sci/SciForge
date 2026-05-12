@@ -228,6 +228,8 @@ function executionStatusDetail(unit: RuntimeExecutionUnit) {
     unit.stdoutRef ? `stdout=${unit.stdoutRef}` : undefined,
     unit.stderrRef ? `stderr=${unit.stderrRef}` : undefined,
     unit.outputRef ? `output=${unit.outputRef}` : undefined,
+    unit.verificationRef ? `verification=${unit.verificationRef}` : undefined,
+    unit.verificationVerdict ? `verdict=${unit.verificationVerdict}` : undefined,
   ].filter(Boolean);
   return lines.length ? lines.join(' · ') : '';
 }
@@ -244,6 +246,8 @@ function executionEnvironmentText(rows: RuntimeExecutionUnit[]) {
     `stdoutRef: ${unit.stdoutRef || 'n/a'}`,
     `stderrRef: ${unit.stderrRef || 'n/a'}`,
     `outputRef: ${unit.outputRef || 'n/a'}`,
+    `verificationRef: ${unit.verificationRef || 'n/a'}`,
+    `verificationVerdict: ${unit.verificationVerdict || 'n/a'}`,
     `runtimeProfileId: ${unit.runtimeProfileId || 'n/a'}`,
     `selectedSkill: ${unit.routeDecision?.selectedSkill || 'n/a'}`,
     `selectedRuntime: ${unit.routeDecision?.selectedRuntime || 'n/a'}`,

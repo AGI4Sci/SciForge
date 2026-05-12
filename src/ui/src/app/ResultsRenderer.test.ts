@@ -7,6 +7,7 @@ import { ArtifactInspectorDrawer } from './results-renderer-artifact-inspector';
 import { nextPinnedObjectReferences, resolveObjectReferenceActionPlan } from './results-renderer-object-actions';
 import { RegistrySlot } from './results-renderer-registry-slot';
 import { createResultsRendererViewModel } from './results-renderer-view-model';
+import { applyBackgroundCompletionEventToSession } from './chat/sessionTransforms';
 import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract';
 import type { ObjectReference, RuntimeArtifact, SciForgeConfig, SciForgeRun, SciForgeSession } from '../domain';
 
@@ -237,6 +238,63 @@ test('ResultsRenderer execution focus renders only execution unit body', () => {
   assert.doesNotMatch(html, /Notebook note/);
   assert.doesNotMatch(html, /Raw JSON \/ stdout \/ stderr refs/);
   assert.doesNotMatch(html, /视图状态/);
+});
+
+test('ResultsRenderer execution focus shows background artifact stages as execution units', () => {
+  const session = applyBackgroundCompletionEventToSession(emptySession(), {
+    contract: 'sciforge.background-completion.v1',
+    type: 'background-stage-update',
+    runId: 'run-bg-render',
+    stageId: 'stage-report',
+    ref: 'run:run-bg-render#stage-report',
+    status: 'running',
+    message: '后台 report artifact 已写入。',
+    artifacts: [{
+      id: 'artifact-bg-render-report',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      data: { markdown: '# Background report' },
+    }],
+    verificationResults: [{ id: 'verify-bg-render', verdict: 'pass' }],
+    updatedAt: '2026-05-09T00:02:00.000Z',
+  });
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-bg-render', initialFocusMode: 'execution' });
+
+  assert.match(html, /EU-run-bg-render-stage-report/);
+  assert.match(html, /sciforge\.background-completion/);
+  assert.match(html, /Running/);
+  assert.match(html, /output=run:run-bg-render#stage-report/);
+  assert.match(html, /verification:verify-bg-render/);
+  assert.match(html, /verdict=pass/);
+});
+
+test('ResultsRenderer execution focus scopes execution units to the active run', () => {
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [
+      {
+        ...completedRun('run-old'),
+        objectReferences: [{ kind: 'artifact', ref: 'artifact:old-report', title: 'old report' }],
+      },
+      {
+        ...completedRun('run-new'),
+        objectReferences: [{ kind: 'artifact', ref: 'artifact:new-report', title: 'new report' }],
+      },
+    ] as never,
+    executionUnits: [
+      { id: 'EU-old', tool: 'old.tool', params: '{}', status: 'done', hash: 'old', outputRef: 'artifact:old-report' },
+      { id: 'EU-new', tool: 'new.tool', params: '{}', status: 'done', hash: 'new', outputRef: 'artifact:new-report' },
+    ],
+  };
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-old', initialFocusMode: 'execution' });
+
+  assert.match(html, /EU-old/);
+  assert.match(html, /old\.tool/);
+  assert.doesNotMatch(html, /EU-new/);
+  assert.doesNotMatch(html, /new\.tool/);
 });
 
 test('paper-card-list workbench slot is rendered by package policy', () => {

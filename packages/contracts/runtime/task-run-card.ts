@@ -126,7 +126,7 @@ export interface TaskRunCard {
   updatedAt: string;
 }
 
-const TRANSIENT_EXTERNAL_PATTERN = /\b(?:http(?:\s+error)?\s*(?:408|425|429|500|502|503|504)|too many requests|rate.?limit|quota|throttl|temporar(?:y|ily)|timeout|timed out|econnreset|etimedout|eai_again|enotfound|network is unreachable|service unavailable)\b/i;
+const TRANSIENT_EXTERNAL_PATTERN = /\b(?:http(?:\s+error)?\s*(?:408|425|429|500|502|503|504)|too many requests|rate.?limit(?:ed)?|quota|throttl|temporar(?:y|ily)|timeout|timed out|econnreset|etimedout|eai_again|enotfound|network is unreachable|service unavailable)\b/i;
 
 export function createFailureSignature(input: FailureSignatureInput): FailureSignature {
   const message = stringField(input.message) ?? stringField(input.code) ?? 'Unclassified failure.';

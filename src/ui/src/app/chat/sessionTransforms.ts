@@ -373,12 +373,13 @@ function mergeBackgroundRun(runs: SciForgeRun[], run: SciForgeRun) {
 function normalizeBackgroundExecutionUnits(event: BackgroundCompletionRuntimeEvent, updatedAt: string): RuntimeExecutionUnit[] {
   const declared = event.executionUnits ?? [];
   const failureReason = event.failureReason ?? event.cancellationReason;
-  if (!failureReason && !event.workEvidence?.length) return declared;
+  if (!backgroundEventHasExecutionEvidence(event, failureReason)) return declared;
   const status = event.status === 'completed'
     ? 'done'
     : event.status === 'running'
       ? 'running'
       : 'failed-with-reason';
+  const refs = backgroundEventRefs(event);
   const evidenceUnit: RuntimeExecutionUnit = {
     id: `EU-${event.runId}-${event.stageId ?? 'background'}`,
     tool: BACKGROUND_COMPLETION_TOOL_ID,
@@ -386,14 +387,54 @@ function normalizeBackgroundExecutionUnits(event: BackgroundCompletionRuntimeEve
     status,
     hash: `${event.runId}:${event.stageId ?? 'run'}`.slice(0, 48),
     time: updatedAt,
+    codeRef: refs.find((ref) => ref.kind === 'file')?.ref,
+    outputRef: event.ref ?? refs.find((ref) => ref.kind === 'artifact' || ref.kind === 'work-evidence' || ref.kind === 'verification')?.ref,
     failureReason,
     recoverActions: event.recoverActions,
     nextStep: event.nextStep,
     artifacts: event.artifacts?.map((artifact) => artifact.id),
     outputArtifacts: event.artifacts?.map((artifact) => artifact.id),
     verificationRef: firstVerificationRef(event),
+    verificationVerdict: firstVerificationVerdict(event),
   };
   return mergeExecutionUnits([evidenceUnit], declared);
+}
+
+function backgroundEventHasExecutionEvidence(event: BackgroundCompletionRuntimeEvent, failureReason?: string) {
+  return Boolean(
+    failureReason
+    || event.workEvidence?.length
+    || event.artifacts?.length
+    || event.verificationResults?.length
+    || event.refs?.length
+    || event.objectReferences?.length
+    || event.executionUnits?.length,
+  );
+}
+
+function backgroundEventRefs(event: BackgroundCompletionRuntimeEvent) {
+  return [
+    ...(event.refs ?? []),
+    ...((event.artifacts ?? []).map((artifact) => ({
+      ref: `artifact:${artifact.id}`,
+      kind: 'artifact' as const,
+      runId: event.runId,
+      stageId: event.stageId,
+      title: artifact.metadata?.title ? String(artifact.metadata.title) : artifact.id,
+    }))),
+    ...((event.verificationResults ?? []).map((result, index) => ({
+      ref: verificationRef(result, event, index),
+      kind: 'verification' as const,
+      runId: event.runId,
+      stageId: event.stageId,
+    }))),
+    ...((event.workEvidence ?? []).map((evidence, index) => ({
+      ref: workEvidenceRef(evidence, event, index),
+      kind: 'work-evidence' as const,
+      runId: event.runId,
+      stageId: event.stageId,
+    }))),
+  ];
 }
 
 function tagBackgroundArtifacts(artifacts: RuntimeArtifact[], event: BackgroundCompletionRuntimeEvent) {
@@ -527,6 +568,12 @@ function objectReferenceForBackgroundRun(run: SciForgeRun, event: BackgroundComp
 function firstVerificationRef(event: BackgroundCompletionRuntimeEvent) {
   const first = event.verificationResults?.[0];
   return first ? verificationRef(first, event, 0) : undefined;
+}
+
+function firstVerificationVerdict(event: BackgroundCompletionRuntimeEvent): RuntimeExecutionUnit['verificationVerdict'] {
+  const verdict = event.verificationResults?.[0]?.verdict;
+  if (verdict === 'pass' || verdict === 'fail' || verdict === 'uncertain' || verdict === 'needs-human' || verdict === 'unverified') return verdict;
+  return undefined;
 }
 
 function verificationRef(result: Record<string, unknown>, event: BackgroundCompletionRuntimeEvent, index: number) {

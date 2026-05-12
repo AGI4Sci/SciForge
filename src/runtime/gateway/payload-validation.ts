@@ -180,7 +180,7 @@ export async function validateAndNormalizePayload(
     verificationPolicy: contractPayload.verificationPolicy,
     workEvidence: contractPayload.workEvidence,
   };
-  const presentationPayload = attachResultPresentationContract(normalizedPayload);
+  const presentationPayload = attachResultPresentationContract(normalizedPayload, { request, skill, refs });
   return referenceValidationFailure
     ? attachPayloadValidationBudgetDebit(presentationPayload, skill, referenceValidationFailure, refs)
     : presentationPayload;
@@ -216,7 +216,7 @@ export function schemaValidationRepairPayload(input: {
     input.sourcePayload,
   );
   return attachPayloadValidationBudgetDebit(
-    repairPayload,
+    attachResultPresentationContract(repairPayload, { request: input.request, skill: input.skill, refs: repairRefs }),
     input.skill,
     validationFailure,
     repairRefs,
@@ -843,7 +843,10 @@ export function repairNeededPayload(
       validationFailure,
     }
     : refs;
-  return buildRepairNeededPayload(request, skill, reason, repairRefs, attemptPlanRefsBuilder(request, skill, reason));
+  return attachResultPresentationContract(
+    buildRepairNeededPayload(request, skill, reason, repairRefs, attemptPlanRefsBuilder(request, skill, reason)),
+    { request, skill, refs: repairRefs },
+  );
 }
 
 export function agentServerGenerationFailureReason(error: string, diagnostics?: AgentServerGenerationFailureDiagnostics) {

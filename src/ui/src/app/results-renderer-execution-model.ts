@@ -2,6 +2,7 @@ import type { ContractValidationFailure, ContractValidationFailureKind } from '@
 import type { SciForgeRun, SciForgeSession } from '../domain';
 import type { RuntimeResolvedViewPlan } from './results/viewPlanResolver';
 import { asString, asStringList, isRecord } from './results/resultArtifactHelpers';
+import { executionUnitsForRun } from './results/executionUnitsForRun';
 
 export type BackendRepairState = {
   id: string;
@@ -25,13 +26,7 @@ export function shouldOpenRunAuditDetails(session: SciForgeSession, activeRun?: 
 }
 
 export function failedExecutionUnits(session: SciForgeSession, activeRun?: SciForgeRun) {
-  const runRefs = new Set([activeRun?.id].filter((id): id is string => Boolean(id)));
-  return session.executionUnits.filter((unit) => {
-    const failed = isBlockingExecutionUnitStatus(unit.status);
-    if (!failed) return false;
-    if (!runRefs.size) return true;
-    return !unit.outputRef || Array.from(runRefs).some((runId) => unit.outputRef?.includes(runId));
-  });
+  return executionUnitsForRun(session, activeRun).filter((unit) => isBlockingExecutionUnitStatus(unit.status));
 }
 
 function isBlockingExecutionUnitStatus(status: unknown) {
@@ -63,7 +58,7 @@ export function runRecoverActions(session: SciForgeSession, activeRun?: SciForge
     ...contractValidationFailures(session, activeRun).flatMap((failure) => failure.recoverActions),
     ...backendRepairStates(session, activeRun).flatMap((state) => state.recoverActions),
     ...failedExecutionUnits(session, activeRun).flatMap((unit) => unit.recoverActions ?? []),
-    ...session.executionUnits.flatMap((unit) => unit.status === 'repair-needed' ? unit.recoverActions ?? [] : []),
+    ...executionUnitsForRun(session, activeRun).flatMap((unit) => unit.status === 'repair-needed' ? unit.recoverActions ?? [] : []),
   ]));
 }
 
@@ -80,7 +75,7 @@ export function runAuditRefs(session: SciForgeSession, activeRun?: SciForgeRun) 
     ]),
     ...backendRepairStates(session, activeRun).flatMap((state) => state.refs),
     ...(run?.references ?? []).map((ref) => ref.ref),
-    ...session.executionUnits.flatMap((unit) => [unit.codeRef, unit.stdoutRef, unit.stderrRef, unit.outputRef, unit.diffRef]).filter((ref): ref is string => Boolean(ref)),
+    ...executionUnitsForRun(session, activeRun).flatMap((unit) => [unit.codeRef, unit.stdoutRef, unit.stderrRef, unit.outputRef, unit.diffRef]).filter((ref): ref is string => Boolean(ref)),
   ]));
 }
 
@@ -259,10 +254,11 @@ function parseMaybeJsonObject(value: string): Record<string, unknown> | undefine
 
 export function rawAuditItems(session: SciForgeSession, activeRun: SciForgeRun | undefined, viewPlan: RuntimeResolvedViewPlan) {
   const run = activeRun ?? session.runs.at(-1);
+  const scopedExecutionUnits = executionUnitsForRun(session, run);
   return [
     run ? { id: `run-${run.id}`, label: `run ${run.id}`, value: JSON.stringify(run.raw ?? run, null, 2) } : undefined,
     session.artifacts.length ? { id: 'artifacts', label: `artifacts (${session.artifacts.length})`, value: JSON.stringify(session.artifacts, null, 2) } : undefined,
-    session.executionUnits.length ? { id: 'execution-units', label: `ExecutionUnit JSON (${session.executionUnits.length})`, value: JSON.stringify(session.executionUnits, null, 2) } : undefined,
+    scopedExecutionUnits.length ? { id: 'execution-units', label: `ExecutionUnit JSON (${scopedExecutionUnits.length})`, value: JSON.stringify(scopedExecutionUnits, null, 2) } : undefined,
     session.notebook.length ? { id: 'notebook', label: `timeline JSON (${session.notebook.length})`, value: JSON.stringify(session.notebook, null, 2) } : undefined,
     viewPlan.allItems.length ? { id: 'view-plan', label: `resolved view plan (${viewPlan.allItems.length})`, value: JSON.stringify(viewPlan.allItems, null, 2) } : undefined,
   ].filter((item): item is { id: string; label: string; value: string } => Boolean(item));

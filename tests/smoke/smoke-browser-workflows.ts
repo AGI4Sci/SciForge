@@ -220,11 +220,16 @@ try {
       workspaceWriterBaseUrl: 'http://127.0.0.1:65535',
       agentServerBaseUrl: 'http://127.0.0.1:65535',
     });
+    await offlineHealthPage.route('http://127.0.0.1:5174/api/sciforge/config', (route) => route.abort());
     await offlineHealthPage.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: 'domcontentloaded' });
     logStep('offline runtime health shows concrete recovery actions');
     await offlineHealthPage.getByText('Runtime Health').first().waitFor({ timeout: 15_000 });
     await offlineHealthPage.getByText('启动 npm run workspace:server 后刷新').waitFor({ timeout: 15_000 });
-    await offlineHealthPage.getByText(/启动或修复 AgentServer|AgentServer\/agent backend/).waitFor({ timeout: 15_000 });
+    await offlineHealthPage.locator('.runtime-health-item')
+      .filter({ hasText: 'AgentServer' })
+      .filter({ hasText: /启动或修复 AgentServer|AgentServer\/agent backend|127\.0\.0\.1:65535/ })
+      .first()
+      .waitFor({ timeout: 15_000 });
     await assertNoRawJsonErrors(offlineHealthPage, 'offline-health');
     await assertNoUnexplainedDisabledPrimaryButtons(offlineHealthPage, 'offline-health');
     await offlineHealthPage.close();
@@ -505,6 +510,13 @@ async function newConfiguredPage(
   const withStructureState = stateMode === true || stateMode === 'structure';
   const withReferenceState = stateMode === 'references';
   const configuredWorkspacePath = withStructureState ? join(workspace, 'structure-smoke') : workspace;
+  const workspaceState = withStructureState
+    ? structureWorkspaceState(configuredWorkspacePath)
+    : withReferenceState
+      ? referenceWorkspaceState(configuredWorkspacePath, referencePreviewPath)
+      : browserSmokeWorkspaceState(configuredWorkspacePath);
+  await mkdir(join(configuredWorkspacePath, '.sciforge'), { recursive: true });
+  await writeFile(join(configuredWorkspacePath, '.sciforge', 'workspace-state.json'), JSON.stringify(workspaceState, null, 2));
   const consoleWarnings: string[] = [];
   page.on('console', (message) => {
     if (message.type() === 'error') console.error(`[browser:${message.type()}] ${message.text()}`);
@@ -536,9 +548,9 @@ async function newConfiguredPage(
     window.localStorage.setItem('sciforge.workspace.v2', JSON.stringify(structureState ?? referenceState ?? defaultWorkspaceState));
   }, {
     config,
-    structureState: withStructureState ? structureWorkspaceState(configuredWorkspacePath) : undefined,
-    referenceState: withReferenceState ? referenceWorkspaceState(configuredWorkspacePath, referencePreviewPath) : undefined,
-    defaultWorkspaceState: browserSmokeWorkspaceState(configuredWorkspacePath),
+    structureState: withStructureState ? workspaceState : undefined,
+    referenceState: withReferenceState ? workspaceState : undefined,
+    defaultWorkspaceState: workspaceState,
   });
   (page as Page & { __sciforgePageErrors?: string[]; __sciforgeConsoleWarnings?: string[] }).__sciforgePageErrors = pageErrors;
   (page as Page & { __sciforgePageErrors?: string[]; __sciforgeConsoleWarnings?: string[] }).__sciforgeConsoleWarnings = consoleWarnings;

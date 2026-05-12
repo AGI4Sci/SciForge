@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceTaskRunResult } from '../runtime-types.js';
 
-const TRANSIENT_EXTERNAL_FAILURE_PATTERN = /\b(?:http(?:\s+error)?\s*(?:408|425|429|500|502|503|504)|too many requests|rate.?limit|quota|throttl|temporar(?:y|ily)|timeout|timed out|econnreset|etimedout|eai_again|enotfound|network is unreachable|service unavailable)\b/i;
+const TRANSIENT_EXTERNAL_FAILURE_PATTERN = /\b(?:http(?:\s+error)?\s*(?:408|425|429|500|502|503|504)|too many requests|rate.?limit(?:ed)?|quota|throttl|temporar(?:y|ily)|timeout|timed out|econnreset|etimedout|eai_again|enotfound|network is unreachable|service unavailable)\b/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

@@ -1,5 +1,15 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import {
+  createFailureSignature,
+  createTaskRunCard,
+  type FailureSignatureInput,
+  type TaskAttributionLayer,
+  type TaskOutcomeStatus,
+  type TaskProtocolStatus,
+  type TaskRoundStatus,
+  type TaskRunCardRef,
+} from '@sciforge-ui/runtime-contract/task-run-card';
 import type { TaskAttemptRecord } from './runtime-types.js';
 import { summarizeWorkEvidenceForHandoff } from './gateway/work-evidence-types.js';
 import { fileExists } from './workspace-task-runner.js';
@@ -23,13 +33,14 @@ export async function appendTaskAttempt(workspacePath: string, record: TaskAttem
   const normalizedRecord = recordWithAudit.status === 'done'
     ? { ...recordWithAudit, failureReason: undefined }
     : recordWithAudit;
+  const normalizedRecordWithCard = withTaskRunCard(normalizedRecord);
   const path = normalizedRecord.sessionBundleRef
     ? join(workspace, normalizedRecord.sessionBundleRef, 'records', 'task-attempts', `${safeName(record.id)}.json`)
     : join(workspace, '.sciforge', 'task-attempts', `${safeName(record.id)}.json`);
   const previous = await readAttempts(path);
   const attempts = [
-    ...previous.filter((item) => item.attempt !== normalizedRecord.attempt),
-    normalizedRecord,
+    ...previous.filter((item) => item.attempt !== normalizedRecordWithCard.attempt),
+    normalizedRecordWithCard,
   ].sort((left, right) => left.attempt - right.attempt);
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, JSON.stringify({
@@ -158,8 +169,164 @@ async function withAttemptDerivedMetadata(workspace: string, attempts: TaskAttem
   return Promise.all(attempts.map(async (attempt) => {
     const withEvidence = await withWorkEvidenceSummary(workspace, attempt);
     const withAudit = await withValidationRepairAuditMetadata(workspace, withEvidence);
-    return withValidationRepairTelemetryMetadata(workspace, withAudit);
+    const withTelemetry = await withValidationRepairTelemetryMetadata(workspace, withAudit);
+    return withTaskRunCard(withTelemetry);
   }));
+}
+
+function withTaskRunCard(record: TaskAttemptRecord): TaskAttemptRecord {
+  const refs = taskRunCardRefsForAttempt(record);
+  const failureSignatures = failureSignaturesForAttempt(record);
+  const genericAttributionLayer = genericAttributionLayerForAttempt(failureSignatures);
+  return {
+    ...record,
+    taskRunCard: createTaskRunCard({
+      id: `task-card:${record.id}:${record.attempt}`,
+      taskId: record.id,
+      title: record.skillId ?? record.id,
+      goal: record.prompt,
+      protocolStatus: protocolStatusForAttempt(record),
+      taskOutcome: outcomeStatusForAttempt(record, refs),
+      rounds: [{
+        round: record.attempt,
+        prompt: record.prompt,
+        expected: 'Complete the requested task with durable refs, visible output, and recoverable diagnostics.',
+        observed: observedAttemptSummary(record),
+        status: roundStatusForAttempt(record),
+        refs,
+      }],
+      refs,
+      failureSignatures,
+      genericAttributionLayer,
+      updatedAt: record.createdAt,
+      noHardcodeReview: {
+        appliesGenerally: true,
+        generalityStatement: 'TaskRunCard is projected only from stable task attempt fields, refs, status, and diagnostics; it does not branch on prompt wording, paper title, artifact name, or backend-specific success paths.',
+        counterExamples: [
+          'A semantic quality judgment still requires backend, verifier, or user evidence beyond this protocol card.',
+          'A dry-run planning message without task refs should not be treated as completed work.',
+        ],
+        ownerLayer: 'runtime-server',
+      },
+    }),
+  };
+}
+
+function genericAttributionLayerForAttempt(failureSignatures: FailureSignatureInput[]): TaskAttributionLayer {
+  const signatures = failureSignatures.map((signature) => createFailureSignature(signature));
+  return signatures.find((signature) => signature.kind === 'external-transient')?.layer
+    ?? signatures[0]?.layer
+    ?? 'runtime-server';
+}
+
+function protocolStatusForAttempt(record: TaskAttemptRecord): TaskProtocolStatus {
+  if (record.status === 'planned') return 'not-run';
+  if (record.status === 'running') return 'running';
+  if (record.status === 'done' || record.status === 'self-healed' || record.status === 'record-only') return 'protocol-success';
+  return 'protocol-failed';
+}
+
+function outcomeStatusForAttempt(record: TaskAttemptRecord, refs: TaskRunCardRef[]): TaskOutcomeStatus {
+  if (record.status === 'running' || record.status === 'planned') return 'unknown';
+  if (record.status === 'done' || record.status === 'self-healed') return 'satisfied';
+  if (record.status === 'needs-human') return 'needs-human';
+  if (record.status === 'repair-needed' || record.status === 'failed-with-reason') return refs.length ? 'needs-work' : 'blocked';
+  if (record.status === 'record-only') return refs.length ? 'needs-work' : 'unknown';
+  return refs.length ? 'needs-work' : 'blocked';
+}
+
+function roundStatusForAttempt(record: TaskAttemptRecord): TaskRoundStatus {
+  if (record.status === 'done' || record.status === 'self-healed') return 'passed';
+  if (record.status === 'needs-human') return 'needs-human';
+  if (record.status === 'record-only' || record.status === 'repair-needed') return 'partial';
+  if (record.status === 'planned') return 'not-run';
+  return 'failed';
+}
+
+function observedAttemptSummary(record: TaskAttemptRecord) {
+  const parts = [
+    `status=${record.status}`,
+    record.exitCode !== undefined ? `exitCode=${record.exitCode}` : '',
+    record.failureReason ? `failure=${record.failureReason}` : '',
+    record.schemaErrors?.length ? `schemaErrors=${record.schemaErrors.length}` : '',
+    record.workEvidenceSummary ? `workEvidence=${record.workEvidenceSummary.count}` : '',
+  ].filter(Boolean);
+  return parts.join('; ') || 'Attempt recorded without additional diagnostics.';
+}
+
+function taskRunCardRefsForAttempt(record: TaskAttemptRecord): TaskRunCardRef[] {
+  return [
+    taskRef('execution-unit', `execution-unit:${record.id}`, record.skillId ?? record.id, record.status),
+    taskRef('file', record.codeRef, 'task code'),
+    taskRef('file', record.inputRef, 'task input'),
+    taskRef('artifact', record.outputRef, 'task output'),
+    taskRef('log', record.stdoutRef, 'stdout'),
+    taskRef('log', record.stderrRef, 'stderr'),
+    taskRef('bundle', record.sessionBundleRef, 'session bundle'),
+    ...attemptRecordRefs(record),
+  ].filter((ref): ref is TaskRunCardRef => Boolean(ref));
+}
+
+function attemptRecordRefs(record: TaskAttemptRecord): TaskRunCardRef[] {
+  const current = record as TaskAttemptRecord & { refs?: Record<string, unknown> };
+  if (!isRecord(current.refs)) return [];
+  return Object.entries(current.refs).flatMap(([key, value]) => {
+    const values = Array.isArray(value)
+      ? value
+      : typeof value === 'string'
+        ? [value]
+        : [];
+    return values
+      .filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0)
+      .map((ref) => taskRef(refKindForAttemptRefKey(key), ref, key))
+      .filter((ref): ref is TaskRunCardRef => Boolean(ref));
+  });
+}
+
+function refKindForAttemptRefKey(key: string): TaskRunCardRef['kind'] {
+  if (/audit|verification/i.test(key)) return 'verification';
+  if (/log|stderr|stdout/i.test(key)) return 'log';
+  if (/bundle/i.test(key)) return 'bundle';
+  if (/artifact|output/i.test(key)) return 'artifact';
+  return 'other';
+}
+
+function taskRef(
+  kind: TaskRunCardRef['kind'],
+  ref: string | undefined,
+  label?: string,
+  status?: string,
+): TaskRunCardRef | undefined {
+  if (!ref?.trim()) return undefined;
+  return { kind, ref: ref.trim(), label, status };
+}
+
+function failureSignaturesForAttempt(record: TaskAttemptRecord): FailureSignatureInput[] {
+  const signatures: FailureSignatureInput[] = [];
+  if (record.failureReason) {
+    signatures.push({
+      message: record.failureReason,
+      operation: record.skillId,
+      refs: [record.stderrRef, record.stdoutRef, record.outputRef].filter((ref): ref is string => Boolean(ref)),
+    });
+  }
+  for (const error of record.schemaErrors ?? []) {
+    signatures.push({
+      kind: 'schema-drift' as const,
+      message: error,
+      schemaPath: 'task-attempt.schemaErrors',
+      refs: [record.outputRef].filter((ref): ref is string => Boolean(ref)),
+    });
+  }
+  if (record.exitCode !== undefined && record.exitCode !== 0 && !record.failureReason) {
+    signatures.push({
+      message: `Workspace task exited with code ${record.exitCode}.`,
+      operation: record.skillId,
+      code: `exit-${record.exitCode}`,
+      refs: [record.stderrRef, record.stdoutRef].filter((ref): ref is string => Boolean(ref)),
+    });
+  }
+  return signatures;
 }
 
 async function withWorkEvidenceSummary(workspace: string, record: TaskAttemptRecord): Promise<TaskAttemptRecord> {

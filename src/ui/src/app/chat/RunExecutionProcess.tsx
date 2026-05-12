@@ -7,6 +7,7 @@ import {
   objectReferenceForArtifactSummary,
 } from '../../../../../packages/support/object-references';
 import { executionStatusLabel, executionStatusShortLabel } from '../results/executionStatusPresentation';
+import { executionUnitsForRun } from '../results/executionUnitsForRun';
 
 type ExecutionProcessStep = {
   id: string;
@@ -29,7 +30,7 @@ export function RunExecutionProcess({
   onObjectFocus: (reference: ObjectReference) => void;
 }) {
   const run = session.runs.find((item) => item.id === runId);
-  const units = executionUnitsForRun(run, session).slice(-8);
+  const units = executionUnitsForRun(session, run).slice(-8);
   if (!run && !units.length && !trace) return null;
   const auditObjectReferences = objectReferencesForAudit(run, session, runId);
   const steps = executionProcessSteps(run, units, auditObjectReferences, trace);
@@ -112,22 +113,6 @@ function executionProcessSteps(
     });
   }
   return steps.slice(0, 24);
-}
-
-function executionUnitsForRun(run: SciForgeRun | undefined, session: SciForgeSession) {
-  if (!run) return [];
-  const artifactRefs = new Set((run.objectReferences ?? [])
-    .filter((reference) => reference.kind === 'artifact')
-    .map((reference) => reference.ref.replace(/^artifact:/i, '')));
-  const packageKey = run.scenarioPackageRef ? `${run.scenarioPackageRef.id}@${run.scenarioPackageRef.version}` : '';
-  const matched = session.executionUnits.filter((unit) => {
-    const unitPackageKey = unit.scenarioPackageRef ? `${unit.scenarioPackageRef.id}@${unit.scenarioPackageRef.version}` : '';
-    if (packageKey && unitPackageKey === packageKey) return true;
-    if (unit.outputArtifacts?.some((artifactId) => artifactRefs.has(artifactId))) return true;
-    if (unit.artifacts?.some((artifactId) => artifactRefs.has(artifactId))) return true;
-    return false;
-  });
-  return matched.length ? matched : session.executionUnits.filter((unit) => unit.status !== 'planned').slice(-6);
 }
 
 function objectReferencesForAudit(run: SciForgeRun | undefined, session: SciForgeSession, runId: string) {

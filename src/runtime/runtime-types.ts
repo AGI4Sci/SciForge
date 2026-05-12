@@ -1,5 +1,6 @@
 import type { SciForgeAgentHandoffSource, SciForgeSharedSkillDomain, SharedAgentHandoffContract } from '@sciforge-ui/runtime-contract/handoff';
 import type { AgentCompactCapability, AgentContextWindowSource, RuntimeVerificationVerdict } from '@sciforge-ui/runtime-contract';
+import type { TaskRunCard } from '@sciforge-ui/runtime-contract/task-run-card';
 import type { RuntimeBackendContextWindowSource } from '@sciforge-ui/runtime-contract/agent-backend-policy';
 import type { CapabilityInvocationBudgetDebitRecord } from '@sciforge-ui/runtime-contract/capability-budget';
 import type { SkillEntrypointType } from '@sciforge-skill/packages/runtime-policy';
@@ -576,5 +577,6 @@ export interface TaskAttemptRecord {
     retryAttempted?: boolean;
     retrySucceeded?: boolean;
   };
+  taskRunCard?: TaskRunCard;
   createdAt: string;
 }

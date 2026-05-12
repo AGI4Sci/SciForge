@@ -52,6 +52,38 @@ test('results renderer execution model normalizes response JSON failures and ref
   ]);
 });
 
+test('results renderer execution model scopes failure units through active run artifact refs', () => {
+  const session = executionFailureSession();
+  session.runs.push({
+    id: 'run-other',
+    scenarioId: 'literature-evidence-review',
+    status: 'failed',
+    prompt: 'other report',
+    response: '',
+    createdAt: '2026-05-10T00:02:00.000Z',
+    objectReferences: [{ kind: 'artifact', ref: 'artifact:other-report', title: 'other report' }],
+  } as never);
+  session.runs[0]!.objectReferences = [{ kind: 'artifact', ref: 'artifact:bad-report', title: 'bad report' }] as never;
+  session.executionUnits.push({
+    id: 'EU-other',
+    tool: 'report.validate',
+    params: '{}',
+    status: 'repair-needed',
+    hash: 'hash-other',
+    outputRef: 'artifact:other-report',
+    recoverActions: ['wrong run action'],
+  });
+
+  const failures = runAuditBlockers(session, session.runs[0]);
+  const refs = runAuditRefs(session, session.runs[0]);
+  const recoverActions = runRecoverActions(session, session.runs[0]);
+
+  assert.ok(failures.some((line) => line.includes('EU-report')));
+  assert.ok(refs.includes('artifact:bad-report'));
+  assert.equal(refs.includes('artifact:other-report'), false);
+  assert.equal(recoverActions.includes('wrong run action'), false);
+});
+
 function executionFailureSession(): SciForgeSession {
   return {
     schemaVersion: 2,

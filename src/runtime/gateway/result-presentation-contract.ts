@@ -5,6 +5,10 @@ import {
 } from '@sciforge-ui/runtime-contract/result-presentation';
 import type { ToolPayload } from '../runtime-types.js';
 import { isRecord, toRecordList } from '../gateway-utils.js';
+import {
+  attachTaskOutcomeProjection,
+  type GatewayTaskOutcomeProjectionContext,
+} from './task-outcome-projection.js';
 
 export { validateResultPresentationContract };
 export type { ResultPresentationContract };
@@ -28,23 +32,26 @@ export function materializeResultPresentationContract(input: ToolPayload | Resul
   });
 }
 
-export function attachResultPresentationContract(payload: ToolPayload): ToolPayload {
+export function attachResultPresentationContract(
+  payload: ToolPayload,
+  context: GatewayTaskOutcomeProjectionContext = {},
+): ToolPayload {
   const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
   const existing = displayIntent.resultPresentation;
   if (validateResultPresentationContract(existing).ok) {
-    return {
+    return attachTaskOutcomeProjection({
       ...payload,
       displayIntent,
-    };
+    }, context);
   }
 
-  return {
+  return attachTaskOutcomeProjection({
     ...payload,
     displayIntent: {
       ...displayIntent,
       resultPresentation: materializeResultPresentationContract({ payload }),
     },
-  };
+  }, context);
 }
 
 function stringField(value: unknown) {

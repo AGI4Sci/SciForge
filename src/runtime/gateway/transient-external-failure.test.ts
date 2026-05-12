@@ -26,6 +26,7 @@ function payload(overrides: Partial<ToolPayload> = {}): ToolPayload {
 
 test('detects provider rate limits and network timeouts as transient external failures', () => {
   assert.equal(isTransientExternalFailure('HTTP Error 429: Unknown Error'), true);
+  assert.equal(isTransientExternalFailure('HTTP Error 429: rate limited by provider'), true);
   assert.equal(isTransientExternalFailure('provider timed out after 30s'), true);
   assert.equal(isTransientExternalFailure('schema validation failed'), false);
 });

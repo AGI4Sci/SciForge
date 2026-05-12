@@ -29,6 +29,7 @@ import {
   isRecord,
   toRecordList,
 } from './results/resultArtifactHelpers';
+import { executionUnitsForRun } from './results/executionUnitsForRun';
 import {
   descriptorCanUseWorkspacePreview,
   descriptorDerivativeKind,
@@ -338,7 +339,7 @@ function PrimaryResult({
 }) {
   const { viewPlan } = model;
   if (focusMode === 'execution') {
-    return <ExecutionOnlyResult session={session} />;
+    return <ExecutionOnlyResult session={session} activeRun={activeRun} />;
   }
   return (
     <div className="stack">
@@ -407,10 +408,11 @@ function PrimaryResult({
   );
 }
 
-function ExecutionOnlyResult({ session }: { session: SciForgeSession }) {
+function ExecutionOnlyResult({ session, activeRun }: { session: SciForgeSession; activeRun?: SciForgeRun }) {
+  const units = executionUnitsForRun(session, activeRun);
   return (
     <div className="stack">
-      <ExecutionPanel session={session} executionUnits={session.executionUnits} embedded />
+      <ExecutionPanel session={session} executionUnits={units} embedded />
     </div>
   );
 }
@@ -470,16 +472,17 @@ function RunAuditDetails({
 }) {
   const rawItems = rawAuditItems(session, activeRun, viewPlan);
   const failureCount = failedExecutionUnits(session, activeRun).length;
+  const units = executionUnitsForRun(session, activeRun ?? session.runs.at(-1));
   return (
     <details className="result-details-panel audit-details-panel" open={defaultOpen}>
       <summary>
         <span>查看运行细节</span>
         <Badge variant={failureCount ? 'danger' : 'muted'}>
-          {failureCount ? `${failureCount} failure` : `${session.executionUnits.length} EU`}
+          {failureCount ? `${failureCount} failure` : `${units.length} EU`}
         </Badge>
       </summary>
       <RunAuditOverview session={session} activeRun={activeRun} />
-      <ExecutionPanel session={session} executionUnits={session.executionUnits} embedded />
+      <ExecutionPanel session={session} executionUnits={units} embedded />
       <NotebookTimeline scenarioId={scenarioId} notebook={session.notebook} embedded />
       <Card className="code-card">
         <SectionHeader icon={Terminal} title="Raw JSON / stdout / stderr refs" />

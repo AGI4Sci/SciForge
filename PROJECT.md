@@ -18,6 +18,8 @@ Token 高效：每轮只携带当前任务真正需要的 state digest、refs、
 
 本阶段重点不是扩展新能力，也不是为某个固定案例打补丁，而是建立通用的多轮对话状态、恢复、历史编辑、分支、token budget、回答速度、benchmark 和指标体系，让任意场景下的 agent 行为都更可预测、更可审计、更贴近用户期望。
 
+请用codex(你)的内置浏览器端到端调试,不用外部浏览器
+
 
 ## 开工前必读
 
@@ -81,6 +83,34 @@ Token 高效：每轮只携带当前任务真正需要的 state digest、refs、
 - [x] `npm run smoke:deep-report`
 - [x] `npm run smoke:agentserver-direct-text`
 - [x] `npm run build`
+
+### 2026-05-12 Milestone：Task outcome 投影与 Run-scoped E2E 收敛
+
+本轮继续以多个 sub agents 并行检查 TODO-GEN、网页 E2E、partial/background、active run 范围和本地服务验证；主线程使用 Computer Use 打开 `http://127.0.0.1:5173/`，确认首页、Runtime Health、Scenario Library、Workspace Writer、AgentServer 和 Model Backend 均可见且 online。根据并行报告完成以下通用修复：
+
+- [x] task attempt ledger 自动生成 `TaskRunCard`，把 goal、round、refs、failure signatures、session bundle、protocol status、task outcome、next step 和 NoHardcodeReview 一起持久化到 attempt 记录。
+- [x] gateway `resultPresentation` 同步挂载 `taskOutcomeProjection`：区分 protocol success 与 task success，生成 user satisfaction proxy 和 next-step attribution，不按 prompt、场景、文件名或 backend 写特例。
+- [x] 扩展 provider-neutral transient failure 识别：`rate limited` 与已有 HTTP 429/5xx、quota、timeout、DNS/network 类失败统一归为 external transient。
+- [x] partial/background completion 只要带 artifact、verification、workEvidence、refs 或失败/取消信息，就合成可审计 ExecutionUnit，并在执行面板展示 verificationRef / verificationVerdict。
+- [x] 抽出 run-scoped ExecutionUnit 匹配，ResultsRenderer、RunExecutionProcess、失败审计、recover actions 和 raw audit 只展示 active run 相关执行单元，避免同 session 多 run 串上下文。
+- [x] 修复 browser smoke 的本地服务隔离：离线 Runtime Health 不再被主实例 `5174/config` fallback 污染，结构场景 fixture 会写入临时 workspace state，覆盖真实刷新恢复路径。
+
+本轮验证：
+
+- [x] Computer Use：打开本地主页，确认 Runtime Health 中 Web UI、Workspace Writer、AgentServer、Model Backend、Scenario Library 均 online，页面无白屏。
+- [x] `node --import tsx --test src/runtime/task-attempt-history.test.ts packages/contracts/runtime/task-run-card.test.ts src/runtime/gateway/transient-external-failure.test.ts src/runtime/gateway/result-presentation-contract.test.ts`
+- [x] `node --import tsx tests/smoke/smoke-result-presentation-contract.ts`
+- [x] `node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts src/ui/src/app/ResultsRenderer.test.ts src/ui/src/app/chat/RunExecutionProcess.test.ts src/ui/src/app/chat/ArchiveDrawer.test.tsx src/ui/src/app/results-renderer-execution-model.test.ts`
+- [x] `npm run typecheck`
+- [x] `npm run smoke:runtime-contracts`
+- [x] `npm run smoke:browser`
+- [x] `npm run build`
+
+后续保留：
+
+- [ ] 建立 FailureSignature run-level registry，跨 run 去重 schema drift、timeout、repair no-op 和 external transient。
+- [ ] 将 TaskRunCard 暴露到 task-attempt API / 历史摘要 UI，替换当前部分自建 compact summary。
+- [ ] 给 schema normalization 增加显式白名单与 audit note，区分结构漂移修复和语义/安全错误 fail-closed。
 
 
 
