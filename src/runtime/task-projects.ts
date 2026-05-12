@@ -6,12 +6,15 @@ import {
   TASK_PROJECT_PLAN_SCHEMA_VERSION,
   TASK_PROJECT_SCHEMA_VERSION,
   TASK_PROJECT_STAGE_HANDOFF_SCHEMA_VERSION,
+  TASK_STAGE_BRANCH_SCHEMA_VERSION,
   TASK_STAGE_SCHEMA_VERSION,
 } from './task-project-contracts.js';
 import type {
   AppendTaskProjectGuidanceInit,
   AppendTaskStageInit,
   CreateTaskProjectInit,
+  ForkTaskProjectStageInit,
+  ForkTaskProjectStageResult,
   ListRecentTaskProjectsFilters,
   ResolveTaskProjectGuidancePatch,
   StageEvidenceInput,
@@ -30,6 +33,7 @@ import type {
   TaskProjectStatus,
   TaskProjectSummaryForHandoff,
   TaskStage,
+  TaskStageBranchMetadata,
   TaskStageKind,
   TaskStageStatus,
   UpdateTaskStagePatch,
@@ -43,6 +47,15 @@ import { taskProjectSkillDomain } from '@sciforge-ui/runtime-contract/handoff';
 import { taskProjectStageAdapterSkillAvailability } from '../../packages/skills/runtime-policy';
 import { maybeWriteSkillPromotionProposal } from './skill-promotion.js';
 import { buildTaskProjectHandoffSummary } from './task-project-handoff.js';
+import {
+  NOTEBOOK_BRANCH_CONTRACT_ID,
+  buildNotebookBranchReplayPlan,
+  notebookBranchPlanAllowsContinuation,
+} from '@sciforge-ui/runtime-contract/notebook-branch';
+import type {
+  NotebookBranchReplayStep,
+  NotebookBranchStepInput,
+} from '@sciforge-ui/runtime-contract/notebook-branch';
 import {
   assertWorkspaceRelative,
   fileRef,
@@ -78,6 +91,7 @@ export {
   TASK_PROJECT_PLAN_SCHEMA_VERSION,
   TASK_PROJECT_SCHEMA_VERSION,
   TASK_PROJECT_STAGE_HANDOFF_SCHEMA_VERSION,
+  TASK_STAGE_BRANCH_SCHEMA_VERSION,
   TASK_STAGE_SCHEMA_VERSION,
 } from './task-project-contracts.js';
 export { taskProjectPathExists } from './task-project-store.js';
@@ -85,6 +99,8 @@ export type {
   AppendTaskProjectGuidanceInit,
   AppendTaskStageInit,
   CreateTaskProjectInit,
+  ForkTaskProjectStageInit,
+  ForkTaskProjectStageResult,
   ListRecentTaskProjectsFilters,
   ResolveTaskProjectGuidancePatch,
   StageEvidenceInput,
@@ -100,6 +116,7 @@ export type {
   TaskProjectStagePromotionOptions,
   TaskProjectStageRunOptions,
   TaskProjectStageRunResult,
+  TaskStageBranchMetadata,
   TaskProjectStatus,
   TaskProjectSummaryForHandoff,
   TaskStage,
@@ -347,6 +364,94 @@ export async function recordStageEvidence(workspace: string, projectId: string, 
     updatedAt: now,
   });
   return { ...updated, evidenceRef };
+}
+
+export async function forkTaskProjectStage(
+  workspace: string,
+  projectId: string,
+  init: ForkTaskProjectStageInit,
+): Promise<ForkTaskProjectStageResult> {
+  const workspaceRoot = normalizeWorkspace(workspace);
+  const read = await readTaskProject(workspaceRoot, projectId);
+  const planStage = findPlanStage(read.plan, init.baseStageId);
+  const baseStage = await readJson<TaskStage>(resolveWorkspacePath(workspaceRoot, stripFileRef(planStage.ref)));
+  const now = init.createdAt ?? new Date().toISOString();
+  const branchPlan = buildNotebookBranchReplayPlan({
+    notebookId: read.project.id,
+    sourceBranchId: init.sourceBranchId,
+    branchId: init.branchId,
+    forkFromStepId: baseStage.id,
+    parameterChanges: init.parameterChanges,
+    requestedAt: now,
+    reason: init.reason ?? `Rerun task project stage ${baseStage.id} with updated parameters.`,
+    steps: read.stages.map((stage) => notebookBranchStepForTaskStage(stage, read.project.id)),
+  });
+  if (!notebookBranchPlanAllowsContinuation(branchPlan)) {
+    throw new Error(`Task project branch replay is blocked: ${branchPlan.diagnostics.join('; ') || 'invalid replay plan'}`);
+  }
+
+  const preservedRefs = branchPlan.retainedSteps.flatMap((step) => refsFromNotebookBranchReplayStep(step));
+  const invalidatedRefs = branchPlan.affectedRefs.map((ref) => ref.ref);
+  const evidence = await recordStageEvidence(workspaceRoot, read.project.id, baseStage.id, {
+    id: `${baseStage.id}-${branchPlan.branchId}-branch`,
+    kind: 'task-stage-branch',
+    title: `Branch ${branchPlan.branchId} from ${baseStage.id}`,
+    summary: `Forked ${read.project.id}/${baseStage.id} with ${init.parameterChanges.length} parameter change(s); downstream refs are invalid for the branch until rerun.`,
+    data: {
+      schemaVersion: TASK_STAGE_BRANCH_SCHEMA_VERSION,
+      contract: NOTEBOOK_BRANCH_CONTRACT_ID,
+      branchPlan,
+    },
+    createdAt: now,
+  });
+
+  const branchMetadata: TaskStageBranchMetadata = {
+    schemaVersion: TASK_STAGE_BRANCH_SCHEMA_VERSION,
+    contract: NOTEBOOK_BRANCH_CONTRACT_ID,
+    mode: 'rerun-from-stage',
+    branchId: branchPlan.branchId,
+    sourceBranchId: branchPlan.sourceBranchId,
+    baseStageId: baseStage.id,
+    baseStageRef: planStage.ref,
+    branchPlanRef: evidence.evidenceRef,
+    parameterPatchRef: evidence.evidenceRef,
+    parameterChanges: init.parameterChanges,
+    preservedRefs,
+    invalidatedRefs,
+    sideEffectPolicy: branchPlan.sideEffectPolicy,
+    createdAt: now,
+  };
+
+  const forked = await appendTaskStage(workspaceRoot, read.project.id, {
+    kind: init.kind ?? baseStage.kind,
+    goal: init.goal ?? `${baseStage.goal} (branch ${branchPlan.branchId})`,
+    status: init.status ?? 'planned',
+    codeRef: init.codeRef ?? baseStage.codeRef,
+    inputRef: init.inputRef ?? baseStage.inputRef,
+    evidenceRefs: stableStringList([evidence.evidenceRef, ...(init.evidenceRefs ?? [])]),
+    artifactRefs: init.artifactRefs,
+    diagnostics: [
+      `Notebook branch ${branchPlan.branchId} starts at ${baseStage.id}; source downstream refs are invalidated for this branch.`,
+    ],
+    recoverActions: [
+      'Run this branch stage before using any downstream source artifacts in the branch result.',
+    ],
+    nextStep: `Run branch ${branchPlan.branchId} from stage ${baseStage.id}.`,
+    createdAt: now,
+    metadata: {
+      ...(init.metadata ?? {}),
+      branch: branchMetadata,
+    },
+  });
+
+  return {
+    ...forked,
+    stage: forked.stage,
+    baseStage,
+    branchPlan,
+    branchEvidenceRef: evidence.evidenceRef,
+    branchMetadata,
+  };
 }
 
 export async function runTaskProjectStage(
@@ -724,6 +829,60 @@ async function workspaceTaskSpecForStage(workspaceRoot: string, project: TaskPro
     stderrRel: stripFileRef(stage.stderrRef ?? fileRef(join(project.paths.logs, `${safeStageId}.stderr.log`))),
     retentionProtectedInputRels: stage.inputRef ? [stripFileRef(stage.inputRef)] : undefined,
   };
+}
+
+function notebookBranchStepForTaskStage(stage: TaskStage, projectId: string): NotebookBranchStepInput {
+  return {
+    id: stage.id,
+    index: stage.index,
+    title: stage.goal,
+    status: notebookStatusForTaskStage(stage.status),
+    branchId: branchIdFromTaskStage(stage) ?? 'main',
+    parameters: parametersFromTaskStage(stage),
+    inputRefs: [stage.inputRef].filter((ref): ref is string => Boolean(ref)),
+    outputRefs: [stage.outputRef].filter((ref): ref is string => Boolean(ref)),
+    artifactRefs: stage.artifactRefs,
+    codeRefs: [stage.codeRef].filter((ref): ref is string => Boolean(ref)),
+    stdoutRefs: [stage.stdoutRef].filter((ref): ref is string => Boolean(ref)),
+    stderrRefs: [stage.stderrRef].filter((ref): ref is string => Boolean(ref)),
+    executionUnitRefs: [`task-stage:${projectId}/${stage.id}`],
+    dependencyRefs: stage.evidenceRefs,
+  };
+}
+
+function notebookStatusForTaskStage(status: TaskStageStatus): NotebookBranchStepInput['status'] {
+  if (status === 'done' || status === 'skipped') return 'completed';
+  if (status === 'running') return 'running';
+  if (status === 'failed') return 'failed';
+  if (status === 'repair-needed' || status === 'blocked') return 'partial';
+  return 'not-run';
+}
+
+function parametersFromTaskStage(stage: TaskStage): Record<string, unknown> {
+  const metadata = isRecord(stage.metadata) ? stage.metadata : {};
+  const branch = isRecord(metadata.branch) ? metadata.branch : {};
+  const directParameters = isRecord(metadata.parameters) ? metadata.parameters : undefined;
+  const branchParameters = isRecord(branch.parameters) ? branch.parameters : undefined;
+  return { ...(branchParameters ?? {}), ...(directParameters ?? {}) };
+}
+
+function branchIdFromTaskStage(stage: TaskStage) {
+  const metadata = isRecord(stage.metadata) ? stage.metadata : {};
+  const branch = isRecord(metadata.branch) ? metadata.branch : {};
+  return typeof branch.branchId === 'string' && branch.branchId.trim() ? branch.branchId.trim() : undefined;
+}
+
+function refsFromNotebookBranchReplayStep(step: NotebookBranchReplayStep) {
+  return stableStringList([
+    ...step.inputRefs,
+    ...step.outputRefs,
+    ...step.artifactRefs,
+    ...step.codeRefs,
+    ...step.stdoutRefs,
+    ...step.stderrRefs,
+    ...step.executionUnitRefs,
+    ...step.dependencyRefs,
+  ].map((ref) => ref.ref));
 }
 
 async function readStageInput(workspaceRoot: string, inputRef: string | undefined): Promise<Record<string, unknown>> {

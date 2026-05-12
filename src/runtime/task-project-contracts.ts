@@ -4,6 +4,10 @@ import type {
   TaskProjectStatus as RuntimeTaskProjectStatus,
   TaskStageStatus as RuntimeTaskStageStatus,
 } from '@sciforge-ui/runtime-contract';
+import type {
+  NotebookBranchParameterChange,
+  NotebookBranchReplayPlan,
+} from '@sciforge-ui/runtime-contract/notebook-branch';
 
 export {
   TASK_PROJECT_STATUSES,
@@ -13,6 +17,7 @@ export {
 export const TASK_PROJECT_SCHEMA_VERSION = 'sciforge.task-project.v1';
 export const TASK_PROJECT_PLAN_SCHEMA_VERSION = 'sciforge.task-project-plan.v1';
 export const TASK_STAGE_SCHEMA_VERSION = 'sciforge.task-stage.v1';
+export const TASK_STAGE_BRANCH_SCHEMA_VERSION = 'sciforge.task-stage-branch.v1';
 export const TASK_PROJECT_HANDOFF_SCHEMA_VERSION = 'sciforge.task-project-handoff.v1';
 export const TASK_PROJECT_STAGE_HANDOFF_SCHEMA_VERSION = 'sciforge.task-project-stage-handoff.v1';
 
@@ -97,6 +102,23 @@ export interface TaskStage {
   metadata?: Record<string, unknown>;
 }
 
+export interface TaskStageBranchMetadata {
+  schemaVersion: typeof TASK_STAGE_BRANCH_SCHEMA_VERSION;
+  contract: 'sciforge.notebook-branch-replay.v1';
+  mode: 'rerun-from-stage';
+  branchId: string;
+  sourceBranchId: string;
+  baseStageId: string;
+  baseStageRef: string;
+  branchPlanRef: string;
+  parameterPatchRef: string;
+  parameterChanges: NotebookBranchParameterChange[];
+  preservedRefs: string[];
+  invalidatedRefs: string[];
+  sideEffectPolicy: 'fork-before-write';
+  createdAt: string;
+}
+
 export interface TaskProjectPlanStage {
   id: string;
   index: number;
@@ -161,6 +183,31 @@ export interface TaskProjectStageRunResult {
   output?: ToolPayload | WorkEvidence;
   outputKind?: 'tool-payload' | 'work-evidence';
   failureReason?: string;
+}
+
+export interface ForkTaskProjectStageInit {
+  baseStageId: string | number;
+  branchId?: string;
+  sourceBranchId?: string;
+  goal?: string;
+  kind?: TaskStageKind;
+  status?: TaskStageStatus;
+  codeRef?: string;
+  inputRef?: string;
+  parameterChanges: NotebookBranchParameterChange[];
+  reason?: string;
+  createdAt?: string;
+  evidenceRefs?: string[];
+  artifactRefs?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface ForkTaskProjectStageResult extends TaskProjectReadResult {
+  stage: TaskStage;
+  baseStage: TaskStage;
+  branchPlan: NotebookBranchReplayPlan;
+  branchEvidenceRef: string;
+  branchMetadata: TaskStageBranchMetadata;
 }
 
 export interface TaskProjectNextStageHandoffSummary {

@@ -525,6 +525,32 @@ Failure/Improvement Notes：
 - [x] `npm run smoke:runtime-gateway-modules`
 
 
+### 2026-05-13 Milestone：Notebook Branch Replay 与 TaskProject 分支收敛
+
+本轮把 R-DATA-06 从“Notebook 风格交互”抽象成可验证的运行时能力：用户回到第 2 个分析步骤改参数时，系统必须保留上游中间文件、在新 branch 上重跑该步骤及下游步骤，并把原下游输出标成 branch-invalid，不允许静默复用旧结果：
+
+- [x] 新增 `sciforge.notebook-branch.v1` / `sciforge.notebook-branch-replay.v1` contract，产出 retained upstream、branch-local rerun、invalidated downstream、affected refs、parameter digest 和 `fork-before-write` side-effect policy。
+- [x] 新增 `forkTaskProjectStage`，把 Notebook branch replay 落到 TaskProject runtime：分支 stage 复用 base stage code/input，写入 `TaskStageBranchMetadata`、branch evidence、parameter patch refs、preserved refs 和 invalidated refs。
+- [x] 分支运行继续复用 `runTaskProjectStage`，branch output 的 `artifactRefs` / `evidenceRefs` / stdout/stderr / ToolPayload lineage 进入原有 TaskProject 持久化链路。
+- [x] 新增 `smoke:notebook-branch`，覆盖三步 notebook fixture：保留第 1 步中间文件、从第 2 步改 `model.alpha` 分支、使第 2/3 步旧输出失效，并记录新的 branch artifact lineage。
+
+Failure/Improvement Notes：
+
+- Notebook branch 不能等同于 conversation history edit；前者是数据分析步骤分支，落点应是 TaskProject stage/evidence/artifact lineage，后者只负责消息历史的 revert/continue 冲突。
+- “回到第 2 步换参数”必须是 fork-before-write：旧第 2/3 步输出可作为 source evidence，但不能作为新 branch 结果复用。
+- 后续 UI 可在 `notebook-timeline` / `workflow-provenance` 上投影 branch metadata；contract owner 仍应留在 runtime 层。
+
+本轮验证：
+
+- [x] `node --import tsx --test packages/contracts/runtime/notebook-branch.test.ts src/runtime/task-projects.test.ts`
+- [x] `npm run smoke:notebook-branch`
+- [x] `npm run typecheck`
+- [x] `npm run smoke:runtime-contracts`
+- [x] `npm run smoke:no-src-capability-semantics`
+- [x] `git diff --check`
+- [x] `npm run verify:full`（745 tests pass；browser smoke 与 artifacts index 通过）
+
+
 
 ### H022 Real-world Complex Task Backlog for SciForge Hardening
 
@@ -572,7 +598,7 @@ Failure/Improvement Notes：
 - [x] R-DATA-03 大文件摘要：读取大文本/日志文件，只允许摘要和 refs，不允许把全文塞入 prompt；后续追问必须按需读取片段。
 - [x] R-DATA-04 图表迭代：先生成图表 artifact，再要求换坐标、换颜色、筛选子集、导出最终报告，测试 artifact identity。已覆盖 resultPresentation action-level lineage、revisionRef、view transform/exportProfile 和同一 artifact 多派生视图保留。
 - [x] R-DATA-05 缺失文件恢复：历史 artifact 指向的文件被删除/移动，用户要求继续，系统必须 stale-check 并进入安全恢复。
-- [ ] R-DATA-06 Notebook 风格任务：连续执行多个分析步骤，每步都有中间文件；用户要求回到第 2 步换参数后继续生成分支结果。
+- [x] R-DATA-06 Notebook 风格任务：连续执行多个分析步骤，每步都有中间文件；用户要求回到第 2 步换参数后继续生成分支结果。已完成 `sciforge.notebook-branch.v1` 分支重放 contract、TaskProject `forkTaskProjectStage` runtime helper、branch metadata/evidence refs、fork-before-write invalidation 和 smoke fixture 覆盖。
 - [x] R-DATA-07 外部数据源限流：调用外部 API 拉数据遇到 429/timeout，系统必须输出 transient-unavailable 诊断和重试建议。已覆盖 pre-output diagnostic payload、partial artifact 降级、provider-neutral workEvidence、transientPolicy 和 retry refs。
 - [x] R-DATA-08 审计导出：分析完成后用户只要求导出 task graph、数据 lineage、执行命令和 artifact refs，不重新计算。
 

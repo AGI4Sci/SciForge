@@ -104,6 +104,28 @@ export type {
   ReleaseGateStepKind,
   ReleaseGateStepStatus,
 } from './release-gate';
+export {
+  NOTEBOOK_BRANCH_CONTRACT_ID,
+  NOTEBOOK_BRANCH_SCHEMA_VERSION,
+  applyNotebookBranchParameterChanges,
+  branchScopedNotebookRef,
+  buildNotebookBranchReplayPlan,
+  notebookBranchPlanAllowsContinuation,
+  parameterDigest,
+} from './notebook-branch';
+export type {
+  NotebookBranchParameterChange,
+  NotebookBranchRef,
+  NotebookBranchRefRole,
+  NotebookBranchReplayPlan,
+  NotebookBranchReplayPlanInput,
+  NotebookBranchReplayStatus,
+  NotebookBranchReplayStep,
+  NotebookBranchSideEffectPolicy,
+  NotebookBranchSourceRetentionPolicy,
+  NotebookBranchStepInput,
+  NotebookBranchStepStatus,
+} from './notebook-branch';
 export type {
   BuiltInScenarioId,
   ScenarioInstanceId,

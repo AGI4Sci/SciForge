@@ -8,6 +8,7 @@ import {
   appendTaskProjectGuidance,
   appendTaskStage,
   createTaskProject,
+  forkTaskProjectStage,
   listRecentTaskProjects,
   maybePromoteTaskProjectStageAdapter,
   prepareNextStageHandoffSummary,
@@ -627,6 +628,75 @@ test('selects the latest completed stage when continuation follows user guidance
     assert.equal(selection.reason, 'latest-completed-stage');
     assert.equal(selection.shouldRepair, false);
     assert.deepEqual(selection.activeGuidance.map((entry) => entry.id), ['extra-check']);
+  } finally {
+    await cleanup(root);
+  }
+});
+
+test('forks a task project stage into a notebook branch without reusing downstream outputs', async () => {
+  const root = await workspace();
+  try {
+    await createTaskProject(root, { id: 'notebook-branch', goal: 'Rerun analysis from a changed middle step.', createdAt: '2026-05-09T00:00:00.000Z' });
+    await appendTaskStage(root, 'notebook-branch', {
+      kind: 'execute',
+      goal: 'Load and normalize data.',
+      status: 'done',
+      codeRef: 'file:.sciforge/projects/notebook-branch/src/1-load.py',
+      outputRef: 'file:.sciforge/projects/notebook-branch/artifacts/1-clean.csv',
+      artifactRefs: ['artifact:notebook-branch:clean-data'],
+      metadata: { parameters: { seed: 42 } },
+      createdAt: '2026-05-09T00:01:00.000Z',
+    });
+    await appendTaskStage(root, 'notebook-branch', {
+      kind: 'execute',
+      goal: 'Fit model with alpha threshold.',
+      status: 'done',
+      codeRef: 'file:.sciforge/projects/notebook-branch/src/2-fit.py',
+      inputRef: 'file:.sciforge/projects/notebook-branch/artifacts/1-clean.csv',
+      outputRef: 'file:.sciforge/projects/notebook-branch/artifacts/2-fit.json',
+      stdoutRef: 'file:.sciforge/projects/notebook-branch/logs/2-fit.stdout.log',
+      stderrRef: 'file:.sciforge/projects/notebook-branch/logs/2-fit.stderr.log',
+      artifactRefs: ['artifact:notebook-branch:fit-v1'],
+      metadata: { parameters: { model: { alpha: 0.05 }, seed: 42 } },
+      createdAt: '2026-05-09T00:02:00.000Z',
+    });
+    await appendTaskStage(root, 'notebook-branch', {
+      kind: 'summarize',
+      goal: 'Render downstream report.',
+      status: 'done',
+      inputRef: 'file:.sciforge/projects/notebook-branch/artifacts/2-fit.json',
+      outputRef: 'file:.sciforge/projects/notebook-branch/artifacts/3-report.md',
+      artifactRefs: ['artifact:notebook-branch:report-v1'],
+      createdAt: '2026-05-09T00:03:00.000Z',
+    });
+
+    const forked = await forkTaskProjectStage(root, 'notebook-branch', {
+      baseStageId: '2-execute',
+      branchId: 'alpha-001',
+      parameterChanges: [{ key: 'model.alpha', before: 0.05, after: 0.01 }],
+      reason: 'User returned to step 2 and changed alpha.',
+      createdAt: '2026-05-09T00:04:00.000Z',
+    });
+
+    assert.equal(forked.stage.id, '4-execute');
+    assert.equal(forked.stage.status, 'planned');
+    assert.equal(forked.stage.codeRef, 'file:.sciforge/projects/notebook-branch/src/2-fit.py');
+    assert.equal(forked.branchPlan.status, 'ready');
+    assert.deepEqual(forked.branchPlan.retainedSteps.map((step) => step.sourceStepId), ['1-execute']);
+    assert.deepEqual(forked.branchPlan.rerunSteps.map((step) => step.sourceStepId), ['2-execute', '3-summarize']);
+    assert.ok(forked.branchMetadata.preservedRefs.includes('file:.sciforge/projects/notebook-branch/artifacts/1-clean.csv'));
+    assert.ok(forked.branchMetadata.invalidatedRefs.includes('file:.sciforge/projects/notebook-branch/artifacts/2-fit.json'));
+    assert.ok(forked.branchMetadata.invalidatedRefs.includes('file:.sciforge/projects/notebook-branch/artifacts/3-report.md'));
+    assert.deepEqual(forked.stage.metadata?.branch, forked.branchMetadata);
+    assert.ok(forked.stage.diagnostics.some((entry) => entry.includes('alpha-001')));
+    assert.ok(forked.stage.evidenceRefs.includes(forked.branchEvidenceRef));
+
+    const evidence = await readJson<Record<string, unknown>>(join(root, '.sciforge', 'projects', 'notebook-branch', 'evidence', '2-execute-2-execute-alpha-001-branch.json'));
+    assert.equal(evidence.kind, 'task-stage-branch');
+    assert.match(JSON.stringify(evidence.data), /sciforge.notebook-branch-replay.v1/);
+
+    const original = await readJson<TaskStage>(join(root, '.sciforge', 'projects', 'notebook-branch', 'stages', '3-summarize.json'));
+    assert.equal(original.outputRef, 'file:.sciforge/projects/notebook-branch/artifacts/3-report.md');
   } finally {
     await cleanup(root);
   }
