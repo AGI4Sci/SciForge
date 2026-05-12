@@ -1,4 +1,15 @@
 import { isRecord, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
+import { decideEvidenceMode } from './conversation-behavior-evidence-mode.js';
+import type { EvidenceModeDecision } from './conversation-behavior-evidence-mode.js';
+
+export type {
+  EvidenceConfidencePolicy,
+  EvidenceGapDecision,
+  EvidenceGapSeverity,
+  EvidenceModeDecision,
+  FullTextPolicyDecision,
+  FullTextPolicyMode,
+} from './conversation-behavior-evidence-mode.js';
 
 export const CONVERSATION_BEHAVIOR_OPTIMIZATION_SCHEMA_VERSION = 'sciforge.conversation.behavior-optimization.v1' as const;
 export const PARALLEL_WORK_PLAN_SCHEMA_VERSION = 'sciforge.parallel-work-plan.v1' as const;
@@ -19,8 +30,6 @@ export type EvidenceSufficiencyLevel = 'sufficient' | 'partial' | 'insufficient'
 export type EvidenceGranularity = 'answer' | 'summary' | 'report' | 'audit';
 export type EscalationAction = 'stop' | 'continue' | 'background' | 'needs-evidence';
 export type BudgetDowngradeLevel = 'none' | 'light' | 'strong';
-export type FullTextPolicyMode = 'bounded-full-text' | 'metadata-and-abstracts' | 'metadata-only';
-export type EvidenceGapSeverity = 'info' | 'warning' | 'blocking';
 
 export interface ConversationBehaviorOptimizationInput {
   [key: string]: unknown;
@@ -173,35 +182,6 @@ export interface BudgetDowngradeDecision {
   retainedWork: string[];
   upgradePath: string[];
   reasonCodes: string[];
-}
-
-export interface EvidenceModeDecision {
-  strict: boolean;
-  fullTextPolicy: FullTextPolicyDecision;
-  evidenceGaps: EvidenceGapDecision[];
-  confidencePolicy: EvidenceConfidencePolicy;
-  reasonCodes: string[];
-}
-
-export interface FullTextPolicyDecision {
-  mode: FullTextPolicyMode;
-  maxDownloads: number;
-  escalationAllowed: boolean;
-  reasonCodes: string[];
-}
-
-export interface EvidenceGapDecision {
-  code: string;
-  required: boolean;
-  presentRefs: string[];
-  severity: EvidenceGapSeverity;
-  affectsClaims: boolean;
-}
-
-export interface EvidenceConfidencePolicy {
-  maxConfidence: number;
-  requireGapDisclosure: boolean;
-  downgradeReasonCodes: string[];
 }
 
 export interface BackendHandoffDirective {
@@ -580,108 +560,6 @@ function decideBudgetDowngrade(data: JsonMap, latencyTier: BehaviorLatencyTier):
   };
 }
 
-function decideEvidenceMode(
-  data: JsonMap,
-  evidence: EvidenceSufficiencyDecision,
-  budget: BudgetDowngradeDecision,
-): EvidenceModeDecision {
-  const evidencePolicy = collectPolicyRecords(data, 'evidencePolicy');
-  const strict = evidencePolicy.some((policy) => booleanValue(policy.strict) || policyMode(policy) === 'strict')
-    || hasPromptEvidenceStrictness(data);
-  const fullTextPolicy = decideFullTextPolicy(data, budget);
-  const evidenceGaps = buildEvidenceGaps(data, evidence, strict);
-  const hasGaps = evidenceGaps.length > 0 || evidence.level !== 'sufficient';
-  const strictWithGaps = strict && hasGaps;
-  const downgradeReasonCodes = uniqueStrings([
-    strict ? 'confidence:strict-evidence' : '',
-    hasGaps ? 'confidence:evidence-gaps' : '',
-    fullTextPolicy.mode === 'metadata-only' ? 'confidence:metadata-only' : '',
-  ]);
-  const maxConfidence = strictWithGaps
-    ? evidence.level === 'insufficient' ? 0.35 : 0.55
-    : strict
-    ? evidence.level === 'sufficient'
-      ? 0.88
-      : evidence.level === 'partial'
-        ? 0.55
-        : 0.35
-    : evidence.level === 'sufficient'
-      ? 0.92
-      : evidence.level === 'partial'
-        ? 0.72
-        : 0.45;
-
-  return {
-    strict,
-    fullTextPolicy,
-    evidenceGaps,
-    confidencePolicy: {
-      maxConfidence,
-      requireGapDisclosure: strict || hasGaps || fullTextPolicy.mode !== 'bounded-full-text',
-      downgradeReasonCodes,
-    },
-    reasonCodes: uniqueStrings([
-      strict ? 'evidence-mode:strict' : 'evidence-mode:normal',
-      fullTextPolicy.mode === 'metadata-only' ? 'evidence-mode:metadata-only' : '',
-      fullTextPolicy.mode === 'metadata-and-abstracts' ? 'evidence-mode:metadata-and-abstracts' : '',
-      hasGaps ? 'evidence-mode:gaps-present' : 'evidence-mode:no-gaps',
-    ]),
-  };
-}
-
-function decideFullTextPolicy(data: JsonMap, budget: BudgetDowngradeDecision): FullTextPolicyDecision {
-  const budgetRecord = recordValue(data.budget) ?? {};
-  const explicitMode = firstFullTextPolicyMode(data);
-  const mode: FullTextPolicyMode = explicitMode
-    ?? (budget.level === 'strong'
-      ? 'metadata-only'
-      : budget.active
-        ? 'metadata-and-abstracts'
-        : 'bounded-full-text');
-  const explicitMaxDownloads = firstNumber([
-    ...collectPolicyRecords(data, 'fullTextPolicy').map((policy) => policy.maxDownloads),
-    budgetRecord.maxFullTextDownloads,
-    budgetRecord.fullTextMaxDownloads,
-  ]);
-  const maxDownloads = mode === 'metadata-only'
-    ? 0
-    : explicitMaxDownloads ?? (mode === 'metadata-and-abstracts' ? 0 : 3);
-  return {
-    mode,
-    maxDownloads,
-    escalationAllowed: mode !== 'bounded-full-text' || budget.active,
-    reasonCodes: uniqueStrings([
-      explicitMode ? 'full-text:explicit-policy' : '',
-      budget.active ? 'full-text:budget-limited' : 'full-text:budget-normal',
-      `full-text:${mode}`,
-    ]),
-  };
-}
-
-function buildEvidenceGaps(
-  data: JsonMap,
-  evidence: EvidenceSufficiencyDecision,
-  strict: boolean,
-): EvidenceGapDecision[] {
-  const structuredGaps = collectPolicyRecords(data, 'evidencePolicy').flatMap((policy) => [
-    ...toStringList(policy.evidenceGaps),
-    ...toStringList(policy.requiredEvidenceGaps),
-    ...toRecordList(policy.gaps).map((gap) => stringValue(gap.code) || stringValue(gap.id)),
-  ]);
-  const codes = uniqueStrings([
-    ...evidence.missing,
-    ...structuredGaps,
-    evidence.level !== 'sufficient' && strict ? 'evidence:sufficient-support' : '',
-  ]);
-  return codes.map((code) => ({
-    code,
-    required: true,
-    presentRefs: evidence.durableEvidenceRefs,
-    severity: strict || evidence.level === 'insufficient' ? 'blocking' : 'warning',
-    affectsClaims: true,
-  }));
-}
-
 function buildBackendHandoffDirective(
   data: JsonMap,
   intent: ConversationIntentSignals,
@@ -723,93 +601,6 @@ function buildBackendHandoffDirective(
       ...evidenceMode.confidencePolicy.downgradeReasonCodes,
     ]),
   };
-}
-
-function collectPolicyRecords(data: JsonMap, key: string): JsonMap[] {
-  const out: JsonMap[] = [];
-  const execution = recordValue(data.executionModePlan) ?? {};
-  const policyOverrides = recordValue(execution.policyOverrides) ?? {};
-  const context = recordValue(data.contextPolicy) ?? {};
-  const budget = recordValue(data.budget) ?? {};
-  for (const value of [data[key], execution[key], policyOverrides[key], context[key], budget[key]]) {
-    const record = recordValue(value);
-    if (record) out.push(record);
-  }
-  return out;
-}
-
-function policyMode(policy: JsonMap): string {
-  return normalizePolicyToken(stringValue(policy.mode) || stringValue(policy.policy) || stringValue(policy.level));
-}
-
-function firstFullTextPolicyMode(data: JsonMap): FullTextPolicyMode | undefined {
-  const execution = recordValue(data.executionModePlan) ?? {};
-  const policyOverrides = recordValue(execution.policyOverrides) ?? {};
-  const context = recordValue(data.contextPolicy) ?? {};
-  const budget = recordValue(data.budget) ?? {};
-  for (const value of [
-    data.fullTextPolicy,
-    data.fullTextMode,
-    execution.fullTextPolicy,
-    execution.fullTextMode,
-    policyOverrides.fullTextPolicy,
-    context.fullTextPolicy,
-    budget.fullTextPolicy,
-    budget.fullTextMode,
-  ]) {
-    const normalized = normalizeFullTextPolicyMode(value);
-    if (normalized) return normalized;
-  }
-  if (hasPromptMetadataOnlyRequest(data)) return 'metadata-only';
-  return undefined;
-}
-
-function normalizeFullTextPolicyMode(value: unknown): FullTextPolicyMode | undefined {
-  const raw = recordValue(value);
-  const text = normalizePolicyToken(raw
-    ? stringValue(raw.mode) || stringValue(raw.policy) || stringValue(raw.value)
-    : stringValue(value));
-  if (!text) return undefined;
-  if (['metadata-only', 'metadata', 'metadata-first', 'no-full-text', 'no-fulltext', 'skip-full-text', 'skip-fulltext'].includes(text)) {
-    return 'metadata-only';
-  }
-  if (['abstracts', 'abstract-only', 'metadata-and-abstracts', 'metadata-abstracts'].includes(text)) {
-    return 'metadata-and-abstracts';
-  }
-  if (['bounded-full-text', 'full-text', 'fulltext', 'allow-full-text', 'allow-fulltext'].includes(text)) {
-    return 'bounded-full-text';
-  }
-  return undefined;
-}
-
-function hasPromptMetadataOnlyRequest(data: JsonMap): boolean {
-  const prompt = stringValue(data.prompt).toLowerCase();
-  return Boolean(prompt && (
-    /\bmetadata\b/.test(prompt) && /\b(?:no|skip|without|defer)\s+full[-\s]?text\b/.test(prompt)
-    || /不要下载全文|不下载全文|先用\s*metadata|metadata\s*快速判断/i.test(prompt)
-  ));
-}
-
-function hasPromptEvidenceStrictness(data: JsonMap): boolean {
-  const prompt = stringValue(data.prompt).toLowerCase();
-  return Boolean(prompt && (
-    /\b(?:do not|don't|dont|never)\s+guess\b/.test(prompt)
-    || /\bstrict\s+evidence\b/.test(prompt)
-    || /\bmark\s+uncertain(?:ty)?\b/.test(prompt)
-    || /不要猜|别猜|不确定就标注|严格证据|证据不足/.test(prompt)
-  ));
-}
-
-function normalizePolicyToken(value: string): string {
-  return value.toLowerCase().trim().replaceAll(/[\s_]+/g, '-');
-}
-
-function firstNumber(values: unknown[]): number | undefined {
-  for (const value of values) {
-    const number = numberValue(value);
-    if (number !== undefined) return number;
-  }
-  return undefined;
 }
 
 function requiredGranularity(intent: ConversationIntentSignals): EvidenceGranularity {

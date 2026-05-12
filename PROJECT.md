@@ -446,6 +446,28 @@ Failure/Improvement Notes：
 - [x] `git diff --check`
 
 
+### 2026-05-13 Milestone：Evidence Mode 语义模块拆分
+
+本轮按前一阶段 long-file watch note 做代码膨胀治理，把 evidence mode 的 full-text policy、evidence gap 和 confidence ceiling 规则从 `conversation-behavior-optimization.ts` 抽到独立语义模块，主入口回到行为编排职责：
+
+- [x] 新增 `conversation-behavior-evidence-mode.ts`，集中导出 `decideEvidenceMode`、`EvidenceModeDecision`、`FullTextPolicyDecision`、`EvidenceGapDecision`、`EvidenceConfidencePolicy` 与 full-text/evidence gap 类型。
+- [x] `conversation-behavior-optimization.ts` 只 import/re-export evidence mode contract，保留 backend handoff、latency、budget、parallel plan 等编排逻辑；文件从 1084 行降到 875 行，退出 1000 行 watch list。
+- [x] `smoke:long-file-budget` 确认 evidence 主入口不再出现在 watch 列表，后续扩 evidence policy 应优先进入新模块而不是回堆主文件。
+
+Failure/Improvement Notes：
+
+- evidence mode 是可继续扩展的策略资产，不能和 latency、parallel plan、handoff 拼在一个大函数文件里；否则后续严格证据、metadata-first、confidence ceiling 会再次制造隐式第二入口。
+- 本轮只做语义模块拆分，不改 policy 行为；backend handoff directive 暂留主文件，因为它同时依赖 intent、budget、state refs 与 evidence mode，后续若继续膨胀再按 `*-handoff-directive` 单独抽。
+
+本轮验证：
+
+- [x] `node --import tsx --test src/runtime/gateway/conversation-behavior-optimization.test.ts`
+- [x] `npm run typecheck`
+- [x] `npm run smoke:long-file-budget`
+- [x] `npm run test`（725 tests pass）
+- [x] `git diff --check`
+
+
 
 ### H022 Real-world Complex Task Backlog for SciForge Hardening
 
