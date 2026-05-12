@@ -72,6 +72,31 @@ test('applies session updates with versioning and run timeline merge', () => {
   assert.equal(next.timelineEvents?.[0].executionUnitRefs[0], 'unit-1');
 });
 
+test('run timeline counts only execution units, not skill or ui plan refs', () => {
+  const nextRun = {
+    id: 'run-1',
+    scenarioId: 'scenario-any',
+    status: 'completed' as const,
+    prompt: 'Summarize result',
+    response: 'ok',
+    createdAt: '2026-05-07T01:00:00.000Z',
+    completedAt: '2026-05-07T01:01:00.000Z',
+    skillPlanRef: 'skill-plan.any.default',
+    uiPlanRef: 'ui-plan.any.default',
+    scenarioPackageRef: { id: 'pkg-any', version: '1.0.0', source: 'workspace' as const },
+  };
+  const nextSession = {
+    ...session([nextRun]),
+    executionUnits: [
+      { id: 'unit-match', tool: 'tool', params: '{}', status: 'done' as const, hash: 'hash', scenarioPackageRef: { id: 'pkg-any', version: '1.0.0', source: 'workspace' as const } },
+      { id: 'unit-other', tool: 'tool', params: '{}', status: 'done' as const, hash: 'hash', scenarioPackageRef: { id: 'other', version: '1.0.0', source: 'workspace' as const } },
+    ],
+  };
+  const next = applySessionUpdateToWorkspace(workspace(), nextSession, 'test update');
+
+  assert.deepEqual(next.timelineEvents?.[0].executionUnitRefs, ['unit-match']);
+});
+
 test('persists background run updates as versioned state and timeline status transitions', () => {
   const runningRun = {
     id: 'run-bg',

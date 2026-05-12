@@ -186,6 +186,8 @@ export const demoExecutionUnits = [
 
 export const demoTimeline = [
   { time: '2026-04-19 14:30', scenario: 'literature-evidence-review' as ScenarioId, title: 'KRAS G12C 耐药文献综述', desc: '47 篇文献进入证据矩阵，识别 3 类耐药机制', claimType: 'inference' as ClaimType, confidence: 0.91 },
+  { time: '2026-04-19 14:42', scenario: 'literature-evidence-review' as ScenarioId, title: 'Partial first result', desc: '先展示 6 篇可用论文和检索 gap，PDF 全文下载在后台继续。', claimType: 'fact' as ClaimType, confidence: 0.72, action: 'run.running' },
+  { time: '2026-04-19 14:58', scenario: 'literature-evidence-review' as ScenarioId, title: 'Background continuation merged', desc: '后台补全文完成后合并 revision，保留 partial artifact lineage 和 stdout/stderr refs。', claimType: 'fact' as ClaimType, confidence: 0.86, action: 'background.finalized' },
   { time: '2026-04-19 15:05', scenario: 'structure-exploration' as ScenarioId, title: '7BZ5 结合口袋分析', desc: 'Switch-II 口袋体积和关键残基已归档', claimType: 'fact' as ClaimType, confidence: 0.94 },
   { time: '2026-04-19 15:40', scenario: 'omics-differential-exploration' as ScenarioId, title: '差异表达视图契约', desc: '火山图、热图、UMAP 等待 workspace task artifact 驱动', claimType: 'inference' as ClaimType, confidence: 0.82 },
   { time: '2026-04-19 16:10', scenario: 'biomedical-knowledge-graph' as ScenarioId, title: 'KRAS 知识库卡片', desc: 'UniProt / ChEMBL / OpenTargets 视图进入 manifest', claimType: 'fact' as ClaimType, confidence: 0.96 },

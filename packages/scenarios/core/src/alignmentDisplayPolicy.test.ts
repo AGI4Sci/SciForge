@@ -45,12 +45,13 @@ describe('alignment display policy', () => {
       action: 'run.failed',
       subject: 'stage',
       artifactRefs: ['artifact:a'],
-      executionUnitRefs: ['unit:b'],
+      executionUnitRefs: ['unit:b', 'skill-plan.literature.default', 'ui-plan.literature.default', 'pkg@1.0.0'],
     });
 
     assert.equal(item.scenario, 'literature-evidence-review');
     assert.equal(item.confidence, 0.35);
     assert.match(item.desc, /artifacts=1/);
+    assert.match(item.desc, /units=1/);
     assert.deepEqual(item.refs, ['artifact:a', 'unit:b']);
   });
 

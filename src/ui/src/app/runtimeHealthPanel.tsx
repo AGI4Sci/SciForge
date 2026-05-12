@@ -136,7 +136,12 @@ export function RuntimeHealthPanel({ items, compact = false }: { items: RuntimeH
       {startDetail ? <div className={cx('runtime-start-status', startState === 'error' && 'error')}>{startDetail}</div> : null}
       <div className="runtime-health-grid">
         {items.map((item) => (
-          <div className="runtime-health-item" key={item.id}>
+          <div
+            className="runtime-health-item"
+            key={item.id}
+            role="group"
+            aria-label={`${item.label}: ${healthLabel(item.status)}. ${item.detail}${item.recoverAction ? `. ${item.recoverAction}` : ''}`}
+          >
             <Badge variant={healthBadgeVariant(item.status)}>{healthLabel(item.status)}</Badge>
             <div>
               <strong>{item.label}</strong>

@@ -166,6 +166,7 @@ export function ResultsRenderer({
   workspaceFileEditor,
   onWorkspaceFileEditorChange,
   onDismissResultSlotPresentation,
+  initialFocusMode = 'all',
 }: {
   scenarioId: ScenarioId;
   config: SciForgeConfig;
@@ -183,13 +184,16 @@ export function ResultsRenderer({
   onWorkspaceFileEditorChange: (next: { file: WorkspaceFileContent; draft: string } | null) => void;
   /** Hide a resolved results card from the UI only (artifacts and workspace files stay). */
   onDismissResultSlotPresentation?: (resolvedSlotPresentationId: string) => void;
+  /** Test hook for rendering a non-default focus mode without browser events. */
+  initialFocusMode?: ResultFocusMode;
 }) {
   const [resultTab, setResultTab] = useState('primary');
-  const [focusMode, setFocusMode] = useState<ResultFocusMode>('all');
+  const [focusMode, setFocusMode] = useState<ResultFocusMode>(initialFocusMode);
   const [inspectedArtifact, setInspectedArtifact] = useState<RuntimeArtifact | undefined>();
   const [pinnedObjectReferences, setPinnedObjectReferences] = useState<ObjectReference[]>([]);
   const [objectActionError, setObjectActionError] = useState('');
   const [objectActionNotice, setObjectActionNotice] = useState('');
+  const executionFocus = focusMode === 'execution';
   const activeRun = activeRunId ? session.runs.find((run) => run.id === activeRunId) : undefined;
   useEffect(() => {
     const handleInlineReferenceFocus = (event: Event) => {
@@ -250,7 +254,7 @@ export function ResultsRenderer({
       onResultTabChange={setResultTab}
       onFocusModeChange={handleFocusModeChange}
       onActiveRunChange={onActiveRunChange}
-      drawer={inspectedArtifact ? (
+      drawer={!executionFocus && inspectedArtifact ? (
         <ArtifactInspectorDrawer
           scenarioId={scenarioId}
           session={session}
@@ -268,7 +272,7 @@ export function ResultsRenderer({
                 onClose={() => onWorkspaceFileEditorChange(null)}
               />
             ) : null}
-            {focusedObjectReference ? (
+            {!executionFocus && focusedObjectReference ? (
               <ObjectFocusBanner
                 reference={focusedObjectReference}
                 pinnedReferences={pinnedObjectReferences}
@@ -281,7 +285,7 @@ export function ResultsRenderer({
             ) : objectActionError ? (
               <div className="object-action-error">{objectActionError}</div>
             ) : null}
-            {focusedObjectReference ? (
+            {!executionFocus && focusedObjectReference ? (
               <WorkspaceObjectPreview
                 reference={focusedObjectReference}
                 session={session}
@@ -295,6 +299,7 @@ export function ResultsRenderer({
                 config={config}
                 session={session}
                 activeRun={activeRun}
+                focusMode={focusMode}
                 model={rendererModel}
                 onArtifactHandoff={onArtifactHandoff}
                 onInspectArtifact={setInspectedArtifact}
@@ -313,6 +318,7 @@ function PrimaryResult({
   config,
   session,
   activeRun,
+  focusMode,
   model,
   onArtifactHandoff,
   onInspectArtifact,
@@ -323,6 +329,7 @@ function PrimaryResult({
   config: SciForgeConfig;
   session: SciForgeSession;
   activeRun?: SciForgeRun;
+  focusMode: ResultFocusMode;
   model: ResultsRendererViewModel;
   onArtifactHandoff: (targetScenario: ScenarioId, artifact: RuntimeArtifact) => void;
   onInspectArtifact: (artifact: RuntimeArtifact) => void;
@@ -330,6 +337,9 @@ function PrimaryResult({
   onDismissResultSlotPresentation?: (resolvedSlotPresentationId: string) => void;
 }) {
   const { viewPlan } = model;
+  if (focusMode === 'execution') {
+    return <ExecutionOnlyResult session={session} />;
+  }
   return (
     <div className="stack">
       <SectionHeader icon={FileText} title="结果视图" subtitle="优先展示用户本轮要看的结果；更多内容默认收起" />
@@ -393,6 +403,14 @@ function PrimaryResult({
           <ManifestDiagnostics items={model.manifestDiagnostics} />
         </details>
       ) : null}
+    </div>
+  );
+}
+
+function ExecutionOnlyResult({ session }: { session: SciForgeSession }) {
+  return (
+    <div className="stack">
+      <ExecutionPanel session={session} executionUnits={session.executionUnits} embedded />
     </div>
   );
 }

@@ -6,6 +6,7 @@ import {
   mergeObjectReferences,
   objectReferenceForArtifactSummary,
 } from '../../../../../packages/support/object-references';
+import { executionStatusLabel, executionStatusShortLabel } from '../results/executionStatusPresentation';
 
 type ExecutionProcessStep = {
   id: string;
@@ -85,10 +86,10 @@ function executionProcessSteps(
       id: `unit-${unit.id || index}`,
       kind: cursorStepKindForUnit(unit, verb),
       title: `${unit.tool}${target ? ` · ${target}` : ''}`,
-      meta: [unit.status, unit.time].filter(Boolean).join(' · '),
+      meta: [executionStatusLabel(unit.status), unit.time].filter(Boolean).join(' · '),
       content: [
         `${verb}：${unit.tool}${target ? `，${target}` : ''}。`,
-        `状态：${unit.status}${unit.time ? `，时间：${unit.time}` : ''}。`,
+        `状态：${executionStatusLabel(unit.status)}${unit.time ? `，时间：${unit.time}` : ''}。`,
         ...details.map((detail) => `- ${detail}`),
       ].join('\n'),
     });
@@ -141,9 +142,9 @@ function objectReferencesForAudit(run: SciForgeRun | undefined, session: SciForg
 }
 
 function cursorStepKindForUnit(unit: RuntimeExecutionUnit, verb: string) {
-  if (unit.status === 'failed' || unit.status === 'failed-with-reason') return 'Failed';
-  if (unit.status === 'repair-needed') return 'Repair';
-  if (unit.status === 'needs-human') return 'Needs Human';
+  if (unit.status === 'failed' || unit.status === 'failed-with-reason' || unit.status === 'repair-needed' || unit.status === 'needs-human') {
+    return executionStatusShortLabel(unit.status);
+  }
   if (verb === '探索文件') return 'Explored';
   if (verb === '编辑文件') return 'Edited';
   if (verb === '运行程序') return 'Ran';

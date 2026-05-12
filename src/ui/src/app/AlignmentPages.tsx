@@ -291,7 +291,7 @@ export function TimelinePage({
     time: new Date(event.createdAt).toLocaleString('zh-CN', { hour12: false }),
     ...alignmentRuntimeTimelineDisplay(event),
   }));
-  const items = [...runtimeItems, ...alignmentItems, ...timeline.map((item) => ({ ...item, action: pageDisplay.timeline.demoAction, refs: [] }))];
+  const items = [...runtimeItems, ...alignmentItems, ...timeline.map((item) => ({ ...item, action: item.action ?? pageDisplay.timeline.demoAction, refs: [] }))];
   const filtered = items.filter((item) => {
     if (actionFilter !== 'all' && item.action !== actionFilter) return false;
     if (!query.trim()) return true;

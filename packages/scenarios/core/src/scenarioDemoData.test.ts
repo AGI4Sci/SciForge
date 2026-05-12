@@ -41,6 +41,8 @@ describe('scenario demo data policy', () => {
       assert.ok(demoMessagesByScenario[scenarioId].length > 0, `${scenarioId} needs seeded chat messages`);
       assert.ok(demoTimeline.some((item) => item.scenario === scenarioId), `${scenarioId} needs a demo timeline item`);
     }
+    assert.ok(demoTimeline.some((item) => item.action === 'run.running' && /Partial first result/i.test(item.title)));
+    assert.ok(demoTimeline.some((item) => item.action === 'background.finalized' && /Background continuation/i.test(item.title)));
   });
 
   it('derives overview count from the display scenario list', () => {

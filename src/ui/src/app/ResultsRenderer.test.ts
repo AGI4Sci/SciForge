@@ -216,6 +216,29 @@ test('ResultsRenderer keeps first-screen failure summary compact while preservin
   assert.match(html, /retry\/fallback attempts, rate-limit diagnostics, and durable refs/);
 });
 
+test('ResultsRenderer execution focus renders only execution unit body', () => {
+  const session = contractFailureSession();
+  session.notebook = [{
+    id: 'note-1',
+    scenario: 'literature-evidence-review',
+    time: '2026-05-09 00:01',
+    title: 'Notebook note',
+    desc: 'should be hidden in execution focus',
+    claimType: 'fact',
+    confidence: 0.4,
+  }];
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-contract-failure', initialFocusMode: 'execution' });
+
+  assert.match(html, /可复现执行单元/);
+  assert.match(html, /Repair needed/);
+  assert.doesNotMatch(html, /<h2>结果视图<\/h2>/);
+  assert.doesNotMatch(html, /运行需要处理/);
+  assert.doesNotMatch(html, /Notebook note/);
+  assert.doesNotMatch(html, /Raw JSON \/ stdout \/ stderr refs/);
+  assert.doesNotMatch(html, /视图状态/);
+});
+
 test('paper-card-list workbench slot is rendered by package policy', () => {
   const artifact: RuntimeArtifact = {
     id: 'papers',
@@ -628,7 +651,7 @@ function completedRun(id: string): SciForgeRun {
   };
 }
 
-function renderResultsRenderer(session: SciForgeSession, options: { activeRunId?: string } = {}) {
+function renderResultsRenderer(session: SciForgeSession, options: { activeRunId?: string; initialFocusMode?: 'all' | 'visual' | 'evidence' | 'execution' } = {}) {
   return renderToStaticMarkup(createElement(ResultsRenderer, {
     scenarioId: 'literature-evidence-review',
     config: testConfig(),
@@ -642,6 +665,7 @@ function renderResultsRenderer(session: SciForgeSession, options: { activeRunId?
     onFocusedObjectChange: () => undefined,
     workspaceFileEditor: null,
     onWorkspaceFileEditorChange: () => undefined,
+    initialFocusMode: options.initialFocusMode,
   }));
 }
 

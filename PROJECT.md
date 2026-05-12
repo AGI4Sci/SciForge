@@ -56,10 +56,31 @@ Token 高效：每轮只携带当前任务真正需要的 state digest、refs、
 
 本轮仍保留为后续通用任务的问题：
 
-- [ ] 统一 ExecutionUnit chip/table/timeline 的状态枚举、计数和文案。
-- [ ] 让“只看执行单元”过滤模式更纯粹，避免仍显示 notebook timeline / Inspector 的混合上下文。
-- [ ] 改进历史 session 列表摘要，突出失败边界、可复用 refs 和下一步。
-- [ ] 补充 partial/background continuation 的真实网页 fixture，验证长任务中途刷新和后台完成合并。
+- [x] 统一 ExecutionUnit chip/table/timeline 的状态枚举、计数和文案。
+- [x] 让“只看执行单元”过滤模式更纯粹，避免仍显示 notebook timeline / Inspector 的混合上下文。
+- [x] 改进历史 session 列表摘要，突出失败边界、可复用 refs 和下一步。
+- [x] 补充 partial/background continuation 的真实网页 fixture，验证长任务中途刷新和后台完成合并。
+
+### 2026-05-12 Milestone：网页 E2E 二轮收敛
+
+本轮继续开启多个 sub agents 使用 Computer Use 从网页端并行检查执行单元状态、历史恢复、partial/background、Runtime Health 和结果过滤。根据报告完成第二轮通用修复：
+
+- [x] 新增共享 `executionStatusPresentation`，统一 EU chip、工作过程、执行表的失败/修复/人工介入文案；`blocked` execution-unit 引用不再显示成生硬的 `BLOCKED`。
+- [x] 修复 timeline run 计数：只把真实 ExecutionUnit refs 计入 `units=`，不再把 skill plan、UI plan 或 package ref 混入计数。
+- [x] `只看执行单元` 模式现在只展示 ExecutionUnit 表、环境定义、stdout/stderr/code/output refs；普通 artifact preview、运行摘要、notebook timeline、raw audit 和 view state 被切到其他模式。
+- [x] 历史会话列表新增 compact run summary：run id 短码、失败边界/完成产物、关键 refs、恢复动作和恢复影响说明。
+- [x] Runtime Health 每个 item 增加可访问分组标签，避免读屏/AX tree 把 `Model Backend` 与下一项 `optional` 文案误连。
+- [x] 研究时间线增加 partial first result / background continuation demo，网页端可直接验证长任务先给 partial、后台再合并 revision 的展示入口。
+
+本轮验证：
+
+- [x] Computer Use：刷新首页、进入工作台、切换只看执行单元、进入研究时间线，确认 UI 行为符合预期。
+- [x] `node --import tsx --test ...` 针对 ResultsRenderer、RunExecutionProcess、ArchiveDrawer、workspaceState、alignment display、scenario demo、runtime health。
+- [x] `npm run typecheck`
+- [x] `npm run smoke:runtime-contracts`
+- [x] `npm run smoke:deep-report`
+- [x] `npm run smoke:agentserver-direct-text`
+- [x] `npm run build`
 
 
 

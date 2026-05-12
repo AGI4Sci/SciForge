@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Clock } from 'lucide-react';
 import { ActionButton, Badge } from '../uiPrimitives';
 import type { SciForgeSession } from '../../domain';
+import { runAuditBlockers, runAuditRefs, runRecoverActions } from '../results-renderer-execution-model';
 
 export function ArchiveDrawer({
   currentSession,
@@ -66,7 +67,9 @@ export function ArchiveDrawer({
         </div>
       ) : (
         <div className="session-history-list">
-          {archivedSessions.map((item) => (
+          {archivedSessions.map((item) => {
+            const summary = sessionHistoryRunSummary(item);
+            return (
             <div className="session-history-row" key={item.sessionId}>
               <input
                 type="checkbox"
@@ -80,15 +83,65 @@ export function ArchiveDrawer({
                 <div className="session-history-meta">
                   {sessionHistoryPackageLabel(item) ? <code>{sessionHistoryPackageLabel(item)}</code> : null}
                   {sessionHistoryLastRunLabel(item) ? <Badge variant={sessionHistoryLastRunVariant(item)}>{sessionHistoryLastRunLabel(item)}</Badge> : <Badge variant="muted">no runs</Badge>}
+                  {summary.runId ? <code>{summary.runId}</code> : null}
                 </div>
+                <p className="session-history-summary">{summary.main}</p>
+                {summary.refs.length || summary.recoverActions.length ? (
+                  <div className="session-history-meta">
+                    {summary.refs.map((ref) => <code key={`${item.sessionId}-${ref}`}>{ref}</code>)}
+                    {summary.recoverActions.map((action) => <code key={`${item.sessionId}-${action}`}>{action}</code>)}
+                  </div>
+                ) : null}
+                <small>恢复后当前工作台会切换到该历史会话，右侧结果同步显示对应 run。</small>
               </div>
               <ActionButton icon={Clock} variant="secondary" onClick={() => onRestore(item.sessionId)}>恢复</ActionButton>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
   );
+}
+
+function sessionHistoryRunSummary(session: SciForgeSession) {
+  const lastRun = session.runs.at(-1);
+  if (!lastRun) {
+    const userMessages = session.messages.filter((message) => message.role === 'user' && !message.id.startsWith('seed')).length;
+    return {
+      runId: '',
+      main: userMessages ? '未执行：仅保留用户消息和草稿上下文。' : '未执行：空草稿会话。',
+      refs: [] as string[],
+      recoverActions: [] as string[],
+    };
+  }
+  const blockers = runAuditBlockers(session, lastRun).map(compactHistoryText);
+  const rawFailure = rawRunFailureReason(lastRun.raw);
+  const refs = runAuditRefs(session, lastRun)
+    .filter((ref) => /research-report|paper-list|verification|execution-unit|EU-|stdout|stderr|output/i.test(ref))
+    .slice(0, 4);
+  const recoverActions = runRecoverActions(session, lastRun).map(compactHistoryText).slice(0, 2);
+  const artifactRefs = session.artifacts.slice(0, 3).map((artifact) => artifact.id);
+  const statusText = lastRun.status === 'completed'
+    ? `完成：${artifactRefs.length ? `产物 ${artifactRefs.join(', ')}` : '没有可见 artifact'}。`
+    : lastRun.status === 'failed'
+      ? `失败边界：${rawFailure ?? blockers.find((line) => !/^blocker: run\b/i.test(line)) ?? blockers[0] ?? compactHistoryText(lastRun.response || '失败原因未记录')}。`
+      : `${lastRun.status}：${compactHistoryText(lastRun.response || lastRun.prompt || '运行状态已记录')}。`;
+  return {
+    runId: shortRunId(lastRun.id),
+    main: statusText,
+    refs,
+    recoverActions,
+  };
+}
+
+function rawRunFailureReason(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const failureReason = typeof record.failureReason === 'string' ? record.failureReason : undefined;
+  const blocker = typeof record.blocker === 'string' ? record.blocker : undefined;
+  const text = failureReason || blocker;
+  return text ? compactHistoryText(text) : undefined;
 }
 
 function sessionHistoryStats(session: SciForgeSession) {
@@ -107,6 +160,15 @@ function sessionHistoryLastRunLabel(session: SciForgeSession) {
   const lastRun = session.runs.at(-1);
   if (!lastRun) return undefined;
   return `last run ${lastRun.status}`;
+}
+
+function shortRunId(value: string) {
+  return value.replace(/^run-/, '').slice(0, 18);
+}
+
+function compactHistoryText(value: string) {
+  const text = value.replace(/\s+/g, ' ').trim();
+  return text.length > 150 ? `${text.slice(0, 147).trim()}...` : text;
 }
 
 function sessionHistoryLastRunVariant(session: SciForgeSession): 'info' | 'success' | 'warning' | 'danger' | 'muted' {

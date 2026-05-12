@@ -8,6 +8,7 @@ import type { EvidenceClaim, NotebookRecord, RuntimeArtifact, RuntimeExecutionUn
 import { exportJsonFile } from '../exportUtils';
 import { ActionButton, Badge, Card, ClaimTag, ConfidenceBar, EmptyArtifactState, EvidenceTag, SectionHeader } from '../uiPrimitives';
 import { UploadedDataUrlPreview } from './WorkspaceObjectPreview';
+import { executionStatusLabel } from './executionStatusPresentation';
 
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
@@ -179,7 +180,7 @@ export function ExecutionPanel({
               <code title={[unit.codeRef, unit.stdoutRef, unit.stderrRef].filter(Boolean).join('\n') || unit.code || ''}>
                 {unit.codeRef || unit.language || unit.code || 'n/a'}
               </code>
-              <Badge variant={executionStatusVariant(unit.status)}>{unit.status}</Badge>
+              <Badge variant={executionStatusVariant(unit.status)}>{executionStatusLabel(unit.status)}</Badge>
               <code>{unit.hash}</code>
               {executionStatusDetail(unit) ? (
                 <div className="eu-detail">

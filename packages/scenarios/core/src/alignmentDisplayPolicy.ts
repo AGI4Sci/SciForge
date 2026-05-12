@@ -147,13 +147,21 @@ export function alignmentContractTimelineDisplay(contract: AlignmentTimelineSour
 }
 
 export function alignmentRuntimeTimelineDisplay(event: RuntimeTimelineSourceInput) {
+  const executionUnitRefs = realExecutionUnitRefs(event.executionUnitRefs);
   return {
     scenario: event.branchId ?? alignmentPageDisplayPolicy.timeline.runtimeFallbackScenarioId,
     title: event.action,
-    desc: `${event.subject} · artifacts=${event.artifactRefs.length} · units=${event.executionUnitRefs.length}`,
+    desc: `${event.subject} · artifacts=${event.artifactRefs.length} · units=${executionUnitRefs.length}`,
     claimType: 'fact' as const,
     confidence: event.action.includes('failed') ? 0.35 : 0.9,
     action: event.action,
-    refs: [...event.artifactRefs, ...event.executionUnitRefs],
+    refs: [...event.artifactRefs, ...executionUnitRefs],
   };
+}
+
+function realExecutionUnitRefs(refs: string[]) {
+  return refs.filter((ref) => {
+    const value = ref.trim();
+    return /^(execution-unit:{1,2})?(EU[-_:]|unit[-_:])/i.test(value);
+  });
 }

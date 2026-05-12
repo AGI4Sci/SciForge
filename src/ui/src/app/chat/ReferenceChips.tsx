@@ -10,6 +10,7 @@ import {
   referenceForObjectReference,
   sciForgeReferenceAttribute,
 } from '../../../../../packages/support/object-references';
+import { objectReferenceStatusLabel } from '../results/executionStatusPresentation';
 
 export function ObjectReferenceChips({
   references,
@@ -37,7 +38,9 @@ export function ObjectReferenceChips({
           <span>{objectReferenceIcon(reference.kind)}</span>
           <strong>{reference.title}</strong>
           {chipModel.pending.some((item) => item.id === reference.id) ? <Badge variant="warning">点击验证</Badge> : null}
-          {reference.status && reference.status !== 'available' ? <Badge variant={reference.status === 'blocked' ? 'danger' : 'warning'}>{reference.status}</Badge> : null}
+          {objectReferenceStatusLabel(reference.kind, reference.status) ? (
+            <Badge variant={reference.status === 'blocked' ? 'danger' : 'warning'}>{objectReferenceStatusLabel(reference.kind, reference.status)}</Badge>
+          ) : null}
         </button>
       ))}
       {chipModel.hasOverflow ? (
