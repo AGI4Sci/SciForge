@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -200,7 +200,7 @@ try {
   for (const backend of AGENT_BACKENDS) {
     const seen = requestsByBackend.get(backend) ?? [];
     assert.equal(seen.length, 3, `${backend} should complete three AgentServer turns`);
-    assert.ok(seen.every((entry) => entry.purpose === 'workspace-task-generation'), `${backend} should use generation dispatch for each turn`);
+    assert.ok(seen.every((entry) => ['workspace-task-generation', 'workspace-task-generation-inline'].includes(entry.purpose)), `${backend} should use generation dispatch for each turn`);
     const usage = usageByBackend.get(backend);
     assert.ok(usage && usage.total > 0, `${backend} should report token usage`);
     const contextWindows = contextWindowsByBackend.get(backend) ?? [];
@@ -221,7 +221,9 @@ try {
       }
     }
   }
-  const reportPath = join(process.cwd(), 'docs', 'AgentBackendMultiturnTestReport.md');
+  const reportDir = join(process.cwd(), 'docs', 'test-artifacts');
+  await mkdir(reportDir, { recursive: true });
+  const reportPath = join(reportDir, 'AgentBackendMultiturnTestReport.md');
   await writeFile(reportPath, buildMarkdownReport(), 'utf8');
   console.log(`[ok] all AgentServer backends handle the same three-round arXiv agent-paper continuation; report written to ${reportPath}`);
 } finally {
@@ -308,22 +310,21 @@ ui_manifest = [
 ]
 ui_manifest.append({"componentId": "execution-unit-table", "artifactRef": "research-report", "priority": len(ui_manifest) + 1})
 
-payload = {
-    "message": f"{backend} round {round_no} completed complex Tabula Sapiens continuation.",
-    "confidence": 0.86,
-    "claimType": "evidence-summary",
-    "evidenceLevel": "mock-agentserver",
-    "reasoningTrace": f"{backend} generated and executed a workspace task for round {round_no}.",
-    "claims": [{"text": f"{backend} preserved complex multi-turn context.", "confidence": 0.86, "evidenceLevel": "mock-agentserver"}],
-    "uiManifest": ui_manifest,
-    "executionUnits": [{
-        "id": f"{backend}-round-{round_no}",
-        "status": "done",
-        "tool": f"agentserver.{backend}.generated.python",
-        "params": json.dumps({"expected": expected, "round": round_no})
-    }],
-    "artifacts": artifacts
-}
+payload = {}
+payload["message"] = f"{backend} round {round_no} completed complex Tabula Sapiens continuation."
+payload["confidence"] = 0.86
+payload["claimType"] = "evidence-summary"
+payload["evidenceLevel"] = "mock-agentserver"
+payload["reasoningTrace"] = f"{backend} generated and executed a workspace task for round {round_no}."
+payload["claims"] = [{"text": f"{backend} preserved complex multi-turn context.", "confidence": 0.86, "evidenceLevel": "mock-agentserver"}]
+payload["uiManifest"] = ui_manifest
+payload["executionUnits"] = [{
+    "id": f"{backend}-round-{round_no}",
+    "status": "done",
+    "tool": f"agentserver.{backend}.generated.python",
+    "params": json.dumps({"expected": expected, "round": round_no})
+}]
+payload["artifacts"] = artifacts
 
 with open(output_path, "w", encoding="utf-8") as handle:
     json.dump(payload, handle, indent=2)

@@ -195,22 +195,30 @@ function normalizeFullTextPolicyMode(value: unknown): FullTextPolicyMode | undef
 }
 
 function hasPromptMetadataOnlyRequest(data: JsonMap): boolean {
-  const prompt = stringValue(data.prompt).toLowerCase();
-  return Boolean(prompt && (
-    /\bmetadata\b/.test(prompt) && /\b(?:no|skip|without|defer)\s+full[-\s]?text\b/.test(prompt)
-    || /不要下载全文|不下载全文|先用\s*metadata|metadata\s*快速判断/i.test(prompt)
+  const text = stringValue(data.prompt).toLowerCase();
+  return Boolean(text && (
+    evidenceMetadataTokenPattern.test(text) && evidenceNoFullTextPattern.test(text)
+    || evidenceMetadataOnlyZhPattern.test(text)
   ));
 }
 
 function hasPromptEvidenceStrictness(data: JsonMap): boolean {
-  const prompt = stringValue(data.prompt).toLowerCase();
-  return Boolean(prompt && (
-    /\b(?:do not|don't|dont|never)\s+guess\b/.test(prompt)
-    || /\bstrict\s+evidence\b/.test(prompt)
-    || /\bmark\s+uncertain(?:ty)?\b/.test(prompt)
-    || /不要猜|别猜|不确定就标注|严格证据|证据不足/.test(prompt)
+  const text = stringValue(data.prompt).toLowerCase();
+  return Boolean(text && (
+    evidenceNoGuessPattern.test(text)
+    || evidenceStrictPattern.test(text)
+    || evidenceUncertainPattern.test(text)
+    || evidenceStrictZhPattern.test(text)
   ));
 }
+
+const evidenceMetadataTokenPattern = /\bmetadata\b/;
+const evidenceNoFullTextPattern = /\b(?:no|skip|without|defer)\s+full[-\s]?text\b/;
+const evidenceMetadataOnlyZhPattern = /不要下载全文|不下载全文|先用\s*metadata|metadata\s*快速判断/i;
+const evidenceNoGuessPattern = /\b(?:do not|don't|dont|never)\s+guess\b/;
+const evidenceStrictPattern = /\bstrict\s+evidence\b/;
+const evidenceUncertainPattern = /\bmark\s+uncertain(?:ty)?\b/;
+const evidenceStrictZhPattern = /不要猜|别猜|不确定就标注|严格证据|证据不足/;
 
 function normalizePolicyToken(value: string): string {
   return value.toLowerCase().trim().replaceAll(/[\s_]+/g, '-');

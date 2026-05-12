@@ -530,7 +530,7 @@ Failure/Improvement Notes：
 - [ ] R-CODE-04 多模块改造：让 agent 同时改 gateway、UI presentation、runtime contract、tests；用户中途要求缩小范围，只保留 runtime 修复。
 - [ ] R-CODE-05 测试失败恢复：第一次 patch 后 typecheck/test 失败，用户要求解释失败并做最小通用修复，不能回滚无关改动。
 - [ ] R-CODE-06 Dirty worktree 协作：预先放入用户未提交改动，再让 agent 修复另一区域，验证不会 reset/revert 用户改动。
-- [ ] R-CODE-07 Release verify 请求：用户要求“等完整验证再推 GitHub”，系统必须阻塞到指定测试完成，失败时不推送。
+- [x] R-CODE-07 Release verify 请求：用户要求“等完整验证再推 GitHub”，系统必须阻塞到指定测试完成，失败时不推送。已新增 `sciforge.release-gate.v1`，把 release/push intent 映射到 `npm run verify:full`，并在缺少 full verify、服务重启、变更摘要、git target 或 audit refs 时保持 pending/needs-human，不允许把 GitHub push 视作完成。
 - [ ] R-CODE-08 Backend handoff 漂移：AgentServer 返回 taskFiles、direct ToolPayload、plain text、malformed generation response 四类输出，要求统一分类和可恢复。
 - [ ] R-CODE-09 多 backend 对比修复：同一任务用 Codex/OpenTeam 两个 backend 跑，比较失败模式，提炼 backend-neutral 修复。
 - [x] R-CODE-10 项目服务生命周期：修改代码后自动重启 dev server，确认端口占用、旧进程退出、新服务 ready、浏览器页面可刷新。已覆盖 Workspace Writer health identity、动态端口 restart smoke 和 Vite capability gate；真实 UI dev server 热更新仍由 `npm run smoke:browser` 持续覆盖。
@@ -581,7 +581,7 @@ UI 与 presentation 真实任务：
 - [ ] R-WF-07 用户反馈收敛：用户连续指出“慢、崩、看不懂、引用错、重复跑”，系统把反馈归类到通用 TODO，而不是逐条道歉。
 - [x] R-WF-08 低预算模式：用户要求“不要下载全文，先用 metadata 快速判断”，后续再允许补全文，测试 budget escalation。已覆盖结构化 fullTextPolicy、低预算 disabled/retained work 与 handoff metadata-first directive。
 - [x] R-WF-09 严格证据模式：用户要求“不要猜，不确定就标注”，系统必须降低 claim confidence 并输出 evidence gaps。已覆盖 evidenceMode.evidenceGaps、confidencePolicy ceiling 与 strict-evidence handoff。
-- [ ] R-WF-10 发布前检查：用户要求把本地改动推 GitHub 前做 release verify、写变更摘要、重启服务，并保留审计记录。
+- [x] R-WF-10 发布前检查：用户要求把本地改动推 GitHub 前做 release verify、写变更摘要、重启服务，并保留审计记录。已覆盖 release gate audit、intent-first verification 展示状态、runtime verification fail-closed gate 和 `smoke:release-gate`；`verify:full` 失败或证据缺失时不会允许推送。
 
 通用修复 TODO 池：
 

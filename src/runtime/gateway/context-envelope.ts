@@ -214,15 +214,18 @@ export function buildContextEnvelope(
   };
 }
 
+const rawLogInspectionPattern = /\b(raw\s+logs?|log\s+(?:text|contents?)|(?:stdout|stderr)\s+(?:text|contents?|logs?)|failure diagnosis|debug logs?|原始日志|日志内容|标准输出内容|错误输出内容|失败诊断|调试日志)\b/i;
+
 function evidenceExpansionPolicySummaryForEnvelope(request: GatewayRequest) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
-  const requestedRawLogInspection = /\b(raw\s+logs?|log\s+(?:text|contents?)|(?:stdout|stderr)\s+(?:text|contents?|logs?)|failure diagnosis|debug logs?|原始日志|日志内容|标准输出内容|错误输出内容|失败诊断|调试日志)\b/i.test(request.prompt);
+  const requestText = request.prompt;
+  const requestedRawLogInspection = rawLogInspectionPattern.test(requestText);
   return {
     schemaVersion: 'sciforge.evidence-expansion-policy.v1',
     defaultAction: 'refs-and-digests-first',
     stdoutStderrRefs: requestedRawLogInspection ? 'may-expand-for-current-user-request' : 'cite-only-by-default',
-    artifactBodies: 'prefer dataRef/path/markdownRef/currentReferenceDigests; expand bounded excerpts only when needed',
-    continuationGuard: 'For continuation/export/audit-summary turns, list log refs and structured artifact refs without reading raw logs unless explicitly requested.',
+    artifactBodies: 'prefer dataRef, path, markdownRef, or currentReferenceDigests; expand bounded excerpts only when needed',
+    continuationGuard: 'For continuation, export, or audit-summary turns, list log refs and structured artifact refs without reading raw logs unless explicitly requested.',
     requestedRawLogInspection,
     source: 'context-envelope',
     uiTransportPolicy: isRecord(uiState.failureRecoveryPolicy) && isRecord(uiState.failureRecoveryPolicy.evidenceExpansionPolicy)

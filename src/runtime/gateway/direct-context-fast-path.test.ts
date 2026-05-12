@@ -38,6 +38,36 @@ test('context follow-up protocol enables direct context answer even when AgentSe
   assert.match(payload.message, /research-report|report/i);
 });
 
+test('context follow-up protocol yields when AgentServer generation is explicitly forced', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Where did the generated files go?',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'research-report',
+      type: 'research-report',
+      metadata: { reportRef: '.sciforge/task-results/report.md' },
+    }],
+    uiState: {
+      forceAgentServerGeneration: true,
+      agentHarness: {
+        contract: {
+          schemaVersion: 'sciforge.agent-harness-contract.v1',
+          intentMode: 'audit',
+          capabilityPolicy: { preferredCapabilityIds: ['runtime.direct-context-answer'] },
+        },
+      },
+      recentExecutionRefs: [{
+        id: 'unit-report',
+        tool: 'capability.report.generate',
+        outputRef: '.sciforge/task-results/report.json',
+      }],
+    },
+  };
+
+  assert.equal(directContextFastPathPayload(request), undefined);
+});
+
 test('context follow-up protocol does not direct-answer fresh work requests', () => {
   const request: GatewayRequest = {
     skillDomain: 'literature',

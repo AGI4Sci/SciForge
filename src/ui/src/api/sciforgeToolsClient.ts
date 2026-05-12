@@ -856,7 +856,7 @@ function buildFailureRecoveryPolicy(executionUnits: unknown[], runs: unknown[]) 
     evidenceExpansionPolicy: {
       defaultAction: 'refs-and-digests-only',
       logRefs: 'cite stdoutRef/stderrRef for audit; expand only for explicit log inspection or failure diagnosis',
-      artifactRefs: 'prefer dataRef/path/markdownRef/currentReferenceDigests before reading full artifact bodies',
+      artifactRefs: 'prefer dataRef, path, markdownRef, or currentReferenceDigests before reading full artifact bodies',
     },
     priorFailureReason: joinFailureAndProcessSummary(priorFailureReason, latestFailedRun ? streamProcessSummaryFromRun(latestFailedRun) : undefined),
     recoverActions,

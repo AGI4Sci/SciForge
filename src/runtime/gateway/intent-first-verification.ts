@@ -16,6 +16,14 @@ import {
   type BackgroundCompletionRef,
   type BackgroundCompletionRuntimeEvent,
 } from '@sciforge-ui/runtime-contract/events';
+import {
+  RELEASE_GATE_REQUIRED_COMMAND,
+  buildReleaseGateAudit,
+  releaseGateHasRequiredVerifyCommand,
+  type ReleaseGateAudit,
+  type ReleaseGateStepInput,
+  type ReleaseGateStepKind,
+} from '@sciforge-ui/runtime-contract/release-gate';
 
 export const INTENT_FIRST_VERIFICATION_SCHEMA_VERSION = 'sciforge.intent-first-verification.v1' as const;
 export const INTENT_MATCH_LOG_KIND = 'intent-match-check' as const;
@@ -59,8 +67,10 @@ export interface VerifyJob {
   level: VerifyLevel;
   status: VerifyJobStatus;
   blockingPolicy: VerifyBlockingPolicy;
+  command?: string;
   targetRefs: string[];
   evidenceRefs: string[];
+  releaseGate?: ReleaseGateAudit;
   failureSummary?: string;
   recommendedFix?: string;
 }
@@ -123,6 +133,7 @@ export function attachIntentFirstVerification(
   };
   const hasPendingWorkVerify = jobs.some((job) => job.status === 'queued' || job.status === 'running');
   const failedWorkVerify = jobs.find((job) => job.status === 'failed');
+  const releaseGate = jobs.find((job) => job.releaseGate)?.releaseGate;
   const workStatus = verificationWorkStatus(jobs, routing);
   const recoverActions = uniqueStrings([
     ...(intentCheck.verdict === 'fail' ? ['Revise the answer to match the latest user intent before doing more work.'] : []),
@@ -176,7 +187,8 @@ export function attachIntentFirstVerification(
           `verifyRoute=${routing.mode}`,
           `blockingPolicy=${routing.blockingPolicy}`,
           `workVerify=${workStatus}`,
-        ],
+          releaseGate ? `releaseGate=${releaseGate.status}` : '',
+        ].filter(Boolean),
         rawRef: failedWorkVerify ? `verify-job:${failedWorkVerify.id}` : `intent-match:${intentCheck.id}`,
       },
     ],
@@ -188,6 +200,14 @@ export function attachIntentFirstVerification(
         response: intentCheck.verdict === 'pass' ? 'intent checked' : 'intent needs attention',
         work: workStatus,
         blocking: routing.blockingPolicy !== 'non-blocking',
+        releaseGate: releaseGate
+          ? {
+            status: releaseGate.status,
+            pushAllowed: releaseGate.pushAllowed,
+            requiredCommand: releaseGate.requiredCommand,
+            missing: releaseGate.missing,
+          }
+          : undefined,
       },
     },
   };
@@ -281,6 +301,31 @@ export function buildVerifyJobs(payload: ToolPayload, routing: VerifyRoutingDeci
       recommendedFix: 'Run background, careful, or release verify if the user asks for stronger assurance.',
     }];
   }
+  if (routing.mode === 'release') {
+    const releaseGate = releaseGateAuditForPayload(payload);
+    const targetRefs = uniqueStrings([
+      ...targetRefsForPayload(payload),
+      `release-gate:${RELEASE_GATE_REQUIRED_COMMAND}`,
+    ]);
+    return [{
+      schemaVersion: INTENT_FIRST_VERIFICATION_SCHEMA_VERSION,
+      id: stableId('verify-release', targetRefs.join('|')),
+      scope: 'heavy',
+      level: 'release',
+      status: 'running',
+      blockingPolicy: 'release',
+      command: RELEASE_GATE_REQUIRED_COMMAND,
+      targetRefs,
+      evidenceRefs: uniqueStrings([
+        ...targetRefs,
+        ...releaseGate.auditRefs,
+        ...releaseGate.gitRefs,
+        ...releaseGate.steps.flatMap((step) => step.evidenceRefs),
+      ]),
+      releaseGate,
+      recommendedFix: releaseGate.nextActions[0] ?? 'Run npm run verify:full before pushing to GitHub.',
+    }];
+  }
   const targetRefs = targetRefsForPayload(payload);
   if (!targetRefs.length) return [];
   return [{
@@ -332,6 +377,41 @@ export function runBackgroundWorkVerify(
   const finalJobs = jobs.map((job): VerifyJob => {
     if (job.status === 'skipped') return job;
     if (!job.targetRefs.length) return job;
+    if (job.level === 'release') {
+      const releaseGate = releaseGateAuditForPayload(payload, request);
+      const releaseEvidenceRefs = uniqueStrings([
+        ...job.evidenceRefs,
+        ...releaseGate.auditRefs,
+        ...releaseGate.gitRefs,
+        ...releaseGate.steps.flatMap((step) => step.evidenceRefs),
+      ]);
+      if (releaseGate.status === 'failed') {
+        return {
+          ...job,
+          status: 'failed',
+          evidenceRefs: releaseEvidenceRefs,
+          releaseGate,
+          failureSummary: releaseGate.failureReasons.join('; ') || 'Release verification failed.',
+          recommendedFix: releaseGate.nextActions[0],
+        };
+      }
+      if (releaseGate.pushAllowed) {
+        return {
+          ...job,
+          status: 'passed',
+          evidenceRefs: releaseEvidenceRefs,
+          releaseGate,
+          recommendedFix: releaseGate.nextActions[0],
+        };
+      }
+      return {
+        ...job,
+        status: 'running',
+        evidenceRefs: releaseEvidenceRefs,
+        releaseGate,
+        recommendedFix: releaseGate.nextActions[0],
+      };
+    }
     return {
       ...job,
       status: evaluation.failureSummary ? 'failed' : 'passed',
@@ -492,6 +572,191 @@ function evaluatePayloadForWorkVerify(payload: ToolPayload) {
   return {};
 }
 
+function releaseGateAuditForPayload(payload: ToolPayload, request?: GatewayRequest) {
+  const explicit = releaseGateRecord(payload, request);
+  const steps = uniqueReleaseGateSteps([
+    ...releaseGateStepsFromUnknown(explicit?.steps),
+    ...payload.executionUnits.flatMap(releaseGateStepsFromExecutionUnit),
+    ...(payload.workEvidence ?? []).flatMap(releaseGateStepsFromWorkEvidence),
+    ...(payload.verificationResults ?? []).flatMap(releaseGateStepsFromVerificationResult),
+  ]);
+  return buildReleaseGateAudit({
+    gateId: stringField(explicit?.gateId) ?? stringField(explicit?.id),
+    changeSummary: stringField(explicit?.changeSummary) ?? stringField(explicit?.summary),
+    currentBranch: stringField(explicit?.currentBranch) ?? stringField(gitRecord(request)?.currentBranch) ?? stringField(gitRecord(request)?.branch),
+    targetRemote: stringField(explicit?.targetRemote) ?? stringField(gitRecord(request)?.targetRemote) ?? stringField(gitRecord(request)?.remote),
+    targetBranch: stringField(explicit?.targetBranch) ?? stringField(gitRecord(request)?.targetBranch),
+    steps,
+    serviceHealth: Array.isArray(explicit?.serviceHealth)
+      ? explicit.serviceHealth.filter(isRecord).map((service) => ({
+        name: stringField(service.name) ?? 'service',
+        status: stringField(service.status) ?? 'unknown',
+        url: stringField(service.url),
+        evidenceRefs: stringList(service.evidenceRefs),
+      }))
+      : undefined,
+    auditRefs: uniqueStrings([
+      ...stringList(explicit?.auditRefs),
+      ...((payload.logs ?? []).map((log) => isRecord(log) ? stringField(log.ref) ?? '' : '').filter((ref) => /audit|release-gate|verify/i.test(ref))),
+      ...payload.artifacts.flatMap((artifact) => isRecord(artifact) && /audit|release-gate|verification/i.test(String(artifact.type ?? artifact.id ?? ''))
+        ? refsFromRecord(artifact)
+        : []),
+    ]),
+    gitRefs: uniqueStrings([
+      ...stringList(explicit?.gitRefs),
+      ...stringList(gitRecord(request)?.gitRefs),
+      ...((payload.logs ?? []).map((log) => isRecord(log) ? stringField(log.ref) ?? '' : '').filter((ref) => /^commit:|^push:|^git:/.test(ref))),
+    ]),
+    createdAt: stringField(explicit?.createdAt),
+  });
+}
+
+function releaseGateRecord(payload: ToolPayload, request?: GatewayRequest) {
+  const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
+  const verificationStatus = isRecord(displayIntent.verificationStatus) ? displayIntent.verificationStatus : {};
+  const requestReleaseGate = isRecord(request?.uiState?.releaseGate) ? request?.uiState?.releaseGate : undefined;
+  return [
+    isRecord(displayIntent.releaseGate) ? displayIntent.releaseGate : undefined,
+    isRecord(verificationStatus.releaseGate) ? verificationStatus.releaseGate : undefined,
+    requestReleaseGate,
+  ].find((record): record is Record<string, unknown> => Boolean(record));
+}
+
+function gitRecord(request: GatewayRequest | undefined) {
+  if (!isRecord(request?.uiState)) return undefined;
+  return isRecord(request.uiState.git) ? request.uiState.git : isRecord(request.uiState.gitState) ? request.uiState.gitState : undefined;
+}
+
+function releaseGateStepsFromUnknown(value: unknown): ReleaseGateStepInput[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).flatMap((entry) => {
+    const kind = releaseGateStepKind(entry.kind);
+    if (!kind) return [];
+    return [{
+      kind,
+      status: stringField(entry.status),
+      command: stringField(entry.command),
+      summary: stringField(entry.summary),
+      failureReason: stringField(entry.failureReason),
+      evidenceRefs: stringList(entry.evidenceRefs),
+    }];
+  });
+}
+
+function releaseGateStepsFromExecutionUnit(unit: Record<string, unknown>): ReleaseGateStepInput[] {
+  if (!isRecord(unit)) return [];
+  const text = compactGateText([unit.tool, unit.command, unit.params, unit.input, unit.outputSummary]);
+  const status = releaseGateStepStatusFromRuntimeStatus(unit.status);
+  const refs = refsFromRecord(unit);
+  if (releaseGateHasRequiredVerifyCommand(text)) {
+    const fallbackRef = stringField(unit.id) ? `execution-unit:${stringField(unit.id)}` : 'execution-unit:release-verify';
+    return [{
+      kind: 'release-verify',
+      status,
+      command: RELEASE_GATE_REQUIRED_COMMAND,
+      failureReason: stringField(unit.failureReason) ?? stringField(unit.error),
+      evidenceRefs: refs.length ? refs : [fallbackRef],
+    }];
+  }
+  if (/service|restart|dev server|workspace writer|agentserver|vite/i.test(text)) {
+    return [{
+      kind: 'service-restart',
+      status,
+      summary: stringField(unit.outputSummary),
+      failureReason: stringField(unit.failureReason) ?? stringField(unit.error),
+      evidenceRefs: refs,
+    }];
+  }
+  return [];
+}
+
+function releaseGateStepsFromWorkEvidence(entry: {
+  kind: string;
+  status: string;
+  provider?: string;
+  input?: Record<string, unknown> | string;
+  outputSummary?: string;
+  evidenceRefs: string[];
+  failureReason?: string;
+}): ReleaseGateStepInput[] {
+  const text = compactGateText([entry.kind, entry.provider, entry.input, entry.outputSummary, ...entry.evidenceRefs]);
+  const status = releaseGateStepStatusFromRuntimeStatus(entry.status);
+  if (releaseGateHasRequiredVerifyCommand(text)) {
+    return [{
+      kind: 'release-verify' as const,
+      status,
+      command: RELEASE_GATE_REQUIRED_COMMAND,
+      summary: entry.outputSummary,
+      failureReason: entry.failureReason,
+      evidenceRefs: entry.evidenceRefs,
+    }];
+  }
+  if (/service|restart|health|ready|workspace writer|agentserver|vite/i.test(text)) {
+    return [{
+      kind: 'service-restart' as const,
+      status,
+      summary: entry.outputSummary,
+      failureReason: entry.failureReason,
+      evidenceRefs: entry.evidenceRefs,
+    }];
+  }
+  return [];
+}
+
+function releaseGateStepsFromVerificationResult(result: {
+  id?: string;
+  verdict: string;
+  critique?: string;
+  evidenceRefs: string[];
+}): ReleaseGateStepInput[] {
+  const text = compactGateText([result.id, result.critique, ...result.evidenceRefs]);
+  if (!releaseGateHasRequiredVerifyCommand(text) && !/verify-full|release/i.test(text)) return [];
+  return [{
+    kind: 'release-verify' as const,
+    status: result.verdict === 'pass' ? 'passed' : result.verdict === 'fail' || result.verdict === 'needs-human' ? 'failed' : 'pending',
+    command: RELEASE_GATE_REQUIRED_COMMAND,
+    failureReason: result.verdict === 'pass' ? undefined : result.critique,
+    evidenceRefs: result.evidenceRefs,
+  }];
+}
+
+function releaseGateStepKind(value: unknown): ReleaseGateStepKind | undefined {
+  return value === 'change-summary'
+    || value === 'git-target'
+    || value === 'release-verify'
+    || value === 'service-restart'
+    || value === 'audit-record'
+    || value === 'push'
+    ? value
+    : undefined;
+}
+
+function releaseGateStepStatusFromRuntimeStatus(value: unknown) {
+  const status = String(value ?? '').trim().toLowerCase();
+  if (status === 'done' || status === 'success' || status === 'passed' || status === 'self-healed') return 'passed';
+  if (status === 'failed' || status === 'failed-with-reason' || status === 'repair-needed' || status === 'needs-human') return 'failed';
+  if (status === 'skipped') return 'skipped';
+  return 'pending';
+}
+
+function uniqueReleaseGateSteps(steps: ReleaseGateStepInput[]) {
+  const seen = new Set<string>();
+  return steps.filter((step) => {
+    const key = `${step.kind}:${step.command ?? ''}:${(step.evidenceRefs ?? []).join('|')}:${step.status ?? ''}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function compactGateText(values: unknown[]) {
+  return values.map((value) => {
+    if (typeof value === 'string') return value;
+    if (value === undefined || value === null) return '';
+    return JSON.stringify(value);
+  }).join('\n');
+}
+
 function emitBackgroundWorkVerifyEvent(input: {
   callbacks?: WorkspaceRuntimeCallbacks;
   completedAt: string;
@@ -640,6 +905,10 @@ function uniqueStrings(values: string[]) {
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function stringList(value: unknown) {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : [];
 }
 
 function toRecordList(value: unknown) {

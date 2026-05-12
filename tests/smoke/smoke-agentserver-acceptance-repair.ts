@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdtemp, readFile, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
@@ -89,9 +89,9 @@ try {
   assert.equal(result.message, 'report written');
   assert.doesNotMatch(String(result.message), /did not satisfy explicit user-requested report terms\/fields/);
 
-  const attemptFiles = await readdir(join(workspace, '.sciforge', 'task-attempts'));
+  const attemptFiles = await collectTaskAttemptFiles(join(workspace, '.sciforge'));
   assert.equal(attemptFiles.length, 1);
-  const attemptHistory = JSON.parse(await readFile(join(workspace, '.sciforge', 'task-attempts', attemptFiles[0]), 'utf8'));
+  const attemptHistory = JSON.parse(await readFile(attemptFiles[0], 'utf8'));
   assert.equal(attemptHistory.attempts.length, 1);
   assert.equal(attemptHistory.attempts[0].status, 'done');
 
@@ -109,6 +109,24 @@ async function readJson(req: NodeJS.ReadableStream): Promise<Record<string, unkn
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+async function collectTaskAttemptFiles(root: string): Promise<string[]> {
+  const out: string[] = [];
+  async function visit(dir: string) {
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await visit(full);
+        continue;
+      }
+      const rel = relative(root, full).replaceAll('\\', '/');
+      if (rel.includes('/records/task-attempts/') || rel.startsWith('task-attempts/')) out.push(full);
+    }
+  }
+  await visit(root);
+  return out;
 }
 
 function sendRunResponse(

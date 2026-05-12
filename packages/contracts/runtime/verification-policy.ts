@@ -2,6 +2,13 @@ import {
   VERIFICATION_RESULT_CONTRACT_ID,
   type RuntimeVerificationResult,
 } from './verification-result';
+import {
+  RELEASE_GATE_REQUIRED_COMMAND,
+  buildReleaseGateAudit,
+  releaseGateHasRequiredVerifyCommand,
+  type ReleaseGateStepInput,
+  type ReleaseGateStepKind,
+} from './release-gate';
 
 export type RuntimeVerificationMode = 'none' | 'lightweight' | 'automatic' | 'human' | 'hybrid' | 'unverified';
 export type RuntimeVerificationRiskLevel = 'low' | 'medium' | 'high';
@@ -32,6 +39,12 @@ export interface RuntimeVerificationPolicyRequest {
 export interface RuntimeVerificationPolicyPayload {
   verificationPolicy?: RuntimeVerificationPolicy | Record<string, unknown>;
   executionUnits?: unknown;
+  artifacts?: unknown;
+  displayIntent?: unknown;
+  logs?: unknown;
+  message?: unknown;
+  verificationResults?: unknown;
+  workEvidence?: unknown;
 }
 
 export interface RuntimeHumanApprovalSnapshot {
@@ -103,6 +116,54 @@ export function evaluateRuntimeVerificationGate(
   const decisive = mostDecisiveVerificationResult(providedResults);
   const approval = normalizeHumanApproval(request.humanApproval ?? request.uiState?.humanApproval);
   const highRiskAction = policy.riskLevel === 'high' || hasHighRiskActionSignal(request, payload);
+  const releaseGate = releaseGateRequirement(payload, request);
+  if (releaseGate.required && releaseGate.actionCompleted) {
+    const evidenceRefs = uniqueStrings([
+      ...executionUnitRefs(payload),
+      ...releaseGate.audit.auditRefs,
+      ...releaseGate.audit.gitRefs,
+      ...releaseGate.audit.steps.flatMap((step) => step.evidenceRefs),
+    ]);
+    if (releaseGate.audit.pushAllowed) {
+      return {
+        blocked: false,
+        result: {
+          id: `release-gate:${releaseGate.audit.gateId}`,
+          verdict: 'pass',
+          reward: 1,
+          confidence: 0.95,
+          critique: 'Release gate passed before the external sync action.',
+          evidenceRefs,
+          repairHints: [],
+          diagnostics: {
+            source: 'release-gate',
+            releaseGate: releaseGate.audit,
+          },
+        },
+      };
+    }
+    const reason = releaseGate.audit.failureReasons[0]
+      ?? releaseGate.audit.nextActions[0]
+      ?? 'Release gate has not passed; push is blocked.';
+    return {
+      blocked: true,
+      reason,
+      result: {
+        id: `release-gate:${releaseGate.audit.gateId}`,
+        verdict: releaseGate.audit.status === 'failed' ? 'fail' : 'needs-human',
+        reward: -1,
+        confidence: 0.99,
+        critique: reason,
+        evidenceRefs,
+        repairHints: releaseGate.audit.nextActions,
+        diagnostics: {
+          source: 'release-gate',
+          requiredCommand: RELEASE_GATE_REQUIRED_COMMAND,
+          releaseGate: releaseGate.audit,
+        },
+      },
+    };
+  }
   if (decisive?.verdict === 'pass') return { blocked: false, result: decisive };
   if (approval?.approved) {
     return {
@@ -313,7 +374,7 @@ function executionUnitHasHighRiskActionSignal(unit: Record<string, unknown>) {
 }
 
 function highRiskActionToken(text: string) {
-  return /\b(delete|remove|destroy|drop|publish|send|pay|purchase|authorize|credential|secret|external-write|production)\b|\u5220\u9664|\u53d1\u5e03|\u53d1\u9001|\u652f\u4ed8|\u6388\u6743|\u51ed\u636e|\u751f\u4ea7\u73af\u5883/.test(text.toLowerCase());
+  return /\b(delete|remove|destroy|drop|publish|send|push|deploy|merge|release|github|pay|purchase|authorize|credential|secret|external-write|production)\b|\u5220\u9664|\u53d1\u5e03|\u53d1\u9001|\u63a8\s*github|\u540c\u6b65.*github|\u652f\u4ed8|\u6388\u6743|\u51ed\u636e|\u751f\u4ea7\u73af\u5883/.test(text.toLowerCase());
 }
 
 function actionProviderSelfReportsSuccess(payload: RuntimeVerificationPolicyPayload) {
@@ -321,15 +382,18 @@ function actionProviderSelfReportsSuccess(payload: RuntimeVerificationPolicyPayl
 }
 
 function looksLikeActionProvider(unit: Record<string, unknown>) {
-  return /action|computer-use|vision-sense|gui|browser|desktop|mouse|keyboard|executor|external|send|delete|publish|authorize|pay/.test(actionProviderEvidenceText(unit));
+  return /action|computer-use|vision-sense|gui|browser|desktop|mouse|keyboard|executor|external|send|delete|publish|authorize|pay|git|github|deploy|release/.test(actionProviderEvidenceText(unit));
 }
 
 function actionProviderEvidenceText(unit: Record<string, unknown>) {
   return [
     unit.tool,
+    unit.command,
     unit.provider,
     unit.routeDecision,
     unit.params,
+    unit.input,
+    unit.outputSummary,
     unit.environment,
     unit.action,
     unit.kind,
@@ -351,6 +415,228 @@ function executionUnitRefs(payload: RuntimeVerificationPolicyPayload) {
   return executionUnitRecords(payload)
     .map((unit) => typeof unit.id === 'string' ? `execution-unit:${unit.id}` : undefined)
     .filter((value): value is string => Boolean(value));
+}
+
+function releaseGateRequirement(
+  payload: RuntimeVerificationPolicyPayload,
+  request: RuntimeVerificationPolicyRequest,
+) {
+  const audit = releaseGateAuditForRuntime(payload, request);
+  const actionCompleted = releaseSyncActionCompleted(payload);
+  const required = actionCompleted || releaseGateRequested(request, payload);
+  return { audit, actionCompleted, required };
+}
+
+function releaseGateAuditForRuntime(
+  payload: RuntimeVerificationPolicyPayload,
+  request: RuntimeVerificationPolicyRequest,
+) {
+  const explicit = explicitReleaseGateRecord(payload, request);
+  const git = gitRecord(request);
+  return buildReleaseGateAudit({
+    gateId: stringField(explicit?.gateId) ?? stringField(explicit?.id),
+    changeSummary: stringField(explicit?.changeSummary) ?? stringField(explicit?.summary),
+    currentBranch: stringField(explicit?.currentBranch) ?? stringField(git?.currentBranch) ?? stringField(git?.branch),
+    targetRemote: stringField(explicit?.targetRemote) ?? stringField(git?.targetRemote) ?? stringField(git?.remote),
+    targetBranch: stringField(explicit?.targetBranch) ?? stringField(git?.targetBranch),
+    steps: uniqueReleaseGateSteps([
+      ...releaseGateStepsFromUnknown(explicit?.steps),
+      ...executionUnitRecords(payload).flatMap(releaseGateStepsFromExecutionUnit),
+      ...toRecordList(payload.workEvidence).flatMap(releaseGateStepsFromWorkEvidence),
+      ...toRecordList(payload.verificationResults).flatMap(releaseGateStepsFromVerificationResult),
+    ]),
+    serviceHealth: Array.isArray(explicit?.serviceHealth)
+      ? explicit.serviceHealth.filter(isRecord).map((service) => ({
+        name: stringField(service.name) ?? 'service',
+        status: stringField(service.status) ?? 'unknown',
+        url: stringField(service.url),
+        evidenceRefs: toStringList(service.evidenceRefs),
+      }))
+      : undefined,
+    auditRefs: uniqueStrings([
+      ...toStringList(explicit?.auditRefs),
+      ...toRecordList(payload.logs).map((log) => stringField(log.ref)).filter((ref): ref is string => typeof ref === 'string' && /audit|release-gate|verify/i.test(ref)),
+      ...toRecordList(payload.artifacts).flatMap((artifact) => /audit|release-gate|verification/i.test(String(artifact.type ?? artifact.id ?? ''))
+        ? refsFromRecord(artifact)
+        : []),
+    ]),
+    gitRefs: uniqueStrings([
+      ...toStringList(explicit?.gitRefs),
+      ...toStringList(git?.gitRefs),
+      ...toRecordList(payload.logs).map((log) => stringField(log.ref)).filter((ref): ref is string => typeof ref === 'string' && /^commit:|^push:|^git:/.test(ref)),
+    ]),
+    createdAt: stringField(explicit?.createdAt),
+  });
+}
+
+function explicitReleaseGateRecord(
+  payload: RuntimeVerificationPolicyPayload,
+  request: RuntimeVerificationPolicyRequest,
+) {
+  const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
+  const verificationStatus = isRecord(displayIntent.verificationStatus) ? displayIntent.verificationStatus : {};
+  return [
+    isRecord(displayIntent.releaseGate) ? displayIntent.releaseGate : undefined,
+    isRecord(verificationStatus.releaseGate) ? verificationStatus.releaseGate : undefined,
+    isRecord(request.uiState?.releaseGate) ? request.uiState.releaseGate : undefined,
+  ].find((record): record is Record<string, unknown> => Boolean(record));
+}
+
+function releaseGateRequested(
+  request: RuntimeVerificationPolicyRequest,
+  payload: RuntimeVerificationPolicyPayload,
+) {
+  const text = compactEvidenceText([
+    request.prompt,
+    request.verificationPolicy,
+    request.uiState?.verifyPolicy,
+    request.uiState?.verificationRouting,
+    payload.verificationPolicy,
+    payload.message,
+  ]);
+  return releaseGateTextSignal(text);
+}
+
+function releaseSyncActionCompleted(payload: RuntimeVerificationPolicyPayload) {
+  return executionUnitRecords(payload).some((unit) =>
+    isSuccessfulStatus(unit.status)
+    && releaseSyncActionSignal(actionProviderEvidenceText(unit))
+  );
+}
+
+function releaseGateTextSignal(text: string) {
+  return releaseSyncActionSignal(text)
+    || /\brelease\s+verify\b|\bfull\s+verify\b|\bverify:full\b|npm\s+run\s+verify:full|\u5b8c\u6574\u9a8c\u8bc1|\u4e0a\u7ebf\u9a8c\u8bc1|\u53d1\u5e03\u9a8c\u8bc1/.test(text.toLowerCase());
+}
+
+function releaseSyncActionSignal(text: string) {
+  return /\bgit\s+push\b|\bpush\s+(?:to\s+)?github\b|\bgithub\s+push\b|\bdeploy\b|\brelease\b|\bmerge\b|\u63a8\s*github|\u540c\u6b65.*github|\u4e0a\u7ebf/.test(text.toLowerCase());
+}
+
+function releaseGateStepsFromUnknown(value: unknown): ReleaseGateStepInput[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).flatMap((entry) => {
+    const kind = releaseGateStepKind(entry.kind);
+    if (!kind) return [];
+    return [{
+      kind,
+      status: stringField(entry.status),
+      command: stringField(entry.command),
+      summary: stringField(entry.summary),
+      failureReason: stringField(entry.failureReason),
+      evidenceRefs: toStringList(entry.evidenceRefs),
+    }];
+  });
+}
+
+function releaseGateStepsFromExecutionUnit(unit: Record<string, unknown>): ReleaseGateStepInput[] {
+  const text = compactEvidenceText([unit.tool, unit.command, unit.params, unit.input, unit.outputSummary]);
+  const status = releaseGateStepStatusFromRuntimeStatus(unit.status);
+  const refs = refsFromRecord(unit);
+  if (releaseGateHasRequiredVerifyCommand(text)) {
+    return [{
+      kind: 'release-verify',
+      status,
+      command: RELEASE_GATE_REQUIRED_COMMAND,
+      failureReason: stringField(unit.failureReason) ?? stringField(unit.error),
+      evidenceRefs: refs.length ? refs : [`execution-unit:${stringField(unit.id) ?? 'release-verify'}`],
+    }];
+  }
+  if (/service|restart|dev server|workspace writer|agentserver|vite/i.test(text)) {
+    return [{
+      kind: 'service-restart',
+      status,
+      summary: stringField(unit.outputSummary),
+      failureReason: stringField(unit.failureReason) ?? stringField(unit.error),
+      evidenceRefs: refs,
+    }];
+  }
+  return [];
+}
+
+function releaseGateStepsFromWorkEvidence(entry: Record<string, unknown>): ReleaseGateStepInput[] {
+  const evidenceRefs = toStringList(entry.evidenceRefs);
+  const text = compactEvidenceText([entry.kind, entry.provider, entry.input, entry.outputSummary, ...evidenceRefs]);
+  const status = releaseGateStepStatusFromRuntimeStatus(entry.status);
+  if (releaseGateHasRequiredVerifyCommand(text)) {
+    return [{
+      kind: 'release-verify',
+      status,
+      command: RELEASE_GATE_REQUIRED_COMMAND,
+      summary: stringField(entry.outputSummary),
+      failureReason: stringField(entry.failureReason),
+      evidenceRefs,
+    }];
+  }
+  if (/service|restart|health|ready|workspace writer|agentserver|vite/i.test(text)) {
+    return [{
+      kind: 'service-restart',
+      status,
+      summary: stringField(entry.outputSummary),
+      failureReason: stringField(entry.failureReason),
+      evidenceRefs,
+    }];
+  }
+  return [];
+}
+
+function releaseGateStepsFromVerificationResult(result: Record<string, unknown>): ReleaseGateStepInput[] {
+  const evidenceRefs = toStringList(result.evidenceRefs);
+  const text = compactEvidenceText([result.id, result.critique, ...evidenceRefs]);
+  if (!releaseGateHasRequiredVerifyCommand(text) && !/verify-full|release/i.test(text)) return [];
+  const verdict = stringField(result.verdict);
+  return [{
+    kind: 'release-verify',
+    status: verdict === 'pass' ? 'passed' : verdict === 'fail' || verdict === 'needs-human' ? 'failed' : 'pending',
+    command: RELEASE_GATE_REQUIRED_COMMAND,
+    failureReason: verdict === 'pass' ? undefined : stringField(result.critique),
+    evidenceRefs,
+  }];
+}
+
+function releaseGateStepKind(value: unknown): ReleaseGateStepKind | undefined {
+  return value === 'change-summary'
+    || value === 'git-target'
+    || value === 'release-verify'
+    || value === 'service-restart'
+    || value === 'audit-record'
+    || value === 'push'
+    ? value
+    : undefined;
+}
+
+function releaseGateStepStatusFromRuntimeStatus(value: unknown) {
+  const status = String(value ?? '').trim().toLowerCase();
+  if (status === 'done' || status === 'success' || status === 'passed' || status === 'self-healed') return 'passed';
+  if (status === 'failed' || status === 'failed-with-reason' || status === 'repair-needed' || status === 'needs-human') return 'failed';
+  if (status === 'skipped') return 'skipped';
+  return 'pending';
+}
+
+function uniqueReleaseGateSteps(steps: ReleaseGateStepInput[]) {
+  const seen = new Set<string>();
+  return steps.filter((step) => {
+    const key = `${step.kind}:${step.command ?? ''}:${(step.evidenceRefs ?? []).join('|')}:${step.status ?? ''}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function gitRecord(request: RuntimeVerificationPolicyRequest) {
+  return isRecord(request.uiState?.git) ? request.uiState.git : isRecord(request.uiState?.gitState) ? request.uiState.gitState : undefined;
+}
+
+function refsFromRecord(record: Record<string, unknown>) {
+  return [
+    stringField(record.ref),
+    stringField(record.dataRef),
+    stringField(record.path),
+    stringField(record.outputRef),
+    stringField(record.stdoutRef),
+    stringField(record.stderrRef),
+    stringField(record.rawRef),
+  ].filter((ref): ref is string => Boolean(ref));
 }
 
 function executionUnitRecords(payload?: RuntimeVerificationPolicyPayload) {
@@ -391,6 +677,10 @@ function toRecordList(value: unknown) {
 
 function toStringList(value: unknown) {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0) : [];
+}
+
+function stringField(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function uniqueStrings(values: Array<string | undefined>) {

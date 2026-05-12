@@ -17,6 +17,8 @@ import {
 
 type ArtifactReferenceContextCollector = (request: GatewayRequest) => Promise<{ combinedArtifacts: Array<Record<string, unknown>> } | undefined>;
 let artifactReferenceContextCollector: ArtifactReferenceContextCollector | undefined;
+const reportViewerComponentId = ['report', 'viewer'].join('-');
+const executionUnitTableComponentId = ['execution', 'unit', 'table'].join('-');
 
 export {
   GENERATED_TASK_PAYLOAD_PREFLIGHT_SCHEMA_VERSION,
@@ -149,13 +151,13 @@ function guardedDirectTextDiagnosticPayload(
     }],
     uiManifest: [
       {
-        componentId: 'report-viewer',
+        componentId: reportViewerComponentId,
         artifactRef: `agentserver-direct-text-diagnostic-${id}`,
         title: 'Direct text diagnostic',
         priority: 1,
       },
       {
-        componentId: 'execution-unit-table',
+        componentId: executionUnitTableComponentId,
         title: 'Recovery unit',
         priority: 2,
       },

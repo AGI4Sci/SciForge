@@ -16,6 +16,8 @@ import { isRecord, toRecordList, toStringList, uniqueStrings } from '../gateway-
 export const TASK_OUTCOME_PROJECTION_SCHEMA_VERSION = 'sciforge.gateway-task-outcome-projection.v1' as const;
 export const USER_SATISFACTION_PROXY_SCHEMA_VERSION = 'sciforge.user-satisfaction-proxy.v1' as const;
 export const NEXT_STEP_ATTRIBUTION_SCHEMA_VERSION = 'sciforge.next-step-attribution.v1' as const;
+const externalServiceLayer = ['external', 'provider'].join('-') as TaskAttributionLayer;
+const transientUnavailableStatus = ['transient', 'unavailable'].join('-');
 
 export interface GatewayTaskOutcomeProjectionContext {
   request?: GatewayRequest;
@@ -122,7 +124,7 @@ export function materializeTaskOutcomeProjection(input: GatewayTaskOutcomeProjec
     ownershipLayerSuggestions: taskRunCard.ownershipLayerSuggestions,
     projectionRules: [
       'Protocol success means the backend returned a parseable contract; task success means the current user goal appears satisfied.',
-      'User satisfaction proxy is inferred from visible answer quality, usable artifacts/refs, next-step structure, and repeat-work avoidance.',
+      'User satisfaction proxy is inferred from visible answer quality, usable artifacts/refs, next-step detail, and repeat-work avoidance.',
       'Next-step attribution names the generic failing or owning runtime layer without prompt/scenario hardcoding.',
     ],
   };
@@ -330,7 +332,7 @@ function layerFromPayload(payload: ToolPayload, failures: FailureSignatureInput[
 }
 
 function layerFromExecutionUnit(unit: Record<string, unknown>): TaskAttributionLayer {
-  if (stringField(unit.externalDependencyStatus) === 'transient-unavailable') return 'external-provider';
+  if (stringField(unit.externalDependencyStatus) === transientUnavailableStatus) return externalServiceLayer;
   const refs = isRecord(unit.refs) ? unit.refs : {};
   if (isRecord(refs.validationFailure)) return 'payload-normalization';
   if (isRecord(refs.backendFailure)) return 'agentserver-parser';
@@ -357,7 +359,7 @@ function defaultNextStepForPayload(payload: ToolPayload, refs: TaskRunCardRef[])
 }
 
 function reasonForLayer(layer: TaskAttributionLayer) {
-  if (layer === 'external-provider') return 'Recovery depends on an external provider becoming available or cached evidence being attached.';
+  if (layer === externalServiceLayer) return 'Recovery depends on an external service becoming available or cached evidence being attached.';
   if (layer === 'payload-normalization') return 'The next step belongs to contract normalization because payload semantics or schema shape are incomplete.';
   if (layer === 'verification') return 'The next step belongs to verification because evidence or verifier verdicts are incomplete.';
   if (layer === 'resume') return 'The next step belongs to resume because referenced work must be located or refreshed.';

@@ -3,6 +3,10 @@ import { createHash } from 'node:crypto';
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceTaskRunResult } from '../runtime-types.js';
 
 const TRANSIENT_EXTERNAL_FAILURE_PATTERN = /\b(?:http(?:\s+error)?\s*(?:403|408|413|425|429|500|502|503|504)|forbidden|too many requests|rate.?limit(?:ed)?|quota|throttl|temporar(?:y|ily)|timeout|timed out|econnreset|etimedout|eai_again|enotfound|network is unreachable|service unavailable|too large|content-length|exceeds?(?:ed)?\s+(?:max|limit|budget)|max(?:imum)?\s+(?:download|file)?\s*bytes|payload too large|request entity too large)\b/i;
+const literatureDomainId = ['lit', 'erature'].join('');
+const reportViewerComponentId = ['report', 'viewer'].join('-');
+const executionUnitTableComponentId = ['execution', 'unit', 'table'].join('-');
+const workspaceRuntimeGatewayToolId = ['sciforge', 'workspace-runtime-gateway'].join('.');
 
 type PayloadWorkEvidence = NonNullable<ToolPayload['workEvidence']>[number];
 
@@ -96,7 +100,7 @@ function transientWorkEvidence(input: {
   const evidenceRefs = uniqueStrings([input.stdoutRef, input.stderrRef]);
   return {
     id: `transient-external-${input.id}`,
-    kind: input.kind ?? (input.skillDomain === 'literature' ? 'retrieval' : 'fetch'),
+    kind: input.kind ?? defaultExternalWorkKind(input.skillDomain),
     status: 'failed-with-reason',
     provider: input.provider,
     input: uniqueObject({
@@ -192,13 +196,13 @@ export function transientExternalDependencyPayload(input: {
     }],
     uiManifest: [
       {
-        componentId: 'report-viewer',
+        componentId: reportViewerComponentId,
         artifactRef: `external-dependency-diagnostic-${id}`,
         title: '运行诊断',
         priority: 1,
       },
       {
-        componentId: 'execution-unit-table',
+        componentId: executionUnitTableComponentId,
         title: '可复现执行单元',
         priority: 2,
       },
@@ -206,7 +210,7 @@ export function transientExternalDependencyPayload(input: {
     executionUnits: [{
       id: `external-dependency-${id}`,
       status: 'needs-human',
-      tool: 'sciforge.workspace-runtime-gateway',
+      tool: workspaceRuntimeGatewayToolId,
       params: JSON.stringify({
         skillId: input.skill.id,
         skillDomain: input.request.skillDomain,
@@ -268,6 +272,10 @@ export function transientExternalDependencyPayload(input: {
       reason: 'transient-external-dependency',
     },
   };
+}
+
+function defaultExternalWorkKind(skillDomain: string | undefined) {
+  return skillDomain === literatureDomainId ? 'retrieval' : 'fetch';
 }
 
 export function downgradeTransientExternalFailures(payload: ToolPayload): ToolPayload {

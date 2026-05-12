@@ -186,6 +186,7 @@ function hasUsableArtifactRefOrData(artifact: Record<string, unknown>) {
 
 function policyRequestsDirectContext(request: GatewayRequest) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
+  if (uiState.forceAgentServerGeneration === true) return false;
   const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : {};
   const contract = isRecord(agentHarness.contract) ? agentHarness.contract : {};
   const capabilityPolicy = isRecord(contract.capabilityPolicy) ? contract.capabilityPolicy : {};

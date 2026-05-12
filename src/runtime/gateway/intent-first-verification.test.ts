@@ -13,6 +13,7 @@ import {
   runBackgroundWorkVerify,
   verifyRoutingDecision,
 } from './intent-first-verification.js';
+import { RELEASE_GATE_REQUIRED_COMMAND } from '@sciforge-ui/runtime-contract/release-gate';
 
 test('intent match check is lightweight and does not imply work verification', () => {
   const check = buildIntentMatchCheck(baseRequest({
@@ -51,6 +52,83 @@ test('verify routing blocks only when user asks to wait or release risk is expli
     actionSideEffects: ['delete external production records'],
   })).blockingPolicy, 'high-risk');
   assert.equal(verifyRoutingDecision(baseRequest({ prompt: 'skip verify, just show the draft.' })).mode, 'skip');
+});
+
+test('release routing creates a verify full gate and blocks push when evidence is missing', () => {
+  const request = baseRequest({ prompt: '等完整验证通过再推 GitHub。' });
+  const payload = basePayload({
+    displayIntent: {
+      releaseGate: {
+        changeSummary: 'Prepared release summary.',
+        currentBranch: 'main',
+        targetRemote: 'origin',
+        auditRefs: ['audit:release-gate'],
+        steps: [{
+          kind: 'service-restart',
+          status: 'passed',
+          evidenceRefs: ['service:agentserver'],
+        }],
+      },
+    },
+  });
+  const routing = verifyRoutingDecision(request);
+  const jobs = buildVerifyJobs(payload, routing);
+  const attached = attachIntentFirstVerification(payload, request, { runWorkVerify: true });
+  const envelope = attached.displayIntent?.intentFirstVerification as {
+    jobs?: Array<{ command?: string; status?: string; releaseGate?: { pushAllowed?: boolean; missing?: string[] } }>;
+    verdicts?: Array<{ verdict?: string }>;
+  } | undefined;
+
+  assert.equal(routing.mode, 'release');
+  assert.equal(jobs[0]?.command, RELEASE_GATE_REQUIRED_COMMAND);
+  assert.equal(jobs[0]?.blockingPolicy, 'release');
+  assert.equal(jobs[0]?.releaseGate?.pushAllowed, false);
+  assert.ok(jobs[0]?.releaseGate?.missing.includes(RELEASE_GATE_REQUIRED_COMMAND));
+  assert.equal(envelope?.jobs?.[0]?.status, 'running');
+  assert.equal(envelope?.jobs?.[0]?.releaseGate?.pushAllowed, false);
+  assert.equal(envelope?.verdicts?.[0]?.verdict, 'pending');
+});
+
+test('release routing passes only when verify full, services, summary, git target, and audit refs are present', () => {
+  const releaseGate = {
+    changeSummary: 'Release verification gate shipped.',
+    currentBranch: 'main',
+    targetRemote: 'origin',
+    targetBranch: 'main',
+    auditRefs: ['audit:release-gate'],
+    gitRefs: ['commit:abc123'],
+    steps: [{
+      kind: 'release-verify',
+      status: 'passed',
+      command: RELEASE_GATE_REQUIRED_COMMAND,
+      evidenceRefs: ['run:verify-full'],
+    }, {
+      kind: 'service-restart',
+      status: 'passed',
+      evidenceRefs: ['service:workspace-writer', 'service:agentserver'],
+    }],
+  };
+  const payload = attachIntentFirstVerification(basePayload({
+    displayIntent: { releaseGate },
+  }), baseRequest({ prompt: 'run release verify before git push.' }), {
+    runWorkVerify: true,
+    now: () => '2026-05-13T00:00:00.000Z',
+  });
+  const status = payload.displayIntent?.verificationStatus as {
+    work?: string;
+    releaseGate?: { status?: string; pushAllowed?: boolean };
+  } | undefined;
+  const envelope = payload.displayIntent?.intentFirstVerification as {
+    jobs?: Array<{ status?: string; releaseGate?: { status?: string; pushAllowed?: boolean } }>;
+    verdicts?: Array<{ verdict?: string }>;
+  } | undefined;
+
+  assert.equal(status?.work, 'verify passed');
+  assert.equal(status?.releaseGate?.status, 'passed');
+  assert.equal(status?.releaseGate?.pushAllowed, true);
+  assert.equal(envelope?.jobs?.[0]?.status, 'passed');
+  assert.equal(envelope?.jobs?.[0]?.releaseGate?.pushAllowed, true);
+  assert.equal(envelope?.verdicts?.[0]?.verdict, 'passed');
 });
 
 test('attaches intent-first verification status without blocking payload delivery', () => {

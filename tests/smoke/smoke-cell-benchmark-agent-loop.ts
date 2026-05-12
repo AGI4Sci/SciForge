@@ -123,8 +123,9 @@ import json
 import sys
 
 output_path = sys.argv[2]
+bad_payload = dict(message="schema-bad: missing ToolPayload arrays")
 with open(output_path, "w", encoding="utf-8") as handle:
-    json.dump({"message": "schema-bad: missing ToolPayload arrays"}, handle)
+    json.dump(bad_payload, handle)
 `;
 
 const cases = [
@@ -291,7 +292,7 @@ try {
   assertCellOutput(directText, 'direct text bridge');
   assert.match(String(directText.reasoningTrace), /plain text|direct/i);
 
-  const generationPrompts = seenPrompts.filter((item) => item.purpose === 'workspace-task-generation');
+  const generationPrompts = seenPrompts.filter((item) => item.purpose === 'workspace-task-generation' || item.purpose === 'workspace-task-generation-inline');
   const repairPrompts = seenPrompts.filter((item) => item.purpose === 'workspace-task-repair');
   assert.ok(generationPrompts.length >= cases.length + 1, 'cell benchmark should exercise generated AgentServer work across initial and bridge cases');
   assert.equal(repairPrompts.length, 1);
@@ -341,7 +342,7 @@ function assertPromptContract(text: string, purpose: string) {
   assert.match(text, /selectedComponentIds|report-viewer|execution-unit-table/i);
   assert.match(text, /priorAttempts|repairContext|workspaceRefs/i);
   assert.match(text, /Tabula Sapiens|label transfer|scVelo|Perturb-seq|spatial|CITE-seq|single-cell|RNA velocity|totalVI|单细胞/i);
-  if (purpose === 'workspace-task-generation') {
+  if (purpose === 'workspace-task-generation' || purpose === 'workspace-task-generation-inline') {
     assert.match(text, /taskContract|AgentServerGenerationResponse/i);
   }
 }

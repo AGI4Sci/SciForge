@@ -86,8 +86,9 @@ try {
   assert.ok(audit.validationDecision?.findings?.some((finding) => finding.kind === 'runtime-verification'));
   assert.equal(audit.repairDecision?.action, 'repair-rerun');
   assert.equal(audit.auditRecord?.outcome, 'repair-requested');
-  const verificationRef = gated.verificationResults?.[0]?.id
-    ? `.sciforge/verifications/${gated.verificationResults[0].id}.json`
+  const displayIntent = gated.displayIntent as { verification?: { ref?: unknown } } | undefined;
+  const verificationRef = typeof displayIntent?.verification?.ref === 'string'
+    ? displayIntent.verification.ref
     : undefined;
   assert.ok(verificationRef);
   const persisted = JSON.parse(await readFile(join(workspace, verificationRef), 'utf8')) as { result?: { verdict?: string } };

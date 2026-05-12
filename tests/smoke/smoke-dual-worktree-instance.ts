@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 
 const repoRoot = git(['rev-parse', '--show-toplevel']);
 const root = await mkdtemp(join(tmpdir(), 'sciforge-dual-worktree-'));
@@ -79,9 +79,9 @@ try {
     runId: 'a-writes-b-repair-result',
     summary: 'A wrote a repair result into B worktree.',
   });
-  await assertPresent(join(b.workspacePath, '.sciforge', 'artifacts', 'session-b-patch-from-a.json'));
+  await assertWorkspaceFileMatching(b.workspacePath, /(^|\/)artifacts\/patch-from-a\.json$/);
   await assertPresent(join(b.workspacePath, '.sciforge', 'feedback', 'repair-results', 'a-writes-b-repair-result.json'));
-  await assertMissing(join(a.workspacePath, '.sciforge', 'artifacts', 'session-b-patch-from-a.json'));
+  await assertWorkspaceFileNotMatching(a.workspacePath, /(^|\/)artifacts\/patch-from-a\.json$/);
   await assertMissing(join(a.workspacePath, '.sciforge', 'feedback', 'repair-results', 'a-writes-b-repair-result.json'));
 
   await writeSnapshot(a.port, a.workspacePath, 'session-a', 'patch-from-b');
@@ -93,9 +93,9 @@ try {
     runId: 'b-writes-a-repair-result',
     summary: 'B wrote a repair result into A worktree.',
   });
-  await assertPresent(join(a.workspacePath, '.sciforge', 'artifacts', 'session-a-patch-from-b.json'));
+  await assertWorkspaceFileMatching(a.workspacePath, /(^|\/)artifacts\/patch-from-b\.json$/);
   await assertPresent(join(a.workspacePath, '.sciforge', 'feedback', 'repair-results', 'b-writes-a-repair-result.json'));
-  await assertMissing(join(b.workspacePath, '.sciforge', 'artifacts', 'session-a-patch-from-b.json'));
+  await assertWorkspaceFileNotMatching(b.workspacePath, /(^|\/)artifacts\/patch-from-b\.json$/);
   await assertMissing(join(b.workspacePath, '.sciforge', 'feedback', 'repair-results', 'b-writes-a-repair-result.json'));
 
   console.log('[ok] dual worktree instance manifests and cross-worktree writer isolation');
@@ -312,6 +312,33 @@ async function assertPresent(path: string) {
 
 async function assertMissing(path: string) {
   await assert.rejects(() => stat(path), /ENOENT/);
+}
+
+async function assertWorkspaceFileMatching(workspacePath: string, pattern: RegExp) {
+  const files = await collectWorkspaceFiles(join(workspacePath, '.sciforge'));
+  assert.ok(files.some((file) => pattern.test(file)), `expected ${workspacePath} to contain ${pattern}; got ${files.join(', ')}`);
+}
+
+async function assertWorkspaceFileNotMatching(workspacePath: string, pattern: RegExp) {
+  const files = await collectWorkspaceFiles(join(workspacePath, '.sciforge'));
+  assert.equal(files.some((file) => pattern.test(file)), false, `expected ${workspacePath} not to contain ${pattern}; got ${files.join(', ')}`);
+}
+
+async function collectWorkspaceFiles(rootPath: string) {
+  const out: string[] = [];
+  async function visit(dir: string) {
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await visit(full);
+        continue;
+      }
+      out.push(relative(rootPath, full).replaceAll('\\', '/'));
+    }
+  }
+  await visit(rootPath);
+  return out;
 }
 
 async function waitForExit(child: ChildProcess | undefined) {

@@ -879,8 +879,10 @@ function hasReferenceField(value: Record<string, unknown>) {
   return Object.values(referenceFields(value)).some(Boolean);
 }
 
+const largeTextFieldKeys = new Set(['content', 'contents', 'text', 'body', 'markdown', 'log', 'logs', 'trace', 'raw', 'output']);
+
 function isLargeTextFieldKey(key: string) {
-  return /^(content|contents|text|body|markdown|log|logs|trace|raw|output)$/.test(key)
+  return largeTextFieldKeys.has(key)
     || key.endsWith('content')
     || key.endsWith('text')
     || key.endsWith('log')

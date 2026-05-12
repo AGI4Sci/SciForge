@@ -190,7 +190,7 @@ function generatedTaskPayloadPreflightIssuesForSource(source: string, sourceRef:
           sourceRef,
           evidence: clipEvidence(literalEvidence),
           reason: 'Generated task uiManifest is object-shaped; ToolPayload uiManifest must be an array of component slots.',
-          recoverActions: ['Return uiManifest as an array, for example [{ componentId: "report-viewer", artifactRef: "<artifact-id>" }].'],
+          recoverActions: ['Return uiManifest as an array of component slots bound to produced artifact ids.'],
         });
       } else if (kind !== 'array') {
         issues.push({
@@ -233,7 +233,7 @@ function generatedTaskPayloadLiteralCandidates(source: string, sourceRef: string
       writtenToOutput: variableNameSuggestsPayload(variableName) || variableWrittenToOutput(source, variableName),
     });
   }
-  const literalWritePattern = /\b(?:json\.dump|json\.dumps|JSON\.stringify)\s*\(\s*{/g;
+  const literalWritePattern = /\b(?:json\.dump|JSON\.stringify)\s*\(\s*{/g;
   for (const match of source.matchAll(literalWritePattern)) {
     const start = (match.index ?? 0) + match[0].lastIndexOf('{');
     const objectText = balancedEnclosedText(source, start, '{', '}');

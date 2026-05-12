@@ -71,6 +71,26 @@ export type {
   IntentRequestedActionType,
   VerifyRouteMode,
 } from './intent-first-verification-policy';
+export {
+  RELEASE_GATE_CONTRACT_ID,
+  RELEASE_GATE_REQUIRED_COMMAND,
+  RELEASE_GATE_SCHEMA_VERSION,
+  RELEASE_GATE_STEP_KINDS,
+  RELEASE_GATE_STEP_STATUSES,
+  buildReleaseGateAudit,
+  releaseGateAllowsPush,
+  releaseGateHasRequiredVerifyCommand,
+} from './release-gate';
+export type {
+  ReleaseGateAudit,
+  ReleaseGateAuditInput,
+  ReleaseGateServiceHealth,
+  ReleaseGateStatus,
+  ReleaseGateStep,
+  ReleaseGateStepInput,
+  ReleaseGateStepKind,
+  ReleaseGateStepStatus,
+} from './release-gate';
 export type {
   BuiltInScenarioId,
   ScenarioInstanceId,

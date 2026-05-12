@@ -115,9 +115,9 @@ try {
 
   const taskArchives = await collectTaskArchives(join(workspace, '.sciforge'));
   assert.ok(taskArchives.some((entry) => entry.includes('/tasks/generated-literature-') || entry.startsWith('tasks/generated-literature-')));
-  const debugFiles = await readdir(join(workspace, '.sciforge', 'debug', 'agentserver'));
+  const debugFiles = taskArchives.filter((entry) => entry.includes('/debug/agentserver/'));
   assert.equal(debugFiles.length, 1);
-  const debug = await readFile(join(workspace, '.sciforge', 'debug', 'agentserver', debugFiles[0]), 'utf8');
+  const debug = await readFile(join(workspace, '.sciforge', debugFiles[0]), 'utf8');
   assert.doesNotMatch(debug, /path-only-secret-key/);
   assert.match(debug, /\[redacted\]/);
   console.log('[ok] path-only AgentServer taskFiles reuse workspace edits and write redacted debug artifact');

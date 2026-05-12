@@ -317,19 +317,23 @@ try {
   assert.match(String(result.reasoningTrace), /AgentServer generation run/);
   assert.match(String(result.reasoningTrace), /Generated a literature fallback task/);
 
-  const attemptFiles = await readdir(join(workspace, '.sciforge', 'task-attempts'));
+  const rootAttemptFiles = await readdir(join(workspace, '.sciforge', 'task-attempts'));
+  const sessionBundleRef = generatedArtifactRef.slice(0, generatedArtifactRef.indexOf('/artifacts/'));
+  const sessionAttemptDir = join(workspace, sessionBundleRef, 'records', 'task-attempts');
+  const sessionAttemptFiles = await readdir(sessionAttemptDir);
   assert.match(await readFile(join(workspace, generatedArtifactRef), 'utf8'), /paper-list/);
-  assert.equal(attemptFiles.length, 2);
-  const generatedAttemptFile = attemptFiles.find((file) => file.startsWith('generated-literature-'));
+  assert.equal(rootAttemptFiles.length + sessionAttemptFiles.length, 2);
+  assert.ok(rootAttemptFiles.includes('prior-generation-failure.json'));
+  const generatedAttemptFile = sessionAttemptFiles.find((file) => file.startsWith('generated-literature-'));
   assert.ok(generatedAttemptFile);
-  const attemptHistory = JSON.parse(await readFile(join(workspace, '.sciforge', 'task-attempts', generatedAttemptFile), 'utf8'));
+  const attemptHistory = JSON.parse(await readFile(join(sessionAttemptDir, generatedAttemptFile), 'utf8'));
   assert.equal(attemptHistory.attempts.length, 1);
   assert.equal(attemptHistory.attempts[0].status, 'done');
   assert.match(
     attemptHistory.attempts[0].codeRef,
     /^\.sciforge\/sessions\/\d{4}-\d{2}-\d{2}_literature_session-smoke-context\/tasks\/generated-literature-[a-f0-9]+\/generated-literature\.py$/,
   );
-  assert.equal(await readFile(join(workspace, '.sciforge', 'tasks', 'generated-literature.py'), 'utf8'), generatedTask);
+  await assert.rejects(readFile(join(workspace, '.sciforge', 'tasks', 'generated-literature.py'), 'utf8'));
   assert.equal(await readFile(join(workspace, attemptHistory.attempts[0].codeRef), 'utf8'), generatedTask);
 
   const continuation = await runWorkspaceRuntimeGateway({

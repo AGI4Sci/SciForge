@@ -70,6 +70,30 @@ const objectUiManifest = evaluateGeneratedTaskPayloadPreflight({
 assert.equal(objectUiManifest.status, 'blocked');
 assert.ok(objectUiManifest.issues.some((issue) => issue.path === 'uiManifest'));
 
+const paramsJsonDumps = evaluateGeneratedTaskPayloadPreflight({
+  taskFiles: [{
+    path: '.sciforge/tasks/params-json-dumps.py',
+    language: 'python',
+    content: [
+      'import json, sys',
+      '_, input_path, output_path = sys.argv',
+      'payload = {}',
+      'payload["message"] = "ok"',
+      'payload["confidence"] = 0.8',
+      'payload["claimType"] = "fact"',
+      'payload["evidenceLevel"] = "runtime"',
+      'payload["reasoningTrace"] = "smoke"',
+      'payload["claims"] = []',
+      'payload["uiManifest"] = []',
+      'payload["executionUnits"] = [{"id": "run", "status": "done", "params": json.dumps({"expected": ["research-report"]})}]',
+      'payload["artifacts"] = [{"id": "report", "type": "research-report", "data": {"markdown": "ok"}}]',
+      'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
+    ].join('\n'),
+  }],
+  entrypoint: { path: '.sciforge/tasks/params-json-dumps.py' },
+});
+assert.equal(paramsJsonDumps.status, 'ready');
+
 const payload = await runAgentServerGeneratedTask(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
   request,
   requestAgentServerGeneration: async () => ({

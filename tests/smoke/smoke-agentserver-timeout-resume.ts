@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdtemp, readFile, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
@@ -108,9 +108,9 @@ try {
     assert.match(secondPromptText, /timed out or was cancelled/i);
     assert.match(secondPromptText, /priorAttempts/i);
   }
-  const debugFiles = await readdir(join(workspace, '.sciforge', 'debug', 'agentserver'));
+  const debugFiles = await collectAgentServerDebugFiles(join(workspace, '.sciforge'));
   assert.ok(debugFiles.length >= 2);
-  const timeoutDebug = await Promise.all(debugFiles.map((file) => readFile(join(workspace, '.sciforge', 'debug', 'agentserver', file), 'utf8')));
+  const timeoutDebug = await Promise.all(debugFiles.map((file) => readFile(file, 'utf8')));
   assert.ok(timeoutDebug.some((text) => /"responseStatus": 0/.test(text)));
   console.log('[ok] AgentServer timeout/cancel diagnostics become repair-needed and retry resumes with priorAttempts');
 } finally {
@@ -132,6 +132,24 @@ function readBody(req: AsyncIterable<Buffer | string>) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+async function collectAgentServerDebugFiles(root: string): Promise<string[]> {
+  const out: string[] = [];
+  async function visit(dir: string) {
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await visit(full);
+        continue;
+      }
+      const rel = relative(root, full).replaceAll('\\', '/');
+      if (rel.includes('/debug/agentserver/')) out.push(full);
+    }
+  }
+  await visit(root);
+  return out;
 }
 
 function sendRunResponse(

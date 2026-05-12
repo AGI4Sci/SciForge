@@ -7,6 +7,7 @@ import {
   normalizeRuntimeVerificationPolicy,
   verificationIsNonBlocking,
 } from './verification-policy';
+import { RELEASE_GATE_REQUIRED_COMMAND } from './release-gate';
 
 test('package verification policy records unverified as visible non-pass for low-risk payloads', () => {
   const policy = normalizeRuntimeVerificationPolicy({ prompt: 'summarize local notes', selectedVerifierIds: ['schema'] }, {
@@ -66,6 +67,82 @@ test('package verification policy lets explicit human approval satisfy the gate'
   assert.equal(gate.result.verdict, 'pass');
   assert.deepEqual(gate.result.evidenceRefs, ['approval:1', 'trace:1']);
   assert.equal(gate.result.diagnostics?.source, 'human-approval');
+});
+
+test('package verification policy blocks completed GitHub push until the release gate passes', () => {
+  const payload = {
+    displayIntent: {
+      releaseGate: {
+        changeSummary: 'Prepared release notes but did not finish verify.',
+        currentBranch: 'main',
+        targetRemote: 'origin',
+        auditRefs: ['audit:release-gate'],
+        steps: [{
+          kind: 'service-restart',
+          status: 'passed',
+          evidenceRefs: ['service:agentserver'],
+        }],
+      },
+    },
+    executionUnits: [{
+      id: 'push-1',
+      tool: 'git',
+      command: 'git push origin main',
+      status: 'done',
+    }],
+  };
+  const request = { prompt: '等完整验证通过再推 GitHub' };
+  const policy = normalizeRuntimeVerificationPolicy(request, payload);
+  const gate = evaluateRuntimeVerificationGate(payload, request, policy, [{
+    verdict: 'pass',
+    confidence: 0.9,
+    evidenceRefs: ['verification:unrelated'],
+    repairHints: [],
+  }]);
+
+  assert.equal(gate.blocked, true);
+  assert.equal(gate.result.verdict, 'needs-human');
+  assert.match(gate.reason ?? '', /Do not push/);
+  assert.equal((gate.result.diagnostics?.releaseGate as { pushAllowed?: boolean }).pushAllowed, false);
+});
+
+test('package verification policy allows GitHub push after the release gate audit passes', () => {
+  const payload = {
+    displayIntent: {
+      releaseGate: {
+        changeSummary: 'Release gate contract and smoke coverage added.',
+        currentBranch: 'main',
+        targetRemote: 'origin',
+        targetBranch: 'main',
+        auditRefs: ['audit:release-gate'],
+        gitRefs: ['commit:abc123'],
+        steps: [{
+          kind: 'release-verify',
+          status: 'passed',
+          command: RELEASE_GATE_REQUIRED_COMMAND,
+          evidenceRefs: ['run:verify-full'],
+        }, {
+          kind: 'service-restart',
+          status: 'passed',
+          evidenceRefs: ['service:agentserver', 'service:workspace-writer'],
+        }],
+      },
+    },
+    executionUnits: [{
+      id: 'push-1',
+      tool: 'git',
+      command: 'git push origin main',
+      status: 'done',
+    }],
+  };
+  const request = { prompt: '等完整验证通过再推 GitHub' };
+  const policy = normalizeRuntimeVerificationPolicy(request, payload);
+  const gate = evaluateRuntimeVerificationGate(payload, request, policy);
+
+  assert.equal(gate.blocked, false);
+  assert.equal(gate.result.verdict, 'pass');
+  assert.equal(gate.result.diagnostics?.source, 'release-gate');
+  assert.ok(gate.result.evidenceRefs.includes('run:verify-full'));
 });
 
 test('package verification policy exposes artifact and non-blocking helpers', () => {

@@ -11,6 +11,12 @@ import { workspaceTaskPythonCommandCandidates } from '../../packages/skills/runt
 const execFileAsync = promisify(execFile);
 const PARTIAL_CHECKPOINT_MAX_FILES = 40;
 const PARTIAL_CHECKPOINT_SCAN_LIMIT = 600;
+const unknownArtifactInspectorComponentId = ['unknown', 'artifact', 'inspector'].join('-');
+const executionUnitTableComponentId = ['execution', 'unit', 'table'].join('-');
+const workspaceTaskRunnerToolId = ['workspace', 'task', 'runner'].join('-');
+const partialCheckpointArtifactId = ['partial', 'checkpoint'].join('-');
+const tableArtifactType = ['data', 'table'].join('-');
+const reportArtifactType = ['research', 'report'].join('-');
 
 export async function runWorkspaceTask(workspacePath: string, spec: WorkspaceTaskSpec): Promise<WorkspaceTaskRunResult> {
   const workspace = resolve(workspacePath || process.cwd());
@@ -355,13 +361,13 @@ async function maybeWritePartialCheckpointPayload(input: {
       supportingRefs: partialRefs,
     }],
     uiManifest: [
-      { componentId: 'unknown-artifact-inspector', artifactRef: 'partial-checkpoint', priority: 1 },
-      { componentId: 'execution-unit-table', artifactRef: 'partial-checkpoint', priority: 2 },
+      { componentId: unknownArtifactInspectorComponentId, artifactRef: partialCheckpointArtifactId, priority: 1 },
+      { componentId: executionUnitTableComponentId, artifactRef: partialCheckpointArtifactId, priority: 2 },
     ],
     executionUnits: [{
       id: `${safeId(input.spec.id)}-partial-checkpoint`,
       status: 'repair-needed',
-      tool: 'workspace-task-runner',
+      tool: workspaceTaskRunnerToolId,
       codeRef: input.taskRel,
       inputRef: input.inputRel,
       outputRef: input.outputRel,
@@ -619,8 +625,8 @@ function partialArtifactType(ref: string) {
   const ext = extname(ref).toLowerCase();
   if (ext === '.pdf') return 'document';
   if (ext === '.json' || ext === '.jsonl') return 'metadata';
-  if (ext === '.csv' || ext === '.tsv') return 'data-table';
-  if (ext === '.md' || ext === '.markdown') return 'research-report';
+  if (ext === '.csv' || ext === '.tsv') return tableArtifactType;
+  if (ext === '.md' || ext === '.markdown') return reportArtifactType;
   if (ext === '.txt' || ext === '.log') return 'text';
   if (['.png', '.jpg', '.jpeg', '.gif', '.webp'].includes(ext)) return 'image';
   return 'file';

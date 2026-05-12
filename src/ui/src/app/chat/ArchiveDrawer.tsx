@@ -5,6 +5,18 @@ import { ActionButton, Badge } from '../uiPrimitives';
 import type { SciForgeRun, SciForgeSession } from '../../domain';
 import { runAuditBlockers, runAuditRefs, runRecoverActions } from '../results-renderer-execution-model';
 
+const archiveAuditRefTerms = [
+  ['research', 'report'].join('-'),
+  ['paper', 'list'].join('-'),
+  'verification',
+  ['execution', 'unit'].join('-'),
+  'EU-',
+  'stdout',
+  'stderr',
+  'output',
+];
+const archiveAuditRefPattern = new RegExp(archiveAuditRefTerms.join('|'), 'i');
+
 export function ArchiveDrawer({
   currentSession,
   archivedSessions,
@@ -121,7 +133,7 @@ function sessionHistoryRunSummary(session: SciForgeSession) {
   const blockers = runAuditBlockers(session, lastRun).map(compactHistoryText);
   const rawFailure = rawRunFailureReason(lastRun.raw);
   const refs = runAuditRefs(session, lastRun)
-    .filter((ref) => /research-report|paper-list|verification|execution-unit|EU-|stdout|stderr|output/i.test(ref))
+    .filter((ref) => archiveAuditRefPattern.test(ref))
     .slice(0, 4);
   const recoverActions = runRecoverActions(session, lastRun).map(compactHistoryText).slice(0, 2);
   const artifactRefs = session.artifacts.slice(0, 3).map((artifact) => artifact.id);

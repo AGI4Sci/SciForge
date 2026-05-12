@@ -361,7 +361,7 @@ function sessionBundleReadme(session: Record<string, unknown>, bundleRel: string
     '- `manifest.json` describes the bundle layout.',
     '- `records/session.json` contains the full session object.',
     '- `records/messages.json`, `records/runs.json`, and `records/execution-units.json` provide split records for quick inspection.',
-    '- `records/session-bundle-audit.json` reports pack/restore/audit readiness for migration.',
+    '- `records/session-bundle-audit.json` stores pack, restore, and audit readiness for migration.',
     '- `records/task-attempts/` contains recoverable attempt ledgers when generated tasks ran.',
   ].join('\n');
 }

@@ -28,8 +28,11 @@ export default defineConfig({
         manualChunks(id) {
           if (id.includes('node_modules/3dmol')) return 'vendor-3dmol';
           if (id.includes('node_modules/recharts') || id.includes('node_modules/d3')) return 'vendor-charts';
-          if (id.includes('src/ui/src/scenarioCompiler')) return 'scenario-compiler';
           if (id.includes('node_modules/react') || id.includes('node_modules/react-dom')) return 'vendor-react';
+          if (id.includes('src/ui/src/app/Dashboard')) return 'dashboard';
+          if (id.includes('src/ui/src/app/ResultsRenderer') || id.includes('src/ui/src/app/results') || id.includes('packages/presentation')) return 'results-rendering';
+          if (id.includes('src/ui/src/app/ScenarioBuilderPanel') || id.includes('src/ui/src/scenarioCompiler')) return 'scenario-builder';
+          if (id.includes('src/ui/src/app/ComponentWorkbenchPage')) return 'component-workbench';
           return undefined;
         },
       },
