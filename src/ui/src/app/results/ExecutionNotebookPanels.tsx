@@ -8,7 +8,7 @@ import type { EvidenceClaim, NotebookRecord, RuntimeArtifact, RuntimeExecutionUn
 import { exportJsonFile } from '../exportUtils';
 import { ActionButton, Badge, Card, ClaimTag, ConfidenceBar, EmptyArtifactState, EvidenceTag, SectionHeader } from '../uiPrimitives';
 import { UploadedDataUrlPreview } from './WorkspaceObjectPreview';
-import { executionStatusLabel } from './executionStatusPresentation';
+import { executionStatusLabel, executionVerificationPresentation, type ExecutionPresentationVariant } from './executionStatusPresentation';
 
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
@@ -180,7 +180,10 @@ export function ExecutionPanel({
               <code title={[unit.codeRef, unit.stdoutRef, unit.stderrRef].filter(Boolean).join('\n') || unit.code || ''}>
                 {unit.codeRef || unit.language || unit.code || 'n/a'}
               </code>
-              <Badge variant={executionStatusVariant(unit.status)}>{executionStatusLabel(unit.status)}</Badge>
+              <span className="eu-status-stack">
+                <Badge variant={executionStatusVariant(unit.status)}>{executionStatusLabel(unit.status)}</Badge>
+                <Badge variant={executionVerificationPresentation(unit).variant}>{executionVerificationPresentation(unit).label}</Badge>
+              </span>
               <code>{unit.hash}</code>
               {executionStatusDetail(unit) ? (
                 <div className="eu-detail">
@@ -199,7 +202,7 @@ export function ExecutionPanel({
   );
 }
 
-function executionStatusVariant(status: RuntimeExecutionUnit['status']): 'info' | 'success' | 'warning' | 'danger' | 'muted' | 'coral' {
+function executionStatusVariant(status: RuntimeExecutionUnit['status']): ExecutionPresentationVariant {
   if (status === 'done' || status === 'self-healed') return 'success';
   if (status === 'failed' || status === 'failed-with-reason') return 'danger';
   if (status === 'repair-needed') return 'warning';
@@ -208,6 +211,7 @@ function executionStatusVariant(status: RuntimeExecutionUnit['status']): 'info' 
 }
 
 function executionStatusDetail(unit: RuntimeExecutionUnit) {
+  const verification = executionVerificationPresentation(unit);
   const lines = [
     unit.attempt ? `attempt=${unit.attempt}` : undefined,
     unit.parentAttempt ? `parentAttempt=${unit.parentAttempt}` : undefined,
@@ -230,6 +234,7 @@ function executionStatusDetail(unit: RuntimeExecutionUnit) {
     unit.outputRef ? `output=${unit.outputRef}` : undefined,
     unit.verificationRef ? `verification=${unit.verificationRef}` : undefined,
     unit.verificationVerdict ? `verdict=${unit.verificationVerdict}` : undefined,
+    `verificationStatus=${verification.detail}`,
   ].filter(Boolean);
   return lines.length ? lines.join(' · ') : '';
 }

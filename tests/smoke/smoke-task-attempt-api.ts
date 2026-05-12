@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 
 import { buildCompactRepairContext } from '../../src/runtime/gateway/agentserver-prompts';
 import { buildContextEnvelope } from '../../src/runtime/gateway/context-envelope';
+import { ensureSessionBundle } from '../../src/runtime/session-bundle';
 import { appendTaskAttempt, readRecentTaskAttempts } from '../../src/runtime/task-attempt-history';
 import type { GatewayRequest, SkillAvailability, TaskAttemptRecord, WorkspaceTaskRunResult } from '../../src/runtime/runtime-types';
 
@@ -21,7 +22,19 @@ const child = spawn(process.execPath, ['--import', 'tsx', 'src/runtime/workspace
 });
 
 try {
-  await writeFileSafe(join(workspace, '.sciforge/task-results/run-literature-1.json'), JSON.stringify({
+  const sessionBundleRef = '.sciforge/sessions/2026-04-25_literature-evidence-review_session-task-attempt-api';
+  await ensureSessionBundle(workspace, sessionBundleRef, {
+    sessionId: 'session-task-attempt-api',
+    scenarioId: 'literature-evidence-review',
+    title: 'Task attempt API smoke',
+    createdAt: '2026-04-25T00:00:00.000Z',
+  });
+  await writeFileSafe(join(workspace, sessionBundleRef, 'records/session.json'), JSON.stringify({ sessionId: 'session-task-attempt-api' }));
+  await writeFileSafe(join(workspace, sessionBundleRef, 'records/messages.json'), '[]');
+  await writeFileSafe(join(workspace, sessionBundleRef, 'records/runs.json'), '[]');
+  await writeFileSafe(join(workspace, sessionBundleRef, 'records/execution-units.json'), '[]');
+  await writeFileSafe(join(workspace, sessionBundleRef, 'README.md'), '# Task attempt API smoke\n');
+  await writeFileSafe(join(workspace, sessionBundleRef, 'task-results/run-literature-1.json'), JSON.stringify({
     workEvidence: [{
       kind: 'retrieval',
       status: 'success',
@@ -35,10 +48,10 @@ try {
     }],
     rawBody: 'RAW_PROVIDER_LOG_SHOULD_NOT_APPEAR',
   }));
-  await writeFileSafe(join(workspace, '.sciforge/tasks/run-literature-1.py'), 'print("run")\n');
-  await writeFileSafe(join(workspace, '.sciforge/task-inputs/run-literature-1.json'), '{"prompt":"CRISPR base editing review"}\n');
-  await writeFileSafe(join(workspace, '.sciforge/logs/run-literature-1.stdout.log'), 'RAW_STDOUT_LOG_SHOULD_NOT_APPEAR\n');
-  await writeFileSafe(join(workspace, '.sciforge/logs/run-literature-1.stderr.log'), '');
+  await writeFileSafe(join(workspace, sessionBundleRef, 'tasks/run-literature-1.py'), 'print("run")\n');
+  await writeFileSafe(join(workspace, sessionBundleRef, 'task-inputs/run-literature-1.json'), '{"prompt":"CRISPR base editing review"}\n');
+  await writeFileSafe(join(workspace, sessionBundleRef, 'logs/run-literature-1.stdout.log'), 'RAW_STDOUT_LOG_SHOULD_NOT_APPEAR\n');
+  await writeFileSafe(join(workspace, sessionBundleRef, 'logs/run-literature-1.stderr.log'), '');
 
   const record: TaskAttemptRecord = {
     id: 'run-literature-1',
@@ -57,10 +70,12 @@ try {
     },
     attempt: 1,
     status: 'done',
-    codeRef: '.sciforge/tasks/run-literature-1.py',
-    stdoutRef: '.sciforge/logs/run-literature-1.stdout.log',
-    stderrRef: '.sciforge/logs/run-literature-1.stderr.log',
-    outputRef: '.sciforge/task-results/run-literature-1.json',
+    codeRef: `${sessionBundleRef}/tasks/run-literature-1.py`,
+    stdoutRef: `${sessionBundleRef}/logs/run-literature-1.stdout.log`,
+    stderrRef: `${sessionBundleRef}/logs/run-literature-1.stderr.log`,
+    outputRef: `${sessionBundleRef}/task-results/run-literature-1.json`,
+    sessionId: 'session-task-attempt-api',
+    sessionBundleRef,
     createdAt: '2026-04-25T00:00:01.000Z',
   };
   await appendTaskAttempt(workspace, record);
@@ -94,6 +109,8 @@ try {
   assert.equal(listed.attempts[0].routeDecision?.selectedSkill, 'literature.pubmed_search');
   assert.equal(listed.attempts[0].scenarioPackageRef?.id, 'literature-evidence-review');
   assert.equal(listed.attempts[0].workEvidenceSummary?.items[0]?.resultCount, 3);
+  assert.equal(listed.attempts[0].sessionBundleAudit?.ready, true);
+  assert.ok(listed.attempts[0].sessionBundleAudit?.checklist.some((item) => item.id === 'restore.entrypoints' && item.status === 'pass'));
   assert.equal(listed.attempts[0].taskRunCard?.schemaVersion, 'sciforge.task-run-card.v1');
   assert.equal(listed.taskRunCards?.[0]?.id, listed.attempts[0].taskRunCard?.id);
   assert.doesNotMatch(JSON.stringify(listed), /RAW_PROVIDER_LOG_SHOULD_NOT_APPEAR|RAW_STDOUT_LOG_SHOULD_NOT_APPEAR/);
@@ -102,7 +119,9 @@ try {
   await assertOk(response);
   const loaded = await response.json() as { attempts: TaskAttemptRecord[]; taskRunCards?: Array<NonNullable<TaskAttemptRecord['taskRunCard']>> };
   assert.equal(loaded.attempts.length, 1);
-  assert.equal(loaded.attempts[0].stdoutRef, '.sciforge/logs/run-literature-1.stdout.log');
+  assert.equal(loaded.attempts[0].stdoutRef, `${sessionBundleRef}/logs/run-literature-1.stdout.log`);
+  assert.equal(loaded.attempts[0].sessionBundleAudit?.ready, true);
+  assert.ok(loaded.attempts[0].taskRunCard?.refs.some((ref) => ref.kind === 'verification' && ref.ref.endsWith('/records/session-bundle-audit.json')));
   assert.equal(loaded.attempts[0].workEvidenceSummary?.items[0]?.diagnostics[0], 'provider status 200');
   assert.equal(loaded.attempts[0].taskRunCard?.goal, 'CRISPR base editing review');
   assert.equal(loaded.taskRunCards?.[0]?.taskId, 'run-literature-1');

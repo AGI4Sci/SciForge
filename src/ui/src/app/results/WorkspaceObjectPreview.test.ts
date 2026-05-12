@@ -32,9 +32,39 @@ describe('WorkspaceObjectPreview stale artifact fallback', () => {
     }));
 
     assert.match(html, /fallback/);
-    assert.match(html, /缺少可读取的 workspace path\/dataRef/);
+    assert.match(html, /可读 inline payload/);
     assert.match(html, /Inline fallback/);
     assert.match(html, /artifact:report-1/);
+  });
+
+  it('prefers inline artifact data over eager hydration of a potentially stale dataRef', () => {
+    const artifact: RuntimeArtifact = {
+      id: 'bad-report',
+      type: 'research-report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      dataRef: '.sciforge/artifacts/no-such.md',
+      metadata: { title: 'Bad report' },
+      data: { markdown: '# Probe\n\nInline report body is still available.' },
+    };
+    const reference: ObjectReference = {
+      id: 'obj-bad-report',
+      title: 'Bad report',
+      kind: 'artifact',
+      ref: 'artifact:bad-report',
+      artifactType: 'research-report',
+      status: 'available',
+    };
+
+    const html = renderToStaticMarkup(createElement(WorkspaceObjectPreview, {
+      reference,
+      session: testSession([artifact]),
+      config: testConfig(),
+    }));
+
+    assert.match(html, /可读 inline payload/);
+    assert.match(html, /Inline report body is still available/);
+    assert.match(html, /\.sciforge\/artifacts\/no-such\.md/);
   });
 });
 

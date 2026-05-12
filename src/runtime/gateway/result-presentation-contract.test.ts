@@ -120,10 +120,13 @@ test('attachResultPresentationContract attributes transient failure next step to
   const card = attached.displayIntent?.taskRunCard as Record<string, unknown> | undefined;
   const attribution = projection?.nextStepAttribution as Record<string, unknown> | undefined;
   const failures = card?.failureSignatures as Array<Record<string, unknown>> | undefined;
+  const suggestions = projection?.ownershipLayerSuggestions as Array<Record<string, unknown>> | undefined;
 
   assert.equal(card?.taskOutcome, 'needs-human');
   assert.equal(card?.status, 'needs-human');
   assert.equal(attribution?.ownerLayer, 'external-provider');
   assert.equal(failures?.[0]?.kind, 'external-transient');
+  assert.ok(suggestions?.some((suggestion) => suggestion.layer === 'external-provider'));
+  assert.ok(suggestions?.some((suggestion) => suggestion.layer === 'runtime-server'));
   assert.match(String(attribution?.nextStep), /provider backoff/i);
 });

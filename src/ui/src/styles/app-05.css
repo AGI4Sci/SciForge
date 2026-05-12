@@ -1717,7 +1717,7 @@
 .eu-head,
 .eu-row {
   display: grid;
-  grid-template-columns: 90px 150px minmax(220px, 1fr) minmax(160px, 0.8fr) 92px 110px;
+  grid-template-columns: 90px 150px minmax(220px, 1fr) minmax(160px, 0.8fr) minmax(150px, 0.7fr) 110px;
   gap: 12px;
   align-items: center;
   min-width: 940px;
@@ -1747,6 +1747,14 @@
   line-height: 1.6;
   padding-top: 2px;
   overflow-wrap: anywhere;
+}
+
+.eu-status-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
 }
 
 .composition-strip,

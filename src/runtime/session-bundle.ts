@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { GatewayRequest } from './runtime-types.js';
@@ -12,6 +12,32 @@ export interface SessionBundleMetadata {
   title?: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export type SessionBundleChecklistPhase = 'pack' | 'restore' | 'audit';
+export type SessionBundleChecklistStatus = 'pass' | 'warn' | 'fail';
+
+export interface SessionBundleChecklistItem {
+  id: string;
+  phase: SessionBundleChecklistPhase;
+  label: string;
+  required: boolean;
+  refs: string[];
+  status?: SessionBundleChecklistStatus;
+  detail?: string;
+}
+
+export interface SessionBundleAuditReport {
+  schemaVersion: typeof SESSION_BUNDLE_SCHEMA_VERSION;
+  bundleRel: string;
+  generatedAt: string;
+  ready: boolean;
+  summary: {
+    passed: number;
+    warned: number;
+    failed: number;
+  };
+  checklist: SessionBundleChecklistItem[];
 }
 
 export function sessionBundleRelForRequest(request: GatewayRequest, now = new Date()) {
@@ -45,6 +71,7 @@ export async function ensureSessionBundle(workspace: string, bundleRel: string, 
   const root = join(workspace, bundleRel);
   await Promise.all([
     mkdir(join(root, 'records'), { recursive: true }),
+    mkdir(join(root, 'records', 'task-attempts'), { recursive: true }),
     mkdir(join(root, 'tasks'), { recursive: true }),
     mkdir(join(root, 'task-inputs'), { recursive: true }),
     mkdir(join(root, 'task-results'), { recursive: true }),
@@ -58,6 +85,36 @@ export async function ensureSessionBundle(workspace: string, bundleRel: string, 
     mkdir(join(root, 'exports'), { recursive: true }),
   ]);
   await writeSessionBundleManifest(workspace, bundleRel, metadata);
+}
+
+export async function auditSessionBundle(workspace: string, bundleRel: string, now = new Date()): Promise<SessionBundleAuditReport> {
+  const checklist = await Promise.all(sessionBundleChecklistTemplate(bundleRel).map(async (item) => ({
+    ...item,
+    ...await checklistStatus(workspace, item),
+  })));
+  const failed = checklist.filter((item) => item.status === 'fail').length;
+  const warned = checklist.filter((item) => item.status === 'warn').length;
+  const passed = checklist.filter((item) => item.status === 'pass').length;
+  return {
+    schemaVersion: SESSION_BUNDLE_SCHEMA_VERSION,
+    bundleRel,
+    generatedAt: now.toISOString(),
+    ready: failed === 0,
+    summary: { passed, warned, failed },
+    checklist,
+  };
+}
+
+export async function writeSessionBundleAudit(
+  workspace: string,
+  bundleRel: string,
+  now = new Date(),
+): Promise<{ report: SessionBundleAuditReport; auditRef: string }> {
+  const report = await auditSessionBundle(workspace, bundleRel, now);
+  const auditRef = `${bundleRel.replace(/\/+$/, '')}/records/session-bundle-audit.json`;
+  await mkdir(join(workspace, bundleRel, 'records'), { recursive: true });
+  await writeFile(join(workspace, auditRef), JSON.stringify(report, null, 2));
+  return { report, auditRef };
 }
 
 async function writeSessionBundleManifest(workspace: string, bundleRel: string, metadata: SessionBundleMetadata) {
@@ -75,8 +132,13 @@ async function writeSessionBundleManifest(workspace: string, bundleRel: string, 
     restore: {
       workspaceStateRef: '.sciforge/workspace-state.json',
       sessionRef: `${bundleRel}/records/session.json`,
+      messagesRef: `${bundleRel}/records/messages.json`,
+      runsRef: `${bundleRel}/records/runs.json`,
+      executionUnitsRef: `${bundleRel}/records/execution-units.json`,
+      taskAttemptsRoot: `${bundleRel}/records/task-attempts/`,
       resourcesRoot: bundleRel,
     },
+    migrationChecklist: sessionBundleChecklistTemplate(bundleRel).map(({ status, detail, ...item }) => item),
     layout: {
       records: 'records/',
       taskCode: 'tasks/',
@@ -93,6 +155,108 @@ async function writeSessionBundleManifest(workspace: string, bundleRel: string, 
     },
   };
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+}
+
+function sessionBundleChecklistTemplate(bundleRel: string): SessionBundleChecklistItem[] {
+  const root = bundleRel.replace(/\/+$/, '');
+  return [
+    {
+      id: 'pack.manifest',
+      phase: 'pack',
+      label: 'Bundle manifest declares schema, layout, restore refs, and checklist.',
+      required: true,
+      refs: [`${root}/manifest.json`],
+    },
+    {
+      id: 'pack.session-records',
+      phase: 'pack',
+      label: 'Portable session records are split for direct inspection and import.',
+      required: true,
+      refs: [
+        `${root}/records/session.json`,
+        `${root}/records/messages.json`,
+        `${root}/records/runs.json`,
+        `${root}/records/execution-units.json`,
+      ],
+    },
+    {
+      id: 'pack.generated-work',
+      phase: 'pack',
+      label: 'Generated task code, inputs, outputs, logs, artifacts, data, and exports stay under the bundle root.',
+      required: true,
+      refs: [
+        `${root}/tasks/`,
+        `${root}/task-inputs/`,
+        `${root}/task-results/`,
+        `${root}/logs/`,
+        `${root}/artifacts/`,
+        `${root}/data/`,
+        `${root}/exports/`,
+      ],
+    },
+    {
+      id: 'restore.entrypoints',
+      phase: 'restore',
+      label: 'Restore entry points include session, messages, runs, execution units, and task-attempt ledger.',
+      required: true,
+      refs: [
+        `${root}/records/session.json`,
+        `${root}/records/messages.json`,
+        `${root}/records/runs.json`,
+        `${root}/records/execution-units.json`,
+        `${root}/records/task-attempts/`,
+      ],
+    },
+    {
+      id: 'restore.handoff-context',
+      phase: 'restore',
+      label: 'Handoff, verification, debug, and version records are colocated for continuation or repair.',
+      required: false,
+      refs: [
+        `${root}/handoffs/`,
+        `${root}/verifications/`,
+        `${root}/debug/`,
+        `${root}/versions/`,
+      ],
+    },
+    {
+      id: 'audit.replay-evidence',
+      phase: 'audit',
+      label: 'Audit evidence includes runtime events, attempts, verification refs, and readable README.',
+      required: false,
+      refs: [
+        `${root}/records/runtime-events.ndjson`,
+        `${root}/records/task-attempts/`,
+        `${root}/verifications/`,
+        `${root}/README.md`,
+      ],
+    },
+  ];
+}
+
+async function checklistStatus(workspace: string, item: SessionBundleChecklistItem) {
+  const results = await Promise.all(item.refs.map((ref) => refExists(workspace, ref)));
+  const present = results.filter(Boolean).length;
+  if (present === item.refs.length) {
+    return { status: 'pass' as const, detail: `found ${present}/${item.refs.length} refs` };
+  }
+  if (present > 0 || !item.required) {
+    return { status: 'warn' as const, detail: `found ${present}/${item.refs.length} refs` };
+  }
+  return { status: 'fail' as const, detail: `found ${present}/${item.refs.length} refs` };
+}
+
+async function refExists(workspace: string, ref: string) {
+  const absolute = join(workspace, ref.replace(/\/+$/, ''));
+  try {
+    const info = await stat(absolute);
+    if (info.isDirectory()) {
+      return ref.endsWith('/') ? true : (await readdir(absolute)).length > 0;
+    }
+    return info.isFile();
+  } catch {
+    return false;
+  }
 }
 
 async function readJsonIfPresent(path: string): Promise<unknown> {

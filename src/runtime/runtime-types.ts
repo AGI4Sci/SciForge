@@ -5,6 +5,7 @@ import type { RuntimeBackendContextWindowSource } from '@sciforge-ui/runtime-con
 import type { CapabilityInvocationBudgetDebitRecord } from '@sciforge-ui/runtime-contract/capability-budget';
 import type { SkillEntrypointType } from '@sciforge-skill/packages/runtime-policy';
 import type { WorkEvidence } from './gateway/work-evidence-types.js';
+import type { SessionBundleAuditReport } from './session-bundle.js';
 
 export type SciForgeSkillDomain = SciForgeSharedSkillDomain;
 
@@ -547,6 +548,7 @@ export interface TaskAttemptRecord {
   stderrRef?: string;
   sessionId?: string;
   sessionBundleRef?: string;
+  sessionBundleAudit?: SessionBundleAuditReport;
   exitCode?: number;
   schemaErrors?: string[];
   workEvidenceSummary?: {

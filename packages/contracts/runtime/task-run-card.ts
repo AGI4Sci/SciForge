@@ -22,6 +22,7 @@ export type TaskAttributionLayer =
   | 'external-provider'
   | 'workspace'
   | 'unknown';
+export type OwnershipLayerSuggestionConfidence = 'high' | 'medium' | 'low';
 export type FailureSignatureKind =
   | 'schema-drift'
   | 'timeout'
@@ -39,6 +40,20 @@ export const FAILURE_SIGNATURE_REGISTRY_TRACKED_KINDS: FailureSignatureRegistryK
   'timeout',
   'repair-no-op',
   'external-transient',
+];
+
+export const TASK_ATTRIBUTION_LAYERS: TaskAttributionLayer[] = [
+  'harness',
+  'runtime-server',
+  'agentserver-parser',
+  'payload-normalization',
+  'presentation',
+  'verification',
+  'resume',
+  'ui',
+  'external-provider',
+  'workspace',
+  'unknown',
 ];
 
 export interface TaskRunCardRef {
@@ -148,6 +163,14 @@ export interface NoHardcodeReview {
   status: 'pass' | 'needs-review' | 'fail';
 }
 
+export interface OwnershipLayerSuggestion {
+  layer: TaskAttributionLayer;
+  confidence: OwnershipLayerSuggestionConfidence;
+  reason: string;
+  signals: string[];
+  nextStep: string;
+}
+
 export interface TaskRunCardInput {
   id?: string;
   taskId?: string;
@@ -161,6 +184,7 @@ export interface TaskRunCardInput {
   verificationRefs?: string[];
   failureSignatures?: Array<FailureSignature | FailureSignatureInput>;
   genericAttributionLayer?: TaskAttributionLayer;
+  ownershipLayerSuggestions?: Array<Partial<OwnershipLayerSuggestion>>;
   nextStep?: string;
   noHardcodeReview?: Partial<NoHardcodeReview>;
   updatedAt?: string;
@@ -181,6 +205,7 @@ export interface TaskRunCard {
   verificationRefs: string[];
   failureSignatures: FailureSignature[];
   genericAttributionLayer: TaskAttributionLayer;
+  ownershipLayerSuggestions: OwnershipLayerSuggestion[];
   nextStep: string;
   noHardcodeReview: NoHardcodeReview;
   updatedAt: string;
@@ -242,6 +267,18 @@ export function createTaskRunCard(input: TaskRunCardInput): TaskRunCard {
   const genericAttributionLayer = input.genericAttributionLayer
     ?? failureSignatures[0]?.layer
     ?? inferAttributionLayerFromExecutionUnits(input.executionUnits ?? []);
+  const nextStep = stringField(input.nextStep) ?? defaultNextStep(status, failureSignatures);
+  const ownershipLayerSuggestions = normalizeOwnershipLayerSuggestions(input.ownershipLayerSuggestions, {
+    status,
+    protocolStatus,
+    taskOutcome,
+    genericAttributionLayer,
+    nextStep,
+    refs,
+    failureSignatures,
+    executionUnits: input.executionUnits ?? [],
+    verificationRefs: input.verificationRefs ?? [],
+  });
 
   return {
     schemaVersion: TASK_RUN_CARD_SCHEMA_VERSION,
@@ -258,7 +295,8 @@ export function createTaskRunCard(input: TaskRunCardInput): TaskRunCard {
     verificationRefs: uniqueStrings(input.verificationRefs ?? []),
     failureSignatures,
     genericAttributionLayer,
-    nextStep: stringField(input.nextStep) ?? defaultNextStep(status, failureSignatures),
+    ownershipLayerSuggestions,
+    nextStep,
     noHardcodeReview: createNoHardcodeReview(input.noHardcodeReview, genericAttributionLayer),
     updatedAt: stringField(input.updatedAt) ?? new Date(0).toISOString(),
   };
@@ -340,6 +378,20 @@ export function validateTaskRunCard(card: unknown): string[] {
   }
   if (!Array.isArray(card.refs)) issues.push('refs must be an array.');
   if (!Array.isArray(card.failureSignatures)) issues.push('failureSignatures must be an array.');
+  if (card.ownershipLayerSuggestions !== undefined && !Array.isArray(card.ownershipLayerSuggestions)) {
+    issues.push('ownershipLayerSuggestions must be an array when present.');
+  }
+  for (const [index, suggestion] of Array.isArray(card.ownershipLayerSuggestions) ? card.ownershipLayerSuggestions.entries() : []) {
+    if (!isRecord(suggestion)) {
+      issues.push(`ownershipLayerSuggestions[${index}] must be an object.`);
+      continue;
+    }
+    if (!isTaskAttributionLayer(suggestion.layer)) issues.push(`ownershipLayerSuggestions[${index}].layer is invalid.`);
+    if (!['high', 'medium', 'low'].includes(String(suggestion.confidence))) issues.push(`ownershipLayerSuggestions[${index}].confidence is invalid.`);
+    if (!stringField(suggestion.reason)) issues.push(`ownershipLayerSuggestions[${index}].reason is required.`);
+    if (!Array.isArray(suggestion.signals)) issues.push(`ownershipLayerSuggestions[${index}].signals must be an array.`);
+    if (!stringField(suggestion.nextStep)) issues.push(`ownershipLayerSuggestions[${index}].nextStep is required.`);
+  }
   if (isRecord(card.noHardcodeReview) && card.noHardcodeReview.status === 'pass' && card.noHardcodeReview.appliesGenerally !== true) {
     issues.push('passing noHardcodeReview must apply generally.');
   }
@@ -427,6 +479,156 @@ function defaultNextStep(status: TaskRunCardStatus, failures: FailureSignature[]
   if (status === 'needs-work' || status === 'partial') return 'Continue from preserved refs and repair the generic failing layer before rerunning expensive work.';
   if (status === 'failed') return 'Inspect failure signatures, stdout/stderr refs, and recover actions before rerun.';
   return 'Record current state and resume when the next user goal is clear.';
+}
+
+function normalizeOwnershipLayerSuggestions(
+  explicit: Array<Partial<OwnershipLayerSuggestion>> | undefined,
+  input: {
+    status: TaskRunCardStatus;
+    protocolStatus: TaskProtocolStatus;
+    taskOutcome: TaskOutcomeStatus;
+    genericAttributionLayer: TaskAttributionLayer;
+    nextStep: string;
+    refs: TaskRunCardRef[];
+    failureSignatures: FailureSignature[];
+    executionUnits: RuntimeExecutionUnit[];
+    verificationRefs: string[];
+  },
+): OwnershipLayerSuggestion[] {
+  const explicitSuggestions = (explicit ?? [])
+    .filter((suggestion) => isTaskAttributionLayer(suggestion.layer))
+    .map((suggestion): OwnershipLayerSuggestion => ({
+      layer: suggestion.layer as TaskAttributionLayer,
+      confidence: isSuggestionConfidence(suggestion.confidence) ? suggestion.confidence : 'medium',
+      reason: stringField(suggestion.reason) ?? reasonForOwnershipLayer(suggestion.layer as TaskAttributionLayer),
+      signals: uniqueStrings(suggestion.signals ?? []),
+      nextStep: stringField(suggestion.nextStep) ?? input.nextStep,
+    }));
+  return dedupeOwnershipLayerSuggestions([
+    ...explicitSuggestions,
+    ...inferOwnershipLayerSuggestions(input),
+  ]);
+}
+
+function inferOwnershipLayerSuggestions(input: {
+  status: TaskRunCardStatus;
+  protocolStatus: TaskProtocolStatus;
+  taskOutcome: TaskOutcomeStatus;
+  genericAttributionLayer: TaskAttributionLayer;
+  nextStep: string;
+  refs: TaskRunCardRef[];
+  failureSignatures: FailureSignature[];
+  executionUnits: RuntimeExecutionUnit[];
+  verificationRefs: string[];
+}): OwnershipLayerSuggestion[] {
+  const scores = new Map<TaskAttributionLayer, { score: number; signals: string[] }>();
+  const add = (layer: TaskAttributionLayer, score: number, signal: string) => {
+    const current = scores.get(layer) ?? { score: 0, signals: [] };
+    scores.set(layer, { score: current.score + score, signals: uniqueStrings([...current.signals, signal]) });
+  };
+
+  add(input.genericAttributionLayer, 2, 'generic-attribution-layer');
+  if (input.protocolStatus === 'not-run') add('harness', 2, 'not-run-protocol-status');
+  if (input.protocolStatus === 'running') add('runtime-server', 2, 'running-protocol-status');
+  if (input.status === 'complete') add('presentation', 1, 'completed-result-needs-visible-presentation');
+  if (input.status === 'needs-work' || input.status === 'partial' || input.status === 'failed') {
+    add(input.genericAttributionLayer, 2, 'unfinished-task-status');
+  }
+  if (input.taskOutcome === 'needs-human') add('harness', 1, 'human-decision-required');
+
+  for (const signature of input.failureSignatures) {
+    add(signature.layer, 4, `failure:${signature.kind}`);
+    if (signature.kind === 'schema-drift') add('payload-normalization', 2, 'schema-drift-failure');
+    if (signature.kind === 'backend-handoff') add('agentserver-parser', 2, 'backend-handoff-failure');
+    if (signature.kind === 'validation-failure') add('verification', 2, 'validation-failure');
+    if (signature.kind === 'missing-ref') add('resume', 2, 'missing-ref-failure');
+    if (signature.kind === 'timeout' || signature.kind === 'repair-no-op') add('runtime-server', 1, `runtime-failure:${signature.kind}`);
+  }
+
+  for (const unit of input.executionUnits) {
+    if (unit.verificationVerdict === 'fail' || unit.verificationVerdict === 'uncertain') add('verification', 3, 'execution-unit-verification-verdict');
+    if (unit.status === 'repair-needed' || unit.status === 'failed-with-reason' || unit.status === 'failed') add(inferAttributionLayerFromExecutionUnits([unit]), 2, `execution-unit-status:${unit.status}`);
+    if (unit.outputRef || unit.stdoutRef || unit.stderrRef) add('runtime-server', 1, 'execution-unit-runtime-refs');
+  }
+
+  if (input.verificationRefs.length || input.refs.some((ref) => ref.kind === 'verification')) add('verification', 1, 'verification-refs');
+  if (input.refs.some((ref) => ref.kind === 'log' || ref.kind === 'bundle')) add('runtime-server', 1, 'runtime-diagnostic-refs');
+  if (input.refs.some((ref) => ref.kind === 'artifact')) add('presentation', 1, 'artifact-result-refs');
+
+  const ranked = [...scores.entries()]
+    .filter(([layer]) => layer !== 'unknown')
+    .sort((left, right) => right[1].score - left[1].score || left[0].localeCompare(right[0]))
+    .slice(0, 4)
+    .map(([layer, scored]): OwnershipLayerSuggestion => ({
+      layer,
+      confidence: scored.score >= 5 ? 'high' : scored.score >= 3 ? 'medium' : 'low',
+      reason: reasonForOwnershipLayer(layer),
+      signals: scored.signals.slice(0, 8),
+      nextStep: nextStepForOwnershipLayer(layer, input.nextStep),
+    }));
+
+  return ranked.length ? ranked : [{
+    layer: 'runtime-server',
+    confidence: 'low',
+    reason: reasonForOwnershipLayer('runtime-server'),
+    signals: ['fallback-no-specific-layer-signal'],
+    nextStep: input.nextStep,
+  }];
+}
+
+function dedupeOwnershipLayerSuggestions(suggestions: OwnershipLayerSuggestion[]) {
+  const byLayer = new Map<TaskAttributionLayer, OwnershipLayerSuggestion>();
+  for (const suggestion of suggestions) {
+    const current = byLayer.get(suggestion.layer);
+    if (!current || confidenceRank(suggestion.confidence) > confidenceRank(current.confidence)) {
+      byLayer.set(suggestion.layer, suggestion);
+      continue;
+    }
+    if (current.confidence === suggestion.confidence) {
+      byLayer.set(suggestion.layer, {
+        ...current,
+        signals: uniqueStrings([...current.signals, ...suggestion.signals]).slice(0, 8),
+      });
+    }
+  }
+  return [...byLayer.values()].sort((left, right) => {
+    const rank = confidenceRank(right.confidence) - confidenceRank(left.confidence);
+    return rank || left.layer.localeCompare(right.layer);
+  }).slice(0, 4);
+}
+
+function reasonForOwnershipLayer(layer: TaskAttributionLayer) {
+  if (layer === 'harness') return 'The next improvement belongs to harness policy because stage, budget, or human-decision governance is the owning layer.';
+  if (layer === 'runtime-server') return 'The next improvement belongs to the runtime server because execution state, refs, logs, or recovery orchestration are the owning layer.';
+  if (layer === 'agentserver-parser') return 'The next improvement belongs to AgentServer parsing because backend handoff output could not be classified safely.';
+  if (layer === 'payload-normalization') return 'The next improvement belongs to payload normalization because contract shape or semantic envelope normalization is the owning layer.';
+  if (layer === 'presentation') return 'The next improvement belongs to presentation because result visibility, artifact ordering, or user-facing projection is the owning layer.';
+  if (layer === 'verification') return 'The next improvement belongs to verification because evidence checks or verifier verdicts are the owning layer.';
+  if (layer === 'resume') return 'The next improvement belongs to resume because preserved refs or prior work must be located, refreshed, or continued.';
+  if (layer === 'ui') return 'The next improvement belongs to UI because interaction state or client rendering is the owning layer.';
+  if (layer === 'external-provider') return 'The next improvement depends on external provider availability, backoff, or cached evidence policy.';
+  if (layer === 'workspace') return 'The next improvement belongs to workspace state because local files, artifacts, or project storage are the owning layer.';
+  return 'No specific owning layer could be inferred from stable runtime signals.';
+}
+
+function nextStepForOwnershipLayer(layer: TaskAttributionLayer, fallback: string) {
+  if (layer === 'harness') return 'Review harness profile, budget, and stage-hook decisions before rerun.';
+  if (layer === 'runtime-server') return 'Inspect runtime refs, logs, task status, and recovery orchestration before rerun.';
+  if (layer === 'agentserver-parser') return 'Classify the backend handoff shape and return a structured recoverable payload.';
+  if (layer === 'payload-normalization') return 'Apply only contract-approved normalization or fail closed with validation diagnostics.';
+  if (layer === 'presentation') return 'Materialize the result presentation contract from preserved refs before changing task logic.';
+  if (layer === 'verification') return 'Run or repair verifier evidence before marking the task satisfied.';
+  if (layer === 'resume') return 'Resume from preserved refs or refresh missing refs before repeating expensive work.';
+  if (layer === 'ui') return 'Check the client projection of the existing runtime contract before changing backend behavior.';
+  if (layer === 'external-provider') return 'Retry after provider backoff or continue with cached evidence and explicit freshness labels.';
+  if (layer === 'workspace') return 'Inspect workspace artifact paths, storage refs, and project state before rerun.';
+  return fallback;
+}
+
+function confidenceRank(confidence: OwnershipLayerSuggestionConfidence) {
+  if (confidence === 'high') return 3;
+  if (confidence === 'medium') return 2;
+  return 1;
 }
 
 function normalizeRounds(rounds: Array<Partial<TaskRunCardRound>>): TaskRunCardRound[] {
@@ -577,6 +779,14 @@ function uniqueRunRefs(refs: FailureSignatureRunRef[]) {
 
 function isFailureSignatureRegistryKind(value: unknown): value is FailureSignatureRegistryKind {
   return FAILURE_SIGNATURE_REGISTRY_TRACKED_KINDS.includes(value as FailureSignatureRegistryKind);
+}
+
+function isTaskAttributionLayer(value: unknown): value is TaskAttributionLayer {
+  return TASK_ATTRIBUTION_LAYERS.includes(value as TaskAttributionLayer);
+}
+
+function isSuggestionConfidence(value: unknown): value is OwnershipLayerSuggestionConfidence {
+  return value === 'high' || value === 'medium' || value === 'low';
 }
 
 function isTrackedFailureSignature(signature: FailureSignature): signature is FailureSignature & { kind: FailureSignatureRegistryKind } {

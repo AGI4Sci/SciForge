@@ -157,3 +157,31 @@ test('builds a compact card from execution units and preserved refs', () => {
   assert.equal(card.failureSignatures[0]?.kind, 'external-transient');
   assert.deepEqual(validateTaskRunCard(card), []);
 });
+
+test('auto-suggests generic ownership layers from runtime contract signals', () => {
+  const card = createTaskRunCard({
+    goal: 'Finish a reusable task after validation failed.',
+    protocolStatus: 'protocol-failed',
+    taskOutcome: 'needs-work',
+    refs: [
+      { kind: 'artifact', ref: '.sciforge/task-results/task.json' },
+      { kind: 'verification', ref: 'verification:payload-validation' },
+    ],
+    failureSignatures: [
+      { kind: 'schema-drift', message: 'Missing required field artifacts[0].id', schemaPath: 'artifacts.0.id' },
+      { kind: 'validation-failure', message: 'Verifier could not confirm required evidence.' },
+    ],
+  });
+
+  const layers = card.ownershipLayerSuggestions.map((suggestion) => suggestion.layer);
+  const payload = card.ownershipLayerSuggestions.find((suggestion) => suggestion.layer === 'payload-normalization');
+  const verification = card.ownershipLayerSuggestions.find((suggestion) => suggestion.layer === 'verification');
+
+  assert.ok(layers.includes('payload-normalization'));
+  assert.ok(layers.includes('verification'));
+  assert.equal(payload?.confidence, 'high');
+  assert.ok(payload?.signals.includes('failure:schema-drift'));
+  assert.match(payload?.nextStep ?? '', /contract-approved normalization|validation diagnostics/i);
+  assert.match(verification?.reason ?? '', /verifier verdicts|evidence checks/i);
+  assert.deepEqual(validateTaskRunCard(card), []);
+});

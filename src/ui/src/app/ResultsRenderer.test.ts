@@ -270,6 +270,33 @@ test('ResultsRenderer execution focus shows background artifact stages as execut
   assert.match(html, /verdict=pass/);
 });
 
+test('ResultsRenderer execution table separates verification states from completed status', () => {
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [completedRun('run-verification-states')],
+    executionUnits: [
+      { id: 'EU-ordinary', tool: 'report.emit', params: '{}', status: 'done', hash: 'ordinary', outputRef: 'artifact:ordinary' },
+      { id: 'EU-unverified', tool: 'report.emit', params: '{}', status: 'done', hash: 'unverified', verificationVerdict: 'unverified', verificationRef: 'verification:unverified' },
+      { id: 'EU-verifying', tool: 'report.emit', params: '{}', status: 'running', hash: 'verifying', outputRef: 'artifact:partial' },
+      { id: 'EU-verification-failed', tool: 'verifier.run', params: '{}', status: 'done', hash: 'failed', verificationVerdict: 'fail', verificationRef: 'verification:failed' },
+      { id: 'EU-release-verified', tool: 'verifier.run', params: '{}', status: 'done', hash: 'passed', verificationVerdict: 'pass', verificationRef: 'verification:passed' },
+    ],
+  };
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-verification-states', initialFocusMode: 'execution' });
+
+  assert.match(html, /No verification requested/);
+  assert.match(html, /Unverified/);
+  assert.match(html, /Verifying/);
+  assert.match(html, /Verification failed/);
+  assert.match(html, /Verification passed/);
+  assert.match(html, /verificationStatus=ordinary result; no runtime verification verdict was recorded/);
+  assert.match(html, /verificationStatus=result is explicitly unverified ref=verification:unverified/);
+  assert.match(html, /verificationStatus=background verification is still running/);
+  assert.match(html, /verificationStatus=verification failed ref=verification:failed/);
+  assert.match(html, /verificationStatus=release verification passed ref=verification:passed/);
+});
+
 test('ResultsRenderer execution focus scopes execution units to the active run', () => {
   const session: SciForgeSession = {
     ...emptySession(),

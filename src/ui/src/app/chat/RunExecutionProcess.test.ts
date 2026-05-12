@@ -131,6 +131,22 @@ test('execution process renders failed execution units preserved in run raw payl
   assert.match(html, /probe failed before rendering/);
 });
 
+test('execution process distinguishes verification states from execution success', () => {
+  const html = renderProcess([
+    executionUnit({ id: 'ordinary', status: 'done' }),
+    executionUnit({ id: 'unverified', status: 'done', verificationVerdict: 'unverified', verificationRef: 'verification:unverified' }),
+    executionUnit({ id: 'verifying', status: 'running', outputRef: 'artifact:partial-report' }),
+    executionUnit({ id: 'verify-failed', status: 'done', verificationVerdict: 'fail', verificationRef: 'verification:failed' }),
+    executionUnit({ id: 'verify-passed', status: 'done', verificationVerdict: 'pass', verificationRef: 'verification:passed' }),
+  ]);
+
+  assert.match(html, /验证状态：No verification requested/);
+  assert.match(html, /验证状态：Unverified/);
+  assert.match(html, /验证状态：Verifying/);
+  assert.match(html, /验证状态：Verification failed/);
+  assert.match(html, /验证状态：Verification passed/);
+});
+
 function renderProcess(executionUnits: RuntimeExecutionUnit[]) {
   return renderToStaticMarkup(createElement(RunExecutionProcess, {
     runId: 'run-1',

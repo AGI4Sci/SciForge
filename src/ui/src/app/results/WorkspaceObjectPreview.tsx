@@ -43,6 +43,7 @@ export function WorkspaceObjectPreview({
 }) {
   const artifact = artifactForObjectReference(reference, session);
   const inlinePreview = useMemo(() => uploadedArtifactPreview(artifact), [artifact]);
+  const readableInlineFallback = useMemo(() => artifactHasReadableInlineFallback(artifact), [artifact]);
   const path = pathForObjectReference(reference, session);
   const previewConfig = useMemo(() => config, [config.workspacePath, config.workspaceWriterBaseUrl]);
   const [descriptor, setDescriptor] = useState<PreviewDescriptor | undefined>();
@@ -54,6 +55,7 @@ export function WorkspaceObjectPreview({
     setDescriptor(undefined);
     setError('');
     if (inlinePreview) return undefined;
+    if (reference.kind === 'artifact' && readableInlineFallback) return undefined;
     if (!path || (reference.kind !== 'file' && reference.kind !== 'artifact') || /^https?:\/\//i.test(path)) return undefined;
     let cancelled = false;
     const staticDescriptor = normalizeArtifactPreviewDescriptor(artifact, path);
@@ -97,7 +99,7 @@ export function WorkspaceObjectPreview({
     return () => {
       cancelled = true;
     };
-  }, [artifact, inlinePreview, path, previewConfig, reference.kind]);
+  }, [artifact, inlinePreview, path, previewConfig, readableInlineFallback, reference.kind]);
 
   if (reference.kind === 'url') {
     const url = reference.ref.replace(/^url:/i, '');
@@ -140,6 +142,17 @@ export function WorkspaceObjectPreview({
           reference={previewReference}
         />
       </div>
+    );
+  }
+  if (reference.kind === 'artifact' && readableInlineFallback) {
+    return (
+      <ArtifactFallbackPreview
+        reference={reference}
+        artifact={artifact}
+        path={path}
+        reason="inline-data"
+        onRequest={onPreviewPackageRequest}
+      />
     );
   }
   if (!path) {
@@ -222,7 +235,7 @@ function ArtifactFallbackPreview({
   artifact?: RuntimeArtifact;
   path?: string;
   diagnostic?: string;
-  reason: 'missing-path' | 'read-failed';
+  reason: 'missing-path' | 'read-failed' | 'inline-data';
   onRequest?: (reference: ObjectReference, path?: string, descriptor?: PreviewDescriptor) => void;
 }) {
   const fallbackReference = referenceForObjectReference(reference);
@@ -234,9 +247,7 @@ function ArtifactFallbackPreview({
         <Badge variant="warning">fallback</Badge>
         <strong>{title}</strong>
       </div>
-      <p>{reason === 'missing-path'
-        ? '这个 artifact 缺少可读取的 workspace path/dataRef，已改用 artifact 记录本身作为备用预览。'
-        : 'workspace 文件暂时不可读，已改用 artifact 记录本身作为备用预览。'}</p>
+      <p>{artifactFallbackReasonLabel(reason)}</p>
       <div className="source-list">
         <code>{reference.ref}</code>
         {artifact?.id ? <code>artifact:{artifact.id}</code> : null}
@@ -258,6 +269,12 @@ function ArtifactFallbackPreview({
       ) : null}
     </div>
   );
+}
+
+function artifactFallbackReasonLabel(reason: 'missing-path' | 'read-failed' | 'inline-data') {
+  if (reason === 'missing-path') return '这个 artifact 缺少可读取的 workspace path/dataRef，已改用 artifact 记录本身作为备用预览。';
+  if (reason === 'inline-data') return '这个 artifact 已包含可读 inline payload，已先展示 artifact 记录本身，避免 stale workspace ref 阻塞预览。';
+  return 'workspace 文件暂时不可读，已改用 artifact 记录本身作为备用预览。';
 }
 
 function DescriptorPreview({ descriptor, config, reference }: { descriptor: PreviewDescriptor; config: SciForgeConfig; reference: SciForgeReference }) {
@@ -657,6 +674,10 @@ function artifactFallbackDataPreview(artifact?: RuntimeArtifact) {
   } catch {
     return String(payload).slice(0, 12000);
   }
+}
+
+function artifactHasReadableInlineFallback(artifact?: RuntimeArtifact) {
+  return artifactFallbackDataPreview(artifact).trim().length > 0;
 }
 
 function workspacePreviewReadErrorMessage(descriptorError: unknown, fileError: unknown, cached = false) {

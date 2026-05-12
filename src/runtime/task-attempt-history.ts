@@ -4,6 +4,7 @@ import {
   createFailureSignature,
   createTaskRunCard,
   type FailureSignatureInput,
+  type OwnershipLayerSuggestion,
   type TaskAttributionLayer,
   type TaskOutcomeStatus,
   type TaskProtocolStatus,
@@ -15,6 +16,7 @@ import { summarizeWorkEvidenceForHandoff } from './gateway/work-evidence-types.j
 import { fileExists } from './workspace-task-runner.js';
 import { resolveWorkspaceFileRefPath } from './workspace-paths.js';
 import { isRecord } from './gateway-utils.js';
+import { auditSessionBundle, writeSessionBundleAudit } from './session-bundle.js';
 import { recordTaskAttemptFailureSignatures } from './failure-signature-registry.js';
 import {
   mergeValidationRepairAuditAttemptMetadata,
@@ -31,9 +33,10 @@ export async function appendTaskAttempt(workspacePath: string, record: TaskAttem
   const workspace = resolve(workspacePath || process.cwd());
   const recordWithEvidence = await withWorkEvidenceSummary(workspace, record);
   const recordWithAudit = await withValidationRepairAuditMetadata(workspace, recordWithEvidence);
-  const normalizedRecord = recordWithAudit.status === 'done'
-    ? { ...recordWithAudit, failureReason: undefined }
-    : recordWithAudit;
+  const recordWithBundleAudit = await withSessionBundleAuditMetadata(workspace, recordWithAudit, true);
+  const normalizedRecord = recordWithBundleAudit.status === 'done'
+    ? { ...recordWithBundleAudit, failureReason: undefined }
+    : recordWithBundleAudit;
   const normalizedRecordWithCard = withTaskRunCard(normalizedRecord);
   const path = normalizedRecord.sessionBundleRef
     ? join(workspace, normalizedRecord.sessionBundleRef, 'records', 'task-attempts', `${safeName(record.id)}.json`)
@@ -172,7 +175,8 @@ async function withAttemptDerivedMetadata(workspace: string, attempts: TaskAttem
     const withEvidence = await withWorkEvidenceSummary(workspace, attempt);
     const withAudit = await withValidationRepairAuditMetadata(workspace, withEvidence);
     const withTelemetry = await withValidationRepairTelemetryMetadata(workspace, withAudit);
-    return withTaskRunCard(withTelemetry);
+    const withBundleAudit = await withSessionBundleAuditMetadata(workspace, withTelemetry);
+    return withTaskRunCard(withBundleAudit);
   }));
 }
 
@@ -200,6 +204,7 @@ function withTaskRunCard(record: TaskAttemptRecord): TaskAttemptRecord {
       refs,
       failureSignatures,
       genericAttributionLayer,
+      ownershipLayerSuggestions: ownershipLayerSuggestionsForAttempt(record, genericAttributionLayer),
       updatedAt: record.createdAt,
       noHardcodeReview: {
         appliesGenerally: true,
@@ -212,6 +217,41 @@ function withTaskRunCard(record: TaskAttemptRecord): TaskAttemptRecord {
       },
     }),
   };
+}
+
+function ownershipLayerSuggestionsForAttempt(
+  record: TaskAttemptRecord,
+  genericAttributionLayer: TaskAttributionLayer,
+): Array<Partial<OwnershipLayerSuggestion>> {
+  const suggestions: Array<Partial<OwnershipLayerSuggestion>> = [];
+  if (record.runtimeProfileId) {
+    suggestions.push({
+      layer: 'harness',
+      confidence: record.status === 'planned' || record.status === 'running' ? 'medium' : 'low',
+      reason: 'Attempt metadata includes a harness/runtime profile, so profile and stage policy are a candidate ownership layer.',
+      signals: [`runtimeProfileId:${record.runtimeProfileId}`, `status:${record.status}`],
+      nextStep: 'Review harness profile, budget, and stage-hook decisions before rerun.',
+    });
+  }
+  if (record.uiPlanRef) {
+    suggestions.push({
+      layer: 'presentation',
+      confidence: 'low',
+      reason: 'Attempt metadata includes a UI/presentation plan ref, so result projection is a candidate ownership layer.',
+      signals: [`uiPlanRef:${record.uiPlanRef}`],
+      nextStep: 'Materialize the result presentation contract from preserved refs before changing task logic.',
+    });
+  }
+  if (record.routeDecision?.fallbackReason) {
+    suggestions.push({
+      layer: genericAttributionLayer === 'unknown' ? 'runtime-server' : genericAttributionLayer,
+      confidence: 'medium',
+      reason: 'Route decision metadata contains a fallback reason, so the selected generic runtime owner should be reviewed.',
+      signals: [`routeFallback:${record.routeDecision.fallbackReason}`],
+      nextStep: 'Inspect runtime routing and preserved diagnostics before rerun.',
+    });
+  }
+  return suggestions;
 }
 
 function genericAttributionLayerForAttempt(failureSignatures: FailureSignatureInput[]): TaskAttributionLayer {
@@ -426,6 +466,33 @@ async function withValidationRepairTelemetryMetadata(workspace: string, record: 
       validationRepairTelemetry: telemetryRefs,
     },
   } as TaskAttemptRecord;
+}
+
+async function withSessionBundleAuditMetadata(
+  workspace: string,
+  record: TaskAttemptRecord,
+  persist = false,
+): Promise<TaskAttemptRecord> {
+  if (!record.sessionBundleRef) return record;
+  try {
+    const { report: sessionBundleAudit, auditRef } = persist
+      ? await writeSessionBundleAudit(workspace, record.sessionBundleRef)
+      : {
+        report: await auditSessionBundle(workspace, record.sessionBundleRef),
+        auditRef: `${record.sessionBundleRef.replace(/\/+$/, '')}/records/session-bundle-audit.json`,
+      };
+    const current = record as TaskAttemptRecord & { refs?: Record<string, unknown> };
+    return {
+      ...record,
+      sessionBundleAudit,
+      refs: {
+        ...(isRecord(current.refs) ? current.refs : {}),
+        sessionBundleAudit: [auditRef],
+      },
+    } as TaskAttemptRecord;
+  } catch {
+    return record;
+  }
 }
 
 function validationRepairTelemetryAttemptMetadataFromAttempt(record: TaskAttemptRecord): ValidationRepairTelemetryAttemptMetadata | undefined {

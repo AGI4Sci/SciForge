@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -36,8 +36,12 @@ test('task attempts with a session bundle stay inside that bundle', async () => 
     assert.equal(direct[0].taskRunCard?.status, 'partial');
     assert.equal(direct[0].taskRunCard?.taskOutcome, 'needs-work');
     assert.equal(direct[0].taskRunCard?.noHardcodeReview.status, 'pass');
+    assert.equal(direct[0].sessionBundleAudit?.ready, false);
     assert.ok(direct[0].taskRunCard?.refs.some((ref) => ref.kind === 'bundle' && ref.ref === sessionBundleRef));
+    assert.ok(direct[0].taskRunCard?.refs.some((ref) => ref.kind === 'verification' && ref.ref.endsWith('/records/session-bundle-audit.json')));
     assert.ok(direct[0].taskRunCard?.failureSignatures.some((signature) => signature.kind === 'unknown'));
+    const audit = JSON.parse(await readFile(join(workspace, sessionBundleRef, 'records/session-bundle-audit.json'), 'utf8'));
+    assert.equal(audit.bundleRel, sessionBundleRef);
 
     const recent = await readRecentTaskAttempts(workspace, 'literature', 4, { prompt: attempt.prompt });
     assert.equal(recent.length, 1);
@@ -76,10 +80,45 @@ test('task run cards separate protocol success from task outcome and keep failur
     assert.equal(card?.taskOutcome, 'needs-work');
     assert.equal(card?.status, 'partial');
     assert.equal(card?.genericAttributionLayer, 'external-provider');
+    assert.ok(card?.ownershipLayerSuggestions.some((suggestion) => suggestion.layer === 'external-provider'));
+    assert.ok(card?.ownershipLayerSuggestions.some((suggestion) => suggestion.layer === 'payload-normalization'));
     assert.ok(card?.refs.some((ref) => ref.kind === 'artifact' && ref.ref === attempt.outputRef));
     assert.ok(card?.failureSignatures.some((signature) => signature.kind === 'external-transient'));
     assert.ok(card?.failureSignatures.some((signature) => signature.kind === 'schema-drift'));
     assert.match(card?.nextStep ?? '', /provider backoff|cached evidence/i);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('task attempts suggest ownership layers from generic runtime metadata', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-task-ownership-'));
+  try {
+    const attempt: TaskAttemptRecord = {
+      id: 'profiled-runtime-attempt',
+      prompt: 'run a task and present the result',
+      skillDomain: 'knowledge',
+      skillId: 'generic-task',
+      runtimeProfileId: 'debug-repair',
+      uiPlanRef: '.sciforge/ui-plans/result.json',
+      routeDecision: {
+        selectedRuntime: 'agentserver',
+        fallbackReason: 'primary runtime returned recoverable diagnostics',
+        selectedAt: '2026-05-12T00:00:00.000Z',
+      },
+      attempt: 1,
+      status: 'record-only',
+      outputRef: '.sciforge/task-results/result.json',
+      createdAt: '2026-05-12T00:00:00.000Z',
+    } as TaskAttemptRecord;
+
+    await appendTaskAttempt(workspace, attempt);
+    const [stored] = await readTaskAttempts(workspace, attempt.id);
+    const suggestions = stored?.taskRunCard?.ownershipLayerSuggestions ?? [];
+
+    assert.ok(suggestions.some((suggestion) => suggestion.layer === 'harness' && suggestion.signals.includes('runtimeProfileId:debug-repair')));
+    assert.ok(suggestions.some((suggestion) => suggestion.layer === 'presentation' && suggestion.signals.includes(`uiPlanRef:${attempt.uiPlanRef}`)));
+    assert.ok(suggestions.some((suggestion) => suggestion.signals.some((signal) => signal.startsWith('routeFallback:'))));
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

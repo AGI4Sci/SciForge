@@ -6,7 +6,7 @@ import {
   ALIGNMENT_CONTRACT_VERSION_ARTIFACT_TYPE,
 } from '@sciforge-ui/runtime-contract';
 import { normalizeWorkspaceRootPath, resolveWorkspaceFilePreviewPath } from '../workspace-paths.js';
-import { ensureSessionBundle, sessionBundleRel } from '../session-bundle.js';
+import { ensureSessionBundle, sessionBundleRel, writeSessionBundleAudit } from '../session-bundle.js';
 import { isBinaryPreviewFile, languageForPath, mimeTypeForPath } from './file-preview.js';
 import { isRecord, readJson, safeName, writeJson } from './http.js';
 import { runWorkspaceOpenAction } from './workspace-open.js';
@@ -205,6 +205,7 @@ export async function handleWorkspaceFileApiRoutes(
           const versionId = safeName(String(version.id || 'version'));
           await writeFile(join(root, bundleRel, 'versions', `${versionId}.json`), JSON.stringify(version, null, 2));
         }
+        await writeSessionBundleAudit(root, bundleRel);
       }
       const alignmentContracts = Array.isArray(state.alignmentContracts) ? state.alignmentContracts : [];
       for (const contract of alignmentContracts as Array<Record<string, unknown>>) {
@@ -360,6 +361,8 @@ function sessionBundleReadme(session: Record<string, unknown>, bundleRel: string
     '- `manifest.json` describes the bundle layout.',
     '- `records/session.json` contains the full session object.',
     '- `records/messages.json`, `records/runs.json`, and `records/execution-units.json` provide split records for quick inspection.',
+    '- `records/session-bundle-audit.json` reports pack/restore/audit readiness for migration.',
+    '- `records/task-attempts/` contains recoverable attempt ledgers when generated tasks ran.',
   ].join('\n');
 }
 

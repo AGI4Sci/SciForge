@@ -6,7 +6,7 @@ import {
   mergeObjectReferences,
   objectReferenceForArtifactSummary,
 } from '../../../../../packages/support/object-references';
-import { executionStatusLabel, executionStatusShortLabel } from '../results/executionStatusPresentation';
+import { executionStatusLabel, executionStatusShortLabel, executionVerificationPresentation } from '../results/executionStatusPresentation';
 import { executionUnitsForRun } from '../results/executionUnitsForRun';
 
 type ExecutionProcessStep = {
@@ -166,11 +166,13 @@ function executionUnitTarget(unit: RuntimeExecutionUnit) {
 }
 
 function executionUnitDetails(unit: RuntimeExecutionUnit) {
+  const verification = executionVerificationPresentation(unit);
   const priorityDetails = [
     unit.failureReason ? `失败原因：${unit.failureReason}` : '',
     unit.recoverActions?.length ? `恢复动作：${unit.recoverActions.map((action) => compactAuditText(action, 180)).join('；')}` : '',
     unit.nextStep ? `下一步：${compactAuditText(unit.nextStep, 180)}` : '',
     unit.selfHealReason ? `自修复说明：${unit.selfHealReason}` : '',
+    `验证状态：${verification.label}（${verification.detail}）`,
   ];
   const supportingDetails = [
     unit.params ? `参数：${compactAuditText(unit.params, 180)}` : '',

@@ -2,6 +2,7 @@ import {
   createTaskRunCard,
   validateTaskRunCard,
   type FailureSignatureInput,
+  type OwnershipLayerSuggestion,
   type TaskAttributionLayer,
   type TaskOutcomeStatus,
   type TaskProtocolStatus,
@@ -55,6 +56,7 @@ export interface GatewayTaskOutcomeProjection {
   taskSuccess: boolean;
   userSatisfactionProxy: UserSatisfactionProxy;
   nextStepAttribution: NextStepAttribution;
+  ownershipLayerSuggestions: OwnershipLayerSuggestion[];
   projectionRules: string[];
 }
 
@@ -117,6 +119,7 @@ export function materializeTaskOutcomeProjection(input: GatewayTaskOutcomeProjec
     taskSuccess: taskOutcome === 'satisfied',
     userSatisfactionProxy,
     nextStepAttribution,
+    ownershipLayerSuggestions: taskRunCard.ownershipLayerSuggestions,
     projectionRules: [
       'Protocol success means the backend returned a parseable contract; task success means the current user goal appears satisfied.',
       'User satisfaction proxy is inferred from visible answer quality, usable artifacts/refs, next-step structure, and repeat-work avoidance.',

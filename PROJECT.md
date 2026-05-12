@@ -1,6 +1,6 @@
 # SciForge - PROJECT.md
 
-最后更新：2026-05-12
+最后更新：2026-05-13
 
 ## 当前目标
 
@@ -18,7 +18,6 @@ Token 高效：每轮只携带当前任务真正需要的 state digest、refs、
 
 本阶段重点不是扩展新能力，也不是为某个固定案例打补丁，而是建立通用的多轮对话状态、恢复、历史编辑、分支、token budget、回答速度、benchmark 和指标体系，让任意场景下的 agent 行为都更可预测、更可审计、更贴近用户期望。
 
-请用codex(你)的内置浏览器端到端调试,不用外部浏览器
 
 
 ## 开工前必读
@@ -217,6 +216,38 @@ Failure/Improvement Notes：
 - [x] `git diff --check`
 
 
+### 2026-05-13 Milestone：Ownership Layer、Session Bundle Checklist 与 Verification UI 收敛
+
+本轮继续开启多个 sub agents 并行推进 runtime contract、session bundle、网页 E2E 和 UI presentation。Codex/Computer Use 手动打开 `http://127.0.0.1:5173/` 检查首页、Runtime Health、聊天输入、失败 run、结果区过滤；并行 E2E worker 运行 `npm run smoke:browser`，覆盖 onboarding、Settings、Workspace、Timeline、failed-run restore、Builder publish/open flow、mobile layout、partial/background demo 和 reference follow-up preview。
+
+- [x] `TaskRunCard` 新增 `ownershipLayerSuggestions`：真实任务结束后按稳定 runtime 信号自动建议归属层，覆盖 harness、runtime-server、AgentServer parser、payload normalization、presentation、verification、resume、UI、external-provider、workspace，不依赖 prompt、文件名、论文名或 backend 特例。
+- [x] gateway `taskOutcomeProjection` 同步暴露 ownership layer suggestions，task-attempt history 会把 runtime profile、UI plan 和 route fallback 等通用元数据纳入建议。
+- [x] session bundle manifest 增加 pack/restore/audit checklist：声明 session/messages/runs/execution-units/task-attempts、generated work、handoff、verification、debug、version、README 和 runtime event refs。
+- [x] 新增 `auditSessionBundle` / `writeSessionBundleAudit`，workspace snapshot 和 task-attempt API 会生成并返回 `records/session-bundle-audit.json`，TaskRunCard refs 中保留 audit ref，支撑一键打包/恢复/审计。
+- [x] UI 执行表和运行过程展示独立 verification 状态，区分 `No verification requested`、`Unverified`、`Verifying`、`Verification failed`、`Verification passed`，不再把 release verification 与 execution success 混在一个 chip 里。
+- [x] stale artifact preview 收敛：artifact 已携带可读 inline payload 时，WorkspaceObjectPreview 先展示 artifact 记录本身，不抢先请求可能 stale 的 workspace dataRef，避免真实 workspace 首屏产生无意义 400。
+
+Failure/Improvement Notes：
+
+- Safari 现有 tab 的 localStorage 残留旧 Workspace Writer 端口 `21431`，Runtime Health 显示 offline；隔离浏览器和 smoke 使用当前 `5174` 正常 online。归因层是 UI/local config persistence，后续可增加“本地配置端口漂移”诊断或一键恢复默认 writer URL。
+- 当前真实 workspace 中 `bad-report` 指向 `.sciforge/artifacts/no-such.md` 的 stale dataRef；已通过 inline artifact fallback 避免首屏 400，但仍应继续保留 stale negative cache 与用户可见 fallback 作为通用策略。
+- `R-RUN-09` 版本漂移恢复需要 capability/schema/runtime fingerprint 与迁移策略，不适合作为小 milestone；先保留为后续架构项。
+- 真实 `R-LIT-03` 多来源检索外部依赖较重，后续应先 fixture 化 provider-neutral provenance/dedupe contract，再跑真实网络版本。
+
+本轮验证：
+
+- [x] Computer Use / Safari：打开本地 5173，检查工作台、Runtime Health、失败 run、只看执行单元过滤和设置弹窗；发现并记录本地端口配置漂移。
+- [x] `npm run smoke:browser`
+- [x] `node --import tsx --test packages/contracts/runtime/task-run-card.test.ts src/runtime/task-attempt-history.test.ts src/runtime/gateway/result-presentation-contract.test.ts src/runtime/session-bundle.test.ts`
+- [x] `node --import tsx --test src/ui/src/app/results/WorkspaceObjectPreview.test.ts src/ui/src/api/workspaceClient.preview-cache.test.ts src/ui/src/app/chat/RunExecutionProcess.test.ts src/ui/src/app/ResultsRenderer.test.ts src/ui/src/app/results-renderer-execution-model.test.ts src/ui/src/app/results/viewPlanResolver.test.ts`
+- [x] `npm run smoke:runtime-contracts`
+- [x] `npm run smoke:task-attempt-api`
+- [x] `npm run smoke:workspace-file-api`
+- [x] `npm run smoke:bundle-import`
+- [x] `npm run typecheck`
+- [x] `git diff --check`
+
+
 
 ### H022 Real-world Complex Task Backlog for SciForge Hardening
 
@@ -287,7 +318,7 @@ UI 与 presentation 真实任务：
 - [ ] R-UI-02 Partial 优先：长任务运行中必须展示已完成部分、当前阶段、后台状态和可安全中止/继续的操作。
 - [ ] R-UI-03 Artifact 选择追问：用户点选某个 file/artifact 后追问“基于这个继续”，系统必须使用被点选对象而不是最近对象。
 - [x] R-UI-04 ExecutionUnit 展示：运行结果中 execution unit 必须包含 codeRef/stdoutRef/stderrRef/outputRef、状态、失败原因和 recoverActions。
-- [ ] R-UI-05 Verification 状态：普通结果、未验证结果、后台验证中、验证失败、release verify 通过五种状态 UI 必须可区分。
+- [x] R-UI-05 Verification 状态：普通结果、未验证结果、后台验证中、验证失败、release verify 通过五种状态 UI 必须可区分。
 - [ ] R-UI-06 空结果页面：没有 artifact 时不能显示误导性 completed；必须展示 empty/needs-human/recoverable 的准确状态。
 - [ ] R-UI-07 多 artifact 比较：结果区同时出现 report、paper-list、diagnostic、verification，用户切换 focus mode 后仍保持正确排序。
 - [ ] R-UI-08 导出 bundle：用户要求导出 JSON bundle/审计包，UI 必须能引用正确 session bundle 而不是当前空状态。
@@ -310,10 +341,10 @@ UI 与 presentation 真实任务：
 - [x] TODO-GEN-01 为每个真实任务自动生成 `TaskRunCard`：目标、轮次、状态、refs、失败模式、通用归因层、下一步。
 - [x] TODO-GEN-02 建立 `FailureSignature` 去重：相同 schema drift、timeout、repair no-op、external transient 不重复开新诊断。
 - [x] TODO-GEN-03 建立 `NoHardcodeReview` checklist：每次修复必须说明适用场景、反例、为什么不是 prompt/file/backend 特例。
-- [ ] TODO-GEN-04 让真实任务跑完后自动建议归属：harness、runtime server、AgentServer parser、payload normalization、presentation、verification、resume、UI。
+- [x] TODO-GEN-04 让真实任务跑完后自动建议归属：harness、runtime server、AgentServer parser、payload normalization、presentation、verification、resume、UI。
 - [x] TODO-GEN-05 为“成功但不满足用户真实目标”的情况增加状态：protocol success 不等于 task success，必须进入 needs-work/needs-human。
 - [x] TODO-GEN-06 为 direct-text fallback 增加 guard：像代码、taskFiles、JSON、trace、日志的内容不能轻易包装成最终报告。
 - [x] TODO-GEN-07 为 schema normalization 建立白名单边界：只修复结构漂移，不吞掉真实语义错误或安全错误。
 - [x] TODO-GEN-08 为 external transient 建立 provider-neutral policy：HTTP、DNS、timeout、rate limit、quota、service unavailable 统一分类。
-- [ ] TODO-GEN-09 为 session bundle 增加“一键打包/恢复/审计”检查清单，确保每个多轮任务可独立迁移。
+- [x] TODO-GEN-09 为 session bundle 增加“一键打包/恢复/审计”检查清单，确保每个多轮任务可独立迁移。
 - [x] TODO-GEN-10 为复杂任务新增“用户满意度 proxy”：是否回答了最新请求、是否展示可用结果、是否给出下一步、是否避免重复劳动。
