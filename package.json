@@ -159,7 +159,7 @@
     "smoke:docs-scenario-package": "tsx tests/smoke/smoke-docs-scenario-package.ts",
     "smoke:runtime-contracts": "tsx tests/smoke/smoke-runtime-contract-schemas.ts",
     "smoke:runtime-gateway-modules": "tsx tests/smoke/smoke-runtime-gateway-modules.ts",
-    "smoke:background-completion": "tsx tests/smoke/smoke-background-completion-protocol.ts",
+    "smoke:background-completion": "tsx tests/smoke/smoke-background-completion-protocol.ts && tsx tests/smoke/smoke-background-stream-continuation.ts",
     "smoke:t098-latency": "tsx tests/smoke/smoke-t098-latency-diagnostics-matrix.ts",
     "smoke:object-references": "tsx tests/smoke/smoke-object-reference-normalization.ts",
     "smoke:vision-sense-runtime": "tsx tests/smoke/smoke-vision-sense-runtime-bridge.ts",

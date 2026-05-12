@@ -7,6 +7,7 @@ import {
 export type LiteratureRetrievalStatus = 'success' | 'partial' | 'failed';
 export type LiteratureProviderAttemptStatus = 'success' | 'empty' | 'timeout' | 'error' | 'skipped';
 export type CitationVerificationStatus = 'verified' | 'mismatch' | 'missing-identifiers';
+export type LiteratureSourceTrustLevel = 'high' | 'medium' | 'low';
 
 export interface LiteratureRetrievalRequest {
   query: string;
@@ -19,6 +20,7 @@ export interface LiteratureRetrievalRequest {
   includeAbstracts?: boolean;
   fullTextPolicy?: 'metadata-only' | 'abstracts' | 'bounded-full-text';
   dedupePolicy?: 'doi-pmid-arxiv-title-year' | 'provider-native' | 'none';
+  excludedProviderIds?: string[];
 }
 
 export interface LiteratureRetrievalBudget {
@@ -52,6 +54,8 @@ export interface OfflineLiteratureProviderFixture {
   elapsedMs?: number;
   errorCode?: string;
   errorMessage?: string;
+  trustLevel?: LiteratureSourceTrustLevel;
+  exclusionReason?: string;
 }
 
 export interface NormalizedLiteraturePaper {
@@ -85,6 +89,33 @@ export interface LiteratureResearchReportArtifact {
   fullTextPolicy: 'metadata-only' | 'abstracts' | 'bounded-summary';
   sourceRefs: string[];
   diagnostics: LiteratureRetrievalDiagnostic[];
+}
+
+export interface LiteratureSourceProvenanceValue {
+  providerId: string;
+  value: string;
+}
+
+export interface LiteratureSourceDifference {
+  field: 'title' | 'year' | 'journal' | 'doi' | 'pmid' | 'arxivId';
+  values: LiteratureSourceProvenanceValue[];
+}
+
+export interface LiteratureSourceProvenanceProviderRecord {
+  providerId: string;
+  providerRecordRef: string;
+  trustLevel: LiteratureSourceTrustLevel;
+  included: boolean;
+  exclusionReason?: string;
+}
+
+export interface LiteratureSourceProvenanceRecord {
+  paperId: string;
+  includedProviderIds: string[];
+  excludedProviderIds: string[];
+  providerRecordRefs: string[];
+  sourceRecords: LiteratureSourceProvenanceProviderRecord[];
+  differences: LiteratureSourceDifference[];
 }
 
 export interface LiteratureWorkEvidence {
@@ -130,7 +161,8 @@ export interface LiteratureRetrievalDiagnostic {
     | 'provider-budget-exceeded'
     | 'result-budget-exceeded'
     | 'download-failure'
-    | 'citation-mismatch';
+    | 'citation-mismatch'
+    | 'source-excluded';
   message: string;
   providerId?: string;
   paperId?: string;
@@ -141,6 +173,7 @@ export interface OfflineLiteratureRetrievalOutput {
   paperList: NormalizedLiteraturePaper[];
   evidenceMatrix: LiteratureEvidenceMatrixRow[];
   researchReport: LiteratureResearchReportArtifact;
+  sourceProvenance: LiteratureSourceProvenanceRecord[];
   workEvidence: LiteratureWorkEvidence[];
   providerAttempts: LiteratureProviderAttempt[];
   citationVerificationResults: CitationVerificationResult[];
@@ -165,12 +198,22 @@ const DEFAULT_LITERATURE_RETRIEVAL_BUDGET: LiteratureRetrievalBudget = {
 const DEFAULT_PROVIDER_IDS = ['pubmed', 'crossref', 'semantic-scholar', 'openalex', 'arxiv', 'web-search', 'scp-biomedical-search'];
 const CITATION_FIELDS: CitationVerificationResult['checkedFields'] = ['doi', 'pmid', 'arxivId', 'title', 'year', 'journal'];
 
+interface LiteratureSourceRecordForProvenance extends LiteratureSourceProvenanceProviderRecord {
+  title: string;
+  year?: number;
+  journal?: string;
+  doi?: string;
+  pmid?: string;
+  arxivId?: string;
+}
+
 export function runOfflineLiteratureRetrieval(input: OfflineLiteratureRetrievalRunnerInput): OfflineLiteratureRetrievalOutput {
   const budget = { ...DEFAULT_LITERATURE_RETRIEVAL_BUDGET, ...input.budget };
   const requestMaxResults = input.request.maxResults ?? budget.maxResults;
   const maxResults = Math.min(requestMaxResults, budget.maxResults);
   const requestedProviders = normalizeRequestedProviders(input.request.databases);
   const selectedProviderIds = requestedProviders.slice(0, budget.maxProviders);
+  const excludedProviderIds = new Set((input.request.excludedProviderIds ?? []).map(normalizeProviderId));
   const diagnostics: LiteratureRetrievalDiagnostic[] = [];
   if (requestedProviders.length > selectedProviderIds.length) {
     diagnostics.push({
@@ -182,6 +225,7 @@ export function runOfflineLiteratureRetrieval(input: OfflineLiteratureRetrievalR
   const fixtureByProvider = new Map(input.providerFixtures.map((fixture) => [normalizeProviderId(fixture.providerId), fixture]));
   const providerAttempts: LiteratureProviderAttempt[] = [];
   const normalizedPapers = new Map<string, NormalizedLiteraturePaper>();
+  const sourceRecordsByPaper = new Map<string, LiteratureSourceRecordForProvenance[]>();
   const recordCitationMatches = new Map<string, boolean>();
   const downloadFailurePaperIds = new Set<string>();
 
@@ -239,10 +283,38 @@ export function runOfflineLiteratureRetrieval(input: OfflineLiteratureRetrievalR
     }
 
     let acceptedCount = 0;
+    const sourceTrustLevel = fixture.trustLevel ?? 'medium';
     for (const record of fixture.records) {
       const paperId = paperKey(record, input.request.dedupePolicy ?? 'doi-pmid-arxiv-title-year', providerId);
-      const existing = normalizedPapers.get(paperId);
       const providerRecordRef = `provider:${providerId}:${record.providerRecordId ?? slug(record.title)}`;
+      const excluded = excludedProviderIds.has(providerId);
+      const sourceRecord: LiteratureSourceRecordForProvenance = {
+        providerId: `literature.retrieval.${providerId}`,
+        providerRecordRef,
+        trustLevel: sourceTrustLevel,
+        included: !excluded,
+        exclusionReason: excluded ? fixture.exclusionReason ?? 'Excluded by request before rewriting the report.' : undefined,
+        title: record.title,
+        year: record.year,
+        journal: record.journal,
+        doi: record.doi,
+        pmid: record.pmid,
+        arxivId: record.arxivId,
+      };
+      const sourceRecords = sourceRecordsByPaper.get(paperId) ?? [];
+      sourceRecords.push(sourceRecord);
+      sourceRecordsByPaper.set(paperId, sourceRecords);
+      if (excluded) {
+        if (!attemptDiagnostics.includes('source-excluded')) attemptDiagnostics.push('source-excluded');
+        diagnostics.push({
+          code: 'source-excluded',
+          providerId: `literature.retrieval.${providerId}`,
+          paperId,
+          message: `${sourceRecord.providerId} was excluded by request; retained for provenance but omitted from paper-list, evidence matrix, and rewritten report.`,
+        });
+        continue;
+      }
+      const existing = normalizedPapers.get(paperId);
       if (existing) {
         existing.sourceProviderIds = unique([...existing.sourceProviderIds, providerId]);
         existing.providerRecordRefs = unique([...existing.providerRecordRefs, providerRecordRef]);
@@ -310,6 +382,7 @@ export function runOfflineLiteratureRetrieval(input: OfflineLiteratureRetrievalR
     citationStatus: citationVerificationResults.find((result) => result.paperId === paper.id)?.status ?? 'missing-identifiers',
   }));
   const status = finalStatus(paperList, diagnostics);
+  const sourceProvenance = paperList.map((paper) => sourceProvenanceForPaper(paper, sourceRecordsByPaper.get(paper.id) ?? []));
   const artifactRefs: LiteratureWorkEvidence['artifactRefs'] = ['artifact:paper-list', 'artifact:evidence-matrix', 'artifact:research-report'];
   const providerAttemptRefs = providerAttempts.map((attempt) => `providerAttempt:${attempt.id}`);
   const workEvidenceRef = `workEvidence:literature-retrieval:${slug(input.request.query)}`;
@@ -347,6 +420,7 @@ export function runOfflineLiteratureRetrieval(input: OfflineLiteratureRetrievalR
       sourceRefs: paperList.flatMap((paper) => paper.providerRecordRefs),
       diagnostics,
     },
+    sourceProvenance,
     workEvidence: [{
       id: workEvidenceRef,
       kind: 'literature-retrieval',
@@ -370,6 +444,7 @@ export function validateOfflineLiteratureRetrievalOutput(output: OfflineLiteratu
   if (!Array.isArray(output.paperList)) failures.push('paperList must be an array');
   if (!Array.isArray(output.evidenceMatrix)) failures.push('evidenceMatrix must be an array');
   if (output.researchReport?.ref !== 'artifact:research-report') failures.push('researchReport must expose artifact:research-report');
+  if (!Array.isArray(output.sourceProvenance)) failures.push('sourceProvenance must be an array');
   if (!output.workEvidence.length) failures.push('workEvidence must include at least one audit row');
   if (!output.providerAttempts.length) failures.push('providerAttempts must include selected provider outcomes');
   if (!Array.isArray(output.citationVerificationResults)) failures.push('citationVerificationResults must be an array');
@@ -389,6 +464,40 @@ export function validateOfflineLiteratureRetrievalOutput(output: OfflineLiteratu
     failures.push('download failure must downgrade researchReport.fullTextPolicy to metadata-only');
   }
   return failures;
+}
+
+function sourceProvenanceForPaper(
+  paper: NormalizedLiteraturePaper,
+  sourceRecords: LiteratureSourceRecordForProvenance[],
+): LiteratureSourceProvenanceRecord {
+  return {
+    paperId: paper.id,
+    includedProviderIds: unique(sourceRecords.filter((record) => record.included).map((record) => record.providerId)),
+    excludedProviderIds: unique(sourceRecords.filter((record) => !record.included).map((record) => record.providerId)),
+    providerRecordRefs: unique(sourceRecords.map((record) => record.providerRecordRef)),
+    sourceRecords: sourceRecords.map((record) => ({
+      providerId: record.providerId,
+      providerRecordRef: record.providerRecordRef,
+      trustLevel: record.trustLevel,
+      included: record.included,
+      exclusionReason: record.exclusionReason,
+    })),
+    differences: sourceDifferences(sourceRecords),
+  };
+}
+
+function sourceDifferences(sourceRecords: LiteratureSourceRecordForProvenance[]): LiteratureSourceDifference[] {
+  const fields: LiteratureSourceDifference['field'][] = ['title', 'year', 'journal', 'doi', 'pmid', 'arxivId'];
+  return fields.flatMap((field) => {
+    const values = sourceRecords
+      .map((record) => {
+        const value = record[field];
+        return value === undefined ? undefined : { providerId: record.providerId, value: String(value) };
+      })
+      .filter((entry): entry is LiteratureSourceProvenanceValue => Boolean(entry));
+    const uniqueValues = unique(values.map((entry) => normalizeDifferenceValue(entry.value)));
+    return uniqueValues.length > 1 ? [{ field, values }] : [];
+  });
 }
 
 function createLiteratureRetrievalBudgetDebitRecord(input: {
@@ -541,6 +650,10 @@ function resolveReportFullTextPolicy(
 
 function unique<T>(items: T[]): T[] {
   return [...new Set(items)];
+}
+
+function normalizeDifferenceValue(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
 function slug(value: string): string {

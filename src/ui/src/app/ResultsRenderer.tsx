@@ -48,13 +48,16 @@ import {
   rawAuditItems,
   runAuditBlockers,
   runAuditRefs,
+  runPresentationState,
   runRecoverActions,
   type BackendRepairState,
+  type RunPresentationState,
 } from './results-renderer-execution-model';
 export {
   backendRepairStates,
   contractValidationFailures,
   runAuditRefs,
+  runPresentationState,
   runRecoverActions,
   shouldOpenRunAuditDetails,
 } from './results-renderer-execution-model';
@@ -345,7 +348,7 @@ function PrimaryResult({
     <div className="stack">
       <SectionHeader icon={FileText} title="结果视图" subtitle="优先展示用户本轮要看的结果；更多内容默认收起" />
       {viewPlan.blockedDesign ? <UIDesignBlockerCard blocker={viewPlan.blockedDesign} /> : null}
-      <RunStatusSummary session={session} activeRun={activeRun} />
+      <RunStatusSummary session={session} activeRun={activeRun} viewPlan={viewPlan} />
       {model.emptyState ? (
         <EmptyArtifactState
           title={model.emptyState.title}
@@ -417,21 +420,24 @@ function ExecutionOnlyResult({ session, activeRun }: { session: SciForgeSession;
   );
 }
 
-function RunStatusSummary({ session, activeRun }: { session: SciForgeSession; activeRun?: SciForgeRun }) {
+function RunStatusSummary({ session, activeRun, viewPlan }: { session: SciForgeSession; activeRun?: SciForgeRun; viewPlan: RuntimeResolvedViewPlan }) {
   const failures = failedExecutionUnits(session, activeRun);
   const run = activeRun ?? session.runs.at(-1);
   const blockers = runAuditBlockers(session, activeRun);
   const validationFailures = contractValidationFailures(session, activeRun);
   const repairStates = backendRepairStates(session, activeRun);
   const recoverActions = runRecoverActions(session, activeRun).slice(0, 4);
-  if (!failures.length && !blockers.length && !validationFailures.length && !repairStates.length && !recoverActions.length && run?.status !== 'failed') return null;
+  const presentationState = runPresentationState(session, activeRun, viewPlan);
+  const shouldShowPresentationState = presentationState.kind !== 'ready' || presentationState.nextSteps.length > 0;
+  if (!failures.length && !blockers.length && !validationFailures.length && !repairStates.length && !recoverActions.length && run?.status !== 'failed' && !shouldShowPresentationState) return null;
   return (
-    <Card className={cx('run-status-summary', failures.length || validationFailures.length || run?.status === 'failed' ? 'failed' : 'recoverable')}>
+    <Card className={cx('run-status-summary', failures.length || validationFailures.length || run?.status === 'failed' ? 'failed' : presentationState.kind)}>
       <SectionHeader
         icon={AlertTriangle}
-        title={failures.length || validationFailures.length || run?.status === 'failed' ? '运行需要处理' : '可恢复建议'}
-        subtitle={run ? `${run.id} · ${run.status}` : '当前 session'}
+        title={failures.length || validationFailures.length || run?.status === 'failed' ? '运行需要处理' : presentationState.title}
+        subtitle={run ? `${run.id} · ${presentationState.kind}` : '当前 session'}
       />
+      <RunPresentationStateSummary state={presentationState} />
       {blockers.length ? (
         <div className="run-status-lines">
           {blockers.map((line) => <span key={line}>{compactVisibleFailureText(line)}</span>)}
@@ -454,6 +460,30 @@ function RunStatusSummary({ session, activeRun }: { session: SciForgeSession; ac
         </div>
       ) : null}
     </Card>
+  );
+}
+
+function RunPresentationStateSummary({ state }: { state: RunPresentationState }) {
+  if (state.kind === 'ready' && !state.nextSteps.length) return null;
+  return (
+    <div className="run-presentation-state">
+      <div className="run-status-lines">
+        <span>{state.reason}</span>
+      </div>
+      {state.availableArtifacts.length ? (
+        <div className="slot-meta">
+          <strong>可用产物</strong>
+          {state.availableArtifacts.slice(0, 6).map((artifact) => (
+            <code key={artifact.id}>{artifact.type}: {artifact.title ?? artifact.id}</code>
+          ))}
+        </div>
+      ) : null}
+      {state.nextSteps.length ? (
+        <div className="run-recover-actions">
+          {state.nextSteps.map((action) => <code key={action}>{action}</code>)}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

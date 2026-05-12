@@ -295,6 +295,100 @@ test('result presentation artifact actions can drive Results view selection', ()
   assert.equal(displayIntentItems.some((item) => item.artifact?.id === 'analysis-report'), true);
 });
 
+test('result presentation artifact actions keep active run scope across mixed artifacts', () => {
+  const oldReport: RuntimeArtifact = {
+    id: 'old-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { markdown: '# Old scoped report' },
+  };
+  const oldPapers: RuntimeArtifact = {
+    id: 'old-papers',
+    type: 'paper-list',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { papers: [{ title: 'Scoped paper' }] },
+  };
+  const oldDiagnostic: RuntimeArtifact = {
+    id: 'old-diagnostic',
+    type: 'runtime-diagnostic',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { status: 'partial', message: 'verification is partial' },
+  };
+  const oldVerification: RuntimeArtifact = {
+    id: 'old-verification',
+    type: 'verification-result',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { verdict: 'uncertain' },
+  };
+  const newReport: RuntimeArtifact = {
+    id: 'new-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: { markdown: '# New report' },
+  };
+  const oldRun: SciForgeRun = {
+    id: 'run-old-mixed',
+    scenarioId: 'literature-evidence-review',
+    status: 'completed',
+    prompt: 'old mixed artifacts',
+    response: 'done',
+    createdAt: '2026-05-07T00:00:01.000Z',
+    objectReferences: [
+      { kind: 'artifact', ref: 'artifact:old-report', title: 'old report' },
+      { kind: 'artifact', ref: 'artifact:old-papers', title: 'old papers' },
+      { kind: 'artifact', ref: 'artifact:old-diagnostic', title: 'old diagnostic' },
+      { kind: 'artifact', ref: 'artifact:old-verification', title: 'old verification' },
+    ],
+    raw: {
+      displayIntent: {
+        resultPresentation: {
+          answerBlocks: [{ id: 'answer-1', text: 'Mixed artifacts are available.' }],
+          artifactActions: [
+            { id: 'papers', label: 'Compare paper list', ref: 'artifact:old-papers', artifactType: 'paper-list' },
+            { id: 'report', label: 'Open report', ref: 'artifact:old-report', artifactType: 'research-report' },
+            { id: 'diagnostic', label: 'Inspect diagnostic', ref: 'artifact:old-diagnostic', artifactType: 'runtime-diagnostic' },
+            { id: 'verification', label: 'Inspect verification', ref: 'artifact:old-verification', artifactType: 'verification-result' },
+          ],
+        },
+      },
+    },
+  } as never;
+  const newRun: SciForgeRun = {
+    id: 'run-new-mixed',
+    scenarioId: 'literature-evidence-review',
+    status: 'completed',
+    prompt: 'new report',
+    response: 'done',
+    createdAt: '2026-05-07T00:00:02.000Z',
+    objectReferences: [{ kind: 'artifact', ref: 'artifact:new-report', title: 'new report' }],
+  } as never;
+  const session = baseSession({
+    runs: [oldRun, newRun],
+    artifacts: [oldReport, oldPapers, oldDiagnostic, oldVerification, newReport],
+  });
+
+  const plan = resolveViewPlan({ scenarioId: 'literature-evidence-review', session, activeRun: oldRun, defaultSlots: [] });
+  const allItems = itemsForFocusMode(plan, 'all');
+  const visualItems = itemsForFocusMode(plan, 'visual');
+
+  assert.equal(allItems.some((item) => item.artifact?.id === 'new-report'), false);
+  assert.ok(allItems.some((item) => item.artifact?.id === 'old-papers'));
+  assert.ok(allItems.some((item) => item.artifact?.id === 'old-report'));
+  assert.ok(allItems.some((item) => item.artifact?.id === 'old-diagnostic'));
+  assert.ok(allItems.some((item) => item.artifact?.id === 'old-verification'));
+  assert.deepEqual(
+    allItems.filter((item) => item.source === 'display-intent').map((item) => item.artifact?.id),
+    ['old-report', 'old-papers', 'old-diagnostic', 'old-verification'],
+  );
+  assert.equal(visualItems.some((item) => item.artifact?.id === 'new-report'), false);
+  assert.ok(visualItems.some((item) => item.artifact?.id === 'old-report'));
+});
+
 test('required artifact type matching is exact and does not invent structure-family aliases', () => {
   const pdbArtifact: RuntimeArtifact = {
     id: 'pdb-result',

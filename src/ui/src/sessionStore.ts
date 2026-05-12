@@ -19,6 +19,60 @@ import { normalizeWorkspaceRootPath } from './config';
 
 const STORAGE_KEY = 'sciforge.workspace.v2';
 const scenarioIds: ScenarioId[] = scenarios.map((scenario) => scenario.id);
+const SESSION_REVISION_KEY = '__sciforgeSessionRevision';
+const SESSION_BASE_REVISION_KEY = '__sciforgeSessionBaseRevision';
+const SESSION_BASE_COLLECTION_REVISIONS_KEY = '__sciforgeSessionBaseCollectionRevisions';
+const WORKSPACE_REVISION_KEY = '__sciforgeWorkspaceRevision';
+const WORKSPACE_BASE_REVISION_KEY = '__sciforgeWorkspaceBaseRevision';
+const SESSION_WRITE_CONFLICT_LIMIT = 20;
+
+export type SessionCollectionKey = 'title' | 'messages' | 'runs' | 'uiManifest' | 'claims' | 'executionUnits' | 'artifacts' | 'notebook' | 'hiddenResultSlotIds';
+type SessionCollectionRevisions = Record<SessionCollectionKey, string>;
+type SessionWithWriteGuard = SciForgeSession & {
+  [SESSION_REVISION_KEY]?: string;
+  [SESSION_BASE_REVISION_KEY]?: string;
+  [SESSION_BASE_COLLECTION_REVISIONS_KEY]?: SessionCollectionRevisions;
+};
+type WorkspaceWithWriteGuard = SciForgeWorkspaceState & {
+  [WORKSPACE_REVISION_KEY]?: string;
+  [WORKSPACE_BASE_REVISION_KEY]?: string;
+  sessionWriteConflicts?: SessionWriteConflictDiagnostic[];
+};
+
+export interface SessionWriteConflictDiagnostic {
+  schemaVersion: 1;
+  id: string;
+  kind: 'stale-base-revision' | 'ordering-conflict';
+  scenarioId: ScenarioInstanceId;
+  sessionId: string;
+  reason: string;
+  writerId?: string;
+  expectedBaseRevision: string;
+  actualBaseRevision: string;
+  attemptedRevision: string;
+  conflictingFields: SessionCollectionKey[];
+  current: SessionConflictSummary;
+  attempted: SessionConflictSummary;
+  recoverable: true;
+  recoverableActions: string[];
+  createdAt: string;
+}
+
+export interface SessionConflictSummary {
+  sessionId: string;
+  updatedAt: string;
+  messageCount: number;
+  runCount: number;
+  artifactCount: number;
+  executionUnitCount: number;
+  notebookCount: number;
+}
+
+export interface SessionWriteGuardOptions {
+  reason?: string;
+  writerId?: string;
+  baseRevision?: string;
+}
 
 function isScenarioId(value: unknown): value is ScenarioId {
   return scenarioIds.includes(value as ScenarioId);
@@ -40,7 +94,7 @@ function seedMessages(scenarioId: ScenarioId): SciForgeMessage[] {
 
 export function createSession(scenarioId: ScenarioInstanceId, title = '新聊天', options: { seed?: boolean } = {}): SciForgeSession {
   const now = nowIso();
-  return {
+  return withSessionWriteGuard({
     schemaVersion: 2,
     sessionId: makeId(`session-${scenarioId}`),
     scenarioId,
@@ -56,15 +110,15 @@ export function createSession(scenarioId: ScenarioInstanceId, title = '新聊天
     versions: [],
     hiddenResultSlotIds: [],
     updatedAt: now,
-  };
+  });
 }
 
 function migrateSession(value: unknown, scenarioId: ScenarioInstanceId): SciForgeSession {
-  if (isSessionV2(value, scenarioId)) return value;
+  if (isSessionV2(value, scenarioId)) return withSessionWriteGuard(value);
   if (typeof value === 'object' && value !== null && (value as { scenarioId?: unknown }).scenarioId === scenarioId) {
     const raw = value as Partial<SciForgeSession> & { schemaVersion?: number };
     const now = nowIso();
-    return {
+    return withSessionWriteGuard({
       schemaVersion: 2,
       sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : makeId(`session-${scenarioId}`),
       scenarioId,
@@ -82,7 +136,7 @@ function migrateSession(value: unknown, scenarioId: ScenarioInstanceId): SciForg
         ? raw.hiddenResultSlotIds.filter((id): id is string => typeof id === 'string')
         : [],
       updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : now,
-    };
+    });
   }
   return createSession(scenarioId);
 }
@@ -98,7 +152,7 @@ function isSessionV2(value: unknown, scenarioId: ScenarioInstanceId): value is S
 
 export function createInitialWorkspaceState(): SciForgeWorkspaceState {
   const now = nowIso();
-  return {
+  return withWorkspaceWriteGuard({
     schemaVersion: 2,
     workspacePath: '',
     sessionsByScenario: scenarioIds.reduce((acc, scenarioId) => {
@@ -111,7 +165,7 @@ export function createInitialWorkspaceState(): SciForgeWorkspaceState {
     feedbackRequests: [],
     githubSyncedOpenIssues: [],
     updatedAt: now,
-  };
+  });
 }
 
 export function loadWorkspaceState(): SciForgeWorkspaceState {
@@ -129,7 +183,7 @@ export function parseWorkspaceState(value: unknown): SciForgeWorkspaceState {
   const now = nowIso();
   if (typeof value !== 'object' || value === null) return createInitialWorkspaceState();
   const raw = value as Partial<SciForgeWorkspaceState>;
-  return {
+  return withWorkspaceWriteGuard({
     schemaVersion: 2,
     workspacePath: typeof raw.workspacePath === 'string' ? normalizeWorkspaceRootPath(raw.workspacePath) : '',
     sessionsByScenario: preserveWorkspaceSessions(raw.sessionsByScenario, scenarioIds.reduce((acc, scenarioId) => {
@@ -169,8 +223,9 @@ export function parseWorkspaceState(value: unknown): SciForgeWorkspaceState {
     hiddenOfficialPackageIds: Array.isArray(raw.hiddenOfficialPackageIds)
       ? Array.from(new Set(raw.hiddenOfficialPackageIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)))
       : [],
+    sessionWriteConflicts: parseSessionWriteConflicts((raw as Record<string, unknown>).sessionWriteConflicts),
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : now,
-  };
+  } as WorkspaceWithWriteGuard);
 }
 
 function isReusableTaskCandidate(value: unknown) {
@@ -272,7 +327,8 @@ function isFeedbackRepairResult(value: unknown) {
 
 export function saveWorkspaceState(state: SciForgeWorkspaceState) {
   if (typeof window === 'undefined') return;
-  const compact = compactWorkspaceStateForStorage(state);
+  const writableState = guardLocalWorkspaceWrite(state);
+  const compact = compactWorkspaceStateForStorage(writableState);
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(compact));
     return;
@@ -298,8 +354,9 @@ export function compactWorkspaceStateForStorage(
   const limits = mode === 'minimal'
     ? { messages: 4, runs: 3, records: 3, versions: 1, archived: 2, timeline: 10, reusable: 5 }
     : { messages: 16, runs: 8, records: 8, versions: 3, archived: 6, timeline: 40, reusable: 20 };
+  const cleanState = stripWorkspaceWriteGuard(state);
   return {
-    ...state,
+    ...cleanState,
     sessionsByScenario: Object.fromEntries(Object.entries(state.sessionsByScenario).map(([id, session]) => [
       id,
       compactSessionForStorage(session, limits),
@@ -312,34 +369,36 @@ export function compactWorkspaceStateForStorage(
     githubSyncedOpenIssues: state.githubSyncedOpenIssues?.slice(0, mode === 'minimal' ? 40 : 120),
     timelineEvents: state.timelineEvents?.slice(0, limits.timeline),
     reusableTaskCandidates: state.reusableTaskCandidates?.slice(0, limits.reusable),
-  };
+    sessionWriteConflicts: sessionWriteConflictsForState(state).slice(0, mode === 'minimal' ? 5 : SESSION_WRITE_CONFLICT_LIMIT),
+  } as WorkspaceWithWriteGuard;
 }
 
 function compactSessionForStorage(
   session: SciForgeSession,
   limits: { messages: number; runs: number; records: number; versions: number },
 ): SciForgeSession {
+  const cleanSession = stripSessionWriteGuard(session);
   return {
-    ...session,
-    messages: session.messages.slice(-limits.messages).map((message) => ({
+    ...cleanSession,
+    messages: cleanSession.messages.slice(-limits.messages).map((message) => ({
       ...message,
       content: message.content.length > 2400 ? `${message.content.slice(0, 2400)}...` : message.content,
     })),
-    runs: session.runs.slice(-limits.runs).map((run) => ({
+    runs: cleanSession.runs.slice(-limits.runs).map((run) => ({
       ...run,
       prompt: run.prompt.length > 1200 ? `${run.prompt.slice(0, 1200)}...` : run.prompt,
       response: run.response.length > 2400 ? `${run.response.slice(0, 2400)}...` : run.response,
       raw: compactArtifactData(run.raw),
     })),
-    uiManifest: session.uiManifest.slice(0, limits.records),
-    claims: session.claims.slice(0, limits.records),
-    executionUnits: session.executionUnits.slice(-limits.records),
-    artifacts: session.artifacts.slice(-limits.records).map((artifact) => ({
+    uiManifest: cleanSession.uiManifest.slice(0, limits.records),
+    claims: cleanSession.claims.slice(0, limits.records),
+    executionUnits: cleanSession.executionUnits.slice(-limits.records),
+    artifacts: cleanSession.artifacts.slice(-limits.records).map((artifact) => ({
       ...artifact,
       data: compactArtifactData(artifact.data),
     })),
-    notebook: session.notebook.slice(0, limits.records),
-    versions: session.versions.slice(0, limits.versions).map((version) => ({
+    notebook: cleanSession.notebook.slice(0, limits.records),
+    versions: cleanSession.versions.slice(0, limits.versions).map((version) => ({
       ...version,
       snapshot: compactSessionSnapshotForStorage(version.snapshot, limits),
     })),
@@ -370,26 +429,27 @@ function compactSessionSnapshotForStorage(
   session: Omit<SciForgeSession, 'versions'>,
   limits: { messages: number; runs: number; records: number; versions: number },
 ): Omit<SciForgeSession, 'versions'> {
+  const cleanSession = stripSessionWriteGuard(session) as Omit<SciForgeSession, 'versions'>;
   return {
-    ...session,
-    messages: session.messages.slice(-limits.messages).map((message) => ({
+    ...cleanSession,
+    messages: cleanSession.messages.slice(-limits.messages).map((message) => ({
       ...message,
       content: message.content.length > 2400 ? `${message.content.slice(0, 2400)}...` : message.content,
     })),
-    runs: session.runs.slice(-limits.runs).map((run) => ({
+    runs: cleanSession.runs.slice(-limits.runs).map((run) => ({
       ...run,
       prompt: run.prompt.length > 1200 ? `${run.prompt.slice(0, 1200)}...` : run.prompt,
       response: run.response.length > 2400 ? `${run.response.slice(0, 2400)}...` : run.response,
       raw: compactArtifactData(run.raw),
     })),
-    uiManifest: session.uiManifest.slice(0, limits.records),
-    claims: session.claims.slice(0, limits.records),
-    executionUnits: session.executionUnits.slice(-limits.records),
-    artifacts: session.artifacts.slice(-limits.records).map((artifact) => ({
+    uiManifest: cleanSession.uiManifest.slice(0, limits.records),
+    claims: cleanSession.claims.slice(0, limits.records),
+    executionUnits: cleanSession.executionUnits.slice(-limits.records),
+    artifacts: cleanSession.artifacts.slice(-limits.records).map((artifact) => ({
       ...artifact,
       data: compactArtifactData(artifact.data),
     })),
-    notebook: session.notebook.slice(0, limits.records),
+    notebook: cleanSession.notebook.slice(0, limits.records),
   };
 }
 
@@ -435,7 +495,9 @@ export function resetSession(scenarioId: ScenarioInstanceId): SciForgeSession {
 }
 
 export function versionSession(session: SciForgeSession, reason: string): SciForgeSession {
-  const snapshot = compactSessionSnapshotForStorage(stripVersions({ ...session, updatedAt: nowIso() }), {
+  const timestamp = nowIso();
+  const cleanSession = stripSessionWriteGuard(session);
+  const snapshot = compactSessionSnapshotForStorage(stripVersions({ ...cleanSession, updatedAt: timestamp }), {
     messages: 16,
     runs: 8,
     records: 8,
@@ -444,23 +506,96 @@ export function versionSession(session: SciForgeSession, reason: string): SciFor
   const version: SessionVersionRecord = {
     id: makeId('version'),
     reason,
-    createdAt: nowIso(),
-    messageCount: session.messages.length,
-    runCount: session.runs.length,
-    artifactCount: session.artifacts.length,
+    createdAt: timestamp,
+    messageCount: cleanSession.messages.length,
+    runCount: cleanSession.runs.length,
+    artifactCount: cleanSession.artifacts.length,
     checksum: checksum(JSON.stringify(snapshot)),
     snapshot,
   };
-  return {
-    ...session,
-    versions: [version, ...session.versions].slice(0, 40),
-    updatedAt: nowIso(),
-  };
+  return withSessionWriteGuard({
+    ...cleanSession,
+    versions: [version, ...cleanSession.versions].slice(0, 40),
+    updatedAt: timestamp,
+  });
 }
 
 function stripVersions(session: SciForgeSession): Omit<SciForgeSession, 'versions'> {
   const { versions: _versions, ...rest } = session;
   return rest;
+}
+
+export function withSessionWriteGuard(session: SciForgeSession): SciForgeSession {
+  const cleanSession = stripSessionWriteGuard(session);
+  const revision = sessionContentRevision(cleanSession);
+  return {
+    ...cleanSession,
+    [SESSION_REVISION_KEY]: revision,
+    [SESSION_BASE_REVISION_KEY]: revision,
+    [SESSION_BASE_COLLECTION_REVISIONS_KEY]: sessionCollectionRevisions(cleanSession),
+  } as SessionWithWriteGuard;
+}
+
+export function sessionContentRevision(session: SciForgeSession | Omit<SciForgeSession, 'versions'>): string {
+  return checksum(stableStringify(sessionRevisionPayload(stripSessionWriteGuard(session))));
+}
+
+export function sessionWriteConflictsForState(state: SciForgeWorkspaceState): SessionWriteConflictDiagnostic[] {
+  const conflicts = (state as WorkspaceWithWriteGuard).sessionWriteConflicts;
+  return Array.isArray(conflicts) ? conflicts.filter(isSessionWriteConflictDiagnostic) : [];
+}
+
+export function detectSessionWriteConflict(
+  currentSession: SciForgeSession | undefined,
+  attemptedSession: SciForgeSession,
+  options: SessionWriteGuardOptions = {},
+): SessionWriteConflictDiagnostic | undefined {
+  if (!currentSession) return undefined;
+  const expectedBaseRevision = options.baseRevision ?? (attemptedSession as SessionWithWriteGuard)[SESSION_BASE_REVISION_KEY];
+  if (!expectedBaseRevision) return undefined;
+
+  const actualBaseRevision = sessionContentRevision(currentSession);
+  const attemptedRevision = sessionContentRevision(attemptedSession);
+  if (actualBaseRevision === expectedBaseRevision || actualBaseRevision === attemptedRevision || attemptedRevision === expectedBaseRevision) {
+    return undefined;
+  }
+
+  const conflictingFields = overlappingSessionChanges(currentSession, attemptedSession);
+  return {
+    schemaVersion: 1,
+    id: makeId('session-conflict'),
+    kind: conflictingFields.length ? 'ordering-conflict' : 'stale-base-revision',
+    scenarioId: attemptedSession.scenarioId,
+    sessionId: attemptedSession.sessionId,
+    reason: options.reason ?? 'session update',
+    writerId: options.writerId,
+    expectedBaseRevision,
+    actualBaseRevision,
+    attemptedRevision,
+    conflictingFields,
+    current: sessionConflictSummary(currentSession),
+    attempted: sessionConflictSummary(attemptedSession),
+    recoverable: true,
+    recoverableActions: [
+      'Reload the current session state.',
+      'Review the attempted update against the current revision.',
+      'Reapply the attempted changes on top of the current session.',
+    ],
+    createdAt: nowIso(),
+  };
+}
+
+export function recordSessionWriteConflict(
+  state: SciForgeWorkspaceState,
+  diagnostic: SessionWriteConflictDiagnostic,
+): SciForgeWorkspaceState {
+  return withWorkspaceWriteGuard({
+    ...state,
+    sessionWriteConflicts: [
+      diagnostic,
+      ...sessionWriteConflictsForState(state).filter((item) => item.id !== diagnostic.id),
+    ].slice(0, SESSION_WRITE_CONFLICT_LIMIT),
+  } as WorkspaceWithWriteGuard);
 }
 
 function checksum(text: string) {
@@ -469,6 +604,227 @@ function checksum(text: string) {
     hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
   }
   return hash.toString(16).padStart(8, '0');
+}
+
+function withWorkspaceWriteGuard(state: SciForgeWorkspaceState): SciForgeWorkspaceState {
+  const cleanState = stripWorkspaceWriteGuard(state);
+  const sessionsByScenario = Object.fromEntries(Object.entries(cleanState.sessionsByScenario).map(([scenarioId, session]) => [
+    scenarioId,
+    withSessionWriteGuard(session),
+  ])) as Record<ScenarioInstanceId, SciForgeSession>;
+  const archivedSessions = (cleanState.archivedSessions ?? []).map(withSessionWriteGuard);
+  const guardedState = {
+    ...cleanState,
+    sessionsByScenario,
+    archivedSessions,
+    sessionWriteConflicts: sessionWriteConflictsForState(state).slice(0, SESSION_WRITE_CONFLICT_LIMIT),
+  } as WorkspaceWithWriteGuard;
+  const revision = workspaceContentRevision(guardedState);
+  return {
+    ...guardedState,
+    [WORKSPACE_REVISION_KEY]: revision,
+    [WORKSPACE_BASE_REVISION_KEY]: revision,
+  } as WorkspaceWithWriteGuard;
+}
+
+function guardLocalWorkspaceWrite(state: SciForgeWorkspaceState): SciForgeWorkspaceState {
+  if (typeof window === 'undefined') return state;
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    if (!stored) return state;
+    const current = parseWorkspaceState(JSON.parse(stored));
+    const diagnostics = detectWorkspaceSessionWriteConflicts(current, state, 'localStorage session write');
+    if (!diagnostics.length) return state;
+    return diagnostics.reduce((nextState, diagnostic) => recordSessionWriteConflict(nextState, diagnostic), current);
+  } catch {
+    return state;
+  }
+}
+
+function detectWorkspaceSessionWriteConflicts(
+  current: SciForgeWorkspaceState,
+  attempted: SciForgeWorkspaceState,
+  reason: string,
+): SessionWriteConflictDiagnostic[] {
+  return Object.values(attempted.sessionsByScenario).flatMap((attemptedSession) => {
+    const expectedBaseRevision = (attemptedSession as SessionWithWriteGuard)[SESSION_BASE_REVISION_KEY];
+    if (!expectedBaseRevision || sessionContentRevision(attemptedSession) === expectedBaseRevision) return [];
+    const diagnostic = detectSessionWriteConflict(
+      current.sessionsByScenario[attemptedSession.scenarioId],
+      attemptedSession,
+      { reason, baseRevision: expectedBaseRevision },
+    );
+    return diagnostic ? [diagnostic] : [];
+  });
+}
+
+function workspaceContentRevision(state: SciForgeWorkspaceState): string {
+  const cleanState = stripWorkspaceWriteGuard(state);
+  return checksum(stableStringify({
+    schemaVersion: cleanState.schemaVersion,
+    workspacePath: cleanState.workspacePath,
+    sessionsByScenario: Object.fromEntries(Object.entries(cleanState.sessionsByScenario).map(([scenarioId, session]) => [
+      scenarioId,
+      sessionContentRevision(session),
+    ])),
+    archivedSessions: cleanState.archivedSessions.map(sessionContentRevision),
+    alignmentContracts: cleanState.alignmentContracts,
+    feedbackComments: cleanState.feedbackComments,
+    feedbackRequests: cleanState.feedbackRequests,
+    feedbackRepairRuns: cleanState.feedbackRepairRuns,
+    feedbackRepairResults: cleanState.feedbackRepairResults,
+    githubSyncedOpenIssues: cleanState.githubSyncedOpenIssues,
+    timelineEvents: cleanState.timelineEvents,
+    reusableTaskCandidates: cleanState.reusableTaskCandidates,
+    hiddenOfficialPackageIds: cleanState.hiddenOfficialPackageIds,
+    sessionWriteConflicts: sessionWriteConflictsForState(state),
+    updatedAt: cleanState.updatedAt,
+  }));
+}
+
+function sessionRevisionPayload(session: SciForgeSession | Omit<SciForgeSession, 'versions'>) {
+  return {
+    schemaVersion: session.schemaVersion,
+    sessionId: session.sessionId,
+    scenarioId: session.scenarioId,
+    title: session.title,
+    createdAt: session.createdAt,
+    messages: session.messages,
+    runs: session.runs,
+    uiManifest: session.uiManifest,
+    claims: session.claims,
+    executionUnits: session.executionUnits,
+    artifacts: session.artifacts,
+    notebook: session.notebook,
+    hiddenResultSlotIds: session.hiddenResultSlotIds ?? [],
+  };
+}
+
+function sessionCollectionRevisions(session: SciForgeSession | Omit<SciForgeSession, 'versions'>): SessionCollectionRevisions {
+  const cleanSession = stripSessionWriteGuard(session);
+  return {
+    title: checksum(stableStringify(cleanSession.title)),
+    messages: checksum(stableStringify(cleanSession.messages)),
+    runs: checksum(stableStringify(cleanSession.runs)),
+    uiManifest: checksum(stableStringify(cleanSession.uiManifest)),
+    claims: checksum(stableStringify(cleanSession.claims)),
+    executionUnits: checksum(stableStringify(cleanSession.executionUnits)),
+    artifacts: checksum(stableStringify(cleanSession.artifacts)),
+    notebook: checksum(stableStringify(cleanSession.notebook)),
+    hiddenResultSlotIds: checksum(stableStringify(cleanSession.hiddenResultSlotIds ?? [])),
+  };
+}
+
+function overlappingSessionChanges(
+  currentSession: SciForgeSession,
+  attemptedSession: SciForgeSession,
+): SessionCollectionKey[] {
+  const baseCollections = (attemptedSession as SessionWithWriteGuard)[SESSION_BASE_COLLECTION_REVISIONS_KEY];
+  if (!baseCollections) return [];
+  const currentCollections = sessionCollectionRevisions(currentSession);
+  const attemptedCollections = sessionCollectionRevisions(attemptedSession);
+  return (Object.keys(baseCollections) as SessionCollectionKey[]).filter((key) => {
+    return currentCollections[key] !== baseCollections[key]
+      && attemptedCollections[key] !== baseCollections[key]
+      && currentCollections[key] !== attemptedCollections[key];
+  });
+}
+
+function sessionConflictSummary(session: SciForgeSession): SessionConflictSummary {
+  return {
+    sessionId: session.sessionId,
+    updatedAt: session.updatedAt,
+    messageCount: session.messages.length,
+    runCount: session.runs.length,
+    artifactCount: session.artifacts.length,
+    executionUnitCount: session.executionUnits.length,
+    notebookCount: session.notebook.length,
+  };
+}
+
+function stripSessionWriteGuard<T extends Partial<SciForgeSession>>(session: T): T {
+  return withoutKeys(session, [
+    SESSION_REVISION_KEY,
+    SESSION_BASE_REVISION_KEY,
+    SESSION_BASE_COLLECTION_REVISIONS_KEY,
+  ]) as T;
+}
+
+function stripWorkspaceWriteGuard<T extends Partial<SciForgeWorkspaceState>>(state: T): T {
+  return withoutKeys(state, [
+    WORKSPACE_REVISION_KEY,
+    WORKSPACE_BASE_REVISION_KEY,
+  ]) as T;
+}
+
+function withoutKeys<T>(value: T, keys: string[]): T {
+  if (!value || typeof value !== 'object') return value;
+  const copy = { ...(value as Record<string, unknown>) };
+  for (const key of keys) delete copy[key];
+  return copy as T;
+}
+
+function stableStringify(value: unknown): string {
+  return JSON.stringify(stableValue(value));
+}
+
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (!value || typeof value !== 'object') return value;
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(Object.keys(record)
+    .filter((key) => record[key] !== undefined && !isWriteGuardKey(key))
+    .sort()
+    .map((key) => [key, stableValue(record[key])]));
+}
+
+function isWriteGuardKey(key: string) {
+  return key === SESSION_REVISION_KEY
+    || key === SESSION_BASE_REVISION_KEY
+    || key === SESSION_BASE_COLLECTION_REVISIONS_KEY
+    || key === WORKSPACE_REVISION_KEY
+    || key === WORKSPACE_BASE_REVISION_KEY;
+}
+
+function parseSessionWriteConflicts(value: unknown): SessionWriteConflictDiagnostic[] {
+  return Array.isArray(value)
+    ? value.filter(isSessionWriteConflictDiagnostic).slice(0, SESSION_WRITE_CONFLICT_LIMIT)
+    : [];
+}
+
+function isSessionWriteConflictDiagnostic(value: unknown): value is SessionWriteConflictDiagnostic {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Partial<SessionWriteConflictDiagnostic>;
+  return record.schemaVersion === 1
+    && typeof record.id === 'string'
+    && (record.kind === 'stale-base-revision' || record.kind === 'ordering-conflict')
+    && typeof record.scenarioId === 'string'
+    && typeof record.sessionId === 'string'
+    && typeof record.reason === 'string'
+    && typeof record.expectedBaseRevision === 'string'
+    && typeof record.actualBaseRevision === 'string'
+    && typeof record.attemptedRevision === 'string'
+    && Array.isArray(record.conflictingFields)
+    && record.conflictingFields.every((field) => isSessionCollectionKey(field))
+    && typeof record.current === 'object'
+    && record.current !== null
+    && typeof record.attempted === 'object'
+    && record.attempted !== null
+    && record.recoverable === true
+    && Array.isArray(record.recoverableActions)
+    && typeof record.createdAt === 'string';
+}
+
+function isSessionCollectionKey(value: unknown): value is SessionCollectionKey {
+  return value === 'title'
+    || value === 'messages'
+    || value === 'runs'
+    || value === 'uiManifest'
+    || value === 'claims'
+    || value === 'executionUnits'
+    || value === 'artifacts'
+    || value === 'notebook'
+    || value === 'hiddenResultSlotIds';
 }
 
 function preserveWorkspaceSessions(

@@ -6,6 +6,7 @@ import {
   rawAuditItems,
   runAuditBlockers,
   runAuditRefs,
+  runPresentationState,
   runRecoverActions,
   shouldOpenRunAuditDetails,
 } from './results-renderer-execution-model';
@@ -82,6 +83,62 @@ test('results renderer execution model scopes failure units through active run a
   assert.ok(refs.includes('artifact:bad-report'));
   assert.equal(refs.includes('artifact:other-report'), false);
   assert.equal(recoverActions.includes('wrong run action'), false);
+});
+
+test('results renderer execution model does not call completed empty runs ready', () => {
+  const session: SciForgeSession = {
+    schemaVersion: 2,
+    sessionId: 'session-empty-result',
+    scenarioId: 'literature-evidence-review',
+    title: 'empty result',
+    createdAt: '2026-05-10T00:00:00.000Z',
+    messages: [],
+    runs: [{
+      id: 'run-empty-result',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'search papers',
+      response: 'completed',
+      createdAt: '2026-05-10T00:00:00.000Z',
+      completedAt: '2026-05-10T00:01:00.000Z',
+    }],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [],
+    notebook: [],
+    versions: [],
+    updatedAt: '2026-05-10T00:01:00.000Z',
+  };
+
+  const state = runPresentationState(session, session.runs[0]);
+
+  assert.equal(state.kind, 'empty');
+  assert.equal(state.title, '本轮没有生成可展示 artifact');
+  assert.match(state.reason, /没有写入可供右侧结果区渲染的 artifact/);
+});
+
+test('results renderer execution model separates needs-human from empty artifacts', () => {
+  const session = responseFailureSession();
+  session.runs[0]!.status = 'completed';
+  session.runs[0]!.response = 'needs-human: choose one provider credential before retry';
+  session.runs[0]!.raw = {
+    displayIntent: {
+      resultPresentation: {
+        status: 'needs-human',
+        processSummary: { status: 'needs-human', summary: 'Provider credentials are missing.' },
+        nextActions: [{ label: 'Add provider credential', kind: 'ask-user' }],
+        artifactActions: [],
+      },
+    },
+  };
+
+  const state = runPresentationState(session, session.runs[0]);
+
+  assert.equal(state.kind, 'needs-human');
+  assert.match(state.title, /人工/);
+  assert.match(state.reason, /Provider credentials are missing/);
+  assert.ok(state.nextSteps.includes('Add provider credential'));
 });
 
 function executionFailureSession(): SciForgeSession {

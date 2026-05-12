@@ -5,9 +5,9 @@ import {
   mergeObjectReferences,
   objectReferenceForArtifactSummary,
   objectReferencesFromInlineTokens,
-  referenceForObjectReference,
   sciForgeReferenceAttribute,
 } from '../../../../../packages/support/object-references';
+import { composerReferenceForObjectReference } from './composerReferences';
 
 export function MessageContent({
   content,
@@ -209,7 +209,7 @@ function renderInlineContent(
           className="message-object-link"
           onClick={() => onObjectFocus(piece.reference as ObjectReference)}
           title={piece.reference.summary || piece.reference.ref}
-          data-sciforge-reference={sciForgeReferenceAttribute(referenceForObjectReference(piece.reference))}
+          data-sciforge-reference={sciForgeReferenceAttribute(composerReferenceForObjectReference(piece.reference))}
         >
           {piece.text}
         </button>,

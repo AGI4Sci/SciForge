@@ -5,7 +5,7 @@ import {
   ALIGNMENT_CONTRACT_ARTIFACT_TYPE,
   ALIGNMENT_CONTRACT_SCHEMA_VERSION,
 } from './domain';
-import { compactWorkspaceStateForStorage, parseWorkspaceState, saveWorkspaceState, shouldUsePersistedWorkspaceState } from './sessionStore';
+import { compactWorkspaceStateForStorage, parseWorkspaceState, saveWorkspaceState, sessionWriteConflictsForState, shouldUsePersistedWorkspaceState } from './sessionStore';
 
 test('parseWorkspaceState preserves built-in and workspace scenario sessions', () => {
   const state = parseWorkspaceState({
@@ -300,6 +300,80 @@ test('compactWorkspaceStateForStorage strips binary dataUrls from artifacts and 
   const serialized = JSON.stringify(compact);
   assert.ok(!serialized.includes(dataUrl.slice(0, 50_000)));
   assert.ok(serialized.includes('binary-or-data-url'));
+});
+
+test('saveWorkspaceState records stale localStorage session writes without overwriting current state', () => {
+  const base = parseWorkspaceState({
+    schemaVersion: 2,
+    workspacePath: '/tmp/sciforge-workspace',
+    sessionsByScenario: {
+      'literature-evidence-review': sessionFixture('shared-session', ['base']),
+    },
+    archivedSessions: [],
+    updatedAt: '2026-04-25T00:00:00.000Z',
+  });
+  const baseSession = base.sessionsByScenario['literature-evidence-review'];
+  const firstWriter = {
+    ...base,
+    sessionsByScenario: {
+      ...base.sessionsByScenario,
+      'literature-evidence-review': {
+        ...baseSession,
+        messages: [...baseSession.messages, {
+          id: 'msg-writer-a',
+          role: 'user' as const,
+          content: 'writer A',
+          createdAt: '2026-04-25T00:01:00.000Z',
+        }],
+      },
+    },
+    updatedAt: '2026-04-25T00:01:00.000Z',
+  };
+  const secondWriter = {
+    ...base,
+    sessionsByScenario: {
+      ...base.sessionsByScenario,
+      'literature-evidence-review': {
+        ...baseSession,
+        messages: [...baseSession.messages, {
+          id: 'msg-writer-b',
+          role: 'user' as const,
+          content: 'writer B',
+          createdAt: '2026-04-25T00:02:00.000Z',
+        }],
+      },
+    },
+    updatedAt: '2026-04-25T00:02:00.000Z',
+  };
+
+  let stored: string | null = JSON.stringify(compactWorkspaceStateForStorage(base));
+  const previousWindow = globalThis.window;
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: {
+      localStorage: {
+        getItem: () => stored,
+        setItem: (_key: string, value: string) => {
+          stored = value;
+        },
+      },
+    },
+  });
+  try {
+    saveWorkspaceState(firstWriter);
+    saveWorkspaceState(secondWriter);
+
+    assert.ok(stored);
+    const saved = parseWorkspaceState(JSON.parse(stored));
+    const savedMessages = saved.sessionsByScenario['literature-evidence-review'].messages.map((message) => message.content);
+    assert.deepEqual(savedMessages, ['base', 'writer A']);
+    assert.equal(sessionWriteConflictsForState(saved).length, 1);
+    assert.equal(sessionWriteConflictsForState(saved)[0]?.kind, 'ordering-conflict');
+    assert.deepEqual(sessionWriteConflictsForState(saved)[0]?.conflictingFields, ['messages']);
+    assert.equal(JSON.stringify(compactWorkspaceStateForStorage(saved)).includes('__sciforgeSessionRevision'), false);
+  } finally {
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: previousWindow });
+  }
 });
 
 function sessionFixture(sessionId: string, messages: string[]) {

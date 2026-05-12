@@ -10,7 +10,13 @@ import {
   type ScenarioInstanceId,
   type TimelineEventRecord,
 } from '../../domain';
-import { versionSession } from '../../sessionStore';
+import {
+  detectSessionWriteConflict,
+  recordSessionWriteConflict,
+  type SessionWriteConflictDiagnostic,
+  type SessionWriteGuardOptions,
+  versionSession,
+} from '../../sessionStore';
 import { applyArtifactHandoffToWorkspace } from '../../workspace/artifactHandoff';
 import { handoffAutoRunPrompt } from '../results/autoRunPrompts';
 import { artifactsForRun, executionUnitsForRun } from '../results/executionUnitsForRun';
@@ -35,6 +41,10 @@ export interface WorkspaceRecoveryFocus {
   updatedAt: string;
 }
 
+export type ApplySessionUpdateResult =
+  | { ok: true; state: SciForgeWorkspaceState; diagnostic?: undefined }
+  | { ok: false; state: SciForgeWorkspaceState; diagnostic: SessionWriteConflictDiagnostic };
+
 export function touchWorkspaceUpdatedAt(state: SciForgeWorkspaceState, updatedAt: string): SciForgeWorkspaceState {
   return { ...state, updatedAt };
 }
@@ -43,8 +53,29 @@ export function applySessionUpdateToWorkspace(
   state: SciForgeWorkspaceState,
   nextSession: SciForgeSession,
   reason = 'session update',
+  options: SessionWriteGuardOptions = {},
 ): SciForgeWorkspaceState {
-  return {
+  return tryApplySessionUpdateToWorkspace(state, nextSession, reason, options).state;
+}
+
+export function tryApplySessionUpdateToWorkspace(
+  state: SciForgeWorkspaceState,
+  nextSession: SciForgeSession,
+  reason = 'session update',
+  options: SessionWriteGuardOptions = {},
+): ApplySessionUpdateResult {
+  const diagnostic = detectSessionWriteConflict(state.sessionsByScenario[nextSession.scenarioId], nextSession, {
+    ...options,
+    reason,
+  });
+  if (diagnostic) {
+    return {
+      ok: false,
+      state: recordSessionWriteConflict(state, diagnostic),
+      diagnostic,
+    };
+  }
+  const nextState = {
     ...state,
     sessionsByScenario: {
       ...state.sessionsByScenario,
@@ -52,6 +83,7 @@ export function applySessionUpdateToWorkspace(
     },
     timelineEvents: mergeRunTimelineEvents(state.timelineEvents ?? [], state.sessionsByScenario[nextSession.scenarioId], nextSession),
   };
+  return { ok: true, state: nextState };
 }
 
 export function recoverableRunFocusForSession(session: SciForgeSession): WorkspaceRecoveryFocus | undefined {

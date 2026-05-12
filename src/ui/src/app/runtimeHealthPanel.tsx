@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { modelHealth, type RuntimeHealthItem, type RuntimeHealthStatus } from '../runtimeHealth';
+import { defaultSciForgeConfig } from '../config';
+import { modelHealth, workspaceWriterHealth, type RuntimeHealthItem, type RuntimeHealthStatus } from '../runtimeHealth';
 import type { SciForgeConfig } from '../domain';
 import { startRuntimeServices } from '../api/workspaceClient';
 import { Badge, cx } from './uiPrimitives';
@@ -13,16 +14,16 @@ export function useRuntimeHealth(config: SciForgeConfig, libraryCount?: number) 
     let cancelled = false;
     setItems(buildInitialHealth(config, libraryCount));
     async function check() {
-      const [workspaceOnline, agentOnline] = await Promise.all([
+      const shouldCheckDefaultWriter = config.workspaceWriterBaseUrl.replace(/\/+$/, '') !== defaultSciForgeConfig.workspaceWriterBaseUrl.replace(/\/+$/, '');
+      const [workspaceOnline, defaultWorkspaceOnline, agentOnline] = await Promise.all([
         probeUrl(`${config.workspaceWriterBaseUrl.replace(/\/+$/, '')}/health`),
+        shouldCheckDefaultWriter ? probeUrl(`${defaultSciForgeConfig.workspaceWriterBaseUrl.replace(/\/+$/, '')}/health`) : Promise.resolve(false),
         probeUrl(`${config.agentServerBaseUrl.replace(/\/+$/, '')}/health`),
       ]);
       if (cancelled) return;
       setItems([
         { id: 'ui', label: 'Web UI', status: 'online', detail: '当前页面已加载' },
-        workspaceOnline
-          ? { id: 'workspace', label: 'Workspace Writer', status: 'online', detail: config.workspaceWriterBaseUrl }
-          : { id: 'workspace', label: 'Workspace Writer', status: 'offline', detail: config.workspaceWriterBaseUrl, recoverAction: '启动 npm run workspace:server 后刷新' },
+        workspaceWriterHealth(config, workspaceOnline, defaultWorkspaceOnline),
         agentOnline
           ? { id: 'agentserver', label: 'AgentServer', status: 'online', detail: config.agentServerBaseUrl }
           : { id: 'agentserver', label: 'AgentServer', status: 'offline', detail: config.agentServerBaseUrl, recoverAction: '启动或修复 AgentServer；正常用户请求必须由 AgentServer/agent backend 判断回答' },

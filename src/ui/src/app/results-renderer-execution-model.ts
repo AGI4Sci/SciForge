@@ -1,8 +1,8 @@
 import type { ContractValidationFailure, ContractValidationFailureKind } from '@sciforge-ui/runtime-contract';
-import type { SciForgeRun, SciForgeSession } from '../domain';
+import type { RuntimeArtifact, SciForgeRun, SciForgeSession } from '../domain';
 import type { RuntimeResolvedViewPlan } from './results/viewPlanResolver';
 import { asString, asStringList, isRecord } from './results/resultArtifactHelpers';
-import { executionUnitsForRun } from './results/executionUnitsForRun';
+import { artifactsForRun, executionUnitsForRun } from './results/executionUnitsForRun';
 
 export type BackendRepairState = {
   id: string;
@@ -16,6 +16,17 @@ export type BackendRepairState = {
   history: string[];
 };
 
+export type RunPresentationStateKind = 'ready' | 'partial' | 'empty' | 'recoverable' | 'needs-human' | 'failed' | 'running';
+
+export type RunPresentationState = {
+  kind: RunPresentationStateKind;
+  title: string;
+  reason: string;
+  nextSteps: string[];
+  availableArtifacts: Array<{ id: string; type: string; title?: string }>;
+  refs: string[];
+};
+
 export function shouldOpenRunAuditDetails(session: SciForgeSession, activeRun?: SciForgeRun) {
   const run = activeRun ?? session.runs.at(-1);
   return Boolean(
@@ -24,6 +35,100 @@ export function shouldOpenRunAuditDetails(session: SciForgeSession, activeRun?: 
     || contractValidationFailures(session, run).length
     || backendRepairStates(session, run).some((state) => state.failureReason || state.status === 'failed' || state.status === 'failed-with-reason'),
   );
+}
+
+export function runPresentationState(session: SciForgeSession, activeRun?: SciForgeRun, viewPlan?: RuntimeResolvedViewPlan): RunPresentationState {
+  const run = activeRun ?? session.runs.at(-1);
+  const blockers = runAuditBlockers(session, run);
+  const recoverActions = runRecoverActions(session, run);
+  const validationFailures = contractValidationFailures(session, run);
+  const repairStates = backendRepairStates(session, run);
+  const units = executionUnitsForRun(session, run);
+  const presentation = resultPresentationForRun(run);
+  const availableArtifacts = presentationArtifacts(session, run, viewPlan);
+  const needsHuman = runNeedsHuman(run) || units.some((unit) => unit.status === 'needs-human' || unit.verificationVerdict === 'needs-human') || textHasNeedsHuman(presentation);
+  const partial = textHasPartial(presentation) || units.some((unit) => String(unit.status) === 'partial') || textHasPartial(run?.response);
+  const failed = run?.status === 'failed' || blockers.length > 0 || validationFailures.length > 0;
+  const recoverable = recoverActions.length > 0
+    || repairStates.some((state) => state.status || state.failureReason || state.recoverActions.length)
+    || units.some((unit) => unit.status === 'repair-needed' || unit.status === 'failed-with-reason');
+  const refs = runAuditRefs(session, run).slice(0, 8);
+  const nextSteps = Array.from(new Set([
+    ...recoverActions,
+    ...resultPresentationNextActions(presentation),
+    ...validationFailures.map((failure) => failure.nextStep).filter((step): step is string => Boolean(step)),
+    ...units.map((unit) => unit.nextStep).filter((step): step is string => Boolean(step)),
+    ...(needsHuman ? ['补充缺失输入或确认下一步后继续。'] : []),
+    ...(!recoverActions.length && failed ? ['查看运行细节中的失败单元，修复后重新运行。'] : []),
+    ...(!availableArtifacts.length && !failed && !needsHuman && !partial && run?.status === 'completed' ? ['重新运行或要求生成可展示 artifact。'] : []),
+  ])).slice(0, 5);
+  const reason = primaryPresentationReason({
+    presentation,
+    blockers,
+    validationFailures,
+    repairStates,
+    units,
+    run,
+    availableArtifacts,
+  });
+  if (failed) {
+    return {
+      kind: recoverable ? 'recoverable' : 'failed',
+      title: recoverable ? '运行失败，但可恢复' : '运行失败',
+      reason,
+      nextSteps,
+      availableArtifacts,
+      refs,
+    };
+  }
+  if (needsHuman) {
+    return {
+      kind: 'needs-human',
+      title: '需要人工处理后继续',
+      reason,
+      nextSteps,
+      availableArtifacts,
+      refs,
+    };
+  }
+  if (run?.status === 'running') {
+    return {
+      kind: 'running',
+      title: '运行仍在进行',
+      reason,
+      nextSteps,
+      availableArtifacts,
+      refs,
+    };
+  }
+  if (partial) {
+    return {
+      kind: 'partial',
+      title: availableArtifacts.length ? '只得到部分结果' : '部分结果尚不可展示',
+      reason,
+      nextSteps,
+      availableArtifacts,
+      refs,
+    };
+  }
+  if (!availableArtifacts.length) {
+    return {
+      kind: recoverable ? 'recoverable' : 'empty',
+      title: recoverable ? '结果需要恢复后展示' : '本轮没有生成可展示 artifact',
+      reason,
+      nextSteps,
+      availableArtifacts,
+      refs,
+    };
+  }
+  return {
+    kind: 'ready',
+    title: '结果可展示',
+    reason,
+    nextSteps,
+    availableArtifacts,
+    refs,
+  };
 }
 
 export function failedExecutionUnits(session: SciForgeSession, activeRun?: SciForgeRun) {
@@ -264,4 +369,112 @@ export function rawAuditItems(session: SciForgeSession, activeRun: SciForgeRun |
     session.notebook.length ? { id: 'notebook', label: `timeline JSON (${session.notebook.length})`, value: JSON.stringify(session.notebook, null, 2) } : undefined,
     viewPlan.allItems.length ? { id: 'view-plan', label: `resolved view plan (${viewPlan.allItems.length})`, value: JSON.stringify(viewPlan.allItems, null, 2) } : undefined,
   ].filter((item): item is { id: string; label: string; value: string } => Boolean(item));
+}
+
+function resultPresentationForRun(run?: SciForgeRun): Record<string, unknown> | undefined {
+  const raw = isRecord(run?.raw) ? run?.raw : undefined;
+  const displayIntent = isRecord(raw?.displayIntent) ? raw.displayIntent : undefined;
+  const payload = isRecord(raw?.payload) ? raw.payload : undefined;
+  const parsedResponse = parseMaybeJsonObject(run?.response ?? '');
+  return firstRecord(
+    raw?.resultPresentation,
+    displayIntent?.resultPresentation,
+    payload?.resultPresentation,
+    parsedResponse?.resultPresentation,
+  );
+}
+
+function firstRecord(...values: unknown[]): Record<string, unknown> | undefined {
+  return values.find(isRecord);
+}
+
+function resultPresentationNextActions(presentation?: Record<string, unknown>) {
+  if (!presentation) return [];
+  return recordList(presentation.nextActions)
+    .map((action) => asString(action.label) || asString(action.action) || asString(action.nextStep))
+    .filter((action): action is string => Boolean(action));
+}
+
+function presentationArtifacts(session: SciForgeSession, run?: SciForgeRun, viewPlan?: RuntimeResolvedViewPlan) {
+  const artifacts = viewPlan
+    ? viewPlan.allItems
+      .filter((item) => item.status === 'bound' && item.artifact)
+      .map((item) => item.artifact!)
+    : artifactsForRun(session, run);
+  const byId = new Map<string, RuntimeArtifact>();
+  for (const artifact of artifacts) {
+    if (!artifact?.id || byId.has(artifact.id)) continue;
+    byId.set(artifact.id, artifact);
+  }
+  return Array.from(byId.values()).map((artifact) => ({
+    id: artifact.id,
+    type: artifact.type,
+    title: artifactTitle(artifact),
+  }));
+}
+
+function artifactTitle(artifact: RuntimeArtifact) {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : undefined;
+  return asString(metadata?.title) || asString(metadata?.label) || artifact.id;
+}
+
+function primaryPresentationReason({
+  presentation,
+  blockers,
+  validationFailures,
+  repairStates,
+  units,
+  run,
+  availableArtifacts,
+}: {
+  presentation?: Record<string, unknown>;
+  blockers: string[];
+  validationFailures: ContractValidationFailure[];
+  repairStates: BackendRepairState[];
+  units: ReturnType<typeof executionUnitsForRun>;
+  run?: SciForgeRun;
+  availableArtifacts: RunPresentationState['availableArtifacts'];
+}) {
+  const processSummary = isRecord(presentation?.processSummary) ? presentation?.processSummary : undefined;
+  const explicit = asString(presentation?.summary)
+    || asString(presentation?.message)
+    || asString(processSummary?.summary)
+    || asString(presentation?.reason)
+    || asString(presentation?.failureReason)
+    || asString((run?.raw as Record<string, unknown> | undefined)?.failureReason);
+  if (explicit) return compactHumanReason(explicit);
+  const validationReason = validationFailures[0]?.failureReason;
+  if (validationReason) return compactHumanReason(validationReason);
+  const repairReason = repairStates.find((state) => state.failureReason)?.failureReason;
+  if (repairReason) return compactHumanReason(repairReason);
+  const unitReason = units.find((unit) => unit.failureReason || unit.selfHealReason)?.failureReason
+    || units.find((unit) => unit.selfHealReason)?.selfHealReason;
+  if (unitReason) return compactHumanReason(unitReason);
+  if (blockers[0]) return compactHumanReason(blockers[0]);
+  if (!availableArtifacts.length && run?.status === 'completed') return '运行已结束，但没有写入可供右侧结果区渲染的 artifact。';
+  if (run?.status === 'running') return '后台仍在生成结果，当前只显示已经落盘的产物。';
+  return availableArtifacts.length ? `${availableArtifacts.length} 个产物可用于右侧展示。` : '当前 run 没有可展示产物。';
+}
+
+function compactHumanReason(value: string) {
+  const text = value.replace(/\s+/g, ' ').trim();
+  return text.length > 320 ? `${text.slice(0, 317).trim()}...` : text;
+}
+
+function runNeedsHuman(run?: SciForgeRun) {
+  const text = [
+    run?.status,
+    run?.response,
+    isRecord(run?.raw) ? run.raw.status : undefined,
+    isRecord(run?.raw) ? run.raw.reason : undefined,
+  ].map((value) => String(value ?? '').toLowerCase()).join(' ');
+  return /needs-human|need human|human input|人工|需要用户|需要人工/.test(text);
+}
+
+function textHasNeedsHuman(value: unknown) {
+  return /needs-human|need human|human input|人工|需要用户|需要人工/.test(JSON.stringify(value ?? '').toLowerCase());
+}
+
+function textHasPartial(value: unknown) {
+  return /partial|partially|incomplete|insufficient|unverified|missing|部分|不完整/.test(JSON.stringify(value ?? '').toLowerCase());
 }

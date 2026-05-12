@@ -55,6 +55,7 @@ const withArtifact = applyBackgroundCompletionEventToSession(started, {
     type: 'research-report',
     producerScenario: 'literature-evidence-review',
     schemaVersion: '1',
+    metadata: { revision: 1, revisionStatus: 'foreground-draft' },
     data: { markdown: '# Long task report\n\nResult is ready.' },
   }],
   workEvidence: [{ id: 'we-long-task-artifact', ref: 'artifact:artifact-long-task-report' }],
@@ -69,6 +70,14 @@ const completed = applyBackgroundCompletionEventToSession(withArtifact, {
   ref: 'run:run-long-task#stage-final',
   status: 'completed',
   finalResponse: '后台补全完成：报告 artifact 已生成，验证通过，可在下一轮继续引用。',
+  artifacts: [{
+    id: 'artifact-long-task-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    metadata: { revision: 2, revisionStatus: 'background-final', supersedesRevision: 1 },
+    data: { markdown: '# Long task report\n\nBackground revision is ready.' },
+  }],
   verificationResults: [{
     id: 'verify-long-task',
     verdict: 'pass',
@@ -85,7 +94,12 @@ assert.equal(completed.runs[0].status, 'completed');
 assert.equal(completed.messages.length, 1);
 assert.equal(completed.messages[0].content.includes('后台补全完成'), true);
 assert.equal(completed.artifacts[0].metadata?.runId, 'run-long-task');
+assert.equal(completed.artifacts[0].metadata?.revision, 2);
+assert.equal(completed.artifacts[0].metadata?.revisionStatus, 'background-final');
+assert.equal(completed.artifacts[0].metadata?.supersedesRevision, 1);
+assert.match(JSON.stringify(completed.runs[0].raw), /artifact-long-task-report/);
 assert.match(JSON.stringify(nextPayload), /artifact-long-task-report/);
+assert.match(JSON.stringify(nextPayload), /"revision":2/);
 assert.match(JSON.stringify(nextPayload), /verify-long-task/);
 
-console.log('[ok] background completion protocol supports quick initial response followed by artifact, verification, evidence, and finalization updates');
+console.log('[ok] background completion protocol supports quick initial response followed by artifact revision, verification, evidence, and finalization updates');

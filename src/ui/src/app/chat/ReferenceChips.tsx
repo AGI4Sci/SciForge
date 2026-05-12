@@ -7,9 +7,9 @@ import {
   objectReferenceIcon,
   objectReferenceKindLabel,
   referenceComposerMarker,
-  referenceForObjectReference,
   sciForgeReferenceAttribute,
 } from '../../../../../packages/support/object-references';
+import { composerReferenceForObjectReference } from './composerReferences';
 import { objectReferenceStatusLabel } from '../results/executionStatusPresentation';
 
 export function ObjectReferenceChips({
@@ -33,7 +33,7 @@ export function ObjectReferenceChips({
           onClick={() => onFocus(reference)}
           title={reference.summary || reference.ref}
           data-tooltip={`${objectReferenceKindLabel(reference.kind)} · ${reference.ref}`}
-          data-sciforge-reference={sciForgeReferenceAttribute(referenceForObjectReference(reference))}
+          data-sciforge-reference={sciForgeReferenceAttribute(composerReferenceForObjectReference(reference))}
         >
           <span>{objectReferenceIcon(reference.kind)}</span>
           <strong>{reference.title}</strong>

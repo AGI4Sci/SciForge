@@ -107,6 +107,11 @@ const success = checked(runOfflineLiteratureRetrieval({
 }));
 assert.equal(success.status, 'success');
 assert.equal(success.paperList.length, 2, 'OpenAlex/PubMed duplicate should dedupe by DOI');
+assert.ok(success.sourceProvenance.some((entry) => (
+  entry.paperId === 'paper:doi:10.5555/sciforge.2026.1'
+  && entry.includedProviderIds.includes('literature.retrieval.openalex')
+  && entry.includedProviderIds.includes('literature.retrieval.pubmed')
+)));
 assert.deepEqual(success.workEvidence[0]?.artifactRefs, ['artifact:paper-list', 'artifact:evidence-matrix', 'artifact:research-report']);
 assert.equal(success.evidenceMatrix.length, success.paperList.length);
 assert.equal(success.researchReport.ref, 'artifact:research-report');
@@ -228,6 +233,78 @@ assert.equal(providerBudget.providerAttempts.length, 3);
 assert.ok(providerBudget.diagnostics.some((diagnostic) => diagnostic.code === 'provider-budget-exceeded'));
 assert.ok(!providerBudget.providerAttempts.some((attempt) => attempt.providerId === 'literature.retrieval.crossref'));
 
+const multiSourceRewrite = checked(runOfflineLiteratureRetrieval({
+  request: {
+    query: 'agentic scientific workflow planning',
+    databases: ['pubmed', 'semantic-scholar', 'arxiv', 'web-search'],
+    includeAbstracts: true,
+    excludedProviderIds: ['web-search'],
+  },
+  budget: { maxProviders: 4 },
+  providerFixtures: [
+    {
+      providerId: 'pubmed',
+      trustLevel: 'high',
+      records: [{
+        providerRecordId: 'pmid-777',
+        title: 'Agentic scientific workflow planning',
+        year: 2026,
+        journal: 'Journal of Scientific Agents',
+        doi: '10.5555/multisource.1',
+        pmid: '777',
+        abstract: 'PubMed fixture abstract.',
+      }],
+    },
+    {
+      providerId: 'semantic-scholar',
+      trustLevel: 'medium',
+      records: [{
+        providerRecordId: 's2-777',
+        title: 'Agentic Scientific Workflow Planning: Evidence and Benchmarks',
+        year: 2026,
+        journal: 'Journal of Scientific Agents',
+        doi: '10.5555/multisource.1',
+        abstract: 'Semantic Scholar duplicate with a title variant.',
+      }],
+    },
+    {
+      providerId: 'arxiv',
+      trustLevel: 'medium',
+      records: [{
+        providerRecordId: '2605.42424',
+        title: 'Offline planning agents for lab workflows',
+        year: 2026,
+        arxivId: '2605.42424',
+      }],
+    },
+    {
+      providerId: 'web-search',
+      trustLevel: 'low',
+      exclusionReason: 'User removed low-trust web source before rewriting the conclusion.',
+      records: [{
+        providerRecordId: 'blog-777',
+        title: 'Agentic scientific workflow planning will replace all lab software',
+        year: 2025,
+        doi: '10.5555/multisource.1',
+        url: 'https://example.test/low-trust-blog',
+      }],
+    },
+  ],
+}));
+assert.equal(multiSourceRewrite.status, 'partial');
+assert.equal(multiSourceRewrite.paperList.length, 2, 'PubMed/Semantic Scholar/Web duplicate should dedupe by DOI, with low-trust web excluded');
+assert.ok(!multiSourceRewrite.paperList.some((paper) => paper.sourceProviderIds.includes('web-search')));
+assert.doesNotMatch(multiSourceRewrite.researchReport.boundedSummary, /replace all lab software/i);
+const duplicateProvenance = multiSourceRewrite.sourceProvenance.find((entry) => entry.paperId === 'paper:doi:10.5555/multisource.1');
+assert.ok(duplicateProvenance, 'duplicate DOI paper should carry provenance');
+assert.deepEqual(duplicateProvenance.includedProviderIds.sort(), [
+  'literature.retrieval.pubmed',
+  'literature.retrieval.semantic-scholar',
+]);
+assert.deepEqual(duplicateProvenance.excludedProviderIds, ['literature.retrieval.web-search']);
+assert.ok(duplicateProvenance.differences.some((difference) => difference.field === 'title'));
+assert.ok(multiSourceRewrite.diagnostics.some((diagnostic) => diagnostic.code === 'source-excluded' && diagnostic.providerId === 'literature.retrieval.web-search'));
+
 console.log('[ok] literature.retrieval capability has offline provider runner/normalizer contract with auditable outputs and failure outcomes');
 
 function checked(output: OfflineLiteratureRetrievalOutput): OfflineLiteratureRetrievalOutput {
@@ -235,6 +312,7 @@ function checked(output: OfflineLiteratureRetrievalOutput): OfflineLiteratureRet
   assert.ok(output.paperList, 'paper-list output should be emitted');
   assert.ok(output.evidenceMatrix, 'evidence-matrix output should be emitted');
   assert.ok(output.researchReport, 'research-report output should be emitted');
+  assert.ok(output.sourceProvenance, 'sourceProvenance output should be emitted');
   assert.ok(output.workEvidence, 'workEvidence output should be emitted');
   assert.ok(output.providerAttempts, 'providerAttempts output should be emitted');
   assert.ok(output.citationVerificationResults, 'citationVerificationResults output should be emitted');

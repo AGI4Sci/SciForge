@@ -217,6 +217,20 @@ test('ResultsRenderer keeps first-screen failure summary compact while preservin
   assert.match(html, /retry\/fallback attempts, rate-limit diagnostics, and durable refs/);
 });
 
+test('ResultsRenderer empty completed run is presented as empty rather than ready', () => {
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [completedRun('run-empty-artifacts')],
+  };
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-empty-artifacts' });
+
+  assert.match(html, /本轮没有生成可展示 artifact/);
+  assert.match(html, /没有写入可供右侧结果区渲染的 artifact/);
+  assert.match(html, /重新运行或要求生成可展示 artifact/);
+  assert.doesNotMatch(html, /ready result/);
+});
+
 test('ResultsRenderer execution focus renders only execution unit body', () => {
   const session = contractFailureSession();
   session.notebook = [{

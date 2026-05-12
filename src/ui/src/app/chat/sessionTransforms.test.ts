@@ -3,6 +3,7 @@ import test from 'node:test';
 import { guidanceQueuedEvent } from '@sciforge-ui/runtime-contract';
 import type { BackgroundCompletionRuntimeEvent, NormalizedAgentResponse, RuntimeArtifact, RuntimeExecutionUnit, SciForgeMessage, SciForgeSession, UserGoalSnapshot } from '../../domain';
 import {
+  applyHistoricalUserMessageEdit,
   applyBackgroundCompletionEventToSession,
   appendFailedRunToSession,
   appendRunningGuidance,
@@ -225,6 +226,160 @@ test('rolls back an edited user message and prunes later run-owned state', () =>
   assert.deepEqual(rolled.messages.map((item) => item.id), ['msg-1']);
   assert.deepEqual(rolled.runs.map((item) => item.id), ['run-before']);
   assert.deepEqual(rolled.executionUnits.map((item) => item.id), ['unit-before']);
+});
+
+test('reverts a historical user message edit and records invalidated downstream refs', () => {
+  const edited = applyHistoricalUserMessageEdit({
+    session: session({
+      messages: [
+        message('msg-1', 'user', 'first', '2026-05-07T00:00:00.000Z'),
+        message('msg-answer-1', 'scenario', 'first answer', '2026-05-07T00:10:00.000Z'),
+        message('msg-2', 'user', 'edit me', '2026-05-07T00:20:00.000Z'),
+        {
+          ...message('msg-answer-2', 'scenario', 'downstream answer', '2026-05-07T00:40:00.000Z'),
+          objectReferences: [{ id: 'obj-after-artifact', kind: 'artifact', ref: 'artifact:artifact-after', title: 'after artifact' }],
+        },
+      ],
+      runs: [{
+        id: 'run-before',
+        scenarioId: 'literature-evidence-review',
+        status: 'completed',
+        prompt: 'first',
+        response: 'ok',
+        createdAt: '2026-05-07T00:10:00.000Z',
+        objectReferences: [{ id: 'obj-before-artifact', kind: 'artifact', ref: 'artifact:artifact-before', title: 'before artifact' }],
+      }, {
+        id: 'run-after',
+        scenarioId: 'literature-evidence-review',
+        status: 'completed',
+        prompt: 'second',
+        response: 'late',
+        createdAt: '2026-05-07T00:40:00.000Z',
+        objectReferences: [
+          { id: 'obj-after-run', kind: 'run', ref: 'run:run-after', title: 'after run' },
+          { id: 'obj-after-artifact-run', kind: 'artifact', ref: 'artifact:artifact-after', title: 'after artifact' },
+        ],
+      }],
+      executionUnits: [{
+        id: 'unit-before',
+        tool: 'read',
+        params: '',
+        status: 'done',
+        hash: 'a',
+        routeDecision: { selectedAt: '2026-05-07T00:05:00.000Z' },
+      }, {
+        id: 'unit-after',
+        tool: 'write',
+        params: '',
+        status: 'done',
+        hash: 'b',
+        routeDecision: { selectedAt: '2026-05-07T00:30:00.000Z' },
+        outputArtifacts: ['artifact-after'],
+      }],
+      artifacts: [{
+        id: 'artifact-before',
+        type: 'report',
+        producerScenario: 'literature-evidence-review',
+        schemaVersion: '1',
+        metadata: { runId: 'run-before' },
+      }, {
+        id: 'artifact-after',
+        type: 'report',
+        producerScenario: 'literature-evidence-review',
+        schemaVersion: '1',
+        metadata: { runId: 'run-after' },
+      }, {
+        id: 'uploaded-context',
+        type: 'file',
+        producerScenario: 'literature-evidence-review',
+        schemaVersion: '1',
+      }],
+      claims: [{
+        id: 'claim-after',
+        text: 'downstream conclusion',
+        type: 'inference',
+        confidence: 0.7,
+        evidenceLevel: 'review',
+        supportingRefs: ['artifact:artifact-after'],
+        opposingRefs: [],
+        updatedAt: '2026-05-07T00:45:00.000Z',
+      }],
+    }),
+    messageId: 'msg-2',
+    content: 'edited user instruction',
+    mode: 'revert',
+    editedAt: '2026-05-07T01:00:00.000Z',
+  });
+
+  assert.deepEqual(edited.session.messages.map((item) => item.id), ['msg-1', 'msg-answer-1', 'msg-2']);
+  assert.equal(edited.session.messages.at(-1)?.content, 'edited user instruction');
+  assert.deepEqual(edited.session.runs.map((item) => item.id), ['run-before']);
+  assert.deepEqual(edited.session.executionUnits.map((item) => item.id), ['unit-before']);
+  assert.deepEqual(edited.session.artifacts.map((item) => item.id), ['artifact-before', 'uploaded-context']);
+  assert.deepEqual(edited.session.claims, []);
+  assert.equal(edited.branch?.mode, 'revert');
+  assert.deepEqual(edited.branch?.invalidatedRefs.map((item) => item.ref).sort(), [
+    'artifact:artifact-after',
+    'claim:claim-after',
+    'execution-unit:unit-after',
+    'message:msg-answer-2',
+    'run:run-after',
+  ]);
+});
+
+test('continues after a historical user message edit with conflict and confirmation metadata', () => {
+  const continued = applyHistoricalUserMessageEdit({
+    session: session({
+      messages: [
+        message('msg-1', 'user', 'original instruction', '2026-05-07T00:00:00.000Z'),
+        message('msg-answer-1', 'scenario', 'answer based on original instruction', '2026-05-07T00:10:00.000Z'),
+      ],
+      runs: [{
+        id: 'run-answer',
+        scenarioId: 'literature-evidence-review',
+        status: 'completed',
+        prompt: 'original instruction',
+        response: 'answer based on original instruction',
+        createdAt: '2026-05-07T00:10:00.000Z',
+        objectReferences: [{ id: 'obj-report', kind: 'artifact', ref: 'artifact:report-original', title: 'original report' }],
+      }],
+      artifacts: [{
+        id: 'report-original',
+        type: 'report',
+        producerScenario: 'literature-evidence-review',
+        schemaVersion: '1',
+        metadata: { runId: 'run-answer', title: 'original report' },
+      }],
+      claims: [{
+        id: 'claim-answer',
+        text: 'conclusion from original answer',
+        type: 'inference',
+        confidence: 0.8,
+        evidenceLevel: 'review',
+        supportingRefs: ['artifact:report-original'],
+        opposingRefs: [],
+        updatedAt: '2026-05-07T00:11:00.000Z',
+      }],
+    }),
+    messageId: 'msg-1',
+    content: 'revised instruction',
+    mode: 'continue',
+    editedAt: '2026-05-07T01:00:00.000Z',
+  });
+
+  assert.equal(continued.session.messages[0].content, 'revised instruction');
+  assert.deepEqual(continued.session.runs.map((item) => item.id), ['run-answer']);
+  assert.deepEqual(continued.session.artifacts.map((item) => item.id), ['report-original']);
+  assert.equal(continued.branch?.mode, 'continue');
+  assert.deepEqual(continued.branch?.invalidatedRefs, []);
+  assert.equal(continued.branch?.requiresUserConfirmation, true);
+  assert.match(continued.branch?.nextStep ?? '', /confirm whether to keep/);
+  assert.deepEqual(continued.branch?.affectedConclusions.map((item) => item.ref), ['claim:claim-answer']);
+  assert.deepEqual(continued.branch?.conflicts[0]?.affectedRefs, ['run:run-answer', 'artifact:report-original']);
+  const raw = continued.session.runs[0].raw as { historicalEditConflict?: { branchId?: string; requiresUserConfirmation?: boolean } };
+  assert.equal(raw.historicalEditConflict?.branchId, continued.branch?.id);
+  assert.equal(raw.historicalEditConflict?.requiresUserConfirmation, true);
+  assert.deepEqual(continued.session.artifacts[0].metadata?.historicalEditConflict, raw.historicalEditConflict);
 });
 
 test('merges response records and failed runs without dropping existing session state', () => {

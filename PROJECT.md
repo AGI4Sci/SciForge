@@ -284,6 +284,43 @@ Failure/Improvement Notes：
 - [x] `git diff --check`
 
 
+### 2026-05-13 Milestone：历史编辑、多标签冲突、Artifact 引用与结果空态收敛
+
+本轮继续开启多个 sub agents 并行推进会话分支、结果区 presentation、reference authority、多标签写入冲突、后台 continuation、literature provenance 和网页端回归；主线程补齐 Runtime Health 对旧 Workspace Writer 端口漂移的诊断。根据并行报告完成以下通用修复：
+
+- [x] 历史消息编辑新增 `applyHistoricalUserMessageEdit`：`revert` 会废弃编辑边界后的派生 messages/runs/artifacts/executionUnits/claims 并记录 invalidated refs；`continue` 会保留已有结果，同时标注 affected refs、affected conclusions、conflicts、requiresUserConfirmation 和 next step。
+- [x] 多标签并发写入增加 session revision/base revision guard：localStorage 或 workspace state 写入前会检测 stale base / ordering conflict，保留当前状态并记录 recoverable `SessionWriteConflictDiagnostic`，不再静默覆盖另一个 tab 的同 session 更新。
+- [x] Artifact 选择追问改为 selected ObjectReference authoritative：inline link 和 object chip 的 `data-sciforge-reference` 携带被点选对象本身，composer payload 写入 `currentReference/objectReference`，避免“基于这个继续”被最近 artifact 抢权。
+- [x] 结果区新增 `runPresentationState`：失败、recoverable、empty、partial、needs-human、running、ready 被投影为首屏可读状态；completed 但无 artifact 不再显示成 ready，raw JSON 仍留在审计细节。
+- [x] `resultPresentation.artifactActions` 参与 active-run scoped view plan：report、paper-list、diagnostic、verification 混合存在时按 presentation action 稳定排序，focus mode 切换不混入其他 run 的 artifact。
+- [x] background continuation smoke 覆盖 artifact revision 合并与 passive disconnect：前端断开不会 abort 后端 long task，后台完成后保留 revision 标注和下一轮 payload refs。
+- [x] literature retrieval offline runner 增加 `sourceProvenance`：多 provider 结果按 DOI/PMID/arXiv/title-year 去重，记录来源差异、trust level、被用户移除的低可信来源，并在重写报告时排除低可信来源内容。
+- [x] Runtime Health 在配置的 Workspace Writer URL 离线但默认 writer 在线时，展示端口漂移诊断和 Settings 修复动作；browser smoke 允许该更具体的恢复路径。
+
+Failure/Improvement Notes：
+
+- R-LIT-03 本轮采用 provider-neutral fixture contract，不再把真实 arXiv/Semantic Scholar/PubMed/网页网络调用作为工程收敛阻塞；真实网络版本后续只作为 provider availability 验证。
+- 多标签冲突不能用浏览器 tab 名、焦点或 localStorage 写入顺序判断；本轮只基于 session revision、base revision 和集合级变更判断。
+- 历史编辑 `continue` 不应自动宣称旧结论仍成立；需要用户确认后才能把受影响 refs 当作 current conclusions。
+- `src/ui/src/app/chat/sessionTransforms.ts` 已到 1459 行 watch 区，下一次继续追加历史/分支逻辑前应优先拆出 `historyEditTransforms` 或相关语义模块，避免越过 1500 行阈值。
+
+本轮验证：
+
+- [x] `node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts src/ui/src/sessionStore.test.ts src/ui/src/app/appShell/workspaceState.test.ts`
+- [x] `node --import tsx --test src/ui/src/app/chat/composerReferences.test.ts src/ui/src/app/chat/MessageContent.test.tsx src/ui/src/app/chat/finalMessagePresentation.test.tsx src/ui/src/app/chat/RunExecutionProcess.test.ts`
+- [x] `node --import tsx --test src/ui/src/app/ResultsRenderer.test.ts src/ui/src/app/results-renderer-execution-model.test.ts src/ui/src/app/results/viewPlanResolver.test.ts`
+- [x] `npm run smoke:background-completion`
+- [x] `npm run smoke:literature-retrieval-capability`
+- [x] `node --import tsx --test src/ui/src/runtimeHealth.test.ts`
+- [x] `npm run smoke:runtime-contracts`
+- [x] `npm run smoke:long-file-budget`
+- [x] `npm run smoke:browser`
+- [x] `npm run typecheck`
+- [x] `npm run build`
+- [x] `npm run test`（717 tests pass）
+- [x] `git diff --check`
+
+
 
 ### H022 Real-world Complex Task Backlog for SciForge Hardening
 
@@ -302,7 +339,7 @@ Failure/Improvement Notes：
 
 - [x] R-LIT-01 今日 arXiv agent 论文深调研：检索今日/最近 agent 论文，下载 PDF，阅读全文，产出中文 markdown 报告；随后要求按方法、数据集、评测指标、主要结论重排；再要求导出审计包。已压测真实失败边界，保留 evidence bundle；后续修复见本轮 notes。
 - [x] R-LIT-02 arXiv 空结果恢复：限定一个很窄主题和当天日期，预期可能空结果；要求系统自动说明 empty result、扩展 query、保留不确定性，并继续生成 partial 报告。
-- [ ] R-LIT-03 多来源文献对照：同一主题分别检索 arXiv、Semantic Scholar/PubMed/网页来源，去重并标注来源差异；用户要求删除低可信来源后重写结论。
+- [x] R-LIT-03 多来源文献对照：同一主题分别检索 arXiv、Semantic Scholar/PubMed/网页来源，去重并标注来源差异；用户要求删除低可信来源后重写结论。已完成 provider-neutral fixture contract；真实网络调用仅作为后续 provider availability 验证。
 - [x] R-LIT-04 全文下载失败恢复：要求下载 10 篇论文全文，其中部分 PDF 超时/403/过大；系统必须保留已下载全文、标注失败原因、继续基于 metadata 补 partial。
 - [ ] R-LIT-05 引用修正多轮：先生成报告，再让用户指出某条引用不可信；系统必须定位原 artifact/ref，修正该段，不污染其他结论。
 - [ ] R-LIT-06 研究方向综述迭代：先做宽泛综述，再要求缩小到 robotics agent，再要求排除 benchmark 论文，再要求只保留开源代码论文。
@@ -315,7 +352,7 @@ Failure/Improvement Notes：
 
 - [ ] R-CODE-01 端到端 bug 修复：用户贴浏览器失败截图，要求定位原因、写通用修复、跑测试、重启服务、同步 GitHub；过程中用户中断一次后继续。
 - [x] R-CODE-02 Schema drift 修复：构造 backend 返回宽松 JSON、fenced JSON、缺字段 payload、空 artifactRef 等情况，要求系统统一归一化而非 repair loop。
-- [ ] R-CODE-03 长任务 stream 稳定性：运行超过前端 timeout 的任务，刷新浏览器、关闭标签、恢复历史，验证后端不被 passive disconnect 杀掉。
+- [x] R-CODE-03 长任务 stream 稳定性：运行超过前端 timeout 的任务，刷新浏览器、关闭标签、恢复历史，验证后端不被 passive disconnect 杀掉。
 - [ ] R-CODE-04 多模块改造：让 agent 同时改 gateway、UI presentation、runtime contract、tests；用户中途要求缩小范围，只保留 runtime 修复。
 - [ ] R-CODE-05 测试失败恢复：第一次 patch 后 typecheck/test 失败，用户要求解释失败并做最小通用修复，不能回滚无关改动。
 - [ ] R-CODE-06 Dirty worktree 协作：预先放入用户未提交改动，再让 agent 修复另一区域，验证不会 reset/revert 用户改动。
@@ -339,10 +376,10 @@ Runtime、恢复与会话生命周期任务：
 
 - [x] R-RUN-01 失败 run 诊断：用户点选 failed run，要求解释为什么失败、哪些文件可用、是否能继续、下一步怎么做。
 - [x] R-RUN-02 Repair loop 防护：制造 repeated repair no-op，要求系统停止重复修复并给通用失败分类。
-- [ ] R-RUN-03 Background continuation：启动长任务后用户继续问另一个问题，后台完成后要求合并结果并标注 revision。
-- [ ] R-RUN-04 多标签并发：两个浏览器标签对同一 session 发送消息，验证 ordering/conflict guard。
-- [ ] R-RUN-05 编辑历史 revert：修改早期用户目标并选择 revert，系统必须废弃后续派生 runs/artifacts。
-- [ ] R-RUN-06 编辑历史 continue：修改早期目标但保留已有结果，系统必须标注冲突和受影响结论。
+- [x] R-RUN-03 Background continuation：启动长任务后用户继续问另一个问题，后台完成后要求合并结果并标注 revision。
+- [x] R-RUN-04 多标签并发：两个浏览器标签对同一 session 发送消息，验证 ordering/conflict guard。
+- [x] R-RUN-05 编辑历史 revert：修改早期用户目标并选择 revert，系统必须废弃后续派生 runs/artifacts。
+- [x] R-RUN-06 编辑历史 continue：修改早期目标但保留已有结果，系统必须标注冲突和受影响结论。
 - [x] R-RUN-07 跨 session 恢复：新开页面恢复旧 session，只依赖持久化 state，不依赖前端内存。
 - [x] R-RUN-08 取消边界：用户显式 cancel 后要求继续，系统必须说明 cancel boundary，不自动恢复不可逆 side effect。
 - [ ] R-RUN-09 版本漂移恢复：代码更新后打开旧 session，系统检测 capability/schema/version drift 并建议迁移或重跑。
@@ -350,13 +387,13 @@ Runtime、恢复与会话生命周期任务：
 
 UI 与 presentation 真实任务：
 
-- [ ] R-UI-01 失败结果可读性：失败时右侧结果必须先展示用户可理解的原因、可用产物、下一步，而不是 raw trace 优先。
+- [x] R-UI-01 失败结果可读性：失败时右侧结果必须先展示用户可理解的原因、可用产物、下一步，而不是 raw trace 优先。
 - [ ] R-UI-02 Partial 优先：长任务运行中必须展示已完成部分、当前阶段、后台状态和可安全中止/继续的操作。
-- [ ] R-UI-03 Artifact 选择追问：用户点选某个 file/artifact 后追问“基于这个继续”，系统必须使用被点选对象而不是最近对象。
+- [x] R-UI-03 Artifact 选择追问：用户点选某个 file/artifact 后追问“基于这个继续”，系统必须使用被点选对象而不是最近对象。
 - [x] R-UI-04 ExecutionUnit 展示：运行结果中 execution unit 必须包含 codeRef/stdoutRef/stderrRef/outputRef、状态、失败原因和 recoverActions。
 - [x] R-UI-05 Verification 状态：普通结果、未验证结果、后台验证中、验证失败、release verify 通过五种状态 UI 必须可区分。
-- [ ] R-UI-06 空结果页面：没有 artifact 时不能显示误导性 completed；必须展示 empty/needs-human/recoverable 的准确状态。
-- [ ] R-UI-07 多 artifact 比较：结果区同时出现 report、paper-list、diagnostic、verification，用户切换 focus mode 后仍保持正确排序。
+- [x] R-UI-06 空结果页面：没有 artifact 时不能显示误导性 completed；必须展示 empty/needs-human/recoverable 的准确状态。
+- [x] R-UI-07 多 artifact 比较：结果区同时出现 report、paper-list、diagnostic、verification，用户切换 focus mode 后仍保持正确排序。
 - [x] R-UI-08 导出 bundle：用户要求导出 JSON bundle/审计包，UI 必须能引用正确 session bundle 而不是当前空状态。
 
 真实用户工作流任务：

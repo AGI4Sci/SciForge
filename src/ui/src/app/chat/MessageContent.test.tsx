@@ -1,0 +1,80 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { renderToStaticMarkup } from 'react-dom/server';
+import type { ObjectReference } from '../../domain';
+import { parseSciForgeReferenceAttribute } from '../../../../../packages/support/object-references';
+import { MessageContent } from './MessageContent';
+import { ObjectReferenceChips } from './ReferenceChips';
+import { currentObjectReferenceFromComposerReference } from './composerReferences';
+
+const pickedFile: ObjectReference = {
+  id: 'obj-picked-file',
+  kind: 'file',
+  title: 'Picked methods file',
+  ref: 'file:papers/methods.md',
+  status: 'available',
+  summary: 'explicitly picked file',
+  provenance: {
+    path: 'papers/methods.md',
+    hash: 'sha256-picked-file',
+    producer: 'workspace',
+  },
+};
+
+const recentArtifact: ObjectReference = {
+  id: 'obj-recent-artifact',
+  kind: 'artifact',
+  title: 'Recent report',
+  ref: 'artifact:recent-report',
+  artifactType: 'research-report',
+  status: 'available',
+  summary: 'implicit recent artifact',
+};
+
+test('message inline object links expose the picked ObjectReference as currentReference payload', () => {
+  const markup = renderToStaticMarkup(
+    <MessageContent
+      content="基于 file:papers/methods.md 继续。"
+      references={[recentArtifact, pickedFile]}
+      onObjectFocus={() => undefined}
+    />,
+  );
+
+  const reference = firstRenderedReference(markup);
+  const currentReference = currentObjectReferenceFromComposerReference(reference);
+  assert.equal(reference.ref, 'file:papers/methods.md');
+  assert.equal(currentReference?.ref, 'file:papers/methods.md');
+  assert.equal(currentReference?.provenance?.hash, 'sha256-picked-file');
+});
+
+test('object reference chips expose each selected chip object instead of the recent artifact', () => {
+  const markup = renderToStaticMarkup(
+    <ObjectReferenceChips
+      references={[pickedFile, recentArtifact]}
+      onFocus={() => undefined}
+    />,
+  );
+
+  const reference = firstRenderedReference(markup);
+  const currentReference = currentObjectReferenceFromComposerReference(reference);
+  assert.equal(reference.ref, 'file:papers/methods.md');
+  assert.equal(currentReference?.ref, 'file:papers/methods.md');
+  assert.equal(currentReference?.id, 'obj-picked-file');
+});
+
+function firstRenderedReference(markup: string) {
+  const match = markup.match(/data-sciforge-reference="([^"]+)"/);
+  assert.ok(match, 'expected rendered data-sciforge-reference attribute');
+  const reference = parseSciForgeReferenceAttribute(decodeHtmlAttribute(match[1]));
+  assert.ok(reference, 'expected parseable SciForgeReference attribute');
+  return reference;
+}
+
+function decodeHtmlAttribute(value: string) {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+}

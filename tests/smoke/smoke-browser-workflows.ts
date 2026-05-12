@@ -241,7 +241,11 @@ try {
     await offlineHealthPage.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: 'domcontentloaded' });
     logStep('offline runtime health shows concrete recovery actions');
     await offlineHealthPage.getByText('Runtime Health').first().waitFor({ timeout: 15_000 });
-    await offlineHealthPage.getByText('启动 npm run workspace:server 后刷新').waitFor({ timeout: 15_000 });
+    await offlineHealthPage.locator('.runtime-health-item')
+      .filter({ hasText: 'Workspace Writer' })
+      .filter({ hasText: /启动 npm run workspace:server 后刷新|默认 writer .* 在线/ })
+      .first()
+      .waitFor({ timeout: 15_000 });
     await offlineHealthPage.locator('.runtime-health-item')
       .filter({ hasText: 'AgentServer' })
       .filter({ hasText: /启动或修复 AgentServer|AgentServer\/agent backend|127\.0\.0\.1:65535/ })

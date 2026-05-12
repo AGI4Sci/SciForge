@@ -1,5 +1,6 @@
 import { RUNTIME_HEALTH_STATUS } from '@sciforge-ui/runtime-contract';
 import type { RuntimeHealthStatus } from '@sciforge-ui/runtime-contract';
+import { defaultSciForgeConfig } from './config';
 import type { SciForgeConfig } from './domain';
 
 export type { RuntimeHealthStatus } from '@sciforge-ui/runtime-contract';
@@ -10,6 +11,25 @@ export interface RuntimeHealthItem {
   status: RuntimeHealthStatus;
   detail: string;
   recoverAction?: string;
+}
+
+export function workspaceWriterHealth(config: SciForgeConfig, workspaceOnline: boolean, defaultWorkspaceOnline = false): RuntimeHealthItem {
+  if (workspaceOnline) {
+    return { id: 'workspace', label: 'Workspace Writer', status: RUNTIME_HEALTH_STATUS.ONLINE, detail: config.workspaceWriterBaseUrl };
+  }
+  const defaultUrl = defaultSciForgeConfig.workspaceWriterBaseUrl;
+  const configuredUrl = config.workspaceWriterBaseUrl.replace(/\/+$/, '');
+  const defaultMatchesConfigured = configuredUrl === defaultUrl.replace(/\/+$/, '');
+  const portDriftAction = !defaultMatchesConfigured && defaultWorkspaceOnline
+    ? `当前 Workspace Writer URL 无法访问；默认 writer ${defaultUrl} 在线。打开 Settings 将 Workspace Writer URL 改回默认值后刷新。`
+    : undefined;
+  return {
+    id: 'workspace',
+    label: 'Workspace Writer',
+    status: RUNTIME_HEALTH_STATUS.OFFLINE,
+    detail: config.workspaceWriterBaseUrl,
+    recoverAction: portDriftAction ?? '启动 npm run workspace:server 后刷新',
+  };
 }
 
 export function modelHealth(config: SciForgeConfig): RuntimeHealthItem {

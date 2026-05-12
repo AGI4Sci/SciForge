@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SciForgeSession, SciForgeWorkspaceState, TimelineEventRecord } from '../../domain';
-import { appendTimelineEventToWorkspace, applySessionUpdateToWorkspace, recoverableRunFocusForSession, touchWorkspaceUpdatedAt, workspaceRecoveryFocusForState } from './workspaceState';
+import { sessionWriteConflictsForState, withSessionWriteGuard } from '../../sessionStore';
+import { appendTimelineEventToWorkspace, applySessionUpdateToWorkspace, recoverableRunFocusForSession, touchWorkspaceUpdatedAt, tryApplySessionUpdateToWorkspace, workspaceRecoveryFocusForState } from './workspaceState';
 
 function session(runs: SciForgeSession['runs'] = []): SciForgeSession {
   return {
@@ -70,6 +71,72 @@ test('applies session updates with versioning and run timeline merge', () => {
   assert.equal(next.timelineEvents?.[0].id, 'timeline-run-1');
   assert.equal(next.timelineEvents?.[0].artifactRefs[0], 'artifact-1');
   assert.equal(next.timelineEvents?.[0].executionUnitRefs[0], 'unit-1');
+});
+
+test('detects stale base session updates without overwriting current workspace session', () => {
+  const baseSession = withSessionWriteGuard(session());
+  const current = applySessionUpdateToWorkspace(workspace(baseSession), {
+    ...baseSession,
+    messages: [{
+      id: 'msg-current',
+      role: 'user',
+      content: 'current writer',
+      createdAt: '2026-05-07T01:00:00.000Z',
+    }],
+  }, 'current writer');
+  const staleRun = {
+    id: 'run-stale',
+    scenarioId: 'scenario-any',
+    status: 'completed' as const,
+    prompt: 'stale run',
+    response: 'late',
+    createdAt: '2026-05-07T01:01:00.000Z',
+  };
+  const result = tryApplySessionUpdateToWorkspace(current, {
+    ...baseSession,
+    runs: [staleRun],
+  }, 'late writer');
+
+  assert.equal(result.ok, false);
+  assert.equal(result.diagnostic.kind, 'stale-base-revision');
+  assert.deepEqual(result.diagnostic.conflictingFields, []);
+  assert.equal(result.state.sessionsByScenario['scenario-any'].messages[0]?.content, 'current writer');
+  assert.equal(result.state.sessionsByScenario['scenario-any'].runs.length, 0);
+  assert.equal(sessionWriteConflictsForState(result.state)[0]?.reason, 'late writer');
+});
+
+test('detects same-collection ordering conflicts as recoverable diagnostics', () => {
+  const baseSession = withSessionWriteGuard(session());
+  const runA = {
+    id: 'run-a',
+    scenarioId: 'scenario-any',
+    status: 'completed' as const,
+    prompt: 'first run',
+    response: 'A',
+    createdAt: '2026-05-07T01:00:00.000Z',
+  };
+  const runB = {
+    id: 'run-b',
+    scenarioId: 'scenario-any',
+    status: 'completed' as const,
+    prompt: 'second run',
+    response: 'B',
+    createdAt: '2026-05-07T01:01:00.000Z',
+  };
+  const current = applySessionUpdateToWorkspace(workspace(baseSession), {
+    ...baseSession,
+    runs: [runA],
+  }, 'first writer');
+  const result = tryApplySessionUpdateToWorkspace(current, {
+    ...baseSession,
+    runs: [runB],
+  }, 'second writer');
+
+  assert.equal(result.ok, false);
+  assert.equal(result.diagnostic.kind, 'ordering-conflict');
+  assert.deepEqual(result.diagnostic.conflictingFields, ['runs']);
+  assert.deepEqual(result.state.sessionsByScenario['scenario-any'].runs.map((run) => run.id), ['run-a']);
+  assert.equal(sessionWriteConflictsForState(result.state)[0]?.recoverable, true);
 });
 
 test('run timeline counts only execution units, not skill or ui plan refs', () => {
