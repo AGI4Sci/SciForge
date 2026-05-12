@@ -192,6 +192,30 @@ test('ResultsRenderer renders ContractValidationFailure diagnostics without synt
   assert.doesNotMatch(html, /已完成报告|ready result/);
 });
 
+test('ResultsRenderer keeps first-screen failure summary compact while preserving raw audit details', () => {
+  const session = contractFailureSession();
+  const longReason = [
+    'ContractValidationFailure work-evidence; contractId=sciforge.work-evidence.v1; schemaPath=packages/contracts/runtime/work-evidence-policy.ts#evaluateWorkEvidencePolicy;',
+    'reason=Contract validation failed because generated work evidence did not include durable evidenceRefs and rawRef for a completed external retrieval.',
+    'Previous failure: External retrieval returned zero results while the task marked itself completed.',
+    'Treat this as repair-needed until the task records provider status, query/url, retry/fallback attempts, rate-limit diagnostics, and durable refs.',
+  ].join(' ');
+  session.executionUnits[0]!.failureReason = longReason;
+  session.runs[0]!.raw = {
+    ...session.runs[0]!.raw as Record<string, unknown>,
+    blocker: longReason,
+  };
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-contract-failure' });
+  const summaryStart = html.indexOf('运行需要处理');
+  const auditStart = html.indexOf('查看运行细节');
+  const summaryHtml = html.slice(summaryStart, auditStart);
+
+  assert.match(summaryHtml, /External retrieval returned zero results while the task marked itself completed/);
+  assert.doesNotMatch(summaryHtml, /retry\/fallback attempts, rate-limit diagnostics, and durable refs/);
+  assert.match(html, /retry\/fallback attempts, rate-limit diagnostics, and durable refs/);
+});
+
 test('paper-card-list workbench slot is rendered by package policy', () => {
   const artifact: RuntimeArtifact = {
     id: 'papers',

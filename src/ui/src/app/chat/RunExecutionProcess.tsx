@@ -141,7 +141,9 @@ function objectReferencesForAudit(run: SciForgeRun | undefined, session: SciForg
 }
 
 function cursorStepKindForUnit(unit: RuntimeExecutionUnit, verb: string) {
-  if (unit.status === 'failed') return 'Failed';
+  if (unit.status === 'failed' || unit.status === 'failed-with-reason') return 'Failed';
+  if (unit.status === 'repair-needed') return 'Repair';
+  if (unit.status === 'needs-human') return 'Needs Human';
   if (verb === '探索文件') return 'Explored';
   if (verb === '编辑文件') return 'Edited';
   if (verb === '运行程序') return 'Ran';
@@ -178,7 +180,13 @@ function executionUnitTarget(unit: RuntimeExecutionUnit) {
 }
 
 function executionUnitDetails(unit: RuntimeExecutionUnit) {
-  const details = [
+  const priorityDetails = [
+    unit.failureReason ? `失败原因：${unit.failureReason}` : '',
+    unit.recoverActions?.length ? `恢复动作：${unit.recoverActions.map((action) => compactAuditText(action, 180)).join('；')}` : '',
+    unit.nextStep ? `下一步：${compactAuditText(unit.nextStep, 180)}` : '',
+    unit.selfHealReason ? `自修复说明：${unit.selfHealReason}` : '',
+  ];
+  const supportingDetails = [
     unit.params ? `参数：${compactAuditText(unit.params, 180)}` : '',
     unit.codeRef ? `代码位置：${formatExecutionRef(unit.codeRef)}` : '',
     unit.code ? `执行代码：${compactAuditText(unit.code, 220)}` : '',
@@ -187,9 +195,8 @@ function executionUnitDetails(unit: RuntimeExecutionUnit) {
     unit.stderrRef ? `错误输出：${formatExecutionRef(unit.stderrRef)}` : '',
     unit.outputRef ? `输出：${formatExecutionRef(unit.outputRef)}` : '',
     unit.patchSummary ? `修改摘要：${unit.patchSummary}` : '',
-    unit.failureReason ? `失败原因：${unit.failureReason}` : '',
   ];
-  return details.filter(Boolean).slice(0, 5);
+  return [...priorityDetails, ...supportingDetails].filter(Boolean).slice(0, 5);
 }
 
 function formatExecutionRef(value?: string) {

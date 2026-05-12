@@ -51,16 +51,17 @@ export function coerceArtifactReportPayload(
     && (!directIsBackendPayloadText || looksLikeSubstantialReportMarkdown(extracted.markdown))
     ? extracted.markdown
     : undefined;
+  const sourceIsBackendPayload = directIsBackendPayloadText || looksLikeBackendPayloadRecord(source);
   const reportRef = extracted.reportRef
     || reportRefFromPayload(source)
     || reportRefFromText(direct)
     || reportRefFromArtifact(artifact);
   const markdown = extractedMarkdown
-    || (!directIsBackendPayloadText ? direct : undefined)
-    || (sections.length && !directIsBackendPayloadText ? reportSectionsToMarkdown(sections) : undefined)
-    || reportFromKnownFields(source)
+    || (!sourceIsBackendPayload ? direct : undefined)
+    || (sections.length && !sourceIsBackendPayload ? reportSectionsToMarkdown(sections) : undefined)
+    || (!sourceIsBackendPayload ? reportFromKnownFields(source) : undefined)
     || relatedMarkdown
-    || (!directIsBackendPayloadText ? extracted.markdown : undefined)
+    || (!sourceIsBackendPayload ? extracted.markdown : undefined)
     || markdownShellForReportRef(reportRef);
   return { markdown, sections, reportRef };
 }
@@ -130,7 +131,17 @@ export function reportRefFromText(text?: string) {
 
 export function looksLikeBackendPayloadText(text?: string) {
   if (!text) return false;
-  return /```json|ToolPayload|Returning the existing result|Let me inspect|prior attempt|\"artifacts\"\s*:|\"uiManifest\"\s*:|\"executionUnits\"\s*:|\"message\"\s*:/i.test(text);
+  return /```json|ToolPayload|Returning the existing result|Let me inspect|prior attempt|sciforge\.agentserver-generation-response\.v1|\"taskFiles\"\s*:|\"artifacts\"\s*:|\"uiManifest\"\s*:|\"executionUnits\"\s*:|\"stdout\"\s*:|\"stderr\"\s*:|\"message\"\s*:|Traceback \(most recent call last\)|^\s*(import|from|const|function|class)\s+\S+/im.test(text);
+}
+
+function looksLikeBackendPayloadRecord(record: Record<string, unknown>) {
+  const version = reportPolicyString(record.version) || reportPolicyString(record.schemaVersion) || '';
+  return /sciforge\.agentserver-generation-response/i.test(version)
+    || Array.isArray(record.taskFiles)
+    || Array.isArray(record.executionUnits)
+    || Array.isArray(record.uiManifest)
+    || typeof record.stdout === 'string'
+    || typeof record.stderr === 'string';
 }
 
 function looksLikeSubstantialReportMarkdown(text: string) {
@@ -250,11 +261,15 @@ function decodeJsonStringLiteral(value: string) {
 }
 
 function reportRefFromPayload(payload: Record<string, unknown>) {
-  return firstMarkdownRef(payload.markdownRef, payload.reportRef, payload.path, payload.dataRef, payload.outputRef, payload.resultRef);
+  return firstMarkdownRef(payload.markdownRef, payload.reportRef, payload.path, payload.dataRef, payload.outputRef, payload.resultRef)
+    || reportRefFromTaskFiles(payload.taskFiles)
+    || reportRefFromTaskFiles(payload.files)
+    || reportRefFromTaskFiles(payload.outputs)
+    || reportRefFromDeepRecord(payload, 2);
 }
 
 function reportRefFromArtifact(artifact?: ReportPolicyRuntimeArtifactLike) {
-  return firstMarkdownRef(
+  const direct = firstMarkdownRef(
     artifact?.metadata?.markdownRef,
     artifact?.metadata?.reportRef,
     artifact?.path,
@@ -264,6 +279,10 @@ function reportRefFromArtifact(artifact?: ReportPolicyRuntimeArtifactLike) {
     artifact?.metadata?.dataRef,
     artifact?.metadata?.outputRef,
   );
+  if (direct) return direct;
+  const data = isReportPolicyRecord(artifact?.data) ? artifact.data : undefined;
+  const metadata = isReportPolicyRecord(artifact?.metadata) ? artifact.metadata : undefined;
+  return data ? reportRefFromPayload(data) : metadata ? reportRefFromPayload(metadata) : undefined;
 }
 
 function firstString(...values: unknown[]) {
@@ -272,6 +291,37 @@ function firstString(...values: unknown[]) {
 
 function firstMarkdownRef(...values: unknown[]) {
   return values.map(reportPolicyString).find((value) => Boolean(value && /\.m(?:d|arkdown)(?:$|[?#])/i.test(value)));
+}
+
+function reportRefFromTaskFiles(value: unknown): string | undefined {
+  const records = Array.isArray(value) ? value.filter(isReportPolicyRecord) : [];
+  for (const record of records) {
+    const ref = firstMarkdownRef(record.path, record.ref, record.dataRef, record.outputRef, record.name);
+    if (ref) return ref;
+  }
+  return undefined;
+}
+
+function reportRefFromDeepRecord(record: Record<string, unknown>, depth: number): string | undefined {
+  if (depth <= 0) return undefined;
+  for (const value of Object.values(record)) {
+    if (typeof value === 'string') {
+      const ref = reportRefFromText(value);
+      if (ref) return ref;
+    }
+    if (isReportPolicyRecord(value)) {
+      const ref = reportRefFromPayload(value);
+      if (ref) return ref;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (!isReportPolicyRecord(item)) continue;
+        const ref = reportRefFromDeepRecord(item, depth - 1);
+        if (ref) return ref;
+      }
+    }
+  }
+  return undefined;
 }
 
 function parseNestedReport(payload: Record<string, unknown>): Record<string, unknown> | undefined {

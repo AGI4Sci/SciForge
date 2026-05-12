@@ -414,13 +414,13 @@ function RunStatusSummary({ session, activeRun }: { session: SciForgeSession; ac
       />
       {blockers.length ? (
         <div className="run-status-lines">
-          {blockers.map((line) => <span key={line}>{line}</span>)}
+          {blockers.map((line) => <span key={line}>{compactVisibleFailureText(line)}</span>)}
         </div>
       ) : null}
       {failures.map((unit) => (
         <div className="run-failure-card" key={unit.id}>
           <strong>{unit.id}</strong>
-          <p>{unit.failureReason || unit.selfHealReason || unit.nextStep || '执行失败，详情已保留在运行审计中。'}</p>
+          <p>{compactVisibleFailureText(unit.failureReason || unit.selfHealReason || unit.nextStep || '执行失败，详情已保留在运行审计中。')}</p>
           <div className="inspector-ref-list">
             {[unit.codeRef, unit.stdoutRef, unit.stderrRef, unit.outputRef, unit.diffRef].filter(Boolean).map((ref) => <code key={ref}>{ref}</code>)}
           </div>
@@ -524,7 +524,7 @@ function ContractValidationFailureSummary({ failure, compact = false }: { failur
   return (
     <div className="run-failure-card">
       <strong>ContractValidationFailure · {failure.failureKind}</strong>
-      <p>{failure.failureReason}</p>
+      <p>{compact ? compactVisibleFailureText(failure.failureReason) : failure.failureReason}</p>
       <div className="slot-meta">
         <code>contractId={failure.contractId}</code>
         <code>capabilityId={failure.capabilityId}</code>
@@ -553,10 +553,11 @@ function ContractValidationFailureSummary({ failure, compact = false }: { failur
 }
 
 function BackendRepairStateSummary({ state, compact = false }: { state: BackendRepairState; compact?: boolean }) {
+  const statusText = [state.status ? `status=${state.status}` : undefined, state.failureReason].filter(Boolean).join(' · ') || 'repair metadata recorded';
   return (
     <div className="run-failure-card">
       <strong>Backend repair state · {state.label}</strong>
-      <p>{[state.status ? `status=${state.status}` : undefined, state.failureReason].filter(Boolean).join(' · ') || 'repair metadata recorded'}</p>
+      <p>{compact ? compactVisibleFailureText(statusText) : statusText}</p>
       <div className="slot-meta">
         {state.sourceRunId ? <code>sourceRunId={state.sourceRunId}</code> : null}
         {state.repairRunId ? <code>repairRunId={state.repairRunId}</code> : null}
@@ -573,6 +574,20 @@ function BackendRepairStateSummary({ state, compact = false }: { state: BackendR
       ) : null}
     </div>
   );
+}
+
+function compactVisibleFailureText(value: string) {
+  const text = value.replace(/\s+/g, ' ').trim();
+  const reasonMatch = text.match(/reason=([^.;]+(?:[.;]|$))/i);
+  const previousFailureMatch = text.match(/Previous failure:\s*([^.;]+(?:[.;]|$))/i);
+  const contractMatch = text.match(/ContractValidationFailure(?:\s+|\()([a-z-]+)/i);
+  const pieces = [
+    contractMatch ? `ContractValidationFailure ${contractMatch[1]}` : undefined,
+    previousFailureMatch?.[1]?.replace(/[.;]\s*$/, ''),
+    reasonMatch?.[1]?.replace(/[.;]\s*$/, ''),
+  ].filter((piece): piece is string => Boolean(piece));
+  const compact = pieces.length ? Array.from(new Set(pieces)).join(' · ') : text;
+  return compact.length > 260 ? `${compact.slice(0, 257).trim()}...` : compact;
 }
 
 function ViewPlanSummary({ viewPlan, session, activeRun }: { viewPlan: RuntimeResolvedViewPlan; session: SciForgeSession; activeRun?: SciForgeRun }) {

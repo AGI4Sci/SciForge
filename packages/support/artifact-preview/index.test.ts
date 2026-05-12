@@ -209,6 +209,33 @@ test('prefers stable markdown refs over backend process sections', () => {
   assert.doesNotMatch(report.markdown ?? '', /Let me inspect/);
 });
 
+test('prefers markdown taskFiles over AgentServer generation response JSON', () => {
+  const generationResponse = {
+    version: 'sciforge.agentserver-generation-response.v1',
+    taskFiles: [
+      { path: '.sciforge/sessions/run-42/artifacts/research-report.md' },
+      { path: '.sciforge/sessions/run-42/code/analysis.py', content: 'print("debug")' },
+    ],
+    stdout: 'worker logs',
+    message: 'completed',
+  };
+  const report = coerceArtifactReportPayload({
+    markdown: JSON.stringify(generationResponse, null, 2),
+  }, {
+    id: 'research-report',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    data: generationResponse,
+    dataRef: '.sciforge/sessions/run-42/raw-output.json',
+  });
+
+  assert.equal(report.reportRef, '.sciforge/sessions/run-42/artifacts/research-report.md');
+  assert.match(report.markdown ?? '', /Markdown report/);
+  assert.doesNotMatch(report.markdown ?? '', /sciforge\.agentserver-generation-response/);
+  assert.doesNotMatch(report.markdown ?? '', /analysis\.py/);
+});
+
 test('keeps normal inline report sections when text is not backend process output', () => {
   const report = coerceArtifactReportPayload({
     sections: [{ title: 'Findings', content: 'Final evidence-backed summary.' }],

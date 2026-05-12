@@ -35,6 +35,8 @@ export function toolPayloadFromPlainAgentOutput(text: string, request: GatewayRe
   if (structured) return ensureDirectAnswerReportArtifact(structured, request, directAnswerResultPolicyIds.structuredAnswerSource);
   const nested = extractNestedAgentServerPayloadFromText(text);
   if (nested) return ensureDirectAnswerReportArtifact(nested, request, directAnswerResultPolicyIds.structuredAnswerSource);
+  const directTextGuard = classifyPlainAgentText(text);
+  if (directTextGuard.kind !== 'human-answer') return guardedDirectTextDiagnosticPayload(text, request, directTextGuard);
   const expected = expectedArtifactTypesForRequest(request);
   const directAnswerPolicy = directAnswerPlainTextResultPolicy(text, {
     prompt: request.prompt,
@@ -63,6 +65,136 @@ export function toolPayloadFromPlainAgentOutput(text: string, request: GatewayRe
       params: JSON.stringify({ expectedArtifactTypes: expected, prompt: request.prompt.slice(0, 200) }),
     }],
     artifacts: directAnswerPolicy.artifacts,
+  };
+}
+
+export type PlainAgentTextClassificationKind =
+  | 'human-answer'
+  | 'tool-payload-json'
+  | 'task-files-json'
+  | 'code-or-script'
+  | 'runtime-log'
+  | 'trace-or-debug-payload'
+  | 'process-narration';
+
+export interface PlainAgentTextClassification {
+  kind: PlainAgentTextClassificationKind;
+  reason: string;
+}
+
+export function classifyPlainAgentText(text: string): PlainAgentTextClassification {
+  const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
+  if (!trimmed) return { kind: 'runtime-log', reason: 'empty direct text cannot satisfy the user-visible result contract' };
+  if (/"(?:message|claims|uiManifest|executionUnits|artifacts)"\s*:/.test(trimmed) || /\bToolPayload\b/.test(trimmed)) {
+    return { kind: 'tool-payload-json', reason: 'direct text looks like an unparsed ToolPayload or payload fragment' };
+  }
+  if (/"taskFiles"\s*:|taskFiles\s*[:=]|\b(outputRel|stdoutRel|stderrRel|taskRel)\b/.test(trimmed)) {
+    return { kind: 'task-files-json', reason: 'direct text looks like generated taskFiles or workspace task metadata' };
+  }
+  if (/\b(stdout|stderr|stack trace|traceback \(most recent call last\)|error:|exception:)\b/i.test(trimmed)
+    && /(?:\n|at\s+\S+\s+\(|\.ts:\d+|\.py", line \d+)/i.test(trimmed)) {
+    return { kind: 'runtime-log', reason: 'direct text looks like raw logs or a stack trace' };
+  }
+  if (/\b(runtimeEvents|reasoningTrace|workEvidence|executionUnits|validationFailures|contractValidationFailure|schemaVersion)\b/.test(trimmed)
+    && /[{[\]]/.test(trimmed)) {
+    return { kind: 'trace-or-debug-payload', reason: 'direct text looks like runtime trace, schema, or debug payload' };
+  }
+  if (looksMostlyLikeCode(trimmed)) {
+    return { kind: 'code-or-script', reason: 'direct text looks like code or script output that should be materialized as an artifact or execution unit' };
+  }
+  if (/^(?:i(?:'|’)ll|i will|let me|now i(?:'|’)ll|next i(?:'|’)ll|checking|inspecting|running|reading)\b/i.test(trimmed)
+    && !/[.!?]\s*$/.test(trimmed.slice(0, 240))) {
+    return { kind: 'process-narration', reason: 'direct text looks like intermediate process narration rather than a final answer' };
+  }
+  if (lower.includes('raw_tool_payload_should_not_render')) {
+    return { kind: 'trace-or-debug-payload', reason: 'direct text includes raw payload sentinel text' };
+  }
+  return { kind: 'human-answer', reason: 'direct text appears to be a user-facing answer' };
+}
+
+function guardedDirectTextDiagnosticPayload(
+  text: string,
+  request: GatewayRequest,
+  classification: PlainAgentTextClassification,
+): ToolPayload {
+  const id = sha1(`${classification.kind}:${text}`).slice(0, 10);
+  const expected = expectedArtifactTypesForRequest(request);
+  const excerpt = clipForAgentServerJson(text, 2000);
+  return {
+    message: 'AgentServer returned raw generated work instead of a user-facing result. SciForge preserved it as a diagnostic and did not present it as the final answer.',
+    confidence: 0,
+    claimType: 'runtime-diagnostic',
+    evidenceLevel: 'agentserver-direct-text-guard',
+    reasoningTrace: [
+      'Plain AgentServer text was blocked by the direct-text fallback guard.',
+      `classification=${classification.kind}`,
+      `reason=${classification.reason}`,
+    ].join('\n'),
+    claims: [{
+      id: `claim-direct-text-guard-${id}`,
+      text: 'Plain AgentServer output looked like raw generated work, logs, code, or debug payload rather than a final answer.',
+      type: 'runtime-diagnostic',
+      confidence: 0,
+      evidenceLevel: 'agentserver-direct-text-guard',
+      supportingRefs: [`artifact:agentserver-direct-text-diagnostic-${id}`],
+      opposingRefs: [],
+    }],
+    uiManifest: [
+      {
+        componentId: 'report-viewer',
+        artifactRef: `agentserver-direct-text-diagnostic-${id}`,
+        title: 'Direct text diagnostic',
+        priority: 1,
+      },
+      {
+        componentId: 'execution-unit-table',
+        title: 'Recovery unit',
+        priority: 2,
+      },
+    ],
+    executionUnits: [{
+      id: `agentserver-direct-text-guard-${id}`,
+      status: 'needs-human',
+      tool: directAnswerResultPolicyIds.directTextTool,
+      params: JSON.stringify({ classification: classification.kind, expectedArtifactTypes: expected, prompt: request.prompt.slice(0, 200) }),
+      failureReason: classification.reason,
+      recoverActions: [
+        'Ask the backend to return a structured ToolPayload with artifacts, executionUnits, and uiManifest.',
+        'If this is code or logs, materialize it as a file/log artifact and cite the ref instead of presenting it as final prose.',
+      ],
+      nextStep: 'Retry with structured output or inspect the preserved diagnostic artifact.',
+    }],
+    artifacts: [{
+      id: `agentserver-direct-text-diagnostic-${id}`,
+      type: 'runtime-diagnostic',
+      format: 'markdown',
+      title: 'AgentServer direct text guard',
+      content: [
+        '# AgentServer direct text guard',
+        '',
+        `- Classification: ${classification.kind}`,
+        `- Reason: ${classification.reason}`,
+        `- Expected artifacts: ${expected.length ? expected.join(', ') : 'none declared'}`,
+        '',
+        '## Preserved excerpt',
+        '',
+        '```text',
+        excerpt,
+        '```',
+      ].join('\n'),
+      data: {
+        classification: classification.kind,
+        reason: classification.reason,
+        excerpt,
+        expectedArtifactTypes: expected,
+      },
+    }],
+    displayIntent: {
+      status: 'needs-human',
+      reason: 'direct-text-fallback-guard',
+      primaryView: 'diagnostic',
+    },
   };
 }
 
@@ -315,6 +447,20 @@ function normalizeAgentServerExecutionUnits(value: unknown): Array<Record<string
     tool: directAnswerResultPolicyIds.directTextTool,
     params: '{}',
   }];
+}
+
+function looksMostlyLikeCode(text: string) {
+  const fenced = text.match(/```(?!json\b)(?:[a-zA-Z0-9_+-]+)?\s*([\s\S]*?)```/);
+  const sample = fenced?.[1] ?? text;
+  const lines = sample.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 3) return false;
+  const codeLike = lines.filter((line) => {
+    return /^(?:import|export|from|def|class|function|const|let|var|if|for|while|try|catch|type|interface)\b/.test(line)
+      || /^[{}[\]();,]+$/.test(line)
+      || /(?:=>|===|!==|;\s*$|\{\s*$|\}\s*$)/.test(line)
+      || /^#!\/|^python\s|^node\s|^npm\s|^tsx\s/.test(line);
+  }).length;
+  return codeLike / lines.length >= 0.45;
 }
 
 function stripOuterJsonFence(text: string) {

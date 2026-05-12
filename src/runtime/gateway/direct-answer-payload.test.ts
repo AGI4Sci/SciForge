@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { coerceWorkspaceTaskPayload } from './direct-answer-payload';
+import { classifyPlainAgentText, coerceWorkspaceTaskPayload, toolPayloadFromPlainAgentOutput } from './direct-answer-payload';
 import { schemaErrors } from './tool-payload-contract';
 
 test('workspace task payload coercion accepts common generated JSON shape drift', () => {
@@ -67,4 +67,34 @@ test('workspace task payload coercion drops empty uiManifest artifact refs', () 
   assert.ok(payload);
   assert.equal('artifactRef' in (payload.uiManifest[0] ?? {}), false);
   assert.deepEqual(schemaErrors(payload), []);
+});
+
+test('plain AgentServer text guard blocks raw task files and logs from final-answer wrapping', () => {
+  const taskFilesText = '{"taskFiles":[{"path":"task.py","content":"print(1)"}],"stdoutRel":".sciforge/debug/stdout.log"}';
+  const classification = classifyPlainAgentText(taskFilesText);
+  assert.equal(classification.kind, 'task-files-json');
+
+  const payload = toolPayloadFromPlainAgentOutput(taskFilesText, {
+    skillDomain: 'knowledge',
+    prompt: 'Fix the run and show me the result.',
+    artifacts: [],
+  });
+
+  assert.equal(payload.displayIntent?.status, 'needs-human');
+  assert.equal(payload.claimType, 'runtime-diagnostic');
+  assert.equal(payload.executionUnits[0]?.status, 'needs-human');
+  assert.equal(payload.artifacts[0]?.type, 'runtime-diagnostic');
+  assert.match(payload.reasoningTrace, /direct-text fallback guard/i);
+});
+
+test('plain AgentServer text guard still allows human-facing prose answers', () => {
+  const payload = toolPayloadFromPlainAgentOutput('The report is ready. I found two evidence gaps and listed the next steps.', {
+    skillDomain: 'knowledge',
+    prompt: 'Summarize the result.',
+    artifacts: [],
+  });
+
+  assert.notEqual(payload.claimType, 'runtime-diagnostic');
+  assert.equal(payload.executionUnits[0]?.status, 'done');
+  assert.match(payload.reasoningTrace, /plain text/i);
 });

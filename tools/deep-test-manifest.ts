@@ -13,6 +13,28 @@ export const deepRunStatuses = ['passed', 'failed', 'repair-needed', 'not-run'] 
 
 export type DeepCoverageStage = typeof deepCoverageStages[number];
 export type DeepRunStatus = typeof deepRunStatuses[number];
+export type DeepEvidenceRef = string | {
+  id?: string;
+  ref?: string;
+  path?: string;
+  kind?: string;
+  label?: string;
+  summary?: string;
+  status?: string;
+};
+export type DeepVerificationVerdict = 'pass' | 'fail' | 'uncertain' | 'needs-human' | 'unverified';
+
+export interface DeepRunVerificationResult {
+  id?: string;
+  verdict: DeepVerificationVerdict;
+  confidence?: number;
+  reward?: number;
+  critique?: string;
+  evidenceRefs?: DeepEvidenceRef[];
+  repairHints?: string[];
+  diagnostics?: Record<string, unknown>;
+  dataRef?: string;
+}
 
 export interface DeepRunManifest {
   schemaVersion: '1.0';
@@ -48,6 +70,14 @@ export interface DeepRunManifest {
   executionUnits: DeepRunExecutionUnit[];
   failurePoints: DeepRunFailurePoint[];
   screenshots: DeepRunScreenshot[];
+  sessionBundleRef?: string;
+  runtimeEventsRef?: string;
+  taskInputRefs?: DeepEvidenceRef[];
+  taskOutputRefs?: DeepEvidenceRef[];
+  stdoutRefs?: DeepEvidenceRef[];
+  stderrRefs?: DeepEvidenceRef[];
+  verificationResults?: DeepRunVerificationResult[];
+  finalUserVisibleResultRef?: string;
   qualityScores: DeepRunQualityScores;
   notes?: string;
 }
@@ -128,6 +158,27 @@ export interface DeepReportResult {
   markdownPath: string;
   htmlPath: string;
   hasValidationErrors: boolean;
+}
+
+export const deepRunEvidenceFieldKeys = [
+  'sessionBundleRef',
+  'runtimeEventsRef',
+  'taskInputRefs',
+  'taskOutputRefs',
+  'stdoutRefs',
+  'stderrRefs',
+  'verificationResults',
+  'finalUserVisibleResultRef',
+] as const;
+
+export type DeepRunEvidenceFieldKey = typeof deepRunEvidenceFieldKeys[number];
+
+export interface DeepRunEvidenceSummary {
+  present: DeepRunEvidenceFieldKey[];
+  missing: DeepRunEvidenceFieldKey[];
+  counts: Record<DeepRunEvidenceFieldKey, number>;
+  totalRefs: number;
+  verificationVerdicts: DeepVerificationVerdict[];
 }
 
 const scoreKeys: Array<keyof Omit<DeepRunQualityScores, 'overall' | 'rationale'>> = [
@@ -215,6 +266,7 @@ export function validateDeepRunManifest(value: unknown) {
   if (Array.isArray(value.executionUnits)) value.executionUnits.forEach((unit, index) => validateExecutionUnit(unit, index, issues));
   if (Array.isArray(value.failurePoints)) value.failurePoints.forEach((failure, index) => validateFailurePoint(failure, index, issues));
   if (Array.isArray(value.screenshots)) value.screenshots.forEach((screenshot, index) => validateScreenshot(screenshot, index, issues));
+  validateEvidenceFields(value, issues);
 
   if (!isRecord(value.qualityScores)) {
     issues.push('qualityScores must be an object');
@@ -224,6 +276,27 @@ export function validateDeepRunManifest(value: unknown) {
   }
 
   return issues;
+}
+
+export function summarizeDeepRunEvidence(manifest: DeepRunManifest): DeepRunEvidenceSummary {
+  const counts: Record<DeepRunEvidenceFieldKey, number> = {
+    sessionBundleRef: manifest.sessionBundleRef ? 1 : 0,
+    runtimeEventsRef: manifest.runtimeEventsRef ? 1 : 0,
+    taskInputRefs: manifest.taskInputRefs?.length ?? 0,
+    taskOutputRefs: manifest.taskOutputRefs?.length ?? 0,
+    stdoutRefs: manifest.stdoutRefs?.length ?? 0,
+    stderrRefs: manifest.stderrRefs?.length ?? 0,
+    verificationResults: manifest.verificationResults?.length ?? 0,
+    finalUserVisibleResultRef: manifest.finalUserVisibleResultRef ? 1 : 0,
+  };
+  const present = deepRunEvidenceFieldKeys.filter((key) => counts[key] > 0);
+  return {
+    present,
+    missing: deepRunEvidenceFieldKeys.filter((key) => counts[key] === 0),
+    counts,
+    totalRefs: deepRunEvidenceFieldKeys.reduce((sum, key) => sum + counts[key], 0),
+    verificationVerdicts: (manifest.verificationResults ?? []).map((result) => result.verdict),
+  };
 }
 
 export async function generateDeepTestReport(options: { rootDir?: string; scenario?: string; outDir?: string } = {}): Promise<DeepReportResult> {
@@ -298,6 +371,39 @@ function validateScreenshot(value: unknown, index: number, issues: string[]) {
   requireString(value, 'path', issues, `screenshots[${index}].`);
 }
 
+function validateEvidenceFields(value: Record<string, unknown>, issues: string[]) {
+  requireOptionalString(value, 'sessionBundleRef', issues);
+  requireOptionalString(value, 'runtimeEventsRef', issues);
+  requireOptionalString(value, 'finalUserVisibleResultRef', issues);
+  validateOptionalEvidenceRefArray(value, 'taskInputRefs', issues);
+  validateOptionalEvidenceRefArray(value, 'taskOutputRefs', issues);
+  validateOptionalEvidenceRefArray(value, 'stdoutRefs', issues);
+  validateOptionalEvidenceRefArray(value, 'stderrRefs', issues);
+  if ('verificationResults' in value) {
+    if (!Array.isArray(value.verificationResults)) {
+      issues.push('verificationResults must be an array');
+    } else {
+      value.verificationResults.forEach((result, index) => validateVerificationResult(result, index, issues));
+    }
+  }
+}
+
+function validateVerificationResult(value: unknown, index: number, issues: string[]) {
+  if (!isRecord(value)) {
+    issues.push(`verificationResults[${index}] must be an object`);
+    return;
+  }
+  requireEnum(value, 'verdict', ['pass', 'fail', 'uncertain', 'needs-human', 'unverified'], issues, `verificationResults[${index}].`);
+  if ('confidence' in value && typeof value.confidence !== 'number') issues.push(`verificationResults[${index}].confidence must be a number`);
+  if ('reward' in value && typeof value.reward !== 'number') issues.push(`verificationResults[${index}].reward must be a number`);
+  if ('id' in value) requireOptionalString(value, 'id', issues, `verificationResults[${index}].`);
+  if ('critique' in value) requireOptionalString(value, 'critique', issues, `verificationResults[${index}].`);
+  if ('dataRef' in value) requireOptionalString(value, 'dataRef', issues, `verificationResults[${index}].`);
+  validateOptionalEvidenceRefArray(value, 'evidenceRefs', issues, `verificationResults[${index}].`);
+  validateOptionalStringArray(value, 'repairHints', issues, `verificationResults[${index}].`);
+  if ('diagnostics' in value && !isRecord(value.diagnostics)) issues.push(`verificationResults[${index}].diagnostics must be an object`);
+}
+
 async function findScenarioDirectoriesMissingManifest(rootDir: string, manifests: LoadedDeepManifest[], scenario?: string) {
   const manifestDirs = new Set(manifests.map((entry) => entry.directory));
   const entries = await readdir(rootDir, { withFileTypes: true }).catch(() => []);
@@ -323,22 +429,23 @@ function renderMarkdownReport(entries: LoadedDeepManifest[], missingManifestDire
     `- Manifests: ${entries.length}`,
     `- Artifact directories missing manifest: ${missingManifestDirectories.length}`,
     `- Validation errors: ${entries.filter((entry) => entry.issues.length > 0).length}`,
+    `- H022 evidence refs: ${entries.reduce((sum, entry) => sum + summarizeDeepRunEvidence(entry.manifest).totalRefs, 0)}`,
     ...deepCoverageStages.map((stage) => `- ${stage}: ${entries.filter((entry) => entry.manifest.coverageStage === stage).length}`),
     '',
     '## Scenario Matrix',
     '',
-    '| Scenario | Status | Coverage | Overall | Rounds | Artifacts | ExecutionUnits | Failures | Manifest |',
-    '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |',
+    '| Scenario | Status | Coverage | Overall | Rounds | Artifacts | ExecutionUnits | Failures | H022 Evidence | Manifest |',
+    '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |',
   ];
 
   if (entries.length === 0) {
-    lines.push('| _No deep manifests found_ | not-run | - | - | 0 | 0 | 0 | 0 | - |');
+    lines.push('| _No deep manifests found_ | not-run | - | - | 0 | 0 | 0 | 0 | 0 | - |');
   } else {
     for (const entry of entries) {
       const manifest = entry.manifest;
       const overall = getOverallScore(manifest.qualityScores).toFixed(1);
       const manifestRef = relative(rootDir, entry.path).replaceAll('\\', '/');
-      lines.push(`| ${escapeMarkdown(manifest.scenarioId)} | ${manifest.status} | ${manifest.coverageStage} | ${overall} | ${manifest.rounds.length} | ${manifest.artifacts.length} | ${manifest.executionUnits.length} | ${manifest.failurePoints.length} | [manifest](${manifestRef}) |`);
+      lines.push(`| ${escapeMarkdown(manifest.scenarioId)} | ${manifest.status} | ${manifest.coverageStage} | ${overall} | ${manifest.rounds.length} | ${manifest.artifacts.length} | ${manifest.executionUnits.length} | ${manifest.failurePoints.length} | ${summarizeDeepRunEvidence(manifest).totalRefs} | [manifest](${manifestRef}) |`);
     }
   }
 
@@ -377,6 +484,8 @@ function renderHtmlIndex(entries: LoadedDeepManifest[], missingManifestDirectori
     const screenshot = manifest.screenshots[0]?.path;
     const screenshotPath = screenshot ? `${relativeDir}/${screenshot}`.replaceAll('\\', '/') : '';
     const issues = entry.issues.length > 0 ? `<p class="issues">${entry.issues.length} schema issue(s)</p>` : '';
+    const evidence = summarizeDeepRunEvidence(manifest);
+    const evidenceLabel = evidence.present.length ? evidence.present.join(', ') : 'none';
     return `
     <article class="card">
       ${screenshotPath ? `<a href="./${escapeHtml(screenshotPath)}"><img src="./${escapeHtml(screenshotPath)}" alt="${escapeHtml(manifest.scenarioId)} screenshot" loading="lazy" /></a>` : '<div class="empty">No screenshot</div>'}
@@ -384,6 +493,7 @@ function renderHtmlIndex(entries: LoadedDeepManifest[], missingManifestDirectori
         <h2>${escapeHtml(manifest.title)}</h2>
         <p><strong>${escapeHtml(manifest.scenarioId)}</strong> · ${escapeHtml(manifest.status)} · ${escapeHtml(manifest.coverageStage)}</p>
         <p>Overall ${getOverallScore(manifest.qualityScores).toFixed(1)} / 5 · ${manifest.rounds.length} rounds · ${manifest.artifacts.length} artifacts · ${manifest.executionUnits.length} EUs</p>
+        <p>H022 evidence ${evidence.totalRefs} · ${escapeHtml(evidenceLabel)}</p>
         ${issues}
         <a href="./${escapeHtml(relativeDir)}/manifest.json">manifest.json</a>
       </div>
@@ -477,6 +587,48 @@ function requireArray(value: Record<string, unknown>, key: string, issues: strin
 
 function requireString(value: Record<string, unknown>, key: string, issues: string[], prefix = '') {
   if (typeof value[key] !== 'string' || value[key].trim() === '') issues.push(`${prefix}${key} must be a non-empty string`);
+}
+
+function requireOptionalString(value: Record<string, unknown>, key: string, issues: string[], prefix = '') {
+  if (value[key] !== undefined && (typeof value[key] !== 'string' || value[key].trim() === '')) {
+    issues.push(`${prefix}${key} must be a non-empty string`);
+  }
+}
+
+function validateOptionalStringArray(value: Record<string, unknown>, key: string, issues: string[], prefix = '') {
+  if (!(key in value)) return;
+  if (!Array.isArray(value[key])) {
+    issues.push(`${prefix}${key} must be an array`);
+    return;
+  }
+  value[key].forEach((item, index) => {
+    if (typeof item !== 'string' || item.trim() === '') issues.push(`${prefix}${key}[${index}] must be a non-empty string`);
+  });
+}
+
+function validateOptionalEvidenceRefArray(value: Record<string, unknown>, key: string, issues: string[], prefix = '') {
+  if (!(key in value)) return;
+  if (!Array.isArray(value[key])) {
+    issues.push(`${prefix}${key} must be an array`);
+    return;
+  }
+  value[key].forEach((item, index) => validateEvidenceRef(item, `${prefix}${key}[${index}]`, issues));
+}
+
+function validateEvidenceRef(value: unknown, path: string, issues: string[]) {
+  if (typeof value === 'string') {
+    if (value.trim() === '') issues.push(`${path} must be a non-empty string or ref object`);
+    return;
+  }
+  if (!isRecord(value)) {
+    issues.push(`${path} must be a non-empty string or ref object`);
+    return;
+  }
+  const hasRefIdentity = ['id', 'ref', 'path'].some((key) => typeof value[key] === 'string' && value[key].trim() !== '');
+  if (!hasRefIdentity) issues.push(`${path} must include id, ref, or path`);
+  for (const key of ['id', 'ref', 'path', 'kind', 'label', 'summary', 'status']) {
+    if (key in value) requireOptionalString(value, key, issues, `${path}.`);
+  }
 }
 
 function requireEnum<T extends string>(value: Record<string, unknown>, key: string, options: readonly T[], issues: string[], prefix = '') {

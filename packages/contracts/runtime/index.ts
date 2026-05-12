@@ -433,6 +433,15 @@ export {
   resultPresentationTextLooksLikeRawJson,
   validateResultPresentationContract,
 } from './result-presentation';
+export {
+  FAILURE_SIGNATURE_SCHEMA_VERSION,
+  NO_HARDCODE_REVIEW_SCHEMA_VERSION,
+  TASK_RUN_CARD_SCHEMA_VERSION,
+  createFailureSignature,
+  createTaskRunCard,
+  taskRunCardStatus,
+  validateTaskRunCard,
+} from './task-run-card';
 export type {
   ResultPresentationAnswerBlock,
   ResultPresentationArtifactAction,
@@ -460,6 +469,22 @@ export type {
   ResultPresentationValidationSeverity,
   ResultPresentationVisibilityProjection,
 } from './result-presentation';
+export type {
+  FailureSignature,
+  FailureSignatureInput,
+  FailureSignatureKind,
+  NoHardcodeReview,
+  TaskAttributionLayer,
+  TaskOutcomeStatus,
+  TaskProtocolStatus,
+  TaskRoundStatus,
+  TaskRunCard,
+  TaskRunCardInput,
+  TaskRunCardRef,
+  TaskRunCardRefKind,
+  TaskRunCardRound,
+  TaskRunCardStatus,
+} from './task-run-card';
 export type {
   CapabilityManifest,
   CapabilityManifestBrief,

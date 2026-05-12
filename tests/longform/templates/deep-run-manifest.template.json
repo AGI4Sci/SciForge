@@ -42,6 +42,31 @@
   "executionUnits": [],
   "failurePoints": [],
   "screenshots": [],
+  "sessionBundleRef": ".sciforge/sessions/<date>_<scenario>_<run-id>",
+  "runtimeEventsRef": ".sciforge/sessions/<date>_<scenario>_<run-id>/records/runtime-events.ndjson",
+  "taskInputRefs": [
+    ".sciforge/sessions/<date>_<scenario>_<run-id>/tasks/task-input.json"
+  ],
+  "taskOutputRefs": [
+    ".sciforge/sessions/<date>_<scenario>_<run-id>/task-results/result.json"
+  ],
+  "stdoutRefs": [
+    ".sciforge/sessions/<date>_<scenario>_<run-id>/logs/stdout.log"
+  ],
+  "stderrRefs": [
+    ".sciforge/sessions/<date>_<scenario>_<run-id>/logs/stderr.log"
+  ],
+  "verificationResults": [
+    {
+      "id": "<verification-id>",
+      "verdict": "unverified",
+      "confidence": 0,
+      "critique": "<what was checked or why verification is incomplete>",
+      "evidenceRefs": [],
+      "repairHints": []
+    }
+  ],
+  "finalUserVisibleResultRef": ".sciforge/sessions/<date>_<scenario>_<run-id>/task-results/final.md",
   "qualityScores": {
     "taskCompletion": 1,
     "reproducibility": 1,
