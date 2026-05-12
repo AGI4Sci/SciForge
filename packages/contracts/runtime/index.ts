@@ -41,6 +41,31 @@ export type {
   RuntimeLlmEndpointConfig,
 } from './agent-backend-policy';
 export {
+  DIRTY_WORKTREE_CHANGE_STATUSES,
+  DIRTY_WORKTREE_COLLABORATION_CONTRACT_ID,
+  DIRTY_WORKTREE_COLLABORATION_SCHEMA_VERSION,
+  DIRTY_WORKTREE_PLAN_STATUSES,
+  buildDirtyWorktreeCollaborationPlan,
+  dirtyWorktreePlanAllowsWrite,
+  parseGitPorcelainStatus,
+  validateDirtyWorktreeCollaborationPlan,
+} from './dirty-worktree-collaboration';
+export type {
+  DirtyWorktreeActionKind,
+  DirtyWorktreeChangeOwner,
+  DirtyWorktreeChangeStatus,
+  DirtyWorktreeCollaborationInput,
+  DirtyWorktreeCollaborationPlan,
+  DirtyWorktreeCommandDecision,
+  DirtyWorktreeCommandInput,
+  DirtyWorktreeFileChange,
+  DirtyWorktreeFileChangeInput,
+  DirtyWorktreePathConflict,
+  DirtyWorktreePlanStatus,
+  DirtyWorktreePlannedChange,
+  DirtyWorktreePlannedChangeInput,
+} from './dirty-worktree-collaboration';
+export {
   USER_FEEDBACK_CONVERGENCE_CONTRACT_ID,
   USER_FEEDBACK_CONVERGENCE_SCHEMA_VERSION,
   createUserFeedbackConvergence,

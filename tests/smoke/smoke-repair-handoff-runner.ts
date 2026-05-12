@@ -24,10 +24,23 @@ const agentServer = createServer(async (req, res) => {
   }
   const body = await readJson(req);
   const agent = isRecord(body.agent) ? body.agent : {};
+  const agentMetadata = isRecord(agent.metadata) ? agent.metadata : {};
+  const input = isRecord(body.input) ? body.input : {};
+  const inputMetadata = isRecord(input.metadata) ? input.metadata : {};
+  const metadataContract = isRecord(inputMetadata.contract) ? inputMetadata.contract : {};
   const cwd = typeof agent.workingDirectory === 'string' ? agent.workingDirectory : '';
   assert.ok(cwd.includes(join('SciForge-B', '.sciforge', 'repair-worktrees')));
-  await mkdir(join(cwd, 'src'), { recursive: true });
-  await writeFile(join(cwd, 'src', 'fixed.txt'), 'repaired\n', 'utf8');
+  assert.equal(agentMetadata.targetWorkspacePath, undefined);
+  assert.equal(agentMetadata.targetWorkspaceWriterUrl, undefined);
+  assert.equal(metadataContract.targetBoundary, 'isolated-worktree-only');
+  assert.equal(metadataContract.targetWorkspacePath, undefined);
+  if (agentMetadata.repairRunId === 'runner-dirty-overlap') {
+    await mkdir(join(cwd, 'docs'), { recursive: true });
+    await writeFile(join(cwd, 'docs', 'user-notes.md'), 'agent attempted to overwrite protected user notes\n', 'utf8');
+  } else {
+    await mkdir(join(cwd, 'src'), { recursive: true });
+    await writeFile(join(cwd, 'src', 'fixed.txt'), 'repaired\n', 'utf8');
+  }
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({
     ok: true,
@@ -69,6 +82,13 @@ const targetWriter = createServer(async (req, res) => {
 try {
   await initRepo(executorRepo);
   await initRepo(targetRepo);
+  await mkdir(join(targetRepo, 'docs'), { recursive: true });
+  await writeFile(join(targetRepo, 'docs', 'user-notes.md'), 'committed target notes\n', 'utf8');
+  await git(targetRepo, ['add', 'docs/user-notes.md']);
+  await git(targetRepo, ['commit', '-q', '-m', 'target notes']);
+  await writeFile(join(targetRepo, 'docs', 'user-notes.md'), 'committed target notes\n\nuser draft must survive\n', 'utf8');
+  await mkdir(join(targetRepo, 'scratch'), { recursive: true });
+  await writeFile(join(targetRepo, 'scratch', 'local.csv'), 'sample,value\nA,1\n', 'utf8');
   await mkdir(executorStateDir, { recursive: true });
   await mkdir(executorLogDir, { recursive: true });
   await writeFile(executorConfigLocalPath, '{}\n', 'utf8');
@@ -120,11 +140,60 @@ try {
   assert.equal(await fileText(join(result.refs.worktreePath ?? '', 'src', 'fixed.txt')), 'repaired\n');
   await assertMissing(join(executorRepo, 'src', 'fixed.txt'));
   await assertMissing(join(targetRepo, 'src', 'fixed.txt'));
+  assert.match(await fileText(join(targetRepo, 'docs', 'user-notes.md')), /user draft must survive/);
+  assert.match(await fileText(join(targetRepo, 'scratch', 'local.csv')), /sample,value/);
   assert.equal(await exists(result.diffRef ?? ''), true);
   assert.match(await fileText(result.diffRef ?? ''), /src\/fixed\.txt/);
+  const dirtyMetadata = result.metadata.dirtyWorktreeCollaboration as Record<string, unknown>;
+  assert.equal(dirtyMetadata.status, 'passed');
+  assert.equal(typeof dirtyMetadata.auditRef, 'string');
+  const dirtyPlan = dirtyMetadata.plan as Record<string, unknown>;
+  assert.equal(dirtyPlan.status, 'safe');
+  const protectedPaths = dirtyPlan.protectedPaths as string[];
+  assert.ok(protectedPaths.includes('docs/user-notes.md'), `protected paths: ${JSON.stringify(protectedPaths)}`);
   assert.equal(targetRuns.length, 1);
   assert.equal(targetResults.length, 1);
   assert.equal((targetResults[0].result as Record<string, unknown>).diffRef, result.diffRef);
+
+  const blocked = await runRepairHandoff({
+    executorInstance: {
+      id: 'A',
+      name: 'Stable A',
+      workspacePath: executorRepo,
+      workspaceWriterUrl: 'http://127.0.0.1:1',
+    },
+    targetInstance: {
+      id: 'B',
+      name: 'Target B',
+      workspacePath: targetRepo,
+      workspaceWriterUrl: `http://127.0.0.1:${targetAddress.port}`,
+    },
+    targetWorkspacePath: targetRepo,
+    targetWorkspaceWriterUrl: `http://127.0.0.1:${targetAddress.port}`,
+    issueBundle: {
+      id: 'feedback-2',
+      title: 'Unsafe overlap',
+      comment: { id: 'feedback-2', comment: 'This patch tries to edit a user-owned dirty file.' },
+    },
+    expectedTests: ['test -f docs/user-notes.md'],
+    githubSyncRequired: false,
+    agentServerBaseUrl: `http://127.0.0.1:${agentAddress.port}`,
+    repairRunId: 'runner-dirty-overlap',
+  }, {
+    executorRepoPath: executorRepo,
+    executorStateDir,
+    executorLogDir,
+    executorConfigLocalPath,
+  });
+
+  assert.equal(blocked.verdict, 'needs-follow-up');
+  assert.match(blocked.summary, /Dirty worktree protection blocked/);
+  assert.deepEqual(blocked.changedFiles, ['docs/user-notes.md']);
+  const blockedDirtyMetadata = blocked.metadata.dirtyWorktreeCollaboration as Record<string, unknown>;
+  assert.equal(blockedDirtyMetadata.status, 'blocked');
+  const blockedDirtyPlan = blockedDirtyMetadata.plan as Record<string, unknown>;
+  assert.equal(blockedDirtyPlan.status, 'blocked');
+  assert.match(await fileText(join(targetRepo, 'docs', 'user-notes.md')), /user draft must survive/);
 
   await assert.rejects(
     () => runRepairHandoff({
@@ -145,7 +214,7 @@ try {
     /targetWorkspacePath cannot equal the executor repo\/worktree/i,
   );
 
-  console.log('[ok] repair handoff runner executes in target isolated worktree and fails closed for executor paths');
+  console.log('[ok] repair handoff runner executes in target isolated worktree, protects dirty user paths, and fails closed for executor paths');
 } finally {
   await new Promise<void>((resolve) => agentServer.close(() => resolve()));
   await new Promise<void>((resolve) => targetWriter.close(() => resolve()));

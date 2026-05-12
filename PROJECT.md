@@ -521,6 +521,7 @@ Failure/Improvement Notes：
 - [x] `npm run typecheck`
 - [x] `npm run smoke:runtime-contracts`
 - [x] `npm run smoke:no-src-capability-semantics`
+- [x] `npm run verify:full`（754 tests pass；repair handoff runner、browser smoke、production build 与 artifacts index 通过）
 - [x] `npm run verify:full`（750 tests pass；browser smoke、production build 与 artifacts index 通过）
 - [x] `npm run smoke:no-legacy-paths`
 - [x] `npm run smoke:runtime-gateway-modules`
@@ -576,6 +577,33 @@ Failure/Improvement Notes：
 - [x] `npm run smoke:no-src-capability-semantics`
 
 
+### 2026-05-13 Milestone：Dirty Worktree 协作保护
+
+本轮完成 R-CODE-06：把“用户已有未提交改动时，agent 只修另一区域且不能 reset/revert 用户改动”做成可复用 runtime contract，而不是只依赖操作者记得谨慎：
+
+- [x] 新增 `sciforge.dirty-worktree-collaboration.v1` contract，可解析 `git status --porcelain`，把 dirty paths 归为 user-owned protected paths，并对 agent planned changes 做路径重叠检查。
+- [x] contract 输出 `writeAllowed`、`protectedPaths`、`allowedChanges`、`blockedChanges`、`pathConflicts`、`commandDecisions`、`prohibitedCommands` 和 `NoHardcodeReview`，用于提交前只 stage 目标文件。
+- [x] 阻断 `git reset --hard`、`git checkout -- path`、`git restore`、`git clean -f`、`git stash` 等会丢失或挪走用户 dirty state 的命令；即使计划路径不重叠也 fail closed。
+- [x] Repair handoff runner 接入 dirty preflight：AgentServer 只收到 isolated worktree contract，不再收到原 target workspace 路径；runner 对 user-owned dirty paths 做 before/after 快照，patch overlap 或原路径被改动时返回 `needs-follow-up`。
+- [x] 新增 `smoke:dirty-worktree-collaboration` 与增强 `smoke:repair-handoff-runner`，在临时 git repo 中模拟用户改 tracked 文件和 untracked 目录，验证 agent 只能写 disjoint path，不能覆盖用户文件或执行 destructive git 命令。
+
+Failure/Improvement Notes：
+
+- Untracked 目录在 porcelain status 中可能只显示为目录级 `scratch/`，保护逻辑必须支持目录与子路径 overlap，不能只按单文件精确匹配。
+- dirty worktree 协作不是 release gate，也不是 repair runner；它应作为 workspace preflight contract 独立存在，供修复、提交和 handoff 前复用。
+- `git status --porcelain` 不能用通用 trim 读取；第一行可能以空格开头，trim 会吞掉 tracked modified path 的首字母。
+- `allowUserOwnedPaths` 保留为显式人工授权逃生口；默认所有 user/unknown dirty paths 都应受保护。
+
+本轮验证：
+
+- [x] `node --import tsx --test packages/contracts/runtime/dirty-worktree-collaboration.test.ts`
+- [x] `npm run smoke:dirty-worktree-collaboration`
+- [x] `npm run smoke:repair-handoff-runner`
+- [x] `npm run typecheck`
+- [x] `npm run smoke:runtime-contracts`
+- [x] `npm run smoke:no-src-capability-semantics`
+
+
 
 ### H022 Real-world Complex Task Backlog for SciForge Hardening
 
@@ -610,7 +638,7 @@ Failure/Improvement Notes：
 - [x] R-CODE-03 长任务 stream 稳定性：运行超过前端 timeout 的任务，刷新浏览器、关闭标签、恢复历史，验证后端不被 passive disconnect 杀掉。
 - [ ] R-CODE-04 多模块改造：让 agent 同时改 gateway、UI presentation、runtime contract、tests；用户中途要求缩小范围，只保留 runtime 修复。
 - [ ] R-CODE-05 测试失败恢复：第一次 patch 后 typecheck/test 失败，用户要求解释失败并做最小通用修复，不能回滚无关改动。
-- [ ] R-CODE-06 Dirty worktree 协作：预先放入用户未提交改动，再让 agent 修复另一区域，验证不会 reset/revert 用户改动。
+- [x] R-CODE-06 Dirty worktree 协作：预先放入用户未提交改动，再让 agent 修复另一区域，验证不会 reset/revert 用户改动。已完成 `sciforge.dirty-worktree-collaboration.v1`、porcelain status parser、user-owned protected paths、destructive git command blocker、repair handoff runner enforcement、disjoint/overlap path smoke 覆盖。
 - [x] R-CODE-07 Release verify 请求：用户要求“等完整验证再推 GitHub”，系统必须阻塞到指定测试完成，失败时不推送。已新增 `sciforge.release-gate.v1`，把 release/push intent 映射到 `npm run verify:full`，并在缺少 full verify、服务重启、变更摘要、git target 或 audit refs 时保持 pending/needs-human，不允许把 GitHub push 视作完成。
 - [x] R-CODE-08 Backend handoff 漂移：AgentServer 返回 taskFiles、direct ToolPayload、plain text、malformed generation response 四类输出，要求统一分类和可恢复。已新增 `sciforge.backend-handoff-drift.v1` 分类 contract 与 `agentserver-handoff-drift` runtime event，覆盖 taskFiles 执行、direct ToolPayload materialize、plain text bridge、guarded raw text diagnostic、malformed generation-looking text strict retry，以及 handoffSummary 不再触发旧任务重跑。
 - [ ] R-CODE-09 多 backend 对比修复：同一任务用 Codex/OpenTeam 两个 backend 跑，比较失败模式，提炼 backend-neutral 修复。
