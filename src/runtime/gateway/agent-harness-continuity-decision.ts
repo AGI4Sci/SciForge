@@ -13,17 +13,20 @@ export function agentHarnessContinuityDecision(request: GatewayRequest) {
   const policyMode = typeof policy?.mode === 'string' ? policy.mode : '';
   const historyReuse = isRecord(policy?.historyReuse) ? policy.historyReuse : {};
   const policyAllowsReuse = historyReuse.allowed === true || policyMode === 'continue' || policyMode === 'repair';
+  const currentReferenceCount = toRecordList(uiState.currentReferences).length;
   const recentRefCount = toRecordList(uiState.recentExecutionRefs).length;
   const artifactCount = Array.isArray(request.artifacts) ? request.artifacts.length : 0;
-  const useContinuity = policyAllowsReuse || recentRefCount > 0 || artifactCount > 0;
   const agentHarness = isRecord(uiState.agentHarness) ? uiState.agentHarness : {};
   const contract = isRecord(agentHarness.contract) ? agentHarness.contract : undefined;
   const summary = isRecord(agentHarness.summary) ? agentHarness.summary : undefined;
   const trace = isRecord(agentHarness.trace) ? agentHarness.trace : undefined;
   const intentMode = stringField(contract?.intentMode) ?? stringField(summary?.intentMode);
   const intentUseContinuity = intentMode === 'continuation' || intentMode === 'repair' || intentMode === 'audit';
+  const useContinuity = intentUseContinuity || currentReferenceCount > 0 || recentRefCount > 0 || artifactCount > 0;
   const reasons = [
-    policyAllowsReuse ? 'reuse-policy' : undefined,
+    policyAllowsReuse ? 'reuse-policy-advisory' : undefined,
+    intentUseContinuity ? 'intent-continuity' : undefined,
+    currentReferenceCount > 0 ? 'current-reference' : undefined,
     recentRefCount > 0 ? 'recent-execution-ref' : undefined,
     artifactCount > 0 ? 'artifact-input' : undefined,
   ].filter((reason): reason is string => Boolean(reason));
@@ -37,6 +40,8 @@ export function agentHarnessContinuityDecision(request: GatewayRequest) {
     runtimeSignals: {
       policyMode: policyMode || undefined,
       policyAllowsReuse,
+      policyReuseIsAdvisory: policyAllowsReuse ? true : undefined,
+      currentReferenceCount,
       recentExecutionRefCount: recentRefCount,
       artifactCount,
     },

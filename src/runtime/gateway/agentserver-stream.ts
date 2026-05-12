@@ -72,7 +72,7 @@ export async function readAgentServerRunStream(
       onEvent(event);
       const totalUsage = agentServerEventTotalUsage(event);
       if (options.maxTotalUsage && totalUsage && totalUsage > options.maxTotalUsage) {
-        const message = `AgentServer generation stopped by convergence guard after ${totalUsage} total tokens; bounded current-reference digests should be used instead of repeated full-file reads.`;
+        const message = `AgentServer generation stopped by convergence guard after ${totalUsage} total tokens (limit ${options.maxTotalUsage}); use bounded session refs, current-reference digests, or a smaller task plan instead of an unbounded generation loop.`;
         options.onGuardTrip?.(message);
         throw new Error(message);
       }
@@ -248,6 +248,15 @@ export function currentReferenceDigestGuardLimit(request: GatewayRequest) {
     ? request.maxContextWindowTokens
     : 200_000;
   return Math.max(40_000, Math.min(80_000, Math.floor(configured * 0.4)));
+}
+
+export function agentServerGenerationTokenGuardLimit(request: GatewayRequest) {
+  const configured = typeof request.maxContextWindowTokens === 'number' && Number.isFinite(request.maxContextWindowTokens)
+    ? request.maxContextWindowTokens
+    : 200_000;
+  const generalLimit = Math.max(120_000, Math.floor(configured * 1.5));
+  const digestLimit = currentReferenceDigestGuardLimit(request);
+  return digestLimit ? Math.min(generalLimit, digestLimit) : generalLimit;
 }
 
 export function currentReferenceDigestSilentGuardMs(request: GatewayRequest) {

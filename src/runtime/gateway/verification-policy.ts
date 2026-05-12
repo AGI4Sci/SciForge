@@ -12,6 +12,7 @@ import {
 } from '@sciforge-ui/runtime-contract/capability-budget';
 import type { GatewayRequest, ToolPayload, VerificationPolicy, VerificationResult, VerificationVerdict } from '../runtime-types.js';
 import { isRecord, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
+import { ensureSessionBundle, sessionBundleRelForRequest, sessionBundleResourceRel } from '../session-bundle.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { resolveWorkspaceFileRefPath } from '../workspace-paths.js';
 import {
@@ -50,7 +51,14 @@ export async function applyRuntimeVerificationPolicy(
   const workspace = resolve(request.workspacePath || process.cwd());
   const resultId = result.id ?? `verification-${sha1(`${request.prompt}:${Date.now()}:${result.verdict}`).slice(0, 12)}`;
   const resultWithId = { ...result, id: resultId };
-  const verificationRel = `.sciforge/verifications/${resultId}.json`;
+  const sessionBundleRel = sessionBundleRelForRequest(request);
+  await ensureSessionBundle(workspace, sessionBundleRel, {
+    sessionId: typeof request.uiState?.sessionId === 'string' ? request.uiState.sessionId : 'sessionless',
+    scenarioId: typeof request.scenarioPackageRef?.id === 'string' ? request.scenarioPackageRef.id : request.skillDomain,
+    createdAt: typeof request.uiState?.sessionCreatedAt === 'string' ? request.uiState.sessionCreatedAt : undefined,
+    updatedAt: typeof request.uiState?.sessionUpdatedAt === 'string' ? request.uiState.sessionUpdatedAt : undefined,
+  });
+  const verificationRel = sessionBundleResourceRel(sessionBundleRel, 'verifications', `${resultId}.json`);
   const artifact = createRuntimeVerificationArtifact(resultWithId, policy, verificationRel, nonBlocking);
   await mkdir(dirname(join(workspace, verificationRel)), { recursive: true });
   await writeFile(join(workspace, verificationRel), JSON.stringify({
@@ -463,7 +471,7 @@ async function persistVerificationGatedPayloadIfPossible(workspace: string, payl
 }
 
 function shouldPreserveArtifactOutputRef(payload: ToolPayload, outputRef: string) {
-  if (outputRef.includes('.sciforge/task-results/')) return false;
+  if (outputRef.includes('.sciforge/task-results/') || /\.sciforge\/sessions\/[^/]+\/task-results\//.test(outputRef)) return false;
   return payload.artifacts
     .filter(isRecord)
     .flatMap((artifact) => artifactRefsFromRecord(artifact))

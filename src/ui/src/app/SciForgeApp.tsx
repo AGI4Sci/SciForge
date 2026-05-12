@@ -36,7 +36,7 @@ import {
   type ScenarioRuntimeOverride,
   type TimelineEventRecord,
 } from '../domain';
-import { compactWorkspaceStateForStorage, createSession, loadWorkspaceState, saveWorkspaceState, shouldUsePersistedWorkspaceState } from '../sessionStore';
+import { compactWorkspaceStateForStorage, createInitialWorkspaceState, createSession, loadWorkspaceState, saveWorkspaceState, shouldUsePersistedWorkspaceState } from '../sessionStore';
 import {
   activeSessionFor as workspaceActiveSessionFor,
   clearArchivedSessions as clearScenarioArchivedSessions,
@@ -170,6 +170,9 @@ export function SciForgeApp() {
         }
         setWorkspaceStatus(`已从 ${restoredPath || '最近工作区'}/.sciforge 恢复工作区`);
       } else {
+        if (requestedPath) {
+          setWorkspaceState({ ...createInitialWorkspaceState(), workspacePath: requestedPath });
+        }
         setWorkspaceStatus(requestedPath ? `未找到 ${requestedPath}/.sciforge/workspace-state.json` : '未找到最近工作区快照');
       }
     } catch (err) {
@@ -202,6 +205,9 @@ export function SciForgeApp() {
           });
           setWorkspaceStatus(`已从 ${restoredPath}/.sciforge 恢复工作区`);
         } else {
+          if (workspacePath) {
+            setWorkspaceState({ ...createInitialWorkspaceState(), workspacePath });
+          }
           setWorkspaceStatus(workspacePath ? `未找到 ${workspacePath}/.sciforge/workspace-state.json` : '未找到最近工作区快照');
         }
       })

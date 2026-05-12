@@ -17,10 +17,13 @@ export function startNewChat(
   newSessionTitle: string,
   archiveLimit = DEFAULT_ARCHIVE_LIMIT,
 ): SciForgeWorkspaceState {
-  const currentSession = versionSession(activeSessionFor(state, scenarioId, newSessionTitle), 'new chat archived previous session');
+  const currentSession = activeSessionFor(state, scenarioId, newSessionTitle);
+  const archivedSessions = sessionActivityScore(currentSession) > 0
+    ? [versionSession(currentSession, 'new chat archived previous session'), ...state.archivedSessions]
+    : state.archivedSessions;
   return {
     ...state,
-    archivedSessions: [currentSession, ...state.archivedSessions].slice(0, archiveLimit),
+    archivedSessions: archivedSessions.slice(0, archiveLimit),
     sessionsByScenario: {
       ...state.sessionsByScenario,
       [scenarioId]: createSession(scenarioId, newSessionTitle),

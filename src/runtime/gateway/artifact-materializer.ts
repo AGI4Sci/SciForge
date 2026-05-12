@@ -92,7 +92,6 @@ export async function persistArtifactRefsForPayload(
     const type = safeArtifactId(String(artifact.type || artifact.id || 'artifact'));
     const artifactHash = sha1(JSON.stringify(clipForAgentServerJson(artifact, 4))).slice(0, 12);
     const rel = sessionBundleResourceRel(sessionBundleRel, 'artifacts', `${type}-${id}-${artifactHash}.json`);
-    const legacyRel = `.sciforge/artifacts/${safeArtifactId(sessionId)}-${type}-${id}-${artifactHash}.json`;
     const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
     const record = {
       ...artifact,
@@ -102,7 +101,6 @@ export async function persistArtifactRefsForPayload(
       metadata: {
         ...metadata,
         artifactRef: rel,
-        legacyArtifactRef: legacyRel,
         outputRef: metadata.outputRef ?? refs.outputRel,
         taskCodeRef: metadata.taskCodeRef ?? refs.taskRel,
         stdoutRef: metadata.stdoutRef ?? refs.stdoutRel,
@@ -113,8 +111,6 @@ export async function persistArtifactRefsForPayload(
     try {
       await mkdir(dirname(join(workspace, rel)), { recursive: true });
       await writeFile(join(workspace, rel), JSON.stringify(record, null, 2));
-      await mkdir(dirname(join(workspace, legacyRel)), { recursive: true });
-      await writeFile(join(workspace, legacyRel), JSON.stringify(record, null, 2));
     } catch {
       // Artifact refs improve multi-turn recovery, but a write failure should not hide the task result.
     }
@@ -129,7 +125,10 @@ export function safeArtifactId(value: string) {
 
 function stableTaskResultRef(value: string) {
   const ref = stableWorkspaceRef(value);
-  return ref && /^\.sciforge\/task-results\/[^/].+/.test(ref) ? ref : undefined;
+  return ref && (
+    /^\.sciforge\/task-results\/[^/].+/.test(ref)
+    || /^\.sciforge\/sessions\/[^/]+\/task-results\/[^/].+/.test(ref)
+  ) ? ref : undefined;
 }
 
 function stableWorkspaceRef(value: string | undefined) {
@@ -142,7 +141,7 @@ function markdownTaskResultRel(outputRel: string, artifact: Record<string, unkno
   const outputName = outputRel.split('/').pop() ?? 'result.json';
   const outputStem = outputName.replace(/\.[^.]+$/, '') || 'result';
   const id = safeArtifactId(String(artifact.id || artifact.type || 'artifact'));
-  return `.sciforge/task-results/${safeArtifactId(outputStem)}-${id}.md`;
+  return `${dirname(outputRel)}/${safeArtifactId(outputStem)}-${id}.md`;
 }
 
 function backendOutputObjectReferences(

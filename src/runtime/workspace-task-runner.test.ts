@@ -58,7 +58,7 @@ test('workspace task runner can persist task input inside a session bundle', asy
     'with open(input_path, "r", encoding="utf-8") as f:',
     '    data = json.load(f)',
     'with open(output_path, "w", encoding="utf-8") as f:',
-    '    json.dump({"inputRef": data["inputRef"]}, f)',
+    '    json.dump({"inputRef": data["inputRef"], "sessionRootEnv": __import__("os").environ.get("SCIFORGE_SESSION_RESOURCE_ROOT")}, f)',
   ].join('\n'), 'utf8');
 
   const run = await runWorkspaceTask(workspace, {
@@ -76,5 +76,41 @@ test('workspace task runner can persist task input inside a session bundle', asy
   assert.equal(run.exitCode, 0);
   assert.deepEqual(JSON.parse(await readFile(join(workspace, run.outputRef), 'utf8')), {
     inputRef: '.sciforge/sessions/2026-05-11_demo_session-1/task-inputs/session-task-input.json',
+    sessionRootEnv: join(workspace, '.sciforge/sessions/2026-05-11_demo_session-1'),
+  });
+  const taskInput = JSON.parse(await readFile(join(workspace, '.sciforge/sessions/2026-05-11_demo_session-1/task-inputs/session-task-input.json'), 'utf8'));
+  assert.equal(taskInput.sessionBundleRef, '.sciforge/sessions/2026-05-11_demo_session-1');
+  assert.equal(taskInput.workspaceRootPath, workspace);
+  assert.equal(taskInput.sessionResourceRootPath, join(workspace, '.sciforge/sessions/2026-05-11_demo_session-1'));
+});
+
+test('workspace task runner resolves bare entrypoint path placeholders from generated task responses', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-bare-entrypoint-placeholders-'));
+  const taskRel = '.sciforge/sessions/2026-05-11_demo_session-2/tasks/run.py';
+  await mkdir(dirname(join(workspace, taskRel)), { recursive: true });
+  await writeFile(join(workspace, taskRel), [
+    'import json, sys',
+    'input_path, output_path = sys.argv[1], sys.argv[2]',
+    'with open(output_path, "w", encoding="utf-8") as f:',
+    '    json.dump({"inputArg": input_path.endswith("task-input.json"), "outputArg": output_path.endswith("task-output.json")}, f)',
+  ].join('\n'), 'utf8');
+
+  const run = await runWorkspaceTask(workspace, {
+    id: 'bare-entrypoint-placeholders',
+    language: 'python',
+    entrypoint: 'main',
+    entrypointArgs: ['inputPath', 'outputPath'],
+    taskRel,
+    inputRel: '.sciforge/sessions/2026-05-11_demo_session-2/task-inputs/task-input.json',
+    input: {},
+    outputRel: '.sciforge/sessions/2026-05-11_demo_session-2/task-results/task-output.json',
+    stdoutRel: '.sciforge/sessions/2026-05-11_demo_session-2/logs/task.stdout.log',
+    stderrRel: '.sciforge/sessions/2026-05-11_demo_session-2/logs/task.stderr.log',
+  });
+
+  assert.equal(run.exitCode, 0);
+  assert.deepEqual(JSON.parse(await readFile(join(workspace, run.outputRef), 'utf8')), {
+    inputArg: true,
+    outputArg: true,
   });
 });

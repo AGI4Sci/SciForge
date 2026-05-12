@@ -59,6 +59,18 @@ export type {
   BackendInputTextAnchorOptions,
   HandoffArtifactDataSummaryReason,
 } from './handoff-input-policy';
+export {
+  INTENT_FIRST_VERIFICATION_POLICY_CONTRACT_ID,
+  actionSideEffectsHaveHighRiskSignal,
+  explicitIntentConstraintsForText,
+  intentTextHasHighRiskSignal,
+  requestedActionTypeForIntentText,
+  verifyRouteModeForIntentText,
+} from './intent-first-verification-policy';
+export type {
+  IntentRequestedActionType,
+  VerifyRouteMode,
+} from './intent-first-verification-policy';
 export type {
   BuiltInScenarioId,
   ScenarioInstanceId,

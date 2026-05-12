@@ -1,0 +1,218 @@
+{
+  "schemaVersion": "sciforge.workspace-runtime-events.fixture.v1",
+  "fixtureId": "m16-workspace-runtime-event-replay-export",
+  "session": {
+    "id": "session:m16-runtime-replay",
+    "workspace": "/workspace/sciforge-m16",
+    "runtimeEvents": [
+      {
+        "type": "user-turn",
+        "status": "received",
+        "source": "workspace-runtime",
+        "message": "User asks to resume a failed long task and export the replay.",
+        "raw": {
+          "id": "evt-user-turn",
+          "timestamp": "2026-05-12T00:00:00.000Z",
+          "timeMs": 0,
+          "turnIndex": 1,
+          "refs": [
+            "run:m16-runtime-replay-001"
+          ],
+          "phase": "turn-start",
+          "status": "received"
+        }
+      },
+      {
+        "type": "resume-preflight",
+        "status": "completed",
+        "source": "workspace-runtime",
+        "message": "Resume-preflight recovered checkpoint, artifact lineage, pending run, and execution-unit state.",
+        "raw": {
+          "id": "evt-resume-preflight",
+          "timestamp": "2026-05-12T00:00:00.120Z",
+          "timeMs": 120,
+          "phase": "resume-preflight",
+          "status": "completed",
+          "refs": [
+            "checkpoint:m16-runtime-replay-001",
+            "artifact:m16-report-draft",
+            "run:m16-runtime-replay-001",
+            "execution-unit:download-evidence"
+          ],
+          "preflight": {
+            "workspace": {
+              "status": "ready"
+            },
+            "sessionStore": {
+              "ref": "session:m16-runtime-replay",
+              "status": "ready"
+            },
+            "sideEffectPolicy": "resume-idempotent-only"
+          }
+        }
+      },
+      {
+        "type": "first-readable-result",
+        "status": "partial",
+        "source": "workspace-runtime",
+        "message": "Partial first result: retained artifact refs are reusable and one verifier is pending.",
+        "raw": {
+          "id": "evt-first-readable-result",
+          "timestamp": "2026-05-12T00:00:00.650Z",
+          "timeMs": 650,
+          "phase": "presentation",
+          "status": "partial",
+          "refs": [
+            "artifact:m16-report-draft",
+            "run:m16-runtime-replay-001"
+          ]
+        }
+      },
+      {
+        "type": "runtime-diagnostics",
+        "status": "emitted",
+        "source": "workspace-runtime",
+        "raw": {
+          "id": "evt-runtime-diagnostics",
+          "timestamp": "2026-05-12T00:00:00.700Z",
+          "timeMs": 700,
+          "phase": "diagnostics",
+          "status": "emitted",
+          "diagnosticsRefs": [
+            "raw:m16-agentserver-response.json",
+            "stderr:m16-verifier.stderr",
+            "log:m16-runtime-debug.log"
+          ],
+          "rawDiagnostics": {
+            "provider": "agentserver",
+            "transport": "stream",
+            "finishReason": "tool_validation_failed",
+            "payloadShape": "raw backend diagnostics only"
+          },
+          "rawRef": "raw:m16-agentserver-response.json",
+          "stderrRef": "stderr:m16-verifier.stderr"
+        }
+      },
+      {
+        "type": "tool-call",
+        "status": "completed",
+        "source": "workspace-runtime",
+        "toolName": "schema-validator",
+        "message": "Verifier reused the idempotent side effect boundary for the retained evidence download.",
+        "raw": {
+          "id": "evt-tool-call",
+          "timestamp": "2026-05-12T00:00:01.000Z",
+          "timeMs": 1000,
+          "phase": "verification",
+          "status": "completed",
+          "refs": [
+            "artifact:m16-report-draft",
+            "run:m16-runtime-replay-001",
+            "execution-unit:verifier"
+          ],
+          "sideEffectPolicy": "resume-idempotent-only"
+        }
+      },
+      {
+        "type": "validation-failure",
+        "status": "failed",
+        "source": "workspace-runtime",
+        "message": "Schema validation failed for one claim; recoverable repair is available.",
+        "raw": {
+          "id": "evt-validation-failure",
+          "timestamp": "2026-05-12T00:00:01.300Z",
+          "timeMs": 1300,
+          "phase": "verification",
+          "status": "failed",
+          "refs": [
+            "run:m16-runtime-replay-001",
+            "execution-unit:verifier"
+          ],
+          "recoverActions": [
+            "repair-claim-from-retained-evidence"
+          ]
+        }
+      },
+      {
+        "type": "recovery-plan",
+        "status": "completed",
+        "source": "workspace-runtime",
+        "message": "Recovery-plan repaired the claim from retained evidence; side effect guard stayed idempotent.",
+        "raw": {
+          "id": "evt-recovery-plan",
+          "timestamp": "2026-05-12T00:00:01.450Z",
+          "timeMs": 1450,
+          "phase": "recovery-plan",
+          "status": "completed",
+          "refs": [
+            "artifact:m16-report-draft",
+            "run:m16-runtime-replay-001",
+            "evidence:m16-retained-claim"
+          ]
+        }
+      },
+      {
+        "type": "history-branch-record",
+        "status": "completed",
+        "source": "workspace-runtime",
+        "message": "History branch record preserved branch and revert recovery boundaries.",
+        "raw": {
+          "id": "evt-history-branch-record",
+          "timestamp": "2026-05-12T00:00:01.650Z",
+          "timeMs": 1650,
+          "phase": "history-branch",
+          "status": "completed",
+          "refs": [
+            "artifact:m16-report-draft",
+            "run:m16-runtime-replay-001",
+            "history-branch:m16-safe-recovery"
+          ],
+          "historyMutation": {
+            "mode": "branch",
+            "retainedRefs": [
+              "artifact:m16-report-draft"
+            ]
+          }
+        }
+      },
+      {
+        "type": "side-effect-guard",
+        "status": "completed",
+        "source": "workspace-runtime",
+        "message": "Side effect guard confirmed idempotent boundary for execution-unit:download-evidence.",
+        "raw": {
+          "id": "evt-side-effect-guard",
+          "timestamp": "2026-05-12T00:00:01.900Z",
+          "timeMs": 1900,
+          "phase": "side-effect-guard",
+          "status": "completed",
+          "refs": [
+            "execution-unit:download-evidence",
+            "run:m16-runtime-replay-001"
+          ],
+          "sideEffects": {
+            "policy": "resume-idempotent-only",
+            "preventedRepeat": true
+          }
+        }
+      },
+      {
+        "type": "final-summary",
+        "status": "completed",
+        "source": "workspace-runtime",
+        "message": "Final summary completed with primary artifact refs, run refs, and folded diagnostics.",
+        "raw": {
+          "id": "evt-final-summary",
+          "timestamp": "2026-05-12T00:00:02.400Z",
+          "timeMs": 2400,
+          "phase": "final",
+          "status": "completed",
+          "refs": [
+            "artifact:m16-report-final",
+            "run:m16-runtime-replay-001"
+          ]
+        }
+      }
+    ]
+  }
+}

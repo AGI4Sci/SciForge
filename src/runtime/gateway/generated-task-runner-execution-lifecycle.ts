@@ -132,8 +132,6 @@ async function materializeGeneratedTaskFiles(input: GeneratedTaskExecutionLifecy
           ),
         };
       }
-      await mkdir(dirname(join(input.workspace, declaredRel)), { recursive: true });
-      await writeFile(join(input.workspace, declaredRel), content);
       await mkdir(dirname(join(input.workspace, rel)), { recursive: true });
       await writeFile(join(input.workspace, rel), content);
       emitWorkspaceRuntimeEvent(input.callbacks, {

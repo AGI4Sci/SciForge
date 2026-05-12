@@ -40,6 +40,9 @@ export type {
 
 export interface WorkspaceTaskInputRefs {
   workspacePath: string;
+  workspaceRootPath?: string;
+  sessionBundleRef?: string;
+  sessionResourceRootPath?: string;
   taskCodeRef: string;
   inputRef: string;
   outputRef: string;
@@ -77,6 +80,7 @@ export async function normalizeBackendHandoff<T = unknown>(
   options: {
     workspacePath: string;
     purpose: string;
+    sessionBundleRel?: string;
     budget?: Partial<BackendHandoffBudget>;
     sourceRefs?: BackendHandoffSlimmingSourceRefs;
   },
@@ -87,7 +91,7 @@ export async function normalizeBackendHandoff<T = unknown>(
   const rawJson = stringifyJson(input);
   const rawSha1 = sha1Text(rawJson);
   const rawBytes = Buffer.byteLength(rawJson, 'utf8');
-  const rawRef = backendHandoffRef(options.purpose, rawSha1);
+  const rawRef = backendHandoffRef(options.purpose, rawSha1, '', options.sessionBundleRel);
   await writeBackendHandoffRawRef({
     workspacePath: options.workspacePath,
     rawRef,
@@ -114,7 +118,7 @@ export async function normalizeBackendHandoff<T = unknown>(
   }) as T;
 
   let normalizedBytes = estimateBytes(payload);
-  if (normalizedBytes > budget.maxPayloadBytes) {
+  if (normalizedBytes > budget.maxPayloadBytes && !looksLikeAgentServerRunPayload(input)) {
     payload = attachHandoffManifest(normalizeHandoffValue(input, {
       budget: {
         ...budget,
@@ -142,7 +146,28 @@ export async function normalizeBackendHandoff<T = unknown>(
     }) as T;
     normalizedBytes = estimateBytes(payload);
   }
-  if (normalizedBytes > budget.maxPayloadBytes) {
+  if (normalizedBytes > budget.maxPayloadBytes && looksLikeAgentServerRunPayload(input)) {
+    decisions.push({
+      kind: 'backend-handoff-envelope',
+      reason: 'preserve-agentserver-contract',
+      rawRef,
+      estimatedBytes: rawBytes,
+    });
+    payload = attachHandoffManifest(compactAgentServerRunPayload(input, {
+      budget,
+      rawRef,
+      decisions,
+    }), {
+      budget,
+      rawRef,
+      rawSha1,
+      rawBytes,
+      forced: true,
+      sourceRefs,
+    }) as T;
+    normalizedBytes = estimateBytes(payload);
+  }
+  if (normalizedBytes > budget.maxPayloadBytes && !looksLikeAgentServerRunPayload(input)) {
     decisions.push({
       kind: 'backend-handoff',
       reason: 'payload-budget',
@@ -169,7 +194,7 @@ export async function normalizeBackendHandoff<T = unknown>(
     }) as T;
     normalizedBytes = estimateBytes(payload);
   }
-  const slimmingTraceRef = backendHandoffRef(options.purpose, rawSha1, '-slimming-trace');
+  const slimmingTraceRef = backendHandoffRef(options.purpose, rawSha1, '-slimming-trace', options.sessionBundleRel);
   let contextEstimate = estimateHandoffContext({
     rawBytes,
     normalizedBytes,
@@ -273,6 +298,56 @@ export async function normalizeBackendHandoff<T = unknown>(
     slimmingTrace,
     slimmingTraceRef,
     slimmingTraceSha1,
+  };
+}
+
+function looksLikeAgentServerRunPayload(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
+  const input = isRecord(value.input) ? value.input : undefined;
+  return isRecord(value.agent) && isRecord(input) && typeof input.text === 'string' && input.text.trim().length > 0;
+}
+
+function compactAgentServerRunPayload(value: Record<string, unknown>, context: {
+  budget: BackendHandoffBudget;
+  rawRef: string;
+  decisions: BackendHandoffBudgetDecision[];
+}) {
+  const strictBudget: BackendHandoffBudget = {
+    ...context.budget,
+    maxInlineStringChars: Math.min(6000, context.budget.maxInlineStringChars),
+    maxInlineJsonBytes: Math.min(8000, context.budget.maxInlineJsonBytes),
+    maxArrayItems: Math.min(8, context.budget.maxArrayItems),
+    maxObjectKeys: Math.min(32, context.budget.maxObjectKeys),
+    maxDepth: Math.min(4, context.budget.maxDepth),
+    headChars: Math.min(1000, context.budget.headChars),
+    tailChars: Math.min(1000, context.budget.tailChars),
+    maxPriorAttempts: Math.min(1, context.budget.maxPriorAttempts),
+  };
+  const ctx = (path: string[]) => ({
+    budget: strictBudget,
+    rawRef: context.rawRef,
+    path,
+    depth: path.length,
+    siblingRefs: {},
+    decisions: context.decisions,
+  });
+  const input = isRecord(value.input) ? value.input : {};
+  const text = typeof input.text === 'string' ? input.text : '';
+  return {
+    agent: normalizeHandoffValue(value.agent, ctx(['agent'])),
+    input: {
+      text: compactBackendInputText(text, ctx(['input', 'text'])),
+      metadata: input.metadata === undefined ? undefined : normalizeHandoffValue(input.metadata, ctx(['input', 'metadata'])),
+    },
+    contextPolicy: value.contextPolicy === undefined ? undefined : normalizeHandoffValue(value.contextPolicy, ctx(['contextPolicy'])),
+    runtime: value.runtime === undefined ? undefined : normalizeHandoffValue(value.runtime, ctx(['runtime'])),
+    metadata: value.metadata === undefined ? undefined : normalizeHandoffValue(value.metadata, ctx(['metadata'])),
+    _sciforgeCompacted: {
+      kind: 'backend-handoff-envelope',
+      reason: 'preserve-agentserver-contract',
+      rawRef: context.rawRef,
+      originalBytes: estimateBytes(value),
+    },
   };
 }
 

@@ -195,18 +195,15 @@ export async function handleWorkspaceFileApiRoutes(
       for (const session of [...sessions, ...archivedSessions] as Array<Record<string, unknown>>) {
         const sessionId = safeName(String(session.sessionId || 'session'));
         const bundleRel = await writeSessionBundleSnapshot(root, session);
-        await writeFile(join(sciforgeDir, 'sessions', `${sessionId}.json`), JSON.stringify(session, null, 2));
         const artifacts = Array.isArray(session.artifacts) ? session.artifacts : [];
         for (const artifact of artifacts as Array<Record<string, unknown>>) {
           const artifactId = safeName(String(artifact.id || artifact.type || 'artifact'));
           await writeFile(join(root, bundleRel, 'artifacts', `${artifactId}.json`), JSON.stringify(artifact, null, 2));
-          await writeFile(join(sciforgeDir, 'artifacts', `${sessionId}-${artifactId}.json`), JSON.stringify(artifact, null, 2));
         }
         const versions = Array.isArray(session.versions) ? session.versions : [];
         for (const version of versions as Array<Record<string, unknown>>) {
           const versionId = safeName(String(version.id || 'version'));
           await writeFile(join(root, bundleRel, 'versions', `${versionId}.json`), JSON.stringify(version, null, 2));
-          await writeFile(join(sciforgeDir, 'versions', `${sessionId}-${versionId}.json`), JSON.stringify(version, null, 2));
         }
       }
       const alignmentContracts = Array.isArray(state.alignmentContracts) ? state.alignmentContracts : [];

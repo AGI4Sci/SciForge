@@ -63,113 +63,116 @@ Token 高效：每轮只携带当前任务真正需要的 state digest、refs、
 
 - [ ] Computer Use / 视觉 GUI grounding 相关压测暂缓，等 grounding 模型部署后再恢复。
 - [ ] 当前阶段不要求测试视觉定位、桌面点击、跨页面视觉操作、屏幕元素 grounding 或纯视觉 GUI 自动化。
-- [ ] 浏览器刷新、关闭标签、恢复历史会话等生命周期任务继续保留，因为它们测试持久化状态和会话恢复，不依赖视觉 grounding。
+
+范围保留：
+
+- [x] 浏览器刷新、关闭标签、恢复历史会话等非视觉生命周期任务继续保留，因为它们测试持久化状态和会话恢复，不依赖视觉 grounding。
 
 分级压测任务：
 
 5 轮任务：验证 agent 是否能在短多轮里保持目标、复用上下文、快速给结果。
 
-- [ ] T5-01 快速调研到报告：用户给主题，agent 给候选资料；用户要求筛选 Top-K；用户要求补证据；用户要求 markdown 报告；用户要求列未完成风险。
-- [ ] T5-02 失败后继续：第 1 轮启动长任务，第 2 轮注入 timeout，第 3 轮要求诊断，第 4 轮要求复用已完成部分继续，第 5 轮要求输出 final + recovery notes。
-- [ ] T5-03 约束逐步收紧：先宽泛回答，再要求只看最近时间窗口，再要求只保留高可信来源，再要求压缩成表格，再要求生成可审计引用列表。
-- [ ] T5-04 多 artifact 追问：生成 artifact A，再生成 artifact B，再比较 A/B，再修改 B，再追问 A 中原始结论，测试引用不漂移。
-- [ ] T5-05 代码任务追问：定位问题，给 patch 计划，执行修改，运行测试失败，恢复并解释下一步。
-- [ ] T5-06 数据分析追问：读取表格摘要，生成统计结果，用户要求换分组，用户要求解释异常值，用户要求导出结论。
-- [ ] T5-07 Runtime 诊断追问：读取 run 状态，定位失败阶段，用户要求查看 execution summary，用户要求导出诊断，用户要求提出通用修复任务。
-- [ ] T5-08 速度优先：用户要求先给答案，agent 给 partial；用户要求继续后台；后台结果回访；用户要求合并；用户要求列证据缺口。
-- [ ] T5-09 隐私约束切换：普通任务开始，中途用户要求不上传敏感内容，agent 重新规划上下文和工具，最后解释哪些步骤被跳过。
-- [ ] T5-10 空结果恢复：检索返回 empty，agent 给替代 query，用户缩小范围，agent 复用新 refs，最后输出 uncertainty-aware 结果。
+- [x] T5-01 快速调研到报告：用户给主题，agent 给候选资料；用户要求筛选 Top-K；用户要求补证据；用户要求 markdown 报告；用户要求列未完成风险。
+- [x] T5-02 失败后继续：第 1 轮启动长任务，第 2 轮注入 timeout，第 3 轮要求诊断，第 4 轮要求复用已完成部分继续，第 5 轮要求输出 final + recovery notes。
+- [x] T5-03 约束逐步收紧：先宽泛回答，再要求只看最近时间窗口，再要求只保留高可信来源，再要求压缩成表格，再要求生成可审计引用列表。
+- [x] T5-04 多 artifact 追问：生成 artifact A，再生成 artifact B，再比较 A/B，再修改 B，再追问 A 中原始结论，测试引用不漂移。
+- [x] T5-05 代码任务追问：定位问题，给 patch 计划，执行修改，运行测试失败，恢复并解释下一步。
+- [x] T5-06 数据分析追问：读取表格摘要，生成统计结果，用户要求换分组，用户要求解释异常值，用户要求导出结论。
+- [x] T5-07 Runtime 诊断追问：读取 run 状态，定位失败阶段，用户要求查看 execution summary，用户要求导出诊断，用户要求提出通用修复任务。
+- [x] T5-08 速度优先：用户要求先给答案，agent 给 partial；用户要求继续后台；后台结果回访；用户要求合并；用户要求列证据缺口。
+- [x] T5-09 隐私约束切换：普通任务开始，中途用户要求不上传敏感内容，agent 重新规划上下文和工具，最后解释哪些步骤被跳过。
+- [x] T5-10 空结果恢复：检索返回 empty，agent 给替代 query，用户缩小范围，agent 复用新 refs，最后输出 uncertainty-aware 结果。
 
 10 轮任务：验证 agent 是否能承受中等长度任务状态、范围变化、重复失败和多 artifact 演化。
 
-- [ ] T10-01 深度文献调研：主题定义、检索、去重、下载、阅读全文摘要、证据矩阵、冲突结论、引用修正、报告重写、最终审计摘要。
-- [ ] T10-02 从失败 run 到可交付：启动、timeout、诊断、恢复计划、继续、schema failure、repair、partial 报告、补验证、最终报告。
-- [ ] T10-03 代码修复迭代：读需求、定位模块、实现、测试失败、缩小范围、二次修复、补测试、解释 diff、处理用户变更、最终总结。
-- [ ] T10-04 多数据源分析：导入 A、导入 B、合并、发现字段冲突、用户给映射、重算、可视化、异常解释、导出 markdown、列复现步骤。
-- [ ] T10-05 Runtime + artifact 混合：读取 task state、查看 execution unit、导出 bundle、解析失败、提出通用代码任务、用户改优先级、生成 TODO、复查 artifact refs、最终验收。
-- [ ] T10-06 长报告编辑：生成提纲、写初稿、用户改受众、补技术细节、补风险、压缩篇幅、加表格、改标题、生成 changelog、最终版本。
-- [ ] T10-07 多 backend 对比：同任务在 backend A 失败，切 backend B，复用 state，比较输出，修正引用，保留 provenance，最终推荐策略。
-- [ ] T10-08 预算耗尽降级：深任务开始，工具预算接近耗尽，agent 产出 partial，用户允许继续但不下载全文，agent 改用 metadata，最后列升级路径。
-- [ ] T10-09 用户多次改范围：宽主题、缩小领域、排除来源、增加时间范围、改输出格式、要求中英文、要求更短、要求补证据、要求删除低可信、最终审计。
-- [ ] T10-10 复杂 recovery：网络失败、下载失败、验证失败、artifact 缺失连续出现，agent 每次都要保存 checkpoint 并避免重跑已完成步骤。
-- [ ] T10-11 记忆复用：第一轮建立索引，后续多轮反复追问同一对象的不同角度，要求 agent 明确复用哪些 refs。
-- [ ] T10-12 互斥约束：用户同时要求快、全、严格验证、低成本，agent 必须解释 tradeoff 并按优先级执行。
+- [x] T10-01 深度文献调研：主题定义、检索、去重、下载、阅读全文摘要、证据矩阵、冲突结论、引用修正、报告重写、最终审计摘要。
+- [x] T10-02 从失败 run 到可交付：启动、timeout、诊断、恢复计划、继续、schema failure、repair、partial 报告、补验证、最终报告。
+- [x] T10-03 代码修复迭代：读需求、定位模块、实现、测试失败、缩小范围、二次修复、补测试、解释 diff、处理用户变更、最终总结。
+- [x] T10-04 多数据源分析：导入 A、导入 B、合并、发现字段冲突、用户给映射、重算、可视化、异常解释、导出 markdown、列复现步骤。
+- [x] T10-05 Runtime + artifact 混合：读取 task state、查看 execution unit、导出 bundle、解析失败、提出通用代码任务、用户改优先级、生成 TODO、复查 artifact refs、最终验收。
+- [x] T10-06 长报告编辑：生成提纲、写初稿、用户改受众、补技术细节、补风险、压缩篇幅、加表格、改标题、生成 changelog、最终版本。
+- [x] T10-07 多 backend 对比：同任务在 backend A 失败，切 backend B，复用 state，比较输出，修正引用，保留 provenance，最终推荐策略。
+- [x] T10-08 预算耗尽降级：深任务开始，工具预算接近耗尽，agent 产出 partial，用户允许继续但不下载全文，agent 改用 metadata，最后列升级路径。
+- [x] T10-09 用户多次改范围：宽主题、缩小领域、排除来源、增加时间范围、改输出格式、要求中英文、要求更短、要求补证据、要求删除低可信、最终审计。
+- [x] T10-10 复杂 recovery：网络失败、下载失败、验证失败、artifact 缺失连续出现，agent 每次都要保存 checkpoint 并避免重跑已完成步骤。
+- [x] T10-11 记忆复用：第一轮建立索引，后续多轮反复追问同一对象的不同角度，要求 agent 明确复用哪些 refs。
+- [x] T10-12 互斥约束：用户同时要求快、全、严格验证、低成本，agent 必须解释 tradeoff 并按优先级执行。
 
 20 轮任务：验证 agent 在高强度长会话中是否能保持任务图、避免上下文腐烂、持续产出 partial、稳定恢复失败。
 
-- [ ] T20-01 端到端研究项目：选题、检索、筛选、下载、阅读、证据抽取、冲突处理、方法比较、图表生成、报告初稿、多轮修订、最终审计包。
-- [ ] T20-02 连续失败韧性：在 20 轮中依次注入 timeout、empty result、tool stderr、backend delay、schema failure、artifact missing、verification failure，要求每次都有可执行 recovery。
-- [ ] T20-03 大型代码改造对话：需求澄清、架构读取、拆任务、并行计划、实现、测试、失败、回滚计划、二次实现、文档更新、性能检查、最终总结。
-- [ ] T20-04 多 artifact 生命周期：创建 5 个 artifact，跨 20 轮修改、比较、引用、废弃、恢复、合并，测试 artifact identity 和 provenance 稳定性。
-- [ ] T20-05 长数据分析项目：多文件载入、清洗、特征定义、统计、可视化、异常分析、用户多次改口径、导出报告、复现实验记录。
-- [ ] T20-06 Runtime 长流程：跨多个 run/artifact 检查状态、导出诊断、失败分析、重试规划、后台任务检查、结果回访，要求 presentation state 和 runtime state 对齐。
-- [ ] T20-07 背景任务回访：前 5 轮启动多个 background continuation，中间 10 轮处理其他任务，最后 5 轮回收后台结果并合并 revision。
-- [ ] T20-08 多目标冲突：用户交替提出调研、代码、数据、runtime/artifact 四类目标，agent 必须维护任务队列，不能把不同目标互相污染。
-- [ ] T20-09 超长报告协作：从 outline 到 3 次大改、5 次局部修订、引用修复、证据缺口处理、最终生成 markdown 和变更摘要。
-- [ ] T20-10 上下文压缩抗性：中途模拟 compaction，只保留 state digest 和 refs，后续仍要恢复任务图、artifact refs、未完成队列。
-- [ ] T20-11 高并发 sidecar：主任务推进时并行检索、验证、预检、artifact scan，测试 cancellation、merge、early stop 和 first result SLA。
-- [ ] T20-12 用户反馈驱动修复：用户多次指出结果不对、引用错、格式错、速度慢，agent 必须把反馈转成通用 task/todo，而不是临时道歉重跑。
-- [ ] T20-13 跨 session 继续：保存 checkpoint，模拟新会话恢复，继续未完成任务并解释复用状态。
-- [ ] T20-14 质量与速度拉扯：每隔几轮用户切换“快一点”和“更严谨”，agent 动态调整 verification layers、tool budget 和 presentation。
-- [ ] T20-15 审计包生成：20 轮结束后自动生成 task graph、decision trace、artifact refs、失败恢复记录、重复工作统计、最终报告。
+- [x] T20-01 端到端研究项目：选题、检索、筛选、下载、阅读、证据抽取、冲突处理、方法比较、图表生成、报告初稿、多轮修订、最终审计包。
+- [x] T20-02 连续失败韧性：在 20 轮中依次注入 timeout、empty result、tool stderr、backend delay、schema failure、artifact missing、verification failure，要求每次都有可执行 recovery。
+- [x] T20-03 大型代码改造对话：需求澄清、架构读取、拆任务、并行计划、实现、测试、失败、回滚计划、二次实现、文档更新、性能检查、最终总结。
+- [x] T20-04 多 artifact 生命周期：创建 5 个 artifact，跨 20 轮修改、比较、引用、废弃、恢复、合并，测试 artifact identity 和 provenance 稳定性。
+- [x] T20-05 长数据分析项目：多文件载入、清洗、特征定义、统计、可视化、异常分析、用户多次改口径、导出报告、复现实验记录。
+- [x] T20-06 Runtime 长流程：跨多个 run/artifact 检查状态、导出诊断、失败分析、重试规划、后台任务检查、结果回访，要求 presentation state 和 runtime state 对齐。
+- [x] T20-07 背景任务回访：前 5 轮启动多个 background continuation，中间 10 轮处理其他任务，最后 5 轮回收后台结果并合并 revision。
+- [x] T20-08 多目标冲突：用户交替提出调研、代码、数据、runtime/artifact 四类目标，agent 必须维护任务队列，不能把不同目标互相污染。
+- [x] T20-09 超长报告协作：从 outline 到 3 次大改、5 次局部修订、引用修复、证据缺口处理、最终生成 markdown 和变更摘要。
+- [x] T20-10 上下文压缩抗性：中途模拟 compaction，只保留 state digest 和 refs，后续仍要恢复任务图、artifact refs、未完成队列。
+- [x] T20-11 高并发 sidecar：主任务推进时并行检索、验证、预检、artifact scan，测试 cancellation、merge、early stop 和 first result SLA。
+- [x] T20-12 用户反馈驱动修复：用户多次指出结果不对、引用错、格式错、速度慢，agent 必须把反馈转成通用 task/todo，而不是临时道歉重跑。
+- [x] T20-13 跨 session 继续：保存 checkpoint，模拟新会话恢复，继续未完成任务并解释复用状态。
+- [x] T20-14 质量与速度拉扯：每隔几轮用户切换“快一点”和“更严谨”，agent 动态调整 verification layers、tool budget 和 presentation。
+- [x] T20-15 审计包生成：20 轮结束后自动生成 task graph、decision trace、artifact refs、失败恢复记录、重复工作统计、最终报告。
 
 真实会话生命周期任务：覆盖用户在真实产品里会发生的重启、恢复、中断、编辑、分支、回滚和继续。
 
-- [ ] TS-01 服务重启后继续当前对话：任务进行到 partial 后关闭并重启 UI/runtime，恢复同一会话，agent 必须识别 last stable checkpoint、pending work 和可继续动作。
-- [ ] TS-02 服务重启后后台任务回访：重启前启动 background continuation，重启后用户询问进度，系统必须恢复 background job 状态或给出可审计的丢失/重建说明。
-- [ ] TS-03 浏览器刷新后继续：前端刷新导致内存状态丢失，但 workspace/session store 仍在，agent 必须从持久化 state 恢复，而不是重新开始。
-- [ ] TS-04 关闭浏览器标签后继续：用户重新打开同一 workspace，选择历史会话，继续上次未完成任务，必须恢复 artifact refs 和 execution unit refs。
-- [ ] TS-05 恢复历史会话继续：用户打开昨天/上周的历史任务，要求“接着做”，agent 必须先判断状态是否过期、依赖是否变化、哪些证据可复用。
-- [ ] TS-06 恢复历史失败任务：历史任务以 failed 结束，用户要求继续，agent 必须生成 recovery plan，区分可复用 output、需要重跑步骤和已失效步骤。
-- [ ] TS-07 恢复历史成功任务追加追问：历史任务已 complete，用户追加新问题，agent 必须基于旧 artifact 回答，同时不把新问题错误归入旧 completion。
-- [ ] TS-08 恢复被取消任务：用户手动 cancel 后回来继续，agent 必须确认 cancel boundary，不能悄悄恢复已取消的 side effect。
-- [ ] TS-09 中断生成后继续：assistant 正在流式输出时被 stop，用户点继续，agent 必须从已生成内容和 run state 续写，避免重复前文或丢失引用。
-- [ ] TS-10 中断工具调用后继续：工具仍在运行或状态未知时用户中断，继续时必须检查实际工具结果、避免重复 side effect。
-- [ ] TS-11 中断 repair 后继续：repair 执行到一半被暂停，继续时必须识别 last repair attempt、patch state、test state 和是否允许重试。
-- [ ] TS-12 编辑最近用户消息并 revert：用户编辑最后一条需求并选择 revert 模式，系统必须废弃编辑点之后的 assistant/run/artifact 分支，基于编辑后的历史重新执行。
-- [ ] TS-13 编辑最近用户消息并 continue：用户编辑最后一条需求并选择 continue 模式，系统必须保留已有结果作为上下文，同时明确哪些结论受新需求影响。
-- [ ] TS-14 编辑较早用户消息并 revert：用户修改第 N 轮原始目标，系统必须回滚该节点之后的派生 task state、artifact refs 和 background jobs。
-- [ ] TS-15 编辑较早用户消息并 continue：用户修改第 N 轮原始目标但要求继续当前分支，系统必须创建 branch state，保留旧结果并标注与新目标的冲突。
-- [ ] TS-16 编辑 assistant 历史回答后继续：用户修正 assistant 输出中的事实/格式/引用，agent 必须把它当作用户反馈约束，而不是伪造历史 run 真的如此发生。
-- [ ] TS-17 同一历史点多分支继续：从同一 turn fork 出 A/B 两个方案，后续必须隔离 task state、artifact refs、后台任务和 verification 结果。
-- [ ] TS-18 合并两个历史分支：用户要求合并 A/B 分支结论，agent 必须检测冲突、重复证据和 artifact lineage，生成 merge summary。
-- [ ] TS-19 跨设备继续：模拟另一个客户端打开同一会话继续，agent 必须处理本地 UI state 缺失，只依赖持久化 workspace state。
-- [ ] TS-20 多标签并发继续：两个标签同时对同一会话发消息，系统必须有 conflict detection 或 serial ordering，不能交叉污染。
-- [ ] TS-21 版本升级后继续：代码或 capability registry 更新后恢复旧会话，agent 必须检测 capability version drift，并决定复用、迁移或重跑。
-- [ ] TS-22 配置变化后继续：用户更换 backend/model/API key/workspace path 后恢复会话，agent 必须解释哪些状态仍可用，哪些需要重新验证。
-- [ ] TS-23 权限变化后继续：恢复历史任务时权限更严格，agent 必须降级能力、保护敏感 refs，并说明被跳过的步骤。
-- [ ] TS-24 文件系统变化后继续：历史 artifact 或输入文件被移动/删除/修改，agent 必须 stale-check，避免引用不存在或过期文件。
-- [ ] TS-25 历史压缩后继续：只保留 summary/state digest/refs，不保留完整消息，agent 必须从摘要恢复任务图并列出不确定项。
-- [ ] TS-26 长时间离线后继续：历史会话过期很久，外部资料可能变化，agent 必须标注 stale risk，并询问或自动执行最小刷新。
-- [ ] TS-27 恢复后用户改目标：继续历史任务后用户立即改变目标，agent 必须把“恢复”和“范围变更”同时纳入规划。
-- [ ] TS-28 恢复后要求不要继续：用户打开历史失败任务但只想看诊断，不想重跑，agent 必须只 materialize explanation，不触发 side effect。
-- [ ] TS-29 恢复后要求导出审计：用户不继续执行，只要求导出历史 task graph、artifact refs、失败原因和可复现命令。
-- [ ] TS-30 恢复未知状态任务：session/run/artifact 三者状态不一致，agent 必须进入 needs-human 或 safe recovery，不得猜测成功。
+- [x] TS-01 服务重启后继续当前对话：任务进行到 partial 后关闭并重启 UI/runtime，恢复同一会话，agent 必须识别 last stable checkpoint、pending work 和可继续动作。
+- [x] TS-02 服务重启后后台任务回访：重启前启动 background continuation，重启后用户询问进度，系统必须恢复 background job 状态或给出可审计的丢失/重建说明。
+- [x] TS-03 浏览器刷新后继续：前端刷新导致内存状态丢失，但 workspace/session store 仍在，agent 必须从持久化 state 恢复，而不是重新开始。
+- [x] TS-04 关闭浏览器标签后继续：用户重新打开同一 workspace，选择历史会话，继续上次未完成任务，必须恢复 artifact refs 和 execution unit refs。
+- [x] TS-05 恢复历史会话继续：用户打开昨天/上周的历史任务，要求“接着做”，agent 必须先判断状态是否过期、依赖是否变化、哪些证据可复用。
+- [x] TS-06 恢复历史失败任务：历史任务以 failed 结束，用户要求继续，agent 必须生成 recovery plan，区分可复用 output、需要重跑步骤和已失效步骤。
+- [x] TS-07 恢复历史成功任务追加追问：历史任务已 complete，用户追加新问题，agent 必须基于旧 artifact 回答，同时不把新问题错误归入旧 completion。
+- [x] TS-08 恢复被取消任务：用户手动 cancel 后回来继续，agent 必须确认 cancel boundary，不能悄悄恢复已取消的 side effect。
+- [x] TS-09 中断生成后继续：assistant 正在流式输出时被 stop，用户点继续，agent 必须从已生成内容和 run state 续写，避免重复前文或丢失引用。
+- [x] TS-10 中断工具调用后继续：工具仍在运行或状态未知时用户中断，继续时必须检查实际工具结果、避免重复 side effect。
+- [x] TS-11 中断 repair 后继续：repair 执行到一半被暂停，继续时必须识别 last repair attempt、patch state、test state 和是否允许重试。
+- [x] TS-12 编辑最近用户消息并 revert：用户编辑最后一条需求并选择 revert 模式，系统必须废弃编辑点之后的 assistant/run/artifact 分支，基于编辑后的历史重新执行。
+- [x] TS-13 编辑最近用户消息并 continue：用户编辑最后一条需求并选择 continue 模式，系统必须保留已有结果作为上下文，同时明确哪些结论受新需求影响。
+- [x] TS-14 编辑较早用户消息并 revert：用户修改第 N 轮原始目标，系统必须回滚该节点之后的派生 task state、artifact refs 和 background jobs。
+- [x] TS-15 编辑较早用户消息并 continue：用户修改第 N 轮原始目标但要求继续当前分支，系统必须创建 branch state，保留旧结果并标注与新目标的冲突。
+- [x] TS-16 编辑 assistant 历史回答后继续：用户修正 assistant 输出中的事实/格式/引用，agent 必须把它当作用户反馈约束，而不是伪造历史 run 真的如此发生。
+- [x] TS-17 同一历史点多分支继续：从同一 turn fork 出 A/B 两个方案，后续必须隔离 task state、artifact refs、后台任务和 verification 结果。
+- [x] TS-18 合并两个历史分支：用户要求合并 A/B 分支结论，agent 必须检测冲突、重复证据和 artifact lineage，生成 merge summary。
+- [x] TS-19 跨设备继续：模拟另一个客户端打开同一会话继续，agent 必须处理本地 UI state 缺失，只依赖持久化 workspace state。
+- [x] TS-20 多标签并发继续：两个标签同时对同一会话发消息，系统必须有 conflict detection 或 serial ordering，不能交叉污染。
+- [x] TS-21 版本升级后继续：代码或 capability registry 更新后恢复旧会话，agent 必须检测 capability version drift，并决定复用、迁移或重跑。
+- [x] TS-22 配置变化后继续：用户更换 backend/model/API key/workspace path 后恢复会话，agent 必须解释哪些状态仍可用，哪些需要重新验证。
+- [x] TS-23 权限变化后继续：恢复历史任务时权限更严格，agent 必须降级能力、保护敏感 refs，并说明被跳过的步骤。
+- [x] TS-24 文件系统变化后继续：历史 artifact 或输入文件被移动/删除/修改，agent 必须 stale-check，避免引用不存在或过期文件。
+- [x] TS-25 历史压缩后继续：只保留 summary/state digest/refs，不保留完整消息，agent 必须从摘要恢复任务图并列出不确定项。
+- [x] TS-26 长时间离线后继续：历史会话过期很久，外部资料可能变化，agent 必须标注 stale risk，并询问或自动执行最小刷新。
+- [x] TS-27 恢复后用户改目标：继续历史任务后用户立即改变目标，agent 必须把“恢复”和“范围变更”同时纳入规划。
+- [x] TS-28 恢复后要求不要继续：用户打开历史失败任务但只想看诊断，不想重跑，agent 必须只 materialize explanation，不触发 side effect。
+- [x] TS-29 恢复后要求导出审计：用户不继续执行，只要求导出历史 task graph、artifact refs、失败原因和可复现命令。
+- [x] TS-30 恢复未知状态任务：session/run/artifact 三者状态不一致，agent 必须进入 needs-human 或 safe recovery，不得猜测成功。
 
 Todo：
 
-- [ ] 定义 `ComplexMultiTurnFixture` contract：turns、expected state、allowed tools、latency budget、memory expectations、artifact expectations、failure injections、success criteria。
-- [ ] 建立不少于 67 个跨场景 fixture：10 个 5 轮、12 个 10 轮、15 个 20 轮、30 个真实会话生命周期任务，并覆盖 success、partial、failure、recovery、background revision、revert、continue、branch、merge。
-- [ ] 为每轮标注 expected `latencyTier`、expected escalation、max first result time、max repeated exploration、required presentation status。
-- [ ] 增加 failure injection 机制：timeout、empty search result、download unavailable、schema validation failure、backend delay、tool stderr。
-- [ ] 为多轮上下文复用增加断言：不得重复下载/读取/验证已稳定 refs，除非用户要求刷新或输入已失效。
-- [ ] 为引用和 artifact 绑定增加断言：后续追问必须解析到正确 artifact/run/execution unit，不能漂移到最近但无关对象。
-- [ ] 每个 10 轮任务至少包含 2 次用户范围变化、1 次失败注入、1 次 artifact 引用追问、1 次 recovery 或 background continuation。
-- [ ] 每个 20 轮任务至少包含 4 次范围变化、3 次失败注入、2 次后台继续、2 次 artifact 身份校验、1 次 context compaction/resume。
-- [ ] 每个真实会话生命周期任务必须标注 resume source、state authority、side effect policy、history mutation mode、artifact lineage expectation。
-- [ ] 为编辑历史消息定义两类 fixture：`revert` 废弃编辑点之后派生状态，`continue` 保留派生状态但标注冲突和不确定性。
-- [ ] 输出每个 fixture 的 replay trace、presentation snapshots、latency summary 和 behavior notes，便于做横向比较。
-- [ ] 把 suite 做成可单独运行的 smoke/benchmark，不进入默认 fast verify，避免日常开发被长任务拖慢。
+- [x] 定义 `ComplexMultiTurnFixture` contract：turns、expected state、allowed tools、latency budget、memory expectations、artifact expectations、failure injections、success criteria。
+- [x] 建立不少于 67 个跨场景 fixture：10 个 5 轮、12 个 10 轮、15 个 20 轮、30 个真实会话生命周期任务，并覆盖 success、partial、failure、recovery、background revision、revert、continue、branch、merge。
+- [x] 为每轮标注 expected `latencyTier`、expected escalation、max first result time、max repeated exploration、required presentation status。
+- [x] 增加 failure injection 机制：timeout、empty search result、download unavailable、schema validation failure、backend delay、tool stderr。
+- [x] 为多轮上下文复用增加断言：不得重复下载/读取/验证已稳定 refs，除非用户要求刷新或输入已失效。
+- [x] 为引用和 artifact 绑定增加断言：后续追问必须解析到正确 artifact/run/execution unit，不能漂移到最近但无关对象。
+- [x] 每个 10 轮任务至少包含 2 次用户范围变化、1 次失败注入、1 次 artifact 引用追问、1 次 recovery 或 background continuation。
+- [x] 每个 20 轮任务至少包含 4 次范围变化、3 次失败注入、2 次后台继续、2 次 artifact 身份校验、1 次 context compaction/resume。
+- [x] 每个真实会话生命周期任务必须标注 resume source、state authority、side effect policy、history mutation mode、artifact lineage expectation。
+- [x] 为编辑历史消息定义两类 fixture：`revert` 废弃编辑点之后派生状态，`continue` 保留派生状态但标注冲突和不确定性。
+- [x] 输出每个 fixture 的 replay trace、presentation snapshots、latency summary 和 behavior notes，便于做横向比较。
+- [x] 把 suite 做成可单独运行的 smoke/benchmark，不进入默认 fast verify，避免日常开发被长任务拖慢。
 
 验收：
 
-- [ ] 压测能稳定复现“长任务失败后只显示 trace/没有可读恢复路径”等通用问题。
-- [ ] 每个问题都能映射到 harness、memory、presentation、progress、verification 或 repair 的通用改造点。
-- [ ] fixture 文案可替换成任意领域，不依赖 arXiv、论文、具体 backend 或固定 artifact 名称。
-- [ ] 5 轮任务用于日常 smoke，10 轮任务用于 PR 前 benchmark，20 轮任务用于高强度 nightly/stress benchmark。
-- [ ] 20 轮任务结束时必须能生成完整 task state summary，包含已完成、未完成、失败、复用、后台、artifact refs 和推荐下一步。
-- [ ] 重启、刷新、恢复历史、中断继续、编辑历史消息、分支和合并都能保持可解释状态边界，不产生静默重复 side effect。
-- [ ] revert 和 continue 两种历史编辑模式行为可预测、可审计，并且 UI 能明确展示当前所处历史分支。
+- [x] 压测能稳定复现“长任务失败后只显示 trace/没有可读恢复路径”等通用问题。
+- [x] 每个问题都能映射到 harness、memory、presentation、progress、verification 或 repair 的通用改造点。
+- [x] fixture 文案可替换成任意领域，不依赖 arXiv、论文、具体 backend 或固定 artifact 名称。
+- [x] 5 轮任务用于日常 smoke，10 轮任务用于 PR 前 benchmark，20 轮任务用于高强度 nightly/stress benchmark。
+- [x] 20 轮任务结束时必须能生成完整 task state summary，包含已完成、未完成、失败、复用、后台、artifact refs 和推荐下一步。
+- [x] 重启、刷新、恢复历史、中断继续、编辑历史消息、分支和合并都能保持可解释状态边界，不产生静默重复 side effect。
+- [x] revert 和 continue 两种历史编辑模式行为可预测、可审计，并且 UI 能明确展示当前所处历史分支。
 
 ### H018 Multi-turn State, Recovery, and Continuation Policy
 
@@ -177,29 +180,29 @@ Todo：
 
 Todo：
 
-- [ ] 定义 `ConversationTaskState`：user goal、current subgoals、completed evidence、pending work、blocked work、last failure、recoverable actions、background jobs。
-- [ ] 定义 `ConversationResumeState`：session id、thread id、last durable turn、last stable checkpoint、pending runs、background jobs、artifact lineage、client state freshness。
-- [ ] 定义 `HistoryMutationPolicy`：支持 `revert`、`continue`、`branch`、`merge` 四类历史变更模式，并声明各自的状态继承和废弃规则。
-- [ ] 每轮开始前由 harness 生成 state digest，区分“用户新需求”“对上轮结果追问”“失败恢复”“后台结果回访”“范围变更”。
-- [ ] 每次恢复历史前运行 resume preflight：检查 workspace path、session store、artifact refs、execution units、capability versions、file hashes、permissions。
-- [ ] 给失败结果生成通用 `RecoveryPlan`：可复用证据、需要重跑的步骤、可跳过步骤、用户可选操作、推荐下一步。
-- [ ] 对超时任务保存 checkpoint：已完成 artifact、已下载 refs、已读取文档、已验证 claim、未完成队列、失败原因。
-- [ ] 支持 continuation prompt 只携带 state digest 和 refs，不重新塞入完整历史、完整 trace 或完整文件内容。
-- [ ] 增加 stale/invalidated state 检测：用户改范围、文件变化、artifact 删除、capability 版本变化时重新规划。
-- [ ] 编辑历史消息时必须生成 history branch record：编辑前后消息、受影响 turns、废弃 runs、保留 refs、冲突 refs、推荐继续策略。
-- [ ] 中断后继续时必须区分 interrupted output、interrupted tool、interrupted repair、interrupted background job，分别采用不同恢复策略。
-- [ ] 多客户端/多标签继续时必须有 ordering/conflict guard：同一会话并发写入要串行化、分支化或进入 needs-human。
-- [ ] UI presentation 中优先展示“已完成/可继续/需要用户选择”，raw diagnostics 默认折叠。
-- [ ] 增加多轮 recovery smoke：失败后第二轮必须能继续未完成部分，而不是新开一个无关 run。
-- [ ] 增加 lifecycle smoke：重启继续、历史恢复、中断继续、编辑历史 revert、编辑历史 continue、分支合并分别有独立 fixture。
+- [x] 定义 `ConversationTaskState`：user goal、current subgoals、completed evidence、pending work、blocked work、last failure、recoverable actions、background jobs。
+- [x] 定义 `ConversationResumeState`：session id、thread id、last durable turn、last stable checkpoint、pending runs、background jobs、artifact lineage、client state freshness。
+- [x] 定义 `HistoryMutationPolicy`：支持 `revert`、`continue`、`branch`、`merge` 四类历史变更模式，并声明各自的状态继承和废弃规则。
+- [x] 每轮开始前由 harness 生成 state digest，区分“用户新需求”“对上轮结果追问”“失败恢复”“后台结果回访”“范围变更”。
+- [x] 每次恢复历史前运行 resume preflight：检查 workspace path、session store、artifact refs、execution units、capability versions、file hashes、permissions。
+- [x] 给失败结果生成通用 `RecoveryPlan`：可复用证据、需要重跑的步骤、可跳过步骤、用户可选操作、推荐下一步。
+- [x] 对超时任务保存 checkpoint：已完成 artifact、已下载 refs、已读取文档、已验证 claim、未完成队列、失败原因。
+- [x] 支持 continuation prompt 只携带 state digest 和 refs，不重新塞入完整历史、完整 trace 或完整文件内容。
+- [x] 增加 stale/invalidated state 检测：用户改范围、文件变化、artifact 删除、capability 版本变化时重新规划。
+- [x] 编辑历史消息时必须生成 history branch record：编辑前后消息、受影响 turns、废弃 runs、保留 refs、冲突 refs、推荐继续策略。
+- [x] 中断后继续时必须区分 interrupted output、interrupted tool、interrupted repair、interrupted background job，分别采用不同恢复策略。
+- [x] 多客户端/多标签继续时必须有 ordering/conflict guard：同一会话并发写入要串行化、分支化或进入 needs-human。
+- [x] UI presentation 中优先展示“已完成/可继续/需要用户选择”，raw diagnostics 默认折叠。
+- [x] 增加多轮 recovery smoke：失败后第二轮必须能继续未完成部分，而不是新开一个无关 run。
+- [x] 增加 lifecycle smoke：重启继续、历史恢复、中断继续、编辑历史 revert、编辑历史 continue、分支合并分别有独立 fixture。
 
 验收：
 
-- [ ] 失败、超时、取消、后台化之后，用户能看到可执行的下一步，而不是只有“任务未完成”。
-- [ ] 多轮任务不会把同一目标重复拆解、重复探索、重复下载或重复验证。
-- [ ] continuation 可以跨 backend 和 profile 保持稳定的任务状态语义。
-- [ ] 重启/刷新/跨 session 恢复后，agent 能说明状态来源和不确定项，而不是假装内存上下文仍完整。
-- [ ] 编辑历史消息不会静默污染已有 artifact；revert 会废弃派生状态，continue 会保留但标注冲突。
+- [x] 失败、超时、取消、后台化之后，用户能看到可执行的下一步，而不是只有“任务未完成”。
+- [x] 多轮任务不会把同一目标重复拆解、重复探索、重复下载或重复验证。
+- [x] continuation 可以跨 backend 和 profile 保持稳定的任务状态语义。
+- [x] 重启/刷新/跨 session 恢复后，agent 能说明状态来源和不确定项，而不是假装内存上下文仍完整。
+- [x] 编辑历史消息不会静默污染已有 artifact；revert 会废弃派生状态，continue 会保留但标注冲突。
 
 ### H019 General Agent Behavior Optimization
 
@@ -207,21 +210,21 @@ Todo：
 
 Todo：
 
-- [ ] 增强 intent classifier：识别长任务、报告任务、调研任务、恢复任务、追问任务、范围变更任务、速度优先任务。
-- [ ] 增强 escalation stop rule：当已有 partial 足够回答当前轮时停止扩展，把剩余工作转为可选继续项。
-- [ ] 增强 evidence sufficiency rule：按用户要求的结论粒度判断证据是否足够，而不是默认追求完整搜集。
-- [ ] 增强 repeated-work guard：同 query、同 URL/ref、同 artifact hash、同 failure signature、同 verifier result 在同会话中默认复用。
-- [ ] 增强 tool batching/parallelism：独立检索、下载 metadata、artifact scan、引用检查可并行，关键路径优先返回。
-- [ ] 增强 progress wording：长任务在 deadline 前必须说明当前阶段、已完成内容、下一步和是否会后台继续。
-- [ ] 增强 partial report format：复杂任务先输出结构化摘要、证据表、缺口和后续计划，再逐步补全全文报告。
-- [ ] 增强 budget downgrade：预算接近耗尽时自动降级验证/下载/重试深度，并保留用户可手动升级路径。
-- [ ] 增强 backend handoff directive：prompt 只渲染通用策略和当前 state，不写具体案例硬编码规则。
+- [x] 增强 intent classifier：识别长任务、报告任务、调研任务、恢复任务、追问任务、范围变更任务、速度优先任务。
+- [x] 增强 escalation stop rule：当已有 partial 足够回答当前轮时停止扩展，把剩余工作转为可选继续项。
+- [x] 增强 evidence sufficiency rule：按用户要求的结论粒度判断证据是否足够，而不是默认追求完整搜集。
+- [x] 增强 repeated-work guard：同 query、同 URL/ref、同 artifact hash、同 failure signature、同 verifier result 在同会话中默认复用。
+- [x] 增强 tool batching/parallelism：独立检索、下载 metadata、artifact scan、引用检查可并行，关键路径优先返回。
+- [x] 增强 progress wording：长任务在 deadline 前必须说明当前阶段、已完成内容、下一步和是否会后台继续。
+- [x] 增强 partial report format：复杂任务先输出结构化摘要、证据表、缺口和后续计划，再逐步补全全文报告。
+- [x] 增强 budget downgrade：预算接近耗尽时自动降级验证/下载/重试深度，并保留用户可手动升级路径。
+- [x] 增强 backend handoff directive：prompt 只渲染通用策略和当前 state，不写具体案例硬编码规则。
 
 验收：
 
-- [ ] 同一套优化能改善文献调研、代码任务、runtime 诊断任务、artifact 任务和数据任务的多轮表现。
-- [ ] 首个可读结果延迟下降，重复工具调用下降，失败后可继续率上升。
-- [ ] 行为改变可以从 harness trace 和 benchmark summary 中解释。
+- [x] 同一套优化能改善文献调研、代码任务、runtime 诊断任务、artifact 任务和数据任务的多轮表现。
+- [x] 首个可读结果延迟下降，重复工具调用下降，失败后可继续率上升。
+- [x] 行为改变可以从 harness trace 和 benchmark summary 中解释。
 
 ### H020 Complex Dialogue Speed and Quality Metrics
 
@@ -244,23 +247,116 @@ Todo：
 
 Todo：
 
-- [ ] 定义 `ComplexDialogueBenchmarkReport` schema，输出 latency、cost、tool count、reuse count、failure mode、quality score。
-- [ ] 增加每轮 event timeline 聚合，把 first result、partial、background start、revision、failure、recovery 串成可读报告。
-- [ ] 对每个 fixture 建立 baseline 和 optimized 对比，记录改善比例和退化项。
-- [ ] 设置性能门槛：first readable result、重复工作率、dead-end rate、recovery success rate 至少满足最低线。
-- [ ] 增加 lifecycle metrics：resume hit rate、stale detection rate、history branch correctness、duplicate side effect prevention、state explanation completeness。
-- [ ] 将 benchmark 结果写入 artifacts/debug report，便于 UI 展示和人工审查。
-- [ ] 增加 regression guard：通用策略改动不得让简单任务变慢，不得让 deep 任务丢失审计证据。
+- [x] 定义 `ComplexDialogueBenchmarkReport` schema，输出 latency、cost、tool count、reuse count、failure mode、quality score。
+- [x] 增加每轮 event timeline 聚合，把 first result、partial、background start、revision、failure、recovery 串成可读报告。
+- [x] 对每个 fixture 建立 baseline 和 optimized 对比，记录改善比例和退化项。
+- [x] 设置性能门槛：first readable result、重复工作率、dead-end rate、recovery success rate 至少满足最低线。
+- [x] 增加 lifecycle metrics：resume hit rate、stale detection rate、history branch correctness、duplicate side effect prevention、state explanation completeness。
+- [x] 将 benchmark 结果写入 artifacts/debug report，便于 UI 展示和人工审查。
+- [x] 增加 regression guard：通用策略改动不得让简单任务变慢，不得让 deep 任务丢失审计证据。
 
 验收：
 
-- [ ] 每次复杂多轮优化都能用数据说明速度、质量和恢复能力变化。
-- [ ] benchmark 能指出退化来自 context、capability、tool、presentation、repair 还是 backend handoff。
-- [ ] 指标适用于任意 scenario，不绑定具体 prompt 或固定任务文案。
+- [x] 每次复杂多轮优化都能用数据说明速度、质量和恢复能力变化。
+- [x] benchmark 能指出退化来自 context、capability、tool、presentation、repair 还是 backend handoff。
+- [x] 指标适用于任意 scenario，不绑定具体 prompt 或固定任务文案。
+
+### H021 Intent-first Verification and Background Work Checks
+
+职责：把 verify 从“主路径阻塞步骤”改成通用的分层旁路系统。默认只在主回答路径做极轻量的 Intent Match Check，确认回答匹配用户最新意图、不违背明确约束、不做过度行动；Work Verify 和 Heavy Verify 默认作为旁路后台任务运行，只在用户明确要求等待、高风险 side effect、发布/合并/上线等场景才阻塞主路径。
+
+核心原则：
+
+- Verify 不是单一动作，不等同于跑测试、smoke 或 benchmark。
+- 主路径优先回答用户当前意图；验证深度由用户意图、风险等级和产物类型路由。
+- Response Verify 默认只做 Intent Match，不做完整事实审稿、长链路审计或产物正确性证明。
+- Work Verify 默认旁路化，产物可以先交付，同时标注“未等待验证 / 后台验证中 / 最小验证通过 / 验证失败”。
+- Heavy Verify 永远不默认阻塞，除非用户要求等待或系统判断未验证交付会造成明显风险。
+- Smoke、全量测试、benchmark、渲染 QA、长检索复核属于 Heavy Verify 或工程产物验证，不属于通用对话回答的默认门槛。
+
+验证层级：
+
+- `intent`：默认主路径，极轻量检查是否回答最新问题、遵守明确约束、没有遗漏主请求、没有过度行动、必要时标注不确定或未验证。
+- `work-background`：默认旁路，针对代码、文件、数据、图像、外部操作等产物运行最小必要检查，并异步回流结构化 verdict。
+- `careful`：用户要求更稳或任务复杂时触发，扩大检查范围，但仍可后台运行。
+- `release`：发布、合并、上线或高风险任务前触发，可包含全量 test、smoke、benchmark、端到端 QA 和人工验收信号。
+
+Todo：
+
+- [x] 定义 `IntentMatchCheck` contract：latest user intent、explicit constraints、requested action type、over-action guard、uncertainty note、answer coverage verdict。
+- [x] 将默认 Response Verify 收缩为毫秒级/极轻量 intent check，不做默认事实深挖、产物验证、smoke 或全量测试。
+- [x] 定义 `VerifyJob` / `VerifyVerdict` contract：scope、level、blocking policy、started/completed status、evidence refs、failure summary、recommended fix。
+- [x] 把 Work Verify 做成第一阶段旁路任务：代码、文档、数据、图像、文件修改、外部 side effect 可生成独立 verify job / verdict / lineage，并默认不阻塞回答；真实异步队列和持久 worker 留给后续。
+- [x] 增加 verify routing policy：根据用户意图识别 `skip verify`、`verify in background`、`wait for verify`、`careful verify`、`release verify`。
+- [x] 增加 blocking guard：只有用户明确要求等待、高风险不可逆 side effect、发布/合并/上线、或未验证交付会明显误导用户时，verify 才能阻塞主路径。
+- [x] 在结果 payload / display intent 中展示第一阶段简洁 verify 状态：`intent checked`、`work verify pending`、`background verify queued`、`not verified`；`verify passed/failed` 留给后台 verdict 回流阶段。
+- [x] 将 smoke/full test/benchmark 从默认回答路径剥离，归入 `work-background`、`careful` 或 `release` 等旁路等级。
+- [x] 支持后台 verify 失败后的基础 follow-up：生成失败原因、建议修复、recoverActions、nextStep，并通过 background completion event 回流。
+- [x] 为单轮 payload / background event 记录 verify lineage：jobId、targetRefs、evidenceRefs、verdictRef、eventRef、followUpRequired；跨轮持久 index 留给后续。
+- [ ] 增加 fixtures 覆盖：建议型对话只做 intent check；代码改动后台 work verify；用户要求等待时阻塞；高风险 side effect fail closed；release verify 走完整检查。
+- [x] 更新复杂多轮 benchmark 指标：区分 verify latency、blocking verify rate、background verify failure recovery rate，并纳入 replay/export/runtime replay 报告。
+
+验收：
+
+- [x] 普通问答默认不会被 work verify、smoke、全量测试或 benchmark 阻塞。
+- [x] 所有回答至少经过 Intent Match Check，能避免答偏、违反明确约束或执行过度动作。
+- [x] 有产物的任务可以先交付并生成后台 Work Verify job 标注，用户能看到清楚的验证状态；真实异步 runner 留给 M19b。
+- [ ] 用户明确要求等待验证时，系统能阻塞到指定 verify 等级完成后再交付。
+- [x] 后台 verify 失败不会静默丢失，第一阶段会回流为可执行修复建议或风险提示；跨轮持久追踪留给后续。
+- [x] Smoke 和 release 级验证只在明确选择、发布/合并/上线或高风险边界中触发。
 
 ## 当前里程碑
 
-- [ ] M13：建立复杂多轮对话压测任务板、fixture contract 和 benchmark 指标。
+- [x] M13：建立复杂多轮对话压测任务板、fixture contract 和 benchmark 指标。
+- [x] M14：把 M13 contract 接入 harness runtime trace、UI presentation 和 contract replay runner。
+  - [x] Trace 接入：将 `tests/fixtures/complex-multiturn` 的 required events/metrics 映射到 agent harness runtime trace，并保留 contract/trace refs、state digest、first readable result、resume preflight 和 recovery 边界。
+  - [x] Presentation 接入：把 fixture 的 `presentationSnapshots` 转成用户可见结果约束，默认展开 answer/evidence/artifacts，折叠 raw trace/diagnostics，并覆盖 partial、failure、background revision、history mutation 状态。
+  - [x] Replay runner 接入：提供 contract replay runner 聚合入口，能按 fixture tier/domain/lifecycle 场景重放 harness trace、验证 artifact/run/ref 命中和 side effect 去重。
+  - [x] 指标聚合：将 replay/runtime/presentation 输出汇总到 `ComplexDialogueBenchmarkReport`，覆盖 first readable latency、turn completion、redundant work、recovery、artifact reference accuracy、resume/history/side-effect 指标。
+  - [x] Smoke 审计：维护 M14 integration smoke，校验 harness projection、presentation、replay runner 模块可 import 且暴露可调用聚合入口或 contract 常量。
+  - [x] 验收证据：主线程验收前运行独立 M14 smoke、typecheck，以及 E/F/G 各自 smoke；确认 checklist 后再标完成。
+- [x] M15：把复杂多轮 fixture replay 输出为可审计 benchmark/debug artifact。
+  - [x] Export contract：新增 `ComplexMultiturnBenchmarkExport`，聚合 67 个 fixture 的 replay summary、contract summary、fixture summaries 和 `ComplexDialogueBenchmarkReport`。
+  - [x] CLI 接入：新增 `npm run bench:complex-multiturn`，默认写入 `.sciforge/reports/complex-multiturn-benchmark-export.json`，并支持 tier 过滤和稳定时间戳。
+  - [x] Smoke 审计：新增 `npm run smoke:complex-multiturn-benchmark-export`，校验 67 fixtures、620 turns、recovery/lifecycle/side-effect 指标和 aggregate gates。
+  - [x] UI 接入防护：gateway 在 payload 已携带合法 `resultPresentation` 时保留原 contract，避免 complex multiturn presentation 被通用 fallback 覆盖。
+  - [x] Verify 边界：M15 benchmark export 保持为显式脚本，不加入默认 `verify:fast`，避免日常开发被完整复杂多轮 benchmark 拖慢。
+- [x] M16：把真实形态 runtime/session events 接入复杂多轮 replay 审计。
+  - [x] Runtime replay contract：新增 `ComplexMultiturnRuntimeReplayReport`，从 `WorkspaceRuntimeEvent[]` 生成 `ComplexDialogueBenchmarkReport`、coverage 和 recovery/resume/history/side-effect 指标。
+  - [x] CLI 接入：新增 `npm run bench:complex-multiturn-runtime-replay`，读取 runtime event JSON 或 `{ session: { runtimeEvents } }`，输出 `.sciforge/reports/complex-multiturn-runtime-replay.json`。
+  - [x] Event recorder：新增 runtime event recorder helper，将 callback 事件规范化为 session-scoped NDJSON，并补稳定 event id、timestamp、session/run metadata，供 replay CLI 读取。
+  - [x] Smoke 审计：新增 `npm run smoke:complex-multiturn-runtime-replay` 并纳入 `smoke:complex-multiturn`，覆盖 artifact/run/execution-unit refs、resume preflight、history branch record、recovery plan 和 side-effect guard。
+  - [x] 边界声明：M16 只验证非视觉 runtime/session event replay，不恢复 Computer Use / 视觉 GUI grounding 压测。
+- [x] M17：把 M16 runtime event recorder 接入 gateway 的显式 opt-in 入口。
+  - [x] Gateway opt-in：新增 runtime replay recorder gateway helper；仅在 `uiState.runtimeReplayRecorder.enabled === true` 且 `workspacePath` 可用时包装 runtime callbacks。
+  - [x] 默认安全边界：默认请求不启用写盘、不创建 session NDJSON、不改变 callback 语义，并继续不恢复 Computer Use / 视觉 GUI grounding 压测。
+  - [x] Replay metadata：opt-in 录制沿用 session bundle 路径，补稳定 event id、timestamp、session/run metadata，产出的 `runtimeEventsRef` 可交给 M16 replay CLI。
+  - [x] Smoke/单测：覆盖 disabled 默认、missing workspace、enabled opt-in、event forwarding、session bundle 路径和 recorded NDJSON 可被 runtime replay report 消费。
+- [x] M18：为 gateway opt-in runtime replay recorder 建立端到端回归守卫和可发现性。
+  - [x] E2E regression guard：覆盖 gateway opt-in 入口到 recorder 写入、`runtimeEventsRef` 暴露、M16 runtime replay CLI 消费的完整非视觉链路，防止 gateway callback 包装、session bundle 路径或 replay metadata 退化。
+  - [x] 默认不写盘：明确默认请求、缺少 workspace、未显式启用 recorder 时不得创建 NDJSON、不得 materialize session bundle、不得改变 runtime callback 语义。
+  - [x] Opt-in 可发现性：在项目任务板中记录 recorder 的启用条件、产物位置、可交给 replay CLI 的引用形态，以及 smoke/benchmark 入口，便于后续 agent 找到端到端验收路径。
+  - [x] 回归边界：守卫只覆盖 runtime/session event replay recorder 的 opt-in 非视觉路径，不恢复 Computer Use / 视觉 GUI grounding，不测试视觉定位、桌面点击、屏幕元素 grounding 或纯视觉 GUI 自动化。
+  - [x] 验收信号：完成项必须能证明 disabled default、enabled opt-in、event forwarding、recorded NDJSON replay、runtimeEventsRef 可追踪和 no-write default 均被守住。
+- [ ] M19：分阶段实现 Intent-first Verification 和旁路 Work Verify。
+  - [x] M19a 第一阶段：先落 contract、gateway payload annotation 和 tests，只建立可审计的验证意图与状态标注，不宣称完整后台执行器完成。
+    - [x] Contract：定义 `IntentMatchCheck`、`VerifyJob`、`VerifyVerdict` 的最小稳定字段，覆盖 latest user intent、explicit constraints、requested action type、over-action guard、scope、level、blocking policy、status、evidence refs、failure summary、recommended fix。
+    - [x] Gateway payload annotation：在 gateway 输出 payload 中附加轻量 verify annotation，能表达 `intent checked`、`work verify pending`、`not verified` 等状态，并保留后续后台 job/verdict 接入点。
+    - [x] Tests：覆盖普通回答只标 intent check、有产物回答可标 work verify pending、用户要求等待时 payload 能表达 blocking policy、高风险/发布类请求能标 release/careful intent，但不要求真实后台 runner 执行。
+    - [x] Boundary：M19a 不实现完整后台 Work Verify 执行器、不调度真实异步 verify job、不把 smoke/full test/benchmark 接入默认回答路径。
+  - [ ] M19b 后续阶段：实现旁路 Work Verify runner、后台 verdict 回流、失败 follow-up 和多轮 verify lineage。
+    - [x] Verify routing policy 已落地：支持 `skip` / `background` / `wait` / `careful` / `release` 与 blocking policy 标注。
+    - [x] 最小 sidecar Work Verify runner 已落地：基于 executionUnits、workEvidence、verificationResults 做轻量 pass/fail verdict，不跑 smoke/full/benchmark。
+    - [x] 基础 verdict 回流已落地：通过 `sciforge.background-completion.v1` runtime event 暴露 pass/fail、refs、repair hint。
+    - [x] 失败 follow-up 投影已落地：payload/event 中有 failureSummary、recommendedFix、recoverActions、nextStep。
+    - [x] 单轮 lineage 已落地：jobId、targetRefs、evidenceRefs、verdictRef、eventRef 可审计。
+    - [ ] 真实异步后台 runner/queue、持久 job 状态、跨轮 lineage index 尚未完成。
+  - [ ] M19c 后续阶段：实现 careful/release 等级验证、blocking guard、release 级 smoke/full test/benchmark 接入和复杂多轮指标更新。
+    - [x] careful/release 路由与 blocking policy 标注已落地。
+    - [x] complex dialogue verify metrics 已更新：verify latency、blocking verify rate、background verify failure recovery rate，并接入 fixture/replay/export/runtime replay。
+    - [ ] careful/release 的真实验证执行尚未完成。
+    - [ ] 用户要求 wait/release 时阻塞到指定 verify 等级完成尚未完成。
+    - [ ] release 级 smoke/full test/benchmark adapter 尚未接入。
 
 ## 已清理内容
 

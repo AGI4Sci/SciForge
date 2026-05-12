@@ -137,6 +137,49 @@ test('context envelope and AgentServer prompt carry only clipped policy summarie
   assert.doesNotMatch(prompt, /RAW_POLICY_SHOULD_NOT_BE_COPIED/);
 });
 
+test('generation prompt compacts capability broker briefs for backend handoff', () => {
+  const longText = 'CAPABILITY_DETAIL_SHOULD_BE_CLIPPED '.repeat(300);
+  const capabilityBrokerBrief = {
+    schemaVersion: 'sciforge.agentserver.capability-broker-brief.v1',
+    source: 'test',
+    contract: 'capability-contract',
+    briefs: Array.from({ length: 14 }, (_, index) => ({
+      id: `capability-${index}`,
+      name: `Capability ${index}`,
+      kind: 'tool',
+      brief: longText,
+      routingTags: ['literature', 'retrieval', 'download'],
+      domains: ['literature'],
+      providerIds: ['provider-a'],
+      budget: {
+        status: 'ok',
+        limits: longText,
+      },
+    })),
+  };
+  const prompt = buildAgentServerGenerationPrompt({
+    prompt: 'Find current papers and produce a report.',
+    skillDomain: 'literature',
+    contextEnvelope: {
+      version: 'test',
+      scenarioFacts: { capabilityBrokerBrief },
+      sessionFacts: {},
+    },
+    workspaceTreeSummary: [],
+    availableSkills: [],
+    availableRuntimeCapabilities: capabilityBrokerBrief,
+    artifactSchema: {},
+    uiManifestContract: {},
+    uiStateSummary: {},
+    priorAttempts: [],
+  });
+
+  assert.match(prompt, /omittedBriefCount/);
+  assert.match(prompt, /capability-5/);
+  assert.doesNotMatch(prompt, /capability-6/);
+  assert.ok(prompt.length < 35_000, `prompt should stay compact, got ${prompt.length}`);
+});
+
 function baseRequest(): GatewayRequest {
   return {
     skillDomain: 'literature',

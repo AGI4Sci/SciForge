@@ -90,10 +90,9 @@ export const DEFAULT_BACKEND_HANDOFF_BUDGET: BackendHandoffBudget = {
   maxPriorAttempts: 4,
 };
 
-export function backendHandoffRef(purpose: string, rawSha1: string, suffix = '') {
+export function backendHandoffRef(purpose: string, rawSha1: string, suffix = '', sessionBundleRel?: string) {
   return join(
-    '.sciforge',
-    'handoffs',
+    sessionBundleRel ? join(sessionBundleRel.replace(/\/+$/, ''), 'handoffs') : join('.sciforge', 'handoffs'),
     `${new Date().toISOString().replace(/[:.]/g, '-')}-${safeToken(purpose)}-${rawSha1.slice(0, 10)}${suffix}.json`,
   );
 }

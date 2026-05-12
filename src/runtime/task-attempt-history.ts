@@ -23,13 +23,15 @@ export async function appendTaskAttempt(workspacePath: string, record: TaskAttem
   const normalizedRecord = recordWithAudit.status === 'done'
     ? { ...recordWithAudit, failureReason: undefined }
     : recordWithAudit;
-  const path = join(workspace, '.sciforge', 'task-attempts', `${safeName(record.id)}.json`);
-  await mkdir(dirname(path), { recursive: true });
+  const path = normalizedRecord.sessionBundleRef
+    ? join(workspace, normalizedRecord.sessionBundleRef, 'records', 'task-attempts', `${safeName(record.id)}.json`)
+    : join(workspace, '.sciforge', 'task-attempts', `${safeName(record.id)}.json`);
   const previous = await readAttempts(path);
   const attempts = [
     ...previous.filter((item) => item.attempt !== normalizedRecord.attempt),
     normalizedRecord,
   ].sort((left, right) => left.attempt - right.attempt);
+  await mkdir(dirname(path), { recursive: true });
   await writeFile(path, JSON.stringify({
     id: normalizedRecord.id,
     prompt: normalizedRecord.prompt,
@@ -38,32 +40,23 @@ export async function appendTaskAttempt(workspacePath: string, record: TaskAttem
     skillPlanRef: normalizedRecord.skillPlanRef,
     uiPlanRef: normalizedRecord.uiPlanRef,
     routeDecision: normalizedRecord.routeDecision,
+    sessionId: normalizedRecord.sessionId,
+    sessionBundleRef: normalizedRecord.sessionBundleRef,
     updatedAt: new Date().toISOString(),
     attempts,
   }, null, 2));
-  if (normalizedRecord.sessionBundleRef) {
-    const sessionAttemptPath = join(workspace, normalizedRecord.sessionBundleRef, 'records', 'task-attempts', `${safeName(record.id)}.json`);
-    await mkdir(dirname(sessionAttemptPath), { recursive: true });
-    await writeFile(sessionAttemptPath, JSON.stringify({
-      id: normalizedRecord.id,
-      prompt: normalizedRecord.prompt,
-      skillDomain: normalizedRecord.skillDomain,
-      scenarioPackageRef: normalizedRecord.scenarioPackageRef,
-      skillPlanRef: normalizedRecord.skillPlanRef,
-      uiPlanRef: normalizedRecord.uiPlanRef,
-      routeDecision: normalizedRecord.routeDecision,
-      sessionId: normalizedRecord.sessionId,
-      sessionBundleRef: normalizedRecord.sessionBundleRef,
-      updatedAt: new Date().toISOString(),
-      attempts,
-    }, null, 2));
-  }
   return path;
 }
 
 export async function readTaskAttempts(workspacePath: string, id: string): Promise<TaskAttemptRecord[]> {
   const workspace = resolve(workspacePath || process.cwd());
-  return withAttemptDerivedMetadata(workspace, await readAttempts(join(workspace, '.sciforge', 'task-attempts', `${safeName(id)}.json`)));
+  const rootAttempts = await readAttempts(join(workspace, '.sciforge', 'task-attempts', `${safeName(id)}.json`));
+  if (rootAttempts.length) return withAttemptDerivedMetadata(workspace, rootAttempts);
+  const sessionFiles = await sessionTaskAttemptFiles(workspace);
+  const groups = await Promise.all(sessionFiles
+    .filter((file) => file.endsWith(`/${safeName(id)}.json`))
+    .map((file) => readAttempts(file)));
+  return withAttemptDerivedMetadata(workspace, groups.flat());
 }
 
 export async function readRecentTaskAttempts(
@@ -73,17 +66,7 @@ export async function readRecentTaskAttempts(
   scope: { scenarioPackageId?: string; skillPlanRef?: string; prompt?: string } = {},
 ): Promise<TaskAttemptRecord[]> {
   const workspace = resolve(workspacePath || process.cwd());
-  const dir = join(workspace, '.sciforge', 'task-attempts');
-  if (!await fileExists(dir)) return [];
-  let files: string[];
-  try {
-    files = await readdir(dir);
-  } catch {
-    return [];
-  }
-  const groups = await Promise.all(files
-    .filter((file) => file.endsWith('.json'))
-    .map((file) => readAttempts(join(dir, file))));
+  const groups = await Promise.all((await taskAttemptFiles(workspace)).map((file) => readAttempts(file)));
   const attempts = groups
     .flat()
     .filter((attempt) => !skillDomain || attempt.skillDomain === skillDomain)
@@ -91,6 +74,37 @@ export async function readRecentTaskAttempts(
     .sort((left, right) => Date.parse(right.createdAt || '') - Date.parse(left.createdAt || ''))
     .slice(0, limit);
   return withAttemptDerivedMetadata(workspace, attempts);
+}
+
+async function taskAttemptFiles(workspace: string) {
+  const rootDir = join(workspace, '.sciforge', 'task-attempts');
+  const rootFiles = await jsonFilesInDir(rootDir);
+  return [...rootFiles, ...await sessionTaskAttemptFiles(workspace)];
+}
+
+async function sessionTaskAttemptFiles(workspace: string) {
+  const sessionsDir = join(workspace, '.sciforge', 'sessions');
+  let sessionDirs: string[];
+  try {
+    sessionDirs = await readdir(sessionsDir);
+  } catch {
+    return [];
+  }
+  const nested = await Promise.all(sessionDirs
+    .filter((entry) => !entry.endsWith('.json'))
+    .map((entry) => jsonFilesInDir(join(sessionsDir, entry, 'records', 'task-attempts'))));
+  return nested.flat();
+}
+
+async function jsonFilesInDir(dir: string) {
+  if (!await fileExists(dir)) return [];
+  try {
+    return (await readdir(dir))
+      .filter((file) => file.endsWith('.json'))
+      .map((file) => join(dir, file));
+  } catch {
+    return [];
+  }
 }
 
 function matchesAttemptScope(

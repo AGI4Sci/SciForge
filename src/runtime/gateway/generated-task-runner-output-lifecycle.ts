@@ -79,7 +79,8 @@ export async function completeGeneratedTaskRunOutputLifecycle(
     const boundaryPayload = normalizeWorkspaceTaskPayloadBoundary(rawPayload) as ToolPayload;
     const payload = deps.coerceWorkspaceTaskPayload(boundaryPayload) ?? boundaryPayload;
     const rawErrors = deps.schemaErrors(rawPayload);
-    const errors = rawErrors.length ? rawErrors : deps.schemaErrors(payload);
+    const payloadErrors = deps.schemaErrors(payload);
+    const errors = payloadErrors.length ? payloadErrors : [];
     let normalized = errors.length ? undefined : await deps.validateAndNormalizePayload(payload, request, skill, {
       ...refs,
       runtimeFingerprint: run.runtimeFingerprint,
@@ -109,10 +110,10 @@ export async function completeGeneratedTaskRunOutputLifecycle(
         ...refs,
         attemptPlanRefs: deps.attemptPlanRefs,
         attemptStatus: lifecycle.attemptStatus,
-        attemptSchemaErrors: errors,
+        attemptSchemaErrors: errors.length ? errors : rawErrors,
         workEvidenceSummary: lifecycle.workEvidenceSummary,
         attemptFailureReason: lifecycle.attemptFailureReason,
-        schemaErrors: errors,
+        schemaErrors: errors.length ? errors : rawErrors,
         failureReason: lifecycle.repair.failureReason,
         recoverActions: lifecycle.repair.recoverActions,
         callbacks: input.callbacks,

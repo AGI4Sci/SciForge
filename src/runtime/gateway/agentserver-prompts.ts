@@ -8,6 +8,7 @@ import { buildCapabilityBrokerBriefForAgentServer, buildContextEnvelope, expecte
 import { agentServerAgentId, agentServerContextPolicy, contextWindowMetadata, fetchAgentServerContextSnapshot } from './agentserver-context-window.js';
 import { cleanUrl, clipForAgentServerJson, clipForAgentServerPrompt, errorMessage, excerptAroundFailureLine, extractLikelyErrorLine, hashJson, headForAgentServer, isRecord, readTextIfExists, tailForAgentServer, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
 import { normalizeBackendHandoff } from '../workspace-task-input.js';
+import { sessionBundleRelForRequest } from '../session-bundle.js';
 import { readRecentTaskAttempts } from '../task-attempt-history.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import { sha1 } from '../workspace-task-runner.js';
@@ -191,6 +192,7 @@ export async function requestAgentServerRepair(params: {
     const normalizedHandoff = await normalizeBackendHandoff(runPayload, {
       workspacePath: params.run.workspace,
       purpose: 'agentserver-repair',
+      sessionBundleRel: sessionBundleRelForRequest(params.request),
     });
     runPayload = normalizedHandoff.payload;
     const response = await fetch(`${params.baseUrl}/api/agent-server/runs`, {
@@ -206,7 +208,7 @@ export async function requestAgentServerRepair(params: {
     } catch {
       // Keep raw text in the failure message below.
     }
-    await writeAgentServerDebugArtifact(params.run.workspace, 'repair', runPayload, response.status, json);
+    await writeAgentServerDebugArtifact(params.run.workspace, 'repair', runPayload, response.status, json, sessionBundleRelForRequest(params.request));
     if (!response.ok) {
       const detail = isRecord(json) ? String(json.error || json.message || '') : '';
       return { ok: false, error: sanitizeAgentServerError(detail || `AgentServer repair HTTP ${response.status}: ${String(text).slice(0, 500)}`) };
@@ -231,7 +233,7 @@ export async function requestAgentServerRepair(params: {
       diffSummary,
     };
   } catch (error) {
-    await writeAgentServerDebugArtifact(params.run.workspace, 'repair', runPayload, 0, { error: errorMessage(error) });
+    await writeAgentServerDebugArtifact(params.run.workspace, 'repair', runPayload, 0, { error: errorMessage(error) }, sessionBundleRelForRequest(params.request));
     return { ok: false, error: agentServerRequestFailureMessage('repair', error, timeoutMs) };
   } finally {
     clearTimeout(timeout);
@@ -256,10 +258,13 @@ export async function writeAgentServerDebugArtifact(
   requestPayload: unknown,
   responseStatus: number,
   responseBody: unknown,
+  sessionBundleRel?: string,
 ) {
   try {
     const id = `${new Date().toISOString().replace(/[:.]/g, '-')}-${task}-${sha1(JSON.stringify(requestPayload)).slice(0, 8)}`;
-    const rel = join('.sciforge', 'debug', 'agentserver', `${id}.json`);
+    const rel = sessionBundleRel
+      ? join(sessionBundleRel.replace(/\/+$/, ''), 'debug', 'agentserver', `${id}.json`)
+      : join('.sciforge', 'debug', 'agentserver', `${id}.json`);
     await mkdir(dirname(join(workspace, rel)), { recursive: true });
     await writeFile(join(workspace, rel), JSON.stringify({
       createdAt: new Date().toISOString(),
@@ -556,6 +561,7 @@ export function buildAgentServerGenerationPrompt(request: {
     : isRecord(request.availableRuntimeCapabilities) && request.availableRuntimeCapabilities.schemaVersion === 'sciforge.agentserver.capability-broker-brief.v1'
       ? request.availableRuntimeCapabilities
       : undefined;
+  const capabilityBrokerRouteSummary = compactCapabilityBrokerRouteSummary(capabilityBrokerBrief);
   const promptRenderPlanSummary = promptRenderPlanSummaryForAgentServer(request, contextEnvelope, sessionFacts);
   const currentTurnSnapshot = {
     kind: 'SciForgeCurrentTurnSnapshot',
@@ -574,7 +580,7 @@ export function buildAgentServerGenerationPrompt(request: {
     executionScope: 'backend-decides',
     selectedToolIds: toStringList(scenarioFacts.selectedToolIds),
     selectedSenseIds: toStringList(scenarioFacts.selectedSenseIds),
-    capabilityBrokerBrief,
+    capabilityBrokerBrief: capabilityBrokerRouteSummary,
     promptRenderPlanSummary,
     currentReferences: Array.isArray(sessionFacts.currentReferences) ? sessionFacts.currentReferences : undefined,
     currentReferenceDigests: Array.isArray(sessionFacts.currentReferenceDigests) ? sessionFacts.currentReferenceDigests : undefined,
@@ -618,7 +624,7 @@ export function buildAgentServerGenerationPrompt(request: {
     ...agentServerExternalIoReliabilityContractLines(),
     '',
     JSON.stringify(clipForAgentServerJson({
-      ...compactGenerationRequestForAgentServer(request, capabilityBrokerBrief, promptRenderPlanSummary),
+      ...compactGenerationRequestForAgentServer(request, capabilityBrokerRouteSummary, promptRenderPlanSummary),
       taskContract: {
         argv: ['inputPath', 'outputPath'],
         outputPayloadKeys: ['message', 'confidence', 'claimType', 'evidenceLevel', 'reasoningTrace', 'claims', 'displayIntent', 'uiManifest', 'executionUnits', 'artifacts', 'objectReferences'],
@@ -651,6 +657,53 @@ function compactGenerationRequestForAgentServer(
       omittedCategories: ['legacy skill catalog', 'legacy tool catalog', 'legacy component catalog'],
       reason: 'T116 default backend handoff consumes compact broker briefs and keeps full schemas/examples/docs lazy.',
     },
+  };
+}
+
+function compactCapabilityBrokerRouteSummary(value: Record<string, unknown> | undefined) {
+  if (!isRecord(value)) return undefined;
+  const briefs = toRecordList(value.briefs);
+  const maxBriefs = 6;
+  return {
+    schemaVersion: stringField(value.schemaVersion),
+    source: stringField(value.source),
+    contract: stringField(value.contract),
+    routingPolicy: isRecord(value.routingPolicy) ? {
+      decisionOwner: stringField(value.routingPolicy.decisionOwner),
+      contractExpansion: stringField(value.routingPolicy.contractExpansion),
+      defaultPayload: stringField(value.routingPolicy.defaultPayload),
+    } : undefined,
+    briefs: briefs.slice(0, maxBriefs).map(compactCapabilityBriefForPrompt),
+    omittedBriefCount: Math.max(0, briefs.length - maxBriefs),
+    inputSummary: isRecord(value.inputSummary) ? {
+      objectRefs: value.inputSummary.objectRefs,
+      artifactIndexEntries: value.inputSummary.artifactIndexEntries,
+      failureHistoryEntries: value.inputSummary.failureHistoryEntries,
+      toolBudgetKeys: toStringList(value.inputSummary.toolBudgetKeys).slice(0, 16),
+    } : undefined,
+  };
+}
+
+function compactCapabilityBriefForPrompt(brief: Record<string, unknown>) {
+  const budget = isRecord(brief.budget) ? brief.budget : {};
+  return {
+    id: stringField(brief.id),
+    name: stringField(brief.name),
+    kind: stringField(brief.kind),
+    ownerPackage: stringField(brief.ownerPackage),
+    brief: clipForAgentServerPrompt(brief.brief, 260),
+    score: typeof brief.score === 'number' && Number.isFinite(brief.score) ? brief.score : undefined,
+    costClass: stringField(brief.costClass),
+    latencyClass: stringField(brief.latencyClass),
+    sideEffectClass: stringField(brief.sideEffectClass),
+    routingTags: toStringList(brief.routingTags).slice(0, 8),
+    domains: toStringList(brief.domains).slice(0, 6),
+    providerIds: toStringList(brief.providerIds).slice(0, 6),
+    budget: {
+      status: stringField(budget.status),
+      limits: clipForAgentServerPrompt(budget.limits, 120),
+    },
+    excluded: clipForAgentServerPrompt(brief.excluded, 180),
   };
 }
 

@@ -669,6 +669,7 @@ function hasStableDeliverableRef(payload: ToolPayload, refs: RepairPolicyRefs) {
     if (!ref || runtimeRefs.has(ref)) return false;
     return /^(?:file|artifact|run|url|http|https):/i.test(ref)
       || /^\.sciforge\/(?:artifacts|task-results|uploads)\//.test(ref)
+      || /^\.sciforge\/sessions\/[^/]+\/(?:artifacts|task-results|data|exports)\//.test(ref)
       || hasStableDeliverablePathSuffix(ref);
   });
 }

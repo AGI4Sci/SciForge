@@ -1,6 +1,7 @@
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceTaskRunResult } from '../runtime-types.js';
 import { skillRuntimeRoutePolicy } from '../../../packages/skills/runtime-policy';
 import { isRecord } from '../gateway-utils.js';
+import { sessionBundleRelForRequest } from '../session-bundle.js';
 import { agentServerBackend } from './agent-backend-config.js';
 
 function stringField(value: unknown) {
@@ -8,10 +9,13 @@ function stringField(value: unknown) {
 }
 
 export function attemptPlanRefs(request: GatewayRequest, skill?: SkillAvailability, fallbackReason?: string) {
+  const sessionBundleRef = sessionBundleRelForRequest(request);
   return {
     scenarioPackageRef: request.scenarioPackageRef,
     skillPlanRef: request.skillPlanRef,
     uiPlanRef: request.uiPlanRef,
+    sessionId: stringField(request.uiState?.sessionId),
+    sessionBundleRef,
     runtimeProfileId: runtimeProfileIdForRequest(request, skill),
     routeDecision: {
       selectedSkill: skill?.id,
