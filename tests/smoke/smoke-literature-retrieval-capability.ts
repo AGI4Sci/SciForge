@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 
 import { loadCoreCapabilityManifestRegistry } from '../../src/runtime/capability-manifest-registry.js';
 import {
+  deriveLiteratureCitationCorrection,
   runOfflineLiteratureRetrieval,
   validateOfflineLiteratureRetrievalOutput,
   type OfflineLiteratureRetrievalOutput,
@@ -304,6 +305,68 @@ assert.deepEqual(duplicateProvenance.includedProviderIds.sort(), [
 assert.deepEqual(duplicateProvenance.excludedProviderIds, ['literature.retrieval.web-search']);
 assert.ok(duplicateProvenance.differences.some((difference) => difference.field === 'title'));
 assert.ok(multiSourceRewrite.diagnostics.some((diagnostic) => diagnostic.code === 'source-excluded' && diagnostic.providerId === 'literature.retrieval.web-search'));
+
+const citationCorrectionSeed = checked(runOfflineLiteratureRetrieval({
+  request: {
+    query: 'citation correction target',
+    databases: ['web-search', 'pubmed', 'arxiv'],
+    includeAbstracts: true,
+  },
+  providerFixtures: [
+    {
+      providerId: 'web-search',
+      trustLevel: 'low',
+      records: [{
+        providerRecordId: 'blog-777',
+        title: 'Overclaimed citation',
+        year: 2026,
+        doi: '10.5555/correct.1',
+        citationMatches: false,
+      }],
+    },
+    {
+      providerId: 'pubmed',
+      trustLevel: 'high',
+      records: [{
+        providerRecordId: 'pmid-777',
+        title: 'Careful citation',
+        year: 2026,
+        journal: 'Journal of Scientific Agents',
+        doi: '10.5555/correct.1',
+        pmid: '777',
+      }],
+    },
+    {
+      providerId: 'arxiv',
+      records: [{
+        providerRecordId: '2605.11111',
+        title: 'Control paper',
+        year: 2026,
+        arxivId: '2605.11111',
+      }],
+    },
+  ],
+}));
+const correction = deriveLiteratureCitationCorrection({
+  output: citationCorrectionSeed,
+  target: { providerRecordRef: 'provider:web-search:blog-777' },
+  reason: 'User flagged the web-search citation as untrusted.',
+  action: 'exclude-provider-record',
+});
+assert.equal(correction.artifactType, 'citation-correction');
+assert.equal(correction.correctionStatus, 'corrected');
+assert.equal(correction.targetPaperId, 'paper:doi:10.5555/correct.1');
+assert.ok(correction.sourceRefs.includes('provider:web-search:blog-777'));
+assert.ok(correction.correctedSegment?.removedEvidenceRefs.includes('provider:web-search:blog-777'));
+assert.ok(correction.correctedSegment?.retainedEvidenceRefs.includes('provider:pubmed:pmid-777'));
+assert.ok(correction.untouchedPaperIds.includes('paper:arxiv:2605.11111'));
+assert.equal(correction.affectedEvidenceRows.some((row) => row.paperId === 'paper:arxiv:2605.11111'), false);
+assert.match(correction.correctionReport, /paper:doi:10\.5555\/correct\.1/);
+assert.deepEqual(
+  citationCorrectionSeed.evidenceMatrix.find((row) => row.paperId === 'paper:doi:10.5555/correct.1')?.evidenceRefs.sort(),
+  ['provider:pubmed:pmid-777', 'provider:web-search:blog-777'],
+  'citation correction must be derived without mutating the original retrieval output',
+);
 
 console.log('[ok] literature.retrieval capability has offline provider runner/normalizer contract with auditable outputs and failure outcomes');
 

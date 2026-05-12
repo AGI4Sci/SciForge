@@ -181,6 +181,42 @@ export interface OfflineLiteratureRetrievalOutput {
   budgetDebits?: CapabilityInvocationBudgetDebitRecord[];
 }
 
+export type LiteratureCitationCorrectionStatus = 'corrected' | 'needs-review' | 'not-found' | 'ambiguous';
+export type LiteratureCitationCorrectionAction = 'exclude-provider-record' | 'mark-citation-untrusted';
+
+export interface LiteratureCitationCorrectionInput {
+  output: OfflineLiteratureRetrievalOutput;
+  target: {
+    paperId?: string;
+    providerRecordRef?: string;
+    evidenceRef?: string;
+  };
+  reason: string;
+  action?: LiteratureCitationCorrectionAction;
+}
+
+export interface LiteratureCitationCorrectionArtifact {
+  artifactType: 'citation-correction';
+  ref: 'artifact:citation-correction';
+  targetArtifactRef?: 'artifact:paper-list' | 'artifact:evidence-matrix' | 'artifact:research-report';
+  targetPaperId?: string;
+  targetProviderRecordRefs: string[];
+  sourceRefs: string[];
+  verificationStatus?: CitationVerificationStatus;
+  correctionStatus: LiteratureCitationCorrectionStatus;
+  correctedSegment?: {
+    paperId: string;
+    claim: string;
+    retainedEvidenceRefs: string[];
+    removedEvidenceRefs: string[];
+    correctionReason: string;
+  };
+  correctionReport: string;
+  affectedEvidenceRows: LiteratureEvidenceMatrixRow[];
+  untouchedPaperIds: string[];
+  diagnostics: LiteratureRetrievalDiagnostic[];
+}
+
 export interface OfflineLiteratureRetrievalRunnerInput {
   request: LiteratureRetrievalRequest;
   providerFixtures: OfflineLiteratureProviderFixture[];
@@ -464,6 +500,120 @@ export function validateOfflineLiteratureRetrievalOutput(output: OfflineLiteratu
     failures.push('download failure must downgrade researchReport.fullTextPolicy to metadata-only');
   }
   return failures;
+}
+
+export function deriveLiteratureCitationCorrection(input: LiteratureCitationCorrectionInput): LiteratureCitationCorrectionArtifact {
+  const targetMatches = findCitationCorrectionTargets(input.output, input.target);
+  const allPaperIds = input.output.paperList.map((paper) => paper.id);
+  if (targetMatches.length === 0) {
+    return {
+      artifactType: 'citation-correction',
+      ref: 'artifact:citation-correction',
+      targetProviderRecordRefs: unique([input.target.providerRecordRef, input.target.evidenceRef].filter((ref): ref is string => Boolean(ref))),
+      sourceRefs: [],
+      correctionStatus: 'not-found',
+      correctionReport: `No citation target matched the supplied refs. reason=${input.reason}`,
+      affectedEvidenceRows: [],
+      untouchedPaperIds: allPaperIds,
+      diagnostics: [{
+        code: 'citation-mismatch',
+        message: 'Citation correction target was not found from paperId, providerRecordRef, or evidenceRef.',
+      }],
+    };
+  }
+
+  if (targetMatches.length > 1) {
+    return {
+      artifactType: 'citation-correction',
+      ref: 'artifact:citation-correction',
+      targetProviderRecordRefs: unique(targetMatches.flatMap((match) => match.providerRecordRefs)),
+      sourceRefs: unique(targetMatches.flatMap((match) => match.providerRecordRefs)),
+      correctionStatus: 'ambiguous',
+      correctionReport: `Citation correction target is ambiguous across ${targetMatches.length} papers; provide paperId or providerRecordRef. reason=${input.reason}`,
+      affectedEvidenceRows: targetMatches.flatMap((match) => match.evidenceRows),
+      untouchedPaperIds: allPaperIds.filter((paperId) => !targetMatches.some((match) => match.paper.id === paperId)),
+      diagnostics: [{
+        code: 'citation-mismatch',
+        message: 'Citation correction target matched more than one paper.',
+      }],
+    };
+  }
+
+  const target = targetMatches[0];
+  const providerRecordRefsToRemove = unique([
+    input.target.providerRecordRef,
+    input.target.evidenceRef,
+  ].filter((ref): ref is string => typeof ref === 'string' && target.providerRecordRefs.includes(ref)));
+  const removedEvidenceRefs = providerRecordRefsToRemove.length
+    ? providerRecordRefsToRemove
+    : input.action === 'mark-citation-untrusted'
+      ? []
+      : target.providerRecordRefs;
+  const affectedEvidenceRows = target.evidenceRows.map((row) => ({
+    ...row,
+    evidenceRefs: row.evidenceRefs.filter((ref) => !removedEvidenceRefs.includes(ref)),
+    citationStatus: row.citationStatus === 'verified' ? 'mismatch' as CitationVerificationStatus : row.citationStatus,
+  }));
+  const retainedEvidenceRefs = unique(target.evidenceRows.flatMap((row) => row.evidenceRefs).filter((ref) => !removedEvidenceRefs.includes(ref)));
+  const verificationStatus = target.citationVerificationResult?.status ?? target.evidenceRows[0]?.citationStatus;
+  const correctionStatus: LiteratureCitationCorrectionStatus = removedEvidenceRefs.length || verificationStatus === 'mismatch'
+    ? 'corrected'
+    : 'needs-review';
+
+  return {
+    artifactType: 'citation-correction',
+    ref: 'artifact:citation-correction',
+    targetArtifactRef: 'artifact:research-report',
+    targetPaperId: target.paper.id,
+    targetProviderRecordRefs: target.providerRecordRefs,
+    sourceRefs: unique([...target.providerRecordRefs, ...target.evidenceRows.flatMap((row) => row.evidenceRefs)]),
+    verificationStatus,
+    correctionStatus,
+    correctedSegment: {
+      paperId: target.paper.id,
+      claim: target.evidenceRows[0]?.claim ?? target.paper.title,
+      retainedEvidenceRefs,
+      removedEvidenceRefs,
+      correctionReason: input.reason,
+    },
+    correctionReport: [
+      `Citation correction for ${target.paper.id}.`,
+      `Reason: ${input.reason}`,
+      removedEvidenceRefs.length ? `Removed evidence refs: ${removedEvidenceRefs.join(', ')}` : 'No evidence refs removed; citation remains flagged for review.',
+      retainedEvidenceRefs.length ? `Retained evidence refs: ${retainedEvidenceRefs.join(', ')}` : 'No retained evidence refs remain for this paper.',
+    ].join('\n'),
+    affectedEvidenceRows,
+    untouchedPaperIds: allPaperIds.filter((paperId) => paperId !== target.paper.id),
+    diagnostics: [{
+      code: 'citation-mismatch',
+      paperId: target.paper.id,
+      message: `Derived citation correction from refs without mutating original retrieval output. reason=${input.reason}`,
+    }],
+  };
+}
+
+function findCitationCorrectionTargets(
+  output: OfflineLiteratureRetrievalOutput,
+  target: LiteratureCitationCorrectionInput['target'],
+) {
+  const targetRefs = unique([target.providerRecordRef, target.evidenceRef].filter((ref): ref is string => Boolean(ref)));
+  return output.paperList
+    .map((paper) => {
+      const sourceProvenance = output.sourceProvenance.find((entry) => entry.paperId === paper.id);
+      const evidenceRows = output.evidenceMatrix.filter((row) => row.paperId === paper.id);
+      const citationVerificationResult = output.citationVerificationResults.find((result) => result.paperId === paper.id);
+      const providerRecordRefs = unique([
+        ...paper.providerRecordRefs,
+        ...evidenceRows.flatMap((row) => row.evidenceRefs),
+        ...(sourceProvenance?.providerRecordRefs ?? []),
+        ...(sourceProvenance?.sourceRecords.map((record) => record.providerRecordRef) ?? []),
+      ]);
+      return { paper, sourceProvenance, evidenceRows, citationVerificationResult, providerRecordRefs };
+    })
+    .filter((candidate) => {
+      if (target.paperId && candidate.paper.id === target.paperId) return true;
+      return targetRefs.some((ref) => candidate.providerRecordRefs.includes(ref));
+    });
 }
 
 function sourceProvenanceForPaper(

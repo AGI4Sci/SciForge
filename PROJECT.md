@@ -401,6 +401,27 @@ Failure/Improvement Notes：
 - [x] `git diff --check`
 
 
+### 2026-05-13 Milestone：文献引用修正派生 artifact 收敛
+
+本轮继续利用 R-LIT-05 explorer 的字段复核结果，落地 literature retrieval 的纯派生 citation correction contract。修复目标是不重写原检索输出、不靠标题/数组序号/文本切段硬匹配，而是从 artifact/ref 层定位目标 paper 与 provider record：
+
+- [x] R-LIT-05 引用修正多轮：新增 `deriveLiteratureCitationCorrection()`，输入 `OfflineLiteratureRetrievalOutput` 与 `paperId/providerRecordRef/evidenceRef` target，输出 `artifact:citation-correction`，包含 `targetPaperId`、`targetProviderRecordRefs`、`sourceRefs`、`verificationStatus`、`correctedSegment`、`affectedEvidenceRows`、`untouchedPaperIds` 与 diagnostics。
+- [x] 引用修正只派生目标 paper 的 correction segment/report；原 `paperList`、`evidenceMatrix`、`researchReport.boundedSummary` 不被突变，其他 paper 的 evidence row 不进入 correction artifact。
+- [x] smoke fixture 覆盖低可信 `web-search` 与高可信 `pubmed` 命中同一 DOI、另有 `arxiv` 对照 paper 的场景，断言 providerRecordRef 精确命中目标，控制 paper 保持 untouched。
+
+Failure/Improvement Notes：
+
+- R-LIT-05 不能依赖论文标题、报告句子或“第 N 条引用”；本轮定位只基于 `paperId`、`providerRecordRef`、evidence ref、`sourceProvenance` 和 `citationVerificationResults`。
+- 当前 `researchReport.boundedSummary` 仍没有段落级锚点；citation correction 先输出结构化 correction artifact，后续若要 UI 内联替换，应从 `targetPaperId/sourceRefs` 派生段落 anchor，而不是文本搜索报告内容。
+
+本轮验证：
+
+- [x] `npm run smoke:literature-retrieval-capability`
+- [x] `npm run typecheck`
+- [x] `npm run test`（724 tests pass）
+- [x] `git diff --check`
+
+
 
 ### H022 Real-world Complex Task Backlog for SciForge Hardening
 
@@ -421,7 +442,7 @@ Failure/Improvement Notes：
 - [x] R-LIT-02 arXiv 空结果恢复：限定一个很窄主题和当天日期，预期可能空结果；要求系统自动说明 empty result、扩展 query、保留不确定性，并继续生成 partial 报告。
 - [x] R-LIT-03 多来源文献对照：同一主题分别检索 arXiv、Semantic Scholar/PubMed/网页来源，去重并标注来源差异；用户要求删除低可信来源后重写结论。已完成 provider-neutral fixture contract；真实网络调用仅作为后续 provider availability 验证。
 - [x] R-LIT-04 全文下载失败恢复：要求下载 10 篇论文全文，其中部分 PDF 超时/403/过大；系统必须保留已下载全文、标注失败原因、继续基于 metadata 补 partial。
-- [ ] R-LIT-05 引用修正多轮：先生成报告，再让用户指出某条引用不可信；系统必须定位原 artifact/ref，修正该段，不污染其他结论。
+- [x] R-LIT-05 引用修正多轮：先生成报告，再让用户指出某条引用不可信；系统必须定位原 artifact/ref，修正该段，不污染其他结论。已覆盖 providerRecordRef/paperId 定位、citation-correction 派生 artifact、目标 evidence row 修正和非目标 paper untouched。
 - [ ] R-LIT-06 研究方向综述迭代：先做宽泛综述，再要求缩小到 robotics agent，再要求排除 benchmark 论文，再要求只保留开源代码论文。
 - [ ] R-LIT-07 论文复现可行性筛选：检索论文后按代码可用性、数据集可用性、计算成本、复现风险排序，并导出复现计划。
 - [x] R-LIT-08 反事实追问：报告完成后用户问“如果只看非 LLM agent 呢”，系统必须复用已有检索 refs 并说明哪些需要刷新。已覆盖“缺少可用 paper-list/report 时必须先 repair/resume”的失败边界。
