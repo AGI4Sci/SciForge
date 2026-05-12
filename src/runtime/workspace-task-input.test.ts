@@ -61,3 +61,56 @@ test('backend handoff slimming preserves AgentServer input.text contract under t
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+test('backend handoff slimming keeps ref-backed large logs and documents summary-only', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-backend-handoff-large-text-'));
+  try {
+    const largeLog = [
+      'LOG_SENTINEL_HEAD',
+      'row '.repeat(12_000),
+      'LOG_SENTINEL_TAIL',
+    ].join('\n');
+    const largeMarkdown = [
+      'DOC_SENTINEL_HEAD',
+      'evidence '.repeat(12_000),
+      'DOC_SENTINEL_TAIL',
+    ].join('\n');
+    const result = await normalizeBackendHandoff({
+      refs: {
+        stdoutRef: '.sciforge/logs/run.stdout.log',
+        stderrRef: '.sciforge/logs/run.stderr.log',
+        dataRef: '.sciforge/artifacts/report.md',
+      },
+      stdoutRef: '.sciforge/logs/run.stdout.log',
+      stdout: largeLog,
+      artifact: {
+        id: 'report',
+        type: 'research-report',
+        dataRef: '.sciforge/artifacts/report.md',
+        markdown: largeMarkdown,
+      },
+    }, {
+      workspacePath: workspace,
+      purpose: 'large-text-summary-only-test',
+      budget: {
+        maxPayloadBytes: 24_000,
+        maxInlineStringChars: 2000,
+        maxInlineJsonBytes: 6000,
+        maxArrayItems: 4,
+        maxObjectKeys: 16,
+        maxDepth: 5,
+        headChars: 500,
+        tailChars: 500,
+      },
+    });
+
+    const serialized = JSON.stringify(result.payload);
+    assert.doesNotMatch(serialized, /LOG_SENTINEL_HEAD|LOG_SENTINEL_TAIL|DOC_SENTINEL_HEAD|DOC_SENTINEL_TAIL/);
+    assert.match(serialized, /run\.stdout\.log/);
+    assert.match(serialized, /report\.md/);
+    assert.ok(result.decisions.some((decision) => decision.kind === 'tool-output'));
+    assert.ok(result.decisions.some((decision) => decision.kind === 'ref-backed-large-text'));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});

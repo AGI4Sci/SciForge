@@ -100,3 +100,106 @@ test('pre-output generated task failure preserves session-bundle partial artifac
   assert.match(serialized, /paper-a\.metadata\.json/);
   assert.ok(payload.objectReferences?.some((ref) => ref.ref === partialPdfRel));
 });
+
+test('partial PDF retrieval failures keep downloaded full text and metadata instead of rerunning repair', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generated-pdf-boundary-'));
+  const sessionBundleRel = '.sciforge/sessions/2026-05-13_literature-evidence-review_pdf-boundary';
+  const pdfRel = `${sessionBundleRel}/task-results/pdfs/downloaded-paper.pdf`;
+  const metadataRel = `${sessionBundleRel}/data/downloaded-paper.metadata.json`;
+  const partialReportRel = `${sessionBundleRel}/artifacts/partial-literature-review.md`;
+  await mkdir(join(workspace, sessionBundleRel, 'task-results', 'pdfs'), { recursive: true });
+  await mkdir(join(workspace, sessionBundleRel, 'data'), { recursive: true });
+  await mkdir(join(workspace, sessionBundleRel, 'artifacts'), { recursive: true });
+  await writeFile(join(workspace, pdfRel), '%PDF-1.7 downloaded full text\n');
+  await writeFile(join(workspace, metadataRel), '{"title":"Downloaded paper","doi":"10.0000/example"}\n');
+  await writeFile(join(workspace, partialReportRel), '# Partial literature review\n\nUses metadata for failed PDFs.\n');
+
+  let repairAttempted = false;
+  const request = {
+    workspacePath: workspace,
+    skillDomain: 'literature',
+    prompt: 'Download 10 paper PDFs, mark failed downloads, and continue a partial report from metadata.',
+    artifacts: [],
+    uiState: {
+      sessionId: 'session-pdf-boundary',
+      sessionCreatedAt: '2026-05-13T03:00:00.000Z',
+    },
+    scenarioPackageRef: { id: 'literature-evidence-review', version: '1.0.0', source: 'built-in' },
+  } as GatewayRequest;
+  const skill = {
+    id: 'literature-test',
+    kind: 'builtin',
+    available: true,
+    checkedAt: '2026-05-13T03:00:00.000Z',
+    reason: 'test',
+  } as unknown as SkillAvailability;
+  const outputRel = `${sessionBundleRel}/task-results/generated-literature-downloads.json`;
+  const run = {
+    spec: {
+      id: 'generated-literature-downloads',
+      language: 'python',
+      entrypoint: 'main',
+      taskRel: `${sessionBundleRel}/tasks/generated-literature-downloads/task.py`,
+    },
+    workspace,
+    command: 'python3',
+    args: [],
+    exitCode: 1,
+    stdout: 'downloaded downloaded-paper.pdf\nmetadata saved for 10 papers\n',
+    stderr: 'PDF download failures: paper-b HTTP 403 forbidden; paper-c content-length exceeds max download bytes; paper-d timeout\n',
+    stdoutRef: `${sessionBundleRel}/logs/generated-literature-downloads.stdout.log`,
+    stderrRef: `${sessionBundleRel}/logs/generated-literature-downloads.stderr.log`,
+    outputRef: outputRel,
+    runtimeFingerprint: { language: 'python', command: 'python3' },
+  } as unknown as WorkspaceTaskRunResult;
+
+  const payload = await completeGeneratedTaskRunOutputLifecycle({
+    workspace,
+    request,
+    skill,
+    skills: [skill],
+    taskId: 'generated-literature-downloads',
+    generation: {
+      ok: true,
+      runId: 'run-pdf-boundary',
+      response: {
+        taskFiles: [],
+        entrypoint: { language: 'python', path: 'tasks/generated-literature-downloads/task.py' },
+        environmentRequirements: {},
+        validationCommand: '',
+        expectedArtifacts: ['research-report'],
+      },
+    },
+    run,
+    taskRel: run.spec.taskRel,
+    inputRel: `${sessionBundleRel}/task-inputs/generated-literature-downloads.json`,
+    outputRel,
+    stdoutRel: run.stdoutRef,
+    stderrRel: run.stderrRef,
+    supplementArtifactTypes: [],
+    runGeneratedTask: async () => undefined,
+    deps: {
+      attemptPlanRefs: () => ({}),
+      failedTaskPayload,
+      tryAgentServerRepairAndRerun: async () => {
+        repairAttempted = true;
+        return undefined;
+      },
+      validateAndNormalizePayload: async (value: ToolPayload) => value,
+      coerceWorkspaceTaskPayload: () => undefined,
+      schemaErrors: () => [],
+      firstPayloadFailureReason: () => undefined,
+      payloadHasFailureStatus: () => false,
+      repairNeededPayload: failedTaskPayload as never,
+    } as never,
+  });
+
+  const serialized = JSON.stringify(payload);
+  assert.equal(repairAttempted, false);
+  assert.match(serialized, /HTTP 403 forbidden/);
+  assert.match(serialized, /content-length exceeds max download bytes/);
+  assert.match(serialized, /generated-task-partial-evidence/);
+  assert.ok(payload.objectReferences?.some((ref) => ref.ref === pdfRel));
+  assert.ok(payload.objectReferences?.some((ref) => ref.ref === metadataRel));
+  assert.ok(payload.objectReferences?.some((ref) => ref.ref === partialReportRel));
+});

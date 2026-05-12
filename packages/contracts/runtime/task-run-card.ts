@@ -211,8 +211,8 @@ export interface TaskRunCard {
   updatedAt: string;
 }
 
-const TRANSIENT_EXTERNAL_PATTERN = /\b(?:http(?:\s+error)?\s*(?:408|425|429|500|502|503|504)|too many requests|rate.?limit(?:ed)?|quota|throttl|temporar(?:y|ily)|timeout|timed out|econnreset|etimedout|eai_again|enotfound|network is unreachable|service unavailable)\b/i;
-const EXTERNAL_TRANSIENT_CONTEXT_PATTERN = /\b(?:http|provider|external|network|dns|quota|rate.?limit(?:ed)?|too many requests|throttl|econnreset|etimedout|eai_again|enotfound|service unavailable)\b/i;
+const TRANSIENT_EXTERNAL_PATTERN = /\b(?:http(?:\s+error)?\s*(?:403|408|413|425|429|500|502|503|504)|forbidden|too many requests|rate.?limit(?:ed)?|quota|throttl|temporar(?:y|ily)|timeout|timed out|econnreset|etimedout|eai_again|enotfound|network is unreachable|service unavailable|too large|content-length|exceeds?(?:ed)?\s+(?:max|limit|budget)|max(?:imum)?\s+(?:download|file)?\s*bytes|payload too large|request entity too large)\b/i;
+const EXTERNAL_TRANSIENT_CONTEXT_PATTERN = /\b(?:http|provider|external|network|dns|quota|rate.?limit(?:ed)?|too many requests|throttl|econnreset|etimedout|eai_again|enotfound|service unavailable|forbidden|download|pdf|content-length|max(?:imum)?\s+(?:download|file)?\s*bytes|too large|payload too large)\b/i;
 
 export function createFailureSignature(input: FailureSignatureInput): FailureSignature {
   const message = stringField(input.message) ?? stringField(input.code) ?? 'Unclassified failure.';
@@ -662,6 +662,8 @@ function registryCategoryForFailureSignature(signature: FailureSignature) {
   const text = `${signature.code ?? ''} ${signature.normalizedMessage}`.toLowerCase();
   if (signature.kind === 'external-transient') {
     if (signature.httpStatus !== undefined) return `http-${signature.httpStatus}`;
+    if (/\b(?:403|forbidden)\b/i.test(text)) return 'forbidden';
+    if (/\b(?:413|too large|content-length|exceeds?(?:ed)?\s+(?:max|limit|budget)|max(?:imum)?\s+(?:download|file)?\s*bytes|payload too large|request entity too large)\b/i.test(text)) return 'download-too-large';
     if (/\b(?:429|too many requests|rate.?limit(?:ed)?|throttl)\b/i.test(text)) return 'rate-limit';
     if (/\b(?:quota)\b/i.test(text)) return 'quota';
     if (/\b(?:eai_again|enotfound|dns|network is unreachable|econnreset)\b/i.test(text)) return 'network';

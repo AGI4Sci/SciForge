@@ -41,6 +41,114 @@ describe('execution bundle export policy', () => {
     assert.equal(bundle.runs[0].skillPlanRef, 'skill-plan.omics-differential-exploration.default');
     assert.deepEqual(bundle.artifacts[0].scenarioPackageRef, { id: 'omics-differential-exploration', version: '1.0.0', source: 'built-in' });
   });
+
+  it('exports the selected run bundle refs, task graph, lineage, commands, and artifact refs without using later empty state', () => {
+    const session = fixtureSession({
+      id: 'artifact-run-1',
+      exportPolicy: 'allowed',
+      dataRef: '.sciforge/sessions/2026-05-12_omics_session-export-policy/artifacts/artifact-run-1.json',
+      metadata: { runId: 'run-1' },
+    });
+    session.runs[0] = {
+      ...session.runs[0]!,
+      raw: {
+        sessionBundleRef: '.sciforge/sessions/2026-05-12_omics_session-export-policy',
+        refs: ['artifact:artifact-run-1', 'execution-unit:EU-export'],
+        auditRefs: ['.sciforge/sessions/2026-05-12_omics_session-export-policy/records/session-bundle-audit.json'],
+      },
+      objectReferences: [{ id: 'obj-artifact-run-1', kind: 'artifact', ref: 'artifact:artifact-run-1', title: 'run 1 artifact' }],
+    };
+    session.runs.push({
+      id: 'run-empty-current',
+      scenarioId: 'omics-differential-exploration',
+      status: 'completed',
+      prompt: 'empty later run',
+      response: '',
+      createdAt: '2026-04-20T00:02:00.000Z',
+      completedAt: '2026-04-20T00:03:00.000Z',
+    });
+    session.artifacts.push({
+      id: 'artifact-unrelated-blocked',
+      type: 'omics-differential-expression',
+      producerScenario: 'omics-differential-exploration',
+      schemaVersion: '1',
+      exportPolicy: 'blocked',
+      metadata: { runId: 'run-empty-current' },
+    });
+    session.executionUnits[0] = {
+      ...session.executionUnits[0]!,
+      code: 'python task.py --input task-input.json',
+      codeRef: '.sciforge/sessions/2026-05-12_omics_session-export-policy/tasks/task.py',
+      stdoutRef: '.sciforge/sessions/2026-05-12_omics_session-export-policy/logs/task.stdout.log',
+      stderrRef: '.sciforge/sessions/2026-05-12_omics_session-export-policy/logs/task.stderr.log',
+      verificationRef: '.sciforge/sessions/2026-05-12_omics_session-export-policy/verifications/task.json',
+      inputData: ['.sciforge/sessions/2026-05-12_omics_session-export-policy/task-inputs/task.json'],
+      outputArtifacts: ['artifact-run-1'],
+    };
+
+    const scopedDecision = evaluateExecutionBundleExport(session, {
+      activeRun: session.runs[0],
+      executionUnits: [session.executionUnits[0]!],
+    });
+    const bundle = buildExecutionBundle(session, scopedDecision, {
+      activeRun: session.runs[0],
+      executionUnits: [session.executionUnits[0]!],
+    });
+
+    assert.equal(scopedDecision.allowed, true);
+    assert.equal(bundle.activeRunId, 'run-1');
+    assert.deepEqual(bundle.runs.map((run) => run.id), ['run-1']);
+    assert.equal(bundle.runs[0]?.sessionBundleRef, '.sciforge/sessions/2026-05-12_omics_session-export-policy');
+    assert.deepEqual(bundle.executionUnits.map((unit) => unit.id), ['EU-export']);
+    assert.deepEqual(bundle.artifacts.map((artifact) => artifact.id), ['artifact-run-1']);
+    assert.deepEqual(bundle.sessionBundleRefs, [
+      '.sciforge/sessions/2026-05-12_omics_session-export-policy',
+      '.sciforge/sessions/2026-05-12_omics_session-export-policy/records/session-bundle-audit.json',
+      '.sciforge/sessions/2026-05-12_omics_session-export-policy/tasks/task.py',
+      '.sciforge/sessions/2026-05-12_omics_session-export-policy/logs/task.stdout.log',
+      '.sciforge/sessions/2026-05-12_omics_session-export-policy/logs/task.stderr.log',
+      '.sciforge/sessions/2026-05-12_omics_session-export-policy/verifications/task.json',
+      '.sciforge/sessions/2026-05-12_omics_session-export-policy/task-inputs/task.json',
+      '.sciforge/sessions/2026-05-12_omics_session-export-policy/artifacts/artifact-run-1.json',
+    ]);
+    assert.ok(bundle.taskGraph.nodes.some((node) => node.id === 'EU-export' && node.kind === 'execution-unit'));
+    assert.ok(bundle.taskGraph.edges.some((edge) => edge.from === 'EU-export' && edge.to === 'artifact-run-1' && edge.kind === 'output'));
+    assert.deepEqual(bundle.dataLineage[0]?.inputRefs, ['.sciforge/sessions/2026-05-12_omics_session-export-policy/task-inputs/task.json']);
+    assert.equal(bundle.executionCommands[0]?.command, 'python task.py --input task-input.json');
+    assert.ok(bundle.artifactRefs.includes('artifact:artifact-run-1'));
+    assert.equal(bundle.runs.some((run) => run.id === 'run-empty-current'), false);
+  });
+
+  it('keeps active-run exports useful for compact single-run sessions and TaskRunCard refs', () => {
+    const session = fixtureSession({
+      id: 'artifact-card-ref',
+      exportPolicy: 'allowed',
+      dataRef: '.sciforge/sessions/2026-05-13_lit_session-card/artifacts/report.md',
+    });
+    session.runs[0] = {
+      ...session.runs[0]!,
+      raw: {
+        displayIntent: {
+          taskRunCard: {
+            refs: [
+              { kind: 'bundle', ref: '.sciforge/sessions/2026-05-13_lit_session-card' },
+              { kind: 'artifact', ref: 'artifact:artifact-card-ref' },
+              { kind: 'file', ref: '.sciforge/sessions/2026-05-13_lit_session-card/records/session-bundle-audit.json' },
+            ],
+          },
+        },
+      },
+    };
+
+    const decision = evaluateExecutionBundleExport(session, { activeRun: session.runs[0] });
+    const bundle = buildExecutionBundle(session, decision, { activeRun: session.runs[0] });
+
+    assert.equal(decision.allowed, true);
+    assert.deepEqual(bundle.executionUnits.map((unit) => unit.id), ['EU-export']);
+    assert.deepEqual(bundle.artifacts.map((artifact) => artifact.id), ['artifact-card-ref']);
+    assert.ok(bundle.sessionBundleRefs.includes('.sciforge/sessions/2026-05-13_lit_session-card'));
+    assert.ok(bundle.sessionBundleRefs.includes('.sciforge/sessions/2026-05-13_lit_session-card/records/session-bundle-audit.json'));
+  });
 });
 
 function fixtureSession(artifact: Pick<RuntimeArtifact, 'id'> & Partial<RuntimeArtifact>): SciForgeSession {

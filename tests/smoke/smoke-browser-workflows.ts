@@ -189,8 +189,9 @@ try {
     logStep('workspace restore opens the latest recoverable failed run directly in the workbench');
     await failedRestorePage.locator('.active-run-banner', { hasText: 'run-browser-failed-restore' }).waitFor({ timeout: 15_000 });
     await failedRestorePage.locator('.run-status-summary', { hasText: '运行需要处理' }).waitFor({ timeout: 15_000 });
-    await failedRestorePage.locator('.run-status-summary', { hasText: 'PDF fetch timed out after writing partial refs' }).waitFor({ timeout: 15_000 });
-    await failedRestorePage.locator('.run-recover-actions', { hasText: 'resume failed run with retained refs' }).first().waitFor({ timeout: 15_000 });
+    await failedRestorePage.locator('.run-status-summary', { hasText: 'PDF retrieval partially failed' }).waitFor({ timeout: 15_000 });
+    await failedRestorePage.locator('.run-recover-actions', { hasText: 'inspect diagnostics without rerun' }).first().waitFor({ timeout: 15_000 });
+    await failedRestorePage.locator('.run-recover-actions', { hasText: 'rerun failed PDF downloads only after explicit confirmation' }).first().waitFor({ timeout: 15_000 });
     await failedRestorePage.locator('code', { hasText: 'file:.sciforge/task-results/failed-restore.bundle.json' }).first().waitFor({ timeout: 15_000 });
     await captureSmokeScreenshot(failedRestorePage, join(artifactsDir, 'browser-smoke-failed-run-restore.png'));
     await assertNoRawJsonErrors(failedRestorePage, 'failed-run-restore');

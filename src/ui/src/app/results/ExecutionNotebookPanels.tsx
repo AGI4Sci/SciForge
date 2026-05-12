@@ -4,7 +4,7 @@ import { scenarioPackageRefLabel } from '@sciforge/scenario-core/scenario-builde
 import { ChevronDown, ChevronUp, Clock, Download, FileCode, Lock, Shield } from 'lucide-react';
 import { buildExecutionBundle, evaluateExecutionBundleExport } from '../../exportPolicy';
 import { scenarios, type ScenarioId } from '../../data';
-import type { EvidenceClaim, NotebookRecord, RuntimeArtifact, RuntimeExecutionUnit, SciForgeSession } from '../../domain';
+import type { EvidenceClaim, NotebookRecord, RuntimeArtifact, RuntimeExecutionUnit, SciForgeRun, SciForgeSession } from '../../domain';
 import { exportJsonFile } from '../exportUtils';
 import { ActionButton, Badge, Card, ClaimTag, ConfidenceBar, EmptyArtifactState, EvidenceTag, SectionHeader } from '../uiPrimitives';
 import { UploadedDataUrlPreview } from './WorkspaceObjectPreview';
@@ -22,13 +22,14 @@ function compactParams(params: string) {
   return params.length > 128 ? `${params.slice(0, 125)}...` : params;
 }
 
-function exportExecutionBundle(session: SciForgeSession) {
-  const decision = evaluateExecutionBundleExport(session);
+function exportExecutionBundle(session: SciForgeSession, activeRun: SciForgeRun | undefined, executionUnits: RuntimeExecutionUnit[]) {
+  const decision = evaluateExecutionBundleExport(session, { activeRun, executionUnits });
   if (!decision.allowed) {
     window.alert(`导出被 artifact policy 阻止：${decision.blockedArtifactIds.join(', ')}`);
     return;
   }
-  exportJsonFile(`execution-units-${session.scenarioId}-${session.sessionId}.json`, buildExecutionBundle(session, decision));
+  const runSuffix = activeRun ? `-${activeRun.id}` : '';
+  exportJsonFile(`execution-units-${session.scenarioId}-${session.sessionId}${runSuffix}.json`, buildExecutionBundle(session, decision, { activeRun, executionUnits }));
 }
 
 function formatResultFileBytes(value: number) {
@@ -147,10 +148,12 @@ export function EvidenceMatrix({ claims, artifacts = [] }: { claims: EvidenceCla
 export function ExecutionPanel({
   session,
   executionUnits,
+  activeRun,
   embedded = false,
 }: {
   session: SciForgeSession;
   executionUnits: RuntimeExecutionUnit[];
+  activeRun?: SciForgeRun;
   embedded?: boolean;
 }) {
   const rows = executionUnits;
@@ -160,7 +163,7 @@ export function ExecutionPanel({
         icon={Lock}
         title="可复现执行单元"
         subtitle={embedded ? '完整 ExecutionUnit、stdout/stderr refs 和数据指纹' : '代码 + 参数 + 环境 + 数据指纹'}
-        action={<ActionButton icon={Download} variant="secondary" onClick={() => exportExecutionBundle(session)}>导出 JSON Bundle</ActionButton>}
+        action={<ActionButton icon={Download} variant="secondary" onClick={() => exportExecutionBundle(session, activeRun, rows)}>导出 JSON Bundle</ActionButton>}
       />
       {rows.length ? (
         <div className="eu-table">

@@ -93,7 +93,7 @@ export function ArchiveDrawer({
                     {summary.recoverActions.map((action) => <code key={`${item.sessionId}-${action}`}>{action}</code>)}
                   </div>
                 ) : null}
-                <small>恢复后当前工作台会切换到该历史会话，右侧结果同步显示对应 run。</small>
+                <small>恢复后当前工作台会切换到该历史会话，右侧结果同步显示对应 run，不会自动重跑历史任务。</small>
               </div>
               <ActionButton icon={Clock} variant="secondary" onClick={() => onRestore(item.sessionId)}>恢复</ActionButton>
             </div>
@@ -147,7 +147,7 @@ function sessionHistoryTaskRunCardSummary(card: TaskRunCard, lastRun: SciForgeRu
       ? `${taskRunCardStatusLabel(card.status)}：${completedRefs.length ? `产物 ${completedRefs.join(', ')}` : compactHistoryText(card.goal)}。`
       : `${taskRunCardStatusLabel(card.status)}：${compactHistoryText(card.nextStep || card.rounds.at(-1)?.observed || card.goal)}。`;
   const refs = card.refs
-    .filter((ref) => ['artifact', 'execution-unit', 'verification', 'log', 'bundle'].includes(ref.kind))
+    .filter((ref) => ['artifact', 'execution-unit', 'verification', 'log', 'bundle', 'file'].includes(ref.kind))
     .slice(0, 4)
     .map(compactTaskRunCardRef);
   return {

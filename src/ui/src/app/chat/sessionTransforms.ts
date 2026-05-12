@@ -185,6 +185,32 @@ export function updateGuidanceQueueRecords(
   };
 }
 
+export function resolveGuidanceQueueAfterRun(
+  session: SciForgeSession,
+  guidanceQueue: GuidanceQueueRecord[],
+  options: { userCancelled?: boolean; runEndedReason?: string } = {},
+): { session: SciForgeSession; remainingQueue: GuidanceQueueRecord[]; nextGuidance?: GuidanceQueueRecord } {
+  if (!guidanceQueue.length) return { session, remainingQueue: [] };
+  if (options.userCancelled) {
+    return {
+      session: updateGuidanceQueueRecords(session, guidanceQueue.map((item) => item.id), {
+        status: 'rejected',
+        reason: options.runEndedReason ?? '用户显式中断当前 run；排队引导已跨过 cancel boundary，不能自动恢复不可逆 side effect。',
+      }),
+      remainingQueue: [],
+    };
+  }
+  const [nextGuidance, ...remainingQueue] = guidanceQueue;
+  return {
+    session: updateGuidanceQueueRecords(session, [nextGuidance.id], {
+      status: 'merged',
+      reason: options.runEndedReason ?? '当前 run 已结束，已按 run orchestration contract 合并为下一轮用户引导。',
+    }),
+    remainingQueue,
+    nextGuidance,
+  };
+}
+
 export function attachGuidanceQueueToResponse(
   response: NormalizedAgentResponse,
   guidanceQueue: GuidanceQueueRecord[],
@@ -760,14 +786,50 @@ function compactExecutionUnitForRequestPayload(unit: RuntimeExecutionUnit): Runt
 }
 
 function compactRunForRequestPayload(run: SciForgeRun): SciForgeRun {
+  const raw = compactRunRaw(run.raw);
+  const cancelBoundary = cancelBoundaryForRun(run);
   return {
     ...run,
     prompt: clipText(run.prompt, REQUEST_PAYLOAD_RUN_TEXT_LIMIT),
     response: clipText(run.response, REQUEST_PAYLOAD_RUN_TEXT_LIMIT),
-    raw: compactRunRaw(run.raw),
+    raw: cancelBoundary ? { ...(isCompactRecord(raw) ? raw : {}), cancelBoundary } : raw,
     references: run.references?.slice(-8),
     objectReferences: run.objectReferences?.slice(-12),
   };
+}
+
+function cancelBoundaryForRun(run: SciForgeRun) {
+  if (run.status !== 'cancelled') return undefined;
+  const reason = terminationReasonFromRaw(run.raw) ?? 'user-cancelled';
+  return {
+    schemaVersion: 'sciforge.cancel-boundary.v1',
+    reason,
+    sideEffectPolicy: reason === 'user-cancelled' ? 'do-not-auto-resume' : 'inspect-before-resume',
+    nextStep: reason === 'user-cancelled'
+      ? 'Ask the user to confirm whether to reuse partial refs or start a new run; do not automatically resume irreversible side effects.'
+      : 'Inspect termination diagnostics and preserved refs before deciding whether continuation is safe.',
+  };
+}
+
+function terminationReasonFromRaw(raw: unknown) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const record = raw as Record<string, unknown>;
+  const direct = record.termination;
+  if (direct && typeof direct === 'object' && !Array.isArray(direct) && typeof (direct as Record<string, unknown>).reason === 'string') {
+    return (direct as Record<string, unknown>).reason as string;
+  }
+  const background = record.backgroundCompletion;
+  if (background && typeof background === 'object' && !Array.isArray(background)) {
+    const termination = (background as Record<string, unknown>).termination;
+    if (termination && typeof termination === 'object' && !Array.isArray(termination) && typeof (termination as Record<string, unknown>).reason === 'string') {
+      return (termination as Record<string, unknown>).reason as string;
+    }
+  }
+  return undefined;
+}
+
+function isCompactRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function compactRunRaw(raw: unknown) {

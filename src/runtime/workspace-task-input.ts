@@ -517,27 +517,33 @@ function normalizeHandoffString(value: string, context: {
     : key === 'stderr'
       ? context.siblingRefs.stderrRef
       : undefined;
+  const refBackedLargeText = hasAnyReferenceField(context.siblingRefs) && isLargeTextFieldKey(key);
   const binaryLike = isBinaryLikeHandoffString(value, key);
-  const mustCompact = value.length > context.budget.maxInlineStringChars || binaryLike || key === 'stdout' || key === 'stderr';
+  const toolOutput = key === 'stdout' || key === 'stderr';
+  const mustCompact = value.length > context.budget.maxInlineStringChars || binaryLike || toolOutput || refBackedLargeText;
   if (!mustCompact) return value;
+  const summaryOnly = toolOutput || refBackedLargeText;
   context.decisions.push({
-    kind: binaryLike ? 'binary' : key === 'stdout' || key === 'stderr' ? 'tool-output' : 'string',
+    kind: binaryLike ? 'binary' : toolOutput ? 'tool-output' : refBackedLargeText ? 'ref-backed-large-text' : 'string',
     rawRef: logRef ?? context.rawRef,
     pointer: logRef ? undefined : jsonPointer(context.path),
     estimatedBytes: Buffer.byteLength(value, 'utf8'),
   });
-  return {
+  const summary: Record<string, unknown> = {
     _sciforgeCompacted: true,
-    kind: binaryLike ? 'binary' : key === 'stdout' || key === 'stderr' ? 'tool-output' : 'string',
+    kind: binaryLike ? 'binary' : toolOutput ? 'tool-output' : refBackedLargeText ? 'ref-backed-large-text' : 'string',
     chars: value.length,
     bytes: Buffer.byteLength(value, 'utf8'),
     sha1: sha1Text(value),
     rawRef: logRef ?? context.rawRef,
     pointer: logRef ? undefined : jsonPointer(context.path),
     schema: handoffStringCompactionSchema(binaryLike),
-    head: value.slice(0, context.budget.headChars),
-    tail: value.length > context.budget.headChars ? value.slice(-context.budget.tailChars) : undefined,
   };
+  if (!summaryOnly) {
+    summary.head = value.slice(0, context.budget.headChars);
+    summary.tail = value.length > context.budget.headChars ? value.slice(-context.budget.tailChars) : undefined;
+  }
+  return summary;
 }
 
 function compactBackendInputText(value: string, context: {
@@ -804,7 +810,7 @@ function compactString(value: string, path: string[]) {
     kind: 'string',
     chars: value.length,
     sha1: sha1Text(value),
-    preview: `${value.slice(0, 2000)}\n\n[SciForge compacted ${value.length - 2000} chars from this field]`,
+    omitted: 'large-text-summary-only',
   };
 }
 
@@ -865,8 +871,20 @@ function referenceFields(value: Record<string, unknown>) {
   };
 }
 
+function hasAnyReferenceField(value: Record<string, string | undefined>) {
+  return Object.values(value).some(Boolean);
+}
+
 function hasReferenceField(value: Record<string, unknown>) {
   return Object.values(referenceFields(value)).some(Boolean);
+}
+
+function isLargeTextFieldKey(key: string) {
+  return /^(content|contents|text|body|markdown|log|logs|trace|raw|output)$/.test(key)
+    || key.endsWith('content')
+    || key.endsWith('text')
+    || key.endsWith('log')
+    || key.endsWith('logs');
 }
 
 function shouldPreserveHandoffContainer(path: string[]) {

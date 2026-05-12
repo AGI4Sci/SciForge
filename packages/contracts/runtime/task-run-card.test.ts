@@ -57,6 +57,33 @@ test('classifies runtime timeout separately from provider transient timeout', ()
   assert.equal(provider.layer, 'external-provider');
 });
 
+test('classifies partial PDF retrieval boundaries as external provider failures', () => {
+  const forbidden = createFailureSignature({
+    message: 'PDF download failed with HTTP 403 forbidden.',
+    operation: 'pdf-download',
+  });
+  const tooLarge = createFailureSignature({
+    message: 'PDF content-length exceeds max download bytes.',
+    operation: 'pdf-download',
+  });
+  const registry = mergeFailureSignaturesIntoRegistry(createFailureSignatureRegistry(), {
+    runId: 'run-pdf-boundary',
+    taskId: 'task-pdf-boundary',
+    status: 'needs-human',
+    refs: ['stderr:pdf-download'],
+    failureSignatures: [forbidden, tooLarge],
+  });
+
+  assert.equal(forbidden.kind, 'external-transient');
+  assert.equal(forbidden.layer, 'external-provider');
+  assert.equal(tooLarge.kind, 'external-transient');
+  assert.equal(tooLarge.layer, 'external-provider');
+  assert.deepEqual(registry.entries.map((entry) => entry.kind), ['external-transient', 'external-transient']);
+  assert.equal(registry.entries.length, 2);
+  assert.ok(registry.entries.some((entry) => /403 forbidden/i.test(entry.message)));
+  assert.ok(registry.entries.some((entry) => /content-length exceeds max download bytes/i.test(entry.message)));
+});
+
 test('merges tracked failure signatures into a run-level registry', () => {
   const first = mergeFailureSignaturesIntoRegistry(createFailureSignatureRegistry(), {
     runId: 'run:1',

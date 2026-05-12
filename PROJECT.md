@@ -248,6 +248,42 @@ Failure/Improvement Notes：
 - [x] `git diff --check`
 
 
+### 2026-05-13 Milestone：Refs-first 恢复、Cancel Boundary 与 Run-scoped 导出收敛
+
+本轮继续开启多个 sub agents 并行推进大文件/压缩恢复、active run 导出、PDF 部分下载失败、历史文献诊断和取消边界；网页端 smoke 覆盖 failed-run restore、reference follow-up preview、context meter compact UX 和运行过程折叠。根据并行报告完成以下通用修复：
+
+- [x] refs-first 大文件恢复：Backend handoff 和 context envelope 对 stdout/stderr、ref-backed markdown/log/raw text 只携带摘要、hash、schema 和 durable refs，不再把 head/tail 原文塞回 prompt；压缩后 `stateDigest` 的 run/artifact/file refs 会进入 long-term refs、startup context 和 capability broker object refs。
+- [x] cancel boundary 收敛：用户显式 cancel 后，下一轮 payload 携带 `sciforge.cancel-boundary.v1`，side effect policy 为 `do-not-auto-resume`；运行中排队的 guidance 会被拒绝并写入 UI message/event transcript，不会跨 cancel boundary 自动重放。
+- [x] active-run 审计导出：ExecutionPanel 导出 JSON bundle 时以当前 active run 和已 scoped ExecutionUnit 为准，导出 session bundle refs、task graph、data lineage、execution commands、artifact refs 和 audit refs，不再被同 session 后续空 run 或 blocked artifact 污染。
+- [x] PDF partial failure 边界：PDF 下载遇到 timeout、HTTP 403、413/过大或 content-length 超限时，进入外部 provider 失败诊断，保留已下载全文、metadata、partial report refs，并提示先复用 retained refs，只有用户明确确认后才重跑失败下载。
+- [x] 历史文献恢复只诊断：ArchiveDrawer 和 browser failed-run restore fixture 展示失败边界、file refs、partial artifact 和下一步选项，并明确恢复历史会话不会自动重跑历史任务。
+- [x] export bundle 补强 compact run：导出策略能从 `TaskRunCard` ref 对象数组提取 bundle/artifact/audit refs；单 run compact session 即使缺少显式 run refs，也会导出可用 ExecutionUnit 和 artifact，而不是生成空 bundle。
+
+Failure/Improvement Notes：
+
+- Browser smoke 发现 active failed run 显示 `0 EU / empty` 时导出的 JSON 仍混入旧 run 的 executionUnits/artifacts；已将导出入口改为 active-run scoped，并把 later empty state 作为回归测试。
+- PDF 403/过大不应触发 repair rerun；通用归因层是 external-provider/download boundary，恢复策略是 retained refs first、explicit retry second。
+- Cancel 后继续不是普通 continuation；任何 queued guidance 都必须先跨 cancel boundary 变成 rejected/needs-confirmation，而不是静默变成下一轮 prompt。
+- `R-RUN-09` 仍保留为后续架构项：版本漂移恢复需要 capability/schema/runtime fingerprint 和迁移策略，不应混入本轮 cancel/refs-first 修复。
+
+本轮验证：
+
+- [x] `node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts src/ui/src/processProgress.test.ts`
+- [x] `node --import tsx --test src/ui/src/exportPolicy.test.ts src/runtime/session-bundle.test.ts src/ui/src/app/ResultsRenderer.test.ts src/ui/src/app/results-renderer-execution-model.test.ts`
+- [x] `node --import tsx --test src/runtime/workspace-task-input.test.ts src/runtime/gateway/context-envelope.test.ts packages/contracts/runtime/task-run-card.test.ts src/runtime/gateway/generated-task-runner-output-lifecycle.test.ts`
+- [x] `node --import tsx --test src/ui/src/app/chat/ArchiveDrawer.test.tsx`
+- [x] `node --import tsx tests/smoke/smoke-refs-first-large-file-recovery.ts`
+- [x] `node --import tsx tests/smoke/smoke-workspace-task-input-compaction.ts`
+- [x] `node --import tsx tests/smoke/smoke-current-reference-prompt-path-digests.ts`
+- [x] `npm run typecheck`
+- [x] `npm run smoke:runtime-contracts`
+- [x] `npm run smoke:long-file-budget`
+- [x] `npm run smoke:browser`
+- [x] `npm run build`
+- [x] `npm run test`（706 tests pass）
+- [x] `git diff --check`
+
+
 
 ### H022 Real-world Complex Task Backlog for SciForge Hardening
 
@@ -267,12 +303,12 @@ Failure/Improvement Notes：
 - [x] R-LIT-01 今日 arXiv agent 论文深调研：检索今日/最近 agent 论文，下载 PDF，阅读全文，产出中文 markdown 报告；随后要求按方法、数据集、评测指标、主要结论重排；再要求导出审计包。已压测真实失败边界，保留 evidence bundle；后续修复见本轮 notes。
 - [x] R-LIT-02 arXiv 空结果恢复：限定一个很窄主题和当天日期，预期可能空结果；要求系统自动说明 empty result、扩展 query、保留不确定性，并继续生成 partial 报告。
 - [ ] R-LIT-03 多来源文献对照：同一主题分别检索 arXiv、Semantic Scholar/PubMed/网页来源，去重并标注来源差异；用户要求删除低可信来源后重写结论。
-- [ ] R-LIT-04 全文下载失败恢复：要求下载 10 篇论文全文，其中部分 PDF 超时/403/过大；系统必须保留已下载全文、标注失败原因、继续基于 metadata 补 partial。
+- [x] R-LIT-04 全文下载失败恢复：要求下载 10 篇论文全文，其中部分 PDF 超时/403/过大；系统必须保留已下载全文、标注失败原因、继续基于 metadata 补 partial。
 - [ ] R-LIT-05 引用修正多轮：先生成报告，再让用户指出某条引用不可信；系统必须定位原 artifact/ref，修正该段，不污染其他结论。
 - [ ] R-LIT-06 研究方向综述迭代：先做宽泛综述，再要求缩小到 robotics agent，再要求排除 benchmark 论文，再要求只保留开源代码论文。
 - [ ] R-LIT-07 论文复现可行性筛选：检索论文后按代码可用性、数据集可用性、计算成本、复现风险排序，并导出复现计划。
 - [x] R-LIT-08 反事实追问：报告完成后用户问“如果只看非 LLM agent 呢”，系统必须复用已有检索 refs 并说明哪些需要刷新。已覆盖“缺少可用 paper-list/report 时必须先 repair/resume”的失败边界。
-- [ ] R-LIT-09 历史文献任务恢复：打开昨天失败的 literature session，要求只看诊断不重跑；系统必须展示失败边界、可复用 refs 和下一步选项。
+- [x] R-LIT-09 历史文献任务恢复：打开昨天失败的 literature session，要求只看诊断不重跑；系统必须展示失败边界、可复用 refs 和下一步选项。
 - [ ] R-LIT-10 双语报告：同一调研先生成中文报告，再要求英文 executive summary，再要求中英术语表，验证 artifact 派生关系。
 
 代码修复与工程任务：
@@ -292,12 +328,12 @@ Failure/Improvement Notes：
 
 - [ ] R-DATA-01 CSV 多轮分析：上传/引用 CSV，先做摘要统计，再改分组口径，再要求异常值解释，再导出 markdown 报告和复现代码。
 - [ ] R-DATA-02 两表合并冲突：A/B 两个表字段不一致，用户给映射规则，系统重算并保留 mapping artifact。
-- [ ] R-DATA-03 大文件摘要：读取大文本/日志文件，只允许摘要和 refs，不允许把全文塞入 prompt；后续追问必须按需读取片段。
+- [x] R-DATA-03 大文件摘要：读取大文本/日志文件，只允许摘要和 refs，不允许把全文塞入 prompt；后续追问必须按需读取片段。
 - [ ] R-DATA-04 图表迭代：先生成图表 artifact，再要求换坐标、换颜色、筛选子集、导出最终报告，测试 artifact identity。
 - [x] R-DATA-05 缺失文件恢复：历史 artifact 指向的文件被删除/移动，用户要求继续，系统必须 stale-check 并进入安全恢复。
 - [ ] R-DATA-06 Notebook 风格任务：连续执行多个分析步骤，每步都有中间文件；用户要求回到第 2 步换参数后继续生成分支结果。
 - [ ] R-DATA-07 外部数据源限流：调用外部 API 拉数据遇到 429/timeout，系统必须输出 transient-unavailable 诊断和重试建议。
-- [ ] R-DATA-08 审计导出：分析完成后用户只要求导出 task graph、数据 lineage、执行命令和 artifact refs，不重新计算。
+- [x] R-DATA-08 审计导出：分析完成后用户只要求导出 task graph、数据 lineage、执行命令和 artifact refs，不重新计算。
 
 Runtime、恢复与会话生命周期任务：
 
@@ -308,9 +344,9 @@ Runtime、恢复与会话生命周期任务：
 - [ ] R-RUN-05 编辑历史 revert：修改早期用户目标并选择 revert，系统必须废弃后续派生 runs/artifacts。
 - [ ] R-RUN-06 编辑历史 continue：修改早期目标但保留已有结果，系统必须标注冲突和受影响结论。
 - [x] R-RUN-07 跨 session 恢复：新开页面恢复旧 session，只依赖持久化 state，不依赖前端内存。
-- [ ] R-RUN-08 取消边界：用户显式 cancel 后要求继续，系统必须说明 cancel boundary，不自动恢复不可逆 side effect。
+- [x] R-RUN-08 取消边界：用户显式 cancel 后要求继续，系统必须说明 cancel boundary，不自动恢复不可逆 side effect。
 - [ ] R-RUN-09 版本漂移恢复：代码更新后打开旧 session，系统检测 capability/schema/version drift 并建议迁移或重跑。
-- [ ] R-RUN-10 压缩后恢复：模拟只剩 state digest 和 refs，继续多轮任务，检查 artifact/run/ref 是否仍能命中。
+- [x] R-RUN-10 压缩后恢复：模拟只剩 state digest 和 refs，继续多轮任务，检查 artifact/run/ref 是否仍能命中。
 
 UI 与 presentation 真实任务：
 
@@ -321,7 +357,7 @@ UI 与 presentation 真实任务：
 - [x] R-UI-05 Verification 状态：普通结果、未验证结果、后台验证中、验证失败、release verify 通过五种状态 UI 必须可区分。
 - [ ] R-UI-06 空结果页面：没有 artifact 时不能显示误导性 completed；必须展示 empty/needs-human/recoverable 的准确状态。
 - [ ] R-UI-07 多 artifact 比较：结果区同时出现 report、paper-list、diagnostic、verification，用户切换 focus mode 后仍保持正确排序。
-- [ ] R-UI-08 导出 bundle：用户要求导出 JSON bundle/审计包，UI 必须能引用正确 session bundle 而不是当前空状态。
+- [x] R-UI-08 导出 bundle：用户要求导出 JSON bundle/审计包，UI 必须能引用正确 session bundle 而不是当前空状态。
 
 真实用户工作流任务：
 

@@ -15,6 +15,7 @@ import {
   mergeExecutionUnits,
   mergeRuntimeArtifacts,
   requestPayloadForTurn,
+  resolveGuidanceQueueAfterRun,
   rollbackSessionBeforeMessage,
   titleFromPrompt,
   updateGuidanceQueueRecords,
@@ -376,6 +377,23 @@ test('running guidance keeps queue status in UI message, event transcript, final
   assert.equal(nextPayload.runs.at(-1)?.guidanceQueue?.[0]?.status, 'merged');
 });
 
+test('user cancel rejects queued guidance instead of replaying it across the cancel boundary', () => {
+  const guidance = createGuidanceQueueRecord('continue with a narrower rerun', {
+    id: 'guidance-cancelled',
+    receivedAt: '2026-05-08T00:01:00.000Z',
+  });
+  const queued = appendRunningGuidanceRecord(session({
+    messages: [message('msg-user', 'user', 'start long task', '2026-05-08T00:00:00.000Z')],
+  }), guidance).session;
+  const resolved = resolveGuidanceQueueAfterRun(queued, [guidance], { userCancelled: true });
+
+  assert.equal(resolved.nextGuidance, undefined);
+  assert.deepEqual(resolved.remainingQueue, []);
+  const queuedMessage = resolved.session.messages.find((item) => item.guidanceQueue?.id === guidance.id);
+  assert.equal(queuedMessage?.guidanceQueue?.status, 'rejected');
+  assert.match(queuedMessage?.guidanceQueue?.reason ?? '', /cancel boundary|不可逆 side effect/);
+});
+
 test('failed runs preserve silent waiting recovery clues for the next turn payload', () => {
   const failed = appendFailedRunToSession({
     optimisticSession: session({ messages: [message('msg-user', 'user', 'run long task', '2026-05-08T00:00:00.000Z')] }),
@@ -513,6 +531,28 @@ test('background completion user cancellation keeps runId and recoverable next s
     .backgroundCompletion?.termination;
   assert.equal(termination?.reason, 'user-cancelled');
   assert.equal(termination?.sessionStatus, 'cancelled');
+});
+
+test('cancelled run payload carries a boundary instead of auto-resume instructions', () => {
+  const cancelled = applyBackgroundCompletionEventToSession(session(), {
+    contract: 'sciforge.background-completion.v1',
+    type: 'background-finalization',
+    runId: 'run-bg-cancel-boundary',
+    stageId: 'stage-final',
+    status: 'cancelled',
+    prompt: 'long irreversible workspace task',
+    message: '用户已取消后台任务。',
+    cancellationReason: 'user requested cancel',
+    completedAt: '2026-05-08T01:12:00.000Z',
+  });
+  const nextUser = message('msg-after-cancel', 'user', '继续上一轮', '2026-05-08T01:13:00.000Z');
+  const payload = requestPayloadForTurn({ ...cancelled, messages: [...cancelled.messages, nextUser] }, nextUser, []);
+  const raw = payload.runs[0]?.raw as { cancelBoundary?: { reason?: string; sideEffectPolicy?: string; nextStep?: string } };
+
+  assert.equal(raw.cancelBoundary?.reason, 'user-cancelled');
+  assert.equal(raw.cancelBoundary?.sideEffectPolicy, 'do-not-auto-resume');
+  assert.match(raw.cancelBoundary?.nextStep ?? '', /Ask the user to confirm/);
+  assert.match(raw.cancelBoundary?.nextStep ?? '', /do not automatically resume irreversible side effects/);
 });
 
 test('background completion can finish while a newer user turn already exists', () => {

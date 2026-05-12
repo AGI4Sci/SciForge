@@ -28,7 +28,7 @@ import { CURRENT_TARGET_INSTANCE_VALUE, enabledPeerInstances, selectedPeerInstan
 import { MessageContent, inlineObjectReferencesForMessage, unmentionedObjectReferencesForMessage } from './chat/MessageContent';
 import { addComposerReferenceWithMarker, addPendingComposerReference, promptForComposerSend, removeComposerReference } from './chat/composerReferences';
 import { runPromptOrchestrator } from './chat/runOrchestrator';
-import { appendRunningGuidanceRecord, appendUploadMessageToSession, attachGuidanceQueueToSessionRun, createGuidanceQueueRecord, mergeAgentResponseIntoSession, rollbackSessionBeforeMessage, updateGuidanceQueueRecords } from './chat/sessionTransforms';
+import { appendRunningGuidanceRecord, appendUploadMessageToSession, attachGuidanceQueueToSessionRun, createGuidanceQueueRecord, mergeAgentResponseIntoSession, resolveGuidanceQueueAfterRun, rollbackSessionBeforeMessage, updateGuidanceQueueRecords } from './chat/sessionTransforms';
 import { attachStreamProcessToFailedSession, attachStreamProcessToResponse, compactFailureNotice, guidanceBadgeVariant, guidanceStatusLabel, latestTokenUsage } from './chat/runPresentation';
 import { RunVerificationTag, runIdForMessage } from './chat/messageRunPresentation';
 import { runReadiness, runningMessageContentFromStream } from './chat/runStatusPresentation';
@@ -515,20 +515,22 @@ export function ChatPanel({
       activeSessionRef.current = mergedSession;
       onActiveRunChange(finalResponseWithProcess.run.id);
     } finally {
+      const wasUserCancelled = userAbortRequestedRef.current;
       setIsSending(false);
       setAssistantDraft('');
       abortRef.current = null;
       userAbortRequestedRef.current = false;
-      const [nextGuidance, ...rest] = guidanceQueueRef.current;
+      const guidanceResolution = resolveGuidanceQueueAfterRun(activeSessionRef.current, guidanceQueueRef.current, {
+        userCancelled: wasUserCancelled,
+      });
+      if (guidanceResolution.session !== activeSessionRef.current) {
+        activeSessionRef.current = guidanceResolution.session;
+        onSessionChange(guidanceResolution.session);
+      }
+      guidanceQueueRef.current = guidanceResolution.remainingQueue;
+      setGuidanceQueue(guidanceResolution.remainingQueue);
+      const nextGuidance = guidanceResolution.nextGuidance;
       if (nextGuidance) {
-        const mergedSession = updateGuidanceQueueRecords(activeSessionRef.current, [nextGuidance.id], {
-          status: 'merged',
-          reason: '当前 run 已结束，已按 run orchestration contract 合并为下一轮用户引导。',
-        });
-        activeSessionRef.current = mergedSession;
-        onSessionChange(mergedSession);
-        guidanceQueueRef.current = rest;
-        setGuidanceQueue(rest);
         window.setTimeout(() => {
           void runPrompt(nextGuidance.prompt, activeSessionRef.current);
         }, 80);

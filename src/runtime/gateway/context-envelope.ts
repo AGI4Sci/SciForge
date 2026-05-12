@@ -48,6 +48,8 @@ export function buildContextEnvelope(
   const conversationLedger = toRecordList(uiState.conversationLedger);
   const currentReferences = toRecordList(uiState.currentReferences);
   const currentReferenceDigests = toRecordList(uiState.currentReferenceDigests);
+  const stateDigest = stateDigestForEnvelope(uiState);
+  const stateDigestRefs = stateDigestRefsForEnvelope(stateDigest);
   const contextGovernance = contextEnvelopeGovernanceForRequest(request);
   const governedCurrentReferences = applyContextEnvelopeRecordGovernance(
     'sessionFacts.currentReferences',
@@ -187,13 +189,14 @@ export function buildContextEnvelope(
       currentUserRequest: currentUserRequestFromPrompt(request.prompt),
       currentReferences: governedCurrentReferences.length ? governedCurrentReferences.slice(0, 8).map((entry) => clipForAgentServerJson(entry, 2)) : undefined,
       currentReferenceDigests: governedCurrentReferenceDigests.length ? governedCurrentReferenceDigests.slice(0, 8).map((entry) => clipForAgentServerJson(entry, 4)) : undefined,
+      stateDigest,
       conversationPolicySummary,
       ...executionModeDecision,
       recentConversation: visibleRecentConversation,
       conversationLedger: summarizeConversationLedger(conversationLedger, mode),
       contextReusePolicy: contextReusePolicy ? clipForAgentServerJson(contextReusePolicy, 3) : undefined,
       recentRuns: Array.isArray(uiState.recentRuns)
-        ? (mode === 'full' ? uiState.recentRuns : uiState.recentRuns.slice(-4).map((entry) => clipForAgentServerJson(entry, 2)))
+        ? summarizeRecentRunsForEnvelope(uiState.recentRuns, mode)
         : undefined,
       recentFailures: recentFailures.length ? recentFailures : undefined,
       verificationResult: request.verificationResult ?? (isRecord(uiState.verificationResult) ? uiState.verificationResult : undefined),
@@ -203,6 +206,7 @@ export function buildContextEnvelope(
       artifacts: summarizeArtifactRefs(request.artifacts),
       recentExecutionRefs: summarizeExecutionRefs(recentExecutionRefs),
       verificationResults: summarizeVerificationResults(request),
+      stateDigestRefs: stateDigestRefs.length ? stateDigestRefs : undefined,
       failureEvidenceRefs: failureEvidenceRefs(failureRecoveryPolicy),
       priorAttempts: summarizeTaskAttemptsForAgentServer(params.priorAttempts ?? []).slice(0, mode === 'full' ? 4 : 2),
       repairRefs: params.repairRefs,
@@ -488,6 +492,7 @@ export function buildStartupContextEnvelopeForRequest(
   const currentRefs = [
     ...startupRefsFromRecords(toRecordList(uiState.currentReferences)),
     ...startupRefsFromRecords(toRecordList(uiState.currentReferenceDigests)),
+    ...stateDigestRefsForEnvelope(stateDigestForEnvelope(uiState)),
   ];
   const recentRuns = toRecordList(uiState.recentRuns).slice(-8).map((run) => ({
     id: stringField(run.id),
@@ -598,6 +603,7 @@ function brokerObjectRefsForRequest(request: GatewayRequest): CapabilityBrokerOb
     ...toRecordList(uiState.currentReferences),
     ...toRecordList(uiState.objectReferences),
     ...toRecordList(uiState.currentReferenceDigests),
+    ...stateDigestRefsForEnvelope(stateDigestForEnvelope(uiState)).map((ref) => ({ ref, kind: refKindForStateDigestRef(ref) })),
   ]).slice(0, 24);
 }
 
@@ -832,6 +838,66 @@ function policyConversationEntries(value: unknown) {
         ? entry.summary
         : '';
     return content.trim() ? [`${role}: ${content}`] : [];
+  });
+}
+
+function stateDigestForEnvelope(uiState: Record<string, unknown>) {
+  const candidate = firstRecord(
+    uiState.stateDigest,
+    uiState.conversationStateDigest,
+    isRecord(uiState.conversationPolicy) ? uiState.conversationPolicy.stateDigest : undefined,
+    isRecord(uiState.contextCompaction) ? uiState.contextCompaction.stateDigest : undefined,
+  );
+  if (!candidate) return undefined;
+  return clipForAgentServerJson(pruneUndefined({
+    schemaVersion: stringField(candidate.schemaVersion),
+    taskId: stringField(candidate.taskId),
+    relation: stringField(candidate.relation),
+    summary: clipForAgentServerPrompt(candidate.summary, 700),
+    handoffPolicy: stringField(candidate.handoffPolicy),
+    stateRefs: toStringList(candidate.stateRefs).slice(0, 12),
+    completedRefs: toStringList(candidate.completedRefs).slice(0, 12),
+    carryForwardRefs: toStringList(candidate.carryForwardRefs).slice(0, 16),
+    pendingWork: toStringList(candidate.pendingWork).slice(0, 12),
+    blockedWork: toStringList(candidate.blockedWork).slice(0, 12),
+    recoverableActions: toStringList(candidate.recoverableActions).slice(0, 12),
+    backgroundJobs: toStringList(candidate.backgroundJobs).slice(0, 12),
+    invalidatedRefs: toStringList(candidate.invalidatedRefs).slice(0, 12),
+    uncertainty: toStringList(candidate.uncertainty).slice(0, 8),
+  }), 3) as Record<string, unknown>;
+}
+
+function stateDigestRefsForEnvelope(stateDigest: Record<string, unknown> | undefined) {
+  if (!stateDigest) return [];
+  return uniqueStrings([
+    ...toStringList(stateDigest.stateRefs),
+    ...toStringList(stateDigest.completedRefs),
+    ...toStringList(stateDigest.carryForwardRefs),
+  ]);
+}
+
+function refKindForStateDigestRef(ref: string) {
+  if (/^run[:/]/i.test(ref) || /\.sciforge\/(?:runs|task-results|logs)\//.test(ref)) return 'run-ref';
+  if (/^artifact[:/]/i.test(ref) || /\.sciforge\/artifacts\//.test(ref)) return 'artifact-ref';
+  return 'state-ref';
+}
+
+function summarizeRecentRunsForEnvelope(value: unknown[], mode: AgentServerContextMode) {
+  const runs = mode === 'full' ? value.slice(-8) : value.slice(-4);
+  return runs.map((entry) => {
+    if (!isRecord(entry)) return clipForAgentServerJson(entry, 1);
+    return clipForAgentServerJson(pruneUndefined({
+      id: stringField(entry.id) ?? stringField(entry.runId),
+      status: stringField(entry.status),
+      ref: stringField(entry.ref),
+      outputRef: stringField(entry.outputRef),
+      stdoutRef: stringField(entry.stdoutRef),
+      stderrRef: stringField(entry.stderrRef),
+      artifactRefs: toStringList(entry.artifactRefs).slice(0, 8),
+      summary: clipForAgentServerPrompt(entry.summary, 500),
+      failureReason: clipForAgentServerPrompt(entry.failureReason, 500),
+      hash: hashJson(entry),
+    }), 2);
   });
 }
 

@@ -412,7 +412,7 @@ function ExecutionOnlyResult({ session, activeRun }: { session: SciForgeSession;
   const units = executionUnitsForRun(session, activeRun);
   return (
     <div className="stack">
-      <ExecutionPanel session={session} executionUnits={units} embedded />
+      <ExecutionPanel session={session} executionUnits={units} activeRun={activeRun} embedded />
     </div>
   );
 }

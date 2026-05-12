@@ -50,7 +50,7 @@ test('archive drawer shows compact run boundary, refs, and restore impact', () =
   assert.match(html, /External retrieval returned zero results/);
   assert.match(html, /execution-unit:EU-literature/);
   assert.match(html, /expand provider-neutral query/);
-  assert.match(html, /恢复后当前工作台会切换到该历史会话/);
+  assert.match(html, /不会自动重跑历史任务/);
 });
 
 test('archive drawer prefers TaskRunCard contract over legacy raw compact summary', () => {
@@ -103,6 +103,56 @@ test('archive drawer prefers TaskRunCard contract over legacy raw compact summar
   assert.match(html, /artifact:.sciforge\/task-results\/report.md/);
   assert.match(html, /Continue from preserved task refs/);
   assert.doesNotMatch(html, /LEGACY_RAW_FAILURE_SHOULD_NOT_RENDER/);
+});
+
+test('archive drawer shows diagnostic-only boundary for historical literature download failures', () => {
+  const taskRunCard = createTaskRunCard({
+    id: 'task-card:run-lit-history:1',
+    taskId: 'run-lit-history',
+    goal: 'Download 10 PDFs, preserve successful full text, and continue with metadata when some downloads fail.',
+    protocolStatus: 'protocol-failed',
+    taskOutcome: 'needs-human',
+    refs: [
+      { kind: 'artifact', ref: 'artifact:partial-literature-report', status: 'partial' },
+      { kind: 'file', ref: 'file:.sciforge/task-results/pdfs/downloaded-paper.pdf', label: 'downloaded full text' },
+      { kind: 'file', ref: 'file:.sciforge/data/downloaded-paper.metadata.json', label: 'metadata' },
+      { kind: 'log', ref: 'file:.sciforge/logs/literature.stderr.log', label: 'stderr' },
+    ],
+    failureSignatures: [{
+      message: 'PDF retrieval partially failed: one timeout, one HTTP 403, one file exceeded max download bytes.',
+      operation: 'pdf-download',
+      refs: ['file:.sciforge/logs/literature.stderr.log'],
+    }],
+    nextStep: 'Open diagnostics and reuse retained refs first; rerun PDF downloads only after an explicit continue/retry request.',
+  });
+  const html = renderToStaticMarkup(createElement(ArchiveDrawer, {
+    currentSession: session({ sessionId: 'current', title: 'current' }),
+    archivedSessions: [session({
+      sessionId: 'history-lit-session',
+      title: 'history literature diagnostics',
+      runs: [{
+        id: 'run-lit-history',
+        scenarioId: 'literature-evidence-review',
+        status: 'failed',
+        prompt: 'download 10 PDFs',
+        response: 'partial failure',
+        createdAt: '2026-05-12T00:00:00.000Z',
+        raw: {
+          displayIntent: {
+            taskRunCard,
+          },
+        },
+      }],
+    })],
+    onRestore: () => undefined,
+    onDelete: () => undefined,
+    onClear: () => undefined,
+  }));
+
+  assert.match(html, /PDF retrieval partially failed/);
+  assert.match(html, /file:.sciforge\/task-results\/pdfs\/downloaded-paper.pdf/);
+  assert.match(html, /Open diagnostics and reuse retained refs first/);
+  assert.match(html, /不会自动重跑历史任务/);
 });
 
 function session(overrides: Partial<SciForgeSession> = {}): SciForgeSession {

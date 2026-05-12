@@ -88,6 +88,74 @@ test('context envelope keeps ref-backed artifact bodies and log refs bounded for
   assert.match(String(envelope.scenarioFacts.evidenceExpansionPolicy?.continuationGuard), /without reading raw logs/);
 });
 
+test('context envelope carries compact state digest refs after history compaction', () => {
+  const envelope = buildContextEnvelope({
+    skillDomain: 'knowledge',
+    prompt: '继续刚才压缩后的任务，打开上一轮报告和失败 run。',
+    artifacts: [],
+    uiState: {
+      stateDigest: {
+        schemaVersion: 'sciforge.conversation.state-digest.v1',
+        taskId: 'task-compacted',
+        relation: 'follow-up',
+        summary: 'Only compact state digest and durable refs remain after backend compaction.',
+        handoffPolicy: 'digest-and-refs-only',
+        stateRefs: ['run:failed-42', '.sciforge/task-results/failed-42.json'],
+        completedRefs: ['artifact:report-42'],
+        carryForwardRefs: ['.sciforge/artifacts/report-42.md', 'artifact:report-42'],
+        invalidatedRefs: ['artifact:old-report'],
+      },
+      recentConversation: [
+        { role: 'assistant', content: 'The old raw history was compacted.' },
+      ],
+    },
+  } as GatewayRequest, { workspace: '/tmp/sciforge-test' });
+
+  assert.equal(record(envelope.sessionFacts.stateDigest).handoffPolicy, 'digest-and-refs-only');
+  assert.deepEqual(envelope.longTermRefs.stateDigestRefs, [
+    'run:failed-42',
+    '.sciforge/task-results/failed-42.json',
+    'artifact:report-42',
+    '.sciforge/artifacts/report-42.md',
+  ]);
+  assert.ok(record(record(envelope.startupContextEnvelope.alwaysOnFacts).keyRefs).currentRefs);
+  const startupRefs = record(record(envelope.startupContextEnvelope.alwaysOnFacts).keyRefs).currentRefs as unknown[];
+  assert.ok(startupRefs.includes('run:failed-42'));
+  assert.ok(startupRefs.includes('.sciforge/artifacts/report-42.md'));
+  assert.ok(Number(record(envelope.scenarioFacts.capabilityBrokerBrief).inputSummary
+    ? record(record(envelope.scenarioFacts.capabilityBrokerBrief).inputSummary).objectRefs
+    : 0) >= 2);
+});
+
+test('context envelope summarizes recent runs instead of carrying raw large log fields', () => {
+  const largeLog = [
+    'RAW_RUN_LOG_SENTINEL_HEAD',
+    'log line '.repeat(4000),
+    'RAW_RUN_LOG_SENTINEL_TAIL',
+  ].join('\n');
+  const envelope = buildContextEnvelope({
+    skillDomain: 'knowledge',
+    prompt: '继续分析失败 run。',
+    artifacts: [],
+    uiState: {
+      recentConversation: ['user: previous'],
+      recentRuns: [{
+        id: 'run-large',
+        status: 'failed-with-reason',
+        stdoutRef: '.sciforge/logs/run-large.stdout.log',
+        stderrRef: '.sciforge/logs/run-large.stderr.log',
+        stdout: largeLog,
+        stderr: largeLog,
+        failureReason: 'failed while parsing large log',
+      }],
+    },
+  } as GatewayRequest, { workspace: '/tmp/sciforge-test' });
+
+  const serialized = JSON.stringify(envelope.sessionFacts.recentRuns);
+  assert.doesNotMatch(serialized, /RAW_RUN_LOG_SENTINEL_HEAD|RAW_RUN_LOG_SENTINEL_TAIL/);
+  assert.match(serialized, /run-large\.stdout\.log/);
+});
+
 test('context envelope can audit harness contract refs and context budget slimming behind feature flag', () => {
   const request = {
     skillDomain: 'knowledge',
