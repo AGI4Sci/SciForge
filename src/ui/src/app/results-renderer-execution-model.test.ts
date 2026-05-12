@@ -118,6 +118,68 @@ test('results renderer execution model does not call completed empty runs ready'
   assert.match(state.reason, /没有写入可供右侧结果区渲染的 artifact/);
 });
 
+test('results renderer execution model surfaces partial-first progress for running runs', () => {
+  const session: SciForgeSession = {
+    schemaVersion: 2,
+    sessionId: 'session-running-partial',
+    scenarioId: 'literature-evidence-review',
+    title: 'running partial',
+    createdAt: '2026-05-10T00:00:00.000Z',
+    messages: [],
+    runs: [{
+      id: 'run-running-partial',
+      scenarioId: 'literature-evidence-review',
+      status: 'running',
+      prompt: 'long task',
+      response: 'partial response is available',
+      createdAt: '2026-05-10T00:00:00.000Z',
+      raw: {
+        backgroundCompletion: {
+          contract: 'sciforge.background-completion.v1',
+          runId: 'run-running-partial',
+          status: 'running',
+          stages: [
+            { stageId: 'metadata', status: 'completed', ref: 'run:run-running-partial#metadata', artifactRefs: ['artifact:partial-report'] },
+            { stageId: 'fulltext', status: 'running', ref: 'run:run-running-partial#fulltext' },
+          ],
+        },
+        resultPresentation: {
+          processSummary: { status: 'running', currentStage: 'fulltext', summary: 'Partial report is available while full text is still downloading.' },
+          nextActions: [{ kind: 'continue', label: 'Use completed metadata refs only', ref: 'artifact:partial-report' }],
+        },
+      },
+      objectReferences: [{ kind: 'artifact', id: 'obj-partial-report', ref: 'artifact:partial-report', title: 'Partial report' }] as never,
+    }],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [
+      { id: 'EU-metadata', tool: 'metadata.fetch', params: '{}', status: 'done', hash: 'hash-metadata', outputRef: 'artifact:partial-report' },
+      { id: 'EU-fulltext', tool: 'fulltext.download', params: '{}', status: 'running', hash: 'hash-fulltext', stdoutRef: 'run:run-running-partial/fulltext.log' },
+    ],
+    artifacts: [{
+      id: 'partial-report',
+      type: 'report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      metadata: { title: 'Partial report', runId: 'run-running-partial' },
+    }],
+    notebook: [],
+    versions: [],
+    updatedAt: '2026-05-10T00:01:00.000Z',
+  };
+
+  const state = runPresentationState(session, session.runs[0]);
+
+  assert.equal(state.kind, 'partial');
+  assert.match(state.title, /已有部分结果/);
+  assert.ok(state.availableArtifacts.some((artifact) => artifact.id === 'partial-report'));
+  assert.ok(state.progress?.completedParts.some((part) => part.ref === 'artifact:partial-report'));
+  assert.equal(state.progress?.currentStage?.id, 'fulltext');
+  assert.equal(state.progress?.backgroundStatus, 'running');
+  assert.ok(state.progress?.safeActions.some((action) => action.kind === 'cancel' && action.safe));
+  assert.ok(state.progress?.safeActions.some((action) => action.kind === 'continue' && action.ref === 'artifact:partial-report'));
+});
+
 test('results renderer execution model separates needs-human from empty artifacts', () => {
   const session = responseFailureSession();
   session.runs[0]!.status = 'completed';

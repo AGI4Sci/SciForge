@@ -63,6 +63,29 @@ export interface SessionVersionRecord {
   snapshot: Omit<SciForgeSession, 'versions'>;
 }
 
+export interface RuntimeCompatibilityFingerprint {
+  schemaVersion: 1;
+  appStateSchemaVersion: number;
+  sessionSchemaVersion: number;
+  compatibilityVersion: string;
+  capabilityFingerprints: string[];
+}
+
+export interface RuntimeCompatibilityDiagnostic {
+  schemaVersion: 1;
+  id: string;
+  kind: 'missing-runtime-fingerprint' | 'schema-version-drift' | 'capability-version-drift';
+  severity: 'info' | 'warning';
+  reason: string;
+  current: RuntimeCompatibilityFingerprint;
+  persisted?: RuntimeCompatibilityFingerprint;
+  affectedSessionId: string;
+  affectedScenarioId: ScenarioInstanceId;
+  recoverable: true;
+  recoverableActions: string[];
+  createdAt: string;
+}
+
 export interface SciForgeSession {
   schemaVersion: 2;
   sessionId: string;
@@ -77,6 +100,8 @@ export interface SciForgeSession {
   artifacts: RuntimeArtifact[];
   notebook: NotebookRecord[];
   versions: SessionVersionRecord[];
+  runtimeFingerprint?: RuntimeCompatibilityFingerprint;
+  runtimeCompatibilityDiagnostics?: RuntimeCompatibilityDiagnostic[];
   /** Resolved view-plan item ids hidden in the results pane only; artifacts/workspace files are untouched. */
   hiddenResultSlotIds?: string[];
   updatedAt: string;

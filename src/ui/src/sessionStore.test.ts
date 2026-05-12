@@ -5,7 +5,15 @@ import {
   ALIGNMENT_CONTRACT_ARTIFACT_TYPE,
   ALIGNMENT_CONTRACT_SCHEMA_VERSION,
 } from './domain';
-import { compactWorkspaceStateForStorage, parseWorkspaceState, saveWorkspaceState, sessionWriteConflictsForState, shouldUsePersistedWorkspaceState } from './sessionStore';
+import {
+  compactWorkspaceStateForStorage,
+  currentRuntimeCompatibilityFingerprint,
+  parseWorkspaceState,
+  runtimeCompatibilityDiagnosticsForSession,
+  saveWorkspaceState,
+  sessionWriteConflictsForState,
+  shouldUsePersistedWorkspaceState,
+} from './sessionStore';
 
 test('parseWorkspaceState preserves built-in and workspace scenario sessions', () => {
   const state = parseWorkspaceState({
@@ -300,6 +308,74 @@ test('compactWorkspaceStateForStorage strips binary dataUrls from artifacts and 
   const serialized = JSON.stringify(compact);
   assert.ok(!serialized.includes(dataUrl.slice(0, 50_000)));
   assert.ok(serialized.includes('binary-or-data-url'));
+});
+
+test('parseWorkspaceState records runtime drift for old sessions but not empty seed sessions', () => {
+  const current = currentRuntimeCompatibilityFingerprint();
+  const state = parseWorkspaceState({
+    schemaVersion: 2,
+    workspacePath: '/tmp/sciforge-workspace',
+    sessionsByScenario: {
+      'literature-evidence-review': {
+        ...sessionFixture('old-session', ['historical task']),
+        runtimeFingerprint: {
+          ...current,
+          compatibilityVersion: 'sciforge-runtime-compatibility-old',
+        },
+      },
+      'structure-exploration': {
+        schemaVersion: 2,
+        sessionId: 'empty-seed',
+        scenarioId: 'structure-exploration',
+        title: 'empty seed',
+        createdAt: '2026-04-25T00:00:00.000Z',
+        messages: [],
+        runs: [],
+        uiManifest: [],
+        claims: [],
+        executionUnits: [],
+        artifacts: [],
+        notebook: [],
+        versions: [],
+        updatedAt: '2026-04-25T00:00:00.000Z',
+      },
+    },
+    archivedSessions: [],
+    updatedAt: '2026-04-25T00:00:00.000Z',
+  });
+
+  const drift = runtimeCompatibilityDiagnosticsForSession(state.sessionsByScenario['literature-evidence-review']);
+  const seedDrift = runtimeCompatibilityDiagnosticsForSession(state.sessionsByScenario['structure-exploration']);
+
+  assert.equal(drift.length, 1);
+  assert.equal(drift[0]?.kind, 'capability-version-drift');
+  assert.match(drift[0]?.recoverableActions.join(' '), /Migrate|Start a new run/);
+  assert.deepEqual(state.sessionsByScenario['literature-evidence-review'].runtimeFingerprint, current);
+  assert.equal(seedDrift.length, 0);
+});
+
+test('parseWorkspaceState preserves legacy missing-fingerprint drift through compact storage', () => {
+  const parsed = parseWorkspaceState({
+    schemaVersion: 2,
+    workspacePath: '/tmp/sciforge-workspace',
+    sessionsByScenario: {
+      'literature-evidence-review': sessionFixture('legacy-session', ['legacy user work']),
+    },
+    archivedSessions: [sessionFixture('archived-legacy-session', ['archived user work'])],
+    updatedAt: '2026-04-25T00:00:00.000Z',
+  });
+
+  const activeDiagnostics = runtimeCompatibilityDiagnosticsForSession(parsed.sessionsByScenario['literature-evidence-review']);
+  const archivedDiagnostics = runtimeCompatibilityDiagnosticsForSession(parsed.archivedSessions[0]!);
+  assert.equal(activeDiagnostics[0]?.kind, 'missing-runtime-fingerprint');
+  assert.equal(archivedDiagnostics[0]?.kind, 'missing-runtime-fingerprint');
+
+  const reparsed = parseWorkspaceState(compactWorkspaceStateForStorage(parsed, 'minimal'));
+  const reparsedDiagnostics = runtimeCompatibilityDiagnosticsForSession(reparsed.sessionsByScenario['literature-evidence-review']);
+
+  assert.equal(reparsedDiagnostics.length, 1);
+  assert.equal(reparsedDiagnostics[0]?.id, activeDiagnostics[0]?.id);
+  assert.equal(reparsed.sessionsByScenario['literature-evidence-review'].runtimeFingerprint?.compatibilityVersion, currentRuntimeCompatibilityFingerprint().compatibilityVersion);
 });
 
 test('saveWorkspaceState records stale localStorage session writes without overwriting current state', () => {

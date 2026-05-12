@@ -759,6 +759,8 @@ export * from './observe';
 export type {
   EvidenceClaim,
   NotebookRecord,
+  RuntimeCompatibilityDiagnostic,
+  RuntimeCompatibilityFingerprint,
   SciForgeRun,
   SciForgeSession,
   SessionVersionRecord,

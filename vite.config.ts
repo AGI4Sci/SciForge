@@ -64,6 +64,7 @@ function sciForgeRuntimeLauncher() {
               healthUrl: `http://127.0.0.1:${WORKSPACE_PORT}/health`,
               cwd: process.cwd(),
               args: ['run', 'workspace:server'],
+              requiredCapability: 'workspace-snapshot',
             }),
             ensureRuntimeProcess({
               id: 'agentserver',

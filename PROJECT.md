@@ -321,6 +321,36 @@ Failure/Improvement Notes：
 - [x] `git diff --check`
 
 
+### 2026-05-13 Milestone：Partial-first 运行态、版本漂移恢复与服务生命周期收敛
+
+本轮继续开启新一批 sub agents 并行复核 partial presentation、runtime drift、service lifecycle 和剩余真实场景 backlog；主线程吸收复核约束后落地三条通用修复线：
+
+- [x] R-UI-02 partial-first 运行态：`runPresentationState` 增加结构化 `progress`，展示已完成部分、当前阶段、后台状态和 safe actions；running run 已有 artifact / done ExecutionUnit / background stage 时优先呈现 `partial`，而不是只显示“仍在运行”。
+- [x] R-RUN-09 版本漂移恢复：session 持久化增加 `RuntimeCompatibilityFingerprint` 与 `RuntimeCompatibilityDiagnostic`，基于 schema/capability/runtime contract fingerprint 检测 missing fingerprint、schema drift 和 capability drift；诊断在结果区可见，建议先检查 refs、迁移 payload 或明确重跑，不自动恢复旧 side effect。
+- [x] R-CODE-10 服务生命周期验证：Workspace Writer `/health` 暴露 pid、startedAt、instanceId 和 lifecycle token；新增动态端口 `smoke:service-lifecycle`，验证旧 writer 退出、新 writer ready、同端口 health identity 更新；Vite runtime launcher 对 Workspace Writer 要求 `workspace-snapshot` capability，避免把未知 `/health` 服务误判为在线。
+- [x] `PROJECT.md` 补充本轮 milestone 与 backlog 状态，记录剩余场景中哪些适合 fixture/smoke 化，哪些继续作为真实任务 backlog。
+
+Failure/Improvement Notes：
+
+- R-UI-02 不能依赖 `ExecutionUnitStatus='partial'` 的非 contract 字段；本轮改为从 TaskRun/resultPresentation、backgroundCompletion、已完成 ExecutionUnit 和 artifact refs 投影 partial progress。
+- R-RUN-09 fingerprint 不能使用时间戳、workspace 绝对路径、模型配置或 backend URL；本轮只哈希稳定 runtime contract/schema/enum/capability 信号，且 fingerprint 更新不进入 session content revision，避免制造多标签写冲突。
+- R-CODE-10 不应 `pkill node` 或按固定端口清理残留进程；本轮 smoke 只停止自己用 lifecycle token 启动的进程。
+- `src/ui/src/sessionStore.ts` 已进入 1063 行 watch 区；下一轮继续扩展 session migration/write-guard/drift 时，应优先拆出 runtime compatibility 与 write guard helper 模块。
+- 适合下一轮 fixture/smoke 化的 backlog：R-LIT-05、R-LIT-10、R-DATA-01/02/04/07、R-WF-08/09；R-WF-01/02/06、R-DATA-06 和真实 R-LIT-06/07 质量评估继续保留为真实场景压测。
+
+本轮验证：
+
+- [x] `node --import tsx --test src/ui/src/sessionStore.test.ts src/ui/src/app/results-renderer-execution-model.test.ts src/ui/src/app/ResultsRenderer.test.ts`
+- [x] `npm run smoke:service-lifecycle`
+- [x] `npm run smoke:runtime-contracts`
+- [x] `npm run smoke:long-file-budget`
+- [x] `npm run typecheck`
+- [x] `npm run build`
+- [x] `npm run test`（722 tests pass）
+- [x] `npm run smoke:browser`
+- [x] `git diff --check`
+
+
 
 ### H022 Real-world Complex Task Backlog for SciForge Hardening
 
@@ -359,7 +389,7 @@ Failure/Improvement Notes：
 - [ ] R-CODE-07 Release verify 请求：用户要求“等完整验证再推 GitHub”，系统必须阻塞到指定测试完成，失败时不推送。
 - [ ] R-CODE-08 Backend handoff 漂移：AgentServer 返回 taskFiles、direct ToolPayload、plain text、malformed generation response 四类输出，要求统一分类和可恢复。
 - [ ] R-CODE-09 多 backend 对比修复：同一任务用 Codex/OpenTeam 两个 backend 跑，比较失败模式，提炼 backend-neutral 修复。
-- [ ] R-CODE-10 项目服务生命周期：修改代码后自动重启 dev server，确认端口占用、旧进程退出、新服务 ready、浏览器页面可刷新。
+- [x] R-CODE-10 项目服务生命周期：修改代码后自动重启 dev server，确认端口占用、旧进程退出、新服务 ready、浏览器页面可刷新。已覆盖 Workspace Writer health identity、动态端口 restart smoke 和 Vite capability gate；真实 UI dev server 热更新仍由 `npm run smoke:browser` 持续覆盖。
 
 数据分析与文件 artifact 任务：
 
@@ -382,13 +412,13 @@ Runtime、恢复与会话生命周期任务：
 - [x] R-RUN-06 编辑历史 continue：修改早期目标但保留已有结果，系统必须标注冲突和受影响结论。
 - [x] R-RUN-07 跨 session 恢复：新开页面恢复旧 session，只依赖持久化 state，不依赖前端内存。
 - [x] R-RUN-08 取消边界：用户显式 cancel 后要求继续，系统必须说明 cancel boundary，不自动恢复不可逆 side effect。
-- [ ] R-RUN-09 版本漂移恢复：代码更新后打开旧 session，系统检测 capability/schema/version drift 并建议迁移或重跑。
+- [x] R-RUN-09 版本漂移恢复：代码更新后打开旧 session，系统检测 capability/schema/version drift 并建议迁移或重跑。已完成 provider-neutral runtime compatibility fingerprint、drift diagnostic、compact 持久化和结果区建议展示。
 - [x] R-RUN-10 压缩后恢复：模拟只剩 state digest 和 refs，继续多轮任务，检查 artifact/run/ref 是否仍能命中。
 
 UI 与 presentation 真实任务：
 
 - [x] R-UI-01 失败结果可读性：失败时右侧结果必须先展示用户可理解的原因、可用产物、下一步，而不是 raw trace 优先。
-- [ ] R-UI-02 Partial 优先：长任务运行中必须展示已完成部分、当前阶段、后台状态和可安全中止/继续的操作。
+- [x] R-UI-02 Partial 优先：长任务运行中必须展示已完成部分、当前阶段、后台状态和可安全中止/继续的操作。已由 `runPresentationState.progress` 与 ResultsRenderer 首屏 partial-first summary 覆盖。
 - [x] R-UI-03 Artifact 选择追问：用户点选某个 file/artifact 后追问“基于这个继续”，系统必须使用被点选对象而不是最近对象。
 - [x] R-UI-04 ExecutionUnit 展示：运行结果中 execution unit 必须包含 codeRef/stdoutRef/stderrRef/outputRef、状态、失败原因和 recoverActions。
 - [x] R-UI-05 Verification 状态：普通结果、未验证结果、后台验证中、验证失败、release verify 通过五种状态 UI 必须可区分。

@@ -22,9 +22,17 @@ export type RunPresentationState = {
   kind: RunPresentationStateKind;
   title: string;
   reason: string;
+  progress?: RunPresentationProgress;
   nextSteps: string[];
   availableArtifacts: Array<{ id: string; type: string; title?: string }>;
   refs: string[];
+};
+
+export type RunPresentationProgress = {
+  completedParts: Array<{ id: string; label: string; ref?: string; status?: string }>;
+  currentStage?: { id: string; label: string; status: string; ref?: string };
+  backgroundStatus?: string;
+  safeActions: Array<{ kind: 'inspect' | 'continue' | 'cancel' | 'resume' | 'rerun' | 'confirm'; label: string; ref?: string; safe: boolean; reason?: string }>;
 };
 
 export function shouldOpenRunAuditDetails(session: SciForgeSession, activeRun?: SciForgeRun) {
@@ -46,8 +54,11 @@ export function runPresentationState(session: SciForgeSession, activeRun?: SciFo
   const units = executionUnitsForRun(session, run);
   const presentation = resultPresentationForRun(run);
   const availableArtifacts = presentationArtifacts(session, run, viewPlan);
+  const progress = runPresentationProgress(run, units, availableArtifacts, presentation);
   const needsHuman = runNeedsHuman(run) || units.some((unit) => unit.status === 'needs-human' || unit.verificationVerdict === 'needs-human') || textHasNeedsHuman(presentation);
-  const partial = textHasPartial(presentation) || units.some((unit) => String(unit.status) === 'partial') || textHasPartial(run?.response);
+  const partial = textHasPartial(presentation)
+    || textHasPartial(run?.response)
+    || (run?.status === 'running' && (availableArtifacts.length > 0 || progress.completedParts.length > 0));
   const failed = run?.status === 'failed' || blockers.length > 0 || validationFailures.length > 0;
   const recoverable = recoverActions.length > 0
     || repairStates.some((state) => state.status || state.failureReason || state.recoverActions.length)
@@ -76,6 +87,7 @@ export function runPresentationState(session: SciForgeSession, activeRun?: SciFo
       kind: recoverable ? 'recoverable' : 'failed',
       title: recoverable ? '运行失败，但可恢复' : '运行失败',
       reason,
+      progress,
       nextSteps,
       availableArtifacts,
       refs,
@@ -86,6 +98,20 @@ export function runPresentationState(session: SciForgeSession, activeRun?: SciFo
       kind: 'needs-human',
       title: '需要人工处理后继续',
       reason,
+      progress,
+      nextSteps,
+      availableArtifacts,
+      refs,
+    };
+  }
+  if (partial) {
+    return {
+      kind: 'partial',
+      title: run?.status === 'running'
+        ? '已有部分结果，后台仍在继续'
+        : availableArtifacts.length ? '只得到部分结果' : '部分结果尚不可展示',
+      reason,
+      progress,
       nextSteps,
       availableArtifacts,
       refs,
@@ -96,16 +122,7 @@ export function runPresentationState(session: SciForgeSession, activeRun?: SciFo
       kind: 'running',
       title: '运行仍在进行',
       reason,
-      nextSteps,
-      availableArtifacts,
-      refs,
-    };
-  }
-  if (partial) {
-    return {
-      kind: 'partial',
-      title: availableArtifacts.length ? '只得到部分结果' : '部分结果尚不可展示',
-      reason,
+      progress,
       nextSteps,
       availableArtifacts,
       refs,
@@ -116,6 +133,7 @@ export function runPresentationState(session: SciForgeSession, activeRun?: SciFo
       kind: recoverable ? 'recoverable' : 'empty',
       title: recoverable ? '结果需要恢复后展示' : '本轮没有生成可展示 artifact',
       reason,
+      progress,
       nextSteps,
       availableArtifacts,
       refs,
@@ -125,6 +143,7 @@ export function runPresentationState(session: SciForgeSession, activeRun?: SciFo
     kind: 'ready',
     title: '结果可展示',
     reason,
+    progress,
     nextSteps,
     availableArtifacts,
     refs,
@@ -411,6 +430,184 @@ function presentationArtifacts(session: SciForgeSession, run?: SciForgeRun, view
     type: artifact.type,
     title: artifactTitle(artifact),
   }));
+}
+
+function runPresentationProgress(
+  run: SciForgeRun | undefined,
+  units: ReturnType<typeof executionUnitsForRun>,
+  availableArtifacts: RunPresentationState['availableArtifacts'],
+  presentation?: Record<string, unknown>,
+): RunPresentationProgress {
+  const background = backgroundCompletionForRun(run);
+  const stages = recordList(background?.stages);
+  const processSummary = isRecord(presentation?.processSummary) ? presentation.processSummary : undefined;
+  const completedParts = completedProgressParts(units, availableArtifacts, stages);
+  const currentStage = currentProgressStage(stages, units, processSummary);
+  const backgroundStatus = asString(background?.status)
+    || asString(processSummary?.status)
+    || (run?.status === 'running' ? 'running' : undefined);
+  return {
+    completedParts,
+    currentStage,
+    backgroundStatus,
+    safeActions: safePresentationActions(run, presentation, background, completedParts),
+  };
+}
+
+function completedProgressParts(
+  units: ReturnType<typeof executionUnitsForRun>,
+  availableArtifacts: RunPresentationState['availableArtifacts'],
+  stages: Record<string, unknown>[],
+) {
+  const parts = new Map<string, { id: string; label: string; ref?: string; status?: string }>();
+  for (const artifact of availableArtifacts) {
+    parts.set(`artifact:${artifact.id}`, {
+      id: artifact.id,
+      label: artifact.title ? `${artifact.type}: ${artifact.title}` : artifact.type,
+      ref: `artifact:${artifact.id}`,
+      status: 'available',
+    });
+  }
+  for (const unit of units) {
+    if (unit.status !== 'done' && unit.status !== 'record-only' && unit.status !== 'self-healed') continue;
+    const ref = unit.outputRef ?? unit.diffRef ?? unit.stdoutRef ?? unit.codeRef;
+    parts.set(`unit:${unit.id}`, {
+      id: unit.id,
+      label: `${unit.tool} · ${unit.status}`,
+      ref,
+      status: unit.status,
+    });
+  }
+  for (const stage of stages) {
+    const status = asString(stage.status);
+    if (status !== 'completed' && status !== 'done' && status !== 'record-only') continue;
+    const stageId = asString(stage.stageId) ?? asString(stage.id) ?? 'stage';
+    parts.set(`stage:${stageId}`, {
+      id: stageId,
+      label: `stage ${stageId} · ${status}`,
+      ref: asString(stage.ref),
+      status,
+    });
+  }
+  return Array.from(parts.values()).slice(0, 8);
+}
+
+function currentProgressStage(
+  stages: Record<string, unknown>[],
+  units: ReturnType<typeof executionUnitsForRun>,
+  processSummary?: Record<string, unknown>,
+) {
+  const runningStage = [...stages].reverse().find((stage) => asString(stage.status) === 'running');
+  const latestStage = runningStage ?? stages.at(-1);
+  if (latestStage) {
+    const id = asString(latestStage.stageId) ?? asString(latestStage.id) ?? 'stage';
+    const status = asString(latestStage.status) ?? 'running';
+    return {
+      id,
+      label: asString(latestStage.label) ?? asString(latestStage.title) ?? `stage ${id}`,
+      status,
+      ref: asString(latestStage.ref),
+    };
+  }
+  const runningUnit = units.find((unit) => unit.status === 'running' || unit.status === 'planned');
+  if (runningUnit) {
+    return {
+      id: runningUnit.id,
+      label: runningUnit.tool,
+      status: runningUnit.status,
+      ref: runningUnit.outputRef ?? runningUnit.stdoutRef ?? runningUnit.codeRef,
+    };
+  }
+  const current = asString(processSummary?.currentStage) ?? asString(processSummary?.stage);
+  if (!current) return undefined;
+  return {
+    id: current,
+    label: current,
+    status: asString(processSummary?.status) ?? 'running',
+  };
+}
+
+function safePresentationActions(
+  run: SciForgeRun | undefined,
+  presentation: Record<string, unknown> | undefined,
+  background: Record<string, unknown> | undefined,
+  completedParts: RunPresentationProgress['completedParts'],
+): RunPresentationProgress['safeActions'] {
+  const explicitActions = recordList(presentation?.nextActions).flatMap((action) => {
+    const label = asString(action.label) || asString(action.action) || asString(action.nextStep);
+    if (!label) return [];
+    return [{
+      kind: normalizeSafeActionKind(asString(action.kind) || asString(action.action)),
+      label,
+      ref: asString(action.ref),
+      safe: action.safe === false ? false : true,
+      reason: asString(action.reason),
+    }];
+  });
+  const actions: RunPresentationProgress['safeActions'] = [
+    ...explicitActions,
+    ...(run ? [{
+      kind: 'inspect' as const,
+      label: '查看已落盘 refs 与运行细节',
+      ref: `run:${run.id}`,
+      safe: true,
+      reason: '只读检查，不会重跑或修改已有产物。',
+    }] : []),
+  ];
+  if (run?.status === 'running') {
+    actions.push({
+      kind: 'cancel',
+      label: '安全中止当前后台任务',
+      ref: run ? `run:${run.id}` : undefined,
+      safe: true,
+      reason: completedParts.length ? '已完成部分会保留为 refs；后续 side effect 不会自动恢复。' : '停止后需要重新确认是否继续。',
+    });
+    if (completedParts.length) {
+      actions.push({
+        kind: 'continue',
+        label: '基于已完成部分继续追问',
+        ref: completedParts[0]?.ref,
+        safe: true,
+        reason: '只复用已落盘 refs，不自动执行未完成阶段。',
+      });
+    }
+  }
+  if (run?.status === 'cancelled' || background?.termination) {
+    actions.push({
+      kind: 'confirm',
+      label: '确认后复用 partial refs 或新开运行',
+      ref: run ? `run:${run.id}` : undefined,
+      safe: true,
+      reason: '跨 cancel boundary 需要用户确认，不自动恢复不可逆 side effect。',
+    });
+  }
+  if (run?.status === 'failed') {
+    actions.push({
+      kind: 'rerun',
+      label: '修复阻塞项后重新运行',
+      ref: run ? `run:${run.id}` : undefined,
+      safe: false,
+      reason: '重新运行可能产生新的 workspace side effect。',
+    });
+  }
+  const byKey = new Map<string, RunPresentationProgress['safeActions'][number]>();
+  for (const action of actions) byKey.set(`${action.kind}:${action.label}:${action.ref ?? ''}`, action);
+  return Array.from(byKey.values()).slice(0, 6);
+}
+
+function normalizeSafeActionKind(value: string | undefined): RunPresentationProgress['safeActions'][number]['kind'] {
+  const normalized = String(value ?? '').toLowerCase();
+  if (normalized.includes('cancel') || normalized.includes('stop') || normalized.includes('abort')) return 'cancel';
+  if (normalized.includes('resume')) return 'resume';
+  if (normalized.includes('rerun') || normalized.includes('retry')) return 'rerun';
+  if (normalized.includes('confirm')) return 'confirm';
+  if (normalized.includes('continue')) return 'continue';
+  return 'inspect';
+}
+
+function backgroundCompletionForRun(run?: SciForgeRun) {
+  const raw = isRecord(run?.raw) ? run.raw : undefined;
+  return isRecord(raw?.backgroundCompletion) ? raw.backgroundCompletion : undefined;
 }
 
 function artifactTitle(artifact: RuntimeArtifact) {

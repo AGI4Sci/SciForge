@@ -231,6 +231,94 @@ test('ResultsRenderer empty completed run is presented as empty rather than read
   assert.doesNotMatch(html, /ready result/);
 });
 
+test('ResultsRenderer surfaces runtime compatibility drift without rerunning old sessions', () => {
+  const session: SciForgeSession = {
+    ...emptySession(),
+    messages: [{ id: 'msg-old-session', role: 'user', content: 'continue old work', createdAt: '2026-05-09T00:00:00.000Z' }],
+    runtimeCompatibilityDiagnostics: [{
+      schemaVersion: 1,
+      id: 'runtime-drift-session-empty',
+      kind: 'capability-version-drift',
+      severity: 'warning',
+      reason: 'Historical session contract differs from the current runtime.',
+      current: {
+        schemaVersion: 1,
+        appStateSchemaVersion: 2,
+        sessionSchemaVersion: 2,
+        compatibilityVersion: 'current-runtime',
+        capabilityFingerprints: ['objectReferenceKinds:abc'],
+      },
+      persisted: {
+        schemaVersion: 1,
+        appStateSchemaVersion: 2,
+        sessionSchemaVersion: 2,
+        compatibilityVersion: 'old-runtime',
+        capabilityFingerprints: ['objectReferenceKinds:old'],
+      },
+      affectedSessionId: 'session-empty',
+      affectedScenarioId: 'literature-evidence-review',
+      recoverable: true,
+      recoverableActions: ['Migrate the session payload', 'Start a new run when drift blocks safe recovery'],
+      createdAt: '2026-05-09T00:00:00.000Z',
+    }],
+  };
+
+  const html = renderResultsRenderer(session);
+
+  assert.match(html, /历史 session 需要兼容性检查/);
+  assert.match(html, /capability-version-drift/);
+  assert.match(html, /Historical session contract differs/);
+  assert.match(html, /persisted: old-runtime/);
+  assert.match(html, /Migrate the session payload/);
+  assert.doesNotMatch(html, /正在重新运行|auto.?resume/i);
+});
+
+test('ResultsRenderer shows partial-first progress while a run is still running', () => {
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [{
+      ...completedRun('run-partial-first'),
+      status: 'running',
+      response: 'partial report is available',
+      raw: {
+        backgroundCompletion: {
+          status: 'running',
+          stages: [
+            { stageId: 'metadata', status: 'completed', ref: 'run:run-partial-first#metadata' },
+            { stageId: 'fulltext', status: 'running', ref: 'run:run-partial-first#fulltext' },
+          ],
+        },
+        resultPresentation: {
+          processSummary: { status: 'running', currentStage: 'fulltext', summary: 'Partial report is available.' },
+          nextActions: [{ kind: 'continue', label: 'Use completed refs', ref: 'artifact:partial-report' }],
+        },
+      },
+      objectReferences: [{ kind: 'artifact', id: 'obj-partial-report', ref: 'artifact:partial-report', title: 'Partial report' }] as never,
+    }],
+    executionUnits: [
+      { id: 'EU-metadata', tool: 'metadata.fetch', params: '{}', status: 'done', hash: 'metadata', outputRef: 'artifact:partial-report' },
+      { id: 'EU-fulltext', tool: 'fulltext.download', params: '{}', status: 'running', hash: 'fulltext', stdoutRef: 'run:run-partial-first/fulltext.log' },
+    ],
+    artifacts: [{
+      id: 'partial-report',
+      type: 'report',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: '1',
+      metadata: { title: 'Partial report', runId: 'run-partial-first' },
+    }],
+  };
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-partial-first' });
+
+  assert.match(html, /已有部分结果，后台仍在继续/);
+  assert.match(html, /已完成部分/);
+  assert.match(html, /report: Partial report/);
+  assert.match(html, /当前阶段：stage fulltext · running|当前阶段：fulltext · running/);
+  assert.match(html, /后台状态：running/);
+  assert.match(html, /safe · 安全中止当前后台任务/);
+  assert.match(html, /safe · Use completed refs/);
+});
+
 test('ResultsRenderer execution focus renders only execution unit body', () => {
   const session = contractFailureSession();
   session.notebook = [{

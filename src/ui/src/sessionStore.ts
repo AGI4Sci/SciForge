@@ -8,6 +8,8 @@ import {
   makeId,
   nowIso,
   type GithubSyncedOpenIssueRecord,
+  type RuntimeCompatibilityDiagnostic,
+  type RuntimeCompatibilityFingerprint,
   type SciForgeMessage,
   type SciForgeSession,
   type SciForgeWorkspaceState,
@@ -16,6 +18,21 @@ import {
 } from './domain';
 import { isTimelineEventRecord } from './timelineSchema';
 import { normalizeWorkspaceRootPath } from './config';
+import {
+  artifactPreviewActions,
+  backgroundCompletionEventTypes,
+  backgroundCompletionStatuses,
+  objectActions,
+  objectReferenceKinds,
+  previewDerivativeKinds,
+  previewDescriptorKinds,
+  previewDescriptorSources,
+  previewInlinePolicies,
+  previewLocatorHintKinds,
+  runtimeContractSchemas,
+  turnAcceptanceSeverities,
+  userGoalTypes,
+} from './runtimeContracts';
 
 const STORAGE_KEY = 'sciforge.workspace.v2';
 const scenarioIds: ScenarioId[] = scenarios.map((scenario) => scenario.id);
@@ -25,6 +42,8 @@ const SESSION_BASE_COLLECTION_REVISIONS_KEY = '__sciforgeSessionBaseCollectionRe
 const WORKSPACE_REVISION_KEY = '__sciforgeWorkspaceRevision';
 const WORKSPACE_BASE_REVISION_KEY = '__sciforgeWorkspaceBaseRevision';
 const SESSION_WRITE_CONFLICT_LIMIT = 20;
+const RUNTIME_COMPATIBILITY_VERSION = 'sciforge-runtime-compatibility-2026-05-13';
+const RUNTIME_COMPATIBILITY_DIAGNOSTIC_LIMIT = 8;
 
 export type SessionCollectionKey = 'title' | 'messages' | 'runs' | 'uiManifest' | 'claims' | 'executionUnits' | 'artifacts' | 'notebook' | 'hiddenResultSlotIds';
 type SessionCollectionRevisions = Record<SessionCollectionKey, string>;
@@ -108,17 +127,19 @@ export function createSession(scenarioId: ScenarioInstanceId, title = '新聊天
     artifacts: [],
     notebook: [],
     versions: [],
+    runtimeFingerprint: currentRuntimeCompatibilityFingerprint(),
+    runtimeCompatibilityDiagnostics: [],
     hiddenResultSlotIds: [],
     updatedAt: now,
   });
 }
 
 function migrateSession(value: unknown, scenarioId: ScenarioInstanceId): SciForgeSession {
-  if (isSessionV2(value, scenarioId)) return withSessionWriteGuard(value);
+  if (isSessionV2(value, scenarioId)) return withSessionWriteGuard(withRuntimeCompatibilityDiagnostics(value));
   if (typeof value === 'object' && value !== null && (value as { scenarioId?: unknown }).scenarioId === scenarioId) {
     const raw = value as Partial<SciForgeSession> & { schemaVersion?: number };
     const now = nowIso();
-    return withSessionWriteGuard({
+    return withSessionWriteGuard(withRuntimeCompatibilityDiagnostics({
       schemaVersion: 2,
       sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : makeId(`session-${scenarioId}`),
       scenarioId,
@@ -132,11 +153,13 @@ function migrateSession(value: unknown, scenarioId: ScenarioInstanceId): SciForg
       artifacts: Array.isArray(raw.artifacts) ? raw.artifacts : [],
       notebook: Array.isArray(raw.notebook) ? raw.notebook : [],
       versions: Array.isArray(raw.versions) ? raw.versions : [],
+      runtimeFingerprint: raw.runtimeFingerprint,
+      runtimeCompatibilityDiagnostics: raw.runtimeCompatibilityDiagnostics,
       hiddenResultSlotIds: Array.isArray(raw.hiddenResultSlotIds)
         ? raw.hiddenResultSlotIds.filter((id): id is string => typeof id === 'string')
         : [],
       updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : now,
-    });
+    }));
   }
   return createSession(scenarioId);
 }
@@ -534,6 +557,186 @@ export function withSessionWriteGuard(session: SciForgeSession): SciForgeSession
     [SESSION_BASE_REVISION_KEY]: revision,
     [SESSION_BASE_COLLECTION_REVISIONS_KEY]: sessionCollectionRevisions(cleanSession),
   } as SessionWithWriteGuard;
+}
+
+export function currentRuntimeCompatibilityFingerprint(): RuntimeCompatibilityFingerprint {
+  const capabilityInputs = {
+    artifactPreviewActions,
+    backgroundCompletionEventTypes,
+    backgroundCompletionStatuses,
+    objectActions,
+    objectReferenceKinds,
+    previewDerivativeKinds,
+    previewDescriptorKinds,
+    previewDescriptorSources,
+    previewInlinePolicies,
+    previewLocatorHintKinds,
+    runtimeContractSchemas,
+    turnAcceptanceSeverities,
+    userGoalTypes,
+  };
+  return {
+    schemaVersion: 1,
+    appStateSchemaVersion: 2,
+    sessionSchemaVersion: 2,
+    compatibilityVersion: RUNTIME_COMPATIBILITY_VERSION,
+    capabilityFingerprints: Object.entries(capabilityInputs)
+      .map(([id, value]) => `${id}:${checksum(stableStringify(value))}`)
+      .sort(),
+  };
+}
+
+export function runtimeCompatibilityDiagnosticsForSession(session: SciForgeSession): RuntimeCompatibilityDiagnostic[] {
+  const diagnostics = session.runtimeCompatibilityDiagnostics;
+  return Array.isArray(diagnostics)
+    ? diagnostics.filter(isRuntimeCompatibilityDiagnostic).slice(0, RUNTIME_COMPATIBILITY_DIAGNOSTIC_LIMIT)
+    : [];
+}
+
+function withRuntimeCompatibilityDiagnostics(session: SciForgeSession): SciForgeSession {
+  const current = currentRuntimeCompatibilityFingerprint();
+  const persisted = parseRuntimeCompatibilityFingerprint(session.runtimeFingerprint);
+  const existing = runtimeCompatibilityDiagnosticsForSession(session);
+  const diagnostic = runtimeCompatibilityDiagnosticForSession(session, current, persisted);
+  const diagnostics = diagnostic
+    ? dedupeRuntimeCompatibilityDiagnostics([diagnostic, ...existing])
+    : existing;
+  return {
+    ...session,
+    runtimeFingerprint: current,
+    runtimeCompatibilityDiagnostics: diagnostics,
+  };
+}
+
+function runtimeCompatibilityDiagnosticForSession(
+  session: SciForgeSession,
+  current: RuntimeCompatibilityFingerprint,
+  persisted?: RuntimeCompatibilityFingerprint,
+): RuntimeCompatibilityDiagnostic | undefined {
+  if (!persisted) {
+    if (!sessionHasUserWork(session)) return undefined;
+    return buildRuntimeCompatibilityDiagnostic({
+      kind: 'missing-runtime-fingerprint',
+      reason: '该历史 session 没有保存 runtime/capability fingerprint；建议先检查可用 refs，再决定迁移或重跑。',
+      current,
+      session,
+    });
+  }
+  if (persisted.sessionSchemaVersion !== current.sessionSchemaVersion || persisted.appStateSchemaVersion !== current.appStateSchemaVersion) {
+    return buildRuntimeCompatibilityDiagnostic({
+      kind: 'schema-version-drift',
+      reason: `历史 session 使用 schema ${persisted.sessionSchemaVersion}/${persisted.appStateSchemaVersion}，当前 runtime 使用 ${current.sessionSchemaVersion}/${current.appStateSchemaVersion}。`,
+      current,
+      persisted,
+      session,
+    });
+  }
+  if (persisted.compatibilityVersion !== current.compatibilityVersion || fingerprintListDiffers(persisted.capabilityFingerprints, current.capabilityFingerprints)) {
+    return buildRuntimeCompatibilityDiagnostic({
+      kind: 'capability-version-drift',
+      reason: '历史 session 的 runtime/capability contract 与当前代码不一致；继续前应检查 artifact refs、迁移旧 payload，或明确重跑。',
+      current,
+      persisted,
+      session,
+    });
+  }
+  return undefined;
+}
+
+function buildRuntimeCompatibilityDiagnostic({
+  kind,
+  reason,
+  current,
+  persisted,
+  session,
+}: {
+  kind: RuntimeCompatibilityDiagnostic['kind'];
+  reason: string;
+  current: RuntimeCompatibilityFingerprint;
+  persisted?: RuntimeCompatibilityFingerprint;
+  session: SciForgeSession;
+}): RuntimeCompatibilityDiagnostic {
+  const id = `runtime-drift-${session.sessionId}-${checksum(stableStringify({
+    kind,
+    persisted,
+    current,
+  }))}`;
+  return {
+    schemaVersion: 1,
+    id,
+    kind,
+    severity: kind === 'missing-runtime-fingerprint' ? 'info' : 'warning',
+    reason,
+    current,
+    persisted,
+    affectedSessionId: session.sessionId,
+    affectedScenarioId: session.scenarioId,
+    recoverable: true,
+    recoverableActions: [
+      'Open the run audit and verify persisted artifact refs before continuing.',
+      'Migrate the session payload if the current contract can read every referenced artifact.',
+      'Start a new run when schema or capability drift blocks safe recovery.',
+    ],
+    createdAt: nowIso(),
+  };
+}
+
+function dedupeRuntimeCompatibilityDiagnostics(diagnostics: RuntimeCompatibilityDiagnostic[]) {
+  const byId = new Map<string, RuntimeCompatibilityDiagnostic>();
+  for (const diagnostic of diagnostics) {
+    if (!isRuntimeCompatibilityDiagnostic(diagnostic)) continue;
+    if (!byId.has(diagnostic.id)) byId.set(diagnostic.id, diagnostic);
+  }
+  return Array.from(byId.values()).slice(0, RUNTIME_COMPATIBILITY_DIAGNOSTIC_LIMIT);
+}
+
+function parseRuntimeCompatibilityFingerprint(value: unknown): RuntimeCompatibilityFingerprint | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Partial<RuntimeCompatibilityFingerprint>;
+  if (record.schemaVersion !== 1) return undefined;
+  if (typeof record.appStateSchemaVersion !== 'number' || typeof record.sessionSchemaVersion !== 'number') return undefined;
+  if (typeof record.compatibilityVersion !== 'string') return undefined;
+  if (!Array.isArray(record.capabilityFingerprints) || !record.capabilityFingerprints.every((item) => typeof item === 'string')) return undefined;
+  return {
+    schemaVersion: 1,
+    appStateSchemaVersion: record.appStateSchemaVersion,
+    sessionSchemaVersion: record.sessionSchemaVersion,
+    compatibilityVersion: record.compatibilityVersion,
+    capabilityFingerprints: [...record.capabilityFingerprints].sort(),
+  };
+}
+
+function isRuntimeCompatibilityDiagnostic(value: unknown): value is RuntimeCompatibilityDiagnostic {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Partial<RuntimeCompatibilityDiagnostic>;
+  return record.schemaVersion === 1
+    && typeof record.id === 'string'
+    && (record.kind === 'missing-runtime-fingerprint' || record.kind === 'schema-version-drift' || record.kind === 'capability-version-drift')
+    && (record.severity === 'info' || record.severity === 'warning')
+    && typeof record.reason === 'string'
+    && parseRuntimeCompatibilityFingerprint(record.current) !== undefined
+    && (record.persisted === undefined || parseRuntimeCompatibilityFingerprint(record.persisted) !== undefined)
+    && typeof record.affectedSessionId === 'string'
+    && typeof record.affectedScenarioId === 'string'
+    && record.recoverable === true
+    && Array.isArray(record.recoverableActions)
+    && typeof record.createdAt === 'string';
+}
+
+function sessionHasUserWork(session: SciForgeSession) {
+  return session.messages.some((message) => !message.id.startsWith('seed'))
+    || session.runs.length > 0
+    || session.uiManifest.length > 0
+    || session.claims.length > 0
+    || session.executionUnits.length > 0
+    || session.artifacts.length > 0
+    || session.notebook.length > 0
+    || session.versions.length > 0;
+}
+
+function fingerprintListDiffers(left: string[], right: string[]) {
+  if (left.length !== right.length) return true;
+  return left.some((item, index) => item !== right[index]);
 }
 
 export function sessionContentRevision(session: SciForgeSession | Omit<SciForgeSession, 'versions'>): string {

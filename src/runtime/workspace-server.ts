@@ -30,6 +30,8 @@ const STATE_DIR = resolve(process.env.SCIFORGE_STATE_DIR || join(process.cwd(), 
 const LOG_DIR = resolve(process.env.SCIFORGE_LOG_DIR || join(STATE_DIR, 'logs'));
 const CONFIG_LOCAL_PATH = resolve(process.env.SCIFORGE_CONFIG_PATH || join(process.cwd(), 'config.local.json'));
 const DEFAULT_WORKSPACE_PATH = normalizeWorkspaceRootPath(resolve(process.env.SCIFORGE_WORKSPACE_PATH || join(process.cwd(), 'workspace')));
+const STARTED_AT = new Date().toISOString();
+const LIFECYCLE_TOKEN = process.env.SCIFORGE_SERVICE_LIFECYCLE_TOKEN || '';
 
 createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -45,6 +47,10 @@ createServer(async (req, res) => {
       ok: true,
       service: 'sciforge-workspace-writer',
       schemaVersion: 1,
+      pid: process.pid,
+      startedAt: STARTED_AT,
+      instanceId: INSTANCE_ID,
+      lifecycleToken: LIFECYCLE_TOKEN || undefined,
       capabilities: [
         'workspace-snapshot',
         'workspace-files',

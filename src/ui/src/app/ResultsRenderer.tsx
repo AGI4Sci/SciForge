@@ -39,7 +39,7 @@ import {
   uploadedArtifactPreview,
 } from './results/previewDescriptor';
 import { UploadedDataUrlPreview, WorkspaceObjectPreview } from './results/WorkspaceObjectPreview';
-import type { SciForgeConfig, SciForgeRun, SciForgeSession, ObjectAction, ObjectReference, PreviewDescriptor, RuntimeArtifact, UIManifestSlot } from '../domain';
+import type { SciForgeConfig, SciForgeRun, SciForgeSession, ObjectAction, ObjectReference, PreviewDescriptor, RuntimeArtifact, RuntimeCompatibilityDiagnostic, UIManifestSlot } from '../domain';
 import {
   backendRepairStates,
   contractValidationFailureKey,
@@ -426,18 +426,20 @@ function RunStatusSummary({ session, activeRun, viewPlan }: { session: SciForgeS
   const blockers = runAuditBlockers(session, activeRun);
   const validationFailures = contractValidationFailures(session, activeRun);
   const repairStates = backendRepairStates(session, activeRun);
+  const runtimeDriftDiagnostics = runtimeCompatibilityDiagnosticsForPresentation(session);
   const recoverActions = runRecoverActions(session, activeRun).slice(0, 4);
   const presentationState = runPresentationState(session, activeRun, viewPlan);
   const shouldShowPresentationState = presentationState.kind !== 'ready' || presentationState.nextSteps.length > 0;
-  if (!failures.length && !blockers.length && !validationFailures.length && !repairStates.length && !recoverActions.length && run?.status !== 'failed' && !shouldShowPresentationState) return null;
+  if (!failures.length && !blockers.length && !validationFailures.length && !repairStates.length && !runtimeDriftDiagnostics.length && !recoverActions.length && run?.status !== 'failed' && !shouldShowPresentationState) return null;
   return (
     <Card className={cx('run-status-summary', failures.length || validationFailures.length || run?.status === 'failed' ? 'failed' : presentationState.kind)}>
       <SectionHeader
-        icon={AlertTriangle}
-        title={failures.length || validationFailures.length || run?.status === 'failed' ? '运行需要处理' : presentationState.title}
+        icon={runtimeDriftDiagnostics.length && !failures.length && !validationFailures.length && run?.status !== 'failed' ? Shield : AlertTriangle}
+        title={failures.length || validationFailures.length || run?.status === 'failed' ? '运行需要处理' : runtimeDriftDiagnostics.length ? '历史 session 需要兼容性检查' : presentationState.title}
         subtitle={run ? `${run.id} · ${presentationState.kind}` : '当前 session'}
       />
       <RunPresentationStateSummary state={presentationState} />
+      {runtimeDriftDiagnostics.map((diagnostic) => <RuntimeCompatibilityDiagnosticSummary key={diagnostic.id} diagnostic={diagnostic} />)}
       {blockers.length ? (
         <div className="run-status-lines">
           {blockers.map((line) => <span key={line}>{compactVisibleFailureText(line)}</span>)}
@@ -463,6 +465,23 @@ function RunStatusSummary({ session, activeRun, viewPlan }: { session: SciForgeS
   );
 }
 
+function RuntimeCompatibilityDiagnosticSummary({ diagnostic }: { diagnostic: RuntimeCompatibilityDiagnostic }) {
+  return (
+    <div className="run-failure-card">
+      <strong>{diagnostic.kind}</strong>
+      <p>{compactVisibleFailureText(diagnostic.reason)}</p>
+      <div className="slot-meta">
+        <strong>兼容性指纹</strong>
+        <code>current: {diagnostic.current.compatibilityVersion}</code>
+        {diagnostic.persisted ? <code>persisted: {diagnostic.persisted.compatibilityVersion}</code> : null}
+      </div>
+      <div className="run-recover-actions">
+        {diagnostic.recoverableActions.map((action) => <code key={action}>{action}</code>)}
+      </div>
+    </div>
+  );
+}
+
 function RunPresentationStateSummary({ state }: { state: RunPresentationState }) {
   if (state.kind === 'ready' && !state.nextSteps.length) return null;
   return (
@@ -478,9 +497,40 @@ function RunPresentationStateSummary({ state }: { state: RunPresentationState })
           ))}
         </div>
       ) : null}
+      {state.progress ? <RunProgressSummary progress={state.progress} /> : null}
       {state.nextSteps.length ? (
         <div className="run-recover-actions">
           {state.nextSteps.map((action) => <code key={action}>{action}</code>)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RunProgressSummary({ progress }: { progress: NonNullable<RunPresentationState['progress']> }) {
+  const hasProgress = progress.completedParts.length || progress.currentStage || progress.backgroundStatus || progress.safeActions.length;
+  if (!hasProgress) return null;
+  return (
+    <div className="run-progress-summary">
+      {progress.completedParts.length ? (
+        <div className="slot-meta">
+          <strong>已完成部分</strong>
+          {progress.completedParts.slice(0, 6).map((part) => (
+            <code key={`${part.id}-${part.ref ?? ''}`}>{part.label}{part.ref ? ` · ${part.ref}` : ''}</code>
+          ))}
+        </div>
+      ) : null}
+      {progress.currentStage || progress.backgroundStatus ? (
+        <div className="run-status-lines">
+          {progress.currentStage ? <span>当前阶段：{progress.currentStage.label} · {progress.currentStage.status}</span> : null}
+          {progress.backgroundStatus ? <span>后台状态：{progress.backgroundStatus}</span> : null}
+        </div>
+      ) : null}
+      {progress.safeActions.length ? (
+        <div className="run-recover-actions">
+          {progress.safeActions.map((action) => (
+            <code key={`${action.kind}-${action.label}-${action.ref ?? ''}`}>{action.safe ? 'safe' : 'confirm'} · {action.label}</code>
+          ))}
         </div>
       ) : null}
     </div>
@@ -625,6 +675,20 @@ function BackendRepairStateSummary({ state, compact = false }: { state: BackendR
       ) : null}
     </div>
   );
+}
+
+function runtimeCompatibilityDiagnosticsForPresentation(session: SciForgeSession): RuntimeCompatibilityDiagnostic[] {
+  const diagnostics = session.runtimeCompatibilityDiagnostics;
+  if (!Array.isArray(diagnostics)) return [];
+  return diagnostics.filter((diagnostic): diagnostic is RuntimeCompatibilityDiagnostic => {
+    return Boolean(diagnostic)
+      && diagnostic.schemaVersion === 1
+      && typeof diagnostic.id === 'string'
+      && typeof diagnostic.reason === 'string'
+      && Array.isArray(diagnostic.recoverableActions)
+      && typeof diagnostic.current === 'object'
+      && diagnostic.current !== null;
+  }).slice(0, 4);
 }
 
 function compactVisibleFailureText(value: string) {

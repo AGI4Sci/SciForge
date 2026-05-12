@@ -281,7 +281,10 @@ try {
       if (button instanceof HTMLElement) button.click();
     });
     await structurePage.getByLabel('Handoff 确认预览').waitFor({ timeout: 15_000 });
-    await structurePage.getByText('new run').waitFor({ timeout: 15_000 });
+    await structurePage
+      .getByLabel('Handoff 确认预览')
+      .getByText('new run', { exact: true })
+      .waitFor({ timeout: 15_000 });
     await structurePage.getByRole('button', { name: '取消' }).click({ force: true });
     await captureSmokeScreenshot(structurePage, join(artifactsDir, 'browser-smoke-structure.png'));
     const viewerBox = await structurePage.locator('[data-component-id="structure-viewer"], .structure-viewer').first().boundingBox();
