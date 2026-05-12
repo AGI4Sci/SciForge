@@ -41,6 +41,25 @@ export type {
   RuntimeLlmEndpointConfig,
 } from './agent-backend-policy';
 export {
+  USER_FEEDBACK_CONVERGENCE_CONTRACT_ID,
+  USER_FEEDBACK_CONVERGENCE_SCHEMA_VERSION,
+  createUserFeedbackConvergence,
+  mergeUserFeedbackConvergence,
+  normalizeUserFeedbackSignal,
+  userFeedbackConvergenceHasActionableTodos,
+  validateUserFeedbackConvergence,
+} from './user-feedback-convergence';
+export type {
+  FeedbackTodoCandidate,
+  UserFeedbackConvergence,
+  UserFeedbackConvergenceInput,
+  UserFeedbackConvergenceStatus,
+  UserFeedbackSignal,
+  UserFeedbackSignalInput,
+  UserFeedbackSignalKind,
+  UserFeedbackSignalSeverity,
+} from './user-feedback-convergence';
+export {
   extractAgentServerCurrentUserRequest,
   normalizeConfiguredAgentServerLlmEndpoint,
 } from './agentserver-prompt-policy';

@@ -521,6 +521,7 @@ Failure/Improvement Notes：
 - [x] `npm run typecheck`
 - [x] `npm run smoke:runtime-contracts`
 - [x] `npm run smoke:no-src-capability-semantics`
+- [x] `npm run verify:full`（750 tests pass；browser smoke、production build 与 artifacts index 通过）
 - [x] `npm run smoke:no-legacy-paths`
 - [x] `npm run smoke:runtime-gateway-modules`
 
@@ -549,6 +550,30 @@ Failure/Improvement Notes：
 - [x] `npm run smoke:no-src-capability-semantics`
 - [x] `git diff --check`
 - [x] `npm run verify:full`（745 tests pass；browser smoke 与 artifacts index 通过）
+
+
+### 2026-05-13 Milestone：用户反馈收敛与通用 TODO 归因
+
+本轮完成 R-WF-07：把“慢、崩、看不懂、引用错、重复跑”这类连续用户反馈从收件箱展示/交接，提升为可审计的 runtime contract。核心目标是把反馈稳定折叠成通用 TODO，而不是逐条道歉或按中文短句写 prompt 特判：
+
+- [x] 新增 `sciforge.user-feedback-convergence.v1` contract，定义 `latency`、`crash`、`unclear-result`、`citation-mismatch`、`duplicate-work`、`goal-miss`、`unknown` 信号，并产出 `FeedbackTodoCandidate`。
+- [x] TODO candidate 显式包含 `ownerLayer`、`dedupeKey`、`sourceSignalIds`、`taskRunCardRefs`、`failureSignatureRefs`、`acceptanceCriteria`、`nextStep` 和 `NoHardcodeReview`，复用 TaskRunCard / FailureSignatureRegistry / attribution layer，而不是污染 failure signature 语义。
+- [x] `feedbackWorkspace` 增加 `createFeedbackConvergenceFromComments`，可从真实 `FeedbackCommentRecord` 生成收敛计划，并保留 session/run/artifact/execution/screenshot/GitHub refs。
+- [x] 新增 `smoke:user-feedback-convergence`，串联 TaskAttempt、TaskRunCard、FailureSignatureRegistry 与反馈信号，验证 slow/crash/unclear/citation/duplicate 会折叠成通用 TODO，重复 complaint 只增加 occurrence/source refs。
+
+Failure/Improvement Notes：
+
+- Feedback Inbox 当前是收集、筛选、GitHub/repair handoff 层；它不应拥有“慢/崩/引用错”的分类语义。分类语义应在 contract 层，UI 只展示和交接结果。
+- 用户反馈不是运行时 failure；不能把所有 feedback 塞进 `FailureSignatureKind`。只有已有 failure evidence 可以作为 TODO 的 supporting refs。
+- 文本匹配只做信号归一化；TODO 归属必须结合 TaskRunCard、FailureSignatureRegistry、refs 和 owner layer，避免 “R-WF-07 字面短句” 特例。
+
+本轮验证：
+
+- [x] `node --import tsx --test packages/contracts/runtime/user-feedback-convergence.test.ts src/ui/src/feedback/feedbackWorkspace.test.ts`
+- [x] `npm run smoke:user-feedback-convergence`
+- [x] `npm run typecheck`
+- [x] `npm run smoke:runtime-contracts`
+- [x] `npm run smoke:no-src-capability-semantics`
 
 
 
@@ -634,7 +659,7 @@ UI 与 presentation 真实任务：
 - [ ] R-WF-04 项目周报：读取 workspace 最近任务、失败 run、已完成 artifact，生成周报；用户要求隐藏敏感路径后重写。
 - [ ] R-WF-05 多同学协作分工：基于当前 PROJECT 和代码结构，给 3-5 个同学拆分任务；后续要求按风险/收益重排。
 - [ ] R-WF-06 调研到代码任务：先调研某技术方案，再要求在 SciForge 中实现最小通用修复，再生成测试计划。
-- [ ] R-WF-07 用户反馈收敛：用户连续指出“慢、崩、看不懂、引用错、重复跑”，系统把反馈归类到通用 TODO，而不是逐条道歉。
+- [x] R-WF-07 用户反馈收敛：用户连续指出“慢、崩、看不懂、引用错、重复跑”，系统把反馈归类到通用 TODO，而不是逐条道歉。已完成 `sciforge.user-feedback-convergence.v1`、feedback comment 到 convergence plan helper、TaskRunCard/FailureSignature evidence refs、NoHardcodeReview 和 smoke 覆盖。
 - [x] R-WF-08 低预算模式：用户要求“不要下载全文，先用 metadata 快速判断”，后续再允许补全文，测试 budget escalation。已覆盖结构化 fullTextPolicy、低预算 disabled/retained work 与 handoff metadata-first directive。
 - [x] R-WF-09 严格证据模式：用户要求“不要猜，不确定就标注”，系统必须降低 claim confidence 并输出 evidence gaps。已覆盖 evidenceMode.evidenceGaps、confidencePolicy ceiling 与 strict-evidence handoff。
 - [x] R-WF-10 发布前检查：用户要求把本地改动推 GitHub 前做 release verify、写变更摘要、重启服务，并保留审计记录。已覆盖 release gate audit、intent-first verification 展示状态、runtime verification fail-closed gate 和 `smoke:release-gate`；`verify:full` 失败或证据缺失时不会允许推送。

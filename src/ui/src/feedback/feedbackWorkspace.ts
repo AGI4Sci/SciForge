@@ -9,6 +9,14 @@ import {
   type GithubSyncedOpenIssueRecord,
   type SciForgeWorkspaceState,
 } from '../domain';
+import {
+  createUserFeedbackConvergence,
+  type UserFeedbackConvergence,
+} from '@sciforge-ui/runtime-contract/user-feedback-convergence';
+import type {
+  FailureSignatureRegistry,
+  TaskRunCard,
+} from '@sciforge-ui/runtime-contract/task-run-card';
 
 const FEEDBACK_COMMENT_LIMIT = 500;
 const FEEDBACK_REQUEST_LIMIT = 80;
@@ -106,6 +114,35 @@ export function createFeedbackRequestFromComments(
       ? { ...comment, status: comment.status === 'open' ? 'triaged' : comment.status, requestId, updatedAt: createdAt }
       : comment),
   };
+}
+
+export function createFeedbackConvergenceFromComments(
+  comments: FeedbackCommentRecord[],
+  options: {
+    createdAt?: string;
+    source?: string;
+    taskRunCards?: TaskRunCard[];
+    failureSignatureRegistry?: FailureSignatureRegistry;
+  } = {},
+): UserFeedbackConvergence {
+  return createUserFeedbackConvergence({
+    createdAt: options.createdAt,
+    source: options.source ?? 'feedback-workspace',
+    taskRunCards: options.taskRunCards,
+    failureSignatureRegistry: options.failureSignatureRegistry,
+    signals: comments.map((comment) => ({
+      id: comment.id,
+      text: comment.comment,
+      priority: comment.priority,
+      status: comment.status,
+      tags: comment.tags,
+      page: comment.runtime.page,
+      scenarioId: comment.runtime.scenarioId,
+      sessionId: comment.runtime.sessionId,
+      activeRunId: comment.runtime.activeRunId,
+      sourceRefs: feedbackSourceRefs(comment),
+    })),
+  });
 }
 
 export function replaceGithubSyncedOpenIssuesInWorkspace(
@@ -328,4 +365,20 @@ function buildFeedbackRequest(
     createdAt,
     updatedAt: createdAt,
   };
+}
+
+function feedbackSourceRefs(comment: FeedbackCommentRecord) {
+  return stableStringList([
+    comment.screenshotRef,
+    comment.githubIssueUrl,
+    comment.runtime.sessionId ? `session:${comment.runtime.sessionId}` : undefined,
+    comment.runtime.activeRunId ? `run:${comment.runtime.activeRunId}` : undefined,
+    comment.target.selector ? `target:${comment.target.selector}` : undefined,
+    ...(comment.runtime.artifactSummary ?? []).map((artifact) => `artifact:${artifact.id}`),
+    ...(comment.runtime.executionSummary ?? []).map((unit) => `execution-unit:${unit.id}`),
+  ].filter((ref): ref is string => Boolean(ref)));
+}
+
+function stableStringList(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).sort();
 }

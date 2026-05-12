@@ -3,6 +3,7 @@ import test from 'node:test';
 import type { FeedbackCommentRecord, FeedbackRepairResultRecord, FeedbackRepairRunRecord, SciForgeWorkspaceState } from '../domain';
 import {
   addFeedbackCommentToWorkspace,
+  createFeedbackConvergenceFromComments,
   createFeedbackRequestFromComments,
   deleteFeedbackCommentsFromWorkspace,
   feedbackRepairAuditForIssue,
@@ -116,6 +117,42 @@ test('creates requests from selected comments and triages open comments', () => 
   assert.equal(next.feedbackComments?.[0].status, 'triaged');
   assert.equal(next.feedbackComments?.[1].status, 'planned');
   assert.equal(next.feedbackComments?.[0].requestId, 'request-new');
+});
+
+test('creates user feedback convergence from workspace comments with runtime refs', () => {
+  const comments: FeedbackCommentRecord[] = [{
+    ...comment('slow-feedback'),
+    comment: '太慢了，卡住没反应。',
+    priority: 'high',
+    runtime: {
+      ...baseComment.runtime,
+      sessionId: 'session-slow',
+      activeRunId: 'run-slow',
+      artifactSummary: [{ id: 'latency-diagnostic', type: 'runtime-diagnostic' }],
+      executionSummary: [{ id: 'slow-eu', tool: 'agentserver', status: 'failed-with-reason' }],
+    },
+    screenshotRef: 'file:.sciforge/feedback/screenshots/slow.png',
+  }, {
+    ...comment('citation-feedback'),
+    comment: '引用不对，来源错了。',
+    tags: ['citation'],
+    runtime: {
+      ...baseComment.runtime,
+      sessionId: 'session-cite',
+      activeRunId: 'run-cite',
+      artifactSummary: [{ id: 'report', type: 'research-report' }],
+    },
+  }];
+
+  const convergence = createFeedbackConvergenceFromComments(comments, {
+    createdAt: '2026-05-13T00:00:00.000Z',
+  });
+
+  assert.equal(convergence.contract, 'sciforge.user-feedback-convergence.v1');
+  assert.deepEqual(new Set(convergence.signals.map((signal) => signal.kind)), new Set(['latency', 'citation-mismatch']));
+  assert.ok(convergence.signals.find((signal) => signal.id === 'slow-feedback')?.refs.includes('artifact:latency-diagnostic'));
+  assert.ok(convergence.signals.find((signal) => signal.id === 'slow-feedback')?.refs.includes('execution-unit:slow-eu'));
+  assert.ok(convergence.todoCandidates.every((todo) => todo.noHardcodeReview.status === 'pass'));
 });
 
 test('replaces synced GitHub issue cache with explicit timestamp', () => {
