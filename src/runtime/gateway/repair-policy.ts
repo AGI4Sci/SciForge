@@ -1,3 +1,6 @@
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, relative, resolve, sep } from 'node:path';
+
 import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-types.js';
 import { WORKSPACE_RUNTIME_GATEWAY_REPAIR_TOOL_ID } from '@sciforge-ui/runtime-contract/capabilities';
 import {
@@ -8,14 +11,16 @@ import {
 import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract/validation-failure';
 import { repairDiagnosticViewSlotPolicy } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy';
 import { sha1 } from '../workspace-task-runner.js';
-import { uniqueStrings } from '../gateway-utils.js';
+import { safeWorkspaceRel, uniqueStrings } from '../gateway-utils.js';
 import { diagnosticForFailure, type AgentServerBackendFailureDiagnostic } from './backend-failure-diagnostics.js';
 
 export const BACKEND_REPAIR_FAILURE_CONTRACT_ID = 'sciforge.backend-repair-failure.v1';
+export const REPAIR_BOUNDARY_POLICY_ID = 'sciforge.repair-boundary-source-edit-guard.v1';
+export const REPAIR_BOUNDARY_DIAGNOSTIC_CONTRACT_ID = 'sciforge.repair-boundary-diagnostic.v1';
 
 export interface BackendRepairFailure {
   contract: typeof BACKEND_REPAIR_FAILURE_CONTRACT_ID;
-  failureKind: 'backend-diagnostic';
+  failureKind: 'backend-diagnostic' | 'repair-boundary';
   capabilityId: string;
   failureReason: string;
   diagnostic: AgentServerBackendFailureDiagnostic;
@@ -32,11 +37,39 @@ export interface RepairPolicyRefs {
   outputRel?: string;
   stdoutRel?: string;
   stderrRel?: string;
+  evidenceRefs?: string[];
   blocker?: string;
   agentServerRefs?: Record<string, unknown>;
   recoverActions?: string[];
   validationFailure?: ContractValidationFailure;
   backendFailure?: BackendRepairFailure;
+}
+
+export interface RepairBoundarySnapshot {
+  policyId: typeof REPAIR_BOUNDARY_POLICY_ID;
+  workspace: string;
+  capturedAt: string;
+  protectedFiles: Record<string, string>;
+}
+
+export interface RepairBoundaryScope {
+  taskRel?: string;
+  allowedRelPaths?: string[];
+  allowedPrefixes?: string[];
+}
+
+export interface RepairBoundaryViolation {
+  contract: typeof REPAIR_BOUNDARY_DIAGNOSTIC_CONTRACT_ID;
+  policyId: typeof REPAIR_BOUNDARY_POLICY_ID;
+  status: 'blocked';
+  reason: string;
+  taskRel?: string;
+  changedPaths: string[];
+  blockedPaths: string[];
+  allowedPaths: string[];
+  allowedPrefixes: string[];
+  auditRef?: string;
+  createdAt: string;
 }
 
 export function repairNeededPayload(
@@ -144,6 +177,112 @@ export function repairNeededPayload(
   };
 }
 
+export async function captureRepairBoundarySnapshot(workspace: string): Promise<RepairBoundarySnapshot> {
+  const root = resolve(workspace);
+  const protectedFiles: Record<string, string> = {};
+  await collectProtectedWorkspaceFiles(root, root, protectedFiles);
+  return {
+    policyId: REPAIR_BOUNDARY_POLICY_ID,
+    workspace: root,
+    capturedAt: new Date().toISOString(),
+    protectedFiles,
+  };
+}
+
+export function evaluateRepairBoundarySnapshot(
+  before: RepairBoundarySnapshot,
+  after: RepairBoundarySnapshot,
+  scope: RepairBoundaryScope = {},
+): RepairBoundaryViolation | undefined {
+  const changedPaths = changedRepairBoundaryPaths(before.protectedFiles, after.protectedFiles);
+  const allowedPrefixes = repairBoundaryAllowedPrefixes(scope);
+  const allowedPaths = changedPaths.filter((path) => repairBoundaryPathAllowed(path, scope, allowedPrefixes));
+  const blockedPaths = changedPaths.filter((path) => !repairBoundaryPathAllowed(path, scope, allowedPrefixes));
+  if (!blockedPaths.length) return undefined;
+  const clipped = blockedPaths.slice(0, 8).join(', ');
+  return {
+    contract: REPAIR_BOUNDARY_DIAGNOSTIC_CONTRACT_ID,
+    policyId: REPAIR_BOUNDARY_POLICY_ID,
+    status: 'blocked',
+    reason: `Repair boundary rejected AgentServer repair because it changed repo source/config files outside the generated task boundary: ${clipped}${blockedPaths.length > 8 ? `, and ${blockedPaths.length - 8} more` : ''}.`,
+    taskRel: normalizeOptionalRel(scope.taskRel),
+    changedPaths,
+    blockedPaths,
+    allowedPaths,
+    allowedPrefixes,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+export async function writeRepairBoundaryAudit(workspace: string, violation: RepairBoundaryViolation): Promise<string> {
+  const rel = `.sciforge/repair-boundary/${sha1(JSON.stringify({
+    blockedPaths: violation.blockedPaths,
+    taskRel: violation.taskRel,
+    createdAt: violation.createdAt,
+  })).slice(0, 12)}.json`;
+  await mkdir(dirname(join(workspace, rel)), { recursive: true });
+  await writeFile(join(workspace, rel), `${JSON.stringify(violation, null, 2)}\n`, 'utf8');
+  return rel;
+}
+
+export async function repairBoundaryDiagnosticPayload(input: {
+  workspace: string;
+  request: GatewayRequest;
+  skill: SkillAvailability;
+  violation: RepairBoundaryViolation;
+  refs?: RepairPolicyRefs;
+}): Promise<ToolPayload> {
+  const auditRef = input.violation.auditRef ?? await writeRepairBoundaryAudit(input.workspace, input.violation);
+  const violation = { ...input.violation, auditRef };
+  const backendFailure = repairBoundaryFailureFromViolation(input.skill, violation);
+  return repairNeededPayload(input.request, input.skill, backendFailure.failureReason, {
+    ...input.refs,
+    blocker: 'repair-boundary',
+    backendFailure,
+    recoverActions: backendFailure.recoverActions,
+    agentServerRefs: {
+      ...(input.refs?.agentServerRefs ?? {}),
+      repairBoundary: violation,
+    },
+  });
+}
+
+export function repairBoundaryFailureFromViolation(
+  skill: SkillAvailability,
+  violation: RepairBoundaryViolation,
+): BackendRepairFailure {
+  const relatedRefs = uniqueStrings([
+    violation.auditRef,
+    violation.taskRel,
+    ...violation.blockedPaths,
+  ].filter((value): value is string => Boolean(value)));
+  const diagnostic: AgentServerBackendFailureDiagnostic = {
+    kind: 'acceptance',
+    categories: ['acceptance'],
+    message: violation.reason,
+    title: 'Repair boundary blocked',
+    userReason: `Repair boundary diagnostic: ${violation.reason}`,
+    evidenceRefs: relatedRefs,
+    recoverActions: [
+      'Reject the repair result and do not rerun it as a successful self-heal.',
+      'Inspect or discard the out-of-bound repo edits before retrying repair.',
+      'Retry repair with changes limited to the generated task or adjacent session-bundle files.',
+    ],
+    nextStep: 'Review the repair-boundary audit, restore any out-of-bound source edits if needed, then retry with a scoped generated-task repair.',
+  };
+  return {
+    contract: BACKEND_REPAIR_FAILURE_CONTRACT_ID,
+    failureKind: 'repair-boundary',
+    capabilityId: skill.id,
+    failureReason: diagnostic.userReason ?? diagnostic.message,
+    diagnostic,
+    recoverActions: diagnostic.recoverActions ?? [],
+    nextStep: diagnostic.nextStep ?? 'Review the repair-boundary audit before retrying.',
+    relatedRefs,
+    createdAt: new Date().toISOString(),
+  };
+}
+
 function repairDiagnosticArtifact(input: {
   artifactId: string;
   request: GatewayRequest;
@@ -231,6 +370,7 @@ function evidenceRefsForRepair(refs: RepairPolicyRefs) {
     refs.outputRel,
     refs.stdoutRel,
     refs.stderrRel,
+    ...(refs.evidenceRefs ?? []),
     ...(refs.backendFailure?.relatedRefs ?? []),
     ...(refs.validationFailure?.relatedRefs ?? []),
     ...(refs.validationFailure?.invalidRefs ?? []),
@@ -447,4 +587,113 @@ function isContractValidationFailure(problem: StructuredRepairFailure): problem 
 
 function isBackendRepairFailure(problem: StructuredRepairFailure): problem is BackendRepairFailure {
   return problem.contract === BACKEND_REPAIR_FAILURE_CONTRACT_ID;
+}
+
+async function collectProtectedWorkspaceFiles(
+  root: string,
+  dir: string,
+  out: Record<string, string>,
+) {
+  let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const abs = join(dir, entry.name);
+    const rel = workspaceRel(root, abs);
+    if (!rel) continue;
+    if (entry.isDirectory()) {
+      if (repairBoundarySkippedDirectory(entry.name, rel)) continue;
+      await collectProtectedWorkspaceFiles(root, abs, out);
+      continue;
+    }
+    if (!entry.isFile() || repairBoundarySkippedFile(rel)) continue;
+    const signature = await protectedFileSignature(abs);
+    if (signature) out[rel] = signature;
+  }
+}
+
+async function protectedFileSignature(abs: string) {
+  try {
+    const meta = await stat(abs);
+    if (!meta.isFile()) return undefined;
+    if (meta.size > 10 * 1024 * 1024) return `large:${meta.size}:${Math.round(meta.mtimeMs)}`;
+    return `${meta.size}:${sha1(await readFile(abs)).slice(0, 16)}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function changedRepairBoundaryPaths(before: Record<string, string>, after: Record<string, string>) {
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  return Array.from(keys)
+    .filter((key) => before[key] !== after[key])
+    .sort();
+}
+
+function repairBoundaryPathAllowed(path: string, scope: RepairBoundaryScope, allowedPrefixes: string[]) {
+  const rel = normalizeOptionalRel(path);
+  if (!rel) return false;
+  const allowedRelPaths = uniqueStrings([
+    scope.taskRel,
+    ...(scope.allowedRelPaths ?? []),
+  ].map(normalizeOptionalRel).filter((value): value is string => Boolean(value)));
+  if (allowedRelPaths.includes(rel)) return true;
+  return allowedPrefixes.some((prefix) => rel === prefix.replace(/\/+$/, '') || rel.startsWith(prefix));
+}
+
+function repairBoundaryAllowedPrefixes(scope: RepairBoundaryScope) {
+  const explicit = (scope.allowedPrefixes ?? [])
+    .map(normalizePrefix)
+    .filter((value): value is string => Boolean(value));
+  const taskRel = normalizeOptionalRel(scope.taskRel);
+  const taskDir = taskRel ? taskRel.split('/').slice(0, -1).join('/') : '';
+  const generatedTaskDir = taskDir && /^(?:tasks|generated-tasks|\.sciforge\/tasks|\.sciforge\/sessions\/[^/]+\/tasks)\//.test(`${taskDir}/`)
+    ? `${taskDir.replace(/\/+$/, '')}/`
+    : undefined;
+  return uniqueStrings([
+    ...explicit,
+    generatedTaskDir,
+  ].filter((value): value is string => Boolean(value)));
+}
+
+function normalizePrefix(value: unknown) {
+  const rel = normalizeOptionalRel(value);
+  return rel ? `${rel.replace(/\/+$/, '')}/` : undefined;
+}
+
+function normalizeOptionalRel(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  try {
+    return safeWorkspaceRel(value.trim());
+  } catch {
+    return undefined;
+  }
+}
+
+function workspaceRel(root: string, abs: string) {
+  const rel = relative(root, abs).split(sep).join('/');
+  return rel && rel !== '..' && !rel.startsWith('../') ? rel : undefined;
+}
+
+function repairBoundarySkippedDirectory(name: string, rel: string) {
+  return [
+    '.git',
+    'node_modules',
+    'dist',
+    'build',
+    'coverage',
+    '.cache',
+    '.next',
+    '.turbo',
+    '.vite',
+    'playwright-report',
+    'test-results',
+  ].includes(name) || /(?:^|\/)(?:__pycache__|\.pytest_cache)$/.test(rel);
+}
+
+function repairBoundarySkippedFile(rel: string) {
+  return /(?:^|\/)(?:\.DS_Store|Thumbs\.db)$/.test(rel);
 }

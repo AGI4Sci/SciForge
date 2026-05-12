@@ -14,6 +14,7 @@ import {
   browserSmokeWorkspaceState,
   contextWindowToolStreamBody,
   cursorLikeWorklogResult,
+  failedRunRestoreWorkspaceState,
   referenceWorkspaceState,
   structureWorkspaceState,
 } from './browser-workflows-fixtures';
@@ -182,6 +183,21 @@ try {
     await assertTooltipCoverage(page, 'desktop-builder');
     await assertNoRechartsSizeWarnings(page, 'desktop-builder');
     await captureSmokeScreenshot(page, join(artifactsDir, 'browser-smoke-desktop.png'));
+
+    const failedRestorePage = await newConfiguredPage(browser, { width: 1280, height: 900 }, 'failed-restore');
+    await failedRestorePage.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: 'domcontentloaded' });
+    logStep('workspace restore opens the latest recoverable failed run directly in the workbench');
+    await failedRestorePage.locator('.active-run-banner', { hasText: 'run-browser-failed-restore' }).waitFor({ timeout: 15_000 });
+    await failedRestorePage.locator('.run-status-summary', { hasText: '运行需要处理' }).waitFor({ timeout: 15_000 });
+    await failedRestorePage.locator('.run-status-summary', { hasText: 'PDF fetch timed out after writing partial refs' }).waitFor({ timeout: 15_000 });
+    await failedRestorePage.locator('.run-recover-actions', { hasText: 'resume failed run with retained refs' }).first().waitFor({ timeout: 15_000 });
+    await failedRestorePage.locator('code', { hasText: 'file:.sciforge/task-results/failed-restore.bundle.json' }).first().waitFor({ timeout: 15_000 });
+    await captureSmokeScreenshot(failedRestorePage, join(artifactsDir, 'browser-smoke-failed-run-restore.png'));
+    await assertNoRawJsonErrors(failedRestorePage, 'failed-run-restore');
+    await assertNoUnexplainedDisabledPrimaryButtons(failedRestorePage, 'failed-run-restore');
+    await assertNoRechartsSizeWarnings(failedRestorePage, 'failed-run-restore');
+    assert.deepEqual((failedRestorePage as Page & { __sciforgePageErrors?: string[] }).__sciforgePageErrors ?? [], [], 'failed run restore workflow should not emit page errors');
+    await failedRestorePage.close();
 
     await openNavigationPanel(page);
     await page.getByRole('button', { name: '研究概览' }).click();
@@ -492,7 +508,7 @@ try {
     await browser.close();
   }
 
-  console.log(`[ok] browser smoke covered onboarding, Settings, Workspace, Timeline, Builder publish/open flow, collapsed results, mobile layout, structure viewer, reference follow-up preview, T097/T095 RunningWorkProcess folding, and context meter compact UX screenshots in ${artifactsDir}`);
+  console.log(`[ok] browser smoke covered onboarding, Settings, Workspace, Timeline, failed-run restore, Builder publish/open flow, collapsed results, mobile layout, structure viewer, reference follow-up preview, T097/T095 RunningWorkProcess folding, and context meter compact UX screenshots in ${artifactsDir}`);
 } finally {
   for (const child of children.reverse()) child.kill('SIGTERM');
   await rm(workspace, { recursive: true, force: true });
@@ -503,17 +519,24 @@ try {
 async function newConfiguredPage(
   browser: Browser,
   viewport: { width: number; height: number },
-  stateMode: boolean | 'default' | 'structure' | 'references' = false,
+  stateMode: boolean | 'default' | 'structure' | 'references' | 'failed-restore' = false,
   configPatch: Partial<{ workspaceWriterBaseUrl: string; agentServerBaseUrl: string }> = {},
 ) {
   const page = await browser.newPage({ viewport });
   const withStructureState = stateMode === true || stateMode === 'structure';
   const withReferenceState = stateMode === 'references';
-  const configuredWorkspacePath = withStructureState ? join(workspace, 'structure-smoke') : workspace;
+  const withFailedRestoreState = stateMode === 'failed-restore';
+  const configuredWorkspacePath = withStructureState
+    ? join(workspace, 'structure-smoke')
+    : withFailedRestoreState
+      ? join(workspace, 'failed-restore-smoke')
+      : workspace;
   const workspaceState = withStructureState
     ? structureWorkspaceState(configuredWorkspacePath)
     : withReferenceState
       ? referenceWorkspaceState(configuredWorkspacePath, referencePreviewPath)
+      : withFailedRestoreState
+        ? failedRunRestoreWorkspaceState(configuredWorkspacePath)
       : browserSmokeWorkspaceState(configuredWorkspacePath);
   await mkdir(join(configuredWorkspacePath, '.sciforge'), { recursive: true });
   await writeFile(join(configuredWorkspacePath, '.sciforge', 'workspace-state.json'), JSON.stringify(workspaceState, null, 2));
@@ -543,13 +566,14 @@ async function newConfiguredPage(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ config }),
   });
-  await page.addInitScript(({ config, structureState, referenceState, defaultWorkspaceState }) => {
+  await page.addInitScript(({ config, structureState, referenceState, failedRestoreState, defaultWorkspaceState }) => {
     window.localStorage.setItem('sciforge.config.v1', JSON.stringify(config));
-    window.localStorage.setItem('sciforge.workspace.v2', JSON.stringify(structureState ?? referenceState ?? defaultWorkspaceState));
+    window.localStorage.setItem('sciforge.workspace.v2', JSON.stringify(structureState ?? referenceState ?? failedRestoreState ?? defaultWorkspaceState));
   }, {
     config,
     structureState: withStructureState ? workspaceState : undefined,
     referenceState: withReferenceState ? workspaceState : undefined,
+    failedRestoreState: withFailedRestoreState ? workspaceState : undefined,
     defaultWorkspaceState: workspaceState,
   });
   (page as Page & { __sciforgePageErrors?: string[]; __sciforgeConsoleWarnings?: string[] }).__sciforgePageErrors = pageErrors;

@@ -28,7 +28,13 @@ import {
   type AgentServerContextMode,
 } from './gateway/context-envelope.js';
 import { applyRuntimeVerificationPolicy } from './gateway/verification-policy.js';
-import { repairNeededPayload as buildRepairNeededPayload, type RepairPolicyRefs } from './gateway/repair-policy.js';
+import {
+  captureRepairBoundarySnapshot,
+  evaluateRepairBoundarySnapshot,
+  repairBoundaryDiagnosticPayload,
+  repairNeededPayload as buildRepairNeededPayload,
+  type RepairPolicyRefs,
+} from './gateway/repair-policy.js';
 import {
   normalizeAgentServerWorkspaceEvent as normalizeAgentServerWorkspaceEventFromModule,
   withRequestContextWindowLimit as withRequestContextWindowLimitFromModule,
@@ -305,6 +311,7 @@ async function tryAgentServerRepairAndRerun(params: {
   const workspace = params.run.workspace;
   const taskPath = join(workspace, params.run.spec.taskRel);
   const beforeCode = await readTextIfExists(taskPath);
+  const repairBoundaryBefore = await captureRepairBoundarySnapshot(workspace);
   const priorAttempts = await readTaskAttempts(workspace, params.taskId);
   const maxAttempts = agentServerRepairMaxAttempts();
   const attempt = Math.max(2, priorAttempts.length + 1);
@@ -328,12 +335,64 @@ async function tryAgentServerRepairAndRerun(params: {
   });
   throwIfRuntimeAborted(params.callbacks);
   const afterCode = await readTextIfExists(taskPath);
+  const repairBoundaryAfter = await captureRepairBoundarySnapshot(workspace);
+  const repairBoundaryViolation = evaluateRepairBoundarySnapshot(repairBoundaryBefore, repairBoundaryAfter, {
+    taskRel: params.run.spec.taskRel,
+    allowedPrefixes: [
+      params.run.spec.sessionBundleRel ? `${params.run.spec.sessionBundleRel.replace(/\/+$/, '')}/tasks/` : undefined,
+      params.run.spec.sessionBundleRel ? `${params.run.spec.sessionBundleRel.replace(/\/+$/, '')}/debug/agentserver/` : undefined,
+      params.run.spec.sessionBundleRel ? `${params.run.spec.sessionBundleRel.replace(/\/+$/, '')}/handoffs/` : undefined,
+      `${sessionBundleRelForRequest(params.request).replace(/\/+$/, '')}/debug/agentserver/`,
+      `${sessionBundleRelForRequest(params.request).replace(/\/+$/, '')}/handoffs/`,
+    ].filter((value): value is string => Boolean(value)),
+  });
   const diffSummary = repair.ok
     ? summarizeTextChange(beforeCode, afterCode, repair.diffSummary)
     : repair.error;
   const diffRel = `.sciforge/task-diffs/${params.taskId}-attempt-${attempt}.diff.txt`;
   await mkdir(dirname(join(workspace, diffRel)), { recursive: true });
   await writeFile(join(workspace, diffRel), diffSummary || 'AgentServer repair produced no diff summary.');
+
+  if (repairBoundaryViolation) {
+    await appendTaskAttempt(workspace, {
+      id: params.taskId,
+      prompt: params.request.prompt,
+      skillDomain: params.request.skillDomain,
+      skillId: params.skill.id,
+      ...attemptPlanRefs(params.request, params.skill, params.failureReason),
+      attempt,
+      parentAttempt,
+      selfHealReason: params.failureReason,
+      patchSummary: [diffSummary, repairBoundaryViolation.reason].filter(Boolean).join('\n\n'),
+      diffRef: diffRel,
+      status: 'repair-needed',
+      codeRef: params.run.spec.taskRel,
+      inputRef: params.run.spec.id ? `.sciforge/task-inputs/${params.run.spec.id}.json` : undefined,
+      outputRef: params.run.outputRef,
+      stdoutRef: params.run.stdoutRef,
+      stderrRef: params.run.stderrRef,
+      exitCode: params.run.exitCode,
+      failureReason: repairBoundaryViolation.reason,
+      createdAt: new Date().toISOString(),
+    });
+    return await repairBoundaryDiagnosticPayload({
+      workspace,
+      request: params.request,
+      skill: params.skill,
+      violation: repairBoundaryViolation,
+      refs: {
+        taskRel: params.run.spec.taskRel,
+        outputRel: params.run.outputRef,
+        stdoutRel: params.run.stdoutRef,
+        stderrRel: params.run.stderrRef,
+        blocker: 'repair-boundary',
+        agentServerRefs: {
+          diffRef: diffRel,
+          repairRunId: repair.ok ? repair.runId : undefined,
+        },
+      },
+    });
+  }
 
   if (!repair.ok) {
     await appendTaskAttempt(workspace, {

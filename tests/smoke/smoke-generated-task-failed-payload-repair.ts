@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
+import { readTaskAttempts } from '../../src/runtime/task-attempt-history.js';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-failed-payload-repair-'));
 let generationRequests = 0;
@@ -175,16 +176,15 @@ try {
   }
   assert.ok(result.artifacts.some((artifact) => artifact.id === 'artifact.repaired'));
 
-  const attemptFiles = await readdir(join(workspace, '.sciforge', 'task-attempts'));
-  const generatedAttemptFile = attemptFiles.find((file) => file.startsWith('generated-literature-'));
-  assert.ok(generatedAttemptFile);
-  const attemptHistory = JSON.parse(await readFile(join(workspace, '.sciforge', 'task-attempts', generatedAttemptFile), 'utf8'));
-  assert.equal(attemptHistory.attempts.length, 3);
-  assert.equal(attemptHistory.attempts[0].status, 'repair-needed');
-  assert.match(attemptHistory.attempts[0].failureReason, /failed payload|Intentional transient bug/);
-  assert.equal(attemptHistory.attempts[1].status, 'failed-with-reason');
-  assert.match(attemptHistory.attempts[1].failureReason, /still needs another AgentServer pass/);
-  assert.equal(attemptHistory.attempts[2].status, 'done');
+  const taskId = String(result.executionUnits[0]?.diffRef || '').match(/task-diffs\/(.+)-attempt-\d+\.diff\.txt/)?.[1];
+  assert.ok(taskId);
+  const attemptHistory = await readTaskAttempts(workspace, taskId);
+  assert.equal(attemptHistory.length, 3);
+  assert.equal(attemptHistory[0].status, 'repair-needed');
+  assert.match(String(attemptHistory[0].failureReason || ''), /failed payload|Intentional transient bug/);
+  assert.equal(attemptHistory[1].status, 'failed-with-reason');
+  assert.match(String(attemptHistory[1].failureReason || ''), /still needs another AgentServer pass/);
+  assert.equal(attemptHistory[2].status, 'done');
 
   console.log('[ok] generated task failed payload triggers generic AgentServer repair loop until rerun succeeds');
 } finally {

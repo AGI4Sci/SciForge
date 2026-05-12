@@ -78,6 +78,7 @@ import {
   createArtifactHandoffTransition,
   createPreviewPackageAutoRunRequest,
   touchWorkspaceUpdatedAt,
+  workspaceRecoveryFocusForState,
 } from './appShell/workspaceState';
 import {
   buildArchivedSessionCountsByScenario,
@@ -109,6 +110,7 @@ export function SciForgeApp() {
   const [selectedRuntimeComponentIds, setSelectedRuntimeComponentIds] = useState<string[]>(() => defaultPublishedRuntimeComponentIds());
   const [drafts, setDrafts] = useState<Record<ScenarioInstanceId, string>>(() => createBuiltInScenarioRecord(''));
   const [messageScrollTops, setMessageScrollTops] = useState<Record<ScenarioInstanceId, number>>(() => createBuiltInScenarioRecord(0));
+  const [workspaceRecoveryFocusKey, setWorkspaceRecoveryFocusKey] = useState<string | undefined>();
 
   const sessions = workspaceState.sessionsByScenario;
   const archivedSessionsByAgent = useMemo(
@@ -152,6 +154,7 @@ export function SciForgeApp() {
   async function hydrateWorkspaceSnapshot(path: string, runtimeConfig: SciForgeConfig, mode: 'prefer-newer' | 'force' = 'prefer-newer') {
     const requestedPath = normalizeWorkspaceRootPath(path);
     setWorkspaceHydrated(false);
+    setWorkspaceRecoveryFocusKey(undefined);
     try {
       const persisted = await loadPersistedWorkspaceState(requestedPath, runtimeConfig);
       if (persisted) {
@@ -223,6 +226,16 @@ export function SciForgeApp() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!workspaceHydrated) return;
+    if (workspaceRecoveryFocusKey) return;
+    const focus = workspaceRecoveryFocusForState(workspaceState);
+    setWorkspaceRecoveryFocusKey(focus ? `${focus.sessionId}:${focus.activeRunId}` : 'none');
+    if (!focus) return;
+    setScenarioId(focus.scenarioId);
+    setPage('workbench');
+  }, [workspaceHydrated, workspaceRecoveryFocusKey, workspaceState]);
 
   useEffect(() => {
     if (!workspaceHydrated) return;

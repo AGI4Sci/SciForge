@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { readRecentTaskAttempts } from '../../src/runtime/task-attempt-history.js';
 import { runWorkspaceRuntimeGateway } from '../../src/runtime/workspace-runtime-gateway.js';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-compact-repair-'));
@@ -19,15 +20,9 @@ import sys
 input_path = sys.argv[1]
 output_path = sys.argv[2]
 
-payload = {
-  "message": "This task has a generated syntax bug",
-  "confidence": 0.0,
-}
 print("ALLOWED_STDOUT_SUMMARY")
 sys.stderr.write("".join(["BLOCKED", "_STDERR", "_SECRET"]))
 raise RuntimeError("intentional compact repair failure before writing output")
-with open(output_path, "w", encoding="utf-8") as handle:
-  json.dump(payload, handle)
 `;
 
 const fixedTask = String.raw`
@@ -222,14 +217,12 @@ try {
   assert.equal(result.executionUnits[0]?.status, 'self-healed');
   assert.ok(result.artifacts.some((artifact) => artifact.id === 'artifact.compact_repair'));
 
-  const attemptFiles = await readdir(join(workspace, '.sciforge', 'task-attempts'));
-  const generatedAttemptFile = attemptFiles.find((file) => file.startsWith('generated-literature-'));
-  assert.ok(generatedAttemptFile);
-  const attemptHistory = JSON.parse(await readFile(join(workspace, '.sciforge', 'task-attempts', generatedAttemptFile), 'utf8'));
-  assert.equal(attemptHistory.attempts.length, 2);
-  assert.equal(attemptHistory.attempts[0].status, 'repair-needed');
-  assert.match(attemptHistory.attempts[0].failureReason, /RuntimeError|intentional compact repair failure|schema validation|missing executionUnits/);
-  assert.equal(attemptHistory.attempts[1].status, 'done');
+  const attemptHistory = (await readRecentTaskAttempts(workspace, 'literature', 8))
+    .sort((left, right) => left.attempt - right.attempt);
+  assert.equal(attemptHistory.length, 2);
+  assert.equal(attemptHistory[0].status, 'repair-needed');
+  assert.match(attemptHistory[0].failureReason ?? '', /RuntimeError|intentional compact repair failure|schema validation|missing executionUnits/);
+  assert.equal(attemptHistory[1].status, 'done');
 
   console.log('[ok] generated syntax failures use compact AgentServer repair and rerun end-to-end');
 } finally {

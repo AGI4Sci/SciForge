@@ -42,7 +42,13 @@ export interface GeneratedTaskRunnerDeps {
     failureReason: string;
     callbacks?: WorkspaceRuntimeCallbacks;
   }): Promise<ToolPayload | undefined>;
-  failedTaskPayload(request: GatewayRequest, skill: SkillAvailability, run: WorkspaceTaskRunResult, parseReason?: string): ToolPayload;
+  failedTaskPayload(
+    request: GatewayRequest,
+    skill: SkillAvailability,
+    run: WorkspaceTaskRunResult,
+    parseReason?: string,
+    refs?: Record<string, unknown>,
+  ): ToolPayload;
   coerceWorkspaceTaskPayload(value: unknown): ToolPayload | undefined;
   schemaErrors(payload: unknown): string[];
   firstPayloadFailureReason(payload: ToolPayload, run?: WorkspaceTaskRunResult): string | undefined;

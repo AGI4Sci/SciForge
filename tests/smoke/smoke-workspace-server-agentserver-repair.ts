@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer, type IncomingMessage } from 'node:http';
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { readRecentTaskAttempts } from '../../src/runtime/task-attempt-history.js';
 
 const workspace = await createRepairWorkspace('sciforge-workspace-http-repair-');
 
@@ -220,12 +221,11 @@ async function createRepairWorkspace(prefix: string) {
 }
 
 async function assertSelfHealedAttemptHistory(repairWorkspace: string) {
-  const attemptFiles = await readdir(join(repairWorkspace, '.sciforge', 'task-attempts'));
-  assert.equal(attemptFiles.length, 1);
-  const attemptHistory = JSON.parse(await readFile(join(repairWorkspace, '.sciforge', 'task-attempts', attemptFiles[0]), 'utf8'));
-  assert.equal(attemptHistory.attempts.length, 2);
-  assert.equal(attemptHistory.attempts[0].status, 'repair-needed');
-  assert.equal(attemptHistory.attempts[1].status, 'done');
+  const attempts = (await readRecentTaskAttempts(repairWorkspace, 'omics', 8))
+    .sort((left, right) => left.attempt - right.attempt);
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0].status, 'repair-needed');
+  assert.equal(attempts[1].status, 'done');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

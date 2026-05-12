@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SciForgeSession, SciForgeWorkspaceState, TimelineEventRecord } from '../../domain';
-import { appendTimelineEventToWorkspace, applySessionUpdateToWorkspace, touchWorkspaceUpdatedAt } from './workspaceState';
+import { appendTimelineEventToWorkspace, applySessionUpdateToWorkspace, recoverableRunFocusForSession, touchWorkspaceUpdatedAt, workspaceRecoveryFocusForState } from './workspaceState';
 
 function session(runs: SciForgeSession['runs'] = []): SciForgeSession {
   return {
@@ -123,6 +123,74 @@ test('run timeline includes failed execution units from the failed run payload',
   const next = applySessionUpdateToWorkspace(workspace(), nextSession, 'failed update');
 
   assert.deepEqual(next.timelineEvents?.[0].executionUnitRefs, ['EU-failed-payload']);
+});
+
+test('recoverable focus selects repair-needed run instead of timeline-only history', () => {
+  const oldFailedSession = session([{
+    id: 'run-old-failed',
+    scenarioId: 'scenario-any',
+    status: 'failed',
+    prompt: 'old failed',
+    response: 'timeout',
+    createdAt: '2026-05-07T01:00:00.000Z',
+    completedAt: '2026-05-07T01:02:00.000Z',
+  }]);
+  const recentRepairSession = {
+    ...session([{
+      id: 'run-repair-needed',
+      scenarioId: 'scenario-repair',
+      status: 'completed' as const,
+      prompt: 'recent repair',
+      response: 'partial',
+      createdAt: '2026-05-07T02:00:00.000Z',
+      completedAt: '2026-05-07T02:02:00.000Z',
+    }]),
+    sessionId: 'session-repair',
+    scenarioId: 'scenario-repair',
+    executionUnits: [{
+      id: 'unit-repair',
+      tool: 'validator',
+      params: '{}',
+      status: 'repair-needed' as const,
+      hash: 'repair',
+      outputRef: 'run:run-repair-needed/result.json',
+      failureReason: 'artifact schema still needs repair',
+      recoverActions: ['resume failed run with existing refs'],
+    }],
+  };
+  const state = {
+    ...workspace(oldFailedSession),
+    sessionsByScenario: {
+      [oldFailedSession.scenarioId]: oldFailedSession,
+      [recentRepairSession.scenarioId]: recentRepairSession,
+    } as SciForgeWorkspaceState['sessionsByScenario'],
+    timelineEvents: [{
+      id: 'timeline-only-failed',
+      actor: 'runtime',
+      action: 'run.failed',
+      subject: 'timeline-only',
+      artifactRefs: [],
+      executionUnitRefs: [],
+      beliefRefs: [],
+      visibility: 'project-record' as const,
+      decisionStatus: 'not-a-decision' as const,
+      createdAt: '2026-05-07T03:00:00.000Z',
+    }],
+  };
+
+  assert.equal(recoverableRunFocusForSession(recentRepairSession)?.activeRunId, 'run-repair-needed');
+  assert.deepEqual(workspaceRecoveryFocusForState(state), {
+    scenarioId: 'scenario-repair',
+    sessionId: 'session-repair',
+    activeRunId: 'run-repair-needed',
+    reason: 'repair-needed-run',
+    updatedAt: '2026-05-07T02:02:00.000Z',
+  });
+  assert.equal(workspaceRecoveryFocusForState({
+    ...workspace(),
+    sessionsByScenario: {} as SciForgeWorkspaceState['sessionsByScenario'],
+    timelineEvents: state.timelineEvents,
+  }), undefined);
 });
 
 test('run timeline scopes artifact refs to the run that produced them', () => {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -155,15 +155,15 @@ try {
   assert.ok((telemetrySummary.spanKindCounts['repair-rerun'] ?? 0) >= 1);
   assert.ok(telemetrySummary.auditIds.some((auditId) => auditId.startsWith('audit:repair-rerun:')));
 
-  const attemptFiles = await readdir(join(workspace, '.sciforge', 'task-attempts'));
-  assert.equal(attemptFiles.length, 1);
-  const attemptHistory = JSON.parse(await readFile(join(workspace, '.sciforge', 'task-attempts', attemptFiles[0]), 'utf8'));
-  assert.equal(attemptHistory.attempts.length, 2);
-  assert.equal(attemptHistory.attempts[0].status, 'repair-needed');
-  assert.equal(attemptHistory.attempts[1].status, 'done');
-  assert.equal(attemptHistory.attempts[1].parentAttempt, 1);
-  assert.ok(attemptHistory.attempts[1].diffRef);
-  const enrichedAttempts = await readTaskAttempts(workspace, attemptHistory.attempts[0].id) as Array<{
+  const taskId = String(result.executionUnits[0].diffRef || '').match(/task-diffs\/(.+)-attempt-\d+\.diff\.txt/)?.[1];
+  assert.ok(taskId);
+  const attemptHistory = await readTaskAttempts(workspace, taskId);
+  assert.equal(attemptHistory.length, 2);
+  assert.equal(attemptHistory[0].status, 'repair-needed');
+  assert.equal(attemptHistory[1].status, 'done');
+  assert.equal(attemptHistory[1].parentAttempt, 1);
+  assert.ok(attemptHistory[1].diffRef);
+  const enrichedAttempts = attemptHistory as Array<{
     refs?: {
       validationRepairAudit?: Array<{ subject?: { kind?: string }; outcome?: string }>;
       validationRepairTelemetry?: Array<{ ref?: string; spanKinds?: string[]; recordRefs?: string[] }>;

@@ -10,7 +10,13 @@ import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
 import { sanitizeAgentServerError } from './backend-failure-diagnostics.js';
 import { readGeneratedTaskFileIfPresent, type AgentServerTaskFilesGeneration } from './generated-task-runner-generation-lifecycle.js';
 import { expectedArtifactTypesForGeneratedRun, supplementScopeForGeneratedRun } from './generated-task-runner-supplement-lifecycle.js';
-import { buildGeneratedTaskRunInputLifecycle, type GeneratedTaskRuntimeRefs } from './generated-task-runner-validation-lifecycle.js';
+import {
+  buildGeneratedTaskRunInputLifecycle,
+  evaluateGeneratedTaskPayloadPreflight,
+  generatedTaskPayloadPreflightFailureReason,
+  generatedTaskPayloadPreflightRecoverActions,
+  type GeneratedTaskRuntimeRefs,
+} from './generated-task-runner-validation-lifecycle.js';
 import type { GeneratedTaskRunnerDeps } from './generated-task-runner.js';
 import { AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE } from '../../../packages/skills/runtime-policy';
 
@@ -75,12 +81,40 @@ export async function runGeneratedTaskExecutionLifecycle(
     };
   }
   const expectedArtifacts = expectedArtifactTypesForGeneratedRun(input.request, input.generation.response.expectedArtifacts);
+  const payloadPreflight = evaluateGeneratedTaskPayloadPreflight({
+    taskFiles: materialized.materializedTaskFiles ?? input.generation.response.taskFiles ?? [],
+    entrypoint: input.generation.response.entrypoint,
+    expectedArtifacts,
+    request: input.request,
+  });
+  if (payloadPreflight.status === 'blocked') {
+    return {
+      kind: 'payload',
+      payload: input.deps.repairNeededPayload(
+        input.request,
+        input.skill,
+        generatedTaskPayloadPreflightFailureReason(payloadPreflight),
+        {
+          taskRel: refs.taskRel,
+          inputRel: refs.inputRel,
+          outputRel: refs.outputRel,
+          stdoutRel: refs.stdoutRel,
+          stderrRel: refs.stderrRel,
+          recoverActions: generatedTaskPayloadPreflightRecoverActions(payloadPreflight),
+          agentServerRefs: {
+            generatedTaskPayloadPreflight: payloadPreflight,
+          },
+        },
+      ),
+    };
+  }
   const taskInputLifecycle = await buildGeneratedTaskRunInputLifecycle({
     workspacePath: input.workspace,
     request: input.request,
     skill: input.skill,
     generatedInputRels: materialized.generatedInputRels,
     expectedArtifacts,
+    payloadPreflight,
   });
   const run = await runWorkspaceTask(input.workspace, {
     id: taskId,
@@ -110,11 +144,17 @@ export async function runGeneratedTaskExecutionLifecycle(
 }
 
 async function materializeGeneratedTaskFiles(input: GeneratedTaskExecutionLifecycleInput & { taskId: string; sessionBundleRel: string }): Promise<
-  | { kind: 'materialized'; generatedPathMap: Map<string, string>; generatedInputRels: string[] }
+  | {
+    kind: 'materialized';
+    generatedPathMap: Map<string, string>;
+    generatedInputRels: string[];
+    materializedTaskFiles: AgentServerTaskFilesGeneration['response']['taskFiles'];
+  }
   | { kind: 'payload'; payload: ToolPayload }
 > {
   const generatedPathMap = new Map<string, string>();
   const generatedInputRels: string[] = [];
+  const materializedTaskFiles: AgentServerTaskFilesGeneration['response']['taskFiles'] = [];
   try {
     for (const file of input.generation.response.taskFiles) {
       const declaredRel = safeWorkspaceRel(file.path);
@@ -132,6 +172,11 @@ async function materializeGeneratedTaskFiles(input: GeneratedTaskExecutionLifecy
           ),
         };
       }
+      materializedTaskFiles.push({
+        path: declaredRel,
+        language: file.language,
+        content,
+      });
       await mkdir(dirname(join(input.workspace, rel)), { recursive: true });
       await writeFile(join(input.workspace, rel), content);
       emitWorkspaceRuntimeEvent(input.callbacks, {
@@ -151,7 +196,7 @@ async function materializeGeneratedTaskFiles(input: GeneratedTaskExecutionLifecy
       ),
     };
   }
-  return { kind: 'materialized', generatedPathMap, generatedInputRels };
+  return { kind: 'materialized', generatedPathMap, generatedInputRels, materializedTaskFiles };
 }
 
 function generatedTaskRuntimeRefs(

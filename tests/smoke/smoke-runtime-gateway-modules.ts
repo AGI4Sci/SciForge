@@ -747,6 +747,71 @@ try {
   assert.equal(commandFailedAttempt[0]?.status, 'repair-needed');
   assert.match(commandFailedAttempt[0]?.failureReason ?? '', /non-zero exitCode/);
 
+  let partialCheckpointRepairCalled = false;
+  let partialCheckpointTaskId = '';
+  const partialCheckpointPayload = await runAgentServerGeneratedTask(request, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
+    request,
+    useProductionPayloadValidation: true,
+    requestAgentServerGeneration: async () => ({
+      ok: true,
+      runId: 'runner-partial-checkpoint-run',
+      response: {
+        taskFiles: [{
+          path: '.sciforge/tasks/runner-partial-checkpoint.py',
+          language: 'python',
+          content: [
+            'import json, os, sys',
+            '_, input_path, output_path = sys.argv',
+            'root = os.environ.get("SCIFORGE_SESSION_RESOURCE_ROOT")',
+            'downloads = os.path.join(root, "downloads")',
+            'os.makedirs(downloads, exist_ok=True)',
+            'with open(os.path.join(downloads, "agent-paper.pdf"), "wb") as f:',
+            '    f.write(b"%PDF-1.4\\npartial pdf bytes\\n")',
+            'meta = dict(title="Agent paper", status="downloaded-before-failure")',
+            'with open(os.path.join(downloads, "agent-paper.metadata.json"), "w", encoding="utf-8") as f:',
+            '    f.write(json.dumps(meta))',
+            'print("downloaded partial PDF and metadata before simulated failure")',
+            'raise SystemExit(3)',
+          ].join('\n'),
+        }],
+        entrypoint: { language: 'python', path: '.sciforge/tasks/runner-partial-checkpoint.py' },
+        environmentRequirements: {},
+        validationCommand: '',
+        expectedArtifacts: ['research-report', 'paper-list'],
+        patchSummary: 'partial external fetch checkpoint smoke task',
+      },
+    }),
+    tryAgentServerRepairAndRerun: async (_params) => {
+      partialCheckpointRepairCalled = true;
+      partialCheckpointTaskId = _params.taskId;
+      assert.match(_params.failureReason, /Workspace task exited 3/);
+      return undefined;
+    },
+  }));
+  assert.equal(partialCheckpointRepairCalled, true, JSON.stringify({
+    message: partialCheckpointPayload?.message,
+    claimType: partialCheckpointPayload?.claimType,
+    executionUnits: partialCheckpointPayload?.executionUnits,
+    workEvidence: partialCheckpointPayload?.workEvidence,
+  }));
+  assert.equal(partialCheckpointPayload?.executionUnits[0]?.status, 'repair-needed');
+  assert.equal(partialCheckpointPayload?.claimType, 'partial-checkpoint');
+  const partialRefs = partialCheckpointPayload?.workEvidence?.[0]?.evidenceRefs ?? [];
+  assert.ok(partialRefs.some((ref) => /downloads\/agent-paper\.pdf$/.test(ref)), 'partial checkpoint should preserve downloaded PDF ref');
+  assert.ok(partialRefs.some((ref) => /downloads\/agent-paper\.metadata\.json$/.test(ref)), 'partial checkpoint should preserve metadata ref');
+  const checkpointOutputRef = String(partialCheckpointPayload?.executionUnits[0]?.outputRef || '');
+  assert.match(await readFile(join(workspace, checkpointOutputRef), 'utf8'), /sciforge\.partial-checkpoint\.v1/);
+  const partialCheckpointAttempts = await readTaskAttempts(workspace, partialCheckpointTaskId);
+  assert.equal(partialCheckpointAttempts[0]?.status, 'repair-needed');
+  assert.match(partialCheckpointAttempts[0]?.outputRef ?? '', /^\.sciforge\/sessions\/.+\/task-results\/generated-literature-/);
+  const attemptEvidenceRefs = partialCheckpointAttempts[0]?.workEvidenceSummary?.items.flatMap((item) => item.evidenceRefs) ?? [];
+  assert.ok(
+    attemptEvidenceRefs.some((ref) => /downloads\/agent-paper\.pdf$/.test(ref)),
+    `attempt should retain partial PDF refs, got ${JSON.stringify(partialCheckpointAttempts[0]?.workEvidenceSummary)}`,
+  );
+  const taskRunCardPartialRefs = partialCheckpointAttempts[0]?.taskRunCard?.refs.map((ref) => ref.ref) ?? [];
+  assert.ok(taskRunCardPartialRefs.some((ref) => /downloads\/agent-paper\.metadata\.json$/.test(ref)), 'failed run card should project partial metadata ref');
+
   const generatedReferencePayload = await runAgentServerGeneratedTask(currentReferenceRequest, skill, [skill], {}, makeGeneratedTaskRunnerDeps({
     request: currentReferenceRequest,
     requestAgentServerGeneration: async () => ({
@@ -959,7 +1024,7 @@ try {
   assert.equal(gatedAudit?.repairDecision?.action, 'needs-human');
   assert.equal(gatedAudit?.auditRecord?.failureKind, 'runtime-verification');
   assert.equal(gatedAudit?.auditRecord?.outcome, 'needs-human');
-  assert.ok(gatedAudit?.auditRecord?.relatedRefs?.some((ref) => ref.includes('.sciforge/verifications/')));
+  assert.ok(gatedAudit?.auditRecord?.relatedRefs?.some((ref) => ref.includes('/verifications/')));
   const persistedGatedPayload = JSON.parse(await readFile(join(workspace, gatedOutputRef), 'utf8')) as ToolPayload & { refs?: Record<string, unknown> };
   assert.ok(persistedGatedPayload.refs?.validationRepairAudit);
   assert.equal(persistedGatedPayload.budgetDebits?.[0]?.debitId, gatedDebit.debitId);

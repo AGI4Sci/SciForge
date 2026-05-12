@@ -18,6 +18,13 @@ import {
 type ArtifactReferenceContextCollector = (request: GatewayRequest) => Promise<{ combinedArtifacts: Array<Record<string, unknown>> } | undefined>;
 let artifactReferenceContextCollector: ArtifactReferenceContextCollector | undefined;
 
+export {
+  GENERATED_TASK_PAYLOAD_PREFLIGHT_SCHEMA_VERSION,
+  evaluateGeneratedTaskPayloadPreflight,
+  type GeneratedTaskPayloadPreflightIssue,
+  type GeneratedTaskPayloadPreflightReport,
+} from './generated-task-payload-preflight.js';
+
 export function configureDirectAnswerArtifactContext(collector: ArtifactReferenceContextCollector) {
   artifactReferenceContextCollector = collector;
 }

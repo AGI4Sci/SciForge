@@ -7,6 +7,7 @@ import { nowIso, type ObjectReference, type PreviewDescriptor, type RuntimeArtif
 import type { WorkspaceFileContent } from '../../api/workspaceClient';
 import { ChatPanel } from '../ChatPanel';
 import { ResultsRenderer } from '../ResultsRenderer';
+import { recoverableRunFocusForSession } from '../appShell/workspaceState';
 import type { HandoffAutoRunRequest } from '../results/viewPlanResolver';
 import { defaultElementSelectionForScenario, ScenarioBuilderPanel } from '../ScenarioBuilderPanel';
 import { useRuntimeHealth } from '../runtimeHealthPanel';
@@ -98,6 +99,7 @@ export function Workbench({
   const [focusedObjectReference, setFocusedObjectReference] = useState<ObjectReference | undefined>();
   const [chatColumnWidth, setChatColumnWidth] = useState(42);
   const workbenchResizeRef = useRef<{ startX: number; startWidth: number; gridWidth: number } | null>(null);
+  const autoFocusedRunKeyRef = useRef<string | undefined>(undefined);
   const runtimeHealth = useRuntimeHealth(config);
   const visionSenseActive = (runtimeScenario.selectedToolIds ?? [visionSenseToolId]).includes(visionSenseToolId);
   const defaultResultSlots = useMemo(
@@ -118,11 +120,25 @@ export function Workbench({
   }, [mobileWorkbenchLayout, mobilePane]);
 
   const showWorkbenchChromeBody = workbenchChromeExpanded;
+  const recoveryFocus = recoverableRunFocusForSession(session);
+  const recoveryRunKey = recoveryFocus ? `${recoveryFocus.sessionId}:${recoveryFocus.activeRunId}` : undefined;
   useEffect(() => {
     if (activeRunId && !session.runs.some((run) => run.id === activeRunId)) {
       setActiveRunId(undefined);
     }
   }, [activeRunId, session.runs]);
+
+  useEffect(() => {
+    if (!recoveryFocus || autoFocusedRunKeyRef.current === recoveryRunKey) return;
+    autoFocusedRunKeyRef.current = recoveryRunKey;
+    setActiveRunId((current) => current && session.runs.some((run) => run.id === current) ? current : recoveryFocus.activeRunId);
+    setResultsCollapsed(false);
+    setMobilePane('results');
+  }, [recoveryFocus, recoveryRunKey, session.runs]);
+
+  function handleActiveRunChange(runId: string | undefined) {
+    setActiveRunId(runId);
+  }
 
   const workspaceFilePathForLayout = workspaceFileEditor?.file.path;
   useEffect(() => {
@@ -262,7 +278,7 @@ export function Workbench({
             onConfigChange={onConfigChange}
             onTimelineEvent={onTimelineEvent}
             activeRunId={activeRunId}
-            onActiveRunChange={setActiveRunId}
+            onActiveRunChange={handleActiveRunChange}
             onMarkReusableRun={(runId) => onMarkReusableRun(scenarioId, runId)}
             onObjectFocus={handleObjectFocus}
             externalReferenceRequest={externalReferenceRequest}
@@ -290,7 +306,7 @@ export function Workbench({
             collapsed={resultsCollapsed}
             onToggleCollapse={() => setResultsCollapsed((value) => !value)}
             activeRunId={activeRunId}
-            onActiveRunChange={setActiveRunId}
+            onActiveRunChange={handleActiveRunChange}
             focusedObjectReference={focusedObjectReference}
             onFocusedObjectChange={setFocusedObjectReference}
             onPreviewPackageRequest={(reference, path, descriptor) => onPreviewPackageRequest(scenarioId, reference, path, descriptor)}

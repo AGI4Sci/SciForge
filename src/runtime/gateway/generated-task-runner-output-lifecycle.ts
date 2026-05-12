@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult } from '../runtime-types.js';
@@ -67,7 +67,11 @@ export async function completeGeneratedTaskRunOutputLifecycle(
   if (run.exitCode !== 0 && !await fileExists(join(workspace, input.outputRel))) {
     const transientReason = transientExternalFailureReasonFromRun(run);
     if (transientReason) {
-      const payload = transientExternalDependencyPayload({ request, skill, run, reason: transientReason });
+      const payload = withGeneratedTaskPartialEvidence(
+        transientExternalDependencyPayload({ request, skill, run, reason: transientReason }),
+        await collectGeneratedTaskPartialEvidenceRefs(workspace, refs),
+        'transient-external-failure',
+      );
       await writeFile(join(workspace, input.outputRel), `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
       let normalized = await deps.validateAndNormalizePayload(payload, request, skill, {
         ...refs,
@@ -103,7 +107,13 @@ export async function completeGeneratedTaskRunOutputLifecycle(
       tryAgentServerRepairAndRerun: deps.tryAgentServerRepairAndRerun,
     });
     if (repair.repaired) return repair.repaired;
-    return deps.failedTaskPayload(request, skill, run, repair.failureReason);
+    return deps.failedTaskPayload(
+      request,
+      skill,
+      run,
+      repair.failureReason,
+      failedTaskPartialEvidenceRefs(await collectGeneratedTaskPartialEvidenceRefs(workspace, refs), 'pre-output-failure'),
+    );
   }
 
   try {
@@ -343,7 +353,13 @@ export async function completeGeneratedTaskRunOutputLifecycle(
       tryAgentServerRepairAndRerun: deps.tryAgentServerRepairAndRerun,
     });
     if (repair.repaired) return repair.repaired;
-    return deps.failedTaskPayload(request, skill, run, repair.failureReason);
+    return deps.failedTaskPayload(
+      request,
+      skill,
+      run,
+      repair.failureReason,
+      failedTaskPartialEvidenceRefs(await collectGeneratedTaskPartialEvidenceRefs(workspace, refs), 'parse-output-failure'),
+    );
   }
 }
 
@@ -390,4 +406,152 @@ function runtimeRefs(input: GeneratedTaskRuntimeRefs): GeneratedTaskRuntimeRefs 
     stdoutRel: input.stdoutRel,
     stderrRel: input.stderrRel,
   };
+}
+
+function failedTaskPartialEvidenceRefs(partialRefs: string[], failureKind: 'pre-output-failure' | 'parse-output-failure') {
+  if (!partialRefs.length) return undefined;
+  return {
+    evidenceRefs: partialRefs,
+    agentServerRefs: {
+      partialEvidence: {
+        kind: 'generated-task-partial-evidence',
+        failureKind,
+        preservedRefs: partialRefs,
+        note: 'Generated task did not produce a valid final ToolPayload, but session-bundle partial files were preserved for continuation or repair.',
+      },
+    },
+    recoverActions: [
+      'Inspect preserved partial refs before rerunning expensive external fetches.',
+      'Resume from the session bundle and write a valid partial ToolPayload/checkpoint before continuing retrieval.',
+    ],
+  };
+}
+
+function withGeneratedTaskPartialEvidence(
+  payload: ToolPayload,
+  partialRefs: string[],
+  failureKind: 'transient-external-failure',
+): ToolPayload {
+  if (!partialRefs.length) return payload;
+  return {
+    ...payload,
+    reasoningTrace: [
+      payload.reasoningTrace,
+      `partialEvidence=${partialRefs.length} session-bundle file ref(s) preserved after ${failureKind}`,
+    ].filter(Boolean).join('\n'),
+    executionUnits: payload.executionUnits.map((unit, index) => isRecord(unit) && index === 0
+      ? {
+        ...unit,
+        refs: {
+          ...(isRecord(unit.refs) ? unit.refs : {}),
+          partialEvidence: {
+            kind: 'generated-task-partial-evidence',
+            failureKind,
+            preservedRefs: partialRefs,
+          },
+        },
+        recoverActions: [
+          ...toStringArrayLocal(unit.recoverActions),
+          'Inspect preserved partial refs before rerunning expensive external fetches.',
+        ],
+      }
+      : unit),
+    objectReferences: [
+      ...(payload.objectReferences ?? []),
+      ...partialRefs.map(objectReferenceForPartialRef),
+    ],
+    logs: [
+      ...(payload.logs ?? []),
+      {
+        kind: 'generated-task-partial-evidence',
+        failureKind,
+        refs: partialRefs,
+      },
+    ],
+  };
+}
+
+async function collectGeneratedTaskPartialEvidenceRefs(
+  workspace: string,
+  refs: GeneratedTaskRuntimeRefs,
+) {
+  const sessionRoot = inferSessionRootFromRef(refs.outputRel)
+    ?? inferSessionRootFromRef(refs.taskRel)
+    ?? inferSessionRootFromRef(refs.inputRel);
+  if (!sessionRoot) return [];
+  const roots = ['artifacts', 'task-results', 'data', 'exports']
+    .map((name) => `${sessionRoot}/${name}`);
+  const excluded = new Set([
+    refs.taskRel,
+    refs.inputRel,
+    refs.outputRel,
+    refs.stdoutRel,
+    refs.stderrRel,
+  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0));
+  const partialRefs: string[] = [];
+  for (const root of roots) {
+    const collected = await collectFileRefs(workspace, root, excluded, 24 - partialRefs.length);
+    partialRefs.push(...collected);
+    if (partialRefs.length >= 24) break;
+  }
+  return Array.from(new Set(partialRefs));
+}
+
+function inferSessionRootFromRef(ref: string | undefined) {
+  if (!ref) return undefined;
+  const normalized = ref.replace(/\\/g, '/');
+  const match = normalized.match(/^(\.sciforge\/sessions\/[^/]+)\//);
+  return match?.[1];
+}
+
+async function collectFileRefs(
+  workspace: string,
+  rel: string,
+  excluded: Set<string>,
+  remaining: number,
+): Promise<string[]> {
+  if (remaining <= 0) return [];
+  let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+  try {
+    entries = await readdir(join(workspace, rel), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const refs: string[] = [];
+  for (const entry of entries) {
+    if (refs.length >= remaining) break;
+    if (entry.name.startsWith('.')) continue;
+    const child = `${rel}/${entry.name}`;
+    if (entry.isDirectory()) {
+      refs.push(...await collectFileRefs(workspace, child, excluded, remaining - refs.length));
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    if (excluded.has(child)) continue;
+    if (!partialEvidencePathLooksUseful(child)) continue;
+    refs.push(child);
+  }
+  return refs;
+}
+
+function partialEvidencePathLooksUseful(rel: string) {
+  return /\.(?:pdf|json|jsonl|ndjson|md|csv|tsv|txt|png|jpe?g|svg|html)$/i.test(rel);
+}
+
+function objectReferenceForPartialRef(ref: string) {
+  return {
+    id: `file:${ref}`,
+    title: ref.split('/').pop() ?? ref,
+    kind: 'file',
+    ref,
+    status: 'available',
+    actions: ['inspect', 'reveal-in-folder', 'copy-path'],
+    provenance: { preservedFromFailedGeneratedTask: true },
+  };
+}
+
+function toStringArrayLocal(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    : [];
 }

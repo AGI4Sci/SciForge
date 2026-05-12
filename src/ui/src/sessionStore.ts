@@ -333,8 +333,8 @@ function compactSessionForStorage(
     })),
     uiManifest: session.uiManifest.slice(0, limits.records),
     claims: session.claims.slice(0, limits.records),
-    executionUnits: session.executionUnits.slice(0, limits.records),
-    artifacts: session.artifacts.slice(0, limits.records).map((artifact) => ({
+    executionUnits: session.executionUnits.slice(-limits.records),
+    artifacts: session.artifacts.slice(-limits.records).map((artifact) => ({
       ...artifact,
       data: compactArtifactData(artifact.data),
     })),
@@ -384,8 +384,8 @@ function compactSessionSnapshotForStorage(
     })),
     uiManifest: session.uiManifest.slice(0, limits.records),
     claims: session.claims.slice(0, limits.records),
-    executionUnits: session.executionUnits.slice(0, limits.records),
-    artifacts: session.artifacts.slice(0, limits.records).map((artifact) => ({
+    executionUnits: session.executionUnits.slice(-limits.records),
+    artifacts: session.artifacts.slice(-limits.records).map((artifact) => ({
       ...artifact,
       data: compactArtifactData(artifact.data),
     })),

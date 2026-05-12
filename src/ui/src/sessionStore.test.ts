@@ -226,6 +226,41 @@ test('compactWorkspaceStateForStorage keeps recent session records', () => {
   );
 });
 
+test('compactWorkspaceStateForStorage keeps recent repair-needed execution refs', () => {
+  const state = parseWorkspaceState({
+    schemaVersion: 2,
+    workspacePath: '/tmp/sciforge-workspace',
+    sessionsByScenario: {
+      'literature-evidence-review': {
+        ...sessionFixture('compact-repair-session', ['recent failed run']),
+        executionUnits: Array.from({ length: 12 }, (_, index) => ({
+          id: index === 11 ? 'unit-recent-repair' : `unit-old-${index}`,
+          tool: 'validator',
+          params: '{}',
+          status: index === 11 ? 'repair-needed' : 'done',
+          hash: `unit-${index}`,
+          outputRef: index === 11 ? 'run:run-recent/failed-output.json' : undefined,
+        })),
+        artifacts: Array.from({ length: 12 }, (_, index) => ({
+          id: index === 11 ? 'artifact-recent-diagnostic' : `artifact-old-${index}`,
+          type: 'diagnostic',
+          producerScenario: 'literature-evidence-review',
+          schemaVersion: '1',
+        })),
+      },
+    },
+    archivedSessions: [],
+    updatedAt: '2026-04-25T00:00:00.000Z',
+  });
+
+  const compact = compactWorkspaceStateForStorage(state, 'minimal');
+  const compactSession = compact.sessionsByScenario['literature-evidence-review'];
+
+  assert.equal(compactSession.executionUnits.some((unit) => unit.id === 'unit-old-0'), false);
+  assert.equal(compactSession.executionUnits.at(-1)?.id, 'unit-recent-repair');
+  assert.equal(compactSession.artifacts.at(-1)?.id, 'artifact-recent-diagnostic');
+});
+
 test('compactWorkspaceStateForStorage strips binary dataUrls from artifacts and versions', () => {
   const dataUrl = `data:application/pdf;base64,${Buffer.from('pdf-binary'.repeat(80_000)).toString('base64')}`;
   const session = {

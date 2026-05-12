@@ -849,18 +849,22 @@ export function mergeRuntimeArtifacts(primary: NormalizedAgentResponse['artifact
   const byKey = new Map<string, NormalizedAgentResponse['artifacts'][number]>();
   for (const artifact of [...secondary, ...primary]) {
     const key = artifact.id || artifact.path || artifact.dataRef || `${artifact.type}-${byKey.size}`;
-    byKey.set(key, { ...byKey.get(key), ...artifact });
+    const previous = byKey.get(key);
+    if (byKey.has(key)) byKey.delete(key);
+    byKey.set(key, { ...previous, ...artifact });
   }
-  return Array.from(byKey.values()).slice(0, 32);
+  return Array.from(byKey.values()).slice(-32);
 }
 
 export function mergeExecutionUnits(primary: NormalizedAgentResponse['executionUnits'], secondary: NormalizedAgentResponse['executionUnits']) {
   const byId = new Map<string, NormalizedAgentResponse['executionUnits'][number]>();
   for (const unit of [...secondary, ...primary]) {
     const key = unit.id || `${unit.tool}-${byId.size}`;
-    byId.set(key, { ...byId.get(key), ...unit });
+    const previous = byId.get(key);
+    if (byId.has(key)) byId.delete(key);
+    byId.set(key, { ...previous, ...unit });
   }
-  return Array.from(byId.values()).slice(0, 32);
+  return Array.from(byId.values()).slice(-32);
 }
 
 export function mergeRuns(primary: NormalizedAgentResponse['run'][], secondary: NormalizedAgentResponse['run'][]) {

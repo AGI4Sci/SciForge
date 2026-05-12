@@ -1109,6 +1109,7 @@ export function failedTaskPayload(
   skill: SkillAvailability,
   run: Awaited<ReturnType<typeof runWorkspaceTask>>,
   parseReason?: string,
+  refs: Partial<RepairPolicyRefs> = {},
 ): ToolPayload {
   return repairNeededPayload(
     request,
@@ -1119,6 +1120,7 @@ export function failedTaskPayload(
       outputRel: run.outputRef,
       stdoutRel: run.stdoutRef,
       stderrRel: run.stderrRef,
+      ...refs,
     },
   );
 }

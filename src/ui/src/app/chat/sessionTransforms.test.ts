@@ -272,6 +272,44 @@ test('merges response records and failed runs without dropping existing session 
   assert.equal(failed.session.messages.at(-1)?.content, 'backend down');
 });
 
+test('merge helpers keep recent repair-needed refs when compacting crowded sessions', () => {
+  const oldUnits: RuntimeExecutionUnit[] = Array.from({ length: 32 }, (_, index) => ({
+    id: `unit-old-${index}`,
+    tool: 'old-tool',
+    params: '{}',
+    status: 'done',
+    hash: `old-${index}`,
+  }));
+  const recentRepairUnit: RuntimeExecutionUnit = {
+    id: 'unit-recent-repair',
+    tool: 'validator',
+    params: '{}',
+    status: 'repair-needed',
+    hash: 'recent-repair',
+    outputRef: 'run:run-recent/failed-output.json',
+    recoverActions: ['resume with retained refs'],
+  };
+  const mergedUnits = mergeExecutionUnits([recentRepairUnit], oldUnits);
+  const mergedArtifacts = mergeRuntimeArtifacts([{
+    id: 'artifact-recent',
+    type: 'diagnostic',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    metadata: { runId: 'run-recent' },
+  }], Array.from({ length: 32 }, (_, index) => ({
+    id: `artifact-old-${index}`,
+    type: 'diagnostic',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+  })));
+
+  assert.equal(mergedUnits.length, 32);
+  assert.equal(mergedUnits.some((unit) => unit.id === 'unit-old-0'), false);
+  assert.equal(mergedUnits.at(-1)?.id, 'unit-recent-repair');
+  assert.equal(mergedArtifacts.length, 32);
+  assert.equal(mergedArtifacts.at(-1)?.id, 'artifact-recent');
+});
+
 test('appends running guidance as a queued user message', () => {
   const guided = appendRunningGuidance(session(), 'add controls');
 

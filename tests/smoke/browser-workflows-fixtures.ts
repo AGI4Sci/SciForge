@@ -1,5 +1,5 @@
 import { buildBuiltInScenarioPackage } from '@sciforge/scenario-core/scenario-package';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 
 export function browserSmokeTimelineEvent() {
   const now = new Date().toISOString();
@@ -402,6 +402,124 @@ export function browserSmokeWorkspaceState(workspacePath: string) {
   };
 }
 
+export function failedRunRestoreWorkspaceState(workspacePath: string) {
+  const now = new Date().toISOString();
+  return {
+    schemaVersion: 2,
+    workspacePath,
+    sessionsByScenario: {
+      'literature-evidence-review': {
+        schemaVersion: 2,
+        sessionId: 'session-failed-run-restore',
+        scenarioId: 'literature-evidence-review',
+        title: 'Failed run restore browser smoke',
+        createdAt: now,
+        messages: [{
+          id: 'msg-failed-run-user',
+          role: 'user',
+          content: 'Restore directly to the failed literature run without using timeline search.',
+          createdAt: now,
+          status: 'completed',
+        }, {
+          id: 'msg-failed-run-system',
+          role: 'system',
+          content: 'The previous run stopped at a recoverable failure boundary.',
+          createdAt: now,
+          status: 'failed',
+        }],
+        runs: [{
+          id: 'run-browser-failed-restore',
+          scenarioId: 'literature-evidence-review',
+          status: 'failed',
+          prompt: 'Download papers and build the report',
+          response: 'PDF fetch timed out after writing partial refs.',
+          createdAt: now,
+          completedAt: now,
+          raw: {
+            failureReason: 'PDF fetch timed out after writing partial refs.',
+            recoverActions: ['resume failed run with retained refs', 'inspect partial evidence bundle'],
+            refs: [
+              'file:.sciforge/task-results/failed-restore.bundle.json',
+              'artifact:failed-restore-partial-report',
+              'execution-unit:EU-failed-restore-fetch',
+            ],
+            resultPresentation: {
+              taskRunCard: {
+                schemaVersion: 'sciforge.task-run-card.v1',
+                id: 'task-card:failed-restore',
+                goal: 'Download papers and build the report',
+                status: 'needs-work',
+                protocolStatus: 'protocol-failed',
+                taskOutcome: 'needs-work',
+                rounds: [],
+                refs: [
+                  { kind: 'bundle', ref: 'file:.sciforge/task-results/failed-restore.bundle.json' },
+                  { kind: 'execution-unit', ref: 'execution-unit:EU-failed-restore-fetch' },
+                ],
+                executionUnitRefs: ['execution-unit:EU-failed-restore-fetch'],
+                verificationRefs: ['verification:failed-restore'],
+                failureSignatures: [],
+                genericAttributionLayer: 'external-dependency',
+                nextStep: 'Resume from the partial bundle instead of restarting from timeline only.',
+                noHardcodeReview: {
+                  status: 'pass',
+                  checkedAt: now,
+                  generalityStatement: 'Browser smoke fixture uses generic failed run refs and recovery actions.',
+                  prohibitedMatches: [],
+                },
+                updatedAt: now,
+              },
+            },
+          },
+          objectReferences: [{
+            id: 'object-failed-restore-run',
+            title: 'Failed restore run',
+            kind: 'run',
+            ref: 'run:run-browser-failed-restore',
+            runId: 'run-browser-failed-restore',
+            status: 'available',
+            summary: 'Recoverable failed run with durable refs.',
+          }],
+        }],
+        uiManifest: [],
+        claims: [],
+        executionUnits: [{
+          id: 'EU-failed-restore-fetch',
+          tool: 'workspace.fetch-papers',
+          params: 'limit=4',
+          status: 'repair-needed',
+          hash: 'failed-restore-fetch',
+          outputRef: 'file:.sciforge/task-results/failed-restore.bundle.json',
+          stdoutRef: 'file:.sciforge/logs/failed-restore.stdout.log',
+          stderrRef: 'file:.sciforge/logs/failed-restore.stderr.log',
+          failureReason: 'PDF fetch timed out after writing partial refs.',
+          recoverActions: ['resume failed run with retained refs'],
+          nextStep: 'Resume from partial PDF metadata and evidence bundle.',
+          time: now,
+        }],
+        artifacts: [{
+          id: 'failed-restore-partial-report',
+          type: 'research-report',
+          producerScenario: 'literature-evidence-review',
+          schemaVersion: '1',
+          metadata: { title: 'Failed restore partial report', status: 'partial', runId: 'run-browser-failed-restore' },
+          data: {
+            markdown: '# Failed restore partial report\n\nPartial refs remain available after refresh.',
+          },
+        }],
+        notebook: [],
+        versions: [],
+        hiddenResultSlotIds: [],
+        updatedAt: now,
+      },
+    },
+    archivedSessions: [],
+    alignmentContracts: [],
+    timelineEvents: [browserSmokeTimelineEvent()],
+    updatedAt: now,
+  };
+}
+
 export function browserSmokeScenarioPackage() {
   const pkg = buildBuiltInScenarioPackage('biomedical-knowledge-graph', '2026-04-25T00:00:00.000Z');
   return {
@@ -428,8 +546,8 @@ export function browserSmokeScenarioPackage() {
 export function browserExecutablePath() {
   const candidates = [
     process.env.SCIFORGE_BROWSER_EXECUTABLE,
+    ...playwrightChromiumCandidates(),
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
     '/Applications/Chromium.app/Contents/MacOS/Chromium',
     '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
   ].filter((value): value is string => Boolean(value));
@@ -437,6 +555,21 @@ export function browserExecutablePath() {
     if (existsSync(candidate)) return candidate;
   }
   throw new Error('No Chromium-compatible browser found. Set SCIFORGE_BROWSER_EXECUTABLE to run browser smoke.');
+}
+
+function playwrightChromiumCandidates() {
+  const home = process.env.HOME;
+  if (!home) return [];
+  const cacheDir = `${home}/Library/Caches/ms-playwright`;
+  try {
+    return readdirSync(cacheDir)
+      .filter((entry) => /^chromium-\d+$/.test(entry))
+      .sort()
+      .reverse()
+      .map((entry) => `${cacheDir}/${entry}/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`);
+  } catch {
+    return [];
+  }
 }
 
 function browserSmokePdb() {

@@ -27,6 +27,13 @@ import { selectedComponentIdsForRequest } from './gateway-request.js';
 import { recordCapabilityEvolutionRuntimeEvent } from './capability-evolution-events.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import {
+  evaluateGeneratedTaskPayloadPreflight,
+  generatedTaskPayloadPreflightForTaskInput,
+  generatedTaskPayloadPreflightFailureReason,
+  generatedTaskPayloadPreflightRecoverActions,
+  type GeneratedTaskPayloadPreflightReport,
+} from './generated-task-payload-preflight.js';
+import {
   attachValidationRepairAuditChainToPayload,
   createValidationRepairAuditChain,
 } from './validation-repair-audit-bridge.js';
@@ -49,6 +56,12 @@ export type {
 export type {
   GeneratedTaskGuardFinding,
 } from './generated-task-validation-guard.js';
+export {
+  evaluateGeneratedTaskPayloadPreflight,
+  generatedTaskPayloadPreflightFailureReason,
+  generatedTaskPayloadPreflightRecoverActions,
+  type GeneratedTaskPayloadPreflightReport,
+} from './generated-task-payload-preflight.js';
 
 type RepairAttemptRunner = (params: {
   request: GatewayRequest;
@@ -150,6 +163,7 @@ export interface GeneratedTaskRunInputLifecycleInput {
   skill: SkillAvailability;
   generatedInputRels: string[];
   expectedArtifacts: string[];
+  payloadPreflight?: GeneratedTaskPayloadPreflightReport;
 }
 
 export interface GeneratedTaskRunInputLifecycle {
@@ -306,7 +320,7 @@ export function assessGeneratedTaskValidationLifecycle(
 export async function appendGeneratedTaskAttemptLifecycle(
   input: GeneratedTaskAttemptLifecycleInput,
 ) {
-  await appendTaskAttempt(input.workspacePath, taskAttemptWithBudgetDebitRefs({
+  const recordWithPartialRefs = taskAttemptWithWorkEvidenceRefs({
     id: input.taskId,
     prompt: input.request.prompt,
     skillDomain: input.request.skillDomain,
@@ -326,7 +340,12 @@ export async function appendGeneratedTaskAttemptLifecycle(
     workEvidenceSummary: input.workEvidenceSummary,
     failureReason: input.failureReason,
     createdAt: new Date().toISOString(),
-  }, input.budgetDebitRefs, input.budgetDebitAuditRefs));
+  });
+  await appendTaskAttempt(input.workspacePath, taskAttemptWithBudgetDebitRefs(
+    recordWithPartialRefs,
+    input.budgetDebitRefs,
+    input.budgetDebitAuditRefs,
+  ));
 }
 
 export async function runGeneratedTaskRepairAttemptLifecycle(
@@ -502,6 +521,9 @@ export async function buildGeneratedTaskRunInputLifecycle(
       priorAttempts,
       expectedArtifacts: input.expectedArtifacts,
       selectedComponentIds: selectedComponentIdsForRequest(input.request),
+      generatedTaskPayloadPreflight: input.payloadPreflight
+        ? generatedTaskPayloadPreflightForTaskInput(input.payloadPreflight)
+        : undefined,
     },
     retentionProtectedInputRels: input.generatedInputRels,
   };
@@ -746,6 +768,23 @@ function taskAttemptWithBudgetDebitRefs(
       budgetDebitAudit: uniqueStrings([
         ...toStringList(isRecord(current.refs) ? current.refs.budgetDebitAudit : undefined),
         ...auditRefs,
+      ]),
+    },
+  } as TaskAttemptRecord;
+}
+
+function taskAttemptWithWorkEvidenceRefs(record: TaskAttemptRecord): TaskAttemptRecord {
+  const refs = uniqueStrings((record.workEvidenceSummary?.items ?? [])
+    .flatMap((item) => toStringList(item.evidenceRefs)));
+  if (!refs.length) return record;
+  const current = record as TaskAttemptRecord & { refs?: Record<string, unknown> };
+  return {
+    ...record,
+    refs: {
+      ...(isRecord(current.refs) ? current.refs : {}),
+      partialArtifactRefs: uniqueStrings([
+        ...toStringList(isRecord(current.refs) ? current.refs.partialArtifactRefs : undefined),
+        ...refs,
       ]),
     },
   } as TaskAttemptRecord;
