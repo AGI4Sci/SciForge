@@ -10,6 +10,7 @@ import {
   attachIntentFirstVerification,
   buildIntentMatchCheck,
   buildVerifyJobs,
+  runBackgroundWorkVerify,
   verifyRoutingDecision,
 } from './intent-first-verification.js';
 
@@ -83,6 +84,101 @@ test('skip route records an intent-only verification job instead of heavy checks
   assert.equal(envelope?.routing?.mode, 'skip');
   assert.equal(envelope?.routing?.level, 'intent');
   assert.equal(envelope?.jobs?.[0]?.status, 'skipped');
+});
+
+test('background work verify completes lightweight jobs and emits lineage event', () => {
+  const events: unknown[] = [];
+  const routing = verifyRoutingDecision(baseRequest({ prompt: '修改报告文件，后台验证即可。' }));
+  const jobs = buildVerifyJobs(basePayload(), routing);
+  const result = runBackgroundWorkVerify(basePayload(), baseRequest({
+    prompt: '修改报告文件，后台验证即可。',
+    uiState: { sessionId: 'session-verify', activeRunId: 'run-verify' },
+  }), jobs, routing, {
+    callbacks: { onEvent: (event) => events.push(event) },
+    now: () => '2026-05-12T00:00:00.000Z',
+  });
+
+  assert.equal(result.jobs[0]?.status, 'passed');
+  assert.equal(result.verdicts[0]?.verdict, 'passed');
+  assert.equal(result.lineage[0]?.verdictRef, `verification:${result.jobs[0]?.id}`);
+  assert.equal(result.lineage[0]?.eventRef, `run:run-verify#${result.jobs[0]?.id}`);
+  const raw = (events[0] as { raw?: { contract?: string; status?: string; verificationResults?: Array<{ verdict?: string }> } }).raw;
+  assert.equal(raw?.contract, 'sciforge.background-completion.v1');
+  assert.equal(raw?.status, 'completed');
+  assert.equal(raw?.verificationResults?.[0]?.verdict, 'pass');
+});
+
+test('background work verify failure returns follow-up instead of silently passing', () => {
+  const events: unknown[] = [];
+  const payload = basePayload({
+    executionUnits: [{
+      id: 'unit-failed',
+      tool: 'sciforge.work',
+      status: 'failed-with-reason',
+      outputRef: 'file:.sciforge/task-results/result.json',
+      failureReason: 'schema validation failed',
+    }],
+  });
+  const routing = verifyRoutingDecision(baseRequest({ prompt: '实现这个改动。' }));
+  const jobs = buildVerifyJobs(payload, routing);
+  const result = runBackgroundWorkVerify(payload, baseRequest({
+    prompt: '实现这个改动。',
+    uiState: { sessionId: 'session-verify', activeRunId: 'run-verify-fail' },
+  }), jobs, routing, {
+    callbacks: { onEvent: (event) => events.push(event) },
+    now: () => '2026-05-12T00:00:00.000Z',
+  });
+
+  assert.equal(result.jobs[0]?.status, 'failed');
+  assert.equal(result.verdicts[0]?.verdict, 'failed');
+  assert.match(result.verdicts[0]?.failureSummary ?? '', /schema validation failed/);
+  assert.equal(result.lineage[0]?.followUpRequired, true);
+  const raw = (events[0] as {
+    raw?: {
+      status?: string;
+      failureReason?: string;
+      recoverActions?: string[];
+      workEvidence?: Array<{ status?: string; failureReason?: string }>;
+    };
+  }).raw;
+  assert.equal(raw?.status, 'failed');
+  assert.equal(raw?.failureReason, 'schema validation failed');
+  assert.match(raw?.recoverActions?.[0] ?? '', /unit-failed/);
+  assert.equal(raw?.workEvidence?.[0]?.status, 'failed-with-reason');
+});
+
+test('attach can run sidecar work verify and expose passed or failed status in display intent', () => {
+  const passed = attachIntentFirstVerification(basePayload(), baseRequest({
+    prompt: '修改报告文件，后台验证即可。',
+  }), { runWorkVerify: true, now: () => '2026-05-12T00:00:00.000Z' });
+  const passedStatus = passed.displayIntent?.verificationStatus as Record<string, unknown> | undefined;
+  const passedEnvelope = passed.displayIntent?.intentFirstVerification as {
+    jobs?: Array<{ status?: string }>;
+    verdicts?: Array<{ verdict?: string }>;
+    lineage?: Array<{ verdictRef?: string }>;
+  } | undefined;
+
+  assert.equal(passedStatus?.work, 'verify passed');
+  assert.equal(passedEnvelope?.jobs?.[0]?.status, 'passed');
+  assert.equal(passedEnvelope?.verdicts?.[0]?.verdict, 'passed');
+  assert.equal(typeof passedEnvelope?.lineage?.[0]?.verdictRef, 'string');
+
+  const failed = attachIntentFirstVerification(basePayload({
+    executionUnits: [{
+      id: 'unit-failed',
+      tool: 'sciforge.work',
+      status: 'failed',
+      outputRef: 'file:.sciforge/task-results/result.json',
+    }],
+  }), baseRequest({ prompt: '实现这个改动。' }), { runWorkVerify: true });
+  const failedStatus = failed.displayIntent?.verificationStatus as Record<string, unknown> | undefined;
+
+  assert.equal(failedStatus?.work, 'verify failed');
+  assert.equal(failed.workEvidence?.some((entry) =>
+    entry.provider === INTENT_FIRST_VERIFY_PROVIDER
+    && entry.status === 'failed-with-reason'
+    && entry.recoverActions.length > 0
+  ), true);
 });
 
 function baseRequest(overrides: Partial<GatewayRequest> = {}): GatewayRequest {

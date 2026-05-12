@@ -35,6 +35,8 @@ test('aggregates event timeline speed, waits, lifecycle, refs, and quality signa
   assert.equal(summary.firstBackendEventMs, 180);
   assert.equal(summary.waits.compactionWaitMs, 60);
   assert.equal(summary.waits.verificationWaitMs, 30);
+  assert.equal(summary.verify.eventCount, 1);
+  assert.equal(summary.verify.latencyMs, 30);
   assert.equal(summary.failureCount, 1);
   assert.equal(summary.recoveryEventCount, 1);
   assert.equal(summary.lifecycle.resumeCount, 1);
@@ -43,6 +45,51 @@ test('aggregates event timeline speed, waits, lifecycle, refs, and quality signa
   assert.equal(summary.evidenceRefCount, 2);
   assert.equal(summary.tokenUsage.total, 14);
   assert.ok(summary.qualityScore > 0.6);
+});
+
+test('tracks intent-first and background work verify metrics independently from default latency', () => {
+  const summary = aggregateComplexDialogueTimeline([
+    event('user', 'user-turn', 'user', 0),
+    event('verify-blocking', 'verification', 'verification', 20, {
+      durationMs: 15,
+      status: 'completed',
+      raw: {
+        routing: { blockingPolicy: 'user-requested-wait' },
+        verdict: 'passed',
+      },
+    }),
+    event('verify-background-fail', 'background-stage-update', 'background', 40, {
+      status: 'failed',
+      phase: 'verify-job-1',
+      refs: ['verify-job:verify-job-1'],
+      raw: {
+        schemaVersion: 'sciforge.intent-first-verification.v1',
+        createdAt: '2026-05-12T00:00:00.000Z',
+        completedAt: '2026-05-12T00:00:00.025Z',
+        verificationResults: [{ id: 'verify-job-1', verdict: 'fail' }],
+        recoverActions: ['Repair failed execution unit and rerun background verification.'],
+      },
+    }),
+    event('verify-background-pass', 'background-stage-update', 'background', 80, {
+      status: 'completed',
+      phase: 'verify-job-2',
+      raw: {
+        schemaVersion: 'sciforge.intent-first-verification.v1',
+        createdAt: '2026-05-12T00:00:00.030Z',
+        completedAt: '2026-05-12T00:00:00.050Z',
+        verificationResults: [{ id: 'verify-job-2', verdict: 'pass' }],
+      },
+    }),
+  ]);
+
+  assert.equal(summary.verify.eventCount, 3);
+  assert.equal(summary.verify.blockingCount, 1);
+  assert.equal(summary.verify.blockingRate, 0.3333);
+  assert.equal(summary.verify.backgroundCount, 2);
+  assert.equal(summary.verify.backgroundFailedCount, 1);
+  assert.equal(summary.verify.backgroundFailureRecoveredCount, 1);
+  assert.equal(summary.verify.backgroundFailureRecoveryRate, 1);
+  assert.equal(summary.verify.latencyMs, 60);
 });
 
 test('evaluates performance gates as pure pass/fail findings', () => {
@@ -58,6 +105,8 @@ test('evaluates performance gates as pure pass/fail findings', () => {
     gates: {
       maxFirstVisibleMs: 500,
       maxTotalDurationMs: 1500,
+      maxBlockingVerifyRate: 0,
+      minBackgroundVerifyFailureRecoveryRate: 1,
       minProgressEventCount: 1,
       minQualityScore: 0.5,
     },
@@ -66,6 +115,8 @@ test('evaluates performance gates as pure pass/fail findings', () => {
   assert.equal(report.gateEvaluation?.passed, false);
   assert.ok(report.gateEvaluation?.results.some((result) => result.name === 'maxFirstVisibleMs' && !result.passed));
   assert.ok(report.gateEvaluation?.results.some((result) => result.name === 'maxTotalDurationMs' && result.passed));
+  assert.ok(report.gateEvaluation?.results.some((result) => result.name === 'maxBlockingVerifyRate' && result.passed));
+  assert.ok(report.gateEvaluation?.results.some((result) => result.name === 'minBackgroundVerifyFailureRecoveryRate' && result.passed));
 
   const direct = evaluateComplexDialoguePerformanceGates(report.timeline.summary, { maxFirstVisibleMs: 1000 });
   assert.equal(direct.passed, true);

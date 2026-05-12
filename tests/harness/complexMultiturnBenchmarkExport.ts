@@ -38,6 +38,9 @@ export interface ComplexMultiturnReplayAggregateSummary {
   totalEventCount: number;
   totalFailureCount: number;
   totalRecoveryEventCount: number;
+  verifyLatencyMs: number;
+  blockingVerifyRate: number;
+  backgroundVerifyFailureRecoveryRate: number;
   aggregateTimeline: ComplexDialogueTimelineSummary;
 }
 
@@ -51,6 +54,9 @@ export interface ComplexMultiturnBenchmarkFixtureSummary {
   recoveryEventCount: number;
   qualityScore: number;
   firstVisibleResponseMs?: number;
+  verifyLatencyMs: number;
+  blockingVerifyRate: number;
+  backgroundVerifyFailureRecoveryRate: number;
   gatePassed: boolean;
   missingRequiredEvents: string[];
   metrics: ComplexMultiturnReplayResult['metrics'];
@@ -72,6 +78,8 @@ export function buildComplexMultiturnBenchmarkExport(
     gates: {
       maxRepeatedWorkCount: 0,
       maxFailureCount: contractSummary.totalFailureInjections,
+      maxBlockingVerifyRate: 0,
+      minBackgroundVerifyFailureRecoveryRate: 1,
       minProgressEventCount: contractSummary.totalTurns,
       minRecoveryEventCount: contractSummary.totalFailureInjections,
       minLifecycleRecoveryRate: 0.95,
@@ -130,6 +138,9 @@ function summaryForReplayResult(result: ComplexMultiturnReplayResult): ComplexMu
     recoveryEventCount: summary.recoveryEventCount,
     qualityScore: summary.qualityScore,
     firstVisibleResponseMs: summary.firstVisibleResponseMs,
+    verifyLatencyMs: summary.verify.latencyMs,
+    blockingVerifyRate: summary.verify.blockingRate,
+    backgroundVerifyFailureRecoveryRate: summary.verify.backgroundFailureRecoveryRate,
     gatePassed: result.report.gateEvaluation?.passed === true,
     missingRequiredEvents: result.coverage.missingRequiredEvents,
     metrics: result.metrics,

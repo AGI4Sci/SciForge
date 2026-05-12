@@ -33,6 +33,9 @@ export interface ComplexMultiturnReplayResult {
     resumeCorrectness: boolean;
     historyMutationCorrectness: boolean;
     sideEffectDuplicationPrevented: boolean;
+    verifyLatencyMs: number;
+    blockingVerifyRate: number;
+    backgroundVerifyFailureRecoveryRate: number;
   };
   coverage: {
     requiredEventCount: number;
@@ -102,6 +105,9 @@ export function replayComplexMultiturnFixture(
       resumeCorrectness: fixture.tier !== 'lifecycle' || events.some((event) => event.type === 'resume-preflight'),
       historyMutationCorrectness: fixture.historyMutation.mode === 'none' || events.some((event) => event.type === 'history-branch-record'),
       sideEffectDuplicationPrevented: fixture.failureInjections.every((failure) => failure.shouldAvoidDuplicateSideEffect),
+      verifyLatencyMs: report.timeline.summary.verify.latencyMs,
+      blockingVerifyRate: report.timeline.summary.verify.blockingRate,
+      backgroundVerifyFailureRecoveryRate: report.timeline.summary.verify.backgroundFailureRecoveryRate,
     },
     coverage: {
       requiredEventCount: fixture.replayTrace.requiredEvents.length,
@@ -151,6 +157,19 @@ export function buildComplexMultiturnTimelineEvents(fixture: ComplexMultiTurnFix
         refs: fixture.failureInjections.filter((failure) => turn.failureInjectionIds.includes(failure.id)).flatMap((failure) => failure.reusableEvidence),
         qualitySignals: { userVisible: true, recoverable: true, evidenceRefs: 1 },
       }));
+      events.push(eventForTurn(fixture, turn, 'background-work-verify-failure', 'background', base + 1950, {
+        status: 'failed',
+        phase: `verify-${turn.index}`,
+        durationMs: 50,
+        refs: turn.referencedRuns,
+        raw: {
+          schemaVersion: 'sciforge.intent-first-verification.v1',
+          routing: { blockingPolicy: 'non-blocking' },
+          verificationResults: [{ id: `verify-${turn.index}`, verdict: 'fail' }],
+          recoverActions: ['Use recovered evidence and rerun background verification.'],
+        },
+        qualitySignals: { recoverable: true, evidenceRefs: 1 },
+      }));
     }
     if (turn.markers.backgroundContinuation) {
       events.push(eventForTurn(fixture, turn, 'background-start', 'background', base + 2000, {
@@ -161,6 +180,18 @@ export function buildComplexMultiturnTimelineEvents(fixture: ComplexMultiTurnFix
         status: 'completed',
         refs: turn.referencedArtifacts,
         qualitySignals: { userVisible: true, artifactRefs: turn.referencedArtifacts.length },
+      }));
+      events.push(eventForTurn(fixture, turn, 'background-work-verify-pass', 'background', base + 3200, {
+        status: 'completed',
+        phase: `verify-${turn.index}`,
+        durationMs: 40,
+        refs: turn.referencedArtifacts,
+        raw: {
+          schemaVersion: 'sciforge.intent-first-verification.v1',
+          routing: { blockingPolicy: 'non-blocking' },
+          verificationResults: [{ id: `verify-${turn.index}`, verdict: 'pass' }],
+        },
+        qualitySignals: { evidenceRefs: 1 },
       }));
     }
     if (

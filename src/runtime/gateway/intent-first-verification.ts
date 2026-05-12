@@ -1,5 +1,6 @@
-import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
+import type { GatewayRequest, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceRuntimeEvent } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
+import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
 import {
   actionSideEffectsHaveHighRiskSignal,
   explicitIntentConstraintsForText,
@@ -9,6 +10,12 @@ import {
   type IntentRequestedActionType,
   type VerifyRouteMode,
 } from '@sciforge-ui/runtime-contract/intent-first-verification-policy';
+import {
+  BACKGROUND_COMPLETION_CONTRACT_ID,
+  WORKSPACE_RUNTIME_SOURCE,
+  type BackgroundCompletionRef,
+  type BackgroundCompletionRuntimeEvent,
+} from '@sciforge-ui/runtime-contract/events';
 
 export const INTENT_FIRST_VERIFICATION_SCHEMA_VERSION = 'sciforge.intent-first-verification.v1' as const;
 export const INTENT_MATCH_LOG_KIND = 'intent-match-check' as const;
@@ -67,34 +74,60 @@ export interface VerifyVerdict {
   recommendedFix?: string;
 }
 
+export interface VerifyLineageRecord {
+  schemaVersion: typeof INTENT_FIRST_VERIFICATION_SCHEMA_VERSION;
+  jobId: string;
+  targetRefs: string[];
+  evidenceRefs: string[];
+  verdictRef?: string;
+  eventRef?: string;
+  followUpRequired: boolean;
+}
+
 export interface IntentFirstVerificationEnvelope {
   schemaVersion: typeof INTENT_FIRST_VERIFICATION_SCHEMA_VERSION;
   intentCheck: IntentMatchCheck;
   routing: VerifyRoutingDecision;
   jobs: VerifyJob[];
   verdicts: VerifyVerdict[];
+  lineage: VerifyLineageRecord[];
 }
 
-export function attachIntentFirstVerification(payload: ToolPayload, request: GatewayRequest): ToolPayload {
+export interface IntentFirstVerificationOptions {
+  callbacks?: WorkspaceRuntimeCallbacks;
+  runWorkVerify?: boolean;
+  now?: () => string;
+}
+
+export function attachIntentFirstVerification(
+  payload: ToolPayload,
+  request: GatewayRequest,
+  options: IntentFirstVerificationOptions = {},
+): ToolPayload {
   const intentCheck = buildIntentMatchCheck(request, payload);
   const routing = verifyRoutingDecision(request);
-  const jobs = buildVerifyJobs(payload, routing);
-  const verdicts = jobs.map((job): VerifyVerdict => ({
-    schemaVersion: INTENT_FIRST_VERIFICATION_SCHEMA_VERSION,
-    jobId: job.id,
-    verdict: job.status === 'skipped' ? 'not-run' : 'pending',
-    evidenceRefs: job.evidenceRefs,
-    recommendedFix: job.recommendedFix,
-  }));
+  const initialJobs = buildVerifyJobs(payload, routing);
+  const workVerify = options.runWorkVerify || options.callbacks
+    ? runBackgroundWorkVerify(payload, request, initialJobs, routing, options)
+    : pendingWorkVerify(initialJobs);
+  const jobs = workVerify.jobs;
+  const verdicts = workVerify.verdicts;
+  const lineage = workVerify.lineage;
   const envelope: IntentFirstVerificationEnvelope = {
     schemaVersion: INTENT_FIRST_VERIFICATION_SCHEMA_VERSION,
     intentCheck,
     routing,
     jobs,
     verdicts,
+    lineage,
   };
   const hasPendingWorkVerify = jobs.some((job) => job.status === 'queued' || job.status === 'running');
+  const failedWorkVerify = jobs.find((job) => job.status === 'failed');
   const workStatus = verificationWorkStatus(jobs, routing);
+  const recoverActions = uniqueStrings([
+    ...(intentCheck.verdict === 'fail' ? ['Revise the answer to match the latest user intent before doing more work.'] : []),
+    ...jobs.map((job) => job.recommendedFix).filter((action): action is string => Boolean(action)),
+  ]);
 
   return {
     ...payload,
@@ -115,7 +148,7 @@ export function attachIntentFirstVerification(payload: ToolPayload, request: Gat
       ...(payload.workEvidence ?? []),
       {
         kind: 'other',
-        status: intentCheck.verdict === 'fail' ? 'failed-with-reason' : hasPendingWorkVerify ? 'partial' : 'success',
+        status: intentCheck.verdict === 'fail' || failedWorkVerify ? 'failed-with-reason' : hasPendingWorkVerify ? 'partial' : 'success',
         provider: INTENT_FIRST_VERIFY_PROVIDER,
         input: {
           requestedActionType: intentCheck.requestedActionType,
@@ -123,20 +156,28 @@ export function attachIntentFirstVerification(payload: ToolPayload, request: Gat
           level: routing.level,
         },
         resultCount: 1,
-        outputSummary: hasPendingWorkVerify
+        outputSummary: failedWorkVerify
+          ? failedWorkVerify.failureSummary ?? 'Background work verification found a failure that needs follow-up.'
+          : hasPendingWorkVerify
           ? 'Intent match check completed; work verification is represented as a separate pending verify job.'
           : intentCheck.verdict === 'pass'
-            ? 'Intent match check passed without requiring work verification.'
+            ? 'Intent match check passed; lightweight work verification did not find a blocking failure.'
           : `Intent match check ${intentCheck.verdict}: ${intentCheck.diagnostics.join('; ')}`,
-        evidenceRefs: jobs.flatMap((job) => job.evidenceRefs),
-        recoverActions: intentCheck.verdict === 'fail' ? ['Revise the answer to match the latest user intent before doing more work.'] : [],
+        evidenceRefs: uniqueStrings([
+          ...jobs.flatMap((job) => job.evidenceRefs),
+          ...lineage.flatMap((entry) => [entry.verdictRef, entry.eventRef]).filter((ref): ref is string => Boolean(ref)),
+        ]),
+        failureReason: failedWorkVerify?.failureSummary,
+        recoverActions,
+        nextStep: failedWorkVerify?.recommendedFix,
         diagnostics: [
           `answerCoverage=${intentCheck.answerCoverage}`,
           `overActionGuard=${intentCheck.overActionGuard}`,
           `verifyRoute=${routing.mode}`,
           `blockingPolicy=${routing.blockingPolicy}`,
+          `workVerify=${workStatus}`,
         ],
-        rawRef: `intent-match:${intentCheck.id}`,
+        rawRef: failedWorkVerify ? `verify-job:${failedWorkVerify.id}` : `intent-match:${intentCheck.id}`,
       },
     ],
     displayIntent: {
@@ -153,6 +194,8 @@ export function attachIntentFirstVerification(payload: ToolPayload, request: Gat
 }
 
 function verificationWorkStatus(jobs: VerifyJob[], routing: VerifyRoutingDecision) {
+  if (jobs.some((job) => job.status === 'failed')) return 'verify failed';
+  if (jobs.some((job) => job.status === 'passed')) return 'verify passed';
   if (jobs.some((job) => job.status === 'running') || routing.blockingPolicy !== 'non-blocking') return 'verify waiting';
   if (jobs.some((job) => job.status === 'queued')) return 'background verify queued';
   if (jobs.some((job) => job.status === 'skipped')) return 'not verified';
@@ -255,6 +298,94 @@ export function buildVerifyJobs(payload: ToolPayload, routing: VerifyRoutingDeci
   }];
 }
 
+export function pendingWorkVerify(jobs: VerifyJob[]) {
+  return {
+    jobs,
+    verdicts: jobs.map((job): VerifyVerdict => ({
+      schemaVersion: INTENT_FIRST_VERIFICATION_SCHEMA_VERSION,
+      jobId: job.id,
+      verdict: job.status === 'skipped' ? 'not-run' : 'pending',
+      evidenceRefs: job.evidenceRefs,
+      recommendedFix: job.recommendedFix,
+    })),
+    lineage: jobs.map((job): VerifyLineageRecord => ({
+      schemaVersion: INTENT_FIRST_VERIFICATION_SCHEMA_VERSION,
+      jobId: job.id,
+      targetRefs: job.targetRefs,
+      evidenceRefs: job.evidenceRefs,
+      followUpRequired: false,
+    })),
+  };
+}
+
+export function runBackgroundWorkVerify(
+  payload: ToolPayload,
+  request: GatewayRequest,
+  jobs: VerifyJob[],
+  routing: VerifyRoutingDecision,
+  options: IntentFirstVerificationOptions = {},
+) {
+  const now = options.now ?? (() => new Date().toISOString());
+  const completedAt = now();
+  const runId = verifyRunIdForRequest(request);
+  const evaluation = evaluatePayloadForWorkVerify(payload);
+  const finalJobs = jobs.map((job): VerifyJob => {
+    if (job.status === 'skipped') return job;
+    if (!job.targetRefs.length) return job;
+    return {
+      ...job,
+      status: evaluation.failureSummary ? 'failed' : 'passed',
+      failureSummary: evaluation.failureSummary,
+      recommendedFix: evaluation.failureSummary ? evaluation.recommendedFix : job.recommendedFix,
+    };
+  });
+  const verdicts = finalJobs.map((job): VerifyVerdict => {
+    const verdict = job.status === 'skipped'
+      ? 'not-run'
+      : job.status === 'failed'
+        ? 'failed'
+        : job.status === 'passed'
+          ? 'passed'
+          : 'pending';
+    return {
+      schemaVersion: INTENT_FIRST_VERIFICATION_SCHEMA_VERSION,
+      jobId: job.id,
+      verdict,
+      evidenceRefs: job.evidenceRefs,
+      failureSummary: job.failureSummary,
+      recommendedFix: job.recommendedFix,
+    };
+  });
+  const lineage = finalJobs.map((job): VerifyLineageRecord => {
+    const verdictRef = job.status === 'passed' || job.status === 'failed' ? `verification:${job.id}` : undefined;
+    const eventRef = verdictRef ? `run:${runId}#${job.id}` : undefined;
+    return {
+      schemaVersion: INTENT_FIRST_VERIFICATION_SCHEMA_VERSION,
+      jobId: job.id,
+      targetRefs: job.targetRefs,
+      evidenceRefs: job.evidenceRefs,
+      verdictRef,
+      eventRef,
+      followUpRequired: job.status === 'failed',
+    };
+  });
+
+  for (const job of finalJobs) {
+    if (job.status !== 'passed' && job.status !== 'failed') continue;
+    emitBackgroundWorkVerifyEvent({
+      callbacks: options.callbacks,
+      completedAt,
+      job,
+      request,
+      routing,
+      runId,
+      verdict: verdicts.find((entry) => entry.jobId === job.id),
+    });
+  }
+
+  return { jobs: finalJobs, verdicts, lineage };
+}
+
 function latestIntentText(request: GatewayRequest) {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const currentPrompt = stringField(uiState.currentPrompt);
@@ -319,6 +450,177 @@ function targetRefsForPayload(payload: ToolPayload) {
   ]);
 }
 
+function evaluatePayloadForWorkVerify(payload: ToolPayload) {
+  const failedExecutionUnit = toRecordList(payload.executionUnits).find((unit) => {
+    const status = stringField(unit.status)?.toLowerCase();
+    const exitCode = typeof unit.exitCode === 'number' ? unit.exitCode : undefined;
+    return status === 'failed'
+      || status === 'failed-with-reason'
+      || status === 'repair-needed'
+      || status === 'needs-human'
+      || (exitCode !== undefined && exitCode !== 0);
+  });
+  if (failedExecutionUnit) {
+    const unitId = stringField(failedExecutionUnit.id) ?? 'execution-unit';
+    const reason = stringField(failedExecutionUnit.failureReason)
+      ?? stringField(failedExecutionUnit.error)
+      ?? `Execution unit ${unitId} did not complete successfully.`;
+    return {
+      failureSummary: reason,
+      recommendedFix: `Inspect ${unitId}, repair the failed work, and rerun background verification.`,
+    };
+  }
+
+  const failedWorkEvidence = payload.workEvidence?.find((entry) =>
+    ['failed', 'failed-with-reason', 'repair-needed'].includes(String(entry.status || '').toLowerCase())
+  );
+  if (failedWorkEvidence) {
+    return {
+      failureSummary: failedWorkEvidence.failureReason ?? failedWorkEvidence.outputSummary ?? 'Work evidence reports a failure.',
+      recommendedFix: failedWorkEvidence.nextStep ?? failedWorkEvidence.recoverActions[0] ?? 'Repair the failed evidence source and rerun background verification.',
+    };
+  }
+
+  const failedVerification = payload.verificationResults?.find((result) => result.verdict === 'fail' || result.verdict === 'needs-human');
+  if (failedVerification) {
+    return {
+      failureSummary: failedVerification.critique ?? `Verification result ${failedVerification.id ?? 'unknown'} did not pass.`,
+      recommendedFix: failedVerification.repairHints[0] ?? 'Address the verification failure and rerun the verifier.',
+    };
+  }
+
+  return {};
+}
+
+function emitBackgroundWorkVerifyEvent(input: {
+  callbacks?: WorkspaceRuntimeCallbacks;
+  completedAt: string;
+  job: VerifyJob;
+  request: GatewayRequest;
+  routing: VerifyRoutingDecision;
+  runId: string;
+  verdict?: VerifyVerdict;
+}) {
+  const event = backgroundWorkVerifyEvent(input);
+  emitWorkspaceRuntimeEvent(input.callbacks, {
+    type: event.type,
+    source: WORKSPACE_RUNTIME_SOURCE,
+    status: event.status,
+    message: event.message,
+    detail: event.failureReason ?? event.nextStep ?? event.finalResponse,
+    workEvidence: event.workEvidence as WorkspaceRuntimeEvent['workEvidence'],
+    raw: event,
+  });
+}
+
+function backgroundWorkVerifyEvent(input: {
+  completedAt: string;
+  job: VerifyJob;
+  request: GatewayRequest;
+  routing: VerifyRoutingDecision;
+  runId: string;
+  verdict?: VerifyVerdict;
+}): BackgroundCompletionRuntimeEvent {
+  const failed = input.job.status === 'failed';
+  const verificationId = input.job.id;
+  const evidenceRefs = input.verdict?.evidenceRefs ?? input.job.evidenceRefs;
+  const status = failed ? 'failed' : 'completed';
+  const failureReason = input.job.failureSummary;
+  const nextStep = input.job.recommendedFix;
+  const backgroundEvent: BackgroundCompletionRuntimeEvent = {
+    contract: BACKGROUND_COMPLETION_CONTRACT_ID,
+    type: 'background-stage-update',
+    runId: input.runId,
+    stageId: input.job.id,
+    ref: `run:${input.runId}#${input.job.id}`,
+    status,
+    prompt: latestIntentText(input.request),
+    message: failed
+      ? 'Background work verification found a repairable failure.'
+      : 'Background work verification completed without finding a blocking failure.',
+    finalResponse: failed ? undefined : 'Background work verification passed.',
+    createdAt: input.completedAt,
+    completedAt: input.completedAt,
+    failureReason,
+    recoverActions: nextStep ? [nextStep] : [],
+    nextStep,
+    refs: backgroundRefsForJob(input.job, input.runId),
+    verificationResults: [{
+      id: verificationId,
+      verdict: failed ? 'fail' : 'pass',
+      confidence: failed ? 0.9 : 0.72,
+      critique: failureReason ?? 'Lightweight background work verification found target refs and no failed execution evidence.',
+      evidenceRefs,
+      repairHints: nextStep ? [nextStep] : [],
+      diagnostics: {
+        schemaVersion: INTENT_FIRST_VERIFICATION_SCHEMA_VERSION,
+        route: input.routing.mode,
+        level: input.routing.level,
+        blockingPolicy: input.routing.blockingPolicy,
+      },
+    }],
+    workEvidence: [{
+      kind: 'validate',
+      id: `work-evidence-${verificationId}`,
+      status: failed ? 'failed-with-reason' : 'success',
+      provider: INTENT_FIRST_VERIFY_PROVIDER,
+      input: {
+        jobId: input.job.id,
+        level: input.job.level,
+        scope: input.job.scope,
+      },
+      resultCount: evidenceRefs.length,
+      outputSummary: failureReason ?? 'Background work verification completed.',
+      failureReason,
+      evidenceRefs,
+      recoverActions: nextStep ? [nextStep] : [],
+      nextStep,
+      diagnostics: [
+        `jobStatus=${input.job.status}`,
+        `blockingPolicy=${input.job.blockingPolicy}`,
+      ],
+      rawRef: `verify-job:${input.job.id}`,
+    }],
+    raw: {
+      schemaVersion: INTENT_FIRST_VERIFICATION_SCHEMA_VERSION,
+      routing: input.routing,
+      job: input.job,
+      verdict: input.verdict,
+    },
+  };
+  return backgroundEvent;
+}
+
+function backgroundRefsForJob(job: VerifyJob, runId: string): BackgroundCompletionRef[] {
+  return [
+    { ref: `verify-job:${job.id}`, kind: 'verification', runId, stageId: job.id, title: `Verify job ${job.id}` },
+    ...job.targetRefs.map((ref): BackgroundCompletionRef => ({
+      ref,
+      kind: refKind(ref),
+      runId,
+      stageId: job.id,
+    })),
+  ];
+}
+
+function refKind(ref: string): BackgroundCompletionRef['kind'] {
+  if (ref.startsWith('artifact:')) return 'artifact';
+  if (ref.startsWith('execution-unit:')) return 'execution-unit';
+  if (ref.startsWith('file:') || ref.startsWith('.')) return 'file';
+  if (ref.startsWith('http://') || ref.startsWith('https://')) return 'url';
+  if (ref.startsWith('work-evidence:')) return 'work-evidence';
+  if (ref.startsWith('verification:')) return 'verification';
+  return 'file';
+}
+
+function verifyRunIdForRequest(request: GatewayRequest) {
+  const uiState = isRecord(request.uiState) ? request.uiState : {};
+  return stringField(uiState.activeRunId)
+    ?? stringField(uiState.runId)
+    ?? (stringField(uiState.sessionId) ? `verify-${stringField(uiState.sessionId)}` : undefined)
+    ?? stableId('verify-run', latestIntentText(request) || request.skillDomain);
+}
+
 function refsFromRecord(value: unknown) {
   if (!isRecord(value)) return [];
   return ['ref', 'dataRef', 'path', 'outputRef', 'stdoutRef', 'stderrRef', 'rawRef']
@@ -338,4 +640,8 @@ function uniqueStrings(values: string[]) {
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function toRecordList(value: unknown) {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
 }

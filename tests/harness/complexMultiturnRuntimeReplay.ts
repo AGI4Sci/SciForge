@@ -23,6 +23,9 @@ export interface ComplexMultiturnRuntimeReplayMetrics {
   historyMutationCorrectness: boolean;
   recoverySuccess: boolean;
   sideEffectDuplicationPrevented: boolean;
+  verifyLatencyMs: number;
+  blockingVerifyRate: number;
+  backgroundVerifyFailureRecoveryRate: number;
 }
 
 export interface ComplexMultiturnRuntimeReplaySummary {
@@ -40,6 +43,9 @@ export interface ComplexMultiturnRuntimeReplaySummary {
   resumeCount: number;
   historyMutationCount: number;
   lifecycleRecoveryRate: number;
+  verifyLatencyMs: number;
+  blockingVerifyRate: number;
+  backgroundVerifyFailureRecoveryRate: number;
   metrics: ComplexMultiturnRuntimeReplayMetrics;
 }
 
@@ -227,6 +233,9 @@ function runtimeReplaySummary(
     resumeCount: summary.lifecycle.resumeCount,
     historyMutationCount: summary.lifecycle.historyEditCount + summary.lifecycle.revertCount + summary.lifecycle.branchCount + summary.lifecycle.mergeCount,
     lifecycleRecoveryRate: summary.lifecycle.lifecycleRecoveryRate,
+    verifyLatencyMs: summary.verify.latencyMs,
+    blockingVerifyRate: summary.verify.blockingRate,
+    backgroundVerifyFailureRecoveryRate: summary.verify.backgroundFailureRecoveryRate,
     metrics,
   };
 }
@@ -243,6 +252,9 @@ function runtimeReplayMetrics(
     historyMutationCorrectness: coverage.historyBranchRecordSeen,
     recoverySuccess: report.timeline.summary.failureCount === 0 || (report.timeline.summary.recoveryEventCount > 0 && coverage.recoveryPlanSeen),
     sideEffectDuplicationPrevented: report.timeline.summary.repeatedWorkCount === 0 && hasSideEffectBoundary(events) && !hasActualDuplicateSideEffect(events),
+    verifyLatencyMs: report.timeline.summary.verify.latencyMs,
+    blockingVerifyRate: report.timeline.summary.verify.blockingRate,
+    backgroundVerifyFailureRecoveryRate: report.timeline.summary.verify.backgroundFailureRecoveryRate,
   };
 }
 
@@ -308,6 +320,8 @@ function defaultRuntimeReplayGates(events: ComplexDialogueTimelineEvent[]): Comp
     maxFirstVisibleMs: 1500,
     maxRepeatedWorkCount: 0,
     maxFailureCount: summaryFailureCount,
+    maxBlockingVerifyRate: 0,
+    minBackgroundVerifyFailureRecoveryRate: 1,
     minProgressEventCount: 1,
     minRecoveryEventCount: summaryFailureCount ? 1 : undefined,
     minLifecycleRecoveryRate: 0.5,

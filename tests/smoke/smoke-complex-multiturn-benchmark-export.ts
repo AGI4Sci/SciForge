@@ -43,6 +43,8 @@ assert.equal(gateEvaluation.passed, true);
 assert.deepEqual(report.aggregateReport.gates, {
   maxRepeatedWorkCount: 0,
   maxFailureCount: report.contractSummary.totalFailureInjections,
+  maxBlockingVerifyRate: 0,
+  minBackgroundVerifyFailureRecoveryRate: 1,
   minProgressEventCount: 620,
   minRecoveryEventCount: report.contractSummary.totalFailureInjections,
   minLifecycleRecoveryRate: 0.95,
@@ -53,6 +55,8 @@ const gatesByName = new Map(gateEvaluation.results.map((gate) => [gate.name, gat
 for (const gateName of [
   'maxRepeatedWorkCount',
   'maxFailureCount',
+  'maxBlockingVerifyRate',
+  'minBackgroundVerifyFailureRecoveryRate',
   'minProgressEventCount',
   'minRecoveryEventCount',
   'minLifecycleRecoveryRate',
@@ -66,12 +70,17 @@ for (const gateName of [
 assert.equal(gatesByName.get('minProgressEventCount')?.actual, 620);
 assert.equal(gatesByName.get('minRecoveryEventCount')?.actual, report.contractSummary.totalFailureInjections);
 assert.equal(gatesByName.get('minLifecycleRecoveryRate')?.actual, aggregateSummary.lifecycle.lifecycleRecoveryRate);
+assert.equal(gatesByName.get('maxBlockingVerifyRate')?.actual, aggregateSummary.verify.blockingRate);
+assert.equal(gatesByName.get('minBackgroundVerifyFailureRecoveryRate')?.actual, aggregateSummary.verify.backgroundFailureRecoveryRate);
 
 assert.equal(aggregateSummary.turnCount, 620);
 assert.equal(aggregateSummary.progressEventCount, 620);
 assert.equal(aggregateSummary.repeatedWorkCount, 0);
 assert.equal(aggregateSummary.failureCount, report.contractSummary.totalFailureInjections);
 assert.equal(aggregateSummary.recoveryEventCount, report.contractSummary.totalFailureInjections);
+assert.ok(aggregateSummary.verify.latencyMs > 0, 'verify metrics should include sidecar verify latency');
+assert.equal(aggregateSummary.verify.blockingRate, 0);
+assert.equal(aggregateSummary.verify.backgroundFailureRecoveryRate, 1);
 assert.ok(aggregateSummary.lifecycle.resumeCount > 0, 'lifecycle metrics should include resume events');
 assert.ok(aggregateSummary.lifecycle.historyEditCount > 0, 'lifecycle metrics should include history edits');
 assert.ok(aggregateSummary.lifecycle.branchCount > 0, 'lifecycle metrics should include branches');
@@ -82,6 +91,8 @@ assert.ok(report.fixtureSummaries.every((fixture) => fixture.gatePassed));
 assert.ok(report.fixtureSummaries.every((fixture) => fixture.metrics.recoverySuccess));
 assert.ok(report.fixtureSummaries.every((fixture) => fixture.metrics.artifactReferenceAccuracy));
 assert.ok(report.fixtureSummaries.every((fixture) => fixture.metrics.sideEffectDuplicationPrevented));
+assert.ok(report.fixtureSummaries.every((fixture) => fixture.metrics.blockingVerifyRate === 0));
+assert.ok(report.fixtureSummaries.every((fixture) => fixture.metrics.backgroundVerifyFailureRecoveryRate === 1));
 assert.ok(report.fixtureSummaries.some((fixture) => fixture.tier === 'lifecycle' && fixture.metrics.resumeCorrectness));
 assert.ok(report.fixtureSummaries.some((fixture) => fixture.metrics.historyMutationCorrectness));
 assert.ok(report.fixtureSummaries.filter((fixture) => fixture.recoveryEventCount > 0).length > 50);

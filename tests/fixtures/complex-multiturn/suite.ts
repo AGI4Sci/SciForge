@@ -522,7 +522,7 @@ function replayTrace(fixtureId: string, tier: ComplexFixtureTier, outcomes: Succ
   if (outcomes.includes('background-revision') || tier === 'twenty-turn') events.push('background-start', 'background-revision');
   if (tier === 'lifecycle' || tier === 'twenty-turn') events.push('resume-preflight');
   if (outcomes.some((outcome) => ['revert', 'continue', 'branch', 'merge'].includes(outcome))) events.push('history-branch-record');
-  const metrics: ComplexMultiTurnFixture['replayTrace']['requiredMetrics'] = ['firstReadableMs', 'turnCompletionMs', 'redundantWorkRate', 'recoverySuccess', 'artifactReferenceAccuracy', 'resumeCorrectness', 'historyMutationCorrectness', 'sideEffectDuplicationRate'];
+  const metrics: ComplexMultiTurnFixture['replayTrace']['requiredMetrics'] = ['firstReadableMs', 'turnCompletionMs', 'redundantWorkRate', 'recoverySuccess', 'artifactReferenceAccuracy', 'resumeCorrectness', 'historyMutationCorrectness', 'sideEffectDuplicationRate', 'verifyLatencyMs', 'blockingVerifyRate', 'backgroundVerifyFailureRecoveryRate'];
   return {
     requiredEvents: [...new Set(events)],
     requiredArtifacts: [`artifact:${fixtureId}:primary`, `artifact:${fixtureId}:audit-summary`],

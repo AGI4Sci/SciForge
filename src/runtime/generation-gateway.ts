@@ -177,7 +177,7 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
         request,
       );
       telemetry.markVerificationEnd();
-      return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder);
+      return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder, telemetry.callbacks);
     }
     const visionSensePayload = await tryRunVisionSenseRuntime(request, telemetry.callbacks);
     if (visionSensePayload) {
@@ -187,7 +187,7 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
         request,
       );
       telemetry.markVerificationEnd();
-      return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder);
+      return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder, telemetry.callbacks);
     }
     const skills = await loadSkillRegistry(request);
     const skill = agentServerGenerationSkill(request.skillDomain);
@@ -204,7 +204,7 @@ export async function runWorkspaceRuntimeGateway(body: Record<string, unknown>, 
       request,
     );
     telemetry.markVerificationEnd();
-    return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder);
+    return finalizeGatewayPayload(telemetry.emitFinal(verified) ?? verified, request, runtimeReplayRecorder, telemetry.callbacks);
   } catch (error) {
     telemetry.markFallback(errorMessage(error));
     telemetry.emitFinal();
@@ -218,10 +218,12 @@ function finalizeGatewayPayload(
   payload: ToolPayload,
   request: GatewayRequest,
   runtimeReplayRecorder: ReturnType<typeof applyRuntimeReplayRecorder>,
+  callbacks: WorkspaceRuntimeCallbacks,
 ): ToolPayload {
   return attachIntentFirstVerification(
     attachRuntimeReplayRecorderRefs(payload, runtimeReplayRecorder),
     request,
+    { callbacks, runWorkVerify: true },
   );
 }
 

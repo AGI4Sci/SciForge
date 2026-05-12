@@ -238,7 +238,7 @@ export interface HistoryMutationExpectation {
 export interface ReplayTraceExpectation {
   requiredEvents: Array<'turn-start' | 'state-digest' | 'first-readable-result' | 'tool-call' | 'failure' | 'recovery-plan' | 'background-start' | 'background-revision' | 'resume-preflight' | 'history-branch-record' | 'final-summary'>;
   requiredArtifacts: string[];
-  requiredMetrics: Array<'firstReadableMs' | 'turnCompletionMs' | 'redundantWorkRate' | 'recoverySuccess' | 'artifactReferenceAccuracy' | 'resumeCorrectness' | 'historyMutationCorrectness' | 'sideEffectDuplicationRate'>;
+  requiredMetrics: Array<'firstReadableMs' | 'turnCompletionMs' | 'redundantWorkRate' | 'recoverySuccess' | 'artifactReferenceAccuracy' | 'resumeCorrectness' | 'historyMutationCorrectness' | 'sideEffectDuplicationRate' | 'verifyLatencyMs' | 'blockingVerifyRate' | 'backgroundVerifyFailureRecoveryRate'>;
 }
 
 export interface PresentationSnapshotExpectation {

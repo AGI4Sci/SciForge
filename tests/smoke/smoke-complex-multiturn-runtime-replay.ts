@@ -79,6 +79,11 @@ assert.equal(report.replaySummary.recoveryEventCount, 1);
 assert.equal(report.replaySummary.repeatedWorkCount, 0);
 assert.equal(report.replaySummary.lifecycleRecoveryRate, 1);
 assert.equal(report.replaySummary.metrics.sideEffectDuplicationPrevented, true);
+assert.equal(report.replaySummary.blockingVerifyRate, report.benchmarkReport.timeline.summary.verify.blockingRate);
+assert.equal(report.replaySummary.backgroundVerifyFailureRecoveryRate, report.benchmarkReport.timeline.summary.verify.backgroundFailureRecoveryRate);
+assert.equal(report.metrics.verifyLatencyMs, report.benchmarkReport.timeline.summary.verify.latencyMs);
+assert.equal(report.metrics.blockingVerifyRate, report.benchmarkReport.timeline.summary.verify.blockingRate);
+assert.equal(report.metrics.backgroundVerifyFailureRecoveryRate, report.benchmarkReport.timeline.summary.verify.backgroundFailureRecoveryRate);
 
 const rawDiagnosticEvents = report.benchmarkReport.timeline.events.filter((event) =>
   event.refs?.some((ref) => report.coverage.rawDiagnosticRefs.includes(ref))

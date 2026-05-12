@@ -111,8 +111,20 @@ export interface ComplexDialogueTimelineSummary {
     verificationWaitMs: number;
     backgroundCompletionMs: number;
   };
+  verify: ComplexDialogueVerifyMetrics;
   lifecycle: ComplexDialogueLifecycleMetrics;
   qualityScore: number;
+}
+
+export interface ComplexDialogueVerifyMetrics {
+  eventCount: number;
+  latencyMs: number;
+  blockingCount: number;
+  blockingRate: number;
+  backgroundCount: number;
+  backgroundFailedCount: number;
+  backgroundFailureRecoveredCount: number;
+  backgroundFailureRecoveryRate: number;
 }
 
 export interface ComplexDialogueLifecycleMetrics {
@@ -139,6 +151,8 @@ export interface ComplexDialoguePerformanceGates {
   maxP95InterEventGapMs?: number;
   maxCompactionWaitMs?: number;
   maxVerificationWaitMs?: number;
+  maxBlockingVerifyRate?: number;
+  minBackgroundVerifyFailureRecoveryRate?: number;
   maxBackgroundCompletionMs?: number;
   maxRepeatedWorkCount?: number;
   maxFailureCount?: number;
@@ -272,6 +286,7 @@ export function aggregateComplexDialogueTimeline(events: ComplexDialogueTimeline
   if (!tokenUsage.total) tokenUsage.total = tokenUsage.input + tokenUsage.output;
 
   const lifecycle = aggregateLifecycleMetrics(sorted);
+  const verify = aggregateVerifyMetrics(sorted);
   const summaryWithoutScore = {
     eventCount: sorted.length,
     turnCount: new Set(sorted.map((event) => event.turnIndex).filter((turn): turn is number => turn !== undefined)).size,
@@ -303,6 +318,7 @@ export function aggregateComplexDialogueTimeline(events: ComplexDialogueTimeline
       verificationWaitMs: sumPhaseDurations(sorted, 'verification'),
       backgroundCompletionMs: sumPhaseDurations(sorted, 'background'),
     },
+    verify,
     lifecycle,
   };
   return stripUndefined({
@@ -350,6 +366,8 @@ export function evaluateComplexDialoguePerformanceGates(
   addMaxGate(results, 'maxP95InterEventGapMs', summary.p95InterEventGapMs, gates.maxP95InterEventGapMs, 'p95 inter-event gap');
   addMaxGate(results, 'maxCompactionWaitMs', summary.waits.compactionWaitMs, gates.maxCompactionWaitMs, 'compaction wait');
   addMaxGate(results, 'maxVerificationWaitMs', summary.waits.verificationWaitMs, gates.maxVerificationWaitMs, 'verification wait');
+  addMaxGate(results, 'maxBlockingVerifyRate', summary.verify.blockingRate, gates.maxBlockingVerifyRate, 'blocking verify rate');
+  addMinGate(results, 'minBackgroundVerifyFailureRecoveryRate', summary.verify.backgroundFailureRecoveryRate, gates.minBackgroundVerifyFailureRecoveryRate, 'background verify failure recovery rate');
   addMaxGate(results, 'maxBackgroundCompletionMs', summary.waits.backgroundCompletionMs, gates.maxBackgroundCompletionMs, 'background completion');
   addMaxGate(results, 'maxRepeatedWorkCount', summary.repeatedWorkCount, gates.maxRepeatedWorkCount, 'repeated work');
   addMaxGate(results, 'maxFailureCount', summary.failureCount, gates.maxFailureCount, 'failures');
@@ -498,14 +516,38 @@ function aggregateLifecycleMetrics(events: ComplexDialogueTimelineEvent[]): Comp
   };
 }
 
+function aggregateVerifyMetrics(events: ComplexDialogueTimelineEvent[]): ComplexDialogueVerifyMetrics {
+  const verifyEvents = events.filter(isVerifyTimelineEvent);
+  const backgroundVerifyEvents = verifyEvents.filter(isBackgroundVerifyTimelineEvent);
+  const blockingCount = verifyEvents.filter(isBlockingVerifyTimelineEvent).length;
+  const backgroundFailed = backgroundVerifyEvents.filter((event) => String(event.status ?? '').toLowerCase() === 'failed');
+  const backgroundFailureRecoveredCount = backgroundFailed.filter((event) =>
+    event.qualitySignals?.recoverable === true
+    || toStringList(event.raw?.recoverActions).length > 0
+    || Boolean(stringField(event.raw?.nextStep))
+    || hasLaterRecoveryEvent(events, event)
+  ).length;
+  return {
+    eventCount: verifyEvents.length,
+    latencyMs: sumVerifyLatency(events),
+    blockingCount,
+    blockingRate: verifyEvents.length ? round(blockingCount / verifyEvents.length, 4) : 0,
+    backgroundCount: backgroundVerifyEvents.length,
+    backgroundFailedCount: backgroundFailed.length,
+    backgroundFailureRecoveredCount,
+    backgroundFailureRecoveryRate: backgroundFailed.length ? round(backgroundFailureRecoveredCount / backgroundFailed.length, 4) : 1,
+  };
+}
+
 function scoreComplexDialogueQuality(summary: Omit<ComplexDialogueTimelineSummary, 'qualityScore'>): number {
   const progressCoverage = summary.eventCount ? Math.min(1, summary.progressEventCount / Math.max(1, summary.turnCount || 1)) : 0;
   const recoveryRate = summary.recoverableFailureCount ? Math.min(1, summary.recoveryEventCount / summary.recoverableFailureCount) : 1;
+  const verifyRecoveryRate = summary.verify.backgroundFailureRecoveryRate;
   const evidencePresence = summary.evidenceRefCount > 0 ? 1 : 0;
   const artifactPresence = summary.artifactRefCount > 0 ? 1 : 0;
   const finalPresence = summary.finalResultCount > 0 ? 1 : 0;
   const penalties = Math.min(0.6, (summary.failureCount * 0.08) + (summary.repeatedWorkCount * 0.08) + (summary.staleStateCount * 0.06) + (summary.conflictCount * 0.06));
-  return round(clamp((progressCoverage * 0.25) + (recoveryRate * 0.25) + (evidencePresence * 0.15) + (artifactPresence * 0.1) + (finalPresence * 0.15) + (summary.lifecycle.lifecycleRecoveryRate * 0.1) - penalties, 0, 1), 4);
+  return round(clamp((progressCoverage * 0.22) + (recoveryRate * 0.22) + (verifyRecoveryRate * 0.08) + (evidencePresence * 0.15) + (artifactPresence * 0.1) + (finalPresence * 0.15) + (summary.lifecycle.lifecycleRecoveryRate * 0.08) - penalties, 0, 1), 4);
 }
 
 function categoryForRuntimeEvent(event: WorkspaceRuntimeEvent): ComplexDialogueEventCategory {
@@ -553,7 +595,7 @@ function inferQualitySignals(
 function sumPhaseDurations(events: ComplexDialogueTimelineEvent[], category: ComplexDialogueEventCategory): number {
   let total = 0;
   const started = new Map<string, number>();
-  for (const event of events.filter((item) => item.category === category)) {
+  for (const event of events.filter((item) => item.category === category || item.phase === category)) {
     if (event.durationMs !== undefined) {
       total += Math.max(0, event.durationMs);
       continue;
@@ -567,6 +609,65 @@ function sumPhaseDurations(events: ComplexDialogueTimelineEvent[], category: Com
     }
   }
   return Math.round(total);
+}
+
+function sumVerifyLatency(events: ComplexDialogueTimelineEvent[]) {
+  const explicit = events
+    .filter(isVerifyTimelineEvent)
+    .reduce((sum, event) => sum + nonNegative(event.durationMs), 0);
+  const paired = sumPhaseDurations(events, 'verification')
+    + events
+      .filter((event) => event.category === 'background' && isVerifyTimelineEvent(event) && event.durationMs === undefined)
+      .reduce((sum, event) => {
+        const rawDuration = durationFromRawTimestamps(event.raw);
+        return sum + nonNegative(rawDuration);
+      }, 0);
+  return Math.round(Math.max(explicit, paired));
+}
+
+function durationFromRawTimestamps(raw: Record<string, unknown> | undefined) {
+  if (!raw) return undefined;
+  const started = stringField(raw.createdAt) ?? stringField(raw.startedAt);
+  const completed = stringField(raw.completedAt) ?? stringField(raw.updatedAt);
+  if (!started || !completed) return undefined;
+  const duration = Date.parse(completed) - Date.parse(started);
+  return Number.isFinite(duration) && duration >= 0 ? duration : undefined;
+}
+
+function isVerifyTimelineEvent(event: ComplexDialogueTimelineEvent) {
+  return event.category === 'verification'
+    || Boolean(event.raw?.verificationResults)
+    || Boolean(event.raw?.verdict)
+    || stringField(event.raw?.contract)?.includes('verification')
+    || stringField(event.raw?.schemaVersion)?.includes('verification')
+    || event.type.toLowerCase().includes('verify')
+    || event.type.toLowerCase().includes('verification');
+}
+
+function isBackgroundVerifyTimelineEvent(event: ComplexDialogueTimelineEvent) {
+  return event.category === 'background'
+    && (isVerifyTimelineEvent(event) || Boolean(event.raw?.verificationResults));
+}
+
+function isBlockingVerifyTimelineEvent(event: ComplexDialogueTimelineEvent) {
+  const raw = event.raw ?? {};
+  const routing = isRecord(raw.routing) ? raw.routing : {};
+  const blockingPolicy = stringField(routing.blockingPolicy) ?? stringField(raw.blockingPolicy);
+  return raw.blocking === true
+    || (blockingPolicy !== undefined && blockingPolicy !== 'non-blocking')
+    || event.qualitySignals?.humanBlocked === true;
+}
+
+function hasLaterRecoveryEvent(events: ComplexDialogueTimelineEvent[], failedEvent: ComplexDialogueTimelineEvent) {
+  return events.some((event) =>
+    event.timeMs >= failedEvent.timeMs
+    && event.category === 'recovery'
+    && (
+      !failedEvent.phase
+      || event.phase === failedEvent.phase
+      || event.refs?.some((ref) => failedEvent.refs?.includes(ref))
+    )
+  );
 }
 
 function addMaxGate(
