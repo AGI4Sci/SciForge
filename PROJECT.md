@@ -261,6 +261,50 @@ Todo：
 - [x] benchmark 能指出退化来自 context、capability、tool、presentation、repair 还是 backend handoff。
 - [x] 指标适用于任意 scenario，不绑定具体 prompt 或固定任务文案。
 
+### H021 Intent-first Verification and Background Work Checks
+
+职责：把 verify 从“主路径阻塞步骤”改成通用的分层旁路系统。默认只在主回答路径做极轻量的 Intent Match Check，确认回答匹配用户最新意图、不违背明确约束、不做过度行动；Work Verify 和 Heavy Verify 默认作为旁路后台任务运行，只在用户明确要求等待、高风险 side effect、发布/合并/上线等场景才阻塞主路径。
+
+核心原则：
+
+- Verify 不是单一动作，不等同于跑测试、smoke 或 benchmark。
+- 主路径优先回答用户当前意图；验证深度由用户意图、风险等级和产物类型路由。
+- Response Verify 默认只做 Intent Match，不做完整事实审稿、长链路审计或产物正确性证明。
+- Work Verify 默认旁路化，产物可以先交付，同时标注“未等待验证 / 后台验证中 / 最小验证通过 / 验证失败”。
+- Heavy Verify 永远不默认阻塞，除非用户要求等待或系统判断未验证交付会造成明显风险。
+- Smoke、全量测试、benchmark、渲染 QA、长检索复核属于 Heavy Verify 或工程产物验证，不属于通用对话回答的默认门槛。
+
+验证层级：
+
+- `intent`：默认主路径，极轻量检查是否回答最新问题、遵守明确约束、没有遗漏主请求、没有过度行动、必要时标注不确定或未验证。
+- `work-background`：默认旁路，针对代码、文件、数据、图像、外部操作等产物运行最小必要检查，并异步回流结构化 verdict。
+- `careful`：用户要求更稳或任务复杂时触发，扩大检查范围，但仍可后台运行。
+- `release`：发布、合并、上线或高风险任务前触发，可包含全量 test、smoke、benchmark、端到端 QA 和人工验收信号。
+
+Todo：
+
+- [x] 定义 `IntentMatchCheck` contract：latest user intent、explicit constraints、requested action type、over-action guard、uncertainty note、answer coverage verdict。
+- [x] 将默认 Response Verify 收缩为毫秒级/极轻量 intent check，不做默认事实深挖、产物验证、smoke 或全量测试。
+- [x] 定义 `VerifyJob` / `VerifyVerdict` contract：scope、level、blocking policy、started/completed status、evidence refs、failure summary、recommended fix。
+- [ ] 把 Work Verify 做成旁路后台任务：代码、文档、数据、图像、文件修改、外部 side effect 都可启动独立 verify job，但默认不阻塞回答。
+- [x] 增加 verify routing policy：根据用户意图识别 `skip verify`、`verify in background`、`wait for verify`、`careful verify`、`release verify`。
+- [x] 增加 blocking guard：只有用户明确要求等待、高风险不可逆 side effect、发布/合并/上线、或未验证交付会明显误导用户时，verify 才能阻塞主路径。
+- [x] 在结果 payload / display intent 中展示第一阶段简洁 verify 状态：`intent checked`、`work verify pending`、`background verify queued`、`not verified`；`verify passed/failed` 留给后台 verdict 回流阶段。
+- [x] 将 smoke/full test/benchmark 从默认回答路径剥离，归入 `work-background`、`careful` 或 `release` 等旁路等级。
+- [ ] 支持后台 verify 失败后的 follow-up：生成失败原因、影响范围、建议修复、是否需要继续修复并重跑。
+- [ ] 为多轮会话记录 verify lineage：哪个回答/产物对应哪个 verify job、verdict、证据 refs 和后续修复。
+- [ ] 增加 fixtures 覆盖：建议型对话只做 intent check；代码改动后台 work verify；用户要求等待时阻塞；高风险 side effect fail closed；release verify 走完整检查。
+- [ ] 更新复杂多轮 benchmark 指标：区分 response latency、work delivery latency、verify latency、blocking verify rate、background verify failure recovery rate。
+
+验收：
+
+- [x] 普通问答默认不会被 work verify、smoke、全量测试或 benchmark 阻塞。
+- [x] 所有回答至少经过 Intent Match Check，能避免答偏、违反明确约束或执行过度动作。
+- [x] 有产物的任务可以先交付并生成后台 Work Verify job 标注，用户能看到清楚的验证状态；真实异步 runner 留给 M19b。
+- [ ] 用户明确要求等待验证时，系统能阻塞到指定 verify 等级完成后再交付。
+- [ ] 后台 verify 失败不会静默丢失，必须能回流为可执行修复建议或风险提示。
+- [x] Smoke 和 release 级验证只在明确选择、发布/合并/上线或高风险边界中触发。
+
 ## 当前里程碑
 
 - [x] M13：建立复杂多轮对话压测任务板、fixture contract 和 benchmark 指标。
@@ -294,6 +338,14 @@ Todo：
   - [x] Opt-in 可发现性：在项目任务板中记录 recorder 的启用条件、产物位置、可交给 replay CLI 的引用形态，以及 smoke/benchmark 入口，便于后续 agent 找到端到端验收路径。
   - [x] 回归边界：守卫只覆盖 runtime/session event replay recorder 的 opt-in 非视觉路径，不恢复 Computer Use / 视觉 GUI grounding，不测试视觉定位、桌面点击、屏幕元素 grounding 或纯视觉 GUI 自动化。
   - [x] 验收信号：完成项必须能证明 disabled default、enabled opt-in、event forwarding、recorded NDJSON replay、runtimeEventsRef 可追踪和 no-write default 均被守住。
+- [ ] M19：分阶段实现 Intent-first Verification 和旁路 Work Verify。
+  - [x] M19a 第一阶段：先落 contract、gateway payload annotation 和 tests，只建立可审计的验证意图与状态标注，不宣称完整后台执行器完成。
+    - [x] Contract：定义 `IntentMatchCheck`、`VerifyJob`、`VerifyVerdict` 的最小稳定字段，覆盖 latest user intent、explicit constraints、requested action type、over-action guard、scope、level、blocking policy、status、evidence refs、failure summary、recommended fix。
+    - [x] Gateway payload annotation：在 gateway 输出 payload 中附加轻量 verify annotation，能表达 `intent checked`、`work verify pending`、`not verified` 等状态，并保留后续后台 job/verdict 接入点。
+    - [x] Tests：覆盖普通回答只标 intent check、有产物回答可标 work verify pending、用户要求等待时 payload 能表达 blocking policy、高风险/发布类请求能标 release/careful intent，但不要求真实后台 runner 执行。
+    - [x] Boundary：M19a 不实现完整后台 Work Verify 执行器、不调度真实异步 verify job、不把 smoke/full test/benchmark 接入默认回答路径。
+  - [ ] M19b 后续阶段：实现旁路 Work Verify runner、verify routing policy、后台 verdict 回流、失败 follow-up 和多轮 verify lineage。
+  - [ ] M19c 后续阶段：实现 careful/release 等级验证、blocking guard、release 级 smoke/full test/benchmark 接入和复杂多轮指标更新。
 
 ## 已清理内容
 

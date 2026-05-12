@@ -193,6 +193,8 @@ test('workspace gateway records runtime replay events only when explicitly opted
     const runtimeEventsRef = '.sciforge/sessions/2026-05-12_literature_session-gateway-enabled/records/runtime-events.ndjson';
     assert.equal(enabled.logs?.some((log) => log.kind === RUNTIME_REPLAY_RECORDER_LOG_KIND && log.ref === runtimeEventsRef), true);
     assert.equal(enabled.workEvidence?.some((entry) => entry.rawRef === runtimeEventsRef), true);
+    assert.equal(typeof (enabled.displayIntent?.verificationStatus as { response?: string } | undefined)?.response, 'string');
+    assert.equal(typeof (enabled.displayIntent?.intentFirstVerification as { schemaVersion?: string } | undefined)?.schemaVersion, 'string');
     assert.equal(forwarded.some((event) => event.type === 'gateway-request-received'), true);
     assert.equal(forwarded.some((event) => event.type === 'latency-diagnostics'), true);
 
