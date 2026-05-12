@@ -660,14 +660,15 @@ function workspacePersistenceSummary(input: SendAgentMessageInput) {
     workspacePath,
     sciforgeDir: workspacePath ? `${workspacePath}/.sciforge` : '.sciforge',
     workspaceStateRef: '.sciforge/workspace-state.json',
-    sessionRef: sessionId ? `.sciforge/sessions/${safeWorkspaceName(sessionId)}.json` : undefined,
     sessionBundlePattern: sessionId ? `.sciforge/sessions/YYYY-MM-DD_*_${safeWorkspaceName(sessionId)}/` : '.sciforge/sessions/YYYY-MM-DD_*_session/',
+    sessionRef: sessionId ? `.sciforge/sessions/YYYY-MM-DD_*_${safeWorkspaceName(sessionId)}/records/session.json` : undefined,
     artifactDir: '.sciforge/sessions/<date>_<scenario>_<session>/artifacts/',
+    dataDir: '.sciforge/sessions/<date>_<scenario>_<session>/data/',
+    exportDir: '.sciforge/sessions/<date>_<scenario>_<session>/exports/',
     taskDir: '.sciforge/sessions/<date>_<scenario>_<session>/tasks/',
     taskResultDir: '.sciforge/sessions/<date>_<scenario>_<session>/task-results/',
     logDir: '.sciforge/sessions/<date>_<scenario>_<session>/logs/',
-    legacyArtifactDir: '.sciforge/artifacts/',
-    note: 'Each multi-turn conversation is persisted as a date-prefixed portable bundle under .sciforge/sessions/, with records, task code, inputs/results, logs, artifacts, versions, data, and exports grouped together.',
+    note: 'Each multi-turn conversation must persist resources only inside its date-prefixed portable bundle under .sciforge/sessions/: records, task code, inputs/results, logs, artifacts, versions, data, and exports grouped together for packaging and restore.',
   };
 }
 

@@ -64,6 +64,22 @@ test('starts a new chat while archiving the previous active session', () => {
   assert.notEqual(next.sessionsByScenario['scenario-any'].sessionId, 'active');
 });
 
+test('starts a new chat without archiving an inactive seed-only session', () => {
+  const inactive = session('seed-only', 'scenario-any', []);
+  inactive.messages = [{
+    id: 'seed-scenario-any-0',
+    role: 'scenario',
+    content: 'Seed prompt',
+    createdAt: '2026-05-07T00:00:00.000Z',
+  }];
+  const state = workspace(inactive);
+  const next = startNewChat(state, 'scenario-any', 'Scenario new chat');
+
+  assert.equal(next.archivedSessions.length, 0);
+  assert.equal(next.sessionsByScenario['scenario-any'].title, 'Scenario new chat');
+  assert.notEqual(next.sessionsByScenario['scenario-any'].sessionId, 'seed-only');
+});
+
 test('deletes active chat by archiving a marked copy and resetting the active session', () => {
   const state = workspace();
   const next = deleteActiveChat(state, 'scenario-any', 'Fallback new chat');

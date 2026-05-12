@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 
 import type { AgentServerGenerationResponse, GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
 import { isRecord, safeWorkspaceRel } from '../gateway-utils.js';
+import { ensureSessionBundle, sessionBundleRelForRequest, sessionBundleResourceRel } from '../session-bundle.js';
 import { emitWorkspaceRuntimeEvent } from '../workspace-runtime-events.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { materializeBackendPayloadOutput, type RuntimeRefBundle } from './artifact-materializer.js';
@@ -197,9 +198,17 @@ export async function completeAgentServerDirectPayloadLifecycle(input: {
   callbacks?: WorkspaceRuntimeCallbacks;
 }): Promise<ToolPayload> {
   const taskId = stableAgentServerPayloadTaskId(input.stableTaskKind, input.request, input.skill, input.generation.runId);
+  const sessionBundleRel = sessionBundleRelForRequest(input.request);
+  await ensureSessionBundle(input.workspace, sessionBundleRel, {
+    sessionId: typeof input.request.uiState?.sessionId === 'string' ? input.request.uiState.sessionId : 'sessionless',
+    scenarioId: input.request.scenarioPackageRef?.id || input.request.skillDomain,
+    createdAt: typeof input.request.uiState?.sessionCreatedAt === 'string' ? input.request.uiState.sessionCreatedAt : undefined,
+    updatedAt: typeof input.request.uiState?.sessionUpdatedAt === 'string' ? input.request.uiState.sessionUpdatedAt : undefined,
+  });
   const refs = backendPayloadRefs(
     taskId,
     AGENTSERVER_DIRECT_PAYLOAD_TASK_REF,
+    sessionBundleRel,
   );
   await writeBackendPayloadLogs(input.workspace, refs, input.logLine);
   const directPayload = await input.deps.mergeReusableContextArtifactsForDirectPayload(
@@ -312,12 +321,12 @@ export async function completeAgentServerDirectPayloadLifecycle(input: {
   return await materializeBackendPayloadOutput(input.workspace, input.request, completedWithDebit, refs);
 }
 
-export function backendPayloadRefs(taskId: string, taskRel: string): RuntimeRefBundle {
+export function backendPayloadRefs(taskId: string, taskRel: string, sessionBundleRel?: string): RuntimeRefBundle {
   return {
     taskRel,
-    outputRel: `.sciforge/task-results/${taskId}.json`,
-    stdoutRel: `.sciforge/logs/${taskId}.stdout.log`,
-    stderrRel: `.sciforge/logs/${taskId}.stderr.log`,
+    outputRel: sessionBundleResourceRel(sessionBundleRel, 'task-results', `${taskId}.json`),
+    stdoutRel: sessionBundleResourceRel(sessionBundleRel, 'logs', `${taskId}.stdout.log`),
+    stderrRel: sessionBundleResourceRel(sessionBundleRel, 'logs', `${taskId}.stderr.log`),
   };
 }
 
@@ -569,6 +578,7 @@ async function currentReferenceDigestRecoveryPayload(input: {
   const recoveryRefs = backendPayloadRefs(
     stableAgentServerPayloadTaskId('digest-recovery', input.request, input.skill, sha1(input.request.prompt).slice(0, 8)),
     `agentserver://${CURRENT_REFERENCE_DIGEST_RECOVERY_REF_PATH}`,
+    sessionBundleRelForRequest(input.request),
   );
   await writeBackendPayloadLogs(input.workspace, recoveryRefs, CURRENT_REFERENCE_DIGEST_RECOVERY_LOG_LINE);
   const recoveryPayload = buildCurrentReferenceDigestRecoveryPayload({

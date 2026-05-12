@@ -20,6 +20,7 @@ export async function runWorkspaceTask(workspacePath: string, spec: WorkspaceTas
   const outputPath = join(workspace, spec.outputRel);
   const stdoutPath = join(workspace, spec.stdoutRel);
   const stderrPath = join(workspace, spec.stderrRel);
+  const sessionBundleRel = spec.sessionBundleRel ?? inferSessionBundleRel(spec.outputRel, spec.inputRel, taskRel);
 
   await Promise.all([
     mkdir(dirname(taskPath), { recursive: true }),
@@ -33,6 +34,9 @@ export async function runWorkspaceTask(workspacePath: string, spec: WorkspaceTas
   }
   await writeFile(inputPath, JSON.stringify(buildWorkspaceTaskInput(spec.input, {
     workspacePath: workspace,
+    workspaceRootPath: workspace,
+    sessionBundleRef: sessionBundleRel,
+    sessionResourceRootPath: sessionBundleRel ? join(workspace, sessionBundleRel) : undefined,
     taskCodeRef: taskRel,
     inputRef: inputRel,
     outputRef: spec.outputRel,
@@ -55,6 +59,7 @@ export async function runWorkspaceTask(workspacePath: string, spec: WorkspaceTas
   try {
     const result = await execFileAsync(command, args, {
       cwd: workspace,
+      env: workspaceTaskEnv(sessionBundleRel ? join(workspace, sessionBundleRel) : undefined, sessionBundleRel),
       timeout: spec.timeoutMs ?? 120000,
       maxBuffer: 32 * 1024 * 1024,
     });
@@ -196,11 +201,18 @@ function argsFor(
 function normalizeEntrypointArgTemplate(args: string[] | undefined, taskPath: string, inputPath: string, outputPath: string) {
   if (!Array.isArray(args)) return [];
   return args
-    .map((arg) => String(arg)
-      .replace(/\{inputPath\}|<inputPath>|INPUT_PATH/g, inputPath)
-      .replace(/\{outputPath\}|<outputPath>|OUTPUT_PATH/g, outputPath)
-      .replace(/\{taskPath\}|<taskPath>|TASK_PATH/g, taskPath))
+    .map((arg) => normalizeEntrypointArgToken(String(arg), taskPath, inputPath, outputPath))
     .filter((arg) => arg.length > 0);
+}
+
+function normalizeEntrypointArgToken(arg: string, taskPath: string, inputPath: string, outputPath: string) {
+  if (/^(?:\{inputPath\}|<inputPath>|INPUT_PATH|inputPath)$/.test(arg)) return inputPath;
+  if (/^(?:\{outputPath\}|<outputPath>|OUTPUT_PATH|outputPath)$/.test(arg)) return outputPath;
+  if (/^(?:\{taskPath\}|<taskPath>|TASK_PATH|taskPath)$/.test(arg)) return taskPath;
+  return arg
+    .replace(/\{inputPath\}|<inputPath>|INPUT_PATH/g, inputPath)
+    .replace(/\{outputPath\}|<outputPath>|OUTPUT_PATH/g, outputPath)
+    .replace(/\{taskPath\}|<taskPath>|TASK_PATH/g, taskPath);
 }
 
 function stripEntrypointCommandTokens(args: string[], taskPath: string, entrypoint: string) {
@@ -255,6 +267,23 @@ async function fingerprint(command: string, language: WorkspaceTaskSpec['languag
 
 function safeId(value: string) {
   return value.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 120);
+}
+
+function inferSessionBundleRel(...refs: Array<string | undefined>) {
+  for (const ref of refs) {
+    const normalized = ref?.replace(/\\/g, '/');
+    const match = normalized?.match(/^(\.sciforge\/sessions\/[^/]+)\//);
+    if (match) return match[1];
+  }
+  return undefined;
+}
+
+function workspaceTaskEnv(sessionResourceRootPath: string | undefined, sessionBundleRel: string | undefined) {
+  return {
+    ...process.env,
+    SCIFORGE_SESSION_BUNDLE_REF: sessionBundleRel ?? '',
+    SCIFORGE_SESSION_RESOURCE_ROOT: sessionResourceRootPath ?? '',
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

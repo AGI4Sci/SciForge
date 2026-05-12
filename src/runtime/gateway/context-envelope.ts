@@ -16,6 +16,7 @@ import {
   type LoadedCapabilityManifestRegistry,
 } from '../capability-manifest-registry.js';
 import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from './gateway-request.js';
+import { sessionBundleRelForRequest } from '../session-bundle.js';
 import { applyContextEnvelopeRecordGovernance, contextEnvelopeGovernanceAudit, contextEnvelopeGovernanceForRequest } from './context-envelope-governance.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import {
@@ -72,6 +73,7 @@ export function buildContextEnvelope(
   const executionModeDecision = executionModeDecisionForEnvelope(uiState);
   const conversationPolicySummary = summarizeConversationPolicyForAgentServer(uiState.conversationPolicy ?? uiState);
   const capabilityBrokerBrief = buildCapabilityBrokerBriefForAgentServer(request);
+  const sessionBundleRef = sessionBundleRelForRequest(request);
   const capabilityBrief = capabilityBriefProjectionFromBrokerBrief(capabilityBrokerBrief, uiState.capabilityBrief);
   const verificationPolicy = request.verificationPolicy ?? brokerVerificationPolicyForRequest(request, brokerCapabilityPolicyForRequest(request));
   const startupContextEnvelope = buildStartupContextEnvelopeForRequest(request, {
@@ -125,20 +127,27 @@ export function buildContextEnvelope(
     workspaceFacts: mode === 'full' ? {
       workspacePath: params.workspace,
       sciforgeDir: '.sciforge',
-      taskDir: '.sciforge/tasks/',
-      taskResultDir: '.sciforge/task-results/',
-      logDir: '.sciforge/logs/',
-      artifactDir: '.sciforge/artifacts/',
+      sessionBundleRef,
+      sessionResourceRoot: sessionBundleRef,
+      taskDir: `${sessionBundleRef}/tasks/`,
+      taskResultDir: `${sessionBundleRef}/task-results/`,
+      logDir: `${sessionBundleRef}/logs/`,
+      artifactDir: `${sessionBundleRef}/artifacts/`,
+      dataDir: `${sessionBundleRef}/data/`,
+      exportDir: `${sessionBundleRef}/exports/`,
       workspaceTreeSummary: workspaceTree,
       workspaceTreeHash: hashJson(workspaceTree),
       workspaceTreeEntryCount: workspaceTree.length,
     } : {
       workspacePath: params.workspace,
+      sessionBundleRef,
       dirs: {
-        task: '.sciforge/tasks/',
-        result: '.sciforge/task-results/',
-        log: '.sciforge/logs/',
-        artifact: '.sciforge/artifacts/',
+        task: `${sessionBundleRef}/tasks/`,
+        result: `${sessionBundleRef}/task-results/`,
+        log: `${sessionBundleRef}/logs/`,
+        artifact: `${sessionBundleRef}/artifacts/`,
+        data: `${sessionBundleRef}/data/`,
+        export: `${sessionBundleRef}/exports/`,
       },
       workspaceTreeHash: hashJson(workspaceTree),
       workspaceTreeEntryCount: workspaceTree.length,

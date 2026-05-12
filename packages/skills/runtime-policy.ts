@@ -339,7 +339,8 @@ export function agentServerWorkspaceTaskRoutingPromptPolicyLines(group: 'all' | 
     ],
     'new-task': [
       'Generate fresh task code only when the current turn truly asks for new work or no prior executable artifact can satisfy the request.',
-      'Put generated task paths under .sciforge/tasks when possible. SciForge will archive any returned taskFiles under .sciforge/tasks/<run-id>/ before execution.',
+      'Put generated task paths under the current session bundle tasks directory when possible. SciForge will archive returned taskFiles under .sciforge/sessions/<date>_<scenario>_<session>/tasks/ before execution.',
+      'All generated task resources for the current multi-turn conversation must be written under the session bundle directories exposed in task input (sessionBundleRef/sessionResourceRootPath): task-results, logs, artifacts, data, and exports. Do not create top-level workspace folders such as papers/ or standalone report files for task outputs.',
       'Do not force self-contained task code when a better installed/workspace tool exists. Prefer the best available tool, record the tool id/version/command in ExecutionUnit, and write only the adapter/glue needed for reproducibility from inputPath and outputPath.',
     ],
   };
@@ -359,7 +360,7 @@ export function agentServerCapabilityRoutingPromptPolicyLines() {
 export function agentServerLargeFilePromptContractLines() {
   return [
     'Large-file contract: uploaded PDFs, images, spreadsheets, binary blobs, extracted full text, and large logs must stay as workspace refs. Do not inline base64, do not print full extracted text to stdout/stderr, and do not paste full document text into final JSON.',
-    'For uploaded PDFs or long documents, generated tasks should read the file by path/dataRef, write any full extraction to .sciforge/artifacts or .sciforge/task-results, and return only bounded excerpts, section summaries, page/figure locators, hashes, and clickable file/artifact refs.',
+    'For uploaded PDFs or long documents, generated tasks should read the file by path/dataRef, write any full extraction under the current .sciforge/sessions/<date>_<scenario>_<session>/{artifacts,task-results,data}/ directories, and return only bounded excerpts, section summaries, page/figure locators, hashes, and clickable file/artifact refs.',
   ];
 }
 

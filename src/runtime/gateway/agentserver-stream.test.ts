@@ -4,6 +4,7 @@ import test from 'node:test';
 import { buildSilentStreamDecisionRecord } from '@sciforge-ui/runtime-contract';
 import type { GatewayRequest } from '../runtime-types.js';
 import {
+  agentServerGenerationTokenGuardLimit,
   agentServerSilentStreamGuardAudit,
   currentReferenceDigestSilentGuardMs,
   currentReferenceDigestSilentGuardPolicy,
@@ -93,6 +94,45 @@ test('silent stream guard consumes harness progressPlan silencePolicy for timeou
   assert.equal(capturedAudit.harnessSignals.harnessStage, 'onStreamGuardTrip');
   assert.equal(capturedAudit.harnessSignals.externalHook.stage, 'onStreamGuardTrip');
   assert.ok(capturedAudit.detail.includes('status=Retrying compact AgentServer stream'));
+});
+
+test('generation token guard applies to all AgentServer streams and tightens when digest refs exist', async () => {
+  const request = {
+    skillDomain: 'literature',
+    prompt: 'guard runaway generation',
+    artifacts: [],
+    maxContextWindowTokens: 200_000,
+    uiState: {},
+  } satisfies GatewayRequest;
+  assert.equal(agentServerGenerationTokenGuardLimit(request), 300_000);
+  assert.equal(agentServerGenerationTokenGuardLimit({
+    ...request,
+    uiState: { currentReferenceDigests: [{ ref: 'refs/current/a.json' }] },
+  }), 80_000);
+
+  const encoder = new TextEncoder();
+  const response = new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(`${JSON.stringify({
+        event: {
+          type: 'usage-update',
+          usage: { input: 260_000, output: 50_001, total: 310_001, provider: 'codex' },
+        },
+      })}\n`));
+      controller.close();
+    },
+  }));
+  let guardMessage = '';
+  await assert.rejects(
+    readAgentServerRunStream(response, () => {}, {
+      maxTotalUsage: agentServerGenerationTokenGuardLimit(request),
+      onGuardTrip: (message) => {
+        guardMessage = message;
+      },
+    }),
+    /convergence guard after 310001 total tokens/,
+  );
+  assert.match(guardMessage, /limit 300000/);
 });
 
 test('conversation recovery uses silent stream policy retry budget and decision', () => {

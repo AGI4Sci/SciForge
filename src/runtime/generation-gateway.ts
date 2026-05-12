@@ -9,6 +9,7 @@ import { emitWorkspaceRuntimeEvent, throwIfRuntimeAborted } from './workspace-ru
 import { composeRuntimeUiManifest } from './runtime-ui-manifest.js';
 import { cleanUrl, clipForAgentServerPrompt, errorMessage, excerptAroundFailureLine, extractLikelyErrorLine, generatedTaskArchiveRel, headForAgentServer, isRecord, isTaskInputRel, readTextIfExists, summarizeTextChange, tailForAgentServer, toRecordList, toStringList } from './gateway-utils.js';
 import { normalizeBackendHandoff } from './workspace-task-input.js';
+import { sessionBundleRelForRequest } from './session-bundle.js';
 import {
   expectedArtifactTypesForRequest,
   normalizeGatewayRequest as normalizeGatewayRequestFromModule,
@@ -121,7 +122,7 @@ import {
   payloadHasFailureStatus,
 } from './gateway/runtime-routing.js';
 import {
-  currentReferenceDigestGuardLimit,
+  agentServerGenerationTokenGuardLimit,
   currentReferenceDigestSilentGuardPolicy,
   mergeBackendStreamWorkEvidence,
   readAgentServerRunStream,
@@ -464,7 +465,8 @@ async function tryAgentServerRepairAndRerun(params: {
     const boundaryPayload = normalizeWorkspaceTaskPayloadBoundary(rawPayload) as ToolPayload;
     const payload = coerceWorkspaceTaskPayload(boundaryPayload) ?? boundaryPayload;
     const rawErrors = schemaErrors(rawPayload);
-    const errors = rawErrors.length ? rawErrors : schemaErrors(payload);
+    const payloadErrors = schemaErrors(payload);
+    const errors = payloadErrors.length ? payloadErrors : [];
     const normalized = errors.length ? undefined : await validateAndNormalizePayload(payload, params.request, params.skill, {
       taskRel: params.run.spec.taskRel,
       outputRel,
@@ -522,10 +524,10 @@ async function tryAgentServerRepairAndRerun(params: {
           ...params,
           run: rerun,
           schemaErrors: errors,
-          failureReason: nextFailureReason,
-          callbacks: params.callbacks,
-        });
-      }
+      failureReason: nextFailureReason,
+      callbacks: params.callbacks,
+    });
+  }
       if (errors.length) {
         return schemaValidationRepairPayload({
           payload,
@@ -812,7 +814,7 @@ async function requestAgentServerGeneration(params: {
           AGENT_BACKEND_ANSWER_PRINCIPLE,
           'You generate SciForge workspace-local task code.',
           !needsContinuity
-            ? 'Fresh-generation hard rule: do not call shell/filesystem/browser tools to inspect the workspace, .sciforge, old task attempts, logs, artifacts, installed packages, or prior generated code before returning. Your first substantive assistant output must be the final compact JSON for a direct ToolPayload or a runnable AgentServerGenerationResponse.'
+            ? 'Fresh-generation hard rule: do not call shell/filesystem/browser tools to inspect the workspace, .sciforge, old task attempts, logs, artifacts, installed packages, or prior generated code before returning. If the user task needs network, downloads, PDF/full-text reading, computation, or file creation, generate a bounded runnable task that performs that work at execution time. Your first substantive assistant output must be the final compact JSON for a direct ToolPayload or a runnable AgentServerGenerationResponse.'
             : 'Continuity-generation mode: inspect only the specific prior refs needed for the user-requested continuation, repair, or rerun.',
           'Write task files that accept inputPath and outputPath argv values and write a SciForge ToolPayload JSON object.',
           'For current-reference document requests, use uiStateSummary.currentReferenceDigests/contextEnvelope.sessionFacts.currentReferenceDigests first; do not spend generation-stage tool calls dumping long files into model context.',
@@ -863,6 +865,14 @@ async function requestAgentServerGeneration(params: {
           nativeToolFirst: needsContinuity,
           llmEndpointSource: llmRuntime.llmEndpoint ? llmEndpointSource : undefined,
           retryAudit: contextRecovery?.retryAudit,
+          toolPolicy: needsContinuity ? {
+            mode: 'continuity-read-limited',
+            inspectOnlyReferencedWorkspaceRefs: true,
+          } : {
+            mode: 'fresh-generation-no-native-inspection',
+            generateRunnableTaskForExternalWork: true,
+            finalJsonFirst: true,
+          },
           ...harnessMetadata,
         },
       },
@@ -884,12 +894,21 @@ async function requestAgentServerGeneration(params: {
           maxRetries: 1,
         },
         retryAudit: contextRecovery?.retryAudit,
+        toolPolicy: needsContinuity ? {
+          mode: 'continuity-read-limited',
+          inspectOnlyReferencedWorkspaceRefs: true,
+        } : {
+          mode: 'fresh-generation-no-native-inspection',
+          generateRunnableTaskForExternalWork: true,
+          finalJsonFirst: true,
+        },
         ...harnessMetadata,
       },
     };
     const normalizedHandoff = await normalizeBackendHandoff(runPayload, {
       workspacePath: params.workspace,
       purpose: contextRecovery ? 'agentserver-generation-rate-limit-retry' : 'agentserver-generation',
+      sessionBundleRel: sessionBundleRelForRequest(request),
       budget: contextRecovery ? {
         maxPayloadBytes: 96_000,
         maxInlineStringChars: 6_000,
@@ -900,6 +919,16 @@ async function requestAgentServerGeneration(params: {
         headChars: 1_200,
         tailChars: 1_200,
         maxPriorAttempts: 1,
+      } : !needsContinuity ? {
+        maxPayloadBytes: 96_000,
+        maxInlineStringChars: 12_000,
+        maxInlineJsonBytes: 24_000,
+        maxArrayItems: 12,
+        maxObjectKeys: 64,
+        maxDepth: 5,
+        headChars: 2_000,
+        tailChars: 2_000,
+        maxPriorAttempts: 0,
       } : {
         maxInlineStringChars: 24_000,
         headChars: 4_000,
@@ -963,7 +992,7 @@ async function requestAgentServerGeneration(params: {
         request,
       ));
     }, {
-      maxTotalUsage: currentReferenceDigestGuardLimit(request),
+      maxTotalUsage: agentServerGenerationTokenGuardLimit(request),
       maxSilentMs: silentGuardPolicy.timeoutMs,
       silencePolicy: silentGuardPolicy,
       silentRetryCount: Math.max(0, dispatchAttempt - 1),
@@ -982,7 +1011,7 @@ async function requestAgentServerGeneration(params: {
         });
       },
     });
-    await writeAgentServerDebugArtifact(params.workspace, 'generation', runPayload, response.status, json);
+    await writeAgentServerDebugArtifact(params.workspace, 'generation', runPayload, response.status, json, sessionBundleRelForRequest(request));
     if (!response.ok) {
       const detail = isRecord(json) ? String(json.error || json.message || '') : '';
       const failure = await recoverOrReturnAgentServerGenerationFailure({
@@ -1111,7 +1140,7 @@ async function requestAgentServerGeneration(params: {
       diagnostics: contextRecovery,
     };
   } catch (error) {
-    await writeAgentServerDebugArtifact(params.workspace, 'generation', runPayload, 0, { error: errorMessage(error) });
+    await writeAgentServerDebugArtifact(params.workspace, 'generation', runPayload, 0, { error: errorMessage(error) }, sessionBundleRelForRequest(params.request));
     return { ok: false, error: agentServerRequestFailureMessage('generation', error, timeoutMs) };
   } finally {
     clearTimeout(timeout);
