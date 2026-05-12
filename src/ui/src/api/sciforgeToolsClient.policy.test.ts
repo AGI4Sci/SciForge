@@ -338,6 +338,63 @@ test('pre-aborted signal cancels the workspace stream request controller', async
   assert.equal(requestSignal?.aborted, true);
 });
 
+test('request timeout becomes a soft wait after backend progress events', async () => {
+  let requestSignal: AbortSignal | undefined;
+  globalThis.fetch = (async (_input, init) => {
+    requestSignal = init?.signal as AbortSignal | undefined;
+    return delayedStreamResponse([
+      {
+        event: {
+          type: 'conversation-policy',
+          message: 'Runtime accepted the request.',
+          latencyPolicy: {
+            firstEventWarningMs: 100,
+            silentRetryMs: 200,
+            requestTimeoutMs: 20,
+          },
+        },
+      },
+      {
+        result: {
+          message: 'Long-running workspace result ready.',
+          executionUnits: [{ id: 'unit-1', status: 'done' }],
+          artifacts: [],
+        },
+      },
+    ], requestSignal, 50);
+  }) as typeof fetch;
+
+  const events: AgentStreamEvent[] = [];
+  const response = await sendSciForgeToolMessage(messageInput(), {
+    onEvent: (event) => events.push(event),
+  });
+
+  assert.equal(response.message.status, 'completed');
+  assert.equal(requestSignal?.aborted, false);
+  assert.ok(events.some((event) => event.type === 'backend-timeout-extended'));
+});
+
+function delayedStreamResponse(items: unknown[], signal: AbortSignal | undefined, delayMs: number) {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    async start(controller) {
+      const abort = () => controller.error(new DOMException('The operation was aborted.', 'AbortError'));
+      signal?.addEventListener('abort', abort, { once: true });
+      try {
+        controller.enqueue(encoder.encode(`${JSON.stringify(items[0])}\n`));
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        if (signal?.aborted) return;
+        for (const item of items.slice(1)) {
+          controller.enqueue(encoder.encode(`${JSON.stringify(item)}\n`));
+        }
+        controller.close();
+      } finally {
+        signal?.removeEventListener('abort', abort);
+      }
+    },
+  }), { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } });
+}
+
 function streamResponse(items: unknown[]) {
   const encoder = new TextEncoder();
   return new Response(new ReadableStream({

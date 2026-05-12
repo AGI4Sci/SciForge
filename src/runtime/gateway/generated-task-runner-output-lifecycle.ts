@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceRuntimeCallbacks, WorkspaceTaskRunResult } from '../runtime-types.js';
@@ -26,6 +26,13 @@ import type { GeneratedTaskRunnerDeps } from './generated-task-runner.js';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types.js';
 import { normalizeWorkspaceTaskPayloadBoundary } from './direct-answer-payload.js';
 import { schemaValidationRepairPayload } from './payload-validation.js';
+import {
+  downgradeTransientExternalFailures,
+  firstTransientExternalFailureReason,
+  payloadHasOnlyTransientExternalDependencyFailures,
+  transientExternalDependencyPayload,
+  transientExternalFailureReasonFromRun,
+} from './transient-external-failure.js';
 
 type RunAgentServerGeneratedTask = (
   request: GatewayRequest,
@@ -58,6 +65,31 @@ export async function completeGeneratedTaskRunOutputLifecycle(
   const refs = runtimeRefs(input);
 
   if (run.exitCode !== 0 && !await fileExists(join(workspace, input.outputRel))) {
+    const transientReason = transientExternalFailureReasonFromRun(run);
+    if (transientReason) {
+      const payload = transientExternalDependencyPayload({ request, skill, run, reason: transientReason });
+      await writeFile(join(workspace, input.outputRel), `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+      let normalized = await deps.validateAndNormalizePayload(payload, request, skill, {
+        ...refs,
+        runtimeFingerprint: run.runtimeFingerprint,
+      });
+      if (normalized) {
+        normalized = await materializeBackendPayloadOutput(workspace, request, normalized, refs);
+      }
+      await appendGeneratedTaskAttemptLifecycle({
+        workspacePath: workspace,
+        request,
+        skill,
+        taskId,
+        run,
+        attemptPlanRefs: deps.attemptPlanRefs,
+        status: 'failed-with-reason',
+        ...refs,
+        schemaErrors: [],
+        failureReason: transientReason,
+      });
+      return normalized ?? payload;
+    }
     const repair = await runGeneratedTaskPreOutputRepairLifecycle({
       workspacePath: workspace,
       request,
@@ -87,6 +119,23 @@ export async function completeGeneratedTaskRunOutputLifecycle(
     });
     if (normalized) {
       normalized = await materializeBackendPayloadOutput(workspace, request, normalized, refs);
+      normalized = downgradeTransientExternalFailures(normalized);
+      if (payloadHasOnlyTransientExternalDependencyFailures(normalized)) {
+        await appendGeneratedTaskAttemptLifecycle({
+          workspacePath: workspace,
+          request,
+          skill,
+          taskId,
+          run,
+          attemptPlanRefs: deps.attemptPlanRefs,
+          status: 'failed-with-reason',
+          ...refs,
+          schemaErrors: errors,
+          workEvidenceSummary: summarizeWorkEvidenceForHandoff(normalized),
+          failureReason: firstTransientExternalFailureReason(normalized),
+        });
+        return normalized;
+      }
     }
 
     const lifecycle = assessGeneratedTaskValidationLifecycle({

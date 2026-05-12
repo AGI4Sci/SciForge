@@ -354,18 +354,20 @@ function normalizeUiManifestSlot(slot: unknown, artifacts: Array<Record<string, 
     return [{ componentId: slot.trim(), artifactRef: firstArtifactIdOrType(artifacts), priority: index + 1 }];
   }
   if (!isRecord(slot)) return [];
-  const componentId = firstStringField(slot, ['componentId', 'component', 'moduleId', 'view', 'type', 'renderer']);
+  const componentId = firstStringField(slot, ['componentId', 'component', 'moduleId', 'view', 'type', 'renderer', 'id']);
   if (componentId) {
     const props = isRecord(slot.props) ? slot.props : {};
     const artifactRef = firstStringField(slot, ['artifactRef', 'artifactId', 'artifact', 'dataRef', 'ref'])
       ?? artifactRefForArtifactType(firstStringField(props, ['artifactType', 'type']), artifacts)
       ?? firstArtifactIdOrType(artifacts);
-    return [{
+    const normalizedSlot: Record<string, unknown> = {
       ...slot,
       componentId,
-      artifactRef,
       priority: typeof slot.priority === 'number' ? slot.priority : index + 1,
-    }];
+    };
+    if (artifactRef) normalizedSlot.artifactRef = artifactRef;
+    else delete normalizedSlot.artifactRef;
+    return [normalizedSlot];
   }
   const nestedComponents = Array.isArray(slot.components) ? slot.components : Array.isArray(slot.componentIds) ? slot.componentIds : undefined;
   if (nestedComponents) {

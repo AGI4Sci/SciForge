@@ -11,6 +11,7 @@ import {
   readAgentServerRunStream,
   type AgentServerSilentStreamGuardAudit,
 } from './agentserver-stream.js';
+import { agentServerRequestFailureMessage } from './agentserver-run-output.js';
 import { planConversationRecovery } from './conversation-recovery-policy.js';
 
 test('silent stream guard consumes harness progressPlan silencePolicy for timeout and audit fields', async () => {
@@ -42,9 +43,9 @@ test('silent stream guard consumes harness progressPlan silencePolicy for timeou
   } satisfies GatewayRequest;
 
   const policy = currentReferenceDigestSilentGuardPolicy(request);
-  assert.equal(currentReferenceDigestSilentGuardMs(request), 7);
+  assert.equal(currentReferenceDigestSilentGuardMs(request), 45_000);
   assert.equal(policy.source, 'request.uiState.agentHarness.contract.progressPlan.silencePolicy');
-  assert.equal(policy.timeoutMs, 7);
+  assert.equal(policy.timeoutMs, 45_000);
   assert.equal(policy.decision, 'retry');
   assert.equal(policy.maxRetries, 2);
   assert.equal(policy.digestRefCount, 1);
@@ -54,6 +55,7 @@ test('silent stream guard consumes harness progressPlan silencePolicy for timeou
   assert.equal(policy.harnessSignals.externalHook.schemaVersion, 'sciforge.agent-harness-external-hook-trace.v1');
   assert.equal(policy.harnessSignals.externalHook.declared, true);
 
+  const shortPolicy = { ...policy, timeoutMs: 7 };
   const transportDecision = buildSilentStreamDecisionRecord({
     runId: 'session-a:turn-silent',
     source: 'ui.transport.silenceWatchdog',
@@ -67,8 +69,8 @@ test('silent stream guard consumes harness progressPlan silencePolicy for timeou
   const response = new Response(new ReadableStream<Uint8Array>({ start() {} }));
   await assert.rejects(
     readAgentServerRunStream(response, () => {}, {
-      maxSilentMs: policy.timeoutMs,
-      silencePolicy: policy,
+      maxSilentMs: shortPolicy.timeoutMs,
+      silencePolicy: shortPolicy,
       silentRetryCount: 1,
       silentRunId: 'session-a:turn-silent',
       silentStreamDecision: transportDecision,
@@ -133,6 +135,17 @@ test('generation token guard applies to all AgentServer streams and tightens whe
     /convergence guard after 310001 total tokens/,
   );
   assert.match(guardMessage, /limit 300000/);
+});
+
+test('request failure message preserves silent stream guard diagnostics', () => {
+  const message = agentServerRequestFailureMessage(
+    'generation',
+    new Error('AgentServer generation stopped by silent stream guard after 5001ms without stream events; silencePolicy decision=visible-status, timeoutMs=5000, retry=0/0.'),
+    900_000,
+  );
+
+  assert.match(message, /silent stream guard after 5001ms/);
+  assert.doesNotMatch(message, /900000ms/);
 });
 
 test('conversation recovery uses silent stream policy retry budget and decision', () => {

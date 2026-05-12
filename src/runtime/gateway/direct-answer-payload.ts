@@ -193,11 +193,13 @@ function coerceStandaloneArtifactPayload(value: Record<string, unknown>): ToolPa
 export function normalizeToolPayloadShape(payload: ToolPayload): ToolPayload {
   const artifacts = normalizeWorkspaceTaskArtifacts(payload.artifacts);
   const rawDisplayIntent: unknown = payload.displayIntent;
+  const message = String(payload.message || '');
   return {
     ...payload,
     reasoningTrace: Array.isArray(payload.reasoningTrace)
       ? payload.reasoningTrace.map(String).filter(Boolean).join('\n')
       : String(payload.reasoningTrace || ''),
+    claims: normalizeAgentServerClaims(payload.claims, message),
     displayIntent: isRecord(rawDisplayIntent)
       ? payload.displayIntent
       : typeof rawDisplayIntent === 'string' && rawDisplayIntent.trim()

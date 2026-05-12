@@ -271,6 +271,8 @@ export function currentReferenceDigestSilentGuardPolicy(request: GatewayRequest)
   const source = harnessSilencePolicySource(request.uiState);
   const silencePolicy = source?.silencePolicy;
   const progressPlan = source?.progressPlan;
+  const configuredTimeoutMs = positiveNumberField(silencePolicy?.timeoutMs)
+    ?? positiveNumberField(progressPlan?.silenceTimeoutMs);
   const harnessSignals = agentHarnessStageHookTraceMetadata(request, 'onStreamGuardTrip', {
     agentHarness: source?.agentHarness,
     summary: source?.summary,
@@ -279,9 +281,7 @@ export function currentReferenceDigestSilentGuardPolicy(request: GatewayRequest)
   return {
     schemaVersion: AGENTSERVER_SILENT_STREAM_POLICY_SCHEMA_VERSION,
     source: source?.source ?? 'runtime.default',
-    timeoutMs: positiveNumberField(silencePolicy?.timeoutMs)
-      ?? positiveNumberField(progressPlan?.silenceTimeoutMs)
-      ?? fallbackTimeoutMs,
+    timeoutMs: Math.max(fallbackTimeoutMs, configuredTimeoutMs ?? fallbackTimeoutMs),
     decision: silenceDecisionField(silencePolicy?.decision) ?? 'visible-status',
     status: stringField(silencePolicy?.status),
     maxRetries: nonNegativeNumberField(silencePolicy?.maxRetries),

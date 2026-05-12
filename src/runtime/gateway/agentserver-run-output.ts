@@ -30,7 +30,7 @@ export function parseGenerationResponse(value: unknown): AgentServerGenerationRe
           })
           .filter(isRecord)
         : [];
-      const entrypoint = normalizeGenerationEntrypoint(parsed.entrypoint);
+      const entrypoint = normalizeGenerationEntrypoint(parsed.entrypoint, taskFiles);
       if (taskFiles.length && typeof entrypoint.path === 'string') {
         return {
           taskFiles: taskFiles.map((file) => ({
@@ -53,6 +53,11 @@ export function parseGenerationResponse(value: unknown): AgentServerGenerationRe
     }
   }
   return undefined;
+}
+
+export function looksLikeUnparsedGenerationResponseText(value: unknown) {
+  const text = typeof value === 'string' ? value : '';
+  return /sciforge\.agentserver-generation-response\.v1|["']taskFiles["']\s*:|```json[\s\S]{0,2000}["']taskFiles["']\s*:/i.test(text);
 }
 
 function structuredTextCandidates(value: unknown): string[] {
@@ -94,7 +99,7 @@ type NormalizedGenerationEntrypoint = {
   args?: unknown[];
 };
 
-function normalizeGenerationEntrypoint(value: unknown): NormalizedGenerationEntrypoint {
+function normalizeGenerationEntrypoint(value: unknown, taskFiles: Array<Record<string, unknown>> = []): NormalizedGenerationEntrypoint {
   if (isRecord(value)) {
     const path = stringField(value.path);
     const command = stringField(value.command);
@@ -106,7 +111,17 @@ function normalizeGenerationEntrypoint(value: unknown): NormalizedGenerationEntr
       language: typeof value.language === 'string' ? value.language : inferLanguageFromEntrypoint(resolvedPath ?? command),
     };
   }
-  return {};
+  const firstExecutableTaskFile = taskFiles.find((file) => {
+    const path = stringField(file.path);
+    if (!path) return false;
+    const language = stringField(file.language);
+    return /\.(?:py|r|sh|bash)$/i.test(path) || /^(?:python|r|shell|cli)$/i.test(language || '');
+  });
+  const inferredPath = stringField(firstExecutableTaskFile?.path);
+  return inferredPath ? {
+    path: inferredPath,
+    language: stringField(firstExecutableTaskFile?.language) ?? inferLanguageFromEntrypoint(inferredPath),
+  } : {};
 }
 
 function extractEntrypointArgs(command: unknown, path: unknown) {
@@ -249,7 +264,10 @@ export function agentServerSessionRef(baseUrl: string, agentId: string) {
 
 export function agentServerRequestFailureMessage(operation: 'generation' | 'repair', error: unknown, timeoutMs: number) {
   const message = errorMessage(error);
-  if (isAbortError(error) || /abort|cancel|timeout/i.test(message)) {
+  if (/silent stream guard/i.test(message)) {
+    return `AgentServer ${operation} request failed: ${sanitizeAgentServerError(message)}`;
+  }
+  if (isAbortError(error) || /abort|cancel/i.test(message)) {
     return `AgentServer ${operation} request timed out or was cancelled after ${timeoutMs}ms. Retry can resume with this repair-needed attempt in priorAttempts.`;
   }
   return `AgentServer ${operation} request failed: ${sanitizeAgentServerError(message)}`;

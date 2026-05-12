@@ -87,6 +87,7 @@ import {
   agentServerRequestFailureMessage,
   agentServerRunFailure,
   extractAgentServerOutputText,
+  looksLikeUnparsedGenerationResponseText,
   parseGenerationResponse,
   parseToolPayloadResponse,
 } from './gateway/agentserver-run-output.js';
@@ -135,6 +136,7 @@ import { hasRecoverableRecentAttempt } from './gateway/recoverable-attempts.js';
 import { tryRunVisionSenseRuntime } from './vision-sense-runtime.js';
 import { applyConversationPolicy } from './conversation-policy/apply.js';
 import { toolPackageManifests } from '../../packages/skills/tool_skills';
+import { AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE } from '../../packages/skills/runtime-policy';
 import { agentHandoffSourceMetadata } from '@sciforge-ui/runtime-contract/handoff';
 import {
   agentServerConvergenceGuardEvent,
@@ -699,6 +701,7 @@ async function requestAgentServerGeneration(params: {
   if (params.callbacks?.signal?.aborted) controller.abort();
   let runPayload: unknown;
   let contextRecovery: AgentServerGenerationFailureDiagnostics | undefined;
+  let strictTaskFilesReason = params.strictTaskFilesReason;
   try {
     const request = params.request;
     const promptRequest = requestWithoutInlineAgentHarness(request);
@@ -779,7 +782,7 @@ async function requestAgentServerGeneration(params: {
       expectedArtifactTypes: expectedArtifactTypesForRequest(promptRequest),
       selectedComponentIds: promptRequest.selectedComponentIds ?? toStringList(promptRequest.uiState?.selectedComponentIds),
       priorAttempts: compactContext.priorAttempts,
-      strictTaskFilesReason: params.strictTaskFilesReason,
+      strictTaskFilesReason,
       retryAudit: contextRecovery?.retryAudit,
       freshCurrentTurn: !needsContinuity,
     };
@@ -1105,6 +1108,21 @@ async function requestAgentServerGeneration(params: {
     const parsedRaw = parseGenerationResponse(run.output) ?? parseGenerationResponse(run) ?? parseGenerationResponse(streamText) ?? parseGenerationResponse(directText);
     const parsed = parsedRaw && directText ? hydrateGeneratedTaskResponseFromText(parsedRaw, directText) : parsedRaw;
     if (!parsed) {
+      if (directText && looksLikeUnparsedGenerationResponseText(directText)) {
+        const malformedGenerationReason = 'AgentServer returned a malformed or incomplete AgentServerGenerationResponse-looking JSON payload; retry with compact executable taskFiles JSON and no markdown fences.';
+        if (!strictTaskFilesReason && dispatchAttempt < 2) {
+          strictTaskFilesReason = malformedGenerationReason;
+          emitWorkspaceRuntimeEvent(params.callbacks, {
+            type: AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE,
+            source: 'workspace-runtime',
+            status: 'running',
+            message: malformedGenerationReason,
+            detail: 'Retrying AgentServer generation with a stricter taskFiles-only contract because the prior response looked like task code JSON but could not be parsed as a runnable generation response.',
+          });
+          continue;
+        }
+        return { ok: false, error: malformedGenerationReason };
+      }
       if (directText) {
         return await finalizeAgentServerGenerationSuccess({
           result: {

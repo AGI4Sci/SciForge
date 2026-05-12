@@ -8,7 +8,8 @@ import { syncRepairResultToGithubIssue } from './github-repair-sync.js';
 import { runRepairHandoff } from './repair-handoff-runner.js';
 import { buildStableVersionSyncPlan, promoteStableVersion, readStableVersion, stableVersionRegistryPath } from './stable-version-registry.js';
 import { normalizeWorkspaceRootPath, resolveWorkspacePreviewRef } from './workspace-paths.js';
-import { isRecord, readJson, readOptionalJson, safeName, writeJson, writeStreamEnvelope } from './server/http.js';
+import { isRecord, readJson, readOptionalJson, safeName, writeJson } from './server/http.js';
+import { createDetachedStreamResponse } from './server/detached-stream.js';
 import {
   WORKSPACE_RUNTIME_ARTIFACT_PREVIEW_CAPABILITY_ID,
 } from '@sciforge-ui/runtime-contract';
@@ -248,11 +249,7 @@ createServer(async (req, res) => {
     return;
   }
   if (url.pathname === '/api/sciforge/tools/run/stream' && req.method === 'POST') {
-    const controller = new AbortController();
-    let completed = false;
-    res.on('close', () => {
-      if (!completed && !res.writableEnded) controller.abort();
-    });
+    const stream = createDetachedStreamResponse(res);
     res.writeHead(200, {
       'Content-Type': 'application/x-ndjson; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
@@ -261,17 +258,16 @@ createServer(async (req, res) => {
     try {
       const body = await readJson(req);
       const result = await runSciForgeTool(body, {
-        signal: controller.signal,
+        signal: stream.signal,
         onEvent(event) {
-          writeStreamEnvelope(res, { event });
+          stream.write({ event });
         },
       });
-      writeStreamEnvelope(res, { result });
+      stream.write({ result });
     } catch (err) {
-      writeStreamEnvelope(res, { error: err instanceof Error ? err.message : String(err) });
+      stream.write({ error: err instanceof Error ? err.message : String(err) });
     } finally {
-      completed = true;
-      res.end();
+      stream.end();
     }
     return;
   }

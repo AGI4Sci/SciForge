@@ -84,14 +84,28 @@ export async function sendSciForgeToolMessage(
   });
   let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
   const requestStartedAt = Date.now();
-  const scheduleTimeout = (thresholds: RuntimeLatencyThresholds) => {
+  let timeoutExtensionCount = 0;
+  const armRequestTimeout = (delayMs: number, thresholds: RuntimeLatencyThresholds) => {
     if (timeout) globalThis.clearTimeout(timeout);
-    const elapsed = Date.now() - requestStartedAt;
-    const remaining = Math.max(0, thresholds.requestTimeoutMs - elapsed);
     timeout = globalThis.setTimeout(() => {
+      if (sawBackendEvent && !signal?.aborted) {
+        timeoutExtensionCount += 1;
+        const detail = `后端仍在产生运行事件；已把 ${thresholds.requestTimeoutMs}ms 请求超时转为软等待（第 ${timeoutExtensionCount} 次），避免中断长任务。`;
+        callbacks.onEvent?.(toolEvent('backend-timeout-extended', detail, {
+          requestTimeoutMs: thresholds.requestTimeoutMs,
+          elapsedMs: Date.now() - requestStartedAt,
+          extensionCount: timeoutExtensionCount,
+        }));
+        armRequestTimeout(Math.max(30_000, Math.min(thresholds.requestTimeoutMs, 60_000)), thresholds);
+        return;
+      }
       timedOut = true;
       activeRequestController?.abort();
-    }, remaining);
+    }, Math.max(0, delayMs));
+  };
+  const scheduleTimeout = (thresholds: RuntimeLatencyThresholds) => {
+    const elapsed = Date.now() - requestStartedAt;
+    armRequestTimeout(Math.max(0, thresholds.requestTimeoutMs - elapsed), thresholds);
   };
   scheduleTimeout(latencyThresholds);
   const linkedAbort = () => activeRequestController?.abort();
