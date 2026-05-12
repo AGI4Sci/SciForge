@@ -571,23 +571,69 @@ function summarizeJson(text: string, maxItems: number): JsonMap {
 }
 
 function summarizeCsv(text: string, maxRows: number): JsonMap {
-  const sample = text.split(/\r?\n/).slice(0, maxRows + 1);
+  const lines = text.split(/\r?\n/);
+  const sample = lines.slice(0, maxRows + 1).filter((line) => line.trim().length > 0);
   const delimiter = sample[0]?.includes('\t') && !sample[0].includes(',') ? '\t' : ',';
-  const rows = sample.map((line) => line.split(delimiter));
+  const rows = sample.map((line) => parseCsvLine(line, delimiter));
   const header = rows[0] ?? [];
   const dataRows = rows.slice(1);
-  const excerpts = dataRows.slice(0, maxRows).map((row, index) => ({
-    kind: 'csv-row',
-    row: index + 1,
-    text: scrubInline(header.length ? JSON.stringify(Object.fromEntries(header.map((key, cellIndex) => [key, row[cellIndex] ?? '']))) : row.join(', ')),
-  }));
-  const totalLines = text.split(/\r?\n/).length;
+  const rowWidthSamples = dataRows.slice(0, maxRows).map((row) => row.length);
+  const normalizedHeaders = header.map((column, index) => scrubInline(column.trim() || `column_${index + 1}`));
+  const totalLines = lines.length;
+  const headerHash = sha1Text(normalizedHeaders.join('\u001f')).slice(0, 16);
+  const schemaFingerprint = sha1Text([
+    delimiter === '\t' ? 'tsv' : 'csv',
+    normalizedHeaders.join('|'),
+    rowWidthSamples.join(','),
+  ].join('\u001e')).slice(0, 16);
   return {
-    digestText: `CSV digest: columns=${header.length}, sampledRows=${dataRows.length}, totalLines=${totalLines}. Headers: ${header.slice(0, 24).join(', ') || 'n/a'}.`,
-    excerpts,
-    metrics: { columnCount: header.length, sampledRowCount: dataRows.length, lineCount: totalLines },
-    omitted: { rowsAfterSample: Math.max(0, totalLines - 1 - dataRows.length) },
+    digestText: `CSV digest: columns=${header.length}, sampledRows=${dataRows.length}, totalLines=${totalLines}. Headers: ${normalizedHeaders.slice(0, 24).join(', ') || 'n/a'}.`,
+    excerpts: [{
+      kind: 'csv-schema',
+      text: `CSV schema/profile only; row values are not inlined. headerHash=${headerHash}; schemaFingerprint=${schemaFingerprint}.`,
+      columns: normalizedHeaders.slice(0, 24),
+      omittedColumns: Math.max(0, normalizedHeaders.length - 24),
+    }],
+    metrics: {
+      delimiter: delimiter === '\t' ? 'tab' : delimiter,
+      columnCount: header.length,
+      sampledRowCount: dataRows.length,
+      lineCount: totalLines,
+      headerHash,
+      schemaFingerprint,
+      sampledRowWidths: rowWidthSamples,
+    },
+    omitted: {
+      rawContent: 'refs-first-not-inlined',
+      rowsAfterSample: Math.max(0, totalLines - 1 - dataRows.length),
+    },
   };
+}
+
+function parseCsvLine(line: string, delimiter: string): string[] {
+  const cells: string[] = [];
+  let current = '';
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === '"' && line[index + 1] === '"') {
+      current += '"';
+      index += 1;
+      continue;
+    }
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (char === delimiter && !quoted) {
+      cells.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  cells.push(current);
+  return cells;
 }
 
 function summarizePlainText(text: string): JsonMap {

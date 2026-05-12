@@ -173,7 +173,7 @@ function makeStandardFixture(definition: FixtureDefinition, tier: Exclude<Comple
     allowedTools: definition.tools,
     latencyBudget: latencyBudget(tier),
     memoryExpectations: memoryExpectations(fixtureId, tier),
-    artifactExpectations: artifactExpectations(fixtureId, tier, definition.outcomes.includes('merge') ? 'merge-with-provenance' : 'append-revision'),
+    artifactExpectations: artifactExpectations(fixtureId, tier, definition.outcomes.includes('merge') ? 'merge-with-provenance' : 'append-revision', definition.sourceTaskId),
     failureInjections,
     successCriteria: successCriteria(fixtureId, definition.outcomes),
     historyMutation: historyMutation('none', fixtureId),
@@ -481,14 +481,36 @@ function memoryExpectations(fixtureId: string, tier: ComplexFixtureTier) {
   };
 }
 
-function artifactExpectations(fixtureId: string, tier: ComplexFixtureTier, mutationPolicy: ComplexMultiTurnFixture['artifactExpectations']['mutationPolicy']) {
+function artifactExpectations(
+  fixtureId: string,
+  tier: ComplexFixtureTier,
+  mutationPolicy: ComplexMultiTurnFixture['artifactExpectations']['mutationPolicy'],
+  sourceTaskId?: string,
+) {
+  const fieldMappingRef = `artifact:${fixtureId}:field-mapping`;
+  const isFieldMappingFixture = sourceTaskId === 'T10-04';
   return {
-    expectedArtifacts: [`artifact:${fixtureId}:primary`, `artifact:${fixtureId}:revision`, `artifact:${fixtureId}:audit-summary`],
-    artifactLineage: [`artifact:${fixtureId}:primary -> artifact:${fixtureId}:revision`, `run:${fixtureId}:latest -> artifact:${fixtureId}:audit-summary`],
-    requiredObjectRefs: [`artifact:${fixtureId}:primary`, `run:${fixtureId}:latest`, `execution:${fixtureId}:main`],
+    expectedArtifacts: [
+      `artifact:${fixtureId}:primary`,
+      `artifact:${fixtureId}:revision`,
+      `artifact:${fixtureId}:audit-summary`,
+      ...(isFieldMappingFixture ? [fieldMappingRef] : []),
+    ],
+    artifactLineage: [
+      `artifact:${fixtureId}:primary -> artifact:${fixtureId}:revision`,
+      `run:${fixtureId}:latest -> artifact:${fixtureId}:audit-summary`,
+      ...(isFieldMappingFixture ? [`${fieldMappingRef} -> artifact:${fixtureId}:revision`] : []),
+    ],
+    requiredObjectRefs: [
+      `artifact:${fixtureId}:primary`,
+      `run:${fixtureId}:latest`,
+      `execution:${fixtureId}:main`,
+      ...(isFieldMappingFixture ? [fieldMappingRef] : []),
+    ],
     identityAssertions: [
       'follow-up references resolve to the requested artifact, not the most recent unrelated artifact',
       tier === 'lifecycle' ? 'resume output names the pre-resume and post-resume lineage' : 'revision keeps provenance to the source artifact',
+      ...(isFieldMappingFixture ? ['field mapping artifact keeps source table refs, dataRef/path, column identity, and provenance for reuse'] : []),
     ],
     mutationPolicy,
   };

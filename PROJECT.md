@@ -422,6 +422,30 @@ Failure/Improvement Notes：
 - [x] `git diff --check`
 
 
+### 2026-05-13 Milestone：CSV refs-first 摘要与 Field Mapping artifact refs 收敛
+
+本轮继续吸收 R-DATA-01/02 explorer 对 CSV 多轮分析与两表字段映射的复核结果，优先收敛 refs-first 与 artifact lineage 这两个通用边界，避免后续多轮分析靠 raw table 内容、临时映射文本或最近 artifact 猜测上下文：
+
+- [x] R-DATA-01 CSV 多轮分析：`ConversationReferenceDigest` 的 CSV 摘要改为 schema/profile digest，只保留 header、列数、行宽采样、headerHash/schemaFingerprint 和 omitted policy；行值不再内联进 prompt digest，敏感单元格只能通过 ref 按需读取。
+- [x] R-DATA-02 两表合并冲突：TaskProject stage 现在从 ToolPayload `artifacts`、`objectReferences`、`metadata`、`provenance` 中统一收集 `artifactRef/ref/dataRef/path/outputRef/rawRef`，裸 `.sciforge/...` 路径归一化为 `file:` ref，field-mapping artifact 可以随 stage 持久化并被下一轮复用。
+- [x] 复杂多轮 fixture 的 `T10-04` 增加 field-mapping artifact、required object ref、lineage 与 identity assertion，要求 mapping artifact 保留 source table refs、`dataRef/path`、column identity 与 provenance。
+
+Failure/Improvement Notes：
+
+- CSV digest 不能用“采样前几行 JSON”换 token，因为真实用户表格常含隐私、密钥、实验 ID 或异常值；默认只暴露 schema/profile，具体行值必须通过 workspace ref 受控展开。
+- field mapping 不能只靠 artifact title、最近输出或用户文本规则恢复；mapping 的 `dataRef/path/provenance` 必须进入 stage artifact refs，否则多轮重算会丢失两表合并的列身份和来源。
+
+本轮验证：
+
+- [x] `npx tsx tests/smoke/smoke-current-reference-prompt-path-digests.ts`
+- [x] `node --import tsx --test src/runtime/task-projects.test.ts src/runtime/gateway/context-envelope.test.ts`
+- [x] `npm run smoke:complex-multiturn-fixtures`
+- [x] `npm run smoke:complex-multiturn-chat`
+- [x] `npm run typecheck`
+- [x] `npm run test`（725 tests pass）
+- [x] `git diff --check`
+
+
 
 ### H022 Real-world Complex Task Backlog for SciForge Hardening
 
@@ -464,8 +488,8 @@ Failure/Improvement Notes：
 
 数据分析与文件 artifact 任务：
 
-- [ ] R-DATA-01 CSV 多轮分析：上传/引用 CSV，先做摘要统计，再改分组口径，再要求异常值解释，再导出 markdown 报告和复现代码。
-- [ ] R-DATA-02 两表合并冲突：A/B 两个表字段不一致，用户给映射规则，系统重算并保留 mapping artifact。
+- [x] R-DATA-01 CSV 多轮分析：上传/引用 CSV，先做摘要统计，再改分组口径，再要求异常值解释，再导出 markdown 报告和复现代码。已覆盖 CSV refs-first schema/profile digest、敏感行值不内联、按 ref 受控展开边界。
+- [x] R-DATA-02 两表合并冲突：A/B 两个表字段不一致，用户给映射规则，系统重算并保留 mapping artifact。已覆盖 ToolPayload/objectReferences/provenance 中 mapping artifact refs 的 stage 持久化与复杂多轮 fixture lineage。
 - [x] R-DATA-03 大文件摘要：读取大文本/日志文件，只允许摘要和 refs，不允许把全文塞入 prompt；后续追问必须按需读取片段。
 - [x] R-DATA-04 图表迭代：先生成图表 artifact，再要求换坐标、换颜色、筛选子集、导出最终报告，测试 artifact identity。已覆盖 resultPresentation action-level lineage、revisionRef、view transform/exportProfile 和同一 artifact 多派生视图保留。
 - [x] R-DATA-05 缺失文件恢复：历史 artifact 指向的文件被删除/移动，用户要求继续，系统必须 stale-check 并进入安全恢复。

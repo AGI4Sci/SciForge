@@ -761,7 +761,7 @@ async function parseStageOutput(workspaceRoot: string, outputRel: string) {
       output: value,
       outputKind: 'tool-payload' as const,
       evidenceRefs: stableStringList([outputRef, ...toolPayloadEvidenceRefs(value)]),
-      artifactRefs: stableStringList(toolPayloadArtifactRefs(value)),
+      artifactRefs: stableStringList(toolPayloadArtifactRefs(value, workspaceRoot)),
       workEvidence,
       diagnostics: stableStringList(workEvidence.flatMap((entry) => entry.diagnostics ?? [])),
       failureReason: toolPayloadFailureReason(value),
@@ -825,20 +825,43 @@ function toolPayloadEvidenceRefs(payload: ToolPayload) {
   return Array.from(refs);
 }
 
-function toolPayloadArtifactRefs(payload: ToolPayload) {
+function toolPayloadArtifactRefs(payload: ToolPayload, workspaceRoot: string) {
   const refs = new Set<string>();
   for (const artifact of Array.isArray(payload.artifacts) ? payload.artifacts : []) {
     if (!isRecord(artifact)) continue;
-    for (const key of ['artifactRef', 'ref', 'dataRef']) {
-      const ref = typeof artifact[key] === 'string' ? artifact[key].trim() : '';
-      if (ref && ref.startsWith('file:')) refs.add(ref);
-    }
+    collectArtifactRefsFromRecord(refs, workspaceRoot, artifact);
     if (isRecord(artifact.metadata)) {
-      const ref = typeof artifact.metadata.artifactRef === 'string' ? artifact.metadata.artifactRef.trim() : '';
-      if (ref) refs.add(ref.startsWith('file:') ? ref : fileRef(ref));
+      collectArtifactRefsFromRecord(refs, workspaceRoot, artifact.metadata);
+    }
+    if (isRecord(artifact.provenance)) {
+      collectArtifactRefsFromRecord(refs, workspaceRoot, artifact.provenance);
+    }
+  }
+  for (const reference of Array.isArray(payload.objectReferences) ? payload.objectReferences : []) {
+    if (!isRecord(reference)) continue;
+    collectArtifactRefsFromRecord(refs, workspaceRoot, reference);
+    if (isRecord(reference.provenance)) {
+      collectArtifactRefsFromRecord(refs, workspaceRoot, reference.provenance);
     }
   }
   return Array.from(refs);
+}
+
+function collectArtifactRefsFromRecord(refs: Set<string>, workspaceRoot: string, record: Record<string, unknown>) {
+  for (const key of ['artifactRef', 'ref', 'dataRef', 'path', 'outputRef', 'rawRef']) {
+    const normalized = normalizeToolPayloadArtifactRef(workspaceRoot, record[key]);
+    if (normalized) refs.add(normalized);
+  }
+}
+
+function normalizeToolPayloadArtifactRef(workspaceRoot: string, value: unknown) {
+  const ref = typeof value === 'string' ? value.trim() : '';
+  if (!ref) return undefined;
+  try {
+    return normalizeRef(workspaceRoot, ref);
+  } catch {
+    return undefined;
+  }
 }
 
 function outputSummary(output: ToolPayload | WorkEvidence | undefined) {

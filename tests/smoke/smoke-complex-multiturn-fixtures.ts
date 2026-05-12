@@ -81,6 +81,7 @@ for (const fixture of complexMultiTurnFixtures) {
   if (fixture.tier === 'ten-turn') validateTenTurnFixture(fixture);
   if (fixture.tier === 'twenty-turn') validateTwentyTurnFixture(fixture);
   if (fixture.tier === 'lifecycle') validateLifecycleFixture(fixture);
+  if (fixture.sourceTaskId === 'T10-04') validateFieldMappingFixture(fixture);
 }
 
 assert.equal(ids.size, complexMultiTurnFixtures.length, 'fixture ids must be unique');
@@ -160,6 +161,22 @@ function validateBaseFixture(fixture: ComplexMultiTurnFixture): void {
     assert.ok(snapshot.requiredSections.length > 0, `${fixture.id}: snapshot sections`);
     assert.ok(snapshot.forbiddenSectionsExpanded.includes('raw trace'), `${fixture.id}: raw trace should stay folded`);
   }
+}
+
+function validateFieldMappingFixture(fixture: ComplexMultiTurnFixture): void {
+  const mappingRef = `artifact:${fixture.id}:field-mapping`;
+  assert.ok(fixture.artifactExpectations.expectedArtifacts.includes(mappingRef), `${fixture.id}: field mapping artifact expected`);
+  assert.ok(fixture.artifactExpectations.requiredObjectRefs.includes(mappingRef), `${fixture.id}: field mapping object ref required`);
+  assert.ok(
+    fixture.artifactExpectations.artifactLineage.some((lineage) => lineage.includes(mappingRef)),
+    `${fixture.id}: field mapping lineage retained`,
+  );
+  assert.ok(
+    fixture.artifactExpectations.identityAssertions.some((assertion) => /source table refs.*dataRef\/path.*column identity.*provenance/i.test(assertion)),
+    `${fixture.id}: field mapping identity assertion`,
+  );
+  assert.ok(fixture.allowedTools.includes('workspace-read'), `${fixture.id}: field mapping requires source table reads by ref`);
+  assert.ok(fixture.allowedTools.includes('artifact-writer'), `${fixture.id}: field mapping artifact must be materialized`);
 }
 
 function validateTurnCount(fixture: ComplexMultiTurnFixture, expected: number): void {

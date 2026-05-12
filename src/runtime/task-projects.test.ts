@@ -185,6 +185,57 @@ test('runs a task project stage successfully with ToolPayload output', async () 
   }
 });
 
+test('captures ToolPayload artifact refs from dataRef path and object references', async () => {
+  const root = await workspace();
+  try {
+    await createTaskProject(root, { id: 'artifact-refs', goal: 'Capture reusable mapping refs.', createdAt: '2026-05-09T00:00:00.000Z' });
+    const payload = {
+      ...toolPayload({ message: 'Mapping artifact ready.' }),
+      artifacts: [{
+        id: 'field-mapping',
+        type: 'field-mapping',
+        dataRef: '.sciforge/projects/artifact-refs/artifacts/field-mapping.json',
+        path: '.sciforge/projects/artifact-refs/artifacts/field-mapping.md',
+        metadata: {
+          artifactRef: 'artifact:artifact-refs:field-mapping',
+        },
+      }],
+      objectReferences: [{
+        kind: 'artifact',
+        ref: 'artifact:artifact-refs:field-mapping',
+        provenance: {
+          dataRef: '.sciforge/projects/artifact-refs/artifacts/field-mapping.json',
+          path: '.sciforge/projects/artifact-refs/artifacts/field-mapping.md',
+        },
+      }],
+    };
+    await writeStageFile(root, 'artifact-refs', 'run.sh', [
+      'cat > "$2" <<\'JSON\'',
+      JSON.stringify(payload),
+      'JSON',
+    ].join('\n'));
+    await appendTaskStage(root, 'artifact-refs', {
+      kind: 'execute',
+      goal: 'Emit a field mapping artifact.',
+      codeRef: 'file:.sciforge/projects/artifact-refs/src/run.sh',
+      createdAt: '2026-05-09T00:01:00.000Z',
+    });
+
+    const result = await runTaskProjectStage(root, 'artifact-refs', 1, {
+      now: fixedClock('2026-05-09T00:02:00.000Z'),
+    });
+
+    assert.equal(result.stage.status, 'done');
+    assert.deepEqual(result.stage.artifactRefs, [
+      'artifact:artifact-refs:field-mapping',
+      'file:.sciforge/projects/artifact-refs/artifacts/field-mapping.json',
+      'file:.sciforge/projects/artifact-refs/artifacts/field-mapping.md',
+    ]);
+  } finally {
+    await cleanup(root);
+  }
+});
+
 test('runs a task project stage successfully with WorkEvidence output', async () => {
   const root = await workspace();
   try {
